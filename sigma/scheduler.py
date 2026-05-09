@@ -1,22 +1,26 @@
 """Sigma scheduler — daily entry point.
 
-Wires the five plugs, broker adapter, data adapter, and risk governor into
-a single ``run_once`` invocation that an external scheduler (cron,
-systemd timer, GitHub Actions, etc.) can call.
+Wires the five plugs, broker adapter, data adapter, risk governor, and
+Postgres persistence into a single ``run_once`` invocation that an external
+scheduler (cron, systemd timer, GitHub Actions, etc.) can call.
 
 Responsibilities each run:
-    1. Reconcile open trades with the broker — fire Tier 1 / Tier 2 / hard-stop
-       events and append any AARs (idempotent across runs).
-    2. Run setup detection on the configured universe.
-    3. For every ACTIVE-phase candidate, build an ``ExecutionDecision`` and
+    1. Open an asyncpg connection pool (when ``DATABASE_URL`` is set) so
+       risk state and AARs persist to ``platform.*``. Without ``DATABASE_URL``
+       the run uses in-memory state and skips DB writes — useful for dry runs.
+    2. Reconcile open trades with the broker — fire Tier 1 / Tier 2 / hard-stop
+       events and persist any AARs (idempotent across runs).
+    3. Run setup detection on the configured universe.
+    4. For every ACTIVE-phase candidate, build an ``ExecutionDecision`` and
        hand it to ``SigmaOrderManager``, which gates → governs → submits.
+    5. Close the pool before exit. Railway's cron worker policy is "exit
+       cleanly" — leaking pool slots blocks the next scheduled fire.
 
 Calling cadence: per ``MASTER_PLAN.md §4.1`` Sigma is a daily-timeframe
 strategy. The scheduler is meant to fire once per session — typically a few
-minutes before close (``tpcore.calendar.next_close`` minus a buffer) so
-fresh closing-context bars are in. Intra-day fills are picked up on the
-*next* run; that's a deliberate trade-off — Sigma's lifecycle is days,
-not minutes.
+minutes after close so closing prints have settled. Intra-day fills are
+picked up on the *next* run; that's a deliberate trade-off — Sigma's
+lifecycle is days, not minutes.
 """
 from __future__ import annotations
 
@@ -24,16 +28,20 @@ import asyncio
 import os
 from datetime import UTC, date as date_t, datetime
 from decimal import Decimal
+from typing import Any
 
 import structlog
 
-from tpcore.alpaca import AlpacaDataAdapter, AlpacaPaperBrokerAdapter
 from tpcore.aar.models import AfterActionReport
+from tpcore.aar.writer import AARWriter
+from tpcore.alpaca import AlpacaDataAdapter, AlpacaPaperBrokerAdapter
+from tpcore.db import build_asyncpg_pool
 from tpcore.risk.governor import (
     InMemoryRiskStateStore,
     RiskGovernor,
     RiskStateStore,
 )
+from tpcore.risk.persistent_store import PostgresRiskStateStore
 
 from sigma.models import Phase
 from sigma.order_manager import ENGINE_ID, SigmaOrderManager
@@ -44,91 +52,6 @@ from sigma.plugs.lifecycle_analysis import SigmaLifecycleAnalysis
 from sigma.plugs.setup_detection import SigmaSetupDetection
 
 logger = structlog.get_logger(__name__)
-
-
-class SigmaScheduler:
-    """One-shot orchestration of a full Sigma trading cycle."""
-
-    def __init__(
-        self,
-        *,
-        engine_equity: Decimal = Decimal("10000"),
-        platform_capital: Decimal = Decimal("10000"),
-        risk_store: RiskStateStore | None = None,
-        broker: AlpacaPaperBrokerAdapter | None = None,
-        data: AlpacaDataAdapter | None = None,
-    ) -> None:
-        self._engine_equity = engine_equity
-        self._broker = broker or AlpacaPaperBrokerAdapter()
-        self._data = data or AlpacaDataAdapter()
-        self._risk_store = risk_store or InMemoryRiskStateStore()
-        self._governor = RiskGovernor(
-            state_store=self._risk_store,
-            broker=self._broker,
-            platform_capital=platform_capital,
-        )
-        self._setup = SigmaSetupDetection(data=self._data)
-        self._lifecycle = SigmaLifecycleAnalysis()
-        self._execution = SigmaExecutionRisk()
-        self._aar = SigmaAARLogging()
-        self._gate = SigmaCapitalGate(engine_equity=engine_equity)
-        self._order_manager = SigmaOrderManager(
-            broker=self._broker,
-            governor=self._governor,
-            capital_gate=self._gate,
-            lifecycle=self._lifecycle,
-            aar=self._aar,
-        )
-
-    async def run_once(self, *, as_of: date_t | None = None) -> RunSummary:
-        """Execute one full cycle. Returns a small summary for the caller."""
-        as_of = as_of or datetime.now(UTC).date()
-        await self._governor.register_engine(ENGINE_ID, self._engine_equity)
-        logger.info("sigma.scheduler.run_start", as_of=as_of.isoformat())
-
-        # 1. Reconcile open trades first so the open-position count is fresh
-        #    before we decide on new entries. Sigma's pre-grad cap is $1,500
-        #    out of $10k engine equity → 15% per trade for sizing reporting.
-        new_aars = await self._order_manager.reconcile(
-            sizing_pct_of_engine_equity=Decimal("0.15"),
-        )
-
-        # 2. Scan for new setups.
-        candidates = await self._setup.scan(as_of=as_of)
-        logger.info("sigma.scheduler.scan_done", n_candidates=len(candidates))
-
-        submitted = 0
-        account = await self._broker.get_account()
-        for cand in candidates:
-            assessment = self._lifecycle.assess(cand)
-            if assessment.phase is not Phase.ACTIVE:
-                continue
-            risk_state = await self._risk_store.get(ENGINE_ID)
-            open_positions = risk_state.open_positions if risk_state else 0
-            decision = self._execution.decide(
-                assessment,
-                account_capital=account.equity,
-                open_positions=open_positions,
-            )
-            if decision is None:
-                continue
-            placed = await self._order_manager.submit_decision(decision, assessment)
-            if placed:
-                submitted += 1
-
-        logger.info(
-            "sigma.scheduler.run_done",
-            as_of=as_of.isoformat(),
-            n_candidates=len(candidates),
-            submitted=submitted,
-            new_aars=len(new_aars),
-        )
-        return RunSummary(
-            as_of=as_of,
-            n_candidates=len(candidates),
-            n_submitted=submitted,
-            aars=new_aars,
-        )
 
 
 class RunSummary:
@@ -152,6 +75,124 @@ class RunSummary:
             f"RunSummary(as_of={self.as_of}, n_candidates={self.n_candidates}, "
             f"n_submitted={self.n_submitted}, n_aars={len(self.aars)})"
         )
+
+
+class SigmaScheduler:
+    """One-shot orchestration of a full Sigma trading cycle.
+
+    Construction is intentionally minimal — heavy resources (broker client,
+    asyncpg pool) are built per-run inside ``run_once`` so the scheduler is
+    safe to import in tests without side effects.
+    """
+
+    def __init__(
+        self,
+        *,
+        engine_equity: Decimal = Decimal("10000"),
+        platform_capital: Decimal = Decimal("10000"),
+        database_url: str | None = None,
+        broker: AlpacaPaperBrokerAdapter | None = None,
+        data: AlpacaDataAdapter | None = None,
+        risk_store: RiskStateStore | None = None,
+        aar_writer: AARWriter | None = None,
+    ) -> None:
+        self._engine_equity = engine_equity
+        self._platform_capital = platform_capital
+        self._database_url = database_url if database_url is not None else os.getenv("DATABASE_URL")
+        self._injected_broker = broker
+        self._injected_data = data
+        self._injected_risk_store = risk_store
+        self._injected_aar_writer = aar_writer
+
+    async def run_once(self, *, as_of: date_t | None = None) -> RunSummary:
+        as_of = as_of or datetime.now(UTC).date()
+        pool: Any | None = None
+        try:
+            # 0. Build pool (and DB-backed deps) iff DATABASE_URL is set and
+            #    no explicit risk_store/aar_writer were injected.
+            if self._injected_risk_store is None and self._injected_aar_writer is None:
+                if self._database_url:
+                    pool = await build_asyncpg_pool(self._database_url)
+                    logger.info("sigma.scheduler.pool_open")
+
+            broker = self._injected_broker or AlpacaPaperBrokerAdapter()
+            data = self._injected_data or AlpacaDataAdapter()
+            risk_store = self._injected_risk_store or (
+                PostgresRiskStateStore(pool) if pool is not None else InMemoryRiskStateStore()
+            )
+            aar_writer = self._injected_aar_writer or (
+                AARWriter(pool) if pool is not None else None
+            )
+
+            governor = RiskGovernor(
+                state_store=risk_store,
+                broker=broker,
+                platform_capital=self._platform_capital,
+            )
+            await governor.register_engine(ENGINE_ID, self._engine_equity)
+            logger.info("sigma.scheduler.run_start", as_of=as_of.isoformat(), persistent=pool is not None)
+
+            setup = SigmaSetupDetection(data=data)
+            lifecycle = SigmaLifecycleAnalysis()
+            execution = SigmaExecutionRisk()
+            sigma_aar = SigmaAARLogging()
+            gate = SigmaCapitalGate(engine_equity=self._engine_equity)
+            order_manager = SigmaOrderManager(
+                broker=broker,
+                governor=governor,
+                capital_gate=gate,
+                lifecycle=lifecycle,
+                aar=sigma_aar,
+                aar_writer=aar_writer,
+            )
+
+            # 1. Reconcile first so the open-position counter is fresh
+            #    before we decide on new entries. Sigma's pre-grad cap is
+            #    $1,500 of $10k engine equity → 15% per trade for sizing.
+            new_aars = await order_manager.reconcile(
+                sizing_pct_of_engine_equity=Decimal("0.15"),
+            )
+
+            # 2. Scan for new setups.
+            candidates = await setup.scan(as_of=as_of)
+            logger.info("sigma.scheduler.scan_done", n_candidates=len(candidates))
+
+            submitted = 0
+            account = await broker.get_account()
+            for cand in candidates:
+                assessment = lifecycle.assess(cand)
+                if assessment.phase is not Phase.ACTIVE:
+                    continue
+                state = await risk_store.get(ENGINE_ID)
+                open_positions = state.open_positions if state else 0
+                decision = execution.decide(
+                    assessment,
+                    account_capital=account.equity,
+                    open_positions=open_positions,
+                )
+                if decision is None:
+                    continue
+                placed = await order_manager.submit_decision(decision, assessment)
+                if placed:
+                    submitted += 1
+
+            logger.info(
+                "sigma.scheduler.run_done",
+                as_of=as_of.isoformat(),
+                n_candidates=len(candidates),
+                submitted=submitted,
+                new_aars=len(new_aars),
+            )
+            return RunSummary(
+                as_of=as_of,
+                n_candidates=len(candidates),
+                n_submitted=submitted,
+                aars=new_aars,
+            )
+        finally:
+            if pool is not None:
+                await pool.close()
+                logger.info("sigma.scheduler.pool_closed")
 
 
 async def _ping_healthcheck(suffix: str = "") -> None:

@@ -139,6 +139,7 @@ async def _make_manager(
     *,
     broker: AsyncMock | None = None,
     starting_equity: Decimal = Decimal("10000"),
+    aar_writer: AsyncMock | None = None,
 ) -> tuple[SigmaOrderManager, AsyncMock, RiskGovernor]:
     broker = broker or _broker_mock()
     store = InMemoryRiskStateStore()
@@ -150,6 +151,7 @@ async def _make_manager(
         capital_gate=SigmaCapitalGate(engine_equity=starting_equity),
         lifecycle=SigmaLifecycleAnalysis(),
         aar=SigmaAARLogging(),
+        aar_writer=aar_writer,
     )
     return manager, broker, governor
 
@@ -325,6 +327,52 @@ async def test_reconcile_cancels_tier2_when_tier1_cancelled_before_fill() -> Non
     aars = await manager.reconcile(sizing_pct_of_engine_equity=Decimal("0.15"))
     assert aars == []
     broker.cancel_order.assert_awaited_once_with("alp-2")
+
+
+async def test_reconcile_writes_aar_via_writer_when_provided() -> None:
+    """When an AAR writer is supplied, every logged AAR is also persisted."""
+    aar_writer = AsyncMock()
+    aar_writer.write_aar.return_value = True
+    manager, broker, _ = await _make_manager(aar_writer=aar_writer)
+    manager._trade_assessments["AAPL_1700000000"] = _assessment()  # noqa: SLF001
+
+    broker.list_recent_orders.return_value = [
+        _placed_order(
+            client_order_id="AAPL_1700000000_tier1",
+            side=OrderSide.BUY,
+            order_type=OrderType.MARKET,
+            broker_order_id="alp-1",
+            order_class=OrderClass.BRACKET,
+            status=OrderStatus.FILLED,
+            filled_qty=Decimal("4"),
+            avg_fill_price=Decimal("184.00"),
+            filled_at=datetime(2026, 5, 10, 14, 0, tzinfo=UTC),
+        ),
+        _placed_order(
+            client_order_id="AAPL_1700000000_tier2",
+            side=OrderSide.SELL,
+            order_type=OrderType.LIMIT,
+            broker_order_id="alp-2",
+            status=OrderStatus.FILLED,
+            filled_qty=Decimal("4"),
+            avg_fill_price=Decimal("188.00"),
+            filled_at=datetime(2026, 5, 11, 18, 30, tzinfo=UTC),
+        ),
+    ]
+
+    aars = await manager.reconcile(sizing_pct_of_engine_equity=Decimal("0.15"))
+    # Both Tier 1 (partial) and Tier 2 (final) AARs persisted.
+    assert aar_writer.write_aar.await_count == 2
+    persisted = [c.args[0] for c in aar_writer.write_aar.call_args_list]
+    assert {a.exit_reason for a in persisted} == {
+        ExitReason.TIER1_MID_BAND,
+        ExitReason.TIER2_OPPOSITE_BAND,
+    }
+    # Returned-AAR list matches what was persisted.
+    assert {a.exit_reason for a in aars} == {
+        ExitReason.TIER1_MID_BAND,
+        ExitReason.TIER2_OPPOSITE_BAND,
+    }
 
 
 async def test_reconcile_is_idempotent_within_process() -> None:

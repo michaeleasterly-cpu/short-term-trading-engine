@@ -21,6 +21,7 @@ from decimal import Decimal
 import structlog
 
 from tpcore.aar.models import AfterActionReport
+from tpcore.aar.writer import AARWriter
 from tpcore.interfaces.broker import (
     BrokerExecutionInterface,
     Order,
@@ -78,12 +79,14 @@ class SigmaOrderManager:
         capital_gate: SigmaCapitalGate,
         lifecycle: SigmaLifecycleAnalysis,
         aar: SigmaAARLogging,
+        aar_writer: AARWriter | None = None,
     ) -> None:
         self._broker = broker
         self._governor = governor
         self._capital_gate = capital_gate
         self._lifecycle = lifecycle
         self._aar = aar
+        self._aar_writer = aar_writer
         # ticker → PhaseAssessment for every trade we've placed this process.
         # The broker is the source of truth for orders; this is a side cache
         # so we can carry assessment context (entry, stop, mid/upper) into the
@@ -204,6 +207,8 @@ class SigmaOrderManager:
                     rule_compliance=True,
                 )
                 self._aar.log_aar(aar)
+                if self._aar_writer is not None:
+                    await self._aar_writer.write_aar(aar)
                 new_aars.append(aar)
                 self._tier1_logged.add(trade_key)
                 # Update lifecycle state — phase stays ACTIVE while tier 2 runs.
@@ -261,6 +266,8 @@ class SigmaOrderManager:
                     rule_compliance=True,
                 )
                 self._aar.log_aar(final)
+                if self._aar_writer is not None:
+                    await self._aar_writer.write_aar(final)
                 new_aars.append(final)
                 self._tier2_logged.add(trade_key)
                 await self._governor.record_fill(

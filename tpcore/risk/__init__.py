@@ -9,10 +9,12 @@ from .governor import (
     RiskState,
     RiskStateStore,
 )
+from .persistent_store import PostgresRiskStateStore
 
 __all__ = [
     "CheckResult",
     "InMemoryRiskStateStore",
+    "PostgresRiskStateStore",
     "RiskDecision",
     "RiskGovernor",
     "RiskLimits",
