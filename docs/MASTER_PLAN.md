@@ -2,7 +2,7 @@
 
 **Version:** 1.0
 **Date:** 2026-05-13
-**Status:** Phase 0 Complete — Ready for Engine Builds
+**Status:** Phases 0–2 Complete — Sigma & Reversion in paper trading on Railway
 
 ---
 
@@ -123,7 +123,7 @@ All engines share the **5-Plug model:** Setup Detection → Lifecycle Analysis �
 
 **Rationale (CHOP):** ADX alone can produce false range signals — a young trend can sit below ADX 20 while CHOP has already dropped, signalling that price is no longer truly chopping. CHOP is the second confirmation that the range-trade thesis is alive on the *candidate stock*, not the index.
 
-Earlier drafts of this plan gated Market Context on **SPY-level** CHOP+ADX. The backtest in `sigma/backtest_chop.py` falsified that design: the SPY-level gate hurt risk-adjusted returns (Sharpe **−28%** vs baseline; max drawdown nearly 2× deeper) while the per-stock gate improved them (Sharpe **+26%**). The shipped engine therefore uses per-stock CHOP — the candidate's own data — and the SPY-level path was removed.
+Earlier drafts of this plan gated Market Context on **SPY-level** CHOP+ADX. The backtest in `sigma/backtest_chop.py` (results in `backtests/chop_backtest_results.json`) falsified that design: the SPY-level gate hurt risk-adjusted returns (Sharpe **−28.4%** vs baseline; max drawdown nearly 2× deeper) while the per-stock gate improved them (Sharpe **+26.2%**, baseline +0.28 → +0.36). All 7 trades the per-stock CHOP gate rejected were baseline losers (each hit the −3% stop, see `backtests/rejected_by_chop.csv`) — the rejection set was clean, not a coin flip. The shipped engine therefore uses per-stock CHOP — the candidate's own data — and the SPY-level path was removed.
 
 **Known weakness — transitional regimes:** When the market is neither cleanly chopping nor cleanly trending (CHOP 38.2–61.8 on the stock, mixed ADX trajectory), Sigma still issues entries that are vulnerable to follow-through breakouts. 2023 was such a year (per-stock-CHOP variant: 25 trades, 18 stop-outs, −27% total return). **Defense for transitional regimes is the position sizing rules and `tpcore.risk.RiskGovernor` — not CHOP.** Specifically: the pre-grad $1,500 cap, the 5% daily / 10% weekly P&L kill switches, and the platform-wide 60% net-long exposure cap are what bound the worst-case loss in a regime that range-scalp can't read.
 
@@ -163,6 +163,8 @@ Earlier drafts of this plan gated Market Context on **SPY-level** CHOP+ADX. The 
 - Must pass `tpcore.fundamentals.EarningsQualityCheck` — if LOW, trade suppressed.
 
 **Phase 2 enhancement (deferred):** Refine the ADX > 25 shutdown by combining with CHOP — a high-ADX *and* high-CHOP regime (volatile chop, not a clean trend) is the worst environment for fading because reversion to the mean keeps overshooting in both directions. Concretely: if ADX > 25 AND CHOP > 61.8, suppress entries even if Statistical Extremity flags. Not implemented in Phase 1; revisit after Reversion has paper-traded for ≥ 30 trades.
+
+**Earnings-quality gate backtest:** `reversion/backtest_earnings_quality.py` (results in `backtests/earnings_quality_backtest.json`) compares baseline vs the live `EarningsQualityCheck` gate. Sample is small — 9 trades over ~10 months, 2 rejected by the gate — but the directional signal is consistent with intent: Sharpe improved from **−0.42** (baseline) to **−0.05** (gated). Infrastructure and methodology are in place; statistically meaningful evaluation requires deeper fundamentals data (FMP free tier currently caps at 5 quarters).
 
 **Graduation:** 30 trades, 60% win rate, avg return ≥ 2%.
 
@@ -291,6 +293,7 @@ These are built only after at least two engines are live.
 
 - `DataValidationSuite` (10 delisting spot checks, S&P 500 constituent comparison, split verification).
 - Passed before any engine graduates to live.
+- Implementation in progress — Data Validation Suite under design (see `docs/decisions/` for delisting/split/constituent approach).
 
 ---
 
@@ -317,17 +320,14 @@ These are built only after at least two engines are live.
 
 ## 9. Build Order
 
-| Phase | Deliverable | Dependencies | Status |
-| --- | --- | --- | --- |
-| Phase 0 | `tpcore` + platform schema + ingestion script | — | Complete |
-| Phase 1 | Sigma engine — full plug implementation | Phase 0 | Next (Tue) |
-| Phase 1b | Sigma paper trading (3+ months), Parity Harness active | Phase 1 | Jul–Oct 2026 |
-| Phase 2 | Reversion engine | Phase 1b success | Late 2026 |
-| Phase 3 | Allocator + Forensics (basic) | 2 engines live | 2027 |
-| Phase 4 | Vector engine | Phase 3 | 2027 |
-| Phase 5 | S2 (satellite) | Platform proven | 2027–2028 |
-| Phase 6 | Catalyst | Platform proven | 2027–2028 |
-| Phase 7 | Sentinel | At least one recession signal needed | When triggered |
+| Phase | Deliverable | Status |
+| --- | --- | --- |
+| Phase 0 | `tpcore` + platform schema + ingestion script | Complete |
+| Phase 1 | Sigma engine — full plug implementation | Complete |
+| Phase 1b | Sigma paper trading (3+ months), Parity Harness active | In progress — deployed on Railway, cron `0 22 * * MON-FRI` UTC, Healthchecks active |
+| Phase 2 | Reversion engine | Complete — deployed on Railway alongside Sigma, Healthchecks active |
+| Phase 3 | Allocator + Forensics (basic) | Deferred — waiting on paper track record from Sigma + Reversion |
+| Phase 4–7 | Vector, S2, Catalyst, Sentinel | Deferred |
 
 ---
 
