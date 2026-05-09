@@ -1,0 +1,33 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.env
+.env.local
+.envrc
+
+# IDE
+.vscode/
+.idea/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Data / local artifacts
+*.db
+*.sqlite3
+data/raw/
+data/cache/
+logs/
+
+# Claude Code per-user state (skills are regenerated from skills-lock.json)
+.claude/
