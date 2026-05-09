@@ -132,6 +132,25 @@ class TradeRecord:
     notional: float = 0.0
     pnl: float = 0.0
     return_pct: float = 0.0  # pnl / notional
+    # Entry-day regime context — populated by run_variant for the trade dump.
+    # Optional so existing tests that build TradeRecord by hand keep working.
+    adx_at_entry: float | None = None
+    chop_at_entry: float | None = None
+    spy_chop_at_entry: float | None = None
+
+    @property
+    def exit_reason(self) -> str:
+        if self.stopped_out:
+            return "stop"
+        if self.tier1_exit_date is not None and self.tier2_exit_date == self.tier1_exit_date:
+            return "tier1+tier2_same_bar"
+        if self.tier2_exit_date is not None and self.tier1_exit_date is not None:
+            return "tier2"
+        if self.tier2_exit_date is not None and self.tier1_exit_date is None:
+            return "time_out"
+        if self.tier1_exit_date is not None:
+            return "tier1_open"
+        return "open"
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -313,11 +332,18 @@ def run_variant(
     start: date,
     end: date,
     require_chop: bool,
+    spy_chop_series: pd.Series | None = None,
 ) -> tuple[list[TradeRecord], list[RejectedRow]]:
     """Walk every trading day; pick top-1 candidate; simulate forward.
 
+    Args:
+        require_chop: per-stock CHOP > 38.2 required to qualify a candidate.
+        spy_chop_series: when provided, days where SPY CHOP < 38.2 produce
+            zero candidates regardless of per-stock state — replicates the
+            shipped Sigma Market Context gate.
+
     Returns:
-        (trades, rejected_rows).  ``rejected_rows`` is non-empty only on the
+        (trades, rejected_rows). ``rejected_rows`` is non-empty only on the
         baseline variant — it captures setups baseline allows but
         chop-enhanced would have refused, with their would-be returns.
     """
@@ -332,6 +358,17 @@ def run_variant(
     for di, today in enumerate(all_dates):
         if di < next_eligible_idx:
             continue
+
+        # SPY-level CHOP gate (Market Context). Days with SPY CHOP missing or
+        # below the sideways-weak floor produce zero candidates.
+        spy_chop_today = float("nan")
+        if spy_chop_series is not None:
+            try:
+                spy_chop_today = float(spy_chop_series.loc[today])
+            except KeyError:
+                spy_chop_today = float("nan")
+            if math.isnan(spy_chop_today) or spy_chop_today <= CHOP_SIDEWAYS_WEAK:
+                continue
 
         best: tuple[float, str, pd.DataFrame, int] | None = None
         # (score, ticker, panel, idx-in-panel)
@@ -384,6 +421,17 @@ def run_variant(
             ticker=ticker,
             entry_date=df.index[idx + 1],
         )
+        # Stamp the entry-day regime context onto the trade for the year dump.
+        record.adx_at_entry = float(df.iloc[idx]["adx"])
+        record.chop_at_entry = float(df.iloc[idx]["chop"])
+        if spy_chop_series is not None:
+            record.spy_chop_at_entry = spy_chop_today
+        else:
+            try:
+                spy_today = float(panels["SPY"].loc[today, "chop"]) if "SPY" in panels else float("nan")
+            except KeyError:
+                spy_today = float("nan")
+            record.spy_chop_at_entry = spy_today
         trades.append(record)
         # Lock out the strategy until the trade exits, so equity curves are
         # comparable across variants without phantom-overlap artefacts.
@@ -480,42 +528,109 @@ def compute_summary(variant: str, trades: list[TradeRecord]) -> VariantSummary:
 # ────────────────────────────────────────────────────────────────────────────
 
 
-def render_summary(b: VariantSummary, c: VariantSummary) -> str:
+def render_summary(summaries: list[VariantSummary]) -> str:
+    """Render N variants side-by-side. First column is the metric name."""
+
     def fmt_pct(x: float) -> str:
         return f"{x*100:+.2f}%"
 
     def fmt_sharpe(x: float) -> str:
         return f"{x:+.2f}"
 
-    rows = [
-        ("trades", str(b.n_trades), str(c.n_trades)),
-        ("win rate", fmt_pct(b.win_rate), fmt_pct(c.win_rate)),
-        ("avg return / trade", fmt_pct(b.avg_return_pct), fmt_pct(c.avg_return_pct)),
-        ("Sharpe (annualized)", fmt_sharpe(b.sharpe_annualized), fmt_sharpe(c.sharpe_annualized)),
-        ("max drawdown", fmt_pct(b.max_drawdown_pct), fmt_pct(c.max_drawdown_pct)),
-        (
-            "profit factor",
-            "inf" if math.isinf(b.profit_factor) else f"{b.profit_factor:.2f}",
-            "inf" if math.isinf(c.profit_factor) else f"{c.profit_factor:.2f}",
-        ),
+    def fmt_pf(x: float) -> str:
+        return "inf" if math.isinf(x) else f"{x:.2f}"
+
+    rows: list[tuple[str, list[str]]] = [
+        ("trades", [str(s.n_trades) for s in summaries]),
+        ("win rate", [fmt_pct(s.win_rate) for s in summaries]),
+        ("avg return / trade", [fmt_pct(s.avg_return_pct) for s in summaries]),
+        ("Sharpe (annualized)", [fmt_sharpe(s.sharpe_annualized) for s in summaries]),
+        ("max drawdown", [fmt_pct(s.max_drawdown_pct) for s in summaries]),
+        ("profit factor", [fmt_pf(s.profit_factor) for s in summaries]),
     ]
-    width_label = max(len(r[0]) for r in rows)
-    width_val = max(len(r[1]) for r in rows + [("col", "baseline", "")])
-    width_val = max(width_val, len("baseline"), len("chop-enhanced"))
-    out = []
-    out.append(f"  {'metric'.ljust(width_label)}    {'baseline'.rjust(width_val)}    {'chop-enhanced'.rjust(width_val)}")
-    out.append(f"  {'-'*width_label}    {'-'*width_val}    {'-'*width_val}")
-    for label, lhs, rhs in rows:
-        out.append(f"  {label.ljust(width_label)}    {lhs.rjust(width_val)}    {rhs.rjust(width_val)}")
+    width_label = max(len(r[0]) for r in rows + [("metric", [])])
+    headers = [s.variant for s in summaries]
+    col_width = max(
+        max((len(v) for r in rows for v in r[1]), default=0),
+        max(len(h) for h in headers),
+    )
+    out: list[str] = []
+    out.append("  " + "metric".ljust(width_label) + "    " + "    ".join(h.rjust(col_width) for h in headers))
+    out.append("  " + "-" * width_label + "    " + "    ".join("-" * col_width for _ in headers))
+    for label, vals in rows:
+        out.append(
+            "  " + label.ljust(width_label) + "    " + "    ".join(v.rjust(col_width) for v in vals)
+        )
     return "\n".join(out)
 
 
-def conclusion_line(b: VariantSummary, c: VariantSummary) -> str:
-    if b.sharpe_annualized == 0:
+def conclusion_line(summaries: list[VariantSummary]) -> str:
+    """Compare each non-baseline variant's Sharpe to the first (baseline)."""
+    if not summaries or summaries[0].sharpe_annualized == 0:
         return "baseline Sharpe is zero — no comparison possible"
-    delta = (c.sharpe_annualized - b.sharpe_annualized) / abs(b.sharpe_annualized)
-    direction = "improved" if delta > 0 else "did not improve"
-    return f"CHOP filter {direction} Sharpe by {delta*100:+.1f}% (baseline {b.sharpe_annualized:.2f} → enhanced {c.sharpe_annualized:.2f})"
+    base = summaries[0]
+    parts: list[str] = []
+    for s in summaries[1:]:
+        delta = (s.sharpe_annualized - base.sharpe_annualized) / abs(base.sharpe_annualized)
+        direction = "improved" if delta > 0 else "did not improve"
+        parts.append(
+            f"  {s.variant}: {direction} Sharpe by {delta*100:+.1f}% "
+            f"(baseline {base.sharpe_annualized:+.2f} → {s.sharpe_annualized:+.2f})"
+        )
+    return "\n".join(parts)
+
+
+def write_year_trade_dump(
+    trades: list[TradeRecord],
+    year: int,
+    output_path: Path,
+) -> int:
+    """Emit a per-trade CSV for ``year`` with regime context — used to dig
+    into anomalous years (e.g. 2023's per-stock-CHOP underperformance).
+    Returns the row count written."""
+    yr_trades = [t for t in trades if t.entry_date.year == year]
+    with output_path.open("w", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(
+            [
+                "ticker",
+                "entry_date",
+                "entry_price",
+                "tier1_exit_date",
+                "tier1_exit_price",
+                "tier2_exit_date",
+                "tier2_exit_price",
+                "stopped_out",
+                "holding_days",
+                "pnl",
+                "return_pct",
+                "exit_reason",
+                "adx_at_entry",
+                "chop_at_entry",
+                "spy_chop_at_entry",
+            ]
+        )
+        for t in yr_trades:
+            writer.writerow(
+                [
+                    t.ticker,
+                    t.entry_date.isoformat(),
+                    f"{t.entry_price:.4f}",
+                    t.tier1_exit_date.isoformat() if t.tier1_exit_date else "",
+                    f"{t.tier1_exit_price:.4f}" if t.tier1_exit_price is not None else "",
+                    t.tier2_exit_date.isoformat() if t.tier2_exit_date else "",
+                    f"{t.tier2_exit_price:.4f}" if t.tier2_exit_price is not None else "",
+                    str(t.stopped_out).lower(),
+                    t.holding_days,
+                    f"{t.pnl:.6f}",
+                    f"{t.return_pct:.6f}",
+                    t.exit_reason,
+                    f"{t.adx_at_entry:.4f}" if t.adx_at_entry is not None else "",
+                    f"{t.chop_at_entry:.4f}" if t.chop_at_entry is not None else "",
+                    f"{t.spy_chop_at_entry:.4f}" if t.spy_chop_at_entry is not None else "",
+                ]
+            )
+    return len(yr_trades)
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -553,6 +668,13 @@ async def amain(args: argparse.Namespace) -> int:
     logger.info("computing indicators  tickers=%d", len(raw))
     panels = {ticker: precompute_indicators(df) for ticker, df in raw.items()}
 
+    # Pull SPY's CHOP series for the SPY-CHOP variant. None → variant skipped.
+    spy_chop_series: pd.Series | None = None
+    if "SPY" in panels:
+        spy_chop_series = panels["SPY"]["chop"]
+    else:
+        logger.warning("SPY not in panels — skipping SPY-CHOP variant")
+
     logger.info("running baseline (ADX-only)")
     baseline_trades, rejected = run_variant(
         variant="baseline",
@@ -562,24 +684,40 @@ async def amain(args: argparse.Namespace) -> int:
         require_chop=False,
     )
 
-    logger.info("running chop-enhanced (ADX + CHOP > 38.2)")
-    chop_trades, _ = run_variant(
-        variant="chop-enhanced",
+    logger.info("running per-stock-chop (ADX + CHOP > 38.2)")
+    per_stock_trades, _ = run_variant(
+        variant="per-stock-chop",
         panels=panels,
         start=args.start,
         end=args.end,
         require_chop=True,
     )
 
-    baseline_summary = compute_summary("baseline", baseline_trades)
-    chop_summary = compute_summary("chop-enhanced", chop_trades)
+    spy_chop_trades: list[TradeRecord] = []
+    if spy_chop_series is not None:
+        logger.info("running spy-chop (Market Context gate + per-stock CHOP)")
+        spy_chop_trades, _ = run_variant(
+            variant="spy-chop",
+            panels=panels,
+            start=args.start,
+            end=args.end,
+            require_chop=True,
+            spy_chop_series=spy_chop_series,
+        )
+
+    summaries: list[VariantSummary] = [
+        compute_summary("baseline", baseline_trades),
+        compute_summary("per-stock-chop", per_stock_trades),
+    ]
+    if spy_chop_series is not None:
+        summaries.append(compute_summary("spy-chop", spy_chop_trades))
 
     print()
     print(f"Sigma CHOP backtest  {args.start} → {args.end}  universe={len(raw)} names")
     print()
-    print(render_summary(baseline_summary, chop_summary))
+    print(render_summary(summaries))
     print()
-    print(conclusion_line(baseline_summary, chop_summary))
+    print(conclusion_line(summaries))
     print()
 
     payload = {
@@ -588,9 +726,8 @@ async def amain(args: argparse.Namespace) -> int:
         "end": args.end.isoformat(),
         "universe": list(args.universe),
         "n_universe_loaded": len(raw),
-        "baseline": asdict(baseline_summary),
-        "chop_enhanced": asdict(chop_summary),
-        "conclusion": conclusion_line(baseline_summary, chop_summary),
+        "variants": {s.variant: asdict(s) for s in summaries},
+        "conclusion": conclusion_line(summaries),
     }
     results_path = args.output_dir / args.results_file
     results_path.write_text(json.dumps(payload, indent=2))
@@ -613,6 +750,11 @@ async def amain(args: argparse.Namespace) -> int:
                 )
         print(f"rejected-by-chop → {rejected_path}  rows={len(rejected)}")
 
+    if args.year is not None:
+        year_path = args.output_dir / f"chop_{args.year}_trades.csv"
+        n_rows = write_year_trade_dump(per_stock_trades, args.year, year_path)
+        print(f"per-stock-chop {args.year} trades → {year_path}  rows={n_rows}")
+
     return 0
 
 
@@ -631,6 +773,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--results-file", default=DEFAULT_RESULTS_FILE)
     p.add_argument("--rejected-file", default=DEFAULT_REJECTED_FILE)
     p.add_argument("--skip-rejected-csv", action="store_true")
+    p.add_argument(
+        "--year",
+        type=int,
+        default=None,
+        help="If set, dump every per-stock-CHOP trade in this calendar year to CSV with regime context.",
+    )
     return p.parse_args(argv)
 
 
