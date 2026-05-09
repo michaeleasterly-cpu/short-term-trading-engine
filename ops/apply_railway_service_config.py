@@ -64,9 +64,24 @@ query($id: String!) {
 
 
 def _load_token() -> str:
+    """Resolve a Railway API token from (in order) env, then CLI config.
+
+    ``RAILWAY_API_TOKEN`` and ``RAILWAY_TOKEN`` are the names the Railway
+    CLI also honors for non-interactive use; ``RAILWAY_API_KEY`` is what
+    this repo's ``.env`` happens to be named.
+    """
+    import os
+
+    for env in ("RAILWAY_API_TOKEN", "RAILWAY_TOKEN", "RAILWAY_API_KEY"):
+        token = os.getenv(env)
+        if token:
+            return token
     cfg = pathlib.Path.home() / ".railway" / "config.json"
     if not cfg.exists():
-        sys.exit(f"no Railway CLI config at {cfg}; run `railway login` first")
+        sys.exit(
+            "no RAILWAY_API_TOKEN/RAILWAY_TOKEN/RAILWAY_API_KEY in env and no "
+            f"Railway CLI config at {cfg}; run `railway login` or set the env var"
+        )
     data = json.loads(cfg.read_text())
     token = (data.get("user") or {}).get("accessToken")
     if not token:
