@@ -18,6 +18,7 @@ Multi-engine automated trading platform. US equities, daily timeframe, fully aut
 - Every engine has 5 Plugs: setup_detection, lifecycle_analysis, execution_risk, aar_logging, capital_gate.
 
 ## Session Rules
+- Read docs/STYLE_GUIDE.md before writing any code.
 - Read docs/glossary.md if present before coding.
 - Never modify tpcore without checking all engines that consume it.
 - Every trade path goes through tpcore.risk.RiskGovernor.check_trade().
