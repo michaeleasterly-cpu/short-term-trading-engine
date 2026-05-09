@@ -47,6 +47,10 @@ ste-check-imports = "tpcore.scripts.check_imports:main"
 include = ["tpcore*", "sigma*", "reversion*"]
 exclude = ["tests*"]
 
+[tool.setuptools.package-data]
+# Validation suite ships hand-curated YAML fixtures alongside the code.
+"tpcore.quality.validation" = ["fixtures/*.yaml"]
+
 [tool.ruff]
 line-length = 110
 target-version = "py311"

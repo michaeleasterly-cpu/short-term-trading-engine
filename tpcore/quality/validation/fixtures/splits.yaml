@@ -1,0 +1,55 @@
+# Forward-split fixtures for the Data Validation Suite.
+#
+# The check verifies that the post-adjusted close on the last trading day
+# before `split_date` matches the close on `split_date` (ratio ≈ 1.0). A
+# missed split would yield a ratio near `ratio_den / ratio_num`
+# (e.g. 0.25 for a 4:1) — orders of magnitude outside the [0.99, 1.01] band.
+#
+# Reverse splits are excluded from MVP scope.
+
+# 2020 — twin big-tech splits same day
+- ticker: AAPL
+  split_date: 2020-08-31
+  ratio: "4:1"
+
+- ticker: TSLA
+  split_date: 2020-08-31
+  ratio: "5:1"
+
+# 2021
+- ticker: NVDA
+  split_date: 2021-07-20
+  ratio: "4:1"
+
+# 2022 — three large-caps in two months
+- ticker: AMZN
+  split_date: 2022-06-06
+  ratio: "20:1"
+
+- ticker: GOOGL
+  split_date: 2022-07-18
+  ratio: "20:1"
+
+- ticker: TSLA
+  split_date: 2022-08-25
+  ratio: "3:1"
+
+# 2024
+- ticker: WMT
+  split_date: 2024-02-26
+  ratio: "3:1"
+
+- ticker: NVDA
+  split_date: 2024-06-10
+  ratio: "10:1"
+
+# Outside the current 50-name backtest universe — these will fail until the
+# bootstrap pulls the broader US universe; documented as such so the
+# coverage gap is visible in the report rather than silently absent.
+- ticker: CMG
+  split_date: 2024-06-26
+  ratio: "50:1"
+
+- ticker: AVGO
+  split_date: 2024-07-15
+  ratio: "10:1"

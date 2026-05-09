@@ -1,0 +1,89 @@
+# Hand-curated delisting fixtures for the Data Validation Suite.
+#
+# Each entry is a public delisting reachable via Alpaca's `status=inactive`
+# asset listing. Mix of bankruptcies and acquisitions across 2020–2024.
+# `delisting_date` is the recorded effective delisting date — the check
+# tolerates ±5 trading days against the observed last bar (Alpaca's
+# bootstrap infers the date from the last bar, so exact equality is rare).
+#
+# `alt_tickers` lists symbols the same security may have traded under
+# (often the pre-bankruptcy primary, before the post-petition "Q" suffix).
+# The check passes if any of [ticker] + alt_tickers satisfies the four
+# conditions in spec §3.1.
+#
+# Maintenance: when adding entries, prefer events ≥ 2018 (Alpaca free-tier
+# coverage) and try to keep at least one event per cause/period.
+
+# 2020 — pandemic-era bankruptcies
+- ticker: HTZGQ
+  alt_tickers: [HTZ]
+  delisting_date: 2020-10-29
+  reason: bankruptcy
+  notes: "Hertz Global Holdings — Chapter 11; later relisted as HTZ"
+
+- ticker: WLLBQ
+  alt_tickers: [WLL]
+  delisting_date: 2020-04-01
+  reason: bankruptcy
+  notes: "Whiting Petroleum — Chapter 11"
+
+- ticker: LK
+  delisting_date: 2020-06-29
+  reason: delisted
+  notes: "Luckin Coffee — NASDAQ delisted after accounting fraud"
+
+# 2023 — regional banking crisis + post-COVID retail bankruptcies
+- ticker: SIVBQ
+  alt_tickers: [SIVB]
+  delisting_date: 2023-03-17
+  reason: bankruptcy
+  notes: "SVB Financial Group — Chapter 11 after FDIC takeover"
+
+- ticker: SBNYQ
+  alt_tickers: [SBNY]
+  delisting_date: 2023-03-12
+  reason: receivership
+  notes: "Signature Bank — NYDFS / FDIC takeover"
+
+- ticker: FRC
+  delisting_date: 2023-05-01
+  reason: receivership
+  notes: "First Republic Bank — FDIC takeover, sold to JPMorgan"
+
+- ticker: BBBYQ
+  alt_tickers: [BBBY]
+  delisting_date: 2023-04-23
+  reason: bankruptcy
+  notes: "Bed Bath & Beyond — Chapter 11"
+
+# 2023 — large-cap acquisitions
+- ticker: ATVI
+  delisting_date: 2023-10-13
+  reason: acquired
+  notes: "Activision Blizzard — acquired by Microsoft"
+
+- ticker: VMW
+  delisting_date: 2023-11-22
+  reason: acquired
+  notes: "VMware — acquired by Broadcom"
+
+# 2024 — recent
+- ticker: SPLK
+  delisting_date: 2024-03-18
+  reason: acquired
+  notes: "Splunk — acquired by Cisco"
+
+- ticker: FTCH
+  delisting_date: 2024-01-30
+  reason: acquired
+  notes: "Farfetch — acquired by Coupang"
+
+- ticker: SI
+  delisting_date: 2024-09-13
+  reason: liquidated
+  notes: "Silvergate Capital — voluntary liquidation"
+
+- ticker: TUP
+  delisting_date: 2024-09-17
+  reason: bankruptcy
+  notes: "Tupperware Brands — Chapter 11"

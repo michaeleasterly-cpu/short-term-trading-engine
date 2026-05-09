@@ -1,0 +1,165 @@
+# Constituent snapshot for the Data Validation Suite.
+#
+# `current_sp500` is a hand-curated subset of S&P 500 names — the largest
+# market caps plus a sector-balanced sample. The check requires every name
+# here to be present in `platform.prices_daily` with a bar within the last
+# 5 trading days (proves daily ingestion is alive). Refresh manually when
+# you want to expand coverage; the master plan §6.3 only commits to a
+# snapshot + recent removals for MVP.
+#
+# `recent_removals` is the survivorship-bias coverage set: names that were
+# removed from the index (or simply matter for bias correction) and should
+# still appear in `platform.prices_daily`, marked `delisted=true` where
+# applicable.
+
+current_sp500_snapshot_date: 2026-05-10
+
+current_sp500:
+  # Mega-cap tech
+  - AAPL
+  - MSFT
+  - GOOGL
+  - GOOG
+  - AMZN
+  - META
+  - NVDA
+  - TSLA
+  - AVGO
+  - ORCL
+  - ADBE
+  - CRM
+  - CSCO
+  - INTC
+  - AMD
+  - QCOM
+  - IBM
+  # Communication services
+  - NFLX
+  - DIS
+  - CMCSA
+  - VZ
+  - T
+  # Financials
+  - JPM
+  - BAC
+  - WFC
+  - GS
+  - MS
+  - C
+  - AXP
+  - BLK
+  - SCHW
+  - V
+  - MA
+  - SPGI
+  # Healthcare
+  - UNH
+  - JNJ
+  - PFE
+  - ABBV
+  - MRK
+  - LLY
+  - TMO
+  - ABT
+  - DHR
+  - BMY
+  - GILD
+  - AMGN
+  # Consumer staples
+  - PG
+  - KO
+  - PEP
+  - WMT
+  - COST
+  - PM
+  - MO
+  # Consumer discretionary
+  - HD
+  - LOW
+  - MCD
+  - SBUX
+  - NKE
+  - TGT
+  - BKNG
+  # Energy
+  - XOM
+  - CVX
+  - COP
+  - SLB
+  # Industrials
+  - BA
+  - CAT
+  - HON
+  - GE
+  - MMM
+  - LMT
+  - RTX
+  - UPS
+  - DE
+  - UNP
+  # Utilities
+  - NEE
+  - DUK
+  - SO
+  # Real estate / materials
+  - LIN
+  - APD
+
+recent_removals:
+  # 2023 banking crisis
+  - ticker: SIVBQ
+    removed_date: 2023-03-15
+    reason: bankruptcy
+    expect_delisted: true
+  - ticker: SBNYQ
+    removed_date: 2023-03-15
+    reason: receivership
+    expect_delisted: true
+  - ticker: FRC
+    removed_date: 2023-05-04
+    reason: receivership
+    expect_delisted: true
+  # 2023 retail bankruptcy
+  - ticker: BBBYQ
+    removed_date: 2022-04-18
+    reason: bankruptcy
+    expect_delisted: true
+  # 2023 large-cap acquisitions
+  - ticker: ATVI
+    removed_date: 2023-10-13
+    reason: acquired_by_msft
+    expect_delisted: true
+  - ticker: VMW
+    removed_date: 2023-11-22
+    reason: acquired_by_avgo
+    expect_delisted: true
+  # 2024
+  - ticker: SPLK
+    removed_date: 2024-03-18
+    reason: acquired_by_csco
+    expect_delisted: true
+  - ticker: FTCH
+    removed_date: 2024-01-30
+    reason: acquired_by_coupang
+    expect_delisted: true
+  - ticker: TUP
+    removed_date: 2024-09-17
+    reason: bankruptcy
+    expect_delisted: true
+  - ticker: SI
+    removed_date: 2024-09-13
+    reason: liquidated
+    expect_delisted: true
+  # Pre-2023
+  - ticker: HTZGQ
+    removed_date: 2020-10-29
+    reason: bankruptcy
+    expect_delisted: true
+  - ticker: LK
+    removed_date: 2020-06-29
+    reason: delisted
+    expect_delisted: true
+  - ticker: WLLBQ
+    removed_date: 2020-04-01
+    reason: bankruptcy
+    expect_delisted: true
