@@ -1,5 +1,6 @@
 {
   "$schema": "https://railway.com/railway.schema.json",
+  "_comment_on_cron_and_restart": "Railway reads buildCommand and startCommand from this file on every build, but `cronSchedule` and `restartPolicyType` live at the service-instance level and are NOT auto-populated from here. Run `python ops/apply_railway_service_config.py` whenever you change them — that script POSTs the values via the GraphQL serviceInstanceUpdate mutation. Idempotent.",
   "build": {
     "builder": "RAILPACK",
     "buildCommand": "pip install -e ."
