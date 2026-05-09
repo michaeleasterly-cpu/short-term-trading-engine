@@ -11,6 +11,9 @@ venv/
 .env.local
 .envrc
 
+# OS
+.DS_Store
+
 # IDE
 .vscode/
 .idea/
