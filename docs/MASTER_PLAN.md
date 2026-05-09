@@ -98,7 +98,7 @@ All tables live in the `platform` schema. The `engine` column discriminates engi
 | `platform.parity_drift_log` | Paper vs live fill drift |
 | `platform.risk_state` | Risk Governor state per engine |
 | `platform.allocations` | (Stub) Future Allocator capital assignments |
-| `platform.coroner_triggers` | (Stub) Future Forensics sprint triggers |
+| `platform.forensics_triggers` | (Stub) Future Forensics sprint triggers |
 | `platform.tax_lots` | Tax lot FIFO records |
 
 ---
@@ -181,7 +181,7 @@ Swing Score: Technical (0–40), Catalyst (0–35), Sentiment (0–25). Threshol
 **Setup Detection:**
 - Layer 0: Short interest > 20% (FINRA, release-date matched), days-to-cover > 5, borrow rate acceleration.
 - Layer 1: Social volume spike (ApeWisdom).
-- Creep Score ≥ 50 (pre-chat), ≥ 60 (social alert).
+- Squeeze Score ≥ 50 (pre-chat), ≥ 60 (social alert).
 
 **Data Limitations:**
 - FINRA data is bi-monthly with 2-week lag. Used for regime detection only — live entry triggered by real-time borrow rates and social signals.
