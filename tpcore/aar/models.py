@@ -14,6 +14,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 class ExitReason(str, Enum):
     TAKE_PROFIT = "take_profit"
+    TIER1_MID_BAND = "tier1_mid_band"
+    TIER2_OPPOSITE_BAND = "tier2_opposite_band"
     STOP_LOSS = "stop_loss"
     TIME_STOP = "time_stop"
     THESIS_BROKEN = "thesis_broken"
