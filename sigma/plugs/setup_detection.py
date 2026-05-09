@@ -33,12 +33,22 @@ LOOKBACK_DAYS = 60
 ADX_PERIOD = 14
 BB_PERIOD = 20
 BB_NUM_STD = 2.0
+CHOP_PERIOD = 14
+VWAP_PERIOD = 20
+SPY_SYMBOL = "SPY"
 
 # Universe-filter thresholds from plan §4.1.
 MIN_PRICE = Decimal("10")
 MIN_AVG_VOLUME = 1_000_000
 MAX_ADX = 20.0
 MAX_WIDTH_PCTILE = 0.30
+
+# Choppiness Index regime thresholds (Dreiss).
+CHOP_SIDEWAYS_STRONG = 61.8
+CHOP_SIDEWAYS_WEAK = 38.2
+
+# How close to VWAP_20 the candidate must be for the neutrality bonus.
+VWAP_NEUTRALITY_PCT = 0.01  # ±1%
 
 
 def _bars_to_frame(bars: list[Bar]) -> pd.DataFrame:
@@ -132,6 +142,44 @@ def _volume_trend(df: pd.DataFrame, fast: int = 5, slow: int = 20) -> float:
     return float(fast_avg / slow_avg)
 
 
+def compute_chop(
+    high: pd.Series,
+    low: pd.Series,
+    close: pd.Series,
+    period: int = CHOP_PERIOD,
+) -> pd.Series:
+    """Choppiness Index (Dreiss).
+
+    ``CHOP = 100 * log10(SUM(ATR(1), n) / (MaxHi(n) - MinLo(n))) / log10(n)``
+
+    Output bounded in roughly ``[0, 100]``. Above 61.8 → sideways chop;
+    below 38.2 → trending; between → transitional. Returns ``NaN`` for
+    bars with insufficient lookback.
+    """
+    prev_close = close.shift(1)
+    tr = pd.concat(
+        [(high - low).abs(), (high - prev_close).abs(), (low - prev_close).abs()],
+        axis=1,
+    ).max(axis=1)
+    sum_atr = tr.rolling(period, min_periods=period).sum()
+    max_high = high.rolling(period, min_periods=period).max()
+    min_low = low.rolling(period, min_periods=period).min()
+    denom = (max_high - min_low).replace(0, np.nan)
+    ratio = sum_atr / denom
+    # log10 of non-positive values would warn; mask them out.
+    safe_ratio = ratio.where(ratio > 0)
+    return 100.0 * np.log10(safe_ratio) / np.log10(period)
+
+
+def _rolling_vwap(close: pd.Series, volume: pd.Series, period: int = VWAP_PERIOD) -> pd.Series:
+    """Rolling N-day VWAP: ``sum(close*volume, n) / sum(volume, n)``."""
+    pv = close * volume
+    return (
+        pv.rolling(period, min_periods=period).sum()
+        / volume.rolling(period, min_periods=period).sum()
+    )
+
+
 def _score_channel_quality(adx_now: float, width_pctile: float, width_stability: float) -> float:
     """0–40. Lower ADX, tighter percentile, more stable width → higher score."""
     if np.isnan(adx_now) or np.isnan(width_pctile):
@@ -152,15 +200,48 @@ def _score_entry_precision(band_proximity_val: float) -> float:
     return float(max(0.0, min(35.0, 35.0 * (1.0 - band_proximity_val / 0.5))))
 
 
-def _score_market_context(volume_ratio: float) -> float:
-    """0–25. Stable-to-rising volume preferred; collapse penalised."""
-    if volume_ratio >= 1.5:
-        return 25.0
-    if volume_ratio >= 1.0:
-        return 18.0
-    if volume_ratio >= 0.7:
+def _score_spy_direction(spy_adx: float, spy_chop: float) -> float:
+    """0–15. SPY-wide regime: rewards confirmed sideways chop, penalizes trends.
+
+    A young trend can still leave ADX < 20 even while the market is
+    decisively *not* chopping; CHOP is the second confirmation that the
+    range-trade thesis is alive at the index level.
+    """
+    if np.isnan(spy_adx) or np.isnan(spy_chop):
+        return 0.0
+    if spy_adx >= MAX_ADX:
+        return 0.0
+    if spy_chop > CHOP_SIDEWAYS_STRONG:
+        return 15.0
+    if spy_chop > CHOP_SIDEWAYS_WEAK:
         return 10.0
-    return 4.0
+    return 0.0
+
+
+def _score_vwap_neutrality(last_close: float, last_vwap_20: float) -> float:
+    """0–10. Last close within ±1% of VWAP_20 → 10; else 0.
+
+    Rationale: a candidate priced far from its short-window VWAP is
+    already on a directional excursion — not neutral enough for a
+    range-scalp entry.
+    """
+    if np.isnan(last_vwap_20) or last_vwap_20 <= 0:
+        return 0.0
+    deviation = abs(last_close - last_vwap_20) / last_vwap_20
+    return 10.0 if deviation <= VWAP_NEUTRALITY_PCT else 0.0
+
+
+def _score_market_context(
+    *,
+    spy_adx: float,
+    spy_chop: float,
+    last_close: float,
+    last_vwap_20: float,
+) -> float:
+    """0–25 = SPY-direction (0–15) + VWAP-neutrality (0–10)."""
+    return _score_spy_direction(spy_adx, spy_chop) + _score_vwap_neutrality(
+        last_close, last_vwap_20
+    )
 
 
 class SigmaSetupDetection(BaseEnginePlug):
@@ -192,13 +273,22 @@ class SigmaSetupDetection(BaseEnginePlug):
 
         ``as_of`` is the inclusive end date (NYSE session). Bars are fetched
         from ``as_of - 90`` calendar days back to give 60-ish trading sessions.
+        Before iterating the universe, fetches SPY once to compute the
+        market-wide ADX(14) and CHOP(14) used by ``_score_market_context``.
         """
         start = as_of - timedelta(days=LOOKBACK_DAYS + 30)
+        spy_adx, spy_chop = await self._spy_regime(start, as_of)
+        logger.info(
+            "sigma.setup.spy_regime",
+            spy_adx=None if pd.isna(spy_adx) else round(spy_adx, 2),
+            spy_chop=None if pd.isna(spy_chop) else round(spy_chop, 2),
+        )
+
         candidates: list[SetupCandidate] = []
         for symbol in self._universe:
             bars = await self._data.get_daily_bars(symbol, start, as_of)
             try:
-                cand = self._evaluate(symbol, as_of, bars)
+                cand = self._evaluate(symbol, as_of, bars, spy_adx=spy_adx, spy_chop=spy_chop)
             except Exception as exc:  # pragma: no cover - defensive
                 logger.warning("sigma.setup.evaluate_failed", symbol=symbol, error=str(exc))
                 continue
@@ -207,7 +297,34 @@ class SigmaSetupDetection(BaseEnginePlug):
         candidates.sort(key=lambda c: c.sigma_score, reverse=True)
         return candidates
 
-    def _evaluate(self, symbol: str, as_of: date, bars: list[Bar]) -> SetupCandidate | None:
+    async def _spy_regime(self, start: date, as_of: date) -> tuple[float, float]:
+        """Fetch SPY bars and compute ``(SPY ADX, SPY CHOP)``.
+
+        Returns ``(NaN, NaN)`` on data outage — that propagates through to
+        ``_score_spy_direction`` as a 0-point contribution, which is the
+        right safe default (no SPY conviction → no SPY bonus).
+        """
+        try:
+            spy_bars = await self._data.get_daily_bars(SPY_SYMBOL, start, as_of)
+        except Exception as exc:
+            logger.warning("sigma.setup.spy_fetch_failed", error=str(exc))
+            return float("nan"), float("nan")
+        df = _bars_to_frame(spy_bars)
+        if len(df) < max(ADX_PERIOD, CHOP_PERIOD) + 5:
+            return float("nan"), float("nan")
+        adx_series = _compute_adx(df)
+        chop_series = compute_chop(df["high"], df["low"], df["close"])
+        return float(adx_series.iloc[-1]), float(chop_series.iloc[-1])
+
+    def _evaluate(
+        self,
+        symbol: str,
+        as_of: date,
+        bars: list[Bar],
+        *,
+        spy_adx: float,
+        spy_chop: float,
+    ) -> SetupCandidate | None:
         df = _bars_to_frame(bars)
         if len(df) < BB_PERIOD + 5:
             return None
@@ -239,11 +356,22 @@ class SigmaSetupDetection(BaseEnginePlug):
             stability = max(0.0, 1.0 - float(recent_widths.std(ddof=0) / recent_widths.mean()))
         else:
             stability = 0.0
-        vol_ratio = _volume_trend(df)
+
+        chop_series = compute_chop(df["high"], df["low"], df["close"])
+        chop_now = float(chop_series.iloc[-1]) if not chop_series.empty else float("nan")
+        if np.isnan(chop_now):
+            return None
+        vwap_series = _rolling_vwap(df["close"], df["volume"])
+        last_vwap_20 = float(vwap_series.iloc[-1]) if not vwap_series.empty else float("nan")
 
         cq = _score_channel_quality(adx_now, width_pctile, stability)
         ep = _score_entry_precision(prox)
-        mc = _score_market_context(vol_ratio)
+        mc = _score_market_context(
+            spy_adx=spy_adx,
+            spy_chop=spy_chop,
+            last_close=last_close,
+            last_vwap_20=last_vwap_20,
+        )
         score = cq + ep + mc
         if score < SCORE_WEAK:
             return None
@@ -259,6 +387,7 @@ class SigmaSetupDetection(BaseEnginePlug):
             band_proximity=round(prox, 4),
             bb_width_percentile=round(width_pctile, 4),
             adx=round(adx_now, 2),
+            chop=round(chop_now, 2),
             suggested_entry_price=Decimal(str(round(last_close, 2))),
             bb_upper=Decimal(str(round(upper_now, 2))),
             bb_lower=Decimal(str(round(lower_now, 2))),

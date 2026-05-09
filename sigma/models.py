@@ -54,6 +54,10 @@ class SetupCandidate(BaseModel):
     )
     bb_width_percentile: float = Field(ge=0, le=1)
     adx: float
+    chop: float = Field(
+        ge=0, le=100,
+        description="Choppiness Index (Dreiss). >61.8 = sideways chop; <38.2 = trending; between = transitional.",
+    )
     suggested_entry_price: Decimal
     bb_upper: Decimal
     bb_lower: Decimal

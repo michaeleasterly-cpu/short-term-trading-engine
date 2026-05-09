@@ -113,6 +113,10 @@ def as_of() -> date:
 def mock_provider(as_of: date) -> MockDataProvider:
     return MockDataProvider(
         {
+            # SPY is a market-context input — Sigma fetches it once per scan.
+            # Range-bound prints give SPY CHOP > 61.8 with ADX < 20, which is
+            # what the new Market Context scorer needs to award full points.
+            "SPY": _range_bound_series("SPY", as_of, base=500.0),
             "AAPL": _range_bound_series("AAPL", as_of, base=180.0),
             "MSFT": _range_bound_series("MSFT", as_of, base=420.0),
             "AMZN": _trending_series("AMZN", as_of, base=200.0),
@@ -154,6 +158,58 @@ async def test_setup_detection_returns_candidates(
     assert tickers.isdisjoint({"AMZN", "GOOGL", "TSLA", "NVDA", "WMT"})
 
 
+def test_compute_chop_low_for_trending_high_for_oscillating() -> None:
+    """CHOP must drop on a clean trend and rise on noisy oscillation."""
+    import pandas as pd
+
+    from sigma.plugs.setup_detection import CHOP_PERIOD, compute_chop
+
+    n = 60
+    # Pure trend: every day +1.
+    trend_close = pd.Series([100.0 + i for i in range(n)])
+    trend_high = trend_close + 0.5
+    trend_low = trend_close - 0.5
+    trend_chop = float(compute_chop(trend_high, trend_low, trend_close).iloc[-1])
+
+    # Tight oscillation around 100 with ±0.5 swings.
+    osc_close = pd.Series([100.0 + (0.5 if i % 2 else -0.5) for i in range(n)])
+    osc_high = osc_close + 0.05
+    osc_low = osc_close - 0.05
+    osc_chop = float(compute_chop(osc_high, osc_low, osc_close).iloc[-1])
+
+    assert trend_chop < 38.2, f"trending series should give low CHOP, got {trend_chop}"
+    assert osc_chop > 61.8, f"oscillating series should give high CHOP, got {osc_chop}"
+    # Window obeyed.
+    assert pd.isna(compute_chop(trend_high, trend_low, trend_close).iloc[CHOP_PERIOD - 2])
+
+
+def test_score_market_context_buckets() -> None:
+    """SPY CHOP/ADX combinations land in the right Market Context bucket."""
+    from sigma.plugs.setup_detection import _score_market_context
+
+    # SPY ADX < 20 AND CHOP > 61.8 → 15 SPY-direction; +10 VWAP within 1% → 25.
+    assert _score_market_context(
+        spy_adx=12.0, spy_chop=70.0, last_close=180.00, last_vwap_20=180.50,
+    ) == 25.0
+    # SPY ADX < 20 AND 38.2 < CHOP ≤ 61.8 → 10 SPY-direction; VWAP miss → 10 total.
+    assert _score_market_context(
+        spy_adx=15.0, spy_chop=50.0, last_close=180.0, last_vwap_20=200.0,
+    ) == 10.0
+    # SPY CHOP < 38.2 → 0 SPY-direction even with ADX < 20; VWAP within 1% → 10.
+    assert _score_market_context(
+        spy_adx=10.0, spy_chop=30.0, last_close=180.0, last_vwap_20=180.5,
+    ) == 10.0
+    # SPY ADX ≥ 20 → 0 SPY-direction regardless of CHOP.
+    assert _score_market_context(
+        spy_adx=22.0, spy_chop=70.0, last_close=180.0, last_vwap_20=400.0,
+    ) == 0.0
+    # NaN inputs: safe zero.
+    assert _score_market_context(
+        spy_adx=float("nan"), spy_chop=float("nan"),
+        last_close=180.0, last_vwap_20=float("nan"),
+    ) == 0.0
+
+
 def test_lifecycle_analysis_classifies_phase() -> None:
     plug = SigmaLifecycleAnalysis()
     assert plug.healthcheck()["ok"]
@@ -168,6 +224,7 @@ def test_lifecycle_analysis_classifies_phase() -> None:
         band_proximity=0.10,
         bb_width_percentile=0.15,
         adx=15.0,
+        chop=70.0,
         suggested_entry_price=Decimal("180.00"),
         bb_upper=Decimal("184.00"),
         bb_lower=Decimal("176.00"),
