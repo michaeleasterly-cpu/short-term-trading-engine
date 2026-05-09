@@ -17,6 +17,12 @@
       "cronSchedule": "0 22 * * MON-FRI",
       "restartPolicyType": "NEVER",
       "source": {"repo": "michaeleasterly-cpu/short-term-trading-engine"}
+    },
+    "validation-scheduler": {
+      "startCommand": "python ops/cron_validation.py",
+      "cronSchedule": "0 6 * * SUN",
+      "restartPolicyType": "NEVER",
+      "source": {"repo": "michaeleasterly-cpu/short-term-trading-engine"}
     }
   }
 }
