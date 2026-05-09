@@ -125,12 +125,13 @@ class FundamentalsCache:
         start_date: date | None = None,  # noqa: ARG002 - kept for API symmetry
         end_date: date | None = None,
     ) -> int:
-        """Pull the latest 5 quarters from FMP and cache every period.
+        """Pull all available quarters from FMP and cache every period.
 
-        ``start_date`` is accepted for API symmetry with the brief but is
-        effectively ignored — FMP free tier returns only the most recent
-        5 quarters regardless of date filters. Returns the row count
-        upserted.
+        ``start_date`` is accepted for API symmetry but the actual depth is
+        bounded by the FMP plan: free tier silently caps at 5 quarters;
+        Starter and above honor the adapter's ``DEFAULT_LIMIT`` (currently
+        40 quarters ≈ 10 years). ``end_date`` is the PIT cutoff. Returns
+        the row count upserted.
         """
         if self._adapter is None:
             raise DataProviderOutage("FundamentalsCache.backfill requires an adapter")

@@ -49,7 +49,7 @@ _BALANCE_FIELDS = (
     "filingDate", "date", "period",
 )
 
-DEFAULT_LIMIT = 5  # FMP free tier caps `limit` at 5; ~1.25 years of quarters.
+DEFAULT_LIMIT = 40  # ~10 years of quarterly data. Free tier silently caps at 5; Starter+ honors larger values.
 DEFAULT_TIMEOUT_S = 20.0
 
 

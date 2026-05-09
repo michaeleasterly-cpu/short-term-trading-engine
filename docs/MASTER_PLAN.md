@@ -164,7 +164,18 @@ Earlier drafts of this plan gated Market Context on **SPY-level** CHOP+ADX. The 
 
 **Phase 2 enhancement (deferred):** Refine the ADX > 25 shutdown by combining with CHOP — a high-ADX *and* high-CHOP regime (volatile chop, not a clean trend) is the worst environment for fading because reversion to the mean keeps overshooting in both directions. Concretely: if ADX > 25 AND CHOP > 61.8, suppress entries even if Statistical Extremity flags. Not implemented in Phase 1; revisit after Reversion has paper-traded for ≥ 30 trades.
 
-**Earnings-quality gate backtest:** `reversion/backtest_earnings_quality.py` (results in `backtests/earnings_quality_backtest.json`) compares baseline vs the live `EarningsQualityCheck` gate. Sample is small — 9 trades over ~10 months, 2 rejected by the gate — but the directional signal is consistent with intent: Sharpe improved from **−0.42** (baseline) to **−0.05** (gated). Infrastructure and methodology are in place; statistically meaningful evaluation requires deeper fundamentals data (FMP free tier currently caps at 5 quarters).
+**Earnings-quality gate backtest:** `reversion/backtest_earnings_quality.py` (results in `backtests/earnings_quality_backtest.json`) compares baseline vs the live `EarningsQualityCheck` gate. After upgrading FMP to Starter and backfilling `platform.fundamentals_quarterly` to 1,790 rows / 47 tickers / ~10 quarterly years, the 2018-01-01 → 2025-12-31 sample produces 61 baseline trades and 34 gated trades. The gate rejects 33 of the would-be baseline candidates (39% of which would have been winners — the gate trades a small share of upside for a meaningful share of downside protection).
+
+| Metric | Baseline | Gated |
+| --- | --- | --- |
+| Trades | 61 | 34 |
+| Win rate | 42.6% | 41.2% |
+| Avg return / trade | −0.74% | −0.68% |
+| Sharpe (annualized) | **−0.42** | **−0.28** (+33.3%) |
+| Max drawdown | −55.9% | **−33.7%** (−40%) |
+| Profit factor | 0.74 | 0.76 |
+
+**Conclusion — gate works as intended; underlying strategy needs work.** The earnings-quality gate produces a real, statistically-not-trivial risk-reduction signal: Sharpe up 33%, max drawdown down 40%, profit factor inching up. That validates the gate's *intent* — it does filter out a higher-than-base-rate share of losers. But both Sharpe values are still negative across the 8-year window: the underlying mean-reversion setup is not profitable on this universe and this period as currently parameterized. The next thread for Reversion is the *strategy* (z-score thresholds, score weights, exit rules), not the *gate*.
 
 **Graduation:** 30 trades, 60% win rate, avg return ≥ 2%.
 

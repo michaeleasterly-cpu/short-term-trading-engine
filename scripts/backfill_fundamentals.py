@@ -1,13 +1,13 @@
-"""One-shot backfill: cache the most recent FMP quarterly fundamentals for the
-50-name backtest universe into ``platform.fundamentals_quarterly``.
+"""One-shot backfill: cache FMP quarterly fundamentals for the 50-name
+backtest universe into ``platform.fundamentals_quarterly``.
 
-FMP free tier reality (verified empirically):
-    * The ``limit`` parameter is capped at 5.
-    * ``from`` / ``to`` are silently ignored.
-So this script captures only ~5 quarters per ticker (≈ 1.25 years). The
-``--start`` / ``--end`` flags are accepted for API symmetry with the brief
-but have no effect on the free tier — they pass through to the adapter
-which uses ``end`` as the PIT cutoff.
+FMP plan reality:
+    * Free tier silently caps ``limit`` at 5 (~1.25 years of quarters)
+      and ignores ``from`` / ``to`` filters.
+    * Starter and above honor the adapter's ``DEFAULT_LIMIT`` (40 quarters
+      ≈ 10 years). ``--start`` / ``--end`` are still mostly cosmetic; the
+      adapter pulls the most-recent ``DEFAULT_LIMIT`` quarters and uses
+      ``end`` only as the PIT cutoff.
 
 Usage::
 
