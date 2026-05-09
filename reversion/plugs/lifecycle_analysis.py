@@ -14,20 +14,25 @@ Plus the engine-specific gates:
     * ADX > 25 → engine disabled (already filtered in setup_detection,
       but re-checked here so the lifecycle is robust to candidates
       that drift trending while in the queue).
-    * Earnings-quality screen: ``tpcore.fundamentals.earnings_quality``
-      must grade the candidate. ``LOW`` → trade suppressed
-      (``earnings_quality_blocked=True``). The current implementation is
-      a stub that raises ``NotImplementedError`` and depends on
-      fundamentals data the live data adapter doesn't fetch yet — we
-      catch the exception and pass through (allow), logging a warning
-      so the gate becomes effective the moment the underlying ships.
+    * Earnings-quality screen: caller passes a ``fundamentals`` dict
+      from ``tpcore.fmp.FMPFundamentalsAdapter``; we run
+      ``check_earnings_quality`` against it. ``LOW`` → trade suppressed
+      (``earnings_quality_blocked=True``). **No fundamentals → no
+      trade.** ``DataProviderOutage`` from the adapter propagates so
+      the scheduler can decide whether the whole scan should bail.
 """
 from __future__ import annotations
 
 from decimal import ROUND_HALF_UP, Decimal
+from typing import Any
 
 import structlog
 
+from tpcore.fundamentals.earnings_quality import (
+    EarningsQualityGrade,
+    EarningsQualityResult,
+    check_earnings_quality,
+)
 from tpcore.interfaces.engine_plug import BaseEnginePlug
 
 from reversion.models import (
@@ -47,51 +52,35 @@ def _round_cents(d: Decimal) -> Decimal:
     return d.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
-def _earnings_quality_blocked(symbol: str) -> bool:
-    """Run the earnings-quality screen if the underlying is available.
+def _evaluate_earnings_quality(
+    fundamentals: dict[str, Any] | None,
+    *,
+    symbol: str,
+) -> tuple[bool, EarningsQualityResult | None]:
+    """Run the earnings-quality screen and return ``(blocked, result)``.
 
-    The shipped ``tpcore.fundamentals.earnings_quality.check_earnings_quality``
-    raises ``NotImplementedError`` and depends on fundamentals data that
-    the live data adapter doesn't fetch today (no FMP/EDGAR adapter
-    wired yet). We deliberately call it anyway so the integration point
-    exists — when the underlying is implemented, this gate becomes
-    effective with no further engine change. Until then, log and allow.
+    No fundamentals dict → blocked (no data, no trade).
+    LOW grade → blocked. HIGH/MEDIUM → not blocked.
     """
-    try:
-        from tpcore.fundamentals.earnings_quality import (
-            EarningsQualityGrade,
-            check_earnings_quality,
-        )
-
-        # We have no fundamentals provider plumbed yet — this call will
-        # NotImplementedError, which is fine. Once the real adapter is
-        # wired, replace these zeros with a fundamentals fetch.
-        result = check_earnings_quality(
-            net_income=Decimal("0"),
-            fcf=Decimal("0"),
-            total_assets=Decimal("0"),
-            revenue=Decimal("0"),
-            receivables=Decimal("0"),
-            capex=Decimal("0"),
-            fcf_history=[],
-        )
-        # NOTE: The plan brief calls this "overall_quality"; the actual
-        # field on EarningsQualityResult is ``grade``.
-        return result.grade is EarningsQualityGrade.LOW
-    except NotImplementedError:
-        logger.debug(
-            "reversion.lifecycle.earnings_quality_unimplemented",
-            symbol=symbol,
-            note="allowing the trade — gate will activate when tpcore.fundamentals ships",
-        )
-        return False
-    except Exception as exc:  # pragma: no cover - defensive
+    if fundamentals is None:
         logger.warning(
-            "reversion.lifecycle.earnings_quality_failed",
+            "reversion.lifecycle.no_fundamentals",
             symbol=symbol,
-            error=str(exc),
+            note="trade suppressed — no fundamentals data available for the gate",
         )
-        return False
+        return True, None
+    result = check_earnings_quality(fundamentals)
+    blocked = result.grade is EarningsQualityGrade.LOW
+    logger.info(
+        "reversion.lifecycle.earnings_quality",
+        symbol=symbol,
+        grade=result.grade.value,
+        fcf_to_ni=str(result.fcf_to_ni_ratio) if result.fcf_to_ni_ratio is not None else None,
+        accruals=str(result.accruals_ratio) if result.accruals_ratio is not None else None,
+        notes=result.notes,
+        blocked=blocked,
+    )
+    return blocked, result
 
 
 class ReversionLifecycleAnalysis(BaseEnginePlug):
@@ -114,7 +103,20 @@ class ReversionLifecycleAnalysis(BaseEnginePlug):
             },
         }
 
-    def assess(self, candidate: SetupCandidate) -> PhaseAssessment:
+    def assess(
+        self,
+        candidate: SetupCandidate,
+        *,
+        fundamentals: dict[str, Any] | None = None,
+    ) -> PhaseAssessment:
+        """Build a ``PhaseAssessment`` for ``candidate``.
+
+        ``fundamentals`` is the dict from
+        ``tpcore.fmp.FMPFundamentalsAdapter.get_quarterly_fundamentals``.
+        When ``None`` (e.g. live adapter unreachable, or test fixture
+        without one), the earnings-quality gate fires and the trade is
+        suppressed — "no data, no trade" per the plan policy.
+        """
         entry = candidate.suggested_entry_price
         if candidate.direction is Direction.LONG:
             stop = _round_cents(entry * (Decimal("1") - HARD_STOP_PCT))
@@ -127,10 +129,11 @@ class ReversionLifecycleAnalysis(BaseEnginePlug):
         else:
             phase = Phase.ACTIVE
 
-        blocked = _earnings_quality_blocked(candidate.ticker)
+        blocked, eq_result = _evaluate_earnings_quality(fundamentals, symbol=candidate.ticker)
         if blocked:
             phase = Phase.EXHAUSTED
 
+        eq_grade = eq_result.grade.value if eq_result is not None else "no_data"
         return PhaseAssessment(
             ticker=candidate.ticker,
             as_of=candidate.as_of,
@@ -143,7 +146,7 @@ class ReversionLifecycleAnalysis(BaseEnginePlug):
             earnings_quality_blocked=blocked,
             notes=(
                 f"score={candidate.reversion_score} z={candidate.z_score:+.2f} "
-                f"adx={candidate.adx_14}"
+                f"adx={candidate.adx_14} eq={eq_grade}"
             ),
         )
 

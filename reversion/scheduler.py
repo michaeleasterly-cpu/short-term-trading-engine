@@ -22,6 +22,8 @@ from tpcore.aar.models import AfterActionReport
 from tpcore.aar.writer import AARWriter
 from tpcore.alpaca import AlpacaDataAdapter, AlpacaPaperBrokerAdapter
 from tpcore.db import build_asyncpg_pool
+from tpcore.fmp import FMPFundamentalsAdapter
+from tpcore.outage import DataProviderOutage
 from tpcore.risk.governor import (
     InMemoryRiskStateStore,
     RiskGovernor,
@@ -75,6 +77,7 @@ class ReversionScheduler:
         data: AlpacaDataAdapter | None = None,
         risk_store: RiskStateStore | None = None,
         aar_writer: AARWriter | None = None,
+        fundamentals: FMPFundamentalsAdapter | None = None,
     ) -> None:
         self._engine_equity = engine_equity
         self._platform_capital = platform_capital
@@ -84,6 +87,7 @@ class ReversionScheduler:
         self._injected_data = data
         self._injected_risk_store = risk_store
         self._injected_aar_writer = aar_writer
+        self._injected_fundamentals = fundamentals
 
     async def run_once(self, *, as_of: date_t | None = None) -> RunSummary:
         as_of = as_of or datetime.now(UTC).date()
@@ -137,25 +141,50 @@ class ReversionScheduler:
             candidates = await setup.scan(as_of=as_of)
             logger.info("reversion.scheduler.scan_done", n_candidates=len(candidates))
 
+            # Fundamentals adapter — required for the earnings-quality gate
+            # per §4.2. Built lazily so a missing FMP_API_KEY in tests/dev
+            # doesn't crash the import path; the adapter constructor itself
+            # raises DataProviderOutage on missing key.
+            fundamentals_adapter = self._injected_fundamentals
+            owned_fundamentals = False
+            if fundamentals_adapter is None:
+                try:
+                    fundamentals_adapter = FMPFundamentalsAdapter()
+                    owned_fundamentals = True
+                except DataProviderOutage as exc:
+                    logger.warning(
+                        "reversion.scheduler.fundamentals_unavailable",
+                        error=str(exc),
+                        note="every candidate will be blocked by the earnings-quality gate",
+                    )
+                    fundamentals_adapter = None
+
             submitted = 0
             account = await broker.get_account()
-            for cand in candidates:
-                assessment = lifecycle.assess(cand)
-                if assessment.phase is not Phase.ACTIVE:
-                    continue
-                state = await risk_store.get(ENGINE_ID)
-                open_positions = state.open_positions if state else 0
-                decision = execution.decide(
-                    assessment,
-                    account_capital=account.equity,
-                    open_positions=open_positions,
-                    allow_shorts=self._allow_shorts,
-                )
-                if decision is None:
-                    continue
-                placed = await order_manager.submit_decision(decision, assessment)
-                if placed:
-                    submitted += 1
+            try:
+                for cand in candidates:
+                    fundamentals = await self._fetch_fundamentals(
+                        fundamentals_adapter, cand.ticker, cand.as_of
+                    )
+                    assessment = lifecycle.assess(cand, fundamentals=fundamentals)
+                    if assessment.phase is not Phase.ACTIVE:
+                        continue
+                    state = await risk_store.get(ENGINE_ID)
+                    open_positions = state.open_positions if state else 0
+                    decision = execution.decide(
+                        assessment,
+                        account_capital=account.equity,
+                        open_positions=open_positions,
+                        allow_shorts=self._allow_shorts,
+                    )
+                    if decision is None:
+                        continue
+                    placed = await order_manager.submit_decision(decision, assessment)
+                    if placed:
+                        submitted += 1
+            finally:
+                if owned_fundamentals and fundamentals_adapter is not None:
+                    await fundamentals_adapter.aclose()
 
             logger.info(
                 "reversion.scheduler.run_done",
@@ -174,6 +203,29 @@ class ReversionScheduler:
             if pool is not None:
                 await pool.close()
                 logger.info("reversion.scheduler.pool_closed")
+
+    @staticmethod
+    async def _fetch_fundamentals(
+        adapter: FMPFundamentalsAdapter | None, symbol: str, as_of: date_t
+    ) -> dict | None:
+        """Pull fundamentals for ``symbol``, returning ``None`` on outage.
+
+        ``DataProviderOutage`` from the adapter is logged and swallowed —
+        a single bad symbol shouldn't kill the whole scan. The lifecycle
+        plug treats ``None`` as "no data, no trade" and blocks just that
+        candidate.
+        """
+        if adapter is None:
+            return None
+        try:
+            return await adapter.get_quarterly_fundamentals(symbol, as_of_date=as_of)
+        except DataProviderOutage as exc:
+            logger.warning(
+                "reversion.scheduler.fundamentals_outage",
+                symbol=symbol,
+                error=str(exc),
+            )
+            return None
 
 
 async def _ping_healthcheck(suffix: str = "") -> None:

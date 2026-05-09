@@ -201,6 +201,45 @@ async def test_setup_detection_finds_overbought_short(
 # ────────────────────────────────────────────────────────────────────────────
 
 
+def _high_grade_fundamentals() -> dict:
+    """Fixture for a HIGH-grade earnings-quality result (clean fundamentals)."""
+    return {
+        "symbol": "AAPL",
+        "net_income": Decimal("100"),
+        "fcf": Decimal("95"),  # fcf/ni = 0.95 ≥ 0.90 → HIGH track
+        "total_assets": Decimal("1000"),  # accruals = 0.005 → HIGH track
+        "revenue": Decimal("500"),
+        "receivables": Decimal("50"),
+        "capex": Decimal("-20"),
+        # 4-entry history so the rev-rec YoY check has data to compare.
+        # Receivables and revenue growing in lockstep → rev-rec ratio ~ 1.0 → no flag.
+        "history": [
+            {"revenue": Decimal("490"), "receivables": Decimal("49"),
+             "fcf": Decimal("90"), "capex": Decimal("-19")},
+            {"revenue": Decimal("480"), "receivables": Decimal("48"),
+             "fcf": Decimal("88"), "capex": Decimal("-18")},
+            {"revenue": Decimal("470"), "receivables": Decimal("47"),
+             "fcf": Decimal("86"), "capex": Decimal("-17")},
+            {"revenue": Decimal("450"), "receivables": Decimal("45"),
+             "fcf": Decimal("82"), "capex": Decimal("-16")},
+        ],
+    }
+
+
+def _low_grade_fundamentals() -> dict:
+    """Fixture forcing LOW grade — fcf/ni well below 0.6."""
+    return {
+        "symbol": "AAPL",
+        "net_income": Decimal("100"),
+        "fcf": Decimal("40"),  # fcf/ni = 0.40 < 0.60 → LOW
+        "total_assets": Decimal("1000"),
+        "revenue": Decimal("500"),
+        "receivables": Decimal("50"),
+        "capex": Decimal("-20"),
+        "history": [],
+    }
+
+
 def _candidate(direction: Direction = Direction.LONG, adx: float = 15.0) -> SetupCandidate:
     return SetupCandidate(
         ticker="AAPL",
@@ -225,16 +264,17 @@ def _candidate(direction: Direction = Direction.LONG, adx: float = 15.0) -> Setu
 
 def test_lifecycle_assess_long_sets_stop_below_entry() -> None:
     plug = ReversionLifecycleAnalysis()
-    assessment = plug.assess(_candidate(Direction.LONG))
+    assessment = plug.assess(_candidate(Direction.LONG), fundamentals=_high_grade_fundamentals())
     assert assessment.phase is Phase.ACTIVE
     # Stop = entry × (1 − 0.08) = 92.00.
     assert assessment.stop_price == Decimal("92.00")
     assert assessment.target_20ma == Decimal("105.00")
+    assert assessment.earnings_quality_blocked is False
 
 
 def test_lifecycle_assess_short_sets_stop_above_entry() -> None:
     plug = ReversionLifecycleAnalysis()
-    assessment = plug.assess(_candidate(Direction.SHORT))
+    assessment = plug.assess(_candidate(Direction.SHORT), fundamentals=_high_grade_fundamentals())
     assert assessment.phase is Phase.ACTIVE
     # Stop = entry × (1 + 0.08) = 108.00.
     assert assessment.stop_price == Decimal("108.00")
@@ -243,13 +283,32 @@ def test_lifecycle_assess_short_sets_stop_above_entry() -> None:
 
 def test_lifecycle_disables_engine_above_adx_25() -> None:
     plug = ReversionLifecycleAnalysis()
-    assessment = plug.assess(_candidate(adx=27.0))
+    assessment = plug.assess(_candidate(adx=27.0), fundamentals=_high_grade_fundamentals())
     assert assessment.phase is Phase.EXHAUSTED
+
+
+def test_lifecycle_blocks_when_fundamentals_missing() -> None:
+    """No fundamentals → no trade — per the §4.2 gate behavior."""
+    plug = ReversionLifecycleAnalysis()
+    assessment = plug.assess(_candidate(Direction.LONG), fundamentals=None)
+    assert assessment.phase is Phase.EXHAUSTED
+    assert assessment.earnings_quality_blocked is True
+
+
+def test_lifecycle_blocks_when_earnings_quality_low() -> None:
+    """LOW-grade fundamentals → trade suppressed."""
+    plug = ReversionLifecycleAnalysis()
+    assessment = plug.assess(
+        _candidate(Direction.LONG), fundamentals=_low_grade_fundamentals()
+    )
+    assert assessment.phase is Phase.EXHAUSTED
+    assert assessment.earnings_quality_blocked is True
+    assert "eq=low" in (assessment.notes or "")
 
 
 def test_lifecycle_handle_tier1_fill_transitions_to_reverting() -> None:
     plug = ReversionLifecycleAnalysis()
-    assessment = plug.assess(_candidate(Direction.LONG))
+    assessment = plug.assess(_candidate(Direction.LONG), fundamentals=_high_grade_fundamentals())
     after = plug.handle_tier1_fill(assessment, position_remaining=2)
     assert after.tier1_filled is True
     assert after.remaining_shares == 2
@@ -261,7 +320,7 @@ def test_lifecycle_handle_tier1_fill_transitions_to_reverting() -> None:
 
 def test_lifecycle_advance_bar_fires_time_stop_after_5_days() -> None:
     plug = ReversionLifecycleAnalysis()
-    assessment = plug.assess(_candidate(Direction.LONG))
+    assessment = plug.assess(_candidate(Direction.LONG), fundamentals=_high_grade_fundamentals())
     a = assessment
     for _ in range(5):
         a = plug.advance_bar(a, touched_20ma=False)
@@ -271,7 +330,7 @@ def test_lifecycle_advance_bar_fires_time_stop_after_5_days() -> None:
 
 def test_lifecycle_advance_bar_resets_counter_on_touch() -> None:
     plug = ReversionLifecycleAnalysis()
-    a = plug.assess(_candidate(Direction.LONG))
+    a = plug.assess(_candidate(Direction.LONG), fundamentals=_high_grade_fundamentals())
     a = plug.advance_bar(a, touched_20ma=False)
     a = plug.advance_bar(a, touched_20ma=False)
     a = plug.advance_bar(a, touched_20ma=True)  # reset
@@ -429,8 +488,9 @@ async def test_pipeline_end_to_end(mock_provider: MockDataProvider, as_of: date)
 
     decisions: list[ExecutionDecision] = []
     open_positions = 0
+    high_grade = _high_grade_fundamentals()
     for cand in candidates:
-        assessment = lifecycle.assess(cand)
+        assessment = lifecycle.assess(cand, fundamentals=high_grade)
         if assessment.phase is not Phase.ACTIVE:
             continue
         decision = execute.decide(
