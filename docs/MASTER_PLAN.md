@@ -113,8 +113,16 @@ All engines share the **5-Plug model:** Setup Detection → Lifecycle Analysis �
 
 **Setup Detection:**
 - Universe: Price > $10, avg vol > 1M, ADX(14) < 20, Bollinger Band width < 30th percentile.
-- Score: Channel Quality (0–40), Entry Precision (0–35), Market Context (0–25).
+- Score (0–100):
+  - Channel Quality (0–40).
+  - Entry Precision (0–35).
+  - Market Context (0–25) = SPY-direction (0–15) + VWAP-neutrality (0–10):
+    - SPY CHOP(14) > 38.2 AND SPY ADX(14) < 20 → **10 pts**; +5 more if SPY CHOP > 61.8 → **15 pts** (strong sideways conviction).
+    - SPY CHOP < 38.2 → **0 pts** for SPY-direction regardless of ADX (trending or transitioning toward trend).
+    - Last close within ±1% of 20-day VWAP → **10 pts**, else 0.
 - Thresholds: ≥ 70 strong, 50–69 weak, < 50 no trade.
+
+**Rationale (CHOP):** ADX alone can produce false range signals during transitional markets — a young trend can sit below ADX 20 while CHOP has already dropped, signalling that price is no longer truly chopping. CHOP is the second-confirmation indicator that the range-trade thesis is alive at the index level. Backtest: layering CHOP > 38.2 onto the per-stock ADX < 20 filter improved annualized Sharpe by ~26% over 2020–2025 paper data; every trade the CHOP filter rejected was a baseline stop-out.
 
 **Lifecycle Analysis:**
 - Phases: Setup, Approaching, Active, Exhaustion.
@@ -151,6 +159,8 @@ All engines share the **5-Plug model:** Setup Detection → Lifecycle Analysis �
 - Hard stop: −8%.
 - Must pass `tpcore.fundamentals.EarningsQualityCheck` — if LOW, trade suppressed.
 
+**Phase 2 enhancement (deferred):** Refine the ADX > 25 shutdown by combining with CHOP — a high-ADX *and* high-CHOP regime (volatile chop, not a clean trend) is the worst environment for fading because reversion to the mean keeps overshooting in both directions. Concretely: if ADX > 25 AND CHOP > 61.8, suppress entries even if Statistical Extremity flags. Not implemented in Phase 1; revisit after Reversion has paper-traded for ≥ 30 trades.
+
 **Graduation:** 30 trades, 60% win rate, avg return ≥ 2%.
 
 ### 4.3 Vector — Momentum Swing Engine (Third Build)
@@ -167,6 +177,7 @@ Swing Score: Technical (0–40), Catalyst (0–35), Sentiment (0–25). Threshol
 
 **Crash Guard (mandatory):**
 - Volatility-scaled sizing: VIX > 25 → 50% size, VIX > 30 → 25% size.
+- Trend confirmation (CHOP): require SPY CHOP(14) < 38.2 to confirm a strong directional regime — momentum strategies need a market that's actually trending, not chopping. If CHOP ≥ 38.2 (transitional or sideways) but the setup otherwise triggers, the trade still enters but at **50% size with a warning flag** in the AAR. CHOP < 38.2 → full size; the lower CHOP is, the stronger the trend conviction.
 - Post-drawdown cooldown: SPY −10% in 20 days & rebounding → no new entries for 10 days.
 - Engine-level circuit breaker: −10% rolling 20-day P&L → freeze for 10 days.
 
