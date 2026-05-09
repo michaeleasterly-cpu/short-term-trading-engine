@@ -25,6 +25,7 @@ dependencies = [
     "tenacity>=8.2",
     "numpy>=1.26",
     "pandas>=2.2",
+    "alpaca-py>=0.30",
 ]
 
 [project.optional-dependencies]

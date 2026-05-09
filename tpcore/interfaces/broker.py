@@ -43,6 +43,17 @@ class OrderStatus(str, Enum):
     EXPIRED = "expired"
 
 
+class OrderClass(str, Enum):
+    """Bracket vs. plain order. Mirrors Alpaca's ``order_class``.
+
+    A BRACKET order carries linked take-profit and stop-loss legs that the
+    broker submits atomically; when one fills the other is auto-cancelled.
+    """
+
+    SIMPLE = "simple"
+    BRACKET = "bracket"
+
+
 class Order(BaseModel):
     """Cross-broker order model. Timestamps in UTC."""
 
@@ -57,6 +68,13 @@ class Order(BaseModel):
     time_in_force: TimeInForce = TimeInForce.DAY
     limit_price: Decimal | None = None
     stop_price: Decimal | None = None
+    order_class: OrderClass = OrderClass.SIMPLE
+    take_profit_limit_price: Decimal | None = Field(
+        default=None, description="Bracket TP leg limit price; required iff order_class=BRACKET."
+    )
+    stop_loss_stop_price: Decimal | None = Field(
+        default=None, description="Bracket SL leg stop price; required iff order_class=BRACKET."
+    )
     status: OrderStatus = OrderStatus.NEW
     filled_qty: Decimal = Decimal("0")
     avg_fill_price: Decimal | None = None
