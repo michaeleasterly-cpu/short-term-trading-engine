@@ -291,9 +291,11 @@ These are built only after at least two engines are live.
 
 ### 6.3 Data Quality Gates
 
-- `DataValidationSuite` (10 delisting spot checks, S&P 500 constituent comparison, split verification).
-- Passed before any engine graduates to live.
-- Implementation in progress — Data Validation Suite under design (see `docs/decisions/` for delisting/split/constituent approach).
+- `DataValidationSuite` — three correctness checks against `platform.prices_daily`: delistings (13 hand-curated entries), S&P 500 constituent snapshot (current names + recent removals), split verification (10 forward splits, ratio in [0.99, 1.01]).
+- Suite implementation: `tpcore.quality.validation` (CLI `python -m tpcore.quality.validation`, weekly cron `validation-scheduler` Sunday 06:00 UTC).
+- Capital Gate hook: `tpcore.quality.validation.capital_gate.assert_passed(pool, max_age_days=7)` is consulted by every engine's `assert_can_graduate`. No engine graduates from paper to live without a fresh passing run.
+- Design spec: `docs/superpowers/specs/2026-05-10-data-validation-suite-design.md`.
+- First prod run (2026-05-09): all three checks failed — the suite caught (a) inactive-symbol bootstrap not yet executed (delistings + recent removals all missing); (b) `prices_daily` is stale (last bar 2025-12-31, daily ingestion not yet wired); (c) AAPL split bars are unadjusted (ratio ≈ 3.87 vs the 4:1 split). All three are real findings the suite is meant to surface.
 
 ---
 
