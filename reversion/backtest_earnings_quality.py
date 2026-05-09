@@ -114,6 +114,7 @@ SCORE_THRESHOLD = 50  # plan §4.2 weak floor
 DEFAULT_OUTPUT_DIR = Path("backtests")
 DEFAULT_RESULTS_FILE = "earnings_quality_backtest.json"
 DEFAULT_REJECTED_FILE = "rejected_by_quality.csv"
+DEFAULT_TRADES_FILE = "reversion_trades.csv"
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -140,6 +141,10 @@ class TradeRecord:
     quality_grade: str | None = None
     fcf_to_ni: float | None = None
     accruals: float | None = None
+    # Diagnostic snapshot at entry (consumed by reversion/diagnose_backtest.py)
+    z_score_at_entry: float | None = None
+    rsi_at_entry: float | None = None
+    adx_at_entry: float | None = None
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -147,6 +152,17 @@ class TradeRecord:
             if d[k] is not None:
                 d[k] = d[k].isoformat()
         return d
+
+    @property
+    def exit_reason(self) -> str:
+        """Categorical label for the exit: 'stop' | 'time_out' | 'target' | 'max_hold'."""
+        if self.stopped_out:
+            return "stop"
+        if self.timed_out:
+            return "time_out"
+        if self.tier1_exit_date is not None and self.tier2_exit_date is not None:
+            return "target"  # Tier 1 + Tier 2 both filled — clean reversion
+        return "max_hold"  # ran out the 30-day cap without hitting target or stop
 
 
 @dataclass
@@ -404,6 +420,9 @@ def _simulate_trade(
     quality_grade: str | None,
     fcf_to_ni: float | None,
     accruals: float | None,
+    z_score_at_entry: float | None = None,
+    rsi_at_entry: float | None = None,
+    adx_at_entry: float | None = None,
 ) -> TradeRecord:
     """Walk forward applying Reversion's exit rules.
 
@@ -427,6 +446,9 @@ def _simulate_trade(
         quality_grade=quality_grade,
         fcf_to_ni=fcf_to_ni,
         accruals=accruals,
+        z_score_at_entry=z_score_at_entry,
+        rsi_at_entry=rsi_at_entry,
+        adx_at_entry=adx_at_entry,
     )
 
     bars_left = min(MAX_HOLD_DAYS, len(df) - entry_idx - 1)
@@ -581,6 +603,9 @@ def _run_variant(
             quality_grade=chosen_grade,
             fcf_to_ni=chosen_ratio[0],
             accruals=chosen_ratio[1],
+            z_score_at_entry=float(chosen.z_score),
+            rsi_at_entry=float(chosen.rsi),
+            adx_at_entry=float(chosen.adx),
         )
         trades.append(record)
 
@@ -700,6 +725,44 @@ def _render(summaries: list[VariantSummary]) -> str:
     for label, vals in rows:
         out.append("  " + label.ljust(width_label) + "    " + "    ".join(v.rjust(col_w) for v in vals))
     return "\n".join(out)
+
+
+def _write_trades_csv(path: Path, trades: list[TradeRecord]) -> None:
+    """One row per trade with everything the diagnostic script needs."""
+    with path.open("w", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(
+            [
+                "ticker", "direction", "entry_date", "entry_price",
+                "tier1_exit_date", "tier1_exit_price",
+                "tier2_exit_date", "tier2_exit_price",
+                "exit_reason", "stopped_out", "timed_out", "holding_days",
+                "pnl", "return_pct", "quality_grade",
+                "fcf_to_ni", "accruals",
+                "z_score_at_entry", "rsi_at_entry", "adx_at_entry",
+            ]
+        )
+        for t in trades:
+            writer.writerow(
+                [
+                    t.ticker, t.direction, t.entry_date.isoformat(),
+                    f"{t.entry_price:.4f}",
+                    t.tier1_exit_date.isoformat() if t.tier1_exit_date else "",
+                    f"{t.tier1_exit_price:.4f}" if t.tier1_exit_price is not None else "",
+                    t.tier2_exit_date.isoformat() if t.tier2_exit_date else "",
+                    f"{t.tier2_exit_price:.4f}" if t.tier2_exit_price is not None else "",
+                    t.exit_reason,
+                    str(t.stopped_out).lower(), str(t.timed_out).lower(),
+                    t.holding_days,
+                    f"{t.pnl:.6f}", f"{t.return_pct:.6f}",
+                    t.quality_grade or "",
+                    f"{t.fcf_to_ni:.4f}" if t.fcf_to_ni is not None else "",
+                    f"{t.accruals:.6f}" if t.accruals is not None else "",
+                    f"{t.z_score_at_entry:.4f}" if t.z_score_at_entry is not None else "",
+                    f"{t.rsi_at_entry:.4f}" if t.rsi_at_entry is not None else "",
+                    f"{t.adx_at_entry:.4f}" if t.adx_at_entry is not None else "",
+                ]
+            )
 
 
 def _conclusion(baseline: VariantSummary, gated: VariantSummary, rejected: list[TradeRecord]) -> str:
@@ -827,6 +890,12 @@ async def amain(args: argparse.Namespace) -> int:
     results_path.write_text(json.dumps(payload, indent=2))
     print(f"results → {results_path}")
 
+    # Per-trade CSV for the baseline variant — consumed by
+    # reversion/diagnose_backtest.py for the diagnostic cuts.
+    trades_path = args.output_dir / args.trades_file
+    _write_trades_csv(trades_path, baseline_trades)
+    print(f"baseline trades → {trades_path}  rows={len(baseline_trades)}")
+
     if rejected and not args.skip_rejected_csv:
         rejected_path = args.output_dir / args.rejected_file
         with rejected_path.open("w", newline="") as fh:
@@ -870,6 +939,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     p.add_argument("--results-file", default=DEFAULT_RESULTS_FILE)
     p.add_argument("--rejected-file", default=DEFAULT_REJECTED_FILE)
+    p.add_argument("--trades-file", default=DEFAULT_TRADES_FILE)
     p.add_argument("--skip-rejected-csv", action="store_true")
     return p.parse_args(argv)
 
