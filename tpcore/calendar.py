@@ -72,6 +72,24 @@ def previous_close(dt: datetime) -> datetime:
     return close_ts.to_pydatetime().astimezone(UTC)
 
 
+def trading_days_between(d1: date, d2: date) -> int:
+    """Approximate count of NYSE trading sessions between ``d1`` and ``d2``.
+
+    Returns the absolute distance — order of arguments doesn't matter. If
+    both endpoints are trading sessions, the result is the number of
+    sessions strictly between them plus one (e.g. consecutive trading days
+    → 1). When an endpoint is a holiday/weekend the count is approximately
+    right; this is intended for tolerances like "within 5 trading days",
+    not for exact arithmetic.
+    """
+    cal = _calendar()
+    lo, hi = sorted([d1, d2])
+    if lo == hi:
+        return 0
+    sessions = cal.sessions_in_range(pd.Timestamp(lo), pd.Timestamp(hi))
+    return max(0, len(sessions) - 1)
+
+
 def next_monday_open(dt: datetime) -> datetime:
     """Next Monday's session open (used for weekly risk resets).
 
