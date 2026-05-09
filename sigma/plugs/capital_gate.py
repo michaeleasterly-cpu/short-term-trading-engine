@@ -8,21 +8,28 @@ Engine-local guardrail. Plan §4.1 limits:
 * Graduation gate (paper → live): 50 trades, win-rate ≥ 65%, avg return ≥ 1.5%.
 
 The platform-wide :class:`tpcore.risk.RiskGovernor` runs **after** this gate;
-both must approve a trade.
+both must approve a trade. Graduation also requires the Data Validation
+Suite (`tpcore.quality.validation.assert_passed`) to have a recent passing
+run — see :meth:`SigmaCapitalGate.assert_can_graduate`.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 import structlog
 
 from tpcore.interfaces.engine_plug import BaseEnginePlug
+from tpcore.quality.validation.capital_gate import assert_passed
 
 from sigma.models import (
     MAX_CONCURRENT_POSITIONS,
     PRE_GRAD_POSITION_CAP_USD,
 )
+
+if TYPE_CHECKING:  # pragma: no cover
+    import asyncpg
 
 logger = structlog.get_logger(__name__)
 
@@ -117,3 +124,20 @@ class SigmaCapitalGate(BaseEnginePlug):
             and stats.win_rate >= GRAD_MIN_WIN_RATE
             and stats.avg_return >= GRAD_MIN_AVG_RETURN
         )
+
+    @staticmethod
+    async def assert_can_graduate(stats: GraduationStats, pool: "asyncpg.Pool") -> bool:
+        """Combined gate: stats thresholds AND Data Validation Suite passing.
+
+        Returns ``False`` (without raising) if the engine hasn't met its
+        threshold stats yet — this is the normal pre-grad case. Returns
+        ``True`` only after a fresh successful validation run. Raises
+        ``ValidationStaleError`` or ``ValidationFailedError`` from
+        ``tpcore.quality.validation`` if the engine is otherwise eligible
+        but the data gate is not satisfied — that's how we keep an engine
+        in pre-grad sizing if validation is broken.
+        """
+        if not SigmaCapitalGate.is_graduated(stats):
+            return False
+        await assert_passed(pool)
+        return True

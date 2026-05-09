@@ -8,21 +8,28 @@ Engine-local guardrail per plan §4.2:
 * Graduation gate (paper → live): 30 trades, win-rate ≥ 60%, avg return ≥ 2%.
 
 The platform-wide :class:`tpcore.risk.RiskGovernor` runs **after** this gate;
-both must approve a trade.
+both must approve a trade. Graduation also requires the Data Validation
+Suite (`tpcore.quality.validation.assert_passed`) to have a recent passing
+run — see :meth:`ReversionCapitalGate.assert_can_graduate`.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 import structlog
 
 from tpcore.interfaces.engine_plug import BaseEnginePlug
+from tpcore.quality.validation.capital_gate import assert_passed
 
 from reversion.models import (
     MAX_CONCURRENT_POSITIONS,
     PRE_GRAD_POSITION_CAP_USD,
 )
+
+if TYPE_CHECKING:  # pragma: no cover
+    import asyncpg
 
 logger = structlog.get_logger(__name__)
 
@@ -112,3 +119,17 @@ class ReversionCapitalGate(BaseEnginePlug):
             and stats.win_rate >= GRAD_MIN_WIN_RATE
             and stats.avg_return >= GRAD_MIN_AVG_RETURN
         )
+
+    @staticmethod
+    async def assert_can_graduate(stats: GraduationStats, pool: "asyncpg.Pool") -> bool:
+        """Combined gate: stats thresholds AND Data Validation Suite passing.
+
+        Returns ``False`` if the stats thresholds are not yet met (normal
+        pre-grad case). Returns ``True`` after a fresh successful validation
+        run. Raises ``ValidationStaleError`` or ``ValidationFailedError`` if
+        the engine is otherwise eligible but the data gate is unsatisfied.
+        """
+        if not ReversionCapitalGate.is_graduated(stats):
+            return False
+        await assert_passed(pool)
+        return True
