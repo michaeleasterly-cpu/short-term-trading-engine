@@ -33,6 +33,7 @@ from tpcore.interfaces.broker import (
     BrokerExecutionInterface,
     Order,
     OrderClass,
+    OrderSide,
     OrderStatus,
     OrderType,
     Position,
@@ -238,6 +239,30 @@ class AlpacaPaperBrokerAdapter(BrokerExecutionInterface):
         cancelled = sum(1 for r in (raw or []) if getattr(r, "status", 0) == 200)
         logger.warning("tpcore.alpaca.emergency_cancel_all", cancelled=cancelled)
         return cancelled
+
+    async def list_recent_orders(self, *, limit: int = 200) -> list[Order]:
+        """Return open + recently-closed orders. Used by engine reconciliation.
+
+        Not part of ``BrokerExecutionInterface`` (the ABC stays minimal); the
+        order manager opts in via ``getattr`` so other broker implementations
+        without this primitive degrade gracefully.
+        """
+        from alpaca.trading.enums import QueryOrderStatus
+        from alpaca.trading.requests import GetOrdersRequest
+
+        request = GetOrdersRequest(status=QueryOrderStatus.ALL, limit=limit, nested=False)
+        raw_list = await self._call(self._client.get_orders, filter=request)
+        out: list[Order] = []
+        for raw in raw_list or []:
+            skeleton = Order(
+                client_order_id=str(getattr(raw, "client_order_id", "") or ""),
+                symbol=str(getattr(raw, "symbol", "")),
+                side=OrderSide(str(getattr(getattr(raw, "side", None), "value", "buy"))),
+                qty=Decimal(str(getattr(raw, "qty", "0") or "0")),
+                order_type=OrderType(str(getattr(getattr(raw, "order_type", None), "value", "market"))),
+            )
+            out.append(self._merge_response(skeleton, raw))
+        return out
 
     # ─── Sigma glue ────────────────────────────────────────────────────
 

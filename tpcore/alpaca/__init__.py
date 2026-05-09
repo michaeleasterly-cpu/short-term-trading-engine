@@ -5,6 +5,7 @@ the broker exclusively through ``tpcore.interfaces.broker.BrokerExecutionInterfa
 """
 
 from .broker_adapter import AlpacaPaperBrokerAdapter
+from .data_adapter import AlpacaDataAdapter
 from .exceptions import BrokerUnavailableError
 
-__all__ = ["AlpacaPaperBrokerAdapter", "BrokerUnavailableError"]
+__all__ = ["AlpacaDataAdapter", "AlpacaPaperBrokerAdapter", "BrokerUnavailableError"]
