@@ -245,8 +245,18 @@ class ReversionScheduler:
 
 
 async def _ping_healthcheck(suffix: str = "") -> None:
-    """Best-effort ping to ``HEALTHCHECKS_PING_URL`` (Healthchecks.io style)."""
-    url = os.getenv("HEALTHCHECKS_PING_URL_REVERSION") or os.getenv("HEALTHCHECKS_PING_URL")
+    """Best-effort ping to Reversion's Healthchecks.io check.
+
+    Resolution order: ``REVERSION_HEALTHCHECKS_PING_URL`` (engine-specific,
+    set on Railway as a separate variable) → ``HEALTHCHECKS_PING_URL``
+    (shared fallback). Each engine should have its own check so a missed
+    Reversion run isn't masked by a healthy Sigma run.
+    """
+    url = (
+        os.getenv("REVERSION_HEALTHCHECKS_PING_URL")
+        or os.getenv("HEALTHCHECKS_PING_URL_REVERSION")
+        or os.getenv("HEALTHCHECKS_PING_URL")
+    )
     if not url:
         return
     import httpx

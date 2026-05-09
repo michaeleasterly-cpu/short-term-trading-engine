@@ -1,13 +1,22 @@
 {
   "$schema": "https://railway.com/railway.schema.json",
-  "_comment_on_cron_and_restart": "Railway reads buildCommand and startCommand from this file on every build, but `cronSchedule` and `restartPolicyType` live at the service-instance level and are NOT auto-populated from here. Run `python ops/apply_railway_service_config.py` whenever you change them — that script POSTs the values via the GraphQL serviceInstanceUpdate mutation. Idempotent.",
+  "_comment": "This file is INTERNAL DOCUMENTATION + the source of truth for ops/apply_railway_service_config.py. Railway itself reads `build.buildCommand` on every build, but it does NOT support per-service nested deploy blocks (the schema is flat). cronSchedule, restartPolicyType, and source.repo all live at the service-instance level and have to be applied via the GraphQL API. Run `python ops/apply_railway_service_config.py --all` after any change to this file.",
   "build": {
     "builder": "RAILPACK",
     "buildCommand": "pip install -e ."
   },
   "deploy": {
-    "startCommand": "python sigma/scheduler.py",
-    "cronSchedule": "0 22 * * MON-FRI",
-    "restartPolicyType": "NEVER"
+    "sigma-scheduler": {
+      "startCommand": "python sigma/scheduler.py",
+      "cronSchedule": "0 22 * * MON-FRI",
+      "restartPolicyType": "NEVER",
+      "source": {"repo": "michaeleasterly-cpu/short-term-trading-engine"}
+    },
+    "reversion-scheduler": {
+      "startCommand": "python reversion/scheduler.py",
+      "cronSchedule": "0 22 * * MON-FRI",
+      "restartPolicyType": "NEVER",
+      "source": {"repo": "michaeleasterly-cpu/short-term-trading-engine"}
+    }
   }
 }
