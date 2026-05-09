@@ -11,8 +11,9 @@ Pipeline per ticker:
 """
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -20,6 +21,8 @@ import structlog
 
 from tpcore.interfaces.data import Bar, DataProviderInterface
 from tpcore.interfaces.engine_plug import BaseEnginePlug
+from tpcore.outage import DataProviderOutage
+from tpcore.quality.data_quality import DataQualityScore
 
 from sigma.models import (
     SCORE_WEAK,
@@ -256,9 +259,20 @@ class SigmaSetupDetection(BaseEnginePlug):
         self,
         data: DataProviderInterface,
         universe: tuple[str, ...] = SIGMA_TEST_UNIVERSE,
+        *,
+        fundamentals: Any | None = None,
     ) -> None:
+        """``fundamentals`` is any object exposing
+        ``async get_quarterly_fundamentals(symbol, as_of_date) -> dict``.
+        When set, each surviving candidate gets an informational
+        ``DataQualityScore`` attached. Pass either
+        ``tpcore.fundamentals.cache.FundamentalsCache`` or
+        ``tpcore.fmp.FMPFundamentalsAdapter``. Sigma does NOT gate on
+        the result — this is for AAR enrichment / Forensics only.
+        """
         self._data = data
         self._universe = universe
+        self._fundamentals = fundamentals
 
     def validate_dependencies(self) -> bool:
         return self._data is not None
@@ -268,7 +282,11 @@ class SigmaSetupDetection(BaseEnginePlug):
             "engine": self.engine_name,
             "plug": "setup_detection",
             "ok": self.validate_dependencies(),
-            "details": {"universe_size": len(self._universe), "lookback_days": LOOKBACK_DAYS},
+            "details": {
+                "universe_size": len(self._universe),
+                "lookback_days": LOOKBACK_DAYS,
+                "fundamentals_attached": self._fundamentals is not None,
+            },
         }
 
     async def scan(self, as_of: date) -> list[SetupCandidate]:
@@ -289,10 +307,56 @@ class SigmaSetupDetection(BaseEnginePlug):
             except Exception as exc:  # pragma: no cover - defensive
                 logger.warning("sigma.setup.evaluate_failed", symbol=symbol, error=str(exc))
                 continue
-            if cand is not None:
-                candidates.append(cand)
+            if cand is None:
+                continue
+            cand = await self._attach_data_quality(cand, as_of=as_of)
+            candidates.append(cand)
         candidates.sort(key=lambda c: c.sigma_score, reverse=True)
         return candidates
+
+    async def _attach_data_quality(
+        self, candidate: SetupCandidate, *, as_of: date
+    ) -> SetupCandidate:
+        """Attach an informational DataQualityScore. Never gates the trade."""
+        if self._fundamentals is None:
+            return candidate
+        try:
+            payload = await self._fundamentals.get_quarterly_fundamentals(
+                candidate.ticker, as_of_date=as_of
+            )
+        except DataProviderOutage as exc:
+            logger.warning(
+                "sigma.setup.fundamentals_outage",
+                ticker=candidate.ticker,
+                error=str(exc),
+            )
+            score = DataQualityScore(
+                source="fmp",
+                timestamp=datetime.now(UTC),
+                missing_bars=1,
+                stale=True,
+                confidence=Decimal("0.0"),
+                source_freshness_days=None,
+                notes=f"outage: {exc}"[:200],
+            )
+            return candidate.model_copy(update={"data_quality": score})
+
+        filing = payload.get("filing_date")
+        days_old = (as_of - filing).days if filing is not None else None
+        # Confidence decays with age; cap "fresh" at 90 days.
+        if days_old is None:
+            confidence = Decimal("0.0")
+        else:
+            confidence = max(Decimal("0.0"), Decimal("1.0") - Decimal(days_old) / Decimal("180"))
+        score = DataQualityScore(
+            source="fmp",
+            timestamp=datetime.now(UTC),
+            confidence=confidence.quantize(Decimal("0.001")),
+            stale=days_old is not None and days_old > 120,
+            source_freshness_days=days_old,
+            notes=f"filing={filing} period={payload.get('period')}",
+        )
+        return candidate.model_copy(update={"data_quality": score})
 
     def _evaluate(self, symbol: str, as_of: date, bars: list[Bar]) -> SetupCandidate | None:
         df = _bars_to_frame(bars)

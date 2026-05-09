@@ -14,10 +14,14 @@ class DataQualityScore(BaseModel):
 
     source: str
     timestamp: datetime
-    latency_ms: int
+    latency_ms: int = 0
     missing_bars: int = 0
     stale: bool = False
     confidence: Decimal = Field(ge=0, le=1)
+    source_freshness_days: int | None = Field(
+        default=None,
+        description="Days between the data point's filing/observation date and ``timestamp``.",
+    )
     notes: str | None = None
 
 

@@ -23,6 +23,7 @@ from tpcore.aar.writer import AARWriter
 from tpcore.alpaca import AlpacaDataAdapter, AlpacaPaperBrokerAdapter
 from tpcore.db import build_asyncpg_pool
 from tpcore.fmp import FMPFundamentalsAdapter
+from tpcore.fundamentals.cache import FundamentalsCache
 from tpcore.outage import DataProviderOutage
 from tpcore.risk.governor import (
     InMemoryRiskStateStore,
@@ -141,30 +142,18 @@ class ReversionScheduler:
             candidates = await setup.scan(as_of=as_of)
             logger.info("reversion.scheduler.scan_done", n_candidates=len(candidates))
 
-            # Fundamentals adapter — required for the earnings-quality gate
-            # per §4.2. Built lazily so a missing FMP_API_KEY in tests/dev
-            # doesn't crash the import path; the adapter constructor itself
-            # raises DataProviderOutage on missing key.
-            fundamentals_adapter = self._injected_fundamentals
-            owned_fundamentals = False
-            if fundamentals_adapter is None:
-                try:
-                    fundamentals_adapter = FMPFundamentalsAdapter()
-                    owned_fundamentals = True
-                except DataProviderOutage as exc:
-                    logger.warning(
-                        "reversion.scheduler.fundamentals_unavailable",
-                        error=str(exc),
-                        note="every candidate will be blocked by the earnings-quality gate",
-                    )
-                    fundamentals_adapter = None
+            # Fundamentals provider — DB-cached when a pool is open, falls
+            # back to direct FMP otherwise. The cache lets daily scheduler
+            # runs hit FMP only on cache miss (new filings) instead of
+            # every candidate, every day.
+            fundamentals_provider, owned_adapter = await self._build_fundamentals_provider(pool)
 
             submitted = 0
             account = await broker.get_account()
             try:
                 for cand in candidates:
                     fundamentals = await self._fetch_fundamentals(
-                        fundamentals_adapter, cand.ticker, cand.as_of
+                        fundamentals_provider, cand.ticker, cand.as_of
                     )
                     assessment = lifecycle.assess(cand, fundamentals=fundamentals)
                     if assessment.phase is not Phase.ACTIVE:
@@ -183,8 +172,8 @@ class ReversionScheduler:
                     if placed:
                         submitted += 1
             finally:
-                if owned_fundamentals and fundamentals_adapter is not None:
-                    await fundamentals_adapter.aclose()
+                if owned_adapter is not None:
+                    await owned_adapter.aclose()
 
             logger.info(
                 "reversion.scheduler.run_done",
@@ -204,21 +193,48 @@ class ReversionScheduler:
                 await pool.close()
                 logger.info("reversion.scheduler.pool_closed")
 
+    async def _build_fundamentals_provider(
+        self, pool: Any | None
+    ) -> tuple[Any | None, FMPFundamentalsAdapter | None]:
+        """Return ``(provider, owned_adapter)``.
+
+        ``provider`` is whatever exposes ``get_quarterly_fundamentals`` —
+        a ``FundamentalsCache`` when a DB pool is available, else the raw
+        adapter. ``owned_adapter`` is the adapter to close on exit (we
+        own the lifecycle since we built it here); ``None`` if the caller
+        injected a provider (lifecycle is theirs).
+        """
+        if self._injected_fundamentals is not None:
+            return self._injected_fundamentals, None
+        try:
+            adapter = FMPFundamentalsAdapter()
+        except DataProviderOutage as exc:
+            logger.warning(
+                "reversion.scheduler.fundamentals_unavailable",
+                error=str(exc),
+                note="every candidate will be blocked by the earnings-quality gate",
+            )
+            return None, None
+        if pool is not None:
+            cache = FundamentalsCache(pool, adapter=adapter)
+            return cache, adapter
+        return adapter, adapter
+
     @staticmethod
     async def _fetch_fundamentals(
-        adapter: FMPFundamentalsAdapter | None, symbol: str, as_of: date_t
+        provider: Any | None, symbol: str, as_of: date_t
     ) -> dict | None:
         """Pull fundamentals for ``symbol``, returning ``None`` on outage.
 
-        ``DataProviderOutage`` from the adapter is logged and swallowed —
+        ``DataProviderOutage`` from the provider is logged and swallowed —
         a single bad symbol shouldn't kill the whole scan. The lifecycle
         plug treats ``None`` as "no data, no trade" and blocks just that
         candidate.
         """
-        if adapter is None:
+        if provider is None:
             return None
         try:
-            return await adapter.get_quarterly_fundamentals(symbol, as_of_date=as_of)
+            return await provider.get_quarterly_fundamentals(symbol, as_of_date=as_of)
         except DataProviderOutage as exc:
             logger.warning(
                 "reversion.scheduler.fundamentals_outage",

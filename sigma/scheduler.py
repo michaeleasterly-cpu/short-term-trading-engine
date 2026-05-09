@@ -36,6 +36,9 @@ from tpcore.aar.models import AfterActionReport
 from tpcore.aar.writer import AARWriter
 from tpcore.alpaca import AlpacaDataAdapter, AlpacaPaperBrokerAdapter
 from tpcore.db import build_asyncpg_pool
+from tpcore.fmp import FMPFundamentalsAdapter
+from tpcore.fundamentals.cache import FundamentalsCache
+from tpcore.outage import DataProviderOutage
 from tpcore.risk.governor import (
     InMemoryRiskStateStore,
     RiskGovernor,
@@ -107,6 +110,7 @@ class SigmaScheduler:
     async def run_once(self, *, as_of: date_t | None = None) -> RunSummary:
         as_of = as_of or datetime.now(UTC).date()
         pool: Any | None = None
+        owned_fundamentals_adapter: FMPFundamentalsAdapter | None = None
         try:
             # 0. Build pool (and DB-backed deps) iff DATABASE_URL is set and
             #    no explicit risk_store/aar_writer were injected.
@@ -132,7 +136,14 @@ class SigmaScheduler:
             await governor.register_engine(ENGINE_ID, self._engine_equity)
             logger.info("sigma.scheduler.run_start", as_of=as_of.isoformat(), persistent=pool is not None)
 
-            setup = SigmaSetupDetection(data=data)
+            # Optional fundamentals cache for informational data-quality
+            # attachment. Only enabled when a DB pool is open AND FMP_API_KEY
+            # is set — otherwise candidates simply lack the optional field.
+            fundamentals_provider, owned_fundamentals_adapter = (
+                self._build_fundamentals_provider(pool)
+            )
+
+            setup = SigmaSetupDetection(data=data, fundamentals=fundamentals_provider)
             lifecycle = SigmaLifecycleAnalysis()
             execution = SigmaExecutionRisk()
             sigma_aar = SigmaAARLogging()
@@ -190,9 +201,27 @@ class SigmaScheduler:
                 aars=new_aars,
             )
         finally:
+            if owned_fundamentals_adapter is not None:
+                await owned_fundamentals_adapter.aclose()
             if pool is not None:
                 await pool.close()
                 logger.info("sigma.scheduler.pool_closed")
+
+    @staticmethod
+    def _build_fundamentals_provider(
+        pool: Any | None,
+    ) -> tuple[Any | None, FMPFundamentalsAdapter | None]:
+        """Returns ``(provider, owned_adapter)``. Provider is None when
+        FMP_API_KEY isn't configured — Sigma never gates on this, so the
+        absence is silently fine; candidates just won't have data_quality
+        populated."""
+        try:
+            adapter = FMPFundamentalsAdapter()
+        except DataProviderOutage:
+            return None, None
+        if pool is not None:
+            return FundamentalsCache(pool, adapter=adapter), adapter
+        return adapter, adapter
 
 
 async def _ping_healthcheck(suffix: str = "") -> None:

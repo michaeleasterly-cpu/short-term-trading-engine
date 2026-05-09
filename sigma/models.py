@@ -11,6 +11,8 @@ from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from tpcore.quality.data_quality import DataQualityScore
+
 # Universe used by the Phase 1 scan. Per the Phase 1 spec: hardcoded 10 names.
 SIGMA_TEST_UNIVERSE: tuple[str, ...] = (
     "AAPL", "MSFT", "AMZN", "GOOGL", "META",
@@ -62,6 +64,10 @@ class SetupCandidate(BaseModel):
     bb_upper: Decimal
     bb_lower: Decimal
     bb_mid: Decimal
+    data_quality: DataQualityScore | None = Field(
+        default=None,
+        description="Informational fundamentals data-quality snapshot. Does NOT gate the trade.",
+    )
 
 
 class PhaseAssessment(BaseModel):

@@ -219,6 +219,9 @@ class FMPFundamentalsAdapter:
                     "filing_date": filing_date,
                     "net_income": _to_decimal(inc.get("netIncome")),
                     "revenue": _to_decimal(inc.get("revenue")),
+                    "shares_outstanding": _to_decimal(
+                        inc.get("weightedAverageShsOutDil") or inc.get("weightedAverageShsOut")
+                    ),
                     "fcf": _to_decimal(cf.get("freeCashFlow")),
                     "operating_cash_flow": _to_decimal(cf.get("operatingCashFlow")),
                     "capex": _to_decimal(cf.get("capitalExpenditure")),
