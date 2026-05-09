@@ -112,17 +112,20 @@ All engines share the **5-Plug model:** Setup Detection → Lifecycle Analysis �
 **Mission:** Capture mean-reversion within well-defined, low-volatility price channels on a daily timeframe.
 
 **Setup Detection:**
-- Universe: Price > $10, avg vol > 1M, ADX(14) < 20, Bollinger Band width < 30th percentile.
+- Universe filter: Price > $10, avg vol > 1M, ADX(14) < 20, **per-stock CHOP(14) > 38.2**, Bollinger Band width < 30th percentile.
 - Score (0–100):
   - Channel Quality (0–40).
   - Entry Precision (0–35).
-  - Market Context (0–25) = SPY-direction (0–15) + VWAP-neutrality (0–10):
-    - SPY CHOP(14) > 38.2 AND SPY ADX(14) < 20 → **10 pts**; +5 more if SPY CHOP > 61.8 → **15 pts** (strong sideways conviction).
-    - SPY CHOP < 38.2 → **0 pts** for SPY-direction regardless of ADX (trending or transitioning toward trend).
+  - Market Context (0–25) = regime-confirmation (0–15) + VWAP-neutrality (0–10):
+    - Per-stock CHOP > 38.2 → **10 pts**; +5 more if CHOP > 61.8 → **15 pts** (strong sideways conviction).
     - Last close within ±1% of 20-day VWAP → **10 pts**, else 0.
 - Thresholds: ≥ 70 strong, 50–69 weak, < 50 no trade.
 
-**Rationale (CHOP):** ADX alone can produce false range signals during transitional markets — a young trend can sit below ADX 20 while CHOP has already dropped, signalling that price is no longer truly chopping. CHOP is the second-confirmation indicator that the range-trade thesis is alive at the index level. Backtest: layering CHOP > 38.2 onto the per-stock ADX < 20 filter improved annualized Sharpe by ~26% over 2020–2025 paper data; every trade the CHOP filter rejected was a baseline stop-out.
+**Rationale (CHOP):** ADX alone can produce false range signals — a young trend can sit below ADX 20 while CHOP has already dropped, signalling that price is no longer truly chopping. CHOP is the second confirmation that the range-trade thesis is alive on the *candidate stock*, not the index.
+
+Earlier drafts of this plan gated Market Context on **SPY-level** CHOP+ADX. The backtest in `sigma/backtest_chop.py` falsified that design: the SPY-level gate hurt risk-adjusted returns (Sharpe **−28%** vs baseline; max drawdown nearly 2× deeper) while the per-stock gate improved them (Sharpe **+26%**). The shipped engine therefore uses per-stock CHOP — the candidate's own data — and the SPY-level path was removed.
+
+**Known weakness — transitional regimes:** When the market is neither cleanly chopping nor cleanly trending (CHOP 38.2–61.8 on the stock, mixed ADX trajectory), Sigma still issues entries that are vulnerable to follow-through breakouts. 2023 was such a year (per-stock-CHOP variant: 25 trades, 18 stop-outs, −27% total return). **Defense for transitional regimes is the position sizing rules and `tpcore.risk.RiskGovernor` — not CHOP.** Specifically: the pre-grad $1,500 cap, the 5% daily / 10% weekly P&L kill switches, and the platform-wide 60% net-long exposure cap are what bound the worst-case loss in a regime that range-scalp can't read.
 
 **Lifecycle Analysis:**
 - Phases: Setup, Approaching, Active, Exhaustion.

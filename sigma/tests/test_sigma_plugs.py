@@ -113,10 +113,6 @@ def as_of() -> date:
 def mock_provider(as_of: date) -> MockDataProvider:
     return MockDataProvider(
         {
-            # SPY is a market-context input — Sigma fetches it once per scan.
-            # Range-bound prints give SPY CHOP > 61.8 with ADX < 20, which is
-            # what the new Market Context scorer needs to award full points.
-            "SPY": _range_bound_series("SPY", as_of, base=500.0),
             "AAPL": _range_bound_series("AAPL", as_of, base=180.0),
             "MSFT": _range_bound_series("MSFT", as_of, base=420.0),
             "AMZN": _trending_series("AMZN", as_of, base=200.0),
@@ -184,29 +180,25 @@ def test_compute_chop_low_for_trending_high_for_oscillating() -> None:
 
 
 def test_score_market_context_buckets() -> None:
-    """SPY CHOP/ADX combinations land in the right Market Context bucket."""
+    """Per-stock CHOP combinations land in the right Market Context bucket.
+
+    The score uses the candidate's own CHOP — index-level (SPY) gating was
+    removed after the backtest showed it underperformed (Sharpe −28% vs
+    baseline). See sigma/backtest_chop.py.
+    """
     from sigma.plugs.setup_detection import _score_market_context
 
-    # SPY ADX < 20 AND CHOP > 61.8 → 15 SPY-direction; +10 VWAP within 1% → 25.
+    # CHOP > 61.8 → 15 regime-confirmation; VWAP within 1% → 10 → total 25.
+    assert _score_market_context(chop=70.0, last_close=180.00, last_vwap_20=180.50) == 25.0
+    # 38.2 < CHOP ≤ 61.8 → 10 regime-confirmation; VWAP miss → 10 total.
+    assert _score_market_context(chop=50.0, last_close=180.0, last_vwap_20=200.0) == 10.0
+    # CHOP < 38.2 → 0 regime-confirmation; VWAP within 1% → 10. (In live code
+    # such a candidate is hard-filtered out upstream — this guards the score
+    # function in isolation.)
+    assert _score_market_context(chop=30.0, last_close=180.0, last_vwap_20=180.5) == 10.0
+    # NaN CHOP → safe zero on the regime leg; VWAP miss → 0 total.
     assert _score_market_context(
-        spy_adx=12.0, spy_chop=70.0, last_close=180.00, last_vwap_20=180.50,
-    ) == 25.0
-    # SPY ADX < 20 AND 38.2 < CHOP ≤ 61.8 → 10 SPY-direction; VWAP miss → 10 total.
-    assert _score_market_context(
-        spy_adx=15.0, spy_chop=50.0, last_close=180.0, last_vwap_20=200.0,
-    ) == 10.0
-    # SPY CHOP < 38.2 → 0 SPY-direction even with ADX < 20; VWAP within 1% → 10.
-    assert _score_market_context(
-        spy_adx=10.0, spy_chop=30.0, last_close=180.0, last_vwap_20=180.5,
-    ) == 10.0
-    # SPY ADX ≥ 20 → 0 SPY-direction regardless of CHOP.
-    assert _score_market_context(
-        spy_adx=22.0, spy_chop=70.0, last_close=180.0, last_vwap_20=400.0,
-    ) == 0.0
-    # NaN inputs: safe zero.
-    assert _score_market_context(
-        spy_adx=float("nan"), spy_chop=float("nan"),
-        last_close=180.0, last_vwap_20=float("nan"),
+        chop=float("nan"), last_close=180.0, last_vwap_20=float("nan")
     ) == 0.0
 
 
