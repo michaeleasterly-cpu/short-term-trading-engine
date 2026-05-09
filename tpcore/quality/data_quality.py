@@ -3,8 +3,15 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
+import structlog
 from pydantic import BaseModel, ConfigDict, Field
+
+if TYPE_CHECKING:  # pragma: no cover
+    import asyncpg
+
+logger = structlog.get_logger(__name__)
 
 
 class DataQualityScore(BaseModel):
@@ -26,12 +33,48 @@ class DataQualityScore(BaseModel):
 
 
 class DataQualityWriter:
-    """Persists ``DataQualityScore`` rows to ``platform.data_quality_log``."""
+    """Persists ``DataQualityScore`` rows to ``platform.data_quality_log``.
 
-    def __init__(self, db_pool) -> None:
+    Idempotency follows D-137 Pattern A: ``ON CONFLICT (source, timestamp) DO
+    NOTHING`` plus ``RETURNING 1`` so callers can tell new inserts from
+    duplicates. ``source_freshness_days`` has no column in the schema and is
+    intentionally not persisted; if the field matters for a given source,
+    serialize it into ``notes`` (JSON).
+    """
+
+    def __init__(self, db_pool: "asyncpg.Pool | None" = None) -> None:
         self._pool = db_pool
 
-    async def write(self, score: DataQualityScore) -> None:
-        """TODO: INSERT into platform.data_quality_log."""
-        _ = (score, self._pool)
-        raise NotImplementedError
+    async def write(self, score: DataQualityScore) -> bool:
+        """Insert ``score`` if absent. Returns ``True`` iff a new row was written."""
+        if self._pool is None:
+            return False
+
+        sql = """
+            INSERT INTO platform.data_quality_log (
+                source, timestamp, latency_ms, missing_bars,
+                stale, confidence, notes
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (source, timestamp) DO NOTHING
+            RETURNING 1
+        """
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                sql,
+                score.source,
+                score.timestamp,
+                score.latency_ms,
+                score.missing_bars,
+                score.stale,
+                score.confidence,
+                score.notes,
+            )
+        wrote = row is not None
+        logger.debug(
+            "tpcore.data_quality.write",
+            source=score.source,
+            timestamp=score.timestamp.isoformat(),
+            wrote=wrote,
+        )
+        return wrote
