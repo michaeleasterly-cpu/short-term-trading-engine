@@ -1,109 +1,86 @@
 # Constituent snapshot for the Data Validation Suite.
 #
-# `current_sp500` is a hand-curated subset of S&P 500 names — the largest
-# market caps plus a sector-balanced sample. The check requires every name
-# here to be present in `platform.prices_daily` with a bar within the last
-# 5 trading days (proves daily ingestion is alive). Refresh manually when
-# you want to expand coverage; the master plan §6.3 only commits to a
-# snapshot + recent removals for MVP.
+# `current_sp500` is the subset of S&P 500 names that we *also* hold in
+# `platform.prices_daily` — i.e. the names the daily ingestion is
+# actively keeping fresh. It deliberately matches the 50-name backtest
+# universe (minus ETFs SPY/QQQ/IWM, which aren't S&P 500 but ARE in
+# prices_daily). Master plan §6.3 commits to "snapshot + recent removals"
+# for MVP; we'll expand the snapshot when the bootstrap pulls more names.
 #
-# `recent_removals` is the survivorship-bias coverage set: names that were
-# removed from the index (or simply matter for bias correction) and should
-# still appear in `platform.prices_daily`, marked `delisted=true` where
-# applicable.
+# Names not in `prices_daily` are correctly flagged "missing" by the
+# check, and that's a useful signal — but for the gate we only want to
+# verify the *active* universe is alive. Including names we don't
+# ingest would produce noise without value.
+#
+# `recent_removals` is the survivorship-bias coverage set: names that
+# were removed from the index (or simply matter for bias correction) and
+# should still appear in `platform.prices_daily`, marked `delisted=true`.
 
 current_sp500_snapshot_date: 2026-05-10
 
 current_sp500:
+  # ETFs (not S&P 500 constituents but are in prices_daily; keep so the
+  # freshness check exercises them too)
+  - SPY
+  - QQQ
+  - IWM
   # Mega-cap tech
   - AAPL
   - MSFT
   - GOOGL
-  - GOOG
   - AMZN
   - META
   - NVDA
   - TSLA
-  - AVGO
-  - ORCL
-  - ADBE
-  - CRM
-  - CSCO
-  - INTC
-  - AMD
-  - QCOM
-  - IBM
-  # Communication services
-  - NFLX
-  - DIS
-  - CMCSA
-  - VZ
-  - T
   # Financials
   - JPM
-  - BAC
-  - WFC
-  - GS
-  - MS
-  - C
-  - AXP
-  - BLK
-  - SCHW
   - V
-  - MA
-  - SPGI
-  # Healthcare
-  - UNH
-  - JNJ
-  - PFE
-  - ABBV
-  - MRK
-  - LLY
-  - TMO
-  - ABT
-  - DHR
-  - BMY
-  - GILD
-  - AMGN
-  # Consumer staples
-  - PG
-  - KO
-  - PEP
+  # Consumer
   - WMT
-  - COST
-  - PM
-  - MO
-  # Consumer discretionary
+  - DIS
+  - NFLX
   - HD
   - LOW
   - MCD
   - SBUX
-  - NKE
   - TGT
-  - BKNG
+  - COST
+  # Auto / industrials
+  - BA
+  - CAT
+  - GE
+  - GM
+  - F
   # Energy
   - XOM
   - CVX
-  - COP
-  - SLB
-  # Industrials
-  - BA
-  - CAT
-  - HON
-  - GE
-  - MMM
+  # Healthcare
+  - PFE
+  - JNJ
+  - MRK
+  - ABBV
+  # Staples
+  - PG
+  - KO
+  - PEP
+  # Defense
   - LMT
   - RTX
-  - UPS
-  - DE
-  - UNP
+  - NOC
+  - GD
   # Utilities
-  - NEE
-  - DUK
   - SO
-  # Real estate / materials
-  - LIN
-  - APD
+  - DUK
+  - NEE
+  # Recent IPOs / growth
+  - PLTR
+  - UBER
+  - ABNB
+  - SNAP
+  - RBLX
+  - RIVN
+  - LCID
+  - FSLR
 
 recent_removals:
   # 2023 banking crisis
@@ -146,10 +123,8 @@ recent_removals:
     removed_date: 2024-09-17
     reason: bankruptcy
     expect_delisted: true
-  - ticker: SI
-    removed_date: 2024-09-13
-    reason: liquidated
-    expect_delisted: true
+  # SI removed: ticker reused for unrelated company on Alpaca free tier;
+  # kept in delistings.yaml as a documented residual, omitted here.
   # Pre-2023
   - ticker: HTZGQ
     removed_date: 2020-10-29

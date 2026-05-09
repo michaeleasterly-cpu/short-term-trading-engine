@@ -38,6 +38,18 @@ async def test_splits_passes_when_close_is_adjusted() -> None:
     assert result.failures == []
 
 
+async def test_splits_passes_when_real_price_move_within_band() -> None:
+    """Adjusted data + real ±10% day-over-day return → still passes (covers TSLA-style moves)."""
+    src = _StaticSplitsSource([SplitEvent(ticker="TSLA", split_date=date(2020, 8, 31), ratio_num=5, ratio_den=1)])
+    rows = [
+        make_bar("TSLA", date(2020, 8, 28), Decimal("147.70")),
+        make_bar("TSLA", date(2020, 8, 31), Decimal("166.24")),  # ratio ≈ 0.888 — in widened band
+    ]
+    pool = FakePool(rows)
+    result = await check_splits(pool, src)
+    assert result.passed is True
+
+
 # ────────────────────────────────────────────────────────────────────────────
 # Failure modes
 # ────────────────────────────────────────────────────────────────────────────

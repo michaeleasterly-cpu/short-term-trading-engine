@@ -102,9 +102,11 @@ The current S&P 500 list is vendored once (manual fixture edit) and refreshed by
 
 For each entry in `fixtures/splits.yaml`, assert:
 1. The ticker has bars on both `split_date - 1` (last trading day before) and `split_date`.
-2. The ratio `close[split_date - 1] / close[split_date]` is in `[0.99, 1.01]`.
+2. The ratio `close[split_date - 1] / close[split_date]` is in `[0.85, 1.15]`.
 
-**Why `[0.99, 1.01]`.** Alpaca's ingestion uses `adjustment="all"` (`tpcore/data/ingest_alpaca_bars.py:88`), which returns split- and dividend-adjusted prices. A correctly adjusted close on the day before and the day of a split should be nearly identical — the adjustment removes the mechanical price change. A missed split produces a ratio of roughly `1/N` for an N:1 split (e.g. 0.25 for AAPL 4:1, 0.10 for NVDA 10:1) — orders of magnitude outside the ±1% band. Tightening to ±0.1% risks false positives from rounding; ±1% is wide enough to absorb that and narrow enough to catch the real failure.
+**Why `[0.85, 1.15]`.** Alpaca's ingestion uses `adjustment="all"` (`tpcore/data/ingest_alpaca_bars.py:88`), which *should* return split- and dividend-adjusted prices. The signal we want from this check is "is the data adjusted at all?" A raw, unadjusted feed yields a ratio equal to the split factor (4.0 for a 4:1, 20.0 for AMZN 20:1, etc.) — orders of magnitude outside `[0.85, 1.15]`. The wider ±15% band tolerates *real* day-over-day price action on split days, which can be substantial (TSLA's 5:1 in 2020 had a +12.5% real return across the split day, yielding an adjusted ratio of 0.888). The original ±1% spec false-positived on ordinary split-day moves and added no extra signal — anything in `[0.85, 1.15]` is plainly adjusted, anything near the split factor is plainly raw.
+
+**Known Alpaca free-tier limitation:** the IEX feed is inconsistent about which symbols' historical bars get split-adjusted. AAPL's 2020-08-31 4:1 split is *not* applied at the API level even with `adjustment="all"` (verified all four `adjustment` modes return the raw value), while TSLA's, NVDA's, AMZN's, GOOGL's, and WMT's are correctly adjusted. This is a documented residual; addressing it requires either the paid SIP feed or pulling splits from `/v2/corporate_actions` and applying them during ingestion.
 
 **Reverse splits and multi-event histories** are out of MVP scope — the fixture only includes simple forward splits.
 

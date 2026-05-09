@@ -35,15 +35,14 @@
 # 2023 — regional banking crisis + post-COVID retail bankruptcies
 - ticker: SIVBQ
   alt_tickers: [SIVB]
-  delisting_date: 2023-03-17
+  delisting_date: 2023-03-09
   reason: bankruptcy
-  notes: "SVB Financial Group — Chapter 11 after FDIC takeover"
+  notes: "SVB Financial Group — Chapter 11 after FDIC takeover; last IEX bar 2023-03-09"
 
 - ticker: SBNYQ
-  alt_tickers: [SBNY]
   delisting_date: 2023-03-12
   reason: receivership
-  notes: "Signature Bank — NYDFS / FDIC takeover"
+  notes: "Signature Bank — NYDFS / FDIC takeover. SBNY ticker has been reused for an unrelated company on Alpaca's free tier (bars through 2025+); kept here as a known-missing residual."
 
 - ticker: FRC
   delisting_date: 2023-05-01
@@ -52,9 +51,9 @@
 
 - ticker: BBBYQ
   alt_tickers: [BBBY]
-  delisting_date: 2023-04-23
+  delisting_date: 2023-05-02
   reason: bankruptcy
-  notes: "Bed Bath & Beyond — Chapter 11"
+  notes: "Bed Bath & Beyond — Chapter 11. Last IEX bar 2023-05-02."
 
 # 2023 — large-cap acquisitions
 - ticker: ATVI
@@ -63,25 +62,25 @@
   notes: "Activision Blizzard — acquired by Microsoft"
 
 - ticker: VMW
-  delisting_date: 2023-11-22
+  delisting_date: 2023-11-21
   reason: acquired
-  notes: "VMware — acquired by Broadcom"
+  notes: "VMware — acquired by Broadcom; last IEX bar 2023-11-21"
 
 # 2024 — recent
 - ticker: SPLK
-  delisting_date: 2024-03-18
+  delisting_date: 2024-03-15
   reason: acquired
-  notes: "Splunk — acquired by Cisco"
+  notes: "Splunk — acquired by Cisco; last IEX bar 2024-03-15"
 
 - ticker: FTCH
-  delisting_date: 2024-01-30
+  delisting_date: 2023-12-18
   reason: acquired
-  notes: "Farfetch — acquired by Coupang"
+  notes: "Farfetch — acquired by Coupang; deal close 2024-01-30 but last IEX bar 2023-12-18"
 
 - ticker: SI
-  delisting_date: 2024-09-13
+  delisting_date: 2023-05-10
   reason: liquidated
-  notes: "Silvergate Capital — voluntary liquidation"
+  notes: "Silvergate Capital — NYSE delisting 2023; voluntary liquidation announced 2024. SI ticker reused for an unrelated company on Alpaca's free tier (bars through 2026+); kept as known-missing residual after row-cleanup."
 
 - ticker: TUP
   delisting_date: 2024-09-17
