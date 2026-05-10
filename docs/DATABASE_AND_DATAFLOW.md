@@ -217,22 +217,24 @@ List every table under the `platform` schema. For each, provide columns, types, 
 
 **Purpose:** FIFO tax lot tracking for the Tax Overlay. Schema deferred.
 
-#### `platform.application_log` (planned — see §5)
+#### `platform.application_log`
 
-**Purpose:** Permanent audit trail for every scheduler run. Replaces ephemeral Railway stdout logs.
+**Purpose:** Rolling 7-day audit trail for every scheduler run. Each invocation tags rows with a per-run UUID so the timeline of one run is queryable. Stdout is the live Railway view; this table is the queryable archive. Populated by `tpcore.logging.DBLogHandler`; retention is enforced on every write — see AI Rules below.
 
-**Columns (planned):**
+**Columns:**
 
-- `id` (uuid, PK).
+- `id` (uuid, PK, default `gen_random_uuid()`): Unique row identifier.
 - `engine` (text): `'sigma'`, `'reversion'`, `'vector'`.
 - `run_id` (uuid): Unique per scheduler invocation.
 - `event_type` (text): `'STARTUP'`, `'SCAN_COMPLETE'`, `'SIGNAL'`, `'ORDER_SUBMITTED'`, `'FILL_CONFIRMED'`, `'ERROR'`, `'SHUTDOWN'`.
 - `severity` (text): `'INFO'`, `'WARNING'`, `'ERROR'`, `'CRITICAL'`.
 - `message` (text): Human-readable.
-- `data` (jsonb): Structured payload.
+- `data` (jsonb, nullable): Structured payload (tickers, scores, order IDs, error tracebacks).
 - `recorded_at` (timestamptz, default `now()`).
 
 **Indexes:** `(engine, run_id, recorded_at)`.
+
+**AI Rules:** Never query without filtering on `run_id` or `recorded_at` — the table is small by design but unbounded growth is the recurring failure mode for audit logs. The handler issues `DELETE FROM platform.application_log WHERE recorded_at < now() - INTERVAL '7 days'` after every insert; do not add a separate retention cron. To inspect a run's timeline: `SELECT recorded_at, event_type, severity, message, data FROM platform.application_log WHERE run_id = $1 ORDER BY recorded_at`.
 
 ## 3. Dataflow Specification
 
@@ -510,14 +512,14 @@ Tables and services that are specified but not yet built:
 
 | Priority | Component | Status |
 | ---: | --- | --- |
-| 1 | `PostgresDataAdapter` | Not built — engines currently hit Alpaca live for bars |
-| 2 | `platform.universe_candidates` + Universe Pre-Screener | Not built — engines use hardcoded lists |
-| 3 | `platform.application_log` + DB log handler | Not built — logs are ephemeral stdout |
-| 4 | Daily bar ingestion cron | Not built — bars not pre-fetched to `prices_daily` |
-| 5 | Fundamentals cache weekly refresh | Not built — cache is lazy (on scan miss) |
-| 6 | `platform.macro_indicators` + FRED adapter | Not built |
-| 7 | `platform.social_signals` + ApeWisdom adapter | Not built |
-| 8 | `platform.short_interest` + FINRA adapter | Not built |
-| 9 | `platform.borrow_rates` + IBorrowDesk adapter | Not built |
-| 10 | `platform.filings_insider` + SEC EDGAR adapter | Not built |
-| 11 | `platform.tax_lots` + Tax Overlay | Schema deferred |
+| 1 | `platform.universe_candidates` + Universe Pre-Screener | Not built — engines use hardcoded lists |
+| 2 | Daily bar ingestion cron | Not built — bars not pre-fetched to `prices_daily` |
+| 3 | Fundamentals cache weekly refresh | Not built — cache is lazy (on scan miss) |
+| 4 | `platform.macro_indicators` + FRED adapter | Not built |
+| 5 | `platform.social_signals` + ApeWisdom adapter | Not built |
+| 6 | `platform.short_interest` + FINRA adapter | Not built |
+| 7 | `platform.borrow_rates` + IBorrowDesk adapter | Not built |
+| 8 | `platform.filings_insider` + SEC EDGAR adapter | Not built |
+| 9 | `platform.tax_lots` + Tax Overlay | Schema deferred |
+
+**Done (kept here for grep history):** `PostgresDataAdapter` (commit `d75076d`, 2026-05-10) — engines now read bars from `platform.prices_daily` exclusively, no live-API fallback. `platform.application_log` + `tpcore.logging.DBLogHandler` (commit `ff468de` + Alembic `20260511_0100`, applied 2026-05-10) — every scheduler run emits a queryable timeline; 7-day retention enforced per-write.

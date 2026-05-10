@@ -2,7 +2,7 @@
 
 **Version:** 1.2
 **Date:** 2026-05-13
-**Status:** All three engine schedulers (Sigma, Reversion, Vector) deployed on Railway and online. RiskGovernor `check_trade()` + startup kill-switch check, AARWriter persistence, and LivePaperParityHarness wiring all verified end-to-end (live DB round-trip for AAR; harnesses no-op without live broker creds, by design). All three engines fail the overfitting-aware credibility gate (60/100); none cleared for live capital — paper-trading only.
+**Status:** All three engine schedulers (Sigma, Reversion, Vector) deployed on Railway and online. RiskGovernor `check_trade()` + startup kill-switch check, AARWriter persistence, and LivePaperParityHarness wiring all verified end-to-end (live DB round-trip for AAR; harnesses no-op without live broker creds, by design). As of 2026-05-10, engines read daily bars exclusively from `platform.prices_daily` via `PostgresDataAdapter` — no live-API fallback; schedulers halt with a critical log if the DB is unreachable. Per-run audit timeline lands in `platform.application_log` (7-day rolling retention) via `tpcore.logging.DBLogHandler`. All three engines fail the overfitting-aware credibility gate (60/100); none cleared for live capital — paper-trading only.
 
 ---
 
@@ -346,7 +346,7 @@ Full database schema and data flow documentation: [`docs/DATABASE_AND_DATAFLOW.m
 
 | Source | Purpose | Cost |
 | --- | --- | --- |
-| Alpaca (IEX free) | Daily bars, quotes, execution, delisted stock data | $0 (real-time upgrade gated on `ExecutionQualityScore` evidence — see §6.5) |
+| Alpaca (IEX free) | Daily bar **ingest** (→ `platform.prices_daily`), quotes, execution, delisted stock data. Engines read bars from the DB, not from Alpaca live. | $0 (real-time upgrade gated on `ExecutionQualityScore` evidence — see §6.5) |
 | FMP **Starter** ($22/mo, active) | Fundamentals, insider, earnings | $22 (Premium $59/mo deferred — see §6.5) |
 | Railway **Hobby** ($5/mo, active) | Cron schedulers (5 services: sigma, reversion, vector, validation, corporate-actions) | $5 |
 | SEC EDGAR | Point-in-time filings, fundamentals backup | $0 |
@@ -388,6 +388,7 @@ Verified row counts and coverage (as of the most recent ingest run):
 | `platform.data_quality_log` | active | Receives rows from the Data Validation Suite, execution-quality tracker, and engine credibility scorer. |
 | `platform.aar_events` | 0 | Schema + writer implemented; populated by live paper trades once they fire. |
 | `platform.risk_state` | 1 | Postgres-backed Risk Governor persistence active. |
+| `platform.application_log` | 0 | Schema + `DBLogHandler` live as of 2026-05-10 (Alembic `20260511_0100`). 7-day rolling retention enforced per-write. Populates on the next scheduler fire. |
 
 All sources free-tier or FMP Starter ($22/month). Hosting on Railway Hobby ($5/month). Total fixed monthly cost: **$27** (see §6.1). No `yfinance`. The Tradier brokerage account is closed; the options-chain and pre-2020 bar export was completed before closure.
 
