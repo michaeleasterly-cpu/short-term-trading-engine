@@ -111,7 +111,7 @@ async def _load_fundamentals(
     out: dict[str, dict[str, Any] | None] = {}
     for ticker in tickers:
         try:
-            out[ticker] = await cache.get(ticker, as_of_date=as_of)
+            out[ticker] = await cache.get_quarterly_fundamentals(ticker, as_of_date=as_of)
         except Exception as exc:  # pragma: no cover - cache miss / no data
             logger.warning("vector.scheduler.fundamentals_miss", ticker=ticker, error=str(exc))
             out[ticker] = None
