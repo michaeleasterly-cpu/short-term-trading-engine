@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
+import uuid
 from collections import defaultdict
 from datetime import UTC, datetime
 from datetime import date as date_t
@@ -33,6 +35,7 @@ from tpcore.alpaca import AlpacaPaperBrokerAdapter
 from tpcore.db import build_asyncpg_pool
 from tpcore.fmp import FMPFundamentalsAdapter
 from tpcore.fundamentals.cache import FundamentalsCache
+from tpcore.logging import DBLogHandler
 from tpcore.outage import DataProviderOutage
 from tpcore.parity import LivePaperParityHarness
 from tpcore.risk.governor import RiskGovernor
@@ -167,8 +170,16 @@ class VectorScheduler:
             )
             raise SystemExit(1)
 
+        run_id = uuid.uuid4()
+        started_at = time.monotonic()
+        exit_code = 0
         pool = await build_asyncpg_pool(self._database_url)
         broker = self._injected_broker or AlpacaPaperBrokerAdapter()
+        db_log = DBLogHandler(pool, ENGINE_ID, run_id)
+        await db_log.startup(
+            commit_sha=os.getenv("RAILWAY_GIT_COMMIT_SHA")
+            or os.getenv("GIT_COMMIT_SHA")
+        )
         try:
             # Wire risk governor + AAR writer + (optional) parity harness.
             governor = RiskGovernor(
@@ -205,7 +216,14 @@ class VectorScheduler:
             new_aars = await order_manager.reconcile(
                 sizing_pct_of_engine_equity=Decimal("0.20"),
             )
+            for aar in new_aars:
+                await db_log.fill_confirmed(
+                    aar.ticker,
+                    fill_price=str(aar.exit_price),
+                    pnl=str(aar.pnl_net),
+                )
 
+            scan_started = time.monotonic()
             tickers = VECTOR_TEST_UNIVERSE + (SPY_SYMBOL,)
             bars = await _load_bars(pool, tickers, as_of)
             spy_panel = bars.pop(SPY_SYMBOL, None)
@@ -222,7 +240,9 @@ class VectorScheduler:
                 spy_panel=spy_panel,
                 vix_value=None,  # MVP — VIX feed deferred; ExecutionRisk treats None as low-VIX
             )
+            scan_ms = int((time.monotonic() - scan_started) * 1000)
             logger.info("vector.scheduler.scan_done", n_candidates=len(candidates), as_of=str(as_of))
+            await db_log.scan_complete(len(candidates), scan_ms)
 
             account = await broker.get_account()
             submitted = 0
@@ -230,6 +250,7 @@ class VectorScheduler:
                 assessment = lifecycle.assess(cand)
                 if assessment.phase is not Phase.ENTRY:
                     continue
+                await db_log.signal(cand.ticker, score=float(cand.swing_score))
                 state = await governor._store.get(ENGINE_ID)  # noqa: SLF001
                 open_positions = state.open_positions if state else 0
                 decision = execution.decide(
@@ -243,6 +264,7 @@ class VectorScheduler:
                 placed = await order_manager.submit_decision(decision, assessment)
                 if placed:
                     submitted += 1
+                    await db_log.order_submitted(decision.ticker, decision.qty)
 
             logger.info(
                 "vector.scheduler.run_done",
@@ -252,7 +274,13 @@ class VectorScheduler:
                 new_aars=len(new_aars),
             )
             return RunSummary(as_of=as_of, n_candidates=len(candidates), n_submitted=submitted)
+        except Exception as exc:
+            exit_code = 1
+            await db_log.error(exc, context="scheduler_crash")
+            raise
         finally:
+            duration_ms = int((time.monotonic() - started_at) * 1000)
+            await db_log.shutdown(duration_ms, exit_code)
             await pool.close()
 
     @staticmethod

@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
+import uuid
 from datetime import UTC, datetime
 from datetime import date as date_t
 from decimal import Decimal
@@ -34,6 +36,7 @@ from tpcore.db import build_asyncpg_pool
 from tpcore.fmp import FMPFundamentalsAdapter
 from tpcore.fundamentals.cache import FundamentalsCache
 from tpcore.interfaces.data import DataProviderInterface
+from tpcore.logging import DBLogHandler
 from tpcore.outage import DataProviderOutage
 from tpcore.parity import LivePaperParityHarness
 from tpcore.risk.governor import (
@@ -95,7 +98,11 @@ class ReversionScheduler:
 
     async def run_once(self, *, as_of: date_t | None = None) -> RunSummary:
         as_of = as_of or datetime.now(UTC).date()
+        run_id = uuid.uuid4()
+        started_at = time.monotonic()
         pool: Any | None = None
+        db_log: DBLogHandler | None = None
+        exit_code = 0
         try:
             if self._injected_risk_store is None and self._injected_aar_writer is None:
                 if self._database_url:
@@ -126,6 +133,14 @@ class ReversionScheduler:
             aar_writer = self._injected_aar_writer or (
                 AARWriter(pool) if pool is not None else None
             )
+
+            # Database-backed audit log — best-effort, never blocks the run.
+            if pool is not None:
+                db_log = DBLogHandler(pool, ENGINE_ID, run_id)
+                await db_log.startup(
+                    commit_sha=os.getenv("RAILWAY_GIT_COMMIT_SHA")
+                    or os.getenv("GIT_COMMIT_SHA")
+                )
 
             governor = RiskGovernor(
                 state_store=risk_store,
@@ -169,9 +184,20 @@ class ReversionScheduler:
             new_aars = await order_manager.reconcile(
                 sizing_pct_of_engine_equity=Decimal("0.20"),
             )
+            if db_log is not None:
+                for aar in new_aars:
+                    await db_log.fill_confirmed(
+                        aar.ticker,
+                        fill_price=str(aar.exit_price),
+                        pnl=str(aar.pnl_net),
+                    )
 
+            scan_started = time.monotonic()
             candidates = await setup.scan(as_of=as_of)
+            scan_ms = int((time.monotonic() - scan_started) * 1000)
             logger.info("reversion.scheduler.scan_done", n_candidates=len(candidates))
+            if db_log is not None:
+                await db_log.scan_complete(len(candidates), scan_ms)
 
             # Fundamentals provider — DB-cached when a pool is open, falls
             # back to direct FMP otherwise. The cache lets daily scheduler
@@ -189,6 +215,12 @@ class ReversionScheduler:
                     assessment = lifecycle.assess(cand, fundamentals=fundamentals)
                     if assessment.phase is not Phase.ACTIVE:
                         continue
+                    if db_log is not None:
+                        await db_log.signal(
+                            cand.ticker,
+                            score=float(cand.fade_score),
+                            direction=cand.direction.value,
+                        )
                     state = await risk_store.get(ENGINE_ID)
                     open_positions = state.open_positions if state else 0
                     decision = execution.decide(
@@ -202,6 +234,8 @@ class ReversionScheduler:
                     placed = await order_manager.submit_decision(decision, assessment)
                     if placed:
                         submitted += 1
+                        if db_log is not None:
+                            await db_log.order_submitted(decision.ticker, decision.qty)
             finally:
                 if owned_adapter is not None:
                     await owned_adapter.aclose()
@@ -219,7 +253,15 @@ class ReversionScheduler:
                 n_submitted=submitted,
                 aars=new_aars,
             )
+        except Exception as exc:
+            exit_code = 1
+            if db_log is not None:
+                await db_log.error(exc, context="scheduler_crash")
+            raise
         finally:
+            if db_log is not None:
+                duration_ms = int((time.monotonic() - started_at) * 1000)
+                await db_log.shutdown(duration_ms, exit_code)
             if pool is not None:
                 await pool.close()
                 logger.info("reversion.scheduler.pool_closed")
