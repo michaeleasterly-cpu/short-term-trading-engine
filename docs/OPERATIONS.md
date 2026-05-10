@@ -86,13 +86,13 @@ If the CLI is not authenticated, use the Railway dashboard:
 
 Each engine and ops service pings Healthchecks at the start and end of every run. The checks fail-loud when a ping doesn't arrive within the configured grace period.
 
-| Healthchecks check name | Expected cadence | Grace | Source env var |
+| Healthchecks check name | Expected cadence | Grace | Source env var (verified against scheduler code) |
 | --- | --- | --- | --- |
-| `short-term-engine-sigma` | weekdays 22:00 UTC | 1h | `HEALTHCHECKS_PING_URL_SIGMA` (or `HEALTHCHECKS_PING_URL`) |
-| `short-term-engine-reversion` | weekdays 22:00 UTC | 1h | `REVERSION_HEALTHCHECKS_PING_URL` (or `HEALTHCHECKS_PING_URL_REVERSION`) |
+| `short-term-engine-sigma` | weekdays 22:00 UTC | 1h | `HEALTHCHECKS_PING_URL` (sigma reads only the generic name — set this **on the sigma-scheduler service specifically**, not as a project-wide variable) |
+| `short-term-engine-reversion` | weekdays 22:00 UTC | 1h | `REVERSION_HEALTHCHECKS_PING_URL` (preferred) → `HEALTHCHECKS_PING_URL_REVERSION` → generic `HEALTHCHECKS_PING_URL` |
 | `short-term-engine-vector` | weekdays 22:00 UTC | 1h | `HEALTHCHECKS_VECTOR_URL` |
 | `short-term-engine-validation-suite` | Sundays 06:00 UTC | 1h | `HEALTHCHECKS_VALIDATION_URL` |
-| `short-term-engine-corporate-actions-ingestion` | Sundays 04:00 UTC | 1h | `HEALTHCHECKS_CORPACTIONS_URL` |
+| `short-term-engine-corporate-actions-ingestion` | Sundays 04:00 UTC | 1h | `HEALTHCHECKS_CORPORATE_ACTIONS_URL` |
 
 **Known issue (2026-05-10):** `short-term-engine-sigma` and `short-term-engine-reversion` show **last ping = Never** — the Railway services are Online and the cron schedules are firing, but no pings have ever reached Healthchecks for those two engines. The validation-suite and corporate-actions checks are healthy (last pings 3–4h ago, ~15 sec duration), and Vector's check exists. Most likely cause: the per-engine `HEALTHCHECKS_PING_URL_*` env vars aren't set on the corresponding Railway services. Verify by inspecting service variables in the Railway dashboard. The schedulers' ping is best-effort — a missing URL causes a silent skip, never an error in the engine logic. **This issue does not affect engine execution; it affects observability.**
 
