@@ -376,7 +376,7 @@ flowchart TB
 4. **Lifecycle Analysis:** For each candidate above threshold, determines phase (SETUP, ACTIVE, EXHAUSTED). Applies engine-specific gates (earnings quality, CHOP, catalyst proximity).
 5. **Execution & Risk:** Computes position size. Calls `RiskGovernor.check_trade()`. Submits bracket orders to Alpaca paper endpoint. Records fill quality.
 6. **AAR Logging:** On Tier 1 and Tier 2 fills, writes `AfterActionReport` to `platform.aar_events` via `AARWriter`.
-7. **Shutdown:** Updates `platform.risk_state` with cumulative P&L. Pings Healthchecks. Closes pool. Exits.
+7. **Shutdown:** Updates `platform.risk_state` with cumulative P&L. Writes a `SHUTDOWN` event to `platform.application_log` (the canonical health indicator for short-lived runs). Closes pool. Exits.
 
 ### 3.4 Backtesting Flow
 
@@ -426,16 +426,16 @@ flowchart TD
         VectorOrder --> FillCheck
         FillCheck --> AAR["Write AAR → platform.aar_events"]
         AAR --> RiskUpdate["Update Risk State\n(P&L, kill switch)"]
-        RiskUpdate --> Healthcheck["Ping Healthchecks.io"]
-        Healthcheck --> EndDaily["End: ~22:05 UTC"]
+        RiskUpdate --> AppLog["Write SHUTDOWN →\nplatform.application_log"]
+        AppLog --> EndDaily["End: ~22:05 UTC"]
     end
 
     subgraph Weekly["Weekly Cycle (Sunday)"]
         StartWeekly["Start: Sun 03:00 UTC"] --> FundRefresh["Fundamentals Cache Refresh\n(FMP → fundamentals_quarterly)"]
         FundRefresh --> CorpActions["Corporate Actions\n(Alpaca → apply splits)"]
         CorpActions --> ValidationSuite["Data Validation Suite\n(check prices_daily)"]
-        ValidationSuite --> WeeklyHealthcheck["Ping Healthchecks"]
-        WeeklyHealthcheck --> EndWeekly["End: ~06:30 UTC"]
+        ValidationSuite --> WeeklyAppLog["Write SHUTDOWN →\nplatform.application_log"]
+        WeeklyAppLog --> EndWeekly["End: ~06:30 UTC"]
     end
 
     subgraph Feedback["AAR Feedback Loop (Live)"]
@@ -459,7 +459,7 @@ flowchart TD
     class BarIngest,Screener,Promote,Planned plannedNode
 ```
 
-- **Daily Cycle:** Bar ingestion at 21:30 UTC, Universe Pre-Screener at 21:30 UTC, engine scans at 22:00 UTC. Signals generate orders; fills are reconciled and logged. Healthchecks ping confirms successful completion.
+- **Daily Cycle:** Bar ingestion at 21:30 UTC, Universe Pre-Screener at 21:30 UTC, engine scans at 22:00 UTC. Signals generate orders; fills are reconciled and logged. The `SHUTDOWN` row in `platform.application_log` confirms successful completion — that table is the sole health indicator for short-lived cron runs.
 - **Weekly Cycle:** Fundamentals cache refresh (Sun 03:00), corporate actions ingest + split application (Sun 04:00), Data Validation Suite (Sun 06:00).
 - **AAR Feedback Loop:** Every fill writes an AAR. The overfitting diagnostic module (live) gates graduation at credibility ≥ 60/100. Failures drive engine refinement and backtest re-runs. The Forensics service and Sprint Dossier generation (planned, master plan §5) will further consume AAR data for automated failure analysis.
 
@@ -504,7 +504,7 @@ This section is binding for all AI coding sessions. Violating any rule is a hard
 
 - **Fail loud.** Never `except Exception: pass`. Log the error, increment the outage counter, and exit non-zero if the error is critical.
 - **Circuit breakers:** For external API calls (FMP, IBorrowDesk, ApeWisdom), 5 consecutive failures trigger a 6-hour pause.
-- **Healthchecks ping on every run.** Success = ping. Failure = `/fail` ping. No ping = alert.
+- **Run audit trail.** Every scheduler / cron emits `STARTUP` and `SHUTDOWN` rows to `platform.application_log` via `tpcore.logging.DBLogHandler`. The presence of a paired `STARTUP` + `SHUTDOWN` (with `exit_code = 0`) per `run_id` is the run-success signal; Railway's dashboard provides deployment status. External ping services are no longer used.
 
 ## 5. Implementation Queue
 

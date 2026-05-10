@@ -74,7 +74,7 @@ Confirm all five lines show `● Online`. Anything else (`Crashed`, `Removed`, `
 
 **For each service, confirm:**
 - Latest deployment is `SUCCESS` (not `FAILED`, `CRASHED`, `BUILDING`, or `STOPPED`).
-- Last execution exited cleanly. The schedulers log a final `*.scheduler.run_done` or `*.scheduler.healthcheck.success` line on success; absence of that line on a day the cron should have fired is a red flag.
+- Last execution exited cleanly. The schedulers log a final `*.scheduler.run_done` line on success and write a `SHUTDOWN` row to `platform.application_log` with `exit_code = 0`; absence of either signal on a day the cron should have fired is a red flag (see §2).
 - No unhandled exceptions, tracebacks, or `RiskGovernor.emergency_kill` events in the recent logs.
 - Cron schedule is still active in the Railway dashboard (Service → Settings → Cron Schedule). Pausing a service or deleting its cron string disables it without raising an alert.
 
@@ -88,39 +88,55 @@ If the CLI is not authenticated, use the Railway dashboard:
 
 ---
 
-## 2. Healthchecks.io Status
+## 2. Run Health (`platform.application_log`)
 
-Each engine and ops service pings Healthchecks at the start and end of every run. The checks fail-loud when a ping doesn't arrive within the configured grace period.
+Health checks are now performed by querying `platform.application_log` for the latest `STARTUP` and `SHUTDOWN` events per engine. Railway's dashboard shows deployment status and cron execution history. Healthchecks.io has been removed — for short-lived runs (cron schedulers, ops jobs) the database log is the authoritative health indicator.
 
-| Healthchecks check name | Expected cadence | Grace | Source env var (verified against scheduler code) |
-| --- | --- | --- | --- |
-| `short-term-engine-sigma` | weekdays 22:00 UTC | 1h | `HEALTHCHECKS_PING_URL` (sigma reads only the generic name — set this **on the sigma-scheduler service specifically**, not as a project-wide variable) |
-| `short-term-engine-reversion` | weekdays 22:00 UTC | 1h | `REVERSION_HEALTHCHECKS_PING_URL` (preferred) → `HEALTHCHECKS_PING_URL_REVERSION` → generic `HEALTHCHECKS_PING_URL` |
-| `short-term-engine-vector` | weekdays 22:00 UTC | 1h | `HEALTHCHECKS_VECTOR_URL` |
-| `short-term-engine-validation-suite` | Sundays 06:00 UTC | 1h | `HEALTHCHECKS_VALIDATION_URL` |
-| `short-term-engine-corporate-actions-ingestion` | Sundays 04:00 UTC | 1h | `HEALTHCHECKS_CORPORATE_ACTIONS_URL` |
+Each scheduler / cron emits two rows per run via `tpcore.logging.DBLogHandler`:
 
-**Status (2026-05-10):** All five `HEALTHCHECKS_*` URLs are set as Railway service-scoped variables. All five services rebuilt with the venv-based build path (`/app/.venv` + Python 3.11.15 pin) — runtime `httpx`-missing crash is resolved. Sigma + reversion checks will flip from "Last Ping = Never" to UP on the next Mon 22:00 UTC cron fire.
+- `STARTUP` — written immediately after pool open, with `commit_sha` in `data`.
+- `SHUTDOWN` — written in the `finally` block, with `duration_ms` and `exit_code` in `data`.
 
-### How to inspect
+A clean run is a `STARTUP` + `SHUTDOWN` pair for the same `run_id` with `exit_code = 0`. A missing `SHUTDOWN` for a recent `run_id` means the process crashed before the `finally` block; cross-reference with Railway logs.
 
-**Dashboard (preferred):**
-1. https://healthchecks.io/checks/ → log in with the project account.
-2. Each check should be green (`up`). Yellow = `late`. Red = `down`. Grey = `paused`.
-3. Click a check → the "Pings" tab shows the timeline. Confirm the last "success" ping (not just "start") arrived within the expected window.
+### Latest run per engine
 
-**API (scriptable):**
-```bash
-curl -H "X-Api-Key: $HEALTHCHECKS_API_KEY" \
-  https://healthchecks.io/api/v3/checks/ | jq '.checks[] | {name, status, last_ping}'
+```sql
+WITH latest AS (
+    SELECT engine, run_id, MAX(recorded_at) AS last_event
+    FROM platform.application_log
+    WHERE recorded_at > now() - INTERVAL '7 days'
+    GROUP BY engine, run_id
+)
+SELECT
+    l.engine,
+    l.run_id,
+    MAX(CASE WHEN a.event_type = 'STARTUP'  THEN a.recorded_at END) AS started_at,
+    MAX(CASE WHEN a.event_type = 'SHUTDOWN' THEN a.recorded_at END) AS finished_at,
+    MAX(CASE WHEN a.event_type = 'SHUTDOWN' THEN (a.data->>'exit_code')::int END) AS exit_code,
+    BOOL_OR(a.severity IN ('ERROR', 'CRITICAL')) AS had_error
+FROM platform.application_log a
+JOIN latest l USING (engine, run_id)
+GROUP BY l.engine, l.run_id
+ORDER BY l.engine, started_at DESC;
 ```
 
-**For each check, confirm:**
-- Status is `up` (or `new` only if a check was just provisioned).
-- `last_ping` ≤ expected cadence + grace period.
-- No check is `paused` (someone disabled it manually) or `down` (missed cadence).
+**For each engine row, confirm:**
+- `started_at` is within the expected cadence (weekdays 22:00 UTC for engines, Sun 06:00 UTC for validation, Sun 04:00 UTC for corporate-actions).
+- `finished_at` is non-NULL and within ~5 minutes of `started_at` for engines, ~30 minutes for ops jobs.
+- `exit_code = 0`.
+- `had_error = false`.
 
-A `late` status that flips green within an hour or two is usually a delayed Railway run, not a real failure — but if it persists, treat it as `down`.
+### Inspect a single run's timeline
+
+```sql
+SELECT recorded_at, event_type, severity, message, data
+FROM platform.application_log
+WHERE run_id = '<uuid>'
+ORDER BY recorded_at;
+```
+
+The handler enforces a 7-day rolling retention on every insert (`DELETE FROM platform.application_log WHERE recorded_at < now() - INTERVAL '7 days'`); older runs are not queryable. For longer audit windows, archive externally before the retention sweep.
 
 ---
 
@@ -367,12 +383,12 @@ Railway
 [ ] validation-scheduler:      (Sundays only) last execution reviewed
 [ ] corporate-actions-scheduler: (Sundays only) last execution exit 0
 
-Healthchecks (names match the dashboard at https://healthchecks.io/checks/)
-[ ] short-term-engine-sigma:                          UP, last ping within 25h
-[ ] short-term-engine-reversion:                      UP, last ping within 25h
-[ ] short-term-engine-vector:                         UP, last ping within 25h
-[ ] short-term-engine-validation-suite:               UP, last ping within 7d
-[ ] short-term-engine-corporate-actions-ingestion:    UP, last ping within 7d
+Run Health (platform.application_log — see §2)
+[ ] sigma:                       latest run has STARTUP + SHUTDOWN with exit_code=0, no ERROR/CRITICAL rows
+[ ] reversion:                   latest run has STARTUP + SHUTDOWN with exit_code=0, no ERROR/CRITICAL rows
+[ ] vector:                      latest run has STARTUP + SHUTDOWN with exit_code=0, no ERROR/CRITICAL rows
+[ ] validation:                  (Sundays only) latest run has STARTUP + SHUTDOWN with exit_code=0
+[ ] corporate-actions:           (Sundays only) latest run has STARTUP + SHUTDOWN with exit_code=0
 
 Database
 [ ] Postgres reachable (SELECT 1 succeeds)
@@ -446,20 +462,32 @@ Common causes:
 - **Missing env var.** Compare against `.env.example`. Add via the Railway dashboard → Service → Variables.
 - **Database unreachable.** See "Database is unreachable" below.
 - **Code regression.** Recent deploy broke something. Check `railway deployments --service <name>` for the prior good build and roll back via the dashboard.
-- **Healthchecks ping URL invalid.** Non-fatal in the schedulers (best-effort), but a 404 in the logs means the env var is wrong.
 
 Recovery: fix root cause → push (Railway auto-deploys on `main`) → confirm next deploy is `SUCCESS`. Do *not* just retry the failed run; the cron will fire again at its next scheduled time on its own.
 
-### A Healthchecks check is `DOWN` or `LATE`
+### A scheduled run produced no `SHUTDOWN` row
 
-```bash
-# Was the underlying service healthy at the expected fire time?
-railway service <corresponding-service> && railway logs | tail -200
+```sql
+-- Find recent runs that started but never finished cleanly:
+SELECT engine, run_id, MIN(recorded_at) AS started_at,
+       BOOL_OR(event_type = 'SHUTDOWN') AS shutdown_seen,
+       MAX(CASE WHEN event_type = 'SHUTDOWN' THEN (data->>'exit_code')::int END) AS exit_code,
+       BOOL_OR(severity IN ('ERROR', 'CRITICAL')) AS had_error
+FROM platform.application_log
+WHERE recorded_at > now() - INTERVAL '7 days'
+GROUP BY engine, run_id
+HAVING NOT BOOL_OR(event_type = 'SHUTDOWN')
+    OR MAX(CASE WHEN event_type = 'SHUTDOWN' THEN (data->>'exit_code')::int END) <> 0
+ORDER BY started_at DESC;
 ```
 
-- If the service ran but the ping didn't arrive: the `HEALTHCHECKS_*` env var is wrong or the HTTP request failed silently. Pings are best-effort and never block the run.
-- If the service didn't run: the cron is paused, the service crashed, or Railway had an outage. Investigate via §1.
-- If you've fixed the cause, Healthchecks will auto-flip back to `UP` on the next successful ping. You can also click "Resolve" in the dashboard to clear the alert manually.
+A missing `SHUTDOWN` row means the process died before the `finally` block. Pull Railway logs for the affected service and `run_id` window:
+
+```bash
+railway service <corresponding-service> && railway logs | tail -300
+```
+
+If a row appears with no matching engine run at all (e.g. cron expected at 22:00 UTC but no STARTUP within the window), the cron didn't fire — investigate via §1 (paused service, crashed deploy, or Railway outage).
 
 ### Database is unreachable
 

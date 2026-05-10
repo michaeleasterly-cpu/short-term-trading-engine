@@ -14,8 +14,6 @@ Operational pattern mirrors ``ops/cron_validation.py``:
 * loads ``DATABASE_URL`` (or ``DATABASE_URL_IPV4`` for the local Supabase
   pooler) from the env;
 * opens an asyncpg pool, runs the two steps;
-* pings ``HEALTHCHECKS_CORPORATE_ACTIONS_URL`` (success URL on pass,
-  ``/fail`` on any unhandled exception);
 * exits 0 on success, 1 on failure.
 
 Cron schedule: weekly, Sunday 04:00 UTC (see ``railway.json``) — runs
@@ -43,7 +41,6 @@ from tpcore.db import build_asyncpg_pool
 
 logger = structlog.get_logger(__name__)
 
-_HEALTHCHECKS_ENV = "HEALTHCHECKS_CORPORATE_ACTIONS_URL"
 _DATA_BASE = "https://data.alpaca.markets"
 _INGEST_START = date(2018, 1, 1)
 _CHUNK_SIZE = 20
@@ -62,21 +59,6 @@ UNIVERSE: tuple[str, ...] = (
     "SO", "DUK", "NEE",
     "PLTR", "UBER", "ABNB", "SNAP", "RBLX", "RIVN", "LCID", "FSLR",
 )
-
-
-async def _ping_healthcheck(suffix: str = "") -> None:
-    """Best-effort ping. Failure here never affects the run outcome."""
-    url = os.getenv(_HEALTHCHECKS_ENV)
-    if not url:
-        return
-    target = url.rstrip("/") + suffix
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            await client.get(target)
-    except Exception as exc:  # pragma: no cover - network-best-effort
-        logger.warning(
-            "corporate_actions.healthcheck.ping_failed", suffix=suffix, error=str(exc)
-        )
 
 
 async def _ingest_universe(pool, *, end: date) -> int:
@@ -111,7 +93,6 @@ async def _amain() -> int:
         return 2
 
     today = datetime.now(UTC).date()
-    await _ping_healthcheck("/start")
     try:
         pool = await build_asyncpg_pool(db_url)
         try:
@@ -121,7 +102,6 @@ async def _amain() -> int:
             await pool.close()
     except Exception as exc:
         logger.exception("corporate_actions.cron.run_failed", error=str(exc))
-        await _ping_healthcheck("/fail")
         return 1
 
     n_applied = len(split_summary["applied"])
@@ -135,7 +115,6 @@ async def _amain() -> int:
             f"  APPLY {a['ticker']:6s} rows={a['n_rows_updated']} "
             f"before={a['before']} after={a['after']}"
         )
-    await _ping_healthcheck("")
     return 0
 
 

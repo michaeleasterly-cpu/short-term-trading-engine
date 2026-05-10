@@ -1,17 +1,16 @@
 """Vector scheduler — daily cron entry point.
 
 MVP scope: scan the universe for candidates, log them, submit Phase.ENTRY
-candidates as Alpaca paper bracket orders, ping Healthchecks. Open-position
-reconciliation, AAR persistence on close, and trail-stop re-evaluation are
-TODO for the next iteration — Sigma's order_manager has the full shape and
-Vector will mirror it once paper-trade volume justifies the lift.
+candidates as Alpaca paper bracket orders. Open-position reconciliation,
+AAR persistence on close, and trail-stop re-evaluation are TODO for the
+next iteration — Sigma's order_manager has the full shape and Vector will
+mirror it once paper-trade volume justifies the lift.
 
 Calling cadence: daily, weekday-only, Mon–Fri 22:00 UTC (see ``railway.json``).
 
 Required env:
     DATABASE_URL                — Postgres URL for prices + fundamentals.
     ALPACA_KEY / ALPACA_SECRET  — paper credentials.
-    HEALTHCHECKS_VECTOR_URL     — optional; success / start / fail pings.
     VECTOR_ENGINE_EQUITY        — optional; default 10000.
 """
 from __future__ import annotations
@@ -26,7 +25,6 @@ from datetime import date as date_t
 from decimal import Decimal
 from typing import Any
 
-import httpx
 import pandas as pd
 import structlog
 
@@ -54,7 +52,6 @@ logger = structlog.get_logger(__name__)
 ENGINE_ID = "vector"
 SPY_SYMBOL = "SPY"
 LOOKBACK_DAYS = 260  # enough for 200-SMA + headroom
-_HEALTHCHECKS_ENV = "HEALTHCHECKS_VECTOR_URL"
 
 
 class RunSummary:
@@ -128,18 +125,6 @@ async def _load_fundamentals(
     if fmp is not None:
         await fmp.aclose()
     return out
-
-
-async def _ping_healthcheck(suffix: str = "") -> None:
-    url = os.getenv(_HEALTHCHECKS_ENV)
-    if not url:
-        return
-    target = url.rstrip("/") + suffix
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            await client.get(target)
-    except Exception as exc:  # pragma: no cover
-        logger.warning("vector.scheduler.healthcheck_ping_failed", suffix=suffix, error=str(exc))
 
 
 class VectorScheduler:
@@ -313,13 +298,11 @@ class VectorScheduler:
 
 async def _amain() -> int:
     equity = Decimal(os.getenv("VECTOR_ENGINE_EQUITY", "10000"))
-    await _ping_healthcheck("/start")
     try:
         scheduler = VectorScheduler(engine_equity=equity)
         summary = await scheduler.run_once()
     except Exception as exc:
         logger.exception("vector.scheduler.run_failed", error=str(exc))
-        await _ping_healthcheck("/fail")
         return 1
 
     logger.info(
@@ -328,7 +311,6 @@ async def _amain() -> int:
         n_candidates=summary.n_candidates,
         n_submitted=summary.n_submitted,
     )
-    await _ping_healthcheck("")
     return 0
 
 

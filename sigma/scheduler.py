@@ -332,38 +332,16 @@ class SigmaScheduler:
         return adapter, adapter
 
 
-async def _ping_healthcheck(suffix: str = "") -> None:
-    """Best-effort ping to ``HEALTHCHECKS_PING_URL`` (Healthchecks.io style).
-
-    ``suffix`` is one of ``""`` (success), ``"/start"``, or ``"/fail"``. Any
-    failure here is swallowed — monitoring outages must never affect the
-    trading cycle.
-    """
-    url = os.getenv("HEALTHCHECKS_PING_URL")
-    if not url:
-        return
-    import httpx
-
-    target = url.rstrip("/") + suffix
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            await client.get(target)
-    except Exception as exc:  # pragma: no cover - network-best-effort
-        logger.warning("sigma.scheduler.healthcheck_ping_failed", suffix=suffix, error=str(exc))
-
-
 async def _amain() -> int:
     """Async entry for ``python -m sigma.scheduler``. Returns shell exit code."""
     equity = Decimal(os.getenv("SIGMA_ENGINE_EQUITY", "10000"))
     platform_capital = Decimal(os.getenv("PLATFORM_CAPITAL", str(equity)))
 
-    await _ping_healthcheck("/start")
     try:
         scheduler = SigmaScheduler(engine_equity=equity, platform_capital=platform_capital)
         summary = await scheduler.run_once()
     except Exception as exc:
         logger.exception("sigma.scheduler.run_failed", error=str(exc))
-        await _ping_healthcheck("/fail")
         return 1
 
     logger.info(
@@ -373,7 +351,6 @@ async def _amain() -> int:
         n_submitted=summary.n_submitted,
         n_aars=len(summary.aars),
     )
-    await _ping_healthcheck("")  # success
     return 0
 
 
