@@ -32,9 +32,31 @@ if TYPE_CHECKING:  # pragma: no cover
 
 logger = structlog.get_logger(__name__)
 
-_ALPACA_BROKER_BASE = "https://api.alpaca.markets"
-_ALPACA_DATA_BASE = "https://data.alpaca.markets"
+_ALPACA_BROKER_BASE_LIVE = "https://api.alpaca.markets"
+_ALPACA_BROKER_BASE_PAPER = "https://paper-api.alpaca.markets"
+_ALPACA_DATA_BASE = "https://data.alpaca.markets"  # same URL for paper + live
 _RATE_LIMIT_SLEEP_SEC = 0.35  # ~170 rpm, safely under 200 rpm cap
+
+
+def _alpaca_broker_base() -> str:
+    """Pick the paper or live broker URL based on ``ALPACA_PAPER`` env.
+
+    The data endpoint is shared, so only the broker (assets / orders) URL
+    needs to switch. Defaults to paper — every environment we run today
+    is paper-keyed, and a live key against the paper URL just 401s with
+    a clear error rather than silently leaking real orders.
+    """
+    return (
+        _ALPACA_BROKER_BASE_PAPER
+        if os.getenv("ALPACA_PAPER", "true").lower() == "true"
+        else _ALPACA_BROKER_BASE_LIVE
+    )
+
+
+# Back-compat shim — older callers referenced the constant directly.
+# Kept as a property-like getter so importers always see the env-resolved
+# value at access time, not at module-import time.
+_ALPACA_BROKER_BASE = _ALPACA_BROKER_BASE_PAPER  # default; runtime callers use _alpaca_broker_base()
 
 
 @dataclass
@@ -55,7 +77,7 @@ def _alpaca_headers() -> dict[str, str]:
 
 async def _list_assets(client: httpx.AsyncClient, status: str) -> list[_AssetRecord]:
     """List active or inactive US equities."""
-    url = f"{_ALPACA_BROKER_BASE}/v2/assets"
+    url = f"{_alpaca_broker_base()}/v2/assets"
     params = {"status": status, "class": "us_equity"}
     resp = await client.get(url, params=params)
     resp.raise_for_status()
@@ -72,6 +94,76 @@ async def _list_assets(client: httpx.AsyncClient, status: str) -> list[_AssetRec
                 exchange=row.get("exchange", ""),
             )
         )
+    return out
+
+
+async def fetch_active_us_equities(
+    client: httpx.AsyncClient,
+    *,
+    exchanges: tuple[str, ...] = ("NYSE", "NASDAQ"),
+) -> list[dict]:
+    """List active, tradable US equities on the named exchanges.
+
+    Returns a list of ``{"symbol", "exchange"}`` dicts. Used by the
+    ``all_active`` daily_bars discovery sweep — distinct from
+    ``_list_assets`` (which returns ``_AssetRecord`` for the bootstrap
+    script).
+    """
+    url = f"{_alpaca_broker_base()}/v2/assets"
+    resp = await client.get(url, params={"status": "active", "asset_class": "us_equity"})
+    resp.raise_for_status()
+    wanted = {e.upper() for e in exchanges}
+    out: list[dict] = []
+    for row in resp.json():
+        if not row.get("tradable"):
+            continue
+        ex = (row.get("exchange") or "").upper()
+        if ex not in wanted:
+            continue
+        out.append({"symbol": row["symbol"], "exchange": ex})
+    return out
+
+
+async def fetch_daily_bars_multi(
+    client: httpx.AsyncClient,
+    symbols: list[str],
+    start: date,
+    end: date,
+    *,
+    feed: str = "iex",
+    adjustment: str = "all",
+) -> dict[str, list[dict]]:
+    """Multi-symbol equivalent of :func:`fetch_daily_bars`.
+
+    Hits ``/v2/stocks/bars`` (no symbol in path) which accepts up to 100
+    symbols per call. Pages through ``next_page_token`` and merges all
+    pages into one dict keyed by symbol. Symbols with no bars in the
+    window are returned as empty lists rather than missing keys, so the
+    caller can iterate over all input symbols deterministically.
+    """
+    url = f"{_ALPACA_DATA_BASE}/v2/stocks/bars"
+    params: dict[str, str] = {
+        "symbols": ",".join(symbols),
+        "timeframe": "1Day",
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "feed": feed,
+        "limit": "10000",
+        "adjustment": adjustment,
+    }
+    out: dict[str, list[dict]] = {s: [] for s in symbols}
+    while True:
+        resp = await client.get(url, params=params)
+        resp.raise_for_status()
+        body = resp.json()
+        bars_by_symbol = body.get("bars") or {}
+        for sym, page in bars_by_symbol.items():
+            out.setdefault(sym, []).extend(page or [])
+        next_token = body.get("next_page_token")
+        if not next_token:
+            break
+        params["page_token"] = next_token
+        await asyncio.sleep(_RATE_LIMIT_SLEEP_SEC)
     return out
 
 
@@ -131,12 +223,15 @@ async def _upsert_bars(
     """
     if not bars:
         return 0
+    # source = 'alpaca' on both INSERT and UPDATE — if a Tradier import
+    # landed this (ticker, date) first, an Alpaca refresh promotes it back
+    # to alpaca-provenance now that we have the authoritative bar.
     sql = """
         INSERT INTO platform.prices_daily (
             ticker, date, open, high, low, close, volume,
-            adjusted_close, delisted, delisting_date
+            adjusted_close, delisted, delisting_date, source
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'alpaca')
         ON CONFLICT (ticker, date) DO UPDATE SET
             open = EXCLUDED.open,
             high = EXCLUDED.high,
@@ -145,7 +240,8 @@ async def _upsert_bars(
             volume = EXCLUDED.volume,
             adjusted_close = EXCLUDED.adjusted_close,
             delisted = EXCLUDED.delisted,
-            delisting_date = EXCLUDED.delisting_date
+            delisting_date = EXCLUDED.delisting_date,
+            source = 'alpaca'
     """
     rows: list[tuple] = []
     for b in bars:

@@ -154,11 +154,38 @@ async def handle_daily_bars(pool: "asyncpg.Pool", config: dict[str, Any]) -> int
     later.
 
     ``config`` keys:
-        * ``universe``: ``"active"`` (default) reads from prices_daily;
-          a list of tickers overrides explicitly.
+        * ``universe``:
+            - ``"active"`` (default): reads tickers from prices_daily.
+            - ``"all_active"``: discovery-mode sweep — enumerate every
+              tradable Alpaca asset on NYSE/NASDAQ and apply a coarse
+              price/volume filter. New tickers that pass the filter
+              enter ``platform.prices_daily``.
+            - ``list[str]``: explicit ticker override.
         * ``lookback_days``: int, default 7.
+        * ``min_price`` / ``min_volume``: coarse filter floors (only
+          consulted on the ``all_active`` path). Defaults: $5, 250k.
+        * ``batch_size`` / ``inter_batch_sleep_sec``: ``all_active``
+          batching. Defaults: 50, 0.3.
+    """
+    universe_cfg = config.get("universe", "active")
+    if universe_cfg == "all_active":
+        return await _handle_daily_bars_all_active(pool, config)
+    return await _handle_daily_bars_explicit(pool, config, universe_cfg)
+
+
+async def _handle_daily_bars_explicit(
+    pool: asyncpg.Pool,
+    config: dict[str, Any],
+    universe_cfg: Any,
+) -> int:
+    """Existing 'active' / list-of-tickers code path. Per-symbol fetches.
+
+    Lifted out of ``handle_daily_bars`` so the discovery sweep
+    (``all_active``) can live as its own helper without making the entry
+    point unreadable.
     """
     import asyncio
+    from datetime import timedelta
 
     import httpx
 
@@ -170,7 +197,6 @@ async def handle_daily_bars(pool: "asyncpg.Pool", config: dict[str, Any]) -> int
     )
 
     lookback_days = int(config.get("lookback_days", 7))
-    universe_cfg = config.get("universe", "active")
     if universe_cfg == "active":
         sql = """
             SELECT DISTINCT ticker
@@ -187,12 +213,10 @@ async def handle_daily_bars(pool: "asyncpg.Pool", config: dict[str, Any]) -> int
     else:
         raise ValueError(
             f"daily_bars: unsupported universe config {universe_cfg!r} — "
-            "expected 'active' or a list of tickers"
+            "expected 'active', 'all_active', or a list of tickers"
         )
 
     today = datetime.now(UTC).date()
-    from datetime import timedelta
-
     start = today - timedelta(days=lookback_days)
 
     headers = _alpaca_headers()
@@ -226,6 +250,100 @@ async def handle_daily_bars(pool: "asyncpg.Pool", config: dict[str, Any]) -> int
             f"daily_bars: {len(failures)} symbol fetch failure(s); first: {failures[0]}"
         )
     return total_rows
+
+
+async def _handle_daily_bars_all_active(
+    pool: asyncpg.Pool, config: dict[str, Any]
+) -> int:
+    """Discovery sweep: enumerate every active US equity, coarse-filter, upsert.
+
+    Uses Alpaca's multi-symbol bars endpoint (``/v2/stocks/bars?symbols=…``)
+    so 8k tickers fits in ~160 calls — under 4 minutes wall time at
+    50 symbols / 0.3s between batches. Filters at the engine layer
+    (close > min_price AND avg volume > min_volume over the lookback
+    window) before upserting; symbols that don't pass never touch the
+    database. New rows land with ``source = 'alpaca'`` (the upsert SQL
+    sets it explicitly so a previously-Tradier-tagged row gets promoted
+    back to alpaca-provenance).
+    """
+    import asyncio
+    from datetime import timedelta
+
+    import httpx
+
+    from tpcore.data.ingest_alpaca_bars import (
+        _ALPACA_DATA_BASE,
+        _alpaca_broker_base,
+        _alpaca_headers,
+        _upsert_bars,
+        fetch_active_us_equities,
+        fetch_daily_bars_multi,
+    )
+
+    lookback_days = int(config.get("lookback_days", 7))
+    min_price = float(config.get("min_price", 5.0))
+    min_volume = int(config.get("min_volume", 250_000))
+    batch_size = int(config.get("batch_size", 50))
+    inter_batch_sleep = float(config.get("inter_batch_sleep_sec", 0.3))
+
+    today = datetime.now(UTC).date()
+    start = today - timedelta(days=lookback_days)
+
+    headers = _alpaca_headers()
+    rows_upserted = 0
+    symbols_passed_coarse = 0
+    failed_batches = 0
+    async with (
+        httpx.AsyncClient(headers=headers, base_url=_alpaca_broker_base(), timeout=60.0) as broker,
+        httpx.AsyncClient(headers=headers, base_url=_ALPACA_DATA_BASE, timeout=60.0) as data,
+    ):
+        assets = await fetch_active_us_equities(broker)
+        all_symbols = [a["symbol"] for a in assets]
+        logger.info(
+            "ingestion.handler.daily_bars.all_active.universe",
+            count=len(all_symbols),
+            min_price=min_price,
+            min_volume=min_volume,
+        )
+
+        for i in range(0, len(all_symbols), batch_size):
+            batch = all_symbols[i : i + batch_size]
+            try:
+                bars_by_symbol = await fetch_daily_bars_multi(data, batch, start, today)
+            except httpx.HTTPStatusError as exc:
+                failed_batches += 1
+                logger.warning(
+                    "ingestion.handler.daily_bars.all_active.batch_failed",
+                    batch_start=i,
+                    status=exc.response.status_code,
+                )
+                await asyncio.sleep(inter_batch_sleep)
+                continue
+
+            for symbol, bars in bars_by_symbol.items():
+                if not bars:
+                    continue
+                last_close = float(bars[-1].get("c") or 0.0)
+                avg_volume = sum(int(b.get("v") or 0) for b in bars) / len(bars)
+                if last_close <= min_price or avg_volume <= min_volume:
+                    continue
+                symbols_passed_coarse += 1
+                rows_upserted += await _upsert_bars(pool, symbol, bars, delisted=False)
+
+            await asyncio.sleep(inter_batch_sleep)
+
+    logger.info(
+        "ingestion.handler.daily_bars.all_active.done",
+        symbols_listed=len(all_symbols),
+        symbols_passed_coarse=symbols_passed_coarse,
+        rows_upserted=rows_upserted,
+        failed_batches=failed_batches,
+    )
+    if failed_batches:
+        raise RuntimeError(
+            f"daily_bars all_active: {failed_batches} batch fetch failure(s)"
+        )
+    return rows_upserted
 
 
 HANDLERS: dict[str, HandlerFn] = {
