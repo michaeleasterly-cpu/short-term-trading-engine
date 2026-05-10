@@ -1,0 +1,481 @@
+# Operations Runbook
+
+**Purpose:** Daily health-check procedure for the Short-Term Trading Engine. Any Claude session (or human operator) should be able to read this file and walk through the checklist in §9 in under 5 minutes.
+
+**Cross-references:**
+- `docs/MASTER_PLAN.md` — what each engine *is* and what success looks like.
+- `docs/STYLE_GUIDE.md` — code conventions enforced when fixes are required.
+- `docs/glossary.md` — canonical terms (engine names, score names, services).
+- `railway.json` — source of truth for the cron schedule and service list.
+
+**Time discipline:** All timestamps are UTC. Cron schedules in `railway.json` are UTC. Don't translate to local time when reading logs — compare in UTC.
+
+**Database access:** The local `.env` exposes two URLs (a known gotcha — see the project memory entry). Use `DATABASE_URL_IPV4` (Supabase pooler) for local CLI work; Railway uses the IPv6 direct URL via `DATABASE_URL`. Never copy one into the other.
+
+```bash
+# Bootstrap a Postgres connection for the queries below:
+export DATABASE_URL=$(grep '^DATABASE_URL_IPV4=' .env | cut -d= -f2-)
+```
+
+---
+
+## 1. Railway Service Health
+
+Five services run on Railway. Verify each has a recent successful deploy and execution.
+
+| Service | Cron schedule (UTC) | Entrypoint |
+| --- | --- | --- |
+| `sigma-scheduler` | `0 22 * * MON-FRI` | `python sigma/scheduler.py` |
+| `reversion-scheduler` | `0 22 * * MON-FRI` | `python reversion/scheduler.py` |
+| `vector-scheduler` | `0 22 * * MON-FRI` | `python vector/scheduler.py` |
+| `validation-scheduler` | `0 6 * * SUN` | `python ops/cron_validation.py` |
+| `corporate-actions-scheduler` | `0 4 * * SUN` | `python ops/cron_corporate_actions.py` |
+
+### How to inspect (Railway CLI)
+
+```bash
+# Login + link is one-time:
+railway login
+railway link        # select the short-term-trading-engine project
+
+# Per-service status:
+railway status --service sigma-scheduler
+railway status --service reversion-scheduler
+railway status --service vector-scheduler
+railway status --service validation-scheduler
+railway status --service corporate-actions-scheduler
+
+# Most recent logs (last 200 lines is usually plenty for a cron run):
+railway logs --service sigma-scheduler | tail -200
+```
+
+**For each service, confirm:**
+- Latest deployment is `SUCCESS` (not `FAILED`, `CRASHED`, `BUILDING`, or `STOPPED`).
+- Last execution exited cleanly. The schedulers log a final `*.scheduler.run_done` or `*.scheduler.healthcheck.success` line on success; absence of that line on a day the cron should have fired is a red flag.
+- No unhandled exceptions, tracebacks, or `RiskGovernor.emergency_kill` events in the recent logs.
+- Cron schedule is still active in the Railway dashboard (Service → Settings → Cron Schedule). Pausing a service or deleting its cron string disables it without raising an alert.
+
+### Dashboard fallback
+
+If the CLI is not authenticated, use the Railway dashboard:
+1. Project → Services → click each service.
+2. Deployments tab → most recent should be green.
+3. Logs tab → scroll to the latest run; verify the final line is success.
+4. Settings tab → Cron Schedule field is non-empty.
+
+---
+
+## 2. Healthchecks.io Status
+
+Each engine and ops service pings Healthchecks at the start and end of every run. The checks fail-loud when a ping doesn't arrive within the configured grace period.
+
+| Check (Healthchecks slug) | Expected ping cadence | Source env var |
+| --- | --- | --- |
+| `sigma-engine` | within 25h on weekdays | `HEALTHCHECKS_PING_URL_SIGMA` (or `HEALTHCHECKS_PING_URL`) |
+| `reversion-engine` | within 25h on weekdays | `REVERSION_HEALTHCHECKS_PING_URL` (or `HEALTHCHECKS_PING_URL_REVERSION`) |
+| `vector-engine` | within 25h on weekdays | `HEALTHCHECKS_VECTOR_URL` |
+| `validation-suite` | within 7d (Sunday 06:00 UTC) | `HEALTHCHECKS_VALIDATION_URL` |
+| `corporate-actions` | within 7d (Sunday 04:00 UTC) | `HEALTHCHECKS_CORPACTIONS_URL` |
+
+### How to inspect
+
+**Dashboard (preferred):**
+1. https://healthchecks.io/checks/ → log in with the project account.
+2. Each check should be green (`up`). Yellow = `late`. Red = `down`. Grey = `paused`.
+3. Click a check → the "Pings" tab shows the timeline. Confirm the last "success" ping (not just "start") arrived within the expected window.
+
+**API (scriptable):**
+```bash
+curl -H "X-Api-Key: $HEALTHCHECKS_API_KEY" \
+  https://healthchecks.io/api/v3/checks/ | jq '.checks[] | {name, status, last_ping}'
+```
+
+**For each check, confirm:**
+- Status is `up` (or `new` only if a check was just provisioned).
+- `last_ping` ≤ expected cadence + grace period.
+- No check is `paused` (someone disabled it manually) or `down` (missed cadence).
+
+A `late` status that flips green within an hour or two is usually a delayed Railway run, not a real failure — but if it persists, treat it as `down`.
+
+---
+
+## 3. Supabase / Database Health
+
+### Reachability
+
+```bash
+psql "$DATABASE_URL" -c 'SELECT 1'
+# expected: ?column? = 1
+```
+
+If this fails, jump to §10 *Troubleshooting → Database is unreachable*.
+
+### Row-count baselines
+
+```sql
+-- Save as a one-shot query (or run via psql -c):
+SELECT 'prices_daily'           AS table, COUNT(*) FROM platform.prices_daily
+UNION ALL SELECT 'fundamentals_quarterly',  COUNT(*) FROM platform.fundamentals_quarterly
+UNION ALL SELECT 'corporate_actions',       COUNT(*) FROM platform.corporate_actions
+UNION ALL SELECT 'aar_events',              COUNT(*) FROM platform.aar_events
+UNION ALL SELECT 'risk_state',              COUNT(*) FROM platform.risk_state
+UNION ALL SELECT 'data_quality_log',        COUNT(*) FROM platform.data_quality_log
+UNION ALL SELECT 'tradier_options_chains',  COUNT(*) FROM platform.tradier_options_chains
+UNION ALL SELECT 'catalyst_events',         COUNT(*) FROM platform.catalyst_events;
+```
+
+Expected ranges (cross-reference `MASTER_PLAN.md §6.4`):
+
+| Table | Expected range | Sudden-drop alert |
+| --- | --- | --- |
+| `platform.prices_daily` | ≥ 300,000 (currently ~301,464) | drop > 1% → investigate |
+| `platform.fundamentals_quarterly` | ≥ 1,790 | any drop → investigate |
+| `platform.corporate_actions` | ≥ 1,200 (grows weekly) | drop → investigate |
+| `platform.aar_events` | grows slowly with live trades; can be 0 | a *drop* is concerning, no growth is normal |
+| `platform.risk_state` | one row per engine that has ever traded | drop → investigate |
+| `platform.data_quality_log` | grows weekly | drop → investigate |
+| `platform.tradier_options_chains` | 122,668 (frozen — should never change) | any change → flag |
+| `platform.catalyst_events` | ≥ 683 | drop → investigate |
+
+### Freshness check
+
+```sql
+SELECT MAX(date) AS latest_bar FROM platform.prices_daily;
+-- Expected: within 5 trading days of today (UTC).
+-- Older than that → daily ingestion is stale.
+
+SELECT MAX(timestamp) AS latest_quality_log FROM platform.data_quality_log;
+-- Expected: within last 7 days (validation suite runs weekly).
+```
+
+### Free-tier quotas
+
+- Supabase free tier: 500 MB database, 50,000 monthly active users (irrelevant here), 2 GB egress, 500 MB file storage. Check via Supabase dashboard → Project Settings → Usage.
+- If database size approaches 400 MB, it's time to plan an archive policy or upgrade.
+
+---
+
+## 4. Alpaca Broker Status
+
+All execution goes through Alpaca paper-trading API. Verify credentials and account state.
+
+```bash
+# Single-shot Python check (uses .env credentials):
+.venv/bin/python <<'PY'
+import os
+from alpaca.trading.client import TradingClient
+from dotenv import load_dotenv
+load_dotenv()
+client = TradingClient(
+    api_key=os.environ["ALPACA_API_KEY"],
+    secret_key=os.environ["ALPACA_API_SECRET"],
+    paper=True,
+)
+acct = client.get_account()
+print(f"status={acct.status}  equity={acct.equity}  buying_power={acct.buying_power}")
+print(f"trading_blocked={acct.trading_blocked}  account_blocked={acct.account_blocked}")
+positions = client.get_all_positions()
+orders = client.get_orders()
+print(f"open positions={len(positions)}  open orders={len(orders)}")
+for p in positions:
+    print(f"  POSITION {p.symbol} qty={p.qty} side={p.side} pnl={p.unrealized_pl}")
+for o in orders:
+    print(f"  ORDER {o.symbol} side={o.side} type={o.type} status={o.status}")
+PY
+```
+
+**Confirm:**
+- `acct.status == "ACTIVE"`. Any other state (e.g. `INACTIVE`, `ACCOUNT_CLOSED`) → escalate immediately.
+- `trading_blocked == False` and `account_blocked == False`.
+- Every open *position* has a corresponding active record in the engine's tracking (cross-check against `platform.aar_events` and the engine's order-manager state). Stuck positions from a failed exit are the most common silent failure.
+- Open *orders*: usually zero outside of market hours. Bracket-order legs (take-profit + stop-loss) live alongside an open position and are expected; a standalone open order with no parent position is an orphan and needs cancellation.
+
+If an orphaned order is found:
+
+```python
+client.cancel_order_by_id(order.id)
+```
+
+If a stuck position is found, do **not** liquidate it programmatically without operator approval — flag it in the runbook output and ask.
+
+---
+
+## 5. Engine Runtime Health
+
+For each engine, walk through the most recent execution.
+
+### Per-engine log inspection
+
+```bash
+# Most recent run for each engine:
+railway logs --service sigma-scheduler | tail -100
+railway logs --service reversion-scheduler | tail -100
+railway logs --service vector-scheduler | tail -100
+```
+
+**Look for:**
+- A `<engine>.scheduler.run_done` or equivalent terminal line.
+- No tracebacks, no `Error`, no `Exception` in the structlog output.
+- The "candidates scanned" / "trades submitted" counts are non-zero on weekdays the cron fired (zero is OK if no setups passed the gates; *missing* counts is a problem).
+
+### Risk Governor state
+
+```sql
+SELECT engine, kill_switch_active, kill_switch_reason,
+       daily_pnl, weekly_pnl, engine_equity, open_positions,
+       updated_at
+FROM platform.risk_state
+ORDER BY engine;
+```
+
+**Confirm for every row:**
+- `kill_switch_active = false` (per-engine column). A `true` value means the platform froze new entries — see §10 *Troubleshooting → Risk Governor kill switch*.
+- `daily_pnl` ≥ −5% × `engine_equity` (5% daily loss kill, per `tpcore.risk.RiskGovernor`).
+- `weekly_pnl` ≥ −10% × `engine_equity` (10% weekly loss kill).
+- `open_positions` ≤ the engine's `MAX_CONCURRENT_POSITIONS` (Sigma 4, Reversion 5, Vector 5).
+- `updated_at` is recent (last weekday for active engines).
+
+### Credibility score (graduation gate)
+
+```sql
+SELECT source, MAX(timestamp) AS latest, ROUND(MAX(confidence) * 100) AS score
+FROM platform.data_quality_log
+WHERE source LIKE 'backtest_credibility.%'
+GROUP BY source
+ORDER BY source;
+```
+
+**Expected:**
+- Each engine's latest score persisted from the most recent backtest. Scores < 60 → engine cannot graduate live (see master plan §9 *Overfitting Diagnostics Status*). This is a known state — current Sigma 50, Reversion 45, Vector 45 — and not an alert by itself; only flag if a previously ≥ 60 score *drops* below 60.
+
+---
+
+## 6. Data Validation Suite
+
+The suite runs weekly (Sunday 06:00 UTC). On a non-Sunday, the most recent run should be the prior Sunday.
+
+```sql
+-- Latest validation run summary:
+SELECT source, timestamp, confidence, notes
+FROM platform.data_quality_log
+WHERE source LIKE 'validation.%'
+ORDER BY timestamp DESC
+LIMIT 10;
+```
+
+**Confirm:**
+- Latest run timestamp is within the last 7 days (within the last 24h on Sunday).
+- The three checks (delistings, constituents, splits) each have a row.
+- Split check: `confidence = 1.0` (passing — corporate-actions pipeline fixed the AAPL adjustment).
+- Delisting + constituent checks: known residuals — 4 delisting misses, 2 constituent misses. The numeric `confidence` is < 1.0 and the `notes` column lists the offending tickers. **If new tickers appear that aren't in the documented residual list, flag immediately** — that's a real new failure, not a known limitation.
+
+If `notes` lists unfamiliar tickers, run the suite locally to reproduce and read the full report:
+
+```bash
+.venv/bin/python -m tpcore.quality.validation
+```
+
+---
+
+## 7. Corporate Actions Pipeline
+
+Two scripts run on `corporate-actions-scheduler` (Sunday 04:00 UTC):
+- `tpcore.data.ingest_corporate_actions` — pulls new splits + dividends from Alpaca.
+- `tpcore.data.apply_splits` — adjusts historical bars in `platform.prices_daily` for any new splits.
+
+```bash
+# Inspect the most recent run:
+railway logs --service corporate-actions-scheduler | tail -200
+```
+
+**Confirm:**
+- Both scripts ran in sequence (ingest first, then apply).
+- `ingest` reported a non-negative count of new actions; `apply` reported zero or N rows updated.
+- No tracebacks.
+
+Cross-check against the validation suite's split result (§6) — the two should agree. If `apply_splits` reports new splits but the next validation run still flags an unadjusted ratio, the pipeline broke.
+
+---
+
+## 8. Costs & Quotas
+
+Fixed monthly cost: **$27** (Railway Hobby $5 + FMP Starter $22). See `MASTER_PLAN.md §6.1`.
+
+### Railway
+
+- Dashboard → Project → Usage tab.
+- Hobby plan ceiling is generous for cron-style workloads; the five services combined run < 5 min/day total.
+- Watch for: surprise long-running deploy logs, container restarts in a tight loop (would chew through credits).
+
+### FMP
+
+- Dashboard: https://site.financialmodelingprep.com/developer/docs → Account → Usage.
+- Starter plan: 300 calls/min, 100k calls/day. The platform's call profile (fundamentals backfill + nightly catalyst-event refresh) is well below this — but if a script regresses into a hot loop, it could blow through the daily cap.
+- If usage is unexpectedly high, check `scripts/backfill_*.py` for unbounded retries.
+
+### Supabase
+
+- Dashboard → Project Settings → Usage.
+- Free tier ceilings: 500 MB DB, 2 GB egress/month, 60 concurrent connections. The pooler keeps connection count low; egress is dominated by validation-suite + backfill reads.
+- Watch DB size — `platform.prices_daily` is the largest table and grows ~700 rows/weekday.
+
+### Alpaca
+
+- Paper trading is free and unmetered. No quota check needed beyond §4.
+
+### Unexpected billing
+
+- Scan the email account associated with each service for billing alerts. Anything unexpected (e.g. Alpaca real-time data subscription that wasn't approved, FMP Premium that auto-renewed) needs immediate investigation.
+
+---
+
+## 9. Daily Checklist
+
+Copy this into the session output when running the daily check. Substitute today's UTC date.
+
+```
+Daily Operations Checklist — YYYY-MM-DD UTC
+
+Railway
+[ ] sigma-scheduler:           last deploy SUCCESS, last execution exit 0
+[ ] reversion-scheduler:       last deploy SUCCESS, last execution exit 0
+[ ] vector-scheduler:          last deploy SUCCESS / NOT YET DEPLOYED (per master plan §9)
+[ ] validation-scheduler:      (Sundays only) last execution reviewed
+[ ] corporate-actions-scheduler: (Sundays only) last execution exit 0
+
+Healthchecks
+[ ] sigma-engine:        UP, last ping within 25h
+[ ] reversion-engine:    UP, last ping within 25h
+[ ] vector-engine:       UP, last ping within 25h (or N/A if scheduler not yet deployed)
+[ ] validation-suite:    UP, last ping within 7d
+[ ] corporate-actions:   UP, last ping within 7d
+
+Database
+[ ] Postgres reachable (SELECT 1 succeeds)
+[ ] prices_daily ≥ 300K rows, latest bar within 5 trading days
+[ ] No data loss in any key table (row counts within expected ranges)
+[ ] Supabase free-tier limits OK (DB size, egress, connections)
+
+Alpaca
+[ ] Account ACTIVE, trading_blocked=false, account_blocked=false
+[ ] No stuck positions or orphaned orders
+
+Risk
+[ ] No kill switches active (all engines: kill_switch_active=false)
+[ ] daily_pnl > -5% × engine_equity for every engine
+[ ] weekly_pnl > -10% × engine_equity for every engine
+
+Costs
+[ ] Railway within Hobby plan
+[ ] FMP within Starter limits (< 100K calls/day)
+[ ] Supabase within free-tier ceilings
+[ ] No unexpected billing alerts
+
+Actions Taken
+- [list any anomalies found and what was done; "none" if clean]
+```
+
+If every box is checked: report **"all green"** and stop. If anything fails: jump to §10.
+
+---
+
+## 10. Troubleshooting
+
+Each scenario lists the diagnostic command first, then the recovery action. **Always confirm before any destructive action** (cancelling orders, restarting a service that submitted live orders mid-run, resetting risk state).
+
+### A Railway service is in `CRASHED` state
+
+```bash
+railway logs --service <name> | tail -300
+# Look for the traceback or non-zero exit at the bottom.
+```
+
+Common causes:
+- **Missing env var.** Compare against `.env.example`. Add via the Railway dashboard → Service → Variables.
+- **Database unreachable.** See "Database is unreachable" below.
+- **Code regression.** Recent deploy broke something. Check `railway deployments --service <name>` for the prior good build and roll back via the dashboard.
+- **Healthchecks ping URL invalid.** Non-fatal in the schedulers (best-effort), but a 404 in the logs means the env var is wrong.
+
+Recovery: fix root cause → push (Railway auto-deploys on `main`) → confirm next deploy is `SUCCESS`. Do *not* just retry the failed run; the cron will fire again at its next scheduled time on its own.
+
+### A Healthchecks check is `DOWN` or `LATE`
+
+```bash
+# Was the underlying service healthy at the expected fire time?
+railway logs --service <corresponding-service> | tail -200
+```
+
+- If the service ran but the ping didn't arrive: the `HEALTHCHECKS_*` env var is wrong or the HTTP request failed silently. Pings are best-effort and never block the run.
+- If the service didn't run: the cron is paused, the service crashed, or Railway had an outage. Investigate via §1.
+- If you've fixed the cause, Healthchecks will auto-flip back to `UP` on the next successful ping. You can also click "Resolve" in the dashboard to clear the alert manually.
+
+### Database is unreachable
+
+```bash
+psql "$DATABASE_URL" -c 'SELECT 1'
+# Expected: 1 row. If this hangs or errors, the DB is the problem.
+```
+
+- **Wrong URL?** The local `.env` has both `DATABASE_URL_IPV4` (pooler — for local CLI) and `DATABASE_URL_IPV6` (direct — for Railway). Confirm you exported the right one.
+- **Supabase down?** Check status.supabase.com. Rare but possible.
+- **Connection limit hit?** Supabase free tier caps concurrent connections. Restart any process that's holding too many.
+- **Auth failure?** Pooler connection strings include the project ref + region; check the URL is intact.
+
+For the local CLI: re-export `DATABASE_URL=$(grep '^DATABASE_URL_IPV4=' .env | cut -d= -f2-)` and retry. On Railway: services use `DATABASE_URL` directly from project variables; if those changed, redeploy.
+
+### Alpaca API key is invalid
+
+```python
+# Run the §4 single-shot check. A 401/403 means the key is stale.
+```
+
+- Generate new keys in the Alpaca dashboard (Paper → Generate New Key).
+- Update three places: local `.env`, Railway service variables (all five services that use Alpaca — usually just the engine schedulers), and any other deploy target.
+- Re-run the §4 check to confirm.
+- Cancel and re-submit any orders that failed during the outage *only after* operator approval.
+
+### Risk Governor kill switch was tripped
+
+```sql
+SELECT engine, kill_switch_active, kill_switch_reason, daily_pnl, weekly_pnl,
+       engine_equity, updated_at
+FROM platform.risk_state
+WHERE kill_switch_active = true;
+```
+
+The `kill_switch_reason` column tells you *why* it tripped: daily-loss-cap, weekly-loss-cap, or a manual `RiskGovernor.emergency_kill()` call.
+
+**Do not auto-clear.** A tripped kill switch is the system protecting capital — clearing it without diagnosis would defeat its purpose. The recovery path:
+1. Read `tpcore/risk/governor.py` for the reset logic — kill switches reset on `daily_reset_at` / `weekly_reset_at` rollover (defined in `tpcore.calendar`).
+2. Confirm with the operator that the underlying loss is real and bounded (not, say, a data-feed bug that mispriced positions).
+3. Wait for the natural reset, or — if the operator approves a manual reset — execute it through `RiskGovernor.reset_daily()` / `reset_weekly()`, never via raw SQL `UPDATE`.
+
+### Data Validation Suite found new failures
+
+```sql
+SELECT source, timestamp, confidence, notes
+FROM platform.data_quality_log
+WHERE source LIKE 'validation.%'
+  AND timestamp > now() - interval '8 days'
+ORDER BY timestamp DESC;
+```
+
+Compare the failing tickers in `notes` against the documented residuals (4 delisting misses, 2 constituent misses — see master plan §6.3). If new tickers appear:
+
+1. Reproduce locally: `.venv/bin/python -m tpcore.quality.validation`.
+2. Read the failure detail.
+3. If the failure is in the split check, the corporate-actions pipeline regressed — see §7.
+4. If the failure is in delistings/constituents, it's a coverage gap — extend the fixture or the relevant `tpcore.quality.validation.sources.*` adapter.
+5. Open a fix branch; do not silence the check by widening the residual list without operator approval.
+
+### Stuck positions or orphaned orders at Alpaca
+
+Per §4. Default action: **flag, do not auto-fix**. The runbook should record what was found and the operator decides whether to cancel orders or liquidate positions. Programmatic recovery is reserved for confirmed transient bugs (e.g., a cancelled order that re-appeared due to broker-side ack lag).
+
+---
+
+## What this runbook is not
+
+- It is **not** a code-review or strategy-tuning procedure — those live in `MASTER_PLAN.md`.
+- It is **not** a substitute for the Risk Governor — automated guardrails come first; this checklist is the human/AI layer that catches what the automated layer can't.
+- It is **not** a place for ad-hoc debugging notes. If a failure mode recurs, codify it as a new troubleshooting entry; if it recurs three times, fix the root cause.
