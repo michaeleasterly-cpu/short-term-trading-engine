@@ -776,6 +776,18 @@ async def amain(args: argparse.Namespace) -> int:
             db_url=db_url,
         )
 
+    # ── Nine-test Overfitting Diagnostic (independent of the statistical
+    # validation block above; consumes the same trade list and emits the
+    # plan §6 OverfittingReport JSON). Skipped together with the rest under
+    # --skip-statistical-validation.
+    if not args.skip_statistical_validation and per_stock_trades:
+        await _run_overfitting_diagnostic_sigma(
+            winner_trades=per_stock_trades,
+            winner_summary=next(s for s in summaries if s.variant == "per-stock-chop"),
+            panels=panels,
+            output_dir=args.output_dir,
+        )
+
     return 0
 
 
@@ -861,6 +873,110 @@ async def _print_statistical_validation_sigma(
             )
         finally:
             await pool.close()
+
+
+def _trades_to_diagnostic_dicts(trades: list[TradeRecord]) -> list[dict]:
+    """Project Sigma TradeRecords onto the schema OverfittingDiagnostic expects.
+
+    Sigma is long-only mean-reversion in Bollinger Bands; ``direction`` is
+    therefore always ``"LONG"``. Exit date is the latest tier exit, falling
+    back to entry_date for any open trade so the field is never missing.
+    """
+    out: list[dict] = []
+    for t in trades:
+        exit_date = t.tier2_exit_date or t.tier1_exit_date or t.entry_date
+        out.append(
+            {
+                "pnl_pct": float(t.return_pct),
+                "entry_date": t.entry_date,
+                "exit_date": exit_date,
+                "direction": "LONG",
+                "ticker": t.ticker,
+                "entry_price": float(t.entry_price),
+            }
+        )
+    return out
+
+
+def _panels_to_price_data(panels: dict[str, pd.DataFrame]) -> pd.DataFrame:
+    """Stack Sigma's per-ticker indicator panels into the long-form frame the
+    diagnostic expects (columns: ticker, date, close, high, low, open).
+
+    The panels are indexed by ``date``; reset the index, add ``ticker``, keep
+    only the OHLC columns the diagnostic uses.
+    """
+    frames: list[pd.DataFrame] = []
+    for ticker, panel in panels.items():
+        df = panel[["open", "high", "low", "close"]].copy().reset_index()
+        df["ticker"] = ticker
+        frames.append(df)
+    if not frames:
+        return pd.DataFrame(columns=["ticker", "date", "open", "high", "low", "close"])
+    return pd.concat(frames, ignore_index=True)
+
+
+async def _run_overfitting_diagnostic_sigma(
+    *,
+    winner_trades: list[TradeRecord],
+    winner_summary: VariantSummary,
+    panels: dict[str, pd.DataFrame],
+    output_dir: Path,
+) -> None:
+    """Run the nine-test overfitting diagnostic on the per-stock-CHOP variant.
+
+    Saves ``backtests/sigma_overfitting_report.json`` and prints a
+    plain-English summary plus the credibility score.
+    """
+    from tpcore.backtest.credibility import BacktestCredibilityRubric
+    from tpcore.backtest.overfitting import OverfittingDiagnostic
+
+    if not winner_trades:
+        print("Overfitting diagnostic skipped — winner has no trades.")
+        return
+
+    trades = _trades_to_diagnostic_dicts(winner_trades)
+    price_data = _panels_to_price_data(panels)
+
+    diag = OverfittingDiagnostic(
+        trades=trades,
+        parameters={
+            "adx_threshold": 20,
+            "chop_threshold": 38.2,
+            "bb_period": 20,
+            "bb_std": 2,
+            "volume_ratio": 1.0,
+        },
+        sr_observed=float(winner_summary.sharpe_annualized),
+        # Honest count of distinct parameter combinations swept during dev:
+        # ADX (5) + CHOP (6) + BB-period (~5) + BB-std (~3) + entry-window (~5)
+        # + variant comparisons (~3) + early misc spikes ≈ 45.
+        n_trials=45,
+        price_data=price_data,
+        engine="sigma",
+    )
+    report = diag.run()
+
+    out_path = output_dir / "sigma_overfitting_report.json"
+    out_path.write_text(report.model_dump_json(indent=2), encoding="utf-8")
+
+    print()
+    print("─── Sigma — Overfitting Diagnostic ───")
+    print(report.summary)
+    print(f"  → report saved: {out_path}")
+
+    score = BacktestCredibilityRubric().evaluate_with_overfitting(
+        report,
+        lookahead_clean=True,
+        survivorship_inclusive=True,
+        pit_fundamentals=True,  # Sigma is technical-only; PIT discipline N/A
+        regime_coverage=True,
+        out_of_sample_validated=False,
+        monte_carlo_drawdown=True,
+    )
+    print(
+        f"  Credibility (overfitting-aware): {score.score}/100  "
+        f"[gate ≥ 60: {'PASS' if score.passes_gate else 'FAIL'}]"
+    )
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:

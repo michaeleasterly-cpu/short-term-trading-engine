@@ -989,6 +989,16 @@ async def amain(args: argparse.Namespace) -> int:
             db_url=db_url,
         )
 
+    # ── Nine-test Overfitting Diagnostic (plan §6) ───────────────────────────
+    if not args.skip_statistical_validation and combined_trades:
+        await _run_overfitting_diagnostic_reversion(
+            winner_trades=combined_trades,
+            winner_summary=summaries[2],
+            panels=panels,
+            spy_panel=spy_panel,
+            output_dir=args.output_dir,
+        )
+
     return 0
 
 
@@ -1075,6 +1085,118 @@ async def _print_statistical_validation_reversion(
             )
         finally:
             await pool.close()
+
+
+def _trades_to_diagnostic_dicts(trades: list[TradeRecord]) -> list[dict]:
+    """Project Reversion TradeRecords onto the OverfittingDiagnostic schema.
+
+    Reversion runs both directions; the ``direction`` field is ``"LONG"`` /
+    ``"SHORT"`` upper-cased to match the diagnostic's expectation.
+    """
+    out: list[dict] = []
+    for t in trades:
+        exit_date = t.tier2_exit_date or t.tier1_exit_date or t.entry_date
+        out.append(
+            {
+                "pnl_pct": float(t.return_pct),
+                "entry_date": t.entry_date,
+                "exit_date": exit_date,
+                "direction": str(t.direction).upper(),
+                "ticker": t.ticker,
+                "entry_price": float(t.entry_price),
+            }
+        )
+    return out
+
+
+def _panels_to_price_data(
+    panels: dict[str, pd.DataFrame], spy_panel: pd.DataFrame | None
+) -> pd.DataFrame:
+    """Stack indicator panels (plus SPY) into the long-form frame the
+    diagnostic expects (columns: ticker, date, close, high, low, open).
+
+    Including SPY here is what enables the diagnostic's regime-coverage
+    test to compute its VIX proxy / ADX / 20-day-return classifiers.
+    """
+    frames: list[pd.DataFrame] = []
+    cols = ["open", "high", "low", "close"]
+    for ticker, panel in panels.items():
+        df = panel[cols].copy().reset_index()
+        df["ticker"] = ticker
+        frames.append(df)
+    if spy_panel is not None:
+        spy_df = spy_panel[cols].copy().reset_index()
+        spy_df["ticker"] = "SPY"
+        frames.append(spy_df)
+    if not frames:
+        return pd.DataFrame(columns=["ticker", "date", "open", "high", "low", "close"])
+    return pd.concat(frames, ignore_index=True)
+
+
+async def _run_overfitting_diagnostic_reversion(
+    *,
+    winner_trades: list[TradeRecord],
+    winner_summary: VariantSummary,
+    panels: dict[str, pd.DataFrame],
+    spy_panel: pd.DataFrame | None,
+    output_dir: Path,
+) -> None:
+    """Run the nine-test overfitting diagnostic on the combined-filter variant.
+
+    Saves ``backtests/reversion_overfitting_report.json`` and prints a
+    plain-English summary plus the credibility score.
+    """
+    from tpcore.backtest.credibility import BacktestCredibilityRubric
+    from tpcore.backtest.overfitting import OverfittingDiagnostic
+
+    if not winner_trades:
+        print("Overfitting diagnostic skipped — winner has no trades.")
+        return
+
+    trades = _trades_to_diagnostic_dicts(winner_trades)
+    price_data = _panels_to_price_data(panels, spy_panel)
+
+    diag = OverfittingDiagnostic(
+        trades=trades,
+        parameters={
+            "z_threshold": 3.0,
+            "quality_grade": "HIGH",
+            "rsi_threshold": 25,
+            "bb_consecutive_days": 2,
+            "volume_ratio": 2.0,
+        },
+        sr_observed=float(winner_summary.sharpe_annualized),
+        # Honest count of distinct parameter combinations swept during dev:
+        # z_threshold (~5) + quality_grade (3) + rsi_threshold (~5) +
+        # bb_consecutive_days (~4) + volume_ratio (~5) + filter_mode (~3) +
+        # misc tuning ≈ 35.
+        n_trials=35,
+        price_data=price_data,
+        engine="reversion",
+    )
+    report = diag.run()
+
+    out_path = output_dir / "reversion_overfitting_report.json"
+    out_path.write_text(report.model_dump_json(indent=2), encoding="utf-8")
+
+    print()
+    print("─── Reversion — Overfitting Diagnostic ───")
+    print(report.summary)
+    print(f"  → report saved: {out_path}")
+
+    score = BacktestCredibilityRubric().evaluate_with_overfitting(
+        report,
+        lookahead_clean=True,
+        survivorship_inclusive=True,
+        pit_fundamentals=True,
+        regime_coverage=True,
+        out_of_sample_validated=False,
+        monte_carlo_drawdown=True,
+    )
+    print(
+        f"  Credibility (overfitting-aware): {score.score}/100  "
+        f"[gate ≥ 60: {'PASS' if score.passes_gate else 'FAIL'}]"
+    )
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:

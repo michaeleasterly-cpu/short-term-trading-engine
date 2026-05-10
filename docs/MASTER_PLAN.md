@@ -207,6 +207,8 @@ Swing Score: Technical (0–40), Catalyst (0–35), Sentiment (0–25). Threshol
 - Entries at market open. Hard stop −7%. Profit target +15% or trailing stop after +10%.
 - Sizing pre-grad $2,000. Max 5 concurrent positions.
 
+**Overfitting diagnostics — deferred:** Overfitting diagnostics will be applied to Vector's backtest once the fundamentals ratio backfill (`pb`/`de` coverage) and the catalyst proxy (`yoy_net_income_growth` standing in until `platform.catalyst_events` is populated) are complete. The `OverfittingDiagnostic` integration follows the same pattern as Sigma (`sigma/backtest.py`) and Reversion (`reversion/backtest_earnings_quality.py`): construct the diagnostic with the winning variant's trade list + parameter dict, save the report to `backtests/vector_overfitting_report.json`, and call `BacktestCredibilityRubric.evaluate_with_overfitting()` to print the credibility score (0–100).
+
 ### 4.4 S2 — Short Squeeze Engine (Fourth Build, Satellite)
 
 **Mission:** Detect conditions conducive to short squeezes. Satellite only — permanent 5% capital cap.

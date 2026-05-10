@@ -39,6 +39,8 @@ from pydantic import BaseModel, ConfigDict, Field
 if TYPE_CHECKING:  # pragma: no cover
     import asyncpg
 
+    from .overfitting import OverfittingReport
+
 logger = structlog.get_logger(__name__)
 
 # Minimum score required to permit live promotion.
@@ -85,6 +87,16 @@ class CredibilityScore(BaseModel):
         description="Number of observations in the backtest exceeds MinBTL for the strategy's Sharpe.",
     )
 
+    # ─── Overfitting-bundle additions (set by evaluate_with_overfitting) ──
+    pbo_passes: bool = Field(
+        default=False,
+        description="CSCV Probability of Backtest Overfitting < 0.50.",
+    )
+    trades_per_param_passes: bool = Field(
+        default=False,
+        description="At least 10 trades per parameter tuned.",
+    )
+
     score: int = Field(ge=0, le=100, default=0)
     notes: str | None = None
 
@@ -108,6 +120,27 @@ class BacktestCredibilityRubric:
         "sensitivity_surface_flat": 10,
         "monte_carlo_sequence_passed": 15,
         "dsr_above_0_90": 10,
+        "backtest_length_above_minbtl": 5,
+    }
+
+    # When an OverfittingReport is supplied, the rubric scores the
+    # 30-point overfitting bundle below in place of `monte_carlo_sequence_passed`
+    # (which becomes one *input* to the overall MC test inside the diagnostic).
+    # The seven non-overfitting items keep their original weights so the total
+    # remains 100.
+    WEIGHTS_WITH_OVERFITTING = {
+        # Integrity (70 pts)
+        "lookahead_clean": 15,
+        "survivorship_inclusive": 10,
+        "pit_fundamentals": 10,
+        "regime_coverage": 5,
+        "out_of_sample_validated": 15,
+        "monte_carlo_drawdown": 5,
+        "sensitivity_surface_flat": 10,
+        # Overfitting bundle (30 pts)
+        "dsr_above_0_90": 10,
+        "pbo_passes": 10,
+        "trades_per_param_passes": 5,
         "backtest_length_above_minbtl": 5,
     }
 
@@ -141,8 +174,60 @@ class BacktestCredibilityRubric:
         score = sum(self.WEIGHTS[k] for k, v in flags.items() if v)
         return CredibilityScore(score=score, notes=notes, **flags)
 
+    def evaluate_with_overfitting(
+        self,
+        overfitting_report: OverfittingReport,
+        *,
+        lookahead_clean: bool,
+        survivorship_inclusive: bool,
+        pit_fundamentals: bool,
+        regime_coverage: bool,
+        out_of_sample_validated: bool,
+        monte_carlo_drawdown: bool,
+        notes: str | None = None,
+    ) -> CredibilityScore:
+        """Score using the overfitting-aware 100-pt rubric.
 
-async def graduation_ready(pool: "asyncpg.Pool", engine_name: str) -> bool:
+        The seven integrity flags come from the caller. The four
+        overfitting-bundle flags are read off ``overfitting_report``:
+
+        * ``sensitivity_surface_flat`` ← report.sensitivity_passes (or False if skipped)
+        * ``dsr_above_0_90``           ← report.dsr_passes
+        * ``pbo_passes``               ← report.pbo_passes (or False if skipped)
+        * ``trades_per_param_passes``  ← report.trades_per_param_passes
+        * ``backtest_length_above_minbtl`` ← report.min_btl_passes
+
+        ``monte_carlo_sequence_passed`` is preserved as an attribute on the
+        returned score (read from ``report.mc_passes``) but is NOT weighted
+        in this scoring path — it has been folded into the broader
+        diagnostic and is now informational here.
+        """
+        sens = overfitting_report.sensitivity_passes
+        flags_for_score = {
+            "lookahead_clean": lookahead_clean,
+            "survivorship_inclusive": survivorship_inclusive,
+            "pit_fundamentals": pit_fundamentals,
+            "regime_coverage": regime_coverage,
+            "out_of_sample_validated": out_of_sample_validated,
+            "monte_carlo_drawdown": monte_carlo_drawdown,
+            "sensitivity_surface_flat": bool(sens) if sens is not None else False,
+            "dsr_above_0_90": overfitting_report.dsr_passes,
+            "pbo_passes": bool(overfitting_report.pbo_passes) if overfitting_report.pbo_passes is not None else False,
+            "trades_per_param_passes": overfitting_report.trades_per_param_passes,
+            "backtest_length_above_minbtl": overfitting_report.min_btl_passes,
+        }
+        score = sum(self.WEIGHTS_WITH_OVERFITTING[k] for k, v in flags_for_score.items() if v)
+        # Persist mc_sequence_passed as an attribute even though it does not
+        # contribute weight on this scoring path — callers/UIs may still display it.
+        return CredibilityScore(
+            score=score,
+            notes=notes,
+            **flags_for_score,
+            monte_carlo_sequence_passed=overfitting_report.mc_passes,
+        )
+
+
+async def graduation_ready(pool: asyncpg.Pool, engine_name: str) -> bool:
     """Return True iff the engine's latest backtest credibility score is ≥ 60.
 
     Reads ``platform.data_quality_log`` for the most recent row with
