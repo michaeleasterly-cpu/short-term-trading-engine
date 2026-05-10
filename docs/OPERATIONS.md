@@ -27,15 +27,16 @@ export DATABASE_URL=$(grep '^DATABASE_URL_IPV4=' .env | cut -d= -f2-)
 
 ## 1. Railway Service Health
 
-Five services run on Railway. Verify each has a recent successful deploy and execution.
+Six services run on Railway. Verify each has a recent successful deploy and execution.
 
 | Service | Cron schedule (UTC) | Entrypoint |
 | --- | --- | --- |
 | `sigma-scheduler` | `0 22 * * MON-FRI` | `python sigma/scheduler.py` |
 | `reversion-scheduler` | `0 22 * * MON-FRI` | `python reversion/scheduler.py` |
 | `vector-scheduler` | `0 22 * * MON-FRI` | `python vector/scheduler.py` |
-| `validation-scheduler` | `0 6 * * SUN` | `python ops/cron_validation.py` |
+| `fundamentals-refresh-scheduler` | `0 3 * * SUN` | `python ops/cron_fundamentals_refresh.py` |
 | `corporate-actions-scheduler` | `0 4 * * SUN` | `python ops/cron_corporate_actions.py` |
+| `validation-scheduler` | `0 6 * * SUN` | `python ops/cron_validation.py` |
 
 ### How to inspect (Railway CLI)
 
@@ -48,8 +49,9 @@ railway link        # select the short-term-engine project
 railway service sigma-scheduler          # then: railway status / railway logs
 railway service reversion-scheduler
 railway service vector-scheduler
-railway service validation-scheduler
+railway service fundamentals-refresh-scheduler
 railway service corporate-actions-scheduler
+railway service validation-scheduler
 
 # `railway status` prints a project overview that includes ALL cron jobs and
 # their schedules in one shot — useful as the first daily check:
@@ -63,14 +65,15 @@ The bottom of `railway status` lists every cron job under "All resources":
 
 ```
 Cron jobs
-  - sigma-scheduler:              ● Online · 0/1 running · 0 22 * * MON-FRI · next run in N
-  - reversion-scheduler:          ● Online · 0/1 running · 0 22 * * MON-FRI · next run in N
-  - vector-scheduler:             ● Online · 0/1 running · 0 22 * * MON-FRI · next run in N
-  - validation-scheduler:         ● Online · 0/1 running · 0 6  * * SUN     · next run in N
-  - corporate-actions-scheduler:  ● Online · 0/1 running · 0 4  * * SUN     · next run in N
+  - sigma-scheduler:                  ● Online · 0/1 running · 0 22 * * MON-FRI · next run in N
+  - reversion-scheduler:              ● Online · 0/1 running · 0 22 * * MON-FRI · next run in N
+  - vector-scheduler:                 ● Online · 0/1 running · 0 22 * * MON-FRI · next run in N
+  - fundamentals-refresh-scheduler:   ● Online · 0/1 running · 0 3  * * SUN     · next run in N
+  - corporate-actions-scheduler:      ● Online · 0/1 running · 0 4  * * SUN     · next run in N
+  - validation-scheduler:             ● Online · 0/1 running · 0 6  * * SUN     · next run in N
 ```
 
-Confirm all five lines show `● Online`. Anything else (`Crashed`, `Removed`, `Paused`) is a red flag.
+Confirm all six lines show `● Online`. Anything else (`Crashed`, `Removed`, `Paused`) is a red flag.
 
 **For each service, confirm:**
 - Latest deployment is `SUCCESS` (not `FAILED`, `CRASHED`, `BUILDING`, or `STOPPED`).
@@ -344,7 +347,7 @@ Fixed monthly cost: **$27** (Railway Hobby $5 + FMP Starter $22). See `MASTER_PL
 ### Railway
 
 - Dashboard → Project → Usage tab.
-- Hobby plan ceiling is generous for cron-style workloads; the five services combined run < 5 min/day total.
+- Hobby plan ceiling is generous for cron-style workloads; the six services combined run < 7 min/week total (Mon–Fri schedulers ~30s each, Sunday cron jobs 1–2 min each).
 - Watch for: surprise long-running deploy logs, container restarts in a tight loop (would chew through credits).
 
 ### FMP
@@ -377,11 +380,12 @@ Copy this into the session output when running the daily check. Substitute today
 Daily Operations Checklist — YYYY-MM-DD UTC
 
 Railway
-[ ] sigma-scheduler:           last deploy SUCCESS, last execution exit 0
-[ ] reversion-scheduler:       last deploy SUCCESS, last execution exit 0
-[ ] vector-scheduler:          last deploy SUCCESS, last execution exit 0
-[ ] validation-scheduler:      (Sundays only) last execution reviewed
-[ ] corporate-actions-scheduler: (Sundays only) last execution exit 0
+[ ] sigma-scheduler:               last deploy SUCCESS, last execution exit 0
+[ ] reversion-scheduler:           last deploy SUCCESS, last execution exit 0
+[ ] vector-scheduler:              last deploy SUCCESS, last execution exit 0
+[ ] fundamentals-refresh-scheduler: (Sundays only) last execution exit 0
+[ ] corporate-actions-scheduler:   (Sundays only) last execution exit 0
+[ ] validation-scheduler:          (Sundays only) last execution reviewed
 
 Run Health (platform.application_log — see §2)
 [ ] sigma:                       latest run has STARTUP + SHUTDOWN with exit_code=0, no ERROR/CRITICAL rows
@@ -510,7 +514,7 @@ For the local CLI: re-export `DATABASE_URL=$(grep '^DATABASE_URL_IPV4=' .env | c
 ```
 
 - Generate new keys in the Alpaca dashboard (Paper → Generate New Key).
-- Update three places: local `.env`, Railway service variables (all five services that use Alpaca — usually just the engine schedulers), and any other deploy target.
+- Update three places: local `.env`, Railway service variables (the engine schedulers — sigma, reversion, vector — plus any cron service that calls Alpaca), and any other deploy target.
 - Re-run the §4 check to confirm.
 - Cancel and re-submit any orders that failed during the outage *only after* operator approval.
 

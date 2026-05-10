@@ -348,7 +348,7 @@ Full database schema and data flow documentation: [`docs/DATABASE_AND_DATAFLOW.m
 | --- | --- | --- |
 | Alpaca (IEX free) | Daily bar **ingest** (→ `platform.prices_daily`), quotes, execution, delisted stock data. Engines read bars from the DB, not from Alpaca live. | $0 (real-time upgrade gated on `ExecutionQualityScore` evidence — see §6.5) |
 | FMP **Starter** ($22/mo, active) | Fundamentals, insider, earnings | $22 (Premium $59/mo deferred — see §6.5) |
-| Railway **Hobby** ($5/mo, active) | Cron schedulers (5 services: sigma, reversion, vector, validation, corporate-actions) | $5 |
+| Railway **Hobby** ($5/mo, active) | Cron schedulers (6 services: sigma, reversion, vector, validation, corporate-actions, fundamentals-refresh) | $5 |
 | SEC EDGAR | Point-in-time filings, fundamentals backup | $0 |
 | ApeWisdom | Social sentiment | $0 |
 | FRED | Macro indicators | $0 |

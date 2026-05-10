@@ -19,6 +19,7 @@ caller understands what the cache will actually contain.
 """
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
@@ -137,6 +138,82 @@ class FundamentalsCache:
             raise DataProviderOutage("FundamentalsCache.backfill requires an adapter")
         payload = await self._adapter.get_quarterly_fundamentals(symbol, end_date)
         return await self._upsert_payload(symbol, payload)
+
+    async def backfill_all(
+        self,
+        tickers: list[str] | None = None,
+        *,
+        inter_symbol_sleep_sec: float = 1.0,
+    ) -> tuple[int, list[tuple[str, str]], list[tuple[str, str]]]:
+        """Refresh every cached symbol. Returns ``(rows, no_data, failures)``.
+
+        ``no_data`` collects symbols FMP responded to with "no usable
+        fundamentals" — the canonical signal for ETFs and the rare
+        delisted shell. These are expected-empty, not actionable, and
+        callers should not exit non-zero on them. ``failures`` is for
+        real outages: timeouts, 5xx, malformed payloads.
+
+        When ``tickers`` is ``None``, the active universe is read from
+        ``platform.prices_daily`` (distinct tickers with a bar in the
+        last 90 days and ``delisted = false``).
+
+        ``inter_symbol_sleep_sec`` is a courtesy delay between FMP
+        calls; Starter plan rate limits comfortably absorb 1s but
+        tighter loops risk 429s on long universes.
+        """
+        if self._adapter is None:
+            raise DataProviderOutage(
+                "FundamentalsCache.backfill_all requires an adapter"
+            )
+        if tickers is None:
+            tickers = await self._list_active_tickers()
+        total = 0
+        no_data: list[tuple[str, str]] = []
+        failures: list[tuple[str, str]] = []
+        for i, symbol in enumerate(tickers, start=1):
+            try:
+                n = await self.backfill(symbol)
+            except DataProviderOutage as exc:
+                msg = str(exc)
+                bucket = no_data if "no usable fundamentals" in msg else failures
+                bucket.append((symbol, msg[:160]))
+                logger.warning(
+                    "fundamentals.cache.backfill_all_skipped"
+                    if bucket is no_data
+                    else "fundamentals.cache.backfill_all_failed",
+                    symbol=symbol,
+                    error=msg,
+                )
+                await asyncio.sleep(inter_symbol_sleep_sec)
+                continue
+            total += n
+            logger.info(
+                "fundamentals.cache.backfill_all_progress",
+                symbol=symbol,
+                rows=n,
+                done=i,
+                total=len(tickers),
+            )
+            await asyncio.sleep(inter_symbol_sleep_sec)
+        return total, no_data, failures
+
+    async def _list_active_tickers(self) -> list[str]:
+        """Distinct tickers with a bar in the last 90 days and not delisted.
+
+        Same definition ``PostgresDataAdapter.get_universe_symbols`` uses;
+        kept inline here to avoid a cross-module dependency from
+        ``tpcore.fundamentals`` into ``tpcore.data``.
+        """
+        sql = """
+            SELECT DISTINCT ticker
+            FROM platform.prices_daily
+            WHERE date >= CURRENT_DATE - INTERVAL '90 days'
+              AND delisted = false
+            ORDER BY ticker
+        """
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(sql)
+        return [r["ticker"] for r in rows]
 
     # ─── Internal ────────────────────────────────────────────────────────
 

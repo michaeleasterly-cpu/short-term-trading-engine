@@ -514,12 +514,11 @@ Tables and services that are specified but not yet built:
 | ---: | --- | --- |
 | 1 | `platform.universe_candidates` + Universe Pre-Screener | Not built — engines use hardcoded lists |
 | 2 | Daily bar ingestion cron | Not built — bars not pre-fetched to `prices_daily` |
-| 3 | Fundamentals cache weekly refresh | Not built — cache is lazy (on scan miss) |
-| 4 | `platform.macro_indicators` + FRED adapter | Not built |
-| 5 | `platform.social_signals` + ApeWisdom adapter | Not built |
-| 6 | `platform.short_interest` + FINRA adapter | Not built |
-| 7 | `platform.borrow_rates` + IBorrowDesk adapter | Not built |
-| 8 | `platform.filings_insider` + SEC EDGAR adapter | Not built |
-| 9 | `platform.tax_lots` + Tax Overlay | Schema deferred |
+| 3 | `platform.macro_indicators` + FRED adapter | Not built |
+| 4 | `platform.social_signals` + ApeWisdom adapter | Not built |
+| 5 | `platform.short_interest` + FINRA adapter | Not built |
+| 6 | `platform.borrow_rates` + IBorrowDesk adapter | Not built |
+| 7 | `platform.filings_insider` + SEC EDGAR adapter | Not built |
+| 8 | `platform.tax_lots` + Tax Overlay | Schema deferred |
 
-**Done (kept here for grep history):** `PostgresDataAdapter` (commit `d75076d`, 2026-05-10) — engines now read bars from `platform.prices_daily` exclusively, no live-API fallback. `platform.application_log` + `tpcore.logging.DBLogHandler` (commit `ff468de` + Alembic `20260511_0100`, applied 2026-05-10) — every scheduler run emits a queryable timeline; 7-day retention enforced per-write.
+**Done (kept here for grep history):** `PostgresDataAdapter` (commit `d75076d`, 2026-05-10) — engines now read bars from `platform.prices_daily` exclusively, no live-API fallback. `platform.application_log` + `tpcore.logging.DBLogHandler` (commit `ff468de` + Alembic `20260511_0100`, applied 2026-05-10) — every scheduler run emits a queryable timeline; 7-day retention enforced per-write. Fundamentals cache weekly refresh (`ops/cron_fundamentals_refresh.py` + `FundamentalsCache.backfill_all`, Railway service `fundamentals-refresh-scheduler` cron `0 3 * * SUN`, applied 2026-05-10) — every distinct active ticker in `prices_daily` has its FMP fundamentals refreshed weekly so the lazy cache never serves stale data.

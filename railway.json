@@ -40,6 +40,13 @@
       "restartPolicyType": "NEVER",
       "source": {"repo": "michaeleasterly-cpu/short-term-trading-engine"},
       "watchPatterns": ["**/*.py", "**/*.yaml", "pyproject.toml", "railway.json", "railpack.toml", ".python-version"]
+    },
+    "fundamentals-refresh-scheduler": {
+      "startCommand": "python ops/cron_fundamentals_refresh.py",
+      "cronSchedule": "0 3 * * SUN",
+      "restartPolicyType": "NEVER",
+      "source": {"repo": "michaeleasterly-cpu/short-term-trading-engine"},
+      "watchPatterns": ["**/*.py", "**/*.yaml", "pyproject.toml", "railway.json", "railpack.toml", ".python-version"]
     }
   }
 }
