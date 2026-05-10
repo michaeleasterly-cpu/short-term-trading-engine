@@ -94,6 +94,12 @@ SPY_DRAWDOWN_THRESHOLD = 0.10
 SPY_DRAWDOWN_LOOKBACK = 20
 SPY_COOLDOWN_DAYS = 10
 
+# VIX-aware sizing — uses 20-day SPY realized vol as VIX proxy.
+# Plan §4.3: > 25% RV → 0.5× size; > 30% RV → 0.25× size.
+VIX_PROXY_LOOKBACK = 20
+VIX_SCALE_DOWN_50_PCT = 25.0  # threshold for half size
+VIX_SCALE_DOWN_25_PCT = 30.0  # threshold for quarter size
+
 DEFAULT_OUTPUT_DIR = Path("backtests")
 DEFAULT_RESULTS_FILE = "vector_backtest.json"
 DEFAULT_TRADES_FILE = "vector_trades.csv"
@@ -114,7 +120,10 @@ class TradeRecord:
     exit_reason: str = ""  # target | hard_stop | trailing_stop | max_hold
     holding_days: int = 0
     pnl: float = 0.0
-    return_pct: float = 0.0
+    raw_return_pct: float = 0.0  # pre-sizing — pnl / entry_price
+    return_pct: float = 0.0  # post-sizing — raw × size_factor (this is what feeds Sharpe/PF)
+    size_factor: float = 1.0  # 1.0 / 0.5 / 0.25 from VIX-aware crash guard
+    rv20_at_entry_pct: float | None = None  # SPY 20-day realized vol at entry, %
     trigger: str = ""  # pullback_to_10ma | pullback_to_20ma | breakout_above_50ma
     catalyst_magnitude: float | None = None
     pb_at_entry: float | None = None
@@ -299,6 +308,42 @@ def _technical_trigger(row: pd.Series, prior_close: float) -> str | None:
 
 
 # ────────────────────────────────────────────────────────────────────────────
+# VIX-aware sizing (SPY 20-day realized volatility proxy)
+# ────────────────────────────────────────────────────────────────────────────
+
+
+def _spy_realized_vol_pct(spy_panel: pd.DataFrame) -> pd.Series:
+    """Annualized SPY 20-day realized volatility expressed as a percent.
+
+    Returns a Series indexed by date — same index as ``spy_panel``. NaN
+    for the first ``VIX_PROXY_LOOKBACK`` rows where the rolling window
+    isn't yet full. Used in two places: as the live VIX proxy for
+    per-trade sizing, and as one bucket axis for the regime test in the
+    overfitting diagnostic.
+    """
+    daily_returns = spy_panel["close"].astype(float).pct_change()
+    rv = daily_returns.rolling(VIX_PROXY_LOOKBACK, min_periods=VIX_PROXY_LOOKBACK).std() * math.sqrt(252)
+    return rv * 100.0  # express as percent
+
+
+def _size_factor_from_rv(rv_pct: float | None) -> float:
+    """Plan §4.3 VIX-aware sizing — applied per-trade.
+
+    rv_pct > 30 → 0.25× ; > 25 → 0.50× ; otherwise 1.00× .
+    None / NaN (rolling window not full) → 1.00× — the strategy can't
+    yet judge regime, so we don't penalize.
+    """
+    if rv_pct is None or (isinstance(rv_pct, float) and math.isnan(rv_pct)):
+        return 1.0
+    v = float(rv_pct)
+    if v > VIX_SCALE_DOWN_25_PCT:
+        return 0.25
+    if v > VIX_SCALE_DOWN_50_PCT:
+        return 0.50
+    return 1.0
+
+
+# ────────────────────────────────────────────────────────────────────────────
 # Crash guard — SPY drawdown cooldown
 # ────────────────────────────────────────────────────────────────────────────
 
@@ -339,9 +384,16 @@ def _simulate_trade(
     catalyst_mag: float | None,
     pb_at_entry: float | None,
     de_at_entry: float | None,
+    rv20_at_entry_pct: float | None = None,
+    size_factor: float = 1.0,
     max_hold_days: int = 30,
 ) -> TradeRecord:
-    """Walk forward applying Vector's exit rules: target / trail / hard stop / max-hold."""
+    """Walk forward applying Vector's exit rules: target / trail / hard stop / max-hold.
+
+    ``size_factor`` is applied at the end to scale the trade's contribution to
+    portfolio P&L (1.0 / 0.5 / 0.25 from the VIX-aware crash guard). The
+    ``raw_return_pct`` field preserves the unsized return for diagnostics.
+    """
     record = TradeRecord(
         ticker=ticker,
         entry_date=entry_date,
@@ -350,6 +402,8 @@ def _simulate_trade(
         catalyst_magnitude=catalyst_mag,
         pb_at_entry=pb_at_entry,
         de_at_entry=de_at_entry,
+        rv20_at_entry_pct=rv20_at_entry_pct,
+        size_factor=size_factor,
     )
     stop = entry_price * (1 - HARD_STOP_PCT)
     target = entry_price * (1 + PROFIT_TARGET_PCT)
@@ -400,7 +454,9 @@ def _simulate_trade(
 
     pnl = (record.exit_price or entry_price) - entry_price
     record.pnl = pnl
-    record.return_pct = pnl / entry_price if entry_price else 0.0
+    raw = pnl / entry_price if entry_price else 0.0
+    record.raw_return_pct = raw
+    record.return_pct = raw * size_factor  # what feeds Sharpe / equity / PF
     return record
 
 
@@ -413,6 +469,7 @@ def _run(
     *,
     panels: dict[str, pd.DataFrame],
     spy_panel: pd.DataFrame | None,
+    spy_rv_pct: pd.Series | None,
     fundamentals: dict[str, list[dict]],
     catalysts: dict[str, list[tuple[date, float]]],
     start: date,
@@ -429,6 +486,8 @@ def _run(
             continue
         if spy_panel is not None and _spy_in_cooldown(spy_panel, today, cooldown_state):
             continue
+        rv_today = float(spy_rv_pct.loc[today]) if (spy_rv_pct is not None and today in spy_rv_pct.index) else None
+        size_factor = _size_factor_from_rv(rv_today)
 
         chosen: tuple[str, pd.DataFrame, int, str, float | None, dict] | None = None
 
@@ -475,6 +534,8 @@ def _run(
             catalyst_mag=magnitude,
             pb_at_entry=funds.get("pb"),
             de_at_entry=funds.get("de"),
+            rv20_at_entry_pct=rv_today,
+            size_factor=size_factor,
         )
         trades.append(record)
 
@@ -626,11 +687,17 @@ async def amain(args: argparse.Namespace) -> int:
     panels = {t: _precompute(df) for t, df in prices.items()}
     spy_panel = panels.pop(SPY_SYMBOL, None)
     eligible_panels = {t: df for t, df in panels.items() if t in eligible}
+    spy_rv_pct = _spy_realized_vol_pct(spy_panel) if spy_panel is not None else None
 
-    logger.info("vector.backtest.running tickers=%d", len(eligible_panels))
+    logger.info(
+        "vector.backtest.running tickers=%d spy_rv_available=%s",
+        len(eligible_panels),
+        spy_rv_pct is not None and spy_rv_pct.notna().any(),
+    )
     trades = _run(
         panels=eligible_panels,
         spy_panel=spy_panel,
+        spy_rv_pct=spy_rv_pct,
         fundamentals=fundamentals,
         catalysts=catalysts,
         start=args.start,
@@ -666,6 +733,7 @@ async def amain(args: argparse.Namespace) -> int:
         await _print_statistical_validation_vector(
             panels=eligible_panels,
             spy_panel=spy_panel,
+            spy_rv_pct=spy_rv_pct,
             fundamentals=fundamentals,
             catalysts=catalysts,
             start=args.start,
@@ -673,6 +741,8 @@ async def amain(args: argparse.Namespace) -> int:
             winner_summary=summary,
             winner_trades=trades,
             db_url=db_url,
+            output_dir=args.output_dir,
+            n_trials=args.n_trials,
         )
 
     return 0
@@ -682,6 +752,7 @@ async def _print_statistical_validation_vector(
     *,
     panels,
     spy_panel,
+    spy_rv_pct,
     fundamentals,
     catalysts,
     start: date,
@@ -689,6 +760,8 @@ async def _print_statistical_validation_vector(
     winner_summary: VariantSummary,
     winner_trades: list[TradeRecord],
     db_url: str | None,
+    output_dir: Path,
+    n_trials: int,
 ) -> None:
     """Sweep PB, DE, and catalyst-window thresholds; MC + PSR/DSR/MinBTL; rubric."""
     from tpcore.backtest.sensitivity import sweep_parameter
@@ -703,15 +776,15 @@ async def _print_statistical_validation_vector(
 
     pb_values = [1.0, 1.25, 1.5, 1.75, 2.0]
     de_values = [2.0, 2.5, 3.0, 3.5, 4.0]
-    n_trials = len(pb_values) + len(de_values)
+    sweep_trials = len(pb_values) + len(de_values)
 
     def _run_with(*, pb: float | None = None, de: float | None = None) -> dict:
         nonlocal_pb = pb if pb is not None else PB_CEILING
         nonlocal_de = de if de is not None else DE_CEILING
-        # Inline-overridden gate evaluator — closure on the swept threshold.
         sweep_trades = _run_with_thresholds(
             panels=panels,
             spy_panel=spy_panel,
+            spy_rv_pct=spy_rv_pct,
             fundamentals=fundamentals,
             catalysts=catalysts,
             start=start,
@@ -737,12 +810,97 @@ async def _print_statistical_validation_vector(
         sweeps=[pb_sweep, de_sweep],
         sharpe_annualized=winner_summary.sharpe_annualized,
         backtest_periods=backtest_periods,
-        n_trials=n_trials,
+        n_trials=sweep_trials,
     )
     print(render(report, title="Vector — Statistical Validation"))
 
-    rubric = evaluate_rubric_from_report(
-        report,
+    # ── Overfitting diagnostic (parallel session's bundle) ─────────────────
+    # The CSCV-PBO + sensitivity + MC + noise + regime stack from
+    # tpcore.backtest.overfitting. n_trials reflects the development-phase
+    # parameter search space (Vector's three-gate model has more knobs
+    # than the few we sweep above).
+    await _run_overfitting_bundle(
+        winner_trades=winner_trades,
+        winner_summary=winner_summary,
+        panels=panels,
+        spy_panel=spy_panel,
+        n_trials=n_trials,
+        output_dir=output_dir,
+        db_url=db_url,
+        sweep_report=report,
+    )
+
+
+async def _run_overfitting_bundle(
+    *,
+    winner_trades: list[TradeRecord],
+    winner_summary: VariantSummary,
+    panels: dict[str, pd.DataFrame],
+    spy_panel: pd.DataFrame | None,
+    n_trials: int,
+    output_dir: Path,
+    db_url: str | None,
+    sweep_report,
+) -> None:
+    """Wire OverfittingDiagnostic, persist the JSON report, score credibility."""
+    from tpcore.backtest.credibility import BacktestCredibilityRubric, MIN_LIVE_SCORE
+    from tpcore.backtest.overfitting import OverfittingDiagnostic
+    from tpcore.backtest.statistical_validation import write_credibility_score
+
+    # Build the ticker/date/close frame the regime test wants.
+    price_data_frames: list[pd.DataFrame] = []
+    for ticker, df in panels.items():
+        sub = df[["close"]].reset_index().rename(columns={"index": "date"})
+        sub["ticker"] = ticker
+        price_data_frames.append(sub)
+    if spy_panel is not None:
+        sub = spy_panel[["close"]].reset_index().rename(columns={"index": "date"})
+        sub["ticker"] = SPY_SYMBOL
+        price_data_frames.append(sub)
+    price_data = (
+        pd.concat(price_data_frames, ignore_index=True)
+        if price_data_frames
+        else pd.DataFrame(columns=["ticker", "date", "close"])
+    )
+
+    trade_dicts = [
+        {"pnl_pct": t.return_pct, "entry_date": t.entry_date, "ticker": t.ticker}
+        for t in winner_trades
+    ]
+    parameters = {
+        "pb_max": PB_CEILING,
+        "de_max": DE_CEILING,
+        "revenue_min": REVENUE_FLOOR,
+        "swing_score_threshold": 65,
+        "vix_crash_25": 0.5,
+        "vix_crash_30": 0.25,
+        "cooldown_days": SPY_COOLDOWN_DAYS,
+    }
+    diagnostic = OverfittingDiagnostic(
+        trades=trade_dicts,
+        parameters=parameters,
+        sr_observed=winner_summary.sharpe_annualized,
+        n_trials=n_trials,
+        price_data=price_data,
+        engine="vector",
+        trial_returns_matrix=None,
+    )
+    overfitting_report = diagnostic.run()
+
+    # Persist the report JSON.
+    report_path = output_dir / "vector_overfitting_report.json"
+    report_path.write_text(overfitting_report.model_dump_json(indent=2))
+    print(f"\noverfitting report → {report_path}")
+    print(f"  overall_passed: {overfitting_report.overall_passed}")
+    print(f"  summary: {overfitting_report.summary}")
+
+    # Credibility — uses the new evaluate_with_overfitting path that the
+    # parallel session added to BacktestCredibilityRubric. The seven
+    # integrity flags are caller-asserted (Vector's PIT discipline +
+    # survivorship-inclusive universe etc.); the four overfitting flags
+    # come straight from the diagnostic.
+    rubric = BacktestCredibilityRubric().evaluate_with_overfitting(
+        overfitting_report,
         lookahead_clean=True,
         survivorship_inclusive=True,
         pit_fundamentals=True,
@@ -750,7 +908,8 @@ async def _print_statistical_validation_vector(
         out_of_sample_validated=False,
         monte_carlo_drawdown=True,
     )
-    print(render_rubric(rubric))
+    verdict = "LIVE OK" if rubric.passes_gate else f"< {MIN_LIVE_SCORE}: BLOCKED"
+    print(f"\nCredibility (with overfitting): {rubric.score}/100  ({verdict})")
 
     if db_url:
         pool = await build_asyncpg_pool(db_url)
@@ -768,6 +927,7 @@ def _run_with_thresholds(
     *,
     panels: dict[str, pd.DataFrame],
     spy_panel: pd.DataFrame | None,
+    spy_rv_pct: pd.Series | None,
     fundamentals: dict[str, list[dict]],
     catalysts: dict[str, list[tuple[date, float]]],
     start: date,
@@ -787,6 +947,8 @@ def _run_with_thresholds(
             continue
         if spy_panel is not None and _spy_in_cooldown(spy_panel, today, cooldown_state):
             continue
+        rv_today = float(spy_rv_pct.loc[today]) if (spy_rv_pct is not None and today in spy_rv_pct.index) else None
+        size_factor = _size_factor_from_rv(rv_today)
         chosen: tuple[str, pd.DataFrame, int, str, float | None, dict] | None = None
         for ticker, df in panels.items():
             if today not in df.index:
@@ -837,6 +999,8 @@ def _run_with_thresholds(
             catalyst_mag=magnitude,
             pb_at_entry=funds.get("pb"),
             de_at_entry=funds.get("de"),
+            rv20_at_entry_pct=rv_today,
+            size_factor=size_factor,
         )
         trades.append(record)
         if record.exit_date is not None:
@@ -859,6 +1023,13 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--results-file", default=DEFAULT_RESULTS_FILE)
     p.add_argument("--trades-file", default=DEFAULT_TRADES_FILE)
     p.add_argument("--skip-statistical-validation", action="store_true")
+    p.add_argument(
+        "--n-trials", type=int, default=30,
+        help=(
+            "Number of independent trials assumed when computing DSR / MinBTL / PBO. "
+            "Default 30 reflects Vector's three-gate development-phase parameter search."
+        ),
+    )
     return p.parse_args(argv)
 
 

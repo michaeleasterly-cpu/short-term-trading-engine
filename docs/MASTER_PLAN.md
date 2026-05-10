@@ -207,7 +207,37 @@ Swing Score: Technical (0–40), Catalyst (0–35), Sentiment (0–25). Threshol
 - Entries at market open. Hard stop −7%. Profit target +15% or trailing stop after +10%.
 - Sizing pre-grad $2,000. Max 5 concurrent positions.
 
-**Overfitting diagnostics — deferred:** Overfitting diagnostics will be applied to Vector's backtest once the fundamentals ratio backfill (`pb`/`de` coverage) and the catalyst proxy (`yoy_net_income_growth` standing in until `platform.catalyst_events` is populated) are complete. The `OverfittingDiagnostic` integration follows the same pattern as Sigma (`sigma/backtest.py`) and Reversion (`reversion/backtest_earnings_quality.py`): construct the diagnostic with the winning variant's trade list + parameter dict, save the report to `backtests/vector_overfitting_report.json`, and call `BacktestCredibilityRubric.evaluate_with_overfitting()` to print the credibility score (0–100).
+**Backtest results — extended window 1995-01-01 → 2025-12-31:** `vector/backtest_vector.py` (44-name universe, with 1,622 PIT-safe `pb`/`de` rows in `fundamentals_quarterly` and 683 `EARNINGS_BEAT` rows in `catalyst_events`):
+
+| Metric | Value |
+| --- | --- |
+| Trades | 11 |
+| Win rate | 45.5% |
+| Avg return / trade | −0.26% |
+| Sharpe (annualized) | −0.05 |
+| Max drawdown | −13.1% |
+| Profit factor | 0.91 |
+
+The 1995-pushed `--start` doesn't change the trade count: bars are present back to 1994 (Tradier merge) but `fundamentals_quarterly` only goes ~10 years back (FMP Starter) and `catalyst_events` starts 2018-01-24 (FMP coverage). Pre-2018 sessions have nothing to gate on. Actual usable window is still 2018-2025.
+
+**VIX-aware crash-guard sizing — implemented.** Plan §4.3's volatility-scaled sizing now fires from a SPY 20-day realized-volatility proxy computed off `platform.prices_daily` (annualized std × √252, expressed as %). Per-trade `size_factor` is 1.0 (default) / 0.5 (RV > 25) / 0.25 (RV > 30) and multiplies `return_pct` so the equity curve and Sharpe reflect the reduced exposure during high-vol regimes. The proxy is also written to each TradeRecord as `rv20_at_entry_pct` for diagnostics. (The CHOP-based trend-confirmation cut from §4.3 is still deferred to a follow-up — it requires a SPY-CHOP feed Vector doesn't yet read.)
+
+**Overfitting verdict — `tpcore.backtest.overfitting.OverfittingDiagnostic` with `n_trials = 30`:** report saved to `backtests/vector_overfitting_report.json`.
+
+* Sensitivity surfaces FLAT on both knobs (PB flatness 0.089, DE flatness 0.143 — well below 0.20). The strategy isn't on a knife-edge.
+* PSR(SR > 0) = 0.452, DSR (deflated for 30 trials) = 0.016. The strong deflation collapses any candidate edge once we account for the gate combinatorics.
+* MC sequence test: observed Sharpe at the 65th percentile of the bootstrap null (threshold ≥ 90% to claim signal). Probability of ruin 0%.
+* MinBTL effectively infinite (Sharpe ≤ 0 — no length suffices to call this real).
+* Trades-per-parameter ratio = 1.6 (11 trades / 7 parameters). The diagnostic flags this as the dominant problem: there isn't enough trade evidence relative to the parameter search space to conclude anything either way.
+
+**Credibility (with overfitting bundle): 45/100 — BLOCKED.** Persisted to `platform.data_quality_log` as `backtest_credibility.vector`.
+
+**Primary cause:** thin trade count relative to the parameter search space. The catalyst gate fires only ~once every 1-2 quarters per ticker, and most of those don't co-occur with a Gate-3 technical trigger inside the 5-day window. **Mitigation paths**, in order of cost:
+1. **Extend paper-trading window** — let the live engine accumulate live trades; revisit when ≥ 30 trades exist on the live tape.
+2. **Broaden the universe** — the 44-name funded universe is a small cross-section of the market; expanding to the next 50–100 liquid names with available fundamentals could roughly double the firing rate without changing the strategy.
+3. **Lock parameters as-is** — don't tune. The sensitivity surface is already flat, so any "improvement" from PB/DE tweaks is curve-fitting noise on 11 trades.
+
+The infrastructure is correct; the strategy needs more evidence before the gate will let it graduate.
 
 ### 4.4 S2 — Short Squeeze Engine (Fourth Build, Satellite)
 
