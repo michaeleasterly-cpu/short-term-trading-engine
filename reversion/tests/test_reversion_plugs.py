@@ -46,61 +46,53 @@ def _bar(symbol: str, day: date, o: float, h: float, l: float, c: float, v: int)
 
 
 def _stable_then_extreme_low(symbol: str, end: date, n: int = 70, base: float = 100.0) -> list[Bar]:
-    """Tight oscillation, then a sharp drop, then a clean hammer at the
-    extreme. Triggers oversold + reversal-candle + volume-spike scoring."""
+    """Tight oscillation, then a single hammer bar at the extreme.
+
+    Triggers oversold (|Z| ≥ 3.0 — the production threshold) plus
+    reversal-candle plus volume-spike scoring. The drop happens entirely
+    inside one bar (gap down + long lower wick + small body near top) so
+    the 20-day window stays mostly stable, keeping std small and z deeply
+    negative.
+    """
     bars: list[Bar] = []
     day = end - timedelta(days=n + 10)
-    for i in range(n - 3):
+    for i in range(n - 1):
         c = base + (0.4 if i % 2 else -0.4)
         o = c - 0.1
         h = max(o, c) + 0.2
         l = min(o, c) - 0.2
         bars.append(_bar(symbol, day, o, h, l, c, 5_000_000))
         day += timedelta(days=1)
-    # Two drop bars push the price to the extreme.
-    drop_levels = [base - 4.0, base - 7.0]
-    last_close = base
-    for c in drop_levels:
-        o = last_close
-        l = c - 0.3
-        h = max(o, c) + 0.1
-        bars.append(_bar(symbol, day, o, h, l, c, 18_000_000))
-        last_close = c
-        day += timedelta(days=1)
-    # Hammer bar at the extreme — small body, long lower wick, close near top.
-    o = last_close
-    l = last_close - 1.5
-    h = last_close + 0.15
-    close = last_close + 0.05  # tiny body
+    # Hammer at the extreme — gap down ~25 from previous close, long lower
+    # wick, small body near top of bar.
+    o = base - 25.0
+    l = base - 30.0
+    h = base - 24.5
+    close = base - 25.0  # body = 0
     bars.append(_bar(symbol, day, o, h, l, close, 18_000_000))
     return bars
 
 
 def _stable_then_extreme_high(symbol: str, end: date, n: int = 70, base: float = 100.0) -> list[Bar]:
-    """Tight oscillation, then a sharp rally, then a shooting-star at the extreme."""
+    """Tight oscillation, then a single shooting-star at the extreme.
+
+    Symmetric to ``_stable_then_extreme_low`` — designed so the |Z| of
+    the final close clears the production threshold (3.0)."""
     bars: list[Bar] = []
     day = end - timedelta(days=n + 10)
-    for i in range(n - 3):
+    for i in range(n - 1):
         c = base + (0.4 if i % 2 else -0.4)
         o = c - 0.1
         h = max(o, c) + 0.2
         l = min(o, c) - 0.2
         bars.append(_bar(symbol, day, o, h, l, c, 5_000_000))
         day += timedelta(days=1)
-    rally_levels = [base + 4.0, base + 7.0]
-    last_close = base
-    for c in rally_levels:
-        o = last_close
-        h = c + 0.3
-        l = min(o, c) - 0.1
-        bars.append(_bar(symbol, day, o, h, l, c, 18_000_000))
-        last_close = c
-        day += timedelta(days=1)
-    # Shooting-star — small body, long upper wick, close near bottom.
-    o = last_close
-    h = last_close + 1.5
-    l = last_close - 0.15
-    close = last_close - 0.05
+    # Shooting star at the extreme — gap up ~25, long upper wick, small
+    # body near bottom of bar.
+    o = base + 25.0
+    h = base + 30.0
+    l = base + 24.5
+    close = base + 25.0  # body = 0
     bars.append(_bar(symbol, day, o, h, l, close, 18_000_000))
     return bars
 
@@ -304,6 +296,32 @@ def test_lifecycle_blocks_when_earnings_quality_low() -> None:
     assert assessment.phase is Phase.EXHAUSTED
     assert assessment.earnings_quality_blocked is True
     assert "eq=low" in (assessment.notes or "")
+
+
+def _medium_grade_fundamentals() -> dict:
+    """fcf/ni in [0.6, 0.9) and accruals in [0.05, 0.10) — MEDIUM grade."""
+    return {
+        "net_income": Decimal("100"),
+        "fcf": Decimal("75"),  # fcf/ni = 0.75 → in MEDIUM band
+        "total_assets": Decimal("1000"),  # accruals will land in MEDIUM band
+        "history": [
+            {"net_income": Decimal("90"), "fcf": Decimal("65"), "total_assets": Decimal("970")},
+            {"net_income": Decimal("80"), "fcf": Decimal("60"), "total_assets": Decimal("950")},
+        ],
+    }
+
+
+def test_lifecycle_blocks_when_earnings_quality_medium() -> None:
+    """MEDIUM-grade fundamentals → blocked. After the 2018–2025 backtest
+    showed only HIGH was profitable, the gate tightened from 'reject LOW'
+    to 'require HIGH'."""
+    plug = ReversionLifecycleAnalysis()
+    assessment = plug.assess(
+        _candidate(Direction.LONG), fundamentals=_medium_grade_fundamentals()
+    )
+    assert assessment.phase is Phase.EXHAUSTED
+    assert assessment.earnings_quality_blocked is True
+    assert "eq=medium" in (assessment.notes or "")
 
 
 def test_lifecycle_handle_tier1_fill_transitions_to_reverting() -> None:

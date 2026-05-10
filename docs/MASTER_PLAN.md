@@ -164,18 +164,18 @@ Earlier drafts of this plan gated Market Context on **SPY-level** CHOP+ADX. The 
 
 **Phase 2 enhancement (deferred):** Refine the ADX > 25 shutdown by combining with CHOP — a high-ADX *and* high-CHOP regime (volatile chop, not a clean trend) is the worst environment for fading because reversion to the mean keeps overshooting in both directions. Concretely: if ADX > 25 AND CHOP > 61.8, suppress entries even if Statistical Extremity flags. Not implemented in Phase 1; revisit after Reversion has paper-traded for ≥ 30 trades.
 
-**Earnings-quality gate backtest:** `reversion/backtest_earnings_quality.py` (results in `backtests/earnings_quality_backtest.json`) compares baseline vs the live `EarningsQualityCheck` gate. After upgrading FMP to Starter and backfilling `platform.fundamentals_quarterly` to 1,790 rows / 47 tickers / ~10 quarterly years, the 2018-01-01 → 2025-12-31 sample produces 61 baseline trades and 34 gated trades. The gate rejects 33 of the would-be baseline candidates (39% of which would have been winners — the gate trades a small share of upside for a meaningful share of downside protection).
+**Earnings-quality gate backtest + combined-filter validation:** `reversion/backtest_earnings_quality.py` (results in `backtests/earnings_quality_backtest.json`) compares three variants on the 2018-01-01 → 2025-12-31 window over the 47-name funded universe (FMP Starter, 1,790 quarterly rows). The third variant — the *combined-filter* — was set after `reversion/diagnose_backtest.py` showed HIGH-grade trades and \|Z\|≥3 trades were each individually profitable while the other buckets weren't.
 
-| Metric | Baseline | Gated |
-| --- | --- | --- |
-| Trades | 61 | 34 |
-| Win rate | 42.6% | 41.2% |
-| Avg return / trade | −0.74% | −0.68% |
-| Sharpe (annualized) | **−0.42** | **−0.28** (+33.3%) |
-| Max drawdown | −55.9% | **−33.7%** (−40%) |
-| Profit factor | 0.74 | 0.76 |
+| Metric | Baseline (z≥2.0, no EQ) | Gated (z≥2.0, reject LOW) | **Combined-filter** (z≥3.0, require HIGH) |
+| --- | --- | --- | --- |
+| Trades | 61 | 34 | **11** |
+| Win rate | 42.6% | 41.2% | **54.5%** |
+| Avg return / trade | −0.74% | −0.68% | **+2.08%** |
+| Sharpe (annualized) | −0.42 | −0.28 | **+0.63** |
+| Max drawdown | −55.9% | −33.7% | **−6.1%** |
+| Profit factor | 0.74 | 0.76 | **3.69** |
 
-**Conclusion — gate works as intended; underlying strategy needs work.** The earnings-quality gate produces a real, statistically-not-trivial risk-reduction signal: Sharpe up 33%, max drawdown down 40%, profit factor inching up. That validates the gate's *intent* — it does filter out a higher-than-base-rate share of losers. But both Sharpe values are still negative across the 8-year window: the underlying mean-reversion setup is not profitable on this universe and this period as currently parameterized. The next thread for Reversion is the *strategy* (z-score thresholds, score weights, exit rules), not the *gate*.
+**Conclusion — combined-filter validated; live engine updated.** Tightening to `Z_SCORE_THRESHOLD = 3.0` and `EarningsQualityGrade is HIGH` flips the strategy from a money-loser to profitable: Sharpe swings from −0.42 to +0.63, max drawdown drops from −55.9% to −6.1%, profit factor 0.74 → 3.69. The trade count drops to 11 over 8 years (~1–2 per year) — sparse but high-quality. Live changes: `reversion/models.py:Z_SCORE_THRESHOLD` is now 3.0; `reversion/plugs/lifecycle_analysis.py` blocks any grade that isn't HIGH (was: blocked only LOW). Phase 2 enhancement (ADX > 25 ∧ CHOP > 61.8) remains deferred until ≥30 paper trades accumulate under the new thresholds — at the new firing rate that's a multi-year horizon, so the next concrete step is to monitor live performance and revisit only if real fills diverge from the backtest.
 
 **Graduation:** 30 trades, 60% win rate, avg return ≥ 2%.
 

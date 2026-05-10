@@ -313,6 +313,8 @@ def _scan_day(
     today: date,
     panels: dict[str, pd.DataFrame],
     spy_panel: pd.DataFrame | None,
+    *,
+    z_threshold: float = Z_SCORE_THRESHOLD,
 ) -> list[_DayCandidate]:
     """Run Reversion's setup detection for ``today``, returning all qualifiers."""
     spy_z = float("nan")
@@ -339,7 +341,7 @@ def _scan_day(
         if math.isnan(adx) or adx > MAX_ADX_FOR_REVERSION:
             continue
         z = float(row["z_score"])
-        if math.isnan(z) or abs(z) < Z_SCORE_THRESHOLD:
+        if math.isnan(z) or abs(z) < z_threshold:
             continue
         direction = Direction.LONG if z < 0 else Direction.SHORT
 
@@ -537,14 +539,21 @@ def _run_variant(
     fundamentals: dict[str, list[dict]],
     start: date,
     end: date,
-    apply_quality_gate: bool,
+    z_threshold: float = Z_SCORE_THRESHOLD,
+    filter_mode: str = "none",
 ) -> tuple[list[TradeRecord], list[TradeRecord]]:
     """Walk every trading day. Returns ``(trades, rejected_trades)``.
 
-    ``rejected_trades`` is non-empty only when ``apply_quality_gate=True``
-    is run side-by-side with baseline; this function returns the
-    rejected-by-quality stream during the *baseline* pass so it can be
-    written to CSV with would-be P&L.
+    ``z_threshold`` overrides the ``Z_SCORE_THRESHOLD`` module default.
+    ``filter_mode`` controls the earnings-quality filter:
+
+    * ``"none"``       — no EQ filter (baseline).
+    * ``"not_low"``    — reject LOW or no-data (current production gate).
+    * ``"high_only"``  — require HIGH (combined-filter variant).
+
+    ``rejected_trades`` is non-empty only on the baseline pass — for
+    each baseline trade whose grade *would* have failed the
+    ``"not_low"`` filter, we stash the would-be P&L for CSV export.
     """
     all_dates = sorted({d for df in panels.values() for d in df.index})
     all_dates = [d for d in all_dates if start <= d <= end]
@@ -556,20 +565,17 @@ def _run_variant(
     for di, today in enumerate(all_dates):
         if di < next_eligible_idx:
             continue
-        candidates = _scan_day(today, panels, spy_panel)
+        candidates = _scan_day(today, panels, spy_panel, z_threshold=z_threshold)
         if not candidates:
             continue
 
-        # Try candidates in score order; first one to pass the gate wins.
+        # Try candidates in score order; first one to pass the filter wins.
         chosen: _DayCandidate | None = None
         chosen_grade: str | None = None
         chosen_ratio: tuple[float | None, float | None] = (None, None)
         for cand in candidates:
             grade, fcf_ni, accr = _grade_or_none(fundamentals.get(cand.ticker, []), today)
-            if apply_quality_gate and grade in (EarningsQualityGrade.LOW, None):
-                # Track what we'd have *traded* if the gate weren't there.
-                # Only populated on baseline-equivalent simulation, see
-                # the rejected-stream branch below.
+            if not _passes_filter(grade, filter_mode):
                 continue
             chosen = cand
             chosen_grade = grade.value if grade else "no_data"
@@ -611,7 +617,7 @@ def _run_variant(
 
         # On the baseline pass, also note if THIS specific trade would have
         # been rejected by the quality gate, and capture the would-be P&L.
-        if not apply_quality_gate and chosen_grade in ("low", "no_data"):
+        if filter_mode == "none" and chosen_grade in ("low", "no_data"):
             rejected.append(record)
 
         if record.tier2_exit_date is not None:
@@ -624,6 +630,17 @@ def _run_variant(
             next_eligible_idx = di + 1
 
     return trades, rejected
+
+
+def _passes_filter(grade: EarningsQualityGrade | None, filter_mode: str) -> bool:
+    """Return True if a candidate with this grade is allowed under ``filter_mode``."""
+    if filter_mode == "none":
+        return True
+    if filter_mode == "not_low":
+        return grade not in (EarningsQualityGrade.LOW, None)
+    if filter_mode == "high_only":
+        return grade is EarningsQualityGrade.HIGH
+    raise ValueError(f"unknown filter_mode {filter_mode!r}")
 
 
 def _grade_or_none(
@@ -765,22 +782,33 @@ def _write_trades_csv(path: Path, trades: list[TradeRecord]) -> None:
             )
 
 
-def _conclusion(baseline: VariantSummary, gated: VariantSummary, rejected: list[TradeRecord]) -> str:
+def _conclusion(baseline: VariantSummary, treatment: VariantSummary, rejected: list[TradeRecord]) -> str:
+    """Free-form summary contrasting ``baseline`` to ``treatment``.
+
+    ``treatment`` may be the quality-gate-only run or the combined-filter
+    run; the wording uses the treatment's own variant label so the prose
+    stays accurate regardless of which comparison the caller makes.
+    """
+    label = treatment.variant
     if baseline.sharpe_annualized == 0:
         sharpe_line = "baseline Sharpe is zero — no comparison possible"
     else:
-        delta = (gated.sharpe_annualized - baseline.sharpe_annualized) / abs(baseline.sharpe_annualized)
+        delta = (
+            (treatment.sharpe_annualized - baseline.sharpe_annualized)
+            / abs(baseline.sharpe_annualized)
+        )
         direction = "improved" if delta > 0 else "did not improve"
         sharpe_line = (
-            f"earnings-quality gate {direction} Sharpe by {delta*100:+.1f}% "
-            f"(baseline {baseline.sharpe_annualized:+.2f} → gated {gated.sharpe_annualized:+.2f})"
+            f"{label} {direction} Sharpe by {delta*100:+.1f}% "
+            f"(baseline {baseline.sharpe_annualized:+.2f} → {label} {treatment.sharpe_annualized:+.2f})"
         )
     n_rejected = len(rejected)
     losers = sum(1 for t in rejected if t.return_pct < 0)
     winners = sum(1 for t in rejected if t.return_pct > 0)
     rejected_line = (
-        f"the gate rejected {n_rejected} trades — {losers} losers, "
-        f"{winners} winners ({(winners/n_rejected*100) if n_rejected else 0:.0f}% would have been profitable)"
+        f"the LOW-grade-only gate would have rejected {n_rejected} trades — "
+        f"{losers} losers, {winners} winners "
+        f"({(winners/n_rejected*100) if n_rejected else 0:.0f}% would have been profitable)"
     )
     return sharpe_line + "\n  " + rejected_line
 
@@ -840,7 +868,7 @@ async def amain(args: argparse.Namespace) -> int:
     panels = {ticker: _precompute_indicators(df) for ticker, df in prices.items()}
     spy_panel = panels.pop(SPY_SYMBOL, None)
 
-    logger.info("running baseline (no quality gate)")
+    logger.info("running baseline (z=2.0, no EQ filter)")
     baseline_trades, rejected = _run_variant(
         variant="baseline",
         panels=panels,
@@ -848,9 +876,10 @@ async def amain(args: argparse.Namespace) -> int:
         fundamentals=fundamentals,
         start=args.start,
         end=args.end,
-        apply_quality_gate=False,
+        z_threshold=2.0,
+        filter_mode="none",
     )
-    logger.info("running quality-gated (LOW or no-data → suppressed)")
+    logger.info("running quality-gated (z=2.0, reject LOW or no-data)")
     gated_trades, _ = _run_variant(
         variant="quality-gated",
         panels=panels,
@@ -858,12 +887,25 @@ async def amain(args: argparse.Namespace) -> int:
         fundamentals=fundamentals,
         start=args.start,
         end=args.end,
-        apply_quality_gate=True,
+        z_threshold=2.0,
+        filter_mode="not_low",
+    )
+    logger.info("running combined-filter (z=3.0, require HIGH)")
+    combined_trades, _ = _run_variant(
+        variant="combined-filter",
+        panels=panels,
+        spy_panel=spy_panel,
+        fundamentals=fundamentals,
+        start=args.start,
+        end=args.end,
+        z_threshold=3.0,
+        filter_mode="high_only",
     )
 
     summaries = [
         _compute_summary("baseline", baseline_trades),
         _compute_summary("quality-gated", gated_trades),
+        _compute_summary("combined-filter", combined_trades),
     ]
 
     print()
@@ -874,7 +916,9 @@ async def amain(args: argparse.Namespace) -> int:
     print()
     print(_render(summaries))
     print()
-    print(_conclusion(summaries[0], summaries[1], rejected))
+    # Headline conclusion is baseline vs combined-filter (the new hypothesis).
+    # Keep the gate-rejected trade audit visible too.
+    print(_conclusion(summaries[0], summaries[2], rejected))
     print()
 
     payload = {

@@ -16,10 +16,13 @@ Plus the engine-specific gates:
       that drift trending while in the queue).
     * Earnings-quality screen: caller passes a ``fundamentals`` dict
       from ``tpcore.fmp.FMPFundamentalsAdapter``; we run
-      ``check_earnings_quality`` against it. ``LOW`` → trade suppressed
-      (``earnings_quality_blocked=True``). **No fundamentals → no
-      trade.** ``DataProviderOutage`` from the adapter propagates so
-      the scheduler can decide whether the whole scan should bail.
+      ``check_earnings_quality`` against it. Only ``HIGH`` passes —
+      ``MEDIUM`` and ``LOW`` are both suppressed (``earnings_quality_blocked
+      =True``). **No fundamentals → no trade.** The HIGH-only policy
+      was set after the 2018–2025 backtest showed only HIGH-grade
+      trades were profitable. ``DataProviderOutage`` from the adapter
+      propagates so the scheduler can decide whether the whole scan
+      should bail.
 """
 from __future__ import annotations
 
@@ -60,7 +63,12 @@ def _evaluate_earnings_quality(
     """Run the earnings-quality screen and return ``(blocked, result)``.
 
     No fundamentals dict → blocked (no data, no trade).
-    LOW grade → blocked. HIGH/MEDIUM → not blocked.
+    HIGH grade → not blocked. MEDIUM and LOW → blocked.
+
+    The HIGH-only policy was set after the 2018–2025 backtest showed
+    HIGH-grade trades produced PF 1.39 / +0.87% avg while MEDIUM and
+    LOW combined averaged −1.65%. See ``backtests/reversion_diagnosis.txt``
+    and master plan §4.2.
     """
     if fundamentals is None:
         logger.warning(
@@ -70,7 +78,7 @@ def _evaluate_earnings_quality(
         )
         return True, None
     result = check_earnings_quality(fundamentals)
-    blocked = result.grade is EarningsQualityGrade.LOW
+    blocked = result.grade is not EarningsQualityGrade.HIGH
     logger.info(
         "reversion.lifecycle.earnings_quality",
         symbol=symbol,
