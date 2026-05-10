@@ -129,14 +129,14 @@ def _input_from_block(block: dict) -> dict:
         payload["source"] = {"repo": src["repo"]}
     # watchPatterns: glob patterns that gate rebuilds on push. Without this,
     # every push to the linked branch rebuilds the service even if no runtime
-    # code changed (docs, markdown, JSON outputs). Joined with "\n" because
-    # Railway's serviceInstanceUpdate accepts watchPatterns as a single
-    # newline-separated string, not a JSON array.
+    # code changed (docs, markdown, JSON outputs). Pass as a JSON array of
+    # strings — earlier this script joined the patterns with newlines, which
+    # Railway's matcher silently failed to parse and SKIPPED every push.
     patterns = block.get("watchPatterns")
     if patterns:
-        if not isinstance(patterns, list):
+        if not isinstance(patterns, list) or not all(isinstance(p, str) for p in patterns):
             sys.exit("watchPatterns must be a list of glob strings")
-        payload["watchPatterns"] = "\n".join(patterns)
+        payload["watchPatterns"] = list(patterns)
     return payload
 
 
