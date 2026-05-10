@@ -340,6 +340,8 @@ These are built only after at least two engines are live.
 
 ## 6. Data Architecture
 
+Full database schema and data flow documentation: [`docs/DATABASE_AND_DATAFLOW.md`](DATABASE_AND_DATAFLOW.md).
+
 ### 6.1 Live / Production Stack
 
 | Source | Purpose | Cost |
