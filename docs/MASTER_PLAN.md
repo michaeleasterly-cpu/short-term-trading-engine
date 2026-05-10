@@ -1,8 +1,8 @@
 # Short-Term Trading Engine — Unified Platform Master Plan
 
-**Version:** 1.1
+**Version:** 1.2
 **Date:** 2026-05-13
-**Status:** All three engine schedulers (Sigma, Reversion, Vector) deployed on Railway and online. All three engines fail the overfitting-aware credibility gate (60/100); none cleared for live capital — paper-trading only.
+**Status:** All three engine schedulers (Sigma, Reversion, Vector) deployed on Railway and online. RiskGovernor `check_trade()` + startup kill-switch check, AARWriter persistence, and LivePaperParityHarness wiring all verified end-to-end (live DB round-trip for AAR; harnesses no-op without live broker creds, by design). All three engines fail the overfitting-aware credibility gate (60/100); none cleared for live capital — paper-trading only.
 
 ---
 
@@ -414,13 +414,15 @@ Current decision: **stay on FMP Starter and Alpaca free**. The overfitting diagn
 
 ## 8. Platform Operations & Safety
 
-- **Kill Switch:** Emergency button → `RiskGovernor.emergency_kill()` → cancels all orders, flattens positions.
+- **Kill Switch:** Emergency button → `RiskGovernor.emergency_kill()` → cancels all orders, flattens positions. **Two-layer enforcement:** every engine's `submit_decision` calls `RiskGovernor.check_trade()` (which returns `BLOCK` if `kill_switch_active`); each scheduler also short-circuits at startup before scanning candidates, so a frozen engine consumes zero FMP / Alpaca / DB calls. Verified by `scripts/test_kill_switch.py`.
 - **Cumulative Exposure Cap:** Net long ≤ 60% of platform capital.
 - **Vacation Mode:** Pauses new entries; exits remain active.
 - **Broker Outage Protocol:** Backup manual login path. No secondary automated broker.
 - **Performance Benchmark:** SPY total return (Sharpe ratio). Failure = underperformance for 24 consecutive months.
 - **Trade Discipline Log:** Daily checklist before first trade.
 - **Tradier account:** CLOSED — $500 moved to Alpaca. No inactivity fees.
+- **Deploy discipline:** Every Railway deployment must correspond to a commit on `main`. Out-of-band CLI redeploys (`railway redeploy --from-source`, `railway up`) are forbidden — they break the audit trail. `watchPatterns` on each service gate rebuilds to runtime files only (`**/*.py`, `**/*.yaml`, `pyproject.toml`, `railway.json`, `.python-version`); doc / markdown / backtest-output changes don't trigger rebuilds. Build creates a venv at `/app/.venv` and the runtime invokes `/app/.venv/bin/python` directly. Python pinned to 3.11.15 via `.python-version`. See `docs/OPERATIONS.md` §1.
+- **AAR persistence:** `tpcore.aar.writer.AARWriter` persists every closed trade to `platform.aar_events` with `(engine, trade_id)` uniqueness + `ON CONFLICT DO NOTHING` idempotency. Pipeline verified end-to-end against the live database via `scripts/test_aar_pipeline.py`.
 
 ---
 

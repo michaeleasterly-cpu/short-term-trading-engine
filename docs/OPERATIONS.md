@@ -10,7 +10,11 @@
 
 **Time discipline:** All timestamps are UTC. Cron schedules in `railway.json` are UTC. Don't translate to local time when reading logs — compare in UTC.
 
-**Push discipline (avoid mid-cron deploys):** A push to `main` that touches files matching a service's `watchPatterns` rebuilds that service. The five Railway services have `watchPatterns = ["**/*.py", "**/*.yaml", "pyproject.toml", "railway.json"]`, so doc-only edits (`docs/`, `*.md`, `backtests/*.json`) do *not* trigger rebuilds. For changes that *do* match the patterns: avoid pushing during the cron firing windows so a redeploy can't kill an in-flight job. Cron windows: weekdays 22:00–22:10 UTC (engines), Sun 04:00–04:30 UTC (corp-actions), Sun 06:00–06:30 UTC (validation). For programmatic Railway operations like `railway variable set`, always pass `--skip-deploys`.
+**Push discipline (avoid mid-cron deploys):** A push to `main` that touches files matching a service's `watchPatterns` rebuilds that service. The five Railway services have `watchPatterns = ["**/*.py", "**/*.yaml", "pyproject.toml", "railway.json", ".python-version"]`, so doc-only edits (`docs/`, `*.md`, `backtests/*.json`) do *not* trigger rebuilds. For changes that *do* match the patterns: avoid pushing during the cron firing windows so a redeploy can't kill an in-flight job. Cron windows: weekdays 22:00–22:10 UTC (engines), Sun 04:00–04:30 UTC (corp-actions), Sun 06:00–06:30 UTC (validation). For programmatic Railway operations like `railway variable set`, always pass `--skip-deploys`.
+
+**Deploy discipline (git is the source of truth):** Every Railway deployment must correspond to a commit on `main`. Never use `railway redeploy --from-source` or `railway up` to push a new image — they create live deployments with no audit trail and break the "what's on `main` = what's running" invariant. If a push doesn't visibly trigger a rebuild within ~2 minutes, push an empty commit instead: `git commit --allow-empty -m "trigger: <reason>" && git push`.
+
+**Build layout:** Railway builds via Railpack. `pyproject.toml` deps install into a venv at `/app/.venv` (created during build by `python -m venv /app/.venv && /app/.venv/bin/pip install -e .`); each service's `startCommand` invokes `/app/.venv/bin/python` directly. The runtime Python version is pinned to **3.11.15** by the repo-root `.python-version` file. If a service crashes with `ModuleNotFoundError`, check `railway logs --build` to confirm the `pip install` step actually ran and produced "Successfully installed …" — and that the runtime is using `/app/.venv/bin/python` rather than mise's system Python.
 
 **Database access:** The local `.env` exposes two URLs (a known gotcha — see the project memory entry). Use `DATABASE_URL_IPV4` (Supabase pooler) for local CLI work; Railway uses the IPv6 direct URL via `DATABASE_URL`. Never copy one into the other.
 
@@ -96,7 +100,7 @@ Each engine and ops service pings Healthchecks at the start and end of every run
 | `short-term-engine-validation-suite` | Sundays 06:00 UTC | 1h | `HEALTHCHECKS_VALIDATION_URL` |
 | `short-term-engine-corporate-actions-ingestion` | Sundays 04:00 UTC | 1h | `HEALTHCHECKS_CORPORATE_ACTIONS_URL` |
 
-**Known issue (2026-05-10):** `short-term-engine-sigma` and `short-term-engine-reversion` show **last ping = Never** — the Railway services are Online and the cron schedules are firing, but no pings have ever reached Healthchecks for those two engines. The validation-suite and corporate-actions checks are healthy (last pings 3–4h ago, ~15 sec duration), and Vector's check exists. Most likely cause: the per-engine `HEALTHCHECKS_PING_URL_*` env vars aren't set on the corresponding Railway services. Verify by inspecting service variables in the Railway dashboard. The schedulers' ping is best-effort — a missing URL causes a silent skip, never an error in the engine logic. **This issue does not affect engine execution; it affects observability.**
+**Status (2026-05-10):** All five `HEALTHCHECKS_*` URLs are now set as Railway service-scoped variables (verified via `railway variable list --service <name> --kv`). The earlier "Last Ping: Never" state for `short-term-engine-sigma` and `short-term-engine-reversion` will only flip to UP once those services run successfully end-to-end — currently blocked by the runtime/`httpx` issue addressed by the venv-based build (see §1 below). First successful Mon 22:00 UTC fire is the verification window.
 
 ### How to inspect
 
@@ -400,7 +404,35 @@ If every box is checked: report **"all green"** and stop. If anything fails: jum
 
 ---
 
-## 10. Troubleshooting
+## 10. Verification Scripts
+
+Two standalone harnesses prove specific safety paths work end-to-end against the live database without waiting for an engine to actually fire a real trade. Use these any time a "the wiring exists but the table is empty" question comes up.
+
+### `scripts/test_aar_pipeline.py`
+
+Proves `tpcore.aar.writer.AARWriter` correctly persists `AfterActionReport` rows to `platform.aar_events`. Builds a synthetic AAR with `engine='synthetic_test'` and a UUID `trade_id`, calls `write_aar` twice, asserts (1) first call returns `True` (insert), (2) round-trip read matches the original JSON, (3) second call returns `False` (idempotent skip via the `UNIQUE (engine, trade_id)` constraint), (4) row count is exactly 1, (5) cleanup `DELETE` runs in a `finally` block so the production table never accumulates harness data.
+
+```bash
+DATABASE_URL=$(grep '^DATABASE_URL_IPV4=' .env | cut -d= -f2-) \
+  .venv/bin/python scripts/test_aar_pipeline.py
+```
+
+A `PASS` line + `cleanup: deleted 1 synthetic row(s)` is the green signal.
+
+### `scripts/test_kill_switch.py`
+
+Proves the engine schedulers' startup kill-switch short-circuit fires. Flips `kill_switch_active=true` for the named engine in `platform.risk_state`, runs that engine's `scheduler.run_once()`, asserts `n_candidates == 0` and `n_submitted == 0`, then resets the switch in a `try/finally` so the live engine isn't left frozen on test failure.
+
+```bash
+DATABASE_URL=$(grep '^DATABASE_URL_IPV4=' .env | cut -d= -f2-) \
+  .venv/bin/python scripts/test_kill_switch.py --engine sigma
+```
+
+Run with `--engine reversion` or `--engine vector` for the other two. Each engine's startup check must be exercised independently.
+
+---
+
+## 11. Troubleshooting
 
 Each scenario lists the diagnostic command first, then the recovery action. **Always confirm before any destructive action** (cancelling orders, restarting a service that submitted live orders mid-run, resetting risk state).
 
