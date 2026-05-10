@@ -26,12 +26,12 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          # CI runs on the latest Python 3.11.x — pyproject.toml's
-          # requires-python = ">=3.11" is the contract. Local .venv is also
-          # 3.11.15. Railway/Railpack picks its own version (mise default);
-          # we don't over-constrain so the runtime image's Python install
-          # path remains whatever Railpack expects to preserve at runtime.
-          python-version: "3.11"
+          # CI runs on Python 3.13 to match Railway's mise default — the
+          # platform's runtime is 3.13.x, so testing here on the same major
+          # eliminates "passed CI, crashed in prod" version drift.
+          # pyproject.toml's requires-python = ">=3.11" still permits 3.11
+          # for local dev; production / CI commit to 3.13.
+          python-version: "3.13"
           cache: pip
 
       - name: Install package + dev deps
