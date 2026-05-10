@@ -29,6 +29,12 @@
       "cronSchedule": "0 4 * * SUN",
       "restartPolicyType": "NEVER",
       "source": {"repo": "michaeleasterly-cpu/short-term-trading-engine"}
+    },
+    "vector-scheduler": {
+      "startCommand": "python vector/scheduler.py",
+      "cronSchedule": "0 22 * * MON-FRI",
+      "restartPolicyType": "NEVER",
+      "source": {"repo": "michaeleasterly-cpu/short-term-trading-engine"}
     }
   }
 }
