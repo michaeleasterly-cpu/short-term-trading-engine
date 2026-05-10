@@ -177,7 +177,9 @@ Earlier drafts of this plan gated Market Context on **SPY-level** CHOP+ADX. The 
 
 **Conclusion — combined-filter validated; live engine updated.** Tightening to `Z_SCORE_THRESHOLD = 3.0` and `EarningsQualityGrade is HIGH` flips the strategy from a money-loser to profitable: Sharpe swings from −0.42 to +0.63, max drawdown drops from −55.9% to −6.1%, profit factor 0.74 → 3.69. The trade count drops to 11 over 8 years (~1–2 per year) — sparse but high-quality. Live changes: `reversion/models.py:Z_SCORE_THRESHOLD` is now 3.0; `reversion/plugs/lifecycle_analysis.py` blocks any grade that isn't HIGH (was: blocked only LOW). Phase 2 enhancement (ADX > 25 ∧ CHOP > 61.8) remains deferred until ≥30 paper trades accumulate under the new thresholds — at the new firing rate that's a multi-year horizon, so the next concrete step is to monitor live performance and revisit only if real fills diverge from the backtest.
 
-**Graduation:** 30 trades, 60% win rate, avg return ≥ 2%.
+**Graduation:** 10 completed trades, win rate ≥ 55%, avg return ≥ +2%, profit factor > 1.5.
+
+**Rationale:** Reversion fires infrequently by design — extremes occur a few times per year across a liquid universe. The win rate and average return bars are calibrated to the backtest results (54.5% / +2.08%). The trade count is set at 10 to balance statistical confidence against the engine's natural firing rate; requiring ~7 years of data ensures graduation is achievable within a reasonable timeframe while still demanding enough trades to avoid single-trade luck. If the live engine's firing rate differs materially from the backtest, re-evaluate the graduation trade count after 2 years of live paper data.
 
 ### 4.3 Vector — Momentum Swing Engine (Third Build)
 

@@ -42,18 +42,19 @@ def _all_three(ts: datetime) -> list[dict[str, Any]]:
 
 async def test_assert_can_graduate_returns_false_when_stats_not_met() -> None:
     pool = _DQLogFakePool([])
-    stats = GraduationStats(n_trades=10, win_rate=0.7, avg_return=0.03)
+    # Below the 10-trade graduation floor → pre-grad, no validation lookup.
+    stats = GraduationStats(n_trades=5, win_rate=0.7, avg_return=0.03, profit_factor=2.0)
     assert await ReversionCapitalGate.assert_can_graduate(stats, pool) is False
 
 
 async def test_assert_can_graduate_returns_true_when_stats_and_validation_pass() -> None:
     pool = _DQLogFakePool(_all_three(datetime.now(UTC) - timedelta(days=1)))
-    stats = GraduationStats(n_trades=30, win_rate=0.65, avg_return=0.02)
+    stats = GraduationStats(n_trades=10, win_rate=0.55, avg_return=0.02, profit_factor=1.5)
     assert await ReversionCapitalGate.assert_can_graduate(stats, pool) is True
 
 
 async def test_assert_can_graduate_raises_when_stats_met_but_validation_stale() -> None:
     pool = _DQLogFakePool([])
-    stats = GraduationStats(n_trades=30, win_rate=0.65, avg_return=0.02)
+    stats = GraduationStats(n_trades=10, win_rate=0.55, avg_return=0.02, profit_factor=1.5)
     with pytest.raises(ValidationStaleError):
         await ReversionCapitalGate.assert_can_graduate(stats, pool)

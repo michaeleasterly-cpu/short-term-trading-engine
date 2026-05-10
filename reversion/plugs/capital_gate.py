@@ -5,12 +5,19 @@ Engine-local guardrail per plan §4.2:
 * Pre-graduation hard cap per position: $2,000.
 * Max concurrent positions: 5.
 * Daily loss kill (mirrors RiskGovernor): freeze on −5% engine-equity drawdown.
-* Graduation gate (paper → live): 30 trades, win-rate ≥ 60%, avg return ≥ 2%.
+* Graduation gate (paper → live): 10 trades, win-rate ≥ 55%, avg return ≥ 2%, profit factor > 1.5.
 
 The platform-wide :class:`tpcore.risk.RiskGovernor` runs **after** this gate;
 both must approve a trade. Graduation also requires the Data Validation
 Suite (`tpcore.quality.validation.assert_passed`) to have a recent passing
 run — see :meth:`ReversionCapitalGate.assert_can_graduate`.
+
+Graduation criteria were tightened on the *quality* side and loosened on
+the *count* side after the 2018–2025 backtest under the combined-filter
+config (z≥3.0, EQ=HIGH) showed Reversion fires only ~1–2 times/year. The
+old 30-trade bar would have required ~20 years to clear; 10 trades + the
+profit-factor floor balances statistical confidence against the engine's
+natural firing rate.
 """
 from __future__ import annotations
 
@@ -34,9 +41,10 @@ if TYPE_CHECKING:  # pragma: no cover
 logger = structlog.get_logger(__name__)
 
 DAILY_LOSS_FREEZE_PCT = Decimal("0.05")
-GRAD_MIN_TRADES = 30
-GRAD_MIN_WIN_RATE = 0.60
+GRAD_MIN_TRADES = 10
+GRAD_MIN_WIN_RATE = 0.55
 GRAD_MIN_AVG_RETURN = 0.02
+GRAD_MIN_PROFIT_FACTOR = 1.5
 
 
 @dataclass
@@ -44,6 +52,7 @@ class GraduationStats:
     n_trades: int = 0
     win_rate: float = 0.0
     avg_return: float = 0.0
+    profit_factor: float = 0.0
 
 
 class ReversionCapitalGate(BaseEnginePlug):
@@ -118,6 +127,7 @@ class ReversionCapitalGate(BaseEnginePlug):
             stats.n_trades >= GRAD_MIN_TRADES
             and stats.win_rate >= GRAD_MIN_WIN_RATE
             and stats.avg_return >= GRAD_MIN_AVG_RETURN
+            and stats.profit_factor >= GRAD_MIN_PROFIT_FACTOR
         )
 
     @staticmethod

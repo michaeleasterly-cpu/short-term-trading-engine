@@ -448,9 +448,20 @@ def test_capital_gate_enforces_limits() -> None:
     assert not gate.check_trade(size=Decimal("1000"), engine_pnl=Decimal("0"), open_positions=5)
     assert not gate.check_trade(size=Decimal("1000"), engine_pnl=Decimal("-600"))  # −6% drawdown
 
-    # Graduation gating per §4.2 (30 trades / 60% / 2%).
-    assert not ReversionCapitalGate.is_graduated(GraduationStats(n_trades=10, win_rate=0.7, avg_return=0.03))
-    assert ReversionCapitalGate.is_graduated(GraduationStats(n_trades=30, win_rate=0.65, avg_return=0.02))
+    # Graduation gating per §4.2 (10 trades / 55% / 2% / PF 1.5).
+    # Insufficient trade count → not graduated even if other metrics are stellar.
+    assert not ReversionCapitalGate.is_graduated(
+        GraduationStats(n_trades=5, win_rate=0.7, avg_return=0.03, profit_factor=3.0)
+    )
+    # Insufficient profit factor → not graduated even with enough trades and acceptable returns.
+    assert not ReversionCapitalGate.is_graduated(
+        GraduationStats(n_trades=20, win_rate=0.6, avg_return=0.02, profit_factor=1.2)
+    )
+    # All four bars met → graduated. Numbers calibrated to the backtest result
+    # (54.5% WR, +2.08% avg, PF 3.69) plus a sample-size buffer.
+    assert ReversionCapitalGate.is_graduated(
+        GraduationStats(n_trades=10, win_rate=0.55, avg_return=0.02, profit_factor=1.5)
+    )
 
 
 # ────────────────────────────────────────────────────────────────────────────
