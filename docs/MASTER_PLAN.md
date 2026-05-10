@@ -1,8 +1,8 @@
 # Short-Term Trading Engine — Unified Platform Master Plan
 
-**Version:** 1.0
+**Version:** 1.1
 **Date:** 2026-05-13
-**Status:** Phases 0–2 Complete — Sigma & Reversion in paper trading on Railway
+**Status:** Phases 0–2 complete and deployed on Railway. Vector code-complete, scheduler not yet deployed. All three engines fail the overfitting-aware credibility gate (60/100); none cleared for live capital.
 
 ---
 
@@ -146,6 +146,12 @@ Earlier drafts of this plan gated Market Context on **SPY-level** CHOP+ADX. The 
 
 **Capital Gate:** Hard cap enforcement, graduation (50 trades, 65% win rate, avg return ≥ 1.5%).
 
+**Status (built and deployed):**
+- All five plugs implemented and tested. Scheduler deployed on Railway as `sigma-scheduler` (cron: Mon–Fri 22:00 UTC).
+- CHOP filter validated by backtest — per-stock variant improves Sharpe by 26%; SPY-level variant falsified and removed.
+- Backtest: `sigma/backtest.py`. Overfitting report: `backtests/sigma_overfitting_report.json`.
+- Overfitting diagnostic score **50/100 — BLOCKED**. Extended window (1995–2025, 754 trades) revealed −83% max drawdown in pre-2008 regimes; per-trade Sharpe collapsed to 0.03 once the longer window pulls in the dot-com bust and 2008 GFC. Not cleared for live capital. See §9 *Overfitting Diagnostics Status* for the failure-mode breakdown.
+
 ### 4.2 Reversion — Mean Reversion Engine (Second Build)
 
 **Mission:** Fade statistically extreme price deviations on a multi-day horizon.
@@ -168,7 +174,7 @@ Earlier drafts of this plan gated Market Context on **SPY-level** CHOP+ADX. The 
 
 **Phase 2 enhancement (deferred):** Refine the ADX > 25 shutdown by combining with CHOP — a high-ADX *and* high-CHOP regime (volatile chop, not a clean trend) is the worst environment for fading because reversion to the mean keeps overshooting in both directions. Concretely: if ADX > 25 AND CHOP > 61.8, suppress entries even if Statistical Extremity flags. Not implemented in Phase 1; revisit after Reversion has paper-traded for ≥ 30 trades.
 
-**Earnings-quality gate backtest + combined-filter validation:** `reversion/backtest_earnings_quality.py` (results in `backtests/earnings_quality_backtest.json`) compares three variants on the 2018-01-01 → 2025-12-31 window over the 47-name funded universe (FMP Starter, 1,790 quarterly rows). The third variant — the *combined-filter* — was set after `reversion/diagnose_backtest.py` showed HIGH-grade trades and \|Z\|≥3 trades were each individually profitable while the other buckets weren't.
+**Earnings-quality gate backtest + combined-filter validation:** `reversion/backtest.py` (results in `backtests/earnings_quality_backtest.json`) compares three variants on the 2018-01-01 → 2025-12-31 window over the 47-name funded universe (FMP Starter, 1,790 quarterly rows). The third variant — the *combined-filter* — was set after `reversion/diagnose_backtest.py` showed HIGH-grade trades and \|Z\|≥3 trades were each individually profitable while the other buckets weren't.
 
 | Metric | Baseline (z≥2.0, no EQ) | Gated (z≥2.0, reject LOW) | **Combined-filter** (z≥3.0, require HIGH) |
 | --- | --- | --- | --- |
@@ -184,6 +190,12 @@ Earlier drafts of this plan gated Market Context on **SPY-level** CHOP+ADX. The 
 **Graduation:** 10 completed trades, win rate ≥ 55%, avg return ≥ +2%, profit factor > 1.5.
 
 **Rationale:** Reversion fires infrequently by design — extremes occur a few times per year across a liquid universe. The win rate and average return bars are calibrated to the backtest results (54.5% / +2.08%). The trade count is set at 10 to balance statistical confidence against the engine's natural firing rate; requiring ~7 years of data ensures graduation is achievable within a reasonable timeframe while still demanding enough trades to avoid single-trade luck. If the live engine's firing rate differs materially from the backtest, re-evaluate the graduation trade count after 2 years of live paper data.
+
+**Status (built and deployed):**
+- All five plugs implemented and tested. Scheduler deployed on Railway as `reversion-scheduler` (cron: Mon–Fri 22:00 UTC).
+- Earnings-quality gate validated; combined filter (HIGH quality + |Z| ≥ 3.0) applied in `reversion/models.py` and `reversion/plugs/lifecycle_analysis.py`.
+- Backtest: `reversion/backtest.py`. Overfitting report: `backtests/reversion_overfitting_report.json`.
+- Overfitting diagnostic score **45/100 — BLOCKED**. Extended window (1995–2025) produced 28 trades. Primary failure modes: trades-per-parameter ratio 5.6 (needs ≥ 10) and a 709-trade MinBTL gap vs the 28 actual. Not cleared for live capital.
 
 ### 4.3 Vector — Momentum Swing Engine (Third Build)
 
@@ -207,7 +219,7 @@ Swing Score: Technical (0–40), Catalyst (0–35), Sentiment (0–25). Threshol
 - Entries at market open. Hard stop −7%. Profit target +15% or trailing stop after +10%.
 - Sizing pre-grad $2,000. Max 5 concurrent positions.
 
-**Backtest results — extended window 1995-01-01 → 2025-12-31:** `vector/backtest_vector.py` (44-name universe, with 1,622 PIT-safe `pb`/`de` rows in `fundamentals_quarterly` and 683 `EARNINGS_BEAT` rows in `catalyst_events`):
+**Backtest results — extended window 1995-01-01 → 2025-12-31:** `vector/backtest.py` (44-name universe, with 1,622 PIT-safe `pb`/`de` rows in `fundamentals_quarterly` and 683 `EARNINGS_BEAT` rows in `catalyst_events`):
 
 | Metric | Value |
 | --- | --- |
@@ -239,6 +251,13 @@ The 1995-pushed `--start` doesn't change the trade count: bars are present back 
 
 The infrastructure is correct; the strategy needs more evidence before the gate will let it graduate.
 
+**Status (code-complete, not yet deployed on Railway):**
+- All five plugs implemented and tested.
+- Catalyst proxy via FMP `EARNINGS_BEAT` events (683 events across 44 tickers, 2018–2025) populated in `platform.catalyst_events`. Fundamentals ratios `pb`/`de` backfilled (1,622 PIT-safe rows in `platform.fundamentals_quarterly`).
+- VIX-aware crash-guard sizing implemented and verified end-to-end in the backtest (1.0× / 0.5× / 0.25× via SPY 20-day realized-vol proxy).
+- Backtest: `vector/backtest.py`. Overfitting report: `backtests/vector_overfitting_report.json`. Score **45/100 — BLOCKED** (11 trades, trades-per-parameter ratio 1.6, MinBTL effectively infinite).
+- `vector-scheduler` exists in `railway.json` but the GraphQL apply has not yet promoted it to a live cron — deferred until the Vector backtest produces a defensible trade count or the Phase 1b/Phase 2 paper-trade evidence justifies adding a third live engine.
+
 ### 4.4 S2 — Short Squeeze Engine (Fourth Build, Satellite)
 
 **Mission:** Detect conditions conducive to short squeezes. Satellite only — permanent 5% capital cap.
@@ -262,6 +281,8 @@ The infrastructure is correct; the strategy needs more evidence before the gate 
 - 30-day ticker re-entry lock.
 
 **Graduation:** 5 trades / 6+ months, win rate ≥ 60%, avg return ≥ 30%.
+
+**Status:** Specification only — no engine code. Options data parked: `platform.tradier_options_chains` (122,668 contracts across 51 tickers) is loaded but no plug consumes it.
 
 ### 4.5 Catalyst — Event-Driven Engine (Fifth Build)
 
@@ -324,8 +345,8 @@ These are built only after at least two engines are live.
 
 | Source | Purpose | Cost |
 | --- | --- | --- |
-| Alpaca (IEX free) | Daily bars, quotes, execution, delisted stock data | $0 |
-| FMP (Starter $22/mo or Premium $59/mo) | Fundamentals, insider, earnings | $22–59 |
+| Alpaca (IEX free) | Daily bars, quotes, execution, delisted stock data | $0 (real-time upgrade gated on `ExecutionQualityScore` evidence — see §6.5) |
+| FMP **Starter** ($22/mo, active) | Fundamentals, insider, earnings | $22 (Premium $59/mo deferred — see §6.5) |
 | SEC EDGAR | Point-in-time filings, fundamentals backup | $0 |
 | ApeWisdom | Social sentiment | $0 |
 | FRED | Macro indicators | $0 |
@@ -335,17 +356,48 @@ These are built only after at least two engines are live.
 ### 6.2 Historical / Backtesting Database (Self-Built)
 
 - Alpaca free tier → survivorship-free daily bars (delisted stocks included).
-- SEC EDGAR XBRL filings → point-in-time quarterly fundamentals.
-- Historical SPY constituent proxy (month-end market-cap ranking).
-- Built in Phase 0–1, operational by July 2026.
+- Tradier historical export → pre-2020 daily bars merged into `platform.prices_daily` (Tradier brokerage account closed; data extracted before closure).
+- FMP Starter → quarterly fundamentals, with `pb`/`de` ratios computed via `scripts/compute_fundamental_ratios.py`.
+- FMP earnings-beats → `platform.catalyst_events` (Vector's catalyst proxy).
+- Self-built corporate-actions pipeline (Alpaca free endpoint) → `platform.corporate_actions` with split + dividend records; AAPL split adjustment verified.
+- Built in Phases 0–4. See §6.4 for current row counts and §6.5 for upgrade triggers.
 
 ### 6.3 Data Quality Gates
 
-- `DataValidationSuite` — three correctness checks against `platform.prices_daily`: delistings (13 hand-curated entries), S&P 500 constituent snapshot (current names + recent removals), split verification (10 forward splits, ratio in [0.99, 1.01]).
-- Suite implementation: `tpcore.quality.validation` (CLI `python -m tpcore.quality.validation`, weekly cron `validation-scheduler` Sunday 06:00 UTC).
+- `DataValidationSuite` — three correctness checks against `platform.prices_daily`: delistings, S&P 500 constituent snapshot, split verification.
+- Deployed on Railway as `validation-scheduler` (cron: Sunday 06:00 UTC). CLI: `python -m tpcore.quality.validation`.
 - Capital Gate hook: `tpcore.quality.validation.capital_gate.assert_passed(pool, max_age_days=7)` is consulted by every engine's `assert_can_graduate`. No engine graduates from paper to live without a fresh passing run.
 - Design spec: `docs/superpowers/specs/2026-05-10-data-validation-suite-design.md`.
-- First prod run (2026-05-09): all three checks failed — the suite caught (a) inactive-symbol bootstrap not yet executed (delistings + recent removals all missing); (b) `prices_daily` is stale (last bar 2025-12-31, daily ingestion not yet wired); (c) AAPL split bars are unadjusted (ratio ≈ 3.87 vs the 4:1 split). All three are real findings the suite is meant to surface.
+- Current state: split check **passing** after the corporate-actions pipeline fixed the AAPL adjustment. Delisting and constituent checks have **documented residuals** (4 delisting misses, 2 constituent misses) — all rooted in Alpaca free-tier coverage gaps and accepted as known limitations rather than blockers.
+
+### 6.4 Current Data Infrastructure Status
+
+Verified row counts and coverage (as of the most recent ingest run):
+
+| Table | Rows | Notes |
+| --- | ---: | --- |
+| `platform.prices_daily` | 301,464 | 60 tickers, 1994-07-21 → 2026-05-08, survivorship-free (Alpaca IEX free + Tradier pre-2020 merge). |
+| `platform.fundamentals_quarterly` | 1,790 | 47 tickers, PIT-safe via FMP Starter. `pb` and `de` populated on 1,622 rows after the ratio backfill. |
+| `platform.corporate_actions` | 1,216 | 12 splits + 1,204 dividends. Self-built via Alpaca free corporate-actions endpoint; AAPL split fix verified. |
+| `platform.tradier_options_chains` | 122,668 | 51 tickers, snapshot from May 2026 (immediately before the Tradier brokerage account closed). Frozen — parked for future S2. |
+| `platform.catalyst_events` | 683 | 44 tickers, all `EARNINGS_BEAT` type, 2018–2025 (FMP coverage starts 2018-01-24). |
+| `platform.data_quality_log` | active | Receives rows from the Data Validation Suite, execution-quality tracker, and engine credibility scorer. |
+| `platform.aar_events` | 0 | Schema + writer implemented; populated by live paper trades once they fire. |
+| `platform.risk_state` | 1 | Postgres-backed Risk Governor persistence active. |
+
+All sources free-tier or FMP Starter ($22/month). No `yfinance`. The Tradier brokerage account is closed; the options-chain and pre-2020 bar export was completed before closure.
+
+### 6.5 Data Upgrade ROI Gates
+
+Triggers for paid-tier upgrades. The default posture is to stay on free + FMP Starter ($22/mo) until the Parity Harness or Overfitting Diagnostic produces measured evidence that an upgrade's marginal benefit exceeds its cost.
+
+| Trigger | Threshold | Upgrade |
+| --- | --- | --- |
+| `ExecutionQualityScore` shows realized-slippage cost > Alpaca real-time subscription cost | After 3 months of paper-trading fills are logged | Alpaca Algo Trader Plus ($99/mo) |
+| Overfitting credibility scores stay below 60 and 6–12 months of additional live trades fail to close the MinBTL gap | After full paper-trading phase for the affected engine | FMP Premium ($59/mo) |
+| Tradier-era price history + FMP Starter fundamentals gap prevents pre-2018 backtesting while the overfitting suite still demands deeper samples | Same trigger as above | FMP Premium |
+
+Current decision: **stay on FMP Starter and Alpaca free**. The overfitting diagnostic is doing its job (every engine fails on trade count, not on shape of edge), so buying more historical depth is the correct lever — but only after the live tape has had a fair chance to add evidence on the cheap.
 
 ---
 
@@ -374,13 +426,31 @@ These are built only after at least two engines are live.
 
 | Phase | Deliverable | Status |
 | --- | --- | --- |
-| Phase 0 | `tpcore` + platform schema + ingestion script | Complete |
-| Phase 1 | Sigma engine — full plug implementation | Complete |
-| Phase 1b | Sigma paper trading (3+ months), Parity Harness active | In progress — deployed on Railway, cron `0 22 * * MON-FRI` UTC, Healthchecks active |
-| Phase 2 | Reversion engine | Complete — deployed on Railway alongside Sigma, Healthchecks active |
-| Phase 3 | Allocator + Forensics (basic) | Deferred — waiting on paper track record from Sigma + Reversion |
-| Phase 4–7 | Vector, S2, Catalyst, Sentinel | Deferred |
-| Cross-cutting | Overfitting detection suite | Complete — Sigma and Reversion backtests now include sensitivity sweeps, Monte Carlo stress tests, and PSR/DSR/MinBTL |
+| Phase 0 | `tpcore` + platform schema + ingestion script | **Complete** |
+| Phase 1 | Sigma engine — full plug implementation | **Complete** |
+| Phase 1b | Sigma paper trading (3+ months), Parity Harness active | **In progress** — deployed on Railway as `sigma-scheduler`. Overfitting diagnostics running. |
+| Phase 2 | Reversion engine | **Complete** — deployed on Railway as `reversion-scheduler`. Combined filter (HIGH quality + \|Z\| ≥ 3.0) applied. Overfitting diagnostics running. |
+| Phase 3 | Allocator + Forensics (basic) | **Deferred** — blocked on paper track record from Sigma + Reversion + Vector. |
+| Phase 4 | Vector engine | **Code complete** — all plugs built and tested. Backtest running. VIX-aware sizing implemented. Not yet deployed on Railway. |
+| Phase 5 | S2 (satellite) | **Deferred** — options data parked in `platform.tradier_options_chains` (122,668 rows), no engine code. |
+| Phase 6 | Catalyst | **Deferred** — specification only. |
+| Phase 7 | Sentinel | **Deferred** — specification only. |
+| Cross-cutting | Overfitting detection suite | **Complete** — `tpcore/backtest/overfitting.py` wired into all three engine backtests. See *Overfitting Diagnostics Status* below. |
+| Cross-cutting | Data Validation Suite | **Complete** — deployed on Railway as `validation-scheduler` (Sun 06:00 UTC). |
+| Cross-cutting | Corporate-actions pipeline | **Complete** — deployed as `corporate-actions-scheduler` (Sun 04:00 UTC). |
+
+### Overfitting Diagnostics Status
+
+- **Module:** `tpcore/backtest/overfitting.py` — nine tests (DSR, PSR, PBO via CSCV, MinBTL, parameter sensitivity sweep, Monte Carlo sequence stress, noise infusion, regime coverage, trades-per-parameter ratio).
+- **Integration:** wired into all three engine backtest scripts (`sigma/backtest.py`, `reversion/backtest.py`, `vector/backtest.py`). Reports saved to `backtests/<engine>_overfitting_report.json`. Credibility consumed by `tpcore.backtest.credibility.BacktestCredibilityRubric.evaluate_with_overfitting()` (70 pts integrity + 30 pts overfitting bundle = 100 total; ≥ 60 required for graduation).
+- **Current scores:** Sigma **50/100**, Reversion **45/100**, Vector **45/100**. All below the 60-point graduation threshold. None of the three engines is cleared for live capital.
+- **Primary cause of failure:** trade-count thinness relative to parameter search space. The MinBTL gap and the DSR deflation are the dominant failure modes — every engine has a defensible per-trade edge in-sample, but not enough trades to clear a multiple-testing-corrected significance threshold.
+- **Mitigation paths (in order of cost):**
+  1. **Extend the paper-trading window** — let the live tape add trade evidence at zero data cost.
+  2. **Broaden the universe** — modest one-time effort, no strategy changes.
+  3. **Upgrade to FMP Premium ($59/mo)** — only if (1) and (2) plateau without clearing the gate.
+
+  No strategy parameter changes are warranted while trade counts are this small; tuning would be curve-fitting noise.
 
 ---
 
