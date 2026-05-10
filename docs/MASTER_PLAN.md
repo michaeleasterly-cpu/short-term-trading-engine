@@ -2,7 +2,7 @@
 
 **Version:** 1.1
 **Date:** 2026-05-13
-**Status:** Phases 0–2 complete and deployed on Railway. Vector code-complete, scheduler not yet deployed. All three engines fail the overfitting-aware credibility gate (60/100); none cleared for live capital.
+**Status:** All three engine schedulers (Sigma, Reversion, Vector) deployed on Railway and online. All three engines fail the overfitting-aware credibility gate (60/100); none cleared for live capital — paper-trading only.
 
 ---
 
@@ -251,12 +251,11 @@ The 1995-pushed `--start` doesn't change the trade count: bars are present back 
 
 The infrastructure is correct; the strategy needs more evidence before the gate will let it graduate.
 
-**Status (code-complete, not yet deployed on Railway):**
-- All five plugs implemented and tested.
+**Status (built and deployed):**
+- All five plugs implemented and tested. Scheduler deployed on Railway as `vector-scheduler` (cron: Mon–Fri 22:00 UTC). Verified Online via `railway status` on 2026-05-10; service ID `6498df68-0a23-4531-85df-f54ba37a1c40`.
 - Catalyst proxy via FMP `EARNINGS_BEAT` events (683 events across 44 tickers, 2018–2025) populated in `platform.catalyst_events`. Fundamentals ratios `pb`/`de` backfilled (1,622 PIT-safe rows in `platform.fundamentals_quarterly`).
 - VIX-aware crash-guard sizing implemented and verified end-to-end in the backtest (1.0× / 0.5× / 0.25× via SPY 20-day realized-vol proxy).
-- Backtest: `vector/backtest.py`. Overfitting report: `backtests/vector_overfitting_report.json`. Score **45/100 — BLOCKED** (11 trades, trades-per-parameter ratio 1.6, MinBTL effectively infinite).
-- `vector-scheduler` exists in `railway.json` but the GraphQL apply has not yet promoted it to a live cron — deferred until the Vector backtest produces a defensible trade count or the Phase 1b/Phase 2 paper-trade evidence justifies adding a third live engine.
+- Backtest: `vector/backtest.py`. Overfitting report: `backtests/vector_overfitting_report.json`. Score **45/100 — BLOCKED** for live capital (11 trades, trades-per-parameter ratio 1.6, MinBTL effectively infinite). Paper-trading is unblocked: the cron submits paper orders via Alpaca for AAR collection while the credibility score remains below 60.
 
 ### 4.4 S2 — Short Squeeze Engine (Fourth Build, Satellite)
 
@@ -434,7 +433,7 @@ Current decision: **stay on FMP Starter and Alpaca free**. The overfitting diagn
 | Phase 1b | Sigma paper trading (3+ months), Parity Harness active | **In progress** — deployed on Railway as `sigma-scheduler`. Overfitting diagnostics running. |
 | Phase 2 | Reversion engine | **Complete** — deployed on Railway as `reversion-scheduler`. Combined filter (HIGH quality + \|Z\| ≥ 3.0) applied. Overfitting diagnostics running. |
 | Phase 3 | Allocator + Forensics (basic) | **Deferred** — blocked on paper track record from Sigma + Reversion + Vector. |
-| Phase 4 | Vector engine | **Code complete** — all plugs built and tested. Backtest running. VIX-aware sizing implemented. Not yet deployed on Railway. |
+| Phase 4 | Vector engine | **Complete** — deployed on Railway as `vector-scheduler` (cron: Mon–Fri 22:00 UTC). VIX-aware sizing implemented. Overfitting diagnostics running; live capital still blocked at 45/100 (paper-trading active). |
 | Phase 5 | S2 (satellite) | **Deferred** — options data parked in `platform.tradier_options_chains` (122,668 rows), no engine code. |
 | Phase 6 | Catalyst | **Deferred** — specification only. |
 | Phase 7 | Sentinel | **Deferred** — specification only. |

@@ -36,18 +36,35 @@ Five services run on Railway. Verify each has a recent successful deploy and exe
 ```bash
 # Login + link is one-time:
 railway login
-railway link        # select the short-term-trading-engine project
+railway link        # select the short-term-engine project
 
-# Per-service status:
-railway status --service sigma-scheduler
-railway status --service reversion-scheduler
-railway status --service vector-scheduler
-railway status --service validation-scheduler
-railway status --service corporate-actions-scheduler
+# `railway status` operates on the currently-linked service. Switch services with:
+railway service sigma-scheduler          # then: railway status / railway logs
+railway service reversion-scheduler
+railway service vector-scheduler
+railway service validation-scheduler
+railway service corporate-actions-scheduler
 
-# Most recent logs (last 200 lines is usually plenty for a cron run):
-railway logs --service sigma-scheduler | tail -200
+# `railway status` prints a project overview that includes ALL cron jobs and
+# their schedules in one shot — useful as the first daily check:
+railway status | tail -20
+
+# Most recent logs for the currently-linked service:
+railway logs | tail -200
 ```
+
+The bottom of `railway status` lists every cron job under "All resources":
+
+```
+Cron jobs
+  - sigma-scheduler:              ● Online · 0/1 running · 0 22 * * MON-FRI · next run in N
+  - reversion-scheduler:          ● Online · 0/1 running · 0 22 * * MON-FRI · next run in N
+  - vector-scheduler:             ● Online · 0/1 running · 0 22 * * MON-FRI · next run in N
+  - validation-scheduler:         ● Online · 0/1 running · 0 6  * * SUN     · next run in N
+  - corporate-actions-scheduler:  ● Online · 0/1 running · 0 4  * * SUN     · next run in N
+```
+
+Confirm all five lines show `● Online`. Anything else (`Crashed`, `Removed`, `Paused`) is a red flag.
 
 **For each service, confirm:**
 - Latest deployment is `SUCCESS` (not `FAILED`, `CRASHED`, `BUILDING`, or `STOPPED`).
@@ -69,13 +86,15 @@ If the CLI is not authenticated, use the Railway dashboard:
 
 Each engine and ops service pings Healthchecks at the start and end of every run. The checks fail-loud when a ping doesn't arrive within the configured grace period.
 
-| Check (Healthchecks slug) | Expected ping cadence | Source env var |
-| --- | --- | --- |
-| `sigma-engine` | within 25h on weekdays | `HEALTHCHECKS_PING_URL_SIGMA` (or `HEALTHCHECKS_PING_URL`) |
-| `reversion-engine` | within 25h on weekdays | `REVERSION_HEALTHCHECKS_PING_URL` (or `HEALTHCHECKS_PING_URL_REVERSION`) |
-| `vector-engine` | within 25h on weekdays | `HEALTHCHECKS_VECTOR_URL` |
-| `validation-suite` | within 7d (Sunday 06:00 UTC) | `HEALTHCHECKS_VALIDATION_URL` |
-| `corporate-actions` | within 7d (Sunday 04:00 UTC) | `HEALTHCHECKS_CORPACTIONS_URL` |
+| Healthchecks check name | Expected cadence | Grace | Source env var |
+| --- | --- | --- | --- |
+| `short-term-engine-sigma` | weekdays 22:00 UTC | 1h | `HEALTHCHECKS_PING_URL_SIGMA` (or `HEALTHCHECKS_PING_URL`) |
+| `short-term-engine-reversion` | weekdays 22:00 UTC | 1h | `REVERSION_HEALTHCHECKS_PING_URL` (or `HEALTHCHECKS_PING_URL_REVERSION`) |
+| `short-term-engine-vector` | weekdays 22:00 UTC | 1h | `HEALTHCHECKS_VECTOR_URL` |
+| `short-term-engine-validation-suite` | Sundays 06:00 UTC | 1h | `HEALTHCHECKS_VALIDATION_URL` |
+| `short-term-engine-corporate-actions-ingestion` | Sundays 04:00 UTC | 1h | `HEALTHCHECKS_CORPACTIONS_URL` |
+
+**Known issue (2026-05-10):** `short-term-engine-sigma` and `short-term-engine-reversion` show **last ping = Never** — the Railway services are Online and the cron schedules are firing, but no pings have ever reached Healthchecks for those two engines. The validation-suite and corporate-actions checks are healthy (last pings 3–4h ago, ~15 sec duration), and Vector's check exists. Most likely cause: the per-engine `HEALTHCHECKS_PING_URL_*` env vars aren't set on the corresponding Railway services. Verify by inspecting service variables in the Railway dashboard. The schedulers' ping is best-effort — a missing URL causes a silent skip, never an error in the engine logic. **This issue does not affect engine execution; it affects observability.**
 
 ### How to inspect
 
@@ -207,10 +226,10 @@ For each engine, walk through the most recent execution.
 ### Per-engine log inspection
 
 ```bash
-# Most recent run for each engine:
-railway logs --service sigma-scheduler | tail -100
-railway logs --service reversion-scheduler | tail -100
-railway logs --service vector-scheduler | tail -100
+# Most recent run for each engine — link the service first, then logs:
+railway service sigma-scheduler && railway logs | tail -100
+railway service reversion-scheduler && railway logs | tail -100
+railway service vector-scheduler && railway logs | tail -100
 ```
 
 **Look for:**
@@ -285,7 +304,7 @@ Two scripts run on `corporate-actions-scheduler` (Sunday 04:00 UTC):
 
 ```bash
 # Inspect the most recent run:
-railway logs --service corporate-actions-scheduler | tail -200
+railway service corporate-actions-scheduler && railway logs | tail -200
 ```
 
 **Confirm:**
@@ -339,14 +358,14 @@ Daily Operations Checklist — YYYY-MM-DD UTC
 Railway
 [ ] sigma-scheduler:           last deploy SUCCESS, last execution exit 0
 [ ] reversion-scheduler:       last deploy SUCCESS, last execution exit 0
-[ ] vector-scheduler:          last deploy SUCCESS / NOT YET DEPLOYED (per master plan §9)
+[ ] vector-scheduler:          last deploy SUCCESS, last execution exit 0
 [ ] validation-scheduler:      (Sundays only) last execution reviewed
 [ ] corporate-actions-scheduler: (Sundays only) last execution exit 0
 
 Healthchecks
 [ ] sigma-engine:        UP, last ping within 25h
 [ ] reversion-engine:    UP, last ping within 25h
-[ ] vector-engine:       UP, last ping within 25h (or N/A if scheduler not yet deployed)
+[ ] vector-engine:       UP, last ping within 25h
 [ ] validation-suite:    UP, last ping within 7d
 [ ] corporate-actions:   UP, last ping within 7d
 
@@ -386,7 +405,7 @@ Each scenario lists the diagnostic command first, then the recovery action. **Al
 ### A Railway service is in `CRASHED` state
 
 ```bash
-railway logs --service <name> | tail -300
+railway service <name> && railway logs | tail -300
 # Look for the traceback or non-zero exit at the bottom.
 ```
 
@@ -402,7 +421,7 @@ Recovery: fix root cause → push (Railway auto-deploys on `main`) → confirm n
 
 ```bash
 # Was the underlying service healthy at the expected fire time?
-railway logs --service <corresponding-service> | tail -200
+railway service <corresponding-service> && railway logs | tail -200
 ```
 
 - If the service ran but the ping didn't arrive: the `HEALTHCHECKS_*` env var is wrong or the HTTP request failed silently. Pings are best-effort and never block the run.
