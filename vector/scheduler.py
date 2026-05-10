@@ -168,6 +168,17 @@ class VectorScheduler:
                 platform_capital=self._engine_equity,
             )
             await governor.register_engine(ENGINE_ID, self._engine_equity)
+
+            # Kill-switch short-circuit: refuse to scan or submit when frozen.
+            current_state = await governor._store.get(ENGINE_ID)  # noqa: SLF001 — read-only peek
+            if current_state and current_state.kill_switch_active:
+                logger.critical(
+                    "vector.scheduler.kill_switch_active",
+                    engine=ENGINE_ID,
+                    reason=current_state.kill_switch_reason or "unspecified",
+                )
+                return RunSummary(as_of=as_of, n_candidates=0, n_submitted=0)
+
             aar_writer = AARWriter(pool)
             parity = self._build_parity_harness(pool, paper_broker=broker)
 

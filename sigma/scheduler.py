@@ -136,6 +136,19 @@ class SigmaScheduler:
             await governor.register_engine(ENGINE_ID, self._engine_equity)
             logger.info("sigma.scheduler.run_start", as_of=as_of.isoformat(), persistent=pool is not None)
 
+            # Kill-switch short-circuit: refuse to scan or submit when the
+            # engine is frozen. The platform-wide check_trade() inside the
+            # order manager would also block submission, but stopping here
+            # avoids wasted FMP / DB / API calls during a freeze.
+            current_state = await risk_store.get(ENGINE_ID)
+            if current_state and current_state.kill_switch_active:
+                logger.critical(
+                    "sigma.scheduler.kill_switch_active",
+                    engine=ENGINE_ID,
+                    reason=current_state.kill_switch_reason or "unspecified",
+                )
+                return RunSummary(as_of=as_of, n_candidates=0, n_submitted=0, aars=[])
+
             # Optional fundamentals cache for informational data-quality
             # attachment. Only enabled when a DB pool is open AND FMP_API_KEY
             # is set — otherwise candidates simply lack the optional field.

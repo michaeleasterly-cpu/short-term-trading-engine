@@ -121,6 +121,16 @@ class ReversionScheduler:
                 persistent=pool is not None,
             )
 
+            # Kill-switch short-circuit: refuse to scan or submit when frozen.
+            current_state = await risk_store.get(ENGINE_ID)
+            if current_state and current_state.kill_switch_active:
+                logger.critical(
+                    "reversion.scheduler.kill_switch_active",
+                    engine=ENGINE_ID,
+                    reason=current_state.kill_switch_reason or "unspecified",
+                )
+                return RunSummary(as_of=as_of, n_candidates=0, n_submitted=0, aars=[])
+
             setup = ReversionSetupDetection(data=data)
             lifecycle = ReversionLifecycleAnalysis()
             execution = ReversionExecutionRisk()
