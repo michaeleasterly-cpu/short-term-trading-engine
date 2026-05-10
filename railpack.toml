@@ -11,4 +11,4 @@
 install_command = "pip install -e ."
 
 [runtime]
-paths = ["/usr/local/lib/python3.13/site-packages"]
+paths = ["/usr/local/lib/python3.11/site-packages"]

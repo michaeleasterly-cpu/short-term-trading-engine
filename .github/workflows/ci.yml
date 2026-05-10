@@ -26,12 +26,10 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          # CI runs on Python 3.13 to match Railway's mise default — the
-          # platform's runtime is 3.13.x, so testing here on the same major
-          # eliminates "passed CI, crashed in prod" version drift.
-          # pyproject.toml's requires-python = ">=3.11" still permits 3.11
-          # for local dev; production / CI commit to 3.13.
-          python-version: "3.13"
+          # CI runs on Python 3.11 to match the .python-version pin
+          # (Railway/Railpack also honors this file). Single source of truth
+          # avoids "passed CI on 3.X, crashed on 3.Y" version drift.
+          python-version-file: .python-version
           cache: pip
 
       - name: Install package + dev deps
