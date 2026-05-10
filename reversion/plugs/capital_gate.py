@@ -27,6 +27,10 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from tpcore.backtest.credibility import (
+    CredibilityScoreInsufficientError,
+    graduation_ready,
+)
 from tpcore.interfaces.engine_plug import BaseEnginePlug
 from tpcore.quality.validation.capital_gate import assert_passed
 
@@ -132,14 +136,21 @@ class ReversionCapitalGate(BaseEnginePlug):
 
     @staticmethod
     async def assert_can_graduate(stats: GraduationStats, pool: "asyncpg.Pool") -> bool:
-        """Combined gate: stats thresholds AND Data Validation Suite passing.
+        """Combined gate: stats thresholds AND Data Validation Suite AND credibility ≥ 60.
 
-        Returns ``False`` if the stats thresholds are not yet met (normal
-        pre-grad case). Returns ``True`` after a fresh successful validation
-        run. Raises ``ValidationStaleError`` or ``ValidationFailedError`` if
-        the engine is otherwise eligible but the data gate is unsatisfied.
+        Returns ``False`` (without raising) if the stats thresholds aren't met
+        (normal pre-grad case). Returns ``True`` only after a fresh successful
+        validation run *and* a credibility-rubric score ≥ 60 in
+        ``platform.data_quality_log``. Raises ``ValidationStaleError`` or
+        ``ValidationFailedError`` if the data gate isn't satisfied; raises
+        ``CredibilityScoreInsufficientError`` if the latest backtest
+        credibility row is < 60 or absent.
         """
         if not ReversionCapitalGate.is_graduated(stats):
             return False
         await assert_passed(pool)
+        if not await graduation_ready(pool, engine_name="reversion"):
+            raise CredibilityScoreInsufficientError(
+                "Reversion backtest credibility score < 60 (or no rubric run on record)"
+            )
         return True

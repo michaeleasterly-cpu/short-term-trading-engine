@@ -973,11 +973,12 @@ async def amain(args: argparse.Namespace) -> int:
                 )
         print(f"rejected-by-quality → {rejected_path}  rows={len(rejected)}")
 
-    # ── Statistical Validation ─────────────────────────────────────────────
+    # ── Statistical Validation + credibility rubric ────────────────────────
     # Winner: combined-filter (z≥3, EQ=HIGH). Sweep z_threshold and filter_mode
-    # around it; MC + PSR/DSR/MinBTL on the winner's trades.
+    # around it; MC + PSR/DSR/MinBTL on the winner's trades; persist the
+    # rubric score for the Capital Gate to read.
     if not args.skip_statistical_validation and combined_trades:
-        _print_statistical_validation_reversion(
+        await _print_statistical_validation_reversion(
             panels=panels,
             spy_panel=spy_panel,
             fundamentals=fundamentals,
@@ -985,12 +986,13 @@ async def amain(args: argparse.Namespace) -> int:
             end=args.end,
             winner_summary=summaries[2],
             winner_trades=combined_trades,
+            db_url=db_url,
         )
 
     return 0
 
 
-def _print_statistical_validation_reversion(
+async def _print_statistical_validation_reversion(
     *,
     panels,
     spy_panel,
@@ -999,10 +1001,18 @@ def _print_statistical_validation_reversion(
     end: date,
     winner_summary,
     winner_trades,
+    db_url: str | None,
 ) -> None:
-    """Sweep z_threshold and filter_mode; run MC + PSR/DSR/MinBTL on the winner."""
+    """Sweep z_threshold and filter_mode; MC + PSR/DSR/MinBTL; rubric; persist."""
     from tpcore.backtest.sensitivity import sweep_parameter
-    from tpcore.backtest.statistical_validation import build_report, render
+    from tpcore.backtest.statistical_validation import (
+        build_report,
+        evaluate_rubric_from_report,
+        render,
+        render_rubric,
+        write_credibility_score,
+    )
+    from tpcore.db import build_asyncpg_pool
 
     z_values = [2.0, 2.5, 3.0, 3.5]
     filter_modes = ["none", "not_low", "high_only"]
@@ -1040,6 +1050,31 @@ def _print_statistical_validation_reversion(
         n_trials=n_trials,
     )
     print(render(report, title="Reversion — Statistical Validation"))
+
+    # Reversion uses fundamentals (PIT-safe via FMP cache), runs on a
+    # survivorship-clean universe, and the validation here is in-sample only
+    # (no held-out OOS yet).
+    rubric = evaluate_rubric_from_report(
+        report,
+        lookahead_clean=True,
+        survivorship_inclusive=True,
+        pit_fundamentals=True,
+        regime_coverage=True,
+        out_of_sample_validated=False,
+        monte_carlo_drawdown=True,
+    )
+    print(render_rubric(rubric))
+
+    if db_url:
+        pool = await build_asyncpg_pool(db_url)
+        try:
+            wrote = await write_credibility_score(pool, engine_name="reversion", score=rubric)
+            print(
+                f"  → persisted to platform.data_quality_log "
+                f"(source=backtest_credibility.reversion, wrote={wrote})\n"
+            )
+        finally:
+            await pool.close()
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:

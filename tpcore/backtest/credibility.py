@@ -4,6 +4,13 @@ A backtest's *score* (0–100) gates whether its engine can graduate from
 paper to live. Below 60 → blocked. The rubric is intentionally
 checklist-driven so it's auditable and deterministic.
 
+Each engine's backtest persists its computed score to
+``platform.data_quality_log`` with ``source = "backtest_credibility.{engine}"``.
+The Capital Gate's ``assert_can_graduate`` reads the latest row via
+:func:`graduation_ready`; engines whose latest credibility row has
+``confidence < 0.60`` cannot graduate even if their stats and the Data
+Validation Suite are clean.
+
 The 10 categories cover the conventional integrity checks plus the
 statistical-validation suite added in 2026 (see
 `tpcore/backtest/sensitivity.py`, `monte_carlo.py`, and
@@ -24,10 +31,27 @@ statistical-validation suite added in 2026 (see
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+import structlog
 from pydantic import BaseModel, ConfigDict, Field
+
+if TYPE_CHECKING:  # pragma: no cover
+    import asyncpg
+
+logger = structlog.get_logger(__name__)
 
 # Minimum score required to permit live promotion.
 MIN_LIVE_SCORE = 60
+
+# Source-prefix used when each engine's backtest writes its credibility
+# score to platform.data_quality_log. The full source key is
+# ``f"{CREDIBILITY_SOURCE_PREFIX}.{engine_name}"``.
+CREDIBILITY_SOURCE_PREFIX = "backtest_credibility"
+
+
+class CredibilityScoreInsufficientError(RuntimeError):
+    """Raised when an engine's last persisted credibility score is < 60 (or absent)."""
 
 
 class CredibilityScore(BaseModel):
@@ -116,3 +140,39 @@ class BacktestCredibilityRubric:
         }
         score = sum(self.WEIGHTS[k] for k, v in flags.items() if v)
         return CredibilityScore(score=score, notes=notes, **flags)
+
+
+async def graduation_ready(pool: "asyncpg.Pool", engine_name: str) -> bool:
+    """Return True iff the engine's latest backtest credibility score is ≥ 60.
+
+    Reads ``platform.data_quality_log`` for the most recent row with
+    ``source = "backtest_credibility.{engine_name}"``. Returns ``False`` if
+    no row exists (no rubric run on record). The score is encoded in the
+    ``confidence`` column as ``score / 100``.
+    """
+    sql = """
+        SELECT confidence
+        FROM platform.data_quality_log
+        WHERE source = $1
+        ORDER BY timestamp DESC
+        LIMIT 1
+    """
+    source = f"{CREDIBILITY_SOURCE_PREFIX}.{engine_name}"
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(sql, source)
+    if row is None:
+        logger.warning(
+            "tpcore.credibility.graduation_ready.no_row",
+            engine=engine_name,
+            source=source,
+        )
+        return False
+    score = int(round(float(row["confidence"]) * 100))
+    ready = score >= MIN_LIVE_SCORE
+    logger.debug(
+        "tpcore.credibility.graduation_ready",
+        engine=engine_name,
+        score=score,
+        ready=ready,
+    )
+    return ready

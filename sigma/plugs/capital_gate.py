@@ -20,6 +20,10 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from tpcore.backtest.credibility import (
+    CredibilityScoreInsufficientError,
+    graduation_ready,
+)
 from tpcore.interfaces.engine_plug import BaseEnginePlug
 from tpcore.quality.validation.capital_gate import assert_passed
 
@@ -127,17 +131,22 @@ class SigmaCapitalGate(BaseEnginePlug):
 
     @staticmethod
     async def assert_can_graduate(stats: GraduationStats, pool: "asyncpg.Pool") -> bool:
-        """Combined gate: stats thresholds AND Data Validation Suite passing.
+        """Combined gate: stats thresholds AND Data Validation Suite AND credibility ≥ 60.
 
         Returns ``False`` (without raising) if the engine hasn't met its
         threshold stats yet — this is the normal pre-grad case. Returns
-        ``True`` only after a fresh successful validation run. Raises
-        ``ValidationStaleError`` or ``ValidationFailedError`` from
-        ``tpcore.quality.validation`` if the engine is otherwise eligible
-        but the data gate is not satisfied — that's how we keep an engine
-        in pre-grad sizing if validation is broken.
+        ``True`` only after a fresh successful validation run *and* a
+        credibility-rubric score ≥ 60 in ``platform.data_quality_log``.
+        Raises ``ValidationStaleError`` or ``ValidationFailedError`` if
+        the data gate isn't satisfied; raises
+        ``CredibilityScoreInsufficientError`` if the latest backtest
+        credibility row is < 60 or absent.
         """
         if not SigmaCapitalGate.is_graduated(stats):
             return False
         await assert_passed(pool)
+        if not await graduation_ready(pool, engine_name="sigma"):
+            raise CredibilityScoreInsufficientError(
+                "Sigma backtest credibility score < 60 (or no rubric run on record)"
+            )
         return True

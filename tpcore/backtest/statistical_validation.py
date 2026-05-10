@@ -10,8 +10,19 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from decimal import Decimal
 from io import StringIO
+from typing import TYPE_CHECKING
 
+from tpcore.quality.data_quality import DataQualityScore, DataQualityWriter
+
+from .credibility import (
+    CREDIBILITY_SOURCE_PREFIX,
+    BacktestCredibilityRubric,
+    CredibilityScore,
+    MIN_LIVE_SCORE,
+)
 from .monte_carlo import MCResult, SHARPE_NULL_DECISION_THRESHOLD
 from .sensitivity import FLATNESS_ROBUST_THRESHOLD, SensitivityResult
 from .statistical_significance import (
@@ -19,6 +30,9 @@ from .statistical_significance import (
     minimum_backtest_length,
     probabilistic_sharpe_ratio,
 )
+
+if TYPE_CHECKING:  # pragma: no cover
+    import asyncpg
 
 
 @dataclass(frozen=True)
@@ -140,6 +154,95 @@ def render(report: StatValidationReport, *, title: str = "Statistical Validation
     return out.getvalue()
 
 
+def evaluate_rubric_from_report(
+    report: StatValidationReport,
+    *,
+    lookahead_clean: bool = True,
+    survivorship_inclusive: bool = True,
+    pit_fundamentals: bool = True,
+    regime_coverage: bool = True,
+    out_of_sample_validated: bool = False,
+    monte_carlo_drawdown: bool = True,
+    notes: str | None = None,
+) -> CredibilityScore:
+    """Combine the auto-derivable validation flags with caller-asserted ones.
+
+    The four auto-flags are read off ``report``:
+
+    * ``sensitivity_surface_flat`` — every sweep's flatness is below threshold.
+    * ``monte_carlo_sequence_passed`` — observed Sharpe in top decile of null.
+    * ``dsr_above_0_90`` — deflated Sharpe ≥ 0.90.
+    * ``backtest_length_above_minbtl`` — observed periods ≥ MinBTL.
+
+    The other six are caller-asserted because they depend on backtest
+    construction (PIT discipline, OOS holdout, etc.) — the rubric is
+    auditable, not magical.
+    """
+    return BacktestCredibilityRubric().evaluate(
+        lookahead_clean=lookahead_clean,
+        survivorship_inclusive=survivorship_inclusive,
+        pit_fundamentals=pit_fundamentals,
+        regime_coverage=regime_coverage,
+        out_of_sample_validated=out_of_sample_validated,
+        monte_carlo_drawdown=monte_carlo_drawdown,
+        sensitivity_surface_flat=all(s.is_flat for s in report.sweeps),
+        monte_carlo_sequence_passed=report.mc.observed_is_significant,
+        dsr_above_0_90=report.dsr >= 0.90,
+        backtest_length_above_minbtl=report.backtest_periods >= report.minbtl_periods,
+        notes=notes,
+    )
+
+
+async def write_credibility_score(
+    pool: "asyncpg.Pool",
+    *,
+    engine_name: str,
+    score: CredibilityScore,
+    timestamp: datetime | None = None,
+) -> bool:
+    """Persist ``score`` to ``platform.data_quality_log`` for the gate to read.
+
+    The score is encoded in ``confidence`` as ``score / 100``; ``stale``
+    is True iff score < 60 (the live-promotion threshold). Returns True
+    iff a new row was written (False on conflict or no pool).
+    """
+    ts = timestamp or datetime.now(UTC)
+    dq = DataQualityScore(
+        source=f"{CREDIBILITY_SOURCE_PREFIX}.{engine_name}",
+        timestamp=ts,
+        latency_ms=0,
+        missing_bars=0,
+        stale=score.score < MIN_LIVE_SCORE,
+        confidence=Decimal(score.score) / Decimal(100),
+        notes=score.model_dump_json(),
+    )
+    return await DataQualityWriter(pool).write(dq)
+
+
+def render_rubric(score: CredibilityScore) -> str:
+    """One-block rendering of the credibility rubric — paired with `render`."""
+    out = StringIO()
+    out.write(f"\nBacktest credibility rubric  →  score {score.score}/100  ")
+    out.write("(LIVE OK)\n" if score.passes_gate else f"(< {MIN_LIVE_SCORE}: BLOCKED)\n")
+    items = [
+        ("lookahead_clean", score.lookahead_clean),
+        ("survivorship_inclusive", score.survivorship_inclusive),
+        ("pit_fundamentals", score.pit_fundamentals),
+        ("regime_coverage", score.regime_coverage),
+        ("out_of_sample_validated", score.out_of_sample_validated),
+        ("monte_carlo_drawdown", score.monte_carlo_drawdown),
+        ("sensitivity_surface_flat", score.sensitivity_surface_flat),
+        ("monte_carlo_sequence_passed", score.monte_carlo_sequence_passed),
+        ("dsr_above_0_90", score.dsr_above_0_90),
+        ("backtest_length_above_minbtl", score.backtest_length_above_minbtl),
+    ]
+    weights = BacktestCredibilityRubric.WEIGHTS
+    for label, ok in items:
+        mark = "✓" if ok else "✗"
+        out.write(f"  [{mark}] {label:32s} ({weights[label]:>2d} pts)\n")
+    return out.getvalue()
+
+
 def _fmt_float(x: float) -> str:
     if x is None:
         return "—"
@@ -150,4 +253,11 @@ def _fmt_float(x: float) -> str:
     return f"{x:6.2f}"
 
 
-__all__ = ["StatValidationReport", "build_report", "render"]
+__all__ = [
+    "StatValidationReport",
+    "build_report",
+    "evaluate_rubric_from_report",
+    "render",
+    "render_rubric",
+    "write_credibility_score",
+]

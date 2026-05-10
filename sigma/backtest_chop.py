@@ -761,23 +761,25 @@ async def amain(args: argparse.Namespace) -> int:
         n_rows = write_year_trade_dump(per_stock_trades, args.year, year_path)
         print(f"per-stock-chop {args.year} trades → {year_path}  rows={n_rows}")
 
-    # ── Statistical Validation ─────────────────────────────────────────────
+    # ── Statistical Validation + credibility rubric ────────────────────────
     # The winner of the comparison is per-stock-chop; run sensitivity sweeps
-    # on its two key knobs and Monte Carlo + PSR/DSR/MinBTL on its trades.
+    # on its two key knobs and Monte Carlo + PSR/DSR/MinBTL on its trades,
+    # then persist the credibility score so the Capital Gate can read it.
     if not args.skip_statistical_validation and per_stock_trades:
-        _print_statistical_validation_sigma(
+        await _print_statistical_validation_sigma(
             panels=panels,
             spy_chop_series=spy_chop_series,
             start=args.start,
             end=args.end,
             winner_summary=next(s for s in summaries if s.variant == "per-stock-chop"),
             winner_trades=per_stock_trades,
+            db_url=db_url,
         )
 
     return 0
 
 
-def _print_statistical_validation_sigma(
+async def _print_statistical_validation_sigma(
     *,
     panels: dict[str, pd.DataFrame],
     spy_chop_series: pd.Series | None,
@@ -785,10 +787,18 @@ def _print_statistical_validation_sigma(
     end: date,
     winner_summary: VariantSummary,
     winner_trades: list[TradeRecord],
+    db_url: str | None,
 ) -> None:
-    """Sweep CHOP and ADX thresholds, run MC + PSR/DSR/MinBTL on the winner."""
+    """Sweep CHOP and ADX thresholds, run MC + PSR/DSR/MinBTL, score rubric, persist."""
     from tpcore.backtest.sensitivity import sweep_parameter
-    from tpcore.backtest.statistical_validation import build_report, render
+    from tpcore.backtest.statistical_validation import (
+        build_report,
+        evaluate_rubric_from_report,
+        render,
+        render_rubric,
+        write_credibility_score,
+    )
+    from tpcore.db import build_asyncpg_pool
 
     chop_values = [30.0, 35.0, 38.2, 40.0, 45.0, 50.0]
     adx_values = [15.0, 18.0, 20.0, 22.0, 25.0]
@@ -826,6 +836,31 @@ def _print_statistical_validation_sigma(
         n_trials=n_trials,
     )
     print(render(report, title="Sigma — Statistical Validation"))
+
+    # Sigma is technical-only — no fundamentals — so the PIT-fundamentals flag
+    # is N/A and treated as "True" (the discipline doesn't apply). OOS holdout
+    # not yet implemented for Sigma, so out_of_sample_validated=False.
+    rubric = evaluate_rubric_from_report(
+        report,
+        lookahead_clean=True,
+        survivorship_inclusive=True,
+        pit_fundamentals=True,
+        regime_coverage=True,
+        out_of_sample_validated=False,
+        monte_carlo_drawdown=True,
+    )
+    print(render_rubric(rubric))
+
+    if db_url:
+        pool = await build_asyncpg_pool(db_url)
+        try:
+            wrote = await write_credibility_score(pool, engine_name="sigma", score=rubric)
+            print(
+                f"  → persisted to platform.data_quality_log "
+                f"(source=backtest_credibility.sigma, wrote={wrote})\n"
+            )
+        finally:
+            await pool.close()
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
