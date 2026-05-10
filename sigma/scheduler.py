@@ -39,6 +39,7 @@ from tpcore.db import build_asyncpg_pool
 from tpcore.fmp import FMPFundamentalsAdapter
 from tpcore.fundamentals.cache import FundamentalsCache
 from tpcore.outage import DataProviderOutage
+from tpcore.parity import LivePaperParityHarness
 from tpcore.risk.governor import (
     InMemoryRiskStateStore,
     RiskGovernor,
@@ -161,6 +162,7 @@ class SigmaScheduler:
             execution = SigmaExecutionRisk()
             sigma_aar = SigmaAARLogging()
             gate = SigmaCapitalGate(engine_equity=self._engine_equity)
+            parity = self._build_parity_harness(pool, paper_broker=broker)
             order_manager = SigmaOrderManager(
                 broker=broker,
                 governor=governor,
@@ -168,6 +170,7 @@ class SigmaScheduler:
                 lifecycle=lifecycle,
                 aar=sigma_aar,
                 aar_writer=aar_writer,
+                parity_harness=parity,
             )
 
             # 1. Reconcile first so the open-position counter is fresh
@@ -219,6 +222,29 @@ class SigmaScheduler:
             if pool is not None:
                 await pool.close()
                 logger.info("sigma.scheduler.pool_closed")
+
+    @staticmethod
+    def _build_parity_harness(pool, *, paper_broker) -> LivePaperParityHarness | None:
+        """Return a harness only when ``ENABLE_PARITY_HARNESS=true`` *and* live creds are present.
+
+        Live credentials live in ``ALPACA_LIVE_KEY`` / ``ALPACA_LIVE_SECRET``;
+        if either is missing we return None and skip parity for this run.
+        Mirrors ``vector.scheduler._build_parity_harness`` so all engines
+        share the same opt-in semantics.
+        """
+        if pool is None:
+            return None
+        if os.getenv("ENABLE_PARITY_HARNESS", "false").lower() != "true":
+            return None
+        live_key = os.getenv("ALPACA_LIVE_KEY")
+        live_secret = os.getenv("ALPACA_LIVE_SECRET")
+        if not live_key or not live_secret:
+            logger.info("sigma.scheduler.parity_disabled_no_live_creds")
+            return None
+        live_broker = AlpacaPaperBrokerAdapter(
+            api_key=live_key, api_secret=live_secret, paper=False
+        )
+        return LivePaperParityHarness(paper_broker, live_broker, pool)
 
     @staticmethod
     def _build_fundamentals_provider(

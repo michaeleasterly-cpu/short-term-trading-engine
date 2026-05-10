@@ -25,6 +25,7 @@ from tpcore.db import build_asyncpg_pool
 from tpcore.fmp import FMPFundamentalsAdapter
 from tpcore.fundamentals.cache import FundamentalsCache
 from tpcore.outage import DataProviderOutage
+from tpcore.parity import LivePaperParityHarness
 from tpcore.risk.governor import (
     InMemoryRiskStateStore,
     RiskGovernor,
@@ -136,6 +137,7 @@ class ReversionScheduler:
             execution = ReversionExecutionRisk()
             rev_aar = ReversionAARLogging()
             gate = ReversionCapitalGate(engine_equity=self._engine_equity)
+            parity = self._build_parity_harness(pool, paper_broker=broker)
             order_manager = ReversionOrderManager(
                 broker=broker,
                 governor=governor,
@@ -143,6 +145,7 @@ class ReversionScheduler:
                 lifecycle=lifecycle,
                 aar=rev_aar,
                 aar_writer=aar_writer,
+                parity_harness=parity,
             )
 
             new_aars = await order_manager.reconcile(
@@ -202,6 +205,30 @@ class ReversionScheduler:
             if pool is not None:
                 await pool.close()
                 logger.info("reversion.scheduler.pool_closed")
+
+    @staticmethod
+    def _build_parity_harness(pool, *, paper_broker) -> LivePaperParityHarness | None:
+        """Return a harness only when ``ENABLE_PARITY_HARNESS=true`` *and* live creds are present.
+
+        Mirrors ``vector.scheduler._build_parity_harness`` and
+        ``sigma.scheduler._build_parity_harness`` so all three engines share
+        the same opt-in semantics. Live credentials live in
+        ``ALPACA_LIVE_KEY`` / ``ALPACA_LIVE_SECRET``; if either is missing
+        we return None and skip parity for this run.
+        """
+        if pool is None:
+            return None
+        if os.getenv("ENABLE_PARITY_HARNESS", "false").lower() != "true":
+            return None
+        live_key = os.getenv("ALPACA_LIVE_KEY")
+        live_secret = os.getenv("ALPACA_LIVE_SECRET")
+        if not live_key or not live_secret:
+            logger.info("reversion.scheduler.parity_disabled_no_live_creds")
+            return None
+        live_broker = AlpacaPaperBrokerAdapter(
+            api_key=live_key, api_secret=live_secret, paper=False
+        )
+        return LivePaperParityHarness(paper_broker, live_broker, pool)
 
     async def _build_fundamentals_provider(
         self, pool: Any | None
