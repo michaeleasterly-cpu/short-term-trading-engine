@@ -1,4 +1,4 @@
-"""Unit tests for the trade simulation in ``sigma.backtest_chop``.
+"""Unit tests for the trade simulation in ``sigma.backtest``.
 
 The full script needs ``platform.prices_daily`` populated to run end-to-end;
 these tests exercise the simulator + metrics on synthetic in-memory bars
@@ -11,7 +11,7 @@ from datetime import date, timedelta
 import pandas as pd
 import pytest
 
-from sigma.backtest_chop import (
+from sigma.backtest import (
     HARD_STOP_PCT,
     SLIPPAGE_PER_SIDE,
     TradeRecord,

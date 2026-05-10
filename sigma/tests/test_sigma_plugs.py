@@ -184,7 +184,7 @@ def test_score_market_context_buckets() -> None:
 
     The score uses the candidate's own CHOP — index-level (SPY) gating was
     removed after the backtest showed it underperformed (Sharpe −28% vs
-    baseline). See sigma/backtest_chop.py.
+    baseline). See sigma/backtest.py.
     """
     from sigma.plugs.setup_detection import _score_market_context
 

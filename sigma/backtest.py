@@ -37,7 +37,7 @@ Usage
 -----
 ::
 
-    python -m sigma.backtest_chop --start 2018-01-01 --end 2025-12-31
+    python -m sigma.backtest --start 2018-01-01 --end 2025-12-31
 
 Reads ``DATABASE_URL`` from the environment.
 """
@@ -73,7 +73,7 @@ from sigma.plugs.setup_detection import (
 )
 from tpcore.db import build_asyncpg_pool
 
-logger = logging.getLogger("sigma.backtest_chop")
+logger = logging.getLogger("sigma.backtest")
 
 # ────────────────────────────────────────────────────────────────────────────
 # Backtest knobs

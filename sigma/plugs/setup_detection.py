@@ -245,7 +245,7 @@ def _score_market_context(
     Both legs use the candidate's own data — index-level (SPY) gating was
     removed after backtest evidence showed it hurt risk-adjusted returns
     relative to the per-stock filter (Sharpe −28% vs baseline, drawdown
-    nearly 2×). See ``sigma/backtest_chop.py`` results.
+    nearly 2×). See ``sigma/backtest.py`` results.
     """
     return _score_regime_confirmation(chop) + _score_vwap_neutrality(last_close, last_vwap_20)
 
