@@ -20,7 +20,6 @@ from decimal import ROUND_HALF_UP, Decimal
 import structlog
 
 from tpcore.interfaces.engine_plug import BaseEnginePlug
-
 from vector.models import (
     HARD_STOP_PCT,
     PROFIT_TARGET_PCT,
@@ -71,7 +70,7 @@ class VectorLifecycleAnalysis(BaseEnginePlug):
             profit_target_price=_round_cents(entry * (Decimal("1") + PROFIT_TARGET_PCT)),
             days_held=0,
             notes=(
-                f"score={candidate.vector_score:.0f} "
+                f"score={candidate.swing_score:.0f} "
                 f"trigger={candidate.pullback_or_breakout} "
                 f"vix={candidate.vix_at_entry}"
             ),

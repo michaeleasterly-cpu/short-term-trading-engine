@@ -66,6 +66,7 @@ class PostgresRiskStateStore(RiskStateStore):
         return _row_to_state(row) if row is not None else None
 
     async def put(self, state: RiskState) -> None:
+        """Upsert ``state`` into ``platform.risk_state`` keyed by engine."""
         sql = """
             INSERT INTO platform.risk_state (
                 engine, engine_equity, daily_pnl, weekly_pnl, open_positions,

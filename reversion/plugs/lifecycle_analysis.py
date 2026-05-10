@@ -31,13 +31,6 @@ from typing import Any
 
 import structlog
 
-from tpcore.fundamentals.earnings_quality import (
-    EarningsQualityGrade,
-    EarningsQualityResult,
-    check_earnings_quality,
-)
-from tpcore.interfaces.engine_plug import BaseEnginePlug
-
 from reversion.models import (
     HARD_STOP_PCT,
     MAX_ADX_FOR_REVERSION,
@@ -47,6 +40,12 @@ from reversion.models import (
     PhaseAssessment,
     SetupCandidate,
 )
+from tpcore.fundamentals.earnings_quality import (
+    EarningsQualityGrade,
+    EarningsQualityResult,
+    check_earnings_quality,
+)
+from tpcore.interfaces.engine_plug import BaseEnginePlug
 
 logger = structlog.get_logger(__name__)
 
@@ -153,7 +152,7 @@ class ReversionLifecycleAnalysis(BaseEnginePlug):
             target_50ma=_round_cents(candidate.target_50ma),
             earnings_quality_blocked=blocked,
             notes=(
-                f"score={candidate.reversion_score} z={candidate.z_score:+.2f} "
+                f"score={candidate.fade_score} z={candidate.z_score:+.2f} "
                 f"adx={candidate.adx_14} eq={eq_grade}"
             ),
         )

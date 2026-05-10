@@ -21,23 +21,22 @@ natural firing rate.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
 import structlog
+from pydantic import BaseModel, ConfigDict
 
+from reversion.models import (
+    MAX_CONCURRENT_POSITIONS,
+    PRE_GRAD_POSITION_CAP_USD,
+)
 from tpcore.backtest.credibility import (
     CredibilityScoreInsufficientError,
     graduation_ready,
 )
 from tpcore.interfaces.engine_plug import BaseEnginePlug
 from tpcore.quality.validation.capital_gate import assert_passed
-
-from reversion.models import (
-    MAX_CONCURRENT_POSITIONS,
-    PRE_GRAD_POSITION_CAP_USD,
-)
 
 if TYPE_CHECKING:  # pragma: no cover
     import asyncpg
@@ -51,8 +50,9 @@ GRAD_MIN_AVG_RETURN = 0.02
 GRAD_MIN_PROFIT_FACTOR = 1.5
 
 
-@dataclass
-class GraduationStats:
+class GraduationStats(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     n_trades: int = 0
     win_rate: float = 0.0
     avg_return: float = 0.0
@@ -135,7 +135,7 @@ class ReversionCapitalGate(BaseEnginePlug):
         )
 
     @staticmethod
-    async def assert_can_graduate(stats: GraduationStats, pool: "asyncpg.Pool") -> bool:
+    async def assert_can_graduate(stats: GraduationStats, pool: asyncpg.Pool) -> bool:
         """Combined gate: stats thresholds AND Data Validation Suite AND credibility ≥ 60.
 
         Returns ``False`` (without raising) if the stats thresholds aren't met

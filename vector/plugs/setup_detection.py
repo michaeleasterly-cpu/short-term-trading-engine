@@ -42,7 +42,6 @@ import pandas as pd
 import structlog
 
 from tpcore.interfaces.engine_plug import BaseEnginePlug
-
 from vector.models import (
     SCORE_STRONG,
     SCORE_WEAK,
@@ -340,7 +339,7 @@ class VectorSetupDetection(BaseEnginePlug):
                 SetupCandidate(
                     ticker=ticker,
                     as_of=as_of,
-                    vector_score=float(total),
+                    swing_score=float(total),
                     technical=float(tech_score),
                     catalyst=float(cat_score),
                     sentiment=float(sent_score),
@@ -356,7 +355,7 @@ class VectorSetupDetection(BaseEnginePlug):
                     notes=f"strong={total>=self._score_floor_strong}",
                 )
             )
-        return sorted(candidates, key=lambda c: c.vector_score, reverse=True)
+        return sorted(candidates, key=lambda c: c.swing_score, reverse=True)
 
     @staticmethod
     def _spy_uptrend(spy_panel: pd.DataFrame | None) -> bool:

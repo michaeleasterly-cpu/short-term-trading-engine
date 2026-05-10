@@ -47,42 +47,30 @@ import argparse
 import asyncio
 import csv
 import json
-import logging
 import math
 import os
 import sys
 from collections import defaultdict
 from dataclasses import asdict, dataclass, field
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import pandas as pd
-
-from tpcore.db import build_asyncpg_pool
-from tpcore.fundamentals.earnings_quality import (
-    EarningsQualityGrade,
-    EarningsQualityResult,
-    check_earnings_quality,
-)
+import structlog
 
 from reversion.models import Direction
 from reversion.plugs.setup_detection import (
-    ADX_PERIOD,
     BB_NUM_STD,
     BB_PERIOD,
-    MAX_ADX_FOR_REVERSION,
     MA_50_PERIOD,
+    MAX_ADX_FOR_REVERSION,
     MIN_AVG_VOLUME,
     MIN_PRICE,
-    RSI_OVERBOUGHT,
-    RSI_OVERSOLD,
     SPY_SYMBOL,
     Z_SCORE_THRESHOLD,
     ZSCORE_PERIOD,
-    _bars_to_frame,
     _bb_breach_consecutive,
     _compute_adx,
     _compute_bbands,
@@ -97,8 +85,14 @@ from reversion.plugs.setup_detection import (
     _spy_realized_vol_proxy,
     _volume_ratio,
 )
+from tpcore.db import build_asyncpg_pool
+from tpcore.fundamentals.earnings_quality import (
+    EarningsQualityGrade,
+    EarningsQualityResult,
+    check_earnings_quality,
+)
 
-logger = logging.getLogger("reversion.backtest_earnings_quality")
+logger = structlog.get_logger(__name__)
 
 # ────────────────────────────────────────────────────────────────────────────
 # Backtest knobs (mirror reversion.models / execution_risk)
@@ -819,7 +813,7 @@ def _conclusion(baseline: VariantSummary, treatment: VariantSummary, rejected: l
 
 
 async def amain(args: argparse.Namespace) -> int:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    """Run Reversion's three-variant backtest and emit the credibility + overfitting reports."""
     db_url = args.database_url or os.getenv("DATABASE_URL")
     if not db_url:
         print("DATABASE_URL not set — pass --database-url or export it.", file=sys.stderr)
@@ -847,20 +841,20 @@ async def amain(args: argparse.Namespace) -> int:
         load_tickers = list({*funded_tickers, SPY_SYMBOL})
 
         logger.info(
-            "loading prices  tickers=%d  range=%s..%s",
-            len(load_tickers),
-            args.start.isoformat(),
-            args.end.isoformat(),
+            "reversion.backtest.loading_prices",
+            tickers=len(load_tickers),
+            start=args.start.isoformat(),
+            end=args.end.isoformat(),
         )
         prices = await _load_prices(pool, load_tickers, args.start, args.end)
-        logger.info("loading fundamentals  tickers=%d", len(funded_tickers))
+        logger.info("reversion.backtest.loading_fundamentals", tickers=len(funded_tickers))
         fundamentals = await _load_fundamentals(pool, funded_tickers)
     finally:
         await pool.close()
 
     if SPY_SYMBOL not in prices:
         print(
-            f"SPY missing from prices_daily for the window — sector-z and VIX proxy "
+            "SPY missing from prices_daily for the window — sector-z and VIX proxy "
             "won't compute, market-context will score zero everywhere.",
             file=sys.stderr,
         )
@@ -868,7 +862,7 @@ async def amain(args: argparse.Namespace) -> int:
     panels = {ticker: _precompute_indicators(df) for ticker, df in prices.items()}
     spy_panel = panels.pop(SPY_SYMBOL, None)
 
-    logger.info("running baseline (z=2.0, no EQ filter)")
+    logger.info("reversion.backtest.running_variant", variant="baseline", config="z=2.0, no EQ filter")
     baseline_trades, rejected = _run_variant(
         variant="baseline",
         panels=panels,
@@ -879,7 +873,7 @@ async def amain(args: argparse.Namespace) -> int:
         z_threshold=2.0,
         filter_mode="none",
     )
-    logger.info("running quality-gated (z=2.0, reject LOW or no-data)")
+    logger.info("reversion.backtest.running_variant", variant="quality-gated", config="z=2.0, reject LOW or no-data")
     gated_trades, _ = _run_variant(
         variant="quality-gated",
         panels=panels,
@@ -890,7 +884,7 @@ async def amain(args: argparse.Namespace) -> int:
         z_threshold=2.0,
         filter_mode="not_low",
     )
-    logger.info("running combined-filter (z=3.0, require HIGH)")
+    logger.info("reversion.backtest.running_variant", variant="combined-filter", config="z=3.0, require HIGH")
     combined_trades, _ = _run_variant(
         variant="combined-filter",
         panels=panels,
@@ -922,7 +916,7 @@ async def amain(args: argparse.Namespace) -> int:
     print()
 
     payload = {
-        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "start": args.start.isoformat(),
         "end": args.end.isoformat(),
         "n_universe": len(panels),
@@ -1166,11 +1160,11 @@ async def _run_overfitting_diagnostic_reversion(
             "volume_ratio": 2.0,
         },
         sr_observed=float(winner_summary.sharpe_annualized),
-        # Honest count of distinct parameter combinations swept during dev:
-        # z_threshold (~5) + quality_grade (3) + rsi_threshold (~5) +
-        # bb_consecutive_days (~4) + volume_ratio (~5) + filter_mode (~3) +
-        # misc tuning ≈ 35.
-        n_trials=35,
+        # Development parameters are now locked. n_trials reflects only the
+        # distinct parameter combinations actually retained in the live
+        # config — earlier exploratory sweeps no longer count once the
+        # winner is frozen.
+        n_trials=20,
         price_data=price_data,
         engine="reversion",
     )

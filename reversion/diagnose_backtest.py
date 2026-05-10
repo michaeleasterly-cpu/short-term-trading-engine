@@ -1,7 +1,7 @@
 """Diagnose Reversion's per-trade losses on the 8-year backtest.
 
 Reads ``backtests/reversion_trades.csv`` (produced by
-``reversion/backtest_earnings_quality.py``) and slices the trade ledger six
+``reversion/backtest.py``) and slices the trade ledger six
 ways:
 
     A. By |Z-score| bucket at entry
@@ -429,7 +429,7 @@ def main() -> None:  # pragma: no cover
 
     if not args.csv.exists():
         raise SystemExit(
-            f"{args.csv} not found — run `python reversion/backtest_earnings_quality.py` "
+            f"{args.csv} not found — run `python reversion/backtest.py` "
             "with --start 2018-01-01 --end 2025-12-31 first."
         )
 

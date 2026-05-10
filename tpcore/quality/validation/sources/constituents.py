@@ -32,10 +32,14 @@ class RemovalEvent(BaseModel):
 
 class ConstituentSource(ABC):
     @abstractmethod
-    def list_current_sp500(self) -> list[str]: ...
+    def list_current_sp500(self) -> list[str]:
+        """Return the current S&P 500 constituent tickers."""
+        ...
 
     @abstractmethod
-    def list_recent_removals(self) -> list[RemovalEvent]: ...
+    def list_recent_removals(self) -> list[RemovalEvent]:
+        """Return recent index removals (ticker + effective date + cause)."""
+        ...
 
 
 class FixtureConstituentSource(ConstituentSource):

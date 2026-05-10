@@ -25,12 +25,9 @@ from decimal import ROUND_DOWN, Decimal
 import structlog
 
 from tpcore.interfaces.engine_plug import BaseEnginePlug
-
 from vector.models import (
-    HARD_STOP_PCT,
     MAX_CONCURRENT_POSITIONS,
     PRE_GRAD_POSITION_CAP_USD,
-    PROFIT_TARGET_PCT,
     SCORE_WEAK,
     VIX_SCALE_DOWN_25,
     VIX_SCALE_DOWN_50,
@@ -80,11 +77,12 @@ class VectorExecutionRisk(BaseEnginePlug):
         account_equity: Decimal,
         open_positions: int,
     ) -> ExecutionDecision | None:
-        if candidate.vector_score < self._score_floor:
+        """Score-gate, sizing-gate, and concurrency-gate the candidate; return a sized decision or None."""
+        if candidate.swing_score < self._score_floor:
             logger.info(
                 "vector.exec.reject_below_floor",
                 ticker=candidate.ticker,
-                score=candidate.vector_score,
+                score=candidate.swing_score,
             )
             return None
         if open_positions >= self._max_positions:

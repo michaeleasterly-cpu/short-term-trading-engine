@@ -53,7 +53,7 @@ class SetupCandidate(BaseModel):
 
     ticker: str
     as_of: date
-    vector_score: float = Field(
+    swing_score: float = Field(
         ge=0, le=100,
         description="Composite of Technical (0–40) + Catalyst (0–35) + Sentiment (0–25).",
     )

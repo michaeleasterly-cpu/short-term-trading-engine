@@ -1,7 +1,7 @@
 """Backtest Vector's three-gate model on historical data.
 
 Same shape as ``sigma/backtest.py`` and
-``reversion/backtest_earnings_quality.py``: pure historical simulation
+``reversion/backtest.py``: pure historical simulation
 on cached panels, no broker calls, no plug imports beyond what already
 lives in ``vector/plugs/``. The science is shared — anything tightened
 in production should land here too.
@@ -40,23 +40,21 @@ import argparse
 import asyncio
 import csv
 import json
-import logging
 import math
 import os
 import sys
 from collections import defaultdict
 from dataclasses import asdict, dataclass, field
-from datetime import date, datetime, timedelta
-from decimal import Decimal
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import pandas as pd
+import structlog
 
 from tpcore.db import build_asyncpg_pool
 
-logger = logging.getLogger("vector.backtest_vector")
+logger = structlog.get_logger(__name__)
 
 # ────────────────────────────────────────────────────────────────────────────
 # Constants — copy of vector/plugs values, kept here so the backtest is
@@ -648,7 +646,7 @@ def _write_trades_csv(path: Path, trades: list[TradeRecord]) -> None:
 
 
 async def amain(args: argparse.Namespace) -> int:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    """Run Vector's three-gate backtest and emit the credibility + overfitting reports."""
     db_url = args.database_url or os.getenv("DATABASE_URL")
     if not db_url:
         print("DATABASE_URL not set", file=sys.stderr)
@@ -674,11 +672,13 @@ async def amain(args: argparse.Namespace) -> int:
         load_tickers = list({*eligible, SPY_SYMBOL})
 
         logger.info(
-            "vector.backtest.loading prices=%d_tickers range=%s..%s",
-            len(load_tickers), args.start, args.end,
+            "vector.backtest.loading_prices",
+            tickers=len(load_tickers),
+            start=args.start.isoformat(),
+            end=args.end.isoformat(),
         )
         prices = await _load_prices(pool, load_tickers, args.start, args.end)
-        logger.info("vector.backtest.loading_funds tickers=%d", len(eligible))
+        logger.info("vector.backtest.loading_fundamentals", tickers=len(eligible))
         fundamentals = await _load_fundamentals(pool, eligible)
         catalysts = await _load_catalysts(pool, eligible)
     finally:
@@ -690,9 +690,9 @@ async def amain(args: argparse.Namespace) -> int:
     spy_rv_pct = _spy_realized_vol_pct(spy_panel) if spy_panel is not None else None
 
     logger.info(
-        "vector.backtest.running tickers=%d spy_rv_available=%s",
-        len(eligible_panels),
-        spy_rv_pct is not None and spy_rv_pct.notna().any(),
+        "vector.backtest.running",
+        tickers=len(eligible_panels),
+        spy_rv_available=spy_rv_pct is not None and spy_rv_pct.notna().any(),
     )
     trades = _run(
         panels=eligible_panels,
@@ -712,7 +712,7 @@ async def amain(args: argparse.Namespace) -> int:
     print()
 
     payload = {
-        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "start": args.start.isoformat(),
         "end": args.end.isoformat(),
         "n_universe": len(eligible_panels),
@@ -767,12 +767,8 @@ async def _print_statistical_validation_vector(
     from tpcore.backtest.sensitivity import sweep_parameter
     from tpcore.backtest.statistical_validation import (
         build_report,
-        evaluate_rubric_from_report,
         render,
-        render_rubric,
-        write_credibility_score,
     )
-    from tpcore.db import build_asyncpg_pool
 
     pb_values = [1.0, 1.25, 1.5, 1.75, 2.0]
     de_values = [2.0, 2.5, 3.0, 3.5, 4.0]
@@ -843,7 +839,7 @@ async def _run_overfitting_bundle(
     sweep_report,
 ) -> None:
     """Wire OverfittingDiagnostic, persist the JSON report, score credibility."""
-    from tpcore.backtest.credibility import BacktestCredibilityRubric, MIN_LIVE_SCORE
+    from tpcore.backtest.credibility import MIN_LIVE_SCORE, BacktestCredibilityRubric
     from tpcore.backtest.overfitting import OverfittingDiagnostic
     from tpcore.backtest.statistical_validation import write_credibility_score
 

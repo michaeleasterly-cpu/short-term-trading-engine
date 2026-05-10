@@ -101,7 +101,7 @@ def test_setup_detection_finds_candidate_when_all_gates_pass() -> None:
     c = candidates[0]
     assert c.ticker == "AAA"
     assert c.pullback_or_breakout == "breakout_above_50ma"
-    assert c.vector_score >= 30  # technical + catalyst > 30 (sentiment 0)
+    assert c.swing_score >= 30  # technical + catalyst > 30 (sentiment 0)
 
 
 def test_setup_detection_rejects_when_revenue_below_floor() -> None:
@@ -148,7 +148,7 @@ def _candidate(*, last_close: Decimal = Decimal("100"), vix: float | None = 18.0
     return SetupCandidate(
         ticker="AAA",
         as_of=date(2026, 5, 1),
-        vector_score=70.0,
+        swing_score=70.0,
         technical=35.0,
         catalyst=25.0,
         sentiment=10.0,
@@ -228,7 +228,7 @@ def test_lifecycle_trailing_stop_arms_then_fires() -> None:
 def test_execution_returns_none_below_score_floor() -> None:
     plug = VectorExecutionRisk()
     cand = _candidate()
-    cand = cand.model_copy(update={"vector_score": 30.0})  # below SCORE_WEAK
+    cand = cand.model_copy(update={"swing_score": 30.0})  # below SCORE_WEAK
     a = VectorLifecycleAnalysis().assess(cand)
     assert plug.decide(cand, a, account_equity=Decimal("10000"), open_positions=0) is None
 

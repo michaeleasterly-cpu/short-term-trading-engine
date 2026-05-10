@@ -56,6 +56,7 @@ class SigmaExecutionRisk(BaseEnginePlug):
         return True
 
     def healthcheck(self) -> dict:
+        """Return the plug's nominal config so the boot sequence can verify it."""
         return {
             "engine": self.engine_name,
             "plug": "execution_risk",

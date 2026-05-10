@@ -35,9 +35,6 @@ import numpy as np
 import pandas as pd
 import structlog
 
-from tpcore.interfaces.data import Bar, DataProviderInterface
-from tpcore.interfaces.engine_plug import BaseEnginePlug
-
 from reversion.models import (
     MAX_ADX_FOR_REVERSION,
     REVERSION_TEST_UNIVERSE,
@@ -48,6 +45,8 @@ from reversion.models import (
     Direction,
     SetupCandidate,
 )
+from tpcore.interfaces.data import Bar, DataProviderInterface
+from tpcore.interfaces.engine_plug import BaseEnginePlug
 
 logger = structlog.get_logger(__name__)
 
@@ -330,7 +329,7 @@ class ReversionSetupDetection(BaseEnginePlug):
                 continue
             if cand is not None:
                 candidates.append(cand)
-        candidates.sort(key=lambda c: c.reversion_score, reverse=True)
+        candidates.sort(key=lambda c: c.fade_score, reverse=True)
         return candidates
 
     async def _market_context(self, start: date, as_of: date) -> tuple[float, float]:
@@ -420,7 +419,7 @@ class ReversionSetupDetection(BaseEnginePlug):
             ticker=symbol,
             as_of=as_of,
             direction=direction,
-            reversion_score=round(score, 2),
+            fade_score=round(score, 2),
             statistical_extremity=round(se, 2),
             exhaustion_confirmation=round(ec, 2),
             market_context=round(mc, 2),

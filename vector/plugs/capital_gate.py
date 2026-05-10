@@ -14,11 +14,11 @@ credibility score ≥ 60 in ``platform.data_quality_log``. The platform-wide
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
 import structlog
+from pydantic import BaseModel, ConfigDict
 
 from tpcore.backtest.credibility import (
     CredibilityScoreInsufficientError,
@@ -26,7 +26,6 @@ from tpcore.backtest.credibility import (
 )
 from tpcore.interfaces.engine_plug import BaseEnginePlug
 from tpcore.quality.validation.capital_gate import assert_passed
-
 from vector.models import (
     DAILY_LOSS_FREEZE_PCT,
     MAX_CONCURRENT_POSITIONS,
@@ -43,8 +42,9 @@ GRAD_MIN_WIN_RATE = 0.55
 GRAD_MIN_AVG_RETURN = 0.03
 
 
-@dataclass
-class GraduationStats:
+class GraduationStats(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     n_trades: int = 0
     win_rate: float = 0.0
     avg_return: float = 0.0
@@ -125,7 +125,7 @@ class VectorCapitalGate(BaseEnginePlug):
         )
 
     @staticmethod
-    async def assert_can_graduate(stats: GraduationStats, pool: "asyncpg.Pool") -> bool:
+    async def assert_can_graduate(stats: GraduationStats, pool: asyncpg.Pool) -> bool:
         """Combined gate: stats AND validation suite AND credibility ≥ 60."""
         if not VectorCapitalGate.is_graduated(stats):
             return False

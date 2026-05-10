@@ -237,7 +237,7 @@ def _candidate(direction: Direction = Direction.LONG, adx: float = 15.0) -> Setu
         ticker="AAPL",
         as_of=date(2026, 5, 1),
         direction=direction,
-        reversion_score=80.0,
+        fade_score=80.0,
         statistical_extremity=40.0,
         exhaustion_confirmation=25.0,
         market_context=15.0,

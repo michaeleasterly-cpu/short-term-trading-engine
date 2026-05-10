@@ -33,7 +33,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import logging
 import os
 import sys
 from dataclasses import dataclass
@@ -147,7 +146,7 @@ _INSERT_SQL = """
 
 
 async def upsert_corporate_actions(
-    pool: "asyncpg.Pool",
+    pool: asyncpg.Pool,
     actions: list[dict],
 ) -> int:
     """Insert each action; returns the count attempted (not the count newly written)."""
@@ -210,7 +209,6 @@ def _parse_args(argv: list[str] | None = None) -> _CLIArgs:
 
 
 async def amain(args: _CLIArgs) -> int:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     db_url = os.getenv("DATABASE_URL")
     if not db_url:
         print("DATABASE_URL not set", file=sys.stderr)

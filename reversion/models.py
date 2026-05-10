@@ -66,7 +66,7 @@ class SetupCandidate(BaseModel):
     ticker: str
     as_of: date
     direction: Direction
-    reversion_score: float = Field(
+    fade_score: float = Field(
         ge=0, le=100,
         description="Composite of Statistical Extremity (0-45), Exhaustion Confirmation (0-30), Market Context (0-25).",
     )

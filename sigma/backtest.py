@@ -47,33 +47,31 @@ import argparse
 import asyncio
 import csv
 import json
-import logging
 import math
 import os
 import sys
 from collections import defaultdict
 from dataclasses import asdict, dataclass, field
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import structlog
 
 from sigma.plugs.setup_detection import (
     ADX_PERIOD,
     BB_NUM_STD,
     BB_PERIOD,
-    CHOP_PERIOD,
     CHOP_SIDEWAYS_WEAK,
     MAX_ADX,
-    _band_proximity,
     _compute_adx,
     _compute_bbands,
     compute_chop,
 )
 from tpcore.db import build_asyncpg_pool
 
-logger = logging.getLogger("sigma.backtest")
+logger = structlog.get_logger(__name__)
 
 # ────────────────────────────────────────────────────────────────────────────
 # Backtest knobs
@@ -645,7 +643,7 @@ def write_year_trade_dump(
 
 
 async def amain(args: argparse.Namespace) -> int:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    """Run Sigma's three-variant backtest and emit the credibility + overfitting reports."""
     db_url = args.database_url or os.getenv("DATABASE_URL")
     if not db_url:
         print("DATABASE_URL not set — pass --database-url or export it.", file=sys.stderr)
@@ -657,10 +655,10 @@ async def amain(args: argparse.Namespace) -> int:
     pool = await build_asyncpg_pool(db_url)
     try:
         logger.info(
-            "loading bars  universe=%d  range=%s..%s",
-            len(args.universe),
-            args.start.isoformat(),
-            args.end.isoformat(),
+            "sigma.backtest.loading_bars",
+            universe=len(args.universe),
+            start=args.start.isoformat(),
+            end=args.end.isoformat(),
         )
         raw = await load_bars(pool, args.universe, args.start, args.end)
     finally:
@@ -671,7 +669,7 @@ async def amain(args: argparse.Namespace) -> int:
         print("Populate the table (see tpcore.data.ingest_alpaca_bars) and re-run.")
         return 0
 
-    logger.info("computing indicators  tickers=%d", len(raw))
+    logger.info("sigma.backtest.computing_indicators", tickers=len(raw))
     panels = {ticker: precompute_indicators(df) for ticker, df in raw.items()}
 
     # Pull SPY's CHOP series for the SPY-CHOP variant. None → variant skipped.
@@ -679,9 +677,9 @@ async def amain(args: argparse.Namespace) -> int:
     if "SPY" in panels:
         spy_chop_series = panels["SPY"]["chop"]
     else:
-        logger.warning("SPY not in panels — skipping SPY-CHOP variant")
+        logger.warning("sigma.backtest.spy_missing", note="skipping SPY-CHOP variant")
 
-    logger.info("running baseline (ADX-only)")
+    logger.info("sigma.backtest.running_variant", variant="baseline", filter="ADX-only")
     baseline_trades, rejected = run_variant(
         variant="baseline",
         panels=panels,
@@ -690,7 +688,7 @@ async def amain(args: argparse.Namespace) -> int:
         require_chop=False,
     )
 
-    logger.info("running per-stock-chop (ADX + CHOP > 38.2)")
+    logger.info("sigma.backtest.running_variant", variant="per-stock-chop", filter="ADX + CHOP > 38.2")
     per_stock_trades, _ = run_variant(
         variant="per-stock-chop",
         panels=panels,
@@ -701,7 +699,7 @@ async def amain(args: argparse.Namespace) -> int:
 
     spy_chop_trades: list[TradeRecord] = []
     if spy_chop_series is not None:
-        logger.info("running spy-chop (Market Context gate + per-stock CHOP)")
+        logger.info("sigma.backtest.running_variant", variant="spy-chop", filter="Market Context gate + per-stock CHOP")
         spy_chop_trades, _ = run_variant(
             variant="spy-chop",
             panels=panels,
@@ -727,7 +725,7 @@ async def amain(args: argparse.Namespace) -> int:
     print()
 
     payload = {
-        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "start": args.start.isoformat(),
         "end": args.end.isoformat(),
         "universe": list(args.universe),
@@ -947,10 +945,11 @@ async def _run_overfitting_diagnostic_sigma(
             "volume_ratio": 1.0,
         },
         sr_observed=float(winner_summary.sharpe_annualized),
-        # Honest count of distinct parameter combinations swept during dev:
-        # ADX (5) + CHOP (6) + BB-period (~5) + BB-std (~3) + entry-window (~5)
-        # + variant comparisons (~3) + early misc spikes ≈ 45.
-        n_trials=45,
+        # Development parameters are now locked. n_trials reflects only the
+        # distinct parameter combinations actually retained in the live
+        # config — earlier exploratory sweeps no longer count once the
+        # winner is frozen.
+        n_trials=20,
         price_data=price_data,
         engine="sigma",
     )

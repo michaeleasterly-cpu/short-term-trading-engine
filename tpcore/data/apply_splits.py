@@ -36,7 +36,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import logging
 import os
 import sys
 from dataclasses import dataclass
@@ -81,7 +80,7 @@ _UPDATE_PRESPLIT_SQL = """
 
 
 async def apply_split(
-    pool: "asyncpg.Pool",
+    pool: asyncpg.Pool,
     ticker: str,
     action_date: date,
     ratio: Decimal,
@@ -155,7 +154,7 @@ def _parse_update_count(status: str) -> int:
     return 0
 
 
-async def apply_all_splits(pool: "asyncpg.Pool", *, only_tickers: list[str] | None = None) -> dict:
+async def apply_all_splits(pool: asyncpg.Pool, *, only_tickers: list[str] | None = None) -> dict:
     """Apply every split in ``platform.corporate_actions`` to prices_daily.
 
     Iterates splits in ascending action_date order; cumulative effects are
@@ -209,7 +208,6 @@ def _parse_args(argv: list[str] | None = None) -> _CLIArgs:
 
 
 async def amain(args: _CLIArgs) -> int:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     db_url = os.getenv("DATABASE_URL")
     if not db_url:
         print("DATABASE_URL not set", file=sys.stderr)
