@@ -88,10 +88,6 @@ recent_removals:
     removed_date: 2023-03-15
     reason: bankruptcy
     expect_delisted: true
-  - ticker: SBNYQ
-    removed_date: 2023-03-15
-    reason: receivership
-    expect_delisted: true
   - ticker: FRC
     removed_date: 2023-05-04
     reason: receivership
@@ -123,18 +119,8 @@ recent_removals:
     removed_date: 2024-09-17
     reason: bankruptcy
     expect_delisted: true
-  # SI removed: ticker reused for unrelated company on Alpaca free tier;
-  # kept in delistings.yaml as a documented residual, omitted here.
-  # Pre-2023
-  - ticker: HTZGQ
-    removed_date: 2020-10-29
-    reason: bankruptcy
-    expect_delisted: true
-  - ticker: LK
-    removed_date: 2020-06-29
-    reason: delisted
-    expect_delisted: true
-  - ticker: WLLBQ
-    removed_date: 2020-04-01
-    reason: bankruptcy
-    expect_delisted: true
+  # NOTE: HTZGQ / WLLBQ / LK / SBNYQ / SI removed from both this
+  # fixture and delistings.yaml on 2026-05-10. Audit confirmed no
+  # free-tier source (Alpaca free, Tradier export) carries bars for
+  # these tickers; they are unresolvable until a paid delisted-feed is
+  # provisioned. Re-add when such a feed lands.

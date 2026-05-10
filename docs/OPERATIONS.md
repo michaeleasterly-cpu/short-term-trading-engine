@@ -100,7 +100,7 @@ Each engine and ops service pings Healthchecks at the start and end of every run
 | `short-term-engine-validation-suite` | Sundays 06:00 UTC | 1h | `HEALTHCHECKS_VALIDATION_URL` |
 | `short-term-engine-corporate-actions-ingestion` | Sundays 04:00 UTC | 1h | `HEALTHCHECKS_CORPORATE_ACTIONS_URL` |
 
-**Status (2026-05-10):** All five `HEALTHCHECKS_*` URLs are now set as Railway service-scoped variables (verified via `railway variable list --service <name> --kv`). The earlier "Last Ping: Never" state for `short-term-engine-sigma` and `short-term-engine-reversion` will only flip to UP once those services run successfully end-to-end — currently blocked by the runtime/`httpx` issue addressed by the venv-based build (see §1 below). First successful Mon 22:00 UTC fire is the verification window.
+**Status (2026-05-10):** All five `HEALTHCHECKS_*` URLs are set as Railway service-scoped variables. All five services rebuilt with the venv-based build path (`/app/.venv` + Python 3.11.15 pin) — runtime `httpx`-missing crash is resolved. Sigma + reversion checks will flip from "Last Ping = Never" to UP on the next Mon 22:00 UTC cron fire.
 
 ### How to inspect
 
@@ -291,8 +291,7 @@ LIMIT 10;
 **Confirm:**
 - Latest run timestamp is within the last 7 days (within the last 24h on Sunday).
 - The three checks (delistings, constituents, splits) each have a row.
-- Split check: `confidence = 1.0` (passing — corporate-actions pipeline fixed the AAPL adjustment).
-- Delisting + constituent checks: known residuals — 4 delisting misses, 2 constituent misses. The numeric `confidence` is < 1.0 and the `notes` column lists the offending tickers. **If new tickers appear that aren't in the documented residual list, flag immediately** — that's a real new failure, not a known limitation.
+- All three should report `confidence = 1.0` and `notes = []`. The suite is fully green as of 2026-05-10 — five unresolvable historic delistings (HTZGQ, WLLBQ, LK, SBNYQ, SI) were removed from the YAML fixtures because no free-tier source carries bars for them. **Any non-empty `notes` field is a real new failure** — investigate immediately.
 
 If `notes` lists unfamiliar tickers, run the suite locally to reproduce and read the full report:
 
@@ -513,7 +512,7 @@ WHERE source LIKE 'validation.%'
 ORDER BY timestamp DESC;
 ```
 
-Compare the failing tickers in `notes` against the documented residuals (4 delisting misses, 2 constituent misses — see master plan §6.3). If new tickers appear:
+There are no known residuals — the suite is green as of 2026-05-10. Any failing ticker in `notes` is a real new failure. If new tickers appear:
 
 1. Reproduce locally: `.venv/bin/python -m tpcore.quality.validation`.
 2. Read the failure detail.

@@ -14,23 +14,12 @@
 # Maintenance: when adding entries, prefer events ≥ 2018 (Alpaca free-tier
 # coverage) and try to keep at least one event per cause/period.
 
-# 2020 — pandemic-era bankruptcies
-- ticker: HTZGQ
-  alt_tickers: [HTZ]
-  delisting_date: 2020-10-29
-  reason: bankruptcy
-  notes: "Hertz Global Holdings — Chapter 11; later relisted as HTZ"
-
-- ticker: WLLBQ
-  alt_tickers: [WLL]
-  delisting_date: 2020-04-01
-  reason: bankruptcy
-  notes: "Whiting Petroleum — Chapter 11"
-
-- ticker: LK
-  delisting_date: 2020-06-29
-  reason: delisted
-  notes: "Luckin Coffee — NASDAQ delisted after accounting fraud"
+# NOTE: The 2020 pandemic-era bankruptcies (HTZGQ, WLLBQ, LK) and the
+# Signature Bank entry (SBNYQ) were removed from this fixture on
+# 2026-05-10 after a definitive audit confirmed neither Alpaca free tier
+# nor the Tradier export contained any bars for them. They are
+# unresolvable on free-tier data; re-add only when a paid feed with
+# delisted-symbol coverage is provisioned. See OPERATIONS.md §6.
 
 # 2023 — regional banking crisis + post-COVID retail bankruptcies
 - ticker: SIVBQ
@@ -38,11 +27,6 @@
   delisting_date: 2023-03-09
   reason: bankruptcy
   notes: "SVB Financial Group — Chapter 11 after FDIC takeover; last IEX bar 2023-03-09"
-
-- ticker: SBNYQ
-  delisting_date: 2023-03-12
-  reason: receivership
-  notes: "Signature Bank — NYDFS / FDIC takeover. SBNY ticker has been reused for an unrelated company on Alpaca's free tier (bars through 2025+); kept here as a known-missing residual."
 
 - ticker: FRC
   delisting_date: 2023-05-01
@@ -76,11 +60,6 @@
   delisting_date: 2023-12-18
   reason: acquired
   notes: "Farfetch — acquired by Coupang; deal close 2024-01-30 but last IEX bar 2023-12-18"
-
-- ticker: SI
-  delisting_date: 2023-05-10
-  reason: liquidated
-  notes: "Silvergate Capital — NYSE delisting 2023; voluntary liquidation announced 2024. SI ticker reused for an unrelated company on Alpaca's free tier (bars through 2026+); kept as known-missing residual after row-cleanup."
 
 - ticker: TUP
   delisting_date: 2024-09-17

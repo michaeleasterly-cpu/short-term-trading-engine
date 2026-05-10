@@ -370,7 +370,7 @@ These are built only after at least two engines are live.
 - Deployed on Railway as `validation-scheduler` (cron: Sunday 06:00 UTC). CLI: `python -m tpcore.quality.validation`.
 - Capital Gate hook: `tpcore.quality.validation.capital_gate.assert_passed(pool, max_age_days=7)` is consulted by every engine's `assert_can_graduate`. No engine graduates from paper to live without a fresh passing run.
 - Design spec: `docs/superpowers/specs/2026-05-10-data-validation-suite-design.md`.
-- Current state: split check **passing** after the corporate-actions pipeline fixed the AAPL adjustment. Delisting and constituent checks have **documented residuals** (4 delisting misses, 2 constituent misses) — all rooted in Alpaca free-tier coverage gaps and accepted as known limitations rather than blockers.
+- Current state: **all three checks pass** (delistings 8/8, constituent 58/58, splits 10/10). Five historic delisted tickers (HTZGQ, WLLBQ, LK, SBNYQ, SI) were removed from `delistings.yaml` and `constituents.yaml` on 2026-05-10 after a definitive audit confirmed neither Alpaca free tier nor the Tradier export carries bars for them — they are unresolvable on free-tier data. Re-add the entries when a paid delisted-feed (EODHD survivorship-free, Norgate, or Polygon w/ delisted) is provisioned.
 
 ### 6.4 Current Data Infrastructure Status
 
