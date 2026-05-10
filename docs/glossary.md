@@ -11,6 +11,7 @@ tpcore: Trading Platform Core — shared library for all engines.
 allocator: Capital allocation service (equal-risk-weighted).
 forensics: Trade analysis service (formerly Coroner).
 settlement: Annual distribution + tax reporting service (formerly Harvester).
+tax-loss harvester: An automated tax-optimisation feature inside `tpcore.tax` (`TaxLossHarvester`), distinct from the deprecated Harvester (now Settlement) service.
 pit: Point-in-time — data as it was known on a specific historical date, not retroactively adjusted.
 survivorship bias: The error introduced when backtests exclude delisted stocks.
 parity harness: System that compares paper fills to live fills.

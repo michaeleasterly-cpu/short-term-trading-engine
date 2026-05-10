@@ -16,12 +16,14 @@ For terms (engine names, score names, service names) the source of truth is `doc
 - Every model declares `model_config = ConfigDict(extra="forbid")`. Frozen iff truly immutable.
 - No `@dataclass` for inter-plug structs. Plain dataclasses are acceptable only for purely internal, never-serialized helpers.
 - Money is `decimal.Decimal`. Quantities are `int`. Never `float` for prices, sizes, or P&L.
+- **Exception:** Backtest research scripts may use `float` for prices and P&L within NumPy/pandas pipelines. Production engine code must use `Decimal`.
 
 ## Logging
 
 - **`structlog` only.** No `print()`. No `import logging` directly.
 - `logger = structlog.get_logger(__name__)` at the top of each module.
 - Event names are dotted, lowercase, namespaced by engine and plug, e.g. `sigma.exec.position_cap_hit`. All other context goes in keyword args, not the event string.
+- **Exception:** Standalone one-shot scripts under `scripts/` may use the stdlib `logging` module.
 
 ## Time
 
@@ -61,6 +63,8 @@ Forbidden direct vendor SDK imports — these are blocked by `tpcore.scripts.che
 ## Naming
 
 Engine, score, and service names must match `docs/glossary.md`. Never re-introduce deprecated names (Creeper, Swinger, Grifter, Fader, Easterly, Grift Score, Creep Score, Commander, Coroner, Harvester).
+
+The class name `TaxLossHarvester` (in `tpcore/tax/`) is allowed: "tax-loss harvesting" is industry-standard finance terminology for the feature, and is distinct from the deprecated *service* called Harvester (now Settlement). See `docs/glossary.md`.
 
 ## Docstrings
 
