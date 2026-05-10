@@ -12,14 +12,14 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict
 
 WASH_SALE_WINDOW = timedelta(days=30)
 
 
-class WashSaleVerdict(str, Enum):
+class WashSaleVerdict(StrEnum):
     NO_WASH = "no_wash"
     WASH_LOSS_DISALLOWED = "wash_loss_disallowed"
 

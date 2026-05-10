@@ -14,9 +14,10 @@ import asyncio
 import json
 import time
 import traceback
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING, Awaitable, Callable
+from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 import structlog
@@ -25,10 +26,14 @@ from tpcore.quality.data_quality import DataQualityScore, DataQualityWriter
 
 from .checks.constituent import (
     CHECK_NAME as CONSTITUENT_NAME,
+)
+from .checks.constituent import (
     check_constituent_snapshot,
 )
-from .checks.delistings import CHECK_NAME as DELISTINGS_NAME, check_delistings
-from .checks.splits import CHECK_NAME as SPLITS_NAME, check_splits
+from .checks.delistings import CHECK_NAME as DELISTINGS_NAME
+from .checks.delistings import check_delistings
+from .checks.splits import CHECK_NAME as SPLITS_NAME
+from .checks.splits import check_splits
 from .models import CheckResult, FailureDetail, SuiteResult
 from .sources.constituents import ConstituentSource, FixtureConstituentSource
 from .sources.delistings import DelistingsSource, FixtureDelistingsSource
@@ -44,7 +49,7 @@ _CheckFn = Callable[..., Awaitable[CheckResult]]
 
 
 async def run_suite(
-    pool: "asyncpg.Pool",
+    pool: asyncpg.Pool,
     *,
     delistings: DelistingsSource | None = None,
     constituents: ConstituentSource | None = None,
@@ -108,7 +113,7 @@ async def run_suite(
 
 
 async def _safe_run(
-    name: str, fn: _CheckFn, pool: "asyncpg.Pool", source
+    name: str, fn: _CheckFn, pool: asyncpg.Pool, source
 ) -> CheckResult:
     started = time.perf_counter()
     try:

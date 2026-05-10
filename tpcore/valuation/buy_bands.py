@@ -7,12 +7,12 @@ back-up-the-truck).
 from __future__ import annotations
 
 from decimal import Decimal
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict
 
 
-class BuyTier(str, Enum):
+class BuyTier(StrEnum):
     OPPORTUNISTIC = "opportunistic"  # ~ moat discount applied
     ATTRACTIVE = "attractive"  # 1.5x discount
     BACK_UP_TRUCK = "back_up_truck"  # 2x discount

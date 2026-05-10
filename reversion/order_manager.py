@@ -16,6 +16,10 @@ from decimal import Decimal
 
 import structlog
 
+from reversion.models import Direction, ExecutionDecision, PhaseAssessment
+from reversion.plugs.aar_logging import ReversionAARLogging
+from reversion.plugs.capital_gate import ReversionCapitalGate
+from reversion.plugs.lifecycle_analysis import ReversionLifecycleAnalysis
 from tpcore.aar.models import AfterActionReport
 from tpcore.aar.writer import AARWriter
 from tpcore.interfaces.broker import (
@@ -26,11 +30,6 @@ from tpcore.interfaces.broker import (
 )
 from tpcore.parity import LivePaperParityHarness
 from tpcore.risk.governor import RiskDecision, RiskGovernor
-
-from reversion.models import Direction, ExecutionDecision, PhaseAssessment
-from reversion.plugs.aar_logging import ReversionAARLogging
-from reversion.plugs.capital_gate import ReversionCapitalGate
-from reversion.plugs.lifecycle_analysis import ReversionLifecycleAnalysis
 
 logger = structlog.get_logger(__name__)
 

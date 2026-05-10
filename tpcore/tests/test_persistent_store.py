@@ -15,7 +15,6 @@ from tpcore.db import normalize_database_url
 from tpcore.risk.governor import RiskState
 from tpcore.risk.persistent_store import PostgresRiskStateStore
 
-
 # ────────────────────────────────────────────────────────────────────────────
 # Fake asyncpg pool — minimum surface the store touches
 # ────────────────────────────────────────────────────────────────────────────

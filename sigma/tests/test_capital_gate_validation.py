@@ -8,10 +8,9 @@ from typing import Any
 
 import pytest
 
+from sigma.plugs.capital_gate import GraduationStats, SigmaCapitalGate
 from tpcore.backtest.credibility import CredibilityScoreInsufficientError
 from tpcore.quality.validation.capital_gate import ValidationStaleError
-
-from sigma.plugs.capital_gate import GraduationStats, SigmaCapitalGate
 
 
 class _FakePool:

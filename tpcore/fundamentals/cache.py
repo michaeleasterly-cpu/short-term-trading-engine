@@ -81,7 +81,7 @@ class FundamentalsCache:
 
     def __init__(
         self,
-        pool: "asyncpg.Pool",
+        pool: asyncpg.Pool,
         adapter: FMPFundamentalsAdapter | None = None,
     ) -> None:
         self._pool = pool

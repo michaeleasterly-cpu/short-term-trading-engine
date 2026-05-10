@@ -56,7 +56,7 @@ class PostgresRiskStateStore(RiskStateStore):
             lifecycle — the caller (the scheduler) closes it on exit.
     """
 
-    def __init__(self, pool: "asyncpg.Pool") -> None:
+    def __init__(self, pool: asyncpg.Pool) -> None:
         self._pool = pool
 
     async def get(self, engine_id: str) -> RiskState | None:

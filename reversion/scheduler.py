@@ -12,12 +12,20 @@ from __future__ import annotations
 
 import asyncio
 import os
-from datetime import UTC, date as date_t, datetime
+from datetime import UTC, datetime
+from datetime import date as date_t
 from decimal import Decimal
 from typing import Any
 
 import structlog
 
+from reversion.models import Phase
+from reversion.order_manager import ENGINE_ID, ReversionOrderManager
+from reversion.plugs.aar_logging import ReversionAARLogging
+from reversion.plugs.capital_gate import ReversionCapitalGate
+from reversion.plugs.execution_risk import ReversionExecutionRisk
+from reversion.plugs.lifecycle_analysis import ReversionLifecycleAnalysis
+from reversion.plugs.setup_detection import ReversionSetupDetection
 from tpcore.aar.models import AfterActionReport
 from tpcore.aar.writer import AARWriter
 from tpcore.alpaca import AlpacaDataAdapter, AlpacaPaperBrokerAdapter
@@ -32,14 +40,6 @@ from tpcore.risk.governor import (
     RiskStateStore,
 )
 from tpcore.risk.persistent_store import PostgresRiskStateStore
-
-from reversion.models import Phase
-from reversion.order_manager import ENGINE_ID, ReversionOrderManager
-from reversion.plugs.aar_logging import ReversionAARLogging
-from reversion.plugs.capital_gate import ReversionCapitalGate
-from reversion.plugs.execution_risk import ReversionExecutionRisk
-from reversion.plugs.lifecycle_analysis import ReversionLifecycleAnalysis
-from reversion.plugs.setup_detection import ReversionSetupDetection
 
 logger = structlog.get_logger(__name__)
 

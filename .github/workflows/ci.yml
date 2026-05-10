@@ -1,0 +1,47 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancel in-flight runs when a newer commit arrives on the same ref —
+# avoids burning minutes on outdated commits while the operator rapid-fires
+# pushes (which has happened more than once).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: pytest + ruff + check_imports
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          # Match the runtime pin in .python-version (Railway also uses 3.11.15
+          # via its own mise install). Keeping CI on the same patch version
+          # avoids "passed CI, crashed in production" surprises.
+          python-version-file: .python-version
+          cache: pip
+
+      - name: Install package + dev deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev]
+
+      - name: Run forbidden-imports check
+        run: python -m tpcore.scripts.check_imports sigma reversion vector tpcore
+
+      - name: Run ruff
+        run: python -m ruff check sigma/ reversion/ vector/ tpcore/ scripts/
+
+      - name: Run pytest
+        run: python -m pytest -q

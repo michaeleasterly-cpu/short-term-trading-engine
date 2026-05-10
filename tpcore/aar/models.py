@@ -7,12 +7,12 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class ExitReason(str, Enum):
+class ExitReason(StrEnum):
     TAKE_PROFIT = "take_profit"
     TIER1_MID_BAND = "tier1_mid_band"
     TIER2_OPPOSITE_BAND = "tier2_opposite_band"

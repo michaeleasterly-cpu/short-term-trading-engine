@@ -18,7 +18,6 @@ from tpcore.quality.validation.suite import run_suite
 
 from .conftest import FakePool, make_bar
 
-
 # ────────────────────────────────────────────────────────────────────────────
 # Inline source stubs
 # ────────────────────────────────────────────────────────────────────────────

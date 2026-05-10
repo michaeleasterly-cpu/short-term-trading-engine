@@ -7,9 +7,6 @@ from typing import Any
 
 import pytest
 
-from tpcore.aar.models import AfterActionReport, ExitReason
-from tpcore.interfaces.data import Bar, DataProviderInterface
-
 from sigma import (
     ExecutionDecision,
     GraduationStats,
@@ -22,7 +19,8 @@ from sigma import (
     SigmaLifecycleAnalysis,
     SigmaSetupDetection,
 )
-
+from tpcore.aar.models import AfterActionReport, ExitReason
+from tpcore.interfaces.data import Bar, DataProviderInterface
 
 # ────────────────────────────────────────────────────────────────────────────
 # Fixtures: synthetic bar generators + mock provider

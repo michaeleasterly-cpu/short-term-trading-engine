@@ -8,10 +8,9 @@ from typing import Any
 
 import pytest
 
+from reversion.plugs.capital_gate import GraduationStats, ReversionCapitalGate
 from tpcore.backtest.credibility import CredibilityScoreInsufficientError
 from tpcore.quality.validation.capital_gate import ValidationStaleError
-
-from reversion.plugs.capital_gate import GraduationStats, ReversionCapitalGate
 
 
 class _FakePool:

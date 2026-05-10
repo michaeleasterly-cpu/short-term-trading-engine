@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING
 import structlog
 
 from tpcore.quality.validation.models import CheckResult, FailureDetail
-from tpcore.quality.validation.sources.splits import SplitEvent, SplitsSource
+from tpcore.quality.validation.sources.splits import SplitsSource
 
 if TYPE_CHECKING:  # pragma: no cover
     import asyncpg
@@ -36,7 +36,7 @@ RATIO_MIN = Decimal("0.85")
 RATIO_MAX = Decimal("1.15")
 
 
-async def check_splits(pool: "asyncpg.Pool", source: SplitsSource) -> CheckResult:
+async def check_splits(pool: asyncpg.Pool, source: SplitsSource) -> CheckResult:
     """Verify each fixture split has a near-1.0 close ratio across its day."""
     started = time.perf_counter()
     events = source.list_splits()

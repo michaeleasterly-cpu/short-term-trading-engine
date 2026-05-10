@@ -35,7 +35,6 @@ from tpcore.interfaces.broker import (
 )
 from tpcore.parity import LivePaperParityHarness
 from tpcore.risk.governor import RiskDecision, RiskGovernor
-
 from vector.models import ExecutionDecision, PhaseAssessment
 from vector.plugs.aar_logging import VectorAARLogging
 from vector.plugs.capital_gate import VectorCapitalGate

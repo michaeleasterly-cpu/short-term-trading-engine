@@ -11,7 +11,6 @@ import pytest
 from tpcore.aar.models import AfterActionReport, ExitReason
 from tpcore.aar.writer import AARWriter
 
-
 # ────────────────────────────────────────────────────────────────────────────
 # Fake pool (same shape as test_persistent_store.py — kept local on purpose)
 # ────────────────────────────────────────────────────────────────────────────

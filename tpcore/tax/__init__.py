@@ -1,7 +1,7 @@
 """Tax tracking — lots, wash sales, loss harvesting."""
 
-from .lot_tracker import TaxLot, TaxLotTracker
 from .loss_harvester import HarvestRecommendation, TaxLossHarvester
+from .lot_tracker import TaxLot, TaxLotTracker
 from .wash_sale import WashSaleEvent, WashSaleTracker
 
 __all__ = [

@@ -19,7 +19,7 @@ how Reversion uses the gate):
 from __future__ import annotations
 
 from decimal import Decimal
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -38,7 +38,7 @@ REV_REC_MIN_REVENUE_GROWTH = Decimal("0.02")  # 2%
 FCF_TREND_BAD_RATIO = Decimal("0.70")
 
 
-class EarningsQualityGrade(str, Enum):
+class EarningsQualityGrade(StrEnum):
     HIGH = "high"
     MEDIUM = "medium"
     LOW = "low"

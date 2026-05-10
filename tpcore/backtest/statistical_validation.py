@@ -19,11 +19,11 @@ from tpcore.quality.data_quality import DataQualityScore, DataQualityWriter
 
 from .credibility import (
     CREDIBILITY_SOURCE_PREFIX,
+    MIN_LIVE_SCORE,
     BacktestCredibilityRubric,
     CredibilityScore,
-    MIN_LIVE_SCORE,
 )
-from .monte_carlo import MCResult, SHARPE_NULL_DECISION_THRESHOLD
+from .monte_carlo import SHARPE_NULL_DECISION_THRESHOLD, MCResult
 from .sensitivity import FLATNESS_ROBUST_THRESHOLD, SensitivityResult
 from .statistical_significance import (
     deflated_sharpe_ratio,
@@ -194,7 +194,7 @@ def evaluate_rubric_from_report(
 
 
 async def write_credibility_score(
-    pool: "asyncpg.Pool",
+    pool: asyncpg.Pool,
     *,
     engine_name: str,
     score: CredibilityScore,

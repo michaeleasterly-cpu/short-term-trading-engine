@@ -19,16 +19,15 @@ import numpy as np
 import pandas as pd
 import structlog
 
-from tpcore.interfaces.data import Bar, DataProviderInterface
-from tpcore.interfaces.engine_plug import BaseEnginePlug
-from tpcore.outage import DataProviderOutage
-from tpcore.quality.data_quality import DataQualityScore
-
 from sigma.models import (
     SCORE_WEAK,
     SIGMA_TEST_UNIVERSE,
     SetupCandidate,
 )
+from tpcore.interfaces.data import Bar, DataProviderInterface
+from tpcore.interfaces.engine_plug import BaseEnginePlug
+from tpcore.outage import DataProviderOutage
+from tpcore.quality.data_quality import DataQualityScore
 
 logger = structlog.get_logger(__name__)
 

@@ -8,7 +8,7 @@ flow is exercised without DB or network. An optional integration test
 from __future__ import annotations
 
 import os
-from datetime import UTC, date, datetime
+from datetime import date
 from decimal import Decimal
 from typing import Any
 
@@ -16,7 +16,6 @@ import pytest
 
 from tpcore.fundamentals.cache import FundamentalsCache
 from tpcore.outage import DataProviderOutage
-
 
 # ────────────────────────────────────────────────────────────────────────────
 # Fake asyncpg + fake adapter

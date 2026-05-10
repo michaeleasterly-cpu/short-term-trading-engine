@@ -11,17 +11,11 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
-import numpy as np
 import pandas as pd
-import pytest
 
 from tpcore.aar.models import ExitReason
-
 from vector.models import (
-    HARD_STOP_PCT,
     MAX_CONCURRENT_POSITIONS,
-    PRE_GRAD_POSITION_CAP_USD,
-    PROFIT_TARGET_PCT,
     Phase,
     SetupCandidate,
 )
@@ -36,7 +30,6 @@ from vector.plugs.capital_gate import (
 from vector.plugs.execution_risk import VectorExecutionRisk
 from vector.plugs.lifecycle_analysis import VectorLifecycleAnalysis
 from vector.plugs.setup_detection import VectorSetupDetection
-
 
 # ────────────────────────────────────────────────────────────────────────────
 # Fixtures — synthetic bar panels

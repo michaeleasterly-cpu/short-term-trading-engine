@@ -115,7 +115,7 @@ async def fetch_daily_bars(
 
 
 async def _upsert_bars(
-    pool: "asyncpg.Pool",
+    pool: asyncpg.Pool,
     symbol: str,
     bars: list[dict],
     delisted: bool,

@@ -12,9 +12,6 @@ from typing import Any
 
 import pytest
 
-from tpcore.aar.models import AfterActionReport, ExitReason
-from tpcore.interfaces.data import Bar, DataProviderInterface
-
 from reversion import (
     Direction,
     ExecutionDecision,
@@ -28,7 +25,8 @@ from reversion import (
     ReversionSetupDetection,
     SetupCandidate,
 )
-
+from tpcore.aar.models import AfterActionReport, ExitReason
+from tpcore.interfaces.data import Bar, DataProviderInterface
 
 # ────────────────────────────────────────────────────────────────────────────
 # Synthetic bar generators

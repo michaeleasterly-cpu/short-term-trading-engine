@@ -30,9 +30,10 @@ import csv
 import logging
 import os
 import sys
+from collections.abc import Iterable
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import httpx
 
@@ -316,7 +317,7 @@ async def extract_calendars(
                 continue
             for entry in _ensure_list(body):
                 ticker = entry.get("request") or entry.get("symbol")
-                results = _ensure_list((entry.get("results") or []))
+                results = _ensure_list(entry.get("results") or [])
                 wrote_for_ticker = False
                 for r in results:
                     tables = r.get("tables") or {}

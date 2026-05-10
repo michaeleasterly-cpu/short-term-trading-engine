@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -27,7 +27,7 @@ PRE_GRAD_POSITION_CAP_USD = Decimal("1500")
 MAX_CONCURRENT_POSITIONS = 4
 
 
-class Phase(str, Enum):
+class Phase(StrEnum):
     """Lifecycle phases per plan §4.1."""
 
     SETUP = "setup"

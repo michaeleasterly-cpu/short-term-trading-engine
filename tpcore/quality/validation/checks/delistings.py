@@ -15,7 +15,6 @@ The four conditions:
 from __future__ import annotations
 
 import time
-from datetime import date
 from typing import TYPE_CHECKING
 
 import structlog
@@ -36,7 +35,7 @@ CHECK_NAME = "delistings"
 DATE_TOLERANCE_DAYS = 5
 
 
-async def check_delistings(pool: "asyncpg.Pool", source: DelistingsSource) -> CheckResult:
+async def check_delistings(pool: asyncpg.Pool, source: DelistingsSource) -> CheckResult:
     started = time.perf_counter()
     events = source.list_delistings()
     failures: list[FailureDetail] = []

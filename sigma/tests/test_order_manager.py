@@ -13,6 +13,11 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from unittest.mock import AsyncMock
 
+from sigma.models import ExecutionDecision, Phase, PhaseAssessment
+from sigma.order_manager import ENGINE_ID, SigmaOrderManager
+from sigma.plugs.aar_logging import SigmaAARLogging
+from sigma.plugs.capital_gate import SigmaCapitalGate
+from sigma.plugs.lifecycle_analysis import SigmaLifecycleAnalysis
 from tpcore.aar.models import ExitReason
 from tpcore.interfaces.broker import (
     Order,
@@ -26,13 +31,6 @@ from tpcore.risk.governor import (
     InMemoryRiskStateStore,
     RiskGovernor,
 )
-
-from sigma.models import ExecutionDecision, Phase, PhaseAssessment
-from sigma.order_manager import ENGINE_ID, SigmaOrderManager
-from sigma.plugs.aar_logging import SigmaAARLogging
-from sigma.plugs.capital_gate import SigmaCapitalGate
-from sigma.plugs.lifecycle_analysis import SigmaLifecycleAnalysis
-
 
 # ────────────────────────────────────────────────────────────────────────────
 # Fixtures / helpers

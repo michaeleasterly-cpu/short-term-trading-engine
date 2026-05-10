@@ -27,7 +27,7 @@ class AARWriter:
     already emitted the AAR via structlog by the time it calls us.
     """
 
-    def __init__(self, db_pool: "asyncpg.Pool | None" = None) -> None:
+    def __init__(self, db_pool: asyncpg.Pool | None = None) -> None:
         self._pool = db_pool
 
     async def write_aar(self, aar: AfterActionReport) -> bool:

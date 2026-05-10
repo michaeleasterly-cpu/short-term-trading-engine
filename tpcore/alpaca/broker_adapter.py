@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
@@ -283,7 +283,8 @@ class AlpacaPaperBrokerAdapter(BrokerExecutionInterface):
 
     @staticmethod
     def _order_from_payload(payload: dict, *, engine_id: str) -> Order:
-        from tpcore.interfaces.broker import OrderSide, TimeInForce as _TIF
+        from tpcore.interfaces.broker import OrderSide
+        from tpcore.interfaces.broker import TimeInForce as _TIF
 
         order_class = OrderClass(payload.get("order_class", "simple"))
         tp = payload.get("take_profit", {}) or {}
@@ -313,7 +314,11 @@ class AlpacaPaperBrokerAdapter(BrokerExecutionInterface):
         """
         from alpaca.trading.enums import (
             OrderClass as _AOC,
+        )
+        from alpaca.trading.enums import (
             OrderSide as _AOS,
+        )
+        from alpaca.trading.enums import (
             TimeInForce as _ATIF,
         )
         from alpaca.trading.requests import (

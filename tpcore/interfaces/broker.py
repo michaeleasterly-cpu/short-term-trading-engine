@@ -8,24 +8,24 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from datetime import datetime
 from decimal import Decimal
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class OrderSide(str, Enum):
+class OrderSide(StrEnum):
     BUY = "buy"
     SELL = "sell"
 
 
-class OrderType(str, Enum):
+class OrderType(StrEnum):
     MARKET = "market"
     LIMIT = "limit"
     STOP = "stop"
     STOP_LIMIT = "stop_limit"
 
 
-class TimeInForce(str, Enum):
+class TimeInForce(StrEnum):
     DAY = "day"
     GTC = "gtc"
     IOC = "ioc"
@@ -34,7 +34,7 @@ class TimeInForce(str, Enum):
     CLS = "cls"
 
 
-class OrderStatus(str, Enum):
+class OrderStatus(StrEnum):
     NEW = "new"
     PARTIALLY_FILLED = "partially_filled"
     FILLED = "filled"
@@ -43,7 +43,7 @@ class OrderStatus(str, Enum):
     EXPIRED = "expired"
 
 
-class OrderClass(str, Enum):
+class OrderClass(StrEnum):
     """Bracket vs. plain order. Mirrors Alpaca's ``order_class``.
 
     A BRACKET order carries linked take-profit and stop-loss legs that the

@@ -19,8 +19,6 @@ from decimal import ROUND_HALF_UP, Decimal
 
 import structlog
 
-from tpcore.interfaces.engine_plug import BaseEnginePlug
-
 from sigma.models import (
     HARD_STOP_PCT,
     SCORE_STRONG,
@@ -29,6 +27,7 @@ from sigma.models import (
     PhaseAssessment,
     SetupCandidate,
 )
+from tpcore.interfaces.engine_plug import BaseEnginePlug
 
 logger = structlog.get_logger(__name__)
 

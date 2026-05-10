@@ -21,8 +21,6 @@ from decimal import ROUND_DOWN, Decimal
 
 import structlog
 
-from tpcore.interfaces.engine_plug import BaseEnginePlug
-
 from reversion.models import (
     HARD_STOP_PCT,
     MAX_CONCURRENT_POSITIONS,
@@ -32,6 +30,7 @@ from reversion.models import (
     Phase,
     PhaseAssessment,
 )
+from tpcore.interfaces.engine_plug import BaseEnginePlug
 
 logger = structlog.get_logger(__name__)
 

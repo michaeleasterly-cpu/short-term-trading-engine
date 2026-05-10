@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -42,14 +42,14 @@ REVERSION_TEST_UNIVERSE: tuple[str, ...] = (
 )
 
 
-class Direction(str, Enum):
+class Direction(StrEnum):
     """Trade direction. LONG fades oversold, SHORT fades overbought."""
 
     LONG = "long"
     SHORT = "short"
 
 
-class Phase(str, Enum):
+class Phase(StrEnum):
     """Lifecycle phases per plan §4.2."""
 
     SETUP = "setup"

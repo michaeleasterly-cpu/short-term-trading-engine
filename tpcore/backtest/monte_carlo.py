@@ -25,10 +25,8 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Iterable
 
 import numpy as np
-
 
 SHARPE_NULL_DECISION_THRESHOLD = 0.90  # observed must beat this fraction of nulls
 

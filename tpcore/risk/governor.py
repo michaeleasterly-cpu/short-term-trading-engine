@@ -20,7 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
-from enum import Enum
+from enum import StrEnum
 
 import structlog
 from pydantic import BaseModel, ConfigDict, Field
@@ -31,7 +31,7 @@ from tpcore.interfaces.broker import BrokerExecutionInterface, OrderSide
 logger = structlog.get_logger(__name__)
 
 
-class RiskDecision(str, Enum):
+class RiskDecision(StrEnum):
     ALLOW = "allow"
     BLOCK = "block"
 

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict
 
@@ -26,7 +26,7 @@ DEFAULT_ANNUAL_NET_LOSS_CAP = Decimal("3000")
 REENTRY_BLOCK_DAYS = 31
 
 
-class HarvestDisposition(str, Enum):
+class HarvestDisposition(StrEnum):
     AUTO_EXECUTED = "auto_executed"
     RECOMMENDED_MANUAL = "recommended_manual"
     SKIPPED = "skipped"

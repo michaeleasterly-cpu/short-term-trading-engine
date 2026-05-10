@@ -13,7 +13,6 @@ from typing import Any
 
 import pytest
 
-
 # ────────────────────────────────────────────────────────────────────────────
 # Fake asyncpg pool
 # ────────────────────────────────────────────────────────────────────────────
@@ -34,7 +33,7 @@ class FakePool:
         self.calls: list[tuple[str, tuple]] = []
 
     # ------------------------------ context-manager plumbing
-    def acquire(self) -> "_FakeAcquireCM":
+    def acquire(self) -> _FakeAcquireCM:
         return _FakeAcquireCM(self)
 
     # ------------------------------ query routing (used by checks + writer)

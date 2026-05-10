@@ -26,12 +26,20 @@ from __future__ import annotations
 
 import asyncio
 import os
-from datetime import UTC, date as date_t, datetime
+from datetime import UTC, datetime
+from datetime import date as date_t
 from decimal import Decimal
 from typing import Any
 
 import structlog
 
+from sigma.models import Phase
+from sigma.order_manager import ENGINE_ID, SigmaOrderManager
+from sigma.plugs.aar_logging import SigmaAARLogging
+from sigma.plugs.capital_gate import SigmaCapitalGate
+from sigma.plugs.execution_risk import SigmaExecutionRisk
+from sigma.plugs.lifecycle_analysis import SigmaLifecycleAnalysis
+from sigma.plugs.setup_detection import SigmaSetupDetection
 from tpcore.aar.models import AfterActionReport
 from tpcore.aar.writer import AARWriter
 from tpcore.alpaca import AlpacaDataAdapter, AlpacaPaperBrokerAdapter
@@ -46,14 +54,6 @@ from tpcore.risk.governor import (
     RiskStateStore,
 )
 from tpcore.risk.persistent_store import PostgresRiskStateStore
-
-from sigma.models import Phase
-from sigma.order_manager import ENGINE_ID, SigmaOrderManager
-from sigma.plugs.aar_logging import SigmaAARLogging
-from sigma.plugs.capital_gate import SigmaCapitalGate
-from sigma.plugs.execution_risk import SigmaExecutionRisk
-from sigma.plugs.lifecycle_analysis import SigmaLifecycleAnalysis
-from sigma.plugs.setup_detection import SigmaSetupDetection
 
 logger = structlog.get_logger(__name__)
 

@@ -5,7 +5,6 @@ import pytest
 
 from tpcore.backtest.sensitivity import (
     ParameterPoint,
-    SensitivityResult,
     sweep_parameter,
 )
 

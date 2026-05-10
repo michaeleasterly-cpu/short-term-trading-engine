@@ -10,13 +10,11 @@ from datetime import date
 from decimal import Decimal
 
 import httpx
-import pytest
 
 from tpcore.data.ingest_corporate_actions import (
     fetch_corporate_actions,
     upsert_corporate_actions,
 )
-
 
 # ────────────────────────────────────────────────────────────────────────────
 # Mocked Alpaca responses

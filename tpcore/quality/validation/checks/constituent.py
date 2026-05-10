@@ -29,7 +29,7 @@ RECENT_TOLERANCE_DAYS = 5
 
 
 async def check_constituent_snapshot(
-    pool: "asyncpg.Pool", source: ConstituentSource
+    pool: asyncpg.Pool, source: ConstituentSource
 ) -> CheckResult:
     started = time.perf_counter()
     today = datetime.now(UTC).date()

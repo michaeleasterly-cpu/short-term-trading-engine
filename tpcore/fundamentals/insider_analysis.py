@@ -3,12 +3,12 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class InsiderTransactionType(str, Enum):
+class InsiderTransactionType(StrEnum):
     BUY = "buy"
     SELL = "sell"
     OPTION_EXERCISE = "option_exercise"
@@ -25,7 +25,7 @@ class InsiderTransaction(BaseModel):
     price: Decimal
 
 
-class InsiderSignal(str, Enum):
+class InsiderSignal(StrEnum):
     BULLISH_CLUSTER = "bullish_cluster"
     BEARISH_CLUSTER = "bearish_cluster"
     NEUTRAL = "neutral"

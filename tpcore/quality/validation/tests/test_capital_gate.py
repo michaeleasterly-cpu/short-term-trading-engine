@@ -20,7 +20,7 @@ class _DQLogFakePool:
         self.rows = rows
         self.calls: list[tuple[str, tuple]] = []
 
-    def acquire(self) -> "_AcquireCM":
+    def acquire(self) -> _AcquireCM:
         return _AcquireCM(self)
 
     async def fetch(self, sql: str, *args) -> list[dict[str, Any]]:

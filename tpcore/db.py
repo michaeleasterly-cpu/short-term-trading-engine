@@ -47,7 +47,7 @@ async def build_asyncpg_pool(
     min_size: int = 1,
     max_size: int = 4,
     timeout: float = 10.0,
-) -> "asyncpg.Pool":
+) -> asyncpg.Pool:
     """Create an ``asyncpg.Pool`` from a SQLAlchemy-style ``DATABASE_URL``.
 
     The Sigma scheduler is a one-shot cron service: a small pool is plenty

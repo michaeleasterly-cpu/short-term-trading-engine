@@ -65,8 +65,13 @@ async def _ensure_engine_row(pool, engine: str, *, equity: Decimal) -> None:
         await conn.execute(sql, engine, equity)
 
 
-async def _run_engine(engine: str, as_of: date) -> "RunSummary":  # type: ignore[name-defined]
-    """Invoke the engine's scheduler.run_once() with default config."""
+async def _run_engine(engine: str, as_of: date) -> object:
+    """Invoke the engine's scheduler.run_once() with default config.
+
+    The return type is the engine-specific RunSummary class (each engine
+    declares its own), so we type as ``object`` and duck-type the
+    ``n_candidates`` / ``n_submitted`` attrs at the call site.
+    """
     if engine == "sigma":
         from sigma.scheduler import SigmaScheduler
         return await SigmaScheduler().run_once(as_of=as_of)

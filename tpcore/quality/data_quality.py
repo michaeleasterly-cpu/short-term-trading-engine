@@ -42,7 +42,7 @@ class DataQualityWriter:
     serialize it into ``notes`` (JSON).
     """
 
-    def __init__(self, db_pool: "asyncpg.Pool | None" = None) -> None:
+    def __init__(self, db_pool: asyncpg.Pool | None = None) -> None:
         self._pool = db_pool
 
     async def write(self, score: DataQualityScore) -> bool:

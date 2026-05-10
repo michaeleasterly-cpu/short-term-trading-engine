@@ -95,7 +95,7 @@ class FMPFundamentalsAdapter:
         # Cache: (symbol, as_of_iso) → fundamentals dict.
         self._cache: dict[tuple[str, str | None], dict] = {}
 
-    async def __aenter__(self) -> "FMPFundamentalsAdapter":
+    async def __aenter__(self) -> FMPFundamentalsAdapter:
         if self._client is None:
             self._client = httpx.AsyncClient(timeout=DEFAULT_TIMEOUT_S)
         return self

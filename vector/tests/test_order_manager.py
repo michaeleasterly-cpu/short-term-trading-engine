@@ -11,7 +11,7 @@ hits Alpaca. Covers:
 """
 from __future__ import annotations
 
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from unittest.mock import AsyncMock
 
@@ -25,13 +25,11 @@ from tpcore.interfaces.broker import (
     TimeInForce,
 )
 from tpcore.risk.governor import InMemoryRiskStateStore, RiskGovernor
-
 from vector.models import ExecutionDecision, Phase, PhaseAssessment
 from vector.order_manager import ENGINE_ID, VectorOrderManager
 from vector.plugs.aar_logging import VectorAARLogging
 from vector.plugs.capital_gate import VectorCapitalGate
 from vector.plugs.lifecycle_analysis import VectorLifecycleAnalysis
-
 
 # ────────────────────────────────────────────────────────────────────────────
 # Fixtures / helpers

@@ -60,6 +60,12 @@ target-version = "py311"
 select = ["E", "F", "I", "B", "UP"]
 ignore = ["E501"]
 
+[tool.ruff.lint.per-file-ignores]
+# `l` for "low" is a natural OHLC variable name in test fixtures; the rule
+# (E741: ambiguous variable name) targets production code where one-letter
+# names hurt readability, not synthetic-bar generators.
+"**/tests/**" = ["E741"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

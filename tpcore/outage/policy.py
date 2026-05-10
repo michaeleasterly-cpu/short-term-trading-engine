@@ -11,12 +11,12 @@ Tiers, in increasing severity:
 from __future__ import annotations
 
 from datetime import timedelta
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict
 
 
-class OutageTier(str, Enum):
+class OutageTier(StrEnum):
     INFORMATIONAL = "informational"
     AVAILABILITY = "availability"
     KILL_SWITCH = "kill_switch"

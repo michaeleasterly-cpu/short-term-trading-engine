@@ -31,7 +31,6 @@ from io import StringIO
 from pathlib import Path
 from statistics import mean
 
-
 _DEFAULT_CSV = Path("backtests/reversion_trades.csv")
 _DEFAULT_REPORT = Path("backtests/reversion_diagnosis.txt")
 
@@ -137,7 +136,7 @@ class BucketStats:
     profit_factor: float
 
     @classmethod
-    def of(cls, label: str, trades: list[Trade]) -> "BucketStats":
+    def of(cls, label: str, trades: list[Trade]) -> BucketStats:
         if not trades:
             return cls(label=label, n=0, win_rate=0.0, avg_return=0.0, profit_factor=0.0)
         wins = [t.return_pct for t in trades if t.return_pct > 0]

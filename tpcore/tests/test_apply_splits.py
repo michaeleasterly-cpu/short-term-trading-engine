@@ -4,13 +4,10 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 
-import pytest
-
 from tpcore.data.apply_splits import (
     RATIO_RAW_THRESHOLD,
     apply_split,
 )
-
 
 # ────────────────────────────────────────────────────────────────────────────
 # Fake pool that holds prices_daily rows in a dict and routes SELECT / UPDATE

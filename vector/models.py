@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -37,7 +37,7 @@ SPY_DRAWDOWN_FREEZE_PCT = Decimal("0.10")  # SPY −10% in 20 days → 10-day co
 ENGINE_DRAWDOWN_FREEZE_PCT = Decimal("0.10")  # engine −10% rolling 20-day → 10-day freeze
 
 
-class Phase(str, Enum):
+class Phase(StrEnum):
     """Lifecycle phases per plan §4.3."""
 
     ENTRY = "entry"  # days 1–3 — validate the breakout / pullback

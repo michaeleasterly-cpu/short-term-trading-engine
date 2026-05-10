@@ -6,7 +6,6 @@ from decimal import Decimal
 
 from tpcore.quality.data_quality import DataQualityScore, DataQualityWriter
 
-
 # ────────────────────────────────────────────────────────────────────────────
 # Fake pool — same shape as test_aar_writer.py / test_persistent_store.py
 # ────────────────────────────────────────────────────────────────────────────

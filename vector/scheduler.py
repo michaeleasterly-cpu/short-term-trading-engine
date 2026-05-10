@@ -19,7 +19,8 @@ from __future__ import annotations
 import asyncio
 import os
 from collections import defaultdict
-from datetime import UTC, date as date_t, datetime
+from datetime import UTC, datetime
+from datetime import date as date_t
 from decimal import Decimal
 from typing import Any
 
@@ -36,7 +37,6 @@ from tpcore.outage import DataProviderOutage
 from tpcore.parity import LivePaperParityHarness
 from tpcore.risk.governor import RiskGovernor
 from tpcore.risk.persistent_store import PostgresRiskStateStore
-
 from vector.models import VECTOR_TEST_UNIVERSE, Phase
 from vector.order_manager import VectorOrderManager
 from vector.plugs.aar_logging import VectorAARLogging

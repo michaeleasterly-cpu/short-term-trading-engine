@@ -37,7 +37,7 @@ class ValidationFailedError(RuntimeError):
     """The most recent validation run had at least one failing check."""
 
 
-async def assert_passed(pool: "asyncpg.Pool", *, max_age_days: int = 7) -> None:
+async def assert_passed(pool: asyncpg.Pool, *, max_age_days: int = 7) -> None:
     """Raise if the most recent suite run isn't fresh enough or didn't fully pass."""
     rows = await _fetch_validation_rows(pool)
     if not rows:
@@ -71,7 +71,7 @@ async def assert_passed(pool: "asyncpg.Pool", *, max_age_days: int = 7) -> None:
     )
 
 
-async def _fetch_validation_rows(pool: "asyncpg.Pool") -> list[dict]:
+async def _fetch_validation_rows(pool: asyncpg.Pool) -> list[dict]:
     sql = """
         SELECT source, timestamp, stale
         FROM platform.data_quality_log
