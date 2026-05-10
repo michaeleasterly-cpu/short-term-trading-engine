@@ -110,8 +110,10 @@ class IngestionEngine:
     async def run_forever(self, *, sleep_sec: float = 60.0) -> None:
         """Loop ``tick()`` forever. Catches CancelledError for clean shutdown.
 
-        On cancellation (SIGTERM/SIGINT bubbled through asyncio), emits a
-        ``SHUTDOWN`` row to ``application_log`` before re-raising.
+        STARTUP / SHUTDOWN application_log events are owned by the entry
+        point (``ops/ingestion_engine.py``) — that's the layer that knows
+        the run's exit_code and total duration, mirroring the scheduler
+        pattern established in commit ``ff468de``.
         """
         logger.info("ingestion.engine.start", sleep_sec=sleep_sec)
         try:
@@ -133,12 +135,6 @@ class IngestionEngine:
                 await asyncio.sleep(sleep_sec)
         except asyncio.CancelledError:
             logger.info("ingestion.engine.shutdown")
-            if self._db_log is not None:
-                await self._db_log.log(
-                    "SHUTDOWN",
-                    "ingestion engine cancelled — clean shutdown",
-                    severity="INFO",
-                )
             raise
 
     # ─── Internals ───────────────────────────────────────────────────────
@@ -226,15 +222,23 @@ class IngestionEngine:
         handler = self._handlers.get(job_name)
         if handler is None:
             logger.warning("ingestion.engine.no_handler", job_name=job_name)
+            err = f"no handler registered for job_name={job_name!r}"
             next_run = next_run_after(schedule, now)
             await self._record_result(
                 job_name,
                 status="failed",
-                error=f"no handler registered for job_name={job_name!r}",
+                error=err,
                 duration_ms=0,
                 next_run=next_run,
                 now=now,
             )
+            if self._db_log is not None:
+                await self._db_log.log(
+                    "INGESTION_FAILED",
+                    f"{job_name} failed: {err}",
+                    severity="ERROR",
+                    data={"job_name": job_name, "error": err, "duration_ms": 0},
+                )
             return JobResult(
                 job_name=job_name,
                 status="skipped_no_handler",

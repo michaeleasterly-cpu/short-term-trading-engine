@@ -1,9 +1,11 @@
 """Built-in ingestion-job handlers.
 
-Each handler is an async callable ``(pool, config: dict) -> None``.
-Success is implicit; any raised exception is captured by the engine
-and recorded as ``last_error``. Handlers reuse the existing single-
-purpose modules — this file is mostly glue.
+Each handler is an async callable ``(pool, config: dict) -> int | None``.
+The return value is ``rows_ingested`` and lands in the
+``INGESTION_COMPLETE`` event payload; ``None`` means "rows" doesn't
+apply to this job (validation, e.g.). Any raised exception is captured
+by the engine and recorded as ``last_error``. Handlers reuse the
+existing single-purpose modules — this file is mostly glue.
 
 Registry: :data:`HANDLERS` maps ``job_name`` → handler. The engine
 looks up by name; jobs without a registered handler land in

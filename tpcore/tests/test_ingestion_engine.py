@@ -566,6 +566,36 @@ async def test_db_log_disabled_when_handler_not_passed() -> None:
     assert result.status == "success"
 
 
+@pytest.mark.asyncio
+async def test_db_log_emits_failed_for_skipped_no_handler() -> None:
+    """``skipped_no_handler`` writes ``last_status='failed'`` to ingestion_jobs
+    but historically didn't emit anything to application_log. The 24h ops
+    query in OPERATIONS.md needs the audit row to surface this failure mode."""
+    now = _at(2026, 5, 11, 12)
+    pool = _FakePool([
+        _FakeJob(job_name="orphan", schedule="0 3 * * SUN", next_run=now)
+    ])
+    db_log = _FakeDBLog()
+    engine = IngestionEngine(
+        pool,  # type: ignore[arg-type]
+        handlers={},  # no handler registered for 'orphan'
+        clock=_frozen_clock(now),
+        db_log=db_log,  # type: ignore[arg-type]
+    )
+
+    [result] = await engine.tick()
+    assert result.status == "skipped_no_handler"
+
+    failed = [c for c in db_log.calls if c["event_type"] == "INGESTION_FAILED"]
+    assert len(failed) == 1
+    assert failed[0]["severity"] == "ERROR"
+    assert failed[0]["data"]["job_name"] == "orphan"
+    assert "no handler registered" in failed[0]["data"]["error"]
+    # And the persisted row carries the same diagnosis.
+    assert pool.store["orphan"].last_status == "failed"
+    assert "no handler registered" in (pool.store["orphan"].last_error or "")
+
+
 # ────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ────────────────────────────────────────────────────────────────────────────

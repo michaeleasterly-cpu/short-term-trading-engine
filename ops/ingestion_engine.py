@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+import time
 import uuid
 
 import structlog
@@ -46,6 +47,8 @@ async def _amain() -> int:
     # process shares the tag so a worker incarnation is groupable in
     # platform.application_log. Restarts get a fresh run_id.
     run_id = uuid.uuid4()
+    started_at = time.monotonic()
+    exit_code = 0
 
     pool = await build_asyncpg_pool(db_url)
     db_log = DBLogHandler(pool, engine=ENGINE_NAME, run_id=run_id)
@@ -57,9 +60,14 @@ async def _amain() -> int:
         engine = IngestionEngine(pool, db_log=db_log)
         sleep_sec = float(os.getenv("INGESTION_TICK_SECONDS", "60"))
         await engine.run_forever(sleep_sec=sleep_sec)
+    except Exception:
+        exit_code = 1
+        raise
     finally:
+        duration_ms = int((time.monotonic() - started_at) * 1000)
+        await db_log.shutdown(duration_ms=duration_ms, exit_code=exit_code)
         await pool.close()
-    return 0  # pragma: no cover - run_forever only exits via cancellation
+    return 0  # pragma: no cover - run_forever only exits via cancellation/exception
 
 
 def main() -> None:  # pragma: no cover - CLI shim
