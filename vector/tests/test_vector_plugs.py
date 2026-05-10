@@ -278,10 +278,13 @@ def test_execution_payload_is_bracket() -> None:
     a = VectorLifecycleAnalysis().assess(cand)
     d = plug.decide(cand, a, account_equity=Decimal("10000"), open_positions=0)
     assert d is not None
-    assert d.order_payload["order_class"] == "bracket"
-    assert d.order_payload["side"] == "buy"
-    assert "take_profit" in d.order_payload
-    assert "stop_loss" in d.order_payload
+    assert len(d.order_payloads) == 1
+    payload = d.order_payloads[0]
+    assert payload["order_class"] == "bracket"
+    assert payload["side"] == "buy"
+    assert "take_profit" in payload
+    assert "stop_loss" in payload
+    assert payload["client_order_id"].startswith("vector_AAA_")
 
 
 # ────────────────────────────────────────────────────────────────────────────

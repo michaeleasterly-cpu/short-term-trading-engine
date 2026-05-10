@@ -120,11 +120,13 @@ class VectorExecutionRisk(BaseEnginePlug):
             Decimal("0.01")
         )
 
+        client_order_id = self._client_order_id(candidate.ticker)
         order_payload = self._bracket_order(
             ticker=candidate.ticker,
             qty=qty,
             stop_price=assessment.stop_price,
             target_price=assessment.profit_target_price,
+            client_order_id=client_order_id,
         )
         return ExecutionDecision(
             ticker=candidate.ticker,
@@ -132,7 +134,7 @@ class VectorExecutionRisk(BaseEnginePlug):
             notional_usd=actual_notional,
             risk_amount_usd=risk_amount,
             vix_size_factor=size_factor,
-            order_payload=order_payload,
+            order_payloads=[order_payload],
             constructed_at=datetime.now(UTC),
         )
 
@@ -149,15 +151,26 @@ class VectorExecutionRisk(BaseEnginePlug):
         return Decimal("1.0")
 
     @staticmethod
+    def _client_order_id(ticker: str) -> str:
+        """Stable prefix the order manager keys assessments + AARs by.
+
+        Format: ``vector_{TICKER}_{epoch}``. The epoch ensures uniqueness
+        across same-day re-entries (rare but possible on volatile names).
+        """
+        return f"vector_{ticker}_{int(datetime.now(UTC).timestamp())}"
+
+    @staticmethod
     def _bracket_order(
         *,
         ticker: str,
         qty: int,
         stop_price: Decimal,
         target_price: Decimal,
+        client_order_id: str,
     ) -> dict:
-        """Alpaca bracket-order payload — same shape Sigma's order manager submits."""
+        """Alpaca bracket-order payload — entry + TP + SL in one shot."""
         return {
+            "client_order_id": client_order_id,
             "symbol": ticker,
             "qty": qty,
             "side": "buy",

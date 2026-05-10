@@ -28,6 +28,7 @@ from tpcore.interfaces.broker import (
     OrderSide,
     OrderStatus,
 )
+from tpcore.parity import LivePaperParityHarness
 from tpcore.risk.governor import RiskDecision, RiskGovernor
 
 from sigma.models import ExecutionDecision, PhaseAssessment
@@ -80,6 +81,7 @@ class SigmaOrderManager:
         lifecycle: SigmaLifecycleAnalysis,
         aar: SigmaAARLogging,
         aar_writer: AARWriter | None = None,
+        parity_harness: LivePaperParityHarness | None = None,
     ) -> None:
         self._broker = broker
         self._governor = governor
@@ -87,6 +89,7 @@ class SigmaOrderManager:
         self._lifecycle = lifecycle
         self._aar = aar
         self._aar_writer = aar_writer
+        self._parity = parity_harness
         # ticker → PhaseAssessment for every trade we've placed this process.
         # The broker is the source of truth for orders; this is a side cache
         # so we can carry assessment context (entry, stop, mid/upper) into the
@@ -156,6 +159,20 @@ class SigmaOrderManager:
             tier2_qty=decision.tier2_qty,
             notional=str(decision.notional_usd),
         )
+
+        # Parity harness — non-blocking. Tier 1 (the bracket entry) is the
+        # informative leg; we don't pair the Tier 2 limit since it doesn't
+        # fire until much later.
+        if self._parity is not None and placed:
+            try:
+                await self._parity.submit_pair(placed[0])
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning(
+                    "sigma.order_manager.parity_harness_failed",
+                    client_order_id=placed[0].client_order_id,
+                    error=str(exc),
+                )
+
         return placed
 
     async def reconcile(

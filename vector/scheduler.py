@@ -27,13 +27,19 @@ import httpx
 import pandas as pd
 import structlog
 
+from tpcore.aar.writer import AARWriter
 from tpcore.alpaca import AlpacaPaperBrokerAdapter
 from tpcore.db import build_asyncpg_pool
 from tpcore.fmp import FMPFundamentalsAdapter
 from tpcore.fundamentals.cache import FundamentalsCache
 from tpcore.outage import DataProviderOutage
+from tpcore.parity import LivePaperParityHarness
+from tpcore.risk.governor import RiskGovernor
+from tpcore.risk.persistent_store import PostgresRiskStateStore
 
 from vector.models import VECTOR_TEST_UNIVERSE, Phase
+from vector.order_manager import VectorOrderManager
+from vector.plugs.aar_logging import VectorAARLogging
 from vector.plugs.capital_gate import VectorCapitalGate
 from vector.plugs.execution_risk import VectorExecutionRisk
 from vector.plugs.lifecycle_analysis import VectorLifecycleAnalysis
@@ -155,6 +161,31 @@ class VectorScheduler:
         pool = await build_asyncpg_pool(self._database_url)
         broker = self._injected_broker or AlpacaPaperBrokerAdapter()
         try:
+            # Wire risk governor + AAR writer + (optional) parity harness.
+            governor = RiskGovernor(
+                state_store=PostgresRiskStateStore(pool),
+                broker=broker,
+                platform_capital=self._engine_equity,
+            )
+            await governor.register_engine(ENGINE_ID, self._engine_equity)
+            aar_writer = AARWriter(pool)
+            parity = self._build_parity_harness(pool, paper_broker=broker)
+
+            order_manager = VectorOrderManager(
+                broker=broker,
+                governor=governor,
+                capital_gate=VectorCapitalGate(engine_equity=self._engine_equity),
+                lifecycle=VectorLifecycleAnalysis(),
+                aar=VectorAARLogging(),
+                aar_writer=aar_writer,
+                parity_harness=parity,
+            )
+
+            # Reconcile any open trades first so the position counter is fresh.
+            new_aars = await order_manager.reconcile(
+                sizing_pct_of_engine_equity=Decimal("0.20"),
+            )
+
             tickers = VECTOR_TEST_UNIVERSE + (SPY_SYMBOL,)
             bars = await _load_bars(pool, tickers, as_of)
             spy_panel = bars.pop(SPY_SYMBOL, None)
@@ -163,7 +194,6 @@ class VectorScheduler:
             setup = VectorSetupDetection()
             lifecycle = VectorLifecycleAnalysis()
             execution = VectorExecutionRisk()
-            gate = VectorCapitalGate(engine_equity=self._engine_equity)
 
             candidates = setup.scan(
                 as_of=as_of,
@@ -180,35 +210,49 @@ class VectorScheduler:
                 assessment = lifecycle.assess(cand)
                 if assessment.phase is not Phase.ENTRY:
                     continue
+                state = await governor._store.get(ENGINE_ID)  # noqa: SLF001
+                open_positions = state.open_positions if state else 0
                 decision = execution.decide(
                     cand,
                     assessment,
                     account_equity=account.equity,
-                    open_positions=0,  # MVP — multi-position tracking deferred
+                    open_positions=open_positions,
                 )
                 if decision is None:
                     continue
-                if not gate.check_trade(
-                    size=decision.notional_usd,
-                    engine_pnl=Decimal("0"),  # MVP — engine-pnl tracking deferred
-                    open_positions=0,
-                ):
-                    continue
-                logger.info(
-                    "vector.scheduler.would_submit",
-                    ticker=decision.ticker,
-                    qty=decision.qty,
-                    notional=str(decision.notional_usd),
-                )
-                # MVP: log the order rather than fire it. Live submission is a
-                # one-line swap to ``await broker.submit_order(decision.order_payload)``
-                # once we wire reconciliation. The Healthchecks ping below
-                # only signals "the scan ran cleanly".
-                submitted += 1
+                placed = await order_manager.submit_decision(decision, assessment)
+                if placed:
+                    submitted += 1
 
+            logger.info(
+                "vector.scheduler.run_done",
+                as_of=str(as_of),
+                n_candidates=len(candidates),
+                submitted=submitted,
+                new_aars=len(new_aars),
+            )
             return RunSummary(as_of=as_of, n_candidates=len(candidates), n_submitted=submitted)
         finally:
             await pool.close()
+
+    @staticmethod
+    def _build_parity_harness(pool, *, paper_broker) -> LivePaperParityHarness | None:
+        """Return a harness only when ``ENABLE_PARITY_HARNESS=true`` *and* live creds are present.
+
+        Live credentials live in ``ALPACA_LIVE_KEY`` / ``ALPACA_LIVE_SECRET``;
+        if either is missing we return None and skip parity for this run.
+        """
+        if os.getenv("ENABLE_PARITY_HARNESS", "false").lower() != "true":
+            return None
+        live_key = os.getenv("ALPACA_LIVE_KEY")
+        live_secret = os.getenv("ALPACA_LIVE_SECRET")
+        if not live_key or not live_secret:
+            logger.info("vector.scheduler.parity_disabled_no_live_creds")
+            return None
+        live_broker = AlpacaPaperBrokerAdapter(
+            api_key=live_key, api_secret=live_secret, paper=False
+        )
+        return LivePaperParityHarness(paper_broker, live_broker, pool)
 
 
 async def _amain() -> int:

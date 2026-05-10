@@ -124,10 +124,13 @@ class ExecutionDecision(BaseModel):
     """Output of ExecutionRisk — Alpaca paper bracket order + sizing facts.
 
     Vector uses a single bracket per position: market entry at next open,
-    take-profit limit at +15%, stop-loss at −7%. The trailing-stop logic is
-    handled in code (LifecycleAnalysis re-evaluates each session) rather
-    than via a server-side trailing order, because the trail arms only
-    after +10% and Alpaca's bracket doesn't natively support that delay.
+    take-profit limit at +15%, stop-loss at −7%. ``order_payloads`` is a
+    one-element list (matching Sigma/Reversion's shape so
+    ``AlpacaPaperBrokerAdapter.submit_execution_decision`` works as-is);
+    the single payload includes ``client_order_id`` for the order manager
+    to track. The trailing-stop logic is handled by LifecycleAnalysis
+    re-evaluating each session — the bracket's stop-loss is the static
+    −7% floor.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -139,5 +142,7 @@ class ExecutionDecision(BaseModel):
     vix_size_factor: Decimal = Field(
         description="Multiplier applied to base size: 1.0 (low VIX), 0.5 (VIX>25), 0.25 (VIX>30)."
     )
-    order_payload: dict
+    order_payloads: list[dict] = Field(
+        description="Single-element list containing the bracket payload (entry + TP + SL).",
+    )
     constructed_at: datetime

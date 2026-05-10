@@ -24,6 +24,7 @@ from tpcore.interfaces.broker import (
     OrderSide,
     OrderStatus,
 )
+from tpcore.parity import LivePaperParityHarness
 from tpcore.risk.governor import RiskDecision, RiskGovernor
 
 from reversion.models import Direction, ExecutionDecision, PhaseAssessment
@@ -64,6 +65,7 @@ class ReversionOrderManager:
         lifecycle: ReversionLifecycleAnalysis,
         aar: ReversionAARLogging,
         aar_writer: AARWriter | None = None,
+        parity_harness: LivePaperParityHarness | None = None,
     ) -> None:
         self._broker = broker
         self._governor = governor
@@ -71,6 +73,7 @@ class ReversionOrderManager:
         self._lifecycle = lifecycle
         self._aar = aar
         self._aar_writer = aar_writer
+        self._parity = parity_harness
         self._trade_assessments: dict[str, PhaseAssessment] = {}
         self._tier1_logged: set[str] = set()
         self._tier2_logged: set[str] = set()
@@ -133,6 +136,18 @@ class ReversionOrderManager:
             tier2_qty=decision.tier2_qty,
             notional=str(decision.notional_usd),
         )
+
+        # Parity harness — non-blocking, mirrors Sigma + Vector.
+        if self._parity is not None and placed:
+            try:
+                await self._parity.submit_pair(placed[0])
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning(
+                    "reversion.order_manager.parity_harness_failed",
+                    client_order_id=placed[0].client_order_id,
+                    error=str(exc),
+                )
+
         return placed
 
     async def reconcile(
