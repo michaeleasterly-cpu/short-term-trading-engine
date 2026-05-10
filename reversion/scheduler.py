@@ -148,12 +148,6 @@ class ReversionScheduler:
                 platform_capital=self._platform_capital,
             )
             await governor.register_engine(ENGINE_ID, self._engine_equity)
-            logger.info(
-                "reversion.scheduler.run_start",
-                as_of=as_of.isoformat(),
-                allow_shorts=self._allow_shorts,
-                persistent=pool is not None,
-            )
 
             # Kill-switch short-circuit: refuse to scan or submit when frozen.
             current_state = await risk_store.get(ENGINE_ID)
@@ -165,7 +159,16 @@ class ReversionScheduler:
                 )
                 return RunSummary(as_of=as_of, n_candidates=0, n_submitted=0, aars=[])
 
-            setup = ReversionSetupDetection(data=data)
+            universe = tuple(await data.get_universe_symbols())
+            logger.info(
+                "reversion.scheduler.run_start",
+                as_of=as_of.isoformat(),
+                allow_shorts=self._allow_shorts,
+                persistent=pool is not None,
+                universe_size=len(universe),
+            )
+
+            setup = ReversionSetupDetection(data=data, universe=universe)
             lifecycle = ReversionLifecycleAnalysis()
             execution = ReversionExecutionRisk()
             rev_aar = ReversionAARLogging()

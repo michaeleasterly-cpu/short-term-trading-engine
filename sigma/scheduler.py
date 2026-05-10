@@ -172,7 +172,6 @@ class SigmaScheduler:
                 platform_capital=self._platform_capital,
             )
             await governor.register_engine(ENGINE_ID, self._engine_equity)
-            logger.info("sigma.scheduler.run_start", as_of=as_of.isoformat(), persistent=pool is not None)
 
             # Kill-switch short-circuit: refuse to scan or submit when the
             # engine is frozen. The platform-wide check_trade() inside the
@@ -187,6 +186,14 @@ class SigmaScheduler:
                 )
                 return RunSummary(as_of=as_of, n_candidates=0, n_submitted=0, aars=[])
 
+            universe = tuple(await data.get_universe_symbols())
+            logger.info(
+                "sigma.scheduler.run_start",
+                as_of=as_of.isoformat(),
+                persistent=pool is not None,
+                universe_size=len(universe),
+            )
+
             # Optional fundamentals cache for informational data-quality
             # attachment. Only enabled when a DB pool is open AND FMP_API_KEY
             # is set — otherwise candidates simply lack the optional field.
@@ -194,7 +201,7 @@ class SigmaScheduler:
                 self._build_fundamentals_provider(pool)
             )
 
-            setup = SigmaSetupDetection(data=data, fundamentals=fundamentals_provider)
+            setup = SigmaSetupDetection(data=data, universe=universe, fundamentals=fundamentals_provider)
             lifecycle = SigmaLifecycleAnalysis()
             execution = SigmaExecutionRisk()
             sigma_aar = SigmaAARLogging()

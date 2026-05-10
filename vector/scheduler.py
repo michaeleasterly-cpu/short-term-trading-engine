@@ -32,6 +32,7 @@ import structlog
 
 from tpcore.aar.writer import AARWriter
 from tpcore.alpaca import AlpacaPaperBrokerAdapter
+from tpcore.data.postgres_data_adapter import PostgresDataAdapter
 from tpcore.db import build_asyncpg_pool
 from tpcore.fmp import FMPFundamentalsAdapter
 from tpcore.fundamentals.cache import FundamentalsCache
@@ -40,7 +41,7 @@ from tpcore.outage import DataProviderOutage
 from tpcore.parity import LivePaperParityHarness
 from tpcore.risk.governor import RiskGovernor
 from tpcore.risk.persistent_store import PostgresRiskStateStore
-from vector.models import VECTOR_TEST_UNIVERSE, Phase
+from vector.models import Phase
 from vector.order_manager import VectorOrderManager
 from vector.plugs.aar_logging import VectorAARLogging
 from vector.plugs.capital_gate import VectorCapitalGate
@@ -224,12 +225,19 @@ class VectorScheduler:
                 )
 
             scan_started = time.monotonic()
-            tickers = VECTOR_TEST_UNIVERSE + (SPY_SYMBOL,)
+            data = PostgresDataAdapter(pool)
+            universe = tuple(await data.get_universe_symbols())
+            logger.info(
+                "vector.scheduler.universe_loaded",
+                as_of=str(as_of),
+                universe_size=len(universe),
+            )
+            tickers = universe + (SPY_SYMBOL,)
             bars = await _load_bars(pool, tickers, as_of)
             spy_panel = bars.pop(SPY_SYMBOL, None)
-            fundamentals = await _load_fundamentals(pool, VECTOR_TEST_UNIVERSE, as_of)
+            fundamentals = await _load_fundamentals(pool, universe, as_of)
 
-            setup = VectorSetupDetection()
+            setup = VectorSetupDetection(universe=universe)
             lifecycle = VectorLifecycleAnalysis()
             execution = VectorExecutionRisk()
 
