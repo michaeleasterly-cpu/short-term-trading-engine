@@ -289,6 +289,12 @@ flowchart TB
         Live["Live Endpoint\n(future)"]
     end
 
+    subgraph Analysis["Analysis & Improvement"]
+        Forensics["Forensics Service\n(analyzes AARs)"]
+        SprintDossier["Sprint Dossier\n(failure patterns)"]
+        EngineRefine["Engine Refinement\n(strategy updates)"]
+    end
+
     Alpaca --> DailyBars
     Alpaca --> CorpActions
     FMP --> FundCache
@@ -336,6 +342,13 @@ flowchart TB
     Vector --> Paper
     Paper --> Quality
     Live --> Quality
+
+    AAR --> Forensics
+    Forensics --> SprintDossier
+    SprintDossier --> EngineRefine
+    EngineRefine --> Sigma
+    EngineRefine --> Reversion
+    EngineRefine --> Vector
 ```
 
 ### 3.2 Ingestion Flow Detail
@@ -368,6 +381,24 @@ flowchart TB
 - **Data Loading:** Reads `platform.prices_daily`, `platform.fundamentals_quarterly`, `platform.catalyst_events`, `platform.corporate_actions` directly. No external APIs.
 - **Trade Simulation:** Identical engine logic. Fills simulated at next open. Transaction cost model: 0.05% slippage per side.
 - **Output:** Per-trade CSV → `backtests/<engine>_trades.csv`. Overfitting report → `backtests/<engine>_overfitting_report.json`. Credibility score → `platform.data_quality_log`.
+
+### 3.5 AAR Feedback Loop
+
+**Purpose:** The platform learns from every trade. AARs are not just a record—they are the input to the engine improvement cycle.
+
+1. **AAR Generation:** On every Tier 1 and Tier 2 fill, the engine's AAR Logging Plug constructs an `AfterActionReport` and writes it to `platform.aar_events` via `tpcore.aar.AARWriter`.
+2. **Forensics Analysis:** The Forensics service (master plan §5, deferred) monitors `platform.aar_events` across all engines. It triggers on:
+   - **Drawdown Trigger:** Engine's 20-day cumulative P&L ≤ −10%.
+   - **Loss Cluster Trigger:** Three consecutive losing trades.
+   - **Extreme Loss Trigger:** A single trade loses more than 2× the engine's average loss.
+3. **Sprint Dossier:** When a trigger fires, Forensics compiles a dossier containing the affected trades, market context at entry, rule-compliance checks, and a plain-language summary. The dossier is written to `platform.forensics_triggers` and flagged for review.
+4. **Engine Refinement:** The development team (or Wizard) reviews the dossier, identifies the root cause, and applies a patch:
+   - Parameter adjustment (e.g., tightening Z-score threshold).
+   - Gate modification (e.g., adding a new filter).
+   - Strategy redesign if the edge has decayed.
+5. **Re-validation:** After changes, the engine's backtest is re-run and the overfitting diagnostics are updated. The engine resumes paper trading with the revised settings.
+
+**Current state:** Forensics is specified but not yet built. AARs are being collected for future analysis. The feedback loop is the core of the platform's long-term edge: it systematically converts losses into strategy improvements.
 
 ## 4. AI Implementation Rules
 
