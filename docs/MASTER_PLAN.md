@@ -214,6 +214,7 @@ Swing Score: Technical (0–40), Catalyst (0–35), Sentiment (0–25). Threshol
 **Setup Detection:**
 - Layer 0: Short interest > 20% (FINRA, release-date matched), days-to-cover > 5, borrow rate acceleration.
 - Layer 1: Social volume spike (ApeWisdom).
+- Layer 1.5 (deferred wiring): options-derived signals — IV skew, put/call ratio, gamma-weighted strike concentration. Source data already on disk: `platform.tradier_options_chains` (122,668 contracts across 51 tickers, snapshot 2026-05-10 from the Tradier production API right before that brokerage account closed). Top-15 liquid names will drive the live signal; the rest are reference. **No live S2 consumption yet — data is parked.**
 - Squeeze Score ≥ 50 (pre-chat), ≥ 60 (social alert).
 
 **Data Limitations:**
