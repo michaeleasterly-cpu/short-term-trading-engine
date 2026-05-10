@@ -347,11 +347,14 @@ These are built only after at least two engines are live.
 | --- | --- | --- |
 | Alpaca (IEX free) | Daily bars, quotes, execution, delisted stock data | $0 (real-time upgrade gated on `ExecutionQualityScore` evidence — see §6.5) |
 | FMP **Starter** ($22/mo, active) | Fundamentals, insider, earnings | $22 (Premium $59/mo deferred — see §6.5) |
+| Railway **Hobby** ($5/mo, active) | Cron schedulers (5 services: sigma, reversion, vector, validation, corporate-actions) | $5 |
 | SEC EDGAR | Point-in-time filings, fundamentals backup | $0 |
 | ApeWisdom | Social sentiment | $0 |
 | FRED | Macro indicators | $0 |
 | FINRA / NASDAQ | Short interest (release-date matched) | $0 |
 | IBorrowDesk | Borrow rates (scraped, fragile) | $0 |
+
+**Total fixed monthly cost: $27** (FMP Starter $22 + Railway Hobby $5).
 
 ### 6.2 Historical / Backtesting Database (Self-Built)
 
@@ -385,7 +388,7 @@ Verified row counts and coverage (as of the most recent ingest run):
 | `platform.aar_events` | 0 | Schema + writer implemented; populated by live paper trades once they fire. |
 | `platform.risk_state` | 1 | Postgres-backed Risk Governor persistence active. |
 
-All sources free-tier or FMP Starter ($22/month). No `yfinance`. The Tradier brokerage account is closed; the options-chain and pre-2020 bar export was completed before closure.
+All sources free-tier or FMP Starter ($22/month). Hosting on Railway Hobby ($5/month). Total fixed monthly cost: **$27** (see §6.1). No `yfinance`. The Tradier brokerage account is closed; the options-chain and pre-2020 bar export was completed before closure.
 
 ### 6.5 Data Upgrade ROI Gates
 
