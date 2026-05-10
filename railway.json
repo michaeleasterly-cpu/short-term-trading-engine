@@ -3,39 +3,39 @@
   "_comment": "MANDATORY: after editing this file, run `python ops/apply_railway_service_config.py --all` BEFORE the next push. Service-instance fields (deploy.<service>.{startCommand, cronSchedule, restartPolicyType, source.repo, watchPatterns}) live on Railway's service-instance config and are only updated via the GraphQL serviceInstanceUpdate mutation. Without the apply, push triggers a rebuild but the new container still runs with the OLD startCommand/cron/etc — you get a build-vs-runtime config drift that's painful to diagnose (build log shows the new buildCommand; runtime crashes anyway because startCommand wasn't propagated). The only field Railway actually reads from this file at build time is `build.buildCommand`. See docs/OPERATIONS.md §1 'Build layout' and the project memory entry feedback_apply_after_railway_json.md.",
   "build": {
     "builder": "RAILPACK",
-    "buildCommand": "python -m venv /app/.venv && /app/.venv/bin/pip install -e ."
+    "buildCommand": "pip install -e ."
   },
   "deploy": {
     "sigma-scheduler": {
-      "startCommand": "/app/.venv/bin/python sigma/scheduler.py",
+      "startCommand": "python sigma/scheduler.py",
       "cronSchedule": "0 22 * * MON-FRI",
       "restartPolicyType": "NEVER",
       "source": {"repo": "michaeleasterly-cpu/short-term-trading-engine"},
       "watchPatterns": ["**/*.py", "**/*.yaml", "pyproject.toml", "railway.json", "railpack.toml", ".python-version"]
     },
     "reversion-scheduler": {
-      "startCommand": "/app/.venv/bin/python reversion/scheduler.py",
+      "startCommand": "python reversion/scheduler.py",
       "cronSchedule": "0 22 * * MON-FRI",
       "restartPolicyType": "NEVER",
       "source": {"repo": "michaeleasterly-cpu/short-term-trading-engine"},
       "watchPatterns": ["**/*.py", "**/*.yaml", "pyproject.toml", "railway.json", "railpack.toml", ".python-version"]
     },
     "validation-scheduler": {
-      "startCommand": "/app/.venv/bin/python ops/cron_validation.py",
+      "startCommand": "python ops/cron_validation.py",
       "cronSchedule": "0 6 * * SUN",
       "restartPolicyType": "NEVER",
       "source": {"repo": "michaeleasterly-cpu/short-term-trading-engine"},
       "watchPatterns": ["**/*.py", "**/*.yaml", "pyproject.toml", "railway.json", "railpack.toml", ".python-version"]
     },
     "corporate-actions-scheduler": {
-      "startCommand": "/app/.venv/bin/python ops/cron_corporate_actions.py",
+      "startCommand": "python ops/cron_corporate_actions.py",
       "cronSchedule": "0 4 * * SUN",
       "restartPolicyType": "NEVER",
       "source": {"repo": "michaeleasterly-cpu/short-term-trading-engine"},
       "watchPatterns": ["**/*.py", "**/*.yaml", "pyproject.toml", "railway.json", "railpack.toml", ".python-version"]
     },
     "vector-scheduler": {
-      "startCommand": "/app/.venv/bin/python vector/scheduler.py",
+      "startCommand": "python vector/scheduler.py",
       "cronSchedule": "0 22 * * MON-FRI",
       "restartPolicyType": "NEVER",
       "source": {"repo": "michaeleasterly-cpu/short-term-trading-engine"},
