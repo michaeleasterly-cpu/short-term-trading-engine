@@ -10,6 +10,8 @@
 
 **Time discipline:** All timestamps are UTC. Cron schedules in `railway.json` are UTC. Don't translate to local time when reading logs — compare in UTC.
 
+**Push discipline (avoid mid-cron deploys):** A push to `main` that touches files matching a service's `watchPatterns` rebuilds that service. The five Railway services have `watchPatterns = ["**/*.py", "**/*.yaml", "pyproject.toml", "railway.json"]`, so doc-only edits (`docs/`, `*.md`, `backtests/*.json`) do *not* trigger rebuilds. For changes that *do* match the patterns: avoid pushing during the cron firing windows so a redeploy can't kill an in-flight job. Cron windows: weekdays 22:00–22:10 UTC (engines), Sun 04:00–04:30 UTC (corp-actions), Sun 06:00–06:30 UTC (validation). For programmatic Railway operations like `railway variable set`, always pass `--skip-deploys`.
+
 **Database access:** The local `.env` exposes two URLs (a known gotcha — see the project memory entry). Use `DATABASE_URL_IPV4` (Supabase pooler) for local CLI work; Railway uses the IPv6 direct URL via `DATABASE_URL`. Never copy one into the other.
 
 ```bash
@@ -362,12 +364,12 @@ Railway
 [ ] validation-scheduler:      (Sundays only) last execution reviewed
 [ ] corporate-actions-scheduler: (Sundays only) last execution exit 0
 
-Healthchecks
-[ ] sigma-engine:        UP, last ping within 25h
-[ ] reversion-engine:    UP, last ping within 25h
-[ ] vector-engine:       UP, last ping within 25h
-[ ] validation-suite:    UP, last ping within 7d
-[ ] corporate-actions:   UP, last ping within 7d
+Healthchecks (names match the dashboard at https://healthchecks.io/checks/)
+[ ] short-term-engine-sigma:                          UP, last ping within 25h
+[ ] short-term-engine-reversion:                      UP, last ping within 25h
+[ ] short-term-engine-vector:                         UP, last ping within 25h
+[ ] short-term-engine-validation-suite:               UP, last ping within 7d
+[ ] short-term-engine-corporate-actions-ingestion:    UP, last ping within 7d
 
 Database
 [ ] Postgres reachable (SELECT 1 succeeds)

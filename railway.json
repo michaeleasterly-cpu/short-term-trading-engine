@@ -1,6 +1,6 @@
 {
   "$schema": "https://railway.com/railway.schema.json",
-  "_comment": "This file is INTERNAL DOCUMENTATION + the source of truth for ops/apply_railway_service_config.py. Railway itself reads `build.buildCommand` on every build, but it does NOT support per-service nested deploy blocks (the schema is flat). cronSchedule, restartPolicyType, and source.repo all live at the service-instance level and have to be applied via the GraphQL API. Run `python ops/apply_railway_service_config.py --all` after any change to this file.",
+  "_comment": "This file is INTERNAL DOCUMENTATION + the source of truth for ops/apply_railway_service_config.py. Railway itself reads `build.buildCommand` on every build, but it does NOT support per-service nested deploy blocks (the schema is flat). cronSchedule, restartPolicyType, source.repo, and watchPatterns all live at the service-instance level and have to be applied via the GraphQL API. Run `python ops/apply_railway_service_config.py --all` after any change to this file.",
   "build": {
     "builder": "RAILPACK",
     "buildCommand": "pip install -e ."
@@ -10,31 +10,36 @@
       "startCommand": "python sigma/scheduler.py",
       "cronSchedule": "0 22 * * MON-FRI",
       "restartPolicyType": "NEVER",
-      "source": {"repo": "michaeleasterly-cpu/short-term-trading-engine"}
+      "source": {"repo": "michaeleasterly-cpu/short-term-trading-engine"},
+      "watchPatterns": ["**/*.py", "**/*.yaml", "pyproject.toml", "railway.json"]
     },
     "reversion-scheduler": {
       "startCommand": "python reversion/scheduler.py",
       "cronSchedule": "0 22 * * MON-FRI",
       "restartPolicyType": "NEVER",
-      "source": {"repo": "michaeleasterly-cpu/short-term-trading-engine"}
+      "source": {"repo": "michaeleasterly-cpu/short-term-trading-engine"},
+      "watchPatterns": ["**/*.py", "**/*.yaml", "pyproject.toml", "railway.json"]
     },
     "validation-scheduler": {
       "startCommand": "python ops/cron_validation.py",
       "cronSchedule": "0 6 * * SUN",
       "restartPolicyType": "NEVER",
-      "source": {"repo": "michaeleasterly-cpu/short-term-trading-engine"}
+      "source": {"repo": "michaeleasterly-cpu/short-term-trading-engine"},
+      "watchPatterns": ["**/*.py", "**/*.yaml", "pyproject.toml", "railway.json"]
     },
     "corporate-actions-scheduler": {
       "startCommand": "python ops/cron_corporate_actions.py",
       "cronSchedule": "0 4 * * SUN",
       "restartPolicyType": "NEVER",
-      "source": {"repo": "michaeleasterly-cpu/short-term-trading-engine"}
+      "source": {"repo": "michaeleasterly-cpu/short-term-trading-engine"},
+      "watchPatterns": ["**/*.py", "**/*.yaml", "pyproject.toml", "railway.json"]
     },
     "vector-scheduler": {
       "startCommand": "python vector/scheduler.py",
       "cronSchedule": "0 22 * * MON-FRI",
       "restartPolicyType": "NEVER",
-      "source": {"repo": "michaeleasterly-cpu/short-term-trading-engine"}
+      "source": {"repo": "michaeleasterly-cpu/short-term-trading-engine"},
+      "watchPatterns": ["**/*.py", "**/*.yaml", "pyproject.toml", "railway.json"]
     }
   }
 }

@@ -127,6 +127,16 @@ def _input_from_block(block: dict) -> dict:
     src = block.get("source")
     if src and src.get("repo"):
         payload["source"] = {"repo": src["repo"]}
+    # watchPatterns: glob patterns that gate rebuilds on push. Without this,
+    # every push to the linked branch rebuilds the service even if no runtime
+    # code changed (docs, markdown, JSON outputs). Joined with "\n" because
+    # Railway's serviceInstanceUpdate accepts watchPatterns as a single
+    # newline-separated string, not a JSON array.
+    patterns = block.get("watchPatterns")
+    if patterns:
+        if not isinstance(patterns, list):
+            sys.exit("watchPatterns must be a list of glob strings")
+        payload["watchPatterns"] = "\n".join(patterns)
     return payload
 
 
