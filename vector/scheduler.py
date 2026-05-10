@@ -154,9 +154,18 @@ class VectorScheduler:
 
     async def run_once(self, *, as_of: date_t | None = None) -> RunSummary:
         as_of = as_of or datetime.now(UTC).date()
+        # Daily bars come from platform.prices_daily — there is no live-API
+        # fallback. Without DATABASE_URL the engine cannot honor backtest
+        # parity; refuse to run rather than silently no-op.
         if not self._database_url:
-            logger.warning("vector.scheduler.no_database_url")
-            return RunSummary(as_of=as_of, n_candidates=0, n_submitted=0)
+            logger.critical(
+                "vector.scheduler.no_database_pool",
+                message=(
+                    "No database pool available. Refusing to run without "
+                    "source-of-truth data."
+                ),
+            )
+            raise SystemExit(1)
 
         pool = await build_asyncpg_pool(self._database_url)
         broker = self._injected_broker or AlpacaPaperBrokerAdapter()

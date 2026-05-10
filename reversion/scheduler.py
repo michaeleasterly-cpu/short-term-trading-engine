@@ -28,10 +28,12 @@ from reversion.plugs.lifecycle_analysis import ReversionLifecycleAnalysis
 from reversion.plugs.setup_detection import ReversionSetupDetection
 from tpcore.aar.models import AfterActionReport
 from tpcore.aar.writer import AARWriter
-from tpcore.alpaca import AlpacaDataAdapter, AlpacaPaperBrokerAdapter
+from tpcore.alpaca import AlpacaPaperBrokerAdapter
+from tpcore.data.postgres_data_adapter import PostgresDataAdapter
 from tpcore.db import build_asyncpg_pool
 from tpcore.fmp import FMPFundamentalsAdapter
 from tpcore.fundamentals.cache import FundamentalsCache
+from tpcore.interfaces.data import DataProviderInterface
 from tpcore.outage import DataProviderOutage
 from tpcore.parity import LivePaperParityHarness
 from tpcore.risk.governor import (
@@ -76,7 +78,7 @@ class ReversionScheduler:
         allow_shorts: bool = False,
         database_url: str | None = None,
         broker: AlpacaPaperBrokerAdapter | None = None,
-        data: AlpacaDataAdapter | None = None,
+        data: DataProviderInterface | None = None,
         risk_store: RiskStateStore | None = None,
         aar_writer: AARWriter | None = None,
         fundamentals: FMPFundamentalsAdapter | None = None,
@@ -99,9 +101,25 @@ class ReversionScheduler:
                 if self._database_url:
                     pool = await build_asyncpg_pool(self._database_url)
                     logger.info("reversion.scheduler.pool_open")
+            # Daily bars must come from platform.prices_daily — no live-API
+            # fallback. Mirrors sigma.scheduler. Build pool here if it wasn't
+            # already built for risk/aar.
+            if self._injected_data is None and pool is None:
+                if self._database_url:
+                    pool = await build_asyncpg_pool(self._database_url)
+                    logger.info("reversion.scheduler.pool_open_for_data")
+                else:
+                    logger.critical(
+                        "reversion.scheduler.no_database_pool",
+                        message=(
+                            "No database pool available. Refusing to run "
+                            "without source-of-truth data."
+                        ),
+                    )
+                    raise SystemExit(1)
 
             broker = self._injected_broker or AlpacaPaperBrokerAdapter()
-            data = self._injected_data or AlpacaDataAdapter()
+            data = self._injected_data or PostgresDataAdapter(pool)
             risk_store = self._injected_risk_store or (
                 PostgresRiskStateStore(pool) if pool is not None else InMemoryRiskStateStore()
             )
