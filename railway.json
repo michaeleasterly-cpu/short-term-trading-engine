@@ -3,39 +3,39 @@
   "_comment": "This file is INTERNAL DOCUMENTATION + the source of truth for ops/apply_railway_service_config.py. Railway itself reads `build.buildCommand` on every build, but it does NOT support per-service nested deploy blocks (the schema is flat). cronSchedule, restartPolicyType, source.repo, and watchPatterns all live at the service-instance level and have to be applied via the GraphQL API. Run `python ops/apply_railway_service_config.py --all` after any change to this file.",
   "build": {
     "builder": "RAILPACK",
-    "buildCommand": "pip install -e ."
+    "buildCommand": "python -m venv /app/.venv && /app/.venv/bin/pip install -e ."
   },
   "deploy": {
     "sigma-scheduler": {
-      "startCommand": "python sigma/scheduler.py",
+      "startCommand": "/app/.venv/bin/python sigma/scheduler.py",
       "cronSchedule": "0 22 * * MON-FRI",
       "restartPolicyType": "NEVER",
       "source": {"repo": "michaeleasterly-cpu/short-term-trading-engine"},
       "watchPatterns": ["**/*.py", "**/*.yaml", "pyproject.toml", "railway.json", ".python-version"]
     },
     "reversion-scheduler": {
-      "startCommand": "python reversion/scheduler.py",
+      "startCommand": "/app/.venv/bin/python reversion/scheduler.py",
       "cronSchedule": "0 22 * * MON-FRI",
       "restartPolicyType": "NEVER",
       "source": {"repo": "michaeleasterly-cpu/short-term-trading-engine"},
       "watchPatterns": ["**/*.py", "**/*.yaml", "pyproject.toml", "railway.json", ".python-version"]
     },
     "validation-scheduler": {
-      "startCommand": "python ops/cron_validation.py",
+      "startCommand": "/app/.venv/bin/python ops/cron_validation.py",
       "cronSchedule": "0 6 * * SUN",
       "restartPolicyType": "NEVER",
       "source": {"repo": "michaeleasterly-cpu/short-term-trading-engine"},
       "watchPatterns": ["**/*.py", "**/*.yaml", "pyproject.toml", "railway.json", ".python-version"]
     },
     "corporate-actions-scheduler": {
-      "startCommand": "python ops/cron_corporate_actions.py",
+      "startCommand": "/app/.venv/bin/python ops/cron_corporate_actions.py",
       "cronSchedule": "0 4 * * SUN",
       "restartPolicyType": "NEVER",
       "source": {"repo": "michaeleasterly-cpu/short-term-trading-engine"},
       "watchPatterns": ["**/*.py", "**/*.yaml", "pyproject.toml", "railway.json", ".python-version"]
     },
     "vector-scheduler": {
-      "startCommand": "python vector/scheduler.py",
+      "startCommand": "/app/.venv/bin/python vector/scheduler.py",
       "cronSchedule": "0 22 * * MON-FRI",
       "restartPolicyType": "NEVER",
       "source": {"repo": "michaeleasterly-cpu/short-term-trading-engine"},
