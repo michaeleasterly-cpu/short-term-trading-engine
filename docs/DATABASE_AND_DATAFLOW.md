@@ -400,6 +400,67 @@ flowchart TB
 
 **Current state:** Forensics is specified but not yet built. AARs are being collected for future analysis. The feedback loop is the core of the platform's long-term edge: it systematically converts losses into strategy improvements.
 
+### 3.6 Process Flow — Daily Trading Cycle
+
+```mermaid
+flowchart TD
+    subgraph Daily["Daily Cycle (Mon-Fri)"]
+        StartDaily["Start: 21:30 UTC"] --> BarIngest["Daily Bar Ingest\n(Alpaca → prices_daily)"]
+        BarIngest --> Screener["Universe Pre-Screener\n(filter candidates per engine)"]
+        Screener --> SigmaScan["Sigma Scan\n(22:00 UTC)"]
+        Screener --> ReversionScan["Reversion Scan\n(22:00 UTC)"]
+        Screener --> VectorScan["Vector Scan\n(22:00 UTC)"]
+        SigmaScan --> SigmaSignal{"Signal?"}
+        ReversionScan --> ReversionSignal{"Signal?"}
+        VectorScan --> VectorSignal{"Signal?"}
+        SigmaSignal -- yes --> SigmaOrder["Submit Paper Order\n(bracket)"]
+        SigmaSignal -- no --> SigmaLog["Log: no setup"]
+        ReversionSignal -- yes --> ReversionOrder["Submit Paper Order\n(bracket)"]
+        ReversionSignal -- no --> ReversionLog["Log: no setup"]
+        VectorSignal -- yes --> VectorOrder["Submit Paper Order\n(bracket)"]
+        VectorSignal -- no --> VectorLog["Log: no setup"]
+        SigmaOrder --> FillCheck["Order Reconciliation\n(check fills)"]
+        ReversionOrder --> FillCheck
+        VectorOrder --> FillCheck
+        FillCheck --> AAR["Write AAR → platform.aar_events"]
+        AAR --> RiskUpdate["Update Risk State\n(P&L, kill switch)"]
+        RiskUpdate --> Healthcheck["Ping Healthchecks.io"]
+        Healthcheck --> EndDaily["End: ~22:05 UTC"]
+    end
+
+    subgraph Weekly["Weekly Cycle (Sunday)"]
+        StartWeekly["Start: Sun 03:00 UTC"] --> FundRefresh["Fundamentals Cache Refresh\n(FMP → fundamentals_quarterly)"]
+        FundRefresh --> CorpActions["Corporate Actions\n(Alpaca → apply splits)"]
+        CorpActions --> ValidationSuite["Data Validation Suite\n(check prices_daily)"]
+        ValidationSuite --> WeeklyHealthcheck["Ping Healthchecks"]
+        WeeklyHealthcheck --> EndWeekly["End: ~06:30 UTC"]
+    end
+
+    subgraph Feedback["AAR Feedback Loop (Live)"]
+        AARdata["platform.aar_events"] --> Diagnostic["Overfitting Diagnostic\n(on-demand, backtest)"]
+        Diagnostic --> Gate["Graduation Gate\n(credibility ≥ 60?)"]
+        Gate -- no --> Improve["Engine Refinement\n(parameter tuning, filters)"]
+        Improve --> Backtest["Re-run Backtest"]
+        Backtest --> Diagnostic
+        Gate -- yes --> Promote["Promote to Live Capital\n(future)"]
+    end
+
+    subgraph Legend["Legend"]
+        Live["Solid = Live"]
+        Planned["Dashed = Planned"]
+    end
+
+    Daily -.-> Weekly
+    AAR -.-> Feedback
+
+    classDef plannedNode stroke-dasharray: 5 5
+    class BarIngest,Screener,Promote,Planned plannedNode
+```
+
+- **Daily Cycle:** Bar ingestion at 21:30 UTC, Universe Pre-Screener at 21:30 UTC, engine scans at 22:00 UTC. Signals generate orders; fills are reconciled and logged. Healthchecks ping confirms successful completion.
+- **Weekly Cycle:** Fundamentals cache refresh (Sun 03:00), corporate actions ingest + split application (Sun 04:00), Data Validation Suite (Sun 06:00).
+- **AAR Feedback Loop:** Every fill writes an AAR. The overfitting diagnostic module (live) gates graduation at credibility ≥ 60/100. Failures drive engine refinement and backtest re-runs. The Forensics service and Sprint Dossier generation (planned, master plan §5) will further consume AAR data for automated failure analysis.
+
 ## 4. AI Implementation Rules
 
 This section is binding for all AI coding sessions. Violating any rule is a hard failure.
