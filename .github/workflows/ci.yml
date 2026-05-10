@@ -26,10 +26,12 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          # Match the runtime pin in .python-version (Railway also uses 3.11.15
-          # via its own mise install). Keeping CI on the same patch version
-          # avoids "passed CI, crashed in production" surprises.
-          python-version-file: .python-version
+          # CI runs on the latest Python 3.11.x — pyproject.toml's
+          # requires-python = ">=3.11" is the contract. Local .venv is also
+          # 3.11.15. Railway/Railpack picks its own version (mise default);
+          # we don't over-constrain so the runtime image's Python install
+          # path remains whatever Railpack expects to preserve at runtime.
+          python-version: "3.11"
           cache: pip
 
       - name: Install package + dev deps
