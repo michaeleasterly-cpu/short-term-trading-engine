@@ -30,6 +30,7 @@ htmlcov/
 *.sqlite3
 data/raw/
 data/cache/
+data/tradier_export/
 logs/
 backtests/
 
