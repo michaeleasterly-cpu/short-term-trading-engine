@@ -63,7 +63,11 @@ The Short-Term Trading Engine is a personal, fully automated, multi-strategy tra
 ### 2.5 Backtest Integrity (`tpcore.backtest`)
 
 - Provider-agnostic harness.
-- `BacktestCredibilityRubric` (0–100) — lookahead, survivorship, PIT fundamentals, regime coverage, out-of-sample.
+- `BacktestCredibilityRubric` (0–100) — lookahead, survivorship, PIT fundamentals, regime coverage, out-of-sample, plus the four overfitting-detection categories below.
+- **Overfitting detection suite** — automatically run by each engine's backtest script as a "Statistical Validation" section after the comparison table:
+    - `Sensitivity sweeps` — parameter perturbation across ±25%, surface flatness scoring (`tpcore/backtest/sensitivity.py`).
+    - `Monte Carlo sequence stress tests` — block-bootstrapped trade-sequence shuffling, null distribution of Sharpe, probability of ruin (`tpcore/backtest/monte_carlo.py`).
+    - `PSR / DSR / MinBTL` (López de Prado) — Probabilistic Sharpe Ratio, Deflated Sharpe Ratio, Minimum Backtest Length (`tpcore/backtest/statistical_significance.py`).
 - Score < 60 → engine cannot trade live.
 - Transaction cost model: 0.05% slippage per side for liquid stocks, configurable.
 
@@ -343,6 +347,7 @@ These are built only after at least two engines are live.
 | Phase 2 | Reversion engine | Complete — deployed on Railway alongside Sigma, Healthchecks active |
 | Phase 3 | Allocator + Forensics (basic) | Deferred — waiting on paper track record from Sigma + Reversion |
 | Phase 4–7 | Vector, S2, Catalyst, Sentinel | Deferred |
+| Cross-cutting | Overfitting detection suite | Complete — Sigma and Reversion backtests now include sensitivity sweeps, Monte Carlo stress tests, and PSR/DSR/MinBTL |
 
 ---
 
