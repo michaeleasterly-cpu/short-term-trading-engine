@@ -28,6 +28,7 @@ dependencies = [
     "alpaca-py>=0.30",
     "PyYAML>=6.0",
     "scipy>=1.11",
+    "croniter>=2.0",
 ]
 
 [project.optional-dependencies]

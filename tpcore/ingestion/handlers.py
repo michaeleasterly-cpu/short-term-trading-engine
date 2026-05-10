@@ -1,0 +1,235 @@
+"""Built-in ingestion-job handlers.
+
+Each handler is an async callable ``(pool, config: dict) -> None``.
+Success is implicit; any raised exception is captured by the engine
+and recorded as ``last_error``. Handlers reuse the existing single-
+purpose modules — this file is mostly glue.
+
+Registry: :data:`HANDLERS` maps ``job_name`` → handler. The engine
+looks up by name; jobs without a registered handler land in
+``last_status = 'failed'`` with a clear error.
+"""
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
+
+import structlog
+
+if TYPE_CHECKING:  # pragma: no cover
+    import asyncpg
+
+logger = structlog.get_logger(__name__)
+
+HandlerFn = Callable[["asyncpg.Pool", dict[str, Any]], Awaitable[None]]
+
+
+async def handle_data_validation(pool: "asyncpg.Pool", config: dict[str, Any]) -> None:
+    """Run the Data Validation Suite. Raises if the suite fails."""
+    from tpcore.quality.validation.suite import run_suite
+
+    result = await run_suite(pool)
+    if not result.passed:
+        # The suite already wrote per-check rows to platform.data_quality_log;
+        # the exception is so the engine records last_status='failed'.
+        raise RuntimeError(f"validation suite failed: {result}")
+
+
+async def handle_fundamentals_refresh(
+    pool: "asyncpg.Pool", config: dict[str, Any]
+) -> None:
+    """Refresh FMP fundamentals for the active universe.
+
+    ``config`` is currently unused — the cache reads the active universe
+    from ``platform.prices_daily`` directly. Kept as the seed payload's
+    ``{"universe": "active"}`` documents intent and leaves room for a
+    future "ticker list override" knob without a schema change.
+    """
+    from tpcore.fmp import FMPFundamentalsAdapter
+    from tpcore.fundamentals.cache import FundamentalsCache
+
+    async with FMPFundamentalsAdapter() as adapter:
+        cache = FundamentalsCache(pool, adapter=adapter)
+        rows, no_data, failures = await cache.backfill_all()
+    logger.info(
+        "ingestion.handler.fundamentals_done",
+        rows=rows,
+        no_data=len(no_data),
+        failures=len(failures),
+    )
+    if failures:
+        # ETF skips (no_data) are expected and silent. Real FMP outages
+        # bubble up so the engine records the run as failed.
+        raise RuntimeError(
+            f"fundamentals_refresh: {len(failures)} real failure(s); "
+            f"first={failures[0][0]}: {failures[0][1]}"
+        )
+
+
+async def handle_corporate_actions(
+    pool: "asyncpg.Pool", config: dict[str, Any]
+) -> None:
+    """Pull Alpaca corporate actions for the backtest universe and
+    re-apply splits to ``platform.prices_daily``.
+
+    This mirrors ``ops/cron_corporate_actions.py`` step-for-step but
+    operates inside the engine's lifecycle (the engine owns the pool).
+    """
+    import httpx
+
+    from tpcore.data.apply_splits import apply_all_splits
+    from tpcore.data.ingest_alpaca_bars import _alpaca_headers
+    from tpcore.data.ingest_corporate_actions import (
+        DEFAULT_TYPES,
+        fetch_corporate_actions,
+        upsert_corporate_actions,
+    )
+
+    # 50-name backtest universe — kept in sync with
+    # ``ops/cron_corporate_actions.py:UNIVERSE``.
+    universe: tuple[str, ...] = (
+        "SPY", "QQQ", "IWM",
+        "AAPL", "MSFT", "AMZN", "GOOGL", "META", "TSLA", "NVDA",
+        "JPM", "V", "WMT", "DIS", "NFLX", "BA", "CAT", "GE", "GM", "F",
+        "XOM", "CVX", "PFE", "JNJ", "MRK", "ABBV", "PG", "KO", "PEP",
+        "MCD", "SBUX", "HD", "LOW", "TGT", "COST",
+        "LMT", "RTX", "NOC", "GD",
+        "SO", "DUK", "NEE",
+        "PLTR", "UBER", "ABNB", "SNAP", "RBLX", "RIVN", "LCID", "FSLR",
+    )
+    chunk_size = 20
+    today = datetime.now(UTC).date()
+    ingest_start = config.get("ingest_start", "2018-01-01")
+    if isinstance(ingest_start, str):
+        from datetime import date as date_t
+
+        ingest_start = date_t.fromisoformat(ingest_start)
+
+    headers = _alpaca_headers()
+    total_actions = 0
+    async with httpx.AsyncClient(
+        headers=headers,
+        base_url="https://data.alpaca.markets",
+        timeout=60.0,
+    ) as client:
+        for i in range(0, len(universe), chunk_size):
+            chunk = list(universe[i : i + chunk_size])
+            actions = await fetch_corporate_actions(
+                client,
+                symbols=chunk,
+                start=ingest_start,
+                end=today,
+                types=list(DEFAULT_TYPES),
+            )
+            if actions:
+                await upsert_corporate_actions(pool, actions)
+            total_actions += len(actions)
+
+    split_summary = await apply_all_splits(pool, only_tickers=list(universe))
+    logger.info(
+        "ingestion.handler.corporate_actions_done",
+        actions_ingested=total_actions,
+        splits_applied=len(split_summary["applied"]),
+        splits_skipped=len(split_summary["skipped"]),
+    )
+
+
+async def handle_daily_bars(pool: "asyncpg.Pool", config: dict[str, Any]) -> None:
+    """Incremental daily-bar refresh for the active universe.
+
+    Pulls the last ``lookback_days`` (default 7) of bars from Alpaca for
+    every ticker that has a recent bar in ``platform.prices_daily`` and
+    is not flagged delisted. The 7-day window is overlap insurance —
+    Alpaca's IEX free tier occasionally restates a bar a day or two
+    later.
+
+    ``config`` keys:
+        * ``universe``: ``"active"`` (default) reads from prices_daily;
+          a list of tickers overrides explicitly.
+        * ``lookback_days``: int, default 7.
+    """
+    import asyncio
+
+    import httpx
+
+    from tpcore.data.ingest_alpaca_bars import (
+        _RATE_LIMIT_SLEEP_SEC,
+        _alpaca_headers,
+        _upsert_bars,
+        fetch_daily_bars,
+    )
+
+    lookback_days = int(config.get("lookback_days", 7))
+    universe_cfg = config.get("universe", "active")
+    if universe_cfg == "active":
+        sql = """
+            SELECT DISTINCT ticker
+            FROM platform.prices_daily
+            WHERE date >= CURRENT_DATE - INTERVAL '90 days'
+              AND delisted = false
+            ORDER BY ticker
+        """
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(sql)
+        symbols = [r["ticker"] for r in rows]
+    elif isinstance(universe_cfg, list):
+        symbols = [str(s).upper() for s in universe_cfg]
+    else:
+        raise ValueError(
+            f"daily_bars: unsupported universe config {universe_cfg!r} — "
+            "expected 'active' or a list of tickers"
+        )
+
+    today = datetime.now(UTC).date()
+    from datetime import timedelta
+
+    start = today - timedelta(days=lookback_days)
+
+    headers = _alpaca_headers()
+    total_rows = 0
+    failures: list[str] = []
+    async with httpx.AsyncClient(
+        headers=headers,
+        base_url="https://data.alpaca.markets",
+        timeout=30.0,
+    ) as client:
+        for symbol in symbols:
+            try:
+                bars = await fetch_daily_bars(client, symbol, start, today)
+            except httpx.HTTPStatusError as exc:
+                failures.append(f"{symbol}({exc.response.status_code})")
+                await asyncio.sleep(_RATE_LIMIT_SLEEP_SEC)
+                continue
+            if bars:
+                inserted = await _upsert_bars(pool, symbol, bars, delisted=False)
+                total_rows += inserted
+            await asyncio.sleep(_RATE_LIMIT_SLEEP_SEC)
+
+    logger.info(
+        "ingestion.handler.daily_bars_done",
+        symbols=len(symbols),
+        rows_upserted=total_rows,
+        failures=len(failures),
+    )
+    if failures:
+        raise RuntimeError(
+            f"daily_bars: {len(failures)} symbol fetch failure(s); first: {failures[0]}"
+        )
+
+
+HANDLERS: dict[str, HandlerFn] = {
+    "data_validation": handle_data_validation,
+    "fundamentals_refresh": handle_fundamentals_refresh,
+    "corporate_actions": handle_corporate_actions,
+    "daily_bars": handle_daily_bars,
+}
+
+
+__all__ = [
+    "HANDLERS",
+    "HandlerFn",
+    "handle_data_validation",
+    "handle_fundamentals_refresh",
+    "handle_corporate_actions",
+    "handle_daily_bars",
+]
