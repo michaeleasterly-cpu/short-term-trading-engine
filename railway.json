@@ -11,35 +11,35 @@
       "cronSchedule": "0 22 * * MON-FRI",
       "restartPolicyType": "NEVER",
       "source": {"repo": "michaeleasterly-cpu/short-term-trading-engine"},
-      "watchPatterns": ["**/*.py", "**/*.yaml", "pyproject.toml", "railway.json", ".python-version"]
+      "watchPatterns": ["**/*.py", "**/*.yaml", "pyproject.toml", "railway.json", "railpack.toml", ".python-version"]
     },
     "reversion-scheduler": {
       "startCommand": "/app/.venv/bin/python reversion/scheduler.py",
       "cronSchedule": "0 22 * * MON-FRI",
       "restartPolicyType": "NEVER",
       "source": {"repo": "michaeleasterly-cpu/short-term-trading-engine"},
-      "watchPatterns": ["**/*.py", "**/*.yaml", "pyproject.toml", "railway.json", ".python-version"]
+      "watchPatterns": ["**/*.py", "**/*.yaml", "pyproject.toml", "railway.json", "railpack.toml", ".python-version"]
     },
     "validation-scheduler": {
       "startCommand": "/app/.venv/bin/python ops/cron_validation.py",
       "cronSchedule": "0 6 * * SUN",
       "restartPolicyType": "NEVER",
       "source": {"repo": "michaeleasterly-cpu/short-term-trading-engine"},
-      "watchPatterns": ["**/*.py", "**/*.yaml", "pyproject.toml", "railway.json", ".python-version"]
+      "watchPatterns": ["**/*.py", "**/*.yaml", "pyproject.toml", "railway.json", "railpack.toml", ".python-version"]
     },
     "corporate-actions-scheduler": {
       "startCommand": "/app/.venv/bin/python ops/cron_corporate_actions.py",
       "cronSchedule": "0 4 * * SUN",
       "restartPolicyType": "NEVER",
       "source": {"repo": "michaeleasterly-cpu/short-term-trading-engine"},
-      "watchPatterns": ["**/*.py", "**/*.yaml", "pyproject.toml", "railway.json", ".python-version"]
+      "watchPatterns": ["**/*.py", "**/*.yaml", "pyproject.toml", "railway.json", "railpack.toml", ".python-version"]
     },
     "vector-scheduler": {
       "startCommand": "/app/.venv/bin/python vector/scheduler.py",
       "cronSchedule": "0 22 * * MON-FRI",
       "restartPolicyType": "NEVER",
       "source": {"repo": "michaeleasterly-cpu/short-term-trading-engine"},
-      "watchPatterns": ["**/*.py", "**/*.yaml", "pyproject.toml", "railway.json", ".python-version"]
+      "watchPatterns": ["**/*.py", "**/*.yaml", "pyproject.toml", "railway.json", "railpack.toml", ".python-version"]
     }
   }
 }

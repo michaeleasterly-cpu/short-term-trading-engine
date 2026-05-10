@@ -1,0 +1,26 @@
+# Railpack build/runtime configuration.
+#
+# Why this file exists: by default Railpack uses a multi-stage Docker build
+# where the runtime image only copies specific paths from the builder
+# (typically /app, /mise/installs, and a few mise paths). When `pip install`
+# runs in the builder stage outside of /app, the installed deps land
+# somewhere the runtime image doesn't copy — they appear in the build log
+# (`Successfully installed httpx-0.28.1 ...`) but vanish at runtime
+# (`ModuleNotFoundError: No module named 'httpx'`).
+#
+# This file fixes that by:
+#   1. Pinning the install_command to create a venv at /app/.venv (which
+#      IS under /app, so it survives the build → runtime copy).
+#   2. Explicitly listing /app/.venv in [runtime] paths so Railpack
+#      preserves it in the final image.
+#
+# Each service's startCommand on Railway invokes /app/.venv/bin/python
+# directly (set via ops/apply_railway_service_config.py from railway.json's
+# deploy.<service>.startCommand). See OPERATIONS.md §1 for the full
+# build-layout context.
+
+[build]
+install_command = "python -m venv /app/.venv && /app/.venv/bin/pip install -e ."
+
+[runtime]
+paths = ["/app/.venv"]
