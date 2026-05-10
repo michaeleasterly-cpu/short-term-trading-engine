@@ -20,20 +20,6 @@
       "source": {"repo": "michaeleasterly-cpu/short-term-trading-engine"},
       "watchPatterns": ["**/*.py", "**/*.yaml", "pyproject.toml", "railway.json", "railpack.toml", ".python-version"]
     },
-    "validation-scheduler": {
-      "startCommand": "python ops/cron_validation.py",
-      "cronSchedule": "0 6 * * SUN",
-      "restartPolicyType": "NEVER",
-      "source": {"repo": "michaeleasterly-cpu/short-term-trading-engine"},
-      "watchPatterns": ["**/*.py", "**/*.yaml", "pyproject.toml", "railway.json", "railpack.toml", ".python-version"]
-    },
-    "corporate-actions-scheduler": {
-      "startCommand": "python ops/cron_corporate_actions.py",
-      "cronSchedule": "0 4 * * SUN",
-      "restartPolicyType": "NEVER",
-      "source": {"repo": "michaeleasterly-cpu/short-term-trading-engine"},
-      "watchPatterns": ["**/*.py", "**/*.yaml", "pyproject.toml", "railway.json", "railpack.toml", ".python-version"]
-    },
     "vector-scheduler": {
       "startCommand": "python vector/scheduler.py",
       "cronSchedule": "0 22 * * MON-FRI",
@@ -41,10 +27,9 @@
       "source": {"repo": "michaeleasterly-cpu/short-term-trading-engine"},
       "watchPatterns": ["**/*.py", "**/*.yaml", "pyproject.toml", "railway.json", "railpack.toml", ".python-version"]
     },
-    "fundamentals-refresh-scheduler": {
-      "startCommand": "python ops/cron_fundamentals_refresh.py",
-      "cronSchedule": "0 3 * * SUN",
-      "restartPolicyType": "NEVER",
+    "ingestion-engine": {
+      "startCommand": "python ops/ingestion_engine.py",
+      "restartPolicyType": "ALWAYS",
       "source": {"repo": "michaeleasterly-cpu/short-term-trading-engine"},
       "watchPatterns": ["**/*.py", "**/*.yaml", "pyproject.toml", "railway.json", "railpack.toml", ".python-version"]
     }

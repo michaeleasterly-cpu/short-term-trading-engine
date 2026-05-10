@@ -117,9 +117,20 @@ def _input_from_block(block: dict) -> dict:
     cron = block.get("cronSchedule")
     restart = block.get("restartPolicyType")
     start_cmd = block.get("startCommand")
-    if cron is None or restart is None:
-        sys.exit("each deploy block must include cronSchedule + restartPolicyType")
-    payload: dict = {"cronSchedule": cron, "restartPolicyType": restart}
+    if restart is None:
+        sys.exit("each deploy block must include restartPolicyType")
+    if restart == "NEVER" and cron is None:
+        sys.exit(
+            "cron services (restartPolicyType=NEVER) require cronSchedule; "
+            "without it Railway will run the service once on deploy and never again"
+        )
+    if restart == "ALWAYS" and cron is not None:
+        sys.exit(
+            "persistent workers (restartPolicyType=ALWAYS) must NOT have cronSchedule"
+        )
+    payload: dict = {"restartPolicyType": restart}
+    if cron is not None:
+        payload["cronSchedule"] = cron
     if start_cmd:
         # serviceInstanceUpdate accepts startCommand on the service-instance,
         # which is what causes Railway to actually run the named entrypoint.
