@@ -27,6 +27,7 @@ dependencies = [
     "pandas>=2.2",
     "alpaca-py>=0.30",
     "PyYAML>=6.0",
+    "scipy>=1.11",
 ]
 
 [project.optional-dependencies]

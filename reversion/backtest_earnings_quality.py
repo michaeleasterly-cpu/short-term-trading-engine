@@ -972,7 +972,74 @@ async def amain(args: argparse.Namespace) -> int:
                     ]
                 )
         print(f"rejected-by-quality → {rejected_path}  rows={len(rejected)}")
+
+    # ── Statistical Validation ─────────────────────────────────────────────
+    # Winner: combined-filter (z≥3, EQ=HIGH). Sweep z_threshold and filter_mode
+    # around it; MC + PSR/DSR/MinBTL on the winner's trades.
+    if not args.skip_statistical_validation and combined_trades:
+        _print_statistical_validation_reversion(
+            panels=panels,
+            spy_panel=spy_panel,
+            fundamentals=fundamentals,
+            start=args.start,
+            end=args.end,
+            winner_summary=summaries[2],
+            winner_trades=combined_trades,
+        )
+
     return 0
+
+
+def _print_statistical_validation_reversion(
+    *,
+    panels,
+    spy_panel,
+    fundamentals,
+    start: date,
+    end: date,
+    winner_summary,
+    winner_trades,
+) -> None:
+    """Sweep z_threshold and filter_mode; run MC + PSR/DSR/MinBTL on the winner."""
+    from tpcore.backtest.sensitivity import sweep_parameter
+    from tpcore.backtest.statistical_validation import build_report, render
+
+    z_values = [2.0, 2.5, 3.0, 3.5]
+    filter_modes = ["none", "not_low", "high_only"]
+    n_trials = len(z_values) + len(filter_modes)
+
+    def _run_with(*, z: float | None = None, mode: str | None = None) -> dict:
+        trades, _ = _run_variant(
+            variant="sweep",
+            panels=panels,
+            spy_panel=spy_panel,
+            fundamentals=fundamentals,
+            start=start,
+            end=end,
+            z_threshold=z if z is not None else 3.0,
+            filter_mode=mode if mode is not None else "high_only",
+        )
+        s = _compute_summary("sweep", trades)
+        return {
+            "profit_factor": s.profit_factor if math.isfinite(s.profit_factor) else 1e6,
+            "sharpe": s.sharpe_annualized,
+            "win_rate": s.win_rate,
+            "max_drawdown": s.max_drawdown_pct,
+        }
+
+    z_sweep = sweep_parameter(lambda v: _run_with(z=v), "z_threshold", z_values)
+    mode_sweep = sweep_parameter(lambda v: _run_with(mode=v), "filter_mode", filter_modes)
+
+    returns = [t.return_pct for t in winner_trades]
+    backtest_periods = (end - start).days * 252 // 365  # approximate trading days
+    report = build_report(
+        returns,
+        sweeps=[z_sweep, mode_sweep],
+        sharpe_annualized=winner_summary.sharpe_annualized,
+        backtest_periods=backtest_periods,
+        n_trials=n_trials,
+    )
+    print(render(report, title="Reversion — Statistical Validation"))
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -985,6 +1052,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--rejected-file", default=DEFAULT_REJECTED_FILE)
     p.add_argument("--trades-file", default=DEFAULT_TRADES_FILE)
     p.add_argument("--skip-rejected-csv", action="store_true")
+    p.add_argument(
+        "--skip-statistical-validation",
+        action="store_true",
+        help="Skip the Statistical Validation section (saves ~30s of compute).",
+    )
     return p.parse_args(argv)
 
 

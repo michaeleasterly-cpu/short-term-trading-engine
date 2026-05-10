@@ -333,14 +333,20 @@ def run_variant(
     end: date,
     require_chop: bool,
     spy_chop_series: pd.Series | None = None,
+    chop_threshold: float = CHOP_SIDEWAYS_WEAK,
+    max_adx: float = MAX_ADX,
 ) -> tuple[list[TradeRecord], list[RejectedRow]]:
     """Walk every trading day; pick top-1 candidate; simulate forward.
 
     Args:
-        require_chop: per-stock CHOP > 38.2 required to qualify a candidate.
-        spy_chop_series: when provided, days where SPY CHOP < 38.2 produce
+        require_chop: per-stock CHOP > ``chop_threshold`` required to qualify a candidate.
+        spy_chop_series: when provided, days where SPY CHOP < ``chop_threshold`` produce
             zero candidates regardless of per-stock state — replicates the
             shipped Sigma Market Context gate.
+        chop_threshold: per-stock and SPY CHOP floor. Defaults to the engine's
+            ``CHOP_SIDEWAYS_WEAK`` (38.2). Override for sensitivity sweeps.
+        max_adx: ADX ceiling — candidates with ADX >= this are skipped. Defaults
+            to the engine's ``MAX_ADX`` (20). Override for sensitivity sweeps.
 
     Returns:
         (trades, rejected_rows). ``rejected_rows`` is non-empty only on the
@@ -367,7 +373,7 @@ def run_variant(
                 spy_chop_today = float(spy_chop_series.loc[today])
             except KeyError:
                 spy_chop_today = float("nan")
-            if math.isnan(spy_chop_today) or spy_chop_today <= CHOP_SIDEWAYS_WEAK:
+            if math.isnan(spy_chop_today) or spy_chop_today <= chop_threshold:
                 continue
 
         best: tuple[float, str, pd.DataFrame, int] | None = None
@@ -383,9 +389,9 @@ def run_variant(
             chop = float(row["chop"])
             if math.isnan(adx) or math.isnan(chop):
                 continue
-            if adx >= MAX_ADX:
+            if adx >= max_adx:
                 continue
-            if require_chop and chop <= CHOP_SIDEWAYS_WEAK:
+            if require_chop and chop <= chop_threshold:
                 continue
             bb_lower = float(row["bb_lower"])
             bb_upper = float(row["bb_upper"])
@@ -446,7 +452,7 @@ def run_variant(
 
         # On the baseline pass, also track which setups the CHOP gate would have
         # rejected (CHOP ≤ 38.2). We're already inside the "baseline-passes" branch.
-        if not require_chop and float(df.iloc[idx]["chop"]) <= CHOP_SIDEWAYS_WEAK:
+        if not require_chop and float(df.iloc[idx]["chop"]) <= chop_threshold:
             rejected.append(
                 RejectedRow(
                     ticker=ticker,
@@ -755,7 +761,71 @@ async def amain(args: argparse.Namespace) -> int:
         n_rows = write_year_trade_dump(per_stock_trades, args.year, year_path)
         print(f"per-stock-chop {args.year} trades → {year_path}  rows={n_rows}")
 
+    # ── Statistical Validation ─────────────────────────────────────────────
+    # The winner of the comparison is per-stock-chop; run sensitivity sweeps
+    # on its two key knobs and Monte Carlo + PSR/DSR/MinBTL on its trades.
+    if not args.skip_statistical_validation and per_stock_trades:
+        _print_statistical_validation_sigma(
+            panels=panels,
+            spy_chop_series=spy_chop_series,
+            start=args.start,
+            end=args.end,
+            winner_summary=next(s for s in summaries if s.variant == "per-stock-chop"),
+            winner_trades=per_stock_trades,
+        )
+
     return 0
+
+
+def _print_statistical_validation_sigma(
+    *,
+    panels: dict[str, pd.DataFrame],
+    spy_chop_series: pd.Series | None,
+    start: date,
+    end: date,
+    winner_summary: VariantSummary,
+    winner_trades: list[TradeRecord],
+) -> None:
+    """Sweep CHOP and ADX thresholds, run MC + PSR/DSR/MinBTL on the winner."""
+    from tpcore.backtest.sensitivity import sweep_parameter
+    from tpcore.backtest.statistical_validation import build_report, render
+
+    chop_values = [30.0, 35.0, 38.2, 40.0, 45.0, 50.0]
+    adx_values = [15.0, 18.0, 20.0, 22.0, 25.0]
+    n_trials = len(chop_values) + len(adx_values)
+
+    def _run_with(*, chop: float | None = None, adx: float | None = None) -> dict:
+        trades, _ = run_variant(
+            variant="sweep",
+            panels=panels,
+            start=start,
+            end=end,
+            require_chop=True,
+            spy_chop_series=spy_chop_series,
+            chop_threshold=chop if chop is not None else CHOP_SIDEWAYS_WEAK,
+            max_adx=adx if adx is not None else MAX_ADX,
+        )
+        s = compute_summary("sweep", trades)
+        return {
+            "profit_factor": s.profit_factor if math.isfinite(s.profit_factor) else 1e6,
+            "sharpe": s.sharpe_annualized,
+            "win_rate": s.win_rate,
+            "max_drawdown": s.max_drawdown_pct,
+        }
+
+    chop_sweep = sweep_parameter(lambda v: _run_with(chop=v), "chop_threshold", chop_values)
+    adx_sweep = sweep_parameter(lambda v: _run_with(adx=v), "max_adx", adx_values)
+
+    returns = [t.return_pct for t in winner_trades]
+    backtest_periods = (end - start).days * 252 // 365  # approximate trading days
+    report = build_report(
+        returns,
+        sweeps=[chop_sweep, adx_sweep],
+        sharpe_annualized=winner_summary.sharpe_annualized,
+        backtest_periods=backtest_periods,
+        n_trials=n_trials,
+    )
+    print(render(report, title="Sigma — Statistical Validation"))
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -773,6 +843,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--results-file", default=DEFAULT_RESULTS_FILE)
     p.add_argument("--rejected-file", default=DEFAULT_REJECTED_FILE)
     p.add_argument("--skip-rejected-csv", action="store_true")
+    p.add_argument(
+        "--skip-statistical-validation",
+        action="store_true",
+        help="Skip the Statistical Validation section (saves ~20s of compute).",
+    )
     p.add_argument(
         "--year",
         type=int,
