@@ -23,6 +23,12 @@
       "cronSchedule": "0 6 * * SUN",
       "restartPolicyType": "NEVER",
       "source": {"repo": "michaeleasterly-cpu/short-term-trading-engine"}
+    },
+    "corporate-actions-scheduler": {
+      "startCommand": "python ops/cron_corporate_actions.py",
+      "cronSchedule": "0 4 * * SUN",
+      "restartPolicyType": "NEVER",
+      "source": {"repo": "michaeleasterly-cpu/short-term-trading-engine"}
     }
   }
 }
