@@ -21,11 +21,16 @@ if TYPE_CHECKING:  # pragma: no cover
 
 logger = structlog.get_logger(__name__)
 
-HandlerFn = Callable[["asyncpg.Pool", dict[str, Any]], Awaitable[None]]
+HandlerFn = Callable[["asyncpg.Pool", dict[str, Any]], Awaitable["int | None"]]
+"""Handlers return ``rows_ingested`` (or ``None`` if the metric doesn't apply,
+e.g. validation). The engine threads the value into the application_log
+``INGESTION_COMPLETE`` event so daily ops checks can see throughput."""
 
 
-async def handle_data_validation(pool: "asyncpg.Pool", config: dict[str, Any]) -> None:
-    """Run the Data Validation Suite. Raises if the suite fails."""
+async def handle_data_validation(pool: "asyncpg.Pool", config: dict[str, Any]) -> int | None:
+    """Run the Data Validation Suite. Raises if the suite fails.
+
+    Returns ``None`` — "rows ingested" doesn't map to a validation pass."""
     from tpcore.quality.validation.suite import run_suite
 
     result = await run_suite(pool)
@@ -33,11 +38,12 @@ async def handle_data_validation(pool: "asyncpg.Pool", config: dict[str, Any]) -
         # The suite already wrote per-check rows to platform.data_quality_log;
         # the exception is so the engine records last_status='failed'.
         raise RuntimeError(f"validation suite failed: {result}")
+    return None
 
 
 async def handle_fundamentals_refresh(
     pool: "asyncpg.Pool", config: dict[str, Any]
-) -> None:
+) -> int | None:
     """Refresh FMP fundamentals for the active universe.
 
     ``config`` is currently unused — the cache reads the active universe
@@ -64,11 +70,12 @@ async def handle_fundamentals_refresh(
             f"fundamentals_refresh: {len(failures)} real failure(s); "
             f"first={failures[0][0]}: {failures[0][1]}"
         )
+    return rows
 
 
 async def handle_corporate_actions(
     pool: "asyncpg.Pool", config: dict[str, Any]
-) -> None:
+) -> int | None:
     """Pull Alpaca corporate actions for the backtest universe and
     re-apply splits to ``platform.prices_daily``.
 
@@ -132,9 +139,10 @@ async def handle_corporate_actions(
         splits_applied=len(split_summary["applied"]),
         splits_skipped=len(split_summary["skipped"]),
     )
+    return total_actions
 
 
-async def handle_daily_bars(pool: "asyncpg.Pool", config: dict[str, Any]) -> None:
+async def handle_daily_bars(pool: "asyncpg.Pool", config: dict[str, Any]) -> int | None:
     """Incremental daily-bar refresh for the active universe.
 
     Pulls the last ``lookback_days`` (default 7) of bars from Alpaca for
@@ -215,6 +223,7 @@ async def handle_daily_bars(pool: "asyncpg.Pool", config: dict[str, Any]) -> Non
         raise RuntimeError(
             f"daily_bars: {len(failures)} symbol fetch failure(s); first: {failures[0]}"
         )
+    return total_rows
 
 
 HANDLERS: dict[str, HandlerFn] = {

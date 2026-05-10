@@ -35,6 +35,8 @@ from tpcore.ingestion.handlers import HANDLERS, HandlerFn
 if TYPE_CHECKING:  # pragma: no cover
     import asyncpg
 
+    from tpcore.logging import DBLogHandler
+
 logger = structlog.get_logger(__name__)
 
 # How long a 'running' row may sit before the engine assumes the previous
@@ -48,6 +50,7 @@ class JobResult:
     job_name: str
     status: str  # 'success' | 'failed' | 'skipped_no_handler' | 'skipped_lost_race'
     duration_ms: int
+    rows_ingested: int | None = None
     error: str | None = None
 
 
@@ -60,6 +63,11 @@ class IngestionEngine:
             the module-level :data:`HANDLERS` registry.
         clock: factory returning the current ``datetime`` (UTC). Injected
             for tests; production passes ``datetime.now(UTC)``.
+        db_log: optional ``DBLogHandler`` bound to a single per-engine
+            ``run_id``. When set, the engine emits ``INGESTION_TICK``,
+            ``INGESTION_COMPLETE``, ``INGESTION_FAILED``, and ``SHUTDOWN``
+            events to ``platform.application_log``. When ``None``, the
+            engine still works but only logs to structlog/stdout.
     """
 
     def __init__(
@@ -68,16 +76,31 @@ class IngestionEngine:
         *,
         handlers: dict[str, HandlerFn] | None = None,
         clock: Callable[[], datetime] | None = None,
+        db_log: "DBLogHandler | None" = None,
     ) -> None:
         self._pool = pool
         self._handlers = handlers if handlers is not None else HANDLERS
         self._clock = clock or (lambda: datetime.now(UTC))
+        self._db_log = db_log
 
     async def tick(self) -> list[JobResult]:
-        """Run one iteration. Returns a result per due job."""
+        """Run one iteration. Returns a result per due job.
+
+        Emits an ``INGESTION_TICK`` event to ``application_log`` (when
+        ``db_log`` is wired) regardless of whether anything was due — the
+        heartbeat is the point. Per-job ``INGESTION_COMPLETE`` /
+        ``INGESTION_FAILED`` events are emitted from :meth:`_run_one`.
+        """
         now = self._clock()
         stale_cutoff = now - _STALE_RUNNING_AFTER
         due = await self._fetch_due(now=now, stale_cutoff=stale_cutoff)
+        if self._db_log is not None:
+            await self._db_log.log(
+                "INGESTION_TICK",
+                f"{len(due)} job(s) due",
+                severity="INFO",
+                data={"due_jobs": len(due), "job_names": [r["job_name"] for r in due]},
+            )
         results: list[JobResult] = []
         for row in due:
             result = await self._run_one(row, now=now, stale_cutoff=stale_cutoff)
@@ -85,7 +108,11 @@ class IngestionEngine:
         return results
 
     async def run_forever(self, *, sleep_sec: float = 60.0) -> None:
-        """Loop ``tick()`` forever. Catches CancelledError for clean shutdown."""
+        """Loop ``tick()`` forever. Catches CancelledError for clean shutdown.
+
+        On cancellation (SIGTERM/SIGINT bubbled through asyncio), emits a
+        ``SHUTDOWN`` row to ``application_log`` before re-raising.
+        """
         logger.info("ingestion.engine.start", sleep_sec=sleep_sec)
         try:
             while True:
@@ -106,6 +133,12 @@ class IngestionEngine:
                 await asyncio.sleep(sleep_sec)
         except asyncio.CancelledError:
             logger.info("ingestion.engine.shutdown")
+            if self._db_log is not None:
+                await self._db_log.log(
+                    "SHUTDOWN",
+                    "ingestion engine cancelled — clean shutdown",
+                    severity="INFO",
+                )
             raise
 
     # ─── Internals ───────────────────────────────────────────────────────
@@ -219,8 +252,11 @@ class IngestionEngine:
         start = time.monotonic()
         error: str | None = None
         status = "success"
+        rows_ingested: int | None = None
         try:
-            await handler(self._pool, config)
+            ret = await handler(self._pool, config)
+            if isinstance(ret, int):
+                rows_ingested = ret
         except Exception as exc:
             status = "failed"
             error = str(exc)[:1000]
@@ -241,10 +277,39 @@ class IngestionEngine:
             job_name=job_name,
             status=status,
             duration_ms=duration_ms,
+            rows_ingested=rows_ingested,
             next_run=next_run.isoformat(),
         )
+        if self._db_log is not None:
+            if status == "success":
+                rows_str = "n/a" if rows_ingested is None else f"{rows_ingested} rows"
+                await self._db_log.log(
+                    "INGESTION_COMPLETE",
+                    f"{job_name} completed: {rows_str}",
+                    severity="INFO",
+                    data={
+                        "job_name": job_name,
+                        "rows_ingested": rows_ingested,
+                        "duration_ms": duration_ms,
+                    },
+                )
+            else:
+                await self._db_log.log(
+                    "INGESTION_FAILED",
+                    f"{job_name} failed: {error}",
+                    severity="ERROR",
+                    data={
+                        "job_name": job_name,
+                        "error": error,
+                        "duration_ms": duration_ms,
+                    },
+                )
         return JobResult(
-            job_name=job_name, status=status, duration_ms=duration_ms, error=error
+            job_name=job_name,
+            status=status,
+            duration_ms=duration_ms,
+            rows_ingested=rows_ingested,
+            error=error,
         )
 
 

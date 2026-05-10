@@ -55,7 +55,7 @@
       ]
     },
     "ingestion-engine": {
-      "startCommand": "python ops/_diag_runtime.py; sleep 60",
+      "startCommand": "python ops/ingestion_engine.py",
       "restartPolicyType": "ALWAYS",
       "source": {
         "repo": "michaeleasterly-cpu/short-term-trading-engine"

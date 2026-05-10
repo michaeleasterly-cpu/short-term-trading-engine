@@ -23,13 +23,17 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+import uuid
 
 import structlog
 
 from tpcore.db import build_asyncpg_pool
 from tpcore.ingestion import IngestionEngine
+from tpcore.logging import DBLogHandler
 
 logger = structlog.get_logger(__name__)
+
+ENGINE_NAME = "ingestion"
 
 
 async def _amain() -> int:
@@ -38,9 +42,19 @@ async def _amain() -> int:
         print("DATABASE_URL not set", file=sys.stderr)
         return 2
 
+    # Single run_id for the entire engine lifetime — every event from this
+    # process shares the tag so a worker incarnation is groupable in
+    # platform.application_log. Restarts get a fresh run_id.
+    run_id = uuid.uuid4()
+
     pool = await build_asyncpg_pool(db_url)
+    db_log = DBLogHandler(pool, engine=ENGINE_NAME, run_id=run_id)
+    await db_log.startup(
+        commit_sha=os.getenv("RAILWAY_GIT_COMMIT_SHA") or os.getenv("GIT_COMMIT_SHA")
+    )
+    logger.info("ingestion.cron.start", run_id=str(run_id))
     try:
-        engine = IngestionEngine(pool)
+        engine = IngestionEngine(pool, db_log=db_log)
         sleep_sec = float(os.getenv("INGESTION_TICK_SECONDS", "60"))
         await engine.run_forever(sleep_sec=sleep_sec)
     finally:

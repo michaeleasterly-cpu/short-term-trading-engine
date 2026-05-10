@@ -139,6 +139,29 @@ WHERE run_id = '<uuid>'
 ORDER BY recorded_at;
 ```
 
+### Ingestion engine — last 24 h heartbeat
+
+The ingestion engine is persistent (not a cron), so it doesn't fit the `STARTUP`+`SHUTDOWN` pair model that scheduler runs use. Instead it emits `INGESTION_TICK` every loop (default every 60 s), plus `INGESTION_COMPLETE` / `INGESTION_FAILED` when due jobs fire. A healthy engine produces a steady drip of `TICK` rows. Absence of `TICK` for >5 minutes means the worker is wedged or dead.
+
+```sql
+SELECT *
+FROM platform.application_log
+WHERE engine = 'ingestion'
+  AND recorded_at > now() - INTERVAL '24 hours'
+ORDER BY recorded_at DESC;
+```
+
+For a tighter check ("is the engine alive *right now*?"):
+
+```sql
+SELECT max(recorded_at) AS last_event,
+       now() - max(recorded_at) AS staleness
+FROM platform.application_log
+WHERE engine = 'ingestion'
+  AND event_type = 'INGESTION_TICK';
+-- staleness > 2 minutes → investigate; > 30 minutes → engine is down
+```
+
 The handler enforces a 7-day rolling retention on every insert (`DELETE FROM platform.application_log WHERE recorded_at < now() - INTERVAL '7 days'`); older runs are not queryable. For longer audit windows, archive externally before the retention sweep.
 
 ---

@@ -19,6 +19,34 @@ from tpcore.ingestion.engine import IngestionEngine, JobResult
 
 
 # ────────────────────────────────────────────────────────────────────────────
+# Fake DBLogHandler — records every log() call so tests can assert events
+# ────────────────────────────────────────────────────────────────────────────
+
+
+class _FakeDBLog:
+    """Stand-in for ``tpcore.logging.DBLogHandler``. Captures calls."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    async def log(
+        self,
+        event_type: str,
+        message: str,
+        severity: str = "INFO",
+        data: dict | None = None,
+    ) -> None:
+        self.calls.append(
+            {
+                "event_type": event_type,
+                "message": message,
+                "severity": severity,
+                "data": data,
+            }
+        )
+
+
+# ────────────────────────────────────────────────────────────────────────────
 # Fake asyncpg pool — simulates ingestion_jobs INSERT/SELECT/UPDATE flow
 # ────────────────────────────────────────────────────────────────────────────
 
@@ -407,9 +435,141 @@ def test_cron_eval_rejects_naive_datetime() -> None:
 
 
 # ────────────────────────────────────────────────────────────────────────────
+# Application-log integration
+# ────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_db_log_emits_tick_event_even_when_nothing_due() -> None:
+    """The TICK heartbeat fires every loop — empty ticks are the signal that
+    the worker is alive. Otherwise an idle engine looks identical to a dead one."""
+    now = _at(2026, 5, 11, 12)
+    pool = _FakePool([])
+    db_log = _FakeDBLog()
+    engine = IngestionEngine(
+        pool,  # type: ignore[arg-type]
+        handlers={},
+        clock=_frozen_clock(now),
+        db_log=db_log,  # type: ignore[arg-type]
+    )
+
+    await engine.tick()
+
+    assert len(db_log.calls) == 1
+    call = db_log.calls[0]
+    assert call["event_type"] == "INGESTION_TICK"
+    assert call["data"] == {"due_jobs": 0, "job_names": []}
+
+
+@pytest.mark.asyncio
+async def test_db_log_emits_complete_event_with_rows_ingested() -> None:
+    now = _at(2026, 5, 11, 12)
+    pool = _FakePool([
+        _FakeJob(
+            job_name="daily_bars",
+            schedule="30 21 * * MON-FRI",
+            next_run=now - timedelta(minutes=1),
+        )
+    ])
+    db_log = _FakeDBLog()
+
+    async def fake_handler(_pool, _cfg):
+        return 1234  # rows_ingested
+
+    engine = IngestionEngine(
+        pool,  # type: ignore[arg-type]
+        handlers={"daily_bars": fake_handler},
+        clock=_frozen_clock(now),
+        db_log=db_log,  # type: ignore[arg-type]
+    )
+
+    [result] = await engine.tick()
+
+    assert result.status == "success"
+    assert result.rows_ingested == 1234
+
+    events = [c["event_type"] for c in db_log.calls]
+    assert events == ["INGESTION_TICK", "INGESTION_COMPLETE"]
+    complete = db_log.calls[1]
+    assert complete["severity"] == "INFO"
+    assert "1234 rows" in complete["message"]
+    assert complete["data"]["job_name"] == "daily_bars"
+    assert complete["data"]["rows_ingested"] == 1234
+    assert isinstance(complete["data"]["duration_ms"], int)
+
+
+@pytest.mark.asyncio
+async def test_db_log_emits_complete_with_na_when_handler_returns_none() -> None:
+    """data_validation handler returns None — message uses 'n/a' not '0 rows'."""
+    now = _at(2026, 5, 11, 12)
+    pool = _FakePool([
+        _FakeJob(job_name="data_validation", schedule="0 6 * * SUN", next_run=now)
+    ])
+    db_log = _FakeDBLog()
+    engine = IngestionEngine(
+        pool,  # type: ignore[arg-type]
+        handlers={"data_validation": _noop},
+        clock=_frozen_clock(now),
+        db_log=db_log,  # type: ignore[arg-type]
+    )
+
+    await engine.tick()
+
+    complete = next(c for c in db_log.calls if c["event_type"] == "INGESTION_COMPLETE")
+    assert "n/a" in complete["message"]
+    assert complete["data"]["rows_ingested"] is None
+
+
+@pytest.mark.asyncio
+async def test_db_log_emits_failed_event_with_error() -> None:
+    now = _at(2026, 5, 11, 12)
+    pool = _FakePool([
+        _FakeJob(job_name="fundamentals_refresh", schedule="0 3 * * SUN", next_run=now)
+    ])
+    db_log = _FakeDBLog()
+
+    async def boom(_pool, _cfg):
+        raise RuntimeError("FMP 503")
+
+    engine = IngestionEngine(
+        pool,  # type: ignore[arg-type]
+        handlers={"fundamentals_refresh": boom},
+        clock=_frozen_clock(now),
+        db_log=db_log,  # type: ignore[arg-type]
+    )
+
+    [result] = await engine.tick()
+
+    assert result.status == "failed"
+    failed = next(c for c in db_log.calls if c["event_type"] == "INGESTION_FAILED")
+    assert failed["severity"] == "ERROR"
+    assert "FMP 503" in failed["message"]
+    assert failed["data"]["job_name"] == "fundamentals_refresh"
+    assert "FMP 503" in failed["data"]["error"]
+
+
+@pytest.mark.asyncio
+async def test_db_log_disabled_when_handler_not_passed() -> None:
+    """Engine still works without db_log — no calls, no crashes."""
+    now = _at(2026, 5, 11, 12)
+    pool = _FakePool([
+        _FakeJob(job_name="x", schedule="*/5 * * * *", next_run=now)
+    ])
+    engine = IngestionEngine(
+        pool,  # type: ignore[arg-type]
+        handlers={"x": _noop},
+        clock=_frozen_clock(now),
+        # db_log omitted — defaults to None
+    )
+
+    [result] = await engine.tick()
+    assert result.status == "success"
+
+
+# ────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ────────────────────────────────────────────────────────────────────────────
 
 
-async def _noop(_pool: Any, _config: Any) -> None:
+async def _noop(_pool: Any, _config: Any) -> int | None:
     return None
