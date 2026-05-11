@@ -55,37 +55,42 @@ async def amain(args: argparse.Namespace) -> int:
         return 2
 
     pool = await build_asyncpg_pool(db_url)
-    total_rows = 0
-    failures: list[tuple[str, str]] = []
     try:
         async with FMPFundamentalsAdapter() as adapter:
             cache = FundamentalsCache(pool, adapter=adapter)
-            for i, symbol in enumerate(args.universe, start=1):
-                try:
-                    n = await cache.backfill(symbol, start_date=args.start, end_date=args.end)
-                except DataProviderOutage as exc:
-                    failures.append((symbol, str(exc)[:160]))
-                    logger.warning("fundamentals.backfill_failed symbol=%s error=%s", symbol, exc)
+            if args.all_active:
+                # One-shot, hours-long backfill across the full active
+                # prices_daily universe. Delegates to cache.backfill_all
+                # which already handles per-symbol pacing, no-data ETF
+                # skips, and outage classification.
+                total_rows, no_data, failures = await cache.backfill_all(tickers=None)
+            else:
+                total_rows = 0
+                no_data: list[tuple[str, str]] = []
+                failures: list[tuple[str, str]] = []
+                for i, symbol in enumerate(args.universe, start=1):
+                    try:
+                        n = await cache.backfill(symbol, start_date=args.start, end_date=args.end)
+                    except DataProviderOutage as exc:
+                        failures.append((symbol, str(exc)[:160]))
+                        logger.warning("fundamentals.backfill_failed symbol=%s error=%s", symbol, exc)
+                        await asyncio.sleep(INTER_SYMBOL_SLEEP_SEC)
+                        continue
+                    total_rows += n
+                    logger.info("[%d/%d] %s rows=%d", i, len(args.universe), symbol, n)
                     await asyncio.sleep(INTER_SYMBOL_SLEEP_SEC)
-                    continue
-                total_rows += n
-                logger.info("[%d/%d] %s rows=%d", i, len(args.universe), symbol, n)
-                await asyncio.sleep(INTER_SYMBOL_SLEEP_SEC)
     finally:
         await pool.close()
 
     print()
-    print(
-        f"backfill complete  symbols={len(args.universe)}  rows_upserted={total_rows}"
-    )
+    label = "active universe" if args.all_active else f"{len(args.universe)} symbols"
+    print(f"backfill complete  scope={label}  rows_upserted={total_rows}")
+    if no_data:
+        print(f"no_data ({len(no_data)}): ETFs/shells with no usable fundamentals (expected)")
     if failures:
         print(f"failures ({len(failures)}):")
         for sym, why in failures:
             print(f"  {sym}: {why}")
-    print(
-        "\nFMP free-tier reminder: each call returns at most 5 quarters and "
-        "ignores from/to filters. To extend backtest depth, upgrade the FMP plan."
-    )
     return 0 if not failures else 1
 
 
@@ -97,6 +102,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--universe",
         type=lambda s: tuple(t.strip().upper() for t in s.split(",") if t.strip()),
         default=DEFAULT_UNIVERSE,
+    )
+    p.add_argument(
+        "--all-active",
+        action="store_true",
+        help=(
+            "Ignore --universe and back-fill every distinct ticker in "
+            "platform.prices_daily (delisted=false, last 90d). Delegates to "
+            "FundamentalsCache.backfill_all. ~7.7k tickers, several hours."
+        ),
     )
     return p.parse_args(argv)
 
