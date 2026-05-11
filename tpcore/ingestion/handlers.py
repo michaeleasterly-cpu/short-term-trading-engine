@@ -76,14 +76,34 @@ async def handle_fundamentals_refresh(
     return rows
 
 
+_CORPORATE_ACTIONS_50_NAME_UNIVERSE: tuple[str, ...] = (
+    "SPY", "QQQ", "IWM",
+    "AAPL", "MSFT", "AMZN", "GOOGL", "META", "TSLA", "NVDA",
+    "JPM", "V", "WMT", "DIS", "NFLX", "BA", "CAT", "GE", "GM", "F",
+    "XOM", "CVX", "PFE", "JNJ", "MRK", "ABBV", "PG", "KO", "PEP",
+    "MCD", "SBUX", "HD", "LOW", "TGT", "COST",
+    "LMT", "RTX", "NOC", "GD",
+    "SO", "DUK", "NEE",
+    "PLTR", "UBER", "ABNB", "SNAP", "RBLX", "RIVN", "LCID", "FSLR",
+)
+"""Original 50-name backtest universe — kept in sync with
+``ops/cron_corporate_actions.py:UNIVERSE``. Default for back-compat;
+``config.universe = "all_active"`` overrides to the full prices_daily set."""
+
+
 async def handle_corporate_actions(
     pool: asyncpg.Pool, config: dict[str, Any]
 ) -> int | None:
-    """Pull Alpaca corporate actions for the backtest universe and
-    re-apply splits to ``platform.prices_daily``.
+    """Pull Alpaca corporate actions and re-apply splits to ``platform.prices_daily``.
 
-    This mirrors ``ops/cron_corporate_actions.py`` step-for-step but
-    operates inside the engine's lifecycle (the engine owns the pool).
+    ``config`` keys:
+        * ``universe``:
+            - default (omitted): the 50-name backtest universe.
+            - ``"all_active"``: every distinct ticker in ``prices_daily``.
+              Apply-splits then runs against the full table (no ticker
+              filter), so Tradier-sourced bars get adjusted too.
+            - ``list[str]``: explicit ticker override.
+        * ``ingest_start``: ISO date, default ``"2018-01-01"``.
     """
     import httpx
 
@@ -95,18 +115,21 @@ async def handle_corporate_actions(
         upsert_corporate_actions,
     )
 
-    # 50-name backtest universe — kept in sync with
-    # ``ops/cron_corporate_actions.py:UNIVERSE``.
-    universe: tuple[str, ...] = (
-        "SPY", "QQQ", "IWM",
-        "AAPL", "MSFT", "AMZN", "GOOGL", "META", "TSLA", "NVDA",
-        "JPM", "V", "WMT", "DIS", "NFLX", "BA", "CAT", "GE", "GM", "F",
-        "XOM", "CVX", "PFE", "JNJ", "MRK", "ABBV", "PG", "KO", "PEP",
-        "MCD", "SBUX", "HD", "LOW", "TGT", "COST",
-        "LMT", "RTX", "NOC", "GD",
-        "SO", "DUK", "NEE",
-        "PLTR", "UBER", "ABNB", "SNAP", "RBLX", "RIVN", "LCID", "FSLR",
-    )
+    universe_cfg = config.get("universe", "default")
+    if universe_cfg == "all_active":
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT DISTINCT ticker FROM platform.prices_daily ORDER BY ticker"
+            )
+        universe: tuple[str, ...] = tuple(r["ticker"] for r in rows)
+        apply_filter: list[str] | None = None
+    elif isinstance(universe_cfg, list):
+        universe = tuple(str(s).upper() for s in universe_cfg)
+        apply_filter = list(universe)
+    else:
+        universe = _CORPORATE_ACTIONS_50_NAME_UNIVERSE
+        apply_filter = list(universe)
+
     chunk_size = 20
     today = datetime.now(UTC).date()
     ingest_start = config.get("ingest_start", "2018-01-01")
@@ -135,9 +158,11 @@ async def handle_corporate_actions(
                 await upsert_corporate_actions(pool, actions)
             total_actions += len(actions)
 
-    split_summary = await apply_all_splits(pool, only_tickers=list(universe))
+    split_summary = await apply_all_splits(pool, only_tickers=apply_filter)
     logger.info(
         "ingestion.handler.corporate_actions_done",
+        universe_mode=universe_cfg if isinstance(universe_cfg, str) else "list",
+        universe_size=len(universe),
         actions_ingested=total_actions,
         splits_applied=len(split_summary["applied"]),
         splits_skipped=len(split_summary["skipped"]),
