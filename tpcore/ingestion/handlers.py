@@ -13,8 +13,9 @@ looks up by name; jobs without a registered handler land in
 """
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, Awaitable, Callable
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
@@ -29,7 +30,7 @@ e.g. validation). The engine threads the value into the application_log
 ``INGESTION_COMPLETE`` event so daily ops checks can see throughput."""
 
 
-async def handle_data_validation(pool: "asyncpg.Pool", config: dict[str, Any]) -> int | None:
+async def handle_data_validation(pool: asyncpg.Pool, config: dict[str, Any]) -> int | None:
     """Run the Data Validation Suite. Raises if the suite fails.
 
     Returns ``None`` — "rows ingested" doesn't map to a validation pass."""
@@ -44,7 +45,7 @@ async def handle_data_validation(pool: "asyncpg.Pool", config: dict[str, Any]) -
 
 
 async def handle_fundamentals_refresh(
-    pool: "asyncpg.Pool", config: dict[str, Any]
+    pool: asyncpg.Pool, config: dict[str, Any]
 ) -> int | None:
     """Refresh FMP fundamentals for the active universe.
 
@@ -76,7 +77,7 @@ async def handle_fundamentals_refresh(
 
 
 async def handle_corporate_actions(
-    pool: "asyncpg.Pool", config: dict[str, Any]
+    pool: asyncpg.Pool, config: dict[str, Any]
 ) -> int | None:
     """Pull Alpaca corporate actions for the backtest universe and
     re-apply splits to ``platform.prices_daily``.
@@ -144,7 +145,7 @@ async def handle_corporate_actions(
     return total_actions
 
 
-async def handle_daily_bars(pool: "asyncpg.Pool", config: dict[str, Any]) -> int | None:
+async def handle_daily_bars(pool: asyncpg.Pool, config: dict[str, Any]) -> int | None:
     """Incremental daily-bar refresh for the active universe.
 
     Pulls the last ``lookback_days`` (default 7) of bars from Alpaca for

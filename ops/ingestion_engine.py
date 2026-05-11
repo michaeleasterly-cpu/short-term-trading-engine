@@ -75,7 +75,7 @@ def main() -> None:  # pragma: no cover - CLI shim
         raise SystemExit(asyncio.run(_amain()))
     except KeyboardInterrupt:
         logger.info("ingestion.engine.keyboard_interrupt")
-        raise SystemExit(0)
+        raise SystemExit(0) from None
 
 
 if __name__ == "__main__":  # pragma: no cover

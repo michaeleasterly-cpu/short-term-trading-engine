@@ -19,7 +19,7 @@ Indexed on ``(engine, run_id, recorded_at)`` to support the canonical
 """
 from __future__ import annotations
 
-from typing import Sequence
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op

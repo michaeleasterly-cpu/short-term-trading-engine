@@ -17,7 +17,6 @@ import pytest
 from tpcore.ingestion.cron_eval import next_run_after
 from tpcore.ingestion.engine import IngestionEngine, JobResult
 
-
 # ────────────────────────────────────────────────────────────────────────────
 # Fake DBLogHandler — records every log() call so tests can assert events
 # ────────────────────────────────────────────────────────────────────────────

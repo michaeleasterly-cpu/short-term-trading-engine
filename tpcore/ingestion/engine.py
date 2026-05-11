@@ -23,9 +23,10 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING
 
 import structlog
 
@@ -72,11 +73,11 @@ class IngestionEngine:
 
     def __init__(
         self,
-        pool: "asyncpg.Pool",
+        pool: asyncpg.Pool,
         *,
         handlers: dict[str, HandlerFn] | None = None,
         clock: Callable[[], datetime] | None = None,
-        db_log: "DBLogHandler | None" = None,
+        db_log: DBLogHandler | None = None,
     ) -> None:
         self._pool = pool
         self._handlers = handlers if handlers is not None else HANDLERS

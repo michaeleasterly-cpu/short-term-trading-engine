@@ -13,7 +13,6 @@ import pytest
 from tpcore.data.postgres_data_adapter import PostgresDataAdapter
 from tpcore.interfaces.data import Bar
 
-
 # ────────────────────────────────────────────────────────────────────────────
 # Fake asyncpg pool — minimum surface the adapter touches
 # ────────────────────────────────────────────────────────────────────────────

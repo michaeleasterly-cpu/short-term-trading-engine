@@ -15,7 +15,6 @@ import pytest
 
 from tpcore.logging.db_handler import DBLogHandler
 
-
 # ────────────────────────────────────────────────────────────────────────────
 # Fake asyncpg pool — minimal in-memory application_log table simulation
 # ────────────────────────────────────────────────────────────────────────────
