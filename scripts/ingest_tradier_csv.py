@@ -52,6 +52,10 @@ logger = logging.getLogger("scripts.ingest_tradier_csv")
 
 DEFAULT_CSV = Path("data/tradier_export/tradier_bars_full.csv")
 COPY_BATCH = 5_000  # tune for executemany throughput vs. memory
+# prices_daily.{open,high,low,close,adjusted_close} are NUMERIC(20,6) — i.e.,
+# 14 integer digits + 6 fractional. Any |value| >= 10^14 overflows on insert.
+# Tradier's wide export occasionally emits Inf or absurd values; reject them.
+_NUMERIC_MAX = Decimal("1e14")
 
 
 _INSERT_SQL = """
@@ -87,6 +91,9 @@ def _row_to_tuple(row: list[str]) -> tuple | None:
         return None
     if open_ is None or high is None or low_ is None or close is None:
         return None
+    for x in (open_, high, low_, close):
+        if not x.is_finite() or abs(x) >= _NUMERIC_MAX:
+            return None
     return (
         ticker,
         d,
