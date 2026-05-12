@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "short-term-trading-engine"
 version = "0.0.1"
 description = "Multi-engine quantitative trading platform with shared core (tpcore), platform schema, and pluggable engines."
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.12"
 readme = "README.md"
 license = { text = "Proprietary" }
 authors = [{ name = "STE Team" }]

@@ -3,11 +3,12 @@
   "_comment": "MANDATORY: after editing this file, run `python ops/apply_railway_service_config.py --all` BEFORE the next push. Service-instance fields (deploy.<service>.{startCommand, cronSchedule, restartPolicyType, source.repo, watchPatterns}) live on Railway's service-instance config and are only updated via the GraphQL serviceInstanceUpdate mutation. Without the apply, push triggers a rebuild but the new container still runs with the OLD startCommand/cron/etc \u2014 you get a build-vs-runtime config drift that's painful to diagnose (build log shows the new buildCommand; runtime crashes anyway because startCommand wasn't propagated). The only field Railway actually reads from this file at build time is `build.buildCommand`. See docs/OPERATIONS.md \u00a71 'Build layout' and the project memory entry feedback_apply_after_railway_json.md.",
   "build": {
     "builder": "RAILPACK",
-    "buildCommand": "pip install -e ."
+    "_build_note": "We build inside an explicit venv at /app/.venv so the runtime container — which invokes /mise/installs/python/3.11.15/bin/python via mise shims — sees the same site-packages the build wrote. Installing with bare `pip install -e .` lands packages in a path Railpack does not surface to the runtime image, which is why services crashed with ModuleNotFoundError despite successful builds.",
+    "buildCommand": "python -m venv /app/.venv && /app/.venv/bin/pip install --upgrade pip && /app/.venv/bin/pip install -e ."
   },
   "deploy": {
     "sigma-scheduler": {
-      "startCommand": "python sigma/scheduler.py",
+      "startCommand": "/app/.venv/bin/python sigma/scheduler.py",
       "cronSchedule": "0 22 * * MON-FRI",
       "restartPolicyType": "NEVER",
       "source": {
@@ -23,7 +24,7 @@
       ]
     },
     "reversion-scheduler": {
-      "startCommand": "python reversion/scheduler.py",
+      "startCommand": "/app/.venv/bin/python reversion/scheduler.py",
       "cronSchedule": "0 22 * * MON-FRI",
       "restartPolicyType": "NEVER",
       "source": {
@@ -39,7 +40,7 @@
       ]
     },
     "vector-scheduler": {
-      "startCommand": "python vector/scheduler.py",
+      "startCommand": "/app/.venv/bin/python vector/scheduler.py",
       "cronSchedule": "0 22 * * MON-FRI",
       "restartPolicyType": "NEVER",
       "source": {
@@ -55,7 +56,7 @@
       ]
     },
     "ingestion-engine": {
-      "startCommand": "python ops/ingestion_engine.py",
+      "startCommand": "/app/.venv/bin/python ops/ingestion_engine.py",
       "restartPolicyType": "ALWAYS",
       "source": {
         "repo": "michaeleasterly-cpu/short-term-trading-engine"
