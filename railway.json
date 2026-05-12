@@ -3,12 +3,12 @@
   "_comment": "MANDATORY: after editing this file, run `python ops/apply_railway_service_config.py --all` BEFORE the next push. Service-instance fields (deploy.<service>.{startCommand, cronSchedule, restartPolicyType, source.repo, watchPatterns}) live on Railway's service-instance config and are only updated via the GraphQL serviceInstanceUpdate mutation. Without the apply, push triggers a rebuild but the new container still runs with the OLD startCommand/cron/etc \u2014 you get a build-vs-runtime config drift that's painful to diagnose (build log shows the new buildCommand; runtime crashes anyway because startCommand wasn't propagated). The only field Railway actually reads from this file at build time is `build.buildCommand`. See docs/OPERATIONS.md \u00a71 'Build layout' and the project memory entry feedback_apply_after_railway_json.md.",
   "build": {
     "builder": "RAILPACK",
-    "_build_note": "Install via the mise-shim Python so packages land in /mise/installs/python/<ver>/lib/python3.11/site-packages — a path Railpack DOES copy into the runtime image. Confirmed empirically: (a) bare `pip install -e .` uses the build container's root pip, writing to /usr/local/lib/python3.X/dist-packages, which is NOT preserved; runtime crashes with ModuleNotFoundError. (b) `python -m venv /app/.venv` worked but .gitignore line 8 (`.venv/`) caused Railpack to filter the venv out of the /app runtime copy. (c) Removing buildCommand entirely produced a build with zero pip-install lines — Railpack's Python auto-install did not fire for our pyproject.toml shape. So we keep an explicit buildCommand pointing at mise.",
-    "buildCommand": "/mise/shims/python -m pip install -e ."
+    "_build_note": "Build into an explicit venv at /app/.deps (NOT /app/.venv — .gitignore line 8 strips that path from the runtime copy). Packages live inside /app, which Railpack copies wholesale into the runtime image; the venv's python binary symlinks back to the mise-managed interpreter at /mise/installs/python/<ver>/bin/python, which IS also copied. Why this over installing into mise's site-packages directly: Railpack only preserves the /mise/installs symlink, not its real target under /root/.local/share/mise/... so `/mise/shims/python -m pip install` succeeds at build time but the packages vanish on stage handoff. The venv-in-/app pattern sidesteps that entirely.",
+    "buildCommand": "python -m venv /app/.deps && /app/.deps/bin/pip install --upgrade pip && /app/.deps/bin/pip install -e ."
   },
   "deploy": {
     "sigma-scheduler": {
-      "startCommand": "python sigma/scheduler.py",
+      "startCommand": "/app/.deps/bin/python sigma/scheduler.py",
       "cronSchedule": "0 22 * * MON-FRI",
       "restartPolicyType": "NEVER",
       "source": {
@@ -24,7 +24,7 @@
       ]
     },
     "reversion-scheduler": {
-      "startCommand": "python reversion/scheduler.py",
+      "startCommand": "/app/.deps/bin/python reversion/scheduler.py",
       "cronSchedule": "0 22 * * MON-FRI",
       "restartPolicyType": "NEVER",
       "source": {
@@ -40,7 +40,7 @@
       ]
     },
     "vector-scheduler": {
-      "startCommand": "python vector/scheduler.py",
+      "startCommand": "/app/.deps/bin/python vector/scheduler.py",
       "cronSchedule": "0 22 * * MON-FRI",
       "restartPolicyType": "NEVER",
       "source": {
@@ -56,7 +56,7 @@
       ]
     },
     "ingestion-engine": {
-      "startCommand": "python ops/ingestion_engine.py",
+      "startCommand": "/app/.deps/bin/python ops/ingestion_engine.py",
       "restartPolicyType": "ALWAYS",
       "source": {
         "repo": "michaeleasterly-cpu/short-term-trading-engine"
