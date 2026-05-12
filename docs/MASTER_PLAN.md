@@ -348,14 +348,15 @@ Full database schema and data flow documentation: [`docs/DATABASE_AND_DATAFLOW.m
 | --- | --- | --- |
 | Alpaca (IEX free) | Daily bar **ingest** (→ `platform.prices_daily`), quotes, execution, delisted stock data. Engines read bars from the DB, not from Alpaca live. | $0 (real-time upgrade gated on `ExecutionQualityScore` evidence — see §6.5) |
 | FMP **Starter** ($22/mo, active) | Fundamentals, insider, earnings | $22 (Premium $59/mo deferred — see §6.5) |
-| Railway **Hobby** ($5/mo, active) | Cron schedulers (6 services: sigma, reversion, vector, validation, corporate-actions, fundamentals-refresh) | $5 |
+| Railway **Hobby** ($5/mo, active — currently paused) | Cron schedulers (6 services). Auto-deploys disabled 2026-05-12; all daily ops run locally for now. | $5 |
+| Supabase **Pro** ($25/mo, active) | Postgres + pooler. Upgraded 2026-05-11 from free tier after `prices_daily` crossed the 500 MB read-only lock; 8 GB disk gives headroom for the all-active universe. | $25 |
 | SEC EDGAR | Point-in-time filings, fundamentals backup | $0 |
 | ApeWisdom | Social sentiment | $0 |
 | FRED | Macro indicators | $0 |
 | FINRA / NASDAQ | Short interest (release-date matched) | $0 |
 | IBorrowDesk | Borrow rates (scraped, fragile) | $0 |
 
-**Total fixed monthly cost: $27** (FMP Starter $22 + Railway Hobby $5).
+**Total fixed monthly cost: $52** (FMP Starter $22 + Railway Hobby $5 + Supabase Pro $25).
 
 ### 6.2 Historical / Backtesting Database (Self-Built)
 
@@ -376,25 +377,25 @@ Full database schema and data flow documentation: [`docs/DATABASE_AND_DATAFLOW.m
 
 ### 6.4 Current Data Infrastructure Status
 
-Verified row counts and coverage (as of the most recent ingest run):
+Verified row counts and coverage (as of 2026-05-12, post-Phase 1 expansion):
 
 | Table | Rows | Notes |
 | --- | ---: | --- |
-| `platform.prices_daily` | 301,464 | 60 tickers, 1994-07-21 → 2026-05-08, survivorship-free (Alpaca IEX free + Tradier pre-2020 merge). |
-| `platform.fundamentals_quarterly` | 1,790 | 47 tickers, PIT-safe via FMP Starter. `pb` and `de` populated on 1,622 rows after the ratio backfill. |
-| `platform.corporate_actions` | 1,216 | 12 splits + 1,204 dividends. Self-built via Alpaca free corporate-actions endpoint; AAPL split fix verified. |
+| `platform.prices_daily` | 20.6M | **7,694 distinct tickers**, 1994-07-21 → 2026-05-11, survivorship-free (Alpaca IEX `all_active` sweep + Tradier wide-export merge). Was 60 tickers / 301k rows pre-Phase 1. |
+| `platform.fundamentals_quarterly` | 178,518 | **5,981 tickers**, PIT-safe via FMP Starter (~30 quarters/ticker mean). `pb` + `de` populated on 152,907 rows; 25,560 NULLs are explainable (negative book value, no price on filing date, missing fields). Was 47 tickers / 1,790 rows pre-Phase 1. |
+| `platform.corporate_actions` | 109,344 | **217 tickers with splits (250 events) + 3,848 tickers with dividends (109,094 events)**. Handler now supports `universe: all_active`; the original 50-name default still works for back-compat. AAPL split fix verified. |
 | `platform.tradier_options_chains` | 122,668 | 51 tickers, snapshot from May 2026 (immediately before the Tradier brokerage account closed). Frozen — parked for future S2. |
-| `platform.catalyst_events` | 683 | 44 tickers, all `EARNINGS_BEAT` type, 2018–2025 (FMP coverage starts 2018-01-24). |
+| `platform.catalyst_events` | 683 | 44 tickers, all `EARNINGS_BEAT` type, 2018–2025 (FMP coverage starts 2018-01-24). Universe-expansion catalyst backfill not yet run; many new tickers have no event row. |
 | `platform.data_quality_log` | active | Receives rows from the Data Validation Suite, execution-quality tracker, and engine credibility scorer. |
 | `platform.aar_events` | 0 | Schema + writer implemented; populated by live paper trades once they fire. |
 | `platform.risk_state` | 1 | Postgres-backed Risk Governor persistence active. |
-| `platform.application_log` | 0 | Schema + `DBLogHandler` live as of 2026-05-10 (Alembic `20260511_0100`). 7-day rolling retention enforced per-write. Populates on the next scheduler fire. |
+| `platform.application_log` | active | `DBLogHandler` writes `STARTUP` / `SHUTDOWN` / `INGESTION_*` / `UNIVERSE_SIMULATION` / `SMOKE_ORDER_*` events. 7-day rolling retention enforced per-write. |
 
-All sources free-tier or FMP Starter ($22/month). Hosting on Railway Hobby ($5/month). Total fixed monthly cost: **$27** (see §6.1). No `yfinance`. The Tradier brokerage account is closed; the options-chain and pre-2020 bar export was completed before closure.
+All sources free-tier or FMP Starter ($22/month). Hosting on Railway Hobby ($5/month, currently paused) + Supabase Pro ($25/month). Total fixed monthly cost: **$52** (see §6.1). No `yfinance`. The Tradier brokerage account is closed; the options-chain and pre-2020 bar export was completed before closure.
 
 ### 6.5 Data Upgrade ROI Gates
 
-Triggers for paid-tier upgrades. The default posture is to stay on free + FMP Starter ($22/mo) until the Parity Harness or Overfitting Diagnostic produces measured evidence that an upgrade's marginal benefit exceeds its cost.
+Triggers for paid-tier upgrades. The default posture is to stay on the current $52/mo stack (FMP Starter + Railway Hobby + Supabase Pro) until the Parity Harness or Overfitting Diagnostic produces measured evidence that an upgrade's marginal benefit exceeds its cost.
 
 | Trigger | Threshold | Upgrade |
 | --- | --- | --- |

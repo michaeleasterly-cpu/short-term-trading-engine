@@ -1,6 +1,6 @@
 # Edge-Discovery and Strategy-Validation Plan
 
-**Status:** Ready for execution. Platform infrastructure is live; strategies are unproven.
+**Status:** Phase 1 complete (2026-05-12). Phase 2 (cost model build) ready to start.
 
 ## Objective
 Systematically find, validate, and calibrate trading strategies that have a statistically significant edge after realistic costs in the US equities market.
@@ -19,18 +19,19 @@ No strategy graduates from paper to live capital until it passes the full overfi
 
 ## Implementation Steps
 
-### Phase 1: Universe Expansion (Start immediately, complete by Monday evening)
-1. **A1 – Full Alpaca asset list ingestion**
-   - Update the `daily_bars` ingestion job to process `universe: all_active`.
-   - Set coarse filter: price > $5, avg daily volume > 250K.
-   - Default cost for unknown tickers: T4 (1.50% round-trip).
-   - Upsert into `platform.prices_daily`.
-2. **A2 – Tradier historical bar extraction**
-   - Run `scripts/extract_tradier.py` against all available US equities.
-   - Write `tradier_bars_full.csv` to disk.
-3. **A3 – Universe simulation**
-   - Run `scripts/simulate_universe.py` against the expanded `prices_daily`.
-   - Verify that candidate counts for Sigma, Reversion, Vector are non-zero.
+### Phase 1: Universe Expansion — **Complete (2026-05-12)**
+1. **A1 – Full Alpaca asset list ingestion** ✓
+   - `daily_bars` job runs with `universe: all_active`, `min_price=5.0`, `min_volume=250000`.
+   - Handler `_handle_daily_bars_all_active` in `tpcore/ingestion/handlers.py`; local driver `scripts/run_daily_bars_all_active.py`.
+   - Last sweep: 8,297 active assets enumerated → 533 passed coarse → 2,665 rows upserted (2026-05-12).
+2. **A2 – Tradier historical bar extraction + ingest** ✓
+   - `scripts/extract_tradier_full.py` produced `data/tradier_export/tradier_bars_full.csv` (1.07 GB, 22.36M rows, 8,640 symbols).
+   - `scripts/ingest_tradier_csv.py` merged into `platform.prices_daily` with Inf/overflow guards (≈50k bad-data rows skipped, 0.23% of source). Latest run: 20.56M rows attempted, 7,710 tickers seen.
+3. **A3 – Universe simulation** ✓
+   - `scripts/simulate_universe.py` rewritten to batched SQL — 32 min → 57 s.
+   - Result (2026-05-12, 7,694-ticker universe): **Sigma 187, Reversion 4, Vector 0**.
+   - Vector zero is a calibration issue, not data: 65% of 1,435 coarse survivors fail on `P/B < 1.5` alone (current market well above that ceiling — AAPL P/B 38.85). See "Pivot Plan" below for the recalibration vs. pivot decision.
+   - The script also persists a `UNIVERSE_SIMULATION` row to `platform.application_log` with the full candidate lists; the smoke-test workflow reads from there.
 
 ### Phase 2: Cost Model Build (Weeks 1-2)
 1. **B1 – Schema migration**

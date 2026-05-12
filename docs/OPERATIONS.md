@@ -2,8 +2,11 @@
 
 **Purpose:** Daily health-check procedure for the Short-Term Trading Engine. Any Claude session (or human operator) should be able to read this file and walk through the checklist in §9 in under 5 minutes.
 
+**Railway status (as of 2026-05-12):** Railway auto-deploys are **disabled**. All daily ops are running locally via the scripts under `scripts/` (the local drivers each mirror the corresponding Railway service entrypoint). §1 below remains accurate for when Railway is re-enabled, but skip the "service is Online" expectations until then.
+
 **Cross-references:**
 - `docs/MASTER_PLAN.md` — what each engine *is* and what success looks like.
+- `docs/EDGE_VALIDATION_PLAN.md` — phase tracker for universe + cost-model + replay work. Phase 1 complete 2026-05-12.
 - `docs/STYLE_GUIDE.md` — code conventions enforced when fixes are required.
 - `docs/glossary.md` — canonical terms (engine names, score names, services).
 - `railway.json` — source of truth for the cron schedule and service list.
@@ -239,18 +242,18 @@ UNION ALL SELECT 'tradier_options_chains',  COUNT(*) FROM platform.tradier_optio
 UNION ALL SELECT 'catalyst_events',         COUNT(*) FROM platform.catalyst_events;
 ```
 
-Expected ranges (cross-reference `MASTER_PLAN.md §6.4`):
+Expected ranges (cross-reference `MASTER_PLAN.md §6.4`, post-Phase-1 expansion):
 
 | Table | Expected range | Sudden-drop alert |
 | --- | --- | --- |
-| `platform.prices_daily` | ≥ 300,000 (currently ~301,464) | drop > 1% → investigate |
-| `platform.fundamentals_quarterly` | ≥ 1,790 | any drop → investigate |
-| `platform.corporate_actions` | ≥ 1,200 (grows weekly) | drop → investigate |
+| `platform.prices_daily` | ≥ 20,000,000 (currently ~20.6M, 7,694 tickers) | drop > 1% → investigate |
+| `platform.fundamentals_quarterly` | ≥ 178,000 (currently 178,518, 5,981 tickers) | any drop → investigate |
+| `platform.corporate_actions` | ≥ 109,000 (currently 109,344, grows weekly) | drop → investigate |
 | `platform.aar_events` | grows slowly with live trades; can be 0 | a *drop* is concerning, no growth is normal |
 | `platform.risk_state` | one row per engine that has ever traded | drop → investigate |
 | `platform.data_quality_log` | grows weekly | drop → investigate |
 | `platform.tradier_options_chains` | 122,668 (frozen — should never change) | any change → flag |
-| `platform.catalyst_events` | ≥ 683 | drop → investigate |
+| `platform.catalyst_events` | ≥ 683 (universe-expansion catalyst backfill is pending) | drop → investigate |
 
 ### Freshness check
 
@@ -263,10 +266,11 @@ SELECT MAX(timestamp) AS latest_quality_log FROM platform.data_quality_log;
 -- Expected: within last 7 days (validation suite runs weekly).
 ```
 
-### Free-tier quotas
+### Supabase Pro quotas
 
-- Supabase free tier: 500 MB database, 50,000 monthly active users (irrelevant here), 2 GB egress, 500 MB file storage. Check via Supabase dashboard → Project Settings → Usage.
-- If database size approaches 400 MB, it's time to plan an archive policy or upgrade.
+- Tier: **Pro ($25/mo)**, 8 GB disk, auto-scaling (+50% at 90% util, capped at +200 GB, max 4 modifications / 24 h). Upgraded 2026-05-11 after Phase 1 pushed `prices_daily` past the free-tier 500 MB read-only lock.
+- Current DB size ≈ 2.7 GB. Disk re-locks only at 95% util with auto-scale quota exhausted — different recovery path than the free-tier 500 MB cliff.
+- Check via Supabase dashboard → Project Settings → Usage.
 
 ---
 
@@ -413,7 +417,7 @@ Cross-check against the validation suite's split result (§6) — the two should
 
 ## 8. Costs & Quotas
 
-Fixed monthly cost: **$27** (Railway Hobby $5 + FMP Starter $22). See `MASTER_PLAN.md §6.1`.
+Fixed monthly cost: **$52** (FMP Starter $22 + Railway Hobby $5 + Supabase Pro $25). See `MASTER_PLAN.md §6.1`.
 
 ### Railway
 
@@ -430,8 +434,8 @@ Fixed monthly cost: **$27** (Railway Hobby $5 + FMP Starter $22). See `MASTER_PL
 ### Supabase
 
 - Dashboard → Project Settings → Usage.
-- Free tier ceilings: 500 MB DB, 2 GB egress/month, 60 concurrent connections. The pooler keeps connection count low; egress is dominated by validation-suite + backfill reads.
-- Watch DB size — `platform.prices_daily` is the largest table and grows ~700 rows/weekday.
+- Pro tier ceilings: 8 GB DB (auto-scales +50% at 90% util, cap +200 GB, max 4 modifications / 24 h), 250 GB egress/month, 60 concurrent connections (pooler keeps count low). Free tier was 500 MB; upgraded 2026-05-11 once Phase 1 pushed `prices_daily` past that.
+- Watch DB size — `platform.prices_daily` is the largest table (~2.7 GB at 7,694 tickers) and grows ~500 rows/weekday from the all-active sweep.
 
 ### Alpaca
 
@@ -519,6 +523,18 @@ DATABASE_URL=$(grep '^DATABASE_URL_IPV4=' .env | cut -d= -f2-) \
 ```
 
 Run with `--engine reversion` or `--engine vector` for the other two. Each engine's startup check must be exercised independently.
+
+### `scripts/smoke_test.py`
+
+One-shot end-to-end check of the paper-trading pipeline before any engine submits a live paper order. Reads the most recent `UNIVERSE_SIMULATION` row from `platform.application_log` (emitted by `scripts/simulate_universe.py`), picks the first Sigma candidate priced ≤ $100 with ≥ 20 bars, builds a `sigma.models.ExecutionDecision` (qty=2 split 1/1, TP=max(SMA20, entry×1.005), SL=entry×0.97), submits through `AlpacaPaperBrokerAdapter.submit_execution_decision()`, logs `SMOKE_ORDER_SUBMITTED`, immediately cancels both orders, logs `SMOKE_ORDER_CANCELLED`, and prints PASS/FAIL. Cancel failures are warnings, not test failures.
+
+```bash
+DATABASE_URL=$(grep '^DATABASE_URL_IPV4=' .env | cut -d= -f2-) \
+ALPACA_KEY=... ALPACA_SECRET=... ALPACA_PAPER=true \
+  .venv/bin/python scripts/smoke_test.py
+```
+
+Idempotent — each run uses fresh UUID-suffixed `client_order_id`s. Validated 2026-05-12 on ACAD (broker IDs round-tripped, both audit events landed in `application_log`).
 
 ---
 

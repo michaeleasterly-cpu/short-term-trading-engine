@@ -1,9 +1,10 @@
 ---
 title: Short-Term Trading Engine — Database & Dataflow
-version: 1.0.0
-last_updated: 2026-05-10
+version: 1.1.0
+last_updated: 2026-05-12
 entities: [Engine, Position, Order, Trade, AAR, RiskState, DataQuality]
-stack: [PostgreSQL, Supabase, Alpaca, Railway, Python, asyncpg, Pydantic v2]
+stack: [PostgreSQL, Supabase Pro, Alpaca, Railway, Python, asyncpg, Pydantic v2]
+phase_1_complete: true  # Universe expanded from ~50 to 7,694 tickers; see docs/EDGE_VALIDATION_PLAN.md
 ---
 
 ## 2. Database Schema
@@ -33,7 +34,7 @@ List every table under the `platform` schema. For each, provide columns, types, 
 
 #### `platform.prices_daily`
 
-**Purpose:** Canonical daily OHLCV bars. Survivorship-free (Alpaca IEX free tier + Tradier pre-2020 merge). Backtests query directly; live engines query via `PostgresDataAdapter`.
+**Purpose:** Canonical daily OHLCV bars. Survivorship-free (Alpaca IEX `all_active` sweep + Tradier wide-export merge). Backtests query directly; live engines query via `PostgresDataAdapter`. As of 2026-05-12: ~20.6M rows across **7,694 distinct tickers** spanning 1994-07-21 → today.
 
 **Columns:**
 
@@ -53,7 +54,7 @@ List every table under the `platform` schema. For each, provide columns, types, 
 
 #### `platform.fundamentals_quarterly`
 
-**Purpose:** Point-in-time quarterly fundamentals (FMP Starter). Used by Reversion for earnings-quality gate and Vector for Gate 1 (P/B, D/E).
+**Purpose:** Point-in-time quarterly fundamentals (FMP Starter). Used by Reversion for earnings-quality gate and Vector for Gate 1 (P/B, D/E). As of 2026-05-12: 178,518 rows across **5,981 tickers** (post-Phase-1 backfill); `pb` + `de` populated on 152,907 rows (~85%), the rest are explainable NULLs (negative book value, no price on filing date, missing balance/share fields). `compute_fundamental_ratios.py` writes both ratios with a single set-based UPDATE; degenerate FMP rows (`total_assets=0`, `total_liabilities<0`) are rejected up front.
 
 **Columns:**
 
