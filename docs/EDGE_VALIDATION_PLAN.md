@@ -33,20 +33,16 @@ No strategy graduates from paper to live capital until it passes the full overfi
    - Vector zero is a calibration issue, not data: 65% of 1,435 coarse survivors fail on `P/B < 1.5` alone (current market well above that ceiling — AAPL P/B 38.85). See "Pivot Plan" below for the recalibration vs. pivot decision.
    - The script also persists a `UNIVERSE_SIMULATION` row to `platform.application_log` with the full candidate lists; the smoke-test workflow reads from there.
 
-### Phase 1.5: Trade Monitor (prerequisite for ANY paper submission)
+### Phase 1.5: Trade Monitor — **Complete (2026-05-12)**
 
-**Status:** Spec only (`docs/superpowers/specs/2026-05-12-trade-monitor-design.md`). Engines are currently in scan-only mode via `TPCORE_SCAN_ONLY=true` because the existing order managers submit both Tier 1 + Tier 2 concurrently, which Alpaca rejects on the opposing-side rule.
+**Status:** All six work items landed; spec `docs/superpowers/specs/2026-05-12-trade-monitor-design.md` realized.
 
-Required before any engine fires a real paper order:
-
-- **M1** — Alembic migration creating `platform.open_orders` (`client_order_id, broker_order_id, parent_client_id, engine, ticker, side, qty, tier, status, filled_qty, avg_fill_price, assessment_json, decision_json, ...`).
-- **M2** — `tpcore/trade_monitor.py` — long-running asyncio service consuming Alpaca's `TradingStream`. Reacts to `fill` / `partial_fill` on a Tier 1 by submitting the matching Tier 2; cancels Tier 2 if the bracket SL fires; writes the AAR on close. Crash-safe via `platform.open_orders` rehydration on startup.
-- **M3** — Refactor `sigma/order_manager.py`, `reversion/order_manager.py`, `vector/order_manager.py` to submit Tier 1 only + persist `decision` + `assessment` to `platform.open_orders` for the monitor to pick up.
-- **M4** — `AlpacaPaperBrokerAdapter.submit_tier1_only(payload)` primitive; `submit_execution_decision` becomes a thin wrapper for back-compat.
-- **M5** — Integration test: one Sigma decision → Tier 1 fills → Tier 2 submitted → Tier 2 fills → AAR rows land in `platform.aar_events`.
-- **M6** — Deploy the monitor as a persistent Railway service (separate from the daily-cron schedulers). Remove the `TPCORE_SCAN_ONLY` guard in the same PR.
-
-Estimated effort: half-day focused. Until M1-M6 ship, `TPCORE_SCAN_ONLY=true` stays set on every environment that runs an engine scheduler.
+- **M1** ✓ — Alembic migration `20260512_0000_create_open_orders.py` applied. Table `platform.open_orders` (id, engine, trade_id, ticker, order_type, alpaca_order_id, status, fill_price, filled_at, decision_data jsonb, created_at, updated_at) with unique (engine, trade_id, order_type) and indexes on alpaca_order_id (partial, NOT NULL) and (engine, status).
+- **M2** ✓ — `tpcore/trade_monitor.py` consuming Alpaca's `TradingStream`. `on_trade_update` matches fills by `alpaca_order_id`, updates the row, submits Tier 2 reactively (BUY bracket at the engine's far target, same hard stop as Tier 1), writes the AAR on Tier 2 close, bumps `risk_state`. Crash-safe via `reconcile_pending_on_startup` which queries broker state for each `'pending'` row.
+- **M3** ✓ — `sigma/order_manager.py`, `reversion/order_manager.py`, `vector/order_manager.py` all submit Tier 1 only and persist `decision` + `assessment` to `platform.open_orders`. `TPCORE_SCAN_ONLY` guard removed.
+- **M4** ✓ — `AlpacaPaperBrokerAdapter.submit_tier1_only(ticker, qty, side, take_profit_price, stop_loss_price, client_order_id, engine_id)` returns the placed `Order`. `submit_execution_decision` is kept as a back-compat wrapper for the smoke test only.
+- **M5** ✓ — `tpcore/tests/test_trade_monitor.py` with 13 tests: unit (helpers) + integration (Sigma Tier 1 fill triggers Tier 2 submission, Vector tier1 fill stays single-leg, Tier 2 fill writes AAR and bumps risk_state, unmatched fills are silently skipped, cancellation flips status).
+- **M6** ✓ — `trade-monitor` service added to `railway.json` (`restartPolicyType=ALWAYS`, persistent). Railway deploy verification is deferred until Railway is re-enabled; locally the monitor is invokable via `python tpcore/trade_monitor.py`.
 
 ### Phase 2: Cost Model Build (Weeks 1-2)
 1. **B1 – Schema migration**

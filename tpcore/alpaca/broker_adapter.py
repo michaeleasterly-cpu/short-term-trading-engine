@@ -269,15 +269,73 @@ class AlpacaPaperBrokerAdapter(BrokerExecutionInterface):
     async def submit_execution_decision(self, decision: ExecutionDecision) -> list[Order]:
         """Place every payload on ``decision`` in tier order. Returns the placed orders.
 
+        **Deprecated for live trading** — kept for back-compat with the
+        smoke test and legacy engine paths. The two-payload contract
+        produces an opposing-side Tier 2 limit that Alpaca rejects
+        while Tier 1 is open. Production submission flows through
+        :py:meth:`submit_tier1_only` (engines) and the trade monitor
+        (which reactively submits Tier 2 after the Tier 1 fill arrives
+        on ``trade_updates``). See
+        ``docs/superpowers/specs/2026-05-12-trade-monitor-design.md``.
+
         On any failure the *already-placed* orders are returned to the
-        caller via the raised exception's ``__cause__`` chain — they aren't
-        auto-cancelled here. The Risk Governor / order manager owns clean-up.
+        caller via the raised exception's ``__cause__`` chain — they
+        aren't auto-cancelled here.
         """
         placed: list[Order] = []
         for payload in decision.order_payloads:
             order = self._order_from_payload(payload, engine_id="sigma")
             placed.append(await self.place_order(order))
         return placed
+
+    async def submit_tier1_only(
+        self,
+        *,
+        ticker: str,
+        qty: int,
+        side: str,
+        take_profit_price: Decimal,
+        stop_loss_price: Decimal,
+        client_order_id: str,
+        engine_id: str,
+    ) -> Order:
+        """Submit one BUY/SELL bracket-market order; return the broker ack.
+
+        This is the production entry primitive — the engines call this in
+        place of the old two-payload ``submit_execution_decision``. The
+        Tier 2 leg is no longer submitted here; the trade monitor
+        (``tpcore.trade_monitor``) handles it reactively once the bracket's
+        entry leg fills.
+
+        Returns the broker-acknowledged ``Order`` (carries ``broker_order_id``).
+        Caller is expected to persist ``broker_order_id`` to
+        ``platform.open_orders`` so the monitor can match inbound
+        ``trade_updates`` back to the originating engine decision.
+
+        Args:
+            ticker: symbol, e.g. "AAPL".
+            qty: integer share count for the entry leg.
+            side: "buy" for long entries (Sigma + Reversion-long + Vector),
+                "sell" for Reversion-short entries.
+            take_profit_price: bracket TP leg limit (Decimal, 2 decimals).
+            stop_loss_price: bracket SL leg stop (Decimal, 2 decimals).
+            client_order_id: unique per submission; matched by the monitor.
+            engine_id: 'sigma' / 'reversion' / 'vector', recorded on the Order.
+        """
+        from tpcore.interfaces.broker import OrderSide as _OS
+
+        order = Order(
+            client_order_id=client_order_id,
+            symbol=ticker,
+            side=_OS(side),
+            qty=Decimal(str(qty)),
+            order_type=OrderType.MARKET,
+            order_class=OrderClass.BRACKET,
+            take_profit_limit_price=take_profit_price,
+            stop_loss_stop_price=stop_loss_price,
+            engine_id=engine_id,
+        )
+        return await self.place_order(order)
 
     # ─── Internal helpers ───────────────────────────────────────────────
 

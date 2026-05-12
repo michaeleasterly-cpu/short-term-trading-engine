@@ -2,7 +2,7 @@
 
 Mocks the broker, governor, and (optionally) parity harness — never
 hits Alpaca. Covers:
-    * Full submit flow (gate → governor → broker.submit_execution_decision).
+    * Full submit flow (gate → governor → broker.submit_tier1_only). Trade monitor handles any follow-up.
     * AAR built and persisted on TP fill (TAKE_PROFIT classification).
     * AAR built on SL fill (STOP_LOSS classification).
     * Capital gate blocks oversized notional → no submission.
@@ -134,7 +134,7 @@ async def _make_governor() -> RiskGovernor:
 async def test_submit_passes_through_gate_governor_and_broker() -> None:
     placed = [_placed_parent()]
     broker = AsyncMock()
-    broker.submit_execution_decision = AsyncMock(return_value=placed)
+    broker.submit_tier1_only = AsyncMock(return_value=placed[0])
     gov = await _make_governor()
     om = VectorOrderManager(
         broker=broker,
@@ -145,14 +145,14 @@ async def test_submit_passes_through_gate_governor_and_broker() -> None:
     )
     out = await om.submit_decision(_decision(), _assessment())
     assert out == placed
-    broker.submit_execution_decision.assert_awaited_once()
+    broker.submit_tier1_only.assert_awaited_once()
     state = await gov._store.get(ENGINE_ID)  # noqa: SLF001
     assert state.open_positions == 1
 
 
 async def test_submit_blocked_by_capital_gate_returns_none() -> None:
     broker = AsyncMock()
-    broker.submit_execution_decision = AsyncMock()
+    broker.submit_tier1_only = AsyncMock()
     gov = await _make_governor()
     om = VectorOrderManager(
         broker=broker,
@@ -163,7 +163,7 @@ async def test_submit_blocked_by_capital_gate_returns_none() -> None:
     )
     out = await om.submit_decision(_decision(), _assessment())
     assert out is None
-    broker.submit_execution_decision.assert_not_called()
+    broker.submit_tier1_only.assert_not_called()
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -174,7 +174,7 @@ async def test_submit_blocked_by_capital_gate_returns_none() -> None:
 async def test_reconcile_builds_take_profit_aar_when_exit_above_entry() -> None:
     placed = [_placed_parent()]
     broker = AsyncMock()
-    broker.submit_execution_decision = AsyncMock(return_value=placed)
+    broker.submit_tier1_only = AsyncMock(return_value=placed[0])
     # Mock list_recent_orders to return the parent (filled) + a TP child fill.
     parent_filled = _placed_parent(
         status=OrderStatus.FILLED,
@@ -215,7 +215,7 @@ async def test_reconcile_builds_take_profit_aar_when_exit_above_entry() -> None:
 async def test_reconcile_builds_stop_loss_aar_when_exit_below_entry() -> None:
     placed = [_placed_parent()]
     broker = AsyncMock()
-    broker.submit_execution_decision = AsyncMock(return_value=placed)
+    broker.submit_tier1_only = AsyncMock(return_value=placed[0])
     parent_filled = _placed_parent(
         status=OrderStatus.FILLED,
         filled_qty=Decimal("20"),
@@ -245,7 +245,7 @@ async def test_reconcile_builds_stop_loss_aar_when_exit_below_entry() -> None:
 async def test_reconcile_idempotent_across_runs() -> None:
     placed = [_placed_parent()]
     broker = AsyncMock()
-    broker.submit_execution_decision = AsyncMock(return_value=placed)
+    broker.submit_tier1_only = AsyncMock(return_value=placed[0])
     parent_filled = _placed_parent(
         status=OrderStatus.FILLED,
         filled_qty=Decimal("20"),
@@ -280,7 +280,7 @@ async def test_reconcile_idempotent_across_runs() -> None:
 async def test_submit_invokes_parity_harness_when_provided() -> None:
     placed = [_placed_parent()]
     broker = AsyncMock()
-    broker.submit_execution_decision = AsyncMock(return_value=placed)
+    broker.submit_tier1_only = AsyncMock(return_value=placed[0])
     parity = AsyncMock()
     parity.submit_pair = AsyncMock()
     om = VectorOrderManager(
@@ -298,7 +298,7 @@ async def test_submit_invokes_parity_harness_when_provided() -> None:
 async def test_parity_failure_does_not_block_paper_trade() -> None:
     placed = [_placed_parent()]
     broker = AsyncMock()
-    broker.submit_execution_decision = AsyncMock(return_value=placed)
+    broker.submit_tier1_only = AsyncMock(return_value=placed[0])
     parity = AsyncMock()
     parity.submit_pair = AsyncMock(side_effect=RuntimeError("live broker rejected"))
     om = VectorOrderManager(

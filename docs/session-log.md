@@ -1,5 +1,14 @@
 # Session Log
 
+## 2026-05-12 (continued) — Trade monitor built (Phase 1.5 complete)
+- M1: Alembic migration `20260512_0000_create_open_orders.py` creates `platform.open_orders` (id, engine, trade_id, ticker, order_type, alpaca_order_id, status, fill_price, filled_at, decision_data jsonb) with `UNIQUE (engine, trade_id, order_type)` + partial index on `alpaca_order_id` for the monitor's hot path.
+- M4: `AlpacaPaperBrokerAdapter.submit_tier1_only(...)` — single-bracket primitive returning the placed `Order`. `submit_execution_decision` retained as deprecated wrapper for the smoke test.
+- M3: All three engine order managers (Sigma, Reversion, Vector) refactored — submit Tier 1 only via the new primitive, persist `decision` + `assessment` JSON to `platform.open_orders`. `TPCORE_SCAN_ONLY` guard removed.
+- M2: `tpcore/trade_monitor.py` — `TradeMonitor` class consuming Alpaca `TradingStream`, reactive Tier 2 submission on Tier 1 fill, AAR + `risk_state` write on Tier 2 close, crash-safe via `reconcile_pending_on_startup`, exponential-backoff reconnect loop. `python tpcore/trade_monitor.py` CLI entry.
+- M5: `tpcore/tests/test_trade_monitor.py` — 13 tests covering helpers (`_decimal`, `_aware`, `_resolve_tier2_take_profit`, `_row_from_record`), Sigma Tier 1 → Tier 2 submission, Vector no-tier2 path, Tier 2 fill → AAR + risk_state, unmatched fills ignored, cancellation flow. All pass.
+- M6: `trade-monitor` service added to `railway.json` (`restartPolicyType=ALWAYS`). Railway deploy verification deferred (Railway is paused).
+- Full suite: **311 passing, 4 skipped**. Ruff + forbidden-imports green.
+
 ## 2026-05-12 (continued) — Scan-only guard + trade-monitor spec
 - Attempted `scripts/start_paper_trading.py`: surfaced a real engine bug. The order managers (Sigma, Reversion, Vector) call `broker.submit_execution_decision` which submits both Tier 1 + Tier 2 sequentially. Tier 2 is an opposing-side limit (LONG → SELL at upper band); Alpaca rejects with `cannot open a short sell while a long buy order is open`. Tier 1 lands as an orphan with no managed Tier 2 exit. Architectural gap: the engines were designed assuming a live worker would react to fills; that worker was never built.
 - Added a `TPCORE_SCAN_ONLY=true` env-var guard to all three order managers — runs gates + governor + signal logging, then returns `None` before any broker call. Defense-in-depth so a cron / manual run can't accidentally submit while the trade monitor is missing.

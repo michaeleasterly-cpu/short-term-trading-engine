@@ -69,6 +69,22 @@
         "railpack.toml",
         ".python-version"
       ]
+    },
+    "trade-monitor": {
+      "_comment": "Persistent service — consumes Alpaca trade_updates and writes platform.open_orders + platform.aar_events. Spec: docs/superpowers/specs/2026-05-12-trade-monitor-design.md. Requires ipv6EgressEnabled=true (Supabase direct connection) and ALPACA_KEY/ALPACA_SECRET/ALPACA_PAPER in service variables.",
+      "startCommand": "/app/.deps/bin/python tpcore/trade_monitor.py",
+      "restartPolicyType": "ALWAYS",
+      "source": {
+        "repo": "michaeleasterly-cpu/short-term-trading-engine"
+      },
+      "watchPatterns": [
+        "**/*.py",
+        "**/*.yaml",
+        "pyproject.toml",
+        "railway.json",
+        "railpack.toml",
+        ".python-version"
+      ]
     }
   }
 }

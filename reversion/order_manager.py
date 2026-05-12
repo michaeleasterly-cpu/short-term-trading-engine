@@ -10,10 +10,11 @@ Mirrors ``sigma.order_manager.SigmaOrderManager``; differences:
 """
 from __future__ import annotations
 
-import os
+import json
 from collections import defaultdict
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 import structlog
 
@@ -31,6 +32,9 @@ from tpcore.interfaces.broker import (
 )
 from tpcore.parity import LivePaperParityHarness
 from tpcore.risk.governor import RiskDecision, RiskGovernor
+
+if TYPE_CHECKING:  # pragma: no cover
+    import asyncpg
 
 logger = structlog.get_logger(__name__)
 
@@ -66,6 +70,7 @@ class ReversionOrderManager:
         aar: ReversionAARLogging,
         aar_writer: AARWriter | None = None,
         parity_harness: LivePaperParityHarness | None = None,
+        pool: asyncpg.Pool | None = None,
     ) -> None:
         self._broker = broker
         self._governor = governor
@@ -74,6 +79,9 @@ class ReversionOrderManager:
         self._aar = aar
         self._aar_writer = aar_writer
         self._parity = parity_harness
+        # asyncpg pool for platform.open_orders persistence — required for
+        # the trade monitor to find Tier 1 rows. See sigma/order_manager.py.
+        self._pool = pool or (aar_writer._pool if aar_writer is not None else None)  # noqa: SLF001
         self._trade_assessments: dict[str, PhaseAssessment] = {}
         self._tier1_logged: set[str] = set()
         self._tier2_logged: set[str] = set()
@@ -117,23 +125,27 @@ class ReversionOrderManager:
             )
             return None
 
-        # Scan-only mode: gate the engine short of broker submission until the
-        # trade monitor (docs/superpowers/specs/2026-05-12-trade-monitor-design.md)
-        # is in place. See sigma/order_manager.py for the rationale.
-        if os.getenv("TPCORE_SCAN_ONLY", "").lower() == "true":
-            logger.info(
-                "reversion.order_manager.scan_only_skipped",
-                ticker=decision.ticker,
-                direction=decision.direction.value,
-                qty=decision.qty,
-                notional=str(decision.notional_usd),
-            )
-            return None
+        # Submit only the Tier 1 bracket; trade monitor handles Tier 2 after fill.
+        tier1_payload = decision.order_payloads[0]
+        tier1_order = await self._broker.submit_tier1_only(
+            ticker=decision.ticker,
+            qty=decision.tier1_qty,
+            side=tier1_payload["side"],
+            take_profit_price=assessment.target_20ma,
+            stop_loss_price=assessment.stop_price,
+            client_order_id=str(tier1_payload["client_order_id"]),
+            engine_id=ENGINE_ID,
+        )
+        placed = [tier1_order]
 
-        placed = await self._broker.submit_execution_decision(decision)
-        if placed:
-            trade_key = _trade_key(placed[0].client_order_id)
-            self._trade_assessments[trade_key] = assessment
+        trade_key = _trade_key(tier1_order.client_order_id)
+        await self._persist_tier1_to_open_orders(
+            tier1_order=tier1_order,
+            trade_key=trade_key,
+            decision=decision,
+            assessment=assessment,
+        )
+        self._trade_assessments[trade_key] = assessment
 
         await self._governor.record_fill(
             engine_id=ENGINE_ID,
@@ -144,24 +156,78 @@ class ReversionOrderManager:
             "reversion.order_manager.trade_submitted",
             ticker=decision.ticker,
             direction=decision.direction.value,
-            qty=decision.qty,
-            tier1_qty=decision.tier1_qty,
-            tier2_qty=decision.tier2_qty,
+            qty=decision.tier1_qty,
+            tier2_pending=decision.tier2_qty,
             notional=str(decision.notional_usd),
+            broker_order_id=tier1_order.broker_order_id,
         )
 
         # Parity harness — non-blocking, mirrors Sigma + Vector.
-        if self._parity is not None and placed:
+        if self._parity is not None:
             try:
-                await self._parity.submit_pair(placed[0])
+                await self._parity.submit_pair(tier1_order)
             except Exception as exc:  # pragma: no cover - defensive
                 logger.warning(
                     "reversion.order_manager.parity_harness_failed",
-                    client_order_id=placed[0].client_order_id,
+                    client_order_id=tier1_order.client_order_id,
                     error=str(exc),
                 )
 
         return placed
+
+    async def _persist_tier1_to_open_orders(
+        self,
+        *,
+        tier1_order: Order,
+        trade_key: str,
+        decision: ExecutionDecision,
+        assessment: PhaseAssessment,
+    ) -> None:
+        """Insert the Tier 1 row that the trade monitor will react to.
+
+        Mirror of ``sigma.order_manager._persist_tier1_to_open_orders``.
+        """
+        if self._pool is None:
+            logger.warning(
+                "reversion.order_manager.no_pool_persistence_skipped",
+                trade_key=trade_key,
+                broker_order_id=tier1_order.broker_order_id,
+            )
+            return
+        payload = json.dumps(
+            {
+                "decision": decision.model_dump(mode="json"),
+                "assessment": assessment.model_dump(mode="json"),
+            },
+            default=str,
+        )
+        sql = """
+            INSERT INTO platform.open_orders
+                (engine, trade_id, ticker, order_type,
+                 alpaca_order_id, status, decision_data)
+            VALUES ($1, $2, $3, 'tier1', $4, 'pending', $5::jsonb)
+            ON CONFLICT (engine, trade_id, order_type)
+            DO UPDATE SET
+                alpaca_order_id = EXCLUDED.alpaca_order_id,
+                decision_data = EXCLUDED.decision_data,
+                updated_at = now()
+        """
+        try:
+            async with self._pool.acquire() as conn:
+                await conn.execute(
+                    sql,
+                    ENGINE_ID,
+                    trade_key,
+                    decision.ticker,
+                    tier1_order.broker_order_id,
+                    payload,
+                )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning(
+                "reversion.order_manager.open_orders_persist_failed",
+                trade_key=trade_key,
+                error=str(exc),
+            )
 
     async def reconcile(
         self,

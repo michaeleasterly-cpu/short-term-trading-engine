@@ -2,8 +2,13 @@
 
 Responsibilities:
     1. ``submit_decision`` runs an ``ExecutionDecision`` through the local
-       capital gate, the platform-wide ``RiskGovernor``, and finally the
-       broker. On success it bumps the governor's ``open_positions`` counter.
+       capital gate and the platform-wide ``RiskGovernor``, then submits
+       only the Tier 1 bracket via ``broker.submit_tier1_only`` and
+       persists ``decision`` + ``assessment`` to ``platform.open_orders``.
+       Tier 2 is the trade monitor's responsibility — it watches Alpaca's
+       ``trade_updates`` stream and submits Tier 2 reactively after the
+       Tier 1 entry fills. See
+       ``docs/superpowers/specs/2026-05-12-trade-monitor-design.md``.
     2. ``reconcile`` lists the broker's orders and decides what events
        happened since the last run — Tier 1 fill, Tier 2 fill, hard stop —
        then drives the lifecycle/AAR plugs accordingly.
@@ -14,10 +19,11 @@ suffixes so the manager can group legs without a local DB.
 """
 from __future__ import annotations
 
-import os
+import json
 from collections import defaultdict
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 import structlog
 
@@ -35,6 +41,9 @@ from tpcore.interfaces.broker import (
 )
 from tpcore.parity import LivePaperParityHarness
 from tpcore.risk.governor import RiskDecision, RiskGovernor
+
+if TYPE_CHECKING:  # pragma: no cover
+    import asyncpg
 
 logger = structlog.get_logger(__name__)
 
@@ -82,6 +91,7 @@ class SigmaOrderManager:
         aar: SigmaAARLogging,
         aar_writer: AARWriter | None = None,
         parity_harness: LivePaperParityHarness | None = None,
+        pool: asyncpg.Pool | None = None,
     ) -> None:
         self._broker = broker
         self._governor = governor
@@ -90,6 +100,10 @@ class SigmaOrderManager:
         self._aar = aar
         self._aar_writer = aar_writer
         self._parity = parity_harness
+        # asyncpg pool for platform.open_orders persistence — required for
+        # the trade monitor to find Tier 1 rows. None falls back to the
+        # aar_writer's pool when available; tests can pass None to skip.
+        self._pool = pool or (aar_writer._pool if aar_writer is not None else None)  # noqa: SLF001
         # ticker → PhaseAssessment for every trade we've placed this process.
         # The broker is the source of truth for orders; this is a side cache
         # so we can carry assessment context (entry, stop, mid/upper) into the
@@ -139,26 +153,31 @@ class SigmaOrderManager:
             )
             return None
 
-        # Scan-only mode: gate the engine short of broker submission until the
-        # trade monitor (docs/superpowers/specs/2026-05-12-trade-monitor-design.md)
-        # is in place. Submitting Tier 1 alone leaves Tier 2 unmanaged — orphan
-        # exposure with nothing watching for fills. ``TPCORE_SCAN_ONLY=true``
-        # short-circuits here; everything upstream (gates, governor accounting,
-        # signal logging) still runs so the audit trail is unchanged.
-        if os.getenv("TPCORE_SCAN_ONLY", "").lower() == "true":
-            logger.info(
-                "sigma.order_manager.scan_only_skipped",
-                ticker=decision.ticker,
-                qty=decision.qty,
-                notional=str(decision.notional_usd),
-            )
-            return None
+        # Submit only the Tier 1 bracket; the trade monitor handles Tier 2
+        # reactively after the entry fill arrives on Alpaca's trade_updates.
+        tier1_payload = decision.order_payloads[0]
+        tier1_order = await self._broker.submit_tier1_only(
+            ticker=decision.ticker,
+            qty=decision.tier1_qty,
+            side=tier1_payload["side"],
+            take_profit_price=assessment.take_profit_mid,
+            stop_loss_price=assessment.stop_price,
+            client_order_id=str(tier1_payload["client_order_id"]),
+            engine_id=ENGINE_ID,
+        )
+        placed = [tier1_order]
 
-        placed = await self._broker.submit_execution_decision(decision)
+        # Persist for the trade monitor to pick up.
+        trade_key = _trade_key(tier1_order.client_order_id)
+        await self._persist_tier1_to_open_orders(
+            tier1_order=tier1_order,
+            trade_key=trade_key,
+            decision=decision,
+            assessment=assessment,
+        )
+
         # Cache the assessment under the trade key so reconcile can build AARs.
-        if placed:
-            trade_key = _trade_key(placed[0].client_order_id)
-            self._trade_assessments[trade_key] = assessment
+        self._trade_assessments[trade_key] = assessment
 
         # Bump open-position counter once per *trade*, not per leg.
         await self._governor.record_fill(
@@ -169,26 +188,82 @@ class SigmaOrderManager:
         logger.info(
             "sigma.order_manager.trade_submitted",
             ticker=decision.ticker,
-            qty=decision.qty,
-            tier1_qty=decision.tier1_qty,
-            tier2_qty=decision.tier2_qty,
+            qty=decision.tier1_qty,
+            tier2_pending=decision.tier2_qty,
             notional=str(decision.notional_usd),
+            broker_order_id=tier1_order.broker_order_id,
         )
 
         # Parity harness — non-blocking. Tier 1 (the bracket entry) is the
-        # informative leg; we don't pair the Tier 2 limit since it doesn't
-        # fire until much later.
-        if self._parity is not None and placed:
+        # informative leg; Tier 2 lives in the monitor.
+        if self._parity is not None:
             try:
-                await self._parity.submit_pair(placed[0])
+                await self._parity.submit_pair(tier1_order)
             except Exception as exc:  # pragma: no cover - defensive
                 logger.warning(
                     "sigma.order_manager.parity_harness_failed",
-                    client_order_id=placed[0].client_order_id,
+                    client_order_id=tier1_order.client_order_id,
                     error=str(exc),
                 )
 
         return placed
+
+    async def _persist_tier1_to_open_orders(
+        self,
+        *,
+        tier1_order: Order,
+        trade_key: str,
+        decision: ExecutionDecision,
+        assessment: PhaseAssessment,
+    ) -> None:
+        """Insert the Tier 1 row that the trade monitor will react to.
+
+        Idempotent on ``(engine, trade_id, order_type)`` — re-running a
+        submission overwrites the broker_order_id but keeps the same row,
+        so the monitor sees the latest broker ack.
+        """
+        if self._pool is None:
+            logger.warning(
+                "sigma.order_manager.no_pool_persistence_skipped",
+                trade_key=trade_key,
+                broker_order_id=tier1_order.broker_order_id,
+                note="trade monitor will not find this row — set pool or aar_writer with pool",
+            )
+            return
+        payload = json.dumps(
+            {
+                "decision": decision.model_dump(mode="json"),
+                "assessment": assessment.model_dump(mode="json"),
+            },
+            default=str,
+        )
+        sql = """
+            INSERT INTO platform.open_orders
+                (engine, trade_id, ticker, order_type,
+                 alpaca_order_id, status, decision_data)
+            VALUES ($1, $2, $3, 'tier1', $4, 'pending', $5::jsonb)
+            ON CONFLICT (engine, trade_id, order_type)
+            DO UPDATE SET
+                alpaca_order_id = EXCLUDED.alpaca_order_id,
+                decision_data = EXCLUDED.decision_data,
+                updated_at = now()
+        """
+        try:
+            async with self._pool.acquire() as conn:
+                await conn.execute(
+                    sql,
+                    ENGINE_ID,
+                    trade_key,
+                    decision.ticker,
+                    tier1_order.broker_order_id,
+                    payload,
+                )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning(
+                "sigma.order_manager.open_orders_persist_failed",
+                trade_key=trade_key,
+                error=str(exc),
+            )
 
     async def reconcile(
         self,

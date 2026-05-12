@@ -126,6 +126,10 @@ def _broker_mock(open_position_count: int = 0) -> AsyncMock:
     broker.emergency_cancel_all.return_value = 0
     broker.list_recent_orders.return_value = []
     broker.cancel_order.return_value = None
+    # Post-trade-monitor refactor: production engine path goes through
+    # submit_tier1_only. submit_execution_decision is kept on the adapter
+    # for back-compat with legacy callers; tests mock both.
+    broker.submit_tier1_only.return_value = None
     broker.submit_execution_decision.return_value = []
     broker.get_account.return_value = type(
         "Acct", (), {"equity": Decimal("10000"), "paper": True}
@@ -162,30 +166,24 @@ async def _make_manager(
 async def test_submit_decision_runs_full_pipeline() -> None:
     manager, broker, governor = await _make_manager()
     decision = _decision()
-    placed_orders = [
-        _placed_order(
-            client_order_id="AAPL_1700000000_tier1",
-            side=OrderSide.BUY,
-            order_type=OrderType.MARKET,
-            broker_order_id="alp-1",
-            order_class=OrderClass.BRACKET,
-            take_profit_limit_price=Decimal("184.00"),
-            stop_loss_stop_price=Decimal("174.60"),
-        ),
-        _placed_order(
-            client_order_id="AAPL_1700000000_tier2",
-            side=OrderSide.SELL,
-            order_type=OrderType.LIMIT,
-            broker_order_id="alp-2",
-            time_in_force=TimeInForce.GTC,
-        ),
-    ]
-    broker.submit_execution_decision.return_value = placed_orders
+    tier1_order = _placed_order(
+        client_order_id="AAPL_1700000000_tier1",
+        side=OrderSide.BUY,
+        order_type=OrderType.MARKET,
+        broker_order_id="alp-1",
+        order_class=OrderClass.BRACKET,
+        take_profit_limit_price=Decimal("184.00"),
+        stop_loss_stop_price=Decimal("174.60"),
+    )
+    broker.submit_tier1_only.return_value = tier1_order
 
     result = await manager.submit_decision(decision, _assessment())
 
-    assert result == placed_orders
-    broker.submit_execution_decision.assert_awaited_once_with(decision)
+    # Post-trade-monitor refactor: order manager submits only Tier 1 via
+    # the broker primitive. Tier 2 is the trade monitor's responsibility.
+    assert result == [tier1_order]
+    broker.submit_tier1_only.assert_awaited_once()
+    broker.submit_execution_decision.assert_not_awaited()
     state = await governor._store.get(ENGINE_ID)  # noqa: SLF001 — read-only peek
     assert state is not None
     assert state.open_positions == 1
@@ -197,6 +195,7 @@ async def test_submit_blocked_when_capital_gate_rejects() -> None:
     big = _decision().model_copy(update={"notional_usd": Decimal("1501.00")})
     result = await manager.submit_decision(big, _assessment())
     assert result is None
+    broker.submit_tier1_only.assert_not_awaited()
     broker.submit_execution_decision.assert_not_awaited()
 
 
@@ -206,6 +205,7 @@ async def test_submit_blocked_when_governor_blocks_after_daily_loss() -> None:
     await governor.record_fill(ENGINE_ID, realized_pnl=Decimal("-501"), position_delta=0)
     result = await manager.submit_decision(_decision(), _assessment())
     assert result is None
+    broker.submit_tier1_only.assert_not_awaited()
     broker.submit_execution_decision.assert_not_awaited()
 
 
