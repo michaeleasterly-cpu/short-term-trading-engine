@@ -37,6 +37,15 @@ Alpaca's ``TradingStream`` exposes a blocking ``run()`` method that
 handles its own reconnects in alpaca-py >= 0.40. We wrap it in an
 outer retry loop with exponential backoff (1s → 60s) so the service
 survives full disconnects too.
+
+Run as a module — ``python tpcore/trade_monitor.py`` shadows stdlib
+``logging`` with the project's ``tpcore.logging`` package because the
+script's directory lands on sys.path. Use ``-m`` so the project root
+is on sys.path instead::
+
+    DATABASE_URL=$DATABASE_URL_IPV4 \\
+      ALPACA_KEY=... ALPACA_SECRET=... ALPACA_PAPER=true \\
+      python -m tpcore.trade_monitor
 """
 from __future__ import annotations
 

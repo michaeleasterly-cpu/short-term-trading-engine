@@ -71,8 +71,8 @@
       ]
     },
     "trade-monitor": {
-      "_comment": "Persistent service — consumes Alpaca trade_updates and writes platform.open_orders + platform.aar_events. Spec: docs/superpowers/specs/2026-05-12-trade-monitor-design.md. Requires ipv6EgressEnabled=true (Supabase direct connection) and ALPACA_KEY/ALPACA_SECRET/ALPACA_PAPER in service variables.",
-      "startCommand": "/app/.deps/bin/python tpcore/trade_monitor.py",
+      "_comment": "Persistent service — consumes Alpaca trade_updates and writes platform.open_orders + platform.aar_events. Spec: docs/superpowers/specs/2026-05-12-trade-monitor-design.md. Requires ipv6EgressEnabled=true (Supabase direct connection) and ALPACA_KEY/ALPACA_SECRET/ALPACA_PAPER in service variables. NOTE: must run as `python -m tpcore.trade_monitor` (not `python tpcore/trade_monitor.py`) — invoking the file directly puts tpcore/ on sys.path, which makes stdlib `import logging` resolve to the project's tpcore.logging package and crash with a circular-import error during interpreter bootstrap.",
+      "startCommand": "/app/.deps/bin/python -m tpcore.trade_monitor",
       "restartPolicyType": "ALWAYS",
       "source": {
         "repo": "michaeleasterly-cpu/short-term-trading-engine"
