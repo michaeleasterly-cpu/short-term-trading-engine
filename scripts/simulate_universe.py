@@ -203,60 +203,90 @@ def _sma(close: pd.Series, period: int) -> float:
 # ---------------------------------------------------------------------------
 
 
-_BARS_SQL = """
-    SELECT date, open, high, low, close, volume
-    FROM platform.prices_daily
-    WHERE ticker = $1
-      AND date >= $2
-      AND date <= $3
-    ORDER BY date
-"""
+# Batched, set-based SQL — one round-trip per concept, not per ticker.
+# The old implementation issued ~7.7k + 3 × ~1.4k = ~12k queries through
+# the Supabase pooler and took 30+ minutes wall-time at ~250ms/round-trip.
+# These four queries scale O(1) in ticker count.
 
-_UNIVERSE_SQL = """
-    SELECT DISTINCT ticker
-    FROM platform.prices_daily
-    WHERE date >= $1
-      AND delisted = false
+# 1) Coarse-stat per active ticker. ``rn`` is dense-ranked latest-first so
+#    the "last close" is rn=1 and the 20-day avg volume is rn <= 20.
+_COARSE_STATS_SQL = """
+    WITH active_tickers AS (
+        SELECT DISTINCT ticker
+        FROM platform.prices_daily
+        WHERE delisted = false
+          AND date >= $1::date - INTERVAL '90 days'
+          AND date <= $1::date
+    ),
+    windowed AS (
+        SELECT pd.ticker, pd.close, pd.volume,
+               ROW_NUMBER() OVER (PARTITION BY pd.ticker ORDER BY pd.date DESC) AS rn
+        FROM platform.prices_daily pd
+        JOIN active_tickers a USING (ticker)
+        WHERE pd.date >= $1::date - INTERVAL '200 days'
+          AND pd.date <= $1::date
+    )
+    SELECT ticker,
+           COUNT(*)::int AS n_bars,
+           MAX(close) FILTER (WHERE rn = 1) AS last_close,
+           AVG(volume) FILTER (WHERE rn <= 20) AS avg_vol_20
+    FROM windowed
+    GROUP BY ticker
     ORDER BY ticker
 """
 
-_FUNDAMENTALS_SQL = """
-    SELECT pb, de, revenue, filing_date
+# 2) Full 200-day bar window for the coarse-pass survivors only.
+_SURVIVOR_BARS_SQL = """
+    SELECT ticker, date, open, high, low, close, volume
+    FROM platform.prices_daily
+    WHERE ticker = ANY($1::text[])
+      AND date >= $2::date - INTERVAL '200 days'
+      AND date <= $2::date
+    ORDER BY ticker, date
+"""
+
+# 3) Latest fundamentals row (filing_date <= as_of) per survivor.
+_SURVIVOR_FUNDAMENTALS_SQL = """
+    SELECT DISTINCT ON (ticker)
+        ticker, pb, de, revenue, filing_date
     FROM platform.fundamentals_quarterly
-    WHERE ticker = $1
-      AND filing_date <= $2
-    ORDER BY filing_date DESC
-    LIMIT 1
+    WHERE ticker = ANY($1::text[])
+      AND filing_date <= $2::date
+    ORDER BY ticker, filing_date DESC
 """
 
-_CATALYST_SQL = """
-    SELECT 1
+# 4) Did each survivor have an EARNINGS_BEAT in the catalyst window?
+_SURVIVOR_CATALYST_SQL = """
+    SELECT DISTINCT ticker
     FROM platform.catalyst_events
-    WHERE ticker = $1
+    WHERE ticker = ANY($1::text[])
       AND event_type = 'EARNINGS_BEAT'
-      AND event_date >= $2
-      AND event_date <= $3
-    LIMIT 1
+      AND event_date >= $2::date
+      AND event_date <= $3::date
 """
 
 
-async def _fetch_universe(pool: asyncpg.Pool, as_of: date) -> list[str]:
-    """Distinct, non-delisted tickers with a bar in the 90 days before ``as_of``."""
-    cutoff = as_of - timedelta(days=90)
+async def _fetch_coarse_stats(pool: asyncpg.Pool, as_of: date) -> list[dict]:
+    """One query: n_bars, last_close, avg_vol_20 per active ticker."""
     async with pool.acquire() as conn:
-        rows = await conn.fetch(_UNIVERSE_SQL, cutoff)
-    return [r["ticker"] for r in rows]
+        rows = await conn.fetch(_COARSE_STATS_SQL, as_of)
+    return [dict(r) for r in rows]
 
 
-async def _fetch_bars(pool: asyncpg.Pool, ticker: str, as_of: date) -> pd.DataFrame:
-    start = as_of - timedelta(days=BARS_LOOKBACK_DAYS)
+async def _fetch_survivor_bars(
+    pool: asyncpg.Pool, survivors: list[str], as_of: date
+) -> dict[str, pd.DataFrame]:
+    """One query for every survivor's 200-day bar window, then groupby in pandas."""
+    if not survivors:
+        return {}
     async with pool.acquire() as conn:
-        rows = await conn.fetch(_BARS_SQL, ticker, start, as_of)
+        rows = await conn.fetch(_SURVIVOR_BARS_SQL, survivors, as_of)
     if not rows:
-        return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+        return {}
     df = pd.DataFrame(
         [
             {
+                "ticker": r["ticker"],
                 "date": r["date"],
                 "open": float(r["open"]),
                 "high": float(r["high"]),
@@ -267,25 +297,36 @@ async def _fetch_bars(pool: asyncpg.Pool, ticker: str, as_of: date) -> pd.DataFr
             for r in rows
         ]
     )
-    return df.sort_values("date").set_index("date")
+    out: dict[str, pd.DataFrame] = {}
+    for ticker, group in df.groupby("ticker", sort=False):
+        out[ticker] = (
+            group.drop(columns=["ticker"]).sort_values("date").set_index("date")
+        )
+    return out
 
 
-async def _fetch_fundamentals(pool: asyncpg.Pool, ticker: str, as_of: date) -> dict | None:
+async def _fetch_survivor_fundamentals(
+    pool: asyncpg.Pool, survivors: list[str], as_of: date
+) -> dict[str, dict]:
+    """One query for the latest filing_date <= as_of per survivor."""
+    if not survivors:
+        return {}
     async with pool.acquire() as conn:
-        row = await conn.fetchrow(_FUNDAMENTALS_SQL, ticker, as_of)
-    return dict(row) if row else None
+        rows = await conn.fetch(_SURVIVOR_FUNDAMENTALS_SQL, survivors, as_of)
+    return {r["ticker"]: dict(r) for r in rows}
 
 
-async def _has_recent_earnings_beat(pool: asyncpg.Pool, ticker: str, as_of: date) -> bool:
-    """True iff an EARNINGS_BEAT row exists in the last ``VEC_CATALYST_TRADING_DAYS``
-    trading days. We approximate trading days as ``ceil(N * 7 / 5)`` calendar
-    days — this is a *diagnostic* gate, not a backtest, and the engines use
-    the trading calendar for the production path."""
-    calendar_window = (VEC_CATALYST_TRADING_DAYS * 7 + 4) // 5  # ≈ 7 cal days for 5 trading
+async def _fetch_survivor_catalysts(
+    pool: asyncpg.Pool, survivors: list[str], as_of: date
+) -> set[str]:
+    """One query for the set of survivors with EARNINGS_BEAT in the catalyst window."""
+    if not survivors:
+        return set()
+    calendar_window = (VEC_CATALYST_TRADING_DAYS * 7 + 4) // 5
     cutoff = as_of - timedelta(days=calendar_window)
     async with pool.acquire() as conn:
-        row = await conn.fetchrow(_CATALYST_SQL, ticker, cutoff, as_of)
-    return row is not None
+        rows = await conn.fetch(_SURVIVOR_CATALYST_SQL, survivors, cutoff, as_of)
+    return {r["ticker"] for r in rows}
 
 
 # ---------------------------------------------------------------------------
@@ -439,20 +480,48 @@ class EngineReport:
 
 
 async def _simulate(pool: asyncpg.Pool, as_of: date, *, verbose_failures: bool) -> int:
-    tickers = await _fetch_universe(pool, as_of)
-    total_in_db = len(tickers)
+    # 1) coarse stats per active ticker (one query)
+    stats = await _fetch_coarse_stats(pool, as_of)
+    total_in_db = len(stats)
     logger.info("universe_loaded count=%d as_of=%s", total_in_db, as_of)
 
-    # Coarse filter — collect TickerPanels for survivors and reasons for the rest.
-    coarse_pass: list[TickerPanel] = []
+    coarse_pass_tickers: list[str] = []
     coarse_fails: list[tuple[str, str]] = []
-    for ticker in tickers:
-        df = await _fetch_bars(pool, ticker, as_of)
-        result, panel = _coarse_filter(ticker, df)
-        if result.passed and panel is not None:
-            coarse_pass.append(panel)
-        else:
-            coarse_fails.append((ticker, result.reason or "unknown"))
+    for s in stats:
+        n_bars = s["n_bars"] or 0
+        last_close = float(s["last_close"]) if s["last_close"] is not None else 0.0
+        avg_vol = float(s["avg_vol_20"]) if s["avg_vol_20"] is not None else 0.0
+        if n_bars < AVG_VOLUME_WINDOW:
+            coarse_fails.append((s["ticker"], f"only {n_bars} bars (need ≥{AVG_VOLUME_WINDOW})"))
+            continue
+        if last_close <= MIN_PRICE:
+            coarse_fails.append((s["ticker"], f"close ${last_close:.2f} ≤ ${MIN_PRICE:.0f}"))
+            continue
+        if avg_vol <= MIN_AVG_VOLUME:
+            coarse_fails.append((s["ticker"], f"avg vol {avg_vol:,.0f} ≤ {MIN_AVG_VOLUME:,}"))
+            continue
+        coarse_pass_tickers.append(s["ticker"])
+
+    logger.info("coarse_pass count=%d", len(coarse_pass_tickers))
+
+    # 2-4) batched fetches for the survivors only (three queries)
+    bars_by_ticker = await _fetch_survivor_bars(pool, coarse_pass_tickers, as_of)
+    fund_by_ticker = await _fetch_survivor_fundamentals(pool, coarse_pass_tickers, as_of)
+    catalyst_set = await _fetch_survivor_catalysts(pool, coarse_pass_tickers, as_of)
+
+    # Build TickerPanels in-memory from the survivor bars (no further I/O).
+    coarse_pass: list[TickerPanel] = []
+    for ticker in coarse_pass_tickers:
+        df = bars_by_ticker.get(ticker)
+        if df is None or len(df) < AVG_VOLUME_WINDOW:
+            # Shouldn't happen given the stats query, but guard anyway.
+            coarse_fails.append((ticker, "missing bars after batched fetch"))
+            continue
+        last_close = float(df["close"].iloc[-1])
+        avg_volume_20 = float(df["volume"].tail(AVG_VOLUME_WINDOW).mean())
+        coarse_pass.append(
+            TickerPanel(ticker=ticker, df=df, last_close=last_close, avg_volume_20=avg_volume_20)
+        )
 
     sigma = EngineReport(
         "Sigma",
@@ -484,8 +553,8 @@ async def _simulate(pool: asyncpg.Pool, as_of: date, *, verbose_failures: bool) 
         else:
             reversion.failures.append((panel.ticker, rev.reason or "unknown"))
 
-        fundamentals = await _fetch_fundamentals(pool, panel.ticker, as_of)
-        has_cat = await _has_recent_earnings_beat(pool, panel.ticker, as_of)
+        fundamentals = fund_by_ticker.get(panel.ticker)
+        has_cat = panel.ticker in catalyst_set
         vec = _vector_filter(panel, fundamentals, has_cat)
         if vec.passed:
             vector.candidates.append(panel.ticker)
