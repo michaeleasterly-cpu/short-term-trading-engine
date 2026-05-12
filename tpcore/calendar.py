@@ -1,8 +1,17 @@
 """NYSE (XNYS) calendar helpers.
 
-All inputs and outputs are timezone-aware UTC datetimes. The underlying
-``exchange_calendars`` library uses pandas Timestamps internally; we convert
-on the boundary so callers only ever deal with stdlib ``datetime``.
+All inputs and outputs are timezone-aware stdlib UTC datetimes. The
+underlying ``exchange_calendars`` library uses pandas Timestamps
+internally; we convert on the boundary so callers only ever deal with
+``datetime``.
+
+Boundary detail: ``exchange_calendars.is_session`` / ``session_open`` /
+``session_close`` validate inputs through ``calendar_helpers.parse_date``,
+which expects either a *naive* Timestamp or a Timestamp whose ``tz``
+exposes ``.key`` (zoneinfo / pytz). The stdlib ``datetime.timezone.utc``
+object has no ``.key``, so we pass naive UTC Timestamps for the
+``is_session`` / ``session_open`` / ``session_close`` calls and keep
+the aware Timestamp only for the open/close range comparison.
 """
 from __future__ import annotations
 
@@ -27,7 +36,18 @@ def _ensure_utc(dt: datetime) -> datetime:
 
 
 def _to_ts(dt: datetime) -> pd.Timestamp:
+    """Tz-aware pandas Timestamp (stdlib UTC) for instant comparisons."""
     return pd.Timestamp(_ensure_utc(dt))
+
+
+def _to_naive_utc_ts(dt: datetime) -> pd.Timestamp:
+    """Naive UTC pandas Timestamp for ``exchange_calendars`` boundary calls.
+
+    Same wall-clock UTC value; the tzinfo is stripped so the helper
+    library doesn't try to read a ``.tz.key`` attribute that stdlib's
+    ``datetime.timezone.utc`` doesn't expose.
+    """
+    return pd.Timestamp(_ensure_utc(dt).replace(tzinfo=None))
 
 
 def is_trading_day(dt: datetime) -> bool:
@@ -40,35 +60,33 @@ def is_trading_day(dt: datetime) -> bool:
 def session_contains(dt: datetime) -> bool:
     """Return True if ``dt`` is inside the regular trading session window."""
     cal = _calendar()
-    ts = _to_ts(dt)
-    if not cal.is_session(ts.normalize()):
+    naive = _to_naive_utc_ts(dt)
+    session_day = naive.normalize()
+    if not cal.is_session(session_day):
         return False
-    open_ts = cal.session_open(ts.normalize())
-    close_ts = cal.session_close(ts.normalize())
-    return open_ts <= ts <= close_ts
+    open_ts = cal.session_open(session_day)
+    close_ts = cal.session_close(session_day)
+    return open_ts <= _to_ts(dt) <= close_ts
 
 
 def next_open(dt: datetime) -> datetime:
     """Next regular session open at or after ``dt`` (UTC)."""
     cal = _calendar()
-    ts = _to_ts(dt)
-    open_ts = cal.next_open(ts)
+    open_ts = cal.next_open(_to_naive_utc_ts(dt))
     return open_ts.to_pydatetime().astimezone(UTC)
 
 
 def next_close(dt: datetime) -> datetime:
     """Next regular session close at or after ``dt`` (UTC)."""
     cal = _calendar()
-    ts = _to_ts(dt)
-    close_ts = cal.next_close(ts)
+    close_ts = cal.next_close(_to_naive_utc_ts(dt))
     return close_ts.to_pydatetime().astimezone(UTC)
 
 
 def previous_close(dt: datetime) -> datetime:
     """Most recent session close at or before ``dt`` (UTC)."""
     cal = _calendar()
-    ts = _to_ts(dt)
-    close_ts = cal.previous_close(ts)
+    close_ts = cal.previous_close(_to_naive_utc_ts(dt))
     return close_ts.to_pydatetime().astimezone(UTC)
 
 

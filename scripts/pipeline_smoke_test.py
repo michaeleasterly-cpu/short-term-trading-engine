@@ -56,6 +56,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 from tpcore.alpaca import AlpacaPaperBrokerAdapter
+from tpcore.calendar import next_open, session_contains
 from tpcore.db import build_asyncpg_pool
 from tpcore.logging.db_handler import DBLogHandler
 
@@ -75,16 +76,26 @@ POLL_TIMEOUT_SEC = 60.0
 
 
 def _is_market_open(now: datetime | None = None) -> bool:
-    """US regular session 09:30–16:00 ET (13:30–20:00 UTC), Mon–Fri.
+    """Wrapper around ``tpcore.calendar.session_contains``.
 
-    Smoke-grade check — doesn't consult the trading calendar for half-days
-    or holidays. Caller should still be willing to skip on a no-fill.
+    Defers to the project's NYSE-aware calendar (``exchange_calendars``)
+    rather than a hardcoded UTC window — so half-days, holidays, and
+    DST shifts are handled the same way the engines see them.
     """
+    return session_contains(now or datetime.now(UTC))
+
+
+def _skipped_message(now: datetime | None = None) -> str:
+    """Human-readable explanation for why we're skipping the live test."""
     now = now or datetime.now(UTC)
-    if now.weekday() >= 5:
-        return False
-    minutes = now.hour * 60 + now.minute
-    return 13 * 60 + 30 <= minutes <= 20 * 60
+    try:
+        nxt = next_open(now).astimezone(UTC)
+        return (
+            f"SKIPPED — NYSE session is closed at {now.isoformat(timespec='minutes')}. "
+            f"Next open per tpcore.calendar: {nxt.isoformat(timespec='minutes')}."
+        )
+    except Exception:
+        return f"SKIPPED — NYSE session is closed at {now.isoformat(timespec='minutes')}."
 
 
 async def _cleanup_test_rows(pool: asyncpg.Pool, ticker: str) -> int:
@@ -235,10 +246,7 @@ async def amain() -> int:
         print("FAILED — ALPACA_KEY/ALPACA_SECRET not set", file=sys.stderr)
         return 1
     if not _is_market_open():
-        print(
-            "SKIPPED — US market closed. Re-run between 13:30 and 20:00 UTC on a weekday.",
-            file=sys.stderr,
-        )
+        print(_skipped_message(), file=sys.stderr)
         return 0
 
     pool = await build_asyncpg_pool(db_url, max_size=4)
