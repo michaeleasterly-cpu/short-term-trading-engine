@@ -10,15 +10,12 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-import pytest
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 import ops  # noqa: E402 — sys.path adjusted above
-
 
 # ────────────────────────────────────────────────────────────────────────
 # _CANDIDATE_RE — parses lines like "Sigma candidates: 4" emitted by

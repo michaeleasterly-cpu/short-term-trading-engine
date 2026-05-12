@@ -46,7 +46,7 @@ import sys
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -273,7 +273,7 @@ async def _run_stage(
 
     try:
         detail = await asyncio.wait_for(coro_factory(), timeout=timeout)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         elapsed_ms = int((time.monotonic() - started) * 1000)
         log.error("ops.stage.timeout", duration_ms=elapsed_ms, timeout_sec=timeout)
         await db_log.log(
