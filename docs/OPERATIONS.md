@@ -549,6 +549,22 @@ ALPACA_KEY=... ALPACA_SECRET=... ALPACA_PAPER=true \
 
 Idempotent — each run uses fresh UUID-suffixed `client_order_id`s. Validated 2026-05-12 on ACAD (broker IDs round-tripped, both audit events landed in `application_log`).
 
+### `scripts/pipeline_smoke_test.py`
+
+End-to-end live pipeline smoke for the trade-monitor era — exercises **engine submission → broker fill → monitor reaction → Tier 2 submission**. Submits one Tier 1 BUY bracket on SPY (1 share, wide TP/SL so the bracket's exit legs don't fire), inserts a Sigma-shaped row in `platform.open_orders` with `tier2_qty = 1`, then polls for the trade monitor to (a) flip the Tier 1 row to `status='filled'` once Alpaca acks the entry leg, and (b) insert a Tier 2 row after submitting the follow-on bracket. Cleans up by cancelling all open Alpaca orders for SPY and deleting both `open_orders` rows in a `finally` block; reruns are idempotent.
+
+**Prerequisites**:
+- US market open (the script gates on 13:30–20:00 UTC weekdays and exits 0 with `SKIPPED` outside that window).
+- Trade monitor running in a second terminal: `DATABASE_URL=$DATABASE_URL_IPV4 ALPACA_KEY=... ALPACA_SECRET=... ALPACA_PAPER=true python -m tpcore.trade_monitor`.
+
+```bash
+DATABASE_URL=$(grep '^DATABASE_URL_IPV4=' .env | cut -d= -f2-) \
+ALPACA_KEY=... ALPACA_SECRET=... ALPACA_PAPER=true \
+  .venv/bin/python scripts/pipeline_smoke_test.py
+```
+
+The mocked-stream tests in `tpcore/tests/test_trade_monitor.py` cover the AAR-write half of the pipeline deterministically; this script proves the live broker + WebSocket legs that mocks can't reach.
+
 ---
 
 ## 11. Troubleshooting

@@ -1,5 +1,9 @@
 # Session Log
 
+## 2026-05-12 (continued) — Pipeline smoke test + monitor run-as-module fix
+- Local run of `python tpcore/trade_monitor.py` surfaced a sys.path trap: the script's directory ends up on sys.path, and the stdlib's internal `import logging` (via concurrent.futures._base via asyncio) resolves to the project's `tpcore.logging` package. Fix: invoke as `python -m tpcore.trade_monitor`. Updated docstring + `railway.json` startCommand accordingly; verified the monitor connects to `BaseURL.TRADING_STREAM_PAPER` and writes STARTUP + STREAM_CONNECTED to `application_log`.
+- New `scripts/pipeline_smoke_test.py` — live end-to-end smoke that submits one Tier 1 BUY bracket on SPY, inserts the matching `open_orders` row, polls for the monitor to mark Tier 1 filled and submit Tier 2, then cancels everything and cleans up. Market-hours gated (13:30–20:00 UTC, Mon–Fri); idempotent across reruns. Documented in `docs/OPERATIONS.md` §10 alongside the existing broker-only `smoke_test.py`.
+
 ## 2026-05-12 (continued) — Trade monitor built (Phase 1.5 complete)
 - M1: Alembic migration `20260512_0000_create_open_orders.py` creates `platform.open_orders` (id, engine, trade_id, ticker, order_type, alpaca_order_id, status, fill_price, filled_at, decision_data jsonb) with `UNIQUE (engine, trade_id, order_type)` + partial index on `alpaca_order_id` for the monitor's hot path.
 - M4: `AlpacaPaperBrokerAdapter.submit_tier1_only(...)` — single-bracket primitive returning the placed `Order`. `submit_execution_decision` retained as deprecated wrapper for the smoke test.
