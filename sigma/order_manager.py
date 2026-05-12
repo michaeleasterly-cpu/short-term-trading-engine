@@ -14,6 +14,7 @@ suffixes so the manager can group legs without a local DB.
 """
 from __future__ import annotations
 
+import os
 from collections import defaultdict
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -135,6 +136,21 @@ class SigmaOrderManager:
                 "sigma.order_manager.governor_blocked",
                 ticker=decision.ticker,
                 reason=check.reason,
+            )
+            return None
+
+        # Scan-only mode: gate the engine short of broker submission until the
+        # trade monitor (docs/superpowers/specs/2026-05-12-trade-monitor-design.md)
+        # is in place. Submitting Tier 1 alone leaves Tier 2 unmanaged — orphan
+        # exposure with nothing watching for fills. ``TPCORE_SCAN_ONLY=true``
+        # short-circuits here; everything upstream (gates, governor accounting,
+        # signal logging) still runs so the audit trail is unchanged.
+        if os.getenv("TPCORE_SCAN_ONLY", "").lower() == "true":
+            logger.info(
+                "sigma.order_manager.scan_only_skipped",
+                ticker=decision.ticker,
+                qty=decision.qty,
+                notional=str(decision.notional_usd),
             )
             return None
 

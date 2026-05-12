@@ -17,7 +17,17 @@
 
 **Deploy discipline (git is the source of truth):** Every Railway deployment must correspond to a commit on `main`. Never use `railway redeploy --from-source` or `railway up` to push a new image — they create live deployments with no audit trail and break the "what's on `main` = what's running" invariant. If a push doesn't visibly trigger a rebuild within ~2 minutes, push an empty commit instead: `git commit --allow-empty -m "trigger: <reason>" && git push`.
 
-**Build layout:** Railway builds via Railpack. `pyproject.toml` deps install into a venv at `/app/.venv` (created during build by `python -m venv /app/.venv && /app/.venv/bin/pip install -e .`); each service's `startCommand` invokes `/app/.venv/bin/python` directly. The runtime Python version is pinned to **3.11.15** by the repo-root `.python-version` file. If a service crashes with `ModuleNotFoundError`, check `railway logs --build` to confirm the `pip install` step actually ran and produced "Successfully installed …" — and that the runtime is using `/app/.venv/bin/python` rather than mise's system Python.
+**Build layout:** Railway builds via Railpack. The runtime Python version is pinned to **3.11.15** by the repo-root `.python-version` file (Railpack reads it through mise). Project deps install into a venv at **`/app/.deps`** — NOT `/app/.venv`. `.gitignore` line 8 (`.venv/`) causes Railpack to silently strip a venv built at the conventional path when copying `/app` from build → runtime, so we use a non-gitignored path. The buildCommand in `railway.json` is:
+
+```
+python -m venv /app/.deps && /app/.deps/bin/pip install --upgrade pip && /app/.deps/bin/pip install -e .
+```
+
+Each service's `startCommand` invokes `/app/.deps/bin/python <entrypoint>.py`. Do not try to "let Railpack auto-install" by removing the buildCommand: Railpack's Python auto-install only fires when it sees `requirements.txt`, `poetry.lock`, `pdm.lock`, `uv.lock`, or `Pipfile`. Our bare `pyproject.toml` + `setuptools.build_meta` matches none of those — auto-install produces zero pip lines and runtime crashes with `ModuleNotFoundError`. The explicit buildCommand is mandatory.
+
+**Egress (IPv6 for Supabase):** `DATABASE_URL` on Railway is the Supabase *direct* hostname (`db.<project>.supabase.co`) which resolves IPv6-only. Each service must have `ipv6EgressEnabled = true` or asyncpg fails at startup with `OSError: [Errno 101] Network is unreachable`. There is no `railway.json` field for this; toggle per service via the GraphQL `serviceInstanceUpdate` mutation (see project memory `feedback_railway_python_deploy.md`). Required when provisioning any new service that touches the DB.
+
+If a service crashes with `ModuleNotFoundError`, check `railway logs --build` to confirm the `pip install` step ran (look for "Successfully installed …") and that the runtime is using `/app/.deps/bin/python`, not the bare `python` shim.
 
 **Database access:** The local `.env` exposes two URLs (a known gotcha — see the project memory entry). Use `DATABASE_URL_IPV4` (Supabase pooler) for local CLI work; Railway uses the IPv6 direct URL via `DATABASE_URL`. Never copy one into the other.
 

@@ -10,6 +10,7 @@ Mirrors ``sigma.order_manager.SigmaOrderManager``; differences:
 """
 from __future__ import annotations
 
+import os
 from collections import defaultdict
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -113,6 +114,19 @@ class ReversionOrderManager:
                 "reversion.order_manager.governor_blocked",
                 ticker=decision.ticker,
                 reason=check.reason,
+            )
+            return None
+
+        # Scan-only mode: gate the engine short of broker submission until the
+        # trade monitor (docs/superpowers/specs/2026-05-12-trade-monitor-design.md)
+        # is in place. See sigma/order_manager.py for the rationale.
+        if os.getenv("TPCORE_SCAN_ONLY", "").lower() == "true":
+            logger.info(
+                "reversion.order_manager.scan_only_skipped",
+                ticker=decision.ticker,
+                direction=decision.direction.value,
+                qty=decision.qty,
+                notional=str(decision.notional_usd),
             )
             return None
 
