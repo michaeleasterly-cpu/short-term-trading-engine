@@ -569,7 +569,59 @@ async def _simulate(pool: asyncpg.Pool, as_of: date, *, verbose_failures: bool) 
         engines=[sigma, reversion, vector],
         verbose_failures=verbose_failures,
     )
+    await _emit_universe_simulation_event(
+        pool=pool,
+        as_of=as_of,
+        total_in_db=total_in_db,
+        coarse_pass_count=len(coarse_pass),
+        sigma_candidates=sigma.candidates,
+        reversion_candidates=reversion.candidates,
+        vector_candidates=vector.candidates,
+    )
     return 0
+
+
+async def _emit_universe_simulation_event(
+    *,
+    pool: asyncpg.Pool,
+    as_of: date,
+    total_in_db: int,
+    coarse_pass_count: int,
+    sigma_candidates: list[str],
+    reversion_candidates: list[str],
+    vector_candidates: list[str],
+) -> None:
+    """Persist a single ``UNIVERSE_SIMULATION`` row in ``application_log``.
+
+    The smoke-test workflow (``scripts/smoke_test.py``) reads the most
+    recent event to pick a Sigma candidate without re-running the full
+    coarse + fine scan. The row is intentionally idempotent — a fresh
+    insert per script invocation, with the prior run preserved by the
+    log's 7-day retention.
+    """
+    import uuid as _uuid
+
+    from tpcore.logging.db_handler import DBLogHandler
+
+    handler = DBLogHandler(pool=pool, engine="platform", run_id=_uuid.uuid4())
+    await handler.log(
+        event_type="UNIVERSE_SIMULATION",
+        message=(
+            f"as_of={as_of.isoformat()} "
+            f"sigma={len(sigma_candidates)} "
+            f"reversion={len(reversion_candidates)} "
+            f"vector={len(vector_candidates)}"
+        ),
+        severity="INFO",
+        data={
+            "as_of": as_of.isoformat(),
+            "total_in_db": total_in_db,
+            "coarse_pass": coarse_pass_count,
+            "sigma_candidates": sigma_candidates,
+            "reversion_candidates": reversion_candidates,
+            "vector_candidates": vector_candidates,
+        },
+    )
 
 
 def _print_report(
