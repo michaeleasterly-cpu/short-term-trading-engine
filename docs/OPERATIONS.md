@@ -25,6 +25,54 @@ export DATABASE_URL=$(grep '^DATABASE_URL_IPV4=' .env | cut -d= -f2-)
 
 ---
 
+## Daily Maintenance (via ops CLI)
+
+The maintenance CLI `scripts/ops.py` is the single entry point for daily and weekly data work. It replaces the previous mix of ad-hoc shell invocations (`run_daily_bars_all_active.py`, `run_corporate_actions_all_active.py`, etc.) and Railway-dependent ingestion checks. Every stage delegates to existing `tpcore` handlers; the CLI itself owns timeouts, logging, and the summary report.
+
+### Before trading
+
+```bash
+python scripts/ops.py --full
+```
+
+This will:
+
+- Refresh trading-universe daily bars, corporate actions, and fundamentals.
+- Run the Data Validation Suite.
+- Run the universe simulation (`scripts/simulate_universe.py`) and report candidate counts per engine.
+- Print a health report.
+
+Each stage has a 120-second hard timeout. On timeout an ERROR row lands in `platform.application_log` and the pipeline moves on to the next stage — a single slow upstream never blocks the whole maintenance run.
+
+### Weekly Maintenance
+
+Sunday cron jobs (`fundamentals-refresh-scheduler` 03:00 UTC, `corporate-actions-scheduler` 04:00 UTC, `validation-scheduler` 06:00 UTC — see §1) already perform the weekly heavy lifts on Railway. To re-run them locally:
+
+```bash
+# Same command as the daily run; the underlying handlers are idempotent.
+python scripts/ops.py --full
+```
+
+A future `--update-weekly` flag is reserved for any extended-universe / extended-fundamentals work that is heavier than the daily refresh. It has not been built yet — there are no extra manual steps to run weekly today; the Sunday Railway crons cover it. If a regression in the Sunday crons forces a manual catch-up, re-run `python scripts/ops.py --full` to backfill the same scope the cron would have ingested.
+
+### Interpreting Results
+
+- `python scripts/ops.py --check --pretty` displays the health report seen during daily operation (terminal-friendly).
+- `python scripts/ops.py --check` returns JSON on stdout, suitable for scripting and grep-by-key.
+- `python scripts/ops.py --update --dry-run` logs every stage to `platform.application_log` without performing any data writes — useful before letting a new credential or schema change touch the live tables.
+- If the check reports `DEGRADED`, the offending sub-check has `ok: false` plus a `reason`/`error` field. Cross-reference the relevant section below — §1 (Railway), §2 (application_log), §3 (database), §5 (engine runtime), §6 (validation), §10 (troubleshooting).
+
+The CLI emits a unique `run_id` (UUID) for every invocation. Every row written to `platform.application_log` during the run carries that `run_id`, so the full timeline of a single `--full` run can be reconstructed with:
+
+```sql
+SELECT recorded_at, event_type, severity, message, data
+FROM platform.application_log
+WHERE run_id = '<uuid-from-stdout>'
+ORDER BY recorded_at;
+```
+
+---
+
 ## 1. Railway Service Health
 
 Six services run on Railway. Verify each has a recent successful deploy and execution.

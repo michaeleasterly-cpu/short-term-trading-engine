@@ -445,6 +445,7 @@ Current decision: **stay on FMP Starter and Alpaca free**. The overfitting diagn
 | Cross-cutting | Overfitting detection suite | **Complete** — `tpcore/backtest/overfitting.py` wired into all three engine backtests. See *Overfitting Diagnostics Status* below. |
 | Cross-cutting | Data Validation Suite | **Complete** — deployed on Railway as `validation-scheduler` (Sun 06:00 UTC). |
 | Cross-cutting | Corporate-actions pipeline | **Complete** — deployed as `corporate-actions-scheduler` (Sun 04:00 UTC). |
+| Cross-cutting | Maintenance CLI (`scripts/ops.py`) | **Complete** — single-file `--update` / `--check` / `--full` driver for daily + weekly data work. Reuses `tpcore.ingestion.handlers`, writes audit rows to `platform.application_log` under `engine='ops'`. Operator runbook in `docs/OPERATIONS.md` § *Daily Maintenance (via ops CLI)*. |
 
 ### Overfitting Diagnostics Status
 
