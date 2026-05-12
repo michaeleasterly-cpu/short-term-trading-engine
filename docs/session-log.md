@@ -1,5 +1,13 @@
 # Session Log
 
+## 2026-05-12 (continued) — Calendar bug fix + pipeline smoke wired through tpcore.calendar
+- Acceptance audit on `scripts/pipeline_smoke_test.py` caught a real contract violation: the market-hours check was a hardcoded `13:30 ≤ UTC minutes ≤ 20:00 ` range, not `tpcore.calendar`. CLAUDE.md + STYLE_GUIDE.md require the calendar.
+- Replacing the hardcoded check surfaced a latent bug in `tpcore.calendar`: `session_contains` / `next_open` / `next_close` / `previous_close` passed tz-aware pandas Timestamps (carrying `datetime.timezone.utc`) into `exchange_calendars`, which now validates inputs through `calendar_helpers.parse_date` and reads `ts.tz.key`. Stdlib `datetime.timezone.utc` doesn't expose `.key`, so every call crashed with `AttributeError`.
+- Fix: naive UTC Timestamps at the `exchange_calendars` boundary (same wall-clock UTC, no tzinfo to introspect); tz-aware Timestamps remain only for the open/close range comparison in `session_contains`. Stdlib `datetime.timezone.utc` stays the lingua franca — no `ZoneInfo` / `pytz` introduced.
+- New `tpcore/tests/test_calendar.py` (11 tests) pins the regression: during/before/after-session, weekend, holiday, naive-input ValueError, `next_open` / `next_close` / `previous_close` stdlib-UTC round-trip, `trading_days_between` arithmetic.
+- `scripts/pipeline_smoke_test.py` `SKIPPED` message now reports the live `next_open` timestamp from the calendar — e.g. `"SKIPPED — NYSE session is closed at 2026-05-12T10:27+00:00. Next open per tpcore.calendar: 2026-05-12T13:30+00:00."`
+- 322 tests pass, ruff clean.
+
 ## 2026-05-12 (continued) — Pipeline smoke test + monitor run-as-module fix
 - Local run of `python tpcore/trade_monitor.py` surfaced a sys.path trap: the script's directory ends up on sys.path, and the stdlib's internal `import logging` (via concurrent.futures._base via asyncio) resolves to the project's `tpcore.logging` package. Fix: invoke as `python -m tpcore.trade_monitor`. Updated docstring + `railway.json` startCommand accordingly; verified the monitor connects to `BaseURL.TRADING_STREAM_PAPER` and writes STARTUP + STREAM_CONNECTED to `application_log`.
 - New `scripts/pipeline_smoke_test.py` — live end-to-end smoke that submits one Tier 1 BUY bracket on SPY, inserts the matching `open_orders` row, polls for the monitor to mark Tier 1 filled and submit Tier 2, then cancels everything and cleans up. Market-hours gated (13:30–20:00 UTC, Mon–Fri); idempotent across reruns. Documented in `docs/OPERATIONS.md` §10 alongside the existing broker-only `smoke_test.py`.

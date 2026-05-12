@@ -554,7 +554,7 @@ Idempotent — each run uses fresh UUID-suffixed `client_order_id`s. Validated 2
 End-to-end live pipeline smoke for the trade-monitor era — exercises **engine submission → broker fill → monitor reaction → Tier 2 submission**. Submits one Tier 1 BUY bracket on SPY (1 share, wide TP/SL so the bracket's exit legs don't fire), inserts a Sigma-shaped row in `platform.open_orders` with `tier2_qty = 1`, then polls for the trade monitor to (a) flip the Tier 1 row to `status='filled'` once Alpaca acks the entry leg, and (b) insert a Tier 2 row after submitting the follow-on bracket. Cleans up by cancelling all open Alpaca orders for SPY and deleting both `open_orders` rows in a `finally` block; reruns are idempotent.
 
 **Prerequisites**:
-- US market open (the script gates on 13:30–20:00 UTC weekdays and exits 0 with `SKIPPED` outside that window).
+- US market open per `tpcore.calendar.session_contains` (NYSE/XNYS via `exchange_calendars`) — the script exits 0 with `SKIPPED` and the calendar's next-open timestamp outside the regular session. Half-days, holidays, and DST are handled the same way the engines see them; no hardcoded UTC window.
 - Trade monitor running in a second terminal: `DATABASE_URL=$DATABASE_URL_IPV4 ALPACA_KEY=... ALPACA_SECRET=... ALPACA_PAPER=true python -m tpcore.trade_monitor`.
 
 ```bash
