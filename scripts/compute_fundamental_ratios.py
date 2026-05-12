@@ -31,32 +31,56 @@ import asyncio
 import logging
 import os
 import sys
-from decimal import Decimal
 
 from tpcore.db import build_asyncpg_pool
 
 logger = logging.getLogger("scripts.compute_fundamental_ratios")
 
 
-_FETCH_PRICE_SQL = """
-    SELECT close
-    FROM platform.prices_daily
-    WHERE ticker = $1 AND date <= $2
-    ORDER BY date DESC
-    LIMIT 1
-"""
-
-_FETCH_FUNDS_SQL = """
-    SELECT ticker, filing_date, total_assets, total_liabilities, shares_outstanding
-    FROM platform.fundamentals_quarterly
-    {where}
-    ORDER BY ticker, filing_date
-"""
-
+# Set-based UPDATE: for each (ticker, filing_date) needing pb/de, pick the
+# most recent prices_daily close on-or-before filing_date and compute both
+# ratios. One SQL statement so it scales to 100k+ rows without holding a
+# pool connection long enough for the Supabase pooler to drop it.
+#
+# Why total_assets > 0 AND total_liabilities >= 0 (not just (ta - tl) > 0):
+# FMP occasionally returns degenerate rows with ta = 0 and tl < 0 (the
+# accounting is inverted — e.g. ARX 2024-03-31). Those satisfy
+# (ta - tl) > 0 because 0 - (-x) > 0, but produce a de of -1.0 because
+# tl / book = -x / x. The tightened predicates reject those rows up front
+# so we never write the bogus ratios. 51 rows had this shape post-backfill
+# and were nulled by a one-shot cleanup; this filter keeps re-runs clean.
+#
+# Postgres has no Decimal-style ``.quantize(Decimal("0.000001"))``; we use
+# ``round(..., 6)`` which matches at NUMERIC precision.
 _UPDATE_SQL = """
-    UPDATE platform.fundamentals_quarterly
-    SET pb = $1, de = $2
-    WHERE ticker = $3 AND filing_date = $4
+    WITH targets AS (
+        SELECT ticker, filing_date, total_assets, total_liabilities, shares_outstanding
+        FROM platform.fundamentals_quarterly
+        WHERE total_assets IS NOT NULL
+          AND total_liabilities IS NOT NULL
+          AND shares_outstanding IS NOT NULL
+          AND total_assets > 0
+          AND total_liabilities >= 0
+          AND shares_outstanding > 0
+          AND (total_assets - total_liabilities) > 0
+          {where}
+    ),
+    priced AS (
+        SELECT DISTINCT ON (t.ticker, t.filing_date)
+            t.ticker, t.filing_date, t.total_assets, t.total_liabilities,
+            t.shares_outstanding, pd.close
+        FROM targets t
+        JOIN platform.prices_daily pd
+          ON pd.ticker = t.ticker AND pd.date <= t.filing_date
+        ORDER BY t.ticker, t.filing_date, pd.date DESC
+    )
+    UPDATE platform.fundamentals_quarterly fq
+    SET pb = round(p.close / ((p.total_assets - p.total_liabilities) / p.shares_outstanding), 6),
+        de = round(p.total_liabilities / (p.total_assets - p.total_liabilities), 6)
+    FROM priced p
+    WHERE fq.ticker = p.ticker
+      AND fq.filing_date = p.filing_date
+    RETURNING fq.ticker
 """
 
 
@@ -67,44 +91,14 @@ async def amain(args: argparse.Namespace) -> int:
         print("DATABASE_URL not set", file=sys.stderr)
         return 2
 
-    where = "" if args.force else "WHERE pb IS NULL OR de IS NULL"
-    sql = _FETCH_FUNDS_SQL.format(where=where)
+    where = "" if args.force else "AND (pb IS NULL OR de IS NULL)"
+    sql = _UPDATE_SQL.format(where=where)
 
     pool = await build_asyncpg_pool(db_url)
-    counts = {"computed": 0, "skipped_no_balance": 0, "skipped_no_book_value": 0,
-              "skipped_no_shares": 0, "skipped_no_price": 0}
     try:
+        logger.info("compute_ratios.start force=%s", args.force)
         async with pool.acquire() as conn:
-            rows = await conn.fetch(sql)
-            logger.info("compute_ratios.input rows=%d (force=%s)", len(rows), args.force)
-
-            for r in rows:
-                ticker = r["ticker"]
-                filing = r["filing_date"]
-                ta = r["total_assets"]
-                tl = r["total_liabilities"]
-                sh = r["shares_outstanding"]
-                if ta is None or tl is None:
-                    counts["skipped_no_balance"] += 1
-                    continue
-                book_value = Decimal(str(ta)) - Decimal(str(tl))
-                if book_value <= 0:
-                    counts["skipped_no_book_value"] += 1
-                    continue
-                if sh is None or Decimal(str(sh)) <= 0:
-                    counts["skipped_no_shares"] += 1
-                    continue
-                bvps = book_value / Decimal(str(sh))
-                close_row = await conn.fetchrow(_FETCH_PRICE_SQL, ticker, filing)
-                if close_row is None:
-                    counts["skipped_no_price"] += 1
-                    continue
-                close = Decimal(str(close_row["close"]))
-                pb = (close / bvps).quantize(Decimal("0.000001"))
-                de = (Decimal(str(tl)) / book_value).quantize(Decimal("0.000001"))
-                await conn.execute(_UPDATE_SQL, pb, de, ticker, filing)
-                counts["computed"] += 1
-
+            updated = await conn.fetch(sql)
             populated = await conn.fetchrow(
                 "SELECT COUNT(*) FILTER (WHERE pb IS NOT NULL) AS pb_n, "
                 "COUNT(*) FILTER (WHERE de IS NOT NULL) AS de_n, "
@@ -114,11 +108,9 @@ async def amain(args: argparse.Namespace) -> int:
         await pool.close()
 
     print()
-    print("Computation summary:")
-    for k, v in counts.items():
-        print(f"  {k}: {v}")
+    print(f"Rows updated this run: {len(updated)}")
     print(
-        f"\nfundamentals_quarterly: {populated['total']} rows total, "
+        f"fundamentals_quarterly: {populated['total']} rows total, "
         f"pb populated on {populated['pb_n']}, de populated on {populated['de_n']}"
     )
     return 0
