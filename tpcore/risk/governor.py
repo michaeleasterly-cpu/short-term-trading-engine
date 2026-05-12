@@ -21,12 +21,16 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
 import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
 from tpcore.calendar import next_monday_open, next_open
 from tpcore.interfaces.broker import BrokerExecutionInterface, OrderSide
+
+if TYPE_CHECKING:  # pragma: no cover
+    import asyncpg
 
 logger = structlog.get_logger(__name__)
 
@@ -131,11 +135,16 @@ class RiskGovernor:
         broker: BrokerExecutionInterface,
         limits: RiskLimits | None = None,
         platform_capital: Decimal = Decimal("0"),
+        pool: asyncpg.Pool | None = None,
     ) -> None:
         self._store = state_store
         self._broker = broker
         self._limits = limits or RiskLimits()
         self._platform_capital = platform_capital
+        # asyncpg pool for the optional cost gate (B6). When ``None``
+        # ``check_cost`` short-circuits ALLOW so tests without a DB
+        # don't need to wire one up.
+        self._pool = pool
 
     @property
     def limits(self) -> RiskLimits:
@@ -166,11 +175,21 @@ class RiskGovernor:
         engine_id: str,
         size: Decimal,
         direction: OrderSide,
+        *,
+        ticker: str | None = None,
+        expected_edge_pct: Decimal | None = None,
     ) -> CheckResult:
         """Return ALLOW/BLOCK for a proposed trade.
 
         ``size`` is the positive notional dollar value of the proposed entry.
         ``direction`` is ``BUY`` or ``SELL``.
+
+        When ``ticker`` and ``expected_edge_pct`` are both provided AND
+        the governor was constructed with a DB pool, the cost gate
+        (B6) fires: if the ticker's round-trip cost in
+        ``platform.liquidity_tiers`` exceeds the trade's expected edge,
+        the trade is BLOCKED. Engines compute the edge from the
+        assessment's entry + take-profit prices.
 
         Order of checks (most fundamental first; first failure wins):
             1. Engine registered.
@@ -179,6 +198,7 @@ class RiskGovernor:
             4. Weekly loss cap.
             5. Max open positions.
             6. Platform-wide net long exposure (BUY only).
+            7. Round-trip cost vs expected edge (opt-in via kwargs).
         """
         if size <= 0:
             return CheckResult(RiskDecision.BLOCK, reason="size must be positive")
@@ -229,6 +249,38 @@ class RiskGovernor:
                     ),
                 )
 
+        if ticker is not None and expected_edge_pct is not None:
+            cost_check = await self.check_cost(ticker, expected_edge_pct)
+            if cost_check.decision is RiskDecision.BLOCK:
+                return cost_check
+
+        return CheckResult(RiskDecision.ALLOW)
+
+    async def check_cost(
+        self,
+        ticker: str,
+        expected_edge_pct: Decimal,
+    ) -> CheckResult:
+        """Block when the ticker's round-trip cost exceeds the trade's edge.
+
+        Reads the median spread from ``platform.liquidity_tiers`` via
+        ``tpcore.backtest.cost_model.get_round_trip_cost``. Returns
+        ALLOW when the governor has no DB pool wired — tests that
+        don't need the gate stay green without extra fixtures.
+        """
+        if self._pool is None:
+            return CheckResult(RiskDecision.ALLOW)
+        from tpcore.backtest.cost_model import get_round_trip_cost
+
+        cost = await get_round_trip_cost(self._pool, ticker)
+        if cost > expected_edge_pct:
+            return CheckResult(
+                RiskDecision.BLOCK,
+                reason=(
+                    f"round-trip cost {cost} > expected edge {expected_edge_pct} "
+                    f"for {ticker}"
+                ),
+            )
         return CheckResult(RiskDecision.ALLOW)
 
     async def _platform_net_long_after(self, additional_long: Decimal) -> Decimal:

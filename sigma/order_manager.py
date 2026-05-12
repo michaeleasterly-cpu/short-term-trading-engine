@@ -139,11 +139,23 @@ class SigmaOrderManager:
             )
             return None
 
-        # Platform-wide governor.
+        # Platform-wide governor + cost gate. Edge is the conservative
+        # Tier 1 target (mid-band exit), not the Tier 2 far target —
+        # if even the close exit can't clear the round-trip cost, the
+        # trade has no expected value.
+        if assessment.entry_price > 0:
+            expected_edge = (
+                (assessment.take_profit_mid - assessment.entry_price)
+                / assessment.entry_price
+            )
+        else:
+            expected_edge = Decimal("0")
         check = await self._governor.check_trade(
             engine_id=ENGINE_ID,
             size=decision.notional_usd,
             direction=OrderSide.BUY,
+            ticker=decision.ticker,
+            expected_edge_pct=expected_edge,
         )
         if check.decision is RiskDecision.BLOCK:
             logger.warning(

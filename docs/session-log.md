@@ -1,5 +1,15 @@
 # Session Log
 
+## 2026-05-12 (continued) — Phase 2 complete (cost model on Corwin-Schultz)
+- B1: migration `20260512_2100_spread_observations_and_liquidity_tiers.py` — both tables live with a 30-day rolling retention trigger on `spread_observations`.
+- B2: `tpcore/backtest/spread_estimator.py` — Corwin-Schultz daily H/L estimator + `rank_universe_by_liquidity` that writes per-ticker means to `spread_observations` with `source='corwin_schultz'`. 6 unit tests.
+- B3: dropped — Tradier streaming is deprecated. Expert call: ship the cost model on Corwin-Schultz alone (per-ticker mean over 20+ daily bars is stable enough to discriminate T1 from T5 with the 5/15/50/200 bps thresholds), defer live intraday quotes to an on-demand REST call when a real engine actually needs a fresh quote at submission time.
+- B4: `scripts/assign_liquidity_tiers.py` — aggregates `median_spread_pct` + `p95_spread_pct` per ticker, assigns tier, upserts. Source-agnostic via `--sources` so a future real-time feed plugs in without code change. First run distribution: T1:14 / T2:46 / T3:324 / T4:988 / T5:63 across 1,435 coarse-pass tickers.
+- B5: `tpcore/backtest/cost_model.py` — `get_round_trip_cost(pool, ticker)` reads tiers from the DB; T4 = 1.50% round-trip default for unknowns. `SimpleCostModel.slippage_bps` default bumped from 5 bps to 75 bps (per-side, matches T4) so unconfigured backtests stop silently understating cost. 6 unit tests.
+- B6: `RiskGovernor.check_cost(ticker, expected_edge_pct)` + new kwargs on `check_trade`. Engines compute their own per-trade edge from `assessment.entry_price` and the conservative TP (Sigma mid-band, Reversion 20-MA, Vector profit_target) and pass it. 6 new tests; back-compat preserved (no ticker + no pool → ALLOW).
+- B7: migration `20260512_2200_parity_drift_log_spread_columns.py` adds `spread_at_order_pct` + `spread_observed_at`. `LivePaperParityHarness.submit_pair` snapshots the latest `spread_observations` row for the ticker before submission, threads it into both the returned `ParityDriftRecord` and the INSERT. 2 new tests.
+- Pushed 342 passing tests (was 322), ruff + forbidden-imports green.
+
 ## 2026-05-12 (continued) — Calendar bug fix + pipeline smoke wired through tpcore.calendar
 - Acceptance audit on `scripts/pipeline_smoke_test.py` caught a real contract violation: the market-hours check was a hardcoded `13:30 ≤ UTC minutes ≤ 20:00 ` range, not `tpcore.calendar`. CLAUDE.md + STYLE_GUIDE.md require the calendar.
 - Replacing the hardcoded check surfaced a latent bug in `tpcore.calendar`: `session_contains` / `next_open` / `next_close` / `previous_close` passed tz-aware pandas Timestamps (carrying `datetime.timezone.utc`) into `exchange_calendars`, which now validates inputs through `calendar_helpers.parse_date` and reads `ts.tz.key`. Stdlib `datetime.timezone.utc` doesn't expose `.key`, so every call crashed with `AttributeError`.

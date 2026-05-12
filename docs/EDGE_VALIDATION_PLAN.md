@@ -44,7 +44,19 @@ No strategy graduates from paper to live capital until it passes the full overfi
 - **M5** ✓ — `tpcore/tests/test_trade_monitor.py` with 13 tests: unit (helpers) + integration (Sigma Tier 1 fill triggers Tier 2 submission, Vector tier1 fill stays single-leg, Tier 2 fill writes AAR and bumps risk_state, unmatched fills are silently skipped, cancellation flips status).
 - **M6** ✓ — `trade-monitor` service added to `railway.json` (`restartPolicyType=ALWAYS`, persistent). Railway deploy verification is deferred until Railway is re-enabled; locally the monitor is invokable via `python tpcore/trade_monitor.py`.
 
-### Phase 2: Cost Model Build (Weeks 1-2)
+### Phase 2: Cost Model Build — **Complete (2026-05-12)**
+
+Shipped on Corwin-Schultz alone — the Tradier streaming subscription (B3) was dropped after Tradier was scheduled to deprecate. `platform.liquidity_tiers` is populated from `source = 'corwin_schultz'`. The aggregator in `scripts/assign_liquidity_tiers.py` is source-agnostic; when a real-time quote feed lands later it joins the same table by extending the `--sources` flag.
+
+- **B1** ✓ — `20260512_2100_spread_observations_and_liquidity_tiers.py`. Tables live with 30-day rolling retention on observations.
+- **B2** ✓ — `tpcore/backtest/spread_estimator.py` + 6 unit tests. CS estimator + `rank_universe_by_liquidity` populates `spread_observations` with `source='corwin_schultz'`. Ranked 1,435 coarse-pass tickers locally.
+- **B3** ✗ wontfix — Tradier streaming deprecated. Future intraday-quote needs are served on-demand (one REST call to `Alpaca /v2/stocks/{symbol}/quotes/latest` at trade time) rather than a persistent service. Spec: revisit if backtest credibility shows CS noise is hurting engine ROI.
+- **B4** ✓ — `scripts/assign_liquidity_tiers.py`. Aggregates by median + p95 spread per ticker, assigns tier per the (5/15/50/200 bps) thresholds, upserts. First run: T1:14 / T2:46 / T3:324 / T4:988 / T5:63.
+- **B5** ✓ — `tpcore/backtest/cost_model.py` exposes `get_round_trip_cost(pool, ticker)`. T4 default for unknowns (150 bps round-trip). `SimpleCostModel` default bumped from 5 bps to T4 so an unconfigured backtest doesn't silently understate cost. 6 tests.
+- **B6** ✓ — `RiskGovernor.check_cost(ticker, expected_edge_pct)` + `check_trade(ticker, expected_edge_pct)` kwargs. The three order managers compute per-trade edge from `assessment.entry_price` and the conservative TP (Sigma: mid-band; Reversion: 20-MA; Vector: profit_target) and thread it through. 6 new tests + back-compat preserved.
+- **B7** ✓ — `20260512_2200_parity_drift_log_spread_columns.py` adds `spread_at_order_pct` + `spread_observed_at`. `LivePaperParityHarness.submit_pair` snapshots the latest `spread_observations` row for the ticker before submission and writes it on the drift row. 2 new tests.
+
+### Phase 2 (original, kept for history): Cost Model Build (Weeks 1-2)
 1. **B1 – Schema migration**
    - Create `platform.spread_observations` and `platform.liquidity_tiers` according to the master plan.
 2. **B2 – Corwin-Schultz bootstrap (free, immediate)**

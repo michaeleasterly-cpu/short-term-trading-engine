@@ -52,16 +52,26 @@ class _StubBroker:
 
 
 class _CapturingPool:
-    """Captures the executemany / execute call args for assertion."""
+    """Captures the executemany / execute call args for assertion.
 
-    def __init__(self) -> None:
+    Optional ``spread_row``: when set, ``fetchrow`` returns this when the
+    harness asks for the latest ``spread_observations`` snapshot.
+    """
+
+    def __init__(self, spread_row: dict | None = None) -> None:
         self.calls: list[tuple[str, tuple]] = []
+        self.fetchrow_calls: list[tuple[str, tuple]] = []
+        self._spread_row = spread_row
 
     def acquire(self):  # type: ignore[no-untyped-def]
         return _CM(self)
 
     async def execute(self, sql, *args):  # type: ignore[no-untyped-def]
         self.calls.append((sql, args))
+
+    async def fetchrow(self, sql, *args):  # type: ignore[no-untyped-def]
+        self.fetchrow_calls.append((sql, args))
+        return self._spread_row
 
 
 class _CM:
@@ -166,3 +176,46 @@ async def test_no_pool_skips_persistence_but_still_returns_record() -> None:
     h = LivePaperParityHarness(paper, live, db_pool=None)
     rec = await h.submit_pair(_order())
     assert rec.drift_bps is not None
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# B7 — spread snapshot at order time
+# ────────────────────────────────────────────────────────────────────────────
+
+
+async def test_persist_includes_spread_snapshot_when_observation_exists() -> None:
+    """The latest ``spread_observations`` row for the ticker is queried and
+    threaded into both the returned record and the INSERT."""
+    snapshot_at = datetime(2026, 5, 12, 19, 55, tzinfo=UTC)
+    pool = _CapturingPool(spread_row={"spread_pct": Decimal("0.0017"), "observed_at": snapshot_at})
+    paper = _StubBroker(fill_price=Decimal("100"), filled_at=datetime(2026, 5, 12, 19, 55, tzinfo=UTC))
+    live = _StubBroker(fill_price=Decimal("100.05"), filled_at=datetime(2026, 5, 12, 19, 55, 1, tzinfo=UTC))
+    h = LivePaperParityHarness(paper, live, pool)
+    rec = await h.submit_pair(_order())
+    # Record carries the snapshot.
+    assert rec.spread_at_order_pct == Decimal("0.0017")
+    assert rec.spread_observed_at == snapshot_at
+    # Lookup happened against the right table.
+    assert pool.fetchrow_calls, "harness should have queried platform.spread_observations"
+    lookup_sql, lookup_args = pool.fetchrow_calls[0]
+    assert "platform.spread_observations" in lookup_sql
+    assert lookup_args == ("AAA",)
+    # INSERT body carries the snapshot values.
+    insert_sql, insert_args = pool.calls[0]
+    assert "spread_at_order_pct" in insert_sql
+    assert insert_args[7] == Decimal("0.0017")
+    assert insert_args[8] == snapshot_at
+
+
+async def test_persist_records_null_spread_when_no_observation_yet() -> None:
+    """No row → NULL columns on the parity_drift_log insert, no crash."""
+    pool = _CapturingPool(spread_row=None)
+    paper = _StubBroker(fill_price=Decimal("100"), filled_at=datetime(2026, 5, 12, 19, 55, tzinfo=UTC))
+    live = _StubBroker(fill_price=Decimal("100.05"), filled_at=datetime(2026, 5, 12, 19, 55, 1, tzinfo=UTC))
+    h = LivePaperParityHarness(paper, live, pool)
+    rec = await h.submit_pair(_order())
+    assert rec.spread_at_order_pct is None
+    assert rec.spread_observed_at is None
+    insert_args = pool.calls[0][1]
+    assert insert_args[7] is None
+    assert insert_args[8] is None

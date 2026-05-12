@@ -103,10 +103,20 @@ class VectorOrderManager:
             )
             return None
 
+        # Edge: Vector's profit target (typically +15% from entry).
+        if assessment.entry_price > 0:
+            expected_edge = (
+                (assessment.profit_target_price - assessment.entry_price)
+                / assessment.entry_price
+            )
+        else:
+            expected_edge = Decimal("0")
         check = await self._governor.check_trade(
             engine_id=ENGINE_ID,
             size=decision.notional_usd,
             direction=OrderSide.BUY,
+            ticker=decision.ticker,
+            expected_edge_pct=expected_edge,
         )
         if check.decision is RiskDecision.BLOCK:
             logger.warning(

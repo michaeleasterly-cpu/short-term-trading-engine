@@ -50,6 +50,12 @@ class ParityDriftRecord(BaseModel):
     paper_filled_at: datetime | None
     live_filled_at: datetime | None
     timestamp: datetime
+    # B7 — snapshot of the ticker's most-recent spread observation at
+    # the moment of submission. NULL when no row exists yet (new
+    # ticker, fresh universe). ``spread_observed_at`` tells callers
+    # how stale the snapshot is.
+    spread_at_order_pct: Decimal | None = None
+    spread_observed_at: datetime | None = None
 
 
 @dataclass
@@ -84,22 +90,55 @@ class LivePaperParityHarness:
         ``order`` as-is; the live submission is a clone with ``qty=live_qty``
         (default 1 share) so the parity test consumes minimal real capital.
 
+        Before submitting we snapshot the ticker's most-recent
+        ``spread_observations`` row — when the row lands in
+        ``parity_drift_log`` later, downstream drift analysis can see
+        what the quoted spread looked like at submission time, not just
+        the fill price.
+
         Returns a record even when the live side fails — failure populates
-        ``live_fill_price=None`` and a log entry explains why. The paper
-        leg's outcome propagates as the engine's actual execution result;
-        the order manager calls this helper *after* paper has already
-        succeeded, so a paper failure means the harness is bypassed.
+        ``live_fill_price=None`` and a log entry explains why.
         """
+        spread_at_order_pct, spread_observed_at = await self._latest_spread_for(order.symbol)
         live_order = self._build_live_clone(order)
         paper_outcome, live_outcome = await asyncio.gather(
             self._submit_and_wait(self._paper, order, label="paper"),
             self._submit_and_wait(self._live, live_order, label="live"),
         )
         record = self._build_record(
-            order, paper_outcome=paper_outcome, live_outcome=live_outcome
+            order,
+            paper_outcome=paper_outcome,
+            live_outcome=live_outcome,
+            spread_at_order_pct=spread_at_order_pct,
+            spread_observed_at=spread_observed_at,
         )
         await self._persist(record)
         return record
+
+    async def _latest_spread_for(self, ticker: str) -> tuple[Decimal | None, datetime | None]:
+        """Most-recent ``spread_observations`` row for ``ticker``, or (None, None)."""
+        if self._pool is None:
+            return None, None
+        sql = """
+            SELECT spread_pct, observed_at
+            FROM platform.spread_observations
+            WHERE ticker = $1
+            ORDER BY observed_at DESC
+            LIMIT 1
+        """
+        try:
+            async with self._pool.acquire() as conn:
+                row = await conn.fetchrow(sql, ticker)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning(
+                "tpcore.parity.spread_lookup_failed",
+                ticker=ticker,
+                error=str(exc),
+            )
+            return None, None
+        if row is None:
+            return None, None
+        return Decimal(str(row["spread_pct"])), row["observed_at"]
 
     def _build_live_clone(self, paper_order: Order) -> Order:
         """Clone ``paper_order`` with the live-side mini quantity."""
@@ -164,6 +203,8 @@ class LivePaperParityHarness:
         *,
         paper_outcome: _SubmissionOutcome,
         live_outcome: _SubmissionOutcome,
+        spread_at_order_pct: Decimal | None = None,
+        spread_observed_at: datetime | None = None,
     ) -> ParityDriftRecord:
         drift_bps: Decimal | None = None
         if paper_outcome.fill_price is not None and live_outcome.fill_price is not None:
@@ -187,6 +228,8 @@ class LivePaperParityHarness:
             paper_filled_at=paper_outcome.filled_at,
             live_filled_at=live_outcome.filled_at,
             timestamp=datetime.now(UTC),
+            spread_at_order_pct=spread_at_order_pct,
+            spread_observed_at=spread_observed_at,
         )
 
     async def _persist(self, record: ParityDriftRecord) -> None:
@@ -195,9 +238,10 @@ class LivePaperParityHarness:
         sql = """
             INSERT INTO platform.parity_drift_log (
                 client_order_id, paper_fill_price, live_fill_price, drift_bps,
-                paper_filled_at, live_filled_at, timestamp
+                paper_filled_at, live_filled_at, timestamp,
+                spread_at_order_pct, spread_observed_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         """
         try:
             async with self._pool.acquire() as conn:
@@ -210,6 +254,8 @@ class LivePaperParityHarness:
                     record.paper_filled_at,
                     record.live_filled_at,
                     record.timestamp,
+                    record.spread_at_order_pct,
+                    record.spread_observed_at,
                 )
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning(

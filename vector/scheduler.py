@@ -172,6 +172,7 @@ class VectorScheduler:
                 state_store=PostgresRiskStateStore(pool),
                 broker=broker,
                 platform_capital=self._engine_equity,
+                pool=pool,
             )
             await governor.register_engine(ENGINE_ID, self._engine_equity)
 

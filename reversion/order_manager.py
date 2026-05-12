@@ -110,12 +110,28 @@ class ReversionOrderManager:
 
         # Governor check — direction is BUY for LONG fades, SELL for SHORT fades.
         # The platform-net-long cap only applies on the BUY path, which is
-        # already what RiskGovernor.check_trade enforces.
+        # already what RiskGovernor.check_trade enforces. Edge: Tier 1's
+        # 20-MA target — the closer mean-revert target, conservative.
         side = OrderSide.BUY if decision.direction is Direction.LONG else OrderSide.SELL
+        if assessment.entry_price > 0:
+            if decision.direction is Direction.LONG:
+                expected_edge = (
+                    (assessment.target_20ma - assessment.entry_price)
+                    / assessment.entry_price
+                )
+            else:
+                expected_edge = (
+                    (assessment.entry_price - assessment.target_20ma)
+                    / assessment.entry_price
+                )
+        else:
+            expected_edge = Decimal("0")
         check = await self._governor.check_trade(
             engine_id=ENGINE_ID,
             size=decision.notional_usd,
             direction=side,
+            ticker=decision.ticker,
+            expected_edge_pct=expected_edge,
         )
         if check.decision is RiskDecision.BLOCK:
             logger.warning(

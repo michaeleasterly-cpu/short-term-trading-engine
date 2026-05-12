@@ -146,6 +146,7 @@ class ReversionScheduler:
                 state_store=risk_store,
                 broker=broker,
                 platform_capital=self._platform_capital,
+                pool=pool,
             )
             await governor.register_engine(ENGINE_ID, self._engine_equity)
 

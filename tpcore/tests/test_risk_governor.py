@@ -165,3 +165,125 @@ async def test_record_fill_updates_counters() -> None:
     assert s2.daily_pnl == Decimal("20")
     assert s2.weekly_pnl == Decimal("20")
     assert s2.open_positions == 0
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# check_cost — Phase 2 B6 gate
+# ────────────────────────────────────────────────────────────────────────────
+
+
+class _CostFakeConn:
+    """Minimal asyncpg connection that returns a fixed median_spread_pct."""
+
+    def __init__(self, median: Decimal | None) -> None:
+        self._median = median
+
+    async def fetchrow(self, sql: str, *args):
+        if self._median is None:
+            return None
+        return {
+            "tier": 4,
+            "median_spread_pct": self._median,
+            "provisional": False,
+            "last_updated": datetime.now(UTC),
+        }
+
+
+class _CostFakeAcquireCM:
+    def __init__(self, conn: _CostFakeConn) -> None:
+        self._conn = conn
+
+    async def __aenter__(self) -> _CostFakeConn:
+        return self._conn
+
+    async def __aexit__(self, *exc) -> None:
+        return None
+
+
+class _CostFakePool:
+    def __init__(self, median: Decimal | None) -> None:
+        self._conn = _CostFakeConn(median)
+
+    def acquire(self) -> _CostFakeAcquireCM:
+        return _CostFakeAcquireCM(self._conn)
+
+
+async def test_check_cost_allows_when_cost_below_edge() -> None:
+    governor = RiskGovernor(
+        state_store=InMemoryRiskStateStore(),
+        broker=_broker_with_positions(),
+        pool=_CostFakePool(median=Decimal("0.0050")),  # 50 bps
+    )
+    result = await governor.check_cost("AAPL", expected_edge_pct=Decimal("0.030"))  # 3% edge
+    assert result.decision is RiskDecision.ALLOW
+
+
+async def test_check_cost_blocks_when_cost_exceeds_edge() -> None:
+    governor = RiskGovernor(
+        state_store=InMemoryRiskStateStore(),
+        broker=_broker_with_positions(),
+        pool=_CostFakePool(median=Decimal("0.030")),  # 3% spread
+    )
+    result = await governor.check_cost("WIDE", expected_edge_pct=Decimal("0.010"))  # 1% edge
+    assert result.decision is RiskDecision.BLOCK
+    assert result.reason is not None
+    assert "cost" in result.reason.lower()
+
+
+async def test_check_cost_allows_when_no_pool_wired() -> None:
+    """Tests / dev paths that don't pass a pool see ALLOW — back-compat."""
+    governor = RiskGovernor(
+        state_store=InMemoryRiskStateStore(),
+        broker=_broker_with_positions(),
+    )
+    result = await governor.check_cost("AAPL", expected_edge_pct=Decimal("0.001"))
+    assert result.decision is RiskDecision.ALLOW
+
+
+async def test_check_cost_uses_t4_default_for_unknown_ticker() -> None:
+    """Unknown ticker → T4 default (1.50% round-trip). Edge < 1.50% blocks."""
+    governor = RiskGovernor(
+        state_store=InMemoryRiskStateStore(),
+        broker=_broker_with_positions(),
+        pool=_CostFakePool(median=None),  # no row in liquidity_tiers
+    )
+    blocked = await governor.check_cost("NOSUCH", expected_edge_pct=Decimal("0.010"))
+    assert blocked.decision is RiskDecision.BLOCK
+    allowed = await governor.check_cost("NOSUCH", expected_edge_pct=Decimal("0.020"))
+    assert allowed.decision is RiskDecision.ALLOW
+
+
+async def test_check_trade_threads_cost_gate_through_when_kwargs_set() -> None:
+    """``check_trade(ticker=..., expected_edge_pct=...)`` invokes the cost gate
+    after the rest of the checks. If cost > edge, the trade blocks even though
+    no other check would have."""
+    store = InMemoryRiskStateStore()
+    governor = RiskGovernor(
+        state_store=store,
+        broker=_broker_with_positions(),
+        platform_capital=Decimal("100000"),
+        pool=_CostFakePool(median=Decimal("0.040")),  # 4% spread
+    )
+    await governor.register_engine("sigma", engine_equity=Decimal("10000"))
+    result = await governor.check_trade(
+        "sigma",
+        size=Decimal("1500"),
+        direction=OrderSide.BUY,
+        ticker="WIDE",
+        expected_edge_pct=Decimal("0.020"),  # 2% edge
+    )
+    assert result.decision is RiskDecision.BLOCK
+    assert "cost" in (result.reason or "").lower()
+
+
+async def test_check_trade_back_compat_no_ticker_no_cost_gate() -> None:
+    """Existing callers that don't pass ticker still work — cost gate is opt-in."""
+    governor = RiskGovernor(
+        state_store=InMemoryRiskStateStore(),
+        broker=_broker_with_positions(),
+        platform_capital=Decimal("100000"),
+        pool=_CostFakePool(median=Decimal("0.040")),  # large spread, but should be ignored
+    )
+    await governor.register_engine("sigma", engine_equity=Decimal("10000"))
+    result = await governor.check_trade("sigma", size=Decimal("1500"), direction=OrderSide.BUY)
+    assert result.decision is RiskDecision.ALLOW
