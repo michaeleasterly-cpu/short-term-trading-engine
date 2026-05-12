@@ -1,15 +1,27 @@
 # Edge-Discovery and Strategy-Validation Plan
 
-**Status:** Phase 1 complete (2026-05-12). Phase 2 (cost model build) ready to start.
+**Status (2026-05-12):** Phase 1 + Phase 1.5 (trade monitor) + Phase 2 (cost model) all complete. Backtests re-run with tier-aware costs — Sigma 55/100, Reversion 45/100, Vector 45/100; none passes the ≥ 60 gate. **Immediate next step: the pipeline smoke test** at the 2026-05-13 US market open. Historical replay (Phase 3) is deferred until smoke + engine architecture decisions land.
+
+## Current Execution Environment
+
+**Local Mac. Railway paused.** The four Railway services (`ingestion-engine`, `sigma-scheduler`, `reversion-scheduler`, `vector-scheduler`) exist but have no cron schedule and `restartPolicyType=NEVER`; the new `trade-monitor` service is in `railway.json` but never reached Railway. All daily ops, engine runs, smoke tests, and backtests are invoked locally from `scripts/`.
+
+The architectural decision on Railway vs. another host is deferred until at least one engine clears the credibility gate. Until then:
+
+- **Immediate next gate** (May 13 open): `scripts/pipeline_smoke_test.py` — confirms the engine → broker → trade_monitor → AAR path round-trips against the live Alpaca paper account.
+- **Daily ops:** `scripts/ops.py --full` for refresh + validation + universe sim.
+- **One-shot infra check:** `scripts/smoke_test.py` for broker reachability only.
+- **Paper trading on demand:** invoke `python sigma/scheduler.py` / `python reversion/scheduler.py` / `python vector/scheduler.py` directly when the operator wants the engines to act.
+- **Trade monitor (live):** `python -m tpcore.trade_monitor` in a separate terminal — required for the engines' Tier 2 follow-on logic to fire.
 
 ## Objective
 Systematically find, validate, and calibrate trading strategies that have a statistically significant edge after realistic costs in the US equities market.
 
 ## Context
-- Three engines (Sigma, Reversion, Vector) are built but fail the overfitting credibility gate (50, 45, 45 / 100).
-- The universe is limited to ~50 large-cap tickers; the simulation showed zero candidates.
-- The cost model currently uses a flat 0.05% slippage assumption.
-- We need to expand the universe, build a real cost model from market data, and then run a historical replay to get an honest edge assessment.
+- Three engines (Sigma, Reversion, Vector) are built and backtested with tier-aware costs (2026-05-12). Credibility scores: Sigma 55, Reversion 45, Vector 45 / 100. None passes the ≥ 60 gate.
+- Universe expanded to 7,694 tickers in `platform.prices_daily`; simulate_universe shows Sigma 187 candidates / Reversion 4 / Vector 0 (the Vector zero is a calibration gap on `P/B < 1.5`, not a data issue).
+- Cost model is tier-aware via `platform.liquidity_tiers` populated from Corwin-Schultz (`tpcore.backtest.spread_estimator`). T4 default (1.50% round-trip) for unknowns.
+- Trade-count thinness vs the parameter search space (MinBTL gap + DSR deflation) remains the binding constraint for all three engines — not cost calibration. The historical replay (Phase 3) is the next lever; deferred until the local-execution smoke loop is proven on the live Alpaca paper account.
 
 ## Two-Track Validation
 - **Track A – Infrastructure Validation:** Prove the pipeline works end-to-end (orders → fills → AARs → risk checks).

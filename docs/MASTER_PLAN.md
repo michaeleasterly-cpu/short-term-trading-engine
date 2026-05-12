@@ -1,8 +1,10 @@
 # Short-Term Trading Engine — Unified Platform Master Plan
 
-**Version:** 1.2
-**Date:** 2026-05-13
-**Status:** All three engine schedulers (Sigma, Reversion, Vector) deployed on Railway and online. RiskGovernor `check_trade()` + startup kill-switch check, AARWriter persistence, and LivePaperParityHarness wiring all verified end-to-end (live DB round-trip for AAR; harnesses no-op without live broker creds, by design). As of 2026-05-10, engines read daily bars exclusively from `platform.prices_daily` via `PostgresDataAdapter` — no live-API fallback; schedulers halt with a critical log if the DB is unreachable. Per-run audit timeline lands in `platform.application_log` (7-day rolling retention) via `tpcore.logging.DBLogHandler`. All three engines fail the overfitting-aware credibility gate (60/100); none cleared for live capital — paper-trading only.
+**Version:** 1.3
+**Date:** 2026-05-12
+**Execution:** **Local Mac. Railway paused.** Auto-deploys disabled and cron schedules unset on the four Railway services (`ingestion-engine`, `sigma-scheduler`, `reversion-scheduler`, `vector-scheduler`); the new `trade-monitor` service is defined in `railway.json` but not deployed. Daily ops, engine runs, smoke tests, and backtests are all invoked locally from `scripts/`. The architectural decision on Railway vs. another host is deferred until an engine clears the credibility gate.
+
+**Status:** All three engine pipelines (Sigma, Reversion, Vector) plus the live trade monitor (`tpcore.trade_monitor`) are built and unit-tested. RiskGovernor `check_trade()` + startup kill-switch check, AARWriter persistence, LivePaperParityHarness wiring, and the Phase 2 cost gate (`RiskGovernor.check_cost`) are all verified end-to-end (live DB round-trip for AAR; harnesses no-op without live broker creds, by design). Engines read daily bars exclusively from `platform.prices_daily` via `PostgresDataAdapter` — no live-API fallback. Per-run audit timeline lands in `platform.application_log` via `tpcore.logging.DBLogHandler`. All three engines still fail the overfitting-aware credibility gate (Sigma 55, Reversion 45, Vector 45 / 100); none cleared for live capital — paper-trading only. **Immediate next gate:** `scripts/pipeline_smoke_test.py` against the Alpaca paper account at the 2026-05-13 US market open.
 
 ---
 
@@ -146,11 +148,11 @@ Earlier drafts of this plan gated Market Context on **SPY-level** CHOP+ADX. The 
 
 **Capital Gate:** Hard cap enforcement, graduation (50 trades, 65% win rate, avg return ≥ 1.5%).
 
-**Status (built and deployed):**
-- All five plugs implemented and tested. Scheduler deployed on Railway as `sigma-scheduler` (cron: Mon–Fri 22:00 UTC).
+**Status (built; Railway paused, runs locally):**
+- All five plugs implemented and tested. Scheduler entry: `sigma/scheduler.py`. The Railway service `sigma-scheduler` exists but is unscheduled (no cron, no auto-restart); engine runs are invoked locally during the Railway pause.
 - CHOP filter validated by backtest — per-stock variant improves Sharpe by 26%; SPY-level variant falsified and removed.
-- Backtest: `sigma/backtest.py`. Overfitting report: `backtests/sigma_overfitting_report.json`.
-- Overfitting diagnostic score **50/100 — BLOCKED**. Extended window (1995–2025, 754 trades) revealed −83% max drawdown in pre-2008 regimes; per-trade Sharpe collapsed to 0.03 once the longer window pulls in the dot-com bust and 2008 GFC. Not cleared for live capital. See §9 *Overfitting Diagnostics Status* for the failure-mode breakdown.
+- Backtest: `sigma/backtest.py` (tier-aware costs from `platform.liquidity_tiers` as of 2026-05-12). Overfitting report: `backtests/sigma_overfitting_report.json`.
+- Overfitting diagnostic score **55/100 — BLOCKED** (was 50/100 pre-tier-aware costs; tier-aware refit flipped `sensitivity_surface_flat` to ✓, gained +5 points). Extended-window runs still show MinBTL gap + DSR deflation as the primary failure modes. Not cleared for live capital. See §9 *Overfitting Diagnostics Status* for the failure-mode breakdown.
 
 ### 4.2 Reversion — Mean Reversion Engine (Second Build)
 
@@ -191,11 +193,11 @@ Earlier drafts of this plan gated Market Context on **SPY-level** CHOP+ADX. The 
 
 **Rationale:** Reversion fires infrequently by design — extremes occur a few times per year across a liquid universe. The win rate and average return bars are calibrated to the backtest results (54.5% / +2.08%). The trade count is set at 10 to balance statistical confidence against the engine's natural firing rate; requiring ~7 years of data ensures graduation is achievable within a reasonable timeframe while still demanding enough trades to avoid single-trade luck. If the live engine's firing rate differs materially from the backtest, re-evaluate the graduation trade count after 2 years of live paper data.
 
-**Status (built and deployed):**
-- All five plugs implemented and tested. Scheduler deployed on Railway as `reversion-scheduler` (cron: Mon–Fri 22:00 UTC).
+**Status (built; Railway paused, runs locally):**
+- All five plugs implemented and tested. Scheduler entry: `reversion/scheduler.py`. The Railway service `reversion-scheduler` exists but is unscheduled during the Railway pause; engine runs are invoked locally.
 - Earnings-quality gate validated; combined filter (HIGH quality + |Z| ≥ 3.0) applied in `reversion/models.py` and `reversion/plugs/lifecycle_analysis.py`.
-- Backtest: `reversion/backtest.py`. Overfitting report: `backtests/reversion_overfitting_report.json`.
-- Overfitting diagnostic score **45/100 — BLOCKED**. Extended window (1995–2025) produced 28 trades. Primary failure modes: trades-per-parameter ratio 5.6 (needs ≥ 10) and a 709-trade MinBTL gap vs the 28 actual. Not cleared for live capital.
+- Backtest: `reversion/backtest.py` (tier-aware costs as of 2026-05-12; funded universe pinned to the 50-name mega-cap subset to keep the run under the pooler statement_timeout). Overfitting report: `backtests/reversion_overfitting_report.json`.
+- Overfitting diagnostic score **45/100 — BLOCKED** (unchanged by tier-aware refit; trade-count thinness is the binding constraint, not cost calibration). Not cleared for live capital.
 
 ### 4.3 Vector — Momentum Swing Engine (Third Build)
 
@@ -251,11 +253,11 @@ The 1995-pushed `--start` doesn't change the trade count: bars are present back 
 
 The infrastructure is correct; the strategy needs more evidence before the gate will let it graduate.
 
-**Status (built and deployed):**
-- All five plugs implemented and tested. Scheduler deployed on Railway as `vector-scheduler` (cron: Mon–Fri 22:00 UTC). Verified Online via `railway status` on 2026-05-10; service ID `6498df68-0a23-4531-85df-f54ba37a1c40`.
-- Catalyst proxy via FMP `EARNINGS_BEAT` events (683 events across 44 tickers, 2018–2025) populated in `platform.catalyst_events`. Fundamentals ratios `pb`/`de` backfilled (1,622 PIT-safe rows in `platform.fundamentals_quarterly`).
+**Status (built; Railway paused, runs locally):**
+- All five plugs implemented and tested. Scheduler entry: `vector/scheduler.py`. The Railway service `vector-scheduler` exists (service ID `6498df68-0a23-4531-85df-f54ba37a1c40`) but is unscheduled during the Railway pause; engine runs are invoked locally.
+- Catalyst proxy via FMP `EARNINGS_BEAT` events (683 events across 44 tickers, 2018–2025) populated in `platform.catalyst_events`. Fundamentals ratios `pb`/`de` backfilled to **152,907 PIT-safe rows** across 5,981 tickers in `platform.fundamentals_quarterly` (post-Phase-1 expansion); the original 1,622-row figure was the pre-expansion state.
 - VIX-aware crash-guard sizing implemented and verified end-to-end in the backtest (1.0× / 0.5× / 0.25× via SPY 20-day realized-vol proxy).
-- Backtest: `vector/backtest.py`. Overfitting report: `backtests/vector_overfitting_report.json`. Score **45/100 — BLOCKED** for live capital (11 trades, trades-per-parameter ratio 1.6, MinBTL effectively infinite). Paper-trading is unblocked: the cron submits paper orders via Alpaca for AAR collection while the credibility score remains below 60.
+- Backtest: `vector/backtest.py` (tier-aware costs as of 2026-05-12). Overfitting report: `backtests/vector_overfitting_report.json`. Score **45/100 — BLOCKED** (unchanged by tier-aware refit; 12 trades, trades-per-parameter ratio 1.6, MinBTL effectively infinite). Paper-trading remains blocked alongside the other engines while Railway is paused — engine runs are invoked locally on demand for AAR collection.
 
 ### 4.4 S2 — Short Squeeze Engine (Fourth Build, Satellite)
 
@@ -370,7 +372,7 @@ Full database schema and data flow documentation: [`docs/DATABASE_AND_DATAFLOW.m
 ### 6.3 Data Quality Gates
 
 - `DataValidationSuite` — three correctness checks against `platform.prices_daily`: delistings, S&P 500 constituent snapshot, split verification.
-- Deployed on Railway as `validation-scheduler` (cron: Sunday 06:00 UTC). CLI: `python -m tpcore.quality.validation`.
+- Invoked locally as `python -m tpcore.quality.validation`. Previously scheduled as the Railway Sunday cron `validation-scheduler`; that service was consolidated into the persistent `ingestion-engine` via `platform.ingestion_jobs` (and the engine is currently paused alongside Railway — operator runs the check on demand).
 - Capital Gate hook: `tpcore.quality.validation.capital_gate.assert_passed(pool, max_age_days=7)` is consulted by every engine's `assert_can_graduate`. No engine graduates from paper to live without a fresh passing run.
 - Design spec: `docs/superpowers/specs/2026-05-10-data-validation-suite-design.md`.
 - Current state: **all three checks pass** (delistings 8/8, constituent 58/58, splits 10/10). Five historic delisted tickers (HTZGQ, WLLBQ, LK, SBNYQ, SI) were removed from `delistings.yaml` and `constituents.yaml` on 2026-05-10 after a definitive audit confirmed neither Alpaca free tier nor the Tradier export carries bars for them — they are unresolvable on free-tier data. Re-add the entries when a paid delisted-feed (EODHD survivorship-free, Norgate, or Polygon w/ delisted) is provisioned.
@@ -432,21 +434,25 @@ Current decision: **stay on FMP Starter and Alpaca free**. The overfitting diagn
 
 ## 9. Build Order
 
+**Hosting note (2026-05-12):** Railway deployment is **deferred until post-edge validation**. Phase 1.5's trade-monitor refactor and Phase 2's cost gate both landed in `railway.json` but neither was applied to live Railway service-instance config; rather than partial-apply, all production execution moved to the operator's local Mac. Re-enabling Railway (or replacing it) is gated on at least one engine clearing the credibility gate (≥ 60/100). Until then, services in the table below describe what's **built** and how they're invoked — not what's running on Railway.
+
 | Phase | Deliverable | Status |
 | --- | --- | --- |
 | Phase 0 | `tpcore` + platform schema + ingestion script | **Complete** |
 | Phase 1 | Sigma engine — full plug implementation | **Complete** |
-| Phase 1b | Sigma paper trading (3+ months), Parity Harness active | **In progress** — deployed on Railway as `sigma-scheduler`. Overfitting diagnostics running. |
-| Phase 2 | Reversion engine | **Complete** — deployed on Railway as `reversion-scheduler`. Combined filter (HIGH quality + \|Z\| ≥ 3.0) applied. Overfitting diagnostics running. |
+| Phase 1b | Sigma paper trading (3+ months), Parity Harness active | **Paused** — engine + Parity Harness built; cron firing blocked by the Railway pause. Paper-trading resumes when execution architecture is settled. |
+| Phase 2 | Reversion engine | **Complete** — combined filter (HIGH quality + \|Z\| ≥ 3.0) applied. Backtest re-run with tier-aware costs 2026-05-12. |
 | Phase 3 | Allocator + Forensics (basic) | **Deferred** — blocked on paper track record from Sigma + Reversion + Vector. |
-| Phase 4 | Vector engine | **Complete** — deployed on Railway as `vector-scheduler` (cron: Mon–Fri 22:00 UTC). VIX-aware sizing implemented. Overfitting diagnostics running; live capital still blocked at 45/100 (paper-trading active). |
+| Phase 4 | Vector engine | **Complete** — VIX-aware sizing implemented. Overfitting diagnostics show 45/100 (still blocked). |
 | Phase 5 | S2 (satellite) | **Deferred** — options data parked in `platform.tradier_options_chains` (122,668 rows), no engine code. |
 | Phase 6 | Catalyst | **Deferred** — specification only. |
 | Phase 7 | Sentinel | **Deferred** — specification only. |
 | Cross-cutting | Overfitting detection suite | **Complete** — `tpcore/backtest/overfitting.py` wired into all three engine backtests. See *Overfitting Diagnostics Status* below. |
-| Cross-cutting | Data Validation Suite | **Complete** — deployed on Railway as `validation-scheduler` (Sun 06:00 UTC). |
-| Cross-cutting | Corporate-actions pipeline | **Complete** — deployed as `corporate-actions-scheduler` (Sun 04:00 UTC). |
+| Cross-cutting | Data Validation Suite | **Complete** — `python -m tpcore.quality.validation` runs locally; was previously scheduled as a Railway Sunday cron, consolidated into `platform.ingestion_jobs` for the persistent `ingestion-engine`. |
+| Cross-cutting | Corporate-actions pipeline | **Complete** — `scripts/run_corporate_actions_all_active.py` runs locally; previously scheduled as a Sunday cron, now driven via `platform.ingestion_jobs`. |
 | Cross-cutting | Maintenance CLI (`scripts/ops.py`) | **Complete** — single-file `--update` / `--check` / `--full` driver for daily + weekly data work. Reuses `tpcore.ingestion.handlers`, writes audit rows to `platform.application_log` under `engine='ops'`. Operator runbook in `docs/OPERATIONS.md` § *Daily Maintenance (via ops CLI)*. |
+| Cross-cutting | Trade monitor (Phase 1.5) | **Complete (built)** — `tpcore/trade_monitor.py` consumes Alpaca's `TradingStream`; defined in `railway.json` but not yet deployed (Railway paused). Local invocation: `python -m tpcore.trade_monitor`. |
+| Cross-cutting | Cost model (Phase 2) | **Complete** — `platform.spread_observations` + `platform.liquidity_tiers` populated from Corwin-Schultz; `RiskGovernor.check_cost` wired through all three engines; backtests use `tpcore.backtest.cost_model.get_round_trip_cost`. Spec: `docs/EDGE_VALIDATION_PLAN.md`. |
 
 ### Overfitting Diagnostics Status
 

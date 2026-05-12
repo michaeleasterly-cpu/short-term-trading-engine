@@ -2,7 +2,7 @@
 
 **Purpose:** Daily health-check procedure for the Short-Term Trading Engine. Any Claude session (or human operator) should be able to read this file and walk through the checklist in §9 in under 5 minutes.
 
-**Railway status (as of 2026-05-12):** Railway auto-deploys are **disabled**. All daily ops are running locally via the scripts under `scripts/` (the local drivers each mirror the corresponding Railway service entrypoint). §1 below remains accurate for when Railway is re-enabled, but skip the "service is Online" expectations until then.
+**Railway status (as of 2026-05-12):** Railway is **paused** — auto-deploys are off, cron schedules are unset on every live service, and the `trade-monitor` block in `railway.json` was never deployed. The active execution environment is the operator's local Mac; §1 documents the local-execution model and the residual Railway service state. Re-enabling Railway is deferred until an engine clears the credibility gate (≥ 60/100).
 
 **Engine submission status (as of 2026-05-12):** Trade monitor is live. Engines submit only the **Tier 1** bracket via `AlpacaPaperBrokerAdapter.submit_tier1_only` and persist `decision_data` to `platform.open_orders`. The `tpcore/trade_monitor.py` service consumes Alpaca's `trade_updates` stream and submits the Tier 2 follow-on reactively after the Tier 1 entry fills. AAR + risk-state updates fire on Tier 2 close. The legacy `TPCORE_SCAN_ONLY` env-var guard has been removed from the order managers; deploy of the trade-monitor Railway service is required before engines can fire (see §1 service table). Smoke test (`scripts/smoke_test.py`) still bypasses the order managers and exercises the raw broker path for sanity checks.
 
@@ -88,70 +88,40 @@ ORDER BY recorded_at;
 
 ---
 
-## 1. Railway Service Health
+## 1. Execution environment (local Mac; Railway paused)
 
-Six services run on Railway. Verify each has a recent successful deploy and execution.
+The active execution environment is the operator's **local Mac**. Railway is paused as of 2026-05-12 — auto-deploys are off, cron schedules are unset on every live service, and the `trade-monitor` service defined in `railway.json` was never deployed. Nothing fires automatically: every engine run, every ingestion sweep, every smoke test starts from a local `python …` invocation.
 
-| Service | Cron schedule (UTC) | Entrypoint |
+### What's invoked, by which script
+
+| Job | Local command | Notes |
 | --- | --- | --- |
-| `sigma-scheduler` | `0 22 * * MON-FRI` | `python sigma/scheduler.py` |
-| `reversion-scheduler` | `0 22 * * MON-FRI` | `python reversion/scheduler.py` |
-| `vector-scheduler` | `0 22 * * MON-FRI` | `python vector/scheduler.py` |
-| `fundamentals-refresh-scheduler` | `0 3 * * SUN` | `python ops/cron_fundamentals_refresh.py` |
-| `corporate-actions-scheduler` | `0 4 * * SUN` | `python ops/cron_corporate_actions.py` |
-| `validation-scheduler` | `0 6 * * SUN` | `python ops/cron_validation.py` |
-| `trade-monitor` | persistent (RestartPolicy=ALWAYS) | `python tpcore/trade_monitor.py` |
+| Daily ops (refresh universe + corp actions + fundamentals + validation + universe sim) | `python scripts/ops.py --full` | See "Daily Maintenance (via ops CLI)" below. Each stage has a 120 s timeout. |
+| Broker reachability smoke (single bracket order, cancelled immediately) | `python scripts/smoke_test.py` | Idempotent. Bypasses the engine order managers; just exercises the broker adapter. |
+| End-to-end pipeline smoke (engine → broker → trade_monitor → AAR) | `python scripts/pipeline_smoke_test.py` | **The current next-gate check** — must be run during US market hours so the bracket entry fills. Requires `python -m tpcore.trade_monitor` running in a separate terminal. |
+| Engine submission run (Sigma / Reversion / Vector) | `python sigma/scheduler.py` (etc.) | Each scheduler is one-shot. Trade monitor must be running. |
+| Trade monitor (live order-lifecycle worker) | `python -m tpcore.trade_monitor` | Persistent loop subscribed to Alpaca `TradingStream`. Required for Sigma/Reversion Tier 2 logic. |
+| Universe simulation (Sigma 187 / Reversion 4 / Vector 0 today) | `python scripts/simulate_universe.py` | Writes a `UNIVERSE_SIMULATION` event to `application_log`. |
+| Tier (re-)assignment | `python scripts/assign_liquidity_tiers.py` | Aggregates `platform.spread_observations` into `platform.liquidity_tiers`. Source-agnostic via `--sources`. |
+| FMP fundamentals backfill (hours-long) | `python scripts/backfill_fundamentals.py --all-active` | Optional one-shot; the daily ops CLI keeps fundamentals current. |
+| Backtests (tier-aware costs) | `python sigma/backtest.py --start … --end …` (etc.) | Same shape for Reversion + Vector. Reads `liquidity_tiers` at startup. |
 
-### How to inspect (Railway CLI)
+All scripts read `DATABASE_URL` from `.env` (use `DATABASE_URL_IPV4`, the Supabase pooler) and `ALPACA_KEY` / `ALPACA_SECRET` / `ALPACA_PAPER` for broker access.
 
-```bash
-# Login + link is one-time:
-railway login
-railway link        # select the short-term-engine project
+### Railway services (paused — not active)
 
-# `railway status` operates on the currently-linked service. Switch services with:
-railway service sigma-scheduler          # then: railway status / railway logs
-railway service reversion-scheduler
-railway service vector-scheduler
-railway service fundamentals-refresh-scheduler
-railway service corporate-actions-scheduler
-railway service validation-scheduler
+The four services in the project are still provisioned; none is currently scheduled or running:
 
-# `railway status` prints a project overview that includes ALL cron jobs and
-# their schedules in one shot — useful as the first daily check:
-railway status | tail -20
+| Service | Live config (verified 2026-05-12 via GraphQL) | Local equivalent |
+| --- | --- | --- |
+| `ingestion-engine` | persistent, `restartPolicyType=NEVER`, no auto-restart, idle | `python scripts/ops.py --full` |
+| `sigma-scheduler` | `cronSchedule=null`, last status "Completed", will not refire | `python sigma/scheduler.py` |
+| `reversion-scheduler` | `cronSchedule=null`, will not refire | `python reversion/scheduler.py` |
+| `vector-scheduler` | `cronSchedule=null`, will not refire | `python vector/scheduler.py` |
 
-# Most recent logs for the currently-linked service:
-railway logs | tail -200
-```
+The `trade-monitor` block in `railway.json` (added 2026-05-12 for the Phase 1.5 spec) is **defined but not deployed**. The Sunday-cron services that earlier revisions of this doc listed (`fundamentals-refresh-scheduler`, `corporate-actions-scheduler`, `validation-scheduler`) **no longer exist on Railway** — that work consolidates into the persistent `ingestion-engine` service via `platform.ingestion_jobs`.
 
-The bottom of `railway status` lists every cron job under "All resources":
-
-```
-Cron jobs
-  - sigma-scheduler:                  ● Online · 0/1 running · 0 22 * * MON-FRI · next run in N
-  - reversion-scheduler:              ● Online · 0/1 running · 0 22 * * MON-FRI · next run in N
-  - vector-scheduler:                 ● Online · 0/1 running · 0 22 * * MON-FRI · next run in N
-  - fundamentals-refresh-scheduler:   ● Online · 0/1 running · 0 3  * * SUN     · next run in N
-  - corporate-actions-scheduler:      ● Online · 0/1 running · 0 4  * * SUN     · next run in N
-  - validation-scheduler:             ● Online · 0/1 running · 0 6  * * SUN     · next run in N
-```
-
-Confirm all six lines show `● Online`. Anything else (`Crashed`, `Removed`, `Paused`) is a red flag.
-
-**For each service, confirm:**
-- Latest deployment is `SUCCESS` (not `FAILED`, `CRASHED`, `BUILDING`, or `STOPPED`).
-- Last execution exited cleanly. The schedulers log a final `*.scheduler.run_done` line on success and write a `SHUTDOWN` row to `platform.application_log` with `exit_code = 0`; absence of either signal on a day the cron should have fired is a red flag (see §2).
-- No unhandled exceptions, tracebacks, or `RiskGovernor.emergency_kill` events in the recent logs.
-- Cron schedule is still active in the Railway dashboard (Service → Settings → Cron Schedule). Pausing a service or deleting its cron string disables it without raising an alert.
-
-### Dashboard fallback
-
-If the CLI is not authenticated, use the Railway dashboard:
-1. Project → Services → click each service.
-2. Deployments tab → most recent should be green.
-3. Logs tab → scroll to the latest run; verify the final line is success.
-4. Settings tab → Cron Schedule field is non-empty.
+When Railway is re-enabled, the canonical sync command is `python ops/apply_railway_service_config.py --all` (uses the GraphQL `serviceInstanceUpdate` mutation; commit-and-push alone leaves service-instance fields stale — see project memory `feedback_apply_after_railway_json.md`).
 
 ---
 
@@ -462,31 +432,36 @@ Fixed monthly cost: **$52** (FMP Starter $22 + Railway Hobby $5 + Supabase Pro $
 
 ## 9. Daily Checklist
 
-Copy this into the session output when running the daily check. Substitute today's UTC date.
+The operator works through this from the local Mac while Railway is paused. Substitute today's UTC date.
 
 ```
 Daily Operations Checklist — YYYY-MM-DD UTC
 
-Railway
-[ ] sigma-scheduler:               last deploy SUCCESS, last execution exit 0
-[ ] reversion-scheduler:           last deploy SUCCESS, last execution exit 0
-[ ] vector-scheduler:              last deploy SUCCESS, last execution exit 0
-[ ] fundamentals-refresh-scheduler: (Sundays only) last execution exit 0
-[ ] corporate-actions-scheduler:   (Sundays only) last execution exit 0
-[ ] validation-scheduler:          (Sundays only) last execution reviewed
+Local ops run (single command does the data refresh + validation + sim)
+[ ] python scripts/ops.py --full       → exit 0, no DEGRADED check, run_id captured
+[ ] python scripts/ops.py --check      → JSON shows all sub-checks ok: true
+
+Engine paper trading (only on demand; Railway paused so nothing fires automatically)
+[ ] python -m tpcore.trade_monitor     → running in a separate terminal; STREAM_CONNECTED in app log
+[ ] python sigma/scheduler.py          → run_done line printed, application_log SHUTDOWN exit_code=0
+[ ] python reversion/scheduler.py      → same shape
+[ ] python vector/scheduler.py         → same shape
+
+Pipeline smoke (only during US regular session 13:30–20:00 UTC weekdays)
+[ ] python scripts/pipeline_smoke_test.py  → exit 0 with PASSED, or 0 with SKIPPED when closed
+[ ] python scripts/smoke_test.py       → exit 0 (broker reachability only; no engine path)
 
 Run Health (platform.application_log — see §2)
-[ ] sigma:                       latest run has STARTUP + SHUTDOWN with exit_code=0, no ERROR/CRITICAL rows
-[ ] reversion:                   latest run has STARTUP + SHUTDOWN with exit_code=0, no ERROR/CRITICAL rows
-[ ] vector:                      latest run has STARTUP + SHUTDOWN with exit_code=0, no ERROR/CRITICAL rows
-[ ] validation:                  (Sundays only) latest run has STARTUP + SHUTDOWN with exit_code=0
-[ ] corporate-actions:           (Sundays only) latest run has STARTUP + SHUTDOWN with exit_code=0
+[ ] sigma:        most recent local run has STARTUP + SHUTDOWN with exit_code=0
+[ ] reversion:    same
+[ ] vector:       same
+[ ] trade_monitor: STREAM_CONNECTED present, no STREAM_RECONNECT loops
 
 Database
-[ ] Postgres reachable (SELECT 1 succeeds)
-[ ] prices_daily ≥ 300K rows, latest bar within 5 trading days
-[ ] No data loss in any key table (row counts within expected ranges)
-[ ] Supabase free-tier limits OK (DB size, egress, connections)
+[ ] Postgres reachable (SELECT 1 succeeds via DATABASE_URL_IPV4 pooler)
+[ ] prices_daily ≥ 20M rows, latest bar within 5 trading days
+[ ] No data loss in any key table (row counts within expected ranges per §3)
+[ ] Supabase Pro within disk + connection limits (no read-only lock)
 
 Alpaca
 [ ] Account ACTIVE, trading_blocked=false, account_blocked=false
@@ -498,10 +473,14 @@ Risk
 [ ] weekly_pnl > -10% × engine_equity for every engine
 
 Costs
-[ ] Railway within Hobby plan
+[ ] Railway within Hobby plan (still paying $5/mo even while paused)
 [ ] FMP within Starter limits (< 100K calls/day)
-[ ] Supabase within free-tier ceilings
+[ ] Supabase Pro within plan ceilings
 [ ] No unexpected billing alerts
+
+Railway (paused — verify state, do not re-enable without an architecture decision)
+[ ] railway service list --json shows the four expected services, none restarted
+[ ] No service has been deleted, renamed, or had cronSchedule re-attached without operator approval
 
 Actions Taken
 - [list any anomalies found and what was done; "none" if clean]
