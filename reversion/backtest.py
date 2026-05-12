@@ -114,6 +114,32 @@ MAX_HOLD_DAYS = 30
 TIME_STOP_DAYS = 5  # bars without touching 20-day MA → time-out exit
 SCORE_THRESHOLD = 50  # plan §4.2 weak floor
 
+# Default volume-climax threshold for a candidate to qualify (vol_ratio is
+# 5-day-volume / 20-day-volume; ≥ this counts as climax). The search pipeline
+# overrides via --volume-climax-multiplier.
+VOLUME_CLIMAX_MULTIPLIER_DEFAULT = 1.0  # 1.0 ≈ "no climax gate" (always passes)
+
+# Parameter-search overrides — None means use the module defaults above.
+_HARD_STOP_PCT_OVERRIDE: float | None = None
+_MAX_HOLD_DAYS_OVERRIDE: int | None = None
+_VOLUME_CLIMAX_OVERRIDE: float | None = None
+
+
+def _hard_stop_pct() -> float:
+    return _HARD_STOP_PCT_OVERRIDE if _HARD_STOP_PCT_OVERRIDE is not None else HARD_STOP_PCT
+
+
+def _max_hold_days() -> int:
+    return _MAX_HOLD_DAYS_OVERRIDE if _MAX_HOLD_DAYS_OVERRIDE is not None else MAX_HOLD_DAYS
+
+
+def _volume_climax_threshold() -> float:
+    return (
+        _VOLUME_CLIMAX_OVERRIDE
+        if _VOLUME_CLIMAX_OVERRIDE is not None
+        else VOLUME_CLIMAX_MULTIPLIER_DEFAULT
+    )
+
 DEFAULT_OUTPUT_DIR = Path("backtests")
 DEFAULT_RESULTS_FILE = "earnings_quality_backtest.json"
 DEFAULT_REJECTED_FILE = "rejected_by_quality.csv"
@@ -358,6 +384,9 @@ def _scan_day(
             df["close"].iloc[: idx + 1], df["bb_upper"].iloc[: idx + 1], df["bb_lower"].iloc[: idx + 1]
         )
         vol_ratio = _volume_ratio(df["volume"].iloc[: idx + 1])
+        if vol_ratio < _volume_climax_threshold():
+            # Volume-climax gate (search-overridable). ≤ default 1.0 → no-op.
+            continue
 
         last = df.iloc[idx]
         if direction is Direction.LONG:
@@ -437,9 +466,9 @@ def _simulate_trade(
     """
     is_long = direction is Direction.LONG
     if is_long:
-        stop_price = entry_price * (1.0 - HARD_STOP_PCT)
+        stop_price = entry_price * (1.0 - _hard_stop_pct())
     else:
-        stop_price = entry_price * (1.0 + HARD_STOP_PCT)
+        stop_price = entry_price * (1.0 + _hard_stop_pct())
     tier1_qty = TIER1_FRACTION
     tier2_qty = 1.0 - TIER1_FRACTION
     record = TradeRecord(
@@ -456,7 +485,7 @@ def _simulate_trade(
         adx_at_entry=adx_at_entry,
     )
 
-    bars_left = min(MAX_HOLD_DAYS, len(df) - entry_idx - 1)
+    bars_left = min(_max_hold_days(), len(df) - entry_idx - 1)
     pnl = 0.0
     bars_without_touching_20ma = 0
 
@@ -515,7 +544,7 @@ def _simulate_trade(
                 record.holding_days = i
                 break
     else:
-        # MAX_HOLD_DAYS expired without exit.
+        # max-hold expired without exit.
         bar = df.iloc[entry_idx + bars_left]
         sell_px = float(bar["close"]) * ((1.0 - _slippage_per_side(ticker)) if is_long else (1.0 + _slippage_per_side(ticker)))
         remaining = (tier1_qty if record.tier1_exit_date is None else 0.0) + tier2_qty
@@ -821,16 +850,242 @@ def _conclusion(baseline: VariantSummary, treatment: VariantSummary, rejected: l
 
 
 # ────────────────────────────────────────────────────────────────────────────
+# Parameter-search hooks
+# ────────────────────────────────────────────────────────────────────────────
+
+
+REVERSION_OVERRIDE_KEYS = (
+    "z_threshold",
+    "earnings_quality",
+    "volume_climax_multiplier",
+    "max_hold_days",
+    "stop_pct",
+)
+
+
+_EARNINGS_QUALITY_TO_FILTER = {
+    "HIGH": "high_only",
+    "MEDIUM_AND_HIGH": "not_low",
+}
+
+
+def _overrides_from_args(args: argparse.Namespace) -> dict:
+    out: dict = {}
+    for k in REVERSION_OVERRIDE_KEYS:
+        v = getattr(args, k, None)
+        if v is not None:
+            out[k] = v
+    return out
+
+
+def _apply_overrides_from_args(args: argparse.Namespace) -> None:
+    global _HARD_STOP_PCT_OVERRIDE, _MAX_HOLD_DAYS_OVERRIDE, _VOLUME_CLIMAX_OVERRIDE
+    _HARD_STOP_PCT_OVERRIDE = (
+        float(args.stop_pct) if getattr(args, "stop_pct", None) is not None else None
+    )
+    _MAX_HOLD_DAYS_OVERRIDE = (
+        int(args.max_hold_days) if getattr(args, "max_hold_days", None) is not None else None
+    )
+    _VOLUME_CLIMAX_OVERRIDE = (
+        float(args.volume_climax_multiplier)
+        if getattr(args, "volume_climax_multiplier", None) is not None
+        else None
+    )
+
+
+def _trade_records_to_search_trades(trades: list[TradeRecord]) -> list:
+    from tpcore.backtest.search import SearchTrade
+
+    out: list[SearchTrade] = []
+    for t in trades:
+        if t.tier2_exit_date is None and t.tier1_exit_date is None:
+            continue
+        exit_d = t.tier2_exit_date or t.tier1_exit_date
+        exit_p = (
+            t.tier2_exit_price
+            if t.tier2_exit_price is not None
+            else (t.tier1_exit_price if t.tier1_exit_price is not None else t.entry_price)
+        )
+        out.append(
+            SearchTrade(
+                ticker=t.ticker,
+                entry_date=t.entry_date,
+                entry_price=float(t.entry_price),
+                exit_date=exit_d,
+                exit_price=float(exit_p) if exit_p is not None else float(t.entry_price),
+                pnl_pct=float(t.return_pct),
+                direction=t.direction.upper(),
+                exit_reason=t.exit_reason,
+            )
+        )
+    return out
+
+
+# Mega-cap universe matched to the standard Reversion backtest set so that
+# search runs are apples-to-apples with the standard backtest's results.
+_REVERSION_SEARCH_UNIVERSE = (
+    "SPY", "QQQ", "IWM",
+    "AAPL", "MSFT", "AMZN", "GOOGL", "META", "TSLA", "NVDA",
+    "JPM", "V", "WMT", "DIS", "NFLX", "BA", "CAT", "GE", "GM", "F",
+    "XOM", "CVX", "PFE", "JNJ", "MRK", "ABBV", "PG", "KO", "PEP",
+    "MCD", "SBUX", "HD", "LOW", "TGT", "COST",
+    "LMT", "RTX", "NOC", "GD",
+    "SO", "DUK", "NEE",
+    "PLTR", "UBER", "ABNB", "SNAP", "RBLX", "RIVN", "LCID", "FSLR",
+)
+
+
+async def run_for_search(
+    *,
+    db_url: str,
+    start: date,
+    end: date,
+    universe: tuple[str, ...] | None = None,
+    overrides: dict | None = None,
+    trade_log_path: Path | None = None,
+) -> "BacktestRunResult":
+    """Programmatic entry for the parameter-search orchestrator.
+
+    Runs Reversion's combined-filter variant (the engine's known winner)
+    with caller overrides. ``earnings_quality`` override accepts ``"HIGH"``
+    or ``"MEDIUM_AND_HIGH"``; defaults to ``"HIGH"`` (the live config).
+    """
+    from tpcore.backtest.cost_model import load_tier_costs
+    from tpcore.backtest.search import (
+        BacktestRunResult,
+        compute_search_metrics,
+        write_trade_log_csv,
+    )
+
+    global _HARD_STOP_PCT_OVERRIDE, _MAX_HOLD_DAYS_OVERRIDE, _VOLUME_CLIMAX_OVERRIDE
+    overrides = dict(overrides or {})
+    if "stop_pct" in overrides:
+        _HARD_STOP_PCT_OVERRIDE = float(overrides["stop_pct"])
+    if "max_hold_days" in overrides:
+        _MAX_HOLD_DAYS_OVERRIDE = int(overrides["max_hold_days"])
+    if "volume_climax_multiplier" in overrides:
+        _VOLUME_CLIMAX_OVERRIDE = float(overrides["volume_climax_multiplier"])
+
+    z_thr = float(overrides.get("z_threshold", 3.0))
+    eq = overrides.get("earnings_quality", "HIGH")
+    filter_mode = _EARNINGS_QUALITY_TO_FILTER.get(eq, "high_only")
+    universe = universe or _REVERSION_SEARCH_UNIVERSE
+
+    pool = await build_asyncpg_pool(db_url)
+    try:
+        _TIER_ROUND_TRIP_COSTS.update(await load_tier_costs(pool))
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT DISTINCT ticker FROM platform.fundamentals_quarterly
+                WHERE ticker = ANY($1::text[])
+                ORDER BY ticker
+                """,
+                list(universe),
+            )
+        funded_tickers = [r["ticker"] for r in rows]
+        load_tickers = list({*funded_tickers, SPY_SYMBOL})
+        prices = await _load_prices(pool, load_tickers, start, end)
+        fundamentals = await _load_fundamentals(pool, funded_tickers)
+    finally:
+        await pool.close()
+
+    if not prices or not funded_tickers:
+        return BacktestRunResult(
+            engine="reversion",
+            parameters=overrides,
+            credibility_score=0,
+            passed_gate=False,
+            sharpe=0.0,
+            profit_factor=0.0,
+            max_drawdown=0.0,
+            trades=0,
+            dsr=0.0,
+            min_btl_gap=0,
+            trades_per_param=0.0,
+            sensitivity_score=None,
+            ruin_probability=0.0,
+            trade_log=[],
+        )
+
+    panels = {ticker: _precompute_indicators(df) for ticker, df in prices.items()}
+    spy_panel = panels.pop(SPY_SYMBOL, None)
+
+    trades, _ = _run_variant(
+        variant="search",
+        panels=panels,
+        spy_panel=spy_panel,
+        fundamentals=fundamentals,
+        start=start,
+        end=end,
+        z_threshold=z_thr,
+        filter_mode=filter_mode,
+    )
+    summary = _compute_summary("search", trades)
+
+    search_trades = _trade_records_to_search_trades(trades)
+    if trade_log_path is not None:
+        write_trade_log_csv(trade_log_path, search_trades)
+
+    parameters = {
+        "z_threshold": z_thr,
+        "earnings_quality": eq,
+        "volume_climax_multiplier": _volume_climax_threshold(),
+        "max_hold_days": int(_max_hold_days()),
+        "stop_pct": float(_hard_stop_pct()),
+    }
+
+    trades_for_diag = _trades_to_diagnostic_dicts(trades)
+    price_data = _panels_to_price_data(panels, spy_panel)
+
+    return compute_search_metrics(
+        engine="reversion",
+        parameters=parameters,
+        trades_for_diag=trades_for_diag,
+        sharpe=summary.sharpe_annualized,
+        profit_factor=summary.profit_factor,
+        max_drawdown=summary.max_drawdown_pct,
+        n_trials=len(parameters),
+        price_data=price_data,
+        rubric_inputs={
+            "lookahead_clean": True,
+            "survivorship_inclusive": True,
+            "pit_fundamentals": True,
+            "regime_coverage": True,
+            "monte_carlo_drawdown": True,
+        },
+        search_trades=search_trades,
+    )
+
+
+# ────────────────────────────────────────────────────────────────────────────
 # Main
 # ────────────────────────────────────────────────────────────────────────────
 
 
 async def amain(args: argparse.Namespace) -> int:
-    """Run Reversion's three-variant backtest and emit the credibility + overfitting reports."""
+    """Run Reversion's three-variant backtest and emit the credibility + overfitting reports.
+
+    When ``--json`` is set, branches to :func:`run_for_search` over the
+    Reversion winner variant (combined-filter) with parameter overrides.
+    """
     db_url = args.database_url or os.getenv("DATABASE_URL")
     if not db_url:
         print("DATABASE_URL not set — pass --database-url or export it.", file=sys.stderr)
         return 2
+
+    _apply_overrides_from_args(args)
+
+    if getattr(args, "json_output", False):
+        result = await run_for_search(
+            db_url=db_url,
+            start=args.start,
+            end=args.end,
+            overrides=_overrides_from_args(args),
+            trade_log_path=args.trade_log,
+        )
+        print(result.to_json())
+        return 0
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1006,6 +1261,14 @@ async def amain(args: argparse.Namespace) -> int:
                     ]
                 )
         print(f"rejected-by-quality → {rejected_path}  rows={len(rejected)}")
+
+    if args.trade_log is not None:
+        from tpcore.backtest.search import write_trade_log_csv
+
+        n = write_trade_log_csv(
+            args.trade_log, _trade_records_to_search_trades(combined_trades)
+        )
+        print(f"combined-filter search trade-log → {args.trade_log}  rows={n}")
 
     # ── Statistical Validation + credibility rubric ────────────────────────
     # Winner: combined-filter (z≥3, EQ=HIGH). Sweep z_threshold and filter_mode
@@ -1248,6 +1511,21 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Skip the Statistical Validation section (saves ~30s of compute).",
     )
+    # ─── Parameter-search hooks ─────────────────────────────────────────────
+    p.add_argument("--json", dest="json_output", action="store_true",
+                   help="Emit a single JSON object with search-pipeline metrics and exit 0.")
+    p.add_argument("--trade-log", type=Path, default=None,
+                   help="Write standardised per-trade CSV to this path.")
+    p.add_argument("--z-threshold", type=float, default=None,
+                   help="Override z-score threshold (default 3.0 for the winner variant).")
+    p.add_argument("--earnings-quality", choices=("HIGH", "MEDIUM_AND_HIGH"), default=None,
+                   help="HIGH → only HIGH-grade earnings; MEDIUM_AND_HIGH → reject only LOW/no-data.")
+    p.add_argument("--volume-climax-multiplier", type=float, default=None,
+                   help="Min volume-climax ratio for a candidate (default 1.0 = no gate).")
+    p.add_argument("--max-hold-days", type=int, default=None,
+                   help="Override max holding period in trading days (default 30).")
+    p.add_argument("--stop-pct", type=float, default=None,
+                   help="Override hard-stop percentage (default 0.08).")
     return p.parse_args(argv)
 
 

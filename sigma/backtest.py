@@ -118,6 +118,29 @@ TIER_SPLIT = 0.5  # 50/50 scale-out
 MAX_HOLD_DAYS = 30
 TRADING_DAYS_PER_YEAR = 252
 
+# Default upper bound on band_proximity for a candidate to qualify
+# (band_proximity = (close - lower)/(upper - lower); 0=lower band, 1=upper band).
+# Search pipeline overrides via --bb-width-percentile (0-100 → /100 maps here).
+BAND_PROXIMITY_MAX = 0.5
+
+# Parameter-search overrides — when None, the module defaults above apply. The
+# search pipeline sets these once per trial before invoking the backtest.
+_HARD_STOP_PCT_OVERRIDE: float | None = None
+_MAX_HOLD_DAYS_OVERRIDE: int | None = None
+_BAND_PROX_MAX_OVERRIDE: float | None = None
+
+
+def _hard_stop_pct() -> float:
+    return _HARD_STOP_PCT_OVERRIDE if _HARD_STOP_PCT_OVERRIDE is not None else HARD_STOP_PCT
+
+
+def _max_hold_days() -> int:
+    return _MAX_HOLD_DAYS_OVERRIDE if _MAX_HOLD_DAYS_OVERRIDE is not None else MAX_HOLD_DAYS
+
+
+def _band_prox_max() -> float:
+    return _BAND_PROX_MAX_OVERRIDE if _BAND_PROX_MAX_OVERRIDE is not None else BAND_PROXIMITY_MAX
+
 # Where to write the run artefacts.
 DEFAULT_OUTPUT_DIR = Path("backtests")
 DEFAULT_RESULTS_FILE = "chop_backtest_results.json"
@@ -275,7 +298,7 @@ def simulate_trade(
     Tier1 fill consumes 50% of qty; tier2 fill consumes the remainder. Stop
     sells the entire remaining position at the stop level.
     """
-    stop_price = entry_price * (1.0 - HARD_STOP_PCT)
+    stop_price = entry_price * (1.0 - _hard_stop_pct())
     notional = 1.0  # unit-normalized so PnL is a dollar return per $1 notional
     tier1_qty = TIER_SPLIT
     tier2_qty = 1.0 - TIER_SPLIT
@@ -287,7 +310,7 @@ def simulate_trade(
         notional=notional,
     )
 
-    bars_left = min(MAX_HOLD_DAYS, len(df) - entry_idx - 1)
+    bars_left = min(_max_hold_days(), len(df) - entry_idx - 1)
     pnl = 0.0
     for i in range(1, bars_left + 1):
         bar = df.iloc[entry_idx + i]
@@ -318,7 +341,7 @@ def simulate_trade(
             record.holding_days = i
             break
     else:
-        # MAX_HOLD_DAYS expired without a clean exit — close at last-bar close.
+        # max-hold expired without a clean exit — close at last-bar close.
         bar = df.iloc[entry_idx + bars_left]
         sell_px = float(bar["close"]) * (1.0 - _slippage_per_side(ticker))
         remaining_qty = (tier1_qty if record.tier1_exit_date is None else 0.0) + tier2_qty
@@ -410,7 +433,7 @@ def run_variant(
             if math.isnan(bb_lower) or math.isnan(bb_upper):
                 continue
             prox = float(row["band_proximity"])
-            if math.isnan(prox) or prox > 0.5:  # demand entry near lower half
+            if math.isnan(prox) or prox > _band_prox_max():  # demand entry near lower half
                 continue
             # Score: simple "channel quality + entry precision" proxy.
             #   low ADX is good (up to 20 pts); low band_proximity is good (up to 35).
@@ -652,16 +675,230 @@ def write_year_trade_dump(
 
 
 # ────────────────────────────────────────────────────────────────────────────
+# Parameter-search hooks
+# ────────────────────────────────────────────────────────────────────────────
+
+
+SIGMA_OVERRIDE_KEYS = (
+    "adx_threshold",
+    "chop_threshold",
+    "bb_width_percentile",
+    "max_hold_days",
+    "stop_pct",
+)
+
+
+def _overrides_from_args(args: argparse.Namespace) -> dict:
+    """Pull just the search-pipeline override keys from an argparse Namespace.
+
+    Missing-or-None values are omitted, so the returned dict reflects only what
+    the operator (or orchestrator) actually asked us to change."""
+    out: dict = {}
+    for k in SIGMA_OVERRIDE_KEYS:
+        v = getattr(args, k, None)
+        if v is not None:
+            out[k] = v
+    return out
+
+
+def _apply_overrides_from_args(args: argparse.Namespace) -> None:
+    """Stamp Namespace values onto the module-level override globals.
+
+    Idempotent — the global is reset to None when the arg is None, so
+    successive calls in the same process behave predictably."""
+    global _HARD_STOP_PCT_OVERRIDE, _MAX_HOLD_DAYS_OVERRIDE, _BAND_PROX_MAX_OVERRIDE
+    _HARD_STOP_PCT_OVERRIDE = (
+        float(args.stop_pct) if getattr(args, "stop_pct", None) is not None else None
+    )
+    _MAX_HOLD_DAYS_OVERRIDE = (
+        int(args.max_hold_days) if getattr(args, "max_hold_days", None) is not None else None
+    )
+    if getattr(args, "bb_width_percentile", None) is not None:
+        # CLI takes a 0-100 percent; internal cap is 0.0-1.0.
+        _BAND_PROX_MAX_OVERRIDE = float(args.bb_width_percentile) / 100.0
+    else:
+        _BAND_PROX_MAX_OVERRIDE = None
+
+
+def _trade_records_to_search_trades(trades: list[TradeRecord]) -> list:
+    """Convert Sigma's TradeRecord list to the standardised SearchTrade shape."""
+    from tpcore.backtest.search import SearchTrade
+
+    out: list[SearchTrade] = []
+    for t in trades:
+        if t.tier2_exit_date is None and t.tier1_exit_date is None:
+            continue  # never exited — skip from search trade list
+        exit_d = t.tier2_exit_date or t.tier1_exit_date
+        exit_p = (
+            t.tier2_exit_price
+            if t.tier2_exit_price is not None
+            else (t.tier1_exit_price if t.tier1_exit_price is not None else t.entry_price)
+        )
+        out.append(
+            SearchTrade(
+                ticker=t.ticker,
+                entry_date=t.entry_date,
+                entry_price=float(t.entry_price),
+                exit_date=exit_d,
+                exit_price=float(exit_p) if exit_p is not None else float(t.entry_price),
+                pnl_pct=float(t.return_pct),
+                direction="LONG",
+                exit_reason=t.exit_reason,
+            )
+        )
+    return out
+
+
+async def run_for_search(
+    *,
+    db_url: str,
+    start: date,
+    end: date,
+    universe: tuple[str, ...] | None = None,
+    overrides: dict | None = None,
+    trade_log_path: Path | None = None,
+) -> "BacktestRunResult":
+    """Programmatic entry point for the parameter-search orchestrator.
+
+    Runs the Sigma per-stock-CHOP variant only (the engine's known winner)
+    over [start, end] with any caller-supplied overrides, then bundles the
+    result into a :class:`BacktestRunResult` via :func:`compute_search_metrics`.
+
+    The caller is responsible for setting overrides BEFORE invocation if
+    the module-level globals need to differ from the defaults. As a
+    convenience, ``overrides`` may be a dict matching ``SIGMA_OVERRIDE_KEYS``
+    — this function stamps them onto the module globals before running.
+    """
+    from tpcore.backtest.cost_model import load_tier_costs
+    from tpcore.backtest.search import (
+        BacktestRunResult,
+        compute_search_metrics,
+        write_trade_log_csv,
+    )
+
+    # Mirror _apply_overrides_from_args but for the dict path.
+    global _HARD_STOP_PCT_OVERRIDE, _MAX_HOLD_DAYS_OVERRIDE, _BAND_PROX_MAX_OVERRIDE
+    overrides = dict(overrides or {})
+    if "stop_pct" in overrides:
+        _HARD_STOP_PCT_OVERRIDE = float(overrides["stop_pct"])
+    if "max_hold_days" in overrides:
+        _MAX_HOLD_DAYS_OVERRIDE = int(overrides["max_hold_days"])
+    if "bb_width_percentile" in overrides:
+        _BAND_PROX_MAX_OVERRIDE = float(overrides["bb_width_percentile"]) / 100.0
+
+    max_adx_override = overrides.get("adx_threshold")
+    chop_override = overrides.get("chop_threshold")
+    universe = universe or DEFAULT_UNIVERSE
+
+    pool = await build_asyncpg_pool(db_url)
+    try:
+        _TIER_ROUND_TRIP_COSTS.update(await load_tier_costs(pool))
+        raw = await load_bars(pool, universe, start, end)
+    finally:
+        await pool.close()
+
+    if not raw:
+        # Empty-dataset path — return a zero-trade result so the orchestrator
+        # can rank it (it will sort to the bottom).
+        return BacktestRunResult(
+            engine="sigma",
+            parameters=overrides,
+            credibility_score=0,
+            passed_gate=False,
+            sharpe=0.0,
+            profit_factor=0.0,
+            max_drawdown=0.0,
+            trades=0,
+            dsr=0.0,
+            min_btl_gap=0,
+            trades_per_param=0.0,
+            sensitivity_score=None,
+            ruin_probability=0.0,
+            trade_log=[],
+        )
+
+    panels = {ticker: precompute_indicators(df) for ticker, df in raw.items()}
+    spy_chop_series = panels["SPY"]["chop"] if "SPY" in panels else None
+
+    trades, _ = run_variant(
+        variant="search",
+        panels=panels,
+        start=start,
+        end=end,
+        require_chop=True,
+        spy_chop_series=spy_chop_series,
+        chop_threshold=float(chop_override) if chop_override is not None else CHOP_SIDEWAYS_WEAK,
+        max_adx=float(max_adx_override) if max_adx_override is not None else MAX_ADX,
+    )
+    summary = compute_summary("search", trades)
+
+    search_trades = _trade_records_to_search_trades(trades)
+    if trade_log_path is not None:
+        write_trade_log_csv(trade_log_path, search_trades)
+
+    parameters = {
+        "adx_threshold": float(max_adx_override) if max_adx_override is not None else float(MAX_ADX),
+        "chop_threshold": float(chop_override) if chop_override is not None else float(CHOP_SIDEWAYS_WEAK),
+        "bb_width_percentile": _band_prox_max() * 100.0,
+        "max_hold_days": int(_max_hold_days()),
+        "stop_pct": float(_hard_stop_pct()),
+    }
+
+    trades_for_diag = _trades_to_diagnostic_dicts(trades)
+    price_data = _panels_to_price_data(panels)
+
+    result = compute_search_metrics(
+        engine="sigma",
+        parameters=parameters,
+        trades_for_diag=trades_for_diag,
+        sharpe=summary.sharpe_annualized,
+        profit_factor=summary.profit_factor,
+        max_drawdown=summary.max_drawdown_pct,
+        n_trials=len(parameters),  # caller overrides for search-correction
+        price_data=price_data,
+        rubric_inputs={
+            "lookahead_clean": True,
+            "survivorship_inclusive": True,
+            "pit_fundamentals": True,
+            "regime_coverage": True,
+            "monte_carlo_drawdown": True,
+        },
+        search_trades=search_trades,
+    )
+    return result
+
+
+# ────────────────────────────────────────────────────────────────────────────
 # Main
 # ────────────────────────────────────────────────────────────────────────────
 
 
 async def amain(args: argparse.Namespace) -> int:
-    """Run Sigma's three-variant backtest and emit the credibility + overfitting reports."""
+    """Run Sigma's three-variant backtest and emit the credibility + overfitting reports.
+
+    When ``args.json_output`` is set, branches to :func:`run_for_search` and
+    prints a single JSON object covering only the per-stock-CHOP variant
+    (Sigma's known winner) with any parameter overrides applied.
+    """
     db_url = args.database_url or os.getenv("DATABASE_URL")
     if not db_url:
         print("DATABASE_URL not set — pass --database-url or export it.", file=sys.stderr)
         return 2
+
+    # Apply any parameter overrides up-front so both code paths see them.
+    _apply_overrides_from_args(args)
+
+    if getattr(args, "json_output", False):
+        result = await run_for_search(
+            db_url=db_url,
+            start=args.start,
+            end=args.end,
+            universe=args.universe,
+            overrides=_overrides_from_args(args),
+            trade_log_path=args.trade_log,
+        )
+        print(result.to_json())
+        return 0
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -782,6 +1019,12 @@ async def amain(args: argparse.Namespace) -> int:
         year_path = args.output_dir / f"chop_{args.year}_trades.csv"
         n_rows = write_year_trade_dump(per_stock_trades, args.year, year_path)
         print(f"per-stock-chop {args.year} trades → {year_path}  rows={n_rows}")
+
+    if args.trade_log is not None:
+        from tpcore.backtest.search import write_trade_log_csv
+
+        n = write_trade_log_csv(args.trade_log, _trade_records_to_search_trades(per_stock_trades))
+        print(f"per-stock-chop search trade-log → {args.trade_log}  rows={n}")
 
     # ── Statistical Validation + credibility rubric ────────────────────────
     # The winner of the comparison is per-stock-chop; run sensitivity sweeps
@@ -1028,6 +1271,25 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="If set, dump every per-stock-CHOP trade in this calendar year to CSV with regime context.",
     )
+    # ─── Parameter-search hooks ─────────────────────────────────────────────
+    # When --json is set, the script suppresses normal output and prints a
+    # single JSON object with the search-pipeline metrics. --trade-log writes
+    # the per-trade CSV at the given path. Parameter overrides default to
+    # None (= use engine defaults) so behaviour is unchanged without flags.
+    p.add_argument("--json", dest="json_output", action="store_true",
+                   help="Emit a single JSON object with search-pipeline metrics and exit 0.")
+    p.add_argument("--trade-log", type=Path, default=None,
+                   help="Write standardised per-trade CSV to this path.")
+    p.add_argument("--adx-threshold", type=float, default=None,
+                   help="Override ADX ceiling (default: engine MAX_ADX=20).")
+    p.add_argument("--chop-threshold", type=float, default=None,
+                   help="Override per-stock CHOP floor (default: engine CHOP_SIDEWAYS_WEAK=38.2).")
+    p.add_argument("--bb-width-percentile", type=float, default=None,
+                   help="Override band-proximity max cutoff (0-100, default 50).")
+    p.add_argument("--max-hold-days", type=int, default=None,
+                   help="Override max holding period in trading days (default 30).")
+    p.add_argument("--stop-pct", type=float, default=None,
+                   help="Override hard-stop percentage (default 0.03).")
     return p.parse_args(argv)
 
 

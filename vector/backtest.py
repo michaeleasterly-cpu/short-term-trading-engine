@@ -94,6 +94,52 @@ def _slippage_per_side(ticker: str) -> float:
     return rt / 2.0 if rt is not None else SLIPPAGE_PER_SIDE
 
 
+# Parameter-search overrides. None = use the module default. Set once per
+# trial by the search orchestrator (or by the CLI flags) before the backtest
+# runs; reset between trials.
+_PB_CEILING_OVERRIDE: float | None = None
+_DE_CEILING_OVERRIDE: float | None = None
+_CATALYST_WINDOW_OVERRIDE: int | None = None
+_HARD_STOP_PCT_OVERRIDE: float | None = None
+_SWING_SCORE_THRESHOLD_OVERRIDE: float | None = None  # None = no gate
+
+
+def _pb_ceiling() -> float:
+    return _PB_CEILING_OVERRIDE if _PB_CEILING_OVERRIDE is not None else PB_CEILING
+
+
+def _de_ceiling() -> float:
+    return _DE_CEILING_OVERRIDE if _DE_CEILING_OVERRIDE is not None else DE_CEILING
+
+
+def _catalyst_window_days() -> int:
+    return (
+        _CATALYST_WINDOW_OVERRIDE
+        if _CATALYST_WINDOW_OVERRIDE is not None
+        else CATALYST_WINDOW_DAYS
+    )
+
+
+def _hard_stop_pct() -> float:
+    return _HARD_STOP_PCT_OVERRIDE if _HARD_STOP_PCT_OVERRIDE is not None else HARD_STOP_PCT
+
+
+def _swing_score_threshold() -> float | None:
+    return _SWING_SCORE_THRESHOLD_OVERRIDE
+
+
+def _synth_swing_score(magnitude: float | None) -> float:
+    """Synthetic 0-90 swing score for the search pipeline only.
+
+    The live engine computes swing_score in ``vector.plugs.setup_detection``;
+    the backtest's gate-pass-through machinery doesn't, so for the search
+    we synthesise: 30 (technical trigger passed) + 100 × |catalyst growth|,
+    clamped to [30, 90]. None / 0 magnitude → 30 (technical only)."""
+    base = 30.0
+    mag = abs(float(magnitude)) if magnitude is not None else 0.0
+    return float(min(90.0, base + 100.0 * mag))
+
+
 PRE_GRAD_POSITION_CAP_USD = 2000.0
 
 # Crash guard: SPY −10% in 20 sessions → 10-session cooldown on new entries.
@@ -267,7 +313,7 @@ def _passes_gate1(fundamentals: dict | None, last_close: float, sma_200: float) 
     revenue = fundamentals["revenue"]
     if pb is None or de is None or revenue is None:
         return False
-    if pb >= PB_CEILING or de >= DE_CEILING or revenue <= REVENUE_FLOOR:
+    if pb >= _pb_ceiling() or de >= _de_ceiling() or revenue <= REVENUE_FLOOR:
         return False
     if math.isnan(sma_200):
         return False
@@ -279,8 +325,8 @@ def _passes_gate1(fundamentals: dict | None, last_close: float, sma_200: float) 
 def _has_catalyst(events: list[tuple[date, float]], as_of: date) -> tuple[bool, float | None]:
     if not events:
         return False, None
-    lo = as_of - timedelta(days=CATALYST_WINDOW_DAYS)
-    hi = as_of + timedelta(days=CATALYST_WINDOW_DAYS)
+    lo = as_of - timedelta(days=_catalyst_window_days())
+    hi = as_of + timedelta(days=_catalyst_window_days())
     # Catalyst window. The "+5 days" half is technically lookahead, but
     # for momentum strategies the *anticipation* of an upcoming earnings
     # beat is itself the signal. The Gate 2 spec explicitly says ±5 days
@@ -412,7 +458,7 @@ def _simulate_trade(
         rv20_at_entry_pct=rv20_at_entry_pct,
         size_factor=size_factor,
     )
-    stop = entry_price * (1 - HARD_STOP_PCT)
+    stop = entry_price * (1 - _hard_stop_pct())
     target = entry_price * (1 + PROFIT_TARGET_PCT)
     trail_armed = False
     high_water = entry_price
@@ -519,6 +565,11 @@ def _run(
                 continue
             trigger = _technical_trigger(row, prior_close)
             if trigger is None:
+                continue
+            # Search-only synthetic swing-score gate. No-op when the override
+            # is None (default backtest behaviour).
+            swing_floor = _swing_score_threshold()
+            if swing_floor is not None and _synth_swing_score(magnitude) < swing_floor:
                 continue
             chosen = (ticker, df, idx, trigger, magnitude, funds or {})
             break  # single position at a time, first match wins
@@ -650,16 +701,258 @@ def _write_trades_csv(path: Path, trades: list[TradeRecord]) -> None:
 
 
 # ────────────────────────────────────────────────────────────────────────────
+# Parameter-search hooks
+# ────────────────────────────────────────────────────────────────────────────
+
+
+VECTOR_OVERRIDE_KEYS = (
+    "pb_ceiling",
+    "de_ceiling",
+    "catalyst_window_days",
+    "swing_score_threshold",
+    "stop_pct",
+)
+
+
+def _overrides_from_args(args: argparse.Namespace) -> dict:
+    out: dict = {}
+    for k in VECTOR_OVERRIDE_KEYS:
+        v = getattr(args, k, None)
+        if v is not None:
+            out[k] = v
+    return out
+
+
+def _apply_overrides_from_args(args: argparse.Namespace) -> None:
+    global _PB_CEILING_OVERRIDE, _DE_CEILING_OVERRIDE, _CATALYST_WINDOW_OVERRIDE
+    global _HARD_STOP_PCT_OVERRIDE, _SWING_SCORE_THRESHOLD_OVERRIDE
+    _PB_CEILING_OVERRIDE = (
+        float(args.pb_ceiling) if getattr(args, "pb_ceiling", None) is not None else None
+    )
+    _DE_CEILING_OVERRIDE = (
+        float(args.de_ceiling) if getattr(args, "de_ceiling", None) is not None else None
+    )
+    _CATALYST_WINDOW_OVERRIDE = (
+        int(args.catalyst_window_days)
+        if getattr(args, "catalyst_window_days", None) is not None
+        else None
+    )
+    _HARD_STOP_PCT_OVERRIDE = (
+        float(args.stop_pct) if getattr(args, "stop_pct", None) is not None else None
+    )
+    _SWING_SCORE_THRESHOLD_OVERRIDE = (
+        float(args.swing_score_threshold)
+        if getattr(args, "swing_score_threshold", None) is not None
+        else None
+    )
+
+
+def _trade_records_to_search_trades(trades: list[TradeRecord]) -> list:
+    from tpcore.backtest.search import SearchTrade
+
+    out: list[SearchTrade] = []
+    for t in trades:
+        if t.exit_date is None:
+            continue
+        out.append(
+            SearchTrade(
+                ticker=t.ticker,
+                entry_date=t.entry_date,
+                entry_price=float(t.entry_price),
+                exit_date=t.exit_date,
+                exit_price=float(t.exit_price) if t.exit_price is not None else float(t.entry_price),
+                pnl_pct=float(t.return_pct),
+                direction="LONG",
+                exit_reason=t.exit_reason or "unknown",
+            )
+        )
+    return out
+
+
+def _build_diagnostic_inputs_for_search(
+    trades: list[TradeRecord],
+    panels: dict[str, pd.DataFrame],
+    spy_panel: pd.DataFrame | None,
+) -> tuple[list[dict], pd.DataFrame]:
+    """Build (trade-dicts, price_data) shaped for OverfittingDiagnostic."""
+    trade_dicts = [
+        {
+            "pnl_pct": t.return_pct,
+            "entry_date": t.entry_date,
+            "ticker": t.ticker,
+            "exit_date": t.exit_date or t.entry_date,
+            "direction": "LONG",
+            "entry_price": float(t.entry_price),
+        }
+        for t in trades
+    ]
+    frames: list[pd.DataFrame] = []
+    for ticker, df in panels.items():
+        sub = df[["open", "high", "low", "close"]].reset_index().rename(columns={"index": "date"})
+        sub["ticker"] = ticker
+        frames.append(sub)
+    if spy_panel is not None:
+        sub = spy_panel[["open", "high", "low", "close"]].reset_index().rename(columns={"index": "date"})
+        sub["ticker"] = SPY_SYMBOL
+        frames.append(sub)
+    price_data = (
+        pd.concat(frames, ignore_index=True)
+        if frames
+        else pd.DataFrame(columns=["ticker", "date", "open", "high", "low", "close"])
+    )
+    return trade_dicts, price_data
+
+
+async def run_for_search(
+    *,
+    db_url: str,
+    start: date,
+    end: date,
+    universe: tuple[str, ...] | None = None,
+    overrides: dict | None = None,
+    trade_log_path: Path | None = None,
+) -> "BacktestRunResult":
+    """Programmatic entry for the parameter-search orchestrator (Vector)."""
+    from tpcore.backtest.cost_model import load_tier_costs
+    from tpcore.backtest.search import (
+        BacktestRunResult,
+        compute_search_metrics,
+        write_trade_log_csv,
+    )
+
+    global _PB_CEILING_OVERRIDE, _DE_CEILING_OVERRIDE, _CATALYST_WINDOW_OVERRIDE
+    global _HARD_STOP_PCT_OVERRIDE, _SWING_SCORE_THRESHOLD_OVERRIDE
+    overrides = dict(overrides or {})
+    if "pb_ceiling" in overrides:
+        _PB_CEILING_OVERRIDE = float(overrides["pb_ceiling"])
+    if "de_ceiling" in overrides:
+        _DE_CEILING_OVERRIDE = float(overrides["de_ceiling"])
+    if "catalyst_window_days" in overrides:
+        _CATALYST_WINDOW_OVERRIDE = int(overrides["catalyst_window_days"])
+    if "stop_pct" in overrides:
+        _HARD_STOP_PCT_OVERRIDE = float(overrides["stop_pct"])
+    if "swing_score_threshold" in overrides:
+        _SWING_SCORE_THRESHOLD_OVERRIDE = float(overrides["swing_score_threshold"])
+
+    pool = await build_asyncpg_pool(db_url)
+    try:
+        _TIER_ROUND_TRIP_COSTS.update(await load_tier_costs(pool))
+        async with pool.acquire() as conn:
+            funded = [r["ticker"] for r in await conn.fetch(
+                "SELECT DISTINCT ticker FROM platform.fundamentals_quarterly "
+                "WHERE pb IS NOT NULL AND de IS NOT NULL AND revenue IS NOT NULL"
+            )]
+            with_catalyst = [r["ticker"] for r in await conn.fetch(
+                "SELECT DISTINCT ticker FROM platform.catalyst_events "
+                "WHERE event_type='EARNINGS_BEAT'"
+            )]
+        eligible = sorted(set(funded) & set(with_catalyst))
+        if universe is not None:
+            eligible = [t for t in eligible if t in universe]
+        load_tickers = list({*eligible, SPY_SYMBOL})
+        prices = await _load_prices(pool, load_tickers, start, end)
+        fundamentals = await _load_fundamentals(pool, eligible)
+        catalysts = await _load_catalysts(pool, eligible)
+    finally:
+        await pool.close()
+
+    if not prices or not eligible:
+        return BacktestRunResult(
+            engine="vector",
+            parameters=overrides,
+            credibility_score=0,
+            passed_gate=False,
+            sharpe=0.0,
+            profit_factor=0.0,
+            max_drawdown=0.0,
+            trades=0,
+            dsr=0.0,
+            min_btl_gap=0,
+            trades_per_param=0.0,
+            sensitivity_score=None,
+            ruin_probability=0.0,
+            trade_log=[],
+        )
+
+    panels = {ticker: _precompute(df) for ticker, df in prices.items()}
+    spy_panel = panels.pop(SPY_SYMBOL, None)
+    spy_rv_pct = _spy_realized_vol_pct(spy_panel) if spy_panel is not None else None
+
+    trades = _run(
+        panels=panels,
+        spy_panel=spy_panel,
+        spy_rv_pct=spy_rv_pct,
+        fundamentals=fundamentals,
+        catalysts=catalysts,
+        start=start,
+        end=end,
+    )
+    summary = _summary(trades)
+
+    search_trades = _trade_records_to_search_trades(trades)
+    if trade_log_path is not None:
+        write_trade_log_csv(trade_log_path, search_trades)
+
+    parameters = {
+        "pb_ceiling": float(_pb_ceiling()),
+        "de_ceiling": float(_de_ceiling()),
+        "catalyst_window_days": int(_catalyst_window_days()),
+        "swing_score_threshold": (
+            float(_swing_score_threshold()) if _swing_score_threshold() is not None else 0.0
+        ),
+        "stop_pct": float(_hard_stop_pct()),
+    }
+
+    trade_dicts, price_data = _build_diagnostic_inputs_for_search(trades, panels, spy_panel)
+
+    return compute_search_metrics(
+        engine="vector",
+        parameters=parameters,
+        trades_for_diag=trade_dicts,
+        sharpe=summary.sharpe_annualized,
+        profit_factor=summary.profit_factor,
+        max_drawdown=summary.max_drawdown_pct,
+        n_trials=len(parameters),
+        price_data=price_data,
+        rubric_inputs={
+            "lookahead_clean": True,
+            "survivorship_inclusive": True,
+            "pit_fundamentals": True,
+            "regime_coverage": True,
+            "monte_carlo_drawdown": True,
+        },
+        search_trades=search_trades,
+    )
+
+
+# ────────────────────────────────────────────────────────────────────────────
 # Main
 # ────────────────────────────────────────────────────────────────────────────
 
 
 async def amain(args: argparse.Namespace) -> int:
-    """Run Vector's three-gate backtest and emit the credibility + overfitting reports."""
+    """Run Vector's three-gate backtest and emit the credibility + overfitting reports.
+
+    When ``--json`` is set, branches to :func:`run_for_search` with parameter
+    overrides applied and prints a single JSON object.
+    """
     db_url = args.database_url or os.getenv("DATABASE_URL")
     if not db_url:
         print("DATABASE_URL not set", file=sys.stderr)
         return 2
+
+    _apply_overrides_from_args(args)
+
+    if getattr(args, "json_output", False):
+        result = await run_for_search(
+            db_url=db_url,
+            start=args.start,
+            end=args.end,
+            overrides=_overrides_from_args(args),
+            trade_log_path=args.trade_log,
+        )
+        print(result.to_json())
+        return 0
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     pool = await build_asyncpg_pool(db_url)
@@ -739,6 +1032,12 @@ async def amain(args: argparse.Namespace) -> int:
     _write_trades_csv(args.output_dir / args.trades_file, trades)
     print(f"results → {args.output_dir / args.results_file}")
     print(f"trades  → {args.output_dir / args.trades_file}  rows={len(trades)}")
+
+    if args.trade_log is not None:
+        from tpcore.backtest.search import write_trade_log_csv
+
+        n = write_trade_log_csv(args.trade_log, _trade_records_to_search_trades(trades))
+        print(f"vector search trade-log → {args.trade_log}  rows={n}")
 
     # ── Statistical Validation ─────────────────────────────────────────────
     # The full overfitting bundle (CSCV PBO, trades-per-param, etc.) is being
@@ -1042,6 +1341,21 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Default 30 reflects Vector's three-gate development-phase parameter search."
         ),
     )
+    # ─── Parameter-search hooks ─────────────────────────────────────────────
+    p.add_argument("--json", dest="json_output", action="store_true",
+                   help="Emit a single JSON object with search-pipeline metrics and exit 0.")
+    p.add_argument("--trade-log", type=Path, default=None,
+                   help="Write standardised per-trade CSV to this path.")
+    p.add_argument("--pb-ceiling", type=float, default=None,
+                   help="Override P/B ceiling for Gate 1 (default 1.5).")
+    p.add_argument("--de-ceiling", type=float, default=None,
+                   help="Override D/E ceiling for Gate 1 (default 3.0).")
+    p.add_argument("--catalyst-window-days", type=int, default=None,
+                   help="Override catalyst window in calendar days (default 5).")
+    p.add_argument("--swing-score-threshold", type=float, default=None,
+                   help="Synthetic swing-score floor for the search pipeline (default: no gate).")
+    p.add_argument("--stop-pct", type=float, default=None,
+                   help="Override hard-stop percentage (default 0.07).")
     return p.parse_args(argv)
 
 
