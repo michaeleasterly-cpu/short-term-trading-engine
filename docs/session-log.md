@@ -1,5 +1,11 @@
 # Session Log
 
+## 2026-05-12 (continued) — Scan-only guard + trade-monitor spec
+- Attempted `scripts/start_paper_trading.py`: surfaced a real engine bug. The order managers (Sigma, Reversion, Vector) call `broker.submit_execution_decision` which submits both Tier 1 + Tier 2 sequentially. Tier 2 is an opposing-side limit (LONG → SELL at upper band); Alpaca rejects with `cannot open a short sell while a long buy order is open`. Tier 1 lands as an orphan with no managed Tier 2 exit. Architectural gap: the engines were designed assuming a live worker would react to fills; that worker was never built.
+- Added a `TPCORE_SCAN_ONLY=true` env-var guard to all three order managers — runs gates + governor + signal logging, then returns `None` before any broker call. Defense-in-depth so a cron / manual run can't accidentally submit while the trade monitor is missing.
+- Wrote design spec `docs/superpowers/specs/2026-05-12-trade-monitor-design.md` for the live `TradeMonitor` worker: Alpaca `TradingStream` consumer, new `platform.open_orders` table, engine refactor to Tier 1-only submission, crash-safe rehydration. Queued as the next implementation block.
+- Two orphan Tier 1 orders (YUMC) from intermediate runs were cancelled at the broker.
+
 ## 2026-05-12 — Phase 1 complete + paper-trading smoke test
 - **A1**: Alpaca `all_active` sweep wired (handler `_handle_daily_bars_all_active` + local driver `scripts/run_daily_bars_all_active.py`). Universe expanded from ~50 to 7,694 tickers in `platform.prices_daily`.
 - **A2**: Tradier wide-export ingested via `scripts/ingest_tradier_csv.py` with Inf/overflow guards (50k bad-data rows dropped — 0.23% of source). 20.6M rows total.

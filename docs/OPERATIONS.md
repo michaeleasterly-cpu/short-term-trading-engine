@@ -4,6 +4,8 @@
 
 **Railway status (as of 2026-05-12):** Railway auto-deploys are **disabled**. All daily ops are running locally via the scripts under `scripts/` (the local drivers each mirror the corresponding Railway service entrypoint). §1 below remains accurate for when Railway is re-enabled, but skip the "service is Online" expectations until then.
 
+**Engine submission status (as of 2026-05-12):** Engines are in **scan-only mode** via `TPCORE_SCAN_ONLY=true`. The order managers run gates + governor accounting + signal logging, then short-circuit before any broker call — no paper orders are submitted. Reason: the existing two-payload `ExecutionDecision` model submits Tier 1 + Tier 2 concurrently, and Alpaca rejects opposing-side legs on the same symbol, leaving Tier 1 as an unmanaged orphan. The live `TradeMonitor` worker spec (`docs/superpowers/specs/2026-05-12-trade-monitor-design.md`, also tracked as Phase 1.5 in `docs/EDGE_VALIDATION_PLAN.md`) defines the fix. Until the monitor lands, **set `TPCORE_SCAN_ONLY=true` in every environment that runs an engine scheduler**. `scripts/smoke_test.py` bypasses the order managers and remains the way to prove the broker is reachable without flipping the flag.
+
 **Cross-references:**
 - `docs/MASTER_PLAN.md` — what each engine *is* and what success looks like.
 - `docs/EDGE_VALIDATION_PLAN.md` — phase tracker for universe + cost-model + replay work. Phase 1 complete 2026-05-12.
