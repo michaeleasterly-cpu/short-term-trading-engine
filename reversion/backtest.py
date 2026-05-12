@@ -98,7 +98,16 @@ logger = structlog.get_logger(__name__)
 # Backtest knobs (mirror reversion.models / execution_risk)
 # ────────────────────────────────────────────────────────────────────────────
 
-SLIPPAGE_PER_SIDE = 0.0005
+SLIPPAGE_PER_SIDE = 0.0005  # legacy default; per-ticker tier lookup wins.
+_TIER_ROUND_TRIP_COSTS: dict[str, float] = {}
+
+
+def _slippage_per_side(ticker: str) -> float:
+    """Per-side slippage for ``ticker``; T4 default for unknowns."""
+    rt = _TIER_ROUND_TRIP_COSTS.get(ticker)
+    return rt / 2.0 if rt is not None else SLIPPAGE_PER_SIDE
+
+
 HARD_STOP_PCT = 0.08
 TIER1_FRACTION = 0.75
 MAX_HOLD_DAYS = 30
@@ -459,7 +468,7 @@ def _simulate_trade(
         # Stop check first (most punitive).
         stop_hit = (is_long and low <= stop_price) or (not is_long and high >= stop_price)
         if stop_hit:
-            sell_px = stop_price * ((1.0 - SLIPPAGE_PER_SIDE) if is_long else (1.0 + SLIPPAGE_PER_SIDE))
+            sell_px = stop_price * ((1.0 - _slippage_per_side(ticker)) if is_long else (1.0 + _slippage_per_side(ticker)))
             remaining = (tier1_qty if record.tier1_exit_date is None else 0.0) + tier2_qty
             pnl += remaining * (sell_px - entry_price) * (1 if is_long else -1)
             record.stopped_out = True
@@ -471,7 +480,7 @@ def _simulate_trade(
         # Tier 1 fill?
         tier1_hit = (is_long and high >= target_20ma) or (not is_long and low <= target_20ma)
         if record.tier1_exit_date is None and tier1_hit:
-            sell_px = target_20ma * ((1.0 - SLIPPAGE_PER_SIDE) if is_long else (1.0 + SLIPPAGE_PER_SIDE))
+            sell_px = target_20ma * ((1.0 - _slippage_per_side(ticker)) if is_long else (1.0 + _slippage_per_side(ticker)))
             pnl += tier1_qty * (sell_px - entry_price) * (1 if is_long else -1)
             record.tier1_exit_date = bar.name
             record.tier1_exit_price = sell_px
@@ -480,7 +489,7 @@ def _simulate_trade(
         # Tier 2 fill — only after tier 1.
         tier2_hit = (is_long and high >= target_50ma) or (not is_long and low <= target_50ma)
         if record.tier1_exit_date is not None and tier2_hit:
-            sell_px = target_50ma * ((1.0 - SLIPPAGE_PER_SIDE) if is_long else (1.0 + SLIPPAGE_PER_SIDE))
+            sell_px = target_50ma * ((1.0 - _slippage_per_side(ticker)) if is_long else (1.0 + _slippage_per_side(ticker)))
             pnl += tier2_qty * (sell_px - entry_price) * (1 if is_long else -1)
             record.tier2_exit_date = bar.name
             record.tier2_exit_price = sell_px
@@ -497,7 +506,7 @@ def _simulate_trade(
             if bars_without_touching_20ma >= TIME_STOP_DAYS:
                 # Force-close at this bar's close.
                 close = float(bar["close"])
-                sell_px = close * ((1.0 - SLIPPAGE_PER_SIDE) if is_long else (1.0 + SLIPPAGE_PER_SIDE))
+                sell_px = close * ((1.0 - _slippage_per_side(ticker)) if is_long else (1.0 + _slippage_per_side(ticker)))
                 remaining = tier1_qty + tier2_qty
                 pnl += remaining * (sell_px - entry_price) * (1 if is_long else -1)
                 record.timed_out = True
@@ -508,7 +517,7 @@ def _simulate_trade(
     else:
         # MAX_HOLD_DAYS expired without exit.
         bar = df.iloc[entry_idx + bars_left]
-        sell_px = float(bar["close"]) * ((1.0 - SLIPPAGE_PER_SIDE) if is_long else (1.0 + SLIPPAGE_PER_SIDE))
+        sell_px = float(bar["close"]) * ((1.0 - _slippage_per_side(ticker)) if is_long else (1.0 + _slippage_per_side(ticker)))
         remaining = (tier1_qty if record.tier1_exit_date is None else 0.0) + tier2_qty
         pnl += remaining * (sell_px - entry_price) * (1 if is_long else -1)
         record.tier2_exit_date = bar.name
@@ -589,7 +598,11 @@ def _run_variant(
             continue
         next_open = float(df.iloc[idx + 1]["open"])
         is_long = chosen.direction is Direction.LONG
-        entry_price = next_open * (1.0 + SLIPPAGE_PER_SIDE if is_long else 1.0 - SLIPPAGE_PER_SIDE)
+        entry_price = next_open * (
+            1.0 + _slippage_per_side(chosen.ticker)
+            if is_long
+            else 1.0 - _slippage_per_side(chosen.ticker)
+        )
         record = _simulate_trade(
             df,
             entry_idx=idx + 1,
@@ -823,12 +836,39 @@ async def amain(args: argparse.Namespace) -> int:
 
     pool = await build_asyncpg_pool(db_url)
     try:
-        # Universe = anything that has fundamentals (so the gate can act),
-        # PLUS SPY for the market-context inputs even though it has no
-        # fundamentals.
+        from tpcore.backtest.cost_model import load_tier_costs
+
+        _TIER_ROUND_TRIP_COSTS.update(await load_tier_costs(pool))
+        logger.info(
+            "reversion.backtest.tier_costs_loaded",
+            n=len(_TIER_ROUND_TRIP_COSTS),
+        )
+        # Universe = anything that has fundamentals, PLUS SPY for market
+        # context. After the Phase 1 universe expansion fundamentals_quarterly
+        # holds 5,981 tickers — too many to backtest through the pooler
+        # without a statement_timeout crash. Constrain to the 50-name
+        # mega-cap backtest set used by Sigma so the credibility number
+        # is apples-to-apples vs the pre-expansion 47-name run. To widen
+        # later (e.g. via FMP Premium), drop the BACKTEST_UNIVERSE filter
+        # below.
+        _REVERSION_BACKTEST_UNIVERSE = (
+            "SPY", "QQQ", "IWM",
+            "AAPL", "MSFT", "AMZN", "GOOGL", "META", "TSLA", "NVDA",
+            "JPM", "V", "WMT", "DIS", "NFLX", "BA", "CAT", "GE", "GM", "F",
+            "XOM", "CVX", "PFE", "JNJ", "MRK", "ABBV", "PG", "KO", "PEP",
+            "MCD", "SBUX", "HD", "LOW", "TGT", "COST",
+            "LMT", "RTX", "NOC", "GD",
+            "SO", "DUK", "NEE",
+            "PLTR", "UBER", "ABNB", "SNAP", "RBLX", "RIVN", "LCID", "FSLR",
+        )
         async with pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT DISTINCT ticker FROM platform.fundamentals_quarterly ORDER BY ticker"
+                """
+                SELECT DISTINCT ticker FROM platform.fundamentals_quarterly
+                WHERE ticker = ANY($1::text[])
+                ORDER BY ticker
+                """,
+                list(_REVERSION_BACKTEST_UNIVERSE),
             )
         funded_tickers = [r["ticker"] for r in rows]
         if not funded_tickers:

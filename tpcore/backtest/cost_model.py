@@ -108,9 +108,37 @@ async def get_round_trip_cost(
     return Decimal(str(median))
 
 
+_LOAD_TIER_COSTS_SQL = """
+    SELECT ticker, median_spread_pct
+    FROM platform.liquidity_tiers
+"""
+
+
+async def load_tier_costs(pool: asyncpg.Pool) -> dict[str, float]:
+    """Load every ticker's median-spread round-trip cost as a float dict.
+
+    Returns ``{ticker: round_trip_cost_pct}`` — same units as
+    ``DEFAULT_ROUND_TRIP_COST_PCT`` (0.0150 = 1.5%). Backtests preload
+    this once at the top of ``amain`` and look up per-trade by ticker
+    without going async on the hot path.
+
+    For tickers missing from ``platform.liquidity_tiers`` the caller is
+    expected to fall back to the legacy ``SLIPPAGE_PER_SIDE`` constant
+    or ``DEFAULT_ROUND_TRIP_COST_PCT``.
+    """
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(_LOAD_TIER_COSTS_SQL)
+    return {
+        r["ticker"]: float(r["median_spread_pct"])
+        for r in rows
+        if r["median_spread_pct"] is not None
+    }
+
+
 __all__ = [
     "SimpleCostModel",
     "get_round_trip_cost",
+    "load_tier_costs",
     "DEFAULT_ROUND_TRIP_COST_PCT",
     "DEFAULT_ROUND_TRIP_COST_BPS",
     "DEFAULT_PER_SIDE_SLIPPAGE_BPS",

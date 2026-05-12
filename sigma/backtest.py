@@ -98,7 +98,21 @@ DEFAULT_UNIVERSE: tuple[str, ...] = (
     "V", "MA", "PG", "MMM", "CAT", "BA", "LMT",
 )
 
-SLIPPAGE_PER_SIDE = 0.0005  # 5 bps round-trip leg
+SLIPPAGE_PER_SIDE = 0.0005  # 5 bps — legacy default, used when a ticker
+# has no row in platform.liquidity_tiers. Backtest's amain() preloads
+# the tier map below at start; ``_slippage_per_side(ticker)`` returns
+# the per-side equivalent of the tier's median round-trip cost.
+_TIER_ROUND_TRIP_COSTS: dict[str, float] = {}
+
+
+def _slippage_per_side(ticker: str) -> float:
+    """Per-side slippage for ``ticker`` — half the round-trip cost from
+    ``platform.liquidity_tiers``, or the legacy ``SLIPPAGE_PER_SIDE``
+    default when the ticker isn't tier'd yet."""
+    rt = _TIER_ROUND_TRIP_COSTS.get(ticker)
+    return rt / 2.0 if rt is not None else SLIPPAGE_PER_SIDE
+
+
 HARD_STOP_PCT = 0.03
 TIER_SPLIT = 0.5  # 50/50 scale-out
 MAX_HOLD_DAYS = 30
@@ -281,7 +295,7 @@ def simulate_trade(
         low = float(bar["low"])
         # Stop check first — most punitive scenario, takes precedence.
         if low <= stop_price:
-            sell_px = stop_price * (1.0 - SLIPPAGE_PER_SIDE)
+            sell_px = stop_price * (1.0 - _slippage_per_side(ticker))
             remaining_qty = (tier1_qty if record.tier1_exit_date is None else 0.0) + tier2_qty
             pnl += remaining_qty * (sell_px - entry_price)
             record.stopped_out = True
@@ -291,13 +305,13 @@ def simulate_trade(
             break
         # Tier 1 fill?
         if record.tier1_exit_date is None and high >= mid_band:
-            sell_px = mid_band * (1.0 - SLIPPAGE_PER_SIDE)
+            sell_px = mid_band * (1.0 - _slippage_per_side(ticker))
             pnl += tier1_qty * (sell_px - entry_price)
             record.tier1_exit_date = bar.name
             record.tier1_exit_price = sell_px
         # Tier 2 fill — only after tier 1 has filled (same bar OK).
         if record.tier1_exit_date is not None and high >= upper_band:
-            sell_px = upper_band * (1.0 - SLIPPAGE_PER_SIDE)
+            sell_px = upper_band * (1.0 - _slippage_per_side(ticker))
             pnl += tier2_qty * (sell_px - entry_price)
             record.tier2_exit_date = bar.name
             record.tier2_exit_price = sell_px
@@ -306,7 +320,7 @@ def simulate_trade(
     else:
         # MAX_HOLD_DAYS expired without a clean exit — close at last-bar close.
         bar = df.iloc[entry_idx + bars_left]
-        sell_px = float(bar["close"]) * (1.0 - SLIPPAGE_PER_SIDE)
+        sell_px = float(bar["close"]) * (1.0 - _slippage_per_side(ticker))
         remaining_qty = (tier1_qty if record.tier1_exit_date is None else 0.0) + tier2_qty
         pnl += remaining_qty * (sell_px - entry_price)
         record.tier2_exit_date = bar.name
@@ -412,7 +426,7 @@ def run_variant(
         if idx + 1 >= len(df):
             continue
         next_open_bar = df.iloc[idx + 1]
-        entry_price = float(next_open_bar["open"]) * (1.0 + SLIPPAGE_PER_SIDE)
+        entry_price = float(next_open_bar["open"]) * (1.0 + _slippage_per_side(ticker))
         mid_band = float(df.iloc[idx]["bb_mid"])
         upper_band = float(df.iloc[idx]["bb_upper"])
         record = simulate_trade(
@@ -654,6 +668,16 @@ async def amain(args: argparse.Namespace) -> int:
     # Pull bars for the universe in a single query.
     pool = await build_asyncpg_pool(db_url)
     try:
+        # Preload tier-aware costs from platform.liquidity_tiers — used
+        # by ``_slippage_per_side`` per trade. Tickers without a tier
+        # row fall back to the legacy ``SLIPPAGE_PER_SIDE`` constant.
+        from tpcore.backtest.cost_model import load_tier_costs
+
+        _TIER_ROUND_TRIP_COSTS.update(await load_tier_costs(pool))
+        logger.info(
+            "sigma.backtest.tier_costs_loaded",
+            n=len(_TIER_ROUND_TRIP_COSTS),
+        )
         logger.info(
             "sigma.backtest.loading_bars",
             universe=len(args.universe),

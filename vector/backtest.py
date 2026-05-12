@@ -84,7 +84,16 @@ HARD_STOP_PCT = 0.07
 PROFIT_TARGET_PCT = 0.15
 TRAILING_TRIGGER_PCT = 0.10
 TRAILING_STOP_PCT = 0.05
-SLIPPAGE_PER_SIDE = 0.0005
+SLIPPAGE_PER_SIDE = 0.0005  # legacy default; per-ticker tier lookup wins.
+_TIER_ROUND_TRIP_COSTS: dict[str, float] = {}
+
+
+def _slippage_per_side(ticker: str) -> float:
+    """Per-side slippage for ``ticker``; T4 default for unknowns."""
+    rt = _TIER_ROUND_TRIP_COSTS.get(ticker)
+    return rt / 2.0 if rt is not None else SLIPPAGE_PER_SIDE
+
+
 PRE_GRAD_POSITION_CAP_USD = 2000.0
 
 # Crash guard: SPY −10% in 20 sessions → 10-session cooldown on new entries.
@@ -416,7 +425,7 @@ def _simulate_trade(
 
         # Stop check first.
         if low <= stop:
-            sell_px = stop * (1.0 - SLIPPAGE_PER_SIDE)
+            sell_px = stop * (1.0 - _slippage_per_side(ticker))
             record.exit_date = bar.name
             record.exit_price = sell_px
             record.exit_reason = "trailing_stop" if trail_armed else "hard_stop"
@@ -424,7 +433,7 @@ def _simulate_trade(
             break
         # Target hit.
         if high >= target:
-            sell_px = target * (1.0 - SLIPPAGE_PER_SIDE)
+            sell_px = target * (1.0 - _slippage_per_side(ticker))
             record.exit_date = bar.name
             record.exit_price = sell_px
             record.exit_reason = "target"
@@ -444,7 +453,7 @@ def _simulate_trade(
     else:
         # max-hold expired without exit.
         bar = df.iloc[entry_idx + bars_left]
-        sell_px = float(bar["close"]) * (1.0 - SLIPPAGE_PER_SIDE)
+        sell_px = float(bar["close"]) * (1.0 - _slippage_per_side(ticker))
         record.exit_date = bar.name
         record.exit_price = sell_px
         record.exit_reason = "max_hold"
@@ -521,7 +530,7 @@ def _run(
         if idx + 1 >= len(df):
             continue
         next_open = float(df.iloc[idx + 1]["open"])
-        entry_price = next_open * (1 + SLIPPAGE_PER_SIDE)
+        entry_price = next_open * (1 + _slippage_per_side(ticker))
         record = _simulate_trade(
             df,
             entry_idx=idx + 1,
@@ -655,6 +664,13 @@ async def amain(args: argparse.Namespace) -> int:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     pool = await build_asyncpg_pool(db_url)
     try:
+        from tpcore.backtest.cost_model import load_tier_costs
+
+        _TIER_ROUND_TRIP_COSTS.update(await load_tier_costs(pool))
+        logger.info(
+            "vector.backtest.tier_costs_loaded",
+            n=len(_TIER_ROUND_TRIP_COSTS),
+        )
         # Universe: anything that has fundamentals + a catalyst event.
         async with pool.acquire() as conn:
             funded = [r["ticker"] for r in await conn.fetch(
@@ -984,7 +1000,7 @@ def _run_with_thresholds(
         if idx + 1 >= len(df):
             continue
         next_open = float(df.iloc[idx + 1]["open"])
-        entry_price = next_open * (1 + SLIPPAGE_PER_SIDE)
+        entry_price = next_open * (1 + _slippage_per_side(ticker))
         record = _simulate_trade(
             df,
             entry_idx=idx + 1,
