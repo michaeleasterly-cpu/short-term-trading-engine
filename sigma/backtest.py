@@ -749,84 +749,106 @@ def _trade_records_to_search_trades(trades: list[TradeRecord]) -> list:
     return out
 
 
-async def run_for_search(
+@dataclass
+class SigmaWindowContext:
+    """Pre-loaded panels + indicators for one walk-forward window.
+
+    Built once by :func:`load_sigma_window_context` (heavy I/O), then reused
+    by every candidate in :func:`run_sigma_with_context` (CPU-only). Saves
+    the bars-fetch + indicator-precompute cost when sweeping many trials
+    over the same window."""
+
+    panels: dict[str, pd.DataFrame]
+    spy_chop_series: pd.Series | None
+    tier_round_trip_costs: dict[str, float]
+    start: date
+    end: date
+    universe: tuple[str, ...]
+
+
+async def load_sigma_window_context(
     *,
     db_url: str,
     start: date,
     end: date,
     universe: tuple[str, ...] | None = None,
+) -> SigmaWindowContext:
+    """Load bars + tier costs and precompute indicators for [start, end].
+
+    Heavy DB I/O — call once per walk-forward window. The returned context is
+    independent of any parameter overrides and can be reused across all
+    candidates in the window."""
+    from tpcore.backtest.cost_model import load_tier_costs
+
+    universe = universe or DEFAULT_UNIVERSE
+    pool = await build_asyncpg_pool(db_url)
+    try:
+        tier_costs = await load_tier_costs(pool)
+        raw = await load_bars(pool, universe, start, end)
+    finally:
+        await pool.close()
+    panels = {ticker: precompute_indicators(df) for ticker, df in raw.items()}
+    spy_chop_series = panels["SPY"]["chop"] if "SPY" in panels else None
+    return SigmaWindowContext(
+        panels=panels,
+        spy_chop_series=spy_chop_series,
+        tier_round_trip_costs=tier_costs,
+        start=start, end=end, universe=universe,
+    )
+
+
+def run_sigma_with_context(
+    context: SigmaWindowContext,
+    *,
     overrides: dict | None = None,
     trade_log_path: Path | None = None,
 ) -> "BacktestRunResult":
-    """Programmatic entry point for the parameter-search orchestrator.
+    """Run the per-stock-CHOP variant against a pre-loaded :class:`SigmaWindowContext`.
 
-    Runs the Sigma per-stock-CHOP variant only (the engine's known winner)
-    over [start, end] with any caller-supplied overrides, then bundles the
-    result into a :class:`BacktestRunResult` via :func:`compute_search_metrics`.
-
-    The caller is responsible for setting overrides BEFORE invocation if
-    the module-level globals need to differ from the defaults. As a
-    convenience, ``overrides`` may be a dict matching ``SIGMA_OVERRIDE_KEYS``
-    — this function stamps them onto the module globals before running.
-    """
-    from tpcore.backtest.cost_model import load_tier_costs
+    CPU-only; safe to call repeatedly with different ``overrides`` against the
+    same context. Mutates module-level override globals as a side effect — the
+    caller is expected to treat this as single-threaded."""
     from tpcore.backtest.search import (
         BacktestRunResult,
         compute_search_metrics,
         write_trade_log_csv,
     )
 
-    # Mirror _apply_overrides_from_args but for the dict path.
     global _HARD_STOP_PCT_OVERRIDE, _MAX_HOLD_DAYS_OVERRIDE, _BAND_PROX_MAX_OVERRIDE
     overrides = dict(overrides or {})
-    if "stop_pct" in overrides:
-        _HARD_STOP_PCT_OVERRIDE = float(overrides["stop_pct"])
-    if "max_hold_days" in overrides:
-        _MAX_HOLD_DAYS_OVERRIDE = int(overrides["max_hold_days"])
-    if "bb_width_percentile" in overrides:
-        _BAND_PROX_MAX_OVERRIDE = float(overrides["bb_width_percentile"]) / 100.0
+    _HARD_STOP_PCT_OVERRIDE = (
+        float(overrides["stop_pct"]) if "stop_pct" in overrides else None
+    )
+    _MAX_HOLD_DAYS_OVERRIDE = (
+        int(overrides["max_hold_days"]) if "max_hold_days" in overrides else None
+    )
+    _BAND_PROX_MAX_OVERRIDE = (
+        float(overrides["bb_width_percentile"]) / 100.0
+        if "bb_width_percentile" in overrides else None
+    )
+
+    # Refresh the tier-cost map from the context (cleared/replaced per window).
+    _TIER_ROUND_TRIP_COSTS.clear()
+    _TIER_ROUND_TRIP_COSTS.update(context.tier_round_trip_costs)
+
+    if not context.panels:
+        return BacktestRunResult(
+            engine="sigma", parameters=overrides, credibility_score=0, passed_gate=False,
+            sharpe=0.0, profit_factor=0.0, max_drawdown=0.0, trades=0, dsr=0.0,
+            min_btl_gap=0, trades_per_param=0.0, sensitivity_score=None,
+            ruin_probability=0.0, trade_log=[],
+        )
 
     max_adx_override = overrides.get("adx_threshold")
     chop_override = overrides.get("chop_threshold")
-    universe = universe or DEFAULT_UNIVERSE
-
-    pool = await build_asyncpg_pool(db_url)
-    try:
-        _TIER_ROUND_TRIP_COSTS.update(await load_tier_costs(pool))
-        raw = await load_bars(pool, universe, start, end)
-    finally:
-        await pool.close()
-
-    if not raw:
-        # Empty-dataset path — return a zero-trade result so the orchestrator
-        # can rank it (it will sort to the bottom).
-        return BacktestRunResult(
-            engine="sigma",
-            parameters=overrides,
-            credibility_score=0,
-            passed_gate=False,
-            sharpe=0.0,
-            profit_factor=0.0,
-            max_drawdown=0.0,
-            trades=0,
-            dsr=0.0,
-            min_btl_gap=0,
-            trades_per_param=0.0,
-            sensitivity_score=None,
-            ruin_probability=0.0,
-            trade_log=[],
-        )
-
-    panels = {ticker: precompute_indicators(df) for ticker, df in raw.items()}
-    spy_chop_series = panels["SPY"]["chop"] if "SPY" in panels else None
 
     trades, _ = run_variant(
         variant="search",
-        panels=panels,
-        start=start,
-        end=end,
+        panels=context.panels,
+        start=context.start,
+        end=context.end,
         require_chop=True,
-        spy_chop_series=spy_chop_series,
+        spy_chop_series=context.spy_chop_series,
         chop_threshold=float(chop_override) if chop_override is not None else CHOP_SIDEWAYS_WEAK,
         max_adx=float(max_adx_override) if max_adx_override is not None else MAX_ADX,
     )
@@ -843,18 +865,16 @@ async def run_for_search(
         "max_hold_days": int(_max_hold_days()),
         "stop_pct": float(_hard_stop_pct()),
     }
-
     trades_for_diag = _trades_to_diagnostic_dicts(trades)
-    price_data = _panels_to_price_data(panels)
-
-    result = compute_search_metrics(
+    price_data = _panels_to_price_data(context.panels)
+    return compute_search_metrics(
         engine="sigma",
         parameters=parameters,
         trades_for_diag=trades_for_diag,
         sharpe=summary.sharpe_annualized,
         profit_factor=summary.profit_factor,
         max_drawdown=summary.max_drawdown_pct,
-        n_trials=len(parameters),  # caller overrides for search-correction
+        n_trials=len(parameters),
         price_data=price_data,
         rubric_inputs={
             "lookahead_clean": True,
@@ -865,7 +885,26 @@ async def run_for_search(
         },
         search_trades=search_trades,
     )
-    return result
+
+
+async def run_for_search(
+    *,
+    db_url: str,
+    start: date,
+    end: date,
+    universe: tuple[str, ...] | None = None,
+    overrides: dict | None = None,
+    trade_log_path: Path | None = None,
+) -> "BacktestRunResult":
+    """Thin wrapper: load context, run once. Preserved for ad-hoc / single-run callers.
+
+    The parameter-search orchestrator should use
+    :func:`load_sigma_window_context` + :func:`run_sigma_with_context` to
+    amortise the DB load across all candidates in a window."""
+    ctx = await load_sigma_window_context(
+        db_url=db_url, start=start, end=end, universe=universe,
+    )
+    return run_sigma_with_context(ctx, overrides=overrides, trade_log_path=trade_log_path)
 
 
 # ────────────────────────────────────────────────────────────────────────────

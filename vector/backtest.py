@@ -803,40 +803,37 @@ def _build_diagnostic_inputs_for_search(
     return trade_dicts, price_data
 
 
-async def run_for_search(
+@dataclass
+class VectorWindowContext:
+    """Pre-loaded panels + fundamentals + catalysts for one walk-forward window."""
+
+    panels: dict[str, pd.DataFrame]
+    spy_panel: pd.DataFrame | None
+    spy_rv_pct: pd.Series | None
+    fundamentals: dict[str, list[dict]]
+    catalysts: dict[str, list[tuple[date, float]]]
+    tier_round_trip_costs: dict[str, float]
+    eligible_tickers: list[str]
+    start: date
+    end: date
+    universe: tuple[str, ...] | None
+
+
+async def load_vector_window_context(
     *,
     db_url: str,
     start: date,
     end: date,
     universe: tuple[str, ...] | None = None,
-    overrides: dict | None = None,
-    trade_log_path: Path | None = None,
-) -> "BacktestRunResult":
-    """Programmatic entry for the parameter-search orchestrator (Vector)."""
-    from tpcore.backtest.cost_model import load_tier_costs
-    from tpcore.backtest.search import (
-        BacktestRunResult,
-        compute_search_metrics,
-        write_trade_log_csv,
-    )
+) -> VectorWindowContext:
+    """Load prices + fundamentals + catalysts + tier costs; precompute indicators.
 
-    global _PB_CEILING_OVERRIDE, _DE_CEILING_OVERRIDE, _CATALYST_WINDOW_OVERRIDE
-    global _HARD_STOP_PCT_OVERRIDE, _SWING_SCORE_THRESHOLD_OVERRIDE
-    overrides = dict(overrides or {})
-    if "pb_ceiling" in overrides:
-        _PB_CEILING_OVERRIDE = float(overrides["pb_ceiling"])
-    if "de_ceiling" in overrides:
-        _DE_CEILING_OVERRIDE = float(overrides["de_ceiling"])
-    if "catalyst_window_days" in overrides:
-        _CATALYST_WINDOW_OVERRIDE = int(overrides["catalyst_window_days"])
-    if "stop_pct" in overrides:
-        _HARD_STOP_PCT_OVERRIDE = float(overrides["stop_pct"])
-    if "swing_score_threshold" in overrides:
-        _SWING_SCORE_THRESHOLD_OVERRIDE = float(overrides["swing_score_threshold"])
+    Heavy I/O — call once per walk-forward window."""
+    from tpcore.backtest.cost_model import load_tier_costs
 
     pool = await build_asyncpg_pool(db_url)
     try:
-        _TIER_ROUND_TRIP_COSTS.update(await load_tier_costs(pool))
+        tier_costs = await load_tier_costs(pool)
         async with pool.acquire() as conn:
             funded = [r["ticker"] for r in await conn.fetch(
                 "SELECT DISTINCT ticker FROM platform.fundamentals_quarterly "
@@ -856,36 +853,69 @@ async def run_for_search(
     finally:
         await pool.close()
 
-    if not prices or not eligible:
-        return BacktestRunResult(
-            engine="vector",
-            parameters=overrides,
-            credibility_score=0,
-            passed_gate=False,
-            sharpe=0.0,
-            profit_factor=0.0,
-            max_drawdown=0.0,
-            trades=0,
-            dsr=0.0,
-            min_btl_gap=0,
-            trades_per_param=0.0,
-            sensitivity_score=None,
-            ruin_probability=0.0,
-            trade_log=[],
-        )
-
     panels = {ticker: _precompute(df) for ticker, df in prices.items()}
     spy_panel = panels.pop(SPY_SYMBOL, None)
     spy_rv_pct = _spy_realized_vol_pct(spy_panel) if spy_panel is not None else None
+    return VectorWindowContext(
+        panels=panels, spy_panel=spy_panel, spy_rv_pct=spy_rv_pct,
+        fundamentals=fundamentals, catalysts=catalysts,
+        tier_round_trip_costs=tier_costs, eligible_tickers=eligible,
+        start=start, end=end, universe=universe,
+    )
+
+
+def run_vector_with_context(
+    context: VectorWindowContext,
+    *,
+    overrides: dict | None = None,
+    trade_log_path: Path | None = None,
+) -> "BacktestRunResult":
+    """Run Vector against a pre-loaded :class:`VectorWindowContext`."""
+    from tpcore.backtest.search import (
+        BacktestRunResult,
+        compute_search_metrics,
+        write_trade_log_csv,
+    )
+
+    global _PB_CEILING_OVERRIDE, _DE_CEILING_OVERRIDE, _CATALYST_WINDOW_OVERRIDE
+    global _HARD_STOP_PCT_OVERRIDE, _SWING_SCORE_THRESHOLD_OVERRIDE
+    overrides = dict(overrides or {})
+    _PB_CEILING_OVERRIDE = (
+        float(overrides["pb_ceiling"]) if "pb_ceiling" in overrides else None
+    )
+    _DE_CEILING_OVERRIDE = (
+        float(overrides["de_ceiling"]) if "de_ceiling" in overrides else None
+    )
+    _CATALYST_WINDOW_OVERRIDE = (
+        int(overrides["catalyst_window_days"])
+        if "catalyst_window_days" in overrides else None
+    )
+    _HARD_STOP_PCT_OVERRIDE = (
+        float(overrides["stop_pct"]) if "stop_pct" in overrides else None
+    )
+    _SWING_SCORE_THRESHOLD_OVERRIDE = (
+        float(overrides["swing_score_threshold"])
+        if "swing_score_threshold" in overrides else None
+    )
+    _TIER_ROUND_TRIP_COSTS.clear()
+    _TIER_ROUND_TRIP_COSTS.update(context.tier_round_trip_costs)
+
+    if not context.panels or not context.eligible_tickers:
+        return BacktestRunResult(
+            engine="vector", parameters=overrides, credibility_score=0, passed_gate=False,
+            sharpe=0.0, profit_factor=0.0, max_drawdown=0.0, trades=0, dsr=0.0,
+            min_btl_gap=0, trades_per_param=0.0, sensitivity_score=None,
+            ruin_probability=0.0, trade_log=[],
+        )
 
     trades = _run(
-        panels=panels,
-        spy_panel=spy_panel,
-        spy_rv_pct=spy_rv_pct,
-        fundamentals=fundamentals,
-        catalysts=catalysts,
-        start=start,
-        end=end,
+        panels=context.panels,
+        spy_panel=context.spy_panel,
+        spy_rv_pct=context.spy_rv_pct,
+        fundamentals=context.fundamentals,
+        catalysts=context.catalysts,
+        start=context.start,
+        end=context.end,
     )
     summary = _summary(trades)
 
@@ -902,9 +932,9 @@ async def run_for_search(
         ),
         "stop_pct": float(_hard_stop_pct()),
     }
-
-    trade_dicts, price_data = _build_diagnostic_inputs_for_search(trades, panels, spy_panel)
-
+    trade_dicts, price_data = _build_diagnostic_inputs_for_search(
+        trades, context.panels, context.spy_panel,
+    )
     return compute_search_metrics(
         engine="vector",
         parameters=parameters,
@@ -923,6 +953,26 @@ async def run_for_search(
         },
         search_trades=search_trades,
     )
+
+
+async def run_for_search(
+    *,
+    db_url: str,
+    start: date,
+    end: date,
+    universe: tuple[str, ...] | None = None,
+    overrides: dict | None = None,
+    trade_log_path: Path | None = None,
+) -> "BacktestRunResult":
+    """Thin wrapper: load context, run once. Single-call convenience.
+
+    The orchestrator should use :func:`load_vector_window_context` +
+    :func:`run_vector_with_context` to amortise the DB load across all
+    candidates in a window."""
+    ctx = await load_vector_window_context(
+        db_url=db_url, start=start, end=end, universe=universe,
+    )
+    return run_vector_with_context(ctx, overrides=overrides, trade_log_path=trade_log_path)
 
 
 # ────────────────────────────────────────────────────────────────────────────

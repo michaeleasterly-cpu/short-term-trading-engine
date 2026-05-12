@@ -935,45 +935,36 @@ _REVERSION_SEARCH_UNIVERSE = (
 )
 
 
-async def run_for_search(
+@dataclass
+class ReversionWindowContext:
+    """Pre-loaded panels + fundamentals for one walk-forward window."""
+
+    panels: dict[str, pd.DataFrame]
+    spy_panel: pd.DataFrame | None
+    fundamentals: dict[str, list[dict]]
+    tier_round_trip_costs: dict[str, float]
+    funded_tickers: list[str]
+    start: date
+    end: date
+    universe: tuple[str, ...]
+
+
+async def load_reversion_window_context(
     *,
     db_url: str,
     start: date,
     end: date,
     universe: tuple[str, ...] | None = None,
-    overrides: dict | None = None,
-    trade_log_path: Path | None = None,
-) -> "BacktestRunResult":
-    """Programmatic entry for the parameter-search orchestrator.
+) -> ReversionWindowContext:
+    """Load prices + fundamentals + tier costs; precompute indicators.
 
-    Runs Reversion's combined-filter variant (the engine's known winner)
-    with caller overrides. ``earnings_quality`` override accepts ``"HIGH"``
-    or ``"MEDIUM_AND_HIGH"``; defaults to ``"HIGH"`` (the live config).
-    """
+    Heavy I/O — call once per walk-forward window."""
     from tpcore.backtest.cost_model import load_tier_costs
-    from tpcore.backtest.search import (
-        BacktestRunResult,
-        compute_search_metrics,
-        write_trade_log_csv,
-    )
 
-    global _HARD_STOP_PCT_OVERRIDE, _MAX_HOLD_DAYS_OVERRIDE, _VOLUME_CLIMAX_OVERRIDE
-    overrides = dict(overrides or {})
-    if "stop_pct" in overrides:
-        _HARD_STOP_PCT_OVERRIDE = float(overrides["stop_pct"])
-    if "max_hold_days" in overrides:
-        _MAX_HOLD_DAYS_OVERRIDE = int(overrides["max_hold_days"])
-    if "volume_climax_multiplier" in overrides:
-        _VOLUME_CLIMAX_OVERRIDE = float(overrides["volume_climax_multiplier"])
-
-    z_thr = float(overrides.get("z_threshold", 3.0))
-    eq = overrides.get("earnings_quality", "HIGH")
-    filter_mode = _EARNINGS_QUALITY_TO_FILTER.get(eq, "high_only")
     universe = universe or _REVERSION_SEARCH_UNIVERSE
-
     pool = await build_asyncpg_pool(db_url)
     try:
-        _TIER_ROUND_TRIP_COSTS.update(await load_tier_costs(pool))
+        tier_costs = await load_tier_costs(pool)
         async with pool.acquire() as conn:
             rows = await conn.fetch(
                 """
@@ -990,34 +981,62 @@ async def run_for_search(
     finally:
         await pool.close()
 
-    if not prices or not funded_tickers:
-        return BacktestRunResult(
-            engine="reversion",
-            parameters=overrides,
-            credibility_score=0,
-            passed_gate=False,
-            sharpe=0.0,
-            profit_factor=0.0,
-            max_drawdown=0.0,
-            trades=0,
-            dsr=0.0,
-            min_btl_gap=0,
-            trades_per_param=0.0,
-            sensitivity_score=None,
-            ruin_probability=0.0,
-            trade_log=[],
-        )
-
     panels = {ticker: _precompute_indicators(df) for ticker, df in prices.items()}
     spy_panel = panels.pop(SPY_SYMBOL, None)
+    return ReversionWindowContext(
+        panels=panels, spy_panel=spy_panel, fundamentals=fundamentals,
+        tier_round_trip_costs=tier_costs, funded_tickers=funded_tickers,
+        start=start, end=end, universe=universe,
+    )
+
+
+def run_reversion_with_context(
+    context: ReversionWindowContext,
+    *,
+    overrides: dict | None = None,
+    trade_log_path: Path | None = None,
+) -> "BacktestRunResult":
+    """Run Reversion's combined-filter variant against a pre-loaded context."""
+    from tpcore.backtest.search import (
+        BacktestRunResult,
+        compute_search_metrics,
+        write_trade_log_csv,
+    )
+
+    global _HARD_STOP_PCT_OVERRIDE, _MAX_HOLD_DAYS_OVERRIDE, _VOLUME_CLIMAX_OVERRIDE
+    overrides = dict(overrides or {})
+    _HARD_STOP_PCT_OVERRIDE = (
+        float(overrides["stop_pct"]) if "stop_pct" in overrides else None
+    )
+    _MAX_HOLD_DAYS_OVERRIDE = (
+        int(overrides["max_hold_days"]) if "max_hold_days" in overrides else None
+    )
+    _VOLUME_CLIMAX_OVERRIDE = (
+        float(overrides["volume_climax_multiplier"])
+        if "volume_climax_multiplier" in overrides else None
+    )
+    _TIER_ROUND_TRIP_COSTS.clear()
+    _TIER_ROUND_TRIP_COSTS.update(context.tier_round_trip_costs)
+
+    z_thr = float(overrides.get("z_threshold", 3.0))
+    eq = overrides.get("earnings_quality", "HIGH")
+    filter_mode = _EARNINGS_QUALITY_TO_FILTER.get(eq, "high_only")
+
+    if not context.panels or not context.funded_tickers:
+        return BacktestRunResult(
+            engine="reversion", parameters=overrides, credibility_score=0, passed_gate=False,
+            sharpe=0.0, profit_factor=0.0, max_drawdown=0.0, trades=0, dsr=0.0,
+            min_btl_gap=0, trades_per_param=0.0, sensitivity_score=None,
+            ruin_probability=0.0, trade_log=[],
+        )
 
     trades, _ = _run_variant(
         variant="search",
-        panels=panels,
-        spy_panel=spy_panel,
-        fundamentals=fundamentals,
-        start=start,
-        end=end,
+        panels=context.panels,
+        spy_panel=context.spy_panel,
+        fundamentals=context.fundamentals,
+        start=context.start,
+        end=context.end,
         z_threshold=z_thr,
         filter_mode=filter_mode,
     )
@@ -1034,10 +1053,8 @@ async def run_for_search(
         "max_hold_days": int(_max_hold_days()),
         "stop_pct": float(_hard_stop_pct()),
     }
-
     trades_for_diag = _trades_to_diagnostic_dicts(trades)
-    price_data = _panels_to_price_data(panels, spy_panel)
-
+    price_data = _panels_to_price_data(context.panels, context.spy_panel)
     return compute_search_metrics(
         engine="reversion",
         parameters=parameters,
@@ -1056,6 +1073,26 @@ async def run_for_search(
         },
         search_trades=search_trades,
     )
+
+
+async def run_for_search(
+    *,
+    db_url: str,
+    start: date,
+    end: date,
+    universe: tuple[str, ...] | None = None,
+    overrides: dict | None = None,
+    trade_log_path: Path | None = None,
+) -> "BacktestRunResult":
+    """Thin wrapper: load context, run once. Single-call convenience.
+
+    The parameter-search orchestrator should use
+    :func:`load_reversion_window_context` + :func:`run_reversion_with_context`
+    so the DB load is amortised across all candidates."""
+    ctx = await load_reversion_window_context(
+        db_url=db_url, start=start, end=end, universe=universe,
+    )
+    return run_reversion_with_context(ctx, overrides=overrides, trade_log_path=trade_log_path)
 
 
 # ────────────────────────────────────────────────────────────────────────────

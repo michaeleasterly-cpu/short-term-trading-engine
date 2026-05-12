@@ -51,6 +51,7 @@ import math
 import os
 import random
 import sys
+import time
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
@@ -212,6 +213,8 @@ def compute_slice_metrics(returns: list[float], span_days: int) -> SliceMetrics:
 
 
 def _runner_for(engine: str) -> Callable[..., Awaitable[Any]]:
+    """Legacy single-call entry; loads context per call. Used for the final
+    held-back run where we don't reuse context across many trials."""
     if engine == "sigma":
         from sigma.backtest import run_for_search
         return run_for_search
@@ -221,6 +224,34 @@ def _runner_for(engine: str) -> Callable[..., Awaitable[Any]]:
     if engine == "vector":
         from vector.backtest import run_for_search
         return run_for_search
+    raise ValueError(f"unknown engine: {engine}")
+
+
+def _context_loader_for(engine: str) -> Callable[..., Awaitable[Any]]:
+    """Returns the async ``load_*_window_context`` function for the engine."""
+    if engine == "sigma":
+        from sigma.backtest import load_sigma_window_context
+        return load_sigma_window_context
+    if engine == "reversion":
+        from reversion.backtest import load_reversion_window_context
+        return load_reversion_window_context
+    if engine == "vector":
+        from vector.backtest import load_vector_window_context
+        return load_vector_window_context
+    raise ValueError(f"unknown engine: {engine}")
+
+
+def _context_runner_for(engine: str) -> Callable[..., Any]:
+    """Returns the sync ``run_*_with_context`` function for the engine."""
+    if engine == "sigma":
+        from sigma.backtest import run_sigma_with_context
+        return run_sigma_with_context
+    if engine == "reversion":
+        from reversion.backtest import run_reversion_with_context
+        return run_reversion_with_context
+    if engine == "vector":
+        from vector.backtest import run_vector_with_context
+        return run_vector_with_context
     raise ValueError(f"unknown engine: {engine}")
 
 
@@ -241,17 +272,14 @@ class TrialResult:
     error: str | None = None
 
 
-async def _evaluate_candidate(
-    *, engine: str, trial_id: int, window: WalkWindow,
-    parameters: dict, db_url: str, runner: Callable[..., Awaitable[Any]],
+def _evaluate_candidate_with_context(
+    *, trial_id: int, window: WalkWindow, parameters: dict,
+    context: Any, ctx_runner: Callable[..., Any],
 ) -> TrialResult:
+    """Sync — runs the engine's CPU-only ``run_*_with_context`` against a
+    pre-loaded :class:`*WindowContext`, then slices to the holdout dates."""
     try:
-        result = await runner(
-            db_url=db_url,
-            start=window.train_start,
-            end=window.holdout_end,
-            overrides=parameters,
-        )
+        result = ctx_runner(context, overrides=parameters)
     except Exception as exc:  # noqa: BLE001
         return TrialResult(
             trial_id=trial_id, window_label=window.label(), parameters=parameters,
@@ -259,7 +287,6 @@ async def _evaluate_candidate(
             error=str(exc),
         )
 
-    # Slice trade log to the holdout window.
     holdout_returns = [
         float(t.pnl_pct) for t in result.trade_log
         if window.holdout_start <= t.entry_date <= window.holdout_end
@@ -464,6 +491,8 @@ async def amain(args: argparse.Namespace) -> int:
     print()
 
     runner = _runner_for(args.engine)
+    ctx_loader = _context_loader_for(args.engine)
+    ctx_runner = _context_runner_for(args.engine)
     rng = random.Random(args.seed + 1)
 
     trials: list[TrialResult] = []
@@ -471,19 +500,27 @@ async def amain(args: argparse.Namespace) -> int:
     for w in windows:
         # Sample subset of candidates for THIS window. Same RNG seed → reproducible.
         idxs = rng.sample(range(len(candidates)), min(args.per_window_trials, len(candidates)))
-        print(f"── window {w.label()}: evaluating {len(idxs)} candidates ──")
+        print(f"── window {w.label()}: loading panels + indicators (one-time per window) ──")
+        load_start = time.time()
+        context = await ctx_loader(
+            db_url=db_url, start=w.train_start, end=w.holdout_end,
+        )
+        load_secs = time.time() - load_start
+        print(f"   panels loaded in {load_secs:.1f}s — evaluating {len(idxs)} candidates against shared context\n")
         for k, idx in enumerate(idxs, 1):
             tid = trial_id_seq
             trial_id_seq += 1
             params = candidates[idx]
-            result = await _evaluate_candidate(
-                engine=args.engine, trial_id=tid, window=w,
-                parameters=params, db_url=db_url, runner=runner,
+            trial_start = time.time()
+            result = _evaluate_candidate_with_context(
+                trial_id=tid, window=w, parameters=params,
+                context=context, ctx_runner=ctx_runner,
             )
+            trial_secs = time.time() - trial_start
             trials.append(result)
             status = (
                 f"err={result.error[:40]}" if result.error
-                else f"n={result.holdout.n_trades}  sharpe={result.holdout.sharpe:+.2f}"
+                else f"n={result.holdout.n_trades}  sharpe={result.holdout.sharpe:+.2f}  ({trial_secs:.1f}s)"
             )
             print(f"  [{k:3d}/{len(idxs)}] trial {tid:>4}  param-idx {idx:>3}  {status}")
         print()
