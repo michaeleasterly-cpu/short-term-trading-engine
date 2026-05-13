@@ -312,16 +312,21 @@ The infrastructure is correct; the strategy needs more evidence before the gate 
 1. `platform.prices_daily` is partially-survivorship-clean (~99% of tickers have bars through 2025 vs ~93-95% expected). Major 2023 delistings SIVB / WeWork / Credit Suisse are missing; BBBY shows post-bankruptcy ticker-reuse data as continuous. Walk-forward 2018-2023 is upward-biased; held-back 2024-2025 less so (most major delistings were 2023, so 24-25 universe is mostly real survivors). The `survivorship_inclusive` rubric flag is honestly set False for the momentum credibility score.
 2. The DSR ≥ 0.95 threshold is calibrated for daily-frequency strategies (1000+ obs); monthly portfolio strategies with 2 years of held-back history cannot pass it regardless of strategy quality. PSR or a frequency-adjusted DSR threshold is appropriate.
 
-**Status (Phase 1 only — backtest, no plugs):**
+**Status — Phase 2 shipped (2026-05-13):**
 - `momentum/backtest.py` — exposes `load_momentum_window_context()` + `run_momentum_with_context()` matching the panel-sharing pattern used by the other engines. CLI supports `--json` / `--trade-log` / parameter overrides.
 - Search wired in `scripts/search_parameters.py` (PARAM_RANGES["momentum"] = 4 narrow knobs: lookback_days 200-280, skip_days 15-30, hold_days 15-30, top_decile_pct 0.05-0.20).
-- **5-plug architecture, scheduler, trade-monitor integration, capital gate — all deferred** to Phase 2, contingent on either (a) DSR threshold being recalibrated for monthly strategies, or (b) paper-trading evidence accruing to validate the +1.58 Sharpe in production.
+- **5 plugs complete**: `momentum/plugs/{setup_detection,lifecycle_analysis,execution_risk,aar_logging,capital_gate}.py`. Session questions route through `tpcore.calendar` per CLAUDE.md convention.
+- **Scheduler complete**: `momentum/scheduler.py` orchestrates the monthly rebalance via `AlpacaPaperBrokerAdapter`. Day-market orders only (no brackets — Momentum doesn't use per-name stops). `--force-rebalance` flag overrides the first-trading-day check for kickoff and emergency mid-month rebalances. `--dry-run` flag previews without submitting.
+- **Paper-trading kickoff scripted**: `scripts/run_momentum_kickoff.sh` does the one-shot force-rebalance from the validated T1+T2 universe. Verified end-to-end against the live DB on 2026-05-13: produced 55 orders (1 close + 54 opens, ~$985/position on a $99,989 paper account).
+- **Looser graduation thresholds than Sigma/Reversion/Vector**: 6 rebalances (≈6 months), Sharpe ≥ 1.0, PF ≥ 1.5. Monthly cadence accrues fewer events per unit time.
 
-**Phase 2 work (deferred):**
-- 5 plugs (`momentum/plugs/{setup_detection,lifecycle_analysis,execution_risk,aar_logging,capital_gate}.py`)
-- Trade-monitor extensions for multi-position monthly rebalance (current monitor is single-position)
-- Sector cap + per-name cap risk controls
-- Drawdown circuit breaker
+**Phase 2.5 deferred (post-kickoff):**
+- DBLogHandler wiring to `platform.application_log` (scheduler currently logs to structlog console only)
+- Drawdown circuit breaker (pause new entries when portfolio > 10% off rolling peak)
+- Sector concentration cap (currently no sector taxonomy in scope)
+- Common-stock-only filter (smoke turned up warrants like `XBPEW` inside the T1+T2 universe — illiquid by structure even at tight spread)
+- Min-price floor ($1) to keep penny stocks out of the decile
+- Trade-monitor integration (not strictly required — Momentum doesn't use per-name stops, so reactive monitoring isn't on the critical path)
 
 ### 4.5 S2 — Short Squeeze Engine (Fifth Build, Satellite)
 
@@ -508,7 +513,7 @@ Current decision: **stay on FMP Starter and Alpaca free**. The overfitting diagn
 | Phase 2 | Reversion engine | **Complete** — combined filter (HIGH quality + \|Z\| ≥ 3.0) applied. Backtest re-run with tier-aware costs 2026-05-12. |
 | Phase 3 | Allocator + Forensics (basic) | **Deferred** — blocked on paper track record from Sigma + Reversion + Vector. |
 | Phase 4 | Vector engine | **Complete (build); data-blocked (validation)** — engine code shipped, but parameter-search verdict (2026-05-13) showed zero trades on T1+T2 because `platform.catalyst_events` has zero overlap with that universe. Re-enabling requires a catalyst-event backfill, not a code change. |
-| Phase 4b | **Momentum engine — Phase 1 (backtest only)** | **Complete (Phase 1)** — `momentum/backtest.py` produces held-back Sharpe +1.58 / PF 2.80 on T1+T2 2024-2025. Phase 2 (five plugs, scheduler, paper trading) deferred pending either DSR threshold recalibration for monthly strategies or paper-trade validation. |
+| Phase 4b | **Momentum engine — Phase 2 (live-shippable)** | **Complete (Phase 2; 2026-05-13)** — 5 plugs + scheduler + Alpaca paper integration. `momentum/backtest.py` produces held-back Sharpe +1.58 / PF 2.80 on T1+T2 2024-2025. Paper kickoff: `scripts/run_momentum_kickoff.sh`. Daily cron pattern: scheduler no-ops on non-rebalance days, fires on the first NYSE session of each month. |
 | Phase 5 | S2 (satellite) | **Deferred** — options data parked in `platform.tradier_options_chains` (122,668 rows), no engine code. |
 | Phase 6 | Catalyst | **Deferred** — specification only. |
 | Phase 7 | Sentinel | **Deferred** — specification only. |

@@ -352,6 +352,56 @@ ORDER BY source;
 
 ---
 
+## 5.4 Momentum Paper Trading
+
+Momentum is the only engine in the bench currently paper-trading. Cadence: monthly rebalance on the first NYSE trading session of each calendar month. Universe: T1+T2 from `platform.liquidity_tiers` (~1,281 names). Signal: 12-1 momentum (231-day lookback, 21-day skip). Top decile equal-weighted; ~50-130 positions concurrent.
+
+**One-shot kickoff** (forces a mid-month rebalance — use once to start paper-trading mid-month, then move to the daily-cron pattern below):
+
+```bash
+scripts/run_momentum_kickoff.sh
+```
+
+Watch for the `RunSummary(..., submitted=N)` line. `N` should equal the order count (1 close per existing position + ~50-130 new opens).
+
+**Daily run** (call every weekday — scheduler no-ops on non-rebalance days):
+
+```bash
+set -a; source .env; set +a
+DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python -m momentum.scheduler
+```
+
+Output on a non-rebalance day: a single `RunSummary(as_of=..., action=no_rebalance)` line. On the first NYSE session of a calendar month: the same orders flow as the kickoff.
+
+**Dry-run preview** before any real submission:
+
+```bash
+set -a; source .env; set +a
+DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python -m momentum.scheduler --dry-run --force-rebalance
+```
+
+**Verify positions at Alpaca paper** any time after fills:
+
+```bash
+.venv/bin/python -c "
+import asyncio
+from tpcore.alpaca import AlpacaPaperBrokerAdapter
+async def main():
+    b = AlpacaPaperBrokerAdapter()
+    a = await b.get_account()
+    p = await b.get_positions()
+    print(f'equity=\${a.equity}  positions={len(p)}')
+    for x in p[:20]: print(f'  {x.symbol:<6} qty={x.qty} mv=\${x.market_value}')
+asyncio.run(main())
+"
+```
+
+**Graduation gate** — Momentum graduates from paper to live when:
+* `n_rebalances >= 6` (≈ 6 months of live paper data — looser than Sigma's 50-trade threshold because monthly cadence accrues fewer events)
+* `sharpe_annualized >= 1.0` and `profit_factor >= 1.5`
+* Data Validation Suite is fresh and clean
+* Credibility rubric ≥ 60 (currently structurally unreachable for monthly strategies with the default DSR ≥ 0.95; consider a frequency-adjusted threshold after live data lands)
+
 ## 5.5 Parameter-Search Pipeline
 
 Production edge-discovery runs are driven by `scripts/search_parameters.py`. Random search + walk-forward + final held-back DSR verdict. Imports each engine's `load_*_window_context()` / `run_*_with_context()` programmatically — no subprocess. Per-window data load is shared across all candidates.

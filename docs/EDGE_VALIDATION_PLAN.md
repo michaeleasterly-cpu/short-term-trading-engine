@@ -130,12 +130,18 @@ The original Phase 4 plan was: run a single historical replay, feed trade lists 
 - **Vector**: backfill `platform.catalyst_events` for T1+T2 tickers (one-time ingestion task). Re-run search. Decision point on whether to invest further then.
 - **Sigma / Reversion**: park. Reversion is overfit-confirmed; Sigma is too marginal to move ahead of Momentum.
 
-### Phase 5a: Momentum Paper Trading (current)
+### Phase 5a: Momentum Paper Trading — **In progress (2026-05-13)**
 
-1. **Build the 5-plug architecture** for Momentum (`momentum/plugs/{setup_detection,lifecycle_analysis,execution_risk,aar_logging,capital_gate}.py`).
-2. **Extend `tpcore.trade_monitor`** to handle multi-position monthly rebalance (current monitor is single-position).
-3. **Paper-trade** through Alpaca with deliberately small capital. Target: 3 months of live paper data.
+1. **5-plug architecture — done.** `momentum/plugs/{setup_detection,lifecycle_analysis,execution_risk,aar_logging,capital_gate}.py`. Session questions route through `tpcore.calendar` per CLAUDE.md.
+2. **Scheduler — done.** `momentum/scheduler.py` runs daily; quietly no-ops on non-rebalance days, fires on the first NYSE session of each month. `--force-rebalance` flag bypasses the date check for kickoff and emergency rebalances. Trade-monitor integration *not* required (Momentum has no per-name stops between rebalances).
+3. **Paper kickoff — in progress.** `scripts/run_momentum_kickoff.sh` queues the first rebalance against Alpaca paper. Target: 3 months of live paper data accumulating from kickoff date.
 4. **Re-evaluate credibility** after paper data lands, under either (a) a frequency-adjusted DSR threshold (~0.5 for monthly with 24 obs) or (b) PSR instead of DSR.
+
+Phase 2.5 follow-ups (post-kickoff, before live capital):
+* DBLogHandler wiring to `platform.application_log`
+* Drawdown circuit breaker (pause new entries when portfolio > 10% off rolling peak)
+* Common-stock-only filter (warrants like `XBPEW` slipped into the smoke output despite the T1+T2 universe)
+* Min-price floor ($1) to keep penny stocks out of the decile
 
 ### Phase 5b: Edge-Finding Agent (deferred until Phase 5a outcome)
 
