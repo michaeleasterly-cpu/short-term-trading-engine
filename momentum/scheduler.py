@@ -116,9 +116,11 @@ class MomentumScheduler:
         *,
         engine_equity_usd: Decimal = Decimal("10000"),
         submit_orders: bool = True,
+        force_rebalance: bool = False,
     ) -> None:
         self._engine_equity = engine_equity_usd
         self._submit = submit_orders
+        self._force_rebalance = force_rebalance
 
     async def run_once(self, as_of: date_t | None = None) -> RunSummary:
         as_of = as_of or datetime.now(UTC).date()
@@ -137,10 +139,12 @@ class MomentumScheduler:
                 state_store=state_store, broker=broker, pool=pool,
             )
 
-            # Plug 2 — is today a rebalance day?
+            # Plug 2 — is today a rebalance day? --force-rebalance overrides
+            # for the initial paper-trading kickoff (and for emergency
+            # mid-month rebalances, which are rare and operator-judgement).
             lifecycle = MomentumLifecycleAnalysis()
             plan = await lifecycle.assess(pool, as_of)
-            if not plan.is_rebalance_day:
+            if not plan.is_rebalance_day and not self._force_rebalance:
                 logger.info(
                     "momentum.scheduler.no_rebalance",
                     as_of=as_of.isoformat(),
@@ -149,6 +153,12 @@ class MomentumScheduler:
                 return RunSummary(
                     as_of=as_of, is_rebalance_day=False,
                     decision=None, submitted_order_ids=[], dry_run=not self._submit,
+                )
+            if not plan.is_rebalance_day and self._force_rebalance:
+                logger.warning(
+                    "momentum.scheduler.force_rebalance_override",
+                    as_of=as_of.isoformat(),
+                    natural_reason=plan.reason,
                 )
 
             # Plug 1 — rank candidates.
@@ -183,8 +193,17 @@ class MomentumScheduler:
                     decision=decision, submitted_order_ids=[], dry_run=not self._submit,
                 )
 
-            # Submit orders — sells first, then buys.
+            # Cancel any of our own stale open orders before submitting new
+            # ones. Otherwise positions remain "held_for_orders" and a fresh
+            # sell will be rejected with `available=0`. We identify our orders
+            # by the `mo_` client_order_id prefix the execution plug stamps.
+            if self._submit:
+                await self._cancel_stale_momentum_orders(broker)
+
+            # Submit orders — sells first, then buys. Per-order try/except so
+            # one rejection doesn't abort the whole rebalance.
             submitted: list[str] = []
+            failed: list[tuple[str, str]] = []
             sells = [o for o in decision.orders if o.side == "sell"]
             buys = [o for o in decision.orders if o.side == "buy"]
 
@@ -196,7 +215,16 @@ class MomentumScheduler:
                         qty=order.qty, side=order.side,
                     )
                     continue
-                placed = await broker.place_order(self._payload_to_order(order))
+                try:
+                    placed = await broker.place_order(self._payload_to_order(order))
+                except Exception as exc:  # noqa: BLE001
+                    failed.append((order.ticker, str(exc)[:200]))
+                    logger.error(
+                        "momentum.scheduler.order_failed",
+                        ticker=order.ticker, action=order.action.value,
+                        qty=order.qty, side=order.side, error=str(exc)[:200],
+                    )
+                    continue
                 if placed.broker_order_id is not None:
                     submitted.append(placed.broker_order_id)
                 logger.info(
@@ -205,6 +233,12 @@ class MomentumScheduler:
                     qty=order.qty, side=order.side,
                     broker_order_id=placed.broker_order_id,
                 )
+            if failed:
+                logger.warning(
+                    "momentum.scheduler.partial_rebalance",
+                    n_submitted=len(submitted), n_failed=len(failed),
+                    failures=failed[:10],
+                )
 
             return RunSummary(
                 as_of=as_of, is_rebalance_day=True,
@@ -212,6 +246,48 @@ class MomentumScheduler:
             )
         finally:
             await pool.close()
+
+    @staticmethod
+    async def _cancel_stale_momentum_orders(broker) -> int:
+        """Cancel any open orders we own (client_order_id starts with ``mo_``)
+        so positions held_for_orders are released before the new rebalance.
+
+        Returns the number of orders cancelled. Silently degrades when the
+        broker doesn't expose ``list_recent_orders`` (non-Alpaca brokers)."""
+        list_fn = getattr(broker, "list_recent_orders", None)
+        if list_fn is None:
+            return 0
+        try:
+            recent = await list_fn(limit=500)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("momentum.scheduler.list_orders_failed", error=str(exc)[:200])
+            return 0
+        # Open statuses worth cancelling: NEW, PARTIALLY_FILLED (cancel
+        # cancels the remainder). Already-filled / cancelled / rejected are
+        # terminal and left alone.
+        open_statuses = {"new", "partially_filled", "accepted", "pending_new"}
+        cancelled = 0
+        for o in recent:
+            cid = (o.client_order_id or "").lower()
+            if not cid.startswith("mo_"):
+                continue
+            status_val = getattr(o.status, "value", str(o.status)).lower()
+            if status_val not in open_statuses:
+                continue
+            if not o.broker_order_id:
+                continue
+            try:
+                await broker.cancel_order(o.broker_order_id)
+                cancelled += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "momentum.scheduler.cancel_failed",
+                    broker_order_id=o.broker_order_id,
+                    client_order_id=o.client_order_id, error=str(exc)[:200],
+                )
+        if cancelled:
+            logger.info("momentum.scheduler.stale_orders_cancelled", n=cancelled)
+        return cancelled
 
     @staticmethod
     def _payload_to_order(order):
@@ -254,6 +330,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=Decimal("10000"),
         help="Engine equity in USD (default $10,000). Used as fallback when broker query fails.",
     )
+    p.add_argument(
+        "--force-rebalance",
+        action="store_true",
+        help=(
+            "Override the 'is first trading day of month' check and rebalance "
+            "regardless. Used for the initial paper-trading kickoff and rare "
+            "emergency mid-month rebalances."
+        ),
+    )
     return p.parse_args(argv)
 
 
@@ -261,6 +346,7 @@ async def amain(args: argparse.Namespace) -> int:
     sched = MomentumScheduler(
         engine_equity_usd=args.engine_equity,
         submit_orders=not args.dry_run,
+        force_rebalance=args.force_rebalance,
     )
     summary = await sched.run_once(as_of=args.as_of)
     print(summary)
