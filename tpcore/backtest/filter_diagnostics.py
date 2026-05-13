@@ -85,6 +85,17 @@ class FilterDiagnostics(BaseModel):
         default=None, description="Sigma: volume not declining",
     )
 
+    # ─── Momentum-specific gates ────────────────────────────────────────────
+    momentum_history_blocked: int | None = Field(
+        default=None, description="Momentum: insufficient bar history for the lookback window",
+    )
+    momentum_score_blocked: int | None = Field(
+        default=None, description="Momentum: 12-1 score could not be computed (NaN / zero prior)",
+    )
+    momentum_tradability_blocked: int | None = Field(
+        default=None, description="Momentum: failed common-stock-only or min-price filter",
+    )
+
     # ─── Reversion-specific gates ───────────────────────────────────────────
     z_score_blocked: int | None = Field(
         default=None, description="Reversion: blocked by Z-score threshold",

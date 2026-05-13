@@ -244,10 +244,21 @@ class MomentumScheduler:
             # section can correlate today's ranking to actual rebalance
             # output. Done BEFORE the capital gate so even a gate-rejected
             # rebalance leaves an audit trail of what the engine would have
-            # done.
+            # done. Each signal carries the scan-time FilterDiagnostics as
+            # extra_data — same instance attached to every candidate by
+            # MomentumSetupDetection.scan(), so we lift it off the first
+            # candidate and pass to every signal.
+            _scan_diag = (
+                candidates[0].filter_diagnostics if candidates
+                and candidates[0].filter_diagnostics is not None else None
+            )
+            _diag_dict = (
+                _scan_diag.model_dump(exclude_none=True) if _scan_diag is not None else None
+            )
             for tgt in decision.targets:
                 await db_log.signal(
                     tgt.ticker, score=float(tgt.momentum_score), direction="LONG",
+                    extra_data=({"filter_diagnostics": _diag_dict} if _diag_dict else None),
                 )
 
             # Plug 4 — capital gate.

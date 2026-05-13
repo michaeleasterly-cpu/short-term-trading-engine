@@ -32,6 +32,7 @@ from momentum.models import (
     MomentumCandidate,
     is_tradeable_common_stock,
 )
+from tpcore.backtest.filter_diagnostics import FilterDiagnostics
 from tpcore.interfaces.engine_plug import BaseEnginePlug
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -85,6 +86,12 @@ class MomentumSetupDetection(BaseEnginePlug):
         load_start = as_of - timedelta(days=self._lookback + self._skip + 30)
         bars_by_ticker = await self._load_bars(pool, list(universe), load_start, as_of)
 
+        diag = FilterDiagnostics(
+            universe_total=len(universe),
+            momentum_history_blocked=0,
+            momentum_score_blocked=0,
+            momentum_tradability_blocked=0,
+        )
         candidates: list[MomentumCandidate] = []
         tiers = await self._load_tier_map(pool)
         for ticker, bars in bars_by_ticker.items():
@@ -92,14 +99,17 @@ class MomentumSetupDetection(BaseEnginePlug):
                 # Heuristic continuity gate: we expect at least half the calendar
                 # window to be filled by trading days. If a ticker is missing a
                 # large chunk, treat it as suspicious (delisting? halt?) and skip.
+                diag.momentum_history_blocked = (diag.momentum_history_blocked or 0) + 1
                 continue
             score = self._score_one(bars, as_of)
             if score is None:
+                diag.momentum_score_blocked = (diag.momentum_score_blocked or 0) + 1
                 continue
             last_close = Decimal(str(bars[-1]["close"])).quantize(Decimal("0.01"))
             # Tradability filter — drop warrants, preferreds, units, and
             # sub-$5 names regardless of score. See momentum/models.py.
             if not is_tradeable_common_stock(ticker, last_close):
+                diag.momentum_tradability_blocked = (diag.momentum_tradability_blocked or 0) + 1
                 continue
             candidates.append(
                 MomentumCandidate(
@@ -110,7 +120,10 @@ class MomentumSetupDetection(BaseEnginePlug):
                     tier=int(tiers.get(ticker, self._max_tier)),
                 )
             )
-
+        diag.candidates_passed = len(candidates)
+        # Attach the same diag instance to every candidate so the scheduler
+        # can pass it through to SIGNAL events as extra_data.
+        candidates = [c.model_copy(update={"filter_diagnostics": diag}) for c in candidates]
         candidates.sort(key=lambda c: c.momentum_score, reverse=True)
         logger.info(
             "momentum.setup.ranked",

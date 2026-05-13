@@ -18,6 +18,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from tpcore.backtest.filter_diagnostics import FilterDiagnostics
+
 # ─── Strategy parameters (live defaults; backtest can override in-process) ──
 # 12-1 momentum: lookback over the prior ~12 calendar months, skipping the
 # most recent ~1 month to dodge short-term reversal.
@@ -104,6 +106,10 @@ class MomentumCandidate(BaseModel):
     )
     last_close: Decimal
     tier: int = Field(ge=1, le=5, description="Liquidity tier (1=tightest spread).")
+    filter_diagnostics: FilterDiagnostics | None = Field(
+        default=None,
+        description="Per-filter pass/block counters from the scan that produced this candidate.",
+    )
 
 
 class RebalancePlan(BaseModel):
