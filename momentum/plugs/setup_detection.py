@@ -30,6 +30,7 @@ from momentum.models import (
     MAX_TIER_FOR_TRADING,
     SKIP_DAYS,
     MomentumCandidate,
+    is_tradeable_common_stock,
 )
 from tpcore.interfaces.engine_plug import BaseEnginePlug
 
@@ -96,6 +97,10 @@ class MomentumSetupDetection(BaseEnginePlug):
             if score is None:
                 continue
             last_close = Decimal(str(bars[-1]["close"])).quantize(Decimal("0.01"))
+            # Tradability filter — drop warrants, preferreds, units, and
+            # sub-$5 names regardless of score. See momentum/models.py.
+            if not is_tradeable_common_stock(ticker, last_close):
+                continue
             candidates.append(
                 MomentumCandidate(
                     ticker=ticker,

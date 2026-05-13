@@ -231,6 +231,13 @@ def _compute_one_rebalance(
         p_then = float(df.iloc[idx - skip - lookback]["close"])
         if p_then <= 0 or math.isnan(p_now) or math.isnan(p_then):
             continue
+        # Tradability filter — keep live and backtest agreed on the universe.
+        # See momentum/models.py for the rules.
+        from momentum.models import is_tradeable_common_stock
+        from decimal import Decimal as _Decimal
+
+        if not is_tradeable_common_stock(ticker, _Decimal(str(p_now))):
+            continue
         scores[ticker] = (p_now / p_then) - 1.0
 
     if not scores:

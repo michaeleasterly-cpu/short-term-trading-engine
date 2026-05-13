@@ -31,6 +31,44 @@ MAX_TIER_FOR_TRADING = 2  # match the validated backtest universe (T1+T2).
 # T1+T2 specifically; widening live to T3 requires re-running the search at
 # that tier first. Don't promote what hasn't been validated.
 
+# ─── Tradability filters (Phase 2.5 #1) ─────────────────────────────────────
+# Even at T1+T2 the universe contains warrants, units, preferred shares, and
+# sub-$5 names that we should not trade. The smoke run on 2026-05-13 surfaced
+# XBPEW, BBLGW, NAMSW (warrants) and a position at $0.06/share. Apply the
+# same filter in setup_detection.scan (live) AND backtest._compute_one_rebalance
+# so live and backtest agree on the universe.
+
+MIN_PRICE_FLOOR = Decimal("5.00")  # SEC "penny stock" line; <$5 → drop
+
+# Tickers containing any of these separators are non-common share classes
+# (preferreds with `.PR`, units with `.U`, rights with `=R`, dual-share with
+# `-A`/`-B`, etc.). Common stocks on US exchanges never contain these.
+TICKER_SEPARATOR_CHARS: tuple[str, ...] = (".", "-", "/", "=")
+
+# Warrants typically end in W or WS on US exchanges. The 5-char-or-longer
+# guard avoids false positives like CDW (3 chars, real common stock) and
+# ZWS (Zurn — 3 chars). Empirically, warrants are universally 5+ chars.
+WARRANT_SUFFIXES: tuple[str, ...] = ("W", "WS")
+WARRANT_MIN_TICKER_LEN = 5
+
+
+def is_tradeable_common_stock(ticker: str, last_close: Decimal) -> bool:
+    """Return False for warrants, units, preferreds, and sub-$5 names.
+
+    Conservative — designed to filter the obvious offenders without
+    rejecting real common stocks. Specifically does NOT filter
+    single-letter trailing `P` (too many false positives like APLS,
+    EART). Refine in a later iteration if needed."""
+    if last_close < MIN_PRICE_FLOOR:
+        return False
+    if any(sep in ticker for sep in TICKER_SEPARATOR_CHARS):
+        return False
+    if len(ticker) >= WARRANT_MIN_TICKER_LEN:
+        for suffix in WARRANT_SUFFIXES:
+            if ticker.endswith(suffix):
+                return False
+    return True
+
 # ─── Graduation gate (paper → live) ─────────────────────────────────────────
 # Looser than the other engines because monthly rebalance accumulates fewer
 # trade-events per unit time. 6 rebalances = 6 months of paper trading.

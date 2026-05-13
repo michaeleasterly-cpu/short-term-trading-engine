@@ -7,7 +7,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from momentum.models import MomentumCandidate, RebalanceAction
+from momentum.models import (
+    MomentumCandidate,
+    RebalanceAction,
+    is_tradeable_common_stock,
+)
 from momentum.plugs.capital_gate import MomentumCapitalGate, MomentumGraduationStats
 from momentum.plugs.execution_risk import MomentumExecutionRisk
 from momentum.plugs.setup_detection import MomentumSetupDetection
@@ -153,6 +157,42 @@ def test_capital_gate_graduation_logic():
         n_rebalances=3, sharpe_annualized=2.0, profit_factor=3.0,
     )
     assert MomentumCapitalGate.is_graduated(stats) is False
+
+
+# ─── Tradability filter ──────────────────────────────────────────────────────
+
+
+def test_filter_rejects_warrants_5_chars_or_more():
+    # Real warrants observed in the 2026-05-13 smoke output.
+    assert not is_tradeable_common_stock("XBPEW", Decimal("10.00"))
+    assert not is_tradeable_common_stock("BBLGW", Decimal("16.70"))
+    assert not is_tradeable_common_stock("NAMSW", Decimal("9.37"))
+
+
+def test_filter_accepts_3_char_W_endings():
+    # Common stocks ending in W where len < 5 → should pass.
+    assert is_tradeable_common_stock("CDW", Decimal("250.00"))
+    assert is_tradeable_common_stock("ZWS", Decimal("50.00"))
+
+
+def test_filter_rejects_sub_5_dollar_stocks():
+    assert not is_tradeable_common_stock("AAPL", Decimal("4.99"))
+    assert not is_tradeable_common_stock("XYZ", Decimal("0.06"))
+    assert is_tradeable_common_stock("AAPL", Decimal("5.00"))
+
+
+def test_filter_rejects_separator_tickers():
+    # Preferreds (BRK.B-style), units (XYZ.U), rights (ABC=R)
+    assert not is_tradeable_common_stock("BRK.B", Decimal("400.00"))
+    assert not is_tradeable_common_stock("BAC-A", Decimal("25.00"))
+    assert not is_tradeable_common_stock("XYZ.U", Decimal("10.00"))
+
+
+def test_filter_accepts_normal_common_stocks():
+    assert is_tradeable_common_stock("AAPL", Decimal("180.00"))
+    assert is_tradeable_common_stock("MSFT", Decimal("400.00"))
+    assert is_tradeable_common_stock("SPY", Decimal("550.00"))
+    assert is_tradeable_common_stock("AGMI", Decimal("75.22"))  # 4-char, no separator, doesn't end in W
 
 
 def test_capital_gate_healthcheck_includes_thresholds():
