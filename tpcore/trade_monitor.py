@@ -89,12 +89,13 @@ class OpenOrderRow:
     alpaca_order_id: str | None
     status: str
     fill_price: Decimal | None
+    filled_at: datetime | None
     decision_data: dict
 
 
 _SELECT_BY_ALPACA_ID_SQL = """
     SELECT id, engine, trade_id, ticker, order_type, alpaca_order_id,
-           status, fill_price, decision_data
+           status, fill_price, filled_at, decision_data
     FROM platform.open_orders
     WHERE alpaca_order_id = $1
     LIMIT 1
@@ -102,7 +103,7 @@ _SELECT_BY_ALPACA_ID_SQL = """
 
 _SELECT_PENDING_SQL = """
     SELECT id, engine, trade_id, ticker, order_type, alpaca_order_id,
-           status, fill_price, decision_data
+           status, fill_price, filled_at, decision_data
     FROM platform.open_orders
     WHERE status = 'pending'
       AND alpaca_order_id IS NOT NULL
@@ -145,6 +146,7 @@ def _row_from_record(record: Any) -> OpenOrderRow:
         alpaca_order_id=record["alpaca_order_id"],
         status=record["status"],
         fill_price=Decimal(str(record["fill_price"])) if record["fill_price"] is not None else None,
+        filled_at=record["filled_at"],
         decision_data=raw_decision,
     )
 
@@ -488,26 +490,30 @@ class TradeMonitor:
             )
             return
         decision = (row.decision_data or {}).get("decision") or {}
+        assessment = (row.decision_data or {}).get("assessment") or {}
         tier1_qty = int(decision.get("tier1_qty") or 0)
         tier2_qty = int(decision.get("tier2_qty") or 0)
         total_qty = tier1_qty + tier2_qty
-        # Weighted average fill prices for the AAR record.
         denom = max(total_qty, 1)
         entry_avg = (tier1_row.fill_price * tier1_qty + fill_price * tier2_qty) / denom
-        # For Tier 2 the take-profit price is the exit assumption used by
-        # the engine when sizing; we record the actual close at AAR time
-        # via the broker's get_order avg_fill_price on each child leg in
-        # the next iteration. For now record the average exit as the
-        # Tier 2 fill (the higher target).
         exit_avg = fill_price
         qty_decimal = Decimal(total_qty)
         pnl_gross = (exit_avg - entry_avg) * qty_decimal
+        # entry_ts: when tier1 actually filled (not now, not constructed_at)
+        entry_ts = tier1_row.filled_at or _aware(_safe_iso(decision.get("constructed_at"))) or datetime.now(UTC)
+        exit_ts = filled_at or datetime.now(UTC)
+        # exit_reason: compare actual fill to the bracket TP/SL legs
+        tp_price = _resolve_tier2_take_profit(engine=row.engine, assessment=assessment)
+        sl_price = _decimal(assessment.get("stop_price"))
+        exit_reason = _classify_exit_reason(
+            exit_price=exit_avg, take_profit=tp_price, stop_loss=sl_price
+        )
         aar = AfterActionReport(
             engine=row.engine,
             trade_id=row.trade_id,
             ticker=row.ticker,
-            entry_ts=_aware(_safe_iso(decision.get("constructed_at"))) or datetime.now(UTC),
-            exit_ts=filled_at or datetime.now(UTC),
+            entry_ts=entry_ts,
+            exit_ts=exit_ts,
             entry_price=entry_avg.quantize(Decimal("0.01")),
             exit_price=exit_avg.quantize(Decimal("0.01")),
             qty=Decimal(total_qty),
@@ -519,7 +525,7 @@ class TradeMonitor:
             fees=Decimal("0"),
             slippage_bps=Decimal("0"),
             regime_tags=[],
-            exit_reason=ExitReason.TAKE_PROFIT,
+            exit_reason=exit_reason,
             rule_compliance=True,
             notes=f"trade_monitor tier1+tier2 close (trade_id={row.trade_id})",
         )
@@ -558,7 +564,7 @@ class TradeMonitor:
     ) -> OpenOrderRow | None:
         sql = """
             SELECT id, engine, trade_id, ticker, order_type, alpaca_order_id,
-                   status, fill_price, decision_data
+                   status, fill_price, filled_at, decision_data
             FROM platform.open_orders
             WHERE engine = $1 AND trade_id = $2 AND order_type = $3
             LIMIT 1
@@ -588,6 +594,29 @@ def _safe_iso(value: Any) -> str | None:
     if isinstance(value, str):
         return value
     return getattr(value, "isoformat", lambda: None)()
+
+
+def _classify_exit_reason(
+    *,
+    exit_price: Decimal,
+    take_profit: Decimal | None,
+    stop_loss: Decimal | None,
+    tolerance_bps: int = 50,
+) -> ExitReason:
+    """Pick the exit reason by checking which bracket leg fired.
+
+    Tier 2 is a TP+SL OCO bracket. The fill price tells us which side
+    filled: within ``tolerance_bps`` of TP → TAKE_PROFIT, within tolerance
+    of SL → STOP_LOSS. A fill between the two brackets (e.g., a manual
+    market-close via reconcile) maps to TIME_STOP — the closest available
+    bucket meaning "exited outside the planned brackets."
+    """
+    tol = (exit_price * Decimal(tolerance_bps) / Decimal(10000)).copy_abs()
+    if take_profit is not None and (exit_price - take_profit).copy_abs() <= tol:
+        return ExitReason.TAKE_PROFIT
+    if stop_loss is not None and (exit_price - stop_loss).copy_abs() <= tol:
+        return ExitReason.STOP_LOSS
+    return ExitReason.TIME_STOP
 
 
 def _resolve_tier2_take_profit(*, engine: str, assessment: dict) -> Decimal | None:

@@ -23,13 +23,22 @@ LOG_DIR="$HOME/Library/Logs/short-term-trading-engine"
 
 mkdir -p "$LOG_DIR"
 
-# Compute the local-time fire that corresponds to 13:00 UTC.
-LOCAL_TIME=$(TZ="$(systemsetup -gettimezone 2>/dev/null | awk -F': ' '{print $2}')" \
-    date -j -u -f '%H:%M' '13:00' '+%H %M' 2>/dev/null || echo "13 00")
-LOCAL_HH=${LOCAL_TIME% *}
-LOCAL_MM=${LOCAL_TIME#* }
-LOCAL_HH=${LOCAL_HH#0}; LOCAL_MM=${LOCAL_MM#0}
-[[ -z "$LOCAL_HH" ]] && LOCAL_HH=13
+# Convert 13:00 UTC to the Mac's local time (launchd's
+# StartCalendarInterval wants local). See install_launchd_post_close.sh
+# for the rationale — `date -j -u -f` was a no-op.
+TODAY_UTC=$(date -u '+%Y-%m-%d')
+EPOCH=$(TZ=UTC date -j -f '%Y-%m-%d %H:%M' "$TODAY_UTC 13:00" '+%s' 2>/dev/null || echo "")
+if [[ -n "$EPOCH" ]]; then
+    LOCAL_HH=$(date -j -r "$EPOCH" '+%H')
+    LOCAL_MM=$(date -j -r "$EPOCH" '+%M')
+else
+    echo "⚠ TZ conversion failed; defaulting to 13:00 local" >&2
+    LOCAL_HH=13
+    LOCAL_MM=0
+fi
+LOCAL_HH=${LOCAL_HH#0}
+LOCAL_MM=${LOCAL_MM#0}
+[[ -z "$LOCAL_HH" ]] && LOCAL_HH=0
 [[ -z "$LOCAL_MM" ]] && LOCAL_MM=0
 
 cat > "$PLIST_PATH" <<EOF

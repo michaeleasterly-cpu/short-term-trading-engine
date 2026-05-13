@@ -31,10 +31,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from tpcore.aar.models import ExitReason
 from tpcore.trade_monitor import (
     OpenOrderRow,
     TradeMonitor,
     _aware,
+    _classify_exit_reason,
     _decimal,
     _resolve_tier2_take_profit,
     _row_from_record,
@@ -252,6 +254,52 @@ def test_resolve_tier2_take_profit_vector_returns_none() -> None:
     assert _resolve_tier2_take_profit(engine="vector", assessment={}) is None
 
 
+def test_classify_exit_reason_take_profit() -> None:
+    # Fill within 50bps of the TP target → TAKE_PROFIT.
+    assert (
+        _classify_exit_reason(
+            exit_price=Decimal("190.50"),
+            take_profit=Decimal("190.00"),
+            stop_loss=Decimal("174.60"),
+        )
+        == ExitReason.TAKE_PROFIT
+    )
+
+
+def test_classify_exit_reason_stop_loss() -> None:
+    assert (
+        _classify_exit_reason(
+            exit_price=Decimal("174.40"),
+            take_profit=Decimal("190.00"),
+            stop_loss=Decimal("174.60"),
+        )
+        == ExitReason.STOP_LOSS
+    )
+
+
+def test_classify_exit_reason_mid_bracket_is_time_stop() -> None:
+    # YUMC-style: trade closed inside the bracket (manual/reconcile market
+    # close, no leg of the TP/SL actually fired). Don't lie and call it TP.
+    assert (
+        _classify_exit_reason(
+            exit_price=Decimal("47.32"),
+            take_profit=Decimal("50.00"),
+            stop_loss=Decimal("45.00"),
+        )
+        == ExitReason.TIME_STOP
+    )
+
+
+def test_classify_exit_reason_missing_levels_returns_time_stop() -> None:
+    # No bracket info (e.g., assessment lost) → conservative TIME_STOP.
+    assert (
+        _classify_exit_reason(
+            exit_price=Decimal("100.00"), take_profit=None, stop_loss=None
+        )
+        == ExitReason.TIME_STOP
+    )
+
+
 def test_row_from_record_parses_decimal_and_jsonb_string() -> None:
     record = {
         "id": uuid.UUID("00000000-0000-0000-0000-000000000001"),
@@ -262,6 +310,7 @@ def test_row_from_record_parses_decimal_and_jsonb_string() -> None:
         "alpaca_order_id": "alp-1",
         "status": "pending",
         "fill_price": "180.50",
+        "filled_at": None,
         "decision_data": json.dumps(_decision_data_sigma()),
     }
     row = _row_from_record(record)
@@ -304,6 +353,7 @@ async def test_tier1_fill_for_sigma_triggers_tier2_submission() -> None:
         "alpaca_order_id": "alp-tier1",
         "status": "pending",
         "fill_price": None,
+        "filled_at": None,
         "decision_data": _decision_data_sigma(),
     }
 
@@ -363,6 +413,7 @@ async def test_tier1_fill_for_vector_does_not_submit_tier2() -> None:
         "alpaca_order_id": "alp-vec",
         "status": "pending",
         "fill_price": None,
+        "filled_at": None,
         "decision_data": _decision_data_vector(),
     }
 
@@ -387,6 +438,7 @@ async def test_tier1_fill_for_vector_does_not_submit_tier2() -> None:
 async def test_tier2_fill_writes_aar_and_bumps_risk_state() -> None:
     """A Tier 2 fill closes the trade: AAR row written with combined entry/exit,
     risk_store.record_fill called with position_delta=-1."""
+    tier1_fill_time = datetime(2026, 5, 12, 19, 30, tzinfo=UTC)
     tier1_filled = OpenOrderRow(
         id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
         engine="sigma",
@@ -396,6 +448,7 @@ async def test_tier2_fill_writes_aar_and_bumps_risk_state() -> None:
         alpaca_order_id="alp-tier1",
         status="filled",
         fill_price=Decimal("180.00"),
+        filled_at=tier1_fill_time,
         decision_data=_decision_data_sigma(),
     )
     tier2_pending = {
@@ -407,6 +460,7 @@ async def test_tier2_fill_writes_aar_and_bumps_risk_state() -> None:
         "alpaca_order_id": "alp-tier2",
         "status": "pending",
         "fill_price": None,
+        "filled_at": None,
         "decision_data": _decision_data_sigma(),
     }
 
@@ -423,6 +477,7 @@ async def test_tier2_fill_writes_aar_and_bumps_risk_state() -> None:
                 "alpaca_order_id": tier1_filled.alpaca_order_id,
                 "status": tier1_filled.status,
                 "fill_price": str(tier1_filled.fill_price),
+                "filled_at": tier1_filled.filled_at,
                 "decision_data": tier1_filled.decision_data,
             }
         return None
@@ -444,6 +499,11 @@ async def test_tier2_fill_writes_aar_and_bumps_risk_state() -> None:
     assert aar.exit_price == Decimal("190.50")
     assert aar.qty == Decimal("4")
     assert aar.pnl_gross == Decimal("21.00")
+    # entry_ts is the tier1 fill time, not the moment the AAR was written.
+    assert aar.entry_ts == tier1_fill_time
+    # exit fill at 190.50 ≈ take_profit_far (190.00) within 50bps → TAKE_PROFIT.
+    assert aar.exit_reason.value == "take_profit"
+    assert aar.entry_ts < aar.exit_ts
     assert len(risk_store.fills) == 1
     assert risk_store.fills[0]["engine"] == "sigma"
     assert risk_store.fills[0]["position_delta"] == -1
@@ -478,6 +538,7 @@ async def test_cancelled_event_marks_row_cancelled() -> None:
         "alpaca_order_id": "alp-tier1",
         "status": "pending",
         "fill_price": None,
+        "filled_at": None,
         "decision_data": _decision_data_sigma(),
     }
 

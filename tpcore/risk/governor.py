@@ -95,6 +95,39 @@ class RiskStateStore:
     ) -> None:  # pragma: no cover - interface
         raise NotImplementedError
 
+    async def record_fill(
+        self,
+        *,
+        engine: str,
+        realized_pnl: Decimal,
+        position_delta: int,
+    ) -> RiskState | None:
+        """Apply one fill's effects to ``engine``'s state.
+
+        Default implementation reads-modifies-writes via ``get`` + ``put``
+        so concrete stores only need to override when they want a faster
+        path (e.g. a single UPDATE). Returns the new state, or None if
+        the engine has no row yet.
+
+        Called by ``tpcore.trade_monitor`` after every closed-position
+        AAR write. ``realized_pnl`` is signed (gain positive);
+        ``position_delta`` is -1 when a position closes.
+        """
+        state = await self.get(engine)
+        if state is None:
+            return None
+        new_open = max(0, state.open_positions + position_delta)
+        updated = state.model_copy(
+            update={
+                "daily_pnl": state.daily_pnl + realized_pnl,
+                "weekly_pnl": state.weekly_pnl + realized_pnl,
+                "open_positions": new_open,
+                "updated_at": datetime.now(UTC),
+            }
+        )
+        await self.put(updated)
+        return updated
+
 
 class InMemoryRiskStateStore(RiskStateStore):
     """Process-local store. Use for tests and single-process dev runs."""

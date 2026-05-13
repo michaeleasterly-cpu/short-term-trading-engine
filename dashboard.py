@@ -1992,13 +1992,16 @@ def render_actions():
         last = {}
 
     # ── Daily — every market day ────────────────────────────────────────────
-    st.markdown("##### Daily — run every market day after the close")
+    st.markdown("##### Daily — every market day after the close")
     st.caption(
-        "Canonical post-close workflow: 7-stage `ops.py --update` (bars → "
-        "corp actions → coverage_fill → fundamentals → validation → "
+        "**Runs automatically** via the `com.michael.trading.post_close` "
+        "launchd daemon at 21:30 UTC (≈ 16:30 ET, after market close). The "
+        "button below is a manual override — use only to re-run after a "
+        "failure or out-of-band. Workflow: 7-stage `ops.py --update` (bars "
+        "→ corp actions → coverage_fill → fundamentals → validation → "
         "universe prescreener → universe simulation) → cross-table audit "
-        "→ validation re-confirm → compress backfill CSVs. **Check the "
-        "Platform-health panel above for per-stage status.**"
+        "→ validation re-confirm → compress backfill CSVs → engine sweep. "
+        "**Check the Platform-health panel above for per-stage status.**"
     )
     c1, c2 = st.columns([1, 4])
     if c1.button(
@@ -2022,11 +2025,13 @@ def render_actions():
         text, _ = _fmt_age(last.get("daily_update"))
         _render_status_line("Last completed:", text, status_color=color)
 
-    # ── Monthly — first trading day of each calendar month ──────────────────
-    st.markdown("##### Monthly — first NYSE session of each calendar month")
+    # ── Monthly — Momentum rebalance ────────────────────────────────────────
+    st.markdown("##### Monthly — Momentum rebalance (first NYSE session of the month)")
     st.caption(
-        "Momentum rebalances naturally on the 1st (the scheduler fires automatically "
-        "if cron is set up; otherwise force-rebalance manually). Other days: no-op."
+        "**Runs automatically** as part of the daily post-close: the momentum "
+        "scheduler fires every day but only emits orders on the 1st NYSE session "
+        "of each calendar month (no-op otherwise). The button below is a manual "
+        "override — re-scores against today's data and submits a fresh batch."
     )
     c1, c2 = st.columns([1, 4])
     if c1.button(

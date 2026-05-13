@@ -30,19 +30,25 @@ LOG_DIR="$HOME/Library/Logs/short-term-trading-engine"
 
 mkdir -p "$LOG_DIR"
 
-# Compute the local-time fire that corresponds to 21:30 UTC.
-# launchd's StartCalendarInterval uses local time, not UTC.
-# `date -j -u -f "%H:%M" 21:30 +"%H %M"` gives UTC; convert to local.
-LOCAL_TIME=$(TZ="$(systemsetup -gettimezone 2>/dev/null | awk -F': ' '{print $2}')" \
-    date -j -u -f '%H:%M' '21:30' '+%H %M' 2>/dev/null || echo "13 30")
-LOCAL_HH=${LOCAL_TIME% *}
-LOCAL_MM=${LOCAL_TIME#* }
-
-# Strip leading zero, default 13:30 if computation failed.
+# Convert 21:30 UTC to the Mac's local time (launchd's StartCalendarInterval
+# wants local time). Earlier `date -j -u -f` approach was a no-op because
+# `-u` makes both input AND output UTC; the correct path is: compute the
+# epoch for today at 21:30 UTC, then format that epoch without `-u`.
+TODAY_UTC=$(date -u '+%Y-%m-%d')
+EPOCH=$(TZ=UTC date -j -f '%Y-%m-%d %H:%M' "$TODAY_UTC 21:30" '+%s' 2>/dev/null || echo "")
+if [[ -n "$EPOCH" ]]; then
+    LOCAL_HH=$(date -j -r "$EPOCH" '+%H')
+    LOCAL_MM=$(date -j -r "$EPOCH" '+%M')
+else
+    # Fallback only if the conversion fails — log it loudly.
+    echo "⚠ TZ conversion failed; defaulting to 13:30 local" >&2
+    LOCAL_HH=13
+    LOCAL_MM=30
+fi
 LOCAL_HH=${LOCAL_HH#0}
 LOCAL_MM=${LOCAL_MM#0}
-[[ -z "$LOCAL_HH" ]] && LOCAL_HH=13
-[[ -z "$LOCAL_MM" ]] && LOCAL_MM=30
+[[ -z "$LOCAL_HH" ]] && LOCAL_HH=0
+[[ -z "$LOCAL_MM" ]] && LOCAL_MM=0
 
 cat > "$PLIST_PATH" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -59,16 +65,17 @@ cat > "$PLIST_PATH" <<EOF
         <string>cd ${REPO_ROOT} &amp;&amp; ${REPO_ROOT}/scripts/run_post_close.sh</string>
     </array>
 
-    <!-- Fires Mon-Fri at ${LOCAL_HH}:${LOCAL_MM} local (= 21:30 UTC).
-         Weekday key: 1=Monday … 5=Friday. -->
+    <!-- Fires every day at ${LOCAL_HH}:${LOCAL_MM} local (= 21:30 UTC).
+         Weekend / holiday runs are harmless no-ops via the
+         market-closed pre-flight + daily_bars idempotency, which is
+         simpler than weekday-filtering across timezones (launchd
+         Weekday is LOCAL day, but 21:30 UTC crosses midnight in
+         Manila so a fixed Weekday=1-5 list misaligns by one). -->
     <key>StartCalendarInterval</key>
-    <array>
-        <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>${LOCAL_HH}</integer><key>Minute</key><integer>${LOCAL_MM}</integer></dict>
-        <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>${LOCAL_HH}</integer><key>Minute</key><integer>${LOCAL_MM}</integer></dict>
-        <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>${LOCAL_HH}</integer><key>Minute</key><integer>${LOCAL_MM}</integer></dict>
-        <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>${LOCAL_HH}</integer><key>Minute</key><integer>${LOCAL_MM}</integer></dict>
-        <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>${LOCAL_HH}</integer><key>Minute</key><integer>${LOCAL_MM}</integer></dict>
-    </array>
+    <dict>
+        <key>Hour</key><integer>${LOCAL_HH}</integer>
+        <key>Minute</key><integer>${LOCAL_MM}</integer>
+    </dict>
 
     <key>RunAtLoad</key>
     <false/>
