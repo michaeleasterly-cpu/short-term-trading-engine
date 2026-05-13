@@ -227,6 +227,50 @@ async def _fetch_active_entry_for_ticker(ticker: str) -> dict | None:
     }
 
 
+async def _fetch_last_run_timestamps() -> dict:
+    """Read 'last run' timestamps for every tracked workflow from the DB.
+
+    Operator HCI: every action button shows when it last completed
+    successfully, so the operator can see at a glance what's stale. None
+    means 'never tracked / never run'."""
+    pool = await build_asyncpg_pool(_db_url(), max_size=2)
+    out: dict = {}
+    try:
+        async with pool.acquire() as conn:
+            # Daily data update — ops.py emits ops.stage.complete with stage='daily_bars'.
+            out["daily_update"] = await conn.fetchval(
+                """
+                SELECT MAX(recorded_at) FROM platform.application_log
+                WHERE engine = 'ops' AND event_type = 'ops.stage.complete'
+                """
+            )
+            # Force-rebalance — momentum scheduler emits SIGNAL events on rebalance days.
+            out["force_rebalance"] = await conn.fetchval(
+                """
+                SELECT MAX(recorded_at) FROM platform.application_log
+                WHERE engine = 'momentum' AND event_type = 'SIGNAL'
+                """
+            )
+            # Credibility refresh — data_quality_log row written by search pipeline.
+            out["credibility_refresh"] = await conn.fetchval(
+                """
+                SELECT MAX(timestamp) FROM platform.data_quality_log
+                WHERE source LIKE 'backtest_credibility.%'
+                """
+            )
+            # Liquidity-tier refresh — assign_liquidity_tiers.py writes to spread_observations
+            # via the Corwin-Schultz pipeline; latest row tells us when last refreshed.
+            try:
+                out["tier_refresh"] = await conn.fetchval(
+                    "SELECT MAX(observed_at) FROM platform.spread_observations"
+                )
+            except Exception:
+                out["tier_refresh"] = None
+    finally:
+        await pool.close()
+    return out
+
+
 async def _fetch_credibility_all_engines() -> dict:
     """Pull the latest credibility rubric for each engine in SCORECARD_ENGINES."""
     pool = await build_asyncpg_pool(_db_url(), max_size=2)
@@ -675,70 +719,182 @@ def _render_process_status_inline():
     )
 
 
+def _fmt_age(ts) -> tuple[str, str]:
+    """Format a 'last run' timestamp as ('2h ago', '#color') tuple.
+
+    Color encodes staleness: green = fresh, amber = aging, red = stale,
+    grey = never run. Tuned per-workflow inside _render_action_status."""
+    if ts is None:
+        return ("never", "#888888")
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=UTC)
+    delta = datetime.now(UTC) - ts
+    secs = delta.total_seconds()
+    if secs < 60:
+        text = f"{int(secs)}s ago"
+    elif secs < 3600:
+        text = f"{int(secs / 60)} min ago"
+    elif secs < 86400:
+        text = f"{secs / 3600:.1f}h ago"
+    elif secs < 86400 * 14:
+        text = f"{int(secs / 86400)}d ago"
+    else:
+        text = ts.strftime("%Y-%m-%d")
+    return (text, "")  # color set by caller based on workflow-specific staleness
+
+
+def _render_status_line(label: str, age_text: str, *, status_color: str = "#666") -> None:
+    st.markdown(
+        f"<div style='font-size:0.8em;color:#666;margin-top:-8px;'>"
+        f"{label} <span style='color:{status_color};font-weight:600;'>{age_text}</span>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _color_for_age(secs: float, fresh_max: float, stale_min: float) -> str:
+    """Green if < fresh_max seconds; amber until stale_min; red beyond."""
+    if secs < fresh_max:
+        return "#0a8a3a"
+    if secs < stale_min:
+        return "#d68800"
+    return "#c92a2a"
+
+
+def _age_seconds(ts) -> float | None:
+    if ts is None:
+        return None
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=UTC)
+    return (datetime.now(UTC) - ts).total_seconds()
+
+
 def render_actions():
     st.subheader("Actions")
     _render_process_status_inline()
+
+    try:
+        last = run_async(_fetch_last_run_timestamps())
+    except Exception:  # noqa: BLE001
+        last = {}
+
+    # ── Daily — every market day ────────────────────────────────────────────
+    st.markdown("##### Daily — run every market day before close")
     st.caption(
-        "Recommended order: **Step 1** (daily update) → **Step 4** (smoke test) → **Step 2** "
-        "(rebalance, if needed). **Step 3** runs after parameter changes. **Step 5** is "
-        "corrective and rarely needed."
+        "Keeps `platform.prices_daily`, fundamentals, and corporate-actions fresh. "
+        "Every other workflow depends on this being current."
     )
-
-    cols = st.columns(5)
-
-    # Step 1 — Daily update (long-running, detached)
-    if cols[0].button(
-        "📥 Step 1\nDaily update",
-        help="Pulls today's bars + corporate actions + fundamentals refresh. Long-running (~30-45 min); detaches so the browser tab can close.",
+    c1, c2 = st.columns([1, 4])
+    if c1.button(
+        "📥  Run daily update",
+        help="Pulls today's bars + corporate actions + fundamentals refresh. Detached (~30-45 min).",
+        use_container_width=True,
     ):
         pid, logfile = run_detached_script("scripts/run_daily_update.sh")
         st.session_state["detached_job"] = {
-            "name": "Daily update",
-            "pid": pid,
-            "logfile": logfile,
+            "name": "Daily update", "pid": pid, "logfile": logfile,
             "started_at": time.time(),
         }
         st.success(f"Launched (pid {pid}); logfile: {logfile}")
         st.rerun()
+    with c2:
+        secs = _age_seconds(last.get("daily_update"))
+        # Daily: fresh < 18h, stale > 36h.
+        color = _color_for_age(secs, 18 * 3600, 36 * 3600) if secs is not None else "#888"
+        text, _ = _fmt_age(last.get("daily_update"))
+        _render_status_line("Last completed:", text, status_color=color)
 
-    # Step 2 — Force-rebalance (typed-confirm)
-    if cols[1].button(
-        "🔄 Step 2\nForce-rebalance",
-        help="Cancels any stale momentum orders, re-scores against today's data, submits a fresh batch. Requires typing REBALANCE to confirm.",
+    # ── Monthly — first trading day of each calendar month ──────────────────
+    st.markdown("##### Monthly — first NYSE session of each calendar month")
+    st.caption(
+        "Momentum rebalances naturally on the 1st (the scheduler fires automatically "
+        "if cron is set up; otherwise force-rebalance manually). Other days: no-op."
+    )
+    c1, c2 = st.columns([1, 4])
+    if c1.button(
+        "🔄  Force-rebalance Momentum",
+        help="Cancels stale orders, re-scores against today's data, submits a fresh batch. Typed-confirm REBALANCE.",
+        use_container_width=True,
     ):
         st.session_state["pending_confirm"] = {
             "action": "force_rebalance",
             "script": "scripts/run_momentum_kickoff.sh",
             "phrase": "REBALANCE",
-            "description": "About to recompute and submit ~50 orders. This affects the Alpaca paper account.",
+            "description": "About to recompute and submit ~50 orders against the Alpaca paper account.",
         }
+    with c2:
+        secs = _age_seconds(last.get("force_rebalance"))
+        # Monthly: fresh < 35 days (one rebalance cycle + buffer), stale > 45 days.
+        color = _color_for_age(secs, 35 * 86400, 45 * 86400) if secs is not None else "#888"
+        text, _ = _fmt_age(last.get("force_rebalance"))
+        _render_status_line("Last signal emitted:", text, status_color=color)
 
-    # Step 3 — Refresh credibility (blocking)
-    if cols[2].button(
-        "📊 Step 3\nRefresh credibility",
-        help="Re-runs the momentum parameter search and persists the held-back credibility rubric to platform.data_quality_log. ~5 min.",
+    # ── Periodic — after parameter or code changes ──────────────────────────
+    st.markdown("##### Periodic — after parameter or code changes")
+    st.caption(
+        "**Refresh credibility** re-runs the parameter search and persists the rubric "
+        "row to `data_quality_log`. **Smoke test** verifies the full pipeline is green."
+    )
+    c1, c2, c3 = st.columns([1, 1, 3])
+    if c1.button(
+        "📊  Refresh credibility",
+        help="Re-runs the momentum parameter search (~5 min) and persists the rubric row.",
+        use_container_width=True,
     ):
         with st.spinner("Running momentum search (this takes ~5 min)..."):
             rc, output = run_blocking_script("scripts/run_momentum_search.sh", timeout=900)
         _render_blocking_output("Refresh credibility", rc, output)
-
-    # Step 4 — Smoke test (blocking, fast)
-    if cols[3].button(
-        "🧪 Step 4\nSmoke test",
-        help="Runs all momentum plug unit tests + scheduler dry-run + tip-sheet render. Canonical 'did the last change break anything' gate.",
+    if c2.button(
+        "🧪  Smoke test",
+        help="Runs all momentum unit tests + dry-run scheduler + tip-sheet render. Canonical 'did anything break' gate.",
+        use_container_width=True,
     ):
         with st.spinner("Running smoke test..."):
             rc, output = run_blocking_script("scripts/run_momentum_smoke.sh", timeout=300)
         _render_blocking_output("Smoke test", rc, output)
+    with c3:
+        secs = _age_seconds(last.get("credibility_refresh"))
+        # Periodic: fresh < 7 days, stale > 30 days.
+        color = _color_for_age(secs, 7 * 86400, 30 * 86400) if secs is not None else "#888"
+        text, _ = _fmt_age(last.get("credibility_refresh"))
+        _render_status_line("Last credibility rubric write:", text, status_color=color)
 
-    # Step 5 — Cancel open orders (corrective)
-    if cols[4].button(
-        "🛑 Step 5\nCancel open orders",
-        help="Corrective only — cancels all `mo_*` open orders at Alpaca. Requires typing CANCEL to confirm.",
+    # ── Quarterly — liquidity-tier refresh ──────────────────────────────────
+    st.markdown("##### Quarterly — liquidity-tier refresh")
+    st.caption(
+        "Re-runs the Corwin-Schultz bootstrap to refresh spread estimates in "
+        "`platform.spread_observations` → `liquidity_tiers`. Cost model depends on this."
+    )
+    c1, c2 = st.columns([1, 4])
+    if c1.button(
+        "🧪  Refresh liquidity tiers",
+        help="Recomputes per-ticker round-trip costs from recent daily bars. Long-running (~20-30 min); detached.",
+        use_container_width=True,
+        disabled=True,  # Phase 6 — needs a wrapper script first
+    ):
+        st.info("Phase 6 — needs a `scripts/run_tier_refresh.sh` wrapper. See backlog.")
+    with c2:
+        secs = _age_seconds(last.get("tier_refresh"))
+        # Quarterly: fresh < 90 days, stale > 180 days.
+        color = _color_for_age(secs, 90 * 86400, 180 * 86400) if secs is not None else "#888"
+        text, _ = _fmt_age(last.get("tier_refresh"))
+        _render_status_line("Last spread observation:", text, status_color=color)
+
+    # ── Corrective — emergency-only ─────────────────────────────────────────
+    st.markdown("##### Corrective — emergency only")
+    st.caption(
+        "Rarely needed. Use after a failed rebalance to clean stuck orders, or before "
+        "manually re-running a kickoff against fresh data."
+    )
+    c1, _ = st.columns([1, 4])
+    if c1.button(
+        "🛑  Cancel open orders",
+        help="Cancels all open `mo_*` orders at Alpaca. Typed-confirm CANCEL.",
+        use_container_width=True,
     ):
         st.session_state["pending_confirm"] = {
             "action": "cancel_orders",
-            "script": None,  # handled inline
+            "script": None,
             "phrase": "CANCEL",
             "description": "About to cancel all open momentum orders at Alpaca paper.",
         }
