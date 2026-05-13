@@ -11,6 +11,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from tpcore.backtest.filter_diagnostics import FilterDiagnostics
 from tpcore.quality.data_quality import DataQualityScore
 
 # Universe used by the Phase 1 scan. Per the Phase 1 spec: hardcoded 10 names.
@@ -67,6 +68,10 @@ class SetupCandidate(BaseModel):
     data_quality: DataQualityScore | None = Field(
         default=None,
         description="Informational fundamentals data-quality snapshot. Does NOT gate the trade.",
+    )
+    filter_diagnostics: FilterDiagnostics | None = Field(
+        default=None,
+        description="Per-filter pass/block counters from the scan that produced this candidate.",
     )
 
 

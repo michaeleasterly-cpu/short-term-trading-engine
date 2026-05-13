@@ -220,10 +220,15 @@ class ReversionScheduler:
                     if assessment.phase is not Phase.ACTIVE:
                         continue
                     if db_log is not None:
+                        _diag = (
+                            cand.filter_diagnostics.model_dump(exclude_none=True)
+                            if cand.filter_diagnostics is not None else None
+                        )
                         await db_log.signal(
                             cand.ticker,
                             score=float(cand.fade_score),
                             direction=cand.direction.value,
+                            extra_data=({"filter_diagnostics": _diag} if _diag else None),
                         )
                     state = await risk_store.get(ENGINE_ID)
                     open_positions = state.open_positions if state else 0

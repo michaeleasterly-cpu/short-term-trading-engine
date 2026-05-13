@@ -24,6 +24,7 @@ from sigma.models import (
     SIGMA_TEST_UNIVERSE,
     SetupCandidate,
 )
+from tpcore.backtest.filter_diagnostics import FilterDiagnostics
 from tpcore.interfaces.data import Bar, DataProviderInterface
 from tpcore.interfaces.engine_plug import BaseEnginePlug
 from tpcore.outage import DataProviderOutage
@@ -298,11 +299,22 @@ class SigmaSetupDetection(BaseEnginePlug):
         """
         start = as_of - timedelta(days=LOOKBACK_DAYS + 30)
 
+        # Per-scan filter diagnostics — the same instance is incremented
+        # inline by _evaluate() and attached to every passing candidate.
+        # Sigma populates adx / chop / bb_width as hard filters; the other
+        # engine-specific fields stay None.
+        diag = FilterDiagnostics(
+            universe_total=len(self._universe),
+            adx_blocked=0,
+            chop_blocked=0,
+            bb_width_blocked=0,
+        )
+
         candidates: list[SetupCandidate] = []
         for symbol in self._universe:
             bars = await self._data.get_daily_bars(symbol, start, as_of)
             try:
-                cand = self._evaluate(symbol, as_of, bars)
+                cand = self._evaluate(symbol, as_of, bars, diag=diag)
             except Exception as exc:  # pragma: no cover - defensive
                 logger.warning("sigma.setup.evaluate_failed", symbol=symbol, error=str(exc))
                 continue
@@ -310,6 +322,10 @@ class SigmaSetupDetection(BaseEnginePlug):
                 continue
             cand = await self._attach_data_quality(cand, as_of=as_of)
             candidates.append(cand)
+        diag.candidates_passed = len(candidates)
+        # Attach the same diag to every candidate so downstream signal logging
+        # (sigma/order_manager.py) can pass it as extra_data.
+        candidates = [c.model_copy(update={"filter_diagnostics": diag}) for c in candidates]
         candidates.sort(key=lambda c: c.sigma_score, reverse=True)
         return candidates
 
@@ -357,14 +373,25 @@ class SigmaSetupDetection(BaseEnginePlug):
         )
         return candidate.model_copy(update={"data_quality": score})
 
-    def _evaluate(self, symbol: str, as_of: date, bars: list[Bar]) -> SetupCandidate | None:
+    def _evaluate(
+        self,
+        symbol: str,
+        as_of: date,
+        bars: list[Bar],
+        *,
+        diag: FilterDiagnostics | None = None,
+    ) -> SetupCandidate | None:
         df = _bars_to_frame(bars)
         if len(df) < BB_PERIOD + 5:
+            if diag is not None:
+                diag.coarse_liquidity_blocked += 1
             return None
 
         last_close = float(df["close"].iloc[-1])
         avg_vol_20 = float(df["volume"].tail(BB_PERIOD).mean())
         if last_close < float(MIN_PRICE) or avg_vol_20 < MIN_AVG_VOLUME:
+            if diag is not None:
+                diag.coarse_liquidity_blocked += 1
             return None
 
         adx_series = _compute_adx(df)
@@ -373,13 +400,19 @@ class SigmaSetupDetection(BaseEnginePlug):
         upper_now = float(upper.iloc[-1])
         lower_now = float(lower.iloc[-1])
         if np.isnan(adx_now) or np.isnan(upper_now) or np.isnan(lower_now):
+            if diag is not None:
+                diag.coarse_liquidity_blocked += 1
             return None
 
         # Universe filters.
         if adx_now >= MAX_ADX:
+            if diag is not None:
+                diag.adx_blocked = (diag.adx_blocked or 0) + 1
             return None
         width_pctile = _width_percentile(width)
         if width_pctile >= MAX_WIDTH_PCTILE:
+            if diag is not None:
+                diag.bb_width_blocked = (diag.bb_width_blocked or 0) + 1
             return None
 
         prox = _band_proximity(last_close, upper_now, lower_now)
@@ -393,12 +426,16 @@ class SigmaSetupDetection(BaseEnginePlug):
         chop_series = compute_chop(df["high"], df["low"], df["close"])
         chop_now = float(chop_series.iloc[-1]) if not chop_series.empty else float("nan")
         if np.isnan(chop_now):
+            if diag is not None:
+                diag.coarse_liquidity_blocked += 1
             return None
         # Per-stock CHOP hard filter: a candidate must itself be in a
         # chopping regime, not just past the ADX < 20 universe filter.
         # Backtest validates this gate; the previous SPY-level variant
         # was empirically worse and was removed.
         if chop_now <= CHOP_SIDEWAYS_WEAK:
+            if diag is not None:
+                diag.chop_blocked = (diag.chop_blocked or 0) + 1
             return None
         vwap_series = _rolling_vwap(df["close"], df["volume"])
         last_vwap_20 = float(vwap_series.iloc[-1]) if not vwap_series.empty else float("nan")

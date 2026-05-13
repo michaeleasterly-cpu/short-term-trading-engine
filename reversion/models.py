@@ -17,6 +17,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from tpcore.backtest.filter_diagnostics import FilterDiagnostics
+
 # Plan §4.2 thresholds.
 SCORE_STRONG = 70
 SCORE_WEAK = 50
@@ -84,6 +86,10 @@ class SetupCandidate(BaseModel):
     target_20ma: Decimal
     target_50ma: Decimal
     notes: str | None = None
+    filter_diagnostics: FilterDiagnostics | None = Field(
+        default=None,
+        description="Per-filter pass/block counters from the scan that produced this candidate.",
+    )
 
 
 class PhaseAssessment(BaseModel):

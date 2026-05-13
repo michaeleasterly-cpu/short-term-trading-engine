@@ -45,6 +45,7 @@ from reversion.models import (
     Direction,
     SetupCandidate,
 )
+from tpcore.backtest.filter_diagnostics import FilterDiagnostics
 from tpcore.interfaces.data import Bar, DataProviderInterface
 from tpcore.interfaces.engine_plug import BaseEnginePlug
 
@@ -319,16 +320,29 @@ class ReversionSetupDetection(BaseEnginePlug):
         start = as_of - timedelta(days=LOOKBACK_DAYS + 30)
         spy_z, vix = await self._market_context(start, as_of)
 
+        # Per-scan filter diagnostics. Reversion enforces hard gates on
+        # adx-trending and z-score; the other engine-specific fields
+        # (rsi_blocked, volume_climax_blocked, earnings_quality_blocked)
+        # stay None — those are scoring inputs / downstream-of-scan,
+        # not hard gates inside this plug.
+        diag = FilterDiagnostics(
+            universe_total=len(self._universe),
+            adx_trending_blocked=0,
+            z_score_blocked=0,
+        )
+
         candidates: list[SetupCandidate] = []
         for symbol in self._universe:
             bars = await self._data.get_daily_bars(symbol, start, as_of)
             try:
-                cand = self._evaluate(symbol, as_of, bars, spy_z=spy_z, vix=vix)
+                cand = self._evaluate(symbol, as_of, bars, spy_z=spy_z, vix=vix, diag=diag)
             except Exception as exc:  # pragma: no cover - defensive
                 logger.warning("reversion.setup.evaluate_failed", symbol=symbol, error=str(exc))
                 continue
             if cand is not None:
                 candidates.append(cand)
+        diag.candidates_passed = len(candidates)
+        candidates = [c.model_copy(update={"filter_diagnostics": diag}) for c in candidates]
         candidates.sort(key=lambda c: c.fade_score, reverse=True)
         return candidates
 
@@ -366,24 +380,33 @@ class ReversionSetupDetection(BaseEnginePlug):
         *,
         spy_z: float,
         vix: float,
+        diag: FilterDiagnostics | None = None,
     ) -> SetupCandidate | None:
         df = _bars_to_frame(bars)
         if len(df) < MA_50_PERIOD + 5:
+            if diag is not None:
+                diag.coarse_liquidity_blocked += 1
             return None
 
         last_close = float(df["close"].iloc[-1])
         avg_vol_20 = float(df["volume"].tail(ZSCORE_PERIOD).mean())
         if last_close < float(MIN_PRICE) or avg_vol_20 < MIN_AVG_VOLUME:
+            if diag is not None:
+                diag.coarse_liquidity_blocked += 1
             return None
 
         adx_series = _compute_adx(df)
         adx_now = float(adx_series.iloc[-1])
         if np.isnan(adx_now) or adx_now > MAX_ADX_FOR_REVERSION:
+            if diag is not None:
+                diag.adx_trending_blocked = (diag.adx_trending_blocked or 0) + 1
             return None  # plan §4.2 — engine disabled in trending markets.
 
         z_series = _compute_zscore(df["close"])
         z_now = float(z_series.iloc[-1])
         if np.isnan(z_now) or abs(z_now) < Z_SCORE_THRESHOLD:
+            if diag is not None:
+                diag.z_score_blocked = (diag.z_score_blocked or 0) + 1
             return None  # need a real statistical extreme to fade.
         direction = Direction.LONG if z_now < 0 else Direction.SHORT
 
@@ -405,6 +428,8 @@ class ReversionSetupDetection(BaseEnginePlug):
 
         ma_50 = float(df["close"].rolling(MA_50_PERIOD, min_periods=MA_50_PERIOD).mean().iloc[-1])
         if np.isnan(ma_50):
+            if diag is not None:
+                diag.coarse_liquidity_blocked += 1
             return None
         ma_20 = float(sma.iloc[-1])
 
