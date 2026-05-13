@@ -34,7 +34,9 @@ from dashboard_components.charts import render_ticker_chart
 from dashboard_components.health import (
     classify_bars,
     classify_corp_actions,
+    classify_coverage_gaps,
     classify_fundamentals,
+    classify_open_orders,
     classify_universe,
     classify_update_run,
     classify_validation,
@@ -416,6 +418,79 @@ async def _fetch_platform_health() -> dict:
             )
             return update_run
 
+    async def _q_coverage_gaps() -> dict:
+        # Tier ≤ 2 tickers with no bar in the last 5 days, AND tier ≤ 2
+        # tickers with NO fundamentals_quarterly row at all. Both are
+        # silent killers — momentum/vector/reversion can score against
+        # them without ever surfacing that the data is incomplete.
+        async with pool.acquire() as conn:
+            total = await conn.fetchval(
+                "SELECT COUNT(*) FROM platform.liquidity_tiers WHERE tier <= 2"
+            )
+            bar_rows = await conn.fetch(
+                """
+                SELECT lt.ticker
+                FROM platform.liquidity_tiers lt
+                LEFT JOIN (
+                    SELECT DISTINCT ticker FROM platform.prices_daily
+                    WHERE date >= CURRENT_DATE - INTERVAL '5 days'
+                ) p ON p.ticker = lt.ticker
+                WHERE lt.tier <= 2 AND p.ticker IS NULL
+                ORDER BY lt.ticker
+                """
+            )
+            fund_rows = await conn.fetch(
+                """
+                SELECT lt.ticker
+                FROM platform.liquidity_tiers lt
+                LEFT JOIN (
+                    SELECT DISTINCT ticker FROM platform.fundamentals_quarterly
+                ) f ON f.ticker = lt.ticker
+                WHERE lt.tier <= 2 AND f.ticker IS NULL
+                ORDER BY lt.ticker
+                """
+            )
+        return {
+            "tier_le_2_total": int(total or 0),
+            "missing_bars": [r["ticker"] for r in bar_rows],
+            "missing_fundamentals": [r["ticker"] for r in fund_rows],
+        }
+
+    async def _q_open_orders() -> dict:
+        # Pending open_orders, total + stale-24h count.
+        async with pool.acquire() as conn:
+            r = await conn.fetchrow(
+                """
+                SELECT
+                    COUNT(*) FILTER (
+                        WHERE status NOT IN ('filled','canceled','cancelled','rejected','expired')
+                    ) AS pending_count,
+                    COUNT(*) FILTER (
+                        WHERE status NOT IN ('filled','canceled','cancelled','rejected','expired')
+                          AND updated_at < now() - INTERVAL '24 hours'
+                    ) AS stale_24h
+                FROM platform.open_orders
+                """
+            )
+            sample = await conn.fetch(
+                """
+                SELECT engine, ticker, status, updated_at
+                FROM platform.open_orders
+                WHERE status NOT IN ('filled','canceled','cancelled','rejected','expired')
+                  AND updated_at < now() - INTERVAL '24 hours'
+                ORDER BY updated_at ASC
+                LIMIT 10
+                """
+            )
+        return {
+            "pending_count": int(r["pending_count"] or 0) if r else 0,
+            "stale_24h": int(r["stale_24h"] or 0) if r else 0,
+            "stale_sample": [
+                {"engine": x["engine"], "ticker": x["ticker"], "status": x["status"], "updated_at": x["updated_at"]}
+                for x in sample
+            ],
+        }
+
     async def _q_validation() -> list[dict]:
         # Show ONLY the latest run per source. A 7-day aggregate would
         # surface stale history as "current failures" — exactly the bug
@@ -456,13 +531,15 @@ async def _fetch_platform_health() -> dict:
             ]
 
     try:
-        bars, fund, ca, uni, run, val = await asyncio.gather(
+        bars, fund, ca, uni, run, val, coverage, orders = await asyncio.gather(
             _q_bars(),
             _q_fundamentals(),
             _q_corp_actions(),
             _q_universe(),
             _q_update_run(),
             _q_validation(),
+            _q_coverage_gaps(),
+            _q_open_orders(),
         )
         out["bars"] = bars
         out["fundamentals"] = fund
@@ -470,6 +547,8 @@ async def _fetch_platform_health() -> dict:
         out["universe"] = uni
         out["update_run"] = run
         out["validation"] = val
+        out["coverage"] = coverage
+        out["open_orders"] = orders
     finally:
         await pool.close()
     return out
@@ -1347,6 +1426,22 @@ HEALTH_ACTIONS: dict[str, dict] = {
 }
 
 
+def _render_ticker_list(label: str, tickers: list[str], cap: int = 20) -> None:
+    """Render a capped list of tickers under a label. Used for coverage-gap
+    detail rows. Caps at ``cap`` to keep the expander readable."""
+    n = len(tickers)
+    if n == 0:
+        st.markdown(f"**{label}:** _none_ 🟢", unsafe_allow_html=True)
+        return
+    shown = tickers[:cap]
+    overflow = n - len(shown)
+    suffix = f" … and {overflow} more" if overflow > 0 else ""
+    st.markdown(
+        f"**{label}** ({n}): <code>{', '.join(shown)}</code>{suffix}",
+        unsafe_allow_html=True,
+    )
+
+
 def _render_validation_failure_detail(source: str, notes: object) -> None:
     """Render the per-ticker failure list under a failing validation source.
 
@@ -1571,6 +1666,47 @@ def render_platform_health() -> None:
     # Universe gets the FAST fix — prescreener-only (~1 min) instead of the
     # full 30-45min daily update.
     _render_health_row("Universe (momentum)", uni_color, uni_text, fix_action="prescreener", row_key="universe")
+
+    # Universe-coverage integrity — silent killers. The prescreener can
+    # write a row with last_close populated, but the ticker may still
+    # have stale bars or zero fundamentals — both invisible to upstream
+    # checks. Surface explicitly.
+    cov = h["coverage"]
+    cov_color, cov_text = classify_coverage_gaps(
+        bar_gap_count=len(cov["missing_bars"]),
+        fund_gap_count=len(cov["missing_fundamentals"]),
+        tier_le_2_total=cov["tier_le_2_total"],
+    )
+    _render_health_row(
+        "Universe coverage",
+        cov_color,
+        cov_text,
+        fix_action="daily_update" if cov_color in ("amber", "red") else None,
+        row_key="coverage",
+    )
+    if cov_color in ("amber", "red"):
+        with st.expander("Coverage gap detail (first 20 tickers per category)", expanded=(cov_color == "red")):
+            _render_ticker_list("Missing bars (last 5d)", cov["missing_bars"])
+            _render_ticker_list("Missing fundamentals", cov["missing_fundamentals"])
+
+    # Open-orders liveness — orphan pending rows older than 24h indicate
+    # engine state has drifted from the broker. Source of the Sigma
+    # "long-while-shorting" crash class.
+    oo = h["open_orders"]
+    oo_color, oo_text = classify_open_orders(
+        pending_count=oo["pending_count"],
+        stale_24h_count=oo["stale_24h"],
+    )
+    _render_health_row("Open orders", oo_color, oo_text, row_key="open_orders")
+    if oo["stale_sample"]:
+        with st.expander("Stale open-order detail", expanded=(oo_color == "red")):
+            for r in oo["stale_sample"]:
+                _render_health_row(
+                    f"  {r['engine']} {r['ticker']}",
+                    "red",
+                    f"status={r['status']} updated_at={r['updated_at']}",
+                )
+            st.caption("Reconcile against Alpaca with `python scripts/check_momentum_orders.sh` (momentum) or restart the relevant scheduler.")
 
     run_color, run_summary, run_detail = classify_update_run(h["update_run"])
     _render_health_row("Last ops --update", run_color, run_summary, fix_action="daily_update", row_key="update_run")

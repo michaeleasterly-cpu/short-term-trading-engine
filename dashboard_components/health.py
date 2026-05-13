@@ -232,6 +232,60 @@ def classify_update_run(
     return color, summary, rows
 
 
+def classify_coverage_gaps(
+    bar_gap_count: int,
+    fund_gap_count: int,
+    tier_le_2_total: int,
+) -> tuple[str, str]:
+    """Universe coverage integrity — fraction of tier ≤ 2 tickers that
+    are missing recent bars and/or any fundamentals row at all.
+
+    Severity:
+      * green   — both gaps under 2% of the tier-≤-2 universe
+      * amber   — either gap between 2% and 5%
+      * red     — either gap above 5%
+
+    The thresholds tolerate the SPAC unit + IPO long-tail (small,
+    expected) without masking a structural ingestion failure (large).
+    """
+    if tier_le_2_total <= 0:
+        return "amber", "No tier ≤ 2 universe to measure against"
+    bar_pct = bar_gap_count / tier_le_2_total
+    fund_pct = fund_gap_count / tier_le_2_total
+    worst_pct = max(bar_pct, fund_pct)
+    if worst_pct < 0.02:
+        color = "green"
+    elif worst_pct < 0.05:
+        color = "amber"
+    else:
+        color = "red"
+    summary = (
+        f"Bars: {bar_gap_count}/{tier_le_2_total} missing recent ({bar_pct:.1%}) · "
+        f"Fundamentals: {fund_gap_count}/{tier_le_2_total} missing rows ({fund_pct:.1%})"
+    )
+    return color, summary
+
+
+def classify_open_orders(
+    pending_count: int,
+    stale_24h_count: int,
+) -> tuple[str, str]:
+    """Open-order liveness check.
+
+    Orphan ``pending`` rows older than 24h indicate the engine's view of
+    its own state has diverged from the broker — exactly the failure
+    class that produces "cannot open a short sell while a long buy order
+    is open" stateful crashes. Any stale row is amber; multiples are red.
+    """
+    if pending_count == 0:
+        return "green", "No pending open orders"
+    if stale_24h_count == 0:
+        return "green", f"{pending_count} pending (all <24h old)"
+    if stale_24h_count == 1:
+        return "amber", f"{pending_count} pending — 1 older than 24h"
+    return "red", f"{pending_count} pending — {stale_24h_count} older than 24h"
+
+
 def classify_validation(
     rows: list[dict[str, Any]],
 ) -> tuple[str, str, list[tuple[str, str, str]]]:

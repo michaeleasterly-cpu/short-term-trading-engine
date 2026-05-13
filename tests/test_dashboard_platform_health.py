@@ -13,7 +13,9 @@ from dashboard_components.health import (
     OPS_UPDATE_STAGES,
     classify_bars,
     classify_corp_actions,
+    classify_coverage_gaps,
     classify_fundamentals,
+    classify_open_orders,
     classify_universe,
     classify_update_run,
     classify_validation,
@@ -267,3 +269,61 @@ def test_banner_required_when_no_bars_at_all():
     severity, message = banner
     assert severity == "required"
     assert "No bars" in message
+
+
+# ─── Coverage gaps ──────────────────────────────────────────────────────────
+
+
+def test_coverage_green_under_2pct_gaps():
+    # 10/1000 = 1% bar gap, 15/1000 = 1.5% fund gap → green
+    color, text = classify_coverage_gaps(bar_gap_count=10, fund_gap_count=15, tier_le_2_total=1000)
+    assert color == "green"
+    assert "1.0%" in text
+    assert "1.5%" in text
+
+
+def test_coverage_amber_between_2_and_5pct():
+    # 30/1000 = 3% → amber
+    color, _ = classify_coverage_gaps(bar_gap_count=30, fund_gap_count=10, tier_le_2_total=1000)
+    assert color == "amber"
+
+
+def test_coverage_red_above_5pct():
+    color, _ = classify_coverage_gaps(bar_gap_count=60, fund_gap_count=10, tier_le_2_total=1000)
+    assert color == "red"
+    # Either dimension being above threshold should trigger red.
+    color, _ = classify_coverage_gaps(bar_gap_count=10, fund_gap_count=60, tier_le_2_total=1000)
+    assert color == "red"
+
+
+def test_coverage_amber_when_no_universe():
+    color, text = classify_coverage_gaps(0, 0, 0)
+    assert color == "amber"
+    assert "No tier" in text
+
+
+# ─── Open orders ────────────────────────────────────────────────────────────
+
+
+def test_open_orders_green_when_no_pending():
+    color, text = classify_open_orders(pending_count=0, stale_24h_count=0)
+    assert color == "green"
+    assert "No pending" in text
+
+
+def test_open_orders_green_when_pending_but_fresh():
+    color, text = classify_open_orders(pending_count=3, stale_24h_count=0)
+    assert color == "green"
+    assert "all <24h" in text
+
+
+def test_open_orders_amber_when_one_stale():
+    color, text = classify_open_orders(pending_count=1, stale_24h_count=1)
+    assert color == "amber"
+    assert "1 older than 24h" in text
+
+
+def test_open_orders_red_when_multiple_stale():
+    color, text = classify_open_orders(pending_count=5, stale_24h_count=3)
+    assert color == "red"
+    assert "3 older than 24h" in text
