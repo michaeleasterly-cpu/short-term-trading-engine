@@ -52,6 +52,15 @@ class FakePool:
         rows = await self.fetch(sql, *args)
         return rows[0] if rows else None
 
+    async def fetchval(self, sql: str, *args) -> Any:
+        """Scalar query. Used by the row_integrity check's COUNT(*).
+        Returns 0 by default so existing tests, which don't care about
+        integrity, get the "clean" signal automatically."""
+        self.calls.append((sql, args))
+        if "count(*)" in sql.lower() and "platform.prices_daily" in sql.lower():
+            return 0
+        return None
+
 
 class _FakeAcquireCM:
     def __init__(self, pool: FakePool) -> None:

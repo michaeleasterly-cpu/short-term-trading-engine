@@ -32,6 +32,8 @@ from .checks.constituent import (
 )
 from .checks.delistings import CHECK_NAME as DELISTINGS_NAME
 from .checks.delistings import check_delistings
+from .checks.row_integrity import CHECK_NAME as ROW_INTEGRITY_NAME
+from .checks.row_integrity import check_row_integrity
 from .checks.splits import CHECK_NAME as SPLITS_NAME
 from .checks.splits import check_splits
 from .models import CheckResult, FailureDetail, SuiteResult
@@ -68,16 +70,23 @@ async def run_suite(
     splits = splits or FixtureSplitsSource()
     writer = writer or DataQualityWriter(pool)
 
-    # Run the three checks in parallel; each individual check is wrapped so
-    # an unexpected exception turns into a failed CheckResult instead of
-    # blowing up the whole suite.
+    # Run the checks in parallel; each individual check is wrapped so an
+    # unexpected exception turns into a failed CheckResult instead of
+    # blowing up the whole suite. ``row_integrity`` has no fixture source
+    # — it scans prices_daily directly; pass ``None`` for parity with the
+    # other check signatures.
     delistings_task = _safe_run(DELISTINGS_NAME, check_delistings, pool, delistings)
     constituent_task = _safe_run(CONSTITUENT_NAME, check_constituent_snapshot, pool, constituents)
     splits_task = _safe_run(SPLITS_NAME, check_splits, pool, splits)
-    delistings_result, constituent_result, splits_result = await asyncio.gather(
-        delistings_task, constituent_task, splits_task
+    row_integrity_task = _safe_run(ROW_INTEGRITY_NAME, check_row_integrity, pool, None)
+    delistings_result, constituent_result, splits_result, row_integrity_result = (
+        await asyncio.gather(
+            delistings_task, constituent_task, splits_task, row_integrity_task,
+        )
     )
-    checks: list[CheckResult] = [delistings_result, constituent_result, splits_result]
+    checks: list[CheckResult] = [
+        delistings_result, constituent_result, splits_result, row_integrity_result,
+    ]
 
     finished_at = datetime.now(UTC)
     suite_passed = all(c.passed for c in checks)

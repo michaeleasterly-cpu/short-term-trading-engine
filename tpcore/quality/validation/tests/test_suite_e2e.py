@@ -31,7 +31,7 @@ class _RecordingWriter:
 
 
 def _build_pool_satisfying(write_yaml) -> tuple[FakePool, FixtureDelistingsSource, FixtureConstituentSource, FixtureSplitsSource]:
-    """Synthetic DB whose rows satisfy the three fixtures we write inline."""
+    """Synthetic DB whose rows satisfy the four checks we write inline."""
     delistings_path = write_yaml(
         "delistings.yaml",
         """
@@ -89,12 +89,13 @@ async def test_e2e_passes_with_satisfying_synthetic_data(write_yaml) -> None:
     writer = _RecordingWriter()
     result = await run_suite(pool, delistings=de, constituents=co, splits=sp, writer=writer)
     assert result.passed is True
-    assert len(writer.scores) == 3
+    assert len(writer.scores) == 4
     sources = {s.source for s in writer.scores}
     assert sources == {
         "validation.delistings",
         "validation.constituent",
         "validation.splits",
+        "validation.row_integrity",
     }
 
 
