@@ -82,8 +82,12 @@ PARAM_RANGES: dict[str, dict[str, tuple]] = {
         "volume_climax_multiplier": (1.2, 3.0, "float"),
         "max_hold_days": (3, 12, "int"),
         "stop_pct": (0.04, 0.12, "float"),
-        # Categorical: choose between two earnings-quality regimes
-        "earnings_quality": (None, None, "choice:HIGH,MEDIUM_AND_HIGH"),
+        # Earnings-quality removed from the search ranges — current
+        # fundamentals_quarterly coverage on the wider universe is sparse
+        # enough that any HIGH/MEDIUM filter produces near-zero trades.
+        # Reversion's run_*_with_context defaults to filter_mode="none" when
+        # the override is absent, so the search sweeps the technical knobs
+        # against a no-EQ-gate baseline.
     },
     "vector": {
         "pb_ceiling": (1.0, 3.5, "float"),
@@ -91,6 +95,14 @@ PARAM_RANGES: dict[str, dict[str, tuple]] = {
         "catalyst_window_days": (3, 10, "int"),
         "swing_score_threshold": (55.0, 75.0, "float"),
         "stop_pct": (0.04, 0.10, "float"),
+    },
+    "momentum": {
+        # Deliberately low-dim: 4 knobs, narrow ranges around the standard
+        # 12-1 academic spec. DSR correction is much friendlier at small N.
+        "lookback_days": (200, 280, "int"),
+        "skip_days": (15, 30, "int"),
+        "hold_days": (15, 30, "int"),
+        "top_decile_pct": (0.05, 0.20, "float"),
     },
 }
 
@@ -224,6 +236,9 @@ def _runner_for(engine: str) -> Callable[..., Awaitable[Any]]:
     if engine == "vector":
         from vector.backtest import run_for_search
         return run_for_search
+    if engine == "momentum":
+        from momentum.backtest import run_for_search
+        return run_for_search
     raise ValueError(f"unknown engine: {engine}")
 
 
@@ -238,6 +253,9 @@ def _context_loader_for(engine: str) -> Callable[..., Awaitable[Any]]:
     if engine == "vector":
         from vector.backtest import load_vector_window_context
         return load_vector_window_context
+    if engine == "momentum":
+        from momentum.backtest import load_momentum_window_context
+        return load_momentum_window_context
     raise ValueError(f"unknown engine: {engine}")
 
 
@@ -252,6 +270,9 @@ def _context_runner_for(engine: str) -> Callable[..., Any]:
     if engine == "vector":
         from vector.backtest import run_vector_with_context
         return run_vector_with_context
+    if engine == "momentum":
+        from momentum.backtest import run_momentum_with_context
+        return run_momentum_with_context
     raise ValueError(f"unknown engine: {engine}")
 
 
@@ -429,7 +450,7 @@ def write_results_csv(path: Path, trials: list[TrialResult]) -> None:
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("--engine", choices=("sigma", "reversion", "vector"), required=True)
+    p.add_argument("--engine", choices=("sigma", "reversion", "vector", "momentum"), required=True)
     p.add_argument("--trials", type=int, default=200,
                    help="Total parameter combinations to pre-sample (default 200).")
     p.add_argument("--per-window-trials", type=int, default=50,
@@ -459,7 +480,31 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="DSR floor for the SURVIVED verdict (default 0.95).")
     p.add_argument("--credibility-threshold", type=int, default=60,
                    help="Credibility floor for SURVIVED verdict (default 60).")
+    p.add_argument("--universe-tier-max", type=int, default=None,
+                   help=(
+                       "If set, pull the universe from platform.liquidity_tiers where "
+                       "tier <= this value (1=tightest spread, 5=widest). Typical: 2 for "
+                       "T1+T2 (~1,300 names), 3 for T1+T2+T3 (~2,700). When omitted, each "
+                       "engine uses its built-in default universe."
+                   ))
     return p.parse_args(argv)
+
+
+async def _load_universe_by_tier(db_url: str, max_tier: int) -> tuple[str, ...]:
+    """Query platform.liquidity_tiers for tickers with tier ≤ max_tier."""
+    import asyncpg
+
+    pool = await asyncpg.create_pool(db_url, min_size=1, max_size=1)
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT ticker FROM platform.liquidity_tiers "
+                "WHERE tier <= $1 ORDER BY ticker",
+                max_tier,
+            )
+    finally:
+        await pool.close()
+    return tuple(r["ticker"] for r in rows)
 
 
 async def amain(args: argparse.Namespace) -> int:
@@ -495,6 +540,16 @@ async def amain(args: argparse.Namespace) -> int:
     ctx_runner = _context_runner_for(args.engine)
     rng = random.Random(args.seed + 1)
 
+    universe: tuple[str, ...] | None = None
+    if args.universe_tier_max is not None:
+        universe = await _load_universe_by_tier(db_url, args.universe_tier_max)
+        print(
+            f"  → universe: {len(universe)} tickers from liquidity_tiers "
+            f"(tier ≤ {args.universe_tier_max})"
+        )
+    else:
+        print("  → universe: engine default (typically ~50 mega-caps)")
+
     trials: list[TrialResult] = []
     trial_id_seq = 0
     for w in windows:
@@ -504,6 +559,7 @@ async def amain(args: argparse.Namespace) -> int:
         load_start = time.time()
         context = await ctx_loader(
             db_url=db_url, start=w.train_start, end=w.holdout_end,
+            universe=universe,
         )
         load_secs = time.time() - load_start
         print(f"   panels loaded in {load_secs:.1f}s — evaluating {len(idxs)} candidates against shared context\n")
@@ -547,6 +603,7 @@ async def amain(args: argparse.Namespace) -> int:
         start=args.train_start,
         end=args.final_holdout_end,
         overrides=winner_params,
+        universe=universe,
     )
     # Slice to held-back only.
     held_returns = [
