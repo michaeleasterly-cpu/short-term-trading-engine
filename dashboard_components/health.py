@@ -235,35 +235,38 @@ def classify_update_run(
 def classify_validation(
     rows: list[dict[str, Any]],
 ) -> tuple[str, str, list[tuple[str, str, str]]]:
-    """Data validation suite: green if zero failed rows in last 7 days,
-    amber if any source had ≤2 failed runs, red if any source had ≥3.
-    Each source is a row in the detail table."""
+    """Data validation suite — latest run per source.
+
+    Each row carries the most recent ``data_quality_log`` entry for its
+    source, plus the boolean flags from that row. Green when latest is
+    clean; red when latest failed. No 7-day aggregate — stale aggregates
+    lie. Each source is a row in the detail table."""
     if not rows:
-        return "amber", "No validation runs in last 7 days", []
+        return "amber", "No validation runs recorded", []
 
     detail: list[tuple[str, str, str]] = []
     worst = "green"
     for r in rows:
-        n_failed = int(r["n_failed"])
-        n_runs = int(r["n_runs"])
         source = r["source"].replace("validation.", "")
-        if n_failed == 0:
+        failed = bool(r.get("stale")) or (
+            r.get("confidence") is not None and r["confidence"] < 1.0
+        )
+        conf = r.get("confidence")
+        if not failed:
             color = "green"
-            text = f"{n_runs} runs, all passed"
-        elif n_failed <= 2:
-            color = "amber"
-            text = f"{n_failed}/{n_runs} runs failed"
-            worst = "amber" if worst == "green" else worst
+            text = "latest run: passed"
         else:
             color = "red"
-            text = f"{n_failed}/{n_runs} runs failed"
+            text = (
+                f"latest run: FAILED (confidence "
+                f"{conf:.0%})" if conf is not None else "latest run: FAILED"
+            )
             worst = "red"
         detail.append((source, color, text))
 
     if worst == "green":
-        summary = f"All {len(rows)} validation source(s) clean (last 7d)"
-    elif worst == "amber":
-        summary = "Some validation failures (last 7d) — see detail"
+        summary = f"Latest run: all {len(rows)} check(s) passed"
     else:
-        summary = "Repeated validation failures (last 7d) — see detail"
+        n_failed = sum(1 for _, c, _ in detail if c == "red")
+        summary = f"Latest run: {n_failed}/{len(rows)} check(s) FAILED — see detail"
     return worst, summary, detail

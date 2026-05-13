@@ -181,33 +181,44 @@ def test_update_run_handles_string_data_blob():
 # ─── Validation suite ───────────────────────────────────────────────────────
 
 
-def test_validation_green_when_all_sources_passed():
+def test_validation_green_when_latest_runs_passed():
+    # Latest run per source: stale=False, confidence=1.0.
     rows = [
-        {"source": "validation.delistings", "latest_at": datetime.now(UTC), "n_failed": 0, "n_runs": 7},
-        {"source": "validation.constituent", "latest_at": datetime.now(UTC), "n_failed": 0, "n_runs": 7},
+        {"source": "validation.delistings", "latest_at": datetime.now(UTC), "stale": False, "confidence": 1.0, "notes": None, "n_failed": 0, "n_runs": 1},
+        {"source": "validation.constituent", "latest_at": datetime.now(UTC), "stale": False, "confidence": 1.0, "notes": None, "n_failed": 0, "n_runs": 1},
     ]
     color, summary, detail = classify_validation(rows)
     assert color == "green"
     assert len(detail) == 2
     assert all(c == "green" for _, c, _ in detail)
+    assert "all 2 check(s) passed" in summary
 
 
-def test_validation_amber_when_one_or_two_failures():
+def test_validation_red_when_latest_run_failed():
     rows = [
-        {"source": "validation.delistings", "latest_at": datetime.now(UTC), "n_failed": 2, "n_runs": 7},
-        {"source": "validation.constituent", "latest_at": datetime.now(UTC), "n_failed": 0, "n_runs": 7},
-    ]
-    color, _, _ = classify_validation(rows)
-    assert color == "amber"
-
-
-def test_validation_red_when_persistent_failures():
-    rows = [
-        {"source": "validation.delistings", "latest_at": datetime.now(UTC), "n_failed": 10, "n_runs": 14},
+        {"source": "validation.delistings", "latest_at": datetime.now(UTC), "stale": True, "confidence": 0.615, "notes": "[]", "n_failed": 1, "n_runs": 1},
+        {"source": "validation.constituent", "latest_at": datetime.now(UTC), "stale": False, "confidence": 1.0, "notes": None, "n_failed": 0, "n_runs": 1},
     ]
     color, summary, detail = classify_validation(rows)
     assert color == "red"
-    assert detail[0][1] == "red"
+    assert "1/2 check(s) FAILED" in summary
+    # The failed source is the red row in detail.
+    by_src = {s: c for s, c, _ in detail}
+    assert by_src["delistings"] == "red"
+    assert by_src["constituent"] == "green"
+
+
+def test_validation_green_when_stale_history_excluded():
+    # The fix: we no longer aggregate over 7 days. If today's run is
+    # clean, the dashboard is clean even if last week was red. This was
+    # the bug — the dashboard showed AAPL split as red because the rolling
+    # window included pre-fix history.
+    rows = [
+        {"source": "validation.splits", "latest_at": datetime.now(UTC), "stale": False, "confidence": 1.0, "notes": None, "n_failed": 0, "n_runs": 1},
+    ]
+    color, _, detail = classify_validation(rows)
+    assert color == "green"
+    assert detail[0][1] == "green"
 
 
 def test_validation_amber_when_no_runs():

@@ -417,27 +417,40 @@ async def _fetch_platform_health() -> dict:
             return update_run
 
     async def _q_validation() -> list[dict]:
-        # "Failure" = ``stale=true`` OR ``confidence < 1.0`` — same
-        # definition ``tpcore.quality`` uses internally.
+        # Show ONLY the latest run per source. A 7-day aggregate would
+        # surface stale history as "current failures" — exactly the bug
+        # that triggered the operator's frustration: AAPL split ratio
+        # appeared red because the rolling window included rows from
+        # before the underlying data was fixed.
+        # Per-source: pick the newest timestamp, then read its row.
         async with pool.acquire() as conn:
             rows = await conn.fetch(
                 """
-                SELECT source, MAX(timestamp) AS latest_at,
-                       SUM(CASE WHEN stale OR confidence < 1.0 THEN 1 ELSE 0 END) AS n_failed,
-                       COUNT(*) AS n_runs
-                FROM platform.data_quality_log
-                WHERE source LIKE 'validation.%'
-                  AND timestamp > now() - INTERVAL '7 days'
-                GROUP BY source
-                ORDER BY source
+                WITH latest AS (
+                    SELECT source, MAX(timestamp) AS latest_at
+                    FROM platform.data_quality_log
+                    WHERE source LIKE 'validation.%'
+                    GROUP BY source
+                )
+                SELECT q.source, q.timestamp AS latest_at,
+                       q.stale, q.confidence, q.notes
+                FROM platform.data_quality_log q
+                JOIN latest l ON l.source = q.source AND l.latest_at = q.timestamp
+                ORDER BY q.source
                 """
             )
             return [
                 {
                     "source": r["source"],
                     "latest_at": r["latest_at"],
-                    "n_failed": int(r["n_failed"] or 0),
-                    "n_runs": int(r["n_runs"] or 0),
+                    # "n_failed" / "n_runs" preserved for backward-compat with
+                    # the classifier signature: 1/1 when latest run failed,
+                    # 0/1 when it passed.
+                    "n_failed": 1 if (r["stale"] or (r["confidence"] is not None and r["confidence"] < 1.0)) else 0,
+                    "n_runs": 1,
+                    "confidence": float(r["confidence"]) if r["confidence"] is not None else None,
+                    "stale": r["stale"],
+                    "notes": r["notes"],
                 }
                 for r in rows
             ]
@@ -611,15 +624,16 @@ def run_blocking_script(script: str, *, timeout: int = 600) -> tuple[int, str]:
         return -1, f"ERROR: {exc}"
 
 
-def run_detached_script(script: str) -> tuple[int, str]:
+def run_detached_script(script: str, *args: str) -> tuple[int, str]:
     """Pattern B — long script (≥10 min), detached so Streamlit recycles don't
     SIGTERM it. Returns (pid, logfile_path). UI tails the logfile on each
     rerun until the process exits."""
     script_path = REPO_ROOT / script
     ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
-    logfile = LOG_DIR / f"dashboard_{Path(script).stem}_{ts}.log"
+    arg_tag = ("_" + "_".join(args)) if args else ""
+    logfile = LOG_DIR / f"dashboard_{Path(script).stem}{arg_tag}_{ts}.log"
     proc = subprocess.Popen(
-        [str(script_path)],
+        [str(script_path), *args],
         stdout=open(logfile, "w"),
         stderr=subprocess.STDOUT,
         start_new_session=True,  # detach from Streamlit's process group
@@ -1323,7 +1337,91 @@ HEALTH_ACTIONS: dict[str, dict] = {
         "args": (),
         "blocking": False,
     },
+    "validation_rerun": {
+        "label": "Re-run validation",
+        "help": "Re-runs the delistings/constituent/splits checks against current prices_daily. ~15s.",
+        "script": "scripts/run_stage.sh",
+        "args": ("data_validation",),
+        "blocking": False,
+    },
 }
+
+
+def _render_validation_failure_detail(source: str, notes: object) -> None:
+    """Render the per-ticker failure list under a failing validation source.
+
+    ``notes`` is the JSON payload stored in ``data_quality_log.notes`` —
+    a list of ``{ticker, reason, expected, observed}`` dicts. We surface
+    each one so the operator can see WHAT specifically is wrong without
+    running an ad-hoc SQL query.
+
+    Each row also offers a focused remediation when one is meaningful:
+
+      * ``reason == "missing"``        → 🔧 Backfill ticker (re-pulls bars)
+      * ``reason == "ratio_off"``      → 🔧 Re-apply splits (re-runs corp_actions)
+      * ``reason == "stale"``          → 🔧 Run daily update (full refresh)
+
+    Other reasons surface as info-only — investigation required.
+    """
+    if not notes:
+        st.caption("No detail recorded for this failure.")
+        return
+    if isinstance(notes, str):
+        try:
+            notes = json.loads(notes)
+        except Exception:
+            st.code(notes[:500])
+            return
+    if not isinstance(notes, list):
+        st.caption(f"Unexpected notes shape: {type(notes).__name__}")
+        return
+    job_busy = _detached_job_is_live()
+    for i, entry in enumerate(notes[:10]):  # cap to avoid wall-of-text
+        if not isinstance(entry, dict):
+            continue
+        ticker = entry.get("ticker", "?")
+        reason = entry.get("reason", "?")
+        expected = entry.get("expected", "")
+        observed = entry.get("observed", "")
+        cols = st.columns([2, 4, 2, 2, 2])
+        cols[0].markdown(f"<span style='color:#888;'>&nbsp;&nbsp;&nbsp;&nbsp;{ticker}</span>", unsafe_allow_html=True)
+        cols[1].markdown(f"<span style='color:#c62828;'>{reason}</span>", unsafe_allow_html=True)
+        cols[2].caption(f"expected: {expected}"[:50])
+        cols[3].caption(f"observed: {observed}"[:50])
+        action_key = _validation_remediation(source, reason)
+        if action_key is None:
+            cols[4].caption("(investigate)")
+            continue
+        action = HEALTH_ACTIONS[action_key]
+        btn_key = f"val_fix_{source}_{ticker}_{i}".replace(" ", "_")
+        if job_busy:
+            cols[4].button("🔧 busy", key=btn_key + "_busy", disabled=True, use_container_width=True, help="Another job running")
+        else:
+            if cols[4].button(
+                f"🔧 {action['label']}",
+                key=btn_key,
+                help=action["help"],
+                use_container_width=True,
+            ):
+                _dispatch_health_fix(action_key)
+    if len(notes) > 10:
+        st.caption(f"… and {len(notes) - 10} more")
+
+
+def _validation_remediation(source: str, reason: str) -> str | None:
+    """Map a (source, reason) pair from a validation failure to a
+    HEALTH_ACTIONS key. Returns None when the failure isn't reliably
+    one-click fixable (operator needs to investigate)."""
+    if reason == "stale":
+        return "daily_update"
+    if reason == "ratio_off":
+        return "daily_update"  # re-running daily_update re-applies corp_actions
+    if reason == "missing":
+        # A missing-ticker failure in delistings/constituent usually means
+        # the universe ingest didn't cover it. daily_update is the broadest
+        # safe fix.
+        return "daily_update"
+    return None
 
 # Per-stage fix actions — each runs `scripts/run_stage.sh <stage>` which
 # invokes `scripts/ops.py --stage <name>`. Same logging + event shape as
@@ -1344,12 +1442,13 @@ def _dispatch_health_fix(action_key: str) -> None:
     so the detached-job panel can tail its log. Clears the Platform-health
     cache so the panel re-fetches on next render."""
     action = HEALTH_ACTIONS[action_key]
+    extra_args = action.get("args") or ()
     if action.get("blocking"):
         with st.spinner(f"Running {action['label']}..."):
             rc, output = run_blocking_script(action["script"], timeout=300)
         _render_blocking_output(action["label"], rc, output)
     else:
-        pid, logfile = run_detached_script(action["script"])
+        pid, logfile = run_detached_script(action["script"], *extra_args)
         st.session_state["detached_job"] = {
             "name": action["label"],
             "pid": pid,
@@ -1365,7 +1464,6 @@ def _dispatch_stage_fix(stage_name: str) -> None:
     """Launch ``scripts/run_stage.sh <stage_name>`` detached. Same session_state
     + cache-clear contract as ``_dispatch_health_fix``."""
     pid = _spawn_detached(["scripts/run_stage.sh", stage_name])
-    logfile = LOG_DIR / f"dashboard_run_stage_{stage_name}_{datetime.now(UTC):%Y%m%d_%H%M%S}.log"
     st.session_state["detached_job"] = {
         "name": f"Re-run stage: {stage_name}",
         "pid": pid["pid"],
@@ -1506,11 +1604,24 @@ def render_platform_health() -> None:
     # Validation failures aren't one-click fixable (data quality is a
     # symptom, not a switch). Show the roll-up without a Fix button.
     val_color, val_summary, val_detail = classify_validation(h["validation"])
-    _render_health_row("Data validation (7d)", val_color, val_summary)
+    _render_health_row(
+        "Data validation",
+        val_color,
+        val_summary,
+        fix_action="validation_rerun",
+        row_key="validation",
+    )
     if val_detail:
-        with st.expander("Per-source validation detail", expanded=(val_color == "red")):
+        with st.expander("Per-source validation detail (latest run)", expanded=(val_color == "red")):
+            # Build a lookup of latest-run notes keyed by source for the
+            # per-row drill-down. Each failed source shows the actual
+            # offending tickers + reasons so the operator can act.
+            notes_by_source = {r["source"]: r.get("notes") for r in h["validation"]}
             for source, color, text in val_detail:
                 _render_health_row(source, color, text)
+                if color != "green":
+                    notes = notes_by_source.get(f"validation.{source}") or notes_by_source.get(source)
+                    _render_validation_failure_detail(source, notes)
 
 
 def render_actions():
