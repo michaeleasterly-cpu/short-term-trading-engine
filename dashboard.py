@@ -271,6 +271,27 @@ async def _fetch_last_run_timestamps() -> dict:
     return out
 
 
+async def _fetch_recent_momentum_orders() -> list[dict]:
+    """All Momentum (mo_* client-id) orders at Alpaca, newest first."""
+    broker = AlpacaPaperBrokerAdapter()
+    orders = await broker.list_recent_orders(limit=500)
+    out: list[dict] = []
+    for o in orders:
+        if not (o.client_order_id or "").startswith("mo_"):
+            continue
+        out.append({
+            "ticker": o.symbol,
+            "side": getattr(o.side, "value", str(o.side)),
+            "qty": int(o.qty) if o.qty else 0,
+            "status": getattr(o.status, "value", str(o.status)),
+            "submitted_at": o.submitted_at,
+            "filled_at": o.filled_at,
+            "avg_fill_price": float(o.avg_fill_price) if o.avg_fill_price else None,
+            "client_order_id": o.client_order_id,
+        })
+    return out
+
+
 async def _fetch_credibility_all_engines() -> dict:
     """Pull the latest credibility rubric for each engine in SCORECARD_ENGINES."""
     pool = await build_asyncpg_pool(_db_url(), max_size=2)
@@ -549,8 +570,30 @@ def render_ticker_detail(ticker: str):
         )
 
 
+# Human-readable labels for the credibility rubric flags. Used by the
+# scorecard panel to show what's blocking each engine. Order matters —
+# the rubric is presented in roughly logical order (integrity flags first,
+# then overfitting bundle).
+RUBRIC_LABELS: dict[str, str] = {
+    "lookahead_clean":              "Look-ahead clean",
+    "survivorship_inclusive":       "Survivorship-inclusive",
+    "pit_fundamentals":             "PIT fundamentals",
+    "regime_coverage":              "Regime coverage",
+    "out_of_sample_validated":      "Out-of-sample validated",
+    "monte_carlo_drawdown":         "Monte-Carlo drawdown",
+    "sensitivity_surface_flat":     "Sensitivity surface flat",
+    "monte_carlo_sequence_passed":  "Monte-Carlo sequence",
+    "dsr_above_0_90":               "DSR ≥ 0.90",
+    "backtest_length_above_minbtl": "Length ≥ MinBTL",
+    "pbo_passes":                   "PBO passes",
+    "trades_per_param_passes":      "Trades/parameter ratio",
+}
+
+
 def render_credibility_scorecards():
-    """Phase 4 — one compact card per engine, color-coded by gate status."""
+    """Phase 4 — one compact card per engine. BLOCKED cards list the
+    specific rubric flags that are failing so the operator knows what
+    would need to improve to clear the gate."""
     st.subheader("Credibility scorecards")
     try:
         scores = run_async(_fetch_credibility_all_engines())
@@ -571,26 +614,62 @@ def render_credibility_scorecards():
                 unsafe_allow_html=True,
             )
             continue
-        if score.score >= MIN_LIVE_SCORE:
+        passing = score.score >= MIN_LIVE_SCORE
+        if passing:
             bg, fg, glyph, status = "#e6f4ea", "#0a8a3a", "▲", "PASS"
         else:
             bg, fg, glyph, status = "#fbe9e7", "#c92a2a", "▼", "BLOCKED"
-        # Count rubric flags that pass for an at-a-glance check.
+
         rubric_dict = score.model_dump()
-        n_pass = sum(
-            1 for k, v in rubric_dict.items()
-            if isinstance(v, bool) and v
-        )
-        col.markdown(
-            f"<div style='padding:12px;border-radius:6px;background:{bg};"
-            f"text-align:center;'>"
+        passing_flags = [k for k, v in rubric_dict.items() if isinstance(v, bool) and v]
+        failing_flags = [
+            RUBRIC_LABELS.get(k, k)
+            for k, v in rubric_dict.items()
+            if isinstance(v, bool) and not v and k in RUBRIC_LABELS
+        ]
+
+        # Header block — score + status pill
+        header = (
+            f"<div style='padding:12px 12px 6px 12px;border-radius:6px 6px 0 0;"
+            f"background:{bg};text-align:center;'>"
             f"<div style='font-size:0.875em;color:#666;'>{engine.upper()}</div>"
             f"<div style='font-size:1.5em;font-weight:600;color:{fg};'>"
             f"{glyph} {score.score}/100</div>"
-            f"<div style='font-size:0.75em;color:{fg};'>{status}  ·  {n_pass} rubric flags ✓</div>"
-            f"</div>",
-            unsafe_allow_html=True,
+            f"<div style='font-size:0.75em;color:{fg};font-weight:600;'>{status}</div>"
+            f"</div>"
         )
+
+        # Failing-flag list — what's blocking the gate. For PASS engines,
+        # show a green 'all checks pass' line instead.
+        if passing:
+            details = (
+                "<div style='padding:6px 12px 12px 12px;background:#f8fcf9;"
+                "border-radius:0 0 6px 6px;font-size:0.75em;color:#0a8a3a;'>"
+                f"All {len(passing_flags)} rubric checks pass ✓"
+                "</div>"
+            )
+        elif failing_flags:
+            items = "".join(
+                f"<li style='margin-bottom:2px;'>{label}</li>" for label in failing_flags
+            )
+            details = (
+                "<div style='padding:6px 12px 12px 12px;background:#fdf4f4;"
+                "border-radius:0 0 6px 6px;font-size:0.75em;color:#666;'>"
+                f"<div style='font-weight:600;color:#c92a2a;margin-bottom:4px;'>"
+                f"Blocking ({len(failing_flags)}):</div>"
+                f"<ul style='margin:0;padding-left:18px;'>{items}</ul>"
+                "</div>"
+            )
+        else:
+            details = (
+                "<div style='padding:6px 12px 12px 12px;background:#fdf4f4;"
+                "border-radius:0 0 6px 6px;font-size:0.75em;color:#666;'>"
+                f"{len(passing_flags)} flags pass · score still &lt; {MIN_LIVE_SCORE}"
+                "</div>"
+            )
+
+        col.markdown(header + details, unsafe_allow_html=True)
+
     st.caption(f"Data as of {datetime.now(UTC).strftime('%H:%M:%S UTC')}  ·  Gate is ≥{MIN_LIVE_SCORE}/100")
 
 
@@ -653,6 +732,79 @@ def render_recent_activity():
             )
             if len(trades) > 50:
                 st.caption(f"showing latest 50 of {len(trades)}")
+
+
+def render_recent_orders():
+    """Recent momentum orders at the broker. Status histogram + latest 30
+    rows. Useful for verifying that yesterday's queued orders actually
+    filled at the open (counts of `filled` vs `new` answer that)."""
+    st.subheader("Recent orders — Momentum")
+    try:
+        orders = run_async(_fetch_recent_momentum_orders())
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"Could not fetch orders: {exc}")
+        return
+    if not orders:
+        st.info("No `mo_*` orders at the broker.")
+        return
+
+    # Status histogram — big numbers at top, color-coded by category.
+    from collections import Counter
+    statuses = Counter(o["status"] for o in orders)
+    cols = st.columns(max(len(statuses), 1))
+    # Stable ordering: fills/active first, then terminal.
+    status_order = ["filled", "partially_filled", "new", "accepted", "pending_new",
+                    "canceled", "rejected", "expired"]
+    ordered_keys = [s for s in status_order if s in statuses] + sorted(set(statuses) - set(status_order))
+    for col, status in zip(cols, ordered_keys):
+        n = statuses[status]
+        if status == "filled":
+            color = "#0a8a3a"
+        elif status in ("new", "accepted", "pending_new", "partially_filled"):
+            color = "#1565c0"
+        elif status == "canceled":
+            color = "#888"
+        elif status in ("rejected", "expired"):
+            color = "#c92a2a"
+        else:
+            color = "#d68800"
+        col.markdown(
+            f"<div style='text-align:center;padding:8px;'>"
+            f"<div style='font-size:2em;font-weight:600;color:{color};'>{n}</div>"
+            f"<div style='font-size:0.85em;color:#666;'>{status}</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+    # Table of the latest 30 orders.
+    import pandas as pd
+    sorted_orders = sorted(
+        orders,
+        key=lambda x: x["submitted_at"] or datetime.min.replace(tzinfo=UTC),
+        reverse=True,
+    )
+    rows = []
+    for o in sorted_orders[:30]:
+        rows.append({
+            "Submitted": o["submitted_at"],
+            "Ticker": o["ticker"],
+            "Side": o["side"],
+            "Qty": o["qty"],
+            "Status": o["status"],
+            "Fill price": o["avg_fill_price"],
+            "Filled at": o["filled_at"],
+        })
+    df = pd.DataFrame(rows)
+    st.dataframe(
+        df, use_container_width=True, hide_index=True, height=320,
+        column_config={
+            "Fill price": st.column_config.NumberColumn(format="$%.2f"),
+        },
+    )
+    st.caption(
+        f"{len(orders)} total momentum orders at the broker  ·  "
+        f"showing newest {min(30, len(orders))}"
+    )
 
 
 def render_equity_curve():
@@ -1121,6 +1273,9 @@ def main():
     if selected_ticker:
         st.divider()
         render_ticker_detail(selected_ticker)
+
+    st.divider()
+    render_recent_orders()
 
     st.divider()
     render_equity_curve()
