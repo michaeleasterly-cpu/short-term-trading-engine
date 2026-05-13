@@ -138,10 +138,17 @@ The original Phase 4 plan was: run a single historical replay, feed trade lists 
 4. **Re-evaluate credibility** after paper data lands, under either (a) a frequency-adjusted DSR threshold (~0.5 for monthly with 24 obs) or (b) PSR instead of DSR.
 
 Phase 2.5 follow-ups (post-kickoff, before live capital):
-* DBLogHandler wiring to `platform.application_log`
-* Drawdown circuit breaker (pause new entries when portfolio > 10% off rolling peak)
-* Common-stock-only filter (warrants like `XBPEW` slipped into the smoke output despite the T1+T2 universe)
-* Min-price floor ($1) to keep penny stocks out of the decile
+* DBLogHandler wiring to `platform.application_log` — **shipped** (commit fa4dcbc)
+* Drawdown circuit breaker (pause new entries when portfolio > 10% off 60-day rolling peak) — **shipped** (commit d10cec8)
+* Common-stock-only filter + $5 min-price floor — **shipped** (commit bf0c5d2; covers warrants like `XBPEW`)
+* Sector concentration cap — **deferred** (needs `platform.ticker_classifications` table + FMP ingestion handler)
+
+Phase 3 — Rolling-portfolio construction (scoped, no code):
+* Replace monthly all-at-once with per-position aging (~21-day timer, ~1/21 of positions rotate per day). Matches how real production momentum funds trade.
+* Two variants: pure timer-rolling (recommended) vs score-decay exit.
+* Phase 3.0 = backtest only with validation gate; 3.1 = scheduler if 3.0 passes; 3.2 = side-by-side paper migration.
+* Not in scope until the running monthly paper experiment has cleared at least one full rebalance cycle (June 1, 2026).
+* Full design: `docs/superpowers/specs/2026-05-13-momentum-rolling-construction.md`.
 
 ### Phase 4 (publication gate — tip sheet): blocked on credibility + attorney review
 

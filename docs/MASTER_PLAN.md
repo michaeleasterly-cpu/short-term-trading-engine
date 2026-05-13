@@ -332,6 +332,14 @@ The infrastructure is correct; the strategy needs more evidence before the gate 
 
 End-to-end smoke (`scripts/run_momentum_smoke.sh`): plug unit tests → scheduler dry-run → tip-sheet render. Used as the canonical 'did anything break?' gate before kicking off real rebalances.
 
+**Phase 3 — Rolling-portfolio construction (scoped, no code yet):**
+
+The current monthly all-at-once rebalance matches Jegadeesh-Titman's *paper* presentation. Real production momentum funds (AQR, AlphaArchitect's MOM ETF) instead use the **overlapping rolling-portfolio** construction: each position carries its own ~21-day timer, the ~1/21 of positions that age out each day are rotated to fresh top-decile names, no synchronized rebalance day. Mathematically equivalent in expected return; smoother turnover; faster response to new top-decile entrants.
+
+Two variants — pure timer-rolling (recommended for first build) vs score-decay exit (AQR-style, higher turnover). Validation gate: held-back Sharpe must come within 0.2 of monthly's +1.58, with profit factor and drawdown also competitive. Migration plan runs both schedulers in parallel on sibling paper accounts for ≥60 trading days before retiring monthly.
+
+Full design: `docs/superpowers/specs/2026-05-13-momentum-rolling-construction.md`. **Phase 3 work is NOT in scope until the running monthly paper experiment has at least one full rebalance cycle (June 1, 2026).**
+
 ### 4.5 S2 — Short Squeeze Engine (Fifth Build, Satellite)
 
 **Mission:** Detect conditions conducive to short squeezes. Satellite only — permanent 5% capital cap.
