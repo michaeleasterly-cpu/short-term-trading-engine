@@ -202,7 +202,17 @@ class FundamentalsCache:
                 n = await self.backfill(symbol)
             except DataProviderOutage as exc:
                 msg = str(exc)
-                bucket = no_data if "no usable fundamentals" in msg else failures
+                # Classify the FMP error:
+                #   * "no usable fundamentals" — ticker has no data (ETFs,
+                #     recent IPOs); permanent skip.
+                #   * "returned 402" — FMP Starter plan doesn't cover this
+                #     ticker (e.g., BF.B / BRK.B dot-suffix names that
+                #     require Premium). Permanent skip until we upgrade.
+                #   * everything else — transient outage. Counts as a
+                #     real failure that the stage surfaces.
+                is_no_data = "no usable fundamentals" in msg
+                is_premium_gated = "returned 402" in msg
+                bucket = no_data if (is_no_data or is_premium_gated) else failures
                 bucket.append((symbol, msg[:160]))
                 logger.warning(
                     "fundamentals.cache.backfill_all_skipped"

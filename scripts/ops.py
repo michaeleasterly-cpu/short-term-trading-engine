@@ -594,7 +594,10 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     ("corporate_actions",   lambda pool, cfg: (lambda: _stage_corporate_actions(pool)),        HEAVY_STAGE_TIMEOUT_SEC),
     ("coverage_fill",       lambda pool, cfg: (lambda: _stage_coverage_fill(pool)),            STAGE_TIMEOUT_SEC),
     ("fundamentals_refresh",lambda pool, cfg: (lambda: _stage_fundamentals_refresh(pool, cfg)),HEAVY_STAGE_TIMEOUT_SEC),
-    ("data_validation",     lambda pool, cfg: (lambda: _stage_data_validation(pool)),          STAGE_TIMEOUT_SEC),
+    # data_validation runs 6 checks against the live tables — at the
+    # current 20M-row prices_daily it consistently runs ~120-130s.
+    # Bumping to 5 min gives headroom without masking a true hang.
+    ("data_validation",     lambda pool, cfg: (lambda: _stage_data_validation(pool)),          300.0),
     ("universe_prescreener",lambda pool, cfg: (lambda: _stage_universe_prescreener(pool)),     STAGE_TIMEOUT_SEC),
     ("universe_simulation", lambda pool, cfg: _stage_simulate_universe,                        STAGE_TIMEOUT_SEC),
 )

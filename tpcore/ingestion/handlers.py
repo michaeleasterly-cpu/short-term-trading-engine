@@ -335,7 +335,17 @@ async def _handle_daily_bars_all_active(
         for i in range(0, len(all_symbols), batch_size):
             batch = all_symbols[i : i + batch_size]
             try:
-                bars_by_symbol = await fetch_daily_bars_multi(data, batch, start, today)
+                # Daily ingestion uses IEX, not the SIP default. Alpaca's
+                # paper free tier returns 403 on SIP for live data; the
+                # historical backfill uses SIP (where the free tier allows
+                # >15-min-old data), but this is the end-of-day daily
+                # path which must work without a paid SIP subscription.
+                # Tradeoff per CLAUDE.md: IEX silently misses tickers that
+                # trade off-IEX (e.g., some ADRs / OTC names); the daily
+                # path accepts that miss rather than failing entirely.
+                bars_by_symbol = await fetch_daily_bars_multi(
+                    data, batch, start, today, feed="iex"
+                )
             except httpx.HTTPStatusError as exc:
                 failed_batches += 1
                 logger.warning(
