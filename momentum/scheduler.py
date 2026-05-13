@@ -46,6 +46,7 @@ import argparse
 import asyncio
 import os
 import sys
+import uuid
 from datetime import UTC, date as date_t, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
@@ -67,6 +68,7 @@ from tpcore.interfaces.broker import (
     OrderType,
     TimeInForce,
 )
+from tpcore.logging import DBLogHandler
 from tpcore.risk.governor import RiskGovernor
 from tpcore.risk.persistent_store import PostgresRiskStateStore
 
@@ -129,9 +131,11 @@ class MomentumScheduler:
             raise RuntimeError("DATABASE_URL not set — cannot run momentum.scheduler")
 
         pool = await build_asyncpg_pool(db_url)
-        # DBLogHandler intentionally not wired in Phase 2 MVP — the scheduler
-        # logs to structlog console only. Wiring to platform.application_log
-        # comes in Phase 2.5 alongside the run-id audit row.
+        # Phase 2.5 #2 — wire DBLogHandler so SIGNAL / ORDER_SUBMITTED events
+        # land in platform.application_log for the tip-sheet's "Recent
+        # signals" section to find them.
+        run_id = uuid.uuid4()
+        db_log = DBLogHandler(pool=pool, engine="momentum", run_id=run_id)
         try:
             broker = AlpacaPaperBrokerAdapter()
             state_store = PostgresRiskStateStore(pool=pool)
@@ -179,6 +183,16 @@ class MomentumScheduler:
                 current_holdings=current_holdings,
                 as_of=as_of,
             )
+
+            # Emit one SIGNAL event per target so the tip-sheet's signals
+            # section can correlate today's ranking to actual rebalance
+            # output. Done BEFORE the capital gate so even a gate-rejected
+            # rebalance leaves an audit trail of what the engine would have
+            # done.
+            for tgt in decision.targets:
+                await db_log.signal(
+                    tgt.ticker, score=float(tgt.momentum_score), direction="LONG",
+                )
 
             # Plug 4 — capital gate.
             gate = MomentumCapitalGate(engine_equity_usd=equity)
@@ -232,6 +246,10 @@ class MomentumScheduler:
                     ticker=order.ticker, action=order.action.value,
                     qty=order.qty, side=order.side,
                     broker_order_id=placed.broker_order_id,
+                )
+                await db_log.order_submitted(
+                    order.ticker, quantity=order.qty,
+                    order_id=placed.broker_order_id,
                 )
             if failed:
                 logger.warning(
