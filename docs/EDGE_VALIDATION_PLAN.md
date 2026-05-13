@@ -143,6 +143,19 @@ Phase 2.5 follow-ups (post-kickoff, before live capital):
 * Common-stock-only filter (warrants like `XBPEW` slipped into the smoke output despite the T1+T2 universe)
 * Min-price floor ($1) to keep penny stocks out of the decile
 
+### Phase 4 (publication gate — tip sheet): blocked on credibility + attorney review
+
+Separate from the original *First Edge Assessment* (superseded above), this Phase 4 covers the tip-sheet publication path.
+
+- **Phase 1 of tip sheet — Private operator review tool**: build now. Terminal-only output. Credibility gate (≥ 60) enforced by default; `--force` permits private review of unproven engines. Disclaimer printed on every output and is non-removable. No public distribution.
+- **Phase 2 of tip sheet — Gated publication**: blocked until ALL of these are true:
+  1. At least one engine has credibility ≥ 60 from held-back validation
+  2. That engine has accumulated ≥ 30 paper trades with documented outcomes
+  3. Disclaimer language has been reviewed by a securities attorney
+- **Phase 3 of tip sheet — Multi-engine roll-up**: blocked until two-plus engines have passed Phase 2 gates.
+
+Full design and rationale: `docs/superpowers/specs/2026-05-13-tip-sheet-plan.md`. Publication-policy document (`docs/TIP_SHEET_POLICY.md`) is written alongside the Phase 2 build, not before.
+
 ### Phase 5b: Edge-Finding Agent (deferred until Phase 5a outcome)
 
 1. **E1 – Build a hypothesis queue** in `platform.research_queue`.

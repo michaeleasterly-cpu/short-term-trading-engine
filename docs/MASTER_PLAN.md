@@ -397,6 +397,17 @@ The infrastructure is correct; the strategy needs more evidence before the gate 
 - VIX > 40: reduce inverse ETFs by 50% (compounding drag spikes).
 - SH/PSQ re-evaluated every 30 calendar days.
 
+### 4.8 Research Tools
+
+Non-engine tooling that consumes engine outputs (credibility scores, AARs, signals) to support operator review. Strictly internal — research, not product.
+
+**Tip Sheet (`scripts/generate_tip_sheet.py`):**
+- **Phase 1 — Private operator review tool (in scope).** Terminal-only report per engine: layman description, credibility-rubric breakdown, recent signals from `platform.application_log`, recent trade outcomes from `platform.aar_events`. Credibility gate (≥ 60) enforced by default; `--force` flag permits private review of unproven engines. Mandatory non-removable disclaimer printed on every output. **No public distribution. No web endpoint. No file output.**
+- **Phase 2 — Gated publication (deferred).** Adds `--publish` flag. Prerequisites: an engine with credibility ≥ 60 AND ≥ 30 documented paper trades AND disclaimer reviewed by a securities attorney. `--force` is *removed* in `--publish` mode.
+- **Phase 3 — Multi-engine roll-up (deferred).** Cross-engine summary view. Prerequisites: two-plus engines have passed Phase 2.
+
+Full design and rationale: [`docs/superpowers/specs/2026-05-13-tip-sheet-plan.md`](superpowers/specs/2026-05-13-tip-sheet-plan.md). Phase 2 / 3 publication gates also tracked in `docs/EDGE_VALIDATION_PLAN.md` as a Phase-4 follow-up to credibility validation.
+
 ---
 
 ## 5. Platform Services (Deferred)

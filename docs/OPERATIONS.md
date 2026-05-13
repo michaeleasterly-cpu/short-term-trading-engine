@@ -402,6 +402,33 @@ asyncio.run(main())
 * Data Validation Suite is fresh and clean
 * Credibility rubric ≥ 60 (currently structurally unreachable for monthly strategies with the default DSR ≥ 0.95; consider a frequency-adjusted threshold after live data lands)
 
+## 5.45 Tip Sheet — private operator research tool
+
+`scripts/generate_tip_sheet.py` is a terminal-only research report. **Not a publication, not a public feed, not a product.** It prints, per engine: a layman-readable description, the credibility-rubric breakdown, recent signals from `platform.application_log` (`event_type='SIGNAL'`), and recent trade outcomes from `platform.aar_events`. A mandatory disclaimer is appended to every run.
+
+**Usage (Phase 1 — current scope):**
+
+```bash
+set -a; source .env; set +a
+DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python scripts/generate_tip_sheet.py --engine momentum
+```
+
+**Flags:**
+
+- `--engine <name>` — required. One of `sigma | reversion | vector | momentum`.
+- `--since <ISO date>` — optional. Default: 30 days back.
+- `--force` — bypass the credibility ≥ 60 gate. **Intended for private review of unproven engines.** Output still prints the disclaimer; do not share.
+
+**Gates (enforced):**
+
+- Credibility ≥ 60 required by default.
+- `--force` lifts the gate but does NOT lift the disclaimer.
+- **No `--publish` flag in Phase 1.** Output is terminal-only.
+
+Publication-gated phases (Phase 2 / 3) are *not built yet* — they're tracked in `docs/EDGE_VALIDATION_PLAN.md` Phase 4 and require a securities-attorney-reviewed disclaimer plus ≥ 30 documented paper trades on a credibility-passing engine before any shareable output is enabled.
+
+Full design rationale: `docs/superpowers/specs/2026-05-13-tip-sheet-plan.md`.
+
 ## 5.5 Parameter-Search Pipeline
 
 Production edge-discovery runs are driven by `scripts/search_parameters.py`. Random search + walk-forward + final held-back DSR verdict. Imports each engine's `load_*_window_context()` / `run_*_with_context()` programmatically — no subprocess. Per-window data load is shared across all candidates.
