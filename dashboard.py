@@ -1481,9 +1481,9 @@ def _render_stage_detail_row(
 
 HEALTH_ACTIONS: dict[str, dict] = {
     "daily_update": {
-        "label": "Run daily update",
-        "help": "Re-runs scripts/ops.py --update (all 6 stages). Detached, ~30-45 min.",
-        "script": "scripts/run_daily_update.sh",
+        "label": "Run post-close",
+        "help": "Full operator workflow: ops.py --update (7 stages) + cross-table audit + validation re-confirm + compress CSVs. Detached, ~30-45 min.",
+        "script": "scripts/run_post_close.sh",
         "args": (),
         "blocking": False,
     },
@@ -1863,20 +1863,21 @@ def render_actions():
     # ── Daily — every market day ────────────────────────────────────────────
     st.markdown("##### Daily — run every market day after the close")
     st.caption(
-        "Six-stage maintenance: bars → corporate actions → fundamentals → "
-        "validation suite → universe pre-screener → universe simulation. "
-        "Every other workflow depends on this being current; **check the "
+        "Canonical post-close workflow: 7-stage `ops.py --update` (bars → "
+        "corp actions → coverage_fill → fundamentals → validation → "
+        "universe prescreener → universe simulation) → cross-table audit "
+        "→ validation re-confirm → compress backfill CSVs. **Check the "
         "Platform-health panel above for per-stage status.**"
     )
     c1, c2 = st.columns([1, 4])
     if c1.button(
-        "📥  Run daily update",
-        help="Runs scripts/ops.py --update (6 stages). Detached (~30-45 min).",
+        "📥  Run post-close",
+        help="Runs scripts/run_post_close.sh (full one-button workflow). Detached (~30-45 min).",
         use_container_width=True,
     ):
-        pid, logfile = run_detached_script("scripts/run_daily_update.sh")
+        pid, logfile = run_detached_script("scripts/run_post_close.sh")
         st.session_state["detached_job"] = {
-            "name": "Daily update",
+            "name": "Post-close",
             "pid": pid,
             "logfile": logfile,
             "started_at": time.time(),

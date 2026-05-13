@@ -608,3 +608,69 @@ Tables and services that are specified but not yet built:
 | 7 | `platform.tax_lots` + Tax Overlay | Schema deferred |
 
 **Done (kept here for grep history):** `PostgresDataAdapter` (commit `d75076d`, 2026-05-10) — engines now read bars from `platform.prices_daily` exclusively, no live-API fallback. `platform.application_log` + `tpcore.logging.DBLogHandler` (commit `ff468de` + Alembic `20260511_0100`, applied 2026-05-10) — every scheduler run emits a queryable timeline; 7-day retention enforced per-write. Fundamentals cache weekly refresh (`ops/cron_fundamentals_refresh.py` + `FundamentalsCache.backfill_all`, Railway service `fundamentals-refresh-scheduler` cron `0 3 * * SUN`, applied 2026-05-10) — every distinct active ticker in `prices_daily` has its FMP fundamentals refreshed weekly so the lazy cache never serves stale data. `platform.universe_candidates` + Universe Pre-Screener (`tpcore.universe.prescreener.prescreen_momentum` + Alembic `20260513_1237`, applied 2026-05-13) — daily-refreshed per-engine candidate roster; momentum's `setup_detection._load_universe` reads it with a `liquidity_tiers` fallback when empty; V1 populates only `engine='momentum'`.
+
+---
+
+## 6. Data-Layer Hardening (2026-05-13)
+
+The data layer underwent a major cleanup and self-healing refactor on 2026-05-13. Operators reading this doc post-cleanup should know:
+
+### 6.1 Validation suite — now 6 checks (was 3)
+
+`tpcore.quality.validation.suite.run_suite` runs every `--update` stage 5. Each check returns a `CheckResult` and persists one row to `platform.data_quality_log`:
+
+| Check | Scope |
+|---|---|
+| `delistings` | known-bankruptcy fixture vs prices_daily.delisted flag |
+| `constituent` | S&P 500 membership fixture vs prices_daily |
+| `splits` | fixture split-day close-ratio in `[0.85, 1.15]` |
+| **`row_integrity`** (NEW) | every prices_daily row: `close > 0`, `close <= 100M`, OHLC consistent (`high >= GREATEST(open, close, low)`, `low <= LEAST(open, close, high)`), non-NULL OHLCV, no future dates |
+| **`fundamentals_integrity`** (NEW) | every fundamentals_quarterly row: `period_end_date <= filing_date`, `shares_outstanding > 0 OR NULL`, no future filings |
+| **`corporate_actions_integrity`** (NEW) | every corp_actions row: `ratio` in `(0, 1000]`, no NULL action_type, no far-future dates |
+
+Acceptance: `passed=True` on all 6 + `confidence=1.000`. Cleanup scripts exist for each predicate (see `scripts/cleanup_*.py`).
+
+### 6.2 `--update` pipeline now 7 stages
+
+```
+daily_bars → corporate_actions → coverage_fill → fundamentals_refresh
+→ data_validation → universe_prescreener → universe_simulation
+```
+
+* **`coverage_fill`** (NEW) self-heals tier ≤ 2 ticker gaps via Alpaca SIP, 14-day window, after every daily_bars run.
+* **`fundamentals_refresh`** now skip-if-refreshed-within-24h — resumable across timeouts.
+* **`daily_bars`** idempotent: checks count for the most-recent closed session; skips if ≥6,500 tickers already present.
+* Each stage emits `INGESTION_START` / `INGESTION_COMPLETE` / `INGESTION_FAILED` events with `data->>'stage'` set. Failed stages auto-retry once if the error class is transient (timeout, ReadError, 429).
+
+### 6.3 Default Alpaca feed: SIP (was IEX)
+
+`tpcore.data.ingest_alpaca_bars.{fetch_daily_bars, fetch_daily_bars_multi}` and `tpcore.alpaca.data_adapter.AlpacaDataAdapter` all default to `feed="sip"`. IEX silently misses tickers that trade primarily off-IEX (canaries: ALOV, LPCV, PAAC, XBPEW — 0 IEX bars, 22 SIP bars each over the same window). Account is subscribed to SIP.
+
+### 6.4 CSV-first ingest for big pulls
+
+Full backfills go via Phase 1 (download → `data/{alpaca,fmp,corp_actions}_backfill/*.csv`) + Phase 2 (validate-each-row + upsert). Loaders auto-compress source CSV on success. Pattern: `scripts/run_full_backfill.sh`.
+
+Daily incremental still writes direct-to-DB inside `--update` — small deltas don't justify CSV overhead — but the lessons-learned memo (`OPERATIONS.md §6 Lessons learned`) lists "consider CSV-first for any non-trivial pull" as a default.
+
+### 6.5 Cross-table integrity audit
+
+`scripts/run_audit_all_tables.sh` runs 8 cross-reference checks (ticker_not_in_prices across every dependent table, stale_30d on liquidity_tiers, expired on tradier_options_chains). Dashboard's **Cross-table integrity** row surfaces the same. The validation suite + audit together are the operational definition of "clean."
+
+### 6.6 Provenance honesty
+
+`prices_daily.source` is accurate provenance, NOT a quality flag:
+* `source='alpaca'`: bar came from Alpaca (the SIP backfill upserted 1.13M rows here).
+* `source='tradier'`: bar came from the now-deprecated Tradier source AND passed the integrity predicate. These are historical bars Alpaca SIP doesn't carry (older than Alpaca's data window, or delisted before Alpaca had history). They're physically valid; we keep them so backtests have depth. The cleanup deleted 94,979 INVALID tradier rows; the remaining ~19.4M are kept.
+
+### 6.7 Cleanup totals (2026-05-13)
+
+| Table | Action | Rows |
+|---|---|---|
+| `prices_daily` | DELETE (integrity violations) | 94,979 |
+| `prices_daily` | UPSERT (SIP backfill) | 1,132,192 |
+| `fundamentals_quarterly` | DELETE (period_end > filing_date) | 88 |
+| `fundamentals_quarterly` | UPDATE shares_outstanding → NULL | 857 |
+| `corporate_actions` | DELETE (ratio > 1000) | 4 |
+| `tradier_options_chains` | DELETE (expired + orphan ticker) | 6,498 |
+
+Every DELETE is audit-logged in `application_log` (event_type=`DATA_CLEANUP`).

@@ -63,19 +63,24 @@ Inside, the implementation calls `streamlit-lightweight-charts-pro`. If the pack
 🩺 HEALTH TAB (default)
 ┌───────────────────────────────────────────────────────────────────────┐
 │  PLATFORM HEALTH                                       [↻ Refresh]    │
-│  Bars (prices_daily)   🟢 Latest 2026-05-12 (1d) — 7,323 tickers     │
-│  Fundamentals          🟢 Last refresh 0.5d ago — period 2026-Q1     │
-│  Corporate actions     🔴 Latest ingest 8.2d ago  [🔧 Run daily update]│
-│  Universe (momentum)   🟢 Today: 1249 candidates                     │
-│  Last ops --update     🔴 2 stage(s) FAILED       [🔧 Re-run]         │
+│  Bars (prices_daily)    🟢 Latest 2026-05-12 — 7,323 tickers         │
+│  Fundamentals           🟢 Last refresh 0.5d ago — period 2026-Q1    │
+│  Corporate actions      🔴 Latest ingest 8.2d ago [🔧 Run daily update]│
+│  Universe (momentum)    🟢 Today: 1249 candidates                    │
+│  Universe coverage      🟡 Bars: 32/1281 missing (2.5%)              │
+│    ▼ first 20 affected tickers per category                          │
+│  Open orders            🔴 1 pending — 1 older than 24h              │
+│  Last ops --update      🔴 2 stage(s) FAILED      [🔧 Re-run]         │
 │    ▼ stage detail (auto-expanded when red)                            │
 │      daily_bars              🟢 OK                                    │
 │      corporate_actions       🔴 FAILED — ReadError                    │
+│      coverage_fill           🟢 OK                                    │
 │      fundamentals_refresh    🔴 FAILED — timeout                      │
 │      data_validation         🟢 OK                                    │
 │      universe_prescreener    🟡 not in latest run                     │
 │      universe_simulation     🟢 OK                                    │
-│  Data validation (7d)  🔴 Repeated failures        [▶ detail]         │
+│  Cross-table integrity  🟢 8/8 checks clean                          │
+│  Data validation        🟢 Latest run: all 6 check(s) passed         │
 └───────────────────────────────────────────────────────────────────────┘
 
 💹 TRADING TAB

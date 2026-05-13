@@ -608,6 +608,7 @@ KNOWN_STAGES: tuple[str, ...] = tuple(name for name, _, _ in _STAGE_SPECS)
 # auto-retry — re-running won't fix a delisted ticker or a real data gap.
 _RETRYABLE_FAILURE_REASONS: frozenset[str] = frozenset({
     "timeout",
+    "timed out",  # _run_stage emits "timed out after Ns"
     "ReadError",
     "ConnectError",
     "ConnectionError",
