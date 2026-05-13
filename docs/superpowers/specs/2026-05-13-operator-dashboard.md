@@ -57,6 +57,14 @@ Inside, the implementation calls `streamlit-lightweight-charts-pro`. If the pack
 │  equity $99,989  |  cash $99,236  |  positions 1  |  today P&L $-2.72│
 │  [Manual refresh]  [Auto-refresh 30s ☐]                              │
 ├───────────────────────────────────────────────────────────────────────┤
+│  PLATFORM HEALTH                                                      │
+│  Bars (prices_daily)   🟢 Latest 2026-05-12 (1d) — 7,323 tickers     │
+│  Fundamentals          🟢 Last refresh 0.5d ago — period 2026-Q1     │
+│  Corporate actions     🟢 Latest ingest 0.4d ago                     │
+│  Universe (momentum)   🟢 Today: 1249 candidates                     │
+│  Last ops --update     🔴 2 stage(s) FAILED, 4/6 OK   [▶ stage detail]│
+│  Data validation (7d)  🔴 Repeated failures           [▶ detail]      │
+├───────────────────────────────────────────────────────────────────────┤
 │  ACTIONS  (5 buttons + log pane)                                      │
 │  [Run daily update]  [Force-rebalance Momentum]  [Refresh credibility]│
 │  [Smoke test]  [Cancel all open orders]                              │
@@ -179,6 +187,20 @@ Per Nielsen's usability heuristics, Norman's gulfs of execution / evaluation, an
 * **Data-freshness timestamp on every panel**: "data as of HH:MM:SS" — manual-refresh-default silently shows stale numbers without it.
 * **Long-running job heartbeat**: detached `Popen` jobs must surface last-log-line + elapsed time + logfile-mtime. Stale indicator (no log update for >5 min) renders amber; >15 min renders red. Without this, the operator can't distinguish "still running" from "silently dead."
 * **Header P&L formatting**: show absolute *and* percent (`$-2.72  (-0.003%)`). Pure-dollar reads differently than pure-percent; both anchor differently.
+* **Platform-health panel (added 2026-05-13)**: positioned *between* the header and the Actions panel — the operator sees data freshness + last-update status *before* being tempted to push a button. Six rows, each glyph + color + short string:
+
+  | Row | Signal | Green / Amber / Red thresholds |
+  |---|---|---|
+  | Bars (`prices_daily`) | `MAX(date)`, `COUNT(DISTINCT ticker)` | ≤1d / 2-3d / ≥4d |
+  | Fundamentals | `MAX(recorded_at)` from `fundamentals_quarterly` | ≤8d / ≤14d / >14d |
+  | Corporate actions | `MAX(recorded_at)` from `corporate_actions` | ≤2d / ≤7d / >7d |
+  | Universe (momentum) | `COUNT` for today + `MAX(as_of_date)` | today's count ≥500 / today missing / never populated |
+  | Last `ops --update` | Per-stage `INGESTION_COMPLETE` vs `INGESTION_FAILED` events from the newest run's `run_id` | all 6 OK / some missing / any failed |
+  | Data validation (7d) | `data_quality_log` rows where `stale OR confidence<1.0` | 0 failed / ≤2 failed / ≥3 failed |
+
+  The last two rows expand to a per-stage / per-source detail table — auto-expanded when red so the operator sees the failure without having to click.
+
+  The expected stage list is the constant `_OPS_UPDATE_STAGES` in `dashboard.py`; keep it in lockstep with the `cmd_update` orchestrator in `scripts/ops.py`. If a stage is added/removed there, update the constant — the panel will otherwise show false "missing" amber rows.
 
 ### Error recovery distinct from normal output
 

@@ -15,6 +15,7 @@ Phases deferred to follow-up commits:
 
 Spec: docs/superpowers/specs/2026-05-13-operator-dashboard.md
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -43,6 +44,7 @@ from tpcore.db import build_asyncpg_pool
 # Phase 5 — auto-refresh (opt-in, off by default per spec).
 try:
     from streamlit_autorefresh import st_autorefresh
+
     _AUTOREFRESH_AVAILABLE = True
 except ImportError:
     _AUTOREFRESH_AVAILABLE = False
@@ -95,9 +97,7 @@ async def _fetch_account_state() -> dict:
         "equity": float(account.equity) if account.equity else 0.0,
         "cash": float(cash) if cash is not None else 0.0,
         "n_positions": len(positions),
-        "unrealized_pl": sum(
-            float(p.unrealized_pl) for p in positions if p.unrealized_pl is not None
-        ),
+        "unrealized_pl": sum(float(p.unrealized_pl) for p in positions if p.unrealized_pl is not None),
         "fetched_at": datetime.now(UTC),
     }
 
@@ -119,7 +119,8 @@ async def _fetch_ohlc(ticker: str, days: int = 90) -> list[dict]:
                 WHERE ticker = $1 AND date >= CURRENT_DATE - ($2::int * INTERVAL '1 day')
                 ORDER BY date ASC
                 """,
-                ticker, days,
+                ticker,
+                days,
             )
     finally:
         await pool.close()
@@ -153,7 +154,8 @@ async def _fetch_closed_trades_for_ticker(ticker: str, days: int = 365) -> list[
                   AND recorded_at >= NOW() - ($2::int * INTERVAL '1 day')
                 ORDER BY recorded_at DESC
                 """,
-                ticker, days,
+                ticker,
+                days,
             )
     finally:
         await pool.close()
@@ -173,21 +175,24 @@ async def _fetch_closed_trades_for_ticker(ticker: str, days: int = 365) -> list[
             if entry_ts and exit_ts:
                 # Strip time for the chart x-axis (daily candles).
                 from datetime import datetime as _dt
+
                 e = _dt.fromisoformat(entry_ts).date() if isinstance(entry_ts, str) else entry_ts
                 x = _dt.fromisoformat(exit_ts).date() if isinstance(exit_ts, str) else exit_ts
                 qty = float(data.get("qty", 0)) or 1.0
                 entry_px = float(data.get("entry_price", 0))
                 exit_px = float(data.get("exit_price", 0))
                 pnl_pct = (exit_px - entry_px) / entry_px if entry_px else 0.0
-                out.append({
-                    "entry_date": e,
-                    "entry_price": entry_px,
-                    "exit_date": x,
-                    "exit_price": exit_px,
-                    "pnl_pct": pnl_pct,
-                    "qty": qty,
-                    "exit_reason": data.get("exit_reason", ""),
-                })
+                out.append(
+                    {
+                        "entry_date": e,
+                        "entry_price": entry_px,
+                        "exit_date": x,
+                        "exit_price": exit_px,
+                        "pnl_pct": pnl_pct,
+                        "qty": qty,
+                        "exit_reason": data.get("exit_reason", ""),
+                    }
+                )
         except Exception:
             continue
     return out
@@ -213,7 +218,11 @@ async def _fetch_active_entry_for_ticker(ticker: str) -> dict | None:
         side_val = getattr(o.side, "value", str(o.side)).lower()
         if status_val == "filled" and side_val == "buy":
             return {
-                "entry_date": o.filled_at.date() if o.filled_at else o.submitted_at.date() if o.submitted_at else None,
+                "entry_date": o.filled_at.date()
+                if o.filled_at
+                else o.submitted_at.date()
+                if o.submitted_at
+                else None,
                 "entry_price": float(o.avg_fill_price) if o.avg_fill_price else float(pos.avg_entry_price),
                 "qty": int(pos.qty),
             }
@@ -269,6 +278,166 @@ async def _fetch_last_run_timestamps() -> dict:
     return out
 
 
+# Stages emitted by ``scripts/ops.py --update``. Kept in sync with the
+# orchestrator order so the dashboard knows whether the latest run was
+# complete (every stage present) or partial.
+_OPS_UPDATE_STAGES: tuple[str, ...] = (
+    "daily_bars",
+    "corporate_actions",
+    "fundamentals_refresh",
+    "data_validation",
+    "universe_prescreener",
+    "universe_simulation",
+)
+
+
+async def _fetch_platform_health() -> dict:
+    """Snapshot of the operational-health signals the operator needs before trading.
+
+    Bundles five questions into one DB round-trip:
+
+    1. *Are today's bars present?* — latest date in ``platform.prices_daily``.
+    2. *Are fundamentals fresh?* — latest ``recorded_at`` row.
+    3. *Are corporate actions current?* — latest ``recorded_at`` row.
+    4. *Did the universe pre-screener write today's row?* — count + latest date
+       in ``platform.universe_candidates`` for ``engine='momentum'``.
+    5. *Did the last ``ops --update`` run finish cleanly?* — per-stage status
+       derived from the most recent run's ``INGESTION_COMPLETE`` /
+       ``INGESTION_FAILED`` events, plus the count of validation-suite
+       failures in ``data_quality_log`` over the last 7 days.
+
+    Returns a dict keyed by panel-row (``bars``, ``fundamentals``, etc.) with
+    a ``status_color`` (``green``/``amber``/``red``/``unknown``) and a short
+    operator-facing string. The renderer is intentionally dumb — all
+    severity decisions live here so they're testable.
+    """
+    pool = await build_asyncpg_pool(_db_url(), max_size=2)
+    out: dict = {}
+    try:
+        async with pool.acquire() as conn:
+            # 1) Bars freshness.
+            bars_row = await conn.fetchrow(
+                """
+                SELECT MAX(date) AS latest_date,
+                       COUNT(DISTINCT ticker) FILTER (
+                           WHERE date >= CURRENT_DATE - INTERVAL '5 days'
+                       ) AS recent_tickers
+                FROM platform.prices_daily
+                """
+            )
+            out["bars"] = {
+                "latest_date": bars_row["latest_date"] if bars_row else None,
+                "recent_tickers": int(bars_row["recent_tickers"]) if bars_row else 0,
+            }
+
+            # 2) Fundamentals freshness — newest insert wins; the cache
+            # refresher rewrites the row on every refresh, so recorded_at
+            # is the right freshness signal.
+            fund_row = await conn.fetchrow(
+                """
+                SELECT MAX(recorded_at) AS latest_at,
+                       MAX(period_end_date) AS latest_period
+                FROM platform.fundamentals_quarterly
+                """
+            )
+            out["fundamentals"] = {
+                "latest_at": fund_row["latest_at"] if fund_row else None,
+                "latest_period": fund_row["latest_period"] if fund_row else None,
+            }
+
+            # 3) Corporate-actions freshness.
+            ca_at = await conn.fetchval("SELECT MAX(recorded_at) FROM platform.corporate_actions")
+            out["corp_actions"] = {"latest_at": ca_at}
+
+            # 4) Universe pre-screener — today's row count, latest date.
+            uc_row = await conn.fetchrow(
+                """
+                SELECT MAX(as_of_date) AS latest_date,
+                       COUNT(*) FILTER (WHERE as_of_date = CURRENT_DATE) AS today_count
+                FROM platform.universe_candidates
+                WHERE engine = 'momentum'
+                """
+            )
+            out["universe"] = {
+                "latest_date": uc_row["latest_date"] if uc_row else None,
+                "today_count": int(uc_row["today_count"]) if uc_row else 0,
+            }
+
+            # 5a) Last ops --update run — find the newest STARTUP for engine='ops'
+            # that has at least one INGESTION_* event with a stage in its data.
+            last_run = await conn.fetchrow(
+                """
+                SELECT run_id, MAX(recorded_at) AS started_at
+                FROM platform.application_log
+                WHERE engine = 'ops' AND event_type = 'STARTUP'
+                GROUP BY run_id
+                ORDER BY started_at DESC
+                LIMIT 1
+                """
+            )
+            update_run: dict = {"run_id": None, "started_at": None, "stages": {}}
+            if last_run:
+                update_run["run_id"] = last_run["run_id"]
+                update_run["started_at"] = last_run["started_at"]
+                stage_rows = await conn.fetch(
+                    """
+                    SELECT data->>'stage' AS stage, event_type, recorded_at, data
+                    FROM platform.application_log
+                    WHERE engine = 'ops'
+                      AND run_id = $1
+                      AND event_type IN ('INGESTION_COMPLETE', 'INGESTION_FAILED')
+                    ORDER BY recorded_at
+                    """,
+                    last_run["run_id"],
+                )
+                for r in stage_rows:
+                    stage = r["stage"]
+                    if not stage:
+                        continue
+                    update_run["stages"][stage] = {
+                        "event_type": r["event_type"],
+                        "recorded_at": r["recorded_at"],
+                        "data": r["data"],
+                    }
+                update_run["shutdown_at"] = await conn.fetchval(
+                    """
+                    SELECT recorded_at FROM platform.application_log
+                    WHERE engine = 'ops' AND run_id = $1 AND event_type = 'SHUTDOWN'
+                    ORDER BY recorded_at DESC LIMIT 1
+                    """,
+                    last_run["run_id"],
+                )
+            out["update_run"] = update_run
+
+            # 5b) Validation-suite failures in the last 7 days. A row is a
+            # "failure" when ``stale=true`` OR ``confidence < 1.0`` — that's
+            # the same definition ``tpcore.quality`` uses internally.
+            val_rows = await conn.fetch(
+                """
+                SELECT source, MAX(timestamp) AS latest_at,
+                       SUM(CASE WHEN stale OR confidence < 1.0 THEN 1 ELSE 0 END) AS n_failed,
+                       COUNT(*) AS n_runs
+                FROM platform.data_quality_log
+                WHERE source LIKE 'validation.%'
+                  AND timestamp > now() - INTERVAL '7 days'
+                GROUP BY source
+                ORDER BY source
+                """
+            )
+            out["validation"] = [
+                {
+                    "source": r["source"],
+                    "latest_at": r["latest_at"],
+                    "n_failed": int(r["n_failed"] or 0),
+                    "n_runs": int(r["n_runs"] or 0),
+                }
+                for r in val_rows
+            ]
+    finally:
+        await pool.close()
+    return out
+
+
 async def _fetch_recent_momentum_orders() -> list[dict]:
     """All Momentum (mo_* client-id) orders at Alpaca, newest first."""
     broker = AlpacaPaperBrokerAdapter()
@@ -277,16 +446,18 @@ async def _fetch_recent_momentum_orders() -> list[dict]:
     for o in orders:
         if not (o.client_order_id or "").startswith("mo_"):
             continue
-        out.append({
-            "ticker": o.symbol,
-            "side": getattr(o.side, "value", str(o.side)),
-            "qty": int(o.qty) if o.qty else 0,
-            "status": getattr(o.status, "value", str(o.status)),
-            "submitted_at": o.submitted_at,
-            "filled_at": o.filled_at,
-            "avg_fill_price": float(o.avg_fill_price) if o.avg_fill_price else None,
-            "client_order_id": o.client_order_id,
-        })
+        out.append(
+            {
+                "ticker": o.symbol,
+                "side": getattr(o.side, "value", str(o.side)),
+                "qty": int(o.qty) if o.qty else 0,
+                "status": getattr(o.status, "value", str(o.status)),
+                "submitted_at": o.submitted_at,
+                "filled_at": o.filled_at,
+                "avg_fill_price": float(o.avg_fill_price) if o.avg_fill_price else None,
+                "client_order_id": o.client_order_id,
+            }
+        )
     return out
 
 
@@ -337,16 +508,18 @@ async def _fetch_trades_all_engines(days: int = 30) -> list[dict]:
             except Exception:  # noqa: BLE001
                 trades = []
             for t in trades:
-                out.append({
-                    "engine": engine,
-                    "ticker": t.ticker,
-                    "entry_ts": t.entry_ts,
-                    "exit_ts": t.exit_ts,
-                    "entry_price": float(t.entry_price),
-                    "exit_price": float(t.exit_price),
-                    "pnl_net": float(t.pnl_net),
-                    "exit_reason": t.exit_reason.value,
-                })
+                out.append(
+                    {
+                        "engine": engine,
+                        "ticker": t.ticker,
+                        "entry_ts": t.entry_ts,
+                        "exit_ts": t.exit_ts,
+                        "entry_price": float(t.entry_price),
+                        "exit_price": float(t.exit_price),
+                        "pnl_net": float(t.pnl_net),
+                        "exit_reason": t.exit_reason.value,
+                    }
+                )
     finally:
         await pool.close()
     out.sort(key=lambda r: r["exit_ts"], reverse=True)
@@ -490,7 +663,7 @@ def render_header():
     cols[3].markdown(
         f"<div style='font-size:0.875em;color:#666;'>Unrealized P&L</div>"
         f"<div style='font-size:1.75em;font-weight:600;color:{color};'>"
-        f"{glyph} ${pl:+,.2f}  ({pl_pct*100:+.3f}%)</div>",
+        f"{glyph} ${pl:+,.2f}  ({pl_pct * 100:+.3f}%)</div>",
         unsafe_allow_html=True,
     )
     st.caption(f"Data as of {state['fetched_at'].strftime('%H:%M:%S UTC')}")
@@ -508,6 +681,7 @@ def render_holdings():
         st.info("No open Momentum positions.")
         return None
     import pandas as pd
+
     df = pd.DataFrame(holdings)
     df["pnl_pct"] = df["unrealized_pl_pct"] * 100.0
     df = df[["ticker", "qty", "entry_price", "current_price", "market_value", "unrealized_pl", "pnl_pct"]]
@@ -530,7 +704,9 @@ def render_holdings():
             "P&L %": st.column_config.NumberColumn(format="%+.2f%%"),
         },
     )
-    st.caption(f"Data as of {datetime.now(UTC).strftime('%H:%M:%S UTC')}  ·  Click a row to see its price chart")
+    st.caption(
+        f"Data as of {datetime.now(UTC).strftime('%H:%M:%S UTC')}  ·  Click a row to see its price chart"
+    )
     selected_rows = event.selection.rows if event and event.selection else []
     if selected_rows:
         return str(df.iloc[selected_rows[0]]["Ticker"])
@@ -548,23 +724,25 @@ def render_ticker_detail(ticker: str):
         st.error(f"Could not fetch ticker data: {exc}")
         return
     import pandas as pd
+
     ohlc_df = pd.DataFrame(ohlc_rows)
     active_entries = [active] if active else []
     render_ticker_chart(
-        ticker=ticker, ohlc=ohlc_df,
-        closed_trades=closed, active_entries=active_entries,
+        ticker=ticker,
+        ohlc=ohlc_df,
+        closed_trades=closed,
+        active_entries=active_entries,
     )
     # Compact metadata below the chart.
     if closed:
         st.caption(
             f"{len(closed)} closed trades in last 365d  ·  "
             f"latest exit: {closed[0]['exit_date']}  "
-            f"({closed[0]['pnl_pct']*100:+.2f}%)"
+            f"({closed[0]['pnl_pct'] * 100:+.2f}%)"
         )
     if active:
         st.caption(
-            f"Currently held: {active['qty']} sh @ ${active['entry_price']:.2f} "
-            f"opened {active['entry_date']}"
+            f"Currently held: {active['qty']} sh @ ${active['entry_price']:.2f} opened {active['entry_date']}"
         )
 
 
@@ -573,18 +751,18 @@ def render_ticker_detail(ticker: str):
 # the rubric is presented in roughly logical order (integrity flags first,
 # then overfitting bundle).
 RUBRIC_LABELS: dict[str, str] = {
-    "lookahead_clean":              "Look-ahead clean",
-    "survivorship_inclusive":       "Survivorship-inclusive",
-    "pit_fundamentals":             "PIT fundamentals",
-    "regime_coverage":              "Regime coverage",
-    "out_of_sample_validated":      "Out-of-sample validated",
-    "monte_carlo_drawdown":         "Monte-Carlo drawdown",
-    "sensitivity_surface_flat":     "Sensitivity surface flat",
-    "monte_carlo_sequence_passed":  "Monte-Carlo sequence",
-    "dsr_above_0_90":               "DSR ≥ 0.90",
+    "lookahead_clean": "Look-ahead clean",
+    "survivorship_inclusive": "Survivorship-inclusive",
+    "pit_fundamentals": "PIT fundamentals",
+    "regime_coverage": "Regime coverage",
+    "out_of_sample_validated": "Out-of-sample validated",
+    "monte_carlo_drawdown": "Monte-Carlo drawdown",
+    "sensitivity_surface_flat": "Sensitivity surface flat",
+    "monte_carlo_sequence_passed": "Monte-Carlo sequence",
+    "dsr_above_0_90": "DSR ≥ 0.90",
     "backtest_length_above_minbtl": "Length ≥ MinBTL",
-    "pbo_passes":                   "PBO passes",
-    "trades_per_param_passes":      "Trades/parameter ratio",
+    "pbo_passes": "PBO passes",
+    "trades_per_param_passes": "Trades/parameter ratio",
 }
 
 
@@ -647,9 +825,7 @@ def render_credibility_scorecards():
                 "</div>"
             )
         elif failing_flags:
-            items = "".join(
-                f"<li style='margin-bottom:2px;'>{label}</li>" for label in failing_flags
-            )
+            items = "".join(f"<li style='margin-bottom:2px;'>{label}</li>" for label in failing_flags)
             details = (
                 "<div style='padding:6px 12px 12px 12px;background:#fdf4f4;"
                 "border-radius:0 0 6px 6px;font-size:0.75em;color:#666;'>"
@@ -681,6 +857,7 @@ def render_recent_activity():
         st.error(f"Could not fetch recent activity: {exc}")
         return
     import pandas as pd
+
     left, right = st.columns(2)
 
     with left:
@@ -693,12 +870,14 @@ def render_recent_activity():
                 data = s.get("data") or {}
                 ticker = data.get("ticker", "?") if isinstance(data, dict) else "?"
                 score = data.get("score") if isinstance(data, dict) else None
-                rows.append({
-                    "When": s.get("recorded_at"),
-                    "Engine": s.get("engine"),
-                    "Ticker": ticker,
-                    "Score": f"{score:+.3f}" if isinstance(score, (int, float)) else "",
-                })
+                rows.append(
+                    {
+                        "When": s.get("recorded_at"),
+                        "Engine": s.get("engine"),
+                        "Ticker": ticker,
+                        "Score": f"{score:+.3f}" if isinstance(score, (int, float)) else "",
+                    }
+                )
             df = pd.DataFrame(rows)
             st.dataframe(df, use_container_width=True, hide_index=True, height=320)
             if len(signals) > 50:
@@ -712,17 +891,22 @@ def render_recent_activity():
             rows = []
             for t in trades[:50]:
                 pnl_pct = (t["exit_price"] - t["entry_price"]) / t["entry_price"] if t["entry_price"] else 0.0
-                rows.append({
-                    "Exited": t["exit_ts"].date() if hasattr(t["exit_ts"], "date") else t["exit_ts"],
-                    "Engine": t["engine"],
-                    "Ticker": t["ticker"],
-                    "P&L $": t["pnl_net"],
-                    "P&L %": pnl_pct * 100.0,
-                    "Exit reason": t["exit_reason"],
-                })
+                rows.append(
+                    {
+                        "Exited": t["exit_ts"].date() if hasattr(t["exit_ts"], "date") else t["exit_ts"],
+                        "Engine": t["engine"],
+                        "Ticker": t["ticker"],
+                        "P&L $": t["pnl_net"],
+                        "P&L %": pnl_pct * 100.0,
+                        "Exit reason": t["exit_reason"],
+                    }
+                )
             df = pd.DataFrame(rows)
             st.dataframe(
-                df, use_container_width=True, hide_index=True, height=320,
+                df,
+                use_container_width=True,
+                hide_index=True,
+                height=320,
                 column_config={
                     "P&L $": st.column_config.NumberColumn(format="$%+.2f"),
                     "P&L %": st.column_config.NumberColumn(format="%+.2f%%"),
@@ -748,11 +932,20 @@ def render_recent_orders():
 
     # Status histogram — big numbers at top, color-coded by category.
     from collections import Counter
+
     statuses = Counter(o["status"] for o in orders)
     cols = st.columns(max(len(statuses), 1))
     # Stable ordering: fills/active first, then terminal.
-    status_order = ["filled", "partially_filled", "new", "accepted", "pending_new",
-                    "canceled", "rejected", "expired"]
+    status_order = [
+        "filled",
+        "partially_filled",
+        "new",
+        "accepted",
+        "pending_new",
+        "canceled",
+        "rejected",
+        "expired",
+    ]
     ordered_keys = [s for s in status_order if s in statuses] + sorted(set(statuses) - set(status_order))
     for col, status in zip(cols, ordered_keys, strict=False):
         n = statuses[status]
@@ -776,6 +969,7 @@ def render_recent_orders():
 
     # Table of the latest 30 orders.
     import pandas as pd
+
     sorted_orders = sorted(
         orders,
         key=lambda x: x["submitted_at"] or datetime.min.replace(tzinfo=UTC),
@@ -783,26 +977,28 @@ def render_recent_orders():
     )
     rows = []
     for o in sorted_orders[:30]:
-        rows.append({
-            "Submitted": o["submitted_at"],
-            "Ticker": o["ticker"],
-            "Side": o["side"],
-            "Qty": o["qty"],
-            "Status": o["status"],
-            "Fill price": o["avg_fill_price"],
-            "Filled at": o["filled_at"],
-        })
+        rows.append(
+            {
+                "Submitted": o["submitted_at"],
+                "Ticker": o["ticker"],
+                "Side": o["side"],
+                "Qty": o["qty"],
+                "Status": o["status"],
+                "Fill price": o["avg_fill_price"],
+                "Filled at": o["filled_at"],
+            }
+        )
     df = pd.DataFrame(rows)
     st.dataframe(
-        df, use_container_width=True, hide_index=True, height=320,
+        df,
+        use_container_width=True,
+        hide_index=True,
+        height=320,
         column_config={
             "Fill price": st.column_config.NumberColumn(format="$%.2f"),
         },
     )
-    st.caption(
-        f"{len(orders)} total momentum orders at the broker  ·  "
-        f"showing newest {min(30, len(orders))}"
-    )
+    st.caption(f"{len(orders)} total momentum orders at the broker  ·  showing newest {min(30, len(orders))}")
 
 
 def render_equity_curve():
@@ -819,6 +1015,7 @@ def render_equity_curve():
         )
         return
     import pandas as pd
+
     df = pd.DataFrame(history)
     df = df.set_index("timestamp")
     st.line_chart(df["equity"], height=240, use_container_width=True)
@@ -919,6 +1116,254 @@ def _age_seconds(ts) -> float | None:
     return (datetime.now(UTC) - ts).total_seconds()
 
 
+# ────────────────────────────────────────────────────────────────────────────
+# Platform-health panel — surface what the operator needs before trading
+# ────────────────────────────────────────────────────────────────────────────
+
+_GLYPH_OK = "🟢"
+_GLYPH_AGING = "🟡"
+_GLYPH_BAD = "🔴"
+_GLYPH_UNKNOWN = "⚪"
+
+
+def _health_glyph(color: str) -> str:
+    return {
+        "green": _GLYPH_OK,
+        "amber": _GLYPH_AGING,
+        "red": _GLYPH_BAD,
+    }.get(color, _GLYPH_UNKNOWN)
+
+
+def _classify_bars(latest_date) -> tuple[str, str]:
+    """Bars freshness: green if within 1 trading day; amber 2-3; red ≥4."""
+    if latest_date is None:
+        return "red", "No bars in prices_daily"
+    age = (datetime.now(UTC).date() - latest_date).days
+    if age <= 1:
+        color = "green"
+    elif age <= 3:
+        color = "amber"
+    else:
+        color = "red"
+    return color, f"Latest bar: {latest_date.isoformat()} ({age}d ago)"
+
+
+def _classify_fundamentals(latest_at) -> tuple[str, str]:
+    """Fundamentals refresh: green ≤8d, amber ≤14d, red >14d. The Sunday
+    cron is the source; one missed Sunday is amber, two is red."""
+    if latest_at is None:
+        return "red", "No fundamentals rows"
+    secs = _age_seconds(latest_at)
+    if secs is None:
+        return "red", "Unknown age"
+    days = secs / 86400
+    if days <= 8:
+        color = "green"
+    elif days <= 14:
+        color = "amber"
+    else:
+        color = "red"
+    return color, f"Last refresh: {days:.1f}d ago"
+
+
+def _classify_corp_actions(latest_at) -> tuple[str, str]:
+    """Corporate actions: green ≤2d, amber ≤7d, red >7d. Splits/dividends
+    are infrequent so we tolerate a multi-day gap before alarming."""
+    if latest_at is None:
+        return "amber", "No corporate actions ingested"
+    secs = _age_seconds(latest_at)
+    if secs is None:
+        return "amber", "Unknown age"
+    days = secs / 86400
+    if days <= 2:
+        color = "green"
+    elif days <= 7:
+        color = "amber"
+    else:
+        color = "red"
+    return color, f"Latest ingest: {days:.1f}d ago"
+
+
+def _classify_universe(latest_date, today_count: int) -> tuple[str, str]:
+    """Universe pre-screener: green if today's row count is healthy; red
+    otherwise. 'Healthy' is heuristic — momentum universe is normally
+    1,000-1,500 names; <500 implies the prescreener failed or the
+    liquidity_tiers table is degraded."""
+    today = datetime.now(UTC).date()
+    if latest_date is None:
+        return "red", "Never populated"
+    if latest_date < today:
+        age = (today - latest_date).days
+        return "amber", f"Stale: latest as_of {latest_date.isoformat()} ({age}d ago)"
+    if today_count < 500:
+        return "red", f"Today: only {today_count} candidates (<500)"
+    return "green", f"Today: {today_count} candidates"
+
+
+def _classify_update_run(update_run: dict) -> tuple[str, str, list[tuple[str, str, str]]]:
+    """Last ops --update run: green if every stage completed; amber if
+    any stage missing (run incomplete); red if any stage FAILED."""
+    stages = update_run.get("stages") or {}
+    if not stages:
+        return "red", "No recent run found", []
+
+    rows: list[tuple[str, str, str]] = []
+    n_failed = 0
+    n_complete = 0
+    for stage_name in _OPS_UPDATE_STAGES:
+        entry = stages.get(stage_name)
+        if entry is None:
+            rows.append((stage_name, "amber", "not in latest run"))
+            continue
+        if entry["event_type"] == "INGESTION_FAILED":
+            n_failed += 1
+            data = entry["data"]
+            if isinstance(data, str):
+                try:
+                    data = json.loads(data)
+                except Exception:
+                    data = {}
+            reason = (
+                (data.get("reason") if isinstance(data, dict) else None)
+                or (data.get("error") if isinstance(data, dict) else None)
+                or "failed"
+            )
+            rows.append((stage_name, "red", f"FAILED — {reason}"))
+        else:
+            n_complete += 1
+            rows.append((stage_name, "green", "OK"))
+
+    started_at = update_run.get("started_at")
+    started_str = ""
+    if started_at is not None:
+        secs = _age_seconds(started_at)
+        if secs is not None:
+            hours = secs / 3600
+            if hours < 1:
+                started_str = f"{int(secs / 60)}m ago"
+            elif hours < 48:
+                started_str = f"{hours:.1f}h ago"
+            else:
+                started_str = f"{hours / 24:.1f}d ago"
+
+    if n_failed > 0:
+        color = "red"
+        summary = (
+            f"Last run {started_str} — {n_failed} stage(s) FAILED, {n_complete}/{len(_OPS_UPDATE_STAGES)} OK"
+        )
+    elif n_complete < len(_OPS_UPDATE_STAGES):
+        color = "amber"
+        missing = len(_OPS_UPDATE_STAGES) - n_complete
+        summary = f"Last run {started_str} — {n_complete}/{len(_OPS_UPDATE_STAGES)} OK ({missing} missing)"
+    else:
+        color = "green"
+        summary = f"Last run {started_str} — {len(_OPS_UPDATE_STAGES)}/{len(_OPS_UPDATE_STAGES)} stages OK"
+    return color, summary, rows
+
+
+def _classify_validation(rows: list[dict]) -> tuple[str, str, list[tuple[str, str, str]]]:
+    """Data validation suite: green if zero failed rows in last 7 days,
+    amber if any source had ≤2 failed runs, red if any source had ≥3.
+    Each source is a row in the detail table."""
+    if not rows:
+        return "amber", "No validation runs in last 7 days", []
+
+    detail: list[tuple[str, str, str]] = []
+    worst = "green"
+    for r in rows:
+        n_failed = int(r["n_failed"])
+        n_runs = int(r["n_runs"])
+        source = r["source"].replace("validation.", "")
+        if n_failed == 0:
+            color = "green"
+            text = f"{n_runs} runs, all passed"
+        elif n_failed <= 2:
+            color = "amber"
+            text = f"{n_failed}/{n_runs} runs failed"
+            worst = "amber" if worst == "green" else worst
+        else:
+            color = "red"
+            text = f"{n_failed}/{n_runs} runs failed"
+            worst = "red"
+        detail.append((source, color, text))
+
+    if worst == "green":
+        summary = f"All {len(rows)} validation source(s) clean (last 7d)"
+    elif worst == "amber":
+        summary = "Some validation failures (last 7d) — see detail"
+    else:
+        summary = "Repeated validation failures (last 7d) — see detail"
+    return worst, summary, detail
+
+
+def _render_health_row(label: str, color: str, text: str) -> None:
+    glyph = _health_glyph(color)
+    color_hex = {
+        "green": "#0a8a3a",
+        "amber": "#c77700",
+        "red": "#c62828",
+    }.get(color, "#666666")
+    st.markdown(
+        f'<div style="display:flex; gap:1rem; align-items:baseline; padding:0.15rem 0;">'
+        f'<span style="width:18ch; color:#888;">{label}</span>'
+        f"<span>{glyph}</span>"
+        f'<span style="color:{color_hex};">{text}</span>'
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def render_platform_health() -> None:
+    """Visibility-of-system-status panel — heuristic #1 of the dashboard spec.
+
+    Rendered between the header and the Actions panel so the operator sees
+    data freshness + last-update health before being tempted to push a
+    button. Every row is one DB-derived signal with a glyph + color +
+    short string. Two collapsible details: the per-stage breakdown of the
+    last --update run, and the per-source validation roll-up."""
+    st.subheader("Platform health")
+    try:
+        h = run_async(_fetch_platform_health())
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"Could not fetch platform health: {exc}")
+        return
+
+    bars_color, bars_text = _classify_bars(h["bars"]["latest_date"])
+    bars_text += f" — {h['bars']['recent_tickers']:,} tickers (last 5d)"
+    _render_health_row("Bars (prices_daily)", bars_color, bars_text)
+
+    fund_color, fund_text = _classify_fundamentals(h["fundamentals"]["latest_at"])
+    latest_period = h["fundamentals"]["latest_period"]
+    if latest_period is not None:
+        fund_text += f" — latest period {latest_period.isoformat()}"
+    _render_health_row("Fundamentals", fund_color, fund_text)
+
+    ca_color, ca_text = _classify_corp_actions(h["corp_actions"]["latest_at"])
+    _render_health_row("Corporate actions", ca_color, ca_text)
+
+    uni_color, uni_text = _classify_universe(
+        h["universe"]["latest_date"],
+        h["universe"]["today_count"],
+    )
+    _render_health_row("Universe (momentum)", uni_color, uni_text)
+
+    run_color, run_summary, run_detail = _classify_update_run(h["update_run"])
+    _render_health_row("Last ops --update", run_color, run_summary)
+    with st.expander("Stage-by-stage detail of last --update run", expanded=(run_color == "red")):
+        if not run_detail:
+            st.caption("No recent run found in platform.application_log.")
+        else:
+            for stage, color, text in run_detail:
+                _render_health_row(stage, color, text)
+
+    val_color, val_summary, val_detail = _classify_validation(h["validation"])
+    _render_health_row("Data validation (7d)", val_color, val_summary)
+    if val_detail:
+        with st.expander("Per-source validation detail", expanded=(val_color == "red")):
+            for source, color, text in val_detail:
+                _render_health_row(source, color, text)
+
+
 def render_actions():
     st.subheader("Actions")
     _render_process_status_inline()
@@ -931,18 +1376,22 @@ def render_actions():
     # ── Daily — every market day ────────────────────────────────────────────
     st.markdown("##### Daily — run every market day before close")
     st.caption(
-        "Keeps `platform.prices_daily`, fundamentals, and corporate-actions fresh. "
-        "Every other workflow depends on this being current."
+        "Six-stage maintenance: bars → corporate actions → fundamentals → "
+        "validation suite → universe pre-screener → universe simulation. "
+        "Every other workflow depends on this being current; **check the "
+        "Platform-health panel above for per-stage status.**"
     )
     c1, c2 = st.columns([1, 4])
     if c1.button(
         "📥  Run daily update",
-        help="Pulls today's bars + corporate actions + fundamentals refresh. Detached (~30-45 min).",
+        help="Runs scripts/ops.py --update (6 stages). Detached (~30-45 min).",
         use_container_width=True,
     ):
         pid, logfile = run_detached_script("scripts/run_daily_update.sh")
         st.session_state["detached_job"] = {
-            "name": "Daily update", "pid": pid, "logfile": logfile,
+            "name": "Daily update",
+            "pid": pid,
+            "logfile": logfile,
             "started_at": time.time(),
         }
         st.success(f"Launched (pid {pid}); logfile: {logfile}")
@@ -1023,7 +1472,9 @@ def render_actions():
     ):
         pid, logfile = run_detached_script("scripts/run_tier_refresh.sh")
         st.session_state["detached_job"] = {
-            "name": "Tier refresh", "pid": pid, "logfile": logfile,
+            "name": "Tier refresh",
+            "pid": pid,
+            "logfile": logfile,
             "started_at": time.time(),
         }
         st.success(f"Launched (pid {pid}); logfile: {logfile}")
@@ -1136,9 +1587,7 @@ def render_detached_job_panel():
 
     if not status["alive"]:
         if status["logfile_exists"]:
-            st.success(
-                f"✓  {job['name']} finished (pid {job['pid']}, elapsed {elapsed/60:.1f} min)"
-            )
+            st.success(f"✓  {job['name']} finished (pid {job['pid']}, elapsed {elapsed / 60:.1f} min)")
         else:
             st.error(f"✗  {job['name']} pid {job['pid']} not found and no logfile")
         with st.expander("Last 30 log lines", expanded=False):
@@ -1157,16 +1606,16 @@ def render_detached_job_panel():
         heartbeat = f"updated {stale:.0f}s ago"
         color = "#0a8a3a"
     elif stale < 900:  # 15 min
-        heartbeat = f"⚠ no output for {stale/60:.1f} min"
+        heartbeat = f"⚠ no output for {stale / 60:.1f} min"
         color = "#d68800"
     else:
-        heartbeat = f"⚠ STALE — no output for {stale/60:.1f} min"
+        heartbeat = f"⚠ STALE — no output for {stale / 60:.1f} min"
         color = "#c92a2a"
 
     st.markdown(
         f"<div style='padding:10px;border-left:4px solid {color};background:#f8f8f8;'>"
         f"<strong>Running</strong> — {job['name']}  "
-        f"<span style='color:#666;'>pid {job['pid']} · elapsed {elapsed/60:.1f} min · "
+        f"<span style='color:#666;'>pid {job['pid']} · elapsed {elapsed / 60:.1f} min · "
         f"<span style='color:{color};'>{heartbeat}</span></span></div>",
         unsafe_allow_html=True,
     )
@@ -1256,6 +1705,11 @@ def main():
     c1, _ = st.columns([1, 8])
     if c1.button("🔁  Refresh", help="Re-fetch all panels  (keyboard: r)"):
         st.rerun()
+
+    # Platform health goes BEFORE actions — operator should know data freshness
+    # and last-update status before being tempted to push a button.
+    st.divider()
+    render_platform_health()
 
     st.divider()
     render_actions()

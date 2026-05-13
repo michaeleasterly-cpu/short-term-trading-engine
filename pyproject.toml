@@ -78,4 +78,13 @@ ignore = ["E501"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["tests"]
+testpaths = [
+    "tests",
+    "tpcore/tests",
+    "tpcore/quality/validation/tests",
+    "sigma/tests",
+    "reversion/tests",
+    "vector/tests",
+    "momentum/tests",
+    "scripts/tests",
+]

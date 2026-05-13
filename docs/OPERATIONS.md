@@ -54,8 +54,11 @@ This will:
 
 - Refresh trading-universe daily bars, corporate actions, and fundamentals.
 - Run the Data Validation Suite.
+- Populate `platform.universe_candidates` for the momentum engine (Universe Pre-Screener — see `tpcore/universe/prescreener.py`).
 - Run the universe simulation (`scripts/simulate_universe.py`) and report candidate counts per engine.
 - Print a health report.
+
+**Faster path — operator dashboard.** `scripts/run_dashboard.sh` launches a Streamlit UI whose **Platform health** panel surfaces all six freshness signals at a glance (bars, fundamentals, corporate actions, universe candidates, last `--update` per-stage breakdown, validation-suite roll-up over 7 days). Color-coded; failed stages auto-expand. Use this before pushing **Run daily update** — it tells you whether a re-run is even needed.
 
 Per-stage timeouts (`scripts/ops.py`): **120 s** for the light stages (`data_validation`, `universe_simulation`) and **3,600 s** (1 hour) for the heavy ingestion stages (`daily_bars`, `corporate_actions`, `fundamentals_refresh`). The heavy-stage budget was raised twice after the Phase 1 universe expansion (7,300 tickers) — `120s → 1200s → 3600s` (commits `d924491` and `57ec234`) — because the underlying FMP-backed handlers iterate ~73 batches with rate-limit sleeps and need real headroom. On timeout an ERROR row lands in `platform.application_log` and the pipeline moves on to the next stage; a single slow upstream never blocks the whole run.
 
