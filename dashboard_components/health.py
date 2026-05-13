@@ -287,6 +287,36 @@ def classify_open_orders(
     return "red", f"{pending_count} pending — {stale_24h_count} older than 24h"
 
 
+def classify_cross_ref(
+    findings: list[dict[str, Any]],
+) -> tuple[str, str, list[tuple[str, str, str]]]:
+    """Cross-table integrity roll-up.
+
+    ``findings`` is a list of ``{check, table, count}`` dicts produced by
+    the ``_q_cross_ref`` async fetch. Any count > 0 is red; the per-row
+    detail makes each violation actionable.
+    """
+    if not findings:
+        return "green", "Every cross-reference check clean", []
+    detail: list[tuple[str, str, str]] = []
+    worst = "green"
+    n_red = 0
+    for f in findings:
+        n = int(f["count"])
+        label = f"{f['table']}.{f['check']}"
+        if n == 0:
+            detail.append((label, "green", "0"))
+        else:
+            detail.append((label, "red", f"{n:,} rows"))
+            worst = "red"
+            n_red += 1
+    if worst == "green":
+        summary = f"All {len(findings)} cross-reference checks clean"
+    else:
+        summary = f"{n_red}/{len(findings)} cross-reference checks FAILED — see detail"
+    return worst, summary, detail
+
+
 def classify_validation(
     rows: list[dict[str, Any]],
 ) -> tuple[str, str, list[tuple[str, str, str]]]:

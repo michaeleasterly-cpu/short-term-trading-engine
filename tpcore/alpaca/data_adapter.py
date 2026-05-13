@@ -33,12 +33,19 @@ logger = structlog.get_logger(__name__)
 
 
 class AlpacaDataAdapter(DataProviderInterface):
-    """Provides daily bars via the Alpaca free-tier IEX feed.
+    """Provides daily bars via the Alpaca SIP feed (paid tier).
+
+    The default was previously ``"iex"``; switched to ``"sip"`` on
+    2026-05-13 after discovering IEX silently misses tickers that trade
+    primarily off-IEX (e.g. ALOV/LPCV/PAAC/XBPEW). The account is
+    subscribed to SIP; the bigger feed produces ~60% more bars per pull
+    with zero physical-integrity violations.
 
     Args:
         api_key: Alpaca API key (defaults to ``ALPACA_KEY`` env).
         api_secret: Alpaca secret (defaults to ``ALPACA_SECRET`` env).
-        feed: Alpaca data feed; the free tier is ``"iex"``.
+        feed: Alpaca data feed; ``"sip"`` for complete data,
+            ``"iex"`` only when explicitly testing the free-tier subset.
         _client: test-only injection point for the SDK client.
     """
 
@@ -47,7 +54,7 @@ class AlpacaDataAdapter(DataProviderInterface):
         *,
         api_key: str | None = None,
         api_secret: str | None = None,
-        feed: str = "iex",
+        feed: str = "sip",
         _client: Any | None = None,
     ) -> None:
         self._api_key = api_key or os.getenv("ALPACA_KEY")

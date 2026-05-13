@@ -35,6 +35,7 @@ from dashboard_components.health import (
     classify_bars,
     classify_corp_actions,
     classify_coverage_gaps,
+    classify_cross_ref,
     classify_fundamentals,
     classify_open_orders,
     classify_universe,
@@ -491,6 +492,81 @@ async def _fetch_platform_health() -> dict:
             ],
         }
 
+    async def _q_cross_ref() -> list[dict]:
+        """One row per cross-reference / structural check. Surfaces the
+        same findings as ``scripts/audit_all_tables.py`` so the operator
+        sees full data-layer integrity in the dashboard."""
+        checks: list[tuple[str, str, str]] = [
+            (
+                "ticker_not_in_prices",
+                "catalyst_events",
+                """SELECT COUNT(*) FROM platform.catalyst_events ce
+                   LEFT JOIN (SELECT DISTINCT ticker FROM platform.prices_daily) p
+                     ON p.ticker = ce.ticker
+                   WHERE p.ticker IS NULL""",
+            ),
+            (
+                "ticker_not_in_prices",
+                "corporate_actions",
+                """SELECT COUNT(*) FROM platform.corporate_actions ca
+                   LEFT JOIN (SELECT DISTINCT ticker FROM platform.prices_daily) p
+                     ON p.ticker = ca.ticker
+                   WHERE p.ticker IS NULL""",
+            ),
+            (
+                "ticker_not_in_prices",
+                "fundamentals_quarterly",
+                """SELECT COUNT(*) FROM platform.fundamentals_quarterly fq
+                   LEFT JOIN (SELECT DISTINCT ticker FROM platform.prices_daily) p
+                     ON p.ticker = fq.ticker
+                   WHERE p.ticker IS NULL""",
+            ),
+            (
+                "ticker_not_in_prices",
+                "liquidity_tiers",
+                """SELECT COUNT(*) FROM platform.liquidity_tiers lt
+                   LEFT JOIN (SELECT DISTINCT ticker FROM platform.prices_daily) p
+                     ON p.ticker = lt.ticker
+                   WHERE p.ticker IS NULL""",
+            ),
+            (
+                "ticker_not_in_prices",
+                "universe_candidates",
+                """SELECT COUNT(*) FROM platform.universe_candidates uc
+                   LEFT JOIN (SELECT DISTINCT ticker FROM platform.prices_daily) p
+                     ON p.ticker = uc.ticker
+                   WHERE p.ticker IS NULL""",
+            ),
+            (
+                "expired",
+                "tradier_options_chains",
+                "SELECT COUNT(*) FROM platform.tradier_options_chains WHERE expiration_date < CURRENT_DATE",
+            ),
+            (
+                "ticker_not_in_prices",
+                "tradier_options_chains",
+                """SELECT COUNT(*) FROM platform.tradier_options_chains tc
+                   LEFT JOIN (SELECT DISTINCT ticker FROM platform.prices_daily) p
+                     ON p.ticker = tc.ticker
+                   WHERE p.ticker IS NULL""",
+            ),
+            (
+                "stale_30d",
+                "liquidity_tiers",
+                "SELECT COUNT(*) FROM platform.liquidity_tiers WHERE last_updated < now() - INTERVAL '30 days'",
+            ),
+        ]
+        async with pool.acquire() as conn:
+            findings: list[dict] = []
+            for check_name, table_name, sql in checks:
+                n = await conn.fetchval(sql)
+                findings.append({
+                    "check": check_name,
+                    "table": table_name,
+                    "count": int(n or 0),
+                })
+        return findings
+
     async def _q_validation() -> list[dict]:
         # Show ONLY the latest run per source. A 7-day aggregate would
         # surface stale history as "current failures" — exactly the bug
@@ -531,7 +607,7 @@ async def _fetch_platform_health() -> dict:
             ]
 
     try:
-        bars, fund, ca, uni, run, val, coverage, orders = await asyncio.gather(
+        bars, fund, ca, uni, run, val, coverage, orders, cross_ref = await asyncio.gather(
             _q_bars(),
             _q_fundamentals(),
             _q_corp_actions(),
@@ -540,6 +616,7 @@ async def _fetch_platform_health() -> dict:
             _q_validation(),
             _q_coverage_gaps(),
             _q_open_orders(),
+            _q_cross_ref(),
         )
         out["bars"] = bars
         out["fundamentals"] = fund
@@ -549,6 +626,7 @@ async def _fetch_platform_health() -> dict:
         out["validation"] = val
         out["coverage"] = coverage
         out["open_orders"] = orders
+        out["cross_ref"] = cross_ref
     finally:
         await pool.close()
     return out
@@ -1739,6 +1817,19 @@ def render_platform_health() -> None:
 
     # Validation failures aren't one-click fixable (data quality is a
     # symptom, not a switch). Show the roll-up without a Fix button.
+    # Cross-table integrity (was scripts/audit_all_tables.sh — now inline)
+    cr_color, cr_summary, cr_detail = classify_cross_ref(h["cross_ref"])
+    _render_health_row(
+        "Cross-table integrity",
+        cr_color,
+        cr_summary,
+        row_key="cross_ref",
+    )
+    if cr_color != "green":
+        with st.expander("Per-table cross-reference detail", expanded=True):
+            for label, color, text in cr_detail:
+                _render_health_row(label, color, text)
+
     val_color, val_summary, val_detail = classify_validation(h["validation"])
     _render_health_row(
         "Data validation",

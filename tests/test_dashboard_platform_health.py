@@ -14,6 +14,7 @@ from dashboard_components.health import (
     classify_bars,
     classify_corp_actions,
     classify_coverage_gaps,
+    classify_cross_ref,
     classify_fundamentals,
     classify_open_orders,
     classify_universe,
@@ -327,3 +328,36 @@ def test_open_orders_red_when_multiple_stale():
     color, text = classify_open_orders(pending_count=5, stale_24h_count=3)
     assert color == "red"
     assert "3 older than 24h" in text
+
+
+# ─── Cross-reference roll-up ────────────────────────────────────────────────
+
+
+def test_cross_ref_green_when_no_findings():
+    color, summary, detail = classify_cross_ref([])
+    assert color == "green"
+    assert "clean" in summary
+    assert detail == []
+
+
+def test_cross_ref_green_when_all_zero():
+    findings = [
+        {"check": "ticker_not_in_prices", "table": "fundamentals_quarterly", "count": 0},
+        {"check": "expired", "table": "tradier_options_chains", "count": 0},
+    ]
+    color, summary, detail = classify_cross_ref(findings)
+    assert color == "green"
+    assert all(c == "green" for _, c, _ in detail)
+
+
+def test_cross_ref_red_when_any_nonzero():
+    findings = [
+        {"check": "ticker_not_in_prices", "table": "fundamentals_quarterly", "count": 0},
+        {"check": "expired", "table": "tradier_options_chains", "count": 2494},
+    ]
+    color, summary, detail = classify_cross_ref(findings)
+    assert color == "red"
+    assert "1/2" in summary
+    by = {f"{x[0]}": x for x in detail}
+    assert by["tradier_options_chains.expired"][1] == "red"
+    assert by["fundamentals_quarterly.ticker_not_in_prices"][1] == "green"
