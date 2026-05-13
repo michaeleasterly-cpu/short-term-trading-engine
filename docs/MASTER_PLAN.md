@@ -413,6 +413,14 @@ Full design: `docs/superpowers/specs/2026-05-13-momentum-rolling-construction.md
 
 Non-engine tooling that consumes engine outputs (credibility scores, AARs, signals) to support operator review. Strictly internal — research, not product.
 
+**Operator Dashboard (`dashboard.py`):**
+- **Phase 1 (in scope, building now):** single-page local Streamlit web UI replacing the 8 separate shell scripts the operator runs daily. Read-mostly view (header, holdings, equity curve, credibility scorecards, signals + AARs, today's recommendations) + action buttons (daily update, force-rebalance, refresh credibility, smoke test, cancel-all-orders).
+- **Chart library**: `streamlit-lightweight-charts-pro` (TradingView Lightweight Charts wrapper) — only Streamlit-compatible option with first-class trade-marker API. Wrapped in a one-file adapter so Plotly fallback is a 1-file swap if maintenance becomes an issue.
+- **Subprocess pattern**: short scripts blocking (`subprocess.run`); long scripts (`run_daily_update.sh` 30-45 min) detached via `Popen(start_new_session=True)` + logfile tail so Streamlit worker recycles don't SIGTERM the job.
+- **HCI**: typed-confirmation modals on destructive actions, heartbeat indicators on detached jobs, data-freshness timestamps per panel, keyboard shortcuts (`r` refresh, `Esc` modal), accessibility (color + glyph, never color alone).
+- **NOT in scope**: order entry (dashboard dispatches scripts, never submits orders directly), public exposure (localhost binding only), authentication (single operator on personal Mac).
+- Full design: [`docs/superpowers/specs/2026-05-13-operator-dashboard.md`](superpowers/specs/2026-05-13-operator-dashboard.md). Sequenced **before** Rolling-Momentum (Phase 3) — see that spec for the prioritization rationale.
+
 **Tip Sheet (`scripts/generate_tip_sheet.py`):**
 - **Phase 1 — Private operator review tool (in scope).** Terminal-only report per engine: layman description, credibility-rubric breakdown, recent signals from `platform.application_log`, recent trade outcomes from `platform.aar_events`. Credibility gate (≥ 60) enforced by default; `--force` flag permits private review of unproven engines. Mandatory non-removable disclaimer printed on every output. **No public distribution. No web endpoint. No file output.**
 - **Phase 2 — Gated publication (deferred).** Adds `--publish` flag. Prerequisites: an engine with credibility ≥ 60 AND ≥ 30 documented paper trades AND disclaimer reviewed by a securities attorney. `--force` is *removed* in `--publish` mode.
