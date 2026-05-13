@@ -73,6 +73,23 @@ A research tool — `scripts/generate_tip_sheet.py` — that renders, per engine
 
 ---
 
+## Phase 1.5 — Historical-replay view (deferred; needs a real signal→trade FK)
+
+**Status:** scoped, not built.
+
+A competing Phase-1 spec (DeepSeek 2026-05-13) proposed a `--past` flag that joins SIGNAL events to AAR outcomes on `ticker` within ±5 trading days, rendering a single table of [Date, Ticker, Score, Direction, Outcome, P&L%] + a `N signals | M acted on | W win | L loss | P pending` summary.
+
+**Why it's not in Phase 1**: the ±5-trading-day join is structurally wrong for our engines. Momentum holds 21+ trading days, so a 5-day window systematically *misses* the engine currently trading; worse, it can silently produce wrong matches (same ticker, different trade). For Sigma/Reversion/Vector the window happens to fit, but those engines aren't paper-trading and have no AAR rows to match.
+
+**Build path when it's worth doing**:
+
+1. Add a `signal_id UUID` column to `platform.aar_events` (or co-locate via `client_order_id`).
+2. At order-submission time in each engine's scheduler, stamp the originating signal's UUID into the order's `client_order_id` and copy it onto the AAR when the position closes.
+3. Then the join is deterministic — no time window heuristic.
+4. *Then* build the `--past` view as a separate command (or flag) that renders the joined table.
+
+Until step 1 lands, the current sectioned format (Recent signals + Recent trades as independent panels) is the honest one — the operator correlates them mentally, but no false-positive matches.
+
 ## Phase 2 — Gated publication (build when an engine earns it)
 
 **Description:** The same script, but output can be shared. The credibility gate is active and non-overrideable for any shared output.
