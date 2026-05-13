@@ -310,7 +310,12 @@ async def _fetch_platform_health() -> dict:
     out: dict = {}
     try:
         async with pool.acquire() as conn:
-            # 1) Bars freshness.
+            # 1) Bars freshness. The outer WHERE clause is critical:
+            # ``MAX(date)`` over the full 20M-row prices_daily table takes
+            # ~15s because the only indexes are on ``(ticker, date)``, not
+            # ``(date)`` alone. Bounding to the last 10 days lets the
+            # planner range-scan; we lose the ability to detect "bars are
+            # 11+ days stale" but that's already deep into the red zone.
             bars_row = await conn.fetchrow(
                 """
                 SELECT MAX(date) AS latest_date,
@@ -318,6 +323,7 @@ async def _fetch_platform_health() -> dict:
                            WHERE date >= CURRENT_DATE - INTERVAL '5 days'
                        ) AS recent_tickers
                 FROM platform.prices_daily
+                WHERE date > CURRENT_DATE - INTERVAL '10 days'
                 """
             )
             out["bars"] = {
@@ -1146,6 +1152,16 @@ def _render_health_row(label: str, color: str, text: str) -> None:
     )
 
 
+@st.cache_data(ttl=180, show_spinner=False)
+def _fetch_platform_health_cached() -> dict:
+    """Sync wrapper around ``_fetch_platform_health`` so Streamlit can
+    cache the result. The fetcher hits the live DB and the bars query
+    alone is ~4s — without this cache, every dashboard rerun re-paid the
+    cost. 3-minute TTL is well shorter than the daily cadence at which
+    these signals can actually change."""
+    return run_async(_fetch_platform_health())
+
+
 def render_platform_health() -> None:
     """Visibility-of-system-status panel — heuristic #1 of the dashboard spec.
 
@@ -1154,9 +1170,13 @@ def render_platform_health() -> None:
     button. Every row is one DB-derived signal with a glyph + color +
     short string. Two collapsible details: the per-stage breakdown of the
     last --update run, and the per-source validation roll-up."""
-    st.subheader("Platform health")
+    header_l, header_r = st.columns([6, 1])
+    header_l.subheader("Platform health")
+    if header_r.button("↻ Refresh", help="Force-refresh platform health (clears the 3-min cache)", key="health_force_refresh"):
+        _fetch_platform_health_cached.clear()
+        st.rerun()
     try:
-        h = run_async(_fetch_platform_health())
+        h = _fetch_platform_health_cached()
     except Exception as exc:  # noqa: BLE001
         st.error(f"Could not fetch platform health: {exc}")
         return
