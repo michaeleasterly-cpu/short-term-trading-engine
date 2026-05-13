@@ -868,11 +868,16 @@ def render_actions():
     c1, c2 = st.columns([1, 4])
     if c1.button(
         "🧪  Refresh liquidity tiers",
-        help="Recomputes per-ticker round-trip costs from recent daily bars. Long-running (~20-30 min); detached.",
+        help="Re-runs Corwin-Schultz bootstrap + re-aggregates platform.liquidity_tiers. Long-running (~20-30 min); detached.",
         use_container_width=True,
-        disabled=True,  # Phase 6 — needs a wrapper script first
     ):
-        st.info("Phase 6 — needs a `scripts/run_tier_refresh.sh` wrapper. See backlog.")
+        pid, logfile = run_detached_script("scripts/run_tier_refresh.sh")
+        st.session_state["detached_job"] = {
+            "name": "Tier refresh", "pid": pid, "logfile": logfile,
+            "started_at": time.time(),
+        }
+        st.success(f"Launched (pid {pid}); logfile: {logfile}")
+        st.rerun()
     with c2:
         secs = _age_seconds(last.get("tier_refresh"))
         # Quarterly: fresh < 90 days, stale > 180 days.
