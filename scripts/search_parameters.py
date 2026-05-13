@@ -195,28 +195,77 @@ class SliceMetrics:
         }
 
 
-def compute_slice_metrics(returns: list[float], span_days: int) -> SliceMetrics:
-    """Annualized Sharpe + profit factor + drawdown + win rate from raw pnl_pct list."""
-    n = len(returns)
-    if n == 0:
+def compute_slice_metrics_from_trades(
+    trades: list[Any], span_days: int,
+) -> SliceMetrics:
+    """Aggregate trades into per-period portfolio returns, then compute metrics.
+
+    Trades sharing the same ``entry_date`` are treated as one rebalance
+    period — their pnl_pcts are equal-weighted into a single portfolio
+    period return. For sequential single-position engines (Sigma/Reversion/
+    Vector) each entry_date already has at most one trade, so the
+    aggregation is a no-op. For parallel-position engines (Momentum) the
+    ~130 concurrent ticker-month trades collapse into one period return.
+
+    Equity curve uses geometric (multiplicative) compounding, which is
+    correct for both modes — the previous arithmetic ``cumsum`` was wrong
+    in both, but the bug was masked for single-position strategies with
+    small pnl_pcts where arithmetic ≈ geometric.
+
+    Sharpe is annualized via *periods*/year (not trades/year), which is
+    the statistically meaningful denominator for portfolio strategies.
+    """
+    if not trades:
         return SliceMetrics(0, 0.0, 0.0, 0.0, 0.0)
-    arr = np.asarray(returns, dtype=float)
-    wins = arr[arr > 0]
-    losses = arr[arr < 0]
-    win_rate = float(len(wins) / n)
-    trades_per_year = n / (span_days / 365.25) if span_days else n
-    sharpe = (
-        float(arr.mean() / arr.std(ddof=1) * math.sqrt(trades_per_year))
-        if arr.std(ddof=1) > 0 and n > 1
-        else 0.0
+    # Group by entry_date — each unique entry_date is one rebalance period.
+    by_date: dict[Any, list[float]] = {}
+    for t in trades:
+        by_date.setdefault(t.entry_date, []).append(float(t.pnl_pct))
+    period_returns_arr = np.array(
+        [float(np.mean(pnls)) for _, pnls in sorted(by_date.items())],
+        dtype=float,
     )
-    equity = np.concatenate(([1.0], 1.0 + np.cumsum(arr)))
+    n_periods = len(period_returns_arr)
+    if n_periods == 0:
+        return SliceMetrics(0, 0.0, 0.0, 0.0, 0.0)
+
+    wins = period_returns_arr[period_returns_arr > 0]
+    losses = period_returns_arr[period_returns_arr < 0]
+    win_rate = float(len(wins) / n_periods)
+    periods_per_year = n_periods / (span_days / 365.25) if span_days else n_periods
+    if period_returns_arr.std(ddof=1) > 0 and n_periods > 1:
+        sharpe = float(
+            period_returns_arr.mean() / period_returns_arr.std(ddof=1)
+            * math.sqrt(periods_per_year)
+        )
+    else:
+        sharpe = 0.0
+
+    # Geometric equity curve = ∏(1 + r_period).
+    equity = np.concatenate(([1.0], np.cumprod(1.0 + period_returns_arr)))
     peak = np.maximum.accumulate(equity)
     max_dd = float(((equity - peak) / peak).min())
     gross_w = float(wins.sum()) if len(wins) else 0.0
     gross_l = float(-losses.sum()) if len(losses) else 0.0
     pf = float(gross_w / gross_l) if gross_l > 0 else float("inf")
-    return SliceMetrics(n_trades=n, sharpe=sharpe, profit_factor=pf, max_drawdown=max_dd, win_rate=win_rate)
+    # n_trades reports the raw position count for transparency; metrics use n_periods.
+    return SliceMetrics(
+        n_trades=len(trades), sharpe=sharpe, profit_factor=pf,
+        max_drawdown=max_dd, win_rate=win_rate,
+    )
+
+
+def period_returns_from_trades(trades: list[Any]) -> list[float]:
+    """Aggregate per-trade pnl_pcts to per-rebalance-period portfolio returns.
+
+    Same grouping as :func:`compute_slice_metrics_from_trades`. Exposed so
+    the DSR computation can operate on the statistically-meaningful unit."""
+    if not trades:
+        return []
+    by_date: dict[Any, list[float]] = {}
+    for t in trades:
+        by_date.setdefault(t.entry_date, []).append(float(t.pnl_pct))
+    return [float(np.mean(pnls)) for _, pnls in sorted(by_date.items())]
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -308,12 +357,12 @@ def _evaluate_candidate_with_context(
             error=str(exc),
         )
 
-    holdout_returns = [
-        float(t.pnl_pct) for t in result.trade_log
+    holdout_trades = [
+        t for t in result.trade_log
         if window.holdout_start <= t.entry_date <= window.holdout_end
     ]
     span_days = (window.holdout_end - window.holdout_start).days or 1
-    slice_metrics = compute_slice_metrics(holdout_returns, span_days)
+    slice_metrics = compute_slice_metrics_from_trades(holdout_trades, span_days)
     return TrialResult(
         trial_id=trial_id, window_label=window.label(), parameters=parameters,
         holdout=slice_metrics, full_credibility_score=int(result.credibility_score),
@@ -605,14 +654,18 @@ async def amain(args: argparse.Namespace) -> int:
         overrides=winner_params,
         universe=universe,
     )
-    # Slice to held-back only.
-    held_returns = [
-        float(t.pnl_pct) for t in final_result.trade_log
+    # Slice to held-back only. DSR is computed on period-aggregated returns
+    # (one observation per rebalance), which is the statistically-meaningful
+    # unit; computing it on per-position trades would double-count concurrent
+    # positions and produce nonsense.
+    held_trades = [
+        t for t in final_result.trade_log
         if args.final_holdout_start <= t.entry_date <= args.final_holdout_end
     ]
     span_days = (args.final_holdout_end - args.final_holdout_start).days or 1
-    held_metrics = compute_slice_metrics(held_returns, span_days)
-    dsr = compute_dsr_for_verdict(held_returns, n_trials=args.trials)
+    held_metrics = compute_slice_metrics_from_trades(held_trades, span_days)
+    held_period_returns = period_returns_from_trades(held_trades)
+    dsr = compute_dsr_for_verdict(held_period_returns, n_trials=args.trials)
 
     print(f"  Trade count        : {held_metrics.n_trades}")
     print(f"  Sharpe (held-back) : {held_metrics.sharpe:+.3f}")
