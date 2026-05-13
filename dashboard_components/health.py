@@ -267,6 +267,66 @@ def classify_coverage_gaps(
     return color, summary
 
 
+def classify_daemons(daemons: list[dict[str, Any]]) -> tuple[str, str, list[tuple[str, str, str]]]:
+    """Roll-up of the three platform daemons (trade_monitor, post_close,
+    allocator). Each daemon entry:
+
+      {'name': str, 'installed': bool, 'last_run_at': datetime | None,
+       'last_exit': int | None, 'kind': 'persistent' | 'scheduled',
+       'next_run_hint': str | None}
+
+    Severity:
+      red   — any required daemon NOT installed
+      amber — a scheduled daemon's last_exit was non-zero, OR persistent
+              daemon hasn't logged in 24h
+      green — all installed + last runs healthy
+    """
+    if not daemons:
+        return "red", "No daemons configured", []
+    detail: list[tuple[str, str, str]] = []
+    worst = "green"
+    not_installed = 0
+    for d in daemons:
+        name = d["name"]
+        if not d.get("installed"):
+            color = "red"
+            text = "not installed — run scripts/install_all_daemons.sh"
+            worst = "red"
+            not_installed += 1
+        elif d.get("kind") == "persistent":
+            # trade_monitor — log file mtime is the heartbeat
+            age = d.get("last_log_age_sec")
+            if age is None:
+                color, text = "amber", "installed; no log activity yet"
+                worst = "amber" if worst == "green" else worst
+            elif age > 24 * 3600:
+                color, text = "amber", f"log silent for {age/3600:.0f}h"
+                worst = "amber" if worst == "green" else worst
+            else:
+                color, text = "green", f"running; log active {age/60:.0f}m ago"
+        else:
+            # Scheduled daemon — surface last exit + next-run hint
+            exit_code = d.get("last_exit")
+            last_run = d.get("last_run_at")
+            hint = d.get("next_run_hint") or ""
+            if last_run is None:
+                color, text = "amber", f"installed, never run yet — next: {hint}"
+                worst = "amber" if worst == "green" else worst
+            elif exit_code != 0:
+                color, text = "amber", f"last exit {exit_code}; next: {hint}"
+                worst = "amber" if worst == "green" else worst
+            else:
+                color, text = "green", f"OK last run; next: {hint}"
+        detail.append((name, color, text))
+    if not_installed:
+        summary = f"{not_installed}/{len(daemons)} daemon(s) not installed"
+    elif worst == "amber":
+        summary = "Daemons installed; one or more need attention"
+    else:
+        summary = f"All {len(daemons)} daemons installed and healthy"
+    return worst, summary, detail
+
+
 def classify_open_orders(
     pending_count: int,
     stale_24h_count: int,

@@ -78,6 +78,28 @@ Two items from the 2026-05-13 hangnail review are explicitly NOT being built. Re
 
 2. **`scripts/replay_history.py` (EDGE_VALIDATION_PLAN Phase 3)** — never built. Per the plan itself: *"Phase 4 (was: run a single historical replay, feed trade lists into OverfittingDiagnostic, decide go/no-go) fired across all four engines via the Phase 2.5 parameter-search pipeline."* The search runs the entire historical period across many parameter combinations; a single-replay script is duplicative. If we ever need engine-level smoke against a frozen historical window, the search scripts (`scripts/run_sigma_search.sh`, etc.) provide it with finer-grained output.
 
+### Daemons — one-button install (2026-05-14)
+
+The platform runs three launchd LaunchAgents on the operator's Mac. After this single command, nothing else needs operator attention:
+
+```bash
+scripts/install_all_daemons.sh
+```
+
+| Daemon | What it does | Schedule |
+|---|---|---|
+| `trade_monitor` | Persistent. Watches Alpaca `TradingStream` for fills, submits Tier 2 cascade for Sigma/Reversion. Auto-restart on crash. | `KeepAlive` on crash |
+| `post_close` | Daily refresh: 7-stage `ops --update` → audit → validation → compress → engine sweep | Mon-Fri 21:30 UTC |
+| `allocator` | Cross-engine capital rebalance | Mon 13:00 UTC |
+
+The dashboard's **Daemons (launchd)** row goes 🔴 when any agent isn't installed, with an inline 🔧 Install all daemons button. Logs at `~/Library/Logs/short-term-trading-engine/{trade-monitor,post-close,allocator}.{log,err}`.
+
+Uninstall:
+```bash
+launchctl unload ~/Library/LaunchAgents/com.michael.trading.*.plist
+rm ~/Library/LaunchAgents/com.michael.trading.*.plist
+```
+
 ### Allocator (2026-05-14)
 
 Cross-engine capital allocation per MASTER_PLAN §5. Runs weekly (Monday pre-open), inverse-realized-volatility weighting with [0.10, 0.50] caps, freeze on drawdown.

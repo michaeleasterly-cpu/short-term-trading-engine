@@ -15,6 +15,7 @@ from dashboard_components.health import (
     classify_corp_actions,
     classify_coverage_gaps,
     classify_cross_ref,
+    classify_daemons,
     classify_fundamentals,
     classify_open_orders,
     classify_universe,
@@ -361,3 +362,79 @@ def test_cross_ref_red_when_any_nonzero():
     by = {f"{x[0]}": x for x in detail}
     assert by["tradier_options_chains.expired"][1] == "red"
     assert by["fundamentals_quarterly.ticker_not_in_prices"][1] == "green"
+
+
+# ─── Daemon roll-up ─────────────────────────────────────────────────────────
+
+
+def test_daemons_red_when_any_not_installed():
+    daemons = [
+        {"name": "trade_monitor", "installed": False, "kind": "persistent",
+         "next_run_hint": "Mon-Sat persistent"},
+        {"name": "post_close", "installed": True, "kind": "scheduled",
+         "last_run_at": datetime.now(UTC), "last_exit": 0,
+         "next_run_hint": "Mon-Fri 21:30 UTC"},
+        {"name": "allocator", "installed": True, "kind": "scheduled",
+         "last_run_at": datetime.now(UTC), "last_exit": 0,
+         "next_run_hint": "Mon 13:00 UTC"},
+    ]
+    color, summary, detail = classify_daemons(daemons)
+    assert color == "red"
+    assert "1/3 daemon(s) not installed" in summary
+    assert detail[0][1] == "red"
+
+
+def test_daemons_amber_when_persistent_silent_24h():
+    daemons = [
+        {"name": "trade_monitor", "installed": True, "kind": "persistent",
+         "last_log_age_sec": 36 * 3600, "next_run_hint": ""},
+        {"name": "post_close", "installed": True, "kind": "scheduled",
+         "last_run_at": datetime.now(UTC), "last_exit": 0,
+         "next_run_hint": "Mon-Fri 21:30 UTC"},
+        {"name": "allocator", "installed": True, "kind": "scheduled",
+         "last_run_at": datetime.now(UTC), "last_exit": 0,
+         "next_run_hint": "Mon 13:00 UTC"},
+    ]
+    color, _, detail = classify_daemons(daemons)
+    assert color == "amber"
+    by = {row[0]: row for row in detail}
+    assert by["trade_monitor"][1] == "amber"
+
+
+def test_daemons_amber_when_scheduled_last_exit_nonzero():
+    daemons = [
+        {"name": "trade_monitor", "installed": True, "kind": "persistent",
+         "last_log_age_sec": 60, "next_run_hint": ""},
+        {"name": "post_close", "installed": True, "kind": "scheduled",
+         "last_run_at": datetime.now(UTC), "last_exit": 1,
+         "next_run_hint": "Mon-Fri 21:30 UTC"},
+        {"name": "allocator", "installed": True, "kind": "scheduled",
+         "last_run_at": datetime.now(UTC), "last_exit": 0,
+         "next_run_hint": "Mon 13:00 UTC"},
+    ]
+    color, _, detail = classify_daemons(daemons)
+    assert color == "amber"
+    by = {row[0]: row for row in detail}
+    assert by["post_close"][1] == "amber"
+
+
+def test_daemons_green_when_all_healthy():
+    daemons = [
+        {"name": "trade_monitor", "installed": True, "kind": "persistent",
+         "last_log_age_sec": 60, "next_run_hint": ""},
+        {"name": "post_close", "installed": True, "kind": "scheduled",
+         "last_run_at": datetime.now(UTC), "last_exit": 0,
+         "next_run_hint": "Mon-Fri 21:30 UTC"},
+        {"name": "allocator", "installed": True, "kind": "scheduled",
+         "last_run_at": datetime.now(UTC), "last_exit": 0,
+         "next_run_hint": "Mon 13:00 UTC"},
+    ]
+    color, summary, _ = classify_daemons(daemons)
+    assert color == "green"
+    assert "3 daemons installed and healthy" in summary
+
+
+def test_daemons_empty_list_is_red():
+    color, summary, detail = classify_daemons([])
+    assert color == "red"
+    assert detail == []

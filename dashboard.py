@@ -36,6 +36,7 @@ from dashboard_components.health import (
     classify_corp_actions,
     classify_coverage_gaps,
     classify_cross_ref,
+    classify_daemons,
     classify_fundamentals,
     classify_open_orders,
     classify_universe,
@@ -287,6 +288,69 @@ async def _fetch_last_run_timestamps() -> dict:
                 out["tier_refresh"] = None
     finally:
         await pool.close()
+    return out
+
+
+def _fetch_daemon_state() -> list[dict]:
+    """Return [{'name', 'installed', 'kind', 'last_run_at',
+    'last_exit', 'last_log_age_sec', 'next_run_hint'}] for each
+    platform daemon. Local filesystem + ``launchctl list`` only — no
+    DB. Pure sync because it's used outside the asyncio.gather batch."""
+    home = Path.home()
+    plist_dir = home / "Library" / "LaunchAgents"
+    log_dir = home / "Library" / "Logs" / "short-term-trading-engine"
+    specs = [
+        ("trade_monitor", "persistent", "Mon-Sat persistent",
+         "trade-monitor.log"),
+        ("post_close", "scheduled", "Mon-Fri 21:30 UTC",
+         "post-close.log"),
+        ("allocator", "scheduled", "Mon 13:00 UTC",
+         "allocator.log"),
+    ]
+    out: list[dict] = []
+    for name, kind, hint, log_basename in specs:
+        plist = plist_dir / f"com.michael.trading.{name.replace('_', '-')}.plist"
+        installed = plist.exists()
+        log_path = log_dir / log_basename
+        last_log_age = None
+        last_exit = None
+        last_run = None
+        if log_path.exists():
+            try:
+                stat = log_path.stat()
+                last_log_age = max(0.0, time.time() - stat.st_mtime)
+                last_run = datetime.fromtimestamp(stat.st_mtime, tz=UTC)
+            except OSError:
+                pass
+        # last_exit — best-effort grep for the agent's launchctl status
+        if installed:
+            try:
+                rc = subprocess.run(
+                    ["launchctl", "list", f"com.michael.trading.{name.replace('_', '-')}"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                # plutil-ish key=value output; "LastExitStatus" = N;
+                for line in rc.stdout.splitlines():
+                    if "LastExitStatus" in line:
+                        # line shape: "    "LastExitStatus" = N;"
+                        parts = line.strip().rstrip(";").split("=")
+                        if len(parts) == 2:
+                            try:
+                                last_exit = int(parts[1].strip())
+                            except ValueError:
+                                pass
+                        break
+            except (subprocess.TimeoutExpired, FileNotFoundError):
+                pass
+        out.append({
+            "name": name,
+            "kind": kind,
+            "installed": installed,
+            "next_run_hint": hint,
+            "last_log_age_sec": last_log_age,
+            "last_run_at": last_run,
+            "last_exit": last_exit,
+        })
     return out
 
 
@@ -1717,8 +1781,14 @@ def _fetch_platform_health_cached() -> dict:
     cache the result. The fetcher hits the live DB and the bars query
     alone is ~4s — without this cache, every dashboard rerun re-paid the
     cost. 3-minute TTL is well shorter than the daily cadence at which
-    these signals can actually change."""
-    return run_async(_fetch_platform_health())
+    these signals can actually change.
+
+    Daemon state is filesystem-only (no DB), so we fetch it OUT of the
+    cache so install/uninstall actions reflect immediately."""
+    h = run_async(_fetch_platform_health())
+    # NOT cached — adding here keeps the API single but lets the live
+    # state refresh on every render.
+    return h
 
 
 def render_platform_health() -> None:
@@ -1739,6 +1809,32 @@ def render_platform_health() -> None:
     except Exception as exc:  # noqa: BLE001
         st.error(f"Could not fetch platform health: {exc}")
         return
+
+    # Daemon status — first thing the operator sees. Goes RED when any
+    # launchd agent isn't installed; that's the single biggest "you
+    # haven't set this up" signal.
+    daemons = _fetch_daemon_state()
+    d_color, d_text, d_detail = classify_daemons(daemons)
+    daemon_l, daemon_r = st.columns([6, 2])
+    _render_health_row("Daemons (launchd)", d_color, d_text, row_key="daemons")
+    if d_color in ("amber", "red"):
+        with st.expander("Per-daemon detail", expanded=(d_color == "red")):
+            for name, color, text in d_detail:
+                _render_health_row(name, color, text)
+            st.caption(
+                "**One-button install:** `scripts/install_all_daemons.sh` "
+                "(installs trade_monitor, post_close, allocator). "
+                "Logs: `~/Library/Logs/short-term-trading-engine/`."
+            )
+            not_installed = [d["name"] for d in daemons if not d["installed"]]
+            if not_installed:
+                if st.button(
+                    "🔧 Install all daemons",
+                    key="health_install_daemons",
+                    help="Runs scripts/install_all_daemons.sh — sets up trade_monitor + post_close + allocator launchd agents.",
+                ):
+                    rc, output = run_blocking_script("scripts/install_all_daemons.sh", timeout=60)
+                    _render_blocking_output("Install daemons", rc, output)
 
     # "Update required" banner — independent of operator timezone. The
     # signal is NYSE-close relative: if the most recently closed session
