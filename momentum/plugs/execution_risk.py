@@ -204,7 +204,28 @@ class MomentumExecutionRisk(BaseEnginePlug):
         )
 
     async def _screen(self, candidates: list[MomentumCandidate]) -> list[MomentumCandidate]:
-        """Apply tier filter + cost gate. Order preserved."""
+        """Apply tier filter + cost gate. Order preserved.
+
+        Bulk-loads the entire liquidity_tiers cost map once via
+        ``load_tier_costs`` instead of calling ``governor.check_cost`` per
+        candidate. The per-call pattern was acquiring a fresh pooler
+        connection for each ticker — at 800+ candidates the Supabase pooler
+        reset the connection mid-loop. Reading the table once and screening
+        in-process is both correct and ~100× faster.
+        """
+        from tpcore.backtest.cost_model import (
+            DEFAULT_ROUND_TRIP_COST_PCT,
+            load_tier_costs,
+        )
+
+        # The governor's check_cost reads from the same pool the execution
+        # plug was constructed with — reuse it for the bulk load.
+        pool = getattr(self._governor, "_pool", None)
+        tier_costs: dict[str, float] = {}
+        if pool is not None:
+            tier_costs = await load_tier_costs(pool)
+
+        default_cost = float(DEFAULT_ROUND_TRIP_COST_PCT)
         out: list[MomentumCandidate] = []
         for c in candidates:
             if c.tier > self._max_tier:
@@ -213,9 +234,9 @@ class MomentumExecutionRisk(BaseEnginePlug):
             # score apportioned to a 1-month hold. Bound at 0 so a negative-
             # momentum candidate (shouldn't be in the top decile anyway) can't
             # produce a negative expected edge that "passes" the gate.
-            expected_edge_pct = Decimal(str(max(0.0, float(c.momentum_score) / 12.0)))
-            check = await self._governor.check_cost(c.ticker, expected_edge_pct)
-            if check.decision.name != "ALLOW":
+            expected_edge_pct = max(0.0, float(c.momentum_score) / 12.0)
+            ticker_cost = tier_costs.get(c.ticker, default_cost)
+            if ticker_cost > expected_edge_pct:
                 continue
             out.append(c)
         return out
