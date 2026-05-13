@@ -497,10 +497,9 @@ async def _fetch_platform_health() -> dict:
                 """
                 SELECT lt.ticker
                 FROM platform.liquidity_tiers lt
-                LEFT JOIN (
-                    SELECT DISTINCT ticker FROM platform.prices_daily
-                    WHERE date >= CURRENT_DATE - INTERVAL '5 days'
-                ) p ON p.ticker = lt.ticker
+                LEFT JOIN platform.prices_daily_tickers p
+                  ON p.ticker = lt.ticker
+                  AND p.latest_date >= CURRENT_DATE - INTERVAL '5 days'
                 WHERE lt.tier <= 2 AND p.ticker IS NULL
                 ORDER BY lt.ticker
                 """
@@ -566,7 +565,7 @@ async def _fetch_platform_health() -> dict:
                 "ticker_not_in_prices",
                 "catalyst_events",
                 """SELECT COUNT(*) FROM platform.catalyst_events ce
-                   LEFT JOIN (SELECT DISTINCT ticker FROM platform.prices_daily) p
+                   LEFT JOIN platform.prices_daily_tickers p
                      ON p.ticker = ce.ticker
                    WHERE p.ticker IS NULL""",
             ),
@@ -574,7 +573,7 @@ async def _fetch_platform_health() -> dict:
                 "ticker_not_in_prices",
                 "corporate_actions",
                 """SELECT COUNT(*) FROM platform.corporate_actions ca
-                   LEFT JOIN (SELECT DISTINCT ticker FROM platform.prices_daily) p
+                   LEFT JOIN platform.prices_daily_tickers p
                      ON p.ticker = ca.ticker
                    WHERE p.ticker IS NULL""",
             ),
@@ -582,7 +581,7 @@ async def _fetch_platform_health() -> dict:
                 "ticker_not_in_prices",
                 "fundamentals_quarterly",
                 """SELECT COUNT(*) FROM platform.fundamentals_quarterly fq
-                   LEFT JOIN (SELECT DISTINCT ticker FROM platform.prices_daily) p
+                   LEFT JOIN platform.prices_daily_tickers p
                      ON p.ticker = fq.ticker
                    WHERE p.ticker IS NULL""",
             ),
@@ -590,7 +589,7 @@ async def _fetch_platform_health() -> dict:
                 "ticker_not_in_prices",
                 "liquidity_tiers",
                 """SELECT COUNT(*) FROM platform.liquidity_tiers lt
-                   LEFT JOIN (SELECT DISTINCT ticker FROM platform.prices_daily) p
+                   LEFT JOIN platform.prices_daily_tickers p
                      ON p.ticker = lt.ticker
                    WHERE p.ticker IS NULL""",
             ),
@@ -598,7 +597,7 @@ async def _fetch_platform_health() -> dict:
                 "ticker_not_in_prices",
                 "universe_candidates",
                 """SELECT COUNT(*) FROM platform.universe_candidates uc
-                   LEFT JOIN (SELECT DISTINCT ticker FROM platform.prices_daily) p
+                   LEFT JOIN platform.prices_daily_tickers p
                      ON p.ticker = uc.ticker
                    WHERE p.ticker IS NULL""",
             ),
@@ -611,7 +610,7 @@ async def _fetch_platform_health() -> dict:
                 "ticker_not_in_prices",
                 "tradier_options_chains",
                 """SELECT COUNT(*) FROM platform.tradier_options_chains tc
-                   LEFT JOIN (SELECT DISTINCT ticker FROM platform.prices_daily) p
+                   LEFT JOIN platform.prices_daily_tickers p
                      ON p.ticker = tc.ticker
                    WHERE p.ticker IS NULL""",
             ),

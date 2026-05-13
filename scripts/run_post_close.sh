@@ -97,9 +97,24 @@ if [[ -n "$FAILED_CHECKS" ]]; then
 fi
 echo "✓ all 6 validation checks green"
 
+# Step 4b — refresh dashboard matview now that prices_daily is current.
+# REFRESH CONCURRENTLY so dashboard reads don't block while it runs (~1s).
+echo ""
+echo "▶ STEP 4b / 7  refresh platform.prices_daily_tickers matview"
+echo "────────────────────────────────────────────────────────────────────────"
+DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python -c "
+import asyncio, asyncpg, os
+async def main():
+    conn = await asyncpg.connect(os.environ['DATABASE_URL'])
+    await conn.execute('REFRESH MATERIALIZED VIEW CONCURRENTLY platform.prices_daily_tickers')
+    print('✓ prices_daily_tickers refreshed')
+    await conn.close()
+asyncio.run(main())
+" || echo "  (matview refresh failed — non-fatal, dashboard will see stale ticker list)"
+
 # Step 5 — compress any CSVs left behind by the backfill scripts.
 echo ""
-echo "▶ STEP 5 / 6  compress backfill CSVs"
+echo "▶ STEP 5 / 7  compress backfill CSVs"
 echo "────────────────────────────────────────────────────────────────────────"
 scripts/run_compress_backfill_csvs.sh
 
