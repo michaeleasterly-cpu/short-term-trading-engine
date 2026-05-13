@@ -57,21 +57,53 @@ Inside, the implementation calls `streamlit-lightweight-charts-pro`. If the pack
 │  equity $99,989  |  cash $99,236  |  positions 1  |  today P&L $-2.72│
 │  [Manual refresh]  [Auto-refresh 30s ☐]                              │
 ├───────────────────────────────────────────────────────────────────────┤
-│  PLATFORM HEALTH                                                      │
+│  TABS:  🩺 Health  |  💹 Trading  |  🔬 Research  |  ⚡ Actions       │
+└───────────────────────────────────────────────────────────────────────┘
+
+🩺 HEALTH TAB (default)
+┌───────────────────────────────────────────────────────────────────────┐
+│  PLATFORM HEALTH                                       [↻ Refresh]    │
 │  Bars (prices_daily)   🟢 Latest 2026-05-12 (1d) — 7,323 tickers     │
 │  Fundamentals          🟢 Last refresh 0.5d ago — period 2026-Q1     │
-│  Corporate actions     🟢 Latest ingest 0.4d ago                     │
+│  Corporate actions     🔴 Latest ingest 8.2d ago  [🔧 Run daily update]│
 │  Universe (momentum)   🟢 Today: 1249 candidates                     │
-│  Last ops --update     🔴 2 stage(s) FAILED, 4/6 OK   [▶ stage detail]│
-│  Data validation (7d)  🔴 Repeated failures           [▶ detail]      │
-├───────────────────────────────────────────────────────────────────────┤
-│  ACTIONS  (5 buttons + log pane)                                      │
-│  [Run daily update]  [Force-rebalance Momentum]  [Refresh credibility]│
-│  [Smoke test]  [Cancel all open orders]                              │
-│  ┌─ log output ─────────────────────────────────────────────────────┐ │
-│  │ [most recent stdout/stderr from the last action]                 │ │
-│  └──────────────────────────────────────────────────────────────────┘ │
-├───────────────────────────────────────────────────────────────────────┤
+│  Last ops --update     🔴 2 stage(s) FAILED       [🔧 Re-run]         │
+│    ▼ stage detail (auto-expanded when red)                            │
+│      daily_bars              🟢 OK                                    │
+│      corporate_actions       🔴 FAILED — ReadError                    │
+│      fundamentals_refresh    🔴 FAILED — timeout                      │
+│      data_validation         🟢 OK                                    │
+│      universe_prescreener    🟡 not in latest run                     │
+│      universe_simulation     🟢 OK                                    │
+│  Data validation (7d)  🔴 Repeated failures        [▶ detail]         │
+└───────────────────────────────────────────────────────────────────────┘
+
+💹 TRADING TAB
+- Currently holding (sortable table; click a row for ticker detail)
+- Ticker detail (90-day candlestick + AAR markers, conditional)
+- Recent orders
+- Equity curve
+
+🔬 RESEARCH TAB
+- Credibility scorecards (one per engine)
+- Recent activity (signals + closed AARs, side-by-side)
+
+⚡ ACTIONS TAB
+- Daily / Monthly / Periodic / Quarterly / Corrective action buttons
+   [Run daily update]  [Force-rebalance Momentum]  [Refresh credibility]
+   [Smoke test]  [Refresh liquidity tiers]  [Cancel open orders]
+   ┌─ log output ─────────────────────────────────────────────────────┐
+   │ [most recent stdout/stderr from the last action]                 │
+   └──────────────────────────────────────────────────────────────────┘
+
+(Confirm modal + detached-job panel render OUTSIDE the tabs so a job
+launched on one tab stays visible when switching.)
+```
+
+(Legacy single-page sketch — kept for reference:)
+
+```
+┌───────────────────────────────────────────────────────────────────────┐
 │  CURRENTLY HOLDING  (Momentum)                                        │
 │  table: ticker / qty / entry / current / pnl_$ / pnl_%  (sortable)   │
 ├───────────────────────────────────────────────────────────────────────┤
@@ -200,7 +232,17 @@ Per Nielsen's usability heuristics, Norman's gulfs of execution / evaluation, an
 
   The last two rows expand to a per-stage / per-source detail table — auto-expanded when red so the operator sees the failure without having to click.
 
-  The expected stage list is the constant `_OPS_UPDATE_STAGES` in `dashboard.py`; keep it in lockstep with the `cmd_update` orchestrator in `scripts/ops.py`. If a stage is added/removed there, update the constant — the panel will otherwise show false "missing" amber rows.
+  The expected stage list is the constant `OPS_UPDATE_STAGES` in `dashboard_components/health.py`; keep it in lockstep with the `cmd_update` orchestrator in `scripts/ops.py`. If a stage is added/removed there, update the constant — the panel will otherwise show false "missing" amber rows.
+
+  **Inline fix-it buttons** (added 2026-05-13): any row that's not green renders a `🔧` button on the right whose action is bound by `HEALTH_ACTIONS` in `dashboard.py`. Resolving one red item at a time and watching it flip green is the intended workflow. Today's registry:
+
+  | Row | Fix button | Script | Cadence |
+  |---|---|---|---|
+  | Bars / Fundamentals / Corp actions / Last `--update` failed | Run daily update | `scripts/run_daily_update.sh` | detached, ~30-45 min |
+  | Universe (momentum) | Re-run prescreener | `scripts/run_prescreener_only.sh` | detached, ~1 min |
+  | Data validation | (no button — symptom, not a switch) | — | — |
+
+  Clicking a button (a) launches the script detached, (b) records it in `session_state["detached_job"]` so the detached-job panel can tail its log, (c) clears the `_fetch_platform_health_cached` cache so the panel re-fetches on the next render.
 
 ### Error recovery distinct from normal output
 

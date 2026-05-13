@@ -306,17 +306,20 @@ async def _fetch_platform_health() -> dict:
     operator-facing string. The renderer is intentionally dumb — all
     severity decisions live here so they're testable.
     """
-    pool = await build_asyncpg_pool(_db_url(), max_size=2)
+    pool = await build_asyncpg_pool(_db_url(), max_size=6)
     out: dict = {}
-    try:
+
+    # Six independent queries run in parallel — each holds its own pooled
+    # connection. Brings first-load from ~12s (serial on one connection)
+    # to ~5s (limited by the slowest query, the 4s bounded bars scan).
+    async def _q_bars() -> dict:
         async with pool.acquire() as conn:
-            # 1) Bars freshness. The outer WHERE clause is critical:
-            # ``MAX(date)`` over the full 20M-row prices_daily table takes
-            # ~15s because the only indexes are on ``(ticker, date)``, not
-            # ``(date)`` alone. Bounding to the last 10 days lets the
-            # planner range-scan; we lose the ability to detect "bars are
-            # 11+ days stale" but that's already deep into the red zone.
-            bars_row = await conn.fetchrow(
+            # Bound to last 10 days. ``MAX(date)`` over the full 20M-row
+            # table takes ~15s — only indexes are on ``(ticker, date)``,
+            # not ``(date)`` alone. With the range bound, the planner
+            # range-scans cheaply. We lose the ability to detect "bars
+            # are 11+ days stale" but that's already deep red.
+            r = await conn.fetchrow(
                 """
                 SELECT MAX(date) AS latest_date,
                        COUNT(DISTINCT ticker) FILTER (
@@ -326,32 +329,33 @@ async def _fetch_platform_health() -> dict:
                 WHERE date > CURRENT_DATE - INTERVAL '10 days'
                 """
             )
-            out["bars"] = {
-                "latest_date": bars_row["latest_date"] if bars_row else None,
-                "recent_tickers": int(bars_row["recent_tickers"]) if bars_row else 0,
+            return {
+                "latest_date": r["latest_date"] if r else None,
+                "recent_tickers": int(r["recent_tickers"]) if r else 0,
             }
 
-            # 2) Fundamentals freshness — newest insert wins; the cache
-            # refresher rewrites the row on every refresh, so recorded_at
-            # is the right freshness signal.
-            fund_row = await conn.fetchrow(
+    async def _q_fundamentals() -> dict:
+        async with pool.acquire() as conn:
+            r = await conn.fetchrow(
                 """
                 SELECT MAX(recorded_at) AS latest_at,
                        MAX(period_end_date) AS latest_period
                 FROM platform.fundamentals_quarterly
                 """
             )
-            out["fundamentals"] = {
-                "latest_at": fund_row["latest_at"] if fund_row else None,
-                "latest_period": fund_row["latest_period"] if fund_row else None,
+            return {
+                "latest_at": r["latest_at"] if r else None,
+                "latest_period": r["latest_period"] if r else None,
             }
 
-            # 3) Corporate-actions freshness.
-            ca_at = await conn.fetchval("SELECT MAX(recorded_at) FROM platform.corporate_actions")
-            out["corp_actions"] = {"latest_at": ca_at}
+    async def _q_corp_actions() -> dict:
+        async with pool.acquire() as conn:
+            v = await conn.fetchval("SELECT MAX(recorded_at) FROM platform.corporate_actions")
+            return {"latest_at": v}
 
-            # 4) Universe pre-screener — today's row count, latest date.
-            uc_row = await conn.fetchrow(
+    async def _q_universe() -> dict:
+        async with pool.acquire() as conn:
+            r = await conn.fetchrow(
                 """
                 SELECT MAX(as_of_date) AS latest_date,
                        COUNT(*) FILTER (WHERE as_of_date = CURRENT_DATE) AS today_count
@@ -359,13 +363,14 @@ async def _fetch_platform_health() -> dict:
                 WHERE engine = 'momentum'
                 """
             )
-            out["universe"] = {
-                "latest_date": uc_row["latest_date"] if uc_row else None,
-                "today_count": int(uc_row["today_count"]) if uc_row else 0,
+            return {
+                "latest_date": r["latest_date"] if r else None,
+                "today_count": int(r["today_count"]) if r else 0,
             }
 
-            # 5a) Last ops --update run — find the newest STARTUP for engine='ops'
-            # that has at least one INGESTION_* event with a stage in its data.
+    async def _q_update_run() -> dict:
+        update_run: dict = {"run_id": None, "started_at": None, "stages": {}}
+        async with pool.acquire() as conn:
             last_run = await conn.fetchrow(
                 """
                 SELECT run_id, MAX(recorded_at) AS started_at
@@ -376,44 +381,45 @@ async def _fetch_platform_health() -> dict:
                 LIMIT 1
                 """
             )
-            update_run: dict = {"run_id": None, "started_at": None, "stages": {}}
-            if last_run:
-                update_run["run_id"] = last_run["run_id"]
-                update_run["started_at"] = last_run["started_at"]
-                stage_rows = await conn.fetch(
-                    """
-                    SELECT data->>'stage' AS stage, event_type, recorded_at, data
-                    FROM platform.application_log
-                    WHERE engine = 'ops'
-                      AND run_id = $1
-                      AND event_type IN ('INGESTION_COMPLETE', 'INGESTION_FAILED')
-                    ORDER BY recorded_at
-                    """,
-                    last_run["run_id"],
-                )
-                for r in stage_rows:
-                    stage = r["stage"]
-                    if not stage:
-                        continue
-                    update_run["stages"][stage] = {
-                        "event_type": r["event_type"],
-                        "recorded_at": r["recorded_at"],
-                        "data": r["data"],
-                    }
-                update_run["shutdown_at"] = await conn.fetchval(
-                    """
-                    SELECT recorded_at FROM platform.application_log
-                    WHERE engine = 'ops' AND run_id = $1 AND event_type = 'SHUTDOWN'
-                    ORDER BY recorded_at DESC LIMIT 1
-                    """,
-                    last_run["run_id"],
-                )
-            out["update_run"] = update_run
+            if not last_run:
+                return update_run
+            update_run["run_id"] = last_run["run_id"]
+            update_run["started_at"] = last_run["started_at"]
+            stage_rows = await conn.fetch(
+                """
+                SELECT data->>'stage' AS stage, event_type, recorded_at, data
+                FROM platform.application_log
+                WHERE engine = 'ops'
+                  AND run_id = $1
+                  AND event_type IN ('INGESTION_COMPLETE', 'INGESTION_FAILED')
+                ORDER BY recorded_at
+                """,
+                last_run["run_id"],
+            )
+            for r in stage_rows:
+                stage = r["stage"]
+                if not stage:
+                    continue
+                update_run["stages"][stage] = {
+                    "event_type": r["event_type"],
+                    "recorded_at": r["recorded_at"],
+                    "data": r["data"],
+                }
+            update_run["shutdown_at"] = await conn.fetchval(
+                """
+                SELECT recorded_at FROM platform.application_log
+                WHERE engine = 'ops' AND run_id = $1 AND event_type = 'SHUTDOWN'
+                ORDER BY recorded_at DESC LIMIT 1
+                """,
+                last_run["run_id"],
+            )
+            return update_run
 
-            # 5b) Validation-suite failures in the last 7 days. A row is a
-            # "failure" when ``stale=true`` OR ``confidence < 1.0`` — that's
-            # the same definition ``tpcore.quality`` uses internally.
-            val_rows = await conn.fetch(
+    async def _q_validation() -> list[dict]:
+        # "Failure" = ``stale=true`` OR ``confidence < 1.0`` — same
+        # definition ``tpcore.quality`` uses internally.
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
                 """
                 SELECT source, MAX(timestamp) AS latest_at,
                        SUM(CASE WHEN stale OR confidence < 1.0 THEN 1 ELSE 0 END) AS n_failed,
@@ -425,15 +431,31 @@ async def _fetch_platform_health() -> dict:
                 ORDER BY source
                 """
             )
-            out["validation"] = [
+            return [
                 {
                     "source": r["source"],
                     "latest_at": r["latest_at"],
                     "n_failed": int(r["n_failed"] or 0),
                     "n_runs": int(r["n_runs"] or 0),
                 }
-                for r in val_rows
+                for r in rows
             ]
+
+    try:
+        bars, fund, ca, uni, run, val = await asyncio.gather(
+            _q_bars(),
+            _q_fundamentals(),
+            _q_corp_actions(),
+            _q_universe(),
+            _q_update_run(),
+            _q_validation(),
+        )
+        out["bars"] = bars
+        out["fundamentals"] = fund
+        out["corp_actions"] = ca
+        out["universe"] = uni
+        out["update_run"] = run
+        out["validation"] = val
     finally:
         await pool.close()
     return out
@@ -1135,21 +1157,100 @@ def _health_glyph(color: str) -> str:
     }.get(color, _GLYPH_UNKNOWN)
 
 
-def _render_health_row(label: str, color: str, text: str) -> None:
+def _render_health_row(
+    label: str,
+    color: str,
+    text: str,
+    *,
+    fix_action: str | None = None,
+    row_key: str | None = None,
+) -> None:
+    """Render one row of the Platform-health panel.
+
+    Args:
+        label: 18ch left column.
+        color: ``green`` / ``amber`` / ``red`` / unknown (drives glyph + text color).
+        text: short operator-facing status string.
+        fix_action: key into ``HEALTH_ACTIONS`` (e.g. ``"daily_update"``). When
+            set AND the row is not green, an inline 🔧 Fix button is shown.
+        row_key: extra uniqueness suffix for the Streamlit widget key — needed
+            because the same ``fix_action`` may appear next to multiple rows.
+    """
     glyph = _health_glyph(color)
     color_hex = {
         "green": "#0a8a3a",
         "amber": "#c77700",
         "red": "#c62828",
     }.get(color, "#666666")
-    st.markdown(
-        f'<div style="display:flex; gap:1rem; align-items:baseline; padding:0.15rem 0;">'
-        f'<span style="width:18ch; color:#888;">{label}</span>'
-        f"<span>{glyph}</span>"
-        f'<span style="color:{color_hex};">{text}</span>'
-        f"</div>",
+    show_button = fix_action is not None and color in ("amber", "red")
+    if show_button:
+        cols = st.columns([3, 6, 2])
+    else:
+        cols = st.columns([3, 8, 0.01])
+    cols[0].markdown(
+        f'<div style="color:#888; padding-top:0.4rem;">{label}</div>',
         unsafe_allow_html=True,
     )
+    cols[1].markdown(
+        f'<div style="padding-top:0.4rem;"><span>{glyph}</span> '
+        f'<span style="color:{color_hex};">{text}</span></div>',
+        unsafe_allow_html=True,
+    )
+    if show_button:
+        action = HEALTH_ACTIONS[fix_action]
+        btn_key = f"health_fix_{fix_action}_{row_key or label}".replace(" ", "_")
+        if cols[2].button(
+            f"🔧 {action['label']}",
+            key=btn_key,
+            help=action["help"],
+            use_container_width=True,
+        ):
+            _dispatch_health_fix(fix_action)
+
+
+# ─── Fix-it action registry ─────────────────────────────────────────────────
+# Each entry maps a fix_action key to {label, help, script, blocking?}.
+# Non-blocking actions run detached via ``run_detached_script`` (same
+# pattern as the main Daily-update button); blocking actions use
+# ``run_blocking_script`` with a timeout.
+
+HEALTH_ACTIONS: dict[str, dict] = {
+    "daily_update": {
+        "label": "Run daily update",
+        "help": "Re-runs scripts/ops.py --update (all 6 stages). Detached, ~30-45 min.",
+        "script": "scripts/run_daily_update.sh",
+        "blocking": False,
+    },
+    "prescreener": {
+        "label": "Re-run prescreener",
+        "help": "Re-populates today's universe_candidates rows for momentum. Fast (~1 min).",
+        "script": "scripts/run_prescreener_only.sh",
+        "blocking": False,
+    },
+}
+
+
+def _dispatch_health_fix(action_key: str) -> None:
+    """Launch the script bound to ``action_key`` and record it in session_state
+    so the detached-job panel can tail its log. Clears the Platform-health
+    cache so the panel re-fetches on next render."""
+    action = HEALTH_ACTIONS[action_key]
+    if action.get("blocking"):
+        with st.spinner(f"Running {action['label']}..."):
+            rc, output = run_blocking_script(action["script"], timeout=300)
+        _render_blocking_output(action["label"], rc, output)
+    else:
+        pid, logfile = run_detached_script(action["script"])
+        st.session_state["detached_job"] = {
+            "name": action["label"],
+            "pid": pid,
+            "logfile": logfile,
+            "started_at": time.time(),
+        }
+        st.success(f"Launched (pid {pid}); logfile: {logfile}")
+    # Invalidate the health cache so the next refresh shows the new state.
+    _fetch_platform_health_cached.clear()
+    st.rerun()
 
 
 @st.cache_data(ttl=180, show_spinner=False)
@@ -1183,32 +1284,39 @@ def render_platform_health() -> None:
 
     bars_color, bars_text = classify_bars(h["bars"]["latest_date"])
     bars_text += f" — {h['bars']['recent_tickers']:,} tickers (last 5d)"
-    _render_health_row("Bars (prices_daily)", bars_color, bars_text)
+    _render_health_row("Bars (prices_daily)", bars_color, bars_text, fix_action="daily_update", row_key="bars")
 
     fund_color, fund_text = classify_fundamentals(h["fundamentals"]["latest_at"])
     latest_period = h["fundamentals"]["latest_period"]
     if latest_period is not None:
         fund_text += f" — latest period {latest_period.isoformat()}"
-    _render_health_row("Fundamentals", fund_color, fund_text)
+    _render_health_row("Fundamentals", fund_color, fund_text, fix_action="daily_update", row_key="fundamentals")
 
     ca_color, ca_text = classify_corp_actions(h["corp_actions"]["latest_at"])
-    _render_health_row("Corporate actions", ca_color, ca_text)
+    _render_health_row("Corporate actions", ca_color, ca_text, fix_action="daily_update", row_key="corp_actions")
 
     uni_color, uni_text = classify_universe(
         h["universe"]["latest_date"],
         h["universe"]["today_count"],
     )
-    _render_health_row("Universe (momentum)", uni_color, uni_text)
+    # Universe gets the FAST fix — prescreener-only (~1 min) instead of the
+    # full 30-45min daily update.
+    _render_health_row("Universe (momentum)", uni_color, uni_text, fix_action="prescreener", row_key="universe")
 
     run_color, run_summary, run_detail = classify_update_run(h["update_run"])
-    _render_health_row("Last ops --update", run_color, run_summary)
+    _render_health_row("Last ops --update", run_color, run_summary, fix_action="daily_update", row_key="update_run")
     with st.expander("Stage-by-stage detail of last --update run", expanded=(run_color == "red")):
         if not run_detail:
             st.caption("No recent run found in platform.application_log.")
         else:
             for stage, color, text in run_detail:
+                # Stage rows show the failure reason but don't carry their
+                # own action button — the parent "Last ops --update" row
+                # already has the Re-run button.
                 _render_health_row(stage, color, text)
 
+    # Validation failures aren't one-click fixable (data quality is a
+    # symptom, not a switch). Show the roll-up without a Fix button.
     val_color, val_summary, val_detail = classify_validation(h["validation"])
     _render_health_row("Data validation (7d)", val_color, val_summary)
     if val_detail:
@@ -1559,37 +1667,46 @@ def main():
     if c1.button("🔁  Refresh", help="Re-fetch all panels  (keyboard: r)"):
         st.rerun()
 
-    # Platform health goes BEFORE actions — operator should know data freshness
-    # and last-update status before being tempted to push a button.
-    st.divider()
-    render_platform_health()
-
-    st.divider()
-    render_actions()
+    # Confirm modal + detached job panel are rendered OUTSIDE the tabs so
+    # they remain visible when the operator switches tabs — a job
+    # launched from one tab should still be visible from another.
     render_confirm_modal()
     render_detached_job_panel()
 
-    st.divider()
-    selected_ticker = render_holdings()
+    # Four-tab layout. Health is the default — heuristic #1
+    # (Visibility of system status): operator sees what's stale before
+    # they're tempted to push a button.
+    tab_health, tab_trading, tab_research, tab_actions = st.tabs(
+        [
+            "🩺 Health",
+            "💹 Trading",
+            "🔬 Research",
+            "⚡ Actions",
+        ]
+    )
 
-    # Ticker detail panel — only renders when a row is selected. Sits
-    # between holdings and equity curve so the operator's eye flows
-    # naturally: row click → chart appears directly below.
-    if selected_ticker:
+    with tab_health:
+        render_platform_health()
+
+    with tab_trading:
+        selected_ticker = render_holdings()
+        # Ticker detail — only renders when a row is selected. Stays
+        # inside the Trading tab so the row-click → chart flow is local.
+        if selected_ticker:
+            st.divider()
+            render_ticker_detail(selected_ticker)
         st.divider()
-        render_ticker_detail(selected_ticker)
+        render_recent_orders()
+        st.divider()
+        render_equity_curve()
 
-    st.divider()
-    render_recent_orders()
+    with tab_research:
+        render_credibility_scorecards()
+        st.divider()
+        render_recent_activity()
 
-    st.divider()
-    render_equity_curve()
-
-    st.divider()
-    render_credibility_scorecards()
-
-    st.divider()
-    render_recent_activity()
+    with tab_actions:
+        render_actions()
 
     st.divider()
     st.caption(
