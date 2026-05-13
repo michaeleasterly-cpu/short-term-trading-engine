@@ -22,6 +22,7 @@ class ExitReason(StrEnum):
     REGIME_FLIP = "regime_flip"
     RISK_GOVERNOR_FORCE_FLAT = "risk_governor_force_flat"
     TAX_HARVEST = "tax_harvest"
+    SCHEDULED_REBALANCE = "scheduled_rebalance"
     MANUAL = "manual"
     OTHER = "other"
 

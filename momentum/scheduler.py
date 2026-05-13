@@ -1,0 +1,286 @@
+"""Momentum scheduler — daily entry point.
+
+Wires the five Momentum plugs + Alpaca broker + Risk Governor + Postgres
+into a single :meth:`MomentumScheduler.run_once` invocation that an external
+scheduler (cron, systemd timer, manual ``python -m momentum.scheduler``) can
+call.
+
+Cadence
+-------
+Momentum rebalances *monthly*, on the first trading day of each calendar
+month. The scheduler is safe to call every trading day — it'll quietly
+no-op on non-rebalance days. This matches the operational model of the
+other engines (call every session, plug decides whether to act).
+
+Responsibilities each run
+-------------------------
+1. Build asyncpg pool + Alpaca broker + Risk Governor.
+2. Lifecycle plug: is today a rebalance day?
+3. If yes:
+    a. Setup plug ranks the universe → list of candidates.
+    b. Pull current Alpaca portfolio.
+    c. Execution-Risk plug builds the target portfolio + order batch.
+    d. Capital gate sanity-checks total buy notional vs allocated equity.
+    e. Submit each market order via the broker, in this order:
+       all SELLs first (free up cash) → all BUYs (deploy it).
+    f. Log each submitted order to ``platform.application_log``.
+4. If no: log a single 'no rebalance today' line and exit cleanly.
+
+What this scheduler does NOT do (deliberately)
+----------------------------------------------
+* No bracket orders. Momentum doesn't use per-name stops — risk is managed
+  by the monthly rebalance discipline.
+* No trade-monitor handoff. There are no Tier 2 legs to submit reactively.
+* No per-fill AAR write. AARs are written when a position is CLOSED on a
+  subsequent rebalance — see :class:`MomentumAARLogging`.
+
+Dry-run mode
+------------
+Pass ``--dry-run`` (or construct with ``submit_orders=False``) to compute
+the rebalance plan without submitting any orders. Useful for paper-trading
+preflight and for the CI smoke test.
+"""
+from __future__ import annotations
+
+import argparse
+import asyncio
+import os
+import sys
+from datetime import UTC, date as date_t, datetime
+from decimal import Decimal
+from typing import TYPE_CHECKING
+
+import structlog
+
+from momentum.models import RebalanceDecision
+from momentum.plugs.aar_logging import MomentumAARLogging
+from momentum.plugs.capital_gate import MomentumCapitalGate
+from momentum.plugs.execution_risk import MomentumExecutionRisk
+from momentum.plugs.lifecycle_analysis import MomentumLifecycleAnalysis
+from momentum.plugs.setup_detection import MomentumSetupDetection
+from tpcore.alpaca import AlpacaPaperBrokerAdapter
+from tpcore.db import build_asyncpg_pool
+from tpcore.interfaces.broker import (
+    Order,
+    OrderClass,
+    OrderSide,
+    OrderType,
+    TimeInForce,
+)
+from tpcore.risk.governor import RiskGovernor
+from tpcore.risk.persistent_store import PostgresRiskStateStore
+
+if TYPE_CHECKING:  # pragma: no cover
+    pass
+
+logger = structlog.get_logger(__name__)
+
+
+class RunSummary:
+    """Result of one ``run_once`` invocation — printable + JSON-serialisable."""
+
+    def __init__(
+        self,
+        *,
+        as_of: date_t,
+        is_rebalance_day: bool,
+        decision: RebalanceDecision | None,
+        submitted_order_ids: list[str],
+        dry_run: bool,
+    ) -> None:
+        self.as_of = as_of
+        self.is_rebalance_day = is_rebalance_day
+        self.decision = decision
+        self.submitted_order_ids = submitted_order_ids
+        self.dry_run = dry_run
+
+    def __repr__(self) -> str:
+        if not self.is_rebalance_day:
+            return f"RunSummary(as_of={self.as_of}, action=no_rebalance)"
+        d = self.decision
+        if d is None:
+            return f"RunSummary(as_of={self.as_of}, action=rebalance, decision=None)"
+        return (
+            f"RunSummary(as_of={self.as_of}, action=rebalance, dry_run={self.dry_run}, "
+            f"targets={len(d.targets)}, orders={len(d.orders)}, "
+            f"open={d.n_open}/close={d.n_close}/inc={d.n_increase}/dec={d.n_decrease}/hold={d.n_hold}, "
+            f"submitted={len(self.submitted_order_ids)})"
+        )
+
+
+class MomentumScheduler:
+    """One-shot orchestration of a full Momentum rebalance cycle."""
+
+    def __init__(
+        self,
+        *,
+        engine_equity_usd: Decimal = Decimal("10000"),
+        submit_orders: bool = True,
+    ) -> None:
+        self._engine_equity = engine_equity_usd
+        self._submit = submit_orders
+
+    async def run_once(self, as_of: date_t | None = None) -> RunSummary:
+        as_of = as_of or datetime.now(UTC).date()
+        db_url = os.getenv("DATABASE_URL")
+        if not db_url:
+            raise RuntimeError("DATABASE_URL not set — cannot run momentum.scheduler")
+
+        pool = await build_asyncpg_pool(db_url)
+        # DBLogHandler intentionally not wired in Phase 2 MVP — the scheduler
+        # logs to structlog console only. Wiring to platform.application_log
+        # comes in Phase 2.5 alongside the run-id audit row.
+        try:
+            broker = AlpacaPaperBrokerAdapter()
+            state_store = PostgresRiskStateStore(pool=pool)
+            governor = RiskGovernor(
+                state_store=state_store, broker=broker, pool=pool,
+            )
+
+            # Plug 2 — is today a rebalance day?
+            lifecycle = MomentumLifecycleAnalysis()
+            plan = await lifecycle.assess(pool, as_of)
+            if not plan.is_rebalance_day:
+                logger.info(
+                    "momentum.scheduler.no_rebalance",
+                    as_of=as_of.isoformat(),
+                    reason=plan.reason,
+                )
+                return RunSummary(
+                    as_of=as_of, is_rebalance_day=False,
+                    decision=None, submitted_order_ids=[], dry_run=not self._submit,
+                )
+
+            # Plug 1 — rank candidates.
+            setup = MomentumSetupDetection()
+            candidates = await setup.scan(pool, as_of)
+
+            # Pull current Alpaca holdings.
+            account = await broker.get_account()
+            equity = account.equity if account.equity > 0 else self._engine_equity
+            positions = await broker.get_positions()
+            current_holdings = {p.symbol: int(p.qty) for p in positions if int(p.qty) > 0}
+
+            # Plug 3 — build rebalance decision.
+            execution = MomentumExecutionRisk(governor=governor)
+            decision = await execution.build_decision(
+                candidates=candidates,
+                equity_usd=equity,
+                current_holdings=current_holdings,
+                as_of=as_of,
+            )
+
+            # Plug 4 — capital gate.
+            gate = MomentumCapitalGate(engine_equity_usd=equity)
+            if decision.orders and not gate.check_rebalance(decision.total_buy_notional_usd):
+                logger.warning(
+                    "momentum.scheduler.gate_rejected_rebalance",
+                    buy_notional=str(decision.total_buy_notional_usd),
+                    equity=str(equity),
+                )
+                return RunSummary(
+                    as_of=as_of, is_rebalance_day=True,
+                    decision=decision, submitted_order_ids=[], dry_run=not self._submit,
+                )
+
+            # Submit orders — sells first, then buys.
+            submitted: list[str] = []
+            sells = [o for o in decision.orders if o.side == "sell"]
+            buys = [o for o in decision.orders if o.side == "buy"]
+
+            for order in sells + buys:
+                if not self._submit:
+                    logger.info(
+                        "momentum.scheduler.dry_run_skip",
+                        ticker=order.ticker, action=order.action.value,
+                        qty=order.qty, side=order.side,
+                    )
+                    continue
+                placed = await broker.place_order(self._payload_to_order(order))
+                if placed.broker_order_id is not None:
+                    submitted.append(placed.broker_order_id)
+                logger.info(
+                    "momentum.scheduler.order_submitted",
+                    ticker=order.ticker, action=order.action.value,
+                    qty=order.qty, side=order.side,
+                    broker_order_id=placed.broker_order_id,
+                )
+
+            return RunSummary(
+                as_of=as_of, is_rebalance_day=True,
+                decision=decision, submitted_order_ids=submitted, dry_run=not self._submit,
+            )
+        finally:
+            await pool.close()
+
+    @staticmethod
+    def _payload_to_order(order):
+        """Build a :class:`tpcore.interfaces.broker.Order` from a
+        :class:`momentum.models.RebalanceOrder`. Day-market only."""
+        payload = order.order_payload
+        return Order(
+            client_order_id=payload["client_order_id"],
+            symbol=payload["symbol"],
+            side=OrderSide.BUY if payload["side"] == "buy" else OrderSide.SELL,
+            qty=Decimal(payload["qty"]),
+            order_type=OrderType.MARKET,
+            time_in_force=TimeInForce.DAY,
+            order_class=OrderClass.SIMPLE,
+            engine_id="momentum",
+        )
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# CLI
+# ────────────────────────────────────────────────────────────────────────────
+
+
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    p.add_argument(
+        "--as-of",
+        type=date_t.fromisoformat,
+        default=None,
+        help="Override the as-of date (ISO format); defaults to today (UTC).",
+    )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Compute the rebalance plan but don't submit orders. Prints the decision.",
+    )
+    p.add_argument(
+        "--engine-equity",
+        type=Decimal,
+        default=Decimal("10000"),
+        help="Engine equity in USD (default $10,000). Used as fallback when broker query fails.",
+    )
+    return p.parse_args(argv)
+
+
+async def amain(args: argparse.Namespace) -> int:
+    sched = MomentumScheduler(
+        engine_equity_usd=args.engine_equity,
+        submit_orders=not args.dry_run,
+    )
+    summary = await sched.run_once(as_of=args.as_of)
+    print(summary)
+    if summary.decision is not None:
+        print()
+        for tgt in summary.decision.targets[:10]:
+            print(f"  target  {tgt.ticker:<6}  {tgt.target_shares:>4} sh  ${tgt.target_notional_usd}  score={tgt.momentum_score:+.4f}")
+        if len(summary.decision.targets) > 10:
+            print(f"  … ({len(summary.decision.targets) - 10} more targets)")
+        print()
+        for o in summary.decision.orders[:10]:
+            print(f"  order   {o.ticker:<6}  {o.action.value:<8}  {o.side} {o.qty:>4} sh  ${o.notional_usd}")
+        if len(summary.decision.orders) > 10:
+            print(f"  … ({len(summary.decision.orders) - 10} more orders)")
+    return 0
+
+
+def main() -> None:  # pragma: no cover - CLI shim
+    raise SystemExit(asyncio.run(amain(_parse_args())))
+
+
+if __name__ == "__main__":  # pragma: no cover
+    main()

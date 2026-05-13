@@ -1,0 +1,113 @@
+"""Momentum — Plug 4: Capital Gate.
+
+Engine-local guardrail. Looser graduation criteria than Sigma/Reversion/
+Vector because monthly rebalance accrues fewer trade-events per unit time
+— 6 rebalances = 6 months of paper trading at this cadence.
+
+Limits:
+
+* **Pre-graduation total notional cap**: ``engine_equity_usd`` (defaults to
+  10k). The portfolio fills equity to ~100% long since this is long-only.
+* **Per-name cap**: enforced in ExecutionRisk via ``PER_NAME_CAP_PCT``.
+* **Drawdown freeze** (Phase 2.5): pause new rebalances when portfolio is
+  >10% off rolling peak. Not implemented in Phase 2 MVP.
+
+Graduation (paper → live) requires three things:
+1. ``stats.n_rebalances >= GRAD_MIN_REBALANCES`` (6 monthly cycles ≈ 6 months).
+2. ``stats.sharpe_annualized >= GRAD_MIN_SHARPE`` (1.0).
+3. Data Validation Suite + credibility rubric — same shared infrastructure
+   the other engines use.
+"""
+from __future__ import annotations
+
+from decimal import Decimal
+from typing import TYPE_CHECKING
+
+import structlog
+from pydantic import BaseModel, ConfigDict
+
+from momentum.models import (
+    GRAD_MIN_PROFIT_FACTOR,
+    GRAD_MIN_REBALANCES,
+    GRAD_MIN_SHARPE,
+)
+from tpcore.backtest.credibility import (
+    CredibilityScoreInsufficientError,
+    graduation_ready,
+)
+from tpcore.interfaces.engine_plug import BaseEnginePlug
+from tpcore.quality.validation.capital_gate import assert_passed
+
+if TYPE_CHECKING:  # pragma: no cover
+    import asyncpg
+
+logger = structlog.get_logger(__name__)
+
+
+class MomentumGraduationStats(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    n_rebalances: int = 0
+    sharpe_annualized: float = 0.0
+    profit_factor: float = 0.0
+
+
+class MomentumCapitalGate(BaseEnginePlug):
+    """Plug 4 of Momentum."""
+
+    engine_name = "momentum"
+
+    def __init__(self, engine_equity_usd: Decimal = Decimal("10000")) -> None:
+        self._engine_equity = engine_equity_usd
+
+    def validate_dependencies(self) -> bool:
+        return True
+
+    def healthcheck(self) -> dict:
+        return {
+            "engine": self.engine_name,
+            "plug": "capital_gate",
+            "ok": True,
+            "details": {
+                "engine_equity_usd": str(self._engine_equity),
+                "grad_min_rebalances": GRAD_MIN_REBALANCES,
+                "grad_min_sharpe": GRAD_MIN_SHARPE,
+                "grad_min_profit_factor": GRAD_MIN_PROFIT_FACTOR,
+            },
+        }
+
+    def check_rebalance(self, total_buy_notional_usd: Decimal) -> bool:
+        """Engine-local sanity: the proposed buy-side notional must not exceed
+        the engine's allocated equity. Long-only, no leverage."""
+        if total_buy_notional_usd <= 0:
+            return False
+        if total_buy_notional_usd > self._engine_equity:
+            logger.warning(
+                "momentum.gate.reject_oversize",
+                buy_notional=str(total_buy_notional_usd),
+                equity=str(self._engine_equity),
+            )
+            return False
+        return True
+
+    @staticmethod
+    def is_graduated(stats: MomentumGraduationStats) -> bool:
+        return (
+            stats.n_rebalances >= GRAD_MIN_REBALANCES
+            and stats.sharpe_annualized >= GRAD_MIN_SHARPE
+            and stats.profit_factor >= GRAD_MIN_PROFIT_FACTOR
+        )
+
+    @staticmethod
+    async def assert_can_graduate(
+        stats: MomentumGraduationStats, pool: asyncpg.Pool,
+    ) -> bool:
+        """Combined gate: stats AND Data Validation Suite AND credibility ≥ 60."""
+        if not MomentumCapitalGate.is_graduated(stats):
+            return False
+        await assert_passed(pool)
+        if not await graduation_ready(pool, engine_name="momentum"):
+            raise CredibilityScoreInsufficientError(
+                "Momentum backtest credibility score < 60 (or no rubric row on record)"
+            )
+        return True
