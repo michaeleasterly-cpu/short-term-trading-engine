@@ -234,6 +234,101 @@ async def test_backfill_upserts_payload() -> None:
 
 
 # ────────────────────────────────────────────────────────────────────────────
+# backfill_all resumability — added 2026-05-13
+# ────────────────────────────────────────────────────────────────────────────
+
+
+class _ResumabilityConn:
+    """FakeConn variant that lets a test pre-program which tickers are
+    considered 'recently refreshed' (i.e. should be skipped)."""
+
+    def __init__(self, fresh_tickers: set[str]) -> None:
+        self.fresh_tickers = fresh_tickers
+        self.fetch_calls: list[tuple[str, tuple]] = []
+        self.executemany_calls: list[tuple[str, list[tuple]]] = []
+
+    async def fetch(self, sql: str, *args):
+        self.fetch_calls.append((sql, args))
+        if "MAX(recorded_at) > now()" in sql:
+            # Bulk freshness check — return rows for tickers in the fresh set.
+            asked = list(args[0])
+            return [{"ticker": t} for t in asked if t in self.fresh_tickers]
+        # Other queries (none in this test path) — empty.
+        return []
+
+    async def executemany(self, sql: str, rows: list[tuple]) -> None:
+        self.executemany_calls.append((sql, rows))
+
+
+async def test_backfill_all_skips_already_fresh_tickers() -> None:
+    conn = _ResumabilityConn(fresh_tickers={"AAPL", "MSFT"})
+    adapter = _FakeAdapter(payload=_adapter_payload(date(2025, 10, 31), ni=100, fcf=95))
+    cache = FundamentalsCache(_FakePool(conn), adapter=adapter)
+    rows, no_data, failures, skipped = await cache.backfill_all(
+        tickers=["AAPL", "MSFT", "GOOG"],
+        inter_symbol_sleep_sec=0.0,
+        skip_if_refreshed_within_hours=24.0,
+    )
+    # AAPL + MSFT skipped (already fresh); only GOOG hits the adapter.
+    assert skipped == 2
+    assert rows >= 1
+    assert len(adapter.calls) == 1
+    assert adapter.calls[0][0] == "GOOG"
+    assert no_data == []
+    assert failures == []
+
+
+async def test_backfill_all_skip_none_when_threshold_is_none() -> None:
+    # ``skip_if_refreshed_within_hours=None`` reverts to the legacy
+    # "always refetch" behavior — no skip query, every ticker hits FMP.
+    conn = _ResumabilityConn(fresh_tickers={"AAPL", "MSFT", "GOOG"})
+    adapter = _FakeAdapter(payload=_adapter_payload(date(2025, 10, 31), ni=100, fcf=95))
+    cache = FundamentalsCache(_FakePool(conn), adapter=adapter)
+    rows, no_data, failures, skipped = await cache.backfill_all(
+        tickers=["AAPL", "MSFT", "GOOG"],
+        inter_symbol_sleep_sec=0.0,
+        skip_if_refreshed_within_hours=None,
+    )
+    assert skipped == 0
+    assert len(adapter.calls) == 3
+    assert {c[0] for c in adapter.calls} == {"AAPL", "MSFT", "GOOG"}
+
+
+async def test_backfill_all_normalizes_ticker_case_for_skip_check() -> None:
+    # Tickers may arrive lowercased; the cache stores uppercase. The
+    # skip-check must match on the upper form so we don't double-fetch.
+    conn = _ResumabilityConn(fresh_tickers={"AAPL"})
+    adapter = _FakeAdapter(payload=_adapter_payload(date(2025, 10, 31), ni=100, fcf=95))
+    cache = FundamentalsCache(_FakePool(conn), adapter=adapter)
+    rows, no_data, failures, skipped = await cache.backfill_all(
+        tickers=["aapl", "msft"],
+        inter_symbol_sleep_sec=0.0,
+        skip_if_refreshed_within_hours=24.0,
+    )
+    assert skipped == 1
+    # Only MSFT should have hit the adapter.
+    assert len(adapter.calls) == 1
+    assert adapter.calls[0][0] == "msft"
+
+
+async def test_backfill_all_returns_4_tuple_shape() -> None:
+    # Belt-and-suspenders against API drift — every caller now unpacks 4.
+    conn = _ResumabilityConn(fresh_tickers=set())
+    adapter = _FakeAdapter(payload=_adapter_payload(date(2025, 10, 31), ni=100, fcf=95))
+    cache = FundamentalsCache(_FakePool(conn), adapter=adapter)
+    result = await cache.backfill_all(
+        tickers=["AAPL"], inter_symbol_sleep_sec=0.0,
+    )
+    assert isinstance(result, tuple)
+    assert len(result) == 4
+    rows, no_data, failures, skipped = result
+    assert isinstance(rows, int)
+    assert isinstance(no_data, list)
+    assert isinstance(failures, list)
+    assert isinstance(skipped, int)
+
+
+# ────────────────────────────────────────────────────────────────────────────
 # Optional live integration
 # ────────────────────────────────────────────────────────────────────────────
 

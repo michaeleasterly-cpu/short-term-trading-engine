@@ -144,14 +144,17 @@ class FundamentalsCache:
         tickers: list[str] | None = None,
         *,
         inter_symbol_sleep_sec: float = 1.0,
-    ) -> tuple[int, list[tuple[str, str]], list[tuple[str, str]]]:
-        """Refresh every cached symbol. Returns ``(rows, no_data, failures)``.
+        skip_if_refreshed_within_hours: float | None = 24.0,
+    ) -> tuple[int, list[tuple[str, str]], list[tuple[str, str]], int]:
+        """Refresh every cached symbol. Returns ``(rows, no_data, failures, skipped)``.
 
         ``no_data`` collects symbols FMP responded to with "no usable
         fundamentals" — the canonical signal for ETFs and the rare
         delisted shell. These are expected-empty, not actionable, and
         callers should not exit non-zero on them. ``failures`` is for
-        real outages: timeouts, 5xx, malformed payloads.
+        real outages: timeouts, 5xx, malformed payloads. ``skipped`` is
+        the count of tickers whose cache row was already fresh enough
+        per ``skip_if_refreshed_within_hours``.
 
         When ``tickers`` is ``None``, the active universe is read from
         ``platform.prices_daily`` (distinct tickers with a bar in the
@@ -160,6 +163,15 @@ class FundamentalsCache:
         ``inter_symbol_sleep_sec`` is a courtesy delay between FMP
         calls; Starter plan rate limits comfortably absorb 1s but
         tighter loops risk 429s on long universes.
+
+        ``skip_if_refreshed_within_hours`` controls resumability — any
+        ticker whose newest ``fundamentals_quarterly.recorded_at`` is
+        younger than this threshold is skipped (no FMP call, no sleep).
+        Default 24h means: a fully-completed run is a near-instant no-op
+        on the same calendar day, and a run that timed out partway
+        through resumes from where it left off. Pass ``None`` to force
+        re-fetch every ticker regardless of freshness (the pre-2026-05-13
+        behavior).
         """
         if self._adapter is None:
             raise DataProviderOutage(
@@ -167,10 +179,25 @@ class FundamentalsCache:
             )
         if tickers is None:
             tickers = await self._list_active_tickers()
+
+        # Resumability: pre-fetch the freshest recorded_at per ticker so we
+        # can decide "skip" without a per-ticker DB round-trip. One bulk
+        # query is cheap (~1s) and saves N - skipped FMP calls.
+        already_fresh: set[str] = set()
+        if skip_if_refreshed_within_hours is not None and tickers:
+            already_fresh = await self._tickers_refreshed_within(
+                tickers, hours=skip_if_refreshed_within_hours,
+            )
+
         total = 0
         no_data: list[tuple[str, str]] = []
         failures: list[tuple[str, str]] = []
+        skipped = 0
         for i, symbol in enumerate(tickers, start=1):
+            if symbol.upper() in already_fresh:
+                skipped += 1
+                logger.debug("fundamentals.cache.backfill_all_skipped_fresh", symbol=symbol)
+                continue
             try:
                 n = await self.backfill(symbol)
             except DataProviderOutage as exc:
@@ -193,9 +220,31 @@ class FundamentalsCache:
                 rows=n,
                 done=i,
                 total=len(tickers),
+                skipped_so_far=skipped,
             )
             await asyncio.sleep(inter_symbol_sleep_sec)
-        return total, no_data, failures
+        return total, no_data, failures, skipped
+
+    async def _tickers_refreshed_within(
+        self,
+        tickers: list[str],
+        *,
+        hours: float,
+    ) -> set[str]:
+        """Return the subset of ``tickers`` whose newest cache row is
+        younger than ``hours`` old. One bulk query — much faster than
+        per-ticker checks in the backfill loop."""
+        upper_tickers = [t.upper() for t in tickers]
+        sql = """
+            SELECT ticker
+            FROM platform.fundamentals_quarterly
+            WHERE ticker = ANY($1::text[])
+            GROUP BY ticker
+            HAVING MAX(recorded_at) > now() - ($2::float * INTERVAL '1 hour')
+        """
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(sql, upper_tickers, hours)
+        return {r["ticker"] for r in rows}
 
     async def _list_active_tickers(self) -> list[str]:
         """Distinct tickers with a bar in the last 90 days and not delisted.

@@ -365,13 +365,22 @@ async def _stage_fundamentals_refresh(pool: asyncpg.Pool, config: dict[str, Any]
 
     async with FMPFundamentalsAdapter() as adapter:
         cache = FundamentalsCache(pool, adapter=adapter)
-        rows, no_data, failures = await cache.backfill_all(tickers=tickers)
+        # skip_if_refreshed_within_hours=24 makes this stage resumable:
+        # if it timed out partway through, the next run picks up where it
+        # left off; if it completed successfully today, the next run is a
+        # near-instant no-op. Without this, the 1s per-symbol sleep means
+        # the stage routinely exceeds its 1-hour timeout on the ~5k+
+        # ticker universe — re-running solves nothing.
+        rows, no_data, failures, skipped = await cache.backfill_all(
+            tickers=tickers, skip_if_refreshed_within_hours=24.0,
+        )
 
     detail = {
         "tickers": len(tickers),
         "rows": rows,
         "no_data": len(no_data),
         "failures": len(failures),
+        "skipped_fresh": skipped,
     }
     if failures:
         # Match handler semantics: real FMP failures surface as an error
@@ -459,6 +468,23 @@ async def _stage_simulate_universe() -> dict[str, Any]:
 # ────────────────────────────────────────────────────────────────────────
 
 
+# Canonical stage spec — (name, factory builder, timeout). The factory takes
+# ``(pool, daily_bars_config_or_none)`` and returns a zero-arg coroutine
+# factory suitable for ``_run_stage``. Single source of truth for both
+# ``cmd_update`` (run all stages in order) and ``cmd_run_stage`` (run one).
+# To add/remove a stage: update this list AND OPS_UPDATE_STAGES in
+# dashboard_components/health.py.
+_STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
+    ("daily_bars",          lambda pool, cfg: (lambda: _stage_daily_bars(pool, cfg)),          HEAVY_STAGE_TIMEOUT_SEC),
+    ("corporate_actions",   lambda pool, cfg: (lambda: _stage_corporate_actions(pool)),        HEAVY_STAGE_TIMEOUT_SEC),
+    ("fundamentals_refresh",lambda pool, cfg: (lambda: _stage_fundamentals_refresh(pool, cfg)),HEAVY_STAGE_TIMEOUT_SEC),
+    ("data_validation",     lambda pool, cfg: (lambda: _stage_data_validation(pool)),          STAGE_TIMEOUT_SEC),
+    ("universe_prescreener",lambda pool, cfg: (lambda: _stage_universe_prescreener(pool)),     STAGE_TIMEOUT_SEC),
+    ("universe_simulation", lambda pool, cfg: _stage_simulate_universe,                        STAGE_TIMEOUT_SEC),
+)
+KNOWN_STAGES: tuple[str, ...] = tuple(name for name, _, _ in _STAGE_SPECS)
+
+
 async def cmd_update(
     pool: asyncpg.Pool,
     log: structlog.stdlib.BoundLogger,
@@ -485,63 +511,92 @@ async def cmd_update(
         summary.finished_at = datetime.now(UTC)
         return summary
 
-    summary.stages.append(
-        await _run_stage(
-            "daily_bars",
-            lambda: _stage_daily_bars(pool, daily_bars_config),
-            log=log,
-            db_log=db_log,
-            dry_run=dry_run,
-            timeout=HEAVY_STAGE_TIMEOUT_SEC,
+    for name, factory_builder, timeout in _STAGE_SPECS:
+        summary.stages.append(
+            await _run_stage(
+                name,
+                factory_builder(pool, daily_bars_config),
+                log=log,
+                db_log=db_log,
+                dry_run=dry_run,
+                timeout=timeout,
+            )
         )
-    )
-    summary.stages.append(
-        await _run_stage(
-            "corporate_actions",
-            lambda: _stage_corporate_actions(pool),
-            log=log,
-            db_log=db_log,
-            dry_run=dry_run,
-            timeout=HEAVY_STAGE_TIMEOUT_SEC,
-        )
-    )
-    summary.stages.append(
-        await _run_stage(
-            "fundamentals_refresh",
-            lambda: _stage_fundamentals_refresh(pool, daily_bars_config),
-            log=log,
-            db_log=db_log,
-            dry_run=dry_run,
-            timeout=HEAVY_STAGE_TIMEOUT_SEC,
-        )
-    )
-    summary.stages.append(
-        await _run_stage(
-            "data_validation",
-            lambda: _stage_data_validation(pool),
-            log=log,
-            db_log=db_log,
-            dry_run=dry_run,
-        )
-    )
-    summary.stages.append(
-        await _run_stage(
-            "universe_prescreener",
-            lambda: _stage_universe_prescreener(pool),
-            log=log,
-            db_log=db_log,
-            dry_run=dry_run,
-        )
-    )
-    summary.stages.append(
-        await _run_stage(
-            "universe_simulation",
-            _stage_simulate_universe,
-            log=log,
-            db_log=db_log,
-            dry_run=dry_run,
-        )
-    )
+
+
+async def cmd_run_stage(
+    stage_name: str,
+    pool: asyncpg.Pool,
+    log: structlog.stdlib.BoundLogger,
+    db_log,
+    *,
+    dry_run: bool,
+) -> UpdateSummary:
+    """Run a single stage by name. Same logging + event shape as ``cmd_update``
+    — different ``run_id``. Used by the dashboard's per-stage Fix buttons.
+
+    Acquires a Postgres advisory lock keyed on the stage name so that a
+    locally-launched stage cannot race a future Railway cron (or another
+    operator session) running the same stage concurrently. Bails with a
+    structured FAILED event if the lock is held — clear signal, not a
+    silent merge."""
+    started_at = datetime.now(UTC)
+    summary = UpdateSummary(run_id=db_log._run_id, started_at=started_at, finished_at=started_at)
+
+    matched = [s for s in _STAGE_SPECS if s[0] == stage_name]
+    if not matched:
+        msg = f"unknown stage '{stage_name}'; known: {', '.join(KNOWN_STAGES)}"
+        await db_log.log("INGESTION_FAILED", msg, severity="ERROR", data={"stage": stage_name})
+        summary.stages.append(StageResult(name=stage_name, status="FAILED", duration_ms=0, error=msg))
+        summary.finished_at = datetime.now(UTC)
+        return summary
+    name, factory_builder, timeout = matched[0]
+
+    # Advisory lock — hash the stage name into an int, try to acquire. The
+    # lock is auto-released on connection close.
+    lock_key = abs(hash(name)) % (2**31)
+    async with pool.acquire() as lock_conn:
+        got = await lock_conn.fetchval("SELECT pg_try_advisory_lock($1)", lock_key)
+        if not got:
+            msg = f"stage '{name}' is already running elsewhere (advisory lock held)"
+            await db_log.log("INGESTION_FAILED", msg, severity="ERROR", data={"stage": name, "reason": "lock_busy"})
+            summary.stages.append(StageResult(name=name, status="FAILED", duration_ms=0, error=msg))
+            summary.finished_at = datetime.now(UTC)
+            return summary
+        try:
+            # daily_bars_config is needed by daily_bars + fundamentals_refresh.
+            # Other stages take an unused config arg, so the load is harmless.
+            try:
+                daily_bars_config = await _load_daily_bars_config(pool)
+            except Exception as exc:  # noqa: BLE001
+                log.error("ops.config.load_failed", error=str(exc), stage=name)
+                await db_log.log(
+                    "INGESTION_FAILED",
+                    f"{name}: config load failed: {exc}",
+                    severity="ERROR",
+                    data={"stage": "config_load", "error": str(exc)},
+                )
+                summary.stages.append(
+                    StageResult(name="config_load", status="FAILED", duration_ms=0, error=str(exc))
+                )
+                summary.finished_at = datetime.now(UTC)
+                return summary
+
+            summary.stages.append(
+                await _run_stage(
+                    name,
+                    factory_builder(pool, daily_bars_config),
+                    log=log,
+                    db_log=db_log,
+                    dry_run=dry_run,
+                    timeout=timeout,
+                )
+            )
+        finally:
+            await lock_conn.fetchval("SELECT pg_advisory_unlock($1)", lock_key)
+
+    summary.finished_at = datetime.now(UTC)
+    return summary
     summary.finished_at = datetime.now(UTC)
     return summary
 
@@ -809,6 +864,11 @@ def _build_parser() -> argparse.ArgumentParser:
     mode.add_argument("--update", action="store_true", help="run maintenance stages")
     mode.add_argument("--check", action="store_true", help="read-only health report")
     mode.add_argument("--full", action="store_true", help="--update then --check")
+    mode.add_argument(
+        "--stage",
+        choices=KNOWN_STAGES,
+        help="run a single --update stage by name (used by the dashboard's per-stage Fix buttons)",
+    )
     p.add_argument("--dry-run", action="store_true", help="log without writing data")
     p.add_argument("--pretty", action="store_true", help="pretty-print --check output")
     return p
@@ -821,7 +881,7 @@ async def amain(args: argparse.Namespace) -> int:
     run_id = uuid.uuid4()
     log = _configure_logging(run_id)
 
-    if args.update or args.full:
+    if args.update or args.full or args.stage:
         _require_env(["DATABASE_URL", "FMP_API_KEY"])
         _require_alpaca_env()
     else:
@@ -834,22 +894,38 @@ async def amain(args: argparse.Namespace) -> int:
     exit_code = 0
 
     try:
+        mode_str = (
+            f"stage:{args.stage}" if args.stage
+            else "update" if args.update
+            else "full" if args.full
+            else "check"
+        )
         await db_log.log(
             "STARTUP",
-            f"ops CLI starting (update={args.update} check={args.check} full={args.full} dry_run={args.dry_run})",
+            f"ops CLI starting (mode={mode_str} dry_run={args.dry_run})",
             severity="INFO",
             data={
                 "argv": sys.argv,
                 "dry_run": args.dry_run,
-                "mode": "update" if args.update else ("full" if args.full else "check"),
+                "mode": mode_str,
             },
         )
-        log.info("ops.start", mode="update" if args.update else ("full" if args.full else "check"))
+        log.info("ops.start", mode=mode_str)
 
         update_summary: UpdateSummary | None = None
         if args.update or args.full:
             update_summary = await cmd_update(pool, log, db_log, dry_run=args.dry_run)
             print("\nUPDATE SUMMARY")
+            print("=" * 72)
+            print(update_summary.to_table())
+            print()
+            if update_summary.exit_code != 0:
+                exit_code = update_summary.exit_code
+        elif args.stage:
+            update_summary = await cmd_run_stage(
+                args.stage, pool, log, db_log, dry_run=args.dry_run,
+            )
+            print(f"\nSTAGE SUMMARY ({args.stage})")
             print("=" * 72)
             print(update_summary.to_table())
             print()

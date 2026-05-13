@@ -17,6 +17,7 @@ from dashboard_components.health import (
     classify_universe,
     classify_update_run,
     classify_validation,
+    update_required_banner,
 )
 
 # ─── Bars freshness ─────────────────────────────────────────────────────────
@@ -213,3 +214,45 @@ def test_validation_amber_when_no_runs():
     color, summary, _ = classify_validation([])
     assert color == "amber"
     assert "No validation runs" in summary
+
+
+# ─── update_required_banner — NYSE-relative staleness signal ────────────────
+
+
+def test_banner_hidden_when_bars_cover_most_recent_close():
+    # Pick a known closed session and bars from that same session.
+    # 2026-05-12 was a regular Tuesday session. After its close, bars dated
+    # 2026-05-12 should require no banner.
+    now = datetime(2026, 5, 12, 22, 0, tzinfo=UTC)  # 18:00 ET
+    banner = update_required_banner(datetime(2026, 5, 12).date(), now)
+    assert banner is None
+
+
+def test_banner_required_for_overnight_manila_wakeup():
+    # User in Manila wakes up 09:00 local on a Monday — that's UTC 01:00
+    # Monday, ET 21:00 Sunday. Friday's session is the most recent close
+    # (~28h ago), and bars are from the previous Thursday → 1 trading day
+    # behind, well past grace → "required".
+    now = datetime(2026, 5, 11, 1, 0, tzinfo=UTC)  # ET Sun 21:00
+    banner = update_required_banner(datetime(2026, 5, 7).date(), now)
+    assert banner is not None
+    severity, message = banner
+    assert severity == "required"
+    assert "Update required" in message
+
+
+def test_banner_warn_within_publication_grace():
+    # 30 minutes after the close, bars not yet available → warn, not required.
+    now = datetime(2026, 5, 12, 20, 30, tzinfo=UTC)  # ~30m after 16:00 ET close
+    banner = update_required_banner(datetime(2026, 5, 11).date(), now)
+    assert banner is not None
+    severity, _ = banner
+    assert severity == "warn"
+
+
+def test_banner_required_when_no_bars_at_all():
+    banner = update_required_banner(None)
+    assert banner is not None
+    severity, message = banner
+    assert severity == "required"
+    assert "No bars" in message

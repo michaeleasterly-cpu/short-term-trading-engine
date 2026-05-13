@@ -38,6 +38,7 @@ from dashboard_components.health import (
     classify_universe,
     classify_update_run,
     classify_validation,
+    update_required_banner,
 )
 from scripts.generate_tip_sheet import (
     fetch_credibility,
@@ -669,6 +670,20 @@ def _color_glyph_for_pnl(pnl: float) -> tuple[str, str]:
     return ("◆", "#666666")
 
 
+def _fmt_local(dt: datetime | None) -> str:
+    """Format a datetime in the dashboard process's local timezone.
+
+    The dashboard is intended to run on the operator's own Mac
+    (localhost:8501), so process-local time == operator's wall clock.
+    Backend persistence stays UTC; only the display is converted."""
+    if dt is None:
+        return "—"
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    local = dt.astimezone()  # system local TZ
+    return local.strftime("%Y-%m-%d %H:%M:%S %Z")
+
+
 def render_header():
     st.title("Trading Engine — Operator Dashboard")
     try:
@@ -689,7 +704,15 @@ def render_header():
         f"{glyph} ${pl:+,.2f}  ({pl_pct * 100:+.3f}%)</div>",
         unsafe_allow_html=True,
     )
-    st.caption(f"Data as of {state['fetched_at'].strftime('%H:%M:%S UTC')}")
+    # Local time first (operator-friendly); UTC kept in parens for
+    # cross-reference with logs and DB rows.
+    now_local = datetime.now().astimezone()
+    fetched_local = state["fetched_at"].astimezone()
+    st.caption(
+        f"Now {now_local.strftime('%H:%M:%S %Z')} · "
+        f"data as of {fetched_local.strftime('%H:%M:%S %Z')} "
+        f"(UTC {state['fetched_at'].strftime('%H:%M:%S')})"
+    )
     return state
 
 
@@ -895,7 +918,7 @@ def render_recent_activity():
                 score = data.get("score") if isinstance(data, dict) else None
                 rows.append(
                     {
-                        "When": s.get("recorded_at"),
+                        "When": _fmt_local(s.get("recorded_at")),
                         "Engine": s.get("engine"),
                         "Ticker": ticker,
                         "Score": f"{score:+.3f}" if isinstance(score, (int, float)) else "",
@@ -1002,13 +1025,13 @@ def render_recent_orders():
     for o in sorted_orders[:30]:
         rows.append(
             {
-                "Submitted": o["submitted_at"],
+                "Submitted": _fmt_local(o["submitted_at"]),
                 "Ticker": o["ticker"],
                 "Side": o["side"],
                 "Qty": o["qty"],
                 "Status": o["status"],
                 "Fill price": o["avg_fill_price"],
-                "Filled at": o["filled_at"],
+                "Filled at": _fmt_local(o["filled_at"]),
             }
         )
     df = pd.DataFrame(rows)
@@ -1208,6 +1231,77 @@ def _render_health_row(
             _dispatch_health_fix(fix_action)
 
 
+def _render_stage_detail_row(
+    stage: str,
+    color: str,
+    text: str,
+    *,
+    job_busy: bool,
+    is_downstream_of_red: bool,
+) -> None:
+    """One row inside the stage-by-stage expander. Adds a per-stage 🔧 Fix
+    button when the stage is amber/red AND we know how to remediate it
+    (``data_validation`` is intentionally button-less — it's a symptom).
+
+    Disable rules:
+      * ``job_busy``           — another detached job is already running.
+        Concurrent dispatches would orphan the first job's tracking entry
+        in session_state.
+      * ``is_downstream_of_red`` — an earlier stage is red; running this
+        one solo will likely fail until the upstream is fixed. Tooltip
+        steers the operator upstream.
+    """
+    glyph = _health_glyph(color)
+    color_hex = {"green": "#0a8a3a", "amber": "#c77700", "red": "#c62828"}.get(color, "#666666")
+    show_button = (
+        color in ("amber", "red")
+        and stage in _STAGE_FIX_HELP
+        and stage != "data_validation"  # symptom, not a switch
+    )
+    if show_button:
+        cols = st.columns([3, 6, 2])
+    else:
+        cols = st.columns([3, 8, 0.01])
+    cols[0].markdown(
+        f'<div style="color:#888; padding-top:0.4rem;">{stage}</div>',
+        unsafe_allow_html=True,
+    )
+    cols[1].markdown(
+        f'<div style="padding-top:0.4rem;"><span>{glyph}</span> '
+        f'<span style="color:{color_hex};">{text}</span></div>',
+        unsafe_allow_html=True,
+    )
+    if show_button:
+        if job_busy:
+            cols[2].button(
+                "🔧 busy",
+                key=f"stage_fix_{stage}_disabled_busy",
+                help="Another job is already running. Wait for it to finish.",
+                disabled=True,
+                use_container_width=True,
+            )
+        elif is_downstream_of_red:
+            cols[2].button(
+                "🔧 upstream",
+                key=f"stage_fix_{stage}_disabled_upstream",
+                help=(
+                    "An earlier stage is red; this stage probably won't "
+                    "succeed until upstream is fixed."
+                ),
+                disabled=True,
+                use_container_width=True,
+            )
+        else:
+            help_text = _STAGE_FIX_HELP[stage]
+            if st.button(
+                "🔧 Fix",
+                key=f"stage_fix_{stage}_active",
+                help=help_text,
+                use_container_width=True,
+            ):
+                _dispatch_stage_fix(stage)
+
+
 # ─── Fix-it action registry ─────────────────────────────────────────────────
 # Each entry maps a fix_action key to {label, help, script, blocking?}.
 # Non-blocking actions run detached via ``run_detached_script`` (same
@@ -1219,14 +1313,29 @@ HEALTH_ACTIONS: dict[str, dict] = {
         "label": "Run daily update",
         "help": "Re-runs scripts/ops.py --update (all 6 stages). Detached, ~30-45 min.",
         "script": "scripts/run_daily_update.sh",
+        "args": (),
         "blocking": False,
     },
     "prescreener": {
         "label": "Re-run prescreener",
-        "help": "Re-populates today's universe_candidates rows for momentum. Fast (~1 min).",
+        "help": "Re-populates today's universe_candidates rows for momentum. Fast (~7s).",
         "script": "scripts/run_prescreener_only.sh",
+        "args": (),
         "blocking": False,
     },
+}
+
+# Per-stage fix actions — each runs `scripts/run_stage.sh <stage>` which
+# invokes `scripts/ops.py --stage <name>`. Same logging + event shape as
+# inside a full --update; advisory-locked against concurrent runs of the
+# same stage. The dashboard wires these into the stage-detail expander.
+_STAGE_FIX_HELP: dict[str, str] = {
+    "daily_bars":            "Re-pull today's bars from Alpaca. Heavy (~30 min on cold cache).",
+    "corporate_actions":     "Re-pull splits/dividends and apply to prices_daily. Heavy.",
+    "fundamentals_refresh":  "Re-fetch FMP fundamentals; tickers already refreshed in the last 24h are skipped, so retries make progress.",
+    "data_validation":       "Re-run the delistings/constituent/splits checks. Symptom-level — root cause is upstream data.",
+    "universe_prescreener":  "Re-populate today's momentum universe_candidates rows. Fast (~7s).",
+    "universe_simulation":   "Diagnostic — re-runs scripts/simulate_universe.py and writes the candidate-count event.",
 }
 
 
@@ -1248,9 +1357,52 @@ def _dispatch_health_fix(action_key: str) -> None:
             "started_at": time.time(),
         }
         st.success(f"Launched (pid {pid}); logfile: {logfile}")
-    # Invalidate the health cache so the next refresh shows the new state.
     _fetch_platform_health_cached.clear()
     st.rerun()
+
+
+def _dispatch_stage_fix(stage_name: str) -> None:
+    """Launch ``scripts/run_stage.sh <stage_name>`` detached. Same session_state
+    + cache-clear contract as ``_dispatch_health_fix``."""
+    pid = _spawn_detached(["scripts/run_stage.sh", stage_name])
+    logfile = LOG_DIR / f"dashboard_run_stage_{stage_name}_{datetime.now(UTC):%Y%m%d_%H%M%S}.log"
+    st.session_state["detached_job"] = {
+        "name": f"Re-run stage: {stage_name}",
+        "pid": pid["pid"],
+        "logfile": str(pid["logfile"]),
+        "started_at": time.time(),
+    }
+    st.success(f"Launched stage '{stage_name}' (pid {pid['pid']}); logfile: {pid['logfile']}")
+    _fetch_platform_health_cached.clear()
+    st.rerun()
+
+
+def _spawn_detached(argv: list[str]) -> dict:
+    """Spawn ``argv`` detached the same way ``run_detached_script`` does for
+    single-string commands. Returns ``{"pid": int, "logfile": Path}``."""
+    logfile = LOG_DIR / f"dashboard_{argv[0].rsplit('/',1)[-1]}_{argv[-1] if len(argv) > 1 else 'x'}_{datetime.now(UTC):%Y%m%d_%H%M%S}.log"
+    proc = subprocess.Popen(  # noqa: S603 — script paths come from our own registry
+        argv,
+        stdout=open(logfile, "w"),
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+        cwd=str(REPO_ROOT),
+    )
+    return {"pid": proc.pid, "logfile": logfile}
+
+
+def _detached_job_is_live() -> bool:
+    """True iff a detached job recorded in session_state is still running.
+    Used to disable Fix buttons so a second click can't overwrite the
+    tracked job and leave the first one orphaned."""
+    job = st.session_state.get("detached_job")
+    if not job:
+        return False
+    try:
+        os.kill(job["pid"], 0)
+        return True
+    except (ProcessLookupError, PermissionError, OSError):
+        return False
 
 
 @st.cache_data(ttl=180, show_spinner=False)
@@ -1282,6 +1434,25 @@ def render_platform_health() -> None:
         st.error(f"Could not fetch platform health: {exc}")
         return
 
+    # "Update required" banner — independent of operator timezone. The
+    # signal is NYSE-close relative: if the most recently closed session
+    # has bars missing AND the publication grace window is past, the
+    # operator needs to act. Hidden when bars are current.
+    banner = update_required_banner(h["bars"]["latest_date"])
+    if banner is not None:
+        severity, message = banner
+        if severity == "required":
+            st.error(f"🛑  **Update required.** {message}", icon=None)
+            if st.button(
+                "📥  Run daily update",
+                key="health_banner_run_update",
+                help="Dispatches scripts/run_daily_update.sh (detached, ~30-45 min).",
+                use_container_width=False,
+            ):
+                _dispatch_health_fix("daily_update")
+        else:
+            st.warning(f"⏳  {message}", icon=None)
+
     bars_color, bars_text = classify_bars(h["bars"]["latest_date"])
     bars_text += f" — {h['bars']['recent_tickers']:,} tickers (last 5d)"
     _render_health_row("Bars (prices_daily)", bars_color, bars_text, fix_action="daily_update", row_key="bars")
@@ -1309,11 +1480,28 @@ def render_platform_health() -> None:
         if not run_detail:
             st.caption("No recent run found in platform.application_log.")
         else:
-            for stage, color, text in run_detail:
-                # Stage rows show the failure reason but don't carry their
-                # own action button — the parent "Last ops --update" row
-                # already has the Re-run button.
-                _render_health_row(stage, color, text)
+            # First red stage in dependency order — anything later that's red
+            # is likely a *consequence*, not an independent failure. Show
+            # operator a hint instead of letting them click downstream
+            # buttons that will just fail again.
+            first_red_idx: int | None = None
+            for i, (_, color, _) in enumerate(run_detail):
+                if color == "red":
+                    first_red_idx = i
+                    break
+
+            job_busy = _detached_job_is_live()
+            for i, (stage, color, text) in enumerate(run_detail):
+                is_downstream_of_red = (
+                    first_red_idx is not None and i > first_red_idx and color == "red"
+                )
+                _render_stage_detail_row(
+                    stage,
+                    color,
+                    text,
+                    job_busy=job_busy,
+                    is_downstream_of_red=is_downstream_of_red,
+                )
 
     # Validation failures aren't one-click fixable (data quality is a
     # symptom, not a switch). Show the roll-up without a Fix button.
@@ -1335,7 +1523,7 @@ def render_actions():
         last = {}
 
     # ── Daily — every market day ────────────────────────────────────────────
-    st.markdown("##### Daily — run every market day before close")
+    st.markdown("##### Daily — run every market day after the close")
     st.caption(
         "Six-stage maintenance: bars → corporate actions → fundamentals → "
         "validation suite → universe pre-screener → universe simulation. "
@@ -1651,6 +1839,39 @@ def _inject_keyboard_shortcuts() -> None:
     )
 
 
+def _inject_tab_styles() -> None:
+    """Make Streamlit's default tabs bigger — the stock 14px font + tight
+    padding makes the four-tab cluster a small click target on a wide
+    monitor. Bumping to 1.15rem with extra horizontal padding turns them
+    into genuine Fitts'-Law-friendly targets."""
+    st.markdown(
+        """
+        <style>
+        button[data-baseweb="tab"] {
+            font-size: 1.6rem !important;
+            padding: 1rem 2rem !important;
+            font-weight: 500 !important;
+            min-height: 3.5rem !important;
+        }
+        button[data-baseweb="tab"] p,
+        button[data-baseweb="tab"] div {
+            font-size: 1.6rem !important;
+            line-height: 1.4 !important;
+        }
+        div[data-baseweb="tab-list"] {
+            gap: 0.75rem;
+            border-bottom: 2px solid rgba(128,128,128,0.2);
+        }
+        button[data-baseweb="tab"][aria-selected="true"] {
+            font-weight: 700 !important;
+            background: rgba(100, 149, 237, 0.1);
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def main():
     st.set_page_config(
         page_title="Trading Engine — Operator Dashboard",
@@ -1659,6 +1880,7 @@ def main():
     )
 
     _inject_keyboard_shortcuts()
+    _inject_tab_styles()
     render_settings_panel()
     render_header()
 

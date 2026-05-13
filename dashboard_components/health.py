@@ -35,6 +35,68 @@ def _age_seconds(ts: datetime | None) -> float | None:
     return (datetime.now(UTC) - ts).total_seconds()
 
 
+def update_required_banner(
+    latest_bar_date: date | None,
+    now_utc: datetime | None = None,
+    *,
+    publication_grace_hours: float = 2.0,
+) -> tuple[str, str] | None:
+    """Decide whether the operator needs to run a daily update right now.
+
+    Returns ``(severity, message)`` or ``None`` (hide the banner). Severity
+    is ``"warn"`` (yellow — most recent session is closed but FMP may still
+    be publishing) or ``"required"`` (red — session closed long enough ago
+    that bars should be present).
+
+    Time-zone behaviour: everything is computed in UTC. The most-recent
+    closed NYSE session is the source of truth — whether the operator is
+    in Manila or NYC doesn't matter. The message references "ET" since
+    that's the exchange's clock, not the operator's.
+
+    Examples
+    --------
+    * Manila 09:00 (UTC 01:00) Mon = ET 21:00 Sun → session closed ~5h ago,
+      bars from previous Friday → ``"required"``.
+    * NYC 17:00 ET = UTC 21:00 → just closed → within grace → ``"warn"``.
+    * NYC 09:00 ET on a session day, bars from the prior session → no banner
+      (today's session hasn't closed yet, so bars-up-to-yesterday is correct).
+    """
+    if latest_bar_date is None:
+        return ("required", "No bars in prices_daily — run daily update before trading.")
+    now_utc = now_utc or datetime.now(UTC)
+
+    # Find the most recent NYSE close at or before now. Lazy import keeps
+    # this module dependency-light when classifiers are used in isolation.
+    from tpcore.calendar import previous_close
+
+    last_close_utc = previous_close(now_utc)
+    last_session_date = last_close_utc.date()
+
+    # If our bars cover the most recently closed session, we're current.
+    # ``latest_bar_date`` represents the trading date of the bar — and that
+    # date equals ``last_session_date`` once the bars for the just-closed
+    # session have been ingested.
+    if latest_bar_date >= last_session_date:
+        return None
+
+    hours_since_close = (now_utc - last_close_utc).total_seconds() / 3600.0
+    behind_days = (last_session_date - latest_bar_date).days
+    if hours_since_close < publication_grace_hours:
+        return (
+            "warn",
+            f"Session closed {hours_since_close:.1f}h ago (ET); bars from "
+            f"{latest_bar_date.isoformat()}. Today's bars may not be "
+            "published yet — wait or run the daily update.",
+        )
+    return (
+        "required",
+        f"Most recent NYSE close was {hours_since_close:.1f}h ago "
+        f"({last_session_date.isoformat()}); bars are from "
+        f"{latest_bar_date.isoformat()} ({behind_days}d behind). "
+        "**Update required before trading.**",
+    )
+
+
 def classify_bars(latest_date: date | None) -> tuple[str, str]:
     """Bars freshness: green if within 1 trading day; amber 2-3; red ≥4."""
     if latest_date is None:
