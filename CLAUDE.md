@@ -4,22 +4,27 @@
 Multi-engine automated trading platform. US equities, daily timeframe, fully automated execution via Alpaca API. Personal-use only.
 
 ## Architecture
-- tpcore/ — shared library (risk, AAR, quality, parity, backtest, fundamentals, valuation, tax)
+- tpcore/ — shared library (risk, AAR, quality, parity, backtest, fundamentals, valuation, tax, universe)
 - platform/ — Postgres schema, Alembic migrations
-- sigma/ — range scalping (daily Bollinger Bands); built, credibility 55/100 (BLOCKED)
-- reversion/ — mean reversion + earnings-quality gate; built, credibility 45/100 (BLOCKED)
-- vector/ — catalyst-driven swing (P/B + D/E + catalyst + technical); built, credibility 45/100 (BLOCKED); data-blocked on T1+T2 universe
-- momentum/ — cross-sectional 12-1 monthly rebalance; built and paper-trading; credibility 40/100 (gated structurally — see momentum spec)
+- dashboard.py + dashboard_components/ — Streamlit operator console (`scripts/run_dashboard.sh`)
+- sigma/ — range scalping (daily Bollinger Bands); built, last search top OOS +1.150 (FAILED DSR gate)
+- reversion/ — mean reversion + earnings-quality gate; built, last search top OOS +1.174 (FAILED DSR gate)
+- vector/ — catalyst-driven swing (P/B + D/E + catalyst + technical); built, last search top OOS +1.257 (FAILED DSR gate; was data-blocked, now unblocked after 2026-05-13 catalyst_events backfill — 1,349 rows / 137 tickers)
+- momentum/ — cross-sectional 12-1 monthly rebalance; built and paper-trading; last search top OOS +0.784 (FAILED DSR gate; gated structurally per momentum spec)
 - Future engines: s2/, catalyst/, sentinel/
+
+**Engine credibility status as of 2026-05-13 (post data-cleanup):** All four engines produce positive OOS edge candidates (scores 0.78–1.26), all four still fail the DSR ≥ 0.95 / credibility ≥ 60 gate. Data foundation is clean; signal strength is the binding constraint.
 
 ## Conventions
 - All timestamps UTC. Market hours via `tpcore.calendar` (which wraps `exchange_calendars` XNYS).
 - No yfinance. No Discord. No manual execution.
-- All orders via Alpaca API. Paper-then-live.
+- All orders via Alpaca API. Paper-then-live. Default Alpaca data feed is **SIP** (not IEX — IEX silently misses tickers that trade off-IEX).
 - Engines built in order so far: Sigma → Reversion → Vector → Momentum.
 - Backtest with self-built survivorship-free database before any live trading. (Note: `prices_daily` is currently only partially survivorship-clean — known caveat in `momentum/backtest.py` docstring.)
 - Every engine has 5 Plugs: setup_detection, lifecycle_analysis, execution_risk, aar_logging, capital_gate.
 - Every engine's `setup_detection` plug populates a `tpcore.backtest.filter_diagnostics.FilterDiagnostics` instance so SIGNAL events carry per-gate pass/block counters.
+- **Data-layer acceptance gate (2026-05-13):** validation suite (6 checks: delistings, constituent, splits, row_integrity, fundamentals_integrity, corporate_actions_integrity) must return `passed=True` with `confidence=1.000`. Cross-table audit (`scripts/run_audit_all_tables.sh`) must return 0 violations across every dependent table.
+- **Operator workflow:** daily post-close via `scripts/run_post_close.sh` (single button: download → upload → verify → fix → compress). Full historical refresh via `scripts/run_full_backfill.sh` (CSV-first across Alpaca bars + FMP fundamentals + Alpaca corp actions). Schedule daily run via `scripts/install_launchd_post_close.sh` (Mon-Fri at 21:30 UTC).
 
 ## Session Rules
 - Read docs/STYLE_GUIDE.md before writing any code.

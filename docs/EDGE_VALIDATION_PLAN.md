@@ -1,6 +1,17 @@
 # Edge-Discovery and Strategy-Validation Plan
 
-**Status (2026-05-12):** Phase 1 + Phase 1.5 (trade monitor) + Phase 2 (cost model) all complete. Backtests re-run with tier-aware costs — Sigma 55/100, Reversion 45/100, Vector 45/100; none passes the ≥ 60 gate. **Immediate next step: the pipeline smoke test** at the 2026-05-13 US market open. Historical replay (Phase 3) is deferred until smoke + engine architecture decisions land.
+**Status (2026-05-13 — post data-cleanup):** Full data layer hardened (94,979 corrupt prices_daily rows deleted + 1.13M SIP backfill + 6-check validation suite + catalyst_events expanded from ~683 to 1,349 rows / 137 tickers). All four engines re-run on clean data:
+
+| Engine | Top OOS score | Verdict | Notes |
+|---|---|---|---|
+| Sigma | +1.150 | FAILED (DSR < 0.95) | chop=47.7, hold=2d, stop=1.8% |
+| Reversion | +1.174 | FAILED | z=2.56, hold=12d, stop=10.4% |
+| **Vector** | **+1.257** | FAILED | catalyst_window=9d, P/B=2.52, D/E=2.94 — **was data-blocked at zero, now unblocked** |
+| Momentum | +0.784 | FAILED | lookback=233d, top decile=6.08% (paper-trading regardless of credibility per momentum spec) |
+
+All four produce positive OOS edge candidates; none passes DSR ≥ 0.95. **Data foundation is clean; signal strength is the binding constraint.** Earlier framing ("Sigma 55, Reversion 45, Vector 45") used tier-aware costs but pre-cleanup data — those scores are superseded by the table above.
+
+**Status (2026-05-12):** Phase 1 + Phase 1.5 (trade monitor) + Phase 2 (cost model) all complete.
 
 ## Current Execution Environment
 
