@@ -118,19 +118,25 @@ List every table under the `platform` schema. For each, provide columns, types, 
 
 **AI Rules:** This table is frozen. Do not write to it.
 
-#### `platform.universe_candidates` (planned — see §5 Implementation Queue)
+#### `platform.universe_candidates`
 
-**Purpose:** Pre-screened candidates per engine, refreshed daily. Engines read from this table instead of using hardcoded lists.
+**Purpose:** Pre-screened candidates per engine, refreshed daily. Engines read from this table instead of using hardcoded lists. The table answers "what's in scope today" — engines compute their own scores at runtime, so there is **no `score` column**. V1 populates only `engine='momentum'`; Sigma/Reversion/Vector keep their hardcoded universes until they need this.
 
-**Columns (planned):**
+**Columns:**
 
-- `engine` (text, PK): `'sigma'`, `'reversion'`, `'vector'`.
-- `ticker` (text, PK): Stock symbol.
 - `as_of_date` (date, PK): Screening date.
-- `score` (float): Engine-specific pre-screen score (0–100).
-- `reason` (text): Human-readable rationale.
+- `engine` (text, PK): `'momentum'` today; future engines opt in by adding a populator to `tpcore.universe.prescreener`.
+- `ticker` (text, PK): Stock symbol.
+- `tier` (smallint, nullable): Liquidity tier (1–5) at selection time. Null if the engine doesn't gate on tier.
+- `last_close` (numeric(18,6), nullable): Close used for the tradability check.
+- `reason` (text, nullable): Optional rationale.
+- `created_at` (timestamptz, default `now()`).
 
-**Indexes:** `(engine, ticker, as_of_date)` unique; `(engine, as_of_date)` for scheduler reads.
+**Indexes:** PK `(as_of_date, engine, ticker)`; secondary `idx_uc_engine_date (engine, as_of_date)` for scheduler reads.
+
+**Populator:** `tpcore.universe.prescreener.prescreen_momentum` (run daily after the prices_daily ingest). Joins `liquidity_tiers` (tier ≤ 2) against the latest close in `prices_daily` and applies `momentum.models.is_tradeable_common_stock`.
+
+**AI Rules:** Upsert via `ON CONFLICT (as_of_date, engine, ticker) DO UPDATE`. Historical rows are kept — don't delete prior dates.
 
 #### `platform.aar_events`
 
@@ -593,13 +599,12 @@ Tables and services that are specified but not yet built:
 
 | Priority | Component | Status |
 | ---: | --- | --- |
-| 1 | `platform.universe_candidates` + Universe Pre-Screener | Not built — engines use hardcoded lists |
-| 2 | Daily bar ingestion cron | Not built — bars not pre-fetched to `prices_daily` |
-| 3 | `platform.macro_indicators` + FRED adapter | Not built |
-| 4 | `platform.social_signals` + ApeWisdom adapter | Not built |
-| 5 | `platform.short_interest` + FINRA adapter | Not built |
-| 6 | `platform.borrow_rates` + IBorrowDesk adapter | Not built |
-| 7 | `platform.filings_insider` + SEC EDGAR adapter | Not built |
-| 8 | `platform.tax_lots` + Tax Overlay | Schema deferred |
+| 1 | Daily bar ingestion cron | Not built — bars not pre-fetched to `prices_daily` |
+| 2 | `platform.macro_indicators` + FRED adapter | Not built |
+| 3 | `platform.social_signals` + ApeWisdom adapter | Not built |
+| 4 | `platform.short_interest` + FINRA adapter | Not built |
+| 5 | `platform.borrow_rates` + IBorrowDesk adapter | Not built |
+| 6 | `platform.filings_insider` + SEC EDGAR adapter | Not built |
+| 7 | `platform.tax_lots` + Tax Overlay | Schema deferred |
 
-**Done (kept here for grep history):** `PostgresDataAdapter` (commit `d75076d`, 2026-05-10) — engines now read bars from `platform.prices_daily` exclusively, no live-API fallback. `platform.application_log` + `tpcore.logging.DBLogHandler` (commit `ff468de` + Alembic `20260511_0100`, applied 2026-05-10) — every scheduler run emits a queryable timeline; 7-day retention enforced per-write. Fundamentals cache weekly refresh (`ops/cron_fundamentals_refresh.py` + `FundamentalsCache.backfill_all`, Railway service `fundamentals-refresh-scheduler` cron `0 3 * * SUN`, applied 2026-05-10) — every distinct active ticker in `prices_daily` has its FMP fundamentals refreshed weekly so the lazy cache never serves stale data.
+**Done (kept here for grep history):** `PostgresDataAdapter` (commit `d75076d`, 2026-05-10) — engines now read bars from `platform.prices_daily` exclusively, no live-API fallback. `platform.application_log` + `tpcore.logging.DBLogHandler` (commit `ff468de` + Alembic `20260511_0100`, applied 2026-05-10) — every scheduler run emits a queryable timeline; 7-day retention enforced per-write. Fundamentals cache weekly refresh (`ops/cron_fundamentals_refresh.py` + `FundamentalsCache.backfill_all`, Railway service `fundamentals-refresh-scheduler` cron `0 3 * * SUN`, applied 2026-05-10) — every distinct active ticker in `prices_daily` has its FMP fundamentals refreshed weekly so the lazy cache never serves stale data. `platform.universe_candidates` + Universe Pre-Screener (`tpcore.universe.prescreener.prescreen_momentum` + Alembic `20260513_1237`, applied 2026-05-13) — daily-refreshed per-engine candidate roster; momentum's `setup_detection._load_universe` reads it with a `liquidity_tiers` fallback when empty; V1 populates only `engine='momentum'`.

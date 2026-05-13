@@ -16,6 +16,7 @@ intentionally minimal because the strategy is intentionally minimal: one
 signal (12-1 return), four configuration knobs (lookback, skip, hold,
 top-decile fraction).
 """
+
 from __future__ import annotations
 
 import math
@@ -76,7 +77,7 @@ class MomentumSetupDetection(BaseEnginePlug):
         """Rank the universe at ``as_of`` and return all qualifying candidates,
         sorted descending by ``momentum_score``. Empty list if the universe
         is empty or no ticker has enough history."""
-        universe = await self._load_universe(pool)
+        universe = await self._load_universe(pool, as_of)
         if not universe:
             logger.warning("momentum.setup.empty_universe", max_tier=self._max_tier)
             return []
@@ -134,8 +135,32 @@ class MomentumSetupDetection(BaseEnginePlug):
         )
         return candidates
 
-    async def _load_universe(self, pool: asyncpg.Pool) -> set[str]:
+    async def _load_universe(self, pool: asyncpg.Pool, as_of: date) -> set[str]:
+        """Universe for ``as_of``.
+
+        Primary path reads ``platform.universe_candidates`` (populated daily by
+        ``tpcore.universe.prescreener``). If no rows are present for ``as_of``
+        — the prescreener hasn't run yet, or the date is older than the table
+        — fall back to ``platform.liquidity_tiers`` so the engine remains
+        operable. The backtest path has its own loader in ``momentum/backtest.py``
+        and is unaffected by this.
+        """
         async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT ticker FROM platform.universe_candidates
+                WHERE engine = 'momentum' AND as_of_date = $1
+                ORDER BY ticker
+                """,
+                as_of,
+            )
+            if rows:
+                return {r["ticker"] for r in rows}
+            logger.info(
+                "momentum.setup.universe_fallback",
+                as_of=as_of.isoformat(),
+                reason="no universe_candidates rows for as_of",
+            )
             rows = await conn.fetch(
                 "SELECT ticker FROM platform.liquidity_tiers WHERE tier <= $1 ORDER BY ticker",
                 self._max_tier,
@@ -148,7 +173,11 @@ class MomentumSetupDetection(BaseEnginePlug):
         return {r["ticker"]: int(r["tier"]) for r in rows}
 
     async def _load_bars(
-        self, pool: asyncpg.Pool, tickers: list[str], start: date, end: date,
+        self,
+        pool: asyncpg.Pool,
+        tickers: list[str],
+        start: date,
+        end: date,
     ) -> dict[str, list[dict]]:
         async with pool.acquire() as conn:
             rows = await conn.fetch(
@@ -158,13 +187,13 @@ class MomentumSetupDetection(BaseEnginePlug):
                 WHERE ticker = ANY($1) AND date BETWEEN $2 AND $3
                 ORDER BY ticker, date
                 """,
-                tickers, start, end,
+                tickers,
+                start,
+                end,
             )
         out: dict[str, list[dict]] = {}
         for r in rows:
-            out.setdefault(r["ticker"], []).append(
-                {"date": r["date"], "close": float(r["close"])}
-            )
+            out.setdefault(r["ticker"], []).append({"date": r["date"], "close": float(r["close"])})
         return out
 
     def _score_one(self, bars: list[dict], as_of: date) -> float | None:

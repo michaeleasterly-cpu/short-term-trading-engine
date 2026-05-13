@@ -2,7 +2,7 @@
 
 Three top-level commands:
 
-    python scripts/ops.py --update          # run the 5 maintenance stages
+    python scripts/ops.py --update          # run the 6 maintenance stages
     python scripts/ops.py --check           # read-only health report (JSON)
     python scripts/ops.py --check --pretty  # …same, formatted for a human
     python scripts/ops.py --full            # --update then --check
@@ -34,6 +34,7 @@ Required env vars (checked at startup, hard-fail on miss):
 
 See `docs/OPERATIONS.md` for the operator's runbook.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -87,6 +88,7 @@ EXPECTED_MIN_ROWS: dict[str, int] = {
 # Logging setup
 # ────────────────────────────────────────────────────────────────────────
 
+
 def _configure_logging(run_id: uuid.UUID, level: int = logging.INFO) -> structlog.stdlib.BoundLogger:
     logging.basicConfig(level=level, format="%(message)s", stream=sys.stderr)
     for noisy in ("httpx", "httpcore", "asyncio"):
@@ -110,6 +112,7 @@ def _configure_logging(run_id: uuid.UUID, level: int = logging.INFO) -> structlo
 # ────────────────────────────────────────────────────────────────────────
 # Env validation
 # ────────────────────────────────────────────────────────────────────────
+
 
 def _require_env(names: list[str]) -> None:
     missing = [n for n in names if not os.environ.get(n)]
@@ -136,6 +139,7 @@ def _require_alpaca_env() -> None:
 # ────────────────────────────────────────────────────────────────────────
 # Stage result + summary
 # ────────────────────────────────────────────────────────────────────────
+
 
 @dataclass
 class StageResult:
@@ -180,23 +184,22 @@ class UpdateSummary:
 # Configuration loader
 # ────────────────────────────────────────────────────────────────────────
 
+
 async def _load_daily_bars_config(pool: asyncpg.Pool) -> dict[str, Any]:
     """Read the config JSON from the `daily_bars` row of platform.ingestion_jobs.
 
     Hard-fails if the row is missing — the CLI is explicit that filter
     values must come from the database, not be hardcoded.
     """
-    row = await pool.fetchrow(
-        "SELECT config FROM platform.ingestion_jobs WHERE job_name = 'daily_bars'"
-    )
+    row = await pool.fetchrow("SELECT config FROM platform.ingestion_jobs WHERE job_name = 'daily_bars'")
     if row is None:
         raise RuntimeError(
             "ops: platform.ingestion_jobs has no row for job_name='daily_bars'. "
             "Seed it before running --update. Example:\n"
             "  INSERT INTO platform.ingestion_jobs (job_name, schedule, provider, config) "
             "VALUES ('daily_bars', '@daily', 'alpaca', "
-            "'{\"universe\": \"all_active\", \"lookback_days\": 7, "
-            "\"min_price\": 5, \"min_volume\": 250000}'::jsonb);"
+            '\'{"universe": "all_active", "lookback_days": 7, '
+            '"min_price": 5, "min_volume": 250000}\'::jsonb);'
         )
     cfg = row["config"]
     if isinstance(cfg, str):
@@ -239,6 +242,7 @@ async def _coarse_filtered_universe(
 # ────────────────────────────────────────────────────────────────────────
 # Stage runner
 # ────────────────────────────────────────────────────────────────────────
+
 
 async def _run_stage(
     name: str,
@@ -330,6 +334,7 @@ async def _run_stage(
 # Stage implementations
 # ────────────────────────────────────────────────────────────────────────
 
+
 async def _stage_daily_bars(pool: asyncpg.Pool, config: dict[str, Any]) -> dict[str, Any]:
     from tpcore.ingestion.handlers import handle_daily_bars
 
@@ -344,9 +349,7 @@ async def _stage_corporate_actions(pool: asyncpg.Pool) -> dict[str, Any]:
     return {"actions_ingested": rows or 0}
 
 
-async def _stage_fundamentals_refresh(
-    pool: asyncpg.Pool, config: dict[str, Any]
-) -> dict[str, Any]:
+async def _stage_fundamentals_refresh(pool: asyncpg.Pool, config: dict[str, Any]) -> dict[str, Any]:
     """Refresh FMP fundamentals restricted to the coarse-filtered universe."""
     from tpcore.fmp import FMPFundamentalsAdapter
     from tpcore.fundamentals.cache import FundamentalsCache
@@ -374,8 +377,7 @@ async def _stage_fundamentals_refresh(
         # Match handler semantics: real FMP failures surface as an error
         # event for the stage, but the pipeline still continues.
         raise RuntimeError(
-            f"fundamentals_refresh: {len(failures)} failure(s); "
-            f"first={failures[0][0]}: {failures[0][1]}"
+            f"fundamentals_refresh: {len(failures)} failure(s); first={failures[0][0]}: {failures[0][1]}"
         )
     return detail
 
@@ -396,6 +398,20 @@ async def _stage_data_validation(pool: asyncpg.Pool) -> dict[str, Any]:
     # FAILED. The pipeline still moves on to universe simulation.
     failed_names = [c.name for c in result.checks if not c.passed]
     raise RuntimeError(f"validation suite failed: {failed_names}")
+
+
+async def _stage_universe_prescreener(pool: asyncpg.Pool) -> dict[str, Any]:
+    """Populate ``platform.universe_candidates`` for today.
+
+    V1 only writes ``engine='momentum'`` rows — Sigma/Reversion/Vector still
+    use hardcoded universes. Runs after the corporate-actions stage so the
+    ``last_close`` snapshot is post-split-adjusted; runs before the
+    diagnostic ``universe_simulation`` stage.
+    """
+    from tpcore.universe.prescreener import prescreen_momentum
+
+    counters = await prescreen_momentum(pool, date.today())
+    return {"engine": "momentum", **counters}
 
 
 _CANDIDATE_RE = re.compile(r"^\s*(\w[\w ]*?)\s+candidates?:\s*(\d+)", re.MULTILINE)
@@ -433,8 +449,7 @@ async def _stage_simulate_universe() -> dict[str, Any]:
 
     if proc.returncode != 0:
         raise RuntimeError(
-            f"simulate_universe exited {proc.returncode}: "
-            f"{stderr.strip()[:200] or 'no stderr'}"
+            f"simulate_universe exited {proc.returncode}: {stderr.strip()[:200] or 'no stderr'}"
         )
     return {"exit_code": proc.returncode, **{f"{k}_candidates": v for k, v in counts.items()}}
 
@@ -442,6 +457,7 @@ async def _stage_simulate_universe() -> dict[str, Any]:
 # ────────────────────────────────────────────────────────────────────────
 # --update orchestrator
 # ────────────────────────────────────────────────────────────────────────
+
 
 async def cmd_update(
     pool: asyncpg.Pool,
@@ -465,9 +481,7 @@ async def cmd_update(
             severity="ERROR",
             data={"stage": "config_load", "error": str(exc)},
         )
-        summary.stages.append(
-            StageResult(name="config_load", status="FAILED", duration_ms=0, error=str(exc))
-        )
+        summary.stages.append(StageResult(name="config_load", status="FAILED", duration_ms=0, error=str(exc)))
         summary.finished_at = datetime.now(UTC)
         return summary
 
@@ -512,6 +526,15 @@ async def cmd_update(
     )
     summary.stages.append(
         await _run_stage(
+            "universe_prescreener",
+            lambda: _stage_universe_prescreener(pool),
+            log=log,
+            db_log=db_log,
+            dry_run=dry_run,
+        )
+    )
+    summary.stages.append(
+        await _run_stage(
             "universe_simulation",
             _stage_simulate_universe,
             log=log,
@@ -526,6 +549,7 @@ async def cmd_update(
 # ────────────────────────────────────────────────────────────────────────
 # --check (read-only health report)
 # ────────────────────────────────────────────────────────────────────────
+
 
 async def _check_connectivity(pool: asyncpg.Pool) -> dict[str, Any]:
     val = await pool.fetchval("SELECT 1")
@@ -588,10 +612,7 @@ async def _check_engine_schedulers(pool: asyncpg.Pool) -> dict[str, Any]:
         ORDER BY engine
         """
     )
-    engines = {
-        r["engine"]: r["latest_startup"].isoformat() if r["latest_startup"] else None
-        for r in rows
-    }
+    engines = {r["engine"]: r["latest_startup"].isoformat() if r["latest_startup"] else None for r in rows}
     return {"ok": True, "engines": engines}
 
 
@@ -608,9 +629,7 @@ async def _check_ingestion_engine(pool: asyncpg.Pool) -> dict[str, Any]:
         """
     )
     jobs = {
-        (r["job"] or "<no-stage>"): r["latest_complete"].isoformat()
-        for r in rows
-        if r["latest_complete"]
+        (r["job"] or "<no-stage>"): r["latest_complete"].isoformat() for r in rows if r["latest_complete"]
     }
     return {"ok": True, "jobs": jobs}
 
@@ -630,13 +649,9 @@ async def _check_validation(pool: asyncpg.Pool) -> dict[str, Any]:
         return {"ok": False, "reason": "no validation runs in last 14 days"}
     latest_ts = rows[0]["timestamp"]
     # Group rows recorded within ~5 minutes of the latest — that's one run.
-    cohort = [
-        r for r in rows
-        if (latest_ts - r["timestamp"]).total_seconds() <= 600
-    ]
+    cohort = [r for r in rows if (latest_ts - r["timestamp"]).total_seconds() <= 600]
     passed = all(
-        float(r["confidence"]) >= 1.0 and (r["notes"] in (None, "[]", []) or r["notes"] == [])
-        for r in cohort
+        float(r["confidence"]) >= 1.0 and (r["notes"] in (None, "[]", []) or r["notes"] == []) for r in cohort
     )
     return {
         "ok": passed,
@@ -775,6 +790,7 @@ def _format_check_pretty(report: dict[str, Any]) -> str:
 # Argparse + entry point
 # ────────────────────────────────────────────────────────────────────────
 
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="ops.py",
@@ -782,7 +798,7 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
-            "  python scripts/ops.py --update              # run all 5 maintenance stages\n"
+            "  python scripts/ops.py --update              # run all 6 maintenance stages\n"
             "  python scripts/ops.py --update --dry-run    # log what would run, no work\n"
             "  python scripts/ops.py --check               # JSON health report to stdout\n"
             "  python scripts/ops.py --check --pretty      # formatted health report\n"

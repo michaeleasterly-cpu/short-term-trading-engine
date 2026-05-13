@@ -1,4 +1,5 @@
 """Unit tests for the Momentum plugs (no DB / no broker)."""
+
 from __future__ import annotations
 
 from datetime import date
@@ -24,8 +25,7 @@ def test_setup_score_basic():
     plug = MomentumSetupDetection(lookback_days=20, skip_days=5)
     # 30 trading days, linear ramp 100 → 130 (price up 30% over 30 days).
     bars = [
-        {"date": date(2024, 1, 1) + __import__("datetime").timedelta(days=i),
-         "close": 100.0 + i}
+        {"date": date(2024, 1, 1) + __import__("datetime").timedelta(days=i), "close": 100.0 + i}
         for i in range(40)
     ]
     score = plug._score_one(bars, as_of=date(2024, 2, 9))
@@ -42,8 +42,7 @@ def test_setup_score_missing_data_returns_none():
     plug = MomentumSetupDetection(lookback_days=20, skip_days=5)
     # Only 10 bars — not enough for a 25-bar window.
     bars = [
-        {"date": date(2024, 1, 1) + __import__("datetime").timedelta(days=i),
-         "close": 100.0}
+        {"date": date(2024, 1, 1) + __import__("datetime").timedelta(days=i), "close": 100.0}
         for i in range(10)
     ]
     score = plug._score_one(bars, as_of=date(2024, 1, 10))
@@ -55,8 +54,11 @@ def test_setup_score_missing_data_returns_none():
 
 def _candidate(ticker: str, score: float, price: float, tier: int = 1) -> MomentumCandidate:
     return MomentumCandidate(
-        ticker=ticker, as_of=date(2024, 1, 2),
-        momentum_score=score, last_close=Decimal(str(price)), tier=tier,
+        ticker=ticker,
+        as_of=date(2024, 1, 2),
+        momentum_score=score,
+        last_close=Decimal(str(price)),
+        tier=tier,
     )
 
 
@@ -69,7 +71,8 @@ def _mock_governor_allow_all() -> MagicMock:
 @pytest.mark.asyncio
 async def test_execution_decision_open_new_targets():
     plug = MomentumExecutionRisk(
-        governor=_mock_governor_allow_all(), top_decile_pct=0.2,
+        governor=_mock_governor_allow_all(),
+        top_decile_pct=0.2,
     )
     candidates = [
         _candidate("A", 0.5, 100.0),
@@ -95,7 +98,8 @@ async def test_execution_decision_open_new_targets():
 @pytest.mark.asyncio
 async def test_execution_decision_closes_dropped_names():
     plug = MomentumExecutionRisk(
-        governor=_mock_governor_allow_all(), top_decile_pct=0.5,
+        governor=_mock_governor_allow_all(),
+        top_decile_pct=0.5,
     )
     # New target set: A, B
     candidates = [_candidate("A", 0.5, 100.0), _candidate("B", 0.4, 50.0)]
@@ -114,7 +118,9 @@ async def test_execution_decision_closes_dropped_names():
 @pytest.mark.asyncio
 async def test_execution_decision_skips_high_tier():
     plug = MomentumExecutionRisk(
-        governor=_mock_governor_allow_all(), top_decile_pct=1.0, max_tier=2,
+        governor=_mock_governor_allow_all(),
+        top_decile_pct=1.0,
+        max_tier=2,
     )
     candidates = [
         _candidate("LIQUID", 0.5, 100.0, tier=1),
@@ -143,17 +149,23 @@ def test_capital_gate_rejects_oversize():
 
 def test_capital_gate_graduation_logic():
     stats = MomentumGraduationStats(
-        n_rebalances=6, sharpe_annualized=1.5, profit_factor=2.0,
+        n_rebalances=6,
+        sharpe_annualized=1.5,
+        profit_factor=2.0,
     )
     assert MomentumCapitalGate.is_graduated(stats) is True
     # Sharpe too low:
     stats = MomentumGraduationStats(
-        n_rebalances=6, sharpe_annualized=0.8, profit_factor=2.0,
+        n_rebalances=6,
+        sharpe_annualized=0.8,
+        profit_factor=2.0,
     )
     assert MomentumCapitalGate.is_graduated(stats) is False
     # Not enough rebalances:
     stats = MomentumGraduationStats(
-        n_rebalances=3, sharpe_annualized=2.0, profit_factor=3.0,
+        n_rebalances=3,
+        sharpe_annualized=2.0,
+        profit_factor=3.0,
     )
     assert MomentumCapitalGate.is_graduated(stats) is False
 
@@ -206,57 +218,160 @@ def test_capital_gate_healthcheck_includes_thresholds():
 
 
 def test_drawdown_breaker_allows_at_peak():
-    assert MomentumCapitalGate.check_drawdown(
-        current_equity=Decimal("10000"), peak_equity=Decimal("10000"),
-    ) is True
+    assert (
+        MomentumCapitalGate.check_drawdown(
+            current_equity=Decimal("10000"),
+            peak_equity=Decimal("10000"),
+        )
+        is True
+    )
 
 
 def test_drawdown_breaker_allows_within_threshold():
     # 5% below peak → no breaker at default 10% threshold.
-    assert MomentumCapitalGate.check_drawdown(
-        current_equity=Decimal("9500"), peak_equity=Decimal("10000"),
-    ) is True
+    assert (
+        MomentumCapitalGate.check_drawdown(
+            current_equity=Decimal("9500"),
+            peak_equity=Decimal("10000"),
+        )
+        is True
+    )
 
 
 def test_drawdown_breaker_trips_at_threshold():
     # Exactly 10% below peak → breaker trips.
-    assert MomentumCapitalGate.check_drawdown(
-        current_equity=Decimal("9000"), peak_equity=Decimal("10000"),
-    ) is False
+    assert (
+        MomentumCapitalGate.check_drawdown(
+            current_equity=Decimal("9000"),
+            peak_equity=Decimal("10000"),
+        )
+        is False
+    )
 
 
 def test_drawdown_breaker_trips_below_threshold():
     # 15% below peak → breaker trips.
-    assert MomentumCapitalGate.check_drawdown(
-        current_equity=Decimal("8500"), peak_equity=Decimal("10000"),
-    ) is False
+    assert (
+        MomentumCapitalGate.check_drawdown(
+            current_equity=Decimal("8500"),
+            peak_equity=Decimal("10000"),
+        )
+        is False
+    )
 
 
 def test_drawdown_breaker_allows_when_peak_unknown():
     # First run, no peak history yet → allow.
-    assert MomentumCapitalGate.check_drawdown(
-        current_equity=Decimal("10000"), peak_equity=None,
-    ) is True
-    assert MomentumCapitalGate.check_drawdown(
-        current_equity=None, peak_equity=Decimal("10000"),
-    ) is True
+    assert (
+        MomentumCapitalGate.check_drawdown(
+            current_equity=Decimal("10000"),
+            peak_equity=None,
+        )
+        is True
+    )
+    assert (
+        MomentumCapitalGate.check_drawdown(
+            current_equity=None,
+            peak_equity=Decimal("10000"),
+        )
+        is True
+    )
 
 
 def test_drawdown_breaker_allows_with_zero_peak():
     # Degenerate input — don't crash, don't trip.
-    assert MomentumCapitalGate.check_drawdown(
-        current_equity=Decimal("100"), peak_equity=Decimal("0"),
-    ) is True
+    assert (
+        MomentumCapitalGate.check_drawdown(
+            current_equity=Decimal("100"),
+            peak_equity=Decimal("0"),
+        )
+        is True
+    )
 
 
 def test_drawdown_breaker_respects_custom_threshold():
     # 6% below peak, threshold raised to 5% → trips.
-    assert MomentumCapitalGate.check_drawdown(
-        current_equity=Decimal("9400"), peak_equity=Decimal("10000"),
-        threshold=Decimal("0.05"),
-    ) is False
+    assert (
+        MomentumCapitalGate.check_drawdown(
+            current_equity=Decimal("9400"),
+            peak_equity=Decimal("10000"),
+            threshold=Decimal("0.05"),
+        )
+        is False
+    )
     # Same drawdown, threshold relaxed to 15% → allows.
-    assert MomentumCapitalGate.check_drawdown(
-        current_equity=Decimal("9400"), peak_equity=Decimal("10000"),
-        threshold=Decimal("0.15"),
-    ) is True
+    assert (
+        MomentumCapitalGate.check_drawdown(
+            current_equity=Decimal("9400"),
+            peak_equity=Decimal("10000"),
+            threshold=Decimal("0.15"),
+        )
+        is True
+    )
+
+
+# ─── SetupDetection — universe loader (candidates table vs fallback) ────────
+
+
+class _RecordingConn:
+    """Tiny pool stand-in. Hands out canned ``fetch`` results based on whether
+    the SQL hits ``universe_candidates`` or ``liquidity_tiers``."""
+
+    def __init__(self, candidates_rows: list[dict], liquidity_rows: list[dict]) -> None:
+        self.candidates_rows = candidates_rows
+        self.liquidity_rows = liquidity_rows
+        self.sql_seen: list[str] = []
+
+    async def fetch(self, sql: str, *args):
+        self.sql_seen.append(sql)
+        if "universe_candidates" in sql:
+            return self.candidates_rows
+        if "liquidity_tiers" in sql:
+            return self.liquidity_rows
+        return []
+
+
+class _AcquireCM:
+    def __init__(self, conn: _RecordingConn) -> None:
+        self._conn = conn
+
+    async def __aenter__(self) -> _RecordingConn:
+        return self._conn
+
+    async def __aexit__(self, *exc) -> None:
+        return None
+
+
+class _FakePool:
+    def __init__(self, candidates_rows: list[dict], liquidity_rows: list[dict]) -> None:
+        self.conn = _RecordingConn(candidates_rows, liquidity_rows)
+
+    def acquire(self) -> _AcquireCM:
+        return _AcquireCM(self.conn)
+
+
+@pytest.mark.asyncio
+async def test_load_universe_prefers_candidates_table_when_present():
+    pool = _FakePool(
+        candidates_rows=[{"ticker": "AAPL"}, {"ticker": "MSFT"}],
+        liquidity_rows=[{"ticker": "OLD"}],
+    )
+    plug = MomentumSetupDetection()
+    universe = await plug._load_universe(pool, date(2026, 5, 13))
+    assert universe == {"AAPL", "MSFT"}
+    # Only the candidates query should have been issued — fallback never ran.
+    assert any("universe_candidates" in s for s in pool.conn.sql_seen)
+    assert not any("liquidity_tiers" in s for s in pool.conn.sql_seen)
+
+
+@pytest.mark.asyncio
+async def test_load_universe_falls_back_to_liquidity_tiers_when_empty():
+    pool = _FakePool(
+        candidates_rows=[],
+        liquidity_rows=[{"ticker": "AAPL"}, {"ticker": "MSFT"}],
+    )
+    plug = MomentumSetupDetection()
+    universe = await plug._load_universe(pool, date(2026, 5, 13))
+    assert universe == {"AAPL", "MSFT"}
+    assert any("universe_candidates" in s for s in pool.conn.sql_seen)
+    assert any("liquidity_tiers" in s for s in pool.conn.sql_seen)
