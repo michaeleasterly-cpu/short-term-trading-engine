@@ -136,14 +136,36 @@ class DBLogHandler:
         )
 
     async def signal(
-        self, ticker: str, score: float, direction: str | None = None
+        self,
+        ticker: str,
+        score: float,
+        direction: str | None = None,
+        extra_data: dict[str, Any] | None = None,
     ) -> None:
+        """Emit a SIGNAL event to platform.application_log.
+
+        Args:
+            ticker: symbol the signal fired for.
+            score: setup score (0-100 or engine-specific).
+            direction: optional 'LONG'/'SHORT'.
+            extra_data: optional dict merged into the data payload —
+                used to attach FilterDiagnostics or other per-signal
+                metadata without changing the method signature again.
+                Shallow merged on top of the base keys; if a caller
+                passes 'ticker' / 'score' / 'direction' in extra_data
+                those override the explicit args.
+        """
+        data: dict[str, Any] = {
+            "ticker": ticker, "score": score, "direction": direction,
+        }
+        if extra_data:
+            data.update(extra_data)
         await self.log(
             "SIGNAL",
             f"signal {ticker} score={score:.2f}"
             + (f" direction={direction}" if direction else ""),
             severity="INFO",
-            data={"ticker": ticker, "score": score, "direction": direction},
+            data=data,
         )
 
     async def order_submitted(

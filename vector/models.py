@@ -11,6 +11,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from tpcore.backtest.filter_diagnostics import FilterDiagnostics
+
 # Universe used by the Phase 4 scan. Liquid, fundamentally trackable mid/large caps.
 VECTOR_TEST_UNIVERSE: tuple[str, ...] = (
     "AAPL", "MSFT", "AMZN", "GOOGL", "META",
@@ -84,6 +86,14 @@ class SetupCandidate(BaseModel):
         description="'pullback_to_10ma' | 'pullback_to_20ma' | 'breakout_above_50ma' | None.",
     )
     notes: str | None = None
+
+    # Per-filter pass/block counters from the setup-detection scan that
+    # produced this candidate. Optional for backward compatibility — older
+    # tests that build SetupCandidate by hand keep working.
+    filter_diagnostics: FilterDiagnostics | None = Field(
+        default=None,
+        description="Pass/block counters per filter gate from the scan run.",
+    )
 
 
 class PhaseAssessment(BaseModel):

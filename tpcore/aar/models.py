@@ -57,3 +57,13 @@ class AfterActionReport(BaseModel):
         description="True iff the trade obeyed every codified rule of the strategy."
     )
     notes: str | None = None
+
+    # Per-filter diagnostic counters captured at signal time. Optional for
+    # backward compatibility with existing AARs (defaults to None, no
+    # migration). The actual shape is :class:`tpcore.backtest.FilterDiagnostics`
+    # serialised via ``model_dump(exclude_none=True)``, but we store as a
+    # generic dict to avoid making the AAR module aware of the engine plugs.
+    filter_diagnostics: dict | None = Field(
+        default=None,
+        description="Per-filter pass/block counters from the setup-detection scan.",
+    )

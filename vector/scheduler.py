@@ -244,7 +244,18 @@ class VectorScheduler:
                 assessment = lifecycle.assess(cand)
                 if assessment.phase is not Phase.ENTRY:
                     continue
-                await db_log.signal(cand.ticker, score=float(cand.swing_score))
+                # Attach scan-time filter diagnostics so the operator can
+                # see at the SIGNAL row how many tickers were filtered at
+                # each gate today. exclude_none keeps the payload sparse —
+                # only the gates Vector populates land in the JSON.
+                _diag = (
+                    cand.filter_diagnostics.model_dump(exclude_none=True)
+                    if cand.filter_diagnostics is not None else None
+                )
+                await db_log.signal(
+                    cand.ticker, score=float(cand.swing_score),
+                    extra_data=({"filter_diagnostics": _diag} if _diag else None),
+                )
                 state = await governor._store.get(ENGINE_ID)  # noqa: SLF001
                 open_positions = state.open_positions if state else 0
                 decision = execution.decide(

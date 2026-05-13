@@ -41,6 +41,7 @@ import numpy as np
 import pandas as pd
 import structlog
 
+from tpcore.backtest.filter_diagnostics import FilterDiagnostics
 from tpcore.interfaces.engine_plug import BaseEnginePlug
 from vector.models import (
     SCORE_STRONG,
@@ -294,38 +295,71 @@ class VectorSetupDetection(BaseEnginePlug):
         spy_panel: pd.DataFrame | None,
         vix_value: float | None,
     ) -> list[SetupCandidate]:
-        """Walk the universe and return passing candidates."""
+        """Walk the universe and return passing candidates.
+
+        Each candidate carries a :class:`FilterDiagnostics` snapshot that
+        records how many tickers were filtered out at each gate during
+        *this* scan. The same diagnostic instance is attached to every
+        candidate (it's a scan-level count, not per-ticker), so the
+        downstream signal-logger can pass it through to
+        ``platform.application_log`` without duplicating data.
+        """
+        # FilterDiagnostics — instantiated up-front; counters incremented
+        # inline as the per-ticker loop filters down to candidates. Vector
+        # uses gate1/gate2/gate3 + coarse-liquidity; crash_guard_size_reduced
+        # is downstream of scan() (in execution_risk) and stays None here.
+        diag = FilterDiagnostics(
+            universe_total=len(self._universe),
+            gate1_value_blocked=0,
+            gate2_catalyst_blocked=0,
+            gate3_technical_blocked=0,
+        )
+
         # Trend filter — SPY > 50-MA AND 50-MA > 200-MA.
         spy_in_uptrend = self._spy_uptrend(spy_panel)
         if not spy_in_uptrend:
-            logger.info("vector.setup.spy_not_in_uptrend", as_of=str(as_of))
+            logger.info(
+                "vector.setup.spy_not_in_uptrend", as_of=str(as_of),
+                diagnostics=diag.model_dump(exclude_none=True),
+            )
             return []
 
         # VIX filter — block all new entries when VIX is too elevated.
         if vix_value is not None and vix_value > float(VIX_BLOCK_NEW):
-            logger.info("vector.setup.vix_blocking", vix=vix_value, threshold=float(VIX_BLOCK_NEW))
+            logger.info(
+                "vector.setup.vix_blocking", vix=vix_value, threshold=float(VIX_BLOCK_NEW),
+                diagnostics=diag.model_dump(exclude_none=True),
+            )
             return []
 
         candidates: list[SetupCandidate] = []
         for ticker in self._universe:
             df = bars_by_ticker.get(ticker)
             if df is None or len(df) < SMA_SLOW_PERIOD + 1:
+                # Missing data / insufficient history — lumped into coarse-
+                # liquidity for accounting (it's filtered before any gate).
+                diag.coarse_liquidity_blocked += 1
                 continue
             stats = _compute_stats(df)
             if stats is None:
+                diag.coarse_liquidity_blocked += 1
                 continue
             if stats.last_close < self._min_price or stats.avg_vol_20 < self._min_avg_volume:
+                diag.coarse_liquidity_blocked += 1
                 continue
 
             fundamentals = fundamentals_by_ticker.get(ticker)
             ok_vq, vq_reason = _check_value_quality(fundamentals, stats)
             if not ok_vq:
+                diag.gate1_value_blocked = (diag.gate1_value_blocked or 0) + 1
                 continue
             ok_cat, growth, cat_reason = _check_catalyst(fundamentals)
             if not ok_cat:
+                diag.gate2_catalyst_blocked = (diag.gate2_catalyst_blocked or 0) + 1
                 continue
             ok_tech, trigger = _check_technical_trigger(df, stats)
             if not ok_tech:
+                diag.gate3_technical_blocked = (diag.gate3_technical_blocked or 0) + 1
                 continue
 
             tech_score = _technical_score(stats, trigger)
@@ -333,8 +367,14 @@ class VectorSetupDetection(BaseEnginePlug):
             sent_score = _sentiment_score()
             total = tech_score + cat_score + sent_score
             if total < self._score_floor_weak:
+                # Score-floor rejections — Vector doesn't track these in
+                # FilterDiagnostics yet (would require a new field); they
+                # land between gate3 and candidates_passed silently. The
+                # operator can infer the count via:
+                #   universe_total - sum(blocked counters) - candidates_passed.
                 continue
 
+            diag.candidates_passed += 1
             candidates.append(
                 SetupCandidate(
                     ticker=ticker,
@@ -353,6 +393,7 @@ class VectorSetupDetection(BaseEnginePlug):
                     earnings_growth_yoy=growth,
                     pullback_or_breakout=trigger,
                     notes=f"strong={total>=self._score_floor_strong}",
+                    filter_diagnostics=diag,
                 )
             )
         return sorted(candidates, key=lambda c: c.swing_score, reverse=True)

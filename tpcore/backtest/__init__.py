@@ -2,6 +2,7 @@
 
 from .cost_model import SimpleCostModel
 from .credibility import BacktestCredibilityRubric, CredibilityScore
+from .filter_diagnostics import FilterDiagnostics
 from .harness import BacktestConfig, BacktestHarness, BacktestResult, Strategy
 from .overfitting import OverfittingDiagnostic, OverfittingReport, cscv_pbo
 
@@ -11,6 +12,7 @@ __all__ = [
     "BacktestHarness",
     "BacktestResult",
     "CredibilityScore",
+    "FilterDiagnostics",
     "OverfittingDiagnostic",
     "OverfittingReport",
     "SimpleCostModel",
