@@ -70,6 +70,14 @@ scripts/run_full_backfill.sh
 
 The CSV-first download → upload → verify → fix → compress pattern across all three sources (Alpaca bars, FMP fundamentals, Alpaca corp actions). Used after large cleanups or universe expansion. Long-running (30-60 min). NOT the daily cadence — that's `run_post_close.sh`.
 
+### Closed by design (not gaps)
+
+Two items from the 2026-05-13 hangnail review are explicitly NOT being built. Recording the reasoning so they don't keep getting reopened.
+
+1. **CSV-first for daily corp_actions + fundamentals stages** — not done. The daily `--update` writes those stages direct-to-DB. CSV intermediate is for non-trivial pulls (full backfills, source switches). A ~5,000-ticker FMP refresh that already supports skip-if-refreshed-within-24h is small enough that the CSV step adds overhead without much audit benefit. The pattern lives in `scripts/run_full_backfill.sh` for when it matters.
+
+2. **`scripts/replay_history.py` (EDGE_VALIDATION_PLAN Phase 3)** — never built. Per the plan itself: *"Phase 4 (was: run a single historical replay, feed trade lists into OverfittingDiagnostic, decide go/no-go) fired across all four engines via the Phase 2.5 parameter-search pipeline."* The search runs the entire historical period across many parameter combinations; a single-replay script is duplicative. If we ever need engine-level smoke against a frozen historical window, the search scripts (`scripts/run_sigma_search.sh`, etc.) provide it with finer-grained output.
+
 ### Lessons learned (2026-05-13 data-cleanup post-mortem)
 
 The post-mortem captured these principles as durable patterns; the post-close + full-backfill scripts above codify them. Treat any deviation as the start of the next mess.
