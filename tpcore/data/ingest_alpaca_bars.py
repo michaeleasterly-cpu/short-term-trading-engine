@@ -130,7 +130,7 @@ async def fetch_daily_bars_multi(
     start: date,
     end: date,
     *,
-    feed: str = "iex",
+    feed: str = "sip",
     adjustment: str = "all",
 ) -> dict[str, list[dict]]:
     """Multi-symbol equivalent of :func:`fetch_daily_bars`.
@@ -173,7 +173,7 @@ async def fetch_daily_bars(
     start: date,
     end: date,
     *,
-    feed: str = "iex",
+    feed: str = "sip",
     adjustment: str = "all",
 ) -> list[dict]:
     """Page through ``/v2/stocks/{symbol}/bars`` for ``timeframe=1Day``.

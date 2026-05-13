@@ -135,10 +135,11 @@ async def _backfill_one(
     start_d: date,
     end_d: date,
     writer: csv.writer,
+    feed: str,
 ) -> tuple[int, int, int]:
     """Pull bars for ``symbols`` over [start_d, end_d], write to CSV.
     Returns (kept, dropped, sym_with_data)."""
-    bars_by_sym = await fetch_daily_bars_multi(client, symbols, start_d, end_d)
+    bars_by_sym = await fetch_daily_bars_multi(client, symbols, start_d, end_d, feed=feed)
     kept = dropped = sym_with_data = 0
     for sym, bars in bars_by_sym.items():
         if bars:
@@ -211,7 +212,7 @@ async def amain(args: argparse.Namespace) -> int:
                     w_start = min(s for s, _ in windows)
                     w_end = max(e for _, e in windows)
                     kept, dropped, with_data = await _backfill_one(
-                        client, batch, w_start, w_end, w,
+                        client, batch, w_start, w_end, w, args.feed,
                     )
                     total_kept += kept
                     total_dropped += dropped
@@ -248,6 +249,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=100,
         help="symbols per Alpaca page (max 100); default 100",
+    )
+    p.add_argument(
+        "--feed",
+        choices=("iex", "sip"),
+        default="sip",
+        help="Alpaca data feed; default 'sip' (covers non-IEX-listed tickers too)",
     )
     return p.parse_args(argv)
 

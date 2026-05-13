@@ -20,6 +20,7 @@ from typing import Any
 OPS_UPDATE_STAGES: tuple[str, ...] = (
     "daily_bars",
     "corporate_actions",
+    "coverage_fill",
     "fundamentals_refresh",
     "data_validation",
     "universe_prescreener",

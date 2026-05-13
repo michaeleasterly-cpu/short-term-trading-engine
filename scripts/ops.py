@@ -47,7 +47,7 @@ import sys
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -439,6 +439,91 @@ async def _stage_data_validation(pool: asyncpg.Pool) -> dict[str, Any]:
     raise RuntimeError(f"validation suite failed: {failed_names}")
 
 
+async def _stage_coverage_fill(pool: asyncpg.Pool) -> dict[str, Any]:
+    """Self-healing — backfill any tier ≤ 2 ticker missing a bar in the last
+    7 days via Alpaca SIP feed. Runs after ``corporate_actions`` (so split
+    adjustments are applied) and before ``universe_prescreener`` (so the
+    prescreener reads complete data). Idempotent and bounded: only the
+    last 14 days per gap-ticker.
+
+    Why this exists: the daily ``daily_bars`` stage hits every active
+    ticker, but Alpaca's IEX feed (historic default) is missing some
+    tier-1 names that the SIP feed has. Without this stage, those gaps
+    persist forever and require manual intervention.
+    """
+    import httpx
+
+    from tpcore.data.ingest_alpaca_bars import fetch_daily_bars_multi
+
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT lt.ticker
+            FROM platform.liquidity_tiers lt
+            LEFT JOIN (
+                SELECT DISTINCT ticker FROM platform.prices_daily
+                WHERE date >= CURRENT_DATE - INTERVAL '7 days'
+            ) p ON p.ticker = lt.ticker
+            WHERE lt.tier <= 2 AND p.ticker IS NULL
+            ORDER BY lt.ticker
+            """
+        )
+    gap_tickers = [r["ticker"] for r in rows]
+    if not gap_tickers:
+        return {"gap_tickers": 0, "rows_upserted": 0}
+
+    start_d = date.today() - timedelta(days=14)
+    end_d = date.today() - timedelta(days=1)
+
+    async with httpx.AsyncClient(
+        headers={
+            "APCA-API-KEY-ID": os.environ.get("ALPACA_KEY", ""),
+            "APCA-API-SECRET-KEY": os.environ.get("ALPACA_SECRET", ""),
+        },
+        timeout=30.0,
+    ) as client:
+        bars_by_sym = await fetch_daily_bars_multi(
+            client, gap_tickers, start_d, end_d, feed="sip",
+        )
+
+    upserts: list[tuple] = []
+    for sym, bars in bars_by_sym.items():
+        for b in bars:
+            try:
+                o = float(b["o"])
+                h = float(b["h"])
+                l_ = float(b["l"])
+                c = float(b["c"])
+                v = int(b["v"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if c <= 0 or c > 100_000_000 or h < max(o, c, l_) or l_ > min(o, c, h) or v < 0:
+                continue
+            bar_date = (b.get("t") or "")[:10]
+            if not bar_date:
+                continue
+            upserts.append((sym, date.fromisoformat(bar_date), o, h, l_, c, v))
+
+    if upserts:
+        sql = """
+            INSERT INTO platform.prices_daily
+                (ticker, date, open, high, low, close, volume, adjusted_close, source, delisted)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $6, 'alpaca', false)
+            ON CONFLICT (ticker, date) DO UPDATE SET
+                open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low,
+                close = EXCLUDED.close, volume = EXCLUDED.volume,
+                adjusted_close = EXCLUDED.adjusted_close, source = 'alpaca'
+        """
+        async with pool.acquire() as conn:
+            await conn.executemany(sql, upserts)
+
+    return {
+        "gap_tickers": len(gap_tickers),
+        "rows_upserted": len(upserts),
+        "feed": "sip",
+    }
+
+
 async def _stage_universe_prescreener(pool: asyncpg.Pool) -> dict[str, Any]:
     """Populate ``platform.universe_candidates`` for today.
 
@@ -507,6 +592,7 @@ async def _stage_simulate_universe() -> dict[str, Any]:
 _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     ("daily_bars",          lambda pool, cfg: (lambda: _stage_daily_bars(pool, cfg)),          HEAVY_STAGE_TIMEOUT_SEC),
     ("corporate_actions",   lambda pool, cfg: (lambda: _stage_corporate_actions(pool)),        HEAVY_STAGE_TIMEOUT_SEC),
+    ("coverage_fill",       lambda pool, cfg: (lambda: _stage_coverage_fill(pool)),            STAGE_TIMEOUT_SEC),
     ("fundamentals_refresh",lambda pool, cfg: (lambda: _stage_fundamentals_refresh(pool, cfg)),HEAVY_STAGE_TIMEOUT_SEC),
     ("data_validation",     lambda pool, cfg: (lambda: _stage_data_validation(pool)),          STAGE_TIMEOUT_SEC),
     ("universe_prescreener",lambda pool, cfg: (lambda: _stage_universe_prescreener(pool)),     STAGE_TIMEOUT_SEC),
