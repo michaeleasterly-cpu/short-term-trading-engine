@@ -71,7 +71,20 @@ The Short-Term Trading Engine is a personal, fully automated, multi-strategy tra
     - `Monte Carlo sequence stress tests` — block-bootstrapped trade-sequence shuffling, null distribution of Sharpe, probability of ruin (`tpcore/backtest/monte_carlo.py`).
     - `PSR / DSR / MinBTL` (López de Prado) — Probabilistic Sharpe Ratio, Deflated Sharpe Ratio, Minimum Backtest Length (`tpcore/backtest/statistical_significance.py`).
 - Score < 60 → engine cannot trade live.
-- Transaction cost model: 0.05% slippage per side for liquid stocks, configurable.
+- Transaction cost model: tier-aware round-trip costs from `platform.liquidity_tiers` via `tpcore/backtest/cost_model.py` (T4 fallback ~1.5% for unknowns); 0.05% per-side slippage is the legacy default still used as a fallback.
+
+**Parameter-search pipeline (`tpcore/backtest/search.py` + `scripts/search_parameters.py`):**
+
+Replaces one-off backtest tuning with a systematic, statistically-rigorous edge-discovery loop. The orchestrator imports each engine's `run_for_search` / `load_*_window_context` / `run_*_with_context` programmatically and never shells out. Per-window data load is amortised across all candidates (~60× per-trial speedup after the panel-sharing refactor).
+
+- **Random search** — uniform sampling over engine-specific parameter ranges (defined in `PARAM_RANGES` per engine). Deliberately narrow ranges keep multiple-testing penalties manageable.
+- **Walk-forward validation** — N-year train + M-year holdout, advancing annually; default 3y/1y because the engines' continuous-coverage window is 2018-2023 and the final-holdout reserves 2024-2025.
+- **Final held-back validation** — never seen during search, touched exactly once. DSR computed on this slice using the total trial count for the multiple-testing correction.
+- **Period-aggregated metrics** (`compute_slice_metrics_from_trades`) — trades sharing an `entry_date` are equal-weighted into one portfolio period return before computing Sharpe / drawdown / DSR. No-op for sequential single-position engines; collapses the ~130 concurrent ticker-month trades into ~24 monthly observations for portfolio strategies like Momentum.
+- **Universe loader** — `--universe-tier-max N` pulls all tickers with tier ≤ N from `platform.liquidity_tiers`. T1+T2 = ~1,281 names; T1-T3 = ~2,686 names.
+- **Verdict** — `SURVIVED` if DSR ≥ 0.95 AND credibility ≥ 60. `FAILED` prints the top 5 alternatives for the next iteration.
+
+DSR ≥ 0.95 is a hard threshold for daily-frequency strategies with 1000+ observations; it is structurally too strict for monthly portfolio strategies with only 24 held-back periods. For low-frequency engines, the held-back portfolio Sharpe + walk-forward consistency are the real signal even when DSR fails.
 
 ### 2.6 Fundamentals & Valuation (`tpcore.fundamentals`, `tpcore.valuation`)
 
@@ -152,7 +165,8 @@ Earlier drafts of this plan gated Market Context on **SPY-level** CHOP+ADX. The 
 - All five plugs implemented and tested. Scheduler entry: `sigma/scheduler.py`. The Railway service `sigma-scheduler` exists but is unscheduled (no cron, no auto-restart); engine runs are invoked locally during the Railway pause.
 - CHOP filter validated by backtest — per-stock variant improves Sharpe by 26%; SPY-level variant falsified and removed.
 - Backtest: `sigma/backtest.py` (tier-aware costs from `platform.liquidity_tiers` as of 2026-05-12). Overfitting report: `backtests/sigma_overfitting_report.json`.
-- Overfitting diagnostic score **55/100 — BLOCKED** (was 50/100 pre-tier-aware costs; tier-aware refit flipped `sensitivity_surface_flat` to ✓, gained +5 points). Extended-window runs still show MinBTL gap + DSR deflation as the primary failure modes. Not cleared for live capital. See §9 *Overfitting Diagnostics Status* for the failure-mode breakdown.
+- Overfitting diagnostic score **55/100 — BLOCKED**. Extended-window runs show MinBTL gap + DSR deflation as the primary failure modes.
+- **Parameter-search verdict (T1+T2, 50 trials × 3 walk-forward windows, 2026-05-12):** held-back 2024-2025 Sharpe **+0.740**, profit factor **+3.71**, max drawdown -8.1%. Walk-forward top-5 all positive across all 3 windows. DSR fails on multiple-testing correction (50 trials × ~150 trades is too few to clear deflation). Marginal real edge, kept as research-only.
 
 ### 4.2 Reversion — Mean Reversion Engine (Second Build)
 
@@ -196,8 +210,9 @@ Earlier drafts of this plan gated Market Context on **SPY-level** CHOP+ADX. The 
 **Status (built; Railway paused, runs locally):**
 - All five plugs implemented and tested. Scheduler entry: `reversion/scheduler.py`. The Railway service `reversion-scheduler` exists but is unscheduled during the Railway pause; engine runs are invoked locally.
 - Earnings-quality gate validated; combined filter (HIGH quality + |Z| ≥ 3.0) applied in `reversion/models.py` and `reversion/plugs/lifecycle_analysis.py`.
-- Backtest: `reversion/backtest.py` (tier-aware costs as of 2026-05-12; funded universe pinned to the 50-name mega-cap subset to keep the run under the pooler statement_timeout). Overfitting report: `backtests/reversion_overfitting_report.json`.
-- Overfitting diagnostic score **45/100 — BLOCKED** (unchanged by tier-aware refit; trade-count thinness is the binding constraint, not cost calibration). Not cleared for live capital.
+- Backtest: `reversion/backtest.py` (tier-aware costs as of 2026-05-12). Overfitting report: `backtests/reversion_overfitting_report.json`.
+- Overfitting diagnostic score **45/100 — BLOCKED**.
+- **Parameter-search verdict (T1+T2 with EQ filter dropped, 50 trials × 3 walk-forward windows, 2026-05-13):** walk-forward top-5 all scored +0.39 to +2.87 across all 3 windows (strong in-sample), but held-back 2024-2025 collapsed to Sharpe **-0.080**, profit factor 0.87. **Classic overfit signature** — the pipeline caught it. Strategy doesn't generalise on the wider universe; DSR=0 correctly rejected the winner. Reversion is shelved pending either (a) a different signal class or (b) the FMP fundamentals coverage expanding far enough to make the original EQ-gated path testable on T2+.
 
 ### 4.3 Vector — Momentum Swing Engine (Third Build)
 
@@ -255,11 +270,60 @@ The infrastructure is correct; the strategy needs more evidence before the gate 
 
 **Status (built; Railway paused, runs locally):**
 - All five plugs implemented and tested. Scheduler entry: `vector/scheduler.py`. The Railway service `vector-scheduler` exists (service ID `6498df68-0a23-4531-85df-f54ba37a1c40`) but is unscheduled during the Railway pause; engine runs are invoked locally.
-- Catalyst proxy via FMP `EARNINGS_BEAT` events (683 events across 44 tickers, 2018–2025) populated in `platform.catalyst_events`. Fundamentals ratios `pb`/`de` backfilled to **152,907 PIT-safe rows** across 5,981 tickers in `platform.fundamentals_quarterly` (post-Phase-1 expansion); the original 1,622-row figure was the pre-expansion state.
+- Catalyst proxy via FMP `EARNINGS_BEAT` events (683 events across **44 tickers**, 2018–2025) populated in `platform.catalyst_events`. **Critical coverage gap: zero of those 44 tickers are in liquidity_tiers T1+T2.** Vector is therefore untestable on the wider universe until catalyst_events is backfilled. Fundamentals ratios `pb`/`de` backfilled to 152,907 PIT-safe rows across 5,981 tickers in `platform.fundamentals_quarterly` — but fundamentals alone aren't enough; the catalyst-event coverage is the binding constraint.
 - VIX-aware crash-guard sizing implemented and verified end-to-end in the backtest (1.0× / 0.5× / 0.25× via SPY 20-day realized-vol proxy).
-- Backtest: `vector/backtest.py` (tier-aware costs as of 2026-05-12). Overfitting report: `backtests/vector_overfitting_report.json`. Score **45/100 — BLOCKED** (unchanged by tier-aware refit; 12 trades, trades-per-parameter ratio 1.6, MinBTL effectively infinite). Paper-trading remains blocked alongside the other engines while Railway is paused — engine runs are invoked locally on demand for AAR collection.
+- Backtest: `vector/backtest.py` (tier-aware costs as of 2026-05-12). Overfitting report: `backtests/vector_overfitting_report.json`. Score **45/100 — BLOCKED**.
+- **Parameter-search verdict (T1+T2, 50 trials × 3 walk-forward windows, 2026-05-13):** zero trades on every candidate due to the catalyst-event coverage gap. **Vector is data-blocked, not strategy-blocked.** The strategy cannot be evaluated on this universe until `platform.catalyst_events` is expanded beyond the original 44-ticker set. Re-enabling Vector is gated on a one-time data-ingestion backfill (catalyst events for T1+T2 tickers from FMP earnings-history endpoint), not on any strategy work.
 
-### 4.4 S2 — Short Squeeze Engine (Fourth Build, Satellite)
+### 4.4 Momentum — Cross-Sectional 12-1 Engine (Fourth Build)
+
+**Mission:** Long-only cross-sectional momentum on a liquid US-equities universe; capture the persistent 12-1 month return-of-returns premium documented in 50+ years of academic literature (Jegadeesh-Titman 1993, Asness-Moskowitz-Pedersen 2013).
+
+**Rationale for adding a fourth engine:** Sigma and Reversion are mean-reversion bets; Vector is catalyst-driven momentum but data-blocked (zero catalyst-event coverage on T1+T2 universe). 2024-2025 has been a momentum-favouring regime, so the existing three-engine bench is regime-mismatched. A regime-matched, simple, well-understood factor engine is the cleanest fourth slot.
+
+**Setup Detection:**
+- Universe: T1+T2 from `platform.liquidity_tiers` (~1,281 names with continuous bar coverage over the lookback window). No fundamentals or catalyst-events required.
+- Signal: 12-1 month total return, `score(ticker, t) = price(t-skip) / price(t-skip-lookback) - 1`. Default skip=21 trading days, lookback=231 (≈12-1 calendar months).
+- Rank survivors; take the top decile (default top 10%).
+
+**Lifecycle Analysis:** Hold to next monthly rebalance. No early exits in Phase 1 (no per-name drawdown circuit breaker, no position-level stop). Phase 2 adds a portfolio-level drawdown circuit breaker (pause new entries when portfolio is > 10% off rolling peak).
+
+**Execution & Risk:**
+- Entry: next bar's open after rebalance signal × (1 + tier-aware slippage).
+- Exit: bar `hold` days later at close × (1 − tier-aware slippage).
+- Equal-weight within the decile (~130 positions). Per-name cap and sector cap deferred to Phase 2.
+- Tier-aware round-trip cost via `tpcore.backtest.cost_model.get_round_trip_cost` (already wired).
+
+**Phase 1 backtest results (T1+T2, 50 trials × 3 walk-forward windows, period-aggregated metrics):**
+
+| Metric | Walk-forward (top-5 avg) | Held-back 2024-2025 |
+|---|---|---|
+| Annual Sharpe | +0.07 to +0.32 | **+1.583** |
+| Profit factor | n/a | **+2.796** |
+| Max drawdown | n/a | -32.4% (geometric, real) |
+| Trades | per-window 200-700 | 1,841 ticker-months → ~24 monthly periods |
+| Top-5 evaluated in 3/3 windows | yes — parameter cluster: lookback 200-220, skip 22-30, hold 28-30, decile 0.06-0.18 | |
+| Credibility | — | 40/100 |
+| DSR (50 trials × 24 periods) | — | 0.0000 |
+
+**Verdict — Phase 1 CONTINUE.** The held-back Sharpe +1.58 / PF +2.80 is the strongest OOS signal across all four engines. The DSR=0 is a structural limitation of López de Prado's deflation at 50 trials with only 24 monthly observations — not a strategy failure. Walk-forward consistency (top-5 all positive across 3/3 windows, tight parameter cluster) is the cleaner evidence of edge.
+
+**Known data caveats:**
+1. `platform.prices_daily` is partially-survivorship-clean (~99% of tickers have bars through 2025 vs ~93-95% expected). Major 2023 delistings SIVB / WeWork / Credit Suisse are missing; BBBY shows post-bankruptcy ticker-reuse data as continuous. Walk-forward 2018-2023 is upward-biased; held-back 2024-2025 less so (most major delistings were 2023, so 24-25 universe is mostly real survivors). The `survivorship_inclusive` rubric flag is honestly set False for the momentum credibility score.
+2. The DSR ≥ 0.95 threshold is calibrated for daily-frequency strategies (1000+ obs); monthly portfolio strategies with 2 years of held-back history cannot pass it regardless of strategy quality. PSR or a frequency-adjusted DSR threshold is appropriate.
+
+**Status (Phase 1 only — backtest, no plugs):**
+- `momentum/backtest.py` — exposes `load_momentum_window_context()` + `run_momentum_with_context()` matching the panel-sharing pattern used by the other engines. CLI supports `--json` / `--trade-log` / parameter overrides.
+- Search wired in `scripts/search_parameters.py` (PARAM_RANGES["momentum"] = 4 narrow knobs: lookback_days 200-280, skip_days 15-30, hold_days 15-30, top_decile_pct 0.05-0.20).
+- **5-plug architecture, scheduler, trade-monitor integration, capital gate — all deferred** to Phase 2, contingent on either (a) DSR threshold being recalibrated for monthly strategies, or (b) paper-trading evidence accruing to validate the +1.58 Sharpe in production.
+
+**Phase 2 work (deferred):**
+- 5 plugs (`momentum/plugs/{setup_detection,lifecycle_analysis,execution_risk,aar_logging,capital_gate}.py`)
+- Trade-monitor extensions for multi-position monthly rebalance (current monitor is single-position)
+- Sector cap + per-name cap risk controls
+- Drawdown circuit breaker
+
+### 4.5 S2 — Short Squeeze Engine (Fifth Build, Satellite)
 
 **Mission:** Detect conditions conducive to short squeezes. Satellite only — permanent 5% capital cap.
 
@@ -285,7 +349,7 @@ The infrastructure is correct; the strategy needs more evidence before the gate 
 
 **Status:** Specification only — no engine code. Options data parked: `platform.tradier_options_chains` (122,668 contracts across 51 tickers) is loaded but no plug consumes it.
 
-### 4.5 Catalyst — Event-Driven Engine (Fifth Build)
+### 4.6 Catalyst — Event-Driven Engine (Sixth Build)
 
 **Mission:** Capture post-event drift from earnings surprises and contract awards. No binary events, no options.
 
@@ -303,7 +367,7 @@ The infrastructure is correct; the strategy needs more evidence before the gate 
 - Hard stop −10%. Profit target event-specific.
 - Max 10% of total platform capital allocated to Catalyst.
 
-### 4.6 Sentinel — Macro Defense Engine (Sixth Build)
+### 4.7 Sentinel — Macro Defense Engine (Seventh Build)
 
 **Mission:** Protect the platform during recessions. Reformed basket with minimal decay.
 
@@ -443,11 +507,13 @@ Current decision: **stay on FMP Starter and Alpaca free**. The overfitting diagn
 | Phase 1b | Sigma paper trading (3+ months), Parity Harness active | **Paused** — engine + Parity Harness built; cron firing blocked by the Railway pause. Paper-trading resumes when execution architecture is settled. |
 | Phase 2 | Reversion engine | **Complete** — combined filter (HIGH quality + \|Z\| ≥ 3.0) applied. Backtest re-run with tier-aware costs 2026-05-12. |
 | Phase 3 | Allocator + Forensics (basic) | **Deferred** — blocked on paper track record from Sigma + Reversion + Vector. |
-| Phase 4 | Vector engine | **Complete** — VIX-aware sizing implemented. Overfitting diagnostics show 45/100 (still blocked). |
+| Phase 4 | Vector engine | **Complete (build); data-blocked (validation)** — engine code shipped, but parameter-search verdict (2026-05-13) showed zero trades on T1+T2 because `platform.catalyst_events` has zero overlap with that universe. Re-enabling requires a catalyst-event backfill, not a code change. |
+| Phase 4b | **Momentum engine — Phase 1 (backtest only)** | **Complete (Phase 1)** — `momentum/backtest.py` produces held-back Sharpe +1.58 / PF 2.80 on T1+T2 2024-2025. Phase 2 (five plugs, scheduler, paper trading) deferred pending either DSR threshold recalibration for monthly strategies or paper-trade validation. |
 | Phase 5 | S2 (satellite) | **Deferred** — options data parked in `platform.tradier_options_chains` (122,668 rows), no engine code. |
 | Phase 6 | Catalyst | **Deferred** — specification only. |
 | Phase 7 | Sentinel | **Deferred** — specification only. |
-| Cross-cutting | Overfitting detection suite | **Complete** — `tpcore/backtest/overfitting.py` wired into all three engine backtests. See *Overfitting Diagnostics Status* below. |
+| Cross-cutting | Parameter-search pipeline | **Complete** — `scripts/search_parameters.py` + `tpcore/backtest/search.py`. Random search + walk-forward + final held-back DSR. Panel-sharing context cache (~60× per-trial speedup). Period-aggregated metrics (correct for portfolio strategies). See §2.5. |
+| Cross-cutting | Overfitting detection suite | **Complete** — `tpcore/backtest/overfitting.py` wired into all engine backtests. See *Overfitting Diagnostics Status* below. |
 | Cross-cutting | Data Validation Suite | **Complete** — `python -m tpcore.quality.validation` runs locally; was previously scheduled as a Railway Sunday cron, consolidated into `platform.ingestion_jobs` for the persistent `ingestion-engine`. |
 | Cross-cutting | Corporate-actions pipeline | **Complete** — `scripts/run_corporate_actions_all_active.py` runs locally; previously scheduled as a Sunday cron, now driven via `platform.ingestion_jobs`. |
 | Cross-cutting | Maintenance CLI (`scripts/ops.py`) | **Complete** — single-file `--update` / `--check` / `--full` driver for daily + weekly data work. Reuses `tpcore.ingestion.handlers`, writes audit rows to `platform.application_log` under `engine='ops'`. Operator runbook in `docs/OPERATIONS.md` § *Daily Maintenance (via ops CLI)*. |
@@ -457,15 +523,24 @@ Current decision: **stay on FMP Starter and Alpaca free**. The overfitting diagn
 ### Overfitting Diagnostics Status
 
 - **Module:** `tpcore/backtest/overfitting.py` — nine tests (DSR, PSR, PBO via CSCV, MinBTL, parameter sensitivity sweep, Monte Carlo sequence stress, noise infusion, regime coverage, trades-per-parameter ratio).
-- **Integration:** wired into all three engine backtest scripts (`sigma/backtest.py`, `reversion/backtest.py`, `vector/backtest.py`). Reports saved to `backtests/<engine>_overfitting_report.json`. Credibility consumed by `tpcore.backtest.credibility.BacktestCredibilityRubric.evaluate_with_overfitting()` (70 pts integrity + 30 pts overfitting bundle = 100 total; ≥ 60 required for graduation).
-- **Current scores:** Sigma **50/100**, Reversion **45/100**, Vector **45/100**. All below the 60-point graduation threshold. None of the three engines is cleared for live capital.
-- **Primary cause of failure:** trade-count thinness relative to parameter search space. The MinBTL gap and the DSR deflation are the dominant failure modes — every engine has a defensible per-trade edge in-sample, but not enough trades to clear a multiple-testing-corrected significance threshold.
-- **Mitigation paths (in order of cost):**
-  1. **Extend the paper-trading window** — let the live tape add trade evidence at zero data cost.
-  2. **Broaden the universe** — modest one-time effort, no strategy changes.
-  3. **Upgrade to FMP Premium ($59/mo)** — only if (1) and (2) plateau without clearing the gate.
+- **Integration:** wired into all four engine backtest scripts (`sigma`, `reversion`, `vector`, `momentum`). Reports saved to `backtests/<engine>_overfitting_report.json`. Credibility consumed by `tpcore.backtest.credibility.BacktestCredibilityRubric.evaluate_with_overfitting()` (70 pts integrity + 30 pts overfitting bundle = 100 total; ≥ 60 required for graduation).
 
-  No strategy parameter changes are warranted while trade counts are this small; tuning would be curve-fitting noise.
+**Parameter-search verdicts (T1+T2 universe, 50 trials × 3 walk-forward windows, period-aggregated metrics; sweeps run 2026-05-12 / 2026-05-13):**
+
+| Engine | Held-back Sharpe | Held-back PF | Held-back DD | Credibility | DSR | Verdict |
+|---|---|---|---|---|---|---|
+| Sigma | +0.74 | +3.71 | -8.1% | 55 | 0.00 | Marginal real edge — research only |
+| Reversion | -0.08 | +0.87 | -8.0% | 45 | 0.00 | Pipeline caught overfit (in-sample +2.87 → OOS -0.08) |
+| Vector | — | — | — | — | — | **Data-blocked** — catalyst_events has 0 overlap with T1+T2 |
+| **Momentum** | **+1.58** | **+2.80** | -32.4% | 40 | 0.00 | **Strongest OOS signal in the bench** — Phase 1 CONTINUE |
+
+- **Why the 60-pt gate has not been cleared anywhere yet:**
+  1. For Sigma/Reversion/Vector: trade-count thinness + DSR multiple-testing correction.
+  2. For Momentum: monthly portfolio frequency × 50-trial penalty × 24 held-back observations makes DSR ≥ 0.95 mathematically unreachable regardless of strategy quality. The rubric was calibrated for daily-frequency strategies; using it as-is on monthly strategies is a category error.
+- **Forward path:**
+  - **Momentum**: paper-trade with small size now; let the live tape become the OOS validation. Re-evaluate credibility under either a frequency-adjusted DSR threshold (≈0.5 for monthly with 24 obs) or PSR (no deflation).
+  - **Vector**: backfill `platform.catalyst_events` for T1+T2 tickers via FMP earnings-history endpoint. Single ingestion task. Re-run search after.
+  - **Sigma / Reversion**: park. Reversion is overfit-confirmed; Sigma is too marginal to move ahead of Momentum.
 
 ---
 

@@ -352,6 +352,65 @@ ORDER BY source;
 
 ---
 
+## 5.5 Parameter-Search Pipeline
+
+Production edge-discovery runs are driven by `scripts/search_parameters.py`. Random search + walk-forward + final held-back DSR verdict. Imports each engine's `load_*_window_context()` / `run_*_with_context()` programmatically — no subprocess. Per-window data load is shared across all candidates.
+
+**Run a search on one engine:**
+
+```bash
+set -a; source .env; set +a
+DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python -u scripts/search_parameters.py \
+  --engine momentum \
+  --trials 50 --per-window-trials 50 \
+  --universe-tier-max 2 \
+  --train-start 2018-01-01 --holdout-end 2023-12-31 \
+  --final-holdout-start 2024-01-01 --final-holdout-end 2025-12-31 \
+  --output backtests/momentum_search_results.csv
+```
+
+- `--engine`: `sigma | reversion | vector | momentum`.
+- `--trials`: total parameter combinations pre-sampled (default 200; 50 is the practical sweet spot — DSR multiple-testing correction is friendlier at smaller N).
+- `--per-window-trials`: how many of the pre-sampled combos to evaluate per walk-forward window. Setting `--per-window-trials = --trials` makes every candidate run in every window → clean OOS averaging.
+- `--universe-tier-max`: pull tickers with tier ≤ N from `platform.liquidity_tiers`. Typical: 2 for T1+T2 (~1,281 names). Omit to use each engine's built-in default universe (~50 mega-caps).
+- `--train-years` / `--holdout-years`: walk-forward window sizing (default 3/1).
+- `--seed`: deterministic parameter sampling (default 0).
+
+**Backgrounded runs (use these for the long N≥200 sweeps):**
+
+```bash
+nohup .venv/bin/python -u scripts/search_parameters.py \
+    --engine momentum --trials 200 --per-window-trials 200 \
+    --universe-tier-max 2 \
+    --train-start 2018-01-01 --holdout-end 2023-12-31 \
+    --final-holdout-start 2024-01-01 --final-holdout-end 2025-12-31 \
+    --database-url "$DATABASE_URL_IPV4" \
+  > backtests/momentum_search.log 2>&1 &
+echo "pid=$!"
+
+# Watch live:
+tail -f backtests/momentum_search.log
+```
+
+The `-u` flag forces unbuffered stdout — otherwise nohup buffers all the progress lines and the log stays empty until the run completes.
+
+**Convenience wrappers** in `scripts/`:
+
+- `scripts/run_sigma_search.sh` — Sigma 200-trial sweep.
+- `scripts/run_vector_search.sh` — Vector sweep on T1+T2 (currently expected to produce zero trades until catalyst_events backfill).
+- `scripts/run_all_searches.sh` — sigma + reversion + vector back-to-back. **Note:** `set -e` is intentionally OFF; a FAILED verdict exits 1 but should not abort the multi-engine sweep.
+
+**Interpreting the verdict:**
+
+The orchestrator prints `VERDICT: SURVIVED` only when both `DSR ≥ --dsr-threshold` (default 0.95) and `credibility ≥ --credibility-threshold` (default 60). For monthly portfolio strategies (Momentum), the default DSR threshold is structurally unreachable with 2 years of held-back data — use held-back portfolio Sharpe + walk-forward consistency as the real signal.
+
+**Outputs:**
+
+- `backtests/<engine>_search_results.csv` — per-trial results (parameters, holdout metrics, full-window credibility).
+- Stdout: header, per-trial timing/status, top-5 candidates by mean OOS score, final held-back metrics, verdict line.
+
+---
+
 ## 6. Data Validation Suite
 
 The suite runs weekly (Sunday 06:00 UTC). On a non-Sunday, the most recent run should be the prior Sunday.

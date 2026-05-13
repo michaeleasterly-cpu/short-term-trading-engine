@@ -90,6 +90,25 @@ Shipped on Corwin-Schultz alone — the Tradier streaming subscription (B3) was 
 7. **B7 – Parity Harness spread logging**
    - Log bid-ask spread at order time alongside fill price.
 
+### Phase 2.5: Parameter-Search Pipeline — **Complete (2026-05-13)**
+
+Built the production edge-discovery substrate that replaces one-off backtest tuning. Three subsystems land together:
+
+1. **Shared search infra (`tpcore/backtest/search.py`)** — `BacktestRunResult` + `SearchTrade` dataclasses, `compute_search_metrics()` that runs the overfitting diagnostic + credibility rubric on any (trades, parameters, price_data) triple, standardised trade-log CSV format.
+2. **Per-engine programmatic entry (`{sigma,reversion,vector,momentum}/backtest.py`)** — each engine exposes `load_*_window_context()` (async, heavy I/O — pulls bars + fundamentals + catalysts as needed) and `run_*_with_context()` (sync, pure compute). The orchestrator imports these directly; no subprocess, no stdout parsing. Each engine's CLI also accepts `--json`, `--trade-log <path>`, and parameter-override flags so ad-hoc invocation works.
+3. **Orchestrator (`scripts/search_parameters.py`)** — random search + walk-forward + final held-back DSR. Loads window context once per walk-forward window (panel-sharing refactor, ~60× per-trial speedup), then runs all candidates in that window against the shared in-memory context. Period-aggregated metrics: trades sharing an `entry_date` collapse into one portfolio period return before computing Sharpe / drawdown / DSR (correct for both single-position and parallel-position strategies).
+
+**Verdicts produced 2026-05-12 / 2026-05-13:**
+
+| Engine | T1+T2 universe? | Held-back Sharpe | Held-back PF | DSR | Conclusion |
+|---|---|---|---|---|---|
+| Sigma | yes (1,281) | +0.74 | +3.71 | 0.00 | Marginal real edge — research only |
+| Reversion | yes (355 funded) | -0.08 | +0.87 | 0.00 | Pipeline caught overfit (in-sample +2.87 → OOS -0.08) |
+| Vector | n/a | — | — | — | **Data-blocked** — `catalyst_events` has 0 overlap with T1+T2 |
+| **Momentum** | yes (1,281) | **+1.58** | **+2.80** | 0.00 | **Strongest OOS signal in the bench** |
+
+DSR ≥ 0.95 is structurally too strict for monthly portfolio strategies with only 2 years of held-back data (24 observations × 50-trial penalty makes the bar unreachable regardless of strategy quality). For Momentum the held-back portfolio Sharpe + walk-forward consistency are the real evidence.
+
 ### Phase 3: Infrastructure Validation via Historical Replay (Weeks 3-4)
 1. **C1 – Historical replay script**
    - Build `scripts/replay_history.py`.
@@ -101,26 +120,34 @@ Shipped on Corwin-Schultz alone — the Tradier streaming subscription (B3) was 
    - Run the replay for the full universe.
    - Collect trade records and P&L.
 
-### Phase 4: First Edge Assessment (Week 4)
-1. **D1 – Compute strategy metrics**
-   - For each engine, calculate Sharpe ratio, maximum drawdown, profit factor, and win rate from the replay.
-2. **D2 – Run the overfitting diagnostic**
-   - Feed the trade list into `OverfittingDiagnostic`.
-   - Check credibility score (≥ 60?), DSR, MinBTL, trades-per-parameter, etc.
-3. **D3 – Decision gate**
-   - If any engine passes the credibility gate → proceed to Phase 5 (Edge-Finding Agent).
-   - If no engine passes → pivot to systematic search for new strategy classes (see Pivot Plan below).
+### Phase 4: First Edge Assessment (Week 4) — **Superseded by Phase 2.5 search pipeline (2026-05-13)**
 
-### Phase 5: Edge-Finding Agent (only if Phase 4 passes)
+The original Phase 4 plan was: run a single historical replay, feed trade lists into `OverfittingDiagnostic`, decide go/no-go. That decision gate fired across all four engines via the Phase 2.5 parameter-search pipeline. The verdict table is in Phase 2.5 above.
+
+**Phase 4 decision (2026-05-13):** Momentum is the only engine producing a real OOS edge on the wider universe. Sigma is marginal; Reversion was caught as overfit; Vector is data-blocked. Forward path:
+
+- **Momentum**: paper-trade with small size (Phase 5a below) to validate the +1.58 held-back Sharpe in production. 3 months of paper performance + the existing backtest = the real out-of-sample test, earned from market exposure not from a credibility-checkbox.
+- **Vector**: backfill `platform.catalyst_events` for T1+T2 tickers (one-time ingestion task). Re-run search. Decision point on whether to invest further then.
+- **Sigma / Reversion**: park. Reversion is overfit-confirmed; Sigma is too marginal to move ahead of Momentum.
+
+### Phase 5a: Momentum Paper Trading (current)
+
+1. **Build the 5-plug architecture** for Momentum (`momentum/plugs/{setup_detection,lifecycle_analysis,execution_risk,aar_logging,capital_gate}.py`).
+2. **Extend `tpcore.trade_monitor`** to handle multi-position monthly rebalance (current monitor is single-position).
+3. **Paper-trade** through Alpaca with deliberately small capital. Target: 3 months of live paper data.
+4. **Re-evaluate credibility** after paper data lands, under either (a) a frequency-adjusted DSR threshold (~0.5 for monthly with 24 obs) or (b) PSR instead of DSR.
+
+### Phase 5b: Edge-Finding Agent (deferred until Phase 5a outcome)
+
 1. **E1 – Build a hypothesis queue** in `platform.research_queue`.
 2. **E2 – Implement a template library** of reusable signal functions from existing plugs.
-3. **E3 – Create a worker** that picks up queued hypotheses, runs them through the historical replay, and writes results.
+3. **E3 – Create a worker** that picks up queued hypotheses, runs them through the parameter-search orchestrator, and writes results.
 4. **E4 – Variation generator** creates slight modifications of top-performing hypotheses for further testing.
 
-### Pivot Plan (if no edge found)
-- Broaden the search to less efficient market segments (micro-caps, OTC, etc.) if liquidity data supports it.
-- Investigate alternative data sources (options flow, insider filings, macro indicators) for novel edges.
-- Consider multi-asset strategies (ETFs, bonds) for diversification.
+### Pivot Plan (if Momentum paper-trading fails)
+- Broaden to less efficient segments (T3+T4 tickers with limits-to-arbitrage).
+- Alternative data (options flow, insider filings, macro indicators).
+- Multi-asset (ETFs, bonds) for diversification or pairs trading.
 - The platform's infrastructure remains a rigorous test environment for any new idea.
 
 ## Deliverables and Timeline
