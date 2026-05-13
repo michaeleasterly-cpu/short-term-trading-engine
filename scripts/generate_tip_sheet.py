@@ -441,7 +441,7 @@ def render_recommendations(
         f"Today's recommendations ({engine}) as of {as_of.date().isoformat()}  "
         f"— top decile, ranked by 12-1 momentum score",
         "─" * 77,
-        f"  {'rank':>4}  {'ticker':<8} {'score':>+8} {'last_close':>11}  {'tier':>4}",
+        f"  {'rank':>4}  {'ticker':<8} {'score':>8} {'last_close':>11}  {'tier':>4}",
         "  " + "─" * 73,
     ]
     for i, r in enumerate(recs[:60], 1):
