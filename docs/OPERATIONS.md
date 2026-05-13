@@ -78,6 +78,42 @@ Two items from the 2026-05-13 hangnail review are explicitly NOT being built. Re
 
 2. **`scripts/replay_history.py` (EDGE_VALIDATION_PLAN Phase 3)** — never built. Per the plan itself: *"Phase 4 (was: run a single historical replay, feed trade lists into OverfittingDiagnostic, decide go/no-go) fired across all four engines via the Phase 2.5 parameter-search pipeline."* The search runs the entire historical period across many parameter combinations; a single-replay script is duplicative. If we ever need engine-level smoke against a frozen historical window, the search scripts (`scripts/run_sigma_search.sh`, etc.) provide it with finer-grained output.
 
+### Allocator (2026-05-14)
+
+Cross-engine capital allocation per MASTER_PLAN §5. Runs weekly (Monday pre-open), inverse-realized-volatility weighting with [0.10, 0.50] caps, freeze on drawdown.
+
+```bash
+scripts/run_allocator.sh                   # paper mode (no kill_switch writes)
+scripts/run_allocator.sh --enforce-freeze  # live mode (writes risk_state.kill_switch_active)
+scripts/run_allocator.sh --platform-capital 50000  # adjust total
+```
+
+* Reads engine equity from `platform.aar_events` (paper or live fills both count).
+* Bootstrap: 25% each until an engine has ≥20 completed AARs; then switches to σ-based.
+* Soft freeze at trailing-peak DD ≥ 15%; hard freeze at DD ≥ 25% or 30 sessions in soft state.
+* Atomicity: `allocations` row + `risk_state.engine_equity` UPDATE wrapped in one transaction.
+* Engines consume `engine_equity` automatically via `RiskStateStore.get()` — no engine-side code change.
+
+### Trade Monitor daemon
+
+`tpcore.trade_monitor` watches Alpaca's `TradingStream` for fills. Required for Sigma + Reversion's Tier 2 cascade (limit-sell on Tier 1 fill); Momentum doesn't need it.
+
+```bash
+scripts/run_trade_monitor.sh                       # foreground
+scripts/install_launchd_trade_monitor.sh           # install as persistent LaunchAgent
+```
+
+Without the monitor running, Tier-1 fills don't trigger Tier-2 submission — orders sit indefinitely in `platform.open_orders` (the YUMC orphan pattern, 2026-05-12).
+
+### Engine sweep (paper trading)
+
+```bash
+scripts/run_all_engines.sh                  # sigma → reversion → vector → momentum
+scripts/run_all_engines.sh --force          # bypass validation-green guard
+```
+
+Refuses to run if `data_validation` has any red row in its latest result. Each scheduler is one-shot; the trade_monitor daemon must be running separately for Tier 2 cascade.
+
 ### Lessons learned (2026-05-13 data-cleanup post-mortem)
 
 The post-mortem captured these principles as durable patterns; the post-close + full-backfill scripts above codify them. Treat any deviation as the start of the next mess.

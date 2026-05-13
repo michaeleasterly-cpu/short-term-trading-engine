@@ -632,16 +632,35 @@ async def _fetch_platform_health() -> dict:
     return out
 
 
-async def _fetch_recent_momentum_orders() -> list[dict]:
-    """All Momentum (mo_* client-id) orders at Alpaca, newest first."""
+# Engine → client-order-id prefix at Alpaca. Each engine tags its orders
+# at submission time so the dashboard can attribute fills back to the
+# right engine without an extra DB lookup.
+_ENGINE_ORDER_PREFIXES: dict[str, str] = {
+    "momentum": "mo_",
+    "sigma": "sig_",
+    "reversion": "rev_",
+    "vector": "vec_",
+}
+
+
+async def _fetch_recent_orders_all_engines() -> list[dict]:
+    """All engine orders at Alpaca, newest first. Each order carries an
+    ``engine`` field derived from the client_order_id prefix."""
     broker = AlpacaPaperBrokerAdapter()
     orders = await broker.list_recent_orders(limit=500)
     out: list[dict] = []
     for o in orders:
-        if not (o.client_order_id or "").startswith("mo_"):
+        cid = o.client_order_id or ""
+        engine = None
+        for eng, prefix in _ENGINE_ORDER_PREFIXES.items():
+            if cid.startswith(prefix):
+                engine = eng
+                break
+        if engine is None:
             continue
         out.append(
             {
+                "engine": engine,
                 "ticker": o.symbol,
                 "side": getattr(o.side, "value", str(o.side)),
                 "qty": int(o.qty) if o.qty else 0,
@@ -653,6 +672,11 @@ async def _fetch_recent_momentum_orders() -> list[dict]:
             }
         )
     return out
+
+
+async def _fetch_recent_momentum_orders() -> list[dict]:
+    """Back-compat alias. Filter all-engines output to momentum-only."""
+    return [o for o in await _fetch_recent_orders_all_engines() if o.get("engine") == "momentum"]
 
 
 async def _fetch_credibility_all_engines() -> dict:
@@ -888,46 +912,54 @@ def render_header():
 
 
 def render_holdings():
-    st.subheader("Currently holding — Momentum")
-    try:
-        holdings = run_async(_fetch_holdings_for_engine("momentum"))
-    except Exception as exc:  # noqa: BLE001
-        st.error(f"Could not fetch holdings: {exc}")
-        return None
-    if not holdings:
-        st.info("No open Momentum positions.")
-        return None
+    """Per-engine holdings — one expander block per engine. Selected ticker
+    is returned so the ticker-detail panel below renders the chart for it.
+
+    All four engines query Alpaca for their client-order-id prefix
+    (mo_/sig_/rev_/vec_); a position only shows under the engine that
+    opened it. The first row click across any engine wins.
+    """
     import pandas as pd
 
-    df = pd.DataFrame(holdings)
-    df["pnl_pct"] = df["unrealized_pl_pct"] * 100.0
-    df = df[["ticker", "qty", "entry_price", "current_price", "market_value", "unrealized_pl", "pnl_pct"]]
-    df.columns = ["Ticker", "Qty", "Entry", "Current", "Market Value", "P&L $", "P&L %"]
-    # Single-row selection — clicking a row sets selected ticker for the
-    # ticker-detail panel below. on_select='rerun' triggers a script rerun
-    # so the chart panel picks up the selection.
-    event = st.dataframe(
-        df,
-        use_container_width=True,
-        hide_index=True,
-        on_select="rerun",
-        selection_mode="single-row",
-        key="holdings_table",
-        column_config={
-            "Entry": st.column_config.NumberColumn(format="$%.2f"),
-            "Current": st.column_config.NumberColumn(format="$%.2f"),
-            "Market Value": st.column_config.NumberColumn(format="$%.2f"),
-            "P&L $": st.column_config.NumberColumn(format="$%+.2f"),
-            "P&L %": st.column_config.NumberColumn(format="%+.2f%%"),
-        },
-    )
+    st.subheader("Currently holding")
+    selected: str | None = None
+    cols = {
+        "Entry": st.column_config.NumberColumn(format="$%.2f"),
+        "Current": st.column_config.NumberColumn(format="$%.2f"),
+        "Market Value": st.column_config.NumberColumn(format="$%.2f"),
+        "P&L $": st.column_config.NumberColumn(format="$%+.2f"),
+        "P&L %": st.column_config.NumberColumn(format="%+.2f%%"),
+    }
+    for engine in SCORECARD_ENGINES:
+        try:
+            holdings = run_async(_fetch_holdings_for_engine(engine))
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Could not fetch {engine} holdings: {exc}")
+            continue
+        with st.expander(f"{engine.capitalize()} — {len(holdings)} position(s)", expanded=bool(holdings)):
+            if not holdings:
+                st.caption(f"No open {engine.capitalize()} positions.")
+                continue
+            df = pd.DataFrame(holdings)
+            df["pnl_pct"] = df["unrealized_pl_pct"] * 100.0
+            df = df[["ticker", "qty", "entry_price", "current_price", "market_value", "unrealized_pl", "pnl_pct"]]
+            df.columns = ["Ticker", "Qty", "Entry", "Current", "Market Value", "P&L $", "P&L %"]
+            event = st.dataframe(
+                df,
+                use_container_width=True,
+                hide_index=True,
+                on_select="rerun",
+                selection_mode="single-row",
+                key=f"holdings_table_{engine}",
+                column_config=cols,
+            )
+            selected_rows = event.selection.rows if event and event.selection else []
+            if selected_rows and selected is None:
+                selected = str(df.iloc[selected_rows[0]]["Ticker"])
     st.caption(
         f"Data as of {datetime.now(UTC).strftime('%H:%M:%S UTC')}  ·  Click a row to see its price chart"
     )
-    selected_rows = event.selection.rows if event and event.selection else []
-    if selected_rows:
-        return str(df.iloc[selected_rows[0]]["Ticker"])
-    return None
+    return selected
 
 
 def render_ticker_detail(ticker: str):
@@ -1134,17 +1166,17 @@ def render_recent_activity():
 
 
 def render_recent_orders():
-    """Recent momentum orders at the broker. Status histogram + latest 30
-    rows. Useful for verifying that yesterday's queued orders actually
-    filled at the open (counts of `filled` vs `new` answer that)."""
-    st.subheader("Recent orders — Momentum")
+    """Recent orders across every engine — status histogram + latest 30
+    rows. Each order is tagged with its originating engine via the
+    client_order_id prefix (mo_/sig_/rev_/vec_)."""
+    st.subheader("Recent orders — all engines")
     try:
-        orders = run_async(_fetch_recent_momentum_orders())
+        orders = run_async(_fetch_recent_orders_all_engines())
     except Exception as exc:  # noqa: BLE001
         st.error(f"Could not fetch orders: {exc}")
         return
     if not orders:
-        st.info("No `mo_*` orders at the broker.")
+        st.info("No engine orders (mo_/sig_/rev_/vec_ prefix) at the broker.")
         return
 
     # Status histogram — big numbers at top, color-coded by category.
@@ -1196,6 +1228,7 @@ def render_recent_orders():
     for o in sorted_orders[:30]:
         rows.append(
             {
+                "Engine": o.get("engine", "?"),
                 "Submitted": _fmt_local(o["submitted_at"]),
                 "Ticker": o["ticker"],
                 "Side": o["side"],
@@ -1215,7 +1248,9 @@ def render_recent_orders():
             "Fill price": st.column_config.NumberColumn(format="$%.2f"),
         },
     )
-    st.caption(f"{len(orders)} total momentum orders at the broker  ·  showing newest {min(30, len(orders))}")
+    by_engine = Counter(o.get("engine", "?") for o in orders)
+    breakdown = " · ".join(f"{e}: {n}" for e, n in sorted(by_engine.items()))
+    st.caption(f"{len(orders)} total engine orders at the broker ({breakdown})  ·  showing newest {min(30, len(orders))}")
 
 
 def render_equity_curve():
