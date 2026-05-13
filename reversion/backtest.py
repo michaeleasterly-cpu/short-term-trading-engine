@@ -866,6 +866,7 @@ REVERSION_OVERRIDE_KEYS = (
 _EARNINGS_QUALITY_TO_FILTER = {
     "HIGH": "high_only",
     "MEDIUM_AND_HIGH": "not_low",
+    "NONE": "none",
 }
 
 
@@ -1019,8 +1020,11 @@ def run_reversion_with_context(
     _TIER_ROUND_TRIP_COSTS.update(context.tier_round_trip_costs)
 
     z_thr = float(overrides.get("z_threshold", 3.0))
-    eq = overrides.get("earnings_quality", "HIGH")
-    filter_mode = _EARNINGS_QUALITY_TO_FILTER.get(eq, "high_only")
+    # Default to "NONE" (no EQ filter) when caller doesn't specify — the
+    # search pipeline operates on a wider universe where fundamentals
+    # coverage is sparse, and the EQ gate would reject most candidates.
+    eq = overrides.get("earnings_quality", "NONE")
+    filter_mode = _EARNINGS_QUALITY_TO_FILTER.get(eq, "none")
 
     if not context.panels or not context.funded_tickers:
         return BacktestRunResult(
