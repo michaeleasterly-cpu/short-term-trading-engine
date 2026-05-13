@@ -292,13 +292,25 @@ Used today by `ops/ingestion_engine.py` (Railway-deployed when active) and as th
 
 **AI Rules:** Always use `INSERT ... ON CONFLICT (engine) DO UPDATE`. Never delete rows from this table.
 
-#### `platform.allocations` (stub)
+#### `platform.allocations`
 
-**Purpose:** Future Allocator capital assignments. Schema deferred.
+**Purpose:** One row per allocator decision per engine. Audit trail for the weekly inverse-volatility rebalance.
 
-#### `platform.forensics_triggers` (stub)
+**Columns (current):** `id`, `engine`, `decided_at`, `weight`, `allocated_capital`, `prior_equity`, `realized_vol`, `freeze_state` (`active` / `soft_frozen` / `hard_frozen`), `freeze_reason`, `drawdown_pct`.
 
-**Purpose:** Future Forensics sprint triggers. Schema deferred.
+**Written by:** `tpcore.allocator.AllocatorService` (daemon: `com.michael.trading.allocator`, fires Mondays 13:00 UTC).
+
+**Read by:** Operator dashboard's Allocator panel + spot-checks via SQL.
+
+#### `platform.forensics_triggers`
+
+**Purpose:** One row per detection event (drawdown period, loss cluster, outlier loss). Surfaces patterns in the AAR history that warrant an operator-driven Sprint Dossier.
+
+**Columns:** `id`, `trigger_kind` (`outlier_loss` / `loss_cluster` / `drawdown_period`), `payload` (jsonb — engine, trade_id(s), σ/drawdown specifics, **`fingerprint`** for idempotency, **`dossier_path`** pointing at the auto-generated markdown postmortem), `fired_at`, `resolved_at` (NULL until operator resolves via dashboard).
+
+**Written by:** `tpcore.forensics.ForensicsService` (runs as the final step of `scripts/run_post_close.sh`).
+
+**Read by:** Operator dashboard's Health → Forensics expander (with one-click resolve button).
 
 #### `platform.tax_lots` (planned)
 
@@ -487,7 +499,7 @@ flowchart TB
    - Strategy redesign if the edge has decayed.
 5. **Re-validation:** After changes, the engine's backtest is re-run and the overfitting diagnostics are updated. The engine resumes paper trading with the revised settings.
 
-**Current state:** Forensics is specified but not yet built. AARs are being collected for future analysis. The feedback loop is the core of the platform's long-term edge: it systematically converts losses into strategy improvements.
+**Current state (2026-05-14):** Forensics is **built and wired into the post-close pipeline** (`tpcore/forensics/`). It runs as the final step of `scripts/run_post_close.sh` and emits trigger rows for drawdown periods, loss clusters, and outlier losses. Each new trigger auto-generates a Sprint Dossier template under `docs/sprints/<date>-<kind>-<engine>-<id>.md` with the trigger payload pre-filled — the operator's job is to write the Hypothesis + Fix sections, ship the change, and mark resolved via the dashboard. Both Forensics and Allocator read AARs through the shared `tpcore.aar.AARReader`.
 
 ### 3.6 Process Flow — Daily Trading Cycle
 
@@ -607,7 +619,7 @@ Tables and services that are specified but not yet built:
 | 6 | `platform.filings_insider` + SEC EDGAR adapter | Not built |
 | 7 | `platform.tax_lots` + Tax Overlay | Schema deferred |
 
-**Done (kept here for grep history):** `PostgresDataAdapter` (commit `d75076d`, 2026-05-10) — engines now read bars from `platform.prices_daily` exclusively, no live-API fallback. `platform.application_log` + `tpcore.logging.DBLogHandler` (commit `ff468de` + Alembic `20260511_0100`, applied 2026-05-10) — every scheduler run emits a queryable timeline; 7-day retention enforced per-write. Fundamentals cache weekly refresh (`ops/cron_fundamentals_refresh.py` + `FundamentalsCache.backfill_all`, Railway service `fundamentals-refresh-scheduler` cron `0 3 * * SUN`, applied 2026-05-10) — every distinct active ticker in `prices_daily` has its FMP fundamentals refreshed weekly so the lazy cache never serves stale data. `platform.universe_candidates` + Universe Pre-Screener (`tpcore.universe.prescreener.prescreen_momentum` + Alembic `20260513_1237`, applied 2026-05-13) — daily-refreshed per-engine candidate roster; momentum's `setup_detection._load_universe` reads it with a `liquidity_tiers` fallback when empty; V1 populates only `engine='momentum'`.
+**Done (kept here for grep history):** `PostgresDataAdapter` (commit `d75076d`, 2026-05-10) — engines now read bars from `platform.prices_daily` exclusively, no live-API fallback. `platform.application_log` + `tpcore.logging.DBLogHandler` (commit `ff468de` + Alembic `20260511_0100`, applied 2026-05-10) — every scheduler run emits a queryable timeline; 7-day retention enforced per-write. Fundamentals cache weekly refresh (`ops/cron_fundamentals_refresh.py` + `FundamentalsCache.backfill_all`, Railway service `fundamentals-refresh-scheduler` cron `0 3 * * SUN`, applied 2026-05-10) — every distinct active ticker in `prices_daily` has its FMP fundamentals refreshed weekly so the lazy cache never serves stale data. `platform.universe_candidates` + Universe Pre-Screener (`tpcore.universe.prescreener.prescreen_momentum` + Alembic `20260513_1237`, applied 2026-05-13) — daily-refreshed per-engine candidate roster; momentum's `setup_detection._load_universe` reads it with a `liquidity_tiers` fallback when empty; V1 populates only `engine='momentum'`. Allocator service + `platform.allocations` extension (Alembic `20260514_0000`, deployed 2026-05-13) — inverse-vol weighting, soft/hard freeze, weekly daemon. Forensics service + Sprint Dossier auto-generation (`tpcore/forensics/`, deployed 2026-05-14) — drawdown/cluster/outlier triggers wired into post-close + dashboard with one-click resolve; both Allocator and Forensics read AARs via the shared `tpcore.aar.AARReader`.
 
 ---
 

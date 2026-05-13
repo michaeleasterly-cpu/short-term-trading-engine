@@ -17,6 +17,7 @@ from dashboard_components.health import (
     classify_cross_ref,
     classify_daemons,
     classify_fundamentals,
+    classify_forensics,
     classify_open_orders,
     classify_universe,
     classify_update_run,
@@ -329,6 +330,46 @@ def test_open_orders_red_when_multiple_stale():
     color, text = classify_open_orders(pending_count=5, stale_24h_count=3)
     assert color == "red"
     assert "3 older than 24h" in text
+
+
+# ─── Forensics ──────────────────────────────────────────────────────────────
+
+
+def test_forensics_green_when_no_open_triggers():
+    color, summary = classify_forensics({"by_kind": [], "recent": []})
+    assert color == "green"
+    assert "No open" in summary
+
+
+def test_forensics_amber_when_recent_trigger():
+    from datetime import UTC, datetime, timedelta
+
+    now = datetime.now(UTC)
+    state = {
+        "by_kind": [
+            {"kind": "outlier_loss", "open_count": 1, "oldest_open_at": now - timedelta(days=2)},
+        ],
+        "recent": [{"id": 1}],
+    }
+    color, summary = classify_forensics(state)
+    assert color == "amber"
+    assert "outlier_loss=1" in summary
+    assert "2d" in summary
+
+
+def test_forensics_red_when_stale_trigger_unresolved():
+    from datetime import UTC, datetime, timedelta
+
+    now = datetime.now(UTC)
+    state = {
+        "by_kind": [
+            {"kind": "drawdown_period", "open_count": 2, "oldest_open_at": now - timedelta(days=20)},
+        ],
+        "recent": [],
+    }
+    color, summary = classify_forensics(state)
+    assert color == "red"
+    assert "20d unresolved" in summary
 
 
 # ─── Cross-reference roll-up ────────────────────────────────────────────────

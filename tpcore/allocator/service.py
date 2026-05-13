@@ -37,6 +37,8 @@ from typing import TYPE_CHECKING
 import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
+from tpcore.aar import AARReader
+
 if TYPE_CHECKING:  # pragma: no cover
     import asyncpg
 
@@ -136,33 +138,16 @@ class AllocatorService:
     # ── load ────────────────────────────────────────────────────────────
     async def _load_histories(self) -> list[_EngineHistory]:
         out: list[_EngineHistory] = []
+        reader = AARReader(self._pool)
         async with self._pool.acquire() as conn:
             for engine in self._engines:
-                rows = await conn.fetch(
-                    """
-                    SELECT aar_data->>'exit_ts' AS exit_ts,
-                           (aar_data->>'pnl_net')::numeric AS pnl_net
-                    FROM platform.aar_events
-                    WHERE engine = $1
-                      AND aar_data->>'exit_ts' IS NOT NULL
-                    ORDER BY (aar_data->>'exit_ts')::timestamptz ASC
-                    """,
-                    engine,
-                )
+                aars = await reader.fetch_by_engine(engine)
                 # Bucket trades into sessions (by exit date) and sum PnL.
                 by_session: dict[date, float] = {}
-                aar_count = 0
-                for r in rows:
-                    aar_count += 1
-                    ts = r["exit_ts"]
-                    if not ts:
-                        continue
-                    d = (
-                        datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                        if isinstance(ts, str) else ts
-                    ).date()
-                    pnl = float(r["pnl_net"] or 0)
-                    by_session[d] = by_session.get(d, 0.0) + pnl
+                for aar in aars:
+                    d = aar.exit_ts.date()
+                    by_session[d] = by_session.get(d, 0.0) + float(aar.pnl_net)
+                aar_count = len(aars)
 
                 sessions = sorted(by_session.keys())
                 daily_pnls = [by_session[d] for d in sessions[-VOL_LOOKBACK_SESSIONS:]]

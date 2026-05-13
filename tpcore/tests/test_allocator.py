@@ -176,3 +176,84 @@ def test_normalize_and_cap_respects_ceiling_with_extreme_weight():
         "tiny2": Decimal("0.0001"),
     })
     assert out["huge"] <= WEIGHT_CEILING + Decimal("0.001")
+
+
+# ── _load_histories via AARReader (covers the tpcore.aar refactor) ──────
+
+
+import pytest  # noqa: E402
+
+from tpcore.aar import AARRow  # noqa: E402
+from datetime import UTC, datetime, timedelta  # noqa: E402
+
+
+class _ConnStub:
+    """asyncpg-shaped conn that returns canned rows + risk_state seeds."""
+
+    def __init__(self, aars_by_engine: dict[str, list[dict]], seeds: dict[str, float]) -> None:
+        self.aars_by_engine = aars_by_engine
+        self.seeds = seeds
+
+    async def fetch(self, sql: str, *args):
+        # _load_histories no longer hits aar_events via raw SQL — AARReader
+        # owns that. This stub only handles whatever residual queries remain.
+        engine = args[0] if args else None
+        if "WHERE engine = $1" in sql and "platform.aar_events" in sql:
+            return self.aars_by_engine.get(engine, [])
+        return []
+
+    async def fetchval(self, sql: str, *args):
+        if "engine_equity" in sql:
+            return self.seeds.get(args[0])
+        return None
+
+
+class _PoolStub:
+    def __init__(self, conn: _ConnStub) -> None:
+        self.conn = conn
+
+    def acquire(self):
+        return self
+
+    async def __aenter__(self):
+        return self.conn
+
+    async def __aexit__(self, *_):
+        return None
+
+
+@pytest.mark.asyncio
+async def test_load_histories_uses_aar_reader_and_buckets_by_session() -> None:
+    """Confirms _load_histories routes through AARReader and sums PnLs per session."""
+    base = datetime(2026, 5, 1, tzinfo=UTC)
+    # Three sigma trades on two distinct exit-dates; two on day 0, one on day 1.
+    sigma_rows = [
+        {
+            "engine": "sigma",
+            "trade_id": f"T{i}",
+            "ticker": "X",
+            "aar_data": {
+                "pnl_net": str(p),
+                "exit_ts": (base + timedelta(days=offset)).isoformat(),
+            },
+            "recorded_at": base + timedelta(days=offset, hours=i),
+        }
+        for i, (p, offset) in enumerate([(10, 0), (5, 0), (-3, 1)])
+    ]
+    conn = _ConnStub({"sigma": sigma_rows}, seeds={"sigma": 10_000.0})
+
+    svc = AllocatorService(
+        pool=_PoolStub(conn),  # type: ignore[arg-type]
+        platform_capital=Decimal("40000"),
+        engines=("sigma",),
+    )
+
+    histories = await svc._load_histories()
+    assert len(histories) == 1
+    sigma = histories[0]
+    assert sigma.aar_count == 3
+    # Day 0: +10 + 5 = +15; Day 1: -3. So daily_pnls = [15.0, -3.0].
+    assert sigma.daily_pnls == [15.0, -3.0]
+    # Allocator reconstructs the curve so it ENDS at the current seed
+    # ($10k). Start of window = 10_000 - 12 = 9988; day-0 = 10003; day-1 = 10000.
+    assert sigma.equity_curve == [10_003.0, 10_000.0]

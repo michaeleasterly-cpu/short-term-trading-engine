@@ -31,12 +31,11 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from tpcore.aar.models import ExitReason
+from tpcore.aar import ExitReason, classify_exit_reason
 from tpcore.trade_monitor import (
     OpenOrderRow,
     TradeMonitor,
     _aware,
-    _classify_exit_reason,
     _decimal,
     _resolve_tier2_take_profit,
     _row_from_record,
@@ -257,7 +256,7 @@ def test_resolve_tier2_take_profit_vector_returns_none() -> None:
 def test_classify_exit_reason_take_profit() -> None:
     # Fill within 50bps of the TP target → TAKE_PROFIT.
     assert (
-        _classify_exit_reason(
+        classify_exit_reason(
             exit_price=Decimal("190.50"),
             take_profit=Decimal("190.00"),
             stop_loss=Decimal("174.60"),
@@ -268,7 +267,7 @@ def test_classify_exit_reason_take_profit() -> None:
 
 def test_classify_exit_reason_stop_loss() -> None:
     assert (
-        _classify_exit_reason(
+        classify_exit_reason(
             exit_price=Decimal("174.40"),
             take_profit=Decimal("190.00"),
             stop_loss=Decimal("174.60"),
@@ -281,7 +280,7 @@ def test_classify_exit_reason_mid_bracket_is_time_stop() -> None:
     # YUMC-style: trade closed inside the bracket (manual/reconcile market
     # close, no leg of the TP/SL actually fired). Don't lie and call it TP.
     assert (
-        _classify_exit_reason(
+        classify_exit_reason(
             exit_price=Decimal("47.32"),
             take_profit=Decimal("50.00"),
             stop_loss=Decimal("45.00"),
@@ -293,7 +292,7 @@ def test_classify_exit_reason_mid_bracket_is_time_stop() -> None:
 def test_classify_exit_reason_missing_levels_returns_time_stop() -> None:
     # No bracket info (e.g., assessment lost) → conservative TIME_STOP.
     assert (
-        _classify_exit_reason(
+        classify_exit_reason(
             exit_price=Decimal("100.00"), take_profit=None, stop_loss=None
         )
         == ExitReason.TIME_STOP

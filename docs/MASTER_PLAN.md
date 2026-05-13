@@ -430,13 +430,13 @@ Full design and rationale: [`docs/superpowers/specs/2026-05-13-tip-sheet-plan.md
 
 ---
 
-## 5. Platform Services (Deferred)
+## 5. Platform Services
 
-These are built only after at least two engines are live.
+Status as of 2026-05-14:
 
-- **Allocator:** Equal-risk-weighted capital distribution. Performance-chasing explicitly rejected. Primary value is the floor (freezing engines in persistent drawdown).
-- **Forensics:** Monitors AARs. Generates Sprint Dossiers on drawdown, loss cluster, or outlier loss.
-- **Settlement:** Annual distribution (75% to operator, 25% retained). Produces Schedule D-ready tax CSV.
+- **Allocator** — **built + deployed** (`tpcore/allocator/`). Inverse-volatility weighting with [0.10, 0.50] caps, soft-freeze at 15% drawdown, hard-freeze at 25%. Runs Mondays 13:00 UTC via the `com.michael.trading.allocator` launchd daemon. Bootstrap mode (equal weights) until each engine has ≥20 AARs. Reads engine pnl history via `tpcore.aar.AARReader`.
+- **Forensics** — **built + wired into post-close** (`tpcore/forensics/`). Scans every engine's AAR history for drawdown periods (≥10% / ≥14 days), loss clusters (≥3 consecutive losers), and outlier losses (>3σ below the mean of ≥5 historical trades). Idempotent via fingerprint. On each new trigger, auto-generates a Sprint Dossier template under `docs/sprints/` so the operator has a structured postmortem to fill in. Dashboard's Health tab surfaces open triggers with a "Mark resolved" button. Runs as the final step of `scripts/run_post_close.sh`.
+- **Settlement** — Deferred. Annual distribution (75% to operator, 25% retained). Produces Schedule D-ready tax CSV. Will be built after the first live-trading cycle completes.
 
 ---
 
@@ -542,7 +542,7 @@ Current decision: **stay on FMP Starter and Alpaca free**. The overfitting diagn
 | Phase 1 | Sigma engine — full plug implementation | **Complete** |
 | Phase 1b | Sigma paper trading (3+ months), Parity Harness active | **Paused** — engine + Parity Harness built; cron firing blocked by the Railway pause. Paper-trading resumes when execution architecture is settled. |
 | Phase 2 | Reversion engine | **Complete** — combined filter (HIGH quality + \|Z\| ≥ 3.0) applied. Backtest re-run with tier-aware costs 2026-05-12. |
-| Phase 3 | Allocator + Forensics (basic) | **Deferred** — blocked on paper track record from Sigma + Reversion + Vector. |
+| Phase 3 | Allocator + Forensics (basic) | **Complete (2026-05-13 / 2026-05-14)** — Allocator service in `tpcore/allocator/` with launchd daemon firing Mondays 13:00 UTC. Forensics in `tpcore/forensics/` wired into the post-close pipeline, auto-generates Sprint Dossiers, surfaces on dashboard with one-click resolve. Both services read AARs through the shared `tpcore.aar.AARReader`. |
 | Phase 4 | Vector engine | **Complete (build); data-blocked (validation)** — engine code shipped, but parameter-search verdict (2026-05-13) showed zero trades on T1+T2 because `platform.catalyst_events` has zero overlap with that universe. Re-enabling requires a catalyst-event backfill, not a code change. |
 | Phase 4b | **Momentum engine — Phase 2 (live-shippable)** | **Complete (Phase 2; 2026-05-13)** — 5 plugs + scheduler + Alpaca paper integration. `momentum/backtest.py` produces held-back Sharpe +1.58 / PF 2.80 on T1+T2 2024-2025. Paper kickoff: `scripts/run_momentum_kickoff.sh`. Daily cron pattern: scheduler no-ops on non-rebalance days, fires on the first NYSE session of each month. |
 | Phase 5 | S2 (satellite) | **Deferred** — options data parked in `platform.tradier_options_chains` (122,668 rows), no engine code. |

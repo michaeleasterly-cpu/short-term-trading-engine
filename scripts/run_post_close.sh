@@ -109,13 +109,25 @@ scripts/run_compress_backfill_csvs.sh
 # Set SKIP_ENGINES=1 to skip this step (data-only post-close).
 if [[ "${SKIP_ENGINES:-0}" == "1" ]]; then
     echo ""
-    echo "▶ STEP 6 / 6  engine sweep — SKIPPED (SKIP_ENGINES=1)"
+    echo "▶ STEP 6 / 7  engine sweep — SKIPPED (SKIP_ENGINES=1)"
 else
     echo ""
-    echo "▶ STEP 6 / 6  engine sweep — sigma → reversion → vector → momentum"
+    echo "▶ STEP 6 / 7  engine sweep — sigma → reversion → vector → momentum"
     echo "────────────────────────────────────────────────────────────────────────"
     scripts/run_all_engines.sh
 fi
+
+# Step 7 — forensics. Pure read-side: scans every engine's AAR history
+# and inserts triggers into platform.forensics_triggers when it sees
+# drawdown periods, loss clusters, or outlier losses. Non-fatal — the
+# service swallows per-engine + per-trigger failures, and if it can't
+# build a DB pool at all it retries once. A failure here never blocks
+# the rest of the post-close.
+echo ""
+echo "▶ STEP 7 / 7  forensics — scan AARs for drawdown/cluster/outlier triggers"
+echo "────────────────────────────────────────────────────────────────────────"
+DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python -m tpcore.forensics || \
+    echo "  (forensics returned non-zero — non-fatal, continuing)"
 
 echo ""
 echo "════════════════════════════════════════════════════════════════════════"

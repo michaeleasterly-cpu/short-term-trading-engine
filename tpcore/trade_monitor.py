@@ -62,7 +62,7 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
-from tpcore.aar.models import AfterActionReport, ExitReason
+from tpcore.aar import AfterActionReport, ExitReason, classify_exit_reason
 from tpcore.aar.writer import AARWriter
 from tpcore.alpaca import AlpacaPaperBrokerAdapter
 from tpcore.db import build_asyncpg_pool
@@ -596,27 +596,9 @@ def _safe_iso(value: Any) -> str | None:
     return getattr(value, "isoformat", lambda: None)()
 
 
-def _classify_exit_reason(
-    *,
-    exit_price: Decimal,
-    take_profit: Decimal | None,
-    stop_loss: Decimal | None,
-    tolerance_bps: int = 50,
-) -> ExitReason:
-    """Pick the exit reason by checking which bracket leg fired.
-
-    Tier 2 is a TP+SL OCO bracket. The fill price tells us which side
-    filled: within ``tolerance_bps`` of TP → TAKE_PROFIT, within tolerance
-    of SL → STOP_LOSS. A fill between the two brackets (e.g., a manual
-    market-close via reconcile) maps to TIME_STOP — the closest available
-    bucket meaning "exited outside the planned brackets."
-    """
-    tol = (exit_price * Decimal(tolerance_bps) / Decimal(10000)).copy_abs()
-    if take_profit is not None and (exit_price - take_profit).copy_abs() <= tol:
-        return ExitReason.TAKE_PROFIT
-    if stop_loss is not None and (exit_price - stop_loss).copy_abs() <= tol:
-        return ExitReason.STOP_LOSS
-    return ExitReason.TIME_STOP
+# Re-exported from ``tpcore.aar`` so any engine that writes an AAR uses
+# the same classifier (vs guessing exit_reason).
+_classify_exit_reason = classify_exit_reason
 
 
 def _resolve_tier2_take_profit(*, engine: str, assessment: dict) -> Decimal | None:

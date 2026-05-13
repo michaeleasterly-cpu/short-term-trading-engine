@@ -136,6 +136,23 @@ scripts/run_all_engines.sh --force          # bypass validation-green guard
 
 Refuses to run if `data_validation` has any red row in its latest result. Each scheduler is one-shot; the trade_monitor daemon must be running separately for Tier 2 cascade.
 
+### Forensics (2026-05-14)
+
+Runs as the final step of `scripts/run_post_close.sh`. Scans every engine's AAR history and emits triggers when it detects:
+
+* **Outlier loss** — a trade with `pnl_net` more than 3σ below the engine's mean (requires ≥5 historical AARs).
+* **Loss cluster** — 3+ consecutive losing trades.
+* **Drawdown period** — ≥10% peak-to-trough decline sustained ≥14 days.
+
+Each new trigger is INSERTed into `platform.forensics_triggers` (idempotent via `payload.fingerprint`) and an auto-generated Sprint Dossier is written to `docs/sprints/<date>-<kind>-<engine>-<id>.md`. The dossier is a markdown template prefilled with the trigger payload — the operator fills in **Hypothesis** + **Fix** sections, ships the change, then clicks **Mark resolved** on the dashboard (Health tab → Forensics expander) which sets `resolved_at = NOW()`.
+
+```bash
+# Run manually (also fires as step 7/7 of run_post_close.sh):
+DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python -m tpcore.forensics
+```
+
+Service-level error handling: each engine and each trigger is isolated — a single malformed AAR or transient INSERT failure logs a warning but doesn't stop the rest of the run. CLI-level retry: one retry on pool-build failure.
+
 ### Lessons learned (2026-05-13 data-cleanup post-mortem)
 
 The post-mortem captured these principles as durable patterns; the post-close + full-backfill scripts above codify them. Treat any deviation as the start of the next mess.

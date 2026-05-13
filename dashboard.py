@@ -37,6 +37,7 @@ from dashboard_components.health import (
     classify_coverage_gaps,
     classify_cross_ref,
     classify_daemons,
+    classify_forensics,
     classify_fundamentals,
     classify_open_orders,
     classify_universe,
@@ -670,8 +671,51 @@ async def _fetch_platform_health() -> dict:
                 for r in rows
             ]
 
+    async def _q_forensics() -> dict:
+        """Open forensics triggers (resolved_at IS NULL) — by kind + by age."""
+        async with pool.acquire() as conn:
+            counts = await conn.fetch(
+                """
+                SELECT trigger_kind,
+                       COUNT(*) AS open_count,
+                       MIN(fired_at) AS oldest_open_at
+                FROM platform.forensics_triggers
+                WHERE resolved_at IS NULL
+                GROUP BY trigger_kind
+                ORDER BY trigger_kind
+                """
+            )
+            recent = await conn.fetch(
+                """
+                SELECT id, trigger_kind, payload, fired_at
+                FROM platform.forensics_triggers
+                WHERE resolved_at IS NULL
+                ORDER BY fired_at DESC
+                LIMIT 20
+                """
+            )
+        return {
+            "by_kind": [
+                {
+                    "kind": r["trigger_kind"],
+                    "open_count": int(r["open_count"]),
+                    "oldest_open_at": r["oldest_open_at"],
+                }
+                for r in counts
+            ],
+            "recent": [
+                {
+                    "id": int(r["id"]),
+                    "kind": r["trigger_kind"],
+                    "payload": r["payload"] if isinstance(r["payload"], dict) else json.loads(r["payload"]),
+                    "fired_at": r["fired_at"],
+                }
+                for r in recent
+            ],
+        }
+
     try:
-        bars, fund, ca, uni, run, val, coverage, orders, cross_ref = await asyncio.gather(
+        bars, fund, ca, uni, run, val, coverage, orders, cross_ref, forensics = await asyncio.gather(
             _q_bars(),
             _q_fundamentals(),
             _q_corp_actions(),
@@ -681,6 +725,7 @@ async def _fetch_platform_health() -> dict:
             _q_coverage_gaps(),
             _q_open_orders(),
             _q_cross_ref(),
+            _q_forensics(),
         )
         out["bars"] = bars
         out["fundamentals"] = fund
@@ -691,6 +736,7 @@ async def _fetch_platform_health() -> dict:
         out["coverage"] = coverage
         out["open_orders"] = orders
         out["cross_ref"] = cross_ref
+        out["forensics"] = forensics
     finally:
         await pool.close()
     return out
@@ -946,7 +992,7 @@ def _fmt_local(dt: datetime | None) -> str:
 def render_header():
     st.title("Trading Engine — Operator Dashboard")
     try:
-        state = run_async(_fetch_account_state())
+        state = _fetch_account_state_cached()
     except Exception as exc:  # noqa: BLE001
         st.error(f"Could not fetch Alpaca account state: {exc}")
         return None
@@ -996,7 +1042,7 @@ def render_holdings():
     }
     for engine in SCORECARD_ENGINES:
         try:
-            holdings = run_async(_fetch_holdings_for_engine(engine))
+            holdings = _fetch_holdings_for_engine_cached(engine)
         except Exception as exc:  # noqa: BLE001
             st.error(f"Could not fetch {engine} holdings: {exc}")
             continue
@@ -1085,7 +1131,7 @@ def render_credibility_scorecards():
     would need to improve to clear the gate."""
     st.subheader("Credibility scorecards")
     try:
-        scores = run_async(_fetch_credibility_all_engines())
+        scores = _fetch_credibility_cached()
     except Exception as exc:  # noqa: BLE001
         st.error(f"Could not fetch credibility scores: {exc}")
         return
@@ -1164,8 +1210,8 @@ def render_recent_activity():
     """Phase 4 — side-by-side panels: signals (left) and closed trades (right)."""
     st.subheader("Recent activity — last 30 days")
     try:
-        signals = run_async(_fetch_signals_all_engines(days=30))
-        trades = run_async(_fetch_trades_all_engines(days=30))
+        signals = _fetch_signals_cached(days=30)
+        trades = _fetch_trades_cached(days=30)
     except Exception as exc:  # noqa: BLE001
         st.error(f"Could not fetch recent activity: {exc}")
         return
@@ -1235,7 +1281,7 @@ def render_recent_orders():
     client_order_id prefix (mo_/sig_/rev_/vec_)."""
     st.subheader("Recent orders — all engines")
     try:
-        orders = run_async(_fetch_recent_orders_all_engines())
+        orders = _fetch_recent_orders_cached()
     except Exception as exc:  # noqa: BLE001
         st.error(f"Could not fetch orders: {exc}")
         return
@@ -1320,7 +1366,7 @@ def render_recent_orders():
 def render_equity_curve():
     st.subheader("Equity curve — last 60 days")
     try:
-        history = run_async(_fetch_equity_history(days=60))
+        history = _fetch_equity_history_cached(days=60)
     except Exception as exc:  # noqa: BLE001
         st.error(f"Could not fetch equity history: {exc}")
         return
@@ -1775,6 +1821,51 @@ def _detached_job_is_live() -> bool:
         return False
 
 
+@st.cache_data(ttl=30, show_spinner=False)
+def _fetch_account_state_cached() -> dict:
+    return run_async(_fetch_account_state())
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _fetch_holdings_for_engine_cached(engine: str) -> list[dict]:
+    return run_async(_fetch_holdings_for_engine(engine))
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _fetch_last_run_timestamps_cached() -> dict:
+    return run_async(_fetch_last_run_timestamps())
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _fetch_daemon_state_cached() -> list[dict]:
+    return _fetch_daemon_state()
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _fetch_recent_orders_cached() -> list[dict]:
+    return run_async(_fetch_recent_orders_all_engines())
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _fetch_credibility_cached() -> dict:
+    return run_async(_fetch_credibility_all_engines())
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _fetch_signals_cached(days: int = 30) -> list[dict]:
+    return run_async(_fetch_signals_all_engines(days=days))
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _fetch_trades_cached(days: int = 30) -> list[dict]:
+    return run_async(_fetch_trades_all_engines(days=days))
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def _fetch_equity_history_cached(days: int = 60) -> list[dict]:
+    return run_async(_fetch_equity_history(days=days))
+
+
 @st.cache_data(ttl=180, show_spinner=False)
 def _fetch_platform_health_cached() -> dict:
     """Sync wrapper around ``_fetch_platform_health`` so Streamlit can
@@ -1813,7 +1904,7 @@ def render_platform_health() -> None:
     # Daemon status — first thing the operator sees. Goes RED when any
     # launchd agent isn't installed; that's the single biggest "you
     # haven't set this up" signal.
-    daemons = _fetch_daemon_state()
+    daemons = _fetch_daemon_state_cached()
     d_color, d_text, d_detail = classify_daemons(daemons)
     daemon_l, daemon_r = st.columns([6, 2])
     _render_health_row("Daemons (launchd)", d_color, d_text, row_key="daemons")
@@ -1981,13 +2072,56 @@ def render_platform_health() -> None:
                     notes = notes_by_source.get(f"validation.{source}") or notes_by_source.get(source)
                     _render_validation_failure_detail(source, notes)
 
+    # Forensics — open triggers from per-engine AAR scans.
+    f_color, f_summary = classify_forensics(h["forensics"])
+    _render_health_row("Forensics (open triggers)", f_color, f_summary, row_key="forensics")
+    recent = h["forensics"].get("recent") or []
+    if recent:
+        with st.expander(f"Open forensics triggers — {len(recent)}", expanded=(f_color == "red")):
+            st.caption(
+                "Each row was emitted by `tpcore.forensics`. Open the dossier "
+                "to write a Sprint postmortem; click **Mark resolved** when the "
+                "fix ships."
+            )
+            for t in recent:
+                payload = t["payload"] or {}
+                fired_at = t["fired_at"]
+                age = (datetime.now(UTC) - (fired_at if fired_at.tzinfo else fired_at.replace(tzinfo=UTC))).days
+                cols = st.columns([3, 1, 1, 1])
+                cols[0].markdown(
+                    f"**{t['kind']}** · engine `{payload.get('engine', '?')}` · "
+                    f"`{payload.get('trade_id', '—')}` · fired {age}d ago"
+                )
+                dossier = payload.get("dossier_path")
+                if dossier:
+                    cols[1].caption(f"Dossier: `{dossier}`")
+                else:
+                    cols[1].caption("(no dossier)")
+                if cols[2].button("Mark resolved", key=f"resolve_{t['id']}"):
+                    run_async(_mark_forensics_resolved(t["id"]))
+                    _fetch_platform_health_cached.clear()
+                    st.rerun()
+
+
+async def _mark_forensics_resolved(trigger_id: int) -> None:
+    """Set ``resolved_at = NOW()`` on the trigger row."""
+    pool = await build_asyncpg_pool(_db_url(), max_size=2)
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE platform.forensics_triggers SET resolved_at = now() WHERE id = $1",
+                trigger_id,
+            )
+    finally:
+        await pool.close()
+
 
 def render_actions():
     st.subheader("Actions")
     _render_process_status_inline()
 
     try:
-        last = run_async(_fetch_last_run_timestamps())
+        last = _fetch_last_run_timestamps_cached()
     except Exception:  # noqa: BLE001
         last = {}
 

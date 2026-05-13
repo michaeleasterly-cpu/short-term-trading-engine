@@ -347,6 +347,38 @@ def classify_open_orders(
     return "red", f"{pending_count} pending — {stale_24h_count} older than 24h"
 
 
+def classify_forensics(state: dict[str, Any]) -> tuple[str, str]:
+    """Forensics open-triggers roll-up.
+
+    Forensics writes a trigger row whenever an AAR pattern (drawdown,
+    loss cluster, outlier loss) needs an operator-driven Sprint Dossier.
+    ``state`` is the dict produced by ``_q_forensics``.
+
+    Severity (no triggers is the happy state — most days):
+
+    * **green**  — no open triggers.
+    * **amber**  — at least one open trigger, oldest ≤ 7 days. Operator
+      should review and resolve via a Sprint Dossier.
+    * **red**    — at least one open trigger older than 14 days. Stale
+      triggers mean an operator hasn't followed up on a real warning.
+    """
+    by_kind = state.get("by_kind") or []
+    if not by_kind:
+        return "green", "No open triggers"
+    total = sum(int(r["open_count"]) for r in by_kind)
+    oldest_at = min((r["oldest_open_at"] for r in by_kind if r["oldest_open_at"]), default=None)
+    if oldest_at is None:
+        return "amber", f"{total} open trigger(s)"
+    now = datetime.now(UTC)
+    if oldest_at.tzinfo is None:
+        oldest_at = oldest_at.replace(tzinfo=UTC)
+    age_days = (now - oldest_at).days
+    summary_kinds = ", ".join(f"{r['kind']}={r['open_count']}" for r in by_kind)
+    if age_days >= 14:
+        return "red", f"{total} open ({summary_kinds}) — oldest {age_days}d unresolved"
+    return "amber", f"{total} open ({summary_kinds}) — oldest {age_days}d"
+
+
 def classify_cross_ref(
     findings: list[dict[str, Any]],
 ) -> tuple[str, str, list[tuple[str, str, str]]]:
