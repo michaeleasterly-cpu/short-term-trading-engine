@@ -218,7 +218,7 @@ _INSERT_SQL = """
 class ForensicsService:
     """Run all detectors against ``platform.aar_events`` and persist new triggers."""
 
-    def __init__(self, pool: "asyncpg.Pool") -> None:
+    def __init__(self, pool: asyncpg.Pool) -> None:
         self._pool = pool
         self._reader = AARReader(pool)
 
@@ -335,7 +335,6 @@ class ForensicsService:
 
 
 __all__ = [
-    "AARRecord",
     "DRAWDOWN_DAYS_THRESHOLD",
     "DRAWDOWN_PCT_THRESHOLD",
     "ForensicsService",

@@ -62,7 +62,7 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
-from tpcore.aar import AfterActionReport, ExitReason, classify_exit_reason
+from tpcore.aar import AfterActionReport, classify_exit_reason
 from tpcore.aar.writer import AARWriter
 from tpcore.alpaca import AlpacaPaperBrokerAdapter
 from tpcore.db import build_asyncpg_pool

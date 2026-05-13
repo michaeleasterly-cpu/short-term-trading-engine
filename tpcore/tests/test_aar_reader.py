@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -116,7 +115,7 @@ class _FakePool:
     def __init__(self, conn: _FakeConn) -> None:
         self.conn = conn
 
-    def acquire(self) -> "_FakePool":
+    def acquire(self) -> _FakePool:
         return self
 
     async def __aenter__(self) -> _FakeConn:

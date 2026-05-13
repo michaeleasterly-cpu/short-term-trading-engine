@@ -181,10 +181,9 @@ def test_normalize_and_cap_respects_ceiling_with_extreme_weight():
 # ── _load_histories via AARReader (covers the tpcore.aar refactor) ──────
 
 
-import pytest  # noqa: E402
-
-from tpcore.aar import AARRow  # noqa: E402
 from datetime import UTC, datetime, timedelta  # noqa: E402
+
+import pytest  # noqa: E402
 
 
 class _ConnStub:

@@ -100,7 +100,7 @@ def _row_to_aar(record: object) -> AARRow | None:
 class AARReader:
     """Read-side over ``platform.aar_events`` shared by Forensics + Allocator."""
 
-    def __init__(self, pool: "asyncpg.Pool") -> None:
+    def __init__(self, pool: asyncpg.Pool) -> None:
         self._pool = pool
 
     async def fetch_by_engine(self, engine: str) -> list[AARRow]:

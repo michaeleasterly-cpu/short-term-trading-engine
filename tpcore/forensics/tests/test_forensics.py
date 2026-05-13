@@ -13,8 +13,6 @@ from tpcore.forensics.service import (
     DRAWDOWN_DAYS_THRESHOLD,
     DRAWDOWN_PCT_THRESHOLD,
     LOSS_CLUSTER_K,
-    MIN_AARS_FOR_OUTLIER,
-    OUTLIER_SIGMA,
     ForensicsService,
     ForensicsTrigger,
     TriggerKind,
@@ -168,7 +166,7 @@ class _FakePool:
     def __init__(self, conn: _FakeConn) -> None:
         self.conn = conn
 
-    def acquire(self) -> "_FakePool":
+    def acquire(self) -> _FakePool:
         return self
 
     async def __aenter__(self) -> _FakeConn:

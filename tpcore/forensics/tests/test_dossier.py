@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from decimal import Decimal
 
 from tpcore.forensics.dossier import (
-    SPRINTS_DIR,
     dossier_path,
     render_dossier,
     write_dossier,
