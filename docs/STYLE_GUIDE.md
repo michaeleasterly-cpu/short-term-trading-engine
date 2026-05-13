@@ -23,7 +23,9 @@ For terms (engine names, score names, service names) the source of truth is `doc
 - **`structlog` only.** No `print()`. No `import logging` directly.
 - `logger = structlog.get_logger(__name__)` at the top of each module.
 - Event names are dotted, lowercase, namespaced by engine and plug, e.g. `sigma.exec.position_cap_hit`. All other context goes in keyword args, not the event string.
-- **Exception:** Standalone one-shot scripts under `scripts/` may use the stdlib `logging` module.
+- **Exceptions:**
+  - Standalone one-shot scripts under `scripts/` may use the stdlib `logging` module.
+  - `tpcore.trade_monitor` may import stdlib `logging` directly. Reason: this module is run as `python -m tpcore.trade_monitor` (not as a file) because invoking the file directly puts `tpcore/` on `sys.path`, which then makes the bootstrap `import logging` resolve to the project's `tpcore.logging` package and crash with a circular-import error. The `-m` invocation sidesteps that. The module-level docstring documents the workaround.
 
 ## Time
 

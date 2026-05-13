@@ -188,7 +188,87 @@ List every table under the `platform` schema. For each, provide columns, types, 
 - `drift_bps` (numeric): Signed basis points.
 - `paper_filled_at` (timestamptz): Paper fill timestamp.
 - `live_filled_at` (timestamptz, nullable): Live fill timestamp.
+- `spread_at_order_pct` (numeric, nullable): Median spread observed for the ticker at order-submission time, snapshotted from `platform.spread_observations`. Added by migration `20260512_2200_parity_drift_log_spread_columns.py` so drift can be attributed to liquidity tier vs other factors.
+- `spread_observed_at` (timestamptz, nullable): Timestamp of the spread observation snapshotted above.
 - `timestamp` (timestamptz, default `now()`).
+
+#### `platform.open_orders`
+
+**Purpose:** Working state for live orders between submission and terminal status. Populated by the trade monitor (`tpcore.trade_monitor`) when it sees an Alpaca `trade_updates` event. Used by engine schedulers to reconcile open positions across cron invocations.
+
+Created by migration `20260512_0000_create_open_orders.py`.
+
+**Columns:**
+
+- `id` (uuid, PK).
+- `engine` (text): originating engine (`'sigma'` / `'reversion'` / `'vector'` / `'momentum'`).
+- `trade_id` (text): engine-local trade identifier.
+- `ticker` (text).
+- `order_type` (text): `'tier1'` / `'tier2'` / `'momentum_rebalance'` etc.
+- `alpaca_order_id` (text, nullable): broker's order ID.
+- `status` (text): `'new'` / `'accepted'` / `'partially_filled'` / `'filled'` / `'canceled'` / `'rejected'`.
+- `fill_price` (numeric, nullable).
+- `filled_at` (timestamptz, nullable).
+- `decision_data` (jsonb): the originating `ExecutionDecision` / `RebalanceOrder` payload, for audit.
+- `created_at` (timestamptz, default `now()`).
+- `updated_at` (timestamptz, default `now()`).
+
+#### `platform.spread_observations`
+
+**Purpose:** Per-ticker spread estimates that feed `platform.liquidity_tiers`. The Corwin-Schultz bootstrap (`tpcore.backtest.spread_estimator.rank_universe_by_liquidity`) writes one row per ticker per run with `source='corwin_schultz'`. Tradier streaming was the planned second source but was deprecated 2026-05-12.
+
+Created by migration `20260512_2100_spread_observations_and_liquidity_tiers.py`.
+
+**Columns:**
+
+- `id` (bigserial, PK).
+- `ticker` (text).
+- `source` (text): currently only `'corwin_schultz'`; future sources extend the `WHERE source IN (...)` filter in `assign_liquidity_tiers.py`.
+- `spread_pct` (numeric): median estimated round-trip spread as a fraction (0.0010 = 10 bps).
+- `n_observations` (integer): how many daily H/L pairs went into the estimate.
+- `observed_at` (timestamptz): when the bootstrap ran.
+
+#### `platform.liquidity_tiers`
+
+**Purpose:** Per-ticker tier assignment derived from `spread_observations`. The cost model (`tpcore.backtest.cost_model.get_round_trip_cost`) looks each ticker up here; unknown tickers fall through to the T4 default (1.50% round-trip).
+
+Created by migration `20260512_2100_spread_observations_and_liquidity_tiers.py`. Re-aggregated by `scripts/assign_liquidity_tiers.py` (wrapped in `scripts/run_tier_refresh.sh`).
+
+**Tier thresholds** (median spread upper bound, exclusive):
+
+| Tier | Median spread ≤ | Round-trip cost band | Universe size (2026-05-12) |
+|---|---|---|---|
+| T1 | 0.0005 (5 bps) | tightest | 702 |
+| T2 | 0.0015 (15 bps) | very liquid | 579 |
+| T3 | 0.0050 (50 bps) | mid-cap-ish | 1,405 |
+| T4 | 0.0200 (200 bps) | **default** for unknowns | 3,692 |
+| T5 | > 0.0200 | widest spreads | 1,180 |
+
+**Columns:**
+
+- `ticker` (text, PK).
+- `tier` (smallint, 1-5): assigned tier.
+- `median_spread_pct` (numeric).
+- `p95_spread_pct` (numeric): 95th percentile across the source's observations.
+- `observations` (integer): aggregate observation count.
+- `provisional` (boolean, default false): true when fewer than 5 observations are pooled (e.g., brand-new IPOs).
+- `last_updated` (timestamptz, default `now()`).
+
+#### `platform.ingestion_jobs`
+
+**Purpose:** Persistent job registry consumed by the `ingestion-engine` service (Railway service definition in `railway.json:58`). Each row describes a recurring ingestion task (daily bars, corporate actions, fundamentals refresh, etc.) — the engine reads the registry on each tick and dispatches due jobs to handlers in `tpcore.ingestion.handlers`.
+
+Used today by `ops/ingestion_engine.py` (Railway-deployed when active) and as the source of truth for which jobs `scripts/ops.py --update` invokes locally.
+
+**Columns:** (verify against the actual migration before quoting verbatim — the registry has evolved through several migrations)
+
+- `id` (uuid, PK).
+- `job_name` (text, unique): canonical identifier (`'daily_bars'`, `'corporate_actions'`, `'fundamentals_refresh'`, `'data_validation'`, `'universe_simulation'`).
+- `schedule` (text): cron expression (or `null` for on-demand-only jobs).
+- `enabled` (boolean, default true).
+- `last_run_at` (timestamptz, nullable).
+- `last_status` (text, nullable): `'OK'` / `'FAILED'` / `'TIMEOUT'` / `'SKIPPED'` / `'DRY_RUN'`.
+- `config` (jsonb): handler-specific parameters (universe selector, lookback days, etc.).
 
 #### `platform.risk_state`
 

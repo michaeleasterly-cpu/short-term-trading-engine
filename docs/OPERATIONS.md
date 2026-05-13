@@ -57,7 +57,7 @@ This will:
 - Run the universe simulation (`scripts/simulate_universe.py`) and report candidate counts per engine.
 - Print a health report.
 
-Each stage has a 120-second hard timeout. On timeout an ERROR row lands in `platform.application_log` and the pipeline moves on to the next stage — a single slow upstream never blocks the whole maintenance run.
+Per-stage timeouts (`scripts/ops.py`): **120 s** for the light stages (`data_validation`, `universe_simulation`) and **3,600 s** (1 hour) for the heavy ingestion stages (`daily_bars`, `corporate_actions`, `fundamentals_refresh`). The heavy-stage budget was raised twice after the Phase 1 universe expansion (7,300 tickers) — `120s → 1200s → 3600s` (commits `d924491` and `57ec234`) — because the underlying FMP-backed handlers iterate ~73 batches with rate-limit sleeps and need real headroom. On timeout an ERROR row lands in `platform.application_log` and the pipeline moves on to the next stage; a single slow upstream never blocks the whole run.
 
 ### Weekly Maintenance
 
