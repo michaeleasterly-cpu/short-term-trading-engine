@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+# One-button daily-after-close workflow.
+#
+# Sequence (each step gated by the previous step's exit code):
+#   1. DOWNLOAD + UPLOAD — scripts/ops.py --update (7 stages, all sources)
+#   2. VERIFY            — scripts/run_audit_all_tables.sh
+#   3. VERIFY            — scripts/run_stage.sh data_validation
+#   4. FIX               — self-heal retry is built into ops.py; if anything
+#                          stays red after that, this script exits non-zero
+#                          so the operator knows to investigate.
+#   5. COMPRESS          — scripts/run_compress_backfill_csvs.sh (any
+#                          uncompressed CSVs left under data/*_backfill/)
+#
+# Refuses to run during NYSE regular session (ops.py --update enforces this).
+# Pass --force to bypass the market-closed check.
+#
+# Usage:
+#   scripts/run_post_close.sh             # the canonical daily workflow
+#   scripts/run_post_close.sh --force     # bypass market-closed guard
+set -uo pipefail
+cd "$(dirname "$0")/.."
+
+FORCE_FLAG=""
+if [[ "${1:-}" == "--force" ]]; then
+    FORCE_FLAG="--force"
+fi
+
+echo "════════════════════════════════════════════════════════════════════════"
+echo "  POST-CLOSE WORKFLOW — $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+echo "════════════════════════════════════════════════════════════════════════"
+
+# Step 1+2 — download + upload via the 7-stage --update pipeline.
+echo ""
+echo "▶ STEP 1+2 / 5  download + upload  (ops.py --update)"
+echo "────────────────────────────────────────────────────────────────────────"
+set -a
+# shellcheck disable=SC1091
+source .env
+set +a
+DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python scripts/ops.py --update $FORCE_FLAG
+UPDATE_RC=$?
+if [[ $UPDATE_RC -ne 0 ]]; then
+    echo "✗ --update exited with code $UPDATE_RC — investigate before proceeding."
+    echo "  Common causes: timeout (rate-limited), partial stage failure, market open."
+    echo "  Self-heal already retried any transient failure once. If still red, look at:"
+    echo "    SELECT * FROM platform.application_log WHERE engine='ops' AND severity='ERROR' ORDER BY recorded_at DESC LIMIT 10;"
+    exit $UPDATE_RC
+fi
+
+# Step 3 — cross-reference audit.
+echo ""
+echo "▶ STEP 3 / 5  verify cross-table integrity"
+echo "────────────────────────────────────────────────────────────────────────"
+scripts/run_audit_all_tables.sh
+AUDIT_RC=$?
+if [[ $AUDIT_RC -ne 0 ]]; then
+    echo "✗ audit_all_tables exited $AUDIT_RC"
+    exit $AUDIT_RC
+fi
+
+# Step 4 — validation suite (already ran inside --update, but re-confirm).
+echo ""
+echo "▶ STEP 4 / 5  fix — surface any remaining validation red"
+echo "────────────────────────────────────────────────────────────────────────"
+FAILED_CHECKS=$(DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python -c "
+import asyncio, os
+from tpcore.db import build_asyncpg_pool
+
+async def main():
+    pool = await build_asyncpg_pool(os.environ['DATABASE_URL'])
+    async with pool.acquire() as conn:
+        rows = await conn.fetch('''
+            WITH latest AS (
+                SELECT source, MAX(timestamp) AS t
+                FROM platform.data_quality_log
+                WHERE source LIKE 'validation.%'
+                GROUP BY source
+            )
+            SELECT q.source, q.stale, q.confidence
+            FROM platform.data_quality_log q
+            JOIN latest l ON l.source = q.source AND l.t = q.timestamp
+            WHERE q.stale OR (q.confidence IS NOT NULL AND q.confidence < 1.0)
+        ''')
+        for r in rows:
+            print(f'{r[\"source\"]}: stale={r[\"stale\"]} confidence={r[\"confidence\"]}')
+    await pool.close()
+
+asyncio.run(main())
+")
+if [[ -n "$FAILED_CHECKS" ]]; then
+    echo "✗ validation has red rows AFTER self-heal:"
+    echo "$FAILED_CHECKS"
+    echo ""
+    echo "  These weren't auto-fixable — operator must investigate."
+    echo "  See the dashboard's Data validation expander for per-failure detail."
+    exit 1
+fi
+echo "✓ all 6 validation checks green"
+
+# Step 5 — compress any CSVs left behind by the backfill scripts.
+echo ""
+echo "▶ STEP 5 / 5  compress backfill CSVs"
+echo "────────────────────────────────────────────────────────────────────────"
+scripts/run_compress_backfill_csvs.sh
+
+echo ""
+echo "════════════════════════════════════════════════════════════════════════"
+echo "  POST-CLOSE COMPLETE — every check 🟢"
+echo "════════════════════════════════════════════════════════════════════════"

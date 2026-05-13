@@ -44,21 +44,44 @@ export DATABASE_URL=$(grep '^DATABASE_URL_IPV4=' .env | cut -d= -f2-)
 
 The maintenance CLI `scripts/ops.py` is the single entry point for daily and weekly data work. It replaces the previous mix of ad-hoc shell invocations (`run_daily_bars_all_active.py`, `run_corporate_actions_all_active.py`, etc.) and Railway-dependent ingestion checks. Every stage delegates to existing `tpcore` handlers; the CLI itself owns timeouts, logging, and the summary report.
 
-### Before trading
+### Before trading — the one-button operator command
 
 ```bash
-python scripts/ops.py --full
+scripts/run_post_close.sh
 ```
 
-This will:
+This runs the canonical post-close workflow in order:
 
-- Refresh trading-universe daily bars, corporate actions, and fundamentals.
-- Run the Data Validation Suite.
-- Populate `platform.universe_candidates` for the momentum engine (Universe Pre-Screener — see `tpcore/universe/prescreener.py`).
-- Run the universe simulation (`scripts/simulate_universe.py`) and report candidate counts per engine.
-- Print a health report.
+1. **DOWNLOAD + UPLOAD** — `scripts/ops.py --update` (7 stages):
+   `daily_bars` → `corporate_actions` → `coverage_fill` → `fundamentals_refresh` → `data_validation` → `universe_prescreener` → `universe_simulation`.
+   Failed stages auto-retry once on transient errors. Refuses to run during the NYSE regular session.
+2. **VERIFY** — `scripts/run_audit_all_tables.sh` (cross-table integrity audit).
+3. **VERIFY** — re-confirms the validation suite is green.
+4. **FIX** — self-heal retry is built into `--update`; if anything stays red after that, the script exits non-zero and points the operator at the dashboard for per-failure detail.
+5. **COMPRESS** — gzips any uncompressed CSVs under `data/{alpaca,fmp,corp_actions}_backfill/`.
 
-**Faster path — operator dashboard.** `scripts/run_dashboard.sh` launches a Streamlit UI whose **Platform health** panel surfaces all six freshness signals at a glance (bars, fundamentals, corporate actions, universe candidates, last `--update` per-stage breakdown, validation-suite roll-up over 7 days). Color-coded; failed stages auto-expand. Use this before pushing **Run daily update** — it tells you whether a re-run is even needed.
+**Faster path — operator dashboard.** `scripts/run_dashboard.sh` launches a Streamlit UI whose **Platform health** panel surfaces every signal at a glance: bars freshness, fundamentals freshness, corporate-actions freshness, universe candidates today, last `--update` per-stage breakdown, validation-suite latest-run, universe coverage gaps, open orders, and the cross-table integrity audit. Each red row has an inline 🔧 Fix button. Use this before pushing **Run daily update** — it tells you whether a re-run is even needed.
+
+### Full backfill (after major data-quality events)
+
+```bash
+scripts/run_full_backfill.sh
+```
+
+The CSV-first download → upload → verify → fix → compress pattern across all three sources (Alpaca bars, FMP fundamentals, Alpaca corp actions). Used after large cleanups or universe expansion. Long-running (30-60 min). NOT the daily cadence — that's `run_post_close.sh`.
+
+### Lessons learned (2026-05-13 data-cleanup post-mortem)
+
+The post-mortem captured these principles as durable patterns; the post-close + full-backfill scripts above codify them. Treat any deviation as the start of the next mess.
+
+1. **CSV-first for any non-trivial pull.** Source → CSV (audit-able artifact) → validate-each-row → upsert. Re-runnable; the CSV remains the permanent record of what the source returned. Daily pulls (~7k bars/day) can write direct; full backfills go CSV-first.
+2. **Physical-truth at write time.** Every row passes the same physical-truth predicate (`close > 0`, OHLC consistent, no future dates) AT the CSV write step, not just at the destination. Bad rows never reach the database.
+3. **Self-healing > manual retry.** Stages that hit transient errors (timeout, 429, ReadError) auto-retry once inside `--update`. Resumable stages (fundamentals: skip-if-refreshed-within-24h, daily_bars: skip-if-already-ingested) make every re-run faster than the previous.
+4. **SIP > IEX.** Alpaca's free IEX feed silently misses tickers that trade off-IEX. The account is subscribed to SIP; default everywhere is `feed="sip"`. The `coverage_fill` stage closes any remaining gap nightly.
+5. **Validation suite is the gate.** 6 checks: delistings, constituent, splits, row_integrity, fundamentals_integrity, corporate_actions_integrity. Validation green is the operational definition of "data is clean enough to trade on."
+6. **Cross-references are integrity too.** `audit_all_tables.sh` (and the dashboard's "Cross-table integrity" row) catches orphan tickers across every dependent table — the kind of failure the validation suite's per-table predicates miss.
+7. **Latest-run beats rolling aggregates on dashboards.** A 7-day rolling failure count surfaces stale history as current state. Show LATEST per source — stale aggregates lie.
+8. **Compress confirmed artifacts.** After a successful upsert, gzip the CSV (~80% disk savings). Loaders read `.gz` transparently on re-run.
 
 Per-stage timeouts (`scripts/ops.py`): **120 s** for the light stages (`data_validation`, `universe_simulation`) and **3,600 s** (1 hour) for the heavy ingestion stages (`daily_bars`, `corporate_actions`, `fundamentals_refresh`). The heavy-stage budget was raised twice after the Phase 1 universe expansion (7,300 tickers) — `120s → 1200s → 3600s` (commits `d924491` and `57ec234`) — because the underlying FMP-backed handlers iterate ~73 batches with rate-limit sleeps and need real headroom. On timeout an ERROR row lands in `platform.application_log` and the pipeline moves on to the next stage; a single slow upstream never blocks the whole run.
 
@@ -538,6 +561,42 @@ FROM (
 | `row_integrity` | every prices_daily row: `close > 0`, `close <= 100M`, OHLC consistent (`high >= GREATEST(open, close, low)`, `low <= LEAST(open, close, high)`), non-NULL OHLCV, no future dates | a physically-impossible bar exists |
 | `fundamentals_integrity` | every fundamentals_quarterly row: non-NULL ticker/filing_date, `period_end_date <= filing_date`, `shares_outstanding > 0 OR NULL`, no future filings | filings reversed in time, placeholder zeros, etc. |
 | `corporate_actions_integrity` | every corporate_actions row: non-NULL cols, `ratio` in `(0, 1000]`, no far-future dates | implausible split ratios or NULL action_type |
+
+### Cross-table audit (added 2026-05-13)
+
+The validation suite covers physical-truth checks. Cross-reference checks live in `scripts/run_audit_all_tables.sh`:
+
+* `ticker_not_in_prices` across `catalyst_events`, `corporate_actions`, `fundamentals_quarterly`, `liquidity_tiers`, `universe_candidates`, `tradier_options_chains` — every dependent table's ticker must exist in `prices_daily`.
+* `tradier_options_chains.expired` — contracts past their expiration date.
+* `liquidity_tiers.stale_30d` — tier assignments older than 30 days.
+
+The dashboard's **Cross-table integrity** row (Platform Health panel) runs the same checks and surfaces any non-zero count.
+
+### The seven `--update` stages (current)
+
+`scripts/ops.py --update` now runs:
+
+1. `daily_bars` — Alpaca SIP feed → `prices_daily` (was IEX prior to 2026-05-13)
+2. `corporate_actions` — Alpaca → `corporate_actions`, applies splits to `prices_daily`
+3. `coverage_fill` — **new 2026-05-13**: any tier ≤ 2 ticker missing a bar in the last 7 days gets a targeted 14-day SIP pull. Self-heals IEX-vs-SIP gaps without operator action.
+4. `fundamentals_refresh` — FMP → `fundamentals_quarterly`. Resumable: skip-if-refreshed-within-24h.
+5. `data_validation` — the 6-check suite above.
+6. `universe_prescreener` — writes today's `momentum` rows to `universe_candidates`.
+7. `universe_simulation` — diagnostic; runs `scripts/simulate_universe.py`.
+
+`--update` refuses to run during the NYSE regular session (corrupts intraday bars). `--force` bypasses. Failed stages auto-retry once if the error matches a known-transient class (timeout, ReadError, 429).
+
+### Two-phase CSV-first ingest (added 2026-05-13)
+
+For full historical backfills, every source uses an audit-able two-phase pattern:
+
+| Source | Phase 1 (download → CSV) | Phase 2 (CSV → DB) |
+|---|---|---|
+| Alpaca bars | `scripts/run_backfill_alpaca_csv.sh` | `scripts/run_load_alpaca_csv.sh` |
+| FMP fundamentals | `scripts/run_backfill_fmp_csv.sh` | `scripts/run_load_fmp_csv.sh` |
+| Alpaca corp actions | `scripts/run_backfill_corp_actions_csv.sh` | `scripts/run_load_corp_actions_csv.sh` |
+
+CSV is the permanent audit record under `data/{alpaca,fmp,corp_actions}_backfill/`. Each row passes the same physical-truth predicate the validation suite enforces at write time; bad rows are filtered AT the CSV layer. Loaders auto-compress source CSVs after successful upsert (`scripts/run_compress_backfill_csvs.sh` for one-shot cleanup) and read `.gz` transparently on re-runs.
 
 ### Cleanup scripts (run on red findings)
 
