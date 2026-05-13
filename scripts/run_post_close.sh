@@ -99,9 +99,23 @@ echo "✓ all 6 validation checks green"
 
 # Step 5 — compress any CSVs left behind by the backfill scripts.
 echo ""
-echo "▶ STEP 5 / 5  compress backfill CSVs"
+echo "▶ STEP 5 / 6  compress backfill CSVs"
 echo "────────────────────────────────────────────────────────────────────────"
 scripts/run_compress_backfill_csvs.sh
+
+# Step 6 — engine sweep. Now that data is verified clean, run every
+# engine scheduler back-to-back. Each is one-shot; the trade_monitor
+# daemon (installed separately) picks up the Tier 2 cascade.
+# Set SKIP_ENGINES=1 to skip this step (data-only post-close).
+if [[ "${SKIP_ENGINES:-0}" == "1" ]]; then
+    echo ""
+    echo "▶ STEP 6 / 6  engine sweep — SKIPPED (SKIP_ENGINES=1)"
+else
+    echo ""
+    echo "▶ STEP 6 / 6  engine sweep — sigma → reversion → vector → momentum"
+    echo "────────────────────────────────────────────────────────────────────────"
+    scripts/run_all_engines.sh
+fi
 
 echo ""
 echo "════════════════════════════════════════════════════════════════════════"

@@ -279,3 +279,60 @@ async def test_daily_bars_runs_when_under_threshold(monkeypatch):
     assert result["rows_upserted"] == 4_242
     assert "skipped" not in result
     assert len(handler_calls) == 1
+
+
+# ────────────────────────────────────────────────────────────────────────
+# cmd_audit — cross-table integrity. Verifies the SQL list is canonical
+# and that the passed flag is the conjunction of every check.
+# ────────────────────────────────────────────────────────────────────────
+
+
+def test_audit_checks_cover_every_dependent_table():
+    """Each table that joins prices_daily must have a ticker_not_in_prices check.
+    Catches the regression where someone adds a new table and forgets to
+    extend _AUDIT_CHECKS."""
+    expected_tables = {
+        "catalyst_events", "corporate_actions", "fundamentals_quarterly",
+        "liquidity_tiers", "universe_candidates", "tradier_options_chains",
+    }
+    audited = {
+        table for table, check, _ in ops._AUDIT_CHECKS
+        if check == "ticker_not_in_prices"
+    }
+    missing = expected_tables - audited
+    assert not missing, f"missing ticker_not_in_prices for: {missing}"
+
+
+def test_audit_includes_freshness_and_expiry_checks():
+    by_kind = {(t, c) for t, c, _ in ops._AUDIT_CHECKS}
+    # The historical pain points — keep these wired.
+    assert ("tradier_options_chains", "expired") in by_kind
+    assert ("liquidity_tiers", "stale_30d") in by_kind
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Parser — every consolidated mode is wired
+# ────────────────────────────────────────────────────────────────────────
+
+
+def test_cli_has_audit_reconcile_allocate_status_modes():
+    """Regression guard: each consolidated command must remain
+    parseable so the dashboard's daemon-status fetchers don't break."""
+    parser = ops._build_parser()
+    for mode in ("--audit", "--reconcile", "--allocate", "--status"):
+        args = parser.parse_args([mode])
+        # exactly one boolean mode flag should be True
+        active = [a for a in ("audit", "reconcile", "allocate", "status",
+                              "update", "check", "full")
+                  if getattr(args, a, False)]
+        assert active == [mode.lstrip("-")], f"{mode} mis-parsed to {active}"
+
+
+def test_cli_enforce_freeze_flag_paired_with_allocate():
+    """--enforce-freeze is a modifier only useful with --allocate.
+    Parser accepts it standalone (no validation there), but the spec
+    requires this combination is the live-mode path."""
+    parser = ops._build_parser()
+    args = parser.parse_args(["--allocate", "--enforce-freeze"])
+    assert args.allocate is True
+    assert args.enforce_freeze is True

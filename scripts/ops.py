@@ -1105,6 +1105,149 @@ def _format_check_pretty(report: dict[str, Any]) -> str:
 
 
 # ────────────────────────────────────────────────────────────────────────
+# Consolidated operator commands (added 2026-05-14)
+# ────────────────────────────────────────────────────────────────────────
+
+
+_AUDIT_CHECKS: tuple[tuple[str, str, str], ...] = (
+    # (table, check_name, sql) — every cross-reference check the
+    # dashboard's "Cross-table integrity" row runs lives here.
+    ("catalyst_events", "ticker_not_in_prices", """
+        SELECT COUNT(*) FROM platform.catalyst_events ce
+        LEFT JOIN (SELECT DISTINCT ticker FROM platform.prices_daily) p
+        ON p.ticker = ce.ticker WHERE p.ticker IS NULL"""),
+    ("corporate_actions", "ticker_not_in_prices", """
+        SELECT COUNT(*) FROM platform.corporate_actions ca
+        LEFT JOIN (SELECT DISTINCT ticker FROM platform.prices_daily) p
+        ON p.ticker = ca.ticker WHERE p.ticker IS NULL"""),
+    ("fundamentals_quarterly", "ticker_not_in_prices", """
+        SELECT COUNT(*) FROM platform.fundamentals_quarterly fq
+        LEFT JOIN (SELECT DISTINCT ticker FROM platform.prices_daily) p
+        ON p.ticker = fq.ticker WHERE p.ticker IS NULL"""),
+    ("liquidity_tiers", "ticker_not_in_prices", """
+        SELECT COUNT(*) FROM platform.liquidity_tiers lt
+        LEFT JOIN (SELECT DISTINCT ticker FROM platform.prices_daily) p
+        ON p.ticker = lt.ticker WHERE p.ticker IS NULL"""),
+    ("universe_candidates", "ticker_not_in_prices", """
+        SELECT COUNT(*) FROM platform.universe_candidates uc
+        LEFT JOIN (SELECT DISTINCT ticker FROM platform.prices_daily) p
+        ON p.ticker = uc.ticker WHERE p.ticker IS NULL"""),
+    ("tradier_options_chains", "expired",
+        "SELECT COUNT(*) FROM platform.tradier_options_chains WHERE expiration_date < CURRENT_DATE"),
+    ("tradier_options_chains", "ticker_not_in_prices", """
+        SELECT COUNT(*) FROM platform.tradier_options_chains tc
+        LEFT JOIN (SELECT DISTINCT ticker FROM platform.prices_daily) p
+        ON p.ticker = tc.ticker WHERE p.ticker IS NULL"""),
+    ("liquidity_tiers", "stale_30d",
+        "SELECT COUNT(*) FROM platform.liquidity_tiers WHERE last_updated < now() - INTERVAL '30 days'"),
+)
+
+
+async def cmd_audit(pool: asyncpg.Pool) -> dict[str, Any]:
+    """Cross-table integrity audit. Same checks the dashboard's
+    'Cross-table integrity' row runs. Returns ``{passed, findings}``."""
+    findings: list[dict] = []
+    async with pool.acquire() as conn:
+        for table, check, sql in _AUDIT_CHECKS:
+            n = int(await conn.fetchval(sql) or 0)
+            findings.append({"table": table, "check": check, "count": n})
+    return {
+        "passed": all(f["count"] == 0 for f in findings),
+        "findings": findings,
+    }
+
+
+async def cmd_reconcile(
+    pool: asyncpg.Pool, log: structlog.stdlib.BoundLogger, db_log,
+) -> int:
+    """Reconcile ``platform.open_orders`` against Alpaca's authoritative
+    state. Same code path TradeMonitor uses on startup."""
+    import uuid as _uuid
+
+    from tpcore.aar.writer import AARWriter
+    from tpcore.alpaca import AlpacaPaperBrokerAdapter
+    from tpcore.trade_monitor import TradeMonitor
+
+    broker = AlpacaPaperBrokerAdapter()
+    aar_writer = AARWriter(pool)
+    monitor = TradeMonitor(
+        pool=pool, broker=broker, aar_writer=aar_writer, run_id=_uuid.uuid4(),
+    )
+    return await monitor.reconcile_pending_on_startup()
+
+
+async def cmd_allocate(
+    pool: asyncpg.Pool, log: structlog.stdlib.BoundLogger,
+    *, enforce_freeze: bool = False,
+) -> list[Any]:
+    """AllocatorService.run_once. Idempotent on (engine, allocation_date)."""
+    from decimal import Decimal as _Decimal
+
+    from tpcore.allocator import AllocatorService
+
+    svc = AllocatorService(pool, platform_capital=_Decimal("40000"), enforce_freeze=enforce_freeze)
+    return await svc.run_once()
+
+
+async def cmd_status(pool: asyncpg.Pool) -> str:
+    """Terse one-screen platform-state summary for cron output. Reads
+    the same signals the dashboard surfaces; pure text output."""
+    from tpcore.quality.validation.checks.row_integrity import _INTEGRITY_PREDICATE as _PRED
+
+    async with pool.acquire() as conn:
+        latest_bar = await conn.fetchval(
+            "SELECT MAX(date) FROM platform.prices_daily WHERE date > CURRENT_DATE - INTERVAL '10 days'"
+        )
+        viol = int(await conn.fetchval(f"SELECT COUNT(*) FROM platform.prices_daily WHERE {_PRED}") or 0)
+        n_t12 = int(await conn.fetchval("SELECT COUNT(*) FROM platform.liquidity_tiers WHERE tier <= 2") or 0)
+        n_universe = int(await conn.fetchval(
+            "SELECT COUNT(*) FROM platform.universe_candidates WHERE engine='momentum' AND as_of_date=CURRENT_DATE"
+        ) or 0)
+        n_pending = int(await conn.fetchval(
+            "SELECT COUNT(*) FROM platform.open_orders WHERE status NOT IN ('filled','canceled','cancelled','rejected','expired')"
+        ) or 0)
+        # Latest allocator decision
+        alloc_rows = await conn.fetch(
+            "SELECT engine, allocated_capital, freeze_state FROM platform.allocations "
+            "WHERE allocation_date = (SELECT MAX(allocation_date) FROM platform.allocations) "
+            "ORDER BY engine"
+        )
+        # Latest validation
+        val_rows = await conn.fetch(
+            """
+            WITH latest AS (
+                SELECT source, MAX(timestamp) AS t FROM platform.data_quality_log
+                WHERE source LIKE 'validation.%' GROUP BY source
+            )
+            SELECT q.source, q.stale, q.confidence
+            FROM platform.data_quality_log q JOIN latest l
+              ON l.source = q.source AND l.t = q.timestamp
+            """
+        )
+    lines: list[str] = []
+    lines.append("─" * 56)
+    lines.append(f"PLATFORM STATUS — {datetime.now(UTC):%Y-%m-%d %H:%M UTC}")
+    lines.append("─" * 56)
+    lines.append(f"  prices_daily latest:    {latest_bar}")
+    lines.append(f"  integrity violations:   {viol}")
+    lines.append(f"  tier ≤ 2 universe:      {n_t12:,}")
+    lines.append(f"  universe_candidates(today): {n_universe:,}")
+    lines.append(f"  pending open_orders:    {n_pending}")
+    lines.append("")
+    lines.append("  Validation suite (latest run):")
+    for r in val_rows:
+        tag = "🟢" if (not r["stale"] and (r["confidence"] or 1) >= 1.0) else "🔴"
+        lines.append(f"    {tag} {r['source']:35s} stale={r['stale']} conf={r['confidence']}")
+    if alloc_rows:
+        lines.append("")
+        lines.append("  Allocator (latest):")
+        for r in alloc_rows:
+            lines.append(f"    {r['engine']:10s} ${r['allocated_capital']:>10}  state={r['freeze_state']}")
+    lines.append("─" * 56)
+    return "\n".join(lines)
+
+
+# ────────────────────────────────────────────────────────────────────────
 # Argparse + entry point
 # ────────────────────────────────────────────────────────────────────────
 
@@ -1132,12 +1275,27 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=KNOWN_STAGES,
         help="run a single --update stage by name (used by the dashboard's per-stage Fix buttons)",
     )
+    # Consolidated platform-level operator commands (added 2026-05-14).
+    # All route through this CLI for unified logging + retry + audit.
+    mode.add_argument("--audit", action="store_true",
+                      help="cross-table integrity audit (read-only)")
+    mode.add_argument("--reconcile", action="store_true",
+                      help="reconcile open_orders against Alpaca (heals YUMC-class orphans)")
+    mode.add_argument("--allocate", action="store_true",
+                      help="run AllocatorService — weekly capital rebalance across engines")
+    mode.add_argument("--status", action="store_true",
+                      help="terse one-screen summary of platform state for cron output")
     p.add_argument("--dry-run", action="store_true", help="log without writing data")
     p.add_argument("--pretty", action="store_true", help="pretty-print --check output")
     p.add_argument(
         "--force",
         action="store_true",
         help="bypass the market-closed pre-flight check (use with care)",
+    )
+    p.add_argument(
+        "--enforce-freeze",
+        action="store_true",
+        help="--allocate only: write risk_state.kill_switch_active on hard freeze (live mode)",
     )
     return p
 
@@ -1152,7 +1310,13 @@ async def amain(args: argparse.Namespace) -> int:
     if args.update or args.full or args.stage:
         _require_env(["DATABASE_URL", "FMP_API_KEY"])
         _require_alpaca_env()
+    elif args.reconcile:
+        _require_env(["DATABASE_URL"])
+        _require_alpaca_env()
+    elif args.allocate:
+        _require_env(["DATABASE_URL"])
     else:
+        # --check, --audit, --status are read-only
         _require_env(["DATABASE_URL"])
 
     db_url = os.environ["DATABASE_URL"]
@@ -1166,6 +1330,10 @@ async def amain(args: argparse.Namespace) -> int:
             f"stage:{args.stage}" if args.stage
             else "update" if args.update
             else "full" if args.full
+            else "audit" if args.audit
+            else "reconcile" if args.reconcile
+            else "allocate" if args.allocate
+            else "status" if args.status
             else "check"
         )
         await db_log.log(
@@ -1211,6 +1379,20 @@ async def amain(args: argparse.Namespace) -> int:
                 # is the operator's signal, not the CLI's exit code. Keep
                 # exit code 0 unless --update stages failed.
                 pass
+        elif args.audit:
+            audit = await cmd_audit(pool)
+            print(json.dumps(audit, indent=2, default=str))
+            exit_code = 0 if audit["passed"] else 1
+        elif args.reconcile:
+            n = await cmd_reconcile(pool, log, db_log)
+            print(f"reconciled {n} pending order(s)")
+        elif args.allocate:
+            decisions = await cmd_allocate(pool, log, enforce_freeze=args.enforce_freeze)
+            for d in decisions:
+                vol = f"σ={d.realized_vol:.2f}" if d.realized_vol is not None else "σ=bootstrap"
+                print(f"  {d.engine:9s}  weight={d.weight:>7.4f}  capital=${d.allocated_capital:>10}  {vol}  state={d.freeze_state}")
+        elif args.status:
+            print(await cmd_status(pool))
 
         elapsed_ms = int((time.monotonic() - started) * 1000)
         await db_log.log(
