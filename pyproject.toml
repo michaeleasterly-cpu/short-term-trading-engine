@@ -42,8 +42,9 @@ dashboard = [
     # Operator dashboard — see docs/superpowers/specs/2026-05-13-operator-dashboard.md.
     # Streamlit pinned <1.50 because the chart-library wrapper
     # (streamlit-lightweight-charts-pro, used in Phase 3 of the dashboard)
-    # is at 0.1.x and minor-bump compatibility isn't proven.
+    # is at 0.x and minor-bump compatibility isn't proven.
     "streamlit>=1.30,<1.50",
+    "streamlit-lightweight-charts-pro>=0.3.0",
 ]
 
 [project.scripts]
