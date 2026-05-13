@@ -37,33 +37,50 @@ CHECK_NAME = "row_integrity"
 # producing a wall-of-text in the dashboard expander.
 FAILURE_CAP = 50
 
-_INTEGRITY_SQL = """
-    SELECT ticker, date, close, high, low, volume,
-           CASE
-               WHEN close IS NULL                          THEN 'close_null'
-               WHEN close <= 0                             THEN 'close_nonpositive'
-               WHEN high  IS NULL OR low IS NULL           THEN 'hl_null'
-               WHEN high  <  low                           THEN 'high_lt_low'
-               WHEN volume IS NULL                         THEN 'volume_null'
-               WHEN volume < 0                             THEN 'volume_negative'
-               WHEN date  >  CURRENT_DATE                  THEN 'future_date'
-           END AS violation
+# Hard ceiling on plausible per-share close. BRK.A is the canonical
+# high (~$700K). 100M leaves 100x headroom for distant futures while
+# still catching the $99-trillion scale corruption we've seen from the
+# deprecated Tradier source. No allowlist.
+_MAX_PLAUSIBLE_CLOSE = 100_000_000
+
+# Single OHLC consistency predicate: high must dominate {open, close, low}
+# and low must be dominated by {open, close, high}. Captures every form
+# of "physically impossible bar" in two comparisons.
+_VIOLATION_CASE = f"""
+    CASE
+        WHEN close IS NULL                                                THEN 'close_null'
+        WHEN close <= 0                                                   THEN 'close_nonpositive'
+        WHEN close > {_MAX_PLAUSIBLE_CLOSE}                               THEN 'close_implausible'
+        WHEN open  IS NULL OR high IS NULL OR low IS NULL                 THEN 'ohl_null'
+        WHEN high  <  GREATEST(open, close, low)                          THEN 'high_not_dominant'
+        WHEN low   >  LEAST(open, close, high)                            THEN 'low_not_dominated'
+        WHEN volume IS NULL                                               THEN 'volume_null'
+        WHEN volume < 0                                                   THEN 'volume_negative'
+        WHEN date  >  CURRENT_DATE                                        THEN 'future_date'
+    END
+"""
+
+_INTEGRITY_PREDICATE = f"""
+       close IS NULL OR close <= 0 OR close > {_MAX_PLAUSIBLE_CLOSE}
+    OR open IS NULL OR high IS NULL OR low IS NULL
+    OR high < GREATEST(open, close, low)
+    OR low > LEAST(open, close, high)
+    OR volume IS NULL OR volume < 0
+    OR date > CURRENT_DATE
+"""
+
+_INTEGRITY_SQL = f"""
+    SELECT ticker, date, close, high, low, volume, {_VIOLATION_CASE} AS violation
     FROM platform.prices_daily
-    WHERE close IS NULL OR close <= 0
-       OR high  IS NULL OR low  IS NULL OR high < low
-       OR volume IS NULL OR volume < 0
-       OR date  >  CURRENT_DATE
+    WHERE {_INTEGRITY_PREDICATE}
     ORDER BY date DESC, ticker
     LIMIT $1
 """
 
-_INTEGRITY_COUNT_SQL = """
+_INTEGRITY_COUNT_SQL = f"""
     SELECT COUNT(*) AS total
     FROM platform.prices_daily
-    WHERE close IS NULL OR close <= 0
-       OR high  IS NULL OR low  IS NULL OR high < low
-       OR volume IS NULL OR volume < 0
-       OR date  >  CURRENT_DATE
+    WHERE {_INTEGRITY_PREDICATE}
 """
 
 

@@ -30,8 +30,12 @@ from .checks.constituent import (
 from .checks.constituent import (
     check_constituent_snapshot,
 )
+from .checks.corporate_actions_integrity import CHECK_NAME as CA_INTEGRITY_NAME
+from .checks.corporate_actions_integrity import check_corporate_actions_integrity
 from .checks.delistings import CHECK_NAME as DELISTINGS_NAME
 from .checks.delistings import check_delistings
+from .checks.fundamentals_integrity import CHECK_NAME as FUND_INTEGRITY_NAME
+from .checks.fundamentals_integrity import check_fundamentals_integrity
 from .checks.row_integrity import CHECK_NAME as ROW_INTEGRITY_NAME
 from .checks.row_integrity import check_row_integrity
 from .checks.splits import CHECK_NAME as SPLITS_NAME
@@ -79,13 +83,18 @@ async def run_suite(
     constituent_task = _safe_run(CONSTITUENT_NAME, check_constituent_snapshot, pool, constituents)
     splits_task = _safe_run(SPLITS_NAME, check_splits, pool, splits)
     row_integrity_task = _safe_run(ROW_INTEGRITY_NAME, check_row_integrity, pool, None)
-    delistings_result, constituent_result, splits_result, row_integrity_result = (
-        await asyncio.gather(
-            delistings_task, constituent_task, splits_task, row_integrity_task,
-        )
+    fund_integrity_task = _safe_run(FUND_INTEGRITY_NAME, check_fundamentals_integrity, pool, None)
+    ca_integrity_task = _safe_run(CA_INTEGRITY_NAME, check_corporate_actions_integrity, pool, None)
+    (
+        delistings_result, constituent_result, splits_result,
+        row_integrity_result, fund_integrity_result, ca_integrity_result,
+    ) = await asyncio.gather(
+        delistings_task, constituent_task, splits_task,
+        row_integrity_task, fund_integrity_task, ca_integrity_task,
     )
     checks: list[CheckResult] = [
-        delistings_result, constituent_result, splits_result, row_integrity_result,
+        delistings_result, constituent_result, splits_result,
+        row_integrity_result, fund_integrity_result, ca_integrity_result,
     ]
 
     finished_at = datetime.now(UTC)

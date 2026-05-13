@@ -505,21 +505,62 @@ The orchestrator prints `VERDICT: SURVIVED` only when both `DSR ≥ --dsr-thresh
 
 ## 6. Data Validation Suite
 
-The suite runs weekly (Sunday 06:00 UTC). On a non-Sunday, the most recent run should be the prior Sunday.
+The suite runs as part of every `python scripts/ops.py --update` (stage 4 of 6) and also on demand via `scripts/run_stage.sh data_validation`.
+
+### Acceptance criterion — "100% validated"
+
+> **Data is clean when every row in every persistence table satisfies its physical-truth predicate, and the validation suite returns `passed=True` with `confidence=1.000` on every one of its six checks. No allowlist, no `WHERE clause` skipping known-bad ticker-date pairs. If the predicate fires, the row gets fixed (re-pulled from source) or deleted.**
+
+Verifiable with one SQL:
 
 ```sql
--- Latest validation run summary:
-SELECT source, timestamp, confidence, notes
-FROM platform.data_quality_log
-WHERE source LIKE 'validation.%'
-ORDER BY timestamp DESC
-LIMIT 10;
+-- Returns 0 when the entire data layer is clean.
+SELECT SUM(failed) AS total_failed
+FROM (
+    SELECT CASE WHEN stale OR confidence < 1.0 THEN 1 ELSE 0 END AS failed
+    FROM platform.data_quality_log q
+    JOIN (
+        SELECT source, MAX(timestamp) AS t
+        FROM platform.data_quality_log
+        WHERE source LIKE 'validation.%'
+        GROUP BY source
+    ) latest ON latest.source = q.source AND latest.t = q.timestamp
+) x;
 ```
 
-**Confirm:**
-- Latest run timestamp is within the last 7 days (within the last 24h on Sunday).
-- The three checks (delistings, constituents, splits) each have a row.
-- All three should report `confidence = 1.0` and `notes = []`. The suite is fully green as of 2026-05-10 — five unresolvable historic delistings (HTZGQ, WLLBQ, LK, SBNYQ, SI) were removed from the YAML fixtures because no free-tier source carries bars for them. **Any non-empty `notes` field is a real new failure** — investigate immediately.
+### The six checks
+
+| Check | What it asserts | What "fail" means |
+|---|---|---|
+| `delistings` | every fixture entry is properly delisted in prices_daily | a known bankruptcy ticker is missing or not flagged |
+| `constituent` | S&P 500 membership matches the constituent fixture | a removal isn't reflected in our data |
+| `splits` | close-ratio across each fixture split day is in `[0.85, 1.15]` | an adjustment is broken |
+| `row_integrity` | every prices_daily row: `close > 0`, `close <= 100M`, OHLC consistent (`high >= GREATEST(open, close, low)`, `low <= LEAST(open, close, high)`), non-NULL OHLCV, no future dates | a physically-impossible bar exists |
+| `fundamentals_integrity` | every fundamentals_quarterly row: non-NULL ticker/filing_date, `period_end_date <= filing_date`, `shares_outstanding > 0 OR NULL`, no future filings | filings reversed in time, placeholder zeros, etc. |
+| `corporate_actions_integrity` | every corporate_actions row: non-NULL cols, `ratio` in `(0, 1000]`, no far-future dates | implausible split ratios or NULL action_type |
+
+### Cleanup scripts (run on red findings)
+
+| Script | What it does |
+|---|---|
+| `scripts/run_cleanup_bad_price_rows.sh` | DELETE prices_daily rows that violate `row_integrity` |
+| `scripts/run_cleanup_fundamentals_integrity.sh` | DELETE period-after-filing rows; UPDATE `shares_outstanding<=0` to NULL |
+
+Both are idempotent and dry-run by default (`--confirm` to apply). Every deletion is audit-logged to `application_log` with the full row payload.
+
+### Status as of 2026-05-13
+
+The validation suite is fully green after the initial cleanup:
+- 94,979 prices_daily rows deleted (all from the deprecated `source=tradier`; OHLC inconsistency + scale corruption up to $99T)
+- 88 fundamentals_quarterly rows deleted (period_end > filing_date)
+- 857 fundamentals_quarterly rows had `shares_outstanding` set to NULL (was 0 or negative)
+- 4 corporate_actions rows deleted (MCHB ratio > 1000)
+
+**Any non-empty `notes` field is a real new failure** — investigate immediately. The historic delisting fixture omits HTZGQ/WLLBQ/LK/SBNYQ/SI because no free-tier source carries their bars.
+
+### Known gap: prices_daily historical coverage
+
+The 94,979 deletions create gaps in `prices_daily` for the affected ticker-date pairs (mostly 2012-2024 dates that were tradier-only). Backtests that read those exact dates will see no row. Gap-fill via Alpaca historical pull is tracked separately — operator decides when to run the backfill. The dashboard's "Universe coverage" row surfaces tier ≤ 2 tickers missing recent bars.
 
 If `notes` lists unfamiliar tickers, run the suite locally to reproduce and read the full report:
 

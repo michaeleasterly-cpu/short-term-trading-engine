@@ -89,13 +89,15 @@ async def test_e2e_passes_with_satisfying_synthetic_data(write_yaml) -> None:
     writer = _RecordingWriter()
     result = await run_suite(pool, delistings=de, constituents=co, splits=sp, writer=writer)
     assert result.passed is True
-    assert len(writer.scores) == 4
+    assert len(writer.scores) == 6
     sources = {s.source for s in writer.scores}
     assert sources == {
         "validation.delistings",
         "validation.constituent",
         "validation.splits",
         "validation.row_integrity",
+        "validation.fundamentals_integrity",
+        "validation.corporate_actions_integrity",
     }
 
 
