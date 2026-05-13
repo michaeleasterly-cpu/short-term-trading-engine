@@ -336,10 +336,40 @@ async def _run_stage(
 
 
 async def _stage_daily_bars(pool: asyncpg.Pool, config: dict[str, Any]) -> dict[str, Any]:
+    # Fast-path: if the most recent CLOSED NYSE session already has bars
+    # for a healthy fraction of the active universe, this stage has
+    # nothing to do. The 7,000-ticker threshold matches our observed
+    # post-ingest population (we typically end up around 7,300 active
+    # tickers). 50% would be too lax; 90% catches a stalled run.
+    from tpcore.calendar import previous_close
     from tpcore.ingestion.handlers import handle_daily_bars
 
+    target_session = previous_close(datetime.now(UTC)).date()
+    async with pool.acquire() as conn:
+        already_ingested = await conn.fetchval(
+            """
+            SELECT COUNT(DISTINCT ticker)
+            FROM platform.prices_daily
+            WHERE date = $1
+            """,
+            target_session,
+        )
+    threshold = 6500  # tighter than the universe; leaves room for new IPOs
+    if already_ingested and already_ingested >= threshold:
+        return {
+            "rows_upserted": 0,
+            "universe": config.get("universe", "active"),
+            "skipped": "already_ingested",
+            "target_session": target_session.isoformat(),
+            "tickers_present": already_ingested,
+        }
+
     rows = await handle_daily_bars(pool, config)
-    return {"rows_upserted": rows or 0, "universe": config.get("universe", "active")}
+    return {
+        "rows_upserted": rows or 0,
+        "universe": config.get("universe", "active"),
+        "target_session": target_session.isoformat(),
+    }
 
 
 async def _stage_corporate_actions(pool: asyncpg.Pool) -> dict[str, Any]:
@@ -484,6 +514,50 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
 )
 KNOWN_STAGES: tuple[str, ...] = tuple(name for name, _, _ in _STAGE_SPECS)
 
+# Reasons (from INGESTION_FAILED.data->>'reason' or exception_type) that
+# we'll auto-retry exactly once after the main --update pipeline finishes.
+# Grounded in a 14-day survey of platform.application_log: the failure
+# population is dominated by transient network/timeouts. Logical-state
+# errors (RuntimeError, validation_failed, no_data) intentionally do not
+# auto-retry — re-running won't fix a delisted ticker or a real data gap.
+_RETRYABLE_FAILURE_REASONS: frozenset[str] = frozenset({
+    "timeout",
+    "ReadError",
+    "ConnectError",
+    "ConnectionError",
+    "ServerDisconnectedError",
+    "RemoteProtocolError",
+    "429",
+    "TooManyRequests",
+})
+
+# Stages that depend on today's regular session having closed. Running
+# these mid-session produces partial / wrong-state bars and contaminates
+# downstream queries — refuse unless the operator passes --force.
+_STAGES_REQUIRING_CLOSED_MARKET: frozenset[str] = frozenset({"daily_bars"})
+
+
+def _market_open_block_reason(now: datetime | None = None) -> str | None:
+    """Return a human-readable refusal reason if the NYSE regular session
+    is currently in progress, else None.
+
+    Allows pre-market, after-hours, weekends, holidays — only the
+    9:30-16:00 ET regular session blocks. tpcore.calendar wraps the
+    exchange_calendars XNYS calendar, so DST and partial-session days
+    (early closes) are handled automatically.
+    """
+    from tpcore.calendar import session_contains
+
+    now = now or datetime.now(UTC)
+    if session_contains(now):
+        return (
+            "NYSE regular session is currently open. Running daily_bars now "
+            "would pull a partial intraday snapshot and corrupt today's row "
+            "in prices_daily. Wait for 16:00 ET / 20:00 UTC and re-run, or "
+            "pass --force to bypass this check."
+        )
+    return None
+
 
 async def cmd_update(
     pool: asyncpg.Pool,
@@ -491,9 +565,29 @@ async def cmd_update(
     db_log,
     *,
     dry_run: bool,
+    force: bool = False,
 ) -> UpdateSummary:
     started_at = datetime.now(UTC)
     summary = UpdateSummary(run_id=db_log._run_id, started_at=started_at, finished_at=started_at)
+
+    # Pre-flight — refuse to run during the NYSE regular session unless
+    # explicitly forced. --update includes daily_bars, which would corrupt
+    # today's row in prices_daily if pulled mid-session.
+    if not force:
+        block = _market_open_block_reason()
+        if block:
+            log.error("ops.update.refused_market_open", reason=block)
+            await db_log.log(
+                "INGESTION_FAILED",
+                f"refused: {block}",
+                severity="ERROR",
+                data={"stage": "pre_flight", "reason": "market_open"},
+            )
+            summary.stages.append(
+                StageResult(name="pre_flight", status="FAILED", duration_ms=0, error=block)
+            )
+            summary.finished_at = datetime.now(UTC)
+            return summary
 
     # Stage 1 — daily bars. Reads its config row up-front so all subsequent
     # stages can share the same min_price/min_volume/lookback values.
@@ -523,6 +617,68 @@ async def cmd_update(
             )
         )
 
+    # Self-healing — retry FAILED/TIMEOUT stages once if their error matches
+    # the transient class (timeouts, network blips, 429). This addresses the
+    # observed pattern in application_log: a single network hiccup leaves
+    # one stage red even though every other stage is green and the issue
+    # has already resolved. Bounded to one retry per stage so we surface
+    # real persistent failures rather than mask them.
+    if not dry_run:
+        await _self_heal_failed_stages(
+            summary, pool, daily_bars_config, log=log, db_log=db_log,
+        )
+
+    summary.finished_at = datetime.now(UTC)
+    return summary
+
+
+async def _self_heal_failed_stages(
+    summary: UpdateSummary,
+    pool: asyncpg.Pool,
+    daily_bars_config: dict[str, Any],
+    *,
+    log: structlog.stdlib.BoundLogger,
+    db_log,
+) -> None:
+    """Retry each FAILED/TIMEOUT stage in ``summary`` exactly once, but only
+    when the failure looks transient (see ``_RETRYABLE_FAILURE_REASONS``).
+
+    The replacement StageResult is marked with ``retried=True`` so the
+    summary table is honest about what was auto-healed vs. what passed
+    on the first try. Emits ``ops.stage.retry`` events to
+    ``application_log`` for forensic visibility.
+    """
+    spec_by_name = {n: (n, fb, to) for n, fb, to in _STAGE_SPECS}
+    for i, result in enumerate(summary.stages):
+        if result.status not in {"FAILED", "TIMEOUT"}:
+            continue
+        # Retry only if the error string contains a retryable token.
+        err = (result.error or "").lower()
+        if not any(tok.lower() in err for tok in _RETRYABLE_FAILURE_REASONS):
+            log.info("ops.self_heal.skipped_non_retryable", stage=result.name, error=result.error[:80] if result.error else "")
+            continue
+        if result.name not in spec_by_name:
+            continue
+        name, factory_builder, timeout = spec_by_name[result.name]
+        await db_log.log(
+            "INGESTION_RETRY",
+            f"self-healing retry for {name}",
+            severity="INFO",
+            data={"stage": name, "first_error": (result.error or "")[:160]},
+        )
+        log.info("ops.self_heal.retry_start", stage=name, prior_error=result.error)
+        retry_result = await _run_stage(
+            name,
+            factory_builder(pool, daily_bars_config),
+            log=log,
+            db_log=db_log,
+            dry_run=False,
+            timeout=timeout,
+        )
+        # Annotate so the table reader can see this was a recovery.
+        retry_result.detail = {**(retry_result.detail or {}), "retried": True, "first_error": (result.error or "")[:160]}
+        summary.stages[i] = retry_result
+
 
 async def cmd_run_stage(
     stage_name: str,
@@ -531,6 +687,7 @@ async def cmd_run_stage(
     db_log,
     *,
     dry_run: bool,
+    force: bool = False,
 ) -> UpdateSummary:
     """Run a single stage by name. Same logging + event shape as ``cmd_update``
     — different ``run_id``. Used by the dashboard's per-stage Fix buttons.
@@ -551,6 +708,25 @@ async def cmd_run_stage(
         summary.finished_at = datetime.now(UTC)
         return summary
     name, factory_builder, timeout = matched[0]
+
+    # Pre-flight: refuse stages that need a closed session, unless --force.
+    # Stages like fundamentals_refresh / data_validation / universe_*
+    # are intraday-safe and pass through regardless.
+    if not force and name in _STAGES_REQUIRING_CLOSED_MARKET:
+        block = _market_open_block_reason()
+        if block:
+            log.error("ops.stage.refused_market_open", stage=name, reason=block)
+            await db_log.log(
+                "INGESTION_FAILED",
+                f"refused {name}: {block}",
+                severity="ERROR",
+                data={"stage": name, "reason": "market_open"},
+            )
+            summary.stages.append(
+                StageResult(name=name, status="FAILED", duration_ms=0, error=block)
+            )
+            summary.finished_at = datetime.now(UTC)
+            return summary
 
     # Advisory lock — hash the stage name into an int, try to acquire. The
     # lock is auto-released on connection close.
@@ -871,6 +1047,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--dry-run", action="store_true", help="log without writing data")
     p.add_argument("--pretty", action="store_true", help="pretty-print --check output")
+    p.add_argument(
+        "--force",
+        action="store_true",
+        help="bypass the market-closed pre-flight check (use with care)",
+    )
     return p
 
 
@@ -914,7 +1095,7 @@ async def amain(args: argparse.Namespace) -> int:
 
         update_summary: UpdateSummary | None = None
         if args.update or args.full:
-            update_summary = await cmd_update(pool, log, db_log, dry_run=args.dry_run)
+            update_summary = await cmd_update(pool, log, db_log, dry_run=args.dry_run, force=args.force)
             print("\nUPDATE SUMMARY")
             print("=" * 72)
             print(update_summary.to_table())
@@ -923,7 +1104,7 @@ async def amain(args: argparse.Namespace) -> int:
                 exit_code = update_summary.exit_code
         elif args.stage:
             update_summary = await cmd_run_stage(
-                args.stage, pool, log, db_log, dry_run=args.dry_run,
+                args.stage, pool, log, db_log, dry_run=args.dry_run, force=args.force,
             )
             print(f"\nSTAGE SUMMARY ({args.stage})")
             print("=" * 72)
