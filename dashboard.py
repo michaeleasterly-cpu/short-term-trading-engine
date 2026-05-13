@@ -31,6 +31,14 @@ import streamlit as st
 # Reuse existing tip-sheet query helpers + broker adapter — same data layer,
 # same shape. Dashboard adds zero new business logic.
 from dashboard_components.charts import render_ticker_chart
+from dashboard_components.health import (
+    classify_bars,
+    classify_corp_actions,
+    classify_fundamentals,
+    classify_universe,
+    classify_update_run,
+    classify_validation,
+)
 from scripts.generate_tip_sheet import (
     fetch_credibility,
     fetch_engine_holdings,
@@ -276,19 +284,6 @@ async def _fetch_last_run_timestamps() -> dict:
     finally:
         await pool.close()
     return out
-
-
-# Stages emitted by ``scripts/ops.py --update``. Kept in sync with the
-# orchestrator order so the dashboard knows whether the latest run was
-# complete (every stage present) or partial.
-_OPS_UPDATE_STAGES: tuple[str, ...] = (
-    "daily_bars",
-    "corporate_actions",
-    "fundamentals_refresh",
-    "data_validation",
-    "universe_prescreener",
-    "universe_simulation",
-)
 
 
 async def _fetch_platform_health() -> dict:
@@ -1134,168 +1129,6 @@ def _health_glyph(color: str) -> str:
     }.get(color, _GLYPH_UNKNOWN)
 
 
-def _classify_bars(latest_date) -> tuple[str, str]:
-    """Bars freshness: green if within 1 trading day; amber 2-3; red ≥4."""
-    if latest_date is None:
-        return "red", "No bars in prices_daily"
-    age = (datetime.now(UTC).date() - latest_date).days
-    if age <= 1:
-        color = "green"
-    elif age <= 3:
-        color = "amber"
-    else:
-        color = "red"
-    return color, f"Latest bar: {latest_date.isoformat()} ({age}d ago)"
-
-
-def _classify_fundamentals(latest_at) -> tuple[str, str]:
-    """Fundamentals refresh: green ≤8d, amber ≤14d, red >14d. The Sunday
-    cron is the source; one missed Sunday is amber, two is red."""
-    if latest_at is None:
-        return "red", "No fundamentals rows"
-    secs = _age_seconds(latest_at)
-    if secs is None:
-        return "red", "Unknown age"
-    days = secs / 86400
-    if days <= 8:
-        color = "green"
-    elif days <= 14:
-        color = "amber"
-    else:
-        color = "red"
-    return color, f"Last refresh: {days:.1f}d ago"
-
-
-def _classify_corp_actions(latest_at) -> tuple[str, str]:
-    """Corporate actions: green ≤2d, amber ≤7d, red >7d. Splits/dividends
-    are infrequent so we tolerate a multi-day gap before alarming."""
-    if latest_at is None:
-        return "amber", "No corporate actions ingested"
-    secs = _age_seconds(latest_at)
-    if secs is None:
-        return "amber", "Unknown age"
-    days = secs / 86400
-    if days <= 2:
-        color = "green"
-    elif days <= 7:
-        color = "amber"
-    else:
-        color = "red"
-    return color, f"Latest ingest: {days:.1f}d ago"
-
-
-def _classify_universe(latest_date, today_count: int) -> tuple[str, str]:
-    """Universe pre-screener: green if today's row count is healthy; red
-    otherwise. 'Healthy' is heuristic — momentum universe is normally
-    1,000-1,500 names; <500 implies the prescreener failed or the
-    liquidity_tiers table is degraded."""
-    today = datetime.now(UTC).date()
-    if latest_date is None:
-        return "red", "Never populated"
-    if latest_date < today:
-        age = (today - latest_date).days
-        return "amber", f"Stale: latest as_of {latest_date.isoformat()} ({age}d ago)"
-    if today_count < 500:
-        return "red", f"Today: only {today_count} candidates (<500)"
-    return "green", f"Today: {today_count} candidates"
-
-
-def _classify_update_run(update_run: dict) -> tuple[str, str, list[tuple[str, str, str]]]:
-    """Last ops --update run: green if every stage completed; amber if
-    any stage missing (run incomplete); red if any stage FAILED."""
-    stages = update_run.get("stages") or {}
-    if not stages:
-        return "red", "No recent run found", []
-
-    rows: list[tuple[str, str, str]] = []
-    n_failed = 0
-    n_complete = 0
-    for stage_name in _OPS_UPDATE_STAGES:
-        entry = stages.get(stage_name)
-        if entry is None:
-            rows.append((stage_name, "amber", "not in latest run"))
-            continue
-        if entry["event_type"] == "INGESTION_FAILED":
-            n_failed += 1
-            data = entry["data"]
-            if isinstance(data, str):
-                try:
-                    data = json.loads(data)
-                except Exception:
-                    data = {}
-            reason = (
-                (data.get("reason") if isinstance(data, dict) else None)
-                or (data.get("error") if isinstance(data, dict) else None)
-                or "failed"
-            )
-            rows.append((stage_name, "red", f"FAILED — {reason}"))
-        else:
-            n_complete += 1
-            rows.append((stage_name, "green", "OK"))
-
-    started_at = update_run.get("started_at")
-    started_str = ""
-    if started_at is not None:
-        secs = _age_seconds(started_at)
-        if secs is not None:
-            hours = secs / 3600
-            if hours < 1:
-                started_str = f"{int(secs / 60)}m ago"
-            elif hours < 48:
-                started_str = f"{hours:.1f}h ago"
-            else:
-                started_str = f"{hours / 24:.1f}d ago"
-
-    if n_failed > 0:
-        color = "red"
-        summary = (
-            f"Last run {started_str} — {n_failed} stage(s) FAILED, {n_complete}/{len(_OPS_UPDATE_STAGES)} OK"
-        )
-    elif n_complete < len(_OPS_UPDATE_STAGES):
-        color = "amber"
-        missing = len(_OPS_UPDATE_STAGES) - n_complete
-        summary = f"Last run {started_str} — {n_complete}/{len(_OPS_UPDATE_STAGES)} OK ({missing} missing)"
-    else:
-        color = "green"
-        summary = f"Last run {started_str} — {len(_OPS_UPDATE_STAGES)}/{len(_OPS_UPDATE_STAGES)} stages OK"
-    return color, summary, rows
-
-
-def _classify_validation(rows: list[dict]) -> tuple[str, str, list[tuple[str, str, str]]]:
-    """Data validation suite: green if zero failed rows in last 7 days,
-    amber if any source had ≤2 failed runs, red if any source had ≥3.
-    Each source is a row in the detail table."""
-    if not rows:
-        return "amber", "No validation runs in last 7 days", []
-
-    detail: list[tuple[str, str, str]] = []
-    worst = "green"
-    for r in rows:
-        n_failed = int(r["n_failed"])
-        n_runs = int(r["n_runs"])
-        source = r["source"].replace("validation.", "")
-        if n_failed == 0:
-            color = "green"
-            text = f"{n_runs} runs, all passed"
-        elif n_failed <= 2:
-            color = "amber"
-            text = f"{n_failed}/{n_runs} runs failed"
-            worst = "amber" if worst == "green" else worst
-        else:
-            color = "red"
-            text = f"{n_failed}/{n_runs} runs failed"
-            worst = "red"
-        detail.append((source, color, text))
-
-    if worst == "green":
-        summary = f"All {len(rows)} validation source(s) clean (last 7d)"
-    elif worst == "amber":
-        summary = "Some validation failures (last 7d) — see detail"
-    else:
-        summary = "Repeated validation failures (last 7d) — see detail"
-    return worst, summary, detail
-
-
 def _render_health_row(label: str, color: str, text: str) -> None:
     glyph = _health_glyph(color)
     color_hex = {
@@ -1328,26 +1161,26 @@ def render_platform_health() -> None:
         st.error(f"Could not fetch platform health: {exc}")
         return
 
-    bars_color, bars_text = _classify_bars(h["bars"]["latest_date"])
+    bars_color, bars_text = classify_bars(h["bars"]["latest_date"])
     bars_text += f" — {h['bars']['recent_tickers']:,} tickers (last 5d)"
     _render_health_row("Bars (prices_daily)", bars_color, bars_text)
 
-    fund_color, fund_text = _classify_fundamentals(h["fundamentals"]["latest_at"])
+    fund_color, fund_text = classify_fundamentals(h["fundamentals"]["latest_at"])
     latest_period = h["fundamentals"]["latest_period"]
     if latest_period is not None:
         fund_text += f" — latest period {latest_period.isoformat()}"
     _render_health_row("Fundamentals", fund_color, fund_text)
 
-    ca_color, ca_text = _classify_corp_actions(h["corp_actions"]["latest_at"])
+    ca_color, ca_text = classify_corp_actions(h["corp_actions"]["latest_at"])
     _render_health_row("Corporate actions", ca_color, ca_text)
 
-    uni_color, uni_text = _classify_universe(
+    uni_color, uni_text = classify_universe(
         h["universe"]["latest_date"],
         h["universe"]["today_count"],
     )
     _render_health_row("Universe (momentum)", uni_color, uni_text)
 
-    run_color, run_summary, run_detail = _classify_update_run(h["update_run"])
+    run_color, run_summary, run_detail = classify_update_run(h["update_run"])
     _render_health_row("Last ops --update", run_color, run_summary)
     with st.expander("Stage-by-stage detail of last --update run", expanded=(run_color == "red")):
         if not run_detail:
@@ -1356,7 +1189,7 @@ def render_platform_health() -> None:
             for stage, color, text in run_detail:
                 _render_health_row(stage, color, text)
 
-    val_color, val_summary, val_detail = _classify_validation(h["validation"])
+    val_color, val_summary, val_detail = classify_validation(h["validation"])
     _render_health_row("Data validation (7d)", val_color, val_summary)
     if val_detail:
         with st.expander("Per-source validation detail", expanded=(val_color == "red")):
