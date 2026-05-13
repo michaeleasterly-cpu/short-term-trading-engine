@@ -32,11 +32,27 @@ import streamlit as st
 # same shape. Dashboard adds zero new business logic.
 from dashboard_components.charts import render_ticker_chart
 from scripts.generate_tip_sheet import (
+    ENGINE_DESCRIPTIONS,
+    fetch_credibility,
     fetch_engine_holdings,
+    fetch_recent_signals,
     fetch_recent_trades,
 )
 from tpcore.alpaca import AlpacaPaperBrokerAdapter
+from tpcore.backtest.credibility import MIN_LIVE_SCORE
 from tpcore.db import build_asyncpg_pool
+
+# Phase 5 — auto-refresh (opt-in, off by default per spec).
+try:
+    from streamlit_autorefresh import st_autorefresh
+    _AUTOREFRESH_AVAILABLE = True
+except ImportError:
+    _AUTOREFRESH_AVAILABLE = False
+
+
+# Which engines get their own credibility scorecard. Order matters — most
+# important / closest-to-graduation first.
+SCORECARD_ENGINES = ("momentum", "sigma", "reversion", "vector")
 
 
 REPO_ROOT = Path(__file__).resolve().parent
@@ -209,6 +225,69 @@ async def _fetch_active_entry_for_ticker(ticker: str) -> dict | None:
         "entry_price": float(pos.avg_entry_price) if pos.avg_entry_price else 0.0,
         "qty": int(pos.qty),
     }
+
+
+async def _fetch_credibility_all_engines() -> dict:
+    """Pull the latest credibility rubric for each engine in SCORECARD_ENGINES."""
+    pool = await build_asyncpg_pool(_db_url(), max_size=2)
+    out: dict = {}
+    try:
+        for engine in SCORECARD_ENGINES:
+            try:
+                out[engine] = await fetch_credibility(pool, engine)
+            except Exception:  # noqa: BLE001
+                out[engine] = None
+    finally:
+        await pool.close()
+    return out
+
+
+async def _fetch_signals_all_engines(days: int = 30) -> list[dict]:
+    """Pull SIGNAL events across all engines, newest first."""
+    since = datetime.now(UTC) - timedelta(days=days)
+    pool = await build_asyncpg_pool(_db_url(), max_size=2)
+    all_signals: list[dict] = []
+    try:
+        for engine in SCORECARD_ENGINES:
+            try:
+                rows = await fetch_recent_signals(pool, engine, since)
+            except Exception:  # noqa: BLE001
+                rows = []
+            for r in rows:
+                r["engine"] = engine
+                all_signals.append(r)
+    finally:
+        await pool.close()
+    all_signals.sort(key=lambda r: r.get("recorded_at") or datetime.min, reverse=True)
+    return all_signals
+
+
+async def _fetch_trades_all_engines(days: int = 30) -> list[dict]:
+    """Pull AAR rows across all engines, newest first."""
+    since = datetime.now(UTC) - timedelta(days=days)
+    pool = await build_asyncpg_pool(_db_url(), max_size=2)
+    out: list[dict] = []
+    try:
+        for engine in SCORECARD_ENGINES:
+            try:
+                trades = await fetch_recent_trades(pool, engine, since)
+            except Exception:  # noqa: BLE001
+                trades = []
+            for t in trades:
+                out.append({
+                    "engine": engine,
+                    "ticker": t.ticker,
+                    "entry_ts": t.entry_ts,
+                    "exit_ts": t.exit_ts,
+                    "entry_price": float(t.entry_price),
+                    "exit_price": float(t.exit_price),
+                    "pnl_net": float(t.pnl_net),
+                    "exit_reason": t.exit_reason.value,
+                })
+    finally:
+        await pool.close()
+    out.sort(key=lambda r: r["exit_ts"], reverse=True)
+    return out
 
 
 async def _fetch_equity_history(days: int = 60) -> list[dict]:
@@ -424,6 +503,112 @@ def render_ticker_detail(ticker: str):
             f"Currently held: {active['qty']} sh @ ${active['entry_price']:.2f} "
             f"opened {active['entry_date']}"
         )
+
+
+def render_credibility_scorecards():
+    """Phase 4 — one compact card per engine, color-coded by gate status."""
+    st.subheader("Credibility scorecards")
+    try:
+        scores = run_async(_fetch_credibility_all_engines())
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"Could not fetch credibility scores: {exc}")
+        return
+    cols = st.columns(len(SCORECARD_ENGINES))
+    for col, engine in zip(cols, SCORECARD_ENGINES):
+        score = scores.get(engine)
+        if score is None:
+            col.markdown(
+                f"<div style='padding:12px;border-radius:6px;background:#f0f0f0;"
+                f"text-align:center;'>"
+                f"<div style='font-size:0.875em;color:#666;'>{engine.upper()}</div>"
+                f"<div style='font-size:1.5em;font-weight:600;color:#888;'>—</div>"
+                f"<div style='font-size:0.75em;color:#888;'>no rubric on record</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+            continue
+        if score.score >= MIN_LIVE_SCORE:
+            bg, fg, glyph, status = "#e6f4ea", "#0a8a3a", "▲", "PASS"
+        else:
+            bg, fg, glyph, status = "#fbe9e7", "#c92a2a", "▼", "BLOCKED"
+        # Count rubric flags that pass for an at-a-glance check.
+        rubric_dict = score.model_dump()
+        n_pass = sum(
+            1 for k, v in rubric_dict.items()
+            if isinstance(v, bool) and v
+        )
+        col.markdown(
+            f"<div style='padding:12px;border-radius:6px;background:{bg};"
+            f"text-align:center;'>"
+            f"<div style='font-size:0.875em;color:#666;'>{engine.upper()}</div>"
+            f"<div style='font-size:1.5em;font-weight:600;color:{fg};'>"
+            f"{glyph} {score.score}/100</div>"
+            f"<div style='font-size:0.75em;color:{fg};'>{status}  ·  {n_pass} rubric flags ✓</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+    st.caption(f"Data as of {datetime.now(UTC).strftime('%H:%M:%S UTC')}  ·  Gate is ≥{MIN_LIVE_SCORE}/100")
+
+
+def render_recent_activity():
+    """Phase 4 — side-by-side panels: signals (left) and closed trades (right)."""
+    st.subheader("Recent activity — last 30 days")
+    try:
+        signals = run_async(_fetch_signals_all_engines(days=30))
+        trades = run_async(_fetch_trades_all_engines(days=30))
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"Could not fetch recent activity: {exc}")
+        return
+    import pandas as pd
+    left, right = st.columns(2)
+
+    with left:
+        st.markdown("**Signals**")
+        if not signals:
+            st.info("No SIGNAL events in window.")
+        else:
+            rows = []
+            for s in signals[:50]:
+                data = s.get("data") or {}
+                ticker = data.get("ticker", "?") if isinstance(data, dict) else "?"
+                score = data.get("score") if isinstance(data, dict) else None
+                rows.append({
+                    "When": s.get("recorded_at"),
+                    "Engine": s.get("engine"),
+                    "Ticker": ticker,
+                    "Score": f"{score:+.3f}" if isinstance(score, (int, float)) else "",
+                })
+            df = pd.DataFrame(rows)
+            st.dataframe(df, use_container_width=True, hide_index=True, height=320)
+            if len(signals) > 50:
+                st.caption(f"showing latest 50 of {len(signals)}")
+
+    with right:
+        st.markdown("**Closed trades (AARs)**")
+        if not trades:
+            st.info("No closed trades in window.")
+        else:
+            rows = []
+            for t in trades[:50]:
+                pnl_pct = (t["exit_price"] - t["entry_price"]) / t["entry_price"] if t["entry_price"] else 0.0
+                rows.append({
+                    "Exited": t["exit_ts"].date() if hasattr(t["exit_ts"], "date") else t["exit_ts"],
+                    "Engine": t["engine"],
+                    "Ticker": t["ticker"],
+                    "P&L $": t["pnl_net"],
+                    "P&L %": pnl_pct * 100.0,
+                    "Exit reason": t["exit_reason"],
+                })
+            df = pd.DataFrame(rows)
+            st.dataframe(
+                df, use_container_width=True, hide_index=True, height=320,
+                column_config={
+                    "P&L $": st.column_config.NumberColumn(format="$%+.2f"),
+                    "P&L %": st.column_config.NumberColumn(format="%+.2f%%"),
+                },
+            )
+            if len(trades) > 50:
+                st.caption(f"showing latest 50 of {len(trades)}")
 
 
 def render_equity_curve():
@@ -683,6 +868,68 @@ def render_detached_job_panel():
 # ────────────────────────────────────────────────────────────────────────────
 
 
+def render_settings_panel() -> None:
+    """Phase 5 — collapsible at top with auto-refresh toggle.
+
+    Auto-refresh is opt-in (off by default). Per the spec: never lower
+    than 30s — Streamlit + custom components leak browser memory at
+    higher refresh rates."""
+    with st.expander("⚙️  Settings", expanded=False):
+        if _AUTOREFRESH_AVAILABLE:
+            on = st.checkbox(
+                "Auto-refresh",
+                value=st.session_state.get("autorefresh_on", False),
+                key="autorefresh_on",
+                help="Re-runs the dashboard every N seconds. Off by default (manual refresh is the primary path).",
+            )
+            interval = st.selectbox(
+                "Interval (seconds)",
+                options=[30, 60, 120, 300],
+                index=1,
+                key="autorefresh_interval",
+                disabled=not on,
+            )
+            if on:
+                st_autorefresh(interval=interval * 1000, key="autorefresh_counter")
+                st.caption(f"Refreshing every {interval}s")
+        else:
+            st.caption(
+                "Auto-refresh requires `streamlit-autorefresh` — "
+                "`pip install streamlit-autorefresh` to enable."
+            )
+        st.caption(
+            "Keyboard: press **r** to refresh, **Esc** to dismiss modals "
+            "(both work when the page is focused)."
+        )
+
+
+def _inject_keyboard_shortcuts() -> None:
+    """Phase 5 — minimal JS injection for `r` to refresh.
+
+    Streamlit doesn't expose first-class keyboard shortcuts; a tiny JS
+    listener on the parent window is the pragmatic path. Bound only when
+    no text input is focused so it doesn't fire while the operator is
+    typing into a confirmation modal."""
+    st.markdown(
+        """
+        <script>
+        (function() {
+            if (window._dashboard_shortcuts_installed) return;
+            window._dashboard_shortcuts_installed = true;
+            window.parent.document.addEventListener('keydown', function(e) {
+                if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+                if (e.key === 'r' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+                    // Click the topmost Streamlit toolbar's reload — emulates F5.
+                    window.location.reload();
+                }
+            });
+        })();
+        </script>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def main():
     st.set_page_config(
         page_title="Trading Engine — Operator Dashboard",
@@ -690,11 +937,13 @@ def main():
         initial_sidebar_state="collapsed",
     )
 
+    _inject_keyboard_shortcuts()
+    render_settings_panel()
     render_header()
 
-    # Manual refresh button
+    # Manual refresh button — primary path. Auto-refresh is opt-in in Settings.
     c1, _ = st.columns([1, 8])
-    if c1.button("🔁  Refresh", help="Re-fetch all panels"):
+    if c1.button("🔁  Refresh", help="Re-fetch all panels  (keyboard: r)"):
         st.rerun()
 
     st.divider()
@@ -714,6 +963,12 @@ def main():
 
     st.divider()
     render_equity_curve()
+
+    st.divider()
+    render_credibility_scorecards()
+
+    st.divider()
+    render_recent_activity()
 
     st.divider()
     st.caption(
