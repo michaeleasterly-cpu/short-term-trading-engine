@@ -35,13 +35,26 @@ A research tool — `scripts/generate_tip_sheet.py` — that renders, per engine
 
 ### What gets built
 
-- Two small async query functions:
+- Four async helpers:
   - `fetch_recent_trades(pool, engine, since) -> list[AfterActionReport]` — reads `platform.aar_events`
   - `fetch_recent_signals(pool, engine, since) -> list[dict]` — reads `platform.application_log` filtered by `event_type='SIGNAL'`
+  - `fetch_engine_holdings(broker, engine) -> list[dict]` — live broker positions filtered to the engine's order-history prefix
+  - `fetch_today_recommendations(pool, engine, as_of) -> list[dict]` — what the engine WOULD trade today (engine-specific dispatch; Momentum-only in Phase 1)
 - Tip-sheet formatting using existing `render()` and `render_rubric()` functions from `tpcore.backtest.statistical_validation`.
 - Credibility gate (≥ 60) enforced by default, with a `--force` flag for private operator review of unproven engines.
+- `--no-broker` flag for offline review (skips the live Alpaca query).
 - **Mandatory disclaimer printed on every output.** Not removable.
 - Engine layman description (above) printed in the header for context.
+
+### Section order in the rendered report
+
+1. Header (engine name, generation timestamp, layman description)
+2. Credibility — 10-item rubric breakdown + PASS/BLOCKED gate verdict
+3. **Currently holding** — live broker positions: ticker, qty, entry/current price, market value, unrealized $/% P&L, totals
+4. **Today's recommendations** — top-decile candidates as the engine would rank them right now
+5. Recent signals — `SIGNAL` events from `application_log`
+6. Recent completed trades — AARs from `aar_events`
+7. Disclaimer
 
 ### Gates
 

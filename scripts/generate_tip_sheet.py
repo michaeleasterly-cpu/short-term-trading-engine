@@ -4,6 +4,10 @@ Terminal-only research report per engine. Renders:
 
 * Layman-readable engine description
 * Credibility score + rubric breakdown (from platform.data_quality_log)
+* **Currently holding** — live positions at the broker, filtered to the
+  engine via order-history prefix match
+* **Today's recommendations** — what the engine would trade if it fired
+  right now. Engine-specific dispatch; uses the setup-detection plug.
 * Recent SIGNAL events (from platform.application_log)
 * Recent completed trades / AARs (from platform.aar_events)
 * Mandatory non-removable disclaimer
@@ -29,7 +33,10 @@ from typing import Any
 
 import structlog
 
+from decimal import Decimal
+
 from tpcore.aar.models import AfterActionReport
+from tpcore.alpaca import AlpacaPaperBrokerAdapter
 from tpcore.backtest.credibility import (
     CREDIBILITY_SOURCE_PREFIX,
     MIN_LIVE_SCORE,
@@ -37,6 +44,23 @@ from tpcore.backtest.credibility import (
 )
 from tpcore.backtest.statistical_validation import render_rubric
 from tpcore.db import build_asyncpg_pool
+
+
+# Engine → client_order_id prefix used by that engine's order manager.
+# Used to filter the broker's order history to a single engine's positions.
+# 'momentum' = "mo_" from momentum/plugs/execution_risk.py.
+# The other engines stamp <TICKER>_<TS> (no engine identifier) — we can't
+# cleanly filter at the broker; Phase 2.5 work to give every engine a
+# stable prefix is tracked but not in scope here.
+ENGINE_ORDER_PREFIX: dict[str, str | None] = {
+    "momentum": "mo_",
+    "sigma": None,      # uses <TICKER>_<TS>_tier1 / _tier2 — not engine-identifying
+    "reversion": None,  # same pattern
+    "vector": None,
+    "s2": None,
+    "catalyst": None,
+    "sentinel": None,
+}
 
 logger = structlog.get_logger(__name__)
 
@@ -278,6 +302,160 @@ def render_trades(trades: list[AfterActionReport]) -> str:
 
 
 # ────────────────────────────────────────────────────────────────────────────
+# Live broker view — currently holding + today's recommendations
+# ────────────────────────────────────────────────────────────────────────────
+
+
+async def fetch_engine_holdings(
+    broker: AlpacaPaperBrokerAdapter, engine: str,
+) -> list[dict[str, Any]]:
+    """Return the broker's current positions filtered to ``engine``'s orders.
+
+    We can't tag positions with engine_id at Alpaca, so we identify
+    engine-owned symbols by inspecting recent order history: any symbol
+    that has a recent FILLED order whose ``client_order_id`` starts with
+    the engine's prefix counts. For engines without an order prefix
+    (Sigma/Reversion/Vector — see ENGINE_ORDER_PREFIX), the function
+    returns *all* current positions with a note appended by the caller."""
+    positions = await broker.get_positions()
+    prefix = ENGINE_ORDER_PREFIX.get(engine)
+    if prefix is None:
+        # No prefix → can't filter; return everything, caller annotates.
+        return [_position_to_dict(p) for p in positions]
+    recent_orders = await broker.list_recent_orders(limit=500)
+    engine_symbols = {
+        o.symbol for o in recent_orders
+        if (o.client_order_id or "").startswith(prefix)
+    }
+    return [_position_to_dict(p) for p in positions if p.symbol in engine_symbols]
+
+
+def _position_to_dict(p) -> dict[str, Any]:
+    qty = int(p.qty) if p.qty else 0
+    mv = float(p.market_value) if p.market_value is not None else 0.0
+    cost = float(p.cost_basis) if p.cost_basis is not None else 0.0
+    upl = float(p.unrealized_pl) if p.unrealized_pl is not None else 0.0
+    entry_px = float(p.avg_entry_price) if p.avg_entry_price is not None else 0.0
+    curr_px = mv / qty if qty else 0.0
+    upl_pct = (upl / cost) if cost else 0.0
+    return {
+        "ticker": p.symbol,
+        "qty": qty,
+        "entry_price": entry_px,
+        "current_price": curr_px,
+        "market_value": mv,
+        "cost_basis": cost,
+        "unrealized_pl": upl,
+        "unrealized_pl_pct": upl_pct,
+    }
+
+
+async def fetch_today_recommendations(
+    pool, engine: str, as_of,
+) -> list[dict[str, Any]]:
+    """Engine-specific dispatch: run the engine's setup-detection plug
+    against fresh data and return the qualifying candidates (top decile
+    for portfolio engines, or all-passing for sequential engines).
+
+    Phase 1 implements only Momentum. Other engines return an empty list
+    with a sentinel marker so the renderer can show "not implemented yet"
+    rather than silently empty."""
+    if engine == "momentum":
+        from momentum.models import TOP_DECILE_PCT
+        from momentum.plugs.setup_detection import MomentumSetupDetection
+
+        plug = MomentumSetupDetection()
+        candidates = await plug.scan(pool, as_of)
+        if not candidates:
+            return []
+        n_decile = max(1, int(len(candidates) * TOP_DECILE_PCT))
+        top = candidates[:n_decile]
+        return [
+            {
+                "ticker": c.ticker,
+                "score": float(c.momentum_score),
+                "last_close": float(c.last_close),
+                "tier": int(c.tier),
+            }
+            for c in top
+        ]
+    # Other engines not yet ported to a per-call recommendation view.
+    return []
+
+
+def render_holdings(engine: str, holdings: list[dict[str, Any]]) -> str:
+    if ENGINE_ORDER_PREFIX.get(engine) is None and holdings:
+        # All positions shown — annotate why.
+        prefix_note = (
+            f" (showing all broker positions — {engine} has no engine-specific "
+            f"order prefix in Phase 1; cross-engine attribution is Phase 2.5)"
+        )
+    else:
+        prefix_note = ""
+    if not holdings:
+        return f"\nCurrently holding ({engine}){prefix_note} — no open positions.\n"
+    out = [
+        "",
+        f"Currently holding ({engine}){prefix_note}",
+        "─" * 77,
+        f"  {'ticker':<8} {'qty':>5} {'entry':>9} {'curr':>9} "
+        f"{'mkt_val':>10} {'pnl_$':>9} {'pnl_%':>7}",
+        "  " + "─" * 73,
+    ]
+    total_mv = 0.0
+    total_pnl = 0.0
+    for h in sorted(holdings, key=lambda x: -x["unrealized_pl"])[:60]:
+        out.append(
+            f"  {h['ticker']:<8} {h['qty']:>5} {h['entry_price']:>9.2f} "
+            f"{h['current_price']:>9.2f} {h['market_value']:>10.2f} "
+            f"{h['unrealized_pl']:>+9.2f} {h['unrealized_pl_pct']*100:>+6.2f}%"
+        )
+        total_mv += h["market_value"]
+        total_pnl += h["unrealized_pl"]
+    if len(holdings) > 60:
+        out.append(f"  … ({len(holdings) - 60} more)")
+    out.append("")
+    out.append(
+        f"  totals: {len(holdings)} positions  mkt_val=${total_mv:,.2f}  "
+        f"unrealized_pnl=${total_pnl:+,.2f}"
+    )
+    out.append("")
+    return "\n".join(out)
+
+
+def render_recommendations(
+    engine: str, recs: list[dict[str, Any]], as_of: datetime,
+) -> str:
+    if not recs:
+        if engine == "momentum":
+            return (
+                f"\nToday's recommendations ({engine}) — none (universe empty "
+                f"or no qualifying candidates today).\n"
+            )
+        return (
+            f"\nToday's recommendations ({engine}) — not implemented in Phase 1 "
+            f"for this engine.\n"
+        )
+    out = [
+        "",
+        f"Today's recommendations ({engine}) as of {as_of.date().isoformat()}  "
+        f"— top decile, ranked by 12-1 momentum score",
+        "─" * 77,
+        f"  {'rank':>4}  {'ticker':<8} {'score':>+8} {'last_close':>11}  {'tier':>4}",
+        "  " + "─" * 73,
+    ]
+    for i, r in enumerate(recs[:60], 1):
+        out.append(
+            f"  {i:>4}  {r['ticker']:<8} {r['score']:>+8.3f} "
+            f"{r['last_close']:>11.2f}  T{r['tier']}"
+        )
+    if len(recs) > 60:
+        out.append(f"  … ({len(recs) - 60} more)")
+    out.append("")
+    return "\n".join(out)
+
+
+# ────────────────────────────────────────────────────────────────────────────
 # Main
 # ────────────────────────────────────────────────────────────────────────────
 
@@ -316,11 +494,26 @@ async def amain(args: argparse.Namespace) -> int:
 
         signals = await fetch_recent_signals(pool, args.engine, since)
         trades = await fetch_recent_trades(pool, args.engine, since)
+        # Today's recommendations need the same pool (for setup-detection's
+        # universe + bar queries). Compute before closing.
+        as_of = datetime.now(UTC)
+        recs = await fetch_today_recommendations(pool, args.engine, as_of.date())
     finally:
         await pool.close()
 
-    print(render_header(args.engine, datetime.now(UTC)))
+    # Live broker view — independent of the DB pool.
+    holdings: list[dict[str, Any]] = []
+    if not args.no_broker:
+        try:
+            broker = AlpacaPaperBrokerAdapter()
+            holdings = await fetch_engine_holdings(broker, args.engine)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("tip_sheet.broker.failed", error=str(exc)[:200])
+
+    print(render_header(args.engine, as_of))
     print(render_credibility(args.engine, score, force=args.force))
+    print(render_holdings(args.engine, holdings))
+    print(render_recommendations(args.engine, recs, as_of))
     print(render_signals(signals))
     print(render_trades(trades))
     print(DISCLAIMER)
@@ -351,6 +544,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     p.add_argument("--database-url", default=None)
+    p.add_argument(
+        "--no-broker", action="store_true",
+        help="Skip the live broker call. The 'Currently holding' section "
+             "shows '(skipped)' instead. Useful for offline review.",
+    )
     return p.parse_args(argv)
 
 

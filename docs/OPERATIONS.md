@@ -415,9 +415,13 @@ DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python scripts/generate_tip_sheet.py
 
 **Flags:**
 
-- `--engine <name>` — required. One of `sigma | reversion | vector | momentum`.
-- `--since <ISO date>` — optional. Default: 30 days back.
+- `--engine <name>` — required. One of `sigma | reversion | vector | momentum | s2 | catalyst | sentinel`.
+- `--days <N>` — optional. Lookback window for signals + trades (default 30).
+- `--since <ISO date>` — optional. Overrides `--days` with an explicit lower bound.
 - `--force` — bypass the credibility ≥ 60 gate. **Intended for private review of unproven engines.** Output still prints the disclaimer; do not share.
+- `--no-broker` — skip the live Alpaca query. "Currently holding" section is suppressed. Useful for offline review.
+
+**Sections rendered, in order:** header → credibility rubric → **currently holding** (live broker positions filtered to the engine) → **today's recommendations** (what the engine would trade right now — Momentum-only in Phase 1) → recent signals → recent completed trades → disclaimer.
 
 **Gates (enforced):**
 
