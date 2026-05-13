@@ -187,20 +187,19 @@ async def _load_bars(
 # ────────────────────────────────────────────────────────────────────────────
 
 
-def _month_end_dates_within(dates: pd.DatetimeIndex, start: date, end: date) -> list[date]:
-    """Pick the last trading date of each month within [start, end].
+def _month_end_dates_within(_dates: pd.DatetimeIndex, start: date, end: date) -> list[date]:
+    """Pick the last NYSE trading session of each calendar month in [start, end].
 
-    ``dates`` is the union of all trading days observed across panels;
-    pandas hands them back as ``pd.Timestamp`` even though asyncpg fed in
-    python ``date`` values, so coerce to ``date`` before the range check."""
+    Source of truth is ``tpcore.calendar`` (CLAUDE.md: "Market hours via
+    exchange_calendars (NYSE)"). The ``_dates`` argument is retained for
+    backwards-compat with callers but ignored — we no longer derive sessions
+    from panel data so that the rebalance schedule is independent of which
+    tickers happened to have bars on each day."""
+    from tpcore.calendar import sessions_in_range
+
+    sessions = sessions_in_range(start, end)
     last_for_ym: dict[tuple[int, int], date] = {}
-    for d_raw in dates:
-        # pd.Timestamp subclasses datetime which subclasses date, so an
-        # isinstance(d, date) check is True for Timestamps — must check for
-        # Timestamp specifically before coercing.
-        d = d_raw.date() if isinstance(d_raw, pd.Timestamp) else d_raw
-        if d < start or d > end:
-            continue
+    for d in sessions:
         last_for_ym[(d.year, d.month)] = d
     return [d for _, d in sorted(last_for_ym.items())]
 

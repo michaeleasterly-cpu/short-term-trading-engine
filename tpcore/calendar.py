@@ -108,6 +108,47 @@ def trading_days_between(d1: date, d2: date) -> int:
     return max(0, len(sessions) - 1)
 
 
+def first_session_of_month(year: int, month: int) -> date:
+    """Return the first NYSE trading session in the given calendar month.
+
+    Used by portfolio strategies that rebalance on the first session of each
+    month — call once with ``year, month`` to learn whether ``as_of`` matches.
+    Raises ``ValueError`` if the month has no sessions (defensive — would only
+    happen if XNYS were closed for an entire calendar month, which it isn't)."""
+    cal = _calendar()
+    start = pd.Timestamp(year, month, 1)
+    # End-of-month: day 28 + 4 lands in the next month, then floor to month-end.
+    end = (start + pd.offsets.MonthEnd(0))
+    sessions = cal.sessions_in_range(start, end)
+    if len(sessions) == 0:
+        raise ValueError(f"no XNYS sessions in {year}-{month:02d}")
+    return sessions[0].date()
+
+
+def sessions_in_range(start: date, end: date) -> list[date]:
+    """All NYSE trading sessions in [start, end] inclusive, as python dates."""
+    cal = _calendar()
+    sessions = cal.sessions_in_range(pd.Timestamp(start), pd.Timestamp(end))
+    return [ts.date() for ts in sessions]
+
+
+def first_sessions_of_each_month_in_range(start: date, end: date) -> list[date]:
+    """Return the first trading session of each calendar month touched by
+    [start, end]. Used by backtests that need to know the rebalance dates
+    across a multi-year window without scanning panel data."""
+    cal = _calendar()
+    sessions = cal.sessions_in_range(pd.Timestamp(start), pd.Timestamp(end))
+    out: list[date] = []
+    last_year_month: tuple[int, int] | None = None
+    for ts in sessions:
+        d = ts.date()
+        ym = (d.year, d.month)
+        if ym != last_year_month:
+            out.append(d)
+            last_year_month = ym
+    return out
+
+
 def next_monday_open(dt: datetime) -> datetime:
     """Next Monday's session open (used for weekly risk resets).
 
