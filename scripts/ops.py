@@ -69,7 +69,7 @@ STAGE_TIMEOUT_SEC = 120.0
 # Phase 1 universe expansion (~7,300 tickers in prices_daily, ~5,981 in
 # fundamentals_quarterly), the original 120s budget cuts off these
 # handlers mid-batch and leaves the database in a partial-update state.
-HEAVY_STAGE_TIMEOUT_SEC = 1200.0  # 20 minutes
+HEAVY_STAGE_TIMEOUT_SEC = 3600.0  # 60 minutes (1200s was still tripping on ~7,300 tickers)
 DATA_FRESHNESS_MAX_DAYS = 4  # 2 trading days + weekend buffer
 CORP_ACTIONS_FRESHNESS_MAX_DAYS = 7
 
