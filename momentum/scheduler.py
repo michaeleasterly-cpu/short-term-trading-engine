@@ -49,7 +49,7 @@ import uuid
 from datetime import UTC, datetime
 from datetime import date as date_t
 from decimal import Decimal
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
@@ -78,6 +78,41 @@ if TYPE_CHECKING:  # pragma: no cover
     pass
 
 logger = structlog.get_logger(__name__)
+
+# Every momentum order carries this client_order_id prefix (stamped in
+# ``momentum.plugs.execution_risk``). Used to attribute account positions
+# back to momentum so the rebalance only diffs against its own book —
+# never against sigma/reversion/vector holdings.
+ENGINE_ORDER_PREFIX = "mo_"
+
+
+def _filter_to_engine_holdings(
+    positions: Any,
+    recent_orders: Any,
+    prefix: str,
+) -> dict[str, int]:
+    """Filter broker positions to those originated by this engine.
+
+    A position is "ours" iff at least one recent order on that symbol
+    carries our ``client_order_id`` prefix. Sub-account isolation isn't
+    available at the broker, so this client-side attribution is the
+    contract that keeps engines from stepping on each other (see the
+    2026-05-14 YUMC incident where momentum's rebalance sold a sigma
+    position because the diff saw the whole account as its book).
+
+    Pure function so the rebalance scheduler can be regression-tested
+    without spinning a real broker. Returns ``{symbol: qty}`` for
+    positions with qty > 0.
+    """
+    engine_symbols = {
+        o.symbol for o in recent_orders
+        if (getattr(o, "client_order_id", None) or "").startswith(prefix)
+    }
+    return {
+        p.symbol: int(p.qty)
+        for p in positions
+        if int(p.qty) > 0 and p.symbol in engine_symbols
+    }
 
 
 async def _fetch_peak_equity(pool, *, lookback_days: int) -> float | None:
@@ -209,7 +244,19 @@ class MomentumScheduler:
             account = await broker.get_account()
             equity = account.equity if account.equity > 0 else self._engine_equity
             positions = await broker.get_positions()
-            current_holdings = {p.symbol: int(p.qty) for p in positions if int(p.qty) > 0}
+            # Filter to momentum-owned positions only. Without this filter
+            # the rebalance diffs against the WHOLE account and emits sell
+            # orders for any non-momentum position whose ticker isn't in
+            # today's target list — i.e., it'd liquidate sigma/reversion/
+            # vector's holdings (the YUMC tier1 incident, 2026-05-14).
+            # Attribution: a position is ours iff a recent order on that
+            # symbol carries the ``mo_`` client_order_id prefix.
+            recent_orders = await broker.list_recent_orders(limit=500)
+            current_holdings = _filter_to_engine_holdings(
+                positions=positions,
+                recent_orders=recent_orders,
+                prefix=ENGINE_ORDER_PREFIX,
+            )
 
             # Snapshot equity to platform.application_log + check drawdown
             # circuit breaker. Done BEFORE setup/execution so a tripped
@@ -354,7 +401,7 @@ class MomentumScheduler:
         cancelled = 0
         for o in recent:
             cid = (o.client_order_id or "").lower()
-            if not cid.startswith("mo_"):
+            if not cid.startswith(ENGINE_ORDER_PREFIX):
                 continue
             status_val = getattr(o.status, "value", str(o.status)).lower()
             if status_val not in open_statuses:

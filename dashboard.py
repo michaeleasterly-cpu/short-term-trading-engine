@@ -292,26 +292,88 @@ async def _fetch_last_run_timestamps() -> dict:
     return out
 
 
+_WEEKDAY_NAMES = ["", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+
+def _parse_plist_schedule(plist_path: Path) -> dict | None:
+    """Extract ``Hour``, ``Minute``, ``Weekday`` from a launchd plist's
+    ``StartCalendarInterval`` block. Returns None on parse failure /
+    persistent (no schedule) plists. Persistent agents (KeepAlive=true)
+    are caught by the absence of StartCalendarInterval — caller decides
+    how to render."""
+    try:
+        text = plist_path.read_text()
+    except OSError:
+        return None
+    if "StartCalendarInterval" not in text:
+        return None
+    import re
+
+    block = re.search(
+        r"<key>StartCalendarInterval</key>\s*<dict>(.*?)</dict>",
+        text,
+        re.DOTALL,
+    )
+    if not block:
+        return None
+    inner = block.group(1)
+    out: dict = {}
+    for key in ("Hour", "Minute", "Weekday"):
+        m = re.search(rf"<key>{key}</key>\s*<integer>(-?\d+)</integer>", inner)
+        if m:
+            out[key.lower()] = int(m.group(1))
+    return out
+
+
+def _format_schedule_hint(schedule: dict | None, persistent: bool) -> str:
+    """Render a human hint showing local + UTC fire time.
+
+    Reads the plist verbatim (local-time fields) and converts to UTC
+    using the host's current offset. Always shows both so an operator
+    in Manila can sanity-check 'next 05:30 local = 21:30 UTC' without
+    doing math."""
+    if persistent:
+        return "persistent (KeepAlive)"
+    if not schedule or "hour" not in schedule:
+        return "schedule not parseable"
+    hour = schedule["hour"]
+    minute = schedule.get("minute", 0)
+    weekday = schedule.get("weekday")  # 1=Mon..7=Sun (launchd convention)
+    # Local time the daemon fires (per the plist's StartCalendarInterval).
+    now_local = datetime.now().astimezone()
+    fire_local = now_local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    fire_utc = fire_local.astimezone(UTC)
+    local_str = f"{hour:02d}:{minute:02d} local"
+    utc_str = f"{fire_utc.hour:02d}:{fire_utc.minute:02d} UTC"
+    if weekday:
+        day = _WEEKDAY_NAMES[weekday] if 1 <= weekday <= 7 else f"weekday={weekday}"
+        return f"{day} {local_str} (= {utc_str})"
+    return f"daily {local_str} (= {utc_str})"
+
+
 def _fetch_daemon_state() -> list[dict]:
     """Return [{'name', 'installed', 'kind', 'last_run_at',
     'last_exit', 'last_log_age_sec', 'next_run_hint'}] for each
     platform daemon. Local filesystem + ``launchctl list`` only — no
-    DB. Pure sync because it's used outside the asyncio.gather batch."""
+    DB. Pure sync because it's used outside the asyncio.gather batch.
+
+    ``next_run_hint`` is parsed from the live plist (no hardcoded
+    string) so it stays accurate when the install script changes the
+    schedule (e.g., removing the Weekday filter from post-close)."""
     home = Path.home()
     plist_dir = home / "Library" / "LaunchAgents"
     log_dir = home / "Library" / "Logs" / "short-term-trading-engine"
     specs = [
-        ("trade_monitor", "persistent", "Mon-Sat persistent",
-         "trade-monitor.log"),
-        ("post_close", "scheduled", "Mon-Fri 21:30 UTC",
-         "post-close.log"),
-        ("allocator", "scheduled", "Mon 13:00 UTC",
-         "allocator.log"),
+        ("trade_monitor", "persistent", "trade-monitor.log"),
+        ("post_close", "scheduled", "post-close.log"),
+        ("allocator", "scheduled", "allocator.log"),
     ]
     out: list[dict] = []
-    for name, kind, hint, log_basename in specs:
+    for name, kind, log_basename in specs:
         plist = plist_dir / f"com.michael.trading.{name.replace('_', '-')}.plist"
         installed = plist.exists()
+        schedule = _parse_plist_schedule(plist) if installed else None
+        hint = _format_schedule_hint(schedule, persistent=(kind == "persistent"))
         log_path = log_dir / log_basename
         last_log_age = None
         last_exit = None
