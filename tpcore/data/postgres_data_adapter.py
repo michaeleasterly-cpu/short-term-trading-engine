@@ -115,6 +115,25 @@ class PostgresDataAdapter(DataProviderInterface):
             rows = await conn.fetch(sql)
         return [r["ticker"] for r in rows]
 
+    async def get_universe_by_liquidity_tier(self, max_tier: int = 2) -> list[str]:
+        """Tickers up to and including the given liquidity tier.
+
+        Use this in any engine that pre-fetches per-ticker context
+        (bars, fundamentals, catalysts) — the all-active universe
+        (~7,700 tickers) makes the upfront work O(7700) and times out
+        against Supabase. T1+T2 is ~1,200 tickers and parallels what
+        the credibility backtests scored on.
+        """
+        sql = """
+            SELECT ticker
+            FROM platform.liquidity_tiers
+            WHERE tier <= $1
+            ORDER BY tier ASC, ticker ASC
+        """
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(sql, max_tier)
+        return [r["ticker"] for r in rows]
+
     async def list_active_symbols(self) -> list[str]:
         """``DataProviderInterface`` alias for ``get_universe_symbols``."""
         return await self.get_universe_symbols()

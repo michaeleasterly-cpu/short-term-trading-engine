@@ -308,22 +308,48 @@ async def fetch_engine_holdings(
 ) -> list[dict[str, Any]]:
     """Return the broker's current positions filtered to ``engine``'s orders.
 
-    We can't tag positions with engine_id at Alpaca, so we identify
-    engine-owned symbols by inspecting recent order history: any symbol
-    that has a recent FILLED order whose ``client_order_id`` starts with
-    the engine's prefix counts. For engines without an order prefix
-    (Sigma/Reversion/Vector — see ENGINE_ORDER_PREFIX), the function
-    returns *all* current positions with a note appended by the caller."""
+    Attribution rules (current — until every engine has a stable
+    client_order_id prefix):
+
+    * **Momentum** uses ``mo_`` prefix → filter precisely.
+    * **Sigma / Reversion / Vector** use ``<TICKER>_<TS>[_tier2]`` (no
+      engine identifier). For these we attribute a position to the
+      engine only if a recent BUY order on that symbol matches the
+      tier pattern (``_tier`` suffix or no engine prefix at all). Two
+      engines can't currently own the same symbol because there's no
+      sub-account isolation; this heuristic is safe in practice.
+
+    Previously the function returned *all* positions for any engine
+    without a prefix — that produced phantom holdings in the
+    Sigma/Reversion/Vector dashboard tabs (every momentum buy looked
+    like it belonged to all three). Now we return only positions we
+    can positively attribute."""
     positions = await broker.get_positions()
     prefix = ENGINE_ORDER_PREFIX.get(engine)
-    if prefix is None:
-        # No prefix → can't filter; return everything, caller annotates.
-        return [_position_to_dict(p) for p in positions]
     recent_orders = await broker.list_recent_orders(limit=500)
-    engine_symbols = {
-        o.symbol for o in recent_orders
-        if (o.client_order_id or "").startswith(prefix)
-    }
+    if prefix is not None:
+        engine_symbols = {
+            o.symbol for o in recent_orders
+            if (o.client_order_id or "").startswith(prefix)
+        }
+    else:
+        # No engine prefix — attribute symbols whose BUY orders carry
+        # the tier pattern AND don't carry any momentum prefix. This
+        # is the order-manager convention for Sigma/Reversion/Vector.
+        momentum_prefixes = {p for p in ENGINE_ORDER_PREFIX.values() if p}
+        engine_symbols = set()
+        for o in recent_orders:
+            coid = (o.client_order_id or "")
+            if not coid:
+                continue
+            if any(coid.startswith(p) for p in momentum_prefixes):
+                continue  # belongs to a prefixed engine, not this one
+            if "_tier" not in coid:
+                continue  # not an engine-managed tier1/tier2 order
+            side_val = getattr(o.side, "value", str(o.side)).lower()
+            if side_val != "buy":
+                continue
+            engine_symbols.add(o.symbol)
     return [_position_to_dict(p) for p in positions if p.symbol in engine_symbols]
 
 

@@ -32,10 +32,7 @@ from tpcore.aar.writer import AARWriter
 from tpcore.alpaca import AlpacaPaperBrokerAdapter
 from tpcore.data.postgres_data_adapter import PostgresDataAdapter
 from tpcore.db import build_asyncpg_pool
-from tpcore.fmp import FMPFundamentalsAdapter
-from tpcore.fundamentals.cache import FundamentalsCache
 from tpcore.logging import DBLogHandler
-from tpcore.outage import DataProviderOutage
 from tpcore.parity import LivePaperParityHarness
 from tpcore.risk.governor import RiskGovernor
 from tpcore.risk.persistent_store import PostgresRiskStateStore
@@ -76,15 +73,25 @@ class RunSummary:
 async def _load_bars(
     pool, tickers: tuple[str, ...], lookback_end: date_t
 ) -> dict[str, pd.DataFrame]:
-    """Pull the last LOOKBACK_DAYS sessions for each ticker."""
+    """Pull the last LOOKBACK_DAYS sessions for each ticker.
+
+    Date lower bound: ``lookback_end - 400 calendar days`` ≈ 280 trading
+    sessions, comfortably above LOOKBACK_DAYS=260. Without this bound
+    the query pulls every historical bar for each ticker (30+ years on
+    legacy names) and times out at the Supabase statement limit before
+    Python ever gets to ``df.tail(LOOKBACK_DAYS)``.
+    """
+    from datetime import timedelta
+
+    lookback_start = lookback_end - timedelta(days=400)
     sql = """
         SELECT ticker, date, open, high, low, close, volume
         FROM platform.prices_daily
-        WHERE ticker = ANY($1) AND date <= $2
+        WHERE ticker = ANY($1) AND date BETWEEN $2 AND $3
         ORDER BY ticker, date
     """
     async with pool.acquire() as conn:
-        rows = await conn.fetch(sql, list(tickers), lookback_end)
+        rows = await conn.fetch(sql, list(tickers), lookback_start, lookback_end)
     by_ticker: dict[str, list[dict]] = defaultdict(list)
     for r in rows:
         by_ticker[r["ticker"]].append(
@@ -107,23 +114,64 @@ async def _load_bars(
 async def _load_fundamentals(
     pool, tickers: tuple[str, ...], as_of: date_t
 ) -> dict[str, dict[str, Any] | None]:
-    """Latest cached fundamentals snapshot per ticker, PIT-filtered to ``as_of``."""
-    fmp = None
-    try:
-        fmp = FMPFundamentalsAdapter()
-    except DataProviderOutage:
-        # No FMP_API_KEY — operate on cache only.
-        pass
-    cache = FundamentalsCache(pool, adapter=fmp)
+    """Latest cached fundamentals snapshot per ticker, PIT-filtered to ``as_of``.
+
+    Uses one batched SQL query instead of ``cache.get_quarterly_fundamentals``
+    per ticker (which was 2 queries × N tickers = O(2N) round-trips, ~127s
+    for the T1+T2 universe). The batched read pulls every PIT-eligible row
+    for every requested ticker, then groups in Python: row 0 is "latest",
+    rows 1..N are "history". Tickers with zero rows map to None.
+    """
+    from decimal import Decimal as _Decimal
+
+    sql = """
+        SELECT ticker, filing_date, period_end_date, period_label,
+               net_income, fcf, operating_cash_flow, capex, revenue,
+               total_assets, total_liabilities, current_assets, current_liabilities,
+               receivables, cash_and_equivalents, shares_outstanding
+        FROM platform.fundamentals_quarterly
+        WHERE ticker = ANY($1::text[]) AND filing_date <= $2
+        ORDER BY ticker, filing_date DESC
+    """
+    upper_tickers = [t.upper() for t in tickers]
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(sql, upper_tickers, as_of)
+
+    def _dec(v: Any) -> _Decimal | None:
+        return _Decimal(str(v)) if v is not None else None
+
+    def _row_to_dict(r) -> dict[str, Any]:
+        return {
+            "symbol": r["ticker"],
+            "period": r["period_label"],
+            "period_end_date": r["period_end_date"],
+            "filing_date": r["filing_date"],
+            "net_income": _dec(r["net_income"]),
+            "revenue": _dec(r["revenue"]),
+            "fcf": _dec(r["fcf"]),
+            "operating_cash_flow": _dec(r["operating_cash_flow"]),
+            "capex": _dec(r["capex"]),
+            "total_assets": _dec(r["total_assets"]),
+            "total_liabilities": _dec(r["total_liabilities"]),
+            "current_assets": _dec(r["current_assets"]),
+            "current_liabilities": _dec(r["current_liabilities"]),
+            "receivables": _dec(r["receivables"]),
+            "cash_and_equivalents": _dec(r["cash_and_equivalents"]),
+            "shares_outstanding": _dec(r["shares_outstanding"]),
+        }
+
+    by_ticker: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        by_ticker.setdefault(r["ticker"], []).append(_row_to_dict(r))
     out: dict[str, dict[str, Any] | None] = {}
     for ticker in tickers:
-        try:
-            out[ticker] = await cache.get_quarterly_fundamentals(ticker, as_of_date=as_of)
-        except Exception as exc:  # pragma: no cover - cache miss / no data
-            logger.warning("vector.scheduler.fundamentals_miss", ticker=ticker, error=str(exc))
+        ticker_rows = by_ticker.get(ticker.upper(), [])
+        if not ticker_rows:
             out[ticker] = None
-    if fmp is not None:
-        await fmp.aclose()
+            continue
+        latest = dict(ticker_rows[0])
+        latest["history"] = ticker_rows[1:]
+        out[ticker] = latest
     return out
 
 
@@ -212,11 +260,16 @@ class VectorScheduler:
 
             scan_started = time.monotonic()
             data = PostgresDataAdapter(pool)
-            universe = tuple(await data.get_universe_symbols())
+            # Vector pre-fetches bars + fundamentals upfront, so the
+            # universe must be small enough to fit under Supabase's
+            # statement timeout. The credibility backtests scored on
+            # T1+T2 (~1,200 tickers); use the same universe live.
+            universe = tuple(await data.get_universe_by_liquidity_tier(max_tier=2))
             logger.info(
                 "vector.scheduler.universe_loaded",
                 as_of=str(as_of),
                 universe_size=len(universe),
+                source="liquidity_tiers<=2",
             )
             tickers = universe + (SPY_SYMBOL,)
             bars = await _load_bars(pool, tickers, as_of)

@@ -229,23 +229,59 @@ async def test_fetch_holdings_filters_to_engine_orders():
 
 
 @pytest.mark.asyncio
-async def test_fetch_holdings_unprefixed_engine_returns_all_positions():
-    """Sigma/Reversion/Vector have no engine prefix (Phase 2.5 deferred).
-    The fetcher returns ALL positions for those engines and the renderer
-    annotates the limitation. This test is the contract that holds the
-    behavior steady until the Phase 2.5 prefix work lands."""
+async def test_fetch_holdings_unprefixed_engine_attributes_via_tier_pattern():
+    """Sigma/Reversion/Vector have no engine prefix — we attribute by the
+    ``<TICKER>_<TS>[_tier]`` BUY-order pattern instead. A position with
+    no matching tier-pattern BUY (e.g., a momentum-prefixed buy) does
+    NOT count as sigma-owned, even though sigma is "prefix-less".
+
+    Previously the function returned ALL positions when prefix=None,
+    which made the dashboard show momentum's entire portfolio under the
+    sigma/reversion/vector tabs."""
+    broker = MagicMock()
+    broker.get_positions = AsyncMock(return_value=[
+        MagicMock(symbol="AAPL", qty=10, avg_entry_price=Decimal("180"),
+                  market_value=Decimal("1855"), cost_basis=Decimal("1800"),
+                  unrealized_pl=Decimal("55")),
+        MagicMock(symbol="YUMC", qty=15, avg_entry_price=Decimal("47.32"),
+                  market_value=Decimal("710"), cost_basis=Decimal("710"),
+                  unrealized_pl=Decimal("0")),
+    ])
+    # Recent orders: AAPL via momentum (mo_), YUMC via sigma's tier pattern.
+    aapl_buy = MagicMock()
+    aapl_buy.symbol = "AAPL"
+    aapl_buy.client_order_id = "mo_AAPL_1700000000"
+    aapl_buy.side = MagicMock(value="buy")
+    yumc_buy = MagicMock()
+    yumc_buy.symbol = "YUMC"
+    yumc_buy.client_order_id = "YUMC_1778582356_tier2"
+    yumc_buy.side = MagicMock(value="buy")
+    broker.list_recent_orders = AsyncMock(return_value=[aapl_buy, yumc_buy])
+
+    holdings = await fetch_engine_holdings(broker, "sigma")
+    tickers = {h["ticker"] for h in holdings}
+    assert tickers == {"YUMC"}, (
+        f"sigma should only own YUMC (the _tier2 buy), not AAPL (mo_ prefix). "
+        f"got: {tickers}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_fetch_holdings_unprefixed_engine_returns_empty_when_no_tier_orders():
+    """If a prefix-less engine has no matching tier-pattern orders, the
+    holdings view is empty — NOT a copy of every momentum position. This
+    is the bug the operator caught on 2026-05-14."""
     broker = MagicMock()
     broker.get_positions = AsyncMock(return_value=[
         MagicMock(symbol="AAPL", qty=10, avg_entry_price=Decimal("180"),
                   market_value=Decimal("1855"), cost_basis=Decimal("1800"),
                   unrealized_pl=Decimal("55")),
     ])
-    # list_recent_orders should NOT be called for unprefixed engines.
-    broker.list_recent_orders = AsyncMock(return_value=[])
+    only_mo = MagicMock()
+    only_mo.symbol = "AAPL"
+    only_mo.client_order_id = "mo_AAPL_1"
+    only_mo.side = MagicMock(value="buy")
+    broker.list_recent_orders = AsyncMock(return_value=[only_mo])
 
-    holdings = await fetch_engine_holdings(broker, "sigma")
-    assert len(holdings) == 1
-    assert holdings[0]["ticker"] == "AAPL"
-    # Verify the broker's list_recent_orders was never called — the
-    # unprefixed path short-circuits to 'return all positions'.
-    broker.list_recent_orders.assert_not_called()
+    holdings = await fetch_engine_holdings(broker, "reversion")
+    assert holdings == []
