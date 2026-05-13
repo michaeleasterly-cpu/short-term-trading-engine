@@ -33,8 +33,6 @@ from typing import Any
 
 import structlog
 
-from decimal import Decimal
-
 from tpcore.aar.models import AfterActionReport
 from tpcore.alpaca import AlpacaPaperBrokerAdapter
 from tpcore.backtest.credibility import (
@@ -44,7 +42,6 @@ from tpcore.backtest.credibility import (
 )
 from tpcore.backtest.statistical_validation import render_rubric
 from tpcore.db import build_asyncpg_pool
-
 
 # Engine → client_order_id prefix used by that engine's order manager.
 # Used to filter the broker's order history to a single engine's positions.
@@ -486,8 +483,8 @@ async def amain(args: argparse.Namespace) -> int:
         if score is None and not args.force:
             print(render_header(args.engine, datetime.now(UTC)))
             print(
-                f"\n  Output suppressed — no credibility rubric on record. "
-                f"Use --force to view anyway for private review.\n"
+                "\n  Output suppressed — no credibility rubric on record. "
+                "Use --force to view anyway for private review.\n"
             )
             print(DISCLAIMER)
             return 1

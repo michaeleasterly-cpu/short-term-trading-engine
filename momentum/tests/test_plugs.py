@@ -1,7 +1,7 @@
 """Unit tests for the Momentum plugs (no DB / no broker)."""
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import date
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock
 
@@ -16,7 +16,6 @@ from momentum.plugs.capital_gate import MomentumCapitalGate, MomentumGraduationS
 from momentum.plugs.execution_risk import MomentumExecutionRisk
 from momentum.plugs.setup_detection import MomentumSetupDetection
 from tpcore.risk.governor import CheckResult, RiskDecision
-
 
 # ─── SetupDetection — score math ────────────────────────────────────────────
 

@@ -21,7 +21,6 @@ import asyncio
 import json
 import os
 import subprocess
-import sys
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -32,7 +31,6 @@ import streamlit as st
 # same shape. Dashboard adds zero new business logic.
 from dashboard_components.charts import render_ticker_chart
 from scripts.generate_tip_sheet import (
-    ENGINE_DESCRIPTIONS,
     fetch_credibility,
     fetch_engine_holdings,
     fetch_recent_signals,
@@ -601,7 +599,7 @@ def render_credibility_scorecards():
         st.error(f"Could not fetch credibility scores: {exc}")
         return
     cols = st.columns(len(SCORECARD_ENGINES))
-    for col, engine in zip(cols, SCORECARD_ENGINES):
+    for col, engine in zip(cols, SCORECARD_ENGINES, strict=False):
         score = scores.get(engine)
         if score is None:
             col.markdown(
@@ -756,7 +754,7 @@ def render_recent_orders():
     status_order = ["filled", "partially_filled", "new", "accepted", "pending_new",
                     "canceled", "rejected", "expired"]
     ordered_keys = [s for s in status_order if s in statuses] + sorted(set(statuses) - set(status_order))
-    for col, status in zip(cols, ordered_keys):
+    for col, status in zip(cols, ordered_keys, strict=False):
         n = statuses[status]
         if status == "filled":
             color = "#0a8a3a"

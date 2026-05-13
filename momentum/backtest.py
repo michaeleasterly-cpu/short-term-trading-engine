@@ -44,15 +44,19 @@ import math
 import os
 import sys
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 import structlog
 
 from tpcore.db import build_asyncpg_pool
+
+if TYPE_CHECKING:  # pragma: no cover
+    from tpcore.backtest.search import BacktestRunResult
 
 logger = structlog.get_logger(__name__)
 
@@ -233,8 +237,9 @@ def _compute_one_rebalance(
             continue
         # Tradability filter — keep live and backtest agreed on the universe.
         # See momentum/models.py for the rules.
-        from momentum.models import is_tradeable_common_stock
         from decimal import Decimal as _Decimal
+
+        from momentum.models import is_tradeable_common_stock
 
         if not is_tradeable_common_stock(ticker, _Decimal(str(p_now))):
             continue
@@ -449,7 +454,7 @@ def run_momentum_with_context(
     *,
     overrides: dict | None = None,
     trade_log_path: Path | None = None,
-) -> "BacktestRunResult":
+) -> BacktestRunResult:
     """Run momentum against a pre-loaded :class:`MomentumWindowContext`."""
     from tpcore.backtest.search import (
         BacktestRunResult,
@@ -528,7 +533,7 @@ async def run_for_search(
     universe: tuple[str, ...] | None = None,
     overrides: dict | None = None,
     trade_log_path: Path | None = None,
-) -> "BacktestRunResult":
+) -> BacktestRunResult:
     """Thin wrapper: load context, run once. Single-call convenience."""
     ctx = await load_momentum_window_context(
         db_url=db_url, start=start, end=end, universe=universe,

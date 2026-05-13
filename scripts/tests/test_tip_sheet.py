@@ -16,9 +16,9 @@ Test selection driven by the 2026-05-13 expert design review:
 """
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from decimal import Decimal
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -35,7 +35,6 @@ from scripts.generate_tip_sheet import (
     render_trades,
 )
 from tpcore.backtest.credibility import CredibilityScore
-
 
 # ─── Render: credibility ────────────────────────────────────────────────────
 

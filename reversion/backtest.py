@@ -55,6 +55,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
@@ -91,6 +92,9 @@ from tpcore.fundamentals.earnings_quality import (
     EarningsQualityResult,
     check_earnings_quality,
 )
+
+if TYPE_CHECKING:  # pragma: no cover
+    from tpcore.backtest.search import BacktestRunResult
 
 logger = structlog.get_logger(__name__)
 
@@ -996,7 +1000,7 @@ def run_reversion_with_context(
     *,
     overrides: dict | None = None,
     trade_log_path: Path | None = None,
-) -> "BacktestRunResult":
+) -> BacktestRunResult:
     """Run Reversion's combined-filter variant against a pre-loaded context."""
     from tpcore.backtest.search import (
         BacktestRunResult,
@@ -1087,7 +1091,7 @@ async def run_for_search(
     universe: tuple[str, ...] | None = None,
     overrides: dict | None = None,
     trade_log_path: Path | None = None,
-) -> "BacktestRunResult":
+) -> BacktestRunResult:
     """Thin wrapper: load context, run once. Single-call convenience.
 
     The parameter-search orchestrator should use

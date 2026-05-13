@@ -54,6 +54,7 @@ from collections import defaultdict
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, date, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
@@ -70,6 +71,9 @@ from sigma.plugs.setup_detection import (
     compute_chop,
 )
 from tpcore.db import build_asyncpg_pool
+
+if TYPE_CHECKING:  # pragma: no cover
+    from tpcore.backtest.search import BacktestRunResult
 
 logger = structlog.get_logger(__name__)
 
@@ -802,7 +806,7 @@ def run_sigma_with_context(
     *,
     overrides: dict | None = None,
     trade_log_path: Path | None = None,
-) -> "BacktestRunResult":
+) -> BacktestRunResult:
     """Run the per-stock-CHOP variant against a pre-loaded :class:`SigmaWindowContext`.
 
     CPU-only; safe to call repeatedly with different ``overrides`` against the
@@ -895,7 +899,7 @@ async def run_for_search(
     universe: tuple[str, ...] | None = None,
     overrides: dict | None = None,
     trade_log_path: Path | None = None,
-) -> "BacktestRunResult":
+) -> BacktestRunResult:
     """Thin wrapper: load context, run once. Preserved for ad-hoc / single-run callers.
 
     The parameter-search orchestrator should use

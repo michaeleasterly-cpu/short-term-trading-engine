@@ -74,7 +74,7 @@ class BacktestRunResult:
     sensitivity_score: float | None
     ruin_probability: float
     trade_log: list[SearchTrade] = field(default_factory=list)
-    credibility_rubric: "CredibilityScore | None" = None  # full Pydantic object
+    credibility_rubric: CredibilityScore | None = None  # full Pydantic object
 
     def to_json_dict(self) -> dict[str, Any]:
         return {

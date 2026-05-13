@@ -45,16 +45,15 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
-import sys
 import uuid
-from datetime import UTC, date as date_t, datetime
+from datetime import UTC, datetime
+from datetime import date as date_t
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
 import structlog
 
 from momentum.models import RebalanceDecision
-from momentum.plugs.aar_logging import MomentumAARLogging
 from momentum.plugs.capital_gate import (
     DRAWDOWN_BREAKER_LOOKBACK_DAYS,
     MomentumCapitalGate,

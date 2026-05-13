@@ -31,6 +31,12 @@ from momentum.models import (
     GRAD_MIN_REBALANCES,
     GRAD_MIN_SHARPE,
 )
+from tpcore.backtest.credibility import (
+    CredibilityScoreInsufficientError,
+    graduation_ready,
+)
+from tpcore.interfaces.engine_plug import BaseEnginePlug
+from tpcore.quality.validation.capital_gate import assert_passed
 
 # Drawdown circuit breaker — pause new rebalances when portfolio is more
 # than this much below its rolling-window peak. Lookback window is the
@@ -38,12 +44,6 @@ from momentum.models import (
 # the prior peak even if the engine has skipped a month).
 DRAWDOWN_BREAKER_THRESHOLD = Decimal("0.10")  # 10% off peak
 DRAWDOWN_BREAKER_LOOKBACK_DAYS = 60
-from tpcore.backtest.credibility import (
-    CredibilityScoreInsufficientError,
-    graduation_ready,
-)
-from tpcore.interfaces.engine_plug import BaseEnginePlug
-from tpcore.quality.validation.capital_gate import assert_passed
 
 if TYPE_CHECKING:  # pragma: no cover
     import asyncpg

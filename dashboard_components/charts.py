@@ -105,7 +105,7 @@ def render_ticker_chart(
     # Active entries — currently-held positions, no exit yet. Use arrow
     # annotations below the entry bar so they're visually distinct from
     # closed trades' linked markers.
-    for i, e in enumerate(active_entries):
+    for _i, e in enumerate(active_entries):
         d = e["entry_date"]
         time_str = d.isoformat() if hasattr(d, "isoformat") else str(d)
         try:

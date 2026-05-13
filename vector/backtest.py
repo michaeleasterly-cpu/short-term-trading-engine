@@ -47,12 +47,16 @@ from collections import defaultdict
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 import structlog
 
 from tpcore.db import build_asyncpg_pool
+
+if TYPE_CHECKING:  # pragma: no cover
+    from tpcore.backtest.search import BacktestRunResult
 
 logger = structlog.get_logger(__name__)
 
@@ -869,7 +873,7 @@ def run_vector_with_context(
     *,
     overrides: dict | None = None,
     trade_log_path: Path | None = None,
-) -> "BacktestRunResult":
+) -> BacktestRunResult:
     """Run Vector against a pre-loaded :class:`VectorWindowContext`."""
     from tpcore.backtest.search import (
         BacktestRunResult,
@@ -963,7 +967,7 @@ async def run_for_search(
     universe: tuple[str, ...] | None = None,
     overrides: dict | None = None,
     trade_log_path: Path | None = None,
-) -> "BacktestRunResult":
+) -> BacktestRunResult:
     """Thin wrapper: load context, run once. Single-call convenience.
 
     The orchestrator should use :func:`load_vector_window_context` +
