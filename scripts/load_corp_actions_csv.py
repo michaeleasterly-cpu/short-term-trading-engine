@@ -47,7 +47,8 @@ async def amain(args: argparse.Namespace) -> int:
 
     rows: list[tuple] = []
     parsed = rejected = 0
-    with csv_path.open("r", encoding="utf-8") as fh:
+    from _csv_compress import open_csv_text
+    with open_csv_text(csv_path)() as fh:
         for r in csv.DictReader(fh):
             parsed += 1
             try:
@@ -83,6 +84,9 @@ async def amain(args: argparse.Namespace) -> int:
                 written += len(chunk)
                 logger.info("upserted %d / %d", written, len(rows))
         logger.info("done; csv=%s rows_upserted=%d", csv_path.name, written)
+        if args.compress and csv_path.suffix != ".gz":
+            from _csv_compress import gzip_in_place
+            gzip_in_place(csv_path)
         return 0
     finally:
         await pool.close()
@@ -91,7 +95,10 @@ async def amain(args: argparse.Namespace) -> int:
 def _newest_csv() -> Path | None:
     if not BACKFILL_DIR.exists():
         return None
-    candidates = sorted(BACKFILL_DIR.glob("corp_actions_*.csv"))
+    candidates = sorted(
+        list(BACKFILL_DIR.glob("corp_actions_*.csv"))
+        + list(BACKFILL_DIR.glob("corp_actions_*.csv.gz"))
+    )
     return candidates[-1] if candidates else None
 
 
@@ -99,6 +106,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("csv", nargs="?", help="path to CSV; default = newest")
     p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--no-compress", dest="compress", action="store_false", default=True,
+                   help="skip gzip-after-success (default = compress)")
     return p.parse_args(argv)
 
 
