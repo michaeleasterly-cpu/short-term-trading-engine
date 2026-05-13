@@ -55,7 +55,10 @@ import structlog
 
 from momentum.models import RebalanceDecision
 from momentum.plugs.aar_logging import MomentumAARLogging
-from momentum.plugs.capital_gate import MomentumCapitalGate
+from momentum.plugs.capital_gate import (
+    DRAWDOWN_BREAKER_LOOKBACK_DAYS,
+    MomentumCapitalGate,
+)
 from momentum.plugs.execution_risk import MomentumExecutionRisk
 from momentum.plugs.lifecycle_analysis import MomentumLifecycleAnalysis
 from momentum.plugs.setup_detection import MomentumSetupDetection
@@ -76,6 +79,40 @@ if TYPE_CHECKING:  # pragma: no cover
     pass
 
 logger = structlog.get_logger(__name__)
+
+
+async def _fetch_peak_equity(pool, *, lookback_days: int) -> float | None:
+    """Read the highest EQUITY_SNAPSHOT for momentum in the lookback window.
+
+    Returns None when no snapshots are on record (first run / fresh DB) —
+    callers should treat that as 'no peak yet, no breaker'."""
+    sql = """
+        SELECT data
+        FROM platform.application_log
+        WHERE engine = 'momentum'
+          AND event_type = 'EQUITY_SNAPSHOT'
+          AND recorded_at >= NOW() - ($1::int * INTERVAL '1 day')
+    """
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(sql, lookback_days)
+    peak: float | None = None
+    for r in rows:
+        data = r["data"]
+        if isinstance(data, str):
+            import json as _json
+            try:
+                data = _json.loads(data)
+            except Exception:  # noqa: BLE001
+                continue
+        if not isinstance(data, dict):
+            continue
+        val = data.get("equity")
+        if val is None:
+            continue
+        v = float(val)
+        if peak is None or v > peak:
+            peak = v
+    return peak
 
 
 class RunSummary:
@@ -174,6 +211,26 @@ class MomentumScheduler:
             equity = account.equity if account.equity > 0 else self._engine_equity
             positions = await broker.get_positions()
             current_holdings = {p.symbol: int(p.qty) for p in positions if int(p.qty) > 0}
+
+            # Snapshot equity to platform.application_log + check drawdown
+            # circuit breaker. Done BEFORE setup/execution so a tripped
+            # breaker short-circuits the whole rebalance cleanly.
+            await db_log.log(
+                "EQUITY_SNAPSHOT",
+                f"equity snapshot ${equity}",
+                severity="INFO",
+                data={"equity": float(equity), "n_positions": len(positions)},
+            )
+            peak_equity = await _fetch_peak_equity(pool, lookback_days=DRAWDOWN_BREAKER_LOOKBACK_DAYS)
+            if not MomentumCapitalGate.check_drawdown(equity, peak_equity):
+                logger.warning(
+                    "momentum.scheduler.drawdown_breaker",
+                    current_equity=str(equity), peak_equity=str(peak_equity),
+                )
+                return RunSummary(
+                    as_of=as_of, is_rebalance_day=True,
+                    decision=None, submitted_order_ids=[], dry_run=not self._submit,
+                )
 
             # Plug 3 — build rebalance decision.
             execution = MomentumExecutionRisk(governor=governor)

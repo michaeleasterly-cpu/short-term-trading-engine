@@ -31,6 +31,13 @@ from momentum.models import (
     GRAD_MIN_REBALANCES,
     GRAD_MIN_SHARPE,
 )
+
+# Drawdown circuit breaker — pause new rebalances when portfolio is more
+# than this much below its rolling-window peak. Lookback window is the
+# last 60 calendar days (longer than monthly rebalance cadence; captures
+# the prior peak even if the engine has skipped a month).
+DRAWDOWN_BREAKER_THRESHOLD = Decimal("0.10")  # 10% off peak
+DRAWDOWN_BREAKER_LOOKBACK_DAYS = 60
 from tpcore.backtest.credibility import (
     CredibilityScoreInsufficientError,
     graduation_ready,
@@ -86,6 +93,36 @@ class MomentumCapitalGate(BaseEnginePlug):
                 "momentum.gate.reject_oversize",
                 buy_notional=str(total_buy_notional_usd),
                 equity=str(self._engine_equity),
+            )
+            return False
+        return True
+
+    @staticmethod
+    def check_drawdown(
+        current_equity: Decimal | float | None,
+        peak_equity: Decimal | float | None,
+        threshold: Decimal = DRAWDOWN_BREAKER_THRESHOLD,
+    ) -> bool:
+        """Return ``True`` if rebalancing is allowed (no breaker trip).
+
+        The breaker trips when ``(peak - current) / peak ≥ threshold`` — i.e.,
+        portfolio is down by ``threshold`` or more from its rolling peak.
+        Returns ``True`` (allow) when either input is missing or zero —
+        first run / no prior equity history is not a reason to halt.
+        Pure function so the logic is unit-testable without a DB."""
+        if current_equity is None or peak_equity is None:
+            return True
+        c = Decimal(str(current_equity))
+        p = Decimal(str(peak_equity))
+        if p <= 0 or c <= 0:
+            return True
+        drawdown = (p - c) / p
+        if drawdown >= threshold:
+            logger.warning(
+                "momentum.gate.drawdown_breaker_tripped",
+                current_equity=str(c), peak_equity=str(p),
+                drawdown_pct=f"{float(drawdown)*100:.2f}",
+                threshold_pct=f"{float(threshold)*100:.2f}",
             )
             return False
         return True

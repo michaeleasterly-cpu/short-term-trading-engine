@@ -423,6 +423,14 @@ DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python scripts/generate_tip_sheet.py
 
 **Sections rendered, in order:** header → credibility rubric → **currently holding** (live broker positions filtered to the engine) → **today's recommendations** (what the engine would trade right now — Momentum-only in Phase 1) → recent signals → recent completed trades → disclaimer.
 
+**Momentum smoke test** — single command that exercises every Phase 2 / Phase 2.5 component without submitting real orders:
+
+```bash
+scripts/run_momentum_smoke.sh
+```
+
+Three stages: (1) momentum plug unit tests, (2) scheduler `--dry-run --force-rebalance` against the live DB + paper broker, (3) tip-sheet render. Any failure aborts with non-zero exit. Designed as the canonical 'did the last commit break anything?' gate.
+
 **Gates (enforced):**
 
 - Credibility ≥ 60 required by default.

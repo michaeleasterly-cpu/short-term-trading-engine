@@ -132,6 +132,19 @@ A research tool — `scripts/generate_tip_sheet.py` — that renders, per engine
 
 ---
 
+## Momentum Phase 2.5 — sector concentration cap (deferred)
+
+**Status:** deferred — not implemented in the 2026-05-13 Phase 2.5 batch.
+
+**Why deferred:** A sector cap requires a per-ticker sector classification source that the platform doesn't yet have. The two viable options both involve new data infrastructure:
+
+1. **FMP `/api/v3/profile/{symbol}`** — exposes `sector` (Technology, Financials, Consumer Cyclical, etc.) and `industry`. ~1,281 calls to backfill T1+T2; refresh quarterly. Needs a new `platform.ticker_classifications` table + an ingestion handler under `tpcore/ingestion/handlers/`. Estimated effort: ~1 day.
+2. **SIC code → sector mapping** — hand-curated. Brittle, doesn't track FMP's classification, but no ongoing data dependency. Estimated effort: ~half day for the mapping + lookup logic.
+
+**What the cap would do once built:** at `MomentumExecutionRisk.build_decision` time, after the top-decile cut, enforce a max-sector-weight (e.g., 30%). If too many top-decile names are in the same sector (typical during regime concentrations — e.g., AI bubble pulled tech to >40% of momentum's top decile in 2024), the excess names get dropped to the next-best non-overrepresented candidate.
+
+**When to build:** after sufficient paper-trading data exists to confirm sector concentration is materially hurting risk-adjusted returns. The 54-name portfolio is well-diversified by construction; the cap is insurance against a regime where it stops being so.
+
 ## Audit findings (reusable components)
 
 | Component | Source | Reusable as |

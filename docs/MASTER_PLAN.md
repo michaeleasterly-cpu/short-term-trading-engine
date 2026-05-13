@@ -320,13 +320,17 @@ The infrastructure is correct; the strategy needs more evidence before the gate 
 - **Paper-trading kickoff scripted**: `scripts/run_momentum_kickoff.sh` does the one-shot force-rebalance from the validated T1+T2 universe. Verified end-to-end against the live DB on 2026-05-13: produced 55 orders (1 close + 54 opens, ~$985/position on a $99,989 paper account).
 - **Looser graduation thresholds than Sigma/Reversion/Vector**: 6 rebalances (≈6 months), Sharpe ≥ 1.0, PF ≥ 1.5. Monthly cadence accrues fewer events per unit time.
 
-**Phase 2.5 deferred (post-kickoff):**
-- DBLogHandler wiring to `platform.application_log` (scheduler currently logs to structlog console only)
-- Drawdown circuit breaker (pause new entries when portfolio > 10% off rolling peak)
-- Sector concentration cap (currently no sector taxonomy in scope)
-- Common-stock-only filter (smoke turned up warrants like `XBPEW` inside the T1+T2 universe — illiquid by structure even at tight spread)
-- Min-price floor ($1) to keep penny stocks out of the decile
-- Trade-monitor integration (not strictly required — Momentum doesn't use per-name stops, so reactive monitoring isn't on the critical path)
+**Phase 2.5 status (2026-05-13):**
+
+| # | Item | Status |
+|---|---|---|
+| 1 | Common-stock-only filter + $5 min-price floor | **✓ Shipped** (commit bf0c5d2) — applied in both `setup_detection.scan` and `backtest._compute_one_rebalance` so live and backtest agree |
+| 2 | DBLogHandler wiring → SIGNAL + ORDER_SUBMITTED + EQUITY_SNAPSHOT rows in `application_log` | **✓ Shipped** (commit fa4dcbc) |
+| 3 | Drawdown circuit breaker — pause rebalance when portfolio > 10% off 60-day rolling peak | **✓ Shipped** — `MomentumCapitalGate.check_drawdown`, queried from `application_log` EQUITY_SNAPSHOTs |
+| 4 | Sector concentration cap | **Deferred** — needs a `platform.ticker_classifications` table + ingestion handler; design note in `docs/superpowers/specs/2026-05-13-tip-sheet-plan.md` |
+| — | Trade-monitor integration | **Not required** — Momentum doesn't use per-name stops, so reactive monitoring isn't on the critical path |
+
+End-to-end smoke (`scripts/run_momentum_smoke.sh`): plug unit tests → scheduler dry-run → tip-sheet render. Used as the canonical 'did anything break?' gate before kicking off real rebalances.
 
 ### 4.5 S2 — Short Squeeze Engine (Fifth Build, Satellite)
 

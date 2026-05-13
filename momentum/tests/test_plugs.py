@@ -201,3 +201,63 @@ def test_capital_gate_healthcheck_includes_thresholds():
     assert hc["ok"] is True
     assert hc["plug"] == "capital_gate"
     assert hc["details"]["grad_min_rebalances"] == 6
+
+
+# ─── Drawdown circuit breaker (Phase 2.5 #3) ─────────────────────────────────
+
+
+def test_drawdown_breaker_allows_at_peak():
+    assert MomentumCapitalGate.check_drawdown(
+        current_equity=Decimal("10000"), peak_equity=Decimal("10000"),
+    ) is True
+
+
+def test_drawdown_breaker_allows_within_threshold():
+    # 5% below peak → no breaker at default 10% threshold.
+    assert MomentumCapitalGate.check_drawdown(
+        current_equity=Decimal("9500"), peak_equity=Decimal("10000"),
+    ) is True
+
+
+def test_drawdown_breaker_trips_at_threshold():
+    # Exactly 10% below peak → breaker trips.
+    assert MomentumCapitalGate.check_drawdown(
+        current_equity=Decimal("9000"), peak_equity=Decimal("10000"),
+    ) is False
+
+
+def test_drawdown_breaker_trips_below_threshold():
+    # 15% below peak → breaker trips.
+    assert MomentumCapitalGate.check_drawdown(
+        current_equity=Decimal("8500"), peak_equity=Decimal("10000"),
+    ) is False
+
+
+def test_drawdown_breaker_allows_when_peak_unknown():
+    # First run, no peak history yet → allow.
+    assert MomentumCapitalGate.check_drawdown(
+        current_equity=Decimal("10000"), peak_equity=None,
+    ) is True
+    assert MomentumCapitalGate.check_drawdown(
+        current_equity=None, peak_equity=Decimal("10000"),
+    ) is True
+
+
+def test_drawdown_breaker_allows_with_zero_peak():
+    # Degenerate input — don't crash, don't trip.
+    assert MomentumCapitalGate.check_drawdown(
+        current_equity=Decimal("100"), peak_equity=Decimal("0"),
+    ) is True
+
+
+def test_drawdown_breaker_respects_custom_threshold():
+    # 6% below peak, threshold raised to 5% → trips.
+    assert MomentumCapitalGate.check_drawdown(
+        current_equity=Decimal("9400"), peak_equity=Decimal("10000"),
+        threshold=Decimal("0.05"),
+    ) is False
+    # Same drawdown, threshold relaxed to 15% → allows.
+    assert MomentumCapitalGate.check_drawdown(
+        current_equity=Decimal("9400"), peak_equity=Decimal("10000"),
+        threshold=Decimal("0.15"),
+    ) is True
