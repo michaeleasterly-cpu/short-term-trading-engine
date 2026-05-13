@@ -65,6 +65,11 @@ if str(REPO_ROOT) not in sys.path:
 
 ENGINE_NAME = "ops"
 STAGE_TIMEOUT_SEC = 120.0
+# Heavy ingestion stages need longer than the 120s default. Post the
+# Phase 1 universe expansion (~7,300 tickers in prices_daily, ~5,981 in
+# fundamentals_quarterly), the original 120s budget cuts off these
+# handlers mid-batch and leaves the database in a partial-update state.
+HEAVY_STAGE_TIMEOUT_SEC = 1200.0  # 20 minutes
 DATA_FRESHNESS_MAX_DAYS = 4  # 2 trading days + weekend buffer
 CORP_ACTIONS_FRESHNESS_MAX_DAYS = 7
 
@@ -473,6 +478,7 @@ async def cmd_update(
             log=log,
             db_log=db_log,
             dry_run=dry_run,
+            timeout=HEAVY_STAGE_TIMEOUT_SEC,
         )
     )
     summary.stages.append(
@@ -482,6 +488,7 @@ async def cmd_update(
             log=log,
             db_log=db_log,
             dry_run=dry_run,
+            timeout=HEAVY_STAGE_TIMEOUT_SEC,
         )
     )
     summary.stages.append(
@@ -491,6 +498,7 @@ async def cmd_update(
             log=log,
             db_log=db_log,
             dry_run=dry_run,
+            timeout=HEAVY_STAGE_TIMEOUT_SEC,
         )
     )
     summary.stages.append(
