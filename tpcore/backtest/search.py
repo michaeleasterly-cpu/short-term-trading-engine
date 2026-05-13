@@ -52,7 +52,13 @@ class SearchTrade:
 
 @dataclass
 class BacktestRunResult:
-    """Single-parameter-set backtest outcome, in JSON-serialisable shape."""
+    """Single-parameter-set backtest outcome, in JSON-serialisable shape.
+
+    The ``credibility_rubric`` field carries the full Pydantic
+    :class:`~tpcore.backtest.credibility.CredibilityScore` (10 boolean
+    rubric flags + integer score) for callers that need to persist or
+    render the breakdown. ``credibility_score`` is the same number as an
+    int for terse JSON output."""
 
     engine: str
     parameters: dict[str, Any]
@@ -68,6 +74,7 @@ class BacktestRunResult:
     sensitivity_score: float | None
     ruin_probability: float
     trade_log: list[SearchTrade] = field(default_factory=list)
+    credibility_rubric: "CredibilityScore | None" = None  # full Pydantic object
 
     def to_json_dict(self) -> dict[str, Any]:
         return {
@@ -221,4 +228,5 @@ def compute_search_metrics(
         sensitivity_score=_mean_sensitivity(report),
         ruin_probability=float(report.mc_ruin_probability),
         trade_log=search_trades,
+        credibility_rubric=rubric,
     )

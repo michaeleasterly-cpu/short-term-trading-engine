@@ -667,6 +667,28 @@ async def amain(args: argparse.Namespace) -> int:
     held_period_returns = period_returns_from_trades(held_trades)
     dsr = compute_dsr_for_verdict(held_period_returns, n_trials=args.trials)
 
+    # Persist the winner's CredibilityScore to platform.data_quality_log so
+    # downstream tools (tip sheet, capital gate) can read it. Without this,
+    # the rubric breakdown is recomputed on every search but never stored.
+    if final_result.credibility_rubric is not None:
+        import asyncpg
+
+        from tpcore.backtest.statistical_validation import write_credibility_score
+
+        persist_pool = await asyncpg.create_pool(db_url, min_size=1, max_size=1)
+        try:
+            wrote = await write_credibility_score(
+                persist_pool,
+                engine_name=args.engine,
+                score=final_result.credibility_rubric,
+            )
+            print(
+                f"  → persisted credibility rubric to platform.data_quality_log "
+                f"(source=backtest_credibility.{args.engine}, wrote={wrote})\n"
+            )
+        finally:
+            await persist_pool.close()
+
     print(f"  Trade count        : {held_metrics.n_trades}")
     print(f"  Sharpe (held-back) : {held_metrics.sharpe:+.3f}")
     print(f"  Profit factor      : {held_metrics.profit_factor:+.3f}")
