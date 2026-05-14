@@ -2069,6 +2069,159 @@ async def _check_recent_errors(pool: asyncpg.Pool) -> dict[str, Any]:
     }
 
 
+async def _check_daemon_progress(pool: asyncpg.Pool) -> dict[str, Any]:
+    """Live progress probe for the data_operations daemon run.
+
+    Phase 0 audit (2026-05-15) verified every `_STAGE_SPECS` stage writes
+    a symmetric INGESTION_START + INGESTION_COMPLETE pair (or
+    INGESTION_FAILED on failure), all share the daemon's tagged
+    ``run_id``, and the daemon writes a SHUTDOWN event on exit. Stage
+    name is consistently available at ``data->>'stage'``. This probe
+    builds on those guarantees.
+
+    Status semantics:
+        * ``no_recent_run``  — no daemon STARTUP within 25h. ok=True
+          (informational; if it's been > 30h, the dedicated
+          ``missed_data_operations`` probe goes red).
+        * ``running``        — STARTUP present, no SHUTDOWN, no FAILED
+          stages yet. ok=True (informational, panel-only).
+        * ``completed_clean``— SHUTDOWN exit_code=0, no FAILED stages.
+          ok=True.
+        * ``completed_with_failures`` — SHUTDOWN exit_code != 0 OR any
+          INGESTION_FAILED row for this run. ok=False.
+
+    Scope-limit: this probe sees only the 15 stages run inside
+    ``ops.py --update``. The shell-wrapper's later steps (audit,
+    validation re-confirm, compress, DATA_OPERATIONS_COMPLETE emit) do
+    NOT write to ``application_log`` — they're outside this probe's
+    visibility. The terminal signal that the WHOLE workflow finished
+    is the ``DATA_OPERATIONS_COMPLETE`` event in ``application_log``,
+    which IS surfaced here as ``workflow_complete``.
+    """
+    # Find the most recent daemon-tagged STARTUP.
+    startup = await pool.fetchrow(
+        """
+        SELECT run_id, recorded_at
+        FROM platform.application_log
+        WHERE engine = 'ops'
+          AND event_type = 'STARTUP'
+          AND data->>'source' = 'data_operations_daemon'
+          AND recorded_at > now() - INTERVAL '25 hours'
+        ORDER BY recorded_at DESC
+        LIMIT 1
+        """
+    )
+    if startup is None:
+        return {
+            "ok": True,
+            "state": "no_recent_run",
+            "stages": [],
+            "reason": "no data_operations_daemon STARTUP in last 25h",
+        }
+    run_id = startup["run_id"]
+    started_at = startup["recorded_at"]
+
+    # Collect every per-stage event for this run.
+    stage_rows = await pool.fetch(
+        """
+        SELECT data->>'stage' AS stage, event_type, recorded_at
+        FROM platform.application_log
+        WHERE run_id = $1
+          AND event_type IN ('INGESTION_START', 'INGESTION_COMPLETE', 'INGESTION_FAILED')
+          AND data->>'stage' IS NOT NULL
+        ORDER BY recorded_at
+        """,
+        run_id,
+    )
+
+    # Per-stage status. Stage with START + no COMPLETE/FAILED → running.
+    # Stage with COMPLETE → completed. Stage with FAILED → failed.
+    by_stage: dict[str, dict[str, Any]] = {}
+    for r in stage_rows:
+        st = r["stage"]
+        if st not in by_stage:
+            by_stage[st] = {"stage": st, "started_at": None, "ended_at": None, "status": None}
+        if r["event_type"] == "INGESTION_START":
+            by_stage[st]["started_at"] = r["recorded_at"]
+            if by_stage[st]["status"] is None:
+                by_stage[st]["status"] = "running"
+        elif r["event_type"] == "INGESTION_COMPLETE":
+            by_stage[st]["ended_at"] = r["recorded_at"]
+            by_stage[st]["status"] = "completed"
+        elif r["event_type"] == "INGESTION_FAILED":
+            by_stage[st]["ended_at"] = r["recorded_at"]
+            by_stage[st]["status"] = "failed"
+
+    # Compute elapsed-ms per stage for the panel.
+    stages_out = []
+    for st, info in by_stage.items():
+        elapsed_ms = None
+        if info["started_at"] and info["ended_at"]:
+            elapsed_ms = int((info["ended_at"] - info["started_at"]).total_seconds() * 1000)
+        elif info["started_at"]:
+            elapsed_ms = int((datetime.now(UTC) - info["started_at"]).total_seconds() * 1000)
+        stages_out.append({
+            "stage": st,
+            "status": info["status"],
+            "started_at": info["started_at"].isoformat() if info["started_at"] else None,
+            "ended_at": info["ended_at"].isoformat() if info["ended_at"] else None,
+            "elapsed_ms": elapsed_ms,
+        })
+
+    # Was there a SHUTDOWN for this run? Parse its exit_code from message.
+    shutdown_row = await pool.fetchrow(
+        """
+        SELECT recorded_at, message
+        FROM platform.application_log
+        WHERE run_id = $1
+          AND event_type = 'SHUTDOWN'
+        ORDER BY recorded_at DESC
+        LIMIT 1
+        """,
+        run_id,
+    )
+    n_failed = sum(1 for s in stages_out if s["status"] == "failed")
+    workflow_complete = False
+    if shutdown_row is not None:
+        # message format: "ops CLI finished (exit_code=N)"
+        msg = shutdown_row["message"] or ""
+        exit_clean = "exit_code=0" in msg
+        if exit_clean and n_failed == 0:
+            state = "completed_clean"
+            ok = True
+        else:
+            state = "completed_with_failures"
+            ok = False
+        # Workflow done iff DATA_OPERATIONS_COMPLETE was emitted (wrapper Step 6).
+        evt = await pool.fetchval(
+            """
+            SELECT 1 FROM platform.application_log
+            WHERE event_type = 'DATA_OPERATIONS_COMPLETE'
+              AND recorded_at > $1
+              AND recorded_at < $1 + INTERVAL '30 minutes'
+            LIMIT 1
+            """,
+            shutdown_row["recorded_at"],
+        )
+        workflow_complete = evt is not None
+    else:
+        state = "running"
+        ok = True  # informational while in flight
+
+    return {
+        "ok": ok,
+        "state": state,
+        "run_id": str(run_id),
+        "started_at": started_at.isoformat(),
+        "n_stages_total": len(stages_out),
+        "n_stages_completed": sum(1 for s in stages_out if s["status"] == "completed"),
+        "n_stages_failed": n_failed,
+        "n_stages_running": sum(1 for s in stages_out if s["status"] == "running"),
+        "workflow_complete": workflow_complete,
+        "stages": stages_out,
+    }
+
+
 _CHECK_FNS = [
     ("db_connectivity", _check_connectivity),
     ("data_freshness", _check_freshness),
@@ -2089,6 +2242,7 @@ _CHECK_FNS = [
     ("disk_space", _check_disk_space),
     ("trade_monitor_heartbeat", _check_trade_monitor_heartbeat),
     ("forensics", _check_forensics),
+    ("daemon_progress", _check_daemon_progress),
     ("recent_errors", _check_recent_errors),
 ]
 

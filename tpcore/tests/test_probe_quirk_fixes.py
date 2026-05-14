@@ -148,6 +148,111 @@ async def test_recent_errors_green_when_only_noise() -> None:
 
 
 @pytest.mark.asyncio
+async def test_daemon_progress_no_recent_run() -> None:
+    """No STARTUP within 25h → state='no_recent_run', ok=True."""
+    pool = AsyncMock()
+    pool.fetchrow = AsyncMock(return_value=None)
+    result = await ops._check_daemon_progress(pool)
+    assert result["ok"] is True
+    assert result["state"] == "no_recent_run"
+    assert result["stages"] == []
+
+
+@pytest.mark.asyncio
+async def test_daemon_progress_running_in_flight() -> None:
+    """STARTUP + some completed stages + one running, no SHUTDOWN → state='running'."""
+    import uuid as _uuid
+    run_id = _uuid.UUID("11111111-1111-1111-1111-111111111111")
+    started = datetime.now(UTC) - timedelta(minutes=20)
+    pool = AsyncMock()
+    # fetchrow used for both the startup query and the shutdown query.
+    # Return startup, then None (no shutdown).
+    pool.fetchrow = AsyncMock(side_effect=[
+        {"run_id": run_id, "recorded_at": started},
+        None,
+    ])
+    # Per-stage events: two complete + one mid-flight.
+    pool.fetch = AsyncMock(return_value=[
+        {"stage": "daily_bars", "event_type": "INGESTION_START",
+         "recorded_at": started + timedelta(seconds=10)},
+        {"stage": "daily_bars", "event_type": "INGESTION_COMPLETE",
+         "recorded_at": started + timedelta(minutes=5)},
+        {"stage": "corporate_actions", "event_type": "INGESTION_START",
+         "recorded_at": started + timedelta(minutes=5, seconds=10)},
+        {"stage": "corporate_actions", "event_type": "INGESTION_COMPLETE",
+         "recorded_at": started + timedelta(minutes=10)},
+        {"stage": "fundamentals_refresh", "event_type": "INGESTION_START",
+         "recorded_at": started + timedelta(minutes=10, seconds=10)},
+    ])
+    pool.fetchval = AsyncMock(return_value=None)
+
+    result = await ops._check_daemon_progress(pool)
+    assert result["ok"] is True
+    assert result["state"] == "running"
+    assert result["n_stages_completed"] == 2
+    assert result["n_stages_failed"] == 0
+    assert result["n_stages_running"] == 1
+    # fundamentals_refresh should still be running.
+    fundies = next(s for s in result["stages"] if s["stage"] == "fundamentals_refresh")
+    assert fundies["status"] == "running"
+    assert fundies["ended_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_daemon_progress_completed_clean() -> None:
+    """All stages complete + SHUTDOWN exit_code=0 → state='completed_clean'."""
+    import uuid as _uuid
+    run_id = _uuid.UUID("22222222-2222-2222-2222-222222222222")
+    started = datetime.now(UTC) - timedelta(hours=1)
+    ended = started + timedelta(minutes=45)
+    pool = AsyncMock()
+    pool.fetchrow = AsyncMock(side_effect=[
+        {"run_id": run_id, "recorded_at": started},
+        {"recorded_at": ended, "message": "ops CLI finished (exit_code=0)"},
+    ])
+    pool.fetch = AsyncMock(return_value=[
+        {"stage": "daily_bars", "event_type": "INGESTION_START",
+         "recorded_at": started + timedelta(seconds=10)},
+        {"stage": "daily_bars", "event_type": "INGESTION_COMPLETE",
+         "recorded_at": started + timedelta(minutes=5)},
+    ])
+    pool.fetchval = AsyncMock(return_value=1)  # DATA_OPERATIONS_COMPLETE found
+
+    result = await ops._check_daemon_progress(pool)
+    assert result["ok"] is True
+    assert result["state"] == "completed_clean"
+    assert result["n_stages_completed"] == 1
+    assert result["workflow_complete"] is True
+
+
+@pytest.mark.asyncio
+async def test_daemon_progress_completed_with_failures() -> None:
+    """One INGESTION_FAILED stage → state='completed_with_failures', ok=False."""
+    import uuid as _uuid
+    run_id = _uuid.UUID("33333333-3333-3333-3333-333333333333")
+    started = datetime.now(UTC) - timedelta(hours=2)
+    ended = started + timedelta(minutes=10)
+    pool = AsyncMock()
+    pool.fetchrow = AsyncMock(side_effect=[
+        {"run_id": run_id, "recorded_at": started},
+        {"recorded_at": ended, "message": "ops CLI finished (exit_code=1)"},
+    ])
+    pool.fetch = AsyncMock(return_value=[
+        {"stage": "daily_bars", "event_type": "INGESTION_START",
+         "recorded_at": started + timedelta(seconds=10)},
+        {"stage": "daily_bars", "event_type": "INGESTION_FAILED",
+         "recorded_at": started + timedelta(minutes=2)},
+    ])
+    pool.fetchval = AsyncMock(return_value=None)
+
+    result = await ops._check_daemon_progress(pool)
+    assert result["ok"] is False
+    assert result["state"] == "completed_with_failures"
+    assert result["n_stages_failed"] == 1
+    assert result["n_stages_completed"] == 0
+
+
+@pytest.mark.asyncio
 async def test_recent_errors_handles_null_transient_count() -> None:
     """fetchval returns None when COUNT(*) somehow yields NULL — the
     probe must not crash on that path."""

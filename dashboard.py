@@ -2063,6 +2063,91 @@ def _fetch_equity_history_cached(days: int = 60) -> list[dict]:
     return run_async(_fetch_equity_history(days=days))
 
 
+async def _fetch_daemon_progress() -> dict:
+    """Stage-by-stage progress of the most recent data_operations daemon run.
+
+    Mirrors the queries in ``scripts/ops.py::_check_daemon_progress``.
+    Verified Phase 0 (2026-05-15): every ``_STAGE_SPECS`` stage writes
+    symmetric INGESTION_START + INGESTION_COMPLETE pairs (or
+    INGESTION_FAILED), all sharing the daemon's tagged ``run_id``, and
+    the daemon writes SHUTDOWN on exit. The renderer is intentionally
+    dumb — severity decisions live in the fetcher.
+    """
+    pool = await build_asyncpg_pool(_db_url(), max_size=2)
+    out: dict = {"state": "no_recent_run", "stages": []}
+    try:
+        startup = await pool.fetchrow(
+            """
+            SELECT run_id, recorded_at FROM platform.application_log
+            WHERE engine='ops' AND event_type='STARTUP'
+              AND data->>'source' = 'data_operations_daemon'
+              AND recorded_at > now() - INTERVAL '25 hours'
+            ORDER BY recorded_at DESC LIMIT 1
+            """
+        )
+        if startup is None:
+            return out
+        out["run_id"] = str(startup["run_id"])
+        out["started_at"] = startup["recorded_at"]
+        rows = await pool.fetch(
+            """
+            SELECT data->>'stage' AS stage, event_type, recorded_at
+            FROM platform.application_log
+            WHERE run_id = $1
+              AND event_type IN ('INGESTION_START','INGESTION_COMPLETE','INGESTION_FAILED')
+              AND data->>'stage' IS NOT NULL
+            ORDER BY recorded_at
+            """,
+            startup["run_id"],
+        )
+        by_stage: dict[str, dict] = {}
+        for r in rows:
+            st = r["stage"]
+            if st not in by_stage:
+                by_stage[st] = {"stage": st, "started_at": None, "ended_at": None, "status": None}
+            if r["event_type"] == "INGESTION_START":
+                by_stage[st]["started_at"] = r["recorded_at"]
+                if by_stage[st]["status"] is None:
+                    by_stage[st]["status"] = "running"
+            elif r["event_type"] == "INGESTION_COMPLETE":
+                by_stage[st]["ended_at"] = r["recorded_at"]
+                by_stage[st]["status"] = "completed"
+            elif r["event_type"] == "INGESTION_FAILED":
+                by_stage[st]["ended_at"] = r["recorded_at"]
+                by_stage[st]["status"] = "failed"
+        out["stages"] = list(by_stage.values())
+        out["n_completed"] = sum(1 for s in out["stages"] if s["status"] == "completed")
+        out["n_failed"] = sum(1 for s in out["stages"] if s["status"] == "failed")
+        out["n_running"] = sum(1 for s in out["stages"] if s["status"] == "running")
+        shutdown = await pool.fetchrow(
+            """
+            SELECT recorded_at, message FROM platform.application_log
+            WHERE run_id = $1 AND event_type='SHUTDOWN'
+            ORDER BY recorded_at DESC LIMIT 1
+            """,
+            startup["run_id"],
+        )
+        if shutdown is None:
+            out["state"] = "running"
+        else:
+            out["ended_at"] = shutdown["recorded_at"]
+            if "exit_code=0" in (shutdown["message"] or "") and out["n_failed"] == 0:
+                out["state"] = "completed_clean"
+            else:
+                out["state"] = "completed_with_failures"
+    finally:
+        await pool.close()
+    return out
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _fetch_daemon_progress_cached() -> dict:
+    """Short TTL — 30s — because a live daemon run should look live.
+    Operator can also click the platform-health ↻ Refresh button to
+    force-clear."""
+    return run_async(_fetch_daemon_progress())
+
+
 @st.cache_data(ttl=180, show_spinner=False)
 def _fetch_platform_health_cached() -> dict:
     """Sync wrapper around ``_fetch_platform_health`` so Streamlit can
@@ -2077,6 +2162,95 @@ def _fetch_platform_health_cached() -> dict:
     # NOT cached — adding here keeps the API single but lets the live
     # state refresh on every render.
     return h
+
+
+def render_daemon_progress() -> None:
+    """Stage-by-stage progress of the most recent data_operations daemon run.
+
+    Three render modes:
+
+    * **no_recent_run** — last daemon STARTUP > 25h ago. One-line note,
+      no expander. (The dedicated ``missed_data_operations`` probe flips
+      red at the 30h ceiling — that's the separate alarm path.)
+    * **running** — STARTUP present, no SHUTDOWN. Renders a progress
+      bar (n_completed / n_stages_total) and a per-stage status table.
+      The currently-running stage shows ⏳ + live-elapsed seconds.
+    * **completed_clean** / **completed_with_failures** — terminal
+      states. Same per-stage table, but elapsed times are frozen.
+
+    Scope limit: covers only the 15 stages inside ``ops.py --update``.
+    The bash wrapper's subsequent steps (audit, validation re-confirm,
+    compress, ``DATA_OPERATIONS_COMPLETE`` emit) don't write to
+    ``application_log`` — they're outside this panel's visibility. To
+    confirm the full workflow completed, look at the
+    ``missed_data_operations`` probe in ``--check``.
+    """
+    try:
+        p = _fetch_daemon_progress_cached()
+    except Exception as exc:  # noqa: BLE001
+        st.warning(f"Could not fetch daemon progress: {exc}")
+        return
+
+    state = p.get("state", "no_recent_run")
+
+    if state == "no_recent_run":
+        st.caption(
+            "**Daemon progress** — no `data_operations_daemon` STARTUP in the last 25h. "
+            "The next scheduled fire is per the daemon row above."
+        )
+        return
+
+    # Header line + run identifier.
+    state_emoji = {
+        "running": "⏳",
+        "completed_clean": "✅",
+        "completed_with_failures": "⚠️",
+    }.get(state, "·")
+    n_total = max(1, len(p.get("stages", [])))
+    n_done = p.get("n_completed", 0)
+    n_failed = p.get("n_failed", 0)
+    n_running = p.get("n_running", 0)
+    started_at = p.get("started_at")
+    header_parts = [f"{state_emoji} **{state.replace('_', ' ')}**"]
+    if started_at:
+        header_parts.append(f"started {started_at.strftime('%H:%M:%S UTC')}")
+    header_parts.append(f"{n_done}/{n_total} stages")
+    if n_failed:
+        header_parts.append(f"⚠ {n_failed} failed")
+    if n_running:
+        header_parts.append(f"⏳ {n_running} running")
+    st.markdown(f"**Daemon progress** — {' · '.join(header_parts)}")
+
+    # Progress bar — fraction of stages completed (failed stages count
+    # as 'done' in the bar so a half-failed run still shows progress).
+    completed_or_failed = n_done + n_failed
+    st.progress(min(1.0, completed_or_failed / n_total))
+
+    # Per-stage detail in an expander — auto-expand if currently running
+    # or if any stage failed.
+    auto_expand = state == "running" or n_failed > 0
+    with st.expander("Per-stage detail", expanded=auto_expand):
+        from datetime import UTC
+        from datetime import datetime as _dt
+
+        now = _dt.now(UTC)
+        rows = []
+        for s in p.get("stages", []):
+            status = s["status"]
+            glyph = {"completed": "✅", "running": "⏳", "failed": "❌"}.get(status, "·")
+            if s.get("ended_at") and s.get("started_at"):
+                elapsed = (s["ended_at"] - s["started_at"]).total_seconds()
+                elapsed_str = f"{elapsed:.1f}s"
+            elif s.get("started_at"):
+                elapsed = (now - s["started_at"]).total_seconds()
+                elapsed_str = f"{elapsed:.0f}s (live)"
+            else:
+                elapsed_str = "—"
+            rows.append({"": glyph, "stage": s["stage"], "elapsed": elapsed_str})
+        if rows:
+            st.dataframe(rows, hide_index=True, use_container_width=True)
+        else:
+            st.caption("No stage events for this run yet — the daemon may have just started.")
 
 
 def render_platform_health() -> None:
@@ -2123,6 +2297,13 @@ def render_platform_health() -> None:
                 ):
                     rc, output = run_blocking_script("scripts/install_all_daemons.sh", timeout=60)
                     _render_blocking_output("Install daemons", rc, output)
+
+    # Daemon progress — live stage-by-stage view of the most recent
+    # data_operations run. Visible during in-flight runs (status='running')
+    # and as a post-run summary. Built on the verified Phase 0 audit:
+    # every stage writes INGESTION_START + INGESTION_COMPLETE (or _FAILED)
+    # tagged with the same run_id as the daemon STARTUP.
+    render_daemon_progress()
 
     # "Update required" banner — independent of operator timezone. The
     # signal is NYSE-close relative: if the most recently closed session
