@@ -1,40 +1,49 @@
-"""End-to-end live pipeline smoke test — engine → broker → monitor → AAR.
+"""End-to-end pipeline smoke test — engine → broker → monitor → AAR.
+
+Runs in two modes depending on what ``tpcore.calendar.session_contains``
+reports for "is the NYSE regular session open right now":
+
+**LIVE mode (market open)** — exercises the full fill round-trip:
+
+1. Fetches the live SPY quote via ``tpcore.alpaca.AlpacaDataAdapter.get_quote``
+   so TP/SL anchor to current price (no drift from yesterday's close).
+2. Submits one Tier 1 BUY bracket via
+   ``AlpacaPaperBrokerAdapter.submit_tier1_only`` (1 share, wide TP/SL).
+3. Inserts the matching ``platform.open_orders`` row with sigma-shaped
+   ``decision_data`` carrying ``tier2_qty = 1`` so the monitor reacts.
+4. Polls open_orders for up to 60 s expecting status flips to
+   ``'filled'`` and a tier2 row to appear (monitor's cascade).
+
+**WIRE mode (market closed)** — exercises the broker→monitor wire only:
+
+1. Fetches the live (last-known) quote; Alpaca returns the last NBBO
+   even when the session is closed.
+2. Submits one ``SIMPLE`` LIMIT BUY at ``mid * 0.5`` via
+   ``broker.place_order`` — far enough below market that it cannot
+   fill even if the session opens during the test window.
+3. Inserts the matching open_orders row.
+4. Polls ``platform.application_log`` for any ``engine='trade_monitor'``
+   ``EVENT_*`` row tagged with our ``alpaca_order_id`` — proves the
+   trade-monitor stream is live AND its ``_lookup_open_order`` path
+   (previously the asyncpg-loop-mismatch crash site) is working.
+
+Either mode always cancels any test orders + deletes its open_orders
+rows in a ``finally`` block. The test is idempotent across re-runs.
 
 Prerequisites
 -------------
-* US market open (regular hours, 09:30–16:00 ET / 13:30–20:00 UTC).
-* ``tpcore.trade_monitor`` running in a second terminal:
-  ``DATABASE_URL=$DATABASE_URL_IPV4 ALPACA_KEY=... ALPACA_SECRET=... \
-    ALPACA_PAPER=true python -m tpcore.trade_monitor``
+* ``tpcore.trade_monitor`` daemon running (launchd installs it).
 * ``platform.open_orders`` migration applied (20260512_0000).
-
-What it does
-------------
-1. Submits **one** Tier 1 BUY bracket on a known-liquid ticker (default
-   SPY, 1 share) via ``AlpacaPaperBrokerAdapter.submit_tier1_only``.
-   Wide TP / SL — we just want the entry leg to fill quickly.
-2. Inserts the matching row in ``platform.open_orders`` with a Sigma-
-   shaped ``decision_data`` carrying ``tier2_qty = 1`` so the monitor
-   will react.
-3. Polls ``platform.open_orders`` for up to 60 s, expecting:
-   - the Tier 1 row to flip ``status = 'filled'`` (monitor saw the fill);
-   - a Tier 2 row to appear (monitor submitted the follow-on).
-4. Cancels everything for the test symbol at Alpaca and deletes both
-   ``open_orders`` rows. The test is idempotent: re-running cleans up
-   any stale rows before submitting a fresh probe.
-5. Prints PASS / FAIL and exits 0 / 1.
+* ALPACA_KEY / ALPACA_SECRET / DATABASE_URL (or DATABASE_URL_IPV4).
 
 What it doesn't do
 ------------------
-* Wait for the Tier 2 to fill — Tier 2's far-target TP is well above
-  the entry on purpose, so the AAR write step isn't exercised live
-  here. The mocked-stream integration test
+* Wait for the Tier 2 to fill — the mocked-stream integration test
   (``tpcore/tests/test_trade_monitor.py::test_tier2_fill_writes_aar_and_bumps_risk_state``)
-  covers that path deterministically.
-* Submit through ``SigmaOrderManager`` — that path requires running
-  setup_detection + the rest of the engine pipeline which is well
-  outside the scope of a smoke. We exercise the broker → DB →
-  monitor leg only.
+  covers the AAR write deterministically.
+* Submit through ``SigmaOrderManager`` — that path is the full engine,
+  outside the scope of a smoke. We exercise the broker → DB → monitor
+  leg only.
 
 Run::
 
@@ -56,8 +65,16 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 from tpcore.alpaca import AlpacaPaperBrokerAdapter
+from tpcore.alpaca.data_adapter import AlpacaDataAdapter
 from tpcore.calendar import next_open, session_contains
 from tpcore.db import build_asyncpg_pool
+from tpcore.interfaces.broker import (
+    Order,
+    OrderClass,
+    OrderSide,
+    OrderType,
+    TimeInForce,
+)
 from tpcore.logging.db_handler import DBLogHandler
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -68,9 +85,15 @@ logger = logging.getLogger("scripts.pipeline_smoke_test")
 TEST_ENGINE = "sigma"  # use sigma so the monitor's tier2 dispatch fires
 TEST_TICKER = "SPY"
 TEST_QTY = 1
-# Wide TP/SL so the bracket's exit legs don't fire during the smoke.
-TP_OFFSET = Decimal("10.00")
-SL_OFFSET = Decimal("10.00")
+# Wide TP/SL so the bracket's exit legs don't fire during the live smoke.
+# 1% buffer against the live quote — large enough to absorb 60s of intraday
+# volatility on SPY without tripping the bracket, small enough to keep
+# the test economically realistic.
+TP_OFFSET_PCT = Decimal("0.01")
+SL_OFFSET_PCT = Decimal("0.01")
+# Wire-mode limit price = mid * this — far below market so the order
+# cannot fill even if the session opens during the test window.
+WIRE_LIMIT_PRICE_PCT = Decimal("0.50")
 POLL_INTERVAL_SEC = 2.0
 POLL_TIMEOUT_SEC = 60.0
 
@@ -85,17 +108,21 @@ def _is_market_open(now: datetime | None = None) -> bool:
     return session_contains(now or datetime.now(UTC))
 
 
-def _skipped_message(now: datetime | None = None) -> str:
-    """Human-readable explanation for why we're skipping the live test."""
+def _wire_mode_banner(now: datetime | None = None) -> str:
+    """Banner text for wire mode (market closed) runs."""
     now = now or datetime.now(UTC)
     try:
         nxt = next_open(now).astimezone(UTC)
         return (
-            f"SKIPPED — NYSE session is closed at {now.isoformat(timespec='minutes')}. "
-            f"Next open per tpcore.calendar: {nxt.isoformat(timespec='minutes')}."
+            f"WIRE MODE — NYSE session closed at {now.isoformat(timespec='minutes')}. "
+            f"Next open per tpcore.calendar: {nxt.isoformat(timespec='minutes')}. "
+            "Testing broker→monitor event wire only (no fill expected)."
         )
     except Exception:
-        return f"SKIPPED — NYSE session is closed at {now.isoformat(timespec='minutes')}."
+        return (
+            f"WIRE MODE — NYSE session closed at {now.isoformat(timespec='minutes')}. "
+            "Testing broker→monitor event wire only (no fill expected)."
+        )
 
 
 async def _cleanup_test_rows(pool: asyncpg.Pool, ticker: str) -> int:
@@ -157,7 +184,7 @@ def _build_decision_data(
             "tier1_qty": qty,
             "tier2_qty": qty,
             "notional_usd": str(entry_estimate * qty * 2),
-            "risk_amount_usd": str(SL_OFFSET * qty),
+            "risk_amount_usd": str(entry_estimate * SL_OFFSET_PCT * qty),
             "order_payloads": [
                 {
                     "client_order_id": "placeholder",   # rewritten below
@@ -214,6 +241,21 @@ _SELECT_TIER2_SQL = """
     WHERE engine = $1 AND trade_id = $2 AND order_type = 'tier2'
 """
 
+# Wire-mode predicate: any trade_monitor event whose data payload
+# carries our alpaca_order_id proves the websocket → DB-log → pool-
+# acquire path is live. EVENT_NEW or EVENT_PENDING_NEW are the
+# expected first events; we accept any EVENT_* (or FILL_CONFIRMED on
+# the off chance the limit somehow fills).
+_SELECT_WIRE_EVENT_SQL = """
+    SELECT event_type, recorded_at
+    FROM platform.application_log
+    WHERE engine = 'trade_monitor'
+      AND (event_type LIKE 'EVENT_%' OR event_type = 'FILL_CONFIRMED')
+      AND data->>'alpaca_order_id' = $1
+    ORDER BY recorded_at ASC
+    LIMIT 1
+"""
+
 
 async def _poll_for(
     pool: asyncpg.Pool,
@@ -245,19 +287,32 @@ async def amain() -> int:
     if not os.getenv("ALPACA_KEY") or not os.getenv("ALPACA_SECRET"):
         print("FAILED — ALPACA_KEY/ALPACA_SECRET not set", file=sys.stderr)
         return 1
-    if not _is_market_open():
-        print(_skipped_message(), file=sys.stderr)
-        return 0
+    market_open = _is_market_open()
 
     pool = await build_asyncpg_pool(db_url, max_size=4)
     log_handler = DBLogHandler(pool=pool, engine="pipeline_smoke", run_id=uuid.uuid4())
     broker = AlpacaPaperBrokerAdapter()
+    # IEX feed for quotes — our Alpaca subscription tier permits IEX but
+    # not SIP for recent quote data (bars on SIP are fine; that's a
+    # different subscription dimension). SPY is heavily traded on IEX so
+    # the quote is reliable for the smoke test's TP/SL anchoring purpose.
+    data = AlpacaDataAdapter(feed="iex")
 
     trade_id = f"pipeline_smoke_{int(datetime.now(UTC).timestamp())}"
     tier1_cid = f"{trade_id}_tier1"
     ticker = TEST_TICKER
     qty = TEST_QTY
-    result_payload: dict[str, Any] = {"trade_id": trade_id, "ticker": ticker, "qty": qty}
+    result_payload: dict[str, Any] = {
+        "trade_id": trade_id,
+        "ticker": ticker,
+        "qty": qty,
+        "mode": "live" if market_open else "wire",
+    }
+
+    if market_open:
+        print("=== LIVE MODE — market open. Full broker→monitor→tier2 round-trip. ===")
+    else:
+        print(f"=== {_wire_mode_banner()} ===")
 
     try:
         # 0. Cleanup any stale rows from prior runs (idempotency).
@@ -266,121 +321,209 @@ async def amain() -> int:
         if deleted or cancelled_prior:
             print(f"cleanup: deleted {deleted} stale rows, cancelled {cancelled_prior} stale orders")
 
-        # 1. Snapshot the latest close from platform.prices_daily as the
-        # price reference for the bracket. (The broker's get_quote isn't
-        # wired on the adapter and the daily close is plenty for sizing a
-        # smoke bracket — we want wide TP/SL anyway.)
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT close FROM platform.prices_daily WHERE ticker = $1 ORDER BY date DESC LIMIT 1",
-                ticker,
-            )
-        if row is None:
-            print(f"FAILED — no prices_daily row for {ticker}", file=sys.stderr)
-            return 1
-        last_close = Decimal(str(row["close"]))
-        tp_price = (last_close + TP_OFFSET).quantize(Decimal("0.01"))
-        sl_price = (last_close - SL_OFFSET).quantize(Decimal("0.01"))
-        far_tp = (last_close + TP_OFFSET * 3).quantize(Decimal("0.01"))
-        print(
-            f"submitting Tier 1 BUY bracket: {ticker} qty={qty} "
-            f"entry≈{last_close} TP={tp_price} SL={sl_price}"
-        )
+        # 1. Anchor TP/SL to the LIVE quote (no drift). Works in both modes —
+        # Alpaca returns the last NBBO even when the session is closed.
+        quote = await data.get_quote(ticker)
+        mid = ((quote.bid + quote.ask) / 2).quantize(Decimal("0.01"))
+        print(f"  quote: bid={quote.bid} ask={quote.ask} mid={mid}")
 
-        # 2. Submit the Tier 1 bracket via the engine's primitive.
-        tier1_order = await broker.submit_tier1_only(
-            ticker=ticker,
-            qty=qty,
-            side="buy",
-            take_profit_price=tp_price,
-            stop_loss_price=sl_price,
+        if market_open:
+            tp_price = (mid * (Decimal("1") + TP_OFFSET_PCT)).quantize(Decimal("0.01"))
+            sl_price = (mid * (Decimal("1") - SL_OFFSET_PCT)).quantize(Decimal("0.01"))
+            far_tp = (mid * (Decimal("1") + TP_OFFSET_PCT * 3)).quantize(Decimal("0.01"))
+            print(
+                f"submitting Tier 1 BUY bracket: {ticker} qty={qty} "
+                f"entry≈{mid} TP={tp_price} SL={sl_price}"
+            )
+
+            # 2a. Submit the Tier 1 bracket via the engine's primitive.
+            tier1_order = await broker.submit_tier1_only(
+                ticker=ticker,
+                qty=qty,
+                side="buy",
+                take_profit_price=tp_price,
+                stop_loss_price=sl_price,
+                client_order_id=tier1_cid,
+                engine_id=TEST_ENGINE,
+            )
+            result_payload["tier1_broker_order_id"] = tier1_order.broker_order_id
+            print(f"  alpaca_order_id={tier1_order.broker_order_id}")
+
+            # 3a. Insert the matching open_orders row so the monitor can find it.
+            decision_data = _build_decision_data(
+                ticker=ticker,
+                qty=qty,
+                entry_estimate=mid,
+                tp_price=tp_price,
+                sl_price=sl_price,
+                far_tp=far_tp,
+            )
+            decision_data["decision"]["order_payloads"][0]["client_order_id"] = tier1_cid
+            decision_data["decision"]["order_payloads"][1]["client_order_id"] = f"{trade_id}_tier2"
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    _INSERT_TIER1_SQL,
+                    TEST_ENGINE,
+                    trade_id,
+                    ticker,
+                    tier1_order.broker_order_id,
+                    json.dumps(decision_data, default=str),
+                )
+            await log_handler.log(
+                "PIPELINE_SMOKE_SUBMITTED",
+                f"{ticker} tier1 broker={tier1_order.broker_order_id}",
+                "INFO",
+                {"trade_id": trade_id, **result_payload},
+            )
+
+            # 4a. Poll for the monitor to mark Tier 1 as filled.
+            async def _tier1_filled(conn: Any) -> tuple[bool, Any]:
+                r = await conn.fetchrow(_SELECT_TIER1_SQL, TEST_ENGINE, trade_id)
+                if r is None:
+                    return False, None
+                return r["status"] == "filled", {
+                    "status": r["status"],
+                    "fill_price": str(r["fill_price"]) if r["fill_price"] is not None else None,
+                    "filled_at": r["filled_at"].isoformat() if r["filled_at"] else None,
+                }
+
+            tier1_filled, tier1_payload = await _poll_for(
+                pool, label="tier1_fill", predicate=_tier1_filled
+            )
+            result_payload["tier1_fill"] = tier1_payload
+            if not tier1_filled:
+                print(
+                    f"FAILED — Tier 1 didn't reach 'filled' after {POLL_TIMEOUT_SEC}s "
+                    f"(last: {tier1_payload}). Is the trade monitor running?",
+                    file=sys.stderr,
+                )
+                return 1
+            print(f"  Tier 1 filled @ {tier1_payload['fill_price']}")
+
+            # 5a. Poll for the monitor to submit a Tier 2 row.
+            async def _tier2_submitted(conn: Any) -> tuple[bool, Any]:
+                r = await conn.fetchrow(_SELECT_TIER2_SQL, TEST_ENGINE, trade_id)
+                if r is None or r["alpaca_order_id"] is None:
+                    return False, None
+                return True, {"alpaca_order_id": r["alpaca_order_id"], "status": r["status"]}
+
+            tier2_seen, tier2_payload = await _poll_for(
+                pool, label="tier2_submitted", predicate=_tier2_submitted
+            )
+            result_payload["tier2"] = tier2_payload
+            if not tier2_seen:
+                print(
+                    f"FAILED — Tier 2 row not seen in open_orders after {POLL_TIMEOUT_SEC}s. "
+                    "Monitor either didn't react or submission errored.",
+                    file=sys.stderr,
+                )
+                return 1
+            print(f"  Tier 2 submitted: alpaca_order_id={tier2_payload['alpaca_order_id']}")
+
+            await log_handler.log(
+                "PIPELINE_SMOKE_PASSED",
+                f"{ticker} live mode tier1→fill→tier2 round-trip ok",
+                "INFO",
+                result_payload,
+            )
+            print("Pipeline smoke test PASSED (live mode).")
+            return 0
+
+        # ───────── WIRE MODE ─────────
+        # Submit a SIMPLE LIMIT BUY at mid * 0.5 — far below market so it
+        # cannot fill even if the session opens during the test window.
+        # We only need the broker ack + the monitor's first EVENT_* row to
+        # confirm the stream-to-pool path is healthy.
+        limit_price = (mid * WIRE_LIMIT_PRICE_PCT).quantize(Decimal("0.01"))
+        print(f"submitting SIMPLE LIMIT BUY: {ticker} qty={qty} limit={limit_price} (mid * {WIRE_LIMIT_PRICE_PCT})")
+
+        # 2b. Submit via the tpcore broker's generic place_order primitive.
+        order = Order(
             client_order_id=tier1_cid,
+            symbol=ticker,
+            side=OrderSide.BUY,
+            qty=Decimal(qty),
+            order_type=OrderType.LIMIT,
+            time_in_force=TimeInForce.DAY,
+            limit_price=limit_price,
+            order_class=OrderClass.SIMPLE,
             engine_id=TEST_ENGINE,
         )
-        result_payload["tier1_broker_order_id"] = tier1_order.broker_order_id
-        print(f"  alpaca_order_id={tier1_order.broker_order_id}")
+        placed = await broker.place_order(order)
+        result_payload["tier1_broker_order_id"] = placed.broker_order_id
+        print(f"  alpaca_order_id={placed.broker_order_id} status={placed.status.value}")
 
-        # 3. Insert the matching open_orders row so the monitor can find it.
-        decision_data = _build_decision_data(
-            ticker=ticker,
-            qty=qty,
-            entry_estimate=last_close,
-            tp_price=tp_price,
-            sl_price=sl_price,
-            far_tp=far_tp,
-        )
-        decision_data["decision"]["order_payloads"][0]["client_order_id"] = tier1_cid
-        decision_data["decision"]["order_payloads"][1]["client_order_id"] = f"{trade_id}_tier2"
+        # 3b. Insert the matching open_orders row so the monitor can attribute
+        # the incoming trade_update event back to us. Minimal decision_data —
+        # wire mode doesn't exercise the tier2 cascade.
+        wire_decision_data = {
+            "decision": {
+                "ticker": ticker,
+                "qty": qty,
+                "tier1_qty": qty,
+                "tier2_qty": 0,  # no cascade in wire mode
+                "notional_usd": str(limit_price * qty),
+                "constructed_at": datetime.now(UTC).isoformat(),
+                "mode": "wire",
+            },
+            "assessment": {
+                "ticker": ticker,
+                "as_of": datetime.now(UTC).date().isoformat(),
+                "phase": "ACTIVE",
+                "entry_price": str(limit_price),
+                "notes": "pipeline_smoke_test wire-mode synthetic decision",
+            },
+        }
         async with pool.acquire() as conn:
             await conn.execute(
                 _INSERT_TIER1_SQL,
                 TEST_ENGINE,
                 trade_id,
                 ticker,
-                tier1_order.broker_order_id,
-                json.dumps(decision_data, default=str),
+                placed.broker_order_id,
+                json.dumps(wire_decision_data, default=str),
             )
         await log_handler.log(
             "PIPELINE_SMOKE_SUBMITTED",
-            f"{ticker} tier1 broker={tier1_order.broker_order_id}",
+            f"{ticker} wire-mode limit broker={placed.broker_order_id}",
             "INFO",
             {"trade_id": trade_id, **result_payload},
         )
 
-        # 4. Poll for the monitor to mark Tier 1 as filled.
-        async def _tier1_filled(conn: Any) -> tuple[bool, Any]:
-            r = await conn.fetchrow(_SELECT_TIER1_SQL, TEST_ENGINE, trade_id)
+        # 4b. Poll application_log for ANY trade_monitor EVENT_* row tagged
+        # with our alpaca_order_id. That proves: stream up, _lookup_open_order
+        # ran, _db_log.log fired — i.e. the pool-acquire path that was
+        # crashing pre-fix is healthy.
+        async def _wire_event_seen(conn: Any) -> tuple[bool, Any]:
+            r = await conn.fetchrow(_SELECT_WIRE_EVENT_SQL, placed.broker_order_id)
             if r is None:
                 return False, None
-            return r["status"] == "filled", {
-                "status": r["status"],
-                "fill_price": str(r["fill_price"]) if r["fill_price"] is not None else None,
-                "filled_at": r["filled_at"].isoformat() if r["filled_at"] else None,
+            return True, {
+                "event_type": r["event_type"],
+                "recorded_at": r["recorded_at"].isoformat(),
             }
 
-        tier1_filled, tier1_payload = await _poll_for(
-            pool, label="tier1_fill", predicate=_tier1_filled
+        event_seen, event_payload = await _poll_for(
+            pool, label="wire_event", predicate=_wire_event_seen,
         )
-        result_payload["tier1_fill"] = tier1_payload
-        if not tier1_filled:
+        result_payload["wire_event"] = event_payload
+        if not event_seen:
             print(
-                f"FAILED — Tier 1 didn't reach 'filled' after {POLL_TIMEOUT_SEC}s "
-                f"(last: {tier1_payload}). Is the trade monitor running?",
+                f"FAILED — trade_monitor never logged an EVENT_* row for "
+                f"alpaca_order_id={placed.broker_order_id} after "
+                f"{POLL_TIMEOUT_SEC}s. Stream or pool path is broken.",
                 file=sys.stderr,
             )
             return 1
-        print(f"  Tier 1 filled @ {tier1_payload['fill_price']}")
+        print(f"  trade_monitor logged {event_payload['event_type']} at {event_payload['recorded_at']}")
 
-        # 5. Poll for the monitor to submit a Tier 2 row.
-        async def _tier2_submitted(conn: Any) -> tuple[bool, Any]:
-            r = await conn.fetchrow(_SELECT_TIER2_SQL, TEST_ENGINE, trade_id)
-            if r is None or r["alpaca_order_id"] is None:
-                return False, None
-            return True, {"alpaca_order_id": r["alpaca_order_id"], "status": r["status"]}
-
-        tier2_seen, tier2_payload = await _poll_for(
-            pool, label="tier2_submitted", predicate=_tier2_submitted
-        )
-        result_payload["tier2"] = tier2_payload
-        if not tier2_seen:
-            print(
-                f"FAILED — Tier 2 row not seen in open_orders after {POLL_TIMEOUT_SEC}s. "
-                "Monitor either didn't react or submission errored.",
-                file=sys.stderr,
-            )
-            return 1
-        print(f"  Tier 2 submitted: alpaca_order_id={tier2_payload['alpaca_order_id']}")
-
-        # All three legs proved: engine submission, monitor reaction, broker
-        # round-trip on Tier 2. We don't wait for Tier 2 to fill — the
-        # mocked-stream test covers the AAR write deterministically.
         await log_handler.log(
             "PIPELINE_SMOKE_PASSED",
-            f"{ticker} tier1→fill→tier2 round-trip ok",
+            f"{ticker} wire mode broker→monitor event wire ok",
             "INFO",
             result_payload,
         )
-        print("Pipeline smoke test PASSED.")
+        print("Pipeline smoke test PASSED (wire mode).")
         return 0
     finally:
         # 6. Always clean up: cancel any test orders + drop the smoke rows.

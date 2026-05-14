@@ -106,8 +106,45 @@ class AlpacaDataAdapter(DataProviderInterface):
             for r in rows
         ]
 
-    async def get_quote(self, symbol: str) -> Quote:  # pragma: no cover - unused by Sigma
-        raise NotImplementedError("AlpacaDataAdapter.get_quote not implemented")
+    async def get_quote(self, symbol: str) -> Quote:
+        """Fetch the latest NBBO quote for ``symbol`` via Alpaca's SIP feed.
+
+        Returns the most recent bid/ask the SIP has seen — works during
+        regular session, extended hours, and overnight (Alpaca always
+        returns the last-known quote, even when the market is closed).
+
+        Used by the daily ``pipeline_smoke_test`` to anchor TP/SL to
+        live price rather than yesterday's close (which drifts intraday
+        and breaks the bracket's ``take_profit.limit_price >= base_price``
+        invariant). The single SIP request is metered against the same
+        quota as ``get_daily_bars``; cost is negligible compared to a
+        bars pull.
+
+        Raises ``RuntimeError`` if Alpaca returns no row for ``symbol``
+        (delisted, halted, invalid). Callers should treat that as a hard
+        failure rather than a soft empty.
+        """
+        from alpaca.data.requests import StockLatestQuoteRequest
+
+        request = StockLatestQuoteRequest(symbol_or_symbols=symbol, feed=self._feed)
+        try:
+            raw = await asyncio.to_thread(self._client.get_stock_latest_quote, request)
+        except Exception as exc:
+            logger.warning("tpcore.alpaca.quote_failed", symbol=symbol, error=str(exc))
+            raise RuntimeError(f"AlpacaDataAdapter.get_quote({symbol}) failed: {exc}") from exc
+        # alpaca-py returns a dict keyed by symbol; the value is a Quote
+        # object with bid_price / ask_price / bid_size / ask_size / timestamp.
+        q = raw.get(symbol) if hasattr(raw, "get") else None
+        if q is None:
+            raise RuntimeError(f"AlpacaDataAdapter.get_quote({symbol}): no quote returned")
+        return Quote(
+            symbol=symbol,
+            ts=q.timestamp,
+            bid=Decimal(str(q.bid_price)),
+            ask=Decimal(str(q.ask_price)),
+            bid_size=int(q.bid_size or 0),
+            ask_size=int(q.ask_size or 0),
+        )
 
     async def get_fundamentals(  # pragma: no cover - Sigma doesn't use fundamentals
         self, symbol: str, as_of: date_t | None = None

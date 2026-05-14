@@ -272,7 +272,7 @@ The active execution environment is the operator's **local Mac**. Railway is pau
 | --- | --- | --- |
 | Daily ops (refresh universe + corp actions + fundamentals + validation + universe sim) | `python scripts/ops.py --full` | See "Daily Maintenance (via ops CLI)" below. Each stage has a 120 s timeout. |
 | Broker reachability smoke (single bracket order, cancelled immediately) | `python scripts/smoke_test.py` | Idempotent. Bypasses the engine order managers; just exercises the broker adapter. |
-| End-to-end pipeline smoke (engine → broker → trade_monitor → AAR) | `python scripts/pipeline_smoke_test.py` | **The current next-gate check** — must be run during US market hours so the bracket entry fills. Requires `python -m tpcore.trade_monitor` running in a separate terminal. |
+| End-to-end pipeline smoke (engine → broker → trade_monitor → AAR) | `python scripts/pipeline_smoke_test.py` | **The current next-gate check** — branches on `tpcore.calendar`: LIVE mode (market open, full fill round-trip with quote-anchored TP/SL via `AlpacaDataAdapter.get_quote`) or WIRE mode (market closed, far-below limit + EVENT_* poll). Runnable any hour. Requires trade-monitor daemon running. |
 | Engine submission run (Sigma / Reversion / Vector) | `python sigma/scheduler.py` (etc.) | Each scheduler is one-shot. Trade monitor must be running. |
 | Trade monitor (live order-lifecycle worker) | `python -m tpcore.trade_monitor` | Persistent loop subscribed to Alpaca `TradingStream`. Required for Sigma/Reversion Tier 2 logic. |
 | Universe simulation (Sigma 187 / Reversion 4 / Vector 0 today) | `python scripts/simulate_universe.py` | Writes a `UNIVERSE_SIMULATION` event to `application_log`. |
@@ -1021,11 +1021,20 @@ Idempotent — each run uses fresh UUID-suffixed `client_order_id`s. Validated 2
 
 ### `scripts/pipeline_smoke_test.py`
 
-End-to-end live pipeline smoke for the trade-monitor era — exercises **engine submission → broker fill → monitor reaction → Tier 2 submission**. Submits one Tier 1 BUY bracket on SPY (1 share, wide TP/SL so the bracket's exit legs don't fire), inserts a Sigma-shaped row in `platform.open_orders` with `tier2_qty = 1`, then polls for the trade monitor to (a) flip the Tier 1 row to `status='filled'` once Alpaca acks the entry leg, and (b) insert a Tier 2 row after submitting the follow-on bracket. Cleans up by cancelling all open Alpaca orders for SPY and deleting both `open_orders` rows in a `finally` block; reruns are idempotent.
+End-to-end pipeline smoke for the trade-monitor era — **runs in two modes** depending on `tpcore.calendar.session_contains`:
+
+- **LIVE mode (market open)** — submits one Tier 1 BUY bracket on SPY (1 share). TP/SL are anchored to the **live quote** from `tpcore.alpaca.AlpacaDataAdapter.get_quote` at ±1% — no drift from yesterday's close. Inserts a sigma-shaped `platform.open_orders` row with `tier2_qty=1`, polls for the trade-monitor to flip Tier 1 to `status='filled'` and then submit a Tier 2 row.
+- **WIRE mode (market closed)** — submits one SIMPLE LIMIT BUY on SPY at `mid * 0.5` (far below market, cannot fill). Polls `platform.application_log` for any `engine='trade_monitor'` `EVENT_*` row tagged with our `alpaca_order_id`. Proves the stream → `_lookup_open_order` → `_db_log` path is healthy without needing a real fill — runnable any hour.
+
+Cleans up by cancelling all open Alpaca orders for SPY and deleting smoke `open_orders` rows in a `finally` block; reruns are idempotent.
+
+**Live-mode quote feed.** `AlpacaDataAdapter` is instantiated with `feed="iex"` inside the smoke test because our Alpaca subscription tier permits IEX but not SIP for recent quote data. SPY is heavily traded on IEX so the quote is reliable; this is local config (the smoke test only — tpcore's adapter is feed-agnostic).
+
+**Broker-vendor coupling.** The smoke test imports `AlpacaPaperBrokerAdapter` + `AlpacaDataAdapter` + `Order`/`OrderClass`/`OrderSide`/`OrderType`/`TimeInForce` directly. If/when the platform swaps brokers, this file is the largest single point that needs to migrate — abstract the broker/data adapter via factory + env-var config at that point.
 
 **Prerequisites**:
-- US market open per `tpcore.calendar.session_contains` (NYSE/XNYS via `exchange_calendars`) — the script exits 0 with `SKIPPED` and the calendar's next-open timestamp outside the regular session. Half-days, holidays, and DST are handled the same way the engines see them; no hardcoded UTC window.
-- Trade monitor running in a second terminal: `DATABASE_URL=$DATABASE_URL_IPV4 ALPACA_KEY=... ALPACA_SECRET=... ALPACA_PAPER=true python -m tpcore.trade_monitor`.
+- Trade-monitor daemon running (`scripts/install_launchd_trade_monitor.sh` keeps it up); the wire mode still requires the stream to be live since that's what we're testing.
+- `platform.open_orders` migration applied (20260512_0000).
 
 ```bash
 DATABASE_URL=$(grep '^DATABASE_URL_IPV4=' .env | cut -d= -f2-) \
