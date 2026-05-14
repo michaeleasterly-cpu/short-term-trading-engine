@@ -43,11 +43,25 @@ logger = structlog.get_logger(__name__)
 # ────────────────────────────────────────────────────────────────────────
 
 
-_ETF_NAME_MARKERS = (
-    " ETF", " ETN", "Trust", "iShares", "SPDR", "Vanguard", "ProShares",
-    "Direxion", "Invesco", "First Trust", "WisdomTree", "VanEck",
-    "Schwab U.S.", "Global X", "ARK ", "JPMorgan ", "PIMCO ",
+# ETF markers split into two categories:
+#
+# * **Absolute** — substring alone is sufficient to call something an
+#   ETF. Standalone words like " ETF", " ETN" or unambiguous issuer
+#   suffixes ("iShares Core ..." always means iShares).
+# * **Anchored** — issuer prefixes that MUST co-occur with a fund/ETF
+#   anchor word ("Fund", "ETF", "Trust", "Series") elsewhere in the
+#   name. Without the anchor they match the issuer's other businesses
+#   too (e.g. "JPMorgan " on its own matches the bank).
+_ETF_NAME_MARKERS_ABSOLUTE = (
+    " ETF", " ETN", "iShares", "SPDR", "Vanguard", "ProShares",
+    "Direxion", "Invesco", "WisdomTree", "VanEck",
+    "Schwab U.S.", "Global X", "ARK ",
+    "Bill Fund", "Bond Fund", "Index Fund",
 )
+_ETF_NAME_MARKERS_ANCHORED_ISSUERS = (
+    "JPMorgan ", "PIMCO ", "First Trust ",
+)
+_ETF_ANCHOR_WORDS = ("ETF", "FUND", "TRUST", "SERIES")
 
 _INVERSE_NAME_MARKERS = (
     "Inverse", "Short ", "-1x", "-2x", "-3x", "Bear ",
@@ -56,23 +70,102 @@ _INVERSE_NAME_MARKERS = (
 
 _LEVERAGE_PATTERN = re.compile(r"\b([1-3])[xX]\b")
 
+# SPAC markers — blank-check companies that legitimately lack
+# ``fundamentals_quarterly`` because there's no operating business
+# until merger. Two flavors:
+#   * "Acquisition" keyword anywhere in the name (covers "Acquisition
+#     III Corp", "Acquisition I Co", etc. — Roman numerals between)
+#   * "Class A Ordinary Shares" trailer — common SPAC share class
+#   * Generic SPAC keywords
+_SPAC_KEYWORDS = (
+    "ACQUISITION",
+    "SPAC ",
+    "SPECIAL PURPOSE ACQUISITION",
+    "BLANK CHECK",
+    "MERGER CORP",
+    "COMBINATION CORP",
+    "CLASS A ORDINARY SHARES",  # SPAC shareholder class trailer
+    "EQUITY PARTNERS",  # Cantor Equity Partners etc.
+)
 
-def _classify_from_name(name: str) -> tuple[str, bool | None, Decimal | None]:
+# SPAC ticker suffix markers — units (.U / U) and warrants (.W / W /
+# WS / RW) traded alongside the underlying SPAC ticker.
+_SPAC_TICKER_SUFFIXES = ("U", "W", "WS", "RW", "WW", ".U", ".W", "-U", "-W")
+
+# Fund markers — closed-end funds, BDCs, preferred shares, notes, and
+# structured products. These have NO ``fundamentals_quarterly`` rows
+# because FMP doesn't model debt/preferred instruments as equities.
+_FUND_KEYWORDS = (
+    "NOTES DUE",
+    "SENIOR NOTES",
+    "SUBORDINATED NOTES",
+    "TERM PREFERRED",
+    "PERPETUAL PREFERRED",
+    "PREFERRED STOCK",
+    "DEPOSITARY SHARES",
+    "TRUST CERT",
+    "STRATS",
+    "PPLUS",
+    "CORTS",
+    "INVESTMENT CORP",  # BDCs (Bain Capital GSS, Carlyle Credit, etc.)
+    "CREDIT FUND",
+    "INCOME FUND",
+    "DIVERSIFIED VALUE FUND",
+    "STRUCTURED PRODUCTS",
+    "FIXED-INCOME SECURITIES",
+)
+
+
+def _classify_from_name(
+    name: str, ticker: str = ""
+) -> tuple[str, bool | None, Decimal | None]:
     """Return ``(asset_class, etf_inverse_or_None, leverage_or_None)``.
 
-    The leverage is only set for ETFs whose name carries an "Nx"
-    marker. None means "1x / no leverage" (or non-applicable).
+    Classifier order (first match wins, so most specific markers go first):
+
+    1. **SPAC by name**: name contains "Acquisition", "Class A Ordinary
+       Shares", or similar blank-check keyword.
+    2. **SPAC by ticker suffix**: 4+ char ticker ending in U/W/WS/RW
+       (units and warrants).
+    3. **Fund by name**: notes, preferred shares, BDCs, structured
+       products — anything FMP doesn't model as equity fundamentals.
+    4. **ETF by name**: contains "ETF", a known issuer, or generic
+       "Bill Fund"/"Bond Fund" pattern. Sets etf_inverse + leverage.
+    5. **Stock**: anything else (the operating-company default).
     """
-    if not name:
+    if not name and not ticker:
         return "stock", None, None
-    upper = name.upper()
-    is_etf = any(m.upper() in upper for m in _ETF_NAME_MARKERS)
+    upper = (name or "").upper()
+
+    # 1. SPAC by name.
+    if any(kw in upper for kw in _SPAC_KEYWORDS):
+        return "spac", None, None
+
+    # 2. SPAC by ticker suffix (warrants/units). Skip 3-char tickers.
+    if ticker and len(ticker) >= 4:
+        for sfx in _SPAC_TICKER_SUFFIXES:
+            if ticker.endswith(sfx):
+                return "spac", None, None
+
+    # 3. Fund / preferred / notes / structured products.
+    if any(kw in upper for kw in _FUND_KEYWORDS):
+        return "fund", None, None
+
+    # 4. ETF markers — absolute (any match wins) OR anchored
+    # (issuer prefix that needs an anchor word elsewhere).
+    is_etf = any(m.upper() in upper for m in _ETF_NAME_MARKERS_ABSOLUTE)
     if not is_etf:
-        return "stock", None, None
-    is_inverse = any(m.upper() in upper for m in _INVERSE_NAME_MARKERS)
-    lev_match = _LEVERAGE_PATTERN.search(name)
-    leverage = Decimal(lev_match.group(1)) if lev_match else None
-    return "etf", is_inverse, leverage
+        for issuer in _ETF_NAME_MARKERS_ANCHORED_ISSUERS:
+            if issuer.upper() in upper and any(a in upper for a in _ETF_ANCHOR_WORDS):
+                is_etf = True
+                break
+    if is_etf:
+        is_inverse = any(m.upper() in upper for m in _INVERSE_NAME_MARKERS)
+        lev_match = _LEVERAGE_PATTERN.search(name)
+        leverage = Decimal(lev_match.group(1)) if lev_match else None
+        return "etf", is_inverse, leverage
+
+    return "stock", None, None
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -141,17 +234,21 @@ async def classify_all_tickers(
         assets = await fetch_alpaca_assets(client)
 
     rows: list[tuple] = []
-    stats = {"stocks": 0, "etfs": 0, "inverse": 0}
+    stats = {"stocks": 0, "etfs": 0, "inverse": 0, "spacs": 0, "funds": 0}
     for a in assets:
         symbol = a.get("symbol") or ""
         name = a.get("name") or ""
         if not symbol:
             continue
-        asset_class, etf_inverse, leverage = _classify_from_name(name)
+        asset_class, etf_inverse, leverage = _classify_from_name(name, symbol)
         if asset_class == "etf":
             stats["etfs"] += 1
             if etf_inverse:
                 stats["inverse"] += 1
+        elif asset_class == "spac":
+            stats["spacs"] += 1
+        elif asset_class == "fund":
+            stats["funds"] += 1
         else:
             stats["stocks"] += 1
         rows.append((
