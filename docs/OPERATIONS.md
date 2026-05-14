@@ -158,9 +158,9 @@ scripts/run_all_engines.sh --force          # bypass validation-green guard
 
 Refuses to run if `data_validation` has any red row in its latest result. Each scheduler is one-shot; the trade_monitor daemon must be running separately for Tier 2 cascade.
 
-### Forensics (2026-05-14)
+### Forensics (2026-05-14, ops-integrated 2026-05-15)
 
-Runs as the final step of `scripts/run_data_operations.sh`. Scans every engine's AAR history and emits triggers when it detects:
+Runs as the final stage (`forensics`) of `ops.py --update`, which is the first step of `scripts/run_data_operations.sh`. Scans every engine's AAR history in `platform.aar_events` and emits triggers when it detects:
 
 * **Outlier loss** — a trade with `pnl_net` more than 3σ below the engine's mean (requires ≥5 historical AARs).
 * **Loss cluster** — 3+ consecutive losing trades.
@@ -169,9 +169,14 @@ Runs as the final step of `scripts/run_data_operations.sh`. Scans every engine's
 Each new trigger is INSERTed into `platform.forensics_triggers` (idempotent via `payload.fingerprint`) and an auto-generated Sprint Dossier is written to `docs/sprints/<date>-<kind>-<engine>-<id>.md`. The dossier is a markdown template prefilled with the trigger payload — the operator fills in **Hypothesis** + **Fix** sections, ships the change, then clicks **Mark resolved** on the dashboard (Health tab → Forensics expander) which sets `resolved_at = NOW()`.
 
 ```bash
-# Run manually (also fires as step 7/7 of run_data_operations.sh):
+# Run standalone via the ops CLI (preferred — matches every other stage):
+DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python scripts/ops.py --stage forensics
+
+# Or directly via the module entrypoint (legacy form, still supported):
 DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python -m tpcore.forensics
 ```
+
+The dashboard's `forensics` probe (added 2026-05-15) surfaces open dossiers, the last fire timestamp, the set of engines under review, and per-kind counts. Probe output is always `ok=True` — open dossiers are findings to review, not platform errors.
 
 Service-level error handling: each engine and each trigger is isolated — a single malformed AAR or transient INSERT failure logs a warning but doesn't stop the rest of the run. CLI-level retry: one retry on pool-build failure.
 
@@ -246,6 +251,7 @@ A future `--update-weekly` flag is reserved for any explicitly-weekly work heavi
   - `supabase_backup` — probes `pg_stat_archiver.last_archived_time`; warns at 26h staleness; fails soft if the role lacks system-view access.
   - `disk_space` — warns when free disk on the repo's filesystem drops below 5 GB (audit-fix D6-1, 2026-05-14).
   - `trade_monitor_heartbeat` — warns when no `trade_monitor` event in `application_log` for 60+ min (catches silent WebSocket disconnects; audit-fix D6-2).
+  - `forensics` — counts open Sprint Dossiers in `platform.forensics_triggers` where `resolved_at IS NULL`; reports last fire timestamp, distinct engines under review, and per-kind counts. Always `ok=True` (dossiers are review work, not platform errors).
   - `macro_indicators_freshness` — green if every FRED series ≤ 90d old; yellow 90-180d; red > 180d or any indicator missing.
 - `python scripts/ops.py --check --pretty` displays the health report seen during daily operation (terminal-friendly).
 - `python scripts/ops.py --check` returns JSON on stdout, suitable for scripting and grep-by-key.

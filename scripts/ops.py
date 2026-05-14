@@ -961,6 +961,27 @@ async def _stage_universe_prescreener(pool: asyncpg.Pool) -> dict[str, Any]:
 _CANDIDATE_RE = re.compile(r"^\s*(\w[\w ]*?)\s+candidates?:\s*(\d+)", re.MULTILINE)
 
 
+async def _stage_forensics(pool: asyncpg.Pool) -> dict[str, Any]:
+    """Run the Forensics service against ``platform.aar_events``.
+
+    Detects drawdown periods, loss clusters, and outlier losses across
+    every engine's AAR history, inserts new triggers into
+    ``platform.forensics_triggers``, and writes Sprint Dossier markdown
+    files under ``docs/sprints/`` (fingerprinted, so re-running is a
+    no-op). Read-side stage — does not modify any data-update table.
+
+    Lives as the final stage of ``--update`` so a single ``ops.py
+    --update`` produces both fresh data AND a refreshed dossier set.
+    Also reachable standalone via ``python scripts/ops.py --stage forensics``.
+    """
+    from tpcore.forensics.service import ForensicsService
+
+    service = ForensicsService(pool=pool)
+    counts = await service.run()
+    total_new = sum(counts.values())
+    return {"new_triggers_total": total_new, "by_kind": counts}
+
+
 async def _stage_simulate_universe() -> dict[str, Any]:
     """Run scripts/simulate_universe.py as a subprocess and parse counts.
 
@@ -1063,6 +1084,11 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     ("data_validation",     lambda pool, cfg: (lambda: _stage_data_validation(pool)),          300.0),
     ("universe_prescreener",lambda pool, cfg: (lambda: _stage_universe_prescreener(pool)),     STAGE_TIMEOUT_SEC),
     ("universe_simulation", lambda pool, cfg: _stage_simulate_universe,                        STAGE_TIMEOUT_SEC),
+    # Forensics — read-side analysis over platform.aar_events. Runs last
+    # so it sees the freshest data + the universe diagnostics. Idempotent
+    # via fingerprint dedup in ForensicsService.persist_trigger; safe to
+    # re-run. Standalone: ``python scripts/ops.py --stage forensics``.
+    ("forensics",           lambda pool, cfg: (lambda: _stage_forensics(pool)),                STAGE_TIMEOUT_SEC),
 )
 KNOWN_STAGES: tuple[str, ...] = tuple(name for name, _, _ in _STAGE_SPECS)
 
@@ -1896,6 +1922,46 @@ async def _check_trade_monitor_heartbeat(pool: asyncpg.Pool) -> dict[str, Any]:
     }
 
 
+async def _check_forensics(pool: asyncpg.Pool) -> dict[str, Any]:
+    """Surface open Sprint Dossiers from ``platform.forensics_triggers``.
+
+    "Open" = ``resolved_at IS NULL``. The probe reports total count,
+    the most recent fire timestamp, and the distinct set of engines
+    under review (each trigger's ``payload->>'engine'``). Operator
+    workflow: open the linked dossier markdown under ``docs/sprints/``,
+    diagnose, then set ``resolved_at = now()`` to close.
+
+    Returns ``ok=True`` regardless of dossier count — open dossiers
+    are findings to review, not platform errors. The dashboard renders
+    them in the operator-action panel rather than the red-light strip.
+    """
+    rows = await pool.fetch(
+        """
+        SELECT trigger_kind,
+               payload->>'engine' AS engine_under_review,
+               fired_at
+        FROM platform.forensics_triggers
+        WHERE resolved_at IS NULL
+        ORDER BY fired_at DESC
+        """
+    )
+    open_count = len(rows)
+    last_fired_at = rows[0]["fired_at"].isoformat() if rows else None
+    engines_under_review = sorted({
+        r["engine_under_review"] for r in rows if r["engine_under_review"]
+    })
+    by_kind: dict[str, int] = {}
+    for r in rows:
+        by_kind[r["trigger_kind"]] = by_kind.get(r["trigger_kind"], 0) + 1
+    return {
+        "ok": True,
+        "open_dossiers": open_count,
+        "last_fired_at": last_fired_at,
+        "engines_under_review": engines_under_review,
+        "by_kind": by_kind,
+    }
+
+
 async def _check_recent_errors(pool: asyncpg.Pool) -> dict[str, Any]:
     rows = await pool.fetch(
         """
@@ -1939,6 +2005,7 @@ _CHECK_FNS = [
     ("supabase_backup", _check_supabase_backup),
     ("disk_space", _check_disk_space),
     ("trade_monitor_heartbeat", _check_trade_monitor_heartbeat),
+    ("forensics", _check_forensics),
     ("recent_errors", _check_recent_errors),
 ]
 
