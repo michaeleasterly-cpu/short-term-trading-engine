@@ -11,6 +11,8 @@ Today's residents:
   for regime filtering and by AllocatorService for rebalance gating.
 """
 
+from .adx import ADX_PERIOD, compute_adx
+from .bbands import BB_NUM_STD, BB_PERIOD, compute_bbands
 from .chop import (
     CHOP_PERIOD,
     CHOP_SIDEWAYS_STRONG,
@@ -19,8 +21,13 @@ from .chop import (
 )
 
 __all__ = [
+    "ADX_PERIOD",
+    "BB_NUM_STD",
+    "BB_PERIOD",
     "CHOP_PERIOD",
     "CHOP_SIDEWAYS_STRONG",
     "CHOP_SIDEWAYS_WEAK",
+    "compute_adx",
+    "compute_bbands",
     "compute_chop",
 ]

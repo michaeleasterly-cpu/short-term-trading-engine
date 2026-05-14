@@ -52,11 +52,13 @@ from tpcore.interfaces.engine_plug import BaseEnginePlug
 logger = structlog.get_logger(__name__)
 
 LOOKBACK_DAYS = 60
-ADX_PERIOD = 14
+# ADX_PERIOD / BB_PERIOD / BB_NUM_STD moved to tpcore.indicators 2026-05-14.
+# Re-exported so existing call sites keep working unchanged.
+from tpcore.indicators.adx import ADX_PERIOD  # noqa: E402, F401
+from tpcore.indicators.bbands import BB_NUM_STD, BB_PERIOD  # noqa: E402, F401
+
 RSI_PERIOD = 14
 ZSCORE_PERIOD = 20
-BB_PERIOD = 20
-BB_NUM_STD = 2.0
 MA_50_PERIOD = 50
 DIVERGENCE_LOOKBACK = 10
 
@@ -94,22 +96,9 @@ def _bars_to_frame(bars: list[Bar]) -> pd.DataFrame:
     return pd.DataFrame(rows).sort_values("ts").set_index("ts")
 
 
-def _compute_adx(df: pd.DataFrame, period: int = ADX_PERIOD) -> pd.Series:
-    """Wilder's ADX (same formula as Sigma's)."""
-    high, low, close = df["high"], df["low"], df["close"]
-    prev_close = close.shift(1)
-    tr = pd.concat(
-        [(high - low).abs(), (high - prev_close).abs(), (low - prev_close).abs()], axis=1
-    ).max(axis=1)
-    up, dn = high.diff(), -low.diff()
-    plus_dm = np.where((up > dn) & (up > 0), up, 0.0)
-    minus_dm = np.where((dn > up) & (dn > 0), dn, 0.0)
-    atr = pd.Series(tr).rolling(period, min_periods=period).mean()
-    plus_di = 100 * pd.Series(plus_dm, index=df.index).rolling(period, min_periods=period).mean() / atr
-    minus_di = 100 * pd.Series(minus_dm, index=df.index).rolling(period, min_periods=period).mean() / atr
-    denom = (plus_di + minus_di).replace(0, np.nan)
-    dx = 100 * (plus_di - minus_di).abs() / denom
-    return dx.rolling(period, min_periods=period).mean()
+# ADX moved to tpcore.indicators 2026-05-14. Re-export under the
+# leading-underscore name so existing imports stay working.
+from tpcore.indicators.adx import compute_adx as _compute_adx  # noqa: E402, F401
 
 
 def _compute_rsi(close: pd.Series, period: int = RSI_PERIOD) -> pd.Series:
@@ -132,10 +121,17 @@ def _compute_zscore(close: pd.Series, period: int = ZSCORE_PERIOD) -> pd.Series:
 def _compute_bbands(
     df: pd.DataFrame, period: int = BB_PERIOD, num_std: float = BB_NUM_STD
 ) -> tuple[pd.Series, pd.Series, pd.Series]:
-    close = df["close"]
-    sma = close.rolling(period, min_periods=period).mean()
-    sd = close.rolling(period, min_periods=period).std(ddof=0)
-    return sma, sma + num_std * sd, sma - num_std * sd
+    """Bollinger Bands 3-tuple (sma, upper, lower) for Reversion's call sites.
+
+    Wraps :func:`tpcore.indicators.bbands.compute_bbands` (which returns a
+    4-tuple including width_normalized that Reversion doesn't need) and
+    drops the width. Local shim added 2026-05-14 to preserve Reversion's
+    existing 3-tuple unpack at the two call sites (lines 414, backtest:313)
+    without forcing a wider refactor.
+    """
+    from tpcore.indicators.bbands import compute_bbands
+    sma, upper, lower, _width = compute_bbands(df, period=period, num_std=num_std)
+    return sma, upper, lower
 
 
 def _bb_breach_consecutive(close: pd.Series, upper: pd.Series, lower: pd.Series) -> int:

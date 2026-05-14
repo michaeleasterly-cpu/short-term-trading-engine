@@ -33,9 +33,13 @@ from tpcore.quality.data_quality import DataQualityScore
 logger = structlog.get_logger(__name__)
 
 LOOKBACK_DAYS = 60
-ADX_PERIOD = 14
-BB_PERIOD = 20
-BB_NUM_STD = 2.0
+# ADX_PERIOD / BB_PERIOD / BB_NUM_STD moved to tpcore.indicators 2026-05-14
+# (alongside the function extraction below). Re-exported here so existing
+# `from sigma.plugs.setup_detection import ADX_PERIOD, BB_PERIOD, BB_NUM_STD`
+# call sites stay working.
+from tpcore.indicators.adx import ADX_PERIOD  # noqa: E402, F401
+from tpcore.indicators.bbands import BB_NUM_STD, BB_PERIOD  # noqa: E402, F401
+
 VWAP_PERIOD = 20
 
 # Universe-filter thresholds from plan §4.1.
@@ -79,42 +83,12 @@ def _bars_to_frame(bars: list[Bar]) -> pd.DataFrame:
     return df
 
 
-def _compute_adx(df: pd.DataFrame, period: int = ADX_PERIOD) -> pd.Series:
-    """Wilder's ADX. Returns a Series indexed like df."""
-    high, low, close = df["high"], df["low"], df["close"]
-    prev_close = close.shift(1)
-
-    tr = pd.concat(
-        [(high - low).abs(), (high - prev_close).abs(), (low - prev_close).abs()],
-        axis=1,
-    ).max(axis=1)
-
-    up = high.diff()
-    dn = -low.diff()
-    plus_dm = np.where((up > dn) & (up > 0), up, 0.0)
-    minus_dm = np.where((dn > up) & (dn > 0), dn, 0.0)
-
-    atr = pd.Series(tr).rolling(period, min_periods=period).mean()
-    plus_di = 100 * pd.Series(plus_dm, index=df.index).rolling(period, min_periods=period).mean() / atr
-    minus_di = 100 * pd.Series(minus_dm, index=df.index).rolling(period, min_periods=period).mean() / atr
-
-    denom = (plus_di + minus_di).replace(0, np.nan)
-    dx = 100 * (plus_di - minus_di).abs() / denom
-    adx = dx.rolling(period, min_periods=period).mean()
-    return adx
-
-
-def _compute_bbands(
-    df: pd.DataFrame, period: int = BB_PERIOD, num_std: float = BB_NUM_STD
-) -> tuple[pd.Series, pd.Series, pd.Series, pd.Series]:
-    """Returns (sma, upper, lower, width_normalized)."""
-    close = df["close"]
-    sma = close.rolling(period, min_periods=period).mean()
-    sd = close.rolling(period, min_periods=period).std(ddof=0)
-    upper = sma + num_std * sd
-    lower = sma - num_std * sd
-    width = (upper - lower) / sma
-    return sma, upper, lower, width
+# ADX + Bollinger Bands moved to tpcore.indicators 2026-05-14 alongside
+# CHOP (extracted earlier the same day). Re-export under the leading-
+# underscore names so existing imports (sigma/backtest.py, tests) keep
+# working unchanged.
+from tpcore.indicators.adx import compute_adx as _compute_adx  # noqa: E402, F401
+from tpcore.indicators.bbands import compute_bbands as _compute_bbands  # noqa: E402, F401
 
 
 def _band_proximity(close: float, upper: float, lower: float) -> float:
