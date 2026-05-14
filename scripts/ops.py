@@ -1159,7 +1159,16 @@ async def cmd_update(
                 "INGESTION_FAILED",
                 f"refused: {block}",
                 severity="ERROR",
-                data={"stage": "pre_flight", "reason": "market_open"},
+                data={
+                    "stage": "pre_flight",
+                    "reason": "market_open",
+                    # Marks this row as expected behavior so the
+                    # _check_recent_errors probe filters it out. The
+                    # operator chose to invoke --update during regular
+                    # session and got the guard's designed refusal;
+                    # this is not a platform failure.
+                    "noise": True,
+                },
             )
             summary.stages.append(
                 StageResult(name="pre_flight", status="FAILED", duration_ms=0, error=block)
@@ -1886,38 +1895,57 @@ TRADE_MONITOR_HEARTBEAT_MAX_MINUTES = 60.0
 
 
 async def _check_trade_monitor_heartbeat(pool: asyncpg.Pool) -> dict[str, Any]:
-    """Trade-monitor liveness probe — warns when the persistent daemon
-    hasn't written an ``application_log`` event in the last 60 minutes.
+    """Trade-monitor liveness probe — reads from ``platform.daemon_heartbeats``.
 
-    The trade_monitor logs STARTUP on launch and emits per-fill events
-    during regular sessions. A silent WebSocket disconnect would stop
-    the per-fill events; this probe surfaces that condition without
-    waiting for the next reconcile attempt. Closes audit gap D6-2.
+    The trade_monitor writes a heartbeat row (UPSERT, single row) every
+    15 minutes regardless of fills, so quiet-day silence no longer
+    looks like daemon death. The status column is the daemon's
+    self-report: ``healthy`` (stream connected, in normal loop) or
+    ``degraded`` (stream errored, backing off for reconnect). The probe
+    interprets:
 
-    Threshold rationale: trade_monitor emits at least heartbeat-style
-    events through its WebSocket polling loop; even outside market
-    hours it logs reconciliation activity. 60 minutes of complete
-    silence is anomalous.
+    * ``healthy`` + fresh timestamp → ok=True (green)
+    * ``degraded`` + fresh timestamp → ok=False (red), reason set
+    * any status with stale timestamp (> 60 min) → ok=False (red)
+    * ``down`` (operator-set, not written by the daemon today) → red
+    * missing row → red
+
+    Replaces the prior ``MAX(recorded_at) WHERE engine='trade_monitor'``
+    query against ``application_log``, which went red on quiet days
+    because the monitor only logged on fills / reconnects. Heartbeat
+    writer in ``tpcore/trade_monitor.py::_heartbeat_writer``.
     """
-    latest = await pool.fetchval(
+    row = await pool.fetchrow(
         """
-        SELECT MAX(recorded_at)
-        FROM platform.application_log
-        WHERE engine = 'trade_monitor'
+        SELECT last_heartbeat, status
+        FROM platform.daemon_heartbeats
+        WHERE daemon_name = 'trade_monitor'
         """
     )
-    if latest is None:
+    if row is None:
         return {
             "ok": False,
             "latest_event": None,
-            "reason": "no trade_monitor events on record",
+            "status": None,
+            "reason": "no daemon_heartbeats row for trade_monitor",
         }
-    age_minutes = (datetime.now(UTC) - latest).total_seconds() / 60.0
+    last_heartbeat = row["last_heartbeat"]
+    status = row["status"]
+    age_minutes = (datetime.now(UTC) - last_heartbeat).total_seconds() / 60.0
+    is_fresh = age_minutes <= TRADE_MONITOR_HEARTBEAT_MAX_MINUTES
+    ok = (status == "healthy") and is_fresh
+    reason = None
+    if not is_fresh:
+        reason = f"heartbeat stale: {age_minutes:.1f} min > {TRADE_MONITOR_HEARTBEAT_MAX_MINUTES} min"
+    elif status != "healthy":
+        reason = f"daemon self-reports status={status!r}"
     return {
-        "ok": age_minutes <= TRADE_MONITOR_HEARTBEAT_MAX_MINUTES,
-        "latest_event": latest.isoformat(),
+        "ok": ok,
+        "latest_event": last_heartbeat.isoformat(),
         "age_minutes": round(age_minutes, 2),
         "threshold_minutes": TRADE_MONITOR_HEARTBEAT_MAX_MINUTES,
+        "status": status,
+        **({"reason": reason} if reason else {}),
     }
 
 
@@ -1962,17 +1990,68 @@ async def _check_forensics(pool: asyncpg.Pool) -> dict[str, Any]:
 
 
 async def _check_recent_errors(pool: asyncpg.Pool) -> dict[str, Any]:
-    rows = await pool.fetch(
+    """ERROR/CRITICAL events in the last 24h, filtered for actionability.
+
+    Two filters convert "noise" into a separate informational bucket
+    so the red light only flips for genuinely-actionable failures:
+
+    1. **Structured noise tag.** ``data->>'noise' = 'true'`` marks
+       rows the operator should NOT be paged on (e.g. the market-hours
+       pre-flight refusal — operator chose to fire --update during
+       regular session and got the guard's designed exit). Added at
+       the write site in ``cmd_update``; new noise sources should add
+       the same flag rather than be allowlisted by message pattern
+       (which drifts).
+    2. **Self-heal correlation.** Any ERROR whose ``run_id`` has a
+       later ``SHUTDOWN`` event with ``exit_code=0`` within the 24h
+       window is considered self-healed (e.g. a transient timeout
+       followed by a successful retry). Excluded from the critical
+       bucket.
+
+    Output splits the surviving rows into:
+        ``critical`` — red, ok=False, operator action required
+        ``transient`` — informational, ok still True; surfaced for
+                        diagnostics but not for alerting
+    """
+    critical_rows = await pool.fetch(
         """
-        SELECT engine, event_type, severity, message, recorded_at
-        FROM platform.application_log
-        WHERE severity IN ('ERROR', 'CRITICAL')
-          AND recorded_at > now() - INTERVAL '24 hours'
-        ORDER BY recorded_at DESC
+        SELECT engine, event_type, severity, message, recorded_at, run_id
+        FROM platform.application_log a
+        WHERE a.severity IN ('ERROR', 'CRITICAL')
+          AND a.recorded_at > now() - INTERVAL '24 hours'
+          AND COALESCE(a.data->>'noise', 'false') != 'true'
+          AND NOT EXISTS (
+            SELECT 1
+            FROM platform.application_log b
+            WHERE b.run_id = a.run_id
+              AND b.event_type = 'SHUTDOWN'
+              AND b.message LIKE '%exit_code=0%'
+              AND b.recorded_at > a.recorded_at
+              AND b.recorded_at > now() - INTERVAL '24 hours'
+          )
+        ORDER BY a.recorded_at DESC
         LIMIT 50
         """
     )
-    errors = [
+    transient_count = await pool.fetchval(
+        """
+        SELECT COUNT(*) FROM platform.application_log a
+        WHERE a.severity IN ('ERROR', 'CRITICAL')
+          AND a.recorded_at > now() - INTERVAL '24 hours'
+          AND (
+            COALESCE(a.data->>'noise', 'false') = 'true'
+            OR EXISTS (
+                SELECT 1 FROM platform.application_log b
+                WHERE b.run_id = a.run_id
+                  AND b.event_type = 'SHUTDOWN'
+                  AND b.message LIKE '%exit_code=0%'
+                  AND b.recorded_at > a.recorded_at
+                  AND b.recorded_at > now() - INTERVAL '24 hours'
+            )
+          )
+        """
+    ) or 0
+    critical = [
         {
             "engine": r["engine"],
             "event_type": r["event_type"],
@@ -1980,9 +2059,14 @@ async def _check_recent_errors(pool: asyncpg.Pool) -> dict[str, Any]:
             "message": r["message"],
             "recorded_at": r["recorded_at"].isoformat(),
         }
-        for r in rows
+        for r in critical_rows
     ]
-    return {"ok": len(errors) == 0, "count": len(errors), "errors": errors}
+    return {
+        "ok": len(critical) == 0,
+        "critical_count": len(critical),
+        "transient_count": int(transient_count),
+        "critical": critical,
+    }
 
 
 _CHECK_FNS = [

@@ -197,6 +197,7 @@ class TradeMonitor:
         stream_factory: Any | None = None,
         run_id: uuid.UUID | None = None,
         max_reconnect_delay_sec: float = 60.0,
+        heartbeat_interval_sec: float = 900.0,
     ) -> None:
         self._pool = pool
         self._broker = broker
@@ -206,28 +207,84 @@ class TradeMonitor:
         self._run_id = run_id or uuid.uuid4()
         self._db_log = DBLogHandler(pool, ENGINE_NAME, self._run_id)
         self._max_reconnect_delay = max_reconnect_delay_sec
+        # Self-reported daemon-health status flipped by the main loop
+        # (healthy while inside ``_consume_stream``, degraded while
+        # backing off after a stream error). The heartbeat writer reads
+        # this and UPSERTs it to ``platform.daemon_heartbeats`` every
+        # ``heartbeat_interval_sec`` (default 900s = 15 min, four-attempts
+        # margin against the CLI probe's 60-min staleness threshold).
+        self._heartbeat_status = "healthy"
+        self._heartbeat_interval_sec = heartbeat_interval_sec
+        self._heartbeat_task: asyncio.Task | None = None
 
     # ── Public lifecycle ────────────────────────────────────────────────
+
+    async def _write_heartbeat_once(self) -> None:
+        """UPSERT a single row into ``platform.daemon_heartbeats``.
+
+        Swallows DB errors — a heartbeat-write failure must never
+        crash the trade-monitor itself. The probe will go red if
+        last_heartbeat falls behind, which surfaces the underlying
+        DB issue naturally.
+        """
+        try:
+            async with self._pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO platform.daemon_heartbeats
+                        (daemon_name, last_heartbeat, status)
+                    VALUES ('trade_monitor', now(), $1)
+                    ON CONFLICT (daemon_name) DO UPDATE
+                        SET last_heartbeat = EXCLUDED.last_heartbeat,
+                            status = EXCLUDED.status
+                    """,
+                    self._heartbeat_status,
+                )
+            logger.debug(
+                "trade_monitor.heartbeat_written",
+                status=self._heartbeat_status,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "trade_monitor.heartbeat_write_failed",
+                error=str(exc),
+            )
+
+    async def _heartbeat_writer(self) -> None:
+        """Background task: write a heartbeat every ``heartbeat_interval_sec``.
+
+        Writes once immediately on startup so the probe sees a fresh
+        row from second zero, then loops on the configured interval.
+        """
+        while True:
+            await self._write_heartbeat_once()
+            await asyncio.sleep(self._heartbeat_interval_sec)
 
     async def run_forever(self) -> None:
         """Connect, reconcile pending orders, and consume the stream.
 
         Exits only on KeyboardInterrupt / SIGTERM. Logs every reconnect
         attempt to both structlog and ``platform.application_log``.
+        Runs the heartbeat writer as a sibling task; status flips to
+        ``degraded`` while backing off from a stream error so the probe
+        can surface that without requiring a real fill to fire an event.
         """
         await self._db_log.startup(
             commit_sha=os.getenv("RAILWAY_GIT_COMMIT_SHA") or os.getenv("GIT_COMMIT_SHA")
         )
+        self._heartbeat_task = asyncio.create_task(self._heartbeat_writer())
         delay = 1.0
         try:
             await self.reconcile_pending_on_startup()
             while True:
                 try:
+                    self._heartbeat_status = "healthy"
                     await self._consume_stream()
                     delay = 1.0  # clean exit, reset backoff
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
+                    self._heartbeat_status = "degraded"
                     logger.warning(
                         "trade_monitor.stream_error",
                         error=str(exc),
@@ -242,6 +299,10 @@ class TradeMonitor:
                     await asyncio.sleep(delay)
                     delay = min(self._max_reconnect_delay, delay * 2)
         finally:
+            if self._heartbeat_task is not None:
+                self._heartbeat_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await self._heartbeat_task
             await self._db_log.shutdown(0, 0)
 
     async def reconcile_pending_on_startup(self) -> int:
