@@ -28,6 +28,7 @@ OPS_UPDATE_STAGES: tuple[str, ...] = (
     "classify_tickers",
     "catalyst_refresh",
     "sec_filings",
+    "macro_indicators",
     "data_validation",
     "universe_prescreener",
     "universe_simulation",

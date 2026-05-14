@@ -165,7 +165,7 @@ The post-mortem captured these principles as durable patterns; the data-operatio
 2. **Physical-truth at write time.** Every row passes the same physical-truth predicate (`close > 0`, OHLC consistent, no future dates) AT the CSV write step, not just at the destination. Bad rows never reach the database.
 3. **Self-healing > manual retry.** Stages that hit transient errors (timeout, 429, ReadError) auto-retry once inside `--update`. Resumable stages (fundamentals: skip-if-refreshed-within-24h, daily_bars: skip-if-already-ingested) make every re-run faster than the previous.
 4. **SIP > IEX.** Alpaca's free IEX feed silently misses tickers that trade off-IEX. The account is subscribed to SIP; default everywhere is `feed="sip"`. The `coverage_fill` stage closes any remaining gap nightly.
-5. **Validation suite is the gate.** 10 checks: delistings, constituent, splits, row_integrity, fundamentals_integrity, corporate_actions_integrity, catalyst_freshness, sec_filings_freshness, liquidity_tiers_freshness, ticker_classifications_coverage (the last two added 2026-05-14 with the universal 5/5 remediation). Validation green is the operational definition of "data is clean enough to trade on."
+5. **Validation suite is the gate.** 11 checks: delistings, constituent, splits, row_integrity, fundamentals_integrity, corporate_actions_integrity, catalyst_freshness, sec_filings_freshness, liquidity_tiers_freshness, ticker_classifications_coverage, macro_indicators_freshness (the last added 2026-05-14 with the FRED adapter — last data source from §6.1). Validation green is the operational definition of "data is clean enough to trade on."
 6. **Cross-references are integrity too.** `audit_all_tables.sh` (and the dashboard's "Cross-table integrity" row) catches orphan tickers across every dependent table — the kind of failure the validation suite's per-table predicates miss.
 7. **Latest-run beats rolling aggregates on dashboards.** A 7-day rolling failure count surfaces stale history as current state. Show LATEST per source — stale aggregates lie.
 8. **Compress confirmed artifacts.** After a successful upsert, gzip the CSV (~80% disk savings). Loaders read `.gz` transparently on re-run.
@@ -183,6 +183,7 @@ The daily `python scripts/ops.py --update` pipeline already includes the heavy w
 | `sec_filings` | Effectively every 3 days (tightened 2026-05-14) | short-circuits when either SEC table was touched within 3 days | SEC EDGAR Form 4 (insider) + 8-K (material events) → `platform.sec_insider_transactions` + `platform.sec_material_events`. Reference implementation of the standard 5-stage data-adapter pipeline; CSV-first (download → validate-at-CSV → load → compress). Requires `SEC_EDGAR_USER_AGENT` env var per SEC fair-access policy. |
 | `tier_refresh` | Quarterly | skip-if-refreshed-within-90-days (outer) + 60d on Corwin-Schultz spread observations (phase 1) | **Two-phase autonomous** (audit G-2 fix, 2026-05-14): phase 1 re-writes `spread_observations` from Corwin-Schultz, phase 2 aggregates `liquidity_tiers`. Replaces the manual `scripts/run_tier_refresh.sh` invocation; the wrapper still works for manual one-shots. |
 | `classify_tickers` | Monthly | skip-if-refreshed-within-30-days AND ≥95%-coverage | Re-runs the Alpaca-asset-name classifier into `platform.ticker_classifications`. Skip-guard is two-clause: forces a re-run when a universe expansion has introduced unclassified tickers even within the 30-day window. |
+| `macro_indicators` | Weekly (2026-05-14, last data source from §6.1) | short-circuits when `MAX(recorded_at)` is within 7 days | FRED time-series → `platform.macro_indicators` for the five canonical series (sahm_rule, industrial_production, initial_claims, yield_curve, hy_spread). Requires `FRED_API_KEY` env var (free signup at https://fred.stlouisfed.org/docs/api/api_key.html). Unblocks the Sentinel macro-defense engine. |
 
 To force-run locally (same command as the daily run; underlying handlers are idempotent):
 
@@ -193,6 +194,7 @@ python scripts/ops.py --stage fundamentals_refresh
 python scripts/ops.py --stage sec_filings        # SEC EDGAR Form 4 + 8-K
 python scripts/ops.py --stage tier_refresh       # quarterly liquidity-tier rebuild
 python scripts/ops.py --stage classify_tickers   # monthly classification refresh
+python scripts/ops.py --stage macro_indicators   # FRED macro time-series
 ```
 
 #### Quarterly: liquidity tier refresh
@@ -217,11 +219,12 @@ A future `--update-weekly` flag is reserved for any explicitly-weekly work heavi
 
 ### Interpreting Results
 
-- The dashboard `--check` output now includes 18 probes (expanded 2026-05-14):
+- The dashboard `--check` output now includes 19 probes (FRED `macro_indicators_freshness` added 2026-05-14 — last data source):
   - `missed_data_operations` — warns when no `ops` STARTUP event in 30h (launchd misfire watchdog).
   - `supabase_backup` — probes `pg_stat_archiver.last_archived_time`; warns at 26h staleness; fails soft if the role lacks system-view access.
   - `disk_space` — warns when free disk on the repo's filesystem drops below 5 GB (audit-fix D6-1, 2026-05-14).
   - `trade_monitor_heartbeat` — warns when no `trade_monitor` event in `application_log` for 60+ min (catches silent WebSocket disconnects; audit-fix D6-2).
+  - `macro_indicators_freshness` — green if every FRED series ≤ 90d old; yellow 90-180d; red > 180d or any indicator missing.
 - `python scripts/ops.py --check --pretty` displays the health report seen during daily operation (terminal-friendly).
 - `python scripts/ops.py --check` returns JSON on stdout, suitable for scripting and grep-by-key.
 - `python scripts/ops.py --update --dry-run` logs every stage to `platform.application_log` without performing any data writes — useful before letting a new credential or schema change touch the live tables.
@@ -654,11 +657,11 @@ The orchestrator prints `VERDICT: SURVIVED` only when both `DSR ≥ --dsr-thresh
 
 ## 6. Data Validation Suite
 
-The suite runs as part of every `python scripts/ops.py --update` (stage 11 of 13 — see `_STAGE_SPECS` in `scripts/ops.py`) and also on demand via `scripts/run_stage.sh data_validation`.
+The suite runs as part of every `python scripts/ops.py --update` (stage 12 of 14 — see `_STAGE_SPECS` in `scripts/ops.py`) and also on demand via `scripts/run_stage.sh data_validation`.
 
 ### Acceptance criterion — "100% validated"
 
-> **Data is clean when every row in every persistence table satisfies its physical-truth predicate, and the validation suite returns `passed=True` with `confidence=1.000` on every one of its ten checks. No allowlist, no `WHERE clause` skipping known-bad ticker-date pairs. If the predicate fires, the row gets fixed (re-pulled from source) or deleted.**
+> **Data is clean when every row in every persistence table satisfies its physical-truth predicate, and the validation suite returns `passed=True` with `confidence=1.000` on every one of its eleven checks. No allowlist, no `WHERE clause` skipping known-bad ticker-date pairs. If the predicate fires, the row gets fixed (re-pulled from source) or deleted.**
 
 Verifiable with one SQL:
 
@@ -677,7 +680,7 @@ FROM (
 ) x;
 ```
 
-### The ten checks
+### The eleven checks
 
 | Check | What it asserts | What "fail" means |
 |---|---|---|
@@ -691,6 +694,7 @@ FROM (
 | `sec_filings_freshness` *(NEW 2026-05-14)* | `sec_insider_transactions` + `sec_material_events` newest `filing_date` ≥ today − 14 days; ≥ 30% of T1+T2 stocks have a filing in last 180 days | SEC EDGAR ingest stalled or universe coverage thin |
 | `liquidity_tiers_freshness` *(NEW 2026-05-14, L-2)* | `liquidity_tiers.max(last_updated)` ≥ today − 100 days; ≥ 3% of active universe in T1+T2 | quarterly tier refresh missed; cost model rotting |
 | `ticker_classifications_coverage` *(NEW 2026-05-14, T-2)* | ≥ 90% of active prices_daily tickers have a row in `ticker_classifications` | universe expansion without re-running the classifier; ETF/SPAC filters silently failing |
+| `macro_indicators_freshness` *(NEW 2026-05-14, FRED adapter)* | All five FRED series present; newest observation ≤ 90d old per series | `FRED_API_KEY` expired, FRED schema break, or stalled weekly stage |
 
 ### Cross-table audit (added 2026-05-13)
 
@@ -702,7 +706,7 @@ The validation suite covers physical-truth checks. Cross-reference checks live i
 
 The dashboard's **Cross-table integrity** row (Platform Health panel) runs the same checks and surfaces any non-zero count.
 
-### The thirteen `--update` stages (current — reordered 2026-05-14 audit)
+### The fourteen `--update` stages (FRED added 2026-05-14)
 
 `scripts/ops.py --update` runs the following stages in order (source of truth: `_STAGE_SPECS` in `scripts/ops.py`). Stage order was corrected 2026-05-14 (audit O-1/O-2/O-3 fix): `tier_refresh` + `classify_tickers` now run **before** `catalyst_refresh` + `sec_filings` because the latter two filter by `ticker_classifications.asset_class`. `reconcile` was added at #3 (audit G-3 fix).
 
@@ -716,9 +720,10 @@ The dashboard's **Cross-table integrity** row (Platform Health panel) runs the s
 8. `classify_tickers` — re-runs the Alpaca-asset-name classifier → `ticker_classifications`. Skip-guard: refreshed within 30 days AND ≥95% coverage of the active universe.
 9. `catalyst_refresh` — FMP earnings-history → `catalyst_events` for T1+T2 stocks. Skip-guard: short-circuits when last refresh < 6 days ago.
 10. `sec_filings` — SEC EDGAR Form 4 + 8-K → `sec_insider_transactions` + `sec_material_events` for T1+T2 stocks. CSV-first. **Skip-guard tightened 6→3 days 2026-05-14** (cadence finding): Form 4 has a 2-business-day filing deadline so 6d staleness was half-stale on average.
-11. `data_validation` — the 10-check suite above.
-12. `universe_prescreener` — writes today's `momentum` rows to `universe_candidates`.
-13. `universe_simulation` — diagnostic; runs `scripts/simulate_universe.py`.
+11. `macro_indicators` — **added 2026-05-14 (FRED adapter, last data source from §6.1)**: FRED time-series → `platform.macro_indicators`. Weekly cadence with 7-day skip guard. Unblocks Sentinel.
+12. `data_validation` — the 11-check suite above.
+13. `universe_prescreener` — writes today's `momentum` rows to `universe_candidates`.
+14. `universe_simulation` — diagnostic; runs `scripts/simulate_universe.py`.
 
 `--update` refuses to run during the NYSE regular session (corrupts intraday bars). `--force` bypasses. Failed stages auto-retry once if the error matches a known-transient class (timeout, ReadError, 429).
 

@@ -86,7 +86,8 @@ Audited 2026-05-14 (re-graded after F-1 / C-1 / L-1..L-4 / T-1..T-4 remediation)
 | `handle_data_validation` | n/a (orchestrator) | ✅ `test_suite.py` + `test_suite_e2e.py` | n/a (orchestrates the 10 checks) | ✅ `validation_suite` | ✅ `data_validation` stage | **5/5 applicable** |
 | `assign_liquidity_tiers` | ✅ structured logs | ✅ `test_liquidity_tiers.py` *(L-1, 9 tests)* | ✅ `liquidity_tiers_freshness` *(L-2)* | ✅ `liquidity_tiers_freshness` row *(L-3)* | ✅ `tier_refresh` stage; skip-if-90d *(L-4)* | **5/5** |
 | `classify_tickers` | ✅ structured logs | ✅ handler-path coverage *(T-1, +4 tests)* | ✅ `ticker_classifications_coverage` *(T-2)* | ✅ `ticker_classifications` row *(T-3)* | ✅ `classify_tickers` stage; skip-if-30d-and-95%-coverage *(T-4)* | **5/5** |
-| `sec_edgar` (Phase 2, 2026-05-14, reference) | ✅ CSV-first sub-protocol | ✅ `test_sec_adapter.py` (9 tests) | ✅ `sec_filings_freshness` | ✅ `sec_filings_freshness` row | ✅ `sec_filings` stage; skip-if-6d | **5/5** |
+| `sec_edgar` (Phase 2, 2026-05-14, reference) | ✅ CSV-first sub-protocol | ✅ `test_sec_adapter.py` (9 tests) | ✅ `sec_filings_freshness` | ✅ `sec_filings_freshness` row | ✅ `sec_filings` stage; skip-if-3d (tightened 2026-05-14) | **5/5** |
+| `fred` (2026-05-14, last data source from §6.1) | ✅ `@with_retry` on `_fetch_raw`; per-series fail-tolerant `get_all_indicators`; structured success event with per-indicator counts + date range | ✅ `test_fred_adapter.py` — 9 tests (happy / empty / 429 retry / 400 no-retry / "." sentinel / all-series iteration / per-series-failure tolerance / idempotency / missing-key fail-fast) | ✅ `macro_indicators_freshness` (11th check) | ✅ `macro_indicators_freshness` row (green ≤ 90d, yellow ≤ 180d) | ✅ `macro_indicators` stage; skip-if-7d; idempotent `ON CONFLICT (indicator, date) DO NOTHING` | **5/5** |
 
 Legend: ✅ implemented · n/a doesn't apply.
 

@@ -46,6 +46,19 @@ class FakePool:
         if "platform.prices_daily" in sql_lower and "ticker = $1" in sql_lower:
             ticker = args[0]
             return [r for r in self.rows if r["ticker"] == ticker]
+        # macro_indicators_freshness check: return one fresh row per
+        # expected indicator so the suite passes when running e2e
+        # tests focused on unrelated checks.
+        if "platform.macro_indicators" in sql_lower and "group by indicator" in sql_lower:
+            from datetime import UTC, datetime, timedelta
+            today = datetime.now(UTC).date() - timedelta(days=5)
+            return [
+                {"indicator": name, "latest_date": today, "rows_total": 100}
+                for name in (
+                    "sahm_rule", "industrial_production", "initial_claims",
+                    "yield_curve", "hy_spread",
+                )
+            ]
         return []
 
     async def fetchrow(self, sql: str, *args) -> dict[str, Any] | None:

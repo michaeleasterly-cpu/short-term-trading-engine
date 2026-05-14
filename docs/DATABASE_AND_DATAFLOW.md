@@ -323,6 +323,31 @@ Populated by the weekly `sec_filings` ops stage (`handle_sec_filings` in `tpcore
 
 **Indexes:** `(ticker, filing_date)`, `(filing_date)`.
 
+#### `platform.macro_indicators`
+
+**Purpose:** FRED (St. Louis Fed) macro time-series. Five canonical indicators ingested by `tpcore.fred.FREDAdapter` → `handle_macro_indicators` → weekly `macro_indicators` ops stage. Built 2026-05-14 as the last data source from MASTER_PLAN §6.1 — closes the spec-only gap and unblocks the Sentinel engine.
+
+**Indicators (canonical_name ← FRED series_id):**
+
+- `sahm_rule` ← `SAHMREALTIME` (monthly recession indicator)
+- `industrial_production` ← `INDPRO` (monthly PMI proxy)
+- `initial_claims` ← `IC4WSA` (weekly 4-wk MA of jobless claims)
+- `yield_curve` ← `T10Y2Y` (daily 10y-2y Treasury spread)
+- `hy_spread` ← `BAMLH0A0HYM2` (daily HY option-adjusted spread — credit stress)
+
+**Columns:**
+
+- `indicator` (text, PK): canonical name from the list above.
+- `date` (date, PK): observation date.
+- `value` (numeric(20,6), NOT NULL): observation value. FRED's missing-value sentinel (`"."`) is filtered at the adapter layer.
+- `recorded_at` (timestamptz, default `now()`).
+
+**Primary key:** `(indicator, date)`. **CHECK** constraints: `length(indicator) > 0`, `date <= CURRENT_DATE + INTERVAL '1 day'`.
+
+**Indexes:** `(indicator, date)` index for time-series scans.
+
+**Refresh cadence:** weekly via `ops.py --update` `macro_indicators` stage. 7-day skip guard. Macro data is slow-moving — quarterly + monthly series legitimately lag 30-60 days; the `macro_indicators_freshness` validation check warns at > 90 days.
+
 #### `platform.ingestion_jobs`
 
 **Purpose:** Persistent job registry consumed by the `ingestion-engine` service (Railway service definition in `railway.json:58`). Each row describes a recurring ingestion task (daily bars, corporate actions, fundamentals refresh, etc.) — the engine reads the registry on each tick and dispatches due jobs to handlers in `tpcore.ingestion.handlers`.
@@ -690,7 +715,7 @@ Tables and services that are specified but not yet built:
 
 The data layer underwent a major cleanup and self-healing refactor on 2026-05-13. Operators reading this doc post-cleanup should know:
 
-### 6.1 Validation suite — now 10 checks (was 3)
+### 6.1 Validation suite — now 11 checks (was 3)
 
 `tpcore.quality.validation.suite.run_suite` runs every `--update` stage 5. Each check returns a `CheckResult` and persists one row to `platform.data_quality_log`:
 
@@ -706,15 +731,16 @@ The data layer underwent a major cleanup and self-healing refactor on 2026-05-13
 | **`sec_filings_freshness`** (NEW 2026-05-14) | `sec_insider_transactions` + `sec_material_events` newest `filing_date` ≤ 14d old; ≥ 30% of T1+T2 stocks have a filing in last 180d. Reference implementation of the standard 5-stage data-adapter pipeline. |
 | **`liquidity_tiers_freshness`** (NEW 2026-05-14, L-2) | `liquidity_tiers.max(last_updated)` ≤ 100d old AND ≥ 3% of active universe in T1+T2. Catches operator inaction on the quarterly tier refresh. |
 | **`ticker_classifications_coverage`** (NEW 2026-05-14, T-2) | ≥ 90% of active prices_daily tickers have a row in `ticker_classifications`. Catches universe expansion without re-running the classifier. |
+| **`macro_indicators_freshness`** (NEW 2026-05-14, FRED adapter) | All five FRED series present + newest observation per indicator ≤ 90 days old. Catches `FRED_API_KEY` expiry, schema breaks, or stalled weekly stage. |
 
-Acceptance: `passed=True` on all 10 + `confidence=1.000`. Cleanup scripts exist for each predicate (see `scripts/cleanup_*.py`).
+Acceptance: `passed=True` on all 11 + `confidence=1.000`. Cleanup scripts exist for each predicate (see `scripts/cleanup_*.py`).
 
-### 6.2 `--update` pipeline now 13 stages (reordered 2026-05-14 audit)
+### 6.2 `--update` pipeline now 14 stages (FRED added 2026-05-14)
 
 ```
 daily_bars → corporate_actions → reconcile → coverage_fill → cross_ref_cleanup
 → fundamentals_refresh → tier_refresh → classify_tickers → catalyst_refresh
-→ sec_filings → data_validation → universe_prescreener → universe_simulation
+→ sec_filings → macro_indicators → data_validation → universe_prescreener → universe_simulation
 ```
 
 Two notable changes vs the pre-2026-05-14 order:

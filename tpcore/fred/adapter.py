@@ -1,0 +1,236 @@
+"""FRED macro-indicators adapter.
+
+Pulls daily/weekly/monthly observations for the five macro series
+listed in :data:`INDICATOR_SERIES` from the St. Louis Fed FRED API:
+
+* ``sahm_rule``            — SAHMREALTIME (monthly recession indicator)
+* ``industrial_production`` — INDPRO (monthly PMI proxy)
+* ``initial_claims``       — IC4WSA (weekly 4-wk MA jobless claims)
+* ``yield_curve``          — T10Y2Y (daily 10y-2y Treasury spread)
+* ``hy_spread``            — BAMLH0A0HYM2 (daily HY OAS — credit stress)
+
+FRED API docs: https://fred.stlouisfed.org/docs/api/fred/
+Rate limit: 120 requests per minute (we pull 5 series → 5 calls per
+run — well under the limit; courtesy delay is symbolic).
+
+Reference implementation: ``tpcore.sec.SECEdgarAdapter``. Same shape:
+fail-fast at construction on missing API key, ``@with_retry`` on the
+HTTP layer, ``DataProviderOutage`` mapping at the public-method
+boundary, structured logging.
+"""
+from __future__ import annotations
+
+import asyncio
+import os
+from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
+from typing import Any
+
+import httpx
+import structlog
+
+from tpcore.outage import DataProviderOutage, with_retry
+
+logger = structlog.get_logger(__name__)
+
+# ── Configuration constants ────────────────────────────────────────────
+
+_PROVIDER_NAME = "fred"
+_API_KEY_ENV = "FRED_API_KEY"
+_BASE_URL = "https://api.stlouisfed.org/fred"
+_DEFAULT_TIMEOUT_S = 30.0
+_INTER_REQUEST_SLEEP_S = 0.5  # well under FRED's 120/min courtesy budget
+
+
+INDICATOR_SERIES: tuple[tuple[str, str], ...] = (
+    ("sahm_rule",            "SAHMREALTIME"),
+    ("industrial_production", "INDPRO"),
+    ("initial_claims",       "IC4WSA"),
+    ("yield_curve",          "T10Y2Y"),
+    ("hy_spread",            "BAMLH0A0HYM2"),
+)
+"""(canonical_name, FRED series_id) pairs — the platform's vocabulary
+on the left, FRED's identifier on the right. Adding a new indicator
+means appending one tuple here plus a glossary entry."""
+
+
+def _parse_observation_date(raw: str) -> date | None:
+    try:
+        return datetime.fromisoformat(raw[:10]).date()
+    except Exception:
+        return None
+
+
+def _parse_value(raw: Any) -> Decimal | None:
+    """FRED encodes missing values as ``"."``; reject those upstream of
+    the DB CHECK constraint."""
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if not s or s == ".":
+        return None
+    try:
+        return Decimal(s)
+    except (InvalidOperation, ValueError):
+        return None
+
+
+class FREDAdapter:
+    """Pulls macro time-series from FRED.
+
+    Args:
+        api_key: FRED API key. Defaults to ``FRED_API_KEY`` env var.
+            Raises ``DataProviderOutage`` at construction if missing —
+            fail-fast per the adapter readiness checklist.
+        client: optional pre-built ``httpx.AsyncClient`` for tests.
+        timeout: per-request timeout in seconds. Defaults to 30.
+        inter_request_sleep_s: courtesy delay between requests.
+    """
+
+    def __init__(
+        self,
+        *,
+        api_key: str | None = None,
+        client: httpx.AsyncClient | None = None,
+        timeout: float = _DEFAULT_TIMEOUT_S,
+        inter_request_sleep_s: float = _INTER_REQUEST_SLEEP_S,
+    ) -> None:
+        key = api_key or os.getenv(_API_KEY_ENV)
+        if not key:
+            raise DataProviderOutage(
+                f"{_PROVIDER_NAME} adapter requires {_API_KEY_ENV} env var "
+                "(free signup at https://fred.stlouisfed.org/docs/api/api_key.html)"
+            )
+        self._api_key = key
+        self._client = client
+        self._timeout = timeout
+        self._inter_sleep = inter_request_sleep_s
+        self._owned_client = client is None
+
+    async def __aenter__(self) -> FREDAdapter:
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                base_url=_BASE_URL,
+                timeout=self._timeout,
+            )
+        return self
+
+    async def __aexit__(self, *exc: Any) -> None:
+        await self.aclose()
+
+    async def aclose(self) -> None:
+        if self._owned_client and self._client is not None:
+            await self._client.aclose()
+            self._client = None
+
+    async def _ensure_client(self) -> httpx.AsyncClient:
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                base_url=_BASE_URL,
+                timeout=self._timeout,
+            )
+            self._owned_client = True
+        return self._client
+
+    # ── Public API ─────────────────────────────────────────────────────
+    async def get_observations(
+        self,
+        series_id: str,
+        *,
+        start: date | None = None,
+        end: date | None = None,
+    ) -> list[dict[str, Any]]:
+        """Fetch observations for a single FRED series.
+
+        Returns a list of ``{"date": date, "value": Decimal | None}``.
+        Missing observations (FRED's ``.``) are filtered out before
+        return — the loader doesn't need to repeat the check.
+
+        Raises ``DataProviderOutage`` on permanent failure
+        (4xx-not-429, exhausted retries).
+        """
+        params: dict[str, Any] = {
+            "series_id": series_id,
+            "api_key": self._api_key,
+            "file_type": "json",
+        }
+        if start is not None:
+            params["observation_start"] = start.isoformat()
+        if end is not None:
+            params["observation_end"] = end.isoformat()
+        try:
+            payload = await self._fetch_raw("/series/observations", params)
+        except DataProviderOutage:
+            raise
+        except httpx.HTTPError as exc:
+            raise DataProviderOutage(
+                f"{_PROVIDER_NAME} get_observations({series_id}) unreachable: {exc}"
+            ) from exc
+
+        raw_obs = (payload or {}).get("observations", []) or []
+        rows: list[dict[str, Any]] = []
+        for o in raw_obs:
+            d = _parse_observation_date(str(o.get("date", "")))
+            v = _parse_value(o.get("value"))
+            if d is None or v is None:
+                continue
+            rows.append({"date": d, "value": v})
+        logger.info(
+            f"{_PROVIDER_NAME}.observations_fetched",
+            series_id=series_id,
+            count_total=len(raw_obs),
+            count_valid=len(rows),
+        )
+        return rows
+
+    async def get_all_indicators(
+        self,
+        *,
+        start: date | None = None,
+        end: date | None = None,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Fetch observations for every indicator in :data:`INDICATOR_SERIES`.
+
+        Returns ``{canonical_name: [{date, value}, ...]}``. Inter-series
+        courtesy delay applied between calls (well under FRED's 120/min
+        cap). Failures on a single series log a warning and continue —
+        a partial result is more useful than nothing.
+        """
+        out: dict[str, list[dict[str, Any]]] = {}
+        for name, series_id in INDICATOR_SERIES:
+            try:
+                out[name] = await self.get_observations(
+                    series_id, start=start, end=end,
+                )
+            except DataProviderOutage as exc:
+                logger.warning(
+                    f"{_PROVIDER_NAME}.series_failed",
+                    series_id=series_id, name=name, error=str(exc),
+                )
+                out[name] = []
+            await asyncio.sleep(self._inter_sleep)
+        return out
+
+    # ── Internal: HTTP layer ──────────────────────────────────────────
+    @with_retry(max_attempts=4, backoff_base_sec=1.0, backoff_cap_sec=30.0)
+    async def _fetch_raw(self, path: str, params: dict[str, Any]) -> Any:
+        client = await self._ensure_client()
+        resp = await client.get(path, params=params)
+        if resp.status_code == 200:
+            return resp.json()
+        if resp.status_code == 429 or 500 <= resp.status_code < 600:
+            raise httpx.HTTPStatusError(
+                f"{_PROVIDER_NAME} {path} → {resp.status_code}",
+                request=resp.request,
+                response=resp,
+            )
+        # 4xx-not-429 → permanent. Raise DataProviderOutage with the
+        # provider's error message so the operator can diagnose
+        # (invalid key, bad series_id, etc.).
+        raise DataProviderOutage(
+            f"{_PROVIDER_NAME} {path} returned {resp.status_code}: "
+            f"{resp.text[:200]}"
+        )
+
+
+__all__ = ["FREDAdapter", "INDICATOR_SERIES"]

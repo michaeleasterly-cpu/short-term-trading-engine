@@ -712,12 +712,104 @@ def _gzip_in_place(path: Any) -> None:
     p.unlink()
 
 
+async def handle_macro_indicators(
+    pool: asyncpg.Pool, config: dict[str, Any],
+) -> int | None:
+    """FRED macro-indicators ingest. Weekly stage (Monday 08:00 UTC).
+
+    Pulls the five canonical series via ``tpcore.fred.FREDAdapter`` and
+    upserts into ``platform.macro_indicators`` with ``ON CONFLICT
+    (indicator, date) DO NOTHING``. Idempotent — second run within the
+    7-day skip-guard window returns 0 new rows.
+
+    ``config`` keys:
+        * ``start_date``: ISO date, default ``"2018-01-01"`` (full
+          backtest-overlap window).
+        * ``skip_guard_days``: skip if MAX(recorded_at) is within this
+          many days (default 7). Pass 0 to force-rerun.
+
+    Returns ``rows_loaded`` across all indicators. Structured success
+    event includes per-indicator counts + date range so the operator
+    can reconcile without opening the DB.
+    """
+    from datetime import date as _date
+
+    from tpcore.fred import INDICATOR_SERIES, FREDAdapter
+
+    # ── 0. Skip guard ────────────────────────────────────────────────
+    skip_days = int(config.get("skip_guard_days", 7))
+    if skip_days > 0:
+        async with pool.acquire() as conn:
+            newest = await conn.fetchval(
+                "SELECT MAX(recorded_at) FROM platform.macro_indicators"
+            )
+        if newest is not None:
+            age = datetime.now(UTC) - newest
+            if age.days < skip_days:
+                logger.info(
+                    "ingestion.handler.macro_indicators.skipped_fresh",
+                    last_refresh_age_days=age.days,
+                )
+                return 0
+
+    start_raw = config.get("start_date", "2018-01-01")
+    start = _date.fromisoformat(start_raw) if isinstance(start_raw, str) else start_raw
+
+    # ── 1. Fetch all five series ─────────────────────────────────────
+    per_indicator: dict[str, list[dict[str, Any]]] = {}
+    async with FREDAdapter() as fred:
+        per_indicator = await fred.get_all_indicators(start=start)
+
+    # ── 2. Bulk upsert ───────────────────────────────────────────────
+    upsert_rows: list[tuple] = []
+    for name, _ in INDICATOR_SERIES:
+        for obs in per_indicator.get(name, []):
+            upsert_rows.append((name, obs["date"], obs["value"]))
+
+    if not upsert_rows:
+        logger.info(
+            "ingestion.handler.macro_indicators.empty",
+            reason="all series returned zero observations",
+        )
+        return 0
+
+    async with pool.acquire() as conn:
+        await conn.executemany(
+            """
+            INSERT INTO platform.macro_indicators (indicator, date, value)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (indicator, date) DO NOTHING
+            """,
+            upsert_rows,
+        )
+
+    summary: dict[str, dict[str, Any]] = {}
+    for name, _ in INDICATOR_SERIES:
+        obs = per_indicator.get(name, [])
+        if obs:
+            summary[name] = {
+                "rows": len(obs),
+                "date_min": obs[0]["date"].isoformat(),
+                "date_max": obs[-1]["date"].isoformat(),
+            }
+        else:
+            summary[name] = {"rows": 0, "reason": "no observations returned"}
+
+    logger.info(
+        "ingestion.handler.macro_indicators.done",
+        rows_upserted=len(upsert_rows),
+        per_indicator=summary,
+    )
+    return len(upsert_rows)
+
+
 HANDLERS: dict[str, HandlerFn] = {
     "data_validation": handle_data_validation,
     "fundamentals_refresh": handle_fundamentals_refresh,
     "corporate_actions": handle_corporate_actions,
     "daily_bars": handle_daily_bars,
     "sec_filings": handle_sec_filings,
+    "macro_indicators": handle_macro_indicators,
 }
 
 
@@ -729,4 +821,5 @@ __all__ = [
     "handle_corporate_actions",
     "handle_daily_bars",
     "handle_sec_filings",
+    "handle_macro_indicators",
 ]

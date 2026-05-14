@@ -741,6 +741,25 @@ async def _stage_classify_tickers(pool: asyncpg.Pool) -> dict[str, Any]:
     return {str(k): int(v) for k, v in stats.items()}
 
 
+async def _stage_macro_indicators(pool: asyncpg.Pool) -> dict[str, Any]:
+    """Weekly FRED macro-indicators ingest.
+
+    Pulls Sahm Rule, industrial production, initial claims, yield curve,
+    HY credit spread → ``platform.macro_indicators``. Idempotent; the
+    handler's own 7-day skip-guard short-circuits intra-week reruns.
+    Added 2026-05-14 as the last data source from MASTER_PLAN §6.1.
+    """
+    from tpcore.ingestion.handlers import handle_macro_indicators
+
+    log = structlog.get_logger("scripts.ops")
+    try:
+        rows = await handle_macro_indicators(pool, {})
+    except Exception as exc:
+        log.error("ops.stage.macro_indicators.failed", error=str(exc))
+        raise
+    return {"rows_loaded": int(rows or 0)}
+
+
 async def _stage_sec_filings(pool: asyncpg.Pool, *, backfill: bool = False) -> dict[str, Any]:
     """Weekly SEC EDGAR Form 4 + 8-K ingest.
 
@@ -1033,6 +1052,11 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # average. Heavy timeout: ~200 tickers × ~1.5s/call (rate-limited
     # under SEC's 10 req/sec cap) + Form 4 XML fetches.
     ("sec_filings",         lambda pool, cfg: (lambda: _stage_sec_filings(pool, backfill=bool(cfg.get("_sec_backfill")))), SEC_FILINGS_STAGE_TIMEOUT_SEC),
+    # FRED macro indicators — weekly. Five canonical series (sahm_rule,
+    # industrial_production, initial_claims, yield_curve, hy_spread)
+    # via FREDAdapter, idempotent ON CONFLICT, 7-day skip-guard.
+    # Added 2026-05-14 — closes the last "spec-only" gap in §6.1.
+    ("macro_indicators",    lambda pool, cfg: (lambda: _stage_macro_indicators(pool)),         STAGE_TIMEOUT_SEC),
     # data_validation runs the 10-check suite against the live tables —
     # at the current 20M-row prices_daily it consistently runs ~120-
     # 130s. Bumping to 5 min gives headroom without masking a true hang.
@@ -1745,6 +1769,55 @@ async def _check_supabase_backup(pool: asyncpg.Pool) -> dict[str, Any]:
 DISK_SPACE_MIN_FREE_GB = 5.0
 
 
+MACRO_FRESHNESS_GREEN_DAYS = 90
+MACRO_FRESHNESS_YELLOW_DAYS = 180
+
+
+async def _check_macro_indicators_freshness(pool: asyncpg.Pool) -> dict[str, Any]:
+    """Dashboard probe — per-indicator freshness for FRED macro data.
+
+    Returns the most-recent value + observation date for each of the
+    five canonical indicators, plus a global ok/yellow/red status:
+        * ok=True  — every indicator within 90d
+        * ok=False — any indicator older than 90d
+    A separate ``warn`` flag marks the 90-180d band so the dashboard
+    can render yellow rather than red.
+    """
+    rows = await pool.fetch(
+        """
+        SELECT indicator,
+               MAX(date) AS latest_date,
+               COUNT(*) AS rows_total
+        FROM platform.macro_indicators
+        GROUP BY indicator
+        """
+    )
+    today = date.today()
+    by_ind: dict[str, dict[str, Any]] = {}
+    max_age = 0
+    for r in rows:
+        age = (today - r["latest_date"]).days
+        by_ind[r["indicator"]] = {
+            "latest_date": r["latest_date"].isoformat(),
+            "age_days": age,
+            "rows_total": int(r["rows_total"] or 0),
+        }
+        if age > max_age:
+            max_age = age
+    if not by_ind:
+        return {"ok": False, "reason": "macro_indicators is empty", "indicators": {}}
+    ok = max_age <= MACRO_FRESHNESS_GREEN_DAYS
+    warn = MACRO_FRESHNESS_GREEN_DAYS < max_age <= MACRO_FRESHNESS_YELLOW_DAYS
+    return {
+        "ok": ok,
+        "warn": warn,
+        "max_age_days": max_age,
+        "threshold_green_days": MACRO_FRESHNESS_GREEN_DAYS,
+        "threshold_yellow_days": MACRO_FRESHNESS_YELLOW_DAYS,
+        "indicators": by_ind,
+    }
+
+
 async def _check_disk_space(pool: asyncpg.Pool) -> dict[str, Any]:
     """Local disk space probe — warns when the repo's filesystem dips
     below ``DISK_SPACE_MIN_FREE_GB``. Catches the operator-forgot-to-
@@ -1844,6 +1917,7 @@ _CHECK_FNS = [
     ("fundamentals_freshness", _check_fundamentals_freshness),
     ("catalyst_freshness", _check_catalyst_freshness),
     ("sec_filings_freshness", _check_sec_filings_freshness),
+    ("macro_indicators_freshness", _check_macro_indicators_freshness),
     ("liquidity_tiers_freshness", _check_liquidity_tiers_freshness),
     ("ticker_classifications", _check_ticker_classifications),
     ("engine_schedulers", _check_engine_schedulers),

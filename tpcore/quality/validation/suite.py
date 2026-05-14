@@ -40,6 +40,8 @@ from .checks.fundamentals_integrity import CHECK_NAME as FUND_INTEGRITY_NAME
 from .checks.fundamentals_integrity import check_fundamentals_integrity
 from .checks.liquidity_tiers_freshness import CHECK_NAME as LIQUIDITY_FRESHNESS_NAME
 from .checks.liquidity_tiers_freshness import check_liquidity_tiers_freshness
+from .checks.macro_indicators_freshness import CHECK_NAME as MACRO_FRESHNESS_NAME
+from .checks.macro_indicators_freshness import check_macro_indicators_freshness
 from .checks.row_integrity import CHECK_NAME as ROW_INTEGRITY_NAME
 from .checks.row_integrity import check_row_integrity
 from .checks.sec_filings_freshness import CHECK_NAME as SEC_FRESHNESS_NAME
@@ -73,6 +75,7 @@ KNOWN_CHECK_NAMES: tuple[str, ...] = (
     SEC_FRESHNESS_NAME,
     LIQUIDITY_FRESHNESS_NAME,
     CLASSIFICATIONS_NAME,
+    MACRO_FRESHNESS_NAME,
 )
 
 
@@ -124,19 +127,25 @@ async def run_suite(
     classifications_task = _safe_run(
         CLASSIFICATIONS_NAME, check_ticker_classifications_coverage, pool, None
     )
+    macro_task = _safe_run(
+        MACRO_FRESHNESS_NAME, check_macro_indicators_freshness, pool, None
+    )
     (
         delistings_result, constituent_result, splits_result,
         row_integrity_result, fund_integrity_result, ca_integrity_result,
         catalyst_result, sec_result, liquidity_result, classifications_result,
+        macro_result,
     ) = await asyncio.gather(
         delistings_task, constituent_task, splits_task,
         row_integrity_task, fund_integrity_task, ca_integrity_task,
         catalyst_task, sec_task, liquidity_task, classifications_task,
+        macro_task,
     )
     checks: list[CheckResult] = [
         delistings_result, constituent_result, splits_result,
         row_integrity_result, fund_integrity_result, ca_integrity_result,
         catalyst_result, sec_result, liquidity_result, classifications_result,
+        macro_result,
     ]
 
     finished_at = datetime.now(UTC)
