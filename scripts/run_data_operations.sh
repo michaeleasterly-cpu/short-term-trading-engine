@@ -35,6 +35,30 @@ if [[ "${1:-}" == "--force" ]]; then
     FORCE_FLAG="--force"
 fi
 
+# Generate one run_id for the whole workflow (added 2026-05-15 to close
+# the daemon-progress visibility gap). Passed to ops.py via --run-id so
+# every event — the 15 --update stages AND the bash-wrapper steps below
+# — shares one row family in application_log. The progress panel
+# queries by run_id, so this is what makes wrapper steps show up.
+RUN_ID=$(.venv/bin/python -c "import uuid; print(uuid.uuid4())")
+
+# Helper: emit a single application_log event with the shared RUN_ID.
+# Swallows logging failures (a missing event must not crash the
+# wrapper). Use as:
+#   _log_event INGESTION_START wrapper_audit ["optional message"]
+_log_event() {
+    local event_type="$1"
+    local stage_name="$2"
+    local msg="${3:-}"
+    DATABASE_URL="${DATABASE_URL_IPV4:-$DATABASE_URL}" \
+        .venv/bin/python scripts/_log_event.py \
+            --run-id "$RUN_ID" \
+            --event-type "$event_type" \
+            --stage-name "$stage_name" \
+            ${msg:+--message "$msg"} \
+            2>/dev/null || true
+}
+
 # macOS notification on failure (audit gap G-4 fix, 2026-05-14).
 # Fires a Notification Center alert + tail-of-log breadcrumb so the
 # operator sees red without trawling logs. Safe on non-Mac hosts
@@ -63,7 +87,8 @@ set -a
 # shellcheck disable=SC1091
 source .env
 set +a
-DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python scripts/ops.py --update --source data_operations_daemon $FORCE_FLAG
+DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python scripts/ops.py \
+    --update --source data_operations_daemon --run-id "$RUN_ID" $FORCE_FLAG
 UPDATE_RC=$?
 if [[ $UPDATE_RC -ne 0 ]]; then
     echo "✗ --update exited with code $UPDATE_RC — investigate before proceeding."
@@ -78,18 +103,22 @@ fi
 echo ""
 echo "▶ STEP 3 / 6  verify cross-table integrity"
 echo "────────────────────────────────────────────────────────────────────────"
+_log_event INGESTION_START wrapper_audit
 scripts/run_audit_all_tables.sh
 AUDIT_RC=$?
 if [[ $AUDIT_RC -ne 0 ]]; then
+    _log_event INGESTION_FAILED wrapper_audit "audit exited $AUDIT_RC"
     echo "✗ audit_all_tables exited $AUDIT_RC"
     _notify_failure "audit_all_tables" $AUDIT_RC
     exit $AUDIT_RC
 fi
+_log_event INGESTION_COMPLETE wrapper_audit
 
 # Step 4 — validation suite (already ran inside --update, but re-confirm).
 echo ""
 echo "▶ STEP 4 / 6  fix — surface any remaining validation red"
 echo "────────────────────────────────────────────────────────────────────────"
+_log_event INGESTION_START wrapper_validation_recheck
 FAILED_CHECKS=$(DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python -c "
 import asyncio, os
 from tpcore.db import build_asyncpg_pool
@@ -116,6 +145,7 @@ async def main():
 asyncio.run(main())
 ")
 if [[ -n "$FAILED_CHECKS" ]]; then
+    _log_event INGESTION_FAILED wrapper_validation_recheck "validation has red rows"
     echo "✗ validation has red rows AFTER self-heal:"
     echo "$FAILED_CHECKS"
     echo ""
@@ -124,6 +154,7 @@ if [[ -n "$FAILED_CHECKS" ]]; then
     _notify_failure "validation suite" 1
     exit 1
 fi
+_log_event INGESTION_COMPLETE wrapper_validation_recheck
 echo "✓ all 6 validation checks green"
 
 # Step 4b — refresh dashboard matview now that prices_daily is current.
@@ -131,7 +162,8 @@ echo "✓ all 6 validation checks green"
 echo ""
 echo "▶ STEP 4b / 6  refresh platform.prices_daily_tickers matview"
 echo "────────────────────────────────────────────────────────────────────────"
-DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python -c "
+_log_event INGESTION_START wrapper_matview_refresh
+if DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python -c "
 import asyncio, asyncpg, os
 async def main():
     conn = await asyncpg.connect(os.environ['DATABASE_URL'])
@@ -139,13 +171,23 @@ async def main():
     print('✓ prices_daily_tickers refreshed')
     await conn.close()
 asyncio.run(main())
-" || echo "  (matview refresh failed — non-fatal, dashboard will see stale ticker list)"
+"; then
+    _log_event INGESTION_COMPLETE wrapper_matview_refresh
+else
+    _log_event INGESTION_FAILED wrapper_matview_refresh "matview refresh non-fatal"
+    echo "  (matview refresh failed — non-fatal, dashboard will see stale ticker list)"
+fi
 
 # Step 5 — compress any CSVs left behind by the backfill scripts.
 echo ""
 echo "▶ STEP 5 / 6  compress backfill CSVs"
 echo "────────────────────────────────────────────────────────────────────────"
-scripts/run_compress_backfill_csvs.sh
+_log_event INGESTION_START wrapper_compress
+if scripts/run_compress_backfill_csvs.sh; then
+    _log_event INGESTION_COMPLETE wrapper_compress
+else
+    _log_event INGESTION_FAILED wrapper_compress "compress exited non-zero"
+fi
 
 # Step 6 — emit DATA_OPERATIONS_COMPLETE so the engine-service daemon
 # fires scripts/run_all_engines.sh. Replaces the inline engine sweep
@@ -154,10 +196,13 @@ scripts/run_compress_backfill_csvs.sh
 if [[ "${SKIP_ENGINES:-0}" == "1" ]]; then
     echo ""
     echo "▶ STEP 6 / 6  emit DATA_OPERATIONS_COMPLETE — SKIPPED (SKIP_ENGINES=1)"
+    _log_event INGESTION_START wrapper_emit_event "skipped via SKIP_ENGINES=1"
+    _log_event INGESTION_COMPLETE wrapper_emit_event "skipped via SKIP_ENGINES=1"
 else
     echo ""
     echo "▶ STEP 6 / 6  emit DATA_OPERATIONS_COMPLETE → engine-service daemon"
     echo "────────────────────────────────────────────────────────────────────────"
+    _log_event INGESTION_START wrapper_emit_event
     DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python -c "
 import asyncio, asyncpg, os, uuid
 async def main():
@@ -176,11 +221,13 @@ async def main():
 asyncio.run(main())
 " || {
         EMIT_RC=$?
+        _log_event INGESTION_FAILED wrapper_emit_event "emit exited $EMIT_RC"
         echo "✗ failed to emit DATA_OPERATIONS_COMPLETE (exit $EMIT_RC) — engines will NOT run."
         echo "  Investigate: is application_log reachable? Is the daemon installed?"
         _notify_failure "emit DATA_OPERATIONS_COMPLETE" $EMIT_RC
         exit $EMIT_RC
     }
+    _log_event INGESTION_COMPLETE wrapper_emit_event
 fi
 
 # Forensics now runs as the final stage of `ops.py --update` (Step 1

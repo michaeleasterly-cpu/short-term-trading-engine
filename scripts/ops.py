@@ -2521,6 +2521,17 @@ def _build_parser() -> argparse.ArgumentParser:
             "runs from operator-typed --check or --update calls."
         ),
     )
+    p.add_argument(
+        "--run-id",
+        default=None,
+        help=(
+            "Optional UUID to use as the run_id for this invocation. "
+            "Lets the bash wrapper (run_data_operations.sh) generate a "
+            "shared run_id and instrument its own steps with the same "
+            "id so the daemon progress panel sees the full end-to-end "
+            "workflow. Auto-generated if omitted (backward-compatible)."
+        ),
+    )
     return p
 
 
@@ -2528,7 +2539,10 @@ async def amain(args: argparse.Namespace) -> int:
     from tpcore.db import build_asyncpg_pool
     from tpcore.logging.db_handler import DBLogHandler
 
-    run_id = uuid.uuid4()
+    # --run-id lets the bash wrapper (run_data_operations.sh) pre-generate
+    # a UUID it can share with its own _log_event.py calls; without it we
+    # auto-generate so direct CLI invocations stay unchanged.
+    run_id = uuid.UUID(args.run_id) if args.run_id else uuid.uuid4()
     log = _configure_logging(run_id)
 
     if args.update or args.full or args.stage:
