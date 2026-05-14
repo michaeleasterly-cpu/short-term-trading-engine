@@ -1,13 +1,19 @@
 # Edge-Discovery and Strategy-Validation Plan
 
-**Status (2026-05-13 — post data-cleanup):** Full data layer hardened (94,979 corrupt prices_daily rows deleted + 1.13M SIP backfill + 6-check validation suite + catalyst_events expanded from ~683 to 1,349 rows / 137 tickers). All four engines re-run on clean data:
+**Status (2026-05-14 — post FRED + SEC integration, pre-Vector recalibration):**
 
 | Engine | Top OOS score | Verdict | Notes |
 |---|---|---|---|
-| Sigma | +1.150 | FAILED (DSR < 0.95) | chop=47.7, hold=2d, stop=1.8% |
-| Reversion | +1.174 | FAILED | z=2.56, hold=12d, stop=10.4% |
-| **Vector** | **+1.257** | FAILED | catalyst_window=9d, P/B=2.52, D/E=2.94 — **was data-blocked at zero, now unblocked** |
-| Momentum | +0.784 | FAILED | lookback=233d, top decile=6.08% (paper-trading regardless of credibility per momentum spec) |
+| Sigma | +1.150 (2026-05-13 sweep) / **55/100** (2026-05-14 follow-up) | FAILED (DSR < 0.95; regime fragility) | chop=47.7, hold=2d, stop=1.8% — same params Sharpe +1.02 / 2018-21 collapse to -0.84 / 2019-22 |
+| Reversion | +1.174 (2026-05-13) / **TBD** (100-trial sweep `b33tsfcvc` in flight 2026-05-14) | FAILED 2026-05-13 | z=2.56, hold=12d, stop=10.4% — fresh sweep results land in `backtests/reversion_search_results.csv` |
+| **Vector** | +1.257 (2026-05-13) | FAILED — **next: relax P/B gate** | catalyst_window=9d, P/B=2.52, D/E=2.94 — produces zero candidates because P/B<1.5 blocks 937/1,435 tickers. SEC NLP catalyst upgrade deferred behind P/B calibration (binding constraint is value gate, not catalyst source). |
+| Momentum | +0.784 | FAILED | paper-trading regardless of credibility per momentum spec |
+
+**Recalibration sequencing (2026-05-14):**
+1. **Sigma** — no parameter changes (sweep didn't find robust config; regime fragility is the binding constraint, not parameters).
+2. **Reversion** — 100-trial sweep in flight; apply any config that passes credibility ≥ 60 AND DSR ≥ 0.95 to `reversion/models.py`.
+3. **Vector** — relax P/B ceiling (1.5 → 2.0 → 2.5 → 3.0 → 3.5 sweep) BEFORE evaluating SEC NLP catalyst upgrade. The catalyst source is not the bottleneck; the value gate is.
+4. **SEC NLP** — DEFERRED. Only evaluate FMP vs. FMP+SEC catalyst after Vector is producing candidates with the relaxed P/B gate and a paper-trade baseline exists.
 
 All four produce positive OOS edge candidates; none passes DSR ≥ 0.95. **Data foundation is clean; signal strength is the binding constraint.** Earlier framing ("Sigma 55, Reversion 45, Vector 45") used tier-aware costs but pre-cleanup data — those scores are superseded by the table above.
 

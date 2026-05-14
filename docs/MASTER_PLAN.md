@@ -167,6 +167,7 @@ Earlier drafts of this plan gated Market Context on **SPY-level** CHOP+ADX. The 
 - Backtest: `sigma/backtest.py` (tier-aware costs from `platform.liquidity_tiers` as of 2026-05-12). Overfitting report: `backtests/sigma_overfitting_report.json`.
 - Overfitting diagnostic score **55/100 — BLOCKED**. Extended-window runs show MinBTL gap + DSR deflation as the primary failure modes.
 - **Parameter-search verdict (T1+T2, 50 trials × 3 walk-forward windows, 2026-05-12):** held-back 2024-2025 Sharpe **+0.740**, profit factor **+3.71**, max drawdown -8.1%. Walk-forward top-5 all positive across all 3 windows. DSR fails on multiple-testing correction (50 trials × ~150 trades is too few to clear deflation). Marginal real edge, kept as research-only.
+- **2026-05-14 follow-up sweep (`backtests/sigma_search_results.csv`, 4 rows):** best credibility **55/100** (trials 0–1, window 2018-2021, Sharpe +1.02 / +1.17). Same parameters collapse to Sharpe -0.84 / +0.25 in window 2019-2022 (credibility drops to 50). **Binding constraint is regime fragility, not parameter calibration** — no config survives both walk-forward windows. **No parameter changes applied** (no sweep evidence supports a different config). Sigma stays at current parameters and remains research-only.
 
 ### 4.2 Reversion — Mean Reversion Engine (Second Build)
 
@@ -213,6 +214,7 @@ Earlier drafts of this plan gated Market Context on **SPY-level** CHOP+ADX. The 
 - Backtest: `reversion/backtest.py` (tier-aware costs as of 2026-05-12). Overfitting report: `backtests/reversion_overfitting_report.json`.
 - Overfitting diagnostic score **45/100 — BLOCKED**.
 - **Parameter-search verdict (T1+T2 with EQ filter dropped, 50 trials × 3 walk-forward windows, 2026-05-13):** walk-forward top-5 all scored +0.39 to +2.87 across all 3 windows (strong in-sample), but held-back 2024-2025 collapsed to Sharpe **-0.080**, profit factor 0.87. **Classic overfit signature** — the pipeline caught it. Strategy doesn't generalise on the wider universe; DSR=0 correctly rejected the winner. Reversion is shelved pending either (a) a different signal class or (b) the FMP fundamentals coverage expanding far enough to make the original EQ-gated path testable on T2+.
+- **2026-05-14 recalibration sweep — 100 trials, 2018-01-01 → 2023-12-31 train / 2024-01-01 → 2025-12-31 held-back:** in progress (background run `b33tsfcvc`); results land in `backtests/reversion_search_results.csv`. Will apply any configuration that passes credibility ≥ 60 AND DSR ≥ 0.95 to `reversion/models.py`; if none pass, the existing parameters stay and this file's gap-statement above remains the current truth.
 
 ### 4.3 Vector — Momentum Swing Engine (Third Build)
 
@@ -274,6 +276,7 @@ The infrastructure is correct; the strategy needs more evidence before the gate 
 - VIX-aware crash-guard sizing implemented and verified end-to-end in the backtest (1.0× / 0.5× / 0.25× via SPY 20-day realized-vol proxy).
 - Backtest: `vector/backtest.py` (tier-aware costs as of 2026-05-12). Overfitting report: `backtests/vector_overfitting_report.json`. Score **45/100 — BLOCKED**.
 - **Parameter-search verdict (T1+T2, 50 trials × 3 walk-forward windows, 2026-05-13):** zero trades on every candidate due to the catalyst-event coverage gap. **Vector is data-blocked, not strategy-blocked.** The strategy cannot be evaluated on this universe until `platform.catalyst_events` is expanded beyond the original 44-ticker set. Re-enabling Vector is gated on a one-time data-ingestion backfill (catalyst events for T1+T2 tickers from FMP earnings-history endpoint), not on any strategy work.
+- **2026-05-14 follow-up:** catalyst_events has been expanded to **1,350 events / 137 tickers** (audited 2026-05-14) and the SEC historical backfill landed 17,844 Form 4 + 8-K rows for 60 T1+T2 stocks. Vector is no longer data-blocked. New binding constraint is **Gate 1 (value): P/B < 1.5 rejects 937 / 1,435 tickers**, so the engine produces zero candidates even with full catalyst coverage. Next step is a **dedicated P/B-ceiling sweep** (1.5 → 2.0 → 2.5 → 3.0 → 3.5) to find the threshold at which a credible edge survives. **SEC NLP catalyst upgrade is DEFERRED** behind this P/B calibration — Vector won't produce candidates until Gate 1 is relaxed, so changing the catalyst source can't move the needle. The right ordering is: relax P/B → paper-trade with FMP earnings-beat catalyst → only then evaluate FMP vs. FMP+SEC in backtest. SEC data is not wasted (serves S2 + research) but isn't on the Vector critical path.
 
 ### 4.4 Momentum — Cross-Sectional 12-1 Engine (Fourth Build)
 
