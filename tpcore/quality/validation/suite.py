@@ -24,6 +24,8 @@ import structlog
 
 from tpcore.quality.data_quality import DataQualityScore, DataQualityWriter
 
+from .checks.catalyst_freshness import CHECK_NAME as CATALYST_FRESHNESS_NAME
+from .checks.catalyst_freshness import check_catalyst_freshness
 from .checks.constituent import (
     CHECK_NAME as CONSTITUENT_NAME,
 )
@@ -85,16 +87,20 @@ async def run_suite(
     row_integrity_task = _safe_run(ROW_INTEGRITY_NAME, check_row_integrity, pool, None)
     fund_integrity_task = _safe_run(FUND_INTEGRITY_NAME, check_fundamentals_integrity, pool, None)
     ca_integrity_task = _safe_run(CA_INTEGRITY_NAME, check_corporate_actions_integrity, pool, None)
+    catalyst_task = _safe_run(CATALYST_FRESHNESS_NAME, check_catalyst_freshness, pool, None)
     (
         delistings_result, constituent_result, splits_result,
         row_integrity_result, fund_integrity_result, ca_integrity_result,
+        catalyst_result,
     ) = await asyncio.gather(
         delistings_task, constituent_task, splits_task,
         row_integrity_task, fund_integrity_task, ca_integrity_task,
+        catalyst_task,
     )
     checks: list[CheckResult] = [
         delistings_result, constituent_result, splits_result,
         row_integrity_result, fund_integrity_result, ca_integrity_result,
+        catalyst_result,
     ]
 
     finished_at = datetime.now(UTC)

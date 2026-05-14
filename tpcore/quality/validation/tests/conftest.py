@@ -49,6 +49,19 @@ class FakePool:
         return []
 
     async def fetchrow(self, sql: str, *args) -> dict[str, Any] | None:
+        sql_lower = sql.lower()
+        # Catalyst freshness check fires its own CTE that doesn't hit
+        # the prices_daily routes above. Return a "clean" snapshot so
+        # e2e tests focused on unrelated checks (splits etc.) don't
+        # false-fail on catalyst coverage.
+        if "platform.catalyst_events" in sql_lower and "addressable" in sql_lower:
+            from datetime import UTC, datetime, timedelta
+            return {
+                "newest_event": datetime.now(UTC).date() - timedelta(days=5),
+                "addressable_count": 50,
+                "covered_count": 30,  # 60% — well above 20% floor
+                "total_rows": 1000,
+            }
         rows = await self.fetch(sql, *args)
         return rows[0] if rows else None
 

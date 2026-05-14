@@ -129,6 +129,7 @@ async def test_run_suite_passes_when_all_checks_pass() -> None:
     assert {c.name for c in result.checks} == {
         "delistings", "constituent", "splits", "row_integrity",
         "fundamentals_integrity", "corporate_actions_integrity",
+        "catalyst_events_freshness",
     }
     assert all(c.passed for c in result.checks)
 
@@ -139,9 +140,17 @@ async def test_run_suite_writes_one_score_per_check() -> None:
     await run_suite(
         pool, delistings=delistings, constituents=constituents, splits=splits, writer=writer
     )
-    assert len(writer.scores) == 6
+    assert len(writer.scores) == 7  # 6 historical + catalyst_events_freshness
     sources = {s.source for s in writer.scores}
-    assert sources == {"validation.delistings", "validation.constituent", "validation.splits", "validation.row_integrity", "validation.fundamentals_integrity", "validation.corporate_actions_integrity"}
+    assert sources == {
+        "validation.delistings",
+        "validation.constituent",
+        "validation.splits",
+        "validation.row_integrity",
+        "validation.fundamentals_integrity",
+        "validation.corporate_actions_integrity",
+        "validation.catalyst_events_freshness",
+    }
 
 
 async def test_run_suite_score_field_mapping() -> None:
@@ -178,8 +187,8 @@ async def test_run_suite_aggregates_failures() -> None:
     failed_checks = [c for c in result.checks if not c.passed]
     assert len(failed_checks) == 1
     assert failed_checks[0].name == "delistings"
-    # All four rows still written
-    assert len(writer.scores) == 6
+    # All seven rows still written (6 historical + catalyst_events_freshness)
+    assert len(writer.scores) == 7
 
 
 async def test_run_suite_wraps_check_exception() -> None:

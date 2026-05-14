@@ -468,6 +468,93 @@ async def _stage_cross_ref_cleanup(pool: asyncpg.Pool) -> dict[str, Any]:
     }
 
 
+async def _stage_catalyst_refresh(pool: asyncpg.Pool) -> dict[str, Any]:
+    """Weekly refresh of ``platform.catalyst_events`` (FMP earnings beats).
+
+    Vector engine reads EARNINGS_BEAT events from this table. Earnings
+    are quarterly so a daily refresh would waste FMP calls. The stage
+    is idempotent and bounded:
+
+    * **Skip guard** — if the table was refreshed within the last 6
+      days, no-op. Use ``recorded_at`` (insert time) rather than
+      ``event_date`` so we don't mistake "no new events this week"
+      for "haven't refreshed."
+    * **Universe** — T1+T2 stocks only (per
+      ``ticker_classifications.asset_class='stock'``). ETFs/SPACs/
+      funds have no earnings to beat; including them would waste ~80%
+      of the FMP call budget.
+    * **Window** — re-fetch all history back to 2018-01-01. The
+      backfill script's INSERT ON CONFLICT pattern makes this safe.
+
+    The stage fires through the same code path as the manual
+    ``scripts/backfill_catalyst_events.py``, so behavior stays in
+    lockstep between cron and operator-on-demand.
+    """
+    from datetime import date as _date
+    from datetime import timedelta as _td
+    from types import SimpleNamespace
+
+    # Skip guard.
+    async with pool.acquire() as conn:
+        newest_recorded = await conn.fetchval(
+            "SELECT MAX(recorded_at) FROM platform.catalyst_events"
+        )
+    log = structlog.get_logger("scripts.ops")
+    if newest_recorded is not None:
+        age = datetime.now(UTC) - newest_recorded
+        if age.days < 6:
+            log.info(
+                "ops.stage.catalyst_refresh.skipped_fresh",
+                last_refresh_age_days=age.days,
+            )
+            return {
+                "skipped": True,
+                "reason": "refreshed_within_6_days",
+                "last_refresh_age_days": age.days,
+            }
+
+    # Build the addressable stock-class T1+T2 universe.
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT lt.ticker
+            FROM platform.liquidity_tiers lt
+            LEFT JOIN platform.ticker_classifications tc USING (ticker)
+            WHERE lt.tier <= 2
+              AND COALESCE(tc.asset_class, 'stock') = 'stock'
+            ORDER BY lt.ticker
+            """
+        )
+    universe = [r["ticker"] for r in rows]
+    if not universe:
+        return {"tickers": 0, "inserted": 0, "note": "empty stock universe"}
+
+    # Delegate to the existing backfill — same code path as the manual
+    # script. The args namespace must shape exactly like its argparse
+    # output (universe, start, end fields).
+    from scripts.backfill_catalyst_events import amain as backfill_amain
+    args = SimpleNamespace(
+        universe=universe,
+        start=_date(2018, 1, 1),
+        end=datetime.now(UTC).date() - _td(days=1),
+    )
+    exit_code = await backfill_amain(args)
+    if exit_code != 0:
+        raise RuntimeError(
+            f"catalyst_refresh: backfill_amain returned {exit_code}"
+        )
+    async with pool.acquire() as conn:
+        post_count = await conn.fetchval("SELECT COUNT(*) FROM platform.catalyst_events")
+        post_tickers = await conn.fetchval(
+            "SELECT COUNT(DISTINCT ticker) FROM platform.catalyst_events"
+        )
+    return {
+        "tickers": len(universe),
+        "total_rows": int(post_count or 0),
+        "covered_tickers": int(post_tickers or 0),
+    }
+
+
 async def _stage_data_validation(pool: asyncpg.Pool) -> dict[str, Any]:
     from tpcore.quality.validation.suite import run_suite
 
@@ -646,6 +733,12 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # rule must have a single proven-safe remediation; see the docstring.
     ("cross_ref_cleanup",   lambda pool, cfg: (lambda: _stage_cross_ref_cleanup(pool)),        STAGE_TIMEOUT_SEC),
     ("fundamentals_refresh",lambda pool, cfg: (lambda: _stage_fundamentals_refresh(pool, cfg)),HEAVY_STAGE_TIMEOUT_SEC),
+    # Catalyst refresh — earnings-beat events for vector engine.
+    # Heavy timeout (1h) because the FMP loop is ~1 sec per ticker;
+    # T1+T2 stock subset is ~66 tickers so a fresh run is ~3 min, but
+    # the universe could grow. Stage short-circuits in ~10ms when
+    # the table was refreshed within 6 days.
+    ("catalyst_refresh",    lambda pool, cfg: (lambda: _stage_catalyst_refresh(pool)),         HEAVY_STAGE_TIMEOUT_SEC),
     # data_validation runs 6 checks against the live tables — at the
     # current 20M-row prices_daily it consistently runs ~120-130s.
     # Bumping to 5 min gives headroom without masking a true hang.

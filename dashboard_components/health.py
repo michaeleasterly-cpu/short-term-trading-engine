@@ -23,6 +23,7 @@ OPS_UPDATE_STAGES: tuple[str, ...] = (
     "coverage_fill",
     "cross_ref_cleanup",
     "fundamentals_refresh",
+    "catalyst_refresh",
     "data_validation",
     "universe_prescreener",
     "universe_simulation",
@@ -383,6 +384,70 @@ def classify_open_orders(
     if stale_24h_count == 1:
         return "amber", f"{pending_count} pending — 1 older than 24h"
     return "red", f"{pending_count} pending — {stale_24h_count} older than 24h"
+
+
+def classify_catalyst(state: dict[str, Any]) -> tuple[str, str]:
+    """Catalyst-events coverage + freshness row.
+
+    Mirrors ``validation.catalyst_events_freshness``: green when newest
+    event ≤ 90d AND ≥ 20% of T1+T2 stocks have an event in last 180d;
+    amber when 10-20% coverage; red when stale or below 10%.
+
+    The dashboard row and the validation check use the same predicates
+    so the two never disagree on what's healthy.
+    """
+    addressable = int(state.get("addressable") or 0)
+    covered = int(state.get("covered") or 0)
+    newest_event = state.get("newest_event")
+    total = int(state.get("total_rows") or 0)
+    last_refresh = state.get("last_refresh")
+
+    if total == 0:
+        return "red", "catalyst_events is empty"
+
+    # Age check.
+    today = datetime.now(UTC).date()
+    if newest_event is None:
+        return "red", f"{total} rows but no event_date"
+    age_days = (today - newest_event).days
+
+    refresh_age_d = (
+        (datetime.now(UTC) - last_refresh).days if last_refresh else None
+    )
+
+    # Coverage check.
+    if addressable == 0:
+        # No stocks to measure against — neutral; freshness alone decides.
+        coverage_pct = None
+        coverage_color = "green"
+    else:
+        coverage_pct = covered / addressable
+        if coverage_pct < 0.10:
+            coverage_color = "red"
+        elif coverage_pct < 0.20:
+            coverage_color = "amber"
+        else:
+            coverage_color = "green"
+
+    # Freshness check (newest event date).
+    if age_days > 180:
+        freshness_color = "red"
+    elif age_days > 90:
+        freshness_color = "amber"
+    else:
+        freshness_color = "green"
+
+    rank = {"green": 0, "amber": 1, "red": 2}
+    color = freshness_color if rank[freshness_color] >= rank[coverage_color] else coverage_color
+
+    pct_str = f"{coverage_pct:.1%}" if coverage_pct is not None else "n/a"
+    refresh_str = f"refreshed {refresh_age_d}d ago" if refresh_age_d is not None else "refresh time unknown"
+    summary = (
+        f"{covered}/{addressable} T1+T2 stocks ({pct_str}) covered in last 180d · "
+        f"newest event {age_days}d ago · "
+        f"{refresh_str}"
+    )
+    return color, summary
 
 
 def classify_forensics(state: dict[str, Any]) -> tuple[str, str]:

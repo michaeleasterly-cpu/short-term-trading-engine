@@ -33,6 +33,7 @@ import streamlit as st
 from dashboard_components.charts import render_ticker_chart
 from dashboard_components.health import (
     classify_bars,
+    classify_catalyst,
     classify_corp_actions,
     classify_coverage_gaps,
     classify_cross_ref,
@@ -809,6 +810,43 @@ async def _fetch_platform_health() -> dict:
                 for r in rows
             ]
 
+    async def _q_catalyst() -> dict:
+        """Catalyst-events coverage + freshness against T1+T2 stock subset.
+
+        Counts mirror what ``validation.catalyst_events_freshness``
+        checks — so the dashboard row stays in lockstep with the suite
+        and the operator sees the same red conditions in both places.
+        """
+        async with pool.acquire() as conn:
+            r = await conn.fetchrow(
+                """
+                WITH addressable AS (
+                    SELECT lt.ticker
+                    FROM platform.liquidity_tiers lt
+                    LEFT JOIN platform.ticker_classifications tc USING (ticker)
+                    WHERE lt.tier <= 2
+                      AND COALESCE(tc.asset_class, 'stock') = 'stock'
+                )
+                SELECT
+                    (SELECT COUNT(*) FROM addressable) AS addressable,
+                    (SELECT COUNT(DISTINCT a.ticker)
+                     FROM addressable a
+                     JOIN platform.catalyst_events ce ON ce.ticker = a.ticker
+                     WHERE ce.event_date >= CURRENT_DATE - INTERVAL '180 days'
+                    ) AS covered,
+                    (SELECT MAX(event_date) FROM platform.catalyst_events) AS newest_event,
+                    (SELECT MAX(recorded_at) FROM platform.catalyst_events) AS last_refresh,
+                    (SELECT COUNT(*) FROM platform.catalyst_events) AS total_rows
+                """
+            )
+        return {
+            "addressable": int(r["addressable"] or 0),
+            "covered": int(r["covered"] or 0),
+            "newest_event": r["newest_event"],
+            "last_refresh": r["last_refresh"],
+            "total_rows": int(r["total_rows"] or 0),
+        }
+
     async def _q_forensics() -> dict:
         """Open forensics triggers (resolved_at IS NULL) — by kind + by age."""
         async with pool.acquire() as conn:
@@ -853,7 +891,7 @@ async def _fetch_platform_health() -> dict:
         }
 
     try:
-        bars, fund, ca, uni, run, val, coverage, orders, cross_ref, forensics = await asyncio.gather(
+        bars, fund, ca, uni, run, val, coverage, orders, cross_ref, forensics, catalyst = await asyncio.gather(
             _q_bars(),
             _q_fundamentals(),
             _q_corp_actions(),
@@ -864,6 +902,7 @@ async def _fetch_platform_health() -> dict:
             _q_open_orders(),
             _q_cross_ref(),
             _q_forensics(),
+            _q_catalyst(),
         )
         out["bars"] = bars
         out["fundamentals"] = fund
@@ -875,6 +914,7 @@ async def _fetch_platform_health() -> dict:
         out["open_orders"] = orders
         out["cross_ref"] = cross_ref
         out["forensics"] = forensics
+        out["catalyst"] = catalyst
     finally:
         await pool.close()
     return out
@@ -2275,6 +2315,10 @@ def render_platform_health() -> None:
                 if color != "green":
                     notes = notes_by_source.get(f"validation.{source}") or notes_by_source.get(source)
                     _render_validation_failure_detail(source, notes)
+
+    # Catalyst events — vector engine's earnings-beat source.
+    cat_color, cat_summary = classify_catalyst(h["catalyst"])
+    _render_health_row("Catalyst events (vector)", cat_color, cat_summary, row_key="catalyst")
 
     # Forensics — open triggers from per-engine AAR scans.
     f_color, f_summary = classify_forensics(h["forensics"])
