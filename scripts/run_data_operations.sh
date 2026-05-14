@@ -11,6 +11,13 @@
 #                          so the operator knows to investigate.
 #   5. COMPRESS          — scripts/run_compress_backfill_csvs.sh (any
 #                          uncompressed CSVs left under data/*_backfill/)
+#   6. EMIT EVENT        — writes DATA_OPERATIONS_COMPLETE to
+#                          platform.application_log; the engine-service
+#                          daemon (installed via install_all_daemons.sh)
+#                          picks it up and fires scripts/run_all_engines.sh.
+#                          Replaces the old inline engine sweep on
+#                          2026-05-14 to decouple data-ops from execution.
+#   7. FORENSICS         — tpcore.forensics AAR scanner (non-fatal).
 #
 # Refuses to run during NYSE regular session (ops.py --update enforces this).
 # Pass --force to bypass the market-closed check.
@@ -138,18 +145,40 @@ echo "▶ STEP 5 / 7  compress backfill CSVs"
 echo "────────────────────────────────────────────────────────────────────────"
 scripts/run_compress_backfill_csvs.sh
 
-# Step 6 — engine sweep. Now that data is verified clean, run every
-# engine scheduler back-to-back. Each is one-shot; the trade_monitor
-# daemon (installed separately) picks up the Tier 2 cascade.
-# Set SKIP_ENGINES=1 to skip this step (data-only run).
+# Step 6 — emit DATA_OPERATIONS_COMPLETE so the engine-service daemon
+# fires scripts/run_all_engines.sh. Replaces the inline engine sweep
+# on 2026-05-14 to decouple data-ops latency / failures from engine
+# execution. Set SKIP_ENGINES=1 to skip the emission (data-only run).
 if [[ "${SKIP_ENGINES:-0}" == "1" ]]; then
     echo ""
-    echo "▶ STEP 6 / 7  engine sweep — SKIPPED (SKIP_ENGINES=1)"
+    echo "▶ STEP 6 / 7  emit DATA_OPERATIONS_COMPLETE — SKIPPED (SKIP_ENGINES=1)"
 else
     echo ""
-    echo "▶ STEP 6 / 7  engine sweep — sigma → reversion → vector → momentum"
+    echo "▶ STEP 6 / 7  emit DATA_OPERATIONS_COMPLETE → engine-service daemon"
     echo "────────────────────────────────────────────────────────────────────────"
-    scripts/run_all_engines.sh
+    DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python -c "
+import asyncio, asyncpg, os, uuid
+async def main():
+    conn = await asyncpg.connect(os.environ['DATABASE_URL'])
+    await conn.execute(
+        '''
+        INSERT INTO platform.application_log
+            (engine, run_id, event_type, severity, message, data)
+        VALUES (\$1, \$2, \$3, \$4, \$5, NULL)
+        ''',
+        'ops', uuid.uuid4(), 'DATA_OPERATIONS_COMPLETE', 'INFO',
+        'data-operations workflow finished — triggering engine sweep',
+    )
+    await conn.close()
+    print('✓ DATA_OPERATIONS_COMPLETE written — engine-service daemon will pick it up within 60s')
+asyncio.run(main())
+" || {
+        EMIT_RC=$?
+        echo "✗ failed to emit DATA_OPERATIONS_COMPLETE (exit $EMIT_RC) — engines will NOT run."
+        echo "  Investigate: is application_log reachable? Is the daemon installed?"
+        _notify_failure "emit DATA_OPERATIONS_COMPLETE" $EMIT_RC
+        exit $EMIT_RC
+    }
 fi
 
 # Step 7 — forensics. Pure read-side: scans every engine's AAR history
