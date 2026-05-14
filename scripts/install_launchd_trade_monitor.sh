@@ -34,18 +34,19 @@ cat > "$PLIST_PATH" <<EOF
         <string>cd ${REPO_ROOT} &amp;&amp; ${REPO_ROOT}/scripts/run_trade_monitor.sh</string>
     </array>
 
-    <!-- Run at load + restart on exit. KeepAlive ensures the daemon
-         comes back if it crashes or the Mac wakes from sleep. -->
+    <!-- Run at load + always restart on exit. KeepAlive=<true/> means
+         launchd respawns regardless of exit reason. The narrower
+         dict-form (Crashed=true) only catches signal-based crashes
+         (SIGSEGV/etc.) — Python tracebacks exit with code 1 which is
+         neither "successful" nor "crashed" to launchd, so the dict
+         form leaves Python errors as zombies. The 2026-05-14 incident
+         (asyncpg-loop-mismatch crash at 08:00 UTC → hung process →
+         smoke-test failure at 13:35 UTC) was caused by the dict form. -->
     <key>RunAtLoad</key>
     <true/>
 
     <key>KeepAlive</key>
-    <dict>
-        <key>SuccessfulExit</key>
-        <false/>
-        <key>Crashed</key>
-        <true/>
-    </dict>
+    <true/>
 
     <!-- Throttle the auto-restart to avoid runaway respawn -->
     <key>ThrottleInterval</key>
