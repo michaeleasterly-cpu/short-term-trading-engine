@@ -82,6 +82,7 @@ testpaths = [
     "tests",
     "tpcore/tests",
     "tpcore/forensics/tests",
+    "tpcore/outage/tests",
     "tpcore/quality/validation/tests",
     "sigma/tests",
     "reversion/tests",

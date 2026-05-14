@@ -1,4 +1,4 @@
-"""3-tier outage policy for upstream service failures."""
+"""3-tier outage policy + retry primitive for upstream service failures."""
 
 from .policy import (
     OutagePolicy,
@@ -6,6 +6,7 @@ from .policy import (
     OutageTier,
     classify_outage,
 )
+from .retry import with_retry
 
 
 class DataProviderOutage(RuntimeError):
@@ -24,4 +25,5 @@ __all__ = [
     "OutageThresholds",
     "OutageTier",
     "classify_outage",
+    "with_retry",
 ]
