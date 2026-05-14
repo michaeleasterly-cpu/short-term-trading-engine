@@ -228,3 +228,58 @@ async def test_upsert_returns_zero_for_empty_input() -> None:
     pool = _FakePool()
     assert await upsert_corporate_actions(pool, []) == 0
     assert pool.conn.executemany_calls == []
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Retry behavior — exercises the @with_retry decorator applied to
+# fetch_corporate_actions (commit 079dba2 / Phase 2 of normalization).
+# ────────────────────────────────────────────────────────────────────────────
+
+
+async def test_fetch_retries_on_429_then_succeeds() -> None:
+    """Production scenario from 2026-05-12: Alpaca 429 used to kill the
+    whole Sunday cron with no retry. Now retries and succeeds."""
+    from unittest.mock import patch
+
+    call_count = {"n": 0}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        call_count["n"] += 1
+        if call_count["n"] < 2:
+            return httpx.Response(429, headers={"Retry-After": "0"}, json={})
+        body = {"corporate_actions": {"forward_splits": [_AAPL_SPLIT]}, "next_page_token": None}
+        return httpx.Response(200, json=body)
+
+    async with _make_client(handler) as client:
+        with patch("asyncio.sleep"):
+            actions = await fetch_corporate_actions(
+                client, symbols=["AAPL"], start=date(2020, 1, 1), end=date(2021, 1, 1)
+            )
+
+    assert call_count["n"] == 2
+    assert len(actions) == 1
+
+
+async def test_fetch_does_not_retry_on_403_forbidden() -> None:
+    """A 403 is permanent (bad credentials / not entitled). Don't waste
+    retries — return early with the original error."""
+    from unittest.mock import patch
+
+    call_count = {"n": 0}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        call_count["n"] += 1
+        return httpx.Response(403, json={"message": "forbidden"})
+
+    raised = False
+    with patch("asyncio.sleep"):
+        async with _make_client(handler) as client:
+            try:
+                await fetch_corporate_actions(
+                    client, symbols=["AAPL"], start=date(2020, 1, 1), end=date(2021, 1, 1)
+                )
+            except httpx.HTTPStatusError:
+                raised = True
+
+    assert raised
+    assert call_count["n"] == 1, "403 must not retry"

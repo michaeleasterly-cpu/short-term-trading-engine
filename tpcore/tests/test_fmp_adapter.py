@@ -195,6 +195,79 @@ def test_init_without_api_key_raises_outage(monkeypatch: Any) -> None:
 
 
 # ────────────────────────────────────────────────────────────────────────────
+# Retry behavior — pins the @with_retry refactor of _fetch_raw
+# (Phase 2 of adapter normalization, commit 079dba2). Previously the
+# adapter used a local ``tenacity.AsyncRetrying`` loop; now it delegates
+# to ``tpcore.outage.with_retry``.
+# ────────────────────────────────────────────────────────────────────────────
+
+
+async def test_retries_on_429_then_succeeds() -> None:
+    """A transient 429 should be retried, not converted to outage."""
+    from unittest.mock import patch
+    call_count = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        # Endpoint dispatch: only matters for the first call we count.
+        path = request.url.path
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return httpx.Response(429, headers={"Retry-After": "0"}, json={})
+        # Subsequent calls return real data.
+        return _route_endpoint_response(path)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = FMPFundamentalsAdapter(api_key="fake", client=client)
+    try:
+        with patch("asyncio.sleep"):
+            payload = await adapter.get_quarterly_fundamentals("AAPL")
+        assert call_count["n"] >= 2  # at least one retry
+        assert payload is not None
+    finally:
+        await adapter.aclose()
+
+
+async def test_does_not_retry_on_403() -> None:
+    """403 is permanent (auth) — must not retry. test_raises_outage_on_persistent_4xx
+    already covers the outage mapping; this test pins the no-retry contract
+    so a future change can't quietly add unnecessary retries on permanent
+    failures."""
+    from unittest.mock import patch
+    call_count = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        call_count["n"] += 1
+        return httpx.Response(403, json={"error": "forbidden"})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = FMPFundamentalsAdapter(api_key="fake", client=client)
+    try:
+        with patch("asyncio.sleep"), pytest.raises(DataProviderOutage):
+            await adapter.get_quarterly_fundamentals("AAPL")
+        # Exactly one call to the first endpoint — the 403 was permanent.
+        # (Different endpoints can fire on the success path, but with a
+        # 403 the adapter raises on the first endpoint.)
+        assert call_count["n"] == 1
+    finally:
+        await adapter.aclose()
+
+
+def _route_endpoint_response(path: str) -> httpx.Response:
+    """Mirror ``_make_mock_transport``'s endpoint routing for the
+    retry-then-success case (a single shared handler is simpler than
+    composing two transports)."""
+    if "income-statement" in path:
+        body = [_income("2025-06-30", "2025-08-01", 1000.0, 200.0)]
+    elif "cash-flow" in path:
+        body = [_cash("2025-06-30", "2025-08-01", 180.0, -30.0)]
+    elif "balance-sheet" in path:
+        body = [_balance("2025-06-30", "2025-08-01", 5000.0, 2000.0, 400.0)]
+    else:
+        body = []
+    return httpx.Response(200, json=body)
+
+
+# ────────────────────────────────────────────────────────────────────────────
 # Optional live test
 # ────────────────────────────────────────────────────────────────────────────
 

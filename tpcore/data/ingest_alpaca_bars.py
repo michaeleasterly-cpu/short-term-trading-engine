@@ -26,6 +26,7 @@ import httpx
 import structlog
 
 from tpcore.db import build_asyncpg_pool
+from tpcore.outage import with_retry
 
 if TYPE_CHECKING:  # pragma: no cover
     import asyncpg
@@ -124,6 +125,7 @@ async def fetch_active_us_equities(
     return out
 
 
+@with_retry(max_attempts=4, backoff_base_sec=2.0, backoff_cap_sec=30.0)
 async def fetch_daily_bars_multi(
     client: httpx.AsyncClient,
     symbols: list[str],
@@ -140,6 +142,10 @@ async def fetch_daily_bars_multi(
     pages into one dict keyed by symbol. Symbols with no bars in the
     window are returned as empty lists rather than missing keys, so the
     caller can iterate over all input symbols deterministically.
+
+    Wrapped with ``@with_retry`` so a transient 429/503 doesn't tank
+    the whole batch — the inner ``raise_for_status`` becomes a retry
+    signal rather than a permanent failure.
     """
     url = f"{_ALPACA_DATA_BASE}/v2/stocks/bars"
     params: dict[str, str] = {

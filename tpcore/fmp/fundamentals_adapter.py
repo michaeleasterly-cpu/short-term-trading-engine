@@ -21,14 +21,8 @@ from typing import Any
 
 import httpx
 import structlog
-from tenacity import (
-    AsyncRetrying,
-    retry_if_exception_type,
-    stop_after_attempt,
-    wait_exponential,
-)
 
-from tpcore.outage import DataProviderOutage
+from tpcore.outage import DataProviderOutage, with_retry
 
 logger = structlog.get_logger(__name__)
 
@@ -144,7 +138,16 @@ class FMPFundamentalsAdapter:
         self._cache[cache_key] = out
         return out
 
-    async def _fetch(self, endpoint: str, symbol: str, limit: int) -> list[dict]:
+    @with_retry(max_attempts=3, backoff_base_sec=1.0, backoff_cap_sec=10.0)
+    async def _fetch_raw(self, endpoint: str, symbol: str, limit: int) -> list[dict]:
+        """Single FMP fetch with retry baked in (429/5xx/network/timeout).
+
+        Refactored 2026-05-14 to drop the local ``tenacity.AsyncRetrying``
+        scaffolding in favor of the platform's shared
+        ``tpcore.outage.with_retry`` decorator. Same retry semantics
+        (3 attempts, exponential backoff, 429/5xx retryable) but
+        consistent with every other external API call on the platform.
+        """
         if self._client is None:
             self._client = httpx.AsyncClient(timeout=DEFAULT_TIMEOUT_S)
             self._owned_client = True
@@ -155,33 +158,33 @@ class FMPFundamentalsAdapter:
             "limit": str(limit),
             "apikey": self._api_key,
         }
+        resp = await self._client.get(url, params=params)
+        if resp.status_code == 200:
+            return resp.json()
+        # 429 / 5xx → raise so the @with_retry decorator retries.
+        # 4xx-not-429 → DataProviderOutage immediately (permanent).
+        if resp.status_code == 429 or 500 <= resp.status_code < 600:
+            raise httpx.HTTPStatusError(
+                f"FMP {endpoint} → {resp.status_code}",
+                request=resp.request,
+                response=resp,
+            )
+        raise DataProviderOutage(
+            f"FMP {endpoint} {symbol} returned {resp.status_code}: "
+            f"{resp.text[:200]}"
+        )
+
+    async def _fetch(self, endpoint: str, symbol: str, limit: int) -> list[dict]:
         try:
-            async for attempt in AsyncRetrying(
-                stop=stop_after_attempt(3),
-                wait=wait_exponential(multiplier=1, min=1, max=10),
-                retry=retry_if_exception_type(
-                    (httpx.TimeoutException, httpx.HTTPStatusError, httpx.TransportError)
-                ),
-                reraise=True,
-            ):
-                with attempt:
-                    resp = await self._client.get(url, params=params)
-                    if resp.status_code in (429,) or 500 <= resp.status_code < 600:
-                        raise httpx.HTTPStatusError(
-                            f"FMP {endpoint} → {resp.status_code}",
-                            request=resp.request,
-                            response=resp,
-                        )
-                    if resp.status_code != 200:
-                        # Auth / not-found / quota — non-retryable, raise outage.
-                        raise DataProviderOutage(
-                            f"FMP {endpoint} {symbol} returned {resp.status_code}: "
-                            f"{resp.text[:200]}"
-                        )
-                    return resp.json()
+            return await self._fetch_raw(endpoint, symbol, limit)
+        except DataProviderOutage:
+            # Already classified — pass through.
+            raise
         except httpx.HTTPError as exc:
-            raise DataProviderOutage(f"FMP {endpoint} {symbol} unreachable: {exc}") from exc
-        return []  # pragma: no cover - tenacity guarantees a return on success
+            # Retry exhausted (5xx, network, timeout). Map to outage.
+            raise DataProviderOutage(
+                f"FMP {endpoint} {symbol} unreachable after retries: {exc}"
+            ) from exc
 
     def _merge(
         self,

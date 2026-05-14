@@ -45,6 +45,7 @@ import structlog
 
 from tpcore.data.ingest_alpaca_bars import _alpaca_headers
 from tpcore.db import build_asyncpg_pool
+from tpcore.outage import with_retry
 
 if TYPE_CHECKING:  # pragma: no cover
     import asyncpg
@@ -67,6 +68,7 @@ DEFAULT_TYPES: tuple[str, ...] = ("forward_split", "cash_dividend")
 # ────────────────────────────────────────────────────────────────────────────
 
 
+@with_retry(max_attempts=4, backoff_base_sec=2.0, backoff_cap_sec=30.0)
 async def fetch_corporate_actions(
     client: httpx.AsyncClient,
     *,
@@ -75,7 +77,13 @@ async def fetch_corporate_actions(
     end: date,
     types: list[str] | None = None,
 ) -> list[dict]:
-    """Page through ``/v1/corporate-actions`` and return normalized records."""
+    """Page through ``/v1/corporate-actions`` and return normalized records.
+
+    Wrapped with ``@with_retry`` (4 attempts, exponential backoff up to
+    30s, ``Retry-After`` honored). Resolves the 2026-05-12 production
+    failure where a single Alpaca 429 on a 20-ticker chunk killed the
+    whole Sunday cron run with no retry.
+    """
     params: dict[str, str] = {
         "symbols": ",".join(symbols),
         "start": start.isoformat(),
