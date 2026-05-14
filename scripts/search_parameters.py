@@ -91,7 +91,12 @@ PARAM_RANGES: dict[str, dict[str, tuple]] = {
         # against a no-EQ-gate baseline.
     },
     "vector": {
-        "pb_ceiling": (1.0, 3.5, "float"),
+        # pb_ceiling lower-bound 1.5 (was 1.0) per the 2026-05-14
+        # recalibration sweep: pb<1.5 is the known-overly-restrictive
+        # zone that produced 0 candidates on the prior sweep. The point
+        # of this run is to find the P/B threshold at which Vector
+        # actually fires AND maintains a credible edge.
+        "pb_ceiling": (1.5, 3.5, "float"),
         "de_ceiling": (1.5, 4.0, "float"),
         "catalyst_window_days": (3, 10, "int"),
         "swing_score_threshold": (55.0, 75.0, "float"),
