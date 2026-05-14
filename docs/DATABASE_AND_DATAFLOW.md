@@ -1,7 +1,7 @@
 ---
 title: Short-Term Trading Engine — Database & Dataflow
 version: 1.1.0
-last_updated: 2026-05-12
+last_updated: 2026-05-14
 entities: [Engine, Position, Order, Trade, AAR, RiskState, DataQuality]
 stack: [PostgreSQL, Supabase Pro, Alpaca, Railway, Python, asyncpg, Pydantic v2]
 phase_1_complete: true  # Universe expanded from ~50 to 7,694 tickers; see docs/EDGE_VALIDATION_PLAN.md
@@ -34,7 +34,7 @@ List every table under the `platform` schema. For each, provide columns, types, 
 
 #### `platform.prices_daily`
 
-**Purpose:** Canonical daily OHLCV bars. Survivorship-free (Alpaca IEX `all_active` sweep + Tradier wide-export merge). Backtests query directly; live engines query via `PostgresDataAdapter`. As of 2026-05-12: ~20.6M rows across **7,694 distinct tickers** spanning 1994-07-21 → today.
+**Purpose:** Canonical daily OHLCV bars. Survivorship-free (Alpaca SIP `all_active` sweep + Tradier wide-export merge; default feed switched IEX→SIP on 2026-05-13 — IEX silently missed tickers that trade off-IEX). Backtests query directly; live engines query via `PostgresDataAdapter`. As of 2026-05-14: **20,654,889 rows** across **7,694 distinct tickers** spanning 1994-07-21 → today.
 
 **Columns:**
 
@@ -54,7 +54,7 @@ List every table under the `platform` schema. For each, provide columns, types, 
 
 #### `platform.fundamentals_quarterly`
 
-**Purpose:** Point-in-time quarterly fundamentals (FMP Starter). Used by Reversion for earnings-quality gate and Vector for Gate 1 (P/B, D/E). As of 2026-05-12: 178,518 rows across **5,981 tickers** (post-Phase-1 backfill); `pb` + `de` populated on 152,907 rows (~85%), the rest are explainable NULLs (negative book value, no price on filing date, missing balance/share fields). `compute_fundamental_ratios.py` writes both ratios with a single set-based UPDATE; degenerate FMP rows (`total_assets=0`, `total_liabilities<0`) are rejected up front.
+**Purpose:** Point-in-time quarterly fundamentals (FMP Starter). Used by Reversion for earnings-quality gate and Vector for Gate 1 (P/B, D/E). As of 2026-05-14: **178,608 rows** across **5,984 tickers** (post-Phase-1 backfill); `pb` + `de` populated on 152,907 rows (~85%), the rest are explainable NULLs (negative book value, no price on filing date, missing balance/share fields). `compute_fundamental_ratios.py` writes both ratios with a single set-based UPDATE; degenerate FMP rows (`total_assets=0`, `total_liabilities<0`) are rejected up front. Adapter (`tpcore/fmp/fundamentals_adapter.py`) uses centralized `@with_retry` (Phase 2 of adapter normalization, 2026-05-14) — `tenacity` dependency removed.
 
 **Columns:**
 
@@ -259,6 +259,28 @@ Created by migration `20260512_2100_spread_observations_and_liquidity_tiers.py`.
 - `observations` (integer): aggregate observation count.
 - `provisional` (boolean, default false): true when fewer than 5 observations are pooled (e.g., brand-new IPOs).
 - `last_updated` (timestamptz, default `now()`).
+
+#### `platform.ticker_classifications`
+
+**Purpose:** Asset-class taxonomy for every ticker in the platform — distinguishes `stock` / `etf` / `spac` / `fund` so catalyst validation, sentinel-engine basket selection, and the dashboard tier panel can filter / classify correctly. Backfilled 2026-05-14 from Alpaca `/v2/assets` plus a name-pattern classifier; **13,669 rows** at backfill.
+
+**Columns:**
+
+- `ticker` (text, PK).
+- `asset_class` (text, NOT NULL): one of `'stock'`, `'etf'`, `'spac'`, `'fund'`.
+- `etf_inverse` (boolean, nullable): true for inverse ETFs (SH, PSQ, SQQQ, etc.). NULL for non-ETF rows.
+- `etf_leverage` (numeric, nullable): leverage factor (e.g., `3.0` for TQQQ, `-2.0` for SQQQ). NULL for non-ETF or 1x ETFs.
+- `etf_category` (text, nullable): rough family (`'equity_broad'`, `'bond_treasury'`, `'commodity_gold'`, …) for the sentinel engine's basket selection.
+- `source` (text): `'alpaca_assets'` or `'name_pattern_fallback'`.
+- `recorded_at` (timestamptz, default `now()`).
+
+**Used by:**
+
+- `catalyst_freshness` validation check (skip ETFs and funds from earnings-event freshness assertions).
+- Sentinel engine (planned) — inverse / leverage / category filters for the macro-inverse basket.
+- Dashboard liquidity-tier filtering (so an ETF doesn't show up labelled as "missing fundamentals").
+
+**Maintenance:** `scripts/classify_tickers.py` re-runs the classifier; the operator runs it after a universe expansion. No daily refresh required — asset-class taxonomy is near-static.
 
 #### `platform.ingestion_jobs`
 
@@ -627,7 +649,7 @@ Tables and services that are specified but not yet built:
 
 The data layer underwent a major cleanup and self-healing refactor on 2026-05-13. Operators reading this doc post-cleanup should know:
 
-### 6.1 Validation suite — now 6 checks (was 3)
+### 6.1 Validation suite — now 7 checks (was 3)
 
 `tpcore.quality.validation.suite.run_suite` runs every `--update` stage 5. Each check returns a `CheckResult` and persists one row to `platform.data_quality_log`:
 
@@ -639,20 +661,23 @@ The data layer underwent a major cleanup and self-healing refactor on 2026-05-13
 | **`row_integrity`** (NEW) | every prices_daily row: `close > 0`, `close <= 100M`, OHLC consistent (`high >= GREATEST(open, close, low)`, `low <= LEAST(open, close, high)`), non-NULL OHLCV, no future dates |
 | **`fundamentals_integrity`** (NEW) | every fundamentals_quarterly row: `period_end_date <= filing_date`, `shares_outstanding > 0 OR NULL`, no future filings |
 | **`corporate_actions_integrity`** (NEW) | every corp_actions row: `ratio` in `(0, 1000]`, no NULL action_type, no far-future dates |
+| **`catalyst_freshness`** (NEW 2026-05-14) | `catalyst_events.max(event_date)` not older than 7 days for the active T1+T2 universe; warns on stale (drives the `catalyst_refresh` stage's skip-guard) |
 
-Acceptance: `passed=True` on all 6 + `confidence=1.000`. Cleanup scripts exist for each predicate (see `scripts/cleanup_*.py`).
+Acceptance: `passed=True` on all 7 + `confidence=1.000`. Cleanup scripts exist for each predicate (see `scripts/cleanup_*.py`).
 
-### 6.2 `--update` pipeline now 7 stages
+### 6.2 `--update` pipeline now 9 stages
 
 ```
-daily_bars → corporate_actions → coverage_fill → fundamentals_refresh
-→ data_validation → universe_prescreener → universe_simulation
+daily_bars → corporate_actions → coverage_fill → cross_ref_cleanup → fundamentals_refresh
+→ catalyst_refresh → data_validation → universe_prescreener → universe_simulation
 ```
 
-* **`coverage_fill`** (NEW) self-heals tier ≤ 2 ticker gaps via Alpaca SIP, 14-day window, after every daily_bars run.
-* **`fundamentals_refresh`** now skip-if-refreshed-within-24h — resumable across timeouts.
+* **`coverage_fill`** (added 2026-05-13) self-heals tier ≤ 2 ticker gaps via Alpaca SIP, 14-day window, after every daily_bars run.
+* **`cross_ref_cleanup`** (added 2026-05-13) deletes expired `tradier_options_chains` rows + orphan-ticker rows across dependent tables — keeps the dashboard cross-table integrity panel green.
+* **`fundamentals_refresh`** is skip-if-refreshed-within-24h — resumable across timeouts.
+* **`catalyst_refresh`** (added 2026-05-14) backfills FMP earnings-beat events for the T1+T2 universe. Skip-guard: short-circuits in ~10ms when `catalyst_events` was refreshed within 6 days. Resolves Vector's "data-blocked" state.
 * **`daily_bars`** idempotent: checks count for the most-recent closed session; skips if ≥6,500 tickers already present.
-* Each stage emits `INGESTION_START` / `INGESTION_COMPLETE` / `INGESTION_FAILED` events with `data->>'stage'` set. Failed stages auto-retry once if the error class is transient (timeout, ReadError, 429).
+* Each stage emits `INGESTION_START` / `INGESTION_COMPLETE` / `INGESTION_FAILED` events with `data->>'stage'` set and writes to `platform.ingestion_jobs.last_run_at` on completion. Failed stages auto-retry once if the error class is transient (timeout, ReadError, 429). Underlying HTTP fetchers use `tpcore.outage.with_retry` so transient 429/5xx is handled centrally.
 
 ### 6.3 Default Alpaca feed: SIP (was IEX)
 

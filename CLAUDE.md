@@ -9,7 +9,7 @@ Multi-engine automated trading platform. US equities, daily timeframe, fully aut
 - dashboard.py + dashboard_components/ — Streamlit operator console (`scripts/run_dashboard.sh`)
 - sigma/ — range scalping (daily Bollinger Bands); built, last search top OOS +1.150 (FAILED DSR gate)
 - reversion/ — mean reversion + earnings-quality gate; built, last search top OOS +1.174 (FAILED DSR gate)
-- vector/ — catalyst-driven swing (P/B + D/E + catalyst + technical); built, last search top OOS +1.257 (FAILED DSR gate; was data-blocked, now unblocked after 2026-05-13 catalyst_events backfill — 1,349 rows / 137 tickers)
+- vector/ — catalyst-driven swing (P/B + D/E + catalyst + technical); built, last search top OOS +1.257 (FAILED DSR gate; was data-blocked, now unblocked after 2026-05-13 catalyst_events backfill — 1,350 rows / 137 tickers, audited 2026-05-14; recurring weekly refresh active via `ops.py catalyst_refresh` stage)
 - momentum/ — cross-sectional 12-1 monthly rebalance; built and paper-trading; last search top OOS +0.784 (FAILED DSR gate; gated structurally per momentum spec)
 - tpcore/allocator/ — weekly inverse-vol capital rebalance across engines (deployed 2026-05-13, daemon Mon 13:00 UTC)
 - tpcore/forensics/ — daily AAR scanner that emits triggers + auto-generates Sprint Dossiers (deployed 2026-05-14, runs as final step of post-close)
@@ -26,8 +26,9 @@ Multi-engine automated trading platform. US equities, daily timeframe, fully aut
 - Backtest with self-built survivorship-free database before any live trading. (Note: `prices_daily` is currently only partially survivorship-clean — known caveat in `momentum/backtest.py` docstring.)
 - Every engine has 5 Plugs: setup_detection, lifecycle_analysis, execution_risk, aar_logging, capital_gate.
 - Every engine's `setup_detection` plug populates a `tpcore.backtest.filter_diagnostics.FilterDiagnostics` instance so SIGNAL events carry per-gate pass/block counters.
-- **Data-layer acceptance gate (2026-05-13):** validation suite (6 checks: delistings, constituent, splits, row_integrity, fundamentals_integrity, corporate_actions_integrity) must return `passed=True` with `confidence=1.000`. Cross-table audit (`scripts/run_audit_all_tables.sh`) must return 0 violations across every dependent table.
-- **Operator workflow:** daily post-close via `scripts/run_post_close.sh` (single button: 7-stage update → audit → validation → compress → engine sweep → **forensics scan**). Full historical refresh via `scripts/run_full_backfill.sh`. Daemons installed via `scripts/install_all_daemons.sh` (trade_monitor + post_close + allocator).
+- **Data-layer acceptance gate (2026-05-13, expanded 2026-05-14):** validation suite (7 checks: delistings, constituent, splits, row_integrity, fundamentals_integrity, corporate_actions_integrity, catalyst_freshness) must return `passed=True` with `confidence=1.000`. Cross-table audit (`scripts/run_audit_all_tables.sh`) must return 0 violations across every dependent table.
+- **External-API discipline (2026-05-14):** every new data adapter starts from `tpcore/templates/adapter_template.py` and must pass `docs/superpowers/checklists/adapter_readiness.md` before merging. HTTP retries go through `tpcore.outage.with_retry` — no local `tenacity`, no `asyncio.sleep` loops.
+- **Operator workflow:** daily post-close via `scripts/run_post_close.sh` (single button: 9-stage update → audit → validation → compress → engine sweep → **forensics scan**). Full historical refresh via `scripts/run_full_backfill.sh`. Daemons installed via `scripts/install_all_daemons.sh` (trade_monitor + post_close + allocator).
 
 ## Session Rules
 - Read docs/STYLE_GUIDE.md before writing any code.

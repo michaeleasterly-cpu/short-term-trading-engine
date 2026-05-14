@@ -161,7 +161,7 @@ The post-mortem captured these principles as durable patterns; the post-close + 
 2. **Physical-truth at write time.** Every row passes the same physical-truth predicate (`close > 0`, OHLC consistent, no future dates) AT the CSV write step, not just at the destination. Bad rows never reach the database.
 3. **Self-healing > manual retry.** Stages that hit transient errors (timeout, 429, ReadError) auto-retry once inside `--update`. Resumable stages (fundamentals: skip-if-refreshed-within-24h, daily_bars: skip-if-already-ingested) make every re-run faster than the previous.
 4. **SIP > IEX.** Alpaca's free IEX feed silently misses tickers that trade off-IEX. The account is subscribed to SIP; default everywhere is `feed="sip"`. The `coverage_fill` stage closes any remaining gap nightly.
-5. **Validation suite is the gate.** 6 checks: delistings, constituent, splits, row_integrity, fundamentals_integrity, corporate_actions_integrity. Validation green is the operational definition of "data is clean enough to trade on."
+5. **Validation suite is the gate.** 7 checks: delistings, constituent, splits, row_integrity, fundamentals_integrity, corporate_actions_integrity, catalyst_freshness (added 2026-05-14 alongside the catalyst maintenance pipeline). Validation green is the operational definition of "data is clean enough to trade on."
 6. **Cross-references are integrity too.** `audit_all_tables.sh` (and the dashboard's "Cross-table integrity" row) catches orphan tickers across every dependent table — the kind of failure the validation suite's per-table predicates miss.
 7. **Latest-run beats rolling aggregates on dashboards.** A 7-day rolling failure count surfaces stale history as current state. Show LATEST per source — stale aggregates lie.
 8. **Compress confirmed artifacts.** After a successful upsert, gzip the CSV (~80% disk savings). Loaders read `.gz` transparently on re-run.
@@ -170,14 +170,40 @@ Per-stage timeouts (`scripts/ops.py`): **120 s** for the light stages (`data_val
 
 ### Weekly Maintenance
 
-Sunday cron jobs (`fundamentals-refresh-scheduler` 03:00 UTC, `corporate-actions-scheduler` 04:00 UTC, `validation-scheduler` 06:00 UTC — see §1) already perform the weekly heavy lifts on Railway. To re-run them locally:
+The daily `python scripts/ops.py --update` pipeline already includes the heavy weekly stages with built-in skip-guards, so no separate weekly command is required. The two stages that effectively run weekly:
+
+| Stage | Cadence | Skip-guard | What it does |
+|---|---|---|---|
+| `fundamentals_refresh` | Effectively weekly | skip-if-refreshed-within-24h per ticker | FMP → `platform.fundamentals_quarterly`. Iterates the all-active universe; ~1 hr full pass. |
+| `catalyst_refresh` | Effectively weekly | short-circuits when `catalyst_events.max(event_date)` < 6 days old | FMP earnings-history → `platform.catalyst_events` for the T1+T2 stock subset. Added 2026-05-14 alongside the `catalyst_freshness` validation check. |
+
+To force-run locally (same command as the daily run; underlying handlers are idempotent):
 
 ```bash
-# Same command as the daily run; the underlying handlers are idempotent.
-python scripts/ops.py --full
+python scripts/ops.py --update           # full daily pipeline (auto-skips fresh stages)
+python scripts/ops.py --stage catalyst_refresh   # one-stage manual fire
+python scripts/ops.py --stage fundamentals_refresh
 ```
 
-A future `--update-weekly` flag is reserved for any extended-universe / extended-fundamentals work that is heavier than the daily refresh. It has not been built yet — there are no extra manual steps to run weekly today; the Sunday Railway crons cover it. If a regression in the Sunday crons forces a manual catch-up, re-run `python scripts/ops.py --full` to backfill the same scope the cron would have ingested.
+#### Quarterly: liquidity tier refresh
+
+Liquidity tiers (T1–T5) are recomputed from `spread_observations` on demand — there is no `--update` stage for this because spread snapshots drift slowly. Re-run when adding tickers in bulk or after a spread-observation backfill:
+
+```bash
+scripts/run_tier_refresh.sh
+```
+
+Wrapped script around `scripts/assign_liquidity_tiers.py` (see §3 of `docs/DATABASE_AND_DATAFLOW.md`). Re-aggregation is idempotent.
+
+#### Quarterly / one-off: ticker classifications
+
+`platform.ticker_classifications` (asset-class taxonomy: stock/etf/spac/fund) is near-static — re-run only after a universe expansion or when a new ETF/SPAC needs classifying:
+
+```bash
+python scripts/classify_tickers.py
+```
+
+A future `--update-weekly` flag is reserved for any explicitly-weekly work heavier than the daily refresh's skip-guarded stages. Not built yet — the current daily pipeline covers it.
 
 ### Interpreting Results
 
@@ -338,9 +364,11 @@ Expected ranges (cross-reference `MASTER_PLAN.md §6.4`, post-Phase-1 expansion)
 
 | Table | Expected range | Sudden-drop alert |
 | --- | --- | --- |
-| `platform.prices_daily` | ≥ 20,000,000 (currently ~20.6M, 7,694 tickers) | drop > 1% → investigate |
-| `platform.fundamentals_quarterly` | ≥ 178,000 (currently 178,518, 5,981 tickers) | any drop → investigate |
-| `platform.corporate_actions` | ≥ 109,000 (currently 109,344, grows weekly) | drop → investigate |
+| `platform.prices_daily` | ≥ 20,000,000 (currently 20,654,889 — 7,694 tickers, audited 2026-05-14) | drop > 1% → investigate |
+| `platform.fundamentals_quarterly` | ≥ 178,000 (currently 178,608 — 5,984 tickers, audited 2026-05-14) | any drop → investigate |
+| `platform.corporate_actions` | ≥ 109,000 (currently 109,413, grows weekly — audited 2026-05-14) | drop → investigate |
+| `platform.catalyst_events` | ≥ 1,000 (currently 1,350 — 137 tickers, audited 2026-05-14) | drop → investigate; weekly `catalyst_refresh` stage owns growth |
+| `platform.ticker_classifications` | 13,669 (audited 2026-05-14, near-static) | unexpected change → investigate |
 | `platform.aar_events` | grows slowly with live trades; can be 0 | a *drop* is concerning, no growth is normal |
 | `platform.risk_state` | one row per engine that has ever traded | drop → investigate |
 | `platform.data_quality_log` | grows weekly | drop → investigate |
@@ -611,11 +639,11 @@ The orchestrator prints `VERDICT: SURVIVED` only when both `DSR ≥ --dsr-thresh
 
 ## 6. Data Validation Suite
 
-The suite runs as part of every `python scripts/ops.py --update` (stage 4 of 6) and also on demand via `scripts/run_stage.sh data_validation`.
+The suite runs as part of every `python scripts/ops.py --update` (stage 7 of 9 — see `_STAGE_SPECS` in `scripts/ops.py`) and also on demand via `scripts/run_stage.sh data_validation`.
 
 ### Acceptance criterion — "100% validated"
 
-> **Data is clean when every row in every persistence table satisfies its physical-truth predicate, and the validation suite returns `passed=True` with `confidence=1.000` on every one of its six checks. No allowlist, no `WHERE clause` skipping known-bad ticker-date pairs. If the predicate fires, the row gets fixed (re-pulled from source) or deleted.**
+> **Data is clean when every row in every persistence table satisfies its physical-truth predicate, and the validation suite returns `passed=True` with `confidence=1.000` on every one of its seven checks. No allowlist, no `WHERE clause` skipping known-bad ticker-date pairs. If the predicate fires, the row gets fixed (re-pulled from source) or deleted.**
 
 Verifiable with one SQL:
 
@@ -634,7 +662,7 @@ FROM (
 ) x;
 ```
 
-### The six checks
+### The seven checks
 
 | Check | What it asserts | What "fail" means |
 |---|---|---|
@@ -644,6 +672,7 @@ FROM (
 | `row_integrity` | every prices_daily row: `close > 0`, `close <= 100M`, OHLC consistent (`high >= GREATEST(open, close, low)`, `low <= LEAST(open, close, high)`), non-NULL OHLCV, no future dates | a physically-impossible bar exists |
 | `fundamentals_integrity` | every fundamentals_quarterly row: non-NULL ticker/filing_date, `period_end_date <= filing_date`, `shares_outstanding > 0 OR NULL`, no future filings | filings reversed in time, placeholder zeros, etc. |
 | `corporate_actions_integrity` | every corporate_actions row: non-NULL cols, `ratio` in `(0, 1000]`, no far-future dates | implausible split ratios or NULL action_type |
+| `catalyst_freshness` *(NEW 2026-05-14)* | `catalyst_events.max(event_date)` ≥ today − 7 days for active T1+T2 stock tickers (ETFs/funds/SPACs filtered via `ticker_classifications`) | catalyst pipeline stalled; Vector engine running on stale events |
 
 ### Cross-table audit (added 2026-05-13)
 
@@ -655,17 +684,19 @@ The validation suite covers physical-truth checks. Cross-reference checks live i
 
 The dashboard's **Cross-table integrity** row (Platform Health panel) runs the same checks and surfaces any non-zero count.
 
-### The seven `--update` stages (current)
+### The nine `--update` stages (current)
 
-`scripts/ops.py --update` now runs:
+`scripts/ops.py --update` runs the following stages in order (source of truth: `_STAGE_SPECS` in `scripts/ops.py`):
 
-1. `daily_bars` — Alpaca SIP feed → `prices_daily` (was IEX prior to 2026-05-13)
-2. `corporate_actions` — Alpaca → `corporate_actions`, applies splits to `prices_daily`
-3. `coverage_fill` — **new 2026-05-13**: any tier ≤ 2 ticker missing a bar in the last 7 days gets a targeted 14-day SIP pull. Self-heals IEX-vs-SIP gaps without operator action.
-4. `fundamentals_refresh` — FMP → `fundamentals_quarterly`. Resumable: skip-if-refreshed-within-24h.
-5. `data_validation` — the 6-check suite above.
-6. `universe_prescreener` — writes today's `momentum` rows to `universe_candidates`.
-7. `universe_simulation` — diagnostic; runs `scripts/simulate_universe.py`.
+1. `daily_bars` — Alpaca SIP feed → `prices_daily` (was IEX prior to 2026-05-13). Underlying fetcher wrapped with `@with_retry` (Phase 2 of adapter normalization, 2026-05-14).
+2. `corporate_actions` — Alpaca → `corporate_actions`, applies splits to `prices_daily`. `@with_retry` resolves the 2026-05-12 Sunday-cron 429 failure.
+3. `coverage_fill` — **added 2026-05-13**: any tier ≤ 2 ticker missing a bar in the last 7 days gets a targeted 14-day SIP pull. Self-heals IEX-vs-SIP gaps without operator action.
+4. `cross_ref_cleanup` — **added 2026-05-13**: deletes expired `tradier_options_chains` rows + orphan-ticker rows across dependent tables. Each rule has a single proven-safe remediation.
+5. `fundamentals_refresh` — FMP → `fundamentals_quarterly`. Resumable: skip-if-refreshed-within-24h. Adapter uses `@with_retry` (replaces the local `tenacity.AsyncRetrying`).
+6. `catalyst_refresh` — **added 2026-05-14**: FMP earnings-history → `catalyst_events` for T1+T2 stocks. Skip-guard: short-circuits in ~10ms when last refresh < 6 days ago. Drives `catalyst_freshness`.
+7. `data_validation` — the 7-check suite above.
+8. `universe_prescreener` — writes today's `momentum` rows to `universe_candidates`.
+9. `universe_simulation` — diagnostic; runs `scripts/simulate_universe.py`.
 
 `--update` refuses to run during the NYSE regular session (corrupts intraday bars). `--force` bypasses. Failed stages auto-retry once if the error matches a known-transient class (timeout, ReadError, 429).
 

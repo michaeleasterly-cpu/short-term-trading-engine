@@ -452,11 +452,11 @@ Full database schema and data flow documentation: [`docs/DATABASE_AND_DATAFLOW.m
 | FMP **Starter** ($22/mo, active) | Fundamentals, insider, earnings | $22 (Premium $59/mo deferred — see §6.5) |
 | Railway **Hobby** ($5/mo, active — currently paused) | Cron schedulers (6 services). Auto-deploys disabled 2026-05-12; all daily ops run locally for now. | $5 |
 | Supabase **Pro** ($25/mo, active) | Postgres + pooler. Upgraded 2026-05-11 from free tier after `prices_daily` crossed the 500 MB read-only lock; 8 GB disk gives headroom for the all-active universe. | $25 |
-| SEC EDGAR | Point-in-time filings, fundamentals backup | $0 |
-| ApeWisdom | Social sentiment | $0 |
-| FRED | Macro indicators | $0 |
-| FINRA / NASDAQ | Short interest (release-date matched) | $0 |
-| IBorrowDesk | Borrow rates (scraped, fragile) | $0 |
+| SEC EDGAR | Point-in-time filings, fundamentals backup *(spec-only; no adapter code as of 2026-05-14)* | $0 |
+| ApeWisdom | Social sentiment *(spec-only; no adapter code as of 2026-05-14)* | $0 |
+| FRED | Macro indicators *(spec-only; no adapter code as of 2026-05-14)* | $0 |
+| FINRA / NASDAQ | Short interest (release-date matched) *(spec-only; no adapter code as of 2026-05-14)* | $0 |
+| IBorrowDesk | Borrow rates (scraped, fragile) *(spec-only; no adapter code as of 2026-05-14)* | $0 |
 
 **Total fixed monthly cost: $52** (FMP Starter $22 + Railway Hobby $5 + Supabase Pro $25).
 
@@ -479,15 +479,16 @@ Full database schema and data flow documentation: [`docs/DATABASE_AND_DATAFLOW.m
 
 ### 6.4 Current Data Infrastructure Status
 
-Verified row counts and coverage (as of 2026-05-12, post-Phase 1 expansion):
+Verified row counts and coverage (audited 2026-05-14, post-data-layer normalization + catalyst backfill):
 
 | Table | Rows | Notes |
 | --- | ---: | --- |
-| `platform.prices_daily` | 20.6M | **7,694 distinct tickers**, 1994-07-21 → 2026-05-11, survivorship-free (Alpaca IEX `all_active` sweep + Tradier wide-export merge). Was 60 tickers / 301k rows pre-Phase 1. |
-| `platform.fundamentals_quarterly` | 178,518 | **5,981 tickers**, PIT-safe via FMP Starter (~30 quarters/ticker mean). `pb` + `de` populated on 152,907 rows; 25,560 NULLs are explainable (negative book value, no price on filing date, missing fields). Was 47 tickers / 1,790 rows pre-Phase 1. |
-| `platform.corporate_actions` | 109,344 | **217 tickers with splits (250 events) + 3,848 tickers with dividends (109,094 events)**. Handler now supports `universe: all_active`; the original 50-name default still works for back-compat. AAPL split fix verified. |
+| `platform.prices_daily` | 20,654,889 | **7,694 distinct tickers**, 1994-07-21 → 2026-05-13, survivorship-free (Alpaca SIP `all_active` sweep + Tradier wide-export merge). Default feed switched IEX→SIP 2026-05-13. |
+| `platform.fundamentals_quarterly` | 178,608 | **5,984 tickers**, PIT-safe via FMP Starter (~30 quarters/ticker mean). `pb` + `de` populated on 152,907 rows; remaining NULLs are explainable (negative book value, no price on filing date, missing fields). |
+| `platform.corporate_actions` | 109,413 | **217 tickers with splits + 3,848 tickers with dividends**. Handler now retries via `@with_retry` (fixes the 2026-05-12 Alpaca-429 cron failure). AAPL split fix verified. |
 | `platform.tradier_options_chains` | 122,668 | 51 tickers, snapshot from May 2026 (immediately before the Tradier brokerage account closed). Frozen — parked for future S2. |
-| `platform.catalyst_events` | 683 | 44 tickers, all `EARNINGS_BEAT` type, 2018–2025 (FMP coverage starts 2018-01-24). Universe-expansion catalyst backfill not yet run; many new tickers have no event row. |
+| `platform.catalyst_events` | 1,350 | **137 tickers**, `EARNINGS_BEAT` type, 2018–2025. Recurring weekly refresh active via `ops.py --update` `catalyst_refresh` stage (skip-guard: 6-day freshness). Vector engine unblocked. |
+| `platform.ticker_classifications` | 13,669 | Asset-class taxonomy (`stock` / `etf` / `spac` / `fund`) + ETF leverage/inverse/category flags for the sentinel engine. Backfilled from Alpaca `/v2/assets` + name-pattern classifier (2026-05-14). |
 | `platform.data_quality_log` | active | Receives rows from the Data Validation Suite, execution-quality tracker, and engine credibility scorer. |
 | `platform.aar_events` | 0 | Schema + writer implemented; populated by live paper trades once they fire. |
 | `platform.risk_state` | 1 | Postgres-backed Risk Governor persistence active. |
