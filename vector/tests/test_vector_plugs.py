@@ -277,7 +277,10 @@ def test_execution_payload_is_bracket() -> None:
     assert payload["side"] == "buy"
     assert "take_profit" in payload
     assert "stop_loss" in payload
-    assert payload["client_order_id"].startswith("vector_AAA_")
+    # Canonical vector cid is now ``vc_<TICKER>_<TS>`` (per
+    # tpcore.order_ids); old format ``vector_<TICKER>_<TS>`` is still
+    # parsed as legacy.
+    assert payload["client_order_id"].startswith("vc_AAA_")
 
 
 # ────────────────────────────────────────────────────────────────────────────

@@ -229,15 +229,16 @@ async def test_fetch_holdings_filters_to_engine_orders():
 
 
 @pytest.mark.asyncio
-async def test_fetch_holdings_unprefixed_engine_attributes_via_tier_pattern():
-    """Sigma/Reversion/Vector have no engine prefix — we attribute by the
-    ``<TICKER>_<TS>[_tier]`` BUY-order pattern instead. A position with
-    no matching tier-pattern BUY (e.g., a momentum-prefixed buy) does
-    NOT count as sigma-owned, even though sigma is "prefix-less".
+async def test_fetch_holdings_attributes_by_canonical_engine_prefix():
+    """Each engine has its own canonical prefix (``mo_``, ``sg_``, ``rv_``,
+    ``vc_``) per ``tpcore.order_ids``. ``fetch_engine_holdings(broker, eng)``
+    returns ONLY positions whose orders carry that engine's prefix.
 
-    Previously the function returned ALL positions when prefix=None,
-    which made the dashboard show momentum's entire portfolio under the
-    sigma/reversion/vector tabs."""
+    Legacy ``<TICKER>_<TS>_tierN`` cids (pre-migration) cannot be told
+    apart between sigma and reversion, so the registry-based attribution
+    returns False for them — those in-flight orders are tracked via the
+    per-engine ``_trade_assessments`` in-memory map until they close.
+    """
     broker = MagicMock()
     broker.get_positions = AsyncMock(return_value=[
         MagicMock(symbol="AAPL", qty=10, avg_entry_price=Decimal("180"),
@@ -246,24 +247,29 @@ async def test_fetch_holdings_unprefixed_engine_attributes_via_tier_pattern():
         MagicMock(symbol="YUMC", qty=15, avg_entry_price=Decimal("47.32"),
                   market_value=Decimal("710"), cost_basis=Decimal("710"),
                   unrealized_pl=Decimal("0")),
+        MagicMock(symbol="XOM", qty=5, avg_entry_price=Decimal("100"),
+                  market_value=Decimal("510"), cost_basis=Decimal("500"),
+                  unrealized_pl=Decimal("10")),
     ])
-    # Recent orders: AAPL via momentum (mo_), YUMC via sigma's tier pattern.
-    aapl_buy = MagicMock()
-    aapl_buy.symbol = "AAPL"
-    aapl_buy.client_order_id = "mo_AAPL_1700000000"
-    aapl_buy.side = MagicMock(value="buy")
-    yumc_buy = MagicMock()
-    yumc_buy.symbol = "YUMC"
-    yumc_buy.client_order_id = "YUMC_1778582356_tier2"
-    yumc_buy.side = MagicMock(value="buy")
-    broker.list_recent_orders = AsyncMock(return_value=[aapl_buy, yumc_buy])
+    # Canonical cids: each engine has its own prefix.
+    def _buy(symbol: str, cid: str) -> MagicMock:
+        o = MagicMock()
+        o.symbol = symbol
+        o.client_order_id = cid
+        o.side = MagicMock(value="buy")
+        return o
+    broker.list_recent_orders = AsyncMock(return_value=[
+        _buy("AAPL", "mo_AAPL_1700000000"),
+        _buy("YUMC", "sg_YUMC_1778582356_tier1"),
+        _buy("XOM",  "rv_XOM_1778582356_tier1"),
+    ])
 
-    holdings = await fetch_engine_holdings(broker, "sigma")
-    tickers = {h["ticker"] for h in holdings}
-    assert tickers == {"YUMC"}, (
-        f"sigma should only own YUMC (the _tier2 buy), not AAPL (mo_ prefix). "
-        f"got: {tickers}"
-    )
+    sigma_holdings = await fetch_engine_holdings(broker, "sigma")
+    reversion_holdings = await fetch_engine_holdings(broker, "reversion")
+    momentum_holdings = await fetch_engine_holdings(broker, "momentum")
+    assert {h["ticker"] for h in sigma_holdings} == {"YUMC"}
+    assert {h["ticker"] for h in reversion_holdings} == {"XOM"}
+    assert {h["ticker"] for h in momentum_holdings} == {"AAPL"}
 
 
 @pytest.mark.asyncio

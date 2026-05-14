@@ -40,6 +40,7 @@ from momentum.models import (
     TargetPosition,
 )
 from tpcore.interfaces.engine_plug import BaseEnginePlug
+from tpcore.order_ids import build_cid
 from tpcore.risk.governor import RiskGovernor
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -251,7 +252,7 @@ class MomentumExecutionRisk(BaseEnginePlug):
         trading day; if a partial fill leaks across the close we re-derive
         the target next month rather than ride a half-filled bracket
         overnight."""
-        client_oid = f"mo_{ticker}_{int(constructed_at.timestamp())}"
+        client_oid = build_cid("momentum", ticker, constructed_at=constructed_at)
         return {
             "symbol": ticker,
             "qty": str(qty),

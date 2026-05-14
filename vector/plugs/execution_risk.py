@@ -25,6 +25,7 @@ from decimal import ROUND_DOWN, Decimal
 import structlog
 
 from tpcore.interfaces.engine_plug import BaseEnginePlug
+from tpcore.order_ids import build_cid
 from vector.models import (
     MAX_CONCURRENT_POSITIONS,
     PRE_GRAD_POSITION_CAP_USD,
@@ -152,10 +153,13 @@ class VectorExecutionRisk(BaseEnginePlug):
     def _client_order_id(ticker: str) -> str:
         """Stable prefix the order manager keys assessments + AARs by.
 
-        Format: ``vector_{TICKER}_{epoch}``. The epoch ensures uniqueness
-        across same-day re-entries (rare but possible on volatile names).
+        Format: ``vc_<TICKER>_<epoch>``. Routed through
+        ``tpcore.order_ids.build_cid`` so the engine-prefix registry is
+        the single source of truth and cross-engine isolation is
+        enforced uniformly. The epoch ensures uniqueness across same-day
+        re-entries (rare but possible on volatile names).
         """
-        return f"vector_{ticker}_{int(datetime.now(UTC).timestamp())}"
+        return build_cid("vector", ticker)
 
     @staticmethod
     def _bracket_order(

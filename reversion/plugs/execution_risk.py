@@ -31,6 +31,7 @@ from reversion.models import (
     PhaseAssessment,
 )
 from tpcore.interfaces.engine_plug import BaseEnginePlug
+from tpcore.order_ids import build_cid
 
 logger = structlog.get_logger(__name__)
 
@@ -129,21 +130,25 @@ class ReversionExecutionRisk(BaseEnginePlug):
         notional = (assessment.entry_price * Decimal(qty)).quantize(Decimal("0.01"))
         risk_amount = (notional * HARD_STOP_PCT).quantize(Decimal("0.01"))
 
-        client_id_prefix = f"{assessment.ticker}_{int(datetime.now(UTC).timestamp())}"
+        constructed_at = datetime.now(UTC)
         tier1_payload = self._tier1_bracket_payload(
             ticker=assessment.ticker,
             qty=tier1_qty,
             direction=assessment.direction,
             take_profit=assessment.target_20ma,
             stop_price=assessment.stop_price,
-            client_order_id=f"{client_id_prefix}_tier1",
+            client_order_id=build_cid(
+                "reversion", assessment.ticker, constructed_at=constructed_at, tier="tier1"
+            ),
         )
         tier2_payload = self._tier2_limit_payload(
             ticker=assessment.ticker,
             qty=tier2_qty,
             direction=assessment.direction,
             limit_price=assessment.target_50ma,
-            client_order_id=f"{client_id_prefix}_tier2",
+            client_order_id=build_cid(
+                "reversion", assessment.ticker, constructed_at=constructed_at, tier="tier2"
+            ),
         )
 
         return ExecutionDecision(

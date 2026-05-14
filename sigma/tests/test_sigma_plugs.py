@@ -268,7 +268,9 @@ def test_execution_risk_builds_two_tier_payloads() -> None:
     assert tier1["qty"] == str(decision.tier1_qty)
     assert tier1["take_profit"] == {"limit_price": "184.00"}
     assert tier1["stop_loss"] == {"stop_price": "174.60"}
-    assert tier1["client_order_id"].startswith("AAPL_")
+    # Canonical sigma cid is now ``sg_<TICKER>_<TS>_tier1`` (per
+    # tpcore.order_ids); old format was ``<TICKER>_<TS>_tier1``.
+    assert tier1["client_order_id"].startswith("sg_AAPL_")
     assert tier1["client_order_id"].endswith("_tier1")
 
     # Tier 2: GTC sell-limit at the upper band, no bracket legs.

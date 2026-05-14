@@ -30,6 +30,7 @@ from tpcore.interfaces.broker import (
     OrderSide,
     OrderStatus,
 )
+from tpcore.order_ids import parse_cid
 from tpcore.parity import LivePaperParityHarness
 from tpcore.risk.governor import RiskDecision, RiskGovernor
 
@@ -42,19 +43,19 @@ ENGINE_ID = "reversion"
 
 
 def _trade_key(client_order_id: str) -> str:
-    if client_order_id.endswith("_tier1"):
-        return client_order_id[: -len("_tier1")]
-    if client_order_id.endswith("_tier2"):
-        return client_order_id[: -len("_tier2")]
-    return client_order_id
+    """Trade-pairing key via :func:`tpcore.order_ids.parse_cid`.
+
+    Accepts canonical ``rv_<TICKER>_<TS>_tierN`` and legacy
+    ``<TICKER>_<TS>_tierN`` formats so in-flight orders from before the
+    prefix migration still reconcile correctly.
+    """
+    parsed = parse_cid(client_order_id)
+    return parsed.trade_key or client_order_id
 
 
 def _tier(client_order_id: str) -> str | None:
-    if client_order_id.endswith("_tier1"):
-        return "tier1"
-    if client_order_id.endswith("_tier2"):
-        return "tier2"
-    return None
+    """Tier label or None if not a tier-bracket cid (filters out cross-engine orders)."""
+    return parse_cid(client_order_id).tier
 
 
 class ReversionOrderManager:

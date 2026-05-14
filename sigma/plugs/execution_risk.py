@@ -35,6 +35,7 @@ from sigma.models import (
     PhaseAssessment,
 )
 from tpcore.interfaces.engine_plug import BaseEnginePlug
+from tpcore.order_ids import build_cid
 
 logger = structlog.get_logger(__name__)
 
@@ -110,19 +111,23 @@ class SigmaExecutionRisk(BaseEnginePlug):
         notional = (assessment.entry_price * Decimal(qty)).quantize(Decimal("0.01"))
         risk_amount = (notional * HARD_STOP_PCT).quantize(Decimal("0.01"))
 
-        client_id_prefix = self._client_id_prefix(assessment.ticker)
+        constructed_at = datetime.now(UTC)
         tier1_payload = self._tier1_bracket_payload(
             ticker=assessment.ticker,
             qty=tier1_qty,
             take_profit=assessment.take_profit_mid,
             stop_price=assessment.stop_price,
-            client_order_id=f"{client_id_prefix}_tier1",
+            client_order_id=build_cid(
+                "sigma", assessment.ticker, constructed_at=constructed_at, tier="tier1"
+            ),
         )
         tier2_payload = self._tier2_limit_payload(
             ticker=assessment.ticker,
             qty=tier2_qty,
             limit_price=assessment.take_profit_far,
-            client_order_id=f"{client_id_prefix}_tier2",
+            client_order_id=build_cid(
+                "sigma", assessment.ticker, constructed_at=constructed_at, tier="tier2"
+            ),
         )
 
         return ExecutionDecision(
@@ -133,7 +138,7 @@ class SigmaExecutionRisk(BaseEnginePlug):
             notional_usd=notional,
             risk_amount_usd=risk_amount,
             order_payloads=[tier1_payload, tier2_payload],
-            constructed_at=datetime.now(UTC),
+            constructed_at=constructed_at,
         )
 
     @staticmethod

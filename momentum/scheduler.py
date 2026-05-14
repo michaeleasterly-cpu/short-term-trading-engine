@@ -94,20 +94,42 @@ def _filter_to_engine_holdings(
     """Filter broker positions to those originated by this engine.
 
     A position is "ours" iff at least one recent order on that symbol
-    carries our ``client_order_id`` prefix. Sub-account isolation isn't
-    available at the broker, so this client-side attribution is the
-    contract that keeps engines from stepping on each other (see the
-    2026-05-14 YUMC incident where momentum's rebalance sold a sigma
-    position because the diff saw the whole account as its book).
+    is attributable to this engine per :func:`tpcore.order_ids.is_engine_cid`.
+    Sub-account isolation isn't available at the broker, so this
+    client-side attribution is the contract that keeps engines from
+    stepping on each other (see the 2026-05-14 YUMC incident).
+
+    The ``prefix`` arg is kept for backward compatibility but the
+    attribution check now uses the central registry — passing ``mo_``
+    targets the ``momentum`` engine specifically, including its legacy
+    forms if any are ever added to the registry.
 
     Pure function so the rebalance scheduler can be regression-tested
     without spinning a real broker. Returns ``{symbol: qty}`` for
     positions with qty > 0.
     """
-    engine_symbols = {
-        o.symbol for o in recent_orders
-        if (getattr(o, "client_order_id", None) or "").startswith(prefix)
-    }
+    from tpcore.order_ids import ENGINE_PREFIX, is_engine_cid
+
+    # Reverse-lookup engine from the prefix arg so callers don't have to
+    # change. Defaults to legacy prefix-startswith if the registry has no
+    # match — preserves current behavior for any future caller.
+    target_engine: str | None = None
+    for engine_name, registered_prefix in ENGINE_PREFIX.items():
+        if registered_prefix == prefix:
+            target_engine = engine_name
+            break
+
+    if target_engine is not None:
+        engine_symbols = {
+            o.symbol for o in recent_orders
+            if is_engine_cid(getattr(o, "client_order_id", None), target_engine)
+        }
+    else:
+        # Unknown prefix — fall back to literal startswith.
+        engine_symbols = {
+            o.symbol for o in recent_orders
+            if (getattr(o, "client_order_id", None) or "").startswith(prefix)
+        }
     return {
         p.symbol: int(p.qty)
         for p in positions

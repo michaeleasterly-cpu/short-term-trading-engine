@@ -39,6 +39,7 @@ from tpcore.interfaces.broker import (
     OrderSide,
     OrderStatus,
 )
+from tpcore.order_ids import parse_cid
 from tpcore.parity import LivePaperParityHarness
 from tpcore.risk.governor import RiskDecision, RiskGovernor
 
@@ -51,21 +52,27 @@ ENGINE_ID = "sigma"
 
 
 def _trade_key(client_order_id: str) -> str:
-    """Strip the ``_tier1``/``_tier2`` suffix to get the shared trade prefix."""
-    if client_order_id.endswith("_tier1"):
-        return client_order_id[: -len("_tier1")]
-    if client_order_id.endswith("_tier2"):
-        return client_order_id[: -len("_tier2")]
-    return client_order_id
+    """Return the trade-pairing key for ``client_order_id``.
+
+    Routes through :func:`tpcore.order_ids.parse_cid` so the same parse
+    works on the canonical ``sg_<TICKER>_<TS>_tierN`` format and the
+    legacy ``<TICKER>_<TS>_tierN`` format (in-flight orders from before
+    the prefix migration). Returns the full cid unchanged if no tier
+    suffix is present.
+    """
+    parsed = parse_cid(client_order_id)
+    return parsed.trade_key or client_order_id
 
 
 def _tier(client_order_id: str) -> str | None:
-    """Return ``"tier1"`` / ``"tier2"`` / ``None`` for non-Sigma orders."""
-    if client_order_id.endswith("_tier1"):
-        return "tier1"
-    if client_order_id.endswith("_tier2"):
-        return "tier2"
-    return None
+    """Return ``"tier1"``/``"tier2"`` or ``None`` if not a tier-bracket cid.
+
+    Accepts both canonical (``sg_..._tier1``) and legacy
+    (``<TICKER>_..._tier1``) formats via :func:`parse_cid`. Returns
+    None for momentum/vector orders so the sigma reconcile loop
+    silently ignores them.
+    """
+    return parse_cid(client_order_id).tier
 
 
 class SigmaOrderManager:
