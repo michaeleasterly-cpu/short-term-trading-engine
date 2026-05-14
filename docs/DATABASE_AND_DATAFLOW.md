@@ -140,7 +140,7 @@ List every table under the `platform` schema. For each, provide columns, types, 
 
 #### `platform.aar_events`
 
-**Purpose:** Unified after-action reports for every trade, paper or live. Fed by `tpcore.aar.AARWriter`.
+**Purpose:** Unified after-action reports for every trade, paper or live. Fed by `tpcore.aar.AARWriter`. The writer exposes its asyncpg pool via the `pool` read-only property (added 2026-05-14) so order managers writing to sibling tables (e.g. `platform.open_orders`) reuse the same connection pool without reaching into the private `_pool` attribute.
 
 **Columns:**
 
@@ -561,7 +561,7 @@ flowchart TB
 2. **Universe Selection:** Queries `platform.universe_candidates WHERE engine = $1 AND as_of_date = CURRENT_DATE`. Falls back to hardcoded list if table is empty (transitional).
 3. **Setup Detection:** Plug queries `platform.prices_daily` via `PostgresDataAdapter` for daily bars. Computes engine-specific scores. Returns ranked candidates.
 4. **Lifecycle Analysis:** For each candidate above threshold, determines phase (SETUP, ACTIVE, EXHAUSTED). Applies engine-specific gates (earnings quality, CHOP, catalyst proximity).
-5. **Execution & Risk:** Computes position size. Calls `RiskGovernor.check_trade()`. Submits bracket orders to Alpaca paper endpoint. Records fill quality.
+5. **Execution & Risk:** Computes position size. Order managers first call `governor.state_for(engine_id)` (read-only public accessor, added 2026-05-14) for the cheap local capital-gate pre-flight, then `RiskGovernor.check_trade()` for the full platform gate. Submits bracket orders to Alpaca paper endpoint. Records fill quality.
 6. **AAR Logging:** On Tier 1 and Tier 2 fills, writes `AfterActionReport` to `platform.aar_events` via `AARWriter`.
 7. **Shutdown:** Updates `platform.risk_state` with cumulative P&L. Writes a `SHUTDOWN` event to `platform.application_log` (the canonical health indicator for short-lived runs). Closes pool. Exits.
 

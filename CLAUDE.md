@@ -32,6 +32,7 @@ Multi-engine automated trading platform. US equities, daily timeframe, fully aut
 
 ## Session Rules
 - Read docs/STYLE_GUIDE.md before writing any code.
+- **Never access private attributes (`._store`, `._pool`, etc.) on tpcore classes.** Use the public accessors (`RiskGovernor.state_for(...)`, `AARWriter.pool`, etc.). If a public accessor doesn't exist for what you need, extend the tpcore class with one — don't add `# noqa: SLF001`. See `docs/STYLE_GUIDE.md` "Private-attribute access on tpcore classes" for the canonical examples.
 - Read docs/glossary.md if present before coding.
 - Never modify tpcore without checking all engines that consume it.
 - Every trade path goes through tpcore.risk.RiskGovernor.check_trade().

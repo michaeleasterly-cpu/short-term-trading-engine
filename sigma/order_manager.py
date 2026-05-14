@@ -110,7 +110,7 @@ class SigmaOrderManager:
         # asyncpg pool for platform.open_orders persistence — required for
         # the trade monitor to find Tier 1 rows. None falls back to the
         # aar_writer's pool when available; tests can pass None to skip.
-        self._pool = pool or (aar_writer._pool if aar_writer is not None else None)  # noqa: SLF001
+        self._pool = pool or (aar_writer.pool if aar_writer is not None else None)
         # ticker → PhaseAssessment for every trade we've placed this process.
         # The broker is the source of truth for orders; this is a side cache
         # so we can carry assessment context (entry, stop, mid/upper) into the
@@ -129,7 +129,7 @@ class SigmaOrderManager:
         orders, or ``None`` if any gate blocked.
         """
         # Local capital gate first (cheap, no I/O).
-        engine_state = await self._governor._store.get(ENGINE_ID)  # noqa: SLF001 — read-only peek
+        engine_state = await self._governor.state_for(ENGINE_ID)
         engine_pnl = engine_state.daily_pnl if engine_state else Decimal("0")
         open_count = engine_state.open_positions if engine_state else 0
 

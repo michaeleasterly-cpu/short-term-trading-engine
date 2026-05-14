@@ -184,7 +184,7 @@ async def test_submit_decision_runs_full_pipeline() -> None:
     assert result == [tier1_order]
     broker.submit_tier1_only.assert_awaited_once()
     broker.submit_execution_decision.assert_not_awaited()
-    state = await governor._store.get(ENGINE_ID)  # noqa: SLF001 — read-only peek
+    state = await governor.state_for(ENGINE_ID)
     assert state is not None
     assert state.open_positions == 1
 
@@ -293,7 +293,7 @@ async def test_reconcile_logs_tier2_final_aar_with_combined_pnl() -> None:
     assert final.pnl_gross == Decimal("48.00")
 
     # Open-position counter should be back to zero after the final.
-    state = await governor._store.get(ENGINE_ID)  # noqa: SLF001
+    state = await governor.state_for(ENGINE_ID)
     assert state is not None
     assert state.open_positions == 0
 

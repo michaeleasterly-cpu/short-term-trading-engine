@@ -56,7 +56,6 @@ from tpcore.parity import LivePaperParityHarness
 from tpcore.risk.governor import (
     InMemoryRiskStateStore,
     RiskGovernor,
-    RiskStateStore,
 )
 from tpcore.risk.persistent_store import PostgresRiskStateStore
 
@@ -102,7 +101,6 @@ class SigmaScheduler:
         database_url: str | None = None,
         broker: AlpacaPaperBrokerAdapter | None = None,
         data: DataProviderInterface | None = None,
-        risk_store: RiskStateStore | None = None,
         aar_writer: AARWriter | None = None,
     ) -> None:
         self._engine_equity = engine_equity
@@ -110,8 +108,11 @@ class SigmaScheduler:
         self._database_url = database_url if database_url is not None else os.getenv("DATABASE_URL")
         self._injected_broker = broker
         self._injected_data = data
-        self._injected_risk_store = risk_store
         self._injected_aar_writer = aar_writer
+        # risk_store no longer injectable — the governor's state_for()
+        # public method (added 2026-05-14) removed the need for the
+        # parallel `risk_store` reference the scheduler used to carry
+        # solely to dodge the `governor._store` private-attr noqa.
 
     async def run_once(self, *, as_of: date_t | None = None) -> RunSummary:
         as_of = as_of or datetime.now(UTC).date()
@@ -123,8 +124,8 @@ class SigmaScheduler:
         owned_fundamentals_adapter: FMPFundamentalsAdapter | None = None
         try:
             # 0. Build pool (and DB-backed deps) iff DATABASE_URL is set and
-            #    no explicit risk_store/aar_writer were injected.
-            if self._injected_risk_store is None and self._injected_aar_writer is None:
+            #    no explicit aar_writer was injected.
+            if self._injected_aar_writer is None:
                 if self._database_url:
                     pool = await build_asyncpg_pool(self._database_url)
                     logger.info("sigma.scheduler.pool_open")
@@ -149,7 +150,7 @@ class SigmaScheduler:
 
             broker = self._injected_broker or AlpacaPaperBrokerAdapter()
             data = self._injected_data or PostgresDataAdapter(pool)
-            risk_store = self._injected_risk_store or (
+            risk_store = (
                 PostgresRiskStateStore(pool) if pool is not None else InMemoryRiskStateStore()
             )
             aar_writer = self._injected_aar_writer or (
@@ -157,8 +158,8 @@ class SigmaScheduler:
             )
 
             # Database-backed audit log — best-effort, never blocks the run.
-            # Pool absence (test path with injected risk_store + aar_writer)
-            # silently skips DB logging; stdout structlog still records.
+            # Pool absence (test path with injected aar_writer) silently
+            # skips DB logging; stdout structlog still records.
             if pool is not None:
                 db_log = DBLogHandler(pool, ENGINE_ID, run_id)
                 await db_log.startup(
@@ -178,7 +179,7 @@ class SigmaScheduler:
             # engine is frozen. The platform-wide check_trade() inside the
             # order manager would also block submission, but stopping here
             # avoids wasted FMP / DB / API calls during a freeze.
-            current_state = await risk_store.get(ENGINE_ID)
+            current_state = await governor.state_for(ENGINE_ID)
             if current_state and current_state.kill_switch_active:
                 logger.critical(
                     "sigma.scheduler.kill_switch_active",
@@ -279,7 +280,7 @@ class SigmaScheduler:
                         cand.ticker, score=float(cand.sigma_score), direction="LONG",
                         extra_data=({"filter_diagnostics": _diag} if _diag else None),
                     )
-                state = await risk_store.get(ENGINE_ID)
+                state = await governor.state_for(ENGINE_ID)
                 open_positions = state.open_positions if state else 0
                 decision = execution.decide(
                     assessment,

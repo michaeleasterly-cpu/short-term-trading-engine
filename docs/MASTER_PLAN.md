@@ -47,7 +47,8 @@ The Short-Term Trading Engine is a personal, fully automated, multi-strategy tra
 
 - Per-engine daily loss limit (5%), weekly loss limit (10%), max concurrent positions (8).
 - Platform-wide net long exposure cap (60% of total capital).
-- `check_trade(engine_id, size, direction) → bool`
+- `check_trade(engine_id, size, direction) → bool` — full gating (cost model + kill switch + caps).
+- `state_for(engine_id) → RiskState | None` — async read-only public accessor (added 2026-05-14). Use for cheap pre-flight checks (`kill_switch_active`, `daily_pnl`, `open_positions`) before invoking `check_trade`. Replaces the prior `governor._store.get(...)` private-attr leak that engines used to read pre-flight state.
 - `emergency_kill()` — cancels all orders, flattens positions.
 - State persisted in `platform.risk_state`.
 

@@ -225,7 +225,7 @@ class VectorScheduler:
             await governor.register_engine(ENGINE_ID, self._engine_equity)
 
             # Kill-switch short-circuit: refuse to scan or submit when frozen.
-            current_state = await governor._store.get(ENGINE_ID)  # noqa: SLF001 — read-only peek
+            current_state = await governor.state_for(ENGINE_ID)
             if current_state and current_state.kill_switch_active:
                 logger.critical(
                     "vector.scheduler.kill_switch_active",
@@ -309,7 +309,7 @@ class VectorScheduler:
                     cand.ticker, score=float(cand.swing_score),
                     extra_data=({"filter_diagnostics": _diag} if _diag else None),
                 )
-                state = await governor._store.get(ENGINE_ID)  # noqa: SLF001
+                state = await governor.state_for(ENGINE_ID)
                 open_positions = state.open_positions if state else 0
                 decision = execution.decide(
                     cand,

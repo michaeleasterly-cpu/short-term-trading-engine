@@ -135,3 +135,25 @@ async def test_aar_writer_integration_roundtrip() -> None:
             )
     finally:
         await pool.close()
+
+
+# ── pool property (added 2026-05-14) ───────────────────────────────────
+
+
+def test_aar_writer_pool_property_returns_none_when_unwired():
+    """A db_pool=None construction → pool property returns None.
+    Mirrors what consumers see in tests / DB-less environments."""
+    from tpcore.aar.writer import AARWriter
+
+    writer = AARWriter(db_pool=None)
+    assert writer.pool is None
+
+
+def test_aar_writer_pool_property_returns_underlying_pool():
+    """Whatever db_pool was passed at construction is exposed via
+    .pool — order managers use this instead of reaching into _pool."""
+    from tpcore.aar.writer import AARWriter
+
+    sentinel = object()  # any non-None object — the property is a passthrough
+    writer = AARWriter(db_pool=sentinel)  # type: ignore[arg-type]
+    assert writer.pool is sentinel

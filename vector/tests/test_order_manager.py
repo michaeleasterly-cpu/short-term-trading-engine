@@ -146,7 +146,7 @@ async def test_submit_passes_through_gate_governor_and_broker() -> None:
     out = await om.submit_decision(_decision(), _assessment())
     assert out == placed
     broker.submit_tier1_only.assert_awaited_once()
-    state = await gov._store.get(ENGINE_ID)  # noqa: SLF001
+    state = await gov.state_for(ENGINE_ID)
     assert state.open_positions == 1
 
 
@@ -208,7 +208,7 @@ async def test_reconcile_builds_take_profit_aar_when_exit_above_entry() -> None:
     assert aar.entry_price == Decimal("100.50")
     assert aar.exit_price == Decimal("115.00")
     aar_writer.write_aar.assert_awaited_once()
-    state = await gov._store.get(ENGINE_ID)  # noqa: SLF001
+    state = await gov.state_for(ENGINE_ID)
     assert state.open_positions == 0  # decremented after AAR
 
 

@@ -203,6 +203,20 @@ class RiskGovernor:
         logger.info("tpcore.risk.engine_registered", engine=engine_id, equity=str(engine_equity))
         return state
 
+    async def state_for(self, engine_id: str) -> RiskState | None:
+        """Read-only peek at the current ``RiskState`` for one engine.
+
+        Returns ``None`` if the engine isn't registered. Use this for
+        cheap pre-flight checks (``kill_switch_active``, ``daily_pnl``,
+        ``open_positions``) BEFORE the heavier :meth:`check_trade` call.
+        The returned object is a snapshot — mutations must go through
+        :meth:`record_fill`, :meth:`register_engine`, or
+        :meth:`emergency_kill`. Added 2026-05-14 to eliminate the
+        private-attribute leak pattern (``governor._store.get(...)``)
+        across the engines' order managers.
+        """
+        return await self._store.get(engine_id)
+
     async def check_trade(
         self,
         engine_id: str,

@@ -30,6 +30,16 @@ class AARWriter:
     def __init__(self, db_pool: asyncpg.Pool | None = None) -> None:
         self._pool = db_pool
 
+    @property
+    def pool(self) -> asyncpg.Pool | None:
+        """The asyncpg pool the writer was constructed with, or ``None``
+        when wired in a DB-less environment. Exposed publicly so
+        consumers that need the same pool (e.g. the order manager
+        writing to ``platform.open_orders``) don't have to reach into
+        ``_pool``. Added 2026-05-14 alongside ``RiskGovernor.state_for``.
+        """
+        return self._pool
+
     async def write_aar(self, aar: AfterActionReport) -> bool:
         """Insert ``aar`` if absent. Returns ``True`` iff a new row was written."""
         if self._pool is None:

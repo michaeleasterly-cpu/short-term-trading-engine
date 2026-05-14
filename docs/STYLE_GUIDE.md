@@ -62,6 +62,19 @@ Order: stdlib → third-party → `tpcore` → local engine modules. Within each
 Forbidden direct vendor SDK imports — these are blocked by `tpcore.scripts.check_imports`:
 `alpaca_trade_api`, `yfinance`, `fmp_python_sdk`, `praw`, `iborrowdesk`. Reach external services through `tpcore.interfaces.broker.BrokerExecutionInterface` and `tpcore.interfaces.data.DataProviderInterface`.
 
+## Private-attribute access on tpcore classes
+
+**Never access private attributes (`._store`, `._pool`, etc.) on tpcore classes from engine code.** Use the public accessors. If a public accessor doesn't exist for what you need, extend the tpcore class with one — don't add a `# noqa: SLF001` marker.
+
+Canonical examples (added 2026-05-14 as the reference pattern):
+
+- `RiskGovernor.state_for(engine_id) -> RiskState | None` — async read-only peek. Replaces `governor._store.get(engine_id)`.
+- `AARWriter.pool -> asyncpg.Pool | None` — read-only property. Replaces `aar_writer._pool`.
+
+The audit that motivated these (`docs/superpowers/pipelines/data_adapter_pipeline.md` cross-references it) found 12 `# noqa: SLF001` sites across order managers + schedulers all reaching into the same two internals. Every one of those sites had a clear public-API gap as the root cause. The fix was the public accessor, not the noqa.
+
+When you find a similar pattern in future audits: extend the tpcore class with a public accessor, replace every consumer site, drop the noqa.
+
 ## Naming
 
 Engine, score, and service names must match `docs/glossary.md`. Never re-introduce deprecated names (Creeper, Swinger, Grifter, Fader, Easterly, Grift Score, Creep Score, Commander, Coroner, Harvester).

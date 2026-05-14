@@ -287,3 +287,34 @@ async def test_check_trade_back_compat_no_ticker_no_cost_gate() -> None:
     await governor.register_engine("sigma", engine_equity=Decimal("10000"))
     result = await governor.check_trade("sigma", size=Decimal("1500"), direction=OrderSide.BUY)
     assert result.decision is RiskDecision.ALLOW
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# state_for — read-only public accessor (added 2026-05-14)
+# ────────────────────────────────────────────────────────────────────────────
+
+
+async def test_state_for_returns_none_for_unregistered_engine() -> None:
+    governor = RiskGovernor(
+        state_store=InMemoryRiskStateStore(),
+        broker=_broker_with_positions(),
+    )
+    state = await governor.state_for("never-registered")
+    assert state is None
+
+
+async def test_state_for_returns_snapshot_for_registered_engine() -> None:
+    """Returns the live RiskState — kill_switch_active, daily_pnl,
+    open_positions readable; matches what the order managers' local
+    capital-gate pre-flight needs."""
+    governor = RiskGovernor(
+        state_store=InMemoryRiskStateStore(),
+        broker=_broker_with_positions(),
+    )
+    await governor.register_engine("sigma", engine_equity=Decimal("10000"))
+    state = await governor.state_for("sigma")
+    assert state is not None
+    assert state.engine == "sigma"
+    assert state.kill_switch_active is False
+    assert state.daily_pnl == Decimal("0")
+    assert state.open_positions == 0

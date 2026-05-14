@@ -42,7 +42,6 @@ from tpcore.parity import LivePaperParityHarness
 from tpcore.risk.governor import (
     InMemoryRiskStateStore,
     RiskGovernor,
-    RiskStateStore,
 )
 from tpcore.risk.persistent_store import PostgresRiskStateStore
 
@@ -82,7 +81,6 @@ class ReversionScheduler:
         database_url: str | None = None,
         broker: AlpacaPaperBrokerAdapter | None = None,
         data: DataProviderInterface | None = None,
-        risk_store: RiskStateStore | None = None,
         aar_writer: AARWriter | None = None,
         fundamentals: FMPFundamentalsAdapter | None = None,
     ) -> None:
@@ -92,9 +90,12 @@ class ReversionScheduler:
         self._database_url = database_url if database_url is not None else os.getenv("DATABASE_URL")
         self._injected_broker = broker
         self._injected_data = data
-        self._injected_risk_store = risk_store
         self._injected_aar_writer = aar_writer
         self._injected_fundamentals = fundamentals
+        # risk_store no longer injectable — the governor's state_for()
+        # public method (added 2026-05-14) removed the need for the
+        # parallel `risk_store` reference the scheduler used to carry
+        # solely to dodge the `governor._store` private-attr noqa.
 
     async def run_once(self, *, as_of: date_t | None = None) -> RunSummary:
         as_of = as_of or datetime.now(UTC).date()
@@ -104,7 +105,7 @@ class ReversionScheduler:
         db_log: DBLogHandler | None = None
         exit_code = 0
         try:
-            if self._injected_risk_store is None and self._injected_aar_writer is None:
+            if self._injected_aar_writer is None:
                 if self._database_url:
                     pool = await build_asyncpg_pool(self._database_url)
                     logger.info("reversion.scheduler.pool_open")
@@ -127,7 +128,7 @@ class ReversionScheduler:
 
             broker = self._injected_broker or AlpacaPaperBrokerAdapter()
             data = self._injected_data or PostgresDataAdapter(pool)
-            risk_store = self._injected_risk_store or (
+            risk_store = (
                 PostgresRiskStateStore(pool) if pool is not None else InMemoryRiskStateStore()
             )
             aar_writer = self._injected_aar_writer or (
@@ -151,7 +152,7 @@ class ReversionScheduler:
             await governor.register_engine(ENGINE_ID, self._engine_equity)
 
             # Kill-switch short-circuit: refuse to scan or submit when frozen.
-            current_state = await risk_store.get(ENGINE_ID)
+            current_state = await governor.state_for(ENGINE_ID)
             if current_state and current_state.kill_switch_active:
                 logger.critical(
                     "reversion.scheduler.kill_switch_active",
@@ -251,7 +252,7 @@ class ReversionScheduler:
                             direction=cand.direction.value,
                             extra_data=({"filter_diagnostics": _diag} if _diag else None),
                         )
-                    state = await risk_store.get(ENGINE_ID)
+                    state = await governor.state_for(ENGINE_ID)
                     open_positions = state.open_positions if state else 0
                     decision = execution.decide(
                         assessment,
