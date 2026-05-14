@@ -20,6 +20,7 @@ No network. No real DB. All async via the existing FakePool pattern.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from dataclasses import dataclass
@@ -556,3 +557,50 @@ async def test_cancelled_event_marks_row_cancelled() -> None:
     update_sql = [r for r in pool.conn.executed if "UPDATE platform.open_orders" in r.sql]
     assert len(update_sql) == 1
     assert update_sql[0].args[1] == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_consume_stream_awaits_run_forever_in_current_loop() -> None:
+    """Regression: _consume_stream must run the alpaca stream in our loop.
+
+    The earlier implementation wrapped alpaca-py's sync ``stream.run()``
+    in ``asyncio.to_thread`` — that forks ``asyncio.run(_run_forever())``
+    inside a worker thread, binding alpaca's callbacks to a brand-new
+    event loop. The trade_updates callback then crashed on every fill
+    with "Task got Future attached to a different loop" the moment it
+    touched the asyncpg pool (which lives in the main loop). Fix is to
+    await ``stream._run_forever()`` directly so the callback path
+    shares our loop. This test pins that contract.
+    """
+    awaited_loops: list[asyncio.AbstractEventLoop] = []
+    closed: list[bool] = []
+
+    class _FakeStream:
+        def subscribe_trade_updates(self, handler) -> None:  # noqa: ARG002
+            pass
+
+        async def _run_forever(self) -> None:
+            awaited_loops.append(asyncio.get_running_loop())
+
+        async def close(self) -> None:
+            closed.append(True)
+
+    pool = _FakePool(fetchrow_handler=lambda *_a, **_k: None)
+    monitor = TradeMonitor(
+        pool=pool,
+        broker=AsyncMock(),
+        aar_writer=_StubAARWriter(),
+        risk_store=_StubRiskStore(),
+        stream_factory=lambda: _FakeStream(),
+        run_id=uuid.UUID("00000000-0000-0000-0000-000000000def"),
+    )
+
+    await monitor._consume_stream()
+
+    # _run_forever was awaited in the test's loop (= same loop the pool
+    # lives in). If a future refactor re-introduces to_thread(stream.run),
+    # this list would either be empty or contain a different loop.
+    assert len(awaited_loops) == 1
+    assert awaited_loops[0] is asyncio.get_running_loop()
+    # close() called in the finally block for clean reconnect.
+    assert closed == [True]

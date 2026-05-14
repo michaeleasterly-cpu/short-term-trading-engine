@@ -299,10 +299,32 @@ class TradeMonitor:
             "INFO",
             {},
         )
-        # alpaca-py's TradingStream.run() is synchronous (it spawns its own
-        # event loop internally). Run it in a worker thread so our parent
-        # asyncio loop stays responsive to cancellation.
-        await asyncio.to_thread(stream.run)
+        # Await alpaca-py's async entry point directly so the stream
+        # and our asyncpg pool live in the same event loop. The earlier
+        # ``await asyncio.to_thread(stream.run)`` wrapped alpaca's sync
+        # ``run()`` (which does ``asyncio.run(self._run_forever())``)
+        # in a worker thread — that forked a brand-new event loop on
+        # the worker side, and every ``on_trade_update`` callback then
+        # crashed with "Task got Future attached to a different loop"
+        # the moment it tried to ``self._pool.acquire()`` (pool was
+        # bound to the main loop, not the worker's).
+        #
+        # ``_run_forever`` is alpaca-py's canonical async coroutine
+        # (line 153 of alpaca/trading/stream.py); ``stream.run()`` is
+        # just ``asyncio.run(self._run_forever())``. Awaiting it
+        # directly sets ``stream._loop = asyncio.get_running_loop()``
+        # to our loop, so the trade_updates callback path runs in the
+        # same loop as the pool. Fixes the 2026-05-14 incident where
+        # the launchd-respawned daemon kept crashing on every fill.
+        try:
+            await stream._run_forever()
+        finally:
+            # Defensive cleanup so the next reconnect iteration in
+            # ``run_forever()`` starts from a clean websocket state.
+            # Suppress Exception (not BaseException), so CancelledError
+            # still propagates upward.
+            with contextlib.suppress(Exception):
+                await stream.close()
 
     def _build_stream(self) -> Any:
         """Construct the upstream Alpaca stream, or use the injected factory."""
