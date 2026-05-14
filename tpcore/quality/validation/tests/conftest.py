@@ -74,6 +74,25 @@ class FakePool:
                 "insider_rows": 500,
                 "material_rows": 700,
             }
+        # Liquidity tiers freshness check probes the table + universe.
+        # Return a passing snapshot so unrelated tests don't false-fail.
+        if "liquidity_tiers" in sql_lower and "active_universe" in sql_lower:
+            from datetime import UTC, datetime, timedelta
+            return {
+                "latest": datetime.now(UTC) - timedelta(days=10),
+                "rows_total": 5000,
+                "t1_t2_count": 1000,  # 20% — well above 3% floor
+                "active_universe": 5000,
+            }
+        # Ticker classifications coverage check.
+        if "ticker_classifications" in sql_lower and "unclassified" in sql_lower:
+            from datetime import UTC, datetime, timedelta
+            return {
+                "latest_update": datetime.now(UTC) - timedelta(days=10),
+                "classified_rows": 13000,
+                "active_universe": 5000,
+                "unclassified": 100,  # 98% coverage — above 90% floor
+            }
         rows = await self.fetch(sql, *args)
         return rows[0] if rows else None
 

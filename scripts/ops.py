@@ -555,6 +555,112 @@ async def _stage_catalyst_refresh(pool: asyncpg.Pool) -> dict[str, Any]:
     }
 
 
+async def _stage_tier_refresh(pool: asyncpg.Pool) -> dict[str, Any]:
+    """Quarterly liquidity-tier refresh.
+
+    Tier assignment drifts slowly (spread observations accumulate over
+    weeks). Skip-guard short-circuits when ``MAX(last_updated)`` is
+    within 90 days. Universe and sources mirror the operator's manual
+    ``scripts/run_tier_refresh.sh``.
+    """
+    log = structlog.get_logger("scripts.ops")
+    # Skip guard.
+    newest = await pool.fetchval(
+        "SELECT MAX(last_updated) FROM platform.liquidity_tiers"
+    )
+    if newest is not None:
+        age = datetime.now(UTC) - newest
+        if age.days < 90:
+            log.info(
+                "ops.stage.tier_refresh.skipped_fresh",
+                last_refresh_age_days=age.days,
+            )
+            return {
+                "skipped": True,
+                "reason": "refreshed_within_90_days",
+                "last_refresh_age_days": age.days,
+            }
+
+    import os
+
+    from scripts.assign_liquidity_tiers import assign_tiers
+
+    db_url = os.getenv("DATABASE_URL") or os.getenv("DATABASE_URL_IPV4")
+    if not db_url:
+        raise RuntimeError("tier_refresh: DATABASE_URL not set")
+    sources = ["corwin_schultz"]
+    bucket = await assign_tiers(db_url=db_url, sources=sources)
+    log.info(
+        "ops.stage.tier_refresh.done",
+        tickers_assigned=sum(bucket.values()),
+        tiers=bucket,
+    )
+    return {
+        "tickers_assigned": sum(bucket.values()),
+        "tiers": {int(k): int(v) for k, v in bucket.items()},
+    }
+
+
+async def _stage_classify_tickers(pool: asyncpg.Pool) -> dict[str, Any]:
+    """Monthly ticker-classification refresh.
+
+    Asset class is near-static — re-runs exist to pick up new
+    listings (Phase-1 universe expansions, new SPAC IPOs). Skip-guard
+    short-circuits when the table was touched within 30 days **and**
+    coverage of the active universe is ≥ 95%. The second clause
+    forces a re-run when a universe expansion has introduced
+    unclassified tickers even if the table was recently touched.
+    """
+    log = structlog.get_logger("scripts.ops")
+
+    # Skip guard — two conditions must BOTH hold for skip.
+    snapshot = await pool.fetchrow(
+        """
+        SELECT
+            (SELECT MAX(last_updated) FROM platform.ticker_classifications) AS latest,
+            (SELECT COUNT(DISTINCT pd.ticker)
+             FROM platform.prices_daily pd
+             LEFT JOIN platform.ticker_classifications tc USING (ticker)
+             WHERE pd.date >= CURRENT_DATE - INTERVAL '30 days'
+               AND pd.delisted = false
+               AND tc.ticker IS NULL) AS unclassified,
+            (SELECT COUNT(DISTINCT ticker) FROM platform.prices_daily
+             WHERE date >= CURRENT_DATE - INTERVAL '30 days'
+               AND delisted = false) AS active
+        """
+    )
+    latest = snapshot["latest"] if snapshot else None
+    unclassified = int(snapshot["unclassified"] or 0) if snapshot else 0
+    active = int(snapshot["active"] or 0) if snapshot else 0
+    coverage_pct = ((active - unclassified) / active) if active else 0.0
+
+    if latest is not None and coverage_pct >= 0.95:
+        age = datetime.now(UTC) - latest
+        if age.days < 30:
+            log.info(
+                "ops.stage.classify_tickers.skipped_fresh",
+                last_refresh_age_days=age.days,
+                coverage_pct=round(coverage_pct, 3),
+            )
+            return {
+                "skipped": True,
+                "reason": "refreshed_within_30_days_and_coverage_sufficient",
+                "last_refresh_age_days": age.days,
+                "coverage_pct": round(coverage_pct, 3),
+            }
+
+    from tpcore.data.classify_tickers import classify_all_tickers
+    from tpcore.data.ingest_alpaca_bars import _alpaca_broker_base, _alpaca_headers
+
+    stats = await classify_all_tickers(
+        pool,
+        alpaca_base_url=_alpaca_broker_base(),
+        alpaca_headers=_alpaca_headers(),
+    )
+    log.info("ops.stage.classify_tickers.done", **{str(k): int(v) for k, v in stats.items()})
+    return {str(k): int(v) for k, v in stats.items()}
+
+
 async def _stage_sec_filings(pool: asyncpg.Pool) -> dict[str, Any]:
     """Weekly SEC EDGAR Form 4 + 8-K ingest.
 
@@ -768,7 +874,16 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # 6 days. Heavy timeout: ~200 tickers × ~1.5s/call (rate-limited
     # under SEC's 10 req/sec cap) + Form 4 XML fetches.
     ("sec_filings",         lambda pool, cfg: (lambda: _stage_sec_filings(pool)),              HEAVY_STAGE_TIMEOUT_SEC),
-    # data_validation runs the 8-check suite against the live tables —
+    # Liquidity tier refresh — quarterly cadence (90d skip guard).
+    # Tier assignment drifts slowly; the stage exists so the dashboard
+    # surfaces operator inaction.
+    ("tier_refresh",        lambda pool, cfg: (lambda: _stage_tier_refresh(pool)),             HEAVY_STAGE_TIMEOUT_SEC),
+    # Ticker classifications refresh — monthly cadence (30d skip guard +
+    # 95% coverage check). Picks up new listings after universe
+    # expansion. ETFs/SPACs/funds get flagged so catalyst + earnings
+    # pipelines can filter them out.
+    ("classify_tickers",    lambda pool, cfg: (lambda: _stage_classify_tickers(pool)),         HEAVY_STAGE_TIMEOUT_SEC),
+    # data_validation runs the 10-check suite against the live tables —
     # at the current 20M-row prices_daily it consistently runs ~120-
     # 130s. Bumping to 5 min gives headroom without masking a true hang.
     ("data_validation",     lambda pool, cfg: (lambda: _stage_data_validation(pool)),          300.0),
@@ -1098,6 +1213,175 @@ async def _check_corp_actions_freshness(pool: asyncpg.Pool) -> dict[str, Any]:
 
 SEC_FILINGS_FRESHNESS_MAX_DAYS = 14
 
+# Fundamentals quarterly filings ship in earnings cycles — even slow
+# names get a new 10-Q every ~95 days (one quarter + grace). Beyond
+# that the table is stale and Reversion's earnings-quality gate stops
+# reflecting reality.
+FUNDAMENTALS_FRESHNESS_MAX_DAYS = 95
+
+# Catalyst events are earnings-beat snapshots; the refresh stage is
+# quarterly-cadence so 95 days is the same threshold as fundamentals.
+CATALYST_FRESHNESS_MAX_DAYS = 95
+
+# Liquidity tiers are recomputed quarterly. Anything beyond 100 days
+# old means the operator forgot to run the refresh script.
+LIQUIDITY_TIERS_FRESHNESS_MAX_DAYS = 100
+
+# Ticker classifications are near-static — refreshed when the universe
+# expands. Coverage warning fires below 90% of the active prices_daily
+# universe. Staleness alone doesn't matter (asset class never changes
+# for a given ticker), but coverage does.
+TICKER_CLASSIFICATIONS_MIN_COVERAGE_PCT = 0.90
+
+
+async def _check_fundamentals_freshness(pool: asyncpg.Pool) -> dict[str, Any]:
+    """Dashboard probe — newest fundamentals filing + pb/de coverage.
+
+    Reads `platform.fundamentals_quarterly` directly so the operator
+    sees freshness without drilling into the validation-suite output.
+    """
+    row = await pool.fetchrow(
+        """
+        SELECT
+            (SELECT MAX(filing_date) FROM platform.fundamentals_quarterly) AS latest_filing,
+            (SELECT COUNT(DISTINCT ticker) FROM platform.fundamentals_quarterly) AS tickers,
+            (SELECT COUNT(*) FROM platform.fundamentals_quarterly) AS rows_total,
+            (SELECT COUNT(*) FROM platform.fundamentals_quarterly WHERE pb IS NOT NULL) AS pb_filled,
+            (SELECT COUNT(*) FROM platform.fundamentals_quarterly WHERE de IS NOT NULL) AS de_filled
+        """
+    )
+    latest = row["latest_filing"] if row else None
+    tickers = int(row["tickers"] or 0) if row else 0
+    rows_total = int(row["rows_total"] or 0) if row else 0
+    pb_filled = int(row["pb_filled"] or 0) if row else 0
+    de_filled = int(row["de_filled"] or 0) if row else 0
+    if latest is None:
+        return {
+            "ok": False,
+            "latest_filing": None,
+            "tickers": tickers,
+            "reason": "table empty",
+        }
+    today = date.today()
+    age_days = (today - latest).days
+    pb_pct = (pb_filled / rows_total) if rows_total else 0.0
+    de_pct = (de_filled / rows_total) if rows_total else 0.0
+    return {
+        "ok": age_days <= FUNDAMENTALS_FRESHNESS_MAX_DAYS,
+        "latest_filing": latest.isoformat(),
+        "age_days": age_days,
+        "threshold_days": FUNDAMENTALS_FRESHNESS_MAX_DAYS,
+        "tickers": tickers,
+        "rows_total": rows_total,
+        "pb_coverage_pct": round(pb_pct, 3),
+        "de_coverage_pct": round(de_pct, 3),
+    }
+
+
+async def _check_catalyst_freshness(pool: asyncpg.Pool) -> dict[str, Any]:
+    """Dashboard probe — newest catalyst_events + T1+T2 stock coverage."""
+    row = await pool.fetchrow(
+        """
+        SELECT
+            (SELECT MAX(event_date) FROM platform.catalyst_events) AS latest_event,
+            (SELECT COUNT(DISTINCT ticker) FROM platform.catalyst_events) AS tickers,
+            (SELECT COUNT(*) FROM platform.catalyst_events) AS rows_total
+        """
+    )
+    latest = row["latest_event"] if row else None
+    tickers = int(row["tickers"] or 0) if row else 0
+    rows_total = int(row["rows_total"] or 0) if row else 0
+    if latest is None:
+        return {
+            "ok": False,
+            "latest_event": None,
+            "tickers": tickers,
+            "reason": "table empty",
+        }
+    today = date.today()
+    age_days = (today - latest).days
+    return {
+        "ok": age_days <= CATALYST_FRESHNESS_MAX_DAYS,
+        "latest_event": latest.isoformat(),
+        "age_days": age_days,
+        "threshold_days": CATALYST_FRESHNESS_MAX_DAYS,
+        "tickers": tickers,
+        "rows_total": rows_total,
+    }
+
+
+async def _check_liquidity_tiers_freshness(pool: asyncpg.Pool) -> dict[str, Any]:
+    """Dashboard probe — newest tier assignment + tier distribution.
+
+    Yellow/red triggers: any tier row older than 100 days. Tier
+    assignment drifts slowly so daily-age is fine; the threshold
+    catches operator inaction.
+    """
+    row = await pool.fetchrow(
+        "SELECT MAX(last_updated) AS latest, COUNT(*) AS tickers FROM platform.liquidity_tiers"
+    )
+    if not row or row["latest"] is None:
+        return {"ok": False, "latest_assignment": None, "tickers": 0, "reason": "table empty"}
+    latest = row["latest"]
+    tickers = int(row["tickers"] or 0)
+    age_days = (datetime.now(UTC) - latest).days
+
+    distrib = await pool.fetch(
+        "SELECT tier, COUNT(*) AS n FROM platform.liquidity_tiers GROUP BY tier ORDER BY tier"
+    )
+    tiers = {int(r["tier"]): int(r["n"]) for r in distrib}
+    return {
+        "ok": age_days <= LIQUIDITY_TIERS_FRESHNESS_MAX_DAYS,
+        "latest_assignment": latest.isoformat(),
+        "age_days": age_days,
+        "threshold_days": LIQUIDITY_TIERS_FRESHNESS_MAX_DAYS,
+        "tickers": tickers,
+        "tiers": tiers,
+    }
+
+
+async def _check_ticker_classifications(pool: asyncpg.Pool) -> dict[str, Any]:
+    """Dashboard probe — classification coverage of the active universe.
+
+    Asset class is near-static, so freshness-by-time isn't the metric —
+    coverage is. Fails when > 10% of prices_daily tickers lack a row in
+    ticker_classifications (universe expansion since the last classify
+    run).
+    """
+    row = await pool.fetchrow(
+        """
+        SELECT
+            (SELECT COUNT(DISTINCT ticker) FROM platform.prices_daily
+             WHERE date >= CURRENT_DATE - INTERVAL '30 days'
+               AND delisted = false) AS active_tickers,
+            (SELECT COUNT(*) FROM platform.ticker_classifications) AS classified_rows,
+            (SELECT COUNT(DISTINCT pd.ticker)
+             FROM platform.prices_daily pd
+             LEFT JOIN platform.ticker_classifications tc USING (ticker)
+             WHERE pd.date >= CURRENT_DATE - INTERVAL '30 days'
+               AND pd.delisted = false
+               AND tc.ticker IS NULL) AS unclassified,
+            (SELECT MAX(last_updated) FROM platform.ticker_classifications) AS latest_update
+        """
+    )
+    active = int(row["active_tickers"] or 0) if row else 0
+    classified_rows = int(row["classified_rows"] or 0) if row else 0
+    unclassified = int(row["unclassified"] or 0) if row else 0
+    latest = row["latest_update"] if row else None
+    coverage_pct = ((active - unclassified) / active) if active else 0.0
+    ok = coverage_pct >= TICKER_CLASSIFICATIONS_MIN_COVERAGE_PCT
+    out: dict[str, Any] = {
+        "ok": ok,
+        "active_tickers": active,
+        "classified_rows": classified_rows,
+        "unclassified": unclassified,
+        "coverage_pct": round(coverage_pct, 3),
+        "threshold_pct": TICKER_CLASSIFICATIONS_MIN_COVERAGE_PCT,
+    }
+    if latest is not None:
+        out["latest_update"] = latest.isoformat()
+    return out
+
 
 async def _check_sec_filings_freshness(pool: asyncpg.Pool) -> dict[str, Any]:
     """Dashboard probe — newest SEC filing across both ingest tables.
@@ -1256,7 +1540,11 @@ _CHECK_FNS = [
     ("data_freshness", _check_freshness),
     ("row_counts", _check_row_counts),
     ("corporate_actions_freshness", _check_corp_actions_freshness),
+    ("fundamentals_freshness", _check_fundamentals_freshness),
+    ("catalyst_freshness", _check_catalyst_freshness),
     ("sec_filings_freshness", _check_sec_filings_freshness),
+    ("liquidity_tiers_freshness", _check_liquidity_tiers_freshness),
+    ("ticker_classifications", _check_ticker_classifications),
     ("engine_schedulers", _check_engine_schedulers),
     ("ingestion_engine", _check_ingestion_engine),
     ("validation_suite", _check_validation),

@@ -690,7 +690,7 @@ Tables and services that are specified but not yet built:
 
 The data layer underwent a major cleanup and self-healing refactor on 2026-05-13. Operators reading this doc post-cleanup should know:
 
-### 6.1 Validation suite — now 8 checks (was 3)
+### 6.1 Validation suite — now 10 checks (was 3)
 
 `tpcore.quality.validation.suite.run_suite` runs every `--update` stage 5. Each check returns a `CheckResult` and persists one row to `platform.data_quality_log`:
 
@@ -704,14 +704,17 @@ The data layer underwent a major cleanup and self-healing refactor on 2026-05-13
 | **`corporate_actions_integrity`** (NEW) | every corp_actions row: `ratio` in `(0, 1000]`, no NULL action_type, no far-future dates |
 | **`catalyst_freshness`** (NEW 2026-05-14) | `catalyst_events.max(event_date)` not older than 7 days for the active T1+T2 universe; warns on stale (drives the `catalyst_refresh` stage's skip-guard) |
 | **`sec_filings_freshness`** (NEW 2026-05-14) | `sec_insider_transactions` + `sec_material_events` newest `filing_date` ≤ 14d old; ≥ 30% of T1+T2 stocks have a filing in last 180d. Reference implementation of the standard 5-stage data-adapter pipeline. |
+| **`liquidity_tiers_freshness`** (NEW 2026-05-14, L-2) | `liquidity_tiers.max(last_updated)` ≤ 100d old AND ≥ 3% of active universe in T1+T2. Catches operator inaction on the quarterly tier refresh. |
+| **`ticker_classifications_coverage`** (NEW 2026-05-14, T-2) | ≥ 90% of active prices_daily tickers have a row in `ticker_classifications`. Catches universe expansion without re-running the classifier. |
 
-Acceptance: `passed=True` on all 8 + `confidence=1.000`. Cleanup scripts exist for each predicate (see `scripts/cleanup_*.py`).
+Acceptance: `passed=True` on all 10 + `confidence=1.000`. Cleanup scripts exist for each predicate (see `scripts/cleanup_*.py`).
 
-### 6.2 `--update` pipeline now 10 stages
+### 6.2 `--update` pipeline now 12 stages
 
 ```
 daily_bars → corporate_actions → coverage_fill → cross_ref_cleanup → fundamentals_refresh
-→ catalyst_refresh → sec_filings → data_validation → universe_prescreener → universe_simulation
+→ catalyst_refresh → sec_filings → tier_refresh → classify_tickers
+→ data_validation → universe_prescreener → universe_simulation
 ```
 
 * **`coverage_fill`** (added 2026-05-13) self-heals tier ≤ 2 ticker gaps via Alpaca SIP, 14-day window, after every daily_bars run.
@@ -719,6 +722,8 @@ daily_bars → corporate_actions → coverage_fill → cross_ref_cleanup → fun
 * **`fundamentals_refresh`** is skip-if-refreshed-within-24h — resumable across timeouts.
 * **`catalyst_refresh`** (added 2026-05-14) backfills FMP earnings-beat events for the T1+T2 universe. Skip-guard: short-circuits in ~10ms when `catalyst_events` was refreshed within 6 days. Resolves Vector's "data-blocked" state.
 * **`sec_filings`** (added 2026-05-14) pulls SEC EDGAR Form 4 + 8-K for the T1+T2 stock universe via the CSV-first sub-protocol (download → validate-at-CSV → load → compress). Skip-guard: 6 days. Reference implementation of the standard 5-stage data-adapter pipeline (`docs/superpowers/pipelines/data_adapter_pipeline.md`).
+* **`tier_refresh`** (added 2026-05-14 as L-4 follow-up) recomputes `liquidity_tiers` from `spread_observations`. Quarterly cadence (90-day skip-guard). Before this stage shipped, the operator's only invocation path was `scripts/run_tier_refresh.sh`.
+* **`classify_tickers`** (added 2026-05-14 as T-4 follow-up) re-runs the Alpaca-asset-name classifier → `ticker_classifications`. Monthly cadence + 95% coverage check (two-clause skip-guard forces re-run when universe expansion introduces unclassified tickers even within 30-day window).
 * **`daily_bars`** idempotent: checks count for the most-recent closed session; skips if ≥6,500 tickers already present.
 * Each stage emits `INGESTION_START` / `INGESTION_COMPLETE` / `INGESTION_FAILED` events with `data->>'stage'` set and writes to `platform.ingestion_jobs.last_run_at` on completion. Failed stages auto-retry once if the error class is transient (timeout, ReadError, 429). Underlying HTTP fetchers use `tpcore.outage.with_retry` so transient 429/5xx is handled centrally.
 

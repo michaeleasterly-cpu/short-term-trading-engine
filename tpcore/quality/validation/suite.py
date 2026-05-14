@@ -38,12 +38,20 @@ from .checks.delistings import CHECK_NAME as DELISTINGS_NAME
 from .checks.delistings import check_delistings
 from .checks.fundamentals_integrity import CHECK_NAME as FUND_INTEGRITY_NAME
 from .checks.fundamentals_integrity import check_fundamentals_integrity
+from .checks.liquidity_tiers_freshness import CHECK_NAME as LIQUIDITY_FRESHNESS_NAME
+from .checks.liquidity_tiers_freshness import check_liquidity_tiers_freshness
 from .checks.row_integrity import CHECK_NAME as ROW_INTEGRITY_NAME
 from .checks.row_integrity import check_row_integrity
 from .checks.sec_filings_freshness import CHECK_NAME as SEC_FRESHNESS_NAME
 from .checks.sec_filings_freshness import check_sec_filings_freshness
 from .checks.splits import CHECK_NAME as SPLITS_NAME
 from .checks.splits import check_splits
+from .checks.ticker_classifications_freshness import (
+    CHECK_NAME as CLASSIFICATIONS_NAME,
+)
+from .checks.ticker_classifications_freshness import (
+    check_ticker_classifications_coverage,
+)
 from .models import CheckResult, FailureDetail, SuiteResult
 from .sources.constituents import ConstituentSource, FixtureConstituentSource
 from .sources.delistings import DelistingsSource, FixtureDelistingsSource
@@ -91,19 +99,25 @@ async def run_suite(
     ca_integrity_task = _safe_run(CA_INTEGRITY_NAME, check_corporate_actions_integrity, pool, None)
     catalyst_task = _safe_run(CATALYST_FRESHNESS_NAME, check_catalyst_freshness, pool, None)
     sec_task = _safe_run(SEC_FRESHNESS_NAME, check_sec_filings_freshness, pool, None)
+    liquidity_task = _safe_run(
+        LIQUIDITY_FRESHNESS_NAME, check_liquidity_tiers_freshness, pool, None
+    )
+    classifications_task = _safe_run(
+        CLASSIFICATIONS_NAME, check_ticker_classifications_coverage, pool, None
+    )
     (
         delistings_result, constituent_result, splits_result,
         row_integrity_result, fund_integrity_result, ca_integrity_result,
-        catalyst_result, sec_result,
+        catalyst_result, sec_result, liquidity_result, classifications_result,
     ) = await asyncio.gather(
         delistings_task, constituent_task, splits_task,
         row_integrity_task, fund_integrity_task, ca_integrity_task,
-        catalyst_task, sec_task,
+        catalyst_task, sec_task, liquidity_task, classifications_task,
     )
     checks: list[CheckResult] = [
         delistings_result, constituent_result, splits_result,
         row_integrity_result, fund_integrity_result, ca_integrity_result,
-        catalyst_result, sec_result,
+        catalyst_result, sec_result, liquidity_result, classifications_result,
     ]
 
     finished_at = datetime.now(UTC)

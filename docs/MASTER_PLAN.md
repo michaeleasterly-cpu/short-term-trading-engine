@@ -489,8 +489,8 @@ Verified row counts and coverage (audited 2026-05-14, post-data-layer normalizat
 | `platform.tradier_options_chains` | 122,668 | 51 tickers, snapshot from May 2026 (immediately before the Tradier brokerage account closed). Frozen — parked for future S2. |
 | `platform.catalyst_events` | 1,350 | **137 tickers**, `EARNINGS_BEAT` type, 2018–2025. Recurring weekly refresh active via `ops.py --update` `catalyst_refresh` stage (skip-guard: 6-day freshness). Vector engine unblocked. |
 | `platform.ticker_classifications` | 13,669 | Asset-class taxonomy (`stock` / `etf` / `spac` / `fund`) + ETF leverage/inverse/category flags for the sentinel engine. Backfilled from Alpaca `/v2/assets` + name-pattern classifier (2026-05-14). |
-| `platform.sec_insider_transactions` | 0 (created 2026-05-14, ingest pending live run) | Form 4 insider BUY/SELL transactions parsed from SEC EDGAR. Populated by the `sec_filings` ops stage on first weekly run. T1+T2 stock universe only. |
-| `platform.sec_material_events` | 0 (created 2026-05-14, ingest pending live run) | 8-K material events (one row per item code from the submissions index). Populated by the same `sec_filings` ops stage. T1+T2 stock universe only. |
+| `platform.sec_insider_transactions` | 0 → populated on first `sec_filings` ops-stage run; historical backfill from 2018-01-01 documented in `docs/OPERATIONS.md §7.5`. Multi-hour wall time at SEC's 10 req/sec courtesy budget. | Form 4 insider BUY/SELL transactions parsed from SEC EDGAR. T1+T2 stock universe. |
+| `platform.sec_material_events` | 0 → populated alongside `sec_insider_transactions` on the same first run. | 8-K material events (one row per item code from the submissions index). T1+T2 stock universe. |
 | `platform.data_quality_log` | active | Receives rows from the Data Validation Suite, execution-quality tracker, and engine credibility scorer. |
 | `platform.aar_events` | 0 | Schema + writer implemented; populated by live paper trades once they fire. |
 | `platform.risk_state` | 1 | Postgres-backed Risk Governor persistence active. |
