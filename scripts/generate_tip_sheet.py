@@ -350,13 +350,20 @@ def _position_to_dict(p) -> dict[str, Any]:
 async def fetch_today_recommendations(
     pool, engine: str, as_of,
 ) -> list[dict[str, Any]]:
-    """Engine-specific dispatch: run the engine's setup-detection plug
-    against fresh data and return the qualifying candidates (top decile
-    for portfolio engines, or all-passing for sequential engines).
+    """Engine-specific dispatch — today's qualifying candidates.
 
-    Phase 1 implements only Momentum. Other engines return an empty list
-    with a sentinel marker so the renderer can show "not implemented yet"
-    rather than silently empty."""
+    * **momentum** — runs the live setup-detection plug + returns the
+      top decile (the orders the scheduler would submit on the next
+      rebalance day).
+    * **sigma / reversion / vector** — reads the most recent ``SIGNAL``
+      events from ``platform.application_log`` (the last completed
+      scan run). Sequential engines emit one SIGNAL row per qualifying
+      setup; this is what the engine "would buy now" if its scheduler
+      were firing live.
+
+    Returns ``[{ticker, score, last_close, tier?}]``. Empty list when
+    the engine hasn't scanned recently (e.g., paused).
+    """
     if engine == "momentum":
         from momentum.models import TOP_DECILE_PCT
         from momentum.plugs.setup_detection import MomentumSetupDetection
@@ -376,7 +383,70 @@ async def fetch_today_recommendations(
             }
             for c in top
         ]
-    # Other engines not yet ported to a per-call recommendation view.
+
+    # Sequential engines — pull the most recent SIGNAL events. Each
+    # engine emits one SIGNAL row per setup that passed all its filters,
+    # tagged with score + direction in the ``data`` jsonb.
+    if engine in ("sigma", "reversion", "vector"):
+        async with pool.acquire() as conn:
+            # The latest scan run for this engine — bound by recorded_at
+            # so we only return today's view, not yesterday's.
+            latest_run = await conn.fetchval(
+                """
+                SELECT run_id
+                FROM platform.application_log
+                WHERE engine = $1
+                  AND event_type = 'STARTUP'
+                  AND recorded_at >= now() - INTERVAL '36 hours'
+                ORDER BY recorded_at DESC
+                LIMIT 1
+                """,
+                engine,
+            )
+            if not latest_run:
+                return []
+            rows = await conn.fetch(
+                """
+                SELECT data->>'ticker' AS ticker,
+                       (data->>'score')::float AS score,
+                       data->>'direction' AS direction,
+                       recorded_at
+                FROM platform.application_log
+                WHERE engine = $1
+                  AND event_type = 'SIGNAL'
+                  AND run_id = $2
+                ORDER BY (data->>'score')::float DESC NULLS LAST
+                LIMIT 50
+                """,
+                engine, latest_run,
+            )
+        if not rows:
+            return []
+        # Enrich with last_close from the matview if available.
+        tickers = [r["ticker"] for r in rows if r["ticker"]]
+        if not tickers:
+            return []
+        async with pool.acquire() as conn:
+            close_rows = await conn.fetch(
+                """
+                SELECT pd.ticker, pd.close
+                FROM platform.prices_daily pd
+                JOIN platform.prices_daily_tickers t ON t.ticker = pd.ticker
+                                                   AND t.latest_date = pd.date
+                WHERE pd.ticker = ANY($1::text[])
+                """,
+                tickers,
+            )
+        close_by_ticker = {r["ticker"]: float(r["close"]) for r in close_rows}
+        return [
+            {
+                "ticker": r["ticker"],
+                "score": float(r["score"] or 0.0),
+                "last_close": close_by_ticker.get(r["ticker"], 0.0),
+                "direction": r["direction"] or "LONG",
+            }
+            for r in rows if r["ticker"]
+        ]
     return []
 
 

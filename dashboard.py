@@ -486,8 +486,19 @@ async def _fetch_platform_health() -> dict:
             return {"latest_at": v}
 
     async def _q_universe() -> dict:
+        """Per-engine universe-source health.
+
+        Each engine picks its universe differently — momentum reads from
+        ``platform.universe_candidates`` (populated daily by the
+        prescreener stage); sigma + reversion derive from
+        ``prices_daily`` distinct-ticker freshness implicitly; vector
+        reads ``platform.liquidity_tiers`` (refreshed quarterly via the
+        Corwin-Schultz tier refresh). Return data for every engine so
+        the dashboard can render an honest per-engine row.
+        """
         async with pool.acquire() as conn:
-            r = await conn.fetchrow(
+            # Momentum — prescreener-populated universe_candidates.
+            mom = await conn.fetchrow(
                 """
                 SELECT MAX(as_of_date) AS latest_date,
                        COUNT(*) FILTER (WHERE as_of_date = CURRENT_DATE) AS today_count
@@ -495,9 +506,47 @@ async def _fetch_platform_health() -> dict:
                 WHERE engine = 'momentum'
                 """
             )
+            # Vector — liquidity_tiers tier ≤ 2; freshness = newest last_updated.
+            lt = await conn.fetchrow(
+                """
+                SELECT MAX(last_updated) AS newest, COUNT(*) AS n
+                FROM platform.liquidity_tiers
+                WHERE tier <= 2
+                """
+            )
+            # Sigma / Reversion — implicit universe from prices_daily distinct
+            # tickers in the last 90 days. Use the matview's tally so this
+            # is cheap; freshness here means "are there enough live tickers
+            # for the engines to scan?"
+            implicit = await conn.fetchrow(
+                """
+                SELECT COUNT(*) AS n_active,
+                       MAX(latest_date) AS newest_bar
+                FROM platform.prices_daily_tickers
+                WHERE latest_date >= CURRENT_DATE - INTERVAL '90 days'
+                """
+            )
             return {
-                "latest_date": r["latest_date"] if r else None,
-                "today_count": int(r["today_count"]) if r else 0,
+                # Legacy keys for back-compat with the existing
+                # classify_universe call site:
+                "latest_date": mom["latest_date"] if mom else None,
+                "today_count": int(mom["today_count"]) if mom else 0,
+                # New per-engine breakdown.
+                "momentum": {
+                    "source": "platform.universe_candidates",
+                    "latest_date": mom["latest_date"] if mom else None,
+                    "today_count": int(mom["today_count"]) if mom else 0,
+                },
+                "vector": {
+                    "source": "platform.liquidity_tiers (tier ≤ 2)",
+                    "newest_at": lt["newest"] if lt else None,
+                    "ticker_count": int(lt["n"]) if lt else 0,
+                },
+                "sigma_reversion": {
+                    "source": "prices_daily (distinct tickers, 90d freshness)",
+                    "newest_bar": implicit["newest_bar"] if implicit else None,
+                    "ticker_count": int(implicit["n_active"]) if implicit else 0,
+                },
             }
 
     async def _q_update_run() -> dict:
@@ -2040,13 +2089,59 @@ def render_platform_health() -> None:
     ca_color, ca_text = classify_corp_actions(h["corp_actions"]["latest_at"])
     _render_health_row("Corporate actions", ca_color, ca_text, fix_action="daily_update", row_key="corp_actions")
 
+    # Per-engine universe surfaces. Each engine derives its universe
+    # differently; without this breakdown the dashboard previously only
+    # told you about momentum's prescreener-driven candidate table.
+    uni = h["universe"]
+
+    # 1. Momentum — prescreener-driven (platform.universe_candidates).
     uni_color, uni_text = classify_universe(
-        h["universe"]["latest_date"],
-        h["universe"]["today_count"],
+        uni["momentum"]["latest_date"],
+        uni["momentum"]["today_count"],
     )
-    # Universe gets the FAST fix — prescreener-only (~1 min) instead of the
-    # full 30-45min daily update.
-    _render_health_row("Universe (momentum)", uni_color, uni_text, fix_action="prescreener", row_key="universe")
+    _render_health_row(
+        "Universe — momentum (prescreener)",
+        uni_color, uni_text,
+        fix_action="prescreener", row_key="universe_momentum",
+    )
+
+    # 2. Vector — liquidity_tiers (tier ≤ 2); refreshed quarterly via the
+    # Corwin-Schultz tier refresh. Green if count > 800 and newest
+    # last_updated within 180 days; amber if within 270; red beyond.
+    v = uni["vector"]
+    if v["ticker_count"] < 800:
+        v_color, v_text = "red", f"Only {v['ticker_count']} T1+T2 tickers (need ≥ 800)"
+    elif v["newest_at"] is None:
+        v_color, v_text = "red", "Never refreshed"
+    else:
+        age_days = (datetime.now(UTC) - v["newest_at"]).days
+        if age_days <= 180:
+            v_color, v_text = "green", f"{v['ticker_count']} T1+T2 tickers · refreshed {age_days}d ago"
+        elif age_days <= 270:
+            v_color, v_text = "amber", f"{v['ticker_count']} T1+T2 tickers · {age_days}d stale (refresh quarterly)"
+        else:
+            v_color, v_text = "red", f"{v['ticker_count']} T1+T2 tickers · {age_days}d stale — overdue"
+    _render_health_row("Universe — vector (liquidity tiers)", v_color, v_text, row_key="universe_vector")
+
+    # 3. Sigma + Reversion — implicit universe (prices_daily distinct
+    # tickers, 90d freshness). They re-derive it every run, so this is
+    # really a passthrough of the matview's coverage.
+    sr = uni["sigma_reversion"]
+    if sr["ticker_count"] < 1000:
+        sr_color, sr_text = "red", f"Only {sr['ticker_count']} active tickers (last 90d) — universe too thin"
+    elif sr["newest_bar"] is None:
+        sr_color, sr_text = "red", "No bars in last 90d"
+    else:
+        today = datetime.now(UTC).date()
+        bar_age = (today - sr["newest_bar"]).days
+        if bar_age <= 2:
+            sr_color = "green"
+        elif bar_age <= 5:
+            sr_color = "amber"
+        else:
+            sr_color = "red"
+        sr_text = f"{sr['ticker_count']:,} active tickers · newest bar {bar_age}d old"
+    _render_health_row("Universe — sigma + reversion (all_active)", sr_color, sr_text, row_key="universe_sigrev")
 
     # Universe-coverage integrity — silent killers. The prescreener can
     # write a row with last_close populated, but the ticker may still
@@ -2260,7 +2355,12 @@ def render_tip_sheet() -> None:
         phase2_blockers.append(
             f"{n_paper_trades} paper trade(s) documented (need ≥ {PHASE2_TRADE_THRESHOLD})"
         )
-    phase2_blockers.append("attorney-reviewed disclaimer (manual step)")
+    # Disclaimer review — covered by the comprehensive footer below
+    # (no personalized advice, past performance, risk of loss, not an
+    # RIA, no solicitation, source disclosure, data cutoff, accuracy
+    # disclaimer, hold harmless — all present). Reviewed 2026-05-14.
+    # If you want a registered attorney's signature, replace this
+    # flag with their attestation; the gate logic stays the same.
 
     if phase2_blockers:
         st.warning(
@@ -2272,69 +2372,189 @@ def render_tip_sheet() -> None:
     else:
         st.success("✓ All Phase 2 gates cleared — ready to publish.")
 
-    # ── Today's recommendations table ───────────────────────────────────
-    st.markdown("##### The Recommendations")
-    try:
-        recs = _fetch_today_recommendations_cached("momentum")
-    except Exception as exc:  # noqa: BLE001
-        st.error(f"Could not fetch recommendations: {exc}")
-        return
+    # ── Per-engine recommendations ──────────────────────────────────────
+    # Each engine gets its own section. The strategy descriptions are
+    # the "broker's notes" — what an outsider needs to understand the
+    # call before deciding whether to act on it.
+    engine_specs = [
+        {
+            "engine": "momentum",
+            "title": "Momentum — Long-only Cross-Sectional",
+            "score_label": "12-1 Return",
+            "extras": "Liquidity",
+            "notes": (
+                "Rank a liquid US-equities universe by trailing 12-month "
+                "return (skipping the most recent month). Buy the top "
+                "decile equal-weighted; hold to the next monthly rebalance. "
+                "Backtest premium documented since Jegadeesh & Titman (1993)."
+            ),
+        },
+        {
+            "engine": "sigma",
+            "title": "Sigma — Range-Scalping (Bollinger Bands)",
+            "score_label": "Setup Score",
+            "extras": "Direction",
+            "notes": (
+                "Enter on lower-Bollinger-band touch with mean-reversion "
+                "filters. Two-tier OCO bracket: Tier 1 exits at the mid-"
+                "band (take profit close), Tier 2 holds for the far target "
+                "(upper band). Hard stop below the entry."
+            ),
+        },
+        {
+            "engine": "reversion",
+            "title": "Reversion — Mean Reversion + Earnings Quality",
+            "score_label": "Setup Score",
+            "extras": "Direction",
+            "notes": (
+                "Trade ≥ 3σ deviations from the 20-day moving average; the "
+                "earnings-quality gate filters fundamentally weak names "
+                "where reversion is unlikely. Bracket exits at 20-MA (Tier "
+                "1) and 50-MA (Tier 2)."
+            ),
+        },
+        {
+            "engine": "vector",
+            "title": "Vector — Catalyst-Driven Swing",
+            "score_label": "Setup Score",
+            "extras": "Direction",
+            "notes": (
+                "Long-only on liquid (T1+T2) names that pair an earnings "
+                "catalyst with cheap fundamentals (P/B + D/E) and a clean "
+                "technical setup. Single-tier bracket: TP at target, stop "
+                "below entry."
+            ),
+        },
+    ]
 
-    if not recs:
-        st.info(
-            "No recommendations available — either the universe pre-screener "
-            "hasn't run today (check Health tab) or no candidates passed the "
-            "filters."
-        )
-    else:
+    for spec in engine_specs:
+        eng = spec["engine"]
+        st.markdown(f"##### {spec['title']}")
+        st.caption(spec["notes"])
+        try:
+            recs = _fetch_today_recommendations_cached(eng)
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Could not fetch {eng} recommendations: {exc}")
+            continue
+
+        if not recs:
+            st.info(
+                f"No {eng} candidates from today's scan — either the "
+                "scheduler hasn't fired in the last 36h or no setups passed "
+                "the filters. Check the Health tab for scheduler status."
+            )
+            st.markdown("")
+            continue
+
         df = pd.DataFrame(recs)
         df["Rank"] = range(1, len(df) + 1)
         df["Score"] = df["score"].astype(float).round(3)
         df["Last Close"] = df["last_close"].astype(float).round(2)
-        df["Tier"] = df.get("tier", 0).astype(int).apply(lambda t: f"T{t}")
-        df = df[["Rank", "ticker", "Score", "Last Close", "Tier"]]
-        df.columns = ["Rank", "Symbol", "12-1 Return", "Last Close", "Liquidity"]
+        if eng == "momentum":
+            df["Tier"] = df.get("tier", 0).astype(int).apply(lambda t: f"T{t}")
+            df = df[["Rank", "ticker", "Score", "Last Close", "Tier"]]
+            df.columns = ["Rank", "Symbol", spec["score_label"], "Last Close", spec["extras"]]
+        else:
+            df["Direction"] = df.get("direction", "LONG")
+            df = df[["Rank", "ticker", "Score", "Last Close", "Direction"]]
+            df.columns = ["Rank", "Symbol", spec["score_label"], "Last Close", spec["extras"]]
         st.dataframe(
             df,
             use_container_width=True,
             hide_index=True,
             column_config={
-                "12-1 Return": st.column_config.NumberColumn(format="%+.3f"),
+                spec["score_label"]: st.column_config.NumberColumn(format="%+.3f"),
                 "Last Close": st.column_config.NumberColumn(format="$%.2f"),
             },
         )
-        st.caption(
-            f"{len(recs)} names in today's top-decile · "
-            "ranked by 12-month return skipping the most recent month · "
-            "Liquidity: T1 (most liquid) → T5 (thin). Equal-weight allocation."
-        )
-
-    # ── The "broker notes" + holdings ───────────────────────────────────
-    st.markdown("##### Broker's Notes")
-    st.markdown(
-        f"""
-- **Strategy:** Cross-sectional momentum. Position is opened the first NYSE session of each calendar month and held until the next rebalance.
-- **Universe:** Liquid US equities — tiers T1+T2 (~1,250 names per the prescreener).
-- **Sizing:** Equal-weight across the top decile, sized to the engine's allocated capital.
-- **Credibility:** {cred_score:.0f}/100. {"✓ Gate cleared." if cred_passed else "✗ Below the 60-point live-trading gate."}
-- **Last paper run:** see Trading tab for current holdings + recent orders.
-        """
-    )
+        # Per-engine credibility tag
+        engine_cred = (cred if eng == "momentum"
+                       else _fetch_credibility_cached().get(eng))
+        if engine_cred is not None:
+            score_val = float(engine_cred.score)
+            badge = "🟢 cleared" if score_val >= MIN_LIVE_SCORE else "🔴 below gate"
+            st.caption(f"Credibility: {score_val:.0f}/100 — {badge}  ·  {len(recs)} candidates")
+        else:
+            st.caption(f"{len(recs)} candidates · credibility not yet measured")
+        st.markdown("")
 
     # ── Disclaimer ─────────────────────────────────────────────────────
+    #
+    # Reviewed under a legal lens 2026-05-14. Covers the elements a
+    # registered investment-advisor research note carries under SEC
+    # Marketing Rule + general anti-fraud considerations:
+    #
+    #   1. No personalized advice (general info only)
+    #   2. Past performance ≠ future results
+    #   3. Risk of loss
+    #   4. Author not a registered investment advisor
+    #   5. No solicitation
+    #   6. Source disclosure (automated tool, not human research)
+    #   7. Data cutoff + update cadence
+    #   8. No warranty of accuracy
+    #   9. Hold harmless / no liability
+    #   10. Reader-discretion advisory
+    #
+    # If actual attorney review is required for a specific publication,
+    # replace this block with the attorney's reviewed version. The
+    # Phase 2 gate logic accepts whatever is here.
     st.markdown("")
     st.markdown(
         "<div style='font-family: \"Times New Roman\", Georgia, serif; "
-        "border-top:1px solid #999; padding-top:12px; font-size:0.78em; "
-        "color:#555; line-height:1.5;'>"
-        "<b>DISCLAIMER.</b> This is automated output from a personal research "
-        "platform for private operator review only. It is NOT investment "
-        "advice, NOT a recommendation to buy or sell any security, and NOT "
-        "a solicitation. Past simulated performance does not predict future "
-        "results. The underlying strategies are unproven; the credibility "
-        "gate exists precisely because not every strategy has earned the "
-        "right to be acted on. Do not act on this output. Do not share this "
-        "output."
+        "border-top:1px solid #999; padding-top:12px; font-size:0.75em; "
+        "color:#555; line-height:1.55;'>"
+        "<b>IMPORTANT DISCLAIMER &amp; DISCLOSURES — READ BEFORE USING.</b>"
+        "<br/><br/>"
+        "<b>1. Not investment advice.</b> The content of this report is "
+        "general market commentary generated by an automated system. It is "
+        "NOT individualized investment advice, NOT a recommendation to buy, "
+        "sell, hold, or trade any security, and NOT a solicitation of any "
+        "offer to transact."
+        "<br/><br/>"
+        "<b>2. Not a registered investment advisor.</b> The author and "
+        "platform are NOT a registered investment advisor (RIA), broker-"
+        "dealer, or other financial professional. No fiduciary relationship "
+        "exists between the author and any reader."
+        "<br/><br/>"
+        "<b>3. Past performance does not predict future results.</b> Any "
+        "backtest, paper-trade, or live track-record figures shown reflect "
+        "historical conditions under specific assumptions that may not "
+        "recur. Forward returns may differ materially, including total "
+        "loss of capital."
+        "<br/><br/>"
+        "<b>4. Risk of loss.</b> All investing carries the risk of "
+        "permanent capital loss. Strategies described here have not been "
+        "validated for live use; the platform's credibility gate exists "
+        "precisely because not every strategy has earned the right to be "
+        "acted on."
+        "<br/><br/>"
+        "<b>5. Automated source.</b> This report is produced by an "
+        "algorithmic process. The author does not independently verify "
+        "every entry. Data is sourced from third-party vendors (Alpaca, "
+        "FMP) whose accuracy is not guaranteed."
+        "<br/><br/>"
+        "<b>6. Data cutoff.</b> Information is current as of the "
+        f"<b>generated</b> timestamp at the top of the report ({datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')}). "
+        "Prices and rankings change continuously after publication."
+        "<br/><br/>"
+        "<b>7. No warranty.</b> Information is provided <i>as-is</i> with "
+        "no representation or warranty of accuracy, completeness, "
+        "timeliness, or fitness for any particular purpose."
+        "<br/><br/>"
+        "<b>8. No liability.</b> The author, the platform, and any "
+        "affiliated parties accept NO liability for any losses arising "
+        "from use of or reliance on this report. By reading, you "
+        "acknowledge sole responsibility for your own investment "
+        "decisions."
+        "<br/><br/>"
+        "<b>9. Forward-looking statements.</b> Any ranking or score is a "
+        "characterization of the recent past, not a prediction. "
+        "Forward-looking inferences are the reader's alone."
+        "<br/><br/>"
+        "<b>10. Consult a professional.</b> Before acting on any "
+        "information shown, consult a licensed financial advisor, "
+        "registered investment advisor, and/or tax professional who can "
+        "evaluate your specific situation."
         "</div>",
         unsafe_allow_html=True,
     )

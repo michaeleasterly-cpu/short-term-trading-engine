@@ -19,7 +19,7 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING
 
 import httpx
@@ -243,28 +243,48 @@ async def _upsert_bars(
             delisting_date = EXCLUDED.delisting_date,
             source = 'alpaca'
     """
+    # Physical-truth gate — matches validation.row_integrity expectations.
+    # Bad rows MUST NEVER reach the database (per the data-acceptance rule
+    # codified after the 94k-bad-row Tradier incident in May 2026):
+    #   * close > 0 and <= 100M (no scale corruption, no pre-IPO zeros)
+    #   * OHLC consistent (high >= max(open, close, low), low <= min(open, close, high))
+    #   * volume >= 0 and not NULL
+    #   * date not in the future
+    today = datetime.now(UTC).date()
     rows: list[tuple] = []
+    rejected = 0
     for b in bars:
-        # Alpaca timestamps are RFC3339 like "2018-01-02T05:00:00Z" (midnight ET).
-        # Taking the UTC date yields the NYSE session date for daily bars.
-        ts_str = b["t"]
-        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+        ts = datetime.fromisoformat(b["t"].replace("Z", "+00:00"))
         session_date = ts.date()
+        o = b.get("o")
+        h = b.get("h")
+        low = b.get("l")
         close = b.get("c")
-        rows.append(
-            (
-                symbol,
-                session_date,
-                b.get("o"),
-                b.get("h"),
-                b.get("l"),
-                close,
-                int(b.get("v") or 0),
-                close,  # adjusted_close — same as close because adjustment=all
-                delisted,
-                delisting_date,
-            )
+        v = b.get("v")
+        if (o is None or h is None or low is None or close is None or v is None):
+            rejected += 1
+            continue
+        if close <= 0 or close > 1e8 or o <= 0 or h <= 0 or low <= 0:
+            rejected += 1
+            continue
+        if h < max(o, close, low) or low > min(o, close, h):
+            rejected += 1
+            continue
+        if session_date > today:
+            rejected += 1
+            continue
+        rows.append((
+            symbol, session_date, o, h, low, close, int(v),
+            close,  # adjusted_close — same as close because adjustment=all
+            delisted, delisting_date,
+        ))
+    if rejected:
+        logger.warning(
+            "ingest_alpaca_bars.physical_truth_rejected",
+            symbol=symbol, rejected=rejected, accepted=len(rows),
         )
+    if not rows:
+        return 0
     async with pool.acquire() as conn:
         await conn.executemany(sql, rows)
     return len(rows)

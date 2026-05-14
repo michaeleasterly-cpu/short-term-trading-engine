@@ -36,7 +36,7 @@ import json
 import os
 import sys
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
@@ -149,22 +149,82 @@ async def upsert_corporate_actions(
     pool: asyncpg.Pool,
     actions: list[dict],
 ) -> int:
-    """Insert each action; returns the count attempted (not the count newly written)."""
+    """Insert each action — filtered at write time by physical-truth predicates.
+
+    Per the platform's data-acceptance rules: bad rows must NEVER reach
+    the database. Today's MCHB incident (Alpaca returns dividends with
+    ratio=1168 for 2022 records — likely a special distribution mis-
+    encoded) showed that ON CONFLICT DO NOTHING isn't enough: a fresh
+    daily ingest re-inserted the same impossible rows the cleanup had
+    deleted. Filter at the source.
+
+    Physical-truth gates (matches ``validation.corporate_actions_integrity``):
+
+    * ``ratio`` strictly within (0, 1000]
+    * ``action_date`` not in the far future
+    * ``ratio`` and required columns NOT NULL
+
+    Rows that fail any gate are dropped + logged with the raw payload so
+    the operator can audit. Returns the count actually inserted (not
+    attempted), so a shrinking gap indicates ingest is finding more bad
+    rows over time.
+    """
     if not actions:
         return 0
-    rows = [
-        (
+
+    today = date.today()
+    far_future = today + timedelta(days=365 * 5)
+    accepted: list[tuple] = []
+    rejected = 0
+    for a in actions:
+        ratio = a.get("ratio")
+        action_date_v = a.get("action_date")
+        if ratio is None or action_date_v is None:
+            rejected += 1
+            logger.warning("ingest_corp_actions.rejected_null", ticker=a.get("ticker"))
+            continue
+        try:
+            ratio_d = Decimal(str(ratio))
+        except (ValueError, ArithmeticError):
+            rejected += 1
+            logger.warning("ingest_corp_actions.rejected_bad_ratio", ticker=a.get("ticker"), ratio=ratio)
+            continue
+        if ratio_d <= 0 or ratio_d > 1000:
+            rejected += 1
+            logger.warning(
+                "ingest_corp_actions.rejected_ratio_implausible",
+                ticker=a["ticker"],
+                action_date=str(action_date_v),
+                ratio=str(ratio_d),
+            )
+            continue
+        if action_date_v > far_future:
+            rejected += 1
+            logger.warning(
+                "ingest_corp_actions.rejected_far_future",
+                ticker=a["ticker"],
+                action_date=str(action_date_v),
+            )
+            continue
+        accepted.append((
             a["ticker"],
-            a["action_date"],
+            action_date_v,
             a["action_type"],
-            a["ratio"],
+            ratio_d,
             json.dumps(a["raw_data"], default=str),
+        ))
+
+    if rejected:
+        logger.info(
+            "ingest_corp_actions.physical_truth_summary",
+            accepted=len(accepted),
+            rejected=rejected,
         )
-        for a in actions
-    ]
+    if not accepted:
+        return 0
     async with pool.acquire() as conn:
-        await conn.executemany(_INSERT_SQL, rows)
-    return len(rows)
+        await conn.executemany(_INSERT_SQL, accepted)
+    return len(accepted)
 
 
 # ────────────────────────────────────────────────────────────────────────────

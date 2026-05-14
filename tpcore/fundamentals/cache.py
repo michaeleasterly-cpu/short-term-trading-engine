@@ -338,30 +338,57 @@ class FundamentalsCache:
                 shares_outstanding = EXCLUDED.shares_outstanding,
                 recorded_at = now()
         """
+        # Physical-truth gate — matches validation.fundamentals_integrity
+        # expectations. Bad rows MUST NEVER reach the database, per the
+        # platform's data-acceptance rules (per-row write-time filtering,
+        # not post-hoc cleanup). Today's incident: USAR / SLDB came in
+        # with shares_outstanding=0; VNOM had period_end > filing_date.
+        today_d = datetime.now(UTC).date()
         rows: list[tuple] = []
         now = datetime.now(UTC)
+        rejected = 0
         for p in usable:
-            rows.append(
-                (
-                    symbol.upper(),
-                    p["filing_date"],
-                    p.get("period_end_date") or p["filing_date"],
-                    p.get("period"),
-                    p.get("net_income"),
-                    p.get("fcf"),
-                    p.get("operating_cash_flow"),
-                    p.get("capex"),
-                    p.get("revenue"),
-                    p.get("total_assets"),
-                    p.get("total_liabilities"),
-                    p.get("current_assets"),
-                    p.get("current_liabilities"),
-                    p.get("receivables"),
-                    p.get("cash_and_equivalents"),
-                    p.get("shares_outstanding"),
-                    now,
-                )
+            filing = p.get("filing_date")
+            period_end = p.get("period_end_date") or filing
+            shares = p.get("shares_outstanding")
+            # filing must be on-or-before today
+            if filing is None or filing > today_d:
+                rejected += 1
+                continue
+            # period_end must be on-or-before filing
+            if period_end is None or period_end > filing:
+                rejected += 1
+                continue
+            # shares_outstanding must be > 0 OR NULL (not zero)
+            if shares is not None and shares <= 0:
+                rejected += 1
+                continue
+            rows.append((
+                symbol.upper(),
+                filing,
+                period_end,
+                p.get("period"),
+                p.get("net_income"),
+                p.get("fcf"),
+                p.get("operating_cash_flow"),
+                p.get("capex"),
+                p.get("revenue"),
+                p.get("total_assets"),
+                p.get("total_liabilities"),
+                p.get("current_assets"),
+                p.get("current_liabilities"),
+                p.get("receivables"),
+                p.get("cash_and_equivalents"),
+                shares,
+                now,
+            ))
+        if rejected:
+            logger.warning(
+                "fundamentals.cache.physical_truth_rejected",
+                symbol=symbol, rejected=rejected, accepted=len(rows),
             )
+        if not rows:
+            return 0
         async with self._pool.acquire() as conn:
             await conn.executemany(sql, rows)
         logger.info("fundamentals.cache.upsert", symbol=symbol, rows=len(rows))
