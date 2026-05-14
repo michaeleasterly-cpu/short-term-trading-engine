@@ -419,7 +419,11 @@ async def handle_sec_filings(pool: asyncpg.Pool, config: dict[str, Any]) -> int 
     from pathlib import Path
 
     # ── 0. Skip guard ────────────────────────────────────────────────
-    skip_days = int(config.get("skip_guard_days", 6))
+    # Default tightened 6 → 3 days 2026-05-14 (audit cadence finding):
+    # Form 4 has a 2-business-day filing deadline so 6-day staleness was
+    # half-stale on average. 3 days keeps signal value while still
+    # skipping back-to-back runs in the daily pipeline.
+    skip_days = int(config.get("skip_guard_days", 3))
     if skip_days > 0:
         async with pool.acquire() as conn:
             newest = await conn.fetchval(

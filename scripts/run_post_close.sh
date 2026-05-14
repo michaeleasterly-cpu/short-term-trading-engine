@@ -25,6 +25,22 @@ if [[ "${1:-}" == "--force" ]]; then
     FORCE_FLAG="--force"
 fi
 
+# macOS notification on failure (audit gap G-4 fix, 2026-05-14).
+# Fires a Notification Center alert + tail-of-log breadcrumb so the
+# operator sees red without trawling logs. Safe on non-Mac hosts
+# (osascript missing → silent no-op).
+_notify_failure() {
+    local step="$1"
+    local rc="$2"
+    if command -v osascript >/dev/null 2>&1; then
+        osascript -e "display notification \"post_close ${step} exited ${rc} — check ~/Library/Logs/short-term-trading-engine/post-close.log\" with title \"STE — post-close FAILED\" sound name \"Basso\"" 2>/dev/null || true
+    fi
+    echo "✗ FAILURE — ${step} exited ${rc}. Notification fired (if osascript available)."
+}
+# Catch any unexpected non-zero exit too (set -e isn't on; rely on
+# explicit `exit` calls but trap as safety net).
+trap '_rc=$?; if [[ $_rc -ne 0 ]]; then _notify_failure "trap (unexpected)" $_rc; fi' EXIT
+
 echo "════════════════════════════════════════════════════════════════════════"
 echo "  POST-CLOSE WORKFLOW — $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 echo "════════════════════════════════════════════════════════════════════════"
@@ -44,6 +60,7 @@ if [[ $UPDATE_RC -ne 0 ]]; then
     echo "  Common causes: timeout (rate-limited), partial stage failure, market open."
     echo "  Self-heal already retried any transient failure once. If still red, look at:"
     echo "    SELECT * FROM platform.application_log WHERE engine='ops' AND severity='ERROR' ORDER BY recorded_at DESC LIMIT 10;"
+    _notify_failure "ops.py --update" $UPDATE_RC
     exit $UPDATE_RC
 fi
 
@@ -55,6 +72,7 @@ scripts/run_audit_all_tables.sh
 AUDIT_RC=$?
 if [[ $AUDIT_RC -ne 0 ]]; then
     echo "✗ audit_all_tables exited $AUDIT_RC"
+    _notify_failure "audit_all_tables" $AUDIT_RC
     exit $AUDIT_RC
 fi
 
@@ -93,6 +111,7 @@ if [[ -n "$FAILED_CHECKS" ]]; then
     echo ""
     echo "  These weren't auto-fixable — operator must investigate."
     echo "  See the dashboard's Data validation expander for per-failure detail."
+    _notify_failure "validation suite" 1
     exit 1
 fi
 echo "✓ all 6 validation checks green"
@@ -144,6 +163,9 @@ echo "────────────────────────�
 DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python -m tpcore.forensics || \
     echo "  (forensics returned non-zero — non-fatal, continuing)"
 
+# Disable the failure-trap before exiting cleanly so the success path
+# doesn't fire a spurious "trap (unexpected)" notification.
+trap - EXIT
 echo ""
 echo "════════════════════════════════════════════════════════════════════════"
 echo "  POST-CLOSE COMPLETE — every check 🟢"

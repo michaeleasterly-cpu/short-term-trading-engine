@@ -709,21 +709,26 @@ The data layer underwent a major cleanup and self-healing refactor on 2026-05-13
 
 Acceptance: `passed=True` on all 10 + `confidence=1.000`. Cleanup scripts exist for each predicate (see `scripts/cleanup_*.py`).
 
-### 6.2 `--update` pipeline now 12 stages
+### 6.2 `--update` pipeline now 13 stages (reordered 2026-05-14 audit)
 
 ```
-daily_bars → corporate_actions → coverage_fill → cross_ref_cleanup → fundamentals_refresh
-→ catalyst_refresh → sec_filings → tier_refresh → classify_tickers
-→ data_validation → universe_prescreener → universe_simulation
+daily_bars → corporate_actions → reconcile → coverage_fill → cross_ref_cleanup
+→ fundamentals_refresh → tier_refresh → classify_tickers → catalyst_refresh
+→ sec_filings → data_validation → universe_prescreener → universe_simulation
 ```
+
+Two notable changes vs the pre-2026-05-14 order:
+* **`reconcile` added at #3** — heals `platform.open_orders` against Alpaca daily so orphans never accumulate between trade_monitor restarts.
+* **`tier_refresh` + `classify_tickers` moved before `catalyst_refresh` + `sec_filings`** — the latter two filter universe by `ticker_classifications.asset_class`, so they benefit from fresh classifications.
 
 * **`coverage_fill`** (added 2026-05-13) self-heals tier ≤ 2 ticker gaps via Alpaca SIP, 14-day window, after every daily_bars run.
 * **`cross_ref_cleanup`** (added 2026-05-13) deletes expired `tradier_options_chains` rows + orphan-ticker rows across dependent tables — keeps the dashboard cross-table integrity panel green.
 * **`fundamentals_refresh`** is skip-if-refreshed-within-24h — resumable across timeouts.
 * **`catalyst_refresh`** (added 2026-05-14) backfills FMP earnings-beat events for the T1+T2 universe. Skip-guard: short-circuits in ~10ms when `catalyst_events` was refreshed within 6 days. Resolves Vector's "data-blocked" state.
-* **`sec_filings`** (added 2026-05-14) pulls SEC EDGAR Form 4 + 8-K for the T1+T2 stock universe via the CSV-first sub-protocol (download → validate-at-CSV → load → compress). Skip-guard: 6 days. Reference implementation of the standard 5-stage data-adapter pipeline (`docs/superpowers/pipelines/data_adapter_pipeline.md`).
-* **`tier_refresh`** (added 2026-05-14 as L-4 follow-up) recomputes `liquidity_tiers` from `spread_observations`. Quarterly cadence (90-day skip-guard). Before this stage shipped, the operator's only invocation path was `scripts/run_tier_refresh.sh`.
-* **`classify_tickers`** (added 2026-05-14 as T-4 follow-up) re-runs the Alpaca-asset-name classifier → `ticker_classifications`. Monthly cadence + 95% coverage check (two-clause skip-guard forces re-run when universe expansion introduces unclassified tickers even within 30-day window).
+* **`sec_filings`** (added 2026-05-14, skip tightened to 3 days same day) pulls SEC EDGAR Form 4 + 8-K for the T1+T2 stock universe via the CSV-first sub-protocol (download → validate-at-CSV → load → compress). Reference implementation of the standard 5-stage data-adapter pipeline (`docs/superpowers/pipelines/data_adapter_pipeline.md`).
+* **`tier_refresh`** (added 2026-05-14, made autonomous 2026-05-14 audit-fix) — two-phase: Phase 1 = Corwin-Schultz spread bootstrap → `spread_observations` (60-day inner skip-guard); Phase 2 = `assign_tiers` aggregates into `liquidity_tiers`. Outer 90-day skip-guard. Replaces the manual `scripts/run_tier_refresh.sh` invocation.
+* **`classify_tickers`** (added 2026-05-14) re-runs the Alpaca-asset-name classifier → `ticker_classifications`. Monthly cadence + 95% coverage check.
+* **`reconcile`** (added 2026-05-14 audit-fix) — `platform.open_orders` healing daily. Same code path TradeMonitor uses on startup; now runs in every `--update` instead of only on daemon restart.
 * **`daily_bars`** idempotent: checks count for the most-recent closed session; skips if ≥6,500 tickers already present.
 * Each stage emits `INGESTION_START` / `INGESTION_COMPLETE` / `INGESTION_FAILED` events with `data->>'stage'` set and writes to `platform.ingestion_jobs.last_run_at` on completion. Failed stages auto-retry once if the error class is transient (timeout, ReadError, 429). Underlying HTTP fetchers use `tpcore.outage.with_retry` so transient 429/5xx is handled centrally.
 

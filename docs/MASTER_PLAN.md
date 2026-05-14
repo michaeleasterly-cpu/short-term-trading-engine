@@ -523,6 +523,7 @@ Current decision: **stay on FMP Starter and Alpaca free**. The overfitting diagn
 
 ## 8. Platform Operations & Safety
 
+- **Autonomous operations posture (2026-05-14):** every recurring data-layer action is now scheduled — 13 stages in `scripts/ops.py:_STAGE_SPECS`, fired daily by `run_post_close.sh` (launchd 21:30 UTC). 16 dashboard probes flag drift across stages, validation suite, risk governor, and managed-service blind spots (`missed_post_close`, `supabase_backup`). Failure paths fire macOS notifications. Operator's only remaining recurring duty is reviewing the dashboard; one-time SEC backfill is a single self-verifying command (`--stage sec_filings --backfill`). See `docs/superpowers/pipelines/data_adapter_pipeline.md` for the 5/5 compliance matrix.
 - **Kill Switch:** Emergency button → `RiskGovernor.emergency_kill()` → cancels all orders, flattens positions. **Two-layer enforcement:** every engine's `submit_decision` calls `RiskGovernor.check_trade()` (which returns `BLOCK` if `kill_switch_active`); each scheduler also short-circuits at startup before scanning candidates, so a frozen engine consumes zero FMP / Alpaca / DB calls. Verified by `scripts/test_kill_switch.py`.
 - **Cumulative Exposure Cap:** Net long ≤ 60% of platform capital.
 - **Vacation Mode:** Pauses new entries; exits remain active.

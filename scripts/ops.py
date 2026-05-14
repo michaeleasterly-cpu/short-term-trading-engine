@@ -379,6 +379,34 @@ async def _stage_corporate_actions(pool: asyncpg.Pool) -> dict[str, Any]:
     return {"actions_ingested": rows or 0}
 
 
+async def _stage_reconcile(pool: asyncpg.Pool) -> dict[str, Any]:
+    """Reconcile ``platform.open_orders`` against Alpaca's authoritative state.
+
+    Same code path TradeMonitor runs on startup (``reconcile_pending_on_startup``).
+    Wired into the daily `--update` pipeline 2026-05-14 (audit gap G-3 fix):
+    before this stage shipped, reconciliation only fired when the
+    trade_monitor daemon restarted (KeepAlive → only crashes restart it),
+    so orphan orders could accumulate silently between restarts.
+
+    Idempotent and cheap (~5s typical). No skip-guard — runs every day.
+    """
+    import uuid as _uuid
+
+    from tpcore.aar.writer import AARWriter
+    from tpcore.alpaca import AlpacaPaperBrokerAdapter
+    from tpcore.trade_monitor import TradeMonitor
+
+    log = structlog.get_logger("scripts.ops")
+    broker = AlpacaPaperBrokerAdapter()
+    aar_writer = AARWriter(pool)
+    monitor = TradeMonitor(
+        pool=pool, broker=broker, aar_writer=aar_writer, run_id=_uuid.uuid4(),
+    )
+    reconciled = await monitor.reconcile_pending_on_startup()
+    log.info("ops.stage.reconcile.done", reconciled_orders=int(reconciled or 0))
+    return {"reconciled_orders": int(reconciled or 0)}
+
+
 async def _stage_fundamentals_refresh(pool: asyncpg.Pool, config: dict[str, Any]) -> dict[str, Any]:
     """Refresh FMP fundamentals restricted to the coarse-filtered universe."""
     from tpcore.fmp import FMPFundamentalsAdapter
@@ -556,15 +584,27 @@ async def _stage_catalyst_refresh(pool: asyncpg.Pool) -> dict[str, Any]:
 
 
 async def _stage_tier_refresh(pool: asyncpg.Pool) -> dict[str, Any]:
-    """Quarterly liquidity-tier refresh.
+    """Quarterly liquidity-tier refresh — bootstrap + aggregation.
 
-    Tier assignment drifts slowly (spread observations accumulate over
-    weeks). Skip-guard short-circuits when ``MAX(last_updated)`` is
-    within 90 days. Universe and sources mirror the operator's manual
-    ``scripts/run_tier_refresh.sh``.
+    Two-phase, mirrors the operator's manual ``scripts/run_tier_refresh.sh``:
+
+    1. **Corwin-Schultz spread bootstrap** — write fresh spread
+       observations to ``platform.spread_observations`` so that step 2
+       has something current to aggregate. Skipped if
+       ``MAX(observed_at)`` is within 60 days (the bootstrap is
+       expensive — ~20-30 min — and spreads themselves drift slower
+       than tier *assignments* respond).
+    2. **Tier aggregation** — re-run ``assign_tiers`` so every
+       ticker's median spread → tier band lands in
+       ``platform.liquidity_tiers``. Outer 90-day skip guard governs
+       whether either phase runs at all.
+
+    Closes audit gap G-2: prior to 2026-05-14 the stage only did
+    phase 2, silently aggregating stale spread data forever if the
+    operator never ran the wrapper script.
     """
     log = structlog.get_logger("scripts.ops")
-    # Skip guard.
+    # Outer skip guard — gate the whole stage on liquidity_tiers freshness.
     newest = await pool.fetchval(
         "SELECT MAX(last_updated) FROM platform.liquidity_tiers"
     )
@@ -584,7 +624,36 @@ async def _stage_tier_refresh(pool: asyncpg.Pool) -> dict[str, Any]:
     import os
 
     from scripts.assign_liquidity_tiers import assign_tiers
+    from tpcore.backtest.spread_estimator import rank_universe_by_liquidity
 
+    # Phase 1 — bootstrap, gated by its own freshness check.
+    newest_obs = await pool.fetchval(
+        "SELECT MAX(observed_at) FROM platform.spread_observations "
+        "WHERE source = 'corwin_schultz'"
+    )
+    bootstrap_skipped = False
+    bootstrap_rows = 0
+    if newest_obs is not None and (datetime.now(UTC) - newest_obs).days < 60:
+        bootstrap_skipped = True
+        log.info(
+            "ops.stage.tier_refresh.bootstrap_skipped",
+            spread_obs_age_days=(datetime.now(UTC) - newest_obs).days,
+        )
+    else:
+        results = await rank_universe_by_liquidity(
+            pool, persist=True, coarse_filter=False,
+        )
+        bootstrap_rows = len(results)
+        log.info(
+            "ops.stage.tier_refresh.bootstrap_done",
+            spread_observations_written=bootstrap_rows,
+            prior_obs_age_days=(
+                (datetime.now(UTC) - newest_obs).days
+                if newest_obs is not None else None
+            ),
+        )
+
+    # Phase 2 — re-aggregate from spread_observations.
     db_url = os.getenv("DATABASE_URL") or os.getenv("DATABASE_URL_IPV4")
     if not db_url:
         raise RuntimeError("tier_refresh: DATABASE_URL not set")
@@ -594,10 +663,14 @@ async def _stage_tier_refresh(pool: asyncpg.Pool) -> dict[str, Any]:
         "ops.stage.tier_refresh.done",
         tickers_assigned=sum(bucket.values()),
         tiers=bucket,
+        bootstrap_skipped=bootstrap_skipped,
+        bootstrap_rows=bootstrap_rows,
     )
     return {
         "tickers_assigned": sum(bucket.values()),
         "tiers": {int(k): int(v) for k, v in bucket.items()},
+        "bootstrap_skipped": bootstrap_skipped,
+        "bootstrap_rows": bootstrap_rows,
     }
 
 
@@ -913,6 +986,10 @@ async def _stage_simulate_universe() -> dict[str, Any]:
 _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     ("daily_bars",          lambda pool, cfg: (lambda: _stage_daily_bars(pool, cfg)),          HEAVY_STAGE_TIMEOUT_SEC),
     ("corporate_actions",   lambda pool, cfg: (lambda: _stage_corporate_actions(pool)),        HEAVY_STAGE_TIMEOUT_SEC),
+    # Reconcile open_orders against Alpaca — daily. Closes audit gap G-3:
+    # before 2026-05-14 reconciliation only fired on trade_monitor
+    # daemon restart, leaving orphan orders to accumulate silently.
+    ("reconcile",           lambda pool, cfg: (lambda: _stage_reconcile(pool)),                STAGE_TIMEOUT_SEC),
     ("coverage_fill",       lambda pool, cfg: (lambda: _stage_coverage_fill(pool)),            STAGE_TIMEOUT_SEC),
     # Self-heal cross-table integrity violations — delete expired
     # tradier_options_chains rows + orphan-ticker rows so the operator
@@ -920,6 +997,22 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # rule must have a single proven-safe remediation; see the docstring.
     ("cross_ref_cleanup",   lambda pool, cfg: (lambda: _stage_cross_ref_cleanup(pool)),        STAGE_TIMEOUT_SEC),
     ("fundamentals_refresh",lambda pool, cfg: (lambda: _stage_fundamentals_refresh(pool, cfg)),HEAVY_STAGE_TIMEOUT_SEC),
+    # Order corrected 2026-05-14 (audit O-1/O-2/O-3): tier_refresh +
+    # classify_tickers must run BEFORE catalyst_refresh + sec_filings
+    # because the latter two filter by ticker_classifications.asset_class.
+    # classify_tickers' per-ticker fallback path reads liquidity_tiers
+    # for the T1+T2 set, so tier_refresh runs first.
+    # Liquidity tier refresh — quarterly cadence (90d skip guard).
+    # Stage 1: Corwin-Schultz bootstrap (60d freshness gate) writes to
+    # spread_observations. Stage 2: assign_tiers aggregates into
+    # liquidity_tiers. Closes audit gap G-2: the bootstrap used to
+    # be manual-only via scripts/run_tier_refresh.sh.
+    ("tier_refresh",        lambda pool, cfg: (lambda: _stage_tier_refresh(pool)),             HEAVY_STAGE_TIMEOUT_SEC),
+    # Ticker classifications refresh — monthly cadence (30d skip guard +
+    # 95% coverage check). Picks up new listings after universe
+    # expansion. ETFs/SPACs/funds get flagged so catalyst + earnings
+    # pipelines can filter them out.
+    ("classify_tickers",    lambda pool, cfg: (lambda: _stage_classify_tickers(pool)),         HEAVY_STAGE_TIMEOUT_SEC),
     # Catalyst refresh — earnings-beat events for vector engine.
     # Heavy timeout (1h) because the FMP loop is ~1 sec per ticker;
     # T1+T2 stock subset is ~66 tickers so a fresh run is ~3 min, but
@@ -928,19 +1021,11 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     ("catalyst_refresh",    lambda pool, cfg: (lambda: _stage_catalyst_refresh(pool)),         HEAVY_STAGE_TIMEOUT_SEC),
     # SEC EDGAR Form 4 + 8-K — reference implementation of the
     # standard 5-stage data-adapter pipeline. CSV-first, idempotent,
-    # skip-guard short-circuits when the tables were refreshed within
-    # 6 days. Heavy timeout: ~200 tickers × ~1.5s/call (rate-limited
+    # skip-guard tightened from 6 → 3 days 2026-05-14: Form 4 has a
+    # 2-business-day filing deadline so 6d staleness was half-stale on
+    # average. Heavy timeout: ~200 tickers × ~1.5s/call (rate-limited
     # under SEC's 10 req/sec cap) + Form 4 XML fetches.
     ("sec_filings",         lambda pool, cfg: (lambda: _stage_sec_filings(pool, backfill=bool(cfg.get("_sec_backfill")))), HEAVY_STAGE_TIMEOUT_SEC),
-    # Liquidity tier refresh — quarterly cadence (90d skip guard).
-    # Tier assignment drifts slowly; the stage exists so the dashboard
-    # surfaces operator inaction.
-    ("tier_refresh",        lambda pool, cfg: (lambda: _stage_tier_refresh(pool)),             HEAVY_STAGE_TIMEOUT_SEC),
-    # Ticker classifications refresh — monthly cadence (30d skip guard +
-    # 95% coverage check). Picks up new listings after universe
-    # expansion. ETFs/SPACs/funds get flagged so catalyst + earnings
-    # pipelines can filter them out.
-    ("classify_tickers",    lambda pool, cfg: (lambda: _stage_classify_tickers(pool)),         HEAVY_STAGE_TIMEOUT_SEC),
     # data_validation runs the 10-check suite against the live tables —
     # at the current 20M-row prices_daily it consistently runs ~120-
     # 130s. Bumping to 5 min gives headroom without masking a true hang.
@@ -1576,6 +1661,80 @@ async def _check_risk_governor(pool: asyncpg.Pool) -> dict[str, Any]:
     return {"ok": not any_killed, "engines": engines}
 
 
+async def _check_missed_post_close(pool: asyncpg.Pool) -> dict[str, Any]:
+    """Watchdog — warn if no `ops` engine STARTUP event in last 30 hours.
+
+    Catches launchd misfires (Mac asleep at trigger + replay window
+    expired, dst transition, manual unload). The post_close daemon
+    fires daily; a 30-hour ceiling tolerates one missed cycle of grace
+    before flagging. Closes audit gap G-6.
+    """
+    latest = await pool.fetchval(
+        """
+        SELECT MAX(recorded_at)
+        FROM platform.application_log
+        WHERE engine = 'ops'
+          AND event_type = 'STARTUP'
+        """
+    )
+    if latest is None:
+        return {"ok": False, "latest_run": None, "reason": "no ops STARTUP events on record"}
+    age_hours = (datetime.now(UTC) - latest).total_seconds() / 3600.0
+    threshold_h = 30.0
+    return {
+        "ok": age_hours <= threshold_h,
+        "latest_run": latest.isoformat(),
+        "age_hours": round(age_hours, 2),
+        "threshold_hours": threshold_h,
+    }
+
+
+async def _check_supabase_backup(pool: asyncpg.Pool) -> dict[str, Any]:
+    """Probe Supabase's WAL archiver — confirm the last backup landed.
+
+    Supabase Pro runs continuous WAL archiving + daily backups. The
+    ``pg_stat_archiver`` system view exposes ``last_archived_time``
+    (timestamp of the last successful WAL archive). 26 hours is the
+    ceiling — daily backups run nightly, so > 26 hours means either
+    Supabase's managed backup pipeline broke or our role lost the
+    system-view grant. Closes audit gap G-5.
+
+    Fails soft: if the view query raises (role grants), report ``ok``
+    with a ``reason`` so the probe is informational rather than a
+    blocker for the dashboard.
+    """
+    try:
+        row = await pool.fetchrow(
+            """
+            SELECT last_archived_time, archived_count, failed_count
+            FROM pg_stat_archiver
+            """
+        )
+    except Exception as exc:  # noqa: BLE001 — managed-service-side blind spot
+        return {
+            "ok": True,
+            "reason": f"pg_stat_archiver unavailable: {exc}",
+            "informational_only": True,
+        }
+    if row is None or row["last_archived_time"] is None:
+        return {
+            "ok": False,
+            "last_archived_time": None,
+            "reason": "pg_stat_archiver returned no archiver row",
+        }
+    last = row["last_archived_time"]
+    age_hours = (datetime.now(UTC) - last).total_seconds() / 3600.0
+    threshold_h = 26.0
+    return {
+        "ok": age_hours <= threshold_h,
+        "last_archived_time": last.isoformat(),
+        "age_hours": round(age_hours, 2),
+        "threshold_hours": threshold_h,
+        "archived_count": int(row["archived_count"] or 0),
+        "failed_count": int(row["failed_count"] or 0),
+    }
+
+
 async def _check_recent_errors(pool: asyncpg.Pool) -> dict[str, Any]:
     rows = await pool.fetch(
         """
@@ -1614,6 +1773,8 @@ _CHECK_FNS = [
     ("ingestion_engine", _check_ingestion_engine),
     ("validation_suite", _check_validation),
     ("risk_governor", _check_risk_governor),
+    ("missed_post_close", _check_missed_post_close),
+    ("supabase_backup", _check_supabase_backup),
     ("recent_errors", _check_recent_errors),
 ]
 

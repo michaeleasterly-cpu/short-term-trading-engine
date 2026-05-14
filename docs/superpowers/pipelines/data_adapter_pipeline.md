@@ -198,11 +198,13 @@ validate:  liquidity_tiers_freshness check in run_suite (NEW L-2) —
            universe in T1+T2 buckets
 dashboard: liquidity_tiers_freshness row in _CHECK_FNS (NEW L-3) —
            returns {latest_assignment, age_days, tickers, tiers, ok}
-schedule:  tier_refresh stage in _STAGE_SPECS (NEW L-4); skip-if-
-           refreshed-within-90-days short-circuit. AWAITING NEXT
-           SCHEDULED RUN — wired into ops.py --update; fires
-           automatically on the next 90-day cadence and self-
-           verifies via ops.stage.tier_refresh.done event.
+schedule:  tier_refresh stage in _STAGE_SPECS (NEW L-4); two-phase
+           (Corwin-Schultz spread bootstrap + tier aggregation) made
+           autonomous 2026-05-14 (audit-fix G-2). Outer 90-day skip-
+           guard on liquidity_tiers; inner 60-day skip-guard on
+           spread_observations. AWAITING NEXT SCHEDULED RUN —
+           ops.stage.tier_refresh.done event reports
+           {tickers_assigned, tiers, bootstrap_skipped, bootstrap_rows}.
 ```
 
 ### `classify_tickers` *(T-1..T-4 remediated 2026-05-14)*
