@@ -199,9 +199,10 @@ validate:  liquidity_tiers_freshness check in run_suite (NEW L-2) —
 dashboard: liquidity_tiers_freshness row in _CHECK_FNS (NEW L-3) —
            returns {latest_assignment, age_days, tickers, tiers, ok}
 schedule:  tier_refresh stage in _STAGE_SPECS (NEW L-4); skip-if-
-           refreshed-within-90-days short-circuit. PENDING OPERATOR
-           RUN of the first invocation to populate live evidence;
-           after first run, second run hits skip-guard.
+           refreshed-within-90-days short-circuit. AWAITING NEXT
+           SCHEDULED RUN — wired into ops.py --update; fires
+           automatically on the next 90-day cadence and self-
+           verifies via ops.stage.tier_refresh.done event.
 ```
 
 ### `classify_tickers` *(T-1..T-4 remediated 2026-05-14)*
@@ -225,8 +226,9 @@ dashboard: ticker_classifications row in _CHECK_FNS (NEW T-3) — returns
 schedule:  classify_tickers stage in _STAGE_SPECS (NEW T-4); skip
            condition: refreshed within 30 days AND ≥ 95% coverage
            (force-rerun on universe expansion even within 30d window).
-           PENDING OPERATOR RUN of the first invocation; second run
-           after a successful first hits skip-guard.
+           AWAITING NEXT SCHEDULED RUN — wired into ops.py --update;
+           fires automatically on the next 30-day cadence and self-
+           verifies via ops.stage.classify_tickers.done event.
 ```
 
 ### `sec_edgar` (Phase 2 reference implementation)
@@ -235,22 +237,22 @@ schedule:  classify_tickers stage in _STAGE_SPECS (NEW T-4); skip
 adapter:   sec_edgar
 commits:   4e8ad7a (pipeline doc) → 8b00500 (adapter) → 73707da (audit)
 
-ingest:    PENDING LIVE RUN — migration shipped (20260514_2400),
-           SEC_EDGAR_USER_AGENT env var required, then:
-             python scripts/ops.py --stage sec_filings
-           Backfill from 2018-01-01: edit handle_sec_filings
-           lookback_days config to (today - 2018-01-01).days, or run
-             python -c "import asyncio; from tpcore.ingestion.handlers \
-               import handle_sec_filings; from tpcore.db import \
-               build_asyncpg_pool; ..."
-           Expect 4-8 hr wall time at SEC's 10 req/sec courtesy budget
-           for ~66 T1+T2 stocks × thousands of historical filings.
+ingest:    PENDING ONE-TIME BACKFILL — migration shipped (20260514_2400),
+           SEC_EDGAR_USER_AGENT env var required, then one command:
+             python scripts/ops.py --stage sec_filings --backfill
+           Pulls Form 4 + 8-K for the T1+T2 stock universe from
+           2018-01-01 → today. ~4-8 hr wall time at SEC's 10 req/sec
+           courtesy budget. Stage self-verifies via
+           ops.stage.sec_filings.done event with insider_rows_total,
+           material_rows_total, tickers_covered, and date range.
+           After the one-time backfill, the same stage runs weekly
+           (sans --backfill) with a 6-day skip-guard.
 
 test:      9 passed, 0 failed (tpcore/tests/test_sec_adapter.py)
 
 validate:  sec_filings_freshness CHECK REGISTERED — 8th check;
            thresholds: newest filing ≤ 14d old AND ≥ 30% T1+T2 stock
-           coverage in last 180d. Fails until first ingest run.
+           coverage in last 180d. Flips to passing once backfill runs.
 
 dashboard: _check_sec_filings_freshness WIRED — flips to ok=true once
            rows land.
@@ -269,7 +271,7 @@ schedule:  sec_filings stage in _STAGE_SPECS; skip-if-6-days idempotent
 | Validation suite check count | **10** (was 8): added `liquidity_tiers_freshness` + `ticker_classifications_coverage` |
 | `--update` stage count | **12** (was 10): added `tier_refresh` + `classify_tickers` |
 | `--check` row count | **15** (was 11): added `fundamentals_freshness`, `catalyst_freshness`, `liquidity_tiers_freshness`, `ticker_classifications` |
-| Live-data PENDING items | (a) SEC backfill (multi-hour SEC API run); (b) first `tier_refresh` run; (c) first `classify_tickers` run via the ops stage. All three flip from PENDING → live as soon as the operator executes them — no further code changes required. |
+| Live-data PENDING items | (a) **SEC backfill** — one-time operator command `python scripts/ops.py --stage sec_filings --backfill` (7-year history pull, multi-hour wall time, self-verifies via `ops.stage.sec_filings.done` event). (b) `tier_refresh` and (c) `classify_tickers` — both wired into `ops.py --update`; fire automatically on their next scheduled cadence (90d / 30d). No operator action required for (b) and (c). |
 
 ## Adding a new adapter — workflow
 

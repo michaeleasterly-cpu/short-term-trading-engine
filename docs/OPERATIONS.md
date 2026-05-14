@@ -798,33 +798,22 @@ After step 3, run `python scripts/ops.py --check --pretty` and confirm the `sec_
 
 ### Historical backfill from 2018-01-01
 
-The default `handle_sec_filings` config pulls `lookback_days=90`. To backfill the full Vector-overlap window:
+Single command — the stage self-verifies:
 
 ```bash
-# In a Python REPL or one-off script (no DATABASE_URL needed; the
-# handler reads it from env via build_asyncpg_pool).
-python -c "
-import asyncio, os
-from datetime import datetime, UTC
-from tpcore.db import build_asyncpg_pool
-from tpcore.ingestion.handlers import handle_sec_filings
-
-async def main():
-    pool = await build_asyncpg_pool(os.environ['DATABASE_URL'])
-    today = datetime.now(UTC).date()
-    lookback = (today - __import__('datetime').date(2018, 1, 1)).days
-    # max_tickers=None ingests the full T1+T2 stock universe.
-    rows = await handle_sec_filings(pool, {
-        'lookback_days': lookback,
-        'max_tickers': None,
-        'skip_guard_days': 0,   # force-run; bypass the 6-day skip.
-    })
-    print(f'rows_loaded={rows}')
-    await pool.close()
-
-asyncio.run(main())
-"
+python scripts/ops.py --stage sec_filings --backfill
 ```
+
+The `--backfill` flag tells the stage to:
+- Override the default 90-day lookback to `2018-01-01 → today` (~7 years).
+- Drop the per-run ticker cap (`max_tickers=None` — full T1+T2 stock universe).
+- Bypass the 6-day skip-guard (one-shot historical fill).
+
+**Self-verification output** (emitted as `ops.stage.sec_filings.done` event + printed in the STAGE SUMMARY table):
+- `rows_loaded` — total new rows persisted this run.
+- `insider_rows_total` / `material_rows_total` — table-wide counts after the run.
+- `tickers_covered_insider` / `tickers_covered_material` — distinct ticker counts.
+- `earliest_filing` / `latest_filing` — actual date span achieved.
 
 **Expectations:**
 - Runtime ~4-8 hours at SEC's 10 req/sec courtesy budget for ~60-70 T1+T2 stock tickers × thousands of historical filings each.

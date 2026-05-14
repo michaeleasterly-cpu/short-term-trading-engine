@@ -661,7 +661,7 @@ async def _stage_classify_tickers(pool: asyncpg.Pool) -> dict[str, Any]:
     return {str(k): int(v) for k, v in stats.items()}
 
 
-async def _stage_sec_filings(pool: asyncpg.Pool) -> dict[str, Any]:
+async def _stage_sec_filings(pool: asyncpg.Pool, *, backfill: bool = False) -> dict[str, Any]:
     """Weekly SEC EDGAR Form 4 + 8-K ingest.
 
     Reference implementation of the standard data-adapter pipeline
@@ -672,16 +672,74 @@ async def _stage_sec_filings(pool: asyncpg.Pool) -> dict[str, Any]:
 
     Universe: T1+T2 stocks (ticker_classifications.asset_class='stock').
     ETFs/funds/SPACs filtered out — they don't file Form 4 or 8-K.
+
+    When ``backfill=True`` (operator invokes via
+    ``python scripts/ops.py --stage sec_filings --backfill``):
+    pulls the full Vector-overlap history from 2018-01-01, ignores
+    the 6-day skip-guard, and drops the per-run ticker cap. This is
+    the one-time historical bootstrap — multi-hour wall time at
+    SEC's 10 req/sec courtesy budget.
     """
+    from datetime import date as _date
+
     from tpcore.ingestion.handlers import handle_sec_filings
 
     log = structlog.get_logger("scripts.ops")
+    config: dict[str, Any] = {}
+    if backfill:
+        today = datetime.now(UTC).date()
+        lookback_days = (today - _date(2018, 1, 1)).days
+        config = {
+            "lookback_days": lookback_days,
+            "max_tickers": None,
+            "skip_guard_days": 0,  # bypass the 6-day skip-guard for the one-shot.
+        }
+        log.info(
+            "ops.stage.sec_filings.backfill_start",
+            lookback_days=lookback_days,
+            start_date="2018-01-01",
+            end_date=today.isoformat(),
+        )
     try:
-        rows = await handle_sec_filings(pool, {})
+        rows = await handle_sec_filings(pool, config)
     except Exception as exc:
-        log.error("ops.stage.sec_filings.failed", error=str(exc))
+        log.error("ops.stage.sec_filings.failed", error=str(exc), backfill=backfill)
         raise
-    return {"rows_loaded": int(rows or 0)}
+
+    # Self-verification snapshot — read back from the DB so the operator
+    # sees the post-run state without a separate query. Cheap two-count
+    # query; runs after thousands-of-hours backfills + 1-minute cron
+    # runs alike.
+    async with pool.acquire() as conn:
+        snapshot = await conn.fetchrow(
+            """
+            SELECT
+                (SELECT COUNT(*) FROM platform.sec_insider_transactions) AS insider_rows,
+                (SELECT COUNT(*) FROM platform.sec_material_events) AS material_rows,
+                (SELECT COUNT(DISTINCT ticker) FROM platform.sec_insider_transactions) AS insider_tickers,
+                (SELECT COUNT(DISTINCT ticker) FROM platform.sec_material_events) AS material_tickers,
+                LEAST(
+                    (SELECT MIN(filing_date) FROM platform.sec_insider_transactions),
+                    (SELECT MIN(filing_date) FROM platform.sec_material_events)
+                ) AS earliest_filing,
+                GREATEST(
+                    (SELECT MAX(filing_date) FROM platform.sec_insider_transactions),
+                    (SELECT MAX(filing_date) FROM platform.sec_material_events)
+                ) AS latest_filing
+            """
+        )
+    out = {
+        "backfill": backfill,
+        "rows_loaded": int(rows or 0),
+        "insider_rows_total": int(snapshot["insider_rows"] or 0),
+        "material_rows_total": int(snapshot["material_rows"] or 0),
+        "tickers_covered_insider": int(snapshot["insider_tickers"] or 0),
+        "tickers_covered_material": int(snapshot["material_tickers"] or 0),
+        "earliest_filing": snapshot["earliest_filing"].isoformat() if snapshot["earliest_filing"] else None,
+        "latest_filing": snapshot["latest_filing"].isoformat() if snapshot["latest_filing"] else None,
+    }
+    log.info("ops.stage.sec_filings.done", **out)
+    return out
 
 
 async def _stage_data_validation(pool: asyncpg.Pool) -> dict[str, Any]:
@@ -873,7 +931,7 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # skip-guard short-circuits when the tables were refreshed within
     # 6 days. Heavy timeout: ~200 tickers × ~1.5s/call (rate-limited
     # under SEC's 10 req/sec cap) + Form 4 XML fetches.
-    ("sec_filings",         lambda pool, cfg: (lambda: _stage_sec_filings(pool)),              HEAVY_STAGE_TIMEOUT_SEC),
+    ("sec_filings",         lambda pool, cfg: (lambda: _stage_sec_filings(pool, backfill=bool(cfg.get("_sec_backfill")))), HEAVY_STAGE_TIMEOUT_SEC),
     # Liquidity tier refresh — quarterly cadence (90d skip guard).
     # Tier assignment drifts slowly; the stage exists so the dashboard
     # surfaces operator inaction.
@@ -1067,6 +1125,7 @@ async def cmd_run_stage(
     *,
     dry_run: bool,
     force: bool = False,
+    backfill: bool = False,
 ) -> UpdateSummary:
     """Run a single stage by name. Same logging + event shape as ``cmd_update``
     — different ``run_id``. Used by the dashboard's per-stage Fix buttons.
@@ -1136,6 +1195,12 @@ async def cmd_run_stage(
                 )
                 summary.finished_at = datetime.now(UTC)
                 return summary
+
+            # Single-shot operator flags piggyback on daily_bars_config —
+            # the factory_builder reads them out by namespaced key. Today
+            # only --backfill (sec_filings) uses this channel.
+            if backfill:
+                daily_bars_config = {**daily_bars_config, "_sec_backfill": True}
 
             summary.stages.append(
                 await _run_stage(
@@ -1808,6 +1873,15 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="--allocate only: write risk_state.kill_switch_active on hard freeze (live mode)",
     )
+    p.add_argument(
+        "--backfill",
+        action="store_true",
+        help=(
+            "--stage sec_filings only: pull the full history from "
+            "2018-01-01 (one-time bootstrap; multi-hour wall time at "
+            "SEC's 10 req/sec courtesy budget; bypasses skip-guard)."
+        ),
+    )
     return p
 
 
@@ -1869,8 +1943,19 @@ async def amain(args: argparse.Namespace) -> int:
             if update_summary.exit_code != 0:
                 exit_code = update_summary.exit_code
         elif args.stage:
+            # --backfill is only meaningful for sec_filings today; reject
+            # silently if used elsewhere so future stages can opt in without
+            # surprise.
+            if args.backfill and args.stage != "sec_filings":
+                log.warning(
+                    "ops.cli.backfill_ignored",
+                    stage=args.stage,
+                    reason="--backfill only applies to sec_filings",
+                )
             update_summary = await cmd_run_stage(
-                args.stage, pool, log, db_log, dry_run=args.dry_run, force=args.force,
+                args.stage, pool, log, db_log,
+                dry_run=args.dry_run, force=args.force,
+                backfill=args.backfill,
             )
             print(f"\nSTAGE SUMMARY ({args.stage})")
             print("=" * 72)
