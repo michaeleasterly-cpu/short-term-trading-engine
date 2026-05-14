@@ -86,7 +86,7 @@ Audited 2026-05-14 (re-graded after F-1 / C-1 / L-1..L-4 / T-1..T-4 remediation)
 | `handle_data_validation` | n/a (orchestrator) | ✅ `test_suite.py` + `test_suite_e2e.py` | n/a (orchestrates the 10 checks) | ✅ `validation_suite` | ✅ `data_validation` stage | **5/5 applicable** |
 | `assign_liquidity_tiers` | ✅ structured logs | ✅ `test_liquidity_tiers.py` *(L-1, 9 tests)* | ✅ `liquidity_tiers_freshness` *(L-2)* | ✅ `liquidity_tiers_freshness` row *(L-3)* | ✅ `tier_refresh` stage; skip-if-90d *(L-4)* | **5/5** |
 | `classify_tickers` | ✅ structured logs | ✅ handler-path coverage *(T-1, +4 tests)* | ✅ `ticker_classifications_coverage` *(T-2)* | ✅ `ticker_classifications` row *(T-3)* | ✅ `classify_tickers` stage; skip-if-30d-and-95%-coverage *(T-4)* | **5/5** |
-| `sec_edgar` (Phase 2, 2026-05-14, reference) | ✅ CSV-first sub-protocol | ✅ `test_sec_adapter.py` (9 tests) | ✅ `sec_filings_freshness` | ✅ `sec_filings_freshness` row | ✅ `sec_filings` stage; skip-if-3d (tightened 2026-05-14) | **5/5** |
+| `sec_edgar` (Phase 2, 2026-05-14, reference, **LIVE**) | ✅ first backfill **2026-05-14 09:11 UTC** — 17,844 rows in 76 min across 60 tickers (insider 9,522 + material 7,938); CSV-first sub-protocol verified end-to-end (download → validate-at-CSV rejected 6,812 bad rows → load ON CONFLICT → gzip) | ✅ `test_sec_adapter.py` (9 tests) | ✅ `sec_filings_freshness` — passes live (age 1d, 9,522 + 7,938 rows) | ✅ `sec_filings_freshness` row green | ✅ `sec_filings` stage; skip-if-3d; idempotency proven (rerun = `skipped_fresh`, 3.1s, 0 new rows) | **5/5 LIVE** |
 | `fred` (2026-05-14, last data source from §6.1, **LIVE**) | ✅ first ingest **2026-05-14 09:03 UTC** — 3,509 rows in 11.4s across 5 series; one transient FRED 502 auto-retried via `@with_retry` | ✅ `test_fred_adapter.py` — 9 tests (happy / empty / 429 retry / 400 no-retry / "." sentinel / all-series iteration / per-series-failure tolerance / idempotency / missing-key fail-fast) | ✅ `macro_indicators_freshness` (11th check) — passes on live data (max_age_days=74) | ✅ `macro_indicators_freshness` row — green (max age 74d < 90d threshold) | ✅ `macro_indicators` stage; skip-if-7d; idempotent `ON CONFLICT (indicator, date) DO NOTHING` | **5/5 LIVE** |
 
 Legend: ✅ implemented · n/a doesn't apply.
@@ -240,25 +240,24 @@ schedule:  classify_tickers stage in _STAGE_SPECS (NEW T-4); skip
 adapter:   sec_edgar
 commits:   4e8ad7a (pipeline doc) → 8b00500 (adapter) → 73707da (audit)
 
-ingest:    PENDING ONE-TIME BACKFILL — migration shipped (20260514_2400),
-           SEC_EDGAR_USER_AGENT env var required, then one command:
-             python scripts/ops.py --stage sec_filings --backfill
-           Pulls Form 4 + 8-K for the T1+T2 stock universe from
-           2018-01-01 → today. ~4-8 hr wall time at SEC's 10 req/sec
-           courtesy budget. Stage self-verifies via
-           ops.stage.sec_filings.done event with insider_rows_total,
-           material_rows_total, tickers_covered, and date range.
-           After the one-time backfill, the same stage runs weekly
-           (sans --backfill) with a 6-day skip-guard.
+ingest:    LIVE — first backfill ran 2026-05-14 09:11 UTC, 76 min wall
+           time (faster than the 4-8 hr estimate thanks to the smaller-
+           than-expected T1+T2 universe of 60 ticker-with-filings).
+           Final counts: rows_downloaded=14,892, rows_rejected_at_csv_layer=
+           6,812, rows_loaded=17,844 (insider=9,522 + material=7,938),
+           tickers_covered_insider=50, tickers_covered_material=55,
+           date_range=2018-01-02..2026-05-13. CSVs auto-gzipped on
+           success (119 KB insider + 24 KB material). Idempotency
+           verified: rerun without --backfill skipped_fresh in 3.1s.
 
 test:      9 passed, 0 failed (tpcore/tests/test_sec_adapter.py)
 
-validate:  sec_filings_freshness CHECK REGISTERED — 8th check;
+validate:  sec_filings_freshness CHECK PASSING LIVE — 8th check;
            thresholds: newest filing ≤ 14d old AND ≥ 30% T1+T2 stock
-           coverage in last 180d. Flips to passing once backfill runs.
+           coverage in last 180d. Latest filing 2026-05-13 (1d old).
 
-dashboard: _check_sec_filings_freshness WIRED — flips to ok=true once
-           rows land.
+dashboard: _check_sec_filings_freshness LIVE OK — latest_filing
+           2026-05-13, age_days=1, insider_rows=9522, material_rows=7938.
 
 schedule:  sec_filings stage in _STAGE_SPECS; skip-if-6-days idempotent
            via ON CONFLICT (...) DO NOTHING on both unique keys.
