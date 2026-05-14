@@ -82,7 +82,7 @@ Google style. One-line summary on the first line, blank line, then optional `Arg
 
 ## New data adapters
 
-Every new external-API adapter starts from `tpcore/templates/adapter_template.py` and must pass [`docs/superpowers/checklists/adapter_readiness.md`](superpowers/checklists/adapter_readiness.md) before merging. The checklist covers retry, logging, configuration, interface compliance, testing, and rate limiting. Existing adapters that need refactoring should be brought into compliance one at a time, not piecemeal.
+Every new external-API adapter starts from `tpcore/templates/adapter_template.py` and must satisfy the five-stage [`Data Adapter Pipeline`](superpowers/pipelines/data_adapter_pipeline.md) (ingest, test, validate, dashboard, schedule) before merging. The pipeline contract is enforced by the pre-merge [`adapter_readiness.md`](superpowers/checklists/adapter_readiness.md) checklist, which covers retry, logging, configuration, interface compliance, testing, and rate limiting. Existing adapters that need refactoring should be brought into compliance one at a time, not piecemeal — see the compliance matrix in the pipeline doc.
 
 ## Testing
 
