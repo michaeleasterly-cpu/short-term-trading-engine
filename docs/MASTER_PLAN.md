@@ -548,6 +548,23 @@ Current decision: **stay on FMP Starter and Alpaca free**. The overfitting diagn
 - **Deploy discipline:** Every Railway deployment must correspond to a commit on `main`. Out-of-band CLI redeploys (`railway redeploy --from-source`, `railway up`) are forbidden — they break the audit trail. `watchPatterns` on each service gate rebuilds to runtime files only (`**/*.py`, `**/*.yaml`, `pyproject.toml`, `railway.json`, `.python-version`); doc / markdown / backtest-output changes don't trigger rebuilds. Build creates a venv at `/app/.venv` and the runtime invokes `/app/.venv/bin/python` directly. Python pinned to 3.11.15 via `.python-version`. See `docs/OPERATIONS.md` §1.
 - **AAR persistence:** `tpcore.aar.writer.AARWriter` persists every closed trade to `platform.aar_events` with `(engine, trade_id)` uniqueness + `ON CONFLICT DO NOTHING` idempotency. Pipeline verified end-to-end against the live database via `scripts/test_aar_pipeline.py`.
 
+### 8.1 Execution Architecture — Local vs. Railway (2026-05-15)
+
+The platform has **two execution shapes**, both backed by the same Python code:
+
+**Local (canonical, today):** Four launchd LaunchAgents on the operator's Mac:
+1. `trade-monitor` — persistent, `KeepAlive=true`.
+2. `engine-service` — persistent, polls `platform.application_log` every 60s for `DATA_OPERATIONS_COMPLETE` events; fires `scripts/run_all_engines.sh` on receipt.
+3. `data-operations` — cron-style, daily 21:30 UTC, runs `scripts/ops.py --update` (15 stages including `forensics`) then emits the event the engine-service polls for.
+4. `allocator` — cron-style, Mondays 13:00 UTC, runs `scripts/ops.py --allocate`.
+
+**Railway (target for when capital scale justifies):** Three services in `railway.json`, consolidated 2026-05-15:
+1. `platform-pipeline` — cron daily 21:30 UTC, runs `python ops/platform_pipeline.py` which sequentially invokes `ops.py --update` then `scripts/run_all_engines.sh` in a single process. Replaces the prior 4-service decomposition (sigma/reversion/vector schedulers + ingestion-engine) which has been folded into the `--update` stage list.
+2. `trade-monitor` — persistent, `restartPolicyType=ALWAYS`.
+3. `allocator` — cron Mondays 13:00 UTC.
+
+The consolidation eliminates the inter-daemon `DATA_OPERATIONS_COMPLETE` polling dependency (single-process sequential is simpler in a stateless container environment) while staying under the Hobby-tier 5-service cap with headroom for a future dashboard or health-check service. Local launchd remains the canonical Mac path; Railway is the target for when the operator is away from their machine or capital scale justifies always-on hosting.
+
 ---
 
 ## 9. Build Order

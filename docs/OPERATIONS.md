@@ -90,10 +90,12 @@ scripts/install_all_daemons.sh
 |---|---|---|
 | `trade_monitor` | Persistent. Watches Alpaca `TradingStream` for fills, submits Tier 2 cascade for Sigma/Reversion. `KeepAlive=true` → respawns on any non-zero exit (Python tracebacks included). | persistent |
 | `engine_service` | Persistent. Polls `platform.application_log` every 60s for `DATA_OPERATIONS_COMPLETE` events; on new event, shells out to `scripts/run_all_engines.sh` for the engine sweep. `KeepAlive=true`. | persistent (event-driven) |
-| `data_operations` | Daily refresh: 14-stage `ops --update` → audit → validation → compress → emits `DATA_OPERATIONS_COMPLETE` (engine sweep is fired by `engine_service`, not inline). | Mon-Fri 21:30 UTC |
+| `data_operations` | Daily refresh: 15-stage `ops --update` (final stage `forensics`) → audit → validation → compress → emits `DATA_OPERATIONS_COMPLETE` (engine sweep is fired by `engine_service`, not inline). | Mon-Fri 21:30 UTC |
 | `allocator` | Cross-engine capital rebalance | Mon 13:00 UTC |
 
 The dashboard's **Daemons (launchd)** row goes 🔴 when any agent isn't installed, with an inline 🔧 Install all daemons button. Logs at `~/Library/Logs/short-term-trading-engine/{trade-monitor,engine-service,data-operations,allocator}.{log,err}`.
+
+**Local vs. Railway execution shapes (2026-05-15).** The four launchd daemons above are the canonical Mac path. Railway uses a different shape — see `railway.json` and `ops/platform_pipeline.py`: **three** services (`platform-pipeline`, `trade-monitor`, `allocator`), where `platform-pipeline` runs `ops.py --update` followed by `run_all_engines.sh` sequentially in a single process. The consolidation eliminates the inter-daemon `DATA_OPERATIONS_COMPLETE` polling dependency, which is unnecessary overhead in a stateless container environment. Stays under the Hobby-tier 5-service cap with headroom. Railway is currently paused (per `project_railway_hobby_tier.md`); the consolidated definitions are committed so a future re-enable just needs `python ops/apply_railway_service_config.py --all` + a git push. See MASTER_PLAN §8.1 for the full architecture.
 
 Uninstall:
 ```bash
