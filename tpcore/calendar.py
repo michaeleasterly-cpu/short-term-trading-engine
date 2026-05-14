@@ -69,6 +69,30 @@ def session_contains(dt: datetime) -> bool:
     return open_ts <= _to_ts(dt) <= close_ts
 
 
+def require_market_closed(*, force: bool = False, now: datetime | None = None) -> bool:
+    """Single source of truth for "is it safe to run this data op?".
+
+    Returns ``True`` when the caller is cleared to proceed:
+        * ``force=True`` short-circuits the check (operator override —
+          use only for testing or controlled mid-session runs).
+        * Otherwise, returns ``True`` iff the NYSE regular session is
+          NOT currently in progress (so pre-market / after-hours /
+          weekends / holidays all pass).
+
+    Returns ``False`` when the regular session is live and ``force`` is
+    not set — callers should refuse and emit a clear operator message.
+
+    Wraps ``session_contains`` so half-days, holidays, and DST shifts
+    are handled the same way the engines see them. Replaces the
+    per-script inline checks that were drifting (``ops.py`` had its own
+    ``_market_open_block_reason``; smoke test had its own
+    ``_is_market_open``; etc.).
+    """
+    if force:
+        return True
+    return not session_contains(now or datetime.now(UTC))
+
+
 def next_open(dt: datetime) -> datetime:
     """Next regular session open at or after ``dt`` (UTC)."""
     cal = _calendar()

@@ -1120,22 +1120,21 @@ def _market_open_block_reason(now: datetime | None = None) -> str | None:
     """Return a human-readable refusal reason if the NYSE regular session
     is currently in progress, else None.
 
-    Allows pre-market, after-hours, weekends, holidays — only the
-    9:30-16:00 ET regular session blocks. tpcore.calendar wraps the
-    exchange_calendars XNYS calendar, so DST and partial-session days
-    (early closes) are handled automatically.
+    Delegates the predicate to ``tpcore.calendar.require_market_closed``
+    (the single source of truth across the platform). This function
+    contributes only the operator-facing refusal string; bypass logic
+    lives in the caller (which decides whether to pass ``--force``).
     """
-    from tpcore.calendar import session_contains
+    from tpcore.calendar import require_market_closed
 
-    now = now or datetime.now(UTC)
-    if session_contains(now):
-        return (
-            "NYSE regular session is currently open. Running daily_bars now "
-            "would pull a partial intraday snapshot and corrupt today's row "
-            "in prices_daily. Wait for 16:00 ET / 20:00 UTC and re-run, or "
-            "pass --force to bypass this check."
-        )
-    return None
+    if require_market_closed(now=now):
+        return None
+    return (
+        "NYSE regular session is currently open. Running daily_bars now "
+        "would pull a partial intraday snapshot and corrupt today's row "
+        "in prices_daily. Wait for 16:00 ET / 20:00 UTC and re-run, or "
+        "pass --force to bypass this check."
+    )
 
 
 async def cmd_update(
