@@ -115,7 +115,13 @@ class PostgresDataAdapter(DataProviderInterface):
             rows = await conn.fetch(sql)
         return [r["ticker"] for r in rows]
 
-    async def get_universe_by_liquidity_tier(self, max_tier: int = 2) -> list[str]:
+    async def get_universe_by_liquidity_tier(
+        self,
+        max_tier: int = 2,
+        *,
+        asset_class: str | None = None,
+        require_fundamentals: bool = False,
+    ) -> list[str]:
         """Tickers up to and including the given liquidity tier.
 
         Use this in any engine that pre-fetches per-ticker context
@@ -123,15 +129,42 @@ class PostgresDataAdapter(DataProviderInterface):
         (~7,700 tickers) makes the upfront work O(7700) and times out
         against Supabase. T1+T2 is ~1,200 tickers and parallels what
         the credibility backtests scored on.
+
+        Optional filters (added 2026-05-15 for the Reversion sweep
+        expansion to T3 with fundamentals coverage):
+
+        * ``asset_class``: when set (e.g. ``"stock"``), inner-joins
+          ``platform.ticker_classifications`` and filters to rows where
+          ``asset_class = <value>``. ETFs/SPACs/funds are excluded by
+          passing ``"stock"``.
+        * ``require_fundamentals``: when True, inner-joins
+          ``platform.fundamentals_quarterly`` (DISTINCT ticker) so only
+          tickers with at least one fundamentals row are returned —
+          required for the Reversion EQ gate.
         """
-        sql = """
-            SELECT ticker
-            FROM platform.liquidity_tiers
-            WHERE tier <= $1
-            ORDER BY tier ASC, ticker ASC
+        clauses = ["lt.tier <= $1"]
+        joins: list[str] = []
+        args: list = [max_tier]
+        if asset_class is not None:
+            joins.append(
+                "JOIN platform.ticker_classifications tc ON tc.ticker = lt.ticker"
+            )
+            clauses.append(f"tc.asset_class = ${len(args) + 1}")
+            args.append(asset_class)
+        if require_fundamentals:
+            joins.append(
+                "JOIN (SELECT DISTINCT ticker FROM platform.fundamentals_quarterly) f "
+                "ON f.ticker = lt.ticker"
+            )
+        sql = f"""
+            SELECT lt.ticker
+            FROM platform.liquidity_tiers lt
+            {' '.join(joins)}
+            WHERE {' AND '.join(clauses)}
+            ORDER BY lt.tier ASC, lt.ticker ASC
         """
         async with self._pool.acquire() as conn:
-            rows = await conn.fetch(sql, max_tier)
+            rows = await conn.fetch(sql, *args)
         return [r["ticker"] for r in rows]
 
     async def list_active_symbols(self) -> list[str]:

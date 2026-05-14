@@ -27,6 +27,25 @@ HARD_STOP_PCT = Decimal("0.03")  # −3% stop
 PRE_GRAD_POSITION_CAP_USD = Decimal("1500")
 MAX_CONCURRENT_POSITIONS = 4
 
+# SPY market-regime pre-scan filter (added 2026-05-15 to address the
+# walk-forward Sharpe-variance problem identified by the parameter
+# sweep — Sharpe swung from +1.02 to −0.84 across windows because
+# CHOP gates per-stock chop but doesn't see the market-level regime).
+#
+# DRAWDOWN_PCT: if SPY's last close is ≥ this % below its 60-day high,
+# AND SPY's 5-day return is positive (rebounding), the regime is in
+# "momentum-crash recovery" — range scalping during V-shaped rebounds
+# is the trade that produced the −0.84 window. Suppress all entries.
+#
+# REALIZED_VOL: if SPY's 20-day realized vol (annualized) exceeds this
+# threshold, the Bollinger band that defines our "range" is expanding
+# faster than we can scalp it; the range is a moving target. Suppress.
+SPY_REGIME_DRAWDOWN_PCT = Decimal("0.10")
+SPY_REGIME_DRAWDOWN_LOOKBACK_DAYS = 60
+SPY_REGIME_REBOUND_LOOKBACK_DAYS = 5
+SPY_REGIME_REALIZED_VOL_THRESHOLD = Decimal("0.30")
+SPY_REGIME_VOL_LOOKBACK_DAYS = 20
+
 
 class Phase(StrEnum):
     """Lifecycle phases per plan §4.1."""

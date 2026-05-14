@@ -170,6 +170,41 @@ async def test_get_universe_symbols_returns_distinct_tickers() -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_universe_by_liquidity_tier_basic() -> None:
+    pool = _FakePool()
+    pool.conn.fetch_result = [{"ticker": "AAPL"}, {"ticker": "MSFT"}]
+    adapter = PostgresDataAdapter(pool)  # type: ignore[arg-type]
+
+    universe = await adapter.get_universe_by_liquidity_tier(max_tier=2)
+
+    assert universe == ["AAPL", "MSFT"]
+    sql, args = pool.conn.calls[-1]
+    assert "platform.liquidity_tiers" in sql
+    assert "tier <= $1" in sql
+    assert args == (2,)
+
+
+@pytest.mark.asyncio
+async def test_get_universe_by_liquidity_tier_with_asset_class_and_fundamentals() -> None:
+    """Reversion-sweep filter (added 2026-05-15): T3 stocks with fundamentals."""
+    pool = _FakePool()
+    pool.conn.fetch_result = [{"ticker": "AAPL"}, {"ticker": "BAC"}]
+    adapter = PostgresDataAdapter(pool)  # type: ignore[arg-type]
+
+    universe = await adapter.get_universe_by_liquidity_tier(
+        max_tier=3, asset_class="stock", require_fundamentals=True,
+    )
+
+    assert universe == ["AAPL", "BAC"]
+    sql, args = pool.conn.calls[-1]
+    # Inner-joined ticker_classifications + fundamentals_quarterly.
+    assert "ticker_classifications" in sql
+    assert "fundamentals_quarterly" in sql
+    assert "asset_class" in sql
+    assert args == (3, "stock")
+
+
+@pytest.mark.asyncio
 async def test_list_active_symbols_aliases_universe() -> None:
     pool = _FakePool()
     pool.conn.fetch_result = [{"ticker": "AAPL"}, {"ticker": "MSFT"}]

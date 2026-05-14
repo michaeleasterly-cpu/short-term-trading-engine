@@ -35,7 +35,14 @@ from typing import Any
 
 import structlog
 
-from sigma.models import Phase
+from sigma.models import (
+    SPY_REGIME_DRAWDOWN_LOOKBACK_DAYS,
+    SPY_REGIME_DRAWDOWN_PCT,
+    SPY_REGIME_REALIZED_VOL_THRESHOLD,
+    SPY_REGIME_REBOUND_LOOKBACK_DAYS,
+    SPY_REGIME_VOL_LOOKBACK_DAYS,
+    Phase,
+)
 from sigma.order_manager import ENGINE_ID, SigmaOrderManager
 from sigma.plugs.aar_logging import SigmaAARLogging
 from sigma.plugs.capital_gate import SigmaCapitalGate
@@ -83,6 +90,101 @@ class RunSummary:
             f"RunSummary(as_of={self.as_of}, n_candidates={self.n_candidates}, "
             f"n_submitted={self.n_submitted}, n_aars={len(self.aars)})"
         )
+
+
+async def _spy_regime_blocks_entries(pool, as_of: date_t) -> tuple[bool, dict | None]:
+    """Market-level regime gate (added 2026-05-15 per param-sweep finding).
+
+    Returns ``(True, payload)`` when Sigma should suppress all entries for
+    this session. ``payload`` carries the diagnostic numbers for logging.
+    Returns ``(False, None)`` when the regime is permissive.
+
+    Blocks under either condition (logical OR):
+
+    * **Momentum-crash recovery**: SPY is ≥ ``SPY_REGIME_DRAWDOWN_PCT``
+      below its ``SPY_REGIME_DRAWDOWN_LOOKBACK_DAYS``-day high, AND its
+      ``SPY_REGIME_REBOUND_LOOKBACK_DAYS``-day return is strictly
+      positive (rebounding). Range scalping in V-shaped recoveries was
+      the trade that produced the −0.84 Sharpe walk-forward window.
+    * **Elevated volatility**: SPY's ``SPY_REGIME_VOL_LOOKBACK_DAYS``-day
+      annualized realized volatility exceeds
+      ``SPY_REGIME_REALIZED_VOL_THRESHOLD``. High vol expands the
+      Bollinger band faster than we can scalp it.
+
+    Degrades gracefully on data shortage — if fewer than
+    ``SPY_REGIME_DRAWDOWN_LOOKBACK_DAYS`` SPY bars are available
+    (rare; happens during fresh DB / backfill in progress), returns
+    ``(False, None)`` so the engine isn't blocked indefinitely by
+    a data outage.
+    """
+    import math
+    from decimal import Decimal
+
+    lookback_days = max(
+        SPY_REGIME_DRAWDOWN_LOOKBACK_DAYS,
+        SPY_REGIME_VOL_LOOKBACK_DAYS + 1,
+    )
+    sql = """
+        SELECT date, close
+        FROM platform.prices_daily
+        WHERE ticker = 'SPY'
+          AND date <= $1
+        ORDER BY date DESC
+        LIMIT $2
+    """
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(sql, as_of, lookback_days)
+    if len(rows) < SPY_REGIME_DRAWDOWN_LOOKBACK_DAYS:
+        return False, None
+
+    # Rows are DESCENDING (newest first); flip for chronological work.
+    closes = [Decimal(str(r["close"])) for r in reversed(rows)]
+    latest = closes[-1]
+
+    # Drawdown from 60-day high.
+    high_60 = max(closes[-SPY_REGIME_DRAWDOWN_LOOKBACK_DAYS:])
+    drawdown_pct = (high_60 - latest) / high_60 if high_60 > 0 else Decimal("0")
+
+    # 5-day return.
+    ret_5d = (
+        (latest - closes[-SPY_REGIME_REBOUND_LOOKBACK_DAYS - 1])
+        / closes[-SPY_REGIME_REBOUND_LOOKBACK_DAYS - 1]
+        if len(closes) > SPY_REGIME_REBOUND_LOOKBACK_DAYS and closes[-SPY_REGIME_REBOUND_LOOKBACK_DAYS - 1] > 0
+        else Decimal("0")
+    )
+
+    # 20-day annualized realized volatility (stdev of daily log returns ×
+    # √252). Uses float for the log/sqrt path; the threshold compare
+    # rounds via Decimal.
+    vol_closes = closes[-SPY_REGIME_VOL_LOOKBACK_DAYS - 1:]
+    log_returns = [
+        math.log(float(vol_closes[i] / vol_closes[i - 1]))
+        for i in range(1, len(vol_closes))
+        if vol_closes[i - 1] > 0
+    ]
+    if log_returns:
+        mean = sum(log_returns) / len(log_returns)
+        var = sum((r - mean) ** 2 for r in log_returns) / max(1, len(log_returns) - 1)
+        realized_vol_annual = Decimal(str(math.sqrt(var) * math.sqrt(252)))
+    else:
+        realized_vol_annual = Decimal("0")
+
+    drawdown_recovery = (
+        drawdown_pct >= SPY_REGIME_DRAWDOWN_PCT and ret_5d > 0
+    )
+    high_vol = realized_vol_annual > SPY_REGIME_REALIZED_VOL_THRESHOLD
+
+    if drawdown_recovery or high_vol:
+        return True, {
+            "spy_last_close": str(latest),
+            "spy_60d_high": str(high_60),
+            "drawdown_pct": str(drawdown_pct.quantize(Decimal("0.0001"))),
+            "ret_5d": str(ret_5d.quantize(Decimal("0.0001"))),
+            "realized_vol_annual": str(realized_vol_annual.quantize(Decimal("0.0001"))),
+            "trigger_drawdown_recovery": drawdown_recovery,
+            "trigger_high_vol": high_vol,
+        }
+    return False, None
 
 
 class SigmaScheduler:
@@ -185,6 +287,19 @@ class SigmaScheduler:
                     "sigma.scheduler.kill_switch_active",
                     engine=ENGINE_ID,
                     reason=current_state.kill_switch_reason or "unspecified",
+                )
+                return RunSummary(as_of=as_of, n_candidates=0, n_submitted=0, aars=[])
+
+            # SPY market-regime gate (added 2026-05-15 per param-sweep
+            # finding). Suppresses entries when SPY is in a momentum-
+            # crash recovery or high-vol regime — both produced the
+            # walk-forward Sharpe-variance problem (+1.02 to −0.84).
+            blocked, regime_payload = await _spy_regime_blocks_entries(pool, as_of)
+            if blocked:
+                logger.warning(
+                    "sigma.scheduler.spy_regime_blocked",
+                    engine=ENGINE_ID,
+                    **regime_payload,
                 )
                 return RunSummary(as_of=as_of, n_candidates=0, n_submitted=0, aars=[])
 

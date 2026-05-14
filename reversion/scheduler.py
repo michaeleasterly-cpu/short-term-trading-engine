@@ -161,17 +161,26 @@ class ReversionScheduler:
                 )
                 return RunSummary(as_of=as_of, n_candidates=0, n_submitted=0, aars=[])
 
-            # Universe: T1+T2 only — matches the credibility backtest
-            # AND keeps the batched-bars fetch under Supabase's
-            # statement timeout. Same fix as sigma + vector.
-            universe = tuple(await data.get_universe_by_liquidity_tier(max_tier=2))
+            # Universe: T1+T2+T3 stocks with fundamentals coverage
+            # (expanded 2026-05-15 per param-sweep signal-sparsity
+            # finding). T3 inclusion ~doubles the candidate set;
+            # asset_class='stock' excludes ETFs/SPACs/funds which
+            # don't have meaningful earnings-quality signals;
+            # require_fundamentals filters to tickers with at least
+            # one quarterly row so the EQ gate can evaluate. Was
+            # ``max_tier=2`` (T1+T2 only, no asset-class filter).
+            universe = tuple(await data.get_universe_by_liquidity_tier(
+                max_tier=3,
+                asset_class="stock",
+                require_fundamentals=True,
+            ))
             logger.info(
                 "reversion.scheduler.run_start",
                 as_of=as_of.isoformat(),
                 allow_shorts=self._allow_shorts,
                 persistent=pool is not None,
                 universe_size=len(universe),
-                source="liquidity_tiers<=2",
+                source="liquidity_tiers<=3,stock,with_fundamentals",
             )
 
             # Pre-fetch bars for the universe in one batched SQL —

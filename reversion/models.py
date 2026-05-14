@@ -29,10 +29,19 @@ TIME_STOP_DAYS = 5
 MAX_ADX_FOR_REVERSION = 25.0  # ADX(14) > 25 → engine disabled.
 
 # Score thresholds drawn from the master plan rationale.
-# Z=3.0 chosen after the 8-year backtest revealed |Z| 2.0–3.0 was the worst-
-# performing entry bucket; |Z|≥3.0 is profitable on its own (PF 1.37). See
-# `backtests/reversion_diagnosis.txt` and master plan §4.2.
-Z_SCORE_THRESHOLD = 3.0
+# Z=3.0 was the original choice — 8-year backtest revealed |Z| 2.0–3.0
+# was the worst-performing entry bucket; |Z|≥3.0 is profitable on its
+# own (PF 1.37). See `backtests/reversion_diagnosis.txt` and master
+# plan §4.2.
+#
+# Relaxed to 2.5 on 2026-05-15: with the combined filter (|Z|≥3.0 +
+# HIGH earnings-quality) the 2018-2023 sweep produced 2 trades — too
+# sparse to validate statistically. 2.5 expands the candidate set while
+# staying above the worst-performing 2.0-3.0 raw bucket. The PF=1.37
+# baseline assumed the raw signal; combined with the EQ + universe-tier
+# filters added since, 2.5 is the minimal relaxation that should yield
+# enough trades for the credibility gate to evaluate.
+Z_SCORE_THRESHOLD = 2.5
 RSI_OVERSOLD = 25.0
 RSI_OVERBOUGHT = 75.0
 
