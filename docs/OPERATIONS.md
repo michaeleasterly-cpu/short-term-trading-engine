@@ -217,7 +217,11 @@ A future `--update-weekly` flag is reserved for any explicitly-weekly work heavi
 
 ### Interpreting Results
 
-- The dashboard `--check` output now includes 16 probes (added 2026-05-14): `missed_data_operations` (warns when no `ops` STARTUP event in 30h — catches launchd misfires) and `supabase_backup` (probes `pg_stat_archiver.last_archived_time`; warns at 26h staleness; fails soft if the role lacks system-view access).
+- The dashboard `--check` output now includes 18 probes (expanded 2026-05-14):
+  - `missed_data_operations` — warns when no `ops` STARTUP event in 30h (launchd misfire watchdog).
+  - `supabase_backup` — probes `pg_stat_archiver.last_archived_time`; warns at 26h staleness; fails soft if the role lacks system-view access.
+  - `disk_space` — warns when free disk on the repo's filesystem drops below 5 GB (audit-fix D6-1, 2026-05-14).
+  - `trade_monitor_heartbeat` — warns when no `trade_monitor` event in `application_log` for 60+ min (catches silent WebSocket disconnects; audit-fix D6-2).
 - `python scripts/ops.py --check --pretty` displays the health report seen during daily operation (terminal-friendly).
 - `python scripts/ops.py --check` returns JSON on stdout, suitable for scripting and grep-by-key.
 - `python scripts/ops.py --update --dry-run` logs every stage to `platform.application_log` without performing any data writes — useful before letting a new credential or schema change touch the live tables.

@@ -1735,6 +1735,76 @@ async def _check_supabase_backup(pool: asyncpg.Pool) -> dict[str, Any]:
     }
 
 
+DISK_SPACE_MIN_FREE_GB = 5.0
+
+
+async def _check_disk_space(pool: asyncpg.Pool) -> dict[str, Any]:
+    """Local disk space probe — warns when the repo's filesystem dips
+    below ``DISK_SPACE_MIN_FREE_GB``. Catches the operator-forgot-to-
+    prune scenario where CSV backfills + log retention silently fill
+    the disk. Closes audit gap D6-1.
+
+    Read-only — uses ``shutil.disk_usage`` on the repo root. The pool
+    parameter is unused but kept for the ``_CHECK_FNS`` signature
+    contract.
+    """
+    import shutil
+    from pathlib import Path
+
+    del pool  # unused; signature contract only
+    repo_root = Path(__file__).resolve().parent.parent
+    usage = shutil.disk_usage(repo_root)
+    free_gb = usage.free / (1024 ** 3)
+    total_gb = usage.total / (1024 ** 3)
+    used_pct = 1.0 - (usage.free / usage.total)
+    return {
+        "ok": free_gb >= DISK_SPACE_MIN_FREE_GB,
+        "free_gb": round(free_gb, 2),
+        "total_gb": round(total_gb, 2),
+        "used_pct": round(used_pct, 3),
+        "threshold_gb": DISK_SPACE_MIN_FREE_GB,
+    }
+
+
+TRADE_MONITOR_HEARTBEAT_MAX_MINUTES = 60.0
+
+
+async def _check_trade_monitor_heartbeat(pool: asyncpg.Pool) -> dict[str, Any]:
+    """Trade-monitor liveness probe — warns when the persistent daemon
+    hasn't written an ``application_log`` event in the last 60 minutes.
+
+    The trade_monitor logs STARTUP on launch and emits per-fill events
+    during regular sessions. A silent WebSocket disconnect would stop
+    the per-fill events; this probe surfaces that condition without
+    waiting for the next reconcile attempt. Closes audit gap D6-2.
+
+    Threshold rationale: trade_monitor emits at least heartbeat-style
+    events through its WebSocket polling loop; even outside market
+    hours it logs reconciliation activity. 60 minutes of complete
+    silence is anomalous.
+    """
+    latest = await pool.fetchval(
+        """
+        SELECT MAX(recorded_at)
+        FROM platform.application_log
+        WHERE engine = 'trade_monitor'
+        """
+    )
+    if latest is None:
+        return {
+            "ok": False,
+            "latest_event": None,
+            "reason": "no trade_monitor events on record",
+        }
+    age_minutes = (datetime.now(UTC) - latest).total_seconds() / 60.0
+    return {
+        "ok": age_minutes <= TRADE_MONITOR_HEARTBEAT_MAX_MINUTES,
+        "latest_event": latest.isoformat(),
+        "age_minutes": round(age_minutes, 2),
+        "threshold_minutes": TRADE_MONITOR_HEARTBEAT_MAX_MINUTES,
+    }
+
+
 async def _check_recent_errors(pool: asyncpg.Pool) -> dict[str, Any]:
     rows = await pool.fetch(
         """
@@ -1775,6 +1845,8 @@ _CHECK_FNS = [
     ("risk_governor", _check_risk_governor),
     ("missed_data_operations", _check_missed_data_operations),
     ("supabase_backup", _check_supabase_backup),
+    ("disk_space", _check_disk_space),
+    ("trade_monitor_heartbeat", _check_trade_monitor_heartbeat),
     ("recent_errors", _check_recent_errors),
 ]
 

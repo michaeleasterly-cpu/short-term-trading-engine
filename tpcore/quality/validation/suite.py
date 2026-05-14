@@ -57,6 +57,25 @@ from .sources.constituents import ConstituentSource, FixtureConstituentSource
 from .sources.delistings import DelistingsSource, FixtureDelistingsSource
 from .sources.splits import FixtureSplitsSource, SplitsSource
 
+# Single source of truth for "what checks are in the suite right now."
+# `capital_gate.assert_passed` reads from this so any new check added
+# below is automatically expected in the completeness gate. Audit-fix
+# D3-1 (2026-05-14): replaces a hardcoded 3-name set that had drifted
+# stale as the suite grew from 3 → 10 checks.
+KNOWN_CHECK_NAMES: tuple[str, ...] = (
+    DELISTINGS_NAME,
+    CONSTITUENT_NAME,
+    SPLITS_NAME,
+    ROW_INTEGRITY_NAME,
+    FUND_INTEGRITY_NAME,
+    CA_INTEGRITY_NAME,
+    CATALYST_FRESHNESS_NAME,
+    SEC_FRESHNESS_NAME,
+    LIQUIDITY_FRESHNESS_NAME,
+    CLASSIFICATIONS_NAME,
+)
+
+
 if TYPE_CHECKING:  # pragma: no cover
     import asyncpg
 

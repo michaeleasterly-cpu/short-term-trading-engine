@@ -274,6 +274,7 @@ schedule:  sec_filings stage in _STAGE_SPECS; skip-if-6-days idempotent
 | `--update` stage count | **12** (was 10): added `tier_refresh` + `classify_tickers` |
 | `--check` row count | **15** (was 11): added `fundamentals_freshness`, `catalyst_freshness`, `liquidity_tiers_freshness`, `ticker_classifications` |
 | Live-data PENDING items | (a) **SEC backfill** — one-time operator command `python scripts/ops.py --stage sec_filings --backfill` (7-year history pull, multi-hour wall time, self-verifies via `ops.stage.sec_filings.done` event). (b) `tier_refresh` and (c) `classify_tickers` — both wired into `ops.py --update`; fire automatically on their next scheduled cadence (90d / 30d). No operator action required for (b) and (c). |
+| Integrated platform audit (2026-05-14) | All adapter pipelines pass static + chaos verification. Three closed findings: **D3-1** capital_gate `EXPECTED_SOURCES` now derives from suite `KNOWN_CHECK_NAMES` (any check added is automatically required); **D6-1** `disk_space` probe added (warns < 5 GB free); **D6-2** `trade_monitor_heartbeat` probe added (warns when no event in 60 min). Two LOW findings accepted as documentation-only: SEC-backfill-vs-allocator concurrency (disjoint tables), `SKIP_ENGINES=1` opt-out (operator intent). Chaos scenarios passed: daemon kill (KeepAlive recovery <4s), launchd unload/reload (clean), database unavailability (clean FAILED stage + macOS notification), stage timeout (caught + retried). |
 
 ## Adding a new adapter — workflow
 

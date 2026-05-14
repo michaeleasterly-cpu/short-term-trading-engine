@@ -8,9 +8,14 @@ fail.
 
 The lookup is intentionally narrow: query the most recent timestamp for
 any ``validation.%`` source, then collect every row sharing that
-timestamp (the suite writes the three sources with one shared
-``started_at``). If fewer than the three expected sources are present at
-that timestamp, the run was partial and is treated as a failure.
+timestamp (the suite writes every source with one shared ``started_at``).
+If any expected source is missing at that timestamp, the run was partial
+and is treated as a failure.
+
+``EXPECTED_SOURCES`` derives from :data:`tpcore.quality.validation.suite.KNOWN_CHECK_NAMES`
+so adding a check to the suite automatically makes it required here.
+Audit-fix D3-1 (2026-05-14): replaces a hardcoded 3-name set that had
+drifted as the suite grew from 3 → 10 checks.
 """
 from __future__ import annotations
 
@@ -19,14 +24,14 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from .suite import KNOWN_CHECK_NAMES
+
 if TYPE_CHECKING:  # pragma: no cover
     import asyncpg
 
 logger = structlog.get_logger(__name__)
 
-EXPECTED_SOURCES = frozenset(
-    {"validation.delistings", "validation.constituent", "validation.splits"}
-)
+EXPECTED_SOURCES = frozenset(f"validation.{name}" for name in KNOWN_CHECK_NAMES)
 
 
 class ValidationStaleError(RuntimeError):

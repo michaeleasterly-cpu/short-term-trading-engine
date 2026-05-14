@@ -48,10 +48,15 @@ class _CM:
 
 
 def _validation_passing() -> list[dict[str, Any]]:
+    """All 10 expected validation sources present + clean. D3-1 (2026-05-14)
+    expanded capital_gate.EXPECTED_SOURCES to derive from
+    suite.KNOWN_CHECK_NAMES, so the fixture must produce all 10."""
+    from tpcore.quality.validation.suite import KNOWN_CHECK_NAMES
+
     ts = datetime.now(UTC) - timedelta(days=1)
     return [
-        {"source": s, "timestamp": ts, "stale": False}
-        for s in ("validation.delistings", "validation.constituent", "validation.splits")
+        {"source": f"validation.{name}", "timestamp": ts, "stale": False}
+        for name in KNOWN_CHECK_NAMES
     ]
 
 

@@ -44,10 +44,15 @@ def _row(source: str, ts: datetime, stale: bool) -> dict[str, Any]:
 
 
 def _all_three(ts: datetime, stale: bool = False) -> list[dict[str, Any]]:
+    """Returns all 10 expected sources at the same timestamp.
+
+    Function name is historical (was 3 sources pre-2026-05-14) — kept to
+    minimize test churn after D3-1 expanded EXPECTED_SOURCES to derive
+    from suite.KNOWN_CHECK_NAMES.
+    """
+    from tpcore.quality.validation.suite import KNOWN_CHECK_NAMES
     return [
-        _row("validation.delistings", ts, stale),
-        _row("validation.constituent", ts, stale),
-        _row("validation.splits", ts, stale),
+        _row(f"validation.{name}", ts, stale) for name in KNOWN_CHECK_NAMES
     ]
 
 
@@ -86,12 +91,13 @@ async def test_assert_passed_raises_stale_when_run_older_than_max_age() -> None:
 
 
 async def test_assert_passed_raises_failed_when_one_check_stale() -> None:
+    """All 10 sources present, but one is marked stale → ValidationFailedError."""
     ts = datetime.now(UTC) - timedelta(days=1)
-    rows = [
-        _row("validation.delistings", ts, stale=False),
-        _row("validation.constituent", ts, stale=True),  # this one failed
-        _row("validation.splits", ts, stale=False),
-    ]
+    rows = _all_three(ts, stale=False)
+    # Mutate one row to be stale (post-2026-05-14 D3-1: pick any of the 10).
+    for r in rows:
+        if r["source"] == "validation.constituent":
+            r["stale"] = True
     pool = _DQLogFakePool(rows)
     with pytest.raises(ValidationFailedError) as excinfo:
         await assert_passed(pool)
@@ -99,13 +105,9 @@ async def test_assert_passed_raises_failed_when_one_check_stale() -> None:
 
 
 async def test_assert_passed_raises_failed_when_a_source_missing_from_latest_run() -> None:
-    """Latest timestamp has only 2 of 3 sources — treated as failure."""
+    """Latest timestamp is missing at least one of the 10 expected sources → failure."""
     ts = datetime.now(UTC) - timedelta(days=1)
-    rows = [
-        _row("validation.delistings", ts, stale=False),
-        _row("validation.constituent", ts, stale=False),
-        # no splits row
-    ]
+    rows = [r for r in _all_three(ts, stale=False) if r["source"] != "validation.splits"]
     pool = _DQLogFakePool(rows)
     with pytest.raises(ValidationFailedError):
         await assert_passed(pool)
