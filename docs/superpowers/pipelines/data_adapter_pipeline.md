@@ -75,20 +75,40 @@ The 2026-05-14 audit closed the highest-leverage gaps (centralized `@with_retry`
 
 ## Compliance matrix
 
-Updated as part of every adapter PR. Each row: which stages are wired and which are exceptions.
+Audited 2026-05-14 against the live codebase. Each row: which stages are wired and which are exceptions. Updated as part of every adapter PR.
 
-| Adapter | Ingest | Test | Validate | Dashboard | Schedule | Exceptions |
+| Adapter | Ingest | Test | Validate | Dashboard | Schedule | Notes |
 |---|---|---|---|---|---|---|
-| `handle_daily_bars` | ✅ | ✅ | ✅ (`row_integrity`, `delistings`, `constituent`, `splits`) | ✅ (`data_freshness`, `row_counts`) | ✅ (`daily_bars` stage; idempotent — upsert on PK) | none |
-| `handle_corporate_actions` | ✅ | ✅ | ✅ (`corporate_actions_integrity`) | ✅ (`corporate_actions_freshness`) | ✅ (`corporate_actions` stage; idempotent — `ON CONFLICT DO NOTHING`) | none |
-| `handle_fundamentals_refresh` | ✅ | ✅ | ✅ (`fundamentals_integrity`) | ✅ (`row_counts`) | ✅ (`fundamentals_refresh` stage; skip-if-refreshed-within-24h) | Dashboard row is generic `row_counts` not a per-source freshness probe — follow-up. |
-| `handle_catalyst_refresh` | ✅ | ✅ | ✅ (`catalyst_events_freshness`) | ⚠️ (covered by `validation_suite` row, no dedicated probe) | ✅ (`catalyst_refresh` stage; skip-if-refreshed-within-6-days) | Dedicated dashboard probe (`catalyst_freshness`) is a follow-up. |
-| `handle_data_validation` | n/a (it *is* the validate stage) | ✅ | n/a | ✅ (`validation_suite`) | ✅ (`data_validation` stage) | "Ingest" doesn't apply — orchestrates other validation checks. |
-| `assign_liquidity_tiers` | ✅ (writes `platform.liquidity_tiers`) | ⚠️ (limited test coverage) | ❌ (no `liquidity_tiers_freshness` check) | ❌ (no dedicated row) | ⚠️ (manual via `scripts/run_tier_refresh.sh`; no `ops.py` stage) | Dedicated validate + dashboard + scheduled stage are open follow-ups. Tier assignments drift slowly so manual-quarterly is acceptable interim; needs explicit cadence guard. |
-| `classify_tickers` | ✅ (writes `platform.ticker_classifications`) | ⚠️ (limited test coverage) | ❌ (no `ticker_classifications_freshness` check) | ❌ (no dedicated row) | ⚠️ (manual via `python scripts/classify_tickers.py`; no `ops.py` stage) | Near-static taxonomy; manual-on-universe-expansion accepted. Validate + dashboard rows are open follow-ups. |
-| `sec_edgar` (Phase 2, 2026-05-14) | ✅ | ✅ | ✅ (`sec_filings_freshness`) | ✅ (`sec_filings_freshness` row) | ✅ (`sec_filings` stage; skip-if-refreshed-within-6-days) | none — reference implementation |
+| `handle_daily_bars` | ✅ `@with_retry` on `fetch_daily_bars_multi`; structured success log with `rows_upserted`, `failed_batches`, `symbols_passed_coarse` | ✅ `test_ingest_physical_truth.py` covers OHLC + delistings paths | ✅ `row_integrity`, `delistings`, `constituent`, `splits` | ✅ `data_freshness`, `row_counts` | ✅ `daily_bars` stage; idempotent — upsert on `(ticker, date)` PK | Reference-grade. The `all_active` discovery sweep batches 50 symbols at 0.3s sleep — well-budgeted under Alpaca's free-tier rate cap. |
+| `handle_corporate_actions` | ✅ `@with_retry` on `fetch_corporate_actions` (fixed the 2026-05-12 Sunday-cron 429); structured success log with `actions_ingested`, `splits_applied`, `splits_skipped` | ✅ `test_ingest_corporate_actions.py` — 18 tests including retry-on-429 + no-retry-on-403 | ✅ `corporate_actions_integrity` | ✅ `corporate_actions_freshness` (dedicated `_check_corp_actions_freshness`) | ✅ `corporate_actions` stage; idempotent `ON CONFLICT DO NOTHING` | Reference-grade. |
+| `handle_fundamentals_refresh` | ✅ `@with_retry` on FMP `_fetch_raw` (replaced `tenacity.AsyncRetrying`); structured success log with `rows`, `no_data`, `failures` | ✅ `test_fmp_adapter.py` — includes retry-on-429 + no-retry-on-403 | ✅ `fundamentals_integrity` | ⚠️ generic `row_counts`; no dedicated `_check_fundamentals_freshness` probe | ✅ `fundamentals_refresh` stage; skip-if-refreshed-within-24h | **Follow-up F-1:** dedicated freshness probe so the dashboard surfaces stale fundamentals without operator drilling into the validation-suite output. |
+| `handle_catalyst_refresh` | ✅ structured success log; reads FMP earnings-history (uses FMP adapter's `@with_retry`) | ⚠️ no direct handler unit test — `backfill_catalyst_events.amain` covered indirectly via `test_fmp_adapter.py` paths; no dedicated coverage of the skip-guard branch | ✅ `catalyst_events_freshness` (registered in `run_suite`) | ⚠️ covered by `validation_suite` aggregate row; no dedicated `_check_catalyst_freshness` probe | ✅ `catalyst_refresh` stage; skip-if-refreshed-within-6-days; writes `last_run_at` to `ingestion_jobs` | **Follow-up C-1:** add `tpcore/tests/test_handle_catalyst_refresh.py` exercising the skip-guard. **C-2:** add a dedicated `_check_catalyst_freshness` row in ops dashboard. |
+| `handle_data_validation` | n/a (orchestrator, not an ingest) | ✅ `test_suite.py` + `test_suite_e2e.py` (FakePool-backed) | n/a (orchestrates the 8 checks) | ✅ `validation_suite` | ✅ `data_validation` stage | Exception is structural — this adapter's "ingest" is running the other adapters' validate checks. |
+| `assign_liquidity_tiers` | ✅ writes `platform.liquidity_tiers` from `spread_observations`; structured logs | ❌ no `test_assign_liquidity_tiers.py` | ❌ no `liquidity_tiers_freshness` check | ❌ no dedicated `_check_liquidity_tiers_freshness` row | ⚠️ manual via `scripts/run_tier_refresh.sh`; no `ops.py` stage | **Follow-ups L-1..L-4:** test, validate, dashboard, schedule. Quarterly cadence is fine — but needs an explicit `liquidity_tiers_freshness` check (e.g., warn if `MAX(last_updated) > 100 days ago`) so the dashboard catches operator inaction. Cross-table audit (`scripts/run_audit_all_tables.sh`) already catches stale-30d as a side effect — that's the interim guard. |
+| `classify_tickers` | ✅ writes `platform.ticker_classifications` from Alpaca `/v2/assets` + name-pattern classifier; structured logs | ⚠️ `test_classify_tickers.py` covers the *classifier logic* (Apple→stock, iShares→ETF, inverse detection) but not the full handler / Alpaca-fetch path | ❌ no `ticker_classifications_freshness` check | ❌ no dedicated row | ⚠️ manual via `python scripts/classify_tickers.py`; no `ops.py` stage | **Follow-ups T-1..T-4:** test handler path, validate, dashboard, schedule. Asset-class taxonomy is near-static — accept manual-on-universe-expansion as the interim cadence, but add an explicit dashboard row warning if `(SELECT COUNT(*) FROM platform.prices_daily WHERE ticker NOT IN (SELECT ticker FROM platform.ticker_classifications)) > 100`. |
+| `sec_edgar` (Phase 2, 2026-05-14, **reference implementation**) | ✅ `@with_retry` on both `_fetch_raw` paths; CSV-first sub-protocol (download → validate-at-CSV → load → compress); structured success log with `rows_downloaded`, `rows_rejected_at_csv_layer`, `rows_loaded`, `insider_loaded`, `material_loaded`, `tickers_with_filings`, `date_range`, `csv_artifact` paths | ✅ `test_sec_adapter.py` — 9 tests (happy path / empty / 429 retry / 403 no-retry / malformed XML / BUY-SELL extraction / idempotency / 8-K item parsing / missing-UA fail-fast) | ✅ `sec_filings_freshness` (8th check in `run_suite`) | ✅ `_check_sec_filings_freshness` (dedicated row in `_CHECK_FNS`) | ✅ `sec_filings` stage in `_STAGE_SPECS`; skip-if-refreshed-within-6-days; idempotent `ON CONFLICT DO NOTHING` on both unique keys | none — reference for all future adapters |
 
 Legend: ✅ implemented · ⚠️ partial · ❌ missing · n/a doesn't apply.
+
+### Outstanding follow-ups
+
+Tracked here as the post-audit punch list. Each item gates that adapter's row from going fully ✅ in a future audit pass.
+
+| ID | Adapter | Gap | Acceptance |
+|---|---|---|---|
+| F-1 | `handle_fundamentals_refresh` | dedicated dashboard freshness probe | `_check_fundamentals_freshness` returns `ok=true` when `MAX(filing_date) > today - 95d` (one quarter + grace); appears as a top-level row in `--check` output |
+| C-1 | `handle_catalyst_refresh` | direct handler test (skip-guard branch) | `tpcore/tests/test_handle_catalyst_refresh.py` exercises skipped_fresh vs forced-refresh paths via a fake pool |
+| C-2 | `handle_catalyst_refresh` | dedicated dashboard probe | `_check_catalyst_freshness` row in `_CHECK_FNS`; mirrors the validation-check thresholds |
+| L-1 | `assign_liquidity_tiers` | test file | covers tier-boundary math + stale-tier detection |
+| L-2 | `assign_liquidity_tiers` | validation check | `liquidity_tiers_freshness` — fail when `MAX(last_updated) < today - 100d` |
+| L-3 | `assign_liquidity_tiers` | dashboard row | `_check_liquidity_tiers_freshness` |
+| L-4 | `assign_liquidity_tiers` | ops.py stage (quarterly cadence) | `tier_refresh` stage with skip-if-refreshed-within-90d guard |
+| T-1 | `classify_tickers` | handler-path test | covers Alpaca-fetch happy path + name-pattern fallback for unseen tickers |
+| T-2 | `classify_tickers` | validation check | `ticker_classifications_coverage` — fail when > 100 prices_daily tickers lack a classification |
+| T-3 | `classify_tickers` | dashboard row | `_check_ticker_classifications_coverage` |
+| T-4 | `classify_tickers` | ops.py stage (universe-expansion trigger) | `classify_tickers_refresh` stage; idempotent; skip-if-no-new-tickers guard |
+
+None of these gaps block any current engine — the existing cross-table audit (`scripts/run_audit_all_tables.sh`) catches the worst symptoms (stale tiers, orphan tickers) as defense in depth. The follow-ups close the gaps proactively so the dashboard surfaces problems before they cascade.
 
 ## Adding a new adapter — workflow
 
