@@ -14,7 +14,7 @@ import asyncio
 import os
 import time
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from datetime import date as date_t
 from decimal import Decimal
 from typing import Any
@@ -160,16 +160,37 @@ class ReversionScheduler:
                 )
                 return RunSummary(as_of=as_of, n_candidates=0, n_submitted=0, aars=[])
 
-            universe = tuple(await data.get_universe_symbols())
+            # Universe: T1+T2 only — matches the credibility backtest
+            # AND keeps the batched-bars fetch under Supabase's
+            # statement timeout. Same fix as sigma + vector.
+            universe = tuple(await data.get_universe_by_liquidity_tier(max_tier=2))
             logger.info(
                 "reversion.scheduler.run_start",
                 as_of=as_of.isoformat(),
                 allow_shorts=self._allow_shorts,
                 persistent=pool is not None,
                 universe_size=len(universe),
+                source="liquidity_tiers<=2",
             )
 
-            setup = ReversionSetupDetection(data=data, universe=universe)
+            # Pre-fetch bars for the universe in one batched SQL —
+            # plug runs over in-memory data via PrefetchedBarsAdapter
+            # instead of N round-trips (which took ~8 min on
+            # all_active 2026-05-14 and got killed).
+            from tpcore.data.batched_fetchers import (
+                PrefetchedBarsAdapter,
+                fetch_bars_batch,
+            )
+
+            bars_start = as_of - timedelta(days=120)
+            bars_by_ticker = await fetch_bars_batch(
+                pool, universe, bars_start, as_of,
+            )
+            batched_data = PrefetchedBarsAdapter(
+                bars_by_ticker, fallback=data,
+            )
+
+            setup = ReversionSetupDetection(data=batched_data, universe=universe)
             lifecycle = ReversionLifecycleAnalysis()
             execution = ReversionExecutionRisk()
             rev_aar = ReversionAARLogging()

@@ -235,7 +235,82 @@ async def fetch_fundamentals_batch(
     return out
 
 
+# ────────────────────────────────────────────────────────────────────────
+# PrefetchedBarsAdapter — drop-in for engine plugs that expect a
+# ``get_daily_bars`` interface but want one batched read upfront.
+# ────────────────────────────────────────────────────────────────────────
+
+
+class PrefetchedBarsAdapter:
+    """Wraps a pre-fetched ``{ticker: [bar_dict]}`` dict + exposes the
+    same async ``get_daily_bars(symbol, start, end, as_of)`` interface
+    the postgres adapter uses.
+
+    The engine plugs (sigma + reversion set up_detection) loop per
+    ticker and call ``await self._data.get_daily_bars(...)``. Without
+    pre-fetching that's 7,695 round-trips per scan. With this adapter:
+    the scheduler does ONE ``fetch_bars_batch`` call, wraps the result,
+    and the plug runs over in-memory data.
+
+    If a fallback ``data_adapter`` is provided, tickers not in the
+    pre-fetched dict fall through to it — useful for SPY / VIX-proxy
+    lookups that the scheduler didn't include in the batch.
+    """
+
+    def __init__(
+        self,
+        bars_by_ticker: dict[str, list[dict]],
+        *,
+        fallback: Any | None = None,
+    ) -> None:
+        self._bars = bars_by_ticker
+        self._fallback = fallback
+
+    async def get_daily_bars(
+        self,
+        symbol: str,
+        start: date,
+        end: date | None = None,
+        as_of: date | None = None,
+    ):
+        """Return Bars filtered by [start, min(end, as_of)] inclusive."""
+        # Import here to avoid a hard module-import dep on pydantic at
+        # this file's load time.
+        from datetime import UTC
+        from datetime import datetime as _dt
+
+        from tpcore.interfaces.data import Bar
+
+        raw = self._bars.get(symbol)
+        if raw is None and self._fallback is not None:
+            return await self._fallback.get_daily_bars(symbol, start, end, as_of)
+        if raw is None:
+            return []
+        upper = end if end is not None else None
+        if as_of is not None and (upper is None or as_of < upper):
+            upper = as_of
+        out: list[Bar] = []
+        for b in raw:
+            d = b["date"]
+            if d < start:
+                continue
+            if upper is not None and d > upper:
+                continue
+            out.append(Bar(
+                symbol=symbol,
+                ts=_dt.combine(d, _dt.min.time()).replace(tzinfo=UTC),
+                open=Decimal(str(b["open"])),
+                high=Decimal(str(b["high"])),
+                low=Decimal(str(b["low"])),
+                close=Decimal(str(b["close"])),
+                volume=int(b["volume"]),
+                adjusted_close=Decimal(str(b["close"])),
+            ))
+        return out
+
+
 __all__ = [
+    "PrefetchedBarsAdapter",
     "fetch_bars_batch",
     "fetch_fundamentals_batch",
     "with_supabase_recovery",

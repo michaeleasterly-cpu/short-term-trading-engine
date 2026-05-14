@@ -28,7 +28,7 @@ import asyncio
 import os
 import time
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from datetime import date as date_t
 from decimal import Decimal
 from typing import Any
@@ -187,12 +187,36 @@ class SigmaScheduler:
                 )
                 return RunSummary(as_of=as_of, n_candidates=0, n_submitted=0, aars=[])
 
-            universe = tuple(await data.get_universe_symbols())
+            # Universe: T1+T2 only (~1,274 tickers) to match the
+            # credibility backtest scope AND keep the batched fetch
+            # well under Supabase's statement timeout. The old
+            # all_active universe (~7,695) ran the per-ticker
+            # ``get_daily_bars`` loop for 8+ minutes — the operator
+            # killed it on 2026-05-14. Universal fix lives in
+            # ``tpcore/data/batched_fetchers.py``.
+            universe = tuple(await data.get_universe_by_liquidity_tier(max_tier=2))
             logger.info(
                 "sigma.scheduler.run_start",
                 as_of=as_of.isoformat(),
                 persistent=pool is not None,
                 universe_size=len(universe),
+                source="liquidity_tiers<=2",
+            )
+
+            # Pre-fetch bars for the WHOLE universe in one batched
+            # SQL — ``setup.scan()`` then runs over in-memory data
+            # via PrefetchedBarsAdapter instead of N round-trips.
+            from tpcore.data.batched_fetchers import (
+                PrefetchedBarsAdapter,
+                fetch_bars_batch,
+            )
+
+            bars_start = as_of - timedelta(days=120)  # ~85 sessions
+            bars_by_ticker = await fetch_bars_batch(
+                pool, universe, bars_start, as_of,
+            )
+            batched_data = PrefetchedBarsAdapter(
+                bars_by_ticker, fallback=data,
             )
 
             # Optional fundamentals cache for informational data-quality
@@ -202,7 +226,7 @@ class SigmaScheduler:
                 self._build_fundamentals_provider(pool)
             )
 
-            setup = SigmaSetupDetection(data=data, universe=universe, fundamentals=fundamentals_provider)
+            setup = SigmaSetupDetection(data=batched_data, universe=universe, fundamentals=fundamentals_provider)
             lifecycle = SigmaLifecycleAnalysis()
             execution = SigmaExecutionRisk()
             sigma_aar = SigmaAARLogging()
