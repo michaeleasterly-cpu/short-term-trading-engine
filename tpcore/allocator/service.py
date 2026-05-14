@@ -29,6 +29,7 @@ Key design choices (per 2026-05-13 expert review):
 from __future__ import annotations
 
 import statistics
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -38,6 +39,12 @@ import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
 from tpcore.aar import AARReader
+from tpcore.indicators.chop import (
+    CHOP_SIDEWAYS_STRONG,
+    CHOP_SIDEWAYS_WEAK,
+    compute_chop,
+)
+from tpcore.logging.db_handler import DBLogHandler
 
 if TYPE_CHECKING:  # pragma: no cover
     import asyncpg
@@ -57,6 +64,17 @@ SOFT_FREEZE_DD = Decimal("0.15")   # 15% drawdown → soft freeze
 SOFT_FREEZE_RECOVERY_DD = Decimal("0.075")  # lift when DD ≤ 7.5%
 HARD_FREEZE_DD = Decimal("0.25")   # 25% drawdown → hard freeze
 HARD_FREEZE_SOFT_SESSIONS = 30     # ≥ 30 sessions in soft state → hard
+
+# ── Rebalance gating (audit items 44 + 45, added 2026-05-14) ──────────
+# Soft band: drift between SOFT and HARD only triggers a rebalance when
+# the market regime is favorable (not transitional). Below SOFT: skip
+# (changes too small to justify the round-trip cost). Above HARD:
+# force-rebalance regardless of regime.
+SOFT_BAND_DRIFT_PCT = Decimal("0.25")  # 25%
+HARD_BAND_DRIFT_PCT = Decimal("0.50")  # 50%
+# How many trailing SPY sessions to compute CHOP on. 60 matches
+# VOL_LOOKBACK_SESSIONS for symmetry and is comfortably > CHOP_PERIOD=14.
+REGIME_CHOP_LOOKBACK_SESSIONS = 60
 
 
 class AllocationDecision(BaseModel):
@@ -114,17 +132,72 @@ class AllocatorService:
         platform_capital: Decimal = Decimal("40000"),
         enforce_freeze: bool = False,
         as_of: date | None = None,
+        run_id: uuid.UUID | None = None,
     ) -> None:
         self._pool = pool
         self._engines = engines
         self._platform_capital = platform_capital
         self._enforce_freeze = enforce_freeze
         self._as_of = as_of or datetime.now(UTC).date()
+        self._run_id = run_id or uuid.uuid4()
+        # DBLogHandler requires a real pool; existing tests that exercise
+        # _decide() in isolation pass pool=None. Lazy-init lets those
+        # tests keep working without forcing every caller to provide a
+        # DB. run_once() needs a real pool anyway.
+        self._db_log: DBLogHandler | None = (
+            DBLogHandler(pool, engine="allocator", run_id=self._run_id)
+            if pool is not None else None
+        )
 
     async def run_once(self) -> list[AllocationDecision]:
         histories = await self._load_histories()
         decisions = self._decide(histories)
-        await self._persist(decisions)
+
+        # ── Rebalance gating — items 44 + 45 (2026-05-14) ───────────────
+        # 1. Compute drift per active engine (frozen engines bypass).
+        max_drift, drift_per_engine = await self._compute_drift(decisions)
+        # 2. Fetch SPY-based market regime.
+        regime, chop_value = await self._fetch_market_regime()
+        # 3. Classify rebalance decision.
+        skip_reason, rebalance_reason = self._classify_rebalance(max_drift, regime)
+        # 4. Persist (always for frozen rows; conditional for active rows).
+        if skip_reason is not None:
+            await self._persist(decisions, active_skip=True)
+            if self._db_log is not None:
+                await self._db_log.log(
+                event_type="ALLOCATOR_SKIPPED",
+                message=f"rebalance skipped — {skip_reason}",
+                severity="INFO",
+                data={
+                    "as_of": self._as_of.isoformat(),
+                    "reason": skip_reason,
+                    "max_drift_pct": float(max_drift),
+                    "drift_per_engine": {k: float(v) for k, v in drift_per_engine.items()},
+                    "regime": regime,
+                    "chop_value": float(chop_value) if chop_value is not None else None,
+                    "frozen_engines_persisted": [
+                        d.engine for d in decisions if d.freeze_state != "active"
+                    ],
+                },
+            )
+        else:
+            await self._persist(decisions, active_skip=False)
+            if self._db_log is not None:
+                await self._db_log.log(
+                event_type="ALLOCATOR_REBALANCED",
+                message=f"rebalanced — {rebalance_reason}",
+                severity="INFO",
+                data={
+                    "as_of": self._as_of.isoformat(),
+                    "reason": rebalance_reason,
+                    "max_drift_pct": float(max_drift),
+                    "drift_per_engine": {k: float(v) for k, v in drift_per_engine.items()},
+                    "regime": regime,
+                    "chop_value": float(chop_value) if chop_value is not None else None,
+                    "new_weights": {d.engine: float(d.weight) for d in decisions},
+                },
+            )
+
         logger.info(
             "tpcore.allocator.rebalance",
             as_of=self._as_of.isoformat(),
@@ -132,8 +205,112 @@ class AllocatorService:
             decisions={d.engine: str(d.allocated_capital) for d in decisions},
             frozen=[d.engine for d in decisions if d.freeze_state != "active"],
             enforce_freeze=self._enforce_freeze,
+            max_drift_pct=float(max_drift),
+            regime=regime,
+            skipped=skip_reason is not None,
+            decision_reason=skip_reason or rebalance_reason,
         )
         return decisions
+
+    # ── Rebalance-gating helpers (items 44 + 45) ────────────────────────
+
+    async def _fetch_market_regime(self) -> tuple[str, float | None]:
+        """Query SPY bars + classify CHOP regime.
+
+        Returns ``(regime, chop_value)`` where regime is one of
+        ``trending`` / ``transitional`` / ``choppy``. If SPY data is
+        missing or CHOP can't be computed (insufficient lookback),
+        defaults to ``trending`` — that's the most permissive regime
+        and ensures the gate doesn't silently block rebalances when
+        the data layer has a temporary issue.
+        """
+        import pandas as pd  # local import — pandas already in deps
+
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT date, high, low, close
+                FROM platform.prices_daily
+                WHERE ticker = 'SPY'
+                  AND date >= CURRENT_DATE - INTERVAL '120 days'
+                ORDER BY date
+                """
+            )
+        if not rows:
+            logger.warning("tpcore.allocator.regime.no_spy_data")
+            return ("trending", None)
+        high = pd.Series([float(r["high"]) for r in rows])
+        low = pd.Series([float(r["low"]) for r in rows])
+        close = pd.Series([float(r["close"]) for r in rows])
+        chop_series = compute_chop(high, low, close)
+        if chop_series.empty or pd.isna(chop_series.iloc[-1]):
+            logger.warning("tpcore.allocator.regime.chop_undefined", n_rows=len(rows))
+            return ("trending", None)
+        chop_now = float(chop_series.iloc[-1])
+        if chop_now > CHOP_SIDEWAYS_STRONG:
+            return ("choppy", chop_now)
+        if chop_now >= CHOP_SIDEWAYS_WEAK:
+            return ("transitional", chop_now)
+        return ("trending", chop_now)
+
+    async def _compute_drift(
+        self, decisions: list[AllocationDecision],
+    ) -> tuple[Decimal, dict[str, Decimal]]:
+        """Compare new vs. prior weights per active engine.
+
+        Returns ``(max_drift, per_engine_drift)``. Frozen engines are
+        excluded — drift gating applies to active engines only. If an
+        active engine has no prior allocation row (first run), drift
+        is 1.0 (force rebalance).
+        """
+        per_engine: dict[str, Decimal] = {}
+        max_drift = Decimal("0")
+        async with self._pool.acquire() as conn:
+            for d in decisions:
+                if d.freeze_state != "active":
+                    continue
+                prior = await conn.fetchval(
+                    """
+                    SELECT weight FROM platform.allocations
+                    WHERE engine = $1
+                    ORDER BY allocation_date DESC
+                    LIMIT 1
+                    """,
+                    d.engine,
+                )
+                if prior is None:
+                    per_engine[d.engine] = Decimal("1")  # first run → force
+                else:
+                    prior_w = Decimal(str(prior))
+                    if prior_w == 0:
+                        # Prior was frozen; any active weight is "infinite"
+                        # drift. Force rebalance.
+                        per_engine[d.engine] = Decimal("1") if d.weight > 0 else Decimal("0")
+                    else:
+                        per_engine[d.engine] = abs(d.weight - prior_w) / prior_w
+                if per_engine[d.engine] > max_drift:
+                    max_drift = per_engine[d.engine]
+        return max_drift, per_engine
+
+    @staticmethod
+    def _classify_rebalance(
+        max_drift: Decimal, regime: str,
+    ) -> tuple[str | None, str | None]:
+        """Return ``(skip_reason, rebalance_reason)`` — exactly one is None.
+
+        Decision tree (audit items 44 + 45):
+        * drift < SOFT_BAND_DRIFT_PCT          → skip (drift_below_threshold)
+        * SOFT ≤ drift < HARD AND transitional → skip (regime_transitional)
+        * SOFT ≤ drift < HARD AND not transitional → rebalance (soft_band)
+        * drift ≥ HARD_BAND_DRIFT_PCT          → rebalance (hard_band_override)
+        """
+        if max_drift < SOFT_BAND_DRIFT_PCT:
+            return ("drift_below_threshold", None)
+        if max_drift < HARD_BAND_DRIFT_PCT:
+            if regime == "transitional":
+                return ("regime_transitional", None)
+            return (None, "soft_band")
+        return (None, "hard_band_override")
 
     # ── load ────────────────────────────────────────────────────────────
     async def _load_histories(self) -> list[_EngineHistory]:
@@ -273,10 +450,25 @@ class AllocatorService:
         return {k: v.quantize(q) for k, v in weights.items()}
 
     # ── persist ─────────────────────────────────────────────────────────
-    async def _persist(self, decisions: list[AllocationDecision]) -> None:
+    async def _persist(
+        self,
+        decisions: list[AllocationDecision],
+        *,
+        active_skip: bool = False,
+    ) -> None:
+        """Persist decisions to ``platform.allocations`` + ``risk_state``.
+
+        When ``active_skip=True`` (drift/regime gate said skip), only
+        frozen-engine rows are written. Frozen-engine state changes
+        must always land so engines reading ``risk_state.engine_equity``
+        see weight=0 promptly. Active engines keep their prior rows
+        and prior ``engine_equity`` until the next rebalance fires.
+        """
         async with self._pool.acquire() as conn:
             async with conn.transaction():
                 for d in decisions:
+                    if active_skip and d.freeze_state == "active":
+                        continue
                     await conn.execute(
                         """
                         INSERT INTO platform.allocations

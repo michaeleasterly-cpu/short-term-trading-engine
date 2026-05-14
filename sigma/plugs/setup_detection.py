@@ -36,7 +36,6 @@ LOOKBACK_DAYS = 60
 ADX_PERIOD = 14
 BB_PERIOD = 20
 BB_NUM_STD = 2.0
-CHOP_PERIOD = 14
 VWAP_PERIOD = 20
 
 # Universe-filter thresholds from plan §4.1.
@@ -45,9 +44,17 @@ MIN_AVG_VOLUME = 1_000_000
 MAX_ADX = 20.0
 MAX_WIDTH_PCTILE = 0.30
 
-# Choppiness Index regime thresholds (Dreiss).
-CHOP_SIDEWAYS_STRONG = 61.8
-CHOP_SIDEWAYS_WEAK = 38.2
+# CHOP (Dreiss Choppiness Index) — moved to tpcore.indicators.chop on
+# 2026-05-14 so both Sigma and AllocatorService can consume the same
+# canonical implementation. Re-exported here so existing `from
+# sigma.plugs.setup_detection import CHOP_PERIOD, compute_chop,
+# CHOP_SIDEWAYS_*` call sites keep working unchanged.
+from tpcore.indicators.chop import (  # noqa: E402, F401
+    CHOP_PERIOD,
+    CHOP_SIDEWAYS_STRONG,
+    CHOP_SIDEWAYS_WEAK,
+    compute_chop,
+)
 
 # How close to VWAP_20 the candidate must be for the neutrality bonus.
 VWAP_NEUTRALITY_PCT = 0.01  # ±1%
@@ -142,35 +149,6 @@ def _volume_trend(df: pd.DataFrame, fast: int = 5, slow: int = 20) -> float:
     if slow_avg <= 0:
         return 1.0
     return float(fast_avg / slow_avg)
-
-
-def compute_chop(
-    high: pd.Series,
-    low: pd.Series,
-    close: pd.Series,
-    period: int = CHOP_PERIOD,
-) -> pd.Series:
-    """Choppiness Index (Dreiss).
-
-    ``CHOP = 100 * log10(SUM(ATR(1), n) / (MaxHi(n) - MinLo(n))) / log10(n)``
-
-    Output bounded in roughly ``[0, 100]``. Above 61.8 → sideways chop;
-    below 38.2 → trending; between → transitional. Returns ``NaN`` for
-    bars with insufficient lookback.
-    """
-    prev_close = close.shift(1)
-    tr = pd.concat(
-        [(high - low).abs(), (high - prev_close).abs(), (low - prev_close).abs()],
-        axis=1,
-    ).max(axis=1)
-    sum_atr = tr.rolling(period, min_periods=period).sum()
-    max_high = high.rolling(period, min_periods=period).max()
-    min_low = low.rolling(period, min_periods=period).min()
-    denom = (max_high - min_low).replace(0, np.nan)
-    ratio = sum_atr / denom
-    # log10 of non-positive values would warn; mask them out.
-    safe_ratio = ratio.where(ratio > 0)
-    return 100.0 * np.log10(safe_ratio) / np.log10(period)
 
 
 def _rolling_vwap(close: pd.Series, volume: pd.Series, period: int = VWAP_PERIOD) -> pd.Series:

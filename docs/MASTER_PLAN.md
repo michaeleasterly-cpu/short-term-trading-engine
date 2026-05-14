@@ -131,7 +131,7 @@ All engines share the **5-Plug model:** Setup Detection → Lifecycle Analysis �
 **Mission:** Capture mean-reversion within well-defined, low-volatility price channels on a daily timeframe.
 
 **Setup Detection:**
-- Universe filter: Price > $10, avg vol > 1M, ADX(14) < 20, **per-stock CHOP(14) > 38.2**, Bollinger Band width < 30th percentile.
+- Universe filter: Price > $10, avg vol > 1M, ADX(14) < 20, **per-stock CHOP(14) > 38.2**, Bollinger Band width < 30th percentile. (CHOP implementation lives in `tpcore.indicators.chop` since 2026-05-14 — extracted from `sigma.plugs.setup_detection` so the Allocator's rebalance gating consumes the same canonical formula. `sigma.plugs.setup_detection` re-exports `compute_chop`/`CHOP_PERIOD`/`CHOP_SIDEWAYS_*` for back-compat.)
 - Score (0–100):
   - Channel Quality (0–40).
   - Entry Precision (0–35).
@@ -437,7 +437,7 @@ Full design and rationale: [`docs/superpowers/specs/2026-05-13-tip-sheet-plan.md
 
 Status as of 2026-05-14:
 
-- **Allocator** — **built + deployed** (`tpcore/allocator/`). Inverse-volatility weighting with [0.10, 0.50] caps, soft-freeze at 15% drawdown, hard-freeze at 25%. Runs Mondays 13:00 UTC via the `com.michael.trading.allocator` launchd daemon. Bootstrap mode (equal weights) until each engine has ≥20 AARs. Reads engine pnl history via `tpcore.aar.AARReader`.
+- **Allocator** — **built + deployed** (`tpcore/allocator/`). Inverse-volatility weighting with [0.10, 0.50] caps, soft-freeze at 15% drawdown, hard-freeze at 25%. Runs Mondays 13:00 UTC via the `com.michael.trading.allocator` launchd daemon. Bootstrap mode (equal weights) until each engine has ≥20 AARs. Reads engine pnl history via `tpcore.aar.AARReader`. **Rebalance gating (2026-05-14, audit items 44 + 45):** CHOP-based regime + soft/hard band drift thresholds via `tpcore.indicators.chop`. Decision tree — `drift < 25% → skip (drift_below_threshold)`; `25% ≤ drift < 50% AND CHOP transitional (38.2–61.8) → skip (regime_transitional)`; `25% ≤ drift < 50% AND CHOP favorable → rebalance (soft_band)`; `drift ≥ 50% → force rebalance (hard_band_override)`. Frozen-engine weight=0 updates always persist regardless of gate. `ALLOCATOR_REBALANCED` and `ALLOCATOR_SKIPPED` events land in `platform.application_log` for audit. CHOP indicator now lives in shared `tpcore/indicators/chop.py` (extracted from `sigma.plugs.setup_detection` so the allocator and sigma consume the same canonical implementation).
 - **Forensics** — **built + wired into data-operations** (`tpcore/forensics/`). Scans every engine's AAR history for drawdown periods (≥10% / ≥14 days), loss clusters (≥3 consecutive losers), and outlier losses (>3σ below the mean of ≥5 historical trades). Idempotent via fingerprint. On each new trigger, auto-generates a Sprint Dossier template under `docs/sprints/` so the operator has a structured postmortem to fill in. Dashboard's Health tab surfaces open triggers with a "Mark resolved" button. Runs as the final step of `scripts/run_data_operations.sh`.
 - **Settlement** — Deferred. Annual distribution (75% to operator, 25% retained). Produces Schedule D-ready tax CSV. Will be built after the first live-trading cycle completes.
 

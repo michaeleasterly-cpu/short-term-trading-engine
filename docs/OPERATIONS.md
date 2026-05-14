@@ -116,6 +116,27 @@ scripts/run_allocator.sh --platform-capital 50000  # adjust total
 * Atomicity: `allocations` row + `risk_state.engine_equity` UPDATE wrapped in one transaction.
 * Engines consume `engine_equity` automatically via `RiskStateStore.get()` — no engine-side code change.
 
+**Rebalance gating (audit items 44 + 45, 2026-05-14).** Before every persist the allocator runs a four-branch decision tree:
+
+| Condition | Action | Event logged |
+|---|---|---|
+| `max_drift < 25%` | Skip rebalance for active engines (frozen rows still persist) | `ALLOCATOR_SKIPPED` (`drift_below_threshold`) |
+| `25% ≤ drift < 50%` AND CHOP transitional (38.2–61.8) | Skip rebalance | `ALLOCATOR_SKIPPED` (`regime_transitional`) |
+| `25% ≤ drift < 50%` AND CHOP favorable | Rebalance | `ALLOCATOR_REBALANCED` (`soft_band`) |
+| `drift ≥ 50%` | Force rebalance regardless of regime | `ALLOCATOR_REBALANCED` (`hard_band_override`) |
+
+CHOP is computed from the trailing-120-day SPY series via `tpcore.indicators.chop.compute_chop` (same canonical implementation Sigma's setup_detection uses). Drift per engine = `abs(new_weight - prior_weight) / prior_weight`; max across active engines is the gate. First run (no prior allocation) → drift = 1.0 → forced rebalance. Frozen engines bypass the gate entirely so a `soft_frozen`/`hard_frozen` state change always lands.
+
+Audit the rebalance history:
+
+```sql
+SELECT recorded_at, event_type, data->>'reason' AS reason,
+       data->>'max_drift_pct' AS drift, data->>'regime' AS regime
+FROM platform.application_log
+WHERE engine = 'allocator'
+ORDER BY recorded_at DESC LIMIT 20;
+```
+
 ### Trade Monitor daemon
 
 `tpcore.trade_monitor` watches Alpaca's `TradingStream` for fills. Required for Sigma + Reversion's Tier 2 cascade (limit-sell on Tier 1 fill); Momentum doesn't need it.

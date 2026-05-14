@@ -386,7 +386,7 @@ Used today by `ops/ingestion_engine.py` (Railway-deployed when active) and as th
 
 **Columns (current):** `id`, `engine`, `decided_at`, `weight`, `allocated_capital`, `prior_equity`, `realized_vol`, `freeze_state` (`active` / `soft_frozen` / `hard_frozen`), `freeze_reason`, `drawdown_pct`.
 
-**Written by:** `tpcore.allocator.AllocatorService` (daemon: `com.michael.trading.allocator`, fires Mondays 13:00 UTC).
+**Written by:** `tpcore.allocator.AllocatorService` (daemon: `com.michael.trading.allocator`, fires Mondays 13:00 UTC). Each rebalance run also emits `ALLOCATOR_REBALANCED` or `ALLOCATOR_SKIPPED` to `platform.application_log` (engine=`allocator`) — see audit items 44 + 45 (2026-05-14) for the four-branch decision tree. CHOP regime input comes from `tpcore.indicators.chop.compute_chop` on the trailing-120-day SPY series.
 
 **Read by:** Operator dashboard's Allocator panel + spot-checks via SQL.
 
