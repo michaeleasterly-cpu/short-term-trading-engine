@@ -34,6 +34,7 @@ data/tradier_export/
 data/alpaca_backfill/
 data/fmp_backfill/
 data/corp_actions_backfill/
+data/sec_backfill/
 logs/
 backtests/
 

@@ -5,13 +5,13 @@
 | Engine | Top OOS score | Verdict | Notes |
 |---|---|---|---|
 | Sigma | +1.150 (2026-05-13 sweep) / **55/100** (2026-05-14 follow-up) | FAILED (DSR < 0.95; regime fragility) | chop=47.7, hold=2d, stop=1.8% — same params Sharpe +1.02 / 2018-21 collapse to -0.84 / 2019-22 |
-| Reversion | +1.174 (2026-05-13) / **TBD** (100-trial sweep `b33tsfcvc` in flight 2026-05-14) | FAILED 2026-05-13 | z=2.56, hold=12d, stop=10.4% — fresh sweep results land in `backtests/reversion_search_results.csv` |
+| Reversion | +1.174 (2026-05-13) / **+0.43 on 2 trades** (100-trial sweep 2026-05-14) | FAILED — structural | Fresh sweep: 150/150 trials credibility=45 (ceiling, not noise). Signal too sparse on T1+T2 (1–3 trades per window) for any parameters to clear DSR. **No code changes**; gap closure needs different signal class or wider universe. |
 | **Vector** | +1.257 (2026-05-13) | FAILED — **next: relax P/B gate** | catalyst_window=9d, P/B=2.52, D/E=2.94 — produces zero candidates because P/B<1.5 blocks 937/1,435 tickers. SEC NLP catalyst upgrade deferred behind P/B calibration (binding constraint is value gate, not catalyst source). |
 | Momentum | +0.784 | FAILED | paper-trading regardless of credibility per momentum spec |
 
 **Recalibration sequencing (2026-05-14):**
 1. **Sigma** — no parameter changes (sweep didn't find robust config; regime fragility is the binding constraint, not parameters).
-2. **Reversion** — 100-trial sweep in flight; apply any config that passes credibility ≥ 60 AND DSR ≥ 0.95 to `reversion/models.py`.
+2. **Reversion** — 100-trial sweep complete 2026-05-14: 0/150 trials passed; every trial scored 45/100 (structural ceiling). No parameter changes. Reversion is shelved at the engine layer — next move is signal-class change (e.g., volume-anomaly trigger instead of Z-score) or universe expansion to T3+ (requires fundamentals coverage on tier-3 names that doesn't currently exist).
 3. **Vector** — relax P/B ceiling (1.5 → 2.0 → 2.5 → 3.0 → 3.5 sweep) BEFORE evaluating SEC NLP catalyst upgrade. The catalyst source is not the bottleneck; the value gate is.
 4. **SEC NLP** — DEFERRED. Only evaluate FMP vs. FMP+SEC catalyst after Vector is producing candidates with the relaxed P/B gate and a paper-trade baseline exists.
 
