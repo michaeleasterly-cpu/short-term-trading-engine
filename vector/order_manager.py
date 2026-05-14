@@ -13,13 +13,10 @@ remaining bracket leg and submits a market sell. (Full automation of
 the trail loop is scheduled for a follow-up; the static −7% stop is the
 current floor.)
 
-Optional parity harness: when constructed with ``parity_harness=`` the
-manager calls ``LivePaperParityHarness.submit_pair`` after each successful
-paper submission. Failures on the live side never block the paper trade.
+Shared scaffolding lives in :class:`tpcore.order_management.BaseOrderManager`.
 """
 from __future__ import annotations
 
-import json
 from collections import defaultdict
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -35,6 +32,7 @@ from tpcore.interfaces.broker import (
     OrderSide,
     OrderStatus,
 )
+from tpcore.order_management import BaseOrderManager
 from tpcore.parity import LivePaperParityHarness
 from tpcore.risk.governor import RiskDecision, RiskGovernor
 from vector.models import ExecutionDecision, PhaseAssessment
@@ -50,8 +48,10 @@ logger = structlog.get_logger(__name__)
 ENGINE_ID = "vector"
 
 
-class VectorOrderManager:
+class VectorOrderManager(BaseOrderManager):
     """Drives a Vector trade from execution decision through final AAR."""
+
+    ENGINE_ID = ENGINE_ID
 
     def __init__(
         self,
@@ -65,16 +65,16 @@ class VectorOrderManager:
         parity_harness: LivePaperParityHarness | None = None,
         pool: asyncpg.Pool | None = None,
     ) -> None:
-        self._broker = broker
-        self._governor = governor
-        self._capital_gate = capital_gate
-        self._lifecycle = lifecycle
-        self._aar = aar
-        self._aar_writer = aar_writer
-        self._parity = parity_harness
-        # asyncpg pool for platform.open_orders persistence — required for
-        # the trade monitor to find Tier 1 rows. See sigma/order_manager.py.
-        self._pool = pool or (aar_writer.pool if aar_writer is not None else None)
+        super().__init__(
+            broker=broker,
+            governor=governor,
+            capital_gate=capital_gate,
+            lifecycle=lifecycle,
+            aar=aar,
+            aar_writer=aar_writer,
+            parity_harness=parity_harness,
+            pool=pool,
+        )
         # client_order_id → assessment cached at submission time.
         self._trade_assessments: dict[str, PhaseAssessment] = {}
         # client_order_ids whose AAR has already been written this process.
@@ -177,63 +177,6 @@ class VectorOrderManager:
 
         return placed
 
-    async def _persist_tier1_to_open_orders(
-        self,
-        *,
-        tier1_order: Order,
-        trade_key: str,
-        decision: ExecutionDecision,
-        assessment: PhaseAssessment,
-    ) -> None:
-        """Insert the open_orders row that the trade monitor reads.
-
-        Mirror of ``sigma.order_manager._persist_tier1_to_open_orders``.
-        Vector has no Tier 2 — the trade monitor honors that by checking
-        for tier2_qty in the persisted decision (Vector doesn't have that
-        field, so the monitor's Tier-2-submit branch is naturally skipped).
-        """
-        if self._pool is None:
-            logger.warning(
-                "vector.order_manager.no_pool_persistence_skipped",
-                trade_key=trade_key,
-                broker_order_id=tier1_order.broker_order_id,
-            )
-            return
-        payload = json.dumps(
-            {
-                "decision": decision.model_dump(mode="json"),
-                "assessment": assessment.model_dump(mode="json"),
-            },
-            default=str,
-        )
-        sql = """
-            INSERT INTO platform.open_orders
-                (engine, trade_id, ticker, order_type,
-                 alpaca_order_id, status, decision_data)
-            VALUES ($1, $2, $3, 'tier1', $4, 'pending', $5::jsonb)
-            ON CONFLICT (engine, trade_id, order_type)
-            DO UPDATE SET
-                alpaca_order_id = EXCLUDED.alpaca_order_id,
-                decision_data = EXCLUDED.decision_data,
-                updated_at = now()
-        """
-        try:
-            async with self._pool.acquire() as conn:
-                await conn.execute(
-                    sql,
-                    ENGINE_ID,
-                    trade_key,
-                    decision.ticker,
-                    tier1_order.broker_order_id,
-                    payload,
-                )
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.warning(
-                "vector.order_manager.open_orders_persist_failed",
-                trade_key=trade_key,
-                error=str(exc),
-            )
-
     async def reconcile(
         self,
         *,
@@ -324,12 +267,6 @@ class VectorOrderManager:
         if exit_price < entry_price:
             return ExitReason.STOP_LOSS
         return ExitReason.TIME_STOP
-
-    async def _fetch_recent_orders(self) -> list[Order]:
-        list_fn = getattr(self._broker, "list_recent_orders", None)
-        if list_fn is None:
-            return []
-        return await list_fn()
 
 
 __all__ = ["ENGINE_ID", "VectorOrderManager"]

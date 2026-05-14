@@ -13,13 +13,15 @@ Responsibilities:
        happened since the last run — Tier 1 fill, Tier 2 fill, hard stop —
        then drives the lifecycle/AAR plugs accordingly.
 
-State is held by the broker. Each Sigma trade carries a stable
-``client_order_id`` prefix (``{ticker}_{ts}``) with ``_tier1`` / ``_tier2``
-suffixes so the manager can group legs without a local DB.
+Shared `__init__` / `_persist_tier1_to_open_orders` / `_fetch_recent_orders`
+live in :class:`tpcore.order_management.BaseOrderManager`. Each Sigma trade
+carries a stable ``client_order_id`` prefix (``sg_<TICKER>_<TS>`` canonical
+or ``<TICKER>_<TS>`` legacy) with ``_tier1`` / ``_tier2`` suffixes so the
+manager can group legs via :func:`tpcore.order_ids.parse_cid` without a
+local DB.
 """
 from __future__ import annotations
 
-import json
 from collections import defaultdict
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -40,6 +42,7 @@ from tpcore.interfaces.broker import (
     OrderStatus,
 )
 from tpcore.order_ids import parse_cid
+from tpcore.order_management import BaseOrderManager
 from tpcore.parity import LivePaperParityHarness
 from tpcore.risk.governor import RiskDecision, RiskGovernor
 
@@ -51,31 +54,7 @@ logger = structlog.get_logger(__name__)
 ENGINE_ID = "sigma"
 
 
-def _trade_key(client_order_id: str) -> str:
-    """Return the trade-pairing key for ``client_order_id``.
-
-    Routes through :func:`tpcore.order_ids.parse_cid` so the same parse
-    works on the canonical ``sg_<TICKER>_<TS>_tierN`` format and the
-    legacy ``<TICKER>_<TS>_tierN`` format (in-flight orders from before
-    the prefix migration). Returns the full cid unchanged if no tier
-    suffix is present.
-    """
-    parsed = parse_cid(client_order_id)
-    return parsed.trade_key or client_order_id
-
-
-def _tier(client_order_id: str) -> str | None:
-    """Return ``"tier1"``/``"tier2"`` or ``None`` if not a tier-bracket cid.
-
-    Accepts both canonical (``sg_..._tier1``) and legacy
-    (``<TICKER>_..._tier1``) formats via :func:`parse_cid`. Returns
-    None for momentum/vector orders so the sigma reconcile loop
-    silently ignores them.
-    """
-    return parse_cid(client_order_id).tier
-
-
-class SigmaOrderManager:
+class SigmaOrderManager(BaseOrderManager):
     """Drives a Sigma trade from execution decision through final AAR.
 
     Args:
@@ -87,6 +66,8 @@ class SigmaOrderManager:
         lifecycle: ``SigmaLifecycleAnalysis`` (used for ``handle_tier1_fill``).
         aar: ``SigmaAARLogging`` for partial/final AAR construction + logging.
     """
+
+    ENGINE_ID = ENGINE_ID
 
     def __init__(
         self,
@@ -100,17 +81,16 @@ class SigmaOrderManager:
         parity_harness: LivePaperParityHarness | None = None,
         pool: asyncpg.Pool | None = None,
     ) -> None:
-        self._broker = broker
-        self._governor = governor
-        self._capital_gate = capital_gate
-        self._lifecycle = lifecycle
-        self._aar = aar
-        self._aar_writer = aar_writer
-        self._parity = parity_harness
-        # asyncpg pool for platform.open_orders persistence — required for
-        # the trade monitor to find Tier 1 rows. None falls back to the
-        # aar_writer's pool when available; tests can pass None to skip.
-        self._pool = pool or (aar_writer.pool if aar_writer is not None else None)
+        super().__init__(
+            broker=broker,
+            governor=governor,
+            capital_gate=capital_gate,
+            lifecycle=lifecycle,
+            aar=aar,
+            aar_writer=aar_writer,
+            parity_harness=parity_harness,
+            pool=pool,
+        )
         # ticker → PhaseAssessment for every trade we've placed this process.
         # The broker is the source of truth for orders; this is a side cache
         # so we can carry assessment context (entry, stop, mid/upper) into the
@@ -187,7 +167,7 @@ class SigmaOrderManager:
         placed = [tier1_order]
 
         # Persist for the trade monitor to pick up.
-        trade_key = _trade_key(tier1_order.client_order_id)
+        trade_key = parse_cid(tier1_order.client_order_id).trade_key or tier1_order.client_order_id
         await self._persist_tier1_to_open_orders(
             tier1_order=tier1_order,
             trade_key=trade_key,
@@ -227,63 +207,6 @@ class SigmaOrderManager:
 
         return placed
 
-    async def _persist_tier1_to_open_orders(
-        self,
-        *,
-        tier1_order: Order,
-        trade_key: str,
-        decision: ExecutionDecision,
-        assessment: PhaseAssessment,
-    ) -> None:
-        """Insert the Tier 1 row that the trade monitor will react to.
-
-        Idempotent on ``(engine, trade_id, order_type)`` — re-running a
-        submission overwrites the broker_order_id but keeps the same row,
-        so the monitor sees the latest broker ack.
-        """
-        if self._pool is None:
-            logger.warning(
-                "sigma.order_manager.no_pool_persistence_skipped",
-                trade_key=trade_key,
-                broker_order_id=tier1_order.broker_order_id,
-                note="trade monitor will not find this row — set pool or aar_writer with pool",
-            )
-            return
-        payload = json.dumps(
-            {
-                "decision": decision.model_dump(mode="json"),
-                "assessment": assessment.model_dump(mode="json"),
-            },
-            default=str,
-        )
-        sql = """
-            INSERT INTO platform.open_orders
-                (engine, trade_id, ticker, order_type,
-                 alpaca_order_id, status, decision_data)
-            VALUES ($1, $2, $3, 'tier1', $4, 'pending', $5::jsonb)
-            ON CONFLICT (engine, trade_id, order_type)
-            DO UPDATE SET
-                alpaca_order_id = EXCLUDED.alpaca_order_id,
-                decision_data = EXCLUDED.decision_data,
-                updated_at = now()
-        """
-        try:
-            async with self._pool.acquire() as conn:
-                await conn.execute(
-                    sql,
-                    ENGINE_ID,
-                    trade_key,
-                    decision.ticker,
-                    tier1_order.broker_order_id,
-                    payload,
-                )
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.warning(
-                "sigma.order_manager.open_orders_persist_failed",
-                trade_key=trade_key,
-                error=str(exc),
-            )
-
     async def reconcile(
         self,
         *,
@@ -300,10 +223,10 @@ class SigmaOrderManager:
         orders = await self._fetch_recent_orders()
         by_trade: dict[str, dict[str, Order]] = defaultdict(dict)
         for o in orders:
-            tier = _tier(o.client_order_id)
-            if tier is None:
+            parsed = parse_cid(o.client_order_id)
+            if parsed.tier is None:
                 continue
-            by_trade[_trade_key(o.client_order_id)][tier] = o
+            by_trade[parsed.trade_key or o.client_order_id][parsed.tier] = o
 
         new_aars: list[AfterActionReport] = []
         for trade_key, legs in by_trade.items():
@@ -403,17 +326,6 @@ class SigmaOrderManager:
                 )
 
         return new_aars
-
-    async def _fetch_recent_orders(self) -> list[Order]:
-        """Return Orders the broker knows about, both open and recently closed.
-
-        ``BrokerExecutionInterface`` doesn't have a ``list_orders`` method
-        today, so we use ``getattr`` to opt in when the adapter exposes one.
-        """
-        list_fn = getattr(self._broker, "list_recent_orders", None)
-        if list_fn is None:
-            return []
-        return await list_fn()
 
 
 __all__ = ["SigmaOrderManager", "ENGINE_ID"]

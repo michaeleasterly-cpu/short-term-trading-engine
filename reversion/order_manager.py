@@ -7,10 +7,11 @@ Mirrors ``sigma.order_manager.SigmaOrderManager``; differences:
     * Earnings-quality gating happens in lifecycle_analysis.assess and
       surfaces here as ``assessment.earnings_quality_blocked``; we
       respect it before submitting.
+
+Shared scaffolding lives in :class:`tpcore.order_management.BaseOrderManager`.
 """
 from __future__ import annotations
 
-import json
 from collections import defaultdict
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -31,6 +32,7 @@ from tpcore.interfaces.broker import (
     OrderStatus,
 )
 from tpcore.order_ids import parse_cid
+from tpcore.order_management import BaseOrderManager
 from tpcore.parity import LivePaperParityHarness
 from tpcore.risk.governor import RiskDecision, RiskGovernor
 
@@ -42,24 +44,10 @@ logger = structlog.get_logger(__name__)
 ENGINE_ID = "reversion"
 
 
-def _trade_key(client_order_id: str) -> str:
-    """Trade-pairing key via :func:`tpcore.order_ids.parse_cid`.
-
-    Accepts canonical ``rv_<TICKER>_<TS>_tierN`` and legacy
-    ``<TICKER>_<TS>_tierN`` formats so in-flight orders from before the
-    prefix migration still reconcile correctly.
-    """
-    parsed = parse_cid(client_order_id)
-    return parsed.trade_key or client_order_id
-
-
-def _tier(client_order_id: str) -> str | None:
-    """Tier label or None if not a tier-bracket cid (filters out cross-engine orders)."""
-    return parse_cid(client_order_id).tier
-
-
-class ReversionOrderManager:
+class ReversionOrderManager(BaseOrderManager):
     """Drives a Reversion trade from execution decision through final AAR."""
+
+    ENGINE_ID = ENGINE_ID
 
     def __init__(
         self,
@@ -73,16 +61,16 @@ class ReversionOrderManager:
         parity_harness: LivePaperParityHarness | None = None,
         pool: asyncpg.Pool | None = None,
     ) -> None:
-        self._broker = broker
-        self._governor = governor
-        self._capital_gate = capital_gate
-        self._lifecycle = lifecycle
-        self._aar = aar
-        self._aar_writer = aar_writer
-        self._parity = parity_harness
-        # asyncpg pool for platform.open_orders persistence — required for
-        # the trade monitor to find Tier 1 rows. See sigma/order_manager.py.
-        self._pool = pool or (aar_writer.pool if aar_writer is not None else None)
+        super().__init__(
+            broker=broker,
+            governor=governor,
+            capital_gate=capital_gate,
+            lifecycle=lifecycle,
+            aar=aar,
+            aar_writer=aar_writer,
+            parity_harness=parity_harness,
+            pool=pool,
+        )
         self._trade_assessments: dict[str, PhaseAssessment] = {}
         self._tier1_logged: set[str] = set()
         self._tier2_logged: set[str] = set()
@@ -155,7 +143,7 @@ class ReversionOrderManager:
         )
         placed = [tier1_order]
 
-        trade_key = _trade_key(tier1_order.client_order_id)
+        trade_key = parse_cid(tier1_order.client_order_id).trade_key or tier1_order.client_order_id
         await self._persist_tier1_to_open_orders(
             tier1_order=tier1_order,
             trade_key=trade_key,
@@ -192,60 +180,6 @@ class ReversionOrderManager:
 
         return placed
 
-    async def _persist_tier1_to_open_orders(
-        self,
-        *,
-        tier1_order: Order,
-        trade_key: str,
-        decision: ExecutionDecision,
-        assessment: PhaseAssessment,
-    ) -> None:
-        """Insert the Tier 1 row that the trade monitor will react to.
-
-        Mirror of ``sigma.order_manager._persist_tier1_to_open_orders``.
-        """
-        if self._pool is None:
-            logger.warning(
-                "reversion.order_manager.no_pool_persistence_skipped",
-                trade_key=trade_key,
-                broker_order_id=tier1_order.broker_order_id,
-            )
-            return
-        payload = json.dumps(
-            {
-                "decision": decision.model_dump(mode="json"),
-                "assessment": assessment.model_dump(mode="json"),
-            },
-            default=str,
-        )
-        sql = """
-            INSERT INTO platform.open_orders
-                (engine, trade_id, ticker, order_type,
-                 alpaca_order_id, status, decision_data)
-            VALUES ($1, $2, $3, 'tier1', $4, 'pending', $5::jsonb)
-            ON CONFLICT (engine, trade_id, order_type)
-            DO UPDATE SET
-                alpaca_order_id = EXCLUDED.alpaca_order_id,
-                decision_data = EXCLUDED.decision_data,
-                updated_at = now()
-        """
-        try:
-            async with self._pool.acquire() as conn:
-                await conn.execute(
-                    sql,
-                    ENGINE_ID,
-                    trade_key,
-                    decision.ticker,
-                    tier1_order.broker_order_id,
-                    payload,
-                )
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.warning(
-                "reversion.order_manager.open_orders_persist_failed",
-                trade_key=trade_key,
-                error=str(exc),
-            )
-
     async def reconcile(
         self,
         *,
@@ -255,10 +189,10 @@ class ReversionOrderManager:
         orders = await self._fetch_recent_orders()
         by_trade: dict[str, dict[str, Order]] = defaultdict(dict)
         for o in orders:
-            tier = _tier(o.client_order_id)
-            if tier is None:
+            parsed = parse_cid(o.client_order_id)
+            if parsed.tier is None:
                 continue
-            by_trade[_trade_key(o.client_order_id)][tier] = o
+            by_trade[parsed.trade_key or o.client_order_id][parsed.tier] = o
 
         new_aars: list[AfterActionReport] = []
         for trade_key, legs in by_trade.items():
@@ -353,12 +287,6 @@ class ReversionOrderManager:
                 )
 
         return new_aars
-
-    async def _fetch_recent_orders(self) -> list[Order]:
-        list_fn = getattr(self._broker, "list_recent_orders", None)
-        if list_fn is None:
-            return []
-        return await list_fn()
 
 
 __all__ = ["ENGINE_ID", "ReversionOrderManager"]
