@@ -4,6 +4,8 @@ Every data adapter on the platform must satisfy five pipeline stages. The point 
 
 This document is the canonical reference. New adapters start from `tpcore/templates/adapter_template.py` and ship the five stages **as one PR**. Existing adapters are audited against this matrix; documented exceptions are tracked at the bottom.
 
+**See also:** [`engine_readiness.md`](../checklists/engine_readiness.md) is the parallel contract for *engines* (the consumers of this data). It enforces the 5-plug structure, shared `tpcore` reuse (indicators, `BaseOrderManager`, `SizingError`, `PerTradeGraduationStats`), and risk/capital gate composition. New engines start from `tpcore/templates/engine_template/`.
+
 ## The five stages
 
 | # | Stage | Artifact | Self-verification requirement |

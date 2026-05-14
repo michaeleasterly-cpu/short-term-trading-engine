@@ -555,13 +555,13 @@ flowchart TB
 
 ### 3.3 Engine Execution Flow
 
-**Trigger:** Railway cron services fire at 22:00 UTC Mon-Fri, 30 minutes after the Universe Pre-Screener completes.
+**Trigger (2026-05-14):** decoupled from data-ops via event-driven hand-off. `scripts/run_data_operations.sh` writes a single `DATA_OPERATIONS_COMPLETE` row to `platform.application_log` after the data layer is verified green. The `engine-service` daemon (`ops/engine_service.py`, installed via `scripts/install_launchd_engine_service.sh`) polls every 60s for new events of that type and, when one arrives, shells out to `scripts/run_all_engines.sh` — which runs each engine's scheduler back-to-back. This replaced the inline engine-sweep step in `run_data_operations.sh` so data-ops latency / failure no longer bleeds into the trade-submit window.
 
 1. **Startup:** Scheduler creates asyncpg pool. Reads `platform.risk_state` for kill-switch status. Refuses to run if kill switch is active or database is unreachable.
 2. **Universe Selection:** Queries `platform.universe_candidates WHERE engine = $1 AND as_of_date = CURRENT_DATE`. Falls back to hardcoded list if table is empty (transitional).
-3. **Setup Detection:** Plug queries `platform.prices_daily` via `PostgresDataAdapter` for daily bars. Computes engine-specific scores. Returns ranked candidates.
+3. **Setup Detection:** Plug queries `platform.prices_daily` via `PostgresDataAdapter` for daily bars. Computes engine-specific scores using shared indicators from `tpcore.indicators` (ADX, Bollinger Bands, CHOP). Returns ranked candidates.
 4. **Lifecycle Analysis:** For each candidate above threshold, determines phase (SETUP, ACTIVE, EXHAUSTED). Applies engine-specific gates (earnings quality, CHOP, catalyst proximity).
-5. **Execution & Risk:** Computes position size. Order managers first call `governor.state_for(engine_id)` (read-only public accessor, added 2026-05-14) for the cheap local capital-gate pre-flight, then `RiskGovernor.check_trade()` for the full platform gate. Submits bracket orders to Alpaca paper endpoint. Records fill quality.
+5. **Execution & Risk:** Computes position size. Order managers (per-trade engines inherit from `tpcore.order_management.BaseOrderManager`) first call `governor.state_for(engine_id)` (read-only public accessor) for the cheap local capital-gate pre-flight, then `RiskGovernor.check_trade()` for the full platform gate. Submits bracket orders to Alpaca paper endpoint. Records fill quality.
 6. **AAR Logging:** On Tier 1 and Tier 2 fills, writes `AfterActionReport` to `platform.aar_events` via `AARWriter`.
 7. **Shutdown:** Updates `platform.risk_state` with cumulative P&L. Writes a `SHUTDOWN` event to `platform.application_log` (the canonical health indicator for short-lived runs). Closes pool. Exits.
 

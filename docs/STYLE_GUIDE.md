@@ -55,6 +55,16 @@ Every engine is a top-level package with this exact shape:
 
 Five plugs, no more, no fewer. Each inherits from `tpcore.interfaces.engine_plug.BaseEnginePlug` and exposes `validate_dependencies()` and `healthcheck()`.
 
+**Shared tpcore reuse (no duplication).** Engines must source the following from `tpcore/` rather than reimplementing them locally:
+
+- Indicators — `tpcore.indicators.{compute_adx, compute_bbands, compute_chop}`. No engine-local indicator code.
+- OrderManager scaffolding — per-trade engines inherit from `tpcore.order_management.BaseOrderManager` (provides `__init__`, `_persist_tier1_to_open_orders`, `_fetch_recent_orders`). Each subclass sets `ENGINE_ID` and implements `submit_decision` + `reconcile`.
+- Sizing exception — `tpcore.exceptions.SizingError`. Don't redeclare in engine code.
+- Per-trade graduation stats — `tpcore.models.graduation.PerTradeGraduationStats`. Subclass to add engine-specific fields (e.g. Reversion adds `profit_factor`).
+- Client-order-id construction — `tpcore.order_ids.build_cid`. Parsing — `tpcore.order_ids.parse_cid`. The engine's prefix must be registered in `tpcore.order_ids.ENGINE_PREFIX`.
+
+**Engine template + checklist.** New engines start from `tpcore/templates/engine_template/` and must satisfy `docs/superpowers/checklists/engine_readiness.md` before merging. The checklist enforces the five plugs, the shared tpcore reuse rules above, the risk/capital gating composition, the AAR + filter-diagnostics wiring, and the daemon integration contract.
+
 ## Imports
 
 Order: stdlib → third-party → `tpcore` → local engine modules. Within each group, alphabetical (ruff's `I` rule enforces this).

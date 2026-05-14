@@ -104,6 +104,15 @@ DSR ≥ 0.95 is a hard threshold for daily-frequency strategies with 1000+ obser
 - `tpcore.calendar` — NYSE calendar wrapper.
 - `tpcore.scripts.check_imports` — blocks forbidden vendor imports.
 
+### 2.9 Engine Standardization (`tpcore.indicators`, `tpcore.order_management`, `tpcore.exceptions`, `tpcore.models`)
+
+Phases 1–5 of the 2026-05-14 standardization sweep consolidated shared engine concerns into `tpcore/` so the next engine doesn't grow new copies. See `docs/superpowers/checklists/engine_readiness.md` for the pre-merge checklist and `tpcore/templates/engine_template/` for the copy-paste scaffold.
+
+- `tpcore.indicators` — shared technical indicators: `compute_adx` (Wilder's ADX, period=14), `compute_bbands` (20-day Bollinger Bands, 2σ), `compute_chop` (Choppiness Index). Engines never reimplement these.
+- `tpcore.order_management.BaseOrderManager` — base class for per-trade engine order managers (sigma/reversion/vector). Centralizes `__init__`, `_persist_tier1_to_open_orders` (writes the row trade_monitor reads), and `_fetch_recent_orders`. Each engine subclass sets `ENGINE_ID` and implements `submit_decision` + `reconcile` for its own scale-out shape.
+- `tpcore.exceptions.SizingError` — raised when no valid position size can be computed (e.g. price ≤ 0). Was previously duplicated byte-identically in sigma + reversion.
+- `tpcore.models.graduation.PerTradeGraduationStats` — shared per-trade graduation rubric (n_trades / win_rate / avg_return). Reversion subclasses it to add `profit_factor`.
+
 ---
 
 ## 3. Platform Database Schema
