@@ -21,6 +21,7 @@ OPS_UPDATE_STAGES: tuple[str, ...] = (
     "daily_bars",
     "corporate_actions",
     "coverage_fill",
+    "cross_ref_cleanup",
     "fundamentals_refresh",
     "data_validation",
     "universe_prescreener",

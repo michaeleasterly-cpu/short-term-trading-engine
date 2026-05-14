@@ -421,6 +421,53 @@ async def _stage_fundamentals_refresh(pool: asyncpg.Pool, config: dict[str, Any]
     return detail
 
 
+async def _stage_cross_ref_cleanup(pool: asyncpg.Pool) -> dict[str, Any]:
+    """Auto-clean known-safe cross-table integrity violations.
+
+    The cross-table audit (scripts/audit_all_tables.py + dashboard's
+    cross_ref panel) historically just *reported* violations and asked
+    the operator to clean them. That's wrong: most of these are pure
+    data-hygiene (e.g., options whose expiration_date passed) and have
+    a single safe remediation — delete the row.
+
+    What this stage cleans (additively — only add rules here for which
+    "delete the row" is the proven-correct action):
+
+    * ``tradier_options_chains`` rows with ``expiration_date < today``
+      — frozen S2 table; expired contracts are permanently dead.
+    * ``tradier_options_chains`` rows whose ticker has no row in
+      ``prices_daily`` — orphan options, no underlying to price against.
+
+    Returns counts so the operator can see what got cleaned. Idempotent
+    by construction (same query, deletes shrink to zero next run).
+    """
+    def _count_from_status(status: str) -> int:
+        # asyncpg execute() returns "DELETE N" — extract N.
+        try:
+            return int(status.split()[-1])
+        except (ValueError, IndexError):
+            return 0
+
+    async with pool.acquire() as conn:
+        expired_status = await conn.execute(
+            "DELETE FROM platform.tradier_options_chains WHERE expiration_date < CURRENT_DATE"
+        )
+        orphan_status = await conn.execute(
+            """
+            DELETE FROM platform.tradier_options_chains tc
+            WHERE NOT EXISTS (
+                SELECT 1 FROM platform.prices_daily_tickers t
+                WHERE t.ticker = tc.ticker
+            )
+            """
+        )
+
+    return {
+        "deleted_expired_options": _count_from_status(expired_status),
+        "deleted_orphan_options": _count_from_status(orphan_status),
+    }
+
+
 async def _stage_data_validation(pool: asyncpg.Pool) -> dict[str, Any]:
     from tpcore.quality.validation.suite import run_suite
 
@@ -593,6 +640,11 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     ("daily_bars",          lambda pool, cfg: (lambda: _stage_daily_bars(pool, cfg)),          HEAVY_STAGE_TIMEOUT_SEC),
     ("corporate_actions",   lambda pool, cfg: (lambda: _stage_corporate_actions(pool)),        HEAVY_STAGE_TIMEOUT_SEC),
     ("coverage_fill",       lambda pool, cfg: (lambda: _stage_coverage_fill(pool)),            STAGE_TIMEOUT_SEC),
+    # Self-heal cross-table integrity violations — delete expired
+    # tradier_options_chains rows + orphan-ticker rows so the operator
+    # doesn't see them as red on the dashboard for human triage. Each
+    # rule must have a single proven-safe remediation; see the docstring.
+    ("cross_ref_cleanup",   lambda pool, cfg: (lambda: _stage_cross_ref_cleanup(pool)),        STAGE_TIMEOUT_SEC),
     ("fundamentals_refresh",lambda pool, cfg: (lambda: _stage_fundamentals_refresh(pool, cfg)),HEAVY_STAGE_TIMEOUT_SEC),
     # data_validation runs 6 checks against the live tables — at the
     # current 20M-row prices_daily it consistently runs ~120-130s.

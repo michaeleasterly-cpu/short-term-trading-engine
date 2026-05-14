@@ -50,6 +50,7 @@ from scripts.generate_tip_sheet import (
     fetch_engine_holdings,
     fetch_recent_signals,
     fetch_recent_trades,
+    fetch_today_recommendations,
 )
 from tpcore.alpaca import AlpacaPaperBrokerAdapter
 from tpcore.backtest.credibility import MIN_LIVE_SCORE
@@ -863,6 +864,20 @@ async def _fetch_credibility_all_engines() -> dict:
     finally:
         await pool.close()
     return out
+
+
+async def _fetch_today_recommendations(engine: str) -> list[dict]:
+    """Tomorrow's ranked picks from the engine's setup-detection plug.
+
+    For momentum: the top-decile ranked list that would be opened on the
+    next rebalance day. For other engines: empty (Phase 1 scope).
+    """
+    pool = await build_asyncpg_pool(_db_url(), max_size=2)
+    as_of = datetime.now(UTC).date()
+    try:
+        return await fetch_today_recommendations(pool, engine, as_of)
+    finally:
+        await pool.close()
 
 
 async def _fetch_signals_all_engines(days: int = 30) -> list[dict]:
@@ -1912,6 +1927,11 @@ def _fetch_credibility_cached() -> dict:
     return run_async(_fetch_credibility_all_engines())
 
 
+@st.cache_data(ttl=180, show_spinner=False)
+def _fetch_today_recommendations_cached(engine: str) -> list[dict]:
+    return run_async(_fetch_today_recommendations(engine))
+
+
 @st.cache_data(ttl=60, show_spinner=False)
 def _fetch_signals_cached(days: int = 30) -> list[dict]:
     return run_async(_fetch_signals_all_engines(days=days))
@@ -2177,6 +2197,149 @@ async def _mark_forensics_resolved(trigger_id: int) -> None:
         await pool.close()
 
 
+def render_tip_sheet() -> None:
+    """Phase 1 tip-sheet view — operator's private research tool.
+
+    Mimics an old-school brokerage research note: serif heading, a
+    credibility "imprint" stamp, a ranked recommendations table with
+    target prices, and a disclaimer. Source data is the same that
+    ``scripts/generate_tip_sheet.py`` produces; this view just renders
+    it for the dashboard.
+
+    Phase 2 ("shareable to outsiders") is gated and not yet earned —
+    see ``docs/superpowers/specs/2026-05-13-tip-sheet-plan.md``. The
+    gate banner at the top of this view tells the operator exactly
+    what's missing.
+    """
+    import pandas as pd
+
+    st.markdown(
+        "<div style='font-family: \"Times New Roman\", Georgia, serif; "
+        "border:2px solid #444; padding:18px; background:#faf7ee; "
+        "color:#222;'>"
+        "<div style='text-align:center; font-size:0.85em; "
+        "letter-spacing:0.3em; color:#777;'>DAILY RESEARCH NOTE</div>"
+        "<h1 style='font-family: \"Times New Roman\", Georgia, serif; "
+        "text-align:center; font-size:2.4em; margin:6px 0 4px 0; "
+        "font-variant:small-caps; letter-spacing:0.08em; color:#222;'>"
+        "The Momentum Tip Sheet</h1>"
+        f"<div style='text-align:center; font-size:0.95em; color:#555;'>"
+        f"For market opening — {datetime.now(UTC).astimezone().strftime('%A, %B %d, %Y')}</div>"
+        "<hr style='border-top:1px solid #999; margin:14px 0;'/>"
+        "<div style='font-size:0.9em; color:#444;'>"
+        "<i>Long-only US-equities momentum strategy. Holdings ranked by trailing "
+        "12-month return (skipping the most recent month). Top-decile bought "
+        "equal-weight, held to the next monthly rebalance.</i></div>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown("")
+
+    # ── Phase 2 publication-readiness gate ─────────────────────────────
+    try:
+        cred = _fetch_credibility_cached().get("momentum")
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"Could not read credibility: {exc}")
+        return
+
+    cred_score = float(cred.score) if cred is not None else 0.0
+    cred_passed = cred is not None and cred_score >= MIN_LIVE_SCORE
+    try:
+        trades = _fetch_trades_cached(days=180)
+        n_paper_trades = len([t for t in trades if t.get("engine") == "momentum"])
+    except Exception:  # noqa: BLE001
+        n_paper_trades = 0
+
+    PHASE2_TRADE_THRESHOLD = 30
+    phase2_blockers = []
+    if not cred_passed:
+        phase2_blockers.append(
+            f"credibility {cred_score:.0f}/100 (need ≥ {MIN_LIVE_SCORE})"
+        )
+    if n_paper_trades < PHASE2_TRADE_THRESHOLD:
+        phase2_blockers.append(
+            f"{n_paper_trades} paper trade(s) documented (need ≥ {PHASE2_TRADE_THRESHOLD})"
+        )
+    phase2_blockers.append("attorney-reviewed disclaimer (manual step)")
+
+    if phase2_blockers:
+        st.warning(
+            "**Not yet shareable to outsiders.** Phase 2 publication "
+            "(per `docs/superpowers/specs/2026-05-13-tip-sheet-plan.md`) "
+            "requires:\n\n"
+            + "\n".join(f"- {b}" for b in phase2_blockers)
+        )
+    else:
+        st.success("✓ All Phase 2 gates cleared — ready to publish.")
+
+    # ── Today's recommendations table ───────────────────────────────────
+    st.markdown("##### The Recommendations")
+    try:
+        recs = _fetch_today_recommendations_cached("momentum")
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"Could not fetch recommendations: {exc}")
+        return
+
+    if not recs:
+        st.info(
+            "No recommendations available — either the universe pre-screener "
+            "hasn't run today (check Health tab) or no candidates passed the "
+            "filters."
+        )
+    else:
+        df = pd.DataFrame(recs)
+        df["Rank"] = range(1, len(df) + 1)
+        df["Score"] = df["score"].astype(float).round(3)
+        df["Last Close"] = df["last_close"].astype(float).round(2)
+        df["Tier"] = df.get("tier", 0).astype(int).apply(lambda t: f"T{t}")
+        df = df[["Rank", "ticker", "Score", "Last Close", "Tier"]]
+        df.columns = ["Rank", "Symbol", "12-1 Return", "Last Close", "Liquidity"]
+        st.dataframe(
+            df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "12-1 Return": st.column_config.NumberColumn(format="%+.3f"),
+                "Last Close": st.column_config.NumberColumn(format="$%.2f"),
+            },
+        )
+        st.caption(
+            f"{len(recs)} names in today's top-decile · "
+            "ranked by 12-month return skipping the most recent month · "
+            "Liquidity: T1 (most liquid) → T5 (thin). Equal-weight allocation."
+        )
+
+    # ── The "broker notes" + holdings ───────────────────────────────────
+    st.markdown("##### Broker's Notes")
+    st.markdown(
+        f"""
+- **Strategy:** Cross-sectional momentum. Position is opened the first NYSE session of each calendar month and held until the next rebalance.
+- **Universe:** Liquid US equities — tiers T1+T2 (~1,250 names per the prescreener).
+- **Sizing:** Equal-weight across the top decile, sized to the engine's allocated capital.
+- **Credibility:** {cred_score:.0f}/100. {"✓ Gate cleared." if cred_passed else "✗ Below the 60-point live-trading gate."}
+- **Last paper run:** see Trading tab for current holdings + recent orders.
+        """
+    )
+
+    # ── Disclaimer ─────────────────────────────────────────────────────
+    st.markdown("")
+    st.markdown(
+        "<div style='font-family: \"Times New Roman\", Georgia, serif; "
+        "border-top:1px solid #999; padding-top:12px; font-size:0.78em; "
+        "color:#555; line-height:1.5;'>"
+        "<b>DISCLAIMER.</b> This is automated output from a personal research "
+        "platform for private operator review only. It is NOT investment "
+        "advice, NOT a recommendation to buy or sell any security, and NOT "
+        "a solicitation. Past simulated performance does not predict future "
+        "results. The underlying strategies are unproven; the credibility "
+        "gate exists precisely because not every strategy has earned the "
+        "right to be acted on. Do not act on this output. Do not share this "
+        "output."
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+
 def render_actions():
     st.subheader("Actions")
     _render_process_status_inline()
@@ -2251,7 +2414,8 @@ def render_actions():
     st.markdown("##### Periodic — after parameter or code changes")
     st.caption(
         "**Refresh credibility** re-runs the parameter search and persists the rubric "
-        "row to `data_quality_log`. **Smoke test** verifies the full pipeline is green."
+        "row to `data_quality_log`. **Smoke test** runs the full platform "
+        "pytest suite + ruff + a dry-run of every engine + forensics + allocator + tip sheet."
     )
     c1, c2, c3 = st.columns([1, 1, 3])
     if c1.button(
@@ -2268,7 +2432,7 @@ def render_actions():
         use_container_width=True,
     ):
         with st.spinner("Running smoke test..."):
-            rc, output = run_blocking_script("scripts/run_momentum_smoke.sh", timeout=300)
+            rc, output = run_blocking_script("scripts/run_smoke_test.sh", timeout=600)
         _render_blocking_output("Smoke test", rc, output)
     with c3:
         secs = _age_seconds(last.get("credibility_refresh"))
@@ -2568,11 +2732,12 @@ def main():
     # Four-tab layout. Health is the default — heuristic #1
     # (Visibility of system status): operator sees what's stale before
     # they're tempted to push a button.
-    tab_health, tab_trading, tab_research, tab_actions = st.tabs(
+    tab_health, tab_trading, tab_research, tab_tipsheet, tab_actions = st.tabs(
         [
             "🩺 Health",
             "💹 Trading",
             "🔬 Research",
+            "📜 Tip Sheet",
             "⚡ Actions",
         ]
     )
@@ -2596,6 +2761,9 @@ def main():
         render_credibility_scorecards()
         st.divider()
         render_recent_activity()
+
+    with tab_tipsheet:
+        render_tip_sheet()
 
     with tab_actions:
         render_actions()
