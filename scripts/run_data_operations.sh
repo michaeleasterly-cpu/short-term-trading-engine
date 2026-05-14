@@ -61,7 +61,7 @@ set -a
 # shellcheck disable=SC1091
 source .env
 set +a
-DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python scripts/ops.py --update $FORCE_FLAG
+DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python scripts/ops.py --update --source data_operations_daemon $FORCE_FLAG
 UPDATE_RC=$?
 if [[ $UPDATE_RC -ne 0 ]]; then
     echo "✗ --update exited with code $UPDATE_RC — investigate before proceeding."

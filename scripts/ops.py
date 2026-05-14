@@ -1693,12 +1693,17 @@ async def _check_risk_governor(pool: asyncpg.Pool) -> dict[str, Any]:
 
 
 async def _check_missed_data_operations(pool: asyncpg.Pool) -> dict[str, Any]:
-    """Watchdog — warn if no `ops` engine STARTUP event in last 30 hours.
+    """Watchdog — warn if no automated data_operations daemon run in last 30 hours.
 
     Catches launchd misfires (Mac asleep at trigger + replay window
-    expired, dst transition, manual unload). The data_operations daemon
-    fires daily; a 30-hour ceiling tolerates one missed cycle of grace
-    before flagging. Closes audit gap G-6.
+    expired, dst transition, manual unload). Filters on
+    ``data->>'source' = 'data_operations_daemon'`` so manual operator
+    invocations (``--check``, ad-hoc ``--update``) don't mask a missed
+    daemon fire. The daemon's wrapper (``scripts/run_data_operations.sh``)
+    passes ``--source data_operations_daemon`` to ops.py for this tag.
+
+    30-hour ceiling tolerates one missed daily cycle of grace before
+    flagging. Closes audit gap G-6.
     """
     latest = await pool.fetchval(
         """
@@ -1706,12 +1711,18 @@ async def _check_missed_data_operations(pool: asyncpg.Pool) -> dict[str, Any]:
         FROM platform.application_log
         WHERE engine = 'ops'
           AND event_type = 'STARTUP'
+          AND data->>'source' = 'data_operations_daemon'
         """
     )
-    if latest is None:
-        return {"ok": False, "latest_run": None, "reason": "no ops STARTUP events on record"}
-    age_hours = (datetime.now(UTC) - latest).total_seconds() / 3600.0
     threshold_h = 30.0
+    if latest is None:
+        return {
+            "ok": False,
+            "latest_run": None,
+            "threshold_hours": threshold_h,
+            "reason": "no data_operations_daemon STARTUP events on record",
+        }
+    age_hours = (datetime.now(UTC) - latest).total_seconds() / 3600.0
     return {
         "ok": age_hours <= threshold_h,
         "latest_run": latest.isoformat(),
@@ -2196,6 +2207,16 @@ def _build_parser() -> argparse.ArgumentParser:
             "SEC's 10 req/sec courtesy budget; bypasses skip-guard)."
         ),
     )
+    p.add_argument(
+        "--source",
+        default=None,
+        help=(
+            "Optional source-tag included in the STARTUP event's data "
+            "payload (e.g. 'data_operations_daemon'). Lets the "
+            "missed_data_operations probe distinguish automated daemon "
+            "runs from operator-typed --check or --update calls."
+        ),
+    )
     return p
 
 
@@ -2235,15 +2256,18 @@ async def amain(args: argparse.Namespace) -> int:
             else "status" if args.status
             else "check"
         )
+        startup_data = {
+            "argv": sys.argv,
+            "dry_run": args.dry_run,
+            "mode": mode_str,
+        }
+        if args.source:
+            startup_data["source"] = args.source
         await db_log.log(
             "STARTUP",
             f"ops CLI starting (mode={mode_str} dry_run={args.dry_run})",
             severity="INFO",
-            data={
-                "argv": sys.argv,
-                "dry_run": args.dry_run,
-                "mode": mode_str,
-            },
+            data=startup_data,
         )
         log.info("ops.start", mode=mode_str)
 

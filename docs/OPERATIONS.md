@@ -241,7 +241,7 @@ A future `--update-weekly` flag is reserved for any explicitly-weekly work heavi
 ### Interpreting Results
 
 - The dashboard `--check` output now includes 19 probes (FRED `macro_indicators_freshness` added 2026-05-14 — last data source):
-  - `missed_data_operations` — warns when no `ops` STARTUP event in 30h (launchd misfire watchdog).
+  - `missed_data_operations` — warns when no automated **data_operations daemon** run in 30h (launchd misfire watchdog). Filters on `data->>'source' = 'data_operations_daemon'` so manual `ops.py --check` / `--update` invocations don't mask a missed daemon fire. The daemon's wrapper (`scripts/run_data_operations.sh`) passes `--source data_operations_daemon` to ops.py for this tag.
   - `supabase_backup` — probes `pg_stat_archiver.last_archived_time`; warns at 26h staleness; fails soft if the role lacks system-view access.
   - `disk_space` — warns when free disk on the repo's filesystem drops below 5 GB (audit-fix D6-1, 2026-05-14).
   - `trade_monitor_heartbeat` — warns when no `trade_monitor` event in `application_log` for 60+ min (catches silent WebSocket disconnects; audit-fix D6-2).
