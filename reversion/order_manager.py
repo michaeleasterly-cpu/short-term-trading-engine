@@ -192,6 +192,13 @@ class ReversionOrderManager(BaseOrderManager):
             parsed = parse_cid(o.client_order_id)
             if parsed.tier is None:
                 continue
+            # Cross-engine isolation: skip orders that another engine
+            # owns (parse_cid resolved an engine prefix and it isn't us).
+            # Legacy cids (no engine prefix → parsed.engine is None) are
+            # allowed through and disambiguated downstream via the
+            # in-process self._trade_assessments cache.
+            if parsed.engine is not None and parsed.engine != self.ENGINE_ID:
+                continue
             by_trade[parsed.trade_key or o.client_order_id][parsed.tier] = o
 
         new_aars: list[AfterActionReport] = []

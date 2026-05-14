@@ -236,6 +236,25 @@ class MomentumScheduler:
                 state_store=state_store, broker=broker, pool=pool,
             )
 
+            # Kill-switch pre-flight (F3 of 2026-05-14 audit). Mirrors
+            # the sigma/reversion/vector pattern so a platform-wide
+            # emergency kill halts Momentum's monthly rebalance too.
+            # Momentum's own gates (MomentumCapitalGate.check_drawdown +
+            # check_rebalance) are engine-local — they can't see this
+            # flag. Without this guard, the operator's mental model
+            # "kill switch halts all engines" was false for Momentum.
+            current_state = await governor.state_for("momentum")
+            if current_state and current_state.kill_switch_active:
+                logger.critical(
+                    "momentum.scheduler.kill_switch_active",
+                    as_of=as_of.isoformat(),
+                    reason=current_state.kill_switch_reason,
+                )
+                return RunSummary(
+                    as_of=as_of, is_rebalance_day=False,
+                    decision=None, submitted_order_ids=[], dry_run=not self._submit,
+                )
+
             # Plug 2 — is today a rebalance day? --force-rebalance overrides
             # for the initial paper-trading kickoff (and for emergency
             # mid-month rebalances, which are rare and operator-judgement).

@@ -88,11 +88,12 @@ scripts/install_all_daemons.sh
 
 | Daemon | What it does | Schedule |
 |---|---|---|
-| `trade_monitor` | Persistent. Watches Alpaca `TradingStream` for fills, submits Tier 2 cascade for Sigma/Reversion. Auto-restart on crash. | `KeepAlive` on crash |
-| `data_operations` | Daily refresh: 7-stage `ops --update` → audit → validation → compress → engine sweep | Mon-Fri 21:30 UTC |
+| `trade_monitor` | Persistent. Watches Alpaca `TradingStream` for fills, submits Tier 2 cascade for Sigma/Reversion. `KeepAlive=true` → respawns on any non-zero exit (Python tracebacks included). | persistent |
+| `engine_service` | Persistent. Polls `platform.application_log` every 60s for `DATA_OPERATIONS_COMPLETE` events; on new event, shells out to `scripts/run_all_engines.sh` for the engine sweep. `KeepAlive=true`. | persistent (event-driven) |
+| `data_operations` | Daily refresh: 14-stage `ops --update` → audit → validation → compress → emits `DATA_OPERATIONS_COMPLETE` (engine sweep is fired by `engine_service`, not inline). | Mon-Fri 21:30 UTC |
 | `allocator` | Cross-engine capital rebalance | Mon 13:00 UTC |
 
-The dashboard's **Daemons (launchd)** row goes 🔴 when any agent isn't installed, with an inline 🔧 Install all daemons button. Logs at `~/Library/Logs/short-term-trading-engine/{trade-monitor,data-operations,allocator}.{log,err}`.
+The dashboard's **Daemons (launchd)** row goes 🔴 when any agent isn't installed, with an inline 🔧 Install all daemons button. Logs at `~/Library/Logs/short-term-trading-engine/{trade-monitor,engine-service,data-operations,allocator}.{log,err}`.
 
 Uninstall:
 ```bash

@@ -402,3 +402,40 @@ async def test_reconcile_is_idempotent_within_process() -> None:
     second = await manager.reconcile(sizing_pct_of_engine_equity=Decimal("0.15"))
     assert len(first) == 1
     assert second == []
+
+
+async def test_reconcile_ignores_other_engines_orders() -> None:
+    """Cross-engine isolation: Sigma's reconcile must not touch orders
+    whose client_order_id parses to a different engine. Specifically,
+    the hard-stop branch would otherwise call broker.cancel_order on
+    a Reversion tier2 limit when its tier1 bracket was canceled — a
+    real cross-engine collision since list_recent_orders returns every
+    Alpaca order on the account, not just Sigma's.
+
+    Regression test for F1 of the 2026-05-14 engine pipeline audit.
+    """
+    manager, broker, _ = await _make_manager()
+    # No sigma trade in this run.
+    broker.list_recent_orders.return_value = [
+        # Reversion-owned canonical cids — rv_ prefix is enough for
+        # parse_cid to attribute these to the 'reversion' engine.
+        _placed_order(
+            client_order_id="rv_AAPL_1700000000_tier1",
+            side=OrderSide.BUY,
+            order_type=OrderType.MARKET,
+            broker_order_id="alp-rv-1",
+            order_class=OrderClass.BRACKET,
+            status=OrderStatus.CANCELED,
+        ),
+        _placed_order(
+            client_order_id="rv_AAPL_1700000000_tier2",
+            side=OrderSide.SELL,
+            order_type=OrderType.LIMIT,
+            broker_order_id="alp-rv-2",
+            status=OrderStatus.NEW,
+        ),
+    ]
+
+    aars = await manager.reconcile(sizing_pct_of_engine_equity=Decimal("0.15"))
+    assert aars == []
+    broker.cancel_order.assert_not_awaited()
