@@ -6,14 +6,23 @@
 |---|---|---|---|
 | Sigma | +1.150 (2026-05-13 sweep) / **55/100** (2026-05-14 follow-up) | FAILED (DSR < 0.95; regime fragility) | chop=47.7, hold=2d, stop=1.8% — same params Sharpe +1.02 / 2018-21 collapse to -0.84 / 2019-22 |
 | Reversion | +1.174 (2026-05-13) / **+0.43 on 2 trades** (100-trial sweep 2026-05-14) | FAILED — structural | Fresh sweep: 150/150 trials credibility=45 (ceiling, not noise). Signal too sparse on T1+T2 (1–3 trades per window) for any parameters to clear DSR. **No code changes**; gap closure needs different signal class or wider universe. |
-| **Vector** | +1.257 (2026-05-13) | FAILED — **next: relax P/B gate** | catalyst_window=9d, P/B=2.52, D/E=2.94 — produces zero candidates because P/B<1.5 blocks 937/1,435 tickers. SEC NLP catalyst upgrade deferred behind P/B calibration (binding constraint is value gate, not catalyst source). |
+| **Vector** | +1.257 (2026-05-13) / **0/150 pass** (2026-05-14, pb_ceiling 1.5–3.5 sweep) | FAILED — structural | Fresh sweep: all 150 trials credibility=45 (same ceiling as Reversion). 100% produced 1–5 trades/window regardless of params. Multi-gate intersection is too restrictive for T1+T2 signal density. **No code changes**; SEC NLP catalyst stays DEFERRED (sweep proved catalyst source isn't the bottleneck). |
 | Momentum | +0.784 | FAILED | paper-trading regardless of credibility per momentum spec |
 
 **Recalibration sequencing (2026-05-14):**
 1. **Sigma** — no parameter changes (sweep didn't find robust config; regime fragility is the binding constraint, not parameters).
 2. **Reversion** — 100-trial sweep complete 2026-05-14: 0/150 trials passed; every trial scored 45/100 (structural ceiling). No parameter changes. Reversion is shelved at the engine layer — next move is signal-class change (e.g., volume-anomaly trigger instead of Z-score) or universe expansion to T3+ (requires fundamentals coverage on tier-3 names that doesn't currently exist).
-3. **Vector** — relax P/B ceiling (1.5 → 2.0 → 2.5 → 3.0 → 3.5 sweep) BEFORE evaluating SEC NLP catalyst upgrade. The catalyst source is not the bottleneck; the value gate is.
-4. **SEC NLP** — DEFERRED. Only evaluate FMP vs. FMP+SEC catalyst after Vector is producing candidates with the relaxed P/B gate and a paper-trade baseline exists.
+3. **Vector** — pb_ceiling sweep COMPLETE 2026-05-14: 0/150 trials passed, all at credibility 45 (structural ceiling). Relaxing P/B widened the upstream pool but downstream gates still cap trade count at 1–5/window. **No code changes.** Like Reversion, gap closure needs strategy redesign (drop a gate / different signal class) or universe expansion to T3+ — not parameter tuning.
+4. **SEC NLP** — REMAINS DEFERRED. The sweep proved the catalyst source isn't the bottleneck; even with relaxed P/B, the multi-gate intersection caps trade count regardless. Changing FMP → FMP+SEC catalyst can't fix a strategy-design problem.
+
+**Status across all 4 engines (2026-05-14):**
+
+- Sigma: capped at 55/100 (regime fragility)
+- Reversion: capped at 45/100 (signal too sparse on T1+T2)
+- Vector: capped at 45/100 (multi-gate intersection too restrictive)
+- Momentum: paper-trading per momentum spec regardless of credibility
+
+**Common pattern:** all three engines hit the same ceiling because T1+T2 is too narrow for these signal classes to clear DSR's multiple-testing correction. The platform-level answer is one of: (a) wider universe with fundamentals coverage (T3+), (b) signal-class research, or (c) accept paper trading + live tracking as the operational gate, not credibility ≥ 60.
 
 All four produce positive OOS edge candidates; none passes DSR ≥ 0.95. **Data foundation is clean; signal strength is the binding constraint.** Earlier framing ("Sigma 55, Reversion 45, Vector 45") used tier-aware costs but pre-cleanup data — those scores are superseded by the table above.
 
