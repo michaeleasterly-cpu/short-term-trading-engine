@@ -220,14 +220,23 @@ class SECEdgarAdapter:
     async def fetch_form4_xml(
         self, cik: int, accession_number: str, primary_document: str,
     ) -> str:
-        """Download the Form 4 primary document (XML). Caller passes the
-        accession number with dashes (``0001234567-26-000001``) and the
-        ``primaryDocument`` filename from the submissions index.
+        """Download the Form 4 raw XML.
+
+        The submissions API's ``primaryDocument`` field commonly points
+        at the *XSL-rendered HTML* version (e.g. ``xslF345X06/form4.xml``).
+        Hitting that path returns HTML the parser can't read. Strip any
+        leading ``xslF345X*/`` directory prefix to hit the underlying
+        raw XML in the same accession folder. Fix landed 2026-05-14
+        after the historical-backfill diagnosis showed every Form 4
+        was producing 0 rows because we were parsing HTML.
         """
         clean_acc = accession_number.replace("-", "")
+        # SEC stores both representations side-by-side; strip the XSL
+        # rendition prefix to land on raw XML.
+        doc = re.sub(r"^xslF345X\d+/", "", primary_document)
         url = (
             f"{_ARCHIVES_BASE}/Archives/edgar/data/{int(cik)}/"
-            f"{clean_acc}/{primary_document}"
+            f"{clean_acc}/{doc}"
         )
         client = await self._ensure_client()
         resp = await self._http_get_text(client, url)
@@ -260,9 +269,13 @@ class SECEdgarAdapter:
             owner_name = owner_el.text.strip()
 
         for tx in root.iterfind(".//nonDerivativeTable/nonDerivativeTransaction"):
-            code_el = tx.find(
-                "transactionCoding/transactionAcquiredDisposedCode/value"
-            )
+            # Buy/sell direction comes from transactionCode (text directly
+            # on the element, NOT wrapped in <value>). The earlier
+            # ``transactionAcquiredDisposedCode/value`` XPath was wrong —
+            # that element doesn't exist in Form 4 schema X0306+ (which
+            # is the only schema SEC has served for years). Fix landed
+            # 2026-05-14 alongside the URL fix.
+            code_el = tx.find("transactionCoding/transactionCode")
             shares_el = tx.find("transactionAmounts/transactionShares/value")
             price_el = tx.find(
                 "transactionAmounts/transactionPricePerShare/value"

@@ -68,7 +68,7 @@ _FORM4_XML = """<?xml version="1.0"?>
   <nonDerivativeTable>
     <nonDerivativeTransaction>
       <transactionCoding>
-        <transactionAcquiredDisposedCode><value>S</value></transactionAcquiredDisposedCode>
+        <transactionCode>S</transactionCode>
       </transactionCoding>
       <transactionAmounts>
         <transactionShares><value>10000</value></transactionShares>
@@ -77,7 +77,7 @@ _FORM4_XML = """<?xml version="1.0"?>
     </nonDerivativeTransaction>
     <nonDerivativeTransaction>
       <transactionCoding>
-        <transactionAcquiredDisposedCode><value>P</value></transactionAcquiredDisposedCode>
+        <transactionCode>P</transactionCode>
       </transactionCoding>
       <transactionAmounts>
         <transactionShares><value>500</value></transactionShares>
@@ -86,7 +86,7 @@ _FORM4_XML = """<?xml version="1.0"?>
     </nonDerivativeTransaction>
     <nonDerivativeTransaction>
       <transactionCoding>
-        <transactionAcquiredDisposedCode><value>M</value></transactionAcquiredDisposedCode>
+        <transactionCode>M</transactionCode>
       </transactionCoding>
       <transactionAmounts>
         <transactionShares><value>200</value></transactionShares>

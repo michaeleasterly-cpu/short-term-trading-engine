@@ -71,6 +71,13 @@ STAGE_TIMEOUT_SEC = 120.0
 # fundamentals_quarterly), the original 120s budget cuts off these
 # handlers mid-batch and leaves the database in a partial-update state.
 HEAVY_STAGE_TIMEOUT_SEC = 3600.0  # 60 minutes (1200s was still tripping on ~7,300 tickers)
+# SEC EDGAR full historical backfill spans 2018-01-01 to today across
+# ~66 T1+T2 stocks, each with hundreds of Form 4 + 8-K filings. At
+# SEC's 8 req/sec courtesy budget the worst case is several thousand
+# fetches, which can run 2-4 hours. 6h gives headroom without
+# silently masking a real hang. Only affects the sec_filings stage;
+# every other stage stays on HEAVY_STAGE_TIMEOUT_SEC.
+SEC_FILINGS_STAGE_TIMEOUT_SEC = 21600.0  # 6 hours
 DATA_FRESHNESS_MAX_DAYS = 4  # 2 trading days + weekend buffer
 CORP_ACTIONS_FRESHNESS_MAX_DAYS = 7
 
@@ -1025,7 +1032,7 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # 2-business-day filing deadline so 6d staleness was half-stale on
     # average. Heavy timeout: ~200 tickers × ~1.5s/call (rate-limited
     # under SEC's 10 req/sec cap) + Form 4 XML fetches.
-    ("sec_filings",         lambda pool, cfg: (lambda: _stage_sec_filings(pool, backfill=bool(cfg.get("_sec_backfill")))), HEAVY_STAGE_TIMEOUT_SEC),
+    ("sec_filings",         lambda pool, cfg: (lambda: _stage_sec_filings(pool, backfill=bool(cfg.get("_sec_backfill")))), SEC_FILINGS_STAGE_TIMEOUT_SEC),
     # data_validation runs the 10-check suite against the live tables —
     # at the current 20M-row prices_daily it consistently runs ~120-
     # 130s. Bumping to 5 min gives headroom without masking a true hang.
