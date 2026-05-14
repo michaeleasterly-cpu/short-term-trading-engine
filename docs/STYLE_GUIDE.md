@@ -76,8 +76,13 @@ Google style. One-line summary on the first line, blank line, then optional `Arg
 
 - **Fail loud.** Never `except Exception: pass`. Catching is a deliberate decision, always with a structlog event explaining what was swallowed and why.
 - For data-source outages, route through `tpcore.outage.classify_outage` and act on the returned `OutageTier`: `INFORMATIONAL` → log only; `AVAILABILITY` → degrade (skip the feed); `KILL_SWITCH` → call `RiskGovernor.emergency_kill()`. Don't invent ad-hoc severity levels.
+- **External-API retries: use `@with_retry` from `tpcore.outage`.** Never write a local retry loop (`await asyncio.sleep(...)` inside a `while True` is a code smell). The decorator handles exponential backoff, `Retry-After` headers, jitter, and 429/5xx classification. 4xx-not-429 is permanent — don't retry it.
 - Engine-local error types (e.g. `SizingError`) live next to the code that raises them. Don't leak vendor SDK exceptions across the plug boundary.
 - **Every trade path** must call `tpcore.risk.RiskGovernor.check_trade()` before submitting. There are no exceptions to this rule.
+
+## New data adapters
+
+Every new external-API adapter starts from `tpcore/templates/adapter_template.py` and must pass [`docs/superpowers/checklists/adapter_readiness.md`](superpowers/checklists/adapter_readiness.md) before merging. The checklist covers retry, logging, configuration, interface compliance, testing, and rate limiting. Existing adapters that need refactoring should be brought into compliance one at a time, not piecemeal.
 
 ## Testing
 
