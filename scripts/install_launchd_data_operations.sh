@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install a launchd LaunchAgent that runs run_post_close.sh nightly at
+# Install a launchd LaunchAgent that runs run_data_operations.sh nightly at
 # 21:30 UTC weekdays (Mon-Fri). Per expert recommendation 2026-05-13.
 #
 # Why 21:30 UTC year-round (one fire, not two):
@@ -13,22 +13,38 @@
 # fire and likely no-op cleanly (validation tolerates "no new bars").
 #
 # Retry policy: launchd's KeepAlive=true retries on crash, which would
-# retry-spam a real failure. Instead, retries live INSIDE run_post_close.sh
-# via ops.py's self-heal pass — bounded to one transient retry per stage.
+# retry-spam a real failure. Instead, retries live INSIDE
+# run_data_operations.sh via ops.py's self-heal pass — bounded to one
+# transient retry per stage.
 #
-# Logs: ~/Library/Logs/short-term-trading-engine/post-close-YYYY-MM-DD.log
+# Logs: ~/Library/Logs/short-term-trading-engine/data-operations-YYYY-MM-DD.log
 #
-# Install:    scripts/install_launchd_post_close.sh
-# Uninstall:  launchctl unload ~/Library/LaunchAgents/com.michael.trading.post-close.plist
+# Install:    scripts/install_launchd_data_operations.sh
+# Uninstall:  launchctl unload ~/Library/LaunchAgents/com.michael.trading.data-operations.plist
+#
+# Renamed 2026-05-14: was install_launchd_post_close.sh /
+# com.michael.trading.post-close. Operator must unload the old
+# plist once before installing this one — see commit message for the
+# one-time migration runbook.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
 REPO_ROOT="$(pwd)"
-AGENT_LABEL="com.michael.trading.post-close"
+AGENT_LABEL="com.michael.trading.data-operations"
 PLIST_PATH="$HOME/Library/LaunchAgents/${AGENT_LABEL}.plist"
 LOG_DIR="$HOME/Library/Logs/short-term-trading-engine"
 
 mkdir -p "$LOG_DIR"
+
+# One-time migration (2026-05-14): unload + remove the legacy
+# com.michael.trading.post-close daemon if still present. Idempotent
+# no-op on machines that never had it.
+LEGACY_PLIST="$HOME/Library/LaunchAgents/com.michael.trading.post-close.plist"
+if [[ -f "$LEGACY_PLIST" ]]; then
+    echo "✓ found legacy post-close plist — unloading + removing"
+    launchctl unload "$LEGACY_PLIST" 2>/dev/null || true
+    rm -f "$LEGACY_PLIST"
+fi
 
 # Convert 21:30 UTC to the Mac's local time (launchd's StartCalendarInterval
 # wants local time). Earlier `date -j -u -f` approach was a no-op because
@@ -62,7 +78,7 @@ cat > "$PLIST_PATH" <<EOF
     <array>
         <string>/bin/bash</string>
         <string>-lc</string>
-        <string>cd ${REPO_ROOT} &amp;&amp; ${REPO_ROOT}/scripts/run_post_close.sh</string>
+        <string>cd ${REPO_ROOT} &amp;&amp; ${REPO_ROOT}/scripts/run_data_operations.sh</string>
     </array>
 
     <!-- Fires every day at ${LOCAL_HH}:${LOCAL_MM} local (= 21:30 UTC).
@@ -84,10 +100,10 @@ cat > "$PLIST_PATH" <<EOF
     <false/>
 
     <key>StandardOutPath</key>
-    <string>${LOG_DIR}/post-close.log</string>
+    <string>${LOG_DIR}/data-operations.log</string>
 
     <key>StandardErrorPath</key>
-    <string>${LOG_DIR}/post-close.err</string>
+    <string>${LOG_DIR}/data-operations.err</string>
 
     <key>EnvironmentVariables</key>
     <dict>
@@ -100,7 +116,7 @@ EOF
 
 echo "✓ wrote $PLIST_PATH"
 echo "  fires Mon-Fri at ${LOCAL_HH}:${LOCAL_MM} local time (= 21:30 UTC year-round)"
-echo "  logs:   $LOG_DIR/post-close.log + post-close.err"
+echo "  logs:   $LOG_DIR/data-operations.log + data-operations.err"
 
 # Load (or reload) the agent.
 launchctl unload "$PLIST_PATH" 2>/dev/null || true

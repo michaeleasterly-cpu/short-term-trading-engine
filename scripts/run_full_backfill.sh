@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Full-historical-backfill workflow. Use after major data-quality events
 # (large cleanup, source switch, new universe expansion) — NOT for the
-# daily cadence. Daily uses ``scripts/run_post_close.sh``.
+# daily cadence. Daily uses ``scripts/run_data_operations.sh``.
 #
 # Implements the operator's canonical pattern:
 #   DOWNLOAD → UPLOAD → VERIFY → FIX → COMPRESS

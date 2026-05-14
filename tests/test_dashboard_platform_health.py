@@ -433,7 +433,7 @@ def test_daemons_red_when_any_not_installed():
     daemons = [
         {"name": "trade_monitor", "installed": False, "kind": "persistent",
          "next_run_hint": "Mon-Sat persistent"},
-        {"name": "post_close", "installed": True, "kind": "scheduled",
+        {"name": "data_operations", "installed": True, "kind": "scheduled",
          "last_run_at": datetime.now(UTC), "last_exit": 0,
          "next_run_hint": "Mon-Fri 21:30 UTC"},
         {"name": "allocator", "installed": True, "kind": "scheduled",
@@ -450,7 +450,7 @@ def test_daemons_amber_when_persistent_silent_24h():
     daemons = [
         {"name": "trade_monitor", "installed": True, "kind": "persistent",
          "last_log_age_sec": 36 * 3600, "next_run_hint": ""},
-        {"name": "post_close", "installed": True, "kind": "scheduled",
+        {"name": "data_operations", "installed": True, "kind": "scheduled",
          "last_run_at": datetime.now(UTC), "last_exit": 0,
          "next_run_hint": "Mon-Fri 21:30 UTC"},
         {"name": "allocator", "installed": True, "kind": "scheduled",
@@ -467,7 +467,7 @@ def test_daemons_amber_when_scheduled_last_exit_nonzero():
     daemons = [
         {"name": "trade_monitor", "installed": True, "kind": "persistent",
          "last_log_age_sec": 60, "next_run_hint": ""},
-        {"name": "post_close", "installed": True, "kind": "scheduled",
+        {"name": "data_operations", "installed": True, "kind": "scheduled",
          "last_run_at": datetime.now(UTC), "last_exit": 1,
          "next_run_hint": "Mon-Fri 21:30 UTC"},
         {"name": "allocator", "installed": True, "kind": "scheduled",
@@ -477,14 +477,14 @@ def test_daemons_amber_when_scheduled_last_exit_nonzero():
     color, _, detail = classify_daemons(daemons)
     assert color == "amber"
     by = {row[0]: row for row in detail}
-    assert by["post_close"][1] == "amber"
+    assert by["data_operations"][1] == "amber"
 
 
 def test_daemons_green_when_all_healthy():
     daemons = [
         {"name": "trade_monitor", "installed": True, "kind": "persistent",
          "last_log_age_sec": 60, "next_run_hint": ""},
-        {"name": "post_close", "installed": True, "kind": "scheduled",
+        {"name": "data_operations", "installed": True, "kind": "scheduled",
          "last_run_at": datetime.now(UTC), "last_exit": 0,
          "next_run_hint": "Mon-Fri 21:30 UTC"},
         {"name": "allocator", "installed": True, "kind": "scheduled",

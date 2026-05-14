@@ -361,13 +361,13 @@ def _fetch_daemon_state() -> list[dict]:
 
     ``next_run_hint`` is parsed from the live plist (no hardcoded
     string) so it stays accurate when the install script changes the
-    schedule (e.g., removing the Weekday filter from post-close)."""
+    schedule (e.g., removing the Weekday filter from data-operations)."""
     home = Path.home()
     plist_dir = home / "Library" / "LaunchAgents"
     log_dir = home / "Library" / "Logs" / "short-term-trading-engine"
     specs = [
         ("trade_monitor", "persistent", "trade-monitor.log"),
-        ("post_close", "scheduled", "post-close.log"),
+        ("data_operations", "scheduled", "data-operations.log"),
         ("allocator", "scheduled", "allocator.log"),
     ]
     out: list[dict] = []
@@ -1818,9 +1818,9 @@ def _render_stage_detail_row(
 
 HEALTH_ACTIONS: dict[str, dict] = {
     "daily_update": {
-        "label": "Run post-close",
-        "help": "Full operator workflow: ops.py --update (7 stages) + cross-table audit + validation re-confirm + compress CSVs. Detached, ~30-45 min.",
-        "script": "scripts/run_post_close.sh",
+        "label": "Run data-operations",
+        "help": "Full operator workflow: ops.py --update (13 stages) + cross-table audit + validation re-confirm + compress CSVs. Detached, ~30-45 min.",
+        "script": "scripts/run_data_operations.sh",
         "args": (),
         "blocking": False,
     },
@@ -2111,7 +2111,7 @@ def render_platform_health() -> None:
                 _render_health_row(name, color, text)
             st.caption(
                 "**One-button install:** `scripts/install_all_daemons.sh` "
-                "(installs trade_monitor, post_close, allocator). "
+                "(installs trade_monitor, data_operations, allocator). "
                 "Logs: `~/Library/Logs/short-term-trading-engine/`."
             )
             not_installed = [d["name"] for d in daemons if not d["installed"]]
@@ -2119,7 +2119,7 @@ def render_platform_health() -> None:
                 if st.button(
                     "🔧 Install all daemons",
                     key="health_install_daemons",
-                    help="Runs scripts/install_all_daemons.sh — sets up trade_monitor + post_close + allocator launchd agents.",
+                    help="Runs scripts/install_all_daemons.sh — sets up trade_monitor + data_operations + allocator launchd agents.",
                 ):
                     rc, output = run_blocking_script("scripts/install_all_daemons.sh", timeout=60)
                     _render_blocking_output("Install daemons", rc, output)
@@ -2644,24 +2644,26 @@ def render_actions():
     # ── Daily — every market day ────────────────────────────────────────────
     st.markdown("##### Daily — every market day after the close")
     st.caption(
-        "**Runs automatically** via the `com.michael.trading.post_close` "
+        "**Runs automatically** via the `com.michael.trading.data-operations` "
         "launchd daemon at 21:30 UTC (≈ 16:30 ET, after market close). The "
         "button below is a manual override — use only to re-run after a "
-        "failure or out-of-band. Workflow: 7-stage `ops.py --update` (bars "
-        "→ corp actions → coverage_fill → fundamentals → validation → "
-        "universe prescreener → universe simulation) → cross-table audit "
-        "→ validation re-confirm → compress backfill CSVs → engine sweep. "
+        "failure or out-of-band. Workflow: 13-stage `ops.py --update` (bars "
+        "→ corp actions → reconcile → coverage_fill → cross_ref_cleanup "
+        "→ fundamentals → tier_refresh → classify_tickers → catalyst_refresh "
+        "→ sec_filings → validation → universe prescreener → universe "
+        "simulation) → cross-table audit → validation re-confirm → compress "
+        "backfill CSVs → engine sweep. "
         "**Check the Platform-health panel above for per-stage status.**"
     )
     c1, c2 = st.columns([1, 4])
     if c1.button(
-        "📥  Run post-close",
-        help="Runs scripts/run_post_close.sh (full one-button workflow). Detached (~30-45 min).",
+        "📥  Run data-operations",
+        help="Runs scripts/run_data_operations.sh (full one-button workflow). Detached (~30-45 min).",
         use_container_width=True,
     ):
-        pid, logfile = run_detached_script("scripts/run_post_close.sh")
+        pid, logfile = run_detached_script("scripts/run_data_operations.sh")
         st.session_state["detached_job"] = {
-            "name": "Post-close",
+            "name": "Data operations",
             "pid": pid,
             "logfile": logfile,
             "started_at": time.time(),
@@ -2678,7 +2680,7 @@ def render_actions():
     # ── Monthly — Momentum rebalance ────────────────────────────────────────
     st.markdown("##### Monthly — Momentum rebalance (first NYSE session of the month)")
     st.caption(
-        "**Runs automatically** as part of the daily post-close: the momentum "
+        "**Runs automatically** as part of the daily data-operations run: the momentum "
         "scheduler fires every day but only emits orders on the 1st NYSE session "
         "of each calendar month (no-op otherwise). The button below is a manual "
         "override — re-scores against today's data and submits a fresh batch."

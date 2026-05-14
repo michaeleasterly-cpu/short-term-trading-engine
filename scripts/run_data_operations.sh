@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# One-button daily-after-close workflow.
+# Daily data-operations workflow (renamed from run_post_close.sh on
+# 2026-05-14 to describe the function rather than the trigger time).
 #
 # Sequence (each step gated by the previous step's exit code):
-#   1. DOWNLOAD + UPLOAD — scripts/ops.py --update (7 stages, all sources)
+#   1. DOWNLOAD + UPLOAD — scripts/ops.py --update (13 stages, all sources)
 #   2. VERIFY            — scripts/run_audit_all_tables.sh
 #   3. VERIFY            — scripts/run_stage.sh data_validation
 #   4. FIX               — self-heal retry is built into ops.py; if anything
@@ -15,8 +16,8 @@
 # Pass --force to bypass the market-closed check.
 #
 # Usage:
-#   scripts/run_post_close.sh             # the canonical daily workflow
-#   scripts/run_post_close.sh --force     # bypass market-closed guard
+#   scripts/run_data_operations.sh             # the canonical daily workflow
+#   scripts/run_data_operations.sh --force     # bypass market-closed guard
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
@@ -33,7 +34,7 @@ _notify_failure() {
     local step="$1"
     local rc="$2"
     if command -v osascript >/dev/null 2>&1; then
-        osascript -e "display notification \"post_close ${step} exited ${rc} — check ~/Library/Logs/short-term-trading-engine/post-close.log\" with title \"STE — post-close FAILED\" sound name \"Basso\"" 2>/dev/null || true
+        osascript -e "display notification \"data_operations ${step} exited ${rc} — check ~/Library/Logs/short-term-trading-engine/data-operations.log\" with title \"STE — data_operations FAILED\" sound name \"Basso\"" 2>/dev/null || true
     fi
     echo "✗ FAILURE — ${step} exited ${rc}. Notification fired (if osascript available)."
 }
@@ -42,7 +43,7 @@ _notify_failure() {
 trap '_rc=$?; if [[ $_rc -ne 0 ]]; then _notify_failure "trap (unexpected)" $_rc; fi' EXIT
 
 echo "════════════════════════════════════════════════════════════════════════"
-echo "  POST-CLOSE WORKFLOW — $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+echo "  DATA OPERATIONS WORKFLOW — $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 echo "════════════════════════════════════════════════════════════════════════"
 
 # Step 1+2 — download + upload via the 7-stage --update pipeline.
@@ -140,7 +141,7 @@ scripts/run_compress_backfill_csvs.sh
 # Step 6 — engine sweep. Now that data is verified clean, run every
 # engine scheduler back-to-back. Each is one-shot; the trade_monitor
 # daemon (installed separately) picks up the Tier 2 cascade.
-# Set SKIP_ENGINES=1 to skip this step (data-only post-close).
+# Set SKIP_ENGINES=1 to skip this step (data-only run).
 if [[ "${SKIP_ENGINES:-0}" == "1" ]]; then
     echo ""
     echo "▶ STEP 6 / 7  engine sweep — SKIPPED (SKIP_ENGINES=1)"
@@ -156,7 +157,7 @@ fi
 # drawdown periods, loss clusters, or outlier losses. Non-fatal — the
 # service swallows per-engine + per-trigger failures, and if it can't
 # build a DB pool at all it retries once. A failure here never blocks
-# the rest of the post-close.
+# the rest of the data-operations run.
 echo ""
 echo "▶ STEP 7 / 7  forensics — scan AARs for drawdown/cluster/outlier triggers"
 echo "────────────────────────────────────────────────────────────────────────"
@@ -168,5 +169,5 @@ DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python -m tpcore.forensics || \
 trap - EXIT
 echo ""
 echo "════════════════════════════════════════════════════════════════════════"
-echo "  POST-CLOSE COMPLETE — every check 🟢"
+echo "  DATA OPERATIONS COMPLETE — every check 🟢"
 echo "════════════════════════════════════════════════════════════════════════"

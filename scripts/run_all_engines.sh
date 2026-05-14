@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run every engine scheduler back-to-back (Sigma → Reversion → Vector →
-# Momentum). Use after run_post_close.sh has confirmed clean data.
+# Momentum). Use after run_data_operations.sh has confirmed clean data.
 #
 # This is the operator's daily-trade trigger: data fresh ⇒ schedulers
 # scan ⇒ orders submitted to Alpaca paper ⇒ trade_monitor (running
@@ -28,7 +28,7 @@ set -a
 source .env
 set +a
 
-# Defensive: only run after the post-close pipeline left the data
+# Defensive: only run after the data-operations pipeline left the data
 # layer green. The validation suite is the source of truth.
 if [[ -z "$FORCE" ]]; then
     LATEST_VALIDATION=$(DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python -c "

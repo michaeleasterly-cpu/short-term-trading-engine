@@ -10,8 +10,8 @@
 # session (would corrupt today's row in prices_daily). Pass --force to
 # bypass that guard.
 #
-# For a comprehensive post-close workflow (update + audit + verify +
-# compress), use ``scripts/run_post_close.sh`` instead — that's the
+# For a comprehensive data-operations workflow (update + audit + verify +
+# compress), use ``scripts/run_data_operations.sh`` instead — that's the
 # one-button operator command.
 set -uo pipefail
 cd "$(dirname "$0")/.."

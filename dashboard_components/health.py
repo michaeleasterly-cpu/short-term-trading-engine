@@ -311,7 +311,7 @@ def classify_coverage_gaps(
 
 
 def classify_daemons(daemons: list[dict[str, Any]]) -> tuple[str, str, list[tuple[str, str, str]]]:
-    """Roll-up of the three platform daemons (trade_monitor, post_close,
+    """Roll-up of the three platform daemons (trade_monitor, data_operations,
     allocator). Each daemon entry:
 
       {'name': str, 'installed': bool, 'last_run_at': datetime | None,

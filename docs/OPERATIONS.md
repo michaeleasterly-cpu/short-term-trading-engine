@@ -47,10 +47,10 @@ The maintenance CLI `scripts/ops.py` is the single entry point for daily and wee
 ### Before trading — the one-button operator command
 
 ```bash
-scripts/run_post_close.sh
+scripts/run_data_operations.sh
 ```
 
-This runs the canonical post-close workflow in order:
+This runs the canonical data-operations workflow in order:
 
 1. **DOWNLOAD + UPLOAD** — `scripts/ops.py --update` (7 stages):
    `daily_bars` → `corporate_actions` → `coverage_fill` → `fundamentals_refresh` → `data_validation` → `universe_prescreener` → `universe_simulation`.
@@ -68,7 +68,7 @@ This runs the canonical post-close workflow in order:
 scripts/run_full_backfill.sh
 ```
 
-The CSV-first download → upload → verify → fix → compress pattern across all three sources (Alpaca bars, FMP fundamentals, Alpaca corp actions). Used after large cleanups or universe expansion. Long-running (30-60 min). NOT the daily cadence — that's `run_post_close.sh`.
+The CSV-first download → upload → verify → fix → compress pattern across all three sources (Alpaca bars, FMP fundamentals, Alpaca corp actions). Used after large cleanups or universe expansion. Long-running (30-60 min). NOT the daily cadence — that's `run_data_operations.sh`.
 
 ### Closed by design (not gaps)
 
@@ -89,10 +89,10 @@ scripts/install_all_daemons.sh
 | Daemon | What it does | Schedule |
 |---|---|---|
 | `trade_monitor` | Persistent. Watches Alpaca `TradingStream` for fills, submits Tier 2 cascade for Sigma/Reversion. Auto-restart on crash. | `KeepAlive` on crash |
-| `post_close` | Daily refresh: 7-stage `ops --update` → audit → validation → compress → engine sweep | Mon-Fri 21:30 UTC |
+| `data_operations` | Daily refresh: 7-stage `ops --update` → audit → validation → compress → engine sweep | Mon-Fri 21:30 UTC |
 | `allocator` | Cross-engine capital rebalance | Mon 13:00 UTC |
 
-The dashboard's **Daemons (launchd)** row goes 🔴 when any agent isn't installed, with an inline 🔧 Install all daemons button. Logs at `~/Library/Logs/short-term-trading-engine/{trade-monitor,post-close,allocator}.{log,err}`.
+The dashboard's **Daemons (launchd)** row goes 🔴 when any agent isn't installed, with an inline 🔧 Install all daemons button. Logs at `~/Library/Logs/short-term-trading-engine/{trade-monitor,data-operations,allocator}.{log,err}`.
 
 Uninstall:
 ```bash
@@ -138,7 +138,7 @@ Refuses to run if `data_validation` has any red row in its latest result. Each s
 
 ### Forensics (2026-05-14)
 
-Runs as the final step of `scripts/run_post_close.sh`. Scans every engine's AAR history and emits triggers when it detects:
+Runs as the final step of `scripts/run_data_operations.sh`. Scans every engine's AAR history and emits triggers when it detects:
 
 * **Outlier loss** — a trade with `pnl_net` more than 3σ below the engine's mean (requires ≥5 historical AARs).
 * **Loss cluster** — 3+ consecutive losing trades.
@@ -147,7 +147,7 @@ Runs as the final step of `scripts/run_post_close.sh`. Scans every engine's AAR 
 Each new trigger is INSERTed into `platform.forensics_triggers` (idempotent via `payload.fingerprint`) and an auto-generated Sprint Dossier is written to `docs/sprints/<date>-<kind>-<engine>-<id>.md`. The dossier is a markdown template prefilled with the trigger payload — the operator fills in **Hypothesis** + **Fix** sections, ships the change, then clicks **Mark resolved** on the dashboard (Health tab → Forensics expander) which sets `resolved_at = NOW()`.
 
 ```bash
-# Run manually (also fires as step 7/7 of run_post_close.sh):
+# Run manually (also fires as step 7/7 of run_data_operations.sh):
 DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python -m tpcore.forensics
 ```
 
@@ -155,11 +155,11 @@ Service-level error handling: each engine and each trigger is isolated — a sin
 
 ### Alerting on failure (2026-05-14)
 
-`scripts/run_post_close.sh` now fires a macOS Notification Center alert (`osascript`) on any non-zero exit — from `ops.py --update`, the cross-table audit, validation suite red, or a trap-caught unexpected exit. The notification points at `~/Library/Logs/short-term-trading-engine/post-close.log`. Safe no-op on non-Mac hosts (CI).
+`scripts/run_data_operations.sh` now fires a macOS Notification Center alert (`osascript`) on any non-zero exit — from `ops.py --update`, the cross-table audit, validation suite red, or a trap-caught unexpected exit. The notification points at `~/Library/Logs/short-term-trading-engine/data-operations.log`. Safe no-op on non-Mac hosts (CI).
 
 ### Lessons learned (2026-05-13 data-cleanup post-mortem)
 
-The post-mortem captured these principles as durable patterns; the post-close + full-backfill scripts above codify them. Treat any deviation as the start of the next mess.
+The post-mortem captured these principles as durable patterns; the data-operations + full-backfill scripts above codify them. Treat any deviation as the start of the next mess.
 
 1. **CSV-first for any non-trivial pull.** Source → CSV (audit-able artifact) → validate-each-row → upsert. Re-runnable; the CSV remains the permanent record of what the source returned. Daily pulls (~7k bars/day) can write direct; full backfills go CSV-first.
 2. **Physical-truth at write time.** Every row passes the same physical-truth predicate (`close > 0`, OHLC consistent, no future dates) AT the CSV write step, not just at the destination. Bad rows never reach the database.
@@ -217,7 +217,7 @@ A future `--update-weekly` flag is reserved for any explicitly-weekly work heavi
 
 ### Interpreting Results
 
-- The dashboard `--check` output now includes 16 probes (added 2026-05-14): `missed_post_close` (warns when no `ops` STARTUP event in 30h — catches launchd misfires) and `supabase_backup` (probes `pg_stat_archiver.last_archived_time`; warns at 26h staleness; fails soft if the role lacks system-view access).
+- The dashboard `--check` output now includes 16 probes (added 2026-05-14): `missed_data_operations` (warns when no `ops` STARTUP event in 30h — catches launchd misfires) and `supabase_backup` (probes `pg_stat_archiver.last_archived_time`; warns at 26h staleness; fails soft if the role lacks system-view access).
 - `python scripts/ops.py --check --pretty` displays the health report seen during daily operation (terminal-friendly).
 - `python scripts/ops.py --check` returns JSON on stdout, suitable for scripting and grep-by-key.
 - `python scripts/ops.py --update --dry-run` logs every stage to `platform.application_log` without performing any data writes — useful before letting a new credential or schema change touch the live tables.

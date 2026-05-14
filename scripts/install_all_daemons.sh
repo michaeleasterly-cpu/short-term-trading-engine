@@ -4,7 +4,7 @@
 #
 # After this runs, the operator's mac will:
 #   * keep tpcore.trade_monitor running 24/7 (auto-restart on crash)
-#   * run scripts/run_post_close.sh every weekday at 21:30 UTC
+#   * run scripts/run_data_operations.sh every weekday at 21:30 UTC
 #     (chains: data refresh → audit → validate → compress → engines)
 #   * run scripts/ops.py --allocate every Monday at 13:00 UTC
 #
@@ -20,7 +20,7 @@ echo "════════════════════════�
 echo "  INSTALLING PLATFORM DAEMONS — $(date '+%Y-%m-%d %H:%M:%S')"
 echo "════════════════════════════════════════════════════════════════════════"
 
-for installer in install_launchd_trade_monitor install_launchd_post_close install_launchd_allocator; do
+for installer in install_launchd_trade_monitor install_launchd_data_operations install_launchd_allocator; do
     echo ""
     echo "▶ ${installer}"
     echo "────────────────────────────────────────────────────────────────────────"
@@ -36,4 +36,4 @@ echo "Verify:"
 echo "  launchctl list | grep com.michael.trading."
 echo ""
 echo "Tail logs:"
-echo "  tail -f ~/Library/Logs/short-term-trading-engine/{trade-monitor,post-close,allocator}.log"
+echo "  tail -f ~/Library/Logs/short-term-trading-engine/{trade-monitor,data-operations,allocator}.log"

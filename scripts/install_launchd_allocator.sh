@@ -24,7 +24,7 @@ LOG_DIR="$HOME/Library/Logs/short-term-trading-engine"
 mkdir -p "$LOG_DIR"
 
 # Convert 13:00 UTC to the Mac's local time (launchd's
-# StartCalendarInterval wants local). See install_launchd_post_close.sh
+# StartCalendarInterval wants local). See install_launchd_data_operations.sh
 # for the rationale — `date -j -u -f` was a no-op.
 TODAY_UTC=$(date -u '+%Y-%m-%d')
 EPOCH=$(TZ=UTC date -j -f '%Y-%m-%d %H:%M' "$TODAY_UTC 13:00" '+%s' 2>/dev/null || echo "")

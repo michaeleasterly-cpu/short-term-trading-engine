@@ -289,7 +289,7 @@ class ForensicsService:
         INSERT (DB connection blip) doesn't stop the rest of the run —
         the failure is logged and the loop continues. The service never
         raises; if the initial AAR fetch itself fails, we log and return
-        zero-counts so the post-close pipeline isn't blocked by a
+        zero-counts so the data-operations pipeline isn't blocked by a
         diagnostic step.
         """
         counts: dict[str, int] = {k.value: 0 for k in TriggerKind}

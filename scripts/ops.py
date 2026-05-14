@@ -1661,11 +1661,11 @@ async def _check_risk_governor(pool: asyncpg.Pool) -> dict[str, Any]:
     return {"ok": not any_killed, "engines": engines}
 
 
-async def _check_missed_post_close(pool: asyncpg.Pool) -> dict[str, Any]:
+async def _check_missed_data_operations(pool: asyncpg.Pool) -> dict[str, Any]:
     """Watchdog — warn if no `ops` engine STARTUP event in last 30 hours.
 
     Catches launchd misfires (Mac asleep at trigger + replay window
-    expired, dst transition, manual unload). The post_close daemon
+    expired, dst transition, manual unload). The data_operations daemon
     fires daily; a 30-hour ceiling tolerates one missed cycle of grace
     before flagging. Closes audit gap G-6.
     """
@@ -1773,7 +1773,7 @@ _CHECK_FNS = [
     ("ingestion_engine", _check_ingestion_engine),
     ("validation_suite", _check_validation),
     ("risk_governor", _check_risk_governor),
-    ("missed_post_close", _check_missed_post_close),
+    ("missed_data_operations", _check_missed_data_operations),
     ("supabase_backup", _check_supabase_backup),
     ("recent_errors", _check_recent_errors),
 ]

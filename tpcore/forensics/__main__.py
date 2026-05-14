@@ -1,6 +1,6 @@
 """CLI entry point for the Forensics service.
 
-Run from the daily post-close pipeline (or by hand). Reads every engine's
+Run from the daily data-operations pipeline (or by hand). Reads every engine's
 AAR history out of ``platform.aar_events``, detects drawdown periods,
 loss clusters, and outlier losses, and INSERTs new triggers into
 ``platform.forensics_triggers``. Re-running is safe (idempotent via
