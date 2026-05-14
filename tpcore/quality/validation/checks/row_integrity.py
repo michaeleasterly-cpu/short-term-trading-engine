@@ -66,8 +66,13 @@ _INTEGRITY_PREDICATE = f"""
     OR high < GREATEST(open, close, low)
     OR low > LEAST(open, close, high)
     OR volume IS NULL OR volume < 0
-    OR date > CURRENT_DATE
 """
+# NOTE: ``date > CURRENT_DATE`` removed from this predicate so a partial
+# index can cover it (Postgres requires IMMUTABLE expressions in partial
+# index predicates; CURRENT_DATE is not). Future-date rejection is now
+# enforced at the ingest writer (``ingest_alpaca_bars._upsert_bars``)
+# rather than at scan time. Migration 20260514_2000 builds the partial
+# index aligned with the predicate above.
 
 _INTEGRITY_SQL = f"""
     SELECT ticker, date, close, high, low, volume, {_VIOLATION_CASE} AS violation
