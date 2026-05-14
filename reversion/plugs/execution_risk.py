@@ -30,6 +30,11 @@ from reversion.models import (
     Phase,
     PhaseAssessment,
 )
+
+# SizingError moved to tpcore.exceptions 2026-05-14 — both Sigma and
+# Reversion had byte-identical copies. Re-exported so existing imports
+# (`from reversion.plugs.execution_risk import SizingError`) stay working.
+from tpcore.exceptions import SizingError  # noqa: F401
 from tpcore.interfaces.engine_plug import BaseEnginePlug
 from tpcore.order_ids import build_cid
 
@@ -38,10 +43,6 @@ logger = structlog.get_logger(__name__)
 DEFAULT_ACCOUNT_CAPITAL = Decimal("10000")
 PER_TRADE_EQUITY_FRACTION = Decimal("0.20")  # cap = min($2000, 20% of equity).
 TIER1_FRACTION = Decimal("0.75")
-
-
-class SizingError(Exception):
-    """Raised when no valid position size can be computed (e.g. price ≤ 0)."""
 
 
 class ReversionExecutionRisk(BaseEnginePlug):

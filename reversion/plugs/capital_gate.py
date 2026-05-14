@@ -25,7 +25,6 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 
 import structlog
-from pydantic import BaseModel, ConfigDict
 
 from reversion.models import (
     MAX_CONCURRENT_POSITIONS,
@@ -36,6 +35,12 @@ from tpcore.backtest.credibility import (
     graduation_ready,
 )
 from tpcore.interfaces.engine_plug import BaseEnginePlug
+
+# Reversion's GraduationStats subclasses the shared
+# PerTradeGraduationStats (n_trades / win_rate / avg_return) and adds
+# profit_factor. Refactored 2026-05-14 to consolidate the shared fields
+# in tpcore.models.graduation.
+from tpcore.models.graduation import PerTradeGraduationStats
 from tpcore.quality.validation.capital_gate import assert_passed
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -50,12 +55,9 @@ GRAD_MIN_AVG_RETURN = 0.02
 GRAD_MIN_PROFIT_FACTOR = 1.5
 
 
-class GraduationStats(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class GraduationStats(PerTradeGraduationStats):
+    """Reversion's graduation rubric — shared per-trade fields plus PF."""
 
-    n_trades: int = 0
-    win_rate: float = 0.0
-    avg_return: float = 0.0
     profit_factor: float = 0.0
 
 

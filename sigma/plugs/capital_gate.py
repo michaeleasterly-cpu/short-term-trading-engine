@@ -18,7 +18,6 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 
 import structlog
-from pydantic import BaseModel, ConfigDict
 
 from sigma.models import (
     MAX_CONCURRENT_POSITIONS,
@@ -29,6 +28,12 @@ from tpcore.backtest.credibility import (
     graduation_ready,
 )
 from tpcore.interfaces.engine_plug import BaseEnginePlug
+
+# Sigma's GraduationStats is the shared per-trade shape — moved to
+# tpcore.models.graduation 2026-05-14. Re-export under the original
+# name for back-compat with `from sigma.plugs.capital_gate import
+# GraduationStats` call sites and the engine __init__.py re-export.
+from tpcore.models.graduation import PerTradeGraduationStats as GraduationStats  # noqa: F401
 from tpcore.quality.validation.capital_gate import assert_passed
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -40,14 +45,6 @@ DAILY_LOSS_FREEZE_PCT = Decimal("0.05")
 GRAD_MIN_TRADES = 50
 GRAD_MIN_WIN_RATE = 0.65
 GRAD_MIN_AVG_RETURN = 0.015
-
-
-class GraduationStats(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    n_trades: int = 0
-    win_rate: float = 0.0
-    avg_return: float = 0.0
 
 
 class SigmaCapitalGate(BaseEnginePlug):

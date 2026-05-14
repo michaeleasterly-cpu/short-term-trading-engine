@@ -18,13 +18,17 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 
 import structlog
-from pydantic import BaseModel, ConfigDict
 
 from tpcore.backtest.credibility import (
     CredibilityScoreInsufficientError,
     graduation_ready,
 )
 from tpcore.interfaces.engine_plug import BaseEnginePlug
+
+# Vector's GraduationStats is the shared per-trade shape — moved to
+# tpcore.models.graduation 2026-05-14. Re-export under the original
+# name for back-compat.
+from tpcore.models.graduation import PerTradeGraduationStats as GraduationStats  # noqa: F401
 from tpcore.quality.validation.capital_gate import assert_passed
 from vector.models import (
     DAILY_LOSS_FREEZE_PCT,
@@ -40,14 +44,6 @@ logger = structlog.get_logger(__name__)
 GRAD_MIN_TRADES = 30
 GRAD_MIN_WIN_RATE = 0.55
 GRAD_MIN_AVG_RETURN = 0.03
-
-
-class GraduationStats(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    n_trades: int = 0
-    win_rate: float = 0.0
-    avg_return: float = 0.0
 
 
 class VectorCapitalGate(BaseEnginePlug):
