@@ -292,11 +292,32 @@ def test_coverage_amber_between_2_and_5pct():
 
 
 def test_coverage_red_above_5pct():
+    # Bars at 6% is red.
     color, _ = classify_coverage_gaps(bar_gap_count=60, fund_gap_count=10, tier_le_2_total=1000)
     assert color == "red"
-    # Either dimension being above threshold should trigger red.
-    color, _ = classify_coverage_gaps(bar_gap_count=10, fund_gap_count=60, tier_le_2_total=1000)
+    # Fundamentals at 60/400 stocks = 15% → red on the new ETF-aware
+    # denominator. (Prior to the 2026-05-14 ETF correction the test
+    # was at 60/1000 = 6%; now the denominator is the non-ETF subset.)
+    color, _ = classify_coverage_gaps(
+        bar_gap_count=10, fund_gap_count=60,
+        tier_le_2_total=1000, tier_le_2_non_etf_count=400,
+    )
     assert color == "red"
+
+
+def test_coverage_fundamentals_green_when_etf_corrected():
+    """The 2026-05-14 case: 922 missing fundamentals out of 1,274 T1+T2
+    sounds bad, but 760 are ETFs (no fundamentals expected). The
+    remaining 162/514 stocks = 31.5% — still red, but the denominator
+    correction is what the test pins."""
+    color, summary = classify_coverage_gaps(
+        bar_gap_count=4, fund_gap_count=162,
+        tier_le_2_total=1274, tier_le_2_non_etf_count=514,
+    )
+    # Bars 4/1274 = 0.3% (green) · Fundamentals 162/514 = 31.5% (red)
+    assert color == "red"
+    assert "514 stocks" in summary
+    assert "31.5%" in summary
 
 
 def test_coverage_amber_when_no_universe():

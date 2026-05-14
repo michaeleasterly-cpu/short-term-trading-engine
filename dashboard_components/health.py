@@ -238,32 +238,69 @@ def classify_coverage_gaps(
     bar_gap_count: int,
     fund_gap_count: int,
     tier_le_2_total: int,
+    tier_le_2_non_etf_count: int | None = None,
 ) -> tuple[str, str]:
-    """Universe coverage integrity — fraction of tier ≤ 2 tickers that
-    are missing recent bars and/or any fundamentals row at all.
+    """Universe coverage integrity — fraction missing bars / fundamentals.
 
-    Severity:
-      * green   — both gaps under 2% of the tier-≤-2 universe
-      * amber   — either gap between 2% and 5%
-      * red     — either gap above 5%
+    Denominators are SPLIT because the two gaps mean different things:
 
-    The thresholds tolerate the SPAC unit + IPO long-tail (small,
-    expected) without masking a structural ingestion failure (large).
+    * **Bars**: denominator = every T1+T2 ticker (ETFs are expected to
+      have bars too). Tight band: green < 2%, amber 2-5%, red > 5%.
+
+    * **Fundamentals**: denominator = T1+T2 **stocks only** (excluding
+      ETFs). ETFs legitimately lack ``fundamentals_quarterly`` rows
+      because FMP doesn't cover them, so counting them as "missing"
+      produced a permanent false-red. With the ETF correction the
+      thresholds become tight again: green < 5%, amber 5-15%, red >
+      15%.
+
+    ``tier_le_2_non_etf_count`` is the new arg (2026-05-14, post
+    ``platform.ticker_classifications`` rollout). When None (legacy
+    callers / tests pre-rollout) the function falls back to the loose
+    threshold against the full denominator. Once every caller passes
+    the new count, the fallback can be removed.
     """
     if tier_le_2_total <= 0:
         return "amber", "No tier ≤ 2 universe to measure against"
     bar_pct = bar_gap_count / tier_le_2_total
-    fund_pct = fund_gap_count / tier_le_2_total
-    worst_pct = max(bar_pct, fund_pct)
-    if worst_pct < 0.02:
-        color = "green"
-    elif worst_pct < 0.05:
-        color = "amber"
+
+    # Bars: tight thresholds against the full T1+T2 denominator.
+    if bar_pct < 0.02:
+        bar_color = "green"
+    elif bar_pct < 0.05:
+        bar_color = "amber"
     else:
-        color = "red"
+        bar_color = "red"
+
+    # Fundamentals: denominator is non-ETF count when available.
+    if tier_le_2_non_etf_count is not None and tier_le_2_non_etf_count > 0:
+        fund_denom = tier_le_2_non_etf_count
+        fund_pct = fund_gap_count / fund_denom
+        if fund_pct < 0.05:
+            fund_color = "green"
+        elif fund_pct < 0.15:
+            fund_color = "amber"
+        else:
+            fund_color = "red"
+        fund_label = f"{fund_gap_count}/{fund_denom} stocks"
+    else:
+        # Legacy fallback — denominator is everything including ETFs.
+        fund_denom = tier_le_2_total
+        fund_pct = fund_gap_count / fund_denom
+        if fund_pct < 0.80:
+            fund_color = "green"
+        elif fund_pct < 0.95:
+            fund_color = "amber"
+        else:
+            fund_color = "red"
+        fund_label = f"{fund_gap_count}/{fund_denom} (incl. ETFs)"
+
+    rank = {"green": 0, "amber": 1, "red": 2}
+    color = bar_color if rank[bar_color] >= rank[fund_color] else fund_color
+
     summary = (
         f"Bars: {bar_gap_count}/{tier_le_2_total} missing recent ({bar_pct:.1%}) · "
-        f"Fundamentals: {fund_gap_count}/{tier_le_2_total} missing rows ({fund_pct:.1%})"
+        f"Fundamentals: {fund_label} missing ({fund_pct:.1%})"
     )
     return color, summary
 

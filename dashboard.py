@@ -597,13 +597,34 @@ async def _fetch_platform_health() -> dict:
             return update_run
 
     async def _q_coverage_gaps() -> dict:
-        # Tier ≤ 2 tickers with no bar in the last 5 days, AND tier ≤ 2
-        # tickers with NO fundamentals_quarterly row at all. Both are
-        # silent killers — momentum/vector/reversion can score against
-        # them without ever surfacing that the data is incomplete.
+        """Universe coverage gaps — bars + fundamentals.
+
+        ETF correction (2026-05-14): the fundamentals check now excludes
+        tickers classified as ETFs in ``platform.ticker_classifications``.
+        ETFs legitimately have no ``fundamentals_quarterly`` rows
+        because FMP doesn't cover them; the dashboard was flagging this
+        as red even though it's expected. The bars check still covers
+        every T1+T2 ticker — ETFs should have bars even though they
+        lack fundamentals.
+
+        ``tier_le_2_total`` is the bars denominator (every T1+T2
+        ticker). The new ``non_etf_count`` is the fundamentals
+        denominator (stocks in T1+T2, the only tickers expected to have
+        fundamentals). Both reported so the dashboard can render both
+        percentages honestly.
+        """
         async with pool.acquire() as conn:
-            total = await conn.fetchval(
-                "SELECT COUNT(*) FROM platform.liquidity_tiers WHERE tier <= 2"
+            counts = await conn.fetchrow(
+                """
+                SELECT
+                    COUNT(*) AS total,
+                    COUNT(*) FILTER (
+                        WHERE COALESCE(tc.asset_class, 'stock') = 'stock'
+                    ) AS non_etf_count
+                FROM platform.liquidity_tiers lt
+                LEFT JOIN platform.ticker_classifications tc USING (ticker)
+                WHERE lt.tier <= 2
+                """
             )
             bar_rows = await conn.fetch(
                 """
@@ -616,19 +637,25 @@ async def _fetch_platform_health() -> dict:
                 ORDER BY lt.ticker
                 """
             )
+            # Only stocks (or unclassified tickers, treated as stocks)
+            # are expected to carry fundamentals.
             fund_rows = await conn.fetch(
                 """
                 SELECT lt.ticker
                 FROM platform.liquidity_tiers lt
+                LEFT JOIN platform.ticker_classifications tc USING (ticker)
                 LEFT JOIN (
                     SELECT DISTINCT ticker FROM platform.fundamentals_quarterly
                 ) f ON f.ticker = lt.ticker
-                WHERE lt.tier <= 2 AND f.ticker IS NULL
+                WHERE lt.tier <= 2
+                  AND COALESCE(tc.asset_class, 'stock') = 'stock'
+                  AND f.ticker IS NULL
                 ORDER BY lt.ticker
                 """
             )
         return {
-            "tier_le_2_total": int(total or 0),
+            "tier_le_2_total": int(counts["total"] or 0),
+            "tier_le_2_non_etf_count": int(counts["non_etf_count"] or 0),
             "missing_bars": [r["ticker"] for r in bar_rows],
             "missing_fundamentals": [r["ticker"] for r in fund_rows],
         }
@@ -2152,6 +2179,7 @@ def render_platform_health() -> None:
         bar_gap_count=len(cov["missing_bars"]),
         fund_gap_count=len(cov["missing_fundamentals"]),
         tier_le_2_total=cov["tier_le_2_total"],
+        tier_le_2_non_etf_count=cov.get("tier_le_2_non_etf_count"),
     )
     _render_health_row(
         "Universe coverage",
