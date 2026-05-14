@@ -22,6 +22,15 @@ from tpcore.forensics.service import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _isolated_sprints_dir(tmp_path, monkeypatch):
+    """Redirect SPRINTS_DIR to a per-test tmp_path so persist_trigger's
+    dossier write never leaks into the real ``docs/sprints/``. Without
+    this, any test that exercises persist_trigger or run() leaves a
+    `-sigma-42.md` / `-sigma-99.md` file behind."""
+    monkeypatch.setattr("tpcore.forensics.dossier.SPRINTS_DIR", tmp_path)
+
+
 def _aar(
     pnl: float | str,
     *,
