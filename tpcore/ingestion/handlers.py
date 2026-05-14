@@ -382,11 +382,338 @@ async def _handle_daily_bars_all_active(
     return rows_upserted
 
 
+async def handle_sec_filings(pool: asyncpg.Pool, config: dict[str, Any]) -> int | None:
+    """SEC EDGAR Form 4 + 8-K ingest. CSV-first per the standard pipeline.
+
+    Workflow (per docs/superpowers/pipelines/data_adapter_pipeline.md
+    ingest sub-protocol):
+
+    1. **download** — adapter pulls submissions index for each T1+T2
+       stock; for each Form 4 also fetches and parses the XML body.
+       Rows written to two CSVs under ``data/sec_backfill/``:
+       ``sec_insider_<run-stamp>.csv`` and ``sec_material_<run-stamp>.csv``.
+       Every row passes the physical-truth predicate at the CSV-write
+       boundary.
+    2. **validate** — at CSV-write: shares > 0, price >= 0, value >= 0,
+       transaction_type ∈ {BUY, SELL}; event_type non-empty. Rejected
+       rows logged with reason; never enter the loader.
+    3. **load** — CSV → DB via ``INSERT ... ON CONFLICT DO NOTHING``.
+       Idempotent: second run of the same CSV inserts zero new rows.
+    4. **compress** — gzip both CSVs in-place on successful upsert.
+
+    ``config`` keys:
+        * ``lookback_days``: how far back to scan submission indexes
+          (default 90). Wider windows pull more historical filings.
+        * ``max_tickers``: hard cap per run (default 200) to keep the
+          stage well under the SEC's 10 req/sec budget. Set to ``None``
+          to ingest the entire stock universe.
+        * ``skip_guard_days``: skip if last ingest landed within this
+          many days (default 6). Set to 0 to force-rerun.
+
+    Returns ``rows_loaded`` (sum across both tables). The structured
+    success event includes per-table counts, ticker coverage, and the
+    csv artifact paths so the operator can reconcile without opening
+    the database.
+    """
+    from datetime import timedelta
+    from pathlib import Path
+
+    # ── 0. Skip guard ────────────────────────────────────────────────
+    skip_days = int(config.get("skip_guard_days", 6))
+    if skip_days > 0:
+        async with pool.acquire() as conn:
+            newest = await conn.fetchval(
+                """
+                SELECT GREATEST(
+                    COALESCE((SELECT MAX(recorded_at) FROM platform.sec_insider_transactions), '-infinity'::timestamptz),
+                    COALESCE((SELECT MAX(recorded_at) FROM platform.sec_material_events),     '-infinity'::timestamptz)
+                )
+                """
+            )
+        if newest is not None and newest != datetime.min.replace(tzinfo=UTC):
+            age = datetime.now(UTC) - newest
+            if age.days < skip_days:
+                logger.info(
+                    "ingestion.handler.sec_filings.skipped_fresh",
+                    last_refresh_age_days=age.days,
+                )
+                return 0
+
+    # ── 1. Universe: T1+T2 stocks (not ETFs/funds/SPACs) ─────────────
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT lt.ticker
+            FROM platform.liquidity_tiers lt
+            LEFT JOIN platform.ticker_classifications tc USING (ticker)
+            WHERE lt.tier <= 2
+              AND COALESCE(tc.asset_class, 'stock') = 'stock'
+            ORDER BY lt.ticker
+            """
+        )
+    universe = [r["ticker"] for r in rows]
+    max_tickers = config.get("max_tickers", 200)
+    if max_tickers is not None and len(universe) > int(max_tickers):
+        universe = universe[: int(max_tickers)]
+
+    if not universe:
+        logger.info(
+            "ingestion.handler.sec_filings.empty_universe",
+            reason="no T1+T2 stocks in liquidity_tiers",
+        )
+        return 0
+
+    lookback_days = int(config.get("lookback_days", 90))
+    since = datetime.now(UTC).date() - timedelta(days=lookback_days)
+
+    # ── 2. CSV artifact paths ────────────────────────────────────────
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    csv_dir = repo_root / "data" / "sec_backfill"
+    csv_dir.mkdir(parents=True, exist_ok=True)
+    run_stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    insider_csv = csv_dir / f"sec_insider_{run_stamp}.csv"
+    material_csv = csv_dir / f"sec_material_{run_stamp}.csv"
+
+    # ── 3. Download + validate-at-CSV-write ──────────────────────────
+    insider_rows, material_rows, downloaded, rejected, ticker_hits = (
+        await _sec_download_to_csv(
+            universe, since, insider_csv, material_csv,
+        )
+    )
+
+    # ── 4. Load CSVs → DB (ON CONFLICT DO NOTHING) ───────────────────
+    loaded_insider, loaded_material = await _sec_load_csvs_to_db(
+        pool, insider_rows, material_rows,
+    )
+
+    # ── 5. Compress source CSVs on success ───────────────────────────
+    _gzip_in_place(insider_csv)
+    _gzip_in_place(material_csv)
+
+    rows_loaded = loaded_insider + loaded_material
+    logger.info(
+        "ingestion.handler.sec_filings.done",
+        rows_downloaded=downloaded,
+        rows_rejected_at_csv_layer=rejected,
+        rows_loaded=rows_loaded,
+        insider_loaded=loaded_insider,
+        material_loaded=loaded_material,
+        tickers_attempted=len(universe),
+        tickers_with_filings=ticker_hits,
+        date_range_start=since.isoformat(),
+        date_range_end=datetime.now(UTC).date().isoformat(),
+        csv_insider=str(insider_csv) + ".gz",
+        csv_material=str(material_csv) + ".gz",
+    )
+    return rows_loaded
+
+
+# ── SEC helpers ───────────────────────────────────────────────────────
+
+
+async def _sec_download_to_csv(
+    universe: list[str],
+    since: Any,  # datetime.date
+    insider_csv: Any,  # Path
+    material_csv: Any,  # Path
+) -> tuple[list[tuple], list[tuple], int, int, int]:
+    """Adapter loop — pulls submission indexes + Form 4 XMLs, writes CSV.
+
+    Returns ``(insider_rows, material_rows, downloaded, rejected, ticker_hits)``.
+    Bad rows (physical-truth failures) are counted under ``rejected`` and
+    NOT written to either CSV — the loader never sees them.
+    """
+    import csv as _csv
+
+    from tpcore.sec.edgar_adapter import SECEdgarAdapter
+
+    insider_rows: list[tuple] = []
+    material_rows: list[tuple] = []
+    downloaded = rejected = ticker_hits = 0
+
+    insider_csv_h = open(insider_csv, "w", newline="", encoding="utf-8")
+    material_csv_h = open(material_csv, "w", newline="", encoding="utf-8")
+    try:
+        ins_writer = _csv.writer(insider_csv_h)
+        mat_writer = _csv.writer(material_csv_h)
+        ins_writer.writerow([
+            "ticker", "filing_date", "insider_name", "transaction_type",
+            "shares", "price", "value",
+        ])
+        mat_writer.writerow(["ticker", "filing_date", "event_type", "summary"])
+
+        async with SECEdgarAdapter() as sec:
+            for ticker in universe:
+                try:
+                    filings = await sec.get_recent_filings(
+                        ticker, forms=("4", "8-K"), since=since,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "ingestion.handler.sec_filings.ticker_failed",
+                        ticker=ticker, error=str(exc),
+                    )
+                    continue
+                if not filings:
+                    continue
+                ticker_hits += 1
+
+                for f in filings:
+                    downloaded += 1
+                    form = f["form"]
+                    if form == "4":
+                        try:
+                            xml_text = await sec.fetch_form4_xml(
+                                f["cik"], f["accession_number"],
+                                f["primary_document"],
+                            )
+                        except Exception as exc:
+                            logger.debug(
+                                "ingestion.handler.sec_filings.form4_fetch_failed",
+                                ticker=ticker, accession=f["accession_number"],
+                                error=str(exc),
+                            )
+                            rejected += 1
+                            continue
+                        tx_rows, skipped = sec.parse_form4_transactions(
+                            xml_text, ticker, f["filing_date"],
+                        )
+                        rejected += skipped
+                        for row in tx_rows:
+                            # CSV-layer physical-truth gate.
+                            if not _insider_row_ok(row):
+                                rejected += 1
+                                continue
+                            ins_writer.writerow([
+                                row["ticker"],
+                                row["filing_date"].isoformat(),
+                                row["insider_name"],
+                                row["transaction_type"],
+                                row["shares"],
+                                f"{row['price']}",
+                                f"{row['value']}",
+                            ])
+                            insider_rows.append((
+                                row["ticker"],
+                                row["filing_date"],
+                                row["insider_name"],
+                                row["transaction_type"],
+                                row["shares"],
+                                row["price"],
+                                row["value"],
+                            ))
+                    elif form == "8-K":
+                        items = sec.parse_8k_items(f["items"])
+                        for item_code in items:
+                            if not _material_row_ok(item_code):
+                                rejected += 1
+                                continue
+                            mat_writer.writerow([
+                                ticker,
+                                f["filing_date"].isoformat(),
+                                item_code,
+                                "",
+                            ])
+                            material_rows.append((
+                                ticker,
+                                f["filing_date"],
+                                item_code,
+                                None,
+                            ))
+    finally:
+        insider_csv_h.close()
+        material_csv_h.close()
+    return insider_rows, material_rows, downloaded, rejected, ticker_hits
+
+
+def _insider_row_ok(row: dict[str, Any]) -> bool:
+    """Physical-truth predicate for insider rows — mirrors the table's
+    CHECK constraints so a CSV-layer rejection is exactly equivalent
+    to what would be rejected at INSERT time. Defense-in-depth: the
+    DB CHECK is the ultimate guard; this stops bad rows earlier.
+    """
+    if row["transaction_type"] not in ("BUY", "SELL"):
+        return False
+    if int(row["shares"]) <= 0:
+        return False
+    from decimal import Decimal as _Decimal
+    if _Decimal(row["price"]) < 0:
+        return False
+    if _Decimal(row["value"]) < 0:
+        return False
+    return True
+
+
+def _material_row_ok(event_type: str) -> bool:
+    return bool(event_type and event_type.strip())
+
+
+async def _sec_load_csvs_to_db(
+    pool: asyncpg.Pool,
+    insider_rows: list[tuple],
+    material_rows: list[tuple],
+) -> tuple[int, int]:
+    """Idempotent upsert. ON CONFLICT DO NOTHING on both unique keys."""
+    loaded_insider = loaded_material = 0
+    if insider_rows:
+        async with pool.acquire() as conn:
+            res = await conn.executemany(
+                """
+                INSERT INTO platform.sec_insider_transactions
+                    (ticker, filing_date, insider_name, transaction_type,
+                     shares, price, value)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                ON CONFLICT (ticker, filing_date, insider_name,
+                             transaction_type, shares) DO NOTHING
+                """,
+                insider_rows,
+            )
+        # asyncpg.executemany returns None; treat all input rows as
+        # "loaded or already present". The accurate "new" count would
+        # need RETURNING, which executemany doesn't surface.
+        loaded_insider = len(insider_rows)
+        del res
+    if material_rows:
+        async with pool.acquire() as conn:
+            await conn.executemany(
+                """
+                INSERT INTO platform.sec_material_events
+                    (ticker, filing_date, event_type, summary)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (ticker, filing_date, event_type) DO NOTHING
+                """,
+                material_rows,
+            )
+        loaded_material = len(material_rows)
+    return loaded_insider, loaded_material
+
+
+def _gzip_in_place(path: Any) -> None:
+    """Compress ``path`` to ``path.gz`` and delete the original.
+
+    Mirrors the pattern in ``scripts/compress_backfill_csvs.py``. No-op
+    if the source doesn't exist (e.g., zero filings → empty file kept
+    for audit, not gzipped twice).
+    """
+    import gzip
+    import shutil
+    from pathlib import Path as _Path
+
+    p = _Path(path)
+    if not p.exists():
+        return
+    gz_path = p.with_suffix(p.suffix + ".gz")
+    with open(p, "rb") as src, gzip.open(gz_path, "wb") as dst:
+        shutil.copyfileobj(src, dst)
+    p.unlink()
+
+
 HANDLERS: dict[str, HandlerFn] = {
     "data_validation": handle_data_validation,
     "fundamentals_refresh": handle_fundamentals_refresh,
     "corporate_actions": handle_corporate_actions,
     "daily_bars": handle_daily_bars,
+    "sec_filings": handle_sec_filings,
 }
 
 
@@ -397,4 +724,5 @@ __all__ = [
     "handle_fundamentals_refresh",
     "handle_corporate_actions",
     "handle_daily_bars",
+    "handle_sec_filings",
 ]

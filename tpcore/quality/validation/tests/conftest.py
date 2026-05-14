@@ -62,6 +62,18 @@ class FakePool:
                 "covered_count": 30,  # 60% — well above 20% floor
                 "total_rows": 1000,
             }
+        # SEC freshness check has the same CTE shape (addressable +
+        # newest filing). Return a "clean" snapshot so e2e tests for
+        # unrelated checks don't false-fail.
+        if "sec_insider_transactions" in sql_lower and "addressable" in sql_lower:
+            from datetime import UTC, datetime, timedelta
+            return {
+                "newest_filing": datetime.now(UTC).date() - timedelta(days=2),
+                "addressable_count": 50,
+                "covered_count": 25,  # 50% — well above 30% floor
+                "insider_rows": 500,
+                "material_rows": 700,
+            }
         rows = await self.fetch(sql, *args)
         return rows[0] if rows else None
 

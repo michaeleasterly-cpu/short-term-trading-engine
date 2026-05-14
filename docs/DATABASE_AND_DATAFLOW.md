@@ -282,6 +282,47 @@ Created by migration `20260512_2100_spread_observations_and_liquidity_tiers.py`.
 
 **Maintenance:** `scripts/classify_tickers.py` re-runs the classifier; the operator runs it after a universe expansion. No daily refresh required — asset-class taxonomy is near-static.
 
+#### `platform.sec_insider_transactions`
+
+**Purpose:** Form 4 insider transactions (BUY/SELL only) parsed from SEC EDGAR. Each row is one non-derivative open-market transaction line from a Form 4 filing. One filing typically produces one row but can produce several when an insider records multiple distinct transactions.
+
+Populated by the weekly `sec_filings` ops stage (`handle_sec_filings` in `tpcore/ingestion/handlers.py`). The adapter (`tpcore/sec/edgar_adapter.py`) uses centralized `@with_retry` for SEC's 10-req/sec rate limit. Filings flow through the CSV-first sub-protocol (download → validate-at-CSV → load → compress).
+
+**Columns:**
+
+- `ticker` (text, PK).
+- `filing_date` (date, PK): Form 4 filing date.
+- `insider_name` (text, PK): `reportingOwner/rptOwnerName` from the Form 4 XML.
+- `transaction_type` (text, PK): canonical BUY/SELL bucket (mapped from Form 4 codes A/P→BUY, S/D→SELL; exotic codes M/G/etc. are dropped at parse time).
+- `shares` (bigint, PK): transaction share count. Always > 0.
+- `price` (numeric(18,4)): price per share. ≥ 0.
+- `value` (numeric(20,2)): `shares × price`, computed at parse time. ≥ 0.
+- `recorded_at` (timestamptz, default `now()`).
+
+**Unique constraint:** `(ticker, filing_date, insider_name, transaction_type, shares)`. Forms with two distinct same-day same-direction transactions at different share counts emit two rows.
+
+**CHECK constraints** (physical-truth predicates baked at the schema level): `transaction_type IN ('BUY', 'SELL')`, `shares > 0`, `price >= 0`, `value >= 0`. The CSV-write layer applies the same predicate so bad rows never enter the loader.
+
+**Indexes:** `(ticker, filing_date)`, `(filing_date)` for downstream signal computation.
+
+#### `platform.sec_material_events`
+
+**Purpose:** 8-K material events. One row per `item` code from the SEC submissions index (e.g., one 8-K filing with `items="2.02,9.01"` produces two rows). Populated by the same `sec_filings` ops stage as `sec_insider_transactions`.
+
+**Columns:**
+
+- `ticker` (text, PK).
+- `filing_date` (date, PK): 8-K filing date.
+- `event_type` (text, PK): canonical 8-K item code (`2.02`, `5.02`, `9.01`, ...). Empty or unrecognized items fall back to `'OTHER'`.
+- `summary` (text, nullable): future free-form summary; null in V1 (the submissions index doesn't ship body summaries).
+- `recorded_at` (timestamptz, default `now()`).
+
+**Unique constraint:** `(ticker, filing_date, event_type)`.
+
+**CHECK constraint:** `length(event_type) > 0`.
+
+**Indexes:** `(ticker, filing_date)`, `(filing_date)`.
+
 #### `platform.ingestion_jobs`
 
 **Purpose:** Persistent job registry consumed by the `ingestion-engine` service (Railway service definition in `railway.json:58`). Each row describes a recurring ingestion task (daily bars, corporate actions, fundamentals refresh, etc.) — the engine reads the registry on each tick and dispatches due jobs to handlers in `tpcore.ingestion.handlers`.
@@ -649,7 +690,7 @@ Tables and services that are specified but not yet built:
 
 The data layer underwent a major cleanup and self-healing refactor on 2026-05-13. Operators reading this doc post-cleanup should know:
 
-### 6.1 Validation suite — now 7 checks (was 3)
+### 6.1 Validation suite — now 8 checks (was 3)
 
 `tpcore.quality.validation.suite.run_suite` runs every `--update` stage 5. Each check returns a `CheckResult` and persists one row to `platform.data_quality_log`:
 
@@ -662,20 +703,22 @@ The data layer underwent a major cleanup and self-healing refactor on 2026-05-13
 | **`fundamentals_integrity`** (NEW) | every fundamentals_quarterly row: `period_end_date <= filing_date`, `shares_outstanding > 0 OR NULL`, no future filings |
 | **`corporate_actions_integrity`** (NEW) | every corp_actions row: `ratio` in `(0, 1000]`, no NULL action_type, no far-future dates |
 | **`catalyst_freshness`** (NEW 2026-05-14) | `catalyst_events.max(event_date)` not older than 7 days for the active T1+T2 universe; warns on stale (drives the `catalyst_refresh` stage's skip-guard) |
+| **`sec_filings_freshness`** (NEW 2026-05-14) | `sec_insider_transactions` + `sec_material_events` newest `filing_date` ≤ 14d old; ≥ 30% of T1+T2 stocks have a filing in last 180d. Reference implementation of the standard 5-stage data-adapter pipeline. |
 
-Acceptance: `passed=True` on all 7 + `confidence=1.000`. Cleanup scripts exist for each predicate (see `scripts/cleanup_*.py`).
+Acceptance: `passed=True` on all 8 + `confidence=1.000`. Cleanup scripts exist for each predicate (see `scripts/cleanup_*.py`).
 
-### 6.2 `--update` pipeline now 9 stages
+### 6.2 `--update` pipeline now 10 stages
 
 ```
 daily_bars → corporate_actions → coverage_fill → cross_ref_cleanup → fundamentals_refresh
-→ catalyst_refresh → data_validation → universe_prescreener → universe_simulation
+→ catalyst_refresh → sec_filings → data_validation → universe_prescreener → universe_simulation
 ```
 
 * **`coverage_fill`** (added 2026-05-13) self-heals tier ≤ 2 ticker gaps via Alpaca SIP, 14-day window, after every daily_bars run.
 * **`cross_ref_cleanup`** (added 2026-05-13) deletes expired `tradier_options_chains` rows + orphan-ticker rows across dependent tables — keeps the dashboard cross-table integrity panel green.
 * **`fundamentals_refresh`** is skip-if-refreshed-within-24h — resumable across timeouts.
 * **`catalyst_refresh`** (added 2026-05-14) backfills FMP earnings-beat events for the T1+T2 universe. Skip-guard: short-circuits in ~10ms when `catalyst_events` was refreshed within 6 days. Resolves Vector's "data-blocked" state.
+* **`sec_filings`** (added 2026-05-14) pulls SEC EDGAR Form 4 + 8-K for the T1+T2 stock universe via the CSV-first sub-protocol (download → validate-at-CSV → load → compress). Skip-guard: 6 days. Reference implementation of the standard 5-stage data-adapter pipeline (`docs/superpowers/pipelines/data_adapter_pipeline.md`).
 * **`daily_bars`** idempotent: checks count for the most-recent closed session; skips if ≥6,500 tickers already present.
 * Each stage emits `INGESTION_START` / `INGESTION_COMPLETE` / `INGESTION_FAILED` events with `data->>'stage'` set and writes to `platform.ingestion_jobs.last_run_at` on completion. Failed stages auto-retry once if the error class is transient (timeout, ReadError, 429). Underlying HTTP fetchers use `tpcore.outage.with_retry` so transient 429/5xx is handled centrally.
 

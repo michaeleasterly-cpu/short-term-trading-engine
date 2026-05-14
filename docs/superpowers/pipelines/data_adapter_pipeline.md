@@ -8,13 +8,28 @@ This document is the canonical reference. New adapters start from `tpcore/templa
 
 | # | Stage | Artifact | Self-verification requirement |
 |---|---|---|---|
-| 1 | **ingest** | Adapter + handler that pull data and upsert idempotently | Handler logs `rows_ingested`, `tickers_covered`, `date_range` in a structured event. If zero new rows, the handler must log a *reason* (e.g., `skipped_fresh`, `empty_universe`, `provider_returned_no_data`). |
+| 1 | **ingest** | Adapter + handler that follow the CSV-first sub-protocol (download → validate → load → compress) and upsert idempotently | Handler logs `rows_downloaded`, `rows_loaded`, `rows_rejected_at_csv_layer`, `tickers_covered`, `date_range`, and `csv_artifact_path` in a structured event. If zero new rows, the handler must log a *reason* (e.g., `skipped_fresh`, `empty_universe`, `provider_returned_no_data`). |
 | 2 | **test** | `tpcore/tests/test_<adapter>.py` with: happy path, empty response, rate-limit (429 → retry), permanent failure (403 → no retry), idempotency (run twice → same final state) | `pytest -q` exits 0 with no skipped tests for this adapter. |
 | 3 | **validate** | A check in `tpcore/quality/validation/checks/` returning a `CheckResult`. Registered in `suite.run_suite()` so it ships with the operational `--update` flow. | The check exercises *real shape* (freshness, coverage, ranges) — not just "row count > 0". Passing on live data is the gate. |
 | 4 | **dashboard** | A row in `scripts/ops.py --check` (via `_CHECK_FNS`) with `ok: true/false`, plus a structured payload (`latest_event`, `age_days`, `threshold_days`, etc.). Surfaces in the Streamlit dashboard's Platform Health panel. | Operator reads `--check --pretty` and immediately sees green/yellow/red for this data source. |
 | 5 | **schedule** | A stage in `scripts/ops.py:_STAGE_SPECS` with a skip-guard (idempotent — second run within window short-circuits) **and** a `last_run_at` writeback to `platform.ingestion_jobs` on completion. | Running `python scripts/ops.py --update` twice in a row produces zero duplicate inserts on the second run and logs `skipped_fresh` (or equivalent). |
 
 All five stages exist or the adapter doesn't ship. Half-built adapters are the operational debt this contract exists to prevent.
+
+### CSV-first sub-protocol (under stage 1: ingest)
+
+For any non-trivial pull (anything beyond a few dozen rows) the ingest stage **must** route through CSV-first:
+
+| Sub-step | What | Where |
+|---|---|---|
+| **download** | Fetch from the external API; write rows to a timestamped CSV under `data/<provider>_backfill/`. The CSV is the permanent audit record of what the provider returned. | `scripts/backfill_<provider>.py` (or the handler's inlined download stage) |
+| **validate** | At the CSV-write boundary: every row passes the same physical-truth predicate the validation suite enforces at the DB. Bad rows never reach the loader. | Inline in the download step. Rejected rows logged with `reason`. |
+| **load** | CSV → DB via `INSERT ... ON CONFLICT (...) DO NOTHING` (or `DO UPDATE` where versioning matters). Idempotent — second run with the same CSV produces zero new rows. | `scripts/load_<provider>_csv.py` (or the handler's inlined load step) |
+| **compress** | On successful upsert, `gzip` the source CSV in place (~80% disk savings). Loaders read `.gz` transparently on re-run, so the artifact stays auditable forever. | Final step of the handler / load script. Loader reads `.gz` automatically on subsequent runs. |
+
+The four sub-steps fire **in this order, every time**. The handler reports each sub-step's row count (downloaded / rejected at CSV / loaded into DB) in its structured success event so the operator can reconcile end-to-end without opening a database.
+
+For trivial daily pulls (`coverage_fill`, `universe_prescreener`) the CSV step can be elided because the volume is tiny and the audit value is low; the handler must still emit the structured row-count log. Anything that touches more than ~500 rows per run goes CSV-first without exception.
 
 ## Self-verification report
 

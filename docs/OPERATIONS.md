@@ -161,7 +161,7 @@ The post-mortem captured these principles as durable patterns; the post-close + 
 2. **Physical-truth at write time.** Every row passes the same physical-truth predicate (`close > 0`, OHLC consistent, no future dates) AT the CSV write step, not just at the destination. Bad rows never reach the database.
 3. **Self-healing > manual retry.** Stages that hit transient errors (timeout, 429, ReadError) auto-retry once inside `--update`. Resumable stages (fundamentals: skip-if-refreshed-within-24h, daily_bars: skip-if-already-ingested) make every re-run faster than the previous.
 4. **SIP > IEX.** Alpaca's free IEX feed silently misses tickers that trade off-IEX. The account is subscribed to SIP; default everywhere is `feed="sip"`. The `coverage_fill` stage closes any remaining gap nightly.
-5. **Validation suite is the gate.** 7 checks: delistings, constituent, splits, row_integrity, fundamentals_integrity, corporate_actions_integrity, catalyst_freshness (added 2026-05-14 alongside the catalyst maintenance pipeline). Validation green is the operational definition of "data is clean enough to trade on."
+5. **Validation suite is the gate.** 8 checks: delistings, constituent, splits, row_integrity, fundamentals_integrity, corporate_actions_integrity, catalyst_freshness, sec_filings_freshness (the last added 2026-05-14 with the SEC EDGAR ingest pipeline). Validation green is the operational definition of "data is clean enough to trade on."
 6. **Cross-references are integrity too.** `audit_all_tables.sh` (and the dashboard's "Cross-table integrity" row) catches orphan tickers across every dependent table — the kind of failure the validation suite's per-table predicates miss.
 7. **Latest-run beats rolling aggregates on dashboards.** A 7-day rolling failure count surfaces stale history as current state. Show LATEST per source — stale aggregates lie.
 8. **Compress confirmed artifacts.** After a successful upsert, gzip the CSV (~80% disk savings). Loaders read `.gz` transparently on re-run.
@@ -176,6 +176,7 @@ The daily `python scripts/ops.py --update` pipeline already includes the heavy w
 |---|---|---|---|
 | `fundamentals_refresh` | Effectively weekly | skip-if-refreshed-within-24h per ticker | FMP → `platform.fundamentals_quarterly`. Iterates the all-active universe; ~1 hr full pass. |
 | `catalyst_refresh` | Effectively weekly | short-circuits when `catalyst_events.max(event_date)` < 6 days old | FMP earnings-history → `platform.catalyst_events` for the T1+T2 stock subset. Added 2026-05-14 alongside the `catalyst_freshness` validation check. |
+| `sec_filings` | Effectively weekly | short-circuits when either SEC table was touched within 6 days | SEC EDGAR Form 4 (insider) + 8-K (material events) → `platform.sec_insider_transactions` + `platform.sec_material_events`. Reference implementation of the standard 5-stage data-adapter pipeline; CSV-first (download → validate-at-CSV → load → compress). Requires `SEC_EDGAR_USER_AGENT` env var per SEC fair-access policy. |
 
 To force-run locally (same command as the daily run; underlying handlers are idempotent):
 
@@ -183,6 +184,7 @@ To force-run locally (same command as the daily run; underlying handlers are ide
 python scripts/ops.py --update           # full daily pipeline (auto-skips fresh stages)
 python scripts/ops.py --stage catalyst_refresh   # one-stage manual fire
 python scripts/ops.py --stage fundamentals_refresh
+python scripts/ops.py --stage sec_filings        # SEC EDGAR Form 4 + 8-K
 ```
 
 #### Quarterly: liquidity tier refresh
@@ -639,11 +641,11 @@ The orchestrator prints `VERDICT: SURVIVED` only when both `DSR ≥ --dsr-thresh
 
 ## 6. Data Validation Suite
 
-The suite runs as part of every `python scripts/ops.py --update` (stage 7 of 9 — see `_STAGE_SPECS` in `scripts/ops.py`) and also on demand via `scripts/run_stage.sh data_validation`.
+The suite runs as part of every `python scripts/ops.py --update` (stage 8 of 10 — see `_STAGE_SPECS` in `scripts/ops.py`) and also on demand via `scripts/run_stage.sh data_validation`.
 
 ### Acceptance criterion — "100% validated"
 
-> **Data is clean when every row in every persistence table satisfies its physical-truth predicate, and the validation suite returns `passed=True` with `confidence=1.000` on every one of its seven checks. No allowlist, no `WHERE clause` skipping known-bad ticker-date pairs. If the predicate fires, the row gets fixed (re-pulled from source) or deleted.**
+> **Data is clean when every row in every persistence table satisfies its physical-truth predicate, and the validation suite returns `passed=True` with `confidence=1.000` on every one of its eight checks. No allowlist, no `WHERE clause` skipping known-bad ticker-date pairs. If the predicate fires, the row gets fixed (re-pulled from source) or deleted.**
 
 Verifiable with one SQL:
 
@@ -662,7 +664,7 @@ FROM (
 ) x;
 ```
 
-### The seven checks
+### The eight checks
 
 | Check | What it asserts | What "fail" means |
 |---|---|---|
@@ -673,6 +675,7 @@ FROM (
 | `fundamentals_integrity` | every fundamentals_quarterly row: non-NULL ticker/filing_date, `period_end_date <= filing_date`, `shares_outstanding > 0 OR NULL`, no future filings | filings reversed in time, placeholder zeros, etc. |
 | `corporate_actions_integrity` | every corporate_actions row: non-NULL cols, `ratio` in `(0, 1000]`, no far-future dates | implausible split ratios or NULL action_type |
 | `catalyst_freshness` *(NEW 2026-05-14)* | `catalyst_events.max(event_date)` ≥ today − 7 days for active T1+T2 stock tickers (ETFs/funds/SPACs filtered via `ticker_classifications`) | catalyst pipeline stalled; Vector engine running on stale events |
+| `sec_filings_freshness` *(NEW 2026-05-14)* | `sec_insider_transactions` + `sec_material_events` newest `filing_date` ≥ today − 14 days; ≥ 30% of T1+T2 stocks have a filing in last 180 days | SEC EDGAR ingest stalled or universe coverage thin |
 
 ### Cross-table audit (added 2026-05-13)
 
@@ -684,7 +687,7 @@ The validation suite covers physical-truth checks. Cross-reference checks live i
 
 The dashboard's **Cross-table integrity** row (Platform Health panel) runs the same checks and surfaces any non-zero count.
 
-### The nine `--update` stages (current)
+### The ten `--update` stages (current)
 
 `scripts/ops.py --update` runs the following stages in order (source of truth: `_STAGE_SPECS` in `scripts/ops.py`):
 
@@ -694,9 +697,10 @@ The dashboard's **Cross-table integrity** row (Platform Health panel) runs the s
 4. `cross_ref_cleanup` — **added 2026-05-13**: deletes expired `tradier_options_chains` rows + orphan-ticker rows across dependent tables. Each rule has a single proven-safe remediation.
 5. `fundamentals_refresh` — FMP → `fundamentals_quarterly`. Resumable: skip-if-refreshed-within-24h. Adapter uses `@with_retry` (replaces the local `tenacity.AsyncRetrying`).
 6. `catalyst_refresh` — **added 2026-05-14**: FMP earnings-history → `catalyst_events` for T1+T2 stocks. Skip-guard: short-circuits in ~10ms when last refresh < 6 days ago. Drives `catalyst_freshness`.
-7. `data_validation` — the 7-check suite above.
-8. `universe_prescreener` — writes today's `momentum` rows to `universe_candidates`.
-9. `universe_simulation` — diagnostic; runs `scripts/simulate_universe.py`.
+7. `sec_filings` — **added 2026-05-14**: SEC EDGAR Form 4 + 8-K → `sec_insider_transactions` + `sec_material_events` for T1+T2 stocks. CSV-first (download → validate-at-CSV → load → compress); idempotent skip-guard at 6 days. Reference implementation of the standard 5-stage data-adapter pipeline.
+8. `data_validation` — the 8-check suite above.
+9. `universe_prescreener` — writes today's `momentum` rows to `universe_candidates`.
+10. `universe_simulation` — diagnostic; runs `scripts/simulate_universe.py`.
 
 `--update` refuses to run during the NYSE regular session (corrupts intraday bars). `--force` bypasses. Failed stages auto-retry once if the error matches a known-transient class (timeout, ReadError, 429).
 

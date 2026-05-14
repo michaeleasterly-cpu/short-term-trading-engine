@@ -555,6 +555,29 @@ async def _stage_catalyst_refresh(pool: asyncpg.Pool) -> dict[str, Any]:
     }
 
 
+async def _stage_sec_filings(pool: asyncpg.Pool) -> dict[str, Any]:
+    """Weekly SEC EDGAR Form 4 + 8-K ingest.
+
+    Reference implementation of the standard data-adapter pipeline
+    (docs/superpowers/pipelines/data_adapter_pipeline.md). CSV-first:
+    download → validate-at-CSV → load → compress. Idempotent — skip
+    guard short-circuits in ~10ms when the tables were touched in
+    the last 6 days.
+
+    Universe: T1+T2 stocks (ticker_classifications.asset_class='stock').
+    ETFs/funds/SPACs filtered out — they don't file Form 4 or 8-K.
+    """
+    from tpcore.ingestion.handlers import handle_sec_filings
+
+    log = structlog.get_logger("scripts.ops")
+    try:
+        rows = await handle_sec_filings(pool, {})
+    except Exception as exc:
+        log.error("ops.stage.sec_filings.failed", error=str(exc))
+        raise
+    return {"rows_loaded": int(rows or 0)}
+
+
 async def _stage_data_validation(pool: asyncpg.Pool) -> dict[str, Any]:
     from tpcore.quality.validation.suite import run_suite
 
@@ -739,9 +762,15 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # the universe could grow. Stage short-circuits in ~10ms when
     # the table was refreshed within 6 days.
     ("catalyst_refresh",    lambda pool, cfg: (lambda: _stage_catalyst_refresh(pool)),         HEAVY_STAGE_TIMEOUT_SEC),
-    # data_validation runs 6 checks against the live tables — at the
-    # current 20M-row prices_daily it consistently runs ~120-130s.
-    # Bumping to 5 min gives headroom without masking a true hang.
+    # SEC EDGAR Form 4 + 8-K — reference implementation of the
+    # standard 5-stage data-adapter pipeline. CSV-first, idempotent,
+    # skip-guard short-circuits when the tables were refreshed within
+    # 6 days. Heavy timeout: ~200 tickers × ~1.5s/call (rate-limited
+    # under SEC's 10 req/sec cap) + Form 4 XML fetches.
+    ("sec_filings",         lambda pool, cfg: (lambda: _stage_sec_filings(pool)),              HEAVY_STAGE_TIMEOUT_SEC),
+    # data_validation runs the 8-check suite against the live tables —
+    # at the current 20M-row prices_daily it consistently runs ~120-
+    # 130s. Bumping to 5 min gives headroom without masking a true hang.
     ("data_validation",     lambda pool, cfg: (lambda: _stage_data_validation(pool)),          300.0),
     ("universe_prescreener",lambda pool, cfg: (lambda: _stage_universe_prescreener(pool)),     STAGE_TIMEOUT_SEC),
     ("universe_simulation", lambda pool, cfg: _stage_simulate_universe,                        STAGE_TIMEOUT_SEC),
@@ -1067,6 +1096,51 @@ async def _check_corp_actions_freshness(pool: asyncpg.Pool) -> dict[str, Any]:
     }
 
 
+SEC_FILINGS_FRESHNESS_MAX_DAYS = 14
+
+
+async def _check_sec_filings_freshness(pool: asyncpg.Pool) -> dict[str, Any]:
+    """Dashboard probe — newest SEC filing across both ingest tables.
+
+    Wired into the ``--check`` output so the operator sees a dedicated
+    sec_filings row instead of having to dig into the validation suite
+    output. Threshold mirrors the validation check's MAX_AGE_DAYS so
+    the two never disagree.
+    """
+    row = await pool.fetchrow(
+        """
+        SELECT
+            GREATEST(
+                COALESCE((SELECT MAX(filing_date) FROM platform.sec_insider_transactions), '-infinity'::date),
+                COALESCE((SELECT MAX(filing_date) FROM platform.sec_material_events),     '-infinity'::date)
+            ) AS newest_filing,
+            (SELECT COUNT(*) FROM platform.sec_insider_transactions) AS insider_rows,
+            (SELECT COUNT(*) FROM platform.sec_material_events) AS material_rows
+        """
+    )
+    newest = row["newest_filing"] if row else None
+    insider_rows = int(row["insider_rows"] or 0) if row else 0
+    material_rows = int(row["material_rows"] or 0) if row else 0
+    if newest is None or newest.year < 1970:
+        return {
+            "ok": False,
+            "latest_filing": None,
+            "insider_rows": insider_rows,
+            "material_rows": material_rows,
+            "reason": "tables empty",
+        }
+    today = date.today()
+    age_days = (today - newest).days
+    return {
+        "ok": age_days <= SEC_FILINGS_FRESHNESS_MAX_DAYS,
+        "latest_filing": newest.isoformat(),
+        "age_days": age_days,
+        "threshold_days": SEC_FILINGS_FRESHNESS_MAX_DAYS,
+        "insider_rows": insider_rows,
+        "material_rows": material_rows,
+    }
+
+
 async def _check_engine_schedulers(pool: asyncpg.Pool) -> dict[str, Any]:
     rows = await pool.fetch(
         """
@@ -1182,6 +1256,7 @@ _CHECK_FNS = [
     ("data_freshness", _check_freshness),
     ("row_counts", _check_row_counts),
     ("corporate_actions_freshness", _check_corp_actions_freshness),
+    ("sec_filings_freshness", _check_sec_filings_freshness),
     ("engine_schedulers", _check_engine_schedulers),
     ("ingestion_engine", _check_ingestion_engine),
     ("validation_suite", _check_validation),

@@ -452,7 +452,7 @@ Full database schema and data flow documentation: [`docs/DATABASE_AND_DATAFLOW.m
 | FMP **Starter** ($22/mo, active) | Fundamentals, insider, earnings | $22 (Premium $59/mo deferred — see §6.5) |
 | Railway **Hobby** ($5/mo, active — currently paused) | Cron schedulers (6 services). Auto-deploys disabled 2026-05-12; all daily ops run locally for now. | $5 |
 | Supabase **Pro** ($25/mo, active) | Postgres + pooler. Upgraded 2026-05-11 from free tier after `prices_daily` crossed the 500 MB read-only lock; 8 GB disk gives headroom for the all-active universe. | $25 |
-| SEC EDGAR | Point-in-time filings, fundamentals backup *(spec-only; no adapter code as of 2026-05-14)* | $0 |
+| SEC EDGAR | Form 4 (insider transactions) + 8-K (material events) via `tpcore.sec.SECEdgarAdapter` → `platform.sec_insider_transactions` + `platform.sec_material_events`. Public API, no key — requires `SEC_EDGAR_USER_AGENT` env var per SEC fair-access. Integrated 2026-05-14 (reference implementation of the standard 5-stage data-adapter pipeline). | $0 |
 | ApeWisdom | Social sentiment *(spec-only; no adapter code as of 2026-05-14)* | $0 |
 | FRED | Macro indicators *(spec-only; no adapter code as of 2026-05-14)* | $0 |
 | FINRA / NASDAQ | Short interest (release-date matched) *(spec-only; no adapter code as of 2026-05-14)* | $0 |
@@ -489,6 +489,8 @@ Verified row counts and coverage (audited 2026-05-14, post-data-layer normalizat
 | `platform.tradier_options_chains` | 122,668 | 51 tickers, snapshot from May 2026 (immediately before the Tradier brokerage account closed). Frozen — parked for future S2. |
 | `platform.catalyst_events` | 1,350 | **137 tickers**, `EARNINGS_BEAT` type, 2018–2025. Recurring weekly refresh active via `ops.py --update` `catalyst_refresh` stage (skip-guard: 6-day freshness). Vector engine unblocked. |
 | `platform.ticker_classifications` | 13,669 | Asset-class taxonomy (`stock` / `etf` / `spac` / `fund`) + ETF leverage/inverse/category flags for the sentinel engine. Backfilled from Alpaca `/v2/assets` + name-pattern classifier (2026-05-14). |
+| `platform.sec_insider_transactions` | 0 (created 2026-05-14, ingest pending live run) | Form 4 insider BUY/SELL transactions parsed from SEC EDGAR. Populated by the `sec_filings` ops stage on first weekly run. T1+T2 stock universe only. |
+| `platform.sec_material_events` | 0 (created 2026-05-14, ingest pending live run) | 8-K material events (one row per item code from the submissions index). Populated by the same `sec_filings` ops stage. T1+T2 stock universe only. |
 | `platform.data_quality_log` | active | Receives rows from the Data Validation Suite, execution-quality tracker, and engine credibility scorer. |
 | `platform.aar_events` | 0 | Schema + writer implemented; populated by live paper trades once they fire. |
 | `platform.risk_state` | 1 | Postgres-backed Risk Governor persistence active. |
