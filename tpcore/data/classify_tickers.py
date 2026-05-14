@@ -102,8 +102,10 @@ _FUND_KEYWORDS = (
     "TERM PREFERRED",
     "PERPETUAL PREFERRED",
     "PREFERRED STOCK",
+    "PREFERRED SHARES",  # SPME and other variants
     "DEPOSITARY SHARES",
     "TRUST CERT",
+    "TR CERT",  # JBK uses the abbreviated "Tr Cert"
     "STRATS",
     "PPLUS",
     "CORTS",
@@ -111,6 +113,10 @@ _FUND_KEYWORDS = (
     "CREDIT FUND",
     "INCOME FUND",
     "DIVERSIFIED VALUE FUND",
+    "ECONOMIC FUND",   # AKAF: "The Frontier Economic Fund"
+    "OPPORTUNITIES FUND",  # Thornburg American Opportunities Fund
+    "GROWTH FUND",   # Thornburg Focus Growth Fund + similar mutual funds
+    "VALUE FUND",
     "STRUCTURED PRODUCTS",
     "FIXED-INCOME SECURITIES",
 )
@@ -255,8 +261,51 @@ async def classify_all_tickers(
             symbol, asset_class, etf_inverse, leverage, None, "alpaca_name",
         ))
     n = await upsert_classifications(pool, rows)
-    logger.info("tpcore.classify_tickers.done", upserted=n, **stats)
-    return {"rows": n, **stats}
+
+    # Follow-up: T1+T2 tickers Alpaca's bulk /v2/assets didn't return
+    # (delisted-but-still-trading, special status) get a per-ticker
+    # lookup. Caught NZUS / similar gaps on 2026-05-14.
+    async with pool.acquire() as conn:
+        unclassified = await conn.fetch(
+            """
+            SELECT lt.ticker
+            FROM platform.liquidity_tiers lt
+            LEFT JOIN platform.ticker_classifications tc USING (ticker)
+            WHERE lt.tier <= 2 AND tc.ticker IS NULL
+            """
+        )
+    follow_up_rows: list[tuple] = []
+    follow_up_stats = {"resolved": 0, "still_unclassified": 0}
+    if unclassified:
+        async with httpx.AsyncClient(
+            base_url=alpaca_base_url, headers=alpaca_headers, timeout=30.0
+        ) as client:
+            for r in unclassified:
+                sym = r["ticker"]
+                try:
+                    resp = await client.get(f"/v2/assets/{sym}")
+                    if resp.status_code != 200:
+                        follow_up_stats["still_unclassified"] += 1
+                        continue
+                    a = resp.json()
+                    name = a.get("name") or ""
+                    asset_class, etf_inverse, leverage = _classify_from_name(name, sym)
+                    follow_up_rows.append((
+                        sym, asset_class, etf_inverse, leverage, None, "alpaca_per_ticker",
+                    ))
+                    follow_up_stats["resolved"] += 1
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("classify_tickers.per_ticker_failed", symbol=sym, error=str(exc))
+                    follow_up_stats["still_unclassified"] += 1
+    if follow_up_rows:
+        await upsert_classifications(pool, follow_up_rows)
+        n += len(follow_up_rows)
+
+    logger.info(
+        "tpcore.classify_tickers.done",
+        upserted=n, **stats, **follow_up_stats,
+    )
+    return {"rows": n, **stats, **follow_up_stats}
 
 
 __all__ = [
