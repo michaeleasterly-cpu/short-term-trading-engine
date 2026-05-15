@@ -383,6 +383,40 @@ async def _stage_daily_bars(pool: asyncpg.Pool, config: dict[str, Any]) -> dict[
     from tpcore.calendar import previous_close
     from tpcore.ingestion.handlers import handle_daily_bars
 
+    # Bounded targeted gap-repair (--param repair_gaps=true). This is the
+    # auto-heal path: instead of force-refreshing the whole ~7,600-ticker
+    # universe (which provably exceeds the 3600s stage timeout — proven
+    # 2026-05-15, two 60-min timeouts), re-pull ONLY the tickers the
+    # prices_daily_completeness invariant currently flags, over a window
+    # that brackets the oldest missing session. Typically a handful of
+    # tickers → 1 multi-symbol chunk → seconds. Detector and healer share
+    # `_evaluate`, so the heal can never target a different set than the
+    # check reports. A structural sentinel (no_sessions / empty universe)
+    # returns no targets here → caller escalates (not bars-fixable).
+    if bool(config.get("repair_gaps", False)):
+        from tpcore.quality.validation.checks.prices_daily_completeness import (
+            compute_gap_repair_targets,
+        )
+        tickers, lookback_days = await compute_gap_repair_targets(pool)
+        if not tickers:
+            return {
+                "rows_upserted": 0,
+                "mode": "repair_gaps",
+                "skipped": "no_gaps_or_not_bars_fixable",
+            }
+        repaired = await handle_daily_bars(pool, {
+            "universe": tickers,
+            "lookback_days": lookback_days,
+            "end_offset_days": int(config.get("end_offset_days", 1)),
+        })
+        return {
+            "rows_upserted": repaired or 0,
+            "mode": "repair_gaps",
+            "tickers_repaired": len(tickers),
+            "lookback_days": lookback_days,
+            "tickers": ",".join(tickers[:30]) + ("…" if len(tickers) > 30 else ""),
+        }
+
     target_session = previous_close(datetime.now(UTC)).date()
     # ``force_refresh`` (via --param force_refresh=true) bypasses the
     # skip-fast — the canonical way to run a coverage backfill: the

@@ -4,6 +4,56 @@ Cross-cutting personal action items that don't fit existing docs. Operational
 build queues belong in `docs/DATABASE_AND_DATAFLOW.md §5 Implementation Queue`
 or `docs/MASTER_PLAN.md §9 Build Order`.
 
+## Autonomous self-heal — EVERY data source (P0, 2026-05-15)
+
+**Mandate (operator, verbatim intent):** "100% data, no gaps, no
+bullshit, runs on its own — I cannot babysit this." This applies to the
+WHOLE data layer, not just daily bars. The 2026-05-15 build delivered
+true end-to-end auto-heal for `prices_daily` ONLY (zero-tolerance
+completeness invariant + Step-4 auto-heal loop in
+`run_data_operations.sh`). Every other source is currently
+*detected + hard-gated* (red blocks the emit / engine sweep) but
+*escalates to the operator* instead of self-healing. That residual
+babysitting is unacceptable per the mandate — close it.
+
+**Scope — bring each source to the same bar as `prices_daily`:**
+1. **`fundamentals_quarterly`** (FMP) — define the ungameable
+   completeness/correctness invariant (every addressable T1/T2 stock has
+   the expected filed quarters within its active range, no missing
+   period), then an auto-heal path via the canonical
+   `ops.py --stage fundamentals_refresh --param …` (no one-off script).
+2. **`corporate_actions`** (Alpaca) — invariant + auto-heal via the
+   canonical corp-actions stage; shrinkage detector already exists,
+   wire it into the heal loop.
+3. **`catalyst_events`** (FMP) — completeness invariant + auto-heal via
+   `catalyst_refresh`.
+4. **`sec_insider_transactions` / SEC filings** (EDGAR) — invariant +
+   auto-heal via `ops.py --stage sec_filings --backfill`.
+5. **`macro_indicators`** (FRED) — invariant + auto-heal (re-pull); the
+   BAMLH0A0HYM2 truncation class must self-recover.
+6. **`liquidity_tiers`, `ticker_classifications`** — invariant +
+   auto-heal/recompute.
+
+**Design constraints (non-negotiable, mirror the prices_daily build):**
+- Each invariant is ungameable: physical-truth, zero-tolerance, no
+  recency window, no percentage knob. Scoped to exactly the data the
+  engines depend on.
+- Auto-heal runs the CANONICAL parameterised stage
+  (`ops.py --stage <name> --param …`) — never a one-off script.
+- Generalise the Step-4 loop from "prices-only healable" to a
+  per-source heal dispatch table; bounded retries; **never emit
+  `DATA_OPERATIONS_COMPLETE` unless 100% of every source is green**;
+  escalate only after auto-heal genuinely exhausts.
+- Honest heal only: a source's heal must actually be able to fix that
+  source's failure class. No dishonest cross-source "heal".
+- Each source's required tickers registered where the freshness check
+  can see them; add/retire the matching `audit_pipeline.py` check in
+  the same change.
+
+This is the path to the operator never touching data again. Until every
+item above is done, the "runs on its own" mandate is only partially met
+and that must be stated plainly, not glossed.
+
 ## Engine structural redesign (post-2026-05-15 sweep)
 
 The 2026-05-15 parameter sweeps validated the targeted fixes (Sigma SPY-

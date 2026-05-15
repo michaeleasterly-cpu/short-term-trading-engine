@@ -40,6 +40,23 @@ class FakePool:
     async def fetch(self, sql: str, *args) -> list[dict[str, Any]]:
         self.calls.append((sql, args))
         sql_lower = sql.lower()
+        # prices_daily_completeness check: return one liquid live ticker
+        # whose single active session is fully covered, so the
+        # zero-tolerance invariant passes for e2e tests focused on
+        # unrelated checks. args[2] is the real NYSE window-session list
+        # the check derived from tpcore.calendar; its last element is
+        # the most-recent session.
+        if "window_dates" in sql_lower:
+            window = list(args[2]) if len(args) > 2 else []
+            if not window:
+                return []
+            latest = window[-1]
+            return [{
+                "ticker": "AAPL",
+                "first_bar": latest,
+                "last_bar": latest,
+                "window_dates": [latest],
+            }]
         if "platform.prices_daily" in sql_lower and "ticker = any($1)" in sql_lower:
             tickers = set(args[0])
             return [r for r in self.rows if r["ticker"] in tickers]
