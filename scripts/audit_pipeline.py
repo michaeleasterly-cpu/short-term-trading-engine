@@ -502,22 +502,41 @@ async def run_known_unknowns(pool, sink: _FindingSink | None = None) -> list[Aud
             recommended_action=None if ok else "verify hy_spread isn't being refreshed by mistake",
         ))
 
-    # Multi-day gaps in prices_daily for active tickers (sample to keep it fast).
+    # Multi-day gaps in prices_daily — scoped to LIQUID COMMON STOCKS.
+    #
+    # A naive "any ticker with a >7-day gap" check is pure noise: SPAC
+    # units (tickers ending 'U'), preferred shares / baby bonds
+    # (asset_class='fund'), and sub-tier micro-caps routinely don't
+    # trade for weeks. Alpaca correctly returns no bar for a no-trade
+    # day, so a "gap" there is normal market behaviour, not missing
+    # data. (Investigated 2026-05-15: 821 raw gaps / 250 tickers, ~90%
+    # SPAC units; every actually-liquid name — AAPL/SPY/TLT/… — had
+    # ZERO gaps.) The check's real value is catching a *liquid* name
+    # that suddenly stops getting bars (the SPY incident class). So
+    # restrict to asset_class='stock' AND tier <= 2 — where a multi-day
+    # gap genuinely implies an ingestion failure. SPAC/fund/illiquid
+    # sparsity is expected and excluded by design.
     async with pool.acquire() as conn:
         gap_rows = await conn.fetch("""
-            WITH per_ticker AS (
-                SELECT ticker,
-                       date,
-                       LAG(date) OVER (PARTITION BY ticker ORDER BY date) AS prev_date
-                FROM platform.prices_daily
-                WHERE delisted=false
-                  AND date >= CURRENT_DATE - INTERVAL '180 days'
+            WITH liquid AS (
+                SELECT lt.ticker
+                FROM platform.liquidity_tiers lt
+                JOIN platform.ticker_classifications tc ON tc.ticker = lt.ticker
+                WHERE lt.tier <= 2 AND tc.asset_class = 'stock'
+            ),
+            per_ticker AS (
+                SELECT pd.ticker, pd.date,
+                       LAG(pd.date) OVER (PARTITION BY pd.ticker ORDER BY pd.date) AS prev_date
+                FROM platform.prices_daily pd
+                JOIN liquid USING (ticker)
+                WHERE pd.delisted = false
+                  AND pd.date >= CURRENT_DATE - INTERVAL '180 days'
             )
             SELECT ticker, date AS gap_end, prev_date AS gap_start,
                    (date - prev_date) AS gap_days
             FROM per_ticker
             WHERE prev_date IS NOT NULL
-              AND (date - prev_date) > 7    -- > 5 trading days = ~7 calendar with weekends
+              AND (date - prev_date) > 7    -- > ~5 trading days
             ORDER BY (date - prev_date) DESC
             LIMIT 25
         """)
@@ -525,18 +544,18 @@ async def run_known_unknowns(pool, sink: _FindingSink | None = None) -> list[Aud
         findings.append(AuditFinding(
             phase="known_unknowns", check_name="prices_daily_gaps",
             source="prices_daily", severity="OK",
-            summary="no 5+ trading-day gaps in active tickers (180d lookback)",
+            summary="no multi-day gaps in liquid common stocks (T1/T2, 180d) — SPAC/fund sparsity excluded by design",
         ))
     else:
         findings.append(AuditFinding(
             phase="known_unknowns", check_name="prices_daily_gaps",
             source="prices_daily", severity="WARN",
-            summary=f"{len(gap_rows)} ticker(s) with multi-day gaps in active range",
+            summary=f"{len(gap_rows)} liquid common stock(s) with multi-day gaps — possible ingestion failure",
             evidence={"top_gaps": [
                 {"ticker": r["ticker"], "gap_start": str(r["gap_start"]), "gap_end": str(r["gap_end"]), "gap_days": int(r["gap_days"].days if hasattr(r["gap_days"], 'days') else r["gap_days"])}
                 for r in gap_rows[:10]
             ]},
-            recommended_action="run daily_bars handler with end_offset_days=1 for the affected tickers",
+            recommended_action="liquid name with a gap is unexpected — re-run daily_bars (end_offset_days=1) for these tickers and check Alpaca coverage",
         ))
 
     # ETF AR mis-estimation (T3/T4 ETFs with median_spread > 0.5%).
