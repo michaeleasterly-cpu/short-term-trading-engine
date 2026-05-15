@@ -13,18 +13,25 @@ assert the structural contract.
 """
 from __future__ import annotations
 
+import importlib.util
 import sys
 from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-OPS_DIR = REPO_ROOT / "ops"
-if str(OPS_DIR.parent) not in sys.path:
-    sys.path.insert(0, str(OPS_DIR.parent))
-
-from ops import platform_pipeline  # noqa: E402
+# Import the platform_pipeline module by file path. We can't do
+# ``from ops import platform_pipeline`` because other test files
+# put ``scripts/`` on sys.path with a top-level ``ops.py`` module
+# that shadows the ``ops/`` package directory.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_SPEC = importlib.util.spec_from_file_location(
+    "platform_pipeline_under_test",
+    _REPO_ROOT / "ops" / "platform_pipeline.py",
+)
+platform_pipeline = importlib.util.module_from_spec(_SPEC)
+sys.modules["platform_pipeline_under_test"] = platform_pipeline
+_SPEC.loader.exec_module(platform_pipeline)
 
 
 @pytest.fixture(autouse=True)
