@@ -279,11 +279,13 @@ async def _handle_daily_bars_explicit(
     config: dict[str, Any],
     universe_cfg: Any,
 ) -> int:
-    """Existing 'active' / list-of-tickers code path. Per-symbol fetches.
+    """The 'active' / list-of-tickers code path. Multi-symbol fetches.
 
     Lifted out of ``handle_daily_bars`` so the discovery sweep
     (``all_active``) can live as its own helper without making the entry
-    point unreadable.
+    point unreadable. Uses Alpaca's ``/v2/stocks/bars?symbols=…`` multi
+    endpoint in 100-symbol chunks (2026-05-15) — the prior per-symbol
+    loop was a ~45-min rate-limit floor on the ~7,669-ticker universe.
     """
     import asyncio
     from datetime import timedelta
@@ -294,8 +296,15 @@ async def _handle_daily_bars_explicit(
         _RATE_LIMIT_SLEEP_SEC,
         _alpaca_headers,
         _upsert_bars,
-        fetch_daily_bars,
+        fetch_daily_bars_multi,
     )
+
+    # Alpaca's /v2/stocks/bars multi endpoint accepts up to 100 symbols
+    # per call. Chunking the universe collapses ~7,669 single-symbol
+    # calls (a ~45-min rate-limit floor) into ~77 calls — minutes, not
+    # hours. Same endpoint handle_corporate_actions + the all_active
+    # sweep already use.
+    _MULTI_CHUNK = 100
 
     lookback_days = int(config.get("lookback_days", 7))
     end_offset_days = int(config.get("end_offset_days", 0))
@@ -332,16 +341,25 @@ async def _handle_daily_bars_explicit(
     async with httpx.AsyncClient(
         headers=headers,
         base_url="https://data.alpaca.markets",
-        timeout=30.0,
+        timeout=60.0,
     ) as client:
-        for symbol in symbols:
+        for i in range(0, len(symbols), _MULTI_CHUNK):
+            chunk = symbols[i : i + _MULTI_CHUNK]
             try:
-                bars = await fetch_daily_bars(client, symbol, start, end)
+                by_symbol = await fetch_daily_bars_multi(client, chunk, start, end)
             except httpx.HTTPStatusError as exc:
-                failures.append(f"{symbol}({exc.response.status_code})")
+                # Whole chunk failed (e.g. SIP end=today 403 mid-session,
+                # or 429 still failing after @with_retry backoff). Record
+                # the chunk's symbols and continue — one bad chunk must
+                # not abort the rest of the universe.
+                failures.append(
+                    f"chunk[{chunk[0]}..{chunk[-1]}]({exc.response.status_code})"
+                )
                 await asyncio.sleep(_RATE_LIMIT_SLEEP_SEC)
                 continue
-            if bars:
+            for symbol, bars in by_symbol.items():
+                if not bars:
+                    continue
                 for b in bars:
                     archive_rows.append({
                         "ticker": symbol, "date": b.get("t", ""),
@@ -366,16 +384,18 @@ async def _handle_daily_bars_explicit(
         validator=lambda r: bool(r.get("ticker")) and r.get("date") not in ("", None),
     )
 
+    n_chunks = (len(symbols) + _MULTI_CHUNK - 1) // _MULTI_CHUNK
     logger.info(
         "ingestion.handler.daily_bars_done",
         symbols=len(symbols),
+        chunks=n_chunks,
         rows_upserted=total_rows,
         failures=len(failures),
         csv_archive=str(archive.path),
     )
     if failures:
         raise RuntimeError(
-            f"daily_bars: {len(failures)} symbol fetch failure(s); first: {failures[0]}"
+            f"daily_bars: {len(failures)} chunk fetch failure(s); first: {failures[0]}"
         )
     return total_rows
 

@@ -33,6 +33,31 @@ The four sub-steps fire **in this order, every time**. The handler reports each 
 
 For trivial daily pulls (`coverage_fill`, `universe_prescreener`) the CSV step can be elided because the volume is tiny and the audit value is low; the handler must still emit the structured row-count log. Anything that touches more than ~500 rows per run goes CSV-first without exception.
 
+### Parameterised backfills (standard — no one-off scripts)
+
+A backfill, re-pull, or special validation is **not** a new
+`scripts/foo.py`. It is the *canonical stage* run through `scripts/ops.py`
+with `--param KEY=VALUE` overrides layered onto the
+`platform.ingestion_jobs` config dict the handler receives:
+
+```
+python scripts/ops.py --stage daily_bars \
+    --param universe=active --param lookback_days=10 \
+    --param end_offset_days=1 --param force_refresh=true --force
+```
+
+`--param` is repeatable; values are coerced int/float/bool/str. This is
+the **only** sanctioned mechanism for ad-hoc data pulls. Rationale:
+one-off backfill scripts accrete into an unmaintainable rat's nest,
+drift from the canonical handler's validation/archive/idempotency
+guarantees, and duplicate logic. If a backfill needs a knob the stage
+doesn't expose, add the knob to the handler's config contract (e.g.
+`force_refresh` on `daily_bars` bypasses the skip-fast) — never fork a
+script. The 2026-05-15 daily_bars coverage incident was remediated this
+way: the per-symbol→multi-symbol rewire made a full-universe re-pull a
+~2-minute parameterised stage run, and the throwaway backfill scripts
+were deleted.
+
 ## Self-verification report
 
 Every adapter PR includes (in the description or as a doc artifact) a self-verification report shaped like:
@@ -101,18 +126,33 @@ Per the pipeline contract, every adapter has a self-verification report. Fields 
 
 ```
 adapter:   handle_daily_bars
-commits:   pre-existing + 2026-05-14 audit
-ingest:    @with_retry on fetch_daily_bars_multi; structured event
-           ingestion.handler.daily_bars.{all_active.done,explicit}
-           emits {symbols_listed, symbols_passed_coarse, rows_upserted,
-                  failed_batches}
-test:      test_ingest_physical_truth.py + test_ingest_corporate_actions.py
-           cover OHLC predicates + retry behavior; full suite passes
-validate:  row_integrity + delistings + constituent + splits checks in run_suite
+commits:   pre-existing + 2026-05-14 audit + 2026-05-15 multi rewire
+ingest:    BOTH paths (all_active sweep AND the 'active'/list explicit
+           path) now use fetch_daily_bars_multi in 100-symbol chunks
+           (_MULTI_CHUNK). The explicit path's prior per-symbol loop
+           was a ~45-min rate-limit floor on the ~7,669-ticker
+           universe (root cause of the 2026-05-11→14 coverage
+           collapse); multi collapses it to ~77 calls / minutes.
+           @with_retry on fetch_daily_bars_multi; per-chunk
+           HTTPStatusError recorded as failure[chunk[a..z]] and the
+           run raises if any chunk failed. Structured event
+           ingestion.handler.daily_bars_done emits {symbols, chunks,
+           rows_upserted, failures, csv_archive}. CSV-first archive
+           preserved (data/alpaca_daily_bars_archive/).
+test:      test_handle_daily_bars_multi.py (chunking, per-symbol
+           upsert, archive collection, per-chunk failure → raise,
+           no-bars skip) + test_ingest_physical_truth.py OHLC
+           predicates; full suite passes
+validate:  row_integrity + delistings + constituent + splits +
+           prices_daily_freshness (incl. coverage-collapse guard) in
+           run_suite
 dashboard: data_freshness + row_counts rows in _CHECK_FNS
 schedule:  daily_bars stage in _STAGE_SPECS; idempotent via
-           ON CONFLICT (ticker, date) DO UPDATE — second run produces
-           zero new rows for unchanged source data
+           ON CONFLICT (ticker, date) DO UPDATE. Backfills run via the
+           canonical parameterised channel — `ops.py --stage daily_bars
+           --param universe=active --param lookback_days=N --param
+           end_offset_days=1 --param force_refresh=true --force` — NOT
+           a one-off script (see "Parameterised backfills" below).
 ```
 
 ### `handle_corporate_actions`

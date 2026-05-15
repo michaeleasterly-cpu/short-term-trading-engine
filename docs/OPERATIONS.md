@@ -70,6 +70,29 @@ scripts/run_full_backfill.sh
 
 The CSV-first download → upload → verify → fix → compress pattern across all three sources (Alpaca bars, FMP fundamentals, Alpaca corp actions). Used after large cleanups or universe expansion. Long-running (30-60 min). NOT the daily cadence — that's `run_data_operations.sh`.
 
+### Targeted backfill / special pull (parameterised stage — NOT a script)
+
+A single-stage backfill or special pull is the canonical stage run
+through `ops.py` with `--param KEY=VALUE` overrides — **never a one-off
+`scripts/foo.py`**. `--param` is repeatable; values coerce
+int/float/bool/str and overlay the `platform.ingestion_jobs` config.
+
+```bash
+# Re-pull a 10-day window for the full active universe (e.g. to fill a
+# coverage hole). force_refresh bypasses daily_bars' skip-fast;
+# end_offset_days=1 keeps it market-hours-safe.
+DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python scripts/ops.py \
+  --stage daily_bars --param universe=active --param lookback_days=10 \
+  --param end_offset_days=1 --param force_refresh=true --force
+```
+
+`daily_bars` uses Alpaca's multi-symbol endpoint (100/chunk) so a full
+~7,669-ticker re-pull is ~2 min, not the ~2 h the old per-symbol path
+took. If a backfill needs a knob the stage lacks, add it to the
+handler's config contract — do not fork a script. (Full rationale +
+the standard: `docs/superpowers/pipelines/data_adapter_pipeline.md`
+§"Parameterised backfills".)
+
 ### Closed by design (not gaps)
 
 Two items from the 2026-05-13 hangnail review are explicitly NOT being built. Recording the reasoning so they don't keep getting reopened.

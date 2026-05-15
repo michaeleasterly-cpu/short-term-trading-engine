@@ -192,6 +192,38 @@ class UpdateSummary:
 # ────────────────────────────────────────────────────────────────────────
 
 
+def _parse_params(raw: list[str] | None) -> dict[str, Any]:
+    """Parse repeated ``--param KEY=VALUE`` into a config-override dict.
+
+    Light type coercion so JSONB config keys keep their natural types:
+    ``int`` → ``float`` → ``bool`` (``true``/``false``) → ``str``
+    fallback. ``--param universe=active`` stays a string; ``--param
+    lookback_days=10`` becomes ``int``. This is the single mechanism for
+    parameterised backfills / special pulls through the canonical CLI —
+    no one-off scripts.
+    """
+    out: dict[str, Any] = {}
+    for item in raw or []:
+        if "=" not in item:
+            raise ValueError(f"--param expects KEY=VALUE, got {item!r}")
+        key, _, val = item.partition("=")
+        key = key.strip()
+        val = val.strip()
+        coerced: Any
+        if val.lower() in ("true", "false"):
+            coerced = val.lower() == "true"
+        else:
+            try:
+                coerced = int(val)
+            except ValueError:
+                try:
+                    coerced = float(val)
+                except ValueError:
+                    coerced = val
+        out[key] = coerced
+    return out
+
+
 async def _load_daily_bars_config(pool: asyncpg.Pool) -> dict[str, Any]:
     """Read the config JSON from the `daily_bars` row of platform.ingestion_jobs.
 
@@ -352,6 +384,12 @@ async def _stage_daily_bars(pool: asyncpg.Pool, config: dict[str, Any]) -> dict[
     from tpcore.ingestion.handlers import handle_daily_bars
 
     target_session = previous_close(datetime.now(UTC)).date()
+    # ``force_refresh`` (via --param force_refresh=true) bypasses the
+    # skip-fast — the canonical way to run a coverage backfill: the
+    # most-recent session may already be above threshold while older
+    # sessions in the lookback window have holes. Same --param channel
+    # as every other config key; no special-case flag.
+    force_refresh = bool(config.get("force_refresh", False))
     async with pool.acquire() as conn:
         already_ingested = await conn.fetchval(
             """
@@ -362,7 +400,7 @@ async def _stage_daily_bars(pool: asyncpg.Pool, config: dict[str, Any]) -> dict[
             target_session,
         )
     threshold = 6500  # tighter than the universe; leaves room for new IPOs
-    if already_ingested and already_ingested >= threshold:
+    if not force_refresh and already_ingested and already_ingested >= threshold:
         return {
             "rows_upserted": 0,
             "universe": config.get("universe", "active"),
@@ -1366,6 +1404,7 @@ async def cmd_run_stage(
     dry_run: bool,
     force: bool = False,
     backfill: bool = False,
+    params: dict[str, Any] | None = None,
 ) -> UpdateSummary:
     """Run a single stage by name. Same logging + event shape as ``cmd_update``
     — different ``run_id``. Used by the dashboard's per-stage Fix buttons.
@@ -1441,6 +1480,15 @@ async def cmd_run_stage(
             # only --backfill (sec_filings) uses this channel.
             if backfill:
                 daily_bars_config = {**daily_bars_config, "_sec_backfill": True}
+
+            # --param overrides overlay the DB config dict. This is the
+            # canonical parameterised-backfill channel: e.g. daily_bars
+            # with {"universe": "active", "lookback_days": 10,
+            # "end_offset_days": 1} re-pulls the recent window for the
+            # whole active universe — no one-off script.
+            if params:
+                daily_bars_config = {**daily_bars_config, **params}
+                log.info("ops.stage.param_override", stage=name, params=params)
 
             summary.stages.append(
                 await _run_stage(
@@ -2602,6 +2650,23 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--param",
+        action="append",
+        default=None,
+        metavar="KEY=VALUE",
+        help=(
+            "--stage only: override a stage config key for this run "
+            "(repeatable). Overlays the platform.ingestion_jobs config "
+            "dict the stage handler receives. Values are coerced "
+            "int/float/bool where unambiguous, else string. This is how "
+            "backfills + special pulls run — via the canonical CLI with "
+            "parameters, NOT a one-off script. Example: "
+            "`--stage daily_bars --param lookback_days=10 "
+            "--param end_offset_days=1 --force` re-pulls a 10-day "
+            "window ending yesterday for the full active universe."
+        ),
+    )
+    p.add_argument(
         "--source",
         default=None,
         help=(
@@ -2702,6 +2767,7 @@ async def amain(args: argparse.Namespace) -> int:
                 args.stage, pool, log, db_log,
                 dry_run=args.dry_run, force=args.force,
                 backfill=args.backfill,
+                params=_parse_params(args.param),
             )
             print(f"\nSTAGE SUMMARY ({args.stage})")
             print("=" * 72)
