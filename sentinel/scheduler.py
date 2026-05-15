@@ -110,7 +110,10 @@ class SentinelScheduler:
         pool = await build_asyncpg_pool(db_url)
         run_id = uuid.uuid4()
         db_log = DBLogHandler(pool=pool, engine="sentinel", run_id=run_id)
+        run_started = datetime.now(UTC)
+        exit_code = 0
         try:
+            await db_log.startup()
             broker = AlpacaPaperBrokerAdapter()
             state_store = PostgresRiskStateStore(pool=pool)
             governor = RiskGovernor(state_store=state_store, broker=broker, pool=pool)
@@ -244,7 +247,15 @@ class SentinelScheduler:
                 "n_orders": len(decision.orders),
                 "fade_factor": str(today.fade_factor),
             }
+        except Exception:
+            exit_code = 1
+            raise
         finally:
+            duration_ms = int((datetime.now(UTC) - run_started).total_seconds() * 1000)
+            try:
+                await db_log.shutdown(duration_ms=duration_ms, exit_code=exit_code)
+            except Exception as _exc:  # noqa: BLE001 — best-effort shutdown event
+                logger.warning("sentinel.scheduler.shutdown_log_failed", error=str(_exc)[:200])
             await pool.close()
 
     @staticmethod

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Run every engine scheduler back-to-back (Sigma → Reversion → Vector →
-# Momentum). Use after run_data_operations.sh has confirmed clean data.
+# Momentum → Sentinel). Use after run_data_operations.sh has confirmed
+# clean data.
 #
 # This is the operator's daily-trade trigger: data fresh ⇒ schedulers
 # scan ⇒ orders submitted to Alpaca paper ⇒ trade_monitor (running
@@ -68,7 +69,7 @@ echo "════════════════════════�
 echo "  ENGINE SWEEP — $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 echo "════════════════════════════════════════════════════════════════════════"
 
-for engine in sigma reversion vector momentum; do
+for engine in sigma reversion vector momentum sentinel; do
     echo ""
     echo "▶ running ${engine} scheduler"
     echo "────────────────────────────────────────────────────────────────────────"

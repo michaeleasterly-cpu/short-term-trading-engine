@@ -484,9 +484,12 @@ naturally as the time series extends.
   Sentinel, not a wiring bug.
 - Capital gate, AAR logging, scheduler all mirror the Momentum pattern.
   Engine prefix `sn_` registered in `tpcore.order_ids`.
-- **Not yet wired into `engine-service` daemon** — Sentinel is daily-
-  check / state-driven-rebalance, not weekly like Momentum.
-  Integration TBD.
+- **Wired into `engine-service` daemon (2026-05-15).** Sentinel is in
+  the `scripts/run_all_engines.sh` per-engine loop and the
+  `ops/platform_pipeline.py` docstring listing. Verified end-to-end:
+  manual `run_all_engines.sh --force` run logged
+  `sentinel.STARTUP` + `sentinel.SHUTDOWN` (exit_code=0, duration=3.6s)
+  to `platform.application_log`.
 - **Graduation gate**: per-cycle (≥ 1 cycle · PF > 1.5 · max DD < 20%) —
   not DSR-based, like S2 and Reversion satellites.
 
@@ -682,7 +685,7 @@ The consolidation eliminates the inter-daemon `DATA_OPERATIONS_COMPLETE` polling
 | Phase 4b | **Momentum engine — Phase 2 (live-shippable)** | **Complete (Phase 2; 2026-05-13)** — 5 plugs + scheduler + Alpaca paper integration. `momentum/backtest.py` produces held-back Sharpe +1.58 / PF 2.80 on T1+T2 2024-2025. Paper kickoff: `scripts/run_momentum_kickoff.sh`. Daily cron pattern: scheduler no-ops on non-rebalance days, fires on the first NYSE session of each month. |
 | Phase 5 | S2 (satellite) | **Deferred** — options data parked in `platform.tradier_options_chains` (122,668 rows), no engine code. |
 | Phase 6 | Catalyst | **Deferred** — specification only. |
-| Phase 7 | Sentinel | **Built (2026-05-15)** — five plugs + backtest + 28 unit tests. Engine prefix `sn_`. Single COVID-2020 activation cycle in 2018-2025 backtest (one TLT trade, −3.37% — macro signal lags fast Fed-driven crashes). SH/PSQ/GLD missing from `platform.prices_daily` — basket renormalizes to available tickers; full basket lives once price history is backfilled. Daemon wiring (daily check) TBD. |
+| Phase 7 | Sentinel | **Built + wired (2026-05-15)** — five plugs + backtest + 41 unit tests (28 base + 13 compliance regression). Engine prefix `sn_`. Single COVID-2020 activation cycle in 2018-2025 backtest (one TLT trade, −3.37% — macro signal lags fast Fed-driven crashes). SH/PSQ/GLD missing from `platform.prices_daily` — basket renormalizes to available tickers; full basket lives once price history is backfilled. Integrated into `scripts/run_all_engines.sh` so the engine-service daemon dispatches it daily; STARTUP/SHUTDOWN events confirmed in `platform.application_log`. |
 | Cross-cutting | Parameter-search pipeline | **Complete** — `scripts/search_parameters.py` + `tpcore/backtest/search.py`. Random search + walk-forward + final held-back DSR. Panel-sharing context cache (~60× per-trial speedup). Period-aggregated metrics (correct for portfolio strategies). See §2.5. |
 | Cross-cutting | Overfitting detection suite | **Complete** — `tpcore/backtest/overfitting.py` wired into all engine backtests. See *Overfitting Diagnostics Status* below. |
 | Cross-cutting | Data Validation Suite | **Complete** — `python -m tpcore.quality.validation` runs locally; was previously scheduled as a Railway Sunday cron, consolidated into `platform.ingestion_jobs` for the persistent `ingestion-engine`. |

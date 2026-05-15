@@ -154,7 +154,7 @@ Without the monitor running, Tier-1 fills don't trigger Tier-2 submission — or
 ### Engine sweep (paper trading)
 
 ```bash
-scripts/run_all_engines.sh                  # sigma → reversion → vector → momentum
+scripts/run_all_engines.sh                  # sigma → reversion → vector → momentum → sentinel
 scripts/run_all_engines.sh --force          # bypass validation-green guard
 ```
 
@@ -283,7 +283,7 @@ The active execution environment is the operator's **local Mac**. Railway is pau
 | Daily ops (refresh universe + corp actions + fundamentals + validation + universe sim) | `python scripts/ops.py --full` | See "Daily Maintenance (via ops CLI)" below. Each stage has a 120 s timeout. |
 | Broker reachability smoke (single bracket order, cancelled immediately) | `python scripts/smoke_test.py` | Idempotent. Bypasses the engine order managers; just exercises the broker adapter. |
 | End-to-end pipeline smoke (engine → broker → trade_monitor → AAR) | `python scripts/pipeline_smoke_test.py` | **The current next-gate check** — branches on `tpcore.calendar`: LIVE mode (market open, full fill round-trip with quote-anchored TP/SL via `AlpacaDataAdapter.get_quote`) or WIRE mode (market closed, far-below limit + EVENT_* poll). Runnable any hour. Requires trade-monitor daemon running. |
-| Engine submission run (Sigma / Reversion / Vector) | `python sigma/scheduler.py` (etc.) | Each scheduler is one-shot. Trade monitor must be running. |
+| Engine submission run (Sigma / Reversion / Vector / Sentinel) | `python sigma/scheduler.py` (etc.) | Each scheduler is one-shot. Trade monitor must be running for sigma/reversion/vector Tier 2 cascade. Sentinel + Momentum use day-market orders only — no Tier 2 dependency. |
 | Trade monitor (live order-lifecycle worker) | `python -m tpcore.trade_monitor` | Persistent loop subscribed to Alpaca `TradingStream`. Required for Sigma/Reversion Tier 2 logic. |
 | Universe simulation (Sigma 187 / Reversion 4 / Vector 0 today) | `python scripts/simulate_universe.py` | Writes a `UNIVERSE_SIMULATION` event to `application_log`. |
 | Tier (re-)assignment | `python scripts/assign_liquidity_tiers.py` | Aggregates `platform.spread_observations` into `platform.liquidity_tiers`. Source-agnostic via `--sources`. |

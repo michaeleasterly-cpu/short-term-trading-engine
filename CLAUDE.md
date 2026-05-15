@@ -46,6 +46,9 @@ Multi-engine automated trading platform. US equities, daily timeframe, fully aut
   - Every scheduler checks `tpcore.calendar.is_trading_day()` and returns early on non-trading days.
   - Every AAR plug uses `tpcore.aar.classify_exit_reason` — never hardcode `ExitReason` literals.
   - Every new engine is added to the `for engine in ...; do` loop in `scripts/run_smoke_test.sh` step 3 — at build time, not after the operator asks.
+  - Every new engine is added to the `for engine in ...; do` loop in `scripts/run_all_engines.sh` AND its docstring listing AND `ops/platform_pipeline.py`'s docstring listing — these are what the `engine-service` daemon dispatches; an engine omitted from them never runs live.
+  - Every scheduler calls `await db_log.startup()` after the `try:` opens and `await db_log.shutdown(duration_ms=..., exit_code=...)` in `finally:` — without these the dashboard can't see the run.
+  - `scripts/pipeline_smoke_test.py` is for Tier-2 OCO bracket per-trade engines (sigma/reversion/vector) only. Portfolio-allocation engines (momentum / sentinel) explicitly do NOT belong there.
 - **Never access private attributes (`._store`, `._pool`, etc.) on tpcore classes.** Use the public accessors (`RiskGovernor.state_for(...)`, `AARWriter.pool`, etc.). If a public accessor doesn't exist for what you need, extend the tpcore class with one — don't add `# noqa: SLF001`. See `docs/STYLE_GUIDE.md` "Private-attribute access on tpcore classes" for the canonical examples.
 - Read docs/glossary.md if present before coding.
 - Never modify tpcore without checking all engines that consume it.

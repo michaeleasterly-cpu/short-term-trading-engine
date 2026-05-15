@@ -120,6 +120,25 @@ by construction.
   build time — not after the operator asks. Without this line a
   cross-engine refactor that breaks the engine's scheduler won't
   surface in the smoke check.
+- **Add the engine to `scripts/run_all_engines.sh`** AND update
+  `ops/platform_pipeline.py`'s docstring engine list. That script is
+  what the `engine-service` daemon invokes after
+  `DATA_OPERATIONS_COMPLETE`; an engine omitted from it never runs
+  live. Update both the script loop and the platform-pipeline
+  docstring's enumerated engine roster in the same commit.
+- **Scheduler emits STARTUP + SHUTDOWN events.** Call
+  `await db_log.startup()` right after the `try:` block opens and
+  `await db_log.shutdown(duration_ms=..., exit_code=...)` from the
+  `finally:` block. `DBLogHandler` exposes both helpers (see
+  `tpcore/logging/db_handler.py`). Without these, daemon liveness
+  probes and the dashboard's "recent runs" panel can't see the
+  engine.
+- **`scripts/pipeline_smoke_test.py` is Tier-2-cascade-specific.** It
+  asserts the trade-monitor's OCO bracket cascade works for per-trade
+  engines (sigma/reversion/vector). Portfolio-allocation engines
+  (momentum / sentinel, no Tier 2 cascade) do NOT belong in that
+  smoke. The engine readiness checklist asks you to confirm which
+  category applies.
 
 When a new engine surfaces a compliance pattern the checklist doesn't
 cover yet, extend this section and §10 of the checklist together.

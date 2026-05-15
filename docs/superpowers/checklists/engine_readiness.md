@@ -118,6 +118,25 @@ running these before merge prevents the same gaps in the next engine.
       the engine isn't in the loop, future cross-engine refactors won't
       catch breakage in its scheduler. One-line addition at engine
       build time — not an afterthought.
+- [ ] **Engine is in `scripts/run_all_engines.sh` per-engine loop.**
+      `grep "<engine>" scripts/run_all_engines.sh` returns a hit inside
+      the `for engine in ...; do` line — and the script's docstring
+      header lists it. This is the file the `engine-service` daemon
+      invokes after `DATA_OPERATIONS_COMPLETE`. Update the matching
+      docstring in `ops/platform_pipeline.py` so the listed engine
+      roster matches reality.
+- [ ] **Scheduler emits STARTUP + SHUTDOWN to `platform.application_log`.**
+      `grep -E "db_log\\.startup\\(|db_log\\.shutdown\\(" <engine>/scheduler.py`
+      returns hits. Use `DBLogHandler.startup()` immediately after the
+      `try:` and `DBLogHandler.shutdown(duration_ms=..., exit_code=...)`
+      in the `finally:` block. Without these, daemon liveness probes
+      and the dashboard's "recent runs" panel won't see the engine.
+- [ ] **`scripts/pipeline_smoke_test.py` review (Tier 2 cascade only).**
+      That script tests the trade-monitor's Tier 2 OCO bracket cascade
+      with sigma-shaped orders. Per-trade engines (sigma/reversion/vector)
+      need a corresponding test fixture in there; portfolio-allocation
+      engines (momentum/sentinel, no Tier 2 cascade) explicitly DO NOT.
+      Confirm one or the other applies and check the box.
 
 These six rules also live in `docs/STYLE_GUIDE.md` (the canonical Don't-Do
 list) and the scaffolds at `tpcore/templates/engine_template/` so a fresh
