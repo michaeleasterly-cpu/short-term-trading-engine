@@ -1,33 +1,42 @@
-"""Corwin-Schultz (2012) high-low bid-ask spread estimator.
+"""Abdi-Ranaldo (2017) bid-ask spread estimator — active implementation.
 
-Reference: "A simple way to estimate bid–ask spreads from daily high
-and low prices", Corwin & Schultz, Journal of Finance, 2012.
+Reference: "A Simple Estimation of Bid-Ask Spreads from Daily Close,
+High, and Low Prices", Abdi & Ranaldo, Review of Financial Studies,
+2017. https://doi.org/10.1093/rfs/hhx084
 
-The estimator uses only daily H/L data — no quote feed required — so
-it works against ``platform.prices_daily`` we already have for 7,694
-tickers. Phase 2 uses it **only** to rank the universe and pick the
-top-200 to subscribe to first via Tradier's streaming WebSocket. All
-tier assignments in ``platform.liquidity_tiers`` flow from real
-streaming data (``source = 'tradier_streaming'``); the CS rows we
-write here land with ``source = 'corwin_schultz'`` and are for
-reference / prioritisation only.
+Replaces the Corwin-Schultz (2012) estimator that was retired
+2026-05-15 after it was found to systematically invert liquidity
+rankings for individual stocks (volatility-driven HIGH/LOW ranges
+were being interpreted as wide spreads on the most liquid names).
+
+The Abdi-Ranaldo estimator addresses C-S's failure mode by anchoring
+spread inference to the **close** price (an observable point estimate
+of mid) rather than the HIGH/LOW range (a volatility-confounded
+estimate). High-volatility liquid stocks no longer get penalized;
+narrow daily ranges no longer get rewarded for illiquidity.
 
 Formula
 -------
-For consecutive trading days t and t+1:
 
-  β_t = (ln(H_t / L_t))^2 + (ln(H_{t+1} / L_{t+1}))^2
-  γ_t = (ln(max(H_t, H_{t+1}) / min(L_t, L_{t+1})))^2
-  α_t = (√(2β_t) - √β_t) / (3 - 2√2) - √(γ_t / (3 - 2√2))
-  S_t = 2 (e^α_t - 1) / (1 + e^α_t)
+For each trading day t with daily bars (H_t, L_t, C_t) and the next
+day's (H_{t+1}, L_{t+1}, C_{t+1}):
 
-Negative single-day estimates are clipped to 0 (the paper recommends
-either clipping or excluding; we clip so the per-ticker mean is a
-stable scalar).
+    η_t   = (log(H_t) + log(L_t)) / 2          # mid-range log-price
+    s²_t  = max(0, 4 * (log(C_t) - η_t) * (log(C_t) - η_{t+1}))
+    S_t   = √(s²_t)                             # daily spread in log space
+
+The per-ticker spread estimate is the mean of valid daily S_t values.
+We then exponentiate-and-subtract-one to convert log-space to a
+fraction-of-mid: ``spread_pct ≈ S_t`` for small S (first-order
+approximation; the linear regime holds up to ~5% spreads, far
+beyond anything tradeable).
+
+Negative single-day estimates are clipped to 0 per the paper —
+they're noise from the L_t > C_t edge case. NaN values appear where
+the next-day bar is missing; callers ``.dropna()`` before reducing.
 """
 from __future__ import annotations
 
-import math
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
@@ -41,75 +50,105 @@ if TYPE_CHECKING:  # pragma: no cover
 
 logger = structlog.get_logger(__name__)
 
-# 3 − 2√2 appears in both the α numerator and denominator. Pre-compute.
-_K_DENOM = 3 - 2 * math.sqrt(2)
+# Source tag persisted to ``platform.spread_observations``. Keeps the
+# audit trail honest about which estimator wrote each row.
+SOURCE_TAG = "abdi_ranaldo"
 
-# Default lookback for ``rank_universe_by_liquidity`` — covers ~20 trading days
-# of HL pairs once we drop the first row (no t-1 to pair with).
-_DEFAULT_LOOKBACK_CALENDAR_DAYS = 35
+# Default lookback. AR is more sample-efficient than C-S because each
+# observation uses 4 OHLC numbers vs C-S's 2 HL pairs, but a longer
+# window still smooths microstructure noise. 35 calendar days ~ 22
+# trading-day pairs after the trailing-day drop.
+_DEFAULT_LOOKBACK_CALENDAR_DAYS = 365
 _MIN_OBSERVATIONS = 5
 
-# Coarse-universe filter mirrors ``simulate_universe.py`` so the same
-# 1,400-ish tickers get prioritised first.
+# Coarse-universe filter — mirrors ``simulate_universe.py`` so the same
+# tickers get ranked first. Engines need to see liquid names, so we
+# pre-filter to a sensible price + volume floor before the estimator
+# does any work.
 _MIN_PRICE = Decimal("10.00")
 _MIN_AVG_VOLUME = 1_000_000
 
 
-def estimate_spread_corwin_schultz(
-    high: pd.Series, low: pd.Series
+def estimate_spread_abdi_ranaldo(
+    high: pd.Series, low: pd.Series, close: pd.Series
 ) -> pd.Series:
-    """Return the Corwin-Schultz daily spread estimate per the paper.
+    """Return AR's per-day **product term** (unclipped, can be negative).
 
-    Inputs are two pandas Series indexed identically (typically by
-    date). Outputs are a Series of the same length whose values are
-    daily spread estimates as a fraction of mid-price (e.g. 0.0015 =
-    15 bps). The first value is NaN — the formula needs a t-1 bar.
+    Inputs are three pandas Series indexed identically (typically by
+    date). Output is a Series of the same length whose values are the
+    per-day cross-product ``4 * (log(C_t) - η_t) * (log(C_t) - η_{t+1})``.
+    The last value is NaN — the formula needs the t+1 mid-range.
 
-    Negative single-day estimates are clipped to 0. NaN values appear
-    where ``γ`` produces a domain error (e.g. constant H = L); callers
-    should ``.dropna()`` before reducing.
+    **Important**: these are NOT per-day spread estimates. Per-day
+    values are noisy and frequently negative; the spread emerges only
+    after averaging across many days. ``average_spread_estimate``
+    aggregates these correctly (mean → clip-at-zero → square root).
+    Callers that want a single spread for a ticker should use
+    ``average_spread_estimate`` directly.
     """
-    if len(high) != len(low):
+    if not (len(high) == len(low) == len(close)):
         raise ValueError(
-            f"high/low length mismatch: high={len(high)} low={len(low)}"
+            f"high/low/close length mismatch: "
+            f"high={len(high)} low={len(low)} close={len(close)}"
         )
-    high = high.astype(float)
-    low = low.astype(float)
-    log_hl = np.log(high / low)
-    beta = log_hl.pow(2) + log_hl.shift(-1).pow(2)
-    # γ uses the 2-day max-high / min-low envelope. Align t and t+1.
-    h2 = np.maximum(high, high.shift(-1))
-    l2 = np.minimum(low, low.shift(-1))
-    log_h2_l2 = np.log(h2 / l2)
-    gamma = log_h2_l2.pow(2)
+    h = high.astype(float)
+    l_ = low.astype(float)
+    c = close.astype(float)
 
-    with np.errstate(invalid="ignore"):
-        alpha = (
-            (np.sqrt(2 * beta) - np.sqrt(beta)) / _K_DENOM
-            - np.sqrt(gamma / _K_DENOM)
-        )
-        spread = 2 * (np.exp(alpha) - 1) / (1 + np.exp(alpha))
+    # Guard against rows with non-positive prices — log() NaNs.
+    valid = (h > 0) & (l_ > 0) & (c > 0)
+    h = h.where(valid)
+    l_ = l_.where(valid)
+    c = c.where(valid)
 
-    # Clip negative single-day estimates to zero (CS 2012 §III).
-    spread = spread.clip(lower=0)
-    return spread
+    log_h = np.log(h)
+    log_l = np.log(l_)
+    log_c = np.log(c)
+    eta = (log_h + log_l) / 2.0
+    # Per-day product term. Negative values are NOT clipped here —
+    # the AR estimator's correctness depends on positive AND negative
+    # per-day products averaging out toward zero for stocks with no
+    # bid-ask bounce. Clipping at the per-day stage inflates the
+    # estimate for liquid stocks (the Corwin-Schultz failure mode
+    # this estimator was meant to replace).
+    product = 4.0 * (log_c - eta) * (log_c - eta.shift(-1))
+    return product
 
 
 def average_spread_estimate(
-    high: pd.Series, low: pd.Series, *, min_observations: int = _MIN_OBSERVATIONS
+    high: pd.Series,
+    low: pd.Series,
+    close: pd.Series,
+    *,
+    min_observations: int = _MIN_OBSERVATIONS,
 ) -> float | None:
-    """Return the mean CS daily spread for a single ticker.
+    """Single AR spread estimate for a ticker — fraction of mid.
 
-    Returns ``None`` when fewer than ``min_observations`` finite daily
-    estimates are available — the per-ticker mean is too noisy to
-    rank otherwise.
+    Aggregates the per-day product terms correctly:
+
+        S = √(max(0, mean(per_day_products)))
+
+    The clip-at-zero step happens on the MEAN, not on each per-day
+    value — see ``estimate_spread_abdi_ranaldo``'s docstring. The
+    mean is taken over finite values only (NaN dropped). Returns
+    ``None`` when fewer than ``min_observations`` finite per-day
+    values are available.
+
+    Result is a fraction (e.g. ``0.00015`` = 1.5 bp), suitable for
+    direct comparison against ``TIER_BOUNDS`` in
+    ``scripts/assign_liquidity_tiers.py``.
     """
-    raw = estimate_spread_corwin_schultz(high, low).replace(
-        [np.inf, -np.inf], np.nan
-    ).dropna()
+    raw = (
+        estimate_spread_abdi_ranaldo(high, low, close)
+        .replace([np.inf, -np.inf], np.nan)
+        .dropna()
+    )
     if len(raw) < min_observations:
         return None
-    return float(raw.mean())
+    mean_product = float(raw.mean())
+    if mean_product <= 0:
+        return 0.0
+    return float(np.sqrt(mean_product))
 
 
 # ── DB-backed ranking + persistence ─────────────────────────────────────
@@ -148,14 +187,13 @@ async def rank_universe_by_liquidity(
     persist: bool = True,
     coarse_filter: bool = True,
 ) -> list[tuple[str, float]]:
-    """Compute average CS spread per active ticker, sorted ascending.
+    """Compute average AR spread per active ticker, sorted ascending.
 
-    Returns ``[(ticker, avg_spread), ...]`` — narrowest spread first. The
-    caller hands the top N tickers to the Tradier streaming subscriber.
+    Returns ``[(ticker, avg_spread), ...]`` — narrowest spread first.
 
     When ``persist=True`` (default), each non-NaN per-ticker estimate
     is written to ``platform.spread_observations`` with
-    ``source='corwin_schultz'`` so we have an audit trail of what the
+    ``source='abdi_ranaldo'`` so the audit trail records what the
     bootstrap recommended on a given day.
     """
     sql = _RANKING_BARS_SQL.format(lookback=lookback_days)
@@ -185,7 +223,7 @@ async def rank_universe_by_liquidity(
         group = group.sort_values("date")
         if coarse_filter and not _passes_coarse(group):
             continue
-        avg = average_spread_estimate(group["high"], group["low"])
+        avg = average_spread_estimate(group["high"], group["low"], group["close"])
         if avg is None:
             continue
         estimates.append((ticker, avg))
@@ -194,7 +232,7 @@ async def rank_universe_by_liquidity(
             Decimal(str(round(avg, 6))),
             now,
             "regular",
-            "corwin_schultz",
+            SOURCE_TAG,
         ))
 
     estimates.sort(key=lambda x: x[1])
@@ -206,6 +244,7 @@ async def rank_universe_by_liquidity(
         logger.info(
             "tpcore.backtest.spread_estimator.bootstrap_persisted",
             n=len(bootstrap_observations),
+            source=SOURCE_TAG,
         )
 
     return estimates
@@ -223,7 +262,8 @@ def _passes_coarse(group: pd.DataFrame) -> bool:
 
 
 __all__ = [
-    "estimate_spread_corwin_schultz",
+    "SOURCE_TAG",
     "average_spread_estimate",
+    "estimate_spread_abdi_ranaldo",
     "rank_universe_by_liquidity",
 ]

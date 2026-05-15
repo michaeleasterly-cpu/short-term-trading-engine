@@ -631,12 +631,17 @@ async def _stage_tier_refresh(pool: asyncpg.Pool) -> dict[str, Any]:
     import os
 
     from scripts.assign_liquidity_tiers import assign_tiers
-    from tpcore.backtest.spread_estimator import rank_universe_by_liquidity
+    from tpcore.backtest.spread_estimator import SOURCE_TAG, rank_universe_by_liquidity
 
     # Phase 1 — bootstrap, gated by its own freshness check.
+    # Source-tagged to the active estimator (abdi_ranaldo as of
+    # 2026-05-15). The legacy 'corwin_schultz' rows in
+    # spread_observations are retained for audit / historical view
+    # but no longer consulted for freshness or aggregation.
     newest_obs = await pool.fetchval(
         "SELECT MAX(observed_at) FROM platform.spread_observations "
-        "WHERE source = 'corwin_schultz'"
+        "WHERE source = $1",
+        SOURCE_TAG,
     )
     bootstrap_skipped = False
     bootstrap_rows = 0
@@ -645,6 +650,7 @@ async def _stage_tier_refresh(pool: asyncpg.Pool) -> dict[str, Any]:
         log.info(
             "ops.stage.tier_refresh.bootstrap_skipped",
             spread_obs_age_days=(datetime.now(UTC) - newest_obs).days,
+            source=SOURCE_TAG,
         )
     else:
         results = await rank_universe_by_liquidity(
@@ -654,6 +660,7 @@ async def _stage_tier_refresh(pool: asyncpg.Pool) -> dict[str, Any]:
         log.info(
             "ops.stage.tier_refresh.bootstrap_done",
             spread_observations_written=bootstrap_rows,
+            source=SOURCE_TAG,
             prior_obs_age_days=(
                 (datetime.now(UTC) - newest_obs).days
                 if newest_obs is not None else None
@@ -664,7 +671,7 @@ async def _stage_tier_refresh(pool: asyncpg.Pool) -> dict[str, Any]:
     db_url = os.getenv("DATABASE_URL") or os.getenv("DATABASE_URL_IPV4")
     if not db_url:
         raise RuntimeError("tier_refresh: DATABASE_URL not set")
-    sources = ["corwin_schultz"]
+    sources = [SOURCE_TAG]
     bucket = await assign_tiers(db_url=db_url, sources=sources)
     log.info(
         "ops.stage.tier_refresh.done",

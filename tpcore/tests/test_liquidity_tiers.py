@@ -107,7 +107,7 @@ async def test_assign_tiers_empty_observations_returns_empty_dict(monkeypatch):
         assign_liquidity_tiers, "build_asyncpg_pool", _fake_build
     )
     bucket = await assign_liquidity_tiers.assign_tiers(
-        db_url="postgresql://noop", sources=["corwin_schultz"],
+        db_url="postgresql://noop", sources=["abdi_ranaldo"],
     )
     assert bucket == {}
     assert conn.executemany_calls == []  # nothing to upsert
@@ -139,7 +139,7 @@ async def test_assign_tiers_produces_correct_distribution(monkeypatch):
         assign_liquidity_tiers, "build_asyncpg_pool", _fake_build
     )
     bucket = await assign_liquidity_tiers.assign_tiers(
-        db_url="postgresql://noop", sources=["corwin_schultz"],
+        db_url="postgresql://noop", sources=["abdi_ranaldo"],
     )
     assert bucket == {1: 1, 2: 1, 3: 1}
     # Single executemany call with all three rows.
@@ -176,7 +176,7 @@ async def test_assign_tiers_marks_provisional_when_under_min_obs(monkeypatch):
         assign_liquidity_tiers, "build_asyncpg_pool", _fake_build
     )
     await assign_liquidity_tiers.assign_tiers(
-        db_url="postgresql://noop", sources=["corwin_schultz"],
+        db_url="postgresql://noop", sources=["abdi_ranaldo"],
     )
     upsert_row = conn.executemany_calls[0][1][0]
     assert upsert_row[5] is True  # provisional
@@ -206,10 +206,10 @@ async def test_assign_tiers_idempotent_same_inputs_same_outputs(monkeypatch):
         assign_liquidity_tiers, "build_asyncpg_pool", _fake_build
     )
     bucket1 = await assign_liquidity_tiers.assign_tiers(
-        db_url="postgresql://noop", sources=["corwin_schultz"],
+        db_url="postgresql://noop", sources=["abdi_ranaldo"],
     )
     bucket2 = await assign_liquidity_tiers.assign_tiers(
-        db_url="postgresql://noop", sources=["corwin_schultz"],
+        db_url="postgresql://noop", sources=["abdi_ranaldo"],
     )
     assert bucket1 == bucket2 == {1: 1}
     # Two upsert calls (one per run) with byte-identical payloads.

@@ -516,6 +516,18 @@ Verified row counts and coverage (audited 2026-05-14, post-data-layer normalizat
 
 All sources free-tier or FMP Starter ($22/month). Hosting on Railway Hobby ($5/month, currently paused) + Supabase Pro ($25/month). Total fixed monthly cost: **$52** (see §6.1). No `yfinance`. The Tradier brokerage account is closed; the options-chain and pre-2020 bar export was completed before closure.
 
+### 6.4a Spread Estimator (2026-05-15 — Abdi-Ranaldo replaces Corwin-Schultz)
+
+`platform.liquidity_tiers` is populated from per-ticker spread estimates aggregated out of `platform.spread_observations`. The original Phase-2 plan called for live Tradier quote data; Tradier was deprecated, so the cost model shipped on a daily-bar-only estimator.
+
+**Corwin-Schultz (2012) — retired 2026-05-15.** Initial implementation. Found to systematically invert liquidity rankings for individual stocks: high-volatility mega-caps (AAPL, NVDA, TSLA) got inflated spread estimates (T3/T4) because their daily HIGH/LOW range is driven by price discovery, not quote width; illiquid microcaps with narrow ranges (BEBE, FONR) got tight-spread estimates (T1) because nobody trades them enough to widen the daily range. The implementation is preserved verbatim at `tpcore/backtest/spread_estimator_archive.py` for academic reference; no active code imports from it. Historical `source='corwin_schultz'` rows in `platform.spread_observations` are retained for audit but the aggregator no longer reads them by default.
+
+**Abdi-Ranaldo (2017) — active.** Replaced C-S on 2026-05-15. Uses close-vs-mid-range cross-day product instead of HIGH/LOW range alone, separating bid-ask noise from volatility-driven range. Implementation in `tpcore/backtest/spread_estimator.py`; CHECK constraint extended to allow `source='abdi_ranaldo'` via migration `20260515_0100`. 365-calendar-day lookback (~252 trading days) per the paper's recommended sample size.
+
+**Verified impact (2026-05-15 recompute):** AAPL/MSFT/NVDA/TSLA correctly landed in T1 (were T3/T4 under C-S); T1+T2 stock count rose from **66 → 1,501** (23× larger pool); Sigma's scan candidate count rose from **1 → 15** (15× lift) on the same day's data. Residual estimator noise remains on individual ETFs (SPY landed in T4 with an inflated ~130 bp estimate vs ~0.5 bp truth) — AR has a known limitation with ETFs whose intraday trading mechanics differ from individual stocks. This is acceptable because engines filter by `asset_class='stock'`, so ETF tier accuracy doesn't gate any engine universe today.
+
+Future tightening paths if AR's ETF noise becomes a problem: (a) ETF-specific spread floor in `assign_tiers`, (b) switch to live SIP quote data via Alpaca Algo Trader Plus subscription, (c) hybrid estimator that combines AR with Roll's serial-correlation estimator.
+
 ### 6.5 Data Upgrade ROI Gates
 
 Triggers for paid-tier upgrades. The default posture is to stay on the current $52/mo stack (FMP Starter + Railway Hobby + Supabase Pro) until the Parity Harness or Overfitting Diagnostic produces measured evidence that an upgrade's marginal benefit exceeds its cost.

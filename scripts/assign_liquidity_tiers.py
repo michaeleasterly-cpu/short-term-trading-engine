@@ -2,22 +2,24 @@
 
 Source policy
 -------------
-The original Phase 2 plan called for streaming Tradier quote data to
-populate this table. Tradier is being deprecated, so we ship the cost
-model on the Corwin-Schultz bootstrap alone: ``WHERE source =
-'corwin_schultz'``. The aggregator was designed source-agnostic, so
-when a real-time quote feed lands later it joins the same table by
-extending the ``source IN (...)`` filter — no schema change needed.
+Default source is ``abdi_ranaldo`` (the active spread estimator as of
+2026-05-15; replaced Corwin-Schultz which was found to invert
+liquidity rankings on individual stocks). The aggregator is
+source-agnostic — pass ``--sources`` to filter to a different
+estimator, e.g. ``--sources tradier_streaming`` when a real-time
+quote feed lands. Legacy ``corwin_schultz`` rows are retained in
+``platform.spread_observations`` for historical audit but are not
+read by default.
 
 Why provisional=false out of the gate
 -------------------------------------
 The Tradier-driven design intended the ``provisional`` flag to model
-"we've seen too few intraday quotes to trust the tier". With CS we
-already have 20+ daily HL pairs per ticker the first time this runs,
-which is enough for the per-ticker mean to stabilise. We still set
-``provisional = true`` for any ticker with fewer than 5 observations
-in the aggregate (e.g. brand-new IPOs) — same intent, different
-trigger.
+"we've seen too few intraday quotes to trust the tier". With AR we
+already have 20+ daily OHLC bars per ticker the first time this
+runs, which is enough for the per-ticker mean to stabilise. We still
+set ``provisional = true`` for any ticker with fewer than 5
+observations in the aggregate (e.g. brand-new IPOs) — same intent,
+different trigger.
 
 Tier thresholds (from EDGE_VALIDATION_PLAN.md):
     T1: median spread < 0.05%
@@ -139,11 +141,13 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument(
         "--sources",
-        default="corwin_schultz",
+        default="abdi_ranaldo",
         help=(
             "Comma-separated list of spread_observations.source values to "
-            "aggregate. Default 'corwin_schultz' (the only source we ship "
-            "with today). When a real quote feed lands, add it here."
+            "aggregate. Default 'abdi_ranaldo' (the active estimator). "
+            "Legacy 'corwin_schultz' rows are retained for audit but no "
+            "longer aggregated by default. When a real quote feed lands, "
+            "add it here."
         ),
     )
     return p.parse_args(argv)
