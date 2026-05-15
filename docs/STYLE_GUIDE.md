@@ -139,6 +139,16 @@ by construction.
   (momentum / sentinel, no Tier 2 cascade) do NOT belong in that
   smoke. The engine readiness checklist asks you to confirm which
   category applies.
+- **Register critical tickers in
+  ``tpcore/quality/validation/checks/prices_daily_freshness.py``.** Any
+  ticker the engine *requires* (regime gates, basket members,
+  market-context proxies) must be in ``CRITICAL_TICKERS``. The check
+  fires on any registered ticker stale > 5 days. The general
+  ``row_integrity`` and ``delistings`` checks do NOT catch per-ticker
+  silent refresh drops — that's what motivated the dedicated check
+  (SPY incident, 2026-05-15). Without registration, an engine can
+  silently break when its key data feed stops refreshing while the
+  rest of the universe stays current.
 
 When a new engine surfaces a compliance pattern the checklist doesn't
 cover yet, extend this section and §10 of the checklist together.

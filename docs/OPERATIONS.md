@@ -194,7 +194,7 @@ The post-mortem captured these principles as durable patterns; the data-operatio
 2. **Physical-truth at write time.** Every row passes the same physical-truth predicate (`close > 0`, OHLC consistent, no future dates) AT the CSV write step, not just at the destination. Bad rows never reach the database.
 3. **Self-healing > manual retry.** Stages that hit transient errors (timeout, 429, ReadError) auto-retry once inside `--update`. Resumable stages (fundamentals: skip-if-refreshed-within-24h, daily_bars: skip-if-already-ingested) make every re-run faster than the previous.
 4. **SIP > IEX.** Alpaca's free IEX feed silently misses tickers that trade off-IEX. The account is subscribed to SIP; default everywhere is `feed="sip"`. The `coverage_fill` stage closes any remaining gap nightly.
-5. **Validation suite is the gate.** 11 checks: delistings, constituent, splits, row_integrity, fundamentals_integrity, corporate_actions_integrity, catalyst_freshness, sec_filings_freshness, liquidity_tiers_freshness, ticker_classifications_coverage, macro_indicators_freshness (the last added 2026-05-14 with the FRED adapter — last data source from §6.1). Validation green is the operational definition of "data is clean enough to trade on."
+5. **Validation suite is the gate.** 12 checks: delistings, constituent, splits, row_integrity, fundamentals_integrity, corporate_actions_integrity, catalyst_freshness, sec_filings_freshness, liquidity_tiers_freshness, ticker_classifications_coverage, macro_indicators_freshness, prices_daily_freshness (the last added 2026-05-15 after the SPY-silent-gap incident — fires when a registered critical ticker stale > 5d or universe-wide staleness > 2%). Validation green is the operational definition of "data is clean enough to trade on."
 6. **Cross-references are integrity too.** `audit_all_tables.sh` (and the dashboard's "Cross-table integrity" row) catches orphan tickers across every dependent table — the kind of failure the validation suite's per-table predicates miss.
 7. **Latest-run beats rolling aggregates on dashboards.** A 7-day rolling failure count surfaces stale history as current state. Show LATEST per source — stale aggregates lie.
 8. **Compress confirmed artifacts.** After a successful upsert, gzip the CSV (~80% disk savings). Loaders read `.gz` transparently on re-run.
@@ -692,7 +692,7 @@ The suite runs as part of every `python scripts/ops.py --update` (stage 12 of 14
 
 ### Acceptance criterion — "100% validated"
 
-> **Data is clean when every row in every persistence table satisfies its physical-truth predicate, and the validation suite returns `passed=True` with `confidence=1.000` on every one of its eleven checks. No allowlist, no `WHERE clause` skipping known-bad ticker-date pairs. If the predicate fires, the row gets fixed (re-pulled from source) or deleted.**
+> **Data is clean when every row in every persistence table satisfies its physical-truth predicate, and the validation suite returns `passed=True` with `confidence=1.000` on every one of its twelve checks. No allowlist, no `WHERE clause` skipping known-bad ticker-date pairs. If the predicate fires, the row gets fixed (re-pulled from source) or deleted.**
 
 Verifiable with one SQL:
 
@@ -752,7 +752,7 @@ The dashboard's **Cross-table integrity** row (Platform Health panel) runs the s
 9. `catalyst_refresh` — FMP earnings-history → `catalyst_events` for T1+T2 stocks. Skip-guard: short-circuits when last refresh < 6 days ago.
 10. `sec_filings` — SEC EDGAR Form 4 + 8-K → `sec_insider_transactions` + `sec_material_events` for T1+T2 stocks. CSV-first. **Skip-guard tightened 6→3 days 2026-05-14** (cadence finding): Form 4 has a 2-business-day filing deadline so 6d staleness was half-stale on average.
 11. `macro_indicators` — **added 2026-05-14 (FRED adapter, last data source from §6.1)**: FRED time-series → `platform.macro_indicators`. Weekly cadence with 7-day skip guard. Unblocks Sentinel.
-12. `data_validation` — the 11-check suite above.
+12. `data_validation` — the 12-check suite above (added prices_daily_freshness 2026-05-15).
 13. `universe_prescreener` — writes today's `momentum` rows to `universe_candidates`.
 14. `universe_simulation` — diagnostic; runs `scripts/simulate_universe.py`.
 

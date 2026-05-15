@@ -748,6 +748,63 @@ async def _stage_classify_tickers(pool: asyncpg.Pool) -> dict[str, Any]:
     return {str(k): int(v) for k, v in stats.items()}
 
 
+async def _stage_delist_stale(pool: asyncpg.Pool) -> dict[str, Any]:
+    """Auto-promote stale SPAC / fund tickers to ``delisted=true``.
+
+    SPACs and funds frequently stop trading via merger / redemption /
+    liquidation without an explicit delisting event reaching our feed.
+    They accumulate as "stale" tickers in ``prices_daily`` (last bar
+    weeks-to-months old, ``delisted=false``), inflating universe counts
+    and triggering false alerts in per-ticker freshness checks. This
+    stage promotes any non-stock asset whose last bar is > 30 days old
+    to ``delisted=true``, with ``delisting_date`` set to the last bar.
+
+    **Common stocks are intentionally excluded** — a single illiquid
+    stock that hasn't traded for a month may simply be temporarily
+    halted, awaiting an earnings restatement, etc. Auto-delisting them
+    is reversible-but-noisy. The operator handles stale stocks via the
+    forensics dashboard.
+
+    Idempotent — re-running has no effect once the stale roster is
+    flushed. Safe under the data_operations pipeline.
+    """
+    log = structlog.get_logger("scripts.ops")
+    sql = """
+        UPDATE platform.prices_daily pd
+        SET delisted = true,
+            delisting_date = COALESCE(pd.delisting_date, (
+                SELECT MAX(date) FROM platform.prices_daily WHERE ticker = pd.ticker
+            ))
+        WHERE pd.ticker IN (
+            SELECT pd2.ticker FROM platform.prices_daily pd2
+            JOIN platform.ticker_classifications tc ON tc.ticker = pd2.ticker
+            WHERE pd2.delisted = false AND tc.asset_class IN ('spac', 'fund')
+            GROUP BY pd2.ticker
+            HAVING MAX(pd2.date) < CURRENT_DATE - INTERVAL '30 days'
+        )
+    """
+    # Count first (so the log reports tickers, not row counts), then apply.
+    count_sql = """
+        SELECT COUNT(DISTINCT pd.ticker) AS n
+        FROM platform.prices_daily pd
+        JOIN platform.ticker_classifications tc ON tc.ticker = pd.ticker
+        WHERE pd.delisted = false AND tc.asset_class IN ('spac', 'fund')
+        GROUP BY pd.ticker
+        HAVING MAX(pd.date) < CURRENT_DATE - INTERVAL '30 days'
+    """
+    async with pool.acquire() as conn:
+        candidates = await conn.fetchval(
+            "SELECT COUNT(*) FROM (" + count_sql + ") t"
+        )
+        candidates = int(candidates or 0)
+        if candidates == 0:
+            log.info("ops.stage.delist_stale.no_candidates")
+            return {"candidates": 0, "delisted": 0}
+        await conn.execute(sql)
+    log.info("ops.stage.delist_stale.done", candidates=candidates)
+    return {"candidates": candidates, "delisted": candidates}
+
+
 async def _stage_macro_indicators(pool: asyncpg.Pool) -> dict[str, Any]:
     """Weekly FRED macro-indicators ingest.
 
@@ -1067,6 +1124,7 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # expansion. ETFs/SPACs/funds get flagged so catalyst + earnings
     # pipelines can filter them out.
     ("classify_tickers",    lambda pool, cfg: (lambda: _stage_classify_tickers(pool)),         HEAVY_STAGE_TIMEOUT_SEC),
+    ("delist_stale",        lambda pool, cfg: (lambda: _stage_delist_stale(pool)),             STAGE_TIMEOUT_SEC),
     # Catalyst refresh — earnings-beat events for vector engine.
     # Heavy timeout (1h) because the FMP loop is ~1 sec per ticker;
     # T1+T2 stock subset is ~66 tickers so a fresh run is ~3 min, but

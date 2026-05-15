@@ -137,6 +137,20 @@ running these before merge prevents the same gaps in the next engine.
       need a corresponding test fixture in there; portfolio-allocation
       engines (momentum/sentinel, no Tier 2 cascade) explicitly DO NOT.
       Confirm one or the other applies and check the box.
+- [ ] **Critical tickers registered in `prices_daily_freshness` check.**
+      Any ticker the engine *requires* to function (regime gates, basket
+      members, market-context proxies — e.g. Sentinel's SPY for the VIX
+      proxy + the 5-ETF defensive basket) must appear in
+      ``CRITICAL_TICKERS`` in
+      ``tpcore/quality/validation/checks/prices_daily_freshness.py``.
+      That check fires immediately on any registered ticker stale > 5
+      days — catches the silent per-ticker refresh failures the general
+      ``row_integrity`` + ``delistings`` checks miss. Verify with
+      ``grep "<TICKER>" tpcore/quality/validation/checks/prices_daily_freshness.py``.
+      Why: the SPY-gap incident on 2026-05-15 (SPY drifted 2 days behind
+      TLT/SQQQ because Alpaca returned an empty 200 OK that the handler
+      treats as "nothing new to insert") would have been caught at the
+      validation gate if SPY had been registered.
 
 These six rules also live in `docs/STYLE_GUIDE.md` (the canonical Don't-Do
 list) and the scaffolds at `tpcore/templates/engine_template/` so a fresh

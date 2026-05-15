@@ -14,6 +14,8 @@ settlement: Annual distribution + tax reporting service (formerly Harvester).
 tax-loss harvester: An automated tax-optimisation feature inside `tpcore.tax` (`TaxLossHarvester`), distinct from the deprecated Harvester (now Settlement) service.
 pit: Point-in-time — data as it was known on a specific historical date, not retroactively adjusted.
 survivorship bias: The error introduced when backtests exclude delisted stocks.
+prices_daily_freshness: Validation check (added 2026-05-15) that catches silent per-ticker refresh drops. Fires when any ticker in `CRITICAL_TICKERS` (SPY, QQQ, Sentinel basket) is stale > 5 days, OR when more than 2% of the active universe is stale > 14 days. Defined in `tpcore/quality/validation/checks/prices_daily_freshness.py`. Every new engine must register its critical tickers there — see `engine_readiness.md` §10.
+delist_stale: Ops stage (added 2026-05-15) that auto-promotes stale SPAC + fund tickers to `delisted=true` when their last bar is > 30 days old. Common stocks are intentionally excluded — they may be temporarily halted; operator handles those via the forensics dashboard. Wired into the daily `data_operations` pipeline after `classify_tickers`.
 parity harness: System that compares paper fills to live fills.
 bracket order: A parent order with linked take-profit and stop-loss legs (Alpaca order_class=bracket).
 @with_retry: Universal HTTP retry decorator in `tpcore.outage`. Exponential backoff with optional jitter, honors `Retry-After`, retries 429/5xx and transient network/timeout errors only — 4xx-not-429 is permanent and re-raised immediately. Every external-API adapter on the platform uses this; ad-hoc `tenacity` and `asyncio.sleep` loops are forbidden.

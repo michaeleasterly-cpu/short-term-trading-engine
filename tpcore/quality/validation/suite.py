@@ -42,6 +42,8 @@ from .checks.liquidity_tiers_freshness import CHECK_NAME as LIQUIDITY_FRESHNESS_
 from .checks.liquidity_tiers_freshness import check_liquidity_tiers_freshness
 from .checks.macro_indicators_freshness import CHECK_NAME as MACRO_FRESHNESS_NAME
 from .checks.macro_indicators_freshness import check_macro_indicators_freshness
+from .checks.prices_daily_freshness import CHECK_NAME as PRICES_FRESHNESS_NAME
+from .checks.prices_daily_freshness import check_prices_daily_freshness
 from .checks.row_integrity import CHECK_NAME as ROW_INTEGRITY_NAME
 from .checks.row_integrity import check_row_integrity
 from .checks.sec_filings_freshness import CHECK_NAME as SEC_FRESHNESS_NAME
@@ -76,6 +78,7 @@ KNOWN_CHECK_NAMES: tuple[str, ...] = (
     LIQUIDITY_FRESHNESS_NAME,
     CLASSIFICATIONS_NAME,
     MACRO_FRESHNESS_NAME,
+    PRICES_FRESHNESS_NAME,
 )
 
 
@@ -130,22 +133,25 @@ async def run_suite(
     macro_task = _safe_run(
         MACRO_FRESHNESS_NAME, check_macro_indicators_freshness, pool, None
     )
+    prices_task = _safe_run(
+        PRICES_FRESHNESS_NAME, check_prices_daily_freshness, pool, None
+    )
     (
         delistings_result, constituent_result, splits_result,
         row_integrity_result, fund_integrity_result, ca_integrity_result,
         catalyst_result, sec_result, liquidity_result, classifications_result,
-        macro_result,
+        macro_result, prices_result,
     ) = await asyncio.gather(
         delistings_task, constituent_task, splits_task,
         row_integrity_task, fund_integrity_task, ca_integrity_task,
         catalyst_task, sec_task, liquidity_task, classifications_task,
-        macro_task,
+        macro_task, prices_task,
     )
     checks: list[CheckResult] = [
         delistings_result, constituent_result, splits_result,
         row_integrity_result, fund_integrity_result, ca_integrity_result,
         catalyst_result, sec_result, liquidity_result, classifications_result,
-        macro_result,
+        macro_result, prices_result,
     ]
 
     finished_at = datetime.now(UTC)
