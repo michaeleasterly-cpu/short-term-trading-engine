@@ -39,19 +39,33 @@ from sentinel.models import (
     apply_basket_overrides,
     apply_missing_etf_fallback,
 )
+from tpcore.interfaces.engine_plug import BaseEnginePlug
 
 logger = structlog.get_logger(__name__)
 
 
-class SentinelExecutionRisk:
+class SentinelExecutionRisk(BaseEnginePlug):
     """Plug 3 — basket construction + order diffing.
 
     ``graduated`` toggles between the 10% pre-graduation cap and the
     20% permanent cap. Mirrors Momentum's pre-graduation discipline.
     """
 
+    engine_name = "sentinel"
+
     def __init__(self, *, graduated: bool = False) -> None:
         self._graduated = graduated
+
+    def validate_dependencies(self) -> bool:
+        return True
+
+    def healthcheck(self) -> dict:
+        return {
+            "engine": self.engine_name,
+            "plug": "execution_risk",
+            "ok": True,
+            "details": {"graduated": self._graduated},
+        }
 
     @property
     def allocation_cap(self) -> Decimal:

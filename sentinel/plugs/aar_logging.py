@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from tpcore.aar.classifier import classify_exit_reason
 from tpcore.aar.models import AfterActionReport, ExitReason
 from tpcore.aar.writer import AARWriter
 from tpcore.interfaces.engine_plug import BaseEnginePlug
@@ -60,15 +61,27 @@ class SentinelAARLogging(BaseEnginePlug):
         exit_price: Decimal,
         qty: Decimal,
         engine_equity_usd: Decimal,
-        exit_reason: ExitReason = ExitReason.SCHEDULED_REBALANCE,
+        exit_reason: ExitReason | None = None,
+        take_profit: Decimal | None = None,
+        stop_loss: Decimal | None = None,
         notes: str | None = None,
     ) -> bool:
         """Persist one AAR row for a closed Sentinel basket position.
 
         ``cycle_id`` ties the AAR row to its activation cycle so a single
-        recession's cycle can be reviewed end-to-end. Returns ``True`` on
-        success or when no writer is attached (dry-run mode).
+        recession's cycle can be reviewed end-to-end. ``exit_reason``
+        defaults to ``classify_exit_reason(...)`` — for Sentinel that's
+        ``TIME_STOP`` (no TP/SL on basket positions), but the helper is
+        the canonical way to derive the bucket so this plug matches the
+        STYLE_GUIDE rule "never hardcode ExitReason values". Returns
+        ``True`` on success or when no writer is attached.
         """
+        if exit_reason is None:
+            exit_reason = classify_exit_reason(
+                exit_price=exit_price,
+                take_profit=take_profit,
+                stop_loss=stop_loss,
+            )
         if self._writer is None:
             logger.debug("sentinel.aar.dry_run", ticker=ticker, trade_id=trade_id)
             return True

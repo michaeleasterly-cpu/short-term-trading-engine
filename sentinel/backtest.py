@@ -56,6 +56,7 @@ from tpcore.backtest.search import (
     compute_search_metrics,
     write_trade_log_csv,
 )
+from tpcore.backtest.statistical_validation import write_credibility_score
 from tpcore.db import build_asyncpg_pool
 
 logger = structlog.get_logger(__name__)
@@ -381,6 +382,18 @@ async def run_backtest(
             },
             search_trades=trades,
         )
+
+        # Persist the credibility rubric to platform.data_quality_log so
+        # SentinelCapitalGate.assert_can_graduate has a row to read. Mirror
+        # Reversion's pattern (reversion/backtest.py:~1423).
+        if result.credibility_rubric is not None:
+            wrote = await write_credibility_score(
+                pool, engine_name="sentinel", score=result.credibility_rubric,
+            )
+            logger.info(
+                "sentinel.backtest.credibility_persisted",
+                wrote=wrote, score=result.credibility_score,
+            )
 
         # Write artefacts.
         results_path = output_dir / results_file

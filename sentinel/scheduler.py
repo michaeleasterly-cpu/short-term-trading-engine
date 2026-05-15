@@ -54,6 +54,7 @@ from sentinel.plugs.setup_detection import (
     fetch_spy_close,
 )
 from tpcore.alpaca import AlpacaPaperBrokerAdapter
+from tpcore.calendar import is_trading_day
 from tpcore.db import build_asyncpg_pool
 from tpcore.interfaces.broker import (
     Order,
@@ -124,6 +125,15 @@ class SentinelScheduler:
                 )
                 return {"as_of": as_of.isoformat(), "action": "kill_switch_halt"}
 
+            # Trading-day gate — no-op on weekends/holidays. Mandatory per
+            # STYLE_GUIDE; tpcore.calendar wraps exchange_calendars XNYS.
+            as_of_dt = datetime.combine(as_of, datetime.min.time(), tzinfo=UTC)
+            if not is_trading_day(as_of_dt):
+                logger.info(
+                    "sentinel.scheduler.non_trading_day", as_of=as_of.isoformat(),
+                )
+                return {"as_of": as_of.isoformat(), "action": "non_trading_day"}
+
             # Replay phases over a rolling window so we don't need to
             # persist daily state — derivable from breakdowns + SPY.
             start = as_of - timedelta(days=LOOKBACK_DAYS)
@@ -177,11 +187,27 @@ class SentinelScheduler:
                 return {"as_of": as_of.isoformat(), "action": "no_orders",
                         "phase": today.phase.value, "bear_score": today.bear_score}
 
-            # Signal events — one per target so the dashboard sees them.
+            # Signal events — one per target. Lift today's FilterDiagnostics
+            # (which sub-scorers fired) into extra_data so the dashboard
+            # can render the "why did Sentinel activate?" breakdown.
+            today_breakdown = breakdowns.get(as_of)
+            _diag_dict = (
+                today_breakdown.filter_diagnostics.model_dump(exclude_none=True)
+                if today_breakdown is not None and today_breakdown.filter_diagnostics is not None
+                else None
+            )
             for tgt in decision.targets:
                 await db_log.signal(
                     tgt.ticker, score=float(today.bear_score), direction="LONG",
+                    extra_data=({"filter_diagnostics": _diag_dict} if _diag_dict else None),
                 )
+
+            # Cancel any of our own stale open orders before submitting new
+            # ones — mirrors Momentum's pattern at momentum/scheduler.py.
+            # Otherwise an unfilled prior market order keeps the position
+            # held_for_orders and the new sell would be rejected.
+            if self._submit:
+                await self._cancel_stale_sentinel_orders(broker)
 
             submitted: list[str] = []
             failed: list[tuple[str, str]] = []
@@ -233,6 +259,47 @@ class SentinelScheduler:
             order_class=OrderClass.SIMPLE,
             engine_id="sentinel",
         )
+
+    @staticmethod
+    async def _cancel_stale_sentinel_orders(broker) -> int:
+        """Cancel any open Sentinel orders (client_order_id starts with ``sn_``)
+        so positions held_for_orders are released before the new rebalance.
+
+        Returns the number of orders cancelled. Silently degrades when the
+        broker doesn't expose ``list_recent_orders`` (non-Alpaca brokers).
+        Mirrors ``MomentumScheduler._cancel_stale_momentum_orders``.
+        """
+        list_fn = getattr(broker, "list_recent_orders", None)
+        if list_fn is None:
+            return 0
+        try:
+            recent = await list_fn(limit=500)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("sentinel.scheduler.list_orders_failed", error=str(exc)[:200])
+            return 0
+        open_statuses = {"new", "partially_filled", "accepted", "pending_new"}
+        cancelled = 0
+        for o in recent:
+            cid = (o.client_order_id or "").lower()
+            if not cid.startswith(ENGINE_ORDER_PREFIX):
+                continue
+            status_val = getattr(o.status, "value", str(o.status)).lower()
+            if status_val not in open_statuses:
+                continue
+            if not o.broker_order_id:
+                continue
+            try:
+                await broker.cancel_order(o.broker_order_id)
+                cancelled += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "sentinel.scheduler.cancel_failed",
+                    broker_order_id=o.broker_order_id,
+                    client_order_id=o.client_order_id, error=str(exc)[:200],
+                )
+        if cancelled:
+            logger.info("sentinel.scheduler.stale_orders_cancelled", n=cancelled)
+        return cancelled
 
 
 async def _latest_prices(pool, as_of: date_t, tickers: list[str]) -> dict[str, Decimal]:

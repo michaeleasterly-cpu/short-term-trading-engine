@@ -490,6 +490,26 @@ naturally as the time series extends.
 - **Graduation gate**: per-cycle (≥ 1 cycle · PF > 1.5 · max DD < 20%) —
   not DSR-based, like S2 and Reversion satellites.
 
+**Compliance audit + remediation (2026-05-15):** A post-build audit
+identified six gaps against the engine readiness checklist (4 HIGH,
+2 MEDIUM/LOW). All six were closed the same day, the checklist + style
+guide + CLAUDE.md + engine template were updated to prevent recurrence,
+and 13 regression tests pin each closure:
+
+| Gap | Severity | Closure |
+|---|---|---|
+| G1: 4/5 plugs missing `BaseEnginePlug` | HIGH | All 5 plugs now subclass `BaseEnginePlug` with `validate_dependencies` + `healthcheck` |
+| G2: No `FilterDiagnostics` on SIGNAL events | HIGH | Sentinel-specific fields added to `tpcore.backtest.filter_diagnostics.FilterDiagnostics` (6 sub-scorer counters); breakdowns carry the diag; scheduler lifts onto `db_log.signal(..., extra_data=...)` |
+| G3: Credibility rubric never persisted to `platform.data_quality_log` | HIGH | `write_credibility_score` call wired into `sentinel/backtest.py`; verified end-to-end (row landed with `source=backtest_credibility.sentinel`) |
+| G4: Scheduler ran on non-trading days | MEDIUM | `tpcore.calendar.is_trading_day(as_of_dt)` early-return after kill-switch |
+| G5: AAR plug hardcoded `ExitReason.SCHEDULED_REBALANCE` | MEDIUM | Now uses `tpcore.aar.classify_exit_reason` (returns `TIME_STOP` for no-TP/SL baskets) |
+| G6: No stale-order cancel before rebalance | LOW | Added `_cancel_stale_sentinel_orders` mirroring `MomentumScheduler._cancel_stale_momentum_orders` |
+
+The checklist's new §10 "Compliance verifications", STYLE_GUIDE.md's new
+"Engine plug compliance" section, CLAUDE.md's added session rule, and
+the updated `tpcore/templates/engine_template/` together mean a fresh
+engine starts compliant by construction.
+
 ### 4.8 Research Tools
 
 Non-engine tooling that consumes engine outputs (credibility scores, AARs, signals) to support operator review. Strictly internal — research, not product.

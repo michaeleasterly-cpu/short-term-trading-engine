@@ -51,11 +51,12 @@ from sentinel.plugs.setup_detection import (
     compute_spy_rally_pct,
     compute_vix_proxy_series,
 )
+from tpcore.interfaces.engine_plug import BaseEnginePlug
 
 logger = structlog.get_logger(__name__)
 
 
-class SentinelLifecycleAnalysis:
+class SentinelLifecycleAnalysis(BaseEnginePlug):
     """State machine over the daily Bear Score series.
 
     Stateless — the full state for day ``t`` is derivable from the
@@ -63,6 +64,19 @@ class SentinelLifecycleAnalysis:
     live can both call :meth:`walk_states` with their respective data
     slices.
     """
+
+    engine_name = "sentinel"
+
+    def validate_dependencies(self) -> bool:
+        return True
+
+    def healthcheck(self) -> dict:
+        return {
+            "engine": self.engine_name,
+            "plug": "lifecycle_analysis",
+            "ok": True,
+            "details": {},
+        }
 
     def walk_states(
         self,

@@ -48,6 +48,8 @@ from sentinel.models import (
     YIELD_CURVE_BEAR_STEEPENER_POINTS,
     BearScoreBreakdown,
 )
+from tpcore.backtest.filter_diagnostics import FilterDiagnostics
+from tpcore.interfaces.engine_plug import BaseEnginePlug
 
 if TYPE_CHECKING:  # pragma: no cover
     import asyncpg
@@ -285,13 +287,26 @@ async def fetch_spy_close(
 # ─── Headline class ─────────────────────────────────────────────────────
 
 
-class SentinelSetupDetection:
+class SentinelSetupDetection(BaseEnginePlug):
     """Plug 1 — compute the Bear Score breakdown for a given date.
 
     Use :meth:`compute_for_range` to pre-compute a panel of breakdowns
     across the backtest window in one query, then walk by date for the
     activation gate. :meth:`compute_for_date` is a thin shim around it.
     """
+
+    engine_name = "sentinel"
+
+    def validate_dependencies(self) -> bool:
+        return True
+
+    def healthcheck(self) -> dict:
+        return {
+            "engine": self.engine_name,
+            "plug": "setup_detection",
+            "ok": True,
+            "details": {},
+        }
 
     async def compute_for_range(
         self,
@@ -384,6 +399,17 @@ class SentinelSetupDetection:
         vix_p = score_vix_proxy(vix_now_dec, vix_ma_dec)
 
         raw = sahm_p + ip_p + ic_p + yc_p + hy_p + vix_p
+        # FilterDiagnostics — one ``passed`` for each sub-scorer that fired.
+        diag = FilterDiagnostics(
+            universe_total=6,  # six sub-scorers evaluated per day
+            candidates_passed=sum(1 for p in (sahm_p, ip_p, ic_p, yc_p, hy_p, vix_p) if p > 0),
+            sahm_rule_blocked=0 if sahm_p > 0 else 1,
+            industrial_production_blocked=0 if ip_p > 0 else 1,
+            initial_claims_blocked=0 if ic_p > 0 else 1,
+            yield_curve_blocked=0 if yc_p > 0 else 1,
+            hy_spread_blocked=0 if hy_p > 0 else 1,
+            vix_proxy_blocked=0 if vix_p > 0 else 1,
+        )
         return BearScoreBreakdown(
             as_of=as_of,
             sahm_pts=sahm_p,
@@ -395,6 +421,7 @@ class SentinelSetupDetection:
             raw_total=raw,
             score=scale_raw_to_100(raw),
             indicators_missing=tuple(sorted(set(missing))),
+            filter_diagnostics=diag,
         )
 
 

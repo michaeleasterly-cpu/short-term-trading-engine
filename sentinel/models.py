@@ -18,6 +18,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from tpcore.backtest.filter_diagnostics import FilterDiagnostics
+
 # ─── Bear Score scoring constants (master plan §4.6) ────────────────────
 #
 # The raw score sums to a max of 85; we scale to 0-100 for the activation
@@ -139,6 +141,12 @@ class BearScoreBreakdown(BaseModel):
     # Observability — populated where the upstream data was usable; helps
     # the operator audit a low score with missing sub-indicators.
     indicators_missing: tuple[str, ...] = Field(default_factory=tuple)
+    # Per-day FilterDiagnostics for the six Bear Score sub-scorers.
+    # ``candidates_passed`` = # of sub-scorers that fired (raw > 0); each
+    # ``_blocked`` field = 1 iff that sub-scorer contributed zero. The
+    # scheduler lifts this dict onto SIGNAL events' ``extra_data`` so the
+    # operator can see *why* a given day did/didn't activate.
+    filter_diagnostics: FilterDiagnostics | None = None
 
 
 # ─── Lifecycle phase + per-day state ────────────────────────────────────

@@ -72,6 +72,52 @@ Order: stdlib → third-party → `tpcore` → local engine modules. Within each
 Forbidden direct vendor SDK imports — these are blocked by `tpcore.scripts.check_imports`:
 `alpaca_trade_api`, `yfinance`, `fmp_python_sdk`, `praw`, `iborrowdesk`. Reach external services through `tpcore.interfaces.broker.BrokerExecutionInterface` and `tpcore.interfaces.data.DataProviderInterface`.
 
+## Engine plug compliance (recurring-gap prevention, 2026-05-15)
+
+The six rules below were broken by the Sentinel engine's first build and
+caught by the 2026-05-15 compliance audit. They're now non-negotiable
+for every engine — present in the engine readiness checklist (§10),
+verified by `grep` at PR review, and seeded into
+`tpcore/templates/engine_template/` so a copy-paste start satisfies them
+by construction.
+
+- **Every plug subclasses `BaseEnginePlug`.** Import from
+  `tpcore.interfaces.engine_plug`. Implement `validate_dependencies() ->
+  bool` and `healthcheck() -> dict` on every one of the five plugs —
+  not just AARLogging. The dashboard and `ops/engine_service`
+  health-probe both call these.
+- **Populate `FilterDiagnostics` and attach to SIGNAL events.** Build a
+  `tpcore.backtest.filter_diagnostics.FilterDiagnostics` in Setup
+  Detection covering every gate the engine uses; pass
+  `extra_data={"filter_diagnostics": diag.model_dump(exclude_none=True)}`
+  to `DBLogHandler.signal(...)` in the scheduler. "Why didn't a signal
+  fire?" depends on these counters.
+- **Backtest persists the credibility rubric.** Call
+  `tpcore.backtest.statistical_validation.write_credibility_score(pool,
+  engine_name=..., score=result.credibility_rubric)` at the end of every
+  backtest run. Without the row in `platform.data_quality_log`,
+  `tpcore.backtest.credibility.graduation_ready` returns False — the
+  capital gate can never approve graduation regardless of trade
+  performance.
+- **Scheduler gates on the trading calendar.** Call
+  `tpcore.calendar.is_trading_day(as_of_dt)` near the top of `run_once`
+  (after kill-switch, before any DB work). Return early on weekends and
+  market holidays — do not query DB or submit orders.
+- **AAR uses `classify_exit_reason`, never a hardcoded `ExitReason`.**
+  Import `tpcore.aar.classify_exit_reason`; use it as the default value
+  when an explicit `exit_reason` isn't passed. Even portfolio-allocation
+  engines (no TP/SL on positions) should default through the classifier
+  — it returns `TIME_STOP` for missing brackets, the canonical fallback.
+- **Cancel your own stale orders before submitting new ones.** Mirror
+  `MomentumScheduler._cancel_stale_momentum_orders` — filter by your
+  engine's client_order_id prefix from
+  `tpcore.order_ids.ENGINE_PREFIX`, cancel any still-open ones, then
+  submit. Skipping this leaves positions `held_for_orders` and the next
+  rebalance's sells are rejected.
+
+When a new engine surfaces a compliance pattern the checklist doesn't
+cover yet, extend this section and §10 of the checklist together.
+
 ## Private-attribute access on tpcore classes
 
 **Never access private attributes (`._store`, `._pool`, etc.) on tpcore classes from engine code.** Use the public accessors. If a public accessor doesn't exist for what you need, extend the tpcore class with one — don't add a `# noqa: SLF001` marker.

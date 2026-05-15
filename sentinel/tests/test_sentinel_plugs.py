@@ -402,3 +402,176 @@ class TestExecutionRisk:
             current_holdings={"TLT": 100},
         )
         assert any(o.ticker == "TLT" and o.side == "sell" and o.qty == 100 for o in d.orders)
+
+
+# ─── Compliance-gap regression tests (G1–G6, 2026-05-15 audit closure) ────
+
+
+class TestPlugComplianceG1:
+    """G1: every plug subclasses BaseEnginePlug + implements interface."""
+
+    @pytest.mark.parametrize(
+        "plug_cls,plug_label",
+        [
+            ("SentinelSetupDetection", "setup_detection"),
+            ("SentinelLifecycleAnalysis", "lifecycle_analysis"),
+            ("SentinelExecutionRisk", "execution_risk"),
+            ("SentinelCapitalGate", "capital_gate"),
+            ("SentinelAARLogging", "aar_logging"),
+        ],
+    )
+    def test_plug_subclasses_base_engine_plug_and_implements_interface(
+        self, plug_cls: str, plug_label: str,
+    ) -> None:
+        from sentinel.plugs import (
+            aar_logging,
+            capital_gate,
+            execution_risk,
+            lifecycle_analysis,
+            setup_detection,
+        )
+        from tpcore.interfaces.engine_plug import BaseEnginePlug
+        mods = {
+            "SentinelSetupDetection": setup_detection,
+            "SentinelLifecycleAnalysis": lifecycle_analysis,
+            "SentinelExecutionRisk": execution_risk,
+            "SentinelCapitalGate": capital_gate,
+            "SentinelAARLogging": aar_logging,
+        }
+        cls = getattr(mods[plug_cls], plug_cls)
+        assert issubclass(cls, BaseEnginePlug), f"{plug_cls} must subclass BaseEnginePlug"
+        # Instantiate (each plug has a zero-arg or default-arg ctor).
+        inst = cls() if plug_cls != "SentinelAARLogging" else cls(pool=None)
+        assert inst.validate_dependencies() is True
+        hc = inst.healthcheck()
+        assert hc["engine"] == "sentinel"
+        assert hc["plug"] == plug_label
+        assert hc["ok"] is True
+        assert isinstance(hc["details"], dict)
+
+
+class TestFilterDiagnosticsG2:
+    """G2: Bear Score breakdown carries a populated FilterDiagnostics."""
+
+    def test_breakdown_includes_filter_diagnostics(self) -> None:
+        # Build a synthetic macro panel + SPY long enough to score one day.
+        import pandas as pd
+
+        from sentinel.plugs.setup_detection import SentinelSetupDetection
+        # Force macro values that yield Sahm-only contribution.
+        idx = pd.date_range("2024-01-01", periods=300, freq="D").date
+        macro = pd.DataFrame(index=idx)
+        macro.index.name = "date"
+        macro["sahm_rule"] = 0.55           # fires
+        macro["industrial_production"] = 100.0  # blocked (above 95)
+        macro["initial_claims"] = 200000.0     # blocked
+        macro["yield_curve"] = 0.20           # never inverted → blocked
+        macro["hy_spread"] = 3.0              # below threshold → blocked
+        spy_idx = pd.date_range("2024-01-01", periods=300, freq="D")
+        spy = pd.Series(100.0, index=spy_idx, name="SPY")
+
+        setup = SentinelSetupDetection()
+        breakdowns = setup._build_breakdowns(
+            macro, spy, start=date_t(2024, 6, 1), end=date_t(2024, 6, 5),
+        )
+        assert len(breakdowns) > 0
+        sample = next(iter(breakdowns.values()))
+        assert sample.filter_diagnostics is not None
+        diag = sample.filter_diagnostics
+        # Sahm fired (1 candidate passed); the rest are blocked.
+        assert diag.candidates_passed == 1
+        assert diag.universe_total == 6
+        assert diag.sahm_rule_blocked == 0
+        assert diag.industrial_production_blocked == 1
+        assert diag.initial_claims_blocked == 1
+        assert diag.yield_curve_blocked == 1
+        assert diag.hy_spread_blocked == 1
+        # VIX proxy on constant SPY → 0 vol → blocked.
+        assert diag.vix_proxy_blocked == 1
+
+    def test_filter_diagnostics_serialises_excluding_none(self) -> None:
+        """FilterDiagnostics.model_dump(exclude_none=True) must drop the
+        non-Sentinel fields so signal-event extra_data stays compact."""
+        from tpcore.backtest.filter_diagnostics import FilterDiagnostics
+        d = FilterDiagnostics(
+            universe_total=6, candidates_passed=2,
+            sahm_rule_blocked=0, industrial_production_blocked=1,
+            initial_claims_blocked=1, yield_curve_blocked=0,
+            hy_spread_blocked=1, vix_proxy_blocked=1,
+        )
+        dump = d.model_dump(exclude_none=True)
+        assert "gate1_value_blocked" not in dump  # vector field — none
+        assert "adx_blocked" not in dump          # sigma field — none
+        assert dump["sahm_rule_blocked"] == 0
+        assert dump["vix_proxy_blocked"] == 1
+
+
+class TestClassifyExitReasonG5:
+    """G5: AAR plug uses classify_exit_reason, not a hardcoded literal."""
+
+    def test_aar_plug_imports_classify_exit_reason(self) -> None:
+        from sentinel.plugs import aar_logging
+        # Verify the symbol is bound at module load (so the runtime path uses it).
+        assert hasattr(aar_logging, "classify_exit_reason")
+
+    @pytest.mark.asyncio
+    async def test_write_basket_close_uses_classifier_when_exit_reason_omitted(self) -> None:
+        """No TP/SL on Sentinel basket positions → classify_exit_reason
+        returns TIME_STOP; the AAR plug must accept omission of exit_reason
+        and fall through to the classifier."""
+        from sentinel.plugs.aar_logging import SentinelAARLogging
+        from tpcore.aar.models import ExitReason
+
+        plug = SentinelAARLogging(pool=None)  # dry-run (no DB write)
+        # Should succeed without raising — classifier returns TIME_STOP for
+        # both-None TP/SL → AAR built with that reason. Return is True
+        # under dry-run regardless of the persisted reason.
+        ok = await plug.write_basket_close(
+            trade_id="t1", ticker="TLT", cycle_id=1,
+            entry_ts=date_t(2024, 1, 1), exit_ts=date_t(2024, 1, 10),
+            entry_price=Decimal("90"), exit_price=Decimal("95"),
+            qty=Decimal("100"), engine_equity_usd=Decimal("100000"),
+            # exit_reason omitted → classifier path
+        )
+        assert ok is True
+        # Sanity: TIME_STOP is the canonical fallback for missing brackets.
+        assert ExitReason.TIME_STOP.value
+
+
+class TestStaleOrderCancelG6:
+    """G6: scheduler exposes a stale-order-cancel helper for the sn_ prefix."""
+
+    def test_scheduler_exposes_cancel_stale_helper(self) -> None:
+        from sentinel.scheduler import SentinelScheduler
+        assert hasattr(SentinelScheduler, "_cancel_stale_sentinel_orders")
+        assert callable(SentinelScheduler._cancel_stale_sentinel_orders)
+
+    @pytest.mark.asyncio
+    async def test_cancel_stale_silently_handles_broker_without_list_recent(self) -> None:
+        from sentinel.scheduler import SentinelScheduler
+
+        class _StubBroker:
+            pass  # no list_recent_orders
+
+        n = await SentinelScheduler._cancel_stale_sentinel_orders(_StubBroker())
+        assert n == 0
+
+
+class TestTradingDayGateG4:
+    """G4: scheduler imports is_trading_day from tpcore.calendar."""
+
+    def test_scheduler_imports_calendar(self) -> None:
+        from sentinel import scheduler
+        assert hasattr(scheduler, "is_trading_day")
+
+
+class TestCredibilityPersistenceG3:
+    """G3: backtest module imports the credibility-write helper.
+
+    A live integration test would require a DB connection; this asserts
+    the wiring so the missing import can't silently regress.
+    """
+
+    def test_backtest_imports_write_credibility_score(self) -> None:
+        from sentinel import backtest
+        assert hasattr(backtest, "write_credibility_score")

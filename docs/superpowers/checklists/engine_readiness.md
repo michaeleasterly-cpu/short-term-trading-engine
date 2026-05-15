@@ -73,6 +73,48 @@ Template: copy `tpcore/templates/engine_template/` as the starting point — it 
 - [ ] Engine prefix added to `tpcore.order_ids.ENGINE_PREFIX`.
 - [ ] If the engine adds new daemons, they're installed via `scripts/install_all_daemons.sh`.
 
+## 10. Compliance verifications (added 2026-05-15 after the Sentinel audit)
+
+Six gaps surfaced in the Sentinel compliance audit that the build-time spec
+review and template didn't catch. Each gap closes with a one-line `grep` —
+running these before merge prevents the same gaps in the next engine.
+
+- [ ] **All 5 plugs subclass `BaseEnginePlug` and implement
+      `validate_dependencies` + `healthcheck`.**
+      `grep -E "class\\s+\\w+\\(BaseEnginePlug\\)" <engine>/plugs/*.py | wc -l` returns `5`.
+      Why: `ops/engine_service` and the operator dashboard rely on the
+      `healthcheck()` contract for liveness probes.
+- [ ] **`FilterDiagnostics` populated in setup_detection and attached to
+      SIGNAL events.**
+      `grep "filter_diagnostics" <engine>/scheduler.py` shows at least one
+      `db_log.signal(..., extra_data={"filter_diagnostics": ...})` call.
+      Why: "why didn't a signal fire today?" requires per-gate
+      pass/block counters on every SIGNAL event.
+- [ ] **Backtest persists the credibility rubric to
+      `platform.data_quality_log` via `write_credibility_score`.**
+      `grep "write_credibility_score" <engine>/backtest.py` returns a hit.
+      Why: `tpcore.backtest.credibility.graduation_ready` reads the row;
+      without it the capital gate's graduation check will never succeed
+      regardless of trade performance.
+- [ ] **Scheduler checks `tpcore.calendar.is_trading_day` before scanning.**
+      `grep "is_trading_day" <engine>/scheduler.py` returns a hit.
+      Why: weekends + holidays should be a no-op return, not a DB
+      query / order-submission attempt.
+- [ ] **AAR plug uses `tpcore.aar.classify_exit_reason` — never hardcodes
+      `ExitReason.*`.**
+      `grep "classify_exit_reason" <engine>/plugs/aar_logging.py` returns
+      a hit. Hardcoded `ExitReason` defaults are forbidden; the
+      classifier is the canonical bracket-fill / fallback mapper.
+- [ ] **Scheduler cancels its own stale orders before submitting.**
+      `grep "_cancel_stale_" <engine>/scheduler.py` returns a hit.
+      Mirrors `MomentumScheduler._cancel_stale_momentum_orders`. Without
+      this, an unfilled prior order leaves the position `held_for_orders`
+      and the next sell is rejected.
+
+These six rules also live in `docs/STYLE_GUIDE.md` (the canonical Don't-Do
+list) and the scaffolds at `tpcore/templates/engine_template/` so a fresh
+engine inherits the wiring rather than re-inventing it.
+
 ---
 
 ## Why this exists

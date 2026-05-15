@@ -112,3 +112,27 @@ class FilterDiagnostics(BaseModel):
     adx_trending_blocked: int | None = Field(
         default=None, description="Reversion: blocked by ADX trending shutdown",
     )
+
+    # ─── Sentinel-specific gates ────────────────────────────────────────────
+    # Sentinel's "universe" is the six Bear Score sub-scorers. For each daily
+    # observation we increment the per-sub-scorer ``_blocked`` counter when
+    # that sub-scorer contributes zero points. ``candidates_passed`` is the
+    # number of sub-scorers that fired (raw_total > 0).
+    sahm_rule_blocked: int | None = Field(
+        default=None, description="Sentinel: Sahm Rule below 0.50",
+    )
+    industrial_production_blocked: int | None = Field(
+        default=None, description="Sentinel: Industrial Production not contracting",
+    )
+    initial_claims_blocked: int | None = Field(
+        default=None, description="Sentinel: Initial Claims not rising above threshold",
+    )
+    yield_curve_blocked: int | None = Field(
+        default=None, description="Sentinel: yield curve not in bear-steepener regime",
+    )
+    hy_spread_blocked: int | None = Field(
+        default=None, description="Sentinel: HY spread not > 500 bps + widening",
+    )
+    vix_proxy_blocked: int | None = Field(
+        default=None, description="Sentinel: VIX proxy not above 25",
+    )

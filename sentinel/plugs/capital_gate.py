@@ -35,11 +35,12 @@ from sentinel.models import (
     PERMANENT_CAP_PCT,
     PRE_GRADUATION_CAP_PCT,
 )
+from tpcore.interfaces.engine_plug import BaseEnginePlug
 
 logger = structlog.get_logger(__name__)
 
 
-class SentinelCapitalGate:
+class SentinelCapitalGate(BaseEnginePlug):
     """Allocation gate — sizes Sentinel within its capital cap.
 
     The cap is fixed; the only mutable input is graduation status.
@@ -47,8 +48,21 @@ class SentinelCapitalGate:
     graduation criteria (see :func:`evaluate_graduation` below).
     """
 
+    engine_name = "sentinel"
+
     def __init__(self, *, graduated: bool = False) -> None:
         self._graduated = graduated
+
+    def validate_dependencies(self) -> bool:
+        return True
+
+    def healthcheck(self) -> dict:
+        return {
+            "engine": self.engine_name,
+            "plug": "capital_gate",
+            "ok": True,
+            "details": {"graduated": self._graduated, "cap_pct": str(self.cap_pct)},
+        }
 
     @property
     def cap_pct(self) -> Decimal:

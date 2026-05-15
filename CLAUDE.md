@@ -39,9 +39,15 @@ Multi-engine automated trading platform. US equities, daily timeframe, fully aut
 
 ## Session Rules
 - Read docs/STYLE_GUIDE.md before writing any code.
+- **When building a new engine, read `docs/superpowers/checklists/engine_readiness.md` BEFORE writing code.** The 10 sections are non-optional. Section 10 in particular enumerates the six compliance verifications (BaseEnginePlug on every plug, FilterDiagnostics on signals, credibility write, trading-day gate, classify_exit_reason, stale-order cancel) that the Sentinel 2026-05-15 audit surfaced. Start from `tpcore/templates/engine_template/` — the scaffold satisfies the gaps by construction.
+- **Engine-build compliance shortlist** (the recurring gaps; full rationale in STYLE_GUIDE.md "Engine plug compliance"):
+  - Every engine plug subclasses `BaseEnginePlug` and implements `validate_dependencies` + `healthcheck`.
+  - Every engine backtest calls `write_credibility_score` so the capital gate has a rubric row to read.
+  - Every scheduler checks `tpcore.calendar.is_trading_day()` and returns early on non-trading days.
+  - Every AAR plug uses `tpcore.aar.classify_exit_reason` — never hardcode `ExitReason` literals.
 - **Never access private attributes (`._store`, `._pool`, etc.) on tpcore classes.** Use the public accessors (`RiskGovernor.state_for(...)`, `AARWriter.pool`, etc.). If a public accessor doesn't exist for what you need, extend the tpcore class with one — don't add `# noqa: SLF001`. See `docs/STYLE_GUIDE.md` "Private-attribute access on tpcore classes" for the canonical examples.
 - Read docs/glossary.md if present before coding.
 - Never modify tpcore without checking all engines that consume it.
 - Every trade path goes through tpcore.risk.RiskGovernor.check_trade().
-- Sigma/Reversion/Vector use Alpaca bracket orders (take-profit + stop-loss submitted together). Momentum uses day-market orders only — no per-name stops between monthly rebalances; risk is managed by diversification + rotation.
+- Sigma/Reversion/Vector use Alpaca bracket orders (take-profit + stop-loss submitted together). Momentum uses day-market orders only — no per-name stops between monthly rebalances; risk is managed by diversification + rotation. Sentinel uses day-market batch orders for the defensive ETF basket — no per-name stops, lifecycle-driven exits.
 - All code type-hinted. Pydantic v2 for data models. structlog for logging.
