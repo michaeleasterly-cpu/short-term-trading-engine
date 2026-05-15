@@ -1,16 +1,33 @@
-"""ARCHIVED — Corwin-Schultz (2012) high-low bid-ask spread estimator.
+"""ARCHIVED — retired/rejected research-quality estimators.
 
-**RETIRED 2026-05-15.** Do not import from this module in any active
-code path. The C-S estimator was found to invert liquidity rankings
-for individual stocks: high-volatility mega-caps (AAPL/NVDA/TSLA)
-got wide-spread estimates (T3/T4) because their daily HIGH/LOW range
-reflects price discovery rather than quote width; illiquid microcaps
-(BEBE/FONR/APXT) with narrow ranges got tight-spread estimates (T1)
-because nobody trades them enough to widen the daily range. The
-active estimator is now Abdi-Ranaldo (2017), in
-``tpcore.backtest.spread_estimator``. This file is preserved verbatim
-for academic reference and the historical
-``source='corwin_schultz'`` rows in ``platform.spread_observations``.
+Two tenants share this archive. Both were proposed, tried, and removed
+from the active code path. Preserved verbatim so the rationale and
+implementation are easy to revisit if anyone re-opens the question.
+
+1. **Corwin-Schultz (2012) — retired 2026-05-15.**
+   High-low bid-ask spread estimator. Found to invert liquidity rankings
+   for individual stocks: high-volatility mega-caps (AAPL/NVDA/TSLA)
+   got wide-spread estimates (T3/T4) because their daily HIGH/LOW range
+   reflects price discovery rather than quote width; illiquid microcaps
+   (BEBE/FONR/APXT) with narrow ranges got tight-spread estimates (T1)
+   because nobody trades them enough to widen the daily range. The
+   active estimator is now Abdi-Ranaldo (2017), in
+   ``tpcore.backtest.spread_estimator``. Historical
+   ``source='corwin_schultz'`` rows in ``platform.spread_observations``
+   are retained for audit only.
+
+2. **Ornstein-Uhlenbeck κ gate — rejected 2026-05-15.**
+   Sigma research spike: gate Sigma's setup candidates on whether the
+   last 60 closes fit an OU process with κ above a sweep-set
+   threshold. 50-trial walk-forward sweep showed the gate degraded
+   Sigma's edge — best across-window mean Sharpe fell from +1.073
+   (baseline) to +0.898 (κ ≥ 1.46), held-back Sharpe regressed from
+   +0.839 to +0.366, and the gate cut *more* trades in the stable
+   walk-forward windows (where Sigma's edge actually fires) than in
+   the fragile window it was meant to filter. Mechanism: low AR(1)
+   coefficient (= high κ) does not correlate with the bounded-channel
+   regime Sigma trades. See verdict notes in commit ``dd7a597`` and
+   the rejection write-up in conversation log of 2026-05-15.
 
 Reference: "A simple way to estimate bid–ask spreads from daily high
 and low prices", Corwin & Schultz, Journal of Finance, 2012.
@@ -234,8 +251,60 @@ def _passes_coarse(group: pd.DataFrame) -> bool:
     return avg_vol > _MIN_AVG_VOLUME
 
 
+# ── Ornstein-Uhlenbeck mean-reversion gate (Sigma spike, 2026-05-15) ────
+#
+# OU SDE: dX_t = κ(θ − X_t) dt + σ dW_t
+# Discrete MLE via AR(1) on the log-close series: regress x_t on x_{t-1},
+# the AR(1) coefficient b = exp(−κ · dt). When 0 < b < 1 the series is
+# mean-reverting and κ = −log(b) / dt; otherwise κ = 0 (random walk /
+# trend / insufficient observations / non-positive prices).
+#
+# Lived briefly in ``sigma/plugs/setup_detection.py`` as
+# ``estimate_ou_kappa``; removed from the live engine 2026-05-15 after
+# the sweep verdict. The implementation is correct — the *hypothesis*
+# (that filtering Sigma candidates by κ tightens DSR) was wrong.
+
+
+def estimate_ou_kappa(close_prices, dt: float = 1.0 / 252.0) -> float:
+    """Estimate the Ornstein-Uhlenbeck mean-reversion speed κ.
+
+    Args:
+        close_prices: 1-D array-like of close prices (typically the last
+            ~60 trading days). Log-transformed before fitting.
+        dt: time step in years. Default 1/252 (one trading day).
+
+    Returns:
+        κ in trading-year units. ``0.0`` when the series is not mean-
+        reverting (AR(1) coefficient ≥ 1 — random walk or trend), when
+        fewer than 10 observations are available, or when any close
+        price is non-positive (log undefined).
+
+    Half-life in trading days is ``log(2) / κ / dt`` when κ > 0; e.g.
+    κ=2.0 → ~87 trading days, κ=5.0 → ~35 trading days.
+    """
+    arr = np.asarray(close_prices, dtype=float).ravel()
+    if arr.size < 10:
+        return 0.0
+    if not np.all(arr > 0):
+        return 0.0
+    x = np.log(arr)
+    x_prev = x[:-1]
+    x_next = x[1:]
+    x_prev_mean = x_prev.mean()
+    x_next_mean = x_next.mean()
+    cov = ((x_prev - x_prev_mean) * (x_next - x_next_mean)).mean()
+    var_prev = ((x_prev - x_prev_mean) ** 2).mean()
+    if var_prev <= 0:
+        return 0.0
+    b = cov / var_prev
+    if not (0.0 < b < 1.0):
+        return 0.0
+    return float(-np.log(b) / dt)
+
+
 __all__ = [
     "estimate_spread_corwin_schultz",
     "average_spread_estimate",
     "rank_universe_by_liquidity",
+    "estimate_ou_kappa",
 ]

@@ -11,6 +11,7 @@ Multi-engine automated trading platform. US equities, daily timeframe, fully aut
 - reversion/ — mean reversion + earnings-quality gate; built, last search top OOS +1.174 (FAILED DSR gate)
 - vector/ — catalyst-driven swing (P/B + D/E + catalyst + technical); built, last search top OOS +1.257 (FAILED DSR gate; was data-blocked, now unblocked after 2026-05-13 catalyst_events backfill — 1,350 rows / 137 tickers, audited 2026-05-14; recurring weekly refresh active via `ops.py catalyst_refresh` stage)
 - momentum/ — cross-sectional 12-1 monthly rebalance; built and paper-trading; last search top OOS +0.784 (FAILED DSR gate; gated structurally per momentum spec)
+- sentinel/ — macro defense (FRED Bear Score + 5-ETF defensive basket; satellite-style per-cycle graduation); built 2026-05-15. 2018-2025 backtest: 1 activation cycle (COVID Apr 2020), single TLT trade −3.37% — macro signal lags fast crashes. SH/PSQ/GLD missing from `platform.prices_daily`; basket renormalizes to available tickers until backfilled.
 - tpcore/allocator/ — weekly inverse-vol capital rebalance across engines (deployed 2026-05-13, daemon Mon 13:00 UTC)
 - tpcore/forensics/ — daily AAR scanner that emits triggers + auto-generates Sprint Dossiers (deployed 2026-05-14, runs as final step of data-operations)
 - tpcore/indicators/ — shared technical indicators (ADX, Bollinger Bands, CHOP) used by every engine's setup_detection plug (2026-05-14).
@@ -20,7 +21,7 @@ Multi-engine automated trading platform. US equities, daily timeframe, fully aut
 - tpcore/templates/engine_template/ — copy-paste-start scaffold for new engines (see `docs/superpowers/checklists/engine_readiness.md`).
 - ops/engine_service.py — daemon polling `platform.application_log` for `DATA_OPERATIONS_COMPLETE`; fires `scripts/run_all_engines.sh` (2026-05-14).
 - Shared AAR read-side: `tpcore.aar.AARReader` (used by both allocator + forensics); shared exit-reason classifier: `tpcore.aar.classify_exit_reason`.
-- Future engines: s2/, catalyst/, sentinel/
+- Future engines: s2/, catalyst/
 
 **Engine credibility status as of 2026-05-13 (post data-cleanup):** All four engines produce positive OOS edge candidates (scores 0.78–1.26), all four still fail the DSR ≥ 0.95 / credibility ≥ 60 gate. Data foundation is clean; signal strength is the binding constraint.
 
@@ -28,7 +29,7 @@ Multi-engine automated trading platform. US equities, daily timeframe, fully aut
 - All timestamps UTC. Market hours via `tpcore.calendar` (which wraps `exchange_calendars` XNYS).
 - No yfinance. No Discord. No manual execution.
 - All orders via Alpaca API. Paper-then-live. Default Alpaca data feed is **SIP** (not IEX — IEX silently misses tickers that trade off-IEX).
-- Engines built in order so far: Sigma → Reversion → Vector → Momentum.
+- Engines built in order so far: Sigma → Reversion → Vector → Momentum → Sentinel.
 - Backtest with self-built survivorship-free database before any live trading. (Note: `prices_daily` is currently only partially survivorship-clean — known caveat in `momentum/backtest.py` docstring.)
 - Every engine has 5 Plugs: setup_detection, lifecycle_analysis, execution_risk, aar_logging, capital_gate.
 - Every engine's `setup_detection` plug populates a `tpcore.backtest.filter_diagnostics.FilterDiagnostics` instance so SIGNAL events carry per-gate pass/block counters.

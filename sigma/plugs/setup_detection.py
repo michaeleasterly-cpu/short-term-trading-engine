@@ -134,59 +134,6 @@ def _rolling_vwap(close: pd.Series, volume: pd.Series, period: int = VWAP_PERIOD
     )
 
 
-# ── Ornstein-Uhlenbeck mean-reversion estimator ─────────────────────────
-#
-# Research spike (2026-05-15) — gates Sigma's setup candidates on whether
-# the recent close series is statistically mean-reverting under a fitted
-# Ornstein-Uhlenbeck process. Sigma's existing CHOP filter catches chop
-# at the indicator level; OU catches it at the price-series level. Off
-# by default (threshold=0 → no gate); the sweep varies the threshold
-# from 1.0 to 5.0 (κ in trading-year units).
-#
-# OU SDE: dX_t = κ(θ - X_t)dt + σ dW_t
-# Discrete MLE: regress X_t on X_{t-1}; b = e^(-κ·dt), so κ = -log(b)/dt
-# when 0 < b < 1. Above 1 or non-positive → not mean-reverting → κ = 0.
-# Fitted on log(close) for the standard multiplicative-stock form.
-
-
-def estimate_ou_kappa(close_prices, dt: float = 1.0 / 252.0) -> float:
-    """Estimate the Ornstein-Uhlenbeck mean-reversion speed κ.
-
-    Args:
-        close_prices: 1-D array-like of close prices (typically the last
-            ~60 trading days). Will be log-transformed before fitting.
-        dt: time step in years. Default 1/252 (one trading day).
-
-    Returns:
-        κ in trading-year units. ``0.0`` when the series is not mean-
-        reverting (AR(1) coefficient ≥ 1 — random walk or trend), when
-        fewer than 10 observations are available, or when any close
-        price is non-positive (log undefined).
-
-    The corresponding half-life in trading days is
-    ``log(2) / κ / dt`` when κ > 0; e.g. κ=2.0 → ~87 trading days,
-    κ=5.0 → ~35 trading days.
-    """
-    arr = np.asarray(close_prices, dtype=float).ravel()
-    if arr.size < 10:
-        return 0.0
-    if not np.all(arr > 0):
-        return 0.0
-    x = np.log(arr)
-    x_prev = x[:-1]
-    x_next = x[1:]
-    x_prev_mean = x_prev.mean()
-    x_next_mean = x_next.mean()
-    cov = ((x_prev - x_prev_mean) * (x_next - x_next_mean)).mean()
-    var_prev = ((x_prev - x_prev_mean) ** 2).mean()
-    if var_prev <= 0:
-        return 0.0
-    b = cov / var_prev
-    if not (0.0 < b < 1.0):
-        return 0.0
-    return float(-np.log(b) / dt)
-
-
 def _score_channel_quality(adx_now: float, width_pctile: float, width_stability: float) -> float:
     """0–40. Lower ADX, tighter percentile, more stable width → higher score."""
     if np.isnan(adx_now) or np.isnan(width_pctile):

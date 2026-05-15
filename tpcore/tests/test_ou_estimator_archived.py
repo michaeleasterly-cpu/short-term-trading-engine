@@ -1,4 +1,13 @@
-"""Unit tests for the OU κ estimator (research spike, 2026-05-15).
+"""Unit tests for the archived OU κ estimator.
+
+The estimator was a Sigma research spike on 2026-05-15 and was
+**rejected** the same day after a 50-trial walk-forward sweep showed
+the gate degraded Sigma's edge (see
+``tpcore/backtest/spread_estimator_archive.py`` module docstring for
+the verdict). These tests stay so the math is still pinned — if anyone
+re-opens the OU question, they can confirm the estimator itself is
+correct before re-running the sweep with different lookback / scope /
+ranges.
 
 Synthetic series:
 
@@ -6,17 +15,13 @@ Synthetic series:
   reasonable tolerance.
 * Random walk (no mean reversion) → estimator returns 0.
 * Insufficient data / non-positive prices → estimator returns 0.
-
-The estimator's purpose is gating, not parameter recovery — exact κ
-matching matters less than correctly classifying mean-reverting vs
-non-mean-reverting series.
 """
 from __future__ import annotations
 
 import numpy as np
 import pytest
 
-from sigma.plugs.setup_detection import estimate_ou_kappa
+from tpcore.backtest.spread_estimator_archive import estimate_ou_kappa
 
 
 def _simulate_ou(

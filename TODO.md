@@ -8,8 +8,7 @@ or `docs/MASTER_PLAN.md §9 Build Order`.
 
 The 2026-05-15 parameter sweeps validated the targeted fixes (Sigma SPY-
 regime filter, Reversion Z-relaxation + T3 expansion) at the metric level
-but DSR/credibility gates remain structurally blocked. Both engines need
-strategy-level redesign, not parameter tuning:
+but DSR/credibility gates remain structurally blocked.
 
 - **Sigma structural redesign.** 2026-05-15 sweep with regime filter
   applied: 80% of walk-forward Sharpe rows are negative (-3.265 to
@@ -24,19 +23,20 @@ strategy-level redesign, not parameter tuning:
   (c) abandon range-scalping for trend-pullback if the market structure
   is fundamentally different from the 2018-2023 calibration window.
   Decision deferred until operator picks a redesign path.
+  **OU mean-reversion gate spike — rejected 2026-05-15.** Tested as one
+  candidate redesign path; 50-trial walk-forward sweep showed the gate
+  cut more trades in stable windows than fragile ones, regressing held-
+  back Sharpe +0.839 → +0.366. Code archived in
+  `tpcore/backtest/spread_estimator_archive.py`.
 
-- **Reversion signal-class redesign.** 2026-05-15 sweep with Z=2.5 +
-  T3+fundamentals: held-back Sharpe +0.732 (was +0.43), trades 8 (was
-  2), credibility 45-50/100 (ceiling unchanged), DSR 0.0000. The metric
-  improvements are real and the relaxed config is retained, but no
-  config in the search space clears DSR ≥ 0.95 / credibility ≥ 60.
-  Z-score + earnings-quality is too narrow a signal class for the
-  multiple-testing correction. Candidate redesigns: (a) add a
-  complementary momentum-divergence signal (RSI divergence on the
-  oversold extreme); (b) require a volatility-collapse confirmation
-  (ATR drops > X% in the days before the reversal entry); (c)
-  pair-trade variant (Z-score relative to sector peer, not just self).
-  Decision deferred until operator picks a redesign path.
+- **Reversion — reclassified as satellite 2026-05-15 (closed).** The
+  signal-class-redesign decision was resolved by reclassifying Reversion
+  as a satellite engine alongside S2: permanent 5–10% capital cap,
+  per-trade graduation criteria, DSR gate retired. The combined filter
+  (Z ≥ 3.0 + HIGH earnings quality) produces 19 trades / Sharpe +0.312
+  / PF 1.755 / max DD −11.5% on 2018-2025 — strong per-trade metrics at
+  a structurally bounded firing rate. See `docs/MASTER_PLAN.md` §4.2 and
+  `backtests/reversion_satellite_backtest.json`.
 
 ## Publishing
 

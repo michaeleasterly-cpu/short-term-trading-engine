@@ -132,13 +132,6 @@ BAND_PROXIMITY_MAX = 0.5
 _HARD_STOP_PCT_OVERRIDE: float | None = None
 _MAX_HOLD_DAYS_OVERRIDE: int | None = None
 _BAND_PROX_MAX_OVERRIDE: float | None = None
-# Research-spike OU gate (2026-05-15). None or 0 → no gate (existing
-# live behavior). Positive value → suppress candidates whose 60-day
-# log-close OU κ < threshold. Wired through run_variant + the search
-# sweep override flow. Will be set to None permanently if the sweep
-# doesn't support adoption.
-_OU_KAPPA_THRESHOLD_OVERRIDE: float | None = None
-_OU_LOOKBACK_DAYS = 60
 
 
 def _hard_stop_pct() -> float:
@@ -381,7 +374,6 @@ def run_variant(
     spy_chop_series: pd.Series | None = None,
     chop_threshold: float = CHOP_SIDEWAYS_WEAK,
     max_adx: float = MAX_ADX,
-    ou_kappa_threshold: float = 0.0,
 ) -> tuple[list[TradeRecord], list[RejectedRow]]:
     """Walk every trading day; pick top-1 candidate; simulate forward.
 
@@ -447,18 +439,6 @@ def run_variant(
             prox = float(row["band_proximity"])
             if math.isnan(prox) or prox > _band_prox_max():  # demand entry near lower half
                 continue
-            # OU mean-reversion gate (2026-05-15 research spike). When
-            # threshold > 0, fit an Ornstein-Uhlenbeck process to the
-            # candidate's last 60 closes and reject if the implied
-            # mean-reversion speed κ is below the threshold (i.e. price
-            # series isn't statistically mean-reverting). Off (0.0)
-            # preserves live engine behavior.
-            if ou_kappa_threshold > 0.0 and row_pos >= _OU_LOOKBACK_DAYS:
-                from sigma.plugs.setup_detection import estimate_ou_kappa
-                window = df.iloc[row_pos - _OU_LOOKBACK_DAYS:row_pos]["close"].to_numpy()
-                kappa = estimate_ou_kappa(window)
-                if kappa < ou_kappa_threshold:
-                    continue
             # Score: simple "channel quality + entry precision" proxy.
             #   low ADX is good (up to 20 pts); low band_proximity is good (up to 35).
             score = (20.0 - adx) + 35.0 * max(0.0, 1.0 - 2.0 * prox)
@@ -839,7 +819,6 @@ def run_sigma_with_context(
     )
 
     global _HARD_STOP_PCT_OVERRIDE, _MAX_HOLD_DAYS_OVERRIDE, _BAND_PROX_MAX_OVERRIDE
-    global _OU_KAPPA_THRESHOLD_OVERRIDE
     overrides = dict(overrides or {})
     _HARD_STOP_PCT_OVERRIDE = (
         float(overrides["stop_pct"]) if "stop_pct" in overrides else None
@@ -850,10 +829,6 @@ def run_sigma_with_context(
     _BAND_PROX_MAX_OVERRIDE = (
         float(overrides["bb_width_percentile"]) / 100.0
         if "bb_width_percentile" in overrides else None
-    )
-    _OU_KAPPA_THRESHOLD_OVERRIDE = (
-        float(overrides["ou_kappa_threshold"])
-        if "ou_kappa_threshold" in overrides else None
     )
 
     # Refresh the tier-cost map from the context (cleared/replaced per window).
@@ -880,10 +855,6 @@ def run_sigma_with_context(
         spy_chop_series=context.spy_chop_series,
         chop_threshold=float(chop_override) if chop_override is not None else CHOP_SIDEWAYS_WEAK,
         max_adx=float(max_adx_override) if max_adx_override is not None else MAX_ADX,
-        ou_kappa_threshold=(
-            float(_OU_KAPPA_THRESHOLD_OVERRIDE)
-            if _OU_KAPPA_THRESHOLD_OVERRIDE is not None else 0.0
-        ),
     )
     summary = compute_summary("search", trades)
 
@@ -897,10 +868,6 @@ def run_sigma_with_context(
         "bb_width_percentile": _band_prox_max() * 100.0,
         "max_hold_days": int(_max_hold_days()),
         "stop_pct": float(_hard_stop_pct()),
-        "ou_kappa_threshold": (
-            float(_OU_KAPPA_THRESHOLD_OVERRIDE)
-            if _OU_KAPPA_THRESHOLD_OVERRIDE is not None else 0.0
-        ),
     }
     trades_for_diag = _trades_to_diagnostic_dicts(trades)
     price_data = _panels_to_price_data(context.panels)

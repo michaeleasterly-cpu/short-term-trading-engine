@@ -52,6 +52,7 @@ ENGINE_PREFIX: dict[str, str] = {
     "sigma": "sg_",
     "reversion": "rv_",
     "vector": "vc_",
+    "sentinel": "sn_",
 }
 
 # Legacy → canonical engine. Parsers walk this AFTER checking ENGINE_PREFIX

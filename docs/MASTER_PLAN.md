@@ -181,9 +181,11 @@ Earlier drafts of this plan gated Market Context on **SPY-level** CHOP+ADX. The 
 - **2026-05-15 SPY market-regime pre-scan filter added** (`sigma/scheduler.py::_spy_regime_blocks_entries`) to address the regime fragility. Suppresses all Sigma entries when **either** (a) SPY is ≥ 10% below its 60-day high AND its 5-day return is positive (momentum-crash recovery — the trade pattern that produced the −0.84 Sharpe walk-forward window), or (b) SPY's 20-day annualized realized volatility exceeds 30% (Bollinger band expands faster than we can scalp it). Thresholds in `sigma/models.py` as `SPY_REGIME_*` constants. Degrades gracefully when < 60 SPY bars are available. Unit-tested across the four regime classes (calm / drawdown-recovery / high-vol / insufficient-data).
 - **2026-05-15 sweep re-run (`backtests/sigma_search_results_2026-05-15.log`, 150 rows):** held-back **Sharpe +0.839, 86 trades, PF 1.365, max DD −12.11%**, credibility **50/100** (was 55 prior; the filter slightly thins the sample), DSR 0.0000 (multiple-testing correction). Top-5 candidates score +0.301 to +0.654 — **no candidate exhibits the prior −0.84 magnitude swing across windows**. **Filter retained — variance-reduction objective met.** DSR-clearance is structurally upstream of the regime filter; the 80%-negative-Sharpe distribution across all 150 rows suggests range scalping is hard in general, not just regime-fragile. **Structural redesign flagged in `TODO.md`** — DSR clearance for Sigma is a different problem than the regime fragility this filter solved.
 
-### 4.2 Reversion — Mean Reversion Engine (Second Build)
+### 4.2 Reversion — Mean Reversion Engine (Second Build; **Satellite — 2026-05-15**)
 
 **Mission:** Fade statistically extreme price deviations on a multi-day horizon.
+
+**Classification (2026-05-15):** Reclassified as a **satellite engine** alongside S2 (§4.5). Permanent capital cap: **5–10% of total deployable equity** (allocator-enforced). Graduation is on **per-trade quality metrics**, not on the DSR ≥ 0.95 credibility gate — see *Graduation* below. The Z + earnings-quality signal class is structurally sparse (rare extreme-Z events on HIGH-quality names), and three rounds of parameter sweeps (2026-05-13 to 2026-05-15) confirmed no parameter setting clears DSR's multiple-testing correction at this firing rate. The signal *is* real (Sharpe positive, profit factor > 1.5 in every backtest cut that uses the combined filter), but the trade frequency cannot be increased without diluting the quality gate that makes it work. Satellite status acknowledges this reality and removes the DSR pressure from an engine whose edge is genuine but whose cadence is bounded.
 
 **Setup Detection:**
 - Z-score vs 20-MA < −2 (oversold) or > +2 (overbought), RSI extremes, volume climax.
@@ -216,9 +218,32 @@ Earlier drafts of this plan gated Market Context on **SPY-level** CHOP+ADX. The 
 
 **Conclusion — combined-filter validated; live engine updated.** Tightening to `Z_SCORE_THRESHOLD = 3.0` and `EarningsQualityGrade is HIGH` flips the strategy from a money-loser to profitable: Sharpe swings from −0.42 to +0.63, max drawdown drops from −55.9% to −6.1%, profit factor 0.74 → 3.69. The trade count drops to 11 over 8 years (~1–2 per year) — sparse but high-quality. Live changes: `reversion/models.py:Z_SCORE_THRESHOLD` is now 3.0; `reversion/plugs/lifecycle_analysis.py` blocks any grade that isn't HIGH (was: blocked only LOW). Phase 2 enhancement (ADX > 25 ∧ CHOP > 61.8) remains deferred until ≥30 paper trades accumulate under the new thresholds — at the new firing rate that's a multi-year horizon, so the next concrete step is to monitor live performance and revisit only if real fills diverge from the backtest.
 
-**Graduation:** 10 completed trades, win rate ≥ 55%, avg return ≥ +2%, profit factor > 1.5.
+**Graduation (per-trade satellite criteria, replaces DSR gate 2026-05-15):**
+10 completed live paper trades cumulatively meeting **all** of:
+- Win rate ≥ 55%
+- Average return per trade ≥ +2%
+- Profit factor > 1.5
+- Max drawdown across the 10-trade sample ≤ −15%
 
-**Rationale:** Reversion fires infrequently by design — extremes occur a few times per year across a liquid universe. The win rate and average return bars are calibrated to the backtest results (54.5% / +2.08%). The trade count is set at 10 to balance statistical confidence against the engine's natural firing rate; requiring ~7 years of data ensures graduation is achievable within a reasonable timeframe while still demanding enough trades to avoid single-trade luck. If the live engine's firing rate differs materially from the backtest, re-evaluate the graduation trade count after 2 years of live paper data.
+No DSR / overall credibility threshold — satellite engines are graduation-gated on per-trade quality, not the multiple-testing-corrected Sharpe gate that applies to core engines. This matches the S2 graduation model (§4.5).
+
+**Rationale:** Reversion fires infrequently by design — extremes occur a few times per year across a liquid universe. The win rate and average return bars are calibrated to the backtest results (combined-filter table above: 54.5% / +2.08%). Ten trades is the satellite graduation floor that balances statistical confidence against the engine's natural firing rate; with the relaxed Z=2.5 + T3 config it accumulates in ~2 calendar years of paper trading. If the live engine's firing rate differs materially from the backtest, re-evaluate the count after 2 years of live data.
+
+**Satellite-classification evidence (2026-05-15, single-pass full window):** `scripts/run_reversion_satellite_backtest.sh` runs `reversion/backtest.py --start 2018-01-01 --end 2025-12-31 --z-threshold 3.0 --earnings-quality HIGH`. Result (`backtests/reversion_satellite_backtest.json`): **19 trades, Sharpe +0.312, profit factor 1.755, max drawdown −11.54%, credibility 45/100, DSR 0.342, passed_gate False**. Trade count slightly above the 5–15 satellite range cited in the 2026-05-15 spec but per-trade metrics qualitatively confirm the satellite profile — PF clears 1.5, drawdown is contained, Sharpe is positive. Lower than the +0.732 from the 2026-05-15 search-sweep holdout (`reversion_search_results_2026-05-15.log`) because that figure was the best-window holdout of a walk-forward search; the single-pass full-window result is the more conservative ground-truth.
+
+**Comparison vs. S2 satellite profile (the only other satellite engine):**
+
+| Dimension | Reversion (this engine) | S2 (§4.5) |
+| --- | --- | --- |
+| Signal class | Z-score extreme + HIGH earnings quality + ADX exit | Short-interest > 20% + days-to-cover > 5 + social spike (+ options Layer 1.5 deferred) |
+| Trade frequency (8-year backtest equivalent) | 19 trades / 8 yr ≈ 2.4 per year | Designed sparse; specification rate not yet backtested |
+| Per-trade Sharpe (single-pass full window) | +0.312 | Not yet measured (no engine code) |
+| Profit factor (single-pass full window) | 1.755 | Not yet measured |
+| Max drawdown (single-pass full window) | −11.54% | Hard stop −7% per trade; aggregate not measured |
+| Capital cap | 5–10% (allocator-enforced) | 5% permanent cap |
+| Graduation gate | 10 trades · 55% WR · +2% avg · PF > 1.5 · max DD ≤ −15% | 5 trades / 6+ months · 60% WR · +30% avg |
+| DSR ≥ 0.95 required? | No (satellite) | No (satellite) |
+| Status | Built; combined filter live; paper-trading on the local Mac | Specification only — options data parked |
 
 **Status (built; Railway paused, runs locally):**
 - All five plugs implemented and tested. Scheduler entry: `reversion/scheduler.py`. The Railway service `reversion-scheduler` exists but is unscheduled during the Railway pause; engine runs are invoked locally.
@@ -361,6 +386,8 @@ Full design: `docs/superpowers/specs/2026-05-13-momentum-rolling-construction.md
 
 **Mission:** Detect conditions conducive to short squeezes. Satellite only — permanent 5% capital cap.
 
+**Note (2026-05-15):** S2 is no longer the only satellite — Reversion (§4.2) joined the satellite tier on the same date. Both engines share the same architectural constraints: permanent capital cap (5–10%), per-trade graduation criteria instead of DSR ≥ 0.95, allocator-enforced budget separation from core engines. The shared rationale is structural: each one's signal class fires too rarely for the multiple-testing-corrected Sharpe gate to clear at any parameter setting, but each one's per-trade quality is real and worth keeping in the roster at a contained size.
+
 **Setup Detection:**
 - Layer 0: Short interest > 20% (FINRA, release-date matched), days-to-cover > 5, borrow rate acceleration.
 - Layer 1: Social volume spike (ApeWisdom).
@@ -401,7 +428,7 @@ Full design: `docs/superpowers/specs/2026-05-13-momentum-rolling-construction.md
 - Hard stop −10%. Profit target event-specific.
 - Max 10% of total platform capital allocated to Catalyst.
 
-### 4.7 Sentinel — Macro Defense Engine (Seventh Build)
+### 4.7 Sentinel — Macro Defense Engine (Seventh Build; **Built 2026-05-15**)
 
 **Mission:** Protect the platform during recessions. Reformed basket with minimal decay.
 
@@ -409,11 +436,11 @@ Full design: `docs/superpowers/specs/2026-05-13-momentum-rolling-construction.md
 
 | Symbol | Weight | Notes |
 | --- | --- | --- |
-| SH | 35% | |
-| PSQ | 25% | |
-| TLT | 20% | |
-| GLD | 10% | |
-| SQQQ | 10% | Tactical, 5-day max hold |
+| SH | 35% | **Not in `platform.prices_daily` (2026-05-15) — basket renormalizes to available tickers until backfilled.** |
+| PSQ | 25% | **Not in `platform.prices_daily` (2026-05-15) — basket renormalizes to available tickers until backfilled.** |
+| TLT | 20% | Live in `platform.prices_daily` from 2002-07-30. |
+| GLD | 10% | **Not in `platform.prices_daily` (2026-05-15) — basket renormalizes to available tickers until backfilled.** |
+| SQQQ | 10% | Tactical, 5-day max hold. Live in `platform.prices_daily` from 2010-02-11. |
 
 **Activation:**
 - Bear Score ≥ 60 for 3 consecutive days with no counter-trend rally > 5%.
@@ -425,6 +452,43 @@ Full design: `docs/superpowers/specs/2026-05-13-momentum-rolling-construction.md
 - Shallow recession override (Bear Score < 80): reduce SH/PSQ by 50%, increase TLT/GLD.
 - VIX > 40: reduce inverse ETFs by 50% (compounding drag spikes).
 - SH/PSQ re-evaluated every 30 calendar days.
+
+**Industrial-production threshold calibration (2026-05-15):** the spec quotes
+ISM-PMI thresholds (< 45 = contraction). The FRED indicator actually loaded
+into `platform.macro_indicators` is **INDPRO** (Industrial Production Index,
+base 2017 = 100, observed range 84–104 in our 2018–2025 window). The
+*semantic intent* of the spec is preserved — < 90 implements "deep
+contraction" (covers COVID April 2020 trough at 84.5), 90–95 implements
+"moderate contraction". Both thresholds are kept in `sentinel/models.py`
+with a comment explaining the divergence.
+
+**HY-spread data window (2026-05-15):** `hy_spread` is only loaded from
+2023-05-15 onward (FRED BAMLH0A0HYM2 ingestion start date). Backtests
+prior to that date score 0 pts for the HY contribution. No engine
+behavior change — this is a data-history limitation that will close
+naturally as the time series extends.
+
+**Status (built; 2026-05-15):**
+- All five plugs implemented (`sentinel/plugs/`). 28 unit tests covering
+  Bear Score sub-scorers, lifecycle state machine (incl. rally veto +
+  false-signal short-circuit), basket overrides, capital gate,
+  execution sizing.
+- Backtest: `scripts/run_sentinel_backtest.sh` against 2018-01-01 →
+  2025-12-31. With the basket stubbed to available ETFs (TLT/SQQQ only),
+  the engine fired **one cycle** (COVID April 3 → May 27 2020, 36
+  trading days). Single TLT trade returned −3.37% — legitimate finding
+  that the macro-data-driven signal lags Fed-driven fast crashes
+  (Sentinel activated 11 trading days after the March 23 2020 SPY
+  trough). With the full SH/PSQ/GLD basket the entry/exit timing
+  edge case would still bite; this is a structural property of
+  Sentinel, not a wiring bug.
+- Capital gate, AAR logging, scheduler all mirror the Momentum pattern.
+  Engine prefix `sn_` registered in `tpcore.order_ids`.
+- **Not yet wired into `engine-service` daemon** — Sentinel is daily-
+  check / state-driven-rebalance, not weekly like Momentum.
+  Integration TBD.
+- **Graduation gate**: per-cycle (≥ 1 cycle · PF > 1.5 · max DD < 20%) —
+  not DSR-based, like S2 and Reversion satellites.
 
 ### 4.8 Research Tools
 
@@ -592,13 +656,13 @@ The consolidation eliminates the inter-daemon `DATA_OPERATIONS_COMPLETE` polling
 | Phase 0 | `tpcore` + platform schema + ingestion script | **Complete** |
 | Phase 1 | Sigma engine — full plug implementation | **Complete** |
 | Phase 1b | Sigma paper trading (3+ months), Parity Harness active | **Paused** — engine + Parity Harness built; cron firing blocked by the Railway pause. Paper-trading resumes when execution architecture is settled. |
-| Phase 2 | Reversion engine | **Complete** — combined filter (HIGH quality + \|Z\| ≥ 3.0) applied. Backtest re-run with tier-aware costs 2026-05-12. |
+| Phase 2 | Reversion engine | **Complete (satellite — paper trading; 2026-05-15)** — reclassified as satellite engine alongside S2 (§4.5). Per-trade graduation criteria replace the DSR ≥ 0.95 gate. Combined filter (HIGH quality + \|Z\| ≥ 3.0) live. Satellite-classification backtest: `backtests/reversion_satellite_backtest.json` — 19 trades / Sharpe +0.312 / PF 1.755 / DD −11.5% on 2018-2025 full window. |
 | Phase 3 | Allocator + Forensics (basic) | **Complete (2026-05-13 / 2026-05-14)** — Allocator service in `tpcore/allocator/` with launchd daemon firing Mondays 13:00 UTC. Forensics in `tpcore/forensics/` wired into the data-operations pipeline, auto-generates Sprint Dossiers, surfaces on dashboard with one-click resolve. Both services read AARs through the shared `tpcore.aar.AARReader`. |
 | Phase 4 | Vector engine | **Complete (build); data-blocked (validation)** — engine code shipped, but parameter-search verdict (2026-05-13) showed zero trades on T1+T2 because `platform.catalyst_events` has zero overlap with that universe. Re-enabling requires a catalyst-event backfill, not a code change. |
 | Phase 4b | **Momentum engine — Phase 2 (live-shippable)** | **Complete (Phase 2; 2026-05-13)** — 5 plugs + scheduler + Alpaca paper integration. `momentum/backtest.py` produces held-back Sharpe +1.58 / PF 2.80 on T1+T2 2024-2025. Paper kickoff: `scripts/run_momentum_kickoff.sh`. Daily cron pattern: scheduler no-ops on non-rebalance days, fires on the first NYSE session of each month. |
 | Phase 5 | S2 (satellite) | **Deferred** — options data parked in `platform.tradier_options_chains` (122,668 rows), no engine code. |
 | Phase 6 | Catalyst | **Deferred** — specification only. |
-| Phase 7 | Sentinel | **Deferred** — specification only. |
+| Phase 7 | Sentinel | **Built (2026-05-15)** — five plugs + backtest + 28 unit tests. Engine prefix `sn_`. Single COVID-2020 activation cycle in 2018-2025 backtest (one TLT trade, −3.37% — macro signal lags fast Fed-driven crashes). SH/PSQ/GLD missing from `platform.prices_daily` — basket renormalizes to available tickers; full basket lives once price history is backfilled. Daemon wiring (daily check) TBD. |
 | Cross-cutting | Parameter-search pipeline | **Complete** — `scripts/search_parameters.py` + `tpcore/backtest/search.py`. Random search + walk-forward + final held-back DSR. Panel-sharing context cache (~60× per-trial speedup). Period-aggregated metrics (correct for portfolio strategies). See §2.5. |
 | Cross-cutting | Overfitting detection suite | **Complete** — `tpcore/backtest/overfitting.py` wired into all engine backtests. See *Overfitting Diagnostics Status* below. |
 | Cross-cutting | Data Validation Suite | **Complete** — `python -m tpcore.quality.validation` runs locally; was previously scheduled as a Railway Sunday cron, consolidated into `platform.ingestion_jobs` for the persistent `ingestion-engine`. |
@@ -617,7 +681,7 @@ The consolidation eliminates the inter-daemon `DATA_OPERATIONS_COMPLETE` polling
 | Engine | Held-back Sharpe | Held-back PF | Held-back DD | Credibility | DSR | Verdict |
 |---|---|---|---|---|---|---|
 | Sigma | +0.74 | +3.71 | -8.1% | 55 | 0.00 | Marginal real edge — research only |
-| Reversion | -0.08 | +0.87 | -8.0% | 45 | 0.00 | Pipeline caught overfit (in-sample +2.87 → OOS -0.08) |
+| Reversion | +0.31 | +1.76 | -11.5% | 45 | 0.34 | **Satellite** (2026-05-15) — DSR gate retired; per-trade graduation criteria. Single-pass full-window evidence in `backtests/reversion_satellite_backtest.json` |
 | Vector | — | — | — | — | — | **Data-blocked** — catalyst_events has 0 overlap with T1+T2 |
 | **Momentum** | **+1.58** | **+2.80** | -32.4% | 40 | 0.00 | **Strongest OOS signal in the bench** — Phase 1 CONTINUE |
 
@@ -627,7 +691,8 @@ The consolidation eliminates the inter-daemon `DATA_OPERATIONS_COMPLETE` polling
 - **Forward path:**
   - **Momentum**: paper-trade with small size now; let the live tape become the OOS validation. Re-evaluate credibility under either a frequency-adjusted DSR threshold (≈0.5 for monthly with 24 obs) or PSR (no deflation).
   - **Vector**: backfill `platform.catalyst_events` for T1+T2 tickers via FMP earnings-history endpoint. Single ingestion task. Re-run search after.
-  - **Sigma / Reversion**: park. Reversion is overfit-confirmed; Sigma is too marginal to move ahead of Momentum.
+  - **Reversion**: satellite-classified 2026-05-15. Graduation now per-trade (10 trades · 55% WR · +2% avg · PF > 1.5 · max DD ≤ −15%) — DSR gate no longer applies. Paper-trading on the local Mac.
+  - **Sigma**: park. Too marginal to move ahead of Momentum. OU mean-reversion spike (2026-05-15) rejected — code archived in `tpcore/backtest/spread_estimator_archive.py`.
 
 ---
 
