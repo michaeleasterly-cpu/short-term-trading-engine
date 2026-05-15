@@ -14,6 +14,21 @@ Sequence:
        vector → momentum schedulers back-to-back. Each engine handles
        its own market-closed / no-rebalance / no-candidates gating.
 
+Flags:
+    ``--force``    bypass the market-closed pre-flight in ``ops.py
+                   --update`` and ``run_all_engines.sh``.
+    ``--dry-run``  non-destructive test mode: forwards ``--dry-run``
+                   to ``ops.py --update`` (each stage runner returns
+                   DRY_RUN without invoking the handler — no writes
+                   to ``platform.prices_daily`` / fundamentals /
+                   anywhere) AND skips the engine sweep entirely
+                   (no orders submitted to Alpaca paper). The
+                   canonical "verify the wire path works during
+                   market hours" combination is
+                   ``--dry-run --force`` — zero side effects on
+                   ``prices_daily``, ``open_orders``, ``aar_events``,
+                   or Alpaca.
+
 Exit codes:
     * 0 — both phases succeeded.
     * N>0 — first phase that failed propagates its exit code. The
@@ -66,14 +81,25 @@ async def amain() -> int:
         logger.error("platform_pipeline.no_dsn", note="set DATABASE_URL")
         return 1
 
-    force_flag = ["--force"] if "--force" in sys.argv[1:] else []
+    argv = sys.argv[1:]
+    force_flag = ["--force"] if "--force" in argv else []
+    dry_run = "--dry-run" in argv
+    dry_run_flag = ["--dry-run"] if dry_run else []
 
     # Phase 1 — data ops via ops.py --update. The final stage of
     # _STAGE_SPECS is `forensics` (added 2026-05-15), so dossiers
-    # are refreshed in-line.
+    # are refreshed in-line. ``--dry-run`` is forwarded; the stage
+    # runner returns DRY_RUN status for each stage without invoking
+    # the handler, so no platform table is written.
     update_rc = await _run_step(
         "ops_update",
-        [sys.executable, str(OPS_PY), "--update", "--source", "platform_pipeline", *force_flag],
+        [
+            sys.executable, str(OPS_PY),
+            "--update",
+            "--source", "platform_pipeline",
+            *dry_run_flag,
+            *force_flag,
+        ],
     )
     if update_rc != 0:
         logger.error(
@@ -82,9 +108,23 @@ async def amain() -> int:
         )
         return update_rc
 
-    # Phase 2 — engine sweep. Each engine handles its own market-state
-    # gating (sigma/reversion/vector via session_contains, momentum via
-    # is_rebalance_day + force-rebalance override).
+    # Phase 2 — engine sweep. Skipped entirely under ``--dry-run`` so
+    # no real paper orders go to Alpaca. The engine schedulers don't
+    # all honor ``--dry-run`` themselves (momentum has it; the
+    # per-trade engines don't), and even a dry-run scan in those
+    # engines fires real broker.submit calls from inside the order
+    # manager. Skipping at this layer is the safe, complete answer.
+    if dry_run:
+        logger.info(
+            "platform_pipeline.engine_sweep_skipped_dry_run",
+            note="no orders submitted to Alpaca under --dry-run",
+        )
+        logger.info("platform_pipeline.complete", dry_run=True)
+        return 0
+
+    # Each engine handles its own market-state gating (sigma/reversion/
+    # vector via session_contains, momentum via is_rebalance_day +
+    # force-rebalance override).
     engines_rc = await _run_step(
         "engine_sweep",
         ["bash", str(RUN_ALL_ENGINES), *force_flag],
@@ -93,7 +133,7 @@ async def amain() -> int:
         logger.error("platform_pipeline.engines_failed", returncode=engines_rc)
         return engines_rc
 
-    logger.info("platform_pipeline.complete")
+    logger.info("platform_pipeline.complete", dry_run=False)
     return 0
 
 
