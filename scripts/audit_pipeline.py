@@ -1,0 +1,927 @@
+"""Comprehensive 4-phase data pipeline audit.
+
+Single CLI that audits every layer of the data pipeline across four
+categories of knowledge:
+
+* **known_knowns**     — explicit checks: row counts, freshness vs.
+  threshold, validation status, ingestion-job state, Sentinel basket
+  presence, hy_spread → credit_spread compliance.
+* **known_unknowns**   — documented gaps we measure: GLD AR-estimator
+  noise, hy_spread freeze post-truncation, prices_daily multi-day gaps,
+  ETF AR mis-estimation in T3/T4.
+* **unknown_knowns**   — data we already collect but don't surface:
+  filter-diagnostics distribution per engine (from SIGNAL events),
+  cross-engine ticker overlap, application_log event-type distribution,
+  empty platform tables, macro indicator pairwise correlations.
+* **unknown_unknowns** — anomaly heuristics: row-count velocity 7d vs
+  prior, macro 3σ stoppage, liquidity-tier distribution shift, engine
+  signal silence, DB size growth, correlated multi-source staleness.
+
+Findings are printed to stdout (formatted or JSON) and persisted to
+``platform.data_quality_log`` under
+``source='pipeline_audit.<phase>.<check_name>'`` so the dashboard can
+read them.
+
+**Canonical audit command.** When the operator asks for a pipeline
+audit, run this — do NOT re-audit manually. See CLAUDE.md session rule.
+
+Exit code: 0 on success; non-zero only if ``--strict`` is set and any
+phase has FAIL severity (default is informational across phases other
+than known_knowns).
+"""
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import os
+import statistics
+import subprocess
+import sys
+from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime
+from decimal import Decimal
+from typing import Any
+
+import structlog
+
+from tpcore.db import build_asyncpg_pool
+
+logger = structlog.get_logger(__name__)
+
+
+# ─── Data-source registry ──────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class DataSource:
+    name: str
+    table: str
+    freshness_days: int
+    where_clause: str = ""  # optional WHERE filter (e.g. for credit_spread)
+    timestamp_col: str = "date"  # column to compute freshness from
+
+
+DATA_SOURCES: tuple[DataSource, ...] = (
+    DataSource("daily_bars",          "platform.prices_daily",            freshness_days=4),
+    DataSource("corporate_actions",   "platform.corporate_actions",       freshness_days=7, timestamp_col="action_date"),
+    DataSource("fundamentals",        "platform.fundamentals_quarterly",  freshness_days=120, timestamp_col="period_end_date"),
+    DataSource("catalyst_events",     "platform.catalyst_events",         freshness_days=90, timestamp_col="event_date"),
+    DataSource("sec_filings",         "platform.sec_insider_transactions", freshness_days=14, timestamp_col="filing_date"),
+    DataSource("macro_indicators",    "platform.macro_indicators",        freshness_days=90),
+    DataSource("credit_spread",       "platform.macro_indicators",        freshness_days=14,
+               where_clause="WHERE indicator='credit_spread'"),
+    DataSource("spread_observations", "platform.spread_observations",     freshness_days=90, timestamp_col="observed_at"),
+    DataSource("ticker_classifications", "platform.ticker_classifications", freshness_days=30, timestamp_col="last_updated"),
+)
+
+
+# ─── Finding model ─────────────────────────────────────────────────────
+
+
+@dataclass
+class AuditFinding:
+    phase: str
+    check_name: str
+    source: str
+    severity: str  # OK | WARN | FAIL
+    summary: str
+    evidence: dict[str, Any] = field(default_factory=dict)
+    recommended_action: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        d = asdict(self)
+        # Decimal isn't JSON-serializable by default; coerce in evidence.
+        d["evidence"] = _jsonify(d["evidence"])
+        return d
+
+
+def _jsonify(obj: Any) -> Any:
+    if isinstance(obj, Decimal):
+        return float(obj)
+    if isinstance(obj, (datetime, )):
+        return obj.isoformat()
+    if isinstance(obj, dict):
+        return {k: _jsonify(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_jsonify(v) for v in obj]
+    return obj
+
+
+# ─── Phase 1: known_knowns ─────────────────────────────────────────────
+
+
+async def run_known_knowns(pool) -> list[AuditFinding]:
+    findings: list[AuditFinding] = []
+
+    # Row counts + freshness per data source.
+    for ds in DATA_SOURCES:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"SELECT COUNT(*) AS n, MAX({ds.timestamp_col}) AS mx FROM {ds.table} {ds.where_clause}"
+            )
+        n = int(row["n"] or 0)
+        mx = row["mx"]
+        if n == 0:
+            findings.append(AuditFinding(
+                phase="known_knowns", check_name="row_count",
+                source=ds.name, severity="FAIL",
+                summary=f"{ds.name}: 0 rows",
+                evidence={"table": ds.table, "rows": 0},
+                recommended_action=f"run the {ds.name} ingestion stage",
+            ))
+            continue
+        if mx is None:
+            findings.append(AuditFinding(
+                phase="known_knowns", check_name="freshness",
+                source=ds.name, severity="WARN",
+                summary=f"{ds.name}: {n:,} rows but {ds.timestamp_col} all NULL",
+                evidence={"rows": n},
+            ))
+            continue
+        # Freshness severity
+        as_of = datetime.now(UTC)
+        if isinstance(mx, datetime):
+            age_days = (as_of - mx).days
+        else:
+            age_days = (as_of.date() - mx).days
+        severity = "OK" if age_days <= ds.freshness_days else ("WARN" if age_days <= 2 * ds.freshness_days else "FAIL")
+        findings.append(AuditFinding(
+            phase="known_knowns", check_name="freshness",
+            source=ds.name, severity=severity,
+            summary=f"{ds.name}: {n:,} rows, newest {mx} ({age_days}d ago, threshold {ds.freshness_days}d)",
+            evidence={"rows": n, "newest": str(mx), "age_days": age_days, "threshold_days": ds.freshness_days},
+        ))
+
+    # Most-recent validation status per source.
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""
+            WITH latest AS (
+                SELECT source, MAX(timestamp) AS t
+                FROM platform.data_quality_log
+                WHERE source LIKE 'validation.%'
+                GROUP BY source
+            )
+            SELECT q.source, q.timestamp, q.stale, q.confidence
+            FROM platform.data_quality_log q
+            JOIN latest l ON l.source=q.source AND l.t=q.timestamp
+            ORDER BY q.source
+        """)
+    if not rows:
+        findings.append(AuditFinding(
+            phase="known_knowns", check_name="validation_status",
+            source="validation_suite", severity="FAIL",
+            summary="no validation rows in data_quality_log",
+            recommended_action="run python -m tpcore.quality.validation",
+        ))
+    else:
+        red = [r for r in rows if r["stale"] or (r["confidence"] is not None and float(r["confidence"]) < 1.0)]
+        for r in red:
+            findings.append(AuditFinding(
+                phase="known_knowns", check_name="validation_status",
+                source=r["source"], severity="FAIL",
+                summary=f"{r['source']}: stale={r['stale']} confidence={r['confidence']}",
+                evidence={"timestamp": str(r["timestamp"])},
+            ))
+        if not red:
+            findings.append(AuditFinding(
+                phase="known_knowns", check_name="validation_status",
+                source="validation_suite", severity="OK",
+                summary=f"all {len(rows)} validation checks green",
+            ))
+
+    # Ingestion-job state.
+    async with pool.acquire() as conn:
+        jobs = await conn.fetch("""
+            SELECT job_name, enabled, last_run_at, last_status, last_error
+            FROM platform.ingestion_jobs ORDER BY job_name
+        """)
+    if jobs:
+        disabled = [j for j in jobs if not j["enabled"]]
+        failed = [j for j in jobs if j["last_status"] not in (None, "success", "completed", "skipped")]
+        stale = []
+        now = datetime.now(UTC)
+        for j in jobs:
+            if j["last_run_at"] is not None and (now - j["last_run_at"]).days > 14:
+                stale.append(j)
+        if disabled:
+            findings.append(AuditFinding(
+                phase="known_knowns", check_name="ingestion_jobs",
+                source="ingestion_jobs", severity="WARN",
+                summary=f"{len(disabled)} job(s) disabled",
+                evidence={"jobs": [j["job_name"] for j in disabled]},
+            ))
+        if failed:
+            findings.append(AuditFinding(
+                phase="known_knowns", check_name="ingestion_jobs",
+                source="ingestion_jobs", severity="FAIL",
+                summary=f"{len(failed)} job(s) failed on last run",
+                evidence={"jobs": [(j["job_name"], j["last_status"], (j["last_error"] or "")[:120]) for j in failed]},
+            ))
+        if not (disabled or failed):
+            findings.append(AuditFinding(
+                phase="known_knowns", check_name="ingestion_jobs",
+                source="ingestion_jobs", severity="OK",
+                summary=f"all {len(jobs)} ingestion jobs enabled and last-run OK",
+            ))
+
+    # Sentinel basket presence.
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT t.ticker, COALESCE(s.n, 0) AS n, s.last_bar
+            FROM UNNEST($1::text[]) AS t(ticker)
+            LEFT JOIN (
+                SELECT ticker, COUNT(*) AS n, MAX(date) AS last_bar
+                FROM platform.prices_daily WHERE delisted=false
+                GROUP BY ticker
+            ) s ON s.ticker = t.ticker
+        """, ["SH", "PSQ", "GLD", "TLT", "SQQQ"])
+    missing = [r for r in rows if r["n"] == 0]
+    if missing:
+        findings.append(AuditFinding(
+            phase="known_knowns", check_name="sentinel_basket",
+            source="sentinel", severity="FAIL",
+            summary=f"{len(missing)}/5 Sentinel basket ETFs missing from prices_daily",
+            evidence={"missing": [r["ticker"] for r in missing]},
+            recommended_action="run scripts/run_backfill_sentinel_etfs.sh",
+        ))
+    else:
+        findings.append(AuditFinding(
+            phase="known_knowns", check_name="sentinel_basket",
+            source="sentinel", severity="OK",
+            summary="all 5 Sentinel basket ETFs present",
+            evidence={t["ticker"]: {"rows": t["n"], "last_bar": str(t["last_bar"])} for t in rows},
+        ))
+
+    # credit_spread with BAA10Y history from 1996.
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT MIN(date) AS mn, MAX(date) AS mx, COUNT(*) AS n
+            FROM platform.macro_indicators WHERE indicator='credit_spread'
+        """)
+    if row["n"] == 0:
+        findings.append(AuditFinding(
+            phase="known_knowns", check_name="credit_spread_history",
+            source="macro_indicators", severity="FAIL",
+            summary="credit_spread has 0 rows",
+            recommended_action="run macro_indicators stage with start_date=1996-01-01",
+        ))
+    else:
+        mn = row["mn"]
+        starts_in_1996 = mn is not None and mn.year <= 1996
+        severity = "OK" if starts_in_1996 else "WARN"
+        findings.append(AuditFinding(
+            phase="known_knowns", check_name="credit_spread_history",
+            source="macro_indicators", severity=severity,
+            summary=f"credit_spread: {row['n']:,} rows, {mn} → {row['mx']}",
+            evidence={"rows": row["n"], "starts_in_1996": starts_in_1996},
+        ))
+
+    # Active-code zero-hits for hy_spread.
+    try:
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        # --include='*.py' excludes pyc-cache binary-file matches.
+        # --exclude-dir='__pycache__' belt + suspenders.
+        result = subprocess.run(
+            ["grep", "-rnE", "--include=*.py", "--exclude-dir=__pycache__",
+             "hy_spread", "tpcore/fred/", "sentinel/plugs/", "scripts/ops.py"],
+            capture_output=True, text=True, timeout=10, cwd=repo_root,
+        )
+        leaks = []
+        for line in result.stdout.splitlines():
+            if line.startswith("Binary file"):
+                continue
+            content = line.split(":", 2)[-1].lstrip()
+            if not content:
+                continue
+            # Skip lines that are clearly docstring/comment context:
+            # leading comment chars OR the symbol appears only inside
+            # rst-backticks / quoted-string context (cross-reference
+            # in a docstring, not an import or call).
+            if content.startswith(("#", "\"\"\"", "'''", "\"", "*", "//", "-")):
+                continue
+            if "``hy_spread``" in content or "'hy_spread'" in content or '"hy_spread"' in content:
+                continue
+            leaks.append(line)
+        severity = "OK" if not leaks else "WARN"
+        findings.append(AuditFinding(
+            phase="known_knowns", check_name="hy_spread_decommission",
+            source="codebase", severity=severity,
+            summary=(
+                "no active hy_spread refs in adapter/plugs/ops"
+                if not leaks else f"{len(leaks)} potential hy_spread leak(s)"
+            ),
+            evidence={"leaks": leaks[:5]} if leaks else {},
+        ))
+    except Exception as exc:  # noqa: BLE001
+        findings.append(AuditFinding(
+            phase="known_knowns", check_name="hy_spread_decommission",
+            source="codebase", severity="WARN",
+            summary=f"grep failed: {exc}",
+        ))
+
+    return findings
+
+
+# ─── Phase 2: known_unknowns ───────────────────────────────────────────
+
+
+async def run_known_unknowns(pool) -> list[AuditFinding]:
+    findings: list[AuditFinding] = []
+
+    # GLD tier T4 (known AR-estimator limitation).
+    async with pool.acquire() as conn:
+        gld = await conn.fetchrow(
+            "SELECT tier, median_spread_pct FROM platform.liquidity_tiers WHERE ticker='GLD'"
+        )
+    if gld is None:
+        findings.append(AuditFinding(
+            phase="known_unknowns", check_name="gld_tier_quirk",
+            source="liquidity_tiers", severity="WARN",
+            summary="GLD missing from liquidity_tiers",
+        ))
+    else:
+        findings.append(AuditFinding(
+            phase="known_unknowns", check_name="gld_tier_quirk",
+            source="liquidity_tiers", severity="OK",
+            summary=f"GLD tier T{gld['tier']} (median spread {float(gld['median_spread_pct']):.4%}) — known AR over-attribution; not a blocker",
+            evidence={"tier": gld["tier"], "median_spread_pct": float(gld["median_spread_pct"])},
+        ))
+
+    # hy_spread freeze — no new rows since BAA10Y swap.
+    async with pool.acquire() as conn:
+        hy = await conn.fetchrow("""
+            SELECT MAX(date) AS mx, COUNT(*) AS n
+            FROM platform.macro_indicators WHERE indicator='hy_spread'
+        """)
+    if hy["n"] == 0:
+        findings.append(AuditFinding(
+            phase="known_unknowns", check_name="hy_spread_freeze",
+            source="macro_indicators", severity="OK",
+            summary="hy_spread table empty (post-truncation, retained for reference but not seeded)",
+        ))
+    else:
+        days_since = (datetime.now(UTC).date() - hy["mx"]).days
+        ok = days_since >= 3  # should be frozen — no new rows
+        findings.append(AuditFinding(
+            phase="known_unknowns", check_name="hy_spread_freeze",
+            source="macro_indicators", severity="OK" if ok else "WARN",
+            summary=f"hy_spread frozen at {hy['mx']} ({days_since}d ago, {hy['n']:,} rows preserved)",
+            evidence={"last_date": str(hy["mx"]), "rows": hy["n"], "days_since": days_since},
+            recommended_action=None if ok else "verify hy_spread isn't being refreshed by mistake",
+        ))
+
+    # Multi-day gaps in prices_daily for active tickers (sample to keep it fast).
+    async with pool.acquire() as conn:
+        gap_rows = await conn.fetch("""
+            WITH per_ticker AS (
+                SELECT ticker,
+                       date,
+                       LAG(date) OVER (PARTITION BY ticker ORDER BY date) AS prev_date
+                FROM platform.prices_daily
+                WHERE delisted=false
+                  AND date >= CURRENT_DATE - INTERVAL '180 days'
+            )
+            SELECT ticker, date AS gap_end, prev_date AS gap_start,
+                   (date - prev_date) AS gap_days
+            FROM per_ticker
+            WHERE prev_date IS NOT NULL
+              AND (date - prev_date) > 7    -- > 5 trading days = ~7 calendar with weekends
+            ORDER BY (date - prev_date) DESC
+            LIMIT 25
+        """)
+    if not gap_rows:
+        findings.append(AuditFinding(
+            phase="known_unknowns", check_name="prices_daily_gaps",
+            source="prices_daily", severity="OK",
+            summary="no 5+ trading-day gaps in active tickers (180d lookback)",
+        ))
+    else:
+        findings.append(AuditFinding(
+            phase="known_unknowns", check_name="prices_daily_gaps",
+            source="prices_daily", severity="WARN",
+            summary=f"{len(gap_rows)} ticker(s) with multi-day gaps in active range",
+            evidence={"top_gaps": [
+                {"ticker": r["ticker"], "gap_start": str(r["gap_start"]), "gap_end": str(r["gap_end"]), "gap_days": int(r["gap_days"].days if hasattr(r["gap_days"], 'days') else r["gap_days"])}
+                for r in gap_rows[:10]
+            ]},
+            recommended_action="run daily_bars handler with end_offset_days=1 for the affected tickers",
+        ))
+
+    # ETF AR mis-estimation (T3/T4 ETFs with median_spread > 0.5%).
+    async with pool.acquire() as conn:
+        etfs = await conn.fetch("""
+            SELECT lt.ticker, lt.tier, lt.median_spread_pct
+            FROM platform.liquidity_tiers lt
+            JOIN platform.ticker_classifications tc ON tc.ticker=lt.ticker
+            WHERE tc.asset_class='etf' AND lt.tier >= 3 AND lt.median_spread_pct > 0.005
+            ORDER BY lt.median_spread_pct DESC LIMIT 20
+        """)
+    if etfs:
+        findings.append(AuditFinding(
+            phase="known_unknowns", check_name="etf_ar_noise",
+            source="liquidity_tiers", severity="OK",
+            summary=f"{len(etfs)} ETF(s) in T3/T4 with median_spread > 0.5% — known AR over-attribution for wide-range ETFs",
+            evidence={"top": [{"ticker": e["ticker"], "tier": e["tier"], "median_spread_pct": float(e["median_spread_pct"])} for e in etfs[:10]]},
+            recommended_action="future calibration pass on AR estimator's ETF treatment",
+        ))
+    else:
+        findings.append(AuditFinding(
+            phase="known_unknowns", check_name="etf_ar_noise",
+            source="liquidity_tiers", severity="OK",
+            summary="no T3/T4 ETFs exceed the AR-noise threshold",
+        ))
+
+    return findings
+
+
+# ─── Phase 3: unknown_knowns ───────────────────────────────────────────
+
+
+async def run_unknown_knowns(pool) -> list[AuditFinding]:
+    findings: list[AuditFinding] = []
+
+    # Filter-diagnostics distribution from SIGNAL events (last 30 days).
+    async with pool.acquire() as conn:
+        sig_rows = await conn.fetch("""
+            SELECT engine, data
+            FROM platform.application_log
+            WHERE event_type='SIGNAL'
+              AND recorded_at > NOW() - INTERVAL '30 days'
+              AND data ? 'filter_diagnostics'
+            ORDER BY recorded_at DESC LIMIT 500
+        """)
+    if not sig_rows:
+        findings.append(AuditFinding(
+            phase="unknown_knowns", check_name="filter_diagnostics",
+            source="application_log", severity="WARN",
+            summary="no SIGNAL events with filter_diagnostics in the last 30 days",
+            recommended_action="verify engines populate FilterDiagnostics in setup_detection",
+        ))
+    else:
+        # Aggregate per engine — count blocks for each gate across signals.
+        per_engine: dict[str, dict[str, int]] = {}
+        for r in sig_rows:
+            eng = r["engine"]
+            diag = r["data"].get("filter_diagnostics", {}) if isinstance(r["data"], dict) else {}
+            if not isinstance(diag, dict):
+                continue
+            bucket = per_engine.setdefault(eng, {})
+            for k, v in diag.items():
+                if k.endswith("_blocked") and isinstance(v, int):
+                    bucket[k] = bucket.get(k, 0) + v
+        if not per_engine:
+            findings.append(AuditFinding(
+                phase="unknown_knowns", check_name="filter_diagnostics",
+                source="application_log", severity="WARN",
+                summary=f"{len(sig_rows)} SIGNAL events but no filter_diagnostics shape recognised",
+            ))
+        else:
+            findings.append(AuditFinding(
+                phase="unknown_knowns", check_name="filter_diagnostics",
+                source="application_log", severity="OK",
+                summary=f"filter-block distribution across {len(per_engine)} engine(s) ({len(sig_rows)} signals)",
+                evidence={
+                    eng: dict(sorted(gates.items(), key=lambda kv: -kv[1])[:5])
+                    for eng, gates in per_engine.items()
+                },
+            ))
+
+    # Cross-engine ticker overlap from AARs (last 90 days).
+    async with pool.acquire() as conn:
+        overlap_rows = await conn.fetch("""
+            SELECT ticker, ARRAY_AGG(DISTINCT engine ORDER BY engine) AS engines, COUNT(*) AS n
+            FROM platform.aar_events
+            WHERE recorded_at > NOW() - INTERVAL '90 days'
+            GROUP BY ticker
+            HAVING COUNT(DISTINCT engine) > 1
+            ORDER BY COUNT(DISTINCT engine) DESC, COUNT(*) DESC
+            LIMIT 25
+        """)
+    if not overlap_rows:
+        findings.append(AuditFinding(
+            phase="unknown_knowns", check_name="cross_engine_overlap",
+            source="aar_events", severity="OK",
+            summary="no cross-engine ticker overlap in last 90 days",
+        ))
+    else:
+        findings.append(AuditFinding(
+            phase="unknown_knowns", check_name="cross_engine_overlap",
+            source="aar_events", severity="WARN",
+            summary=f"{len(overlap_rows)} ticker(s) traded by multiple engines in last 90 days",
+            evidence={"top": [
+                {"ticker": r["ticker"], "engines": list(r["engines"]), "trade_count": int(r["n"])}
+                for r in overlap_rows[:10]
+            ]},
+            recommended_action="review allocator + engine universe definitions for unintended overlap",
+        ))
+
+    # Application log event-type distribution (last 30 days).
+    async with pool.acquire() as conn:
+        et_rows = await conn.fetch("""
+            SELECT event_type, COUNT(*) AS n
+            FROM platform.application_log
+            WHERE recorded_at > NOW() - INTERVAL '30 days'
+            GROUP BY event_type ORDER BY n DESC
+        """)
+    if et_rows:
+        total = sum(r["n"] for r in et_rows)
+        dominant = [r for r in et_rows if r["n"] > total * 0.5]
+        top5 = et_rows[:5]
+        findings.append(AuditFinding(
+            phase="unknown_knowns", check_name="event_type_distribution",
+            source="application_log", severity="WARN" if dominant else "OK",
+            summary=f"{total:,} events / {len(et_rows)} distinct event_types in last 30d",
+            evidence={
+                "top5": {r["event_type"]: int(r["n"]) for r in top5},
+                "dominant_50pct": [r["event_type"] for r in dominant],
+            },
+        ))
+
+    # Empty platform tables (unknown-knowns: data shapes we have but never populate).
+    async with pool.acquire() as conn:
+        tables = await conn.fetch("""
+            SELECT table_name FROM information_schema.tables
+            WHERE table_schema='platform' AND table_type='BASE TABLE'
+        """)
+    empty: list[str] = []
+    for t in tables:
+        try:
+            async with pool.acquire() as conn:
+                n = await conn.fetchval(f"SELECT COUNT(*) FROM platform.{t['table_name']}")
+            if int(n or 0) == 0:
+                empty.append(t["table_name"])
+        except Exception:  # noqa: BLE001
+            continue
+    # Expected empties (no rows is normal until live trading writes them).
+    # ``aar_events`` is empty by design pre-graduation: engines that
+    # haven't cleared the DSR/credibility gate are paper-only and don't
+    # close positions yet. Will populate as engines graduate to live.
+    EXPECTED_EMPTY = {
+        "forensics_triggers", "open_orders", "tax_lots",
+        "execution_quality_log", "allocations", "parity_drift_log",
+        "universe_candidates", "alembic_version", "aar_events",
+    }
+    unexpected = [t for t in empty if t not in EXPECTED_EMPTY]
+    if not unexpected:
+        findings.append(AuditFinding(
+            phase="unknown_knowns", check_name="empty_tables",
+            source="information_schema", severity="OK",
+            summary=f"{len(empty)} empty table(s), all expected",
+            evidence={"empty": empty},
+        ))
+    else:
+        findings.append(AuditFinding(
+            phase="unknown_knowns", check_name="empty_tables",
+            source="information_schema", severity="WARN",
+            summary=f"{len(unexpected)} unexpected empty table(s)",
+            evidence={"unexpected_empty": unexpected, "expected_empty": [t for t in empty if t in EXPECTED_EMPTY]},
+        ))
+
+    # Macro indicator pairwise correlations (last 90 days).
+    async with pool.acquire() as conn:
+        macro_rows = await conn.fetch("""
+            SELECT indicator, date, value FROM platform.macro_indicators
+            WHERE date >= CURRENT_DATE - INTERVAL '90 days'
+              AND indicator IN ('sahm_rule','industrial_production','initial_claims','yield_curve','credit_spread')
+            ORDER BY indicator, date
+        """)
+    if macro_rows:
+        # Build per-indicator series, then forward-fill align on common dates.
+        import pandas as pd  # local import — pandas already in deps
+        df = pd.DataFrame(
+            [{"indicator": r["indicator"], "date": r["date"], "value": float(r["value"])} for r in macro_rows]
+        )
+        pivot = df.pivot(index="date", columns="indicator", values="value").sort_index().ffill().dropna()
+        if len(pivot) >= 10:
+            corr = pivot.corr().round(2)
+            inversions: list[dict[str, Any]] = []
+            # Heuristic priors — historically yield_curve and credit_spread positively correlate (both stress signals).
+            # Sahm + initial_claims positively. Flag big sign reversals from these defaults.
+            EXPECTED_POSITIVE = [("yield_curve", "credit_spread"), ("sahm_rule", "initial_claims")]
+            for a, b in EXPECTED_POSITIVE:
+                if a in corr.columns and b in corr.columns:
+                    c = float(corr.loc[a, b])
+                    if c < -0.3:
+                        inversions.append({"pair": [a, b], "correlation": c})
+            findings.append(AuditFinding(
+                phase="unknown_knowns", check_name="macro_correlations",
+                source="macro_indicators", severity="WARN" if inversions else "OK",
+                summary=f"macro pairwise correlations computed across {len(pivot)} aligned days",
+                evidence={
+                    "correlation_matrix": {a: {b: float(corr.loc[a, b]) for b in corr.columns} for a in corr.columns},
+                    "inversions": inversions,
+                },
+            ))
+
+    return findings
+
+
+# ─── Phase 4: unknown_unknowns ─────────────────────────────────────────
+
+
+async def run_unknown_unknowns(pool) -> list[AuditFinding]:
+    findings: list[AuditFinding] = []
+
+    # Row-count velocity 7d vs prior 7d.
+    velocity_targets = [
+        ("prices_daily", "date"),
+        ("corporate_actions", "action_date"),
+        ("fundamentals_quarterly", "filing_date"),
+        ("sec_insider_transactions", "filing_date"),
+        ("aar_events", "recorded_at"),
+        ("application_log", "recorded_at"),
+    ]
+    for table, col in velocity_targets:
+        async with pool.acquire() as conn:
+            try:
+                row = await conn.fetchrow(f"""
+                    SELECT
+                        COUNT(*) FILTER (WHERE {col} > NOW() - INTERVAL '7 days') AS recent,
+                        COUNT(*) FILTER (WHERE {col} > NOW() - INTERVAL '14 days' AND {col} <= NOW() - INTERVAL '7 days') AS prior
+                    FROM platform.{table}
+                """)
+            except Exception as exc:  # noqa: BLE001
+                findings.append(AuditFinding(
+                    phase="unknown_unknowns", check_name="row_velocity",
+                    source=table, severity="WARN",
+                    summary=f"velocity check skipped: {exc}"[:120],
+                ))
+                continue
+        recent = int(row["recent"] or 0)
+        prior = int(row["prior"] or 0)
+        if prior == 0 and recent == 0:
+            continue
+        if prior == 0:
+            change_pct = float("inf")
+        else:
+            change_pct = (recent - prior) / prior
+        severity = "OK"
+        if abs(change_pct) > 0.5 and prior > 100:
+            severity = "WARN"
+        findings.append(AuditFinding(
+            phase="unknown_unknowns", check_name="row_velocity",
+            source=table, severity=severity,
+            summary=f"{table}: {recent:,} rows last 7d vs {prior:,} prior 7d ({change_pct:+.1%})",
+            evidence={"recent_7d": recent, "prior_7d": prior, "change_pct": change_pct if change_pct != float('inf') else None},
+        ))
+
+    # Sudden macro stoppage — most recent value > 3σ from 90-day mean.
+    async with pool.acquire() as conn:
+        macro_rows = await conn.fetch("""
+            SELECT indicator, date, value FROM platform.macro_indicators
+            WHERE date >= CURRENT_DATE - INTERVAL '120 days'
+            ORDER BY indicator, date
+        """)
+    series: dict[str, list[tuple[Any, float]]] = {}
+    for r in macro_rows:
+        series.setdefault(r["indicator"], []).append((r["date"], float(r["value"])))
+    for ind, pts in series.items():
+        if len(pts) < 20:
+            continue
+        values = [v for _, v in pts]
+        latest_v = values[-1]
+        mean = statistics.mean(values[:-1])
+        stdev = statistics.pstdev(values[:-1])
+        if stdev == 0:
+            continue
+        z = (latest_v - mean) / stdev
+        if abs(z) > 3.0:
+            findings.append(AuditFinding(
+                phase="unknown_unknowns", check_name="macro_stoppage_3sigma",
+                source=f"macro:{ind}", severity="WARN",
+                summary=f"{ind} latest {latest_v:.3f} is {z:+.2f}σ from 90-day mean ({mean:.3f}±{stdev:.3f})",
+                evidence={"indicator": ind, "z": z, "latest": latest_v, "mean": mean, "stdev": stdev},
+            ))
+
+    # Liquidity tier distribution shift (current vs ~30 days ago).
+    async with pool.acquire() as conn:
+        cur = await conn.fetch("""
+            SELECT tier, COUNT(*) AS n FROM platform.liquidity_tiers
+            WHERE last_updated > NOW() - INTERVAL '40 days'
+            GROUP BY tier ORDER BY tier
+        """)
+    if cur:
+        total = sum(r["n"] for r in cur) or 1
+        dist = {int(r["tier"]): int(r["n"]) for r in cur}
+        findings.append(AuditFinding(
+            phase="unknown_unknowns", check_name="tier_distribution",
+            source="liquidity_tiers", severity="OK",
+            summary=f"tier distribution: {dict(sorted(dist.items()))} (total {total})",
+            evidence={"distribution": dist, "pct": {k: round(v/total, 3) for k, v in dist.items()}},
+        ))
+
+    # Engine signal silence (zero signals last 7d but had signals in prior 23d).
+    async with pool.acquire() as conn:
+        sig_rows = await conn.fetch("""
+            SELECT engine,
+                   COUNT(*) FILTER (WHERE recorded_at > NOW() - INTERVAL '7 days') AS recent,
+                   COUNT(*) FILTER (WHERE recorded_at > NOW() - INTERVAL '30 days'
+                                    AND recorded_at <= NOW() - INTERVAL '7 days') AS prior
+            FROM platform.application_log
+            WHERE event_type='SIGNAL'
+              AND recorded_at > NOW() - INTERVAL '30 days'
+            GROUP BY engine ORDER BY engine
+        """)
+    for r in sig_rows:
+        recent, prior = int(r["recent"] or 0), int(r["prior"] or 0)
+        if recent == 0 and prior > 0:
+            findings.append(AuditFinding(
+                phase="unknown_unknowns", check_name="signal_silence",
+                source=f"engine:{r['engine']}", severity="WARN",
+                summary=f"{r['engine']}: 0 signals last 7d (had {prior} in prior 23d) — possible silent universe failure",
+                evidence={"engine": r["engine"], "recent_7d": 0, "prior_23d": prior},
+                recommended_action=f"check {r['engine']} setup_detection + upstream data",
+            ))
+
+    # Database size growth (best-effort; depends on permissions).
+    try:
+        async with pool.acquire() as conn:
+            size_bytes = await conn.fetchval("SELECT pg_database_size(current_database())")
+            findings.append(AuditFinding(
+                phase="unknown_unknowns", check_name="db_size",
+                source="postgres", severity="OK",
+                summary=f"db size: {int(size_bytes)/1e9:.2f} GB",
+                evidence={"size_bytes": int(size_bytes)},
+            ))
+    except Exception as exc:  # noqa: BLE001
+        findings.append(AuditFinding(
+            phase="unknown_unknowns", check_name="db_size",
+            source="postgres", severity="WARN",
+            summary=f"pg_database_size unavailable: {str(exc)[:120]}",
+        ))
+
+    # Correlated multi-source staleness.
+    async with pool.acquire() as conn:
+        stale_sources = []
+        for ds in DATA_SOURCES:
+            row = await conn.fetchrow(
+                f"SELECT MAX({ds.timestamp_col}) AS mx FROM {ds.table} {ds.where_clause}"
+            )
+            mx = row["mx"]
+            if mx is None:
+                continue
+            age_days = (datetime.now(UTC).date() - (mx.date() if isinstance(mx, datetime) else mx)).days
+            if age_days > ds.freshness_days:
+                stale_sources.append((ds.name, age_days))
+    if len(stale_sources) >= 3:
+        findings.append(AuditFinding(
+            phase="unknown_unknowns", check_name="correlated_staleness",
+            source="multi_source", severity="FAIL",
+            summary=f"{len(stale_sources)} sources stale simultaneously — likely upstream outage, not individual failures",
+            evidence={"stale": stale_sources},
+            recommended_action="check Alpaca/FMP/FRED reachability before remediating per-source",
+        ))
+    elif stale_sources:
+        findings.append(AuditFinding(
+            phase="unknown_unknowns", check_name="correlated_staleness",
+            source="multi_source", severity="OK",
+            summary=f"{len(stale_sources)} source(s) individually stale (no correlation pattern)",
+            evidence={"stale": stale_sources},
+        ))
+    else:
+        findings.append(AuditFinding(
+            phase="unknown_unknowns", check_name="correlated_staleness",
+            source="multi_source", severity="OK",
+            summary="all data sources within freshness thresholds",
+        ))
+
+    return findings
+
+
+# ─── Output + persistence ──────────────────────────────────────────────
+
+
+def _render_stdout(findings: list[AuditFinding]) -> None:
+    by_phase: dict[str, list[AuditFinding]] = {}
+    for f in findings:
+        by_phase.setdefault(f.phase, []).append(f)
+
+    sev_glyph = {"OK": "🟢", "WARN": "🟡", "FAIL": "🔴"}
+    total = len(findings)
+    counts = {s: sum(1 for f in findings if f.severity == s) for s in ("OK", "WARN", "FAIL")}
+    print(f"\nPIPELINE AUDIT — {datetime.now(UTC):%Y-%m-%d %H:%M UTC}")
+    print(f"  total: {total}  🟢 {counts['OK']}  🟡 {counts['WARN']}  🔴 {counts['FAIL']}")
+    print("=" * 76)
+
+    for phase in ("known_knowns", "known_unknowns", "unknown_knowns", "unknown_unknowns"):
+        if phase not in by_phase:
+            continue
+        rows = by_phase[phase]
+        ok = sum(1 for f in rows if f.severity == "OK")
+        warn = sum(1 for f in rows if f.severity == "WARN")
+        fail = sum(1 for f in rows if f.severity == "FAIL")
+        print(f"\n### {phase}  ({len(rows)} checks · 🟢 {ok} 🟡 {warn} 🔴 {fail})")
+        for f in rows:
+            print(f"  {sev_glyph[f.severity]} {f.check_name:<24} {f.source:<22} {f.summary}")
+            if f.recommended_action and f.severity != "OK":
+                print(f"        → {f.recommended_action}")
+
+
+async def _persist(pool, findings: list[AuditFinding], run_ts: datetime) -> None:
+    """Write each finding as its own row in ``platform.data_quality_log``.
+
+    Source key: ``pipeline_audit.<phase>.<check_name>.<source>`` —
+    includes the finding's source so multiple findings under the same
+    (phase, check_name) — e.g. one freshness row per data source —
+    don't collide on the ``(source, timestamp)`` unique constraint.
+    """
+    rows = []
+    for f in findings:
+        confidence = {"OK": Decimal("1.000"), "WARN": Decimal("0.700"), "FAIL": Decimal("0.000")}[f.severity]
+        # Replace any chars that make the source key awkward to parse later.
+        clean_source = f.source.replace(":", "-")
+        rows.append((
+            f"pipeline_audit.{f.phase}.{f.check_name}.{clean_source}",
+            run_ts,
+            0,
+            0,
+            f.severity != "OK",
+            confidence,
+            json.dumps({
+                "summary": f.summary, "severity": f.severity,
+                "evidence": _jsonify(f.evidence),
+                "recommended_action": f.recommended_action,
+            })[:8000],
+        ))
+    if not rows:
+        return
+    async with pool.acquire() as conn:
+        # ON CONFLICT DO NOTHING — re-running the audit within the same
+        # second is rare but a no-op if it happens (idempotent).
+        await conn.executemany(
+            """
+            INSERT INTO platform.data_quality_log
+                (source, timestamp, latency_ms, missing_bars, stale, confidence, notes)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (source, timestamp) DO NOTHING
+            """,
+            rows,
+        )
+
+
+# ─── Main ──────────────────────────────────────────────────────────────
+
+
+PHASES = {
+    "known_knowns":     run_known_knowns,
+    "known_unknowns":   run_known_unknowns,
+    "unknown_knowns":   run_unknown_knowns,
+    "unknown_unknowns": run_unknown_unknowns,
+}
+
+
+async def amain(args: argparse.Namespace) -> int:
+    db_url = os.environ.get("DATABASE_URL")
+    if not db_url:
+        print("ERROR: DATABASE_URL not set", file=sys.stderr)
+        return 1
+    pool = await build_asyncpg_pool(db_url)
+    run_ts = datetime.now(UTC)
+    try:
+        phases = [args.phase] if args.phase else list(PHASES.keys())
+        findings: list[AuditFinding] = []
+        for ph in phases:
+            if ph not in PHASES:
+                print(f"unknown phase: {ph}", file=sys.stderr)
+                return 1
+            findings.extend(await PHASES[ph](pool))
+
+        if args.source:
+            findings = [f for f in findings if f.source == args.source]
+
+        if args.json:
+            print(json.dumps([f.to_dict() for f in findings], indent=2, default=str))
+        elif not args.silent:
+            _render_stdout(findings)
+
+        await _persist(pool, findings, run_ts)
+
+        exit_code = 0
+        if args.strict and any(f.severity == "FAIL" for f in findings):
+            exit_code = 2
+        elif any(f.severity == "FAIL" and f.phase == "known_knowns" for f in findings):
+            exit_code = 1
+        return exit_code
+    finally:
+        await pool.close()
+
+
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    p.add_argument("--json", action="store_true", help="machine-readable JSON output")
+    p.add_argument("--source", default=None, help="filter findings to a single source name")
+    p.add_argument("--phase", choices=list(PHASES.keys()), default=None,
+                   help="audit only one phase")
+    p.add_argument("--silent", action="store_true", help="suppress stdout, only persist to data_quality_log")
+    p.add_argument("--strict", action="store_true",
+                   help="exit non-zero on any FAIL across all phases (default: only known_knowns failures)")
+    return p.parse_args(argv)
+
+
+def main() -> None:  # pragma: no cover — CLI shim
+    raise SystemExit(asyncio.run(amain(_parse_args())))
+
+
+if __name__ == "__main__":  # pragma: no cover
+    main()
