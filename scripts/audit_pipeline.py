@@ -215,19 +215,43 @@ async def run_known_knowns(pool, sink: _FindingSink | None = None) -> list[Audit
             ))
 
     # Ingestion-job state.
+    #
+    # ``platform.ingestion_jobs`` is the *Railway* ingestion-engine's
+    # bookkeeping table. Railway has been paused since 2026-05-12, so
+    # those rows are frozen at whatever state the daemon last left them
+    # — a `last_status='failed'` there is NOT necessarily an active
+    # failure. The authoritative signal for the local execution
+    # environment is the most-recent successful INGESTION_COMPLETE
+    # event in ``application_log`` for that stage. So a frozen "failed"
+    # row whose stage has since completed successfully via the local
+    # ops pipeline is *resolved*, not failing. Only a job with NO
+    # superseding local success is a true FAIL.
     async with pool.acquire() as conn:
         jobs = await conn.fetch("""
             SELECT job_name, enabled, last_run_at, last_status, last_error
             FROM platform.ingestion_jobs ORDER BY job_name
         """)
+        local_success = await conn.fetch("""
+            SELECT data->>'stage' AS stage, MAX(recorded_at) AS last_ok
+            FROM platform.application_log
+            WHERE event_type = 'INGESTION_COMPLETE'
+              AND recorded_at > NOW() - INTERVAL '7 days'
+            GROUP BY data->>'stage'
+        """)
+    last_ok_by_stage = {r["stage"]: r["last_ok"] for r in local_success if r["stage"]}
     if jobs:
         disabled = [j for j in jobs if not j["enabled"]]
-        failed = [j for j in jobs if j["last_status"] not in (None, "success", "completed", "skipped")]
-        stale = []
-        now = datetime.now(UTC)
-        for j in jobs:
-            if j["last_run_at"] is not None and (now - j["last_run_at"]).days > 14:
-                stale.append(j)
+        raw_failed = [j for j in jobs if j["last_status"] not in (None, "success", "completed", "skipped")]
+        truly_failed = []
+        stale_resolved = []
+        for j in raw_failed:
+            local_ok = last_ok_by_stage.get(j["job_name"])
+            if local_ok is not None and (
+                j["last_run_at"] is None or local_ok > j["last_run_at"]
+            ):
+                stale_resolved.append((j, local_ok))
+            else:
+                truly_failed.append(j)
         if disabled:
             findings.append(AuditFinding(
                 phase="known_knowns", check_name="ingestion_jobs",
@@ -235,18 +259,36 @@ async def run_known_knowns(pool, sink: _FindingSink | None = None) -> list[Audit
                 summary=f"{len(disabled)} job(s) disabled",
                 evidence={"jobs": [j["job_name"] for j in disabled]},
             ))
-        if failed:
+        if truly_failed:
             findings.append(AuditFinding(
                 phase="known_knowns", check_name="ingestion_jobs",
                 source="ingestion_jobs", severity="FAIL",
-                summary=f"{len(failed)} job(s) failed on last run",
-                evidence={"jobs": [(j["job_name"], j["last_status"], (j["last_error"] or "")[:120]) for j in failed]},
+                summary=f"{len(truly_failed)} job(s) failed with no superseding local success",
+                evidence={"jobs": [(j["job_name"], j["last_status"], (j["last_error"] or "")[:120]) for j in truly_failed]},
+                recommended_action="re-run the stage via scripts/run_data_operations.sh and inspect the error",
             ))
-        if not (disabled or failed):
+        if stale_resolved:
             findings.append(AuditFinding(
                 phase="known_knowns", check_name="ingestion_jobs",
                 source="ingestion_jobs", severity="OK",
-                summary=f"all {len(jobs)} ingestion jobs enabled and last-run OK",
+                summary=(
+                    f"{len(stale_resolved)} frozen Railway-era failure(s) superseded by "
+                    f"successful local INGESTION_COMPLETE — resolved, not failing"
+                ),
+                evidence={"resolved": [
+                    {"job": j["job_name"], "frozen_status": j["last_status"],
+                     "frozen_at": str(j["last_run_at"]), "local_success_at": str(ok)}
+                    for j, ok in stale_resolved
+                ]},
+            ))
+        if not (disabled or truly_failed):
+            findings.append(AuditFinding(
+                phase="known_knowns", check_name="ingestion_jobs",
+                source="ingestion_jobs", severity="OK",
+                summary=(
+                    f"all {len(jobs)} ingestion jobs healthy"
+                    + (f" ({len(stale_resolved)} frozen Railway-era rows superseded by local runs)" if stale_resolved else "")
+                ),
             ))
 
     # Sentinel basket presence.
