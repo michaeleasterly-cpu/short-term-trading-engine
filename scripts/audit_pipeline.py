@@ -502,20 +502,26 @@ async def run_known_unknowns(pool, sink: _FindingSink | None = None) -> list[Aud
             recommended_action=None if ok else "verify hy_spread isn't being refreshed by mistake",
         ))
 
-    # Multi-day gaps in prices_daily — scoped to LIQUID COMMON STOCKS.
+    # Multi-day gaps in prices_daily — a CURRENT hole on a GENUINELY
+    # LIQUID name (recalibrated 2026-05-15, expert pass).
     #
-    # A naive "any ticker with a >7-day gap" check is pure noise: SPAC
-    # units (tickers ending 'U'), preferred shares / baby bonds
-    # (asset_class='fund'), and sub-tier micro-caps routinely don't
-    # trade for weeks. Alpaca correctly returns no bar for a no-trade
-    # day, so a "gap" there is normal market behaviour, not missing
-    # data. (Investigated 2026-05-15: 821 raw gaps / 250 tickers, ~90%
-    # SPAC units; every actually-liquid name — AAPL/SPY/TLT/… — had
-    # ZERO gaps.) The check's real value is catching a *liquid* name
-    # that suddenly stops getting bars (the SPY incident class). So
-    # restrict to asset_class='stock' AND tier <= 2 — where a multi-day
-    # gap genuinely implies an ingestion failure. SPAC/fund/illiquid
-    # sparsity is expected and excluded by design.
+    # tier<=2 + asset_class='stock' alone was insufficient: it still
+    # caught (a) thin tier-1 names whose spread is tight but which
+    # barely trade (MAYS avg vol 2,693; KELYB 18K) — expected sparsity;
+    # (b) post-IPO halts (SHAZ); (c) historical exchange halts on
+    # collapsing micro-caps (AREB: 38-day halt during a $9→$0.17
+    # implosion, resumed weeks ago). None are ingestion failures. The
+    # check's ONLY real target is the SPY-incident class: a name that
+    # actually trades every day silently stops getting bars *right now*.
+    # That is isolated by THREE conditions together:
+    #   1. tier<=2 AND asset_class='stock'         (not SPAC/fund)
+    #   2. avg daily volume (60d) >= 500,000       (genuinely liquid —
+    #      excludes thin tier-1 + most post-IPO/halted micro-caps)
+    #   3. gap_end within the last 14 calendar days (a CURRENT hole, not
+    #      a historical halt that already resolved — AREB's gap ended
+    #      weeks ago and must not flag)
+    # A liquid name with a brand-new multi-day hole is unambiguously an
+    # ingest failure worth acting on; everything else is market reality.
     async with pool.acquire() as conn:
         gap_rows = await conn.fetch("""
             WITH liquid AS (
@@ -524,11 +530,20 @@ async def run_known_unknowns(pool, sink: _FindingSink | None = None) -> list[Aud
                 JOIN platform.ticker_classifications tc ON tc.ticker = lt.ticker
                 WHERE lt.tier <= 2 AND tc.asset_class = 'stock'
             ),
+            vol AS (
+                SELECT pd.ticker, AVG(pd.volume) AS avg_vol_60d
+                FROM platform.prices_daily pd
+                JOIN liquid USING (ticker)
+                WHERE pd.delisted = false
+                  AND pd.date >= CURRENT_DATE - INTERVAL '60 days'
+                GROUP BY pd.ticker
+                HAVING AVG(pd.volume) >= 500000
+            ),
             per_ticker AS (
                 SELECT pd.ticker, pd.date,
                        LAG(pd.date) OVER (PARTITION BY pd.ticker ORDER BY pd.date) AS prev_date
                 FROM platform.prices_daily pd
-                JOIN liquid USING (ticker)
+                JOIN vol USING (ticker)
                 WHERE pd.delisted = false
                   AND pd.date >= CURRENT_DATE - INTERVAL '180 days'
             )
@@ -536,7 +551,8 @@ async def run_known_unknowns(pool, sink: _FindingSink | None = None) -> list[Aud
                    (date - prev_date) AS gap_days
             FROM per_ticker
             WHERE prev_date IS NOT NULL
-              AND (date - prev_date) > 7    -- > ~5 trading days
+              AND (date - prev_date) > 7                       -- > ~5 trading days
+              AND date >= CURRENT_DATE - INTERVAL '14 days'    -- CURRENT hole only
             ORDER BY (date - prev_date) DESC
             LIMIT 25
         """)
@@ -544,18 +560,22 @@ async def run_known_unknowns(pool, sink: _FindingSink | None = None) -> list[Aud
         findings.append(AuditFinding(
             phase="known_unknowns", check_name="prices_daily_gaps",
             source="prices_daily", severity="OK",
-            summary="no multi-day gaps in liquid common stocks (T1/T2, 180d) — SPAC/fund sparsity excluded by design",
+            summary=(
+                "no CURRENT (≤14d) multi-day gap on any genuinely-liquid "
+                "name (T1/T2 stock, 60d avg vol ≥ 500k) — thin/halted/"
+                "post-IPO sparsity excluded by design"
+            ),
         ))
     else:
         findings.append(AuditFinding(
             phase="known_unknowns", check_name="prices_daily_gaps",
             source="prices_daily", severity="WARN",
-            summary=f"{len(gap_rows)} liquid common stock(s) with multi-day gaps — possible ingestion failure",
-            evidence={"top_gaps": [
+            summary=f"{len(gap_rows)} liquid name(s) with a CURRENT multi-day bar gap — ingestion failure",
+            evidence={"gaps": [
                 {"ticker": r["ticker"], "gap_start": str(r["gap_start"]), "gap_end": str(r["gap_end"]), "gap_days": int(r["gap_days"].days if hasattr(r["gap_days"], 'days') else r["gap_days"])}
                 for r in gap_rows[:10]
             ]},
-            recommended_action="liquid name with a gap is unexpected — re-run daily_bars (end_offset_days=1) for these tickers and check Alpaca coverage",
+            recommended_action="genuinely-liquid name with a fresh gap = real ingest failure — `ops.py --stage daily_bars --param universe=active --param lookback_days=14 --param end_offset_days=1 --param force_refresh=true --force`",
         ))
 
     # ETF AR mis-estimation (T3/T4 ETFs with median_spread > 0.5%).
@@ -773,24 +793,45 @@ async def run_unknown_knowns(pool, sink: _FindingSink | None = None) -> list[Aud
 async def run_unknown_unknowns(pool, sink: _FindingSink | None = None) -> list[AuditFinding]:
     findings: list[AuditFinding] = sink if sink is not None else []
 
-    # Row-count velocity 7d vs prior 7d.
+    # Row-count velocity — CADENCE-AWARE (recalibrated 2026-05-15).
+    #
+    # A flat 7d-vs-prior-7d delta is the right signal for daily-cadence
+    # tables (it correctly caught the prices_daily coverage collapse:
+    # daily bars should accrue ~continuously, so a sharp drop = real
+    # ingest failure). It is structural NOISE for sporadic-cadence
+    # tables — corporate_actions (event-driven: splits/dividends
+    # cluster around ex-div/earnings) and fundamentals_quarterly
+    # (quarterly filings) legitimately swing 80%+ week to week. For
+    # those the only real failure is *sustained silence*: zero rows
+    # over 30d while the 90d history shows regular activity = a stalled
+    # ingest. (table, timestamp_col, cadence).
     velocity_targets = [
-        ("prices_daily", "date"),
-        ("corporate_actions", "action_date"),
-        ("fundamentals_quarterly", "filing_date"),
-        ("sec_insider_transactions", "filing_date"),
-        ("aar_events", "recorded_at"),
-        ("application_log", "recorded_at"),
+        ("prices_daily", "date", "daily"),
+        ("sec_insider_transactions", "filing_date", "daily"),
+        ("aar_events", "recorded_at", "daily"),
+        ("application_log", "recorded_at", "daily"),
+        ("corporate_actions", "action_date", "sporadic"),
+        ("fundamentals_quarterly", "filing_date", "sporadic"),
     ]
-    for table, col in velocity_targets:
+    for table, col, cadence in velocity_targets:
         async with pool.acquire() as conn:
             try:
-                row = await conn.fetchrow(f"""
-                    SELECT
-                        COUNT(*) FILTER (WHERE {col} > NOW() - INTERVAL '7 days') AS recent,
-                        COUNT(*) FILTER (WHERE {col} > NOW() - INTERVAL '14 days' AND {col} <= NOW() - INTERVAL '7 days') AS prior
-                    FROM platform.{table}
-                """)
+                if cadence == "daily":
+                    row = await conn.fetchrow(f"""
+                        SELECT
+                            COUNT(*) FILTER (WHERE {col} > NOW() - INTERVAL '7 days') AS recent,
+                            COUNT(*) FILTER (WHERE {col} > NOW() - INTERVAL '14 days'
+                                             AND {col} <= NOW() - INTERVAL '7 days') AS prior
+                        FROM platform.{table}
+                    """)
+                else:
+                    row = await conn.fetchrow(f"""
+                        SELECT
+                            COUNT(*) FILTER (WHERE {col} > NOW() - INTERVAL '30 days') AS recent,
+                            COUNT(*) FILTER (WHERE {col} > NOW() - INTERVAL '120 days'
+                                             AND {col} <= NOW() - INTERVAL '30 days') AS prior
+                        FROM platform.{table}
+                    """)
             except Exception as exc:  # noqa: BLE001
                 findings.append(AuditFinding(
                     phase="unknown_unknowns", check_name="row_velocity",
@@ -802,19 +843,36 @@ async def run_unknown_unknowns(pool, sink: _FindingSink | None = None) -> list[A
         prior = int(row["prior"] or 0)
         if prior == 0 and recent == 0:
             continue
-        if prior == 0:
-            change_pct = float("inf")
+        if cadence == "daily":
+            change_pct = float("inf") if prior == 0 else (recent - prior) / prior
+            severity = "WARN" if (abs(change_pct) > 0.5 and prior > 100) else "OK"
+            findings.append(AuditFinding(
+                phase="unknown_unknowns", check_name="row_velocity",
+                source=table, severity=severity,
+                summary=f"{table}: {recent:,} rows last 7d vs {prior:,} prior 7d ({change_pct:+.1%})",
+                evidence={"recent_7d": recent, "prior_7d": prior,
+                          "change_pct": change_pct if change_pct != float('inf') else None,
+                          "cadence": "daily"},
+            ))
         else:
-            change_pct = (recent - prior) / prior
-        severity = "OK"
-        if abs(change_pct) > 0.5 and prior > 100:
-            severity = "WARN"
-        findings.append(AuditFinding(
-            phase="unknown_unknowns", check_name="row_velocity",
-            source=table, severity=severity,
-            summary=f"{table}: {recent:,} rows last 7d vs {prior:,} prior 7d ({change_pct:+.1%})",
-            evidence={"recent_7d": recent, "prior_7d": prior, "change_pct": change_pct if change_pct != float('inf') else None},
-        ))
+            # Sporadic: only sustained silence is a failure. WARN iff
+            # the source produced rows over the prior 90d but ZERO in
+            # the last 30d (stalled ingest). Otherwise informational.
+            silent = recent == 0 and prior > 0
+            findings.append(AuditFinding(
+                phase="unknown_unknowns", check_name="row_velocity",
+                source=table, severity="WARN" if silent else "OK",
+                summary=(
+                    f"{table} (sporadic): {recent:,} rows last 30d vs "
+                    f"{prior:,} prior 90d"
+                    + (" — SILENT (stalled ingest?)" if silent else " — within event-cadence variance")
+                ),
+                evidence={"recent_30d": recent, "prior_90d": prior, "cadence": "sporadic"},
+                recommended_action=(
+                    f"re-run the {table} stage — zero rows in 30d but history shows activity"
+                    if silent else None
+                ),
+            ))
 
     # Sudden macro stoppage — most recent value > 3σ from 90-day mean.
     async with pool.acquire() as conn:

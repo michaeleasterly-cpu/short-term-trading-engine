@@ -1,26 +1,33 @@
-"""One-shot baseline dump for the FULL-SNAPSHOT ingestion sources.
+"""One-shot baseline archive dump for the DB-baselineable sources.
 
 The CSV-first retrofit defends against vendor-side data truncation
 (FRED BAMLH0A0HYM2, 2026-05-15) by archiving every ingest before the
-DB upsert, then comparing each archive's row count to its predecessor
-(``tpcore.ingestion.csv_archive.detect_shrinkage``).
+DB upsert. Two distinct guarantees ride on the archive directory:
 
-That comparison is only meaningful for sources whose handler
-re-pulls the **entire history every run** — a sudden row-count drop
-then unambiguously means the vendor truncated. Two of the five
-retrofitted sources are full-snapshot:
+1. **Shrinkage detection** — only the *full-snapshot* sources
+   (``fred_macro``, ``alpaca_corporate_actions``) re-pull their entire
+   history every run, so ``detect_shrinkage`` comparing the new
+   archive's row count to its predecessor unambiguously catches a
+   vendor truncation. Shrinkage detection is wired ONLY for these two
+   (see the handlers — daily_bars/fundamentals/catalyst do not call
+   ``detect_shrinkage``).
 
-* ``fred_macro``               — FREDAdapter re-pulls 1996→now each run.
-* ``alpaca_corporate_actions`` — re-fetches 2018→now each run.
+2. **Presence** — the ``csv_archive_presence`` audit check requires
+   *an* archive on disk for every retrofitted source. ``fmp_fundamentals``
+   and ``fmp_catalyst_events`` archive only the incremental slice each
+   run, so they have no archive until their handler next fires — which
+   leaves ``csv_archive_presence`` WARN-yellow indefinitely. Seeding a
+   one-time baseline from current DB state satisfies presence and is
+   completely safe: there is NO shrinkage comparator on these sources
+   to "poison" (point 1). The earlier "no baseline by design" reasoning
+   conflated the two guarantees — corrected 2026-05-15.
 
-The other three (``alpaca_daily_bars``, ``fmp_fundamentals``,
-``fmp_catalyst_events``) archive only the **incremental slice** touched
-that run. A full-table baseline would be the wrong comparator for them
-— the next incremental run would look like a 99% "shrinkage" and fire
-a false alarm. Their shrinkage detection works naturally run-over-run
-once two real ingests exist; no baseline is needed (and a full one
-would poison it). This script therefore ONLY seeds the two
-full-snapshot sources.
+This script therefore seeds every source that can be dumped from the
+DB: the 2 shrinkage sources + the 2 presence-only incremental sources.
+``alpaca_daily_bars`` is excluded — ~20M rows make a one-shot dump
+impractical, and it self-archives on every handler run (so its
+presence is satisfied by the normal/parameterised stage run, not a
+baseline).
 
 Idempotent: re-running writes a fresh dated baseline.
 
@@ -44,8 +51,11 @@ from tpcore.ingestion.csv_archive import write_archive
 logger = structlog.get_logger(__name__)
 
 
-# Full-snapshot sources ONLY — (source, table, fieldnames, ORDER BY).
-FULL_SNAPSHOT_SOURCES: tuple[tuple[str, str, list[str], str], ...] = (
+# Every DB-baselineable source — (source, table, fieldnames, ORDER BY).
+# First two: full-snapshot, feed shrinkage detection. Last two:
+# presence-only incremental sources (no shrinkage comparator to poison).
+# alpaca_daily_bars excluded (size + self-archives every handler run).
+BASELINE_SOURCES: tuple[tuple[str, str, list[str], str], ...] = (
     (
         "fred_macro",
         "platform.macro_indicators",
@@ -57,6 +67,24 @@ FULL_SNAPSHOT_SOURCES: tuple[tuple[str, str, list[str], str], ...] = (
         "platform.corporate_actions",
         ["ticker", "action_date", "action_type", "ratio", "raw_data", "recorded_at"],
         "ticker, action_date",
+    ),
+    (
+        "fmp_fundamentals",
+        "platform.fundamentals_quarterly",
+        [
+            "ticker", "filing_date", "period_end_date", "period_label",
+            "net_income", "fcf", "operating_cash_flow", "capex", "revenue",
+            "total_assets", "total_liabilities", "current_assets",
+            "current_liabilities", "receivables", "cash_and_equivalents",
+            "shares_outstanding", "pb", "de", "recorded_at",
+        ],
+        "ticker, period_end_date",
+    ),
+    (
+        "fmp_catalyst_events",
+        "platform.catalyst_events",
+        ["ticker", "event_date", "event_type", "magnitude_pct", "source", "recorded_at"],
+        "ticker, event_date",
     ),
 )
 
@@ -82,18 +110,18 @@ async def amain() -> int:
     pool = await build_asyncpg_pool(db_url)
     started = datetime.now(UTC)
     try:
-        print(f"Baseline archive dump (full-snapshot sources) — {started:%Y-%m-%d %H:%M:%S UTC}")
+        print(f"Baseline archive dump — {started:%Y-%m-%d %H:%M:%S UTC}")
         total = 0
-        for source, table, fields, order_by in FULL_SNAPSHOT_SOURCES:
+        for source, table, fields, order_by in BASELINE_SOURCES:
             try:
                 total += await _dump_one(pool, source, table, fields, order_by)
             except Exception as exc:  # noqa: BLE001
                 print(f"  {source:<28}: FAILED — {exc}", file=sys.stderr)
         elapsed = (datetime.now(UTC) - started).total_seconds()
         print(f"\ntotal rows archived: {total:,}  ({elapsed:.1f}s)")
-        print("\nNote: alpaca_daily_bars / fmp_fundamentals / fmp_catalyst_events")
-        print("are incremental-archive sources — no baseline by design (a full")
-        print("baseline would false-flag their next incremental run as shrinkage).")
+        print("\nNote: alpaca_daily_bars is excluded (~20M rows; it self-archives")
+        print("on every handler run, so csv_archive_presence is satisfied by the")
+        print("normal/parameterised daily_bars stage, not a baseline dump).")
         return 0
     finally:
         await pool.close()
