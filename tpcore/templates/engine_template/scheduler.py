@@ -24,6 +24,9 @@ Compliance contract (STYLE_GUIDE.md "Engine plug compliance"):
 * When emitting SIGNAL events via ``DBLogHandler.signal(...)``, pass
   ``extra_data={"filter_diagnostics": diag.model_dump(exclude_none=True)}``
   so the dashboard can render per-gate pass/block counters.
+* Add this engine to the ``for engine in ...; do`` loop in
+  ``scripts/run_smoke_test.sh`` step 3 — that's the canonical
+  per-engine scheduler-dry-run smoke before paper-trading.
 """
 from __future__ import annotations
 

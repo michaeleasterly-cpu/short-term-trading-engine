@@ -114,6 +114,12 @@ by construction.
   `tpcore.order_ids.ENGINE_PREFIX`, cancel any still-open ones, then
   submit. Skipping this leaves positions `held_for_orders` and the next
   rebalance's sells are rejected.
+- **Add the engine to `scripts/run_smoke_test.sh`.** That script's step
+  3 is the canonical per-engine scheduler-dry-run gate before paper-
+  trading. New engines go into the `for engine in ...; do` loop at
+  build time — not after the operator asks. Without this line a
+  cross-engine refactor that breaks the engine's scheduler won't
+  surface in the smoke check.
 
 When a new engine surfaces a compliance pattern the checklist doesn't
 cover yet, extend this section and §10 of the checklist together.

@@ -58,6 +58,7 @@ Template: copy `tpcore/templates/engine_template/` as the starting point — it 
 - [ ] `<engine_name>/scheduler.py` exposes a `run_once` (or analogous) async entry point.
 - [ ] Engine is dispatched by `ops/engine_service.py` on the `DAILY_SCAN_COMPLETE` trigger. **Not** called from `scripts/run_data_operations.sh` — data ops and engine execution are decoupled.
 - [ ] Idempotent: re-running `run_once` within the same session doesn't duplicate orders (relies on `(engine, trade_id, order_type)` unique constraint on `platform.open_orders`).
+- [ ] Engine appears in the per-engine scheduler-dry-run loop in `scripts/run_smoke_test.sh` (step 3). One-line `for engine in ... <engine_name>; do` addition — operator must not need to remember a separate smoke command.
 
 ## 8. Backtest + credibility
 
@@ -110,6 +111,13 @@ running these before merge prevents the same gaps in the next engine.
       Mirrors `MomentumScheduler._cancel_stale_momentum_orders`. Without
       this, an unfilled prior order leaves the position `held_for_orders`
       and the next sell is rejected.
+- [ ] **Engine is in `scripts/run_smoke_test.sh` per-engine loop.**
+      `grep "<engine>" scripts/run_smoke_test.sh` returns a hit inside
+      the `for engine in ...; do` line. Why: `run_smoke_test.sh` is the
+      canonical "did anything regress" gate before paper-trading; if
+      the engine isn't in the loop, future cross-engine refactors won't
+      catch breakage in its scheduler. One-line addition at engine
+      build time — not an afterthought.
 
 These six rules also live in `docs/STYLE_GUIDE.md` (the canonical Don't-Do
 list) and the scaffolds at `tpcore/templates/engine_template/` so a fresh
