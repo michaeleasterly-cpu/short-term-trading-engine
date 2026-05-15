@@ -11,7 +11,7 @@ Sequence:
        during NYSE regular session (the underlying stages enforce
        that); pass ``--force`` to bypass.
     2. ``scripts/run_all_engines.sh`` — runs sigma → reversion →
-       vector → momentum schedulers back-to-back. Each engine handles
+       vector → momentum → sentinel schedulers back-to-back. Each engine handles
        its own market-closed / no-rebalance / no-candidates gating.
 
 Flags:
