@@ -143,6 +143,43 @@ historical base is already archived via the one-shot backfill scripts —
 worst case we'd lose 1 day of deltas, not 30 years of history. Worth
 revisiting only after FRED is fixed.
 
+## Performance — daily_bars multi-symbol fetch
+
+**Switch the `daily_bars` active path to `fetch_daily_bars_multi`.**
+
+`tpcore/ingestion/handlers.py::_handle_daily_bars_explicit` fetches one
+ticker per HTTP call with a hard `_RATE_LIMIT_SLEEP_SEC = 0.35` sleep
+after each. With the universe at ~7,669 active tickers that's a
+~45-minute *pure rate-limit floor* (7,669 × 0.35s), and ~60–75 min
+wall once HTTP + upsert are added — making `daily_bars` ~60% of the
+full ~1.5–2 hr daily `ops.py --update`.
+
+`tpcore/data/ingest_alpaca_bars.py::fetch_daily_bars_multi` already
+exists and pulls bars for *many symbols in one request* (Alpaca's
+`/v2/stocks/bars?symbols=A,B,C…` multi endpoint, same one
+`handle_corporate_actions` uses in 20-symbol chunks). Batching the
+active path at, say, 100–200 symbols/request collapses ~7,669 calls →
+~40–80 calls — cutting the rate-limit floor from ~45 min to well
+under 5 min.
+
+Scope:
+- Rewire `_handle_daily_bars_explicit` to chunk `symbols` and call
+  `fetch_daily_bars_multi` instead of the per-symbol `fetch_daily_bars`
+  loop. Keep the existing `end_offset_days`, `_upsert_bars`, and
+  per-chunk failure handling.
+- Preserve the CSV-first archive write (added 2026-05-15) — it already
+  collects `archive_rows` across the loop; just move the collection
+  into the chunked path.
+- Verify multi-endpoint pagination + the SIP `end=today` 403 behaviour
+  still hold per chunk; keep `@with_retry` semantics.
+- Re-run a full `daily_bars` and confirm coverage parity (all ~7,460
+  daily tickers) at the new speed.
+
+Priority: medium. Not urgent while daily ops run overnight off the
+trade-submit window, but the single biggest latency lever on the
+pipeline and a prerequisite if daily-update ever needs to run closer
+to market open.
+
 ## Publishing
 
 - **Publish a GitHub gist of the entire project.** Scope: everything —
