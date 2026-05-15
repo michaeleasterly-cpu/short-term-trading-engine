@@ -45,7 +45,7 @@ from sentinel.plugs.setup_detection import (
     compute_spy_rally_pct,
     compute_vix_proxy_series,
     scale_raw_to_100,
-    score_hy_spread,
+    score_credit_spread,
     score_industrial_production,
     score_initial_claims,
     score_sahm_rule,
@@ -90,13 +90,31 @@ class TestBearScoreSubScorers:
         # Missing → 0.
         assert score_yield_curve(None, Decimal("-0.30")) == 0
 
-    def test_hy_spread_requires_above_500bps_and_widening(self) -> None:
-        # 5.20 > 5.00, widening (latest > prior).
-        assert score_hy_spread(Decimal("5.20"), Decimal("4.90")) == 5
-        # Above threshold but tightening.
-        assert score_hy_spread(Decimal("5.20"), Decimal("5.30")) == 0
-        # Below threshold even when widening.
-        assert score_hy_spread(Decimal("4.90"), Decimal("4.50")) == 0
+    def test_credit_spread_graduated_tiers(self) -> None:
+        """Baa-10Y spread graduated scorer: Watch / Warning / Recession.
+
+        Replaces the prior HY OAS binary scorer (2026-05-15) after FRED
+        truncated BAMLH0A0HYM2. Anchors: GFC ~6%, COVID ~4.9%, calm ~2%.
+        """
+        # Below Watch threshold → 0 pts regardless of direction.
+        assert score_credit_spread(Decimal("2.50"), Decimal("2.30")) == 0
+        # Watch tier (>3.0% AND widening) → 2 pts.
+        assert score_credit_spread(Decimal("3.50"), Decimal("3.20")) == 2
+        # Watch threshold but tightening → 0 pts (recovery, not stress).
+        assert score_credit_spread(Decimal("3.50"), Decimal("3.60")) == 0
+        # Warning tier (>4.0% AND widening) → 3 pts.
+        assert score_credit_spread(Decimal("4.50"), Decimal("4.20")) == 3
+        # Warning level but tightening → 0 pts.
+        assert score_credit_spread(Decimal("4.50"), Decimal("4.80")) == 0
+        # Recession tier (>5.0%) → 5 pts regardless of direction.
+        assert score_credit_spread(Decimal("5.50"), Decimal("5.30")) == 5
+        assert score_credit_spread(Decimal("5.50"), Decimal("5.80")) == 5
+        # COVID anchor: 4.90% (just below 5%) AND widening → Warning.
+        assert score_credit_spread(Decimal("4.90"), Decimal("4.40")) == 3
+        # Missing latest → 0; missing prior at Recession still pays.
+        assert score_credit_spread(None, Decimal("4.0")) == 0
+        assert score_credit_spread(Decimal("5.50"), None) == 5
+        assert score_credit_spread(Decimal("3.50"), None) == 0
 
     def test_vix_proxy_high_with_ma_pays_full_else_partial(self) -> None:
         # > 25 AND > 200-day MA → 15.
@@ -161,7 +179,7 @@ def _make_breakdown_series(scores: list[int], start: date_t) -> dict[date_t, Bea
             industrial_production_pts=0,
             initial_claims_pts=0,
             yield_curve_pts=0,
-            hy_spread_pts=0,
+            credit_spread_pts=0,
             vix_pts=0,
             raw_total=raw,
             score=s,
@@ -466,7 +484,7 @@ class TestFilterDiagnosticsG2:
         macro["industrial_production"] = 100.0  # blocked (above 95)
         macro["initial_claims"] = 200000.0     # blocked
         macro["yield_curve"] = 0.20           # never inverted → blocked
-        macro["hy_spread"] = 3.0              # below threshold → blocked
+        macro["credit_spread"] = 2.5          # below Watch threshold → blocked
         spy_idx = pd.date_range("2024-01-01", periods=300, freq="D")
         spy = pd.Series(100.0, index=spy_idx, name="SPY")
 
@@ -485,7 +503,7 @@ class TestFilterDiagnosticsG2:
         assert diag.industrial_production_blocked == 1
         assert diag.initial_claims_blocked == 1
         assert diag.yield_curve_blocked == 1
-        assert diag.hy_spread_blocked == 1
+        assert diag.credit_spread_blocked == 1
         # VIX proxy on constant SPY → 0 vol → blocked.
         assert diag.vix_proxy_blocked == 1
 
@@ -497,7 +515,7 @@ class TestFilterDiagnosticsG2:
             universe_total=6, candidates_passed=2,
             sahm_rule_blocked=0, industrial_production_blocked=1,
             initial_claims_blocked=1, yield_curve_blocked=0,
-            hy_spread_blocked=1, vix_proxy_blocked=1,
+            credit_spread_blocked=1, vix_proxy_blocked=1,
         )
         dump = d.model_dump(exclude_none=True)
         assert "gate1_value_blocked" not in dump  # vector field — none

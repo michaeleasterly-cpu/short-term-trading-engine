@@ -462,11 +462,19 @@ contraction" (covers COVID April 2020 trough at 84.5), 90–95 implements
 "moderate contraction". Both thresholds are kept in `sentinel/models.py`
 with a comment explaining the divergence.
 
-**HY-spread data window (2026-05-15):** `hy_spread` is only loaded from
-2023-05-15 onward (FRED BAMLH0A0HYM2 ingestion start date). Backtests
-prior to that date score 0 pts for the HY contribution. No engine
-behavior change — this is a data-history limitation that will close
-naturally as the time series extends.
+**Credit-spread indicator swap (2026-05-15):** Originally used `hy_spread`
+(FRED `BAMLH0A0HYM2`, HY option-adjusted spread). FRED permanently
+truncated `BAMLH0A0HYM2` to a rolling 3-year window starting April 2026,
+so the pre-2023 history is no longer accessible. Replaced with
+`credit_spread` (FRED `BAA10Y` — Moody's seasoned Baa corporate bond
+yield minus 10-year Treasury). BAA10Y has full FRED history back to 1996,
+no truncation, and the same crisis correlation. The Bear Score sub-scorer
+was recalibrated to a 3-tier graduated structure (Watch >3.0% / Warning
+>4.0% / Recession >5.0%) at 2/3/5 pts respectively — preserves the 5-pt
+budget, so `RAW_SCORE_MAX` stays at 85. Historical `hy_spread` rows in
+`platform.macro_indicators` are retained for audit but no longer
+refreshed; `EXPECTED_INDICATORS` in the freshness check was updated to
+the new active 5.
 
 **Status (built; 2026-05-15):**
 - All five plugs implemented (`sentinel/plugs/`). 28 unit tests covering
@@ -560,7 +568,7 @@ Full database schema and data flow documentation: [`docs/DATABASE_AND_DATAFLOW.m
 | Supabase **Pro** ($25/mo, active) | Postgres + pooler. Upgraded 2026-05-11 from free tier after `prices_daily` crossed the 500 MB read-only lock; 8 GB disk gives headroom for the all-active universe. | $25 |
 | SEC EDGAR | Form 4 (insider transactions) + 8-K (material events) via `tpcore.sec.SECEdgarAdapter` → `platform.sec_insider_transactions` + `platform.sec_material_events`. Public API, no key — requires `SEC_EDGAR_USER_AGENT` env var per SEC fair-access. Integrated 2026-05-14 (reference implementation of the standard 5-stage data-adapter pipeline). | $0 |
 | ApeWisdom | Social sentiment *(spec-only; no adapter code as of 2026-05-14)* | $0 |
-| FRED | Macro indicators — Sahm Rule, industrial production (PMI proxy), 4-wk MA jobless claims, 10y-2y Treasury spread, HY OAS credit spread → `platform.macro_indicators` via `tpcore.fred.FREDAdapter`. Public REST API, free key required (`FRED_API_KEY`). Integrated 2026-05-14 — last data source from this list. Unblocks Sentinel engine. | $0 |
+| FRED | Macro indicators — Sahm Rule, industrial production (INDPRO), 4-wk MA jobless claims, 10y-2y Treasury spread, **Baa-10Y credit spread (BAA10Y)** → `platform.macro_indicators` via `tpcore.fred.FREDAdapter`. Public REST API, free key required (`FRED_API_KEY`). Integrated 2026-05-14. Credit-spread series swapped from BAMLH0A0HYM2 to BAA10Y on 2026-05-15 after FRED truncated the HY OAS history. | $0 |
 | FINRA / NASDAQ | Short interest (release-date matched) *(spec-only; no adapter code as of 2026-05-14)* | $0 |
 | IBorrowDesk | Borrow rates (scraped, fragile) *(spec-only; no adapter code as of 2026-05-14)* | $0 |
 
@@ -597,7 +605,7 @@ Verified row counts and coverage (audited 2026-05-14, post-data-layer normalizat
 | `platform.ticker_classifications` | 13,669 | Asset-class taxonomy (`stock` / `etf` / `spac` / `fund`) + ETF leverage/inverse/category flags for the sentinel engine. Backfilled from Alpaca `/v2/assets` + name-pattern classifier (2026-05-14). |
 | `platform.sec_insider_transactions` | **9,522 rows** (50 tickers, 2018-01-02 → 2026-05-13; first backfill landed 2026-05-14 09:11 UTC, 76-min runtime) | Form 4 insider BUY/SELL transactions parsed from SEC EDGAR. T1+T2 stock universe. |
 | `platform.sec_material_events` | **7,938 rows** (55 tickers, same window) | 8-K material events (one row per item code from the submissions index). T1+T2 stock universe. |
-| `platform.macro_indicators` | 0 → populated on first weekly `macro_indicators` ops-stage run after `FRED_API_KEY` is set. ~7 years × 5 series ≈ several thousand rows. | FRED macro time-series: sahm_rule, industrial_production, initial_claims, yield_curve, hy_spread. One row per indicator per observation date. Built 2026-05-14. |
+| `platform.macro_indicators` | ~17,500 rows (2026-05-15, after the 1996-onward backfill). | FRED macro time-series: sahm_rule, industrial_production, initial_claims, yield_curve, credit_spread (BAA10Y; was hy_spread/BAMLH0A0HYM2 until the 2026-05-15 swap — old rows retained for audit). One row per indicator per observation date. Built 2026-05-14. |
 | `platform.data_quality_log` | active | Receives rows from the Data Validation Suite, execution-quality tracker, and engine credibility scorer. |
 | `platform.aar_events` | 0 | Schema + writer implemented; populated by live paper trades once they fire. |
 | `platform.risk_state` | 1 | Postgres-backed Risk Governor persistence active. |

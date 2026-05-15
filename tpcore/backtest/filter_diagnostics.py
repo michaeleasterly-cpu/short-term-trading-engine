@@ -130,8 +130,14 @@ class FilterDiagnostics(BaseModel):
     yield_curve_blocked: int | None = Field(
         default=None, description="Sentinel: yield curve not in bear-steepener regime",
     )
-    hy_spread_blocked: int | None = Field(
-        default=None, description="Sentinel: HY spread not > 500 bps + widening",
+    credit_spread_blocked: int | None = Field(
+        default=None,
+        description=(
+            "Sentinel: Baa-10Y credit spread did not contribute (below 3% "
+            "Watch tier OR tightening at <5% level). Replaced "
+            "``hy_spread_blocked`` 2026-05-15 when FRED truncated "
+            "BAMLH0A0HYM2 and the sub-scorer switched to BAA10Y."
+        ),
     )
     vix_proxy_blocked: int | None = Field(
         default=None, description="Sentinel: VIX proxy not above 25",

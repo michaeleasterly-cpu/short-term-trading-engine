@@ -252,7 +252,7 @@ def _phase_history_rows(
                     "industrial_production_pts": bs.industrial_production_pts,
                     "initial_claims_pts": bs.initial_claims_pts,
                     "yield_curve_pts": bs.yield_curve_pts,
-                    "hy_spread_pts": bs.hy_spread_pts,
+                    "credit_spread_pts": bs.credit_spread_pts,
                     "vix_pts": bs.vix_pts,
                     "raw_total": bs.raw_total,
                     "indicators_missing": "|".join(bs.indicators_missing),

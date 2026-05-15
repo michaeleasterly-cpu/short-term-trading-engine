@@ -50,8 +50,19 @@ INITIAL_CLAIMS_POINTS = 10
 
 YIELD_CURVE_BEAR_STEEPENER_POINTS = 15
 
-HY_SPREAD_THRESHOLD = Decimal("5.00")  # 5.00% = 500 bps
-HY_SPREAD_POINTS = 5
+# Credit-spread (Moody's Baa - 10Y Treasury, BAA10Y) graduated scorer.
+# Replaced the BAMLH0A0HYM2 HY OAS-based sub-scorer on 2026-05-15 after
+# FRED truncated BAMLH0A0HYM2 to a rolling 3-year window. BAA10Y has full
+# FRED history from 1996, no truncation. Historical reference points:
+# GFC peak ~6% (600 bp), calm periods 200-250 bp, COVID peak ~4.9%.
+# Graduated thresholds preserve the existing 5-pt budget so RAW_SCORE_MAX
+# stays at 85.
+CREDIT_SPREAD_WATCH_THRESHOLD = Decimal("3.00")        # 300 bp
+CREDIT_SPREAD_WATCH_POINTS = 2
+CREDIT_SPREAD_WARNING_THRESHOLD = Decimal("4.00")      # 400 bp
+CREDIT_SPREAD_WARNING_POINTS = 3
+CREDIT_SPREAD_RECESSION_THRESHOLD = Decimal("5.00")    # 500 bp
+CREDIT_SPREAD_RECESSION_POINTS = 5
 
 VIX_PROXY_HIGH_THRESHOLD = Decimal("25.0")
 VIX_PROXY_HIGH_PLUS_MA_POINTS = 15
@@ -134,7 +145,7 @@ class BearScoreBreakdown(BaseModel):
     industrial_production_pts: int = Field(ge=0, le=INDUSTRIAL_PRODUCTION_HARD_POINTS)
     initial_claims_pts: int = Field(ge=0, le=INITIAL_CLAIMS_POINTS)
     yield_curve_pts: int = Field(ge=0, le=YIELD_CURVE_BEAR_STEEPENER_POINTS)
-    hy_spread_pts: int = Field(ge=0, le=HY_SPREAD_POINTS)
+    credit_spread_pts: int = Field(ge=0, le=CREDIT_SPREAD_RECESSION_POINTS)
     vix_pts: int = Field(ge=0, le=VIX_PROXY_HIGH_PLUS_MA_POINTS)
     raw_total: int = Field(ge=0, le=RAW_SCORE_MAX)
     score: int = Field(ge=0, le=SCALED_SCORE_MAX)
@@ -317,7 +328,9 @@ __all__ = [
     "INDUSTRIAL_PRODUCTION_SOFT_POINTS",
     "INITIAL_CLAIMS_THRESHOLD", "INITIAL_CLAIMS_POINTS",
     "YIELD_CURVE_BEAR_STEEPENER_POINTS",
-    "HY_SPREAD_THRESHOLD", "HY_SPREAD_POINTS",
+    "CREDIT_SPREAD_WATCH_THRESHOLD", "CREDIT_SPREAD_WATCH_POINTS",
+    "CREDIT_SPREAD_WARNING_THRESHOLD", "CREDIT_SPREAD_WARNING_POINTS",
+    "CREDIT_SPREAD_RECESSION_THRESHOLD", "CREDIT_SPREAD_RECESSION_POINTS",
     "VIX_PROXY_HIGH_THRESHOLD", "VIX_PROXY_HIGH_PLUS_MA_POINTS",
     "VIX_PROXY_HIGH_ONLY_POINTS",
     "RAW_SCORE_MAX", "SCALED_SCORE_MAX",

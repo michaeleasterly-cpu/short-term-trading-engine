@@ -7,7 +7,17 @@ listed in :data:`INDICATOR_SERIES` from the St. Louis Fed FRED API:
 * ``industrial_production`` — INDPRO (monthly PMI proxy)
 * ``initial_claims``       — IC4WSA (weekly 4-wk MA jobless claims)
 * ``yield_curve``          — T10Y2Y (daily 10y-2y Treasury spread)
-* ``hy_spread``            — BAMLH0A0HYM2 (daily HY OAS — credit stress)
+* ``credit_spread``        — BAA10Y (Moody's Seasoned Baa Corporate Bond
+                              Yield relative to the 10-Year Treasury,
+                              daily — credit stress proxy)
+
+**2026-05-15 — BAA10Y replaces BAMLH0A0HYM2.** FRED permanently truncated
+the HY OAS series (``BAMLH0A0HYM2``) to a rolling 3-year window starting
+April 2026; the full pre-2023 history is no longer accessible through
+any free source. BAA10Y is a free FRED series with full history back to
+1996, strong correlation with the HY OAS in crises, and no truncation.
+The historical ``hy_spread`` rows in ``platform.macro_indicators`` are
+retained for audit but no longer refreshed.
 
 FRED API docs: https://fred.stlouisfed.org/docs/api/fred/
 Rate limit: 120 requests per minute (we pull 5 series → 5 calls per
@@ -47,7 +57,7 @@ INDICATOR_SERIES: tuple[tuple[str, str], ...] = (
     ("industrial_production", "INDPRO"),
     ("initial_claims",       "IC4WSA"),
     ("yield_curve",          "T10Y2Y"),
-    ("hy_spread",            "BAMLH0A0HYM2"),
+    ("credit_spread",        "BAA10Y"),
 )
 """(canonical_name, FRED series_id) pairs — the platform's vocabulary
 on the left, FRED's identifier on the right. Adding a new indicator

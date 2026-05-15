@@ -34,8 +34,13 @@ EXPECTED_INDICATORS: tuple[str, ...] = (
     "industrial_production",
     "initial_claims",
     "yield_curve",
-    "hy_spread",
+    "credit_spread",
 )
+# ``hy_spread`` (BAMLH0A0HYM2) was the credit-stress indicator until
+# 2026-05-15, when FRED truncated the underlying series to a rolling 3-year
+# window. The active credit-stress indicator is now ``credit_spread``
+# (BAA10Y). Historical hy_spread rows in macro_indicators are retained
+# for audit but excluded from the freshness check (they'll never refresh).
 
 
 _SQL = """

@@ -333,7 +333,7 @@ Populated by the weekly `sec_filings` ops stage (`handle_sec_filings` in `tpcore
 - `industrial_production` ← `INDPRO` (monthly PMI proxy)
 - `initial_claims` ← `IC4WSA` (weekly 4-wk MA of jobless claims)
 - `yield_curve` ← `T10Y2Y` (daily 10y-2y Treasury spread)
-- `hy_spread` ← `BAMLH0A0HYM2` (daily HY option-adjusted spread — credit stress)
+- `credit_spread` ← `BAA10Y` (daily Moody's Baa - 10Y Treasury spread — credit stress; replaced `hy_spread`/`BAMLH0A0HYM2` 2026-05-15 after FRED truncated the HY OAS series to a rolling 3-year window)
 
 **Columns:**
 

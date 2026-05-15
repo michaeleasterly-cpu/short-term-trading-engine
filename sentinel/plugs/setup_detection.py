@@ -27,8 +27,12 @@ import pandas as pd
 import structlog
 
 from sentinel.models import (
-    HY_SPREAD_POINTS,
-    HY_SPREAD_THRESHOLD,
+    CREDIT_SPREAD_RECESSION_POINTS,
+    CREDIT_SPREAD_RECESSION_THRESHOLD,
+    CREDIT_SPREAD_WARNING_POINTS,
+    CREDIT_SPREAD_WARNING_THRESHOLD,
+    CREDIT_SPREAD_WATCH_POINTS,
+    CREDIT_SPREAD_WATCH_THRESHOLD,
     INDUSTRIAL_PRODUCTION_HARD_POINTS,
     INDUSTRIAL_PRODUCTION_HARD_THRESHOLD,
     INDUSTRIAL_PRODUCTION_SOFT_HIGH,
@@ -62,7 +66,7 @@ _INDICATORS_NEEDED: tuple[str, ...] = (
     "industrial_production",
     "initial_claims",
     "yield_curve",
-    "hy_spread",
+    "credit_spread",
 )
 
 
@@ -135,19 +139,42 @@ def score_yield_curve(
     return 0
 
 
-def score_hy_spread(latest: Decimal | None, prior: Decimal | None) -> int:
-    """> 500 bps and widening (latest > prior) → 5 pts. Else 0.
+def score_credit_spread(latest: Decimal | None, prior: Decimal | None) -> int:
+    """Graduated credit-stress scorer for Moody's Baa - 10Y Treasury.
 
-    ``hy_spread`` values in our FRED loader are in *percent* (e.g.,
-    5.20 = 520 bps), matching FRED's BAMLH0A0HYM2 series. The 500 bps
-    threshold therefore compares against 5.00. Missing → 0.
+    Values are in *percent* (FRED ``BAA10Y``). Historical anchors: GFC
+    peak ~6% (600 bp), COVID peak ~4.9%, calm periods 200-250 bp.
+
+    Tiers (preserves the 5-pt budget from the prior HY OAS scorer so
+    ``RAW_SCORE_MAX`` is unchanged):
+
+    * **Recession** — ``latest > 5.00%`` (>500 bp): 5 pts. Fires at this
+      level regardless of direction — sustained ≥500 bp credit stress
+      is bad whether widening or stable.
+    * **Warning** — ``latest > 4.00%`` AND widening (``latest > prior``):
+      3 pts. Direction filter avoids paying for a tightening spread
+      that's still elevated but recovering.
+    * **Watch** — ``latest > 3.00%`` AND widening: 2 pts.
+    * Otherwise (below 3% OR tightening at <5% level): 0 pts.
+
+    Missing ``latest`` → 0. Missing ``prior`` is treated as "no direction
+    info" — the Recession tier still fires on level alone; Watch/Warning
+    require a non-None ``prior``.
     """
-    if latest is None or prior is None:
+    if latest is None:
         return 0
-    if latest <= HY_SPREAD_THRESHOLD:
+    # Recession tier — level alone, no direction filter.
+    if latest > CREDIT_SPREAD_RECESSION_THRESHOLD:
+        return CREDIT_SPREAD_RECESSION_POINTS
+    if prior is None:
         return 0
-    if latest > prior:
-        return HY_SPREAD_POINTS
+    # Watch / Warning tiers require widening.
+    if latest <= prior:
+        return 0
+    if latest > CREDIT_SPREAD_WARNING_THRESHOLD:
+        return CREDIT_SPREAD_WARNING_POINTS
+    if latest > CREDIT_SPREAD_WATCH_THRESHOLD:
+        return CREDIT_SPREAD_WATCH_POINTS
     return 0
 
 
@@ -383,8 +410,8 @@ class SentinelSetupDetection(BaseEnginePlug):
         # Re-steepener detector — use the 90-day trailing min as the inversion floor.
         yc_floor = _trailing_min(macro, "yield_curve", as_of=as_of, days=90)
 
-        hy_latest = _get("hy_spread")
-        hy_prior = _get_lagged(macro, "hy_spread", as_of=as_of, days=5, missing=missing)
+        cs_latest = _get("credit_spread")
+        cs_prior = _get_lagged(macro, "credit_spread", as_of=as_of, days=5, missing=missing)
 
         vix_now = _series_value_at_or_before(vix_proxy, as_of)
         vix_ma = _series_value_at_or_before(vix_200d_ma, as_of)
@@ -395,19 +422,19 @@ class SentinelSetupDetection(BaseEnginePlug):
         ip_p = score_industrial_production(ip_v)
         ic_p = score_initial_claims(ic_now, ic_prev, ic_two)
         yc_p = score_yield_curve(yc_latest, yc_floor)
-        hy_p = score_hy_spread(hy_latest, hy_prior)
+        cs_p = score_credit_spread(cs_latest, cs_prior)
         vix_p = score_vix_proxy(vix_now_dec, vix_ma_dec)
 
-        raw = sahm_p + ip_p + ic_p + yc_p + hy_p + vix_p
+        raw = sahm_p + ip_p + ic_p + yc_p + cs_p + vix_p
         # FilterDiagnostics — one ``passed`` for each sub-scorer that fired.
         diag = FilterDiagnostics(
             universe_total=6,  # six sub-scorers evaluated per day
-            candidates_passed=sum(1 for p in (sahm_p, ip_p, ic_p, yc_p, hy_p, vix_p) if p > 0),
+            candidates_passed=sum(1 for p in (sahm_p, ip_p, ic_p, yc_p, cs_p, vix_p) if p > 0),
             sahm_rule_blocked=0 if sahm_p > 0 else 1,
             industrial_production_blocked=0 if ip_p > 0 else 1,
             initial_claims_blocked=0 if ic_p > 0 else 1,
             yield_curve_blocked=0 if yc_p > 0 else 1,
-            hy_spread_blocked=0 if hy_p > 0 else 1,
+            credit_spread_blocked=0 if cs_p > 0 else 1,
             vix_proxy_blocked=0 if vix_p > 0 else 1,
         )
         return BearScoreBreakdown(
@@ -416,7 +443,7 @@ class SentinelSetupDetection(BaseEnginePlug):
             industrial_production_pts=ip_p,
             initial_claims_pts=ic_p,
             yield_curve_pts=yc_p,
-            hy_spread_pts=hy_p,
+            credit_spread_pts=cs_p,
             vix_pts=vix_p,
             raw_total=raw,
             score=scale_raw_to_100(raw),
@@ -484,7 +511,7 @@ __all__ = [
     "score_industrial_production",
     "score_initial_claims",
     "score_yield_curve",
-    "score_hy_spread",
+    "score_credit_spread",
     "score_vix_proxy",
     "scale_raw_to_100",
 ]
