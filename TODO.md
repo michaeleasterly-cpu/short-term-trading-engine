@@ -38,6 +38,76 @@ strategy-level redesign, not parameter tuning:
   pair-trade variant (Z-score relative to sector peer, not just self).
   Decision deferred until operator picks a redesign path.
 
+## Liquidity-tier ranking is inverted for individual stocks (P1 correctness)
+
+`platform.liquidity_tiers` is misranking high-volatility mega-caps as
+illiquid and illiquid microcaps as ultra-liquid. The classifier
+(`classify_tickers`) is correct — the bug is in the **Corwin-Schultz
+spread estimator** that feeds `assign_tiers`.
+
+**Evidence (2026-05-15 forensic query):**
+
+| Ticker | Real spread | C-S median | Tier | |
+|---|---|---|---|---|
+| SPY  | ~0.5 bp | 7.5 bp  | T2 | broadly OK |
+| AAPL | ~1-2 bp | 25 bp   | T3 | 15× overstated |
+| MSFT | ~1-2 bp | 25 bp   | T3 | 15× overstated |
+| NVDA | ~1-3 bp | 63 bp   | T4 | 30× overstated |
+| TSLA | ~2-5 bp | 81 bp   | T4 | 30× overstated |
+| QQQ  | ~0.5 bp | 19 bp   | T3 | 30× overstated |
+| BEBE | illiquid microcap | 0.1 bp  | T1 | wildly understated |
+| FONR | illiquid microcap | 3.5 bp  | T1 | understated |
+| APXT | illiquid microcap | 4.1 bp  | T1 | understated |
+
+Also: every ticker has only 2-3 observations vs the
+`MIN_OBSERVATIONS_FOR_STABLE = 5` threshold; tiers are getting
+assigned with `provisional=True`.
+
+**Why C-S inverts the ranking.** Corwin-Schultz infers spread from
+daily HIGH/LOW range. High-volatility, ultra-liquid stocks (NVDA,
+TSLA, AAPL) have wide daily ranges driven by *price discovery*, not
+wide quotes — C-S incorrectly inflates spread. Illiquid microcaps
+(BEBE, FONR, APXT) have narrow daily ranges because nobody trades
+enough to move the price — C-S incorrectly tightens spread. The
+estimator works decently on broad-market ETFs (SPY ≈ correct) but
+fails catastrophically on individual stocks. This is a known failure
+mode in the academic literature.
+
+**Platform-wide impact.** Every engine query against
+`liquidity_tiers <= 2` is running on the wrong universe:
+
+  - T1+T2 currently has 66 'stocks' — almost all small/micro-cap
+    (APXT, BANFP, BEBE, BPOPM, FONR, GIX, SBXD, TPH, WLYB, …)
+  - AAPL, MSFT, AMZN, GOOGL, META, NVDA, TSLA, V, WMT, JPM —
+    all classified `stock` but **none** are in T1+T2
+  - Sigma's universe scan is therefore *excluding the exact stocks
+    it should be including*. Explains why its candidate yield is
+    so low even on otherwise-good market days.
+  - Reversion's 2026-05-15 expansion to T3+stock+fundamentals
+    accidentally pulls the megacaps back in — verified live this
+    evening (AVPT, TXRH candidates), but that's a side-effect of
+    going to T3, not a deliberate fix.
+
+**Remediation paths (operator decision):**
+
+1. **Dollar-volume floor override in `assign_tiers`** (smallest
+   surface): require `avg_daily_dollar_volume >= $50M` (or similar)
+   to qualify for T1 regardless of C-S estimate; require `>= $10M`
+   for T2. Overrides the C-S inversion at the assignment step
+   without replacing the estimator. Data already in
+   `prices_daily.volume × close`. Easiest fix.
+2. **Replace Corwin-Schultz with Abdi-Ranaldo or Roll's estimator.**
+   Both handle high-volatility-low-spread stocks better than C-S.
+   Larger code change in `tpcore/backtest/spread_estimator.py`.
+3. **Use Alpaca SIP quote data directly.** Real bid/ask, eliminates
+   the estimator. Requires Algo Trader Plus subscription (different
+   dimension than the SIP bars we already pay for).
+
+Recommend #1 as the immediate fix; #2 or #3 as longer-term
+robustness improvements. Until this lands, treat `liquidity_tiers`
+as an unreliable filter for individual stocks — engines that need a
+real mega-cap universe should hardcode it or use a different source.
+
 ## Platform integrity
 
 - **Make pipeline-test non-destructive.** `ops/platform_pipeline.py --force`
