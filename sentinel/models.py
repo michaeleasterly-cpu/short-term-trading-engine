@@ -252,10 +252,14 @@ def apply_missing_etf_fallback(
 ) -> dict[str, Decimal]:
     """Drop tickers without price history, renormalize the rest to 1.0.
 
-    Used when the operator hasn't backfilled SH/PSQ/GLD yet — the live
-    spec retains them, but at runtime we trade what we have. Returns a
-    fresh dict; never mutates ``weights``. Returns ``{}`` when no
-    requested ticker is available (caller must treat as DORMANT).
+    Originally added as a workaround when SH/PSQ/GLD were missing from
+    ``platform.prices_daily``. As of 2026-05-15 those three are backfilled
+    (Alpaca SIP from 2016-01) and the renormalization no longer triggers
+    for the canonical basket. Kept in place as a forward-looking safety
+    net — if a basket ETF is ever delisted or its data goes stale, the
+    engine degrades gracefully instead of erroring. Returns a fresh dict;
+    never mutates ``weights``. Returns ``{}`` when no requested ticker is
+    available (caller treats as DORMANT).
     """
     kept = {t: w for t, w in weights.items() if t in available_tickers}
     s = sum(kept.values())

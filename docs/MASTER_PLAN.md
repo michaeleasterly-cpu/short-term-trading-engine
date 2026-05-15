@@ -436,11 +436,11 @@ Full design: `docs/superpowers/specs/2026-05-13-momentum-rolling-construction.md
 
 | Symbol | Weight | Notes |
 | --- | --- | --- |
-| SH | 35% | **Not in `platform.prices_daily` (2026-05-15) — basket renormalizes to available tickers until backfilled.** |
-| PSQ | 25% | **Not in `platform.prices_daily` (2026-05-15) — basket renormalizes to available tickers until backfilled.** |
-| TLT | 20% | Live in `platform.prices_daily` from 2002-07-30. |
-| GLD | 10% | **Not in `platform.prices_daily` (2026-05-15) — basket renormalizes to available tickers until backfilled.** |
-| SQQQ | 10% | Tactical, 5-day max hold. Live in `platform.prices_daily` from 2010-02-11. |
+| SH | 35% | Live in `platform.prices_daily` from 2016-06-27 (Alpaca SIP free-tier cutoff). Backfilled 2026-05-15. Tier 3. |
+| PSQ | 25% | Live in `platform.prices_daily` from 2016-01-04. Backfilled 2026-05-15. Tier 2. |
+| TLT | 20% | Live in `platform.prices_daily` from 2002-07-30. Tier 3. |
+| GLD | 10% | Live in `platform.prices_daily` from 2016-01-04. Backfilled 2026-05-15. Tier 4 — the Abdi-Ranaldo spread estimator over-attributes GLD's daily H-L range (gold price discovery) to spread, the same failure mode that hit mega-caps under Corwin-Schultz. Logged for follow-up; cost penalty in backtest is higher than reality but internally consistent. |
+| SQQQ | 10% | Tactical, 5-day max hold. Live in `platform.prices_daily` from 2010-02-11. Tier 3. |
 
 **Activation:**
 - Bear Score ≥ 60 for 3 consecutive days with no counter-trend rally > 5%.
@@ -474,14 +474,16 @@ naturally as the time series extends.
   false-signal short-circuit), basket overrides, capital gate,
   execution sizing.
 - Backtest: `scripts/run_sentinel_backtest.sh` against 2018-01-01 →
-  2025-12-31. With the basket stubbed to available ETFs (TLT/SQQQ only),
-  the engine fired **one cycle** (COVID April 3 → May 27 2020, 36
-  trading days). Single TLT trade returned −3.37% — legitimate finding
-  that the macro-data-driven signal lags Fed-driven fast crashes
-  (Sentinel activated 11 trading days after the March 23 2020 SPY
-  trough). With the full SH/PSQ/GLD basket the entry/exit timing
-  edge case would still bite; this is a structural property of
-  Sentinel, not a wiring bug.
+  2025-12-31. The engine fired **one cycle** (COVID April 3 → May 27 2020,
+  36 trading days). Post-backfill full-basket result (2026-05-15):
+  GLD +4.97%, TLT −3.37%, SH −19.74%, PSQ −21.86% (SQQQ not deployed —
+  Bear Score peaked at 76, below the SQQQ-eligibility threshold of 80).
+  Confirms what the prior partial-basket run showed: Sentinel's macro-
+  lagging activation put it on the wrong side of the Fed-driven V-shape
+  recovery — by April 3 SPY had already begun rallying, so the inverse
+  ETFs (SH/PSQ) took the brunt. GLD's diversification partially offsets
+  but doesn't save the basket. Structural property of macro-data-driven
+  defense, not a wiring bug.
 - Capital gate, AAR logging, scheduler all mirror the Momentum pattern.
   Engine prefix `sn_` registered in `tpcore.order_ids`.
 - **Wired into `engine-service` daemon (2026-05-15).** Sentinel is in
@@ -685,7 +687,7 @@ The consolidation eliminates the inter-daemon `DATA_OPERATIONS_COMPLETE` polling
 | Phase 4b | **Momentum engine — Phase 2 (live-shippable)** | **Complete (Phase 2; 2026-05-13)** — 5 plugs + scheduler + Alpaca paper integration. `momentum/backtest.py` produces held-back Sharpe +1.58 / PF 2.80 on T1+T2 2024-2025. Paper kickoff: `scripts/run_momentum_kickoff.sh`. Daily cron pattern: scheduler no-ops on non-rebalance days, fires on the first NYSE session of each month. |
 | Phase 5 | S2 (satellite) | **Deferred** — options data parked in `platform.tradier_options_chains` (122,668 rows), no engine code. |
 | Phase 6 | Catalyst | **Deferred** — specification only. |
-| Phase 7 | Sentinel | **Built + wired (2026-05-15)** — five plugs + backtest + 41 unit tests (28 base + 13 compliance regression). Engine prefix `sn_`. Single COVID-2020 activation cycle in 2018-2025 backtest (one TLT trade, −3.37% — macro signal lags fast Fed-driven crashes). SH/PSQ/GLD missing from `platform.prices_daily` — basket renormalizes to available tickers; full basket lives once price history is backfilled. Integrated into `scripts/run_all_engines.sh` so the engine-service daemon dispatches it daily; STARTUP/SHUTDOWN events confirmed in `platform.application_log`. |
+| Phase 7 | Sentinel | **Built + wired + basket complete (2026-05-15)** — five plugs + backtest + 41 unit tests (28 base + 13 compliance regression). Engine prefix `sn_`. SH/PSQ/GLD backfilled into `platform.prices_daily` from 2016 (Alpaca SIP free-tier cutoff) + tier-classified (PSQ T2, SH T3, GLD T4). Full 5-ETF basket now trades natively without renormalization. Single COVID-2020 activation cycle: GLD +4.97%, TLT −3.37%, SH −19.74%, PSQ −21.86% (SQQQ correctly gated out at peak Bear Score 76 < 80 threshold). Macro signal lags fast Fed-driven crashes — structural, not a bug. Integrated into `scripts/run_all_engines.sh`; STARTUP/SHUTDOWN events confirmed in `platform.application_log`. |
 | Cross-cutting | Parameter-search pipeline | **Complete** — `scripts/search_parameters.py` + `tpcore/backtest/search.py`. Random search + walk-forward + final held-back DSR. Panel-sharing context cache (~60× per-trial speedup). Period-aggregated metrics (correct for portfolio strategies). See §2.5. |
 | Cross-cutting | Overfitting detection suite | **Complete** — `tpcore/backtest/overfitting.py` wired into all engine backtests. See *Overfitting Diagnostics Status* below. |
 | Cross-cutting | Data Validation Suite | **Complete** — `python -m tpcore.quality.validation` runs locally; was previously scheduled as a Railway Sunday cron, consolidated into `platform.ingestion_jobs` for the persistent `ingestion-engine`. |

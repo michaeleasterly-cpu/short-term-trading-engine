@@ -188,6 +188,13 @@ async def handle_daily_bars(pool: asyncpg.Pool, config: dict[str, Any]) -> int |
               enter ``platform.prices_daily``.
             - ``list[str]``: explicit ticker override.
         * ``lookback_days``: int, default 7.
+        * ``end_offset_days``: int, default 0. Shifts the request window's
+          end date back by N days relative to "today". Use ``1`` for
+          mid-session backfills — Alpaca's SIP free tier returns 403
+          when ``end=today`` during regular hours (intraday data
+          subscription required), but historical ``end=yesterday`` is
+          fine. The after-hours scheduled run leaves this at 0 since
+          21:30 UTC ≈ 17:30 ET is post-close.
         * ``min_price`` / ``min_volume``: coarse filter floors (only
           consulted on the ``all_active`` path). Defaults: $5, 250k.
         * ``batch_size`` / ``inter_batch_sleep_sec``: ``all_active``
@@ -223,6 +230,7 @@ async def _handle_daily_bars_explicit(
     )
 
     lookback_days = int(config.get("lookback_days", 7))
+    end_offset_days = int(config.get("end_offset_days", 0))
     if universe_cfg == "active":
         sql = """
             SELECT DISTINCT ticker
@@ -243,7 +251,8 @@ async def _handle_daily_bars_explicit(
         )
 
     today = datetime.now(UTC).date()
-    start = today - timedelta(days=lookback_days)
+    end = today - timedelta(days=end_offset_days)
+    start = end - timedelta(days=lookback_days)
 
     headers = _alpaca_headers()
     total_rows = 0
@@ -255,7 +264,7 @@ async def _handle_daily_bars_explicit(
     ) as client:
         for symbol in symbols:
             try:
-                bars = await fetch_daily_bars(client, symbol, start, today)
+                bars = await fetch_daily_bars(client, symbol, start, end)
             except httpx.HTTPStatusError as exc:
                 failures.append(f"{symbol}({exc.response.status_code})")
                 await asyncio.sleep(_RATE_LIMIT_SLEEP_SEC)
