@@ -38,6 +38,111 @@ but DSR/credibility gates remain structurally blocked.
   a structurally bounded firing rate. See `docs/MASTER_PLAN.md` §4.2 and
   `backtests/reversion_satellite_backtest.json`.
 
+## Data archival — CSV-first retrofit (DONE 2026-05-15)
+
+**Closed.** The 2026-05-15 BAMLH0A0HYM2 incident exposed that the
+CSV-first sub-protocol was implemented for only one handler. Rather
+than patch FRED alone, all five ingest handlers were retrofitted to a
+shared archive layer.
+
+**Shipped:**
+- `tpcore/ingestion/csv_archive.py` — shared write + gzip + shrinkage
+  detection. 8 unit tests including the BAMLH0A0HYM2 truncation
+  scenario (7,500 → 785 rows → `over_threshold=True`).
+- All 5 handlers write a gzipped CSV archive before/after the DB
+  upsert: `handle_macro_indicators`, `handle_daily_bars`,
+  `handle_corporate_actions`, `handle_fundamentals_refresh`,
+  `_stage_catalyst_refresh`.
+- **Shrinkage detection** (the vendor-truncation alarm) is wired into
+  the two *full-snapshot* sources only — `fred_macro` and
+  `alpaca_corporate_actions` — which re-pull their entire history every
+  run, so a row-count drop unambiguously means truncation. The three
+  *incremental* sources (`alpaca_daily_bars`, `fmp_fundamentals`,
+  `fmp_catalyst_events`) pull a variable window each run, so row-count
+  shrinkage there is noise — they get the audit-trail archive but no
+  alarm (a full-table baseline would false-flag their next incremental
+  run; this was caught and corrected during the build).
+- `scripts/dump_baseline_archives.py` — seeds baseline snapshots for
+  the two full-snapshot sources so shrinkage detection has a real
+  predecessor from run 1. Run once 2026-05-15.
+
+**Remaining (deferred, low severity):** re-grade the FRED row of the
+compliance matrix in `docs/superpowers/pipelines/data_adapter_pipeline.md`
+to reflect the now-implemented CSV-first path.
+
+---
+
+### Original incident write-up (kept for context)
+
+The 2026-05-15 BAMLH0A0HYM2 incident (FRED retroactively truncated the
+HY OAS series to a rolling 3-year window, erasing ~1996–2023 history)
+exposed the one place the documented CSV-first sub-protocol
+(`docs/superpowers/pipelines/data_adapter_pipeline.md`) isn't actually
+implemented end-to-end.
+
+**What's already in place:** Heavy one-shot backfills for Alpaca bars,
+FMP fundamentals, FMP corporate actions, and SEC EDGAR all write
+gzipped CSVs to `data/<source>_backfill/` before loading. Those
+archives are auditable and replayable — that's how the 2026-05-13
+Supabase Pro-tier cutover survived.
+
+**The gap:** `tpcore/ingestion/handlers.py:handle_macro_indicators`
+goes API → memory → `INSERT` with no CSV snapshot, and there is no
+`scripts/backfill_fred_csv.py` analogue to `backfill_alpaca_csv.py`.
+Every FRED row in `platform.macro_indicators` is therefore single-
+sourced from Postgres. If FRED truncates another series (Sahm rule,
+INDPRO, IC4WSA, T10Y2Y, BAA10Y are all still exposed) we have no local
+fallback — same failure mode that just hit BAMLH0A0HYM2.
+
+**How the existing 17,500 rows got there:** Commit `9233bb0` (2026-05-15
+BAA10Y swap) re-ran the daily handler with `start_date=1996-01-01,
+skip_guard_days=0`. That's a 17,500-row historical pull on the same
+code path used for the weekly ~30-row delta — well over the 500-row
+CSV-first threshold the pipeline doc itself sets (line 34). The
+shortcut was: flag-bomb the daily handler instead of writing a proper
+backfill script. Same pattern as the other heavy sources (Alpaca, FMP,
+corp_actions, SEC) — FRED is the one source where that step was
+skipped and never corrected.
+
+**Compliance-matrix lie to fix in the same sprint:** Line 92 of
+`docs/superpowers/pipelines/data_adapter_pipeline.md` rates `fred`
+ingest as ✅ 5/5 LIVE. The ✅ was awarded based on the 2026-05-14
+first-ingest run (3,509 rows in 11.4s) — small enough to plausibly
+sit under the trivial-pull carve-out. But yesterday's 17,500-row
+1996-backfill on the same non-CSV path made that rating false in
+retrospect. The matrix needs to be re-graded as ⚠ (or ❌) on the
+ingest column until the backfill script lands, *or* the protocol
+needs an explicit "FRED-shaped exception" carve-out (and I don't
+think it should — that's how this whole gap opened).
+
+To close it:
+
+1. Add `scripts/backfill_fred_csv.py` matching the SEC EDGAR shape:
+   one CSV per indicator under `data/fred_backfill/fred_<series>_
+   <run_stamp>.csv`, validated at CSV-write, gzipped on successful
+   load.
+2. One-shot run it now to capture the existing 1996-onward rows out
+   of Postgres into baseline `data/fred_backfill/` snapshots before
+   FRED revokes anything else.
+3. Either fold the CSV-write into `handle_macro_indicators` itself or
+   leave the daily delta API→INSERT path alone and rely on weekly
+   `backfill_fred_csv.py` runs to refresh the snapshot. (The weekly-
+   refresh path is the lighter-touch option; the delta handler's
+   ~30 rows/week is well under the 500-row CSV-first threshold the
+   pipeline doc carves out.)
+4. Re-grade the FRED row of the compliance matrix in
+   `docs/superpowers/pipelines/data_adapter_pipeline.md` once the
+   above lands. Update the self-verification report at line 96+ with
+   real CSV-artifact paths.
+
+**Secondary (lower-severity) gap to defer:** the four daily-delta
+handlers (`handle_daily_bars`, `handle_corporate_actions`,
+`handle_fundamentals_refresh`, `_stage_catalyst_refresh`) don't snapshot
+their incremental rows either. The risk is much smaller because the
+historical base is already archived via the one-shot backfill scripts —
+worst case we'd lose 1 day of deltas, not 30 years of history. Worth
+revisiting only after FRED is fixed.
+
 ## Publishing
 
 - **Publish a GitHub gist of the entire project.** Scope: everything —

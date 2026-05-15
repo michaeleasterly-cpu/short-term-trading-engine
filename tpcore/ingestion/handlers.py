@@ -13,6 +13,7 @@ looks up by name; jobs without a registered handler land in
 """
 from __future__ import annotations
 
+import json
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -57,14 +58,53 @@ async def handle_fundamentals_refresh(
     from tpcore.fmp import FMPFundamentalsAdapter
     from tpcore.fundamentals.cache import FundamentalsCache
 
+    run_started = datetime.now(UTC)
     async with FMPFundamentalsAdapter() as adapter:
         cache = FundamentalsCache(pool, adapter=adapter)
         rows, no_data, failures = await cache.backfill_all()
+
+    # CSV-first archive — pull rows touched in this run from the DB
+    # and write them out. Schema mirrors fundamentals_quarterly so the
+    # archive can fully reconstruct DB state if FMP revokes history.
+    async with pool.acquire() as conn:
+        new_rows = await conn.fetch(
+            """
+            SELECT ticker, filing_date, period_end_date, period_label,
+                   net_income, fcf, operating_cash_flow, capex, revenue,
+                   total_assets, total_liabilities, current_assets,
+                   current_liabilities, receivables, cash_and_equivalents,
+                   shares_outstanding, pb, de, recorded_at
+            FROM platform.fundamentals_quarterly
+            WHERE recorded_at >= $1
+            ORDER BY ticker, period_end_date
+            """,
+            run_started,
+        )
+    archive_rows = [
+        {k: str(v) if v is not None else "" for k, v in dict(r).items()}
+        for r in new_rows
+    ]
+    # CSV-first audit archive (incremental — new rows this run only;
+    # shrinkage detection is reserved for full-snapshot sources).
+    from tpcore.ingestion.csv_archive import write_archive
+    archive = write_archive(
+        "fmp_fundamentals", archive_rows,
+        fieldnames=[
+            "ticker", "filing_date", "period_end_date", "period_label",
+            "net_income", "fcf", "operating_cash_flow", "capex", "revenue",
+            "total_assets", "total_liabilities", "current_assets",
+            "current_liabilities", "receivables", "cash_and_equivalents",
+            "shares_outstanding", "pb", "de", "recorded_at",
+        ],
+        validator=lambda r: bool(r.get("ticker")) and bool(r.get("period_end_date")),
+    )
+
     logger.info(
         "ingestion.handler.fundamentals_done",
         rows=rows,
         no_data=len(no_data),
         failures=len(failures),
+        csv_archive=str(archive.path),
     )
     if failures:
         # ETF skips (no_data) are expected and silent. Real FMP outages
@@ -140,6 +180,7 @@ async def handle_corporate_actions(
 
     headers = _alpaca_headers()
     total_actions = 0
+    archive_rows: list[dict] = []
     async with httpx.AsyncClient(
         headers=headers,
         base_url="https://data.alpaca.markets",
@@ -155,8 +196,33 @@ async def handle_corporate_actions(
                 types=list(DEFAULT_TYPES),
             )
             if actions:
+                for a in actions:
+                    # actions is typically a list of dicts shaped by
+                    # fetch_corporate_actions; archive what we have.
+                    archive_rows.append({
+                        "ticker": a.get("symbol") or a.get("ticker") or "",
+                        "action_date": str(a.get("ex_date") or a.get("effective_date") or a.get("date") or ""),
+                        "action_type": a.get("type") or a.get("action_type") or "",
+                        "ratio": str(a.get("ratio") or a.get("split_ratio") or ""),
+                        "raw": json.dumps(a, default=str)[:500],
+                    })
                 await upsert_corporate_actions(pool, actions)
             total_actions += len(actions)
+
+    # CSV-first archive.
+    from tpcore.ingestion.csv_archive import (
+        detect_shrinkage,
+        log_shrinkage_warning,
+        write_archive,
+    )
+    archive = write_archive(
+        "alpaca_corporate_actions", archive_rows,
+        fieldnames=["ticker", "action_date", "action_type", "ratio", "raw"],
+        validator=lambda r: bool(r.get("ticker")) and bool(r.get("action_type")),
+    )
+    shrinkage = detect_shrinkage("alpaca_corporate_actions", archive.rows_written, exclude_path=archive.path)
+    if shrinkage is not None:
+        log_shrinkage_warning(shrinkage)
 
     split_summary = await apply_all_splits(pool, only_tickers=apply_filter)
     logger.info(
@@ -166,6 +232,8 @@ async def handle_corporate_actions(
         actions_ingested=total_actions,
         splits_applied=len(split_summary["applied"]),
         splits_skipped=len(split_summary["skipped"]),
+        csv_archive=str(archive.path),
+        shrinkage_over_threshold=shrinkage.over_threshold if shrinkage else False,
     )
     return total_actions
 
@@ -257,6 +325,10 @@ async def _handle_daily_bars_explicit(
     headers = _alpaca_headers()
     total_rows = 0
     failures: list[str] = []
+    # CSV-first archive: collect every bar across symbols, write once
+    # at the end (one archive per run). The shrinkage detector picks up
+    # if Alpaca silently drops bars next run.
+    archive_rows: list[dict] = []
     async with httpx.AsyncClient(
         headers=headers,
         base_url="https://data.alpaca.markets",
@@ -270,15 +342,36 @@ async def _handle_daily_bars_explicit(
                 await asyncio.sleep(_RATE_LIMIT_SLEEP_SEC)
                 continue
             if bars:
+                for b in bars:
+                    archive_rows.append({
+                        "ticker": symbol, "date": b.get("t", ""),
+                        "open": b.get("o", ""), "high": b.get("h", ""),
+                        "low": b.get("l", ""), "close": b.get("c", ""),
+                        "volume": b.get("v", ""), "vwap": b.get("vw", ""),
+                    })
                 inserted = await _upsert_bars(pool, symbol, bars, delisted=False)
                 total_rows += inserted
             await asyncio.sleep(_RATE_LIMIT_SLEEP_SEC)
+
+    # CSV-first audit archive. daily_bars pulls a VARIABLE window
+    # (7-day incremental refresh vs 6000-day backfill), so row-count
+    # shrinkage detection is noise here — the archive's value is the
+    # audit trail (reconstruct what Alpaca returned on a given run),
+    # not a vendor-truncation alarm. Shrinkage detection is reserved
+    # for the full-snapshot sources (fred_macro, corporate_actions).
+    from tpcore.ingestion.csv_archive import write_archive
+    archive = write_archive(
+        "alpaca_daily_bars", archive_rows,
+        fieldnames=["ticker", "date", "open", "high", "low", "close", "volume", "vwap"],
+        validator=lambda r: bool(r.get("ticker")) and r.get("date") not in ("", None),
+    )
 
     logger.info(
         "ingestion.handler.daily_bars_done",
         symbols=len(symbols),
         rows_upserted=total_rows,
         failures=len(failures),
+        csv_archive=str(archive.path),
     )
     if failures:
         raise RuntimeError(
@@ -782,6 +875,33 @@ async def handle_macro_indicators(
         )
         return 0
 
+    # ── 2a. CSV-first archive (BAMLH0A0HYM2 truncation defence) ──────
+    # Write the full vendor response to a gzipped CSV BEFORE the upsert.
+    # If FRED retroactively truncates a series again, this archive is
+    # the only place the pre-truncation history survives. Shrinkage
+    # detection on the next run compares this archive to its predecessor.
+    from tpcore.ingestion.csv_archive import (
+        detect_shrinkage,
+        log_shrinkage_warning,
+        write_archive,
+    )
+
+    csv_rows = [
+        {"indicator": name, "date": d, "value": str(value)}
+        for (name, d, value) in upsert_rows
+    ]
+    archive = write_archive(
+        "fred_macro", csv_rows,
+        fieldnames=["indicator", "date", "value"],
+        validator=lambda r: bool(r.get("indicator")) and r.get("date") is not None,
+    )
+    shrinkage = detect_shrinkage(
+        "fred_macro", archive.rows_written, exclude_path=archive.path,
+    )
+    if shrinkage is not None:
+        log_shrinkage_warning(shrinkage)
+
+    # ── 3. Load CSV → DB (ON CONFLICT DO NOTHING) ────────────────────
     async with pool.acquire() as conn:
         await conn.executemany(
             """
@@ -808,6 +928,8 @@ async def handle_macro_indicators(
         "ingestion.handler.macro_indicators.done",
         rows_upserted=len(upsert_rows),
         per_indicator=summary,
+        csv_archive=str(archive.path),
+        shrinkage_over_threshold=shrinkage.over_threshold if shrinkage else False,
     )
     return len(upsert_rows)
 

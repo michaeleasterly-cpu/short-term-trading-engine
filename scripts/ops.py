@@ -573,6 +573,7 @@ async def _stage_catalyst_refresh(pool: asyncpg.Pool) -> dict[str, Any]:
         start=_date(2018, 1, 1),
         end=datetime.now(UTC).date() - _td(days=1),
     )
+    run_started = datetime.now(UTC)
     exit_code = await backfill_amain(args)
     if exit_code != 0:
         raise RuntimeError(
@@ -583,10 +584,34 @@ async def _stage_catalyst_refresh(pool: asyncpg.Pool) -> dict[str, Any]:
         post_tickers = await conn.fetchval(
             "SELECT COUNT(DISTINCT ticker) FROM platform.catalyst_events"
         )
+        new_rows = await conn.fetch(
+            """
+            SELECT ticker, event_date, event_type, magnitude_pct, source, recorded_at
+            FROM platform.catalyst_events
+            WHERE recorded_at >= $1
+            ORDER BY ticker, event_date
+            """,
+            run_started,
+        )
+
+    # CSV-first audit archive (incremental — new rows this run only;
+    # shrinkage detection is reserved for full-snapshot sources).
+    from tpcore.ingestion.csv_archive import write_archive
+    archive_rows = [
+        {k: str(v) if v is not None else "" for k, v in dict(r).items()}
+        for r in new_rows
+    ]
+    archive = write_archive(
+        "fmp_catalyst_events", archive_rows,
+        fieldnames=["ticker", "event_date", "event_type", "magnitude_pct", "source", "recorded_at"],
+        validator=lambda r: bool(r.get("ticker")) and bool(r.get("event_type")),
+    )
+
     return {
         "tickers": len(universe),
         "total_rows": int(post_count or 0),
         "covered_tickers": int(post_tickers or 0),
+        "csv_archive": str(archive.path),
     }
 
 

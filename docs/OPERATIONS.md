@@ -198,6 +198,23 @@ The post-mortem captured these principles as durable patterns; the data-operatio
 6. **Cross-references are integrity too.** `audit_all_tables.sh` (and the dashboard's "Cross-table integrity" row) catches orphan tickers across every dependent table — the kind of failure the validation suite's per-table predicates miss.
 7. **Latest-run beats rolling aggregates on dashboards.** A 7-day rolling failure count surfaces stale history as current state. Show LATEST per source — stale aggregates lie.
 8. **Compress confirmed artifacts.** After a successful upsert, gzip the CSV (~80% disk savings). Loaders read `.gz` transparently on re-run.
+9a. **CSV-first archive on every ingest.** All five ingest handlers
+(`handle_daily_bars`, `handle_corporate_actions`,
+`handle_fundamentals_refresh`, `handle_macro_indicators`,
+`_stage_catalyst_refresh`) write a gzipped CSV to
+`data/<source>_archive/<source>_<stamp>.csv.gz` before/after the DB
+upsert via `tpcore.ingestion.csv_archive`. This is the defence against
+a vendor retroactively truncating history (FRED BAMLH0A0HYM2,
+2026-05-15) — the archive is the permanent record of what the source
+returned at a given moment. **Shrinkage detection** runs on the two
+full-snapshot sources (`fred_macro`, `alpaca_corporate_actions`, which
+re-pull all history every run): if the new archive is > 20% smaller
+than the prior one, a `csv_archive.shrinkage_detected` WARNING fires —
+the BAMLH0A0HYM2 detector. The three incremental sources get the
+audit-trail archive but no shrinkage alarm (variable pull windows make
+row-count comparison noise). Baseline snapshots for the two
+full-snapshot sources are seeded via `scripts/run_dump_baseline_archives.sh`.
+
 9. **Comprehensive audit beyond validation.** `python scripts/audit_pipeline.py` (or `scripts/run_audit_pipeline.sh`) runs the 4-phase audit covering: explicit checks (known-knowns) including freshness for every data source / Sentinel basket / credit_spread / hy_spread decommission; documented gaps (known-unknowns) including GLD tier quirk, hy_spread freeze, prices_daily gaps, ETF AR noise; latent data (unknown-knowns) including filter-diagnostics distribution, cross-engine ticker overlap, application_log event-type distribution, empty platform tables, macro correlations; anomaly heuristics (unknown-unknowns) including row-count velocity, 3σ macro stoppage, tier distribution shift, engine signal silence, DB size, correlated multi-source staleness. Findings persist to `data_quality_log` for dashboard surfacing. Run on demand when investigating; operator can also schedule it daily. **Canonical command** — when asked to "audit pipeline" the operator (and Claude in any session) runs this script, not a manual re-audit.
 
 Per-stage timeouts (`scripts/ops.py`): **120 s** for the light stages (`data_validation`, `universe_simulation`) and **3,600 s** (1 hour) for the heavy ingestion stages (`daily_bars`, `corporate_actions`, `fundamentals_refresh`). The heavy-stage budget was raised twice after the Phase 1 universe expansion (7,300 tickers) — `120s → 1200s → 3600s` (commits `d924491` and `57ec234`) — because the underlying FMP-backed handlers iterate ~73 batches with rate-limit sleeps and need real headroom. On timeout an ERROR row lands in `platform.application_log` and the pipeline moves on to the next stage; a single slow upstream never blocks the whole run.
