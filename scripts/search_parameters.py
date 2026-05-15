@@ -77,6 +77,14 @@ PARAM_RANGES: dict[str, dict[str, tuple]] = {
         "bb_width_percentile": (15.0, 45.0, "float"),
         "max_hold_days": (2, 6, "int"),
         "stop_pct": (0.015, 0.05, "float"),
+        # OU mean-reversion gate (research spike, 2026-05-15). κ=0
+        # disables the gate (live engine behavior); positive values
+        # require the candidate's 60-day log-close to fit an OU
+        # process with κ ≥ threshold. κ=2.0 ≈ 87-day half-life;
+        # κ=5.0 ≈ 35-day. Spike asks whether suppressing entries on
+        # non-mean-reverting series tightens walk-forward Sharpe
+        # variance and moves DSR.
+        "ou_kappa_threshold": (1.0, 5.0, "float"),
     },
     "reversion": {
         "z_threshold": (2.0, 4.0, "float"),
