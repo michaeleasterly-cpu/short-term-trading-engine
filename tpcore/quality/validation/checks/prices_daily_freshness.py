@@ -63,6 +63,20 @@ CRITICAL_MAX_AGE_DAYS = 5     # calendar days; ~3 trading days
 UNIVERSE_MAX_AGE_DAYS = 14    # calendar days
 UNIVERSE_STALE_PCT_MAX = 0.02  # 2% of the active universe
 
+# Coverage-collapse guard (added 2026-05-15 after the daily_bars
+# incident). MAX(date) freshness is blind to a universe-wide coverage
+# collapse: on 2026-05-11→14 the daily_bars stage stopped completing
+# the full ~7,700-ticker universe and bar coverage fell to ~534
+# tickers/day, but MAX(date) stayed current because the ~534 survivors
+# included recent dates — so every freshness check passed while 91% of
+# the universe silently went stale. This guard compares the most-recent
+# fully-published trading day's distinct-ticker count against the
+# trailing-20-session average; a drop past COVERAGE_COLLAPSE_PCT means
+# the ingest is only covering a fraction of the universe even though
+# "today" looks fresh.
+COVERAGE_TRAILING_SESSIONS = 20
+COVERAGE_COLLAPSE_PCT = 0.30   # >30% below trailing avg ticker-count = collapse
+
 
 _CRITICAL_SQL = """
     SELECT t.ticker, MAX(pd.date) AS last_bar
@@ -143,11 +157,50 @@ async def check_prices_daily_freshness(
                     ),
                 ))
 
+    # ── Coverage-collapse check ──────────────────────────────────────────
+    # Most-recent fully-published session's distinct-ticker count vs the
+    # trailing average. Catches the daily_bars-incident class where
+    # MAX(date) is current but the ingest only covered a fraction of
+    # the universe.
+    async with pool.acquire() as conn:
+        cov_rows = await conn.fetch(
+            """
+            SELECT date, COUNT(DISTINCT ticker) AS n
+            FROM platform.prices_daily
+            WHERE delisted = false
+              AND date >= CURRENT_DATE - INTERVAL '40 days'
+            GROUP BY date
+            ORDER BY date DESC
+            LIMIT $1
+            """,
+            COVERAGE_TRAILING_SESSIONS + 1,
+        )
+    if len(cov_rows) >= 5:
+        latest_n = int(cov_rows[0]["n"])
+        trailing = [int(r["n"]) for r in cov_rows[1:]]
+        if trailing:
+            avg_trailing = sum(trailing) / len(trailing)
+            if avg_trailing > 0 and latest_n < avg_trailing * (1 - COVERAGE_COLLAPSE_PCT):
+                failures.append(FailureDetail(
+                    ticker="<universe>",
+                    reason="coverage_collapse",
+                    expected=(
+                        f"latest session ≥ {(1 - COVERAGE_COLLAPSE_PCT):.0%} of "
+                        f"trailing-{len(trailing)}-session avg ({avg_trailing:,.0f} tickers)"
+                    ),
+                    observed=(
+                        f"latest session {cov_rows[0]['date']} has {latest_n:,} tickers "
+                        f"= {latest_n / avg_trailing:.0%} of trailing avg — daily_bars "
+                        f"is only covering a fraction of the universe (MAX(date) is "
+                        f"current but coverage collapsed)"
+                    ),
+                ))
+
     duration_ms = int((time.perf_counter() - started) * 1000)
     return CheckResult(
         name=CHECK_NAME,
         passed=len(failures) == 0,
-        total=len(CRITICAL_TICKERS) + 1,  # critical tickers + universe summary
+        total=len(CRITICAL_TICKERS) + 2,  # critical tickers + universe-stale + coverage
         failed=len(failures),
         duration_ms=duration_ms,
         failures=failures,
