@@ -108,11 +108,35 @@ def _jsonify(obj: Any) -> Any:
     return obj
 
 
+# ─── Streaming sink ────────────────────────────────────────────────────
+
+
+class _FindingSink(list):
+    """``list`` subclass whose ``.append`` fires a callback per finding.
+
+    Lets every existing ``findings.append(...)`` site stream + persist
+    incrementally with zero changes to the ~40 call sites. ``amain``
+    injects a sink whose hook renders the finding to stdout and writes
+    its data_quality_log row immediately, so a long audit shows
+    progress as it goes and a crash mid-run still persists everything
+    completed so far.
+    """
+
+    def __init__(self, on_append=None) -> None:
+        super().__init__()
+        self._on_append = on_append
+
+    def append(self, item) -> None:  # type: ignore[override]
+        super().append(item)
+        if self._on_append is not None:
+            self._on_append(item)
+
+
 # ─── Phase 1: known_knowns ─────────────────────────────────────────────
 
 
-async def run_known_knowns(pool) -> list[AuditFinding]:
-    findings: list[AuditFinding] = []
+async def run_known_knowns(pool, sink: _FindingSink | None = None) -> list[AuditFinding]:
+    findings: list[AuditFinding] = sink if sink is not None else []
 
     # Row counts + freshness per data source.
     for ds in DATA_SOURCES:
@@ -320,14 +344,79 @@ async def run_known_knowns(pool) -> list[AuditFinding]:
             summary=f"grep failed: {exc}",
         ))
 
+    # CSV-first archive presence (guardrail shipped 2026-05-15 — moved
+    # from "vendor truncation is a blindspot" to "we detect it"). For
+    # each of the 5 retrofitted sources, verify the archive directory
+    # has at least one .csv.gz.
+    from tpcore.ingestion.csv_archive import latest_archive
+    ARCHIVE_SOURCES = (
+        "fred_macro", "alpaca_corporate_actions", "alpaca_daily_bars",
+        "fmp_fundamentals", "fmp_catalyst_events",
+    )
+    missing_archive = []
+    archive_state: dict[str, str] = {}
+    for src in ARCHIVE_SOURCES:
+        try:
+            la = latest_archive(src)
+        except Exception:  # noqa: BLE001
+            la = None
+        if la is None:
+            missing_archive.append(src)
+        else:
+            archive_state[src] = la.name
+    if missing_archive:
+        findings.append(AuditFinding(
+            phase="known_knowns", check_name="csv_archive_presence",
+            source="csv_archive", severity="WARN",
+            summary=f"{len(missing_archive)}/5 ingest sources have no CSV archive yet",
+            evidence={"missing": missing_archive, "present": archive_state},
+            recommended_action="run scripts/run_dump_baseline_archives.sh (full-snapshot) or wait for the next ingest of the incremental sources",
+        ))
+    else:
+        findings.append(AuditFinding(
+            phase="known_knowns", check_name="csv_archive_presence",
+            source="csv_archive", severity="OK",
+            summary="all 5 ingest sources have a CSV archive on disk",
+            evidence=archive_state,
+        ))
+
+    # Shrinkage-detector state — did the BAMLH0A0HYM2 detector fire for
+    # any full-snapshot source recently? A hit means a vendor truncated.
+    async with pool.acquire() as conn:
+        shrink_rows = await conn.fetch("""
+            SELECT engine, message, data, recorded_at
+            FROM platform.application_log
+            WHERE event_type = 'WARNING'
+              AND message = 'csv_archive.shrinkage_detected'
+              AND recorded_at > NOW() - INTERVAL '7 days'
+            ORDER BY recorded_at DESC LIMIT 10
+        """)
+    if shrink_rows:
+        findings.append(AuditFinding(
+            phase="known_knowns", check_name="shrinkage_detector",
+            source="csv_archive", severity="FAIL",
+            summary=f"{len(shrink_rows)} vendor-truncation alarm(s) in last 7d — a source shrank > 20%",
+            evidence={"events": [
+                {"recorded_at": str(r["recorded_at"]), "data": _jsonify(r["data"]) if isinstance(r["data"], dict) else str(r["data"])}
+                for r in shrink_rows[:5]
+            ]},
+            recommended_action="inspect data/<source>_archive/ — vendor likely revoked history; the prior archive is the recovery source",
+        ))
+    else:
+        findings.append(AuditFinding(
+            phase="known_knowns", check_name="shrinkage_detector",
+            source="csv_archive", severity="OK",
+            summary="no vendor-truncation (shrinkage) alarms in last 7d",
+        ))
+
     return findings
 
 
 # ─── Phase 2: known_unknowns ───────────────────────────────────────────
 
 
-async def run_known_unknowns(pool) -> list[AuditFinding]:
-    findings: list[AuditFinding] = []
+async def run_known_unknowns(pool, sink: _FindingSink | None = None) -> list[AuditFinding]:
+    findings: list[AuditFinding] = sink if sink is not None else []
 
     # GLD tier T4 (known AR-estimator limitation).
     async with pool.acquire() as conn:
@@ -438,8 +527,8 @@ async def run_known_unknowns(pool) -> list[AuditFinding]:
 # ─── Phase 3: unknown_knowns ───────────────────────────────────────────
 
 
-async def run_unknown_knowns(pool) -> list[AuditFinding]:
-    findings: list[AuditFinding] = []
+async def run_unknown_knowns(pool, sink: _FindingSink | None = None) -> list[AuditFinding]:
+    findings: list[AuditFinding] = sink if sink is not None else []
 
     # Filter-diagnostics distribution from SIGNAL events (last 30 days).
     async with pool.acquire() as conn:
@@ -620,8 +709,8 @@ async def run_unknown_knowns(pool) -> list[AuditFinding]:
 # ─── Phase 4: unknown_unknowns ─────────────────────────────────────────
 
 
-async def run_unknown_unknowns(pool) -> list[AuditFinding]:
-    findings: list[AuditFinding] = []
+async def run_unknown_unknowns(pool, sink: _FindingSink | None = None) -> list[AuditFinding]:
+    findings: list[AuditFinding] = sink if sink is not None else []
 
     # Row-count velocity 7d vs prior 7d.
     velocity_targets = [
@@ -792,30 +881,8 @@ async def run_unknown_unknowns(pool) -> list[AuditFinding]:
 # ─── Output + persistence ──────────────────────────────────────────────
 
 
-def _render_stdout(findings: list[AuditFinding]) -> None:
-    by_phase: dict[str, list[AuditFinding]] = {}
-    for f in findings:
-        by_phase.setdefault(f.phase, []).append(f)
-
-    sev_glyph = {"OK": "🟢", "WARN": "🟡", "FAIL": "🔴"}
-    total = len(findings)
-    counts = {s: sum(1 for f in findings if f.severity == s) for s in ("OK", "WARN", "FAIL")}
-    print(f"\nPIPELINE AUDIT — {datetime.now(UTC):%Y-%m-%d %H:%M UTC}")
-    print(f"  total: {total}  🟢 {counts['OK']}  🟡 {counts['WARN']}  🔴 {counts['FAIL']}")
-    print("=" * 76)
-
-    for phase in ("known_knowns", "known_unknowns", "unknown_knowns", "unknown_unknowns"):
-        if phase not in by_phase:
-            continue
-        rows = by_phase[phase]
-        ok = sum(1 for f in rows if f.severity == "OK")
-        warn = sum(1 for f in rows if f.severity == "WARN")
-        fail = sum(1 for f in rows if f.severity == "FAIL")
-        print(f"\n### {phase}  ({len(rows)} checks · 🟢 {ok} 🟡 {warn} 🔴 {fail})")
-        for f in rows:
-            print(f"  {sev_glyph[f.severity]} {f.check_name:<24} {f.source:<22} {f.summary}")
-            if f.recommended_action and f.severity != "OK":
-                print(f"        → {f.recommended_action}")
+# Output is now streamed per-finding in ``amain`` (see ``_on_finding``);
+# the old batch renderer was removed when streaming landed (2026-05-15).
 
 
 async def _persist(pool, findings: list[AuditFinding], run_ts: datetime) -> None:
@@ -871,6 +938,9 @@ PHASES = {
 }
 
 
+_SEV_GLYPH = {"OK": "🟢", "WARN": "🟡", "FAIL": "🔴"}
+
+
 async def amain(args: argparse.Namespace) -> int:
     db_url = os.environ.get("DATABASE_URL")
     if not db_url:
@@ -880,27 +950,59 @@ async def amain(args: argparse.Namespace) -> int:
     run_ts = datetime.now(UTC)
     try:
         phases = [args.phase] if args.phase else list(PHASES.keys())
-        findings: list[AuditFinding] = []
         for ph in phases:
             if ph not in PHASES:
                 print(f"unknown phase: {ph}", file=sys.stderr)
                 return 1
-            findings.extend(await PHASES[ph](pool))
 
-        if args.source:
-            findings = [f for f in findings if f.source == args.source]
+        all_findings: list[AuditFinding] = []
+        stream_human = not args.json and not args.silent
+
+        if stream_human:
+            print(f"\nPIPELINE AUDIT — {run_ts:%Y-%m-%d %H:%M UTC}  (streaming)")
+            print("=" * 76)
+
+        # Per-finding hook: render to stdout + persist immediately so a
+        # long audit shows progress and a mid-run crash still saves
+        # everything completed so far.
+        def _on_finding(f: AuditFinding) -> None:
+            if args.source and f.source != args.source:
+                return
+            all_findings.append(f)
+            if stream_human:
+                glyph = _SEV_GLYPH.get(f.severity, "?")
+                print(f"  {glyph} [{f.phase:<16}] {f.check_name:<26} {f.source:<22} {f.summary}")
+                if f.recommended_action and f.severity != "OK":
+                    print(f"        → {f.recommended_action}")
+                sys.stdout.flush()
+            # Fire-and-await the single-row persist. Cheap (ON CONFLICT
+            # DO NOTHING); keeps the data_quality_log current as we go.
+            persist_queue.append(f)
+
+        persist_queue: list[AuditFinding] = []
+
+        for ph in phases:
+            if stream_human:
+                print(f"\n### {ph}")
+            sink = _FindingSink(on_append=_on_finding)
+            await PHASES[ph](pool, sink)
+            # Flush this phase's findings to data_quality_log now —
+            # crash-safe across phase boundaries.
+            if persist_queue:
+                await _persist(pool, persist_queue, run_ts)
+                persist_queue = []
 
         if args.json:
-            print(json.dumps([f.to_dict() for f in findings], indent=2, default=str))
+            print(json.dumps([f.to_dict() for f in all_findings], indent=2, default=str))
         elif not args.silent:
-            _render_stdout(findings)
-
-        await _persist(pool, findings, run_ts)
+            counts = {s: sum(1 for f in all_findings if f.severity == s) for s in ("OK", "WARN", "FAIL")}
+            print("\n" + "=" * 76)
+            print(f"  TOTAL: {len(all_findings)}  🟢 {counts['OK']}  🟡 {counts['WARN']}  🔴 {counts['FAIL']}")
 
         exit_code = 0
-        if args.strict and any(f.severity == "FAIL" for f in findings):
+        if args.strict and any(f.severity == "FAIL" for f in all_findings):
             exit_code = 2
-        elif any(f.severity == "FAIL" and f.phase == "known_knowns" for f in findings):
+        elif any(f.severity == "FAIL" and f.phase == "known_knowns" for f in all_findings):
             exit_code = 1
         return exit_code
     finally:
