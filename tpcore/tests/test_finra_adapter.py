@@ -134,3 +134,45 @@ async def test_handler_pit_release_date_after_settlement(monkeypatch) -> None:
     assert release > settle              # PIT lag applied
     assert (release - settle).days >= 9  # ~9 NYSE sessions
     assert pct is None                   # no fundamentals → honest NULL
+
+
+async def test_offset_pagination_walks_all_pages(monkeypatch) -> None:
+    """Regression: the adapter MUST page via offset until a short page.
+
+    The original bug shipped a single unpaginated request — FINRA caps
+    at 1000 rows and returns the oldest settlement period first, so only
+    one stale period was ever ingested (observed 2026-05-16). Page size
+    is shrunk here so 3 pages exercise the loop without 1000 rows.
+    """
+    import json as _json
+
+    from tpcore.finra import adapter as _ad
+    monkeypatch.setattr(_ad, "_PAGE_SIZE", 2)
+
+    def rec(sym: str, sd: str):
+        return {"symbolCode": sym, "settlementDate": sd,
+                "currentShortPositionQuantity": "100", "daysToCoverQuantity": "1.0"}
+
+    pages = {
+        0: [rec("AAA", "2026-04-30"), rec("BBB", "2026-04-30")],   # full → continue
+        2: [rec("CCC", "2026-04-15"), rec("DDD", "2026-04-15")],   # full → continue
+        4: [rec("EEE", "2026-03-31")],                             # short → stop
+    }
+    seen_offsets: list[int] = []
+
+    def h(req: httpx.Request) -> httpx.Response:
+        if "oauth2/access_token" in str(req.url):
+            return httpx.Response(200, json=_TOKEN)
+        body = _json.loads(req.content)
+        off = int(body.get("offset", 0))
+        seen_offsets.append(off)
+        return httpx.Response(200, json=pages.get(off, []))
+
+    a = _adapter(h)
+    recs = await a.get_short_interest(since=date(2026, 1, 1))
+    # All 5 rows across 3 pages, every settlement period present.
+    assert {r.ticker for r in recs} == {"AAA", "BBB", "CCC", "DDD", "EEE"}
+    assert seen_offsets == [0, 2, 4]
+    assert {str(r.settlement_date) for r in recs} == {
+        "2026-04-30", "2026-04-15", "2026-03-31"}
+    await a.aclose()

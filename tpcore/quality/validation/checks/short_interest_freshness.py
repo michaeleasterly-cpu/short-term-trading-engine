@@ -1,8 +1,16 @@
 """short_interest freshness — FINRA bi-monthly data must not be stale.
 
 FINRA disseminates ~twice a month. FAIL if the most-recent
-``settlement_date`` is older than ``MAX_AGE_DAYS`` (one full bi-monthly
-cycle + dissemination lag + slack).
+``settlement_date`` is older than ``MAX_AGE_DAYS``.
+
+MAX_AGE_DAYS is cadence-derived, not guessed (evidence 2026-05-16, a
+live FINRA pull returned 10 settlement periods): bi-monthly period
+≈ 16d + measured dissemination lag ≈ 13d (release_date −
+settlement_date) + ~13d slack = 42d. The earlier 35 was ~right; the
+red it threw was NOT miscalibration — it was the FINRA adapter's
+missing offset-pagination ingesting only one stale period. That bug
+is fixed; this threshold now legitimately means "FINRA published a
+newer period we failed to pull" → honestly self-healable.
 """
 from __future__ import annotations
 

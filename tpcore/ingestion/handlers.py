@@ -1858,9 +1858,15 @@ async def handle_finra_short_interest(
             )
             return 0
 
+    # FINRA cadence-derived window (measured 2026-05-16: bi-monthly,
+    # ~16d period; 10 settlement periods returned for a 180d span).
+    # 60d covers the latest ~3 bi-monthly periods incl. the freshest —
+    # bounded (~3×21k rows, well under the adapter page cap), idempotent
+    # ON CONFLICT. Replaces the blanket 90d. (Becomes the declared
+    # FINRA cadence-profile value in the #163 single-source-of-truth.)
     sc = config.get("since")
     since = (_date.fromisoformat(sc) if isinstance(sc, str)
-             else datetime.now(UTC).date() - _td(days=90))
+             else datetime.now(UTC).date() - _td(days=60))
 
     async with pool.acquire() as conn:
         urows = await conn.fetch(

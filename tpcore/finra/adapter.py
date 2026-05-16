@@ -37,6 +37,11 @@ _TOKEN_URL = (
 _DATA_URL = (
     "https://api.finra.org/data/group/otcMarket/name/consolidatedShortInterest"
 )
+# FINRA caps a single response at 1000 rows. Page via offset until a
+# short page; bounded so a misbehaving API can't loop unbounded
+# (200 pages = 200k rows ≫ a full bi-monthly universe).
+_PAGE_SIZE = 1000
+_MAX_PAGES = 200
 
 
 class ShortInterestRecord(BaseModel):
@@ -100,23 +105,43 @@ class FinraAdapter:
         ≥ ``since``). Raises ``DataProviderOutage`` on permanent failure
         or malformed payload."""
         await self._ensure_token()
-        body: dict[str, Any] = {}
+        # NOTE: FINRA rejects `sortFields` unless every partition key is
+        # pinned with an EQUAL filter (400). Offset pagination alone
+        # still walks every row (all settlement periods) across pages.
+        base: dict[str, Any] = {}
         if since is not None:
-            body = {
-                "compareFilters": [{
-                    "compareType": "GTE",
-                    "fieldName": "settlementDate",
-                    "fieldValue": since.isoformat(),
-                }]
-            }
-        try:
-            raw = await self._fetch_data(body)
-        except DataProviderOutage:
-            raise
-        except httpx.HTTPError as exc:
-            raise DataProviderOutage(
-                f"{_PROVIDER_NAME} get_short_interest unreachable: {exc}"
-            ) from exc
+            base["compareFilters"] = [{
+                "compareType": "GTE",
+                "fieldName": "settlementDate",
+                "fieldValue": since.isoformat(),
+            }]
+        # FINRA caps a single response at 1000 rows and returns the
+        # oldest settlement period first. Without offset pagination we
+        # silently ingest ONLY that first period and miss every newer
+        # bi-monthly settlement (observed 2026-05-16: a 180d window
+        # returned 1000 rows all settled 2025-11-28). Page until a
+        # short page; bounded so a misbehaving API can't loop forever.
+        raw: list[dict[str, Any]] = []
+        offset = 0
+        for _page in range(_MAX_PAGES):
+            body = dict(base, limit=_PAGE_SIZE, offset=offset)
+            try:
+                page = await self._fetch_data(body)
+            except DataProviderOutage:
+                raise
+            except httpx.HTTPError as exc:
+                raise DataProviderOutage(
+                    f"{_PROVIDER_NAME} get_short_interest unreachable: {exc}"
+                ) from exc
+            raw.extend(page)
+            if len(page) < _PAGE_SIZE:
+                break
+            offset += _PAGE_SIZE
+        else:
+            logger.warning(
+                "finra.pagination_capped",
+                max_pages=_MAX_PAGES, rows=len(raw),
+            )
 
         out: list[ShortInterestRecord] = []
         try:
