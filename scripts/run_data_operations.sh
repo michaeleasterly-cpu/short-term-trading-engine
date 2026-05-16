@@ -148,147 +148,39 @@ if [[ $AUDIT_RC -ne 0 ]]; then
 fi
 _log_event INGESTION_COMPLETE wrapper_audit
 
-# Step 4 — AUTONOMOUS SELF-HEAL (rebuilt 2026-05-15).
+# Step 4 — AUTONOMOUS SELF-HEAL (rebuilt 2026-05-16: thin caller).
 #
-# Old behaviour: validation red → notify + exit. That made every gap a
-# babysitting event. New behaviour: validation red on a daily-bars
-# completeness/freshness check → the pipeline *fixes it itself* via the
-# canonical parameterised backfill, re-validates, and only escalates to
-# the operator after MAX_HEAL_ATTEMPTS failed auto-fixes. Reds that a
-# bars backfill genuinely cannot fix (fundamentals/corp-actions/etc.)
-# escalate immediately — pretending to heal those would be dishonest
-# and would let the system trade on bad data.
+# The bespoke bash heal loop was replaced by the generic tpcore
+# self-heal engine (architecture mandate, TODO #132). All logic —
+# run data_validation, read reds, dispatch each red to its HealSpec,
+# run the bounded canonical repair, re-validate, bounded retry,
+# honest escalation — lives in `python -m tpcore.selfheal` and is
+# unit-tested. This wrapper only enforces the process contract:
 #
-# Safety invariant: DATA_OPERATIONS_COMPLETE (Step 6) is NEVER emitted
-# unless validation is fully green. If auto-heal exhausts its attempts,
-# this script exits non-zero WITHOUT emitting — so the engine-service
-# daemon never fires the engine sweep on unhealed data. "100% data or
-# don't trade" is enforced structurally, not by a human watching.
+#   exit 0  → data layer is 100% green (after 0+ autonomous repairs)
+#   exit !0 → escalation; NOT green
+#
+# Safety invariant unchanged: DATA_OPERATIONS_COMPLETE (Step 6) is
+# NEVER emitted unless this returns 0, so the engine-service daemon
+# can never fire the engine sweep on unhealed data. Per-source heal
+# capability is added by registering a HealSpec — never by editing
+# this script (one canonical mechanism, no bash spider-web).
 echo ""
-echo "▶ STEP 4 / 6  autonomous self-heal — guarantee 100% validation green"
-echo "────────────────────────────────────────────────────────────────────────"
-_log_event INGESTION_START wrapper_validation_recheck
-
-MAX_HEAL_ATTEMPTS=3
-# The heal uses the BOUNDED targeted gap-repair
-# (`--param repair_gaps=true`): the stage re-pulls only the tickers the
-# completeness invariant currently flags, over a window bracketing the
-# oldest missing session. A whole-universe `force_refresh` was proven
-# 2026-05-15 to exceed the 3600s stage timeout (two 60-min timeouts),
-# so it could never actually self-heal. Targeted repair is a handful of
-# tickers → seconds, well inside the timeout and the pre-open window.
-
-# Print the bare source name of every currently-red validation check
-# (one per line). Reads the freshest row per source from
-# data_quality_log — written by the validation stage of ops.py --update
-# and re-written by each `ops.py --stage data_validation` re-run below.
-_red_validation_sources() {
-    DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python -c "
-import asyncio, os
-from tpcore.db import build_asyncpg_pool
-async def main():
-    pool = await build_asyncpg_pool(os.environ['DATABASE_URL'])
-    async with pool.acquire() as conn:
-        rows = await conn.fetch('''
-            WITH latest AS (
-                SELECT source, MAX(timestamp) AS t
-                FROM platform.data_quality_log
-                WHERE source LIKE 'validation.%'
-                GROUP BY source
-            )
-            SELECT q.source
-            FROM platform.data_quality_log q
-            JOIN latest l ON l.source = q.source AND l.t = q.timestamp
-            WHERE q.stale OR (q.confidence IS NOT NULL AND q.confidence < 1.0)
-            ORDER BY q.source
-        ''')
-        for r in rows:
-            print(r['source'])
-    await pool.close()
-asyncio.run(main())
-"
-}
-
-heal_attempt=0
-while :; do
-    RED_SOURCES="$(_red_validation_sources)"
-    if [[ -z "$RED_SOURCES" ]]; then
-        break   # fully green — invariant satisfied
-    fi
-
-    # Split red into the auto-healable class (daily-bars completeness /
-    # freshness — a backfill can fill these) vs everything else.
-    NON_HEALABLE="$(grep -v '^validation\.prices_daily_\(completeness\|freshness\)$' <<<"$RED_SOURCES" || true)"
-    if [[ -n "$NON_HEALABLE" ]]; then
-        _log_event INGESTION_FAILED wrapper_validation_recheck "non-healable validation red"
-        echo "✗ validation red on check(s) a daily_bars backfill cannot fix:"
-        echo "$NON_HEALABLE" | sed 's/^/    /'
-        echo ""
-        echo "  These require operator investigation (fundamentals / corp-"
-        echo "  actions / classifications / etc. — not a prices gap). Not"
-        echo "  emitting DATA_OPERATIONS_COMPLETE; engines will NOT trade."
-        _notify_failure "validation (non-healable: $(echo "$NON_HEALABLE" | tr '\n' ',' | sed 's/,$//'))" 1
-        exit 1
-    fi
-
-    if (( heal_attempt >= MAX_HEAL_ATTEMPTS )); then
-        _log_event INGESTION_FAILED wrapper_validation_recheck "auto-heal exhausted after $MAX_HEAL_ATTEMPTS attempts"
-        echo "✗ daily-bars validation STILL red after $MAX_HEAL_ATTEMPTS auto-heal"
-        echo "  backfill attempts:"
-        echo "$RED_SOURCES" | sed 's/^/    /'
-        echo ""
-        echo "  The backfill is not closing the gap — likely an upstream"
-        echo "  vendor outage (Alpaca) or a structural data issue. Escalating."
-        echo "  NOT emitting DATA_OPERATIONS_COMPLETE; engines will NOT trade"
-        echo "  on incomplete data."
-        _notify_failure "auto-heal exhausted ($MAX_HEAL_ATTEMPTS attempts, still red)" 1
-        exit 1
-    fi
-
-    heal_attempt=$((heal_attempt + 1))
-    echo ""
-    echo "  ⟳ auto-heal attempt ${heal_attempt}/${MAX_HEAL_ATTEMPTS} — red:"
-    echo "$RED_SOURCES" | sed 's/^/      /'
-    echo "    running canonical BOUNDED targeted gap-repair (no one-off script):"
-    echo "    ops.py --stage daily_bars --param repair_gaps=true --force"
-    echo "    (re-pulls only the invariant-flagged tickers — seconds, not 60+ min)"
-    _log_event INGESTION_START wrapper_autoheal "attempt ${heal_attempt}/${MAX_HEAL_ATTEMPTS}"
-
-    DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python scripts/ops.py \
-        --stage daily_bars \
-        --param repair_gaps=true \
-        --force --run-id "$RUN_ID"
-    HEAL_RC=$?
-    if [[ $HEAL_RC -ne 0 ]]; then
-        _log_event INGESTION_FAILED wrapper_autoheal "backfill exited $HEAL_RC (attempt ${heal_attempt})"
-        echo "✗ auto-heal backfill itself exited $HEAL_RC on attempt ${heal_attempt}."
-        echo "  Cannot self-heal through a failing backfill. Escalating; NOT"
-        echo "  emitting DATA_OPERATIONS_COMPLETE."
-        _notify_failure "auto-heal backfill (attempt ${heal_attempt}, rc $HEAL_RC)" $HEAL_RC
-        exit $HEAL_RC
-    fi
-
-    # Re-validate so data_quality_log reflects the post-backfill state;
-    # the loop then re-probes and either breaks green or retries.
-    echo "    re-validating after backfill..."
-    DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python scripts/ops.py \
-        --stage data_validation --run-id "$RUN_ID"
-    REVAL_RC=$?
-    if [[ $REVAL_RC -ne 0 ]]; then
-        _log_event INGESTION_FAILED wrapper_autoheal "re-validation exited $REVAL_RC"
-        echo "✗ re-validation stage exited $REVAL_RC after backfill. Escalating."
-        _notify_failure "auto-heal re-validation (rc $REVAL_RC)" $REVAL_RC
-        exit $REVAL_RC
-    fi
-    _log_event INGESTION_COMPLETE wrapper_autoheal "attempt ${heal_attempt} re-validated"
-done
-
-_log_event INGESTION_COMPLETE wrapper_validation_recheck
-if (( heal_attempt > 0 )); then
-    echo "✓ validation fully green after ${heal_attempt} autonomous heal attempt(s) — zero gaps, no human needed"
-else
-    echo "✓ validation fully green on first pass — zero gaps"
+echo "▶ STEP 4 / 6  autonomous self-heal (tpcore.selfheal) — guarantee 100% green"
+echo "─────────────────────────────────────────────────────────────────"
+_log_event INGESTION_START wrapper_selfheal
+DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python -m tpcore.selfheal
+SELFHEAL_RC=$?
+if [[ $SELFHEAL_RC -ne 0 ]]; then
+    _log_event INGESTION_FAILED wrapper_selfheal "self-heal escalated (rc $SELFHEAL_RC)"
+    echo "✗ self-heal could not reach 100% green — escalated (see output above)."
+    echo "  NOT emitting DATA_OPERATIONS_COMPLETE; engines will NOT trade on"
+    echo "  unhealed data. Operator investigation required."
+    _notify_failure "self-heal escalated" $SELFHEAL_RC
+    exit $SELFHEAL_RC
 fi
+_log_event INGESTION_COMPLETE wrapper_selfheal
+echo "✓ data layer 100% green (autonomous self-heal)"
 
 # Step 4b — refresh dashboard matview now that prices_daily is current.
 # REFRESH CONCURRENTLY so dashboard reads don't block while it runs (~1s).

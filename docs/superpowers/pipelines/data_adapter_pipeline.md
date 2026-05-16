@@ -6,7 +6,7 @@ This document is the canonical reference. New adapters start from `tpcore/templa
 
 **See also:** [`engine_readiness.md`](../checklists/engine_readiness.md) is the parallel contract for *engines* (the consumers of this data). It enforces the 5-plug structure, shared `tpcore` reuse (indicators, `BaseOrderManager`, `SizingError`, `PerTradeGraduationStats`), and risk/capital gate composition. New engines start from `tpcore/templates/engine_template/`.
 
-## The five stages
+## The six stages
 
 | # | Stage | Artifact | Self-verification requirement |
 |---|---|---|---|
@@ -15,8 +15,9 @@ This document is the canonical reference. New adapters start from `tpcore/templa
 | 3 | **validate** | A check in `tpcore/quality/validation/checks/` returning a `CheckResult`. Registered in `suite.run_suite()` so it ships with the operational `--update` flow. | The check exercises *real shape* (freshness, coverage, ranges) — not just "row count > 0". Passing on live data is the gate. |
 | 4 | **dashboard** | A row in `scripts/ops.py --check` (via `_CHECK_FNS`) with `ok: true/false`, plus a structured payload (`latest_event`, `age_days`, `threshold_days`, etc.). Surfaces in the Streamlit dashboard's Platform Health panel. | Operator reads `--check --pretty` and immediately sees green/yellow/red for this data source. |
 | 5 | **schedule** | A stage in `scripts/ops.py:_STAGE_SPECS` with a skip-guard (idempotent — second run within window short-circuits) **and** a `last_run_at` writeback to `platform.ingestion_jobs` on completion. | Running `python scripts/ops.py --update` twice in a row produces zero duplicate inserts on the second run and logs `skipped_fresh` (or equivalent). |
+| 6 | **self-heal** | A `HealSpec` registered in `tpcore/selfheal/registry.py` for this feed's validation check. Either **healable** — a *bounded targeted* repair mode on the canonical stage (the `daily_bars --param repair_gaps=true` pattern: re-pull ONLY the invariant-flagged rows, computed from the **same evaluation as the validation check** so detector and healer cannot disagree; NEVER a whole-universe `force_refresh` — proven 2026-05-15 to exceed the stage timeout and so never self-heal) — or honestly **`healable=False`** with an `unhealable_reason` (escalates; never fake-green). | `test_selfheal.py` registry-coverage asserts the HealSpec set == `suite.KNOWN_CHECK_NAMES`: the build FAILS until this feed's HealSpec decision is recorded. `python -m tpcore.selfheal` drives the layer to 100% green or an honest escalation. |
 
-All five stages exist or the adapter doesn't ship. Half-built adapters are the operational debt this contract exists to prevent.
+All six stages exist or the adapter doesn't ship. Half-built adapters are the operational debt this contract exists to prevent. Stage 6 is enforced mechanically — you cannot land stage 3 (a new validation check) without stage 6 (its HealSpec) or the registry-coverage test goes red.
 
 ### CSV-first sub-protocol (under stage 1: ingest)
 
@@ -323,9 +324,10 @@ schedule:  sec_filings stage in _STAGE_SPECS; skip-if-6-days idempotent
 
 1. Copy `tpcore/templates/adapter_template.py` to `tpcore/<provider>/<name>_adapter.py`.
 2. Open `docs/superpowers/checklists/adapter_readiness.md` and check off each item as you implement.
-3. Land all five pipeline stages in **one PR**. Don't split the validation check from the adapter; don't split the dashboard row from the schedule stage. Half-shipped adapters are the bug this doc exists to prevent.
-4. Update the compliance matrix above with a new row for the adapter, listing the artifacts you shipped.
-5. The PR description includes the self-verification report shown above with real numbers from a live ingest.
+3. Land all **six** pipeline stages in **one PR**. Don't split the validation check from the adapter; don't split the dashboard row from the schedule stage; **don't split the HealSpec (stage 6) from the validation check (stage 3)** — the registry-coverage test enforces this, the build is red until the HealSpec exists. Half-shipped adapters are the bug this doc exists to prevent.
+4. Register the **stage-6 HealSpec** in `tpcore/selfheal/registry.py`: either `healable=True` with a *bounded targeted* repair mode on the canonical stage (mirror `daily_bars` `repair_gaps`: a `compute_*_repair_targets` that shares the validation check's evaluation, re-pulling only the flagged rows over a bracketing window — NEVER whole-universe `force_refresh`), or `healable=False` with an honest `unhealable_reason`. No new bash, no new orchestrator code — one declarative line.
+5. Update the compliance matrix above with a new row for the adapter, listing the artifacts you shipped (incl. the HealSpec).
+6. The PR description includes the self-verification report shown above with real numbers from a live ingest **and** a `python -m tpcore.selfheal` dry result (green, or the honest escalation if `healable=False`).
 
 ## References
 
@@ -335,3 +337,4 @@ schedule:  sec_filings stage in _STAGE_SPECS; skip-if-6-days idempotent
 - Validation suite: `tpcore/quality/validation/suite.py`
 - Ops stage spec: `scripts/ops.py:_STAGE_SPECS`
 - Dashboard probes: `scripts/ops.py:_CHECK_FNS`
+- **Self-heal engine + HealSpec registry: `tpcore/selfheal/` (stage 6); thin caller `python -m tpcore.selfheal`**

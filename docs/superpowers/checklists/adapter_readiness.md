@@ -65,7 +65,17 @@ Template: copy `tpcore/templates/adapter_template.py` as the starting point — 
 - [ ] Has a skip-guard for high-cost / low-frequency operations (e.g., catalyst refresh: skip if last run < 6 days ago).
 - [ ] Writes back to `platform.ingestion_jobs.last_run_at` on completion (TODO once that wiring lands; see follow-up).
 
-## 9. Final checks
+## 9. Self-heal (pipeline stage 6 — mechanically enforced)
+
+- [ ] A `HealSpec` for this feed's validation check is registered in `tpcore/selfheal/registry.py`. (The registry-coverage test in `tpcore/tests/test_selfheal.py` asserts the HealSpec set == `suite.KNOWN_CHECK_NAMES` — the build is RED until this exists. You cannot forget self-heal.)
+- [ ] The HealSpec decision is deliberate and honest: **either** `healable=True` with a *bounded targeted* repair, **or** `healable=False` with a real `unhealable_reason`. No silent gap, no fake-green.
+- [ ] If `healable=True`: the repair is a **bounded targeted** mode on the canonical `ops.py` stage (the `daily_bars --param repair_gaps=true` pattern). It re-pulls ONLY the invariant-flagged rows, over a window bracketing the oldest miss. **Never a whole-universe `force_refresh`** — proven 2026-05-15 to exceed the 3600s stage timeout and so never actually self-heal.
+- [ ] If `healable=True`: the repair's target set is computed from the **same evaluation function as the validation check** (cf. `_evaluate` shared by `check_prices_daily_completeness` + `compute_gap_repair_targets`) so detector and healer can never disagree.
+- [ ] Heal executes ONLY via the canonical `ops.py --stage` path — no one-off script, no ingestion reimplemented in the orchestrator.
+- [ ] `python -m tpcore.selfheal` was run against live data and the result is in the PR description (green, or the honest escalation if `healable=False`).
+- [ ] No edits to `run_data_operations.sh` or `tpcore/selfheal/orchestrator.py` were needed — capability was added by the one declarative HealSpec line (if you had to touch the orchestrator, the abstraction is wrong — stop and fix that, don't special-case).
+
+## 10. Final checks
 
 - [ ] `ruff check .` clean.
 - [ ] Full `pytest -q` passes — no regressions in other engines/adapters.

@@ -34,18 +34,48 @@ babysitting is unacceptable per the mandate — close it.
 6. **`liquidity_tiers`, `ticker_classifications`** — invariant +
    auto-heal/recompute.
 
-**Design constraints (non-negotiable, mirror the prices_daily build):**
+**ARCHITECTURE MANDATE (binding — the shape, not negotiable):**
+Self-heal is a GENERIC `tpcore` capability, NOT per-source bash.
+1. **One self-heal orchestrator in `tpcore`**, beside the validation
+   suite (detector + healer in the same layer). Input: the suite
+   result. Per red check → dispatch to the registered healer for that
+   source → bounded retry → re-validate → escalate if exhausted or
+   unhealable. Pure Python, unit-testable with fake healers.
+2. **Each data feed contributes only a declarative `HealSpec`**:
+   {invariant = the existing validation check; canonical repair =
+   which `ops.py --stage X --param …`; is-auto-healable; bounded
+   retry/backoff policy}. Adding a source = registering a spec —
+   ZERO bash edits, zero new branches.
+3. **Heal executes ONLY via the canonical `ops.py --stage` infra.**
+   The orchestrator INVOKES it; it never reimplements ingestion. No
+   one-off scripts. (Standard: data_adapter_pipeline.md.)
+4. **Every HealSpec is BOUNDED/targeted.** Proven 2026-05-15: a
+   whole-universe `force_refresh` exceeds the 3600s stage timeout and
+   can never self-heal. Targeted repair only (the `repair_gaps`
+   pattern: re-pull just the invariant-flagged tickers/window).
+5. **Detector/healer symmetry.** The healer's target set is computed
+   from the SAME code as the check (cf. `_evaluate` shared by
+   `check_prices_daily_completeness` + `compute_gap_repair_targets`)
+   so they can never disagree.
+6. **Process concerns stay in the bash wrapper, thin:** never emit
+   `DATA_OPERATIONS_COMPLETE` unless 100% green; self-exclusion lock;
+   post-close/`tpcore.calendar` gating. `run_data_operations.sh`
+   becomes a thin caller of the tpcore orchestrator.
+7. **`prices_daily` is the reference implementation, migrated INTO
+   the orchestrator** — not a bash special case. One canonical
+   mechanism, no N variants (operating-identity: symmetry/standard).
+
+**Per-source design constraints (within the architecture above):**
 - Each invariant is ungameable: physical-truth, zero-tolerance, no
   recency window, no percentage knob. Scoped to exactly the data the
   engines depend on.
-- Auto-heal runs the CANONICAL parameterised stage
-  (`ops.py --stage <name> --param …`) — never a one-off script.
-- Generalise the Step-4 loop from "prices-only healable" to a
-  per-source heal dispatch table; bounded retries; **never emit
-  `DATA_OPERATIONS_COMPLETE` unless 100% of every source is green**;
-  escalate only after auto-heal genuinely exhausts.
-- Honest heal only: a source's heal must actually be able to fix that
-  source's failure class. No dishonest cross-source "heal".
+- Honest heal only: a source's HealSpec must actually be able to fix
+  that source's failure class. No dishonest cross-source "heal";
+  not-bars-fixable → escalate, never fake-green.
+- **No lazy vendor-blame.** A shortfall on authoritative data (SEC
+  EDGAR especially) is OUR ingestion defect until proven per-ticker
+  against the source. Threshold recalibration only after the our-gap
+  hypothesis is empirically killed.
 - Each source's required tickers registered where the freshness check
   can see them; add/retire the matching `audit_pipeline.py` check in
   the same change.
