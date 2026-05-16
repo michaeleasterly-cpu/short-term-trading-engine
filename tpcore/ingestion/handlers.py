@@ -1711,6 +1711,74 @@ async def handle_iborrowdesk_borrow_rates(
     return len(rows)
 
 
+async def handle_aaii_sentiment(
+    pool: asyncpg.Pool, config: dict[str, Any]
+) -> int | None:
+    """AAII weekly Sentiment Survey → ``platform.aaii_sentiment``.
+    Published Thursdays; weekly → 5-day skip-guard. The source is a
+    single full-history workbook, so the upsert is idempotent and
+    self-correcting (``ON CONFLICT (date) DO UPDATE``) — every run
+    refreshes the whole series cheaply. ``config``: ``skip_guard_days``
+    (default 5; 0 forces re-pull — self-heal).
+    """
+    from datetime import UTC
+
+    from tpcore.aaii import AAIIAdapter
+
+    skip_days = int(config.get("skip_guard_days", 5))
+    if skip_days > 0:
+        async with pool.acquire() as conn:
+            newest = await conn.fetchval(
+                "SELECT MAX(recorded_at) FROM platform.aaii_sentiment"
+            )
+        if newest is not None and (datetime.now(UTC) - newest).days < skip_days:
+            logger.info(
+                "ingestion.handler.aaii_sentiment.skipped_fresh",
+                last_refresh_age_days=(datetime.now(UTC) - newest).days,
+            )
+            return 0
+
+    async with AAIIAdapter() as adapter:
+        records = await adapter.get_sentiment_history()
+    if not records:
+        logger.info("ingestion.handler.aaii_sentiment.empty")
+        return 0
+
+    rows = [
+        (r.date, float(r.bullish_pct), float(r.bearish_pct), float(r.neutral_pct))
+        for r in records
+    ]
+
+    from tpcore.ingestion.csv_archive import write_archive
+    write_archive(
+        "aaii_sentiment",
+        [{"date": d.isoformat(), "bullish_pct": str(b),
+          "bearish_pct": str(be), "neutral_pct": str(n)}
+         for (d, b, be, n) in rows],
+        fieldnames=["date", "bullish_pct", "bearish_pct", "neutral_pct"],
+        validator=lambda x: bool(x.get("date")) and bool(x.get("bullish_pct")),
+    )
+    async with pool.acquire() as conn:
+        await conn.executemany(
+            """
+            INSERT INTO platform.aaii_sentiment
+                (date, bullish_pct, bearish_pct, neutral_pct)
+            VALUES ($1,$2,$3,$4)
+            ON CONFLICT (date) DO UPDATE SET
+                bullish_pct=EXCLUDED.bullish_pct,
+                bearish_pct=EXCLUDED.bearish_pct,
+                neutral_pct=EXCLUDED.neutral_pct,
+                recorded_at=now()
+            """,
+            rows,
+        )
+    logger.info(
+        "ingestion.handler.aaii_sentiment.done",
+        rows=len(rows), date_range=f"{rows[0][0]}..{rows[-1][0]}",
+    )
+    return len(rows)
+
+
 HANDLERS: dict[str, HandlerFn] = {
     "data_validation": handle_data_validation,
     "fundamentals_refresh": handle_fundamentals_refresh,
@@ -1724,6 +1792,7 @@ HANDLERS: dict[str, HandlerFn] = {
     "fear_greed": handle_fear_greed,
     "finra_short_interest": handle_finra_short_interest,
     "iborrowdesk_borrow_rates": handle_iborrowdesk_borrow_rates,
+    "aaii_sentiment": handle_aaii_sentiment,
 }
 
 
@@ -1742,4 +1811,5 @@ __all__ = [
     "handle_fear_greed",
     "handle_finra_short_interest",
     "handle_iborrowdesk_borrow_rates",
+    "handle_aaii_sentiment",
 ]

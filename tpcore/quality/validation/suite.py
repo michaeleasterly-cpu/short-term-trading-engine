@@ -24,6 +24,8 @@ import structlog
 
 from tpcore.quality.data_quality import DataQualityScore, DataQualityWriter
 
+from .checks.aaii_sentiment_freshness import CHECK_NAME as AAII_SENTIMENT_NAME
+from .checks.aaii_sentiment_freshness import check_aaii_sentiment_freshness
 from .checks.borrow_rates_freshness import CHECK_NAME as BORROW_RATES_NAME
 from .checks.borrow_rates_freshness import check_borrow_rates_freshness
 from .checks.catalyst_freshness import CHECK_NAME as CATALYST_FRESHNESS_NAME
@@ -100,6 +102,7 @@ KNOWN_CHECK_NAMES: tuple[str, ...] = (
     FEAR_GREED_NAME,
     SHORT_INTEREST_NAME,
     BORROW_RATES_NAME,
+    AAII_SENTIMENT_NAME,
 )
 
 
@@ -178,6 +181,9 @@ async def run_suite(
     borrow_rates_task = _safe_run(
         BORROW_RATES_NAME, check_borrow_rates_freshness, pool, None
     )
+    aaii_sentiment_task = _safe_run(
+        AAII_SENTIMENT_NAME, check_aaii_sentiment_freshness, pool, None
+    )
     (
         delistings_result, constituent_result, splits_result,
         row_integrity_result, fund_integrity_result, ca_integrity_result,
@@ -186,6 +192,7 @@ async def run_suite(
         options_maxpain_result, insider_sentiment_result,
         social_sentiment_result, fear_greed_result,
         short_interest_result, borrow_rates_result,
+        aaii_sentiment_result,
     ) = await asyncio.gather(
         delistings_task, constituent_task, splits_task,
         row_integrity_task, fund_integrity_task, ca_integrity_task,
@@ -194,6 +201,7 @@ async def run_suite(
         options_maxpain_task, insider_sentiment_task,
         social_sentiment_task, fear_greed_task,
         short_interest_task, borrow_rates_task,
+        aaii_sentiment_task,
     )
     checks: list[CheckResult] = [
         delistings_result, constituent_result, splits_result,
@@ -203,6 +211,7 @@ async def run_suite(
         options_maxpain_result, insider_sentiment_result,
         social_sentiment_result, fear_greed_result,
         short_interest_result, borrow_rates_result,
+        aaii_sentiment_result,
     ]
 
     finished_at = datetime.now(UTC)

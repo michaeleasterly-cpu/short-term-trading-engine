@@ -356,6 +356,16 @@ The index correctly bottoms at the two worst crashes (COVID < GFC, matching the 
 
 **Refresh cadence:** daily via the `iborrowdesk_borrow_rates` stage; 24h skip-guard. `borrow_rates_freshness` check FAILs if newest `date` > 5d old; self-heal re-runs the stage (`skip_guard_hours=0`).
 
+#### `platform.aaii_sentiment`
+
+**Purpose:** AAII Sentiment Survey — % of individual investors bullish / neutral / bearish on the next 6 months, surveyed weekly since 1987. A widely-cited **contrarian** indicator. PK `(date)`. Columns: `bullish_pct`, `bearish_pct`, `neutral_pct` (numeric, 2dp, each `[0,100]`), `recorded_at`. Ingested by `tpcore.aaii.AAIIAdapter` (no auth; single legacy OLE2 `.xls` full-history workbook parsed via `xlrd`) → `handle_aaii_sentiment` → `aaii_sentiment` stage. The source is one full-history file so the upsert is idempotent + self-correcting (`ON CONFLICT (date) DO UPDATE`) — every run cheaply refreshes the whole series. Added 2026-05-16.
+
+**Integrity:** a DB CHECK enforces `abs(bullish+bearish+neutral - 100) <= 1.5` per row. The parser independently drops any workbook row whose components don't sum to ~100 (the source has a known one-off 1996-01-11 row that stored percents instead of fractions → skipped, never persisted — verified live: 2,023 of 2,024 rows ingested, the corrupt one excluded).
+
+**Anti-bot fragility:** a plain request 403s; the adapter sends a browser-shaped request (Chrome UA + Accept + Referer) — verified 2026-05-16. A 403 is permanent per the canonical `with_retry`; 429/5xx/network retry. No credentials, no auth bypass.
+
+**Refresh cadence:** weekly (published Thursdays, pull Friday) via the `aaii_sentiment` stage; 5-day skip-guard. `aaii_sentiment_freshness` check FAILs if newest `date` > 10d old; self-heal re-runs the stage (`skip_guard_days=0`).
+
 #### `platform.social_sentiment`
 
 **Purpose:** ApeWisdom Reddit social sentiment (no auth). One row per (ticker, date) — mentions / upvotes / rank + 24h-ago comparators for the T1/T2 stock universe. Ingested by `tpcore.apewisdom.ApeWisdomAdapter` → `handle_apewisdom_social_sentiment` → `apewisdom_social_sentiment` stage (all pages, local T1/T2 filter, 24h skip-guard, idempotent `ON CONFLICT DO NOTHING`). Added 2026-05-16.

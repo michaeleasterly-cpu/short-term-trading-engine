@@ -260,6 +260,7 @@ The daily `python scripts/ops.py --update` pipeline already includes the heavy w
 | `fear_greed` | Daily after close (2026-05-16) | recompute is idempotent (ON CONFLICT DO UPDATE) | 4-component Fear & Greed from existing platform data (no provider) → `platform.fear_greed`. `--param backfill=true` computes full 2001→today history. |
 | `finra_short_interest` | Bi-monthly (2026-05-16); 12-day skip-guard | no-op if `MAX(recorded_at)` within 12d | FINRA consolidated short interest (OAuth2; `FINRA_API_CLIENT_ID`/`FINRA_API_SECRET_KEY`) → `platform.short_interest` for T1/T2 stocks. PIT: `release_date` stored separate from `settlement_date` (~9 NYSE-session lag); `short_interest_pct` from PIT shares_outstanding (NULL if none). `--param skip_guard_days=0` forces re-pull. |
 | `iborrowdesk_borrow_rates` | Daily (2026-05-16); 24h skip-guard | no-op if `MAX(recorded_at)` within 24h | IBorrowDesk daily borrow-fee % (no auth, scrape-fragile) → `platform.borrow_rates` per-ticker over T1/T2. 3 consecutive anti-bot drops → CRITICAL log + skip, never crashes. `--param max_tickers=N` bounds the run; `--param skip_guard_hours=0` forces re-pull. **Completes the master-plan data layer.** |
+| `aaii_sentiment` | Weekly (2026-05-16); 5-day skip-guard | no-op if `MAX(recorded_at)` within 5d | AAII Sentiment Survey (no auth) — full-history `.xls` workbook → `platform.aaii_sentiment` (idempotent ON CONFLICT DO UPDATE, whole series refreshed each run). Published Thursdays; pulled Friday. `--param skip_guard_days=0` forces re-pull (self-heal). Contrarian indicator. |
 
 To force-run locally (same command as the daily run; underlying handlers are idempotent):
 
@@ -779,6 +780,7 @@ FROM (
 | `fear_greed_freshness` *(NEW 2026-05-16)* | Most-recent fear_greed row ≤ 3 NYSE sessions old | stale macro/SPY inputs or stalled `fear_greed` stage; self-heal recomputes |
 | `short_interest_freshness` *(NEW 2026-05-16, FINRA adapter)* | Newest `settlement_date` ≤ 35d old | FINRA OAuth creds invalid, FINRA outage, or stalled `finra_short_interest` stage; self-heal re-runs the stage |
 | `borrow_rates_freshness` *(NEW 2026-05-16, IBorrowDesk adapter)* | Newest `date` ≤ 5d old | IBorrowDesk anti-bot block or stalled `iborrowdesk_borrow_rates` stage; self-heal re-runs the stage |
+| `aaii_sentiment_freshness` *(NEW 2026-05-16, AAII adapter)* | Newest survey `date` ≤ 10d old | AAII anti-bot block, workbook moved, or stalled `aaii_sentiment` stage; self-heal re-runs the stage |
 
 ### Cross-table audit (added 2026-05-13)
 

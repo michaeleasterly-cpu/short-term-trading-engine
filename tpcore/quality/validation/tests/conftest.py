@@ -167,6 +167,11 @@ class FakePool:
         if "max(date)" in sql.lower() and "platform.borrow_rates" in sql.lower():
             from datetime import UTC, datetime, timedelta
             return datetime.now(UTC).date() - timedelta(days=1)
+        # aaii_sentiment_freshness MAX(date): a fresh date so the
+        # suite is green in e2e tests for unrelated checks.
+        if "max(date)" in sql.lower() and "platform.aaii_sentiment" in sql.lower():
+            from datetime import UTC, datetime, timedelta
+            return datetime.now(UTC).date() - timedelta(days=3)
         return None
 
 

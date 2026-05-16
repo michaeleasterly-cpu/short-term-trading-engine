@@ -100,6 +100,9 @@ _SPECS: tuple[HealSpec, ...] = (
     HealSpec(check_name="borrow_rates_freshness", source="iborrowdesk_borrow_rates",
              healable=True, stage="iborrowdesk_borrow_rates",
              params={"skip_guard_hours": "0"}, max_attempts=2),
+    HealSpec(check_name="aaii_sentiment_freshness", source="aaii_sentiment",
+             healable=True, stage="aaii_sentiment",
+             params={"skip_guard_days": "0"}, max_attempts=2),
 )
 
 HEAL_SPECS: dict[str, HealSpec] = {s.check_name: s for s in _SPECS}

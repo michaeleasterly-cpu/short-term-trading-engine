@@ -1047,6 +1047,23 @@ async def _stage_iborrowdesk_borrow_rates(
     return {"rows_loaded": int(rows or 0)}
 
 
+async def _stage_aaii_sentiment(
+    pool: asyncpg.Pool, config: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """AAII weekly Sentiment Survey (full-history workbook, idempotent
+    ON CONFLICT DO UPDATE). ``--param skip_guard_days=0`` forces a
+    re-pull (self-heal)."""
+    from tpcore.ingestion.handlers import handle_aaii_sentiment
+
+    log = structlog.get_logger("scripts.ops")
+    try:
+        rows = await handle_aaii_sentiment(pool, config or {})
+    except Exception as exc:
+        log.error("ops.stage.aaii_sentiment.failed", error=str(exc))
+        raise
+    return {"rows_loaded": int(rows or 0)}
+
+
 async def _stage_sec_filings(pool: asyncpg.Pool, *, backfill: bool = False) -> dict[str, Any]:
     """Weekly SEC EDGAR Form 4 + 8-K ingest.
 
@@ -1383,6 +1400,9 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # master-plan data layer. Added 2026-05-16.
     ("finra_short_interest", lambda pool, cfg: (lambda: _stage_finra_short_interest(pool, cfg)), HEAVY_STAGE_TIMEOUT_SEC),
     ("iborrowdesk_borrow_rates", lambda pool, cfg: (lambda: _stage_iborrowdesk_borrow_rates(pool, cfg)), HEAVY_STAGE_TIMEOUT_SEC),
+    # AAII Sentiment Survey (weekly, no auth, full-history workbook).
+    # Added 2026-05-16.
+    ("aaii_sentiment", lambda pool, cfg: (lambda: _stage_aaii_sentiment(pool, cfg)), HEAVY_STAGE_TIMEOUT_SEC),
     # data_validation runs the 10-check suite against the live tables —
     # at the current 20M-row prices_daily it consistently runs ~120-
     # 130s. Bumping to 5 min gives headroom without masking a true hang.
@@ -2700,6 +2720,50 @@ async def _check_iborrowdesk_borrow_rates(pool: asyncpg.Pool) -> dict[str, Any]:
     }
 
 
+async def _check_aaii_sentiment(pool: asyncpg.Pool) -> dict[str, Any]:
+    """Dashboard probe — AAII Sentiment Survey (weekly).
+
+    Data health: red if no data or latest > 10d old (matches the
+    ``aaii_sentiment_freshness`` validation threshold). When data is
+    fresh, the colour reflects the contrarian regime per spec: red if
+    bearish > 55% (extreme fear → contrarian-bullish signal), green
+    if neutral/balanced, gray (yellow) otherwise (e.g. extreme greed).
+    """
+    row = await pool.fetchrow(
+        """
+        SELECT date, bullish_pct, bearish_pct, neutral_pct
+        FROM platform.aaii_sentiment
+        ORDER BY date DESC
+        LIMIT 1
+        """
+    )
+    if row is None:
+        return {"ok": False, "reason": "no aaii_sentiment rows",
+                "summary": "AAII Sentiment: no data"}
+    latest = row["date"]
+    age = (date.today() - latest).days
+    bull = float(row["bullish_pct"])
+    bear = float(row["bearish_pct"])
+    summary = (
+        f"AAII Sentiment: Bullish {bull:.1f}% / Bearish {bear:.1f}% "
+        f"as of {latest.isoformat()}"
+    )
+    if age > 10:
+        return {"ok": False, "reason": f"stale ({age}d old)",
+                "summary": summary, "age_days": age}
+    # Fresh data — colour by contrarian regime.
+    if bear > 55.0:
+        # Extreme bearishness is a contrarian-bullish flag — surface
+        # it red so the operator sees the signal, per spec.
+        return {"ok": False, "reason": "extreme bearish (>55%) — "
+                "contrarian-bullish signal", "summary": summary,
+                "age_days": age, "bearish_pct": bear}
+    if bull <= 55.0:
+        return {"ok": True, "summary": summary, "age_days": age}
+    # Extreme greed / other — neither alarm nor green.
+    return {"ok": True, "warn": True, "summary": summary, "age_days": age}
+
+
 _CHECK_FNS = [
     ("db_connectivity", _check_connectivity),
     ("data_freshness", _check_freshness),
@@ -2715,6 +2779,7 @@ _CHECK_FNS = [
     ("fear_greed", _check_fear_greed),
     ("short_interest_freshness", _check_finra_short_interest),
     ("borrow_rates_freshness", _check_iborrowdesk_borrow_rates),
+    ("aaii_sentiment_freshness", _check_aaii_sentiment),
     ("liquidity_tiers_freshness", _check_liquidity_tiers_freshness),
     ("ticker_classifications", _check_ticker_classifications),
     ("engine_schedulers", _check_engine_schedulers),
