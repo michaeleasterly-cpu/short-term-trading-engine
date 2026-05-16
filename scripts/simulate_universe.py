@@ -593,9 +593,12 @@ async def _emit_universe_simulation_event(
 ) -> None:
     """Persist a single ``UNIVERSE_SIMULATION`` row in ``application_log``.
 
-    The smoke-test workflow (``scripts/smoke_test.py``) reads the most
-    recent event to pick a Sigma candidate without re-running the full
-    coarse + fine scan. The row is intentionally idempotent — a fresh
+    The paper-trading workflow (``scripts/start_paper_trading.py``)
+    reads the most recent event to pick engine candidates without
+    re-running the full coarse + fine scan. (The legacy
+    ``scripts/smoke_test.py`` consumer was archived with Sigma on
+    2026-05-16 → ``archive/smoke_test.py``.) The row is
+    intentionally idempotent — a fresh
     insert per script invocation, with the prior run preserved by the
     log's 7-day retention.
     """

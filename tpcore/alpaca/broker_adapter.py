@@ -12,9 +12,11 @@ into ``tpcore.outage.classify_outage``; once it returns
 ``BrokerUnavailableError`` so the engine's order manager can shut down new
 submissions and the Risk Governor can flatten positions.
 
-Sigma integration: ``submit_execution_decision`` accepts the two-payload
-``ExecutionDecision`` from ``sigma.plugs.execution_risk`` and ships the
-Tier 1 bracket and Tier 2 limit orders sequentially. Each fill is recorded
+Per-trade engine integration: ``submit_execution_decision`` accepts the
+two-payload ``ExecutionDecision`` from any per-trade engine's
+``execution_risk`` plug (Reversion/Vector — Sigma archived 2026-05-16)
+and ships the Tier 1 bracket and Tier 2 limit orders sequentially. Each
+fill is recorded
 to ``tpcore.quality.execution_quality.ExecutionQualityWriter``; if the
 writer has no DB pool wired it logs via ``structlog``.
 """

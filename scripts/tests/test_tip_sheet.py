@@ -12,7 +12,7 @@ Test selection driven by the 2026-05-13 expert design review:
 * ``--no-broker`` graceful path when broker raises
 * No-rubric-on-record produces gated output, not a crash
 * Engine-prefix filter of holdings is correct (the ``ENGINE_ORDER_PREFIX``
-  logic, currently a footgun for sigma/reversion/vector with no prefix)
+  logic, currently a footgun for reversion/vector with no prefix)
 """
 from __future__ import annotations
 
@@ -58,27 +58,27 @@ def _make_score(score: int) -> CredibilityScore:
 
 def test_credibility_blocked_renders_blocked_marker():
     score = _make_score(55)
-    out = render_credibility("sigma", score, force=False)
+    out = render_credibility("reversion", score, force=False)
     assert "BLOCKED" in out
     assert "55" in out
 
 
 def test_credibility_blocked_with_force_notes_bypass():
     score = _make_score(55)
-    out = render_credibility("sigma", score, force=True)
+    out = render_credibility("reversion", score, force=True)
     assert "BLOCKED" in out
     assert "force" in out.lower()
 
 
 def test_credibility_above_gate_passes():
     score = _make_score(75)
-    out = render_credibility("sigma", score, force=False)
+    out = render_credibility("reversion", score, force=False)
     assert "PASS" in out
     assert "75" in out
 
 
 def test_credibility_no_row_on_record():
-    out = render_credibility("sigma", None, force=False)
+    out = render_credibility("reversion", None, force=False)
     assert "no rubric row on record" in out.lower()
     # Crucially: must not crash with None.
 
@@ -109,8 +109,8 @@ def test_render_holdings_unprefixed_engine_shows_annotation():
         "market_value": 100.0, "cost_basis": 100.0,
         "unrealized_pl": 0.0, "unrealized_pl_pct": 0.0,
     }]
-    out = render_holdings("sigma", holdings)
-    # Sigma has no order-prefix so we show ALL broker positions; the renderer
+    out = render_holdings("reversion", holdings)
+    # Reversion has no order-prefix so we show ALL broker positions; the renderer
     # must annotate this so the operator isn't misled.
     assert "Phase 2.5" in out or "cross-engine attribution" in out
 
@@ -124,9 +124,9 @@ def test_render_recommendations_empty_momentum():
 
 
 def test_render_recommendations_empty_other_engine():
-    # Sigma/Reversion/Vector aren't ported in Phase 1 — the message should
+    # Reversion/Vector aren't ported in Phase 1 — the message should
     # say 'not implemented' not 'none', so the operator knows the difference.
-    out = render_recommendations("sigma", [], datetime.now(UTC))
+    out = render_recommendations("reversion", [], datetime.now(UTC))
     assert "not implemented" in out.lower()
 
 
@@ -178,12 +178,12 @@ def test_disclaimer_includes_key_phrases():
 def test_engine_prefix_map_only_momentum_has_prefix():
     """Phase 1 reality: only Momentum's order_manager stamps a stable
     engine-identifying prefix on client_order_ids. The other engines
-    (sigma/reversion/vector) stamp <TICKER>_<TS>_<tier> — no engine
+    (reversion/vector) stamp <TICKER>_<TS>_<tier> — no engine
     identifier, so we can't filter holdings to those engines at all.
     If this test fails, ENGINE_ORDER_PREFIX has drifted and the
     'currently holding' section will silently misattribute positions."""
     assert ENGINE_ORDER_PREFIX["momentum"] == "mo_"
-    for engine in ("sigma", "reversion", "vector", "s2", "catalyst", "sentinel"):
+    for engine in ("reversion", "vector", "s2", "catalyst", "sentinel"):
         assert ENGINE_ORDER_PREFIX[engine] is None, (
             f"{engine} acquired an order-prefix without updating the "
             f"holdings filter test — verify the prefix is actually engine-"
@@ -235,7 +235,7 @@ async def test_fetch_holdings_attributes_by_canonical_engine_prefix():
     returns ONLY positions whose orders carry that engine's prefix.
 
     Legacy ``<TICKER>_<TS>_tierN`` cids (pre-migration) cannot be told
-    apart between sigma and reversion, so the registry-based attribution
+    apart between reversion and vector, so the registry-based attribution
     returns False for them — those in-flight orders are tracked via the
     per-engine ``_trade_assessments`` in-memory map until they close.
     """
@@ -260,14 +260,14 @@ async def test_fetch_holdings_attributes_by_canonical_engine_prefix():
         return o
     broker.list_recent_orders = AsyncMock(return_value=[
         _buy("AAPL", "mo_AAPL_1700000000"),
-        _buy("YUMC", "sg_YUMC_1778582356_tier1"),
+        _buy("YUMC", "vc_YUMC_1778582356_tier1"),
         _buy("XOM",  "rv_XOM_1778582356_tier1"),
     ])
 
-    sigma_holdings = await fetch_engine_holdings(broker, "sigma")
+    vector_holdings = await fetch_engine_holdings(broker, "vector")
     reversion_holdings = await fetch_engine_holdings(broker, "reversion")
     momentum_holdings = await fetch_engine_holdings(broker, "momentum")
-    assert {h["ticker"] for h in sigma_holdings} == {"YUMC"}
+    assert {h["ticker"] for h in vector_holdings} == {"YUMC"}
     assert {h["ticker"] for h in reversion_holdings} == {"XOM"}
     assert {h["ticker"] for h in momentum_holdings} == {"AAPL"}
 

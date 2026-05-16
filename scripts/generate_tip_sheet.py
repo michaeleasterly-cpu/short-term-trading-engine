@@ -51,8 +51,7 @@ from tpcore.db import build_asyncpg_pool
 # stable prefix is tracked but not in scope here.
 ENGINE_ORDER_PREFIX: dict[str, str | None] = {
     "momentum": "mo_",
-    "sigma": None,      # uses <TICKER>_<TS>_tier1 / _tier2 — not engine-identifying
-    "reversion": None,  # same pattern
+    "reversion": None,  # uses <TICKER>_<TS>_tier1 / _tier2 — not engine-identifying
     "vector": None,
     "s2": None,
     "catalyst": None,
@@ -77,12 +76,6 @@ Do not share this output.
 
 
 ENGINE_DESCRIPTIONS: dict[str, str] = {
-    "sigma": (
-        "Sigma looks for stocks stuck in a sideways channel — bouncing between "
-        "a price floor and ceiling without a clear trend. When the stock touches "
-        "the bottom and shows signs of turning back up, Sigma enters with a "
-        "tight stop-loss. Half off at mid-channel, the rest at the ceiling."
-    ),
     "reversion": (
         "Reversion hunts for stocks that have fallen too far, too fast, and are "
         "statistically likely to snap back. Waits for fundamentals to confirm "
@@ -311,7 +304,7 @@ async def fetch_engine_holdings(
     Attribution uses :func:`tpcore.order_ids.is_engine_cid` — the single
     source of truth for which `client_order_id` belongs to which engine.
     Canonical prefixes (``mo_``, ``sg_``, ``rv_``, ``vc_``) plus the
-    legacy ``vector_`` prefix are recognized; legacy sigma/reversion
+    legacy ``vector_`` prefix are recognized; legacy per-trade-engine
     tier-suffix cids cannot be told apart from each other so they are
     NOT attributed to either (the order managers' in-process state is
     the source of truth for those in-flight orders).
@@ -355,7 +348,7 @@ async def fetch_today_recommendations(
     * **momentum** — runs the live setup-detection plug + returns the
       top decile (the orders the scheduler would submit on the next
       rebalance day).
-    * **sigma / reversion / vector** — reads the most recent ``SIGNAL``
+    * **reversion / vector** — reads the most recent ``SIGNAL``
       events from ``platform.application_log`` (the last completed
       scan run). Sequential engines emit one SIGNAL row per qualifying
       setup; this is what the engine "would buy now" if its scheduler
@@ -387,7 +380,7 @@ async def fetch_today_recommendations(
     # Sequential engines — pull the most recent SIGNAL events. Each
     # engine emits one SIGNAL row per setup that passed all its filters,
     # tagged with score + direction in the ``data`` jsonb.
-    if engine in ("sigma", "reversion", "vector"):
+    if engine in ("reversion", "vector"):
         async with pool.acquire() as conn:
             # The latest scan run for this engine — bound by recorded_at
             # so we only return today's view, not yesterday's.

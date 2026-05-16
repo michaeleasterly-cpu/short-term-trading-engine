@@ -1,37 +1,39 @@
-"""One-shot: run Sigma + Reversion against the paper account via canonical schedulers.
+"""One-shot: run Reversion against the paper account via the canonical scheduler.
 
 Strategy
 --------
 The full canonical pipeline (setup_detection → lifecycle → execution →
 order_manager → broker → AAR) is what we want — the order manager is the
-only submitter that handles Sigma/Reversion's Tier 2 leg correctly
-(reactively, after Tier 1 fills). But the engines' setup_detection
-plugs iterate per-ticker against the data adapter (one round-trip per
-ticker × ~250 ms via the Supabase pooler × 7,694-ticker universe = ~30
-minutes per engine). That's the same N+1 anti-pattern we already fixed
-in ``simulate_universe.py``.
+only submitter that handles Reversion's Tier 2 leg correctly (reactively,
+after Tier 1 fills). But the engine's setup_detection plug iterates
+per-ticker against the data adapter (one round-trip per ticker × ~250 ms
+via the Supabase pooler × 7,694-ticker universe = ~30 minutes). That's
+the same N+1 anti-pattern we already fixed in ``simulate_universe.py``.
+
+(Sigma was archived 2026-05-16 after its failed-expansion final test
+failed the gate — see ``archive/sigma/EULOGY.md``. This entrypoint is
+Reversion-only; Vector remains deferred pending P/B-gate recalibration.)
 
 Workaround until ``setup_detection`` is batched at the engine layer:
 
 1. Read the most recent ``UNIVERSE_SIMULATION`` row from
-   ``platform.application_log`` for today's Sigma + Reversion candidate
-   lists (~187 + ~4 tickers, plus SPY for Reversion's market context).
+   ``platform.application_log`` for today's Reversion candidate list
+   (~4 tickers, plus SPY for Reversion's market context).
 2. Bulk-fetch the 200-day bar window for that combined set in **one
    SQL query**.
 3. Inject a ``_PreloadedDataAdapter`` that:
        - returns the scoped candidate list from ``get_universe_symbols``
        - serves ``get_daily_bars`` from the in-memory dict (no DB hits)
-4. Run each engine's canonical ``Scheduler.run_once()`` with that data
-   adapter injected. The schedulers still open their own pool for
+4. Run the engine's canonical ``Scheduler.run_once()`` with that data
+   adapter injected. The scheduler still opens its own pool for
    ``risk_state`` / ``aar_writer`` — keeping that isolation matches the
    production path.
 
-Position sizing stays at the engine default ($1500 pre-grad cap, 15 %
-of equity for Sigma, 20 % for Reversion). Lowering to $100 specifically
-is a constants change in ``sigma.models`` / ``reversion.models``, not an
-out-of-band override.
+Position sizing stays at the engine default ($1500 pre-grad cap, 20 %
+of equity for Reversion). Lowering to $100 specifically is a constants
+change in ``reversion.models``, not an out-of-band override.
 
-Idempotency: each engine's order manager reconciles against
+Idempotency: the engine's order manager reconciles against
 ``platform.risk_state`` and the broker's open positions before
 submitting, so re-runs do not double up.
 
@@ -54,7 +56,6 @@ from datetime import date as date_t
 from typing import TYPE_CHECKING
 
 from reversion.scheduler import ReversionScheduler
-from sigma.scheduler import SigmaScheduler
 from tpcore.data.postgres_data_adapter import PostgresDataAdapter
 from tpcore.db import build_asyncpg_pool
 from tpcore.interfaces.data import Bar
@@ -64,13 +65,11 @@ if TYPE_CHECKING:  # pragma: no cover
     import asyncpg
 
     from reversion.scheduler import RunSummary as RevSummary
-    from sigma.scheduler import RunSummary as SigSummary
 
 logger = logging.getLogger("scripts.start_paper_trading")
 
-# Combined lookback covers Sigma's LOOKBACK_DAYS + 30 = 90 calendar days
-# and Reversion's same — pull 200 calendar days to leave headroom for the
-# market-context window in Reversion (`_market_context`).
+# Pull 200 calendar days to cover Reversion's LOOKBACK_DAYS + 30 plus
+# headroom for the market-context window (`_market_context`).
 PRELOAD_LOOKBACK_CALENDAR_DAYS = 200
 
 # Reversion's market-context needs SPY regardless of whether SPY is in
@@ -143,7 +142,7 @@ class _PreloadedDataAdapter(PostgresDataAdapter):
         return out
 
 
-async def _load_candidate_lists(pool: asyncpg.Pool) -> tuple[list[str], list[str]]:
+async def _load_candidate_list(pool: asyncpg.Pool) -> list[str]:
     async with pool.acquire() as conn:
         row = await conn.fetchrow(_LATEST_SIM_SQL)
     if row is None:
@@ -153,7 +152,7 @@ async def _load_candidate_lists(pool: asyncpg.Pool) -> tuple[list[str], list[str
     data = row["data"]
     if isinstance(data, str):
         data = json.loads(data)
-    return list(data.get("sigma_candidates") or []), list(data.get("reversion_candidates") or [])
+    return list(data.get("reversion_candidates") or [])
 
 
 async def _preload_bars(
@@ -194,23 +193,20 @@ async def amain() -> int:
     os.environ["DATABASE_URL"] = db_url
 
     pool = await build_asyncpg_pool(db_url, max_size=4)
-    sigma_summary: SigSummary | None = None
     rev_summary: RevSummary | None = None
-    sigma_error: str | None = None
     rev_error: str | None = None
     as_of = datetime.now(UTC).date()
 
     try:
         try:
-            sigma_candidates, reversion_candidates = await _load_candidate_lists(pool)
+            reversion_candidates = await _load_candidate_list(pool)
         except RuntimeError as exc:
             print(f"FAILED — {exc}", file=sys.stderr)
             return 1
 
-        combined = sorted({SPY, *sigma_candidates, *reversion_candidates})
+        combined = sorted({SPY, *reversion_candidates})
         logger.info(
-            "paper_trading.preload sigma=%d reversion=%d combined=%d",
-            len(sigma_candidates),
+            "paper_trading.preload reversion=%d combined=%d",
             len(reversion_candidates),
             len(combined),
         )
@@ -220,18 +216,6 @@ async def amain() -> int:
             len(bars_by_ticker),
             sum(len(v) for v in bars_by_ticker.values()),
         )
-
-        # Sigma
-        try:
-            sigma_data = _PreloadedDataAdapter(
-                pool,
-                universe=[t for t in sigma_candidates if t in bars_by_ticker],
-                bars_by_ticker=bars_by_ticker,
-            )
-            sigma_summary = await SigmaScheduler(data=sigma_data).run_once(as_of=as_of)
-        except Exception as exc:
-            sigma_error = str(exc)
-            logger.exception("paper_trading.sigma_failed")
 
         # Reversion
         try:
@@ -250,20 +234,13 @@ async def amain() -> int:
         await log_handler.log(
             "PAPER_TRADING_START",
             (
-                f"sigma={getattr(sigma_summary, 'n_submitted', 0)}/"
-                f"{getattr(sigma_summary, 'n_candidates', 0)} "
                 f"reversion={getattr(rev_summary, 'n_submitted', 0)}/"
                 f"{getattr(rev_summary, 'n_candidates', 0)}"
             ),
-            "ERROR" if (sigma_error or rev_error) else "INFO",
+            "ERROR" if rev_error else "INFO",
             {
                 "test_trade": True,
                 "as_of": as_of.isoformat(),
-                "sigma_universe_size": len(sigma_candidates),
-                "sigma_candidates_active": getattr(sigma_summary, "n_candidates", 0),
-                "sigma_submitted": getattr(sigma_summary, "n_submitted", 0),
-                "sigma_new_aars": len(getattr(sigma_summary, "aars", []) or []),
-                "sigma_error": sigma_error,
                 "reversion_universe_size": len(reversion_candidates),
                 "reversion_candidates_active": getattr(rev_summary, "n_candidates", 0),
                 "reversion_submitted": getattr(rev_summary, "n_submitted", 0),
@@ -275,25 +252,19 @@ async def amain() -> int:
     finally:
         await pool.close()
 
-    sig_sub = getattr(sigma_summary, "n_submitted", 0)
-    sig_cand = getattr(sigma_summary, "n_candidates", 0)
     rev_sub = getattr(rev_summary, "n_submitted", 0)
     rev_cand = getattr(rev_summary, "n_candidates", 0)
-    total = sig_sub + rev_sub
 
     print()
     print(f"PAPER TRADING START — {as_of.isoformat()}")
-    print(f"  Sigma orders submitted:     {sig_sub}  (setup-detection candidates: {sig_cand})")
-    if sigma_error:
-        print(f"    sigma scheduler error:    {sigma_error}")
     print(f"  Reversion orders submitted: {rev_sub}  (setup-detection candidates: {rev_cand})")
     if rev_error:
         print(f"    reversion scheduler error: {rev_error}")
     print( "  Vector:                     DEFERRED (P/B gate pending backtest recalibration)")
-    print(f"  Total:                      {total}")
+    print(f"  Total:                      {rev_sub}")
     print( "  Check the Alpaca paper dashboard for fills.")
 
-    return 1 if (sigma_error and rev_error) else 0
+    return 1 if rev_error else 0
 
 
 def main() -> None:  # pragma: no cover

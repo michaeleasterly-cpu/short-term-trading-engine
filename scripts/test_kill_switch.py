@@ -9,7 +9,6 @@ failure, so the live engine isn't left frozen.
 
 Usage::
 
-    python scripts/test_kill_switch.py --engine sigma
     python scripts/test_kill_switch.py --engine reversion
     python scripts/test_kill_switch.py --engine vector
 
@@ -72,9 +71,6 @@ async def _run_engine(engine: str, as_of: date) -> object:
     declares its own), so we type as ``object`` and duck-type the
     ``n_candidates`` / ``n_submitted`` attrs at the call site.
     """
-    if engine == "sigma":
-        from sigma.scheduler import SigmaScheduler
-        return await SigmaScheduler().run_once(as_of=as_of)
     if engine == "reversion":
         from reversion.scheduler import ReversionScheduler
         return await ReversionScheduler().run_once(as_of=as_of)
@@ -138,7 +134,7 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument(
         "--engine",
-        choices=("sigma", "reversion", "vector"),
+        choices=("reversion", "vector"),
         required=True,
         help="Which engine's kill switch to flip + verify.",
     )

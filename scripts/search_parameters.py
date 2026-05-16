@@ -34,12 +34,12 @@ Usage
 ::
 
     python scripts/search_parameters.py \\
-        --engine sigma \\
+        --engine reversion \\
         --trials 200 \\
         --train-start 2018-01-01 --train-end 2023-12-31 \\
         --holdout-start 2022-01-01 --holdout-end 2023-12-31 \\
         --final-holdout-start 2024-01-01 --final-holdout-end 2025-12-31 \\
-        --output backtests/sigma_search_results.csv
+        --output backtests/reversion_search_results.csv
 """
 from __future__ import annotations
 
@@ -70,14 +70,9 @@ import numpy as np
 
 
 PARAM_RANGES: dict[str, dict[str, tuple]] = {
-    "sigma": {
-        # name: (low, high, type) — uniform
-        "adx_threshold": (16.0, 24.0, "float"),
-        "chop_threshold": (32.0, 48.0, "float"),
-        "bb_width_percentile": (15.0, 45.0, "float"),
-        "max_hold_days": (2, 6, "int"),
-        "stop_pct": (0.015, 0.05, "float"),
-    },
+    # Sigma archived 2026-05-16 — its FINAL test (#168, failed-expansion
+    # redesign) FAILED decisively (DSR 0.0000, held-back 2020-2026
+    # Sharpe -1.208, 50/50 trials negative). See archive/sigma/EULOGY.md.
     "reversion": {
         "z_threshold": (2.0, 4.0, "float"),
         "volume_climax_multiplier": (1.2, 3.0, "float"),
@@ -282,9 +277,6 @@ def period_returns_from_trades(trades: list[Any]) -> list[float]:
 def _runner_for(engine: str) -> Callable[..., Awaitable[Any]]:
     """Legacy single-call entry; loads context per call. Used for the final
     held-back run where we don't reuse context across many trials."""
-    if engine == "sigma":
-        from sigma.backtest import run_for_search
-        return run_for_search
     if engine == "reversion":
         from reversion.backtest import run_for_search
         return run_for_search
@@ -299,9 +291,6 @@ def _runner_for(engine: str) -> Callable[..., Awaitable[Any]]:
 
 def _context_loader_for(engine: str) -> Callable[..., Awaitable[Any]]:
     """Returns the async ``load_*_window_context`` function for the engine."""
-    if engine == "sigma":
-        from sigma.backtest import load_sigma_window_context
-        return load_sigma_window_context
     if engine == "reversion":
         from reversion.backtest import load_reversion_window_context
         return load_reversion_window_context
@@ -316,9 +305,6 @@ def _context_loader_for(engine: str) -> Callable[..., Awaitable[Any]]:
 
 def _context_runner_for(engine: str) -> Callable[..., Any]:
     """Returns the sync ``run_*_with_context`` function for the engine."""
-    if engine == "sigma":
-        from sigma.backtest import run_sigma_with_context
-        return run_sigma_with_context
     if engine == "reversion":
         from reversion.backtest import run_reversion_with_context
         return run_reversion_with_context
@@ -505,7 +491,7 @@ def write_results_csv(path: Path, trials: list[TrialResult]) -> None:
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("--engine", choices=("sigma", "reversion", "vector", "momentum"), required=True)
+    p.add_argument("--engine", choices=("reversion", "vector", "momentum"), required=True)
     p.add_argument("--trials", type=int, default=200,
                    help="Total parameter combinations to pre-sample (default 200).")
     p.add_argument("--per-window-trials", type=int, default=50,

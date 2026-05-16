@@ -1,7 +1,7 @@
 """Railway cron entry point for the Data Validation Suite.
 
-Wires the suite to the same operational pattern as `sigma/scheduler.py` and
-`reversion/scheduler.py`:
+Wires the suite to the same operational pattern as the engine schedulers
+(e.g. `reversion/scheduler.py`):
 
 * loads ``DATABASE_URL`` (or ``DATABASE_URL_IPV4`` for the local Supabase
   pooler) from the env;

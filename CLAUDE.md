@@ -7,7 +7,7 @@ Multi-engine automated trading platform. US equities, daily timeframe, fully aut
 - tpcore/ — shared library (risk, AAR, quality, parity, backtest, fundamentals, valuation, tax, universe)
 - platform/ — Postgres schema, Alembic migrations
 - dashboard.py + dashboard_components/ — Streamlit operator console (`scripts/run_dashboard.sh`)
-- sigma/ — range scalping (daily Bollinger Bands); built, last search top OOS +1.150 (FAILED DSR gate)
+- ~~sigma/~~ — **ARCHIVED 2026-05-16** → `archive/sigma/` (see `archive/sigma/EULOGY.md`). Range scalping (daily Bollinger Bands). Two honest gate attempts both FAILED: static range-fade (top OOS +1.150, FAILED DSR) and the failed-expansion redesign (#168: 50/50 trials negative held-back Sharpe, credibility 45, DSR 0.0000). No longer imported, scheduled, gated, or swept. **Scoping caveat:** this retires the *directional* form only — the sector-neutral residual variant is a *future new engine*, NOT a Sigma rescue, and was never tested.
 - reversion/ — mean reversion + earnings-quality gate; built, last search top OOS +1.174 (FAILED DSR gate)
 - vector/ — catalyst-driven swing (P/B + D/E + catalyst + technical); built, last search top OOS +1.257 (FAILED DSR gate; was data-blocked, now unblocked after 2026-05-13 earnings_events backfill — 1,350 rows / 137 tickers, audited 2026-05-14; recurring weekly refresh active via `ops.py earnings_refresh` stage)
 - momentum/ — cross-sectional 12-1 monthly rebalance; built and paper-trading; last search top OOS +0.784 (FAILED DSR gate; gated structurally per momentum spec)
@@ -15,8 +15,8 @@ Multi-engine automated trading platform. US equities, daily timeframe, fully aut
 - tpcore/allocator/ — weekly inverse-vol capital rebalance across engines (deployed 2026-05-13, daemon Mon 13:00 UTC)
 - tpcore/forensics/ — daily AAR scanner that emits triggers + auto-generates Sprint Dossiers (deployed 2026-05-14, runs as final step of data-operations)
 - tpcore/indicators/ — shared technical indicators (ADX, Bollinger Bands, CHOP) used by every engine's setup_detection plug (2026-05-14).
-- tpcore/order_management/ — `BaseOrderManager` base class for per-trade engines (sigma/reversion/vector) — centralizes `__init__`, `_persist_tier1_to_open_orders`, `_fetch_recent_orders` (2026-05-14).
-- tpcore/exceptions.py — `SizingError` shared by sigma + reversion (2026-05-14).
+- tpcore/order_management/ — `BaseOrderManager` base class for per-trade engines (reversion/vector; formerly also sigma, archived) — centralizes `__init__`, `_persist_tier1_to_open_orders`, `_fetch_recent_orders` (2026-05-14).
+- tpcore/exceptions.py — `SizingError` shared by the per-trade engines (2026-05-14).
 - tpcore/models/graduation.py — `PerTradeGraduationStats` shared by all per-trade engines; Reversion subclasses to add `profit_factor` (2026-05-14).
 - tpcore/templates/engine_template/ — copy-paste-start scaffold for new engines (see `docs/superpowers/checklists/engine_readiness.md`).
 - ops/engine_service.py — daemon polling `platform.application_log` for `DATA_OPERATIONS_COMPLETE`; fires `scripts/run_all_engines.sh` (2026-05-14).
@@ -29,7 +29,7 @@ Multi-engine automated trading platform. US equities, daily timeframe, fully aut
 - All timestamps UTC. Market hours via `tpcore.calendar` (which wraps `exchange_calendars` XNYS).
 - No yfinance. No Discord. No manual execution.
 - All orders via Alpaca API. Paper-then-live. Default Alpaca data feed is **SIP** (not IEX — IEX silently misses tickers that trade off-IEX).
-- Engines built in order so far: Sigma → Reversion → Vector → Momentum → Sentinel.
+- Engines built in order so far: Sigma (archived 2026-05-16) → Reversion → Vector → Momentum → Sentinel.
 - Backtest with self-built survivorship-free database before any live trading. (Note: `prices_daily` is currently only partially survivorship-clean — known caveat in `momentum/backtest.py` docstring.)
 - Every engine has 5 Plugs: setup_detection, lifecycle_analysis, execution_risk, aar_logging, capital_gate.
 - Every engine's `setup_detection` plug populates a `tpcore.backtest.filter_diagnostics.FilterDiagnostics` instance so SIGNAL events carry per-gate pass/block counters.
@@ -51,11 +51,11 @@ Multi-engine automated trading platform. US equities, daily timeframe, fully aut
   - Every new engine is added to the `for engine in ...; do` loop in `scripts/run_smoke_test.sh` step 3 — at build time, not after the operator asks.
   - Every new engine is added to the `for engine in ...; do` loop in `scripts/run_all_engines.sh` AND its docstring listing AND `ops/platform_pipeline.py`'s docstring listing — these are what the `engine-service` daemon dispatches; an engine omitted from them never runs live.
   - Every scheduler calls `await db_log.startup()` after the `try:` opens and `await db_log.shutdown(duration_ms=..., exit_code=...)` in `finally:` — without these the dashboard can't see the run.
-  - `scripts/pipeline_smoke_test.py` is for Tier-2 OCO bracket per-trade engines (sigma/reversion/vector) only. Portfolio-allocation engines (momentum / sentinel) explicitly do NOT belong there.
+  - `scripts/pipeline_smoke_test.py` is for Tier-2 OCO bracket per-trade engines (reversion/vector) only. Portfolio-allocation engines (momentum / sentinel) explicitly do NOT belong there.
   - Register every ticker the engine *requires* (regime gate, basket member, market-context proxy) in `CRITICAL_TICKERS` in `tpcore/quality/validation/checks/prices_daily_freshness.py`. The general `row_integrity` + `delistings` checks do NOT catch silent per-ticker refresh drops — the SPY-gap incident (2026-05-15) is why this dedicated check exists.
 - **Never access private attributes (`._store`, `._pool`, etc.) on tpcore classes.** Use the public accessors (`RiskGovernor.state_for(...)`, `AARWriter.pool`, etc.). If a public accessor doesn't exist for what you need, extend the tpcore class with one — don't add `# noqa: SLF001`. See `docs/STYLE_GUIDE.md` "Private-attribute access on tpcore classes" for the canonical examples.
 - Read docs/glossary.md if present before coding.
 - Never modify tpcore without checking all engines that consume it.
 - Every trade path goes through tpcore.risk.RiskGovernor.check_trade().
-- Sigma/Reversion/Vector use Alpaca bracket orders (take-profit + stop-loss submitted together). Momentum uses day-market orders only — no per-name stops between monthly rebalances; risk is managed by diversification + rotation. Sentinel uses day-market batch orders for the defensive ETF basket — no per-name stops, lifecycle-driven exits.
+- Reversion/Vector use Alpaca bracket orders (take-profit + stop-loss submitted together). Momentum uses day-market orders only — no per-name stops between monthly rebalances; risk is managed by diversification + rotation. Sentinel uses day-market batch orders for the defensive ETF basket — no per-name stops, lifecycle-driven exits.
 - All code type-hinted. Pydantic v2 for data models. structlog for logging.

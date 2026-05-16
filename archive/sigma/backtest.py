@@ -273,6 +273,22 @@ def precompute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["bb_upper"] = upper
     df["bb_lower"] = lower
     df["band_proximity"] = (df["close"] - lower) / (upper - lower).replace(0, np.nan)
+    # ── Failed-expansion primitives (#168) — PARAM-FREE so the window
+    # context stays override-independent (compression %ile / breakout /
+    # exit are derived from these per-candidate in run_variant). The
+    # static range-fade path never reads these, so its behaviour and
+    # all existing tests are unchanged. ──
+    df["bb_width"] = (upper - lower) / sma.replace(0, np.nan)
+    _tp = (df["high"] + df["low"] + df["close"]) / 3.0
+    _vol = df["volume"].replace(0, np.nan)
+    # Rolling 20-session anchored-VWAP proxy for the daily timeframe
+    # (true intraday VWAP is unavailable on EOD bars; the rolling
+    # typical-price/volume mean is the standard EOD stand-in). The
+    # value-area midpoint is the BB SMA (``bb_mid``).
+    df["vwap"] = (
+        (_tp * _vol).rolling(20, min_periods=5).sum()
+        / _vol.rolling(20, min_periods=5).sum()
+    )
     return df
 
 
@@ -374,6 +390,20 @@ def run_variant(
     spy_chop_series: pd.Series | None = None,
     chop_threshold: float = CHOP_SIDEWAYS_WEAK,
     max_adx: float = MAX_ADX,
+    # ── Failed-expansion redesign (#168). Defaults reproduce the
+    # static range-fade path EXACTLY (signal_mode="static"), so every
+    # existing test + the shipped behaviour are unchanged. ──
+    signal_mode: str = "static",
+    compression_window: int = 20,
+    compression_percentile: float = 20.0,
+    failed_breakout_window: int = 3,
+    exit_mode: str = "band_mid",
+    # Market-level regime suppressors (None → inactive, like
+    # spy_chop_series). Provided by the window context when set.
+    vix_series: pd.Series | None = None,
+    vix_suppress: float | None = None,
+    fear_greed_series: pd.Series | None = None,
+    fear_greed_suppress: float | None = None,
 ) -> tuple[list[TradeRecord], list[RejectedRow]]:
     """Walk every trading day; pick top-1 candidate; simulate forward.
 
@@ -415,6 +445,26 @@ def run_variant(
             if math.isnan(spy_chop_today) or spy_chop_today <= chop_threshold:
                 continue
 
+        # Market-level regime suppressors (#168). Keep Sigma OUT of
+        # high-vol / extreme-fear regimes — its documented failure mode
+        # during macro transitions. Inactive unless the context
+        # supplied the series (same opt-in shape as spy_chop_series),
+        # so the static path + all existing tests are unaffected.
+        if vix_series is not None and vix_suppress is not None:
+            try:
+                _vt = float(vix_series.loc[today])
+            except KeyError:
+                _vt = float("nan")
+            if not math.isnan(_vt) and _vt > float(vix_suppress):
+                continue
+        if fear_greed_series is not None and fear_greed_suppress is not None:
+            try:
+                _fg = float(fear_greed_series.loc[today])
+            except KeyError:
+                _fg = float("nan")
+            if not math.isnan(_fg) and _fg < float(fear_greed_suppress):
+                continue
+
         best: tuple[float, str, pd.DataFrame, int] | None = None
         # (score, ticker, panel, idx-in-panel)
         for ticker, df in panels.items():
@@ -436,12 +486,52 @@ def run_variant(
             bb_upper = float(row["bb_upper"])
             if math.isnan(bb_lower) or math.isnan(bb_upper):
                 continue
-            prox = float(row["band_proximity"])
-            if math.isnan(prox) or prox > _band_prox_max():  # demand entry near lower half
-                continue
-            # Score: simple "channel quality + entry precision" proxy.
-            #   low ADX is good (up to 20 pts); low band_proximity is good (up to 35).
-            score = (20.0 - adx) + 35.0 * max(0.0, 1.0 - 2.0 * prox)
+
+            if signal_mode == "failed_expansion":
+                # (1) volatility compression: today's BB-width is in the
+                # lowest ``compression_percentile`` of the trailing
+                # ``compression_window`` sessions.
+                w0 = max(0, row_pos - int(compression_window) + 1)
+                width_win = df["bb_width"].iloc[w0:row_pos + 1].dropna()
+                cur_w = float(row["bb_width"])
+                if len(width_win) < 5 or math.isnan(cur_w):
+                    continue
+                thresh = float(
+                    np.percentile(width_win.to_numpy(),
+                                  float(compression_percentile))
+                )
+                if cur_w > thresh:
+                    continue
+                # (2)+(3) an attempted breakout in the last
+                # ``failed_breakout_window`` sessions that FAILED — i.e.
+                # close poked outside a band then is back inside today.
+                fbw = int(failed_breakout_window)
+                b0 = max(0, row_pos - fbw)
+                recent = df.iloc[b0:row_pos]  # excludes today
+                broke = bool(
+                    ((recent["close"] > recent["bb_upper"]).any())
+                    or ((recent["close"] < recent["bb_lower"]).any())
+                )
+                close_t = float(row["close"])
+                inside_now = bb_lower <= close_t <= bb_upper
+                if not (broke and inside_now):
+                    continue
+                # Score: tighter compression = better; closer to a band
+                # edge at the failed-breakout reversion = better entry.
+                prox = float(row["band_proximity"])
+                if math.isnan(prox):
+                    continue
+                score = (
+                    40.0 * max(0.0, 1.0 - cur_w / thresh)
+                    + 20.0 * max(0.0, 1.0 - abs(prox - 0.5) * 2.0)
+                    + (20.0 - adx)
+                )
+            else:
+                prox = float(row["band_proximity"])
+                if math.isnan(prox) or prox > _band_prox_max():  # near lower half
+                    continue
+                # Score: channel quality + entry precision proxy.
+                score = (20.0 - adx) + 35.0 * max(0.0, 1.0 - 2.0 * prox)
             if best is None or score > best[0]:
                 best = (score, ticker, df, row_pos)
 
@@ -456,6 +546,16 @@ def run_variant(
         entry_price = float(next_open_bar["open"]) * (1.0 + _slippage_per_side(ticker))
         mid_band = float(df.iloc[idx]["bb_mid"])
         upper_band = float(df.iloc[idx]["bb_upper"])
+        # Failed-expansion exits at the value-area midpoint / VWAP, not
+        # the static band-mid. ``simulate_trade`` already exits at the
+        # ``mid_band`` target, so we just retarget it (no signature
+        # change): vwap_mid → the higher of value-mid (BB SMA) and the
+        # rolling VWAP proxy = the mean-reversion magnet for a failed
+        # downside poke. ``band_mid`` (default) keeps prior behaviour.
+        if signal_mode == "failed_expansion" and exit_mode == "vwap_mid":
+            _vwap = float(df.iloc[idx]["vwap"])
+            if not math.isnan(_vwap):
+                mid_band = max(mid_band, _vwap)
         record = simulate_trade(
             df,
             entry_idx=idx + 1,
@@ -768,6 +868,10 @@ class SigmaWindowContext:
     start: date
     end: date
     universe: tuple[str, ...]
+    # Market-level regime series for the #168 suppressors (date-indexed).
+    # Optional + default None → existing constructions/tests unaffected.
+    vix_series: pd.Series | None = None
+    fear_greed_series: pd.Series | None = None
 
 
 async def load_sigma_window_context(
@@ -789,15 +893,39 @@ async def load_sigma_window_context(
     try:
         tier_costs = await load_tier_costs(pool)
         raw = await load_bars(pool, universe, start, end)
+        # Market-level regime series for the #168 suppressors. Loaded
+        # once per window (read-only; data already in the platform —
+        # no new adapters). Indexed by date for O(1) per-day lookup.
+        vix_rows = await pool.fetch(
+            "SELECT date, value FROM platform.macro_indicators "
+            "WHERE indicator = 'vix' AND date BETWEEN $1 AND $2 "
+            "ORDER BY date",
+            start, end,
+        )
+        fg_rows = await pool.fetch(
+            "SELECT date, score FROM platform.fear_greed "
+            "WHERE date BETWEEN $1 AND $2 ORDER BY date",
+            start, end,
+        )
     finally:
         await pool.close()
     panels = {ticker: precompute_indicators(df) for ticker, df in raw.items()}
     spy_chop_series = panels["SPY"]["chop"] if "SPY" in panels else None
+    vix_series = (
+        pd.Series({r["date"]: float(r["value"]) for r in vix_rows})
+        if vix_rows else None
+    )
+    fear_greed_series = (
+        pd.Series({r["date"]: float(r["score"]) for r in fg_rows})
+        if fg_rows else None
+    )
     return SigmaWindowContext(
         panels=panels,
         spy_chop_series=spy_chop_series,
         tier_round_trip_costs=tier_costs,
         start=start, end=end, universe=universe,
+        vix_series=vix_series,
+        fear_greed_series=fear_greed_series,
     )
 
 
@@ -846,15 +974,46 @@ def run_sigma_with_context(
     max_adx_override = overrides.get("adx_threshold")
     chop_override = overrides.get("chop_threshold")
 
+    # #168 failed-expansion params. ``signal_mode`` defaults to
+    # "static" → existing range-fade path + every existing test
+    # unchanged. In failed-expansion the compression filter replaces
+    # the per-stock CHOP gate and the VIX/F&G suppressors replace the
+    # SPY-CHOP market gate (the hypothesis is the NEW signal + NEW
+    # regime filters, not stacked on the old gates).
+    sig_mode = str(overrides.get("signal_mode", "static"))
+    fe = sig_mode == "failed_expansion"
+
+    def _opt_float(v: object) -> float | None:
+        # choice: params arrive as strings ("25", "off"). "off"/blank →
+        # suppressor disabled (lets the sweep test VIX-only / F&G-only /
+        # neither / both and isolate each filter's marginal value).
+        if v is None or str(v).strip().lower() in ("off", "none", ""):
+            return None
+        return float(v)
+
+    _vix_sup = _opt_float(overrides.get("vix_suppress")) if fe else None
+    _fg_sup = _opt_float(overrides.get("fear_greed_suppress")) if fe else None
+
     trades, _ = run_variant(
         variant="search",
         panels=context.panels,
         start=context.start,
         end=context.end,
-        require_chop=True,
-        spy_chop_series=context.spy_chop_series,
+        require_chop=not fe,
+        spy_chop_series=None if fe else context.spy_chop_series,
         chop_threshold=float(chop_override) if chop_override is not None else CHOP_SIDEWAYS_WEAK,
         max_adx=float(max_adx_override) if max_adx_override is not None else MAX_ADX,
+        signal_mode=sig_mode,
+        compression_window=int(overrides.get("compression_window", 20)),
+        compression_percentile=float(overrides.get("compression_percentile", 20.0)),
+        failed_breakout_window=int(overrides.get("failed_breakout_window", 3)),
+        exit_mode=str(overrides.get("exit_mode", "band_mid")),
+        vix_series=context.vix_series if (fe and _vix_sup is not None) else None,
+        vix_suppress=_vix_sup,
+        fear_greed_series=(
+            context.fear_greed_series if (fe and _fg_sup is not None) else None
+        ),
+        fear_greed_suppress=_fg_sup,
     )
     summary = compute_summary("search", trades)
 
@@ -868,6 +1027,14 @@ def run_sigma_with_context(
         "bb_width_percentile": _band_prox_max() * 100.0,
         "max_hold_days": int(_max_hold_days()),
         "stop_pct": float(_hard_stop_pct()),
+        # #168 — recorded for reproducibility of the failed-expansion run.
+        "signal_mode": sig_mode,
+        "compression_window": int(overrides.get("compression_window", 20)),
+        "compression_percentile": float(overrides.get("compression_percentile", 20.0)),
+        "failed_breakout_window": int(overrides.get("failed_breakout_window", 3)),
+        "exit_mode": str(overrides.get("exit_mode", "band_mid")),
+        "vix_suppress": _vix_sup,
+        "fear_greed_suppress": _fg_sup,
     }
     trades_for_diag = _trades_to_diagnostic_dicts(trades)
     price_data = _panels_to_price_data(context.panels)

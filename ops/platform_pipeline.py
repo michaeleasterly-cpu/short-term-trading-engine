@@ -10,8 +10,9 @@ Sequence:
        update stages including the final ``forensics`` stage. Refuses
        during NYSE regular session (the underlying stages enforce
        that); pass ``--force`` to bypass.
-    2. ``scripts/run_all_engines.sh`` — runs sigma → reversion →
-       vector → momentum → sentinel schedulers back-to-back. Each engine handles
+    2. ``scripts/run_all_engines.sh`` — runs reversion → vector →
+       momentum → sentinel schedulers back-to-back (Sigma archived
+       2026-05-16). Each engine handles
        its own market-closed / no-rebalance / no-candidates gating.
 
 Flags:
@@ -122,8 +123,8 @@ async def amain() -> int:
         logger.info("platform_pipeline.complete", dry_run=True)
         return 0
 
-    # Each engine handles its own market-state gating (sigma/reversion/
-    # vector via session_contains, momentum via is_rebalance_day +
+    # Each engine handles its own market-state gating (reversion/vector
+    # via session_contains, momentum via is_rebalance_day +
     # force-rebalance override).
     engines_rc = await _run_step(
         "engine_sweep",

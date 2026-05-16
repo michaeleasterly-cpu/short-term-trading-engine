@@ -1,7 +1,7 @@
 # Glossary
 
 plug: One of five standardized modules inside each engine.
-sigma: Range scalping engine (daily Bollinger Bands, ADX, stochastic).
+sigma: ARCHIVED 2026-05-16 (`archive/sigma/`, see `archive/sigma/EULOGY.md`). Was a range scalping engine (daily Bollinger Bands, ADX, stochastic). Failed the credibility gate in both its static and failed-expansion forms; no longer imported/scheduled/gated/swept. The sector-neutral residual idea would be a *new* engine, not a revival.
 reversion: Statistical mean reversion engine (Z-score, RSI extremes).
 vector: Momentum swing engine (multi-day trend, catalyst overlay).
 s2: Short squeeze engine (satellite, rare setups).
@@ -46,7 +46,7 @@ Sahm Rule: Real-time recession indicator (FRED series SAHMREALTIME). Fires when 
 PMI proxy: Industrial Production Index (FRED series INDPRO) is the platform's free-tier proxy for ISM PMI — the ISM PMI series itself is licensed and not free in FRED. INDPRO is monthly and correlates well with PMI direction.
 macro_indicators stage: 11th `ops.py --update` stage (added 2026-05-14). Weekly cadence; 7-day skip-guard. Calls `handle_macro_indicators` which iterates the five FRED series via `FREDAdapter.get_all_indicators`.
 macro_indicators_freshness: 11th validation check (added 2026-05-14). Asserts all five FRED series present + newest observation per series ≤ 90 days old.
-BaseOrderManager: Shared base class at `tpcore.order_management.BaseOrderManager`. Per-trade engines (sigma, reversion, vector) inherit from it for `__init__`, `_persist_tier1_to_open_orders`, and `_fetch_recent_orders` — methods that were byte-identical across all three before 2026-05-14. Subclasses set `ENGINE_ID` and implement their own `submit_decision` + `reconcile`.
+BaseOrderManager: Shared base class at `tpcore.order_management.BaseOrderManager`. Per-trade engines (reversion, vector; formerly also sigma, archived) inherit from it for `__init__`, `_persist_tier1_to_open_orders`, and `_fetch_recent_orders` — methods that were byte-identical across all three before 2026-05-14. Subclasses set `ENGINE_ID` and implement their own `submit_decision` + `reconcile`.
 engine template: Copy-paste scaffold at `tpcore/templates/engine_template/` — the starting point for any new engine. 5-plug structure + `BaseOrderManager`-inheriting order_manager + models.py with the standard Phase / PhaseAssessment / ExecutionDecision shape.
 engine readiness checklist: Pre-merge gate at `docs/superpowers/checklists/engine_readiness.md`. 9 sections (5 plugs, shared tpcore reuse, risk gates, order layout, logging, tests, scheduler integration, backtest credibility, final checks) every new engine must satisfy. Mirrors the adapter readiness checklist.
 PerTradeGraduationStats: Shared Pydantic model at `tpcore.models.graduation.PerTradeGraduationStats` — the canonical (`n_trades`, `win_rate`, `avg_return`) graduation rubric for per-trade engines. Reversion subclasses it to add `profit_factor`.

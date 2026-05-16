@@ -4,7 +4,7 @@
 **Date:** 2026-05-12
 **Execution:** **Local Mac. Railway paused.** Auto-deploys disabled and cron schedules unset on the four Railway services (`ingestion-engine`, `sigma-scheduler`, `reversion-scheduler`, `vector-scheduler`); the new `trade-monitor` service is defined in `railway.json` but not deployed. Daily ops, engine runs, smoke tests, and backtests are all invoked locally from `scripts/`. The architectural decision on Railway vs. another host is deferred until an engine clears the credibility gate.
 
-**Status:** All three engine pipelines (Sigma, Reversion, Vector) plus the live trade monitor (`tpcore.trade_monitor`) are built and unit-tested. RiskGovernor `check_trade()` + startup kill-switch check, AARWriter persistence, LivePaperParityHarness wiring, and the Phase 2 cost gate (`RiskGovernor.check_cost`) are all verified end-to-end (live DB round-trip for AAR; harnesses no-op without live broker creds, by design). Engines read daily bars exclusively from `platform.prices_daily` via `PostgresDataAdapter` — no live-API fallback. Per-run audit timeline lands in `platform.application_log` via `tpcore.logging.DBLogHandler`. All three engines still fail the overfitting-aware credibility gate (Sigma 55, Reversion 45, Vector 45 / 100); none cleared for live capital — paper-trading only. **Immediate next gate:** `scripts/pipeline_smoke_test.py` against the Alpaca paper account at the 2026-05-13 US market open.
+**Status:** Sigma was **archived 2026-05-16** after failing the credibility gate in both its static and failed-expansion forms (see `archive/sigma/EULOGY.md` and §4.1). The surviving per-trade pipelines (Reversion, Vector) plus the live trade monitor (`tpcore.trade_monitor`) are built and unit-tested. RiskGovernor `check_trade()` + startup kill-switch check, AARWriter persistence, LivePaperParityHarness wiring, and the Phase 2 cost gate (`RiskGovernor.check_cost`) are all verified end-to-end (live DB round-trip for AAR; harnesses no-op without live broker creds, by design). Engines read daily bars exclusively from `platform.prices_daily` via `PostgresDataAdapter` — no live-API fallback. Per-run audit timeline lands in `platform.application_log` via `tpcore.logging.DBLogHandler`. The surviving engines still fail the overfitting-aware credibility gate (Reversion 45, Vector 45 / 100; Sigma archived after maxing at 55 then collapsing to 45 in its final test); none cleared for live capital — paper-trading only. **Immediate next gate:** `scripts/pipeline_smoke_test.py` against the Alpaca paper account at the 2026-05-13 US market open.
 
 ---
 
@@ -109,7 +109,7 @@ DSR ≥ 0.95 is a hard threshold for daily-frequency strategies with 1000+ obser
 Phases 1–5 of the 2026-05-14 standardization sweep consolidated shared engine concerns into `tpcore/` so the next engine doesn't grow new copies. See `docs/superpowers/checklists/engine_readiness.md` for the pre-merge checklist and `tpcore/templates/engine_template/` for the copy-paste scaffold.
 
 - `tpcore.indicators` — shared technical indicators: `compute_adx` (Wilder's ADX, period=14), `compute_bbands` (20-day Bollinger Bands, 2σ), `compute_chop` (Choppiness Index). Engines never reimplement these.
-- `tpcore.order_management.BaseOrderManager` — base class for per-trade engine order managers (sigma/reversion/vector). Centralizes `__init__`, `_persist_tier1_to_open_orders` (writes the row trade_monitor reads), and `_fetch_recent_orders`. Each engine subclass sets `ENGINE_ID` and implements `submit_decision` + `reconcile` for its own scale-out shape.
+- `tpcore.order_management.BaseOrderManager` — base class for per-trade engine order managers (reversion/vector; formerly also sigma, archived 2026-05-16). Centralizes `__init__`, `_persist_tier1_to_open_orders` (writes the row trade_monitor reads), and `_fetch_recent_orders`. Each engine subclass sets `ENGINE_ID` and implements `submit_decision` + `reconcile` for its own scale-out shape.
 - `tpcore.exceptions.SizingError` — raised when no valid position size can be computed (e.g. price ≤ 0). Was previously duplicated byte-identically in sigma + reversion.
 - `tpcore.models.graduation.PerTradeGraduationStats` — shared per-trade graduation rubric (n_trades / win_rate / avg_return). Reversion subclasses it to add `profit_factor`.
 
@@ -136,7 +136,20 @@ All tables live in the `platform` schema. The `engine` column discriminates engi
 
 All engines share the **5-Plug model:** Setup Detection → Lifecycle Analysis → Execution & Risk Scaling → AAR Logging → Capital Gate.
 
-### 4.1 Sigma — Range Scalping Engine (First Build)
+### 4.1 Sigma — Range Scalping Engine (First Build) — ⚰️ ARCHIVED 2026-05-16
+
+> **ARCHIVED 2026-05-16 → `archive/sigma/` (canonical record: `archive/sigma/EULOGY.md`).**
+> Sigma had two independent, honestly-gated shots and failed both: the
+> static Bollinger range-fade (top OOS +1.150, FAILED DSR) and the
+> research-backed failed-expansion redesign (#168 — 50/50 trials negative
+> held-back Sharpe, best −0.1185, credibility pinned 45, DSR 0.0000, run
+> through the canonical `search_parameters.py` pipeline; smoke confirmed
+> real trades so it is a true negative). No longer imported, scheduled,
+> gated, or swept. **Scoping caveat:** this adjudicates only the
+> *directional* failed-expansion form — the **sector-neutral residual
+> variant** the research marks as the next step is a *new engine*, not a
+> Sigma rescue, and was never tested. The section below is retained as
+> the historical record of why Sigma was retired.
 
 **Mission:** Capture mean-reversion within well-defined, low-volatility price channels on a daily timeframe.
 
@@ -730,8 +743,8 @@ The consolidation eliminates the inter-daemon `DATA_OPERATIONS_COMPLETE` polling
 | Phase | Deliverable | Status |
 | --- | --- | --- |
 | Phase 0 | `tpcore` + platform schema + ingestion script | **Complete** |
-| Phase 1 | Sigma engine — full plug implementation | **Complete** |
-| Phase 1b | Sigma paper trading (3+ months), Parity Harness active | **Paused** — engine + Parity Harness built; cron firing blocked by the Railway pause. Paper-trading resumes when execution architecture is settled. |
+| Phase 1 | Sigma engine — full plug implementation | **Archived 2026-05-16** — built + fully tested, but failed the credibility gate in both forms. `archive/sigma/EULOGY.md`. |
+| Phase 1b | Sigma paper trading (3+ months), Parity Harness active | **Cancelled (engine archived 2026-05-16)** — never graduated; the gate correctly refused it. |
 | Phase 2 | Reversion engine | **Complete (satellite — paper trading; 2026-05-15)** — reclassified as satellite engine alongside S2 (§4.5). Per-trade graduation criteria replace the DSR ≥ 0.95 gate. Combined filter (HIGH quality + \|Z\| ≥ 3.0) live. Satellite-classification backtest: `backtests/reversion_satellite_backtest.json` — 19 trades / Sharpe +0.312 / PF 1.755 / DD −11.5% on 2018-2025 full window. |
 | Phase 3 | Allocator + Forensics (basic) | **Complete (2026-05-13 / 2026-05-14)** — Allocator service in `tpcore/allocator/` with launchd daemon firing Mondays 13:00 UTC. Forensics in `tpcore/forensics/` wired into the data-operations pipeline, auto-generates Sprint Dossiers, surfaces on dashboard with one-click resolve. Both services read AARs through the shared `tpcore.aar.AARReader`. |
 | Phase 4 | Vector engine | **Complete (build); data-blocked (validation)** — engine code shipped, but parameter-search verdict (2026-05-13) showed zero trades on T1+T2 because `platform.earnings_events` has zero overlap with that universe. Re-enabling requires a catalyst-event backfill, not a code change. |
@@ -756,7 +769,7 @@ The consolidation eliminates the inter-daemon `DATA_OPERATIONS_COMPLETE` polling
 
 | Engine | Held-back Sharpe | Held-back PF | Held-back DD | Credibility | DSR | Verdict |
 |---|---|---|---|---|---|---|
-| Sigma | +0.74 | +3.71 | -8.1% | 55 | 0.00 | Marginal real edge — research only |
+| Sigma | +0.74 | +3.71 | -8.1% | 55 | 0.00 | **ARCHIVED 2026-05-16** — final failed-expansion test: 50/50 trials negative, credibility 45, DSR 0.0000. `archive/sigma/EULOGY.md` |
 | Reversion | +0.31 | +1.76 | -11.5% | 45 | 0.34 | **Satellite** (2026-05-15) — DSR gate retired; per-trade graduation criteria. Single-pass full-window evidence in `backtests/reversion_satellite_backtest.json` |
 | Vector | — | — | — | — | — | **Data-blocked** — earnings_events has 0 overlap with T1+T2 |
 | **Momentum** | **+1.58** | **+2.80** | -32.4% | 40 | 0.00 | **Strongest OOS signal in the bench** — Phase 1 CONTINUE |
@@ -768,7 +781,7 @@ The consolidation eliminates the inter-daemon `DATA_OPERATIONS_COMPLETE` polling
   - **Momentum**: paper-trade with small size now; let the live tape become the OOS validation. Re-evaluate credibility under either a frequency-adjusted DSR threshold (≈0.5 for monthly with 24 obs) or PSR (no deflation).
   - **Vector**: backfill `platform.earnings_events` for T1+T2 tickers via FMP earnings-history endpoint. Single ingestion task. Re-run search after.
   - **Reversion**: satellite-classified 2026-05-15. Graduation now per-trade (10 trades · 55% WR · +2% avg · PF > 1.5 · max DD ≤ −15%) — DSR gate no longer applies. Paper-trading on the local Mac.
-  - **Sigma**: park. Too marginal to move ahead of Momentum. OU mean-reversion spike (2026-05-15) rejected — code archived in `tpcore/backtest/spread_estimator_archive.py`.
+  - **Sigma**: **ARCHIVED 2026-05-16.** Parking ended — the final failed-expansion test (#168) failed decisively (50/50 trials negative, credibility 45, DSR 0.0000). Engine moved to `archive/sigma/`; see `archive/sigma/EULOGY.md`. The sector-neutral residual idea, if pursued, is a *new* engine — not a Sigma revival.
 
 ---
 

@@ -117,8 +117,9 @@ at the latest run; an unrelated red no longer blocks it. Refinement,
 not weakening — each engine still needs 100% of ITS data; run-
 staleness still blocks everyone (safety). `assert_passed` (global
 all-green) unchanged and retained as the operator override
-(`CAPITAL_GATE_REQUIRE_ALL_GREEN` env, read by each plug). The 4
-suite-gated engine plugs (sigma/reversion/vector/momentum) call the
+(`CAPITAL_GATE_REQUIRE_ALL_GREEN` env, read by each plug). The
+suite-gated engine plugs (reversion/vector/momentum; sigma archived
+2026-05-16) call the
 per-engine variant; sentinel has no suite gate (satellite model) —
 untouched. NO engine strategy logic modified (gating call only). 897
 tests (12 capital_gate incl. unrelated-red-doesn't-block, own-red-
@@ -283,59 +284,31 @@ The 2026-05-15 parameter sweeps validated the targeted fixes (Sigma SPY-
 regime filter, Reversion Z-relaxation + T3 expansion) at the metric level
 but DSR/credibility gates remain structurally blocked.
 
-- **Sigma structural redesign.** 2026-05-15 sweep with regime filter
-  applied: 80% of walk-forward Sharpe rows are negative (-3.265 to
-  +1.454, median -0.666). The regime filter eliminated the −0.84
-  parameter-stability swing — that win is real — but the underlying
-  range-scalping signal is fragile across most market windows. Held-back
-  +0.839 Sharpe / 86 trades / credibility 50 / DSR 0.0000. The next
-  experiment is NOT more parameter sweeps. Candidate redesigns: (a) shift
-  from band-touch entries to band-mean-reversion confirmations (require
-  close back inside band before entry); (b) require explicit volatility-
-  contraction prerequisite (BB-width percentile rank < N before entry);
-  (c) abandon range-scalping for trend-pullback if the market structure
-  is fundamentally different from the 2018-2023 calibration window.
-  Decision deferred until operator picks a redesign path.
-  **OU mean-reversion gate spike — rejected 2026-05-15.** Tested as one
-  candidate redesign path; 50-trial walk-forward sweep showed the gate
-  cut more trades in stable windows than fragile ones, regressing held-
-  back Sharpe +0.839 → +0.366. Code archived in
-  `tpcore/backtest/spread_estimator_archive.py`.
-
-  **PATH PICKED 2026-05-16 — HMM regime classifier (QUEUED, NOT
-  STARTED; deferred behind the WEEK GOAL data-layer work per operator
-  decision).** This is Sigma's final test before permanent retirement.
-  Full spec captured so it is executable without re-derivation when the
-  data layer closes:
-  - Phase 1: `tpcore/indicators/hmm_regime.py` — shared
-    `HMMRegimeClassifier` (hmmlearn `GaussianHMM(n_components=2,
-    covariance_type='full', n_iter=100)`), fit on SPY 252d returns
-    rolling; label lower-return-autocorr state = mean-reverting;
-    expose `is_mean_reverting` bool. Params: `lookback_days=252`,
-    `retrain_frequency_days=21`, `require_confirmations=3`. Unit-test
-    on synthetic OU(κ=5)=mean-reverting vs RW-with-drift=trending.
-  - Phase 2: `sigma/plugs/setup_detection.py` — replace static
-    ADX<20∧CHOP>38.2 gate with the HMM classifier behind
-    `--use-hmm-regime`; keep static gate behind `--use-static-regime`
-    for baseline. Sweep params: hmm_lookback {126,252,504},
-    hmm_retrain_freq {10,21,42}, hmm_confirmations {1,2,3,5}.
-  - Phase 3: `search_parameters.py --engine sigma --trials 100`
-    (train 2018-01-01, holdout→2023-12-31, final-holdout 2024-01-01→
-    2025-12-31) → `backtests/sigma_hmm_sweep_results.csv`. ~2-4h.
-  - Phase 4 decision (ZERO ambiguity): adopt iff any config achieves
-    **credibility ≥ 60 AND DSR ≥ 0.95 on held-back**; else Sigma is
-    permanently archived (`sigma/`→`archive/sigma/`, removed from
-    `run_all_engines.sh` + the selfheal/smoke loops + docs).
-  - Add `hmmlearn` to `pyproject.toml` deps.
-  - **Constraints carried from this review:** the archive/adopt
-    *execution* is operator-confirmed at decision time, NOT an
-    automatic script side-effect (engine retirement is structural).
-    Default `--use-hmm-regime` OFF until the sweep adjudicates; all
-    existing tests + ruff + check_imports stay green throughout.
-    Tension acknowledged: the prior "next experiment is NOT more
-    parameter sweeps" note stands for *static* gates — HMM is a
-    classifier *redesign* (different object than the rejected OU
-    gate), which is why the operator picked it as the path.
+- **Sigma — ⚰️ ARCHIVED 2026-05-16 (CLOSED).** The "final test before
+  permanent retirement" was run this session — not the queued HMM path
+  but the operator-approved **failed-expansion redesign** (#168:
+  volatility-compression → attempted-then-failed breakout entry →
+  VWAP/value-mid exit, with VIX>25 + Fear&Greed Extreme-Fear
+  suppressors). Run end-to-end through the **canonical**
+  `scripts/search_parameters.py` pipeline (no one-off script).
+  **Verdict — decisive FAILED:** 50/50 trials negative held-back
+  Sharpe (best −0.1185, mean −2.55), credibility pinned at 45 (gate is
+  60), DSR 0.0000. Smoke confirmed real trades with VIX/F&G series
+  loaded → true negative, not a dead-signal artifact. Operator
+  confirmed archival. Engine moved `sigma/`→`archive/sigma/`; removed
+  from `pyproject.toml`, `run_all_engines.sh`, `run_smoke_test.sh`,
+  `run_all_searches.sh`, `ENGINE_TABLES`, tip-sheet registry, and all
+  real importers (tpcore tests now duck-type `ExecutionDecision`).
+  Canonical record + raw sweep CSV: `archive/sigma/EULOGY.md` /
+  `archive/sigma/sigma_failed_expansion_search.csv`.
+  **Scoping caveat (carried into the eulogy):** this adjudicates only
+  the *directional* failed-expansion form. The **sector-neutral
+  residual variant** the research marks as the next step is a *new
+  engine* (different signal construction + risk model), NOT a Sigma
+  un-archiving — and was never tested here. "Sigma failed" ≠
+  "compression/residual mean-reversion is dead." (The previously-queued
+  HMM-regime path and the rejected 2026-05-15 OU gate are now moot —
+  Sigma is closed.)
 
 - **Reversion — reclassified as satellite 2026-05-15 (closed).** The
   signal-class-redesign decision was resolved by reclassifying Reversion

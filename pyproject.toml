@@ -55,7 +55,7 @@ ste-check-imports = "tpcore.scripts.check_imports:main"
 # NOTE: ``platform/`` is intentionally NOT a Python package — that name shadows
 # the stdlib ``platform`` module (used transitively by pandas/exchange_calendars).
 # It contains only Alembic migration files which are loaded by path, not import.
-include = ["tpcore*", "sigma*", "reversion*", "vector*", "momentum*", "sentinel*"]
+include = ["tpcore*", "reversion*", "vector*", "momentum*", "sentinel*"]  # sigma archived 2026-05-16
 exclude = ["tests*"]
 
 [tool.setuptools.package-data]
@@ -84,7 +84,6 @@ testpaths = [
     "tpcore/forensics/tests",
     "tpcore/outage/tests",
     "tpcore/quality/validation/tests",
-    "sigma/tests",
     "reversion/tests",
     "vector/tests",
     "momentum/tests",

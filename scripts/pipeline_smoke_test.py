@@ -9,8 +9,9 @@ reports for "is the NYSE regular session open right now":
    so TP/SL anchor to current price (no drift from yesterday's close).
 2. Submits one Tier 1 BUY bracket via
    ``AlpacaPaperBrokerAdapter.submit_tier1_only`` (1 share, wide TP/SL).
-3. Inserts the matching ``platform.open_orders`` row with sigma-shaped
-   ``decision_data`` carrying ``tier2_qty = 1`` so the monitor reacts.
+3. Inserts the matching ``platform.open_orders`` row with per-trade
+   engine-shaped ``decision_data`` carrying ``tier2_qty = 1`` so the
+   monitor reacts.
 4. Polls open_orders for up to 60 s expecting status flips to
    ``'filled'`` and a tier2 row to appear (monitor's cascade).
 
@@ -41,9 +42,9 @@ What it doesn't do
 * Wait for the Tier 2 to fill — the mocked-stream integration test
   (``tpcore/tests/test_trade_monitor.py::test_tier2_fill_writes_aar_and_bumps_risk_state``)
   covers the AAR write deterministically.
-* Submit through ``SigmaOrderManager`` — that path is the full engine,
-  outside the scope of a smoke. We exercise the broker → DB → monitor
-  leg only.
+* Submit through the engine's order manager — that path is the full
+  engine, outside the scope of a smoke. We exercise the broker → DB →
+  monitor leg only.
 
 Run::
 
@@ -82,7 +83,7 @@ if TYPE_CHECKING:  # pragma: no cover
 
 logger = logging.getLogger("scripts.pipeline_smoke_test")
 
-TEST_ENGINE = "sigma"  # use sigma so the monitor's tier2 dispatch fires
+TEST_ENGINE = "reversion"  # Tier-2 OCO per-trade engine — monitor's tier2 dispatch fires
 TEST_TICKER = "SPY"
 TEST_QTY = 1
 # Wide TP/SL so the bracket's exit legs don't fire during the live smoke.
@@ -176,7 +177,7 @@ def _build_decision_data(
     sl_price: Decimal,
     far_tp: Decimal,
 ) -> dict[str, Any]:
-    """Shape that matches what ``sigma.order_manager`` persists."""
+    """Shape that matches what the per-trade engine order manager persists."""
     return {
         "decision": {
             "ticker": ticker,

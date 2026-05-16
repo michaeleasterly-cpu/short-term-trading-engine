@@ -89,7 +89,7 @@ def _market_order(**overrides) -> Order:
         qty=Decimal("4"),
         order_type=OrderType.MARKET,
         time_in_force=TimeInForce.DAY,
-        engine_id="sigma",
+        engine_id="reversion",
     )
     base.update(overrides)
     return Order(**base)
@@ -183,10 +183,21 @@ async def test_place_bracket_requires_both_legs() -> None:
 # ────────────────────────────────────────────────────────────────────────────
 
 
+class _StubExecutionDecision:
+    """Duck-typed stand-in for an engine's ``ExecutionDecision``.
+
+    ``submit_execution_decision`` only reads ``order_payloads`` (the
+    broker is engine-agnostic). tpcore tests must not import an engine
+    (layering invariant, 2026-05-16), so the contract is reproduced
+    locally instead of importing ``sigma.models``/``reversion.models``.
+    """
+
+    def __init__(self, order_payloads: list[dict]) -> None:
+        self.order_payloads = order_payloads
+
+
 async def test_submit_execution_decision_places_two_orders() -> None:
     from datetime import date as date_t
-
-    from sigma.models import ExecutionDecision
 
     client = MagicMock()
     client.submit_order.side_effect = [
@@ -199,13 +210,7 @@ async def test_submit_execution_decision_places_two_orders() -> None:
     ]
     adapter = _make_adapter(client=client)
 
-    decision = ExecutionDecision(
-        ticker="AAPL",
-        qty=8,
-        tier1_qty=4,
-        tier2_qty=4,
-        notional_usd=Decimal("1440.00"),
-        risk_amount_usd=Decimal("43.20"),
+    decision = _StubExecutionDecision(
         order_payloads=[
             {
                 "symbol": "AAPL",
@@ -228,7 +233,6 @@ async def test_submit_execution_decision_places_two_orders() -> None:
                 "client_order_id": "AAPL_1700000000_tier2",
             },
         ],
-        constructed_at=datetime(2026, 5, 9, 13, 30, tzinfo=UTC),
     )
 
     placed = await adapter.submit_execution_decision(decision)

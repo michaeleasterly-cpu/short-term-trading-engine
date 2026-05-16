@@ -1,4 +1,5 @@
-"""Engine graduation gate — `assert_passed` is called by Sigma + Reversion.
+"""Engine graduation gate — `assert_passed` is called by the per-trade
+engines (Reversion + Vector; Sigma archived 2026-05-16).
 
 Per spec §5: the engines call this before "the graduation return path"
 (i.e. before swapping from the pre-grad cap to live sizing). It raises
@@ -41,9 +42,6 @@ EXPECTED_SOURCES = frozenset(f"validation.{name}" for name in KNOWN_CHECK_NAMES)
 # universe_candidates) are platform STATE, not validation-gated feeds,
 # so they are intentionally absent.
 #
-#   sigma     prices_daily          backtest.py:31,86,239;
-#                                    scheduler.py:129,234
-#             liquidity_tiers        backtest.py:106,114,951
 #   reversion prices_daily          backtest.py:18,223; scheduler.py:112
 #             fundamentals_quarterly backtest.py:19,38,257,976,1167,1176
 #   vector    prices_daily          backtest.py:216; scheduler.py:89,194
@@ -60,7 +58,6 @@ EXPECTED_SOURCES = frozenset(f"validation.{name}" for name in KNOWN_CHECK_NAMES)
 #             macro_indicators       backtest.py:4; models.py:34;
 #                                    plugs/setup_detection.py:63,260
 ENGINE_TABLES: dict[str, frozenset[str]] = {
-    "sigma": frozenset({"prices_daily", "liquidity_tiers"}),
     "reversion": frozenset({"prices_daily", "fundamentals_quarterly"}),
     "vector": frozenset({
         "prices_daily", "fundamentals_quarterly", "earnings_events",

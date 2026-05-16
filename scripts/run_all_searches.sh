@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Sweep all three engines back-to-back on the T1+T2 universe (1,281 names).
+# Sweep the per-trade engines back-to-back on the T1+T2 universe (1,281
+# names). Sigma archived 2026-05-16 — see archive/sigma/EULOGY.md.
 # Sequential so they don't fight for DB connections; ~5-15 min per engine.
 # NOTE: no `-e`. The orchestrator exits 1 on a FAILED verdict, which is a
 # normal/expected outcome — not a crash. `-e` would abort the sweep on the
@@ -12,7 +13,7 @@ set -a
 source .env
 set +a
 
-for engine in sigma reversion vector; do
+for engine in reversion vector; do
   echo "════════════════════════════════════════════════════════════════════════"
   echo "  Starting ${engine} search ($(date +'%Y-%m-%d %H:%M:%S'))"
   echo "════════════════════════════════════════════════════════════════════════"

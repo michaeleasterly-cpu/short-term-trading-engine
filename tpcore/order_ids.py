@@ -1,7 +1,10 @@
 """Centralised client_order_id builders + parsers for cross-engine isolation.
 
-The platform runs four engines (momentum, sigma, reversion, vector) against
-a single Alpaca paper account. Without sub-account isolation the only way
+The platform runs the engines (momentum, reversion, vector, sentinel;
+Sigma archived 2026-05-16) against a single Alpaca paper account. The
+``sg_`` prefix is retained below so historical Sigma orders remain
+attributable — it is never minted for new orders. Without sub-account
+isolation the only way
 to attribute an order back to its originating engine is by inspecting the
 ``client_order_id`` field stamped at submission time.
 
@@ -16,7 +19,7 @@ restart) **cannot** mistake each other's orders for their own.
 Two-character engine prefixes — chosen so no prefix is a prefix of another:
 
 * ``mo_`` — momentum (single order per ticker per rebalance)
-* ``sg_`` — sigma (Tier 1 + Tier 2 OCO bracket)
+* ``sg_`` — sigma (Tier 1 + Tier 2 OCO bracket) — archived, historical-only
 * ``rv_`` — reversion (Tier 1 + Tier 2 OCO bracket)
 * ``vc_`` — vector (parent + take-profit + stop-loss bracket)
 
@@ -49,7 +52,7 @@ from datetime import UTC, datetime
 
 ENGINE_PREFIX: dict[str, str] = {
     "momentum": "mo_",
-    "sigma": "sg_",
+    "sigma": "sg_",  # archived 2026-05-16 — kept for historical attribution only
     "reversion": "rv_",
     "vector": "vc_",
     "sentinel": "sn_",
