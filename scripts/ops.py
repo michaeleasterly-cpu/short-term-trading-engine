@@ -695,7 +695,9 @@ async def _stage_earnings_refresh(
     }
 
 
-async def _stage_tier_refresh(pool: asyncpg.Pool) -> dict[str, Any]:
+async def _stage_tier_refresh(
+    pool: asyncpg.Pool, cfg: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """Quarterly liquidity-tier refresh — bootstrap + aggregation.
 
     Two-phase, mirrors the operator's manual ``scripts/run_tier_refresh.sh``:
@@ -716,13 +718,17 @@ async def _stage_tier_refresh(pool: asyncpg.Pool) -> dict[str, Any]:
     operator never ran the wrapper script.
     """
     log = structlog.get_logger("scripts.ops")
-    # Outer skip guard — gate the whole stage on liquidity_tiers freshness.
+    # Outer skip guard — gate the whole stage on liquidity_tiers
+    # freshness. ``skip_guard_days`` (via --param) overrides the 90-day
+    # default; 0 forces a re-run — the canonical self-heal force the
+    # selfheal orchestrator uses (mirrors the other stages' contract).
+    skip_days = int((cfg or {}).get("skip_guard_days", 90))
     newest = await pool.fetchval(
         "SELECT MAX(last_updated) FROM platform.liquidity_tiers"
     )
-    if newest is not None:
+    if newest is not None and skip_days > 0:
         age = datetime.now(UTC) - newest
-        if age.days < 90:
+        if age.days < skip_days:
             log.info(
                 "ops.stage.tier_refresh.skipped_fresh",
                 last_refresh_age_days=age.days,
@@ -793,7 +799,9 @@ async def _stage_tier_refresh(pool: asyncpg.Pool) -> dict[str, Any]:
     }
 
 
-async def _stage_classify_tickers(pool: asyncpg.Pool) -> dict[str, Any]:
+async def _stage_classify_tickers(
+    pool: asyncpg.Pool, cfg: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """Monthly ticker-classification refresh.
 
     Asset class is near-static — re-runs exist to pick up new
@@ -826,9 +834,12 @@ async def _stage_classify_tickers(pool: asyncpg.Pool) -> dict[str, Any]:
     active = int(snapshot["active"] or 0) if snapshot else 0
     coverage_pct = ((active - unclassified) / active) if active else 0.0
 
-    if latest is not None and coverage_pct >= 0.95:
+    # ``skip_guard_days`` (via --param) overrides the 30-day default;
+    # 0 forces a re-run — the canonical self-heal force.
+    skip_days = int((cfg or {}).get("skip_guard_days", 30))
+    if latest is not None and coverage_pct >= 0.95 and skip_days > 0:
         age = datetime.now(UTC) - latest
-        if age.days < 30:
+        if age.days < skip_days:
             log.info(
                 "ops.stage.classify_tickers.skipped_fresh",
                 last_refresh_age_days=age.days,
@@ -1417,12 +1428,12 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # spread_observations. Stage 2: assign_tiers aggregates into
     # liquidity_tiers. Closes audit gap G-2: the bootstrap used to
     # be manual-only via scripts/run_tier_refresh.sh.
-    ("tier_refresh",        lambda pool, cfg: (lambda: _stage_tier_refresh(pool)),             HEAVY_STAGE_TIMEOUT_SEC),
+    ("tier_refresh",        lambda pool, cfg: (lambda: _stage_tier_refresh(pool, cfg)),         HEAVY_STAGE_TIMEOUT_SEC),
     # Ticker classifications refresh — monthly cadence (30d skip guard +
     # 95% coverage check). Picks up new listings after universe
     # expansion. ETFs/SPACs/funds get flagged so catalyst + earnings
     # pipelines can filter them out.
-    ("classify_tickers",    lambda pool, cfg: (lambda: _stage_classify_tickers(pool)),         HEAVY_STAGE_TIMEOUT_SEC),
+    ("classify_tickers",    lambda pool, cfg: (lambda: _stage_classify_tickers(pool, cfg)),     HEAVY_STAGE_TIMEOUT_SEC),
     ("delist_stale",        lambda pool, cfg: (lambda: _stage_delist_stale(pool)),             STAGE_TIMEOUT_SEC),
     # earnings_refresh — earnings-beat events for vector engine.
     # Heavy timeout (1h) because the FMP loop is ~1 sec per ticker;

@@ -101,12 +101,14 @@ _SPECS: tuple[HealSpec, ...] = (
     HealSpec(check_name="macro_indicators_freshness", source="macro_indicators",
              healable=True, stage="macro_indicators",
              params={"skip_guard_days": "0"}, max_attempts=2),
-    # Re-pullable, but tier_refresh / classify_tickers take no config
-    # and expose no force param — cannot honestly self-heal yet.
+    # Force param added to tier_refresh / classify_tickers
+    # (skip_guard_days=0) → now honestly healable via canonical re-run.
     HealSpec(check_name="liquidity_tiers_freshness", source="liquidity_tiers",
-             healable=False, unhealable_reason=_NEEDS_FORCE_PARAM),
+             healable=True, stage="tier_refresh",
+             params={"skip_guard_days": "0"}, max_attempts=2),
     HealSpec(check_name="ticker_classifications_coverage", source="ticker_classifications",
-             healable=False, unhealable_reason=_NEEDS_FORCE_PARAM),
+             healable=True, stage="classify_tickers",
+             params={"skip_guard_days": "0"}, max_attempts=2),
     HealSpec(check_name="prices_daily_freshness", source="prices_daily",
              healable=True, stage="daily_bars", params=dict(_PRICES_REPAIR),
              max_attempts=3),
