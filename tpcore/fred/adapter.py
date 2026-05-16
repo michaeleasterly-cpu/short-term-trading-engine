@@ -67,6 +67,10 @@ INDICATOR_SERIES: tuple[tuple[str, str], ...] = (
     # BAA10Y stays the Sentinel Bear-Score signal; the HY→Sentinel
     # scoring switch is a separate, deferred, backtest-gated decision.
     ("hy_spread",            "BAMLH0A0HYM2"),
+    # VIX close (CBOE Volatility Index) — added 2026-05-16 for the
+    # Fear & Greed volatility component. FRED VIXCLS has full daily
+    # history from 1990-01-02; no new provider (FRED is existing).
+    ("vix",                  "VIXCLS"),
 )
 """(canonical_name, FRED series_id) pairs — the platform's vocabulary
 on the left, FRED's identifier on the right. Adding a new indicator

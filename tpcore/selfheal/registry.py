@@ -88,6 +88,10 @@ _SPECS: tuple[HealSpec, ...] = (
              source="apewisdom_social_sentiment",
              healable=True, stage="apewisdom_social_sentiment",
              params={"skip_guard_hours": "0"}, max_attempts=2),
+    # Stale Fear & Greed → recompute via the bounded canonical stage
+    # (reads existing platform data; no external pull).
+    HealSpec(check_name="fear_greed_freshness", source="fear_greed",
+             healable=True, stage="fear_greed", params={}, max_attempts=2),
 )
 
 HEAL_SPECS: dict[str, HealSpec] = {s.check_name: s for s in _SPECS}

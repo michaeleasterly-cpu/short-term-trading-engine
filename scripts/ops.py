@@ -993,6 +993,27 @@ async def _stage_apewisdom_social_sentiment(
     return {"rows_loaded": int(rows or 0)}
 
 
+async def _stage_fear_greed(
+    pool: asyncpg.Pool, config: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Recompute the Fear & Greed index from existing platform data.
+
+    Daily (after close). ``--param backfill=true`` computes the full
+    2001→today history; ``--param start_date=YYYY-MM-DD`` for an
+    explicit window. No external provider. NOT a one-off script — this
+    canonical stage IS the backfill path.
+    """
+    from tpcore.ingestion.handlers import handle_fear_greed
+
+    log = structlog.get_logger("scripts.ops")
+    try:
+        rows = await handle_fear_greed(pool, config or {})
+    except Exception as exc:
+        log.error("ops.stage.fear_greed.failed", error=str(exc))
+        raise
+    return {"rows_loaded": int(rows or 0)}
+
+
 async def _stage_sec_filings(pool: asyncpg.Pool, *, backfill: bool = False) -> dict[str, Any]:
     """Weekly SEC EDGAR Form 4 + 8-K ingest.
 
@@ -1321,6 +1342,9 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # ApeWisdom Reddit social sentiment; all pages, T1/T2 local filter,
     # 24h skip-guard, idempotent ON CONFLICT. Added 2026-05-16.
     ("apewisdom_social_sentiment", lambda pool, cfg: (lambda: _stage_apewisdom_social_sentiment(pool, cfg)), STAGE_TIMEOUT_SEC),
+    # Fear & Greed: derived from existing platform data (no provider).
+    # Daily recompute; --param backfill=true for full 2001→ history.
+    ("fear_greed",          lambda pool, cfg: (lambda: _stage_fear_greed(pool, cfg)),            STAGE_TIMEOUT_SEC),
     # data_validation runs the 10-check suite against the live tables —
     # at the current 20M-row prices_daily it consistently runs ~120-
     # 130s. Bumping to 5 min gives headroom without masking a true hang.
@@ -2561,6 +2585,38 @@ async def _check_apewisdom_social_sentiment(pool: asyncpg.Pool) -> dict[str, Any
     }
 
 
+async def _check_fear_greed(pool: asyncpg.Pool) -> dict[str, Any]:
+    """Dashboard probe — 'Fear & Greed: XX (label) as of YYYY-MM-DD'.
+
+    Color: red Extreme Fear, yellow Fear, green Neutral/Greed,
+    gray Extreme Greed.
+    """
+    row = await pool.fetchrow(
+        """
+        SELECT date, score, label FROM platform.fear_greed
+        ORDER BY date DESC LIMIT 1
+        """
+    )
+    if row is None:
+        return {"ok": False, "reason": "no fear_greed rows",
+                "summary": "Fear & Greed: — (no data)"}
+    label = str(row["label"])
+    score = float(row["score"])
+    color = {
+        "Extreme Fear": "red", "Fear": "yellow",
+        "Neutral": "green", "Greed": "green", "Extreme Greed": "gray",
+    }.get(label, "gray")
+    age = (date.today() - row["date"]).days
+    return {
+        "ok": age <= 5,  # ~3 trading days incl. a weekend
+        "summary": f"Fear & Greed: {score:.1f} ({label}) as of {row['date'].isoformat()}",
+        "score": score,
+        "label": label,
+        "color": color,
+        "as_of": row["date"].isoformat(),
+    }
+
+
 _CHECK_FNS = [
     ("db_connectivity", _check_connectivity),
     ("data_freshness", _check_freshness),
@@ -2573,6 +2629,7 @@ _CHECK_FNS = [
     ("greeks_max_pain_freshness", _check_greeks_max_pain),
     ("insider_sentiment_freshness", _check_finnhub_insider_sentiment),
     ("social_sentiment_freshness", _check_apewisdom_social_sentiment),
+    ("fear_greed", _check_fear_greed),
     ("liquidity_tiers_freshness", _check_liquidity_tiers_freshness),
     ("ticker_classifications", _check_ticker_classifications),
     ("engine_schedulers", _check_engine_schedulers),

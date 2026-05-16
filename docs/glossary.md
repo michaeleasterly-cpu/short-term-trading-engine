@@ -60,3 +60,5 @@ engine-service: Long-running daemon at `ops/engine_service.py`. Polls `platform.
 **MSPR (Monthly Share Purchase Ratio)** — Finnhub's insider-sentiment metric, range [-100, 100]; positive = net insider buying pressure, negative = net selling. Sourced monthly per symbol into `platform.insider_sentiment` (`mspr`, `net_change`). Added 2026-05-16.
 
 **Social sentiment (ApeWisdom)** — Reddit community mentions/upvotes/rank for a ticker, scanned ~every 2h by apewisdom.io (no auth). Stored daily per ticker in `platform.social_sentiment` with 24h-ago comparators. Used as a multiplier/risk signal, never a standalone entry trigger. Added 2026-05-16.
+
+**Fear & Greed Index (internal)** — 0–100 composite of four normalized components: volatility (VIX vs 50dma), credit (HY-OAS 3yr z-score), momentum (SPY vs 125dma), safe-haven (10Y-2Y). <25 Extreme Fear … ≥75 Extreme Greed. Computed from existing platform data only (no CNN/Yahoo). `tpcore.indicators.fear_greed`. Added 2026-05-16.

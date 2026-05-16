@@ -73,7 +73,7 @@ class FakePool:
                 {"indicator": name, "latest_date": today, "rows_total": 100}
                 for name in (
                     "sahm_rule", "industrial_production", "initial_claims",
-                    "yield_curve", "credit_spread", "hy_spread",
+                    "yield_curve", "credit_spread", "hy_spread", "vix",
                 )
             ]
         # options_max_pain_freshness: one fresh snapshot per expected
@@ -152,6 +152,11 @@ class FakePool:
         # social_sentiment_freshness MAX(date): a fresh date so the
         # suite is green in e2e tests for unrelated checks.
         if "max(date)" in sql.lower() and "platform.social_sentiment" in sql.lower():
+            from datetime import UTC, datetime, timedelta
+            return datetime.now(UTC).date() - timedelta(days=1)
+        # fear_greed_freshness MAX(date): a fresh date so the suite is
+        # green in e2e tests for unrelated checks.
+        if "max(date)" in sql.lower() and "platform.fear_greed" in sql.lower():
             from datetime import UTC, datetime, timedelta
             return datetime.now(UTC).date() - timedelta(days=1)
         return None

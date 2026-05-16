@@ -323,6 +323,12 @@ Populated by the weekly `sec_filings` ops stage (`handle_sec_filings` in `tpcore
 
 **Indexes:** `(ticker, filing_date)`, `(filing_date)`.
 
+#### `platform.fear_greed`
+
+**Purpose:** Internally-computed 4-component Fear & Greed index (volatility 30% / credit 30% / momentum 25% / safe-haven 15%). One row per trading date. Derived purely from existing platform data (FRED `vix`/`hy_spread`/`yield_curve` in macro_indicators + SPY in prices_daily) via the pure `tpcore.indicators.fear_greed` function → `handle_fear_greed` → daily `fear_greed` stage. **No external provider.** `ON CONFLICT (date) DO UPDATE` (recompute corrects late-data rows). Added 2026-05-16.
+
+**Refresh cadence:** daily after close via the `fear_greed` stage; `--param backfill=true` computes 2001→today. `fear_greed_freshness` check FAILs if the latest row is > 3 NYSE sessions old; self-heal recomputes via the bounded stage.
+
 #### `platform.social_sentiment`
 
 **Purpose:** ApeWisdom Reddit social sentiment (no auth). One row per (ticker, date) — mentions / upvotes / rank + 24h-ago comparators for the T1/T2 stock universe. Ingested by `tpcore.apewisdom.ApeWisdomAdapter` → `handle_apewisdom_social_sentiment` → `apewisdom_social_sentiment` stage (all pages, local T1/T2 filter, 24h skip-guard, idempotent `ON CONFLICT DO NOTHING`). Added 2026-05-16.

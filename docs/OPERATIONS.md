@@ -257,6 +257,7 @@ The daily `python scripts/ops.py --update` pipeline already includes the heavy w
 | `greeks_max_pain` | Daily (2026-05-16) | same-day skip-guard: no-op if today's `observed_date` already present for the symbol | greeks.pro free-tier max-pain → `platform.options_max_pain` for 1 tracked symbol (SPY). Requires `GREEKS_API_KEY` (greeks.pro free tier, 10/min·600/day). `/flow`/`/greeks`/`/gex` are paid (403) and intentionally not ingested. |
 | `finnhub_insider_sentiment` | ~Monthly (2026-05-16); 25-day skip-guard | no-op if `MAX(recorded_at)` within 25d | Finnhub free-tier insider-sentiment MSPR → `platform.insider_sentiment` for T1/T2 stock universe. Requires `FINNHUB_API_KEY` (free signup at finnhub.io). `/news-sentiment`/`/social-sentiment` are premium (403) and not ingested. |
 | `apewisdom_social_sentiment` | Daily (2026-05-16); 24h skip-guard | no-op if `MAX(recorded_at)` within 24h | ApeWisdom Reddit social sentiment (no auth) → `platform.social_sentiment` for T1/T2 universe (all pages, local filter). API refreshes ~2h. |
+| `fear_greed` | Daily after close (2026-05-16) | recompute is idempotent (ON CONFLICT DO UPDATE) | 4-component Fear & Greed from existing platform data (no provider) → `platform.fear_greed`. `--param backfill=true` computes full 2001→today history. |
 
 To force-run locally (same command as the daily run; underlying handlers are idempotent):
 
@@ -773,6 +774,7 @@ FROM (
 | `options_max_pain_freshness` *(NEW 2026-05-16, greeks.pro adapter)* | Tracked symbol (SPY) has a max-pain snapshot ≤ 7d old | `GREEKS_API_KEY` invalid, greeks.pro outage, or stalled `greeks_max_pain` stage; self-heal re-runs the bounded stage |
 | `insider_sentiment_freshness` *(NEW 2026-05-16, Finnhub adapter)* | Newest insider-sentiment (year,month) period ≤ 3 months old | `FINNHUB_API_KEY` invalid, Finnhub outage, or stalled stage; self-heal re-runs the bounded stage |
 | `social_sentiment_freshness` *(NEW 2026-05-16, ApeWisdom adapter)* | Latest data ≤ 7d old AND ≥ 30% of T1+T2 stocks covered | ApeWisdom outage or stalled stage; self-heal re-runs the bounded stage |
+| `fear_greed_freshness` *(NEW 2026-05-16)* | Most-recent fear_greed row ≤ 3 NYSE sessions old | stale macro/SPY inputs or stalled `fear_greed` stage; self-heal recomputes |
 
 ### Cross-table audit (added 2026-05-13)
 

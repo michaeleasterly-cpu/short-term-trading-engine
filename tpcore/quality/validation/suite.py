@@ -36,6 +36,8 @@ from .checks.corporate_actions_integrity import CHECK_NAME as CA_INTEGRITY_NAME
 from .checks.corporate_actions_integrity import check_corporate_actions_integrity
 from .checks.delistings import CHECK_NAME as DELISTINGS_NAME
 from .checks.delistings import check_delistings
+from .checks.fear_greed_freshness import CHECK_NAME as FEAR_GREED_NAME
+from .checks.fear_greed_freshness import check_fear_greed_freshness
 from .checks.fundamentals_integrity import CHECK_NAME as FUND_INTEGRITY_NAME
 from .checks.fundamentals_integrity import check_fundamentals_integrity
 from .checks.insider_sentiment_freshness import CHECK_NAME as INSIDER_SENTIMENT_NAME
@@ -91,6 +93,7 @@ KNOWN_CHECK_NAMES: tuple[str, ...] = (
     OPTIONS_MAXPAIN_NAME,
     INSIDER_SENTIMENT_NAME,
     SOCIAL_SENTIMENT_NAME,
+    FEAR_GREED_NAME,
 )
 
 
@@ -160,20 +163,23 @@ async def run_suite(
     social_sentiment_task = _safe_run(
         SOCIAL_SENTIMENT_NAME, check_social_sentiment_freshness, pool, None
     )
+    fear_greed_task = _safe_run(
+        FEAR_GREED_NAME, check_fear_greed_freshness, pool, None
+    )
     (
         delistings_result, constituent_result, splits_result,
         row_integrity_result, fund_integrity_result, ca_integrity_result,
         catalyst_result, sec_result, liquidity_result, classifications_result,
         macro_result, prices_result, completeness_result,
         options_maxpain_result, insider_sentiment_result,
-        social_sentiment_result,
+        social_sentiment_result, fear_greed_result,
     ) = await asyncio.gather(
         delistings_task, constituent_task, splits_task,
         row_integrity_task, fund_integrity_task, ca_integrity_task,
         catalyst_task, sec_task, liquidity_task, classifications_task,
         macro_task, prices_task, completeness_task,
         options_maxpain_task, insider_sentiment_task,
-        social_sentiment_task,
+        social_sentiment_task, fear_greed_task,
     )
     checks: list[CheckResult] = [
         delistings_result, constituent_result, splits_result,
@@ -181,7 +187,7 @@ async def run_suite(
         catalyst_result, sec_result, liquidity_result, classifications_result,
         macro_result, prices_result, completeness_result,
         options_maxpain_result, insider_sentiment_result,
-        social_sentiment_result,
+        social_sentiment_result, fear_greed_result,
     ]
 
     finished_at = datetime.now(UTC)

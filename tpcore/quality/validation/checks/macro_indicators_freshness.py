@@ -36,6 +36,7 @@ EXPECTED_INDICATORS: tuple[str, ...] = (
     "yield_curve",
     "credit_spread",
     "hy_spread",
+    "vix",
 )
 # ``hy_spread`` (BAMLH0A0HYM2) was truncated by FRED 2026-05-15 to a
 # rolling 3-year window. Its full pre-truncation history was recovered

@@ -1170,6 +1170,9 @@ async def handle_finnhub_insider_sentiment(
             return 0
 
     symbols_cfg = config.get("symbols")
+    if isinstance(symbols_cfg, str) and symbols_cfg.strip():
+        # --param symbols=AAPL,MSFT,... arrives as a string; accept it.
+        symbols_cfg = [s for s in symbols_cfg.replace(" ", "").split(",") if s]
     if isinstance(symbols_cfg, list) and symbols_cfg:
         universe = [str(s).upper() for s in symbols_cfg]
     else:
@@ -1342,6 +1345,118 @@ async def handle_apewisdom_social_sentiment(
     return len(rows)
 
 
+async def handle_fear_greed(
+    pool: asyncpg.Pool, config: dict[str, Any]
+) -> int | None:
+    """Compute the 4-component Fear & Greed index from existing
+    platform data and upsert into ``platform.fear_greed``.
+
+    Pure logic lives in ``tpcore.indicators.fear_greed``; this handler
+    is the I/O shell. Always computes over the full available history
+    (rolling windows need it), then upserts rows from ``start_date``.
+    ``config``: ``backfill`` (bool; True → start 2001-01-01),
+    ``start_date`` (ISO; default: last 10 days for the daily stage).
+    No external provider — VIX/hy_spread/yield_curve from
+    ``macro_indicators``, SPY from ``prices_daily``.
+    """
+    from datetime import UTC
+    from datetime import date as _date
+    from datetime import timedelta as _td
+
+    import pandas as pd
+
+    from tpcore.indicators.fear_greed import compute_fear_greed
+
+    backfill = bool(config.get("backfill", False))
+    if backfill:
+        start = _date(2001, 1, 1)
+    else:
+        sd = config.get("start_date")
+        start = (_date.fromisoformat(sd) if isinstance(sd, str)
+                 else datetime.now(UTC).date() - _td(days=10))
+
+    async with pool.acquire() as conn:
+        macro = await conn.fetch(
+            """
+            SELECT indicator, date, value
+            FROM platform.macro_indicators
+            WHERE indicator IN ('vix','hy_spread','yield_curve')
+            ORDER BY date
+            """
+        )
+        spy = await conn.fetch(
+            """
+            SELECT date, close FROM platform.prices_daily
+            WHERE ticker = 'SPY' AND delisted = false
+            ORDER BY date
+            """
+        )
+
+    def _ser(rows, key):
+        s = pd.Series(
+            {r["date"]: float(r["value"]) for r in rows if r["indicator"] == key}
+        )
+        s.index = pd.to_datetime(s.index)
+        return s.sort_index()
+
+    vix = _ser(macro, "vix")
+    hy = _ser(macro, "hy_spread")
+    t10 = _ser(macro, "yield_curve")
+    sp = pd.Series({r["date"]: float(r["close"]) for r in spy})
+    sp.index = pd.to_datetime(sp.index)
+    sp = sp.sort_index()
+
+    if vix.empty or hy.empty or sp.empty or t10.empty:
+        logger.warning(
+            "ingestion.handler.fear_greed.missing_inputs",
+            vix=len(vix), hy=len(hy), spy=len(sp), t10y2y=len(t10),
+        )
+        return 0
+
+    fg = compute_fear_greed(vix, hy, sp, t10).dropna(subset=["score"])
+    fg = fg[fg.index.date >= start]
+    if fg.empty:
+        logger.info("ingestion.handler.fear_greed.empty", start=start.isoformat())
+        return 0
+
+    rows = [
+        (
+            d.date(), float(r["score"]), str(r["label"]),
+            (None if pd.isna(r["direction"]) else str(r["direction"])),
+            (None if pd.isna(r["score_5d_ago"]) else float(r["score_5d_ago"])),
+            float(r["volatility_component"]), float(r["credit_component"]),
+            float(r["momentum_component"]), float(r["safe_haven_component"]),
+        )
+        for d, r in fg.iterrows()
+    ]
+    async with pool.acquire() as conn:
+        await conn.executemany(
+            """
+            INSERT INTO platform.fear_greed
+                (date, score, label, direction, score_5d_ago,
+                 volatility_component, credit_component,
+                 momentum_component, safe_haven_component)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+            ON CONFLICT (date) DO UPDATE SET
+                score=EXCLUDED.score, label=EXCLUDED.label,
+                direction=EXCLUDED.direction,
+                score_5d_ago=EXCLUDED.score_5d_ago,
+                volatility_component=EXCLUDED.volatility_component,
+                credit_component=EXCLUDED.credit_component,
+                momentum_component=EXCLUDED.momentum_component,
+                safe_haven_component=EXCLUDED.safe_haven_component,
+                recorded_at=now()
+            """,
+            rows,
+        )
+    logger.info(
+        "ingestion.handler.fear_greed.done",
+        rows=len(rows), backfill=backfill, start=start.isoformat(),
+        latest_score=rows[-1][1], latest_label=rows[-1][2],
+    )
+    return len(rows)
+
+
 HANDLERS: dict[str, HandlerFn] = {
     "data_validation": handle_data_validation,
     "fundamentals_refresh": handle_fundamentals_refresh,
@@ -1352,6 +1467,7 @@ HANDLERS: dict[str, HandlerFn] = {
     "greeks_max_pain": handle_greeks_max_pain,
     "finnhub_insider_sentiment": handle_finnhub_insider_sentiment,
     "apewisdom_social_sentiment": handle_apewisdom_social_sentiment,
+    "fear_greed": handle_fear_greed,
 }
 
 
@@ -1367,4 +1483,5 @@ __all__ = [
     "handle_greeks_max_pain",
     "handle_finnhub_insider_sentiment",
     "handle_apewisdom_social_sentiment",
+    "handle_fear_greed",
 ]
