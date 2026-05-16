@@ -200,6 +200,32 @@ class AAIIAdapter:
             ) from exc
         return parse_sentiment_workbook(content)
 
+    async def latest_published(self) -> date | None:
+        """Cheap publication-availability probe (#165 facet 4): HEAD the
+        survey file and read ``Last-Modified`` — the date AAII last
+        published — WITHOUT downloading the 1 MB workbook. Lets a
+        freshness check distinguish "we are stale (our defect → heal)"
+        from "AAII simply hasn't published newer yet (vendor-late →
+        quiet, no churn)". Returns ``None`` if the header is absent or
+        the probe fails — caller falls back to the strict (assume-
+        behind) behaviour, never silently green.
+        """
+        if self._client is None:
+            self._client = httpx.AsyncClient(
+                base_url=self._base_url, timeout=self._timeout,
+                headers=_BROWSER_HEADERS, follow_redirects=True,
+            )
+            self._owned_client = True
+        try:
+            resp = await self._client.head(_SURVEY_PATH)
+            lm = resp.headers.get("Last-Modified")
+            if not lm:
+                return None
+            from email.utils import parsedate_to_datetime
+            return parsedate_to_datetime(lm).date()
+        except (httpx.HTTPError, ValueError, TypeError):
+            return None
+
     # ── Internal ───────────────────────────────────────────────────────
     @with_retry(max_attempts=3, backoff_base_sec=2.0, backoff_cap_sec=30.0)
     async def _fetch_raw(self, path: str) -> bytes:

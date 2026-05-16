@@ -61,10 +61,30 @@ Single focus until further notice — no engine/Sigma-redesign work. Sequence:
    calls it → `ops.py --update --only <due>`; absent `--only` =
    today's full sweep (preserved/reversible); empty-due = infra +
    Step-4 self-heal only (NONE_DUE sentinel — green-gate unaffected);
-   launchd timing untouched. Live-proven; 879 tests. **Remaining
-   #165: TARGETING (demand-driven set for constrained feeds —
-   engine-coupled) + PUBLICATION-AVAILABILITY GATE (per-adapter
-   "source has newer?" probe).**
+   launchd timing untouched. Live-proven; 879 tests.
+3c. ✅ **TARGETING + PUBLICATION facets (#165) — DONE 2026-05-16.**
+   TARGETING: `tpcore/feeds/targeting.py` — `demand_targets` (DB-
+   derived active interest: open_orders ∪ recent aar_events ∪ recent
+   universe_candidates; NO engine code — engine *output* in shared
+   tables) + `prioritise`; CONSTRAINED_DEMAND_DRIVEN feeds spend their
+   bounded budget on demand tickers first, WHOLE_UNIVERSE never
+   narrowed; empty demand → unchanged. Wired exemplar:
+   IBorrowDesk handler. PUBLICATION: `tpcore/feeds/publication.py` —
+   freshness is now VENDOR-ANCHORED (UTC, the vendor's calendar, NOT
+   today−N): `FeedProfile.publish_weekday` (AAII=Thu) +
+   `expected_latest_publish` (pure, offline — last scheduled publish
+   minus dissemination lag) wired into the AAII check, so a red means
+   "vendor published, we're behind" (genuine our-gap) and normal
+   vendor lag never false-fires. Live HEAD `Last-Modified` probe
+   (`AAIIAdapter.latest_published` + `source_has_newer`) built +
+   registered + tested as the mechanism. 891 tests; ruff/imports
+   clean; no engine code modified.
+   **Honest remaining (incremental adoption, not unbuilt design):**
+   per-constrained-feed targeting rollout beyond IBorrowDesk;
+   per-adapter probes beyond AAII (FINRA has no cheap latest-probe);
+   self-heal-orchestrator probe consult for the vendor-MISSED-a-
+   scheduled-publish-beyond-lag edge (schedule anchoring already
+   covers the normal case). Each a one-entry/­one-wire increment.
 4. **Hardening pass** (some items NOT blocked on the verdict — run in
    parallel while SEC backfills):
    - `prices_daily_gaps` audit check: close the 14-day-recency blind spot

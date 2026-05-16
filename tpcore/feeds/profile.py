@@ -69,6 +69,11 @@ class FeedProfile(BaseModel):
     skip_guard_days: int | None = None       # handler skip-guard default
     targeting: Targeting = Targeting.WHOLE_UNIVERSE
     publication_probe: bool = False          # phased per-adapter
+    # Vendor publication schedule (UTC-anchored, NOT our clock). For
+    # weekly feeds: ISO weekday the vendor posts (Mon=1..Sun=7). When
+    # set, freshness reasons from "last scheduled vendor publish" not
+    # "today − N" — see publication.expected_latest_publish.
+    publish_weekday: int | None = None
     evidence: str = ""                       # how cadence/lag were determined
 
 
@@ -97,8 +102,11 @@ FEED_PROFILES: dict[str, FeedProfile] = {
     "aaii_sentiment": FeedProfile(
         feed="aaii_sentiment", trigger=FeedTrigger.VENDOR_WEEKLY,
         cadence_days=7, freshness_max_age_days=10, skip_guard_days=5,
-        evidence="AAII publishes weekly (Thu); 10d tolerates one missed "
-                 "publication + a late Friday pull.",
+        publication_probe=True, publish_weekday=4,  # Thursday (ISO Mon=1)
+        evidence="AAII Sentiment Survey closes Wed, results posted "
+                 "Thursday (vendor TZ→UTC). Freshness is vendor-anchored "
+                 "(last scheduled Thu publish, not today−N) and confirmed "
+                 "by the HEAD Last-Modified probe.",
     ),
     "iborrowdesk_borrow_rates": FeedProfile(
         feed="iborrowdesk_borrow_rates", trigger=FeedTrigger.CONTINUOUS,

@@ -42,11 +42,35 @@ async def check_aaii_sentiment_freshness(
             observed="zero rows in platform.aaii_sentiment",
         ))
     else:
-        age = (datetime.now(UTC).date() - latest).days
-        if age > MAX_AGE_DAYS:
+        now = datetime.now(UTC)
+        age = (now.date() - latest).days
+        # VENDOR-ANCHORED freshness (#165 facet 4): reason from AAII's
+        # own publication calendar in UTC — the last scheduled Thursday
+        # publish — NOT "today − N". We are "behind" only if our newest
+        # row predates the vendor's most-recent scheduled publish (we
+        # missed a publish). If the feed had no fixed schedule we'd
+        # fall back to the cadence window (MAX_AGE_DAYS).
+        # PURE + offline: reason from AAII's own publication calendar
+        # (last scheduled Thursday, UTC) — NOT "today − N", NOT a
+        # network call (validation must be deterministic/offline; the
+        # conftest fakes the DB precisely to avoid I/O). The live
+        # Last-Modified probe that distinguishes "our gap" from
+        # "vendor-late" runs in the SELF-HEAL orchestrator before it
+        # spends a heal cycle — not here.
+        from tpcore.feeds.publication import expected_latest_publish
+        expected = expected_latest_publish("aaii_sentiment", now)
+        behind = (
+            latest < expected if expected is not None
+            else age > MAX_AGE_DAYS
+        )
+        if behind:
             failures.append(FailureDetail(
                 ticker="<aaii_sentiment>", reason="stale",
-                expected=f"newest date within {MAX_AGE_DAYS}d",
+                expected=(
+                    f"≥ vendor's last scheduled publish "
+                    f"{expected.isoformat()}" if expected
+                    else f"newest date within {MAX_AGE_DAYS}d"
+                ),
                 observed=f"latest {latest.isoformat()} ({age}d ago)",
             ))
     duration_ms = int((time.perf_counter() - started) * 1000)

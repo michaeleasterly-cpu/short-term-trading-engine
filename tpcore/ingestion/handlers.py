@@ -2011,6 +2011,18 @@ async def handle_iborrowdesk_borrow_rates(
     if not universe:
         logger.info("ingestion.handler.borrow_rates.empty_universe")
         return 0
+    # Demand-driven targeting (#165 facet 3): IBorrowDesk is
+    # scrape-fragile + ticker-limited (CONSTRAINED_DEMAND_DRIVEN) — so
+    # spend the bounded budget on tickers the engines are acting on
+    # FIRST (open orders / recent AAR / recent candidates), then the
+    # rest. Empty demand (paper/early) → universe unchanged. Demand is
+    # an optimisation, never load-bearing.
+    from tpcore.feeds.targeting import demand_targets, prioritise
+    try:
+        _demand = await demand_targets(pool, "iborrowdesk_borrow_rates")
+        universe = prioritise(universe, _demand)
+    except Exception:
+        pass  # targeting must never break the pull
     max_tickers = config.get("max_tickers")
     if max_tickers is not None and len(universe) > int(max_tickers):
         universe = universe[: int(max_tickers)]
