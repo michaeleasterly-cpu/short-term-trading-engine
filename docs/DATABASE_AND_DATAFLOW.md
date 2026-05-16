@@ -329,6 +329,17 @@ Populated by the weekly `sec_filings` ops stage (`handle_sec_filings` in `tpcore
 
 **Refresh cadence:** daily after close via the `fear_greed` stage; `--param backfill=true` computes 2001→today. `fear_greed_freshness` check FAILs if the latest row is > 3 NYSE sessions old; self-heal recomputes via the bounded stage.
 
+**Validation (2026-05-16 — backfill done & regime-checked, not just populated):** the 2001→today history was computed (6,634 rows, 2001-01-02 → 2026-05-15, no gaps) after ingesting full VIX history into `macro_indicators` (FRED `VIXCLS`, 9,186 rows 1990→2026). The index was verified to read the correct regime at independently-known periods:
+
+| Period | F&G score | Label | Expected |
+|---|---|---|---|
+| 2008-11 GFC | 19.5–26.7 | Extreme Fear / Fear | Fear ✓ |
+| 2020-03 COVID crash | 5.1–13.3 | Extreme Fear | Extreme Fear ✓ (series low — sharpest vol spike) |
+| 2017 calm bull | 57.6–64.0 | Greed | Greed ✓ |
+| 2021 melt-up | 61.8–65.7 | Greed | Greed ✓ |
+
+The index correctly bottoms at the two worst crashes (COVID < GFC, matching the relative vol shock) and reads Greed in low-vol bull markets — economically sound, not merely row-populated.
+
 #### `platform.social_sentiment`
 
 **Purpose:** ApeWisdom Reddit social sentiment (no auth). One row per (ticker, date) — mentions / upvotes / rank + 24h-ago comparators for the T1/T2 stock universe. Ingested by `tpcore.apewisdom.ApeWisdomAdapter` → `handle_apewisdom_social_sentiment` → `apewisdom_social_sentiment` stage (all pages, local T1/T2 filter, 24h skip-guard, idempotent `ON CONFLICT DO NOTHING`). Added 2026-05-16.
