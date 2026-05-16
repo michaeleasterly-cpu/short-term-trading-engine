@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
+from tpcore.feeds import freshness_max_age_days
 from tpcore.quality.validation.models import CheckResult, FailureDetail
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -32,7 +33,7 @@ if TYPE_CHECKING:  # pragma: no cover
 logger = structlog.get_logger(__name__)
 
 CHECK_NAME = "sec_filings_freshness"
-MAX_AGE_DAYS = 14
+MAX_AGE_DAYS = freshness_max_age_days("sec_insider_transactions", 14)  # single source of truth: tpcore.feeds profile
 MIN_COVERAGE_PCT = 0.30
 COVERAGE_WINDOW_DAYS = 180
 

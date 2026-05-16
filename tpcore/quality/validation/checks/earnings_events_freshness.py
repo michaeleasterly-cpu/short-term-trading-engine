@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
+from tpcore.feeds import freshness_max_age_days
 from tpcore.quality.validation.models import CheckResult, FailureDetail
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -35,7 +36,7 @@ if TYPE_CHECKING:  # pragma: no cover
 logger = structlog.get_logger(__name__)
 
 CHECK_NAME = "earnings_events_freshness"
-MAX_AGE_DAYS = 90
+MAX_AGE_DAYS = freshness_max_age_days("earnings_events", 90)  # single source of truth: tpcore.feeds profile
 # Minimum coverage of the *addressable* universe — T1+T2 tickers
 # classified as stocks (operating companies that report earnings).
 # ETFs/SPACs/funds in T1+T2 don't report quarterly earnings, so they

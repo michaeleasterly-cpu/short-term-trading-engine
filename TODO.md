@@ -35,10 +35,24 @@ Single focus until further notice — no engine/Sigma-redesign work. Sequence:
    (69e84b2); 3 + 2 healable flips (556cc9e, 51fb643). Force param
    added to tier_refresh/classify_tickers.
 3. ✅ Validation/self-heal honest-green path proven (macro + classify
-   force-repull live-verified). **Open refinement (#163):** per-feed
-   cadence profile as single source of truth (trigger / cadence /
-   targeting / publication-availability gate) — replaces remaining
-   blanket constants; demand-driven targeting for constrained feeds.
+   force-repull live-verified).
+3a. ✅ **Per-feed cadence profile (#163) — cadence facet DONE
+   2026-05-16.** `tpcore/feeds/` is the single source of truth: one
+   evidence-backed `FeedProfile` per feed (13 feeds), frozen, with an
+   `evidence` string (no-vendor-blame). The 9 single-MAX_AGE freshness
+   checks now READ `freshness_max_age_days` from the profile instead
+   of scattered guessed constants — this also fixed the live
+   short_interest docstring/constant lie (said 42, constant was still
+   35 → now 42 from the profile). Clockwork drift test: every healable
+   HealSpec source must declare a profile (can't ship a self-healing
+   feed without an evidence-backed cadence). The other 3 facets are
+   **declared as profile fields with per-feed values but enforcement
+   is honestly phased, NOT dropped**: TRIGGER (scheduler re-arch off
+   the blanket daily sweep — launchd-level), TARGETING (demand-driven
+   set for constrained feeds — crosses the engine boundary),
+   PUBLICATION-AVAILABILITY GATE (per-adapter "source has newer?"
+   probe so vendor-late ≠ red). Those three are the remaining #163
+   work, each a deliberate phase.
 4. **Hardening pass** (some items NOT blocked on the verdict — run in
    parallel while SEC backfills):
    - `prices_daily_gaps` audit check: close the 14-day-recency blind spot

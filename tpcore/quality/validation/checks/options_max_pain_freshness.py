@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
+from tpcore.feeds import freshness_max_age_days
 from tpcore.quality.validation.models import CheckResult, FailureDetail
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -22,7 +23,7 @@ if TYPE_CHECKING:  # pragma: no cover
 logger = structlog.get_logger(__name__)
 
 CHECK_NAME = "options_max_pain_freshness"
-MAX_AGE_DAYS = 7
+MAX_AGE_DAYS = freshness_max_age_days("greeks_max_pain", 7)  # single source of truth: tpcore.feeds profile
 # Symbols the platform expects a daily max-pain snapshot for. Free tier
 # tracks one; SPY is the platform's canonical macro/regime proxy.
 EXPECTED_SYMBOLS: tuple[str, ...] = ("SPY",)

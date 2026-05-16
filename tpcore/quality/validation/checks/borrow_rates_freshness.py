@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
+from tpcore.feeds import freshness_max_age_days
 from tpcore.quality.validation.models import CheckResult, FailureDetail
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -20,7 +21,7 @@ if TYPE_CHECKING:  # pragma: no cover
 logger = structlog.get_logger(__name__)
 
 CHECK_NAME = "borrow_rates_freshness"
-MAX_AGE_DAYS = 5
+MAX_AGE_DAYS = freshness_max_age_days("iborrowdesk_borrow_rates", 5)  # single source of truth: tpcore.feeds profile
 
 
 async def check_borrow_rates_freshness(

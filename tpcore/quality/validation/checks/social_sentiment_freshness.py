@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
+from tpcore.feeds import freshness_max_age_days
 from tpcore.quality.validation.models import CheckResult, FailureDetail
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -37,7 +38,7 @@ if TYPE_CHECKING:  # pragma: no cover
 logger = structlog.get_logger(__name__)
 
 CHECK_NAME = "social_sentiment_freshness"
-MAX_AGE_DAYS = 7
+MAX_AGE_DAYS = freshness_max_age_days("apewisdom_social_sentiment", 7)  # single source of truth: tpcore.feeds profile
 # Evidence-derived (2026-05-16): ApeWisdom∩T1/T2 ceiling ≈ 23.0%
 # (345/1501); floor set below it so real ingestion regressions trip
 # but the proven structural ceiling never false-fires. See docstring.
