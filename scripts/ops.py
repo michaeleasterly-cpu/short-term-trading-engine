@@ -910,19 +910,25 @@ async def _stage_delist_stale(pool: asyncpg.Pool) -> dict[str, Any]:
     return {"candidates": candidates, "delisted": candidates}
 
 
-async def _stage_macro_indicators(pool: asyncpg.Pool) -> dict[str, Any]:
+async def _stage_macro_indicators(
+    pool: asyncpg.Pool, config: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """Weekly FRED macro-indicators ingest.
 
     Pulls Sahm Rule, industrial production, initial claims, yield curve,
     HY credit spread → ``platform.macro_indicators``. Idempotent; the
     handler's own 7-day skip-guard short-circuits intra-week reruns.
     Added 2026-05-14 as the last data source from MASTER_PLAN §6.1.
+
+    Canonical one-time historical CSV backfill (no one-off script):
+    ``--param hist_csv_path=<file> --param hist_indicator=<name>`` loads
+    a pre-truncation archive for a single indicator, idempotently.
     """
     from tpcore.ingestion.handlers import handle_macro_indicators
 
     log = structlog.get_logger("scripts.ops")
     try:
-        rows = await handle_macro_indicators(pool, {})
+        rows = await handle_macro_indicators(pool, config or {})
     except Exception as exc:
         log.error("ops.stage.macro_indicators.failed", error=str(exc))
         raise
@@ -1247,7 +1253,7 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # industrial_production, initial_claims, yield_curve, hy_spread)
     # via FREDAdapter, idempotent ON CONFLICT, 7-day skip-guard.
     # Added 2026-05-14 — closes the last "spec-only" gap in §6.1.
-    ("macro_indicators",    lambda pool, cfg: (lambda: _stage_macro_indicators(pool)),         STAGE_TIMEOUT_SEC),
+    ("macro_indicators",    lambda pool, cfg: (lambda: _stage_macro_indicators(pool, cfg)),    STAGE_TIMEOUT_SEC),
     # data_validation runs the 10-check suite against the live tables —
     # at the current 20M-row prices_daily it consistently runs ~120-
     # 130s. Bumping to 5 min gives headroom without masking a true hang.

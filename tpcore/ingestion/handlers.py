@@ -834,6 +834,84 @@ def _gzip_in_place(path: Any) -> None:
     p.unlink()
 
 
+async def _ingest_macro_hist_csv(
+    pool: asyncpg.Pool, csv_path: str, indicator: str
+) -> int | None:
+    """One-time historical CSV → ``platform.macro_indicators`` for a
+    single indicator. Idempotent (``ON CONFLICT (indicator, date) DO
+    NOTHING``) — re-running inserts nothing and never overwrites or
+    deletes other indicators (e.g. ``credit_spread``/BAA10Y) or the
+    live truncated rows of this same indicator.
+
+    Parsing reuses the FRED adapter's own date/value parsers so the
+    ``"."`` missing-marker and value semantics are byte-identical to
+    the live API path. Archived under the distinct ``fred_macro_hist``
+    source so the one-off volume does not poison the recurring
+    ``fred_macro`` shrinkage comparator.
+    """
+    import csv as _csv
+    from pathlib import Path as _Path
+
+    from tpcore.fred.adapter import _parse_observation_date, _parse_value
+    from tpcore.ingestion.csv_archive import write_archive
+
+    rows = list(_csv.reader(_Path(csv_path).open()))
+    if not rows or len(rows) < 2:
+        raise RuntimeError(f"macro hist csv {csv_path}: empty or header-only")
+    body = rows[1:]  # skip header (DATE,<series>)
+
+    upsert_rows: list[tuple] = []
+    skipped_missing = 0
+    for r in body:
+        if len(r) < 2:
+            continue
+        d = _parse_observation_date(r[0])
+        v = _parse_value(r[1])
+        if d is None:
+            continue
+        if v is None:  # "." / blank — FRED missing marker, skip (not zero)
+            skipped_missing += 1
+            continue
+        upsert_rows.append((indicator, d, v))
+
+    if not upsert_rows:
+        raise RuntimeError(
+            f"macro hist csv {csv_path}: zero parseable rows for {indicator}"
+        )
+
+    archive = write_archive(
+        "fred_macro_hist",
+        [{"indicator": indicator, "date": d.isoformat(), "value": str(v)}
+         for (_, d, v) in upsert_rows],
+        fieldnames=["indicator", "date", "value"],
+        validator=lambda x: bool(x.get("indicator")) and x.get("date") is not None,
+    )
+
+    async with pool.acquire() as conn:
+        await conn.executemany(
+            """
+            INSERT INTO platform.macro_indicators (indicator, date, value)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (indicator, date) DO NOTHING
+            """,
+            upsert_rows,
+        )
+
+    dmin = min(d for _, d, _ in upsert_rows)
+    dmax = max(d for _, d, _ in upsert_rows)
+    logger.info(
+        "ingestion.handler.macro_indicators.hist_csv_done",
+        indicator=indicator,
+        rows_parsed=len(upsert_rows),
+        skipped_missing=skipped_missing,
+        date_min=dmin.isoformat(),
+        date_max=dmax.isoformat(),
+        csv_archive=str(archive.path),
+        source_csv=csv_path,
+    )
+    return len(upsert_rows)
+
+
 async def handle_macro_indicators(
     pool: asyncpg.Pool, config: dict[str, Any],
 ) -> int | None:
@@ -857,6 +935,19 @@ async def handle_macro_indicators(
     from datetime import date as _date
 
     from tpcore.fred import INDICATOR_SERIES, FREDAdapter
+
+    # ── One-time historical CSV backfill (canonical knob, not a one-off
+    # script). FRED + ALFRED permanently truncated BAMLH0A0HYM2 to a
+    # rolling 3yr window (verified 2026-05-16: retroactive across all
+    # ALFRED vintages). The pre-truncation history survives only in an
+    # external CSV archive. This branch ingests such a CSV for ONE named
+    # indicator, idempotently, without disturbing any other series.
+    #     ops.py --stage macro_indicators \
+    #       --param hist_csv_path=<file> --param hist_indicator=hy_spread --force
+    hist_csv = config.get("hist_csv_path")
+    hist_ind = config.get("hist_indicator")
+    if hist_csv and hist_ind:
+        return await _ingest_macro_hist_csv(pool, str(hist_csv), str(hist_ind))
 
     # ── 0. Skip guard ────────────────────────────────────────────────
     skip_days = int(config.get("skip_guard_days", 7))

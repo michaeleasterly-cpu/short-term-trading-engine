@@ -476,6 +476,25 @@ budget, so `RAW_SCORE_MAX` stays at 85. Historical `hy_spread` rows in
 refreshed; `EXPECTED_INDICATORS` in the freshness check was updated to
 the new active 5.
 
+**Partial HY-spread history recovered (2026-05-16) — gap remains.**
+ALFRED was verified conclusively dead (truncation applied retroactively
+across all vintages; 2020-01-01 vintage absent — ICE BofA licensing).
+The pre-truncation history was instead recovered from a public archive
+(`github.com/csaladenes/eco-archive/BAMLH0A0HYM2.csv`, validated:
+2008 peak 21.82%, 2020 peak 10.87% — genuine) and ingested via the
+**canonical** macro stage knob (`ops.py --stage macro_indicators
+--param hist_csv_path=… --param hist_indicator=hy_spread`, idempotent,
+no one-off script). `hy_spread` now covers **1996-12-31 → 2021-03-19**
+(archive) **+ 2023-05-15 → present** (FRED live). A **~26-month hole
+(2021-03-20 → 2023-05-14) remains in NO known source** — the archive
+ends 2021-03-19 and FRED's window starts 2023-05-15, with no overlap.
+Tracked in `docs/research-spikes/hy-spread-gap-2021-2023.md`.
+**`credit_spread`/BAA10Y stays the primary Bear-Score signal** — it is
+contiguous 1996→present; switching Sentinel to the now-restored-but-
+non-contiguous `hy_spread` is deferred until the gap is filled (a holey
+credit signal feeding the live Bear Score is a production-risk change,
+not done).
+
 **Status (built; 2026-05-15):**
 - All five plugs implemented (`sentinel/plugs/`). 28 unit tests covering
   Bear Score sub-scorers, lifecycle state machine (incl. rally veto +
@@ -568,7 +587,7 @@ Full database schema and data flow documentation: [`docs/DATABASE_AND_DATAFLOW.m
 | Supabase **Pro** ($25/mo, active) | Postgres + pooler. Upgraded 2026-05-11 from free tier after `prices_daily` crossed the 500 MB read-only lock; 8 GB disk gives headroom for the all-active universe. | $25 |
 | SEC EDGAR | Form 4 (insider transactions) + 8-K (material events) via `tpcore.sec.SECEdgarAdapter` → `platform.sec_insider_transactions` + `platform.sec_material_events`. Public API, no key — requires `SEC_EDGAR_USER_AGENT` env var per SEC fair-access. Integrated 2026-05-14 (reference implementation of the standard 5-stage data-adapter pipeline). | $0 |
 | ApeWisdom | Social sentiment *(spec-only; no adapter code as of 2026-05-14)* | $0 |
-| FRED | Macro indicators — Sahm Rule, industrial production (INDPRO), 4-wk MA jobless claims, 10y-2y Treasury spread, **Baa-10Y credit spread (BAA10Y)** → `platform.macro_indicators` via `tpcore.fred.FREDAdapter`. Public REST API, free key required (`FRED_API_KEY`). Integrated 2026-05-14. Credit-spread series swapped from BAMLH0A0HYM2 to BAA10Y on 2026-05-15 after FRED truncated the HY OAS history. | $0 |
+| FRED | Macro indicators — Sahm Rule, industrial production (INDPRO), 4-wk MA jobless claims, 10y-2y Treasury spread, **Baa-10Y credit spread (BAA10Y)** → `platform.macro_indicators` via `tpcore.fred.FREDAdapter`. Public REST API, free key required (`FRED_API_KEY`). Integrated 2026-05-14. Credit-spread series swapped from BAMLH0A0HYM2 to BAA10Y on 2026-05-15 after FRED truncated the HY OAS history. Pre-truncation `hy_spread` partially recovered 2026-05-16 from a public archive (github.com/csaladenes/eco-archive, 1996-12-31→2021-03-19) via the canonical `macro_indicators --param hist_csv_path` knob; a 2021-03-20→2023-05-14 gap remains unrecovered (see `docs/research-spikes/hy-spread-gap-2021-2023.md`). BAA10Y remains the primary Bear-Score signal. | $0 |
 | FINRA / NASDAQ | Short interest (release-date matched) *(spec-only; no adapter code as of 2026-05-14)* | $0 |
 | IBorrowDesk | Borrow rates (scraped, fragile) *(spec-only; no adapter code as of 2026-05-14)* | $0 |
 

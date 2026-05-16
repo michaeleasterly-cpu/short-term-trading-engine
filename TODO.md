@@ -4,6 +4,60 @@ Cross-cutting personal action items that don't fit existing docs. Operational
 build queues belong in `docs/DATABASE_AND_DATAFLOW.md §5 Implementation Queue`
 or `docs/MASTER_PLAN.md §9 Build Order`.
 
+## WEEK GOAL (2026-05-16): Data layer finalization + hardening
+
+Single focus until further notice — no engine/Sigma-redesign work. Sequence:
+
+1. **(blocking, in flight)** SEC backfill completes → re-measure catalyst +
+   SEC 180d coverage vs thresholds → verdict held to the bar (our-defect-
+   until-proven-per-ticker; no vendor-blame; threshold reframe only with
+   evidence the gap is not ours).
+2. Roll the 7 detection-only sources to `healable` — one bounded targeted
+   repair + HealSpec flip each (fundamentals, corp_actions, catalyst, SEC,
+   macro, liquidity_tiers, classifications), gated per the 6-stage contract.
+3. Drive validation to 13/13 green; prove `python -m tpcore.selfheal`
+   returns green end-to-end (the deferred live e2e).
+4. **Hardening pass** (some items NOT blocked on the verdict — run in
+   parallel while SEC backfills):
+   - `prices_daily_gaps` audit check: close the 14-day-recency blind spot
+     (old un-backfilled liquid holes invisible).
+   - sporadic `row_velocity`: tighten (currently only fires on total
+     silence; misses sustained severe partial degradation).
+   - FMP handler-path CSV archive: verify end-to-end (presence unproven).
+   - **HY-spread source investigation (ALFRED / Nasdaq Data Link)** —
+     can the full pre-truncation BAMLH0A0HYM2 (1996→) be recovered as a
+     vintage pull or mirror? Investigation only, evidence-based; outcome
+     decides restore-HY-spread vs keep-BAA10Y. (In progress 2026-05-16.)
+   - then the tracked `catalyst→earnings` rename (below).
+
+## Rename: `catalyst_*` → `earnings_*` (tracked, DEFERRED behind data layer)
+
+**Decision (operator, 2026-05-16): the rename WILL happen — but only
+AFTER the data layer is fully squared away. Do not start it before
+then; just be aware it is coming and don't entrench the misnomer.**
+
+`platform.catalyst_events` / the `catalyst_refresh` stage / the
+`catalyst_events_freshness` check / the new selfheal `HealSpec`
+(`source="catalyst_events"`) are all misnamed. Verified empirically
+2026-05-16: the table holds exactly ONE `event_type` — `EARNINGS_BEAT`
+(13,848 rows / 1,104 tickers, source 100% `fmp`). It is **earnings-beat
+events only** — no M&A / FDA / guidance / analyst / news / insider.
+"Catalyst" is aspirational for a future general catalyst engine that
+does not exist; today the only consumer is the **Vector** engine.
+
+Why it matters beyond cosmetics: the `catalyst_events_freshness`
+threshold ("≥20% of T1/T2 with an event in 180d") reasons as if this
+were a broad catalyst stream; it is quarterly earnings *beats*. The
+misnomer actively causes threshold-reasoning confusion (relevant to the
+pending catalyst coverage verdict).
+
+Scope when unblocked: rename table (idempotent migration), the stage,
+the validation check + `KNOWN_CHECK_NAMES`, the selfheal `HealSpec`
+source, the audit_pipeline check, and every Vector consumer — in one
+PR, all six pipeline stages kept in lockstep. Honest name candidates:
+`earnings_events` / `earnings_beats`. Document the column/table rename;
+never drop data.
+
 ## Autonomous self-heal — EVERY data source (P0, 2026-05-15)
 
 **Mandate (operator, verbatim intent):** "100% data, no gaps, no
