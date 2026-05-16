@@ -27,6 +27,11 @@ from .spec import HealSpec
 # whole-universe force_refresh that times out at 3600s.
 _PRICES_REPAIR = {"repair_gaps": "true"}
 
+# Honest disposition is per failure-CLASS, not a blanket placeholder.
+#
+# _PENDING is honest ONLY for genuinely re-pullable freshness/coverage
+# feeds whose targeted repair mode is still being rolled out (#132) —
+# a heal really is coming.
 _PENDING = (
     "no bounded targeted repair spec yet — detected + hard-gated "
     "(blocks the emit / engine sweep) and escalates to the operator; "
@@ -34,25 +39,43 @@ _PENDING = (
     "lands)"
 )
 
+# _CORRUPTION: physical-truth/integrity failure (NULLs, impossible
+# dates, nonpositive shares, bad ratios). A red is bad rows ALREADY in
+# the table — re-pull cannot honestly fix it and a blind bulk re-pull
+# could destroy correct data. Permanently healable=False by nature;
+# the only correct "heal" is operator investigation. Not a rollout gap.
+_CORRUPTION = (
+    "data-corruption / physical-truth class, not a missing-data gap — "
+    "must be investigated, never bulk re-pulled blindly; healable=False "
+    "is permanent and honest, NOT pending a rollout"
+)
+
+# _SOURCE_OF_TRUTH: our data disagrees with an authoritative reference
+# (S&P constituent set / known delistings / known splits). A red is a
+# reconciliation discrepancy, not staleness — re-pulling the feed
+# cannot reconcile it. Permanently healable=False; escalate to
+# investigate which side is wrong.
+_SOURCE_OF_TRUTH = (
+    "discrepancy vs an authoritative source-of-truth (constituents / "
+    "delistings / splits) — a reconciliation failure, not staleness; "
+    "re-pull cannot fix it. healable=False is permanent and honest"
+)
+
 # Explicit, exhaustive. Order mirrors suite.KNOWN_CHECK_NAMES for
 # symmetry / easy diffing.
 _SPECS: tuple[HealSpec, ...] = (
     HealSpec(check_name="delistings", source="delistings",
-             healable=False, unhealable_reason=_PENDING),
+             healable=False, unhealable_reason=_SOURCE_OF_TRUTH),
     HealSpec(check_name="constituent", source="sp500_constituents",
-             healable=False, unhealable_reason=_PENDING),
+             healable=False, unhealable_reason=_SOURCE_OF_TRUTH),
     HealSpec(check_name="splits", source="splits",
-             healable=False, unhealable_reason=_PENDING),
+             healable=False, unhealable_reason=_SOURCE_OF_TRUTH),
     HealSpec(check_name="row_integrity", source="prices_daily",
-             healable=False,
-             unhealable_reason=(
-                 "row_integrity failure is a data-corruption class, not a "
-                 "missing-bars gap — must be investigated, never bulk "
-                 "re-pulled blindly")),
+             healable=False, unhealable_reason=_CORRUPTION),
     HealSpec(check_name="fundamentals_integrity", source="fundamentals_quarterly",
-             healable=False, unhealable_reason=_PENDING),
+             healable=False, unhealable_reason=_CORRUPTION),
     HealSpec(check_name="corporate_actions_integrity", source="corporate_actions",
-             healable=False, unhealable_reason=_PENDING),
+             healable=False, unhealable_reason=_CORRUPTION),
     HealSpec(check_name="earnings_events_freshness", source="earnings_events",
              healable=False, unhealable_reason=_PENDING),
     HealSpec(check_name="sec_filings_freshness", source="sec_insider_transactions",
