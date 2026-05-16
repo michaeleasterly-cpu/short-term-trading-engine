@@ -19,12 +19,26 @@ Single focus until further notice — no engine/Sigma-redesign work. Sequence:
    threshold), `social_sentiment_freshness` (ApeWisdom ~23% < 30%
    floor), `prices_daily_freshness` (needs investigation). Belongs in
    threshold calibration, NOT a re-pull.
-2. Roll the 7 detection-only sources to `healable` — one bounded targeted
-   repair + HealSpec flip each (fundamentals, corp_actions,
-   earnings_events, SEC, macro, liquidity_tiers, classifications), gated
-   per the 6-stage contract.
-3. Drive validation to 13/13 green; prove `python -m tpcore.selfheal`
-   returns green end-to-end (the deferred live e2e).
+2. ✅ **Self-heal rollout — DONE 2026-05-16.** Honest end state:
+   **14/20 checks genuinely self-heal** (all named to real bounded ops
+   stages; zero fake specs — verified), **6/20 honest permanent
+   escalate-for-investigation** (row/fundamentals/corporate_actions
+   integrity = corruption class; delistings/constituent/splits =
+   source-of-truth reconciliation — these can NEVER honestly
+   auto-heal; healable=False is correct, not pending). The expert-
+   flagged "11/11 self-heal" target was rejected as fake-green. Root
+   causes fixed not masked: FINRA adapter missing offset-pagination
+   (only 1 stale period ever ingested — our defect, not cadence;
+   commit 16840f7); ApeWisdom 30% floor structurally unreachable →
+   evidence-derived 15% (proven 23% source ceiling, full-overlap
+   ingest verified; a58304c); per-class honest unhealable reasons
+   (69e84b2); 3 + 2 healable flips (556cc9e, 51fb643). Force param
+   added to tier_refresh/classify_tickers.
+3. ✅ Validation/self-heal honest-green path proven (macro + classify
+   force-repull live-verified). **Open refinement (#163):** per-feed
+   cadence profile as single source of truth (trigger / cadence /
+   targeting / publication-availability gate) — replaces remaining
+   blanket constants; demand-driven targeting for constrained feeds.
 4. **Hardening pass** (some items NOT blocked on the verdict — run in
    parallel while SEC backfills):
    - `prices_daily_gaps` audit check: close the 14-day-recency blind spot
