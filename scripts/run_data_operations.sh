@@ -121,8 +121,26 @@ set -a
 # shellcheck disable=SC1091
 source .env
 set +a
+# Profile-driven feed dispatch (#165): ask the EXISTING data-ops flow
+# which feeds are due per their FeedProfile cadence/trigger, and run
+# only those stages — instead of the blanket "every stage every run".
+# Safety: if the dispatcher errors, fall back to the full sweep (never
+# "nothing runs"). An empty due list is a VALID no-op (nothing's
+# cadence is up) — ops.py still runs data_validation/forensics +
+# Step-4 self-heal regardless, so the 100%-green gate is unaffected.
+ONLY_FLAG=""
+if DUE_STAGES=$(DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python -m tpcore.feeds 2>/tmp/feeds_dispatch.err); then
+    DUE_CSV=$(echo "$DUE_STAGES" | paste -sd, - | tr -d '[:space:]')
+    # Empty due list is VALID (nothing's cadence is up). Pass a
+    # non-matching sentinel so ops runs only infra + Step-4 self-heal,
+    # NOT the full sweep (which truthiness would wrongly do).
+    ONLY_FLAG="--only ${DUE_CSV:-NONE_DUE}"
+    echo "  feed dispatcher: due = [${DUE_CSV:-<none — infra/self-heal only>}]"
+else
+    echo "  ⚠ feed dispatcher failed (see /tmp/feeds_dispatch.err) — full sweep fallback"
+fi
 DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python scripts/ops.py \
-    --update --source data_operations_daemon --run-id "$RUN_ID" $FORCE_FLAG
+    --update --source data_operations_daemon --run-id "$RUN_ID" $FORCE_FLAG $ONLY_FLAG
 UPDATE_RC=$?
 if [[ $UPDATE_RC -ne 0 ]]; then
     echo "✗ --update exited with code $UPDATE_RC — investigate before proceeding."

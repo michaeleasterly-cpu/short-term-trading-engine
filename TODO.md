@@ -53,6 +53,18 @@ Single focus until further notice — no engine/Sigma-redesign work. Sequence:
    PUBLICATION-AVAILABILITY GATE (per-adapter "source has newer?"
    probe so vendor-late ≠ red). Those three are the remaining #163
    work, each a deliberate phase.
+3b. ✅ **TRIGGER facet (#165) — DONE 2026-05-16.** `tpcore/feeds/
+   dispatcher.py` (pure, tested) + `python -m tpcore.feeds`: reads
+   the canonical per-stage last-success from `application_log` + the
+   XNYS close gate, returns only feeds whose trigger/cadence is due
+   per FeedProfile. The EXISTING data-ops daemon (no new daemon)
+   calls it → `ops.py --update --only <due>`; absent `--only` =
+   today's full sweep (preserved/reversible); empty-due = infra +
+   Step-4 self-heal only (NONE_DUE sentinel — green-gate unaffected);
+   launchd timing untouched. Live-proven; 879 tests. **Remaining
+   #165: TARGETING (demand-driven set for constrained feeds —
+   engine-coupled) + PUBLICATION-AVAILABILITY GATE (per-adapter
+   "source has newer?" probe).**
 4. **Hardening pass** (some items NOT blocked on the verdict — run in
    parallel while SEC backfills):
    - `prices_daily_gaps` audit check: close the 14-day-recency blind spot

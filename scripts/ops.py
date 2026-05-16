@@ -1539,6 +1539,7 @@ async def cmd_update(
     *,
     dry_run: bool,
     force: bool = False,
+    only: set[str] | None = None,
 ) -> UpdateSummary:
     started_at = datetime.now(UTC)
     summary = UpdateSummary(run_id=db_log._run_id, started_at=started_at, finished_at=started_at)
@@ -1588,6 +1589,16 @@ async def cmd_update(
         return summary
 
     for name, factory_builder, timeout in _STAGE_SPECS:
+        # Profile-driven feed dispatch (#165): when ``only`` is given
+        # (the feed dispatcher's due list), run just those stages.
+        # ``only=None`` → every stage (today's blanket behaviour,
+        # preserved). data_validation/forensics are infra steps, not
+        # feeds — always allowed through so the green-gate + dossier
+        # still run regardless of which feeds were due.
+        if only is not None and name not in only and name not in (
+            "data_validation", "forensics", "reconcile",
+        ):
+            continue
         summary.stages.append(
             await _run_stage(
                 name,
@@ -3122,6 +3133,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="--allocate only: write risk_state.kill_switch_active on hard freeze (live mode)",
     )
     p.add_argument(
+        "--only",
+        default=None,
+        help="--update only: comma-separated stage names to run (the "
+             "feed dispatcher's due list). Omitted = every stage "
+             "(today's blanket sweep). data_validation/forensics/"
+             "reconcile always run regardless.",
+    )
+    p.add_argument(
         "--backfill",
         action="store_true",
         help=(
@@ -3227,7 +3246,18 @@ async def amain(args: argparse.Namespace) -> int:
 
         update_summary: UpdateSummary | None = None
         if args.update or args.full:
-            update_summary = await cmd_update(pool, log, db_log, dry_run=args.dry_run, force=args.force)
+            # ``--only`` provided (even as the NONE_DUE sentinel / empty)
+            # → feed-driven subset; absent → None → full sweep (today's
+            # behaviour). Truthiness must NOT collapse "nothing due"
+            # into "run everything".
+            _only = (
+                {s.strip() for s in args.only.split(",") if s.strip()}
+                if args.only is not None else None
+            )
+            update_summary = await cmd_update(
+                pool, log, db_log, dry_run=args.dry_run,
+                force=args.force, only=_only,
+            )
             print("\nUPDATE SUMMARY")
             print("=" * 72)
             print(update_summary.to_table())
