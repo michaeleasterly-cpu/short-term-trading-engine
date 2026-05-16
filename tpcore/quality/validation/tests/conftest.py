@@ -73,7 +73,7 @@ class FakePool:
                 {"indicator": name, "latest_date": today, "rows_total": 100}
                 for name in (
                     "sahm_rule", "industrial_production", "initial_claims",
-                    "yield_curve", "credit_spread",
+                    "yield_curve", "credit_spread", "hy_spread",
                 )
             ]
         return []

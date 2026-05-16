@@ -35,12 +35,16 @@ EXPECTED_INDICATORS: tuple[str, ...] = (
     "initial_claims",
     "yield_curve",
     "credit_spread",
+    "hy_spread",
 )
-# ``hy_spread`` (BAMLH0A0HYM2) was the credit-stress indicator until
-# 2026-05-15, when FRED truncated the underlying series to a rolling 3-year
-# window. The active credit-stress indicator is now ``credit_spread``
-# (BAA10Y). Historical hy_spread rows in macro_indicators are retained
-# for audit but excluded from the freshness check (they'll never refresh).
+# ``hy_spread`` (BAMLH0A0HYM2) was truncated by FRED 2026-05-15 to a
+# rolling 3-year window. Its full pre-truncation history was recovered
+# 2026-05-16 (eco-archive + Scribd gap, validated 772/772 exact —
+# contiguous 1996→2026) and it was re-added to the active
+# ``INDICATOR_SERIES``: FRED still serves the rolling window so the
+# weekly stage keeps the tail fresh. It is therefore back in the
+# freshness check. ``credit_spread`` (BAA10Y) remains the active
+# Sentinel Bear-Score signal pending a separate deferred decision.
 
 
 _SQL = """

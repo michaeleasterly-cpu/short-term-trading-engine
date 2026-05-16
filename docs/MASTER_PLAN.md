@@ -471,10 +471,12 @@ yield minus 10-year Treasury). BAA10Y has full FRED history back to 1996,
 no truncation, and the same crisis correlation. The Bear Score sub-scorer
 was recalibrated to a 3-tier graduated structure (Watch >3.0% / Warning
 >4.0% / Recession >5.0%) at 2/3/5 pts respectively — preserves the 5-pt
-budget, so `RAW_SCORE_MAX` stays at 85. Historical `hy_spread` rows in
-`platform.macro_indicators` are retained for audit but no longer
-refreshed; `EXPECTED_INDICATORS` in the freshness check was updated to
-the new active 5.
+budget, so `RAW_SCORE_MAX` stays at 85. (Update 2026-05-16: see below
+— `hy_spread` was fully recovered and **re-activated**; it is again an
+actively-refreshed `INDICATOR_SERIES` member and back in
+`EXPECTED_INDICATORS` (now 6). The Sentinel Bear Score still reads
+`credit_spread`/BAA10Y; the HY→Sentinel scoring switch is a separate,
+deliberately deferred, backtest-gated decision — NOT done.)
 
 **Full HY-spread history recovered — `hy_spread` now contiguous
 (2026-05-16).** ALFRED was verified conclusively dead (truncation
@@ -595,7 +597,7 @@ Full database schema and data flow documentation: [`docs/DATABASE_AND_DATAFLOW.m
 | Supabase **Pro** ($25/mo, active) | Postgres + pooler. Upgraded 2026-05-11 from free tier after `prices_daily` crossed the 500 MB read-only lock; 8 GB disk gives headroom for the all-active universe. | $25 |
 | SEC EDGAR | Form 4 (insider transactions) + 8-K (material events) via `tpcore.sec.SECEdgarAdapter` → `platform.sec_insider_transactions` + `platform.sec_material_events`. Public API, no key — requires `SEC_EDGAR_USER_AGENT` env var per SEC fair-access. Integrated 2026-05-14 (reference implementation of the standard 5-stage data-adapter pipeline). | $0 |
 | ApeWisdom | Social sentiment *(spec-only; no adapter code as of 2026-05-14)* | $0 |
-| FRED | Macro indicators — Sahm Rule, industrial production (INDPRO), 4-wk MA jobless claims, 10y-2y Treasury spread, **Baa-10Y credit spread (BAA10Y)** → `platform.macro_indicators` via `tpcore.fred.FREDAdapter`. Public REST API, free key required (`FRED_API_KEY`). Integrated 2026-05-14. Credit-spread series swapped from BAMLH0A0HYM2 to BAA10Y on 2026-05-15 after FRED truncated the HY OAS history. Pre-truncation `hy_spread` **fully recovered 2026-05-16** (eco-archive 1996-2021 + Scribd FRED-graph export for the 2021-2023 gap; Scribd validated 772/772 exact vs DB before ingest) via the canonical `macro_indicators --param hist_csv_path` knob — `hy_spread` now contiguous 1996-12-31→2026-05-12 (research spike RESOLVED). BAA10Y remains the primary Bear-Score signal pending a deliberate switch decision. | $0 |
+| FRED | Macro indicators — Sahm Rule, industrial production (INDPRO), 4-wk MA jobless claims, 10y-2y Treasury spread, **Baa-10Y credit spread (BAA10Y)** → `platform.macro_indicators` via `tpcore.fred.FREDAdapter`. Public REST API, free key required (`FRED_API_KEY`). Integrated 2026-05-14. Credit-spread series swapped from BAMLH0A0HYM2 to BAA10Y on 2026-05-15 after FRED truncated the HY OAS history. Pre-truncation `hy_spread` **fully recovered 2026-05-16** (eco-archive 1996-2021 + Scribd FRED-graph export for the 2021-2023 gap; Scribd validated 772/772 exact vs DB before ingest) via the canonical `macro_indicators --param hist_csv_path` knob — `hy_spread` now contiguous 1996-12-31→present (research spike RESOLVED). **Re-activated 2026-05-16** as an active `INDICATOR_SERIES` member: FRED still serves the rolling 3-yr window so the weekly stage keeps the tail fresh going forward (idempotent — never touches recovered history). Both `hy_spread` and `credit_spread`/BAA10Y are now maintained; BAA10Y remains the primary Bear-Score signal pending a deliberate, backtest-gated switch decision (held). | $0 |
 | FINRA / NASDAQ | Short interest (release-date matched) *(spec-only; no adapter code as of 2026-05-14)* | $0 |
 | IBorrowDesk | Borrow rates (scraped, fragile) *(spec-only; no adapter code as of 2026-05-14)* | $0 |
 

@@ -58,6 +58,15 @@ INDICATOR_SERIES: tuple[tuple[str, str], ...] = (
     ("initial_claims",       "IC4WSA"),
     ("yield_curve",          "T10Y2Y"),
     ("credit_spread",        "BAA10Y"),
+    # hy_spread re-activated 2026-05-16: the full pre-truncation history
+    # was recovered (eco-archive + Scribd gap, validated 772/772 exact)
+    # and is contiguous 1996→2026 in macro_indicators. FRED still serves
+    # the rolling ~3yr window for BAMLH0A0HYM2, so keeping it here lets
+    # the weekly stage keep the recent tail fresh going forward
+    # (idempotent ON CONFLICT — never touches the recovered history).
+    # BAA10Y stays the Sentinel Bear-Score signal; the HY→Sentinel
+    # scoring switch is a separate, deferred, backtest-gated decision.
+    ("hy_spread",            "BAMLH0A0HYM2"),
 )
 """(canonical_name, FRED series_id) pairs — the platform's vocabulary
 on the left, FRED's identifier on the right. Adding a new indicator

@@ -24,10 +24,16 @@ Single focus until further notice — no engine/Sigma-redesign work. Sequence:
    - sporadic `row_velocity`: tighten (currently only fires on total
      silence; misses sustained severe partial degradation).
    - FMP handler-path CSV archive: verify end-to-end (presence unproven).
-   - **HY-spread source investigation (ALFRED / Nasdaq Data Link)** —
-     can the full pre-truncation BAMLH0A0HYM2 (1996→) be recovered as a
-     vintage pull or mirror? Investigation only, evidence-based; outcome
-     decides restore-HY-spread vs keep-BAA10Y. (In progress 2026-05-16.)
+   - ✅ **HY-spread recovery — DONE 2026-05-16.** ALFRED/Nasdaq ruled
+     out empirically; full history recovered (eco-archive 1996-2021 +
+     Scribd FRED-graph gap, validated 772/772 exact). `hy_spread`
+     contiguous 1996→present, re-activated as a maintained
+     `INDICATOR_SERIES` member (FRED rolling window keeps tail fresh).
+     BAA10Y also still maintained. Research spike RESOLVED.
+     **Deferred (held by operator):** the HY→Sentinel Bear-Score
+     scoring switch — original was binary HY>5%; current is graduated
+     BAA10Y. Requires backtest-derived HY-OAS graduated thresholds
+     before going live. NOT done; awaiting explicit go + validation.
    - then the tracked `catalyst→earnings` rename (below).
 
 ## Rename: `catalyst_*` → `earnings_*` (tracked, DEFERRED behind data layer)
