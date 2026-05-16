@@ -34,9 +34,15 @@ async def test_happy_single_page() -> None:
     await a.aclose()
 
 
-async def test_pagination_walks_all_pages() -> None:
+async def test_pagination_uses_path_segment_not_query() -> None:
+    # ApeWisdom paginates via PATH (/filter/all-stocks/page/N); the
+    # ?page= query form is ignored live. The mock asserts the adapter
+    # uses the path form and returns distinct pages.
+    seen_paths: list[str] = []
+
     def h(req: httpx.Request) -> httpx.Response:
-        pg = int(req.url.params.get("page", 1))
+        seen_paths.append(req.url.path)
+        pg = int(req.url.path.rstrip("/").split("/")[-1])
         return httpx.Response(200, json={
             "count": 6, "pages": 3, "current_page": pg,
             "results": [_rec(pg * 10 + 1, f"T{pg}A"), _rec(pg * 10 + 2, f"T{pg}B")]})
@@ -44,6 +50,8 @@ async def test_pagination_walks_all_pages() -> None:
     recs = await a.get_all_sentiment()
     assert len(recs) == 6
     assert {x.ticker for x in recs} == {"T1A", "T1B", "T2A", "T2B", "T3A", "T3B"}
+    assert seen_paths[0].endswith("/filter/all-stocks/page/1")
+    assert any(p.endswith("/page/2") for p in seen_paths)
     await a.aclose()
 
 

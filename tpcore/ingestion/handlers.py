@@ -1297,11 +1297,20 @@ async def handle_apewisdom_social_sentiment(
         records = await adapter.get_all_sentiment()
 
     today = datetime.now(UTC).date()
-    rows = [
-        (rec.ticker, today, rec.mentions, rec.upvotes, rec.rank,
-         rec.rank_24h_ago, rec.mentions_24h_ago)
-        for rec in records if rec.ticker in universe
-    ]
+    # Dedup by ticker (date is constant) — keep the best-ranked entry
+    # if a ticker appears twice. Prevents rows_loaded over-counting vs
+    # the (ticker,date) PK and makes the return value match DB truth.
+    _by_ticker: dict[str, tuple] = {}
+    for rec in records:
+        if rec.ticker not in universe:
+            continue
+        prev = _by_ticker.get(rec.ticker)
+        if prev is None or rec.rank < prev[4]:
+            _by_ticker[rec.ticker] = (
+                rec.ticker, today, rec.mentions, rec.upvotes, rec.rank,
+                rec.rank_24h_ago, rec.mentions_24h_ago,
+            )
+    rows = list(_by_ticker.values())
     if not rows:
         logger.info(
             "ingestion.handler.social_sentiment.empty",

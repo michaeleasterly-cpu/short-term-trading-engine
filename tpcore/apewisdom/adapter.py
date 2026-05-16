@@ -97,7 +97,10 @@ class ApeWisdomAdapter:
         total_pages = 1
         while page <= total_pages and page <= _MAX_PAGES:
             try:
-                raw = await self._fetch_raw(_FILTER_PATH, {"page": page})
+                # ApeWisdom paginates via a PATH segment, NOT ?page= —
+                # the query form is silently ignored (returns page 1
+                # every time). Verified 2026-05-16.
+                raw = await self._fetch_raw(f"{_FILTER_PATH}/page/{page}", {})
             except DataProviderOutage:
                 raise
             except httpx.HTTPError as exc:
