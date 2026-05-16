@@ -186,6 +186,19 @@ relevant to the still-owed SEC/earnings coverage verdict (WEEK GOAL #1).
 
 ## Autonomous self-heal — EVERY data source (P0, 2026-05-15)
 
+> **STATUS 2026-05-16 — substantially DELIVERED (see WEEK GOAL #2/3a-c
+> above).** Honest end state: 14/20 checks genuinely self-heal (real
+> bounded canonical repair, verified no fake specs); 6/20 are honest
+> permanent escalate-for-investigation (corruption + source-of-truth
+> classes — re-pull cannot fix them; healable=False is correct, not
+> pending). Per-feed cadence profile is the SoT; feed-driven dispatch
+> + vendor-anchored freshness shipped. Root causes fixed not masked
+> (FINRA pagination, ApeWisdom ceiling). The mandate's spirit ("runs
+> on its own, no fake-green") is met; the section below is the
+> original design intent, kept for rationale — remaining work is
+> incremental per-feed breadth (targeting/probes), not unbuilt
+> architecture.
+
 **Mandate (operator, verbatim intent):** "100% data, no gaps, no
 bullshit, runs on its own — I cannot babysit this." This applies to the
 WHOLE data layer, not just daily bars. The 2026-05-15 build delivered

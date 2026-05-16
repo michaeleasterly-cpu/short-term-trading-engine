@@ -101,6 +101,37 @@ Two items from the 2026-05-13 hangnail review are explicitly NOT being built. Re
 
 2. **`scripts/replay_history.py` (EDGE_VALIDATION_PLAN Phase 3)** — never built. Per the plan itself: *"Phase 4 (was: run a single historical replay, feed trade lists into OverfittingDiagnostic, decide go/no-go) fired across all four engines via the Phase 2.5 parameter-search pipeline."* The search runs the entire historical period across many parameter combinations; a single-replay script is duplicative. If we ever need engine-level smoke against a frozen historical window, the search scripts (`scripts/run_sigma_search.sh`, etc.) provide it with finer-grained output.
 
+### Feed-driven scheduling & per-engine gating (2026-05-16)
+
+**Scheduling is feed-driven, not a blanket cron.** The data-ops daemon
+still fires at the launchd time, but `run_data_operations.sh` now asks
+`python -m tpcore.feeds` which feeds are *due* per their `FeedProfile`
+(vendor-anchored trigger/cadence, UTC) and runs `ops.py --update
+--only <due>` — only those stages. Inspect/debug:
+
+```bash
+python -m tpcore.feeds --reasons   # due stage \t feed \t why
+```
+
+Fallbacks (safe by design): dispatcher error → full sweep; empty due
+list → infra + Step-4 self-heal only (NONE_DUE sentinel). `ops.py
+--update` with no `--only` = the old full sweep (unchanged). The
+single source of truth is `tpcore/feeds/profile.py`; freshness
+thresholds are read from there (no per-check guessed constants).
+
+**Per-engine data gate + operator override.** Graduation/trade gating
+is now per-engine: an engine is blocked only if a validation source
+IT reads is red (`capital_gate.ENGINE_TABLES`, evidence-documented).
+To force the old global all-green behaviour (block every engine on
+ANY red — e.g. during an incident):
+
+```bash
+export CAPITAL_GATE_REQUIRE_ALL_GREEN=1   # unset/0 = per-engine (default)
+```
+
+The env var is read by each engine's capital-gate plug; no restart of
+anything else required.
+
 ### Daemons — one-button install (2026-05-14)
 
 The platform runs three launchd LaunchAgents on the operator's Mac. After this single command, nothing else needs operator attention:
