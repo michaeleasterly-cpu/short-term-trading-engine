@@ -61,6 +61,19 @@ _SOURCE_OF_TRUTH = (
     "re-pull cannot fix it. healable=False is permanent and honest"
 )
 
+# _NEEDS_FORCE_PARAM: genuinely re-pullable freshness/coverage, BUT
+# its canonical stage takes no config and has no skip-guard-bypass
+# param — the orchestrator cannot force a re-pull, so a healable=True
+# spec would silently no-op and infinite-retry (fake-green). Honest
+# until the stage gains a force param (#132 per-feed work), then flip.
+_NEEDS_FORCE_PARAM = (
+    "re-pullable in principle, but the canonical stage exposes no "
+    "skip-guard-bypass --param yet, so the orchestrator cannot force "
+    "the repair (a healable spec would silently no-op → infinite "
+    "retry). Flip to healable once the stage gains a force param "
+    "(#132 per-feed work) — NOT a fake-green now"
+)
+
 # Explicit, exhaustive. Order mirrors suite.KNOWN_CHECK_NAMES for
 # symmetry / easy diffing.
 _SPECS: tuple[HealSpec, ...] = (
@@ -76,16 +89,24 @@ _SPECS: tuple[HealSpec, ...] = (
              healable=False, unhealable_reason=_CORRUPTION),
     HealSpec(check_name="corporate_actions_integrity", source="corporate_actions",
              healable=False, unhealable_reason=_CORRUPTION),
+    # Re-pullable freshness, bounded canonical stage, real
+    # skip_guard_days=0 force → honestly healable. A red means stale →
+    # forced re-pull genuinely clears it.
     HealSpec(check_name="earnings_events_freshness", source="earnings_events",
-             healable=False, unhealable_reason=_PENDING),
+             healable=True, stage="earnings_refresh",
+             params={"skip_guard_days": "0"}, max_attempts=2),
     HealSpec(check_name="sec_filings_freshness", source="sec_insider_transactions",
-             healable=False, unhealable_reason=_PENDING),
-    HealSpec(check_name="liquidity_tiers_freshness", source="liquidity_tiers",
-             healable=False, unhealable_reason=_PENDING),
-    HealSpec(check_name="ticker_classifications_coverage", source="ticker_classifications",
-             healable=False, unhealable_reason=_PENDING),
+             healable=True, stage="sec_filings",
+             params={"skip_guard_days": "0"}, max_attempts=2),
     HealSpec(check_name="macro_indicators_freshness", source="macro_indicators",
-             healable=False, unhealable_reason=_PENDING),
+             healable=True, stage="macro_indicators",
+             params={"skip_guard_days": "0"}, max_attempts=2),
+    # Re-pullable, but tier_refresh / classify_tickers take no config
+    # and expose no force param — cannot honestly self-heal yet.
+    HealSpec(check_name="liquidity_tiers_freshness", source="liquidity_tiers",
+             healable=False, unhealable_reason=_NEEDS_FORCE_PARAM),
+    HealSpec(check_name="ticker_classifications_coverage", source="ticker_classifications",
+             healable=False, unhealable_reason=_NEEDS_FORCE_PARAM),
     HealSpec(check_name="prices_daily_freshness", source="prices_daily",
              healable=True, stage="daily_bars", params=dict(_PRICES_REPAIR),
              max_attempts=3),
