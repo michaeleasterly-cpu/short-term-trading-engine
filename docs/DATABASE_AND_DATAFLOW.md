@@ -23,7 +23,7 @@ erDiagram
     AAR_EVENT ||--o{ TAX_LOT : feeds
     PRICES_DAILY ||--o{ UNIVERSE_CANDIDATE : filters
     FUNDAMENTALS_QUARTERLY ||--o{ UNIVERSE_CANDIDATE : filters
-    CATALYST_EVENTS ||--o{ UNIVERSE_CANDIDATE : filters
+    EARNINGS_EVENTS ||--o{ UNIVERSE_CANDIDATE : filters
     CORPORATE_ACTIONS ||--o{ PRICES_DAILY : adjusts
     DATA_QUALITY_LOG ||--o{ VALIDATION_RUN : records
 ```
@@ -88,7 +88,7 @@ List every table under the `platform` schema. For each, provide columns, types, 
 
 **Indexes:** `(ticker, action_date, action_type)` unique.
 
-#### `platform.catalyst_events`
+#### `platform.earnings_events`
 
 **Purpose:** Earnings beats (FMP Starter). Used by Vector Gate 2 and future Catalyst engine.
 
@@ -276,7 +276,7 @@ Created by migration `20260512_2100_spread_observations_and_liquidity_tiers.py`.
 
 **Used by:**
 
-- `catalyst_freshness` validation check (skip ETFs and funds from earnings-event freshness assertions).
+- `earnings_events_freshness` validation check (skip ETFs and funds from earnings-event freshness assertions).
 - Sentinel engine (planned) — inverse / leverage / category filters for the macro-inverse basket.
 - Dashboard liquidity-tier filtering (so an ETF doesn't show up labelled as "missing fundamentals").
 
@@ -515,7 +515,7 @@ flowchart TB
         Prices["platform.prices_daily"]
         FundQ["platform.fundamentals_quarterly"]
         CorpActs["platform.corporate_actions"]
-        Catalyst["platform.catalyst_events"]
+        EarningsEvents["platform.earnings_events"]
         Universe["platform.universe_candidates"]
         AAR["platform.aar_events"]
         Risk["platform.risk_state"]
@@ -566,7 +566,7 @@ flowchart TB
 
     Prices --> Screener
     FundQ --> Screener
-    Catalyst --> Screener
+    EarningsEvents --> Screener
     Screener --> Universe
     Prices --> Validation
     Validation --> Quality
@@ -628,7 +628,7 @@ flowchart TB
 
 ### 3.4 Backtesting Flow
 
-- **Data Loading:** Reads `platform.prices_daily`, `platform.fundamentals_quarterly`, `platform.catalyst_events`, `platform.corporate_actions` directly. No external APIs.
+- **Data Loading:** Reads `platform.prices_daily`, `platform.fundamentals_quarterly`, `platform.earnings_events`, `platform.corporate_actions` directly. No external APIs.
 - **Trade Simulation:** Identical engine logic. Fills simulated at next open. Transaction cost model: 0.05% slippage per side.
 - **Output:** Per-trade CSV → `backtests/<engine>_trades.csv`. Overfitting report → `backtests/<engine>_overfitting_report.json`. Credibility score → `platform.data_quality_log`.
 
@@ -788,7 +788,7 @@ The data layer underwent a major cleanup and self-healing refactor on 2026-05-13
 | **`row_integrity`** (NEW) | every prices_daily row: `close > 0`, `close <= 100M`, OHLC consistent (`high >= GREATEST(open, close, low)`, `low <= LEAST(open, close, high)`), non-NULL OHLCV, no future dates |
 | **`fundamentals_integrity`** (NEW) | every fundamentals_quarterly row: `period_end_date <= filing_date`, `shares_outstanding > 0 OR NULL`, no future filings |
 | **`corporate_actions_integrity`** (NEW) | every corp_actions row: `ratio` in `(0, 1000]`, no NULL action_type, no far-future dates |
-| **`catalyst_freshness`** (NEW 2026-05-14) | `catalyst_events.max(event_date)` not older than 7 days for the active T1+T2 universe; warns on stale (drives the `catalyst_refresh` stage's skip-guard) |
+| **`earnings_events_freshness`** (NEW 2026-05-14) | `earnings_events.max(event_date)` not older than 7 days for the active T1+T2 universe; warns on stale (drives the `earnings_refresh` stage's skip-guard) |
 | **`sec_filings_freshness`** (NEW 2026-05-14) | `sec_insider_transactions` + `sec_material_events` newest `filing_date` ≤ 14d old; ≥ 30% of T1+T2 stocks have a filing in last 180d. Reference implementation of the standard 5-stage data-adapter pipeline. |
 | **`liquidity_tiers_freshness`** (NEW 2026-05-14, L-2) | `liquidity_tiers.max(last_updated)` ≤ 100d old AND ≥ 3% of active universe in T1+T2. Catches operator inaction on the quarterly tier refresh. |
 | **`ticker_classifications_coverage`** (NEW 2026-05-14, T-2) | ≥ 90% of active prices_daily tickers have a row in `ticker_classifications`. Catches universe expansion without re-running the classifier. |
@@ -800,18 +800,18 @@ Acceptance: `passed=True` on all 11 + `confidence=1.000`. Cleanup scripts exist 
 
 ```
 daily_bars → corporate_actions → reconcile → coverage_fill → cross_ref_cleanup
-→ fundamentals_refresh → tier_refresh → classify_tickers → catalyst_refresh
+→ fundamentals_refresh → tier_refresh → classify_tickers → earnings_refresh
 → sec_filings → macro_indicators → data_validation → universe_prescreener → universe_simulation
 ```
 
 Two notable changes vs the pre-2026-05-14 order:
 * **`reconcile` added at #3** — heals `platform.open_orders` against Alpaca daily so orphans never accumulate between trade_monitor restarts.
-* **`tier_refresh` + `classify_tickers` moved before `catalyst_refresh` + `sec_filings`** — the latter two filter universe by `ticker_classifications.asset_class`, so they benefit from fresh classifications.
+* **`tier_refresh` + `classify_tickers` moved before `earnings_refresh` + `sec_filings`** — the latter two filter universe by `ticker_classifications.asset_class`, so they benefit from fresh classifications.
 
 * **`coverage_fill`** (added 2026-05-13) self-heals tier ≤ 2 ticker gaps via Alpaca SIP, 14-day window, after every daily_bars run.
 * **`cross_ref_cleanup`** (added 2026-05-13) deletes expired `tradier_options_chains` rows + orphan-ticker rows across dependent tables — keeps the dashboard cross-table integrity panel green.
 * **`fundamentals_refresh`** is skip-if-refreshed-within-24h — resumable across timeouts.
-* **`catalyst_refresh`** (added 2026-05-14) backfills FMP earnings-beat events for the T1+T2 universe. Skip-guard: short-circuits in ~10ms when `catalyst_events` was refreshed within 6 days. Resolves Vector's "data-blocked" state.
+* **`earnings_refresh`** (added 2026-05-14) backfills FMP earnings-beat events for the T1+T2 universe. Skip-guard: short-circuits in ~10ms when `earnings_events` was refreshed within 6 days. Resolves Vector's "data-blocked" state.
 * **`sec_filings`** (added 2026-05-14, skip tightened to 3 days same day) pulls SEC EDGAR Form 4 + 8-K for the T1+T2 stock universe via the CSV-first sub-protocol (download → validate-at-CSV → load → compress). Reference implementation of the standard 5-stage data-adapter pipeline (`docs/superpowers/pipelines/data_adapter_pipeline.md`).
 * **`tier_refresh`** (added 2026-05-14, made autonomous 2026-05-14 audit-fix) — two-phase: Phase 1 = Corwin-Schultz spread bootstrap → `spread_observations` (60-day inner skip-guard); Phase 2 = `assign_tiers` aggregates into `liquidity_tiers`. Outer 90-day skip-guard. Replaces the manual `scripts/run_tier_refresh.sh` invocation.
 * **`classify_tickers`** (added 2026-05-14) re-runs the Alpaca-asset-name classifier → `ticker_classifications`. Monthly cadence + 95% coverage check.

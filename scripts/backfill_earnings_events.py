@@ -1,4 +1,4 @@
-"""Backfill ``platform.catalyst_events`` with FMP earnings beats.
+"""Backfill ``platform.earnings_events`` with FMP earnings beats.
 
 MVP catalyst proxy for Vector's Gate 2: an earnings report where
 ``actual_eps > estimated_eps × 1.05`` becomes an EARNINGS_BEAT row with
@@ -7,8 +7,8 @@ NLP pipeline (contract awards, raised guidance, etc.) is Phase 3.
 
 Run::
 
-    python scripts/backfill_catalyst_events.py
-    python scripts/backfill_catalyst_events.py --start 2018-01-01 --end 2025-12-31
+    python scripts/backfill_earnings_events.py
+    python scripts/backfill_earnings_events.py --start 2018-01-01 --end 2025-12-31
 
 FMP endpoint (verified 2026-05-11): ``GET /stable/earnings?symbol={t}``
 returns the full historical + future earnings calendar for one symbol
@@ -28,7 +28,7 @@ import httpx
 
 from tpcore.db import build_asyncpg_pool
 
-logger = logging.getLogger("scripts.backfill_catalyst_events")
+logger = logging.getLogger("scripts.backfill_earnings_events")
 
 DEFAULT_UNIVERSE: tuple[str, ...] = (
     "SPY", "QQQ", "IWM",
@@ -48,7 +48,7 @@ BEAT_THRESHOLD = Decimal("0.05")  # > 5% beat
 
 
 _INSERT_SQL = """
-    INSERT INTO platform.catalyst_events
+    INSERT INTO platform.earnings_events
         (ticker, event_date, event_type, magnitude_pct, source, recorded_at)
     VALUES ($1, $2, $3, $4, $5, now())
     ON CONFLICT (ticker, event_date, event_type) DO NOTHING
@@ -149,14 +149,14 @@ async def amain(args: argparse.Namespace) -> int:
             r = await conn.fetchrow(
                 "SELECT COUNT(*) AS n, COUNT(DISTINCT ticker) AS t, "
                 "MIN(event_date) AS mn, MAX(event_date) AS mx "
-                "FROM platform.catalyst_events WHERE event_type='EARNINGS_BEAT'"
+                "FROM platform.earnings_events WHERE event_type='EARNINGS_BEAT'"
             )
     finally:
         await pool.close()
 
     print(f"\nbackfill complete  symbols={len(universe)}  beats_inserted_this_run={inserted_total}")
     print(
-        f"catalyst_events EARNINGS_BEAT total: {r['n']:,} rows / "
+        f"earnings_events EARNINGS_BEAT total: {r['n']:,} rows / "
         f"{r['t']} tickers / span {r['mn']}..{r['mx']}"
     )
     if skipped_no_data:

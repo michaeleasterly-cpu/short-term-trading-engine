@@ -703,8 +703,8 @@ async def _fetch_platform_health() -> dict:
         checks: list[tuple[str, str, str]] = [
             (
                 "ticker_not_in_prices",
-                "catalyst_events",
-                """SELECT COUNT(*) FROM platform.catalyst_events ce
+                "earnings_events",
+                """SELECT COUNT(*) FROM platform.earnings_events ce
                    LEFT JOIN platform.prices_daily_tickers p
                      ON p.ticker = ce.ticker
                    WHERE p.ticker IS NULL""",
@@ -813,7 +813,7 @@ async def _fetch_platform_health() -> dict:
     async def _q_catalyst() -> dict:
         """Catalyst-events coverage + freshness against T1+T2 stock subset.
 
-        Counts mirror what ``validation.catalyst_events_freshness``
+        Counts mirror what ``validation.earnings_events_freshness``
         checks — so the dashboard row stays in lockstep with the suite
         and the operator sees the same red conditions in both places.
         """
@@ -831,12 +831,12 @@ async def _fetch_platform_health() -> dict:
                     (SELECT COUNT(*) FROM addressable) AS addressable,
                     (SELECT COUNT(DISTINCT a.ticker)
                      FROM addressable a
-                     JOIN platform.catalyst_events ce ON ce.ticker = a.ticker
+                     JOIN platform.earnings_events ce ON ce.ticker = a.ticker
                      WHERE ce.event_date >= CURRENT_DATE - INTERVAL '180 days'
                     ) AS covered,
-                    (SELECT MAX(event_date) FROM platform.catalyst_events) AS newest_event,
-                    (SELECT MAX(recorded_at) FROM platform.catalyst_events) AS last_refresh,
-                    (SELECT COUNT(*) FROM platform.catalyst_events) AS total_rows
+                    (SELECT MAX(event_date) FROM platform.earnings_events) AS newest_event,
+                    (SELECT MAX(recorded_at) FROM platform.earnings_events) AS last_refresh,
+                    (SELECT COUNT(*) FROM platform.earnings_events) AS total_rows
                 """
             )
         return {
@@ -2830,7 +2830,7 @@ def render_actions():
         "button below is a manual override — use only to re-run after a "
         "failure or out-of-band. Workflow: 13-stage `ops.py --update` (bars "
         "→ corp actions → reconcile → coverage_fill → cross_ref_cleanup "
-        "→ fundamentals → tier_refresh → classify_tickers → catalyst_refresh "
+        "→ fundamentals → tier_refresh → classify_tickers → earnings_refresh "
         "→ sec_filings → validation → universe prescreener → universe "
         "simulation) → cross-table audit → validation re-confirm → compress "
         "backfill CSVs → engine sweep. "

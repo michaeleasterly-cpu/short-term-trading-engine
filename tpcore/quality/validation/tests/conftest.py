@@ -96,11 +96,11 @@ class FakePool:
         # the 30% floor) so the suite is green in unrelated e2e tests.
         if "platform.social_sentiment" in sql_lower and "covered" in sql_lower:
             return {"universe": 100, "covered": 50}
-        # Catalyst freshness check fires its own CTE that doesn't hit
+        # earnings_events freshness check fires its own CTE that doesn't hit
         # the prices_daily routes above. Return a "clean" snapshot so
         # e2e tests focused on unrelated checks (splits etc.) don't
-        # false-fail on catalyst coverage.
-        if "platform.catalyst_events" in sql_lower and "addressable" in sql_lower:
+        # false-fail on earnings_events coverage.
+        if "platform.earnings_events" in sql_lower and "addressable" in sql_lower:
             from datetime import UTC, datetime, timedelta
             return {
                 "newest_event": datetime.now(UTC).date() - timedelta(days=5),

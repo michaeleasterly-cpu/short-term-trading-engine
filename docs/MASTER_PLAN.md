@@ -277,7 +277,7 @@ Swing Score: Technical (0–40), Catalyst (0–35), Sentiment (0–25). Threshol
 - Entries at market open. Hard stop −7%. Profit target +15% or trailing stop after +10%.
 - Sizing pre-grad $2,000. Max 5 concurrent positions.
 
-**Backtest results — extended window 1995-01-01 → 2025-12-31:** `vector/backtest.py` (44-name universe, with 1,622 PIT-safe `pb`/`de` rows in `fundamentals_quarterly` and 683 `EARNINGS_BEAT` rows in `catalyst_events`):
+**Backtest results — extended window 1995-01-01 → 2025-12-31:** `vector/backtest.py` (44-name universe, with 1,622 PIT-safe `pb`/`de` rows in `fundamentals_quarterly` and 683 `EARNINGS_BEAT` rows in `earnings_events`):
 
 | Metric | Value |
 | --- | --- |
@@ -288,7 +288,7 @@ Swing Score: Technical (0–40), Catalyst (0–35), Sentiment (0–25). Threshol
 | Max drawdown | −13.1% |
 | Profit factor | 0.91 |
 
-The 1995-pushed `--start` doesn't change the trade count: bars are present back to 1994 (Tradier merge) but `fundamentals_quarterly` only goes ~10 years back (FMP Starter) and `catalyst_events` starts 2018-01-24 (FMP coverage). Pre-2018 sessions have nothing to gate on. Actual usable window is still 2018-2025.
+The 1995-pushed `--start` doesn't change the trade count: bars are present back to 1994 (Tradier merge) but `fundamentals_quarterly` only goes ~10 years back (FMP Starter) and `earnings_events` starts 2018-01-24 (FMP coverage). Pre-2018 sessions have nothing to gate on. Actual usable window is still 2018-2025.
 
 **VIX-aware crash-guard sizing — implemented.** Plan §4.3's volatility-scaled sizing now fires from a SPY 20-day realized-volatility proxy computed off `platform.prices_daily` (annualized std × √252, expressed as %). Per-trade `size_factor` is 1.0 (default) / 0.5 (RV > 25) / 0.25 (RV > 30) and multiplies `return_pct` so the equity curve and Sharpe reflect the reduced exposure during high-vol regimes. The proxy is also written to each TradeRecord as `rv20_at_entry_pct` for diagnostics. (The CHOP-based trend-confirmation cut from §4.3 is still deferred to a follow-up — it requires a SPY-CHOP feed Vector doesn't yet read.)
 
@@ -311,11 +311,11 @@ The infrastructure is correct; the strategy needs more evidence before the gate 
 
 **Status (built; Railway paused, runs locally):**
 - All five plugs implemented and tested. Scheduler entry: `vector/scheduler.py`. The Railway service `vector-scheduler` exists (service ID `6498df68-0a23-4531-85df-f54ba37a1c40`) but is unscheduled during the Railway pause; engine runs are invoked locally.
-- Catalyst proxy via FMP `EARNINGS_BEAT` events (683 events across **44 tickers**, 2018–2025) populated in `platform.catalyst_events`. **Critical coverage gap: zero of those 44 tickers are in liquidity_tiers T1+T2.** Vector is therefore untestable on the wider universe until catalyst_events is backfilled. Fundamentals ratios `pb`/`de` backfilled to 152,907 PIT-safe rows across 5,981 tickers in `platform.fundamentals_quarterly` — but fundamentals alone aren't enough; the catalyst-event coverage is the binding constraint.
+- Catalyst proxy via FMP `EARNINGS_BEAT` events (683 events across **44 tickers**, 2018–2025) populated in `platform.earnings_events`. **Critical coverage gap: zero of those 44 tickers are in liquidity_tiers T1+T2.** Vector is therefore untestable on the wider universe until earnings_events is backfilled. Fundamentals ratios `pb`/`de` backfilled to 152,907 PIT-safe rows across 5,981 tickers in `platform.fundamentals_quarterly` — but fundamentals alone aren't enough; the catalyst-event coverage is the binding constraint.
 - VIX-aware crash-guard sizing implemented and verified end-to-end in the backtest (1.0× / 0.5× / 0.25× via SPY 20-day realized-vol proxy).
 - Backtest: `vector/backtest.py` (tier-aware costs as of 2026-05-12). Overfitting report: `backtests/vector_overfitting_report.json`. Score **45/100 — BLOCKED**.
-- **Parameter-search verdict (T1+T2, 50 trials × 3 walk-forward windows, 2026-05-13):** zero trades on every candidate due to the catalyst-event coverage gap. **Vector is data-blocked, not strategy-blocked.** The strategy cannot be evaluated on this universe until `platform.catalyst_events` is expanded beyond the original 44-ticker set. Re-enabling Vector is gated on a one-time data-ingestion backfill (catalyst events for T1+T2 tickers from FMP earnings-history endpoint), not on any strategy work.
-- **2026-05-14 follow-up — P/B-relaxation sweep:** catalyst_events expanded to **1,350 events / 137 tickers**, SEC historical backfill landed 17,844 Form 4 + 8-K rows for 60 T1+T2 stocks. Ran 100-trial sweep with `pb_ceiling ∈ [1.5, 3.5]` (`backtests/vector_search_results.csv`, 150 rows, 3 walk-forward windows). **Result: 0/150 trials passed; every trial scored credibility 45/100** — same structural ceiling as Reversion. **100% of clean trials produced 1–5 trades per 3-year window**, with no trial exceeding 5 trades regardless of parameters. Apparent "high Sharpe" winners (Sharpe 60–120, PF=∞) are 2–4 trade samples — statistically meaningless. **Diagnosis:** the binding constraint is NOT any single gate but the multi-gate intersection (value × quality × catalyst window × swing score) being too restrictive for T1+T2's signal density. Relaxing P/B widens the upstream candidate pool but downstream gates still throttle to 2–5 trades/window. **No parameter changes applied to `vector/models.py`** — sweep evidence didn't support any config. Gap closure requires either (a) dropping a gate (e.g., remove swing_score entirely) for a different strategy variant, or (b) wider universe (T3+ with fundamentals coverage). **SEC NLP catalyst upgrade remains DEFERRED** — same reasoning, plus the sweep proved the catalyst source is not the bottleneck.
+- **Parameter-search verdict (T1+T2, 50 trials × 3 walk-forward windows, 2026-05-13):** zero trades on every candidate due to the catalyst-event coverage gap. **Vector is data-blocked, not strategy-blocked.** The strategy cannot be evaluated on this universe until `platform.earnings_events` is expanded beyond the original 44-ticker set. Re-enabling Vector is gated on a one-time data-ingestion backfill (catalyst events for T1+T2 tickers from FMP earnings-history endpoint), not on any strategy work.
+- **2026-05-14 follow-up — P/B-relaxation sweep:** earnings_events expanded to **1,350 events / 137 tickers**, SEC historical backfill landed 17,844 Form 4 + 8-K rows for 60 T1+T2 stocks. Ran 100-trial sweep with `pb_ceiling ∈ [1.5, 3.5]` (`backtests/vector_search_results.csv`, 150 rows, 3 walk-forward windows). **Result: 0/150 trials passed; every trial scored credibility 45/100** — same structural ceiling as Reversion. **100% of clean trials produced 1–5 trades per 3-year window**, with no trial exceeding 5 trades regardless of parameters. Apparent "high Sharpe" winners (Sharpe 60–120, PF=∞) are 2–4 trade samples — statistically meaningless. **Diagnosis:** the binding constraint is NOT any single gate but the multi-gate intersection (value × quality × catalyst window × swing score) being too restrictive for T1+T2's signal density. Relaxing P/B widens the upstream candidate pool but downstream gates still throttle to 2–5 trades/window. **No parameter changes applied to `vector/models.py`** — sweep evidence didn't support any config. Gap closure requires either (a) dropping a gate (e.g., remove swing_score entirely) for a different strategy variant, or (b) wider universe (T3+ with fundamentals coverage). **SEC NLP catalyst upgrade remains DEFERRED** — same reasoning, plus the sweep proved the catalyst source is not the bottleneck.
 
 ### 4.4 Momentum — Cross-Sectional 12-1 Engine (Fourth Build)
 
@@ -612,7 +612,7 @@ Full database schema and data flow documentation: [`docs/DATABASE_AND_DATAFLOW.m
 - Alpaca free tier → survivorship-free daily bars (delisted stocks included).
 - Tradier historical export → pre-2020 daily bars merged into `platform.prices_daily` (Tradier brokerage account closed; data extracted before closure).
 - FMP Starter → quarterly fundamentals, with `pb`/`de` ratios computed via `scripts/compute_fundamental_ratios.py`.
-- FMP earnings-beats → `platform.catalyst_events` (Vector's catalyst proxy).
+- FMP earnings-beats → `platform.earnings_events` (Vector's catalyst proxy).
 - Self-built corporate-actions pipeline (Alpaca free endpoint) → `platform.corporate_actions` with split + dividend records; AAPL split adjustment verified.
 - Built in Phases 0–4. See §6.4 for current row counts and §6.5 for upgrade triggers.
 
@@ -626,7 +626,7 @@ Full database schema and data flow documentation: [`docs/DATABASE_AND_DATAFLOW.m
 
 **Comprehensive Pipeline Audit (2026-05-15).** A 4-phase audit beyond the validation suite — `scripts/audit_pipeline.py` (wrapper `scripts/run_audit_pipeline.sh`):
 
-* **known_knowns** — explicit checks: row counts, freshness vs threshold for every data source (daily_bars, corporate_actions, fundamentals_quarterly, catalyst_events, sec_filings, macro_indicators, credit_spread, spread_observations, ticker_classifications), validation-suite status, ingestion-jobs state, Sentinel basket presence, credit_spread back to 1996, zero active-code refs to deprecated `hy_spread`.
+* **known_knowns** — explicit checks: row counts, freshness vs threshold for every data source (daily_bars, corporate_actions, fundamentals_quarterly, earnings_events, sec_filings, macro_indicators, credit_spread, spread_observations, ticker_classifications), validation-suite status, ingestion-jobs state, Sentinel basket presence, credit_spread back to 1996, zero active-code refs to deprecated `hy_spread`.
 * **known_unknowns** — documented gaps we measure: GLD tier-T4 quirk, prices_daily multi-day gaps, ETF AR-estimator noise. (The former "hy_spread post-truncation freeze" entry was retired 2026-05-16 — `hy_spread` is now fully recovered + contiguous 1996→present.)
 * **unknown_knowns** — data we already collect but rarely surface: filter-diagnostics distribution from SIGNAL events, cross-engine ticker overlap from `aar_events`, application_log event-type distribution, unexpected empty platform tables, macro indicator pairwise correlations.
 * **unknown_unknowns** — anomaly heuristics: row-count velocity 7d vs prior 7d (per table), 3σ macro stoppage, liquidity-tier distribution shift, engine signal silence, DB size, correlated multi-source staleness ("if N≥3 sources stale together, it's an Alpaca/FMP/FRED outage, not N separate failures").
@@ -643,7 +643,7 @@ Verified row counts and coverage (audited 2026-05-14, post-data-layer normalizat
 | `platform.fundamentals_quarterly` | 178,608 | **5,984 tickers**, PIT-safe via FMP Starter (~30 quarters/ticker mean). `pb` + `de` populated on 152,907 rows; remaining NULLs are explainable (negative book value, no price on filing date, missing fields). |
 | `platform.corporate_actions` | 109,413 | **217 tickers with splits + 3,848 tickers with dividends**. Handler now retries via `@with_retry` (fixes the 2026-05-12 Alpaca-429 cron failure). AAPL split fix verified. |
 | `platform.tradier_options_chains` | 122,668 | 51 tickers, snapshot from May 2026 (immediately before the Tradier brokerage account closed). Frozen — parked for future S2. |
-| `platform.catalyst_events` | 1,350 | **137 tickers**, `EARNINGS_BEAT` type, 2018–2025. Recurring weekly refresh active via `ops.py --update` `catalyst_refresh` stage (skip-guard: 6-day freshness). Vector engine unblocked. |
+| `platform.earnings_events` | 1,350 | **137 tickers**, `EARNINGS_BEAT` type, 2018–2025. Recurring weekly refresh active via `ops.py --update` `earnings_refresh` stage (skip-guard: 6-day freshness). Vector engine unblocked. |
 | `platform.ticker_classifications` | 13,669 | Asset-class taxonomy (`stock` / `etf` / `spac` / `fund`) + ETF leverage/inverse/category flags for the sentinel engine. Backfilled from Alpaca `/v2/assets` + name-pattern classifier (2026-05-14). |
 | `platform.sec_insider_transactions` | **9,522 rows** (50 tickers, 2018-01-02 → 2026-05-13; first backfill landed 2026-05-14 09:11 UTC, 76-min runtime) | Form 4 insider BUY/SELL transactions parsed from SEC EDGAR. T1+T2 stock universe. |
 | `platform.sec_material_events` | **7,938 rows** (55 tickers, same window) | 8-K material events (one row per item code from the submissions index). T1+T2 stock universe. |
@@ -733,7 +733,7 @@ The consolidation eliminates the inter-daemon `DATA_OPERATIONS_COMPLETE` polling
 | Phase 1b | Sigma paper trading (3+ months), Parity Harness active | **Paused** — engine + Parity Harness built; cron firing blocked by the Railway pause. Paper-trading resumes when execution architecture is settled. |
 | Phase 2 | Reversion engine | **Complete (satellite — paper trading; 2026-05-15)** — reclassified as satellite engine alongside S2 (§4.5). Per-trade graduation criteria replace the DSR ≥ 0.95 gate. Combined filter (HIGH quality + \|Z\| ≥ 3.0) live. Satellite-classification backtest: `backtests/reversion_satellite_backtest.json` — 19 trades / Sharpe +0.312 / PF 1.755 / DD −11.5% on 2018-2025 full window. |
 | Phase 3 | Allocator + Forensics (basic) | **Complete (2026-05-13 / 2026-05-14)** — Allocator service in `tpcore/allocator/` with launchd daemon firing Mondays 13:00 UTC. Forensics in `tpcore/forensics/` wired into the data-operations pipeline, auto-generates Sprint Dossiers, surfaces on dashboard with one-click resolve. Both services read AARs through the shared `tpcore.aar.AARReader`. |
-| Phase 4 | Vector engine | **Complete (build); data-blocked (validation)** — engine code shipped, but parameter-search verdict (2026-05-13) showed zero trades on T1+T2 because `platform.catalyst_events` has zero overlap with that universe. Re-enabling requires a catalyst-event backfill, not a code change. |
+| Phase 4 | Vector engine | **Complete (build); data-blocked (validation)** — engine code shipped, but parameter-search verdict (2026-05-13) showed zero trades on T1+T2 because `platform.earnings_events` has zero overlap with that universe. Re-enabling requires a catalyst-event backfill, not a code change. |
 | Phase 4b | **Momentum engine — Phase 2 (live-shippable)** | **Complete (Phase 2; 2026-05-13)** — 5 plugs + scheduler + Alpaca paper integration. `momentum/backtest.py` produces held-back Sharpe +1.58 / PF 2.80 on T1+T2 2024-2025. Paper kickoff: `scripts/run_momentum_kickoff.sh`. Daily cron pattern: scheduler no-ops on non-rebalance days, fires on the first NYSE session of each month. |
 | Phase 5 | S2 (satellite) | **Deferred** — options data parked in `platform.tradier_options_chains` (122,668 rows), no engine code. |
 | Phase 6 | Catalyst | **Deferred** — specification only. |
@@ -757,7 +757,7 @@ The consolidation eliminates the inter-daemon `DATA_OPERATIONS_COMPLETE` polling
 |---|---|---|---|---|---|---|
 | Sigma | +0.74 | +3.71 | -8.1% | 55 | 0.00 | Marginal real edge — research only |
 | Reversion | +0.31 | +1.76 | -11.5% | 45 | 0.34 | **Satellite** (2026-05-15) — DSR gate retired; per-trade graduation criteria. Single-pass full-window evidence in `backtests/reversion_satellite_backtest.json` |
-| Vector | — | — | — | — | — | **Data-blocked** — catalyst_events has 0 overlap with T1+T2 |
+| Vector | — | — | — | — | — | **Data-blocked** — earnings_events has 0 overlap with T1+T2 |
 | **Momentum** | **+1.58** | **+2.80** | -32.4% | 40 | 0.00 | **Strongest OOS signal in the bench** — Phase 1 CONTINUE |
 
 - **Why the 60-pt gate has not been cleared anywhere yet:**
@@ -765,7 +765,7 @@ The consolidation eliminates the inter-daemon `DATA_OPERATIONS_COMPLETE` polling
   2. For Momentum: monthly portfolio frequency × 50-trial penalty × 24 held-back observations makes DSR ≥ 0.95 mathematically unreachable regardless of strategy quality. The rubric was calibrated for daily-frequency strategies; using it as-is on monthly strategies is a category error.
 - **Forward path:**
   - **Momentum**: paper-trade with small size now; let the live tape become the OOS validation. Re-evaluate credibility under either a frequency-adjusted DSR threshold (≈0.5 for monthly with 24 obs) or PSR (no deflation).
-  - **Vector**: backfill `platform.catalyst_events` for T1+T2 tickers via FMP earnings-history endpoint. Single ingestion task. Re-run search after.
+  - **Vector**: backfill `platform.earnings_events` for T1+T2 tickers via FMP earnings-history endpoint. Single ingestion task. Re-run search after.
   - **Reversion**: satellite-classified 2026-05-15. Graduation now per-trade (10 trades · 55% WR · +2% avg · PF > 1.5 · max DD ≤ −15%) — DSR gate no longer applies. Paper-trading on the local Mac.
   - **Sigma**: park. Too marginal to move ahead of Momentum. OU mean-reversion spike (2026-05-15) rejected — code archived in `tpcore/backtest/spread_estimator_archive.py`.
 

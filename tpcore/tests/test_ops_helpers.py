@@ -292,7 +292,7 @@ def test_audit_checks_cover_every_dependent_table():
     Catches the regression where someone adds a new table and forgets to
     extend _AUDIT_CHECKS."""
     expected_tables = {
-        "catalyst_events", "corporate_actions", "fundamentals_quarterly",
+        "earnings_events", "corporate_actions", "fundamentals_quarterly",
         "liquidity_tiers", "universe_candidates", "tradier_options_chains",
     }
     audited = {

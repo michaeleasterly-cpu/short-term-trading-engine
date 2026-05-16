@@ -20,7 +20,7 @@ Archive layout
 ``data/<source>_archive/<source>_<YYYYMMDDTHHMMSSZ>.csv.gz``
 
 * ``<source>`` is the canonical name (``alpaca_daily_bars``, ``fred_macro``,
-  ``fmp_fundamentals``, ``fmp_corporate_actions``, ``fmp_catalyst_events``).
+  ``fmp_fundamentals``, ``fmp_corporate_actions``, ``fmp_earnings_events``).
 * Run stamp is UTC, second precision — collision-safe enough for daily
   pipelines and human-readable for the operator.
 

@@ -24,12 +24,12 @@ async def main() -> int:
                 tag = "🟢" if n == 0 else "🔴"
                 print(f"  {tag} {label:60s} n={n}")
 
-            print("=== catalyst_events ===")
-            await q("NULL ticker", "SELECT COUNT(*) FROM platform.catalyst_events WHERE ticker IS NULL")
-            await q("NULL event_date", "SELECT COUNT(*) FROM platform.catalyst_events WHERE event_date IS NULL")
-            await q("event_date > 365d ahead", "SELECT COUNT(*) FROM platform.catalyst_events WHERE event_date > CURRENT_DATE + INTERVAL '365 days'")
+            print("=== earnings_events ===")
+            await q("NULL ticker", "SELECT COUNT(*) FROM platform.earnings_events WHERE ticker IS NULL")
+            await q("NULL event_date", "SELECT COUNT(*) FROM platform.earnings_events WHERE event_date IS NULL")
+            await q("event_date > 365d ahead", "SELECT COUNT(*) FROM platform.earnings_events WHERE event_date > CURRENT_DATE + INTERVAL '365 days'")
             await q("ticker not in prices_daily", """
-                SELECT COUNT(*) FROM platform.catalyst_events ce
+                SELECT COUNT(*) FROM platform.earnings_events ce
                 LEFT JOIN (SELECT DISTINCT ticker FROM platform.prices_daily) p ON p.ticker = ce.ticker
                 WHERE p.ticker IS NULL
             """)

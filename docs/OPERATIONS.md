@@ -217,14 +217,14 @@ The post-mortem captured these principles as durable patterns; the data-operatio
 2. **Physical-truth at write time.** Every row passes the same physical-truth predicate (`close > 0`, OHLC consistent, no future dates) AT the CSV write step, not just at the destination. Bad rows never reach the database.
 3. **Self-healing > manual retry.** Stages that hit transient errors (timeout, 429, ReadError) auto-retry once inside `--update`. Resumable stages (fundamentals: skip-if-refreshed-within-24h, daily_bars: skip-if-already-ingested) make every re-run faster than the previous.
 4. **SIP > IEX.** Alpaca's free IEX feed silently misses tickers that trade off-IEX. The account is subscribed to SIP; default everywhere is `feed="sip"`. The `coverage_fill` stage closes any remaining gap nightly.
-5. **Validation suite is the gate.** 12 checks: delistings, constituent, splits, row_integrity, fundamentals_integrity, corporate_actions_integrity, catalyst_freshness, sec_filings_freshness, liquidity_tiers_freshness, ticker_classifications_coverage, macro_indicators_freshness, prices_daily_freshness (the last added 2026-05-15 after the SPY-silent-gap incident — fires when a registered critical ticker stale > 5d or universe-wide staleness > 2%). Validation green is the operational definition of "data is clean enough to trade on."
+5. **Validation suite is the gate.** 12 checks: delistings, constituent, splits, row_integrity, fundamentals_integrity, corporate_actions_integrity, earnings_events_freshness, sec_filings_freshness, liquidity_tiers_freshness, ticker_classifications_coverage, macro_indicators_freshness, prices_daily_freshness (the last added 2026-05-15 after the SPY-silent-gap incident — fires when a registered critical ticker stale > 5d or universe-wide staleness > 2%). Validation green is the operational definition of "data is clean enough to trade on."
 6. **Cross-references are integrity too.** `audit_all_tables.sh` (and the dashboard's "Cross-table integrity" row) catches orphan tickers across every dependent table — the kind of failure the validation suite's per-table predicates miss.
 7. **Latest-run beats rolling aggregates on dashboards.** A 7-day rolling failure count surfaces stale history as current state. Show LATEST per source — stale aggregates lie.
 8. **Compress confirmed artifacts.** After a successful upsert, gzip the CSV (~80% disk savings). Loaders read `.gz` transparently on re-run.
 9a. **CSV-first archive on every ingest.** All five ingest handlers
 (`handle_daily_bars`, `handle_corporate_actions`,
 `handle_fundamentals_refresh`, `handle_macro_indicators`,
-`_stage_catalyst_refresh`) write a gzipped CSV to
+`_stage_earnings_refresh`) write a gzipped CSV to
 `data/<source>_archive/<source>_<stamp>.csv.gz` before/after the DB
 upsert via `tpcore.ingestion.csv_archive`. This is the defence against
 a vendor retroactively truncating history (FRED BAMLH0A0HYM2,
@@ -249,7 +249,7 @@ The daily `python scripts/ops.py --update` pipeline already includes the heavy w
 | Stage | Cadence | Skip-guard | What it does |
 |---|---|---|---|
 | `fundamentals_refresh` | Effectively weekly | skip-if-refreshed-within-24h per ticker | FMP → `platform.fundamentals_quarterly`. Iterates the all-active universe; ~1 hr full pass. |
-| `catalyst_refresh` | Effectively weekly | short-circuits when `catalyst_events.max(event_date)` < 6 days old | FMP earnings-history → `platform.catalyst_events` for the T1+T2 stock subset. Added 2026-05-14 alongside the `catalyst_freshness` validation check. |
+| `earnings_refresh` | Effectively weekly | short-circuits when `earnings_events.max(event_date)` < 6 days old | FMP earnings-history → `platform.earnings_events` for the T1+T2 stock subset. Added 2026-05-14 alongside the `earnings_events_freshness` validation check. |
 | `sec_filings` | Effectively every 3 days (tightened 2026-05-14) | short-circuits when either SEC table was touched within 3 days | SEC EDGAR Form 4 (insider) + 8-K (material events) → `platform.sec_insider_transactions` + `platform.sec_material_events`. Reference implementation of the standard 5-stage data-adapter pipeline; CSV-first (download → validate-at-CSV → load → compress). Requires `SEC_EDGAR_USER_AGENT` env var per SEC fair-access policy. |
 | `tier_refresh` | Quarterly | skip-if-refreshed-within-90-days (outer) + 60d on Corwin-Schultz spread observations (phase 1) | **Two-phase autonomous** (audit G-2 fix, 2026-05-14): phase 1 re-writes `spread_observations` from Corwin-Schultz, phase 2 aggregates `liquidity_tiers`. Replaces the manual `scripts/run_tier_refresh.sh` invocation; the wrapper still works for manual one-shots. |
 | `classify_tickers` | Monthly | skip-if-refreshed-within-30-days AND ≥95%-coverage | Re-runs the Alpaca-asset-name classifier into `platform.ticker_classifications`. Skip-guard is two-clause: forces a re-run when a universe expansion has introduced unclassified tickers even within the 30-day window. |
@@ -266,7 +266,7 @@ To force-run locally (same command as the daily run; underlying handlers are ide
 
 ```bash
 python scripts/ops.py --update           # full daily pipeline (auto-skips fresh stages)
-python scripts/ops.py --stage catalyst_refresh   # one-stage manual fire
+python scripts/ops.py --stage earnings_refresh   # one-stage manual fire
 python scripts/ops.py --stage fundamentals_refresh
 python scripts/ops.py --stage sec_filings        # SEC EDGAR Form 4 + 8-K
 python scripts/ops.py --stage tier_refresh       # quarterly liquidity-tier rebuild
@@ -454,7 +454,7 @@ UNION ALL SELECT 'aar_events',              COUNT(*) FROM platform.aar_events
 UNION ALL SELECT 'risk_state',              COUNT(*) FROM platform.risk_state
 UNION ALL SELECT 'data_quality_log',        COUNT(*) FROM platform.data_quality_log
 UNION ALL SELECT 'tradier_options_chains',  COUNT(*) FROM platform.tradier_options_chains
-UNION ALL SELECT 'catalyst_events',         COUNT(*) FROM platform.catalyst_events;
+UNION ALL SELECT 'earnings_events',         COUNT(*) FROM platform.earnings_events;
 ```
 
 Expected ranges (cross-reference `MASTER_PLAN.md §6.4`, post-Phase-1 expansion):
@@ -464,13 +464,13 @@ Expected ranges (cross-reference `MASTER_PLAN.md §6.4`, post-Phase-1 expansion)
 | `platform.prices_daily` | ≥ 20,000,000 (currently 20,654,889 — 7,694 tickers, audited 2026-05-14) | drop > 1% → investigate |
 | `platform.fundamentals_quarterly` | ≥ 178,000 (currently 178,608 — 5,984 tickers, audited 2026-05-14) | any drop → investigate |
 | `platform.corporate_actions` | ≥ 109,000 (currently 109,413, grows weekly — audited 2026-05-14) | drop → investigate |
-| `platform.catalyst_events` | ≥ 1,000 (currently 1,350 — 137 tickers, audited 2026-05-14) | drop → investigate; weekly `catalyst_refresh` stage owns growth |
+| `platform.earnings_events` | ≥ 1,000 (currently 1,350 — 137 tickers, audited 2026-05-14) | drop → investigate; weekly `earnings_refresh` stage owns growth |
 | `platform.ticker_classifications` | 13,669 (audited 2026-05-14, near-static) | unexpected change → investigate |
 | `platform.aar_events` | grows slowly with live trades; can be 0 | a *drop* is concerning, no growth is normal |
 | `platform.risk_state` | one row per engine that has ever traded | drop → investigate |
 | `platform.data_quality_log` | grows weekly | drop → investigate |
 | `platform.tradier_options_chains` | 122,668 (frozen — should never change) | any change → flag |
-| `platform.catalyst_events` | ≥ 683 (universe-expansion catalyst backfill is pending) | drop → investigate |
+| `platform.earnings_events` | ≥ 683 (universe-expansion catalyst backfill is pending) | drop → investigate |
 
 ### Freshness check
 
@@ -720,7 +720,7 @@ The `-u` flag forces unbuffered stdout — otherwise nohup buffers all the progr
 **Convenience wrappers** in `scripts/`:
 
 - `scripts/run_sigma_search.sh` — Sigma 200-trial sweep.
-- `scripts/run_vector_search.sh` — Vector sweep on T1+T2 (currently expected to produce zero trades until catalyst_events backfill).
+- `scripts/run_vector_search.sh` — Vector sweep on T1+T2 (currently expected to produce zero trades until earnings_events backfill).
 - `scripts/run_all_searches.sh` — sigma + reversion + vector back-to-back. **Note:** `set -e` is intentionally OFF; a FAILED verdict exits 1 but should not abort the multi-engine sweep.
 
 **Interpreting the verdict:**
@@ -769,7 +769,7 @@ FROM (
 | `row_integrity` | every prices_daily row: `close > 0`, `close <= 100M`, OHLC consistent (`high >= GREATEST(open, close, low)`, `low <= LEAST(open, close, high)`), non-NULL OHLCV, no future dates | a physically-impossible bar exists |
 | `fundamentals_integrity` | every fundamentals_quarterly row: non-NULL ticker/filing_date, `period_end_date <= filing_date`, `shares_outstanding > 0 OR NULL`, no future filings | filings reversed in time, placeholder zeros, etc. |
 | `corporate_actions_integrity` | every corporate_actions row: non-NULL cols, `ratio` in `(0, 1000]`, no far-future dates | implausible split ratios or NULL action_type |
-| `catalyst_freshness` *(NEW 2026-05-14)* | `catalyst_events.max(event_date)` ≥ today − 7 days for active T1+T2 stock tickers (ETFs/funds/SPACs filtered via `ticker_classifications`) | catalyst pipeline stalled; Vector engine running on stale events |
+| `earnings_events_freshness` *(NEW 2026-05-14)* | `earnings_events.max(event_date)` ≥ today − 7 days for active T1+T2 stock tickers (ETFs/funds/SPACs filtered via `ticker_classifications`) | catalyst pipeline stalled; Vector engine running on stale events |
 | `sec_filings_freshness` *(NEW 2026-05-14)* | `sec_insider_transactions` + `sec_material_events` newest `filing_date` ≥ today − 14 days; ≥ 30% of T1+T2 stocks have a filing in last 180 days | SEC EDGAR ingest stalled or universe coverage thin |
 | `liquidity_tiers_freshness` *(NEW 2026-05-14, L-2)* | `liquidity_tiers.max(last_updated)` ≥ today − 100 days; ≥ 3% of active universe in T1+T2 | quarterly tier refresh missed; cost model rotting |
 | `ticker_classifications_coverage` *(NEW 2026-05-14, T-2)* | ≥ 90% of active prices_daily tickers have a row in `ticker_classifications` | universe expansion without re-running the classifier; ETF/SPAC filters silently failing |
@@ -786,7 +786,7 @@ FROM (
 
 The validation suite covers physical-truth checks. Cross-reference checks live in `scripts/run_audit_all_tables.sh`:
 
-* `ticker_not_in_prices` across `catalyst_events`, `corporate_actions`, `fundamentals_quarterly`, `liquidity_tiers`, `universe_candidates`, `tradier_options_chains` — every dependent table's ticker must exist in `prices_daily`.
+* `ticker_not_in_prices` across `earnings_events`, `corporate_actions`, `fundamentals_quarterly`, `liquidity_tiers`, `universe_candidates`, `tradier_options_chains` — every dependent table's ticker must exist in `prices_daily`.
 * `tradier_options_chains.expired` — contracts past their expiration date.
 * `liquidity_tiers.stale_30d` — tier assignments older than 30 days.
 
@@ -794,7 +794,7 @@ The dashboard's **Cross-table integrity** row (Platform Health panel) runs the s
 
 ### The fourteen `--update` stages (FRED added 2026-05-14)
 
-`scripts/ops.py --update` runs the following stages in order (source of truth: `_STAGE_SPECS` in `scripts/ops.py`). Stage order was corrected 2026-05-14 (audit O-1/O-2/O-3 fix): `tier_refresh` + `classify_tickers` now run **before** `catalyst_refresh` + `sec_filings` because the latter two filter by `ticker_classifications.asset_class`. `reconcile` was added at #3 (audit G-3 fix).
+`scripts/ops.py --update` runs the following stages in order (source of truth: `_STAGE_SPECS` in `scripts/ops.py`). Stage order was corrected 2026-05-14 (audit O-1/O-2/O-3 fix): `tier_refresh` + `classify_tickers` now run **before** `earnings_refresh` + `sec_filings` because the latter two filter by `ticker_classifications.asset_class`. `reconcile` was added at #3 (audit G-3 fix).
 
 1. `daily_bars` — Alpaca SIP feed → `prices_daily`. Underlying fetcher wrapped with `@with_retry`.
 2. `corporate_actions` — Alpaca → `corporate_actions`, applies splits to `prices_daily`. `@with_retry` resolves the 2026-05-12 Sunday-cron 429 failure.
@@ -804,7 +804,7 @@ The dashboard's **Cross-table integrity** row (Platform Health panel) runs the s
 6. `fundamentals_refresh` — FMP → `fundamentals_quarterly`. Resumable: skip-if-refreshed-within-24h. Adapter uses `@with_retry`.
 7. `tier_refresh` — **enhanced 2026-05-14 (audit G-2 fix)**: two-phase. Phase 1 = Corwin-Schultz spread bootstrap → `spread_observations` (60-day skip guard). Phase 2 = `assign_tiers` aggregates into `liquidity_tiers`. Outer 90-day skip guard governs whether either phase runs. Before 2026-05-14 only phase 2 ran, silently aggregating stale spread data.
 8. `classify_tickers` — re-runs the Alpaca-asset-name classifier → `ticker_classifications`. Skip-guard: refreshed within 30 days AND ≥95% coverage of the active universe.
-9. `catalyst_refresh` — FMP earnings-history → `catalyst_events` for T1+T2 stocks. Skip-guard: short-circuits when last refresh < 6 days ago.
+9. `earnings_refresh` — FMP earnings-history → `earnings_events` for T1+T2 stocks. Skip-guard: short-circuits when last refresh < 6 days ago.
 10. `sec_filings` — SEC EDGAR Form 4 + 8-K → `sec_insider_transactions` + `sec_material_events` for T1+T2 stocks. CSV-first. **Skip-guard tightened 6→3 days 2026-05-14** (cadence finding): Form 4 has a 2-business-day filing deadline so 6d staleness was half-stale on average.
 11. `macro_indicators` — **added 2026-05-14 (FRED adapter, last data source from §6.1)**: FRED time-series → `platform.macro_indicators`. Weekly cadence with 7-day skip guard. Unblocks Sentinel.
 12. `data_validation` — the 12-check suite above (added prices_daily_freshness 2026-05-15).

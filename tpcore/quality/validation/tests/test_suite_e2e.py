@@ -98,7 +98,7 @@ async def test_e2e_passes_with_satisfying_synthetic_data(write_yaml) -> None:
         "validation.row_integrity",
         "validation.fundamentals_integrity",
         "validation.corporate_actions_integrity",
-        "validation.catalyst_events_freshness",
+        "validation.earnings_events_freshness",
         "validation.sec_filings_freshness",
         "validation.liquidity_tiers_freshness",
         "validation.ticker_classifications_coverage",

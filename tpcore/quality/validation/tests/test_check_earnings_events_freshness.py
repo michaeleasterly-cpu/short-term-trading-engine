@@ -1,4 +1,4 @@
-"""Tests for ``check_catalyst_freshness``."""
+"""Tests for ``check_earnings_events_freshness``."""
 
 from __future__ import annotations
 
@@ -6,9 +6,9 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from tpcore.quality.validation.checks.catalyst_freshness import (
+from tpcore.quality.validation.checks.earnings_events_freshness import (
     MIN_COVERAGE_PCT,
-    check_catalyst_freshness,
+    check_earnings_events_freshness,
 )
 
 
@@ -49,7 +49,7 @@ async def test_passes_when_fresh_and_well_covered():
         "covered_count": 30,
         "total_rows": 1350,
     })
-    r = await check_catalyst_freshness(pool)
+    r = await check_earnings_events_freshness(pool)
     assert r.passed is True
     assert r.failures == []
 
@@ -66,7 +66,7 @@ async def test_passes_at_floor_coverage():
         "covered_count": n_cov,
         "total_rows": 9999,
     })
-    r = await check_catalyst_freshness(pool)
+    r = await check_earnings_events_freshness(pool)
     assert r.passed is True
 
 
@@ -80,7 +80,7 @@ async def test_fails_when_coverage_below_floor():
         "covered_count": 5,  # 5% — well below 20% floor
         "total_rows": 99,
     })
-    r = await check_catalyst_freshness(pool)
+    r = await check_earnings_events_freshness(pool)
     assert r.passed is False
     assert r.failures[0].reason == "insufficient_stock_coverage"
     assert "5/100" in r.failures[0].observed
@@ -95,7 +95,7 @@ async def test_fails_when_newest_event_stale():
         "covered_count": 30,
         "total_rows": 1350,
     })
-    r = await check_catalyst_freshness(pool)
+    r = await check_earnings_events_freshness(pool)
     assert r.passed is False
     assert r.failures[0].reason == "stale_newest_event"
 
@@ -108,7 +108,7 @@ async def test_fails_when_table_empty():
         "covered_count": 0,
         "total_rows": 0,
     })
-    r = await check_catalyst_freshness(pool)
+    r = await check_earnings_events_freshness(pool)
     assert r.passed is False
     assert r.failures[0].reason == "empty_table"
 
@@ -125,5 +125,5 @@ async def test_skips_coverage_when_no_addressable_universe():
         "covered_count": 0,
         "total_rows": 1350,
     })
-    r = await check_catalyst_freshness(pool)
+    r = await check_earnings_events_freshness(pool)
     assert r.passed is True

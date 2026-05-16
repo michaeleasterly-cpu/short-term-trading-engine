@@ -53,7 +53,7 @@ _SPECS: tuple[HealSpec, ...] = (
              healable=False, unhealable_reason=_PENDING),
     HealSpec(check_name="corporate_actions_integrity", source="corporate_actions",
              healable=False, unhealable_reason=_PENDING),
-    HealSpec(check_name="catalyst_events_freshness", source="catalyst_events",
+    HealSpec(check_name="earnings_events_freshness", source="earnings_events",
              healable=False, unhealable_reason=_PENDING),
     HealSpec(check_name="sec_filings_freshness", source="sec_insider_transactions",
              healable=False, unhealable_reason=_PENDING),

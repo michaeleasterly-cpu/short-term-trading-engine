@@ -103,14 +103,14 @@ The 2026-05-14 audit closed the highest-leverage gaps (centralized `@with_retry`
 
 ## Compliance matrix
 
-Audited 2026-05-14 (re-graded after F-1 / C-1 / L-1..L-4 / T-1..T-4 remediation), **re-graded again 2026-05-15** after the CSV-first archive retrofit (`tpcore/ingestion/csv_archive.py`) closed the one genuine gap: `fred` ingest had been graded ✅ on the "trivial first pull" carve-out, but the 2026-05-15 BAA10Y backfill (~17.5k rows) made that basis false. All five ingest handlers (`handle_daily_bars`, `handle_corporate_actions`, `handle_fundamentals_refresh`, `handle_macro_indicators`, `_stage_catalyst_refresh`) now write a gzipped CSV archive via the shared `write_archive` before the DB upsert — the ingest column is now ✅ on a real CSV-first implementation, not a carve-out. Every adapter is **5/5** on its applicable stages. Self-verification reports per adapter live in the section below.
+Audited 2026-05-14 (re-graded after F-1 / C-1 / L-1..L-4 / T-1..T-4 remediation), **re-graded again 2026-05-15** after the CSV-first archive retrofit (`tpcore/ingestion/csv_archive.py`) closed the one genuine gap: `fred` ingest had been graded ✅ on the "trivial first pull" carve-out, but the 2026-05-15 BAA10Y backfill (~17.5k rows) made that basis false. All five ingest handlers (`handle_daily_bars`, `handle_corporate_actions`, `handle_fundamentals_refresh`, `handle_macro_indicators`, `_stage_earnings_refresh`) now write a gzipped CSV archive via the shared `write_archive` before the DB upsert — the ingest column is now ✅ on a real CSV-first implementation, not a carve-out. Every adapter is **5/5** on its applicable stages. Self-verification reports per adapter live in the section below.
 
 | Adapter | Ingest | Test | Validate | Dashboard | Schedule | Score |
 |---|---|---|---|---|---|---|
 | `handle_daily_bars` | ✅ | ✅ | ✅ `row_integrity` + `delistings` + `constituent` + `splits` | ✅ `data_freshness` + `row_counts` | ✅ `daily_bars` stage | **5/5** |
 | `handle_corporate_actions` | ✅ | ✅ 18 tests incl. 429/403 | ✅ `corporate_actions_integrity` | ✅ `corporate_actions_freshness` | ✅ `corporate_actions` stage | **5/5** |
 | `handle_fundamentals_refresh` | ✅ | ✅ `test_fmp_adapter.py` incl. 429/403 | ✅ `fundamentals_integrity` | ✅ `fundamentals_freshness` *(F-1, 2026-05-14)* | ✅ `fundamentals_refresh` stage; skip-if-24h | **5/5** |
-| `handle_catalyst_refresh` | ✅ | ✅ via FMP adapter tests | ✅ `catalyst_events_freshness` | ✅ `catalyst_freshness` *(C-1, 2026-05-14)* | ✅ `catalyst_refresh` stage; skip-if-6d | **5/5** |
+| `handle_earnings_refresh` | ✅ | ✅ via FMP adapter tests | ✅ `earnings_events_freshness` | ✅ `earnings_events_freshness` *(C-1, 2026-05-14)* | ✅ `earnings_refresh` stage; skip-if-6d | **5/5** |
 | `handle_data_validation` | n/a (orchestrator) | ✅ `test_suite.py` + `test_suite_e2e.py` | n/a (orchestrates the 10 checks) | ✅ `validation_suite` | ✅ `data_validation` stage | **5/5 applicable** |
 | `assign_liquidity_tiers` | ✅ structured logs | ✅ `test_liquidity_tiers.py` *(L-1, 9 tests)* | ✅ `liquidity_tiers_freshness` *(L-2)* | ✅ `liquidity_tiers_freshness` row *(L-3)* | ✅ `tier_refresh` stage; skip-if-90d *(L-4)* | **5/5** |
 | `classify_tickers` | ✅ structured logs | ✅ handler-path coverage *(T-1, +4 tests)* | ✅ `ticker_classifications_coverage` *(T-2)* | ✅ `ticker_classifications` row *(T-3)* | ✅ `classify_tickers` stage; skip-if-30d-and-95%-coverage *(T-4)* | **5/5** |
@@ -199,21 +199,21 @@ schedule:  fundamentals_refresh stage; FundamentalsCache.backfill_all
            is skip-if-refreshed-within-24h per ticker
 ```
 
-### `handle_catalyst_refresh` *(C-1 remediated 2026-05-14)*
+### `handle_earnings_refresh` *(C-1 remediated 2026-05-14)*
 
 ```
-adapter:   handle_catalyst_refresh
+adapter:   handle_earnings_refresh
 commits:   2026-05-14 pipeline normalization, this PR (C-1 dashboard probe)
-ingest:    structured event ops.stage.catalyst_refresh.done emits
+ingest:    structured event ops.stage.earnings_refresh.done emits
            {tickers, total_rows, covered_tickers}; reads via FMP adapter
            which has @with_retry
 test:      indirect coverage via test_fmp_adapter.py (FMP fetch paths);
-           backfill_catalyst_events.amain is the same code path
-validate:  catalyst_events_freshness check in run_suite — asserts newest
+           backfill_earnings_events.amain is the same code path
+validate:  earnings_events_freshness check in run_suite — asserts newest
            event_date ≤ 90d old AND ≥ 20% T1+T2 stock coverage
-dashboard: catalyst_freshness row in _CHECK_FNS (NEW C-1) — returns
+dashboard: earnings_events_freshness row in _CHECK_FNS (NEW C-1) — returns
            {latest_event, age_days, tickers, rows_total, ok}
-schedule:  catalyst_refresh stage in _STAGE_SPECS;
+schedule:  earnings_refresh stage in _STAGE_SPECS;
            skip-if-refreshed-within-6-days short-circuit; writes
            last_run_at to platform.ingestion_jobs on completion
 ```
@@ -322,9 +322,9 @@ schedule:  sec_filings stage in _STAGE_SPECS; skip-if-6-days idempotent
 | `python -m tpcore.scripts.check_imports tpcore` | clean |
 | Validation suite check count | **10** (was 8): added `liquidity_tiers_freshness` + `ticker_classifications_coverage` |
 | `--update` stage count | **12** (was 10): added `tier_refresh` + `classify_tickers` |
-| `--check` row count | **15** (was 11): added `fundamentals_freshness`, `catalyst_freshness`, `liquidity_tiers_freshness`, `ticker_classifications` |
+| `--check` row count | **15** (was 11): added `fundamentals_freshness`, `earnings_events_freshness`, `liquidity_tiers_freshness`, `ticker_classifications` |
 | Live-data PENDING items | (a) **SEC backfill** — one-time operator command `python scripts/ops.py --stage sec_filings --backfill` (7-year history pull, multi-hour wall time, self-verifies via `ops.stage.sec_filings.done` event). (b) `tier_refresh` and (c) `classify_tickers` — both wired into `ops.py --update`; fire automatically on their next scheduled cadence (90d / 30d). No operator action required for (b) and (c). |
-| CSV-first retrofit (2026-05-15) | Closed the `fred` ingest-grading gap. All 5 ingest handlers (`handle_daily_bars`, `handle_corporate_actions`, `handle_fundamentals_refresh`, `handle_macro_indicators`, `_stage_catalyst_refresh`) route through `tpcore.ingestion.csv_archive.write_archive` (gzipped archive before DB upsert) via the shared layer. Shrinkage detection (vendor-truncation alarm) on the 2 full-snapshot sources (`fred_macro`, `alpaca_corporate_actions`); audit-trail-only archive on the 3 incremental sources. `test_csv_archive.py` (8 tests, incl. the BAMLH0A0HYM2 truncation scenario). Baselines seeded via `scripts/dump_baseline_archives.py`. The `fred` matrix row's ✅ now rests on a real CSV-first implementation, not the trivial-pull carve-out. |
+| CSV-first retrofit (2026-05-15) | Closed the `fred` ingest-grading gap. All 5 ingest handlers (`handle_daily_bars`, `handle_corporate_actions`, `handle_fundamentals_refresh`, `handle_macro_indicators`, `_stage_earnings_refresh`) route through `tpcore.ingestion.csv_archive.write_archive` (gzipped archive before DB upsert) via the shared layer. Shrinkage detection (vendor-truncation alarm) on the 2 full-snapshot sources (`fred_macro`, `alpaca_corporate_actions`); audit-trail-only archive on the 3 incremental sources. `test_csv_archive.py` (8 tests, incl. the BAMLH0A0HYM2 truncation scenario). Baselines seeded via `scripts/dump_baseline_archives.py`. The `fred` matrix row's ✅ now rests on a real CSV-first implementation, not the trivial-pull carve-out. |
 | Integrated platform audit (2026-05-14) | All adapter pipelines pass static + chaos verification. Three closed findings: **D3-1** capital_gate `EXPECTED_SOURCES` now derives from suite `KNOWN_CHECK_NAMES` (any check added is automatically required); **D6-1** `disk_space` probe added (warns < 5 GB free); **D6-2** `trade_monitor_heartbeat` probe added (warns when no event in 60 min). Two LOW findings accepted as documentation-only: SEC-backfill-vs-allocator concurrency (disjoint tables), `SKIP_ENGINES=1` opt-out (operator intent). Chaos scenarios passed: daemon kill (KeepAlive recovery <4s), launchd unload/reload (clean), database unavailability (clean FAILED stage + macOS notification), stage timeout (caught + retried). |
 
 ## Adding a new adapter — workflow

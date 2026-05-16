@@ -1,4 +1,4 @@
-"""Catalyst-events freshness check — confirms ``platform.catalyst_events``
+"""earnings_events freshness check — confirms ``platform.earnings_events``
 is staying current with the active universe.
 
 The vector engine reads earnings-beat events from this table. Without
@@ -9,7 +9,7 @@ Failure conditions:
 
 * Newest ``event_date`` is older than ``MAX_AGE_DAYS`` (default 90).
 * Fewer than ``MIN_COVERED_TICKERS`` distinct tickers (in T1+T2) have
-  at least one catalyst event in the last ``COVERAGE_WINDOW_DAYS``
+  at least one earnings event in the last ``COVERAGE_WINDOW_DAYS``
   (default 180).
 
 Both pieces matter:
@@ -34,16 +34,16 @@ if TYPE_CHECKING:  # pragma: no cover
 
 logger = structlog.get_logger(__name__)
 
-CHECK_NAME = "catalyst_events_freshness"
+CHECK_NAME = "earnings_events_freshness"
 MAX_AGE_DAYS = 90
 # Minimum coverage of the *addressable* universe — T1+T2 tickers
 # classified as stocks (operating companies that report earnings).
 # ETFs/SPACs/funds in T1+T2 don't report quarterly earnings, so they
-# can't have catalyst events and including them in the denominator
+# can't have earnings events and including them in the denominator
 # produces false-fail. The non-ETF/non-SPAC/non-fund stock subset of
 # T1+T2 is currently ~66 tickers.
 #
-# Threshold rationale: catalyst rows only record EARNINGS_BEAT events
+# Threshold rationale: earnings_events rows only record EARNINGS_BEAT events
 # where ``actual_eps > estimated_eps * 1.05``. Historical baseline is
 # ~25-35% of stocks beating by >5% in any 180-day window (most stocks
 # either meet, miss, or beat by less than 5%). A drop below 20% means
@@ -66,19 +66,19 @@ _FRESHNESS_SQL = f"""
         (SELECT COUNT(*) FROM addressable) AS addressable_count,
         (SELECT COUNT(DISTINCT a.ticker)
          FROM addressable a
-         JOIN platform.catalyst_events ce ON ce.ticker = a.ticker
+         JOIN platform.earnings_events ce ON ce.ticker = a.ticker
          WHERE ce.event_date >= CURRENT_DATE - INTERVAL '{COVERAGE_WINDOW_DAYS} days'
         ) AS covered_count,
         COUNT(*) AS total_rows
-    FROM platform.catalyst_events
+    FROM platform.earnings_events
 """
 
 
-async def check_catalyst_freshness(
+async def check_earnings_events_freshness(
     pool: asyncpg.Pool,
     source: Any = None,
 ) -> CheckResult:
-    """Verify catalyst_events is fresh + covers T1+T2 adequately."""
+    """Verify earnings_events is fresh + covers T1+T2 adequately."""
     del source
     started = time.perf_counter()
     async with pool.acquire() as conn:
@@ -98,8 +98,8 @@ async def check_catalyst_freshness(
         failures.append(FailureDetail(
             ticker="<table>",
             reason="empty_table",
-            expected=f"catalyst_events populated with events ≤ {MAX_AGE_DAYS}d old",
-            observed="catalyst_events is empty",
+            expected=f"earnings_events populated with events ≤ {MAX_AGE_DAYS}d old",
+            observed="earnings_events is empty",
         ))
     else:
         age_days = (today - newest).days
@@ -116,7 +116,7 @@ async def check_catalyst_freshness(
     # denominator since they don't report quarterly earnings.
     if addressable == 0:
         # No stocks to measure against — skip silently (universe issue,
-        # not a catalyst issue).
+        # not a earnings_events issue).
         pass
     else:
         coverage_pct = covered / addressable
@@ -132,7 +132,7 @@ async def check_catalyst_freshness(
                 observed=(
                     f"only {covered}/{addressable} stocks ({coverage_pct:.1%}) "
                     f"have an event in last {COVERAGE_WINDOW_DAYS}d "
-                    f"(total catalyst rows={total})"
+                    f"(total earnings_events rows={total})"
                 ),
             ))
 
@@ -153,5 +153,5 @@ __all__ = [
     "COVERAGE_WINDOW_DAYS",
     "MAX_AGE_DAYS",
     "MIN_COVERAGE_PCT",
-    "check_catalyst_freshness",
+    "check_earnings_events_freshness",
 ]

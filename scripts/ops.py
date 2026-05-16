@@ -87,7 +87,7 @@ EXPECTED_MIN_ROWS: dict[str, int] = {
     "platform.prices_daily": 300_000,
     "platform.fundamentals_quarterly": 1_700,
     "platform.corporate_actions": 1_200,
-    "platform.catalyst_events": 600,
+    "platform.earnings_events": 600,
 }
 
 
@@ -575,10 +575,10 @@ async def _stage_cross_ref_cleanup(pool: asyncpg.Pool) -> dict[str, Any]:
     }
 
 
-async def _stage_catalyst_refresh(
+async def _stage_earnings_refresh(
     pool: asyncpg.Pool, config: dict[str, Any] | None = None
 ) -> dict[str, Any]:
-    """Weekly refresh of ``platform.catalyst_events`` (FMP earnings beats).
+    """Weekly refresh of ``platform.earnings_events`` (FMP earnings beats).
 
     Vector engine reads EARNINGS_BEAT events from this table. Earnings
     are quarterly so a daily refresh would waste FMP calls. The stage
@@ -596,7 +596,7 @@ async def _stage_catalyst_refresh(
       backfill script's INSERT ON CONFLICT pattern makes this safe.
 
     The stage fires through the same code path as the manual
-    ``scripts/backfill_catalyst_events.py``, so behavior stays in
+    ``scripts/backfill_earnings_events.py``, so behavior stays in
     lockstep between cron and operator-on-demand.
     """
     from datetime import date as _date
@@ -611,14 +611,14 @@ async def _stage_catalyst_refresh(
     skip_guard_days = int(config.get("skip_guard_days", 6))
     async with pool.acquire() as conn:
         newest_recorded = await conn.fetchval(
-            "SELECT MAX(recorded_at) FROM platform.catalyst_events"
+            "SELECT MAX(recorded_at) FROM platform.earnings_events"
         )
     log = structlog.get_logger("scripts.ops")
     if newest_recorded is not None and skip_guard_days > 0:
         age = datetime.now(UTC) - newest_recorded
         if age.days < skip_guard_days:
             log.info(
-                "ops.stage.catalyst_refresh.skipped_fresh",
+                "ops.stage.earnings_refresh.skipped_fresh",
                 last_refresh_age_days=age.days,
                 skip_guard_days=skip_guard_days,
             )
@@ -647,7 +647,7 @@ async def _stage_catalyst_refresh(
     # Delegate to the existing backfill — same code path as the manual
     # script. The args namespace must shape exactly like its argparse
     # output (universe, start, end fields).
-    from scripts.backfill_catalyst_events import amain as backfill_amain
+    from scripts.backfill_earnings_events import amain as backfill_amain
     args = SimpleNamespace(
         universe=universe,
         start=_date(2018, 1, 1),
@@ -657,17 +657,17 @@ async def _stage_catalyst_refresh(
     exit_code = await backfill_amain(args)
     if exit_code != 0:
         raise RuntimeError(
-            f"catalyst_refresh: backfill_amain returned {exit_code}"
+            f"earnings_refresh: backfill_amain returned {exit_code}"
         )
     async with pool.acquire() as conn:
-        post_count = await conn.fetchval("SELECT COUNT(*) FROM platform.catalyst_events")
+        post_count = await conn.fetchval("SELECT COUNT(*) FROM platform.earnings_events")
         post_tickers = await conn.fetchval(
-            "SELECT COUNT(DISTINCT ticker) FROM platform.catalyst_events"
+            "SELECT COUNT(DISTINCT ticker) FROM platform.earnings_events"
         )
         new_rows = await conn.fetch(
             """
             SELECT ticker, event_date, event_type, magnitude_pct, source, recorded_at
-            FROM platform.catalyst_events
+            FROM platform.earnings_events
             WHERE recorded_at >= $1
             ORDER BY ticker, event_date
             """,
@@ -682,7 +682,7 @@ async def _stage_catalyst_refresh(
         for r in new_rows
     ]
     archive = write_archive(
-        "fmp_catalyst_events", archive_rows,
+        "fmp_earnings_events", archive_rows,
         fieldnames=["ticker", "event_date", "event_type", "magnitude_pct", "source", "recorded_at"],
         validator=lambda r: bool(r.get("ticker")) and bool(r.get("event_type")),
     )
@@ -1408,7 +1408,7 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     ("cross_ref_cleanup",   lambda pool, cfg: (lambda: _stage_cross_ref_cleanup(pool)),        STAGE_TIMEOUT_SEC),
     ("fundamentals_refresh",lambda pool, cfg: (lambda: _stage_fundamentals_refresh(pool, cfg)),HEAVY_STAGE_TIMEOUT_SEC),
     # Order corrected 2026-05-14 (audit O-1/O-2/O-3): tier_refresh +
-    # classify_tickers must run BEFORE catalyst_refresh + sec_filings
+    # classify_tickers must run BEFORE earnings_refresh + sec_filings
     # because the latter two filter by ticker_classifications.asset_class.
     # classify_tickers' per-ticker fallback path reads liquidity_tiers
     # for the T1+T2 set, so tier_refresh runs first.
@@ -1424,12 +1424,12 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # pipelines can filter them out.
     ("classify_tickers",    lambda pool, cfg: (lambda: _stage_classify_tickers(pool)),         HEAVY_STAGE_TIMEOUT_SEC),
     ("delist_stale",        lambda pool, cfg: (lambda: _stage_delist_stale(pool)),             STAGE_TIMEOUT_SEC),
-    # Catalyst refresh — earnings-beat events for vector engine.
+    # earnings_refresh — earnings-beat events for vector engine.
     # Heavy timeout (1h) because the FMP loop is ~1 sec per ticker;
     # T1+T2 stock subset is ~66 tickers so a fresh run is ~3 min, but
     # the universe could grow. Stage short-circuits in ~10ms when
     # the table was refreshed within 6 days.
-    ("catalyst_refresh",    lambda pool, cfg: (lambda: _stage_catalyst_refresh(pool, cfg)),    HEAVY_STAGE_TIMEOUT_SEC),
+    ("earnings_refresh",    lambda pool, cfg: (lambda: _stage_earnings_refresh(pool, cfg)),    HEAVY_STAGE_TIMEOUT_SEC),
     # SEC EDGAR Form 4 + 8-K — reference implementation of the
     # standard 5-stage data-adapter pipeline. CSV-first, idempotent,
     # skip-guard tightened from 6 → 3 days 2026-05-14: Form 4 has a
@@ -1828,9 +1828,9 @@ SEC_FILINGS_FRESHNESS_MAX_DAYS = 14
 # reflecting reality.
 FUNDAMENTALS_FRESHNESS_MAX_DAYS = 95
 
-# Catalyst events are earnings-beat snapshots; the refresh stage is
+# Earnings events are earnings-beat snapshots; the refresh stage is
 # quarterly-cadence so 95 days is the same threshold as fundamentals.
-CATALYST_FRESHNESS_MAX_DAYS = 95
+EARNINGS_EVENTS_FRESHNESS_MAX_DAYS = 95
 
 # Liquidity tiers are recomputed quarterly. Anything beyond 100 days
 # old means the operator forgot to run the refresh script.
@@ -1887,14 +1887,14 @@ async def _check_fundamentals_freshness(pool: asyncpg.Pool) -> dict[str, Any]:
     }
 
 
-async def _check_catalyst_freshness(pool: asyncpg.Pool) -> dict[str, Any]:
-    """Dashboard probe — newest catalyst_events + T1+T2 stock coverage."""
+async def _check_earnings_events_freshness(pool: asyncpg.Pool) -> dict[str, Any]:
+    """Dashboard probe — newest earnings_events + T1+T2 stock coverage."""
     row = await pool.fetchrow(
         """
         SELECT
-            (SELECT MAX(event_date) FROM platform.catalyst_events) AS latest_event,
-            (SELECT COUNT(DISTINCT ticker) FROM platform.catalyst_events) AS tickers,
-            (SELECT COUNT(*) FROM platform.catalyst_events) AS rows_total
+            (SELECT MAX(event_date) FROM platform.earnings_events) AS latest_event,
+            (SELECT COUNT(DISTINCT ticker) FROM platform.earnings_events) AS tickers,
+            (SELECT COUNT(*) FROM platform.earnings_events) AS rows_total
         """
     )
     latest = row["latest_event"] if row else None
@@ -1910,10 +1910,10 @@ async def _check_catalyst_freshness(pool: asyncpg.Pool) -> dict[str, Any]:
     today = date.today()
     age_days = (today - latest).days
     return {
-        "ok": age_days <= CATALYST_FRESHNESS_MAX_DAYS,
+        "ok": age_days <= EARNINGS_EVENTS_FRESHNESS_MAX_DAYS,
         "latest_event": latest.isoformat(),
         "age_days": age_days,
-        "threshold_days": CATALYST_FRESHNESS_MAX_DAYS,
+        "threshold_days": EARNINGS_EVENTS_FRESHNESS_MAX_DAYS,
         "tickers": tickers,
         "rows_total": rows_total,
     }
@@ -2829,7 +2829,7 @@ _CHECK_FNS = [
     ("row_counts", _check_row_counts),
     ("corporate_actions_freshness", _check_corp_actions_freshness),
     ("fundamentals_freshness", _check_fundamentals_freshness),
-    ("catalyst_freshness", _check_catalyst_freshness),
+    ("earnings_events_freshness", _check_earnings_events_freshness),
     ("sec_filings_freshness", _check_sec_filings_freshness),
     ("macro_indicators_freshness", _check_macro_indicators_freshness),
     ("greeks_max_pain_freshness", _check_greeks_max_pain),
@@ -2925,8 +2925,8 @@ def _format_check_pretty(report: dict[str, Any]) -> str:
 _AUDIT_CHECKS: tuple[tuple[str, str, str], ...] = (
     # (table, check_name, sql) — every cross-reference check the
     # dashboard's "Cross-table integrity" row runs lives here.
-    ("catalyst_events", "ticker_not_in_prices", """
-        SELECT COUNT(*) FROM platform.catalyst_events ce
+    ("earnings_events", "ticker_not_in_prices", """
+        SELECT COUNT(*) FROM platform.earnings_events ce
         LEFT JOIN (SELECT DISTINCT ticker FROM platform.prices_daily) p
         ON p.ticker = ce.ticker WHERE p.ticker IS NULL"""),
     ("corporate_actions", "ticker_not_in_prices", """

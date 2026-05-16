@@ -66,7 +66,7 @@ DATA_SOURCES: tuple[DataSource, ...] = (
     DataSource("daily_bars",          "platform.prices_daily",            freshness_days=4),
     DataSource("corporate_actions",   "platform.corporate_actions",       freshness_days=7, timestamp_col="action_date"),
     DataSource("fundamentals",        "platform.fundamentals_quarterly",  freshness_days=120, timestamp_col="period_end_date"),
-    DataSource("catalyst_events",     "platform.catalyst_events",         freshness_days=90, timestamp_col="event_date"),
+    DataSource("earnings_events",     "platform.earnings_events",         freshness_days=90, timestamp_col="event_date"),
     DataSource("sec_filings",         "platform.sec_insider_transactions", freshness_days=14, timestamp_col="filing_date"),
     DataSource("macro_indicators",    "platform.macro_indicators",        freshness_days=90),
     DataSource("credit_spread",       "platform.macro_indicators",        freshness_days=14,
@@ -393,7 +393,7 @@ async def run_known_knowns(pool, sink: _FindingSink | None = None) -> list[Audit
     from tpcore.ingestion.csv_archive import latest_archive
     ARCHIVE_SOURCES = (
         "fred_macro", "alpaca_corporate_actions", "alpaca_daily_bars",
-        "fmp_fundamentals", "fmp_catalyst_events",
+        "fmp_fundamentals", "fmp_earnings_events",
     )
     missing_archive = []
     archive_state: dict[str, str] = {}

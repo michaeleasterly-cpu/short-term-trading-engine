@@ -11,7 +11,7 @@ Gates (all point-in-time):
        with ``filing_date <= sim_date`` must satisfy
        ``pb < 1.5 AND de < 3 AND revenue > $500M`` AND last close above
        the 200-SMA.
-    2. **Catalyst** — at least one ``catalyst_events`` row for the
+    2. **Catalyst** — at least one ``earnings_events`` row for the
        ticker with ``event_date`` within ±5 trading days of sim_date.
     3. **Technical trigger** — pullback to 10-/20-MA on volume > 1.2× avg
        OR breakout above 50-MA on volume > 1.5× avg (mirrors
@@ -73,7 +73,7 @@ DE_CEILING = 3.0
 REVENUE_FLOOR = 500_000_000.0  # $500M
 
 # Gate 2 window (trading days, applied in calendar days for simplicity).
-CATALYST_WINDOW_DAYS = 5
+EARNINGS_WINDOW_DAYS = 5
 
 # Gate 3 windows / volume multipliers.
 SMA_10 = 10
@@ -103,7 +103,7 @@ def _slippage_per_side(ticker: str) -> float:
 # runs; reset between trials.
 _PB_CEILING_OVERRIDE: float | None = None
 _DE_CEILING_OVERRIDE: float | None = None
-_CATALYST_WINDOW_OVERRIDE: int | None = None
+_EARNINGS_WINDOW_OVERRIDE: int | None = None
 _HARD_STOP_PCT_OVERRIDE: float | None = None
 _SWING_SCORE_THRESHOLD_OVERRIDE: float | None = None  # None = no gate
 
@@ -118,9 +118,9 @@ def _de_ceiling() -> float:
 
 def _catalyst_window_days() -> int:
     return (
-        _CATALYST_WINDOW_OVERRIDE
-        if _CATALYST_WINDOW_OVERRIDE is not None
-        else CATALYST_WINDOW_DAYS
+        _EARNINGS_WINDOW_OVERRIDE
+        if _EARNINGS_WINDOW_OVERRIDE is not None
+        else EARNINGS_WINDOW_DAYS
     )
 
 
@@ -266,7 +266,7 @@ async def _load_fundamentals(pool, tickers: list[str]) -> dict[str, list[dict]]:
 async def _load_catalysts(pool, tickers: list[str]) -> dict[str, list[date]]:
     sql = """
         SELECT ticker, event_date, magnitude_pct
-        FROM platform.catalyst_events
+        FROM platform.earnings_events
         WHERE ticker = ANY($1) AND event_type = 'EARNINGS_BEAT'
         ORDER BY ticker, event_date
     """
@@ -728,7 +728,7 @@ def _overrides_from_args(args: argparse.Namespace) -> dict:
 
 
 def _apply_overrides_from_args(args: argparse.Namespace) -> None:
-    global _PB_CEILING_OVERRIDE, _DE_CEILING_OVERRIDE, _CATALYST_WINDOW_OVERRIDE
+    global _PB_CEILING_OVERRIDE, _DE_CEILING_OVERRIDE, _EARNINGS_WINDOW_OVERRIDE
     global _HARD_STOP_PCT_OVERRIDE, _SWING_SCORE_THRESHOLD_OVERRIDE
     _PB_CEILING_OVERRIDE = (
         float(args.pb_ceiling) if getattr(args, "pb_ceiling", None) is not None else None
@@ -736,7 +736,7 @@ def _apply_overrides_from_args(args: argparse.Namespace) -> None:
     _DE_CEILING_OVERRIDE = (
         float(args.de_ceiling) if getattr(args, "de_ceiling", None) is not None else None
     )
-    _CATALYST_WINDOW_OVERRIDE = (
+    _EARNINGS_WINDOW_OVERRIDE = (
         int(args.catalyst_window_days)
         if getattr(args, "catalyst_window_days", None) is not None
         else None
@@ -844,7 +844,7 @@ async def load_vector_window_context(
                 "WHERE pb IS NOT NULL AND de IS NOT NULL AND revenue IS NOT NULL"
             )]
             with_catalyst = [r["ticker"] for r in await conn.fetch(
-                "SELECT DISTINCT ticker FROM platform.catalyst_events "
+                "SELECT DISTINCT ticker FROM platform.earnings_events "
                 "WHERE event_type='EARNINGS_BEAT'"
             )]
         eligible = sorted(set(funded) & set(with_catalyst))
@@ -881,7 +881,7 @@ def run_vector_with_context(
         write_trade_log_csv,
     )
 
-    global _PB_CEILING_OVERRIDE, _DE_CEILING_OVERRIDE, _CATALYST_WINDOW_OVERRIDE
+    global _PB_CEILING_OVERRIDE, _DE_CEILING_OVERRIDE, _EARNINGS_WINDOW_OVERRIDE
     global _HARD_STOP_PCT_OVERRIDE, _SWING_SCORE_THRESHOLD_OVERRIDE
     overrides = dict(overrides or {})
     _PB_CEILING_OVERRIDE = (
@@ -890,7 +890,7 @@ def run_vector_with_context(
     _DE_CEILING_OVERRIDE = (
         float(overrides["de_ceiling"]) if "de_ceiling" in overrides else None
     )
-    _CATALYST_WINDOW_OVERRIDE = (
+    _EARNINGS_WINDOW_OVERRIDE = (
         int(overrides["catalyst_window_days"])
         if "catalyst_window_days" in overrides else None
     )
@@ -1025,12 +1025,12 @@ async def amain(args: argparse.Namespace) -> int:
                 "WHERE pb IS NOT NULL AND de IS NOT NULL AND revenue IS NOT NULL"
             )]
             with_catalyst = [r["ticker"] for r in await conn.fetch(
-                "SELECT DISTINCT ticker FROM platform.catalyst_events "
+                "SELECT DISTINCT ticker FROM platform.earnings_events "
                 "WHERE event_type='EARNINGS_BEAT'"
             )]
         eligible = sorted(set(funded) & set(with_catalyst))
         if not eligible:
-            print("no eligible tickers — populate fundamentals + catalyst_events first", file=sys.stderr)
+            print("no eligible tickers — populate fundamentals + earnings_events first", file=sys.stderr)
             return 2
         load_tickers = list({*eligible, SPY_SYMBOL})
 

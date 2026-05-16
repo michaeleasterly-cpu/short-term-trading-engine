@@ -14,7 +14,7 @@ DB upsert. Two distinct guarantees ride on the archive directory:
 
 2. **Presence** — the ``csv_archive_presence`` audit check requires
    *an* archive on disk for every retrofitted source. ``fmp_fundamentals``
-   and ``fmp_catalyst_events`` archive only the incremental slice each
+   and ``fmp_earnings_events`` archive only the incremental slice each
    run, so they have no archive until their handler next fires — which
    leaves ``csv_archive_presence`` WARN-yellow indefinitely. Seeding a
    one-time baseline from current DB state satisfies presence and is
@@ -81,8 +81,8 @@ BASELINE_SOURCES: tuple[tuple[str, str, list[str], str], ...] = (
         "ticker, period_end_date",
     ),
     (
-        "fmp_catalyst_events",
-        "platform.catalyst_events",
+        "fmp_earnings_events",
+        "platform.earnings_events",
         ["ticker", "event_date", "event_type", "magnitude_pct", "source", "recorded_at"],
         "ticker, event_date",
     ),

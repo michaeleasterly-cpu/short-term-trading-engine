@@ -129,7 +129,7 @@ async def test_run_suite_passes_when_all_checks_pass() -> None:
     assert {c.name for c in result.checks} == {
         "delistings", "constituent", "splits", "row_integrity",
         "fundamentals_integrity", "corporate_actions_integrity",
-        "catalyst_events_freshness", "sec_filings_freshness",
+        "earnings_events_freshness", "sec_filings_freshness",
         "liquidity_tiers_freshness", "ticker_classifications_coverage",
         "macro_indicators_freshness", "prices_daily_freshness",
         "prices_daily_completeness", "options_max_pain_freshness",
@@ -155,7 +155,7 @@ async def test_run_suite_writes_one_score_per_check() -> None:
         "validation.row_integrity",
         "validation.fundamentals_integrity",
         "validation.corporate_actions_integrity",
-        "validation.catalyst_events_freshness",
+        "validation.earnings_events_freshness",
         "validation.sec_filings_freshness",
         "validation.liquidity_tiers_freshness",
         "validation.ticker_classifications_coverage",

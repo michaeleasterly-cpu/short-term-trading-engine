@@ -74,7 +74,7 @@ REV_VOL_RATIO_MIN = 1.5
 VEC_PB_CEILING = 1.5
 VEC_DE_CEILING = 3.0
 VEC_REVENUE_FLOOR = 500_000_000.0
-VEC_CATALYST_TRADING_DAYS = 5
+VEC_EARNINGS_TRADING_DAYS = 5
 VEC_MA_FAST = 50
 VEC_MA_SHORT = 10
 VEC_MA_MEDIUM = 20
@@ -256,9 +256,9 @@ _SURVIVOR_FUNDAMENTALS_SQL = """
 """
 
 # 4) Did each survivor have an EARNINGS_BEAT in the catalyst window?
-_SURVIVOR_CATALYST_SQL = """
+_SURVIVOR_EARNINGS_SQL = """
     SELECT DISTINCT ticker
-    FROM platform.catalyst_events
+    FROM platform.earnings_events
     WHERE ticker = ANY($1::text[])
       AND event_type = 'EARNINGS_BEAT'
       AND event_date >= $2::date
@@ -322,10 +322,10 @@ async def _fetch_survivor_catalysts(
     """One query for the set of survivors with EARNINGS_BEAT in the catalyst window."""
     if not survivors:
         return set()
-    calendar_window = (VEC_CATALYST_TRADING_DAYS * 7 + 4) // 5
+    calendar_window = (VEC_EARNINGS_TRADING_DAYS * 7 + 4) // 5
     cutoff = as_of - timedelta(days=calendar_window)
     async with pool.acquire() as conn:
-        rows = await conn.fetch(_SURVIVOR_CATALYST_SQL, survivors, cutoff, as_of)
+        rows = await conn.fetch(_SURVIVOR_EARNINGS_SQL, survivors, cutoff, as_of)
     return {r["ticker"] for r in rows}
 
 
@@ -457,7 +457,7 @@ def _vector_filter(
     if not has_catalyst:
         return FilterResult(
             False,
-            f"no EARNINGS_BEAT in last {VEC_CATALYST_TRADING_DAYS} trading days",
+            f"no EARNINGS_BEAT in last {VEC_EARNINGS_TRADING_DAYS} trading days",
             detail,
         )
     ok_tech, tech_reason = _vector_technical_signal(panel)
@@ -536,7 +536,7 @@ async def _simulate(pool: asyncpg.Pool, as_of: date, *, verbose_failures: bool) 
         (
             f"P/B < {VEC_PB_CEILING}, D/E < {VEC_DE_CEILING}, "
             f"revenue > ${VEC_REVENUE_FLOOR:,.0f}, EARNINGS_BEAT in last "
-            f"{VEC_CATALYST_TRADING_DAYS} trading days, close > 50-MA or pullback bounce"
+            f"{VEC_EARNINGS_TRADING_DAYS} trading days, close > 50-MA or pullback bounce"
         ),
     )
 

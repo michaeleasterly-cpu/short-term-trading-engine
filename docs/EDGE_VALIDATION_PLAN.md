@@ -130,7 +130,7 @@ Built the production edge-discovery substrate that replaces one-off backtest tun
 |---|---|---|---|---|---|
 | Sigma | yes (1,281) | +0.74 | +3.71 | 0.00 | Marginal real edge — research only |
 | Reversion | yes (355 funded) | -0.08 | +0.87 | 0.00 | Pipeline caught overfit (in-sample +2.87 → OOS -0.08) |
-| Vector | n/a | — | — | — | **Data-blocked** — `catalyst_events` has 0 overlap with T1+T2 |
+| Vector | n/a | — | — | — | **Data-blocked** — `earnings_events` has 0 overlap with T1+T2 |
 | **Momentum** | yes (1,281) | **+1.58** | **+2.80** | 0.00 | **Strongest OOS signal in the bench** |
 
 DSR ≥ 0.95 is structurally too strict for monthly portfolio strategies with only 2 years of held-back data (24 observations × 50-trial penalty makes the bar unreachable regardless of strategy quality). For Momentum the held-back portfolio Sharpe + walk-forward consistency are the real evidence.
@@ -153,7 +153,7 @@ The original Phase 4 plan was: run a single historical replay, feed trade lists 
 **Phase 4 decision (2026-05-13):** Momentum is the only engine producing a real OOS edge on the wider universe. Sigma is marginal; Reversion was caught as overfit; Vector is data-blocked. Forward path:
 
 - **Momentum**: paper-trade with small size (Phase 5a below) to validate the +1.58 held-back Sharpe in production. 3 months of paper performance + the existing backtest = the real out-of-sample test, earned from market exposure not from a credibility-checkbox.
-- **Vector**: backfill `platform.catalyst_events` for T1+T2 tickers (one-time ingestion task). Re-run search. Decision point on whether to invest further then.
+- **Vector**: backfill `platform.earnings_events` for T1+T2 tickers (one-time ingestion task). Re-run search. Decision point on whether to invest further then.
 - **Sigma / Reversion**: park. Reversion is overfit-confirmed; Sigma is too marginal to move ahead of Momentum.
 
 ### Phase 5a: Momentum Paper Trading — **In progress (2026-05-13)**

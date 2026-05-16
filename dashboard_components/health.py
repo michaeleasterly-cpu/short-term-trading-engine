@@ -26,7 +26,7 @@ OPS_UPDATE_STAGES: tuple[str, ...] = (
     "fundamentals_refresh",
     "tier_refresh",
     "classify_tickers",
-    "catalyst_refresh",
+    "earnings_refresh",
     "sec_filings",
     "macro_indicators",
     "data_validation",
@@ -394,7 +394,7 @@ def classify_open_orders(
 def classify_catalyst(state: dict[str, Any]) -> tuple[str, str]:
     """Catalyst-events coverage + freshness row.
 
-    Mirrors ``validation.catalyst_events_freshness``: green when newest
+    Mirrors ``validation.earnings_events_freshness``: green when newest
     event ≤ 90d AND ≥ 20% of T1+T2 stocks have an event in last 180d;
     amber when 10-20% coverage; red when stale or below 10%.
 
@@ -408,7 +408,7 @@ def classify_catalyst(state: dict[str, Any]) -> tuple[str, str]:
     last_refresh = state.get("last_refresh")
 
     if total == 0:
-        return "red", "catalyst_events is empty"
+        return "red", "earnings_events is empty"
 
     # Age check.
     today = datetime.now(UTC).date()

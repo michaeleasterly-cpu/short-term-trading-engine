@@ -8,13 +8,21 @@ or `docs/MASTER_PLAN.md §9 Build Order`.
 
 Single focus until further notice — no engine/Sigma-redesign work. Sequence:
 
-1. **(blocking, in flight)** SEC backfill completes → re-measure catalyst +
-   SEC 180d coverage vs thresholds → verdict held to the bar (our-defect-
-   until-proven-per-ticker; no vendor-blame; threshold reframe only with
-   evidence the gap is not ours).
+1. ✅ **SEC backfill — DONE 2026-05-16.** Per-ticker crawl root-caused
+   as wrong tool; built two-phase bulk Form-345 ETL (insider 646,107
+   rows / 84.1% T1-T2) + full-history-shard 8-K API backfill (237,680
+   rows / 85.1%), 2018→2026, DB-verified, CI-green. `sec_filings_freshness`
+   GREEN. **Still owed:** the catalyst/SEC 180d coverage *verdict vs
+   thresholds* (our-defect-until-proven-per-ticker; no vendor-blame).
+   3 suite checks red for **structural** reasons, not pull-staleness —
+   `short_interest_freshness` (FINRA bi-monthly cadence > 35d
+   threshold), `social_sentiment_freshness` (ApeWisdom ~23% < 30%
+   floor), `prices_daily_freshness` (needs investigation). Belongs in
+   threshold calibration, NOT a re-pull.
 2. Roll the 7 detection-only sources to `healable` — one bounded targeted
-   repair + HealSpec flip each (fundamentals, corp_actions, catalyst, SEC,
-   macro, liquidity_tiers, classifications), gated per the 6-stage contract.
+   repair + HealSpec flip each (fundamentals, corp_actions,
+   earnings_events, SEC, macro, liquidity_tiers, classifications), gated
+   per the 6-stage contract.
 3. Drive validation to 13/13 green; prove `python -m tpcore.selfheal`
    returns green end-to-end (the deferred live e2e).
 4. **Hardening pass** (some items NOT blocked on the verdict — run in
@@ -42,7 +50,7 @@ Single focus until further notice — no engine/Sigma-redesign work. Sequence:
 `DATA_OPERATIONS_COMPLETE` / `run_all_engines.sh` / `capital_gate`
 require ALL validation checks green or NO engine trades. But each
 engine consumes a different data subset: Sentinel→macro/credit
-(hy_spread, credit_spread, macro_indicators); Vector→catalyst_events +
+(hy_spread, credit_spread, macro_indicators); Vector→earnings_events +
 fundamentals; Momentum→prices_daily only; etc. `options_max_pain` and
 `insider_sentiment` (added today) are consumed by **no current engine**
 — yet under the global gate a red `insider_sentiment_freshness` would
@@ -64,33 +72,36 @@ selfheal orchestrator (per-engine escalation scoping).
   is the first sub-task.
 - Sits behind the WEEK GOAL data-layer work + #132 in priority.
 
-## Rename: `catalyst_*` → `earnings_*` (tracked, DEFERRED behind data layer)
+## ✅ Rename: `catalyst_* → earnings_*` — FEED DONE 2026-05-16
 
-**Decision (operator, 2026-05-16): the rename WILL happen — but only
-AFTER the data layer is fully squared away. Do not start it before
-then; just be aware it is coming and don't entrench the misnomer.**
+The data **feed** was renamed in lockstep (operator picked
+`earnings_events`): `platform.catalyst_events → platform.earnings_events`
+(idempotent migration `20260516_0800`, table + index + PK constraint,
+no data dropped — 13,848 rows / 1,104 tickers verified intact); stage
+`catalyst_refresh → earnings_refresh` (+ `_stage_*`/`handle_*` fns);
+validation check + module file (`checks/earnings_events_freshness.py`,
+`CHECK_NAME="earnings_events_freshness"`) + `KNOWN_CHECK_NAMES` +
+suite vars + conftest routing + test_suite/e2e source sets; selfheal
+`HealSpec(source="earnings_events")`; `audit_pipeline.py`; the two
+one-off backfill scripts (git-mv'd); Vector's data-loading queries;
+docs. `earnings_events_freshness` verified GREEN on the live renamed
+table via the validation suite.
 
-`platform.catalyst_events` / the `catalyst_refresh` stage / the
-`catalyst_events_freshness` check / the new selfheal `HealSpec`
-(`source="catalyst_events"`) are all misnamed. Verified empirically
-2026-05-16: the table holds exactly ONE `event_type` — `EARNINGS_BEAT`
-(13,848 rows / 1,104 tickers, source 100% `fmp`). It is **earnings-beat
-events only** — no M&A / FDA / guidance / analyst / news / insider.
-"Catalyst" is aspirational for a future general catalyst engine that
-does not exist; today the only consumer is the **Vector** engine.
+**OPEN — deliberate scope boundary, operator decision pending:** the
+Vector engine's **internal scoring vocabulary** is *not* renamed —
+the `VectorScore.catalyst` Pydantic field (0–35 component), the
+`catalyst_magnitude` backtest CSV column header, `_has_catalyst` /
+`_catalyst_window_days`, and "Catalyst-Driven Swing" branding. That is
+the engine's model concept, not the feed; renaming it touches a
+serialized model field + CSV schema + dashboard reads (artifact-
+breaking) and was out of scope for "rename the feed." Flagged to
+operator: decide whether to also purge Vector's internal "Catalyst"
+vocabulary or leave the engine concept as-is.
 
-Why it matters beyond cosmetics: the `catalyst_events_freshness`
-threshold ("≥20% of T1/T2 with an event in 180d") reasons as if this
-were a broad catalyst stream; it is quarterly earnings *beats*. The
-misnomer actively causes threshold-reasoning confusion (relevant to the
-pending catalyst coverage verdict).
-
-Scope when unblocked: rename table (idempotent migration), the stage,
-the validation check + `KNOWN_CHECK_NAMES`, the selfheal `HealSpec`
-source, the audit_pipeline check, and every Vector consumer — in one
-PR, all six pipeline stages kept in lockstep. Honest name candidates:
-`earnings_events` / `earnings_beats`. Document the column/table rename;
-never drop data.
+Note: the misnomer's threshold-reasoning confusion (the
+`earnings_events_freshness` "≥X% of T1/T2 in 180d" floor reasons as a
+broad catalyst stream but it is quarterly earnings *beats*) remains
+relevant to the still-owed SEC/earnings coverage verdict (WEEK GOAL #1).
 
 ## Autonomous self-heal — EVERY data source (P0, 2026-05-15)
 
@@ -113,8 +124,8 @@ babysitting is unacceptable per the mandate — close it.
 2. **`corporate_actions`** (Alpaca) — invariant + auto-heal via the
    canonical corp-actions stage; shrinkage detector already exists,
    wire it into the heal loop.
-3. **`catalyst_events`** (FMP) — completeness invariant + auto-heal via
-   `catalyst_refresh`.
+3. **`earnings_events`** (FMP) — completeness invariant + auto-heal via
+   `earnings_refresh`.
 4. **`sec_insider_transactions` / SEC filings** (EDGAR) — invariant +
    auto-heal via `ops.py --stage sec_filings --backfill`.
 5. **`macro_indicators`** (FRED) — invariant + auto-heal (re-pull); the
@@ -255,13 +266,13 @@ shared archive layer.
 - All 5 handlers write a gzipped CSV archive before/after the DB
   upsert: `handle_macro_indicators`, `handle_daily_bars`,
   `handle_corporate_actions`, `handle_fundamentals_refresh`,
-  `_stage_catalyst_refresh`.
+  `_stage_earnings_refresh`.
 - **Shrinkage detection** (the vendor-truncation alarm) is wired into
   the two *full-snapshot* sources only — `fred_macro` and
   `alpaca_corporate_actions` — which re-pull their entire history every
   run, so a row-count drop unambiguously means truncation. The three
   *incremental* sources (`alpaca_daily_bars`, `fmp_fundamentals`,
-  `fmp_catalyst_events`) pull a variable window each run, so row-count
+  `fmp_earnings_events`) pull a variable window each run, so row-count
   shrinkage there is noise — they get the audit-trail archive but no
   alarm (a full-table baseline would false-flag their next incremental
   run; this was caught and corrected during the build).
