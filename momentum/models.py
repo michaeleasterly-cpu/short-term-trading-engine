@@ -20,6 +20,29 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from tpcore.backtest.filter_diagnostics import FilterDiagnostics
 
+# Universe tradeability primitives live in tpcore (moved 2026-05-16 to
+# enforce the layering invariant — tpcore.universe.prescreener needs
+# them and tpcore must never import an engine). Re-exported so every
+# momentum call site is unchanged (engine→tpcore is the correct
+# direction). Listed in __all__ so the re-export is not "unused".
+from tpcore.universe.tradeability import (
+    MAX_TIER_FOR_TRADING,
+    MIN_PRICE_FLOOR,
+    TICKER_SEPARATOR_CHARS,
+    WARRANT_MIN_TICKER_LEN,
+    WARRANT_SUFFIXES,
+    is_tradeable_common_stock,
+)
+
+__all__ = [
+    "MAX_TIER_FOR_TRADING",
+    "MIN_PRICE_FLOOR",
+    "TICKER_SEPARATOR_CHARS",
+    "WARRANT_MIN_TICKER_LEN",
+    "WARRANT_SUFFIXES",
+    "is_tradeable_common_stock",
+]
+
 # ─── Strategy parameters (live defaults; backtest can override in-process) ──
 # 12-1 momentum: lookback over the prior ~12 calendar months, skipping the
 # most recent ~1 month to dodge short-term reversal.
@@ -28,48 +51,6 @@ SKIP_DAYS = 21            # ~ 1 trading month skipped before measurement
 HOLD_DAYS = 21            # ~ 1 trading month between rebalances
 TOP_DECILE_PCT = 0.10     # top 10% of ranked universe enters the portfolio
 PER_NAME_CAP_PCT = Decimal("0.01")  # 1% of equity max per ticker (anti-concentration)
-MAX_TIER_FOR_TRADING = 2  # match the validated backtest universe (T1+T2).
-# Phase 1's parameter-search result (held-back Sharpe +1.58) was earned on
-# T1+T2 specifically; widening live to T3 requires re-running the search at
-# that tier first. Don't promote what hasn't been validated.
-
-# ─── Tradability filters (Phase 2.5 #1) ─────────────────────────────────────
-# Even at T1+T2 the universe contains warrants, units, preferred shares, and
-# sub-$5 names that we should not trade. The smoke run on 2026-05-13 surfaced
-# XBPEW, BBLGW, NAMSW (warrants) and a position at $0.06/share. Apply the
-# same filter in setup_detection.scan (live) AND backtest._compute_one_rebalance
-# so live and backtest agree on the universe.
-
-MIN_PRICE_FLOOR = Decimal("5.00")  # SEC "penny stock" line; <$5 → drop
-
-# Tickers containing any of these separators are non-common share classes
-# (preferreds with `.PR`, units with `.U`, rights with `=R`, dual-share with
-# `-A`/`-B`, etc.). Common stocks on US exchanges never contain these.
-TICKER_SEPARATOR_CHARS: tuple[str, ...] = (".", "-", "/", "=")
-
-# Warrants typically end in W or WS on US exchanges. The 5-char-or-longer
-# guard avoids false positives like CDW (3 chars, real common stock) and
-# ZWS (Zurn — 3 chars). Empirically, warrants are universally 5+ chars.
-WARRANT_SUFFIXES: tuple[str, ...] = ("W", "WS")
-WARRANT_MIN_TICKER_LEN = 5
-
-
-def is_tradeable_common_stock(ticker: str, last_close: Decimal) -> bool:
-    """Return False for warrants, units, preferreds, and sub-$5 names.
-
-    Conservative — designed to filter the obvious offenders without
-    rejecting real common stocks. Specifically does NOT filter
-    single-letter trailing `P` (too many false positives like APLS,
-    EART). Refine in a later iteration if needed."""
-    if last_close < MIN_PRICE_FLOOR:
-        return False
-    if any(sep in ticker for sep in TICKER_SEPARATOR_CHARS):
-        return False
-    if len(ticker) >= WARRANT_MIN_TICKER_LEN:
-        for suffix in WARRANT_SUFFIXES:
-            if ticker.endswith(suffix):
-                return False
-    return True
 
 # ─── Graduation gate (paper → live) ─────────────────────────────────────────
 # Looser than the other engines because monthly rebalance accumulates fewer

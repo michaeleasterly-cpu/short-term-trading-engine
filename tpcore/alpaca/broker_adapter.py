@@ -44,7 +44,10 @@ from tpcore.quality.execution_quality import ExecutionQualityScore, ExecutionQua
 from .exceptions import BrokerUnavailableError
 
 if TYPE_CHECKING:  # pragma: no cover
-    from sigma.models import ExecutionDecision
+    # Structural duck-typed shape — tpcore must not depend on an engine
+    # package (sigma archived 2026-05-16). The broker only needs the
+    # ExecutionDecision interface, satisfied by every engine's model.
+    from typing import Any as ExecutionDecision
 
 logger = structlog.get_logger(__name__)
 

@@ -24,7 +24,10 @@ from typing import TYPE_CHECKING
 
 import structlog
 
-from momentum.models import MAX_TIER_FOR_TRADING, is_tradeable_common_stock
+from tpcore.universe.tradeability import (
+    MAX_TIER_FOR_TRADING,
+    is_tradeable_common_stock,
+)
 
 if TYPE_CHECKING:  # pragma: no cover
     import asyncpg
