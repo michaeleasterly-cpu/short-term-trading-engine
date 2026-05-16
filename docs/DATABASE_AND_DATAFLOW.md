@@ -323,6 +323,12 @@ Populated by the weekly `sec_filings` ops stage (`handle_sec_filings` in `tpcore
 
 **Indexes:** `(ticker, filing_date)`, `(filing_date)`.
 
+#### `platform.social_sentiment`
+
+**Purpose:** ApeWisdom Reddit social sentiment (no auth). One row per (ticker, date) — mentions / upvotes / rank + 24h-ago comparators for the T1/T2 stock universe. Ingested by `tpcore.apewisdom.ApeWisdomAdapter` → `handle_apewisdom_social_sentiment` → `apewisdom_social_sentiment` stage (all pages, local T1/T2 filter, 24h skip-guard, idempotent `ON CONFLICT DO NOTHING`). Added 2026-05-16.
+
+**Refresh cadence:** daily via the `apewisdom_social_sentiment` stage; 24h skip-guard (API refreshes ~2h). `social_sentiment_freshness` check FAILs if latest > 7d old OR < 30% of T1/T2 covered; self-heal re-runs the bounded stage.
+
 #### `platform.insider_sentiment`
 
 **Purpose:** Finnhub free-tier insider sentiment. One row per (symbol, year, month) — monthly MSPR (Monthly Share Purchase Ratio, insider sentiment [-100,100]) + net insider share change for the T1/T2 stock universe. Ingested by `tpcore.finnhub.FinnhubAdapter` → `handle_finnhub_insider_sentiment` → `finnhub_insider_sentiment` stage (25-day skip-guard, idempotent `ON CONFLICT DO NOTHING`). Added 2026-05-16. `/news-sentiment`/`/social-sentiment` are premium (403) and NOT ingested.

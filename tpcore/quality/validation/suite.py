@@ -54,6 +54,8 @@ from .checks.row_integrity import CHECK_NAME as ROW_INTEGRITY_NAME
 from .checks.row_integrity import check_row_integrity
 from .checks.sec_filings_freshness import CHECK_NAME as SEC_FRESHNESS_NAME
 from .checks.sec_filings_freshness import check_sec_filings_freshness
+from .checks.social_sentiment_freshness import CHECK_NAME as SOCIAL_SENTIMENT_NAME
+from .checks.social_sentiment_freshness import check_social_sentiment_freshness
 from .checks.splits import CHECK_NAME as SPLITS_NAME
 from .checks.splits import check_splits
 from .checks.ticker_classifications_freshness import (
@@ -88,6 +90,7 @@ KNOWN_CHECK_NAMES: tuple[str, ...] = (
     PRICES_COMPLETENESS_NAME,
     OPTIONS_MAXPAIN_NAME,
     INSIDER_SENTIMENT_NAME,
+    SOCIAL_SENTIMENT_NAME,
 )
 
 
@@ -154,18 +157,23 @@ async def run_suite(
     insider_sentiment_task = _safe_run(
         INSIDER_SENTIMENT_NAME, check_insider_sentiment_freshness, pool, None
     )
+    social_sentiment_task = _safe_run(
+        SOCIAL_SENTIMENT_NAME, check_social_sentiment_freshness, pool, None
+    )
     (
         delistings_result, constituent_result, splits_result,
         row_integrity_result, fund_integrity_result, ca_integrity_result,
         catalyst_result, sec_result, liquidity_result, classifications_result,
         macro_result, prices_result, completeness_result,
         options_maxpain_result, insider_sentiment_result,
+        social_sentiment_result,
     ) = await asyncio.gather(
         delistings_task, constituent_task, splits_task,
         row_integrity_task, fund_integrity_task, ca_integrity_task,
         catalyst_task, sec_task, liquidity_task, classifications_task,
         macro_task, prices_task, completeness_task,
         options_maxpain_task, insider_sentiment_task,
+        social_sentiment_task,
     )
     checks: list[CheckResult] = [
         delistings_result, constituent_result, splits_result,
@@ -173,6 +181,7 @@ async def run_suite(
         catalyst_result, sec_result, liquidity_result, classifications_result,
         macro_result, prices_result, completeness_result,
         options_maxpain_result, insider_sentiment_result,
+        social_sentiment_result,
     ]
 
     finished_at = datetime.now(UTC)

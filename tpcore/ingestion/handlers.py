@@ -1246,6 +1246,102 @@ async def handle_finnhub_insider_sentiment(
     return len(upsert_rows)
 
 
+async def handle_apewisdom_social_sentiment(
+    pool: asyncpg.Pool, config: dict[str, Any]
+) -> int | None:
+    """ApeWisdom Reddit social-sentiment for the T1/T2 stock universe.
+
+    API refreshes every ~2h. 24h skip-guard. Pull all pages, filter to
+    T1/T2 stocks locally (no per-ticker API filter), CSV-first →
+    idempotent upsert. ``config``: ``skip_guard_hours`` (default 24;
+    0 forces re-pull — self-heal).
+    """
+    from datetime import UTC
+    from datetime import timedelta as _td
+
+    from tpcore.apewisdom import ApeWisdomAdapter
+    from tpcore.ingestion.csv_archive import write_archive
+
+    skip_hours = int(config.get("skip_guard_hours", 24))
+    if skip_hours > 0:
+        async with pool.acquire() as conn:
+            newest = await conn.fetchval(
+                "SELECT MAX(recorded_at) FROM platform.social_sentiment"
+            )
+        if newest is not None and (datetime.now(UTC) - newest) < _td(hours=skip_hours):
+            logger.info(
+                "ingestion.handler.social_sentiment.skipped_fresh",
+                last_refresh=newest.isoformat(),
+            )
+            return 0
+
+    async with pool.acquire() as conn:
+        urows = await conn.fetch(
+            """
+            SELECT lt.ticker
+            FROM platform.liquidity_tiers lt
+            LEFT JOIN platform.ticker_classifications tc USING (ticker)
+            WHERE lt.tier <= 2
+              AND COALESCE(tc.asset_class, 'stock') = 'stock'
+            """
+        )
+    universe = {r["ticker"].upper() for r in urows}
+    if not universe:
+        logger.info("ingestion.handler.social_sentiment.empty_universe")
+        return 0
+
+    async with ApeWisdomAdapter() as adapter:
+        records = await adapter.get_all_sentiment()
+
+    today = datetime.now(UTC).date()
+    rows = [
+        (rec.ticker, today, rec.mentions, rec.upvotes, rec.rank,
+         rec.rank_24h_ago, rec.mentions_24h_ago)
+        for rec in records if rec.ticker in universe
+    ]
+    if not rows:
+        logger.info(
+            "ingestion.handler.social_sentiment.empty",
+            reason="no T1/T2 overlap", total_records=len(records),
+        )
+        return 0
+
+    write_archive(
+        "apewisdom_social_sentiment",
+        [
+            {
+                "ticker": t, "date": d.isoformat(), "mentions": str(m),
+                "upvotes": str(u), "rank": str(rk),
+                "rank_24h_ago": "" if r24 is None else str(r24),
+                "mentions_24h_ago": "" if m24 is None else str(m24),
+            }
+            for (t, d, m, u, rk, r24, m24) in rows
+        ],
+        fieldnames=[
+            "ticker", "date", "mentions", "upvotes", "rank",
+            "rank_24h_ago", "mentions_24h_ago",
+        ],
+        validator=lambda x: bool(x.get("ticker")) and bool(x.get("date")),
+    )
+    async with pool.acquire() as conn:
+        await conn.executemany(
+            """
+            INSERT INTO platform.social_sentiment
+                (ticker, date, mentions, upvotes, rank,
+                 rank_24h_ago, mentions_24h_ago)
+            VALUES ($1,$2,$3,$4,$5,$6,$7)
+            ON CONFLICT (ticker, date) DO NOTHING
+            """,
+            rows,
+        )
+    logger.info(
+        "ingestion.handler.social_sentiment.done",
+        rows=len(rows), total_records=len(records),
+        universe=len(universe), date=today.isoformat(),
+    )
+    return len(rows)
+
+
 HANDLERS: dict[str, HandlerFn] = {
     "data_validation": handle_data_validation,
     "fundamentals_refresh": handle_fundamentals_refresh,
@@ -1255,6 +1351,7 @@ HANDLERS: dict[str, HandlerFn] = {
     "macro_indicators": handle_macro_indicators,
     "greeks_max_pain": handle_greeks_max_pain,
     "finnhub_insider_sentiment": handle_finnhub_insider_sentiment,
+    "apewisdom_social_sentiment": handle_apewisdom_social_sentiment,
 }
 
 
@@ -1269,4 +1366,5 @@ __all__ = [
     "handle_macro_indicators",
     "handle_greeks_max_pain",
     "handle_finnhub_insider_sentiment",
+    "handle_apewisdom_social_sentiment",
 ]

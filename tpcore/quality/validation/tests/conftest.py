@@ -92,6 +92,10 @@ class FakePool:
             from datetime import UTC, datetime
             now = datetime.now(UTC)
             return {"newest_period": now.year * 12 + now.month, "rows_total": 10}
+        # social_sentiment_freshness coverage CTE: 50% coverage (passes
+        # the 30% floor) so the suite is green in unrelated e2e tests.
+        if "platform.social_sentiment" in sql_lower and "covered" in sql_lower:
+            return {"universe": 100, "covered": 50}
         # Catalyst freshness check fires its own CTE that doesn't hit
         # the prices_daily routes above. Return a "clean" snapshot so
         # e2e tests focused on unrelated checks (splits etc.) don't
@@ -145,6 +149,11 @@ class FakePool:
         self.calls.append((sql, args))
         if "count(*)" in sql.lower() and "platform.prices_daily" in sql.lower():
             return 0
+        # social_sentiment_freshness MAX(date): a fresh date so the
+        # suite is green in e2e tests for unrelated checks.
+        if "max(date)" in sql.lower() and "platform.social_sentiment" in sql.lower():
+            from datetime import UTC, datetime, timedelta
+            return datetime.now(UTC).date() - timedelta(days=1)
         return None
 
 

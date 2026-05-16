@@ -974,6 +974,25 @@ async def _stage_finnhub_insider_sentiment(
     return {"rows_loaded": int(rows or 0)}
 
 
+async def _stage_apewisdom_social_sentiment(
+    pool: asyncpg.Pool, config: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """ApeWisdom Reddit social-sentiment (T1/T2 universe, daily).
+
+    API refreshes ~2h; handler 24h skip-guard. ``--param
+    skip_guard_hours=0`` forces a re-pull (self-heal).
+    """
+    from tpcore.ingestion.handlers import handle_apewisdom_social_sentiment
+
+    log = structlog.get_logger("scripts.ops")
+    try:
+        rows = await handle_apewisdom_social_sentiment(pool, config or {})
+    except Exception as exc:
+        log.error("ops.stage.apewisdom_social_sentiment.failed", error=str(exc))
+        raise
+    return {"rows_loaded": int(rows or 0)}
+
+
 async def _stage_sec_filings(pool: asyncpg.Pool, *, backfill: bool = False) -> dict[str, Any]:
     """Weekly SEC EDGAR Form 4 + 8-K ingest.
 
@@ -1299,6 +1318,9 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # Finnhub insider-sentiment (MSPR) for the T1/T2 universe; monthly,
     # 25-day skip-guard, idempotent ON CONFLICT. Added 2026-05-16.
     ("finnhub_insider_sentiment", lambda pool, cfg: (lambda: _stage_finnhub_insider_sentiment(pool, cfg)), HEAVY_STAGE_TIMEOUT_SEC),
+    # ApeWisdom Reddit social sentiment; all pages, T1/T2 local filter,
+    # 24h skip-guard, idempotent ON CONFLICT. Added 2026-05-16.
+    ("apewisdom_social_sentiment", lambda pool, cfg: (lambda: _stage_apewisdom_social_sentiment(pool, cfg)), STAGE_TIMEOUT_SEC),
     # data_validation runs the 10-check suite against the live tables —
     # at the current 20M-row prices_daily it consistently runs ~120-
     # 130s. Bumping to 5 min gives headroom without masking a true hang.
@@ -2508,6 +2530,37 @@ async def _check_finnhub_insider_sentiment(pool: asyncpg.Pool) -> dict[str, Any]
     }
 
 
+async def _check_apewisdom_social_sentiment(pool: asyncpg.Pool) -> dict[str, Any]:
+    """Dashboard probe — ApeWisdom social-sentiment freshness.
+
+    'ApeWisdom sentiment: N tickers / latest YYYY-MM-DD'. Green ≤3d,
+    yellow ≤7d, red >7d / empty.
+    """
+    row = await pool.fetchrow(
+        """
+        SELECT MAX(date) AS latest,
+               COUNT(DISTINCT ticker) FILTER (
+                   WHERE date = (SELECT MAX(date) FROM platform.social_sentiment)
+               ) AS tickers
+        FROM platform.social_sentiment
+        """
+    )
+    latest = row["latest"] if row else None
+    tickers = int(row["tickers"]) if row and row["tickers"] else 0
+    if latest is None:
+        return {"ok": False, "reason": "no social_sentiment rows",
+                "summary": "ApeWisdom sentiment: 0 tickers / latest none"}
+    age = (date.today() - latest).days
+    return {
+        "ok": age <= 3,
+        "warn": 3 < age <= 7,
+        "summary": f"ApeWisdom sentiment: {tickers} tickers / latest {latest.isoformat()}",
+        "latest": latest.isoformat(),
+        "tickers": tickers,
+        "age_days": age,
+    }
+
+
 _CHECK_FNS = [
     ("db_connectivity", _check_connectivity),
     ("data_freshness", _check_freshness),
@@ -2519,6 +2572,7 @@ _CHECK_FNS = [
     ("macro_indicators_freshness", _check_macro_indicators_freshness),
     ("greeks_max_pain_freshness", _check_greeks_max_pain),
     ("insider_sentiment_freshness", _check_finnhub_insider_sentiment),
+    ("social_sentiment_freshness", _check_apewisdom_social_sentiment),
     ("liquidity_tiers_freshness", _check_liquidity_tiers_freshness),
     ("ticker_classifications", _check_ticker_classifications),
     ("engine_schedulers", _check_engine_schedulers),

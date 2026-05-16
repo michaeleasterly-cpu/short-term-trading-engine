@@ -58,3 +58,5 @@ engine-service: Long-running daemon at `ops/engine_service.py`. Polls `platform.
 **Max Pain** — the option strike at which the aggregate dollar value of in-the-money options (the total payout option *writers* must make) is minimized; i.e., the price where the most option holders expire worthless. Sourced per-expiration from greeks.pro into `platform.options_max_pain` (`max_pain_strike`, `total_pain_at_max`, `spot_distance_pct`). Used as an options-positioning / pinning context signal. Added 2026-05-16.
 
 **MSPR (Monthly Share Purchase Ratio)** — Finnhub's insider-sentiment metric, range [-100, 100]; positive = net insider buying pressure, negative = net selling. Sourced monthly per symbol into `platform.insider_sentiment` (`mspr`, `net_change`). Added 2026-05-16.
+
+**Social sentiment (ApeWisdom)** — Reddit community mentions/upvotes/rank for a ticker, scanned ~every 2h by apewisdom.io (no auth). Stored daily per ticker in `platform.social_sentiment` with 24h-ago comparators. Used as a multiplier/risk signal, never a standalone entry trigger. Added 2026-05-16.

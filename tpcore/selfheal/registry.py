@@ -82,6 +82,12 @@ _SPECS: tuple[HealSpec, ...] = (
              source="finnhub_insider_sentiment",
              healable=True, stage="finnhub_insider_sentiment",
              params={"skip_guard_days": "0"}, max_attempts=2),
+    # Stale/low-coverage social sentiment → re-run the bounded stage
+    # with the 24h skip-guard disabled.
+    HealSpec(check_name="social_sentiment_freshness",
+             source="apewisdom_social_sentiment",
+             healable=True, stage="apewisdom_social_sentiment",
+             params={"skip_guard_hours": "0"}, max_attempts=2),
 )
 
 HEAL_SPECS: dict[str, HealSpec] = {s.check_name: s for s in _SPECS}
