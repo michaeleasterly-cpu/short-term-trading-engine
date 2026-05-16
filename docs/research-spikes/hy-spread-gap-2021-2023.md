@@ -1,5 +1,26 @@
 # Research spike — recover BAMLH0A0HYM2 gap 2021-03-20 → 2023-05-14
 
+**Status: ✅ RESOLVED — GAP CLOSED 2026-05-16.** Recovered from a Scribd
+FRED-graph export (`735614588-fredgraph`, 2019-03-31→2024-05-03).
+Validated to the gold standard before ingest: **772/772 overlapping
+dates EXACT-matched** the existing DB (both the 1996-2021 eco-archive
+era and the 2023+ FRED era), gap-region OCR-integrity checks all clean
+(0 out-of-band values, 0 OCR day-shifts, 0 NYSE sessions missing a
+row), seams smooth (eco→scribd 3.67→3.58 weekend step; scribd→FRED
+4.76→4.77). Ingested via the canonical `macro_indicators
+--param hist_csv_path` knob (idempotent). `hy_spread` is now contiguous
+**1996-12-31 → 2026-05-12** (7,667 rows; only 2 isolated FRED
+non-print days in 2013/2015, vendor-side, not our gap). `credit_spread`
+/BAA10Y untouched and remains the primary Bear-Score signal pending a
+deliberate switch decision. Source-of-truth CSV backups retained at
+`data/hy_spread_recovery/` and `data/fred_macro_backfill/`.
+
+The prompt below is retained for reference / future re-derivation only.
+
+---
+
+_Original (pre-resolution) content:_
+
 Status: OPEN. Created 2026-05-16. Owner decision: ingest what we have
 (1996–2021), keep BAA10Y, fill this gap "eventually."
 
