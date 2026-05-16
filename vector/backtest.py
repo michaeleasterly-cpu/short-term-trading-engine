@@ -73,7 +73,7 @@ DE_CEILING = 3.0
 REVENUE_FLOOR = 500_000_000.0  # $500M
 
 # Gate 2 window (trading days, applied in calendar days for simplicity).
-EARNINGS_WINDOW_DAYS = 5
+CATALYST_WINDOW_DAYS = 5
 
 # Gate 3 windows / volume multipliers.
 SMA_10 = 10
@@ -103,7 +103,7 @@ def _slippage_per_side(ticker: str) -> float:
 # runs; reset between trials.
 _PB_CEILING_OVERRIDE: float | None = None
 _DE_CEILING_OVERRIDE: float | None = None
-_EARNINGS_WINDOW_OVERRIDE: int | None = None
+_CATALYST_WINDOW_OVERRIDE: int | None = None
 _HARD_STOP_PCT_OVERRIDE: float | None = None
 _SWING_SCORE_THRESHOLD_OVERRIDE: float | None = None  # None = no gate
 
@@ -118,9 +118,9 @@ def _de_ceiling() -> float:
 
 def _catalyst_window_days() -> int:
     return (
-        _EARNINGS_WINDOW_OVERRIDE
-        if _EARNINGS_WINDOW_OVERRIDE is not None
-        else EARNINGS_WINDOW_DAYS
+        _CATALYST_WINDOW_OVERRIDE
+        if _CATALYST_WINDOW_OVERRIDE is not None
+        else CATALYST_WINDOW_DAYS
     )
 
 
@@ -728,7 +728,7 @@ def _overrides_from_args(args: argparse.Namespace) -> dict:
 
 
 def _apply_overrides_from_args(args: argparse.Namespace) -> None:
-    global _PB_CEILING_OVERRIDE, _DE_CEILING_OVERRIDE, _EARNINGS_WINDOW_OVERRIDE
+    global _PB_CEILING_OVERRIDE, _DE_CEILING_OVERRIDE, _CATALYST_WINDOW_OVERRIDE
     global _HARD_STOP_PCT_OVERRIDE, _SWING_SCORE_THRESHOLD_OVERRIDE
     _PB_CEILING_OVERRIDE = (
         float(args.pb_ceiling) if getattr(args, "pb_ceiling", None) is not None else None
@@ -736,7 +736,7 @@ def _apply_overrides_from_args(args: argparse.Namespace) -> None:
     _DE_CEILING_OVERRIDE = (
         float(args.de_ceiling) if getattr(args, "de_ceiling", None) is not None else None
     )
-    _EARNINGS_WINDOW_OVERRIDE = (
+    _CATALYST_WINDOW_OVERRIDE = (
         int(args.catalyst_window_days)
         if getattr(args, "catalyst_window_days", None) is not None
         else None
@@ -881,7 +881,7 @@ def run_vector_with_context(
         write_trade_log_csv,
     )
 
-    global _PB_CEILING_OVERRIDE, _DE_CEILING_OVERRIDE, _EARNINGS_WINDOW_OVERRIDE
+    global _PB_CEILING_OVERRIDE, _DE_CEILING_OVERRIDE, _CATALYST_WINDOW_OVERRIDE
     global _HARD_STOP_PCT_OVERRIDE, _SWING_SCORE_THRESHOLD_OVERRIDE
     overrides = dict(overrides or {})
     _PB_CEILING_OVERRIDE = (
@@ -890,7 +890,7 @@ def run_vector_with_context(
     _DE_CEILING_OVERRIDE = (
         float(overrides["de_ceiling"]) if "de_ceiling" in overrides else None
     )
-    _EARNINGS_WINDOW_OVERRIDE = (
+    _CATALYST_WINDOW_OVERRIDE = (
         int(overrides["catalyst_window_days"])
         if "catalyst_window_days" in overrides else None
     )
