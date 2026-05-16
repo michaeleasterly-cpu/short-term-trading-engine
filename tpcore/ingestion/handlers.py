@@ -651,6 +651,17 @@ async def handle_sec_filings(pool: asyncpg.Pool, config: dict[str, Any]) -> int 
         chunks = [universe[i:i + chunk_size]
                   for i in range(0, len(universe), chunk_size)]
 
+    # ``eight_k_only`` runs the per-ticker path for 8-K material events
+    # only (insider is covered by the bulk Form-345 ETL). 8-K item
+    # codes come from the submissions index — one request per issuer,
+    # no per-document XML — so a full-history pull is fast.
+    # ``full_history`` additionally follows the older submissions
+    # shards so a 2018→now backfill doesn't miss filings aged out of
+    # ``recent`` for prolific filers.
+    sec_forms = (("8-K",) if config.get("eight_k_only")
+                 else ("4", "8-K"))
+    full_history = bool(config.get("full_history", False))
+
     rows_loaded = downloaded = rejected = ticker_hits = 0
     loaded_insider = loaded_material = 0
     end_date = datetime.now(UTC).date().isoformat()
@@ -666,6 +677,7 @@ async def handle_sec_filings(pool: asyncpg.Pool, config: dict[str, Any]) -> int 
         try:
             c_ins, c_mat, c_dl, c_rej, c_hits = await _sec_download_to_csv(
                 chunk, since, insider_csv, material_csv,
+                forms=sec_forms, full_history=full_history,
             )
             c_li, c_lm = await _sec_load_csvs_to_db(pool, c_ins, c_mat)
         except Exception as exc:
@@ -734,6 +746,9 @@ async def _sec_download_to_csv(
     since: Any,  # datetime.date
     insider_csv: Any,  # Path
     material_csv: Any,  # Path
+    *,
+    forms: tuple[str, ...] = ("4", "8-K"),
+    full_history: bool = False,
 ) -> tuple[list[tuple], list[tuple], int, int, int]:
     """Adapter loop — pulls submission indexes + Form 4 XMLs, writes CSV.
 
@@ -764,7 +779,8 @@ async def _sec_download_to_csv(
             for ticker in universe:
                 try:
                     filings = await sec.get_recent_filings(
-                        ticker, forms=("4", "8-K"), since=since,
+                        ticker, forms=forms, since=since,
+                        full_history=full_history,
                     )
                 except Exception as exc:
                     logger.warning(

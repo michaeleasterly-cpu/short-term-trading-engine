@@ -47,7 +47,7 @@ def _patch(monkeypatch, *, fail_chunks=()):
     """Stub the download + load helpers; record which ticker chunks ran."""
     seen: list[list[str]] = []
 
-    async def fake_dl(universe, since, ins_csv, mat_csv):
+    async def fake_dl(universe, since, ins_csv, mat_csv, **_kw):
         seen.append(list(universe))
         if len(seen) in fail_chunks:
             raise RuntimeError("simulated pooler: connection was closed")

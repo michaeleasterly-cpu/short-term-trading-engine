@@ -899,28 +899,46 @@ After step 3, run `python scripts/ops.py --check --pretty` and confirm the `sec_
 
 ### Historical backfill from 2018-01-01
 
-Single command — the stage self-verifies:
+Two datasets, two mechanisms (a bulk **file** download is a different
+pipeline than a per-issuer **API** crawl — #132, 2026-05-16):
+
+**Insider transactions — bulk Form-345 ETL** (the ~30h per-ticker
+Form-4 XML crawl was the wrong tool):
 
 ```bash
 python scripts/ops.py --stage sec_filings --backfill
 ```
 
-The `--backfill` flag tells the stage to:
-- Override the default 90-day lookback to `2018-01-01 → today` (~7 years).
-- Drop the per-run ticker cap (`max_tickers=None` — full T1+T2 stock universe).
-- Bypass the 6-day skip-guard (one-shot historical fill).
+Real two-phase ETL: **Phase 1 Extract** downloads the ~33 quarterly
+`*_form345.zip` datasets (~336 MB) to a durable `data/sec_backfill/raw/`
+cache (a valid zip already on disk is *not* re-downloaded — resumable,
+replayable offline). **Phase 2** transforms → validates-at-CSV →
+idempotent `ON CONFLICT` load → gzip, one short txn per quarter
+(pooler-safe). Runtime **~2.5 min**. Verified 2026-05-16: insider
+**646,107 rows, 1,262/1,501 T1+T2 stocks (84.1%)**, 2018→2026.
 
-**Self-verification output** (emitted as `ops.stage.sec_filings.done` event + printed in the STAGE SUMMARY table):
-- `rows_loaded` — total new rows persisted this run.
-- `insider_rows_total` / `material_rows_total` — table-wide counts after the run.
-- `tickers_covered_insider` / `tickers_covered_material` — distinct ticker counts.
-- `earliest_filing` / `latest_filing` — actual date span achieved.
+**8-K material events — historical API backfill** (no bulk 8-K dataset
+exists; item codes live only in the per-issuer submissions index):
 
-**Expectations:**
-- Runtime ~4-8 hours at SEC's 10 req/sec courtesy budget for ~60-70 T1+T2 stock tickers × thousands of historical filings each.
-- Inter-request sleep of 0.12s built into the adapter (~8 req/sec sustained).
-- CSV artifacts land under `data/sec_backfill/` and gzip on success.
-- `@with_retry(max=4, backoff=2s, cap=60s)` handles transient 429/5xx; permanent 4xx-not-429 raises `DataProviderOutage` and skips the ticker.
+```bash
+python scripts/ops.py --stage sec_filings --param eight_k_backfill=true
+```
+
+Per-issuer submissions crawl, 8-K only (no per-document XML), chunked +
+idempotent + CSV-first. `full_history=True` follows the older
+`filings.files` shards so a 2018→now pull is complete for prolific
+filers (not just whatever is still in SEC's ~1000-filing `recent`
+block). Runtime **~14 min**. Verified 2026-05-16: material events
+**237,680 rows, 1,278/1,501 T1+T2 stocks (85.1%)**, 2018→2026.
+
+The per-ticker `SECEdgarAdapter` (default, `recent`-only, no
+`full_history`) remains the cheap daily/weekly incremental — unchanged.
+
+**Self-verification** (emitted as `ops.stage.sec_filings.done` + STAGE
+SUMMARY): `rows_loaded`, table-wide totals, distinct-ticker counts,
+date span. CSV artifacts land under `data/sec_backfill/`; raw bulk zips
+under `data/sec_backfill/raw/`. `@with_retry` handles transient
+429/5xx; permanent 4xx raises `DataProviderOutage`.
 
 ### Verification queries
 

@@ -255,3 +255,85 @@ def test_parse_8k_items_handles_csv_and_blank():
 def test_missing_user_agent_env_raises_fail_fast():
     with patch.dict(os.environ, {}, clear=True), pytest.raises(DataProviderOutage):
         SECEdgarAdapter()
+
+
+# ── full_history: follow older submissions shards (#158) ───────────────
+
+_SUBS_WITH_SHARDS = {
+    "cik": "320193",
+    "filings": {
+        "recent": {
+            "form": ["8-K"],
+            "filingDate": ["2026-05-09"],
+            "accessionNumber": ["a-recent"],
+            "primaryDocument": ["r.htm"],
+            "items": ["2.02"],
+        },
+        "files": [{
+            "name": "CIK0000320193-submissions-001.json",
+            "filingFrom": "2018-01-02", "filingTo": "2021-12-31",
+            "filingCount": 2,
+        }],
+    },
+}
+_SHARD_001 = {
+    "form": ["8-K", "4"],
+    "filingDate": ["2019-06-01", "2019-06-02"],
+    "accessionNumber": ["a-old", "a-old4"],
+    "primaryDocument": ["o.htm", "o4.xml"],
+    "items": ["5.02", ""],
+}
+
+
+@pytest.mark.asyncio
+async def test_full_history_follows_shards():
+    def handler(req: httpx.Request) -> httpx.Response:
+        u = str(req.url)
+        if "company_tickers.json" in u:
+            return httpx.Response(200, json=_TICKER_MAP_PAYLOAD)
+        if "submissions-001.json" in u:
+            return httpx.Response(200, json=_SHARD_001)
+        if "submissions/CIK" in u:
+            return httpx.Response(200, json=_SUBS_WITH_SHARDS)
+        return httpx.Response(404)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    with patch.dict(os.environ, _ua_env(), clear=False):
+        async with SECEdgarAdapter(client=client) as sec:
+            recent_only = await sec.get_recent_filings(
+                "AAPL", forms=("8-K",), since=date(2018, 1, 1),
+            )
+            full = await sec.get_recent_filings(
+                "AAPL", forms=("8-K",), since=date(2018, 1, 1),
+                full_history=True,
+            )
+    # Default: only `recent` (~1000 latest) — unchanged behaviour.
+    assert [f["filing_date"] for f in recent_only] == [date(2026, 5, 9)]
+    # full_history: recent + the older shard's 8-K merged.
+    assert sorted(f["filing_date"] for f in full) == [
+        date(2019, 6, 1), date(2026, 5, 9)]
+
+
+@pytest.mark.asyncio
+async def test_full_history_skips_out_of_window_shard():
+    """A shard whose filingTo < since must NOT be fetched (efficiency +
+    correctness — no decade-old pulls for a recent window)."""
+    def handler(req: httpx.Request) -> httpx.Response:
+        u = str(req.url)
+        if "company_tickers.json" in u:
+            return httpx.Response(200, json=_TICKER_MAP_PAYLOAD)
+        if "submissions-001.json" in u:
+            return httpx.Response(500)  # must never be hit
+        if "submissions/CIK" in u:
+            return httpx.Response(200, json=_SUBS_WITH_SHARDS)
+        return httpx.Response(404)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    with patch.dict(os.environ, _ua_env(), clear=False):
+        async with SECEdgarAdapter(client=client) as sec:
+            res = await sec.get_recent_filings(
+                "AAPL", forms=("8-K",), since=date(2023, 1, 1),
+                full_history=True,
+            )
+    # Shard (filingTo 2021) is out of the 2023+ window → skipped, no 500.
+    assert [f["filing_date"] for f in res] == [date(2026, 5, 9)]

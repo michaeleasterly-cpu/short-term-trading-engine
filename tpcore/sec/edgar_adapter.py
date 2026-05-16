@@ -163,13 +163,22 @@ class SECEdgarAdapter:
         *,
         forms: Iterable[str] = ("4", "8-K"),
         since: date | None = None,
+        full_history: bool = False,
     ) -> list[dict[str, Any]]:
-        """Return submission-index rows for the ticker's recent filings.
+        """Return submission-index rows for the ticker's filings.
 
         Each row carries ``form``, ``filing_date``, ``accession_number``,
         ``primary_document``, and ``items`` (8-K item-codes; empty for
         Form 4). The caller decides whether to fetch + parse the Form 4
         body — see ``parse_form4_transactions``.
+
+        By default only ``filings.recent`` (SEC's ~1000 latest) is read
+        — correct + cheap for the daily/weekly incremental. With
+        ``full_history=True`` the older ``filings.files`` shards whose
+        date range overlaps ``since..today`` are also fetched and
+        merged, so a historical backfill does not silently miss filings
+        that aged out of ``recent`` for prolific filers. Default is
+        unchanged behaviour (no impact on existing callers/engines).
 
         Raises ``DataProviderOutage`` on permanent failure (unknown
         ticker, 4xx-not-429, exhausted retries).
@@ -185,35 +194,60 @@ class SECEdgarAdapter:
             return []
         url = f"{_SUBMISSIONS_BASE}/submissions/CIK{_cik_to_padded(cik)}.json"
         payload = await self._fetch_raw(url)
-        recent = (payload or {}).get("filings", {}).get("recent", {}) or {}
-        if not recent:
-            return []
-
-        forms_list = recent.get("form", []) or []
-        dates_list = recent.get("filingDate", []) or []
-        acc_list = recent.get("accessionNumber", []) or []
-        primary_list = recent.get("primaryDocument", []) or []
-        items_list = recent.get("items", []) or []
-
+        filings = (payload or {}).get("filings", {}) or {}
         forms_filter = {str(f).upper() for f in forms}
         results: list[dict[str, Any]] = []
-        for i, form in enumerate(forms_list):
-            if str(form).upper() not in forms_filter:
-                continue
-            filing_date = _parse_filing_date(dates_list[i]) if i < len(dates_list) else None
-            if filing_date is None:
-                continue
-            if since is not None and filing_date < since:
-                continue
-            results.append({
-                "ticker": ticker_n,
-                "cik": cik,
-                "form": str(form).upper(),
-                "filing_date": filing_date,
-                "accession_number": str(acc_list[i]) if i < len(acc_list) else "",
-                "primary_document": str(primary_list[i]) if i < len(primary_list) else "",
-                "items": str(items_list[i]) if i < len(items_list) else "",
-            })
+
+        def _emit(block: dict[str, Any]) -> None:
+            forms_list = block.get("form", []) or []
+            dates_list = block.get("filingDate", []) or []
+            acc_list = block.get("accessionNumber", []) or []
+            primary_list = block.get("primaryDocument", []) or []
+            items_list = block.get("items", []) or []
+            for i, form in enumerate(forms_list):
+                if str(form).upper() not in forms_filter:
+                    continue
+                fd = (_parse_filing_date(dates_list[i])
+                      if i < len(dates_list) else None)
+                if fd is None:
+                    continue
+                if since is not None and fd < since:
+                    continue
+                results.append({
+                    "ticker": ticker_n,
+                    "cik": cik,
+                    "form": str(form).upper(),
+                    "filing_date": fd,
+                    "accession_number": (str(acc_list[i])
+                                         if i < len(acc_list) else ""),
+                    "primary_document": (str(primary_list[i])
+                                         if i < len(primary_list) else ""),
+                    "items": (str(items_list[i])
+                              if i < len(items_list) else ""),
+                })
+
+        recent = filings.get("recent", {}) or {}
+        if recent:
+            _emit(recent)
+
+        if full_history:
+            # Older filings live in dated shards under ``filings.files``.
+            # Fetch only the shards whose [filingFrom, filingTo] overlaps
+            # the requested window — complete for ``since``, without
+            # pulling decades of irrelevant history.
+            for shard in filings.get("files", []) or []:
+                name = shard.get("name")
+                if not name:
+                    continue
+                if since is not None:
+                    s_to = _parse_filing_date(str(shard.get("filingTo", "")))
+                    if s_to is not None and s_to < since:
+                        continue
+                shard_payload = await self._fetch_raw(
+                    f"{_SUBMISSIONS_BASE}/submissions/{name}"
+                )
+                _emit(shard_payload or {})
+
         return results
 
     # ── Form 4 XML parsing ────────────────────────────────────────────

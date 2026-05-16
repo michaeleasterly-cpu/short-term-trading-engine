@@ -1064,7 +1064,10 @@ async def _stage_aaii_sentiment(
     return {"rows_loaded": int(rows or 0)}
 
 
-async def _stage_sec_filings(pool: asyncpg.Pool, *, backfill: bool = False) -> dict[str, Any]:
+async def _stage_sec_filings(
+    pool: asyncpg.Pool, *, backfill: bool = False,
+    cfg: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Weekly SEC EDGAR Form 4 + 8-K ingest.
 
     Reference implementation of the standard data-adapter pipeline
@@ -1088,7 +1091,52 @@ async def _stage_sec_filings(pool: asyncpg.Pool, *, backfill: bool = False) -> d
     from tpcore.ingestion.handlers import handle_sec_filings
 
     log = structlog.get_logger("scripts.ops")
+    cfg = cfg or {}
     config: dict[str, Any] = {}
+
+    # One-time 8-K historical backfill (material events). 8-K item
+    # codes are not in any SEC bulk dataset (verified) — they come
+    # from the per-issuer submissions index, one request per issuer
+    # (no per-document XML), so a full-history pull is fast. Driven
+    # canonically by ``--param eight_k_backfill=true``. full_history
+    # follows the older submissions shards so 2018→now is complete
+    # for prolific filers, not just whatever is still in `recent`.
+    if cfg.get("eight_k_backfill"):
+        today = datetime.now(UTC).date()
+        config = {
+            "lookback_days": (today - _date(2018, 1, 1)).days,
+            "max_tickers": None,
+            "skip_guard_days": 0,
+            "eight_k_only": True,
+            "full_history": True,
+            "ticker_chunk_size": 200,
+        }
+        log.info(
+            "ops.stage.sec_filings.eight_k_backfill_start",
+            start_date="2018-01-01", end_date=today.isoformat(),
+        )
+        try:
+            rows = await handle_sec_filings(pool, config)
+        except Exception as exc:
+            log.error("ops.stage.sec_filings.failed",
+                      error=str(exc), eight_k_backfill=True)
+            raise
+        async with pool.acquire() as conn:
+            snap = await conn.fetchrow(
+                "SELECT COUNT(*) r, COUNT(DISTINCT ticker) t, "
+                "MIN(filing_date) mn, MAX(filing_date) mx "
+                "FROM platform.sec_material_events"
+            )
+        out = {
+            "eight_k_backfill": True, "rows_loaded": int(rows or 0),
+            "material_rows_total": int(snap["r"] or 0),
+            "tickers_covered_material": int(snap["t"] or 0),
+            "earliest": snap["mn"].isoformat() if snap["mn"] else None,
+            "latest": snap["mx"].isoformat() if snap["mx"] else None,
+        }
+        log.info("ops.stage.sec_filings.done", **out)
+        return out
+
     if backfill:
         today = datetime.now(UTC).date()
         lookback_days = (today - _date(2018, 1, 1)).days
@@ -1388,7 +1436,7 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # 2-business-day filing deadline so 6d staleness was half-stale on
     # average. Heavy timeout: ~200 tickers × ~1.5s/call (rate-limited
     # under SEC's 10 req/sec cap) + Form 4 XML fetches.
-    ("sec_filings",         lambda pool, cfg: (lambda: _stage_sec_filings(pool, backfill=bool(cfg.get("_sec_backfill")))), SEC_FILINGS_STAGE_TIMEOUT_SEC),
+    ("sec_filings",         lambda pool, cfg: (lambda: _stage_sec_filings(pool, backfill=bool(cfg.get("_sec_backfill")), cfg=cfg)), SEC_FILINGS_STAGE_TIMEOUT_SEC),
     # FRED macro indicators — weekly. Five canonical series (sahm_rule,
     # industrial_production, initial_claims, yield_curve, hy_spread)
     # via FREDAdapter, idempotent ON CONFLICT, 7-day skip-guard.
