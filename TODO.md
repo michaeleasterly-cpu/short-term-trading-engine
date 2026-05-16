@@ -36,6 +36,34 @@ Single focus until further notice — no engine/Sigma-redesign work. Sequence:
      before going live. NOT done; awaiting explicit go + validation.
    - then the tracked `catalyst→earnings` rename (below).
 
+## Per-engine data gates (operator idea 2026-05-16, tracked — NOT started)
+
+**Merit: real and growing.** Today the gate is global all-or-nothing —
+`DATA_OPERATIONS_COMPLETE` / `run_all_engines.sh` / `capital_gate`
+require ALL validation checks green or NO engine trades. But each
+engine consumes a different data subset: Sentinel→macro/credit
+(hy_spread, credit_spread, macro_indicators); Vector→catalyst_events +
+fundamentals; Momentum→prices_daily only; etc. `options_max_pain` and
+`insider_sentiment` (added today) are consumed by **no current engine**
+— yet under the global gate a red `insider_sentiment_freshness` would
+block even Momentum. Over-blocks now; worse with every new adapter.
+
+**Design:** a per-engine data-dependency map → engine X trades iff the
+checks for the data X actually reads are green. Synergizes with the
+selfheal orchestrator (per-engine escalation scoping).
+
+**Constraints / why not now:**
+- This is a **production trade-gating change** (touches capital_gate /
+  emit / run_all_engines). NO PRODUCTION CHANGE without validation +
+  explicit operator go (SCOPE DISCIPLINE).
+- Stays consistent with the "100% data or don't trade" mandate — it's
+  a *refinement* (each engine still needs 100% of ITS data), not a
+  weakening. State that explicitly when built.
+- The per-engine dependency map must be **derived from each engine's
+  actual data reads** (grep the plugs), NOT invented. That derivation
+  is the first sub-task.
+- Sits behind the WEEK GOAL data-layer work + #132 in priority.
+
 ## Rename: `catalyst_*` → `earnings_*` (tracked, DEFERRED behind data layer)
 
 **Decision (operator, 2026-05-16): the rename WILL happen — but only
