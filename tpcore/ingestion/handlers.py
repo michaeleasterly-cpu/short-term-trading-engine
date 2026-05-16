@@ -589,6 +589,33 @@ async def handle_sec_filings(pool: asyncpg.Pool, config: dict[str, Any]) -> int 
         )
         return 0
 
+    # ── 1b. Targeted backfill: skip already-covered tickers ──────────
+    # The historical bootstrap re-running the whole universe is what
+    # hung on the pooler. ``skip_covered`` makes the backfill BOUNDED
+    # and TARGETED (same principle as daily_bars repair_gaps): only
+    # tickers with zero SEC rows are pulled, so a resumed run converges
+    # instead of re-walking the done set. Daily path leaves this off.
+    if config.get("skip_covered"):
+        async with pool.acquire() as conn:
+            covered = await conn.fetch(
+                """
+                SELECT ticker FROM platform.sec_insider_transactions
+                UNION
+                SELECT ticker FROM platform.sec_material_events
+                """
+            )
+        covered_set = {r["ticker"] for r in covered}
+        before = len(universe)
+        universe = [t for t in universe if t not in covered_set]
+        logger.info(
+            "ingestion.handler.sec_filings.skip_covered",
+            already_covered=len(covered_set),
+            universe_before=before, universe_after=len(universe),
+        )
+        if not universe:
+            logger.info("ingestion.handler.sec_filings.all_covered")
+            return 0
+
     lookback_days = int(config.get("lookback_days", 90))
     since = datetime.now(UTC).date() - timedelta(days=lookback_days)
 
@@ -596,27 +623,78 @@ async def handle_sec_filings(pool: asyncpg.Pool, config: dict[str, Any]) -> int 
     repo_root = Path(__file__).resolve().parent.parent.parent
     csv_dir = repo_root / "data" / "sec_backfill"
     csv_dir.mkdir(parents=True, exist_ok=True)
-    run_stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    insider_csv = csv_dir / f"sec_insider_{run_stamp}.csv"
-    material_csv = csv_dir / f"sec_material_{run_stamp}.csv"
 
-    # ── 3. Download + validate-at-CSV-write ──────────────────────────
-    insider_rows, material_rows, downloaded, rejected, ticker_hits = (
-        await _sec_download_to_csv(
-            universe, since, insider_csv, material_csv,
-        )
-    )
+    # ── 3-5. Process in TICKER CHUNKS ────────────────────────────────
+    # Root-cause fix for the pooler "connection was closed" on the
+    # multi-hour bootstrap: each chunk does download → load → commit →
+    # gzip with a fresh short-lived connection, then frees memory. A
+    # crash mid-run keeps every committed chunk (ON CONFLICT DO NOTHING
+    # is idempotent), so a re-run with skip_covered resumes cleanly.
+    # ``ticker_chunk_size`` ≤ 0 (default) = one chunk → byte-identical
+    # to the pre-chunking behaviour for the daily path + tests.
+    chunk_size = int(config.get("ticker_chunk_size", 0))
+    if chunk_size <= 0 or chunk_size >= len(universe):
+        chunks = [universe]
+    else:
+        chunks = [universe[i:i + chunk_size]
+                  for i in range(0, len(universe), chunk_size)]
 
-    # ── 4. Load CSVs → DB (ON CONFLICT DO NOTHING) ───────────────────
-    loaded_insider, loaded_material = await _sec_load_csvs_to_db(
-        pool, insider_rows, material_rows,
-    )
+    rows_loaded = downloaded = rejected = ticker_hits = 0
+    loaded_insider = loaded_material = 0
+    end_date = datetime.now(UTC).date().isoformat()
+    last_csv_insider = last_csv_material = ""
+    multi = len(chunks) > 1
+    chunks_failed = 0
+    for ci, chunk in enumerate(chunks, start=1):
+        run_stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        suffix = f"{run_stamp}_c{ci:04d}" if multi else run_stamp
+        insider_csv = csv_dir / f"sec_insider_{suffix}.csv"
+        material_csv = csv_dir / f"sec_material_{suffix}.csv"
 
-    # ── 5. Compress source CSVs on success ───────────────────────────
-    _gzip_in_place(insider_csv)
-    _gzip_in_place(material_csv)
+        try:
+            c_ins, c_mat, c_dl, c_rej, c_hits = await _sec_download_to_csv(
+                chunk, since, insider_csv, material_csv,
+            )
+            c_li, c_lm = await _sec_load_csvs_to_db(pool, c_ins, c_mat)
+        except Exception as exc:
+            # Multi-chunk bootstrap is resumable: a transient failure
+            # (e.g. a pooler "connection was closed" if the daily
+            # data-ops run overlaps) fails only THIS chunk. Prior
+            # chunks are committed; a re-run with skip_covered picks
+            # up the rest. A single-chunk (daily) run re-raises so the
+            # stage still surfaces the error.
+            if not multi:
+                raise
+            chunks_failed += 1
+            logger.warning(
+                "ingestion.handler.sec_filings.chunk_failed",
+                chunk=ci, chunks_total=len(chunks),
+                chunk_tickers=len(chunk), error=str(exc),
+            )
+            continue
+        _gzip_in_place(insider_csv)
+        _gzip_in_place(material_csv)
 
-    rows_loaded = loaded_insider + loaded_material
+        downloaded += c_dl
+        rejected += c_rej
+        ticker_hits += c_hits
+        loaded_insider += c_li
+        loaded_material += c_lm
+        rows_loaded += c_li + c_lm
+        last_csv_insider = str(insider_csv) + ".gz"
+        last_csv_material = str(material_csv) + ".gz"
+        if multi:
+            # Streamed progress: a crash here still leaves prior chunks
+            # committed, and the operator sees forward motion.
+            logger.info(
+                "ingestion.handler.sec_filings.chunk_done",
+                chunk=ci, chunks_total=len(chunks),
+                chunk_tickers=len(chunk),
+                cum_rows_loaded=rows_loaded,
+                cum_tickers_with_filings=ticker_hits,
+                chunks_failed=chunks_failed,
+            )
+
     logger.info(
         "ingestion.handler.sec_filings.done",
         rows_downloaded=downloaded,
@@ -626,10 +704,12 @@ async def handle_sec_filings(pool: asyncpg.Pool, config: dict[str, Any]) -> int 
         material_loaded=loaded_material,
         tickers_attempted=len(universe),
         tickers_with_filings=ticker_hits,
+        chunks=len(chunks),
+        chunks_failed=chunks_failed,
         date_range_start=since.isoformat(),
-        date_range_end=datetime.now(UTC).date().isoformat(),
-        csv_insider=str(insider_csv) + ".gz",
-        csv_material=str(material_csv) + ".gz",
+        date_range_end=end_date,
+        csv_insider=last_csv_insider,
+        csv_material=last_csv_material,
     )
     return rows_loaded
 

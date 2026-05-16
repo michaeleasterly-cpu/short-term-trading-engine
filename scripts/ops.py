@@ -1096,6 +1096,14 @@ async def _stage_sec_filings(pool: asyncpg.Pool, *, backfill: bool = False) -> d
             "lookback_days": lookback_days,
             "max_tickers": None,
             "skip_guard_days": 0,  # bypass the 6-day skip-guard for the one-shot.
+            # Bounded + resumable bootstrap (#132): chunk the universe so
+            # each chunk commits on a fresh short-lived pooler connection
+            # (the monolithic single-connection multi-hour run is what hit
+            # "connection was closed"), and skip already-covered tickers
+            # so a resumed run converges instead of re-walking the done
+            # set. Idempotent ON CONFLICT makes re-runs safe.
+            "ticker_chunk_size": 40,
+            "skip_covered": True,
         }
         log.info(
             "ops.stage.sec_filings.backfill_start",
