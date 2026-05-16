@@ -1014,6 +1014,39 @@ async def _stage_fear_greed(
     return {"rows_loaded": int(rows or 0)}
 
 
+async def _stage_finra_short_interest(
+    pool: asyncpg.Pool, config: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """FINRA consolidated short interest (T1/T2), bi-monthly, PIT-safe.
+    ``--param skip_guard_days=0`` forces a re-pull (self-heal)."""
+    from tpcore.ingestion.handlers import handle_finra_short_interest
+
+    log = structlog.get_logger("scripts.ops")
+    try:
+        rows = await handle_finra_short_interest(pool, config or {})
+    except Exception as exc:
+        log.error("ops.stage.finra_short_interest.failed", error=str(exc))
+        raise
+    return {"rows_loaded": int(rows or 0)}
+
+
+async def _stage_iborrowdesk_borrow_rates(
+    pool: asyncpg.Pool, config: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """IBorrowDesk daily borrow rates (T1/T2). Scrape-fragile — the
+    handler skips (never crashes) on repeated blocks. ``--param
+    skip_guard_hours=0`` forces a re-pull (self-heal)."""
+    from tpcore.ingestion.handlers import handle_iborrowdesk_borrow_rates
+
+    log = structlog.get_logger("scripts.ops")
+    try:
+        rows = await handle_iborrowdesk_borrow_rates(pool, config or {})
+    except Exception as exc:
+        log.error("ops.stage.iborrowdesk_borrow_rates.failed", error=str(exc))
+        raise
+    return {"rows_loaded": int(rows or 0)}
+
+
 async def _stage_sec_filings(pool: asyncpg.Pool, *, backfill: bool = False) -> dict[str, Any]:
     """Weekly SEC EDGAR Form 4 + 8-K ingest.
 
@@ -1345,6 +1378,11 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # Fear & Greed: derived from existing platform data (no provider).
     # Daily recompute; --param backfill=true for full 2001→ history.
     ("fear_greed",          lambda pool, cfg: (lambda: _stage_fear_greed(pool, cfg)),            STAGE_TIMEOUT_SEC),
+    # FINRA short interest (bi-monthly, OAuth2, PIT release_date) and
+    # IBorrowDesk borrow rates (daily, scrape-fragile). Final 2 of the
+    # master-plan data layer. Added 2026-05-16.
+    ("finra_short_interest", lambda pool, cfg: (lambda: _stage_finra_short_interest(pool, cfg)), HEAVY_STAGE_TIMEOUT_SEC),
+    ("iborrowdesk_borrow_rates", lambda pool, cfg: (lambda: _stage_iborrowdesk_borrow_rates(pool, cfg)), HEAVY_STAGE_TIMEOUT_SEC),
     # data_validation runs the 10-check suite against the live tables —
     # at the current 20M-row prices_daily it consistently runs ~120-
     # 130s. Bumping to 5 min gives headroom without masking a true hang.
@@ -2617,6 +2655,51 @@ async def _check_fear_greed(pool: asyncpg.Pool) -> dict[str, Any]:
     }
 
 
+async def _check_finra_short_interest(pool: asyncpg.Pool) -> dict[str, Any]:
+    """Dashboard probe — FINRA short-interest freshness (bi-monthly).
+    Green ≤21d, yellow ≤35d, red >35d / empty."""
+    row = await pool.fetchrow(
+        """
+        SELECT MAX(settlement_date) latest, COUNT(*) n,
+               COUNT(*) FILTER (WHERE short_interest_pct IS NOT NULL) with_pct
+        FROM platform.short_interest
+        """
+    )
+    latest = row["latest"] if row else None
+    if latest is None:
+        return {"ok": False, "reason": "no short_interest rows", "rows": 0}
+    age = (date.today() - latest).days
+    return {
+        "ok": age <= 21, "warn": 21 < age <= 35,
+        "summary": f"FINRA short interest: latest settlement {latest.isoformat()} ({age}d)",
+        "rows": int(row["n"]), "with_pct": int(row["with_pct"]), "age_days": age,
+    }
+
+
+async def _check_iborrowdesk_borrow_rates(pool: asyncpg.Pool) -> dict[str, Any]:
+    """Dashboard probe — IBorrowDesk borrow-rate freshness (daily).
+    Green ≤2d, yellow ≤5d, red >5d / empty."""
+    row = await pool.fetchrow(
+        """
+        SELECT MAX(date) latest,
+               COUNT(DISTINCT ticker) FILTER (
+                   WHERE date = (SELECT MAX(date) FROM platform.borrow_rates)
+               ) tickers
+        FROM platform.borrow_rates
+        """
+    )
+    latest = row["latest"] if row else None
+    if latest is None:
+        return {"ok": False, "reason": "no borrow_rates rows (scrape blocked?)",
+                "summary": "Borrow rates: no data"}
+    age = (date.today() - latest).days
+    return {
+        "ok": age <= 2, "warn": 2 < age <= 5,
+        "summary": f"Borrow rates: {int(row['tickers'])} tickers / latest {latest.isoformat()}",
+        "tickers": int(row["tickers"]), "age_days": age,
+    }
+
+
 _CHECK_FNS = [
     ("db_connectivity", _check_connectivity),
     ("data_freshness", _check_freshness),
@@ -2630,6 +2713,8 @@ _CHECK_FNS = [
     ("insider_sentiment_freshness", _check_finnhub_insider_sentiment),
     ("social_sentiment_freshness", _check_apewisdom_social_sentiment),
     ("fear_greed", _check_fear_greed),
+    ("short_interest_freshness", _check_finra_short_interest),
+    ("borrow_rates_freshness", _check_iborrowdesk_borrow_rates),
     ("liquidity_tiers_freshness", _check_liquidity_tiers_freshness),
     ("ticker_classifications", _check_ticker_classifications),
     ("engine_schedulers", _check_engine_schedulers),

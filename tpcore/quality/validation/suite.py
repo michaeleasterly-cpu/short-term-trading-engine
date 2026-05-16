@@ -24,6 +24,8 @@ import structlog
 
 from tpcore.quality.data_quality import DataQualityScore, DataQualityWriter
 
+from .checks.borrow_rates_freshness import CHECK_NAME as BORROW_RATES_NAME
+from .checks.borrow_rates_freshness import check_borrow_rates_freshness
 from .checks.catalyst_freshness import CHECK_NAME as CATALYST_FRESHNESS_NAME
 from .checks.catalyst_freshness import check_catalyst_freshness
 from .checks.constituent import (
@@ -56,6 +58,8 @@ from .checks.row_integrity import CHECK_NAME as ROW_INTEGRITY_NAME
 from .checks.row_integrity import check_row_integrity
 from .checks.sec_filings_freshness import CHECK_NAME as SEC_FRESHNESS_NAME
 from .checks.sec_filings_freshness import check_sec_filings_freshness
+from .checks.short_interest_freshness import CHECK_NAME as SHORT_INTEREST_NAME
+from .checks.short_interest_freshness import check_short_interest_freshness
 from .checks.social_sentiment_freshness import CHECK_NAME as SOCIAL_SENTIMENT_NAME
 from .checks.social_sentiment_freshness import check_social_sentiment_freshness
 from .checks.splits import CHECK_NAME as SPLITS_NAME
@@ -94,6 +98,8 @@ KNOWN_CHECK_NAMES: tuple[str, ...] = (
     INSIDER_SENTIMENT_NAME,
     SOCIAL_SENTIMENT_NAME,
     FEAR_GREED_NAME,
+    SHORT_INTEREST_NAME,
+    BORROW_RATES_NAME,
 )
 
 
@@ -166,6 +172,12 @@ async def run_suite(
     fear_greed_task = _safe_run(
         FEAR_GREED_NAME, check_fear_greed_freshness, pool, None
     )
+    short_interest_task = _safe_run(
+        SHORT_INTEREST_NAME, check_short_interest_freshness, pool, None
+    )
+    borrow_rates_task = _safe_run(
+        BORROW_RATES_NAME, check_borrow_rates_freshness, pool, None
+    )
     (
         delistings_result, constituent_result, splits_result,
         row_integrity_result, fund_integrity_result, ca_integrity_result,
@@ -173,6 +185,7 @@ async def run_suite(
         macro_result, prices_result, completeness_result,
         options_maxpain_result, insider_sentiment_result,
         social_sentiment_result, fear_greed_result,
+        short_interest_result, borrow_rates_result,
     ) = await asyncio.gather(
         delistings_task, constituent_task, splits_task,
         row_integrity_task, fund_integrity_task, ca_integrity_task,
@@ -180,6 +193,7 @@ async def run_suite(
         macro_task, prices_task, completeness_task,
         options_maxpain_task, insider_sentiment_task,
         social_sentiment_task, fear_greed_task,
+        short_interest_task, borrow_rates_task,
     )
     checks: list[CheckResult] = [
         delistings_result, constituent_result, splits_result,
@@ -188,6 +202,7 @@ async def run_suite(
         macro_result, prices_result, completeness_result,
         options_maxpain_result, insider_sentiment_result,
         social_sentiment_result, fear_greed_result,
+        short_interest_result, borrow_rates_result,
     ]
 
     finished_at = datetime.now(UTC)

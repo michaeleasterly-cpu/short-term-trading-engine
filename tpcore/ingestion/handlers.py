@@ -1466,6 +1466,251 @@ async def handle_fear_greed(
     return len(rows)
 
 
+# FINRA disseminates consolidated short interest ~8 NYSE sessions after
+# the settlement date. release_date = settlement + this many sessions is
+# a conservative PIT-safe estimate (never lets a backtest see the data
+# before it could have existed; erring late, not early).
+_FINRA_DISSEM_SESSIONS = 9
+
+
+async def handle_finra_short_interest(
+    pool: asyncpg.Pool, config: dict[str, Any]
+) -> int | None:
+    """FINRA consolidated short interest → ``platform.short_interest``,
+    filtered to the T1/T2 stock universe. Bi-monthly → 12-day
+    skip-guard. ``short_interest_pct`` derived from the most-recent
+    PIT-safe ``fundamentals_quarterly.shares_outstanding``
+    (period_end_date ≤ settlement_date); NULL if unavailable. PIT
+    ``release_date`` = settlement + conservative NYSE-session lag.
+    ``config``: ``since`` (ISO; default last 90d), ``skip_guard_days``
+    (default 12; 0 forces re-pull — self-heal).
+    """
+    from datetime import UTC
+    from datetime import date as _date
+    from datetime import timedelta as _td
+
+    from tpcore import calendar as cal
+    from tpcore.finra import FinraAdapter
+
+    skip_days = int(config.get("skip_guard_days", 12))
+    if skip_days > 0:
+        async with pool.acquire() as conn:
+            newest = await conn.fetchval(
+                "SELECT MAX(recorded_at) FROM platform.short_interest"
+            )
+        if newest is not None and (datetime.now(UTC) - newest).days < skip_days:
+            logger.info(
+                "ingestion.handler.short_interest.skipped_fresh",
+                last_refresh_age_days=(datetime.now(UTC) - newest).days,
+            )
+            return 0
+
+    sc = config.get("since")
+    since = (_date.fromisoformat(sc) if isinstance(sc, str)
+             else datetime.now(UTC).date() - _td(days=90))
+
+    async with pool.acquire() as conn:
+        urows = await conn.fetch(
+            """
+            SELECT lt.ticker
+            FROM platform.liquidity_tiers lt
+            LEFT JOIN platform.ticker_classifications tc USING (ticker)
+            WHERE lt.tier <= 2 AND COALESCE(tc.asset_class, 'stock') = 'stock'
+            """
+        )
+    universe = {r["ticker"].upper() for r in urows}
+    if not universe:
+        logger.info("ingestion.handler.short_interest.empty_universe")
+        return 0
+
+    async with FinraAdapter() as adapter:
+        records = [r for r in await adapter.get_short_interest(since=since)
+                   if r.ticker in universe]
+    if not records:
+        logger.info("ingestion.handler.short_interest.empty", since=since.isoformat())
+        return 0
+
+    # PIT shares_outstanding: latest filing with period_end_date ≤
+    # settlement_date, per ticker. One query for the involved tickers.
+    tickers = sorted({r.ticker for r in records})
+    async with pool.acquire() as conn:
+        fund = await conn.fetch(
+            """
+            SELECT ticker, period_end_date, shares_outstanding
+            FROM platform.fundamentals_quarterly
+            WHERE ticker = ANY($1::text[]) AND shares_outstanding IS NOT NULL
+            ORDER BY ticker, period_end_date
+            """,
+            tickers,
+        )
+    by_ticker: dict[str, list[tuple]] = {}
+    for f in fund:
+        by_ticker.setdefault(f["ticker"], []).append(
+            (f["period_end_date"], f["shares_outstanding"])
+        )
+
+    def _pit_shares(tk: str, on: _date):
+        cand = [s for (pe, s) in by_ticker.get(tk, []) if pe <= on]
+        return cand[-1] if cand else None  # list is period_end ascending
+
+    rows = []
+    for rec in records:
+        # release_date = settlement + conservative dissemination lag.
+        span = cal.sessions_in_range(
+            rec.settlement_date, rec.settlement_date + _td(days=30)
+        )
+        after = [s for s in span if s > rec.settlement_date]
+        release = (after[_FINRA_DISSEM_SESSIONS - 1]
+                   if len(after) >= _FINRA_DISSEM_SESSIONS
+                   else rec.settlement_date + _td(days=14))
+        shares = _pit_shares(rec.ticker, rec.settlement_date)
+        pct = (
+            round(float(rec.short_position_qty) / float(shares) * 100.0, 4)
+            if shares and float(shares) > 0 else None
+        )
+        rows.append((
+            rec.ticker, rec.settlement_date, release, pct,
+            float(rec.days_to_cover) if rec.days_to_cover is not None else None,
+        ))
+
+    from tpcore.ingestion.csv_archive import write_archive
+    write_archive(
+        "finra_short_interest",
+        [{"ticker": t, "settlement_date": sd.isoformat(),
+          "release_date": rd.isoformat(),
+          "short_interest_pct": "" if p is None else str(p),
+          "days_to_cover": "" if d is None else str(d)}
+         for (t, sd, rd, p, d) in rows],
+        fieldnames=["ticker", "settlement_date", "release_date",
+                    "short_interest_pct", "days_to_cover"],
+        validator=lambda x: bool(x.get("ticker")) and bool(x.get("settlement_date")),
+    )
+    async with pool.acquire() as conn:
+        await conn.executemany(
+            """
+            INSERT INTO platform.short_interest
+                (ticker, settlement_date, release_date,
+                 short_interest_pct, days_to_cover)
+            VALUES ($1,$2,$3,$4,$5)
+            ON CONFLICT (ticker, settlement_date) DO UPDATE SET
+                release_date=EXCLUDED.release_date,
+                short_interest_pct=EXCLUDED.short_interest_pct,
+                days_to_cover=EXCLUDED.days_to_cover,
+                recorded_at=now()
+            """,
+            rows,
+        )
+    logger.info(
+        "ingestion.handler.short_interest.done",
+        rows=len(rows), universe=len(universe),
+        with_pct=sum(1 for r in rows if r[3] is not None),
+    )
+    return len(rows)
+
+
+async def handle_iborrowdesk_borrow_rates(
+    pool: asyncpg.Pool, config: dict[str, Any]
+) -> int | None:
+    """IBorrowDesk latest borrow rate per T1/T2 stock →
+    ``platform.borrow_rates``. Daily → 1-day skip-guard. Scrape-fragile:
+    3 CONSECUTIVE failures → CRITICAL log + skip (never crash). Per-
+    ticker failures are isolated and counted. ``config``:
+    ``skip_guard_hours`` (default 24; 0 forces re-pull — self-heal);
+    ``max_tickers`` (default None = full T1/T2 universe; a positive int
+    caps the per-run loop for bounded e2e / targeted self-heal).
+    """
+    from datetime import UTC
+    from datetime import timedelta as _td
+
+    from tpcore.iborrowdesk import IBorrowDeskAdapter
+    from tpcore.outage import DataProviderOutage
+
+    skip_hours = int(config.get("skip_guard_hours", 24))
+    if skip_hours > 0:
+        async with pool.acquire() as conn:
+            newest = await conn.fetchval(
+                "SELECT MAX(recorded_at) FROM platform.borrow_rates"
+            )
+        if newest is not None and (datetime.now(UTC) - newest) < _td(hours=skip_hours):
+            logger.info(
+                "ingestion.handler.borrow_rates.skipped_fresh",
+                last_refresh=newest.isoformat(),
+            )
+            return 0
+
+    async with pool.acquire() as conn:
+        urows = await conn.fetch(
+            """
+            SELECT lt.ticker
+            FROM platform.liquidity_tiers lt
+            LEFT JOIN platform.ticker_classifications tc USING (ticker)
+            WHERE lt.tier <= 2 AND COALESCE(tc.asset_class, 'stock') = 'stock'
+            ORDER BY lt.ticker
+            """
+        )
+    universe = [r["ticker"].upper() for r in urows]
+    if not universe:
+        logger.info("ingestion.handler.borrow_rates.empty_universe")
+        return 0
+    max_tickers = config.get("max_tickers")
+    if max_tickers is not None and len(universe) > int(max_tickers):
+        universe = universe[: int(max_tickers)]
+
+    rows: list[tuple] = []
+    consecutive_fail = 0
+    failures = 0
+    async with IBorrowDeskAdapter() as adapter:
+        for tk in universe:
+            try:
+                rec = await adapter.get_latest_borrow_rate(tk)
+                consecutive_fail = 0
+            except DataProviderOutage as exc:
+                failures += 1
+                consecutive_fail += 1
+                if consecutive_fail >= 3:
+                    logger.critical(
+                        "ingestion.handler.borrow_rates.site_unreachable",
+                        consecutive_failures=consecutive_fail,
+                        last_error=str(exc), processed=len(rows),
+                        reason="3 consecutive IBorrowDesk failures — "
+                               "skipping rest, NOT crashing pipeline",
+                    )
+                    break
+                continue
+            if rec is not None:
+                rows.append((rec.ticker, rec.date, float(rec.borrow_rate_pct)))
+
+    if not rows:
+        logger.warning(
+            "ingestion.handler.borrow_rates.empty",
+            reason="no reachable borrow data", failures=failures,
+        )
+        return 0
+
+    from tpcore.ingestion.csv_archive import write_archive
+    write_archive(
+        "iborrowdesk_borrow_rates",
+        [{"ticker": t, "date": d.isoformat(), "borrow_rate_pct": str(r)}
+         for (t, d, r) in rows],
+        fieldnames=["ticker", "date", "borrow_rate_pct"],
+        validator=lambda x: bool(x.get("ticker")) and bool(x.get("date")),
+    )
+    async with pool.acquire() as conn:
+        await conn.executemany(
+            """
+            INSERT INTO platform.borrow_rates (ticker, date, borrow_rate_pct)
+            VALUES ($1,$2,$3)
+            ON CONFLICT (ticker, date) DO NOTHING
+            """,
+            rows,
+        )
+    logger.info(
+        "ingestion.handler.borrow_rates.done",
+        rows=len(rows), universe=len(universe), failures=failures,
+    )
+    return len(rows)
+
+
 HANDLERS: dict[str, HandlerFn] = {
     "data_validation": handle_data_validation,
     "fundamentals_refresh": handle_fundamentals_refresh,
@@ -1477,6 +1722,8 @@ HANDLERS: dict[str, HandlerFn] = {
     "finnhub_insider_sentiment": handle_finnhub_insider_sentiment,
     "apewisdom_social_sentiment": handle_apewisdom_social_sentiment,
     "fear_greed": handle_fear_greed,
+    "finra_short_interest": handle_finra_short_interest,
+    "iborrowdesk_borrow_rates": handle_iborrowdesk_borrow_rates,
 }
 
 
@@ -1493,4 +1740,6 @@ __all__ = [
     "handle_finnhub_insider_sentiment",
     "handle_apewisdom_social_sentiment",
     "handle_fear_greed",
+    "handle_finra_short_interest",
+    "handle_iborrowdesk_borrow_rates",
 ]

@@ -340,6 +340,22 @@ Populated by the weekly `sec_filings` ops stage (`handle_sec_filings` in `tpcore
 
 The index correctly bottoms at the two worst crashes (COVID < GFC, matching the relative vol shock) and reads Greed in low-vol bull markets — economically sound, not merely row-populated.
 
+#### `platform.short_interest`
+
+**Purpose:** FINRA consolidated bi-monthly short interest for the T1/T2 stock universe. PK `(ticker, settlement_date)`. Columns: `release_date` (nullable-no), `short_interest_pct` (numeric, nullable), `days_to_cover` (numeric, nullable), `recorded_at`. Ingested by `tpcore.finra.FinraAdapter` (OAuth2 client-credentials) → `handle_finra_short_interest` → `finra_short_interest` stage. `short_interest_pct` is derived from PIT `fundamentals_quarterly.shares_outstanding` (latest filing with `period_end_date ≤ settlement_date`); NULL when no PIT shares figure exists (honest gap, never fabricated). Idempotent `ON CONFLICT (ticker, settlement_date) DO UPDATE`. Added 2026-05-16.
+
+**Point-in-time correctness:** `release_date` is stored **separately** from `settlement_date` and is the settlement date plus a conservative ~9-NYSE-session dissemination lag (FINRA publishes mid-month for end-of-prior-period settlement). A DB CHECK enforces `release_date >= settlement_date`. Backtests MUST filter `release_date <= sim_date` (not `settlement_date`) to avoid look-ahead — short interest is unknown to the market until released.
+
+**Refresh cadence:** via the `finra_short_interest` stage; 12-day skip-guard (bi-monthly cadence). `short_interest_freshness` check FAILs if newest `settlement_date` > 35d old; self-heal re-runs the stage (`skip_guard_days=0`).
+
+#### `platform.borrow_rates`
+
+**Purpose:** IBorrowDesk daily stock borrow-fee % (no auth). PK `(ticker, date)`. Columns: `borrow_rate_pct` (numeric, CHECK ≥ 0 and `date <= today+1`), `recorded_at`. Per-ticker over the T1/T2 universe via `tpcore.iborrowdesk.IBorrowDeskAdapter` → `handle_iborrowdesk_borrow_rates` → `iborrowdesk_borrow_rates` stage. Idempotent `ON CONFLICT (ticker, date) DO NOTHING`. Added 2026-05-16 — **completes the master-plan data layer.**
+
+**Scrape-fragility contract:** the source is an unauthenticated scrape that anti-bot-drops under load (HTTP 403/429/444). 429/5xx/network retry via canonical `with_retry`; a permanent block surfaces as `DataProviderOutage`. The handler isolates per-ticker failures and, on **3 consecutive** failures, emits a CRITICAL log and **skips the remainder without crashing the pipeline** (proven live 2026-05-16: 10 rows then 3× HTTP-444 → CRITICAL skip, exit 0). `max_tickers` config caps the per-run loop for bounded e2e / targeted self-heal.
+
+**Refresh cadence:** daily via the `iborrowdesk_borrow_rates` stage; 24h skip-guard. `borrow_rates_freshness` check FAILs if newest `date` > 5d old; self-heal re-runs the stage (`skip_guard_hours=0`).
+
 #### `platform.social_sentiment`
 
 **Purpose:** ApeWisdom Reddit social sentiment (no auth). One row per (ticker, date) — mentions / upvotes / rank + 24h-ago comparators for the T1/T2 stock universe. Ingested by `tpcore.apewisdom.ApeWisdomAdapter` → `handle_apewisdom_social_sentiment` → `apewisdom_social_sentiment` stage (all pages, local T1/T2 filter, 24h skip-guard, idempotent `ON CONFLICT DO NOTHING`). Added 2026-05-16.

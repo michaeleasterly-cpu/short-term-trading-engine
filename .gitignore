@@ -35,6 +35,7 @@ data/alpaca_backfill/
 data/fmp_backfill/
 data/corp_actions_backfill/
 data/sec_backfill/
+data/*_archive/
 logs/
 backtests/
 

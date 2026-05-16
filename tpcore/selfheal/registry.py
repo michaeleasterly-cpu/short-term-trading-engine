@@ -92,6 +92,14 @@ _SPECS: tuple[HealSpec, ...] = (
     # (reads existing platform data; no external pull).
     HealSpec(check_name="fear_greed_freshness", source="fear_greed",
              healable=True, stage="fear_greed", params={}, max_attempts=2),
+    # Stale short interest / borrow rates → re-run the bounded
+    # canonical stage with the skip-guard disabled.
+    HealSpec(check_name="short_interest_freshness", source="finra_short_interest",
+             healable=True, stage="finra_short_interest",
+             params={"skip_guard_days": "0"}, max_attempts=2),
+    HealSpec(check_name="borrow_rates_freshness", source="iborrowdesk_borrow_rates",
+             healable=True, stage="iborrowdesk_borrow_rates",
+             params={"skip_guard_hours": "0"}, max_attempts=2),
 )
 
 HEAL_SPECS: dict[str, HealSpec] = {s.check_name: s for s in _SPECS}

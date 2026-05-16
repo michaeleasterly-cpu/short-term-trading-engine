@@ -62,3 +62,7 @@ engine-service: Long-running daemon at `ops/engine_service.py`. Polls `platform.
 **Social sentiment (ApeWisdom)** — Reddit community mentions/upvotes/rank for a ticker, scanned ~every 2h by apewisdom.io (no auth). Stored daily per ticker in `platform.social_sentiment` with 24h-ago comparators. Used as a multiplier/risk signal, never a standalone entry trigger. Added 2026-05-16.
 
 **Fear & Greed Index (internal)** — 0–100 composite of four normalized components: volatility (VIX vs 50dma), credit (HY-OAS 3yr z-score), momentum (SPY vs 125dma), safe-haven (10Y-2Y). <25 Extreme Fear … ≥75 Extreme Greed. Computed from existing platform data only (no CNN/Yahoo). `tpcore.indicators.fear_greed`. Added 2026-05-16.
+
+**Short interest (FINRA)** — Aggregate shares sold short, reported bi-monthly by FINRA per settlement date. Stored in `platform.short_interest` with `short_interest_pct` (short qty ÷ PIT shares outstanding) and `days_to_cover` (short qty ÷ avg daily volume). **Release vs settlement date:** the market does not learn a settlement-date figure until FINRA *releases* it ~9 NYSE sessions later — `release_date` is stored separately and is the only PIT-safe filter for backtests. Added 2026-05-16.
+
+**Borrow rate (IBorrowDesk)** — Daily cost (annualized %) to borrow a stock for shorting; a hard-to-borrow proxy and short-squeeze risk signal. Scraped (no auth) from iborrowdesk.com into `platform.borrow_rates` per (ticker, date). Source is anti-bot-fragile: the ingest handler skips (never crashes) after 3 consecutive blocks. Added 2026-05-16.

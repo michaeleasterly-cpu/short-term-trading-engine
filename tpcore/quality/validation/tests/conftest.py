@@ -159,6 +159,14 @@ class FakePool:
         if "max(date)" in sql.lower() and "platform.fear_greed" in sql.lower():
             from datetime import UTC, datetime, timedelta
             return datetime.now(UTC).date() - timedelta(days=1)
+        # short_interest_freshness MAX(settlement_date) / borrow_rates
+        # MAX(date): fresh dates so the suite is green for unrelated e2e.
+        if "max(settlement_date)" in sql.lower() and "platform.short_interest" in sql.lower():
+            from datetime import UTC, datetime, timedelta
+            return datetime.now(UTC).date() - timedelta(days=10)
+        if "max(date)" in sql.lower() and "platform.borrow_rates" in sql.lower():
+            from datetime import UTC, datetime, timedelta
+            return datetime.now(UTC).date() - timedelta(days=1)
         return None
 
 
