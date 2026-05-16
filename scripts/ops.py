@@ -575,7 +575,9 @@ async def _stage_cross_ref_cleanup(pool: asyncpg.Pool) -> dict[str, Any]:
     }
 
 
-async def _stage_catalyst_refresh(pool: asyncpg.Pool) -> dict[str, Any]:
+async def _stage_catalyst_refresh(
+    pool: asyncpg.Pool, config: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """Weekly refresh of ``platform.catalyst_events`` (FMP earnings beats).
 
     Vector engine reads EARNINGS_BEAT events from this table. Earnings
@@ -601,22 +603,28 @@ async def _stage_catalyst_refresh(pool: asyncpg.Pool) -> dict[str, Any]:
     from datetime import timedelta as _td
     from types import SimpleNamespace
 
-    # Skip guard.
+    # Skip guard. ``skip_guard_days`` (via --param) mirrors the
+    # _stage_sec_filings contract: default 6; set 0 to bypass for a
+    # forced full-universe refresh (the canonical way to run the
+    # coverage backfill — no one-off script).
+    config = config or {}
+    skip_guard_days = int(config.get("skip_guard_days", 6))
     async with pool.acquire() as conn:
         newest_recorded = await conn.fetchval(
             "SELECT MAX(recorded_at) FROM platform.catalyst_events"
         )
     log = structlog.get_logger("scripts.ops")
-    if newest_recorded is not None:
+    if newest_recorded is not None and skip_guard_days > 0:
         age = datetime.now(UTC) - newest_recorded
-        if age.days < 6:
+        if age.days < skip_guard_days:
             log.info(
                 "ops.stage.catalyst_refresh.skipped_fresh",
                 last_refresh_age_days=age.days,
+                skip_guard_days=skip_guard_days,
             )
             return {
                 "skipped": True,
-                "reason": "refreshed_within_6_days",
+                "reason": f"refreshed_within_{skip_guard_days}_days",
                 "last_refresh_age_days": age.days,
             }
 
@@ -1227,7 +1235,7 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # T1+T2 stock subset is ~66 tickers so a fresh run is ~3 min, but
     # the universe could grow. Stage short-circuits in ~10ms when
     # the table was refreshed within 6 days.
-    ("catalyst_refresh",    lambda pool, cfg: (lambda: _stage_catalyst_refresh(pool)),         HEAVY_STAGE_TIMEOUT_SEC),
+    ("catalyst_refresh",    lambda pool, cfg: (lambda: _stage_catalyst_refresh(pool, cfg)),    HEAVY_STAGE_TIMEOUT_SEC),
     # SEC EDGAR Form 4 + 8-K — reference implementation of the
     # standard 5-stage data-adapter pipeline. CSV-first, idempotent,
     # skip-guard tightened from 6 → 3 days 2026-05-14: Form 4 has a
