@@ -69,6 +69,13 @@ _SPECS: tuple[HealSpec, ...] = (
     HealSpec(check_name="prices_daily_completeness", source="prices_daily",
              healable=True, stage="daily_bars", params=dict(_PRICES_REPAIR),
              max_attempts=3),
+    # A stale max-pain snapshot is fixed by re-running the bounded
+    # canonical stage (1 symbol, 1 idempotent API call) — genuinely
+    # healable, not escalate-only. force the skip-guard off so the
+    # heal actually re-pulls.
+    HealSpec(check_name="options_max_pain_freshness", source="greeks_max_pain",
+             healable=True, stage="greeks_max_pain",
+             params={"skip_guard": "false"}, max_attempts=2),
 )
 
 HEAL_SPECS: dict[str, HealSpec] = {s.check_name: s for s in _SPECS}

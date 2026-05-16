@@ -935,6 +935,26 @@ async def _stage_macro_indicators(
     return {"rows_loaded": int(rows or 0)}
 
 
+async def _stage_greeks_max_pain(
+    pool: asyncpg.Pool, config: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Daily greeks.pro free-tier max-pain snapshot (1 symbol).
+
+    Handler has its own same-day skip-guard (idempotent regardless).
+    ``--param symbol=XXX`` overrides the tracked symbol (default SPY);
+    ``--param skip_guard=false`` forces a re-pull (used by self-heal).
+    """
+    from tpcore.ingestion.handlers import handle_greeks_max_pain
+
+    log = structlog.get_logger("scripts.ops")
+    try:
+        rows = await handle_greeks_max_pain(pool, config or {})
+    except Exception as exc:
+        log.error("ops.stage.greeks_max_pain.failed", error=str(exc))
+        raise
+    return {"rows_loaded": int(rows or 0)}
+
+
 async def _stage_sec_filings(pool: asyncpg.Pool, *, backfill: bool = False) -> dict[str, Any]:
     """Weekly SEC EDGAR Form 4 + 8-K ingest.
 
@@ -1254,6 +1274,9 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # via FREDAdapter, idempotent ON CONFLICT, 7-day skip-guard.
     # Added 2026-05-14 — closes the last "spec-only" gap in §6.1.
     ("macro_indicators",    lambda pool, cfg: (lambda: _stage_macro_indicators(pool, cfg)),    STAGE_TIMEOUT_SEC),
+    # greeks.pro free-tier max-pain (1 symbol/day, X-API-Key, idempotent
+    # ON CONFLICT, handler same-day skip-guard). Added 2026-05-16.
+    ("greeks_max_pain",     lambda pool, cfg: (lambda: _stage_greeks_max_pain(pool, cfg)),     STAGE_TIMEOUT_SEC),
     # data_validation runs the 10-check suite against the live tables —
     # at the current 20M-row prices_daily it consistently runs ~120-
     # 130s. Bumping to 5 min gives headroom without masking a true hang.
@@ -2408,6 +2431,34 @@ async def _check_daemon_progress(pool: asyncpg.Pool) -> dict[str, Any]:
     }
 
 
+async def _check_greeks_max_pain(pool: asyncpg.Pool) -> dict[str, Any]:
+    """Dashboard probe — greeks.pro max-pain snapshot freshness.
+
+    ok=True if the tracked symbol (SPY) has a snapshot within 7d;
+    warn (yellow) in the 7-14d band; red beyond.
+    """
+    row = await pool.fetchrow(
+        """
+        SELECT MAX(observed_date) AS latest, COUNT(*) AS rows_total
+        FROM platform.options_max_pain
+        WHERE symbol = 'SPY'
+        """
+    )
+    latest = row["latest"] if row else None
+    total = int(row["rows_total"]) if row and row["rows_total"] else 0
+    if latest is None:
+        return {"ok": False, "reason": "no SPY max-pain rows", "rows_total": 0}
+    age = (date.today() - latest).days
+    return {
+        "ok": age <= 7,
+        "warn": 7 < age <= 14,
+        "latest_observed_date": latest.isoformat(),
+        "age_days": age,
+        "threshold_days": 7,
+        "rows_total": total,
+    }
+
+
 _CHECK_FNS = [
     ("db_connectivity", _check_connectivity),
     ("data_freshness", _check_freshness),
@@ -2417,6 +2468,7 @@ _CHECK_FNS = [
     ("catalyst_freshness", _check_catalyst_freshness),
     ("sec_filings_freshness", _check_sec_filings_freshness),
     ("macro_indicators_freshness", _check_macro_indicators_freshness),
+    ("greeks_max_pain_freshness", _check_greeks_max_pain),
     ("liquidity_tiers_freshness", _check_liquidity_tiers_freshness),
     ("ticker_classifications", _check_ticker_classifications),
     ("engine_schedulers", _check_engine_schedulers),

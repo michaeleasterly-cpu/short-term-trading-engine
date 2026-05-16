@@ -89,7 +89,7 @@ async def test_e2e_passes_with_satisfying_synthetic_data(write_yaml) -> None:
     writer = _RecordingWriter()
     result = await run_suite(pool, delistings=de, constituents=co, splits=sp, writer=writer)
     assert result.passed is True
-    assert len(writer.scores) == 13  # +prices_daily_completeness (2026-05-15)
+    assert len(writer.scores) == 14  # +options_max_pain_freshness (2026-05-16)
     sources = {s.source for s in writer.scores}
     assert sources == {
         "validation.delistings",
@@ -105,6 +105,7 @@ async def test_e2e_passes_with_satisfying_synthetic_data(write_yaml) -> None:
         "validation.macro_indicators_freshness",
         "validation.prices_daily_freshness",
         "validation.prices_daily_completeness",
+        "validation.options_max_pain_freshness",
     }
 
 

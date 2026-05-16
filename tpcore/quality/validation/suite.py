@@ -42,6 +42,8 @@ from .checks.liquidity_tiers_freshness import CHECK_NAME as LIQUIDITY_FRESHNESS_
 from .checks.liquidity_tiers_freshness import check_liquidity_tiers_freshness
 from .checks.macro_indicators_freshness import CHECK_NAME as MACRO_FRESHNESS_NAME
 from .checks.macro_indicators_freshness import check_macro_indicators_freshness
+from .checks.options_max_pain_freshness import CHECK_NAME as OPTIONS_MAXPAIN_NAME
+from .checks.options_max_pain_freshness import check_options_max_pain_freshness
 from .checks.prices_daily_completeness import CHECK_NAME as PRICES_COMPLETENESS_NAME
 from .checks.prices_daily_completeness import check_prices_daily_completeness
 from .checks.prices_daily_freshness import CHECK_NAME as PRICES_FRESHNESS_NAME
@@ -82,6 +84,7 @@ KNOWN_CHECK_NAMES: tuple[str, ...] = (
     MACRO_FRESHNESS_NAME,
     PRICES_FRESHNESS_NAME,
     PRICES_COMPLETENESS_NAME,
+    OPTIONS_MAXPAIN_NAME,
 )
 
 
@@ -142,22 +145,28 @@ async def run_suite(
     completeness_task = _safe_run(
         PRICES_COMPLETENESS_NAME, check_prices_daily_completeness, pool, None
     )
+    options_maxpain_task = _safe_run(
+        OPTIONS_MAXPAIN_NAME, check_options_max_pain_freshness, pool, None
+    )
     (
         delistings_result, constituent_result, splits_result,
         row_integrity_result, fund_integrity_result, ca_integrity_result,
         catalyst_result, sec_result, liquidity_result, classifications_result,
         macro_result, prices_result, completeness_result,
+        options_maxpain_result,
     ) = await asyncio.gather(
         delistings_task, constituent_task, splits_task,
         row_integrity_task, fund_integrity_task, ca_integrity_task,
         catalyst_task, sec_task, liquidity_task, classifications_task,
         macro_task, prices_task, completeness_task,
+        options_maxpain_task,
     )
     checks: list[CheckResult] = [
         delistings_result, constituent_result, splits_result,
         row_integrity_result, fund_integrity_result, ca_integrity_result,
         catalyst_result, sec_result, liquidity_result, classifications_result,
         macro_result, prices_result, completeness_result,
+        options_maxpain_result,
     ]
 
     finished_at = datetime.now(UTC)

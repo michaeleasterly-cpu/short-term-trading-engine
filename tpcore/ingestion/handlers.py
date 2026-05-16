@@ -1045,6 +1045,102 @@ async def handle_macro_indicators(
     return len(upsert_rows)
 
 
+async def handle_greeks_max_pain(
+    pool: asyncpg.Pool, config: dict[str, Any]
+) -> int | None:
+    """greeks.pro free-tier max-pain ingest (1 symbol, daily snapshot).
+
+    CSV-first → idempotent upsert. Skip-guard: if today's
+    ``observed_date`` already has rows for the symbol, no-op (saves a
+    call against the 600/day free quota; the upsert is idempotent
+    regardless). ``config`` keys: ``symbol`` (default ``"SPY"``),
+    ``skip_guard`` (default True; pass False to force a re-pull).
+    """
+    from datetime import UTC, datetime
+
+    from tpcore.greeks import GreeksProAdapter
+    from tpcore.ingestion.csv_archive import write_archive
+
+    symbol = str(config.get("symbol", "SPY")).upper()
+    skip_guard = bool(config.get("skip_guard", True))
+    today = datetime.now(UTC).date()
+
+    if skip_guard:
+        async with pool.acquire() as conn:
+            existing = await conn.fetchval(
+                """
+                SELECT COUNT(*) FROM platform.options_max_pain
+                WHERE symbol = $1 AND observed_date = $2
+                """,
+                symbol, today,
+            )
+        if existing and existing > 0:
+            logger.info(
+                "ingestion.handler.greeks_max_pain.skipped_fresh",
+                symbol=symbol, observed_date=today.isoformat(),
+            )
+            return 0
+
+    async with GreeksProAdapter() as adapter:
+        snap = await adapter.get_max_pain(symbol)
+
+    obs_date = snap.observed_at.date()
+    rows = [
+        (
+            snap.symbol, r.expiration_date.date(), obs_date, r.dte,
+            snap.spot_price, r.max_pain_strike, r.total_pain_at_max,
+            r.spot_distance, r.spot_distance_pct, snap.observed_at,
+        )
+        for r in snap.results
+    ]
+    if not rows:
+        logger.info(
+            "ingestion.handler.greeks_max_pain.empty",
+            symbol=symbol, reason="provider returned zero expirations",
+        )
+        return 0
+
+    write_archive(
+        "greeks_max_pain",
+        [
+            {
+                "symbol": s, "expiration_date": ed.isoformat(),
+                "observed_date": od.isoformat(), "dte": str(d),
+                "spot_price": str(sp), "max_pain_strike": str(mp),
+                "total_pain_at_max": str(tp), "spot_distance": str(sd),
+                "spot_distance_pct": str(sdp), "observed_at": oa.isoformat(),
+            }
+            for (s, ed, od, d, sp, mp, tp, sd, sdp, oa) in rows
+        ],
+        fieldnames=[
+            "symbol", "expiration_date", "observed_date", "dte",
+            "spot_price", "max_pain_strike", "total_pain_at_max",
+            "spot_distance", "spot_distance_pct", "observed_at",
+        ],
+        validator=lambda x: bool(x.get("symbol")) and bool(x.get("expiration_date")),
+    )
+
+    async with pool.acquire() as conn:
+        await conn.executemany(
+            """
+            INSERT INTO platform.options_max_pain
+                (symbol, expiration_date, observed_date, dte, spot_price,
+                 max_pain_strike, total_pain_at_max, spot_distance,
+                 spot_distance_pct, observed_at)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+            ON CONFLICT (symbol, expiration_date, observed_date) DO NOTHING
+            """,
+            rows,
+        )
+
+    logger.info(
+        "ingestion.handler.greeks_max_pain.done",
+        symbol=symbol, observed_date=obs_date.isoformat(),
+        expirations=len(rows), spot_price=str(snap.spot_price),
+    )
+    return len(rows)
+
+
 HANDLERS: dict[str, HandlerFn] = {
     "data_validation": handle_data_validation,
     "fundamentals_refresh": handle_fundamentals_refresh,
@@ -1052,6 +1148,7 @@ HANDLERS: dict[str, HandlerFn] = {
     "daily_bars": handle_daily_bars,
     "sec_filings": handle_sec_filings,
     "macro_indicators": handle_macro_indicators,
+    "greeks_max_pain": handle_greeks_max_pain,
 }
 
 
@@ -1064,4 +1161,5 @@ __all__ = [
     "handle_daily_bars",
     "handle_sec_filings",
     "handle_macro_indicators",
+    "handle_greeks_max_pain",
 ]

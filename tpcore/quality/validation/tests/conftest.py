@@ -76,6 +76,12 @@ class FakePool:
                     "yield_curve", "credit_spread", "hy_spread",
                 )
             ]
+        # options_max_pain_freshness: one fresh snapshot per expected
+        # symbol so the suite passes in e2e tests for unrelated checks.
+        if "platform.options_max_pain" in sql_lower:
+            from datetime import UTC, datetime, timedelta
+            fresh = datetime.now(UTC).date() - timedelta(days=1)
+            return [{"symbol": "SPY", "latest": fresh}]
         return []
 
     async def fetchrow(self, sql: str, *args) -> dict[str, Any] | None:
