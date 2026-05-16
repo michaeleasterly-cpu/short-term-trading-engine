@@ -14,6 +14,7 @@ run — see :meth:`SigmaCapitalGate.assert_can_graduate`.
 """
 from __future__ import annotations
 
+import os
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
@@ -34,7 +35,7 @@ from tpcore.interfaces.engine_plug import BaseEnginePlug
 # name for back-compat with `from sigma.plugs.capital_gate import
 # GraduationStats` call sites and the engine __init__.py re-export.
 from tpcore.models.graduation import PerTradeGraduationStats as GraduationStats  # noqa: F401
-from tpcore.quality.validation.capital_gate import assert_passed
+from tpcore.quality.validation.capital_gate import assert_passed_for_engine
 
 if TYPE_CHECKING:  # pragma: no cover
     import asyncpg
@@ -141,7 +142,12 @@ class SigmaCapitalGate(BaseEnginePlug):
         """
         if not SigmaCapitalGate.is_graduated(stats):
             return False
-        await assert_passed(pool)
+        await assert_passed_for_engine(
+            pool, "sigma",
+            require_all_green=os.getenv(
+                "CAPITAL_GATE_REQUIRE_ALL_GREEN", "").strip().lower()
+            in ("1", "true", "yes", "on"),
+        )
         if not await graduation_ready(pool, engine_name="sigma"):
             raise CredibilityScoreInsufficientError(
                 "Sigma backtest credibility score < 60 (or no rubric run on record)"

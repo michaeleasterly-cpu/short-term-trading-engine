@@ -132,3 +132,81 @@ async def test_assert_passed_uses_only_most_recent_run() -> None:
     pool = _DQLogFakePool(rows)
     with pytest.raises(ValidationFailedError):
         await assert_passed(pool)
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Per-engine gate (#166) — refinement, not weakening
+# ────────────────────────────────────────────────────────────────────────────
+
+from tpcore.quality.validation.capital_gate import (  # noqa: E402
+    EXPECTED_SOURCES,
+    _required_sources,
+    assert_passed_for_engine,
+)
+
+
+def test_required_sources_is_evidence_subset_not_everything() -> None:
+    vec = _required_sources("vector")
+    # vector reads prices_daily + fundamentals_quarterly + earnings_events
+    assert "validation.earnings_events_freshness" in vec
+    assert "validation.fundamentals_integrity" in vec
+    assert "validation.prices_daily_freshness" in vec
+    # vector does NOT read macro_indicators / liquidity_tiers
+    assert "validation.macro_indicators_freshness" not in vec
+    assert "validation.liquidity_tiers_freshness" not in vec
+    assert vec < EXPECTED_SOURCES  # strict subset
+
+
+def test_unknown_engine_fails_safe_gated_on_everything() -> None:
+    assert _required_sources("does_not_exist") == EXPECTED_SOURCES
+
+
+@pytest.mark.asyncio
+async def test_engine_not_blocked_by_unrelated_red() -> None:
+    """momentum reads only prices_daily + liquidity_tiers. A red
+    macro_indicators check (sentinel-only) must NOT block momentum —
+    but DOES block the global gate (proves the refinement)."""
+    ts = datetime.now(UTC)
+    rows = _all_three(ts, stale=False)
+    for r in rows:
+        if r["source"] == "validation.macro_indicators_freshness":
+            r["stale"] = True
+    pool = _DQLogFakePool(rows)
+    await assert_passed_for_engine(pool, "momentum")  # not blocked
+    with pytest.raises(ValidationFailedError):
+        await assert_passed(pool)  # global still blocks
+
+
+@pytest.mark.asyncio
+async def test_engine_blocked_by_its_own_red() -> None:
+    ts = datetime.now(UTC)
+    rows = _all_three(ts, stale=False)
+    for r in rows:
+        if r["source"] == "validation.prices_daily_freshness":
+            r["stale"] = True  # momentum DOES read prices_daily
+    pool = _DQLogFakePool(rows)
+    with pytest.raises(ValidationFailedError):
+        await assert_passed_for_engine(pool, "momentum")
+
+
+@pytest.mark.asyncio
+async def test_require_all_green_override_restores_global() -> None:
+    ts = datetime.now(UTC)
+    rows = _all_three(ts, stale=False)
+    for r in rows:
+        if r["source"] == "validation.macro_indicators_freshness":
+            r["stale"] = True
+    pool = _DQLogFakePool(rows)
+    # default: momentum unaffected
+    await assert_passed_for_engine(pool, "momentum")
+    # override: behaves like the global gate again
+    with pytest.raises(ValidationFailedError):
+        await assert_passed_for_engine(pool, "momentum", require_all_green=True)
+
+
+@pytest.mark.asyncio
+async def test_engine_gate_still_blocks_on_stale_run() -> None:
+    old = datetime.now(UTC) - timedelta(days=30)
+    pool = _DQLogFakePool(_all_three(old, stale=False))
+    with pytest.raises(ValidationStaleError):
+        await assert_passed_for_engine(pool, "sigma")

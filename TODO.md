@@ -104,7 +104,28 @@ Single focus until further notice — no engine/Sigma-redesign work. Sequence:
      before going live. NOT done; awaiting explicit go + validation.
    - then the tracked `catalyst→earnings` rename (below).
 
-## Per-engine data gates (operator idea 2026-05-16, tracked — NOT started)
+## ✅ Per-engine data gates — DONE 2026-05-16 (operator-authorised)
+
+Shipped: `tpcore/quality/validation/capital_gate.py` gains
+`ENGINE_TABLES` (EVIDENCE-derived engine→table map, every pair a real
+`platform.<table>` read with file:line documented in the module) +
+`assert_passed_for_engine(pool, engine, *, require_all_green=False)`.
+Table→checks is derived from the selfheal registry `source` field
+(existing SoT; registry-coverage test makes it drift-proof). An
+engine is blocked ONLY if a source IT reads is missing/stale/failed
+at the latest run; an unrelated red no longer blocks it. Refinement,
+not weakening — each engine still needs 100% of ITS data; run-
+staleness still blocks everyone (safety). `assert_passed` (global
+all-green) unchanged and retained as the operator override
+(`CAPITAL_GATE_REQUIRE_ALL_GREEN` env, read by each plug). The 4
+suite-gated engine plugs (sigma/reversion/vector/momentum) call the
+per-engine variant; sentinel has no suite gate (satellite model) —
+untouched. NO engine strategy logic modified (gating call only). 897
+tests (12 capital_gate incl. unrelated-red-doesn't-block, own-red-
+blocks, override-restores-global, unknown-engine-fails-safe); ruff/
+check_imports clean.
+
+--- superseded design notes below (kept for rationale) ---
 
 **Merit: real and growing.** Today the gate is global all-or-nothing —
 `DATA_OPERATIONS_COMPLETE` / `run_all_engines.sh` / `capital_gate`

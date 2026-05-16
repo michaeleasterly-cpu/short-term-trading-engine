@@ -20,6 +20,7 @@ Graduation (paper → live) requires three things:
 """
 from __future__ import annotations
 
+import os
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
@@ -36,7 +37,7 @@ from tpcore.backtest.credibility import (
     graduation_ready,
 )
 from tpcore.interfaces.engine_plug import BaseEnginePlug
-from tpcore.quality.validation.capital_gate import assert_passed
+from tpcore.quality.validation.capital_gate import assert_passed_for_engine
 
 # Drawdown circuit breaker — pause new rebalances when portfolio is more
 # than this much below its rolling-window peak. Lookback window is the
@@ -142,7 +143,12 @@ class MomentumCapitalGate(BaseEnginePlug):
         """Combined gate: stats AND Data Validation Suite AND credibility ≥ 60."""
         if not MomentumCapitalGate.is_graduated(stats):
             return False
-        await assert_passed(pool)
+        await assert_passed_for_engine(
+            pool, "momentum",
+            require_all_green=os.getenv(
+                "CAPITAL_GATE_REQUIRE_ALL_GREEN", "").strip().lower()
+            in ("1", "true", "yes", "on"),
+        )
         if not await graduation_ready(pool, engine_name="momentum"):
             raise CredibilityScoreInsufficientError(
                 "Momentum backtest credibility score < 60 (or no rubric row on record)"

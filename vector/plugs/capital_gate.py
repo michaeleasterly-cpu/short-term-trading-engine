@@ -14,6 +14,7 @@ credibility score ≥ 60 in ``platform.data_quality_log``. The platform-wide
 """
 from __future__ import annotations
 
+import os
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
@@ -29,7 +30,7 @@ from tpcore.interfaces.engine_plug import BaseEnginePlug
 # tpcore.models.graduation 2026-05-14. Re-export under the original
 # name for back-compat.
 from tpcore.models.graduation import PerTradeGraduationStats as GraduationStats  # noqa: F401
-from tpcore.quality.validation.capital_gate import assert_passed
+from tpcore.quality.validation.capital_gate import assert_passed_for_engine
 from vector.models import (
     DAILY_LOSS_FREEZE_PCT,
     MAX_CONCURRENT_POSITIONS,
@@ -125,7 +126,12 @@ class VectorCapitalGate(BaseEnginePlug):
         """Combined gate: stats AND validation suite AND credibility ≥ 60."""
         if not VectorCapitalGate.is_graduated(stats):
             return False
-        await assert_passed(pool)
+        await assert_passed_for_engine(
+            pool, "vector",
+            require_all_green=os.getenv(
+                "CAPITAL_GATE_REQUIRE_ALL_GREEN", "").strip().lower()
+            in ("1", "true", "yes", "on"),
+        )
         if not await graduation_ready(pool, engine_name="vector"):
             raise CredibilityScoreInsufficientError(
                 "Vector backtest credibility score < 60 (or no rubric run on record)"
