@@ -169,6 +169,41 @@ but DSR/credibility gates remain structurally blocked.
   back Sharpe +0.839 → +0.366. Code archived in
   `tpcore/backtest/spread_estimator_archive.py`.
 
+  **PATH PICKED 2026-05-16 — HMM regime classifier (QUEUED, NOT
+  STARTED; deferred behind the WEEK GOAL data-layer work per operator
+  decision).** This is Sigma's final test before permanent retirement.
+  Full spec captured so it is executable without re-derivation when the
+  data layer closes:
+  - Phase 1: `tpcore/indicators/hmm_regime.py` — shared
+    `HMMRegimeClassifier` (hmmlearn `GaussianHMM(n_components=2,
+    covariance_type='full', n_iter=100)`), fit on SPY 252d returns
+    rolling; label lower-return-autocorr state = mean-reverting;
+    expose `is_mean_reverting` bool. Params: `lookback_days=252`,
+    `retrain_frequency_days=21`, `require_confirmations=3`. Unit-test
+    on synthetic OU(κ=5)=mean-reverting vs RW-with-drift=trending.
+  - Phase 2: `sigma/plugs/setup_detection.py` — replace static
+    ADX<20∧CHOP>38.2 gate with the HMM classifier behind
+    `--use-hmm-regime`; keep static gate behind `--use-static-regime`
+    for baseline. Sweep params: hmm_lookback {126,252,504},
+    hmm_retrain_freq {10,21,42}, hmm_confirmations {1,2,3,5}.
+  - Phase 3: `search_parameters.py --engine sigma --trials 100`
+    (train 2018-01-01, holdout→2023-12-31, final-holdout 2024-01-01→
+    2025-12-31) → `backtests/sigma_hmm_sweep_results.csv`. ~2-4h.
+  - Phase 4 decision (ZERO ambiguity): adopt iff any config achieves
+    **credibility ≥ 60 AND DSR ≥ 0.95 on held-back**; else Sigma is
+    permanently archived (`sigma/`→`archive/sigma/`, removed from
+    `run_all_engines.sh` + the selfheal/smoke loops + docs).
+  - Add `hmmlearn` to `pyproject.toml` deps.
+  - **Constraints carried from this review:** the archive/adopt
+    *execution* is operator-confirmed at decision time, NOT an
+    automatic script side-effect (engine retirement is structural).
+    Default `--use-hmm-regime` OFF until the sweep adjudicates; all
+    existing tests + ruff + check_imports stay green throughout.
+    Tension acknowledged: the prior "next experiment is NOT more
+    parameter sweeps" note stands for *static* gates — HMM is a
+    classifier *redesign* (different object than the rejected OU
+    gate), which is why the operator picked it as the path.
+
 - **Reversion — reclassified as satellite 2026-05-15 (closed).** The
   signal-class-redesign decision was resolved by reclassifying Reversion
   as a satellite engine alongside S2: permanent 5–10% capital cap,
