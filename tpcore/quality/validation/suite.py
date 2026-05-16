@@ -38,6 +38,8 @@ from .checks.delistings import CHECK_NAME as DELISTINGS_NAME
 from .checks.delistings import check_delistings
 from .checks.fundamentals_integrity import CHECK_NAME as FUND_INTEGRITY_NAME
 from .checks.fundamentals_integrity import check_fundamentals_integrity
+from .checks.insider_sentiment_freshness import CHECK_NAME as INSIDER_SENTIMENT_NAME
+from .checks.insider_sentiment_freshness import check_insider_sentiment_freshness
 from .checks.liquidity_tiers_freshness import CHECK_NAME as LIQUIDITY_FRESHNESS_NAME
 from .checks.liquidity_tiers_freshness import check_liquidity_tiers_freshness
 from .checks.macro_indicators_freshness import CHECK_NAME as MACRO_FRESHNESS_NAME
@@ -85,6 +87,7 @@ KNOWN_CHECK_NAMES: tuple[str, ...] = (
     PRICES_FRESHNESS_NAME,
     PRICES_COMPLETENESS_NAME,
     OPTIONS_MAXPAIN_NAME,
+    INSIDER_SENTIMENT_NAME,
 )
 
 
@@ -148,25 +151,28 @@ async def run_suite(
     options_maxpain_task = _safe_run(
         OPTIONS_MAXPAIN_NAME, check_options_max_pain_freshness, pool, None
     )
+    insider_sentiment_task = _safe_run(
+        INSIDER_SENTIMENT_NAME, check_insider_sentiment_freshness, pool, None
+    )
     (
         delistings_result, constituent_result, splits_result,
         row_integrity_result, fund_integrity_result, ca_integrity_result,
         catalyst_result, sec_result, liquidity_result, classifications_result,
         macro_result, prices_result, completeness_result,
-        options_maxpain_result,
+        options_maxpain_result, insider_sentiment_result,
     ) = await asyncio.gather(
         delistings_task, constituent_task, splits_task,
         row_integrity_task, fund_integrity_task, ca_integrity_task,
         catalyst_task, sec_task, liquidity_task, classifications_task,
         macro_task, prices_task, completeness_task,
-        options_maxpain_task,
+        options_maxpain_task, insider_sentiment_task,
     )
     checks: list[CheckResult] = [
         delistings_result, constituent_result, splits_result,
         row_integrity_result, fund_integrity_result, ca_integrity_result,
         catalyst_result, sec_result, liquidity_result, classifications_result,
         macro_result, prices_result, completeness_result,
-        options_maxpain_result,
+        options_maxpain_result, insider_sentiment_result,
     ]
 
     finished_at = datetime.now(UTC)

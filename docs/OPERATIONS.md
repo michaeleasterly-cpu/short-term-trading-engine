@@ -255,6 +255,7 @@ The daily `python scripts/ops.py --update` pipeline already includes the heavy w
 | `classify_tickers` | Monthly | skip-if-refreshed-within-30-days AND ≥95%-coverage | Re-runs the Alpaca-asset-name classifier into `platform.ticker_classifications`. Skip-guard is two-clause: forces a re-run when a universe expansion has introduced unclassified tickers even within the 30-day window. |
 | `macro_indicators` | Weekly (2026-05-14, last data source from §6.1) | short-circuits when `MAX(recorded_at)` is within 7 days | FRED time-series → `platform.macro_indicators` for the five canonical series (sahm_rule, industrial_production, initial_claims, yield_curve, credit_spread). Requires `FRED_API_KEY` env var (free signup at https://fred.stlouisfed.org/docs/api/api_key.html). Unblocks the Sentinel macro-defense engine. The credit-stress indicator is BAA10Y (Moody's Baa minus 10Y Treasury) — swapped in 2026-05-15 after FRED truncated `BAMLH0A0HYM2`. |
 | `greeks_max_pain` | Daily (2026-05-16) | same-day skip-guard: no-op if today's `observed_date` already present for the symbol | greeks.pro free-tier max-pain → `platform.options_max_pain` for 1 tracked symbol (SPY). Requires `GREEKS_API_KEY` (greeks.pro free tier, 10/min·600/day). `/flow`/`/greeks`/`/gex` are paid (403) and intentionally not ingested. |
+| `finnhub_insider_sentiment` | ~Monthly (2026-05-16); 25-day skip-guard | no-op if `MAX(recorded_at)` within 25d | Finnhub free-tier insider-sentiment MSPR → `platform.insider_sentiment` for T1/T2 stock universe. Requires `FINNHUB_API_KEY` (free signup at finnhub.io). `/news-sentiment`/`/social-sentiment` are premium (403) and not ingested. |
 
 To force-run locally (same command as the daily run; underlying handlers are idempotent):
 
@@ -769,6 +770,7 @@ FROM (
 | `ticker_classifications_coverage` *(NEW 2026-05-14, T-2)* | ≥ 90% of active prices_daily tickers have a row in `ticker_classifications` | universe expansion without re-running the classifier; ETF/SPAC filters silently failing |
 | `macro_indicators_freshness` *(NEW 2026-05-14, FRED adapter)* | All five FRED series present; newest observation ≤ 90d old per series | `FRED_API_KEY` expired, FRED schema break, or stalled weekly stage |
 | `options_max_pain_freshness` *(NEW 2026-05-16, greeks.pro adapter)* | Tracked symbol (SPY) has a max-pain snapshot ≤ 7d old | `GREEKS_API_KEY` invalid, greeks.pro outage, or stalled `greeks_max_pain` stage; self-heal re-runs the bounded stage |
+| `insider_sentiment_freshness` *(NEW 2026-05-16, Finnhub adapter)* | Newest insider-sentiment (year,month) period ≤ 3 months old | `FINNHUB_API_KEY` invalid, Finnhub outage, or stalled stage; self-heal re-runs the bounded stage |
 
 ### Cross-table audit (added 2026-05-13)
 

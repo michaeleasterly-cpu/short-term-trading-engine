@@ -1141,6 +1141,111 @@ async def handle_greeks_max_pain(
     return len(rows)
 
 
+async def handle_finnhub_insider_sentiment(
+    pool: asyncpg.Pool, config: dict[str, Any]
+) -> int | None:
+    """Finnhub free-tier insider-sentiment (MSPR) for the T1/T2 stock
+    universe. Monthly data → 25-day skip-guard. CSV-first → idempotent
+    upsert. ``config``: ``symbols`` (list override; default = T1/T2
+    stock universe), ``lookback_months`` (default 12),
+    ``skip_guard_days`` (default 25; 0 forces re-pull — self-heal).
+    """
+    import asyncio as _asyncio
+    from datetime import timedelta as _td
+
+    from tpcore.finnhub import FinnhubAdapter
+    from tpcore.ingestion.csv_archive import write_archive
+
+    skip_days = int(config.get("skip_guard_days", 25))
+    if skip_days > 0:
+        async with pool.acquire() as conn:
+            newest = await conn.fetchval(
+                "SELECT MAX(recorded_at) FROM platform.insider_sentiment"
+            )
+        if newest is not None and (datetime.now(UTC) - newest).days < skip_days:
+            logger.info(
+                "ingestion.handler.insider_sentiment.skipped_fresh",
+                last_refresh_age_days=(datetime.now(UTC) - newest).days,
+            )
+            return 0
+
+    symbols_cfg = config.get("symbols")
+    if isinstance(symbols_cfg, list) and symbols_cfg:
+        universe = [str(s).upper() for s in symbols_cfg]
+    else:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT lt.ticker
+                FROM platform.liquidity_tiers lt
+                LEFT JOIN platform.ticker_classifications tc USING (ticker)
+                WHERE lt.tier <= 2
+                  AND COALESCE(tc.asset_class, 'stock') = 'stock'
+                ORDER BY lt.ticker
+                """
+            )
+        universe = [r["ticker"] for r in rows]
+    if not universe:
+        logger.info("ingestion.handler.insider_sentiment.empty_universe")
+        return 0
+
+    today = datetime.now(UTC).date()
+    lookback_months = int(config.get("lookback_months", 12))
+    from_date = today - _td(days=31 * lookback_months)
+
+    upsert_rows: list[tuple] = []
+    archive_rows: list[dict[str, Any]] = []
+    failures = 0
+    async with FinnhubAdapter() as adapter:
+        for i, sym in enumerate(universe):
+            try:
+                res = await adapter.get_insider_sentiment(sym, from_date, today)
+            except Exception as exc:  # noqa: BLE001 — per-ticker isolation
+                failures += 1
+                logger.debug("insider_sentiment.ticker_failed", ticker=sym, error=str(exc))
+                continue
+            for rec in res.records:
+                upsert_rows.append(
+                    (rec.symbol, rec.year, rec.month, rec.mspr, rec.net_change)
+                )
+                archive_rows.append({
+                    "symbol": rec.symbol, "year": str(rec.year),
+                    "month": str(rec.month), "mspr": str(rec.mspr),
+                    "net_change": str(rec.net_change),
+                })
+            if i % 50 == 49:
+                logger.info("insider_sentiment.progress", done=i + 1, total=len(universe))
+            await _asyncio.sleep(1.1)  # ~60/min free-tier courtesy
+
+    if not upsert_rows:
+        logger.info(
+            "ingestion.handler.insider_sentiment.empty",
+            reason="no records returned across universe", failures=failures,
+        )
+        return 0
+
+    write_archive(
+        "finnhub_insider_sentiment", archive_rows,
+        fieldnames=["symbol", "year", "month", "mspr", "net_change"],
+        validator=lambda r: bool(r.get("symbol")) and bool(r.get("month")),
+    )
+    async with pool.acquire() as conn:
+        await conn.executemany(
+            """
+            INSERT INTO platform.insider_sentiment
+                (symbol, year, month, mspr, net_change)
+            VALUES ($1,$2,$3,$4,$5)
+            ON CONFLICT (symbol, year, month) DO NOTHING
+            """,
+            upsert_rows,
+        )
+    logger.info(
+        "ingestion.handler.insider_sentiment.done",
+        rows=len(upsert_rows), tickers=len(universe), failures=failures,
+    )
+    return len(upsert_rows)
+
+
 HANDLERS: dict[str, HandlerFn] = {
     "data_validation": handle_data_validation,
     "fundamentals_refresh": handle_fundamentals_refresh,
@@ -1149,6 +1254,7 @@ HANDLERS: dict[str, HandlerFn] = {
     "sec_filings": handle_sec_filings,
     "macro_indicators": handle_macro_indicators,
     "greeks_max_pain": handle_greeks_max_pain,
+    "finnhub_insider_sentiment": handle_finnhub_insider_sentiment,
 }
 
 
@@ -1162,4 +1268,5 @@ __all__ = [
     "handle_sec_filings",
     "handle_macro_indicators",
     "handle_greeks_max_pain",
+    "handle_finnhub_insider_sentiment",
 ]

@@ -76,6 +76,12 @@ _SPECS: tuple[HealSpec, ...] = (
     HealSpec(check_name="options_max_pain_freshness", source="greeks_max_pain",
              healable=True, stage="greeks_max_pain",
              params={"skip_guard": "false"}, max_attempts=2),
+    # Stale insider-sentiment is fixed by re-running the bounded
+    # canonical stage with the monthly skip-guard disabled.
+    HealSpec(check_name="insider_sentiment_freshness",
+             source="finnhub_insider_sentiment",
+             healable=True, stage="finnhub_insider_sentiment",
+             params={"skip_guard_days": "0"}, max_attempts=2),
 )
 
 HEAL_SPECS: dict[str, HealSpec] = {s.check_name: s for s in _SPECS}

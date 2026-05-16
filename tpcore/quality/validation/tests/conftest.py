@@ -86,6 +86,12 @@ class FakePool:
 
     async def fetchrow(self, sql: str, *args) -> dict[str, Any] | None:
         sql_lower = sql.lower()
+        # insider_sentiment_freshness: a current-month record so the
+        # suite passes in e2e tests for unrelated checks.
+        if "platform.insider_sentiment" in sql_lower:
+            from datetime import UTC, datetime
+            now = datetime.now(UTC)
+            return {"newest_period": now.year * 12 + now.month, "rows_total": 10}
         # Catalyst freshness check fires its own CTE that doesn't hit
         # the prices_daily routes above. Return a "clean" snapshot so
         # e2e tests focused on unrelated checks (splits etc.) don't

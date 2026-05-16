@@ -56,3 +56,5 @@ DATA_OPERATIONS_COMPLETE: Event-type written to `platform.application_log` by `s
 engine-service: Long-running daemon at `ops/engine_service.py`. Polls `platform.application_log` for `DATA_OPERATIONS_COMPLETE` events and shells out to `scripts/run_all_engines.sh` when one arrives. Installed via `scripts/install_launchd_engine_service.sh`; KeepAlive=true via launchd. Fourth daemon alongside trade_monitor + data_operations + allocator.
 
 **Max Pain** — the option strike at which the aggregate dollar value of in-the-money options (the total payout option *writers* must make) is minimized; i.e., the price where the most option holders expire worthless. Sourced per-expiration from greeks.pro into `platform.options_max_pain` (`max_pain_strike`, `total_pain_at_max`, `spot_distance_pct`). Used as an options-positioning / pinning context signal. Added 2026-05-16.
+
+**MSPR (Monthly Share Purchase Ratio)** — Finnhub's insider-sentiment metric, range [-100, 100]; positive = net insider buying pressure, negative = net selling. Sourced monthly per symbol into `platform.insider_sentiment` (`mspr`, `net_change`). Added 2026-05-16.

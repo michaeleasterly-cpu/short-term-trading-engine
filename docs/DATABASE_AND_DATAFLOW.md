@@ -323,6 +323,12 @@ Populated by the weekly `sec_filings` ops stage (`handle_sec_filings` in `tpcore
 
 **Indexes:** `(ticker, filing_date)`, `(filing_date)`.
 
+#### `platform.insider_sentiment`
+
+**Purpose:** Finnhub free-tier insider sentiment. One row per (symbol, year, month) — monthly MSPR (Monthly Share Purchase Ratio, insider sentiment [-100,100]) + net insider share change for the T1/T2 stock universe. Ingested by `tpcore.finnhub.FinnhubAdapter` → `handle_finnhub_insider_sentiment` → `finnhub_insider_sentiment` stage (25-day skip-guard, idempotent `ON CONFLICT DO NOTHING`). Added 2026-05-16. `/news-sentiment`/`/social-sentiment` are premium (403) and NOT ingested.
+
+**Refresh cadence:** monthly-ish via the `finnhub_insider_sentiment` stage; 25-day skip-guard. `insider_sentiment_freshness` validation check warns if the newest period is > 3 months old; self-heal re-runs the bounded stage.
+
 #### `platform.options_max_pain`
 
 **Purpose:** greeks.pro free-tier options max-pain. One row per (symbol, expiration_date, observed_date) — daily max-pain strike / total-pain / spot-distance for 1 tracked symbol (SPY). Ingested by `tpcore.greeks.GreeksProAdapter` → `handle_greeks_max_pain` → daily `greeks_max_pain` ops stage (same-day skip-guard, idempotent `ON CONFLICT DO NOTHING`). Added 2026-05-16. `/flow`/`/greeks`/`/gex` are Trader+ (paid, verified 403) and intentionally NOT ingested.

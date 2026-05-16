@@ -955,6 +955,25 @@ async def _stage_greeks_max_pain(
     return {"rows_loaded": int(rows or 0)}
 
 
+async def _stage_finnhub_insider_sentiment(
+    pool: asyncpg.Pool, config: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Finnhub insider-sentiment (MSPR) for the T1/T2 stock universe.
+
+    Monthly data → handler 25-day skip-guard. ``--param symbols=...``
+    or ``--param skip_guard_days=0`` (force re-pull; used by self-heal).
+    """
+    from tpcore.ingestion.handlers import handle_finnhub_insider_sentiment
+
+    log = structlog.get_logger("scripts.ops")
+    try:
+        rows = await handle_finnhub_insider_sentiment(pool, config or {})
+    except Exception as exc:
+        log.error("ops.stage.finnhub_insider_sentiment.failed", error=str(exc))
+        raise
+    return {"rows_loaded": int(rows or 0)}
+
+
 async def _stage_sec_filings(pool: asyncpg.Pool, *, backfill: bool = False) -> dict[str, Any]:
     """Weekly SEC EDGAR Form 4 + 8-K ingest.
 
@@ -1277,6 +1296,9 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # greeks.pro free-tier max-pain (1 symbol/day, X-API-Key, idempotent
     # ON CONFLICT, handler same-day skip-guard). Added 2026-05-16.
     ("greeks_max_pain",     lambda pool, cfg: (lambda: _stage_greeks_max_pain(pool, cfg)),     STAGE_TIMEOUT_SEC),
+    # Finnhub insider-sentiment (MSPR) for the T1/T2 universe; monthly,
+    # 25-day skip-guard, idempotent ON CONFLICT. Added 2026-05-16.
+    ("finnhub_insider_sentiment", lambda pool, cfg: (lambda: _stage_finnhub_insider_sentiment(pool, cfg)), HEAVY_STAGE_TIMEOUT_SEC),
     # data_validation runs the 10-check suite against the live tables —
     # at the current 20M-row prices_daily it consistently runs ~120-
     # 130s. Bumping to 5 min gives headroom without masking a true hang.
@@ -2459,6 +2481,33 @@ async def _check_greeks_max_pain(pool: asyncpg.Pool) -> dict[str, Any]:
     }
 
 
+async def _check_finnhub_insider_sentiment(pool: asyncpg.Pool) -> dict[str, Any]:
+    """Dashboard probe — Finnhub insider-sentiment freshness.
+
+    ok=True if the newest (year,month) period is ≤ 3 months old;
+    warn (yellow) at 3-5 months; red beyond / empty.
+    """
+    row = await pool.fetchrow(
+        """
+        SELECT MAX(year * 12 + month) AS newest_period, COUNT(*) AS rows_total
+        FROM platform.insider_sentiment
+        """
+    )
+    total = int(row["rows_total"]) if row and row["rows_total"] else 0
+    newest = row["newest_period"] if row else None
+    if not total or newest is None:
+        return {"ok": False, "reason": "no insider_sentiment rows", "rows_total": 0}
+    now = date.today()
+    age = (now.year * 12 + now.month) - int(newest)
+    return {
+        "ok": age <= 3,
+        "warn": 3 < age <= 5,
+        "newest_period_months_old": age,
+        "threshold_months": 3,
+        "rows_total": total,
+    }
+
+
 _CHECK_FNS = [
     ("db_connectivity", _check_connectivity),
     ("data_freshness", _check_freshness),
@@ -2469,6 +2518,7 @@ _CHECK_FNS = [
     ("sec_filings_freshness", _check_sec_filings_freshness),
     ("macro_indicators_freshness", _check_macro_indicators_freshness),
     ("greeks_max_pain_freshness", _check_greeks_max_pain),
+    ("insider_sentiment_freshness", _check_finnhub_insider_sentiment),
     ("liquidity_tiers_freshness", _check_liquidity_tiers_freshness),
     ("ticker_classifications", _check_ticker_classifications),
     ("engine_schedulers", _check_engine_schedulers),
