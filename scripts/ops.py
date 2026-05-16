@@ -1096,12 +1096,15 @@ async def _stage_sec_filings(pool: asyncpg.Pool, *, backfill: bool = False) -> d
             "lookback_days": lookback_days,
             "max_tickers": None,
             "skip_guard_days": 0,  # bypass the 6-day skip-guard for the one-shot.
-            # Bounded + resumable bootstrap (#132): chunk the universe so
-            # each chunk commits on a fresh short-lived pooler connection
-            # (the monolithic single-connection multi-hour run is what hit
-            # "connection was closed"), and skip already-covered tickers
-            # so a resumed run converges instead of re-walking the done
-            # set. Idempotent ON CONFLICT makes re-runs safe.
+            # #132: the historical insider bootstrap uses SEC's BULK
+            # Form 345 quarterly datasets (~336 MB / ~33 zips, parsed
+            # locally) instead of the per-ticker submissions+XML crawl
+            # (hundreds of thousands of fetches at 8 req/s ≈ ~30h). The
+            # bulk path is minutes, idempotent, and pooler-safe (one
+            # short txn per quarter). The per-ticker adapter remains the
+            # daily/weekly incremental. ticker_chunk_size/skip_covered
+            # still apply to any non-bulk fallback.
+            "bulk_form345": True,
             "ticker_chunk_size": 40,
             "skip_covered": True,
         }

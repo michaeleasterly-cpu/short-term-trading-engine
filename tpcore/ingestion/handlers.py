@@ -589,6 +589,18 @@ async def handle_sec_filings(pool: asyncpg.Pool, config: dict[str, Any]) -> int 
         )
         return 0
 
+    # ── Bulk insider backfill (Form 345 quarterly datasets) ──────────
+    # The per-ticker submissions+XML crawl is the WRONG tool for the
+    # historical bootstrap (hundreds of thousands of tiny HTTP fetches
+    # at SEC's 8 req/s ≈ ~30h). SEC publishes the entire market's
+    # Form 3/4/5 history as ~33 quarterly zips (~336 MB total). For
+    # the backfill we download those and parse locally; the per-ticker
+    # adapter stays for the cheap daily/weekly incremental.
+    if config.get("bulk_form345"):
+        lb = int(config.get("lookback_days", 90))
+        since_b = datetime.now(UTC).date() - timedelta(days=lb)
+        return await _sec_bulk_form345_backfill(pool, set(universe), since_b)
+
     # ── 1b. Targeted backfill: skip already-covered tickers ──────────
     # The historical bootstrap re-running the whole universe is what
     # hung on the pooler. ``skip_covered`` makes the backfill BOUNDED
@@ -912,6 +924,251 @@ def _gzip_in_place(path: Any) -> None:
     with open(p, "rb") as src, gzip.open(gz_path, "wb") as dst:
         shutil.copyfileobj(src, dst)
     p.unlink()
+
+
+_SEC_BULK_URL = (
+    "https://www.sec.gov/files/structureddata/data/"
+    "insider-transactions-data-sets/{q}_form345.zip"
+)
+
+
+async def _sec_bulk_fetch_zip(url: str, ua: str) -> bytes:
+    """Download one Form-345 quarterly zip (module-level so tests can
+    monkeypatch it). 429/5xx → retry via the canonical decorator;
+    404 (a not-yet-published quarter) → ``DataProviderOutage`` so the
+    caller can skip it cleanly."""
+    import httpx
+
+    from tpcore.outage import DataProviderOutage, with_retry
+
+    @with_retry(max_attempts=4, backoff_base_sec=2.0, backoff_cap_sec=30.0)
+    async def _do() -> bytes:
+        async with httpx.AsyncClient(timeout=180.0) as c:
+            r = await c.get(url, headers={"User-Agent": ua})
+        if r.status_code == 200:
+            return r.content
+        if r.status_code == 429 or 500 <= r.status_code < 600:
+            raise httpx.HTTPStatusError(
+                f"sec_bulk {url} → {r.status_code}",
+                request=r.request, response=r,
+            )
+        raise DataProviderOutage(f"sec_bulk {url} returned {r.status_code}")
+
+    return await _do()
+
+
+def _sec_quarters(since: Any) -> list[str]:
+    """Quarter labels (``YYYYqN``) from ``since`` (date) to today."""
+    from datetime import date as _date
+
+    today = datetime.now(UTC).date()
+    y, q = since.year, (since.month - 1) // 3 + 1
+    out: list[str] = []
+    while (y, q) <= (today.year, (today.month - 1) // 3 + 1):
+        out.append(f"{y}q{q}")
+        q += 1
+        if q > 4:
+            q, y = 1, y + 1
+        if y > today.year + 1:  # defensive
+            break
+    del _date
+    return out
+
+
+def _sec_bulk_parse_date(s: str) -> Any:
+    """Parse the Form-345 ``DD-MON-YYYY`` date (e.g. ``31-MAR-2026``)."""
+    from datetime import datetime as _dt
+
+    s = (s or "").strip()
+    if not s:
+        return None
+    try:
+        return _dt.strptime(s.title(), "%d-%b-%Y").date()
+    except ValueError:
+        return None
+
+
+async def _sec_bulk_form345_backfill(
+    pool: asyncpg.Pool, universe: set[str], since: Any,
+    dest_dir: Any = None,
+) -> int:
+    """Two-phase ETL load of the SEC quarterly Form 3/4/5 datasets.
+
+    **Phase 1 — Extract.** Download every quarter zip to
+    ``data/sec_backfill/raw/<q>_form345.zip``. A zip already on disk
+    (and valid) is NOT re-downloaded — the raw files are a durable,
+    re-runnable extract cache, so a crashed/aborted run resumes
+    without re-pulling 336 MB.
+
+    **Phase 2 — Transform → validate-at-CSV → Load → compress.** For
+    each on-disk zip: parse SUBMISSION/REPORTINGOWNER/NONDERIV_TRANS
+    filtered to the T1+T2 ``universe`` and ``since``; every row passes
+    the ``_insider_row_ok`` physical-truth gate **as it is written to
+    the per-quarter CSV** (the validation boundary, per the platform
+    CSV-first sub-protocol); load the validated set idempotently
+    (``ON CONFLICT DO NOTHING``); gzip the CSV. Each quarter is its
+    own short DB transaction → bounded + pooler-safe + resumable.
+    """
+    import csv as _csv
+    import io
+    import os
+    import zipfile
+    from decimal import Decimal
+    from pathlib import Path
+
+    from tpcore.outage import DataProviderOutage
+
+    ua = os.getenv("SEC_EDGAR_USER_AGENT", "short-term-trading-engine ops@local")
+    quarters = _sec_quarters(since)
+    if dest_dir is not None:
+        csv_dir = Path(dest_dir)
+    else:
+        repo_root = Path(__file__).resolve().parent.parent.parent
+        csv_dir = repo_root / "data" / "sec_backfill"
+    raw_dir = csv_dir / "raw"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── PHASE 1: EXTRACT — durable download to disk (resumable) ──────
+    extracted: list[tuple[str, Any]] = []
+    dl_new = dl_cached = dl_skipped = 0
+    for q in quarters:
+        zpath = raw_dir / f"{q}_form345.zip"
+        if zpath.exists() and zipfile.is_zipfile(zpath):
+            extracted.append((q, zpath))
+            dl_cached += 1
+            continue
+        try:
+            raw = await _sec_bulk_fetch_zip(_SEC_BULK_URL.format(q=q), ua)
+        except DataProviderOutage as exc:
+            # Future / not-yet-published quarter (404) — not an error.
+            dl_skipped += 1
+            logger.info(
+                "ingestion.handler.sec_filings.extract_skip",
+                quarter=q, reason=str(exc),
+            )
+            continue
+        tmp = zpath.with_suffix(".zip.part")
+        tmp.write_bytes(raw)
+        if not zipfile.is_zipfile(tmp):
+            tmp.unlink(missing_ok=True)
+            dl_skipped += 1
+            logger.warning(
+                "ingestion.handler.sec_filings.extract_bad_zip", quarter=q,
+            )
+            continue
+        tmp.rename(zpath)  # atomic: a partial download never looks done
+        extracted.append((q, zpath))
+        dl_new += 1
+        logger.info(
+            "ingestion.handler.sec_filings.extract_done",
+            quarter=q, bytes=len(raw),
+        )
+    logger.info(
+        "ingestion.handler.sec_filings.extract_phase_done",
+        quarters_available=len(extracted), downloaded=dl_new,
+        cached=dl_cached, skipped=dl_skipped,
+    )
+
+    # ── PHASE 2: TRANSFORM → validate-at-CSV → LOAD → compress ───────
+    total_loaded = 0
+    quarters_failed = 0
+    for qi, (q, zpath) in enumerate(extracted, start=1):
+        try:
+            zf = zipfile.ZipFile(zpath)
+
+            def _rows(name: str):
+                with zf.open(name) as fh:  # noqa: B023
+                    yield from _csv.DictReader(
+                        io.TextIOWrapper(fh, encoding="utf-8", errors="replace"),
+                        delimiter="\t",
+                    )
+
+            # ACCESSION → (ticker, filing_date) for in-universe issuers.
+            sub: dict[str, tuple[str, Any]] = {}
+            for r in _rows("SUBMISSION.tsv"):
+                tk = (r.get("ISSUERTRADINGSYMBOL") or "").strip().upper()
+                if not tk or tk not in universe:
+                    continue
+                if (r.get("DOCUMENT_TYPE") or "").strip() not in (
+                    "4", "5", "4/A", "5/A"
+                ):
+                    continue
+                fd = _sec_bulk_parse_date(r.get("FILING_DATE", ""))
+                if fd is None or fd < since:
+                    continue
+                sub[r["ACCESSION_NUMBER"]] = (tk, fd)
+
+            owner: dict[str, str] = {}
+            for r in _rows("REPORTINGOWNER.tsv"):
+                acc = r.get("ACCESSION_NUMBER")
+                if acc in sub and acc not in owner:
+                    owner[acc] = (r.get("RPTOWNERNAME") or "").strip() or "UNKNOWN"
+
+            # Transform + validate-at-CSV-write (the CSV is the
+            # validation boundary; only rows that pass the physical-
+            # truth gate are written AND loaded).
+            stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+            cpath = csv_dir / f"sec_insider_bulk_{q}_{stamp}.csv"
+            rows: list[tuple] = []
+            rejected = 0
+            with open(cpath, "w", newline="", encoding="utf-8") as fh:
+                w = _csv.writer(fh)
+                w.writerow(["ticker", "filing_date", "insider_name",
+                            "transaction_type", "shares", "price", "value"])
+                for r in _rows("NONDERIV_TRANS.tsv"):
+                    acc = r.get("ACCESSION_NUMBER")
+                    meta = sub.get(acc)
+                    if meta is None:
+                        continue
+                    disp = (r.get("TRANS_ACQUIRED_DISP_CD") or "").strip().upper()
+                    ttype = ("BUY" if disp == "A"
+                             else "SELL" if disp == "D" else "")
+                    try:
+                        shares = int(float(r.get("TRANS_SHARES") or 0))
+                        price = Decimal(str(r.get("TRANS_PRICEPERSHARE") or "0"))
+                    except (ValueError, ArithmeticError):
+                        rejected += 1
+                        continue
+                    tk, fd = meta
+                    row = {
+                        "ticker": tk, "filing_date": fd,
+                        "insider_name": owner.get(acc, "UNKNOWN"),
+                        "transaction_type": ttype, "shares": shares,
+                        "price": price, "value": price * shares,
+                    }
+                    if not _insider_row_ok(row):
+                        rejected += 1
+                        continue
+                    w.writerow([tk, fd.isoformat(), row["insider_name"],
+                                ttype, shares, f"{price}",
+                                f"{row['value']}"])
+                    rows.append((tk, fd, row["insider_name"], ttype,
+                                 shares, price, row["value"]))
+
+            loaded_i, _ = await _sec_load_csvs_to_db(pool, rows, [])
+            _gzip_in_place(cpath)
+            total_loaded += loaded_i
+            logger.info(
+                "ingestion.handler.sec_filings.bulk_quarter_done",
+                quarter=q, idx=qi, quarters_total=len(extracted),
+                rows_loaded=loaded_i, rows_rejected_at_csv_layer=rejected,
+                cum_rows_loaded=total_loaded,
+            )
+        except Exception as exc:
+            quarters_failed += 1
+            logger.warning(
+                "ingestion.handler.sec_filings.bulk_quarter_failed",
+                quarter=q, error=str(exc),
+            )
+            continue
+
+    logger.info(
+        "ingestion.handler.sec_filings.bulk_done",
+        quarters_available=len(extracted), quarters_failed=quarters_failed,
+        rows_loaded=total_loaded, universe=len(universe),
+        since=since.isoformat(),
+    )
+    return total_loaded
 
 
 async def _ingest_macro_hist_csv(
