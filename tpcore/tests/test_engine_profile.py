@@ -9,6 +9,7 @@ from tpcore.engine_profile import (
     Cadence,
     EngineProfile,
     _cadence_boundary,
+    _cadence_window_start,
     profile_for,
 )
 
@@ -62,3 +63,20 @@ def test_weekly_boundary_true_only_on_first_session_of_week():
         p = profile_for("allocator")
         assert _cadence_boundary(p, datetime(2026, 5, 4, 13, 0, tzinfo=UTC)) is True
         assert _cadence_boundary(p, datetime(2026, 5, 5, 13, 0, tzinfo=UTC)) is False
+
+
+def test_daily_window_start_is_midnight_utc_of_now_date():
+    ws = _cadence_window_start(profile_for("reversion"), datetime(2026, 5, 5, 21, 30, tzinfo=UTC))
+    assert ws == datetime(2026, 5, 5, 0, 0, tzinfo=UTC)
+
+
+def test_monthly_window_start_is_first_session_midnight():
+    with patch("tpcore.engine_profile.cal.first_session_of_month", return_value=date(2026, 5, 4)):
+        ws = _cadence_window_start(profile_for("momentum"), datetime(2026, 5, 4, 21, 30, tzinfo=UTC))
+        assert ws == datetime(2026, 5, 4, 0, 0, tzinfo=UTC)
+
+
+def test_weekly_window_start_is_week_first_session_midnight():
+    with patch("tpcore.engine_profile.cal.sessions_in_range", return_value=[date(2026, 5, 4), date(2026, 5, 5)]):
+        ws = _cadence_window_start(profile_for("allocator"), datetime(2026, 5, 5, 13, 0, tzinfo=UTC))
+        assert ws == datetime(2026, 5, 4, 0, 0, tzinfo=UTC)

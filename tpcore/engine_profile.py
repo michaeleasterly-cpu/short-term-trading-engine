@@ -14,7 +14,7 @@ docs/superpowers/specs/2026-05-17-event-driven-engine-services-design.md.
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from enum import StrEnum
 
 import structlog
@@ -70,3 +70,26 @@ def _cadence_boundary(profile: EngineProfile, now: datetime) -> bool:
         sessions = cal.sessions_in_range(wk_start, d)
         return bool(sessions) and sessions[0] == d
     return False  # unknown cadence → fail-closed
+
+
+def _midnight_utc(d: date) -> datetime:
+    return datetime.combine(d, time.min, tzinfo=UTC)
+
+
+def _cadence_window_start(profile: EngineProfile, now: datetime) -> datetime:
+    """Start (UTC) of the cadence cycle containing ``now``.
+
+    A run record at/after this instant means the engine already ran
+    this cycle. Daily = midnight UTC of now's date; monthly = midnight
+    of the month's first session; weekly = midnight of the week's
+    first session.
+    """
+    d = now.date()
+    if profile.cadence is Cadence.DAILY:
+        return _midnight_utc(d)
+    if profile.cadence is Cadence.MONTHLY_FIRST_TRADING_DAY:
+        return _midnight_utc(cal.first_session_of_month(d.year, d.month))
+    if profile.cadence is Cadence.WEEKLY_FIRST_TRADING_DAY:
+        sessions = cal.sessions_in_range(_week_start_date(d), d)
+        return _midnight_utc(sessions[0] if sessions else d)
+    return _midnight_utc(d)  # unknown → narrowest safe window (today)
