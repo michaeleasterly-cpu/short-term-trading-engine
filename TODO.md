@@ -319,12 +319,31 @@ but DSR/credibility gates remain structurally blocked.
   `archive/sigma/sigma_failed_expansion_search.csv`.
   **Scoping caveat (carried into the eulogy):** this adjudicates only
   the *directional* failed-expansion form. The **sector-neutral
-  residual variant** the research marks as the next step is a *new
-  engine* (different signal construction + risk model), NOT a Sigma
-  un-archiving — and was never tested here. "Sigma failed" ≠
-  "compression/residual mean-reversion is dead." (The previously-queued
-  HMM-regime path and the rejected 2026-05-15 OU gate are now moot —
-  Sigma is closed.)
+  residual idea** is pursued (operator decision 2026-05-17) as a
+  **Reversion enhancement** — the PCA-residual signal switch (Avellaneda
+  & Lee), NOT a new standalone engine and NOT a Sigma un-archiving.
+  "Sigma failed" ≠ "compression/residual mean-reversion is dead." (The
+  previously-queued HMM-regime path and the rejected 2026-05-15 OU gate
+  are now moot — Sigma is closed.)
+
+- **Reversion PCA-residual switch (2026-05-17, IN PROGRESS #171-175).**
+  Switch Reversion's primary signal from earnings-gated price-z fades to
+  daily PCA-residual mean reversion (rolling 252d PCA on T1+T2, top-K PC
+  removal, OU s-score, PCA-implied statistical groups for
+  market/sector-neutral matched book, volume overlays). Shared primitive
+  `tpcore/backtest/pca_residual.py`; sweep via canonical
+  `search_parameters.py --engine reversion` (signal_mode adjudicates
+  pca_residual vs retained price_z baseline). Train 2011-01-01,
+  held-back 2022-01-01 (data can't honor the literature's 1999 start —
+  28 tickers pre-2000; sector-neutral has no GICS source so PCA-implied
+  groups substitute). Survivorship is the dominant risk (prices_daily
+  logs ~54 delistings of 7,730 true-hundreds): terminal delisting leg
+  injected AND `survivorship_inclusive=False` so credibility is capped.
+  Verdict bar (operator): held-back DSR≥0.95, credibility≥60, PBO≤0.20,
+  trades/param≥25, ≥150 held-back trades, no single-crisis PnL
+  concentration. Live setup_detection parity (#173) is deferred until
+  the sweep clears the battery — do not wire a live plug to an
+  unvalidated signal (the Sigma lesson).
 
 - **Reversion — reclassified as satellite 2026-05-15 (closed).** The
   signal-class-redesign decision was resolved by reclassifying Reversion

@@ -1,7 +1,7 @@
 # Glossary
 
 plug: One of five standardized modules inside each engine.
-sigma: ARCHIVED 2026-05-16 (`archive/sigma/`, see `archive/sigma/EULOGY.md`). Was a range scalping engine (daily Bollinger Bands, ADX, stochastic). Failed the credibility gate in both its static and failed-expansion forms; no longer imported/scheduled/gated/swept. The sector-neutral residual idea would be a *new* engine, not a revival.
+sigma: ARCHIVED 2026-05-16 (`archive/sigma/`, see `archive/sigma/EULOGY.md`). Was a range scalping engine (daily Bollinger Bands, ADX, stochastic). Failed the credibility gate in both its static and failed-expansion forms; no longer imported/scheduled/gated/swept. The sector-neutral residual idea is pursued (2026-05-17) as a *Reversion enhancement* (the PCA-residual signal switch), not a new engine and not a Sigma revival.
 reversion: Statistical mean reversion engine (Z-score, RSI extremes).
 vector: Momentum swing engine (multi-day trend, catalyst overlay).
 s2: Short squeeze engine (satellite, rare setups).

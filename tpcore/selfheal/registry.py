@@ -20,12 +20,30 @@ from tpcore.quality.validation.suite import KNOWN_CHECK_NAMES
 
 from .spec import HealSpec
 
-# Bounded targeted repair shared by both prices checks: the daily_bars
-# stage's repair_gaps mode re-pulls ONLY the invariant-flagged tickers
-# (computed from the same _evaluate the checks use → detector/healer
-# can't disagree). Proven 2026-05-15: closes live gaps in seconds vs a
-# whole-universe force_refresh that times out at 3600s.
+# Bounded targeted repair for the COMPLETENESS invariant: the
+# daily_bars stage's repair_gaps mode re-pulls ONLY the
+# invariant-flagged tickers (computed from the same _evaluate the
+# completeness check uses → detector/healer can't disagree). Closes
+# per-ticker completeness gaps in seconds.
 _PRICES_REPAIR = {"repair_gaps": "true"}
+
+# prices_daily_freshness goes red on staleness OR coverage_collapse.
+# Three repair modes were tried 2026-05-17, only the third works:
+#   1. repair_gaps — BLIND to coverage_collapse (derives targets from
+#      the COMPLETENESS invariant, empty in this failure mode);
+#      no-op'd a live 506/7,650 collapse. Fake-healable.
+#   2. force_refresh active (whole universe) — TIMED OUT at the 3600s
+#      stage cap, reaching only 6,910/7,650 in 60min. Re-pulling all
+#      ~7,650 every cycle can't self-heal; the "could never self-heal"
+#      caveat held even with the chunked endpoint.
+#   3. repair_coverage — computes ONLY the tickers present on the
+#      prior session but missing the target session and re-pulls just
+#      those (747 = 8 chunks ≈ 6min). Bounded, deterministic,
+#      detector/healer agree by construction. THIS is the real heal.
+# Producer self-validation in _stage_daily_bars also fails the stage
+# loudly on collapse, so this heal is the recovery path, not the only
+# line of defence.
+_PRICES_COVERAGE_REPAIR = {"repair_coverage": "true"}
 
 # Honest disposition is per failure-CLASS, not a blanket placeholder.
 #
@@ -110,8 +128,8 @@ _SPECS: tuple[HealSpec, ...] = (
              healable=True, stage="classify_tickers",
              params={"skip_guard_days": "0"}, max_attempts=2),
     HealSpec(check_name="prices_daily_freshness", source="prices_daily",
-             healable=True, stage="daily_bars", params=dict(_PRICES_REPAIR),
-             max_attempts=3),
+             healable=True, stage="daily_bars",
+             params=dict(_PRICES_COVERAGE_REPAIR), max_attempts=3),
     HealSpec(check_name="prices_daily_completeness", source="prices_daily",
              healable=True, stage="daily_bars", params=dict(_PRICES_REPAIR),
              max_attempts=3),
