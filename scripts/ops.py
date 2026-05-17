@@ -553,6 +553,14 @@ async def _stage_daily_bars(pool: asyncpg.Pool, config: dict[str, Any]) -> dict[
     # does NOT emit DATA_OPERATIONS_COMPLETE and self-heal/escalation
     # fires at ingest time, not a cycle later. "100% data or don't
     # trade" enforced at the producer, not just the consumer.
+    #
+    # #185 Phase 4 decision (kept, not retired): this coarse guard is a
+    # cheap fail-fast PRE-FILTER, NOT the source of truth. It already
+    # reuses the canonical check's threshold (COVERAGE_COLLAPSE_PCT
+    # below) so it cannot diverge, and the authoritative per-feed
+    # `prices_daily_*` checks now also run on-completion via the
+    # Phase 2/3 tripwire (_per_feed_tripwire). Defense-in-depth — do
+    # NOT grow bespoke logic here; extend the canonical check instead.
     from tpcore.quality.validation.checks.prices_daily_freshness import (
         COVERAGE_COLLAPSE_PCT,
     )
