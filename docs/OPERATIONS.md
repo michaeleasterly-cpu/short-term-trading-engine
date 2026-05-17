@@ -599,8 +599,10 @@ ORDER BY engine;
 - `kill_switch_active = false` (per-engine column). A `true` value means the platform froze new entries — see §10 *Troubleshooting → Risk Governor kill switch*.
 - `daily_pnl` ≥ −5% × `engine_equity` (5% daily loss kill, per `tpcore.risk.RiskGovernor`).
 - `weekly_pnl` ≥ −10% × `engine_equity` (10% weekly loss kill).
-- `open_positions` ≤ the engine's `MAX_CONCURRENT_POSITIONS` (Sigma 4, Reversion 5, Vector 5).
+- `open_positions` ≤ the engine's per-engine position cap, resolved from the declarative SoT `tpcore.risk.limits_profile.limits_for()`: momentum 200, sentinel 5, all others (reversion/vector) default 8.
 - `updated_at` is recent (last weekday for active engines).
+
+**Governor is now real and uniformly enforced (2026-05-17).** Previously the `RiskGovernor` gated only the 2 per-trade engines and ran against frozen placeholder equity. Now all 4 live engines reach `check_trade()` + `record_fill()` on every order: per-trade engines (reversion/vector) via `BaseOrderManager.submit_decision`, batch engines (momentum/sentinel) via the shared `tpcore.risk.batch_gate.gate_batch_order()` in their scheduler submit loop (with `record_fill(position_delta=-1)` on rebalance-driven exits). Per-engine `RiskLimits` come from `tpcore.risk.limits_profile`; the governor emits a `tpcore.risk.equity_unallocated` WARNING while an engine's effective equity is still the 10000 placeholder. **Known limitation:** for batch engines `open_positions` is a conservative slot proxy — `+1` per gated order, `−1` per submitted close, but stale prior-holding slots are not reconciled against actual broker positions, so the cap errs tight/conservative and never fails open; full broker-position reconciliation is a documented follow-up.
 
 ### Credibility score (graduation gate)
 

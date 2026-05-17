@@ -35,6 +35,12 @@ class _StubGovernor:
     def __init__(self, state: RiskState | None) -> None:
         self._state = state
 
+    async def register_engine(self, *_args, **_kwargs) -> None:
+        # No-op: the scheduler registers momentum with the governor before
+        # the kill-switch check. Idempotent on the real governor; here it
+        # just must not raise so the early-return path is still exercised.
+        return None
+
     async def state_for(self, engine_id: str) -> RiskState | None:
         return self._state
 

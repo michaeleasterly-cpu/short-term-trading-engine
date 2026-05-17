@@ -71,7 +71,9 @@ from tpcore.interfaces.broker import (
     TimeInForce,
 )
 from tpcore.logging import DBLogHandler
+from tpcore.risk.batch_gate import gate_batch_order
 from tpcore.risk.governor import RiskGovernor
+from tpcore.risk.limits_profile import limits_for
 from tpcore.risk.persistent_store import PostgresRiskStateStore
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -235,6 +237,16 @@ class MomentumScheduler:
             governor = RiskGovernor(
                 state_store=state_store, broker=broker, pool=pool,
             )
+            # Register momentum with the governor so check_trade has a
+            # RiskState row + the basket-sized position cap (limits_for
+            # gives momentum max_open_positions=200; the global 8-pos
+            # default would otherwise block the whole decile). Idempotent —
+            # won't clobber an existing state, only (re)records limits.
+            await governor.register_engine(
+                "momentum",
+                self._engine_equity,
+                limits=limits_for("momentum"),
+            )
 
             # Kill-switch pre-flight (F3 of 2026-05-14 audit). Mirrors
             # the sigma/reversion/vector pattern so a platform-wide
@@ -384,6 +396,26 @@ class MomentumScheduler:
                         qty=order.qty, side=order.side,
                     )
                     continue
+                # Every submitted name passes the shared batch gate so the
+                # RiskGovernor (loss caps, kill switch, position cap,
+                # exposure) is enforced per order — not just the global
+                # kill-switch pre-flight above. A BLOCKed name is skipped;
+                # the rest of the rebalance still proceeds.
+                side = OrderSide.SELL if order in sells else OrderSide.BUY
+                gated = await gate_batch_order(
+                    governor, "momentum",
+                    ticker=order.ticker,
+                    notional=Decimal(str(order.notional_usd)),
+                    direction=side,
+                )
+                if not gated:
+                    failed.append((order.ticker, "governor_blocked"))
+                    logger.warning(
+                        "momentum.scheduler.governor_blocked",
+                        ticker=order.ticker, action=order.action.value,
+                        qty=order.qty, side=order.side,
+                    )
+                    continue
                 try:
                     placed = await broker.place_order(self._payload_to_order(order))
                 except Exception as exc:  # noqa: BLE001
@@ -394,6 +426,16 @@ class MomentumScheduler:
                         qty=order.qty, side=order.side, error=str(exc)[:200],
                     )
                     continue
+                if side is OrderSide.SELL:
+                    # Realized P&L for batch day-market exits is reconciled
+                    # via the AAR / trade_monitor path; here we only free the
+                    # governor position slot so max_open_positions stays real.
+                    # Do NOT add realized_pnl here (would double-count).
+                    await governor.record_fill(
+                        engine_id="momentum",
+                        realized_pnl=Decimal("0"),
+                        position_delta=-1,
+                    )
                 if placed.broker_order_id is not None:
                     submitted.append(placed.broker_order_id)
                 logger.info(

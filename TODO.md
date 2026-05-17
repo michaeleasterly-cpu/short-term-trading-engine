@@ -374,3 +374,64 @@ fully closed — no remaining items.
   reserved/generic), pin a license, add `pyproject.toml` package
   metadata, set up `python -m build` + `twine upload`, decide on
   versioning scheme. Same key/PII review as the gist.
+
+## Discovered follow-ups — RiskGovernor work + architecture review (2026-05-17)
+
+Surfaced while making the RiskGovernor real + uniform (branch
+`worktree-risk-governor-fix`). Recorded here so they are not lost.
+
+**Architecture epics (operator directives 2026-05-17 — see memory
+`project_three_service_architecture`):**
+- **Event-driven engine services (P1 epic).** Entire engine service
+  event-driven: an engine fires the moment its preconditions are met
+  (data ready + market closed + setup ready), never on a clock. Time is
+  a GATE/precondition, never a TRIGGER. Engine service is already
+  event-driven (`DATA_OPERATIONS_COMPLETE`); the allocator is the
+  time-driven outlier to convert.
+- **Two-daemon consolidation.** Collapse to exactly two daemons: data
+  daemon (emits readiness event) + engine daemon. AAR, forensics, and
+  the allocator all move INTO the engine daemon (no separate launchd
+  jobs).
+- **Declarative `engine_profile` (the vehicle).** Per-engine cadence +
+  precondition SoT, same proven pattern as `tpcore.feeds` /
+  `tpcore.risk.limits_profile`. MUST extend the existing per-engine
+  data gate ("Per-engine data gates — DONE 2026-05-16"), NOT a parallel
+  mechanism. First step: inventory the existing per-engine gate.
+- **Allocator → event-driven.** Fire on the readiness event + an
+  idempotent "first-trading-day-of-week / already-ran-this-cycle"
+  guard (it is weekly, not daily — today it has NO such guard, only the
+  `(engine, allocation_date)` unique constraint prevents corruption).
+
+**Pre-existing bugs discovered (NOT introduced by this work; out of
+scope here, flagged honestly):**
+- **Allocator `_engines` default is stale.** `AllocatorService.__init__`
+  default `("sigma","reversion","vector","momentum")` includes ARCHIVED
+  sigma and OMITS live sentinel. Production constructs it without
+  `engines=`, so: the allocator never allocates capital to sentinel,
+  and it re-upserts a `sigma` risk_state row every run. Needs a design
+  decision (is sentinel in the inverse-vol capital set? it is a
+  defensive overlay — may be intentionally excluded) then fix the
+  default / unify with the canonical engine roster used by
+  `run_all_engines.sh` as a single shared SoT. (T9's prune was made
+  fail-safe via an explicit `_ARCHIVED_ENGINES` allowlist so this stale
+  default can no longer cause live-engine data loss.)
+- **`audit_pipeline.shrinkage_detector` is vacuous.** It counts
+  `csv_archive.shrinkage_detected` in `application_log.message`, but
+  that is a pure structlog event never written to `application_log`
+  (no structlog→DB bridge in the repo). Same false premise the new
+  `governor_enforcement` check was redesigned away from. Re-key it off
+  persisted evidence or it is audit theatre.
+
+**Governor follow-ups:**
+- **Batch-engine slot accounting.** `open_positions` for momentum/
+  sentinel is a conservative proxy (gate records +1 per gated order,
+  −1 per submitted close; stale prior-holding slots not reconciled).
+  Errs tight/never fails open. Follow-up: reconcile against broker
+  positions / AAR for an exact concurrent count.
+- **`ALLOCATOR_PRUNED_RISK_STATE` audit payload** `live_engines` field
+  is informational-only and slightly misleading (lists `self._engines`
+  incl. stale sigma) — cosmetic cleanup.
+- **Verify real-state substrate end-to-end once an engine graduates**
+  (allocator feeds `engine_equity`; trade_monitor/AAR feed pnl/
+  positions). The `tpcore.risk.equity_unallocated` WARNING surfaces a
+  still-placeholder equity — watch for it post-graduation.

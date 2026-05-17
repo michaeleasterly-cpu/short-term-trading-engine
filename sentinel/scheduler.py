@@ -65,7 +65,9 @@ from tpcore.interfaces.broker import (
 )
 from tpcore.logging import DBLogHandler
 from tpcore.order_ids import ENGINE_PREFIX, build_cid, is_engine_cid
+from tpcore.risk.batch_gate import gate_batch_order
 from tpcore.risk.governor import RiskGovernor
+from tpcore.risk.limits_profile import limits_for
 from tpcore.risk.persistent_store import PostgresRiskStateStore
 
 logger = structlog.get_logger(__name__)
@@ -117,6 +119,16 @@ class SentinelScheduler:
             broker = AlpacaPaperBrokerAdapter()
             state_store = PostgresRiskStateStore(pool=pool)
             governor = RiskGovernor(state_store=state_store, broker=broker, pool=pool)
+            # Register sentinel with the governor so check_trade has a
+            # RiskState row + the engine's position cap (limits_for gives
+            # sentinel its basket-sized limits; the global 8-pos default
+            # would otherwise block the 5-ETF defensive basket). Idempotent
+            # — won't clobber an existing state, only (re)records limits.
+            await governor.register_engine(
+                "sentinel",
+                self._platform_equity,
+                limits=limits_for("sentinel"),
+            )
 
             # Kill-switch pre-flight — same pattern as Momentum.
             risk_state = await governor.state_for("sentinel")
@@ -221,6 +233,25 @@ class SentinelScheduler:
                     logger.info("sentinel.scheduler.dry_run_skip",
                                 ticker=order.ticker, qty=order.qty, side=order.side)
                     continue
+                # Every submitted ETF passes the shared batch gate so the
+                # RiskGovernor (loss caps, kill switch, position cap,
+                # exposure) is enforced per name — not just the global
+                # kill-switch pre-flight above. A BLOCKed name is skipped;
+                # the rest of the basket still proceeds.
+                side = OrderSide.SELL if order in sells else OrderSide.BUY
+                gated = await gate_batch_order(
+                    governor, "sentinel",
+                    ticker=order.ticker,
+                    notional=Decimal(str(order.notional_usd)),
+                    direction=side,
+                )
+                if not gated:
+                    failed.append((order.ticker, "governor_blocked"))
+                    logger.warning(
+                        "sentinel.scheduler.governor_blocked",
+                        ticker=order.ticker, qty=order.qty, side=order.side,
+                    )
+                    continue
                 try:
                     placed = await broker.place_order(self._build_order(order))
                 except Exception as exc:  # noqa: BLE001
@@ -228,6 +259,16 @@ class SentinelScheduler:
                     logger.error("sentinel.scheduler.order_failed",
                                  ticker=order.ticker, error=str(exc)[:200])
                     continue
+                if side is OrderSide.SELL:
+                    # Realized P&L for batch day-market exits is reconciled
+                    # via the AAR / trade_monitor path; here we only free the
+                    # governor position slot so max_open_positions stays real.
+                    # Do NOT add realized_pnl here (would double-count).
+                    await governor.record_fill(
+                        engine_id="sentinel",
+                        realized_pnl=Decimal("0"),
+                        position_delta=-1,
+                    )
                 if placed.broker_order_id:
                     submitted.append(placed.broker_order_id)
                 await db_log.order_submitted(

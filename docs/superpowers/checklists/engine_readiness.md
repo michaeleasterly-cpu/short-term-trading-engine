@@ -25,7 +25,9 @@ Template: copy `tpcore/templates/engine_template/` as the starting point — it 
 
 ## 3. Risk + capital gates
 
-- [ ] Every trade path runs through `tpcore.risk.RiskGovernor.check_trade()` **after** the engine-local capital gate. Both must approve.
+- [ ] Every trade path runs through `tpcore.risk.RiskGovernor` **after** the engine-local capital gate. Both must approve. Wire it per the engine's order topology:
+  - [ ] **OrderManager engines (reversion/vector):** `submit_decision` calls `governor.check_trade()` before submitting and `governor.record_fill()` after a fill — the `BaseOrderManager` pattern. No raw broker call may skip `check_trade()`.
+  - [ ] **Batch-scheduler engines with NO OrderManager (momentum/sentinel):** the per-name submit loop calls `tpcore.risk.batch_gate.gate_batch_order(...)` before `broker.place_order`, and records exits with `record_fill(position_delta=-1)`. The batch gate is the only sanctioned governor entry point for batch engines.
 - [ ] Capital gate's `assert_can_graduate` requires stats thresholds AND a fresh `tpcore.quality.validation.assert_passed` AND a credibility-rubric score ≥ 60 in `platform.data_quality_log` (via `tpcore.backtest.credibility.graduation_ready`).
 - [ ] Pre-graduation hard caps + daily-loss freeze + max-concurrent-positions are module-level constants in `models.py`, not magic numbers.
 
