@@ -57,16 +57,25 @@ class _NoopAsyncpgPool:
 
 
 class _StubGovernor:
-    """Records register_engine; state_for returns a non-killed state."""
+    """Records register_engine; state_for returns a non-killed state.
+
+    ``record_fill`` is a spy: every call is appended to ``fills`` so the
+    exit-side decrement test can assert ``position_delta`` / ``realized_pnl``
+    per closed ETF.
+    """
 
     def __init__(self) -> None:
         self.registered: list[tuple[str, Decimal]] = []
+        self.fills: list[tuple[str, Decimal, int]] = []
 
     async def register_engine(self, engine_id, engine_equity, limits=None):
         self.registered.append((engine_id, engine_equity))
 
     async def state_for(self, engine_id):
         return None  # not killed → proceeds
+
+    async def record_fill(self, engine_id, realized_pnl, position_delta):
+        self.fills.append((engine_id, realized_pnl, position_delta))
 
     async def check_trade(self, **_kwargs):  # pragma: no cover - patched out
         raise AssertionError("check_trade should go through gate_batch_order")
@@ -235,6 +244,77 @@ async def test_sentinel_skips_governor_blocked_etf(monkeypatch) -> None:
         await sched.run_once(as_of=AS_OF)
 
     assert sorted(broker.placed) == [t for t in BASKET if t != "TLT"]
+
+
+class _StubExecutionWithExits(_StubExecution):
+    """ACTIVE→exit: 2 prior ETFs being CLOSED (sells) + 1 fresh buy.
+
+    Mirrors a basket rotation where two satellite names are exited and
+    one new name is opened, so the submit loop processes 2 SELLs and
+    1 BUY.
+    """
+
+    def build_decision(self, *, as_of, state, equity_usd, prices, current_holdings):
+        sells = ["SH", "PSQ"]
+        buy = "GLD"
+        targets = [
+            SentinelTarget(
+                ticker=buy,
+                target_weight=BASKET_WEIGHTS_DEFAULT[buy],
+                target_notional_usd=Decimal("1000"),
+                target_shares=10,
+                last_price=Decimal("100"),
+            )
+        ]
+        orders = [
+            SentinelOrder(ticker=t, side="sell", qty=10, notional_usd=Decimal("1000"))
+            for t in sells
+        ] + [
+            SentinelOrder(ticker=buy, side="buy", qty=10, notional_usd=Decimal("1000"))
+        ]
+        return SentinelDecision(
+            as_of=as_of,
+            state=state,
+            allocation_cap_pct=Decimal("0.10"),
+            deployable_equity_usd=Decimal("10000"),
+            targets=targets,
+            orders=orders,
+            missing_etfs=(),
+        )
+
+
+async def test_sentinel_decrements_governor_slot_on_close(monkeypatch) -> None:
+    """Each successfully-submitted SELL (a closed basket member) frees one
+    governor position slot via ``record_fill(position_delta=-1)``.
+
+    ``gate_batch_order`` is stubbed to True so its own ALLOW-side
+    ``record_fill(+1)`` accounting is out of the picture — the ONLY
+    ``record_fill`` calls the spy can see are the new exit-side decrements.
+    The decision yields two SELLs (SH, PSQ) and one BUY (GLD); only the
+    two SELLs must produce a decrement, each carrying ``realized_pnl == 0``
+    (P&L is reconciled via the AAR path — adding it here would
+    double-count).
+    """
+    governor, broker = _patch_scheduler(monkeypatch)
+    monkeypatch.setattr(
+        scheduler_module, "SentinelExecutionRisk", _StubExecutionWithExits
+    )
+
+    with patch(
+        "sentinel.scheduler.gate_batch_order",
+        new=AsyncMock(return_value=True),
+    ):
+        sched = SentinelScheduler(submit_orders=True)
+        await sched.run_once(as_of=AS_OF)
+
+    # Exactly the two SELLs (SH, PSQ) were submitted → two decrements.
+    assert governor.fills == [
+        ("sentinel", Decimal("0"), -1),
+        ("sentinel", Decimal("0"), -1),
+    ]
+    assert sum(1 for _e, _p, d in governor.fills if d == -1) == 2
+    # No realized P&L recorded here (double-count guard).
+    assert all(pnl == Decimal("0") for _e, pnl, _d in governor.fills)
 
 
 if __name__ == "__main__":  # pragma: no cover

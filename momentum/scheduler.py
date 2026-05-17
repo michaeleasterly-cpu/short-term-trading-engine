@@ -426,6 +426,16 @@ class MomentumScheduler:
                         qty=order.qty, side=order.side, error=str(exc)[:200],
                     )
                     continue
+                if side is OrderSide.SELL:
+                    # Realized P&L for batch day-market exits is reconciled
+                    # via the AAR / trade_monitor path; here we only free the
+                    # governor position slot so max_open_positions stays real.
+                    # Do NOT add realized_pnl here (would double-count).
+                    await governor.record_fill(
+                        engine_id="momentum",
+                        realized_pnl=Decimal("0"),
+                        position_delta=-1,
+                    )
                 if placed.broker_order_id is not None:
                     submitted.append(placed.broker_order_id)
                 logger.info(

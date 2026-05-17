@@ -69,16 +69,25 @@ class _NoopAsyncpgPool:
 
 
 class _StubGovernor:
-    """Records register_engine; state_for returns a non-killed state."""
+    """Records register_engine; state_for returns a non-killed state.
+
+    ``record_fill`` is a spy: every call is appended to ``fills`` so the
+    exit-side decrement test can assert ``position_delta`` / ``realized_pnl``
+    per closed name.
+    """
 
     def __init__(self) -> None:
         self.registered: list[tuple[str, Decimal]] = []
+        self.fills: list[tuple[str, Decimal, int]] = []
 
     async def register_engine(self, engine_id, engine_equity, limits=None):
         self.registered.append((engine_id, engine_equity))
 
     async def state_for(self, engine_id):
         return None  # not killed → proceeds
+
+    async def record_fill(self, engine_id, realized_pnl, position_delta):
+        self.fills.append((engine_id, realized_pnl, position_delta))
 
     async def check_trade(self, **_kwargs):  # pragma: no cover - patched out
         raise AssertionError("check_trade should go through gate_batch_order")
@@ -234,6 +243,35 @@ async def test_momentum_skips_governor_blocked_name(monkeypatch) -> None:
         await sched.run_once(as_of=date_t(2026, 5, 14))
 
     assert sorted(broker.placed) == ["AAA", "CCC"]
+
+
+async def test_momentum_decrements_governor_slot_on_close(monkeypatch) -> None:
+    """Each successfully-submitted SELL (a closed prior holding) frees one
+    governor position slot via ``record_fill(position_delta=-1)``.
+
+    ``gate_batch_order`` is stubbed to True so its own ALLOW-side
+    ``record_fill(+1)`` accounting is out of the picture — the ONLY
+    ``record_fill`` calls the spy can see are the new exit-side decrements.
+    The decision yields exactly one SELL (AAA, RebalanceAction.CLOSE) and
+    two BUYs; only AAA must produce a decrement, and it must carry
+    ``realized_pnl == 0`` (P&L is reconciled via the AAR path — adding it
+    here would double-count).
+    """
+    governor, broker = _patch_scheduler(monkeypatch)
+
+    with patch(
+        "momentum.scheduler.gate_batch_order",
+        new=AsyncMock(return_value=True),
+    ):
+        sched = MomentumScheduler(submit_orders=True, force_rebalance=True)
+        await sched.run_once(as_of=date_t(2026, 5, 14))
+
+    # Exactly one SELL was submitted (AAA) → exactly one decrement.
+    assert governor.fills == [("momentum", Decimal("0"), -1)]
+    # The two BUYs (BBB, CCC) must NOT produce any decrement.
+    assert sum(1 for _e, _p, d in governor.fills if d == -1) == 1
+    # No realized P&L recorded here (double-count guard).
+    assert all(pnl == Decimal("0") for _e, pnl, _d in governor.fills)
 
 
 if __name__ == "__main__":  # pragma: no cover
