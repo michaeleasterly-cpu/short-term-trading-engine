@@ -110,13 +110,16 @@ def _derive(cls: str) -> DispositionPolicy | None:
     return None
 
 
+def _rung2_classes() -> set[str]:
+    return (
+        {f"selfheal:{k}" for k in HEAL_SPECS}
+        | {f"auditheal:{k}" for k in REMEDIATION_SPECS}
+        | {f"contract:{k}" for k in ADAPTER_CONTRACTS}
+    )
+
+
 def data_lane_escalation_classes() -> set[str]:
-    out: set[str] = set()
-    out |= {f"selfheal:{k}" for k in HEAL_SPECS}
-    out |= {f"auditheal:{k}" for k in REMEDIATION_SPECS}
-    out |= {f"contract:{k}" for k in ADAPTER_CONTRACTS}
-    out |= set(DISPOSITION_POLICIES)
-    return out
+    return _rung2_classes() | set(DISPOSITION_POLICIES)
 
 
 def policy_for(cls: str) -> DispositionPolicy:
@@ -140,11 +143,7 @@ def _resolvable(cls: str) -> bool:
 def disposition_drift() -> tuple[set[str], set[str]]:
     known = data_lane_escalation_classes()
     missing = {c for c in known if not _resolvable(c)}
-    rung2 = (
-        {f"selfheal:{k}" for k in HEAL_SPECS}
-        | {f"auditheal:{k}" for k in REMEDIATION_SPECS}
-        | {f"contract:{k}" for k in ADAPTER_CONTRACTS}
-    )
+    rung2 = _rung2_classes()
     extra = {k for k in DISPOSITION_POLICIES if k not in known or k in rung2}
     return missing, extra
 

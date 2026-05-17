@@ -72,7 +72,7 @@ def test_policy_for_unknown_raises() -> None:
 def test_audit_kk_checks_match_live_source() -> None:
     from tpcore.ladder.disposition import _AUDIT_KK_CHECKS
 
-    src = pathlib.Path("scripts/audit_data_pipeline.py").read_text()
+    src = (pathlib.Path(__file__).resolve().parents[2] / "scripts" / "audit_data_pipeline.py").read_text()
     m = re.search(r"async def run_known_knowns\(.*?\n(?=async def )",
                   src, re.S)
     body = m.group(0) if m else src
