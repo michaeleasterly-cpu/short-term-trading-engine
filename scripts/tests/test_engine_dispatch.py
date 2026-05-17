@@ -363,3 +363,21 @@ async def test_invoke_failure_is_isolated_per_engine():
     assert calls == list(ROSTER)
     assert any(c.args and c.args[0] == "engine_dispatch.invoke_failed"
                for c in log.error.call_args_list)
+
+
+async def test_dispatch_once_delegates_each_roster_engine_to_dispatch_engine():
+    """dispatch_once delegates per-engine work to _dispatch_engine with
+    _safe_invoke as the injected invoker (the extraction seam)."""
+    calls: list[tuple[str, object]] = []
+
+    async def _spy(pool, now, engine, invoke):
+        calls.append((engine, invoke))
+
+    pool = object()
+    now = datetime(2026, 5, 18, 13, 0, tzinfo=UTC)
+    with patch.object(ed, "_dispatch_engine", _spy), \
+         patch.object(ed, "_dispatch_allocator", AsyncMock()):
+        await dispatch_once(pool, now)
+
+    assert [c[0] for c in calls] == list(ROSTER)
+    assert all(c[1] is ed._safe_invoke for c in calls)

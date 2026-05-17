@@ -134,73 +134,93 @@ async def _safe_invoke(engine: str) -> None:
                      error=str(exc))
 
 
+async def _dispatch_engine(pool, now: datetime, engine: str,
+                           invoke) -> None:
+    """One profiled actor's gated dispatch (B's ladder, extracted so
+    the allocator reuses it — spec C §3, reused not duplicated).
+
+    `invoke` is an awaitable `(engine: str) -> None` that runs the
+    actor with crash isolation (`_safe_invoke` for ROSTER engines,
+    `_invoke_allocator` for the allocator).
+    """
+    decision = await should_fire(engine, now, pool)
+    if decision.fire:
+        logger.info("engine_dispatch.dispatched", engine=engine)
+        await invoke(engine)
+    elif decision.checks.get("data_ready") is False:
+        window_start = cadence_window_start(engine, now)
+        # CLEANUP #2 (deferred from B-T3): compute failing sources FIRST
+        # (failing_sources_for_engine does its own pool.acquire) and
+        # only THEN open our outer conn — there is never a nested
+        # acquire (one conn held at a time for the whole branch).
+        sources = await failing_sources_for_engine(pool, engine)
+        async with pool.acquire() as conn:
+            state = await _open_request_state(conn, engine, window_start)
+            if state is None:
+                # no request yet → emit one (dedup boundary)
+                await _emit_data_request(
+                    conn, engine, sources, decision.reason)
+                return
+            terminal = state["terminal"]
+            if terminal == "DATA_REPAIR_COMPLETE" and state["green"] is True:
+                redecision = await should_fire(engine, now, pool)
+                if redecision.fire:
+                    logger.info("engine_dispatch.refire_after_repair",
+                                engine=engine)
+                    await invoke(engine)
+                else:
+                    logger.info(
+                        "engine_dispatch.repair_green_but_still_no_fire",
+                        engine=engine, reason=redecision.reason)
+                return
+            if (terminal == "DATA_REPAIR_ESCALATED"
+                    or (terminal == "DATA_REPAIR_COMPLETE"
+                        and not state["green"])):
+                logger.error("engine_dispatch.data_unrecovered",
+                             engine=engine, request_id=state["request_id"])
+                return
+            # terminal is None — request open, no terminal event yet
+            if (now - state["req_ts"]).total_seconds() \
+                    >= _NO_TERMINAL_TIMEOUT_SECONDS:
+                logger.error("engine_dispatch.data_request_timeout",
+                             engine=engine,
+                             request_id=state["request_id"])
+            else:
+                logger.info("engine_dispatch.request_open", engine=engine)
+            return
+    elif decision.reason == "already ran this cycle":
+        prof = profile_for(engine)
+        window_start = cadence_window_start(engine, now) if prof else now
+        async with pool.acquire() as conn:
+            if await _crashed_startup_refire(conn, engine, now, window_start):
+                logger.warning(
+                    "engine_dispatch.crashed_startup_refire", engine=engine)
+                await invoke(engine)
+                return
+        logger.info(
+            "engine_dispatch.skipped", engine=engine,
+            reason=decision.reason,
+            data_ready=decision.checks.get("data_ready"),
+        )
+    else:
+        logger.info(
+            "engine_dispatch.skipped", engine=engine,
+            reason=decision.reason,
+            data_ready=decision.checks.get("data_ready"),
+        )
+
+
+async def _dispatch_allocator(pool, now: datetime) -> None:  # pragma: no cover — C-T2 stub
+    """Placeholder for allocator gated dispatch (Sub-project C-T2).
+
+    Will be implemented in C-T2 using _dispatch_engine with
+    _invoke_allocator.  Lives here now so the seam test can patch it.
+    """
+
+
 async def dispatch_once(pool, now: datetime) -> None:
     for engine in ROSTER:
-        decision = await should_fire(engine, now, pool)
-        if decision.fire:
-            logger.info("engine_dispatch.dispatched", engine=engine)
-            await _safe_invoke(engine)
-        elif decision.checks.get("data_ready") is False:
-            window_start = cadence_window_start(engine, now)
-            # CLEANUP #2 (deferred from T3): compute failing sources FIRST
-            # (failing_sources_for_engine does its own pool.acquire) and
-            # only THEN open our outer conn — there is never a nested
-            # acquire (one conn held at a time for the whole branch).
-            sources = await failing_sources_for_engine(pool, engine)
-            async with pool.acquire() as conn:
-                state = await _open_request_state(conn, engine, window_start)
-                if state is None:
-                    # no request yet → emit one (dedup boundary)
-                    await _emit_data_request(
-                        conn, engine, sources, decision.reason)
-                    continue
-                terminal = state["terminal"]
-                if terminal == "DATA_REPAIR_COMPLETE" and state["green"] is True:
-                    redecision = await should_fire(engine, now, pool)
-                    if redecision.fire:
-                        logger.info("engine_dispatch.refire_after_repair",
-                                    engine=engine)
-                        await _safe_invoke(engine)
-                    else:
-                        logger.info(
-                            "engine_dispatch.repair_green_but_still_no_fire",
-                            engine=engine, reason=redecision.reason)
-                    continue
-                if (terminal == "DATA_REPAIR_ESCALATED"
-                        or (terminal == "DATA_REPAIR_COMPLETE"
-                            and not state["green"])):
-                    logger.error("engine_dispatch.data_unrecovered",
-                                 engine=engine, request_id=state["request_id"])
-                    continue
-                # terminal is None — request open, no terminal event yet
-                if (now - state["req_ts"]).total_seconds() \
-                        >= _NO_TERMINAL_TIMEOUT_SECONDS:
-                    logger.error("engine_dispatch.data_request_timeout",
-                                 engine=engine,
-                                 request_id=state["request_id"])
-                else:
-                    logger.info("engine_dispatch.request_open", engine=engine)
-                continue
-        elif decision.reason == "already ran this cycle":
-            prof = profile_for(engine)
-            window_start = cadence_window_start(engine, now) if prof else now
-            async with pool.acquire() as conn:
-                if await _crashed_startup_refire(conn, engine, now, window_start):
-                    logger.warning(
-                        "engine_dispatch.crashed_startup_refire", engine=engine)
-                    await _safe_invoke(engine)
-                    continue
-            logger.info(
-                "engine_dispatch.skipped", engine=engine,
-                reason=decision.reason,
-                data_ready=decision.checks.get("data_ready"),
-            )
-        else:
-            logger.info(
-                "engine_dispatch.skipped", engine=engine,
-                reason=decision.reason,
-                data_ready=decision.checks.get("data_ready"),
-            )
+        await _dispatch_engine(pool, now, engine, _safe_invoke)
 
 
 async def _amain() -> int:
