@@ -23,6 +23,14 @@ from ops.aar_autotune import _BEHAVIORAL
 from ops.engine_supervisor import INFRA_FAILURE_CLASSES
 
 
+class EscalationShape(StrEnum):
+    """Whether an escalation paired an ENGINE_HELD (held) or not
+    (escalate-only — DA-2 noise; engine kept trading)."""
+
+    HELD = "held"
+    ESCALATE_ONLY = "escalate-only"
+
+
 class EngineEscalationDisposition(StrEnum):
     """Every engine escalation terminates in exactly one of these.
     No AUTO_CONVERTED: the engine lane has no auto-conversion actor."""
@@ -145,6 +153,7 @@ _OPEN_FP_SQL = """
 
 
 def _triggers_list(raw: Any) -> list[str]:
+    # asyncpg returns JSONB as a native list; the str branch guards a double-encoded producer
     if raw is None:
         return []
     if isinstance(raw, str):
@@ -166,28 +175,30 @@ async def list_undispositioned(pool, *, now: datetime | None = None,
     cutoff = now - timedelta(days=grace)
     async with pool.acquire() as conn:
         rows = await conn.fetch(_CANDIDATE_SQL, cutoff)
+    all_fps: set[str] = set()
+    for r in rows:
+        if not bool(r["has_held"]):
+            all_fps.update(_triggers_list(r["triggers"]))
+    open_fp_set: set[str] = set()
+    if all_fps:
+        async with pool.acquire() as conn:
+            fp_rows = await conn.fetch(_OPEN_FP_SQL, list(all_fps))
+        open_fp_set = {fr["fp"] for fr in fp_rows}
     out: list[dict] = []
     for r in rows:
-        rec = r["recorded_at"]
-        if rec is not None and rec >= cutoff:
-            continue  # within grace — skip (SQL already does this in prod)
-        has_held = bool(r["has_held"])
-        if has_held:
-            shape = "held"
+        if bool(r["has_held"]):
+            shape = EscalationShape.HELD
         else:
-            shape = "escalate-only"
+            shape = EscalationShape.ESCALATE_ONLY
             fps = _triggers_list(r["triggers"])
-            if fps:
-                async with pool.acquire() as conn:
-                    open_rows = await conn.fetch(_OPEN_FP_SQL, fps)
-                if not open_rows:
-                    continue  # all fps resolved → auto-closed
+            if fps and not (set(fps) & open_fp_set):
+                continue  # all fps resolved → auto-closed
             # no fps recorded → cannot auto-close; remains open
         pol = policy_for(r["failure_class"])
         out.append({
             "hold_id": r["hold_id"], "engine": r["engine"],
             "failure_class": r["failure_class"], "reason": r["reason"],
-            "recorded_at": r["recorded_at"], "shape": shape,
+            "recorded_at": r["recorded_at"], "shape": str(shape),
             "policy_default": (pol.default.value if pol else None),
             "policy_rationale": (pol.rationale if pol else None),
         })

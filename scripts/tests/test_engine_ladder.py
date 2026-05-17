@@ -1,4 +1,5 @@
-import contextlib  # noqa: F401  (used by later tasks' fake pools)
+import contextlib
+import json as _json
 import sys
 from pathlib import Path
 
@@ -55,7 +56,6 @@ def test_policy_for_unknown_is_none():
     assert el.policy_for("not_a_class") is None
 
 
-import json as _json  # noqa: E402
 from datetime import UTC, datetime, timedelta  # noqa: E402
 
 NOW = datetime(2026, 5, 18, 12, 0, tzinfo=UTC)
@@ -70,6 +70,10 @@ def _conn(esc_rows, open_fps):
         async def fetch(self, sql, *a):
             if "forensics_triggers" in sql:
                 return [{"fp": fp} for fp in open_fps]
+            cutoff = a[0] if a else None
+            if cutoff is not None:
+                return [r for r in esc_rows
+                        if r["recorded_at"] is None or r["recorded_at"] < cutoff]
             return esc_rows
     class _P:
         @contextlib.asynccontextmanager
@@ -79,11 +83,13 @@ def _conn(esc_rows, open_fps):
 
 
 def _row(hold_id, *, engine="reversion", failure_class="crashed_startup",
-         reason="x", recorded_at=OLD, has_held=True, triggers=None):
+         reason="x", recorded_at=OLD, has_held=True, triggers=None,
+         raw_triggers=False):
+    t = triggers or []
     return {"hold_id": hold_id, "engine": engine,
             "failure_class": failure_class, "reason": reason,
             "recorded_at": recorded_at, "has_held": has_held,
-            "triggers": _json.dumps(triggers or [])}
+            "triggers": (t if raw_triggers else _json.dumps(t))}
 
 
 async def test_list_includes_past_grace_held_open():
@@ -116,3 +122,19 @@ async def test_list_carries_policy_default():
     pool = _conn([_row("h3", failure_class="data_repair_escalated")], set())
     out = await el.list_undispositioned(pool, now=NOW, grace_days=7)
     assert out[0]["policy_default"] == "structural"
+
+
+async def test_list_escalate_only_native_list_triggers_branch():
+    pool = _conn([_row("e3", failure_class="behavioral", has_held=False,
+                        triggers=["fp-n"], raw_triggers=True)], {"fp-n"})
+    out = await el.list_undispositioned(pool, now=NOW, grace_days=7)
+    assert [r["hold_id"] for r in out] == ["e3"]
+    assert out[0]["shape"] == "escalate-only"
+
+
+async def test_list_escalate_only_no_fps_stays_open():
+    pool = _conn([_row("e4", failure_class="behavioral", has_held=False,
+                        triggers=[])], set())
+    out = await el.list_undispositioned(pool, now=NOW, grace_days=7)
+    assert [r["hold_id"] for r in out] == ["e4"]
+    assert out[0]["shape"] == "escalate-only"
