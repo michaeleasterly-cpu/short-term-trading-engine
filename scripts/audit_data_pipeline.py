@@ -53,12 +53,15 @@ import sys
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
 from tpcore.db import build_asyncpg_pool
 from tpcore.feeds import freshness_max_age_days
+
+if TYPE_CHECKING:
+    from tpcore.ingestion.csv_archive import ShrinkageReport
 
 logger = structlog.get_logger(__name__)
 
@@ -163,6 +166,98 @@ class _FindingSink(list):
         super().append(item)
         if self._on_append is not None:
             self._on_append(item)
+
+
+# ─── CSV-first archive guardrail ───────────────────────────────────────
+
+
+# The 5 ingest sources retrofitted with the CSV-first archive guardrail
+# (shipped 2026-05-15 — see tpcore.ingestion.csv_archive). Both the
+# csv_archive_presence check and the (disk-based) shrinkage_detector
+# iterate this single tuple — they must never diverge.
+ARCHIVE_SOURCES = (
+    "fred_macro", "alpaca_corporate_actions", "alpaca_daily_bars",
+    "fmp_fundamentals", "fmp_earnings_events",
+)
+
+
+def _detect_archive_shrinkage() -> list[ShrinkageReport]:
+    """Compare each archive source's latest snapshot to its predecessor.
+
+    Pool-free and disk-only: this is the *real* persisted evidence of a
+    vendor truncation (the on-disk ``.csv.gz`` archive), unlike the old
+    application_log query which keyed off a structlog event that has no
+    structlog→DB bridge in this repo (it could never fire).
+
+    Returns one :class:`ShrinkageReport` per source that has a prior
+    archive to compare against. A source with <2 archives yields no
+    report (``detect_shrinkage`` returns ``None``) — not an alarm.
+    """
+    from tpcore.ingestion.csv_archive import (
+        count_archive_rows,
+        detect_shrinkage,
+        latest_archive,
+    )
+
+    reports: list[ShrinkageReport] = []
+    for src in ARCHIVE_SOURCES:
+        try:
+            la = latest_archive(src)
+            if la is None:
+                continue
+            current_rows = count_archive_rows(la)
+            report = detect_shrinkage(src, current_rows, exclude_path=la)
+        except Exception:  # noqa: BLE001 — a broken archive must not abort the audit
+            continue
+        if report is not None:
+            reports.append(report)
+    return reports
+
+
+def _append_shrinkage_finding(
+    findings: list[AuditFinding], reports: list[ShrinkageReport]
+) -> None:
+    """Render the disk-based shrinkage check into an AuditFinding.
+
+    Preserves the original finding shape exactly (phase/check_name/
+    source/severity/summary/evidence/recommended_action).
+    """
+    over = [r for r in reports if r.over_threshold]
+    if over:
+        findings.append(AuditFinding(
+            phase="known_knowns", check_name="shrinkage_detector",
+            source="csv_archive", severity="FAIL",
+            summary=(
+                f"{len(over)} full-snapshot source(s) shrank > 20% vs the "
+                f"prior CSV archive — vendor truncation"
+            ),
+            evidence={"over_threshold": [
+                {
+                    "source": r.source,
+                    "previous_rows": r.previous_rows,
+                    "current_rows": r.current_rows,
+                    "shrinkage_pct": round(r.shrinkage_pct, 4),
+                    "previous_archive": r.previous_archive,
+                }
+                for r in over
+            ]},
+            recommended_action="inspect data/<source>_archive/ — vendor likely revoked history; the prior archive is the recovery source",
+        ))
+    else:
+        findings.append(AuditFinding(
+            phase="known_knowns", check_name="shrinkage_detector",
+            source="csv_archive", severity="OK",
+            summary="no full-snapshot source shrank > 20% vs its prior CSV archive",
+            evidence={"compared": [
+                {
+                    "source": r.source,
+                    "previous_rows": r.previous_rows,
+                    "current_rows": r.current_rows,
+                    "shrinkage_pct": round(r.shrinkage_pct, 4),
+                }
+                for r in reports
+            ]},
+        ))
 
 
 # ─── Phase 1: known_knowns ─────────────────────────────────────────────
@@ -424,10 +519,6 @@ async def run_known_knowns(pool, sink: _FindingSink | None = None) -> list[Audit
     # each of the 5 retrofitted sources, verify the archive directory
     # has at least one .csv.gz.
     from tpcore.ingestion.csv_archive import latest_archive
-    ARCHIVE_SOURCES = (
-        "fred_macro", "alpaca_corporate_actions", "alpaca_daily_bars",
-        "fmp_fundamentals", "fmp_earnings_events",
-    )
     missing_archive = []
     archive_state: dict[str, str] = {}
     for src in ARCHIVE_SOURCES:
@@ -455,34 +546,13 @@ async def run_known_knowns(pool, sink: _FindingSink | None = None) -> list[Audit
             evidence=archive_state,
         ))
 
-    # Shrinkage-detector state — did the BAMLH0A0HYM2 detector fire for
-    # any full-snapshot source recently? A hit means a vendor truncated.
-    async with pool.acquire() as conn:
-        shrink_rows = await conn.fetch("""
-            SELECT engine, message, data, recorded_at
-            FROM platform.application_log
-            WHERE event_type = 'WARNING'
-              AND message = 'csv_archive.shrinkage_detected'
-              AND recorded_at > NOW() - INTERVAL '7 days'
-            ORDER BY recorded_at DESC LIMIT 10
-        """)
-    if shrink_rows:
-        findings.append(AuditFinding(
-            phase="known_knowns", check_name="shrinkage_detector",
-            source="csv_archive", severity="FAIL",
-            summary=f"{len(shrink_rows)} vendor-truncation alarm(s) in last 7d — a source shrank > 20%",
-            evidence={"events": [
-                {"recorded_at": str(r["recorded_at"]), "data": _jsonify(r["data"]) if isinstance(r["data"], dict) else str(r["data"])}
-                for r in shrink_rows[:5]
-            ]},
-            recommended_action="inspect data/<source>_archive/ — vendor likely revoked history; the prior archive is the recovery source",
-        ))
-    else:
-        findings.append(AuditFinding(
-            phase="known_knowns", check_name="shrinkage_detector",
-            source="csv_archive", severity="OK",
-            summary="no vendor-truncation (shrinkage) alarms in last 7d",
-        ))
+    # Shrinkage-detector state — the BAMLH0A0HYM2 detector, re-keyed off
+    # the *real* persisted evidence: the on-disk CSV archive. (The old
+    # implementation queried platform.application_log for a structlog
+    # event with no structlog→DB bridge in this repo — it was vacuous
+    # and could never fire.) Compares each full-snapshot source's latest
+    # archive to its predecessor; FAIL if any shrank > 20%.
+    _append_shrinkage_finding(findings, _detect_archive_shrinkage())
 
     # insider_sentiment (Finnhub MSPR) — period-keyed, NOT date-keyed, so
     # it cannot ride the DATA_SOURCES date loop. Dedicated check mirroring
