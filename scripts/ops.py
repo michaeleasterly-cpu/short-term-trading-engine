@@ -431,28 +431,64 @@ async def _stage_daily_bars(pool: asyncpg.Pool, config: dict[str, Any]) -> dict[
     # key off "present on prior session, absent on target".
     if bool(config.get("repair_coverage", False)):
         from tpcore.calendar import previous_close
+        from tpcore.quality.validation.checks.prices_daily_freshness import (
+            CRITICAL_MAX_AGE_DAYS,
+            CRITICAL_TICKERS,
+            UNIVERSE_MAX_AGE_DAYS,
+        )
 
         tgt = previous_close(datetime.now(UTC)).date()
+        # Detector/healer convergence: prices_daily_freshness flags FOUR
+        # modes — coverage_collapse, critical_ticker_stale/missing_ticker,
+        # universe_stale_excess. The original query covered only
+        # coverage_collapse (present prior session, absent target); a
+        # multi-session SPY drop or a >14d-stale tail was never in that
+        # set → never healed → exhaust + escalate (the residual
+        # fake-healable found 2026-05-17). Target set is now the UNION of
+        # all three populations, using the check's OWN constants
+        # (single source of truth — never duplicated).
         async with pool.acquire() as conn:
             rows = await conn.fetch(
                 """
                 WITH prior AS (
                     SELECT MAX(date) AS d FROM platform.prices_daily
                     WHERE date < $1
+                ),
+                latest AS (
+                    SELECT ticker, MAX(date) AS last_date
+                    FROM platform.prices_daily
+                    WHERE delisted = false
+                    GROUP BY ticker
                 )
-                SELECT DISTINCT p.ticker
-                FROM platform.prices_daily p, prior
-                WHERE p.date = prior.d
-                  AND p.delisted = false
-                  AND NOT EXISTS (
-                      SELECT 1 FROM platform.prices_daily q
-                      WHERE q.ticker = p.ticker AND q.date = $1
-                  )
-                ORDER BY p.ticker
+                SELECT DISTINCT t FROM (
+                    -- coverage_collapse: present prior session, absent target
+                    SELECT p.ticker AS t
+                    FROM platform.prices_daily p, prior
+                    WHERE p.date = prior.d AND p.delisted = false
+                      AND NOT EXISTS (
+                          SELECT 1 FROM platform.prices_daily q
+                          WHERE q.ticker = p.ticker AND q.date = $1
+                      )
+                    UNION
+                    -- critical_ticker_stale / missing_ticker
+                    SELECT c.ticker AS t
+                    FROM unnest($2::text[]) AS c(ticker)
+                    LEFT JOIN latest l ON l.ticker = c.ticker
+                    WHERE l.last_date IS NULL OR l.last_date < $1 - $3::int
+                    UNION
+                    -- universe_stale_excess
+                    SELECT l.ticker AS t
+                    FROM latest l
+                    WHERE l.last_date < $1 - $4::int
+                ) u
+                ORDER BY t
                 """,
                 tgt,
+                list(CRITICAL_TICKERS),
+                CRITICAL_MAX_AGE_DAYS,
+                UNIVERSE_MAX_AGE_DAYS,
             )
-        missing = [r["ticker"] for r in rows]
+        missing = [r["t"] for r in rows]
         if not missing:
             return {
                 "rows_upserted": 0,
@@ -462,7 +498,11 @@ async def _stage_daily_bars(pool: asyncpg.Pool, config: dict[str, Any]) -> dict[
             }
         repaired = await handle_daily_bars(pool, {
             "universe": missing,
-            "lookback_days": int(config.get("lookback_days", 4)),
+            # Wide enough to backfill a >UNIVERSE_MAX_AGE_DAYS stale tail,
+            # not just a single-session hole.
+            "lookback_days": int(
+                config.get("lookback_days", UNIVERSE_MAX_AGE_DAYS + 6)
+            ),
             "end_offset_days": int(config.get("end_offset_days", 1)),
         })
         return {

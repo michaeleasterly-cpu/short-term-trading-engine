@@ -157,10 +157,20 @@ _SPECS: tuple[HealSpec, ...] = (
              source="apewisdom_social_sentiment",
              healable=True, stage="apewisdom_social_sentiment",
              params={"skip_guard_hours": "0"}, max_attempts=2),
-    # Stale Fear & Greed → recompute via the bounded canonical stage
-    # (reads existing platform data; no external pull).
+    # Fear & Greed is a DERIVED index — no external provider. The 2026
+    # -05-17 audit flagged it "fake-healable" assuming isolated heal;
+    # VERIFIED otherwise: handle_fear_greed recomputes from
+    # macro_indicators (VIX/hy_spread/yield_curve) + prices_daily (SPY),
+    # and the orchestrator iterates (max_iterations=4) — so its
+    # upstreams heal in an earlier pass and its recompute succeeds in a
+    # later one. healable=True is CORRECT and must stay: marking it
+    # healable=False would (per `if unhealable: return`) make a routine
+    # stale-fear_greed escalate the ENTIRE data layer and heal nothing.
+    # depends_on makes the upstream contract explicit + test-enforced
+    # (the fear_greed-class guard).
     HealSpec(check_name="fear_greed_freshness", source="fear_greed",
-             healable=True, stage="fear_greed", params={}, max_attempts=2),
+             healable=True, stage="fear_greed", params={}, max_attempts=2,
+             depends_on=("macro_indicators", "prices_daily")),
     # Stale short interest / borrow rates → re-run the bounded
     # canonical stage with the skip-guard disabled.
     HealSpec(check_name="short_interest_freshness", source="finra_short_interest",
