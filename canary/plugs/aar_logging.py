@@ -7,6 +7,7 @@ from decimal import Decimal
 
 import structlog
 
+from canary.models import CANARY_TICKER
 from tpcore.aar.classifier import classify_exit_reason
 from tpcore.aar.models import AfterActionReport, ExitReason
 from tpcore.interfaces.engine_plug import BaseEnginePlug
@@ -36,7 +37,7 @@ class CanaryAARLogging(BaseEnginePlug):
         sizing = ((entry_price * qty) / engine_equity_usd
                   if engine_equity_usd > 0 else Decimal("0"))
         return AfterActionReport(
-            engine="canary", trade_id=trade_id, ticker="SPY",
+            engine=self.engine_name, trade_id=trade_id, ticker=CANARY_TICKER,
             entry_ts=datetime.fromisoformat(entry_ts_iso),
             exit_ts=datetime.fromisoformat(exit_ts_iso),
             entry_price=entry_price, exit_price=exit_price, qty=qty,
