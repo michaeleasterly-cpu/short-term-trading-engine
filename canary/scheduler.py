@@ -57,9 +57,11 @@ _PREFIX = ENGINE_PREFIX["canary"]  # "ca_"
 class _Components:
     """Injectable seam so tests isolate the heavy broker/pool wiring.
 
-    ``db_log`` is the DBLogHandler for this run; callers must invoke
-    ``await comp.db_log.startup()`` / ``await comp.db_log.shutdown()``
-    around the trade logic so the seam controls those events in tests.
+    ``db_log`` is the DBLogHandler for this run.  ``run_once`` creates
+    the real handler, calls ``await db_log.startup()`` FIRST inside
+    ``try:``, then passes the same object here so ``comp.db_log is
+    db_log`` in production.  Tests patch ``_run_components`` and return
+    the same fake that ``DBLogHandler`` already yielded.
     """
     db_log: Any
     price: Decimal
@@ -71,9 +73,10 @@ class _Components:
 
 async def _run_components(pool, broker, governor, db_log) -> _Components:
     """Production wiring: latest SPY close, prior canary SPY holding,
-    real AARWriter + broker.place_order. db_log threaded in from the
-    caller so startup/shutdown (called on the returned comp.db_log)
-    hit the same object as run_once's outer db_log."""
+    real AARWriter + broker.place_order. db_log is threaded in from the
+    caller (run_once) — startup() has already been awaited on it before
+    this function is called; the same object is returned as comp.db_log
+    so subsequent signal()/order_submitted() calls hit it correctly."""
     from tpcore.aar import AARWriter  # noqa: PLC0415 — deferred; test patches _run_components
     writer = AARWriter(pool)
     async with pool.acquire() as conn:
@@ -170,6 +173,10 @@ async def run_once(as_of: date_t | None = None) -> dict[str, object]:
     # comp is used in finally for shutdown; assign None so finally always safe.
     comp: _Components | None = None
     try:
+        # FIRST awaited statement — mirrors sentinel/scheduler.py lines
+        # 132-133.  Guarantees DA-1 gets a STARTUP row even if any
+        # subsequent setup step (broker/governor/components) raises.
+        await db_log.startup()
         broker = AlpacaPaperBrokerAdapter()
         state_store = PostgresRiskStateStore(pool=pool)
         governor = RiskGovernor(state_store=state_store, broker=broker, pool=pool)
@@ -187,10 +194,10 @@ async def run_once(as_of: date_t | None = None) -> dict[str, object]:
             return {"as_of": as_of.isoformat(), "action": "kill_switch_halt"}
 
         # _run_components threads db_log in so comp.db_log IS db_log.
-        # startup/shutdown are called on comp.db_log so the injectable
-        # seam (tests patch _run_components) controls those events too.
+        # startup() has already been called above; the same object is
+        # returned so all subsequent signal()/order_submitted() calls
+        # use the live handler.
         comp = await _run_components(pool, broker, governor, db_log)
-        await comp.db_log.startup()
 
         if comp.price <= 0:
             logger.warning("canary.scheduler.no_price", as_of=as_of.isoformat())
