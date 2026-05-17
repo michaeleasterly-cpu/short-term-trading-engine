@@ -12,6 +12,9 @@
 #   * run scripts/run_data_operations.sh every weekday at 21:30 UTC
 #     (chains: data refresh → audit → validate → compress → emit event)
 #   * run scripts/ops.py --allocate every Monday at 13:00 UTC
+#   * emit the weekly data-layer digest (idempotent/ISO-week) — the
+#     operator's state-comprehension floor; unacked 2 weeks auto-
+#     de-escalates live trading
 #
 # Logs go to ~/Library/Logs/short-term-trading-engine/.
 #
@@ -25,7 +28,7 @@ echo "════════════════════════�
 echo "  INSTALLING PLATFORM DAEMONS — $(date '+%Y-%m-%d %H:%M:%S')"
 echo "════════════════════════════════════════════════════════════════════════"
 
-for installer in install_launchd_trade_monitor install_launchd_engine_service install_launchd_data_repair_service install_launchd_data_operations install_launchd_allocator; do
+for installer in install_launchd_trade_monitor install_launchd_engine_service install_launchd_data_repair_service install_launchd_data_operations install_launchd_allocator install_launchd_weekly_digest; do
     echo ""
     echo "▶ ${installer}"
     echo "────────────────────────────────────────────────────────────────────────"
@@ -41,4 +44,4 @@ echo "Verify:"
 echo "  launchctl list | grep com.michael.trading."
 echo ""
 echo "Tail logs:"
-echo "  tail -f ~/Library/Logs/short-term-trading-engine/{trade-monitor,engine-service,data-repair-service,data-operations,allocator}.log"
+echo "  tail -f ~/Library/Logs/short-term-trading-engine/{trade-monitor,engine-service,data-repair-service,data-operations,allocator,weekly-digest}.log"
