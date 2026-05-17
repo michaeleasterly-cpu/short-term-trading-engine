@@ -164,7 +164,7 @@ no data dropped — 13,848 rows / 1,104 tickers verified intact); stage
 validation check + module file (`checks/earnings_events_freshness.py`,
 `CHECK_NAME="earnings_events_freshness"`) + `KNOWN_CHECK_NAMES` +
 suite vars + conftest routing + test_suite/e2e source sets; selfheal
-`HealSpec(source="earnings_events")`; `audit_pipeline.py`; the two
+`HealSpec(source="earnings_events")`; `audit_data_pipeline.py`; the two
 one-off backfill scripts (git-mv'd); Vector's data-loading queries;
 docs. `earnings_events_freshness` verified GREEN on the live renamed
 table via the validation suite.
@@ -199,6 +199,22 @@ relevant to the still-owed SEC/earnings coverage verdict (WEEK GOAL #1).
 > original design intent, kept for rationale — remaining work is
 > incremental per-feed breadth (targeting/probes), not unbuilt
 > architecture.
+
+> **🔴 OPEN INCIDENT — prices_daily coverage collapse (logged 2026-05-17).**
+> `validation.prices_daily_freshness` red (ran 2026-05-16 21:30 UTC):
+> `stale=True confidence=0.889`, reason `coverage_collapse` — the
+> 2026-05-15 (Fri) NYSE session has only **506 tickers = 7%** of the
+> ~7,634 trailing-20-session avg (MAX(date) is current so the recency
+> check passes; coverage cratered underneath it — same failure class as
+> the prior 91% collapse). Core ETFs SPY/GLD/IWM/SH/PSQ stop at
+> 2026-05-14. Canonical fix is the existing bounded heal
+> (`prices_daily_freshness` → `daily_bars --param repair_gaps=true`).
+> **Decision (operator, 2026-05-17): report-only — no manual repair;
+> left for the next `run_data_operations.sh` self-heal cycle to clear.**
+> Re-check this entry after the next cycle; if still red, the bounded
+> heal is not converging and needs root-cause (why did 2026-05-15 ingest
+> only 506/7,634?). Not caused by the concurrent reversion/backtest
+> session (backtests read prices_daily, they don't write daily_bars).
 
 **Mandate (operator, verbatim intent):** "100% data, no gaps, no
 bullshit, runs on its own — I cannot babysit this." This applies to the
@@ -271,7 +287,7 @@ Self-heal is a GENERIC `tpcore` capability, NOT per-source bash.
   against the source. Threshold recalibration only after the our-gap
   hypothesis is empirically killed.
 - Each source's required tickers registered where the freshness check
-  can see them; add/retire the matching `audit_pipeline.py` check in
+  can see them; add/retire the matching `audit_data_pipeline.py` check in
   the same change.
 
 This is the path to the operator never touching data again. Until every
