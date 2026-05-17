@@ -268,6 +268,22 @@ fi
 _log_event INGESTION_COMPLETE wrapper_deep_audit
 echo "✓ 4-phase audit clean (no known_knowns 🔴; advisory yellows are non-gating)"
 
+# Step 4d — DATA SUPERVISOR (per-source hold + autonomous auto-clear).
+# Runs AFTER self-heal (Step 4) / deep-audit (Step 4c) so it sees the
+# cycle's FINAL red set. STATE-TRACKING ONLY: it NEVER gates — exit is
+# always 0 and it does NOT affect whether DATA_OPERATIONS_COMPLETE is
+# emitted (that remains exclusively the Step-4/4c 100%-green decision,
+# unchanged). Opens a per-source DATA_SOURCE_HELD for still-red
+# sources, autonomously auto-clears recovered ones, escalates a
+# chronically-stuck source. Data-native symmetric counterpart of the
+# engine DA-1 supervisor.
+echo ""
+echo "▶ STEP 4d / 6  data supervisor (per-source hold + auto-clear)"
+echo "────────────────────────────────────────────────────────────────────────"
+_log_event INGESTION_START wrapper_datasupervisor
+DATABASE_URL="${DATABASE_URL_IPV4:-$DATABASE_URL}" .venv/bin/python -m tpcore.datasupervisor || true
+_log_event INGESTION_COMPLETE wrapper_datasupervisor
+
 # Step 5 — compress any CSVs left behind by the backfill scripts.
 echo ""
 echo "▶ STEP 5 / 6  compress backfill CSVs"
