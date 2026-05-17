@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 
 import structlog
 
-from ops import engine_supervisor
+from ops import aar_autotune, engine_supervisor
 from tpcore.db import build_asyncpg_pool
 from tpcore.engine_profile import cadence_window_start, should_fire
 from tpcore.quality.validation.capital_gate import failing_sources_for_engine
@@ -100,6 +100,18 @@ async def _safe_supervise(pool, engine: str, now: datetime, invoke) -> None:
         await engine_supervisor.supervise(pool, engine, now, invoke)
     except Exception as exc:  # noqa: BLE001 — never abort the sweep
         logger.error("engine_dispatch.supervisor_failed", engine=engine,
+                     error=str(exc))
+
+
+async def _safe_autotune(pool, engine: str, now: datetime) -> None:
+    """Call the behavioral auto-tune with call-site crash isolation
+    (defense in depth — autotune() is already internally isolated; a
+    broken autotune must NEVER abort the sweep, DA-2 §9). No `invoke`:
+    behavioral holds have no self-heal."""
+    try:
+        await aar_autotune.autotune(pool, engine, now)
+    except Exception as exc:  # noqa: BLE001 — never abort the sweep
+        logger.error("engine_dispatch.autotune_failed", engine=engine,
                      error=str(exc))
 
 
@@ -222,6 +234,7 @@ async def _dispatch_allocator(pool, now: datetime) -> None:
     persisting any hold/clear so the same-cycle should_fire read sees
     it; on supervisor failure the dispatch still proceeds."""
     await _safe_supervise(pool, "allocator", now, _invoke_allocator)
+    await _safe_autotune(pool, "allocator", now)
     await _dispatch_engine(pool, now, "allocator", _invoke_allocator)
 
 
@@ -229,6 +242,7 @@ async def dispatch_once(pool, now: datetime) -> None:
     await _dispatch_allocator(pool, now)
     for engine in ROSTER:
         await _safe_supervise(pool, engine, now, _safe_invoke)
+        await _safe_autotune(pool, engine, now)
         await _dispatch_engine(pool, now, engine, _safe_invoke)
 
 

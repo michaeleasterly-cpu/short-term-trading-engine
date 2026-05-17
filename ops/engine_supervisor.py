@@ -146,6 +146,13 @@ async def _repair_complete_green_after(conn, engine: str,
 async def _auto_clear(pool, engine: str, now: datetime, hold) -> None:
     """Strong clear predicate (DA-1 §7). Conservative by construction;
     DA-2 reuses ENGINE_HELD/ENGINE_CLEARED with a stronger predicate."""
+    # DA-2 seam guard: DA-1 only clears the infra classes it created.
+    # Behavioral holds (failure_class="behavioral") are DA-2-owned and
+    # operator-cleared — DA-1 must never auto-resume them.
+    if hold.failure_class not in (
+            "crashed_startup", "scheduler_crash", "data_request_timeout",
+            "data_repair_escalated", "missed_cycle"):
+        return
     async with pool.acquire() as conn:
         if not await _clean_cycle_after(conn, engine, hold.held_at):
             return

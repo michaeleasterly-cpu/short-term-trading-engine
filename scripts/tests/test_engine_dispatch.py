@@ -571,3 +571,50 @@ async def test_supervise_failure_does_not_abort_sweep():
         await dispatch_once(object(), datetime(2026, 5, 18, 13, 0, tzinfo=UTC))
 
     assert ran == ["allocator", *ROSTER]  # every actor dispatched despite supervisor raising
+
+
+# ---------------------------------------------------------------------------
+# TASK DA-2 — wire aar_autotune per actor (between supervise and dispatch)
+# ---------------------------------------------------------------------------
+
+async def test_autotune_called_per_actor_between_supervise_and_dispatch():
+    order: list[str] = []
+
+    async def _sup(pool, engine, now, invoke):
+        order.append(f"supervise:{engine}")
+
+    async def _at(pool, engine, now):
+        order.append(f"autotune:{engine}")
+
+    async def _de(pool, now, engine, invoke):
+        order.append(f"dispatch:{engine}")
+
+    with patch.object(ed.engine_supervisor, "supervise", _sup), \
+         patch.object(ed.aar_autotune, "autotune", _at), \
+         patch.object(ed, "_dispatch_engine", _de), \
+         patch.object(ed, "_invoke_allocator", AsyncMock()):
+        await dispatch_once(object(), datetime(2026, 5, 18, 13, 0, tzinfo=UTC))
+
+    assert order[0:3] == ["supervise:allocator", "autotune:allocator",
+                          "dispatch:allocator"]
+    for i, item in enumerate(order):
+        if item.startswith("autotune:"):
+            eng = item.split(":")[1]
+            assert order[i - 1] == f"supervise:{eng}"
+            assert order[i + 1] == f"dispatch:{eng}"
+
+
+async def test_autotune_failure_does_not_abort_sweep():
+    ran: list[str] = []
+
+    async def _de(pool, now, engine, invoke):
+        ran.append(engine)
+
+    with patch.object(ed.engine_supervisor, "supervise", AsyncMock()), \
+         patch.object(ed.aar_autotune, "autotune",
+                      AsyncMock(side_effect=RuntimeError("autotune boom"))), \
+         patch.object(ed, "_dispatch_engine", _de), \
+         patch.object(ed, "_invoke_allocator", AsyncMock()):
+        await dispatch_once(object(), datetime(2026, 5, 18, 13, 0, tzinfo=UTC))
+
+    assert ran == ["allocator", *ROSTER]
