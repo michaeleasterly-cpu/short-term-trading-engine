@@ -216,3 +216,17 @@ async def test_disposition_missing_engine_surfaces_no_write():
     rc = await el.disposition(p, "hx", "structural", "")
     assert rc == 2
     assert p.conn.inserts == []
+
+
+def test_module_has_main_entrypoint():
+    src = (REPO_ROOT / "ops" / "engine_ladder.py").read_text()
+    assert 'if __name__ == "__main__":' in src
+    assert "argparse" in src
+    assert "def main()" in src
+
+
+async def test_amain_list_runs_dbless_clean(monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL_IPV4", raising=False)
+    rc = await el._amain(["list"])
+    assert rc == 1  # explicit no-DSN failure, NOT a silent 0

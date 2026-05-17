@@ -11,8 +11,11 @@ Engine-native; symmetry-references the data-lane ladder
 """
 from __future__ import annotations
 
+import argparse
+import asyncio
 import json
 import os
+import sys
 import uuid
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -23,6 +26,7 @@ from pydantic import BaseModel, ConfigDict
 
 from ops.aar_autotune import _BEHAVIORAL
 from ops.engine_supervisor import INFRA_FAILURE_CLASSES
+from tpcore.db import build_asyncpg_pool
 
 logger = structlog.get_logger(__name__)
 
@@ -272,3 +276,57 @@ async def disposition(pool, hold_id: str, verb: str, note: str) -> int:
     logger.info("engine_ladder.dispositioned", hold_id=hold_id,
                 disposition=disp.value)
     return 0
+
+
+def _fmt(rows: list[dict]) -> str:
+    head = (f"UNDISPOSITIONED ENGINE-LANE ESCALATIONS ({len(rows)}) — "
+            "rung-3: each MUST be converted | structural | removed")
+    if not rows:
+        return head
+    lines = [head]
+    for r in rows:
+        lines.append(
+            f"  [{r['shape']}] {r['engine']}/{r['failure_class']} "
+            f"hold_id={r['hold_id']} since={r['recorded_at']} "
+            f"reason={r['reason']} "
+            f"-> policy={r['policy_default']} ({r['policy_rationale']})")
+    return "\n".join(lines)
+
+
+async def _amain(argv: list[str]) -> int:
+    dsn = (os.environ.get("DATABASE_URL")
+           or os.environ.get("DATABASE_URL_IPV4"))
+    if not dsn:
+        logger.error("engine_ladder.no_dsn")
+        return 1
+    p = argparse.ArgumentParser(prog="python -m ops.engine_ladder")
+    sub = p.add_subparsers(dest="cmd")
+    pl = sub.add_parser("list")
+    pl.add_argument("--grace-days", type=int, default=None)
+    pd = sub.add_parser("disposition")
+    pd.add_argument("hold_id")
+    pd.add_argument("verb")
+    pd.add_argument("note", nargs="*", default=[])
+    args = p.parse_args(argv or ["list"])
+    pool = await build_asyncpg_pool(dsn)
+    try:
+        if args.cmd in (None, "list"):
+            rows = await list_undispositioned(
+                pool, grace_days=getattr(args, "grace_days", None))
+            print(_fmt(rows))
+            return 0
+        if args.cmd == "disposition":
+            return await disposition(pool, args.hold_id, args.verb,
+                                     " ".join(args.note))
+        p.print_usage(sys.stderr)
+        return 2
+    finally:
+        await pool.close()
+
+
+def main() -> None:  # pragma: no cover - CLI shim
+    sys.exit(asyncio.run(_amain(sys.argv[1:])))
+
+
+if __name__ == "__main__":  # pragma: no cover
+    main()
