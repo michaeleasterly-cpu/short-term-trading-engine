@@ -64,6 +64,13 @@ ENGINE_TABLES: dict[str, frozenset[str]] = {
     }),
     "momentum": frozenset({"prices_daily", "liquidity_tiers"}),
     "sentinel": frozenset({"prices_daily", "macro_indicators"}),
+    # Sub-project C (D-C5): the allocator's only validation-gated input
+    # is prices_daily (SPY regime/CHOP). AAR/risk_state are engine
+    # *output* tables, not validation-gated. Gating here on the REAL
+    # dependency per the per-engine-gate model (not the global
+    # fail-safe) makes failing_sources_for_engine("allocator") return
+    # the right HealSpec.source for the ENGINE_DATA_REQUEST path.
+    "allocator": frozenset({"prices_daily"}),
 }
 
 
