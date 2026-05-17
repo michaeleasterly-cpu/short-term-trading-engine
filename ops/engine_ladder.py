@@ -27,6 +27,11 @@ from pydantic import BaseModel, ConfigDict
 from ops.aar_autotune import _BEHAVIORAL
 from ops.engine_supervisor import INFRA_FAILURE_CLASSES
 from tpcore.db import build_asyncpg_pool
+from tpcore.supervisor_state import (
+    CLEARED_EVENT,
+    ESCALATED_EVENT,
+    HELD_EVENT,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -119,6 +124,9 @@ def policy_for(class_name: str) -> DispositionPolicy | None:
     return DISPOSITION_POLICIES.get(class_name)
 
 
+# Genuinely new, engine-ladder-local (DA-1/DA-2 never emit it).
+_DISPOSITIONED_EVENT = "ENGINE_ESCALATION_DISPOSITIONED"
+
 _GRACE_DAYS = int(os.environ.get("ENGINE_LADDER_GRACE_DAYS", "7"))
 
 # Candidate ENGINE_ESCALATED rows: not later-CLEARED, not DISPOSITIONED,
@@ -126,7 +134,10 @@ _GRACE_DAYS = int(os.environ.get("ENGINE_LADDER_GRACE_DAYS", "7"))
 # caller distinguishes held vs escalate-only. Escalate-only auto-close
 # (trigger fingerprints resolved) is applied in Python against
 # forensics_triggers (mirrors aar_autotune behavioral re-eval).
-_CANDIDATE_SQL = """
+# Event-type literals interpolated from the tpcore.supervisor_state
+# constants DA-1/DA-2 emit (trusted compile-time module constants, NOT
+# user input — safe to f-string into the SQL; same shape DA-1 uses).
+_CANDIDATE_SQL = f"""
     SELECT e.data->>'hold_id'        AS hold_id,
            e.engine                  AS engine,
            e.data->>'failure_class'  AS failure_class,
@@ -134,20 +145,20 @@ _CANDIDATE_SQL = """
            e.recorded_at             AS recorded_at,
            (e.data->'triggers')      AS triggers,
            EXISTS (SELECT 1 FROM platform.application_log h
-                   WHERE h.event_type = 'ENGINE_HELD'
+                   WHERE h.event_type = '{HELD_EVENT}'
                      AND (h.data->>'hold_id') = (e.data->>'hold_id'))
                                      AS has_held
     FROM platform.application_log e
-    WHERE e.event_type = 'ENGINE_ESCALATED'
+    WHERE e.event_type = '{ESCALATED_EVENT}'
       AND (e.data->>'hold_id') IS NOT NULL
       AND e.recorded_at < $1
       AND NOT EXISTS (
         SELECT 1 FROM platform.application_log d
-        WHERE d.event_type = 'ENGINE_ESCALATION_DISPOSITIONED'
+        WHERE d.event_type = '{_DISPOSITIONED_EVENT}'
           AND (d.data->>'hold_id') = (e.data->>'hold_id'))
       AND NOT EXISTS (
         SELECT 1 FROM platform.application_log c
-        WHERE c.event_type = 'ENGINE_CLEARED'
+        WHERE c.event_type = '{CLEARED_EVENT}'
           AND (c.data->>'hold_id') = (e.data->>'hold_id')
           AND c.recorded_at > e.recorded_at)
     ORDER BY e.recorded_at
@@ -172,6 +183,23 @@ def _triggers_list(raw: Any) -> list[str]:
     return [str(x) for x in raw] if isinstance(raw, list) else []
 
 
+async def _escalate_only_still_open(pool, fps: list[str]) -> bool:
+    """Single source of truth for the escalate-only auto-close rule
+    (shared by list_undispositioned AND disposition so they can never
+    diverge again). An escalate-only escalation is OPEN iff:
+      - it recorded NO trigger fingerprints (cannot auto-close → open), OR
+      - at least one of its fingerprints is still unresolved in
+        platform.forensics_triggers.
+    If it recorded fingerprints and ALL are resolved → auto-closed
+    (NOT open)."""
+    if not fps:
+        return True  # no fps recorded → cannot auto-close; remains open
+    async with pool.acquire() as conn:
+        fp_rows = await conn.fetch(_OPEN_FP_SQL, list(set(fps)))
+    open_fp_set = {fr["fp"] for fr in fp_rows}
+    return bool(set(fps) & open_fp_set)
+
+
 async def list_undispositioned(pool, *, now: datetime | None = None,
                                grace_days: int | None = None) -> list[dict]:
     """Open-undispositioned engine escalations (held + escalate-only).
@@ -183,15 +211,6 @@ async def list_undispositioned(pool, *, now: datetime | None = None,
     cutoff = now - timedelta(days=grace)
     async with pool.acquire() as conn:
         rows = await conn.fetch(_CANDIDATE_SQL, cutoff)
-    all_fps: set[str] = set()
-    for r in rows:
-        if not bool(r["has_held"]):
-            all_fps.update(_triggers_list(r["triggers"]))
-    open_fp_set: set[str] = set()
-    if all_fps:
-        async with pool.acquire() as conn:
-            fp_rows = await conn.fetch(_OPEN_FP_SQL, list(all_fps))
-        open_fp_set = {fr["fp"] for fr in fp_rows}
     out: list[dict] = []
     for r in rows:
         if bool(r["has_held"]):
@@ -199,9 +218,8 @@ async def list_undispositioned(pool, *, now: datetime | None = None,
         else:
             shape = EscalationShape.ESCALATE_ONLY
             fps = _triggers_list(r["triggers"])
-            if fps and not (set(fps) & open_fp_set):
+            if not await _escalate_only_still_open(pool, fps):
                 continue  # all fps resolved → auto-closed
-            # no fps recorded → cannot auto-close; remains open
         pol = policy_for(r["failure_class"])
         out.append({
             "hold_id": r["hold_id"], "engine": r["engine"],
@@ -219,20 +237,28 @@ _INSERT_SQL = """
     VALUES ($1, $2, $3, $4, $5, $6::jsonb)
 """
 
-_DISPOSITIONED_EVENT = "ENGINE_ESCALATION_DISPOSITIONED"
-
-_IS_OPEN_SQL = """
-    SELECT e.engine AS engine
+# Mirrors _CANDIDATE_SQL's anti-joins + has_held/triggers projection
+# (single hold_id; no grace filter — disposition has NO grace by
+# design). The escalate-only fingerprint-resolution gate is applied in
+# Python via the SHARED _escalate_only_still_open helper so list and
+# disposition can never diverge on what "open" means.
+_IS_OPEN_SQL = f"""
+    SELECT e.engine            AS engine,
+           (e.data->'triggers') AS triggers,
+           EXISTS (SELECT 1 FROM platform.application_log h
+                   WHERE h.event_type = '{HELD_EVENT}'
+                     AND (h.data->>'hold_id') = $1)
+                               AS has_held
     FROM platform.application_log e
-    WHERE e.event_type = 'ENGINE_ESCALATED'
+    WHERE e.event_type = '{ESCALATED_EVENT}'
       AND (e.data->>'hold_id') = $1
       AND NOT EXISTS (
         SELECT 1 FROM platform.application_log d
-        WHERE d.event_type = 'ENGINE_ESCALATION_DISPOSITIONED'
+        WHERE d.event_type = '{_DISPOSITIONED_EVENT}'
           AND (d.data->>'hold_id') = $1)
       AND NOT EXISTS (
         SELECT 1 FROM platform.application_log c
-        WHERE c.event_type = 'ENGINE_CLEARED'
+        WHERE c.event_type = '{CLEARED_EVENT}'
           AND (c.data->>'hold_id') = $1
           AND c.recorded_at > e.recorded_at)
     LIMIT 1
@@ -269,6 +295,18 @@ async def disposition(pool, hold_id: str, verb: str, note: str) -> int:
     if not engine:
         logger.error("engine_ladder.escalation_missing_engine", hold_id=hold_id)
         return 2
+    # Escalate-only parity: list_undispositioned auto-closes an
+    # escalate-only escalation once all its trigger fingerprints are
+    # resolved. disposition MUST apply the SAME gate (via the shared
+    # helper) so a hold_id `list` hides can never be dispositioned.
+    # Held escalations are NOT subject to this (held shape proceeds).
+    # The grace asymmetry is deliberate: disposition has NO grace.
+    if not bool(first["has_held"]):
+        fps = _triggers_list(first["triggers"])
+        if not await _escalate_only_still_open(pool, fps):
+            logger.error("engine_ladder.escalate_only_already_resolved",
+                          hold_id=hold_id)
+            return 2
     payload = {"schema": 1, "hold_id": hold_id,
                "disposition": disp.value, "note": note}
     await _emit(pool, engine, _DISPOSITIONED_EVENT, "INFO",

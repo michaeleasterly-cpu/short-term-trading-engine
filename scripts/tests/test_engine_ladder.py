@@ -142,14 +142,20 @@ async def test_list_escalate_only_no_fps_stays_open():
 
 def _rec_pool(open_hold_ids):
     """fetch returns a 1-row marker iff hold_id is an open escalation;
-    execute records the disposition INSERT."""
+    execute records the disposition INSERT. The ENGINE_ESCALATED row is
+    escalate-only (has_held=False) with a still-open fingerprint so the
+    shared escalate-only gate keeps it genuinely open."""
     class _C:
         def __init__(self):
             self.inserts = []
         async def fetch(self, sql, *a):
+            if "forensics_triggers" in sql:
+                return [{"fp": "fp-open"}]  # still unresolved → open
             if "ENGINE_ESCALATED" in sql:
                 hid = a[0]
-                return ([{"hold_id": hid, "engine": "reversion"}]
+                return ([{"hold_id": hid, "engine": "reversion",
+                          "has_held": False,
+                          "triggers": _json.dumps(["fp-open"])}]
                         if hid in open_hold_ids else [])
             return []
         async def execute(self, sql, *a):
@@ -216,6 +222,65 @@ async def test_disposition_missing_engine_surfaces_no_write():
     rc = await el.disposition(p, "hx", "structural", "")
     assert rc == 2
     assert p.conn.inserts == []
+
+
+async def test_disposition_rejects_escalate_only_all_fps_resolved_no_write():
+    # escalate-only hold_id whose fingerprints have ALL resolved →
+    # list_undispositioned auto-closed it → disposition MUST reject it.
+    class _C:
+        def __init__(self): self.inserts = []
+        async def fetch(self, sql, *a):
+            if "forensics_triggers" in sql:
+                return []  # zero still-open fingerprints
+            if "ENGINE_ESCALATED" in sql:
+                return [{"engine": "reversion", "has_held": False,
+                         "triggers": _json.dumps(["fp-gone"])}]
+            return []
+        async def execute(self, sql, *a):
+            self.inserts.append((sql, a))
+    c = _C()
+    class _P:
+        @contextlib.asynccontextmanager
+        async def acquire(self):
+            yield c
+    p = _P()
+    p.conn = c
+    rc = await el.disposition(p, "eo1", "structural", "")
+    assert rc == 2
+    assert p.conn.inserts == []
+
+
+async def test_disposition_accepts_escalate_only_fp_still_open_one_write():
+    # complementary positive: an escalate-only hold_id with a still-open
+    # fingerprint → disposition rc==0 + exactly one INSERT (proves the
+    # new gate does NOT over-reject genuinely-open escalate-only rows).
+    class _C:
+        def __init__(self): self.inserts = []
+        async def fetch(self, sql, *a):
+            if "forensics_triggers" in sql:
+                return [{"fp": "fp-live"}]  # still unresolved → open
+            if "ENGINE_ESCALATED" in sql:
+                return [{"engine": "vector", "has_held": False,
+                         "triggers": _json.dumps(["fp-live"])}]
+            return []
+        async def execute(self, sql, *a):
+            self.inserts.append((sql, a))
+    c = _C()
+    class _P:
+        @contextlib.asynccontextmanager
+        async def acquire(self):
+            yield c
+    p = _P()
+    p.conn = c
+    rc = await el.disposition(p, "eo2", "removed", "edge gone")
+    assert rc == 0
+    ins = [a for s, a in p.conn.inserts
+           if "INSERT INTO platform.application_log" in s]
+    assert len(ins) == 1
+    payload = _json.loads(ins[0][-1])
+    assert payload == {"schema": 1, "hold_id": "eo2",
+                       "disposition": "removed", "note": "edge gone"}
+    assert ins[0][2] == "ENGINE_ESCALATION_DISPOSITIONED"
 
 
 def test_module_has_main_entrypoint():

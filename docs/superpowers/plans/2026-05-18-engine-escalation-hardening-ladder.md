@@ -35,43 +35,21 @@
 
 - [ ] **Step 1: Write the failing SoT-pin test**
 
-Append to `scripts/tests/test_engine_supervisor.py` (the file already has the ops-collision guard + `_rows_conn` + `import ops.engine_supervisor as es`-style header — match its existing import alias; the recon shows it imports the module; use that alias, here written `es`):
+Add to `scripts/tests/test_engine_supervisor.py` (the file already has the ops-collision guard + `_rows_conn` + `import ops.engine_supervisor as es`-style header — match its existing import alias; here written `es`).
+
+The pin is a **GENUINE AST-introspection clockwork**, NOT a hand-maintained detector list. `test_classify_emittable_set_is_pinned_to_constant` reads `_classify`'s real source via `inspect.getsource`, `ast.parse`/`ast.walk`s it, and collects every string literal that is the first element of a `return "<cls>", <bool>` tuple. That emitted set MUST equal `set(es.INFRA_FAILURE_CLASSES)`. Because it parses the actual function, adding a 6th `_detect_*` whose `_classify` arm does `return "new_cls", x` makes `emitted` include `"new_cls"` ∉ the constant → this test fails RED until `INFRA_FAILURE_CLASSES` (and, via the engine-ladder drift test, a `DispositionPolicy`) is updated — closing the most common add-a-class path with no per-detector parametrize to forget. A non-vacuous behavior smoke (`test_classify_known_detectors_yield_their_class`) additionally asserts each of the 5 known detectors, True in isolation, drives `_classify` to its own class; and `test_infra_failure_classes_is_the_five_da1_classes` keeps the frozenset-equality anchor:
 
 ```python
-import pytest  # noqa: E402  (only if not already imported at top — else omit this line)
-
-
-@pytest.mark.parametrize("detector,expected", [
-    ("_detect_crashed_startup", "crashed_startup"),
-    ("_detect_scheduler_crash", "scheduler_crash"),
-    ("_detect_data_request_timeout", "data_request_timeout"),
-    ("_detect_data_repair_escalated", "data_repair_escalated"),
-    ("_detect_missed_cycle", "missed_cycle"),
-])
-async def test_classify_emittable_classes_are_pinned_to_constant(
-        detector, expected):
-    """Every class _classify can return MUST be in INFRA_FAILURE_CLASSES
-    — so a new DA-1 detector/class fails the engine-ladder clockwork
-    until INFRA_FAILURE_CLASSES (and a disposition policy) is updated."""
-    assert hasattr(es, "INFRA_FAILURE_CLASSES")
-    # Patch the chosen detector True, all others False → _classify
-    # returns (expected, _). Assert that class ∈ the constant.
-    patches = {}
-    for d in ("_detect_crashed_startup", "_detect_scheduler_crash",
-              "_detect_data_request_timeout",
-              "_detect_data_repair_escalated", "_detect_missed_cycle"):
-        patches[d] = patch.object(
-            es, d, new=AsyncMock(return_value=(d == detector)))
-    with patches["_detect_crashed_startup"], \
-         patches["_detect_scheduler_crash"], \
-         patches["_detect_data_request_timeout"], \
-         patches["_detect_data_repair_escalated"], \
-         patches["_detect_missed_cycle"]:
-        cls, _heal = await es._classify(object(), "reversion",
-                                        datetime(2026, 5, 6, tzinfo=UTC),
-                                        datetime(2026, 5, 6, tzinfo=UTC))
-    assert cls == expected
-    assert cls in es.INFRA_FAILURE_CLASSES
+def test_classify_emittable_set_is_pinned_to_constant():
+    src = inspect.getsource(es._classify)
+    tree = ast.parse(textwrap.dedent(src))
+    emitted: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Return) and isinstance(node.value, ast.Tuple):
+            first = node.value.elts[0]
+            if isinstance(first, ast.Constant) and isinstance(first.value, str):
+                emitted.add(first.value)
+    assert emitted == set(es.INFRA_FAILURE_CLASSES)
 
 
 def test_infra_failure_classes_is_the_five_da1_classes():
@@ -80,7 +58,7 @@ def test_infra_failure_classes_is_the_five_da1_classes():
         "data_repair_escalated", "missed_cycle"})
 ```
 
-Ensure `AsyncMock`, `patch`, `datetime`, `UTC` are imported in that test file (the recon shows its header has `AsyncMock`/`patch`/`datetime`/`UTC` already — only add what's missing; do NOT duplicate imports).
+Add `import ast`, `import inspect`, `import textwrap` to the test file's stdlib import block (ruff-ordered, with the other top stdlib imports). This is a pure test change — zero DA-1 production-logic delta.
 
 - [ ] **Step 2: Run to verify it fails**
 
@@ -115,7 +93,7 @@ Replace with (semantically byte-identical — same set, same `not in`):
         return
 ```
 
-Do NOT change `_classify`'s `return "<str>", <bool>` lines (the SoT-pin test introspects them by driving the real `_classify`; they already all ∈ the constant — the test enforces it stays true). No other change.
+Do NOT change `_classify`'s `return "<str>", <bool>` lines gratuitously (the SoT-pin test AST-parses them from the real `_classify` source; they already all ∈ the constant — the test enforces the emitted set stays == `INFRA_FAILURE_CLASSES`, so any new/changed return-class arm must be matched by a constant update). No other change.
 
 - [ ] **Step 4: Run to verify it passes**
 
