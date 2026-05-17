@@ -56,6 +56,7 @@ ENGINE_PREFIX: dict[str, str] = {
     "reversion": "rv_",
     "vector": "vc_",
     "sentinel": "sn_",
+    "canary": "ca_",  # pipeline-exercise heartbeat engine
 }
 
 # Legacy → canonical engine. Parsers walk this AFTER checking ENGINE_PREFIX

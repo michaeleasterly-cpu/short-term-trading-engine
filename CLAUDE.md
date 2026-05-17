@@ -21,6 +21,7 @@ Multi-engine automated trading platform. US equities, daily timeframe, fully aut
 - tpcore/templates/engine_template/ — copy-paste-start scaffold for new engines (see `docs/superpowers/checklists/engine_readiness.md`).
 - ops/engine_service.py — daemon polling `platform.application_log` for `DATA_OPERATIONS_COMPLETE`; fires `scripts/run_all_engines.sh` (2026-05-14).
 - Shared AAR read-side: `tpcore.aar.AARReader` (used by both allocator + forensics); shared exit-reason classifier: `tpcore.aar.classify_exit_reason`.
+- canary/ — permanent pipeline-exercise heartbeat engine (1-share SPY paper daily; exercises DA-1/DA-2/AAR/forensics dispatch paths without signal risk; never graduates — the ONE documented compliance deviation: no `write_credibility_score` per spec §4b; allocator-excluded by omission, spec §5a). Built 2026-05-17.
 - Future engines: s2/, catalyst/
 
 **Engine credibility status as of 2026-05-13 (post data-cleanup):** All four engines produce positive OOS edge candidates (scores 0.78–1.26), all four still fail the DSR ≥ 0.95 / credibility ≥ 60 gate. Data foundation is clean; signal strength is the binding constraint.
@@ -29,7 +30,7 @@ Multi-engine automated trading platform. US equities, daily timeframe, fully aut
 - All timestamps UTC. Market hours via `tpcore.calendar` (which wraps `exchange_calendars` XNYS).
 - No yfinance. No Discord. No manual execution.
 - All orders via Alpaca API. Paper-then-live. Default Alpaca data feed is **SIP** (not IEX — IEX silently misses tickers that trade off-IEX).
-- Engines built in order so far: Sigma (archived 2026-05-16) → Reversion → Vector → Momentum → Sentinel.
+- Engines built in order so far: Sigma (archived 2026-05-16) → Reversion → Vector → Momentum → Sentinel → Canary (heartbeat).
 - Backtest with self-built survivorship-free database before any live trading. (Note: `prices_daily` is currently only partially survivorship-clean — known caveat in `momentum/backtest.py` docstring.)
 - Every engine has 5 Plugs: setup_detection, lifecycle_analysis, execution_risk, aar_logging, capital_gate.
 - Every engine's `setup_detection` plug populates a `tpcore.backtest.filter_diagnostics.FilterDiagnostics` instance so SIGNAL events carry per-gate pass/block counters.
@@ -47,7 +48,7 @@ Multi-engine automated trading platform. US equities, daily timeframe, fully aut
 - **When building a new engine, read `docs/superpowers/checklists/engine_readiness.md` BEFORE writing code.** The 10 sections are non-optional. Section 10 in particular enumerates the six compliance verifications (BaseEnginePlug on every plug, FilterDiagnostics on signals, credibility write, trading-day gate, classify_exit_reason, stale-order cancel) that the Sentinel 2026-05-15 audit surfaced. Start from `tpcore/templates/engine_template/` — the scaffold satisfies the gaps by construction.
 - **Engine-build compliance shortlist** (the recurring gaps; full rationale in STYLE_GUIDE.md "Engine plug compliance"):
   - Every engine plug subclasses `BaseEnginePlug` and implements `validate_dependencies` + `healthcheck`.
-  - Every engine backtest calls `write_credibility_score` so the capital gate has a rubric row to read.
+  - Every engine backtest calls `write_credibility_score` so the capital gate has a rubric row to read. **Exception: `canary` is intentionally non-graduating (spec §4b) and must NEVER call `write_credibility_score` — enforced by `canary/tests/test_backtest.py::test_backtest_deliberately_never_writes_credibility`.**
   - Every scheduler checks `tpcore.calendar.is_trading_day()` and returns early on non-trading days.
   - Every AAR plug uses `tpcore.aar.classify_exit_reason` — never hardcode `ExitReason` literals.
   - Every new engine is added to the `for engine in ...; do` loop in `scripts/run_smoke_test.sh` step 3 — at build time, not after the operator asks.

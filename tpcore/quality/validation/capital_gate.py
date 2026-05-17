@@ -71,6 +71,9 @@ ENGINE_TABLES: dict[str, frozenset[str]] = {
     # fail-safe) makes failing_sources_for_engine("allocator") return
     # the right HealSpec.source for the ENGINE_DATA_REQUEST path.
     "allocator": frozenset({"prices_daily"}),
+    # Canary heartbeat: trades SPY → only validation-gated input is
+    # prices_daily (C-T5 pattern; SPY already in CRITICAL_TICKERS).
+    "canary": frozenset({"prices_daily"}),
 }
 
 

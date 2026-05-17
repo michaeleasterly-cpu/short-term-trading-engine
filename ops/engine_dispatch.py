@@ -25,7 +25,7 @@ from tpcore.quality.validation.capital_gate import failing_sources_for_engine
 
 logger = structlog.get_logger(__name__)
 
-ROSTER: tuple[str, ...] = ("reversion", "vector", "momentum", "sentinel")
+ROSTER: tuple[str, ...] = ("reversion", "vector", "momentum", "sentinel", "canary")
 
 
 async def _invoke_scheduler(engine: str) -> int:

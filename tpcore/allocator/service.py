@@ -146,6 +146,8 @@ class AllocatorService:
         # risk_state row every run); sentinel intentionally excluded —
         # defensive macro overlay budgeted by SentinelCapitalGate
         # (fixed 10–20% cap), not the inverse-vol pool.
+        # canary excluded by omission — pipeline-exercise heartbeat,
+        # never reweighted (spec §5a).
         engines: tuple[str, ...] = ("reversion", "vector", "momentum"),
         platform_capital: Decimal = Decimal("40000"),
         enforce_freeze: bool = False,
