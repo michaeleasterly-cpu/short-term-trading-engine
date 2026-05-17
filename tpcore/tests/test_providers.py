@@ -93,3 +93,24 @@ def test_binding_is_frozen_and_evidence_mandatory() -> None:
             feed="x", provider="y", adapter_module="tpcore.providers",
             status=ProviderStatus.FALLBACK, evidence="e",
         )
+
+
+def test_eco_archive_candidate_is_honest_not_a_fake_fallback() -> None:
+    """Phase 4: the macro_indicators eco_archive recovery path is the
+    one real alternative provider. It is a CANDIDATE, NOT a FALLBACK —
+    a FALLBACK would require a parity_verified_at it cannot honestly
+    claim (static-history-only, not a live drop-in). Guards against the
+    'pad the registry with fictitious fallbacks' anti-pattern."""
+    macro = bindings_for("macro_indicators")
+    providers = {b.provider: b for b in macro}
+    assert "fred" in providers and "eco_archive" in providers
+    assert providers["fred"].status is ProviderStatus.ACTIVE
+    eco = providers["eco_archive"]
+    assert eco.status is ProviderStatus.CANDIDATE  # NOT FALLBACK
+    assert eco.parity_verified_at is None  # no fabricated cutover-ready date
+    # The exactly-one-ACTIVE invariant still holds with the candidate.
+    assert active_provider("macro_indicators") is providers["fred"]
+    # No other feed gained a fictitious alternative — eco_archive is
+    # the only multi-binding feed (registry not padded).
+    multi = [f for f in all_feeds() if len(bindings_for(f)) > 1]
+    assert multi == ["macro_indicators"], f"unexpected multi-binding feeds: {multi}"
