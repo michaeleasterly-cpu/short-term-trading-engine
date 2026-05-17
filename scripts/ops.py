@@ -78,6 +78,10 @@ HEAVY_STAGE_TIMEOUT_SEC = 3600.0  # 60 minutes (1200s was still tripping on ~7,3
 # silently masking a real hang. Only affects the sec_filings stage;
 # every other stage stays on HEAVY_STAGE_TIMEOUT_SEC.
 SEC_FILINGS_STAGE_TIMEOUT_SEC = 21600.0  # 6 hours
+# Marker written into every canary-injected forensics_triggers row and used
+# by the teardown DELETE predicate.  Single constant keeps the 4 sites in sync
+# so a divergence can never make teardown silently fail to clean injected rows.
+_CANARY_INJECTION_SOURCE = "canary_injection"
 DATA_FRESHNESS_MAX_DAYS = 4  # 2 trading days + weekend buffer
 CORP_ACTIONS_FRESHNESS_MAX_DAYS = 7
 
@@ -1571,7 +1575,8 @@ async def _stage_canary_inject_trigger(
         async with pool.acquire() as conn:
             await conn.execute(
                 "DELETE FROM platform.forensics_triggers "
-                "WHERE payload->>'source' = 'canary_injection'")
+                "WHERE payload->>'source' = $1",
+                _CANARY_INJECTION_SOURCE)
         return {"teardown": True}
 
     kind = str(cfg.get("kind", "loss_cluster"))
@@ -1590,7 +1595,7 @@ async def _stage_canary_inject_trigger(
             "total_loss": "-100.00",
             "ended_at": now.isoformat(),
             "fingerprint": fp,
-            "source": "canary_injection",
+            "source": _CANARY_INJECTION_SOURCE,
         }
     elif kind == "drawdown_period":
         fp = f"canary|dd|inject|{now.date().isoformat()}"
@@ -1602,7 +1607,7 @@ async def _stage_canary_inject_trigger(
             "drawdown_pct": "0.1500",
             "days_in_drawdown": int(cfg.get("days", 20)),
             "fingerprint": fp,
-            "source": "canary_injection",
+            "source": _CANARY_INJECTION_SOURCE,
         }
     else:  # outlier_loss
         fp = "canary|ca_inject_outlier"
@@ -1616,7 +1621,7 @@ async def _stage_canary_inject_trigger(
             "threshold": "-160.0000",
             "exit_ts": now.isoformat(),
             "fingerprint": fp,
-            "source": "canary_injection",
+            "source": _CANARY_INJECTION_SOURCE,
         }
     async with pool.acquire() as conn:
         exists = await conn.fetchrow(

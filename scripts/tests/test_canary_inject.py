@@ -8,7 +8,7 @@ import json  # noqa: E402
 
 import pytest  # noqa: E402
 
-from scripts.ops import _stage_canary_inject_trigger  # noqa: E402
+from scripts.ops import _CANARY_INJECTION_SOURCE, _stage_canary_inject_trigger  # noqa: E402
 
 
 class _Conn:
@@ -83,5 +83,44 @@ async def test_teardown_deletes_only_injection_marked_rows():
             if c[0] == "execute"
             and "DELETE FROM platform.forensics_triggers" in c[1]]
     assert len(dels) == 1
-    assert "canary_injection" in dels[0][1]
+    # The source marker must scope the DELETE (prevents deleting non-injected rows).
+    # With the parameterized query the literal no longer appears in the SQL text;
+    # it flows in as a query arg so teardown still only removes canary-injected rows.
+    assert "payload->>'source'" in dels[0][1]   # scoping predicate in SQL
+    assert _CANARY_INJECTION_SOURCE in dels[0][2]  # marker passed as query arg
     assert out["teardown"] is True
+
+
+async def test_inject_is_idempotent_skips_insert_when_fingerprint_exists():
+    """Re-running the same kind/params must NOT write a duplicate:
+    when the dedup SELECT finds an existing fingerprint, no INSERT."""
+    class _ConnExists:
+        def __init__(self):
+            self.calls = []
+        async def fetchrow(self, sql, *a):
+            self.calls.append(("fetchrow", sql, a))
+            return {"1": 1}  # fingerprint already present
+        async def execute(self, sql, *a):
+            self.calls.append(("execute", sql, a))
+            return "INSERT 0 1"
+
+    class _PoolExists:
+        def __init__(self):
+            self.conn = _ConnExists()
+        def acquire(self):
+            pool = self
+            class _Cm:
+                async def __aenter__(self):
+                    return pool.conn
+                async def __aexit__(self, *a):
+                    return False
+            return _Cm()
+
+    pool = _PoolExists()
+    out = await _stage_canary_inject_trigger(
+        pool, {"kind": "loss_cluster", "streak": 5})
+    inserts = [c for c in pool.conn.calls
+               if c[0] == "execute"
+               and "INSERT INTO platform.forensics_triggers" in c[1]]
+    assert len(inserts) == 0          # dedup hit → no duplicate INSERT
+    assert out["injected"] == "loss_cluster"  # still reports the (deduped) kind
