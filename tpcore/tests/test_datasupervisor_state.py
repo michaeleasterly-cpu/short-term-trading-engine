@@ -9,7 +9,9 @@ from datetime import UTC, datetime
 
 from tpcore.datasupervisor.state import (
     CLEARED_EVENT,
+    ESCALATED_EVENT,
     HELD_EVENT,
+    RECOVERED_EVENT,
     SCHEMA_VERSION,
     SourceHoldState,
     current_source_hold,
@@ -49,6 +51,8 @@ def test_constants_locked() -> None:
     assert SCHEMA_VERSION == 1
     assert HELD_EVENT == "DATA_SOURCE_HELD"
     assert CLEARED_EVENT == "DATA_SOURCE_CLEARED"
+    assert ESCALATED_EVENT == "DATA_SOURCE_ESCALATED"
+    assert RECOVERED_EVENT == "DATA_SUPERVISOR_RECOVERED"  # deliberate: mirrors engine ENGINE_SUPERVISOR_RECOVERED (NOT DATA_SOURCE_RECOVERED)
 
 
 async def test_open_hold_returned() -> None:
@@ -60,6 +64,7 @@ async def test_open_hold_returned() -> None:
     hold = await current_source_hold(pool, "validation:prices_daily")
     assert isinstance(hold, SourceHoldState)
     assert hold.hold_id == "h1" and hold.held_at == now
+    assert hold.reason == "validation:prices_daily red"
     sql, args = pool.conn.calls[0]
     assert args == ("DATA_SOURCE_HELD", "DATA_SOURCE_CLEARED",
                     "validation:prices_daily")
