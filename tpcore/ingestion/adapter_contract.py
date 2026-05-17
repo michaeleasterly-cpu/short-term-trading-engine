@@ -110,6 +110,7 @@ def _is_empty(v: Any) -> bool:
 
 
 def _read(rec: Any, field: str, accessor: str) -> Any:
+    # accessor is declared per-feed in the registry; attr-feeds always emit named records, key-feeds always dicts (never mixed).
     if accessor == "attr":
         return getattr(rec, field, None)
     try:

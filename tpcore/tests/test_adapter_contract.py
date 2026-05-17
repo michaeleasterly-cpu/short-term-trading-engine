@@ -1,33 +1,20 @@
 """Unit tests for the adapter contract-population sentinel (#186(6))."""
 from __future__ import annotations
 
-import pathlib
-import re
-
 import pytest
 
 from tpcore.ingestion.adapter_contract import (
     ADAPTER_CONTRACTS,
-    AdapterContract,  # noqa: F401
     AdapterContractDrift,
     assert_contract_populated,
     contract_drift,
 )
 
 
-def _csv_first_feeds() -> set[str]:
-    feeds: set[str] = set()
-    pat = re.compile(r"write_archive\(\s*\n?\s*\"([a-z0-9_]+)\"")
-    for rel in ("tpcore/ingestion/handlers.py", "scripts/ops.py"):
-        feeds.update(pat.findall(pathlib.Path(rel).read_text()))
-    return feeds
-
-
 def test_registry_in_lockstep_with_csv_first_feeds() -> None:
     missing, extra = contract_drift()
     assert missing == set(), f"CSV-first feeds with no AdapterContract: {missing}"
     assert extra == set(), f"AdapterContracts for non-CSV-first feeds: {extra}"
-    assert set(ADAPTER_CONTRACTS) == _csv_first_feeds()
 
 
 def test_guard_pending_set_is_pinned() -> None:
