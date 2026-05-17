@@ -1,7 +1,7 @@
 """Prices-daily completeness — the ungameable zero-gap invariant.
 
 ``prices_daily_freshness`` answers "is the *newest* bar recent, and did
-coverage collapse?". ``audit_pipeline.prices_daily_gaps`` answers "is
+coverage collapse?". ``audit_data_pipeline.prices_daily_gaps`` answers "is
 there a >7-day hole that *ended in the last 14 days*?". Both are useful
 but both are *gameable / blind*: freshness is satisfied by a single
 recent bar, and the audit gap check has a 14-day recency window and a
@@ -20,7 +20,7 @@ Why each scoping clause is a principled invariant boundary and NOT a
 tolerance knob that hides failures:
 
 * **tier ≤ 2 AND asset_class = 'stock'** — the exact set the engines
-  treat as tradeable (identical to ``audit_pipeline.prices_daily_gaps``,
+  treat as tradeable (identical to ``audit_data_pipeline.prices_daily_gaps``,
   kept symmetric on purpose). Completeness over SPACs/funds the engines
   never touch is not the outcome being guaranteed.
 * **60d avg volume ≥ 500,000** — this *defines* the set of names that
@@ -51,7 +51,7 @@ sessions: this is the data the engines trade on *now*, it keeps the
 check fast, and it is sized so the auto-remediation backfill
 (``ops.py --stage daily_bars --param lookback_days=…``) can actually
 fill anything this surfaces. Deep-history completeness is the 4-phase
-``audit_pipeline.py``'s job, not this hot-path gate.
+``audit_data_pipeline.py``'s job, not this hot-path gate.
 """
 
 from __future__ import annotations
@@ -73,7 +73,7 @@ logger = structlog.get_logger(__name__)
 
 CHECK_NAME = "prices_daily_completeness"
 
-# Universe boundary — identical to audit_pipeline.prices_daily_gaps so
+# Universe boundary — identical to audit_data_pipeline.prices_daily_gaps so
 # the invariant gate and the heuristic audit speak about the same set.
 TRADEABLE_TIER_MAX = 2
 LIQUID_MIN_AVG_VOL_60D = 500_000
