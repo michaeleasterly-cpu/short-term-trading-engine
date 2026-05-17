@@ -71,7 +71,9 @@ from tpcore.interfaces.broker import (
     TimeInForce,
 )
 from tpcore.logging import DBLogHandler
+from tpcore.risk.batch_gate import gate_batch_order
 from tpcore.risk.governor import RiskGovernor
+from tpcore.risk.limits_profile import limits_for
 from tpcore.risk.persistent_store import PostgresRiskStateStore
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -235,6 +237,16 @@ class MomentumScheduler:
             governor = RiskGovernor(
                 state_store=state_store, broker=broker, pool=pool,
             )
+            # Register momentum with the governor so check_trade has a
+            # RiskState row + the basket-sized position cap (limits_for
+            # gives momentum max_open_positions=200; the global 8-pos
+            # default would otherwise block the whole decile). Idempotent —
+            # won't clobber an existing state, only (re)records limits.
+            await governor.register_engine(
+                "momentum",
+                self._engine_equity,
+                limits=limits_for("momentum"),
+            )
 
             # Kill-switch pre-flight (F3 of 2026-05-14 audit). Mirrors
             # the sigma/reversion/vector pattern so a platform-wide
@@ -380,6 +392,26 @@ class MomentumScheduler:
                 if not self._submit:
                     logger.info(
                         "momentum.scheduler.dry_run_skip",
+                        ticker=order.ticker, action=order.action.value,
+                        qty=order.qty, side=order.side,
+                    )
+                    continue
+                # Every submitted name passes the shared batch gate so the
+                # RiskGovernor (loss caps, kill switch, position cap,
+                # exposure) is enforced per order — not just the global
+                # kill-switch pre-flight above. A BLOCKed name is skipped;
+                # the rest of the rebalance still proceeds.
+                side = OrderSide.SELL if order in sells else OrderSide.BUY
+                gated = await gate_batch_order(
+                    governor, "momentum",
+                    ticker=order.ticker,
+                    notional=Decimal(str(order.notional_usd)),
+                    direction=side,
+                )
+                if not gated:
+                    failed.append((order.ticker, "governor_blocked"))
+                    logger.warning(
+                        "momentum.scheduler.governor_blocked",
                         ticker=order.ticker, action=order.action.value,
                         qty=order.qty, side=order.side,
                     )
