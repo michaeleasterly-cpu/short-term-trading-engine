@@ -19,18 +19,22 @@ from datetime import datetime
 
 import structlog
 
+from tpcore.engine_profile import cadence_window_start, profile_for
 from tpcore.supervisor_state import (
     CLEARED_EVENT,
     ESCALATED_EVENT,
     HELD_EVENT,
     RECOVERED_EVENT,
     SCHEMA_VERSION,
+    current_hold,
 )
 
 logger = structlog.get_logger(__name__)
 
 _MAX_REINVOKE = int(os.environ.get("ENGINE_SUPERVISOR_MAX_REINVOKE", "2"))
 _MISSED_CYCLES_N = int(os.environ.get("ENGINE_SUPERVISOR_MISSED_CYCLES", "2"))
+_STALE_STARTUP_SECONDS = int(
+    os.environ.get("ENGINE_DISPATCH_STALE_STARTUP_SECONDS", "7200"))  # 2h
 
 _INSERT_SQL = """
     INSERT INTO platform.application_log
@@ -85,9 +89,64 @@ async def _emit_recovered(pool, engine: str, failure_class: str,
                  "failure_class": failure_class, "attempts": attempts})
 
 
-async def _detect_and_act(pool, engine: str, now: datetime, invoke) -> None:
-    """Detect/self-heal/escalate/auto-clear (Tasks 4–6 fill this in)."""
+async def _detect_crashed_startup(conn, engine: str, now: datetime,
+                                  window_start: datetime) -> bool:
+    """STARTUP in window with NO clean completion, older than stale
+    threshold. Migrated verbatim from engine_dispatch._crashed_startup_refire
+    (single owner; engine_dispatch will delegate). Behavior-preserving."""
+    row = await conn.fetchrow(
+        """
+        SELECT
+          max(recorded_at) FILTER (WHERE event_type = 'STARTUP')      AS started_at,
+          bool_or(event_type IN ('SCAN_COMPLETE', 'SHUTDOWN'))        AS completed
+        FROM platform.application_log
+        WHERE engine = $1 AND recorded_at >= $2
+        """,
+        engine, window_start,
+    )
+    if not row or row["started_at"] is None or row["completed"]:
+        return False
+    return (now - row["started_at"]).total_seconds() >= _STALE_STARTUP_SECONDS
+
+
+async def _auto_clear(pool, engine: str, now: datetime, hold) -> None:
+    """Strong clean-cycle clear (Task 6 fills this in)."""
     return None
+
+
+async def _detect_and_act(pool, engine: str, now: datetime, invoke) -> None:
+    prof = profile_for(engine)
+    window_start = cadence_window_start(engine, now) if prof else now
+
+    hold = await current_hold(pool, engine)
+    if hold is not None:
+        # Already held → never re-detect/duplicate; only attempt clear.
+        await _auto_clear(pool, engine, now, hold)
+        return
+
+    async with pool.acquire() as conn:
+        crashed = await _detect_crashed_startup(conn, engine, now,
+                                                window_start)
+    if not crashed:
+        return
+
+    failure_class = "crashed_startup"
+    attempts = 0
+    while attempts < _MAX_REINVOKE:
+        attempts += 1
+        await invoke(engine)  # bounded self-heal: re-invoke scheduler
+        async with pool.acquire() as conn:
+            still = await _detect_crashed_startup(conn, engine, now,
+                                                  window_start)
+        if not still:
+            await _emit_recovered(pool, engine, failure_class, attempts)
+            return
+
+    hold_id = str(uuid.uuid4())
+    reason = f"{failure_class} unresolved after {attempts} re-invoke(s)"
+    await _emit_escalated(pool, engine, hold_id, failure_class, reason,
+                          attempts)
+    await _emit_held(pool, engine, hold_id, failure_class, reason)
 
 
 async def supervise(pool, engine: str, now: datetime, invoke) -> None:
