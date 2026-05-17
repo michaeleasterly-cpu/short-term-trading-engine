@@ -1,5 +1,5 @@
 """Unit tests for the per-feed validate + bounded self-heal helpers
-(#185 Phase 1, landed dark).
+(#185 Phase 1 dark helpers + Phase 2 on-completion hook).
 
 Pure: the canonical check fn and the HealSpec are injected via
 monkeypatch, ``run_stage`` is a fake recorder, the pool is an inert
@@ -11,11 +11,14 @@ from types import SimpleNamespace
 
 import pytest
 
+from tpcore.feeds.dispatcher import FEED_STAGE
 from tpcore.quality.validation.suite import KNOWN_CHECK_NAMES
 from tpcore.selfheal import per_feed
 from tpcore.selfheal.per_feed import (
     feed_checks,
     heal_one,
+    is_leaf_feed,
+    on_stage_complete,
     validate_and_heal_feed,
     validate_feed,
     validate_one,
@@ -205,3 +208,58 @@ async def test_vahf_unhealable_escalates_honestly(monkeypatch) -> None:
     assert out.escalated == [
         ("prices_daily_completeness", "permanent reconcile failure")
     ]
+
+
+# --- Phase 2: stage→feed resolution + on_stage_complete --------------
+
+def test_stage_feed_coverage_no_drift() -> None:
+    # _STAGE_FEED is exactly the reverse of the FEED_STAGE SoT, and
+    # every mapped feed resolves to >=1 canonical check (clockwork: a
+    # misaligned new feed/stage fails the build, not silently no-ops).
+    assert per_feed._STAGE_FEED == {s: f for f, s in FEED_STAGE.items()}
+    for stage, feed in per_feed._STAGE_FEED.items():
+        assert feed_checks(feed), f"{stage}->{feed} resolves to no check"
+
+
+def test_is_leaf_feed_split() -> None:
+    assert is_leaf_feed("prices_daily") is True
+    assert is_leaf_feed("fear_greed") is False  # derived (depends_on)
+
+
+async def test_on_stage_complete_infra_stage_is_noop() -> None:
+    # data_validation/forensics are not in the feed map → no-op.
+    assert await on_stage_complete(_POOL, "data_validation", "rid") is None
+
+
+async def test_on_stage_complete_derived_feed_deferred() -> None:
+    # fear_greed is derived → Phase 3 territory, not validated here.
+    assert await on_stage_complete(_POOL, "fear_greed", "rid") is None
+
+
+async def test_on_stage_complete_leaf_green(monkeypatch) -> None:
+    _patch_feed(monkeypatch, "prices_daily", {})
+
+    async def _never(stage, params):  # invoking it = shelled out on green
+        raise AssertionError("repair runner invoked but feed was green")
+
+    monkeypatch.setattr(
+        per_feed, "make_canonical_runner", lambda run_id: _never
+    )
+    out = await on_stage_complete(_POOL, "daily_bars", "rid")
+    assert out is not None and out.green and out.feed == "prices_daily"
+    assert out.healed == [] and out.escalated == []
+
+
+async def test_on_stage_complete_leaf_red_heals(monkeypatch) -> None:
+    monkeypatch.setattr(per_feed, "spec_for", lambda c: _spec())
+    rs = _rs()
+
+    async def comp(pool):
+        return _cr(len(rs.calls) >= 1)
+
+    _patch_feed(monkeypatch, "prices_daily", {"prices_daily_completeness": comp})
+    monkeypatch.setattr(per_feed, "make_canonical_runner", lambda run_id: rs)
+    out = await on_stage_complete(_POOL, "daily_bars", "rid")
+    assert out is not None and out.green
+    assert out.healed == ["prices_daily_completeness"]
+    assert rs.calls == [("daily_bars", {"k": "v"})]
