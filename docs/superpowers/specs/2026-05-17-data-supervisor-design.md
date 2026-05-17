@@ -1,9 +1,24 @@
 # Data Supervisor — Per-Source Hold + Autonomous Auto-Clear — Design
 
-**Status:** spec 2026-05-17 (DATA lane). Brainstorm → **spec (this
+**Status:** BUILT 2026-05-17 (DATA lane). Brainstorm → **spec (this
 doc)** → plan → phased subagent build. Task #205. The data-native,
 **symmetric (NOT copied)** counterpart of the engine lane's DA-1
 `ops/engine_supervisor.py` + `tpcore/supervisor_state.py`.
+
+**Build record:**
+- P1 (PR #38): `tpcore/datasupervisor/` state vocabulary —
+  `DATA_SOURCE_HELD`/`DATA_SOURCE_CLEARED`/`DATA_SOURCE_ESCALATED`,
+  `DATA_SUPERVISOR_RECOVERED`, schema:1, event-sourced,
+  `current_source_hold` view. Landed dark.
+- P2 (PR #39): `datasupervise(pool, run_id)` — one bounded per-source
+  pass; reuses selfheal/auditheal red predicates; opens per-source
+  holds idempotently; autonomous auto-clear for recovered sources;
+  bounded-escalates a source stuck ≥3 held cycles; crash-isolated.
+  Thin `python -m tpcore.datasupervisor` entry point. Landed dark.
+- P3 (PR #40): wire Step 4d — `run_data_operations.sh` Step 4d calls
+  `python -m tpcore.datasupervisor` after self-heal (Step 4) and
+  deep-audit (Step 4c); state-tracking only, never gates, `DATA_OPERATIONS_COMPLETE` invariant preserved.
+- P4 (this doc update): CLAUDE.md + spec reconciled to shipped reality.
 
 **Symmetry, not copy** (operator directive, saved memory): this reuses
 DA-1's *pattern + locked contract shape + decision framework* (bounded
