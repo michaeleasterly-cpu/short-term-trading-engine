@@ -140,5 +140,49 @@ def test_every_spec_is_self_consistent() -> None:
             assert spec.unhealable_reason, f"{name}: unhealable but no reason"
 
 
+def test_depends_on_resolves_to_known_healable_sources() -> None:
+    """A derived feed must never silently depend on an unknown or
+    UNHEALABLE upstream — that is exactly the fear_greed-class
+    fake-heal (recompute no-ops forever because the real blocker is an
+    upstream that can't heal). Every depends_on entry must be the
+    `source` of some healable HealSpec."""
+    healable_sources = {s.source for s in HEAL_SPECS.values() if s.healable}
+    for name, spec in HEAL_SPECS.items():
+        for dep in spec.depends_on:
+            assert dep in healable_sources, (
+                f"{name}: depends_on '{dep}' is not a known healable "
+                f"HealSpec source — a derived feed depending on an "
+                f"unhealable/unknown upstream can never self-heal"
+            )
+
+
+def test_depends_on_graph_is_acyclic() -> None:
+    """Dependency-ordered healing (the HealProfile follow-up) requires
+    a DAG; a cycle would deadlock topological heal ordering."""
+    by_source: dict[str, tuple[str, ...]] = {}
+    for spec in HEAL_SPECS.values():
+        by_source.setdefault(spec.source, ())
+        if spec.depends_on:
+            by_source[spec.source] = by_source[spec.source] + spec.depends_on
+
+    visiting: set[str] = set()
+    done: set[str] = set()
+
+    def _walk(node: str, path: tuple[str, ...]) -> None:
+        if node in done:
+            return
+        assert node not in visiting, (
+            f"depends_on cycle: {' -> '.join((*path, node))}"
+        )
+        visiting.add(node)
+        for nxt in by_source.get(node, ()):
+            _walk(nxt, (*path, node))
+        visiting.discard(node)
+        done.add(node)
+
+    for src in list(by_source):
+        _walk(src, ())
+
+
 def test_spec_for_unknown_is_none() -> None:
     assert spec_for("no_such_check") is None

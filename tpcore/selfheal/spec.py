@@ -48,6 +48,20 @@ class HealSpec(BaseModel):
     # Why it's unhealable (required when healable is False) — surfaced
     # in the escalation so the operator knows it's by-design, not a bug.
     unhealable_reason: str = ""
+    # Upstream HealSpec.source names this feed's heal DEPENDS ON. A
+    # *derived* feed (no own external provider — e.g. fear_greed,
+    # recomputed from macro_indicators + prices_daily) cannot heal
+    # until its upstreams are fresh; its own stage no-ops otherwise.
+    # Empty = leaf feed (repair is a direct external re-pull, no
+    # platform-feed dependency). Evidence-derived from the handler,
+    # never assumed. The registry test asserts every entry is itself a
+    # known healable source and the graph is acyclic, so a derived feed
+    # can never silently depend on an unhealable/unknown upstream (the
+    # fear_greed-class fake-heal). The dependency-ORDERED orchestrator
+    # that acts on this is the HealProfile follow-up; today the iterated
+    # loop (max_iterations=4) heals upstreams first by emergence — this
+    # field makes the contract explicit + tested.
+    depends_on: tuple[str, ...] = ()
 
     def model_post_init(self, _ctx: object) -> None:  # noqa: D401
         if self.healable:
