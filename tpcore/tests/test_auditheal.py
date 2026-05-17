@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from tpcore.auditheal.registry import REMEDIATION_SPECS, registry_drift, spec_for
+from tpcore.auditheal.registry import REMEDIATION_SPECS, registry_drift, spec_for  # noqa: F401
 from tpcore.auditheal.spec import RemediationSpec
 
 
