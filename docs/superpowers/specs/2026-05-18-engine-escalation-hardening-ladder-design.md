@@ -55,16 +55,31 @@ this is the engine-native adaptation, not a deviation).
 - `DispositionPolicy` (pydantic v2, `extra="forbid", frozen=True`):
   `class_name: str`, `default: EngineEscalationDisposition`,
   `rationale: str`.
-- `INFRA_FAILURE_CLASSES` — the ONLY DA-1 touch: a behavior-preserving
-  extract in `ops/engine_supervisor.py`. The seam-guard tuple
-  currently inline at `engine_supervisor.py:153-154`
-  (`("crashed_startup","scheduler_crash","data_request_timeout",
-  "data_repair_escalated","missed_cycle")`) becomes a module constant
-  `INFRA_FAILURE_CLASSES: frozenset[str] = frozenset({...})`; the
-  `_auto_clear` guard references the constant instead of the inline
-  literal (identical behavior — the literal is replaced by the named
-  constant; `_classify`'s per-class `return` strings are unchanged).
-  This makes the DA-1 class set a single importable SoT.
+- `INFRA_FAILURE_CLASSES` — the DA-1 touch (expert-hardened): a
+  behavior-preserving extract in `ops/engine_supervisor.py` that makes
+  it the **single enforced SoT**, not just one of two parallel
+  literals. Today the seam-guard tuple (`engine_supervisor.py:152-154`)
+  and `_classify`'s five inline `return "…"` strings are TWO
+  independent literals that merely happen to agree — a new DA-1 class
+  is naturally added via a new `_detect_*`+`_classify` return, and the
+  seam-guard tuple (hence any constant extracted only from it) would
+  NOT change → the clockwork test would stay green → R2 defeated for
+  the most likely way a class is added. Therefore:
+  - Introduce `INFRA_FAILURE_CLASSES: frozenset[str] =
+    frozenset({"crashed_startup","scheduler_crash",
+    "data_request_timeout","data_repair_escalated","missed_cycle"})`.
+  - `_auto_clear`'s guard references the constant instead of its inline
+    literal — **byte-identical behavior** (the DA-1 supervisor suite
+    is the equivalence oracle, exactly like C-T1/CAN-T2 extracts).
+  - Pin `_classify`'s emittable set to the constant: EITHER refactor
+    `_classify` to iterate a `(detector, class_name)` table whose
+    `class_name`s are exactly `INFRA_FAILURE_CLASSES` (preferred —
+    one SoT by construction), OR add a clockwork assertion that the
+    set of every string `_classify` can `return` ⊆/==
+    `INFRA_FAILURE_CLASSES`. The plan picks the table refactor if it
+    is behavior-preserving and small; else the assertion. Either way
+    a new `_classify` class without a constant+policy update **fails
+    the build**.
 - `KNOWN_ESCALATION_CLASSES: frozenset[str]` =
   `engine_supervisor.INFRA_FAILURE_CLASSES | {aar_autotune._BEHAVIORAL}`
   (the real, current emitted-class union — derived, not hardcoded).
@@ -76,26 +91,42 @@ this is the engine-native adaptation, not a deviation).
   - `scheduler_crash → STRUCTURAL` "non-zero scheduler exit survived
     self-heal ⇒ a code/runtime defect to fix structurally."
   - `data_request_timeout → STRUCTURAL` "data lane never answered the
-    request in-window ⇒ structural inter-lane/timeout fix."
-  - `data_repair_escalated → REMOVED` "data lane exhausted bounded
-    repair ⇒ the engine cannot run on absent data; it stays removed
-    (held) until the data is structurally restored — disposition
-    records that the operator confirmed the data-lane escalation owns
-    the fix."
+    request in-window ⇒ the structural fix is typically in the DATA
+    LANE's request fulfillment/timeout, NOT this engine; disposition
+    records the operator confirmed cross-lane ownership."
+  - `data_repair_escalated → STRUCTURAL` (expert-corrected from
+    REMOVED — `REMOVED` here means archive/kill/graduation-gate-out,
+    which is actively wrong for a transient cross-lane data outage)
+    "the DATA-LANE escalation owns the fix; this engine is HELD (not
+    removed) and AUTO-CLEARS on DATA_REPAIR_COMPLETE green via DA-1
+    `_auto_clear`'s `_repair_complete_green_after` path; disposition
+    records the operator confirmed cross-lane ownership; escalate to
+    `REMOVED` ONLY if the data source is permanently retired."
   - `missed_cycle → STRUCTURAL` "engine silently failed to start over
     N cycles ⇒ a structural scheduling/dispatch fix."
   - `behavioral → STRUCTURAL` "DA-2 loss_cluster≥5 / drawdown ⇒
     edge-decay; a structural strategy review, or `REMOVED` if the
     edge is gone (snap-out via the Engine SDLC)."
-- `escalation_drift() -> tuple[set[str], set[str]]`: `(missing,
-  extra)` of `KNOWN_ESCALATION_CLASSES` vs `DISPOSITION_POLICIES`
-  keys. `policy_for(class_name) -> DispositionPolicy | None`.
+- `escalation_drift() -> tuple[set[str], set[str]]`: takes **no
+  argument** and derives `KNOWN_ESCALATION_CLASSES` internally from
+  the live constants (identical idiom to the data ladder's
+  `tpcore.ladder.disposition.disposition_drift()` — the symmetry
+  oracle). Returns `(missing, extra)` = (`KNOWN` not in
+  `DISPOSITION_POLICIES`, `DISPOSITION_POLICIES` keys not in `KNOWN`).
+  `policy_for(class_name) -> DispositionPolicy | None`.
 - Clockwork test (`scripts/tests/test_engine_ladder.py`): asserts
-  `escalation_drift() == (set(), set())` AND
-  `KNOWN_ESCALATION_CLASSES == engine_supervisor.INFRA_FAILURE_CLASSES
-  | {aar_autotune._BEHAVIORAL}`. So adding a DA-1/DA-2 failure class
-  (without recording a policy) **fails the build**. These are the R2
-  teeth.
+  `escalation_drift() == (set(), set())`. **No tautological
+  `KNOWN == INFRA_FAILURE_CLASSES | {_BEHAVIORAL}` identity assertion**
+  (that is `X == X`, asserts nothing, and falsely reads as a tooth —
+  expert-removed). The non-tautology proof (mirroring the data
+  ladder's drift test): a test that, with a synthetic class present
+  in the derived `KNOWN` but absent from `DISPOSITION_POLICIES`,
+  asserts `escalation_drift()` returns non-empty `missing` — proving
+  the build genuinely breaks. Because `KNOWN` is DERIVED from the
+  pinned constants (incl. `_classify` per the SoT pinning above),
+  adding a real DA-1/DA-2 class grows `KNOWN` → `missing` non-empty →
+  **build breaks until a `DISPOSITION_POLICIES` entry is added**.
+  This — not the deleted identity assert — is the R2 tooth.
 
 ## 4. R3 — undispositioned-instance surface + disposition verb
 
@@ -104,25 +135,53 @@ event-sourced over `platform.application_log` (mirrors the
 `current_hold` / `_open_request_state` read idiom; mirrors DA-1/DA-2
 `_emit` for writes):
 
-- `list` (default) — the undispositioned digest. An escalation
-  *instance* is keyed by `hold_id` (the uuid4 every `ENGINE_ESCALATED`
-  carries — DA-1 §8 / DA-2). It is OPEN-UNDISPOSITIONED iff:
-  an `ENGINE_ESCALATED` with that `hold_id` exists, AND there is NO
-  later `ENGINE_CLEARED` for that `hold_id`, AND NO
-  `ENGINE_ESCALATION_DISPOSITIONED` for that `hold_id`, AND its
-  `recorded_at` is older than `_GRACE_DAYS` (default 7,
-  `ENGINE_LADDER_GRACE_DAYS` env-overridable — symmetry with the data
-  ladder's 7-day grace). Prints per instance: engine, failure_class,
-  reason, age, and the class's `policy_for(...)` default+rationale
-  (so the operator sees the recommended disposition). Header states
-  the rung-3 principle ("each MUST be converted | structural |
-  removed"), symmetry with the data digest's section title.
+**Two escalation shapes (expert-hardened — the make-or-break
+correctness point):** every `ENGINE_ESCALATED` carries a `hold_id`
+(uuid4), but there are TWO shapes with DIFFERENT terminals:
+  - **held-class** (all DA-1 classes — DA-1 always escalates+holds;
+    and DA-2 hold-eligible: `loss_cluster≥5`/`drawdown`): the SAME
+    `hold_id` is on a paired `ENGINE_HELD`; terminal = a later
+    `ENGINE_CLEARED` for that `hold_id` OR an
+    `ENGINE_ESCALATION_DISPOSITIONED` for it. The engine is gated off
+    by `should_fire` while held (R1).
+  - **escalate-only** (DA-2 noise: `outlier_loss` / short
+    `loss_cluster`, `aar_autotune.py:156` — emits `ENGINE_ESCALATED`
+    with a fresh uuid4 `hold_id`, **NO `ENGINE_HELD`, and NOTHING
+    ever emits `ENGINE_CLEARED` for it**; the engine KEEPS TRADING by
+    design — it's noise, not decay). Without special handling this
+    would surface forever (no possible `ENGINE_CLEARED`) AND never be
+    tracked-to-closure. Terminal for escalate-only = an
+    `ENGINE_ESCALATION_DISPOSITIONED` for its `hold_id` **OR** every
+    `triggers` fingerprint in its payload is no longer open in
+    `platform.forensics_triggers` (i.e. all operator-resolved /
+    absent from DA-2's `_open_triggers` view — the honest "the noise
+    cleared" auto-close, mirroring DA-2's own `_maybe_clear_behavioral`
+    re-evaluation idiom). An escalate-only escalation IS dispositionable
+    and IS tracked; it is NOT a hold.
+
+- `list` (default) — the undispositioned digest. An instance
+  (keyed by `hold_id`) is **OPEN-UNDISPOSITIONED** iff: an
+  `ENGINE_ESCALATED` with that `hold_id` exists, `recorded_at` older
+  than `_GRACE_DAYS` (default 7, `ENGINE_LADDER_GRACE_DAYS`
+  env-overridable — data-ladder symmetry), NO
+  `ENGINE_ESCALATION_DISPOSITIONED` for that `hold_id`, AND **either**
+  (held-class) no later `ENGINE_CLEARED` for that `hold_id`, **or**
+  (escalate-only: that `hold_id` has no paired `ENGINE_HELD`) at least
+  one of its payload `triggers` fingerprints is still open in
+  `forensics_triggers`. Prints per instance: engine, shape
+  (held / escalate-only), failure_class, reason, age, and the class's
+  `policy_for(...)` default+rationale. Header states the rung-3
+  principle ("each MUST be converted | structural | removed"),
+  symmetry with the data digest's section title.
 - `disposition <hold_id> <converted|structural|removed> [note]` —
   validates the verb is a valid `EngineEscalationDisposition`
   (case-insensitive accepted, stored lowercase); validates the
-  `hold_id` corresponds to a real open `ENGINE_ESCALATED` (unknown /
-  already-cleared-and-no-open / unknown verb → nonzero exit + message,
-  NO write). On success emits event-sourced
+  `hold_id` corresponds to a real `ENGINE_ESCALATED` that is still
+  OPEN-UNDISPOSITIONED per the predicate above — **for either shape**
+  (it must accept an escalate-only `hold_id`, i.e. one with NO paired
+  `ENGINE_HELD`; validity MUST NOT be gated on `current_hold`).
+  Unknown `hold_id` / not-open / unknown verb → nonzero exit +
+  message, NO write. On success emits event-sourced
   `ENGINE_ESCALATION_DISPOSITIONED {schema:1, hold_id, disposition,
   note}` to `platform.application_log` via the locked INSERT
   (`(engine, run_id, event_type, severity, message, data)` —
@@ -156,8 +215,11 @@ enumerated as how the `removed` disposition is physically realized,
 NO new code; R5 = LLM/agentic triage, OUT, Epic E); the disposition
 vocabulary; the operator workflow (`python -m ops.engine_ladder list`
 → triage the dossier/logs → `disposition <hold_id> <verb> [note]`);
-and an explicit "symmetry-references the data-lane ladder; engine-
-native; lane-separate; not a clone" note. Plus a one-line CLAUDE.md
+one sentence stating escalate-only (no-hold) escalations close on
+EITHER disposition OR resolution of all their trigger fingerprints
+(so the doc's "every escalation terminates" claim is literally true
+for the no-hold case); and an explicit "symmetry-references the
+data-lane ladder; engine-native; lane-separate; not a clone" note. Plus a one-line CLAUDE.md
 engine-lane-escalation-contract bullet, parallel to the existing
 data-lane-escalation-contract bullet — staged with `git diff`/`git
 add -p` guarding ONLY the new bullet (the data session edits CLAUDE.md
@@ -191,23 +253,36 @@ NO partial write. Re-running `list` is read-only and idempotent.
 
 Unit (fake pool, no DB; ops-name-collision guard like sibling
 scripts/tests):
-- `escalation_drift()` == `(set(), set())` in lockstep; returns
-  `missing` non-empty when a known class lacks a policy.
-- Clockwork: `KNOWN_ESCALATION_CLASSES ==
-  engine_supervisor.INFRA_FAILURE_CLASSES | {aar_autotune._BEHAVIORAL}`
-  — and a test proving the drift test would FAIL if a class were
-  added without a policy (simulate by checking
-  `escalation_drift({...known}|{"new_x"})`-style helper or asserting
-  policy coverage of the real union; non-tautological).
+- `escalation_drift()` (no args; derives KNOWN internally) ==
+  `(set(), set())` in lockstep; returns `missing` non-empty when a
+  known class lacks a policy.
+- Non-tautology proof (NO `KNOWN == INFRA|{_BEHAVIORAL}` identity
+  assert — deleted as vacuous): with a synthetic class present in the
+  derived KNOWN but absent from `DISPOSITION_POLICIES`,
+  `escalation_drift()` returns non-empty `missing` (build would
+  break) — symmetric with the data ladder's `disposition_drift` test
+  (name it as the oracle).
+- `_classify` SoT pin: a test asserting the set of every string
+  `_classify` can `return` ⊆ `engine_supervisor.INFRA_FAILURE_CLASSES`
+  (so a new `_classify` class without a constant+policy update fails
+  CI) — OR, if the `(detector, class_name)`-table refactor is used,
+  a test that the table's `class_name`s == `INFRA_FAILURE_CLASSES`.
 - `policy_for` returns the right policy / None for unknown.
-- `list`: includes a past-grace open undispositioned escalation;
-  EXCLUDES one within grace; EXCLUDES one with a later
+- `list` (held-class): includes a past-grace open undispositioned
+  held escalation; EXCLUDES within-grace; EXCLUDES one with a later
   `ENGINE_CLEARED`; EXCLUDES one with an
   `ENGINE_ESCALATION_DISPOSITIONED`.
+- `list` (escalate-only, no `ENGINE_HELD`): INCLUDES a past-grace one
+  whose trigger fingerprints are STILL open; EXCLUDES one whose
+  fingerprints are ALL resolved/absent from `forensics_triggers`
+  EVEN BEFORE grace expiry (the auto-close disjunct, symmetric with
+  the data digest's resolving-terminal exclusion); EXCLUDES one with
+  an `ENGINE_ESCALATION_DISPOSITIONED`.
 - `disposition`: emits the locked `ENGINE_ESCALATION_DISPOSITIONED`
   payload (schema:1, hold_id, disposition lowercased, note) for a
-  valid verb; nonzero exit + NO write for an unknown verb and for an
-  unknown/not-open hold_id.
+  valid verb on BOTH a held-class AND an escalate-only `hold_id`
+  (validity NOT gated on `current_hold`); nonzero exit + NO write for
+  an unknown verb and for an unknown/not-open hold_id.
 - `__main__`/entrypoint present and `list` reaches a clean DB-less
   exit (canary `-m`-no-op regression guard).
 - Constant-extract behavior-preserving: full
@@ -253,3 +328,18 @@ suite + ruff + check_imports green; lane discipline asserted.
   lane-separate; not a clone. DA-3 is the next sub-project after.
 - **D-EL-7** A `__main__`/`-m`-invocable entrypoint with a test
   (canary `__main__`-no-op regression lesson).
+- **D-EL-8** (expert hardening, 2026-05-18) DA-2 **escalate-only**
+  escalations (no `ENGINE_HELD`, no possible `ENGINE_CLEARED`, engine
+  keeps trading) are explicitly in-scope: a separate digest shape;
+  terminal = DISPOSITIONED OR all payload `triggers` fingerprints
+  resolved/absent from `forensics_triggers`; `disposition` accepts
+  their `hold_id` (NOT gated on `current_hold`). Without this they'd
+  surface forever / slip untracked.
+- **D-EL-9** (expert hardening) `INFRA_FAILURE_CLASSES` must be the
+  ENFORCED SoT — `_classify`'s emittable set is pinned to it (table
+  refactor or a coverage assertion), not just the `_auto_clear`
+  seam-guard literal, else R2 is vacuous for the common
+  add-a-class path. The tautological `KNOWN == INFRA|{_BEHAVIORAL}`
+  assertion is deleted. `data_repair_escalated` default disposition
+  corrected `REMOVED → STRUCTURAL` (cross-lane owned; engine
+  auto-clears on data-green).
