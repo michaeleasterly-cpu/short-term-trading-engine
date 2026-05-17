@@ -65,3 +65,68 @@ async def test_autotune_is_crash_isolated():
 
 async def test_loss_cluster_hold_len_default_is_5():
     assert at.LOSS_CLUSTER_HOLD_LEN == 5
+
+
+def _trig(kind, fp, **payload):
+    return {"id": 1, "trigger_kind": kind,
+            "payload": {"engine": "reversion", "fingerprint": fp, **payload}}
+
+
+async def _run(open_triggers, hold=None):
+    rec = _rows_conn([open_triggers])
+    with patch.object(at, "current_hold",
+                      new=AsyncMock(return_value=hold)):
+        await at.autotune(_pool_for(rec), "reversion",
+                          datetime(2026, 5, 5, 21, 30, tzinfo=UTC))
+    return [a[2] for _s, a in rec.inserts]
+
+
+async def test_outlier_loss_escalate_only_no_hold():
+    events = await _run([_trig("outlier_loss", "fp-o")])
+    assert "ENGINE_ESCALATED" in events
+    assert "ENGINE_HELD" not in events
+
+
+async def test_loss_cluster_short_escalate_only():
+    for n in (3, 4):
+        events = await _run([_trig("loss_cluster", f"fp-c{n}",
+                                   streak_length=n)])
+        assert events.count("ENGINE_ESCALATED") == 1
+        assert "ENGINE_HELD" not in events
+
+
+async def test_loss_cluster_long_holds_and_escalates():
+    events = await _run([_trig("loss_cluster", "fp-c5", streak_length=5)])
+    assert "ENGINE_HELD" in events
+    assert "ENGINE_ESCALATED" in events
+
+
+async def test_drawdown_holds_and_escalates():
+    events = await _run([_trig("drawdown_period", "fp-d",
+                               drawdown_pct="0.1234", days_in_drawdown=20)])
+    assert "ENGINE_HELD" in events
+    assert "ENGINE_ESCALATED" in events
+
+
+async def test_no_open_triggers_no_events():
+    assert await _run([]) == []
+
+
+async def test_one_hold_rule_skips_when_already_held():
+    from tpcore.supervisor_state import HoldState
+    infra = HoldState("h-i", "crashed_startup", "x",
+                      datetime(2026, 5, 5, tzinfo=UTC))
+    events = await _run([_trig("drawdown_period", "fp-d")], hold=infra)
+    assert events == []
+
+
+async def test_hold_payload_carries_kind_and_fingerprints():
+    rec = _rows_conn([[_trig("drawdown_period", "fp-d")]])
+    with patch.object(at, "current_hold", new=AsyncMock(return_value=None)):
+        await at.autotune(_pool_for(rec), "reversion",
+                          datetime(2026, 5, 5, 21, 30, tzinfo=UTC))
+    held = [a for _s, a in rec.inserts if a[2] == "ENGINE_HELD"][0]
+    p = json.loads(held[-1])
+    assert p["failure_class"] == "behavioral"
+    assert "drawdown_period" in p["reason"]
+    assert p["triggers"] == ["fp-d"]

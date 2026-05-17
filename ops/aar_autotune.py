@@ -29,7 +29,7 @@ from tpcore.supervisor_state import (
     ESCALATED_EVENT,
     HELD_EVENT,
     SCHEMA_VERSION,
-    current_hold,  # noqa: F401  # used by DA2-T3/T4
+    current_hold,
 )
 
 logger = structlog.get_logger(__name__)
@@ -107,9 +107,54 @@ async def _open_triggers(pool, engine: str) -> list[dict]:
     return out
 
 
+def _streak_len(payload: dict) -> int:
+    """loss_cluster payload streak_length (int in the producer's JSON;
+    tolerate str defensively)."""
+    v = payload.get("streak_length", 0)
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _is_hold_eligible(trig: dict) -> bool:
+    """Spec §3 HOLD set: drawdown_period, or loss_cluster with
+    streak_length >= LOSS_CLUSTER_HOLD_LEN."""
+    kind = trig["trigger_kind"]
+    if kind == "drawdown_period":
+        return True
+    if kind == "loss_cluster":
+        return _streak_len(trig["payload"]) >= LOSS_CLUSTER_HOLD_LEN
+    return False
+
+
 async def _decide_and_act(pool, engine: str, now: datetime) -> None:
-    """Policy + emit (DA2-T3 fills this in)."""
-    return None
+    # One-hold rule (spec §6): if ANY uncleared hold exists, DA-2 never
+    # emits a (second) hold/escalation here. Clearing a behavioral hold
+    # is handled separately in autotune() (DA2-T4).
+    if await current_hold(pool, engine) is not None:
+        return
+
+    triggers = await _open_triggers(pool, engine)
+    if not triggers:
+        return
+
+    hold_eligible = [t for t in triggers if _is_hold_eligible(t)]
+    if hold_eligible:
+        fps = [t["payload"].get("fingerprint", "") for t in hold_eligible]
+        kinds = sorted({t["trigger_kind"] for t in hold_eligible})
+        hold_id = str(uuid.uuid4())
+        reason = (f"{','.join(kinds)}: "
+                  f"{len(hold_eligible)} open hold-eligible trigger(s)")
+        await _emit_escalated(pool, engine, hold_id, reason, fps)
+        await _emit_held(pool, engine, hold_id, reason, fps)
+        return
+
+    # Only ESCALATE-only triggers open (outlier_loss / short clusters).
+    fps = [t["payload"].get("fingerprint", "") for t in triggers]
+    kinds = sorted({t["trigger_kind"] for t in triggers})
+    await _emit_escalated(pool, engine, str(uuid.uuid4()),
+                          f"{','.join(kinds)}: escalate-only", fps)
 
 
 async def autotune(pool, engine: str, now: datetime) -> None:
