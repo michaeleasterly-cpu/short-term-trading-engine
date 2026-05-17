@@ -14,10 +14,13 @@ docs/superpowers/specs/2026-05-17-event-driven-engine-services-design.md.
 """
 from __future__ import annotations
 
+from datetime import date, datetime, timedelta
 from enum import StrEnum
 
 import structlog
 from pydantic import BaseModel, ConfigDict
+
+from tpcore import calendar as cal
 
 logger = structlog.get_logger(__name__)
 
@@ -48,3 +51,22 @@ _PROFILE: dict[str, EngineProfile] = {
 def profile_for(engine: str) -> EngineProfile | None:
     """The EngineProfile for an engine, or None if unprofiled."""
     return _PROFILE.get(engine)
+
+
+def _week_start_date(d: date) -> date:
+    """Monday of d's ISO week (date)."""
+    return d - timedelta(days=d.weekday())
+
+
+def _cadence_boundary(profile: EngineProfile, now: datetime) -> bool:
+    """True iff ``now``'s date is this profile's cadence boundary (XNYS)."""
+    d = now.date()
+    if profile.cadence is Cadence.DAILY:
+        return cal.is_trading_day(now)
+    if profile.cadence is Cadence.MONTHLY_FIRST_TRADING_DAY:
+        return d == cal.first_session_of_month(d.year, d.month)
+    if profile.cadence is Cadence.WEEKLY_FIRST_TRADING_DAY:
+        wk_start = _week_start_date(d)
+        sessions = cal.sessions_in_range(wk_start, d)
+        return bool(sessions) and sessions[0] == d
+    return False  # unknown cadence → fail-closed
