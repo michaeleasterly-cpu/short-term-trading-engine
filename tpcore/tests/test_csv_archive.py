@@ -114,3 +114,26 @@ class TestShrinkageDetection:
             previous_archive="x", shrinkage_pct=0.01, over_threshold=False,
         )
         csv_archive.log_shrinkage_warning(rep)  # no exception = pass
+
+    def test_assert_not_shrunk_raises_over_threshold(self) -> None:
+        """Producer hard-stop: a full-snapshot pull that shrank past
+        the threshold must RAISE so the stage fails loudly (the
+        daily_bars producer-guard pattern, generalised via the
+        existing shrinkage detector — no new per-source thresholds)."""
+        rep = csv_archive.ShrinkageReport(
+            source="fred_macro", current_rows=785, previous_rows=7500,
+            previous_archive="prev.csv.gz", shrinkage_pct=0.895,
+            over_threshold=True,
+        )
+        with pytest.raises(
+            csv_archive.ProducerShrinkageError, match="fred_macro"
+        ):
+            csv_archive.assert_not_shrunk(rep)
+
+    def test_assert_not_shrunk_noop_under_threshold_or_none(self) -> None:
+        under = csv_archive.ShrinkageReport(
+            source="fred_macro", current_rows=100, previous_rows=101,
+            previous_archive="x", shrinkage_pct=0.01, over_threshold=False,
+        )
+        csv_archive.assert_not_shrunk(under)  # not over_threshold → no raise
+        csv_archive.assert_not_shrunk(None)   # first run → no raise
