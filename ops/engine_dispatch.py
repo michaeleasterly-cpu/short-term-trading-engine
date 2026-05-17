@@ -47,6 +47,37 @@ async def _invoke_scheduler(engine: str) -> int:
 _REQUEST_EVENT = "ENGINE_DATA_REQUEST"
 _TERMINAL_EVENTS = ("DATA_REPAIR_COMPLETE", "DATA_REPAIR_ESCALATED")
 
+_STALE_STARTUP_SECONDS = int(
+    os.environ.get("ENGINE_DISPATCH_STALE_STARTUP_SECONDS", "7200"))  # 2h (spec §6)
+
+
+async def _crashed_startup_refire(conn, engine: str, now: datetime,
+                                  window_start: datetime) -> bool:
+    """True iff this cadence cycle has a STARTUP with NO completion
+    (SCAN_COMPLETE/SHUTDOWN) and the STARTUP is older than the stale
+    threshold — a crashed pre-trade run that should_fire's STARTUP-
+    based 'already ran' would wrongly skip (up to a month for momentum).
+    A RECENT started-but-incomplete run is in-flight: do NOT re-fire.
+
+    Any completion event counts (``bool_or`` over SCAN_COMPLETE/SHUTDOWN).
+    A non-zero-exit SHUTDOWN is a real failure that must escalate via the
+    existing alarms, NOT be silently re-fired here — so exit_code is
+    deliberately not parsed.
+    """
+    row = await conn.fetchrow(
+        """
+        SELECT
+          max(recorded_at) FILTER (WHERE event_type = 'STARTUP')      AS started_at,
+          bool_or(event_type IN ('SCAN_COMPLETE', 'SHUTDOWN'))        AS completed
+        FROM platform.application_log
+        WHERE engine = $1 AND recorded_at >= $2
+        """,
+        engine, window_start,
+    )
+    if not row or row["started_at"] is None or row["completed"]:
+        return False
+    return (now - row["started_at"]).total_seconds() >= _STALE_STARTUP_SECONDS
+
 
 async def _has_open_request(conn, engine: str, window_start: datetime) -> bool:
     """True if an ENGINE_DATA_REQUEST for this engine in the current
@@ -102,6 +133,20 @@ async def dispatch_once(pool, now: datetime) -> None:
                     continue
                 sources = await failing_sources_for_engine(pool, engine)
                 await _emit_data_request(conn, engine, sources, decision.reason)
+        elif decision.reason == "already ran this cycle":
+            prof = profile_for(engine)
+            window_start = cadence_window_start(engine, now) if prof else now
+            async with pool.acquire() as conn:
+                if await _crashed_startup_refire(conn, engine, now, window_start):
+                    logger.warning(
+                        "engine_dispatch.crashed_startup_refire", engine=engine)
+                    await _invoke_scheduler(engine)
+                    continue
+            logger.info(
+                "engine_dispatch.skipped", engine=engine,
+                reason=decision.reason,
+                data_ready=decision.checks.get("data_ready"),
+            )
         else:
             logger.info(
                 "engine_dispatch.skipped", engine=engine,

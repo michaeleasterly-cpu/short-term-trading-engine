@@ -70,3 +70,59 @@ async def test_open_request_is_not_re_emitted():
          patch("ops.engine_dispatch.failing_sources_for_engine", new=AsyncMock(return_value=["prices_daily"])), \
          patch("ops.engine_dispatch._invoke_scheduler", new=AsyncMock()):
         await dispatch_once(_P(), now=datetime(2026,5,5,21,30,tzinfo=UTC))
+
+
+async def test_stale_startup_without_completion_is_refired():
+    already = FireDecision(False, "already ran this cycle",
+                           {"data_ready": True, "not_already_run": False})
+    class _C:
+        async def fetchrow(self, *_a, **_k):
+            # STARTUP 3h before `now`, no completion
+            return {"started_at": datetime(2026,5,5,18,0,tzinfo=UTC), "completed": False}
+        async def fetchval(self,*_a,**_k): return None
+        async def fetch(self,*_a,**_k): return []
+        async def execute(self,*_a,**_k): return None
+    class _P:
+        @contextlib.asynccontextmanager
+        async def acquire(self): yield _C()
+    with patch("ops.engine_dispatch.should_fire", AsyncMock(return_value=already)), \
+         patch("ops.engine_dispatch._invoke_scheduler", new=AsyncMock()) as inv:
+        await dispatch_once(_P(), now=datetime(2026,5,5,21,30,tzinfo=UTC))
+    assert inv.await_count >= 1
+    assert all(c.args[0] in ROSTER for c in inv.await_args_list)
+
+
+async def test_recent_startup_without_completion_is_not_refired():
+    already = FireDecision(False, "already ran this cycle",
+                           {"data_ready": True, "not_already_run": False})
+    class _C:
+        async def fetchrow(self,*_a,**_k):
+            return {"started_at": datetime(2026,5,5,21,20,tzinfo=UTC), "completed": False}  # 10m ago
+        async def fetchval(self,*_a,**_k): return None
+        async def fetch(self,*_a,**_k): return []
+        async def execute(self,*_a,**_k): return None
+    class _P:
+        @contextlib.asynccontextmanager
+        async def acquire(self): yield _C()
+    with patch("ops.engine_dispatch.should_fire", AsyncMock(return_value=already)), \
+         patch("ops.engine_dispatch._invoke_scheduler", new=AsyncMock()) as inv:
+        await dispatch_once(_P(), now=datetime(2026,5,5,21,30,tzinfo=UTC))
+    inv.assert_not_called()
+
+
+async def test_completed_run_is_not_refired():
+    already = FireDecision(False, "already ran this cycle",
+                           {"data_ready": True, "not_already_run": False})
+    class _C:
+        async def fetchrow(self,*_a,**_k):
+            return {"started_at": datetime(2026,5,5,18,0,tzinfo=UTC), "completed": True}
+        async def fetchval(self,*_a,**_k): return None
+        async def fetch(self,*_a,**_k): return []
+        async def execute(self,*_a,**_k): return None
+    class _P:
+        @contextlib.asynccontextmanager
+        async def acquire(self): yield _C()
+    with patch("ops.engine_dispatch.should_fire", AsyncMock(return_value=already)), \
+         patch("ops.engine_dispatch._invoke_scheduler", new=AsyncMock()) as inv:
+        await dispatch_once(_P(), now=datetime(2026,5,5,21,30,tzinfo=UTC))
+    inv.assert_not_called()
