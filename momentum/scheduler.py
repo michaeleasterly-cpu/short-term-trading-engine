@@ -8,23 +8,27 @@ call.
 Cadence
 -------
 Momentum rebalances *monthly*, on the first trading day of each calendar
-month. The scheduler is safe to call every trading day — it'll quietly
-no-op on non-rebalance days. This matches the operational model of the
-other engines (call every session, plug decides whether to act).
+month. That cadence boundary is enforced **exactly once** — by the
+Python dispatcher (``ops/engine_dispatch.py``) via
+``tpcore.engine_profile.should_fire`` (momentum profile =
+``MONTHLY_FIRST_TRADING_DAY``). The scheduler itself NO LONGER carries
+an internal cadence gate (the old ``lifecycle.assess`` /
+``plan.is_rebalance_day`` early-return was redundant double-gating and
+was deleted on 2026-05-17). If ``run_once`` is invoked at all, it
+rebalances. Direct manual ``python -m momentum.scheduler`` runs are an
+operator decision — ``--force-rebalance`` is kept as the documented
+escape-hatch flag for those (it now has no internal cadence to bypass).
 
 Responsibilities each run
 -------------------------
 1. Build asyncpg pool + Alpaca broker + Risk Governor.
-2. Lifecycle plug: is today a rebalance day?
-3. If yes:
-    a. Setup plug ranks the universe → list of candidates.
-    b. Pull current Alpaca portfolio.
-    c. Execution-Risk plug builds the target portfolio + order batch.
-    d. Capital gate sanity-checks total buy notional vs allocated equity.
-    e. Submit each market order via the broker, in this order:
-       all SELLs first (free up cash) → all BUYs (deploy it).
-    f. Log each submitted order to ``platform.application_log``.
-4. If no: log a single 'no rebalance today' line and exit cleanly.
+2. Setup plug ranks the universe → list of candidates.
+3. Pull current Alpaca portfolio.
+4. Execution-Risk plug builds the target portfolio + order batch.
+5. Capital gate sanity-checks total buy notional vs allocated equity.
+6. Submit each market order via the broker, in this order:
+   all SELLs first (free up cash) → all BUYs (deploy it).
+7. Log each submitted order to ``platform.application_log``.
 
 What this scheduler does NOT do (deliberately)
 ----------------------------------------------
@@ -60,7 +64,6 @@ from momentum.plugs.capital_gate import (
     MomentumCapitalGate,
 )
 from momentum.plugs.execution_risk import MomentumExecutionRisk
-from momentum.plugs.lifecycle_analysis import MomentumLifecycleAnalysis
 from momentum.plugs.setup_detection import MomentumSetupDetection
 from tpcore.alpaca import AlpacaPaperBrokerAdapter
 from tpcore.db import build_asyncpg_pool
@@ -280,27 +283,17 @@ class MomentumScheduler:
                     decision=None, submitted_order_ids=[], dry_run=not self._submit,
                 )
 
-            # Plug 2 — is today a rebalance day? --force-rebalance overrides
-            # for the initial paper-trading kickoff (and for emergency
-            # mid-month rebalances, which are rare and operator-judgement).
-            lifecycle = MomentumLifecycleAnalysis()
-            plan = await lifecycle.assess(pool, as_of)
-            if not plan.is_rebalance_day and not self._force_rebalance:
-                logger.info(
-                    "momentum.scheduler.no_rebalance",
-                    as_of=as_of.isoformat(),
-                    reason=plan.reason,
-                )
-                return RunSummary(
-                    as_of=as_of, is_rebalance_day=False,
-                    decision=None, submitted_order_ids=[], dry_run=not self._submit,
-                )
-            if not plan.is_rebalance_day and self._force_rebalance:
-                logger.warning(
-                    "momentum.scheduler.force_rebalance_override",
-                    as_of=as_of.isoformat(),
-                    natural_reason=plan.reason,
-                )
+            # Cadence is NOT gated here. The MONTHLY_FIRST_TRADING_DAY
+            # boundary is enforced exactly once — by the Python dispatcher
+            # (ops/engine_dispatch.py) via tpcore.engine_profile.should_fire
+            # (operator directive 2026-05-17, event-driven engine services).
+            # The old in-scheduler lifecycle.assess / plan.is_rebalance_day
+            # early-return was redundant double-gating and has been deleted
+            # so engine_profile is the SOLE cadence authority. If this
+            # scheduler is invoked at all, it rebalances. --force-rebalance
+            # remains for direct manual `python -m momentum.scheduler` runs
+            # (it now has no internal cadence to bypass, but stays a
+            # documented accepted operator escape hatch).
 
             # Plug 1 — rank candidates.
             setup = MomentumSetupDetection()
@@ -572,9 +565,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--force-rebalance",
         action="store_true",
         help=(
-            "Override the 'is first trading day of month' check and rebalance "
-            "regardless. Used for the initial paper-trading kickoff and rare "
-            "emergency mid-month rebalances."
+            "Operator escape hatch for direct manual `python -m "
+            "momentum.scheduler` invocation. Cadence (MONTHLY first trading "
+            "day) is enforced by the dispatcher via tpcore.engine_profile — "
+            "the scheduler no longer has an internal cadence gate to bypass. "
+            "This flag remains an accepted, documented no-op-compatible flag "
+            "for manual runs and parity with the other engines."
         ),
     )
     return p.parse_args(argv)
