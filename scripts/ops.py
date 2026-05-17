@@ -1546,6 +1546,91 @@ async def _stage_forensics(pool: asyncpg.Pool) -> dict[str, Any]:
     return {"new_triggers_total": total_new, "by_kind": counts}
 
 
+async def _stage_canary_inject_trigger(
+    pool: asyncpg.Pool, config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Inject ONE well-formed forensics_triggers row for engine='canary'
+    ONLY (DA-2 end-to-end harness). Payload mirrors the forensics
+    producer's shape per kind + a source='canary_injection' marker for
+    audit/teardown. ``--param teardown=true`` removes all injected rows.
+    NEVER writes for any engine other than canary.
+
+    Supported kinds: ``outlier_loss``, ``loss_cluster``, ``drawdown_period``.
+    Default kind is ``loss_cluster``.
+    """
+    import json as _json
+    from datetime import UTC
+    from datetime import datetime as _dt
+
+    cfg = config or {}
+    if cfg.get("engine", "canary") != "canary":
+        raise ValueError(
+            "canary_inject_trigger writes for engine='canary' ONLY — "
+            "pass engine='canary' or omit the param entirely")
+    if cfg.get("teardown"):
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "DELETE FROM platform.forensics_triggers "
+                "WHERE payload->>'source' = 'canary_injection'")
+        return {"teardown": True}
+
+    kind = str(cfg.get("kind", "loss_cluster"))
+    if kind not in ("outlier_loss", "loss_cluster", "drawdown_period"):
+        raise ValueError(
+            f"unknown kind {kind!r}; valid kinds: "
+            "outlier_loss, loss_cluster, drawdown_period")
+    now = _dt.now(UTC)
+    if kind == "loss_cluster":
+        streak = int(cfg.get("streak", 5))
+        fp = f"canary|cluster|ca_inject|{streak}"
+        payload: dict[str, Any] = {
+            "engine": "canary",
+            "streak_length": streak,
+            "trade_ids": [f"ca_inject_{i}" for i in range(streak)],
+            "total_loss": "-100.00",
+            "ended_at": now.isoformat(),
+            "fingerprint": fp,
+            "source": "canary_injection",
+        }
+    elif kind == "drawdown_period":
+        fp = f"canary|dd|inject|{now.date().isoformat()}"
+        payload = {
+            "engine": "canary",
+            "peak_equity": "10000",
+            "peak_date": now.date().isoformat(),
+            "trough_equity": "8500",
+            "drawdown_pct": "0.1500",
+            "days_in_drawdown": int(cfg.get("days", 20)),
+            "fingerprint": fp,
+            "source": "canary_injection",
+        }
+    else:  # outlier_loss
+        fp = "canary|ca_inject_outlier"
+        payload = {
+            "engine": "canary",
+            "trade_id": "ca_inject_outlier",
+            "ticker": "SPY",
+            "pnl_net": "-500.0000",
+            "mean": "-10.0000",
+            "stdev": "50.0000",
+            "threshold": "-160.0000",
+            "exit_ts": now.isoformat(),
+            "fingerprint": fp,
+            "source": "canary_injection",
+        }
+    async with pool.acquire() as conn:
+        exists = await conn.fetchrow(
+            "SELECT 1 FROM platform.forensics_triggers WHERE "
+            "trigger_kind=$1 AND payload->>'fingerprint'=$2 LIMIT 1",
+            kind, fp)
+        if exists is None:
+            await conn.execute(
+                "INSERT INTO platform.forensics_triggers "
+                "(trigger_kind, payload, fired_at) VALUES ($1,$2::jsonb,$3)",
+                kind, _json.dumps(payload), now)
+    return {"injected": kind, "fingerprint": fp, "engine": "canary"}
+
+
 async def _stage_simulate_universe() -> dict[str, Any]:
     """Run scripts/simulate_universe.py as a subprocess and parse counts.
 
@@ -1674,6 +1759,11 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # via fingerprint dedup in ForensicsService.persist_trigger; safe to
     # re-run. Standalone: ``python scripts/ops.py --stage forensics``.
     ("forensics",           lambda pool, cfg: (lambda: _stage_forensics(pool)),                STAGE_TIMEOUT_SEC),
+    # Canary harness — injects / tears down forensics_triggers test rows
+    # for the DA-2 end-to-end proof run. Canary-only hard-guarded.
+    # Use: --stage canary_inject_trigger --param kind=loss_cluster [--param streak=5]
+    #      --stage canary_inject_trigger --param teardown=true
+    ("canary_inject_trigger", lambda pool, cfg: (lambda: _stage_canary_inject_trigger(pool, cfg)), STAGE_TIMEOUT_SEC),
 )
 KNOWN_STAGES: tuple[str, ...] = tuple(name for name, _, _ in _STAGE_SPECS)
 
