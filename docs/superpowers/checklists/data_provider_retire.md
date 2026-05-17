@@ -6,6 +6,12 @@ lifecycle-design.md` §4; plan Phase 3). Mirrors
 `data_provider_evaluate.md` — every box checked before the binding's
 status becomes `RETIRED`.
 
+> **Entry point:** RETIRE is **operator-triggered** — one of the only
+> two operations the operator approves (the `REMOVE` op of the
+> [Data Feed Change Request](data_feed_change_request.md)). The system
+> prepares + validates the 3-way-atomic diff; the operator gives a
+> binary y/n. Never hand-author a removal.
+
 **Why this gate exists:** this session's ad-hoc retirements (Sigma →
 left a fake-healable HealSpec; FRED `BAMLH0A0HYM2` truncation → left a
 dangling spec + no archive plan) proved that retiring a feed/provider

@@ -152,10 +152,29 @@ quietly worse.
 Each phase independently testable; (1) and (2) are the new structural
 core.
 
-## 10. Non-goals / open questions
+## 10. Operator-interaction policy (AUTHORITATIVE — supersedes earlier drafts)
 
-- **Not** an automatic provider-swapper — CUTOVER is operator-confirmed
-  (a provider change is structural, like engine archival).
+Operator approval is required for **exactly two** operations: **ADD** a
+feed/derived datum (ONBOARD) and **REMOVE** one (RETIRE). Everything
+else — provider **CUTOVER** for an existing feed, EVALUATE parity,
+self-heal, validation — is **automated, deterministic, no operator
+approval**. The single operator touchpoint is the structured
+[Data Feed Change Request](../checklists/data_feed_change_request.md):
+the operator never hand-edits a registry; the system prepares +
+validates the exact diff and the operator gives a binary y/n on
+ADD/REMOVE only.
+
+> **Correction (2026-05-17):** an earlier draft said "CUTOVER is
+> operator-confirmed, not an automatic swapper." That is **reversed**.
+> A provider swap for an *existing* feed is reversible and
+> parity-gated (only a parity-verified FALLBACK is eligible), so it is
+> automated — the parity gate already supplied the human-equivalent
+> judgement. Only feed *existence* (add/remove) is the structural,
+> operator-gated decision. Every automated cutover/config change is
+> emitted to the audit bus and surfaced in the weekly digest.
+
+## 11. Non-goals / open questions
+
 - Open: does a feed ever need *simultaneous* multi-provider blending
   (e.g. union coverage), or strictly one ACTIVE? (Default: one ACTIVE;
   blending is a future variant, not v1.)

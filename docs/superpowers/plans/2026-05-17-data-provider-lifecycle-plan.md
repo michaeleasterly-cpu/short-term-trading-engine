@@ -4,6 +4,15 @@
 (approved, merged `bf60a9f`). Lane: DATA. Flow: spec → **plan (this
 doc)** → incremental build, each phase independently testable.
 
+> **Operator-interaction policy (spec §10, authoritative):** operator
+> approves ONLY ADD/REMOVE of a feed via the
+> [Data Feed Change Request](../checklists/data_feed_change_request.md);
+> CUTOVER and EVALUATE are **automated** (the earlier
+> "operator-confirmed CUTOVER" framing — Phase 5 / PR #15 — is
+> superseded; PR #15 left unmerged). Phase 5's remaining work is the
+> runtime binding-state overlay + the deterministic cutover agent that
+> applies `plan_cutover`, not an operator runbook.
+
 ## Phase decomposition
 
 | Phase | Deliverable | Risk | Status |
