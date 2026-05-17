@@ -141,3 +141,48 @@ async def test_already_held_skips_redetection_idempotent():
         await es.supervise(_pool_for(conn), "reversion", now, AsyncMock())
     assert all(a[2] != "ENGINE_HELD" for _s, a in conn.inserts)
     clear.assert_awaited_once()
+
+
+async def test_scheduler_crash_nonzero_shutdown_detected_and_self_heals():
+    now = datetime(2026, 5, 5, 21, 30, tzinfo=UTC)
+    conn = _rows_conn([
+        None,                                   # current_hold
+        {"started_at": None, "completed": False},  # crashed_startup: no
+        {"crashed": True},                      # scheduler_crash detect
+        {"crashed": False},                     # verify after re-invoke
+    ])
+    invoke = AsyncMock()
+    await es.supervise(_pool_for(conn), "reversion", now, invoke)
+    invoke.assert_awaited()
+    assert any(a[2] == "ENGINE_SUPERVISOR_RECOVERED" for _s, a in conn.inserts)
+
+
+async def test_data_repair_escalated_holds_without_selfheal():
+    now = datetime(2026, 5, 5, 21, 30, tzinfo=UTC)
+    conn = _rows_conn([
+        None,                                   # current_hold
+        {"started_at": None, "completed": False},  # crashed_startup: no
+        {"crashed": False},                     # scheduler_crash: no
+        {"open": False},                        # data_request_timeout: no
+        {"escalated": True},                    # data_repair_escalated: yes
+    ])
+    invoke = AsyncMock()
+    await es.supervise(_pool_for(conn), "vector", now, invoke)
+    invoke.assert_not_awaited()  # no self-heal possible
+    events = [a[2] for _s, a in conn.inserts]
+    assert "ENGINE_ESCALATED" in events and "ENGINE_HELD" in events
+
+
+async def test_missed_cycle_excludes_held_windows():
+    now = datetime(2026, 5, 5, 21, 30, tzinfo=UTC)
+    conn = _rows_conn([
+        None,                                   # current_hold
+        {"started_at": None, "completed": False},  # crashed_startup: no
+        {"crashed": False},                     # scheduler_crash: no
+        {"open": False},                        # data_request_timeout: no
+        {"escalated": False},                   # data_repair_escalated: no
+        {"startups": 0, "eligible_windows": es._MISSED_CYCLES_N},  # missed
+    ])
+    invoke = AsyncMock()
+    await es.supervise(_pool_for(conn), "momentum", now, invoke)
+    invoke.assert_awaited()  # missed_cycle self-heals via re-invoke

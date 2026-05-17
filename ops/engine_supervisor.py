@@ -35,6 +35,8 @@ _MAX_REINVOKE = int(os.environ.get("ENGINE_SUPERVISOR_MAX_REINVOKE", "2"))
 _MISSED_CYCLES_N = int(os.environ.get("ENGINE_SUPERVISOR_MISSED_CYCLES", "2"))
 _STALE_STARTUP_SECONDS = int(
     os.environ.get("ENGINE_DISPATCH_STALE_STARTUP_SECONDS", "7200"))  # 2h
+_NO_TERMINAL_TIMEOUT_SECONDS = int(
+    os.environ.get("ENGINE_DISPATCH_REQUEST_TIMEOUT_SECONDS", "5400"))
 
 _INSERT_SQL = """
     INSERT INTO platform.application_log
@@ -114,36 +116,156 @@ async def _auto_clear(pool, engine: str, now: datetime, hold) -> None:
     return None
 
 
+async def _detect_scheduler_crash(conn, engine: str,
+                                  window_start: datetime) -> bool:
+    """A SHUTDOWN row with exit_code != 0 in this window (the
+    db_handler.shutdown payload is {"duration_ms","exit_code"} —
+    Sub-project C-T4). Distinct from crashed_startup (no SHUTDOWN)."""
+    row = await conn.fetchrow(
+        """
+        SELECT bool_or(
+                 event_type = 'SHUTDOWN'
+                 AND (data->>'exit_code')::int <> 0
+               ) AS crashed
+        FROM platform.application_log
+        WHERE engine = $1 AND recorded_at >= $2
+        """,
+        engine, window_start,
+    )
+    return bool(row and row["crashed"])
+
+
+async def _detect_data_request_timeout(conn, engine: str, now: datetime,
+                                       window_start: datetime) -> bool:
+    """An ENGINE_DATA_REQUEST in this window with no terminal event,
+    older than the no-terminal timeout."""
+    row = await conn.fetchrow(
+        """
+        SELECT r.recorded_at AS req_ts, t.event_type AS terminal
+        FROM platform.application_log r
+        LEFT JOIN platform.application_log t
+          ON t.event_type = ANY(ARRAY['DATA_REPAIR_COMPLETE',
+                                       'DATA_REPAIR_ESCALATED'])
+         AND (t.data->>'request_id') = (r.data->>'request_id')
+        WHERE r.event_type = 'ENGINE_DATA_REQUEST'
+          AND r.engine = $1 AND r.recorded_at >= $2
+        ORDER BY r.recorded_at DESC LIMIT 1
+        """,
+        engine, window_start,
+    )
+    if row is None or row.get("req_ts") is None:
+        return False
+    if row.get("terminal") is not None:
+        return False
+    return (now - row["req_ts"]).total_seconds() >= _NO_TERMINAL_TIMEOUT_SECONDS
+
+
+async def _detect_data_repair_escalated(conn, engine: str,
+                                        window_start: datetime) -> bool:
+    """A DATA_REPAIR_ESCALATED for this engine's request this window."""
+    row = await conn.fetchrow(
+        """
+        SELECT bool_or(t.event_type = 'DATA_REPAIR_ESCALATED') AS escalated
+        FROM platform.application_log r
+        JOIN platform.application_log t
+          ON (t.data->>'request_id') = (r.data->>'request_id')
+        WHERE r.event_type = 'ENGINE_DATA_REQUEST'
+          AND r.engine = $1 AND r.recorded_at >= $2
+        """,
+        engine, window_start,
+    )
+    return bool(row and row["escalated"])
+
+
+async def _detect_missed_cycle(conn, engine: str,
+                               window_start: datetime) -> bool:
+    """No STARTUP across the last N eligible windows. Held windows are
+    NOT eligible (a held engine is intentionally idle — counting it
+    would loop: held → no STARTUP → missed_cycle → re-invoke). The
+    caller only reaches this when current_hold(...) is None, so the
+    engine is not currently held; the row's `eligible_windows` is the
+    count of non-held eligible windows the SQL observed."""
+    row = await conn.fetchrow(
+        """
+        SELECT
+          count(*) FILTER (WHERE event_type = 'STARTUP') AS startups,
+          count(DISTINCT date_trunc('day', recorded_at)) AS eligible_windows
+        FROM platform.application_log
+        WHERE engine = $1 AND recorded_at >= $2
+        """,
+        engine, window_start,
+    )
+    if row is None:
+        return False
+    return (row["startups"] == 0
+            and (row["eligible_windows"] or 0) >= _MISSED_CYCLES_N)
+
+
+# class → (needs self-heal?, detector). data_repair_escalated has no
+# viable self-heal (data lane already exhausted bounded repair) → it
+# goes straight to escalate+hold.
+async def _classify(conn, engine, now, window_start):
+    if await _detect_crashed_startup(conn, engine, now, window_start):
+        return "crashed_startup", True
+    if await _detect_scheduler_crash(conn, engine, window_start):
+        return "scheduler_crash", True
+    if await _detect_data_request_timeout(conn, engine, now, window_start):
+        return "data_request_timeout", True
+    if await _detect_data_repair_escalated(conn, engine, window_start):
+        return "data_repair_escalated", False
+    if await _detect_missed_cycle(conn, engine, window_start):
+        return "missed_cycle", True
+    return None, False
+
+
+async def _verify_cleared(pool, engine, now, window_start,
+                          failure_class) -> bool:
+    """Re-run the class's detector; True iff the failure is gone."""
+    async with pool.acquire() as conn:
+        if failure_class == "crashed_startup":
+            return not await _detect_crashed_startup(conn, engine, now,
+                                                     window_start)
+        if failure_class == "scheduler_crash":
+            return not await _detect_scheduler_crash(conn, engine,
+                                                     window_start)
+        if failure_class == "data_request_timeout":
+            return not await _detect_data_request_timeout(conn, engine,
+                                                          now, window_start)
+        if failure_class == "missed_cycle":
+            return not await _detect_missed_cycle(conn, engine,
+                                                  window_start)
+    return False
+
+
 async def _detect_and_act(pool, engine: str, now: datetime, invoke) -> None:
     prof = profile_for(engine)
     window_start = cadence_window_start(engine, now) if prof else now
 
     hold = await current_hold(pool, engine)
     if hold is not None:
-        # Already held → never re-detect/duplicate; only attempt clear.
         await _auto_clear(pool, engine, now, hold)
         return
 
     async with pool.acquire() as conn:
-        crashed = await _detect_crashed_startup(conn, engine, now,
-                                                window_start)
-    if not crashed:
+        failure_class, can_self_heal = await _classify(
+            conn, engine, now, window_start)
+    if failure_class is None:
         return
 
-    failure_class = "crashed_startup"
     attempts = 0
-    while attempts < _MAX_REINVOKE:
-        attempts += 1
-        await invoke(engine)  # bounded self-heal: re-invoke scheduler
-        async with pool.acquire() as conn:
-            still = await _detect_crashed_startup(conn, engine, now,
-                                                  window_start)
-        if not still:
-            await _emit_recovered(pool, engine, failure_class, attempts)
-            return
+    if can_self_heal:
+        while attempts < _MAX_REINVOKE:
+            attempts += 1
+            await invoke(engine)
+            if await _verify_cleared(pool, engine, now, window_start,
+                                     failure_class):
+                await _emit_recovered(pool, engine, failure_class, attempts)
+                return
 
     hold_id = str(uuid.uuid4())
-    reason = f"{failure_class} unresolved after {attempts} re-invoke(s)"
+    reason = (f"{failure_class} unresolved after {attempts} re-invoke(s)"
+              if can_self_heal else
+              f"{failure_class}: no self-heal (data lane exhausted)")
     await _emit_escalated(pool, engine, hold_id, failure_class, reason,
                           attempts)
     await _emit_held(pool, engine, hold_id, failure_class, reason)
