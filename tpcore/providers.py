@@ -25,7 +25,10 @@ from collections import defaultdict
 from datetime import date
 from enum import StrEnum
 
+import structlog
 from pydantic import BaseModel, ConfigDict
+
+logger = structlog.get_logger(__name__)
 
 
 class ProviderStatus(StrEnum):
@@ -91,9 +94,36 @@ _BINDINGS: tuple[ProviderBinding, ...] = (
         feed="macro_indicators", provider="fred",
         adapter_module="tpcore.ingestion.handlers.handle_macro_indicators",
         status=ProviderStatus.ACTIVE,
-        evidence="FRED series (INDICATOR_SERIES). hy_spread (BAMLH0A0HYM2) "
-                 "subject to FRED rolling-window truncation — see the "
-                 "eco-archive recovery; a candidate fallback is Phase 4.",
+        evidence="FRED series (INDICATOR_SERIES), pulled per-series with "
+                 "skip_guard. hy_spread (BAMLH0A0HYM2) is subject to FRED "
+                 "rolling-window truncation (the BAMLH0A0HYM2 incident); "
+                 "the eco_archive CANDIDATE below is the recovery path.",
+    ),
+    # Phase 4: the ONE real alternative for this feed (no others exist —
+    # the registry is not padded with fictitious fallbacks). Honest
+    # CANDIDATE, NOT FALLBACK: a FALLBACK requires parity_verified_at
+    # and "cutover-ready standby" semantics. This is the
+    # hist_csv_path/hist_indicator recovery path that reloaded
+    # BAMLH0A0HYM2 1996-2021 (eco-archive + Scribd fred-graph gap),
+    # validated 772/772 EXACT on 2026-05-16 — parity-grade accuracy on
+    # the historical overlap. It is NOT a live drop-in: it serves the
+    # historical span only and does NOT keep the recent tail fresh
+    # (FRED does). A true FALLBACK would be a hybrid (eco-archive
+    # history + FRED live tail) — a future EVALUATE/ONBOARD, not
+    # claimable today. CANDIDATE needs no parity_verified_at, so this
+    # records the real recovery capability without fabricating a
+    # cutover-ready date.
+    ProviderBinding(
+        feed="macro_indicators", provider="eco_archive",
+        adapter_module="tpcore.ingestion.handlers._ingest_macro_hist_csv",
+        status=ProviderStatus.CANDIDATE,
+        evidence="Static-history recovery for hy_spread (BAMLH0A0HYM2) "
+                 "when FRED truncates: loads the eco-archive + Scribd "
+                 "fred-graph CSV (1996-2021), validated 772/772 EXACT "
+                 "2026-05-16. CANDIDATE not FALLBACK — covers the "
+                 "historical span only, does not keep the live tail "
+                 "fresh; a full fallback (hybrid history+live tail) is a "
+                 "future EVALUATE/ONBOARD.",
     ),
     ProviderBinding(
         feed="earnings_events", provider="fmp",
@@ -198,11 +228,176 @@ def all_feeds() -> set[str]:
     return set(PROVIDER_BINDINGS)
 
 
+# ────────────────────────────────────────────────────────────────────────
+# CUTOVER — automated, deterministic (spec §10: NOT operator-confirmed).
+#
+# `plan_cutover` is the PURE legality guard (re-landed from the
+# unmerged PR #15; that PR's contradicted part was only the
+# operator-confirmed *runbook*, not this guard). The runtime overlay
+# (`provider_binding_state`) + `apply_cutover` + the ops.cutover_agent
+# are what make it automated. `_BINDINGS` stays the frozen declared SoT
+# (defaults + which providers exist + parity-verified fallbacks); the
+# overlay holds only the live ACTIVE selection.
+# ────────────────────────────────────────────────────────────────────────
+
+
+class CutoverChange(BaseModel):
+    """One binding's status transition within a cutover plan."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    provider: str
+    from_status: ProviderStatus
+    to_status: ProviderStatus
+
+
+class CutoverPlan(BaseModel):
+    """The validated (or blocked) result of a proposed cutover."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    feed: str
+    to_provider: str
+    allowed: bool
+    block_reason: str | None = None
+    changes: tuple[CutoverChange, ...] = ()
+
+    @property
+    def summary(self) -> str:
+        if not self.allowed:
+            return f"BLOCKED {self.feed}→{self.to_provider}: {self.block_reason}"
+        parts = [f"{c.provider}:{c.from_status}→{c.to_status}" for c in self.changes]
+        return f"OK {self.feed}→{self.to_provider}: " + "; ".join(parts)
+
+
+def plan_cutover(
+    feed: str,
+    to_provider: str,
+    *,
+    retire_incumbent: bool = False,
+) -> CutoverPlan:
+    """Validate promoting ``to_provider`` to ACTIVE for ``feed``.
+
+    Eligibility (mirrors EVALUATE): target must be a bound ``FALLBACK``
+    (parity-verified — the model enforces a FALLBACK has
+    ``parity_verified_at``). ``CANDIDATE`` is NOT eligible (must pass
+    EVALUATE → FALLBACK first; skipping parity is the silent-
+    degradation class). Exactly-one-ACTIVE preserved; incumbent demoted
+    to ``FALLBACK`` (reversible) or ``RETIRED`` (only via the separate
+    RETIRE gate). Pure — never mutates, never trades.
+    """
+    bindings = PROVIDER_BINDINGS.get(feed, [])
+    if not bindings:
+        return CutoverPlan(feed=feed, to_provider=to_provider, allowed=False,
+                           block_reason=f"unknown feed {feed!r} (no bindings)")
+    by_provider = {b.provider: b for b in bindings}
+    target = by_provider.get(to_provider)
+    if target is None:
+        return CutoverPlan(
+            feed=feed, to_provider=to_provider, allowed=False,
+            block_reason=f"{to_provider!r} is not a bound provider for "
+                         f"{feed} (have: {sorted(by_provider)})")
+    if target.status is ProviderStatus.ACTIVE:
+        return CutoverPlan(feed=feed, to_provider=to_provider, allowed=False,
+                           block_reason=f"{to_provider} is already ACTIVE for {feed}")
+    if target.status is not ProviderStatus.FALLBACK:
+        return CutoverPlan(
+            feed=feed, to_provider=to_provider, allowed=False,
+            block_reason=(
+                f"{to_provider} is {target.status} — only a FALLBACK "
+                f"(parity-verified) is cutover-eligible. Run EVALUATE to "
+                f"promote it first; skipping the parity gate is the "
+                f"silent-degradation class the lifecycle prevents."))
+    incumbent = active_provider(feed)
+    changes: list[CutoverChange] = [
+        CutoverChange(provider=to_provider,
+                      from_status=ProviderStatus.FALLBACK,
+                      to_status=ProviderStatus.ACTIVE)
+    ]
+    if incumbent is not None:
+        changes.append(CutoverChange(
+            provider=incumbent.provider, from_status=ProviderStatus.ACTIVE,
+            to_status=(ProviderStatus.RETIRED if retire_incumbent
+                       else ProviderStatus.FALLBACK)))
+    return CutoverPlan(feed=feed, to_provider=to_provider, allowed=True,
+                       changes=tuple(changes))
+
+
+_STATE_SELECT = (
+    "SELECT active_provider FROM platform.provider_binding_state "
+    "WHERE feed = $1"
+)
+_STATE_UPSERT = """
+    INSERT INTO platform.provider_binding_state (feed, active_provider, reason)
+    VALUES ($1, $2, $3)
+    ON CONFLICT (feed) DO UPDATE SET
+        active_provider = EXCLUDED.active_provider,
+        reason          = EXCLUDED.reason,
+        updated_at      = now()
+"""
+_AUDIT_INSERT = """
+INSERT INTO platform.application_log
+    (engine, run_id, event_type, severity, message, data)
+VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+"""
+
+
+async def resolve_active_provider(pool: object, feed: str) -> ProviderBinding | None:
+    """Runtime-resolved ACTIVE: the overlay selection if a
+    ``provider_binding_state`` row exists and names a known binding,
+    else the code-declared ACTIVE. The overlay is how an automated
+    cutover takes effect without a code PR."""
+    async with pool.acquire() as conn:  # type: ignore[attr-defined]
+        row = await conn.fetchrow(_STATE_SELECT, feed)
+    if row and row["active_provider"]:
+        for b in PROVIDER_BINDINGS.get(feed, []):
+            if b.provider == row["active_provider"]:
+                return b
+        logger.warning(
+            "providers.overlay_unknown_provider",
+            feed=feed, overlay=row["active_provider"],
+        )
+    return active_provider(feed)
+
+
+async def apply_cutover(
+    pool: object, plan: CutoverPlan, *, run_id: str | None = None
+) -> None:
+    """Apply an ALLOWED plan: flip the live overlay to the new ACTIVE
+    and emit a ``PROVIDER_CUTOVER`` audit event. Idempotent (overlay
+    upsert). Raises on a blocked plan — callers must never apply one."""
+    import json
+    import uuid as _uuid
+
+    if not plan.allowed:
+        raise ValueError(f"refusing to apply a blocked cutover: {plan.summary}")
+    rid = run_id or str(_uuid.uuid4())
+    reason = plan.summary
+    async with pool.acquire() as conn:  # type: ignore[attr-defined]
+        await conn.execute(_STATE_UPSERT, plan.feed, plan.to_provider, reason)
+        await conn.execute(
+            _AUDIT_INSERT, "cutover-agent", rid, "PROVIDER_CUTOVER", "WARNING",
+            f"cutover {plan.feed} → {plan.to_provider}",
+            json.dumps({
+                "schema": 1, "feed": plan.feed,
+                "to_provider": plan.to_provider,
+                "changes": [c.model_dump() for c in plan.changes],
+            }, default=str),
+        )
+    logger.info("providers.cutover_applied", feed=plan.feed,
+                to_provider=plan.to_provider)
+
+
 __all__ = [
     "PROVIDER_BINDINGS",
+    "CutoverChange",
+    "CutoverPlan",
     "ProviderBinding",
     "ProviderStatus",
     "active_provider",
     "all_feeds",
+    "apply_cutover",
     "bindings_for",
+    "plan_cutover",
+    "resolve_active_provider",
 ]

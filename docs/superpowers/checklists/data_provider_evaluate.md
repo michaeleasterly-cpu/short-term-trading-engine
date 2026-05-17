@@ -6,6 +6,12 @@ Lifecycle (spec `…/specs/2026-05-17-data-provider-lifecycle-design.md`
 §5; plan Phase 2). Mirrors `adapter_readiness.md` — every box checked
 before the binding's status advances.
 
+> **Automated, not operator-confirmed.** EVALUATE runs automatically;
+> it gates the automated CUTOVER (`data_provider_cutover.md`). The
+> operator does **not** approve EVALUATE or CUTOVER — only ADD/REMOVE
+> via the [Data Feed Change Request](data_feed_change_request.md)
+> (spec §10).
+
 This is the structural defense against the silent-degradation class
 (the prices_daily 506/7,650 incident; FRED truncation; Alpaca
 SIP/IEX). **A failing parity verdict BLOCKS cutover.**
