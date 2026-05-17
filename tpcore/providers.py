@@ -225,11 +225,139 @@ def all_feeds() -> set[str]:
     return set(PROVIDER_BINDINGS)
 
 
+# ────────────────────────────────────────────────────────────────────────
+# CUTOVER (Phase 5) — the operator-confirmed snap-in transition.
+#
+# Spec non-goal: CUTOVER is NOT an automatic swapper. A provider change
+# is structural, like engine archival — it is a reviewed code edit to
+# `_BINDINGS`, gated by this deterministic transition-guard. This
+# function is PURE: it validates a proposed swap and returns the exact,
+# legal status changes (or an honest block reason). It does NOT mutate
+# the frozen SoT and does NOT trade — applying the plan is the
+# operator's reviewed PR (audit trail = the PR + the optional
+# PROVIDER_CUTOVER_PLANNED event the CLI emits).
+# ────────────────────────────────────────────────────────────────────────
+
+
+class CutoverChange(BaseModel):
+    """One binding's status transition within a cutover plan."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    provider: str
+    from_status: ProviderStatus
+    to_status: ProviderStatus
+
+
+class CutoverPlan(BaseModel):
+    """The validated (or blocked) result of a proposed cutover."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    feed: str
+    to_provider: str
+    allowed: bool
+    block_reason: str | None = None
+    changes: tuple[CutoverChange, ...] = ()
+
+    @property
+    def summary(self) -> str:
+        if not self.allowed:
+            return f"BLOCKED {self.feed}→{self.to_provider}: {self.block_reason}"
+        parts = [
+            f"{c.provider}:{c.from_status}→{c.to_status}" for c in self.changes
+        ]
+        return f"OK {self.feed}→{self.to_provider}: " + "; ".join(parts)
+
+
+def plan_cutover(
+    feed: str,
+    to_provider: str,
+    *,
+    retire_incumbent: bool = False,
+) -> CutoverPlan:
+    """Validate promoting ``to_provider`` to ACTIVE for ``feed``.
+
+    Eligibility (honest, mirrors the EVALUATE gate):
+      * ``to_provider`` must be a binding for ``feed``;
+      * it must be ``FALLBACK`` — i.e. parity-verified
+        (``parity_verified_at`` set; the model already enforces a
+        FALLBACK has it). ``CANDIDATE`` is NOT cutover-eligible: it
+        must pass EVALUATE → become FALLBACK first (no skipping the
+        parity gate — that is exactly the silent-degradation class the
+        lifecycle exists to prevent);
+      * the current ACTIVE incumbent is demoted to ``FALLBACK``
+        (reversible) or ``RETIRED`` (``retire_incumbent=True`` — then
+        the §3 RETIRE checklist's 3-way-atomic rule applies);
+      * the resulting graph preserves exactly-one-ACTIVE.
+
+    Returns a :class:`CutoverPlan` — ``allowed`` with the exact status
+    changes the operator applies in a reviewed PR, or ``allowed=False``
+    with an honest ``block_reason``. Never mutates; never trades.
+    """
+    bindings = PROVIDER_BINDINGS.get(feed, [])
+    if not bindings:
+        return CutoverPlan(
+            feed=feed, to_provider=to_provider, allowed=False,
+            block_reason=f"unknown feed {feed!r} (no bindings)",
+        )
+    by_provider = {b.provider: b for b in bindings}
+    target = by_provider.get(to_provider)
+    if target is None:
+        return CutoverPlan(
+            feed=feed, to_provider=to_provider, allowed=False,
+            block_reason=f"{to_provider!r} is not a bound provider for "
+                         f"{feed} (have: {sorted(by_provider)})",
+        )
+    if target.status is ProviderStatus.ACTIVE:
+        return CutoverPlan(
+            feed=feed, to_provider=to_provider, allowed=False,
+            block_reason=f"{to_provider} is already ACTIVE for {feed}",
+        )
+    if target.status is not ProviderStatus.FALLBACK:
+        return CutoverPlan(
+            feed=feed, to_provider=to_provider, allowed=False,
+            block_reason=(
+                f"{to_provider} is {target.status} — only a FALLBACK "
+                f"(parity-verified) is cutover-eligible. Run EVALUATE "
+                f"(data_provider_evaluate.md) to promote it to FALLBACK "
+                f"first; skipping the parity gate is the silent-"
+                f"degradation class this lifecycle prevents."
+            ),
+        )
+    incumbent = active_provider(feed)
+    changes: list[CutoverChange] = [
+        CutoverChange(
+            provider=to_provider,
+            from_status=ProviderStatus.FALLBACK,
+            to_status=ProviderStatus.ACTIVE,
+        )
+    ]
+    if incumbent is not None:
+        changes.append(
+            CutoverChange(
+                provider=incumbent.provider,
+                from_status=ProviderStatus.ACTIVE,
+                to_status=(
+                    ProviderStatus.RETIRED if retire_incumbent
+                    else ProviderStatus.FALLBACK
+                ),
+            )
+        )
+    return CutoverPlan(
+        feed=feed, to_provider=to_provider, allowed=True,
+        changes=tuple(changes),
+    )
+
+
 __all__ = [
     "PROVIDER_BINDINGS",
+    "CutoverChange",
+    "CutoverPlan",
     "ProviderBinding",
     "ProviderStatus",
     "active_provider",
     "all_feeds",
     "bindings_for",
+    "plan_cutover",
 ]
