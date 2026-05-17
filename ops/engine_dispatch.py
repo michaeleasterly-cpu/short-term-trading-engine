@@ -18,8 +18,9 @@ from datetime import UTC, datetime
 
 import structlog
 
+from ops import engine_supervisor
 from tpcore.db import build_asyncpg_pool
-from tpcore.engine_profile import cadence_window_start, profile_for, should_fire
+from tpcore.engine_profile import cadence_window_start, should_fire
 from tpcore.quality.validation.capital_gate import failing_sources_for_engine
 
 logger = structlog.get_logger(__name__)
@@ -47,39 +48,8 @@ async def _invoke_scheduler(engine: str) -> int:
 _REQUEST_EVENT = "ENGINE_DATA_REQUEST"
 _TERMINAL_EVENTS = ("DATA_REPAIR_COMPLETE", "DATA_REPAIR_ESCALATED")
 
-_STALE_STARTUP_SECONDS = int(
-    os.environ.get("ENGINE_DISPATCH_STALE_STARTUP_SECONDS", "7200"))  # 2h (spec §6)
-
 _NO_TERMINAL_TIMEOUT_SECONDS = int(
     os.environ.get("ENGINE_DISPATCH_REQUEST_TIMEOUT_SECONDS", "5400"))  # 90 min (spec §6)
-
-
-async def _crashed_startup_refire(conn, engine: str, now: datetime,
-                                  window_start: datetime) -> bool:
-    """True iff this cadence cycle has a STARTUP with NO completion
-    (SCAN_COMPLETE/SHUTDOWN) and the STARTUP is older than the stale
-    threshold — a crashed pre-trade run that should_fire's STARTUP-
-    based 'already ran' would wrongly skip (up to a month for momentum).
-    A RECENT started-but-incomplete run is in-flight: do NOT re-fire.
-
-    Any completion event counts (``bool_or`` over SCAN_COMPLETE/SHUTDOWN).
-    A non-zero-exit SHUTDOWN is a real failure that must escalate via the
-    existing alarms, NOT be silently re-fired here — so exit_code is
-    deliberately not parsed.
-    """
-    row = await conn.fetchrow(
-        """
-        SELECT
-          max(recorded_at) FILTER (WHERE event_type = 'STARTUP')      AS started_at,
-          bool_or(event_type IN ('SCAN_COMPLETE', 'SHUTDOWN'))        AS completed
-        FROM platform.application_log
-        WHERE engine = $1 AND recorded_at >= $2
-        """,
-        engine, window_start,
-    )
-    if not row or row["started_at"] is None or row["completed"]:
-        return False
-    return (now - row["started_at"]).total_seconds() >= _STALE_STARTUP_SECONDS
 
 
 async def _open_request_state(conn, engine: str, window_start: datetime) -> dict | None:
@@ -218,14 +188,8 @@ async def _dispatch_engine(pool, now: datetime, engine: str,
                 logger.info("engine_dispatch.request_open", engine=engine)
             return
     elif decision.reason == "already ran this cycle":
-        prof = profile_for(engine)
-        window_start = cadence_window_start(engine, now) if prof else now
-        async with pool.acquire() as conn:
-            if await _crashed_startup_refire(conn, engine, now, window_start):
-                logger.warning(
-                    "engine_dispatch.crashed_startup_refire", engine=engine)
-                await invoke(engine)
-                return
+        # DA-1: crashed-STARTUP re-invoke is owned by engine_supervisor
+        # (ran above, before should_fire). Here we only record the skip.
         logger.info(
             "engine_dispatch.skipped", engine=engine,
             reason=decision.reason,
@@ -242,22 +206,19 @@ async def _dispatch_engine(pool, now: datetime, engine: str,
 async def _dispatch_allocator(pool, now: datetime) -> None:
     """Sub-project C (D-C1): the allocator is the FIRST gated step,
     before the engine ROSTER loop. Reuses B's exact ladder via
-    `_dispatch_engine` with the canonical `_invoke_allocator`
-    (subprocess `scripts/ops.py --allocate`). should_fire("allocator")
-    applies the WEEKLY_FIRST_TRADING_DAY cadence + market-closed +
-    per-engine data gate + STARTUP idempotency uniformly; data-blocked
-    emits ENGINE_DATA_REQUEST(engine="allocator") on the locked
-    inter-lane contract. Ordering (allocator before engines) is
-    guaranteed by construction (sequential await); on allocator
-    failure the engines run on the persisted prior-week
-    risk_state.engine_equity (D-C3).
-    """
+    `_dispatch_engine` with the canonical `_invoke_allocator`. DA-1:
+    the supervisor runs first (crash-isolated within `supervise`),
+    persisting any hold/clear so the same-cycle should_fire read sees
+    it; on supervisor failure the dispatch still proceeds."""
+    await engine_supervisor.supervise(pool, "allocator", now,
+                                      _invoke_allocator)
     await _dispatch_engine(pool, now, "allocator", _invoke_allocator)
 
 
 async def dispatch_once(pool, now: datetime) -> None:
     await _dispatch_allocator(pool, now)
     for engine in ROSTER:
+        await engine_supervisor.supervise(pool, engine, now, _safe_invoke)
         await _dispatch_engine(pool, now, engine, _safe_invoke)
 
 
