@@ -78,3 +78,23 @@ async def test_invalid_disposition_rejected() -> None:
     pool = _Pool()
     rc = await wd.disposition_escalation(pool, "h1", "bogus", "")
     assert rc != 0 and pool.conn.emitted == []
+
+
+def test_open_escalation_sql_has_all_exclusion_clauses() -> None:
+    # The anti-join correctness can't be exercised by a fake pool
+    # (it doesn't run SQL). Static guard: the open-escalation query
+    # MUST keep all three exclusions or a regression ships silently.
+    import inspect
+    src = inspect.getsource(wd.build_weekly_digest)
+    # The query is identified by its leading marker comment.
+    assert "-- OPEN_ESCALATIONS" in src
+    # (a) resolving-terminal anti-join (both terminals + both ref cols)
+    assert "DATA_REPAIR_COMPLETE" in src and "DATA_SOURCE_CLEARED" in src
+    assert "t.data->>'request_id' = x.ref" in src
+    assert "t.data->>'hold_id' = x.ref" in src
+    assert "t.recorded_at > x.recorded_at" in src
+    # (b) already-dispositioned exclusion
+    assert "DATA_ESCALATION_DISPOSITIONED" in src
+    assert "dp.data->>'ref' = x.ref" in src
+    # (c) grace-window age bound
+    assert "x.recorded_at < $1" in src
