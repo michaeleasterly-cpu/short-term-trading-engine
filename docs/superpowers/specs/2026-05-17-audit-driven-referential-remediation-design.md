@@ -1,9 +1,23 @@
 # Audit-Driven Referential Remediation (`tpcore/auditheal`) — Design
 
-**Status:** spec 2026-05-17 (DATA lane). Brainstorm → **spec (this
-doc, v2 — retargeted)** → plan → phased build. First sub-agent of the
-#186 "remaining deterministic data agents" epic (operator-selected:
-candidate (5)).
+**Status:** BUILT 2026-05-17 (DATA lane). Brainstorm → spec (this
+doc, v2 — retargeted) → plan → **phased build complete** (P1–P4). First
+sub-agent of the #186 "remaining deterministic data agents" epic
+(operator-selected: candidate (5)).
+
+**Build record:**
+- P1 (PR #26): `tpcore/audit/cross_table.py` — structured cross-table
+  audit with `CROSS_TABLE_CHECKS` SoT, `data_quality_log` persistence
+  (`cross_table_audit.*` rows), 🟢/🔴 stdout roll-up preserved.
+- P2 (PR #28): `tpcore/auditheal/` generic loop — `RemediationSpec`,
+  `REMEDIATION_SPECS` registry (drift-guarded), `run_audit_heal`
+  orchestrator. Landed dark (Step 3 not yet wired).
+- P3 (PR #29): wire Step 3 + enforce gate — `run_data_operations.sh`
+  Step 3 calls `python -m tpcore.auditheal`; exit 1 on any
+  unremediated/escalate-only red hard-stops the cycle (no
+  `DATA_OPERATIONS_COMPLETE`). Previously always exit 0 (theatre).
+- P4 (this doc update): CLAUDE.md / TODO.md / spec reconciled to
+  shipped reality.
 
 **v2 correction (2026-05-17):** v1 targeted Step-4c
 (`audit_data_pipeline.py` known_knowns) — but its 11 known_knowns
