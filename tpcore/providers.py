@@ -91,9 +91,36 @@ _BINDINGS: tuple[ProviderBinding, ...] = (
         feed="macro_indicators", provider="fred",
         adapter_module="tpcore.ingestion.handlers.handle_macro_indicators",
         status=ProviderStatus.ACTIVE,
-        evidence="FRED series (INDICATOR_SERIES). hy_spread (BAMLH0A0HYM2) "
-                 "subject to FRED rolling-window truncation — see the "
-                 "eco-archive recovery; a candidate fallback is Phase 4.",
+        evidence="FRED series (INDICATOR_SERIES), pulled per-series with "
+                 "skip_guard. hy_spread (BAMLH0A0HYM2) is subject to FRED "
+                 "rolling-window truncation (the BAMLH0A0HYM2 incident); "
+                 "the eco_archive CANDIDATE below is the recovery path.",
+    ),
+    # Phase 4: the ONE real alternative for this feed (no others exist —
+    # the registry is not padded with fictitious fallbacks). Honest
+    # CANDIDATE, NOT FALLBACK: a FALLBACK requires parity_verified_at
+    # and "cutover-ready standby" semantics. This is the
+    # hist_csv_path/hist_indicator recovery path that reloaded
+    # BAMLH0A0HYM2 1996-2021 (eco-archive + Scribd fred-graph gap),
+    # validated 772/772 EXACT on 2026-05-16 — parity-grade accuracy on
+    # the historical overlap. It is NOT a live drop-in: it serves the
+    # historical span only and does NOT keep the recent tail fresh
+    # (FRED does). A true FALLBACK would be a hybrid (eco-archive
+    # history + FRED live tail) — a future EVALUATE/ONBOARD, not
+    # claimable today. CANDIDATE needs no parity_verified_at, so this
+    # records the real recovery capability without fabricating a
+    # cutover-ready date.
+    ProviderBinding(
+        feed="macro_indicators", provider="eco_archive",
+        adapter_module="tpcore.ingestion.handlers._ingest_macro_hist_csv",
+        status=ProviderStatus.CANDIDATE,
+        evidence="Static-history recovery for hy_spread (BAMLH0A0HYM2) "
+                 "when FRED truncates: loads the eco-archive + Scribd "
+                 "fred-graph CSV (1996-2021), validated 772/772 EXACT "
+                 "2026-05-16. CANDIDATE not FALLBACK — covers the "
+                 "historical span only, does not keep the live tail "
+                 "fresh; a full fallback (hybrid history+live tail) is a "
+                 "future EVALUATE/ONBOARD.",
     ),
     ProviderBinding(
         feed="earnings_events", provider="fmp",
