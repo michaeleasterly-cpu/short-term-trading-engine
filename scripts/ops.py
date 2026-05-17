@@ -1721,10 +1721,14 @@ async def _per_feed_tripwire(
     *,
     log: structlog.stdlib.BoundLogger,
     db_log,
+    cycle_green: set[str],
 ) -> None:
-    """#185 Phase 2 — fail-safe wrapper around the per-feed
-    validate-on-completion hook. Resolves stage→leaf-feed, validates it
+    """#185 Phase 2/3 — fail-safe wrapper around the per-feed
+    validate-on-completion hook. Resolves stage→feed, validates it
     immediately and bounded-heals on red (detection a cycle earlier).
+    ``cycle_green`` is the in-cycle set of feeds already validated green
+    this run (Phase 3: a derived feed validates only once every upstream
+    is in it); ``on_stage_complete`` mutates it.
 
     Hard invariant: this NEVER raises into the ingest cycle and NEVER
     aborts it. An escalation here is logged + surfaced (forensic
@@ -1736,9 +1740,11 @@ async def _per_feed_tripwire(
     try:
         from tpcore.selfheal.per_feed import on_stage_complete
 
-        outcome = await on_stage_complete(pool, stage_name, run_id)
+        outcome = await on_stage_complete(
+            pool, stage_name, run_id, cycle_green=cycle_green
+        )
         if outcome is None:
-            return  # infra stage or derived feed (Phase 3) — no-op
+            return  # infra stage or deferred derived feed — no-op
         if outcome.green:
             log.info(
                 "ops.per_feed.green",
@@ -1837,6 +1843,11 @@ async def cmd_update(
         summary.finished_at = datetime.now(UTC)
         return summary
 
+    # #185 Phase 3 — in-cycle set of feeds the per-feed tripwire has
+    # validated green this run. A derived feed (fear_greed) validates
+    # only once every upstream feed is in here.
+    cycle_green: set[str] = set()
+
     for name, factory_builder, timeout in _STAGE_SPECS:
         # Profile-driven feed dispatch (#165): when ``only`` is given
         # (the feed dispatcher's due list), run just those stages.
@@ -1857,16 +1868,19 @@ async def cmd_update(
             timeout=timeout,
         )
         summary.stages.append(result)
-        # #185 Phase 2 — per-feed validate-on-completion (early
-        # tripwire). Leaf feeds only; derived feeds + the standalone
-        # single-stage path are deferred (Phase 3 / lock-safety). Runs
-        # inside run_data_operations.sh's lock (cycle path). Fail-safe:
-        # a hook error NEVER aborts the cycle — the end-of-cycle
+        # #185 Phase 2/3 — per-feed validate-on-completion (early
+        # tripwire). Leaf feeds validate on their own stage; a derived
+        # feed validates on its own stage once every upstream went green
+        # this cycle (cycle_green). The standalone single-stage path
+        # does not trigger this (lock-safety, spec §5). Runs inside
+        # run_data_operations.sh's lock (cycle path). Fail-safe: a hook
+        # error NEVER aborts the cycle — the end-of-cycle
         # data_validation + Step-4 whole-layer self-heal stay the
         # authoritative 100%-green gate (spec §4).
         if per_feed_validate and not dry_run and result.status == "OK":
             await _per_feed_tripwire(
-                pool, name, str(summary.run_id), log=log, db_log=db_log
+                pool, name, str(summary.run_id),
+                log=log, db_log=db_log, cycle_green=cycle_green,
             )
 
     # Self-healing — retry FAILED/TIMEOUT stages once if their error matches
