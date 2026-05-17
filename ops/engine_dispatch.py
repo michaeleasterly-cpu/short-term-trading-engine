@@ -10,14 +10,17 @@ See docs/superpowers/specs/2026-05-17-sub-project-b-event-driven-dispatch-design
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
+import uuid
 from datetime import UTC, datetime
 
 import structlog
 
 from tpcore.db import build_asyncpg_pool
-from tpcore.engine_profile import should_fire
+from tpcore.engine_profile import cadence_window_start, profile_for, should_fire
+from tpcore.quality.validation.capital_gate import failing_sources_for_engine
 
 logger = structlog.get_logger(__name__)
 
@@ -41,12 +44,64 @@ async def _invoke_scheduler(engine: str) -> int:
     return rc
 
 
+_REQUEST_EVENT = "ENGINE_DATA_REQUEST"
+_TERMINAL_EVENTS = ("DATA_REPAIR_COMPLETE", "DATA_REPAIR_ESCALATED")
+
+
+async def _has_open_request(conn, engine: str, window_start: datetime) -> bool:
+    """True if an ENGINE_DATA_REQUEST for this engine in the current
+    cadence window has no terminal event yet (dedupe — at most one
+    open request per (engine, cadence-window))."""
+    row = await conn.fetchval(
+        """
+        SELECT 1 FROM platform.application_log r
+        WHERE r.event_type = $1 AND r.engine = $2 AND r.recorded_at >= $3
+          AND NOT EXISTS (
+            SELECT 1 FROM platform.application_log t
+            WHERE t.event_type = ANY($4::text[])
+              AND (t.data->>'request_id') = (r.data->>'request_id'))
+        LIMIT 1
+        """,
+        _REQUEST_EVENT, engine, window_start, list(_TERMINAL_EVENTS),
+    )
+    return row is not None
+
+
+async def _emit_data_request(conn, engine: str, sources: list[str], reason: str) -> str:
+    request_id = str(uuid.uuid4())
+    payload = json.dumps({
+        "schema": 1, "request_id": request_id,
+        "engine": engine, "sources": sources, "reason": reason,
+    })
+    await conn.execute(
+        """
+        INSERT INTO platform.application_log
+            (engine, run_id, event_type, severity, message, data)
+        VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+        """,
+        engine, uuid.uuid4(), _REQUEST_EVENT, "WARNING",
+        f"{engine} data-blocked: {reason}", payload,
+    )
+    logger.warning("engine_dispatch.data_request", engine=engine,
+                    request_id=request_id, sources=sources)
+    return request_id
+
+
 async def dispatch_once(pool, now: datetime) -> None:
     for engine in ROSTER:
         decision = await should_fire(engine, now, pool)
         if decision.fire:
             logger.info("engine_dispatch.dispatched", engine=engine)
             await _invoke_scheduler(engine)
+        elif decision.checks.get("data_ready") is False:
+            prof = profile_for(engine)
+            window_start = cadence_window_start(engine, now) if prof else now
+            async with pool.acquire() as conn:
+                if await _has_open_request(conn, engine, window_start):
+                    logger.info("engine_dispatch.request_open", engine=engine)
+                    continue
+                sources = await failing_sources_for_engine(pool, engine)
+                await _emit_data_request(conn, engine, sources, decision.reason)
         else:
             logger.info(
                 "engine_dispatch.skipped", engine=engine,
