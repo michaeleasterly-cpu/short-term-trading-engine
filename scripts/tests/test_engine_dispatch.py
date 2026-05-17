@@ -137,40 +137,24 @@ async def test_stale_startup_without_completion_is_refired():
     inv.assert_not_called()
 
 
-async def test_recent_startup_without_completion_is_not_refired():
-    already = FireDecision(False, "already ran this cycle",
-                           {"data_ready": True, "not_already_run": False})
-    class _C:
-        async def fetchrow(self,*_a,**_k):
-            return {"started_at": datetime(2026,5,5,21,20,tzinfo=UTC), "completed": False}  # 10m ago
-        async def fetchval(self,*_a,**_k): return None
-        async def fetch(self,*_a,**_k): return []
-        async def execute(self,*_a,**_k): return None
-    class _P:
-        @contextlib.asynccontextmanager
-        async def acquire(self): yield _C()
-    with patch.object(ed, "should_fire", AsyncMock(return_value=already)), \
-         patch.object(ed, "_invoke_scheduler", new=AsyncMock()) as inv:
-        await dispatch_once(_P(), now=datetime(2026,5,5,21,30,tzinfo=UTC))
-    inv.assert_not_called()
 
-
-async def test_completed_run_is_not_refired():
-    already = FireDecision(False, "already ran this cycle",
-                           {"data_ready": True, "not_already_run": False})
-    class _C:
-        async def fetchrow(self,*_a,**_k):
-            return {"started_at": datetime(2026,5,5,18,0,tzinfo=UTC), "completed": True}
-        async def fetchval(self,*_a,**_k): return None
-        async def fetch(self,*_a,**_k): return []
-        async def execute(self,*_a,**_k): return None
-    class _P:
-        @contextlib.asynccontextmanager
-        async def acquire(self): yield _C()
-    with patch.object(ed, "should_fire", AsyncMock(return_value=already)), \
-         patch.object(ed, "_invoke_scheduler", new=AsyncMock()) as inv:
-        await dispatch_once(_P(), now=datetime(2026,5,5,21,30,tzinfo=UTC))
-    inv.assert_not_called()
+async def test_already_ran_branch_is_skip_only_never_reinvokes():
+    """DA-1: the crashed-startup re-invoke moved to engine_supervisor.
+    The dispatch already-ran branch must now be a pure skip — it must
+    NOT re-invoke (regression guard against re-adding refire here).
+    Boundary semantics (recent/completed → no refire) are covered in
+    test_engine_supervisor.py."""
+    ran = FireDecision(False, "already ran this cycle",
+                       {"profiled": True, "cadence": True,
+                        "market_closed": True, "supervisor_held": True,
+                        "data_ready": True, "not_already_run": False})
+    with patch.object(ed, "should_fire", AsyncMock(return_value=ran)), \
+         patch.object(ed.engine_supervisor, "supervise", AsyncMock()), \
+         patch.object(ed, "_invoke_scheduler", new=AsyncMock()) as inv, \
+         patch.object(ed, "_invoke_allocator", new=AsyncMock()) as alloc:
+        await dispatch_once(_Pool(), now=datetime(2026, 5, 5, 21, 30, tzinfo=UTC))
+    inv.assert_not_called()     # already-ran → no engine scheduler re-invoke
+    alloc.assert_not_called()   # already-ran → no allocator re-invoke
 
 
 # ---------------------------------------------------------------------------
@@ -583,6 +567,7 @@ async def test_supervise_failure_does_not_abort_sweep():
     with patch.object(ed.engine_supervisor, "supervise",
                       AsyncMock(side_effect=RuntimeError("supervisor boom"))), \
          patch.object(ed, "_dispatch_engine", _de), \
-         patch.object(ed, "_invoke_allocator", AsyncMock()), \
-         contextlib.suppress(RuntimeError):
+         patch.object(ed, "_invoke_allocator", AsyncMock()):
         await dispatch_once(object(), datetime(2026, 5, 18, 13, 0, tzinfo=UTC))
+
+    assert ran == ["allocator", *ROSTER]  # every actor dispatched despite supervisor raising

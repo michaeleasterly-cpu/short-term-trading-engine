@@ -92,6 +92,17 @@ async def _emit_data_request(conn, engine: str, sources: list[str], reason: str)
     return request_id
 
 
+async def _safe_supervise(pool, engine: str, now: datetime, invoke) -> None:
+    """Call the supervisor with call-site crash isolation (defense in
+    depth — supervise() is already internally isolated; a broken
+    supervisor must NEVER abort the sweep, DA-1 §2/§10)."""
+    try:
+        await engine_supervisor.supervise(pool, engine, now, invoke)
+    except Exception as exc:  # noqa: BLE001 — never abort the sweep
+        logger.error("engine_dispatch.supervisor_failed", engine=engine,
+                     error=str(exc))
+
+
 async def _safe_invoke(engine: str) -> None:
     """Spawn one engine's scheduler with per-engine crash isolation
     (CLEANUP #1, deferred from T2). A raising subprocess spawn (OSError
@@ -210,15 +221,14 @@ async def _dispatch_allocator(pool, now: datetime) -> None:
     the supervisor runs first (crash-isolated within `supervise`),
     persisting any hold/clear so the same-cycle should_fire read sees
     it; on supervisor failure the dispatch still proceeds."""
-    await engine_supervisor.supervise(pool, "allocator", now,
-                                      _invoke_allocator)
+    await _safe_supervise(pool, "allocator", now, _invoke_allocator)
     await _dispatch_engine(pool, now, "allocator", _invoke_allocator)
 
 
 async def dispatch_once(pool, now: datetime) -> None:
     await _dispatch_allocator(pool, now)
     for engine in ROSTER:
-        await engine_supervisor.supervise(pool, engine, now, _safe_invoke)
+        await _safe_supervise(pool, engine, now, _safe_invoke)
         await _dispatch_engine(pool, now, engine, _safe_invoke)
 
 

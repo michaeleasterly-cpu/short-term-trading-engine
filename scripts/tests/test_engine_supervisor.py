@@ -1,7 +1,7 @@
 import contextlib
 import json
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -222,3 +222,37 @@ async def test_auto_clear_repair_escalated_needs_repair_complete_green():
     with patch.object(es, "current_hold", new=AsyncMock(return_value=held)):
         await es.supervise(_pool_for(conn), "vector", now, AsyncMock())
     assert all(a[2] != "ENGINE_CLEARED" for _s, a in conn.inserts)
+
+
+async def test_crashed_startup_recent_incomplete_is_not_detected():
+    now = datetime(2026, 5, 5, 21, 30, tzinfo=UTC)
+    recent = now - timedelta(seconds=es._STALE_STARTUP_SECONDS // 2)  # NOT stale
+    conn = _rows_conn([
+        None,                                           # current_hold: not held
+        {"started_at": recent, "completed": False},     # crashed_startup detect
+        {"crashed": False},                             # scheduler_crash
+        {"open": False},                                # data_request_timeout
+        {"escalated": False},                           # data_repair_escalated
+        {"startups": 1, "eligible_windows": 1},         # missed_cycle: no
+    ])
+    invoke = AsyncMock()
+    await es.supervise(_pool_for(conn), "reversion", now, invoke)
+    invoke.assert_not_awaited()           # recent-incomplete is in-flight, NOT crashed
+    assert conn.inserts == []             # no HELD/ESCALATED/RECOVERED
+
+
+async def test_crashed_startup_completed_run_is_not_detected():
+    now = datetime(2026, 5, 5, 21, 30, tzinfo=UTC)
+    stale = now - timedelta(seconds=es._STALE_STARTUP_SECONDS * 2)
+    conn = _rows_conn([
+        None,                                           # current_hold: not held
+        {"started_at": stale, "completed": True},       # completed → NOT crashed
+        {"crashed": False},                             # scheduler_crash
+        {"open": False},                                # data_request_timeout
+        {"escalated": False},                           # data_repair_escalated
+        {"startups": 1, "eligible_windows": 1},         # missed_cycle: no
+    ])
+    invoke = AsyncMock()
+    await es.supervise(_pool_for(conn), "reversion", now, invoke)
+    invoke.assert_not_awaited()
+    assert conn.inserts == []
