@@ -381,3 +381,39 @@ async def test_dispatch_once_delegates_each_roster_engine_to_dispatch_engine():
 
     assert [c[0] for c in calls] == list(ROSTER)
     assert all(c[1] is ed._safe_invoke for c in calls)
+
+
+async def test_invoke_allocator_runs_canonical_command_exit_zero():
+    proc = AsyncMock()
+    proc.wait = AsyncMock(return_value=0)
+    with patch.object(ed.asyncio, "create_subprocess_exec",
+                      AsyncMock(return_value=proc)) as spawn, \
+         patch.object(ed, "logger") as log:
+        await ed._invoke_allocator("allocator")
+    args = spawn.call_args[0]
+    assert args[0] == sys.executable
+    assert args[1:] == ("scripts/ops.py", "--allocate")
+    assert any(c.args and c.args[0] == "engine_dispatch.allocator_done"
+               for c in log.info.call_args_list)
+    assert not any(c.args and c.args[0] == "engine_dispatch.allocator_failed"
+                   for c in log.error.call_args_list)
+
+
+async def test_invoke_allocator_nonzero_exit_alarms_and_returns():
+    proc = AsyncMock()
+    proc.wait = AsyncMock(return_value=2)
+    with patch.object(ed.asyncio, "create_subprocess_exec",
+                      AsyncMock(return_value=proc)), \
+         patch.object(ed, "logger") as log:
+        await ed._invoke_allocator("allocator")  # must NOT raise
+    assert any(c.args and c.args[0] == "engine_dispatch.allocator_failed"
+               for c in log.error.call_args_list)
+
+
+async def test_invoke_allocator_spawn_raises_is_isolated():
+    with patch.object(ed.asyncio, "create_subprocess_exec",
+                      AsyncMock(side_effect=OSError("no fork"))), \
+         patch.object(ed, "logger") as log:
+        await ed._invoke_allocator("allocator")  # must NOT raise
+    assert any(c.args and c.args[0] == "engine_dispatch.allocator_failed"
+               for c in log.error.call_args_list)

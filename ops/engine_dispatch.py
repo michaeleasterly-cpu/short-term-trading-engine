@@ -134,6 +134,35 @@ async def _safe_invoke(engine: str) -> None:
                      error=str(exc))
 
 
+async def _invoke_allocator(engine: str = "allocator") -> None:
+    """Run the weekly capital rebalance as an isolated subprocess via
+    the EXACT canonical command the retired launchd cron ran
+    (`python scripts/ops.py --allocate`; spec C §3b / D-C2). Crash-
+    isolated like `_safe_invoke` AND raises the operator alarm
+    `engine_dispatch.allocator_failed` on non-zero / spawn error
+    (D-C3) so the engine ROSTER loop proceeds on the persisted
+    prior-week risk_state.engine_equity — a weekly-rebalance failure
+    is degraded-not-broken and must NEVER abort the daily sweep.
+
+    `engine` is always "allocator" by construction (kept for the
+    uniform injected-invoker signature `_dispatch_engine` expects);
+    a freeze/skip is a valid exit-0 outcome and is NOT a failure.
+    """
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, "scripts/ops.py", "--allocate", cwd=repo,
+        )
+        rc = await proc.wait()
+    except Exception as exc:  # noqa: BLE001 — isolate: never abort sweep
+        logger.error("engine_dispatch.allocator_failed", error=str(exc))
+        return
+    if rc == 0:
+        logger.info("engine_dispatch.allocator_done", returncode=rc)
+    else:
+        logger.error("engine_dispatch.allocator_failed", returncode=rc)
+
+
 async def _dispatch_engine(pool, now: datetime, engine: str,
                            invoke) -> None:
     """One profiled actor's gated dispatch (B's ladder, extracted so
