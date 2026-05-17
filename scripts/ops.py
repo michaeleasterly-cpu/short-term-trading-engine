@@ -1251,6 +1251,45 @@ async def _stage_sec_filings(
         log.info("ops.stage.sec_filings.done", **out)
         return out
 
+    # Self-heal coverage repair (--param repair=true, the
+    # sec_filings_freshness HealSpec). The daily/default path runs with
+    # handler defaults (max_tickers=200, lookback=90, skip-guard ON) —
+    # correct for the incremental, but it CANNOT clear
+    # `insufficient_stock_coverage` (needs ≥30% of the ~1,500-name T1+T2
+    # stock universe with a filing in the trailing 180d): 200<<needed,
+    # 90d<180d window, and (pre-fix) the HealSpec's skip_guard_days was
+    # silently dropped because cfg was never overlaid here. The heal
+    # must re-pull the full universe over the coverage window. Mirrors
+    # the daily_bars repair_coverage / eight_k_backfill named-mode
+    # pattern (no fragile --param soup; max_tickers=None can't be
+    # expressed via the int-coercing --param channel).
+    if cfg.get("repair"):
+        config = {
+            "lookback_days": int(cfg.get("lookback_days", 200)),  # ≥ 180d coverage window
+            "max_tickers": None,                                  # whole T1+T2 stock universe
+            "skip_guard_days": 0,                                 # force past the skip-guard
+        }
+        log.info("ops.stage.sec_filings.repair_start",
+                 lookback_days=config["lookback_days"])
+        try:
+            rows = await handle_sec_filings(pool, config)
+        except Exception as exc:
+            log.error("ops.stage.sec_filings.failed", error=str(exc), repair=True)
+            raise
+        async with pool.acquire() as conn:
+            snap = await conn.fetchrow(
+                "SELECT COUNT(*) r, COUNT(DISTINCT ticker) t, "
+                "MAX(filing_date) mx FROM platform.sec_insider_transactions"
+            )
+        out = {
+            "repair": True, "rows_loaded": int(rows or 0),
+            "insider_rows_total": int(snap["r"] or 0),
+            "tickers_covered_insider": int(snap["t"] or 0),
+            "latest_filing": snap["mx"].isoformat() if snap["mx"] else None,
+        }
+        log.info("ops.stage.sec_filings.done", **out)
+        return out
+
     if backfill:
         today = datetime.now(UTC).date()
         lookback_days = (today - _date(2018, 1, 1)).days

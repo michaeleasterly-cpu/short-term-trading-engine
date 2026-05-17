@@ -113,9 +113,14 @@ _SPECS: tuple[HealSpec, ...] = (
     HealSpec(check_name="earnings_events_freshness", source="earnings_events",
              healable=True, stage="earnings_refresh",
              params={"skip_guard_days": "0"}, max_attempts=2),
+    # {skip_guard_days:0} was a FAKE heal: _stage_sec_filings never
+    # overlaid cfg on the default path so the param was silently
+    # dropped, AND defaults (max_tickers=200, lookback=90) cannot clear
+    # insufficient_stock_coverage (≥30% of ~1,500 stocks / 180d).
+    # `repair` triggers the full-universe, 200d, skip-guard-off re-pull.
     HealSpec(check_name="sec_filings_freshness", source="sec_insider_transactions",
              healable=True, stage="sec_filings",
-             params={"skip_guard_days": "0"}, max_attempts=2),
+             params={"repair": "true"}, max_attempts=2),
     HealSpec(check_name="macro_indicators_freshness", source="macro_indicators",
              healable=True, stage="macro_indicators",
              params={"skip_guard_days": "0"}, max_attempts=2),
