@@ -310,7 +310,7 @@ and that must be stated plainly, not glossed.
   profile, TRIGGER facet, TARGETING, PUBLICATION — see WEEK GOAL §3a-c
   above). Remaining: incremental per-adapter targeting/probe rollout
   (each a one-entry increment, not unbuilt architecture).
-- **candidate (6): schema/contract-drift sentinel — OPEN.** No spec yet.
+- ✅ **candidate (6): schema/contract-drift sentinel — DONE 2026-05-17.** `tpcore/ingestion/adapter_contract.py` — declared `ADAPTER_CONTRACTS` SoT (all 12 CSV-first feeds; clockwork drift test == CSV-first feed set); `assert_contract_populated` raises before load when a required adapter-output field is systematically empty across a non-empty pull (producer hard-stop; symptom-level detection; escalate-only, no auto-heal); 4 high-risk feeds enforced (fred_macro/iborrowdesk_borrow_rates/finra_short_interest/apewisdom_social_sentiment), rest `guard_pending`; thin Step-4c `adapter_contract` known_knowns check adds coverage/visibility + 24h-escalation FAIL. PRs #32 (P1 registry+helper dark) / #33 (P2 enforce 4 high-risk handlers) / #35 (P3 thin Step-4c check). (3)/(4) realized by #165; (5) auditheal done; **(6) done** ⇒ remaining deterministic-agents work = the Data Supervisor (Escalation & Hardening Ladder rung 2) + #187 LLM triage (rung 3).
 
 ## Engine structural redesign (post-2026-05-15 sweep)
 
