@@ -28,7 +28,9 @@ Key design choices (per 2026-05-13 expert review):
 
 from __future__ import annotations
 
+import os
 import statistics
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -166,85 +168,101 @@ class AllocatorService:
         )
 
     async def run_once(self) -> list[AllocationDecision]:
-        histories = await self._load_histories()
-        decisions = self._decide(histories)
+        started_at = time.monotonic()
+        exit_code = 0
+        if self._db_log is not None:
+            await self._db_log.startup(
+                commit_sha=os.getenv("RAILWAY_GIT_COMMIT_SHA") or os.getenv("GIT_COMMIT_SHA")
+            )
+        try:
+            histories = await self._load_histories()
+            decisions = self._decide(histories)
 
-        # ── Rebalance gating — items 44 + 45 (2026-05-14) ───────────────
-        # 1. Compute drift per active engine (frozen engines bypass).
-        max_drift, drift_per_engine = await self._compute_drift(decisions)
-        # 2. Fetch SPY-based market regime.
-        regime, chop_value = await self._fetch_market_regime()
-        # 3. Classify rebalance decision.
-        skip_reason, rebalance_reason = self._classify_rebalance(max_drift, regime)
-        # 4. Persist (always for frozen rows; conditional for active rows).
-        if skip_reason is not None:
-            pruned_engines = await self._persist(decisions, active_skip=True)
-            if self._db_log is not None:
+            # ── Rebalance gating — items 44 + 45 (2026-05-14) ───────────────
+            # 1. Compute drift per active engine (frozen engines bypass).
+            max_drift, drift_per_engine = await self._compute_drift(decisions)
+            # 2. Fetch SPY-based market regime.
+            regime, chop_value = await self._fetch_market_regime()
+            # 3. Classify rebalance decision.
+            skip_reason, rebalance_reason = self._classify_rebalance(max_drift, regime)
+            # 4. Persist (always for frozen rows; conditional for active rows).
+            if skip_reason is not None:
+                pruned_engines = await self._persist(decisions, active_skip=True)
+                if self._db_log is not None:
+                    await self._db_log.log(
+                    event_type="ALLOCATOR_SKIPPED",
+                    message=f"rebalance skipped — {skip_reason}",
+                    severity="INFO",
+                    data={
+                        "as_of": self._as_of.isoformat(),
+                        "reason": skip_reason,
+                        "max_drift_pct": float(max_drift),
+                        "drift_per_engine": {k: float(v) for k, v in drift_per_engine.items()},
+                        "regime": regime,
+                        "chop_value": float(chop_value) if chop_value is not None else None,
+                        "frozen_engines_persisted": [
+                            d.engine for d in decisions if d.freeze_state != "active"
+                        ],
+                    },
+                )
+            else:
+                pruned_engines = await self._persist(decisions, active_skip=False)
+                if self._db_log is not None:
+                    await self._db_log.log(
+                    event_type="ALLOCATOR_REBALANCED",
+                    message=f"rebalanced — {rebalance_reason}",
+                    severity="INFO",
+                    data={
+                        "as_of": self._as_of.isoformat(),
+                        "reason": rebalance_reason,
+                        "max_drift_pct": float(max_drift),
+                        "drift_per_engine": {k: float(v) for k, v in drift_per_engine.items()},
+                        "regime": regime,
+                        "chop_value": float(chop_value) if chop_value is not None else None,
+                        "new_weights": {d.engine: float(d.weight) for d in decisions},
+                    },
+                )
+
+            # ── Prune audit (only when something was actually pruned) ────────
+            # Mirrors the ALLOCATOR_REBALANCED / ALLOCATOR_SKIPPED emission
+            # above exactly: same self._db_log handler, same (engine, run_id)
+            # binding, same INSERT INTO platform.application_log path. One row
+            # per prune; zero rows when nothing stale (idempotent — a second
+            # run finds a clean table, prunes nothing, logs nothing).
+            if pruned_engines and self._db_log is not None:
                 await self._db_log.log(
-                event_type="ALLOCATOR_SKIPPED",
-                message=f"rebalance skipped — {skip_reason}",
-                severity="INFO",
-                data={
-                    "as_of": self._as_of.isoformat(),
-                    "reason": skip_reason,
-                    "max_drift_pct": float(max_drift),
-                    "drift_per_engine": {k: float(v) for k, v in drift_per_engine.items()},
-                    "regime": regime,
-                    "chop_value": float(chop_value) if chop_value is not None else None,
-                    "frozen_engines_persisted": [
-                        d.engine for d in decisions if d.freeze_state != "active"
-                    ],
-                },
+                    event_type="ALLOCATOR_PRUNED_RISK_STATE",
+                    message=f"pruned {len(pruned_engines)} stale risk_state row(s)",
+                    severity="INFO",
+                    data={
+                        "as_of": self._as_of.isoformat(),
+                        "pruned_engines": pruned_engines,
+                        "live_engines": list(self._engines),
+                    },
+                )
+
+            logger.info(
+                "tpcore.allocator.rebalance",
+                as_of=self._as_of.isoformat(),
+                platform_capital=str(self._platform_capital),
+                decisions={d.engine: str(d.allocated_capital) for d in decisions},
+                frozen=[d.engine for d in decisions if d.freeze_state != "active"],
+                enforce_freeze=self._enforce_freeze,
+                max_drift_pct=float(max_drift),
+                regime=regime,
+                skipped=skip_reason is not None,
+                decision_reason=skip_reason or rebalance_reason,
             )
-        else:
-            pruned_engines = await self._persist(decisions, active_skip=False)
+            return decisions
+        except Exception as exc:
+            exit_code = 1
             if self._db_log is not None:
-                await self._db_log.log(
-                event_type="ALLOCATOR_REBALANCED",
-                message=f"rebalanced — {rebalance_reason}",
-                severity="INFO",
-                data={
-                    "as_of": self._as_of.isoformat(),
-                    "reason": rebalance_reason,
-                    "max_drift_pct": float(max_drift),
-                    "drift_per_engine": {k: float(v) for k, v in drift_per_engine.items()},
-                    "regime": regime,
-                    "chop_value": float(chop_value) if chop_value is not None else None,
-                    "new_weights": {d.engine: float(d.weight) for d in decisions},
-                },
-            )
-
-        # ── Prune audit (only when something was actually pruned) ────────
-        # Mirrors the ALLOCATOR_REBALANCED / ALLOCATOR_SKIPPED emission
-        # above exactly: same self._db_log handler, same (engine, run_id)
-        # binding, same INSERT INTO platform.application_log path. One row
-        # per prune; zero rows when nothing stale (idempotent — a second
-        # run finds a clean table, prunes nothing, logs nothing).
-        if pruned_engines and self._db_log is not None:
-            await self._db_log.log(
-                event_type="ALLOCATOR_PRUNED_RISK_STATE",
-                message=f"pruned {len(pruned_engines)} stale risk_state row(s)",
-                severity="INFO",
-                data={
-                    "as_of": self._as_of.isoformat(),
-                    "pruned_engines": pruned_engines,
-                    "live_engines": list(self._engines),
-                },
-            )
-
-        logger.info(
-            "tpcore.allocator.rebalance",
-            as_of=self._as_of.isoformat(),
-            platform_capital=str(self._platform_capital),
-            decisions={d.engine: str(d.allocated_capital) for d in decisions},
-            frozen=[d.engine for d in decisions if d.freeze_state != "active"],
-            enforce_freeze=self._enforce_freeze,
-            max_drift_pct=float(max_drift),
-            regime=regime,
-            skipped=skip_reason is not None,
-            decision_reason=skip_reason or rebalance_reason,
-        )
-        return decisions
+                await self._db_log.error(exc, context="allocator_crash")
+            raise
+        finally:
+            if self._db_log is not None:
+                duration_ms = int((time.monotonic() - started_at) * 1000)
+                await self._db_log.shutdown(duration_ms, exit_code)
 
     # ── Rebalance-gating helpers (items 44 + 45) ────────────────────────
 

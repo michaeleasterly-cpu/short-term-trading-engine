@@ -335,8 +335,14 @@ async def test_log_events_written_skip():
     svc._load_histories = _empty_histories  # type: ignore[method-assign]
     await svc.run_once()
     log_writes = _app_log_writes(pool)
-    assert len(log_writes) == 1
-    sql, args = log_writes[0]
+    # run_once now emits STARTUP + domain event + SHUTDOWN (3 total)
+    assert len(log_writes) == 3
+    event_types = [w[1][2] for w in log_writes]
+    assert event_types[0] == "STARTUP"
+    assert event_types[2] == "SHUTDOWN"
+    # Find the domain event by event_type
+    domain = next(w for w in log_writes if w[1][2] == "ALLOCATOR_SKIPPED")
+    sql, args = domain
     # Args from DBLogHandler INSERT: (engine, run_id, event_type, severity, message, data)
     assert args[0] == "allocator"
     assert args[2] == "ALLOCATOR_SKIPPED"
@@ -367,8 +373,13 @@ async def test_log_events_written_rebalance():
     svc._load_histories = _empty_histories  # type: ignore[method-assign]
     await svc.run_once()
     log_writes = _app_log_writes(pool)
-    assert len(log_writes) == 1
-    sql, args = log_writes[0]
+    # run_once now emits STARTUP + domain event + SHUTDOWN (3 total)
+    assert len(log_writes) == 3
+    event_types = [w[1][2] for w in log_writes]
+    assert event_types[0] == "STARTUP"
+    assert event_types[2] == "SHUTDOWN"
+    domain = next(w for w in log_writes if w[1][2] == "ALLOCATOR_REBALANCED")
+    sql, args = domain
     assert args[2] == "ALLOCATOR_REBALANCED"
     payload = json.loads(args[5])
     assert payload["reason"] == "hard_band_override"
