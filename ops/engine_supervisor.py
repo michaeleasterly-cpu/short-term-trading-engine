@@ -111,9 +111,50 @@ async def _detect_crashed_startup(conn, engine: str, now: datetime,
     return (now - row["started_at"]).total_seconds() >= _STALE_STARTUP_SECONDS
 
 
+async def _clean_cycle_after(conn, engine: str, held_at: datetime) -> bool:
+    """A STARTUP followed by a clean SHUTDOWN (exit_code 0) recorded
+    strictly AFTER the hold. NOT 'ran once' — a full clean cycle."""
+    row = await conn.fetchrow(
+        """
+        SELECT (
+          bool_or(event_type = 'STARTUP')
+          AND bool_or(event_type = 'SHUTDOWN'
+                      AND (data->>'exit_code')::int = 0)
+        ) AS clean
+        FROM platform.application_log
+        WHERE engine = $1 AND recorded_at > $2
+        """,
+        engine, held_at,
+    )
+    return bool(row and row["clean"])
+
+
+async def _repair_complete_green_after(conn, engine: str,
+                                       held_at: datetime) -> bool:
+    row = await conn.fetchrow(
+        """
+        SELECT bool_or((data->>'green')::bool) AS green
+        FROM platform.application_log
+        WHERE engine = $1 AND event_type = 'DATA_REPAIR_COMPLETE'
+          AND recorded_at > $2
+        """,
+        engine, held_at,
+    )
+    return bool(row and row["green"])
+
+
 async def _auto_clear(pool, engine: str, now: datetime, hold) -> None:
-    """Strong clean-cycle clear (Task 6 fills this in)."""
-    return None
+    """Strong clear predicate (DA-1 §7). Conservative by construction;
+    DA-2 reuses ENGINE_HELD/ENGINE_CLEARED with a stronger predicate."""
+    async with pool.acquire() as conn:
+        if not await _clean_cycle_after(conn, engine, hold.held_at):
+            return
+        if hold.failure_class == "data_repair_escalated":
+            if not await _repair_complete_green_after(conn, engine,
+                                                      hold.held_at):
+                return
+    await _emit_cleared(pool, engine, hold.hold_id,
+                        f"clean cycle after {hold.failure_class}")
 
 
 async def _detect_scheduler_crash(conn, engine: str,

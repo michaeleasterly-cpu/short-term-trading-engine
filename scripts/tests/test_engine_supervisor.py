@@ -186,3 +186,39 @@ async def test_missed_cycle_excludes_held_windows():
     invoke = AsyncMock()
     await es.supervise(_pool_for(conn), "momentum", now, invoke)
     invoke.assert_awaited()  # missed_cycle self-heals via re-invoke
+
+
+async def test_auto_clear_requires_clean_shutdown_not_just_startup():
+    from tpcore.supervisor_state import HoldState
+    now = datetime(2026, 5, 6, 21, 30, tzinfo=UTC)
+    held = HoldState("h-1", "crashed_startup", "stale",
+                     datetime(2026, 5, 5, 21, 0, tzinfo=UTC))
+    conn = _rows_conn([{"clean": False}])  # post-hold STARTUP but NO clean SHUTDOWN
+    with patch.object(es, "current_hold", new=AsyncMock(return_value=held)):
+        await es.supervise(_pool_for(conn), "reversion", now, AsyncMock())
+    assert all(a[2] != "ENGINE_CLEARED" for _s, a in conn.inserts)
+
+
+async def test_auto_clear_emits_cleared_on_clean_cycle():
+    from tpcore.supervisor_state import HoldState
+    now = datetime(2026, 5, 6, 21, 30, tzinfo=UTC)
+    held = HoldState("h-1", "crashed_startup", "stale",
+                     datetime(2026, 5, 5, 21, 0, tzinfo=UTC))
+    conn = _rows_conn([{"clean": True}])  # STARTUP + clean SHUTDOWN exit0 post-hold
+    with patch.object(es, "current_hold", new=AsyncMock(return_value=held)):
+        await es.supervise(_pool_for(conn), "reversion", now, AsyncMock())
+    cleared = [a for _s, a in conn.inserts if a[2] == "ENGINE_CLEARED"]
+    assert len(cleared) == 1
+    payload = json.loads(cleared[0][-1])
+    assert payload["hold_id"] == "h-1" and payload["schema"] == 1
+
+
+async def test_auto_clear_repair_escalated_needs_repair_complete_green():
+    from tpcore.supervisor_state import HoldState
+    now = datetime(2026, 5, 6, 21, 30, tzinfo=UTC)
+    held = HoldState("h-2", "data_repair_escalated", "data lane exhausted",
+                     datetime(2026, 5, 5, 21, 0, tzinfo=UTC))
+    conn = _rows_conn([{"clean": True}, {"green": False}])  # clean but no repair-green
+    with patch.object(es, "current_hold", new=AsyncMock(return_value=held)):
+        await es.supervise(_pool_for(conn), "vector", now, AsyncMock())
+    assert all(a[2] != "ENGINE_CLEARED" for _s, a in conn.inserts)
