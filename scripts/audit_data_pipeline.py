@@ -1,11 +1,22 @@
-"""Comprehensive 4-phase data pipeline audit.
+"""Comprehensive 4-phase DATA pipeline audit.
+
+Scope: the **data** pipeline only (ingestion → platform tables →
+validation → freshness/anomalies). This is NOT the engine pipeline
+(covered by the smoke tests) nor the AAR pipeline (covered by
+``test_aar_pipeline`` + the live forensics scanner) — engines/AAR
+appear here only as data artifacts (SIGNAL/aar_events observability).
 
 Single CLI that audits every layer of the data pipeline across four
 categories of knowledge:
 
 * **known_knowns**     — explicit checks: row counts, freshness vs.
-  threshold, validation status, ingestion-job state, Sentinel basket
-  presence, hy_spread → credit_spread compliance.
+  threshold for every data source (incl. the 2026-05-16 feeds:
+  options_max_pain, social_sentiment, fear_greed, short_interest,
+  borrow_rates, aaii_sentiment + the period-keyed insider_sentiment),
+  validation status, ingestion-job state, Sentinel basket presence,
+  hy_spread → credit_spread compliance. Freshness thresholds for the
+  new feeds come from the canonical tpcore.feeds profile so the audit
+  and validation suite never disagree.
 * **known_unknowns**   — documented gaps we measure: GLD AR-estimator
   noise, hy_spread freeze post-truncation, prices_daily multi-day gaps,
   ETF AR mis-estimation in T3/T4.
@@ -19,11 +30,12 @@ categories of knowledge:
 
 Findings are printed to stdout (formatted or JSON) and persisted to
 ``platform.data_quality_log`` under
-``source='pipeline_audit.<phase>.<check_name>'`` so the dashboard can
-read them.
+``source='data_pipeline_audit.<phase>.<check_name>'`` so the dashboard
+can read them.
 
-**Canonical audit command.** When the operator asks for a pipeline
-audit, run this — do NOT re-audit manually. See CLAUDE.md session rule.
+**Canonical audit command.** When the operator asks for a data
+pipeline audit (or just "audit pipeline"), run this — do NOT re-audit
+manually. See CLAUDE.md session rule.
 
 Exit code: 0 on success; non-zero only if ``--strict`` is set and any
 phase has FAIL severity (default is informational across phases other
@@ -46,6 +58,7 @@ from typing import Any
 import structlog
 
 from tpcore.db import build_asyncpg_pool
+from tpcore.feeds import freshness_max_age_days
 
 logger = structlog.get_logger(__name__)
 
@@ -73,6 +86,26 @@ DATA_SOURCES: tuple[DataSource, ...] = (
                where_clause="WHERE indicator='credit_spread'"),
     DataSource("spread_observations", "platform.spread_observations",     freshness_days=90, timestamp_col="observed_at"),
     DataSource("ticker_classifications", "platform.ticker_classifications", freshness_days=30, timestamp_col="last_updated"),
+    # ── Cross-sectional / sentiment / macro feeds shipped 2026-05-16.
+    # Freshness thresholds come from the SAME canonical tpcore.feeds
+    # profile the validation suite uses (freshness_max_age_days, same
+    # fallbacks as tpcore/quality/validation/checks/<feed>_freshness.py)
+    # so the audit and validation can never disagree on staleness. Adding
+    # them here also enrolls them in the unknown_unknowns
+    # correlated-staleness sweep automatically. This is independent
+    # defence-in-depth on top of the known_knowns validation_status check
+    # (which already surfaces validation.<feed>_freshness reds).
+    DataSource("options_max_pain",    "platform.options_max_pain",        freshness_days=freshness_max_age_days("greeks_max_pain", 7),       timestamp_col="observed_date"),
+    DataSource("social_sentiment",    "platform.social_sentiment",        freshness_days=freshness_max_age_days("apewisdom_social_sentiment", 7)),
+    DataSource("fear_greed",          "platform.fear_greed",              freshness_days=5),  # validation gate is 3 NYSE sessions; 5 calendar days ≈ session + weekend/holiday pad (advisory defence — validation is the hard gate)
+    DataSource("short_interest",      "platform.short_interest",          freshness_days=freshness_max_age_days("finra_short_interest", 35), timestamp_col="settlement_date"),
+    DataSource("borrow_rates",        "platform.borrow_rates",            freshness_days=freshness_max_age_days("iborrowdesk_borrow_rates", 5)),
+    DataSource("aaii_sentiment",      "platform.aaii_sentiment",          freshness_days=freshness_max_age_days("aaii_sentiment", 10)),
+    # NOTE: insider_sentiment (Finnhub MSPR) is period-keyed (year, month)
+    # with NO date/timestamp column — it cannot use this date-based
+    # MAX()/age loop without fabricating a date. It gets a dedicated
+    # period-aware known_knowns check (insider_sentiment_period) that
+    # mirrors tpcore.quality.validation.checks.insider_sentiment_freshness.
 )
 
 
@@ -449,6 +482,44 @@ async def run_known_knowns(pool, sink: _FindingSink | None = None) -> list[Audit
             phase="known_knowns", check_name="shrinkage_detector",
             source="csv_archive", severity="OK",
             summary="no vendor-truncation (shrinkage) alarms in last 7d",
+        ))
+
+    # insider_sentiment (Finnhub MSPR) — period-keyed, NOT date-keyed, so
+    # it cannot ride the DATA_SOURCES date loop. Dedicated check mirroring
+    # tpcore.quality.validation.checks.insider_sentiment_freshness:
+    # newest (year*12+month) must be ≤ MAX_AGE_MONTHS old.
+    INSIDER_MAX_AGE_MONTHS = 3
+    async with pool.acquire() as conn:
+        ins = await conn.fetchrow("""
+            SELECT MAX(year * 12 + month) AS newest_period, COUNT(*) AS n
+            FROM platform.insider_sentiment
+        """)
+    if ins is None or int(ins["n"] or 0) == 0:
+        findings.append(AuditFinding(
+            phase="known_knowns", check_name="insider_sentiment_period",
+            source="insider_sentiment", severity="FAIL",
+            summary="insider_sentiment: 0 rows",
+            evidence={"table": "platform.insider_sentiment", "rows": 0},
+            recommended_action="run the finnhub_insider_sentiment ingestion stage",
+        ))
+    else:
+        now = datetime.now(UTC)
+        now_period = now.year * 12 + now.month
+        age_months = now_period - int(ins["newest_period"])
+        severity = "OK" if age_months <= INSIDER_MAX_AGE_MONTHS else "FAIL"
+        findings.append(AuditFinding(
+            phase="known_knowns", check_name="insider_sentiment_period",
+            source="insider_sentiment", severity=severity,
+            summary=(
+                f"insider_sentiment: {int(ins['n']):,} rows, newest period "
+                f"{age_months} month(s) old (threshold {INSIDER_MAX_AGE_MONTHS})"
+            ),
+            evidence={"rows": int(ins["n"]), "age_months": age_months,
+                      "threshold_months": INSIDER_MAX_AGE_MONTHS},
+            recommended_action=(
+                None if severity == "OK"
+                else "re-run the finnhub_insider_sentiment stage — MSPR data is stale"
+            ),
         ))
 
     return findings
@@ -1007,7 +1078,7 @@ async def run_unknown_unknowns(pool, sink: _FindingSink | None = None) -> list[A
 async def _persist(pool, findings: list[AuditFinding], run_ts: datetime) -> None:
     """Write each finding as its own row in ``platform.data_quality_log``.
 
-    Source key: ``pipeline_audit.<phase>.<check_name>.<source>`` —
+    Source key: ``data_pipeline_audit.<phase>.<check_name>.<source>`` —
     includes the finding's source so multiple findings under the same
     (phase, check_name) — e.g. one freshness row per data source —
     don't collide on the ``(source, timestamp)`` unique constraint.
@@ -1018,7 +1089,7 @@ async def _persist(pool, findings: list[AuditFinding], run_ts: datetime) -> None
         # Replace any chars that make the source key awkward to parse later.
         clean_source = f.source.replace(":", "-")
         rows.append((
-            f"pipeline_audit.{f.phase}.{f.check_name}.{clean_source}",
+            f"data_pipeline_audit.{f.phase}.{f.check_name}.{clean_source}",
             run_ts,
             0,
             0,

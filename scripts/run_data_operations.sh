@@ -16,7 +16,7 @@
 #                          bars backfill can't fix escalate immediately.
 #                          NEVER reaches Step 6 unless 100% green.
 #  4b. MATVIEW           — refresh platform.prices_daily_tickers.
-#  4c. DEEP AUDIT        — scripts/audit_pipeline.py run unattended every
+#  4c. DEEP AUDIT        — scripts/audit_data_pipeline.py run unattended every
 #                          cycle; known_knowns 🔴 → alarm + hard stop
 #                          (no emit). Advisory yellows are non-gating.
 #   5. COMPRESS          — scripts/run_compress_backfill_csvs.sh (any
@@ -223,7 +223,7 @@ fi
 
 # Step 4c — 4-phase deep audit, run UNATTENDED (added 2026-05-15).
 #
-# Closes the "audit is theatre" gap: audit_pipeline.py used to be
+# Closes the "audit is theatre" gap: audit_data_pipeline.py used to be
 # on-demand only, so heuristic drift accumulated silently between
 # operator asks. It now runs every data-ops cycle, serialized inline
 # here (NOT a separate launchd job — a concurrent job is exactly what
@@ -241,7 +241,7 @@ echo ""
 echo "▶ STEP 4c / 6  4-phase deep audit (unattended)"
 echo "────────────────────────────────────────────────────────────────────────"
 _log_event INGESTION_START wrapper_deep_audit
-DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python scripts/audit_pipeline.py
+DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python scripts/audit_data_pipeline.py
 DEEP_AUDIT_RC=$?
 if [[ $DEEP_AUDIT_RC -eq 1 ]]; then
     _log_event INGESTION_FAILED wrapper_deep_audit "known_knowns FAIL (exit 1)"
