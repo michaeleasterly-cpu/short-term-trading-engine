@@ -220,12 +220,19 @@ async def _detect_data_repair_escalated(conn, engine: str,
 
 async def _detect_missed_cycle(conn, engine: str,
                                window_start: datetime) -> bool:
-    """No STARTUP across the last N eligible windows. Held windows are
-    NOT eligible (a held engine is intentionally idle — counting it
-    would loop: held → no STARTUP → missed_cycle → re-invoke). The
-    caller only reaches this when current_hold(...) is None, so the
-    engine is not currently held; the row's `eligible_windows` is the
-    count of non-held eligible windows the SQL observed."""
+    """No STARTUP across the last N eligible windows (silent death).
+
+    Held-window exclusion is enforced STRUCTURALLY by the caller, NOT
+    by this SQL: `_detect_and_act` short-circuits to `_auto_clear` and
+    returns when `current_hold(...)` is not None, so `_classify` (and
+    therefore this detector) is unreachable while the engine is held —
+    a held engine is intentionally idle and must never be counted as a
+    missed cycle (else held → no STARTUP → missed_cycle → re-invoke
+    loop). This query performs NO held-window filtering itself;
+    `eligible_windows` is simply the count of distinct recorded days
+    observed since `window_start`. Do NOT rely on a SQL-level held
+    filter here — the safety is the caller short-circuit plus the
+    clean-cycle clear guaranteeing a post-hold STARTUP exists."""
     row = await conn.fetchrow(
         """
         SELECT
