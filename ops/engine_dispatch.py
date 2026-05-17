@@ -239,15 +239,24 @@ async def _dispatch_engine(pool, now: datetime, engine: str,
         )
 
 
-async def _dispatch_allocator(pool, now: datetime) -> None:  # pragma: no cover — C-T2 stub
-    """Placeholder for allocator gated dispatch (Sub-project C-T2).
-
-    Will be implemented in C-T2 using _dispatch_engine with
-    _invoke_allocator.  Lives here now so the seam test can patch it.
+async def _dispatch_allocator(pool, now: datetime) -> None:
+    """Sub-project C (D-C1): the allocator is the FIRST gated step,
+    before the engine ROSTER loop. Reuses B's exact ladder via
+    `_dispatch_engine` with the canonical `_invoke_allocator`
+    (subprocess `scripts/ops.py --allocate`). should_fire("allocator")
+    applies the WEEKLY_FIRST_TRADING_DAY cadence + market-closed +
+    per-engine data gate + STARTUP idempotency uniformly; data-blocked
+    emits ENGINE_DATA_REQUEST(engine="allocator") on the locked
+    inter-lane contract. Ordering (allocator before engines) is
+    guaranteed by construction (sequential await); on allocator
+    failure the engines run on the persisted prior-week
+    risk_state.engine_equity (D-C3).
     """
+    await _dispatch_engine(pool, now, "allocator", _invoke_allocator)
 
 
 async def dispatch_once(pool, now: datetime) -> None:
+    await _dispatch_allocator(pool, now)
     for engine in ROSTER:
         await _dispatch_engine(pool, now, engine, _safe_invoke)
 

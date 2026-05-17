@@ -4,7 +4,9 @@ import sys
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 # scripts/ops.py (data-ops CLI) and the ops/ daemons package share the
 # top-level name `ops`; tpcore/tests/test_ops.py does
@@ -26,6 +28,20 @@ for _m in [m for m in list(sys.modules) if m == "ops" or m.startswith("ops.")]:
 from ops import engine_dispatch as ed  # noqa: E402
 from ops.engine_dispatch import ROSTER, dispatch_once  # noqa: E402
 from tpcore.engine_profile import FireDecision  # noqa: E402
+
+# Save the real _invoke_allocator before the autouse fixture replaces it,
+# so the three unit tests below can call the real implementation directly.
+_real_invoke_allocator = ed._invoke_allocator
+
+
+@pytest.fixture(autouse=True)
+def _no_real_allocator():
+    """Sub-project C: dispatch_once now runs the allocator first.
+    Neutralize the real subprocess for every test that doesn't
+    explicitly exercise it (allocator-specific tests patch
+    ed._invoke_allocator / ed._dispatch_allocator themselves)."""
+    with patch.object(ed, "_invoke_allocator", AsyncMock()):
+        yield
 
 
 class _Conn:
@@ -71,8 +87,8 @@ async def test_data_blocked_emits_one_request_and_skips_never_heals():
         await dispatch_once(_P(), now=datetime(2026,5,5,21,30,tzinfo=UTC))
     inv.assert_not_called()
     payloads = [a for s, a in inserts if "INSERT INTO platform.application_log" in s]
-    assert len(payloads) == 4  # one ENGINE_DATA_REQUEST per ROSTER engine (all data-blocked here)
-    data = json.loads(payloads[0][-1])
+    assert len(payloads) == 5  # allocator + one ENGINE_DATA_REQUEST per ROSTER engine (all data-blocked)
+    data = json.loads(payloads[1][-1])  # payloads[0] is allocator; [1] is first ROSTER engine
     assert data["schema"] == 1 and data["engine"] in ROSTER
     assert data["sources"] == ["prices_daily"]
     uuid.UUID(data["request_id"])  # valid uuid
@@ -336,8 +352,8 @@ async def test_no_request_yet_emits_one_data_request():
     inv.assert_not_called()
     payloads = [a for s, a in inserts
                 if "INSERT INTO platform.application_log" in s]
-    assert len(payloads) == len(ROSTER)  # one request per engine
-    data = json.loads(payloads[0][-1])
+    assert len(payloads) == len(ROSTER) + 1  # allocator + one request per ROSTER engine
+    data = json.loads(payloads[1][-1])  # payloads[0] is allocator; [1] is first ROSTER engine
     assert data["schema"] == 1 and data["engine"] in ROSTER
     assert data["sources"] == ["prices_daily"]
     uuid.UUID(data["request_id"])
@@ -389,7 +405,7 @@ async def test_invoke_allocator_runs_canonical_command_exit_zero():
     with patch.object(ed.asyncio, "create_subprocess_exec",
                       AsyncMock(return_value=proc)) as spawn, \
          patch.object(ed, "logger") as log:
-        await ed._invoke_allocator("allocator")
+        await _real_invoke_allocator("allocator")
     args = spawn.call_args[0]
     assert args[0] == sys.executable
     assert args[1:] == ("scripts/ops.py", "--allocate")
@@ -405,7 +421,7 @@ async def test_invoke_allocator_nonzero_exit_alarms_and_returns():
     with patch.object(ed.asyncio, "create_subprocess_exec",
                       AsyncMock(return_value=proc)), \
          patch.object(ed, "logger") as log:
-        await ed._invoke_allocator("allocator")  # must NOT raise
+        await _real_invoke_allocator("allocator")  # must NOT raise
     assert any(c.args and c.args[0] == "engine_dispatch.allocator_failed"
                for c in log.error.call_args_list)
 
@@ -414,6 +430,109 @@ async def test_invoke_allocator_spawn_raises_is_isolated():
     with patch.object(ed.asyncio, "create_subprocess_exec",
                       AsyncMock(side_effect=OSError("no fork"))), \
          patch.object(ed, "logger") as log:
-        await ed._invoke_allocator("allocator")  # must NOT raise
+        await _real_invoke_allocator("allocator")  # must NOT raise
     assert any(c.args and c.args[0] == "engine_dispatch.allocator_failed"
                for c in log.error.call_args_list)
+
+
+# ---------------------------------------------------------------------------
+# TASK C-T3 — allocator as first gated step in dispatch_once
+# ---------------------------------------------------------------------------
+
+def _fire(reason="fire"):
+    return FireDecision(fire=True, reason=reason,
+                        checks={"profiled": True, "cadence": True,
+                                "market_closed": True, "data_ready": True,
+                                "not_already_run": True})
+
+
+def _skip(reason="off cadence"):
+    return FireDecision(fire=False, reason=reason,
+                        checks={"profiled": True, "cadence": False})
+
+
+def _blocked():
+    return FireDecision(fire=False, reason="data not ready",
+                        checks={"profiled": True, "cadence": True,
+                                "market_closed": True, "data_ready": False})
+
+
+async def test_allocator_fires_before_any_roster_engine():
+    order: list[str] = []
+
+    async def _sf(engine, now, pool):
+        return _fire()
+
+    async def _alloc(engine="allocator"):
+        order.append("allocator")
+
+    async def _eng(engine):
+        order.append(engine)
+
+    with patch.object(ed, "should_fire", _sf), \
+         patch.object(ed, "_invoke_allocator", _alloc), \
+         patch.object(ed, "_safe_invoke", _eng):
+        await dispatch_once(object(), datetime(2026, 5, 18, 13, 0, tzinfo=UTC))
+
+    assert order[0] == "allocator"
+    assert order[1:] == list(ROSTER)
+
+
+async def test_allocator_failure_does_not_abort_roster():
+    async def _sf(engine, now, pool):
+        return _fire()
+
+    ran: list[str] = []
+
+    async def _alloc(engine="allocator"):
+        ed.logger.error("engine_dispatch.allocator_failed", returncode=2)
+
+    async def _eng(engine):
+        ran.append(engine)
+
+    with patch.object(ed, "logger") as mock_logger, \
+         patch.object(ed, "should_fire", _sf), \
+         patch.object(ed, "_invoke_allocator", _alloc), \
+         patch.object(ed, "_safe_invoke", _eng):
+        await dispatch_once(object(), datetime(2026, 5, 18, 13, 0, tzinfo=UTC))
+
+    error_events = [c.args[0] for c in mock_logger.error.call_args_list]
+    assert "engine_dispatch.allocator_failed" in error_events
+    assert ran == list(ROSTER)  # engines still ran (Q3)
+
+
+async def test_allocator_data_blocked_emits_request_for_allocator():
+    async def _sf(engine, now, pool):
+        return _blocked() if engine == "allocator" else _skip()
+
+    conn = AsyncMock()
+    conn.fetchrow = AsyncMock(return_value=None)
+    pool = MagicMock()
+    pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
+    pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    with patch.object(ed, "should_fire", _sf), \
+         patch.object(ed, "failing_sources_for_engine",
+                      AsyncMock(return_value=["prices_daily"])), \
+         patch.object(ed, "_emit_data_request",
+                      AsyncMock(return_value="rid-1")) as emit, \
+         patch.object(ed, "_invoke_allocator", AsyncMock()) as alloc, \
+         patch.object(ed, "_safe_invoke", AsyncMock()):
+        await dispatch_once(pool, datetime(2026, 5, 18, 13, 0, tzinfo=UTC))
+
+    emit.assert_awaited_once()
+    assert emit.call_args[0][1] == "allocator"
+    assert emit.call_args[0][2] == ["prices_daily"]
+    alloc.assert_not_awaited()
+
+
+async def test_allocator_off_cadence_skips_no_invoke():
+    async def _sf(engine, now, pool):
+        return _skip()
+
+    with patch.object(ed, "should_fire", _sf), \
+         patch.object(ed, "_invoke_allocator", AsyncMock()) as alloc, \
+         patch.object(ed, "_safe_invoke", AsyncMock()):
+        await dispatch_once(object(), datetime(2026, 5, 19, 13, 0, tzinfo=UTC))
+
+    alloc.assert_not_awaited()
