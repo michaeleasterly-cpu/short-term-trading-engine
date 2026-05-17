@@ -11,7 +11,7 @@ Engine-native; symmetry-references the data-lane ladder
 """
 from __future__ import annotations
 
-import enum
+from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict
 
@@ -19,7 +19,7 @@ from ops.aar_autotune import _BEHAVIORAL
 from ops.engine_supervisor import INFRA_FAILURE_CLASSES
 
 
-class EngineEscalationDisposition(enum.StrEnum):
+class EngineEscalationDisposition(StrEnum):
     """Every engine escalation terminates in exactly one of these.
     No AUTO_CONVERTED: the engine lane has no auto-conversion actor."""
 
@@ -94,4 +94,6 @@ def escalation_drift() -> tuple[set[str], set[str]]:
 
 
 def policy_for(class_name: str) -> DispositionPolicy | None:
+    """The class's policy, or None if unknown (the data-lane analog
+    tpcore.ladder.disposition.policy_for raises KeyError instead)."""
     return DISPOSITION_POLICIES.get(class_name)

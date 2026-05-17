@@ -38,7 +38,9 @@ def test_data_repair_escalated_default_is_structural_not_removed():
 
 
 def test_escalation_drift_empty_in_lockstep():
-    assert el.escalation_drift() == (set(), set())
+    missing, extra = el.escalation_drift()
+    assert missing == set(), f"classes with no disposition policy: {missing}"
+    assert extra == set(), f"disposition policies for unknown classes: {extra}"
 
 
 def test_escalation_drift_reports_missing_for_uncovered_class():
