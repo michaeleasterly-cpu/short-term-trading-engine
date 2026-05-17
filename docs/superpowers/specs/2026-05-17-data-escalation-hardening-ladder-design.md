@@ -1,12 +1,27 @@
 # Data-Lane Escalation & Hardening Ladder — Formal Design
 
-**Status:** spec 2026-05-17 (DATA lane). Brainstorm → **spec (this
-doc)** → plan → phased subagent build. Formalises the operator-named
-"Escalation & Hardening Ladder" (memory `deterministic-agents-epic`),
-**scoped to the DATA lane only** (operator decision 2026-05-17 —
-engine/aar lanes are a different session's territory; cross-lane
-unification is the operator's future cross-session call, NOT
-front-run here).
+**Status:** BUILT 2026-05-17 (DATA lane). Brainstorm → **spec (this
+doc)** → plan → phased subagent build complete (P1–P3). Formalises the
+operator-named "Escalation & Hardening Ladder" (memory
+`deterministic-agents-epic`), **scoped to the DATA lane only** (operator
+decision 2026-05-17 — engine/aar lanes are a different session's
+territory; cross-lane unification is the operator's future
+cross-session call, NOT front-run here).
+
+**Build record:**
+- P1 (PR #44): `tpcore/ladder/disposition.py` — `Disposition` enum,
+  `DispositionPolicy` model, `DISPOSITION_POLICIES` explicit registry
+  (non-rung-2 classes), `data_lane_escalation_classes()` (rung-2 keys
+  derived from `HEAL_SPECS`/`REMEDIATION_SPECS`/`ADAPTER_CONTRACTS` +
+  explicit non-rung-2 set), `policy_for()`, `disposition_drift()`.
+  Clockwork drift-test == full known set. Landed dark.
+- P2 (PR #45): `ops/weekly_digest.py` undispositioned-escalations
+  section — open-escalation reads (one-terminal-liveness queries),
+  each annotated with `policy_for`, age-bounded by 7-day grace;
+  `python -m ops.weekly_digest disposition <ref> <converted|structural|removed> [note]`
+  verb; integrated into existing digest render + ack/de-escalation path.
+- P3 (this): `docs/ESCALATION_HARDENING_LADDER.md` canonical data-lane
+  convention doc + CLAUDE.md one-line pointer + spec reconciled to BUILT.
 
 ## 1. Principle (the load-bearing invariant)
 
