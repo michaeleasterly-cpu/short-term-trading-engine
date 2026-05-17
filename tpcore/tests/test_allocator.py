@@ -56,7 +56,8 @@ def test_bootstrap_equal_weights_when_all_engines_below_min_aar():
     decisions = svc._decide(hs)
     weights = {d.engine: d.weight for d in decisions}
     assert all(d.realized_vol is None for d in decisions), "no engine has enough AARs"
-    # Equal-ish weight (after [0.10, 0.50] cap iteration, 4 engines → 0.25 each).
+    # Equal-ish weight (after [0.10, 0.50] cap iteration, equal weight
+    # across the managed engines — 3 engines → ≈0.333 each).
     for w in weights.values():
         assert WEIGHT_FLOOR <= w <= WEIGHT_CEILING
     total = sum(weights.values())
@@ -68,7 +69,8 @@ def test_bootstrap_allocates_proportional_capital():
     hs = [_hist(e, pnls=[1.0]) for e in svc._engines]
     decisions = svc._decide(hs)
     total = sum(d.allocated_capital for d in decisions)
-    # All-active 4-engine equal weights → $10,000 each.
+    # All-active equal weights across the managed engines (3 engines
+    # → ≈$13,333 each); total still conserves the $40,000 platform capital.
     assert Decimal("39990") <= total <= Decimal("40010"), f"total ${total} drift"
 
 

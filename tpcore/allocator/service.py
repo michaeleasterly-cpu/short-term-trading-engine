@@ -136,7 +136,15 @@ class AllocatorService:
         self,
         pool: asyncpg.Pool,
         *,
-        engines: tuple[str, ...] = ("sigma", "reversion", "vector", "momentum"),
+        # Default managed set for the weekly inverse-vol pool. Production
+        # constructs AllocatorService WITHOUT engines= (scripts/ops.py
+        # cmd_allocate, scripts/run_allocator.py), so this default IS the
+        # live roster. sigma archived 2026-05-16 (removed — keeping it
+        # made the per-engine upsert loop resurrect a stale sigma
+        # risk_state row every run); sentinel intentionally excluded —
+        # defensive macro overlay budgeted by SentinelCapitalGate
+        # (fixed 10–20% cap), not the inverse-vol pool.
+        engines: tuple[str, ...] = ("reversion", "vector", "momentum"),
         platform_capital: Decimal = Decimal("40000"),
         enforce_freeze: bool = False,
         as_of: date | None = None,
@@ -560,18 +568,21 @@ class AllocatorService:
                 # `engine <> ALL(self._engines)`. Keying off self._engines
                 # is fail-DANGEROUS: production constructs AllocatorService
                 # without engines=, so self._engines is the __init__
-                # default ("sigma","reversion","vector","momentum") which
-                # both KEEPS archived sigma and DELETES live sentinel's
-                # risk_state row (sentinel is not in the default set). An
-                # explicit archived allowlist can only ever delete
-                # known-dead engines, regardless of the managed set.
+                # default ("reversion","vector","momentum") which would
+                # DELETE live sentinel's risk_state row (sentinel is not
+                # in the default set). An explicit archived allowlist can
+                # only ever delete known-dead engines, regardless of the
+                # managed set.
                 #
                 # Ordering: this DELETE runs AFTER the per-engine upsert
                 # loop above, inside the SAME conn.transaction(). The
-                # upsert loop re-INSERTs a risk_state row for sigma (sigma
-                # is still in the __init__ default self._engines); this
-                # prune then DELETEs it in the same transaction, so the
-                # net committed effect is "sigma row removed" — correct.
+                # __init__ default no longer includes sigma (removed
+                # 2026-05-16, commit f0c78c4), so the upsert loop does
+                # NOT recreate a sigma risk_state row; this prune still
+                # removes any pre-existing/legacy sigma row via the
+                # explicit _ARCHIVED_ENGINES allowlist, independent of
+                # the managed set, so the net committed effect is "any
+                # stale sigma row removed" — correct.
                 # Idempotent: a clean table deletes zero rows.
                 # Parameterised (never string-interpolated).
                 pruned_rows = await conn.fetch(
