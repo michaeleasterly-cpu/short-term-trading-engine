@@ -54,8 +54,9 @@ def test_sot_is_nonempty_and_well_formed() -> None:
         assert isinstance(c, CrossTableCheck)
         assert c.kind == "violation_count"
         assert c.table and c.check_name and c.sql
-        assert f"/*{c.check_name}*/" in c.sql
+        assert f"/*{c.key}*/" in c.sql
         assert "." not in c.table and "." not in c.check_name
+    assert len({c.key for c in CROSS_TABLE_CHECKS}) == len(CROSS_TABLE_CHECKS), "duplicate (table, check_name) key"
 
 
 def test_tradier_orphan_predicate_matches_cross_ref_cleanup() -> None:
@@ -76,7 +77,7 @@ def test_tradier_orphan_predicate_matches_cross_ref_cleanup() -> None:
 
 async def test_run_persists_fail_and_ok_rows_with_convention() -> None:
     target = CROSS_TABLE_CHECKS[0]
-    pool = _Pool({target.check_name: 3})
+    pool = _Pool({target.key: 3})
     findings = await run_cross_table_audit(pool, persist=True)
 
     by_key = {(f.table, f.check_name): f for f in findings}

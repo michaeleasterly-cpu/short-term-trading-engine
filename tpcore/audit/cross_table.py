@@ -34,7 +34,7 @@ logger = structlog.get_logger(__name__)
 
 class CrossTableCheck(BaseModel):
     """One declared cross-table violation check. ``sql`` MUST return a
-    single integer violation count and MUST embed a ``/*<check_name>*/``
+    single integer violation count and MUST embed a ``/*<table>/<check_name>*/``
     marker (greppable; keeps the SQL self-identifying)."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -54,7 +54,7 @@ class CrossTableFinding:
     table: str
     check_name: str
     count: int
-    severity: str  # OK | FAIL
+    severity: Literal["OK", "FAIL"]
 
     @property
     def source_key(self) -> str:
@@ -63,49 +63,49 @@ class CrossTableFinding:
 
 CROSS_TABLE_CHECKS: tuple[CrossTableCheck, ...] = (
     CrossTableCheck(table="earnings_events", check_name="null_ticker",
-        sql="SELECT COUNT(*) /*null_ticker*/ FROM platform.earnings_events WHERE ticker IS NULL"),
+        sql="SELECT COUNT(*) /*earnings_events/null_ticker*/ FROM platform.earnings_events WHERE ticker IS NULL"),
     CrossTableCheck(table="earnings_events", check_name="null_event_date",
-        sql="SELECT COUNT(*) /*null_event_date*/ FROM platform.earnings_events WHERE event_date IS NULL"),
+        sql="SELECT COUNT(*) /*earnings_events/null_event_date*/ FROM platform.earnings_events WHERE event_date IS NULL"),
     CrossTableCheck(table="earnings_events", check_name="event_date_far_future",
-        sql="SELECT COUNT(*) /*event_date_far_future*/ FROM platform.earnings_events WHERE event_date > CURRENT_DATE + INTERVAL '365 days'"),
+        sql="SELECT COUNT(*) /*earnings_events/event_date_far_future*/ FROM platform.earnings_events WHERE event_date > CURRENT_DATE + INTERVAL '365 days'"),
     CrossTableCheck(table="earnings_events", check_name="orphan_no_prices",
-        sql="SELECT COUNT(*) /*orphan_no_prices*/ FROM platform.earnings_events ce LEFT JOIN (SELECT DISTINCT ticker FROM platform.prices_daily) p ON p.ticker = ce.ticker WHERE p.ticker IS NULL"),
+        sql="SELECT COUNT(*) /*earnings_events/orphan_no_prices*/ FROM platform.earnings_events ce LEFT JOIN (SELECT DISTINCT ticker FROM platform.prices_daily) p ON p.ticker = ce.ticker WHERE p.ticker IS NULL"),
     CrossTableCheck(table="liquidity_tiers", check_name="orphan_no_prices",
-        sql="SELECT COUNT(*) /*orphan_no_prices*/ FROM platform.liquidity_tiers lt LEFT JOIN (SELECT DISTINCT ticker FROM platform.prices_daily) p ON p.ticker = lt.ticker WHERE p.ticker IS NULL"),
+        sql="SELECT COUNT(*) /*liquidity_tiers/orphan_no_prices*/ FROM platform.liquidity_tiers lt LEFT JOIN (SELECT DISTINCT ticker FROM platform.prices_daily) p ON p.ticker = lt.ticker WHERE p.ticker IS NULL"),
     CrossTableCheck(table="liquidity_tiers", check_name="stale_30d",
-        sql="SELECT COUNT(*) /*stale_30d*/ FROM platform.liquidity_tiers WHERE last_updated < now() - INTERVAL '30 days'"),
+        sql="SELECT COUNT(*) /*liquidity_tiers/stale_30d*/ FROM platform.liquidity_tiers WHERE last_updated < now() - INTERVAL '30 days'"),
     CrossTableCheck(table="liquidity_tiers", check_name="negative_median_spread",
-        sql="SELECT COUNT(*) /*negative_median_spread*/ FROM platform.liquidity_tiers WHERE median_spread_pct < 0"),
+        sql="SELECT COUNT(*) /*liquidity_tiers/negative_median_spread*/ FROM platform.liquidity_tiers WHERE median_spread_pct < 0"),
     CrossTableCheck(table="liquidity_tiers", check_name="negative_p95_spread",
-        sql="SELECT COUNT(*) /*negative_p95_spread*/ FROM platform.liquidity_tiers WHERE p95_spread_pct < 0"),
+        sql="SELECT COUNT(*) /*liquidity_tiers/negative_p95_spread*/ FROM platform.liquidity_tiers WHERE p95_spread_pct < 0"),
     CrossTableCheck(table="liquidity_tiers", check_name="nonpositive_observations",
-        sql="SELECT COUNT(*) /*nonpositive_observations*/ FROM platform.liquidity_tiers WHERE observations <= 0"),
+        sql="SELECT COUNT(*) /*liquidity_tiers/nonpositive_observations*/ FROM platform.liquidity_tiers WHERE observations <= 0"),
     CrossTableCheck(table="universe_candidates", check_name="null_engine",
-        sql="SELECT COUNT(*) /*null_engine*/ FROM platform.universe_candidates WHERE engine IS NULL"),
+        sql="SELECT COUNT(*) /*universe_candidates/null_engine*/ FROM platform.universe_candidates WHERE engine IS NULL"),
     CrossTableCheck(table="universe_candidates", check_name="as_of_date_future",
-        sql="SELECT COUNT(*) /*as_of_date_future*/ FROM platform.universe_candidates WHERE as_of_date > CURRENT_DATE"),
+        sql="SELECT COUNT(*) /*universe_candidates/as_of_date_future*/ FROM platform.universe_candidates WHERE as_of_date > CURRENT_DATE"),
     CrossTableCheck(table="universe_candidates", check_name="nonpositive_last_close",
-        sql="SELECT COUNT(*) /*nonpositive_last_close*/ FROM platform.universe_candidates WHERE last_close IS NOT NULL AND last_close <= 0"),
+        sql="SELECT COUNT(*) /*universe_candidates/nonpositive_last_close*/ FROM platform.universe_candidates WHERE last_close IS NOT NULL AND last_close <= 0"),
     CrossTableCheck(table="universe_candidates", check_name="orphan_no_prices",
-        sql="SELECT COUNT(*) /*orphan_no_prices*/ FROM platform.universe_candidates uc LEFT JOIN (SELECT DISTINCT ticker FROM platform.prices_daily) p ON p.ticker = uc.ticker WHERE p.ticker IS NULL"),
+        sql="SELECT COUNT(*) /*universe_candidates/orphan_no_prices*/ FROM platform.universe_candidates uc LEFT JOIN (SELECT DISTINCT ticker FROM platform.prices_daily) p ON p.ticker = uc.ticker WHERE p.ticker IS NULL"),
     CrossTableCheck(table="spread_observations", check_name="negative_spread",
-        sql="SELECT COUNT(*) /*negative_spread*/ FROM platform.spread_observations WHERE spread_pct < 0"),
+        sql="SELECT COUNT(*) /*spread_observations/negative_spread*/ FROM platform.spread_observations WHERE spread_pct < 0"),
     CrossTableCheck(table="spread_observations", check_name="extreme_spread",
-        sql="SELECT COUNT(*) /*extreme_spread*/ FROM platform.spread_observations WHERE spread_pct > 0.5"),
+        sql="SELECT COUNT(*) /*spread_observations/extreme_spread*/ FROM platform.spread_observations WHERE spread_pct > 0.5"),
     CrossTableCheck(table="spread_observations", check_name="future_observed_at",
-        sql="SELECT COUNT(*) /*future_observed_at*/ FROM platform.spread_observations WHERE observed_at > now()"),
+        sql="SELECT COUNT(*) /*spread_observations/future_observed_at*/ FROM platform.spread_observations WHERE observed_at > now()"),
     CrossTableCheck(table="risk_state", check_name="null_engine",
-        sql="SELECT COUNT(*) /*null_engine*/ FROM platform.risk_state WHERE engine IS NULL"),
+        sql="SELECT COUNT(*) /*risk_state/null_engine*/ FROM platform.risk_state WHERE engine IS NULL"),
     CrossTableCheck(table="corporate_actions", check_name="orphan_no_prices",
-        sql="SELECT COUNT(*) /*orphan_no_prices*/ FROM platform.corporate_actions ca LEFT JOIN (SELECT DISTINCT ticker FROM platform.prices_daily) p ON p.ticker = ca.ticker WHERE p.ticker IS NULL"),
+        sql="SELECT COUNT(*) /*corporate_actions/orphan_no_prices*/ FROM platform.corporate_actions ca LEFT JOIN (SELECT DISTINCT ticker FROM platform.prices_daily) p ON p.ticker = ca.ticker WHERE p.ticker IS NULL"),
     CrossTableCheck(table="fundamentals_quarterly", check_name="orphan_no_prices",
-        sql="SELECT COUNT(*) /*orphan_no_prices*/ FROM platform.fundamentals_quarterly fq LEFT JOIN (SELECT DISTINCT ticker FROM platform.prices_daily) p ON p.ticker = fq.ticker WHERE p.ticker IS NULL"),
+        sql="SELECT COUNT(*) /*fundamentals_quarterly/orphan_no_prices*/ FROM platform.fundamentals_quarterly fq LEFT JOIN (SELECT DISTINCT ticker FROM platform.prices_daily) p ON p.ticker = fq.ticker WHERE p.ticker IS NULL"),
     CrossTableCheck(table="tradier_options_chains", check_name="null_ticker",
-        sql="SELECT COUNT(*) /*null_ticker*/ FROM platform.tradier_options_chains WHERE ticker IS NULL"),
+        sql="SELECT COUNT(*) /*tradier_options_chains/null_ticker*/ FROM platform.tradier_options_chains WHERE ticker IS NULL"),
     CrossTableCheck(table="tradier_options_chains", check_name="expiration_in_past",
-        sql="SELECT COUNT(*) /*expiration_in_past*/ FROM platform.tradier_options_chains WHERE expiration_date < CURRENT_DATE"),
+        sql="SELECT COUNT(*) /*tradier_options_chains/expiration_in_past*/ FROM platform.tradier_options_chains WHERE expiration_date < CURRENT_DATE"),
     CrossTableCheck(table="tradier_options_chains", check_name="orphan_no_prices",
-        sql="SELECT COUNT(*) /*orphan_no_prices*/ FROM platform.tradier_options_chains tc WHERE NOT EXISTS (SELECT 1 FROM platform.prices_daily_tickers t WHERE t.ticker = tc.ticker)"),
+        sql="SELECT COUNT(*) /*tradier_options_chains/orphan_no_prices*/ FROM platform.tradier_options_chains tc WHERE NOT EXISTS (SELECT 1 FROM platform.prices_daily_tickers t WHERE t.ticker = tc.ticker)"),
 )
 
 _OK = Decimal("1.000")
