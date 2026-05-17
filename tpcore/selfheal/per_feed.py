@@ -25,6 +25,7 @@ from typing import Any
 
 import structlog
 
+from tpcore.feeds.dispatcher import FEED_STAGE
 from tpcore.quality.validation.checks.aaii_sentiment_freshness import (
     check_aaii_sentiment_freshness,
 )
@@ -82,8 +83,15 @@ from tpcore.quality.validation.sources.constituents import FixtureConstituentSou
 from tpcore.quality.validation.sources.delistings import FixtureDelistingsSource
 from tpcore.quality.validation.sources.splits import FixtureSplitsSource
 from tpcore.selfheal.registry import HEAL_SPECS, spec_for
+from tpcore.selfheal.runner import make_canonical_runner
 
 logger = structlog.get_logger(__name__)
+
+# Reverse of the existing feed→stage SoT (spec §2.1: "No new mapping —
+# reuse what exists"). ingest stage name → feed. Values are unique
+# (one schedulable stage per feed); a coverage test pins every entry to
+# ≥1 canonical check so a misaligned new feed fails the build.
+_STAGE_FEED: dict[str, str] = {stage: feed for feed, stage in FEED_STAGE.items()}
 
 RunStage = Callable[[str, dict[str, str]], Awaitable[int]]
 _CheckCallable = Callable[..., Awaitable[CheckResult]]
@@ -218,12 +226,88 @@ async def validate_and_heal_feed(
     return FeedOutcome(feed, not escalated, healed, escalated)
 
 
+def upstream_feeds(feed: str) -> list[str]:
+    """The feeds ``feed`` is derived from — the union of its checks'
+    HealSpec.depends_on (feed names, read LIVE from the registry SoT,
+    not an import snapshot — the cutover-agent lesson, spec §5).
+    Empty ⇒ leaf."""
+    return sorted(
+        {
+            dep
+            for c in feed_checks(feed)
+            if (s := spec_for(c)) is not None
+            for dep in s.depends_on
+        }
+    )
+
+
+def is_leaf_feed(feed: str) -> bool:
+    """Leaf = no check declares a HealSpec.depends_on (spec §3).
+    Derived feeds validate only after every upstream is green this
+    cycle (Phase 3), never on a single upstream's completion."""
+    return not upstream_feeds(feed)
+
+
+async def on_stage_complete(
+    pool: Any,
+    stage_name: str,
+    run_id: str,
+    *,
+    cycle_green: set[str] | None = None,
+) -> FeedOutcome | None:
+    """Per-feed validate-on-completion hook — call after an ingest stage
+    completes OK. Resolves stage→feed via the existing SoT.
+
+    - **Leaf feed** (Phase 2): validate immediately, bounded-heal on red.
+    - **Derived feed** (Phase 3): its own producing stage runs *after*
+      its upstreams' stages, so at this point validate it **only if
+      every** ``upstream_feeds`` went green this cycle (tracked in
+      ``cycle_green``, read live). Any upstream not green ⇒ defer
+      (return ``None``) — the end-of-cycle monolithic gate stays
+      authoritative (spec §4); we never false-fail a derived feed on a
+      red upstream.
+
+    ``cycle_green`` is the in-cycle set of feeds this hook has already
+    validated green (cmd_update owns it across stages). When a feed
+    validates green here it is added, so a later derived feed can see
+    it. ``None`` ⇒ no cycle state (leaf-only, Phase-2 behaviour).
+    Returns ``None`` for infra stages + deferred derived feeds.
+    """
+    feed = _STAGE_FEED.get(stage_name)
+    if feed is None:
+        return None  # infra stage — not a feed producer
+    if not feed_checks(feed):
+        return None
+
+    ups = upstream_feeds(feed)
+    if ups:  # derived feed
+        if cycle_green is None:
+            return None  # no cycle state → defer (Phase-2 compat)
+        missing = [u for u in ups if u not in cycle_green]
+        if missing:
+            logger.info(
+                "per_feed.derived_deferred",
+                feed=feed, stage=stage_name, upstream_not_green=missing,
+            )
+            return None  # final monolithic gate is authoritative
+
+    outcome = await validate_and_heal_feed(
+        pool, feed, make_canonical_runner(run_id)
+    )
+    if outcome.green and cycle_green is not None:
+        cycle_green.add(feed)
+    return outcome
+
+
 __all__ = [
     "FeedOutcome",
     "HealOneResult",
     "RunStage",
     "feed_checks",
     "heal_one",
+    "is_leaf_feed",
+    "on_stage_complete",
+    "upstream_feeds",
     "validate_and_heal_feed",
     "validate_feed",
     "validate_one",

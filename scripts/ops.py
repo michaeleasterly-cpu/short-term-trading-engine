@@ -553,6 +553,14 @@ async def _stage_daily_bars(pool: asyncpg.Pool, config: dict[str, Any]) -> dict[
     # does NOT emit DATA_OPERATIONS_COMPLETE and self-heal/escalation
     # fires at ingest time, not a cycle later. "100% data or don't
     # trade" enforced at the producer, not just the consumer.
+    #
+    # #185 Phase 4 decision (kept, not retired): this coarse guard is a
+    # cheap fail-fast PRE-FILTER, NOT the source of truth. It already
+    # reuses the canonical check's threshold (COVERAGE_COLLAPSE_PCT
+    # below) so it cannot diverge, and the authoritative per-feed
+    # `prices_daily_*` checks now also run on-completion via the
+    # Phase 2/3 tripwire (_per_feed_tripwire). Defense-in-depth — do
+    # NOT grow bespoke logic here; extend the canonical check instead.
     from tpcore.quality.validation.checks.prices_daily_freshness import (
         COVERAGE_COLLAPSE_PCT,
     )
@@ -1714,6 +1722,78 @@ def _market_open_block_reason(now: datetime | None = None) -> str | None:
     )
 
 
+async def _per_feed_tripwire(
+    pool: asyncpg.Pool,
+    stage_name: str,
+    run_id: str,
+    *,
+    log: structlog.stdlib.BoundLogger,
+    db_log,
+    cycle_green: set[str],
+) -> None:
+    """#185 Phase 2/3 — fail-safe wrapper around the per-feed
+    validate-on-completion hook. Resolves stage→feed, validates it
+    immediately and bounded-heals on red (detection a cycle earlier).
+    ``cycle_green`` is the in-cycle set of feeds already validated green
+    this run (Phase 3: a derived feed validates only once every upstream
+    is in it); ``on_stage_complete`` mutates it.
+
+    Hard invariant: this NEVER raises into the ingest cycle and NEVER
+    aborts it. An escalation here is logged + surfaced (forensic
+    visibility), but the authoritative 100%-green decision still belongs
+    to the end-of-cycle data_validation + Step-4 whole-layer self-heal
+    (spec §4). Worst case the hook is a no-op and the final gate catches
+    everything exactly as before this change.
+    """
+    try:
+        from tpcore.selfheal.per_feed import on_stage_complete
+
+        outcome = await on_stage_complete(
+            pool, stage_name, run_id, cycle_green=cycle_green
+        )
+        if outcome is None:
+            return  # infra stage or deferred derived feed — no-op
+        if outcome.green:
+            log.info(
+                "ops.per_feed.green",
+                stage=stage_name, feed=outcome.feed, healed=outcome.healed,
+            )
+            if outcome.healed:
+                await db_log.log(
+                    "SELF_HEAL",
+                    f"per-feed early heal: {outcome.feed} "
+                    f"({', '.join(outcome.healed)})",
+                    severity="INFO",
+                    data={"feed": outcome.feed, "healed": outcome.healed,
+                          "stage": stage_name, "phase": "per_feed_tripwire"},
+                )
+        else:
+            log.warning(
+                "ops.per_feed.escalated",
+                stage=stage_name, feed=outcome.feed,
+                escalated=outcome.escalated,
+            )
+            await db_log.log(
+                "INGESTION_FAILED",
+                f"per-feed tripwire: {outcome.feed} still red "
+                f"(final gate is authoritative) — {outcome.escalated}",
+                severity="WARNING",
+                data={"feed": outcome.feed, "stage": stage_name,
+                      "escalated": outcome.escalated,
+                      "phase": "per_feed_tripwire",
+                      # Not a cycle failure: the end-of-cycle gate
+                      # remains the authority. Marked so the recent-
+                      # error probe doesn't double-count it.
+                      "noise": True},
+            )
+    except Exception as exc:  # noqa: BLE001 — tripwire must never break the cycle
+        log.error(
+            "ops.per_feed.hook_error",
+            stage=stage_name, error=str(exc),
+            exc_type=type(exc).__name__,
+        )
+
+
 async def cmd_update(
     pool: asyncpg.Pool,
     log: structlog.stdlib.BoundLogger,
@@ -1722,6 +1802,7 @@ async def cmd_update(
     dry_run: bool,
     force: bool = False,
     only: set[str] | None = None,
+    per_feed_validate: bool = True,
 ) -> UpdateSummary:
     started_at = datetime.now(UTC)
     summary = UpdateSummary(run_id=db_log._run_id, started_at=started_at, finished_at=started_at)
@@ -1770,6 +1851,11 @@ async def cmd_update(
         summary.finished_at = datetime.now(UTC)
         return summary
 
+    # #185 Phase 3 — in-cycle set of feeds the per-feed tripwire has
+    # validated green this run. A derived feed (fear_greed) validates
+    # only once every upstream feed is in here.
+    cycle_green: set[str] = set()
+
     for name, factory_builder, timeout in _STAGE_SPECS:
         # Profile-driven feed dispatch (#165): when ``only`` is given
         # (the feed dispatcher's due list), run just those stages.
@@ -1781,16 +1867,29 @@ async def cmd_update(
             "data_validation", "forensics", "reconcile",
         ):
             continue
-        summary.stages.append(
-            await _run_stage(
-                name,
-                factory_builder(pool, daily_bars_config),
-                log=log,
-                db_log=db_log,
-                dry_run=dry_run,
-                timeout=timeout,
-            )
+        result = await _run_stage(
+            name,
+            factory_builder(pool, daily_bars_config),
+            log=log,
+            db_log=db_log,
+            dry_run=dry_run,
+            timeout=timeout,
         )
+        summary.stages.append(result)
+        # #185 Phase 2/3 — per-feed validate-on-completion (early
+        # tripwire). Leaf feeds validate on their own stage; a derived
+        # feed validates on its own stage once every upstream went green
+        # this cycle (cycle_green). The standalone single-stage path
+        # does not trigger this (lock-safety, spec §5). Runs inside
+        # run_data_operations.sh's lock (cycle path). Fail-safe: a hook
+        # error NEVER aborts the cycle — the end-of-cycle
+        # data_validation + Step-4 whole-layer self-heal stay the
+        # authoritative 100%-green gate (spec §4).
+        if per_feed_validate and not dry_run and result.status == "OK":
+            await _per_feed_tripwire(
+                pool, name, str(summary.run_id),
+                log=log, db_log=db_log, cycle_green=cycle_green,
+            )
 
     # Self-healing — retry FAILED/TIMEOUT stages once if their error matches
     # the transient class (timeouts, network blips, 429). This addresses the

@@ -1,8 +1,21 @@
 # Per-Feed Validate-on-Completion + Self-Heal-on-Fail — Design
 
-**Status:** draft 2026-05-17 (DATA lane). Brainstorm → **spec (this
-doc)** → plan → phased build. Generalises the producer self-validation
-(#1) from coarse bespoke guards into one canonical mechanism.
+**Status:** **BUILT 2026-05-17** (DATA lane). Brainstorm → spec → plan
+→ **phased build complete** (Phases 1–4, PRs #21/#22/#23 + this doc
+update). Generalises the producer self-validation (#1) from coarse
+bespoke guards into one canonical mechanism.
+
+**Build record:**
+- Phase 1 (PR #21): `tpcore/selfheal/per_feed.py` — `validate_one` /
+  `validate_feed` / `heal_one` / `validate_and_heal_feed`, drift-guarded
+  check registry. Landed dark.
+- Phase 2 (PR #22): `on_stage_complete` + the fail-safe
+  `_per_feed_tripwire` wired into `cmd_update` for **leaf** feeds.
+- Phase 3 (PR #23): `upstream_feeds` + `cycle_green` in-cycle state →
+  derived feeds (fear_greed) validate on their own stage once every
+  upstream went green this cycle.
+- Phase 4 (this doc + guard docstrings): coarse guards **KEPT** as
+  cheap non-authoritative pre-filters — see §6 row 4 / §8 resolution.
 
 Operator directives captured verbatim: *"validation should run per feed
 or data point and a final just checks referential integrity between
@@ -94,10 +107,10 @@ confirms nothing regressed cross-feed.
 
 | Phase | Deliverable |
 |---|---|
-| 1 | `heal_one(pool, check)` + `validate_one(pool, feed)` helpers — pure-ish, reuse the canonical checks + HealSpec + runner; unit-tested. Landed dark. |
-| 2 | Wire the validate→heal hook into the stage runner for **leaf** feeds (after each ingest stage). |
-| 3 | Derived-feed ordering via the `depends_on` graph (defer derived validation until upstreams green). |
-| 4 | Decide #1's coarse guards: keep as defense-in-depth **or** retire now that the canonical check subsumes them (recommend: keep `shrinkage`/`coverage` as a cheap pre-check, but the canonical per-feed check is authoritative — documented, not duplicated logic). |
+| 1 | ✅ `heal_one` + `validate_one`/`validate_feed`/`validate_and_heal_feed` helpers — reuse the canonical checks + HealSpec + runner; unit-tested; landed dark. (PR #21) |
+| 2 | ✅ `on_stage_complete` + fail-safe `_per_feed_tripwire` wired into `cmd_update` for **leaf** feeds. (PR #22) |
+| 3 | ✅ Derived-feed ordering via the live `depends_on` graph + `cycle_green` in-cycle state (defer derived validation until upstreams green). (PR #23) |
+| 4 | ✅ **DECIDED: keep, non-authoritative.** The `coverage` raise (`ops.py _stage_daily_bars`) and `shrinkage` detector (`tpcore/ingestion/csv_archive.py`) are retained as cheap fail-fast PRE-FILTERS. The canonical per-feed `check_<feed>` (now run on-completion via Phases 2/3 + the end-of-cycle monolithic gate) is authoritative. The coverage guard already imports the canonical `COVERAGE_COLLAPSE_PCT` (cannot diverge); both guard docstrings now state "do not accrete bespoke validity logic — extend the canonical check instead". Documented, not duplicated logic — no code retired. |
 
 ## 7. Non-goals
 
@@ -108,10 +121,17 @@ confirms nothing regressed cross-feed.
   hardening; the operator's only touchpoints remain the
   ADD/REMOVE Data Feed Change Request + the weekly digest ack.
 
-## 8. Open questions for the plan phase
+## 8. Open questions — RESOLVED in the build
 
-- Exact stage-runner hook point (`run_data_operations.sh` step vs
-  `ops.py` stage wrapper) — minimise blast radius / collision with the
-  parallel engine lane.
-- Whether Phase 4 retires the coarse guards or keeps them as a fast
-  pre-filter (lean toward keep-but-non-authoritative).
+- **Stage-runner hook point → RESOLVED:** the single chokepoint inside
+  `cmd_update`'s `_STAGE_SPECS` loop (after each `_run_stage` returns
+  OK), via the fail-safe `_per_feed_tripwire` → `on_stage_complete`.
+  Chosen over a `run_data_operations.sh` step: one in-process call site
+  covers every cycle path with minimal blast radius, zero bash edits,
+  and runs inside the existing data-operations lock (spec §5). The
+  standalone single-stage path does NOT trigger it (lock-safety). The
+  hook is fail-safe by construction — it never raises into / aborts the
+  cycle; the end-of-cycle `data_validation` + Step-4 whole-layer
+  self-heal remain the authoritative 100%-green gate (§4).
+- **Phase 4 coarse guards → RESOLVED: keep, non-authoritative** (see
+  §6 row 4). No code retired; defense-in-depth, documented.
