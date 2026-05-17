@@ -218,7 +218,7 @@ _INSERT_SQL = """
 _DISPOSITIONED_EVENT = "ENGINE_ESCALATION_DISPOSITIONED"
 
 _IS_OPEN_SQL = """
-    SELECT e.data->>'hold_id' AS hold_id, e.engine AS engine
+    SELECT e.engine AS engine
     FROM platform.application_log e
     WHERE e.event_type = 'ENGINE_ESCALATED'
       AND (e.data->>'hold_id') = $1
@@ -235,31 +235,40 @@ _IS_OPEN_SQL = """
 """
 
 
+async def _emit(pool, engine: str, event_type: str, severity: str,
+                message: str, payload: dict) -> None:
+    """One application_log row via the locked INSERT (column-order
+    parity with engine_supervisor._emit / weekly_digest._emit)."""
+    async with pool.acquire() as conn:
+        await conn.execute(
+            _INSERT_SQL, engine, uuid.uuid4(), event_type, severity,
+            message, json.dumps(payload, default=str))
+
+
 async def disposition(pool, hold_id: str, verb: str, note: str) -> int:
     """Record an operator disposition for an open engine escalation.
     Accepts BOTH held and escalate-only hold_ids (validity is the
-    open-escalation predicate, NOT current_hold). 0 ok; non-zero +
-    NO write on a bad verb or an unknown/not-open hold_id."""
+    open-escalation predicate, NOT current_hold). Returns 0 on success,
+    1 on a bad verb, 2 on an unknown/not-open hold_id."""
     try:
         disp = EngineEscalationDisposition(verb.strip().lower())
     except ValueError:
         logger.error("engine_ladder.bad_verb", verb=verb)
-        return 2
+        return 1
     async with pool.acquire() as conn:
         rows = await conn.fetch(_IS_OPEN_SQL, hold_id)
     if not rows:
         logger.error("engine_ladder.unknown_or_not_open", hold_id=hold_id)
         return 2
     first = rows[0]
-    engine = (first.get("engine") if isinstance(first, dict)
-              else first["engine"]) or "engine"
+    engine = first["engine"]
+    if not engine:
+        logger.error("engine_ladder.escalation_missing_engine", hold_id=hold_id)
+        return 2
     payload = {"schema": 1, "hold_id": hold_id,
                "disposition": disp.value, "note": note}
-    async with pool.acquire() as conn:
-        await conn.execute(
-            _INSERT_SQL, engine, uuid.uuid4(), _DISPOSITIONED_EVENT,
-            "INFO", f"escalation {hold_id} dispositioned: {disp.value}",
-            json.dumps(payload, default=str))
+    await _emit(pool, engine, _DISPOSITIONED_EVENT, "INFO",
+                f"escalation {hold_id} dispositioned: {disp.value}", payload)
     logger.info("engine_ladder.dispositioned", hold_id=hold_id,
                 disposition=disp.value)
     return 0

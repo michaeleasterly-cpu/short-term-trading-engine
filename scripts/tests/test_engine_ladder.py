@@ -160,7 +160,7 @@ def _rec_pool(open_hold_ids):
         async def acquire(self):
             yield c
     p = _P()
-    p._c = c
+    p.conn = c
     return p
 
 
@@ -168,7 +168,7 @@ async def test_disposition_emits_locked_event_for_valid_verb():
     pool = _rec_pool({"h9"})
     rc = await el.disposition(pool, "h9", "Structural", "the note")
     assert rc == 0
-    ins = [a for s, a in pool._c.inserts
+    ins = [a for s, a in pool.conn.inserts
            if "INSERT INTO platform.application_log" in s]
     assert len(ins) == 1
     payload = _json.loads(ins[0][-1])
@@ -180,18 +180,39 @@ async def test_disposition_emits_locked_event_for_valid_verb():
 async def test_disposition_rejects_unknown_verb_no_write():
     pool = _rec_pool({"h9"})
     rc = await el.disposition(pool, "h9", "bogus", "")
-    assert rc != 0
-    assert not any("INSERT" in s for s, _ in pool._c.inserts)
+    assert rc == 1
+    assert not any("INSERT" in s for s, _ in pool.conn.inserts)
 
 
 async def test_disposition_rejects_unknown_or_not_open_hold_no_write():
     pool = _rec_pool(set())
     rc = await el.disposition(pool, "h9", "structural", "")
-    assert rc != 0
-    assert not any("INSERT" in s for s, _ in pool._c.inserts)
+    assert rc == 2
+    assert not any("INSERT" in s for s, _ in pool.conn.inserts)
 
 
 async def test_disposition_accepts_escalate_only_hold_id():
     pool = _rec_pool({"e1"})
     rc = await el.disposition(pool, "e1", "converted", "fixed it")
     assert rc == 0
+
+
+async def test_disposition_missing_engine_surfaces_no_write():
+    class _C:
+        def __init__(self): self.inserts = []
+        async def fetch(self, sql, *a):
+            if "ENGINE_ESCALATED" in sql:
+                return [{"engine": None}]
+            return []
+        async def execute(self, sql, *a):
+            self.inserts.append((sql, a))
+    c = _C()
+    class _P:
+        @contextlib.asynccontextmanager
+        async def acquire(self):
+            yield c
+    p = _P()
+    p.conn = c
+    rc = await el.disposition(p, "hx", "structural", "")
+    assert rc == 2
+    assert p.conn.inserts == []
