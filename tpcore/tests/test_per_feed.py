@@ -19,6 +19,7 @@ from tpcore.selfheal.per_feed import (
     heal_one,
     is_leaf_feed,
     on_stage_complete,
+    upstream_feeds,
     validate_and_heal_feed,
     validate_feed,
     validate_one,
@@ -231,8 +232,8 @@ async def test_on_stage_complete_infra_stage_is_noop() -> None:
     assert await on_stage_complete(_POOL, "data_validation", "rid") is None
 
 
-async def test_on_stage_complete_derived_feed_deferred() -> None:
-    # fear_greed is derived → Phase 3 territory, not validated here.
+async def test_on_stage_complete_derived_no_cycle_state_defers() -> None:
+    # No cycle_green (Phase-2 compat / standalone) → derived defers.
     assert await on_stage_complete(_POOL, "fear_greed", "rid") is None
 
 
@@ -263,3 +264,59 @@ async def test_on_stage_complete_leaf_red_heals(monkeypatch) -> None:
     assert out is not None and out.green
     assert out.healed == ["prices_daily_completeness"]
     assert rs.calls == [("daily_bars", {"k": "v"})]
+
+
+# --- Phase 3: derived-feed depends_on ordering ----------------------
+
+def test_upstream_feeds_resolves_from_live_registry() -> None:
+    assert upstream_feeds("fear_greed") == ["macro_indicators", "prices_daily"]
+    assert upstream_feeds("prices_daily") == []  # leaf
+
+
+async def test_leaf_green_records_into_cycle_green(monkeypatch) -> None:
+    _patch_feed(monkeypatch, "prices_daily", {})
+
+    async def _never(stage, params):
+        raise AssertionError("runner invoked on green feed")
+
+    monkeypatch.setattr(per_feed, "make_canonical_runner", lambda r: _never)
+    cg: set[str] = set()
+    out = await on_stage_complete(_POOL, "daily_bars", "rid", cycle_green=cg)
+    assert out is not None and out.green
+    assert cg == {"prices_daily"}  # visible to a later derived feed
+
+
+async def test_derived_deferred_when_upstreams_not_all_green(
+    monkeypatch,
+) -> None:
+    async def boom(stage, params):
+        raise AssertionError("derived validated despite a red upstream")
+
+    monkeypatch.setattr(per_feed, "make_canonical_runner", lambda r: boom)
+    # only one of the two upstreams is green
+    cg = {"prices_daily"}
+    out = await on_stage_complete(
+        _POOL, "fear_greed", "rid", cycle_green=cg
+    )
+    assert out is None  # macro_indicators missing → deferred
+    assert "fear_greed" not in cg
+
+
+async def test_derived_validates_when_all_upstreams_green(
+    monkeypatch,
+) -> None:
+    async def ok(pool):
+        return _cr(True)
+
+    monkeypatch.setitem(per_feed._CHECK_FN, "fear_greed_freshness", ok)
+
+    async def _never(stage, params):
+        raise AssertionError("runner invoked on green derived feed")
+
+    monkeypatch.setattr(per_feed, "make_canonical_runner", lambda r: _never)
+    cg = {"prices_daily", "macro_indicators"}
+    out = await on_stage_complete(
+        _POOL, "fear_greed", "rid", cycle_green=cg
+    )
+    assert out is not None and out.green and out.feed == "fear_greed"
+    assert "fear_greed" in cg  # now visible to any further derived feed
