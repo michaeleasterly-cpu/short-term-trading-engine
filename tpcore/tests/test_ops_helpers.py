@@ -221,6 +221,22 @@ class _FakeConn:
         # Only one fetchval site in _stage_daily_bars: the bar-count check.
         return self._count
 
+    async def fetch(self, sql, *args):
+        # Producer self-validation's post-ingest coverage query. Simulate
+        # a HEALTHY post-ingest DB: the real target_session (the same
+        # previous_close ops.py computes) plus 20 trailing sessions, all
+        # at full coverage — so the collapse guard passes and this test
+        # exercises the under-threshold handler path, not the guard.
+        from datetime import UTC, datetime, timedelta
+
+        from tpcore.calendar import previous_close
+
+        tgt = previous_close(datetime.now(UTC)).date()
+        return [
+            {"date": tgt - timedelta(days=i), "n": 7_000}
+            for i in range(21)
+        ]
+
 
 class _FakeCM:
     def __init__(self, conn):
