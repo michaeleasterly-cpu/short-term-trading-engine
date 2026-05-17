@@ -172,7 +172,8 @@ class RiskGovernor:
     ) -> None:
         self._store = state_store
         self._broker = broker
-        self._limits = limits or RiskLimits()
+        self._default_limits = limits or RiskLimits()
+        self._engine_limits: dict[str, RiskLimits] = {}
         self._platform_capital = platform_capital
         # asyncpg pool for the optional cost gate (B6). When ``None``
         # ``check_cost`` short-circuits ALLOW so tests without a DB
@@ -181,14 +182,26 @@ class RiskGovernor:
 
     @property
     def limits(self) -> RiskLimits:
-        return self._limits
+        return self._default_limits
 
     async def register_engine(
         self,
         engine_id: str,
         engine_equity: Decimal,
+        limits: RiskLimits | None = None,
     ) -> RiskState:
-        """Create initial state for an engine. Idempotent — won't clobber existing."""
+        """Create initial state for an engine. Idempotent — won't clobber existing.
+
+        ``limits`` overrides the governor's default ``RiskLimits`` for this
+        engine only. Engines that pass nothing (reversion/vector) keep the
+        global default — batch engines (momentum holds ~130 names) pass a
+        wider ``max_open_positions`` so the global cap doesn't block them.
+        Limits are (re)recorded on every call — even when state already
+        exists — so a config/profile change is picked up on the next
+        process registration.
+        """
+        if limits is not None:
+            self._engine_limits[engine_id] = limits
         existing = await self._store.get(engine_id)
         if existing is not None:
             return existing
@@ -200,7 +213,12 @@ class RiskGovernor:
             weekly_reset_at=next_monday_open(now),
         )
         await self._store.put(state)
-        logger.info("tpcore.risk.engine_registered", engine=engine_id, equity=str(engine_equity))
+        logger.info(
+            "tpcore.risk.engine_registered",
+            engine=engine_id,
+            equity=str(engine_equity),
+            limits=limits.model_dump(mode="json") if limits is not None else "default",
+        )
         return state
 
     async def state_for(self, engine_id: str) -> RiskState | None:
@@ -263,30 +281,32 @@ class RiskGovernor:
                 reason=f"kill switch active: {state.kill_switch_reason or 'unspecified'}",
             )
 
-        daily_floor = -(state.engine_equity * self._limits.daily_loss_pct)
+        limits = self._engine_limits.get(engine_id, self._default_limits)
+
+        daily_floor = -(state.engine_equity * limits.daily_loss_pct)
         if state.daily_pnl <= daily_floor:
             return CheckResult(
                 RiskDecision.BLOCK,
                 reason=f"daily loss cap hit ({state.daily_pnl} ≤ {daily_floor})",
             )
-        weekly_floor = -(state.engine_equity * self._limits.weekly_loss_pct)
+        weekly_floor = -(state.engine_equity * limits.weekly_loss_pct)
         if state.weekly_pnl <= weekly_floor:
             return CheckResult(
                 RiskDecision.BLOCK,
                 reason=f"weekly loss cap hit ({state.weekly_pnl} ≤ {weekly_floor})",
             )
-        if state.open_positions >= self._limits.max_open_positions:
+        if state.open_positions >= limits.max_open_positions:
             return CheckResult(
                 RiskDecision.BLOCK,
                 reason=(
                     f"max concurrent positions hit "
-                    f"({state.open_positions} ≥ {self._limits.max_open_positions})"
+                    f"({state.open_positions} ≥ {limits.max_open_positions})"
                 ),
             )
 
         if direction is OrderSide.BUY:
             exposure = await self._platform_net_long_after(size)
-            cap = self._limits.platform_net_long_cap_pct
+            cap = limits.platform_net_long_cap_pct
             if self._platform_capital > 0 and exposure / self._platform_capital > cap:
                 return CheckResult(
                     RiskDecision.BLOCK,

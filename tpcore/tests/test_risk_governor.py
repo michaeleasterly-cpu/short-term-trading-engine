@@ -5,6 +5,8 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import AsyncMock
 
+import pytest
+
 from tpcore.interfaces.broker import OrderSide, Position
 from tpcore.risk.governor import (
     InMemoryRiskStateStore,
@@ -318,3 +320,45 @@ async def test_state_for_returns_snapshot_for_registered_engine() -> None:
     assert state.kill_switch_active is False
     assert state.daily_pnl == Decimal("0")
     assert state.open_positions == 0
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Per-engine RiskLimits (D1a)
+# ────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def fake_broker() -> AsyncMock:
+    """Minimal broker mirroring ``_broker_with_positions()`` — no positions."""
+    return _broker_with_positions()
+
+
+def test_register_engine_accepts_limits_param() -> None:
+    import inspect
+
+    from tpcore.risk.governor import RiskGovernor
+
+    sig = inspect.signature(RiskGovernor.register_engine)
+    assert "limits" in sig.parameters  # per-engine limits param (D1a)
+
+
+async def test_per_engine_limits_override_default(fake_broker: AsyncMock) -> None:
+    gov = RiskGovernor(state_store=InMemoryRiskStateStore(), broker=fake_broker)
+    await gov.register_engine("reversion", Decimal("10000"))  # default limits
+    await gov.register_engine(
+        "momentum",
+        Decimal("10000"),
+        limits=RiskLimits(max_open_positions=150),
+    )
+    st = await gov.state_for("momentum")
+    st = st.model_copy(update={"open_positions": 120})
+    await gov._store.put(st)
+    res = await gov.check_trade("momentum", Decimal("100"), OrderSide.BUY)
+    assert res.decision.name == "ALLOW"
+
+    rv = await gov.state_for("reversion")
+    rv = rv.model_copy(update={"open_positions": 9})
+    await gov._store.put(rv)
+    res2 = await gov.check_trade("reversion", Decimal("100"), OrderSide.BUY)
+    assert res2.decision.name == "BLOCK"
+    assert "max concurrent positions" in (res2.reason or "")
