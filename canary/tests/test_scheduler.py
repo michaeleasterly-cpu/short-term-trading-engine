@@ -94,3 +94,48 @@ async def test_startup_emitted_before_setup_crash():
 
     assert rec["startup"] == 1  # STARTUP emitted BEFORE the crash
     assert rec["shutdown"] == 1  # SHUTDOWN emitted in finally (exit_code=1)
+
+
+async def test_run_components_detects_prior_canary_spy_holding():
+    """CAN-CR-1 regression: prior_qty must be >0 when a SPY position
+    exists that the canary opened (cid prefixed 'ca_'). The old
+    getattr(p,'engine_id') guard made this permanently 0."""
+    from canary.scheduler import _run_components
+
+    class _Pos:
+        def __init__(self, symbol, qty):
+            self.symbol = symbol
+            self.qty = qty
+
+    class _Ord:
+        def __init__(self, symbol, cid):
+            self.symbol = symbol
+            self.client_order_id = cid
+
+    class _Conn:
+        async def fetchrow(self, *a, **k): return {"close": Decimal("500")}
+
+    class _Pool:
+        def acquire(self):
+            class _Cm:
+                async def __aenter__(s): return _Conn()
+                async def __aexit__(s, *a): return False
+            return _Cm()
+
+    class _Broker:
+        async def get_positions(self):
+            return [_Pos("SPY", 1), _Pos("AAPL", 9)]
+        async def list_recent_orders(self, limit=500):
+            return [_Ord("SPY", "ca_SPY_20260506"),   # canary's own
+                    _Ord("AAPL", "rv_AAPL_20260506")]  # another engine
+        async def place_order(self, o): ...
+
+    comp = await _run_components(_Pool(), _Broker(), object(), object())
+    assert comp.prior_qty == 1          # SPY held via a ca_ order
+    assert comp.price == Decimal("500")
+    # negative control: a SPY position with NO canary order ⇒ not counted
+    class _Broker2(_Broker):
+        async def list_recent_orders(self, limit=500):
+            return [_Ord("SPY", "sn_SPY_x")]  # sentinel's, not canary's
+    comp2 = await _run_components(_Pool(), _Broker2(), object(), object())
+    assert comp2.prior_qty == 0

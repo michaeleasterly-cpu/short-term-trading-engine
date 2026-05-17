@@ -43,7 +43,7 @@ from tpcore.interfaces.broker import (
     TimeInForce,
 )
 from tpcore.logging import DBLogHandler
-from tpcore.order_ids import ENGINE_PREFIX, build_cid
+from tpcore.order_ids import ENGINE_PREFIX, build_cid, is_engine_cid
 from tpcore.risk.batch_gate import gate_batch_order
 from tpcore.risk.governor import RiskGovernor
 from tpcore.risk.limits_profile import limits_for
@@ -77,7 +77,9 @@ async def _run_components(pool, broker, governor, db_log) -> _Components:
     caller (run_once) — startup() has already been awaited on it before
     this function is called; the same object is returned as comp.db_log
     so subsequent signal()/order_submitted() calls hit it correctly."""
-    from tpcore.aar import AARWriter  # noqa: PLC0415 — deferred; test patches _run_components
+    from tpcore.aar import (
+        AARWriter,  # noqa: PLC0415 — lazy: _run_components is skipped entirely on non-trading days
+    )
     writer = AARWriter(pool)
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
@@ -87,10 +89,21 @@ async def _run_components(pool, broker, governor, db_log) -> _Components:
         )
     price = Decimal(str(row["close"])) if row else Decimal("0")
     positions = await broker.get_positions()
+    # Prior canary SPY holding: a SPY position the canary itself opened.
+    # Position has no engine_id; cross-reference recent orders by the
+    # canary client_order_id prefix — the sentinel idiom
+    # (_filter_to_engine_holdings / is_engine_cid in sentinel/scheduler.py).
+    try:
+        recent = await broker.list_recent_orders(limit=500)
+    except Exception:  # noqa: BLE001 — no recent-orders source ⇒ treat as flat
+        recent = []
+    canary_symbols = {
+        o.symbol for o in recent
+        if is_engine_cid(getattr(o, "client_order_id", None), "canary")
+    }
     prior_qty = sum(
         int(p.qty) for p in positions
-        if p.symbol == CANARY_TICKER
-        and getattr(p, "engine_id", "") == "canary"
+        if p.symbol == CANARY_TICKER and p.symbol in canary_symbols
     )
     return _Components(
         db_log=db_log,
