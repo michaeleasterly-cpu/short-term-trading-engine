@@ -7,7 +7,7 @@
 #                          final stage `forensics` scans aar_events for
 #                          drawdown / loss-cluster / outlier-loss triggers
 #                          and writes Sprint Dossiers under docs/sprints/).
-#   2. VERIFY            — scripts/run_audit_all_tables.sh
+#   2. VERIFY            — tpcore.auditheal (cross-table audit + auto-remediation)
 #   3. VERIFY            — scripts/run_stage.sh data_validation
 #   4. SELF-HEAL         — re-validate; if a daily-bars completeness/
 #                          freshness check is red, the pipeline runs the
@@ -151,17 +151,22 @@ if [[ $UPDATE_RC -ne 0 ]]; then
     exit $UPDATE_RC
 fi
 
-# Step 3 — cross-reference audit.
+# Step 3 — cross-table referential audit + auto-remediation
+# (#186(5)). tpcore.auditheal runs the structured cross-table audit,
+# auto-runs the proven cross_ref_cleanup remediation for the
+# tradier_options_chains expired/orphan class, re-audits, and exits
+# 1 on any unremediated/escalate-only red (now an ENFORCED gate —
+# previously audit_all_tables always exited 0).
 echo ""
-echo "▶ STEP 3 / 6  verify cross-table integrity"
+echo "▶ STEP 3 / 6  cross-table audit + auto-remediation"
 echo "────────────────────────────────────────────────────────────────────────"
 _log_event INGESTION_START wrapper_audit
-scripts/run_audit_all_tables.sh
+DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python -m tpcore.auditheal
 AUDIT_RC=$?
 if [[ $AUDIT_RC -ne 0 ]]; then
     _log_event INGESTION_FAILED wrapper_audit "audit exited $AUDIT_RC"
-    echo "✗ audit_all_tables exited $AUDIT_RC"
-    _notify_failure "audit_all_tables" $AUDIT_RC
+    echo "✗ auditheal exited $AUDIT_RC"
+    _notify_failure "auditheal" $AUDIT_RC
     exit $AUDIT_RC
 fi
 _log_event INGESTION_COMPLETE wrapper_audit
