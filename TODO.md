@@ -294,6 +294,24 @@ This is the path to the operator never touching data again. Until every
 item above is done, the "runs on its own" mandate is only partially met
 and that must be stated plainly, not glossed.
 
+## #186 — Remaining deterministic data agents
+
+- ✅ **candidate (5): audit-driven referential remediation — DONE
+  2026-05-17.** `tpcore/auditheal/` — structured cross-table audit
+  (`tpcore/audit/cross_table.py`, persisted to `data_quality_log` as
+  `cross_table_audit.*` rows) + bounded `cross_ref_cleanup` remediation
+  loop + ENFORCED Step-3 gate (previously theatre: `audit_all_tables.py`
+  always exited 0, a 🔴 printed and the cycle continued). Launch scope
+  strictly the two `tradier_options_chains` checks (expired / orphan);
+  all other cross-table checks are escalate-only. PRs #26 (P1 structured
+  audit + persistence), #28 (P2 `tpcore/auditheal` loop, dark), #29
+  (P3 wire Step 3 + enforce gate).
+- **candidates (3)/(4): largely realized by #165** (per-feed cadence
+  profile, TRIGGER facet, TARGETING, PUBLICATION — see WEEK GOAL §3a-c
+  above). Remaining: incremental per-adapter targeting/probe rollout
+  (each a one-entry increment, not unbuilt architecture).
+- **candidate (6): schema/contract-drift sentinel — OPEN.** No spec yet.
+
 ## Engine structural redesign (post-2026-05-15 sweep)
 
 The 2026-05-15 parameter sweeps validated the targeted fixes (Sigma SPY-
