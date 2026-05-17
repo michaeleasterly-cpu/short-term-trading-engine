@@ -1,10 +1,21 @@
 # Adapter Contract-Population Sentinel (schema/contract-drift) — Design
 
-**Status:** spec 2026-05-17 (DATA lane, **v2 — reframed**). Brainstorm
-→ spec → **(this doc, v2)** → plan → phased subagent build. #186
+**Status:** BUILT 2026-05-17 (DATA lane, **v2 — reframed**). Brainstorm
+→ spec → **(this doc, v2)** → plan → **phased build complete** (P1–P4). #186
 candidate (6), the last genuinely-unbuilt agent of the "remaining
 deterministic data agents" epic (cand (5) auditheal shipped
 2026-05-17; (3)/(4) largely realized by #165).
+
+**Build record:**
+- P1 (PR #32): `tpcore/ingestion/adapter_contract.py` — `ADAPTER_CONTRACTS`
+  SoT (all 12 CSV-first feeds), `assert_contract_populated` helper. Landed dark
+  (not yet wired into handlers).
+- P2 (PR #33): enforce in 4 high-risk handlers (fred_macro /
+  iborrowdesk_borrow_rates / finra_short_interest / apewisdom_social_sentiment);
+  rest declared `guard_pending`.
+- P3 (PR #35): thin Step-4c `adapter_contract` known_knowns check —
+  coverage/visibility + `guard_pending` WARN + 24h-escalation FAIL.
+- P4 (this doc update): CLAUDE.md / TODO.md / spec reconciled to shipped reality.
 
 **v2 reframe (2026-05-17).** v1 assumed the handler sees *raw vendor
 records with vendor keys* to assert. Verified false across all 4
