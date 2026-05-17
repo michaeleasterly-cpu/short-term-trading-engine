@@ -14,6 +14,7 @@ docs/superpowers/specs/2026-05-17-event-driven-engine-services-design.md.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time, timedelta
 from enum import StrEnum
 
@@ -21,6 +22,7 @@ import structlog
 from pydantic import BaseModel, ConfigDict
 
 from tpcore import calendar as cal
+from tpcore.quality.validation.capital_gate import assert_passed_for_engine
 
 logger = structlog.get_logger(__name__)
 
@@ -93,3 +95,71 @@ def _cadence_window_start(profile: EngineProfile, now: datetime) -> datetime:
         sessions = cal.sessions_in_range(_week_start_date(d), d)
         return _midnight_utc(sessions[0] if sessions else d)
     return _midnight_utc(d)  # unknown → narrowest safe window (today)
+
+
+@dataclass(frozen=True)
+class FireDecision:
+    fire: bool
+    reason: str
+    checks: dict[str, bool] = field(default_factory=dict)
+
+
+_RUN_START_EVENT = "STARTUP"  # tpcore/logging/db_handler.py:115 (canonical run-start)
+
+
+async def _already_ran(engine: str, pool, window_start: datetime) -> bool:
+    async with pool.acquire() as conn:
+        hit = await conn.fetchval(
+            """
+            SELECT 1 FROM platform.application_log
+            WHERE engine = $1 AND event_type = $2 AND recorded_at >= $3
+            LIMIT 1
+            """,
+            engine, _RUN_START_EVENT, window_start,
+        )
+    return hit is not None
+
+
+async def should_fire(engine: str, now: datetime, pool) -> FireDecision:
+    """Fail-CLOSED gate: True only if every precondition holds.
+
+    Order (short-circuit): profiled → cadence boundary → market closed
+    → data ready (capital_gate) → not already run this cycle. ANY
+    error/ambiguity → fire=False (never trade on doubt).
+    """
+    checks: dict[str, bool] = {}
+    try:
+        profile = profile_for(engine)
+        checks["profiled"] = profile is not None
+        if profile is None:
+            return FireDecision(False, "unprofiled engine", checks)
+
+        checks["cadence"] = _cadence_boundary(profile, now)
+        if not checks["cadence"]:
+            return FireDecision(False, "not a cadence boundary", checks)
+
+        if profile.market_closed_required:
+            closed = not cal.session_contains(now)
+            checks["market_closed"] = closed
+            if not closed:
+                return FireDecision(False, "market open", checks)
+        else:
+            checks["market_closed"] = True
+
+        try:
+            await assert_passed_for_engine(pool, engine)
+            checks["data_ready"] = True
+        except Exception as exc:  # noqa: BLE001 — any data-gate failure = not ready
+            checks["data_ready"] = False
+            return FireDecision(False, f"data not ready: {exc}", checks)
+
+        ran = await _already_ran(engine, pool, _cadence_window_start(profile, now))
+        checks["not_already_run"] = not ran
+        if ran:
+            return FireDecision(False, "already ran this cycle", checks)
+
+        return FireDecision(True, "ready", checks)
+    except Exception as exc:  # noqa: BLE001 — fail-closed on ANYTHING unexpected
+        logger.warning("tpcore.engine_profile.should_fire_error",
+                        engine=engine, error=str(exc))
+        return FireDecision(False, f"error: {exc}", checks)

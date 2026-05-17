@@ -1,5 +1,6 @@
+import contextlib
 from datetime import UTC, date, datetime
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from pydantic import ValidationError
@@ -8,9 +9,11 @@ from tpcore.engine_profile import (
     _PROFILE,
     Cadence,
     EngineProfile,
+    FireDecision,
     _cadence_boundary,
     _cadence_window_start,
     profile_for,
+    should_fire,
 )
 
 
@@ -80,3 +83,73 @@ def test_weekly_window_start_is_week_first_session_midnight():
     with patch("tpcore.engine_profile.cal.sessions_in_range", return_value=[date(2026, 5, 4), date(2026, 5, 5)]):
         ws = _cadence_window_start(profile_for("allocator"), datetime(2026, 5, 5, 13, 0, tzinfo=UTC))
         assert ws == datetime(2026, 5, 4, 0, 0, tzinfo=UTC)
+
+
+class _FakeConn:
+    def __init__(self, ran: bool):
+        self._ran = ran
+
+    async def fetchval(self, *_a, **_k):
+        return 1 if self._ran else None
+
+
+class _FakePool:
+    def __init__(self, ran: bool = False):
+        self._ran = ran
+
+    @contextlib.asynccontextmanager
+    async def acquire(self):
+        yield _FakeConn(self._ran)
+
+
+def _patch_all(*, boundary=True, closed=True, data_ok=True):
+    cm = contextlib.ExitStack()
+    cm.enter_context(patch("tpcore.engine_profile._cadence_boundary", return_value=boundary))
+    cm.enter_context(patch("tpcore.engine_profile.cal.session_contains", return_value=not closed))
+    ag = AsyncMock(return_value=None) if data_ok else AsyncMock(side_effect=RuntimeError("stale"))
+    cm.enter_context(patch("tpcore.engine_profile.assert_passed_for_engine", ag))
+    return cm
+
+
+async def test_should_fire_all_green_fires():
+    with _patch_all():
+        d = await should_fire("reversion", datetime(2026, 5, 5, 21, 30, tzinfo=UTC), _FakePool(ran=False))
+    assert isinstance(d, FireDecision)
+    assert d.fire is True and d.reason == "ready"
+    assert d.checks == {"profiled": True, "cadence": True, "market_closed": True,
+                        "data_ready": True, "not_already_run": True}
+
+
+async def test_unknown_engine_fail_closed():
+    d = await should_fire("nope", datetime(2026, 5, 5, 21, 30, tzinfo=UTC), _FakePool())
+    assert d.fire is False and "unprofiled" in d.reason and d.checks["profiled"] is False
+
+
+async def test_not_a_cadence_boundary_no_fire():
+    with _patch_all(boundary=False):
+        d = await should_fire("momentum", datetime(2026, 5, 5, 21, 30, tzinfo=UTC), _FakePool())
+    assert d.fire is False and d.reason == "not a cadence boundary"
+
+
+async def test_market_open_no_fire():
+    with _patch_all(closed=False):
+        d = await should_fire("reversion", datetime(2026, 5, 5, 15, 0, tzinfo=UTC), _FakePool())
+    assert d.fire is False and d.reason == "market open"
+
+
+async def test_data_not_ready_no_fire():
+    with _patch_all(data_ok=False):
+        d = await should_fire("reversion", datetime(2026, 5, 5, 21, 30, tzinfo=UTC), _FakePool())
+    assert d.fire is False and d.reason.startswith("data not ready")
+
+
+async def test_already_ran_this_cycle_no_fire():
+    with _patch_all():
+        d = await should_fire("reversion", datetime(2026, 5, 5, 21, 30, tzinfo=UTC), _FakePool(ran=True))
+    assert d.fire is False and d.reason == "already ran this cycle"
+
+
+async def test_exception_in_check_fails_closed():
+    with patch("tpcore.engine_profile._cadence_boundary", side_effect=RuntimeError("boom")):
+        d = await should_fire("reversion", datetime(2026, 5, 5, 21, 30, tzinfo=UTC), _FakePool())
+    assert d.fire is False and d.reason.startswith("error:")
