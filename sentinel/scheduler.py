@@ -9,8 +9,16 @@ Cadence
 -------
 Sentinel checks the Bear Score *daily* but rebalances *only* on state
 transitions (DORMANT/EXITED → WATCH, WATCH → ACTIVE, ACTIVE → FADING,
-FADING → EXITED). The scheduler is safe to call every trading day —
-it'll no-op on a no-transition day rather than submitting churn orders.
+FADING → EXITED) — it no-ops on a no-transition day rather than
+submitting churn orders. The DAILY trading-day cadence boundary is
+enforced **exactly once** — by the Python dispatcher
+(``ops/engine_dispatch.py``) via ``tpcore.engine_profile.should_fire``
+(sentinel profile = ``DAILY``). The scheduler itself NO LONGER carries
+an internal trading-day gate (the old ``is_trading_day`` early-return
+was redundant double-gating and was deleted on 2026-05-17). ``--force``
+is kept as the documented operator escape-hatch flag for direct manual
+``python -m sentinel.scheduler`` runs (parity with momentum's
+``--force-rebalance``; no internal cadence remains for it to bypass).
 
 Responsibilities each run
 -------------------------
@@ -54,7 +62,6 @@ from sentinel.plugs.setup_detection import (
     fetch_spy_close,
 )
 from tpcore.alpaca import AlpacaPaperBrokerAdapter
-from tpcore.calendar import is_trading_day
 from tpcore.db import build_asyncpg_pool
 from tpcore.interfaces.broker import (
     Order,
@@ -98,10 +105,18 @@ class SentinelScheduler:
         platform_equity_usd: Decimal = Decimal("100000"),
         graduated: bool = False,
         submit_orders: bool = True,
+        force: bool = False,
     ) -> None:
         self._platform_equity = platform_equity_usd
         self._graduated = graduated
         self._submit = submit_orders
+        # Operator escape hatch for direct manual `python -m
+        # sentinel.scheduler` invocation, kept for parity with momentum's
+        # --force-rebalance. Cadence (DAILY trading-day boundary) is
+        # enforced by the dispatcher via tpcore.engine_profile — there is
+        # no remaining internal cadence gate for this flag to bypass, so
+        # it is an accepted, documented no-op-compatible flag.
+        self._force = force
 
     async def run_once(self, as_of: date_t | None = None) -> dict[str, object]:
         as_of = as_of or datetime.now(UTC).date()
@@ -140,14 +155,15 @@ class SentinelScheduler:
                 )
                 return {"as_of": as_of.isoformat(), "action": "kill_switch_halt"}
 
-            # Trading-day gate — no-op on weekends/holidays. Mandatory per
-            # STYLE_GUIDE; tpcore.calendar wraps exchange_calendars XNYS.
-            as_of_dt = datetime.combine(as_of, datetime.min.time(), tzinfo=UTC)
-            if not is_trading_day(as_of_dt):
-                logger.info(
-                    "sentinel.scheduler.non_trading_day", as_of=as_of.isoformat(),
-                )
-                return {"as_of": as_of.isoformat(), "action": "non_trading_day"}
+            # Cadence is NOT gated here. The DAILY (trading-day) boundary
+            # is enforced exactly once — by the Python dispatcher
+            # (ops/engine_dispatch.py) via
+            # tpcore.engine_profile.should_fire (sentinel profile =
+            # DAILY), operator directive 2026-05-17 (event-driven engine
+            # services). The old in-scheduler is_trading_day early-return
+            # was redundant double-gating and has been deleted so
+            # engine_profile is the SOLE cadence authority. If this
+            # scheduler is invoked at all, it runs its Bear-Score check.
 
             # Replay phases over a rolling window so we don't need to
             # persist daily state — derivable from breakdowns + SPY.
@@ -373,6 +389,19 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--platform-equity", type=Decimal, default=Decimal("100000"))
     p.add_argument("--graduated", action="store_true")
+    p.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "Operator escape hatch for direct manual `python -m "
+            "sentinel.scheduler` invocation. Cadence (DAILY trading-day "
+            "boundary) is enforced by the dispatcher via "
+            "tpcore.engine_profile — the scheduler no longer has an "
+            "internal cadence gate to bypass. Kept as an accepted, "
+            "documented no-op-compatible flag for manual runs and parity "
+            "with momentum's --force-rebalance."
+        ),
+    )
     return p.parse_args(argv)
 
 
@@ -381,6 +410,7 @@ async def amain(args: argparse.Namespace) -> int:
         platform_equity_usd=args.platform_equity,
         graduated=args.graduated,
         submit_orders=not args.dry_run,
+        force=args.force,
     )
     summary = await sched.run_once(as_of=args.as_of)
     print(summary)

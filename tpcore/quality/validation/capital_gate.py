@@ -99,6 +99,18 @@ def _required_sources(engine: str) -> frozenset[str]:
     return frozenset(req) if req else EXPECTED_SOURCES
 
 
+def _is_red(row: dict, max_age_days: int) -> bool:
+    """The single per-row red predicate. A latest-run row counts as a
+    failing check iff it is marked ``stale``. ``max_age_days`` is part
+    of the signature because run-level staleness is a separate, global
+    concern handled by the callers (a globally-stale run can't be
+    trusted for ANY source); it is intentionally unused here so the
+    per-row predicate stays the one shared definition of "red".
+    """
+    del max_age_days  # global staleness is handled by callers, not per-row
+    return bool(row["stale"])
+
+
 def _evaluate(
     rows: list[dict], required: frozenset[str], max_age_days: int,
 ) -> None:
@@ -123,7 +135,7 @@ def _evaluate(
         )
     failed = sorted(
         r["source"] for r in latest_rows
-        if r["stale"] and r["source"] in required
+        if _is_red(r, max_age_days) and r["source"] in required
     )
     if failed:
         raise ValidationFailedError(
@@ -164,6 +176,62 @@ async def assert_passed_for_engine(
     _evaluate(rows, required, max_age_days)
 
 
+async def failing_sources_for_engine(
+    pool: asyncpg.Pool,
+    engine: str,
+    *,
+    max_age_days: int = 7,
+) -> list[str]:
+    """NON-raising. Return ``engine``'s failing data sources in the
+    HealSpec.source vocabulary (the selfheal-registry ``source``
+    namespace ``ENGINE_TABLES`` is built from) — the locked inter-lane
+    contract vocabulary for Sub-project B.
+
+    A source is failing if any required ``validation.<check>`` that
+    maps to it (via the SAME ``HEAL_SPECS``→source iteration
+    :func:`_required_sources` uses) is missing from the latest run or
+    is :func:`_is_red`. A globally-stale or empty run is treated as
+    "no trustworthy data" → every required source fails. An unknown
+    engine has no ``ENGINE_TABLES`` entry, so there is nothing to
+    heal/report → ``[]``.
+    """
+    tables = ENGINE_TABLES.get(engine)
+    if not tables:  # unknown / unmapped engine: nothing to report
+        return []
+    from tpcore.selfheal.registry import HEAL_SPECS  # lazy: avoid cycle
+
+    # Same mechanism as _required_sources, but keep the validation-key →
+    # HealSpec.source mapping so a failing key reports in source vocab.
+    key_to_source = {
+        f"validation.{check}": spec.source
+        for check, spec in HEAL_SPECS.items()
+        if spec.source in tables
+    }
+    if not key_to_source:  # fail safe mirrors _required_sources
+        key_to_source = {
+            f"validation.{check}": spec.source
+            for check, spec in HEAL_SPECS.items()
+        }
+
+    rows = await _fetch_validation_rows(pool)
+    if not rows:
+        return sorted(set(key_to_source.values()))
+    latest_ts = max(r["timestamp"] for r in rows)
+    age = datetime.now(UTC) - latest_ts
+    if age > timedelta(days=max_age_days):
+        # Globally-stale run can't be trusted for ANY source.
+        return sorted(set(key_to_source.values()))
+    latest = {
+        r["source"]: r for r in rows if r["timestamp"] == latest_ts
+    }
+    failing: set[str] = set()
+    for key, source in key_to_source.items():
+        row = latest.get(key)
+        if row is None or _is_red(row, max_age_days):
+            failing.add(source)
+    return sorted(failing)
+
+
 async def _fetch_validation_rows(pool: asyncpg.Pool) -> list[dict]:
     sql = """
         SELECT source, timestamp, stale
@@ -178,6 +246,7 @@ async def _fetch_validation_rows(pool: asyncpg.Pool) -> list[dict]:
 __all__ = [
     "assert_passed",
     "assert_passed_for_engine",
+    "failing_sources_for_engine",
     "ENGINE_TABLES",
     "ValidationFailedError",
     "ValidationStaleError",

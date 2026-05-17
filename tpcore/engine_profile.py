@@ -97,6 +97,17 @@ def _cadence_window_start(profile: EngineProfile, now: datetime) -> datetime:
     return _midnight_utc(d)  # unknown → narrowest safe window (today)
 
 
+def cadence_window_start(engine: str, now: datetime) -> datetime:
+    """Public: start (UTC) of the cadence cycle containing ``now`` for
+    ``engine`` (the single cadence-window authority — wraps
+    :func:`_cadence_window_start`). Unprofiled engine → narrowest safe
+    window (midnight UTC of now's date)."""
+    profile = profile_for(engine)
+    if profile is None:
+        return _midnight_utc(now.date())
+    return _cadence_window_start(profile, now)
+
+
 @dataclass(frozen=True)
 class FireDecision:
     fire: bool

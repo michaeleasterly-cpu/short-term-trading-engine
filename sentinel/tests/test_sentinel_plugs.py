@@ -576,11 +576,34 @@ class TestStaleOrderCancelG6:
 
 
 class TestTradingDayGateG4:
-    """G4: scheduler imports is_trading_day from tpcore.calendar."""
+    """G4: the DAILY trading-day cadence boundary is enforced.
 
-    def test_scheduler_imports_calendar(self) -> None:
+    UPDATED 2026-05-17: the in-scheduler ``is_trading_day`` early-return
+    was redundant double-gating and was deleted — cadence (incl. the
+    DAILY trading-day boundary) is now enforced exactly once, by the
+    dispatcher via ``tpcore.engine_profile``. The original assertion
+    (``scheduler`` imports ``is_trading_day``) asserted the now-removed
+    in-scheduler gate's wiring; it is re-expressed here at the new
+    authority boundary. This is an authority MOVE, not a removal of the
+    DAILY-cadence guarantee — sentinel is still profiled DAILY and the
+    boundary is still enforced, just by the single canonical authority.
+    """
+
+    def test_scheduler_no_longer_carries_in_scheduler_trading_day_gate(self) -> None:
+        # The deleted gate's only symbol was the module-level
+        # is_trading_day import — its absence proves the redundant
+        # in-scheduler gate is gone (no double-gating).
         from sentinel import scheduler
-        assert hasattr(scheduler, "is_trading_day")
+        assert not hasattr(scheduler, "is_trading_day")
+
+    def test_sentinel_cadence_owned_by_engine_profile_daily(self) -> None:
+        # The DAILY cadence boundary now lives in the single canonical
+        # authority. The guarantee is preserved, just relocated.
+        from tpcore.engine_profile import Cadence, profile_for
+
+        profile = profile_for("sentinel")
+        assert profile is not None
+        assert profile.cadence is Cadence.DAILY
 
 
 class TestCredibilityPersistenceG3:

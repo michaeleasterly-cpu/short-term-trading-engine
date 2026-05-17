@@ -1,25 +1,24 @@
-"""Regression test for Task 4 of the RiskGovernor-enforcement plan.
+"""Regression test: the in-scheduler MONTHLY cadence gate is GONE.
 
-Verifies that ``MomentumScheduler.run_once`` routes EVERY submitted order
-through the shared ``tpcore.risk.batch_gate.gate_batch_order`` before it
-hits the broker. Prior to this fix Momentum only honored the kill switch
-(see ``test_scheduler_kill_switch.py``) and never called
-``RiskGovernor.check_trade`` per name — a blocked / capped position would
-still be submitted.
+Operator directive 2026-05-17 (event-driven engine services): cadence is
+enforced exactly once, by the Python dispatcher
+(``ops/engine_dispatch.py``) via ``tpcore.engine_profile.should_fire``
+(momentum profile = ``MONTHLY_FIRST_TRADING_DAY``). The per-scheduler
+``lifecycle.assess`` / ``plan.is_rebalance_day`` early-return was
+redundant double-gating and has been deleted, so ``engine_profile`` is
+the SOLE cadence authority.
 
-Harness mirrors ``test_scheduler_kill_switch.py``: there is no shared
-momentum scheduler fixture, so we monkeypatch the plug classes + broker +
-governor + state store on ``momentum.scheduler`` exactly as that test
-does, then drive a rebalance that yields a known set of orders.
+These tests pin the new reality:
 
-NOTE (2026-05-17): the in-scheduler MONTHLY cadence gate
-(``lifecycle.assess`` / ``plan.is_rebalance_day``) was deleted —
-cadence is now the dispatcher's sole responsibility via
-``tpcore.engine_profile``. This test no longer stubs
-``MomentumLifecycleAnalysis`` (the symbol no longer exists in the
-scheduler) and no longer needs ``force_rebalance=True`` to reach the
-rebalance body — the scheduler always proceeds when invoked. The
-governor-enforcement assertions below are unchanged.
+* ``run_once`` invoked on a NON-first-trading-day proceeds into the
+  rebalance body (it does NOT early-return a ``no_rebalance`` /
+  ``is_rebalance_day=False`` summary). The dispatcher is the gate now;
+  if the scheduler is invoked it acts.
+* ``--force-rebalance`` is still an accepted CLI flag (operator escape
+  hatch for direct manual ``python -m momentum.scheduler`` runs).
+
+Harness mirrors ``test_scheduler_governor.py`` — same monkeypatch of
+plug classes + broker + governor + state store on ``momentum.scheduler``.
 """
 from __future__ import annotations
 
@@ -37,7 +36,12 @@ from momentum.models import (
     RebalanceOrder,
     TargetPosition,
 )
-from momentum.scheduler import MomentumScheduler
+from momentum.scheduler import MomentumScheduler, _parse_args
+
+# 2026-05-20 is a Wednesday and is NOT the first trading day of May 2026
+# (the first session of May 2026 is Fri 2026-05-01). Under the OLD gate
+# this date would early-return is_rebalance_day=False.
+NON_FIRST_TRADING_DAY = date_t(2026, 5, 20)
 
 
 def _make_order(ticker: str, side: str, action: RebalanceAction) -> RebalanceOrder:
@@ -77,16 +81,8 @@ class _NoopAsyncpgPool:
 
 
 class _StubGovernor:
-    """Records register_engine; state_for returns a non-killed state.
-
-    ``record_fill`` is a spy: every call is appended to ``fills`` so the
-    exit-side decrement test can assert ``position_delta`` / ``realized_pnl``
-    per closed name.
-    """
-
     def __init__(self) -> None:
         self.registered: list[tuple[str, Decimal]] = []
-        self.fills: list[tuple[str, Decimal, int]] = []
 
     async def register_engine(self, engine_id, engine_equity, limits=None):
         self.registered.append((engine_id, engine_equity))
@@ -95,10 +91,7 @@ class _StubGovernor:
         return None  # not killed → proceeds
 
     async def record_fill(self, engine_id, realized_pnl, position_delta):
-        self.fills.append((engine_id, realized_pnl, position_delta))
-
-    async def check_trade(self, **_kwargs):  # pragma: no cover - patched out
-        raise AssertionError("check_trade should go through gate_batch_order")
+        return None
 
 
 class _StubAccount:
@@ -145,7 +138,6 @@ class _StubExecution:
         orders = [
             _make_order("AAA", "sell", RebalanceAction.CLOSE),
             _make_order("BBB", "buy", RebalanceAction.OPEN),
-            _make_order("CCC", "buy", RebalanceAction.OPEN),
         ]
         return RebalanceDecision(
             as_of=as_of,
@@ -159,9 +151,9 @@ class _StubExecution:
                 ),
             ],
             orders=orders,
-            total_buy_notional_usd=Decimal("2000"),
+            total_buy_notional_usd=Decimal("1000"),
             total_sell_notional_usd=Decimal("1000"),
-            n_open=2,
+            n_open=1,
             n_close=1,
             n_increase=0,
             n_decrease=0,
@@ -224,65 +216,38 @@ def _patch_scheduler(monkeypatch) -> tuple[_StubGovernor, _StubBroker]:
     return governor, broker
 
 
-async def test_momentum_gates_every_order_through_governor(monkeypatch) -> None:
-    """Each of the 3 submitted names must pass through gate_batch_order."""
-    governor, broker = _patch_scheduler(monkeypatch)
+async def test_run_once_proceeds_on_non_first_trading_day(monkeypatch) -> None:
+    """No in-scheduler cadence gate: a mid-month invocation (NOT the first
+    trading day) must proceed into the rebalance body and submit orders —
+    NOT early-return an is_rebalance_day=False / no_rebalance summary.
 
-    with patch(
-        "momentum.scheduler.gate_batch_order",
-        new=AsyncMock(return_value=True),
-    ) as g:
-        sched = MomentumScheduler(submit_orders=True)
-        result = await sched.run_once(as_of=date_t(2026, 5, 14))
-
-    assert g.await_count == 3
-    assert sorted(broker.placed) == ["AAA", "BBB", "CCC"]
-    assert sorted(result.submitted_order_ids) == ["brk_AAA", "brk_BBB", "brk_CCC"]
-    # Governor was registered with momentum's configured equity.
-    assert governor.registered and governor.registered[0][0] == "momentum"
-
-
-async def test_momentum_skips_governor_blocked_name(monkeypatch) -> None:
-    """A False return from the gate skips that name but not the batch."""
-    governor, broker = _patch_scheduler(monkeypatch)
-
-    async def _gate(_gov, _eng, *, ticker, notional, direction, expected_edge_pct=None):
-        return ticker != "BBB"  # block BBB only
-
-    with patch("momentum.scheduler.gate_batch_order", new=AsyncMock(side_effect=_gate)):
-        sched = MomentumScheduler(submit_orders=True)
-        await sched.run_once(as_of=date_t(2026, 5, 14))
-
-    assert sorted(broker.placed) == ["AAA", "CCC"]
-
-
-async def test_momentum_decrements_governor_slot_on_close(monkeypatch) -> None:
-    """Each successfully-submitted SELL (a closed prior holding) frees one
-    governor position slot via ``record_fill(position_delta=-1)``.
-
-    ``gate_batch_order`` is stubbed to True so its own ALLOW-side
-    ``record_fill(+1)`` accounting is out of the picture — the ONLY
-    ``record_fill`` calls the spy can see are the new exit-side decrements.
-    The decision yields exactly one SELL (AAA, RebalanceAction.CLOSE) and
-    two BUYs; only AAA must produce a decrement, and it must carry
-    ``realized_pnl == 0`` (P&L is reconciled via the AAR path — adding it
-    here would double-count).
-    """
+    Cadence is the dispatcher's job (engine_profile.should_fire); if the
+    scheduler is invoked at all, it acts. No --force-rebalance is passed,
+    proving the gate is gone (not merely bypassed)."""
     governor, broker = _patch_scheduler(monkeypatch)
 
     with patch(
         "momentum.scheduler.gate_batch_order",
         new=AsyncMock(return_value=True),
     ):
-        sched = MomentumScheduler(submit_orders=True)
-        await sched.run_once(as_of=date_t(2026, 5, 14))
+        sched = MomentumScheduler(submit_orders=True)  # NO force_rebalance
+        result = await sched.run_once(as_of=NON_FIRST_TRADING_DAY)
 
-    # Exactly one SELL was submitted (AAA) → exactly one decrement.
-    assert governor.fills == [("momentum", Decimal("0"), -1)]
-    # The two BUYs (BBB, CCC) must NOT produce any decrement.
-    assert sum(1 for _e, _p, d in governor.fills if d == -1) == 1
-    # No realized P&L recorded here (double-count guard).
-    assert all(pnl == Decimal("0") for _e, pnl, _d in governor.fills)
+    # Old gate would have returned is_rebalance_day=False with no orders.
+    assert result.is_rebalance_day is True
+    assert result.decision is not None
+    assert sorted(broker.placed) == ["AAA", "BBB"]
+    assert sorted(result.submitted_order_ids) == ["brk_AAA", "brk_BBB"]
+
+
+def test_force_rebalance_flag_still_parses() -> None:
+    """``--force-rebalance`` remains an accepted CLI flag (operator escape
+    hatch for direct manual invocation)."""
+    args = _parse_args(["--force-rebalance"])
+    assert args.force_rebalance is True
+
+    args_default = _parse_args([])
+    assert args_default.force_rebalance is False
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -42,26 +42,35 @@ logger = structlog.get_logger(__name__)
 
 POLL_INTERVAL_SEC = 60
 INITIAL_CURSOR_LOOKBACK = timedelta(hours=1)
-TRIGGER_EVENT_TYPE = "DATA_OPERATIONS_COMPLETE"
+TRIGGER_EVENT_TYPES: tuple[str, ...] = ("DATA_OPERATIONS_COMPLETE", "DATA_REPAIR_COMPLETE")
 SWEEP_SCRIPT = "scripts/run_all_engines.sh"
 
 
 async def _find_new_trigger(pool, cursor: datetime) -> datetime | None:
-    """Return the recorded_at of the newest DATA_OPERATIONS_COMPLETE > cursor.
+    """Return the recorded_at of the newest trigger event > cursor.
 
-    Returns None if no new event since ``cursor``.
+    Triggers on either ``DATA_OPERATIONS_COMPLETE`` (nightly data-ops
+    finished) or ``DATA_REPAIR_COMPLETE`` (the data lane healed an
+    engine's blocked data — re-run the sweep so the now-unblocked
+    engine doesn't miss its window). A ``DATA_REPAIR_COMPLETE`` only
+    counts when it is *green* (``data->>'green'`` true): a red repair
+    didn't unblock anything, so re-firing would be a no-op sweep.
+
+    Returns None if no new qualifying event since ``cursor``.
     """
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """
             SELECT recorded_at
             FROM platform.application_log
-            WHERE event_type = $1
+            WHERE event_type = ANY($1::text[])
               AND recorded_at > $2
+              AND (event_type <> 'DATA_REPAIR_COMPLETE'
+                   OR (data->>'green')::bool IS TRUE)
             ORDER BY recorded_at DESC
             LIMIT 1
             """,
-            TRIGGER_EVENT_TYPE,
+            list(TRIGGER_EVENT_TYPES),
             cursor,
         )
         return row["recorded_at"] if row else None
@@ -81,7 +90,7 @@ async def _main_loop(pool, stop_event: asyncio.Event) -> None:
     cursor = datetime.now(UTC) - INITIAL_CURSOR_LOOKBACK
     logger.info(
         "engine_service.started",
-        trigger=TRIGGER_EVENT_TYPE,
+        triggers=list(TRIGGER_EVENT_TYPES),
         poll_interval_sec=POLL_INTERVAL_SEC,
         initial_cursor=cursor.isoformat(),
     )
