@@ -37,6 +37,14 @@ if a vendor silently truncates, the next ingest's CSV row count will be
 materially smaller than the prior archive's and we surface it
 immediately instead of waiting for the operator to notice the DB
 shrink.
+
+#185 Phase 4 decision (kept, not retired): this is a cheap CSV-stage
+fail-fast PRE-FILTER, NOT the authoritative definition of "is the feed
+good". The canonical per-feed `check_<feed>` (run on-completion via the
+#185 Phase 2/3 tripwire and at the end-of-cycle monolithic gate) is
+authoritative. Keep this as defense-in-depth catching vendor truncation
+before the row even lands; do NOT accrete bespoke validity logic here —
+extend the canonical check instead so the two cannot diverge.
 """
 
 from __future__ import annotations
