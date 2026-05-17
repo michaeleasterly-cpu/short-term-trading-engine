@@ -49,3 +49,5 @@ def test_capital_gate_tiny_cap_and_never_graduates():
                          open_positions=0) is True
     assert g.check_trade(size=Decimal("5000"), engine_pnl=Decimal("0"),
                          open_positions=0) is False
+    assert g.check_trade(size=Decimal("500"), engine_pnl=Decimal("0"),
+                         open_positions=1) is False  # ≤1 position rule

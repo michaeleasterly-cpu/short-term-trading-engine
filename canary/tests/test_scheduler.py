@@ -139,3 +139,60 @@ async def test_run_components_detects_prior_canary_spy_holding():
             return [_Ord("SPY", "sn_SPY_x")]  # sentinel's, not canary's
     comp2 = await _run_components(_Pool(), _Broker2(), object(), object())
     assert comp2.prior_qty == 0
+
+
+async def test_dry_run_skips_real_order_placement():
+    """--dry-run path: gates/startup/shutdown still run, but no real
+    broker order is placed (smoke-safe)."""
+    rec = {"placed": [], "startup": 0, "shutdown": 0}
+
+    class _DBLog:
+        async def startup(self, *a, **k): rec["startup"] += 1
+        async def shutdown(self, *a, **k): rec["shutdown"] += 1
+        async def signal(self, *a, **k): ...
+        async def order_submitted(self, *a, **k): ...
+
+    async def _place(o): rec["placed"].append(o)
+
+    class _Gov:
+        async def register_engine(self, *a, **k): ...
+        async def state_for(self, *a, **k): return None
+        async def record_fill(self, *a, **k): ...
+
+    class _FakePool:
+        async def close(self): ...
+
+    async def _components(pool, broker, governor, db_log):
+        return cs._Components(db_log=db_log, price=Decimal("500"),
+                              prior_qty=1, aar_write=lambda a: None,
+                              place=_place, governor=_Gov())
+
+    with patch.object(cs, "is_trading_day", lambda *_a, **_k: True), \
+         patch.object(cs, "gate_batch_order",
+                      new=AsyncMock(return_value=True)), \
+         patch.object(cs, "_run_components", _components), \
+         patch.object(cs, "build_asyncpg_pool",
+                      new=AsyncMock(return_value=_FakePool())), \
+         patch.object(cs, "DBLogHandler", lambda *a, **k: _DBLog()), \
+         patch.object(cs, "AlpacaPaperBrokerAdapter", lambda *a, **k: object()), \
+         patch.object(cs, "RiskGovernor", lambda *a, **k: _Gov()), \
+         patch.object(cs, "PostgresRiskStateStore", lambda *a, **k: object()), \
+         patch.dict("os.environ", {"DATABASE_URL": "postgres://x"}):
+        out = await cs.run_once(as_of=datetime(2026, 5, 6).date(),
+                                dry_run=True)
+
+    assert out["action"] == "round_trip"
+    assert rec["startup"] == 1 and rec["shutdown"] == 1
+    assert rec["placed"] == []   # NO real order placed under --dry-run
+
+
+def test_scheduler_module_has_main_entrypoint():
+    """The dispatcher runs `python -m canary.scheduler`; the smoke loop
+    runs it with --dry-run. The module MUST be invocable (a __main__
+    block) or the dispatcher silently no-ops."""
+    from pathlib import Path
+    repo = Path(__file__).resolve().parents[1]
+    # Assert the __main__ guard is present in the source.
+    src = (repo / "scheduler.py").read_text()
+    assert 'if __name__ == "__main__":' in src
+    assert "--dry-run" in src

@@ -16,6 +16,8 @@ engine-build compliance shortlist).
 """
 from __future__ import annotations
 
+import argparse
+import asyncio
 import os
 import uuid
 from collections.abc import Callable
@@ -167,7 +169,10 @@ async def _cancel_stale_canary_orders(broker) -> int:
     return cancelled
 
 
-async def run_once(as_of: date_t | None = None) -> dict[str, object]:
+async def run_once(
+    as_of: date_t | None = None,
+    dry_run: bool = False,
+) -> dict[str, object]:
     as_of = as_of or datetime.now(UTC).date()
     as_of_dt = datetime.combine(as_of, datetime.min.time(), tzinfo=UTC)
     if not is_trading_day(as_of_dt):
@@ -239,7 +244,13 @@ async def run_once(as_of: date_t | None = None) -> dict[str, object]:
 
         # SELL the prior held share (realize one AAR) then BUY 1 SPY.
         if comp.prior_qty > 0:
-            if await gate_batch_order(
+            if dry_run:
+                logger.info(
+                    "canary.scheduler.dry_run_skip",
+                    side="sell",
+                    ticker=CANARY_TICKER,
+                )
+            elif await gate_batch_order(
                 comp.governor,
                 "canary",
                 ticker=CANARY_TICKER,
@@ -263,7 +274,13 @@ async def run_once(as_of: date_t | None = None) -> dict[str, object]:
                 )
                 await comp.aar_write(aar)
 
-        if await gate_batch_order(
+        if dry_run:
+            logger.info(
+                "canary.scheduler.dry_run_skip",
+                side="buy",
+                ticker=CANARY_TICKER,
+            )
+        elif await gate_batch_order(
             comp.governor,
             "canary",
             ticker=CANARY_TICKER,
@@ -287,3 +304,24 @@ async def run_once(as_of: date_t | None = None) -> dict[str, object]:
                 "canary.scheduler.shutdown_log_failed", error=str(exc)[:200]
             )
         await pool.close()
+
+
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    p.add_argument("--as-of", type=date_t.fromisoformat, default=None)
+    p.add_argument("--dry-run", action="store_true")
+    return p.parse_args(argv)
+
+
+async def amain(args: argparse.Namespace) -> int:
+    summary = await run_once(as_of=args.as_of, dry_run=args.dry_run)
+    print(summary)
+    return 0
+
+
+def main() -> None:  # pragma: no cover — CLI shim
+    raise SystemExit(asyncio.run(amain(_parse_args())))
+
+
+if __name__ == "__main__":  # pragma: no cover
+    main()
