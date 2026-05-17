@@ -202,8 +202,26 @@ class RiskGovernor:
         """
         if limits is not None:
             self._engine_limits[engine_id] = limits
+
+        def _warn_if_placeholder(effective_equity: Decimal) -> None:
+            # Key the warning off the EFFECTIVE equity the governor will
+            # actually gate against — not the raw argument. Schedulers
+            # always pass the 10000 default every process run; the allocator
+            # writes REAL equity into the store. Warning only when the
+            # effective equity is still the placeholder lets it self-silence
+            # once tpcore.allocator has run.
+            if effective_equity == Decimal("10000"):
+                logger.warning(
+                    "tpcore.risk.equity_unallocated",
+                    engine=engine_id,
+                    detail="engine_equity is the 10000 placeholder — allocator "
+                           "has not set real capital; caps are evaluated against "
+                           "a fiction until tpcore.allocator runs",
+                )
+
         existing = await self._store.get(engine_id)
         if existing is not None:
+            _warn_if_placeholder(existing.engine_equity)
             return existing
         now = datetime.now(UTC)
         state = RiskState(
@@ -219,6 +237,7 @@ class RiskGovernor:
             equity=str(engine_equity),
             limits=limits.model_dump(mode="json") if limits is not None else "default",
         )
+        _warn_if_placeholder(engine_equity)
         return state
 
     async def state_for(self, engine_id: str) -> RiskState | None:

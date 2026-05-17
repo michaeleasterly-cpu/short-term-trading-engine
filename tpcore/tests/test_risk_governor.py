@@ -6,6 +6,7 @@ from decimal import Decimal
 from unittest.mock import AsyncMock
 
 import pytest
+import structlog
 
 from tpcore.interfaces.broker import OrderSide, Position
 from tpcore.risk.governor import (
@@ -13,6 +14,7 @@ from tpcore.risk.governor import (
     RiskDecision,
     RiskGovernor,
     RiskLimits,
+    RiskState,
 )
 
 
@@ -362,3 +364,71 @@ async def test_per_engine_limits_override_default(fake_broker: AsyncMock) -> Non
     res2 = await gov.check_trade("reversion", Decimal("100"), OrderSide.BUY)
     assert res2.decision.name == "BLOCK"
     assert "max concurrent positions" in (res2.reason or "")
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Placeholder-equity warning (D3a)
+# ────────────────────────────────────────────────────────────────────────────
+
+
+async def test_register_warns_when_equity_is_unallocated_placeholder(
+    fake_broker: AsyncMock,
+) -> None:
+    gov = RiskGovernor(state_store=InMemoryRiskStateStore(), broker=fake_broker)
+    with structlog.testing.capture_logs() as logs:
+        await gov.register_engine("momentum", Decimal("10000"))
+    assert any(
+        entry.get("event") == "tpcore.risk.equity_unallocated" for entry in logs
+    ), logs
+
+
+async def test_register_does_not_warn_when_stored_equity_is_real(
+    fake_broker: AsyncMock,
+) -> None:
+    """Regression: once the allocator has written REAL equity into the store,
+    a subsequent scheduler registration (which always passes the 10000
+    placeholder default arg) must NOT re-emit the false 'unallocated' warning.
+
+    The warning must key off the EFFECTIVE/stored equity the governor will
+    actually gate against — not the raw argument."""
+    store = InMemoryRiskStateStore()
+    now = datetime.now(UTC)
+    # Allocator has already set real capital for momentum.
+    await store.put(
+        RiskState(
+            engine="momentum",
+            engine_equity=Decimal("250000"),
+            daily_reset_at=now + timedelta(hours=12),
+            weekly_reset_at=now + timedelta(days=3),
+        )
+    )
+    gov = RiskGovernor(state_store=store, broker=fake_broker)
+    with structlog.testing.capture_logs() as logs:
+        # Scheduler always passes the placeholder default arg every run.
+        await gov.register_engine("momentum", Decimal("10000"))
+    assert not any(
+        entry.get("event") == "tpcore.risk.equity_unallocated" for entry in logs
+    ), logs
+
+
+async def test_register_warns_when_existing_stored_equity_is_placeholder(
+    fake_broker: AsyncMock,
+) -> None:
+    """If the EXISTING stored row is still the 10000 placeholder (allocator
+    has not run yet), the warning must still fire on re-registration."""
+    store = InMemoryRiskStateStore()
+    now = datetime.now(UTC)
+    await store.put(
+        RiskState(
+            engine="momentum",
+            engine_equity=Decimal("10000"),
+            daily_reset_at=now + timedelta(hours=12),
+            weekly_reset_at=now + timedelta(days=3),
+        )
+    )
+    gov = RiskGovernor(state_store=store, broker=fake_broker)
+    with structlog.testing.capture_logs() as logs:
+        await gov.register_engine("momentum", Decimal("10000"))
+    assert any(
+        entry.get("event") == "tpcore.risk.equity_unallocated" for entry in logs
+    ), logs
