@@ -45,6 +45,7 @@ from typing import Any
 import structlog
 
 from tpcore.db import build_asyncpg_pool
+from tpcore.ladder import policy_for
 
 logger = structlog.get_logger(__name__)
 
@@ -115,6 +116,20 @@ class WeeklyDigest:
             f"to no-live-trading until acked)",
         ]
         return "\n".join(L)
+
+
+def _disposition_label(etype: str) -> str:
+    """The disposition policy for an escalation event class, rendered
+    inline so the operator sees WHAT terminates it without a lookup
+    (spec §4.3). A future etype with no event:<etype> policy degrades
+    to UNREGISTERED rather than crashing the digest (the clockwork
+    drift-test is the real guard; this is graceful display)."""
+    try:
+        p = policy_for(f"event:{etype}")
+    except KeyError:
+        return "policy:UNREGISTERED (add event: disposition)"
+    base = f"policy:{p.disposition.value}"
+    return f"{base} — {p.reason}" if p.reason else base
 
 
 def _iso_week(dt: datetime) -> str:
@@ -238,7 +253,8 @@ async def build_weekly_digest(pool: Any, now: datetime | None = None) -> WeeklyD
     )
     undispositioned = [
         f"{r['recorded_at']:%Y-%m-%d} [{r['etype']}] ref={r['ref']} "
-        f"{r['message']}" for r in open_esc
+        f"{r['message']} | {_disposition_label(r['etype'])}"
+        for r in open_esc
     ]
 
     return WeeklyDigest(
