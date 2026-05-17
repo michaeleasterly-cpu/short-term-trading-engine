@@ -521,6 +521,81 @@ async def run_known_knowns(pool, sink: _FindingSink | None = None) -> list[Audit
                 else "re-run the finnhub_insider_sentiment stage — MSPR data is stale"
             ),
         ))
+    # Governor enforcement (regression guard): for each engine, if it
+    # produced submit/signal activity in application_log, did the
+    # RiskGovernor *actually run* for it?
+    #
+    # Governor activity is NOT in application_log — the governor emits
+    # pure structlog events and no structlog→DB processor exists in this
+    # repo, so a message-count on application_log was always 0 (vacuous).
+    # The real persisted evidence is ``platform.risk_state``: both
+    # ``RiskGovernor.register_engine`` and ``RiskGovernor.record_fill``
+    # upsert that engine's row via the store's ``put``, which sets
+    # ``updated_at = now()``. So the truth test is: an engine that
+    # submitted/signalled (real DBLogHandler event_types ``SIGNAL`` /
+    # ``ORDER_SUBMITTED`` / ``FILL_CONFIRMED``) MUST have a risk_state
+    # row whose ``updated_at`` is no older than its most recent submit —
+    # otherwise the governor never ran for that submit (possible bypass).
+    # Engines are pre-graduation (paper, not trading) today, so the
+    # expected normal state is "no submits at all" → OK, never FAIL.
+    _SUBMIT_EVENT_TYPES = ("SIGNAL", "ORDER_SUBMITTED", "FILL_CONFIRMED")
+    for engine in ("reversion", "vector", "momentum", "sentinel"):
+        async with pool.acquire() as conn:
+            log_row = await conn.fetchrow("""
+                SELECT
+                  COUNT(*)        AS submit,
+                  MAX(recorded_at) AS last_submit_at
+                FROM platform.application_log
+                WHERE engine = $1
+                  AND event_type = ANY($2::text[])
+                  AND recorded_at > NOW() - INTERVAL '30 days'
+            """, engine, list(_SUBMIT_EVENT_TYPES))
+            gov_row = await conn.fetchrow(
+                "SELECT engine, updated_at FROM platform.risk_state WHERE engine = $1",
+                engine,
+            )
+        submit = int(log_row["submit"] or 0)
+        last_submit_at = log_row["last_submit_at"]
+        gov_updated_at = gov_row["updated_at"] if gov_row is not None else None
+        evidence: dict[str, Any] = {
+            "engine": engine,
+            "submit_signal_30d": submit,
+            "last_submit_at": str(last_submit_at) if last_submit_at is not None else None,
+            "risk_state_updated_at": str(gov_updated_at) if gov_updated_at is not None else "missing",
+        }
+        if submit > 0 and (gov_row is None or (last_submit_at is not None and gov_updated_at < last_submit_at)):
+            findings.append(AuditFinding(
+                phase="known_knowns", check_name="governor_enforcement",
+                source=f"engine:{engine}", severity="WARN",
+                summary=f"{engine}: engine submitted but governor state not updated since — possible bypass "
+                        f"({submit} submit/signal event(s) in 30d, "
+                        f"risk_state {'missing' if gov_row is None else 'stale'})",
+                evidence=evidence,
+                recommended_action=f"verify {engine} trade path runs through tpcore.risk.RiskGovernor.check_trade()/record_fill() "
+                                   f"(OrderManager) or tpcore.risk.batch_gate.gate_batch_order() (batch scheduler)",
+            ))
+        elif gov_row is not None and submit == 0:
+            findings.append(AuditFinding(
+                phase="known_knowns", check_name="governor_enforcement",
+                source=f"engine:{engine}", severity="OK",
+                summary=f"{engine}: governor registered; no submits in 30d (pre-graduation)",
+                evidence=evidence,
+            ))
+        elif submit > 0:
+            findings.append(AuditFinding(
+                phase="known_knowns", check_name="governor_enforcement",
+                source=f"engine:{engine}", severity="OK",
+                summary=f"{engine}: governor state current with submit activity (enforcement live) "
+                        f"({submit} submit/signal event(s) in 30d)",
+                evidence=evidence,
+            ))
+        else:
+            findings.append(AuditFinding(
+                phase="known_knowns", check_name="governor_enforcement",
+                source=f"engine:{engine}", severity="OK",
+                summary=f"{engine}: no activity (pre-graduation / paper — expected)",
+                evidence=evidence,
+            ))
 
     return findings
 
