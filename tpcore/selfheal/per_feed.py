@@ -25,6 +25,7 @@ from typing import Any
 
 import structlog
 
+from tpcore.feeds.dispatcher import FEED_STAGE
 from tpcore.quality.validation.checks.aaii_sentiment_freshness import (
     check_aaii_sentiment_freshness,
 )
@@ -82,8 +83,15 @@ from tpcore.quality.validation.sources.constituents import FixtureConstituentSou
 from tpcore.quality.validation.sources.delistings import FixtureDelistingsSource
 from tpcore.quality.validation.sources.splits import FixtureSplitsSource
 from tpcore.selfheal.registry import HEAL_SPECS, spec_for
+from tpcore.selfheal.runner import make_canonical_runner
 
 logger = structlog.get_logger(__name__)
+
+# Reverse of the existing feed→stage SoT (spec §2.1: "No new mapping —
+# reuse what exists"). ingest stage name → feed. Values are unique
+# (one schedulable stage per feed); a coverage test pins every entry to
+# ≥1 canonical check so a misaligned new feed fails the build.
+_STAGE_FEED: dict[str, str] = {stage: feed for feed, stage in FEED_STAGE.items()}
 
 RunStage = Callable[[str, dict[str, str]], Awaitable[int]]
 _CheckCallable = Callable[..., Awaitable[CheckResult]]
@@ -218,12 +226,48 @@ async def validate_and_heal_feed(
     return FeedOutcome(feed, not escalated, healed, escalated)
 
 
+def is_leaf_feed(feed: str) -> bool:
+    """Leaf = none of the feed's checks declare a HealSpec.depends_on
+    (spec §3). Derived feeds (e.g. fear_greed) must validate only after
+    their upstreams are green — deferred to Phase 3, NOT validated on a
+    single upstream's completion (would false-fail)."""
+    return not any(
+        (s := spec_for(c)) is not None and bool(s.depends_on)
+        for c in feed_checks(feed)
+    )
+
+
+async def on_stage_complete(
+    pool: Any, stage_name: str, run_id: str
+) -> FeedOutcome | None:
+    """Phase 2 hook — call after an ingest stage completes OK. Resolves
+    stage→feed via the existing SoT; for a **leaf** feed, validate it
+    immediately and bounded-heal on red (the early tripwire). Returns
+    ``None`` for infra stages (``data_validation``/``forensics``/…, not
+    in the feed map) and for **derived** feeds (Phase 3 wires those via
+    the depends_on graph). The final monolithic gate stays authoritative
+    (spec §4) — this only moves detection a cycle earlier."""
+    feed = _STAGE_FEED.get(stage_name)
+    if feed is None:
+        return None  # infra stage — not a feed producer
+    if not feed_checks(feed):
+        return None
+    if not is_leaf_feed(feed):
+        logger.info("per_feed.deferred_derived", feed=feed, stage=stage_name)
+        return None
+    return await validate_and_heal_feed(
+        pool, feed, make_canonical_runner(run_id)
+    )
+
+
 __all__ = [
     "FeedOutcome",
     "HealOneResult",
     "RunStage",
     "feed_checks",
     "heal_one",
+    "is_leaf_feed",
+    "on_stage_complete",
     "validate_and_heal_feed",
     "validate_feed",
     "validate_one",

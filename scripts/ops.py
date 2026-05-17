@@ -1714,6 +1714,72 @@ def _market_open_block_reason(now: datetime | None = None) -> str | None:
     )
 
 
+async def _per_feed_tripwire(
+    pool: asyncpg.Pool,
+    stage_name: str,
+    run_id: str,
+    *,
+    log: structlog.stdlib.BoundLogger,
+    db_log,
+) -> None:
+    """#185 Phase 2 — fail-safe wrapper around the per-feed
+    validate-on-completion hook. Resolves stage→leaf-feed, validates it
+    immediately and bounded-heals on red (detection a cycle earlier).
+
+    Hard invariant: this NEVER raises into the ingest cycle and NEVER
+    aborts it. An escalation here is logged + surfaced (forensic
+    visibility), but the authoritative 100%-green decision still belongs
+    to the end-of-cycle data_validation + Step-4 whole-layer self-heal
+    (spec §4). Worst case the hook is a no-op and the final gate catches
+    everything exactly as before this change.
+    """
+    try:
+        from tpcore.selfheal.per_feed import on_stage_complete
+
+        outcome = await on_stage_complete(pool, stage_name, run_id)
+        if outcome is None:
+            return  # infra stage or derived feed (Phase 3) — no-op
+        if outcome.green:
+            log.info(
+                "ops.per_feed.green",
+                stage=stage_name, feed=outcome.feed, healed=outcome.healed,
+            )
+            if outcome.healed:
+                await db_log.log(
+                    "SELF_HEAL",
+                    f"per-feed early heal: {outcome.feed} "
+                    f"({', '.join(outcome.healed)})",
+                    severity="INFO",
+                    data={"feed": outcome.feed, "healed": outcome.healed,
+                          "stage": stage_name, "phase": "per_feed_tripwire"},
+                )
+        else:
+            log.warning(
+                "ops.per_feed.escalated",
+                stage=stage_name, feed=outcome.feed,
+                escalated=outcome.escalated,
+            )
+            await db_log.log(
+                "INGESTION_FAILED",
+                f"per-feed tripwire: {outcome.feed} still red "
+                f"(final gate is authoritative) — {outcome.escalated}",
+                severity="WARNING",
+                data={"feed": outcome.feed, "stage": stage_name,
+                      "escalated": outcome.escalated,
+                      "phase": "per_feed_tripwire",
+                      # Not a cycle failure: the end-of-cycle gate
+                      # remains the authority. Marked so the recent-
+                      # error probe doesn't double-count it.
+                      "noise": True},
+            )
+    except Exception as exc:  # noqa: BLE001 — tripwire must never break the cycle
+        log.error(
+            "ops.per_feed.hook_error",
+            stage=stage_name, error=str(exc),
+            exc_type=type(exc).__name__,
+        )
+
+
 async def cmd_update(
     pool: asyncpg.Pool,
     log: structlog.stdlib.BoundLogger,
@@ -1722,6 +1788,7 @@ async def cmd_update(
     dry_run: bool,
     force: bool = False,
     only: set[str] | None = None,
+    per_feed_validate: bool = True,
 ) -> UpdateSummary:
     started_at = datetime.now(UTC)
     summary = UpdateSummary(run_id=db_log._run_id, started_at=started_at, finished_at=started_at)
@@ -1781,16 +1848,26 @@ async def cmd_update(
             "data_validation", "forensics", "reconcile",
         ):
             continue
-        summary.stages.append(
-            await _run_stage(
-                name,
-                factory_builder(pool, daily_bars_config),
-                log=log,
-                db_log=db_log,
-                dry_run=dry_run,
-                timeout=timeout,
-            )
+        result = await _run_stage(
+            name,
+            factory_builder(pool, daily_bars_config),
+            log=log,
+            db_log=db_log,
+            dry_run=dry_run,
+            timeout=timeout,
         )
+        summary.stages.append(result)
+        # #185 Phase 2 — per-feed validate-on-completion (early
+        # tripwire). Leaf feeds only; derived feeds + the standalone
+        # single-stage path are deferred (Phase 3 / lock-safety). Runs
+        # inside run_data_operations.sh's lock (cycle path). Fail-safe:
+        # a hook error NEVER aborts the cycle — the end-of-cycle
+        # data_validation + Step-4 whole-layer self-heal stay the
+        # authoritative 100%-green gate (spec §4).
+        if per_feed_validate and not dry_run and result.status == "OK":
+            await _per_feed_tripwire(
+                pool, name, str(summary.run_id), log=log, db_log=db_log
+            )
 
     # Self-healing — retry FAILED/TIMEOUT stages once if their error matches
     # the transient class (timeouts, network blips, 429). This addresses the
