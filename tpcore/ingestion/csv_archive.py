@@ -263,9 +263,41 @@ def log_shrinkage_warning(report: ShrinkageReport) -> None:
     )
 
 
+class ProducerShrinkageError(RuntimeError):
+    """A full-snapshot ingest came back materially short of its prior
+    archive — a producer defect (broken/partial pull, vendor truncation),
+    not legitimate variance. Raised so the stage fails loudly
+    (INGESTION_FAILED → no DATA_OPERATIONS_COMPLETE → self-heal /
+    escalation), instead of the WARNING being eyeballed past. This is
+    the daily_bars producer-guard pattern generalised to every
+    full-snapshot source via the EXISTING shrinkage detector — no new
+    per-source thresholds."""
+
+
+def assert_not_shrunk(report: ShrinkageReport | None) -> None:
+    """Producer hard-stop: raise if a full-snapshot pull shrank past
+    the detector's threshold.
+
+    No-op when ``report`` is None (first run — nothing to compare) or
+    not ``over_threshold`` (within tolerated variance). Pair with
+    ``log_shrinkage_warning`` so the structured WARNING is still
+    emitted for observability before the raise.
+    """
+    if report is None or not report.over_threshold:
+        return
+    raise ProducerShrinkageError(
+        f"{report.source}: full-snapshot ingest shrank "
+        f"{report.shrinkage_pct:.1%} ({report.previous_rows:,} → "
+        f"{report.current_rows:,}) vs {report.previous_archive} — "
+        f"refusing to report OK on a likely broken/partial pull or "
+        f"vendor truncation. Investigate before re-running."
+    )
+
+
 __all__ = [
-    "ArchiveWriteResult", "ShrinkageReport",
-    "archive_dir_for", "count_archive_rows", "detect_shrinkage",
+    "ArchiveWriteResult", "ProducerShrinkageError", "ShrinkageReport",
+    "archive_dir_for", "assert_not_shrunk",
+    "count_archive_rows", "detect_shrinkage",
     "latest_archive", "log_shrinkage_warning", "read_archive_rows",
     "repo_data_dir", "write_archive",
 ]

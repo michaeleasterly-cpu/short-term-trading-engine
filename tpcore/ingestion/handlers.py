@@ -211,6 +211,7 @@ async def handle_corporate_actions(
 
     # CSV-first archive.
     from tpcore.ingestion.csv_archive import (
+        assert_not_shrunk,
         detect_shrinkage,
         log_shrinkage_warning,
         write_archive,
@@ -223,6 +224,7 @@ async def handle_corporate_actions(
     shrinkage = detect_shrinkage("alpaca_corporate_actions", archive.rows_written, exclude_path=archive.path)
     if shrinkage is not None:
         log_shrinkage_warning(shrinkage)
+        assert_not_shrunk(shrinkage)  # producer hard-stop on a short snapshot
 
     split_summary = await apply_all_splits(pool, only_tickers=apply_filter)
     logger.info(
@@ -1363,6 +1365,7 @@ async def handle_macro_indicators(
     # the only place the pre-truncation history survives. Shrinkage
     # detection on the next run compares this archive to its predecessor.
     from tpcore.ingestion.csv_archive import (
+        assert_not_shrunk,
         detect_shrinkage,
         log_shrinkage_warning,
         write_archive,
@@ -1382,6 +1385,7 @@ async def handle_macro_indicators(
     )
     if shrinkage is not None:
         log_shrinkage_warning(shrinkage)
+        assert_not_shrunk(shrinkage)  # producer hard-stop (FRED-truncation class)
 
     # ── 3. Load CSV → DB (ON CONFLICT DO NOTHING) ────────────────────
     async with pool.acquire() as conn:
