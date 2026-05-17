@@ -308,6 +308,13 @@ async def _handle_daily_bars_explicit(
 
     lookback_days = int(config.get("lookback_days", 7))
     end_offset_days = int(config.get("end_offset_days", 0))
+    # Free-tier Alpaca has no SIP entitlement. fetch_daily_bars_multi's
+    # signature defaults feed="sip"; this explicit path previously
+    # omitted the arg and inherited that default → 403 on every chunk
+    # (2026-05-17). The all_active path already passes feed="iex" for
+    # this reason. Default to iex here too; keep it config-overridable
+    # for if/when a SIP subscription is added.
+    feed = str(config.get("feed", "iex"))
     if universe_cfg == "active":
         sql = """
             SELECT DISTINCT ticker
@@ -321,10 +328,19 @@ async def _handle_daily_bars_explicit(
         symbols = [r["ticker"] for r in rows]
     elif isinstance(universe_cfg, list):
         symbols = [str(s).upper() for s in universe_cfg]
+    elif isinstance(universe_cfg, str) and "," in universe_cfg:
+        # Explicit comma-separated set. The canonical --param channel
+        # coerces to scalars only, so a targeted list arrives here as a
+        # CSV string. This is the bounded coverage-collapse repair the
+        # pipeline previously couldn't express (repair_gaps is blind to
+        # a freshness coverage_collapse; a full force_refresh times out
+        # at 3600s — proven 2026-05-17). Re-pulling only the missing
+        # tail is fast and canonical.
+        symbols = [s.strip().upper() for s in universe_cfg.split(",") if s.strip()]
     else:
         raise ValueError(
             f"daily_bars: unsupported universe config {universe_cfg!r} — "
-            "expected 'active', 'all_active', or a list of tickers"
+            "expected 'active', 'all_active', a CSV string, or a list"
         )
 
     today = datetime.now(UTC).date()
@@ -346,7 +362,9 @@ async def _handle_daily_bars_explicit(
         for i in range(0, len(symbols), _MULTI_CHUNK):
             chunk = symbols[i : i + _MULTI_CHUNK]
             try:
-                by_symbol = await fetch_daily_bars_multi(client, chunk, start, end)
+                by_symbol = await fetch_daily_bars_multi(
+                    client, chunk, start, end, feed=feed
+                )
             except httpx.HTTPStatusError as exc:
                 # Whole chunk failed (e.g. SIP end=today 403 mid-session,
                 # or 429 still failing after @with_retry backoff). Record

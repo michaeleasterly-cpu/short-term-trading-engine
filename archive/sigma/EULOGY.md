@@ -50,13 +50,13 @@ This eulogy retires the **directional failed-expansion form of
 Sigma**. It does **not** adjudicate the **sector-neutral residual
 variant** that the Sigma Research Synthesis marks as the *next* step.
 
-That variant is a **different engine**, not a Sigma rescue: it trades
-the cross-sectional residual after removing sector beta, which is a
-distinct signal-construction and distinct risk model. Reviving it
-would be a new engine build (start from `tpcore/templates/
-engine_template/`, follow `docs/superpowers/checklists/
-engine_readiness.md`), not an un-archiving of this code. Nothing in
-the failed-expansion result here is evidence for *or* against the
+That variant is **not a Sigma rescue**: it trades the cross-sectional
+residual after removing systematic (PCA) factors — a distinct
+signal-construction and risk model. Per the operator's 2026-05-17
+decision it is being pursued as a **Reversion enhancement** (the
+PCA-residual signal switch, Avellaneda & Lee), *not* an un-archiving of
+this code and *not* a new standalone engine. Nothing in the
+failed-expansion result here is evidence for *or* against the
 sector-neutral idea — they were never tested. Do not let "Sigma
 failed" be read as "compression/residual mean-reversion is dead." It
 means *this directional form, on this universe, under honest gates,

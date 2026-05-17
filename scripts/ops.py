@@ -417,6 +417,62 @@ async def _stage_daily_bars(pool: asyncpg.Pool, config: dict[str, Any]) -> dict[
             "tickers": ",".join(tickers[:30]) + ("…" if len(tickers) > 30 else ""),
         }
 
+    # Bounded targeted COVERAGE-collapse repair (--param
+    # repair_coverage=true). This is the self-heal path for
+    # prices_daily_freshness's coverage_collapse: repair_gaps is blind
+    # to it (it derives targets from the COMPLETENESS invariant, empty
+    # in that failure mode) and a whole-universe force_refresh times
+    # out at 3600s (proven 2026-05-17: reached only 6,910/7,650 in
+    # 60min before the cap). Compute exactly the tickers that had a bar
+    # on the most recent prior session but are missing the target
+    # session, and re-pull ONLY those via the explicit-universe path —
+    # 747 names = 8 chunks ≈ 6min, never the full-universe timeout.
+    # Detector (freshness check) and healer agree by construction: both
+    # key off "present on prior session, absent on target".
+    if bool(config.get("repair_coverage", False)):
+        from tpcore.calendar import previous_close
+
+        tgt = previous_close(datetime.now(UTC)).date()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                WITH prior AS (
+                    SELECT MAX(date) AS d FROM platform.prices_daily
+                    WHERE date < $1
+                )
+                SELECT DISTINCT p.ticker
+                FROM platform.prices_daily p, prior
+                WHERE p.date = prior.d
+                  AND p.delisted = false
+                  AND NOT EXISTS (
+                      SELECT 1 FROM platform.prices_daily q
+                      WHERE q.ticker = p.ticker AND q.date = $1
+                  )
+                ORDER BY p.ticker
+                """,
+                tgt,
+            )
+        missing = [r["ticker"] for r in rows]
+        if not missing:
+            return {
+                "rows_upserted": 0,
+                "mode": "repair_coverage",
+                "target_session": tgt.isoformat(),
+                "skipped": "no_coverage_gap",
+            }
+        repaired = await handle_daily_bars(pool, {
+            "universe": missing,
+            "lookback_days": int(config.get("lookback_days", 4)),
+            "end_offset_days": int(config.get("end_offset_days", 1)),
+        })
+        return {
+            "rows_upserted": repaired or 0,
+            "mode": "repair_coverage",
+            "target_session": tgt.isoformat(),
+            "tickers_repaired": len(missing),
+            "tickers": ",".join(missing[:30]) + ("…" if len(missing) > 30 else ""),
+        }
+
     target_session = previous_close(datetime.now(UTC)).date()
     # ``force_refresh`` (via --param force_refresh=true) bypasses the
     # skip-fast — the canonical way to run a coverage backfill: the
@@ -444,10 +500,57 @@ async def _stage_daily_bars(pool: asyncpg.Pool, config: dict[str, Any]) -> dict[
         }
 
     rows = await handle_daily_bars(pool, config)
+
+    # Producer self-validation (2026-05-17 incident hardening): a pull
+    # can exit "OK" while having written only a fraction of the
+    # universe — the all_active coarse-filter cap (468/8300) and the
+    # feed=sip 403-every-chunk bug both did exactly this, and the
+    # collapse was only caught a cycle later by the downstream
+    # validation suite (or, worse, eyeballed as "good"). Refuse to
+    # report OK on a collapsed target session: re-using the SAME
+    # threshold the freshness check uses (single source of truth),
+    # raise so the stage fails loudly → INGESTION_FAILED → the daemon
+    # does NOT emit DATA_OPERATIONS_COMPLETE and self-heal/escalation
+    # fires at ingest time, not a cycle later. "100% data or don't
+    # trade" enforced at the producer, not just the consumer.
+    from tpcore.quality.validation.checks.prices_daily_freshness import (
+        COVERAGE_COLLAPSE_PCT,
+    )
+
+    async with pool.acquire() as conn:
+        cov = await conn.fetch(
+            """
+            SELECT date, COUNT(DISTINCT ticker) AS n
+            FROM platform.prices_daily
+            WHERE date >= $1::date - INTERVAL '40 days' AND date <= $1
+            GROUP BY date ORDER BY date DESC LIMIT 21
+            """,
+            target_session,
+        )
+    by_date = {r["date"]: int(r["n"]) for r in cov}
+    latest_n = by_date.get(target_session, 0)
+    trailing = [n for d, n in by_date.items() if d != target_session]
+    if trailing:
+        avg_trailing = sum(trailing) / len(trailing)
+        floor = avg_trailing * (1 - COVERAGE_COLLAPSE_PCT)
+        if avg_trailing > 0 and latest_n < floor:
+            raise RuntimeError(
+                f"daily_bars coverage collapse: {target_session} has "
+                f"{latest_n} tickers = {latest_n / avg_trailing:.0%} of the "
+                f"trailing-{len(trailing)}-session avg ({avg_trailing:,.0f}); "
+                f"floor is {floor:,.0f} ({1 - COVERAGE_COLLAPSE_PCT:.0%}). "
+                f"Refusing to report OK — partial/failed ingest "
+                f"(rows_upserted={rows or 0}, universe="
+                f"{config.get('universe', 'active')!r}). "
+                f"Repair: ops.py --stage daily_bars --param force_refresh=true "
+                f"--param universe=active --param end_offset_days=1"
+            )
+
     return {
         "rows_upserted": rows or 0,
         "universe": config.get("universe", "active"),
         "target_session": target_session.isoformat(),
+        "coverage_tickers": latest_n,
     }
 
 
