@@ -47,8 +47,13 @@ _CONTRACT_RED_SQL = """
     SELECT data->>'error' AS error
     FROM platform.application_log
     WHERE event_type = 'INGESTION_FAILED'
-      AND exception_type = 'AdapterContractDrift'
+      AND data->>'exception_type' = 'AdapterContractDrift'
       AND recorded_at > NOW() - INTERVAL '24 hours'
+"""
+
+_ESCALATED_EXISTS_SQL = """
+    SELECT 1 FROM platform.application_log
+    WHERE event_type = $1 AND data->>'hold_id' = $2 LIMIT 1
 """
 
 _OPEN_HOLD_SQL = """
@@ -65,6 +70,13 @@ def _healspec_source(check_name: str) -> str | None:
     """Return the HealSpec.source for a validation check name, or None."""
     spec = spec_for(check_name)
     return spec.source if spec is not None else None
+
+
+async def _already_escalated(pool: Any, hold_id: str) -> bool:
+    """Return True if DATA_SOURCE_ESCALATED was already emitted for this hold_id."""
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(_ESCALATED_EXISTS_SQL, ESCALATED_EVENT, hold_id)
+    return row is not None
 
 
 async def _red_sources(pool: Any) -> set[str]:
@@ -201,20 +213,21 @@ async def datasupervise(pool: Any, run_id: str) -> DataSupervisorOutcome:
                 # Still red — check bounded escalation
                 n = await _held_cycles(pool, hold.held_at)
                 if n >= _MAX_HELD_CYCLES:
-                    await _emit(
-                        pool,
-                        ESCALATED_EVENT,
-                        f"datasupervisor: escalate {source} after {n} held cycles",
-                        {
-                            "schema": SCHEMA_VERSION,
-                            "hold_id": hold.hold_id,
-                            "source": source,
-                            "held_cycles": n,
-                            "reason": f"still red after {_MAX_HELD_CYCLES} held cycles",
-                        },
-                        severity="ERROR",
-                    )
-                    out.escalated.append(source)
+                    if not await _already_escalated(pool, hold.hold_id):
+                        await _emit(
+                            pool,
+                            ESCALATED_EVENT,
+                            f"datasupervisor: escalate {source} after {n} held cycles",
+                            {
+                                "schema": SCHEMA_VERSION,
+                                "hold_id": hold.hold_id,
+                                "source": source,
+                                "held_cycles": n,
+                                "reason": f"still red after {_MAX_HELD_CYCLES} held cycles",
+                            },
+                            severity="ERROR",
+                        )
+                        out.escalated.append(source)
 
     except Exception as exc:  # noqa: BLE001
         logger.error("datasupervisor.error", error=str(exc))
