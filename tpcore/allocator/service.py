@@ -76,6 +76,14 @@ HARD_BAND_DRIFT_PCT = Decimal("0.50")  # 50%
 # VOL_LOOKBACK_SESSIONS for symmetry and is comfortably > CHOP_PERIOD=14.
 REGIME_CHOP_LOOKBACK_SESSIONS = 60
 
+# Engines that have been ARCHIVED — their platform.risk_state row is
+# stale and must be pruned. This is an explicit allowlist (NOT derived
+# from self._engines) so the prune can ONLY ever delete known-dead
+# engines and can never delete a live engine's risk state, regardless
+# of how the allocator's managed-engine set is configured. Add an
+# engine here only when it is archived (see archive/<engine>/EULOGY.md).
+_ARCHIVED_ENGINES: tuple[str, ...] = ("sigma",)
+
 
 class AllocationDecision(BaseModel):
     """Per-engine output of one rebalance run. Maps 1:1 to a row in
@@ -162,7 +170,7 @@ class AllocatorService:
         skip_reason, rebalance_reason = self._classify_rebalance(max_drift, regime)
         # 4. Persist (always for frozen rows; conditional for active rows).
         if skip_reason is not None:
-            await self._persist(decisions, active_skip=True)
+            pruned_engines = await self._persist(decisions, active_skip=True)
             if self._db_log is not None:
                 await self._db_log.log(
                 event_type="ALLOCATOR_SKIPPED",
@@ -181,7 +189,7 @@ class AllocatorService:
                 },
             )
         else:
-            await self._persist(decisions, active_skip=False)
+            pruned_engines = await self._persist(decisions, active_skip=False)
             if self._db_log is not None:
                 await self._db_log.log(
                 event_type="ALLOCATOR_REBALANCED",
@@ -195,6 +203,24 @@ class AllocatorService:
                     "regime": regime,
                     "chop_value": float(chop_value) if chop_value is not None else None,
                     "new_weights": {d.engine: float(d.weight) for d in decisions},
+                },
+            )
+
+        # ── Prune audit (only when something was actually pruned) ────────
+        # Mirrors the ALLOCATOR_REBALANCED / ALLOCATOR_SKIPPED emission
+        # above exactly: same self._db_log handler, same (engine, run_id)
+        # binding, same INSERT INTO platform.application_log path. One row
+        # per prune; zero rows when nothing stale (idempotent — a second
+        # run finds a clean table, prunes nothing, logs nothing).
+        if pruned_engines and self._db_log is not None:
+            await self._db_log.log(
+                event_type="ALLOCATOR_PRUNED_RISK_STATE",
+                message=f"pruned {len(pruned_engines)} stale risk_state row(s)",
+                severity="INFO",
+                data={
+                    "as_of": self._as_of.isoformat(),
+                    "pruned_engines": pruned_engines,
+                    "live_engines": list(self._engines),
                 },
             )
 
@@ -455,7 +481,7 @@ class AllocatorService:
         decisions: list[AllocationDecision],
         *,
         active_skip: bool = False,
-    ) -> None:
+    ) -> list[str]:
         """Persist decisions to ``platform.allocations`` + ``risk_state``.
 
         When ``active_skip=True`` (drift/regime gate said skip), only
@@ -463,6 +489,12 @@ class AllocatorService:
         must always land so engines reading ``risk_state.engine_equity``
         see weight=0 promptly. Active engines keep their prior rows
         and prior ``engine_equity`` until the next rebalance fires.
+
+        Returns the sorted list of engine names pruned from
+        ``platform.risk_state`` (rows for engines no longer managed by
+        this allocator — e.g. an archived engine). Empty when nothing
+        was stale; the prune runs inside the same transaction as the
+        upserts so engines never observe a half-updated risk state.
         """
         async with self._pool.acquire() as conn:
             async with conn.transaction():
@@ -516,3 +548,39 @@ class AllocatorService:
                             "UPDATE platform.risk_state SET kill_switch_active=FALSE, kill_switch_reason=NULL WHERE engine=$1 AND kill_switch_active=TRUE AND kill_switch_reason LIKE 'allocator:%'",
                             d.engine,
                         )
+
+                # ── Prune stale risk_state rows (archived engines) ────────
+                # The allocator is the canonical owner of risk_state. An
+                # archived engine's row (e.g. sigma after its 2026-05-16
+                # archival) is stale and must not linger: engines read
+                # risk_state, and a dead engine's row is a silent landmine.
+                #
+                # CRITICAL: the prune targets the explicit
+                # _ARCHIVED_ENGINES allowlist via `engine = ANY($1)`, NOT
+                # `engine <> ALL(self._engines)`. Keying off self._engines
+                # is fail-DANGEROUS: production constructs AllocatorService
+                # without engines=, so self._engines is the __init__
+                # default ("sigma","reversion","vector","momentum") which
+                # both KEEPS archived sigma and DELETES live sentinel's
+                # risk_state row (sentinel is not in the default set). An
+                # explicit archived allowlist can only ever delete
+                # known-dead engines, regardless of the managed set.
+                #
+                # Ordering: this DELETE runs AFTER the per-engine upsert
+                # loop above, inside the SAME conn.transaction(). The
+                # upsert loop re-INSERTs a risk_state row for sigma (sigma
+                # is still in the __init__ default self._engines); this
+                # prune then DELETEs it in the same transaction, so the
+                # net committed effect is "sigma row removed" — correct.
+                # Idempotent: a clean table deletes zero rows.
+                # Parameterised (never string-interpolated).
+                pruned_rows = await conn.fetch(
+                    """
+                    DELETE FROM platform.risk_state
+                    WHERE engine = ANY($1::text[])
+                    RETURNING engine
+                    """,
+                    list(_ARCHIVED_ENGINES),
+                )
+                pruned_engines = sorted(r["engine"] for r in pruned_rows)
+        return pruned_engines
