@@ -78,6 +78,7 @@ class WeeklyDigest:
     cutovers: list[str]
     self_heals: list[str]
     near_miss_gates: list[str]
+    undispositioned: list[str]
     most_likely_wrong: str
     generated_at: datetime
 
@@ -98,6 +99,12 @@ class WeeklyDigest:
                 f"GATES THAT PASSED WITHIN {NEAR_MISS_MARGIN:.0%} OF FAILING "
                 f"({len(self.near_miss_gates)}):",
                 self.near_miss_gates,
+            ),
+            *_section(
+                f"UNDISPOSITIONED DATA-LANE ESCALATIONS "
+                f"({len(self.undispositioned)}) — rung-3: each MUST be "
+                f"converted | structural | removed:",
+                self.undispositioned,
             ),
             "MOST LIKELY SILENTLY WRONG RIGHT NOW:",
             f"  → {self.most_likely_wrong}",
@@ -195,11 +202,50 @@ async def build_weekly_digest(pool: Any, now: datetime | None = None) -> WeeklyD
             "validation layer looks like. Spot-check one feed by hand."
         )
 
+    open_esc = await _q(
+        pool,
+        """-- OPEN_ESCALATIONS
+        WITH esc AS (
+          SELECT e.data->>'request_id' AS ref,
+                 'DATA_REPAIR_ESCALATED' AS etype,
+                 e.recorded_at, e.message
+          FROM platform.application_log e
+          WHERE e.event_type = 'DATA_REPAIR_ESCALATED'
+          UNION ALL
+          SELECT e.data->>'hold_id' AS ref,
+                 'DATA_SOURCE_ESCALATED' AS etype,
+                 e.recorded_at, e.message
+          FROM platform.application_log e
+          WHERE e.event_type = 'DATA_SOURCE_ESCALATED'
+        )
+        SELECT ref, etype, recorded_at, message FROM esc x
+        WHERE x.ref IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM platform.application_log t
+            WHERE t.event_type IN
+                  ('DATA_REPAIR_COMPLETE','DATA_SOURCE_CLEARED')
+              AND (t.data->>'request_id' = x.ref
+                   OR t.data->>'hold_id' = x.ref)
+              AND t.recorded_at > x.recorded_at)
+          AND NOT EXISTS (
+            SELECT 1 FROM platform.application_log dp
+            WHERE dp.event_type = 'DATA_ESCALATION_DISPOSITIONED'
+              AND dp.data->>'ref' = x.ref)
+          AND x.recorded_at < $1
+        ORDER BY x.recorded_at
+        """,
+        start,
+    )
+    undispositioned = [
+        f"{r['recorded_at']:%Y-%m-%d} [{r['etype']}] ref={r['ref']} "
+        f"{r['message']}" for r in open_esc
+    ]
+
     return WeeklyDigest(
         iso_week=_iso_week(now), period_start=start, period_end=now,
         cutovers=cutovers, self_heals=self_heals,
-        near_miss_gates=near_miss_gates, most_likely_wrong=mlw,
-        generated_at=now,
+        near_miss_gates=near_miss_gates, undispositioned=undispositioned,
+        most_likely_wrong=mlw, generated_at=now,
     )
 
 
@@ -293,6 +339,28 @@ async def ack_digest(pool: Any, now: datetime | None = None) -> str:
     return wk
 
 
+_VALID_DISPOSITIONS = {"converted", "structural", "removed"}
+
+
+async def disposition_escalation(
+    pool: Any, ref: str, disposition: str, note: str
+) -> int:
+    """Record an operator disposition for an open escalation instance.
+    Mirrors ack_digest's emit pattern. 0 ok; 1 on a bad disposition."""
+    if disposition not in _VALID_DISPOSITIONS:
+        logger.error("weekly_digest.bad_disposition", value=disposition)
+        return 1
+    await _emit(
+        pool, "DATA_ESCALATION_DISPOSITIONED",
+        f"escalation {ref} dispositioned: {disposition}",
+        {"schema": 1, "ref": ref, "disposition": disposition,
+         "note": note},
+    )
+    logger.info("weekly_digest.dispositioned", ref=ref,
+                disposition=disposition)
+    return 0
+
+
 async def live_clearance(
     pool: Any, now: datetime | None = None
 ) -> tuple[bool, str]:
@@ -359,7 +427,21 @@ async def _amain(argv: list[str]) -> int:
             cleared, reason = await live_clearance(pool)
             print(f"live_cleared={cleared}  — {reason}")
             return 0 if cleared else 2
-        print(f"usage: python -m ops.weekly_digest {{emit|ack|status}}; "
+        if cmd == "disposition":
+            if len(argv) < 3:
+                print(
+                    "usage: python -m ops.weekly_digest disposition "
+                    "<ref> <converted|structural|removed> [note ...]",
+                    file=sys.stderr,
+                )
+                return 2
+            ref = argv[1]
+            disp = argv[2]
+            note_words = argv[3:]
+            rc = await disposition_escalation(pool, ref, disp,
+                                              " ".join(note_words))
+            return rc
+        print(f"usage: python -m ops.weekly_digest {{emit|ack|status|disposition}}; "
               f"got {cmd!r}", file=sys.stderr)
         return 2
     finally:
