@@ -536,3 +536,14 @@ async def test_allocator_off_cadence_skips_no_invoke():
         await dispatch_once(object(), datetime(2026, 5, 19, 13, 0, tzinfo=UTC))
 
     alloc.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# TASK C-T6 — retire allocator launchd installer
+# ---------------------------------------------------------------------------
+
+def test_install_all_daemons_no_longer_references_allocator_launchd():
+    repo = REPO_ROOT
+    sh = (repo / "scripts" / "install_all_daemons.sh").read_text()
+    assert "install_launchd_allocator" not in sh
+    assert not (repo / "scripts" / "install_launchd_allocator.sh").exists()
