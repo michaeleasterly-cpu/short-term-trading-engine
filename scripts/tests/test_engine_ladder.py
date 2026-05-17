@@ -138,3 +138,60 @@ async def test_list_escalate_only_no_fps_stays_open():
     out = await el.list_undispositioned(pool, now=NOW, grace_days=7)
     assert [r["hold_id"] for r in out] == ["e4"]
     assert out[0]["shape"] == "escalate-only"
+
+
+def _rec_pool(open_hold_ids):
+    """fetch returns a 1-row marker iff hold_id is an open escalation;
+    execute records the disposition INSERT."""
+    class _C:
+        def __init__(self):
+            self.inserts = []
+        async def fetch(self, sql, *a):
+            if "ENGINE_ESCALATED" in sql:
+                hid = a[0]
+                return ([{"hold_id": hid, "engine": "reversion"}]
+                        if hid in open_hold_ids else [])
+            return []
+        async def execute(self, sql, *a):
+            self.inserts.append((sql, a))
+    c = _C()
+    class _P:
+        @contextlib.asynccontextmanager
+        async def acquire(self):
+            yield c
+    p = _P()
+    p._c = c
+    return p
+
+
+async def test_disposition_emits_locked_event_for_valid_verb():
+    pool = _rec_pool({"h9"})
+    rc = await el.disposition(pool, "h9", "Structural", "the note")
+    assert rc == 0
+    ins = [a for s, a in pool._c.inserts
+           if "INSERT INTO platform.application_log" in s]
+    assert len(ins) == 1
+    payload = _json.loads(ins[0][-1])
+    assert payload == {"schema": 1, "hold_id": "h9",
+                       "disposition": "structural", "note": "the note"}
+    assert ins[0][2] == "ENGINE_ESCALATION_DISPOSITIONED"
+
+
+async def test_disposition_rejects_unknown_verb_no_write():
+    pool = _rec_pool({"h9"})
+    rc = await el.disposition(pool, "h9", "bogus", "")
+    assert rc != 0
+    assert not any("INSERT" in s for s, _ in pool._c.inserts)
+
+
+async def test_disposition_rejects_unknown_or_not_open_hold_no_write():
+    pool = _rec_pool(set())
+    rc = await el.disposition(pool, "h9", "structural", "")
+    assert rc != 0
+    assert not any("INSERT" in s for s, _ in pool._c.inserts)
+
+
+async def test_disposition_accepts_escalate_only_hold_id():
+    pool = _rec_pool({"e1"})
+    rc = await el.disposition(pool, "e1", "converted", "fixed it")
+    assert rc == 0

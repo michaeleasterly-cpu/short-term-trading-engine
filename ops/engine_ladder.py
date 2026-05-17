@@ -13,14 +13,18 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any
 
+import structlog
 from pydantic import BaseModel, ConfigDict
 
 from ops.aar_autotune import _BEHAVIORAL
 from ops.engine_supervisor import INFRA_FAILURE_CLASSES
+
+logger = structlog.get_logger(__name__)
 
 
 class EscalationShape(StrEnum):
@@ -203,3 +207,59 @@ async def list_undispositioned(pool, *, now: datetime | None = None,
             "policy_rationale": (pol.rationale if pol else None),
         })
     return out
+
+
+_INSERT_SQL = """
+    INSERT INTO platform.application_log
+        (engine, run_id, event_type, severity, message, data)
+    VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+"""
+
+_DISPOSITIONED_EVENT = "ENGINE_ESCALATION_DISPOSITIONED"
+
+_IS_OPEN_SQL = """
+    SELECT e.data->>'hold_id' AS hold_id, e.engine AS engine
+    FROM platform.application_log e
+    WHERE e.event_type = 'ENGINE_ESCALATED'
+      AND (e.data->>'hold_id') = $1
+      AND NOT EXISTS (
+        SELECT 1 FROM platform.application_log d
+        WHERE d.event_type = 'ENGINE_ESCALATION_DISPOSITIONED'
+          AND (d.data->>'hold_id') = $1)
+      AND NOT EXISTS (
+        SELECT 1 FROM platform.application_log c
+        WHERE c.event_type = 'ENGINE_CLEARED'
+          AND (c.data->>'hold_id') = $1
+          AND c.recorded_at > e.recorded_at)
+    LIMIT 1
+"""
+
+
+async def disposition(pool, hold_id: str, verb: str, note: str) -> int:
+    """Record an operator disposition for an open engine escalation.
+    Accepts BOTH held and escalate-only hold_ids (validity is the
+    open-escalation predicate, NOT current_hold). 0 ok; non-zero +
+    NO write on a bad verb or an unknown/not-open hold_id."""
+    try:
+        disp = EngineEscalationDisposition(verb.strip().lower())
+    except ValueError:
+        logger.error("engine_ladder.bad_verb", verb=verb)
+        return 2
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(_IS_OPEN_SQL, hold_id)
+    if not rows:
+        logger.error("engine_ladder.unknown_or_not_open", hold_id=hold_id)
+        return 2
+    first = rows[0]
+    engine = (first.get("engine") if isinstance(first, dict)
+              else first["engine"]) or "engine"
+    payload = {"schema": 1, "hold_id": hold_id,
+               "disposition": disp.value, "note": note}
+    async with pool.acquire() as conn:
+        await conn.execute(
+            _INSERT_SQL, engine, uuid.uuid4(), _DISPOSITIONED_EVENT,
+            "INFO", f"escalation {hold_id} dispositioned: {disp.value}",
+            json.dumps(payload, default=str))
+    logger.info("engine_ladder.dispositioned", hold_id=hold_id,
+                disposition=disp.value)
+    return 0
