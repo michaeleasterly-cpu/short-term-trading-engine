@@ -11,7 +11,11 @@ Engine-native; symmetry-references the data-lane ladder
 """
 from __future__ import annotations
 
+import json
+import os
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
@@ -97,3 +101,94 @@ def policy_for(class_name: str) -> DispositionPolicy | None:
     """The class's policy, or None if unknown (the data-lane analog
     tpcore.ladder.disposition.policy_for raises KeyError instead)."""
     return DISPOSITION_POLICIES.get(class_name)
+
+
+_GRACE_DAYS = int(os.environ.get("ENGINE_LADDER_GRACE_DAYS", "7"))
+
+# Candidate ENGINE_ESCALATED rows: not later-CLEARED, not DISPOSITIONED,
+# with a has_held flag (paired ENGINE_HELD on the SAME hold_id) so the
+# caller distinguishes held vs escalate-only. Escalate-only auto-close
+# (trigger fingerprints resolved) is applied in Python against
+# forensics_triggers (mirrors aar_autotune behavioral re-eval).
+_CANDIDATE_SQL = """
+    SELECT e.data->>'hold_id'        AS hold_id,
+           e.engine                  AS engine,
+           e.data->>'failure_class'  AS failure_class,
+           e.data->>'reason'         AS reason,
+           e.recorded_at             AS recorded_at,
+           (e.data->'triggers')      AS triggers,
+           EXISTS (SELECT 1 FROM platform.application_log h
+                   WHERE h.event_type = 'ENGINE_HELD'
+                     AND (h.data->>'hold_id') = (e.data->>'hold_id'))
+                                     AS has_held
+    FROM platform.application_log e
+    WHERE e.event_type = 'ENGINE_ESCALATED'
+      AND (e.data->>'hold_id') IS NOT NULL
+      AND e.recorded_at < $1
+      AND NOT EXISTS (
+        SELECT 1 FROM platform.application_log d
+        WHERE d.event_type = 'ENGINE_ESCALATION_DISPOSITIONED'
+          AND (d.data->>'hold_id') = (e.data->>'hold_id'))
+      AND NOT EXISTS (
+        SELECT 1 FROM platform.application_log c
+        WHERE c.event_type = 'ENGINE_CLEARED'
+          AND (c.data->>'hold_id') = (e.data->>'hold_id')
+          AND c.recorded_at > e.recorded_at)
+    ORDER BY e.recorded_at
+"""
+
+_OPEN_FP_SQL = """
+    SELECT payload->>'fingerprint' AS fp
+    FROM platform.forensics_triggers
+    WHERE resolved_at IS NULL AND payload->>'fingerprint' = ANY($1::text[])
+"""
+
+
+def _triggers_list(raw: Any) -> list[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (TypeError, ValueError):
+            return []
+    return [str(x) for x in raw] if isinstance(raw, list) else []
+
+
+async def list_undispositioned(pool, *, now: datetime | None = None,
+                               grace_days: int | None = None) -> list[dict]:
+    """Open-undispositioned engine escalations (held + escalate-only).
+    Read-only, grace-windowed. Escalate-only rows auto-close once all
+    their trigger fingerprints are resolved/absent from
+    forensics_triggers (the no-hold terminal disjunct)."""
+    now = now or datetime.now(UTC)
+    grace = grace_days if grace_days is not None else _GRACE_DAYS
+    cutoff = now - timedelta(days=grace)
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(_CANDIDATE_SQL, cutoff)
+    out: list[dict] = []
+    for r in rows:
+        rec = r["recorded_at"]
+        if rec is not None and rec >= cutoff:
+            continue  # within grace — skip (SQL already does this in prod)
+        has_held = bool(r["has_held"])
+        if has_held:
+            shape = "held"
+        else:
+            shape = "escalate-only"
+            fps = _triggers_list(r["triggers"])
+            if fps:
+                async with pool.acquire() as conn:
+                    open_rows = await conn.fetch(_OPEN_FP_SQL, fps)
+                if not open_rows:
+                    continue  # all fps resolved → auto-closed
+            # no fps recorded → cannot auto-close; remains open
+        pol = policy_for(r["failure_class"])
+        out.append({
+            "hold_id": r["hold_id"], "engine": r["engine"],
+            "failure_class": r["failure_class"], "reason": r["reason"],
+            "recorded_at": r["recorded_at"], "shape": shape,
+            "policy_default": (pol.default.value if pol else None),
+            "policy_rationale": (pol.rationale if pol else None),
+        })
+    return out
