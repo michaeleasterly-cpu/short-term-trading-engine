@@ -260,6 +260,57 @@ def _append_shrinkage_finding(
         ))
 
 
+async def _adapter_contract_findings(pool) -> list[AuditFinding]:
+    """#186(6) thin Step-4c check. The producer raise is authoritative;
+    this adds (1) registry coverage, (2) guard_pending visibility,
+    (3) recent unacknowledged adapter_contract_drift escalations. It
+    CANNOT re-derive drift post-cycle (adapter output is gone) —
+    deliberately thinner than shrinkage_detector."""
+    from tpcore.ingestion.adapter_contract import (
+        ADAPTER_CONTRACTS,
+        contract_drift,
+    )
+
+    out: list[AuditFinding] = []
+    missing, extra = contract_drift()
+    if missing or extra:
+        out.append(AuditFinding(
+            phase="known_knowns", check_name="adapter_contract",
+            source="registry", severity="FAIL",
+            summary=f"ADAPTER_CONTRACTS drift: missing={sorted(missing)} "
+                    f"extra={sorted(extra)}"))
+    else:
+        out.append(AuditFinding(
+            phase="known_knowns", check_name="adapter_contract",
+            source="registry", severity="OK",
+            summary="ADAPTER_CONTRACTS in lockstep with CSV-first feeds"))
+
+    pending = sorted(f for f, c in ADAPTER_CONTRACTS.items()
+                     if c.guard_pending)
+    if pending:
+        out.append(AuditFinding(
+            phase="known_knowns", check_name="adapter_contract",
+            source="guard_pending", severity="WARN",
+            summary=f"guard_pending (declared, enforced wiring not yet "
+                    f"rolled out): {pending}"))
+
+    async with pool.acquire() as conn:
+        n = await conn.fetchval("""
+            SELECT COUNT(*)
+            FROM platform.application_log
+            WHERE event_type = 'INGESTION_FAILED'
+              AND data->>'reason' = 'adapter_contract_drift'
+              AND recorded_at > NOW() - INTERVAL '24 hours'
+        """)
+    if n and int(n) > 0:
+        out.append(AuditFinding(
+            phase="known_knowns", check_name="adapter_contract",
+            source="escalation", severity="FAIL",
+            summary=f"{int(n)} adapter_contract_drift escalation(s) in "
+                    f"the last 24h — a vendor contract changed"))
+    return out
+
+
 # ─── Phase 1: known_knowns ─────────────────────────────────────────────
 
 
@@ -666,6 +717,9 @@ async def run_known_knowns(pool, sink: _FindingSink | None = None) -> list[Audit
                 summary=f"{engine}: no activity (pre-graduation / paper — expected)",
                 evidence=evidence,
             ))
+
+    for f in await _adapter_contract_findings(pool):
+        findings.append(f)
 
     return findings
 
