@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import pytest
 
+from tpcore.auditheal.orchestrator import run_audit_heal
 from tpcore.auditheal.registry import REMEDIATION_SPECS, registry_drift
 from tpcore.auditheal.spec import RemediationSpec
 
@@ -56,9 +57,6 @@ def test_every_spec_self_consistent() -> None:
             assert s.stage
         else:
             assert s.escalate_reason
-
-
-from tpcore.auditheal.orchestrator import run_audit_heal  # noqa: E402
 
 
 class _Conn:
