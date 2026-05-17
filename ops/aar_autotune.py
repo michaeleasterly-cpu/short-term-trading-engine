@@ -157,11 +157,30 @@ async def _decide_and_act(pool, engine: str, now: datetime) -> None:
                           f"{','.join(kinds)}: escalate-only", fps)
 
 
+async def _maybe_clear_behavioral(pool, engine: str) -> None:
+    """Operator-only behavioral clear (spec §5). If the engine has an
+    uncleared behavioral hold, clear it iff NO HOLD-eligible trigger
+    remains open — re-evaluate the §3 HOLD condition against
+    currently-open triggers (NOT a stale fingerprint match; the
+    operator resolves triggers via forensics_triggers.resolved_at, so
+    they leave _open_triggers). A NEWER hold-eligible trigger keeps it
+    held (guards against premature resume)."""
+    hold = await current_hold(pool, engine)
+    if hold is None or hold.failure_class != _BEHAVIORAL:
+        return
+    triggers = await _open_triggers(pool, engine)
+    if any(_is_hold_eligible(t) for t in triggers):
+        return  # still systemically decayed (incl. a newer trigger)
+    await _emit_cleared(pool, engine, hold.hold_id,
+                        "no open hold-eligible forensics trigger")
+
+
 async def autotune(pool, engine: str, now: datetime) -> None:
     """Per-actor behavioral pass. Crash-isolated: ANY exception is
     logged and swallowed — the dispatch sweep must never abort on a
     broken autotune (spec §9)."""
     try:
+        await _maybe_clear_behavioral(pool, engine)
         await _decide_and_act(pool, engine, now)
     except Exception as exc:  # noqa: BLE001 — never abort the sweep
         logger.error("aar_autotune.error", engine=engine, error=str(exc))

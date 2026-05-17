@@ -130,3 +130,56 @@ async def test_hold_payload_carries_kind_and_fingerprints():
     assert p["failure_class"] == "behavioral"
     assert "drawdown_period" in p["reason"]
     assert p["triggers"] == ["fp-d"]
+
+
+def _beh_hold(hold_id="h-b"):
+    from tpcore.supervisor_state import HoldState
+    return HoldState(hold_id, "behavioral", "drawdown_period: fp-d",
+                     datetime(2026, 5, 5, 21, 0, tzinfo=UTC))
+
+
+async def test_behavioral_held_not_cleared_while_holdeligible_open():
+    events = await _run([_trig("drawdown_period", "fp-d")],
+                        hold=_beh_hold())
+    assert "ENGINE_CLEARED" not in events
+    assert "ENGINE_HELD" not in events  # one-hold rule: no re-hold either
+
+
+async def test_behavioral_held_cleared_when_no_holdeligible_open():
+    rec = _rows_conn([[]])
+    with patch.object(at, "current_hold",
+                      new=AsyncMock(return_value=_beh_hold("h-z"))):
+        await at.autotune(_pool_for(rec), "reversion",
+                          datetime(2026, 5, 5, 21, 30, tzinfo=UTC))
+    cleared = [a for _s, a in rec.inserts if a[2] == "ENGINE_CLEARED"]
+    assert len(cleared) == 1
+    p = json.loads(cleared[0][-1])
+    assert p["hold_id"] == "h-z" and p["schema"] == 1
+
+
+async def test_behavioral_held_cleared_when_only_escalate_triggers_open():
+    # original drawdown resolved; an outlier_loss is open but NOT
+    # hold-eligible → re-eval has no hold-eligible → clear.
+    rec = _rows_conn([[_trig("outlier_loss", "fp-o")]])
+    with patch.object(at, "current_hold",
+                      new=AsyncMock(return_value=_beh_hold("h-q"))):
+        await at.autotune(_pool_for(rec), "reversion",
+                          datetime(2026, 5, 5, 21, 30, tzinfo=UTC))
+    assert any(a[2] == "ENGINE_CLEARED" for _s, a in rec.inserts)
+
+
+async def test_behavioral_held_kept_when_newer_holdeligible_fires():
+    # original trigger resolved but a NEW drawdown is open → still
+    # hold-eligible → NOT cleared (re-eval, not fingerprint match).
+    events = await _run([_trig("drawdown_period", "fp-NEW")],
+                        hold=_beh_hold("h-k"))
+    assert "ENGINE_CLEARED" not in events
+
+
+async def test_infra_hold_not_cleared_by_da2():
+    # DA-2 must only clear BEHAVIORAL holds; an infra hold is DA-1's.
+    from tpcore.supervisor_state import HoldState
+    infra = HoldState("h-i", "crashed_startup", "x",
+                      datetime(2026, 5, 5, tzinfo=UTC))
+    events = await _run([], hold=infra)
+    assert "ENGINE_CLEARED" not in events
