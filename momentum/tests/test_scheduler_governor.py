@@ -200,6 +200,15 @@ def _patch_scheduler(monkeypatch) -> tuple[_StubGovernor, _StubBroker]:
         def __init__(self, *_a, **_k):
             pass
 
+        async def startup(self, *_a, **_k):
+            pass
+
+        async def shutdown(self, *_a, **_k):
+            pass
+
+        async def error(self, *_a, **_k):
+            pass
+
         async def log(self, *_a, **_k):
             pass
 

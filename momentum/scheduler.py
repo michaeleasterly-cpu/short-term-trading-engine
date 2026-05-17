@@ -45,6 +45,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import time
 import uuid
 from datetime import UTC, datetime
 from datetime import date as date_t
@@ -231,6 +232,18 @@ class MomentumScheduler:
         # signals" section to find them.
         run_id = uuid.uuid4()
         db_log = DBLogHandler(pool=pool, engine="momentum", run_id=run_id)
+        # STARTUP / SHUTDOWN bookend the run. tpcore.engine_profile.should_fire
+        # keys its "already ran this cadence window" idempotency off a STARTUP
+        # row in platform.application_log — without these the event-driven
+        # dispatcher (Sub-project B) would re-fire a MONTHLY engine on every
+        # readiness event in its first-trading-day window. Mirrors the
+        # reversion/vector/sentinel schedulers' bookend idiom exactly.
+        started_at = time.monotonic()
+        exit_code = 0
+        await db_log.startup(
+            commit_sha=os.getenv("RAILWAY_GIT_COMMIT_SHA")
+            or os.getenv("GIT_COMMIT_SHA")
+        )
         try:
             broker = AlpacaPaperBrokerAdapter()
             state_store = PostgresRiskStateStore(pool=pool)
@@ -459,7 +472,17 @@ class MomentumScheduler:
                 as_of=as_of, is_rebalance_day=True,
                 decision=decision, submitted_order_ids=submitted, dry_run=not self._submit,
             )
+        except Exception as exc:
+            exit_code = 1
+            await db_log.error(exc, context="scheduler_crash")
+            raise
         finally:
+            # SHUTDOWN must always fire — including the no-rebalance /
+            # kill-switch / drawdown early-return paths and the exception
+            # path — so the dispatcher's idempotency sees the cycle closed.
+            # Order matters: log SHUTDOWN (needs the pool) THEN close it.
+            duration_ms = int((time.monotonic() - started_at) * 1000)
+            await db_log.shutdown(duration_ms=duration_ms, exit_code=exit_code)
             await pool.close()
 
     @staticmethod
