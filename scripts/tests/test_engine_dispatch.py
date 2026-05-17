@@ -65,8 +65,8 @@ async def test_fires_only_engines_should_fire_approves():
     assert invoked == ["reversion"]
 
 
-async def test_roster_is_the_four_live_engines():
-    assert ROSTER == ("reversion", "vector", "momentum", "sentinel")
+async def test_roster_is_the_five_live_engines():
+    assert ROSTER == ("reversion", "vector", "momentum", "sentinel", "canary")
 
 
 async def test_data_blocked_emits_one_request_and_skips_never_heals():
@@ -87,7 +87,7 @@ async def test_data_blocked_emits_one_request_and_skips_never_heals():
         await dispatch_once(_P(), now=datetime(2026,5,5,21,30,tzinfo=UTC))
     inv.assert_not_called()
     payloads = [a for s, a in inserts if "INSERT INTO platform.application_log" in s]
-    assert len(payloads) == 5  # allocator + one ENGINE_DATA_REQUEST per ROSTER engine (all data-blocked)
+    assert len(payloads) == 6  # allocator + one ENGINE_DATA_REQUEST per ROSTER engine (all data-blocked)
     data = json.loads(payloads[1][-1])  # payloads[0] is allocator; [1] is first ROSTER engine
     assert data["schema"] == 1 and data["engine"] in ROSTER
     assert data["sources"] == ["prices_daily"]

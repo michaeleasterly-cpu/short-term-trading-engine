@@ -38,10 +38,10 @@ jobs:
           pip install -e .[dev]
 
       - name: Run forbidden-imports check
-        run: python -m tpcore.scripts.check_imports reversion vector momentum sentinel tpcore
+        run: python -m tpcore.scripts.check_imports reversion vector momentum sentinel canary tpcore
 
       - name: Run ruff
-        run: python -m ruff check reversion/ vector/ momentum/ sentinel/ tpcore/ scripts/ ops/
+        run: python -m ruff check reversion/ vector/ momentum/ sentinel/ canary/ tpcore/ scripts/ ops/
 
       - name: Run pytest
         run: python -m pytest -q

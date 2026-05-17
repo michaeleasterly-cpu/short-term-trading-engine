@@ -2,6 +2,7 @@
 
 plug: One of five standardized modules inside each engine.
 sigma: ARCHIVED 2026-05-16 (`archive/sigma/`, see `archive/sigma/EULOGY.md`). Was a range scalping engine (daily Bollinger Bands, ADX, stochastic). Failed the credibility gate in both its static and failed-expansion forms; no longer imported/scheduled/gated/swept. The sector-neutral residual idea is pursued (2026-05-17) as a *Reversion enhancement* (the PCA-residual signal switch), not a new engine and not a Sigma revival.
+canary: Permanent pipeline-exercise heartbeat engine (1-share SPY paper daily). Exercises DA-1/DA-2/AAR/forensics dispatch paths without signal risk. Never graduates — the one documented compliance deviation: no `write_credibility_score` (spec §4b). Allocator-excluded by omission (spec §5a).
 reversion: Statistical mean reversion engine (Z-score, RSI extremes).
 vector: Momentum swing engine (multi-day trend, catalyst overlay).
 s2: Short squeeze engine (satellite, rare setups).

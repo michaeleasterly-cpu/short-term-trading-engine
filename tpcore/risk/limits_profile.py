@@ -13,6 +13,7 @@ from tpcore.risk.governor import RiskLimits
 _PROFILE: dict[str, RiskLimits] = {
     "momentum": RiskLimits(max_open_positions=200),
     "sentinel": RiskLimits(max_open_positions=5),
+    "canary":   RiskLimits(max_open_positions=1),
 }
 
 

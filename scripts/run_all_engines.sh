@@ -7,6 +7,7 @@
 # runs each engine that tpcore.engine_profile.should_fire +
 # capital_gate clears ⇒ orders submitted to Alpaca paper ⇒
 # trade_monitor (running separately) watches fills.
+# Engines dispatched: reversion → vector → momentum → sentinel → canary.
 #
 # Per-engine gating (validation freshness, should_fire, capital_gate)
 # now lives in ops/engine_dispatch.py — NOT a global all-or-nothing

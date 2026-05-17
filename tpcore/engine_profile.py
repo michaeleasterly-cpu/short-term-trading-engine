@@ -45,6 +45,7 @@ _PROFILE: dict[str, EngineProfile] = {
     "reversion": EngineProfile(engine="reversion", cadence=Cadence.DAILY),
     "vector":    EngineProfile(engine="vector",    cadence=Cadence.DAILY),
     "sentinel":  EngineProfile(engine="sentinel",  cadence=Cadence.DAILY),
+    "canary":    EngineProfile(engine="canary",    cadence=Cadence.DAILY),
     "momentum":  EngineProfile(engine="momentum",  cadence=Cadence.MONTHLY_FIRST_TRADING_DAY),
     # allocator profile present (this is the SoT); consumed in Sub-project C.
     "allocator": EngineProfile(engine="allocator", cadence=Cadence.WEEKLY_FIRST_TRADING_DAY),

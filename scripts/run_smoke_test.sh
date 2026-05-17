@@ -5,7 +5,7 @@
 #   1. Full pytest suite — every engine, tpcore, dashboard, forensics.
 #   2. ruff — lint clean.
 #   3. Per-engine scheduler dry-run (no orders submitted): reversion,
-#      vector, momentum, sentinel (Sigma archived 2026-05-16).
+#      vector, momentum, sentinel, canary (Sigma archived 2026-05-16).
 #   4. Forensics CLI — scan AAR table for triggers (no-op when empty).
 #   5. Allocator CLI — paper mode (no kill_switch writes).
 #   6. Tip sheet render (momentum) — exercises every section.
@@ -48,7 +48,7 @@ step "Ruff lint" \
     .venv/bin/python -m ruff check .
 
 # Step 3 — per-engine scheduler dry-runs.
-for engine in reversion vector momentum sentinel; do
+for engine in reversion vector momentum sentinel canary; do
     step "${engine} scheduler dry-run" bash -c "\
         DATABASE_URL=\"\$DATABASE_URL_IPV4\" .venv/bin/python -m ${engine}.scheduler --dry-run 2>&1 | tail -10"
 done
