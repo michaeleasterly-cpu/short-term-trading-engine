@@ -32,7 +32,9 @@ references the data-lane ladder (`docs/ESCALATION_HARDENING_LADDER.md`)
   or a disposition; **escalate-only** closes on a disposition OR all
   its payload `triggers` fingerprints resolved/absent from
   `forensics_triggers` (so the "every escalation terminates" claim is
-  literally true for the no-hold case). `python -m ops.engine_ladder
+  literally true for the no-hold case — except an escalate-only row
+  with no recorded fingerprints, which cannot auto-close and requires
+  a manual disposition). `python -m ops.engine_ladder
   disposition <hold_id> <converted|structural|removed> [note]` records
   an event-sourced `ENGINE_ESCALATION_DISPOSITIONED`.
 - **R4 — structural removal levers (existing, no new code):** the
