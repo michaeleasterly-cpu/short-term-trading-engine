@@ -80,6 +80,37 @@ async def test_invalid_disposition_rejected() -> None:
     assert rc != 0 and pool.conn.emitted == []
 
 
+async def test_undispositioned_line_annotated_with_policy() -> None:
+    pool = _Pool({
+        "OPEN_ESCALATIONS": [
+            {"ref": "h1", "etype": "DATA_SOURCE_ESCALATED",
+             "recorded_at": datetime(2026, 5, 1, tzinfo=UTC),
+             "message": "source prices_daily stuck"},
+        ],
+    })
+    d = await wd.build_weekly_digest(pool, datetime(2026, 5, 17, tzinfo=UTC))
+    line = next(x for x in d.undispositioned if "prices_daily" in x)
+    # the disposition policy for event:DATA_SOURCE_ESCALATED is
+    # escalate_operator — it MUST appear inline on the line.
+    assert "escalate_operator" in line
+    # and the line still has the existing fields
+    assert "h1" in line and "DATA_SOURCE_ESCALATED" in line
+
+
+async def test_unregistered_etype_degrades_gracefully() -> None:
+    pool = _Pool({
+        "OPEN_ESCALATIONS": [
+            {"ref": "x9", "etype": "TOTALLY_NEW_ESCALATION",
+             "recorded_at": datetime(2026, 5, 1, tzinfo=UTC),
+             "message": "novel"},
+        ],
+    })
+    # must NOT crash the whole digest if an etype has no event: policy.
+    d = await wd.build_weekly_digest(pool, datetime(2026, 5, 17, tzinfo=UTC))
+    line = next(x for x in d.undispositioned if "x9" in x)
+    assert "UNREGISTERED" in line
+
+
 def test_open_escalation_sql_has_all_exclusion_clauses() -> None:
     # The anti-join correctness can't be exercised by a fake pool
     # (it doesn't run SQL). Static guard: the open-escalation query
