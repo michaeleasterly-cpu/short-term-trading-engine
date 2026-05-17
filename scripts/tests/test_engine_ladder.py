@@ -230,3 +230,40 @@ async def test_amain_list_runs_dbless_clean(monkeypatch):
     monkeypatch.delenv("DATABASE_URL_IPV4", raising=False)
     rc = await el._amain(["list"])
     assert rc == 1  # explicit no-DSN failure, NOT a silent 0
+
+
+async def test_amain_dispatches_list_and_disposition(monkeypatch):
+    """Wire-up guard: _amain must route list→list_undispositioned and
+    disposition→disposition with correctly-named argparse attrs (the
+    canary __main__-no-op lesson — a typo'd attr would survive to a
+    live run otherwise)."""
+    monkeypatch.setenv("DATABASE_URL", "postgres://fake/db")
+
+    class _FakePool:
+        async def close(self): ...
+    fake_pool = _FakePool()
+
+    async def _fake_build(_dsn):
+        return fake_pool
+    monkeypatch.setattr(el, "build_asyncpg_pool", _fake_build)
+
+    seen = {}
+
+    async def _fake_list(pool, *, grace_days=None):
+        seen["list"] = (pool is fake_pool, grace_days)
+        return []
+
+    async def _fake_disp(pool, hold_id, verb, note):
+        seen["disp"] = (pool is fake_pool, hold_id, verb, note)
+        return 0
+    monkeypatch.setattr(el, "list_undispositioned", _fake_list)
+    monkeypatch.setattr(el, "disposition", _fake_disp)
+
+    rc_list = await el._amain(["list", "--grace-days", "3"])
+    rc_disp = await el._amain(
+        ["disposition", "h1", "structural", "a", "note"])
+
+    assert rc_list == 0
+    assert seen["list"] == (True, 3)
+    assert rc_disp == 0
+    assert seen["disp"] == (True, "h1", "structural", "a note")

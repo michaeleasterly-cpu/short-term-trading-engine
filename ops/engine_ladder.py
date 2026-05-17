@@ -285,11 +285,15 @@ def _fmt(rows: list[dict]) -> str:
         return head
     lines = [head]
     for r in rows:
+        pol_default = r["policy_default"]
+        if pol_default is None:
+            pol_str = "UNKNOWN (no policy registered — drift; add to DISPOSITION_POLICIES)"
+        else:
+            pol_str = f"{pol_default} ({r['policy_rationale']})"
         lines.append(
             f"  [{r['shape']}] {r['engine']}/{r['failure_class']} "
             f"hold_id={r['hold_id']} since={r['recorded_at']} "
-            f"reason={r['reason']} "
-            f"-> policy={r['policy_default']} ({r['policy_rationale']})")
+            f"reason={r['reason']} -> policy={pol_str}")
     return "\n".join(lines)
 
 
@@ -310,9 +314,9 @@ async def _amain(argv: list[str]) -> int:
     args = p.parse_args(argv or ["list"])
     pool = await build_asyncpg_pool(dsn)
     try:
-        if args.cmd in (None, "list"):
+        if args.cmd == "list":
             rows = await list_undispositioned(
-                pool, grace_days=getattr(args, "grace_days", None))
+                pool, grace_days=args.grace_days)
             print(_fmt(rows))
             return 0
         if args.cmd == "disposition":
