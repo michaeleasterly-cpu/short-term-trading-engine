@@ -1346,6 +1346,12 @@ async def handle_macro_indicators(
     async with FREDAdapter() as fred:
         per_indicator = await fred.get_all_indicators(start=start)
 
+    from tpcore.ingestion.adapter_contract import assert_contract_populated
+    assert_contract_populated(
+        "fred_macro",
+        [o for lst in per_indicator.values() for o in lst],
+    )
+
     # ── 2. Bulk upsert ───────────────────────────────────────────────
     upsert_rows: list[tuple] = []
     for name, _ in INDICATOR_SERIES:
@@ -1671,6 +1677,9 @@ async def handle_apewisdom_social_sentiment(
     async with ApeWisdomAdapter() as adapter:
         records = await adapter.get_all_sentiment()
 
+    from tpcore.ingestion.adapter_contract import assert_contract_populated
+    assert_contract_populated("apewisdom_social_sentiment", records)
+
     today = datetime.now(UTC).date()
     # Dedup by ticker (date is constant) — keep the best-ranked entry
     # if a ticker appears twice. Prevents rows_loaded over-counting vs
@@ -1911,6 +1920,9 @@ async def handle_finra_short_interest(
         logger.info("ingestion.handler.short_interest.empty", since=since.isoformat())
         return 0
 
+    from tpcore.ingestion.adapter_contract import assert_contract_populated
+    assert_contract_populated("finra_short_interest", records)
+
     # PIT shares_outstanding: latest filing with period_end_date ≤
     # settlement_date, per ticker. One query for the involved tickers.
     tickers = sorted({r.ticker for r in records})
@@ -2050,6 +2062,7 @@ async def handle_iborrowdesk_borrow_rates(
         universe = universe[: int(max_tickers)]
 
     rows: list[tuple] = []
+    recs: list = []
     consecutive_fail = 0
     failures = 0
     async with IBorrowDeskAdapter() as adapter:
@@ -2072,6 +2085,10 @@ async def handle_iborrowdesk_borrow_rates(
                 continue
             if rec is not None:
                 rows.append((rec.ticker, rec.date, float(rec.borrow_rate_pct)))
+                recs.append(rec)
+
+    from tpcore.ingestion.adapter_contract import assert_contract_populated
+    assert_contract_populated("iborrowdesk_borrow_rates", recs)
 
     if not rows:
         logger.warning(
