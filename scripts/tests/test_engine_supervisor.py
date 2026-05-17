@@ -5,6 +5,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 # ops/ vs scripts/ops.py top-level name collision guard (identical to
 # scripts/tests/test_engine_dispatch.py — repo root first, evict any
 # non-package `ops`/`ops.*` so the real ops/ package resolves).
@@ -288,3 +290,41 @@ async def test_auto_clear_still_clears_each_infra_class():
                                AsyncMock())
         cleared = [a for _s, a in conn.inserts if a[2] == "ENGINE_CLEARED"]
         assert len(cleared) == 1, f"{fc} must still auto-clear"
+
+
+@pytest.mark.parametrize("detector,expected", [
+    ("_detect_crashed_startup", "crashed_startup"),
+    ("_detect_scheduler_crash", "scheduler_crash"),
+    ("_detect_data_request_timeout", "data_request_timeout"),
+    ("_detect_data_repair_escalated", "data_repair_escalated"),
+    ("_detect_missed_cycle", "missed_cycle"),
+])
+async def test_classify_emittable_classes_are_pinned_to_constant(
+        detector, expected):
+    """Every class _classify can return MUST be in INFRA_FAILURE_CLASSES
+    — so a new DA-1 detector/class fails the engine-ladder clockwork
+    until INFRA_FAILURE_CLASSES (and a disposition policy) is updated."""
+    assert hasattr(es, "INFRA_FAILURE_CLASSES")
+    names = ("_detect_crashed_startup", "_detect_scheduler_crash",
+             "_detect_data_request_timeout",
+             "_detect_data_repair_escalated", "_detect_missed_cycle")
+    ctx = [patch.object(es, d, new=AsyncMock(return_value=(d == detector)))
+           for d in names]
+    for c in ctx:
+        c.__enter__()
+    try:
+        cls, _heal = await es._classify(
+            object(), "reversion",
+            datetime(2026, 5, 6, tzinfo=UTC),
+            datetime(2026, 5, 6, tzinfo=UTC))
+    finally:
+        for c in ctx:
+            c.__exit__(None, None, None)
+    assert cls == expected
+    assert cls in es.INFRA_FAILURE_CLASSES
+
+
+def test_infra_failure_classes_is_the_five_da1_classes():
+    assert es.INFRA_FAILURE_CLASSES == frozenset({
+        "crashed_startup", "scheduler_crash", "data_request_timeout",
+        "data_repair_escalated", "missed_cycle"})
