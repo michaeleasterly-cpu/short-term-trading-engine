@@ -108,6 +108,7 @@ def _patch_all(*, boundary=True, closed=True, data_ok=True):
     cm.enter_context(patch("tpcore.engine_profile.cal.session_contains", return_value=not closed))
     ag = AsyncMock(return_value=None) if data_ok else AsyncMock(side_effect=RuntimeError("stale"))
     cm.enter_context(patch("tpcore.engine_profile.assert_passed_for_engine", ag))
+    cm.enter_context(patch("tpcore.engine_profile.current_hold", new=AsyncMock(return_value=None)))
     return cm
 
 
@@ -117,6 +118,7 @@ async def test_should_fire_all_green_fires():
     assert isinstance(d, FireDecision)
     assert d.fire is True and d.reason == "ready"
     assert d.checks == {"profiled": True, "cadence": True, "market_closed": True,
+                        "supervisor_held": True,
                         "data_ready": True, "not_already_run": True}
 
 
@@ -153,3 +155,31 @@ async def test_exception_in_check_fails_closed():
     with patch("tpcore.engine_profile._cadence_boundary", side_effect=RuntimeError("boom")):
         d = await should_fire("reversion", datetime(2026, 5, 5, 21, 30, tzinfo=UTC), _FakePool())
     assert d.fire is False and d.reason.startswith("error:")
+
+
+async def test_should_fire_blocks_when_supervisor_held():
+    from tpcore.supervisor_state import HoldState
+
+    held = HoldState(hold_id="h-9", failure_class="crashed_startup",
+                      reason="stale", held_at=datetime(2026, 5, 5, tzinfo=UTC))
+    with _patch_all(), \
+         patch("tpcore.engine_profile.current_hold",
+               new=AsyncMock(return_value=held)):
+        d = await should_fire("reversion",
+                              datetime(2026, 5, 5, 21, 30, tzinfo=UTC),
+                              _FakePool(ran=False))
+    assert d.fire is False
+    assert d.reason == "supervisor hold"
+    assert d.checks["supervisor_held"] is False
+    assert "data_ready" not in d.checks
+
+
+async def test_should_fire_proceeds_when_not_held():
+    with _patch_all(), \
+         patch("tpcore.engine_profile.current_hold",
+               new=AsyncMock(return_value=None)):
+        d = await should_fire("reversion",
+                              datetime(2026, 5, 5, 21, 30, tzinfo=UTC),
+                              _FakePool(ran=False))
+    assert d.fire is True and d.reason == "ready"
+    assert d.checks["supervisor_held"] is True
