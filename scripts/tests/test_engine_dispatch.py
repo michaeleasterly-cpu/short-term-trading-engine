@@ -117,59 +117,44 @@ async def test_open_request_is_not_re_emitted():
 
 
 async def test_stale_startup_without_completion_is_refired():
+    # DA-1: crashed-startup re-invoke is now owned by engine_supervisor.
+    # dispatch_once calls supervise(pool, engine, now, invoke) per actor
+    # BEFORE _dispatch_engine; assert the supervisor is awaited for each
+    # actor (re-invoke is the supervisor's job — tested in test_engine_supervisor.py).
     already = FireDecision(False, "already ran this cycle",
                            {"data_ready": True, "not_already_run": False})
-    class _C:
-        async def fetchrow(self, *_a, **_k):
-            # STARTUP 3h before `now`, no completion
-            return {"started_at": datetime(2026,5,5,18,0,tzinfo=UTC), "completed": False}
-        async def fetchval(self,*_a,**_k): return None
-        async def fetch(self,*_a,**_k): return []
-        async def execute(self,*_a,**_k): return None
-    class _P:
-        @contextlib.asynccontextmanager
-        async def acquire(self): yield _C()
+    sup = AsyncMock()
     with patch.object(ed, "should_fire", AsyncMock(return_value=already)), \
+         patch.object(ed.engine_supervisor, "supervise", sup), \
          patch.object(ed, "_invoke_scheduler", new=AsyncMock()) as inv:
-        await dispatch_once(_P(), now=datetime(2026,5,5,21,30,tzinfo=UTC))
-    assert inv.await_count >= 1
-    assert all(c.args[0] in ROSTER for c in inv.await_args_list)
-
-
-async def test_recent_startup_without_completion_is_not_refired():
-    already = FireDecision(False, "already ran this cycle",
-                           {"data_ready": True, "not_already_run": False})
-    class _C:
-        async def fetchrow(self,*_a,**_k):
-            return {"started_at": datetime(2026,5,5,21,20,tzinfo=UTC), "completed": False}  # 10m ago
-        async def fetchval(self,*_a,**_k): return None
-        async def fetch(self,*_a,**_k): return []
-        async def execute(self,*_a,**_k): return None
-    class _P:
-        @contextlib.asynccontextmanager
-        async def acquire(self): yield _C()
-    with patch.object(ed, "should_fire", AsyncMock(return_value=already)), \
-         patch.object(ed, "_invoke_scheduler", new=AsyncMock()) as inv:
-        await dispatch_once(_P(), now=datetime(2026,5,5,21,30,tzinfo=UTC))
+        await dispatch_once(object(), now=datetime(2026,5,5,21,30,tzinfo=UTC))
+    # supervisor was called for allocator + every ROSTER engine
+    assert sup.await_count == 1 + len(ROSTER)
+    engines_supervised = [c.args[1] for c in sup.await_args_list]
+    assert engines_supervised[0] == "allocator"
+    assert engines_supervised[1:] == list(ROSTER)
+    # dispatch path only logs skip (no re-invoke from _dispatch_engine)
     inv.assert_not_called()
 
 
-async def test_completed_run_is_not_refired():
-    already = FireDecision(False, "already ran this cycle",
-                           {"data_ready": True, "not_already_run": False})
-    class _C:
-        async def fetchrow(self,*_a,**_k):
-            return {"started_at": datetime(2026,5,5,18,0,tzinfo=UTC), "completed": True}
-        async def fetchval(self,*_a,**_k): return None
-        async def fetch(self,*_a,**_k): return []
-        async def execute(self,*_a,**_k): return None
-    class _P:
-        @contextlib.asynccontextmanager
-        async def acquire(self): yield _C()
-    with patch.object(ed, "should_fire", AsyncMock(return_value=already)), \
-         patch.object(ed, "_invoke_scheduler", new=AsyncMock()) as inv:
-        await dispatch_once(_P(), now=datetime(2026,5,5,21,30,tzinfo=UTC))
-    inv.assert_not_called()
+
+async def test_already_ran_branch_is_skip_only_never_reinvokes():
+    """DA-1: the crashed-startup re-invoke moved to engine_supervisor.
+    The dispatch already-ran branch must now be a pure skip — it must
+    NOT re-invoke (regression guard against re-adding refire here).
+    Boundary semantics (recent/completed → no refire) are covered in
+    test_engine_supervisor.py."""
+    ran = FireDecision(False, "already ran this cycle",
+                       {"profiled": True, "cadence": True,
+                        "market_closed": True, "supervisor_held": True,
+                        "data_ready": True, "not_already_run": False})
+    with patch.object(ed, "should_fire", AsyncMock(return_value=ran)), \
+         patch.object(ed.engine_supervisor, "supervise", AsyncMock()), \
+         patch.object(ed, "_invoke_scheduler", new=AsyncMock()) as inv, \
+         patch.object(ed, "_invoke_allocator", new=AsyncMock()) as alloc:
+        await dispatch_once(_Pool(), now=datetime(2026, 5, 5, 21, 30, tzinfo=UTC))
+    inv.assert_not_called()     # already-ran → no engine scheduler re-invoke
+    alloc.assert_not_called()   # already-ran → no allocator re-invoke
 
 
 # ---------------------------------------------------------------------------
@@ -547,3 +532,42 @@ def test_install_all_daemons_no_longer_references_allocator_launchd():
     sh = (repo / "scripts" / "install_all_daemons.sh").read_text()
     assert "install_launchd_allocator" not in sh
     assert not (repo / "scripts" / "install_launchd_allocator.sh").exists()
+
+
+# ---------------------------------------------------------------------------
+# TASK DA-1 — wire engine_supervisor per actor
+# ---------------------------------------------------------------------------
+
+async def test_supervise_called_per_actor_before_dispatch():
+    order: list[str] = []
+
+    async def _sup(pool, engine, now, invoke):
+        order.append(f"supervise:{engine}")
+
+    async def _de(pool, now, engine, invoke):
+        order.append(f"dispatch:{engine}")
+
+    with patch.object(ed.engine_supervisor, "supervise", _sup), \
+         patch.object(ed, "_dispatch_engine", _de), \
+         patch.object(ed, "_invoke_allocator", AsyncMock()):
+        await dispatch_once(object(), datetime(2026, 5, 18, 13, 0, tzinfo=UTC))
+
+    for i, item in enumerate(order):
+        if item.startswith("dispatch:"):
+            assert order[i - 1] == item.replace("dispatch:", "supervise:")
+    assert order[0] == "supervise:allocator"
+
+
+async def test_supervise_failure_does_not_abort_sweep():
+    ran: list[str] = []
+
+    async def _de(pool, now, engine, invoke):
+        ran.append(engine)
+
+    with patch.object(ed.engine_supervisor, "supervise",
+                      AsyncMock(side_effect=RuntimeError("supervisor boom"))), \
+         patch.object(ed, "_dispatch_engine", _de), \
+         patch.object(ed, "_invoke_allocator", AsyncMock()):
+        await dispatch_once(object(), datetime(2026, 5, 18, 13, 0, tzinfo=UTC))
+
+    assert ran == ["allocator", *ROSTER]  # every actor dispatched despite supervisor raising

@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict
 
 from tpcore import calendar as cal
 from tpcore.quality.validation.capital_gate import assert_passed_for_engine
+from tpcore.supervisor_state import current_hold
 
 logger = structlog.get_logger(__name__)
 
@@ -156,6 +157,11 @@ async def should_fire(engine: str, now: datetime, pool) -> FireDecision:
                 return FireDecision(False, "market open", checks)
         else:
             checks["market_closed"] = True
+
+        hold = await current_hold(pool, engine)
+        checks["supervisor_held"] = hold is None
+        if hold is not None:
+            return FireDecision(False, "supervisor hold", checks)
 
         try:
             await assert_passed_for_engine(pool, engine)
