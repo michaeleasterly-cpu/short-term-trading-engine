@@ -166,8 +166,36 @@ green; `ruff`/`check_imports` clean.**
   dispatching it; per-scheduler cadence hardcoding deleted; behavior
   becomes profile-driven. Live-dispatch change → its own spec/plan,
   isolated, reviewed.
+  - **B requirement (operator, 2026-05-17) — data-not-ready ⇒
+    self-heal then re-check.** When `should_fire()` returns
+    `checks["data_ready"] is False`, the dispatcher does NOT just skip
+    the engine — it invokes the EXISTING `tpcore.selfheal.run_self_heal()`
+    (the canonical bounded-repair path: reads red `validation.*` →
+    bounded `ops.py --stage` repair → re-validate; it re-derives its
+    own targets from the validation suite, so the gate need not pass
+    them), then re-evaluates `should_fire()`. Reuse existing infra
+    only — no new remediation machinery. `should_fire()` itself stays
+    a pure read-only gate (single responsibility); remediation is the
+    dispatcher's job. Bounded retry + honest escalation if still not
+    green (same posture as `run_data_operations.sh` Step 4).
 - **C:** allocator dispatched event-driven via its
   `WEEKLY_FIRST_TRADING_DAY` profile + idempotency; retire the Mon
   launchd job.
 - **D:** consolidate to two daemons (data daemon + engine daemon);
   AAR/forensics/allocator run inside the engine daemon.
+  - **Agentic framing (operator, 2026-05-17) — maps onto existing
+    infra, no new messaging system.** The "two support agents passing
+    information" ARE these two daemons; the channel IS
+    `platform.application_log` events (the platform already decouples
+    data-ops↔engine-sweep this exact way via `DATA_OPERATIONS_COMPLETE`).
+    Protocol: engine daemon detects "engine N data not ready" (from
+    `should_fire().checks`) → emits a request event → data daemon
+    consumes it, runs the existing `tpcore.selfheal.run_self_heal()`
+    → emits a "data ready, re-check" event → engine daemon re-runs
+    `should_fire()` and dispatches. The engine agent's brain =
+    `should_fire()` (Sub-project A); the data agent's hands = existing
+    self-heal; the bus = `application_log`. Build it by adding two
+    typed events + the consume/emit loop on the existing daemons —
+    NOT a new agent framework or message broker. Detailed protocol
+    (event names, idempotency, retry/escalation) is brainstormed when
+    B/D are reached; recorded here so the requirement is not lost.
