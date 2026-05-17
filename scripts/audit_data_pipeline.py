@@ -295,11 +295,20 @@ async def _adapter_contract_findings(pool) -> list[AuditFinding]:
                     f"rolled out): {pending}"))
 
     async with pool.acquire() as conn:
+        # `_run_stage` (ops.py bare `except Exception`) records the exception
+        # class name in data->>'exception_type', not data->>'reason'.  The
+        # `reason` OR-branch is forward-compat for any future explicit reason
+        # field.  Note: the 24h window is the interim "recent escalation"
+        # signal — there is no acknowledge/clear primitive in the data lane
+        # yet; a proper ack/auto-clear arrives with the Data Supervisor
+        # (Escalation & Hardening Ladder rung 2).  The check therefore stays
+        # FAIL for up to 24h after a drift even once resolved — intended.
         n = await conn.fetchval("""
             SELECT COUNT(*)
             FROM platform.application_log
             WHERE event_type = 'INGESTION_FAILED'
-              AND data->>'reason' = 'adapter_contract_drift'
+              AND (data->>'exception_type' = 'AdapterContractDrift'
+                   OR data->>'reason' = 'adapter_contract_drift')
               AND recorded_at > NOW() - INTERVAL '24 hours'
         """)
     if n and int(n) > 0:
