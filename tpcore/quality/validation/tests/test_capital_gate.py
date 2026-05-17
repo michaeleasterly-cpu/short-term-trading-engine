@@ -142,6 +142,7 @@ from tpcore.quality.validation.capital_gate import (  # noqa: E402
     EXPECTED_SOURCES,
     _required_sources,
     assert_passed_for_engine,
+    failing_sources_for_engine,
 )
 
 
@@ -210,3 +211,85 @@ async def test_engine_gate_still_blocks_on_stale_run() -> None:
     pool = _DQLogFakePool(_all_three(old, stale=False))
     with pytest.raises(ValidationStaleError):
         await assert_passed_for_engine(pool, "sigma")
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# failing_sources_for_engine — non-raising, HealSpec.source vocabulary
+# (Sub-project B locked inter-lane contract)
+# ────────────────────────────────────────────────────────────────────────────
+
+
+async def test_failing_sources_for_engine_returns_healspec_source_names() -> None:
+    """reversion's ENGINE_TABLES = {prices_daily, fundamentals_quarterly}.
+
+    The validation checks mapping to prices_daily
+    (prices_daily_freshness / prices_daily_completeness / row_integrity)
+    are RED; the fundamentals_quarterly check
+    (fundamentals_integrity) is green → the failing list must be the
+    HealSpec.source name ["prices_daily"] only, NOT
+    "fundamentals_quarterly" and NOT the validation.<check> key.
+    """
+    ts = datetime.now(UTC) - timedelta(days=1)
+    rows = _all_three(ts, stale=False)
+    for r in rows:
+        if r["source"] in (
+            "validation.prices_daily_freshness",
+            "validation.prices_daily_completeness",
+            "validation.row_integrity",
+        ):
+            r["stale"] = True  # prices_daily checks RED
+        # validation.fundamentals_integrity stays green
+    pool = _DQLogFakePool(rows)
+    failing = await failing_sources_for_engine(pool, "reversion")
+    assert failing == ["prices_daily"]
+    assert "fundamentals_quarterly" not in failing
+    assert "validation.prices_daily_freshness" not in failing
+
+
+async def test_failing_sources_for_engine_all_green_returns_empty() -> None:
+    ts = datetime.now(UTC) - timedelta(days=1)
+    pool = _DQLogFakePool(_all_three(ts, stale=False))
+    assert await failing_sources_for_engine(pool, "reversion") == []
+
+
+async def test_failing_sources_for_engine_unknown_engine_returns_empty() -> None:
+    ts = datetime.now(UTC) - timedelta(days=1)
+    pool = _DQLogFakePool(_all_three(ts, stale=False))
+    assert await failing_sources_for_engine(pool, "does_not_exist") == []
+
+
+async def test_failing_sources_for_engine_missing_required_row_is_failing() -> None:
+    """A required validation check with NO row at all in the latest run
+    (missing from data_quality_log) must be reported as failing —
+    missing data = not ready.
+
+    The run is RECENT (ts = now − 1 day, well within max_age_days=7) so
+    the globally-stale early-return is NOT taken; the empty-run
+    early-return is NOT taken (rows is non-empty). This exercises the
+    per-row ``row is None`` branch in failing_sources_for_engine
+    specifically: reversion's prices_daily checks
+    (prices_daily_completeness / prices_daily_freshness / row_integrity)
+    have NO rows, while fundamentals_integrity is present and green.
+    """
+    ts = datetime.now(UTC) - timedelta(days=1)
+    # Recent, green run for every known check EXCEPT we drop all three
+    # prices_daily checks entirely (no row at all). fundamentals_integrity
+    # remains present and green.
+    rows = [
+        r
+        for r in _all_three(ts, stale=False)
+        if r["source"]
+        not in (
+            "validation.prices_daily_completeness",
+            "validation.prices_daily_freshness",
+            "validation.row_integrity",
+        )
+    ]
+    # Sanity: the run is non-empty (no empty-run early-return) and the
+    # green fundamentals_integrity row is still present.
+    assert rows
+    assert any(r["source"] == "validation.fundamentals_integrity" for r in rows)
+    pool = _DQLogFakePool(rows)
+    failing = await failing_sources_for_engine(pool, "reversion")
+    assert failing == ["prices_daily"]
+    assert "fundamentals_quarterly" not in failing
