@@ -16,7 +16,7 @@ No real DB / broker / repo / ``data/`` is touched (fake store only).
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pytest
@@ -125,7 +125,7 @@ def test_trade_monitor_stream_routes_close_through_record_close() -> None:
 
 async def test_stream_then_scheduler_one_decrement() -> None:
     gov, store = await _governor(open_positions=3)
-    tid = build_close_id("momentum", "AAPL", "2026-05-19")
+    tid = build_close_id("momentum", "AAPL", date(2026, 5, 19))
     await gov.record_close("momentum", tid, Decimal("12"))  # stream
     await gov.record_close("momentum", tid, Decimal("0"))   # scheduler (same close)
     st = await store.get("momentum")
@@ -135,7 +135,7 @@ async def test_stream_then_scheduler_one_decrement() -> None:
 
 async def test_scheduler_then_stream_one_decrement() -> None:
     gov, store = await _governor(open_positions=3)
-    tid = build_close_id("momentum", "AAPL", "2026-05-19")
+    tid = build_close_id("momentum", "AAPL", date(2026, 5, 19))
     await gov.record_close("momentum", tid, Decimal("0"))   # scheduler
     await gov.record_close("momentum", tid, Decimal("12"))  # stream (same close)
     st = await store.get("momentum")
@@ -145,7 +145,7 @@ async def test_scheduler_then_stream_one_decrement() -> None:
 
 async def test_concurrent_same_close_one_decrement() -> None:
     gov, store = await _governor(open_positions=3)
-    tid = build_close_id("momentum", "AAPL", "2026-05-19")
+    tid = build_close_id("momentum", "AAPL", date(2026, 5, 19))
     res = await asyncio.gather(
         gov.record_close("momentum", tid, Decimal("0")),
         gov.record_close("momentum", tid, Decimal("0")),
@@ -157,7 +157,7 @@ async def test_concurrent_same_close_one_decrement() -> None:
 
 async def test_one_path_only_still_one_decrement() -> None:
     gov, store = await _governor(open_positions=3)
-    tid = build_close_id("momentum", "AAPL", "2026-05-19")
+    tid = build_close_id("momentum", "AAPL", date(2026, 5, 19))
     await gov.record_close("momentum", tid, Decimal("0"))
     st = await store.get("momentum")
     assert st.open_positions == 2
@@ -196,7 +196,7 @@ async def test_ledger_error_contained_no_decrement() -> None:
 @pytest.mark.parametrize("n", [2, 4, 9])
 async def test_idempotency_property_n_via_both_paths_one_net_decrement(n: int) -> None:
     gov, store = await _governor(open_positions=5)
-    tid = build_close_id("momentum", "AAPL", "2026-05-19")
+    tid = build_close_id("momentum", "AAPL", date(2026, 5, 19))
     for i in range(n):  # alternate "stream" / "scheduler" callers
         await gov.record_close("momentum", tid, Decimal("7") if i % 2 == 0 else Decimal("0"))
     st = await store.get("momentum")

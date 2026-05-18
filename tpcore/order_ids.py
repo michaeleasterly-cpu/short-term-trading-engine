@@ -44,7 +44,7 @@ long tickers and 10-digit epochs.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 # ────────────────────────────────────────────────────────────────────────
 # Registry — the only place engine names map to / from prefixes
@@ -94,7 +94,7 @@ def _ts(constructed_at: datetime | None = None) -> int:
     return int((constructed_at or datetime.now(UTC)).timestamp())
 
 
-def build_close_id(engine: str, ticker: str, as_of: object) -> str:
+def build_close_id(engine: str, ticker: str, as_of: date) -> str:
     """Stable per-close dedupe key for a batch-engine position close.
 
     Batch engines (momentum/sentinel) submit ONE day-market order per
@@ -111,7 +111,7 @@ def build_close_id(engine: str, ticker: str, as_of: object) -> str:
     prefix = ENGINE_PREFIX.get(engine)
     if prefix is None:
         raise ValueError(f"unknown engine '{engine}'; expected one of {sorted(ENGINE_PREFIX)}")
-    return f"{prefix}{ticker}_close_{as_of}"
+    return f"{prefix}{ticker}_close_{as_of.isoformat()}"
 
 
 def build_cid(
