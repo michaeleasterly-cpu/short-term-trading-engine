@@ -13,7 +13,8 @@ planner/ecr at module load — mirroring ``ops/lab/__main__.py``'s
 module-top ``from ops.lab.run import run_lab``. The planner/ecr keep
 EVERY engine import lazy/function-local (H-S3-10), so
 ``import ops.engine_sdlc.__main__`` STILL eager-imports ZERO engine
-modules (proven by ``test_importing_main_does_not_eager_import_an_engine``).
+modules (proven by ``tpcore/tests/test_engine_sdlc_cli.py::
+test_importing_engine_sdlc_main_does_not_eager_import_an_engine``).
 The planner names are module attributes here so the T8 tests can
 ``monkeypatch.setattr(cli, "apply", …)`` — the patchable seam.
 """

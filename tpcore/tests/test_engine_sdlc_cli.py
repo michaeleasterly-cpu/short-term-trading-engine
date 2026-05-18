@@ -214,3 +214,117 @@ async def test_every_outcome_emits_audit(tmp_path, monkeypatch):
                               "reason: x\neulogy_notes: y\n")
     rc = await cli._amain(["--ecr", str(p4)])
     assert rc == 1, "a gate-failed apply must not exit silently 0"
+
+
+@pytest.mark.asyncio
+async def test_apply_rc0(tmp_path, monkeypatch, capsys):
+    """H-S3-12 (spec §11): a FULLY-SUCCESSFUL applied outcome at the CLI
+    layer returns EXACTLY ``rc == 0`` AND surfaces the applied receipt.
+    The spec + plan both NAME this test by id; it was previously absent.
+
+    Non-vacuous: ``apply`` is stubbed to return the SAME (un-rejected)
+    plan — a silent non-zero, or a reject masquerading as success (the
+    CLI checks ``res.rejection``), trips the rc-and-print assertions. A
+    byte-identical real-tree oracle proves no production mutation."""
+    import ops.engine_sdlc.__main__ as cli
+    ep = REPO_ROOT / "tpcore" / "engine_profile.py"
+    pkg = REPO_ROOT / "sentinel"
+    arc = REPO_ROOT / "archive"
+    before = _snapshot_tree(ep, pkg, arc)
+    # a valid REMOVE of a real PAPER engine reaches the OPERATOR prompt
+    p = _write_ecr(tmp_path, "ECR\naction: REMOVE\nengine: sentinel\n"
+                             "reason: x\neulogy_notes: y\n")
+    # green validate (no real dry-run subprocess), operator says yes,
+    # apply returns the un-rejected plan ⇒ the success leg.
+    monkeypatch.setattr(cli, "_validate_for_cli", lambda plan, ecr: plan)
+    monkeypatch.setattr(cli, "_read_confirm", lambda: "y")
+    applied = {"n": 0}
+    monkeypatch.setattr(
+        cli, "apply",
+        lambda plan, **k: applied.__setitem__("n", 1) or plan)
+    rc = await cli._amain(["--ecr", str(p)])
+    assert rc == 0, "a fully-successful apply must return EXACTLY rc 0"
+    assert applied["n"] == 1, "the success leg never invoked apply()"
+    assert "APPLIED" in capsys.readouterr().out, (
+        "a successful apply must surface the applied receipt — a silent "
+        "0 with no receipt is the canary -m-no-op anti-pattern (H-S3-12)")
+    assert _snapshot_tree(ep, pkg, arc) == before, (
+        "a stubbed-apply success path mutated the real tree")
+
+
+@pytest.mark.asyncio
+async def test_modify_routes_automated_no_prompt(tmp_path, monkeypatch,
+                                                 capsys):
+    """Deviation #3 fail-open guard: a valid MODIFY ECR is AUTOMATED
+    (spec §12 operator-confirmed) and MUST route PAST the y/n prompt.
+    Drives a real MODIFY ECR (fold_existing sidecar, right target,
+    in-PARAM_RANGES key==winning, DSR≥0.95/cred≥60/SURVIVED) through
+    ``_amain`` with ``_read_confirm`` as a TRIPWIRE.
+
+    Non-vacuous: if the CLI's ``== ApprovalClass.AUTOMATED`` regressed to
+    ``is`` (the frozen-pydantic StrEnum carries the ``.value`` string,
+    not the enum identity), MODIFY would fall through to the OPERATOR
+    prompt — ``called['prompt']`` would be 1 and this fails. (Proven by
+    a transient local ``==``→``is`` flip; reverted, diff clean.)"""
+    import ops.engine_sdlc.__main__ as cli
+    from tpcore.tests.test_engine_sdlc_planner import (
+        _modify_ecr,
+        _modify_sidecar,
+    )
+    ep = REPO_ROOT / "tpcore" / "engine_profile.py"
+    rev = REPO_ROOT / "reversion"
+    before = _snapshot_tree(ep, rev)
+    # a genuine valid MODIFY ECR (the T7 helpers build the matching
+    # frozen LabResult sidecar + the param_change wire fields).
+    md = _modify_sidecar(tmp_path)
+    secr = _modify_ecr(md)
+    pc = ",".join(f"{k}={v}" for k, v in secr.param_change.items())
+    p = _write_ecr(
+        tmp_path,
+        f"ECR\naction: MODIFY\nengine: {secr.engine}\n"
+        f"lab_dossier: {secr.lab_dossier}\n"
+        f"param_change: {pc}\n"
+        f"gate_dsr: {secr.gate_dsr}\ngate_cred: {secr.gate_cred}\n")
+    called = {"prompt": 0}
+    monkeypatch.setattr(
+        cli, "_read_confirm",
+        lambda: called.__setitem__("prompt", 1) or "y")
+    # green validate (no real zero-trust subprocess/sidecar re-derive);
+    # apply returns the un-rejected plan ⇒ the AUTOMATED success leg.
+    monkeypatch.setattr(cli, "_validate_for_cli", lambda plan, ecr: plan)
+    applied = {"n": 0}
+    monkeypatch.setattr(
+        cli, "apply",
+        lambda plan, **k: applied.__setitem__("n", 1) or plan)
+    rc = await cli._amain(["--ecr", str(p)])
+    assert called["prompt"] == 0, (
+        "a valid MODIFY (AUTOMATED) reached the operator y/n prompt — "
+        "the `== ApprovalClass.AUTOMATED` routing regressed to `is` "
+        "(fail-open break of the §12 automated-MODIFY contract)")
+    assert rc == 0, "a clean automated MODIFY must return rc 0"
+    assert applied["n"] == 1, "the AUTOMATED leg never invoked apply()"
+    assert "APPLIED (automated, gated)" in capsys.readouterr().out
+    assert _snapshot_tree(ep, rev) == before, (
+        "an automated MODIFY (stubbed apply) mutated the real tree")
+
+
+def test_importing_engine_sdlc_main_does_not_eager_import_an_engine():
+    """H-S3-10 (the docstring's named proof): importing the entrypoint
+    must NOT pull in any engine package — every engine import stays
+    lazy/function-local in the SP3 ops.engine_sdlc planner/ecr.
+
+    Non-vacuous: a module-top ``import reversion`` (etc.) anywhere in the
+    __main__ → planner → ecr import chain trips it. The eviction guard
+    makes it collection-order-independent."""
+    import importlib
+
+    engines = ("reversion", "vector", "momentum", "sentinel", "canary",
+               "sigma")
+    for mod in engines:
+        sys.modules.pop(mod, None)
+    importlib.import_module("ops.engine_sdlc.__main__")
+    for mod in engines:
+        assert mod not in sys.modules, (
+            f"import ops.engine_sdlc.__main__ eager-imported {mod!r} — "
+            "engine imports must stay lazy (H-S3-10)"
+        )
