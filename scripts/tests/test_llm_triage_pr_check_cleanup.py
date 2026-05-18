@@ -116,7 +116,16 @@ def test_load_specs_base_cleanup_normal_path(tmp_path: Path) -> None:
     repo = _setup_tmp_repo(tmp_path)
 
     with patch.object(_mod, "_REPO_ROOT", repo):
-        _mod._load_specs_base("main")  # succeeds (tpcore on venv PYTHONPATH)
+        result = _mod._load_specs_base("main")  # succeeds (tpcore on venv PYTHONPATH)
+
+    # Return-contract: must be a non-empty dict keyed by every _REGISTRY_SNIPPETS
+    # name — currently {"selfheal", "auditheal"} — derived from the SoT directly.
+    expected_keys = {name for name, _ in _mod._REGISTRY_SNIPPETS}
+    assert isinstance(result, dict), "_load_specs_base must return a dict"
+    assert result, "_load_specs_base must return a non-empty dict"
+    assert set(result.keys()) == expected_keys, (
+        f"_load_specs_base keys {set(result.keys())!r} != expected {expected_keys!r}"
+    )
 
     # Post-call: only the main worktree remains.
     assert _worktree_list_count(repo) == 1, (
