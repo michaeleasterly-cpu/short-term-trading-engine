@@ -1,11 +1,26 @@
 # Engine Silent-Absence Detectors (#243) — Design **v1 (expert-scoped)**
 
-**Status:** spec **v1 (expert-scoped)** 2026-05-18 (ENGINE lane,
-deterministic — NO LLM). Brainstorm-by-investigation (code-grounded
-expert scoping) → **spec (this doc)** → operator spec-review gate →
-plan → phased subagent build. Closes the deferred Epic-E Phase-0
-follow-up **#243**; companion of `docs/superpowers/specs/
-2026-05-18-engine-llm-triage-advisory-layer-design.md` §7a.
+**Status:** **BUILT 2026-05-18** (ENGINE lane, deterministic — NO LLM).
+Brainstorm-by-investigation (code-grounded expert scoping) → spec (this
+doc) → operator spec-review gate → plan → phased subagent build.
+Closes the deferred Epic-E Phase-0 follow-up **#243**; companion of
+`docs/superpowers/specs/2026-05-18-engine-llm-triage-advisory-layer-design.md`
+§7a.
+
+**Build record:**
+- spec + plan: **#71** (this spec v1 + phased plan).
+- Phase 1: **#73** — the two detectors (`engine_service_sweep_silent` +
+  `engine_service_digest_stalled`) in `engine_service._main_loop` + R2
+  clockwork (`PLATFORM_SERVICE_FAILURE_CLASSES` + `DISPOSITION_POLICIES`
+  rows, both `STRUCTURAL`, same PR); (b) trade-monitor-silent recorded
+  as resolved-by-existing-coverage (no new detector); TDD fake-pool
+  tests for both predicates.
+- Phase 2 (docs): **#<this>** — §7a detector-home correction in the
+  Epic-E spec (→ `engine_service._main_loop`, not
+  `engine_supervisor._detect_*`); R1 coverage note extended in
+  `docs/ENGINE_ESCALATION_HARDENING_LADDER.md`; this spec → BUILT +
+  build record; memory `project_engine_llm_triage_ownership` updated
+  (#243 → done).
 
 **Ownership:** data-lane session (owns Epic E + its deferred
 follow-ups). Engine-lane session notified (collision-avoidance on

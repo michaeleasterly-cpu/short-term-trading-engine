@@ -84,11 +84,25 @@ references the data-lane ladder (`docs/ESCALATION_HARDENING_LADDER.md`)
   `ops/llm_triage_service.py` (NOT in the live-trading `engine_service`,
   NOT a 5th daemon — the installer/launchd label/4-token whitelist are
   unchanged, the two-daemon topology invariant holds by construction).
-  The bounded silent-absence detectors (no-sweep-in-N-windows /
-  no-trade-updates-while-market-open / digest-key-stalled) are a
-  **tracked deterministic follow-up (#243)** — deliberately deferred
-  (no non-flaky predicate today on a live trading daemon), explicitly
-  NOT the LLM's job. Spec:
+  **#243 Phase 1 (BUILT 2026-05-18)** extended R1 with two additional
+  engine-daemon *silent-absence* escalate-only classes that escalate
+  deterministically from `engine_service._main_loop` (the long-lived
+  60s poll — the correct home; `engine_supervisor.supervise()` only runs
+  inside the sweep subprocess and would be dead code for a
+  "sweep never ran" detector): `engine_service_sweep_silent` (a
+  qualifying trigger landed but no sweep ran within `SWEEP_SILENT_SEC`)
+  and `engine_service_digest_stalled` (ISO-week rollover passed by more
+  than `DIGEST_STALE_SEC` with no successful digest completion). Both
+  are `STRUCTURAL`, escalate-only (no `ENGINE_HELD`), added to
+  `PLATFORM_SERVICE_FAILURE_CLASSES` + `DISPOSITION_POLICIES` in the
+  same Phase-1 PR (R2 clockwork enforced). Trade-monitor-silent
+  (the third originally-deferred case) is **resolved-by-existing-coverage**
+  — not a new detector (the `tpcore/trade_monitor` `daemon_heartbeats`
+  substrate + dashboard `trade_monitor_heartbeat` probe +
+  `engine_service_task_crashloop` already provide the coverage).
+  Spec:
+  `docs/superpowers/specs/2026-05-18-engine-silent-absence-detectors-design.md`.
+  Spec:
   `docs/superpowers/specs/2026-05-18-engine-llm-triage-advisory-layer-design.md`;
   persona `docs/engine_llm_triage_persona.md`; settings runbook
   `docs/llm_data_triage_operator_runbook.md` (shared, both lanes).
