@@ -1,10 +1,26 @@
 # LLM Triage Advisory Layer (Ladder rung 5 / Epic E) — Design **v2**
 
-**Status:** spec **v2.1** 2026-05-18 (DATA lane). Brainstorm → spec
-(v1) → operator scope escalation ×3 + **two independent expert
-opinions** → **spec v2** → plan → phased subagent build (P1, P2
-merged) → **v2.1 invocation amendment (this rev)**. #187 — Ladder
-rung 5 (`docs/ESCALATION_HARDENING_LADDER.md`).
+**Status:** BUILT 2026-05-18 (DATA lane). Spec **v2.1** 2026-05-18.
+Brainstorm → spec (v1) → operator scope escalation ×3 + **two
+independent expert opinions** → **spec v2** → plan → phased subagent
+build (P1–P4 merged) → **v2.1 invocation amendment (preserved
+below)**. #187 — Ladder rung 5 (`docs/ESCALATION_HARDENING_LADDER.md`).
+
+**Build record:**
+- P1 (PR #56): deterministic safety skeleton — `tpcore/llm_data_triage/`
+  select/packet/fence/canary + `scripts/llm_triage_pr_check.py` +
+  `docs/llm_data_triage_persona.md` (versioned) + `PERSONA_VERSION`
+  lockstep test. Landed dark (no LLM).
+- P2 (PR #58): sandboxed agent `ops/llm_data_triage.py` — ephemeral
+  credential-starved `git worktree` runner + official Anthropic
+  `messages.create` (no `tools`, bounded `max_tokens`, no-key no-op,
+  `tpcore.outage.with_retry`), client **mocked** in CI. Landed dark.
+- P3 (PR #59): event-driven daemon `ops/llm_triage_service.py` (sibling
+  of `data_repair_service`/`engine_service`) + sandbox/draft-PR open +
+  label-gated `llm-triage-fence` CI job + weekly-digest surfacing.
+- P4 (this PR): docs — CLAUDE.md rung-5 bullet + daemon-roster update;
+  Ladder rung 5 → BUILT + expert envelope/vetoes;
+  `docs/llm_data_triage_operator_runbook.md`; this status + build record.
 
 **v2.1 amendment (operator directive 2026-05-18, after P2 merge):**
 the agent is invoked **event-driven** off the existing
