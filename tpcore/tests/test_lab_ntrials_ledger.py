@@ -128,3 +128,26 @@ async def test_cumulative_sums_only_prior_rows_for_that_target():
     # vector isolated from reversion
     assert await cumulative_n_trials(
         pool, "vector", base + timedelta(seconds=99)) == 99
+
+
+async def test_notes_payload_shape_is_frozen_schema_1():
+    """The notes JSON vocabulary is frozen (schema:1) — a drift fails
+    the build, mirroring the supervisor_state schema:1 locked-vocabulary
+    discipline. If a field is added/removed/renamed, THIS test must be
+    updated in the same commit (an explicit, reviewed contract delta)."""
+    import json
+
+    from tpcore.lab.ledger import LEDGER_SCHEMA_VERSION, record_trial_spend
+    pool = _FakePool()
+    await record_trial_spend(
+        pool, target="vector", candidate=None, trials=12, seed=3,
+        run_outcome="sampled")
+    payload = json.loads(pool.rows[0]["notes"])
+    assert set(payload) == {
+        "schema", "target_engine", "candidate",
+        "trials", "seed", "run_outcome",
+    }, f"notes vocabulary drifted: {sorted(payload)}"
+    assert payload["schema"] == LEDGER_SCHEMA_VERSION == 1
+    assert payload["candidate"] is None  # candidate may be null (legacy/None)
+    assert isinstance(payload["trials"], int)
+    assert isinstance(payload["seed"], int)
