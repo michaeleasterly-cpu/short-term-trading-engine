@@ -11,8 +11,10 @@ existing Ladder read APIs *verbatim* and re-derives nothing:
 * engine lane → ``ops.engine_ladder.list_undispositioned`` (the
   open-undispositioned engine escalations; keyed on ``hold_id``).
 * data lane  → ``ops.weekly_digest.build_weekly_digest`` →
-  ``.undispositioned`` (the data-lane Ladder's already-rendered
-  open-undispositioned lines; keyed on the stable ``ref=`` token).
+  ``.undispositioned_entries`` (the data-lane Ladder's STRUCTURED
+  open-undispositioned escalations; the clean ``ref`` is read off the
+  struct — never regex-scraped from the rendered display string, whose
+  format is the digest's own concern and may drift).
 
 It issues **NO** ``application_log`` escalation query of its own — the
 register and the weekly digest call the SAME functions, so they are
@@ -29,10 +31,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
-import re
 import sys
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Literal
 
 import structlog
@@ -41,16 +42,6 @@ from ops import engine_ladder, weekly_digest
 from tpcore.db import build_asyncpg_pool
 
 logger = structlog.get_logger(__name__)
-
-# The stable id the data-lane Ladder renders into every undispositioned
-# line (weekly_digest.build_weekly_digest): ``... [ETYPE] ref=<id> ...``.
-# We read the id the digest already exposes — we do NOT re-derive it
-# from application_log (that would be the exact re-derivation bug).
-_REF_RE = re.compile(r"\bref=(\S+)")
-# The leading ``YYYY-MM-DD`` the data-lane line is prefixed with (its
-# escalation recorded_at date) — used only for deterministic ordering;
-# parse-failure degrades to datetime.min, never fabricates a ref.
-_DATE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})\b")
 
 
 @dataclass(frozen=True)
@@ -73,31 +64,6 @@ class DefectRow:
     fix_ref: str | None  # always None in DR1 (DR2 introduces fix linkage)
 
 
-def _data_ref(line: str) -> str | None:
-    """The stable defect_ref the data-lane Ladder rendered into this
-    undispositioned line. ``None`` if no ``ref=`` token is present (a
-    line we cannot key is DROPPED — never assigned a fabricated ref,
-    which would manufacture a phantom defect and break parity)."""
-    m = _REF_RE.search(line)
-    return m.group(1) if m else None
-
-
-def _data_opened_at(line: str) -> datetime:
-    """The leading ``YYYY-MM-DD`` the data-lane line is prefixed with,
-    as a UTC-aware datetime for deterministic ordering only (UTC-aware
-    to sort alongside the engine Ladder's tz-aware recorded_at — mixing
-    naive+aware would raise). Parse-failure degrades to a stable
-    UTC-aware minimum, never raises, never fabricates a ref."""
-    _MIN = datetime.min.replace(tzinfo=UTC)
-    m = _DATE_RE.match(line)
-    if not m:
-        return _MIN
-    try:
-        return datetime.strptime(m.group(1), "%Y-%m-%d").replace(tzinfo=UTC)
-    except ValueError:  # pragma: no cover - regex already constrains it
-        return _MIN
-
-
 async def consolidated_defects(pool) -> list[DefectRow]:
     """The unified, deterministically-ordered defect view.
 
@@ -110,7 +76,10 @@ async def consolidated_defects(pool) -> list[DefectRow]:
     """
     engine_entries = await engine_ladder.list_undispositioned(pool)
     digest = await weekly_digest.build_weekly_digest(pool)
-    data_lines = digest.undispositioned
+    # Structured surface — the clean ``ref`` is read off the struct, NOT
+    # regex-scraped from the rendered display string (a digest display
+    # reformat must never silently drop every data-lane defect).
+    data_entries = digest.undispositioned_entries
 
     # Join, never sum: first-writer-wins per defect_ref. Engine entries
     # are mapped first so an engine hold_id that also appears in a
@@ -119,6 +88,10 @@ async def consolidated_defects(pool) -> list[DefectRow]:
 
     for e in engine_entries:
         ref = e["hold_id"]
+        # engine-first-wins on a defect_ref collision is DELIBERATE: the
+        # engine row is the richer/structured one, so a later data-lane
+        # entry with the same ref is dropped as a duplicate (by design,
+        # not an oversight — see the data-lane loop's collision branch).
         if ref is None or ref in by_ref:
             continue
         pol = e.get("policy_default")
@@ -138,22 +111,25 @@ async def consolidated_defects(pool) -> list[DefectRow]:
             fix_ref=None,
         )
 
-    for line in data_lines:
-        ref = _data_ref(line)
+    for ent in data_entries:
+        ref = ent.ref
         if ref is None or ref in by_ref:
             # No keyable ref → drop (no phantom). Already-seen ref →
             # JOIN (collapse to the existing row; never a second row).
+            # Engine-first-wins here is deliberate (see engine loop).
             continue
         by_ref[ref] = DefectRow(
             defect_ref=ref,
             origin="escalation",
             lane="data",
-            summary=line,
-            # Present in build_weekly_digest().undispositioned ⇒ open
-            # by the data-lane Ladder's anti-join predicate.
+            summary=ent.rendered,
+            # Present in build_weekly_digest().undispositioned_entries ⇒
+            # open by the data-lane Ladder's anti-join predicate.
             state="open",
-            opened_at=_data_opened_at(line),
-            policy=None,  # the data-lane Ladder bakes its policy into the line
+            # The struct's typed recorded_at (UTC-aware, same as the
+            # engine Ladder's) — no display-string date parse.
+            opened_at=ent.recorded_at,
+            policy=ent.policy,  # the inline disposition-policy label
             fix_ref=None,
         )
 

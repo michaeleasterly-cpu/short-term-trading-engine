@@ -3,10 +3,11 @@
 Deterministic, no DB/`data/`: a fake pool + monkeypatched Ladder read
 APIs. The register is a derived read-model — it MUST compose
 ``engine_ladder.list_undispositioned`` and
-``weekly_digest.build_weekly_digest().undispositioned`` *verbatim* and
-re-derive nothing (never issue its own application_log escalation
-query). These tests bite if a future change inlines such a query or
-drifts the register from either Ladder.
+``weekly_digest.build_weekly_digest().undispositioned_entries``
+*verbatim* and re-derive nothing (never issue its own application_log
+escalation query, never regex-scrape the digest's display string).
+These tests bite if a future change inlines such a query or drifts the
+register from either Ladder.
 
 importlib-loads the module under test to dodge the documented
 ``scripts/ops.py`` ↔ ``ops/`` package-shadow hazard (the
@@ -90,25 +91,44 @@ def _eng_row(hold_id, *, engine="reversion",
             "policy_rationale": policy_rationale}
 
 
-def _data_line(ref, *, date="2026-05-11", etype="DATA_REPAIR_ESCALATED",
-                message="fred_macro stalled",
-                policy="policy:structural — owns the fix"):
-    """A pre-rendered data-lane undispositioned line, byte-identical to
-    weekly_digest.build_weekly_digest().undispositioned format:
-    ``{date} [{etype}] ref={ref} {message} | {policy}``."""
-    return f"{date} [{etype}] ref={ref} {message} | {policy}"
+class _Entry:
+    """A structured undispositioned escalation, shaped exactly like
+    ``weekly_digest.UndispositionedEntry`` (the field the register now
+    reads: ``ref``/``recorded_at``/``rendered``/``policy``). The
+    register consumes the STRUCT — not a regex-scrape of ``rendered`` —
+    so an entry can carry a clean ref even if ``rendered`` drifts."""
+
+    def __init__(self, ref, *, date="2026-05-11",
+                 etype="DATA_REPAIR_ESCALATED",
+                 message="fred_macro stalled",
+                 policy="policy:structural — owns the fix"):
+        self.ref = ref
+        self.etype = etype
+        self.recorded_at = datetime.strptime(date, "%Y-%m-%d").replace(
+            tzinfo=UTC)
+        self.message = message
+        self.policy = policy
+        self.rendered = f"{date} [{etype}] ref={ref} {message} | {policy}"
 
 
-def _patch(monkeypatch, *, engine_rows, data_lines):
+def _data_entry(ref, **kw):
+    """A structured data-lane undispositioned entry (the register's
+    new input contract). Replaces the old pre-rendered ``_data_line``
+    string the register used to regex-scrape."""
+    return _Entry(ref, **kw)
+
+
+def _patch(monkeypatch, *, engine_rows, data_entries):
     """Stub BOTH Ladder read APIs so the register composes them
     verbatim with no DB. build_weekly_digest returns a stub object
-    exposing only ``.undispositioned`` (the field the register reads)."""
+    exposing ``.undispositioned_entries`` (the structured field the
+    register now reads — NOT the rendered ``.undispositioned`` string)."""
 
     async def _fake_list(pool, **kw):
         return list(engine_rows)
 
     class _Digest:
-        undispositioned = list(data_lines)
+        undispositioned_entries = list(data_entries)
 
     async def _fake_digest(pool, now=None):
         return _Digest()
@@ -123,7 +143,7 @@ def _patch(monkeypatch, *, engine_rows, data_lines):
 
 
 async def test_engine_undispositioned_yields_one_engine_row(monkeypatch):
-    _patch(monkeypatch, engine_rows=[_eng_row("h1")], data_lines=[])
+    _patch(monkeypatch, engine_rows=[_eng_row("h1")], data_entries=[])
     pool = _GuardPool()
     out = await dr.consolidated_defects(pool)
     assert len(out) == 1
@@ -142,7 +162,7 @@ async def test_engine_undispositioned_yields_one_engine_row(monkeypatch):
 
 async def test_data_lane_undispositioned_yields_one_data_row(monkeypatch):
     _patch(monkeypatch, engine_rows=[],
-           data_lines=[_data_line("req-42")])
+           data_entries=[_data_entry("req-42")])
     out = await dr.consolidated_defects(_GuardPool())
     assert len(out) == 1
     r = out[0]
@@ -156,7 +176,7 @@ async def test_same_defect_ref_in_both_collapses_to_one_row(monkeypatch):
     # A ref present in BOTH Ladders must JOIN to ONE row, never sum to 2.
     _patch(monkeypatch,
            engine_rows=[_eng_row("shared-ref")],
-           data_lines=[_data_line("shared-ref")])
+           data_entries=[_data_entry("shared-ref")])
     out = await dr.consolidated_defects(_GuardPool())
     refs = [r.defect_ref for r in out]
     assert refs == ["shared-ref"], f"join failed — got {refs} (summed?)"
@@ -164,7 +184,7 @@ async def test_same_defect_ref_in_both_collapses_to_one_row(monkeypatch):
 
 
 async def test_empty_both_yields_empty(monkeypatch):
-    _patch(monkeypatch, engine_rows=[], data_lines=[])
+    _patch(monkeypatch, engine_rows=[], data_entries=[])
     assert await dr.consolidated_defects(_GuardPool()) == []
 
 
@@ -172,7 +192,7 @@ async def test_deterministic_order_by_opened_at_then_ref(monkeypatch):
     _patch(monkeypatch,
            engine_rows=[_eng_row("z-late", recorded_at=T3),
                         _eng_row("a-early", recorded_at=T1)],
-           data_lines=[_data_line("m-mid", date="2026-05-13")])
+           data_entries=[_data_entry("m-mid", date="2026-05-13")])
     out = await dr.consolidated_defects(_GuardPool())
     assert [r.defect_ref for r in out] == ["a-early", "m-mid", "z-late"]
 
@@ -184,7 +204,7 @@ async def test_no_self_issued_escalation_query_spy_guard(monkeypatch):
     if someone later inlines an application_log query here, this test
     fails loudly."""
     _patch(monkeypatch, engine_rows=[_eng_row("h1")],
-           data_lines=[_data_line("d1")])
+           data_entries=[_data_entry("d1")])
     pool = _GuardPool()
     out = await dr.consolidated_defects(pool)
     assert {r.defect_ref for r in out} == {"h1", "d1"}
@@ -204,7 +224,7 @@ async def test_register_invokes_both_ladder_apis(monkeypatch):
         return [_eng_row("h1")]
 
     class _Digest:
-        undispositioned = [_data_line("d1")]
+        undispositioned_entries = [_data_entry("d1")]
 
     async def _spy_digest(pool, now=None):
         calls["digest"] += 1
@@ -225,7 +245,7 @@ async def test_cli_list_prints_rows_deterministic_grepable(
         monkeypatch, capsys):
     _patch(monkeypatch,
            engine_rows=[_eng_row("h1", recorded_at=T1)],
-           data_lines=[_data_line("req-9", date="2026-05-13")])
+           data_entries=[_data_entry("req-9", date="2026-05-13")])
 
     class _FakePool:
         async def close(self): ...
@@ -265,14 +285,16 @@ async def test_parity_register_escalation_refs_equal_both_ladders(
     """PARITY FORCING-TEST (mirrors escalation_drift()'s test style):
     the register's escalation-origin defect_ref SET must be EXACTLY the
     union of engine_ladder.list_undispositioned hold_ids and the
-    data-lane undispositioned refs. It FAILS the build if the register
-    ever drops, adds, aliases, or re-derives a ref. Non-tautological:
-    it reads the Ladder outputs independently of the register."""
+    data-lane structured undispositioned ``ref``s. It FAILS the build if
+    the register ever drops, adds, aliases, or re-derives a ref.
+    Non-tautological: it reads the Ladder outputs independently of the
+    register, and the data ref now comes off the STRUCT (``.ref``) — not
+    a regex-scrape of the display string."""
     engine_rows = [_eng_row("e-alpha", recorded_at=T1),
                    _eng_row("e-beta", recorded_at=T2)]
-    data_lines = [_data_line("d-gamma", date="2026-05-12"),
-                  _data_line("e-beta", date="2026-05-14")]  # also in engine
-    _patch(monkeypatch, engine_rows=engine_rows, data_lines=data_lines)
+    data_entries = [_data_entry("d-gamma", date="2026-05-12"),
+                    _data_entry("e-beta", date="2026-05-14")]  # also in engine
+    _patch(monkeypatch, engine_rows=engine_rows, data_entries=data_entries)
 
     out = await dr.consolidated_defects(_GuardPool())
     register_refs = {r.defect_ref for r in out
@@ -281,7 +303,7 @@ async def test_parity_register_escalation_refs_equal_both_ladders(
     # Independently recompute the expected set from the Ladder APIs
     # (same forcing-test discipline as escalation_drift's test).
     eng_refs = {r["hold_id"] for r in engine_rows}
-    data_refs = {dr._data_ref(ln) for ln in data_lines}
+    data_refs = {e.ref for e in data_entries}
     expected = eng_refs | data_refs
 
     assert register_refs == expected, (
@@ -290,13 +312,21 @@ async def test_parity_register_escalation_refs_equal_both_ladders(
         f"extra={register_refs - expected}")
 
 
-def test_parity_test_bites_on_drift():
-    """The parity test is genuinely load-bearing: prove _data_ref
-    extracts the stable ref so an alias/typo would change the set and
-    fail the parity assertion above (not a tautology)."""
-    assert dr._data_ref(_data_line("req-77")) == "req-77"
-    assert dr._data_ref(_data_line("hold-xyz",
-                                   etype="DATA_SOURCE_ESCALATED")) == "hold-xyz"
-    # A line whose ref token is absent must NOT silently become a
-    # spurious row — it yields None and is dropped (no fabricated ref).
-    assert dr._data_ref("2026-05-11 [X] no ref token here") is None
+async def test_register_uses_struct_ref_not_display_scrape(monkeypatch):
+    """The contract test that now BITES on the right drift: the register
+    keys off the STRUCTURED ``.ref`` — so even if the digest's rendered
+    display string were reformatted (``rendered`` mangled beyond any
+    ``ref=`` regex), the register still keys correctly. This is exactly
+    the regression the old display-string regex-scrape silently dropped
+    (and which the previous _data_line helper-based parity test could
+    NOT catch, since it never exercised the live render path)."""
+    ent = _data_entry("req-77")
+    # Simulate a future digest display reformat: scramble ``rendered``
+    # so ANY `ref=` scrape would fail — the struct still carries the
+    # clean ref, so the register MUST still produce req-77.
+    ent.rendered = "DISPLAY FORMAT CHANGED — no parseable ref token"
+    _patch(monkeypatch, engine_rows=[], data_entries=[ent])
+    out = await dr.consolidated_defects(_GuardPool())
+    assert [r.defect_ref for r in out] == ["req-77"], (
+        "register must read the structured .ref, not scrape the "
+        "display string (a display reformat must not drop the defect)")

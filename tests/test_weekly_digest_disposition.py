@@ -154,6 +154,59 @@ async def test_undispositioned_line_has_no_llm_suffix_when_absent() -> None:
     assert "LLM:" not in line
 
 
+async def test_undispositioned_entries_exposes_structured_ref() -> None:
+    """CONTRACT TEST — the structured surface the consolidated defect
+    register now consumes. ``undispositioned_entries`` MUST expose a
+    clean ``ref`` (+ the fields the register's DefectRow needs:
+    etype/recorded_at/message/policy/rendered) for every open
+    undispositioned escalation. This is what bites if the digest's
+    STRUCTURED surface drifts — it replaces the brittle coupling to the
+    rendered display string's format."""
+    pool = _Pool({
+        "OPEN_ESCALATIONS": [
+            {"ref": "req-77", "etype": "DATA_REPAIR_ESCALATED",
+             "recorded_at": datetime(2026, 5, 1, tzinfo=UTC),
+             "message": "fred_macro stalled"},
+        ],
+    })
+    d = await wd.build_weekly_digest(pool, datetime(2026, 5, 17, tzinfo=UTC))
+    assert len(d.undispositioned_entries) == 1
+    e = d.undispositioned_entries[0]
+    assert isinstance(e, wd.UndispositionedEntry)
+    # the clean ref — read off the struct, no regex-scrape needed
+    assert e.ref == "req-77"
+    assert e.etype == "DATA_REPAIR_ESCALATED"
+    assert e.recorded_at == datetime(2026, 5, 1, tzinfo=UTC)
+    assert "fred_macro stalled" in e.message
+    assert e.policy and "policy:" in e.policy
+    # single source: the struct's rendered IS the human line, byte-equal
+    assert e.rendered == d.undispositioned[0]
+
+
+async def test_undispositioned_string_is_byte_identical_pure_add() -> None:
+    """PURE-ADD PROOF: adding ``undispositioned_entries`` did NOT alter
+    the existing rendered ``undispositioned: list[str]`` surface by a
+    single byte (existing consumers — dashboard.py, render() — are
+    unaffected). Locks the exact representative line format."""
+    pool = _Pool({
+        "OPEN_ESCALATIONS": [
+            {"ref": "h1", "etype": "DATA_SOURCE_ESCALATED",
+             "recorded_at": datetime(2026, 5, 1, tzinfo=UTC),
+             "message": "source prices_daily stuck"},
+        ],
+    })
+    d = await wd.build_weekly_digest(pool, datetime(2026, 5, 17, tzinfo=UTC))
+    # The exact pre-change f-string output:
+    # f"{recorded_at:%Y-%m-%d} [{etype}] ref={ref} {message} | {policy}"
+    # (DATA_SOURCE_ESCALATED → policy:escalate_operator; no LLM suffix).
+    expected = (
+        "2026-05-01 [DATA_SOURCE_ESCALATED] ref=h1 "
+        "source prices_daily stuck | "
+        + wd._disposition_label("DATA_SOURCE_ESCALATED")
+    )
+    assert d.undispositioned == [expected]
+
+
 def test_open_escalation_sql_has_all_exclusion_clauses() -> None:
     # The anti-join correctness can't be exercised by a fake pool
     # (it doesn't run SQL). Static guard: the open-escalation query
