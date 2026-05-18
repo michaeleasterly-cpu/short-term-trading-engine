@@ -444,3 +444,239 @@ def test_remove_rostered_engine_updates_frozen_literal(tmp_path):
     assert '"throwaway")' not in tc, (
         "the frozen-literal was not updated to drop the retired engine")
     assert '"reversion", "vector", "momentum", "sentinel", "canary")' in tc
+
+
+# ─── T6: ADD executor + readiness build gate (H-S3-11) ───
+
+
+def test_add_new_scaffold_rejects_gate_fields():
+    """H-S3-11(b): a new_scaffold engine cannot present a gate score it
+    has not earned — non-None gate_dsr/gate_cred is a hard reject."""
+    from ops.engine_sdlc.ecr import EngineChangeRequest
+    from ops.engine_sdlc.planner import attach_ecr_context, classify, validate
+    ecr = EngineChangeRequest(
+        action="add", engine="newx", source="new_scaffold",
+        cadence="daily", allocator=False, dispatch_order=9,
+        gate_dsr=0.99, gate_cred=80, need="x")
+    plan = attach_ecr_context(classify(ecr, {}), ecr)
+    vp = validate(plan, repo_root=None, ecr=ecr)
+    assert vp.rejection is not None
+    assert "new_scaffold" in vp.rejection and "gate" in vp.rejection
+
+
+def test_add_always_lands_LAB():
+    from ops.engine_sdlc.ecr import EngineChangeRequest
+    from ops.engine_sdlc.planner import classify
+    ecr = EngineChangeRequest(
+        action="add", engine="newx", source="new_scaffold",
+        cadence="daily", allocator=True, dispatch_order=9, need="x")
+    plan = classify(ecr, {})
+    assert plan.to_state is LifecycleState.LAB  # never PAPER (H-S3-11a)
+
+
+def test_add_always_lands_LAB_executor_hard_rejects_non_lab():
+    """H-S3-11(a) non-vacuity: even if a tampered TransitionPlan asks the
+    executor for to_state≠LAB, validate() HARD-REJECTS — an ADD can NEVER
+    land PAPER/LIVE (that maturity is an automated transition, not ADD).
+    A regression that let ADD land PAPER trips this directly."""
+    from ops.engine_sdlc.ecr import EngineChangeRequest
+    from ops.engine_sdlc.planner import ApprovalClass, ECRAction, TransitionPlan, validate
+    ecr = EngineChangeRequest(
+        action="add", engine="newx", source="new_scaffold",
+        cadence="daily", allocator=False, dispatch_order=9, need="x")
+    forged = TransitionPlan(
+        action=ECRAction.ADD, engine="newx", from_state=None,
+        to_state=LifecycleState.PAPER,  # the forbidden landing state
+        approval_class=ApprovalClass.OPERATOR, source="new_scaffold")
+    vp = validate(forged, repo_root=None, ecr=ecr)
+    assert vp.rejection is not None
+    assert "ADD must land LAB" in vp.rejection
+
+
+def test_add_lab_candidate_requires_promote_new(tmp_path):
+    """H-S3-11(c): a lab_candidate ADD whose sidecar says fold_existing
+    is a MODIFY, not an ADD — explicit redirect in the rejection."""
+    from ops.engine_sdlc.ecr import EngineChangeRequest
+    from ops.engine_sdlc.planner import attach_ecr_context, classify, validate
+
+    # build a fold_existing sidecar
+    from tpcore.tests.test_lab_dossier_sidecar import _labresult
+    r = _labresult()  # intent/recommended_exit == fold_existing
+    md = tmp_path / "2026-05-18-revcand-SURVIVED-seed0.md"
+    md.write_text("# rendered")
+    md.with_suffix(".json").write_text(r.model_dump_json())
+    ecr = EngineChangeRequest(
+        action="add", engine="newx", source="lab_candidate",
+        lab_dossier=str(md), cadence="daily", allocator=False,
+        dispatch_order=9, need="x")
+    plan = attach_ecr_context(classify(ecr, {}), ecr)
+    vp = validate(plan, repo_root=None, ecr=ecr)
+    assert vp.rejection is not None
+    assert "fold_existing" in vp.rejection and "MODIFY" in vp.rejection
+
+
+def test_add_lab_candidate_missing_sidecar_rejects(tmp_path):
+    """H-S3-11(c) non-vacuity: a lab_candidate ADD whose .json sidecar
+    does NOT exist is a loud reject (the T3 EvidenceError surfaced) — a
+    regression that accepted a missing dossier trips this."""
+    from ops.engine_sdlc.ecr import EngineChangeRequest
+    from ops.engine_sdlc.planner import attach_ecr_context, classify, validate
+    md = tmp_path / "2026-05-18-nodossier-SURVIVED-seed0.md"
+    md.write_text("# rendered")  # NO sibling .json
+    ecr = EngineChangeRequest(
+        action="add", engine="newx", source="lab_candidate",
+        lab_dossier=str(md), cadence="daily", allocator=False,
+        dispatch_order=9, need="x")
+    plan = attach_ecr_context(classify(ecr, {}), ecr)
+    vp = validate(plan, repo_root=None, ecr=ecr)
+    assert vp.rejection is not None
+    assert "sidecar" in vp.rejection
+
+
+def test_add_lab_candidate_tampered_sidecar_rejects(tmp_path):
+    """H-S3-11(c) non-vacuity: an extra-field (tampered) sidecar fails
+    LabResult extra=forbid → loud reject, no mutation. Accepting a
+    tampered dossier trips this."""
+    import json
+
+    from ops.engine_sdlc.ecr import EngineChangeRequest
+    from ops.engine_sdlc.planner import attach_ecr_context, classify, validate
+    from tpcore.tests.test_lab_dossier_sidecar import _labresult
+    payload = json.loads(_labresult().model_dump_json())
+    payload["smuggled_field"] = "tamper"  # extra=forbid → ValidationError
+    md = tmp_path / "2026-05-18-tampered-SURVIVED-seed0.md"
+    md.write_text("# rendered")
+    md.with_suffix(".json").write_text(json.dumps(payload))
+    ecr = EngineChangeRequest(
+        action="add", engine="newx", source="lab_candidate",
+        lab_dossier=str(md), cadence="daily", allocator=False,
+        dispatch_order=9, need="x")
+    plan = attach_ecr_context(classify(ecr, {}), ecr)
+    vp = validate(plan, repo_root=None, ecr=ecr)
+    assert vp.rejection is not None
+    assert "tampered" in vp.rejection or "extra" in vp.rejection
+
+
+def test_add_readiness_miss_rejects(tmp_path):
+    """H-S3-11(d): a scaffold with no <engine>/tests dir / no
+    BaseEnginePlug plugs ⇒ reject, zero mutation."""
+    from ops.engine_sdlc.ecr import EngineChangeRequest
+    from ops.engine_sdlc.planner import apply, attach_ecr_context, classify
+    staged = _make_synthetic_engine_tree(tmp_path)
+    # remove the template so the scaffold is incomplete
+    (staged / "tpcore" / "templates" / "engine_template").rename(
+        staged / "tpcore" / "templates" / "_gone")
+    ecr = EngineChangeRequest(
+        action="add", engine="brandnew", source="new_scaffold",
+        cadence="daily", allocator=False, dispatch_order=7, need="x")
+    plan = attach_ecr_context(classify(ecr, {}), ecr)
+    res = apply(plan, repo_root=staged, emit_audit=False)
+    assert res.rejection is not None
+    assert not (staged / "brandnew").is_dir(), "scaffold not cleaned up"
+
+
+def test_add_leaves_frozen_literal_untouched(tmp_path):
+    """H-S3-2 ADD leg: ADD → LAB does NOT change roster_for_dispatch()
+    (LAB filtered by _DISPATCHABLE) — the frozen literal is unchanged."""
+    from ops.engine_sdlc.ecr import EngineChangeRequest
+    from ops.engine_sdlc.planner import apply, attach_ecr_context, classify, validate
+    staged = _make_synthetic_engine_tree(tmp_path)
+    tc = (staged / "tpcore" / "tests"
+          / "test_engine_lifecycle_consistency.py")
+    before = tc.read_text()
+    ecr = EngineChangeRequest(
+        action="add", engine="brandnew", source="new_scaffold",
+        cadence="daily", allocator=False, dispatch_order=7, need="x")
+    plan = validate(attach_ecr_context(classify(ecr, {
+        "reversion": LifecycleState.PAPER}), ecr),
+        repo_root=staged, ecr=ecr)
+    apply(plan, repo_root=staged, emit_audit=False)
+    assert tc.read_text().count("roster_for_dispatch() == (") == \
+        before.count("roster_for_dispatch() == ("), \
+        "ADD→LAB must NOT touch the frozen literal"
+
+
+def test_add_readiness_miss_rolls_back_to_byte_identical(tmp_path):
+    """H-S3-4 ADD leg (readiness-reject path): a `new_scaffold` ADD from
+    the bare engine_template legitimately fails the readiness gate (no
+    `<engine>/tests/` dir — spec H-S3-11d; the template is a START point,
+    the operator adds tests). The RuntimeError must reverse-replay the
+    journaled scaffold-copy + _PROFILE write so the tree is BYTE-IDENTICAL
+    — ZERO trace: no stray brandnew/, no _PROFILE entry. Proven with the
+    T5 recursive-byte-map oracle so it is non-vacuous: scaffold residue,
+    a surviving _PROFILE entry, or any drifted byte trips it."""
+    from ops.engine_sdlc.ecr import EngineChangeRequest
+    from ops.engine_sdlc.planner import apply, attach_ecr_context, classify
+    staged = _make_synthetic_engine_tree(tmp_path)
+    ep = staged / "tpcore" / "engine_profile.py"
+    pkg = staged / "brandnew"
+    before_ep = ep.read_bytes()
+    # oracle scoped to the new package subtree (T5 discipline — the whole
+    # tpcore/ tree is noisy with subprocess-generated __pycache__ .pyc;
+    # the ADD mutation surface is exactly brandnew/ + engine_profile.py).
+    before_pkg = _snapshot_tree(pkg)
+    assert not pkg.exists(), "brandnew/ must be absent pre-apply"
+    ecr = EngineChangeRequest(
+        action="add", engine="brandnew", source="new_scaffold",
+        cadence="daily", allocator=False, dispatch_order=7, need="x")
+    plan = attach_ecr_context(classify(ecr, {
+        "reversion": LifecycleState.PAPER}), ecr)
+    res = apply(plan, repo_root=staged, emit_audit=False)
+    assert res.rejection is not None
+    assert "readiness:" in res.rejection, res.rejection
+    assert not pkg.exists(), (
+        "failed ADD left a stray brandnew/ scaffold residue")
+    assert ep.read_bytes() == before_ep, "engine_profile not byte-identical"
+    assert '"brandnew"' not in ep.read_text(), (
+        "failed ADD left a _PROFILE entry behind")
+    after_pkg = _snapshot_tree(pkg)
+    assert after_pkg == before_pkg, (
+        "failed ADD did not restore the package subtree byte-identical — "
+        f"extra={set(after_pkg) - set(before_pkg)} "
+        f"missing={set(before_pkg) - set(after_pkg)}")
+
+
+def test_add_red_consistency_rolls_back_to_byte_identical(tmp_path):
+    """H-S3-4 ADD leg (post-stage clockwork-red path): with a scaffold
+    that PASSES readiness (a `tests/` dir injected into the staged
+    engine_template), the staged ADD→LAB still makes the consistency
+    subprocess red (the SP1 `test_lab_sentinel_is_not_wired` pins exactly
+    one LAB sentinel — a 2nd LAB engine is correctly a half-state until
+    promoted). apply() must reverse-replay every journaled scaffold-copy
+    + _PROFILE write to a BYTE-IDENTICAL pre-state — ZERO trace. Proven
+    with the T5 recursive-byte-map oracle: scaffold residue, a surviving
+    _PROFILE entry, or any drifted byte trips it (non-vacuous)."""
+    from ops.engine_sdlc.ecr import EngineChangeRequest
+    from ops.engine_sdlc.planner import apply, attach_ecr_context, classify
+    staged = _make_synthetic_engine_tree(tmp_path)
+    # make the staged engine_template readiness-complete so the reject
+    # comes from the post-stage subprocess, NOT the readiness gate.
+    tmpl_tests = (staged / "tpcore" / "templates"
+                  / "engine_template" / "tests")
+    tmpl_tests.mkdir(parents=True)
+    (tmpl_tests / "__init__.py").write_text("")
+    (tmpl_tests / "test_smoke.py").write_text("def test_ok():\n    pass\n")
+    ep = staged / "tpcore" / "engine_profile.py"
+    pkg = staged / "brandnew"
+    before_ep = ep.read_bytes()
+    before_pkg = _snapshot_tree(pkg)  # T5 discipline (see sibling test)
+    assert not pkg.exists(), "brandnew/ must be absent pre-apply"
+    ecr = EngineChangeRequest(
+        action="add", engine="brandnew", source="new_scaffold",
+        cadence="daily", allocator=False, dispatch_order=7, need="x")
+    plan = attach_ecr_context(classify(ecr, {
+        "reversion": LifecycleState.PAPER}), ecr)
+    res = apply(plan, repo_root=staged, emit_audit=False,
+                _force_validate=True)
+    assert res.rejection is not None
+    assert "post-stage clockwork red" in res.rejection, res.rejection
+    assert not pkg.exists(), (
+        "failed ADD left a stray brandnew/ scaffold residue")
+    assert ep.read_bytes() == before_ep, "engine_profile not byte-identical"
+    assert '"brandnew"' not in ep.read_text(), (
+        "failed ADD left a _PROFILE entry behind")
+    after_pkg = _snapshot_tree(pkg)
+    assert after_pkg == before_pkg, (
+        "failed ADD did not restore the package subtree byte-identical — "
+        f"extra={set(after_pkg) - set(before_pkg)} "
+        f"missing={set(before_pkg) - set(after_pkg)}")

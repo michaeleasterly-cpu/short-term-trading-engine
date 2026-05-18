@@ -284,6 +284,18 @@ class _Journal:
             if kind == "move":
                 src, dst = a, b
                 assert dst is not None
+                if src.name == "__sentinel_absent__":
+                    # ADD scaffold (T6): no prior package — ``dst`` is a
+                    # freshly-created dir/file. Restore = remove it
+                    # entirely so a failed ADD leaves ZERO trace (no
+                    # stray <engine>/ package). rmtree (not unlink) is
+                    # defensive — the scaffold copytree is a dir tree.
+                    if dst.exists():
+                        if dst.is_dir():
+                            shutil.rmtree(dst)
+                        else:
+                            dst.unlink()
+                    continue
                 if dst.exists():
                     if src.exists():
                         if src.is_dir():
@@ -368,16 +380,44 @@ def _render_eulogy(engine: str, *, reason: str, eulogy_notes: str,
             .replace("{{GATE_RECORD}}", gate_record))
 
 
-def validate(plan: TransitionPlan, *,
-             repo_root: Path | None = None) -> TransitionPlan:
-    """§5.2 — reject, never force. Re-verify evidence (T6/T7 fill the
-    action branches), then run the REAL clockwork in an isolated temp
-    tree (H-S3-1). On any failure, set plan.rejection and return — the
-    caller (CLI / apply) never mutates a rejected plan."""
+def validate(plan: TransitionPlan, *, repo_root: Path | None = None,
+             ecr: EngineChangeRequest | None = None) -> TransitionPlan:
+    """§5.2 — reject, never force. ADD: H-S3-11 fail-closed gate.
+    MODIFY: H-S3-6 zero-trust (T7). REMOVE: no gate (always may stop)."""
     if plan.rejection is not None:
         return plan
-    # Action-specific evidence re-verification is layered in T6 (ADD) /
-    # T7 (MODIFY); REMOVE has no gate (you may always stop trading).
+    root = repo_root or REPO_ROOT
+    del root  # bound for the T7 MODIFY-branch parity; ADD uses no root
+    if plan.action is ECRAction.ADD and ecr is not None:
+        if ecr.source == "new_scaffold":
+            if ecr.gate_dsr is not None or ecr.gate_cred is not None:
+                return _reject(
+                    ecr, "new_scaffold ADD must NOT carry gate_dsr/"
+                         "gate_cred — a new engine cannot present a gate "
+                         "score it has not earned (fail-closed H-S3-11b)")
+        elif ecr.source == "lab_candidate":
+            from ops.engine_sdlc._evidence import EvidenceError, load_labresult_sidecar
+            try:
+                lr = load_labresult_sidecar(ecr.lab_dossier)
+            except EvidenceError as exc:
+                return _reject(ecr, str(exc))
+            if lr.recommended_exit == "fold_existing":
+                return _reject(
+                    ecr, "lab_candidate dossier recommends fold_existing "
+                         "— that is a MODIFY of the target engine, NOT an "
+                         "ADD (H-S3-11c). Re-file as action: MODIFY.")
+            if not (lr.verdict == "SURVIVED" and lr.dsr >= 0.95
+                    and lr.credibility_score >= 60
+                    and lr.recommended_exit == "promote_new"):
+                return _reject(
+                    ecr, f"lab_candidate sidecar fails the gate: "
+                         f"verdict={lr.verdict} dsr={lr.dsr} "
+                         f"cred={lr.credibility_score} "
+                         f"recommended_exit={lr.recommended_exit}")
+        if plan.to_state is not LifecycleState.LAB:
+            return _reject(ecr, "ADD must land LAB, never PAPER (H-S3-11a)")
+    if plan.action is ECRAction.MODIFY and ecr is not None:
+        return _validate_modify(plan, ecr)  # T7
     return plan
 
 
@@ -421,9 +461,96 @@ def _emit_audit(engine: str, action: str, from_state, to_state,
         pass
 
 
+_READINESS_PLUG_RE = re.compile(r"class\s+\w+\(BaseEnginePlug\)")
+
+
+def _check_readiness(staged: Path, engine: str) -> str | None:
+    """The programmatically-checkable engine_readiness.md items
+    (H-S3-11d). Returns a rejection reason or None."""
+    pkg = staged / engine
+    if not pkg.is_dir():
+        return f"readiness: scaffold {engine}/ not created"
+    if not (pkg / "tests").is_dir():
+        return f"readiness: {engine}/tests/ missing (engine_readiness §6)"
+    try:
+        import importlib.util
+        spec = importlib.util.find_spec(f"{engine}.scheduler")
+    except ModuleNotFoundError:
+        spec = None
+    if spec is None and not (pkg / "scheduler.py").is_file():
+        return f"readiness: {engine}.scheduler not importable"
+    plug_count = sum(
+        len(_READINESS_PLUG_RE.findall(p.read_text()))
+        for p in (pkg / "plugs").glob("*.py")) if (
+            pkg / "plugs").is_dir() else 0
+    if plug_count != 5:
+        return (f"readiness: expected 5 BaseEnginePlug subclasses in "
+                f"{engine}/plugs/, found {plug_count}")
+    return None
+
+
 def _apply_add(plan: TransitionPlan, root: Path, jn: _Journal) -> None:
-    """T6 implements the ADD executor; T5 only exercises REMOVE."""
-    raise NotImplementedError("ADD executor lands in T6")
+    """H-S3-11 ADD executor (new_scaffold / lab_candidate). ADD ALWAYS
+    lands LAB (allocator_eligible forced False — SP1 test_no_half_state);
+    the AST-safe _PROFILE insert goes IMMEDIATELY before the documented
+    ``allocator`` sentinel comment (H-S3-3 stable anchor). Every scaffold
+    copy / file write is journaled BEFORE it happens so a red consistency
+    subprocess OR any exception reverse-replays to a BYTE-IDENTICAL
+    pre-state (H-S3-4) — a failed ADD leaves ZERO trace (no stray
+    package, no _PROFILE entry, no scaffold residue). It reuses the T5
+    ``_Journal`` (action-agnostic record_move/record_file) — the
+    scaffold-copy is recorded as a ``__sentinel_absent__`` move whose
+    restore is ``rmtree(dst)`` (there is no prior package).
+    """
+    engine = plan.engine
+    src_tmpl = root / "tpcore" / "templates" / "engine_template"
+    if not src_tmpl.is_dir():
+        raise RuntimeError(
+            "engine_template scaffold missing — cannot ADD(new_scaffold)")
+    pkg = root / engine
+    if pkg.exists():
+        raise RuntimeError(
+            f"ADD target {engine}/ already exists on disk — refusing to "
+            f"clobber (classify should have rejected; defence-in-depth)")
+    # scaffold: there is no prior package, so the whole new tree is
+    # journaled as one sentinel-move (restore = rmtree pkg). Journal
+    # BEFORE the copytree so a failure mid-copy is still fully reversible.
+    jn.record_move(pkg / "__sentinel_absent__", pkg)
+    shutil.copytree(src_tmpl, pkg)
+    # AST-safe _PROFILE insert BEFORE the allocator sentinel comment.
+    ep = root / "tpcore" / "engine_profile.py"
+    jn.record_file(ep)
+    cad = plan.sot_diff.get("cadence") or "daily"
+    order = plan.sot_diff.get("dispatch_order")
+    cad_enum = {
+        "daily": "Cadence.DAILY",
+        "weekly_first_trading_day": "Cadence.WEEKLY_FIRST_TRADING_DAY",
+        "monthly_first_trading_day": "Cadence.MONTHLY_FIRST_TRADING_DAY",
+    }[cad]
+    new_entry = (
+        f'    "{engine}":   EngineProfile(engine="{engine}", '
+        f'cadence={cad_enum},\n'
+        f'                               dispatch_order={order}, '
+        f'lifecycle_state=LifecycleState.LAB),\n')
+    src = ep.read_text()
+    anchor = "    # allocator: separate _dispatch_allocator path"
+    if anchor not in src:
+        raise RuntimeError("allocator sentinel anchor not found in _PROFILE")
+    new_src = src.replace(anchor, new_entry + anchor, 1)
+    compile(new_src, "<engine_profile_add>", "exec")  # H-S3-3 gate
+    miss = _check_readiness(root, engine)  # readiness BEFORE the SoT write
+    if miss is not None:
+        raise RuntimeError(miss)  # apply()'s except → full restore
+    ep.write_text(new_src)
+
+
+def _validate_modify(plan: TransitionPlan,
+                     ecr: EngineChangeRequest) -> TransitionPlan:
+    """T7 implements the MODIFY zero-trust evidence gate (H-S3-6); the
+    T6 ``validate`` ADD branch is complete, the MODIFY branch defers
+    here. T5/T6 never route a MODIFY+ecr through validate, so this stub
+    is never reached until T7 replaces it (mirrors _apply_modify)."""
+    raise NotImplementedError("MODIFY evidence gate lands in T7")
 
 
 def _apply_modify(plan: TransitionPlan, root: Path, jn: _Journal) -> None:
