@@ -767,6 +767,18 @@ it is truthful, not aspirational:
   (on-demand, not a daemon — `_staged_copytree` excludes
   `.git/.venv/__pycache__/backtests`). Recorded for honesty; not a SP4
   concern.
+- **(d) Pre-existing SP2-oracle test-isolation fragility.**
+  `scripts/tests/test_search_parameters_characterization.py`'s
+  `asyncpg.create_pool` monkeypatch (an `acquire`-less `_FakePool`) can
+  interact with `cost_model.py:129` under a global-`sys.modules`-mutating
+  test plus a specific collection order → spurious
+  `OSError`/`AttributeError`; out of SP4 scope (a locked SP2 oracle),
+  does NOT fail in the canonical `DATABASE_URL`-unset state, tracked for
+  a future SP2-oracle-robustness follow-up. (Also recorded as
+  CI-green-by-design under H-S2-6: the `test_lab_isolation` DB-connect
+  `OSError` when `DATABASE_URL` is transiently exported with no local PG
+  is an environment flake of a concurrent process, not an SP4 defect —
+  CI has DB+PG so it is green there by H-S2-6 design.)
 
 ### 13.3 Future-work (explicitly deferred, not SP4)
 

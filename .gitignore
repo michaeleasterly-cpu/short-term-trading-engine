@@ -25,6 +25,13 @@ htmlcov/
 .mypy_cache/
 .ruff_cache/
 
+# Lab dossier run artifacts (ops/lab/dossier.py emits
+# docs/lab/{day}-{candidate}-{verdict}-seed{seed}.{md,json} per run —
+# these are RUN ARTIFACTS, not source; the tracked docs/lab/.gitkeep is
+# unaffected by these path-specific patterns).
+docs/lab/*-seed*.md
+docs/lab/*-seed*.json
+
 # Data / local artifacts
 *.db
 *.sqlite3

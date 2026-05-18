@@ -75,14 +75,24 @@ def test_hand_edit_out_of_fence_passes_check(tmp_path):
 
 
 def test_collision_preemption_stanza_present():
-    """H-S4-9: every SP4 scripts/tests file that imports ops/the
-    generator carries the proven sys.modules eviction loop verbatim."""
+    """H-S4-9: every SP4 scripts/tests file *that imports ops/the
+    generator* carries the proven sys.modules eviction loop verbatim.
+
+    ``test_sp4_scope_confined.py`` is DELIBERATELY excluded: like its
+    proven SP3 sibling ``scripts/tests/test_sp3_scope_confined.py`` it
+    imports ONLY stdlib + pytest and shells read-only ``git`` — it never
+    resolves ``ops.*`` and so does not need (and must not carry) the
+    stanza. Per H-S4-9 the stanza is for files that import ops/the
+    generator; carrying it in the pure scope-gate would needlessly
+    mutate global ``sys.modules`` at collection time and perturb the
+    locked SP2 oracle (the §13.2(d) ``_FakePool`` collection-order
+    fragility). Its own scope-confinement is asserted by
+    ``test_sp4_scope_confined.py`` itself."""
     needle = ('for _m in [m for m in list(sys.modules) if m == "ops" '
               'or m.startswith("ops.")]:')
     for fn in ("test_engine_manifest_in_sync.py",
                "test_gen_engine_manifest_render.py",
-               "test_sdlc_docs_match_code.py",
-               "test_sp4_scope_confined.py"):
+               "test_sdlc_docs_match_code.py"):
         p = REPO_ROOT / "scripts" / "tests" / fn
         if not p.is_file():
             continue  # lands in its own task; asserted there too
