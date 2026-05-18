@@ -48,7 +48,9 @@ from datetime import UTC, date, datetime, timedelta
 import structlog
 
 from ops.engine_supervisor import _emit_escalated
+from ops.weekly_digest import DIGEST_EVENT, _iso_week
 from tpcore.aar.writer import AARWriter
+from tpcore.calendar import is_trading_day
 from tpcore.alpaca import AlpacaPaperBrokerAdapter
 from tpcore.db import build_asyncpg_pool
 from tpcore.trade_monitor import TradeMonitor
@@ -83,6 +85,13 @@ _DIGEST_STALLED_CLASS = "engine_service_digest_stalled"
 # return invariant already guarantees a slow sweep advances the cursor
 # (so _find_new_trigger returns None) before this bound elapses.
 SWEEP_SILENT_SEC: int = 2 * POLL_INTERVAL_SEC + 300  # 420s
+
+# The weekly digest is due at the ISO-week's Monday-00:00 UTC rollover;
+# if it has not completed > this many seconds past that rollover on a
+# trading day, the trigger never advanced (distinct from a rc≠0 failed
+# digest). ~6h: comfortably past the day-rollover kick + any startup
+# catch-up, well inside a trading day so it always surfaces same-week.
+DIGEST_STALE_SEC: int = 6 * 60 * 60  # 21600s (~6h)
 
 
 def _engsvc_hold_id(failure_class: str, task_name: str) -> str:
@@ -279,10 +288,65 @@ async def _maybe_escalate_sweep_silent(
         attempts=1)
 
 
+async def _digest_completed_this_week(pool, iso_week: str) -> bool:
+    """True iff a WEEKLY_DIGEST completion row for ``iso_week`` exists —
+    the SAME (event_type, data->>'iso_week') marker ops.weekly_digest
+    writes on a successful ``emit`` (the format is reused, NOT
+    re-derived: ``_iso_week`` is imported from that module)."""
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT 1 FROM platform.application_log
+            WHERE event_type = $1 AND data->>'iso_week' = $2
+            LIMIT 1
+            """,
+            DIGEST_EVENT, iso_week,
+        )
+    return row is not None
+
+
+async def _maybe_escalate_digest_stalled(
+        pool, now: datetime, emitted: set[str] | None = None) -> None:
+    """#243 Phase 1 (c): escalate (advisory, escalate-only) when the
+    weekly digest was never reached / never advanced this ISO-week —
+    DISTINCT from the shipped ``engine_service_digest_failed`` (rc≠0,
+    still emitted by ``_maybe_fire_weekly_digest`` unchanged). FIRE iff:
+    ``is_trading_day(now)`` (the anti-false-positive guard — no digest is
+    due on a weekend/holiday; the ONLY calendar input, not a data-lane
+    re-derivation) AND this ISO-week's Monday-00:00-UTC rollover passed
+    by > ``DIGEST_STALE_SEC`` AND no WEEKLY_DIGEST completion row exists
+    for the current ISO-week. One-shot per ISO-week (the loop-local
+    ``emitted`` set, mirroring the sweep-silent dedup). NEVER raises."""
+    if emitted is None:
+        emitted = set()
+    if not is_trading_day(now):
+        return
+    iso_week = _iso_week(now)
+    if iso_week in emitted:
+        return
+    # ISO-week rollover = this week's Monday 00:00 UTC.
+    week_start = (now - timedelta(days=now.isoweekday() - 1)).replace(
+        hour=0, minute=0, second=0, microsecond=0)
+    if (now - week_start).total_seconds() <= DIGEST_STALE_SEC:
+        return  # within grace — the day-rollover kick may still run
+    if await _digest_completed_this_week(pool, iso_week):
+        return
+    emitted.add(iso_week)
+    await _safe_emit_escalated(
+        pool, engine="engine_service:weekly_digest",
+        hold_id=_engsvc_hold_id(_DIGEST_STALLED_CLASS, "weekly_digest"),
+        failure_class=_DIGEST_STALLED_CLASS,
+        reason=(f"weekly digest {iso_week} never advanced: "
+                f">{DIGEST_STALE_SEC}s past the ISO-week rollover on a "
+                f"trading day with no completion marker"),
+        attempts=1)
+
+
 async def _main_loop(pool, stop_event: asyncio.Event) -> None:
     cursor = datetime.now(UTC) - INITIAL_CURSOR_LOOKBACK
     digest_state: dict = {"last": None}
     sweep_silent_emitted: set[datetime] = set()
+    digest_stalled_emitted: set[str] = set()
     logger.info(
         "engine_service.started",
         triggers=list(TRIGGER_EVENT_TYPES),
@@ -318,6 +382,16 @@ async def _main_loop(pool, stop_event: asyncio.Event) -> None:
             await asyncio.get_event_loop().run_in_executor(None, _run_engine_sweep)
 
         await _maybe_fire_weekly_digest(digest_state, pool=pool)
+
+        # #243 Phase 1 (c): a digest that was never reached / never
+        # advanced this trading ISO-week is a silent state-comprehension
+        # gap — escalate-only, advisory. Crash-isolated.
+        try:
+            await _maybe_escalate_digest_stalled(
+                pool, datetime.now(UTC), digest_stalled_emitted)
+        except Exception as exc:  # noqa: BLE001 — advisory; never abort the loop
+            logger.error("engine_service.digest_stalled_check_failed",
+                         error=str(exc))
 
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=POLL_INTERVAL_SEC)

@@ -633,6 +633,181 @@ async def test_sweep_silent_emit_failure_does_not_break_loop(monkeypatch):
                         monkeypatch=monkeypatch, fixed_now=now)
 
 
+# ---------------------------------------------------------------------------
+# #243 Phase 1 (c): engine_service_digest_stalled — the weekly digest was
+# never reached/never advanced this trading ISO-week (distinct from the
+# shipped engine_service_digest_failed rc≠0 path). Deterministic:
+# is_trading_day guard + ISO-week scoping; no data-calendar re-derivation.
+# ---------------------------------------------------------------------------
+
+
+def _digest_stalled_hid():
+    return _expected_hold_id("engine_service_digest_stalled",
+                             "weekly_digest")
+
+
+class _DigestConn:
+    """fetchrow returns a 1-row marker iff a WEEKLY_DIGEST completion for
+    the queried iso_week exists; else None."""
+
+    def __init__(self, completed_weeks):
+        self._weeks = set(completed_weeks)
+
+    async def fetchrow(self, sql, *args):
+        assert "iso_week" in sql, sql
+        assert args[0] == "WEEKLY_DIGEST", args  # the DIGEST_EVENT param
+        wk = args[-1]
+        return {"ok": 1} if wk in self._weeks else None
+
+
+class _DigestPool:
+    def __init__(self, completed_weeks=()):
+        self.conn = _RecConn()
+        self._dc = _DigestConn(completed_weeks)
+
+    @contextlib.asynccontextmanager
+    async def acquire(self):
+        yield self  # both fetchrow (digest) + execute (escalate) here
+
+    async def fetchrow(self, sql, *a):
+        return await self._dc.fetchrow(sql, *a)
+
+    async def execute(self, sql, *a):
+        await self.conn.execute(sql, *a)
+
+
+def _esc_rows_dp(pool):
+    out = []
+    for sql, args in pool.conn.execs:
+        if "INSERT INTO platform.application_log" not in sql:
+            continue
+        engine, _rid, etype, sev, msg, data_json = args
+        if etype != _esup.ESCALATED_EVENT:
+            continue
+        out.append({"engine": engine, "severity": sev,
+                    "payload": __import__("json").loads(data_json)})
+    return out
+
+
+# Wed 2026-05-20 12:00 UTC — a trading day, ISO week 2026-W21; the week's
+# Monday 00:00 UTC rollover is >> DIGEST_STALE_SEC in the past.
+_WED = datetime(2026, 5, 20, 12, 0, tzinfo=UTC)
+_ISO_WK_WED = "2026-W21"
+
+
+async def test_digest_stale_bound_value():
+    assert es.DIGEST_STALE_SEC == 21600  # ~6h
+    assert isinstance(es.DIGEST_STALE_SEC, int)
+
+
+async def test_digest_stalled_fires_trading_day_overdue_no_completion(
+        monkeypatch):
+    """(i) trading day + overdue + no completion ⇒ ONE ENGINE_ESCALATED
+    (digest_stalled, weekly_digest hold_id, escalate-only)."""
+    monkeypatch.setattr(es, "is_trading_day", lambda _dt: True)
+    pool = _DigestPool(completed_weeks=())
+    await es._maybe_escalate_digest_stalled(pool, _WED)
+    rows = _esc_rows_dp(pool)
+    assert len(rows) == 1, rows
+    r = rows[0]
+    assert r["engine"] == "engine_service:weekly_digest"
+    assert r["payload"]["failure_class"] == "engine_service_digest_stalled"
+    assert r["payload"]["hold_id"] == _digest_stalled_hid()
+    assert r["severity"] == "ERROR"
+    assert set(r["payload"]) == {
+        "schema", "hold_id", "engine", "failure_class",
+        "reason", "attempts"}
+
+
+async def test_digest_stalled_not_trading_day_no_escalation(monkeypatch):
+    """(ii) is_trading_day False (weekend/holiday) ⇒ no escalation."""
+    monkeypatch.setattr(es, "is_trading_day", lambda _dt: False)
+    pool = _DigestPool(completed_weeks=())
+    await es._maybe_escalate_digest_stalled(pool, _WED)
+    assert _esc_rows_dp(pool) == []
+
+
+async def test_digest_stalled_already_emitted_no_escalation(monkeypatch):
+    """(iii) digest already emitted this ISO-week ⇒ no escalation."""
+    monkeypatch.setattr(es, "is_trading_day", lambda _dt: True)
+    pool = _DigestPool(completed_weeks={_ISO_WK_WED})
+    await es._maybe_escalate_digest_stalled(pool, _WED)
+    assert _esc_rows_dp(pool) == []
+
+
+async def test_digest_stalled_within_grace_no_escalation(monkeypatch):
+    """(iv) within DIGEST_STALE_SEC grace ⇒ no escalation. Monday
+    2026-05-18 just after week-start rollover (< 6h elapsed)."""
+    monkeypatch.setattr(es, "is_trading_day", lambda _dt: True)
+    just_after = datetime(2026, 5, 18, 3, 0, tzinfo=UTC)  # Mon, ~3h in
+    pool = _DigestPool(completed_weeks=())
+    await es._maybe_escalate_digest_stalled(pool, just_after)
+    assert _esc_rows_dp(pool) == []
+
+
+async def test_digest_stalled_distinct_from_digest_failed(monkeypatch):
+    """(v) a FAILED digest (rc≠0) still uses the SHIPPED
+    engine_service_digest_failed class/path — _maybe_fire_weekly_digest
+    is unchanged; this detector only covers the never-reached case."""
+    async def _fake_exec(*a, **k):
+        class _P:
+            async def wait(self): return 7
+        return _P()
+    monkeypatch.setattr(es.asyncio, "create_subprocess_exec", _fake_exec)
+    pool = _RecPool()
+    await es._maybe_fire_weekly_digest({"last": None}, pool=pool,
+                                       today=date(2026, 5, 20))
+    rows = _escalated_rows(pool)
+    assert len(rows) == 1
+    assert rows[0]["payload"]["failure_class"] == \
+        "engine_service_digest_failed"  # NOT _stalled
+
+
+async def test_digest_stalled_no_duplicate_on_repoll(monkeypatch):
+    """(vi) re-poll ⇒ no duplicate (one-shot per ISO-week)."""
+    monkeypatch.setattr(es, "is_trading_day", lambda _dt: True)
+    pool = _DigestPool(completed_weeks=())
+    emitted: set[str] = set()  # the loop-local one-shot dedup set
+    await es._maybe_escalate_digest_stalled(pool, _WED, emitted)
+    await es._maybe_escalate_digest_stalled(pool, _WED, emitted)
+    await es._maybe_escalate_digest_stalled(pool, _WED, emitted)
+    assert len(_esc_rows_dp(pool)) == 1
+
+
+async def test_digest_stalled_emit_failure_does_not_raise(monkeypatch):
+    """Crash-isolation: a failing escalate emit must not propagate."""
+    monkeypatch.setattr(es, "is_trading_day", lambda _dt: True)
+
+    async def _boom_emit(*a, **k):
+        raise RuntimeError("emit DB down")
+    monkeypatch.setattr(es, "_emit_escalated", _boom_emit)
+    # must NOT raise
+    await es._maybe_escalate_digest_stalled(
+        _DigestPool(completed_weeks=()), _WED)
+
+
+async def test_digest_stalled_wired_into_main_loop(monkeypatch):
+    """The detector is invoked from _main_loop adjacent to the
+    _maybe_fire_weekly_digest call (deterministic, crash-isolated)."""
+    monkeypatch.setattr(es, "POLL_INTERVAL_SEC", 0)
+    monkeypatch.setattr(es, "_run_engine_sweep", lambda: 0)
+    monkeypatch.setattr(es, "_maybe_fire_weekly_digest",
+                        AsyncMock(return_value=None))
+    seen = {}
+
+    async def _spy(pool, now, emitted):
+        seen["called"] = True
+    monkeypatch.setattr(es, "_maybe_escalate_digest_stalled", _spy)
+    stop = asyncio.Event()
+
+    async def _ft(p, c):
+        stop.set()
+        return None
+    monkeypatch.setattr(es, "_find_new_trigger", _ft)
+    await es._main_loop(_RecPool(), stop)
+    assert seen.get("called") is True
+
+
 def test_run_engine_service_wrapper_has_env_for_monitor():
     """H-2: the consolidated daemon's wrapper must source .env (so the
     co-hosted TradeMonitor sees ALPACA_KEY/ALPACA_SECRET) AND keep the
