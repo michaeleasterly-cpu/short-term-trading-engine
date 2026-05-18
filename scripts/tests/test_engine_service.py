@@ -336,17 +336,16 @@ async def test_crashloop_re_escalates_after_recovery():
     ⇒ a SECOND ENGINE_ESCALATED (the ``escalated`` latch reset). The
     co-task ONLY ever crashes (never cleanly returns — a clean return
     would exit _run_supervised); the gap that drains the deque is a
-    >600s jump in the mocked crash clock between burst 1 and burst 2."""
+    >600s jump in the mocked monotonic clock between burst 1 and burst 2."""
     pool = _RecPool()
     stop = asyncio.Event()
-    base = datetime(2026, 5, 18, 12, 0, tzinfo=UTC)
-    # 6 crash timestamps: burst1 (3 in-window) then a >600s jump then
-    # burst2 (3 in-window). datetime.now is called once per crash.
-    crash_times = [
-        base, base + timedelta(seconds=10), base + timedelta(seconds=20),
-        base + timedelta(hours=3),  # >600s later → deque drains, latch off
-        base + timedelta(hours=3, seconds=10),
-        base + timedelta(hours=3, seconds=20),
+    # 6 monotonic timestamps (floats): burst1 (3 in-window) then a >600s
+    # gap then burst2 (3 in-window). time.monotonic is called once per crash.
+    crash_mono = [
+        0.0, 10.0, 20.0,
+        10_000.0,   # >600s later → deque drains, latch resets
+        10_010.0,
+        10_020.0,
     ]
     seq = {"i": 0}
     calls = {"n": 0}
@@ -358,21 +357,13 @@ async def test_crashloop_re_escalates_after_recovery():
             return
         raise RuntimeError(f"boom-{calls['n']}")
 
-    real_dt = datetime
+    def _fake_monotonic():
+        t = crash_mono[min(seq["i"], len(crash_mono) - 1)]
+        seq["i"] += 1
+        return t
 
-    class _DT:
-        @staticmethod
-        def now(tz=None):
-            t = crash_times[min(seq["i"], len(crash_times) - 1)]
-            seq["i"] += 1
-            return t
-
-        def __new__(cls, *a, **k):
-            return real_dt(*a, **k)
-
-    with patch.object(es, "datetime", _DT):
-        await es._run_supervised("sweep", _flaky, stop, pool=pool,
-                                 backoff=0.0)
+    await es._run_supervised("sweep", _flaky, stop, pool=pool,
+                             backoff=0.0, _monotonic=_fake_monotonic)
     rows = _escalated_rows(pool)
     assert len(rows) == 2, [r["payload"] for r in rows]
     assert all(r["payload"]["failure_class"]

@@ -42,6 +42,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from datetime import UTC, date, datetime, timedelta
 
 import structlog
@@ -180,7 +181,8 @@ async def _maybe_fire_weekly_digest(state: dict, pool=None,
 
 
 async def _run_supervised(name: str, factory, stop_event: asyncio.Event,
-                          pool=None, backoff: float = 5.0) -> None:
+                          pool=None, backoff: float = 5.0,
+                          _monotonic=None) -> None:
     """Run ``factory()`` (a 0-arg coroutine fn) until stop_event; an
     Exception is logged and the task restarted after ``backoff`` (one
     crashed co-task must NEVER kill its sibling — H-6). CancelledError
@@ -193,8 +195,10 @@ async def _run_supervised(name: str, factory, stop_event: asyncio.Event,
     escalation is purely a surface). ``escalated`` latches so we emit
     exactly once per crossing; it resets to False when the rolling
     window empties, so a recovered task that later re-loops re-escalates.
-    ``pool`` may be None (no escalation if so)."""
-    crashes: collections.deque[datetime] = collections.deque()
+    ``pool`` may be None (no escalation if so). ``_monotonic`` defaults
+    to ``time.monotonic``; injected in tests for deterministic control."""
+    _mono = _monotonic if _monotonic is not None else time.monotonic
+    crashes: collections.deque[float] = collections.deque()
     escalated = False
     while not stop_event.is_set():
         try:
@@ -205,17 +209,17 @@ async def _run_supervised(name: str, factory, stop_event: asyncio.Event,
         except Exception as exc:  # noqa: BLE001 — restart, don't propagate
             logger.error("engine_service.task_crashed", task=name,
                          error=str(exc))
-            now = datetime.now(UTC)
+            now_mono = _mono()
             # Drop stale entries FIRST (relative to this crash) so the
             # deque can genuinely empty after a quiet period; THEN record
             # this crash. The latch resets the moment the rolling window
             # is empty — a recovered task that later re-loops re-escalates.
             while crashes and (
-                    now - crashes[0]).total_seconds() > _CRASHLOOP_WINDOW_SEC:
+                    now_mono - crashes[0]) > _CRASHLOOP_WINDOW_SEC:
                 crashes.popleft()
             if not crashes:
                 escalated = False
-            crashes.append(now)
+            crashes.append(now_mono)
             if len(crashes) >= _CRASHLOOP_BUDGET and not escalated:
                 escalated = True
                 if pool is not None:
