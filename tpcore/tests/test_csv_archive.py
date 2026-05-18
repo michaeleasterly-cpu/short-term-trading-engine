@@ -7,6 +7,7 @@ truncating its history must be caught by ``detect_shrinkage`` on the
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
@@ -137,3 +138,39 @@ class TestShrinkageDetection:
         )
         csv_archive.assert_not_shrunk(under)  # not over_threshold → no raise
         csv_archive.assert_not_shrunk(None)   # first run → no raise
+
+
+class TestRepoDataDirEnvSeam:
+    """Prep 1 — ``TP_DATA_DIR`` env seam (pure local no-op today).
+
+    Host-agnostic seam for the deferred pre-Railway archive-substrate
+    migration. When the env var is unset the path must be byte-identical
+    to the prior ``<repo_root>/data`` expression — zero behaviour change.
+    """
+
+    _PRIOR_EXPR = (
+        Path(csv_archive.__file__).resolve().parent.parent.parent / "data"
+    )
+
+    def test_default_unset_is_byte_identical_to_prior_expression(
+        self, monkeypatch
+    ) -> None:
+        monkeypatch.delenv("TP_DATA_DIR", raising=False)
+        got = csv_archive.repo_data_dir()
+        assert got == self._PRIOR_EXPR
+        assert str(got) == str(self._PRIOR_EXPR)
+
+    def test_env_set_relocates_archive_root(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        target = tmp_path / "relocated_data"
+        monkeypatch.setenv("TP_DATA_DIR", str(target))
+        assert csv_archive.repo_data_dir() == target
+        # archive_dir_for must compose off the override, untouched.
+        ad = csv_archive.archive_dir_for("fred_macro")
+        assert ad == target / "fred_macro_archive"
+        assert ad.is_dir()
+
+    def test_empty_string_env_treated_as_unset(self, monkeypatch) -> None:
+        monkeypatch.setenv("TP_DATA_DIR", "")
+        assert csv_archive.repo_data_dir() == self._PRIOR_EXPR
