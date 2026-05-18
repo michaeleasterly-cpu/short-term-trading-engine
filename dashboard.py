@@ -31,7 +31,12 @@ import streamlit as st
 # Reuse existing tip-sheet query helpers + broker adapter — same data layer,
 # same shape. Dashboard adds zero new business logic.
 from dashboard_components.charts import render_ticker_chart
-from dashboard_components.escalation import classify_cross_table_audit
+from dashboard_components.escalation import (
+    classify_cross_table_audit,
+    classify_recent_escalations,
+    classify_source_holds,
+    classify_undispositioned,
+)
 from dashboard_components.health import (
     classify_bars,
     classify_catalyst,
@@ -2588,13 +2593,6 @@ def render_escalation_audit() -> None:
     except Exception as exc:  # noqa: BLE001
         st.error(f"Could not fetch escalation state: {exc}")
         return
-
-    from dashboard_components.escalation import (
-        classify_cross_table_audit,
-        classify_recent_escalations,
-        classify_source_holds,
-        classify_undispositioned,
-    )
 
     for label, key, rows, fn, detail_title in (
         ("Source holds (Data Supervisor)", "src_holds",
