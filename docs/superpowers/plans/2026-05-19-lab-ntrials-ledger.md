@@ -870,9 +870,9 @@ git commit -m "feat(lab-fh): SP-A T4 (T-MONO) — unconditional spend emit + cum
 
 ---
 
-### Task 5: Cumulative fails where per-run survived (MAKE-OR-BREAK · T-CUM)
+### Task 5: Cumulative fails where per-run survived (MAKE-OR-BREAK · T-CUMUL)
 
-Satisfies: **§5 (the honest-behavior invariant)**, **H-LL-7 (forbid reverting the correct new failure)**. Spec test: **T5 / T-CUM**.
+Satisfies: **§5 (the honest-behavior invariant)**, **H-LL-7 (forbid reverting the correct new failure)**. Spec test: **T5 / T-CUMUL**.
 
 **Files:**
 - Modify: `tpcore/tests/test_lab_ntrials_ledger.py` (append)
@@ -884,7 +884,7 @@ First, pin a concrete returns slice + trial counts where per-run survives but cu
 ```python
 async def test_cumulative_fails_where_per_run_would_have_survived(
         monkeypatch, tmp_path):
-    """MAKE-OR-BREAK · T-CUM. A candidate that SURVIVES under the
+    """MAKE-OR-BREAK · T-CUMUL. A candidate that SURVIVES under the
     per-run trial count but FAILS once the cumulative penalty is
     applied. The FAILED verdict is the CORRECT, HONEST outcome — the
     edge only "passed" because the multiple-testing penalty was being
@@ -974,7 +974,7 @@ Expected: `All checks passed!`
 ```bash
 git branch --show-current   # MUST print: lab-fh-epic-decomp
 git add tpcore/tests/test_lab_ntrials_ledger.py
-git commit -m "test(lab-fh): SP-A T5 (T-CUM) — cumulative-fails-where-per-run-survived is the honest outcome"
+git commit -m "test(lab-fh): SP-A T5 (T-CUMUL) — cumulative-fails-where-per-run-survived is the honest outcome"
 ```
 
 ---
@@ -1681,7 +1681,7 @@ Use **superpowers:finishing-a-development-branch** to integrate the work (verify
 | §3.3 emit/read ordering (strict `<`) | T1 (`before_ts` strict), T4 (emit→read order) |
 | §3.4 ungameability (no reset / no under-declare / monotone / cross-session) | T3 (no reset), T8 (no under-declare), T4 (monotone), T1 (Postgres substrate = cross-session) |
 | §4 live-safety / isolation reuse (H-S2-3 / H-S3-8 / gate unchanged / no forbidden file) | T4 (H-S3-8 reuse), T6 (gate unchanged), T7 (live read untouched), T9 (H-S2-3), T11 (lane assertion) |
-| §5 honest-behavior invariant | T5 (T-CUM, with H-LL-7 docstring) |
+| §5 honest-behavior invariant | T5 (T-CUMUL, with H-LL-7 docstring) |
 | §6 integration point + print/dossier honesty + helper home | T0, T1 (helper home), T4 (emit/read/changed line), T10 (print + LabResult) |
 | §7 T0–T11 decomposition | Tasks 0–11 (1:1) |
 | §8 H-LL-1..8 | see table below |
@@ -1698,10 +1698,10 @@ Use **superpowers:finishing-a-development-branch** to integrate the work (verify
 | H-LL-4 (disjoint namespace, no live poison) | T1 (`ledger_source` ≠ credibility prefix) | T7 (T-LIVE) |
 | H-LL-5 (no new table, event-sourced SUM) | T0, T1 | T3 (T-NORESET) |
 | H-LL-6 (dossier/print honesty) | T10 | T10 |
-| H-LL-7 (forbid reverting the correct new failure) | T5 docstring, T6 gate pin | T5 (T-CUM) + T6 (T-GATE) |
+| H-LL-7 (forbid reverting the correct new failure) | T5 docstring, T6 gate pin | T5 (T-CUMUL) + T6 (T-GATE) |
 | H-LL-8 (microsecond-collision under-count residual) | documented at the T3 test site | T3 (no error / no double-count) |
 
-All 6 make-or-break tests map: **T-NORESET → T3**, **T-MONO → T4**, **T-CUM → T5**, **T-GATE → T6**, **T-LIVE → T7**, **T-ABORT → T8**. The under-count-closed unconditional-spend-event constraint (§3.2) is the spine: emitted in T4 at sample time **before** the `:639`/`:698` rc-returns and the conditional `:731` credibility write; pinned by **T8**.
+All 6 make-or-break tests map: **T-NORESET → T3**, **T-MONO → T4**, **T-CUMUL → T5**, **T-GATE → T6**, **T-LIVE → T7**, **T-ABORT → T8**. The under-count-closed unconditional-spend-event constraint (§3.2) is the spine: emitted in T4 at sample time **before** the `:639`/`:698` rc-returns and the conditional `:731` credibility write; pinned by **T8**.
 
 ### 2. Placeholder scan
 

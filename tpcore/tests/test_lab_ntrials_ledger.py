@@ -463,7 +463,7 @@ def test_run_py_ledger_callsite_is_append_only_no_reset():
         assert banned not in src, banned
 
 
-# ── SP-A T5 (T-CUM) — cumulative fails where per-run survived. The proof
+# ── SP-A T5 (T-CUMUL) — cumulative fails where per-run survived. The proof
 #    that the anti-laundering mechanism actually BITES: a candidate that
 #    clears DSR>=0.95 at the per-run trial count is correctly FAILED once
 #    the cumulative prior-fishing penalty is applied. The FAILED verdict
@@ -473,7 +473,7 @@ def test_run_py_ledger_callsite_is_append_only_no_reset():
 
 async def test_cumulative_fails_where_per_run_would_have_survived(
         monkeypatch, tmp_path):
-    """MAKE-OR-BREAK · T-CUM. A candidate that SURVIVES under the
+    """MAKE-OR-BREAK · T-CUMUL. A candidate that SURVIVES under the
     per-run trial count but FAILS once the cumulative penalty is
     applied. The FAILED verdict is the CORRECT, HONEST outcome — the
     edge only "passed" because the multiple-testing penalty was being
