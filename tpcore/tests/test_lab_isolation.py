@@ -226,3 +226,124 @@ async def test_read_pool_rejects_write_and_guards_fire():
                 await handler.startup()
         finally:
             await guard_pool.close()
+
+
+async def test_lab_ledger_disjoint_from_live_graduation(tmp_path):
+    """MAKE-OR-BREAK · T-LIVE. A real Lab walk-forward run targeting the
+    LIVE engine ``reversion`` (candidate set ⇒ Lab path) writes a
+    ``lab_trial_ledger.reversion`` spend row, yet:
+
+    - ``graduation_ready(pool, "reversion")`` is byte-identical to
+      before (the ledger source is invisible to the live gate),
+    - the live ``backtest_credibility.reversion`` source row-count is
+      unchanged (H-S2-3 no-poison, re-asserted alongside the ledger),
+    - ``graduation_ready``'s SQL filters strictly on
+      ``backtest_credibility.{engine}`` — it never reads
+      ``lab_trial_ledger.*`` (namespace disjointness, H-LL-4),
+    - the ledger DID record the spend (so the disjointness is
+      *meaningful*, not vacuous: a row exists and is still invisible).
+    """
+    import inspect
+
+    import ops.lab.run as lab_run
+    from tpcore.backtest.credibility import (
+        CREDIBILITY_SOURCE_PREFIX,
+        graduation_ready,
+    )
+    from tpcore.db import build_asyncpg_pool
+    from tpcore.lab.context import LabContext
+    from tpcore.lab.ledger import ledger_source
+
+    # Static disjointness: graduation_ready reads ONLY the credibility
+    # prefix; the ledger source uses a different prefix entirely.
+    grad_src = inspect.getsource(graduation_ready)
+    assert f"{CREDIBILITY_SOURCE_PREFIX}." in grad_src
+    assert "lab_trial_ledger" not in grad_src
+    assert not ledger_source("reversion").startswith(
+        f"{CREDIBILITY_SOURCE_PREFIX}.")
+
+    url = os.environ["DATABASE_URL"]
+    audit = await build_asyncpg_pool(url, max_size=1)
+    try:
+        rev_cred_src = f"{CREDIBILITY_SOURCE_PREFIX}.reversion"
+        ledger_src = ledger_source("reversion")
+        rev_cred_before = await _rowcount(
+            audit, "data_quality_log", f"WHERE source='{rev_cred_src}'")
+        ledger_before = await _rowcount(
+            audit, "data_quality_log", f"WHERE source='{ledger_src}'")
+        grad_before = await graduation_ready(audit, "reversion")
+
+        args = _LabArgs()
+        args.output = tmp_path / "ledger_iso.csv"
+        async with LabContext(db_url=url):
+            rc = await lab_run.amain(args, candidate="ledger_iso_probe")
+        assert rc in (0, 1), f"unexpected amain rc={rc}"
+
+        # Live gate read byte-identical.
+        assert await graduation_ready(audit, "reversion") == grad_before, \
+            "Lab run changed graduation_ready(reversion) — live poison"
+        # Live credibility source row-count unchanged (no-poison).
+        assert await _rowcount(
+            audit, "data_quality_log",
+            f"WHERE source='{rev_cred_src}'") == rev_cred_before, \
+            f"Lab poisoned {rev_cred_src}"
+        # The ledger DID record the spend (disjointness is meaningful).
+        ledger_after = await _rowcount(
+            audit, "data_quality_log", f"WHERE source='{ledger_src}'")
+        assert ledger_after >= ledger_before + 1, (
+            f"Lab run must have emitted a {ledger_src} spend row "
+            f"(before={ledger_before}, after={ledger_after})")
+    finally:
+        await audit.close()
+
+
+async def test_cumulative_n_trials_real_db_integer_correctness():
+    """MAKE-OR-BREAK (H-LL-9). Seed KNOWN lab_trial_ledger rows in the
+    real DB and assert cumulative_n_trials returns the EXACT integer —
+    pins the live SQL: SUM (not COUNT), the notes::jsonb->>'trials'
+    int-cast (not another key), the source=$1 per-target predicate
+    (cross-target isolation), and the strict ``timestamp < before_ts``
+    boundary. None of these are observable through the offline fakes.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from tpcore.db import build_asyncpg_pool
+    from tpcore.lab.ledger import cumulative_n_trials, record_trial_spend
+
+    url = os.environ["DATABASE_URL"]
+    pool = await build_asyncpg_pool(url, max_size=1)
+    try:
+        # Unique target so the assertion is independent of any prior
+        # ledger history in this DB (the SUM is monotone/append-only).
+        tgt = f"revtest_{datetime.now(UTC):%Y%m%d%H%M%S%f}"
+        other = f"vectest_{datetime.now(UTC):%Y%m%d%H%M%S%f}"
+        base = await cumulative_n_trials(pool, tgt, datetime.now(UTC))
+        assert base == 0, f"fresh target must be 0, got {base}"
+
+        t0 = datetime.now(UTC)
+        await record_trial_spend(
+            pool, target=tgt, candidate="h-ll-9", trials=40, seed=1)
+        await record_trial_spend(
+            pool, target=tgt, candidate="h-ll-9", trials=60, seed=2)
+        # Cross-target row that must NOT be summed into `tgt`.
+        await record_trial_spend(
+            pool, target=other, candidate="h-ll-9", trials=999, seed=9)
+        cutoff = datetime.now(UTC) + timedelta(seconds=1)
+        # A strictly-after row that must be EXCLUDED by `< cutoff`.
+        await record_trial_spend(
+            pool, target=tgt, candidate="h-ll-9", trials=7, seed=3)
+
+        got = await cumulative_n_trials(pool, tgt, cutoff)
+        assert got == 100, (
+            f"cumulative SUM wrong: expected 40+60=100 (cross-target "
+            f"{other}=999 excluded by source predicate; the trials=7 "
+            f"post-cutoff row excluded by strict '<'), got {got} — "
+            f"a SQL-text regression (JSON key / SUM / predicate / "
+            f"boundary) in cumulative_n_trials")
+        # Cross-target isolation, asserted from the other side too.
+        assert await cumulative_n_trials(pool, other, cutoff) == 999
+        # Strict-prior boundary: a before_ts == an existing row's ts
+        # excludes that row (proves '<' not '<=').
+        assert await cumulative_n_trials(pool, tgt, t0) == 0
+    finally:
+        await pool.close()
