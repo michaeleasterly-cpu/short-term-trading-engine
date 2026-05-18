@@ -111,6 +111,49 @@ async def test_unregistered_etype_degrades_gracefully() -> None:
     assert "UNREGISTERED" in line
 
 
+async def test_undispositioned_line_annotated_with_llm_proposal() -> None:
+    # LT-P3 §5: when a DATA_LLM_TRIAGE_PROPOSAL exists for the ref, the
+    # undispositioned line gains a ` | LLM: <disp> (conf <c>) — PR <l>`
+    # suffix. DRY: same open set, just annotated.
+    pool = _Pool({
+        "OPEN_ESCALATIONS": [
+            {"ref": "h1", "etype": "DATA_SOURCE_ESCALATED",
+             "recorded_at": datetime(2026, 5, 1, tzinfo=UTC),
+             "message": "source prices_daily stuck"},
+        ],
+        "DATA_LLM_TRIAGE_PROPOSAL": [
+            {"ref": "h1", "proposed_disposition": "converted",
+             "confidence": "high",
+             "pr_link": "https://github.com/x/y/pull/9"},
+        ],
+    })
+    d = await wd.build_weekly_digest(pool, datetime(2026, 5, 17, tzinfo=UTC))
+    line = next(x for x in d.undispositioned if "h1" in x)
+    assert "LLM: converted (conf high)" in line
+    assert "PR https://github.com/x/y/pull/9" in line
+    # the existing policy annotation is still there too
+    assert "escalate_operator" in line
+
+
+async def test_undispositioned_line_has_no_llm_suffix_when_absent() -> None:
+    # No proposal for the ref → NO ` | LLM:` suffix (annotation absent).
+    pool = _Pool({
+        "OPEN_ESCALATIONS": [
+            {"ref": "h2", "etype": "DATA_SOURCE_ESCALATED",
+             "recorded_at": datetime(2026, 5, 1, tzinfo=UTC),
+             "message": "source x stuck"},
+        ],
+        # proposal exists but for a DIFFERENT ref — must not annotate h2
+        "DATA_LLM_TRIAGE_PROPOSAL": [
+            {"ref": "other", "proposed_disposition": "converted",
+             "confidence": "high", "pr_link": "p"},
+        ],
+    })
+    d = await wd.build_weekly_digest(pool, datetime(2026, 5, 17, tzinfo=UTC))
+    line = next(x for x in d.undispositioned if "h2" in x)
+    assert "LLM:" not in line
+
+
 def test_open_escalation_sql_has_all_exclusion_clauses() -> None:
     # The anti-join correctness can't be exercised by a fake pool
     # (it doesn't run SQL). Static guard: the open-escalation query
