@@ -236,17 +236,22 @@ def _make_synthetic_engine_tree(tmp_path: Path) -> Path:
         'lifecycle_state=LifecycleState.PAPER),\n'
         '    # allocator: separate _dispatch_allocator path')
     ep.write_text(t)
-    smoke = staged / "scripts" / "run_smoke_test.sh"
-    smoke.write_text(smoke.read_text().replace(
-        "for engine in reversion vector momentum sentinel canary; do",
-        "for engine in reversion vector momentum sentinel canary "
-        "throwaway; do"))
-    pp = staged / "pyproject.toml"
-    pj = pp.read_text().replace(
-        '"canary*"]  # sigma archived 2026-05-16',
-        '"canary*", "throwaway*"]  # sigma archived 2026-05-16').replace(
-        '    "canary/tests",', '    "canary/tests",\n    "throwaway/tests",')
-    pp.write_text(pj)
+    # DDF-1 (SP4 T2): the shadows are sentinel-fenced; the old
+    # str.replace on the un-fenced literal is now a silent no-op. Build
+    # the synthetic `throwaway`-bearing shadows by the ONE renderer
+    # against a throwaway-augmented roster, so the staged tree is green
+    # pre-REMOVE no matter the fence wording.
+    import sys as _sys
+    _repo = Path(__file__).resolve().parents[2]
+    _sys.path.insert(0, str(_repo))
+    from scripts.gen_engine_manifest import render_all
+    _aug_roster = ("reversion", "vector", "momentum", "sentinel",
+                   "canary", "throwaway")
+    _aug_archived = ("sigma",)
+    for _rel in ("scripts/run_smoke_test.sh", "pyproject.toml"):
+        _p = staged / _rel
+        _p.write_text(render_all(_p.read_text(), _rel,
+                                 _aug_roster, _aug_archived))
     # the frozen-literal pin must include throwaway BEFORE the retire so
     # the staged tree is green pre-REMOVE (H-S3-2: REMOVE then drops it).
     tc = staged / "tpcore" / "tests" / "test_engine_lifecycle_consistency.py"

@@ -337,7 +337,16 @@ def _shadow_edit_remove(staged: Path, engine: str, jn: _Journal) -> None:
     pp = staged / "pyproject.toml"
     jn.record_file(pp)
     txt = pp.read_text()
+    # SP4 T2 (DDF-1, second instance): the pyproject include/testpaths
+    # engine rows are now sentinel-fenced multi-line arrays (one
+    # ``    "engine*",`` per line). The legacy single-line CSV purges
+    # (``"engine*", `` / ``, "engine*"``) silently no-op on that form —
+    # also strip the own-a-line row so the executor purge stays correct
+    # post-fence. (The general executor→renderer migration is T5; this
+    # is the minimal fence-safe purge so T2's SP3-atomicity gate is
+    # green.)
     txt = txt.replace(f'"{engine}*", ', "").replace(f', "{engine}*"', "")
+    txt = re.sub(rf'\n\s*"{engine}\*",', "", txt)
     txt = re.sub(rf'\n\s*"{engine}/tests",', "", txt)
     pp.write_text(txt)
 

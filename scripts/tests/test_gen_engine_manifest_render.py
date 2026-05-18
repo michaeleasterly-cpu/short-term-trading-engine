@@ -100,3 +100,70 @@ def test_generator_imports_no_engine():
         cwd=str(REPO_ROOT), capture_output=True, text=True, check=True)
     assert res.stdout.strip() == "", (
         f"generator eager-imported forbidden modules: {res.stdout!r}")
+
+
+import ast  # noqa: E402
+import tomllib  # noqa: E402
+
+_SHADOWS = (
+    "scripts/run_smoke_test.sh",
+    "scripts/run_all_engines.sh",
+    "ops/platform_pipeline.py",
+    "pyproject.toml",
+)
+
+
+@pytest.mark.parametrize("rel", _SHADOWS)
+def test_generator_is_idempotent(rel):
+    """H-S4-3: render_all is a fixed point — render_all(render_all(x))
+    == render_all(x) for every shadow file as committed."""
+    text = (REPO_ROOT / rel).read_text()
+    once = gm.render_all(text, rel, ROSTER, ARCHIVED)
+    twice = gm.render_all(once, rel, ROSTER, ARCHIVED)
+    assert twice == once, f"{rel}: render_all is not idempotent"
+
+
+@pytest.mark.parametrize("rel", _SHADOWS)
+def test_check_clean_after_write(rel):
+    """H-S4-3: the committed shadow is already byte-identical to its
+    own regeneration (a clean checkout never needs a regen ritual)."""
+    text = (REPO_ROOT / rel).read_text()
+    assert gm.render_all(text, rel, ROSTER, ARCHIVED) == text, (
+        f"{rel}: committed bytes != regeneration — run the generator")
+
+
+def test_smoke_sh_still_parses():
+    res = subprocess.run(  # noqa: S603
+        ["bash", "-n", "scripts/run_smoke_test.sh"],
+        cwd=str(REPO_ROOT), capture_output=True, text=True)
+    assert res.returncode == 0, (
+        f"run_smoke_test.sh failed bash -n post-fence:\n{res.stderr}")
+
+
+def test_run_all_engines_sh_still_parses():
+    res = subprocess.run(  # noqa: S603
+        ["bash", "-n", "scripts/run_all_engines.sh"],
+        cwd=str(REPO_ROOT), capture_output=True, text=True)
+    assert res.returncode == 0, (
+        f"run_all_engines.sh failed bash -n post-fence:\n{res.stderr}")
+
+
+def test_pyproject_still_valid_toml():
+    pp = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())
+    testpaths = set(pp["tool"]["pytest"]["ini_options"]["testpaths"])
+    includes = set(pp["tool"]["setuptools"]["packages"]["find"]["include"])
+    for e in ROSTER:
+        assert f"{e}/tests" in testpaths, f"{e}/tests missing"
+        assert f"{e}*" in includes, f"{e}* missing"
+    # the hand-owned non-engine rows survive outside the fence:
+    assert "tpcore/tests" in testpaths
+    assert "tpcore*" in includes
+
+
+def test_platform_pipeline_docstring_still_valid():
+    src = (REPO_ROOT / "ops" / "platform_pipeline.py").read_text()
+    mod = ast.parse(src)
+    doc = ast.get_docstring(mod)
+    assert doc is not None, "platform_pipeline lost its module docstring"
+    assert " → ".join(ROSTER) in doc, (
+        "the regenerated dispatch-order line is absent from the docstring")
