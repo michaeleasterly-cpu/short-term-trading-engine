@@ -1,178 +1,220 @@
-# LLM Triage Advisory Layer (Ladder rung 5 / Epic E) — Design
+# LLM Triage Advisory Layer (Ladder rung 5 / Epic E) — Design **v2**
 
-**Status:** spec 2026-05-18 (DATA lane). Brainstorm → **spec (this
-doc)** → plan → phased subagent build. #187 — the operator-deferred
-"Epic E", now un-deferred. Rung 5 of the Escalation & Hardening Ladder
-(`docs/ESCALATION_HARDENING_LADDER.md`).
+**Status:** spec **v2** 2026-05-18 (DATA lane). Brainstorm → spec
+(v1) → operator scope escalation ×3 + **two independent expert
+opinions** → **spec v2 (this doc)** → plan → phased subagent build.
+#187 — Ladder rung 5 (`docs/ESCALATION_HARDENING_LADDER.md`).
 
-**Operator decision (2026-05-18):** the platform **does** call an LLM
-API with a purpose-built triage persona (operator overrode the
-deterministic-packet-only recommendation; the operator is the
-authority). The standing hard constraints still bind and shape the
-safety envelope below.
+**v2 supersedes v1.** v1 was "advisory text only, no tools." Operator
+escalated: (a) the LLM may *run tests to investigate*; (b) it must
+help *fix the data* while data stays **100%**; (c) it must *stage
+new/updated deterministic agents & self-heal, review-ready, so it
+won't intervene again*. Two skeptical staff-architect expert passes
+(commissioned by the operator) defined the maximal **responsible**
+envelope and its bright lines, adopted verbatim below. Operator
+directives also locked: a purpose-built **persona is a created,
+versioned artifact**; the Anthropic integration is built **against
+official Claude documentation, not assumed knowledge**; **one
+canonical mechanism — no on/off scripts / no rat's nest**.
 
-## 1. Mandate & non-negotiable constraints
+## 1. What the LLM produces (per NOVEL escalation)
 
-The LLM is an **advisory analyst at the escalation boundary only**:
+In a credential- & network-**starved ephemeral git worktree** (no
+`.env`, no `DATABASE_URL`, no Alpaca/Supabase creds, egress-denied
+except a read-only package mirror) the triage LLM may **read the
+repo** and **run the fixture test suite / ruff / the clockwork-drift
+tests** to investigate. Its sole deliverable is a **draft,
+human-merge-only PR** containing:
 
-- **Advisory-only / human-gated / never auto-applied.** The LLM never
-  dispositions, never converts an escalation, never writes a HealSpec/
-  RemediationSpec/AdapterContract, never touches risk/orders/data. Its
-  sole output is a **non-authoritative proposal** a human reads.
-- **Never the mutating actor.** Structurally incapable: text
-  completion only — **no tool-use, no function-calling**. The proposal
-  is a string in an `application_log` event; nothing consumes it
-  programmatically.
-- **The deterministic agents stay deterministic.** `tpcore/selfheal`,
-  `tpcore/auditheal`, `tpcore/datasupervisor`, the trading path, the
-  rung-2 registries are byte-untouched. The LLM is a *separate* lane
-  that runs *after* deterministic escalation and *before* the human —
-  it accelerates the rung-3 human; it does not replace rungs 1–4.
-- **Fails safe to "human handles it."** Any LLM/API failure, missing
-  key, or crash → the escalation simply stays undispositioned (its
-  pre-#187 state). #187 can only *add* a suggestion; its absence
-  changes nothing.
-- **Data-lane only.** Engine/aar lanes are a separate session's
-  territory (consistent with the Ladder scope).
+1. an **additive, mechanism-free** HealSpec / RemediationSpec / Ladder
+   binding that points an **already-existing, already-proven canonical
+   `ops.py --stage`** (with already-shipped bounded params) at the
+   novel escalation class — so the deterministic agent permanently
+   owns it (the Ladder rung-3 "converted" outcome; "won't intervene
+   again"); and
+2. a **machine-checkable dossier**: escalation id, the novel failure
+   signature, why this bounded repair is sufficient, and what it
+   deliberately does NOT cover.
 
-## 2. Trigger predicate — genuinely novel only (reuses the Ladder SoT)
+It also emits a non-authoritative `DATA_LLM_TRIAGE_PROPOSAL` event
+(advisory record, pointer to the PR) that surfaces on the escalation's
+line in the weekly digest.
 
-The agent fires for an escalation iff ALL hold (no new predicate —
-reuses `tpcore.ladder` + the existing escalation reads):
+## 2. "Data stays 100%" — the bright line
 
-1. it is an **open** escalation instance (the `ops.weekly_digest`
-   undispositioned set — escalation event with no resolving terminal,
-   not yet `DATA_ESCALATION_DISPOSITIONED`);
-2. its Ladder `policy_for(<class>)` disposition is
-   `ESCALATE_OPERATOR` — i.e. **no deterministic auto-conversion
-   exists** (precisely rung-5's "NOVEL ambiguous failure the
-   deterministic agents escalated"; auto-healed/known classes never
-   reach the LLM);
-3. there is **no prior `LLM_TRIAGE_PROPOSAL`** for its ref
-   (one-terminal dedup — exactly one proposal per escalation, ever).
+The LLM / its PR **never** triggers, runs, queues, or schedules a
+repair, and has no creds or real tree to do so. The **present** outage
+is restored independently and as today: the existing deterministic
+path, or a human running an **existing** canonical stage. The PR is
+the **future permanent** fix — it is **never on the critical path of
+"stay 100%."** Data continues to be restored only by the canonical
+bounded mechanism, gated, exactly as before #187.
 
-Bounded: a per-cycle cap (`_MAX_TRIAGE_PER_CYCLE`, default 5) so an
-escalation storm cannot run up API cost; oldest-first.
+## 3. Deterministic enforcement (expert-vetted; non-bypassable)
 
-## 3. Deterministic read-only context packet
+The LLM's self-judgement of "minor vs major" gates **nothing** — the
+boundary is a property of the *artifact*, evaluated by code the LLM
+never runs and on a tree it cannot write.
 
-Before any LLM call, the agent deterministically assembles
-(pure reads, no mutation) a `TriagePacket`: the escalation event +
-payload, the Ladder disposition policy + reason for its class, the
-latest relevant `data_quality_log` / `cross_table_audit.%` rows for
-the source, and the Sprint Dossier body if `tpcore/forensics/dossier`
-has one. The packet is persisted (in the proposal event's data, plus
-a `packet_hash`) so every proposal is auditable and reproducible.
+- **Hard-denied → required CI check auto-fails + auto-closes the PR
+  (the "body"):** any diff touching `tpcore/risk/**`,
+  `tpcore/order_management/**`, `tpcore/risk/limits_profile.py`, the
+  DSR/credibility gate, `platform/migrations/**`, `**/providers.py`,
+  `scripts/run_data_operations.sh`, `scripts/ops.py`.
+- **Allowed-but-maximally-gated (the "brain"):** HealSpec /
+  RemediationSpec / Ladder binding files — **additive entries ONLY**,
+  enforced by a NEW required CI check **"HealSpec provenance"** that
+  FAILS unless ALL hold: (a) every stage/param the new spec references
+  already exists on `main` from a **non-LLM** PR; (b) **zero new
+  mechanism** — no new stage, no new or loosened param/bound, no
+  `healable` false→true, no edit to an existing spec (all of those are
+  100%-human-authored, hard-denied to the LLM); (c) the clockwork-
+  drift suite passes with the new spec **active in fixture** (3-way
+  registry lockstep proven); (d) the machine-checkable dossier is
+  present and well-formed.
+- **Two-human review, one ≠ the dispositioning operator** (CODEOWNERS;
+  operator-sole-review is a single point of failure). The change is
+  **inert until merged**.
+- **Post-merge mandatory shadow/canary, N cycles:** a newly-merged
+  LLM-authored spec **fires but does NOT mutate** — its computed
+  repair is diffed against the no-op baseline and logged/gated; a
+  human **promotes** it after detector-vs-healer agreement is observed
+  for N cycles. (The cheapest control against a plausible-but-wrong
+  LLM HealSpec silently corrupting correct data every cycle.)
+- **No merge authority, no live creds, no real-tree write, no
+  mutating tool, no LLM self-classification gating anything.**
 
-## 4. The triage persona (versioned, documented artifact)
+## 4. Vetoed outright (expert, non-negotiable)
 
-`docs/llm_triage_persona.md` — the frozen system prompt + the
-operator's required "prompt format + documentation". Persona mandate
-baked in:
+Any LLM-proposed **new or widened repair mechanism** (new canonical
+stage, new/loosened param or bound, `healable` flip, edit to an
+existing spec); any **merge authority**; any **live credential** in
+the sandbox; any **real-working-tree write**; treating the **persona /
+operating instructions as a safety boundary** (they govern output
+*quality* only). *"The LLM may choose which proven hammer to point at
+a new nail; it may never forge a hammer."*
 
-- Role: an *advisory data-platform triage analyst* for ONE escalation.
-- Output contract: exactly one `proposed_disposition ∈ {converted,
-  structural, removed}` + (for `converted`) a concrete candidate
-  mechanism (e.g. a sketched HealSpec / param / canonical stage) +
-  `rationale` + explicit `confidence` (low/med/high) + an explicit
-  "what I could NOT determine from the packet" section.
-- Hard-baked guardrails in the prompt: it has **no authority**; it
-  must **defer to the operator**; it must **never state or imply a
-  change was made**; on thin evidence it must answer "insufficient
-  context — escalate to operator" rather than guess; it must not
-  invent platform internals not in the packet.
-- `persona_version` (a string constant) is stamped into every
-  proposal so prompt revisions are auditable; changing the persona
-  bumps the version (a test asserts the constant matches the doc's
-  declared version header).
+## 5. The triage persona — a created, versioned artifact (operator-required)
 
-## 5. The LLM call + airtight safety envelope
+`docs/llm_data_triage_persona.md` is **created in P1** (not implied): the
+frozen system prompt + the operator's required prompt-format
+documentation. Mandate baked in: an *advisory data-platform triage
+analyst* for ONE escalation; output contract = a proposed
+mechanism-free binding to an existing canonical stage + dossier +
+explicit confidence + an explicit "what I could NOT determine";
+hard-baked guardrails (no authority; defer to humans; never imply a
+change was made; "insufficient context" over guessing; never invent
+internals not in the packet; never propose a new mechanism). A
+`PERSONA_VERSION` constant is stamped into every proposal; a test
+asserts the constant == the doc's declared version header (lockstep).
+**The persona is explicitly NOT a safety boundary** (§3/§4 are) — it
+is output-quality only; this is stated in the doc itself.
 
-- **Provider:** Anthropic API via `ANTHROPIC_API_KEY` (env). Key
-  absent → the agent logs `llm_triage.no_api_key` and no-ops (never
-  blocks the cycle; fails safe).
-- **Transport:** HTTP retry through the existing
-  `tpcore.outage.with_retry` (the codebase HTTP-retry SoT — no local
-  `tenacity`, no bespoke loop). Bounded `max_tokens`; a single
-  completion; **`tools` / function-calling NEVER passed** (structural
-  inability to act).
-- **Output:** a schema'd, explicitly non-authoritative
-  `LLM_TRIAGE_PROPOSAL` `application_log` event:
-  `{schema:1, ref, escalation_class, persona_version, model,
-  proposed_disposition, confidence, rationale, could_not_determine,
-  packet_hash}`. Nothing in the platform consumes this
-  programmatically — it is render-only (rung-5 → rung-3 human).
-- **Import-isolation clockwork guard (load-bearing):** a test asserts
-  `ops/llm_triage.py`'s import closure contains **no**
-  `tpcore.selfheal` / `tpcore.auditheal` / `tpcore.datasupervisor` /
-  `tpcore.risk` / order/registry-mutation module — the LLM lane is
-  structurally fenced from every actor path. A new import that
-  breaches the fence fails the build.
-- **Crash-isolated:** any exception (API, parse, timeout) →
-  structured `llm_triage.error` log → the agent returns, the cycle
-  proceeds, the escalation stays undispositioned. Mirrors the
-  datasupervisor/auditheal crash-isolation precedent.
-- **Tests use a mocked client** — zero live API calls in CI.
+## 6. Anthropic integration — built against official docs (operator-required)
 
-## 6. Human-gated terminus (unchanged rung-3)
+Implemented strictly against the **official Anthropic documentation**
+(retrieved via the context7 MCP from `/anthropics/anthropic-sdk-python`
++ `docs.claude.com`; the plan re-fetches and pins exact references —
+**no assumed knowledge**, per [[feedback_use_official_docs]]):
 
-The proposal surfaces **attached to its escalation** in the
-`ops/weekly_digest` UNDISPOSITIONED section, e.g.
-`… | LLM: <disposition> (conf <c>) — <rationale one-liner>`. The
-operator still runs the existing `python -m ops.weekly_digest
-disposition <ref> <converted|structural|removed> [note]` verb. The
-LLM proposal is *advice on the line the operator already had to act
-on* — it adds no new write path, button, or authority. An operator
-disposition clears the escalation exactly as before.
+- Official `anthropic` Python SDK, `client.messages.create(...)`
+  (`POST /v1/messages`). A thin official dependency added to
+  `pyproject` (acceptable: operator chose system-calls-LLM; the
+  official SDK is the least-assumption path).
+- Request: top-level `system=` (the persona — **not** a system-role
+  message), `messages=[{"role":"user","content": <packet>}]`,
+  required `max_tokens` (bounded), `model` = a pinned current-model
+  constant (plan confirms the current id from the official models doc;
+  not hardcoded from memory). **`tools=` is NEVER passed** →
+  structurally incapable of tool-use/acting.
+- Transport wrapped in the codebase SoT `tpcore.outage.with_retry`
+  (no bespoke retry loop, no local `tenacity`).
+- Response parsed per the official `Message` shape: text from
+  `content[0].text` (type `"text"`), `stop_reason`, `usage`
+  (`input_tokens`/`output_tokens` logged for cost). `ANTHROPIC_API_KEY`
+  from env; absent → agent logs `llm_data_triage.no_api_key` and no-ops
+  (fails safe; never blocks the cycle).
+- Tests **mock `messages.create`** returning a real-shaped `Message`
+  (per the official doc) — **zero live API calls in CI**. A reviewer
+  checks the mocked shape against the official doc, not against
+  assertion.
 
-## 7. Non-goals
+## 7. Trigger predicate — genuinely novel only (reuses the Ladder SoT)
 
-- No auto-apply, ever. No tool-use. No LLM in any deterministic-agent
-  / repair / trading / data-mutation path.
-- Not a new daemon — a thin agent on the existing `application_log`
-  bus (sibling of `ops/cutover_agent.py` / `ops/data_repair_service`),
-  invoked in the data-ops flow like the other agents.
-- Not engine/aar (separate session).
-- Not a replacement for rungs 1–4 — purely additive rung-5 advice.
-- No dashboard write surface (the existing read-only escalation panel
-  MAY later show the proposal; not in this spec's scope).
-- Does not modify the persona at runtime / no self-tuning of the
-  prompt (versioned static artifact only).
+Fires for an escalation iff: (1) it is **open + undispositioned** (the
+`ops.weekly_digest` open-escalation set); (2) its Ladder
+`policy_for(<class>)` == `ESCALATE_OPERATOR` (no deterministic
+auto-conversion exists — the genuinely novel class); (3) **no prior
+`DATA_LLM_TRIAGE_PROPOSAL`** for its ref (one-terminal dedup; exactly one
+attempt per escalation, ever). Bounded: `_MAX_TRIAGE_PER_CYCLE`
+(default 5), oldest-first, so a storm cannot run up API cost. The
+read-only context **packet** (deterministic) = the escalation event +
+payload, the Ladder policy+reason, the relevant
+`data_quality_log`/`cross_table_audit.%` rows, the Sprint Dossier if
+present; size-bounded (deterministic truncate-with-marker) so it can't
+blow the token budget; `packet_hash` recorded for reproducibility.
 
-## 8. Phasing (each independently testable; gated PR per phase)
+## 8. One canonical mechanism — no rat's nest (operator-required)
+
+A **single** triage agent on the existing `application_log` bus
+(sibling of `ops/cutover_agent.py` / `ops/data_repair_service.py`,
+invoked in the data-ops flow like the others) + **one** declarative
+`provenance` check wired into the **existing** `.github/workflows/
+ci.yml` (a new required job/step, not a parallel pipeline) + reuse of
+the existing PR / clockwork-drift / branch-protection / canary
+machinery. **No on/off bash toggles, no one-off scripts, no second
+pipeline.** Crash-isolated (any failure → structured log, cycle
+proceeds, escalation stays undispositioned — fails safe to "human").
+
+## 9. Non-goals / scope
+
+- Data-lane only (engine/aar = separate session — consistent with the
+  Ladder).
+- Not in any deterministic-agent / repair / trading / data-mutation
+  runtime path. No auto-apply, ever.
+- Not a new daemon. Not a dashboard write surface.
+- Branch-protection / CODEOWNERS / a merge-less bot identity are
+  partly **GitHub repo settings**, not code: the code-side fence
+  (provenance + hard-denied required checks + starved sandbox +
+  no-merge-call + full existing gate + canary) is itself sufficient to
+  make a system-breaking *merge* impossible without a human; the repo
+  settings are an operator **runbook** deliverable (P4), honestly
+  flagged as config-not-code.
+
+## 10. Phasing — build the fence before the thing (gated PR per phase)
 
 | Phase | Deliverable |
 |---|---|
-| 1 | `ops/llm_triage.py` — the deterministic, **no-LLM-yet** core: the trigger predicate (reusing `tpcore.ladder.policy_for` + the weekly-digest open/undispositioned read + the no-prior-`LLM_TRIAGE_PROPOSAL` dedup) and the `TriagePacket` read-only context builder + `packet_hash`. `docs/llm_triage_persona.md` (the versioned persona/system prompt + prompt-format doc). Unit tests (fake pool): predicate fires only on undispositioned + `ESCALATE_OPERATOR` + no-prior-proposal; packet assembled from scripted rows; persona_version constant == the doc header. **Landed dark** (no API call). |
-| 2 | The LLM call + `LLM_TRIAGE_PROPOSAL` emission + the safety envelope: `ANTHROPIC_API_KEY` env gate, `tpcore.outage.with_retry` transport, NO tools, schema'd event, crash-isolation, the import-isolation clockwork guard test, the per-cycle cap. Tests inject a mock LLM client (no live calls); cover proposal emit, dedup, no-key no-op, crash-isolation, the import-fence assertion. **Landed dark** (agent exists, not yet wired into the cycle). |
-| 3 | Wire the thin agent into the data-ops flow (sibling-of-cutover_agent placement; read the exact step) AND surface the proposal attached to its escalation in the `ops/weekly_digest` UNDISPOSITIONED line. Net behaviour: a novel escalation now also carries an LLM advisory the operator sees when dispositioning. The rung-3 verb + teeth are unchanged. |
-| 4 | Docs — "all of it": CLAUDE.md (the rung-5 advisory lane + its hard constraints + that it never mutates), `docs/ESCALATION_HARDENING_LADDER.md` (rung 5 status → BUILT, advisory-only), the persona doc cross-links, this spec → BUILT + build record. |
+| 1 | **Safety skeleton, deterministic, no LLM.** The "HealSpec provenance" check (additive-only / mechanism-free / stage-must-pre-exist / dossier-present / drift-in-fixture) as a pure module + its required-CI entrypoint + the **hard-denied protected-path check**; the post-merge **canary harness** (a merged LLM-authored spec is shadow-only until promoted); the trigger predicate (reuse `tpcore.ladder.policy_for` + weekly-digest open set + no-prior-proposal); the deterministic read-only context **packet** builder + `packet_hash`; **`docs/llm_data_triage_persona.md`** (created, versioned) + the `PERSONA_VERSION` lockstep test. Unit-tested; **landed dark**. |
+| 2 | **The sandboxed LLM agent.** Ephemeral starved worktree runner; the official-SDK `messages.create` call (per §6, doc-grounded) wrapped in `tpcore.outage.with_retry`, **no `tools`**, bounded `max_tokens`, no-key no-op, crash-isolated; produces the branch + dossier + `DATA_LLM_TRIAGE_PROPOSAL`. The **import-isolation clockwork guard** (the agent's import closure excludes `tpcore.risk`/`order_management`/`selfheal`/`auditheal`/`datasupervisor` actor paths). Client **mocked** in CI (no live calls). Landed dark (not wired). |
+| 3 | **Wire into the existing pipeline.** The thin agent in the data-ops flow (sibling-idiom; read the exact step); draft-PR open (merge-less identity); the provenance + protected-path checks added as **required** jobs in the existing `ci.yml`; auto-close on a hard-denied/provenance failure; the proposal surfaced on the escalation's weekly-digest line. Net: a novel escalation now yields a fenced, review-ready PR + advisory. |
+| 4 | **Docs — "all of it".** CLAUDE.md (rung-5 + the bright lines + that data restoration never goes through the LLM); `docs/ESCALATION_HARDENING_LADDER.md` rung-5 → BUILT with the expert envelope + vetoes; the persona doc cross-links; the **operator runbook** for the GitHub branch-protection/CODEOWNERS/merge-less-identity repo settings (config-not-code, honestly flagged); spec → BUILT + build record. |
 
-## 9. Open questions for the plan phase (resolve by READING code, not guessing)
+## 11. Open questions for the plan phase (resolve by READING code/docs, not guessing)
 
-- **Exact data-ops wiring point** for the thin agent — read how
-  `ops/cutover_agent.py` / the post-escalation agents are invoked
-  (a step in `run_data_operations.sh`? after the datasupervisor Step
-  4d?); place it AFTER the deterministic escalation/disposition state
-  is final for the cycle, BEFORE the digest build, mirroring the
-  established sibling-agent invocation idiom. Do not assume.
-- **Anthropic SDK vs raw HTTP via `tpcore.outage.with_retry`** —
-  read whether the repo already vendors an Anthropic client anywhere
-  (investigation found none); prefer the minimal raw-HTTPS call
-  wrapped in `with_retry` to avoid a new heavy dependency, unless the
-  repo's HTTP conventions dictate otherwise. Decide from the actual
-  `tpcore.outage` API + existing adapter HTTP patterns.
-- **`LLM_TRIAGE_PROPOSAL` ↔ escalation-ref correlation** — confirm
-  the exact ref key per escalation type (`request_id` for
-  `DATA_REPAIR_ESCALATED`, `hold_id` for `DATA_SOURCE_ESCALATED`,
-  feed for `AdapterContractDrift`) by reading the weekly-digest
-  open-escalation query; the dedup + the digest attachment MUST key
-  on the identical ref the rung-3 disposition uses, or the proposal
-  attaches to the wrong line.
-- **Per-cycle cap + cost** — confirm there is no existing cost-budget
-  convention to reuse; if none, `_MAX_TRIAGE_PER_CYCLE` constant +
-  the strict novelty predicate is the bound (documented).
-- **Packet size bound** — the persona prompt must be bounded; the
-  plan defines a hard cap on dossier/rows excerpt length so a huge
-  escalation can't blow the token budget (truncate-with-marker,
-  deterministic).
+- **Re-fetch & pin the official Anthropic API/model/version refs**
+  (context7 `/anthropics/anthropic-sdk-python` + `docs.claude.com`):
+  exact current model id, `anthropic-version`/SDK version, the
+  `Message`/`content`/`stop_reason`/`usage` shape the mock must match.
+  Capture URLs in the plan. Do not code from memory.
+- **Exact data-ops wiring point** — read how `ops/cutover_agent.py` /
+  the post-escalation siblings are invoked (`run_data_operations.sh`
+  step order; after the datasupervisor Step 4d?); place after the
+  cycle's escalation state is final, before the digest build.
+- **Escalation-ref key per type** — confirm `request_id`
+  (`DATA_REPAIR_ESCALATED`) / `hold_id` (`DATA_SOURCE_ESCALATED`) /
+  feed (`AdapterContractDrift`) from the weekly-digest open-escalation
+  query so dedup + the digest attachment key identically to the rung-3
+  disposition.
+- **`DATA_LLM_TRIAGE_PROPOSAL` insert** — mirror
+  `ops/data_repair_service._INSERT_SQL` exactly.
+- **Provenance "stage/param already exists on `main` from a non-LLM
+  PR"** — define the deterministic check precisely against the actual
+  HealSpec/RemediationSpec schemas + how PR authorship/label is
+  detectable in CI (read `ci.yml` context + the registries).
+- **Canary "promote" mechanism** — the minimal deterministic
+  promotion record (an event/flag the deterministic agent reads to
+  switch a spec from shadow→active); read how selfheal/datasupervisor
+  read state so this reuses the bus, not a new toggle.
+- **The drift/clockwork & import-isolation test technique** — mirror
+  the existing `registry_drift` / fake-pool test precedents.
