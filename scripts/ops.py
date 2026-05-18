@@ -2753,16 +2753,23 @@ _RETIRED_DAEMON_LABELS = {
 }
 
 
-async def _check_consolidated_daemon_topology(pool) -> dict[str, Any]:
+async def _check_consolidated_daemon_topology(pool: asyncpg.Pool) -> dict[str, Any]:
     """DA-3 two-daemon invariant (engine-lane probe; NOT in the
     data-pipeline audit). Live ``launchctl list`` label set must be
-    exactly the 3 expected daemons, with the 2 retired ones absent."""
+    exactly the 3 expected daemons, with the 2 retired ones absent.
+
+    macOS-only — returns ``ok=False`` (not an exception) when
+    ``launchctl`` is absent (CI/Linux), so a non-macOS ``--check`` run
+    shows this probe red-by-design rather than crashing.
+    """
+    del pool  # unused; signature contract only
     try:
         proc = subprocess.run(
             ["launchctl", "list"],
             capture_output=True,
             text=True,
             check=False,
+            timeout=10,
         )
         labels = {
             ln.split("\t")[-1].strip()
@@ -2773,10 +2780,14 @@ async def _check_consolidated_daemon_topology(pool) -> dict[str, Any]:
         return {"ok": False, "reason": f"launchctl list failed: {exc}"}
     present_retired = labels & _RETIRED_DAEMON_LABELS
     missing_expected = _EXPECTED_DAEMON_LABELS - labels
-    ok = not present_retired and not missing_expected
+    unexpected = labels - _EXPECTED_DAEMON_LABELS - _RETIRED_DAEMON_LABELS
+    ok = not present_retired and not missing_expected and not unexpected
     res: dict[str, Any] = {"ok": ok, "labels": sorted(labels)}
     if present_retired:
         res["reason"] = f"retired daemon still loaded: {sorted(present_retired)}"
+    elif unexpected:
+        res["reason"] = f"unexpected daemon label: {sorted(unexpected)}"
+        res["unexpected"] = sorted(unexpected)
     elif missing_expected:
         res["reason"] = f"expected daemon missing: {sorted(missing_expected)}"
     return res

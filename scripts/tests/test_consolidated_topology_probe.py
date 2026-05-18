@@ -52,7 +52,7 @@ async def test_probe_ok_for_expected_label_set() -> None:
     with patch.object(
         opsmod.subprocess,
         "run",
-        return_value=type("R", (), {"stdout": out})(),
+        return_value=type("R", (), {"stdout": out, "returncode": 0, "stderr": ""})(),
     ):
         res = await opsmod._check_consolidated_daemon_topology(None)
     assert res["ok"] is True
@@ -68,7 +68,7 @@ async def test_probe_red_when_retired_daemon_present() -> None:
     with patch.object(
         opsmod.subprocess,
         "run",
-        return_value=type("R", (), {"stdout": out})(),
+        return_value=type("R", (), {"stdout": out, "returncode": 0, "stderr": ""})(),
     ):
         res = await opsmod._check_consolidated_daemon_topology(None)
     assert res["ok"] is False
@@ -83,8 +83,38 @@ async def test_probe_red_when_expected_daemon_missing() -> None:
     with patch.object(
         opsmod.subprocess,
         "run",
-        return_value=type("R", (), {"stdout": out})(),
+        return_value=type("R", (), {"stdout": out, "returncode": 0, "stderr": ""})(),
     ):
         res = await opsmod._check_consolidated_daemon_topology(None)
     assert res["ok"] is False
     assert "data-operations" in str(res)
+
+
+async def test_probe_red_when_launchctl_absent() -> None:
+    """Graceful degradation on non-macOS/CI hosts where launchctl is absent."""
+    with patch.object(
+        opsmod.subprocess,
+        "run",
+        side_effect=FileNotFoundError("launchctl"),
+    ):
+        res = await opsmod._check_consolidated_daemon_topology(None)
+    assert res["ok"] is False
+    assert "launchctl" in res["reason"]
+
+
+async def test_probe_red_when_unexpected_label_present() -> None:
+    """An unrecognised com.michael.trading.* label must also be red (exact-set gate)."""
+    out = (
+        "1\t0\tcom.michael.trading.engine-service\n"
+        "2\t0\tcom.michael.trading.data-repair-service\n"
+        "3\t0\tcom.michael.trading.data-operations\n"
+        "4\t0\tcom.michael.trading.something-new\n"
+    )
+    with patch.object(
+        opsmod.subprocess,
+        "run",
+        return_value=type("R", (), {"stdout": out, "returncode": 0, "stderr": ""})(),
+    ):
+        res = await opsmod._check_consolidated_daemon_topology(None)
+    assert res["ok"] is False
+    assert "something-new" in str(res)
