@@ -652,14 +652,7 @@ scope here, flagged honestly):**
   rendered at L217-260.
 
 **Governor follow-ups:**
-- **Batch-engine slot accounting.** `open_positions` for momentum/
-  sentinel is a conservative proxy (gate records +1 per gated order,
-  −1 per submitted close; stale prior-holding slots not reconciled).
-  Errs tight/never fails open. Follow-up: reconcile against broker
-  positions / AAR for an exact concurrent count. `[lane: platform-
-  overlay (RiskGovernor)] [gate: none] [needs operator decision: no]
-  [effort: M]` — VERIFIED still open: no broker-position reconciliation
-  path exists. Errs safe-tight, so low urgency.
+- ✅ **Batch-engine slot accounting — RESOLVED 2026-05-19 (B1#82 + B2#87 + A1#88).** Root fixed, not deferred: B1 introduced the idempotent `record_close`/`risk_close_ledger` arbiter (never-fail-open hardening + reusable primitive); B2 fixed the REAL dual-decrement (reversion/vector `order_manager.reconcile()` `−1` now routes through `record_close`, keyed by the shared bare `open_orders.trade_id`); A1 added the `max(proxy, broker_floor)` never-fail-open last-line raise (opt-in `reconcile_open_floor=True` for momentum/sentinel). **Remaining deferred:** per-engine broker attribution (needs `client_order_id` engine tagging; cross-engine over-count is strictly tighter/safe meanwhile). `[lane: platform-overlay (RiskGovernor)] [gate: none] [needs operator decision: no] [effort: S]`
 - ✅ **`ALLOCATOR_PRUNED_RISK_STATE` `live_engines` payload — MOOT
   (resolved as a side-effect).** `self._engines` no longer includes
   stale sigma (now `allocator_eligible_engines()` — see the fixed

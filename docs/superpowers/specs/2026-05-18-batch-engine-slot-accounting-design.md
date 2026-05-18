@@ -1,12 +1,44 @@
 # Batch-Engine Slot Accounting (#251) — Design **v1.1 (expert-scoped; A+B in-scope)**
 
-**Status:** spec **v1.1** 2026-05-18 (platform-overlay /
-RiskGovernor). Scope-by-investigation → spec v1 → **operator review
-gate: APPROVED with "also fix the dual-decrement now" (NOT deferred)**
-→ focused expert design pass on Part B → **spec v1.1 (this rev — Part
-B folded in-scope)** → plan → phased subagent build. TODO §"Governor
-follow-ups" item #251. **Live-money risk control — the
-never-fail-open invariant is sacred.**
+**Status:** **BUILT 2026-05-19** — B1 #82 + B2 #87 + A1 #88 + D1
+(this PR). Spec v1.1 2026-05-18 (platform-overlay / RiskGovernor).
+Scope-by-investigation → spec v1 → **operator review gate: APPROVED
+with "also fix the dual-decrement now" (NOT deferred)** → focused
+expert design pass on Part B → **spec v1.1 (this rev — Part B folded
+in-scope)** → plan → phased subagent build. TODO §"Governor follow-ups"
+item #251 resolved. **Live-money risk control — the never-fail-open
+invariant is sacred.**
+
+**Build record:**
+- Spec + plan: PR #80 (`docs(risk): #251 batch-engine slot accounting — spec v1.1 + plan`)
+- B1 #82 — idempotent `record_close` + `risk_close_ledger` ledger primitive + batch hardening (never-fail-open hardening; NOT the root fix — corrected in spec v1.2; see the honesty trail above)
+- B2 #87 — the REAL dual-decrement fix: reversion/vector `order_manager.reconcile()` `−1` routed through `record_close`, keyed by the shared bare `open_orders.trade_id`
+- A1 #88 — never-fail-open `max(proxy, broker_floor)` raise, opt-in (`reconcile_open_floor=True`) for momentum + sentinel only
+- D1 (this PR) — docs reconciliation
+
+**Remaining deferred:** per-engine broker attribution (needs `client_order_id` engine tagging — `client_order_id` is not present on both open/close paths today; cross-engine over-count is strictly tighter / safe meanwhile). Separate ticket.
+
+**A1 auditable side-effect (spec-review-mandated record):**
+
+When `reconcile_open_floor` is True (momentum/sentinel), the
+`_broker.get_positions()` call is hoisted to before the concurrent-
+position check in `RiskGovernor.check_trade`. If `get_positions()`
+raises or times out on a **BUY** decision, A1 catches the exception,
+sets `broker_floor = 0` (a no-op against `max(…)`, proxy stands), and
+returns a clean **BLOCK** for net-long-unverifiable. Pre-A1, that
+exception was unhandled and would crash the scheduler.
+
+This is strictly tighter (never-fail-open), not a silent degradation:
+- The `broker_floor = 0` fallback means the proxy stands — identical
+  to the pre-A1 logic for the position-count path.
+- The BLOCK is the only correct outcome when broker state is
+  unverifiable on a BUY (net-long cannot be confirmed safe).
+- This is NOT a second round-trip; the hoist reuses the existing
+  in-band `_broker.get_positions()` call — no new latency except the
+  hoist position (before vs. after the concurrent check).
+- Flag-OFF path (`reconcile_open_floor=False`, all non-batch engines)
+  is byte-identical to pre-A1. The behaviour change is strictly
+  opt-in.
 
 **v1.1 change:** the operator decided the dual-decrement close-path
 drift is fixed at the ROOT now, not deferred.
