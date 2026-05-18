@@ -180,6 +180,53 @@ ARCHIVE_SOURCES = (
     "fmp_fundamentals", "fmp_earnings_events",
 )
 
+# row_velocity sporadic-cadence severe-degradation thresholds (#248).
+#
+# CLUSTER-ROBUST WINDOWS (revised after the #248 spec review found a
+# Critical false-positive). The two sporadic targets are *clustered*,
+# not uniform-rate: corporate_actions is event-driven (splits/divs/
+# earnings cluster around ex-div/earnings dates) and
+# fundamentals_quarterly arrives in ~4 dense filing seasons per year
+# (10-Q/10-K windows ~Jan/Apr/Jul/Oct), each ~6 weeks, with only
+# stragglers/amendments between. A *short* recent window (the original
+# 30d) can fall ENTIRELY inside a legitimate inter-cluster off-season
+# — a quarterly off-season exceeds 30d — so a 30d-vs-rate-normalized
+# predicate WARNs on perfectly healthy data (reviewer's verified
+# scenario: prior≈100, a 3-row straggler lull → WARN). A constant
+# tweak cannot fix this: a clustered lull can be ~0 *regardless* of
+# prior magnitude or floor, because the recent window is shorter than
+# the off-season.
+#
+# The only non-flaky partial predicate for clustered cadence uses a
+# recent window guaranteed to span ≥1 full expected season. A 180d
+# recent window CANNOT fit inside any off-season for either table:
+# 180d necessarily contains ≥1 full quarterly filing season (and, for
+# corporate_actions, ≥1 earnings season + ≥2 dividend quarters). A
+# *sustained* near-zero over 180d while the prior FULL YEAR shows the
+# regular seasonal cycle is therefore unambiguous — a healthy
+# quarterly/event table physically cannot produce ~nothing across a
+# 180d span (it would have hit a season). Detection latency ~one
+# quarter is acceptable: this is *sustained* degradation by
+# definition; acute staleness is already covered by
+# freshness/selfheal.
+#
+# Windows: recent = last 180d; prior = the 365d band from 180d–545d
+# ago (a full prior year → the complete annual seasonal baseline).
+# Rate-normalized 180d expectation = prior * (180/365).
+# SPORADIC_SEVERE_FRAC=0.10: 180d at <10% of the full-year
+# rate-normalized expectation is unreachable by any legitimate
+# seasonal pattern (any healthy 180d window hits ≥1 full season →
+# far more than 10% of the annual rate). The prior floor requires
+# ≥1 year of real history (≥40 rows in the 365d prior band) before
+# the ratio is statistically meaningful.
+SPORADIC_RECENT_DAYS = 180
+SPORADIC_PRIOR_DAYS = 545  # prior band = (PRIOR_DAYS, RECENT_DAYS] ago
+SPORADIC_SEVERE_FRAC = 0.10
+SPORADIC_PRIOR_FLOOR = 40
+# Rate-normalization factor: recent window length / prior band length.
+SPORADIC_PRIOR_BAND_DAYS = SPORADIC_PRIOR_DAYS - SPORADIC_RECENT_DAYS  # 365
+SPORADIC_RATE_FACTOR = SPORADIC_RECENT_DAYS / SPORADIC_PRIOR_BAND_DAYS
+
 
 def _detect_archive_shrinkage() -> tuple[list[ShrinkageReport], list[dict]]:
     """Compare each archive source's latest snapshot to its predecessor.
@@ -1137,9 +1184,11 @@ async def run_unknown_unknowns(pool, sink: _FindingSink | None = None) -> list[A
     # tables — corporate_actions (event-driven: splits/dividends
     # cluster around ex-div/earnings) and fundamentals_quarterly
     # (quarterly filings) legitimately swing 80%+ week to week. For
-    # those the only real failure is *sustained silence*: zero rows
-    # over 30d while the 90d history shows regular activity = a stalled
-    # ingest. (table, timestamp_col, cadence).
+    # those the only real failures are *sustained silence* or *severe
+    # sustained partial degradation* measured over a 180d cluster-robust
+    # window (see SPORADIC_* constants) — a 180d span cannot fit inside
+    # any inter-cluster off-season, so near-zero activity there vs the
+    # prior 365d cycle is unambiguous. (table, timestamp_col, cadence).
     velocity_targets = [
         ("prices_daily", "date", "daily"),
         ("sec_insider_transactions", "filing_date", "daily"),
@@ -1162,9 +1211,13 @@ async def run_unknown_unknowns(pool, sink: _FindingSink | None = None) -> list[A
                 else:
                     row = await conn.fetchrow(f"""
                         SELECT
-                            COUNT(*) FILTER (WHERE {col} > NOW() - INTERVAL '30 days') AS recent,
-                            COUNT(*) FILTER (WHERE {col} > NOW() - INTERVAL '120 days'
-                                             AND {col} <= NOW() - INTERVAL '30 days') AS prior
+                            COUNT(*) FILTER (
+                                WHERE {col} > NOW() - INTERVAL '{SPORADIC_RECENT_DAYS} days'
+                            ) AS recent,
+                            COUNT(*) FILTER (
+                                WHERE {col} > NOW() - INTERVAL '{SPORADIC_PRIOR_DAYS} days'
+                                  AND {col} <= NOW() - INTERVAL '{SPORADIC_RECENT_DAYS} days'
+                            ) AS prior
                         FROM platform.{table}
                     """)
             except Exception as exc:  # noqa: BLE001
@@ -1190,23 +1243,60 @@ async def run_unknown_unknowns(pool, sink: _FindingSink | None = None) -> list[A
                           "cadence": "daily"},
             ))
         else:
-            # Sporadic: only sustained silence is a failure. WARN iff
-            # the source produced rows over the prior 90d but ZERO in
-            # the last 30d (stalled ingest). Otherwise informational.
+            # Sporadic: WARN on sustained silence OR severe sustained
+            # partial degradation, both over a CLUSTER-ROBUST window.
+            # Total silence (zero rows in the recent window while
+            # history shows activity) = a fully stalled ingest. Severe
+            # partial = recent far below the rate-normalized
+            # expectation over a window that, for clustered cadence,
+            # is guaranteed to span ≥1 full season (so it cannot be a
+            # legitimate inter-cluster lull) while a few stragglers
+            # still trickle in (not zero, so not "silent"). See the
+            # SPORADIC_* rationale block above for why the recent
+            # window is 180d and the baseline a full prior year.
             silent = recent == 0 and prior > 0
+            expected = prior * SPORADIC_RATE_FACTOR  # rate-normalized recent expectation
+            severe_partial = (
+                not silent
+                and prior >= SPORADIC_PRIOR_FLOOR
+                and recent < expected * SPORADIC_SEVERE_FRAC
+            )
+            if silent:
+                summary = (
+                    f"{table} (sporadic): {recent:,} rows last {SPORADIC_RECENT_DAYS}d vs "
+                    f"{prior:,} prior {SPORADIC_PRIOR_BAND_DAYS}d — SILENT (stalled ingest?)"
+                )
+                recommended_action = (
+                    f"re-run the {table} stage — zero rows in {SPORADIC_RECENT_DAYS}d "
+                    f"but history shows activity"
+                )
+            elif severe_partial:
+                summary = (
+                    f"{table} (sporadic): severe sustained degradation: "
+                    f"{recent:,} in {SPORADIC_RECENT_DAYS}d vs ~{expected:.0f} "
+                    f"rate-normalized expectation from {prior:,} prior-"
+                    f"{SPORADIC_PRIOR_BAND_DAYS}d"
+                )
+                recommended_action = (
+                    f"investigate the {table} ingest — sustained rate "
+                    f"collapse to <{SPORADIC_SEVERE_FRAC:.0%} of the "
+                    f"rate-normalized {SPORADIC_PRIOR_BAND_DAYS}d "
+                    f"expectation over a full-season window (not zero, "
+                    f"so the silence check did not fire)"
+                )
+            else:
+                summary = (
+                    f"{table} (sporadic): {recent:,} rows last {SPORADIC_RECENT_DAYS}d vs "
+                    f"{prior:,} prior {SPORADIC_PRIOR_BAND_DAYS}d — within event-cadence variance"
+                )
+                recommended_action = None
             findings.append(AuditFinding(
                 phase="unknown_unknowns", check_name="row_velocity",
-                source=table, severity="WARN" if silent else "OK",
-                summary=(
-                    f"{table} (sporadic): {recent:,} rows last 30d vs "
-                    f"{prior:,} prior 90d"
-                    + (" — SILENT (stalled ingest?)" if silent else " — within event-cadence variance")
-                ),
-                evidence={"recent_30d": recent, "prior_90d": prior, "cadence": "sporadic"},
-                recommended_action=(
-                    f"re-run the {table} stage — zero rows in 30d but history shows activity"
-                    if silent else None
-                ),
+                source=table,
+                severity="WARN" if (silent or severe_partial) else "OK",
+                summary=summary,
+                evidence={"recent_180d": recent, "prior_365d": prior, "cadence": "sporadic"},
+                recommended_action=recommended_action,
             ))
 
     # Sudden macro stoppage — most recent value > 3σ from 90-day mean.
