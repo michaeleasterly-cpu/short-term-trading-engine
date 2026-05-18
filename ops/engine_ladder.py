@@ -109,6 +109,18 @@ DISPOSITION_POLICIES: dict[str, DispositionPolicy] = {
                   "(spawn error or non-zero rc) and was swallowed; "
                   "the digest is the state-comprehension floor — a "
                   "structural fix to the digest path, not an engine heal."),
+    "engine_service_sweep_silent": DispositionPolicy(
+        class_name="engine_service_sweep_silent", default=_D.STRUCTURAL,
+        rationale="a qualifying data-ops/green-repair trigger landed but "
+                  "no engine sweep ran within the bound; a trigger that "
+                  "produced no sweep is a dispatch/daemon defect — a "
+                  "structural fix to the sweep path, not an engine heal."),
+    "engine_service_digest_stalled": DispositionPolicy(
+        class_name="engine_service_digest_stalled", default=_D.STRUCTURAL,
+        rationale="the weekly digest was never reached/never advanced "
+                  "this trading ISO-week (distinct from digest_failed's "
+                  "rc≠0); the digest is the state-comprehension floor — "
+                  "a structural fix to the digest trigger, not an engine heal."),
 }
 
 KNOWN_ESCALATION_CLASSES: frozenset[str] = (

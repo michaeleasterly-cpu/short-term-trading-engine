@@ -54,7 +54,8 @@ def test_platform_service_classes_in_known_set_and_have_structural_policy():
     R2 clockwork tooth (escalation_drift stays empty)."""
     psf = es.PLATFORM_SERVICE_FAILURE_CLASSES
     assert psf == frozenset(
-        {"engine_service_task_crashloop", "engine_service_digest_failed"})
+        {"engine_service_task_crashloop", "engine_service_digest_failed",
+         "engine_service_sweep_silent", "engine_service_digest_stalled"})
     # not folded into INFRA
     assert psf & es.INFRA_FAILURE_CLASSES == set()
     # derived KNOWN set is the explicit 3-way union
@@ -62,6 +63,28 @@ def test_platform_service_classes_in_known_set_and_have_structural_policy():
         es.INFRA_FAILURE_CLASSES | psf | {at._BEHAVIORAL})
     for cls in psf:
         assert cls in el.KNOWN_ESCALATION_CLASSES
+        p = el.policy_for(cls)
+        assert p is not None
+        assert p.default is el.EngineEscalationDisposition.STRUCTURAL
+        assert p.rationale.strip()
+    missing, extra = el.escalation_drift()
+    assert missing == set() and extra == set()
+
+
+def test_silent_absence_classes_in_known_set_and_have_structural_policy():
+    """#243 Phase 1 R2 clockwork: the two deterministic silent-absence
+    detector classes (sweep-silent + digest-stalled) must be in
+    PLATFORM_SERVICE_FAILURE_CLASSES (NOT folded into INFRA — keeps
+    _auto_clear inert, matching the shipped Phase-0 classes) AND each
+    carry a STRUCTURAL DISPOSITION_POLICIES row, so escalation_drift()
+    stays empty (the build-failing tooth)."""
+    psf = es.PLATFORM_SERVICE_FAILURE_CLASSES
+    for cls in ("engine_service_sweep_silent",
+                "engine_service_digest_stalled"):
+        assert cls in psf, cls
+        assert cls not in es.INFRA_FAILURE_CLASSES, cls
+        assert cls in el.KNOWN_ESCALATION_CLASSES, cls
+        assert cls in el.DISPOSITION_POLICIES, cls
         p = el.policy_for(cls)
         assert p is not None
         assert p.default is el.EngineEscalationDisposition.STRUCTURAL

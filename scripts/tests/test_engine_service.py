@@ -250,9 +250,12 @@ def _escalated_rows(pool):
 
 
 def test_platform_service_failure_classes_constant():
-    # The frozen SoT lives in ops/engine_supervisor (NOT engine_service)
+    # The frozen SoT lives in ops/engine_supervisor (NOT engine_service).
+    # Phase-0 shipped the crash classes; #243 Phase 1 adds the two
+    # deterministic silent-absence detector classes.
     assert _esup.PLATFORM_SERVICE_FAILURE_CLASSES == frozenset(
-        {"engine_service_task_crashloop", "engine_service_digest_failed"})
+        {"engine_service_task_crashloop", "engine_service_digest_failed",
+         "engine_service_sweep_silent", "engine_service_digest_stalled"})
     # NOT folded into the DA-1 infra set
     assert (_esup.PLATFORM_SERVICE_FAILURE_CLASSES
             & _esup.INFRA_FAILURE_CLASSES) == set()
@@ -452,6 +455,357 @@ async def test_digest_never_raises_even_if_emit_fails(monkeypatch):
     # must NOT raise
     await es._maybe_fire_weekly_digest({"last": None}, pool=_RecPool(),
                                        today=date(2026, 5, 18))
+
+
+# ---------------------------------------------------------------------------
+# #243 Phase 1 (a): engine_service_sweep_silent — a qualifying trigger
+# landed but no sweep ran within SWEEP_SILENT_SEC. Deterministic; consumes
+# the EXISTING _find_new_trigger substrate (the green-repair SQL filter is
+# NOT reimplemented). escalate-only, deterministic hold_id.
+# ---------------------------------------------------------------------------
+
+
+def _sweep_silent_hid():
+    return _expected_hold_id("engine_service_sweep_silent", "sweep")
+
+
+async def _run_one_poll(pool, *, find_new_trigger, monkeypatch,
+                        run_sweep=lambda: 0, fixed_now=None):
+    """Drive exactly ONE _main_loop iteration with injected seams, then
+    stop. _find_new_trigger / _run_engine_sweep are monkeypatched; the
+    weekly-digest check is neutralized (separate detector, Task 1.3)."""
+    monkeypatch.setattr(es, "POLL_INTERVAL_SEC", 0)  # no real 60s sleep
+    monkeypatch.setattr(es, "_find_new_trigger", find_new_trigger)
+    monkeypatch.setattr(es, "_run_engine_sweep", run_sweep)
+    monkeypatch.setattr(es, "_maybe_fire_weekly_digest",
+                        AsyncMock(return_value=None))
+    if fixed_now is not None:
+        class _FixedDT(es.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return fixed_now
+        monkeypatch.setattr(es, "datetime", _FixedDT)
+    stop = asyncio.Event()
+
+    orig = es._find_new_trigger
+
+    async def _wrapped(p, c):
+        r = await orig(p, c)
+        stop.set()  # one iteration only
+        return r
+    monkeypatch.setattr(es, "_find_new_trigger", _wrapped)
+    await es._main_loop(pool, stop)
+
+
+async def test_sweep_silent_bound_value():
+    # 2*POLL_INTERVAL_SEC + 300 == 420; must exceed the longest
+    # legitimate sweep so an in-flight long sweep is never flagged.
+    assert es.SWEEP_SILENT_SEC == 2 * es.POLL_INTERVAL_SEC + 300
+    assert isinstance(es.SWEEP_SILENT_SEC, int)
+
+
+async def test_sweep_silent_fires_when_old_trigger_no_sweep(monkeypatch):
+    """(i) qualifying trigger older than SWEEP_SILENT_SEC, no sweep ⇒
+    exactly ONE ENGINE_ESCALATED, escalate-only, deterministic hold_id,
+    payload-parity with the shipped Phase-0 emit."""
+    pool = _RecPool()
+    now = datetime(2026, 5, 18, 12, 0, tzinfo=UTC)
+    old = now - timedelta(seconds=es.SWEEP_SILENT_SEC + 60)
+
+    async def _ft(p, c):
+        return old
+    await _run_one_poll(pool, find_new_trigger=_ft, monkeypatch=monkeypatch,
+                        fixed_now=now)
+    rows = _escalated_rows(pool)
+    assert len(rows) == 1, rows
+    r = rows[0]
+    assert r["engine"] == "engine_service:sweep"
+    assert r["payload"]["failure_class"] == "engine_service_sweep_silent"
+    assert r["payload"]["hold_id"] == _sweep_silent_hid()
+    assert r["severity"] == "ERROR"
+    # byte-parity with the shipped Phase-0 escalate-only payload shape
+    assert set(r["payload"]) == {
+        "schema", "hold_id", "engine", "failure_class",
+        "reason", "attempts"}
+    # escalate-only: NO ENGINE_HELD row for this hold_id
+    held = [s for s, _ in pool.conn.execs
+            if "INSERT INTO platform.application_log" in s
+            and "ENGINE_HELD" in str(_)]
+    assert held == []
+
+
+async def test_sweep_silent_no_trigger_no_escalation(monkeypatch):
+    """(ii) NO qualifying trigger (quiet weekend / no data-ops) ⇒ none."""
+    pool = _RecPool()
+
+    async def _ft(p, c):
+        return None
+    await _run_one_poll(pool, find_new_trigger=_ft, monkeypatch=monkeypatch)
+    assert _escalated_rows(pool) == []
+
+
+async def test_sweep_silent_sweep_ran_no_escalation(monkeypatch):
+    """(iii) a sweep ran for the trigger ⇒ the cursor advanced past it,
+    so _find_new_trigger returns None ⇒ no escalation (defers to the
+    existing cursor signal, NOT a reimplemented predicate)."""
+    pool = _RecPool()
+
+    async def _ft(p, c):
+        return None  # cursor already past it (sweep consumed it)
+    await _run_one_poll(pool, find_new_trigger=_ft, monkeypatch=monkeypatch)
+    assert _escalated_rows(pool) == []
+
+
+async def test_sweep_silent_red_repair_no_escalation(monkeypatch):
+    """(iv) a red (non-green) DATA_REPAIR_COMPLETE ⇒ no escalation —
+    _find_new_trigger's SQL already excludes it (returns None); the
+    check defers, it does NOT re-derive the trigger predicate."""
+    pool = _RecPool()
+    seen = {}
+
+    async def _ft(p, c):
+        seen["called"] = True
+        return None  # green-only SQL filtered the red repair server-side
+    await _run_one_poll(pool, find_new_trigger=_ft, monkeypatch=monkeypatch)
+    assert seen.get("called") is True
+    assert _escalated_rows(pool) == []
+
+
+async def test_sweep_silent_young_trigger_no_escalation(monkeypatch):
+    """(v) trigger younger than SWEEP_SILENT_SEC ⇒ no escalation
+    (in-flight grace)."""
+    pool = _RecPool()
+    now = datetime(2026, 5, 18, 12, 0, tzinfo=UTC)
+    young = now - timedelta(seconds=es.SWEEP_SILENT_SEC - 30)
+
+    async def _ft(p, c):
+        return young
+    await _run_one_poll(pool, find_new_trigger=_ft, monkeypatch=monkeypatch,
+                        fixed_now=now)
+    assert _escalated_rows(pool) == []
+
+
+async def test_sweep_silent_no_duplicate_on_repoll(monkeypatch):
+    """(vi) re-poll after escalation ⇒ NO duplicate for the same
+    trigger/hold_id."""
+    pool = _RecPool()
+    now = datetime(2026, 5, 18, 12, 0, tzinfo=UTC)
+    old = now - timedelta(seconds=es.SWEEP_SILENT_SEC + 60)
+    monkeypatch.setattr(es, "POLL_INTERVAL_SEC", 0)  # no real 60s sleep
+    monkeypatch.setattr(es, "_run_engine_sweep", lambda: 0)
+    monkeypatch.setattr(es, "_maybe_fire_weekly_digest",
+                        AsyncMock(return_value=None))
+
+    class _FixedDT(es.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now
+    monkeypatch.setattr(es, "datetime", _FixedDT)
+
+    polls = {"n": 0}
+    stop = asyncio.Event()
+
+    async def _ft(p, c):
+        polls["n"] += 1
+        if polls["n"] >= 3:
+            stop.set()
+        return old  # same trigger every poll (cursor never advances it)
+    monkeypatch.setattr(es, "_find_new_trigger", _ft)
+    await es._main_loop(pool, stop)
+    rows = _escalated_rows(pool)
+    assert len(rows) == 1, [r["payload"] for r in rows]
+
+
+async def test_sweep_silent_emit_failure_does_not_break_loop(monkeypatch):
+    """Crash-isolation: a failing escalate emit must not break the loop
+    (reuses the Phase-0 _safe_emit_escalated wrapper)."""
+    now = datetime(2026, 5, 18, 12, 0, tzinfo=UTC)
+    old = now - timedelta(seconds=es.SWEEP_SILENT_SEC + 60)
+
+    async def _boom_emit(*a, **k):
+        raise RuntimeError("emit DB down")
+    monkeypatch.setattr(es, "_emit_escalated", _boom_emit)
+
+    async def _ft(p, c):
+        return old
+    # must NOT raise
+    await _run_one_poll(_RecPool(), find_new_trigger=_ft,
+                        monkeypatch=monkeypatch, fixed_now=now)
+
+
+# ---------------------------------------------------------------------------
+# #243 Phase 1 (c): engine_service_digest_stalled — the weekly digest was
+# never reached/never advanced this trading ISO-week (distinct from the
+# shipped engine_service_digest_failed rc≠0 path). Deterministic:
+# is_trading_day guard + ISO-week scoping; no data-calendar re-derivation.
+# ---------------------------------------------------------------------------
+
+
+def _digest_stalled_hid():
+    return _expected_hold_id("engine_service_digest_stalled",
+                             "weekly_digest")
+
+
+class _DigestConn:
+    """fetchrow returns a 1-row marker iff a WEEKLY_DIGEST completion for
+    the queried iso_week exists; else None."""
+
+    def __init__(self, completed_weeks):
+        self._weeks = set(completed_weeks)
+
+    async def fetchrow(self, sql, *args):
+        assert "iso_week" in sql, sql
+        assert args[0] == "WEEKLY_DIGEST", args  # the DIGEST_EVENT param
+        wk = args[-1]
+        return {"ok": 1} if wk in self._weeks else None
+
+
+class _DigestPool:
+    def __init__(self, completed_weeks=()):
+        self.conn = _RecConn()
+        self._dc = _DigestConn(completed_weeks)
+
+    @contextlib.asynccontextmanager
+    async def acquire(self):
+        yield self  # both fetchrow (digest) + execute (escalate) here
+
+    async def fetchrow(self, sql, *a):
+        return await self._dc.fetchrow(sql, *a)
+
+    async def execute(self, sql, *a):
+        await self.conn.execute(sql, *a)
+
+
+def _esc_rows_dp(pool):
+    out = []
+    for sql, args in pool.conn.execs:
+        if "INSERT INTO platform.application_log" not in sql:
+            continue
+        engine, _rid, etype, sev, msg, data_json = args
+        if etype != _esup.ESCALATED_EVENT:
+            continue
+        out.append({"engine": engine, "severity": sev,
+                    "payload": __import__("json").loads(data_json)})
+    return out
+
+
+# Wed 2026-05-20 12:00 UTC — a trading day, ISO week 2026-W21; the week's
+# Monday 00:00 UTC rollover is >> DIGEST_STALE_SEC in the past.
+_WED = datetime(2026, 5, 20, 12, 0, tzinfo=UTC)
+_ISO_WK_WED = "2026-W21"
+
+
+async def test_digest_stale_bound_value():
+    assert es.DIGEST_STALE_SEC == 21600  # ~6h
+    assert isinstance(es.DIGEST_STALE_SEC, int)
+
+
+async def test_digest_stalled_fires_trading_day_overdue_no_completion(
+        monkeypatch):
+    """(i) trading day + overdue + no completion ⇒ ONE ENGINE_ESCALATED
+    (digest_stalled, weekly_digest hold_id, escalate-only)."""
+    monkeypatch.setattr(es, "is_trading_day", lambda _dt: True)
+    pool = _DigestPool(completed_weeks=())
+    await es._maybe_escalate_digest_stalled(pool, _WED, set())
+    rows = _esc_rows_dp(pool)
+    assert len(rows) == 1, rows
+    r = rows[0]
+    assert r["engine"] == "engine_service:weekly_digest"
+    assert r["payload"]["failure_class"] == "engine_service_digest_stalled"
+    assert r["payload"]["hold_id"] == _digest_stalled_hid()
+    assert r["severity"] == "ERROR"
+    assert set(r["payload"]) == {
+        "schema", "hold_id", "engine", "failure_class",
+        "reason", "attempts"}
+
+
+async def test_digest_stalled_not_trading_day_no_escalation(monkeypatch):
+    """(ii) is_trading_day False (weekend/holiday) ⇒ no escalation."""
+    monkeypatch.setattr(es, "is_trading_day", lambda _dt: False)
+    pool = _DigestPool(completed_weeks=())
+    await es._maybe_escalate_digest_stalled(pool, _WED, set())
+    assert _esc_rows_dp(pool) == []
+
+
+async def test_digest_stalled_already_emitted_no_escalation(monkeypatch):
+    """(iii) digest already emitted this ISO-week ⇒ no escalation."""
+    monkeypatch.setattr(es, "is_trading_day", lambda _dt: True)
+    pool = _DigestPool(completed_weeks={_ISO_WK_WED})
+    await es._maybe_escalate_digest_stalled(pool, _WED, set())
+    assert _esc_rows_dp(pool) == []
+
+
+async def test_digest_stalled_within_grace_no_escalation(monkeypatch):
+    """(iv) within DIGEST_STALE_SEC grace ⇒ no escalation. Monday
+    2026-05-18 just after week-start rollover (< 6h elapsed)."""
+    monkeypatch.setattr(es, "is_trading_day", lambda _dt: True)
+    just_after = datetime(2026, 5, 18, 3, 0, tzinfo=UTC)  # Mon, ~3h in
+    pool = _DigestPool(completed_weeks=())
+    await es._maybe_escalate_digest_stalled(pool, just_after, set())
+    assert _esc_rows_dp(pool) == []
+
+
+async def test_digest_stalled_distinct_from_digest_failed(monkeypatch):
+    """(v) a FAILED digest (rc≠0) still uses the SHIPPED
+    engine_service_digest_failed class/path — _maybe_fire_weekly_digest
+    is unchanged; this detector only covers the never-reached case."""
+    async def _fake_exec(*a, **k):
+        class _P:
+            async def wait(self): return 7
+        return _P()
+    monkeypatch.setattr(es.asyncio, "create_subprocess_exec", _fake_exec)
+    pool = _RecPool()
+    await es._maybe_fire_weekly_digest({"last": None}, pool=pool,
+                                       today=date(2026, 5, 20))
+    rows = _escalated_rows(pool)
+    assert len(rows) == 1
+    assert rows[0]["payload"]["failure_class"] == \
+        "engine_service_digest_failed"  # NOT _stalled
+
+
+async def test_digest_stalled_no_duplicate_on_repoll(monkeypatch):
+    """(vi) re-poll ⇒ no duplicate (one-shot per ISO-week)."""
+    monkeypatch.setattr(es, "is_trading_day", lambda _dt: True)
+    pool = _DigestPool(completed_weeks=())
+    emitted: set[str] = set()  # the loop-local one-shot dedup set
+    await es._maybe_escalate_digest_stalled(pool, _WED, emitted)
+    await es._maybe_escalate_digest_stalled(pool, _WED, emitted)
+    await es._maybe_escalate_digest_stalled(pool, _WED, emitted)
+    assert len(_esc_rows_dp(pool)) == 1
+
+
+async def test_digest_stalled_emit_failure_does_not_raise(monkeypatch):
+    """Crash-isolation: a failing escalate emit must not propagate."""
+    monkeypatch.setattr(es, "is_trading_day", lambda _dt: True)
+
+    async def _boom_emit(*a, **k):
+        raise RuntimeError("emit DB down")
+    monkeypatch.setattr(es, "_emit_escalated", _boom_emit)
+    # must NOT raise
+    await es._maybe_escalate_digest_stalled(
+        _DigestPool(completed_weeks=()), _WED, set())
+
+
+async def test_digest_stalled_wired_into_main_loop(monkeypatch):
+    """The detector is invoked from _main_loop adjacent to the
+    _maybe_fire_weekly_digest call (deterministic, crash-isolated)."""
+    monkeypatch.setattr(es, "POLL_INTERVAL_SEC", 0)
+    monkeypatch.setattr(es, "_run_engine_sweep", lambda: 0)
+    monkeypatch.setattr(es, "_maybe_fire_weekly_digest",
+                        AsyncMock(return_value=None))
+    seen = {}
+
+    async def _spy(pool, now, emitted):
+        seen["called"] = True
+    monkeypatch.setattr(es, "_maybe_escalate_digest_stalled", _spy)
+    stop = asyncio.Event()
+
+    async def _ft(p, c):
+        stop.set()
+        return None
+    monkeypatch.setattr(es, "_find_new_trigger", _ft)
+    await es._main_loop(_RecPool(), stop)
+    assert seen.get("called") is True
 
 
 def test_run_engine_service_wrapper_has_env_for_monitor():

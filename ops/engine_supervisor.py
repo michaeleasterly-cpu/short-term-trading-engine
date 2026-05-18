@@ -51,7 +51,10 @@ INFRA_FAILURE_CLASSES: frozenset[str] = frozenset({
 # INFRA_FAILURE_CLASSES. The engine-ladder R2 clockwork unions this set
 # into KNOWN_ESCALATION_CLASSES so each carries a recorded disposition.
 PLATFORM_SERVICE_FAILURE_CLASSES: frozenset[str] = frozenset({
-    "engine_service_task_crashloop", "engine_service_digest_failed"})
+    "engine_service_task_crashloop", "engine_service_digest_failed",
+    # #243 Phase 1: deterministic silent-absence detectors (the daemon
+    # is alive but a co-hosted service is silently not doing its job).
+    "engine_service_sweep_silent", "engine_service_digest_stalled"})
 
 _INSERT_SQL = """
     INSERT INTO platform.application_log
