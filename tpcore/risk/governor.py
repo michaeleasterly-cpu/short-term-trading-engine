@@ -401,8 +401,6 @@ class RiskGovernor:
         # below does its own single fetch = byte-identical pre-A1 path.
         # A list (possibly ``[]``) ⇒ pre-fetched here and reused below so
         # ``get_positions()`` is called AT MOST ONCE per ``check_trade``.
-        # ``None`` ⇒ NOT pre-fetched (flag-OFF) → the BUY net-long check
-        # below does its own single fetch = byte-identical pre-A1 path.
         broker_positions: list | None = None
         broker_floor = 0
         broker_errored = False
