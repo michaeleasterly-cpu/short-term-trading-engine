@@ -20,10 +20,23 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from ops import engine_ladder
 from tpcore.engine_llm_triage.select import EngineNovelEscalation
 from tpcore.engine_profile import profile_for
 from tpcore.supervisor_state import current_hold
+
+
+def _engine_ladder():
+    """Lazy accessor for the read-only `ops.engine_ladder.policy_for`
+    predicate. Imported at CALL time (never at module-load / pytest
+    collection time) so importing this pure module never binds
+    `sys.modules['ops']` — that would collide with `test_ops.py`'s
+    `scripts/ops.py`-on-sys.path shim (the documented
+    `scripts/ops.py`↔`ops/` shadowing). Read predicate only — NOT an
+    actor path.
+    """
+    from ops import engine_ladder
+
+    return engine_ladder
 
 # Parity with tpcore/llm_data_triage/packet.py (#187): same cap + marker.
 _MAX_TEXT = 24_000
@@ -51,7 +64,7 @@ class EngineTriagePacket:
 def _advisory_policy(failure_class: str) -> dict[str, str | None]:
     """The Ladder's RECOMMENDED disposition for the class — advisory
     context for the LLM, NEVER a gate. `policy_for` is read-only."""
-    pol = engine_ladder.policy_for(failure_class)
+    pol = _engine_ladder().policy_for(failure_class)
     if pol is None:
         return {"default": None, "rationale": None}
     return {"default": pol.default.value, "rationale": pol.rationale}

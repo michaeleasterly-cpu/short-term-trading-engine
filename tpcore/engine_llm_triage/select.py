@@ -22,8 +22,21 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from ops import engine_ladder
 from tpcore.llm_data_triage.select import MAX_TRIAGE_PER_CYCLE
+
+
+def _engine_ladder():
+    """Lazy accessor for the read-only `ops.engine_ladder` predicate
+    module. Imported at CALL time (never at module-load / pytest
+    collection time) so importing this pure module never binds
+    `sys.modules['ops']` — that would collide with `test_ops.py`'s
+    `scripts/ops.py`-on-sys.path shim (the documented
+    `scripts/ops.py`↔`ops/` shadowing). Read predicate only
+    (`list_undispositioned`/`policy_for`) — NOT an actor path.
+    """
+    from ops import engine_ladder
+
+    return engine_ladder
 
 # One terminal, exactly one triage attempt per escalation, ever.
 _PRIOR_SQL = """
@@ -57,7 +70,7 @@ async def select_novel_escalations(
     open / grace / escalate-only-fingerprint-resolution semantics — we
     re-derive none of it.
     """
-    rows = await engine_ladder.list_undispositioned(pool)
+    rows = await _engine_ladder().list_undispositioned(pool)
     async with pool.acquire() as conn:
         prior = {r["hold_id"] for r in await conn.fetch(_PRIOR_SQL)}
     out: list[EngineNovelEscalation] = []

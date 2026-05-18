@@ -7,6 +7,7 @@ policy_for() is None (proven dead — spec §7). Fake pool, no LLM.
 from __future__ import annotations
 
 import inspect
+import types
 from datetime import UTC, datetime
 
 import tpcore.engine_llm_triage.select as S
@@ -50,6 +51,20 @@ class _Pool:
         return _CM(_Conn(self))
 
 
+def _fake_ladder(rows):
+    """A collision-free stand-in for the lazily-imported
+    `ops.engine_ladder` read-predicate module."""
+    mod = types.SimpleNamespace()
+
+    async def _list_undispositioned(pool, **kw):
+        _list_undispositioned.called = True
+        return list(rows)
+
+    _list_undispositioned.called = False
+    mod.list_undispositioned = _list_undispositioned
+    return mod
+
+
 def _ud(hold_id, *, engine="reversion", fc="scheduler_crash"):
     """A list_undispositioned() row shape."""
     return {
@@ -69,15 +84,10 @@ async def test_calls_list_undispositioned_not_reimplemented(monkeypatch) -> None
     """The selection delegates the open/grace/escalate-only semantics
     to engine_ladder.list_undispositioned — it does not reimplement
     them (the bug symmetry-not-copy forbids)."""
-    called = {}
-
-    async def _fake_list(pool, **kw):
-        called["hit"] = True
-        return [_ud("h1"), _ud("h2")]
-
-    monkeypatch.setattr(S.engine_ladder, "list_undispositioned", _fake_list)
+    ladder = _fake_ladder([_ud("h1"), _ud("h2")])
+    monkeypatch.setattr(S, "_engine_ladder", lambda: ladder)
     out = await select_novel_escalations(_Pool())
-    assert called.get("hit") is True
+    assert ladder.list_undispositioned.called is True
     assert [e.hold_id for e in out] == ["h1", "h2"]
     assert all(isinstance(e, EngineNovelEscalation) for e in out)
 
@@ -117,22 +127,18 @@ async def test_does_not_test_policy_for_is_none() -> None:
 
 
 async def test_dedup_skips_prior_proposal(monkeypatch) -> None:
-    async def _fake_list(pool, **kw):
-        return [_ud("h1"), _ud("h2"), _ud("h3")]
-
-    monkeypatch.setattr(S.engine_ladder, "list_undispositioned", _fake_list)
+    ladder = _fake_ladder([_ud("h1"), _ud("h2"), _ud("h3")])
+    monkeypatch.setattr(S, "_engine_ladder", lambda: ladder)
     pool = _Pool(prior_hold_ids=["h2"])
     out = await select_novel_escalations(pool)
     assert [e.hold_id for e in out] == ["h1", "h3"]
 
 
 async def test_bounded_oldest_first(monkeypatch) -> None:
+    # list_undispositioned already returns oldest-first
     rows = [_ud(f"r{i}") for i in range(MAX_TRIAGE_PER_CYCLE + 3)]
-
-    async def _fake_list(pool, **kw):
-        return rows  # list_undispositioned already returns oldest-first
-
-    monkeypatch.setattr(S.engine_ladder, "list_undispositioned", _fake_list)
+    ladder = _fake_ladder(rows)
+    monkeypatch.setattr(S, "_engine_ladder", lambda: ladder)
     out = await select_novel_escalations(_Pool())
     assert len(out) == MAX_TRIAGE_PER_CYCLE
     assert [e.hold_id for e in out] == [
@@ -142,10 +148,8 @@ async def test_bounded_oldest_first(monkeypatch) -> None:
 async def test_policy_default_attached_for_packet(monkeypatch) -> None:
     """policy_for is advisory context (default+rationale) attached to
     the result — NEVER a selection gate."""
-    async def _fake_list(pool, **kw):
-        return [_ud("h1")]
-
-    monkeypatch.setattr(S.engine_ladder, "list_undispositioned", _fake_list)
+    ladder = _fake_ladder([_ud("h1")])
+    monkeypatch.setattr(S, "_engine_ladder", lambda: ladder)
     out = await select_novel_escalations(_Pool())
     assert out[0].policy_default == "structural"
     assert out[0].policy_rationale == "because"
