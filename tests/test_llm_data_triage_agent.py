@@ -1,13 +1,32 @@
 """LT-P2: the agent calls the official SDK (mocked), emits a
 non-authoritative DATA_LLM_TRIAGE_PROPOSAL, never passes tools,
-no-ops without a key, crash-isolated. No live API calls."""
+no-ops without a key, crash-isolated. No live API calls.
+
+Test-hygiene fence (autouse, this whole module): these P2 tests
+exercise the SDK/emit path and DELIBERATELY set ANTHROPIC_API_KEY,
+so a produced proposal would reach P3 ``_open_draft_pr`` — which, with
+the *real* ``_default_pr_runner``, runs real ``git worktree add -b
+llm-triage/<ref>`` / a nested ``pytest`` / ``gh pr create`` against the
+LIVE host repo (leaking ``llm-triage/h1`` / ``llm-triage/ref-good``
+branches and potentially a real PR). The P3 git path is owned and fully
+covered by the isolated ``tpcore/tests/test_llm_data_triage_pr.py``
+(injected ``_FakeRunner``); here we replace the module default
+``_default_pr_runner`` with a no-op fake so NO real subprocess ever
+touches the host repo, and assert the host repo is untouched after every
+test (the regression bite — any reintroduced real-repo git call fails).
+Production ``ops/llm_data_triage.py`` is byte-identical: only the test
+process's view of ``lt._default_pr_runner`` is patched.
+"""
 from __future__ import annotations
 
 import importlib.util
 import json
 import pathlib
+import subprocess
 import sys
 from datetime import UTC, datetime
+
+import pytest
 
 _spec = importlib.util.spec_from_file_location(
     "lt_agent",
@@ -15,6 +34,77 @@ _spec = importlib.util.spec_from_file_location(
 lt = importlib.util.module_from_spec(_spec)
 sys.modules["lt_agent"] = lt
 _spec.loader.exec_module(lt)
+
+_HOST_REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
+
+
+def _host_llm_triage_branches() -> list[str]:
+    """Every `llm-triage/*` local branch in the LIVE host repo (empty
+    on a clean repo). Used as the regression bite: a test that leaks a
+    real `git worktree add -b llm-triage/<ref>` shows up here.
+
+    Fails LOUD on its own failure (git absent / non-zero exit): a guard
+    that returns ``[]`` when it could not actually run git would let the
+    pre/post leak asserts vacuously pass — a silent false-negative. The
+    only paths out of here are a *positively confirmed* branch list or a
+    raised error that ERRORs the test."""
+    try:
+        proc = subprocess.run(  # noqa: S603 — fixed argv, no shell
+            ["git", "-C", str(_HOST_REPO_ROOT),
+             "branch", "--list", "llm-triage/*"],
+            capture_output=True, text=True, check=True,
+        )
+    except FileNotFoundError as exc:  # git absent
+        raise RuntimeError(
+            f"host-repo leak guard could not run git: {exc}") from exc
+    except subprocess.CalledProcessError as exc:  # non-zero git exit
+        raise RuntimeError(
+            "host-repo leak guard could not run git: "
+            f"rc={exc.returncode} stderr={exc.stderr!r}") from exc
+    return [ln.strip().lstrip("* ").strip()
+            for ln in proc.stdout.splitlines() if ln.strip()]
+
+
+@pytest.fixture(autouse=True)
+def _no_real_pr_path():
+    """Autouse, module-wide. (1) Replace the *bound* default
+    ``pr_runner`` of ``run_triage`` with a no-op fake so a produced
+    proposal can NEVER spawn a real ``git worktree``/nested
+    ``pytest``/``gh pr create`` against the host repo. ``pr_runner`` is
+    a keyword-only arg whose default is bound to the real
+    ``_default_pr_runner`` at def-time and lives in
+    ``run_triage.__kwdefaults__`` — patching ``lt._default_pr_runner``
+    alone would NOT take effect, so the bound default is what we swap
+    (and ``lt._default_pr_runner`` too, for any direct reference).
+    (2) Assert the host repo carries no ``llm-triage/*`` branch before
+    AND after the test — the structural regression bite if a real-repo
+    git call is ever reintroduced."""
+    pre = _host_llm_triage_branches()
+    assert pre == [], (
+        f"host repo dirty BEFORE test (pre-existing leak): {pre}")
+
+    def _fake_pr_runner(argv, *, env=None, cwd=None):  # noqa: ANN001
+        # gh pr create → success URL; everything else (incl. every git
+        # worktree/branch op) → benign rc=0. No subprocess is spawned.
+        if argv and argv[0] == "gh":
+            return 0, "https://github.com/x/y/pull/1", ""
+        return 0, "", ""
+
+    orig_attr = lt._default_pr_runner
+    orig_kwd = dict(lt.run_triage.__kwdefaults__)
+    lt._default_pr_runner = _fake_pr_runner
+    lt.run_triage.__kwdefaults__["pr_runner"] = _fake_pr_runner
+    try:
+        yield
+    finally:
+        lt._default_pr_runner = orig_attr
+        lt.run_triage.__kwdefaults__["pr_runner"] = orig_kwd["pr_runner"]
+        post = _host_llm_triage_branches()
+        assert post == [], (
+            "host repo MUTATED by this test — a real-repo `git worktree "
+            f"add -b llm-triage/<ref>` leaked branch(es): {post}. The P2 "
+            "agent test must NOT exercise the real P3 git path; that is "
+            "owned by tpcore/tests/test_llm_data_triage_pr.py.")
 
 
 class _Block:
@@ -271,3 +361,31 @@ async def test_import_isolation_daemon_no_actor_paths() -> None:
     bad = [m for m in imported for f in _FORBIDDEN_ACTOR_PATHS
            if m == f or m.startswith(f + ".")]
     assert bad == [], f"daemon imports fenced actor path(s): {bad}"
+
+
+def test_leak_guard_fails_loud_when_git_absent(monkeypatch) -> None:  # noqa: ANN001
+    # The host-repo leak guard must be incapable of a silent
+    # false-negative: if git can't even run, it must ERROR the test,
+    # NEVER return [] (which would make the pre/post leak asserts
+    # vacuously pass). Bite: revert _host_llm_triage_branches to
+    # check=False / swallow → this test fails.
+    def _git_absent(*_a, **_k):
+        raise FileNotFoundError("[Errno 2] No such file or directory: 'git'")
+
+    monkeypatch.setattr(subprocess, "run", _git_absent)
+    with pytest.raises(RuntimeError,
+                       match="host-repo leak guard could not run git"):
+        _host_llm_triage_branches()
+
+
+def test_leak_guard_fails_loud_on_nonzero_git(monkeypatch) -> None:  # noqa: ANN001
+    # Same incapability-of-false-negative invariant for a non-zero git
+    # exit (e.g. not-a-repo): must raise, not return [].
+    def _git_fails(*_a, **_k):
+        raise subprocess.CalledProcessError(
+            128, ["git"], output="", stderr="fatal: not a git repository")
+
+    monkeypatch.setattr(subprocess, "run", _git_fails)
+    with pytest.raises(RuntimeError,
+                       match="host-repo leak guard could not run git"):
+        _host_llm_triage_branches()
