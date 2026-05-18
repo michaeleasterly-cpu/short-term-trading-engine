@@ -544,3 +544,79 @@ async def test_cumulative_fails_where_per_run_would_have_survived(
         "cumulative penalty must make this FAIL — the honest behaviour "
         "(spec §5). If this asserts True, _run_lab_core regressed to "
         "per-run n_trials.")
+
+
+async def test_gate_expression_byte_identical_and_reduces_to_per_run(
+        monkeypatch, tmp_path):
+    """MAKE-OR-BREAK · T-GATE. Two assertions:
+
+    (a) AST/source pin: the ``survived`` expression in _run_lab_core is
+        EXACTLY ``dsr >= args.dsr_threshold and
+        final_result.credibility_score >= args.credibility_threshold
+        and held_metrics.n_trades >= 3`` and the default thresholds are
+        0.95 / 60 / 3 — byte-identical, only the n_trials INPUT to
+        compute_dsr_for_verdict grew (H-LL-7).
+
+    (b) Behavioural superset: a FIRST-EVER Lab run against a target
+        (cumulative == 0) yields effective_n_trials == args.trials and a
+        verdict identical to pre-SP-A for the same inputs. SP-A reduces
+        to the status quo when no prior trials exist (spec §9)."""
+    import ast
+    import inspect
+
+    import ops.lab.run as lab_run
+    from tpcore.lab.context import LabContext
+
+    # ── (a) source/AST pin of the gate ────────────────────────────────
+    src = inspect.getsource(lab_run._run_lab_core)
+    # The exact gate expression text must be present verbatim.
+    assert (
+        "survived = (\n"
+        "        dsr >= args.dsr_threshold\n"
+        "        and final_result.credibility_score "
+        ">= args.credibility_threshold\n"
+        "        and held_metrics.n_trades >= 3\n"
+        "    )"
+    ) in src, "the survived gate expression changed — H-LL-7 violated"
+    # Default thresholds unchanged in _parse_args.
+    pa = inspect.getsource(lab_run._parse_args)
+    assert '"--dsr-threshold", type=float, default=0.95' in pa
+    assert '"--credibility-threshold", type=int, default=60' in pa
+    # n_trades floor literal 3 still in the gate (not parameterised away).
+    tree = ast.parse(inspect.getsource(lab_run._run_lab_core))
+    assert any(
+        isinstance(n, ast.Constant) and n.value == 3
+        for n in ast.walk(tree)
+    )
+
+    # ── (b) first-ever run reduces to per-run behaviour ───────────────
+    import numpy as np
+    rng = np.random.default_rng(5)
+    returns = [float(x) for x in rng.normal(0.018, 0.01, 40)]
+    seen: list[int] = []
+    real_dsr = lab_run.compute_dsr_for_verdict
+
+    def _spy(r, *, n_trials):
+        seen.append(n_trials)
+        return real_dsr(r, n_trials=n_trials)
+
+    monkeypatch.setattr(lab_run, "compute_dsr_for_verdict", _spy)
+    _install_offline_harness(monkeypatch, lab_run, returns=returns)
+    shared = _SharedLedgerPool()  # EMPTY → cumulative == 0
+
+    async def _fake_build(url, *, read_only, **k):
+        return shared
+
+    monkeypatch.setattr("tpcore.db.build_asyncpg_pool", _fake_build,
+                        raising=True)
+
+    async with LabContext(db_url="postgres://fake/db"):
+        core = await lab_run._run_lab_core(
+            _ns(tmp_path / "first.csv", trials=37, seed=4),
+            candidate="rev_first")
+
+    assert not isinstance(core, int)
+    assert core.effective_n_trials == 37          # 0 + args.trials
+    assert seen[-1] == 37                          # exactly per-run
+    # Same returns + same n_trials ⇒ DSR identical to pre-SP-A path.
+    assert core.dsr == real_dsr(returns, n_trials=37)
