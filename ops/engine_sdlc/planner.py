@@ -235,28 +235,77 @@ EULOGY_TEMPLATE = REPO_ROOT / "tpcore" / "templates" / "eulogy_template.md"
 @dataclass
 class _Journal:
     """H-S3-4: every touched file's exact prior bytes (or absent) + every
-    dir move (src,dst), so apply() can restore byte-identical on red."""
+    PER-ITEM move (src→dst), each recorded BEFORE it is performed, so
+    apply() can restore byte-identical on red — the reverse-move drags
+    back exactly (and only) the original items, never a generated file.
+
+    Ordering invariant: ``ops`` is a single time-ordered list of
+    operations. ``restore()`` replays it in strict reverse, so a
+    mid-loop failure (some moves done, some not) is still fully
+    reversible — every executed move has its journal entry recorded
+    before the move ran (closes #C2).
+    """
     files: dict[Path, bytes | None] = field(default_factory=dict)
-    moves: list[tuple[Path, Path]] = field(default_factory=list)
+    # time-ordered ops: ("move", src, dst) or ("file", path) — a "file"
+    # op points at the snapshot held in ``files`` (prior bytes / None).
+    ops: list[tuple[str, Path, Path | None]] = field(default_factory=list)
 
     def record_file(self, p: Path) -> None:
-        if p in self.files:
-            return
-        self.files[p] = p.read_bytes() if p.is_file() else None
+        """Snapshot ``p``'s exact prior bytes (or None if absent) and
+        append a time-ordered file op. A generated file is recorded with
+        prior=None at its REAL final path, so restore() unlinks exactly
+        that file wherever it ends up (closes #C1: the per-item reverse
+        move never drags a generated EULOGY back into the package)."""
+        if p not in self.files:
+            self.files[p] = p.read_bytes() if p.is_file() else None
+        self.ops.append(("file", p, None))
+
+    def record_move(self, src: Path, dst: Path) -> None:
+        """Journal a single src→dst move BEFORE it is performed (the
+        caller does the ``shutil.move`` only after this returns)."""
+        self.ops.append(("move", src, dst))
+
+    def record_mkdir(self, d: Path) -> None:
+        """Journal a directory creation BEFORE it is performed iff ``d``
+        is genuinely new. On restore the dir is removed (it must be empty
+        once the moves it received are reversed) so NO empty
+        ``archive/<engine>/`` is left behind (the byte-identical /
+        no-file-stranded invariant covers the dir too)."""
+        if not d.exists():
+            self.ops.append(("mkdir", d, None))
 
     def restore(self) -> None:
-        # reverse order: undo the dir moves first, then the text edits.
-        for src, dst in reversed(self.moves):
-            if dst.exists():
-                if src.exists():
-                    shutil.rmtree(src)
-                shutil.move(str(dst), str(src))
-        for p, prior in reversed(list(self.files.items())):
-            if prior is None:
-                if p.is_file():
-                    p.unlink()
-            else:
-                p.write_bytes(prior)
+        """Replay every recorded op in strict reverse order. Moves are
+        reversed exactly (dst→src) so only the originally-present items
+        return to the package; file ops restore prior bytes or unlink a
+        created file at its real path; a journaled mkdir is removed once
+        emptied by the reversed moves."""
+        for kind, a, b in reversed(self.ops):
+            if kind == "move":
+                src, dst = a, b
+                assert dst is not None
+                if dst.exists():
+                    if src.exists():
+                        if src.is_dir():
+                            shutil.rmtree(src)
+                        else:
+                            src.unlink()
+                    src.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(dst), str(src))
+            elif kind == "mkdir":
+                # the dir was created by apply(); the reversed moves +
+                # file-unlinks above already emptied it — remove it so
+                # nothing is stranded. rmtree (not rmdir) is defensive:
+                # any residue is itself a rollback defect we must clear.
+                if a.exists():
+                    shutil.rmtree(a)
+            else:  # "file"
+                prior = self.files.get(a)
+                if prior is None:
+                    if a.is_file():
+                        a.unlink()
+                else:
+                    a.write_bytes(prior)
 
 
 def _shadow_edit_remove(staged: Path, engine: str, jn: _Journal) -> None:
@@ -303,15 +352,19 @@ def _maybe_rewrite_frozen_literal(
                   f"roster_for_dispatch() == ({new_tuple})"))
 
 
-def _render_eulogy(engine: str, ecr: EngineChangeRequest,
+def _render_eulogy(engine: str, *, reason: str, eulogy_notes: str,
                    gate_record: str) -> str:
+    """#N1: the SINGLE eulogy template-fill site (DRY) — _apply_remove
+    routes its eulogy generation through here. Takes resolved strings
+    (not an ECR) so the apply path, which threads the ECR free-text via
+    plan.sot_diff, and any future caller share one template contract."""
     tmpl = EULOGY_TEMPLATE.read_text()
     day = datetime.now(UTC).strftime("%Y-%m-%d")
     return (tmpl
             .replace("{{ENGINE}}", engine)
             .replace("{{DATE}}", day)
-            .replace("{{REASON}}", ecr.reason or "(no reason given)")
-            .replace("{{EULOGY_NOTES}}", ecr.eulogy_notes or "(none)")
+            .replace("{{REASON}}", reason or "(no reason given)")
+            .replace("{{EULOGY_NOTES}}", eulogy_notes or "(none)")
             .replace("{{GATE_RECORD}}", gate_record))
 
 
@@ -446,33 +499,34 @@ def _apply_remove(plan: TransitionPlan, root: Path, jn: _Journal) -> None:
     # shadow edits + conditional frozen-literal rewrite (TEXT edits first)
     _shadow_edit_remove(root, engine, jn)
     _maybe_rewrite_frozen_literal(root, retired_engine=engine, jn=jn)
-    # EULOGY render (text)
+    # The package CONTENTS move into archive/<engine>/ alongside a
+    # generated EULOGY. Atomicity (H-S3-4, #C1/#C2): every per-item move
+    # is journaled BEFORE it is performed so a mid-loop failure is fully
+    # reversible (#C2); the generated EULOGY is journaled as its own
+    # file entry (prior=None) at its REAL final path so restore() unlinks
+    # exactly that file and the per-item reverse-move never drags it back
+    # into the package (#C1) — the restored package is byte-identical.
     arc = root / "archive" / engine
+    jn.record_mkdir(arc)  # journal-before-create so a red removes it
     arc.mkdir(parents=True, exist_ok=True)
+    pkg = root / engine
+    if pkg.is_dir():
+        # journal-then-move each original package item individually.
+        for item in list(pkg.iterdir()):
+            jn.record_move(item, arc / item.name)
+            shutil.move(str(item), str(arc / item.name))
+        pkg.rmdir()
+    # EULOGY render (text) — its own journal entry at its real path.
     eulogy = arc / "EULOGY.md"
     jn.record_file(eulogy)
     # attach_ecr_context threads the ECR free-text onto plan.sot_diff
     # (classify stays pure); the CLI (T8) wraps classify the same way.
-    reason = plan.sot_diff.get("reason") or "(retired via ECR)"
-    notes = plan.sot_diff.get("eulogy_notes") or "(none)"
-    day = datetime.now(UTC).strftime("%Y-%m-%d")
-    body = (EULOGY_TEMPLATE.read_text()
-            .replace("{{ENGINE}}", engine)
-            .replace("{{DATE}}", day)
-            .replace("{{REASON}}", reason)
-            .replace("{{EULOGY_NOTES}}", notes)
-            .replace("{{GATE_RECORD}}", "no surviving gate record"))
-    eulogy.write_text(body)
+    eulogy.write_text(_render_eulogy(
+        engine,
+        reason=plan.sot_diff.get("reason") or "(retired via ECR)",
+        eulogy_notes=plan.sot_diff.get("eulogy_notes") or "(none)",
+        gate_record="no surviving gate record"))
     ep.write_text(new_src)  # the SoT flip (text)
-    # the package move LAST (the irreversible-ish op after cheap reverts)
-    pkg = root / engine
-    if pkg.is_dir():
-        # move package CONTENTS into archive/<engine>/ alongside EULOGY;
-        # the logical (pkg → arc) move is journaled for reverse restore.
-        for item in list(pkg.iterdir()):
-            shutil.move(str(item), str(arc / item.name))
-        jn.moves.append((pkg, arc))
-        pkg.rmdir()
 
 
 __all__ = [

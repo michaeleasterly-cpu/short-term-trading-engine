@@ -209,14 +209,44 @@ def test_remove_throwaway_engine_end_to_end(tmp_path):
     assert rc == 0, f"clean retire must leave the clockwork green:\n{out}"
 
 
+def _snapshot_tree(*roots: Path) -> dict[str, bytes]:
+    """Full recursive {posix-relpath-under-its-root: bytes} map of every
+    file under each root (a root that doesn't exist contributes nothing
+    but is keyed so its later appearance/absence is observable). This is
+    the byte-identical oracle: a stray EULOGY, a file stranded in
+    archive/<engine>/, a half-gutted package, or a drifted text edit all
+    change this map (closes #I1 — the prior subset assertions stayed
+    green while #C1 was live)."""
+    snap: dict[str, bytes] = {}
+    for r in roots:
+        if not r.exists():
+            continue
+        for p in sorted(r.rglob("*")):
+            if p.is_file():
+                snap[f"{r.name}::{p.relative_to(r).as_posix()}"] = (
+                    p.read_bytes())
+    return snap
+
+
 def test_apply_red_consistency_rolls_back_to_byte_identical(tmp_path):
     from ops.engine_sdlc.ecr import EngineChangeRequest
     from ops.engine_sdlc.planner import apply, attach_ecr_context, classify
     staged = _make_synthetic_engine_tree(tmp_path)
     ep = staged / "tpcore" / "engine_profile.py"
     smoke = staged / "scripts" / "run_smoke_test.sh"
-    before_ep = ep.read_bytes()
-    before_smoke = smoke.read_bytes()
+    pp = staged / "pyproject.toml"
+    cg = staged / "tpcore" / "quality" / "validation" / "capital_gate.py"
+    tc = staged / "tpcore" / "tests" / "test_engine_lifecycle_consistency.py"
+    pkg = staged / "throwaway"
+    arc = staged / "archive" / "throwaway"
+    # FULL recursive pre-state of every path apply() can touch: the whole
+    # package, both shadows, _PROFILE, capital_gate, the frozen-literal
+    # test, and the (absent) archive dir. Post-rollback this map MUST be
+    # byte-identical — any stray/missing/drifted byte trips it (#I1).
+    before_files = {p: p.read_bytes()
+                    for p in (ep, smoke, pp, cg, tc)}
+    before_pkg = _snapshot_tree(pkg, arc)
+    assert not arc.exists(), "archive/<engine>/ must be absent pre-apply"
     ecr = EngineChangeRequest(
         action="remove", engine="throwaway", reason="x", eulogy_notes="y")
     snap = {"throwaway": LifecycleState.PAPER}
@@ -224,16 +254,122 @@ def test_apply_red_consistency_rolls_back_to_byte_identical(tmp_path):
     # Force a red apply: corrupt the consistency test in the staged tree
     # so the post-stage subprocess exits non-zero — apply must restore
     # every journaled file byte-identical and move nothing permanently.
-    tc = staged / "tpcore" / "tests" / "test_engine_lifecycle_consistency.py"
+    # (The corruption is appended; the journal snapshot of `tc` was taken
+    # by _maybe_rewrite_frozen_literal BEFORE this line via record_file,
+    # so the byte-oracle below uses the WITH-corruption baseline for tc.)
     tc.write_text(tc.read_text() +
                   "\n\ndef test_forced_red():\n    assert False\n")
+    before_files[tc] = tc.read_bytes()  # post-corruption tc is the pre-apply state
     res = apply(plan, repo_root=staged, emit_audit=False,
                 _force_validate=True)
     assert res.rejection is not None
-    assert ep.read_bytes() == before_ep, "_PROFILE not restored byte-identical"
-    assert smoke.read_bytes() == before_smoke, "shadow not restored"
-    assert (staged / "throwaway").is_dir(), "package move not reverted"
-    assert not (staged / "archive" / "throwaway").is_dir()
+    assert "post-stage clockwork red" in res.rejection, res.rejection
+    # byte-identical reversal of EVERY touched path:
+    for p, b in before_files.items():
+        assert p.read_bytes() == b, f"{p.name} not restored byte-identical"
+    after_pkg = _snapshot_tree(pkg, arc)
+    assert after_pkg == before_pkg, (
+        "package not restored to EXACT recursive file-set/bytes — "
+        f"extra={set(after_pkg) - set(before_pkg)} "
+        f"missing={set(before_pkg) - set(after_pkg)}")
+    assert pkg.is_dir(), "package move not reverted"
+    # the stray-EULOGY (#C1) would appear here:
+    assert not (pkg / "EULOGY.md").exists(), (
+        "#C1 regression: a generated EULOGY survived inside the package")
+    assert sorted(p.name for p in pkg.iterdir()) == [
+        "__init__.py", "scheduler.py", "tests"], (
+        "restored package contents drifted from the original file-set")
+    # nothing stranded in archive/<engine>/ (#C2 leak):
+    assert not arc.exists(), "archive/<engine>/ left behind after rollback"
+
+
+def test_apply_mid_move_loop_failure_byte_identical(tmp_path, monkeypatch):
+    """#I2/#C2: inject a failure mid-way through the per-item package
+    move loop (1st item already relocated into archive/, journal holds
+    that move) — the realistic window the old arc.mkdir injection never
+    reached. With per-item journaled-before-move, restore() reverses the
+    completed move(s) exactly: the package returns byte-identical with
+    NO stray EULOGY and NO file stranded in archive/, and the loud
+    escalation (rejection carrying the inner exception) surfaces.
+
+    Pre-refactor (#C2) this would strand the 1st item in archive/ with
+    an EMPTY journal (the coarse (pkg,arc) tuple was appended only AFTER
+    the whole loop) — restore() was a no-op and this assertion trips."""
+    from ops.engine_sdlc import planner as P
+    from ops.engine_sdlc.ecr import EngineChangeRequest
+    from ops.engine_sdlc.planner import apply, attach_ecr_context, classify
+    staged = _make_synthetic_engine_tree(tmp_path)
+    ep = staged / "tpcore" / "engine_profile.py"
+    smoke = staged / "scripts" / "run_smoke_test.sh"
+    pp = staged / "pyproject.toml"
+    cg = staged / "tpcore" / "quality" / "validation" / "capital_gate.py"
+    tc = staged / "tpcore" / "tests" / "test_engine_lifecycle_consistency.py"
+    pkg = staged / "throwaway"
+    arc = staged / "archive" / "throwaway"
+    before_files = {p: p.read_bytes() for p in (ep, smoke, pp, cg, tc)}
+    before_pkg = _snapshot_tree(pkg, arc)
+    assert not arc.exists()
+    # Patch shutil.move so the 2nd package-item move raises — by then the
+    # 1st item is already in archive/ AND (move loop runs before eulogy)
+    # at least one journaled move is recorded. Then also force a raise
+    # right after the eulogy write so the failure window spans both.
+    real_move = P.shutil.move
+    calls = {"n": 0}
+
+    def flaky_move(src, dst):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise OSError("injected mid-move-loop failure")
+        return real_move(src, dst)
+
+    monkeypatch.setattr(P.shutil, "move", flaky_move)
+    ecr = EngineChangeRequest(
+        action="remove", engine="throwaway", reason="x", eulogy_notes="y")
+    res = apply(attach_ecr_context(
+                    classify(ecr, {"throwaway": LifecycleState.PAPER}), ecr),
+                repo_root=staged, emit_audit=False)
+    assert res.rejection is not None
+    assert "apply aborted" in res.rejection, res.rejection
+    assert "injected mid-move-loop failure" in res.rejection, (
+        "the inner exception was swallowed, not escalated loudly")
+    for p, b in before_files.items():
+        assert p.read_bytes() == b, f"{p.name} not reverted byte-identical"
+    after_pkg = _snapshot_tree(pkg, arc)
+    assert after_pkg == before_pkg, (
+        "#C2: mid-move-loop failure left the package non-byte-identical — "
+        f"extra={set(after_pkg) - set(before_pkg)} "
+        f"missing={set(before_pkg) - set(after_pkg)}")
+    assert pkg.is_dir() and sorted(p.name for p in pkg.iterdir()) == [
+        "__init__.py", "scheduler.py", "tests"]
+    assert not (pkg / "EULOGY.md").exists(), "#C1: stray EULOGY in package"
+    assert not arc.exists(), "#C2: files stranded in archive/<engine>/"
+
+
+def test_apply_restore_failure_escalates_loudly(tmp_path, monkeypatch):
+    """The loud-escalation invariant must survive the refactor: if
+    _Journal.restore() itself raises, apply() returns
+    outcome-equivalent rejection carrying the INNER restore exception
+    (not the original, not swallowed) — proven via a no-op/raising
+    restore monkeypatch (the technique that keeps these non-vacuous)."""
+    from ops.engine_sdlc import planner as P
+    from ops.engine_sdlc.ecr import EngineChangeRequest
+    from ops.engine_sdlc.planner import apply, attach_ecr_context, classify
+    staged = _make_synthetic_engine_tree(tmp_path)
+    (staged / "archive").mkdir(parents=True, exist_ok=True)
+    (staged / "archive" / "throwaway").write_text("not-a-dir")  # forces raise
+
+    def boom(self):
+        raise RuntimeError("restore detonated")
+
+    monkeypatch.setattr(P._Journal, "restore", boom)
+    ecr = EngineChangeRequest(
+        action="remove", engine="throwaway", reason="x", eulogy_notes="y")
+    res = apply(attach_ecr_context(
+                    classify(ecr, {"throwaway": LifecycleState.PAPER}), ecr),
+                repo_root=staged, emit_audit=False)
+    assert res.rejection is not None
+    assert "restore detonated" in res.rejection, (
+        "restore-failure exception was swallowed, not escalated")
 
 
 def test_apply_move_failure_restores_text_edits(tmp_path):
