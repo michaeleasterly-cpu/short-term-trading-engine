@@ -25,6 +25,8 @@ from tpcore.quality.validation.capital_gate import failing_sources_for_engine
 
 logger = structlog.get_logger(__name__)
 
+# Engine roster + dispatch ORDER are the engine_profile SoT (the
+# dispatch_order field). NEVER re-hardcode — see roster_for_dispatch().
 ROSTER: tuple[str, ...] = roster_for_dispatch()
 
 
