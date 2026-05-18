@@ -9,6 +9,17 @@ if TYPE_CHECKING:
 _LAB_ACTIVE: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "_LAB_ACTIVE", default=False)
 
+_ACTIVE_CRED_POOL: contextvars.ContextVar = contextvars.ContextVar(
+    "_ACTIVE_CRED_POOL", default=None)
+
+
+def active_credibility_pool():
+    """The active LabContext's single allowlisted RW credibility pool,
+    or None if no LabContext is active (legacy non-Lab path). Public
+    accessor — never reach into LabContext internals (STYLE_GUIDE
+    private-attribute rule)."""
+    return _ACTIVE_CRED_POOL.get()
+
 
 class LabIsolationViolation(RuntimeError):
     """A live side-effect class was constructed inside an active Lab run."""
@@ -47,23 +58,42 @@ class LabContext:
         self._build_pools = build_pools
         self._max_size = max_size
         self._token: contextvars.Token | None = None
+        self._cred_token: contextvars.Token | None = None
         self.read_pool: asyncpg.Pool | None = None
         self.credibility_pool: asyncpg.Pool | None = None
 
     async def __aenter__(self) -> LabContext:
-        self._token = _LAB_ACTIVE.set(True)
         try:
             if self._build_pools:
                 from tpcore.db import build_asyncpg_pool
+                # the ONE allowlisted RW handle — credibility append
+                # only. Built BEFORE _LAB_ACTIVE is set: build_asyncpg_pool
+                # forces default_transaction_read_only=on whenever
+                # lab_is_active() is True, so building this after the
+                # contextvar flip would silently make the "allowlisted RW
+                # handle" read-only and any write through it would raise
+                # ReadOnlySQLTransactionError server-side (the T2 thread
+                # target — H-S3-8: the credibility write must stay the
+                # single intentional RW exception, not be newly blocked).
+                self.credibility_pool = await build_asyncpg_pool(
+                    self._db_url, read_only=False, min_size=1, max_size=1)
+            self._token = _LAB_ACTIVE.set(True)
+            self._cred_token = _ACTIVE_CRED_POOL.set(self.credibility_pool)
+            if self._build_pools:
+                from tpcore.db import build_asyncpg_pool
+
+                # read_only=True ⇒ read-only regardless of lab_is_active().
                 self.read_pool = await build_asyncpg_pool(
                     self._db_url, read_only=True,
                     min_size=1, max_size=self._max_size)
-                # the ONE allowlisted RW handle — credibility append only.
-                self.credibility_pool = await build_asyncpg_pool(
-                    self._db_url, read_only=False, min_size=1, max_size=1)
         except Exception:
             if self.read_pool is not None:
                 await self.read_pool.close()
+            if self.credibility_pool is not None:
+                await self.credibility_pool.close()
+            if self._cred_token is not None:
+                _ACTIVE_CRED_POOL.reset(self._cred_token)
+                self._cred_token = None
             if self._token is not None:
                 _LAB_ACTIVE.reset(self._token)
                 self._token = None
@@ -77,5 +107,9 @@ class LabContext:
             if self.credibility_pool is not None:
                 await self.credibility_pool.close()
         finally:
+            if self._cred_token is not None:
+                _ACTIVE_CRED_POOL.reset(self._cred_token)
+                self._cred_token = None
             if self._token is not None:
                 _LAB_ACTIVE.reset(self._token)
+                self._token = None

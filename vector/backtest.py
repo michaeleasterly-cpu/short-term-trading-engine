@@ -47,7 +47,7 @@ from collections import defaultdict
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
@@ -130,6 +130,21 @@ def _hard_stop_pct() -> float:
 
 def _swing_score_threshold() -> float | None:
     return _SWING_SCORE_THRESHOLD_OVERRIDE
+
+
+def default_params() -> dict[str, Any]:
+    """Current live defaults for EXACTLY this engine's
+    ops.lab.run.PARAM_RANGES keys (SP3 O1 seam, spec §7.1). Pure. The
+    swing-score default mirrors run_vector_with_context's 0.0-when-None
+    convention so the diff is well-defined."""
+    swing = _swing_score_threshold()
+    return {
+        "pb_ceiling": float(_pb_ceiling()),
+        "de_ceiling": float(_de_ceiling()),
+        "catalyst_window_days": int(_catalyst_window_days()),
+        "swing_score_threshold": float(swing) if swing is not None else 0.0,
+        "stop_pct": float(_hard_stop_pct()),
+    }
 
 
 def _synth_swing_score(magnitude: float | None) -> float:

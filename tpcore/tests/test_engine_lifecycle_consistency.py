@@ -147,3 +147,74 @@ def test_lab_sentinel_is_not_wired():
     states = {p.lifecycle_state for p in _PROFILE.values()}
     assert states <= {LifecycleState.PAPER, LifecycleState.LIVE,
                       LifecycleState.RETIRED, LifecycleState.LAB}
+
+
+def test_retired_engine_eulogy_content_floor():
+    """H-S3-5: a RETIRED engine's EULOGY must be a REAL artifact — a
+    non-empty `## Cause of death` AND `## Retirement checklist` section
+    (header present + ≥1 non-blank line under each). A zero-byte/stub
+    EULOGY (the data-lane fake-healable-HealSpec analog) fails CI."""
+    for name, p in _PROFILE.items():
+        if p.lifecycle_state is not LifecycleState.RETIRED:
+            continue
+        body = (REPO / "archive" / name / "EULOGY.md").read_text()
+        for header in ("## Cause of death", "## Retirement checklist"):
+            assert header in body, f"{name}: EULOGY missing {header!r}"
+            after = body.split(header, 1)[1]
+            nxt = after.find("\n## ")
+            section = after[:nxt] if nxt != -1 else after
+            assert any(ln.strip() for ln in section.splitlines()), (
+                f"{name}: EULOGY {header!r} section is empty (stub)")
+
+
+def test_retired_engine_absent_from_structural_shadows():
+    """H-S3-5: a RETIRED engine's name must be ABSENT from the
+    run_smoke_test.sh step-3 loop AND the pyproject testpaths/include
+    (the explicit RETIRED-absent assertion, so a forgotten shadow fails
+    on the retire leg, not only indirectly)."""
+    retired = [n for n, p in _PROFILE.items()
+               if p.lifecycle_state is LifecycleState.RETIRED]
+    smoke = (REPO / "scripts" / "run_smoke_test.sh").read_text()
+    m = re.search(r"for engine in ([^\n;]+);\s*do", smoke)
+    loop = set(m.group(1).split())
+    pp = tomllib.loads((REPO / "pyproject.toml").read_text())
+    testpaths = set(pp["tool"]["pytest"]["ini_options"]["testpaths"])
+    includes = set(pp["tool"]["setuptools"]["packages"]["find"]["include"])
+    for name in retired:
+        assert name not in loop, f"{name}: RETIRED but still in smoke loop"
+        assert f"{name}/tests" not in testpaths, (
+            f"{name}: RETIRED but still a pyproject testpath")
+        assert f"{name}*" not in includes, (
+            f"{name}: RETIRED but still in packages.find.include")
+
+
+def test_no_orphan_archive():
+    """H-S3-5: every archive/<dir>/ that contains an EULOGY.md must
+    correspond to a _PROFILE entry with lifecycle_state == RETIRED
+    (catches an archive with no SoT entry)."""
+    arc = REPO / "archive"
+    if not arc.is_dir():
+        return
+    for child in arc.iterdir():
+        if not (child / "EULOGY.md").is_file():
+            continue
+        name = child.name
+        p = _PROFILE.get(name)
+        assert p is not None and p.lifecycle_state is LifecycleState.RETIRED, (
+            f"archive/{name}/EULOGY.md exists but {name} is not a RETIRED "
+            f"_PROFILE entry (orphan archive)")
+
+
+def test_retired_engine_not_importable_as_live():
+    """H-S3-5: a RETIRED engine must NOT be importable as a live
+    <name>.scheduler (symmetric to the live-engine positive leg)."""
+    for name, p in _PROFILE.items():
+        if p.lifecycle_state is not LifecycleState.RETIRED:
+            continue
+        try:
+            spec = importlib.util.find_spec(f"{name}.scheduler")
+        except ModuleNotFoundError:
+            spec = None
+        assert spec is None, (
+            f"{name}: RETIRED but {name}.scheduler still importable — "
+            f"the package was not moved to archive/")

@@ -47,7 +47,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
@@ -101,6 +101,17 @@ def _hold() -> int:
 
 def _top_decile() -> float:
     return _TOP_DECILE_OVERRIDE if _TOP_DECILE_OVERRIDE is not None else DEFAULT_TOP_DECILE_PCT
+
+
+def default_params() -> dict[str, Any]:
+    """Current live defaults for EXACTLY this engine's
+    ops.lab.run.PARAM_RANGES keys (SP3 O1 seam, spec §7.1). Pure."""
+    return {
+        "lookback_days": int(_lookback()),
+        "skip_days": int(_skip()),
+        "hold_days": int(_hold()),
+        "top_decile_pct": float(_top_decile()),
+    }
 
 
 MOMENTUM_OVERRIDE_KEYS = (

@@ -55,7 +55,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
@@ -143,6 +143,20 @@ def _volume_climax_threshold() -> float:
         if _VOLUME_CLIMAX_OVERRIDE is not None
         else VOLUME_CLIMAX_MULTIPLIER_DEFAULT
     )
+
+
+def default_params() -> dict[str, Any]:
+    """Current live defaults for EXACTLY this engine's
+    ops.lab.run.PARAM_RANGES keys (SP3 O1 seam, spec §7.1). Pure — reads
+    the module accessors, no DB. The parity test pins the keyset ==
+    PARAM_RANGES['reversion']."""
+    return {
+        "z_threshold": float(Z_SCORE_THRESHOLD),
+        "volume_climax_multiplier": float(_volume_climax_threshold()),
+        "max_hold_days": int(_max_hold_days()),
+        "stop_pct": float(_hard_stop_pct()),
+    }
+
 
 DEFAULT_OUTPUT_DIR = Path("backtests")
 DEFAULT_RESULTS_FILE = "earnings_quality_backtest.json"
