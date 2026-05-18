@@ -40,6 +40,8 @@ No args / unknown args => --dry-run (safe default).
 EOF
 }
 
+git rev-parse --show-toplevel >/dev/null 2>&1 \
+  || { echo "ERROR: not inside a git repository — abort." >&2; exit 1; }
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 

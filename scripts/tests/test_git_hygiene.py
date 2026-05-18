@@ -165,3 +165,24 @@ def test_apply_never_deletes_current_branch(fab_repo: Path) -> None:
     r = _run_script(fab_repo, "--apply")
     assert r.returncode == 0, r.stderr
     assert "merged-gone" in _local_branches(fab_repo)  # current => kept
+
+
+def test_apply_handles_slash_named_branch(fab_repo: Path) -> None:
+    # Regression: the awk extraction in deletable_branches() parses the
+    # first field of `git branch -vv` output. A branch name containing
+    # '/' (e.g. feat/slash-name) is emitted as a single token by awk, so
+    # the extraction must preserve it intact. This test would FAIL (the
+    # branch would survive undeletably) if awk split on '/' or the
+    # grep -xF anchor failed to match the full name.
+    _git(fab_repo, "switch", "-q", "-c", "feat/slash-name")
+    _git(fab_repo, "push", "-q", "-u", "origin", "feat/slash-name")
+    _git(fab_repo, "switch", "-q", "main")  # feat/slash-name == main => merged
+    _git(fab_repo, "push", "-q", "origin", "--delete", "feat/slash-name")
+    # Upstream is now [gone]; branch is merged into main => deletable.
+    r = _run_script(fab_repo, "--apply")
+    assert r.returncode == 0, r.stderr
+    after = _local_branches(fab_repo)
+    assert "feat/slash-name" not in after  # slash name deleted correctly
+    assert "main" in after  # main untouched
+    assert "merged-gone" not in after  # merged-gone also cleaned up
+    assert "unmerged-gone" in after  # unmerged branch kept
