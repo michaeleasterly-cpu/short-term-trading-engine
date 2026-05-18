@@ -235,6 +235,48 @@ async def test_pr_failure_still_emits_proposal_and_cleans_up(
 # ── (d) Env-scrub is a fresh dict, never os.environ.copy() ──────────────
 
 
+# ── (e) Branch is deleted on the gate-red path (no wedged retry) ────────
+
+
+def _branch_deletes(runner: _FakeRunner) -> list[list[str]]:
+    return [c for c in runner.argvs()
+            if c[:3] == ["git", "branch", "-D"]]
+
+
+async def test_gate_red_deletes_branch_so_retry_is_not_wedged(
+    monkeypatch,
+) -> None:
+    _seed_secrets(monkeypatch)
+    runner = _FakeRunner(gate_rc=1)  # gate red ⇒ no PR
+    pool = _Pool(open_rows=[_row("h1")])
+
+    out = await lt.run_triage(
+        pool, client_factory=lambda: _Client(),
+        pr_runner=runner)
+
+    assert out.proposed == ["h1"]            # advisory preserved
+    assert not runner.pr_created()           # NO PR on a red gate
+    # `git worktree remove` does NOT delete the branch; without the
+    # explicit `git branch -D` a same-ref retry would hit `worktree add
+    # -b <same branch>` → rc≠0 → that ref never gets a PR again.
+    deletes = _branch_deletes(runner)
+    assert deletes, "branch was NOT deleted — a same-ref retry is wedged"
+    assert deletes[0][3] == "llm-triage/h1"  # the exact branch removed
+
+
+async def test_branch_deleted_on_success_path_too(monkeypatch) -> None:
+    _seed_secrets(monkeypatch)
+    runner = _FakeRunner(gate_rc=0)  # green ⇒ PR opened
+    pool = _Pool(open_rows=[_row("h1")])
+
+    await lt.run_triage(pool, client_factory=lambda: _Client(),
+                        pr_runner=runner)
+
+    assert runner.pr_created()
+    deletes = _branch_deletes(runner)
+    assert deletes and deletes[0][3] == "llm-triage/h1"
+
+
 async def test_env_scrub_excludes_every_forbidden_var(monkeypatch) -> None:
     _seed_secrets(monkeypatch)
     runner = _FakeRunner(gate_rc=0)

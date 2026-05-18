@@ -15,6 +15,8 @@ import asyncio
 import json
 import os
 import pathlib
+import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -183,7 +185,11 @@ async def _open_draft_pr(
     emitted; no PR, no leaked worktree, escalation stays for the human),
     NEVER raises. The produced PR is draft + human-merge-only + inert.
     """
-    ref_short = str(esc.ref)[:24].replace("/", "-")
+    # Defense-in-depth: sanitize anything that isn't a safe
+    # branch/path char before it ever becomes a branch or filename
+    # (we already use list-args / no-shell, so this is belt-and-
+    # suspenders, not the primary control).
+    ref_short = re.sub(r"[^A-Za-z0-9._-]", "-", str(esc.ref))[:24]
     branch = f"llm-triage/{ref_short}"
     tmpdir = tempfile.mkdtemp(prefix="llm_triage_wt_")
     worktree_added = False
@@ -273,6 +279,23 @@ async def _open_draft_pr(
             except Exception as exc:  # noqa: BLE001 — best-effort cleanup
                 logger.error("llm_data_triage.worktree_remove_failed",
                              ref=esc.ref, error=str(exc))
+            # `git worktree remove` does NOT delete the branch. Without
+            # this, the local `llm-triage/<ref_short>` branch persists
+            # after ANY outcome (gate-red / gh-fail / success) and a
+            # later run for the SAME esc.ref hits `git worktree add -b
+            # <same branch>` → rc≠0 → that ref NEVER gets a PR again
+            # (a wedged retry). Best-effort delete; never raises out.
+            try:
+                runner(["git", "branch", "-D", branch],
+                        cwd=str(_REPO_ROOT))
+            except Exception as exc:  # noqa: BLE001 — best-effort cleanup
+                logger.error("llm_data_triage.branch_delete_failed",
+                             ref=esc.ref, error=str(exc))
+        # Unconditionally drop the temp dir: mkdtemp() created it BEFORE
+        # `git worktree add`, so if the add failed (worktree_added=False)
+        # the conditional `git worktree remove` above is skipped and the
+        # dir would otherwise leak. ignore_errors → never raises out.
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 async def run_triage(

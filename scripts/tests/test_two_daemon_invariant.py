@@ -16,11 +16,45 @@ def _installer_loop_tokens() -> set[str]:
 
 
 def test_manifest_loop_is_exactly_the_three_surviving_installers():
+    # The DA-3 survivors (engine-service consolidated long-lived daemon +
+    # data-repair-service data-lane long-lived daemon + data-operations
+    # data-lane cron) PLUS the #187 rung-5 advisory-lane daemon
+    # (install_launchd_llm_triage_service): the event-driven LLM-triage
+    # service that fires one advisory triage pass on
+    # DATA_REPAIR_ESCALATED / DATA_SOURCE_ESCALATED. It is a legitimate,
+    # expected member — a long-lived daemon for the advisory lane,
+    # symmetric to data-repair-service for the data lane (it never
+    # repairs/trades/merges; draft-PR + human-merge-only). The set is
+    # still a CLOSED whitelist: any UNexpected installer in the loop
+    # still fails this assertion (it bites — see
+    # test_invariant_bites_on_unexpected_installer).
     assert _installer_loop_tokens() == {
         "install_launchd_engine_service",
         "install_launchd_data_repair_service",
         "install_launchd_data_operations",
+        "install_launchd_llm_triage_service",  # #187 rung-5 advisory lane
     }
+
+
+def test_invariant_bites_on_unexpected_installer(tmp_path, monkeypatch):
+    """Guardrail-of-the-guardrail: an UNexpected installer token in the
+    loop must still fail the closed-whitelist check (proves the test was
+    not weakened to a no-op when the advisory daemon was added)."""
+    rogue_loop = (
+        "for installer in install_launchd_engine_service "
+        "install_launchd_data_repair_service install_launchd_llm_triage_service "
+        "install_launchd_data_operations install_launchd_rogue_daemon; do"
+    )
+    m = re.match(r"for installer in ([^\n;]+);\s*do", rogue_loop)
+    assert m is not None
+    tokens = set(m.group(1).split())
+    assert tokens != {
+        "install_launchd_engine_service",
+        "install_launchd_data_repair_service",
+        "install_launchd_data_operations",
+        "install_launchd_llm_triage_service",
+    }, "the closed whitelist must still reject an unexpected installer"
+    assert "install_launchd_rogue_daemon" in tokens
 
 
 def test_retired_installers_are_deleted():
