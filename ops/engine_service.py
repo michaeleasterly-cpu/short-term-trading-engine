@@ -50,8 +50,8 @@ import structlog
 from ops.engine_supervisor import _emit_escalated
 from ops.weekly_digest import DIGEST_EVENT, _iso_week
 from tpcore.aar.writer import AARWriter
-from tpcore.calendar import is_trading_day
 from tpcore.alpaca import AlpacaPaperBrokerAdapter
+from tpcore.calendar import is_trading_day
 from tpcore.db import build_asyncpg_pool
 from tpcore.trade_monitor import TradeMonitor
 
