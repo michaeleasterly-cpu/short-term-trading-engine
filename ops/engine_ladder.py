@@ -25,7 +25,10 @@ import structlog
 from pydantic import BaseModel, ConfigDict
 
 from ops.aar_autotune import _BEHAVIORAL
-from ops.engine_supervisor import INFRA_FAILURE_CLASSES
+from ops.engine_supervisor import (
+    INFRA_FAILURE_CLASSES,
+    PLATFORM_SERVICE_FAILURE_CLASSES,
+)
 from tpcore.db import build_asyncpg_pool
 from tpcore.supervisor_state import (
     CLEARED_EVENT,
@@ -94,10 +97,23 @@ DISPOSITION_POLICIES: dict[str, DispositionPolicy] = {
         rationale="DA-2 loss_cluster≥5 / drawdown ⇒ edge-decay; a "
                   "structural strategy review, or REMOVED if the edge "
                   "is gone (snap-out via the Engine SDLC)."),
+    "engine_service_task_crashloop": DispositionPolicy(
+        class_name="engine_service_task_crashloop", default=_D.STRUCTURAL,
+        rationale="a co-hosted engine-daemon task (sweep/monitor) "
+                  "crash-looped past the 3-in-600s budget; the 5s-backoff "
+                  "restart is advisory — persistence ⇒ a structural fix "
+                  "to that co-task's runtime, NOT a per-engine infra heal."),
+    "engine_service_digest_failed": DispositionPolicy(
+        class_name="engine_service_digest_failed", default=_D.STRUCTURAL,
+        rationale="the day-rollover weekly_digest subprocess failed "
+                  "(spawn error or non-zero rc) and was swallowed; "
+                  "the digest is the state-comprehension floor — a "
+                  "structural fix to the digest path, not an engine heal."),
 }
 
 KNOWN_ESCALATION_CLASSES: frozenset[str] = (
-    INFRA_FAILURE_CLASSES | {_BEHAVIORAL})
+    INFRA_FAILURE_CLASSES | PLATFORM_SERVICE_FAILURE_CLASSES
+    | {_BEHAVIORAL})
 
 
 def _drift_for(*, known: set[str] | frozenset[str],

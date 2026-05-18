@@ -44,6 +44,15 @@ INFRA_FAILURE_CLASSES: frozenset[str] = frozenset({
     "crashed_startup", "scheduler_crash", "data_request_timeout",
     "data_repair_escalated", "missed_cycle"})
 
+# Engine-daemon co-hosted platform-service failure classes (Epic E
+# Phase-0). DELIBERATELY a separate SoT — these are NOT DA-1 per-engine
+# infra classes (no detector/heal loop; the engine-service daemon emits
+# them directly as advisory escalations) so they must NOT be folded into
+# INFRA_FAILURE_CLASSES. The engine-ladder R2 clockwork unions this set
+# into KNOWN_ESCALATION_CLASSES so each carries a recorded disposition.
+PLATFORM_SERVICE_FAILURE_CLASSES: frozenset[str] = frozenset({
+    "engine_service_task_crashloop", "engine_service_digest_failed"})
+
 _INSERT_SQL = """
     INSERT INTO platform.application_log
         (engine, run_id, event_type, severity, message, data)

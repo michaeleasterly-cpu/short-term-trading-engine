@@ -18,7 +18,17 @@ references the data-lane ladder (`docs/ESCALATION_HARDENING_LADDER.md`)
   engine is gated off by `tpcore.engine_profile.should_fire`. DA-2
   *escalate-only* (noise: outlier_loss / short loss_cluster) emits
   `ENGINE_ESCALATED` with NO hold — the engine keeps trading by
-  design.
+  design. **Engine-daemon co-hosted platform-service failures (Epic E
+  Phase-0):** the consolidated engine daemon (`ops/engine_service.py`)
+  now also emits *escalate-only* `ENGINE_ESCALATED` for two frozen
+  classes — `engine_service_task_crashloop` (a co-hosted
+  `_run_supervised` task crash-looping past a 3-in-600s budget; the
+  log+5s-backoff restart is unchanged, the escalation is advisory) and
+  `engine_service_digest_failed` (a swallowed weekly-digest spawn error
+  / non-zero rc). Deterministic `hold_id` (`engsvc-<sha256[:16]>` of
+  `class|task`), `engine="engine_service:<task>"`, NO `ENGINE_HELD`
+  (advisory — the daemon keeps running). Surfaced + dispositioned via
+  R3 like any other escalate-only class.
 - **R2 — clockwork forcing-function:** `ops/engine_ladder.py`
   `DISPOSITION_POLICIES` covers every class in
   `KNOWN_ESCALATION_CLASSES` (derived from

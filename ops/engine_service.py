@@ -35,7 +35,9 @@ signal-driven shutdown.
 from __future__ import annotations
 
 import asyncio
+import collections
 import contextlib
+import hashlib
 import os
 import signal
 import subprocess
@@ -44,6 +46,7 @@ from datetime import UTC, date, datetime, timedelta
 
 import structlog
 
+from ops.engine_supervisor import _emit_escalated
 from tpcore.aar.writer import AARWriter
 from tpcore.alpaca import AlpacaPaperBrokerAdapter
 from tpcore.db import build_asyncpg_pool
@@ -56,6 +59,38 @@ INITIAL_CURSOR_LOOKBACK = timedelta(hours=1)
 TRIGGER_EVENT_TYPES: tuple[str, ...] = ("DATA_OPERATIONS_COMPLETE", "DATA_REPAIR_COMPLETE")
 SWEEP_SCRIPT = "scripts/run_all_engines.sh"
 POOL_MAX_SIZE = 6  # sweep-poll (1) + co-hosted monitor (~4) + headroom (H-8)
+
+# Epic E Phase-0: engine-daemon co-hosted platform-service failures
+# escalate (advisory) into the engine Ladder via ENGINE_ESCALATED. Two
+# frozen classes (engine_supervisor.PLATFORM_SERVICE_FAILURE_CLASSES);
+# escalate-only (NO ENGINE_HELD). Crash-loop budget: 3 crashes in a
+# rolling 600s window, per co-task.
+_CRASHLOOP_CLASS = "engine_service_task_crashloop"
+_DIGEST_FAILED_CLASS = "engine_service_digest_failed"
+_CRASHLOOP_WINDOW_SEC = 600.0
+_CRASHLOOP_BUDGET = 3
+
+
+def _engsvc_hold_id(failure_class: str, task_name: str) -> str:
+    """Deterministic (NOT uuid4) hold_id so a re-escalation of the same
+    (class, task) is stable across restarts — ``engsvc-<sha256[:16]>``."""
+    return "engsvc-" + hashlib.sha256(
+        f"{failure_class}|{task_name}".encode()).hexdigest()[:16]
+
+
+async def _safe_emit_escalated(pool, *, engine: str, hold_id: str,
+                               failure_class: str, reason: str,
+                               attempts: int) -> None:
+    """Wrap ``engine_supervisor._emit_escalated`` so an emit failure
+    (DB down etc.) can NEVER break the 'one crashed co-task must never
+    kill its sibling' invariant — escalation is advisory."""
+    try:
+        await _emit_escalated(pool, engine, hold_id, failure_class,
+                              reason, attempts)
+    except Exception as exc:  # noqa: BLE001 — advisory; never abort the daemon
+        logger.error("engine_service.escalate_emit_failed",
+                     failure_class=failure_class, engine=engine,
+                     error=str(exc))
 
 
 async def _find_new_trigger(pool, cursor: datetime) -> datetime | None:
@@ -98,15 +133,24 @@ def _run_engine_sweep() -> int:
     return result.returncode
 
 
-async def _maybe_fire_weekly_digest(state: dict, today: date | None = None) -> None:
+async def _maybe_fire_weekly_digest(state: dict, pool=None,
+                                    today: date | None = None) -> None:
     """Deterministic day-rollover trigger for the (idempotent-per-ISO-week)
     weekly digest — relocated from the retired launchd cron. Fires
     ``python -m ops.weekly_digest emit`` as a crash-isolated subprocess
-    (the Sub-project-C ``_invoke_allocator`` seam). NEVER raises."""
+    (the Sub-project-C ``_invoke_allocator`` seam). NEVER raises.
+
+    Epic E Phase-0: a swallowed digest failure (spawn exception OR
+    non-zero rc) now escalates (advisory, escalate-only) into the engine
+    Ladder via ``ENGINE_ESCALATED`` — the digest is the
+    state-comprehension floor, so a silent failure must surface. A
+    clean ``rc==0`` emits nothing. ``pool`` may be None (no escalation
+    if so — keeps the historical call-shape working)."""
     today = today or datetime.now(UTC).date()
     if state.get("last") == today:
         return
     state["last"] = today
+    digest_engine = "engine_service:weekly_digest"
     try:
         proc = await asyncio.create_subprocess_exec(
             sys.executable, "-m", "ops.weekly_digest", "emit",
@@ -114,19 +158,44 @@ async def _maybe_fire_weekly_digest(state: dict, today: date | None = None) -> N
         rc = await proc.wait()
     except Exception as exc:  # noqa: BLE001 — isolate: never abort the daemon
         logger.error("engine_service.weekly_digest_failed", error=str(exc))
+        if pool is not None:
+            await _safe_emit_escalated(
+                pool, engine=digest_engine,
+                hold_id=_engsvc_hold_id(_DIGEST_FAILED_CLASS,
+                                        "weekly_digest"),
+                failure_class=_DIGEST_FAILED_CLASS,
+                reason=f"weekly_digest spawn failed: {exc}", attempts=1)
         return
     if rc == 0:
         logger.info("engine_service.weekly_digest_done")
     else:
         logger.error("engine_service.weekly_digest_failed", returncode=rc)
+        if pool is not None:
+            await _safe_emit_escalated(
+                pool, engine=digest_engine,
+                hold_id=_engsvc_hold_id(_DIGEST_FAILED_CLASS,
+                                        "weekly_digest"),
+                failure_class=_DIGEST_FAILED_CLASS,
+                reason=f"weekly_digest subprocess rc={rc}", attempts=1)
 
 
 async def _run_supervised(name: str, factory, stop_event: asyncio.Event,
-                          backoff: float = 5.0) -> None:
+                          pool=None, backoff: float = 5.0) -> None:
     """Run ``factory()`` (a 0-arg coroutine fn) until stop_event; an
     Exception is logged and the task restarted after ``backoff`` (one
     crashed co-task must NEVER kill its sibling — H-6). CancelledError
-    propagates (clean shutdown)."""
+    propagates (clean shutdown).
+
+    Epic E Phase-0: a co-task that crash-loops past the budget (>=3
+    crashes within a rolling 600s window) escalates ONCE (advisory,
+    escalate-only) into the engine Ladder via ``ENGINE_ESCALATED`` — the
+    log+backoff+restart behavior is UNCHANGED (it keeps restarting; the
+    escalation is purely a surface). ``escalated`` latches so we emit
+    exactly once per crossing; it resets to False when the rolling
+    window empties, so a recovered task that later re-loops re-escalates.
+    ``pool`` may be None (no escalation if so)."""
+    crashes: collections.deque[datetime] = collections.deque()
+    escalated = False
     while not stop_event.is_set():
         try:
             await factory()
@@ -136,6 +205,29 @@ async def _run_supervised(name: str, factory, stop_event: asyncio.Event,
         except Exception as exc:  # noqa: BLE001 — restart, don't propagate
             logger.error("engine_service.task_crashed", task=name,
                          error=str(exc))
+            now = datetime.now(UTC)
+            # Drop stale entries FIRST (relative to this crash) so the
+            # deque can genuinely empty after a quiet period; THEN record
+            # this crash. The latch resets the moment the rolling window
+            # is empty — a recovered task that later re-loops re-escalates.
+            while crashes and (
+                    now - crashes[0]).total_seconds() > _CRASHLOOP_WINDOW_SEC:
+                crashes.popleft()
+            if not crashes:
+                escalated = False
+            crashes.append(now)
+            if len(crashes) >= _CRASHLOOP_BUDGET and not escalated:
+                escalated = True
+                if pool is not None:
+                    await _safe_emit_escalated(
+                        pool, engine=f"engine_service:{name}",
+                        hold_id=_engsvc_hold_id(_CRASHLOOP_CLASS, name),
+                        failure_class=_CRASHLOOP_CLASS,
+                        reason=(f"co-task {name!r} crash-looped: "
+                                f">={_CRASHLOOP_BUDGET} crashes within "
+                                f"{int(_CRASHLOOP_WINDOW_SEC)}s "
+                                f"(last: {exc})"),
+                        attempts=len(crashes))
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=backoff)
             except TimeoutError:
@@ -151,7 +243,7 @@ async def _main_loop(pool, stop_event: asyncio.Event) -> None:
         poll_interval_sec=POLL_INTERVAL_SEC,
         initial_cursor=cursor.isoformat(),
     )
-    await _maybe_fire_weekly_digest(digest_state)  # startup kick (O-2)
+    await _maybe_fire_weekly_digest(digest_state, pool=pool)  # startup kick (O-2)
 
     while not stop_event.is_set():
         try:
@@ -168,7 +260,7 @@ async def _main_loop(pool, stop_event: asyncio.Event) -> None:
             # together. The next poll picks up any newer trigger.
             await asyncio.get_event_loop().run_in_executor(None, _run_engine_sweep)
 
-        await _maybe_fire_weekly_digest(digest_state)
+        await _maybe_fire_weekly_digest(digest_state, pool=pool)
 
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=POLL_INTERVAL_SEC)
@@ -206,9 +298,9 @@ async def _amain() -> int:
         await monitor.run_forever()
 
     sweep_task = asyncio.create_task(
-        _run_supervised("sweep", _sweep_factory, stop_event))
+        _run_supervised("sweep", _sweep_factory, stop_event, pool=pool))
     monitor_task = asyncio.create_task(
-        _run_supervised("monitor", _monitor_factory, stop_event))
+        _run_supervised("monitor", _monitor_factory, stop_event, pool=pool))
     try:
         # Exit on signal (stop_event) OR if both co-tasks have exited
         # (nothing left to supervise — don't zombie the process).
