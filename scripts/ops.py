@@ -731,6 +731,36 @@ async def _stage_cross_ref_cleanup(pool: asyncpg.Pool) -> dict[str, Any]:
     }
 
 
+async def _stage_risk_close_ledger_prune(pool: asyncpg.Pool) -> dict[str, Any]:
+    """Bounded 14-day prune of ``platform.risk_close_ledger`` (#251 B1.4).
+
+    ``risk_close_ledger`` is the idempotent arbiter that guarantees a
+    single position close decrements ``risk_state.open_positions`` AT
+    MOST once (the never-fail-open root fix). It only needs to retain a
+    close's ``(engine, trade_id)`` key long enough to dedupe the two
+    close paths (the trade-monitor stream + the scheduler rebalance-sell
+    loop) — which fire within the same trading session. A settled
+    ``trade_id`` is NEVER re-closed (the position no longer exists), so a
+    pruned row cannot cause a re-decrement under normal flow.
+
+    14 days is a generous age-ring: it keeps the table from growing
+    unbounded (one row per close, forever) while never expiring a key
+    that could still arbitrate a same-cycle duplicate. Wired into the
+    existing daily ``--update`` cadence (NO new daemon). Idempotent by
+    construction (same query; deletes shrink to zero on the next run).
+    """
+    async with pool.acquire() as conn:
+        status = await conn.execute(
+            "DELETE FROM platform.risk_close_ledger "
+            "WHERE recorded_at < now() - interval '14 days'"
+        )
+    try:
+        pruned = int(status.split()[-1])
+    except (ValueError, IndexError):
+        pruned = 0
+    return {"pruned_settled_close_keys": pruned}
+
+
 async def _stage_earnings_refresh(
     pool: asyncpg.Pool, config: dict[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -1698,6 +1728,11 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # doesn't see them as red on the dashboard for human triage. Each
     # rule must have a single proven-safe remediation; see the docstring.
     ("cross_ref_cleanup",   lambda pool, cfg: (lambda: _stage_cross_ref_cleanup(pool)),        STAGE_TIMEOUT_SEC),
+    # Bounded 14-day prune of platform.risk_close_ledger (#251 B1.4) —
+    # the never-fail-open close arbiter only needs to retain a close key
+    # long enough to dedupe the same-session dual-decrement; a settled
+    # trade_id is never re-closed. No new daemon — rides --update.
+    ("risk_close_ledger_prune", lambda pool, cfg: (lambda: _stage_risk_close_ledger_prune(pool)), STAGE_TIMEOUT_SEC),
     ("fundamentals_refresh",lambda pool, cfg: (lambda: _stage_fundamentals_refresh(pool, cfg)),HEAVY_STAGE_TIMEOUT_SEC),
     # Order corrected 2026-05-14 (audit O-1/O-2/O-3): tier_refresh +
     # classify_tickers must run BEFORE earnings_refresh + sec_filings

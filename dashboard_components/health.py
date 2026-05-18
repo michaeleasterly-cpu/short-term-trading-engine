@@ -23,6 +23,7 @@ OPS_UPDATE_STAGES: tuple[str, ...] = (
     "reconcile",
     "coverage_fill",
     "cross_ref_cleanup",
+    "risk_close_ledger_prune",
     "fundamentals_refresh",
     "tier_refresh",
     "classify_tickers",
