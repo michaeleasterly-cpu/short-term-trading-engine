@@ -19,9 +19,21 @@ DOES (not what it should do):
   ``write_credibility_score(engine_name="reversion")`` argument (pre-H-S2-3;
   T6 flips this to ``lab.<candidate>`` and updates THIS assertion in the
   same commit, making the behaviour delta explicit and oracle-pinned).
+
+T5 MIGRATION (binding): when T5 extracts ``amain`` into ``ops.lab.run`` and
+turns ``scripts/search_parameters.py`` into a re-export shim, the
+``test_amain_smoke_survived_verdict`` monkeypatch targets (``sp._runner_for``,
+``sp._context_runner_for``, ``sp._context_loader_for``) MUST be retargeted to
+the module that DEFINES amain (``ops.lab.run``) — patch where the name is
+used, not where it is re-exported — or this smoke silently no-ops. The
+pure-unit tests are shim-safe (re-exported attrs resolve); only the
+amain-smoke monkeypatch targets need the T5 retarget. T5's plan step +
+commit must do this in the same commit; the oracle must pass identically
+pre- and post-extract.
 """
 from __future__ import annotations
 
+import json as _json
 import sys
 from dataclasses import dataclass
 from datetime import date
@@ -62,7 +74,7 @@ def test_sample_parameters_is_seed_deterministic():
     b = sp.sample_parameters("reversion", 20, seed=7)
     c = sp.sample_parameters("reversion", 20, seed=8)
     assert a == b
-    assert a != c
+    assert a != c  # 20-combo list differs across seeds (collision prob ~0 over the continuous 4-tuple domain)
     for combo in a:
         assert set(combo) == set(sp.PARAM_RANGES["reversion"])
 
@@ -82,6 +94,8 @@ def test_compute_dsr_for_verdict_bounds_and_monotone():
 
 def test_norm_inv_known_quantiles():
     assert abs(sp._norm_inv(0.5)) < 1e-6
+    # Acklam approx is deterministic pure math — this is a mathematical property (Φ⁻¹(0.975)),
+    # NOT an implementation snapshot; a refactor to scipy.stats.norm.ppf keeps it within 1e-3.
     assert abs(sp._norm_inv(0.975) - 1.959963985) < 1e-3
 
 
@@ -232,3 +246,5 @@ async def test_amain_smoke_survived_verdict(monkeypatch, tmp_path):
     assert persisted["engine_name"] == "reversion"  # CURRENT behavior (pre-H-S2-3)
     assert len(seen_overrides) >= 2
     assert all(isinstance(o, dict) for o in seen_overrides)
+    assert len({_json.dumps(o, sort_keys=True) for o in seen_overrides}) == len(seen_overrides), \
+        "successive candidates leaked/shared an overrides dict (O2)"
