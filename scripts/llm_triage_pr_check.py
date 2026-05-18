@@ -85,29 +85,51 @@ def _load_specs_head() -> dict[str, dict[str, dict]]:
 
 def _load_specs_base(base_ref: str) -> dict[str, dict[str, dict]]:
     """Load both registries from the base branch via a git worktree."""
-    with tempfile.TemporaryDirectory(prefix="llm_triage_base_") as tmpdir:
-        wt_path = os.path.join(tmpdir, "base_wt")
-        _run(["git", "worktree", "add", "--detach", wt_path,
-              f"origin/{base_ref}"])
-        try:
-            out: dict[str, dict[str, dict]] = {}
-            for name, snippet in _REGISTRY_SNIPPETS:
-                raw = subprocess.run(
-                    [sys.executable, "-c", snippet],
+    try:
+        with tempfile.TemporaryDirectory(prefix="llm_triage_base_") as tmpdir:
+            wt_path = os.path.join(tmpdir, "base_wt")
+            _run(["git", "worktree", "add", "--detach", wt_path,
+                  f"origin/{base_ref}"])
+            try:
+                out: dict[str, dict[str, dict]] = {}
+                for name, snippet in _REGISTRY_SNIPPETS:
+                    raw = subprocess.run(
+                        [sys.executable, "-c", snippet],
+                        capture_output=True,
+                        text=True,
+                        check=True,
+                        cwd=wt_path,
+                        env={**os.environ, "PYTHONPATH": wt_path},
+                    ).stdout.strip()
+                    out[name] = json.loads(raw)
+                return out
+            finally:
+                subprocess.run(
+                    ["git", "worktree", "remove", "--force", wt_path],
+                    cwd=str(_REPO_ROOT),
                     capture_output=True,
-                    text=True,
-                    check=True,
-                    cwd=wt_path,
-                    env={**os.environ, "PYTHONPATH": wt_path},
-                ).stdout.strip()
-                out[name] = json.loads(raw)
-            return out
-        finally:
-            subprocess.run(
-                ["git", "worktree", "remove", "--force", wt_path],
+                )
+        # TemporaryDirectory has now been deleted (wt_path no longer exists
+        # on disk).  Defensive best-effort prune: if ``git worktree remove``
+        # above failed or was interrupted, a stale .git/worktrees/<name> admin
+        # entry may survive.  ``git worktree prune`` reclaims entries whose
+        # filesystem path is gone — this is the official-git-doc backed remedy
+        # ("Removes stale administrative files for worktrees that have been
+        # deleted").  Runs AFTER the TemporaryDirectory exits so the path is
+        # definitively absent and git treats the entry as stale.  Must NEVER
+        # raise — swallow all subprocess exceptions so the caller's
+        # return/exception semantics are unchanged.
+    finally:
+        try:
+            subprocess.run(  # noqa: S603 — fixed list-args, no shell, no user input
+                ["git", "worktree", "prune"],
                 cwd=str(_REPO_ROOT),
                 capture_output=True,
+                check=False,
+                timeout=30,
             )
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            pass  # best-effort; a git absence/timeout must not mask the real return/exception
 
 
 # ---------------------------------------------------------------------------
