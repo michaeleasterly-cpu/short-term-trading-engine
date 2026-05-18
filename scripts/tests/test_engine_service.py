@@ -203,3 +203,13 @@ async def test_digest_trigger_crash_isolated(monkeypatch):
     state = {"last": None}
     # must NOT raise — crash-isolated like _invoke_allocator
     await es._maybe_fire_weekly_digest(state, today=date(2026, 5, 18))
+
+
+def test_run_engine_service_wrapper_has_env_for_monitor():
+    """H-2: the consolidated daemon's wrapper must source .env (so the
+    co-hosted TradeMonitor sees ALPACA_KEY/ALPACA_SECRET) AND keep the
+    IPv4-pooler pin (launchd network-namespace requirement)."""
+    sh = (REPO_ROOT / "scripts" / "run_engine_service.sh").read_text()
+    assert "source .env" in sh, "wrapper must source .env for ALPACA creds"
+    assert 'DATABASE_URL="${DATABASE_URL_IPV4:-$DATABASE_URL}"' in sh
+    assert "-m ops.engine_service" in sh
