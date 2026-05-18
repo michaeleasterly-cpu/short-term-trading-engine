@@ -84,6 +84,44 @@ def profile_for(engine: str) -> EngineProfile | None:
     return _PROFILE.get(engine)
 
 
+def _roster_sorted(profiles: dict[str, EngineProfile]) -> list[EngineProfile]:
+    """Non-RETIRED, non-allocator profiles sorted by dispatch_order.
+    Raises ValueError on a duplicate dispatch_order among them — the
+    sort key MUST be total (ROSTER binds at import before tests run)."""
+    live = [p for p in profiles.values()
+            if p.lifecycle_state in _DISPATCHABLE and p.engine != "allocator"]
+    orders = [p.dispatch_order for p in live]
+    if len(set(orders)) != len(orders):
+        raise ValueError(f"duplicate dispatch_order among dispatchable engines: {orders}")
+    return sorted(live, key=lambda p: p.dispatch_order)
+
+
+def roster_for_dispatch() -> tuple[str, ...]:
+    """Engines dispatched in the ROSTER loop: PAPER/LIVE, non-allocator,
+    ordered by dispatch_order. The authority for ops.engine_dispatch.ROSTER."""
+    return tuple(p.engine for p in _roster_sorted(_PROFILE))
+
+
+def allocator_eligible_engines() -> tuple[str, ...]:
+    """Inverse-vol-pool engines (allocator_eligible), ordered by dispatch_order.
+    Replaces the hand-typed allocator `engines=` default."""
+    return tuple(p.engine for p in _roster_sorted(_PROFILE) if p.allocator_eligible)
+
+
+def archived_engines() -> tuple[str, ...]:
+    """RETIRED engines (provenance-in-SoT; data-SDLC RETIRED symmetry),
+    sorted by name. Consumer is `engine = ANY($1::text[])` (set semantics),
+    so order is behavior-equivalent; sorted for stable test diffs."""
+    return tuple(sorted(p.engine for p in _PROFILE.values()
+                        if p.lifecycle_state is LifecycleState.RETIRED))
+
+
+def engine_package_names() -> frozenset[str]:
+    """Top-level engine package dirs (PAPER/LIVE, non-allocator) — for the
+    tpcore-never-imports-an-engine layering invariant (check_imports)."""
+    return frozenset(roster_for_dispatch())
+
+
 def _week_start_date(d: date) -> date:
     """Monday of d's ISO week (date)."""
     return d - timedelta(days=d.weekday())
@@ -173,6 +211,10 @@ async def should_fire(engine: str, now: datetime, pool) -> FireDecision:
         checks["profiled"] = profile is not None
         if profile is None:
             return FireDecision(False, "unprofiled engine", checks)
+
+        checks["dispatchable"] = profile.lifecycle_state in _DISPATCHABLE
+        if not checks["dispatchable"]:
+            return FireDecision(False, "engine not dispatchable (lifecycle)", checks)
 
         checks["cadence"] = _cadence_boundary(profile, now)
         if not checks["cadence"]:

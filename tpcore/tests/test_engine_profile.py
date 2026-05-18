@@ -119,8 +119,8 @@ async def test_should_fire_all_green_fires():
         d = await should_fire("reversion", datetime(2026, 5, 5, 21, 30, tzinfo=UTC), _FakePool(ran=False))
     assert isinstance(d, FireDecision)
     assert d.fire is True and d.reason == "ready"
-    assert d.checks == {"profiled": True, "cadence": True, "market_closed": True,
-                        "supervisor_held": True,
+    assert d.checks == {"profiled": True, "dispatchable": True, "cadence": True,
+                        "market_closed": True, "supervisor_held": True,
                         "data_ready": True, "not_already_run": True}
 
 
@@ -218,3 +218,44 @@ def test_profile_for_sigma_returns_retired_profile():
 def test_engine_profile_rejects_missing_required_fields():
     with pytest.raises(ValidationError):
         EngineProfile(engine="x", cadence=Cadence.DAILY)  # no dispatch_order/lifecycle_state
+
+
+def test_accessors_return_exact_frozen_literals():
+    from tpcore.engine_profile import (
+        allocator_eligible_engines,
+        archived_engines,
+        engine_package_names,
+        roster_for_dispatch,
+    )
+    assert roster_for_dispatch() == ("reversion", "vector", "momentum", "sentinel", "canary")
+    assert allocator_eligible_engines() == ("reversion", "vector", "momentum")
+    assert archived_engines() == ("sigma",)
+    assert engine_package_names() == frozenset(
+        {"reversion", "vector", "momentum", "sentinel", "canary"})
+
+
+def test_roster_excludes_allocator_and_retired():
+    from tpcore.engine_profile import roster_for_dispatch
+    r = roster_for_dispatch()
+    assert "allocator" not in r and "sigma" not in r
+
+
+def test_dispatch_order_uniqueness_validation():
+    from tpcore.engine_profile import _roster_sorted
+    bad = {
+        "a": EngineProfile(engine="a", cadence=Cadence.DAILY, dispatch_order=1,
+                           lifecycle_state=LifecycleState.PAPER),
+        "b": EngineProfile(engine="b", cadence=Cadence.DAILY, dispatch_order=1,
+                           lifecycle_state=LifecycleState.PAPER),
+    }
+    with pytest.raises(ValueError, match="duplicate dispatch_order"):
+        _roster_sorted(bad)
+
+
+async def test_should_fire_fails_closed_for_non_dispatchable_lifecycle():
+    # sigma is RETIRED in _PROFILE → should_fire must fail-closed even
+    # though profile_for now returns a profile (H-B7).
+    d = await should_fire("sigma", datetime(2026, 5, 18, 21, 0, tzinfo=UTC), pool=None)
+    assert d.fire is False
+    assert d.reason == "engine not dispatchable (lifecycle)"
+    assert d.checks.get("dispatchable") is False
