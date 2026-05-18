@@ -1077,12 +1077,14 @@ gate has real content to check.
 **H-S4-11 — the OPERATIONS.md stale `search_parameters.py`-as-prod
 reframe must not delete still-true content.** *Risk:* over-aggressively
 rewriting OPERATIONS.md lines 713/719/738/755-757 could remove the
-still-accurate description of `scripts/search_parameters.py` as the
-underlying walk-forward engine the Lab wraps. *Mitigation:* the
+still-needed reference to `scripts/search_parameters.py` — which
+remains a thin re-export shim delegating to `ops.lab.run` (where the
+walk-forward engine now lives), not a deleted artifact. *Mitigation:* the
 reframe (T7) *adds* the `python -m ops.lab` canonical-entrypoint
 framing and *re-roles* (does not delete) the search-script prose:
-`scripts/search_parameters.py` is documented as the *underlying*
-walk-forward harness the Lab now wraps, not the operator entrypoint;
+`scripts/search_parameters.py` is documented as a thin re-export shim
+delegating to `ops.lab.run` (which hosts the walk-forward engine), not
+the operator entrypoint;
 the `scripts/run_*_search.sh` descriptions are kept where the scripts
 still exist (verified at T7 time with `ls`), only their *role* is
 corrected. *Enforced at:* T7 — `test_sdlc_docs_match_code` (H-S4-10)
@@ -1272,8 +1274,9 @@ pinning test ships in the same task as its behavior.
   `docs/lab/…` + `.json` sidecar, recommendation-only / never
   daemon-wired / isolation); re-role (NOT delete) the lines
   713/719/738/755-757 `search_parameters.py`-as-prod framing — `python
-  -m ops.lab` is the canonical entrypoint, `search_parameters.py` the
-  underlying walk-forward harness it wraps; `ls`-verify the named
+  -m ops.lab` is the canonical operator entrypoint; `ops.lab.run` hosts
+  the walk-forward engine; `scripts/search_parameters.py` is a thin
+  re-export shim delegating to it (re-roled, NOT deleted); `ls`-verify the named
   `run_*_search.sh` scripts before describing them. *Pin:* content
   lands; validated by T8's gate (the OPERATIONS.md clause); T7 alone
   CI-green.
