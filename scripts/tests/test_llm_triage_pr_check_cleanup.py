@@ -234,24 +234,97 @@ def test_engine_lane_load_specs_base_cleanup_invariant(
     )
 
 
-def test_engine_lane_base_loader_succeeds_against_real_repo() -> None:
-    """Complementary positive: against the REAL host repo's origin/main
-    (which DOES contain ops/engine_ladder.py) the engine base loader
-    returns the normalised DISPOSITION_POLICIES baseline — proving the
-    engine snippet itself is correct (the bare-tmp-repo failure above is
-    purely a fixture artifact, not a loader defect). Still #63-clean:
-    asserts no llm_triage_base_ worktree leaks into the host repo."""
-    result = _mod._load_specs_base("main", _mod._ENGINE_REGISTRY_SNIPPETS)
+def _setup_tmp_repo_with_ops(tmp: Path) -> Path:
+    """Like ``_setup_tmp_repo`` but the initial commit also contains a
+    minimal ``ops/engine_ladder.py`` stub (no Pydantic dependency) whose
+    ``DISPOSITION_POLICIES`` exactly matches the shape the engine snippet
+    emits — so ``PYTHONPATH=wt_path`` resolves the import inside the
+    worktree subprocess without touching the real host repo or any remote."""
+    repo = tmp / "repo"
+    repo.mkdir()
+
+    def g(*args: str) -> str:
+        return subprocess.run(
+            ["git", *args],
+            cwd=str(repo),
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+    g("init", "-b", "main")
+    g("config", "user.email", "test@example.com")
+    g("config", "user.name", "Test")
+
+    ops_dir = repo / "ops"
+    ops_dir.mkdir()
+    (ops_dir / "__init__.py").write_text("")
+    # Minimal stub: same public shape as the real engine_ladder but with no
+    # Pydantic / StrEnum imports so the snippet works in the venv-less
+    # subprocess that only has PYTHONPATH=wt_path.
+    (ops_dir / "engine_ladder.py").write_text(
+        "class _Disp:\n"
+        "    def __init__(self, v): self.value = v\n"
+        "class _Pol:\n"
+        "    def __init__(self, d): self.default = _Disp(d)\n"
+        "DISPOSITION_POLICIES = {\n"
+        "    'crashed_startup': _Pol('structural'),\n"
+        "    'scheduler_crash': _Pol('structural'),\n"
+        "}\n"
+    )
+    (repo / "placeholder.txt").write_text("x")
+    g("add", ".")
+    g("commit", "-m", "init")
+    # Self-origin so ``origin/main`` resolves inside the tmp repo.
+    g("remote", "add", "origin", str(repo))
+    g("fetch", "origin")
+    return repo
+
+
+def test_engine_lane_base_loader_succeeds_tmp_isolated(tmp_path: Path) -> None:
+    """Positive: the engine-lane base loader returns a normalised
+    ``DISPOSITION_POLICIES`` baseline when the worktree contains a valid
+    ``ops/engine_ladder.py`` — proving the snippet and loader contract are
+    correct.
+
+    Fully tmp-isolated: uses a throwaway repo in ``tmp_path`` whose initial
+    commit contains a minimal ``ops/engine_ladder.py`` stub; a self-origin
+    remote makes ``origin/main`` resolve LOCALLY inside the tmp repo.
+    ``_REPO_ROOT`` is patched so every ``git worktree`` command targets the
+    tmp repo — the real host repo and ``origin/main`` of the real repo are
+    never accessed.  Mirrors the ``_setup_tmp_repo`` pattern from the
+    data-lane #63 tests (git-hygiene rule 3).
+
+    Replaces ``test_engine_lane_base_loader_succeeds_against_real_repo``
+    which ran `git worktree add ... origin/main` against the real repo and
+    failed in GitHub Actions because the CI checkout does not have
+    ``origin/main`` as a resolvable local ref."""
+    repo = _setup_tmp_repo_with_ops(tmp_path)
+
+    with patch.object(_mod, "_REPO_ROOT", repo):
+        result = _mod._load_specs_base("main", _mod._ENGINE_REGISTRY_SNIPPETS)
+
     expected_keys = {name for name, _ in _mod._ENGINE_REGISTRY_SNIPPETS}
-    assert isinstance(result, dict) and result
-    assert set(result.keys()) == expected_keys
+    assert isinstance(result, dict) and result, (
+        "_load_specs_base must return a non-empty dict"
+    )
+    assert set(result.keys()) == expected_keys, (
+        f"keys {set(result.keys())!r} != expected {expected_keys!r}"
+    )
     pols = result["disposition_policies"]
-    assert "crashed_startup" in pols
+    assert "crashed_startup" in pols, "baseline must contain 'crashed_startup'"
     assert pols["crashed_startup"]["stage"] == "structural"
     assert pols["crashed_startup"]["act"] is True
-    # #63 host-guard: the loader cleaned up its own worktree.
+
+    # Cleanup invariant: no stale admin entry, only the main worktree remains.
+    assert _worktree_list_count(repo) == 1, (
+        "Engine-lane base load leaked a stale worktree admin entry"
+    )
+    assert not _stale_admin_entry_exists(repo)
+
+    # Host guard: the real host repo MUST be untouched.
     assert not _worktree_has_llm_triage_entry(_HOST_REPO), (
-        "Engine-lane base load leaked a worktree entry into the host repo"
+        "Engine-lane base load leaked a worktree entry into the real host repo"
     )
 
 
