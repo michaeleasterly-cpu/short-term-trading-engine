@@ -242,16 +242,22 @@ parse_ecr(markdown) ──▶ EngineChangeRequest          (reject on parse erro
 ```
 
 `apply(plan)` is the **only** mutating step and is **atomic-or-abort**:
-it stages every SoT edit + filesystem op, runs the full
-`test_engine_lifecycle_consistency.py` suite **in-process against the
-staged tree**, and commits the staged changes to disk **only if the
-suite is green**. A red suite ⇒ roll back the staging, emit the
-rejection, mutate nothing. (Symmetric to the data lane's "the prepared
-diff must pass every invariant test *before* you are asked to
-approve.") Git is **not** touched by the executor — it stages working-
-tree changes only; committing is the operator's separate, normal step
-(honors the standing "tests never touch the real repo" / executor never
-runs git rule).
+it stages every SoT edit + filesystem op into the working tree, then
+runs the full `test_engine_lifecycle_consistency.py` suite **as a
+fresh subprocess** against the now-staged on-disk tree (H-S3-1: a
+subprocess with `cwd`=the staged tree, NOT in-process — the public
+accessors and the consistency test bind module-global `_PROFILE`/
+`REPO` at import, so an in-process or dict-injected run would validate
+a *different* code path than CI; H-S3-4 journals every touched file's
+pre-state first). The staged changes remain on disk **only if the
+subprocess exits 0**; a non-zero exit ⇒ reverse-order restore from the
+journal to byte-identical pre-state, emit the rejection, mutate
+nothing. (Symmetric to the data lane's "the prepared diff must pass
+every invariant test *before* you are asked to approve.") Git is
+**not** touched by the executor — it stages working-tree changes only;
+committing is the operator's separate, normal step (honors the
+standing "tests never touch the real repo" / executor never runs git
+rule).
 
 ### 3.3 Audit + state-comprehension
 
@@ -491,14 +497,22 @@ Mirrors the data lane's "a request that cannot produce a consistent
 diff is rejected with the reason — never handed to you to force":
 
 1. **Evidence re-verification** (§5.4): every gate number is recomputed
-   from the cited dossier / on-record data, not read from the ECR.
-2. **Dry consistency run**: build the *staged* `_PROFILE` + staged
-   filesystem in a temp overlay; run the full
-   `test_engine_lifecycle_consistency.py` against the overlay
-   (parametrised to accept an injected profile dict + repo root — SP1's
-   `_roster_sorted(profiles=…)` already supports an injected dict; SP3
-   threads the same seam through the test helpers without changing the
-   default-call behaviour the existing assertions pin).
+   from the frozen `LabResult` JSON sidecar (H-S3-9) / on-record data,
+   not read from the ECR and **not** scraped from rendered markdown.
+2. **Dry consistency run (H-S3-1 — the corrected mechanism):**
+   `shutil.copytree` the worktree (minus `.git`/`.venv`/`__pycache__`/
+   `backtests`) into an isolated temp tree, stage the *proposed*
+   `_PROFILE` source + filesystem ops into **that** copy, then run
+   `python -m pytest tpcore/tests/test_engine_lifecycle_consistency.py
+   -q` **as a fresh subprocess with `cwd`=the temp tree** (so its
+   `import tpcore.engine_profile`, its `_PROFILE`, and its
+   module-constant `REPO` are all the *proposed* ones — zero
+   in-process state bleed). The dry run passes iff that subprocess
+   exits 0. The `_roster_sorted(profiles=…)` injection seam is **NOT**
+   the dry-run mechanism (it is insufficient — the public accessors and
+   the consistency test bind module-global `_PROFILE`/`REPO`; see
+   H-S3-1/D2); it is retained only as a fast `_roster_sorted` unit-test
+   convenience.
 3. **Readiness gate** (ADD only): run the programmatically-checkable
    `engine_readiness.md` items against the scaffolded package.
 4. Any failure ⇒ `plan.rejection` is set; the CLI prints the exact
@@ -506,13 +520,19 @@ diff is rejected with the reason — never handed to you to force":
 
 ### 5.3 `apply(plan)` — atomic-or-abort
 
-Stage all edits (the `_PROFILE` source rewrite, the package move/
-scaffold, the shadow-file region edits, the EULOGY render) into the
-working tree; re-run the full consistency suite in-process against the
-now-on-disk staged state; if green, leave it (the operator commits);
-if red, **revert every staged change** (the executor records the exact
-pre-state of every file it touched and restores it) and emit the
-rejection. No partial application is ever left on disk.
+Journal the exact pre-state (bytes-or-absent) of every file the plan
+will touch + every dir-move source/dest (H-S3-4); stage all edits (the
+AST-validated `_PROFILE` source rewrite, the shadow-file region edits,
+the EULOGY render — text edits first; the package `shutil.move` **last**,
+the irreversible-ish op after the cheap-to-revert ones) into the
+working tree; re-run the full consistency suite **as a fresh
+subprocess** against the now-on-disk staged state (H-S3-1 — not
+in-process); if it exits 0, leave it (the operator commits); on
+non-zero **or any exception**, **restore every journaled file to its
+exact prior bytes and every dir move to its origin, in reverse order**,
+then emit the rejection; a restore failure escalates loudly
+(`ENGINE_CHANGE_REQUEST` `outcome=apply_restore_failed`). No partial
+application is ever left on disk.
 
 ### 5.4 Evidence is re-verified, never trusted
 
@@ -520,12 +540,29 @@ The ECR carries `gate_dsr`/`gate_cred`/`param_change` for *operator
 legibility* (so the human sees what they are approving), but the
 planner **recomputes every one** from the authoritative source:
 
-- ADD(lab_candidate) / MODIFY: re-read + re-parse the cited
-  `lab_dossier` markdown (it is the rendered form of the frozen
-  `LabResult`); re-verify verdict == SURVIVED, DSR ≥ 0.95, credibility
-  ≥ 60, `recommended_exit` matches the action, `target_engine` matches.
-  A dossier whose numbers disagree with the ECR text ⇒ **reject for
-  evidence mismatch** (a forged/stale ECR cannot get past the gate).
+- ADD(lab_candidate) / MODIFY: the planner re-reads the **frozen
+  `LabResult` JSON sidecar** (`<dossier>.json`, model-validated back
+  into the `LabResult` pydantic model — `extra="forbid"`, so a
+  tampered/extra field is a hard reject), **not** the rendered
+  `.md` prose. The markdown is a human rendering; re-scraping rendered
+  markdown for the load-bearing automated-MODIFY gate would couple the
+  zero-trust check to the dossier *template's* formatting and is
+  rejected as a fragile coupling (design-defect fix H-S3-9: SP2's
+  `write_lab_dossier` currently writes *only* the `.md`; SP3 makes it
+  additionally emit the byte-stable `LabResult.model_dump_json()`
+  sidecar — an additive, behaviour-preserving change to
+  `ops/lab/dossier.py`, in SP3 scope as the SP2 carry-forward that
+  makes the evidence machine-verifiable). Re-verify, against the
+  parsed `LabResult`: `verdict == "SURVIVED"`, `dsr ≥ 0.95`,
+  `credibility_score ≥ 60`, `recommended_exit` matches the action
+  (`promote_new` for ADD(lab_candidate), `fold_existing` for MODIFY),
+  `target_engine == ecr.engine`. A sidecar whose numbers disagree
+  with the ECR text ⇒ **reject for evidence mismatch** (a
+  forged/stale ECR cannot get past the gate). The sidecar must also
+  be **identity-fresh**: its `candidate`/`target_engine`/`seed` and
+  the `winning_params` keyset must match the ECR's cited dossier path
+  + (MODIFY) the `param_change` keyset exactly — a sidecar for a
+  *different* run or a stale path is a hard reject.
 - The Lab credibility namespace invariant is honored: the planner
   reads `backtest_credibility.<engine>` (live namespace) for the
   EULOGY's "last on-record gate" and `lab.<candidate>` only via the
@@ -701,10 +738,10 @@ to-nothing is rejected as it weakens the contract.)
 
 | Concern | Reused (compose) | New (SP3) |
 |---|---|---|
-| Lifecycle SoT + states | `tpcore.engine_profile._PROFILE`, `LifecycleState`, `Cadence`, `_roster_sorted(profiles=…)` injectable seam | — (SP3 only *edits the literal*) |
+| Lifecycle SoT + states | `tpcore.engine_profile._PROFILE`, `LifecycleState`, `Cadence` (the `_roster_sorted(profiles=…)` arg is a `_roster_sorted` unit-test convenience only — **not** the dry-run mechanism; H-S3-1/D2) | — (SP3 only *edits the literal*; the dry run is an isolated-temp-tree subprocess) |
 | SoT-derived shadows | `roster_for_dispatch()`, `allocator_eligible_engines()`, `archived_engines()`, `engine_package_names()` — all auto-derive | — (proven: snap-out = one literal flip) |
 | Consistency clockwork | `tpcore/tests/test_engine_lifecycle_consistency.py` (all SP1 legs) | **complete the partial archive leg** (§4.2.2) |
-| Lab → SP3 contract | `LabResult`, `LabCandidate`, `ParamDelta`, `recommended_exit`, the dossier markdown (`ops/lab/dossier.py`) | the ECR-side dossier *re-parser/verifier* |
+| Lab → SP3 contract | `LabResult`, `LabCandidate`, `ParamDelta`, `recommended_exit`, the dossier renderer (`ops/lab/dossier.py`) | the **`LabResult` JSON sidecar** emit (additive to `write_lab_dossier`, H-S3-9) + the ECR-side sidecar *loader/verifier* (model-validate, never markdown-scrape) |
 | Engine scaffold | `tpcore/templates/engine_template/`, `docs/superpowers/checklists/engine_readiness.md` | ECR ADD invokes them as the build gate |
 | Archive worked example | `archive/sigma/EULOGY.md` structure, the Sigma retirement checklist | `tpcore/templates/eulogy_template.md` (structure-reuse) |
 | ops engine-dispatch pattern | `ops/lab/run.py:_runner_for` lazy per-engine import (legal-in-ops) | `ops/engine_sdlc/default_params.py` mirrors it |
@@ -717,7 +754,8 @@ __main__,__init__}.py`, `docs/superpowers/checklists/
 engine_change_request.md`, `tpcore/templates/eulogy_template.md`,
 per-engine `default_params()` in 3 `backtest.py` files, the archive-leg
 test completion + a `default_params` parity test, the
-`credibility_pool` threading. **No new tpcore module; no new
+`credibility_pool` threading, the additive `LabResult` JSON sidecar
+emit in `ops/lab/dossier.py` (H-S3-9). **No new tpcore module; no new
 tpcore→engine import; no new daemon (SP3 is an on-demand operator
 tool, exactly like the Lab).**
 
@@ -798,59 +836,694 @@ tool, exactly like the Lab).**
 
 ## 11. Hardening
 
-> *Placeholder — filled by a separate expert-harden pass with `H-S3-*`
-> hardening IDs and the `T0…Tn` task decomposition for the
-> writing-plans pass. The decomposition outline proposed to that pass:*
->
-> - **T0** — `ops/engine_sdlc/` package skeleton + `EngineChangeRequest`
->   model + `parse_ecr` (strict, reject-on-unknown) + the
->   `engine_change_request.md` checklist; unit tests on parse/reject.
-> - **T1** — O1: per-engine `default_params()` in the 3 `backtest.py`
->   files + `ops/engine_sdlc/default_params.py` dispatcher + the
->   parity test; wire `_build_lab_result` (remove the `# TODO(SP3)`).
-> - **T2** — the `credibility_pool` threading in `_run_lab_core` +
->   test that it is the only RW handle under an active `LabContext`
->   (legacy path byte-identical — SP2 oracle still green).
-> - **T3** — `classify()` + `TransitionPlan` + the closed
->   classification table; pure-function tests for every cell incl.
->   every rejection.
-> - **T4** — `validate()` incl. the dry in-overlay consistency run
->   (thread the injectable-profile/repo-root seam through the test
->   helpers without changing default-call behaviour).
-> - **T5** — REMOVE executor + `tpcore/templates/eulogy_template.md`
->   + the completed archive-leg clockwork (§4.2.2); a synthetic
->   end-to-end retire of a throwaway fixture engine in a temp tree.
-> - **T6** — ADD executor (new_scaffold + lab_candidate) incl. the
->   engine-readiness build gate invocation.
-> - **T7** — MODIFY executor + zero-trust evidence re-verification.
-> - **T8** — `ops/engine_sdlc/__main__.py` CLI (prepare→validate→
->   binary y/n for ADD/REMOVE; automated receipt for MODIFY/promote;
->   explicit non-zero, never silent 0) + `ENGINE_CHANGE_REQUEST`
->   audit emit.
-> - **T9** — full-suite green pass: ruff, check_imports
->   (tpcore∌engine still clean — SP3 added no tpcore→engine import),
->   the SP1 N-way clockwork, the SP2 Lab oracle, the new SP3 tests;
->   wrapper scripts `bash -n` clean.
+This section is the output of the adversarial expert-harden pass. It
+supersedes the §10 failure-mode table where they overlap (§10 is the
+design-time sketch; §11 is the enforced contract). Every `H-S3-*`
+entry is **risk → mitigation → enforcement point** (the test/guard that
+makes the mitigation true, not aspirational).
+
+### 11.1 The H-S3-* hardening register
+
+**H-S3-1 — The dry-consistency run must execute the REAL clockwork
+against the proposed tree, not a dict-injected approximation.**
+*Risk:* the spec's §5.2 idea of "inject a profile dict via the
+`_roster_sorted(profiles=…)` seam" is **insufficient and unsafe**:
+verified, `roster_for_dispatch()` / `allocator_eligible_engines()` /
+`archived_engines()` call `_roster_sorted()` with **no** `profiles=`
+arg (they bind module-global `_PROFILE` at import), and
+`test_engine_lifecycle_consistency.py` reads a module-constant
+`REPO = Path(__file__).resolve().parents[2]` and calls
+`roster_for_dispatch()` *directly*. A dict-injection dry run would
+validate a *different* code path than the one CI runs after merge — a
+green dry run could still be a red real build (the exact false-negative
+that lets a half-state through).
+*Mitigation:* `validate(plan)` stages the full proposed tree (the
+rewritten `tpcore/engine_profile.py` source, the moved/scaffolded
+package dirs, the rendered EULOGY, the shadow-file edits) into an
+**isolated temp repo copy** (`shutil.copytree` of the worktree minus
+`.git`/`.venv`/`__pycache__`/`backtests`), then runs
+`python -m pytest tpcore/tests/test_engine_lifecycle_consistency.py
+-q` **as a fresh subprocess with `cwd` = the temp tree** (so its
+`REPO`, its `import tpcore.engine_profile`, and `_PROFILE` are all the
+*proposed* ones, with zero in-process module-state bleed). The dry run
+passes iff that subprocess exits 0. The dict-injection seam is **not**
+the dry-run mechanism; it is retained only as a fast unit-test
+convenience for `_roster_sorted` itself.
+*Enforced at:* `ops/engine_sdlc/planner.py::validate` (subprocess
+invocation + exit-code assertion); pinned by
+`tpcore/tests/test_engine_sdlc_planner.py::
+test_validate_runs_real_clockwork_in_isolated_tree` (a staged tree with
+a deliberately-introduced half-state must make `validate` reject with
+the clockwork's own failure text) — **T4**.
+
+**H-S3-2 — The `dispatch_order` literal pin must transition with the
+ECR, never be hand-patched or silently broken.**
+*Risk:* `test_dispatch_order_invariant_is_the_frozen_literal` asserts
+`roster_for_dispatch() == ("reversion","vector","momentum","sentinel",
+"canary")` — a hard literal (roster order is high-risk per DA-3/Sub-C).
+A legitimate ADD(→LAB) does **not** change it (LAB is not dispatchable,
+filtered by `_DISPATCHABLE`); a REMOVE of a *currently-rostered* engine
+**does** change it; a LAB→PAPER promotion **does** change it. If that
+literal is left stale the honest build red-fails; if a task "fixes" it
+by hand the operator-never-hand-edits contract is violated and the pin
+stops being a pin.
+*Mitigation:* (a) the dry-run subprocess (H-S3-1) runs that exact test
+against the *proposed* tree — so a transition that changes the roster
+is **rejected unless the literal is updated in the same staged change**;
+(b) the planner, when (and only when) the transition changes
+`roster_for_dispatch()`, mechanically rewrites the literal tuple inside
+`test_dispatch_order_invariant_is_the_frozen_literal` to the
+SoT-derived proposed roster **as part of the same staged diff** (it is
+a structurally-parseable shadow exactly like the
+`run_smoke_test.sh`/`pyproject` shadows — added to the enumerated
+shadow-edit set in fs_op 4); (c) the operator sees the literal change
+in the prepared diff and approves it as part of the ADD/REMOVE binary
+y/n — it is never a separate hand-edit. ADD(new_scaffold)/
+ADD(lab_candidate) → LAB asserts the literal is **unchanged** (defends
+against an accidental dispatch_order that leaks a LAB engine into the
+roster).
+*Enforced at:* `planner.py` (conditional literal rewrite, gated on
+`roster_for_dispatch()` delta); `tpcore/tests/test_engine_sdlc_planner
+.py::test_remove_rostered_engine_updates_frozen_literal` and
+`::test_add_lab_engine_leaves_frozen_literal_untouched` — **T5/T6**.
+
+**H-S3-3 — The `_PROFILE` source rewrite must be structurally safe
+(AST-faithful), never a regex smash of a frozen-pydantic literal.**
+*Risk:* `_PROFILE` is a hand-formatted dict of `EngineProfile(...)`
+calls with inline comments (the `allocator`/`sigma`/`lab` sentinels) in
+a tpcore module every engine imports. A naïve string/regex rewrite can
+(i) corrupt the literal (broken syntax → every engine's import dies,
+platform-wide outage), (ii) silently drop the explanatory comments
+(losing the D-SDLC provenance), or (iii) reorder keys (cosmetic but
+review-noisy and diff-hostile).
+*Mitigation:* the rewrite is **AST-validated, append/replace-shaped,
+and re-parsed before staging**: (a) ADD inserts a new
+`"<engine>": EngineProfile(...)` entry **immediately before the
+`allocator` sentinel comment** (a stable, documented anchor) — never
+reformats existing entries; (b) REMOVE/MODIFY-of-state edits **only the
+single target entry's** `lifecycle_state=`/`allocator_eligible=` tokens
+in place (a targeted, line-anchored replace of that one
+`EngineProfile(...)` call), touching no sibling; (c) after the textual
+edit the planner does `ast.parse()` on the new source **and**
+`compile()`s it **and** imports it in the H-S3-1 subprocess — any
+`SyntaxError`/`ValueError` (e.g. pydantic `extra="forbid"` /
+`frozen=True` violation, duplicate key) aborts with the parser's exact
+error and **stages nothing**; (d) MODIFY never touches `_PROFILE` at
+all (engine params are not in the lifecycle SoT — §4.3), removing that
+entire risk surface for the highest-frequency action.
+*Enforced at:* `planner.py::_rewrite_profile_source` (ast.parse +
+compile gate before any disk write); `test_engine_sdlc_planner.py::
+test_profile_rewrite_is_ast_valid_and_preserves_siblings` and
+`::test_malformed_rewrite_aborts_with_zero_disk_change` — **T5**.
+
+**H-S3-4 — `apply()` must be atomic-or-abort with a real
+pre-state journal; a crash mid-apply must leave the tree byte-identical
+to pre-apply.**
+*Risk:* a half-applied transition (`_PROFILE` flipped but the
+`shutil.move(<engine>/ → archive/<engine>/)` failed; or the package
+moved but the literal not flipped; or the EULOGY written but the
+shadow-edits not) is exactly the Sigma-drift class the whole SP exists
+to kill — and worse here because it is *machine*-produced.
+*Mitigation:* `apply(plan)` is journaled and reversible: (a) **before
+any mutation** it records, for every file it will touch, the exact
+prior bytes (or "absent"), and for every dir move, the source/dest
+pair; (b) it performs the mutations in a fixed order: write `_PROFILE`
++ shadow-file edits + EULOGY (text edits, easy to revert) **first**,
+the package `shutil.move` **last** (the irreversible-ish op last, so
+the cheap-to-revert ops are validated before it); (c) it then runs the
+**on-disk** consistency subprocess (H-S3-1) against the now-staged real
+tree; (d) **green ⇒ leave it** (the operator commits via normal git —
+the executor never touches git); (e) **red OR any exception ⇒ restore
+every journaled file to its exact prior bytes and every dir move to its
+origin, in reverse order**, then emit the rejection; (f) the journal
+restore is itself wrapped so a restore failure escalates loudly
+(`ENGINE_CHANGE_REQUEST` with `outcome=apply_restore_failed`) rather
+than silently leaving a half-state. No `DATA_OPERATIONS_COMPLETE`-style
+sacred-invariant analog is needed because the executor never enables
+trading; the consistency subprocess is the gate.
+*Enforced at:* `planner.py::apply` (journal + reverse-order restore);
+`test_engine_sdlc_planner.py::test_apply_red_consistency_rolls_back_to_
+byte_identical` and `::test_apply_move_failure_restores_text_edits` —
+**T5** (REMOVE is the first action that exercises the package move, so
+the atomicity test lands with it).
+
+**H-S3-5 — Completing the archive-leg clockwork: a partial REMOVE must
+fail CI exactly as a half-retired data feed does.**
+*Risk:* SP1 left `test_retired_engine_fully_offboarded` as a *detector*
+only (RETIRED ⇒ archive dir + EULOGY exists + no package). The gaps:
+(i) an EULOGY that is a touched zero-byte/stub file passes today (the
+data-lane "fake-healable HealSpec" analog — a real artifact-shaped
+hole); (ii) a RETIRE that forgot a shadow (`run_smoke_test.sh` /
+`pyproject`) only fails *indirectly* via
+`test_structurally_parseable_shadows_match_sot`, not on the retire leg;
+(iii) the inverse — an `archive/<engine>/` dir or
+`archive/<engine>/EULOGY.md` with **no** RETIRED `_PROFILE` entry
+(orphan archive) — is not asserted at all; (iv) an engine still
+importable as a live `<engine>.scheduler` while RETIRED.
+*Mitigation:* extend the **existing** tpcore test file (no new module,
+no tpcore→engine import — it imports only `tpcore.engine_profile` +
+stdlib + filesystem) with: (a) **EULOGY content floor** — the file must
+contain a non-empty `## Cause of death` and a `## Retirement checklist`
+section (header present + ≥1 non-blank line under each); (b)
+**shadow-purge completeness** — a RETIRED engine's name must be **absent
+from** the `run_smoke_test.sh` step-3 loop token list **and** the
+`pyproject` testpaths/include arrays (the explicit RETIRED-absent
+assertion, so a forgotten shadow fails on the retire leg); (c)
+**no-orphan-archive** — every `archive/<dir>/` that contains an
+`EULOGY.md` must correspond to a `_PROFILE` entry with
+`lifecycle_state == RETIRED` (catches an archive with no SoT entry);
+(d) **RETIRED ⇒ not importable as a live engine** — `importlib.util.
+find_spec(f"{name}.scheduler")` must be `None` for a RETIRED engine
+(symmetric to the live-engine leg's positive assertion). This is the
+direct symmetry of the data 3-way `test_provider_lifecycle_consistency
+.py` (`test_fully_retired_feed_offboarded_everywhere`) — shape reused,
+engine-native predicates.
+*Enforced at:* `tpcore/tests/test_engine_lifecycle_consistency.py`
+(extended in place); the new assertions are exercised end-to-end by the
+REMOVE executor's synthetic-throwaway-engine test — **T5** (the test
+extension lands in the SAME task as the REMOVE executor that makes a
+clean retire, per TDD: the clockwork that proves a behavior ships with
+the behavior, never before — landing it earlier would red-fail an
+honest build with no producer).
+
+**H-S3-6 — Automated MODIFY zero-trust: the gate is the ONLY thing
+between a dossier and live params, so it re-derives, never trusts, and
+cannot escape the risk envelope.**
+*Risk:* operator-confirmed `automated-if-gated` (§6.2, §12 — operator
+risk-acceptance recorded 2026-05-18) means no human y/n stands between
+a `fold_existing` dossier and a live-traded param change. A forged ECR,
+a stale dossier, a dossier for a *different* engine, a `param_change`
+key the Lab never swept, or a MODIFY that smuggles a lifecycle/strategy
+change would each be a real-capital hazard.
+*Mitigation:* (a) **evidence is re-derived from the frozen `LabResult`
+JSON sidecar, never the ECR text and never the rendered markdown**
+(H-S3-9): model-validate the sidecar (`extra="forbid"`), then assert
+`verdict=="SURVIVED"`, `dsr≥0.95`, `credibility_score≥60`,
+`recommended_exit=="fold_existing"`, `target_engine==ecr.engine`; (b)
+**identity-freshness**: the sidecar's `candidate`/`seed`/path must match
+the ECR's cited dossier and `winning_params` must be a superset of
+`ecr.param_change` with **equal values** (a value mismatch = reject);
+(c) **search-space membership**: every key in `ecr.param_change` must be
+in that engine's `ops.lab.run.PARAM_RANGES` set **and** in the sidecar
+`winning_params` (no smuggling a param the Lab never swept); (d)
+**lifecycle-immutability**: MODIFY's `sot_diff` is asserted **empty** —
+the planner hard-fails if a MODIFY plan carries any `_PROFILE` edit
+(strategy existence / lifecycle / allocator-eligibility cannot be
+touched by MODIFY by construction); (e) **envelope invariance**: the
+re-tuned param keyset is a subset of `PARAM_RANGES`, which is by
+definition within the engine's existing RiskGovernor/`RiskLimits`/
+capital-gate envelope (a MODIFY changes *which* params, never the risk
+contract — documented invariant, not a runtime check, because no SP3
+code path can reach RiskGovernor); (f) **paper backstop pinned**: no
+engine is `LifecycleState.LIVE` (paper-only mandate, §1.1) — a MODIFY
+today changes paper behaviour only; this is recorded as the residual
+backstop, not relied on as the primary control (the gate is). Any
+failure of (a)–(d) ⇒ hard reject, zero mutation, `ENGINE_CHANGE_
+REQUEST` audit with `outcome=rejected` + the precise reason.
+*Enforced at:* `planner.py::validate` (the MODIFY branch); `test_
+engine_sdlc_planner.py::test_modify_rejects_{forged_numbers,wrong_
+target,non_param_ranges_key,value_mismatch,stale_sidecar}` and
+`::test_modify_plan_sot_diff_is_always_empty` — **T7**.
+
+**H-S3-7 — Operator-interaction integrity: a declined/rejected ECR
+mutates exactly zero bytes; the binary confirm is explicit and
+un-spoofable; every applied transition emits an audit receipt.**
+*Risk:* the prepare→validate→binary-confirm flow is the whole
+operator-safety contract for ADD/REMOVE (the structural, irreversible
+decisions). If a non-`y` answer could still mutate, or a stray
+stdin/EOF defaulted to "yes", or an applied transition emitted no
+audit, the contract is hollow.
+*Mitigation:* (a) `apply()` is **never called** on the OPERATOR
+approval path until an **exact, case-sensitive `y` (or `yes`)** is read
+from a TTY prompt — any other token, empty line, EOF, or
+non-interactive stdin ⇒ **declined**, `apply` not called, zero mutation
+(fail-closed default = decline, mirroring the data-lane binary y/n and
+the `should_fire` fail-closed posture); (b) the validation+diff render
+runs **before** the prompt, so the operator only ever confirms a
+green-validated diff (a rejected plan never reaches the prompt — it
+exits non-zero with the reason, exactly the data-lane "rejected with
+the reason, never handed to you to force"); (c) **every** terminal
+outcome emits one `platform.application_log` `ENGINE_CHANGE_REQUEST`
+event with `action`, `engine`, `from_state`, `to_state`, `approval_
+class`, and `outcome ∈ {applied, rejected, operator_declined, apply_
+restore_failed}` + the rejection reason if any (engine-native audit,
+symmetry-ref of the data-lane audit-event discipline — the single
+existing `application_log` bus, not a new digest/reporting lane, §3.3);
+(d) the MODIFY/promote automated paths emit the same event with
+`approval_class=AUTOMATED` so an automated change is as visible as an
+operator one.
+*Enforced at:* `ops/engine_sdlc/__main__.py` (TTY-explicit-`y` gate,
+fail-closed) + `planner.py::apply`/`validate` (audit emit on every
+terminal branch); `test_engine_sdlc_cli.py::test_{non_y_declines_zero_
+mutation,eof_declines,rejected_plan_never_prompts,every_outcome_emits_
+audit}` — **T8**.
+
+**H-S3-8 — SP2 carry-forwards must not regress SP2's isolation
+contract or its characterization oracle.**
+*Risk:* O1 (`default_params()` + dispatcher + wiring `_build_lab_
+result`) and the `credibility_pool` threading both touch live SP2
+surfaces. Specific hazards: (i) adding a tpcore→engine import while
+wiring the dispatcher (breaks `check_imports`); (ii) the
+`_build_lab_result` change perturbing the T1 characterization oracle
+(`scripts/tests/test_search_parameters_characterization.py`) which pins
+`amain`'s rc + the `write_credibility_score` call args; (iii) threading
+`credibility_pool` accidentally making the ONE allowlisted RW write
+read-only under `_LAB_ACTIVE` (the credibility append is the single
+intentional RW exception inside the Lab — `tpcore/tests/test_lab_
+isolation.py` pins zero live-write delta + the no-poison namespace);
+(iv) the legacy `python scripts/search_parameters.py` path (candidate
+is None) drifting from byte-identical.
+*Mitigation:* (a) the `default_params()` accessor is added **only to
+the three engine `backtest.py` files** (reversion/vector/momentum — the
+`PARAM_RANGES` engines); the dispatcher
+`ops/engine_sdlc/default_params.py` does the **lazy per-engine import
+inside the function body** (exact parity with the proven-legal
+`ops/lab/run.py::_runner_for`) — **zero tpcore module touched, zero
+tpcore→engine import**; a parity test asserts
+`set(default_params(e)) == set(PARAM_RANGES[e])` per engine and that
+sentinel/canary (no search space) expose **no** accessor (a new
+searched param without a default fails CI — the HealSpec-coverage
+discipline); (b) `_build_lab_result` calls the dispatcher and emits
+`ParamDelta(current=default_params(e)[k], winning=v)` — the T1 oracle
+pins rc + the credibility-call args, **not** `param_diff` contents, so
+this is oracle-neutral by construction; the task **re-runs the T1
+oracle unchanged** as its gate; (c) `credibility_pool` threading: when
+a `LabContext` is active *and* `candidate is not None`, `_run_lab_core`
+uses `context.credibility_pool` (the existing allowlisted RW handle)
+instead of opening its own `asyncpg.create_pool`; when `candidate is
+None` (legacy search CLI, no LabContext) the **own-pool path is
+byte-identical, untouched**; the `write_credibility_score` *call args*
+(engine_name, score) are unchanged in both paths (only the pool object
+differs), so the T1 oracle and `test_lab_isolation.py` both stay green
+— pinned by a new assertion that under an active `LabContext` the
+write goes through `context.credibility_pool` and **no second RW pool
+is created inside the isolation boundary**; (d) the LabContext is
+**not reentrant** (verified: inner exit resets `_LAB_ACTIVE`) — the
+threading must read `context.credibility_pool` from the *active* CM,
+not construct a nested `LabContext`.
+*Enforced at:* `<engine>/backtest.py::default_params` ×3 +
+`ops/engine_sdlc/default_params.py` + `ops/lab/run.py::_build_lab_
+result`/`_run_lab_core`; `tpcore/tests/test_engine_default_params_
+parity.py` (parity + coverage), the unchanged T1 oracle, the unchanged
+`test_lab_isolation.py`, and a new `tpcore/tests/test_lab_credibility_
+pool_threaded.py::test_active_labcontext_write_uses_context_pool_no_
+second_rw_pool` — **T1 (O1)**, **T2 (pool)**.
+
+**H-S3-9 — The Lab evidence the automated MODIFY gate trusts must be a
+machine-readable frozen artifact, not scraped rendered markdown
+(design-defect fix).**
+*Risk (design defect found during hardening):* SP2's
+`ops/lab/dossier.py::write_lab_dossier` writes **only** the rendered
+`.md`; there is **no persisted machine-readable `LabResult`**. The
+spec's original §5.4 had the planner "re-parse the dossier markdown".
+For the **automated, no-y/n** MODIFY path that is the single
+load-bearing gate, re-scraping prose rendered by a template is fragile
+(template reformat silently breaks the gate or, worse, mis-parses a
+number) — unacceptable for a real-capital control.
+*Mitigation:* `write_lab_dossier` additionally writes a sibling
+`<dossier>.json` = `LabResult.model_dump_json()` (frozen pydantic,
+deterministic field order). The SP3 planner loads + `model_validate`s
+that JSON (`extra="forbid"` ⇒ a tampered/extra field is a hard reject)
+and re-derives every gate number from the validated model — the `.md`
+stays purely human-facing. This is an **additive, behaviour-preserving
+~3-line change to one ops function** (the rendered markdown is
+byte-unchanged; only a new sibling file is added) — in SP3 scope as the
+SP2→SP3 evidence carry-forward, not new SP2 design. It is the precise
+engine-domain analog of the data lane persisting structured state
+(not prose) as the authority a gate reads.
+*Enforced at:* `ops/lab/dossier.py::write_lab_dossier` (sidecar emit) +
+`planner.py::validate` (sidecar load/validate, never markdown);
+`tpcore/tests/test_lab_dossier_sidecar.py::test_sidecar_roundtrips_
+labresult_and_md_unchanged` (round-trip + markdown-byte-stability) —
+**T3** (lands before any executor that consumes it; the planner's
+sidecar reader and the REMOVE/MODIFY executors that depend on it come
+after).
+
+**H-S3-10 — Lane + collision discipline: no tpcore→engine import; the
+`ops`-package vs `scripts/ops.py` `sys.modules` collision is
+pre-empted; SP3 does no data-lane or SP4 work.**
+*Risk:* (i) any new tpcore→engine edge fails `check_imports` (the
+4e73fe8 layering invariant); (ii) **the SP2-proven `ops` collision**:
+`tpcore/tests/test_ops.py` does `sys.path.insert(0, scripts/)` then
+`import ops` — which binds `sys.modules["ops"]` to **`scripts/ops.py`**
+(a 160 KB single-file module), *not* the `ops/` package. Any SP3 test
+that imports `ops.engine_sdlc.*` **at module/collection scope** can
+clobber or be clobbered by that binding (the exact bite SP2 T9/T10
+hit); (iii) SP3 accidentally doing SP4's doc closure
+(CLAUDE.md/OPERATIONS.md/glossary regen) or touching a data-lane SoT.
+*Mitigation:* (a) every SP3 test that needs `ops.engine_sdlc.*` imports
+it **lazily inside the test function body**, never at module top
+(exact parity with SP2's `tpcore/tests/test_lab_isolation.py` discipline
+— "we do NOT import ops.lab.run at module level"); SP3 test files live
+in **`tpcore/tests/`** (a collected pyproject testpath) — **not**
+`ops/engine_sdlc/tests/` (uncollected ⇒ a safety test there silently
+never runs), matching the SP2 decision verbatim; (b) `check_imports` is
+run in the T9 full-suite gate and the planner's `_PROFILE` rewrite is
+asserted **data-only** (a test greps the rewritten source for any
+`import`/`from` line delta vs the original — the rewrite may only
+change `EngineProfile(...)` data tokens, never add an import); (c) SP3
+edits **no** `CLAUDE.md`/`OPERATIONS.md`/`glossary.md` and **no**
+`tpcore/providers.py`/`tpcore/feeds/`/`tpcore/selfheal/` (data-lane) —
+a scope assertion in the T9 gate diff-checks that the SP3 change set is
+confined to the §8 net-new surface + the enumerated extends.
+*Enforced at:* test file placement + lazy-import convention (all SP3
+test files); `test_engine_sdlc_planner.py::test_profile_rewrite_adds_no
+_import`; the T9 `ruff` + `check_imports` + scope-diff gate — **every
+task** (placement/lazy-import is a standing constraint), **T9**
+(the suite-level proof).
+
+**H-S3-11 — The ADD readiness gate and the `lab_candidate`/`new_
+scaffold` split must fail closed (no unearned PAPER, no half-scaffold).**
+*Risk:* ADD is operator-gated but the *scaffold quality* is machine-
+produced. Hazards: a `new_scaffold` ADD that presents a `gate_dsr`/
+`gate_cred` it cannot have earned; a `lab_candidate` ADD whose dossier
+actually says `fold_existing` (that is a MODIFY, not an ADD); a
+scaffold that imports but has no `tests/`/no `BaseEnginePlug` plugs;
+ADD landing straight into PAPER (unearned graduation).
+*Mitigation:* (a) ADD **always** → `LifecycleState.LAB`, never PAPER
+(PAPER is reachable only via the separate automated gated LAB→PAPER
+`promote` — §4.1); the classifier hard-rejects any ADD plan whose
+`to_state != LAB`; (b) `new_scaffold` ADD **rejects** non-None
+`gate_dsr`/`gate_cred` (a new engine cannot present a score it has not
+earned — fail-closed); (c) `lab_candidate` ADD re-derives from the JSON
+sidecar (H-S3-9) and **rejects** unless `recommended_exit==
+"promote_new"` (a `fold_existing` sidecar with that exact guidance is a
+MODIFY — explicit redirect in the rejection text); (d) the
+programmatically-checkable `engine_readiness.md` items (package
+present, `<engine>/tests/` dir, importable `<engine>.scheduler`, 5
+plugs subclass `BaseEnginePlug` via the documented `grep -E
+"class\s+\w+\(BaseEnginePlug\)"` count == 5) are run against the
+*staged scaffold* in `validate`; any miss ⇒ reject, zero mutation; (e)
+LAB-entry forces `allocator_eligible=False` (SP1 `test_no_half_state`),
+re-proven by the H-S3-1 dry run.
+*Enforced at:* `planner.py::classify`/`validate` (ADD branch);
+`test_engine_sdlc_planner.py::test_add_{new_scaffold_rejects_gate_
+fields,lab_candidate_requires_promote_new,readiness_miss_rejects,always_
+lands_LAB}` — **T6**.
+
+**H-S3-12 — The CLI must never silently succeed; explicit non-zero on
+every non-apply outcome (the canary `-m`-no-op lesson).**
+*Risk:* a `python -m ops.engine_sdlc` invocation that prints nothing
+and exits 0 on a rejected/declined/parse-failed ECR would let a
+no-op masquerade as success (the documented canary-`-m`-no-op /
+"explicit non-zero, never silent 0" lesson the Lab CLI already
+encodes).
+*Mitigation:* the CLI mirrors `ops/lab/__main__.py::_amain` /
+`ops/engine_ladder._amain` exactly: parse failure → printed reason +
+rc1; rejected plan → printed reason + rc1; operator-declined → printed
+"declined, nothing changed" + rc1; applied → printed receipt + rc0;
+MODIFY/promote automated-applied → printed done-receipt + rc0; **no
+code path returns 0 without a successful `apply` (or a clean no-work
+explicitly stated)**. `python -m ops.engine_sdlc` with no/invalid args
+exits non-zero with usage.
+*Enforced at:* `ops/engine_sdlc/__main__.py`; `test_engine_sdlc_cli.py
+::test_{parse_fail_rc1,reject_rc1,decline_rc1,apply_rc0,no_args_rc_
+nonzero}` — **T8**.
+
+### 11.2 Residual risks consciously accepted
+
+- **R1 — MODIFY automated is operator-confirmed risk-acceptance, not
+  expert-eliminated.** The operator explicitly chose
+  automated-if-gated (2026-05-18, recorded §12). The residual (a param
+  change reaches paper-traded behaviour with no human y/n) is bounded
+  by H-S3-6 zero-trust + the paper-only backstop + the one-line
+  documented escape-hatch (operator may flip a single MODIFY to y/n via
+  the §6 approval-class table, not a redesign). **Accepted as
+  operator-owned, not residual-expert-owned.**
+- **R2 — `apply()` is working-tree-atomic, not git-atomic.** The
+  executor never runs git (standing rule); a crash *after* a green
+  apply but *before* the operator commits leaves a valid, CI-green,
+  uncommitted change (the operator's normal `git status` shows it).
+  This is the same posture as every other operator tool here and is
+  **accepted** — git-atomicity would require the executor to run git,
+  which is explicitly forbidden.
+- **R3 — The H-S3-1 dry run runs the full consistency suite via a
+  subprocess `copytree`, which is O(repo size).** Accepted: it is an
+  on-demand operator tool (not a daemon, not on the trade-submit path),
+  the copy excludes `.git`/`.venv`/`__pycache__`/`backtests`, and
+  fidelity (real test, real `_PROFILE`, real `REPO`) is worth more than
+  a few seconds — a dict-injected fast path was rejected (H-S3-1) as
+  validating the wrong code path.
+
+### 11.3 Design defects found and fixed inline
+
+- **D1 (fixed §5.4, §8, H-S3-9):** SP2 persists only rendered dossier
+  markdown; the automated-MODIFY gate cannot safely rest on
+  markdown-scraping. Fixed by the additive `LabResult` JSON sidecar in
+  `write_lab_dossier` + the planner reading the validated frozen model.
+- **D2 (fixed H-S3-1):** the spec's §5.2 "inject a profile dict via
+  `_roster_sorted(profiles=…)`" is insufficient — the public accessors
+  and the consistency test bind module-global `_PROFILE`/`REPO`, so a
+  dict-injected dry run validates a different path than CI. Fixed by
+  the isolated-temp-tree subprocess dry run; the injection seam is
+  retained only for `_roster_sorted` unit tests.
+
+---
+
+## 11A. Final ordered TDD task decomposition (T0–T9)
+
+Every task is self-contained and **CI-green on its own** (the pinning
+test ships in the **same** task as the behaviour — never a behaviour
+without its test, never a test before its producer). Lane/collision
+constraints (H-S3-10) apply to **every** task: SP3 test files live in
+`tpcore/tests/`, import `ops.engine_sdlc.*` **lazily inside test
+bodies**, and SP3 touches no tpcore *code* / no data-lane SoT / no SP4
+doc. Ordering rationale follows the data dependency: contracts/seams
+(T0–T3) → pure logic (T4-classify is folded into T3? no — see below) →
+executors that consume them (T5–T7) → CLI/audit surface (T8) →
+suite-level proof (T9).
+
+- **T0 — `ops/engine_sdlc/` package + ECR contract + checklist.**
+  *Create:* `ops/engine_sdlc/__init__.py` (one-line docstring noting
+  ops is exempt from the check_imports tpcore∌engine scan, parity with
+  `ops/lab/__init__.py`), `ops/engine_sdlc/ecr.py`
+  (`ECRAction`, `EngineChangeRequest` frozen pydantic-v2
+  `extra="forbid"` + the exactly-one-action model validator,
+  `parse_ecr(text) -> EngineChangeRequest` strict fenced-block parser
+  that rejects unknown keys / wrong-block fields with the exact
+  reason), `docs/superpowers/checklists/engine_change_request.md` (the
+  copy/fill block, symmetric in feel to `data_feed_change_request.md`,
+  with the §6 operator-interaction policy header).
+  *Create test:* `tpcore/tests/test_ecr_parse.py` —
+  `test_{valid_add_parses,valid_remove_parses,valid_modify_parses,
+  unknown_key_rejected,cross_block_field_rejected,multi_action_
+  rejected,nonparsing_rejected_with_reason}` (lazy `import
+  ops.engine_sdlc.ecr` inside each).
+  *Pinning test:* `test_unknown_key_rejected` +
+  `test_multi_action_rejected` (the strict-parser contract).
+
+- **T1 — O1: per-engine `default_params()` + dispatcher + wiring +
+  parity test (carry-forward; H-S3-8).**
+  *Create:* `default_params() -> dict[str, Any]` module-level pure fn
+  in `reversion/backtest.py`, `vector/backtest.py`,
+  `momentum/backtest.py` (returns current defaults for **exactly** that
+  engine's `PARAM_RANGES` keys — reuse the existing module accessors:
+  reversion `_hard_stop_pct`/`_max_hold_days`/`_volume_climax_threshold`
+  + the `Z_SCORE_THRESHOLD` default; vector `_pb_ceiling`/`_de_ceiling`/
+  `_catalyst_window_days`/`_hard_stop_pct`/`_swing_score_threshold`;
+  momentum the existing `_lookback`/`_skip`/`_hold`/`_top_decile`
+  block); `ops/engine_sdlc/default_params.py` (lazy per-engine import
+  dispatcher, parity with `ops/lab/run.py::_runner_for`).
+  *Modify:* `ops/lab/run.py::_build_lab_result` — replace the
+  `# TODO(SP3)` line with `ParamDelta(current=default_params(args.
+  engine)[k], winning=v)`.
+  *Create test:* `tpcore/tests/test_engine_default_params_parity.py` —
+  `test_each_param_ranges_engine_default_keyset_equals_param_ranges`
+  (the cannot-be-forgotten clockwork), `test_sentinel_canary_have_no_
+  accessor`.
+  *Re-run unchanged as gate:* the T1 characterization oracle
+  `scripts/tests/test_search_parameters_characterization.py` (must pass
+  identically — pins rc + credibility-call args, not `param_diff`).
+  *Pinning test:* `test_each_param_ranges_engine_default_keyset_equals_
+  param_ranges` (a new searched param without a default fails CI).
+
+- **T2 — `credibility_pool` threading (carry-forward; H-S3-8).**
+  *Modify:* `ops/lab/run.py::_run_lab_core` — when a `LabContext` is
+  active **and** `candidate is not None`, use the active context's
+  `credibility_pool` for the `write_credibility_score` call instead of
+  `asyncpg.create_pool`; `candidate is None` (legacy CLI, no
+  LabContext) keeps its own pool **byte-identical**. The
+  `write_credibility_score(engine_name=…, score=…)` call args are
+  unchanged in both paths.
+  *Create test:* `tpcore/tests/test_lab_credibility_pool_threaded.py::
+  test_active_labcontext_write_uses_context_pool_no_second_rw_pool`
+  (DB-gated, skip-without-`DATABASE_URL`, parity with
+  `test_lab_isolation.py`'s gating).
+  *Re-run unchanged as gate:* `test_lab_isolation.py` (zero live-write
+  delta + no-poison still green) **and** the T1 oracle (unchanged).
+  *Pinning test:* `test_active_labcontext_write_uses_context_pool_no_
+  second_rw_pool`.
+
+- **T3 — Lab `LabResult` JSON sidecar (design-defect fix; H-S3-9) +
+  the planner-side sidecar loader/verifier.**
+  *Modify:* `ops/lab/dossier.py::write_lab_dossier` — additionally
+  write `<dossier>.json = LabResult.model_dump_json()` (rendered `.md`
+  byte-unchanged).
+  *Create:* `ops/engine_sdlc/_evidence.py` —
+  `load_labresult_sidecar(md_path) -> LabResult` (resolve the sibling
+  `.json`, `LabResult.model_validate_json`, `extra="forbid"`; raise a
+  typed `EvidenceError` with the exact reason on missing/tampered).
+  *Create test:* `tpcore/tests/test_lab_dossier_sidecar.py::
+  test_sidecar_roundtrips_labresult_and_md_unchanged`,
+  `::test_loader_rejects_missing_sidecar`,
+  `::test_loader_rejects_tampered_extra_field`.
+  *Pinning test:* `test_sidecar_roundtrips_labresult_and_md_unchanged`
+  (round-trip fidelity + markdown byte-stability).
+
+- **T4 — `classify()` + `TransitionPlan` + the closed classification
+  table (pure, no I/O) + `validate()`'s dry-consistency mechanism
+  (H-S3-1, H-S3-2 read-side).**
+  *Create:* `ops/engine_sdlc/planner.py` — `TransitionPlan`
+  (frozen: `from_state`, `to_state`, `sot_diff`, `fs_ops`,
+  `gate_checks`, `approval_class`, `rejection: str | None`);
+  `classify(ecr, profile_snapshot) -> TransitionPlan` (the **total,
+  closed** §5.1 table — every `(action, in-profile?, from_state,
+  source)` maps to an edge or a typed rejection); `validate(plan,
+  *, repo_root)` skeleton with the **isolated-temp-tree subprocess
+  consistency runner** (`shutil.copytree` minus `.git/.venv/__pycache__
+  /backtests` → `python -m pytest tpcore/tests/test_engine_lifecycle_
+  consistency.py -q` with `cwd`=temp → pass iff rc0) — executors
+  (T5–T7) fill the action-specific staging.
+  *Create test:* `tpcore/tests/test_engine_sdlc_planner.py` —
+  `test_classify_every_table_cell` (every row of §5.1 incl. every
+  rejection: ADD-exists, REMOVE-absent, REMOVE-retired, MODIFY-absent,
+  MODIFY-retired), `test_validate_runs_real_clockwork_in_isolated_tree`
+  (a staged half-state tree ⇒ `validate` rejects with the clockwork's
+  own failure text), `test_profile_rewrite_adds_no_import`.
+  *Pinning test:* `test_classify_every_table_cell` +
+  `test_validate_runs_real_clockwork_in_isolated_tree`.
+
+- **T5 — REMOVE executor + EULOGY template + completed archive-leg
+  clockwork + atomicity (H-S3-3, H-S3-4, H-S3-5, H-S3-2 REMOVE leg).**
+  *Create:* `tpcore/templates/eulogy_template.md` (Sigma-validated
+  section structure: title+date / `## Cause of death` / `## What it
+  leaves behind` / `## Retirement checklist` — structure only, not
+  Sigma content).
+  *Modify:* `ops/engine_sdlc/planner.py` — the REMOVE `apply` leg:
+  AST-validated single-entry `_PROFILE` flip to RETIRED +
+  `allocator_eligible=False`; `shutil` package move
+  `<engine>/ → archive/<engine>/` (+ by-name wrapper scripts) **last**;
+  EULOGY render from template; the enumerated shadow edits
+  (`run_smoke_test.sh` step-3 loop, `pyproject` testpaths/include) +
+  the conditional `test_dispatch_order_invariant_is_the_frozen_literal`
+  literal rewrite **iff** the roster changes; `ENGINE_TABLES` orphan
+  removal; the journaled pre-state + reverse-order restore.
+  *Modify (extend in place):* `tpcore/tests/test_engine_lifecycle_
+  consistency.py` — add the H-S3-5 assertions (EULOGY content floor;
+  RETIRED-absent shadow purge; no-orphan-archive; RETIRED ⇒ not
+  importable).
+  *Create test:* in `test_engine_sdlc_planner.py` —
+  `test_remove_throwaway_engine_end_to_end` (synthetic fixture engine
+  in a temp tree → clean retire → the extended clockwork passes),
+  `test_apply_red_consistency_rolls_back_to_byte_identical`,
+  `test_apply_move_failure_restores_text_edits`,
+  `test_profile_rewrite_is_ast_valid_and_preserves_siblings`,
+  `test_malformed_rewrite_aborts_with_zero_disk_change`,
+  `test_remove_rostered_engine_updates_frozen_literal`.
+  *Pinning test:* `test_remove_throwaway_engine_end_to_end` +
+  `test_apply_red_consistency_rolls_back_to_byte_identical`.
+
+- **T6 — ADD executor (new_scaffold + lab_candidate) + readiness build
+  gate (H-S3-11, H-S3-2 ADD leg).**
+  *Modify:* `planner.py` — ADD `apply` leg: scaffold from
+  `tpcore/templates/engine_template/` (new_scaffold) or from the
+  Lab-proven candidate (lab_candidate, sidecar-verified via T3
+  `_evidence`); insert the LAB `_PROFILE` entry (AST-safe, before the
+  `allocator` sentinel anchor, `allocator_eligible=False`); run the
+  programmatically-checkable `engine_readiness.md` items against the
+  staged scaffold; assert the frozen-literal is **unchanged** (LAB not
+  rostered).
+  *Create test:* `test_engine_sdlc_planner.py::test_add_{new_scaffold_
+  rejects_gate_fields,lab_candidate_requires_promote_new,readiness_miss_
+  rejects,always_lands_LAB,leaves_frozen_literal_untouched}`.
+  *Pinning test:* `test_add_always_lands_LAB` +
+  `test_add_lab_candidate_requires_promote_new`.
+
+- **T7 — MODIFY executor + zero-trust evidence re-verification +
+  LAB→PAPER `promote` (H-S3-6).**
+  *Modify:* `planner.py` — the MODIFY branch: re-derive from the T3
+  sidecar (verdict/dsr/cred/recommended_exit==`fold_existing`/
+  target_engine/identity-freshness/`PARAM_RANGES` membership/value
+  match); assert `plan.sot_diff` **empty**; apply the validated
+  `current→winning` diff to the engine's `default_params()` source
+  (the O1 seam — line-anchored edit of the engine `backtest.py`
+  default tokens, AST-validated). The automated gated `LAB→PAPER
+  promote` edge (capital-gate/`graduation_ready` authority, no y/n).
+  *Create test:* `test_engine_sdlc_planner.py::test_modify_rejects_
+  {forged_numbers,wrong_target,non_param_ranges_key,value_mismatch,
+  stale_sidecar}`, `::test_modify_plan_sot_diff_is_always_empty`,
+  `::test_promote_flips_lab_to_paper_iff_gate_green`.
+  *Pinning test:* `test_modify_plan_sot_diff_is_always_empty` +
+  `test_modify_rejects_forged_numbers`.
+
+- **T8 — `ops/engine_sdlc/__main__.py` CLI + audit emit
+  (H-S3-7, H-S3-12).**
+  *Create:* `ops/engine_sdlc/__main__.py` (`python -m ops.engine_sdlc`,
+  separate OS process, never wired to a daemon; mirrors
+  `ops/lab/__main__.py::_amain` shape): parse → classify → validate →
+  render diff → (ADD/REMOVE) explicit TTY `y`/`yes` gate, fail-closed
+  on anything else/EOF/non-TTY → apply; (MODIFY/promote) automated
+  apply + done-receipt; `ENGINE_CHANGE_REQUEST` `application_log` emit
+  on **every** terminal outcome; explicit non-zero, never silent 0.
+  *Create test:* `tpcore/tests/test_engine_sdlc_cli.py::test_{parse_
+  fail_rc1,reject_rc1,non_y_declines_zero_mutation,eof_declines,
+  rejected_plan_never_prompts,apply_rc0,every_outcome_emits_audit,no_
+  args_rc_nonzero}`.
+  *Pinning test:* `test_non_y_declines_zero_mutation` +
+  `test_every_outcome_emits_audit`.
+
+- **T9 — Suite-level proof + lane/scope gate (H-S3-10).**
+  *No new behaviour.* Run, and pin green: `ruff check`,
+  `python -m tpcore.scripts.check_imports tpcore <every live engine>`
+  (tpcore∌engine still clean — SP3 added zero tpcore→engine import),
+  the full SP1 `test_engine_lifecycle_consistency.py` (incl. the T5
+  extensions), the SP2 T1 oracle + `test_lab_isolation.py`
+  (both unchanged-green), every new SP3 test, `bash -n` on any new/
+  edited wrapper scripts. *Create:* a scope-diff assertion
+  (`scripts/tests/` or a doc check) that the SP3 change set is confined
+  to the §8 net-new surface + the enumerated in-place extends — **no**
+  `CLAUDE.md`/`OPERATIONS.md`/`glossary.md`/data-lane SoT touched
+  (SP4/data-lane boundary).
+  *Pinning test:* the green full suite + the scope-diff assertion.
+
+> **Ordering invariants (TDD-correct, reviewer-uncatchable hazards
+> pre-empted):** (i) the archive-leg clockwork extension (H-S3-5) lands
+> **with** the REMOVE executor (T5), never earlier — landing it before
+> T5 would red-fail an honest build with no producer of a clean retire
+> (a behavior's pinning test ships with the behavior); (ii) the JSON
+> sidecar (T3) lands **before** the executors that consume it (T5–T7)
+> — the planner's sidecar reader has no producer until T3; (iii) the O1
+> `_build_lab_result` wiring (T1) and the pool threading (T2) each
+> re-run the **unchanged** SP2 T1 oracle / `test_lab_isolation.py` as
+> their own gate, so an SP2 regression fails *that* task, not T9; (iv)
+> every SP3 test file is in `tpcore/tests/` with **lazy** in-body
+> `ops.engine_sdlc` imports — the `scripts/ops.py`↔`ops/` `sys.modules`
+> collision (SP2 T9/T10's bite) cannot occur at collection; (v) `apply`
+> never runs git and never enables trading — the consistency subprocess
+> is the only gate, the operator commits separately (R2 accepted).
 
 ---
 
 ## 12. Open items needing an OPERATOR decision
 
-None are design-blocking. The one item that is a genuine
-*risk-acceptance* (not design) call, recorded with the expert's default
-so SP3 is not blocked:
+None are design-blocking. There are no open expert-default items: the
+one *risk-acceptance* axis has been operator-decided.
 
-- **MODIFY approval class.** Defaulted to **automated-if-gated** with
-  the full §6.2 justification + the zero-trust guardrail. This is the
-  expert's call per the lane's "delegate design to the expert" rule;
-  it is surfaced here only because it is the one place the dispatch
-  brief flagged as a legitimate operator *risk-acceptance* axis. The
-  operator may, with a one-line policy flip (not a redesign), elect to
-  hold MODIFY for y/n — the spec is built so that is a config of the
-  approval-class table, not an architectural change. **Default stands;
-  SP3 proceeds automated-if-gated.**
+- **MODIFY approval class — OPERATOR-CONFIRMED (2026-05-18):
+  automated-if-it-passes-the-DSR≥0.95/credibility≥60-gate.** This is
+  **no longer an expert default** — the operator explicitly chose
+  automated-if-gated over the y/n option **and** over the
+  live-only-hybrid (recorded 2026-05-18; matches the §6.2 / §6
+  approval-class-table decision, which stands as operator-confirmed).
+  The full §6.2 justification + the H-S3-6 zero-trust guardrail + the
+  paper-only backstop bound the residual (R1, §11.2). The documented
+  one-line escape-hatch is retained: the operator may, with a single
+  policy flip in the §6 approval-class table (a config change, **not**
+  a redesign), elect to hold a specific MODIFY for y/n. **Decision is
+  operator-owned and final; SP3 proceeds automated-if-gated.**
 
 ---
 
-*End of SP3 design. `§11 Hardening` to be filled by the expert-harden
-pass (H-S3-* + T0–Tn) before writing-plans.*
+*End of SP3 design. `§11 Hardening` (H-S3-* register + §11A T0–T9 TDD
+decomposition + §11.2 residuals + §11.3 fixed defects) completed by the
+adversarial expert-harden pass 2026-05-18 — ready for writing-plans.*
