@@ -72,6 +72,25 @@ VALUES
 
 
 @dataclass(frozen=True)
+class UndispositionedEntry:
+    """The STRUCTURED open-undispositioned data-lane escalation —
+    the machine-consumable counterpart of the human ``undispositioned``
+    line. Both the rendered string AND this struct derive from the SAME
+    ``open_esc`` row inside ``build_weekly_digest`` (single source; no
+    duplicated logic). Consumers that need a clean ``ref`` (e.g. the
+    consolidated defect register) read THIS — never regex-scrape the
+    display string (a display-format change would silently break them;
+    the doctrine is "consume the structured SoT datum")."""
+
+    ref: str
+    etype: str
+    recorded_at: datetime
+    message: str
+    policy: str  # the inline disposition-policy label (== _disposition_label)
+    rendered: str  # the exact human line emitted in ``undispositioned``
+
+
+@dataclass(frozen=True)
 class WeeklyDigest:
     iso_week: str          # e.g. "2026-W20" — the idempotency key
     period_start: datetime
@@ -80,6 +99,10 @@ class WeeklyDigest:
     self_heals: list[str]
     near_miss_gates: list[str]
     undispositioned: list[str]
+    # Additive structured surface (pure add — ``undispositioned`` above
+    # and every existing consumer are byte-unchanged). Same length /
+    # order as ``undispositioned``; entry i is the struct for line i.
+    undispositioned_entries: list[UndispositionedEntry]
     most_likely_wrong: str
     generated_at: datetime
 
@@ -276,17 +299,30 @@ async def build_weekly_digest(pool: Any, now: datetime | None = None) -> WeeklyD
             f"(conf {p.get('confidence')}) — PR {link}"
         )
 
-    undispositioned = [
-        f"{r['recorded_at']:%Y-%m-%d} [{r['etype']}] ref={r['ref']} "
-        f"{r['message']} | {_disposition_label(r['etype'])}"
-        f"{_llm_suffix(r['ref'])}"
-        for r in open_esc
-    ]
+    # Single source: build the structured entry per open_esc row and
+    # derive the human line from it. The rendered string and the struct
+    # cannot disagree (no duplicated formatting / no regex round-trip).
+    undispositioned_entries: list[UndispositionedEntry] = []
+    for r in open_esc:
+        policy = _disposition_label(r["etype"])
+        rendered = (
+            f"{r['recorded_at']:%Y-%m-%d} [{r['etype']}] ref={r['ref']} "
+            f"{r['message']} | {policy}{_llm_suffix(r['ref'])}"
+        )
+        undispositioned_entries.append(
+            UndispositionedEntry(
+                ref=r["ref"], etype=r["etype"],
+                recorded_at=r["recorded_at"], message=r["message"],
+                policy=policy, rendered=rendered,
+            )
+        )
+    undispositioned = [e.rendered for e in undispositioned_entries]
 
     return WeeklyDigest(
         iso_week=_iso_week(now), period_start=start, period_end=now,
         cutovers=cutovers, self_heals=self_heals,
         near_miss_gates=near_miss_gates, undispositioned=undispositioned,
+        undispositioned_entries=undispositioned_entries,
         most_likely_wrong=mlw, generated_at=now,
     )
 
