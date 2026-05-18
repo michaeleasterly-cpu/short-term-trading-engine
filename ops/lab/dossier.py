@@ -78,6 +78,11 @@ def dossier_path(r: LabResult) -> Path:
 def write_lab_dossier(r: LabResult) -> Path:
     p = dossier_path(r)
     p.write_text(render_lab_dossier(r))
+    # H-S3-9 (D1 fix): the automated-MODIFY gate (SP3) re-derives every
+    # number from a machine-readable frozen artifact, NEVER scraped
+    # rendered markdown. model_dump_json is deterministic field order
+    # (frozen pydantic). The .md above is byte-unchanged.
+    p.with_suffix(".json").write_text(r.model_dump_json())
     return p
 
 
