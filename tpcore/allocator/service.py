@@ -41,7 +41,7 @@ import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
 from tpcore.aar import AARReader
-from tpcore.engine_profile import archived_engines
+from tpcore.engine_profile import allocator_eligible_engines, archived_engines
 from tpcore.indicators.chop import (
     CHOP_SIDEWAYS_STRONG,
     CHOP_SIDEWAYS_WEAK,
@@ -86,6 +86,7 @@ REGIME_CHOP_LOOKBACK_SESSIONS = 60
 # of how the allocator's managed-engine set is configured. Add an
 # engine here only when it is archived (see archive/<engine>/EULOGY.md).
 _ARCHIVED_ENGINES: tuple[str, ...] = archived_engines()
+_DEFAULT_ENGINES: tuple[str, ...] = allocator_eligible_engines()
 
 
 class AllocationDecision(BaseModel):
@@ -149,7 +150,7 @@ class AllocatorService:
         # (fixed 10–20% cap), not the inverse-vol pool.
         # canary excluded by omission — pipeline-exercise heartbeat,
         # never reweighted (spec §5a).
-        engines: tuple[str, ...] = ("reversion", "vector", "momentum"),
+        engines: tuple[str, ...] = _DEFAULT_ENGINES,
         platform_capital: Decimal = Decimal("40000"),
         enforce_freeze: bool = False,
         as_of: date | None = None,
