@@ -825,10 +825,10 @@ def _build_lab_result(
     already-computed :class:`_LabCore` — pure, no DB, no re-run. The
     recommendation is a deterministic function of the numbers (D-SP2-8:
     SP2 recommends, never applies): FAILED → ``"none"``; SURVIVED →
-    the candidate's declared intent. No ``default_params()`` accessor
-    exists on any engine (O1 was folded into the spec but not built in
-    T1–T9), so ``param_diff`` honestly carries the winning value with
-    ``current=None`` (unknown — there is no engine-default seam to read).
+    the candidate's declared intent. The O1 ``default_params()`` seam
+    (SP3 T1) supplies the live default for each swept param, so
+    ``param_diff`` carries the real ``current → winning`` diff
+    (SP3 §7.1).
     """
     # LabResult.credibility_rubric is non-optional (spec §7). _LabCore
     # carries it as Any | None; if a run produced none, raise the clean
@@ -840,9 +840,10 @@ def _build_lab_result(
         )
     verdict = "SURVIVED" if core.survived else "FAILED"
     recommended_exit = candidate.intent if core.survived else "none"
+    from ops.engine_sdlc.default_params import default_params
+    _live_defaults = default_params(args.engine)
     param_diff = [
-        # TODO(SP3): current=None until a per-engine default_params() accessor exists (spec O1, deferred from SP2 — see docstring).
-        ParamDelta(name=k, current=None, winning=v)
+        ParamDelta(name=k, current=_live_defaults.get(k), winning=v)
         for k, v in sorted(core.winner_params.items())
     ]
     walk_windows = [
