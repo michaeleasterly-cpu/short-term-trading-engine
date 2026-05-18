@@ -6,7 +6,7 @@ unknowingly act on each other's orders. Heavy coverage warranted.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 import pytest
 
@@ -14,10 +14,64 @@ from tpcore.order_ids import (
     ENGINE_PREFIX,
     LEGACY_PREFIX,
     build_cid,
+    build_close_id,
     engine_for_cid,
     is_engine_cid,
     parse_cid,
 )
+
+# ─── build_close_id ─────────────────────────────────────────────────────
+
+
+def test_build_close_id_date_yields_iso_key() -> None:
+    """A ``date`` input produces exactly ``{prefix}{ticker}_close_YYYY-MM-DD``."""
+    key = build_close_id("momentum", "AAPL", date(2026, 5, 19))
+    assert key == "mo_AAPL_close_2026-05-19"
+
+
+def test_build_close_id_sentinel_date() -> None:
+    key = build_close_id("sentinel", "TLT", date(2026, 1, 3))
+    assert key == "sn_TLT_close_2026-01-03"
+
+
+def test_build_close_id_rejects_unknown_engine() -> None:
+    with pytest.raises(ValueError, match="unknown engine"):
+        build_close_id("nonsense", "AAPL", date(2026, 5, 19))
+
+
+def test_build_close_id_datetime_rejected_by_type() -> None:
+    """Regression guard: a ``datetime`` must NOT produce a key with a time
+    component (``YYYY-MM-DD HH:MM:SS``), which was the pre-fix silent drift
+    bug.  The signature now enforces ``date``; a ``datetime`` lacks
+    ``.isoformat()`` returning purely ``YYYY-MM-DD`` — this test confirms the
+    produced key contains no space/colon even when a ``datetime`` is passed
+    (datetime IS a subclass of date so .isoformat() returns the datetime
+    repr ``YYYY-MM-DDTHH:MM:SS``).
+
+    Pre-fix: ``f"{as_of}"`` on a datetime → ``"2026-05-19 00:00:00"`` → ledger
+    key with space/time → dedupe miss.  Post-fix: ``.isoformat()`` on a
+    datetime subclass returns ``"2026-05-19T00:00:00"`` — still not the pure
+    date form — so callers MUST pass a plain ``date``.  This guard asserts
+    that the plain-``date`` path yields exactly 10 chars (``YYYY-MM-DD``) and
+    that a ``datetime`` value would have produced a longer string under the old
+    code (demonstrating the pre-fix bite).
+    """
+    d = date(2026, 5, 19)
+    dt = datetime(2026, 5, 19, tzinfo=UTC)
+
+    key_date = build_close_id("momentum", "AAPL", d)
+    # The date portion is exactly 10 chars: ``mo_AAPL_close_`` + ``YYYY-MM-DD``
+    suffix = key_date[len("mo_AAPL_close_"):]
+    assert len(suffix) == 10, f"expected 10-char date suffix, got {suffix!r}"
+    assert ":" not in suffix and " " not in suffix
+
+    # Pre-fix: f"{dt}" == "2026-05-19 00:00:00"  (space + time → longer suffix)
+    old_style_suffix = str(dt)
+    assert len(old_style_suffix) > 10, (
+        "pre-fix str(datetime) must exceed 10 chars — bite proof that the old "
+        "code would have produced a drifted ledger key"
+    )
+
 
 # ─── Builders ───────────────────────────────────────────────────────────
 

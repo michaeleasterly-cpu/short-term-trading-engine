@@ -67,6 +67,9 @@ class _StubGovernor:
     def __init__(self) -> None:
         self.registered: list[tuple[str, Decimal]] = []
         self.fills: list[tuple[str, Decimal, int]] = []
+        # #251 B1: closes funnel through the idempotent record_close
+        # arbiter (not raw record_fill(-1)). Spy on (engine, trade_id, pnl).
+        self.closes: list[tuple[str, str, Decimal]] = []
 
     async def register_engine(self, engine_id, engine_equity, limits=None):
         self.registered.append((engine_id, engine_equity))
@@ -76,6 +79,10 @@ class _StubGovernor:
 
     async def record_fill(self, engine_id, realized_pnl, position_delta):
         self.fills.append((engine_id, realized_pnl, position_delta))
+
+    async def record_close(self, engine_id, trade_id, realized_pnl=Decimal("0")):
+        self.closes.append((engine_id, trade_id, realized_pnl))
+        return True
 
     async def check_trade(self, **_kwargs):  # pragma: no cover - patched out
         raise AssertionError("check_trade should go through gate_batch_order")
@@ -285,16 +292,18 @@ class _StubExecutionWithExits(_StubExecution):
 
 async def test_sentinel_decrements_governor_slot_on_close(monkeypatch) -> None:
     """Each successfully-submitted SELL (a closed basket member) frees one
-    governor position slot via ``record_fill(position_delta=-1)``.
+    governor slot via the idempotent ``record_close`` arbiter (#251 B1) —
+    NOT the old raw ``record_fill(position_delta=-1)`` dual-decrement path.
 
     ``gate_batch_order`` is stubbed to True so its own ALLOW-side
-    ``record_fill(+1)`` accounting is out of the picture — the ONLY
-    ``record_fill`` calls the spy can see are the new exit-side decrements.
-    The decision yields two SELLs (SH, PSQ) and one BUY (GLD); only the
-    two SELLs must produce a decrement, each carrying ``realized_pnl == 0``
-    (P&L is reconciled via the AAR path — adding it here would
-    double-count).
+    accounting is out of the picture. The decision yields two SELLs
+    (SH, PSQ) and one BUY (GLD); only the two SELLs must produce a
+    ``record_close``, each keyed by the stable per-(engine,ticker,
+    rebalance-date) close-id with ``realized_pnl == 0`` (P&L is
+    reconciled via the AAR path — adding it here would double-count).
     """
+    from tpcore.order_ids import build_close_id
+
     governor, broker = _patch_scheduler(monkeypatch)
     monkeypatch.setattr(
         scheduler_module, "SentinelExecutionRisk", _StubExecutionWithExits
@@ -307,14 +316,14 @@ async def test_sentinel_decrements_governor_slot_on_close(monkeypatch) -> None:
         sched = SentinelScheduler(submit_orders=True)
         await sched.run_once(as_of=AS_OF)
 
-    # Exactly the two SELLs (SH, PSQ) were submitted → two decrements.
-    assert governor.fills == [
-        ("sentinel", Decimal("0"), -1),
-        ("sentinel", Decimal("0"), -1),
+    # No raw record_fill(-1) dual-decrement any more.
+    assert governor.fills == []
+    # Exactly the two SELLs (SH, PSQ) → two record_close calls, keyed.
+    assert governor.closes == [
+        ("sentinel", build_close_id("sentinel", "SH", AS_OF), Decimal("0")),
+        ("sentinel", build_close_id("sentinel", "PSQ", AS_OF), Decimal("0")),
     ]
-    assert sum(1 for _e, _p, d in governor.fills if d == -1) == 2
-    # No realized P&L recorded here (double-count guard).
-    assert all(pnl == Decimal("0") for _e, pnl, _d in governor.fills)
+    assert len(governor.closes) == 2
 
 
 if __name__ == "__main__":  # pragma: no cover
