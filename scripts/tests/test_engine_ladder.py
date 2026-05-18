@@ -21,8 +21,11 @@ def test_disposition_enum_is_converted_structural_removed():
 
 
 def test_known_classes_derived_from_real_constants():
+    # Phase-0: KNOWN is the explicit 3-way union — INFRA (DA-1) +
+    # PLATFORM_SERVICE (engine-daemon co-hosted) + {behavioral} (DA-2).
     assert el.KNOWN_ESCALATION_CLASSES == (
-        es.INFRA_FAILURE_CLASSES | {at._BEHAVIORAL})
+        es.INFRA_FAILURE_CLASSES | es.PLATFORM_SERVICE_FAILURE_CLASSES
+        | {at._BEHAVIORAL})
 
 
 def test_every_known_class_has_a_policy():
@@ -42,6 +45,29 @@ def test_escalation_drift_empty_in_lockstep():
     missing, extra = el.escalation_drift()
     assert missing == set(), f"classes with no disposition policy: {missing}"
     assert extra == set(), f"disposition policies for unknown classes: {extra}"
+
+
+def test_platform_service_classes_in_known_set_and_have_structural_policy():
+    """Phase-0: the two engine-daemon co-hosted platform-service failure
+    classes must be in KNOWN (via the new frozenset union, NOT folded
+    into INFRA_FAILURE_CLASSES) AND each carry a STRUCTURAL policy — the
+    R2 clockwork tooth (escalation_drift stays empty)."""
+    psf = es.PLATFORM_SERVICE_FAILURE_CLASSES
+    assert psf == frozenset(
+        {"engine_service_task_crashloop", "engine_service_digest_failed"})
+    # not folded into INFRA
+    assert psf & es.INFRA_FAILURE_CLASSES == set()
+    # derived KNOWN set is the explicit 3-way union
+    assert el.KNOWN_ESCALATION_CLASSES == (
+        es.INFRA_FAILURE_CLASSES | psf | {at._BEHAVIORAL})
+    for cls in psf:
+        assert cls in el.KNOWN_ESCALATION_CLASSES
+        p = el.policy_for(cls)
+        assert p is not None
+        assert p.default is el.EngineEscalationDisposition.STRUCTURAL
+        assert p.rationale.strip()
+    missing, extra = el.escalation_drift()
+    assert missing == set() and extra == set()
 
 
 def test_escalation_drift_reports_missing_for_uncovered_class():
