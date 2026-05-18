@@ -62,11 +62,20 @@ import sys
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+# tpcore.lab is the engine-FREE contract layer (H-S2-1) — safe to import
+# at module top; only the engine packages stay lazy in _runner_for etc.
+from tpcore.lab.models import (
+    LabCandidate,
+    LabResult,
+    ParamDelta,
+    WalkWindowRecord,
+)
 
 # Each engine's run_for_search is imported lazily inside _runner_for so the
 # orchestrator stays importable even when an engine module is being refactored.
@@ -566,8 +575,37 @@ async def _load_universe_by_tier(db_url: str, max_tier: int) -> tuple[str, ...]:
     return tuple(r["ticker"] for r in rows)
 
 
-async def amain(args: argparse.Namespace, candidate: str | None = None) -> int:
-    """Walk-forward search + final held-back verdict.
+@dataclass
+class _LabCore:
+    """The structured outcome of one walk-forward Lab run — the shared
+    spine of ``amain`` (prints + int rc, oracle-pinned) and ``run_lab``
+    (returns a frozen ``LabResult`` for the dossier). Carrying the exact
+    locals ``amain`` already computes means the walk-forward is run
+    EXACTLY ONCE: ``run_lab`` does not re-execute it (T10 seam)."""
+
+    winner_params: dict
+    winner_score: float
+    held_metrics: SliceMetrics
+    dsr: float
+    full_credibility_score: int
+    credibility_rubric: Any | None
+    ranked: list[tuple[dict, float, int]]
+    windows: list[WalkWindow]
+    survived: bool
+
+
+async def _run_lab_core(
+    args: argparse.Namespace, candidate: str | None = None,
+) -> _LabCore | int:
+    """Walk-forward search + final held-back verdict — the orchestration
+    body shared by ``amain`` and ``run_lab``.
+
+    Returns an ``int`` rc for the three non-result outcomes (no DSN → 2,
+    no walk-forward windows fit → 2, no rankable trial → 1) — the exact
+    legacy stderr/stdout message is already printed inline, so
+    ``amain``'s observable contract (rc + the ``write_credibility_score``
+    call) is byte-identical pre/post extraction (T1 characterization
+    oracle). A successful run returns the :class:`_LabCore` spine.
 
     ``candidate`` is the Lab seam (H-S2-3): when set (a Lab run), the
     final credibility is persisted under the Lab-namespaced source
@@ -657,7 +695,7 @@ async def amain(args: argparse.Namespace, candidate: str | None = None) -> int:
     ranked = rank_candidates(trials)
     if not ranked:
         print("FAILED: no trial produced any rankable result (all errored or had < 3 trades).")
-        return 1
+        return 1  # noqa: RET504 — oracle-pinned non-result rc
 
     print("═══ Top 5 candidates by mean OOS score ═══")
     for i, (params, score, nw) in enumerate(ranked[:5], 1):
@@ -731,21 +769,123 @@ async def amain(args: argparse.Namespace, candidate: str | None = None) -> int:
         and final_result.credibility_score >= args.credibility_threshold
         and held_metrics.n_trades >= 3
     )
-    if survived:
+    return _LabCore(
+        winner_params=winner_params,
+        winner_score=winner_score,
+        held_metrics=held_metrics,
+        dsr=dsr,
+        full_credibility_score=int(final_result.credibility_score),
+        credibility_rubric=final_result.credibility_rubric,
+        ranked=ranked,
+        windows=windows,
+        survived=survived,
+    )
+
+
+async def amain(args: argparse.Namespace, candidate: str | None = None) -> int:
+    """Walk-forward search + final held-back verdict — prints the human
+    report and returns the int rc (0 SURVIVED / 1 FAILED / 2 setup
+    error). Behaviour is byte-identical to the pre-T10 ``amain``: the
+    structured spine is computed once by :func:`_run_lab_core` (no
+    duplicated walk-forward); this function only renders the verdict
+    block and maps it to the historical exit code (T1 oracle pins
+    ``amain(args, candidate) -> int`` + the ``write_credibility_score``
+    call args). ``candidate`` is the H-S2-3 Lab-namespacing seam.
+    """
+    core = await _run_lab_core(args, candidate)
+    if isinstance(core, int):
+        return core  # non-result outcome — message already printed inline.
+
+    print(f"  Trade count        : {core.held_metrics.n_trades}")
+    print(f"  Sharpe (held-back) : {core.held_metrics.sharpe:+.3f}")
+    print(f"  Profit factor      : {core.held_metrics.profit_factor:+.3f}")
+    print(f"  Max drawdown       : {core.held_metrics.max_drawdown*100:+.2f}%")
+    print(f"  Credibility (full) : {core.full_credibility_score}/100")
+    print(f"  DSR (n_trials={args.trials:>3}): {core.dsr:.4f}")
+    print()
+
+    if core.survived:
         print(f"  VERDICT: SURVIVED — DSR ≥ {args.dsr_threshold} AND credibility ≥ {args.credibility_threshold}")
-        print(f"  → recommend promoting these parameters: {json.dumps(winner_params, sort_keys=True)}")
+        print(f"  → recommend promoting these parameters: {json.dumps(core.winner_params, sort_keys=True)}")
         return 0
 
     print(f"  VERDICT: FAILED — DSR < {args.dsr_threshold} or credibility < {args.credibility_threshold}")
     print("\n  Top 5 alternatives (for the next iteration):")
-    for i, (params, score, nw) in enumerate(ranked[:5], 1):
+    for i, (params, score, nw) in enumerate(core.ranked[:5], 1):
         print(f"    {i}. score={score:+.3f}  windows={nw}  params={json.dumps(params, sort_keys=True)}")
     return 1
+
+
+def _build_lab_result(
+    *, candidate: LabCandidate, core: _LabCore, args: argparse.Namespace,
+) -> LabResult:
+    """Assemble the frozen SP2→SP3 contract (:class:`LabResult`) from the
+    already-computed :class:`_LabCore` — pure, no DB, no re-run. The
+    recommendation is a deterministic function of the numbers (D-SP2-8:
+    SP2 recommends, never applies): FAILED → ``"none"``; SURVIVED →
+    the candidate's declared intent. No ``default_params()`` accessor
+    exists on any engine (O1 was folded into the spec but not built in
+    T1–T9), so ``param_diff`` honestly carries the winning value with
+    ``current=None`` (unknown — there is no engine-default seam to read).
+    """
+    verdict = "SURVIVED" if core.survived else "FAILED"
+    recommended_exit = candidate.intent if core.survived else "none"
+    param_diff = [
+        ParamDelta(name=k, current=None, winning=v)
+        for k, v in sorted(core.winner_params.items())
+    ]
+    walk_windows = [
+        WalkWindowRecord(
+            train_start=w.train_start, train_end=w.train_end,
+            holdout_start=w.holdout_start, holdout_end=w.holdout_end,
+        )
+        for w in core.windows
+    ]
+    return LabResult(
+        candidate=candidate.name,
+        target_engine=candidate.target_engine,
+        intent=candidate.intent,
+        verdict=verdict,
+        dsr=core.dsr,
+        credibility_score=core.full_credibility_score,
+        credibility_rubric=core.credibility_rubric,
+        held_metrics=core.held_metrics.to_dict(),
+        winning_params=core.winner_params,
+        param_diff=param_diff,
+        recommended_exit=recommended_exit,
+        ranked_alternatives=[p for p, _s, _n in core.ranked[:5]],
+        walk_windows=walk_windows,
+        n_trials=args.trials,
+        seed=args.seed,
+        generated_at=datetime.now(UTC),
+    )
+
+
+async def run_lab(
+    args: argparse.Namespace, *, candidate: LabCandidate,
+) -> LabResult:
+    """The T10 CLI seam: run the walk-forward Lab EXACTLY ONCE (via the
+    same :func:`_run_lab_core` ``amain`` uses — no duplicated search) and
+    return the frozen :class:`LabResult` the dossier renders. Raises
+    ``RuntimeError`` for the non-result outcomes (no DSN / no windows /
+    no rankable trial) — the CLI maps that to an explicit non-zero rc,
+    never a silent 0. ``amain``'s behaviour is unchanged (the oracle is
+    unaffected: ``run_lab`` is additive and ``_run_lab_core`` preserves
+    every print + the ``write_credibility_score`` call site).
+    """
+    core = await _run_lab_core(args, candidate.name)
+    if isinstance(core, int):
+        raise RuntimeError(
+            f"Lab produced no result (rc={core}): no DSN, no walk-forward "
+            f"window fit the span, or no trial was rankable. See the "
+            f"message above."
+        )
+    return _build_lab_result(candidate=candidate, core=core, args=args)
 
 
 def main() -> None:  # pragma: no cover - CLI shim
     raise SystemExit(asyncio.run(amain(_parse_args())))
 
 
-if __name__ == "__main__":  # pragma: no cover
+if __name__ == "__main__":  # pragma: no cover - dev alias of `python -m ops.lab`
     main()
