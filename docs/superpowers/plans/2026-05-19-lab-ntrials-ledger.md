@@ -1170,10 +1170,69 @@ async def test_lab_ledger_disjoint_from_live_graduation(tmp_path):
         await audit.close()
 ```
 
-- [ ] **Step 2: Run test to verify it fails (or skips locally)**
+- [ ] **Step 1b: Write the MANDATORY DB-gated SUM-integer correctness test (closes the T0+T1-review Important gap — H-LL-9)**
 
-Run: `/Users/michael/short-term-trading-engine/.venv/bin/python -m pytest -q -p no:cacheprovider "tpcore/tests/test_lab_isolation.py::test_lab_ledger_disjoint_from_live_graduation" -v`
-Expected (local, no `DATABASE_URL`): SKIPPED (module-level `pytest.mark.skipif`). The static-disjointness assertions still must pass when run with a DB (CI). Expected with a DB but **before Task 4's emit existed**: FAIL on `ledger_after >= ledger_before + 1`. With Task 4 in place: PASS.
+The offline fakes (T1/T4/T8) re-implement the WHERE/JSON semantics in Python, so a SQL-TEXT bug in `cumulative_n_trials` (wrong JSON key `->>'trials'`→`->>'seed'`, `SUM`→`COUNT`, dropped `source=$1` predicate, `<`→`<=` strict-prior boundary, wrong cast) is NOT caught anywhere in T1–T11 without this. A silently-wrong SUM defeats SP-A's entire anti-laundering purpose. This test exercises the REAL SQL end-to-end against a real Postgres. Append to `tpcore/tests/test_lab_isolation.py` (same DB-gated file; reuses its skipif + helpers):
+
+```python
+async def test_cumulative_n_trials_real_db_integer_correctness():
+    """MAKE-OR-BREAK (H-LL-9). Seed KNOWN lab_trial_ledger rows in the
+    real DB and assert cumulative_n_trials returns the EXACT integer —
+    pins the live SQL: SUM (not COUNT), the notes::jsonb->>'trials'
+    int-cast (not another key), the source=$1 per-target predicate
+    (cross-target isolation), and the strict ``timestamp < before_ts``
+    boundary. None of these are observable through the offline fakes.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from tpcore.db import build_asyncpg_pool
+    from tpcore.lab.ledger import (
+        cumulative_n_trials,
+        ledger_source,
+        record_trial_spend,
+    )
+
+    url = os.environ["DATABASE_URL"]
+    pool = await build_asyncpg_pool(url, max_size=1)
+    try:
+        # Unique target so the assertion is independent of any prior
+        # ledger history in this DB (the SUM is monotone/append-only).
+        tgt = f"revtest_{datetime.now(UTC):%Y%m%d%H%M%S%f}"
+        other = f"vectest_{datetime.now(UTC):%Y%m%d%H%M%S%f}"
+        base = await cumulative_n_trials(pool, tgt, datetime.now(UTC))
+        assert base == 0, f"fresh target must be 0, got {base}"
+
+        t0 = datetime.now(UTC)
+        await record_trial_spend(pool, tgt, trials=40, seed=1)
+        await record_trial_spend(pool, tgt, trials=60, seed=2)
+        # Cross-target row that must NOT be summed into `tgt`.
+        await record_trial_spend(pool, other, trials=999, seed=9)
+        cutoff = datetime.now(UTC) + timedelta(seconds=1)
+        # A strictly-after row that must be EXCLUDED by `< cutoff`.
+        await record_trial_spend(pool, tgt, trials=7, seed=3)
+
+        got = await cumulative_n_trials(pool, tgt, cutoff)
+        assert got == 100, (
+            f"cumulative SUM wrong: expected 40+60=100 (cross-target "
+            f"{other}=999 excluded by source predicate; the trials=7 "
+            f"post-cutoff row excluded by strict '<'), got {got} — "
+            f"a SQL-text regression (JSON key / SUM / predicate / "
+            f"boundary) in cumulative_n_trials")
+        # Cross-target isolation, asserted from the other side too.
+        assert await cumulative_n_trials(pool, other, cutoff) == 999
+        # Strict-prior boundary: a before_ts == an existing row's ts
+        # excludes that row (proves '<' not '<=').
+        assert await cumulative_n_trials(pool, tgt, t0) == 0
+    finally:
+        await pool.close()
+```
+
+This is a **mandatory T7 deliverable**, not optional. Without it the live ledger SUM has zero real-DB verification and a boundary/JSON-key bug ships undetected.
+
+- [ ] **Step 2: Run the T7 tests to verify they fail (or skip locally)**
+
+Run: `/Users/michael/short-term-trading-engine/.venv/bin/python -m pytest -q -p no:cacheprovider "tpcore/tests/test_lab_isolation.py::test_lab_ledger_disjoint_from_live_graduation" "tpcore/tests/test_lab_isolation.py::test_cumulative_n_trials_real_db_integer_correctness" -v`
+Expected (local, no `DATABASE_URL`): both SKIPPED (module-level `pytest.mark.skipif`). With a DB but **before Task 4's emit / Task 1's helper existed**: `test_lab_ledger_disjoint…` FAILs on `ledger_after >= ledger_before + 1`; `test_cumulative_n_trials_real_db_integer_correctness` FAILs (helper/SQL absent or wrong). With Tasks 1+4 in place: both PASS. A SQL-text regression in `cumulative_n_trials` (wrong JSON key / SUM→COUNT / dropped source predicate / `<`→`<=`) makes `test_cumulative_n_trials_real_db_integer_correctness` FAIL in CI — this is the H-LL-9 closure.
 
 > This test is DB-gated by design (mirrors the existing isolation tests). It runs fully in CI. Do NOT force it locally.
 
