@@ -77,6 +77,13 @@ _CRASHLOOP_BUDGET = 3
 _SWEEP_SILENT_CLASS = "engine_service_sweep_silent"
 _DIGEST_STALLED_CLASS = "engine_service_digest_stalled"
 
+# A qualifying trigger older than this with no sweep ⇒ silent dispatch.
+# Must exceed the longest legitimate sweep so an in-flight long sweep is
+# never flagged — the synchronous-sweep + cursor-only-advances-after-
+# return invariant already guarantees a slow sweep advances the cursor
+# (so _find_new_trigger returns None) before this bound elapses.
+SWEEP_SILENT_SEC: int = 2 * POLL_INTERVAL_SEC + 300  # 420s
+
 
 def _engsvc_hold_id(failure_class: str, task_name: str) -> str:
     """Deterministic (NOT uuid4) hold_id so a re-escalation of the same
@@ -244,9 +251,38 @@ async def _run_supervised(name: str, factory, stop_event: asyncio.Event,
                 pass
 
 
+async def _maybe_escalate_sweep_silent(
+        pool, newest: datetime | None, now: datetime,
+        emitted: set[datetime]) -> None:
+    """#243 Phase 1 (a): escalate (advisory, escalate-only) when a
+    qualifying trigger landed but no sweep ran for it within
+    ``SWEEP_SILENT_SEC``. Deterministic; consumes the EXISTING
+    ``_find_new_trigger`` result (``newest``) — the green-``DATA_REPAIR_
+    COMPLETE`` SQL filter and the data calendar are NOT re-derived: a
+    quiet weekend / non-trading day / red repair emits no qualifying
+    trigger so ``newest`` is None and there is nothing to be late for. A
+    sweep that ran advanced the cursor past the trigger, so
+    ``_find_new_trigger`` returns None (no false positive). One-shot per
+    trigger ``recorded_at`` via ``emitted``. NEVER raises (the
+    ``_safe_emit_escalated`` wrapper isolates an emit failure)."""
+    if newest is None or newest in emitted:
+        return
+    if (now - newest).total_seconds() < SWEEP_SILENT_SEC:
+        return  # in-flight grace — sweep may still be running
+    emitted.add(newest)
+    await _safe_emit_escalated(
+        pool, engine="engine_service:sweep",
+        hold_id=_engsvc_hold_id(_SWEEP_SILENT_CLASS, "sweep"),
+        failure_class=_SWEEP_SILENT_CLASS,
+        reason=(f"qualifying trigger at {newest.isoformat()} produced no "
+                f"sweep within {SWEEP_SILENT_SEC}s"),
+        attempts=1)
+
+
 async def _main_loop(pool, stop_event: asyncio.Event) -> None:
     cursor = datetime.now(UTC) - INITIAL_CURSOR_LOOKBACK
     digest_state: dict = {"last": None}
+    sweep_silent_emitted: set[datetime] = set()
     logger.info(
         "engine_service.started",
         triggers=list(TRIGGER_EVENT_TYPES),
@@ -261,6 +297,17 @@ async def _main_loop(pool, stop_event: asyncio.Event) -> None:
         except Exception as exc:
             logger.error("engine_service.poll_failed", error=str(exc))
             newest = None
+
+        # #243 Phase 1 (a): a qualifying trigger that produced no sweep
+        # within the bound is a silent dispatch defect — escalate-only,
+        # advisory; the sweep below still runs (we surface that it was
+        # late, we do not suppress it). Crash-isolated.
+        try:
+            await _maybe_escalate_sweep_silent(
+                pool, newest, datetime.now(UTC), sweep_silent_emitted)
+        except Exception as exc:  # noqa: BLE001 — advisory; never abort the loop
+            logger.error("engine_service.sweep_silent_check_failed",
+                         error=str(exc))
 
         if newest is not None and newest > cursor:
             logger.info("engine_service.trigger_seen", recorded_at=newest.isoformat())
