@@ -78,6 +78,16 @@ _PROFILE: dict[str, EngineProfile] = {
     # sigma RETIRED (data-SDLC RETIRED symmetry, D-SDLC1-2). cadence/dispatch_order are arbitrary inert placeholders — RETIRED engines are filtered out of every dispatch/allocator accessor (T2) so these values are never consumed (D-SDLC1-6).
     "sigma":     EngineProfile(engine="sigma", cadence=Cadence.DAILY,
                                dispatch_order=99, lifecycle_state=LifecycleState.RETIRED),
+    # SP2 Lab sentinel: proves LifecycleState.LAB is a real exercised
+    # state. NOT a runnable engine — no package/scheduler; excluded from
+    # roster/allocator by _DISPATCHABLE; ephemeral experiments live in
+    # ops/lab.registry (D-SP2-4 two-tier). dispatch_order=50 reserved
+    # (gap between live ≤5 and retired 99), unique among non-RETIRED.
+    # cadence/dispatch_order are inert placeholders — LAB engines are
+    # filtered out of every dispatch/allocator accessor by _DISPATCHABLE
+    # (never scheduled).
+    "lab":       EngineProfile(engine="lab", cadence=Cadence.DAILY,
+                               dispatch_order=50, lifecycle_state=LifecycleState.LAB),
 }
 
 

@@ -26,6 +26,8 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
+from tpcore.lab.context import assert_not_in_lab
+
 if TYPE_CHECKING:  # pragma: no cover
     import asyncpg
 
@@ -111,6 +113,7 @@ class DBLogHandler:
     # ────────────────────────────────────────────────────────────────────
 
     async def startup(self, commit_sha: str | None = None) -> None:
+        assert_not_in_lab()
         await self.log(
             "STARTUP",
             f"{self._engine} scheduler run starting",

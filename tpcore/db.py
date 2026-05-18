@@ -47,21 +47,44 @@ async def build_asyncpg_pool(
     min_size: int = 1,
     max_size: int = 4,
     timeout: float = 10.0,
+    read_only: bool = False,
 ) -> asyncpg.Pool:
     """Create an ``asyncpg.Pool`` from a SQLAlchemy-style ``DATABASE_URL``.
 
     The Sigma scheduler is a one-shot cron service: a small pool is plenty
     and avoids holding extra connections against Supabase's pooled limits.
     Always close the pool with ``await pool.close()`` before exit.
+
+    ``read_only=True`` (or an active ``tpcore.lab`` ``_LAB_ACTIVE`` context)
+    builds a pool whose every connection runs with
+    ``default_transaction_read_only=on`` — any write raises asyncpg
+    ``ReadOnlySQLTransactionError`` server-side (the Lab isolation floor,
+    SDLC SP2 H-S2-2).
     """
     import asyncpg
 
-    return await asyncpg.create_pool(
+    # Local, import-error-guarded import: ``tpcore.lab.context`` is created
+    # in SDLC SP2 T3 and may not be merged when this builder lands. The guard
+    # makes T2 independently landable and keeps ``tpcore/db.py`` import-light
+    # / cycle-free — deliberate documented resilience, not a placeholder.
+    try:
+        from tpcore.lab.context import lab_is_active
+    except ImportError:
+        def lab_is_active() -> bool:
+            return False
+
+    server_settings: dict[str, str] = {}
+    if read_only or lab_is_active():
+        server_settings["default_transaction_read_only"] = "on"
+    kwargs: dict = dict(
         dsn=normalize_database_url(database_url),
         min_size=min_size,
         max_size=max_size,
         timeout=timeout,
     )
+    if server_settings:
+        kwargs["server_settings"] = server_settings
+    return await asyncpg.create_pool(**kwargs)
 
 
 __all__ = ["build_asyncpg_pool", "normalize_database_url"]

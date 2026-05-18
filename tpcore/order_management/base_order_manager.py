@@ -27,6 +27,7 @@ import structlog
 
 from tpcore.aar.writer import AARWriter
 from tpcore.interfaces.broker import BrokerExecutionInterface, Order
+from tpcore.lab.context import assert_not_in_lab
 from tpcore.parity import LivePaperParityHarness
 from tpcore.risk.governor import RiskGovernor
 
@@ -53,6 +54,7 @@ class BaseOrderManager:
         parity_harness: LivePaperParityHarness | None = None,
         pool: asyncpg.Pool | None = None,
     ) -> None:
+        assert_not_in_lab()
         self._broker = broker
         self._governor = governor
         self._capital_gate = capital_gate
