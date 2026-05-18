@@ -147,9 +147,9 @@ scripts/install_all_daemons.sh
 | `data_operations` | Daily refresh: 15-stage `ops --update` (final stage `forensics`) → audit → validation → compress → emits `DATA_OPERATIONS_COMPLETE` (engine sweep is fired by `engine_service`, not inline). | Mon-Fri 21:30 UTC |
 | `allocator` | Cross-engine capital rebalance (retired as launchd daemon 2026-05-17; now the first gated step in `ops/engine_dispatch.py`) | event-driven via engine_dispatch (WEEKLY_FIRST_TRADING_DAY) |
 
-The dashboard's **Daemons (launchd)** row goes 🔴 when any agent isn't installed, with an inline 🔧 Install all daemons button. Logs at `~/Library/Logs/short-term-trading-engine/{trade-monitor,engine-service,data-repair-service,data-operations}.{log,err}`. (Allocator is now event-driven via `engine_dispatch`; re-run `install_all_daemons.sh` to remove its live plist.)
+The dashboard's **Daemons (launchd)** row goes 🔴 when any agent isn't installed, with an inline 🔧 Install all daemons button. Logs at `~/Library/Logs/short-term-trading-engine/{engine-service,data-repair-service,data-operations}.{log,err}`. (Allocator is now event-driven via `engine_dispatch`; re-run `install_all_daemons.sh` to remove its live plist.)
 
-**Local vs. Railway execution shapes (2026-05-15).** The three launchd daemons above (plus `data_repair_service`) are the canonical Mac path (4 daemons total; allocator is event-driven via `engine_dispatch`, not launchd). Railway uses a different shape — see `railway.json` and `ops/platform_pipeline.py`: **three** services (`platform-pipeline`, `trade-monitor`, `allocator`), where `platform-pipeline` runs `ops.py --update` followed by `run_all_engines.sh` sequentially in a single process. The consolidation eliminates the inter-daemon `DATA_OPERATIONS_COMPLETE` polling dependency, which is unnecessary overhead in a stateless container environment. Stays under the Hobby-tier 5-service cap with headroom. Railway is currently paused (per `project_railway_hobby_tier.md`); the consolidated definitions are committed so a future re-enable just needs `python ops/apply_railway_service_config.py --all` + a git push. See MASTER_PLAN §8.1 for the full architecture.
+**Local vs. Railway execution shapes (2026-05-15; DA-3 consolidation 2026-05-18).** The launchd daemons above are the canonical Mac path: `engine-service` (consolidated — co-hosts the trade-monitor stream + the day-rollover weekly-digest trigger), `data-repair-service`, and `data-operations` (3 daemons total; allocator is event-driven via `engine_dispatch`, not launchd; trade-monitor + the weekly-digest cron-trigger folded into `engine-service` per DA-3). Railway uses a different shape — see `railway.json` and `ops/platform_pipeline.py`: **three** services (`platform-pipeline`, `trade-monitor`, `allocator`), where `platform-pipeline` runs `ops.py --update` followed by `run_all_engines.sh` sequentially in a single process. The consolidation eliminates the inter-daemon `DATA_OPERATIONS_COMPLETE` polling dependency, which is unnecessary overhead in a stateless container environment. Stays under the Hobby-tier 5-service cap with headroom. Railway is currently paused (per `project_railway_hobby_tier.md`); the consolidated definitions are committed so a future re-enable just needs `python ops/apply_railway_service_config.py --all` + a git push. See MASTER_PLAN §8.1 for the full architecture.
 
 Uninstall:
 ```bash
@@ -196,11 +196,11 @@ ORDER BY recorded_at DESC LIMIT 20;
 
 ### Trade Monitor daemon
 
-`tpcore.trade_monitor` watches Alpaca's `TradingStream` for fills. Required for Sigma + Reversion's Tier 2 cascade (limit-sell on Tier 1 fill); Momentum doesn't need it.
+`tpcore.trade_monitor` watches Alpaca's `TradingStream` for fills. Required for Sigma + Reversion's Tier 2 cascade (limit-sell on Tier 1 fill); Momentum doesn't need it. As of DA-3 (2026-05-18) the trade-monitor is **no longer a standalone daemon** — it is co-hosted inside the consolidated engine-service daemon (`ops/engine_service.py`); there is no `install_launchd_trade_monitor.sh`. Install via `scripts/install_all_daemons.sh`.
 
 ```bash
-scripts/run_trade_monitor.sh                       # foreground
-scripts/install_launchd_trade_monitor.sh           # install as persistent LaunchAgent
+scripts/run_trade_monitor.sh                       # foreground (manual / debug only)
+scripts/install_all_daemons.sh                     # installs the consolidated engine-service daemon (co-hosts trade-monitor)
 ```
 
 Without the monitor running, Tier-1 fills don't trigger Tier-2 submission — orders sit indefinitely in `platform.open_orders` (the YUMC orphan pattern, 2026-05-12).
@@ -212,7 +212,7 @@ scripts/run_all_engines.sh                  # sigma → reversion → vector →
 scripts/run_all_engines.sh --force          # bypass validation-green guard
 ```
 
-Refuses to run if `data_validation` has any red row in its latest result. Each scheduler is one-shot; the trade_monitor daemon must be running separately for Tier 2 cascade.
+Refuses to run if `data_validation` has any red row in its latest result. Each scheduler is one-shot; the trade-monitor (co-hosted in the consolidated engine-service daemon as of DA-3) handles the Tier 2 cascade.
 
 ### Forensics (2026-05-14, ops-integrated 2026-05-15)
 
@@ -361,7 +361,7 @@ The active execution environment is the operator's **local Mac**. Railway is pau
 | --- | --- | --- |
 | Daily ops (refresh universe + corp actions + fundamentals + validation + universe sim) | `python scripts/ops.py --full` | See "Daily Maintenance (via ops CLI)" below. Each stage has a 120 s timeout. |
 | Broker reachability smoke (single bracket order, cancelled immediately) | `python scripts/smoke_test.py` | Idempotent. Bypasses the engine order managers; just exercises the broker adapter. |
-| End-to-end pipeline smoke (engine → broker → trade_monitor → AAR) | `python scripts/pipeline_smoke_test.py` | **The current next-gate check** — branches on `tpcore.calendar`: LIVE mode (market open, full fill round-trip with quote-anchored TP/SL via `AlpacaDataAdapter.get_quote`) or WIRE mode (market closed, far-below limit + EVENT_* poll). Runnable any hour. Requires trade-monitor daemon running. |
+| End-to-end pipeline smoke (engine → broker → trade_monitor → AAR) | `python scripts/pipeline_smoke_test.py` | **The current next-gate check** — branches on `tpcore.calendar`: LIVE mode (market open, full fill round-trip with quote-anchored TP/SL via `AlpacaDataAdapter.get_quote`) or WIRE mode (market closed, far-below limit + EVENT_* poll). Runnable any hour. Requires the consolidated engine-service daemon running (co-hosts the trade-monitor stream). |
 | Engine submission run (Sigma / Reversion / Vector / Sentinel) | `python sigma/scheduler.py` (etc.) | Each scheduler is one-shot. Trade monitor must be running for sigma/reversion/vector Tier 2 cascade. Sentinel + Momentum use day-market orders only — no Tier 2 dependency. |
 | Trade monitor (live order-lifecycle worker) | `python -m tpcore.trade_monitor` | Persistent loop subscribed to Alpaca `TradingStream`. Required for Sigma/Reversion Tier 2 logic. |
 | Universe simulation (Sigma 187 / Reversion 4 / Vector 0 today) | `python scripts/simulate_universe.py` | Writes a `UNIVERSE_SIMULATION` event to `application_log`. |
@@ -1149,7 +1149,7 @@ Cleans up by cancelling all open Alpaca orders for SPY and deleting smoke `open_
 **Broker-vendor coupling.** The smoke test imports `AlpacaPaperBrokerAdapter` + `AlpacaDataAdapter` + `Order`/`OrderClass`/`OrderSide`/`OrderType`/`TimeInForce` directly. If/when the platform swaps brokers, this file is the largest single point that needs to migrate — abstract the broker/data adapter via factory + env-var config at that point.
 
 **Prerequisites**:
-- Trade-monitor daemon running (`scripts/install_launchd_trade_monitor.sh` keeps it up); the wire mode still requires the stream to be live since that's what we're testing.
+- The consolidated engine-service daemon running (`scripts/install_all_daemons.sh`) — it co-hosts the trade-monitor stream; the wire mode still requires the stream to be live since that's what we're testing.
 - `platform.open_orders` migration applied (20260512_0000).
 
 ```bash

@@ -3,21 +3,26 @@
 # Idempotent: existing agents are unloaded + reloaded.
 #
 # After this runs, the operator's mac will:
-#   * keep tpcore.trade_monitor running 24/7 (auto-restart on crash)
-#   * keep ops.engine_service running 24/7 — polls application_log for
-#     DATA_OPERATIONS_COMPLETE and fires the engine sweep when seen
-#   * keep ops.data_repair_service running 24/7 — polls application_log
-#     for ENGINE_DATA_REQUEST, runs the canonical self-heal, and emits
-#     exactly one terminal reply per request_id
+#   * keep ops.engine_service running 24/7 — the single consolidated
+#     engine daemon: DATA_OPERATIONS_COMPLETE-triggered sweep + co-hosted
+#     trade-monitor stream + day-rollover weekly-digest trigger
+#   * keep ops.data_repair_service running 24/7 (data-lane) — polls
+#     application_log for ENGINE_DATA_REQUEST, runs the canonical
+#     self-heal, and emits exactly one terminal reply per request_id
 #   * run scripts/run_data_operations.sh every weekday at 21:30 UTC
-#     (chains: data refresh → audit → validate → compress → emit event)
+#     (data-lane cron; chains: data refresh → audit → validate →
+#     compress → emit event)
 #
 # Note: the allocator is no longer a launchd daemon (retired 2026-05-17,
 # Sub-project C). It now runs as the first gated step in
 # ops/engine_dispatch.py (event-driven, WEEKLY_FIRST_TRADING_DAY).
-#   * emit the weekly data-layer digest (idempotent/ISO-week) — the
-#     operator's state-comprehension floor; unacked 2 weeks auto-
-#     de-escalates live trading
+#
+# Note: trade_monitor + the weekly-digest cron-trigger are no longer
+# their own launchd daemons (retired 2026-05-18, DA-3). Both are folded
+# into the single engine daemon (ops/engine_service.py). The daemon set
+# is now: engine-service (consolidated sweep + trade-monitor +
+# weekly-digest trigger), data-repair-service (data-lane),
+# data-operations (data-lane cron).
 #
 # Logs go to ~/Library/Logs/short-term-trading-engine/.
 #
@@ -33,7 +38,19 @@ echo "════════════════════════�
 
 # allocator retired from launchd 2026-05-17 (Sub-project C): now the
 # first gated step in ops/engine_dispatch.py (event-driven, WEEKLY).
-for installer in install_launchd_trade_monitor install_launchd_engine_service install_launchd_data_repair_service install_launchd_data_operations install_launchd_weekly_digest; do
+
+# DA-3 (2026-05-18): trade_monitor + weekly_digest folded into the
+# single engine daemon (ops/engine_service.py). Retire their launchd
+# plists idempotently — a deleted per-installer cannot self-unload,
+# and a still-loaded trade-monitor plist would run a SECOND Tier-2
+# cascade (H-3). Symmetric to Sub-project C retiring the allocator cron.
+for stale in com.michael.trading.trade-monitor com.michael.trading.weekly-digest; do
+    p="$HOME/Library/LaunchAgents/${stale}.plist"
+    launchctl unload "$p" 2>/dev/null || true
+    rm -f "$p"
+done
+
+for installer in install_launchd_engine_service install_launchd_data_repair_service install_launchd_data_operations; do
     echo ""
     echo "▶ ${installer}"
     echo "────────────────────────────────────────────────────────────────────────"
@@ -49,4 +66,4 @@ echo "Verify:"
 echo "  launchctl list | grep com.michael.trading."
 echo ""
 echo "Tail logs:"
-echo "  tail -f ~/Library/Logs/short-term-trading-engine/{trade-monitor,engine-service,data-repair-service,data-operations,weekly-digest}.log"
+echo "  tail -f ~/Library/Logs/short-term-trading-engine/{engine-service,data-repair-service,data-operations}.log"

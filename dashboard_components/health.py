@@ -312,7 +312,7 @@ def classify_coverage_gaps(
 
 
 def classify_daemons(daemons: list[dict[str, Any]]) -> tuple[str, str, list[tuple[str, str, str]]]:
-    """Roll-up of the three platform daemons (trade_monitor, data_operations,
+    """Roll-up of the three platform daemons (engine_service, data_operations,
     allocator). Each daemon entry:
 
       {'name': str, 'installed': bool, 'last_run_at': datetime | None,
@@ -338,7 +338,7 @@ def classify_daemons(daemons: list[dict[str, Any]]) -> tuple[str, str, list[tupl
             worst = "red"
             not_installed += 1
         elif d.get("kind") == "persistent":
-            # trade_monitor — log file mtime is the heartbeat
+            # engine_service — log file mtime is the heartbeat
             age = d.get("last_log_age_sec")
             if age is None:
                 color, text = "amber", "installed; no log activity yet"

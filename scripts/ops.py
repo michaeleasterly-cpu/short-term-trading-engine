@@ -43,6 +43,7 @@ import json
 import logging
 import os
 import re
+import subprocess
 import sys
 import time
 import uuid
@@ -2741,6 +2742,57 @@ async def _check_trade_monitor_heartbeat(pool: asyncpg.Pool) -> dict[str, Any]:
     }
 
 
+_EXPECTED_DAEMON_LABELS = {
+    "com.michael.trading.engine-service",
+    "com.michael.trading.data-repair-service",
+    "com.michael.trading.data-operations",
+}
+_RETIRED_DAEMON_LABELS = {
+    "com.michael.trading.trade-monitor",
+    "com.michael.trading.weekly-digest",
+}
+
+
+async def _check_consolidated_daemon_topology(pool: asyncpg.Pool) -> dict[str, Any]:
+    """DA-3 two-daemon invariant (engine-lane probe; NOT in the
+    data-pipeline audit). Live ``launchctl list`` label set must be
+    exactly the 3 expected daemons, with the 2 retired ones absent.
+
+    macOS-only — returns ``ok=False`` (not an exception) when
+    ``launchctl`` is absent (CI/Linux), so a non-macOS ``--check`` run
+    shows this probe red-by-design rather than crashing.
+    """
+    del pool  # unused; signature contract only
+    try:
+        proc = subprocess.run(
+            ["launchctl", "list"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+        labels = {
+            ln.split("\t")[-1].strip()
+            for ln in proc.stdout.splitlines()
+            if "com.michael.trading." in ln
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "reason": f"launchctl list failed: {exc}"}
+    present_retired = labels & _RETIRED_DAEMON_LABELS
+    missing_expected = _EXPECTED_DAEMON_LABELS - labels
+    unexpected = labels - _EXPECTED_DAEMON_LABELS - _RETIRED_DAEMON_LABELS
+    ok = not present_retired and not missing_expected and not unexpected
+    res: dict[str, Any] = {"ok": ok, "labels": sorted(labels)}
+    if present_retired:
+        res["reason"] = f"retired daemon still loaded: {sorted(present_retired)}"
+    elif unexpected:
+        res["reason"] = f"unexpected daemon label: {sorted(unexpected)}"
+        res["unexpected"] = sorted(unexpected)
+    elif missing_expected:
+        res["reason"] = f"expected daemon missing: {sorted(missing_expected)}"
+    return res
+
+
 async def _check_forensics(pool: asyncpg.Pool) -> dict[str, Any]:
     """Surface open Sprint Dossiers from ``platform.forensics_triggers``.
 
@@ -3247,6 +3299,7 @@ _CHECK_FNS = [
     ("supabase_backup", _check_supabase_backup),
     ("disk_space", _check_disk_space),
     ("trade_monitor_heartbeat", _check_trade_monitor_heartbeat),
+    ("consolidated_daemon_topology", _check_consolidated_daemon_topology),
     ("forensics", _check_forensics),
     ("daemon_progress", _check_daemon_progress),
     ("recent_errors", _check_recent_errors),

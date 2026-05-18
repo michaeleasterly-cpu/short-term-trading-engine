@@ -22,21 +22,32 @@ strictly-newer events. On first start the cursor initializes to
 ``now() - 1h`` so a freshly-restarted daemon doesn't replay events
 older than the typical data-ops window.
 
-KeepAlive=true at the launchd layer restarts the process on crash;
-this loop has no internal restart, just clean exits + reconnection.
+Consolidated topology (DA-3): one engine daemon co-hosts (a) the
+``DATA_OPERATIONS_COMPLETE`` / green-``DATA_REPAIR_COMPLETE`` sweep
+poll-loop, (b) the ``TradeMonitor.run_forever()`` stream (Tier-2 OCO
+cascade), and (c) a deterministic UTC-day-rollover ``python -m
+ops.weekly_digest emit`` subprocess trigger. The two long-lived tasks
+run under a per-task supervisor that restarts a crashed task without
+killing its sibling (defense-in-depth atop launchd ``KeepAlive``); a
+single shared asyncpg pool backs all of them, with clean
+signal-driven shutdown.
 """
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import signal
 import subprocess
 import sys
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import structlog
 
+from tpcore.aar.writer import AARWriter
+from tpcore.alpaca import AlpacaPaperBrokerAdapter
 from tpcore.db import build_asyncpg_pool
+from tpcore.trade_monitor import TradeMonitor
 
 logger = structlog.get_logger(__name__)
 
@@ -44,6 +55,7 @@ POLL_INTERVAL_SEC = 60
 INITIAL_CURSOR_LOOKBACK = timedelta(hours=1)
 TRIGGER_EVENT_TYPES: tuple[str, ...] = ("DATA_OPERATIONS_COMPLETE", "DATA_REPAIR_COMPLETE")
 SWEEP_SCRIPT = "scripts/run_all_engines.sh"
+POOL_MAX_SIZE = 6  # sweep-poll (1) + co-hosted monitor (~4) + headroom (H-8)
 
 
 async def _find_new_trigger(pool, cursor: datetime) -> datetime | None:
@@ -86,14 +98,60 @@ def _run_engine_sweep() -> int:
     return result.returncode
 
 
+async def _maybe_fire_weekly_digest(state: dict, today: date | None = None) -> None:
+    """Deterministic day-rollover trigger for the (idempotent-per-ISO-week)
+    weekly digest — relocated from the retired launchd cron. Fires
+    ``python -m ops.weekly_digest emit`` as a crash-isolated subprocess
+    (the Sub-project-C ``_invoke_allocator`` seam). NEVER raises."""
+    today = today or datetime.now(UTC).date()
+    if state.get("last") == today:
+        return
+    state["last"] = today
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, "-m", "ops.weekly_digest", "emit",
+        )
+        rc = await proc.wait()
+    except Exception as exc:  # noqa: BLE001 — isolate: never abort the daemon
+        logger.error("engine_service.weekly_digest_failed", error=str(exc))
+        return
+    if rc == 0:
+        logger.info("engine_service.weekly_digest_done")
+    else:
+        logger.error("engine_service.weekly_digest_failed", returncode=rc)
+
+
+async def _run_supervised(name: str, factory, stop_event: asyncio.Event,
+                          backoff: float = 5.0) -> None:
+    """Run ``factory()`` (a 0-arg coroutine fn) until stop_event; an
+    Exception is logged and the task restarted after ``backoff`` (one
+    crashed co-task must NEVER kill its sibling — H-6). CancelledError
+    propagates (clean shutdown)."""
+    while not stop_event.is_set():
+        try:
+            await factory()
+            return  # clean completion
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — restart, don't propagate
+            logger.error("engine_service.task_crashed", task=name,
+                         error=str(exc))
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=backoff)
+            except TimeoutError:
+                pass
+
+
 async def _main_loop(pool, stop_event: asyncio.Event) -> None:
     cursor = datetime.now(UTC) - INITIAL_CURSOR_LOOKBACK
+    digest_state: dict = {"last": None}
     logger.info(
         "engine_service.started",
         triggers=list(TRIGGER_EVENT_TYPES),
         poll_interval_sec=POLL_INTERVAL_SEC,
         initial_cursor=cursor.isoformat(),
     )
+    await _maybe_fire_weekly_digest(digest_state)  # startup kick (O-2)
 
     while not stop_event.is_set():
         try:
@@ -110,6 +168,8 @@ async def _main_loop(pool, stop_event: asyncio.Event) -> None:
             # together. The next poll picks up any newer trigger.
             await asyncio.get_event_loop().run_in_executor(None, _run_engine_sweep)
 
+        await _maybe_fire_weekly_digest(digest_state)
+
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=POLL_INTERVAL_SEC)
         except TimeoutError:
@@ -122,7 +182,7 @@ async def _amain() -> int:
         logger.error("engine_service.no_dsn", note="set DATABASE_URL or DATABASE_URL_IPV4")
         return 1
 
-    pool = await build_asyncpg_pool(dsn)
+    pool = await build_asyncpg_pool(dsn, max_size=POOL_MAX_SIZE)
     stop_event = asyncio.Event()
 
     def _handle_signal(signum):
@@ -133,9 +193,41 @@ async def _amain() -> int:
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, _handle_signal, sig)
 
-    try:
+    # H-1: construct the monitor against the SHARED pool (mirror
+    # tpcore.trade_monitor.amain()'s construction block — NOT amain()).
+    monitor = TradeMonitor(
+        pool=pool, broker=AlpacaPaperBrokerAdapter(),
+        aar_writer=AARWriter(pool))
+
+    async def _sweep_factory():
         await _main_loop(pool, stop_event)
+
+    async def _monitor_factory():
+        await monitor.run_forever()
+
+    sweep_task = asyncio.create_task(
+        _run_supervised("sweep", _sweep_factory, stop_event))
+    monitor_task = asyncio.create_task(
+        _run_supervised("monitor", _monitor_factory, stop_event))
+    try:
+        # Exit on signal (stop_event) OR if both co-tasks have exited
+        # (nothing left to supervise — don't zombie the process).
+        stop_waiter = asyncio.ensure_future(stop_event.wait())
+        both_done = asyncio.gather(sweep_task, monitor_task)
+        done, _pending = await asyncio.wait(
+            {stop_waiter, both_done},
+            return_when=asyncio.FIRST_COMPLETED)
+        stop_waiter.cancel()
+        both_done.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await stop_waiter
+        with contextlib.suppress(BaseException):
+            await both_done
     finally:
+        for t in (sweep_task, monitor_task):
+            t.cancel()
+        await asyncio.gather(sweep_task, monitor_task,
+                             return_exceptions=True)
         await pool.close()
         logger.info("engine_service.stopped")
     return 0
