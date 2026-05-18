@@ -103,9 +103,62 @@ def _install_lab_core_stub_harness(monkeypatch, lab_run, *, created_pools,
                         raising=True)
 
 
+class _CtxConn:
+    """Append-only data_quality_log fake (mirrors the ledger test's
+    _FakeConn). T4 routes the SP-A trial-spend emit through the SAME
+    allowlisted credibility pool (H-LL-3 reuse — no second RW pool), so
+    that pool's stub must now actually model ``acquire()``/``fetchrow``/
+    ``fetchval`` — the ledger emit genuinely exercises the pool, unlike
+    the monkeypatched ``write_credibility_score`` which never touched
+    it. Behaviour-only: the test's pinned assertions are unchanged."""
+
+    def __init__(self, rows: list[dict]) -> None:
+        self._rows = rows
+
+    async def fetchrow(self, sql, *params):
+        s = " ".join(sql.split())
+        if s.startswith("INSERT INTO platform.data_quality_log"):
+            source, ts = params[0], params[1]
+            notes = params[6]
+            if any(r["source"] == source and r["timestamp"] == ts
+                   for r in self._rows):
+                return None  # ON CONFLICT DO NOTHING
+            self._rows.append(
+                {"source": source, "timestamp": ts, "notes": notes})
+            return {"?column?": 1}
+        raise AssertionError(f"unexpected fetchrow SQL: {s}")
+
+    async def fetchval(self, sql, *params):
+        import json
+        s = " ".join(sql.split())
+        assert "SUM" in s, s
+        source, before_ts = params[0], params[1]
+        total = 0
+        for r in self._rows:
+            if r["source"] != source or r["timestamp"] >= before_ts:
+                continue
+            total += int(json.loads(r["notes"])["trials"])
+        return total
+
+
+class _CtxAcquire:
+    def __init__(self, conn) -> None:
+        self._c = conn
+
+    async def __aenter__(self):
+        return self._c
+
+    async def __aexit__(self, *a):
+        return False
+
+
 class _CtxPool:
     def __init__(self, tag: str) -> None:
         self.tag = tag
+        self.rows: list[dict] = []
+
+    def acquire(self):
+        return _CtxAcquire(_CtxConn(self.rows))
 
     async def close(self) -> None: ...
 

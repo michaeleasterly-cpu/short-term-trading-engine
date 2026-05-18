@@ -10,9 +10,11 @@ lazy/in-body.
 """
 from __future__ import annotations
 
+import argparse
 import inspect
 import sys
-from datetime import UTC, datetime, timedelta
+from dataclasses import dataclass
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -267,3 +269,195 @@ async def test_no_reset_path_monotone_and_conflict_is_dropped_not_doubled():
         assert cur >= prev, (cur, prev)  # never decreases
         assert cur == prev + n  # strictly additive — no reset path
         prev = cur
+
+
+# ── SP-A T4 (T-MONO) — _run_lab_core emit-at-sample + cumulative read +
+#    monotone-harder. The offline harness is inlined here verbatim per
+#    the SP2/SP3 precedent (the SP2 oracle exports no reusable harness;
+#    the threaded-lab test inlines its own — we do the same so the
+#    oracle file stays unmodified). ─────────────────────────────────────
+
+
+@dataclass
+class _Trade:
+    entry_date: date
+    pnl_pct: float
+
+
+def _ns(output, *, trials=40, seed=0):
+    return argparse.Namespace(
+        engine="reversion", trials=trials, per_window_trials=4,
+        train_start=date(2018, 1, 1), holdout_end=date(2021, 12, 31),
+        final_holdout_start=date(2022, 1, 1),
+        final_holdout_end=date(2022, 12, 31),
+        walk_forward_step=365, train_years=3, holdout_years=1,
+        seed=seed, output=output, database_url="postgres://fake/db",
+        dsr_threshold=0.95, credibility_threshold=60,
+        universe_tier_max=None,
+    )
+
+
+class _SharedLedgerPool:
+    """One in-memory data_quality_log shared across simulated runs —
+    the cross-run memory the ledger relies on. Mirrors the append-only
+    + SUM contract (same as _FakePool but reusable across runs)."""
+    def __init__(self) -> None:
+        self.rows: list[dict] = []
+
+    def acquire(self):
+        return _Acquire(_FakeConn(self.rows))
+
+    async def close(self) -> None: ...
+
+
+def _install_offline_harness(monkeypatch, lab_run, *, returns,
+                             cred_score=80):
+    """Stub the heavy engine seams so ``_run_lab_core`` reaches the DSR
+    code with a fixed held-period-returns slice and a non-None
+    credibility rubric — exactly the offline pattern
+    ``tpcore/tests/test_lab_credibility_pool_threaded.py`` uses (the
+    SP2 oracle exposes no reusable harness; inline our own; the oracle
+    file is NOT modified)."""
+    class _Rubric:
+        score = cred_score
+
+    class _RunResult:
+        credibility_score = cred_score
+        credibility_rubric = _Rubric()
+        # one trade per return on a distinct in-window entry_date →
+        # period_returns_from_trades == returns (grouping is by
+        # entry_date; distinct dates ⇒ no period collapse). timedelta
+        # arithmetic (NOT date(2022, 1, 3 + i) — day would overflow
+        # past 31). All dates land inside [2022-01-01, 2022-12-31] for
+        # ≤ ~360 returns.
+        trade_log = [
+            _Trade(
+                entry_date=date(2022, 1, 3) + timedelta(days=i),
+                pnl_pct=r,
+            )
+            for i, r in enumerate(returns)
+        ]
+
+    def _ctx_runner(context, *, overrides=None):
+        return _RunResult()
+
+    async def _ctx_loader(*a, **k):
+        return object()
+
+    async def _runner(*a, **k):
+        return _RunResult()
+
+    monkeypatch.setattr("ops.lab.run._context_runner_for",
+                        lambda e: _ctx_runner)
+    monkeypatch.setattr("ops.lab.run._context_loader_for",
+                        lambda e: _ctx_loader)
+    monkeypatch.setattr("ops.lab.run._runner_for", lambda e: _runner)
+
+    async def _fake_write_cred(pool, *, engine_name, score):
+        return True
+
+    monkeypatch.setattr(
+        "tpcore.backtest.statistical_validation.write_credibility_score",
+        _fake_write_cred, raising=True)
+
+
+async def test_second_candidate_same_target_gets_strictly_larger_n_trials(
+        monkeypatch, tmp_path):
+    """MAKE-OR-BREAK · T-MONO. Two Lab runs against the SAME target on a
+    shared ledger: run 2's n_trials fed to compute_dsr_for_verdict is
+    strictly greater than run 1's, cumulative grows, and (fixed returns)
+    DSR(run2) <= DSR(run1) — the gate is monotone-harder by construction
+    (per-target keying, H-LL-2)."""
+    # A moderately strong fixed return slice (same for both runs).
+    import numpy as np
+
+    import ops.lab.run as lab_run
+    from tpcore.lab.context import LabContext
+    rng = np.random.default_rng(0)
+    returns = [float(x) for x in rng.normal(0.015, 0.01, 40)]
+
+    seen_n_trials: list[int] = []
+    real_dsr = lab_run.compute_dsr_for_verdict
+
+    def _spy_dsr(r, *, n_trials):
+        seen_n_trials.append(n_trials)
+        return real_dsr(r, n_trials=n_trials)
+
+    monkeypatch.setattr(lab_run, "compute_dsr_for_verdict", _spy_dsr)
+    _install_offline_harness(monkeypatch, lab_run, returns=returns)
+
+    shared = _SharedLedgerPool()
+
+    async def _fake_build(url, *, read_only, **k):
+        # LabContext's read_pool + credibility_pool both resolve to the
+        # shared in-memory ledger pool (the credibility pool is the RW
+        # handle the ledger emit reuses — H-LL-3).
+        return shared
+
+    monkeypatch.setattr("tpcore.db.build_asyncpg_pool", _fake_build,
+                        raising=True)
+
+    async with LabContext(db_url="postgres://fake/db"):
+        core1 = await lab_run._run_lab_core(
+            _ns(tmp_path / "r1.csv", trials=40, seed=1),
+            candidate="rev_cand_a")
+    async with LabContext(db_url="postgres://fake/db"):
+        core2 = await lab_run._run_lab_core(
+            _ns(tmp_path / "r2.csv", trials=50, seed=2),
+            candidate="rev_cand_b")
+
+    # Both reached the DSR call.
+    assert not isinstance(core1, int) and not isinstance(core2, int)
+    assert len(seen_n_trials) == 2
+    # Run 1: cumulative(0) + 40 == 40. Run 2: cumulative(40) + 50 == 90.
+    assert seen_n_trials[0] == 40
+    assert seen_n_trials[1] == 90
+    assert seen_n_trials[1] > seen_n_trials[0]      # strictly larger
+    assert core2.effective_n_trials == 90           # carried on the spine
+    assert core1.effective_n_trials == 40
+    # Monotone-harder: more trials ⇒ DSR no higher on identical returns.
+    assert core2.dsr <= core1.dsr
+
+
+def test_run_py_ledger_callsite_is_append_only_no_reset():
+    """CARRY-FORWARD from the T3 review (closes the structural
+    blind-spot the T3 reviewer flagged for "T4's reviewer to note").
+
+    T3's T-NORESET source-scan is module-scoped to
+    ``tpcore/lab/ledger.py`` ONLY. A raw DELETE/UPDATE against
+    ``data_quality_log`` / ``lab_trial_ledger.*`` added to
+    ``ops/lab/run.py`` would silently defeat the ledger and T3 would
+    NOT catch it. This extends the append-only / no-reset guarantee to
+    the run.py call-site (mirroring T3's T-NORESET scan technique,
+    extended to the run.py module):
+
+    1. ``ops/lab/run.py`` contains NO DELETE/TRUNCATE of, and NO UPDATE
+       against, ``data_quality_log`` and NO ``lab_trial_ledger`` raw
+       SQL — run.py reaches the ledger ONLY via the two append-only
+       helpers.
+    2. The ONLY ledger names run.py references are the two T1 helpers
+       (``record_trial_spend`` for the append, ``cumulative_n_trials``
+       for the SUM read) — never any reset/delete/clear entrypoint
+       (there is none on the ledger surface anyway — T3 (1) — but this
+       pins run.py introduces no out-of-band one either).
+    """
+    import ops.lab.run as lab_run
+
+    src = inspect.getsource(lab_run)
+    up = src.upper()
+
+    # (1) no mutable/reset SQL against the ledger substrate in run.py.
+    assert "DELETE FROM" not in up
+    assert "TRUNCATE" not in up
+    assert "UPDATE PLATFORM.DATA_QUALITY_LOG" not in up
+    # run.py never names the ledger source / table in raw SQL — it goes
+    # only through the helpers (which own the disjoint namespace).
+    assert "LAB_TRIAL_LEDGER" not in up
+
+    # (2) the ledger is reached ONLY through the two append-only helpers.
+    assert "record_trial_spend" in src
+    assert "cumulative_n_trials" in src
+    for banned in ("reset_trial", "delete_trial", "clear_trial",
+                   "zero_trial", "purge_trial", "rollback_trial",
+                   "decrement_trial", "_reset_ledger", "_clear_ledger"):
+        assert banned not in src, banned

@@ -592,6 +592,7 @@ class _LabCore:
     ranked: list[tuple[dict, float, int]]
     windows: list[WalkWindow]
     survived: bool
+    effective_n_trials: int
 
 
 async def _run_lab_core(
@@ -624,6 +625,34 @@ async def _run_lab_core(
 
     candidates = sample_parameters(args.engine, args.trials, seed=args.seed)
     print(f"  → sampled {len(candidates)} parameter combinations  (seed={args.seed})")
+
+    # SP-A H-LL-1 (the §3.2 spine): record this run's trial SPEND as its
+    # own UNCONDITIONAL append-only fact, RIGHT HERE — before the DSR
+    # code and before EVERY non-result rc return below (no DSN already
+    # returned at the early :2 path above; no-windows/no-rankable returns
+    # are still ahead). An abort-after-fishing therefore still counts
+    # (T-ABORT). Lab seam (H-S2-3): only a Lab run (candidate is not
+    # None) with the active LabContext RW handle
+    # (active_credibility_pool(), the ONE allowlisted RW pool — H-LL-3
+    # reuse, no second ad-hoc pool). The legacy non-Lab path (candidate
+    # is None / no LabContext) emits nothing and stays byte-identical
+    # (T9). spend_ts is the strict ``<`` boundary the cumulative read
+    # uses below.
+    from tpcore.lab.context import active_credibility_pool
+    from tpcore.lab.ledger import cumulative_n_trials, record_trial_spend
+
+    _ledger_pool = (
+        active_credibility_pool() if candidate is not None else None
+    )
+    spend_ts = None
+    if _ledger_pool is not None:
+        spend_ts = await record_trial_spend(
+            _ledger_pool,
+            target=args.engine,
+            candidate=candidate,
+            trials=args.trials,
+            seed=args.seed,
+        )
 
     windows = build_walk_windows(
         train_start=args.train_start, holdout_end=args.holdout_end,
@@ -723,7 +752,22 @@ async def _run_lab_core(
     span_days = (args.final_holdout_end - args.final_holdout_start).days or 1
     held_metrics = compute_slice_metrics_from_trades(held_trades, span_days)
     held_period_returns = period_returns_from_trades(held_trades)
-    dsr = compute_dsr_for_verdict(held_period_returns, n_trials=args.trials)
+    # SP-A §2.3: the multiple-testing penalty is CUMULATIVE — every
+    # configuration ever scored against this target, summed, plus this
+    # run's own args.trials (read strictly BEFORE this run's spend row
+    # so the current run is counted exactly once via the explicit
+    # + args.trials). Legacy non-Lab path (spend_ts is None) keeps the
+    # per-run penalty byte-identical (T6/T9: SP-A reduces to today's
+    # behaviour when cumulative == 0). The gate expression + thresholds
+    # below are UNCHANGED — only this n_trials input grows.
+    if spend_ts is not None:
+        cumulative = await cumulative_n_trials(
+            _ledger_pool, args.engine, spend_ts)
+        effective_n_trials = cumulative + args.trials
+    else:
+        effective_n_trials = args.trials
+    dsr = compute_dsr_for_verdict(
+        held_period_returns, n_trials=effective_n_trials)
 
     # Persist the winner's CredibilityScore to platform.data_quality_log so
     # downstream tools (tip sheet, capital gate) can read it. Without this,
@@ -799,6 +843,7 @@ async def _run_lab_core(
         ranked=ranked,
         windows=windows,
         survived=survived,
+        effective_n_trials=effective_n_trials,
     )
 
 
