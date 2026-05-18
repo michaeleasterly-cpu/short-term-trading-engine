@@ -17,26 +17,83 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import types
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
-# Documented scripts/ops.py ↔ ops/ package-shadow hazard: when
-# scripts/tests/ is co-collected, scripts/ops.py can register itself as
-# module ``ops``, breaking ``from ops import engine_ladder``. Purge any
-# shadowed (non-package) ``ops`` entry so the real package wins (the
-# scripts/tests/test_engine_ladder.py precedent, lines 8-10).
-for _m in [m for m in list(sys.modules) if m == "ops" or m.startswith("ops.")]:
-    if not hasattr(sys.modules[_m], "__path__"):
-        del sys.modules[_m]
 
-_SPEC = importlib.util.spec_from_file_location(
-    "_dr_under_test", _REPO / "ops" / "defect_register.py")
-dr = importlib.util.module_from_spec(_SPEC)
-sys.modules["_dr_under_test"] = dr
-_SPEC.loader.exec_module(dr)
+# ── scripts/ops.py ↔ ops/ package-shadow hazard ────────────────────────
+# ``scripts/ops.py`` is a single-file module that tpcore/tests/test_ops*
+# import as the top-level name ``ops`` (they put ``scripts/`` on sys.path
+# then ``import ops`` → ``sys.modules['ops']`` becomes the non-package
+# script). The ``ops/`` *directory* is ALSO a real package
+# (ops/engine_ladder.py, ops/weekly_digest.py, ops/defect_register.py).
+# ``ops/defect_register.py:41`` does ``from ops import engine_ladder,
+# weekly_digest`` — correct for production ``python -m ops.defect_register``
+# but, when imported here, that line REGISTERS the namespace-package
+# ``ops`` (and its siblings) into the shared sys.modules.
+#
+# The old "purge non-package ops then bare importlib-load" block left
+# that registration in place, so whichever of test_ops /
+# test_defect_register collected FIRST poisoned the other (the whole
+# suite, one process, fails ~40 test_ops* with ``module 'ops' has no
+# attribute _CANDIDATE_RE`` etc.). A targeted subset masked it.
+#
+# Fix (the proven test_llm_triage_service.py precedent for the IDENTICAL
+# hazard): snapshot EXACTLY the sys.modules keys we touch, ensure
+# ``ops`` is package-shaped + the real siblings are bound by file path
+# (so ``from ops import engine_ladder, weekly_digest`` resolves to the
+# REAL modules the tests monkeypatch — NOT raising stubs, since the
+# tests exercise the real ``consolidated_defects`` compose path with
+# only the two Ladder callables patched per-test), exec the module
+# under test, then RESTORE sys.modules EXACTLY — zero global side
+# effects, collection-order safe in BOTH directions.
+_DR_PATH = _REPO / "ops" / "defect_register.py"
+
+
+def _load_real_sibling(name: str) -> types.ModuleType:
+    """Load ops/<name>.py by file path, bound under ``ops.<name>`` so
+    defect_register's ``from ops import …`` picks up the REAL module."""
+    spec = importlib.util.spec_from_file_location(
+        f"ops.{name}", _REPO / "ops" / f"{name}.py")
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[f"ops.{name}"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_SAVED = {
+    k: sys.modules.get(k)
+    for k in ("ops", "ops.engine_ladder", "ops.weekly_digest",
+              "ops.defect_register")
+}
+try:
+    _ops = sys.modules.get("ops")
+    if not isinstance(getattr(_ops, "__path__", None), list):
+        _pkg = types.ModuleType("ops")
+        _pkg.__path__ = [str(_DR_PATH.parent)]  # make it package-shaped
+        sys.modules["ops"] = _pkg
+    _load_real_sibling("engine_ladder")
+    _load_real_sibling("weekly_digest")
+
+    _SPEC = importlib.util.spec_from_file_location(
+        "_dr_under_test", _DR_PATH)
+    assert _SPEC is not None and _SPEC.loader is not None
+    dr = importlib.util.module_from_spec(_SPEC)
+    sys.modules["_dr_under_test"] = dr
+    _SPEC.loader.exec_module(dr)
+finally:
+    # Restore sys.modules entries EXACTLY so no later-collected test
+    # (e.g. tpcore/tests/test_ops*.py) sees our scaffolding.
+    for _k, _v in _SAVED.items():
+        if _v is None:
+            sys.modules.pop(_k, None)
+        else:
+            sys.modules[_k] = _v
 
 NOW = datetime(2026, 5, 19, 12, 0, tzinfo=UTC)
 T1 = NOW - timedelta(days=10)
