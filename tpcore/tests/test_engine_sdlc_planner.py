@@ -841,3 +841,250 @@ def test_promote_flips_lab_to_paper_iff_gate_green(tmp_path):
     rc, out = _run_consistency_subprocess(staged)
     assert rc == 0, (
         f"promote LAB->PAPER must leave the clockwork GREEN:\n{out}")
+
+
+# ---- T7 hardening (review notes #1/#2): _apply_modify e2e + byte-
+# identical multi-file rollback; _validate_modify lifecycle-immutable ----
+
+
+def test_apply_modify_edits_default_const_and_rolls_back_byte_identical(
+        tmp_path):
+    """Review note #1 (the real one): drive the REAL apply() entry with a
+    clean validated MODIFY ECR all the way through to a multi-file engine
+    default-constant edit, then a forced-red byte-identical rollback.
+
+    UNIQUE surface vs the T5-pinned REMOVE rollback (both unpinned before
+    this test):
+      (a) the by_file MULTI-FILE grouped edit — ONE MODIFY ECR carrying
+          z_threshold + max_hold_days hits TWO real source files
+          (reversion/models.py:Z_SCORE_THRESHOLD +
+          reversion/backtest.py:MAX_HOLD_DAYS — verified against the live
+          source / _ENGINE_DEFAULT_CONSTS), the genuine `by_file` group;
+      (b) the constant-value compile() AST-gate in _apply_modify (a code
+          path distinct from T5's _rewrite_profile_source gate).
+
+    A plain _staged_copytree (NOT _make_synthetic_engine_tree) is used:
+    the MODIFY target `reversion` already exists in a clean copytree, and
+    a clean MODIFY of parameter CONSTANTS touches no lifecycle/roster, so
+    the post-stage consistency subprocess stays GREEN on the success leg
+    (the success-path proof is itself non-vacuous — it asserts a None
+    rejection AND the changed bytes AND a green subprocess).
+
+    NON-VACUOUS (forced-red leg): the post-stage clockwork is forced red
+    by appending a failing test to the staged consistency suite (the T5
+    forced-red technique from
+    test_apply_red_consistency_rolls_back_to_byte_identical). The
+    assertion is the recursive _snapshot_tree byte-oracle over BOTH
+    edited files' parent trees: a non-reversing rollback, OR a PARTIAL
+    multi-file rollback (file A reverted but file B's edit surviving, or
+    vice-versa), changes the map and trips it. Transient-break proof
+    (performed during authoring, restored before commit): commenting out
+    `jn.restore()` on the rc!=0 branch of apply() makes BOTH the
+    edited-file byte assertions AND the recursive-map assertion FAIL
+    (extra/missing reported); making restore reverse only the FIRST
+    by_file entry (a simulated partial multi-file rollback) leaves the
+    second file drifted and the recursive-map assertion FAILs with the
+    surviving-edit delta — `git diff` clean after restoring planner.py.
+    """
+    from ops.engine_sdlc.planner import (
+        _staged_copytree,
+        apply,
+        attach_ecr_context,
+        classify,
+        validate,
+    )
+    staged = _staged_copytree(tmp_path / "tree")
+    models_py = staged / "reversion" / "models.py"
+    backtest_py = staged / "reversion" / "backtest.py"
+    profile_py = staged / "tpcore" / "engine_profile.py"
+
+    # REAL pre-edit constant lines (verified against the live source):
+    #   reversion/models.py     -> Z_SCORE_THRESHOLD = 2.5
+    #   reversion/backtest.py   -> MAX_HOLD_DAYS = 30
+    assert "Z_SCORE_THRESHOLD = 2.5" in models_py.read_text()
+    assert "MAX_HOLD_DAYS = 30" in backtest_py.read_text()
+    before_profile = profile_py.read_bytes()
+
+    # ── Success leg: clean validated MODIFY through the REAL apply() ──
+    # fold_existing + SURVIVED + dsr0.97 + cred64 + winning matching the
+    # ECR param_change for BOTH keys (the _modify_sidecar/_modify_ecr
+    # helpers already default to z_threshold=3.1 + max_hold_days=8, both
+    # in reversion PARAM_RANGES). z_threshold lives in models.py,
+    # max_hold_days in backtest.py — ONE ECR, the genuine by_file group.
+    md = _modify_sidecar(tmp_path)
+    ecr = _modify_ecr(md)  # param_change={"z_threshold":"3.1",
+    #                                       "max_hold_days":"8"}
+    plan = attach_ecr_context(
+        classify(ecr, {"reversion": LifecycleState.PAPER}), ecr)
+    vplan = validate(plan, ecr=ecr)
+    assert vplan.rejection is None, vplan.rejection
+    res = apply(vplan, repo_root=staged, emit_audit=False)
+    assert res.rejection is None, (
+        f"a clean MODIFY through apply() must succeed:\n{res.rejection}")
+    # the targeted constants are changed in the CORRECT files to the
+    # validated winning values (the by_file grouped multi-file edit):
+    new_models = models_py.read_text()
+    new_backtest = backtest_py.read_text()
+    assert "Z_SCORE_THRESHOLD = 3.1" in new_models, (
+        "z_threshold not rewritten in reversion/models.py")
+    assert "Z_SCORE_THRESHOLD = 2.5" not in new_models, (
+        "stale Z_SCORE_THRESHOLD default survived the MODIFY")
+    assert "MAX_HOLD_DAYS = 8" in new_backtest, (
+        "max_hold_days not rewritten in reversion/backtest.py")
+    assert "MAX_HOLD_DAYS = 30" not in new_backtest, (
+        "stale MAX_HOLD_DAYS default survived the MODIFY")
+    # AST-gate exercised: the rewritten sources must still parse/compile
+    # (apply() returned no rejection => _apply_modify's compile() passed;
+    # assert it explicitly so the AST-gate code path is pinned).
+    import ast
+    ast.parse(new_models)
+    ast.parse(new_backtest)
+    # H-S3-6d: MODIFY NEVER edits lifecycle — _PROFILE byte-unchanged.
+    assert profile_py.read_bytes() == before_profile, (
+        "MODIFY mutated tpcore/engine_profile.py — lifecycle is immutable "
+        "under MODIFY (H-S3-6d)")
+    # the consistency subprocess path was exercised on the SUCCESS leg:
+    # a clean param-constant MODIFY leaves the clockwork GREEN (a broken
+    # subprocess invocation that always returned non-zero would have
+    # produced res.rejection above — this nails it positively).
+    from ops.engine_sdlc.planner import _run_consistency_subprocess
+    rc, out = _run_consistency_subprocess(staged)
+    assert rc == 0, (
+        f"a clean param MODIFY must leave the clockwork GREEN:\n{out}")
+
+    # ── Forced-red leg: byte-identical multi-file rollback ──
+    # Fresh staged tree so the pre-state is the pristine source.
+    staged2 = _staged_copytree(tmp_path / "tree2")
+    models2 = staged2 / "reversion" / "models.py"
+    backtest2 = staged2 / "reversion" / "backtest.py"
+    profile2 = staged2 / "tpcore" / "engine_profile.py"
+    tc2 = (staged2 / "tpcore" / "tests"
+           / "test_engine_lifecycle_consistency.py")
+    # Force the post-stage subprocess red (T5 technique): append a
+    # failing test to the staged consistency suite. _apply_modify does
+    # NOT touch tc, so tc's pre-apply bytes are exactly this corrupted
+    # form — the byte-oracle baseline below captures it AFTER corruption.
+    tc2.write_text(tc2.read_text() +
+                   "\n\ndef test_forced_red():\n    assert False\n")
+    before_files = {p: p.read_bytes()
+                    for p in (models2, backtest2, profile2, tc2)}
+
+    def _src_snapshot(root):
+        # _snapshot_tree minus subprocess-generated bytecode: the
+        # consistency subprocess runs with cwd=staged2 and writes
+        # reversion/**/__pycache__/*.pyc that were never in the
+        # pre-state. Those are NOT a rollback defect (a surviving
+        # CONSTANT edit lives in a .py source file, never a .pyc), so
+        # filtering them keeps the partial-multi-file oracle honest
+        # while removing pure test-harness noise (same discipline the
+        # T6 ADD byte-oracle tests use to scope to the .py surface).
+        return {k: v for k, v in _snapshot_tree(root).items()
+                if "__pycache__" not in k and not k.endswith(".pyc")}
+
+    before_models_tree = _src_snapshot(staged2 / "reversion")
+    s2dir = tmp_path / "s2"
+    s2dir.mkdir()
+    md2 = _modify_sidecar(s2dir)
+    ecr2 = _modify_ecr(md2)
+    plan2 = attach_ecr_context(
+        classify(ecr2, {"reversion": LifecycleState.PAPER}), ecr2)
+    vplan2 = validate(plan2, ecr=ecr2)
+    assert vplan2.rejection is None, vplan2.rejection
+    res2 = apply(vplan2, repo_root=staged2, emit_audit=False,
+                 _force_validate=True)
+    assert res2.rejection is not None
+    assert "post-stage clockwork red" in res2.rejection, res2.rejection
+    # EVERY touched file byte-identical — a partial multi-file rollback
+    # (models.py reverted but backtest.py's edit surviving, or vice
+    # versa) trips one of these directly:
+    for p, b in before_files.items():
+        assert p.read_bytes() == b, (
+            f"{p.relative_to(staged2)} not restored byte-identical after "
+            f"forced-red rollback (partial/no multi-file rollback)")
+    # recursive byte-oracle over the WHOLE reversion/ package: NO drifted
+    # constant survives in EITHER file (closes the partial-multi-file
+    # window — if file A's edit was reverted but file B's was not, the
+    # map differs and reports the surviving-edit delta):
+    after_models_tree = _src_snapshot(staged2 / "reversion")
+    assert after_models_tree == before_models_tree, (
+        "forced-red MODIFY did not restore reversion/ byte-identical — "
+        f"extra={set(after_models_tree) - set(before_models_tree)} "
+        f"missing={set(before_models_tree) - set(after_models_tree)}")
+    # the pristine defaults are back in BOTH files (explicit, in case a
+    # future refactor changes _snapshot_tree's root):
+    assert "Z_SCORE_THRESHOLD = 2.5" in models2.read_text(), (
+        "models.py default not restored on forced-red rollback")
+    assert "MAX_HOLD_DAYS = 30" in backtest2.read_text(), (
+        "backtest.py default not restored on forced-red rollback")
+    # loud escalation surfaced (not swallowed into a false-green):
+    assert res2.rejection and "rc=" in res2.rejection
+
+
+def test_validate_modify_rejects_lifecycle_key_in_sot_diff():
+    """Review note #2 (cheap defense-in-depth): _validate_modify's
+    sot_diff lifecycle-immutable guard (planner.py ~598-604) must LOUDLY
+    reject a MODIFY plan whose sot_diff carries ANY lifecycle key
+    (lifecycle_state / allocator_eligible / dispatch_order / cadence) —
+    lifecycle is immutable under MODIFY (H-S3-6d).
+
+    The normal path (classify -> attach_ecr_context for MODIFY) only
+    threads lab_dossier/param_change/gate_* into sot_diff, so a lifecycle
+    key cannot arrive organically — per the task, directly construct the
+    TransitionPlan with such a sot_diff and pass it to _validate_modify
+    (the real guarded function, exported in planner.__all__).
+
+    NON-VACUOUS: each forbidden key is asserted independently, the
+    rejection substring is pinned ("lifecycle is immutable"), and a clean
+    sot_diff (no lifecycle key) is asserted to PASS — so deleting the
+    guard (planner.py ~598-604) makes the four reject-asserts fail while
+    the clean-pass control proves the gate is not a constant reject.
+    """
+    import tempfile
+
+    from ops.engine_sdlc.ecr import ECRAction
+    from ops.engine_sdlc.planner import (
+        ApprovalClass,
+        TransitionPlan,
+        _validate_modify,
+    )
+    # a sidecar+ECR that, by itself, fully PASSES the zero-trust gate so
+    # the ONLY thing under test is the lifecycle-key guard.
+    with tempfile.TemporaryDirectory() as td:
+        from pathlib import Path as _P
+        tdp = _P(td)
+        md = _modify_sidecar(tdp)
+        ecr = _modify_ecr(md)
+        base_kw = dict(
+            action=ECRAction.MODIFY, engine="reversion",
+            from_state=LifecycleState.PAPER, to_state=LifecycleState.PAPER,
+            approval_class=ApprovalClass.AUTOMATED,
+            gate_checks=["modify_evidence"])
+        # control: a sot_diff with ONLY the legit MODIFY context keys
+        # PASSES (proves the guard is not a blanket reject).
+        clean = TransitionPlan(**base_kw, sot_diff={
+            "lab_dossier": str(md),
+            "param_change": {"z_threshold": "3.1", "max_hold_days": "8"},
+            "gate_dsr": 0.97, "gate_cred": 64})
+        ok = _validate_modify(clean, ecr)
+        assert ok.rejection is None, (
+            f"clean MODIFY sot_diff must pass the guard: {ok.rejection}")
+        # each forbidden lifecycle key, injected into sot_diff alongside
+        # the otherwise-valid context, must be LOUDLY rejected:
+        for bad_key, bad_val in (
+                ("lifecycle_state", "PAPER"),
+                ("allocator_eligible", True),
+                ("dispatch_order", 9),
+                ("cadence", "daily")):
+            tampered = TransitionPlan(**base_kw, sot_diff={
+                "lab_dossier": str(md),
+                "param_change": {"z_threshold": "3.1",
+                                 "max_hold_days": "8"},
+                "gate_dsr": 0.97, "gate_cred": 64,
+                bad_key: bad_val})
+            rej = _validate_modify(tampered, ecr)
+            assert rej.rejection is not None, (
+                f"MODIFY plan carrying lifecycle key {bad_key!r} was NOT "
+                f"rejected — the H-S3-6d guard is missing/broken")
+            assert "lifecycle is immutable" in rej.rejection, (
+                f"reject for {bad_key!r} lacks the pinned H-S3-6d "
+                f"substring: {rej.rejection!r}")
