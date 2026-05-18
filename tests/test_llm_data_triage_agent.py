@@ -167,6 +167,72 @@ async def test_auth_error_is_safe_like_no_key(monkeypatch) -> None:
     assert out.proposed == []
 
 
+class _MultiMessages:
+    """Returns responses from a list, one per call."""
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self._idx = 0
+    def create(self, **kw):
+        r = self._responses[self._idx]
+        self._idx += 1
+        return r
+
+
+class _MultiClient:
+    def __init__(self, responses):
+        self.messages = _MultiMessages(responses)
+
+
+class _EmptyContentMsg:
+    """Simulates SDK returning empty content list."""
+    def __init__(self):
+        self.content = []
+        self.stop_reason = "end_turn"
+        self.usage = _Usage()
+        self.id = "msg_empty"
+        self.model = "claude-sonnet-4-6"
+
+
+async def test_empty_content_skips_escalation_not_batch(monkeypatch) -> None:
+    """Empty content[] on first call → per-escalation skip; second processes fine."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+
+    valid_text = json.dumps({
+        "proposed_disposition": "converted", "confidence": "high",
+        "rationale": "ok", "could_not_determine": "n"})
+
+    responses = [_EmptyContentMsg(), _Msg(valid_text)]
+    pool = _Pool(open_rows=[_row("ref-bad"), _row("ref-good")])
+    out = await lt.run_triage(pool, client_factory=lambda: _MultiClient(responses))
+
+    assert out.error is None, f"batch aborted: out.error={out.error!r}"
+    emitted = [json.loads(a[5]) for a in pool.conn.emitted
+               if json.loads(a[5]).get("ref") is not None]
+    proposal_refs = [e["ref"] for e in emitted if "proposed_disposition" in e]
+    assert proposal_refs == ["ref-good"], f"expected only ref-good, got {proposal_refs}"
+    assert out.proposed == ["ref-good"]
+
+
+async def test_non_dict_json_skips_escalation_not_batch(monkeypatch) -> None:
+    """json.loads returns None (not a dict) on first call → per-escalation skip."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+
+    valid_text = json.dumps({
+        "proposed_disposition": "converted", "confidence": "high",
+        "rationale": "ok", "could_not_determine": "n"})
+
+    responses = [_Msg("null"), _Msg(valid_text)]
+    pool = _Pool(open_rows=[_row("ref-null"), _row("ref-good")])
+    out = await lt.run_triage(pool, client_factory=lambda: _MultiClient(responses))
+
+    assert out.error is None, f"batch aborted: out.error={out.error!r}"
+    emitted = [json.loads(a[5]) for a in pool.conn.emitted
+               if json.loads(a[5]).get("ref") is not None]
+    proposal_refs = [e["ref"] for e in emitted if "proposed_disposition" in e]
+    assert proposal_refs == ["ref-good"], f"expected only ref-good, got {proposal_refs}"
+    assert out.proposed == ["ref-good"]
+
+
 async def test_import_isolation_no_actor_paths() -> None:
     # The agent must NOT import any actor/mutation path.
     import ast

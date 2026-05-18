@@ -171,46 +171,62 @@ async def run_triage(
                 )
                 raise  # propagate to outer try/except → sets out.error
 
-            txt = resp.content[0].text
             try:
-                prop = json.loads(txt)
-            except json.JSONDecodeError as json_exc:
-                logger.error(
-                    "llm_data_triage.json_parse_error",
+                txt = resp.content[0].text
+                try:
+                    prop = json.loads(txt)
+                except json.JSONDecodeError as json_exc:
+                    logger.warning(
+                        "llm_data_triage.malformed_response",
+                        ref=esc.ref,
+                        error=str(json_exc),
+                        response_preview=txt[:200],
+                    )
+                    continue  # skip this escalation, don't abort the loop
+
+                if not isinstance(prop, dict):
+                    logger.warning(
+                        "llm_data_triage.non_dict_response",
+                        ref=esc.ref,
+                        response_preview=txt[:200],
+                    )
+                    continue  # skip this escalation, don't abort the loop
+
+                await _emit(
+                    pool,
+                    "DATA_LLM_TRIAGE_PROPOSAL",
+                    f"LLM triage proposal for ref={esc.ref}",
+                    {
+                        "schema": 1,
+                        "ref": esc.ref,
+                        "cls": esc.cls,
+                        "persona_version": _PERSONA_VERSION,
+                        "model": _MODEL,
+                        "proposed_disposition": prop.get("proposed_disposition"),
+                        "confidence": prop.get("confidence"),
+                        "rationale": prop.get("rationale"),
+                        "could_not_determine": prop.get("could_not_determine"),
+                        "packet_hash": pkt.packet_hash,
+                        "usage": {
+                            "in": resp.usage.input_tokens,
+                            "out": resp.usage.output_tokens,
+                        },
+                    },
+                )
+                out.proposed.append(esc.ref)
+                logger.info(
+                    "llm_data_triage.proposal_emitted",
                     ref=esc.ref,
-                    error=str(json_exc),
-                    response_preview=txt[:200],
+                    model=_MODEL,
+                    persona_version=_PERSONA_VERSION,
+                )
+            except (IndexError, AttributeError, KeyError, TypeError) as parse_exc:
+                logger.warning(
+                    "llm_data_triage.malformed_response",
+                    ref=esc.ref,
+                    error=str(parse_exc),
                 )
                 continue  # skip this escalation, don't abort the loop
-
-            await _emit(
-                pool,
-                "DATA_LLM_TRIAGE_PROPOSAL",
-                f"LLM triage proposal for ref={esc.ref}",
-                {
-                    "schema": 1,
-                    "ref": esc.ref,
-                    "cls": esc.cls,
-                    "persona_version": _PERSONA_VERSION,
-                    "model": _MODEL,
-                    "proposed_disposition": prop.get("proposed_disposition"),
-                    "confidence": prop.get("confidence"),
-                    "rationale": prop.get("rationale"),
-                    "could_not_determine": prop.get("could_not_determine"),
-                    "packet_hash": pkt.packet_hash,
-                    "usage": {
-                        "in": resp.usage.input_tokens,
-                        "out": resp.usage.output_tokens,
-                    },
-                },
-            )
-            out.proposed.append(esc.ref)
-            logger.info(
-                "llm_data_triage.proposal_emitted",
-                ref=esc.ref,
-                model=_MODEL,
-                persona_version=_PERSONA_VERSION,
-            )
 
     except Exception as exc:  # noqa: BLE001 — never raises; crash-isolated
         logger.error("llm_data_triage.error", error=str(exc))
