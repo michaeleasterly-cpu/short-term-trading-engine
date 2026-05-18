@@ -191,7 +191,7 @@ def test_lifecycle_state_enum_values():
     assert {s.value for s in LifecycleState} == {"lab", "paper", "live", "retired"}
 
 
-def test_profile_has_new_fields_all_seven_entries():
+def test_profile_has_new_fields_all_entries():
     # all 5 live engines + allocator are PAPER; sigma is RETIRED;
     # lab is the durable SP2 LAB sentinel (D-SP2-4 two-tier registry).
     expected = {

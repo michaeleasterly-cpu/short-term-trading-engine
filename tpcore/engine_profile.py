@@ -83,6 +83,9 @@ _PROFILE: dict[str, EngineProfile] = {
     # roster/allocator by _DISPATCHABLE; ephemeral experiments live in
     # ops/lab.registry (D-SP2-4 two-tier). dispatch_order=50 reserved
     # (gap between live ≤5 and retired 99), unique among non-RETIRED.
+    # cadence/dispatch_order are inert placeholders — LAB engines are
+    # filtered out of every dispatch/allocator accessor by _DISPATCHABLE
+    # (never scheduled).
     "lab":       EngineProfile(engine="lab", cadence=Cadence.DAILY,
                                dispatch_order=50, lifecycle_state=LifecycleState.LAB),
 }

@@ -138,12 +138,6 @@ def test_lab_sentinel_is_not_wired():
     dispatch/allocator, no top-level package, and LAB is the ONLY
     non-{PAPER,LIVE,RETIRED} state (closes the half-state gap
     symmetric to the RETIRED leg)."""
-    from tpcore.engine_profile import (
-        _PROFILE,
-        LifecycleState,
-        allocator_eligible_engines,
-        roster_for_dispatch,
-    )
     lab = [n for n, p in _PROFILE.items()
            if p.lifecycle_state is LifecycleState.LAB]
     assert lab == ["lab"], f"expected exactly one LAB sentinel, got {lab}"
