@@ -180,8 +180,16 @@ def next_monday_open(dt: datetime) -> datetime:
     otherwise advances to the following Monday and returns its session open.
     Honors holidays — if Monday is closed, advances to the next session open.
     """
-    d = _ensure_utc(dt).date()
-    days_ahead = (0 - d.weekday()) % 7  # Monday == 0
-    monday = d + timedelta(days=days_ahead)
-    candidate = datetime(monday.year, monday.month, monday.day, tzinfo=UTC)
+    dt_utc = _ensure_utc(dt)
+    d = dt_utc.date()
+    if d.weekday() == 0:  # Monday
+        this_monday = datetime(d.year, d.month, d.day, tzinfo=UTC)
+        this_open = next_open(this_monday)  # holiday-aware session open
+        if dt_utc < this_open:
+            return this_open
+        next_monday = d + timedelta(days=7)
+    else:
+        days_ahead = (0 - d.weekday()) % 7  # Monday == 0
+        next_monday = d + timedelta(days=days_ahead)
+    candidate = datetime(next_monday.year, next_monday.month, next_monday.day, tzinfo=UTC)
     return next_open(candidate)
