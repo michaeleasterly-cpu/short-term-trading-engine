@@ -34,27 +34,95 @@ class Cadence(StrEnum):
     WEEKLY_FIRST_TRADING_DAY = "weekly_first_trading_day"
 
 
+class LifecycleState(StrEnum):
+    LAB = "lab"          # SP2 territory; never dispatched/allocated
+    PAPER = "paper"      # graduated, paper-trading (current reality for all live engines)
+    LIVE = "live"        # reserved; no engine here yet (paper-only mandate)
+    RETIRED = "retired"  # snap-out complete; archive/EULOGY exists; never dispatched
+
+
+# Dispatchable states. Consumed by roster_for_dispatch() (T2) and the should_fire lifecycle guard (T3).
+_DISPATCHABLE: frozenset[LifecycleState] = frozenset(
+    {LifecycleState.PAPER, LifecycleState.LIVE})
+
+_ALLOCATOR_ENGINE = "allocator"  # the one structurally-separate engine (its own _dispatch_allocator path, D-SDLC1-4)
+
+
 class EngineProfile(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     engine: str
     cadence: Cadence
+    dispatch_order: int
+    lifecycle_state: LifecycleState
     market_closed_required: bool = True
+    allocator_eligible: bool = False
 
 
 _PROFILE: dict[str, EngineProfile] = {
-    "reversion": EngineProfile(engine="reversion", cadence=Cadence.DAILY),
-    "vector":    EngineProfile(engine="vector",    cadence=Cadence.DAILY),
-    "sentinel":  EngineProfile(engine="sentinel",  cadence=Cadence.DAILY),
-    "canary":    EngineProfile(engine="canary",    cadence=Cadence.DAILY),
-    "momentum":  EngineProfile(engine="momentum",  cadence=Cadence.MONTHLY_FIRST_TRADING_DAY),
-    # allocator profile present (this is the SoT); consumed in Sub-project C.
-    "allocator": EngineProfile(engine="allocator", cadence=Cadence.WEEKLY_FIRST_TRADING_DAY),
+    "reversion": EngineProfile(engine="reversion", cadence=Cadence.DAILY,
+                               dispatch_order=1, lifecycle_state=LifecycleState.PAPER,
+                               allocator_eligible=True),
+    "vector":    EngineProfile(engine="vector", cadence=Cadence.DAILY,
+                               dispatch_order=2, lifecycle_state=LifecycleState.PAPER,
+                               allocator_eligible=True),
+    "momentum":  EngineProfile(engine="momentum", cadence=Cadence.MONTHLY_FIRST_TRADING_DAY,
+                               dispatch_order=3, lifecycle_state=LifecycleState.PAPER,
+                               allocator_eligible=True),
+    "sentinel":  EngineProfile(engine="sentinel", cadence=Cadence.DAILY,
+                               dispatch_order=4, lifecycle_state=LifecycleState.PAPER),
+    "canary":    EngineProfile(engine="canary", cadence=Cadence.DAILY,
+                               dispatch_order=5, lifecycle_state=LifecycleState.PAPER),
+    # allocator: separate _dispatch_allocator path (NOT in the ROSTER loop, D-SDLC1-4).
+    "allocator": EngineProfile(engine="allocator", cadence=Cadence.WEEKLY_FIRST_TRADING_DAY,
+                               dispatch_order=0, lifecycle_state=LifecycleState.PAPER),
+    # sigma RETIRED (data-SDLC RETIRED symmetry, D-SDLC1-2). cadence/dispatch_order are arbitrary inert placeholders — RETIRED engines are filtered out of every dispatch/allocator accessor (T2) so these values are never consumed (D-SDLC1-6).
+    "sigma":     EngineProfile(engine="sigma", cadence=Cadence.DAILY,
+                               dispatch_order=99, lifecycle_state=LifecycleState.RETIRED),
 }
 
 
 def profile_for(engine: str) -> EngineProfile | None:
     """The EngineProfile for an engine, or None if unprofiled."""
     return _PROFILE.get(engine)
+
+
+def _roster_sorted(profiles: dict[str, EngineProfile] | None = None) -> list[EngineProfile]:
+    """Non-RETIRED, non-allocator profiles sorted by dispatch_order.
+    Raises ValueError on a duplicate dispatch_order among them — the
+    sort key MUST be total (ROSTER binds at import before tests run)."""
+    profiles = profiles if profiles is not None else _PROFILE
+    live = [p for p in profiles.values()
+            if p.lifecycle_state in _DISPATCHABLE and p.engine != _ALLOCATOR_ENGINE]
+    orders = [p.dispatch_order for p in live]
+    if len(set(orders)) != len(orders):
+        raise ValueError(f"duplicate dispatch_order among dispatchable engines: {orders}")
+    return sorted(live, key=lambda p: p.dispatch_order)
+
+
+def roster_for_dispatch() -> tuple[str, ...]:
+    """Engines dispatched in the ROSTER loop: PAPER/LIVE, non-allocator,
+    ordered by dispatch_order. The authority for ops.engine_dispatch.ROSTER."""
+    return tuple(p.engine for p in _roster_sorted())
+
+
+def allocator_eligible_engines() -> tuple[str, ...]:
+    """Inverse-vol-pool engines (allocator_eligible), ordered by dispatch_order.
+    Replaces the hand-typed allocator `engines=` default."""
+    return tuple(p.engine for p in _roster_sorted() if p.allocator_eligible)
+
+
+def archived_engines() -> tuple[str, ...]:
+    """RETIRED engines (provenance-in-SoT; data-SDLC RETIRED symmetry),
+    sorted by name. Consumer is `engine = ANY($1::text[])` (set semantics),
+    so order is behavior-equivalent; sorted for stable test diffs."""
+    return tuple(sorted(p.engine for p in _PROFILE.values()
+                        if p.lifecycle_state is LifecycleState.RETIRED))
+
+
+def engine_package_names() -> frozenset[str]:
+    """Top-level engine package dirs (PAPER/LIVE, non-allocator) — for the
+    tpcore-never-imports-an-engine layering invariant (check_imports)."""
+    return frozenset(roster_for_dispatch())
 
 
 def _week_start_date(d: date) -> date:
@@ -146,6 +214,10 @@ async def should_fire(engine: str, now: datetime, pool) -> FireDecision:
         checks["profiled"] = profile is not None
         if profile is None:
             return FireDecision(False, "unprofiled engine", checks)
+
+        checks["dispatchable"] = profile.lifecycle_state in _DISPATCHABLE
+        if not checks["dispatchable"]:
+            return FireDecision(False, "engine not dispatchable (lifecycle)", checks)
 
         checks["cadence"] = _cadence_boundary(profile, now)
         if not checks["cadence"]:

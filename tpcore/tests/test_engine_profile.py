@@ -10,6 +10,7 @@ from tpcore.engine_profile import (
     Cadence,
     EngineProfile,
     FireDecision,
+    LifecycleState,
     _cadence_boundary,
     _cadence_window_start,
     profile_for,
@@ -23,6 +24,7 @@ def test_profile_for_known_engines():
     assert profile_for("sentinel").cadence is Cadence.DAILY
     assert profile_for("momentum").cadence is Cadence.MONTHLY_FIRST_TRADING_DAY
     assert profile_for("allocator").cadence is Cadence.WEEKLY_FIRST_TRADING_DAY
+    assert profile_for("canary").cadence is Cadence.DAILY
 
 
 def test_profile_for_unknown_returns_none():
@@ -38,8 +40,8 @@ def test_profiles_are_frozen_and_self_consistent():
 
 
 def test_profile_covers_live_engine_roster():
-    # SoT: scripts/run_all_engines.sh:73 (sigma archived — excluded).
-    live = {"reversion", "vector", "momentum", "sentinel"}
+    # SoT: tpcore.engine_profile._PROFILE (sigma RETIRED, excluded from live)
+    live = {"reversion", "vector", "momentum", "sentinel", "canary"}
     missing = live - set(_PROFILE)
     assert not missing, f"engines without an EngineProfile: {missing}"
 
@@ -117,8 +119,8 @@ async def test_should_fire_all_green_fires():
         d = await should_fire("reversion", datetime(2026, 5, 5, 21, 30, tzinfo=UTC), _FakePool(ran=False))
     assert isinstance(d, FireDecision)
     assert d.fire is True and d.reason == "ready"
-    assert d.checks == {"profiled": True, "cadence": True, "market_closed": True,
-                        "supervisor_held": True,
+    assert d.checks == {"profiled": True, "dispatchable": True, "cadence": True,
+                        "market_closed": True, "supervisor_held": True,
                         "data_ready": True, "not_already_run": True}
 
 
@@ -183,3 +185,85 @@ async def test_should_fire_proceeds_when_not_held():
                               _FakePool(ran=False))
     assert d.fire is True and d.reason == "ready"
     assert d.checks["supervisor_held"] is True
+
+
+def test_lifecycle_state_enum_values():
+    assert {s.value for s in LifecycleState} == {"lab", "paper", "live", "retired"}
+
+
+def test_profile_has_new_fields_all_seven_entries():
+    # all 5 live engines + allocator are PAPER; sigma is RETIRED
+    expected = {
+        "allocator": (0, LifecycleState.PAPER, False),
+        "reversion": (1, LifecycleState.PAPER, True),
+        "vector":    (2, LifecycleState.PAPER, True),
+        "momentum":  (3, LifecycleState.PAPER, True),
+        "sentinel":  (4, LifecycleState.PAPER, False),
+        "canary":    (5, LifecycleState.PAPER, False),
+        "sigma":     (99, LifecycleState.RETIRED, False),
+    }
+    assert set(_PROFILE) == set(expected)
+    for name, (order, state, elig) in expected.items():
+        p = _PROFILE[name]
+        assert p.dispatch_order == order
+        assert p.lifecycle_state is state
+        assert p.allocator_eligible is elig
+
+
+def test_profile_for_sigma_returns_retired_profile():
+    p = profile_for("sigma")
+    assert p is not None and p.lifecycle_state is LifecycleState.RETIRED
+
+
+def test_engine_profile_rejects_missing_required_fields():
+    with pytest.raises(ValidationError):
+        EngineProfile(engine="x", cadence=Cadence.DAILY)  # no dispatch_order/lifecycle_state
+
+
+def test_accessors_return_exact_frozen_literals():
+    from tpcore.engine_profile import (
+        allocator_eligible_engines,
+        archived_engines,
+        engine_package_names,
+        roster_for_dispatch,
+    )
+    assert roster_for_dispatch() == ("reversion", "vector", "momentum", "sentinel", "canary")
+    assert allocator_eligible_engines() == ("reversion", "vector", "momentum")
+    assert archived_engines() == ("sigma",)
+    assert engine_package_names() == frozenset(
+        {"reversion", "vector", "momentum", "sentinel", "canary"})
+
+
+def test_roster_excludes_allocator_and_retired():
+    from tpcore.engine_profile import roster_for_dispatch
+    r = roster_for_dispatch()
+    assert "allocator" not in r and "sigma" not in r
+
+
+def test_dispatch_order_uniqueness_validation():
+    from tpcore.engine_profile import _roster_sorted
+    bad = {
+        "a": EngineProfile(engine="a", cadence=Cadence.DAILY, dispatch_order=1,
+                           lifecycle_state=LifecycleState.PAPER),
+        "b": EngineProfile(engine="b", cadence=Cadence.DAILY, dispatch_order=1,
+                           lifecycle_state=LifecycleState.PAPER),
+    }
+    with pytest.raises(ValueError, match="duplicate dispatch_order"):
+        _roster_sorted(bad)
+
+
+async def test_should_fire_fails_closed_for_non_dispatchable_lifecycle():
+    # sigma is RETIRED in _PROFILE → should_fire must fail-closed even
+    # though profile_for now returns a profile (H-B7).
+    d = await should_fire("sigma", datetime(2026, 5, 18, 21, 0, tzinfo=UTC), pool=None)
+    assert d.fire is False
+    assert d.reason == "engine not dispatchable (lifecycle)"
+    assert d.checks.get("dispatchable") is False
+
+
+def test_check_imports_engine_packages_derived_and_drift_fixed():
+    from tpcore.scripts.check_imports import ENGINE_PACKAGES
+    assert ENGINE_PACKAGES == frozenset(
+        {"reversion", "vector", "momentum", "sentinel", "canary"})
+    assert "sigma" not in ENGINE_PACKAGES   # archived drift fixed
+    assert "canary" in ENGINE_PACKAGES      # missing-live drift fixed

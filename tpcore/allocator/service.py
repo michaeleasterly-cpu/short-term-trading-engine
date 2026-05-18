@@ -41,6 +41,7 @@ import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
 from tpcore.aar import AARReader
+from tpcore.engine_profile import allocator_eligible_engines, archived_engines
 from tpcore.indicators.chop import (
     CHOP_SIDEWAYS_STRONG,
     CHOP_SIDEWAYS_WEAK,
@@ -78,13 +79,12 @@ HARD_BAND_DRIFT_PCT = Decimal("0.50")  # 50%
 # VOL_LOOKBACK_SESSIONS for symmetry and is comfortably > CHOP_PERIOD=14.
 REGIME_CHOP_LOOKBACK_SESSIONS = 60
 
-# Engines that have been ARCHIVED — their platform.risk_state row is
-# stale and must be pruned. This is an explicit allowlist (NOT derived
-# from self._engines) so the prune can ONLY ever delete known-dead
-# engines and can never delete a live engine's risk state, regardless
-# of how the allocator's managed-engine set is configured. Add an
-# engine here only when it is archived (see archive/<engine>/EULOGY.md).
-_ARCHIVED_ENGINES: tuple[str, ...] = ("sigma",)
+# Derived from tpcore.engine_profile.archived_engines() (SDLC SP1). To
+# archive an engine, set lifecycle_state=RETIRED in engine_profile._PROFILE
+# — do NOT edit this line.
+_ARCHIVED_ENGINES: tuple[str, ...] = archived_engines()
+# Derived from the engine_profile SoT (allocator_eligible flag, SDLC SP1).
+_DEFAULT_ENGINES: tuple[str, ...] = allocator_eligible_engines()
 
 
 class AllocationDecision(BaseModel):
@@ -148,7 +148,7 @@ class AllocatorService:
         # (fixed 10–20% cap), not the inverse-vol pool.
         # canary excluded by omission — pipeline-exercise heartbeat,
         # never reweighted (spec §5a).
-        engines: tuple[str, ...] = ("reversion", "vector", "momentum"),
+        engines: tuple[str, ...] = _DEFAULT_ENGINES,
         platform_capital: Decimal = Decimal("40000"),
         enforce_freeze: bool = False,
         as_of: date | None = None,

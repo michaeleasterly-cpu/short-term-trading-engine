@@ -222,11 +222,7 @@ async def test_prune_is_idempotent_second_run_no_delete_no_audit() -> None:
 
 
 def _make_service_production_default(pool: _FakePool) -> AllocatorService:
-    """Construct AllocatorService EXACTLY as production does — WITHOUT
-    passing ``engines=``, so ``self._engines`` is the ``__init__``
-    default ``("sigma", "reversion", "vector", "momentum")``. This
-    reproduces the critical defect: the default includes archived
-    ``sigma`` and OMITS live ``sentinel``."""
+    """Construct AllocatorService EXACTLY as production does — WITHOUT passing ``engines=``, so ``self._engines`` is the ``__init__`` default (sigma-free since 2026-05-16; the prune path separately targets archived_engines())."""
     return AllocatorService(
         pool=pool,  # type: ignore[arg-type]
         platform_capital=Decimal("40000"),

@@ -16,6 +16,8 @@ import ast
 import sys
 from pathlib import Path
 
+from tpcore.engine_profile import engine_package_names
+
 FORBIDDEN_MODULES = frozenset(
     {
         "alpaca_trade_api",
@@ -33,9 +35,7 @@ FORBIDDEN_MODULES = frozenset(
 # under ``TYPE_CHECKING`` — ast.walk sees it) fails the build. Scoped
 # to library code: tpcore/tests and tpcore/templates (scaffold) are
 # exempt — they are not part of the shipped import graph.
-ENGINE_PACKAGES = frozenset(
-    {"sigma", "reversion", "vector", "momentum", "sentinel"}
-)
+ENGINE_PACKAGES = engine_package_names()
 
 
 def _module_root(name: str) -> str:
