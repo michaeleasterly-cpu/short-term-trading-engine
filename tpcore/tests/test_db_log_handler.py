@@ -50,7 +50,25 @@ class _FakeConn:
         if "DELETE FROM platform.application_log" in sql:
             (cutoff,) = args
             before = len(self._rows)
-            self._rows[:] = [r for r in self._rows if r["recorded_at"] >= cutoff]
+            # Honor the real prune's retention-exemption clause: rows
+            # whose event_type is named in an ``event_type NOT IN (...)``
+            # predicate survive regardless of age (DR2.1 — the
+            # REVIEW_DEFECT_* primitive must not silently expire). Parsed
+            # from the real SQL so the fake tracks the actual prune.
+            exempt: set[str] = set()
+            if "event_type NOT IN" in sql:
+                inside = sql.split("event_type NOT IN", 1)[1]
+                inside = inside.split("(", 1)[1].split(")", 1)[0]
+                exempt = {
+                    tok.strip().strip("'\"")
+                    for tok in inside.split(",")
+                    if tok.strip()
+                }
+            self._rows[:] = [
+                r
+                for r in self._rows
+                if r["recorded_at"] >= cutoff or r["event_type"] in exempt
+            ]
             removed = before - len(self._rows)
             return f"DELETE {removed}"
         return "OK"
@@ -287,3 +305,127 @@ async def test_retention_window_respects_constructor_value() -> None:
     assert "3 days ago" not in messages  # past 2-day window
     assert "1 day ago" in messages  # inside 2-day window
     assert "now" in messages
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Retention exemption — REVIEW_DEFECT_* rows survive past the window
+# (DR2.1, #254): the consolidated defect register's only durable
+# primitive lives on application_log; the 7-day prune must NEVER delete
+# an open review-found defect or it silently expires.
+# ────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "event_type", ["REVIEW_DEFECT_LOGGED", "REVIEW_DEFECT_RESOLVED"]
+)
+@pytest.mark.asyncio
+async def test_retention_exempts_review_defect_events(event_type) -> None:
+    """An aged REVIEW_DEFECT_* row is NOT pruned; a same-age ordinary
+    row IS (control). Drives the real prune SQL against the fake pool."""
+    pool = _FakePool()
+    aged = datetime.now(UTC) - timedelta(days=30)
+    pool.rows.append(
+        _FakeRow(
+            engine="ops",
+            run_id=uuid.uuid4(),
+            event_type=event_type,
+            severity="INFO",
+            message="aged review defect",
+            data={"defect_ref": "#254"},
+            recorded_at=aged,
+        )
+    )
+    pool.rows.append(
+        _FakeRow(
+            engine="sigma",
+            run_id=uuid.uuid4(),
+            event_type="STARTUP",  # control — ordinary, same age
+            severity="INFO",
+            message="aged ordinary",
+            data=None,
+            recorded_at=aged,
+        )
+    )
+
+    handler = DBLogHandler(pool, "ops", uuid.uuid4())  # type: ignore[arg-type]
+    await handler.log("STARTUP", "fresh run", severity="INFO")
+
+    msgs = [r["message"] for r in pool.rows]
+    assert "aged review defect" in msgs, (
+        f"{event_type} was pruned — an open review-found defect must "
+        "survive the retention window (it would silently expire)"
+    )
+    assert "aged ordinary" not in msgs  # control: ordinary aged row IS pruned
+    assert "fresh run" in msgs
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Single-source-of-truth + empty-set safety (DR2 code-quality fix): the
+# real _RETENTION_SQL exemption clause is derived ONCE at module load
+# from RETENTION_EXEMPT_EVENT_TYPES — there is no duplicated hard-coded
+# literal that can drift, and an empty exempt set must NOT emit
+# ``NOT IN ()`` (a Postgres syntax error).
+# ────────────────────────────────────────────────────────────────────────────
+
+
+def test_retention_sql_derived_from_constant_no_drift() -> None:
+    """Every exempt event type — derived FROM the constant, not a
+    hard-coded literal — must appear in the real prune SQL, and no
+    OTHER quoted token may. This bites if someone re-hardcodes a
+    divergent literal (constant and SQL would diverge)."""
+    from tpcore.logging import db_handler as dh
+
+    for et in dh.RETENTION_EXEMPT_EVENT_TYPES:
+        assert repr(et) in dh._RETENTION_SQL, (
+            f"{et!r} is in RETENTION_EXEMPT_EVENT_TYPES but missing from "
+            "_RETENTION_SQL — constant and prune SQL have drifted"
+        )
+    if dh.RETENTION_EXEMPT_EVENT_TYPES:
+        clause = dh._RETENTION_SQL.split("event_type NOT IN", 1)[1]
+        inside = clause.split("(", 1)[1].split(")", 1)[0]
+        in_sql = {tok.strip().strip("'\"") for tok in inside.split(",") if tok.strip()}
+        assert in_sql == set(dh.RETENTION_EXEMPT_EVENT_TYPES), (
+            "the prune's NOT IN set must equal the constant exactly — "
+            "a re-hardcoded extra/missing literal would diverge"
+        )
+
+
+def test_empty_exempt_set_emits_no_not_in_clause(monkeypatch) -> None:
+    """With an empty exempt tuple the rebuilt clause must contain NO
+    ``NOT IN`` (``NOT IN ()`` is a Postgres syntax error) and an aged
+    row of a former-exempt type IS pruned (clause-builder reproduced
+    from the production logic so the test bites on its semantics)."""
+    from tpcore.logging import db_handler as dh
+
+    monkeypatch.setattr(dh, "RETENTION_EXEMPT_EVENT_TYPES", ())
+    exempt: tuple[str, ...] = dh.RETENTION_EXEMPT_EVENT_TYPES
+    clause = (
+        f"\n  AND event_type NOT IN ({', '.join(repr(e) for e in exempt)})"
+        if exempt
+        else ""
+    )
+    rebuilt_sql = f"""
+DELETE FROM platform.application_log
+WHERE recorded_at < $1{clause}
+"""
+    assert "NOT IN" not in rebuilt_sql
+    assert "NOT IN ()" not in rebuilt_sql
+
+    # Drive the fake prune with the empty-set SQL: a formerly-exempt
+    # aged row is now pruned (the fake parses the clause from the SQL).
+    rows: list[_FakeRow] = [
+        _FakeRow(
+            engine="ops",
+            run_id=uuid.uuid4(),
+            event_type="REVIEW_DEFECT_LOGGED",
+            severity="INFO",
+            message="aged former-exempt",
+            data=None,
+            recorded_at=datetime.now(UTC) - timedelta(days=30),
+        )
+    ]
+    import asyncio
+
+    conn = _FakeConn(rows, [])
+    asyncio.run(conn.execute(rebuilt_sql, datetime.now(UTC) - timedelta(days=7)))
+    assert [r["message"] for r in rows] == []  # no exemption → pruned
