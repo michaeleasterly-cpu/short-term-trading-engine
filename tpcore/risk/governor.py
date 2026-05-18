@@ -50,6 +50,11 @@ class RiskLimits(BaseModel):
     weekly_loss_pct: Decimal = Decimal("0.10")
     max_open_positions: int = 8
     platform_net_long_cap_pct: Decimal = Decimal("0.60")
+    # #251 Part A: opt-in (batch engines only) for the never-fail-open
+    # ``effective = max(proxy, broker_floor)`` raise on the
+    # concurrent-position check. Default False ⇒ the check is byte-identical
+    # to pre-A1 (raw persisted proxy). See spec §2 / §3.
+    reconcile_open_floor: bool = False
 
 
 class RiskState(BaseModel):

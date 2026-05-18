@@ -11,8 +11,12 @@ from __future__ import annotations
 from tpcore.risk.governor import RiskLimits
 
 _PROFILE: dict[str, RiskLimits] = {
-    "momentum": RiskLimits(max_open_positions=200),
-    "sentinel": RiskLimits(max_open_positions=5),
+    # #251 Part A: the batch engines opt into the broker-floor raise
+    # (cross-engine ``get_positions()`` sum, used solely to TIGHTEN the
+    # concurrent-position check — never-fail-open). Per-trade/heartbeat
+    # engines keep it False so their check stays byte-identical to pre-A1.
+    "momentum": RiskLimits(max_open_positions=200, reconcile_open_floor=True),
+    "sentinel": RiskLimits(max_open_positions=5, reconcile_open_floor=True),
     "canary":   RiskLimits(max_open_positions=1),
 }
 
