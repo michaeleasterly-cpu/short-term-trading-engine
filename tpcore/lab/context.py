@@ -24,7 +24,11 @@ def assert_not_in_lab() -> None:
     if _LAB_ACTIVE.get():
         raise LabIsolationViolation(
             "live side-effect path reached inside an active Lab run "
-            "(SDLC SP2 isolation contract)")
+            "(SDLC SP2 isolation contract). If a Lab run legitimately needs "
+            "risk/aar/order/broker/startup logic, wire it OUTSIDE LabContext "
+            "(e.g. InMemoryRiskStateStore + a mock broker) — engine "
+            "run_*_with_context backtest paths construct none of these by "
+            "design (SP2 C2).")
 
 
 class LabContext:

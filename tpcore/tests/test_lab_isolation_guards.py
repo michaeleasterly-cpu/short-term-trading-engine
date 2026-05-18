@@ -43,6 +43,19 @@ async def test_live_constructors_fail_closed_in_lab():
         with pytest.raises(LabIsolationViolation):
             await handler.startup()
 
+        # BaseOrderManager.__init__ — the guard is the FIRST body line so
+        # it fires before any argument is dereferenced; None/dummy args safe.
+        from tpcore.order_management.base_order_manager import BaseOrderManager
+
+        with pytest.raises(LabIsolationViolation):
+            BaseOrderManager(  # type: ignore[call-arg]
+                broker=None,
+                governor=None,
+                capital_gate=None,
+                lifecycle=None,
+                aar=None,
+            )
+
 
 def test_live_constructors_ok_outside_lab():
     from tpcore.aar.writer import AARWriter
@@ -59,8 +72,13 @@ async def test_db_handler_startup_ok_outside_lab():
     from tpcore.logging.db_handler import DBLogHandler
 
     class _DummyPool:
-        def acquire(self):  # pragma: no cover - never reached (object())
-            raise AssertionError("not exercised")
+        # acquire() IS called by DBLogHandler.log() on the inert-outside
+        # path (startup() does not raise outside a Lab run so log() runs
+        # and does `async with self._pool.acquire()`); its error is swallowed
+        # by log()'s except Exception — that swallow path is what this test
+        # exercises (startup() must NOT raise LabIsolationViolation).
+        def acquire(self):
+            raise AssertionError("dummy pool — error swallowed by log()")
 
     handler = DBLogHandler(_DummyPool(), "outside-lab", _uuid.uuid4())  # type: ignore[arg-type]
     await handler.startup()  # no LabIsolationViolation outside a Lab run
