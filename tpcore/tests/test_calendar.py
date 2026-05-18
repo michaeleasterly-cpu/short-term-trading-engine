@@ -17,13 +17,14 @@ only for the range comparison. These tests pin that contract:
 """
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta, timezone
 
 import pytest
 
 from tpcore.calendar import (
     is_trading_day,
     next_close,
+    next_monday_open,
     next_open,
     previous_close,
     session_contains,
@@ -106,3 +107,85 @@ def test_naive_datetime_raises() -> None:
     naive = datetime(2024, 1, 8, 18, 0)
     with pytest.raises(ValueError):
         session_contains(naive)
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# next_monday_open — must honor its "before the open" contract (#245)
+#
+# Reference fixtures (verified against XNYS):
+#   2024-01-08  Monday, session open 14:30Z
+#   2024-01-15  Monday — MLK Day holiday (closed); next_open → 2024-01-16 14:30Z
+#   2024-01-22  Monday, session open 14:30Z (next trading Monday after MLK)
+# ────────────────────────────────────────────────────────────────────────────
+
+_MON_0108_OPEN = datetime(2024, 1, 8, 14, 30, tzinfo=UTC)
+_MON_0122_OPEN = datetime(2024, 1, 22, 14, 30, tzinfo=UTC)
+# 2024-01-15 is MLK Day → the holiday-aware "following Monday" open is 01-16.
+_TUE_0116_OPEN = datetime(2024, 1, 16, 14, 30, tzinfo=UTC)
+
+
+def test_next_monday_open_monday_before_open_returns_this_monday() -> None:
+    # Monday 2024-01-08 at 09:00Z — strictly before the 14:30Z open.
+    dt = datetime(2024, 1, 8, 9, 0, tzinfo=UTC)
+    assert next_monday_open(dt) == _MON_0108_OPEN
+
+
+def test_next_monday_open_monday_exactly_at_open_advances() -> None:
+    # Monday 2024-01-08 exactly AT the open → following Monday (01-15 is a
+    # holiday, so the holiday-aware open is 2024-01-16).
+    dt = datetime(2024, 1, 8, 14, 30, tzinfo=UTC)
+    assert next_monday_open(dt) == _TUE_0116_OPEN
+
+
+def test_next_monday_open_monday_mid_session_advances() -> None:
+    dt = datetime(2024, 1, 8, 18, 0, tzinfo=UTC)
+    assert next_monday_open(dt) == _TUE_0116_OPEN
+
+
+def test_next_monday_open_monday_end_of_day_advances() -> None:
+    dt = datetime(2024, 1, 8, 23, 59, tzinfo=UTC)
+    assert next_monday_open(dt) == _TUE_0116_OPEN
+
+
+@pytest.mark.parametrize(
+    ("day", "hour"),
+    [
+        (9, 18),  # Tue 2024-01-09
+        (10, 18),  # Wed
+        (11, 18),  # Thu
+        (12, 18),  # Fri
+        (13, 18),  # Sat
+        (14, 18),  # Sun
+    ],
+)
+def test_next_monday_open_tue_through_sun_returns_next_monday(
+    day: int, hour: int
+) -> None:
+    # The Monday following 2024-01-09..14 is 2024-01-15 (MLK holiday) →
+    # holiday-aware open is 2024-01-16 14:30Z.
+    dt = datetime(2024, 1, day, hour, 0, tzinfo=UTC)
+    assert next_monday_open(dt) == _TUE_0116_OPEN
+
+
+def test_next_monday_open_target_monday_is_holiday_before_open_branch() -> None:
+    # Sunday 2024-01-14 → next Monday is 2024-01-15 (MLK, closed).
+    # next_open must advance to 2024-01-16 14:30Z.
+    dt = datetime(2024, 1, 14, 12, 0, tzinfo=UTC)
+    assert next_monday_open(dt) == _TUE_0116_OPEN
+
+
+def test_next_monday_open_following_monday_branch_skips_to_clean_monday() -> None:
+    # Monday 2024-01-22 mid-session → following Monday 2024-01-29 (open day).
+    dt = datetime(2024, 1, 22, 18, 0, tzinfo=UTC)
+    assert next_monday_open(dt) == datetime(2024, 1, 29, 14, 30, tzinfo=UTC)
+
+
+def test_next_monday_open_non_utc_tz_near_boundary() -> None:
+    # 09:25 in UTC-05:00 == 14:25Z on Monday 2024-01-08 — strictly before the
+    # 14:30Z open → this Monday's open. tz handling must be unchanged.
+    est = timezone(timedelta(hours=-5))
+    dt = datetime(2024, 1, 8, 9, 25, tzinfo=est)
+    assert next_monday_open(dt) == _MON_0108_OPEN
+    # 09:35 EST == 14:35Z — at/after open → following Monday (holiday-aware).
+    dt_after = datetime(2024, 1, 8, 9, 35, tzinfo=est)
+    assert next_monday_open(dt_after) == _TUE_0116_OPEN
