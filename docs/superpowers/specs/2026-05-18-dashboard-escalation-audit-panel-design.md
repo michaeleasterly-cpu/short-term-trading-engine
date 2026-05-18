@@ -1,9 +1,24 @@
 # Dashboard Escalation/Integrity Audit Panel — Design
 
-**Status:** spec 2026-05-18 (DATA lane / operator console). Brainstorm
-→ **spec (this doc)** → plan → phased subagent build. #189 (the
+**Status:** BUILT 2026-05-18 (DATA lane / operator console). Brainstorm
+→ **spec (this doc)** → plan → phased subagent build → complete. #189 (the
 deferred-LAST item; its precondition — finish the data-lane hardening
 — is now met).
+
+**Build record:**
+- P1 (PR #51): `dashboard_components/escalation.py` — four pure
+  `classify_*` functions returning the `health.py` `(color, summary,
+  detail)` tuple shape + unit tests (fabricated rows, no DB/Streamlit).
+  Landed dark (no `dashboard.py` caller).
+- P2 (PR #52): `dashboard.py` `_fetch_escalation_state()` +
+  `_fetch_escalation_state_cached` + `render_escalation_audit()`;
+  wired in Health tab after `render_platform_health()`. `_q_cross_ref`
+  repointed from stale pre-session `{check, table, count}` shape to
+  persisted `cross_table_audit.*` `data_quality_log` rows via
+  `classify_cross_table_audit` (stale `classify_cross_ref` body
+  retired; panel row label unchanged).
+- P3 (this doc update): `docs/superpowers/specs/2026-05-13-operator-
+  dashboard.md` + `CLAUDE.md` + this spec reconciled to shipped reality.
 
 **Investigation finding (verified, not assumed):** a grep of the
 entire console (`dashboard.py`, 3255 lines, + `dashboard_components/`)
