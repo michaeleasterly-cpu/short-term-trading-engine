@@ -180,6 +180,28 @@ ARCHIVE_SOURCES = (
     "fmp_fundamentals", "fmp_earnings_events",
 )
 
+# row_velocity sporadic-cadence severe-degradation thresholds (#248).
+#
+# The sporadic branch compares recent=30d vs prior=90d windows. The
+# rate-normalized expectation for the 30d window is prior * (30/90) =
+# prior/3. Sporadic tables (corporate_actions, fundamentals_quarterly)
+# legitimately swing 80%+ *week to week* — but that variance is on a
+# weekly granularity. Averaged over a 30-day aggregate against a
+# rate-normalized 90-day baseline, even a run of consecutive 80%-down
+# weeks does NOT pull the 30d total below ~20% of the rate-normalized
+# expectation: e.g. prior/3 with sustained 80%-down weeks still lands
+# near ~0.2–0.5× expectation in realistic event clustering. Only a
+# genuine multi-week sustained STALL (ingest broken but not fully
+# silent — a few stragglers still trickle in) drops recent below 15%
+# of the rate-normalized expectation. SPORADIC_SEVERE_FRAC=0.15 is
+# therefore conservatively clear of legitimate event-cadence variance
+# (a false WARN on a live-money guardrail has real cost). The prior
+# floor prevents a tiny-history table (few prior rows) from tripping
+# the ratio on noise: 30 prior-90d rows is the minimum history at
+# which a sustained-stall signal is statistically meaningful.
+SPORADIC_SEVERE_FRAC = 0.15
+SPORADIC_PRIOR_FLOOR = 30
+
 
 def _detect_archive_shrinkage() -> tuple[list[ShrinkageReport], list[dict]]:
     """Compare each archive source's latest snapshot to its predecessor.
@@ -1190,23 +1212,57 @@ async def run_unknown_unknowns(pool, sink: _FindingSink | None = None) -> list[A
                           "cadence": "daily"},
             ))
         else:
-            # Sporadic: only sustained silence is a failure. WARN iff
-            # the source produced rows over the prior 90d but ZERO in
-            # the last 30d (stalled ingest). Otherwise informational.
+            # Sporadic: WARN on sustained silence OR severe sustained
+            # partial degradation. Total silence (zero rows over 30d
+            # while the 90d history shows activity) = a fully stalled
+            # ingest. Severe partial = recent far below the
+            # rate-normalized expectation (prior * 30/90 = prior/3)
+            # while a few stragglers still trickle in (not zero, so
+            # not "silent") — a sustained ~85%+ rate collapse that the
+            # silence check alone misses. Both are conservatively well
+            # clear of legitimate 80%-wk/wk event-cadence variance
+            # (see SPORADIC_SEVERE_FRAC rationale above). Otherwise OK.
             silent = recent == 0 and prior > 0
+            expected = prior / 3.0  # rate-normalized 30d expectation
+            severe_partial = (
+                not silent
+                and prior >= SPORADIC_PRIOR_FLOOR
+                and recent < expected * SPORADIC_SEVERE_FRAC
+            )
+            if silent:
+                summary = (
+                    f"{table} (sporadic): {recent:,} rows last 30d vs "
+                    f"{prior:,} prior 90d — SILENT (stalled ingest?)"
+                )
+                recommended_action = (
+                    f"re-run the {table} stage — zero rows in 30d "
+                    f"but history shows activity"
+                )
+            elif severe_partial:
+                summary = (
+                    f"{table} (sporadic): severe sustained degradation: "
+                    f"{recent:,} in 30d vs ~{expected:.0f} rate-normalized "
+                    f"expectation from {prior:,} prior-90d"
+                )
+                recommended_action = (
+                    f"investigate the {table} ingest — sustained rate "
+                    f"collapse to <{SPORADIC_SEVERE_FRAC:.0%} of the "
+                    f"rate-normalized 90d expectation (not zero, so the "
+                    f"silence check did not fire)"
+                )
+            else:
+                summary = (
+                    f"{table} (sporadic): {recent:,} rows last 30d vs "
+                    f"{prior:,} prior 90d — within event-cadence variance"
+                )
+                recommended_action = None
             findings.append(AuditFinding(
                 phase="unknown_unknowns", check_name="row_velocity",
-                source=table, severity="WARN" if silent else "OK",
-                summary=(
-                    f"{table} (sporadic): {recent:,} rows last 30d vs "
-                    f"{prior:,} prior 90d"
-                    + (" — SILENT (stalled ingest?)" if silent else " — within event-cadence variance")
-                ),
+                source=table,
+                severity="WARN" if (silent or severe_partial) else "OK",
+                summary=summary,
                 evidence={"recent_30d": recent, "prior_90d": prior, "cadence": "sporadic"},
-                recommended_action=(
-                    f"re-run the {table} stage — zero rows in 30d but history shows activity"
-                    if silent else None
-                ),
+                recommended_action=recommended_action,
             ))
 
     # Sudden macro stoppage — most recent value > 3σ from 90-day mean.
