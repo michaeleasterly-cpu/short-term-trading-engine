@@ -706,7 +706,7 @@ async def test_digest_stalled_fires_trading_day_overdue_no_completion(
     (digest_stalled, weekly_digest hold_id, escalate-only)."""
     monkeypatch.setattr(es, "is_trading_day", lambda _dt: True)
     pool = _DigestPool(completed_weeks=())
-    await es._maybe_escalate_digest_stalled(pool, _WED)
+    await es._maybe_escalate_digest_stalled(pool, _WED, set())
     rows = _esc_rows_dp(pool)
     assert len(rows) == 1, rows
     r = rows[0]
@@ -723,7 +723,7 @@ async def test_digest_stalled_not_trading_day_no_escalation(monkeypatch):
     """(ii) is_trading_day False (weekend/holiday) ⇒ no escalation."""
     monkeypatch.setattr(es, "is_trading_day", lambda _dt: False)
     pool = _DigestPool(completed_weeks=())
-    await es._maybe_escalate_digest_stalled(pool, _WED)
+    await es._maybe_escalate_digest_stalled(pool, _WED, set())
     assert _esc_rows_dp(pool) == []
 
 
@@ -731,7 +731,7 @@ async def test_digest_stalled_already_emitted_no_escalation(monkeypatch):
     """(iii) digest already emitted this ISO-week ⇒ no escalation."""
     monkeypatch.setattr(es, "is_trading_day", lambda _dt: True)
     pool = _DigestPool(completed_weeks={_ISO_WK_WED})
-    await es._maybe_escalate_digest_stalled(pool, _WED)
+    await es._maybe_escalate_digest_stalled(pool, _WED, set())
     assert _esc_rows_dp(pool) == []
 
 
@@ -741,7 +741,7 @@ async def test_digest_stalled_within_grace_no_escalation(monkeypatch):
     monkeypatch.setattr(es, "is_trading_day", lambda _dt: True)
     just_after = datetime(2026, 5, 18, 3, 0, tzinfo=UTC)  # Mon, ~3h in
     pool = _DigestPool(completed_weeks=())
-    await es._maybe_escalate_digest_stalled(pool, just_after)
+    await es._maybe_escalate_digest_stalled(pool, just_after, set())
     assert _esc_rows_dp(pool) == []
 
 
@@ -783,7 +783,7 @@ async def test_digest_stalled_emit_failure_does_not_raise(monkeypatch):
     monkeypatch.setattr(es, "_emit_escalated", _boom_emit)
     # must NOT raise
     await es._maybe_escalate_digest_stalled(
-        _DigestPool(completed_weeks=()), _WED)
+        _DigestPool(completed_weeks=()), _WED, set())
 
 
 async def test_digest_stalled_wired_into_main_loop(monkeypatch):

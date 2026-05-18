@@ -306,7 +306,7 @@ async def _digest_completed_this_week(pool, iso_week: str) -> bool:
 
 
 async def _maybe_escalate_digest_stalled(
-        pool, now: datetime, emitted: set[str] | None = None) -> None:
+        pool, now: datetime, emitted: set[str]) -> None:
     """#243 Phase 1 (c): escalate (advisory, escalate-only) when the
     weekly digest was never reached / never advanced this ISO-week —
     DISTINCT from the shipped ``engine_service_digest_failed`` (rc≠0,
@@ -315,10 +315,9 @@ async def _maybe_escalate_digest_stalled(
     due on a weekend/holiday; the ONLY calendar input, not a data-lane
     re-derivation) AND this ISO-week's Monday-00:00-UTC rollover passed
     by > ``DIGEST_STALE_SEC`` AND no WEEKLY_DIGEST completion row exists
-    for the current ISO-week. One-shot per ISO-week (the loop-local
-    ``emitted`` set, mirroring the sweep-silent dedup). NEVER raises."""
-    if emitted is None:
-        emitted = set()
+    for the current ISO-week. One-shot per ISO-week (``emitted`` — the
+    loop-local dedup set the caller owns, matching
+    ``_maybe_escalate_sweep_silent``). NEVER raises."""
     if not is_trading_day(now):
         return
     iso_week = _iso_week(now)
