@@ -10,6 +10,7 @@ lazy/in-body.
 """
 from __future__ import annotations
 
+import inspect
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -151,3 +152,118 @@ async def test_notes_payload_shape_is_frozen_schema_1():
     assert payload["candidate"] is None  # candidate may be null (legacy/None)
     assert isinstance(payload["trials"], int)
     assert isinstance(payload["seed"], int)
+
+
+async def test_no_reset_path_monotone_and_conflict_is_dropped_not_doubled():
+    """MAKE-OR-BREAK · T-NORESET. The cumulative count is monotone and
+    has NO reset entrypoint:
+
+    1. The ledger module's public surface exposes ONLY append
+       (``record_trial_spend``) + sum (``cumulative_n_trials``) +
+       pure vocabulary helpers — no UPDATE/DELETE/reset/zero function,
+       no kwarg that reduces the SUM.
+    2. The module source contains no UPDATE/DELETE SQL against
+       ``data_quality_log`` and no DELETE/TRUNCATE at all.
+    3. Re-emitting the SAME (source, timestamp) is ``ON CONFLICT DO
+       NOTHING`` — no error, no double-count (the count stays equal,
+       never grows on the dup, never raises).
+
+    H-LL-8 (accepted residual, documented HERE not silently): a
+    same-microsecond ``(source, timestamp)`` collision drops one count
+    (``ON CONFLICT DO NOTHING``). This is fail-safe toward UNDER-count
+    ONLY and is not adversarially reachable — timestamps are
+    ``datetime.now(UTC)`` per distinct run; an adversary forcing a
+    collision also drops their OWN run's count, which cannot reduce
+    their penalty below honest. Accepted; asserted no-error/no-double
+    below.
+    """
+    import tpcore.lab.ledger as ledger
+    from tpcore.lab.ledger import (
+        cumulative_n_trials,
+        record_trial_spend,
+    )
+
+    # (1) public surface = append + sum + pure vocabulary only.
+    assert set(ledger.__all__) == {
+        "LEDGER_SCHEMA_VERSION", "LEDGER_SOURCE_PREFIX",
+        "ledger_source", "record_trial_spend", "cumulative_n_trials",
+    }
+    funcs = {n for n, o in vars(ledger).items()
+             if callable(o) and not n.startswith("_")
+             and getattr(o, "__module__", "") == ledger.__name__}
+    assert funcs == {"ledger_source", "record_trial_spend",
+                     "cumulative_n_trials"}, funcs
+    for banned in ("reset", "delete", "clear", "zero", "rollback",
+                   "decrement", "purge"):
+        assert not any(banned in f.lower() for f in funcs), banned
+    # record_trial_spend has no kwarg that could lower the SUM.
+    sig = inspect.signature(ledger.record_trial_spend)
+    assert set(sig.parameters) == {
+        "pool", "target", "candidate", "trials", "seed", "run_outcome",
+    }
+
+    # (2) no UPDATE/DELETE/TRUNCATE SQL anywhere in the module.
+    src = inspect.getsource(ledger).upper()
+    assert "UPDATE PLATFORM.DATA_QUALITY_LOG" not in src
+    assert "DELETE FROM" not in src
+    assert "TRUNCATE" not in src
+    assert "ON CONFLICT (SOURCE, TIMESTAMP) DO NOTHING" in (
+        # the contract is enforced by DataQualityWriter.write; assert the
+        # ledger relies on it (no own-rolled mutable write path).
+        inspect.getsource(
+            __import__("tpcore.quality.data_quality",
+                       fromlist=["DataQualityWriter"]).DataQualityWriter
+        ).upper()
+    )
+
+    # (3) duplicate (source, timestamp) → dropped, not doubled, no raise.
+    pool = _FakePool()
+    ts = await record_trial_spend(
+        pool, target="reversion", candidate="c", trials=40, seed=0)
+    # cumulative AFTER the first spend counts it exactly once.
+    after_first = ts + timedelta(microseconds=1)
+    cum_one = await cumulative_n_trials(pool, "reversion", after_first)
+    assert cum_one == 40
+    rows_before = len(pool.rows)
+
+    # Force a GENUINE same-(source, timestamp) collision through the
+    # exact write path record_trial_spend uses (DataQualityWriter.write)
+    # so the ON CONFLICT DO NOTHING branch is actually exercised:
+    # MUST NOT raise, MUST NOT append a row, MUST NOT double-count.
+    from decimal import Decimal
+
+    from tpcore.quality.data_quality import (
+        DataQualityScore,
+        DataQualityWriter,
+    )
+    dup = DataQualityScore(
+        source=ledger.ledger_source("reversion"),
+        timestamp=ts,  # SAME (source, timestamp) as the row above
+        latency_ms=0,
+        missing_bars=0,
+        stale=False,
+        confidence=Decimal(0),
+        notes=pool.rows[0]["notes"],
+    )
+    wrote = await DataQualityWriter(pool).write(dup)  # no exception
+    assert wrote is False  # ON CONFLICT DO NOTHING → no new row
+    assert len(pool.rows) == rows_before  # dropped, not appended
+    # no double-count: cumulative is unchanged by the dropped collision.
+    assert await cumulative_n_trials(pool, "reversion", after_first) == 40
+
+    # (b) monotone: each genuine (distinct-ts) spend only ever grows the
+    # cumulative — it is a SUM over an append-only log, never decreases.
+    # Distinct, strictly-increasing timestamps are forced (mirroring the
+    # cumulative test) so the H-LL-8 same-microsecond drop — proven above
+    # — does not perturb the additive-growth assertion here.
+    prev = await cumulative_n_trials(pool, "reversion", after_first)
+    spaced = ts + timedelta(seconds=10)
+    for i, n in enumerate((10, 25, 5)):
+        await record_trial_spend(
+            pool, target="reversion", candidate="c", trials=n, seed=0)
+        pool.rows[-1]["timestamp"] = spaced + timedelta(seconds=i)
+        cur = await cumulative_n_trials(
+            pool, "reversion", spaced + timedelta(seconds=i, microseconds=1))
+        assert cur >= prev, (cur, prev)  # never decreases
+        assert cur == prev + n  # strictly additive — no reset path
+        prev = cur
