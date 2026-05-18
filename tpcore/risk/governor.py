@@ -385,17 +385,77 @@ class RiskGovernor:
                 RiskDecision.BLOCK,
                 reason=f"weekly loss cap hit ({state.weekly_pnl} ≤ {weekly_floor})",
             )
-        if state.open_positions >= limits.max_open_positions:
+        # #251 Part A: the never-fail-open ``max(proxy, broker_floor)``
+        # raise. Fetch the broker's open positions ONCE here (the single
+        # in-band ``get_positions()`` round-trip — its result is also
+        # reused for the BUY net-long check below; NO second round-trip).
+        # ``broker_floor`` is the cross-engine open-position COUNT (no
+        # per-engine attribution — over-counting one engine is strictly
+        # TIGHTER, still never-fail-open). On ANY broker
+        # error/timeout/exception/empty/None → ``broker_floor = 0`` (a
+        # no-op against the ``max``: the conservative proxy stands). The
+        # raise is applied to the concurrent-position check ONLY when the
+        # per-engine ``reconcile_open_floor`` flag is set; otherwise the
+        # check is byte-identical to pre-A1 (raw ``state.open_positions``).
+        # ``None`` ⇒ NOT pre-fetched (flag-OFF) → the BUY net-long check
+        # below does its own single fetch = byte-identical pre-A1 path.
+        # A list (possibly ``[]``) ⇒ pre-fetched here and reused below so
+        # ``get_positions()`` is called AT MOST ONCE per ``check_trade``.
+        # ``None`` ⇒ NOT pre-fetched (flag-OFF) → the BUY net-long check
+        # below does its own single fetch = byte-identical pre-A1 path.
+        broker_positions: list | None = None
+        broker_floor = 0
+        broker_errored = False
+        if limits.reconcile_open_floor:
+            try:
+                fetched = await self._broker.get_positions()
+            except Exception as exc:  # noqa: BLE001 — never fail open: any
+                # broker failure must degrade to broker_floor=0 (proxy
+                # stands), never raise out of the gate. BLE001 precedent:
+                # the broker is an external dependency; a partial/odd
+                # response must not relax the live-money cap.
+                logger.warning(
+                    "tpcore.risk.broker_floor_unavailable",
+                    engine=engine_id,
+                    error=str(exc),
+                    detail="get_positions failed — broker_floor=0 (proxy "
+                           "stands; never fail open)",
+                )
+                fetched = None
+                broker_errored = True
+            # error/None/empty → [] (broker_floor stays 0 — the proxy
+            # stands; no second round-trip below).
+            broker_positions = list(fetched) if fetched else []
+            broker_floor = len(broker_positions)
+
+        effective_open = max(state.open_positions, broker_floor)
+        if effective_open >= limits.max_open_positions:
             return CheckResult(
                 RiskDecision.BLOCK,
                 reason=(
                     f"max concurrent positions hit "
-                    f"({state.open_positions} ≥ {limits.max_open_positions})"
+                    f"({effective_open} ≥ {limits.max_open_positions})"
                 ),
             )
 
         if direction is OrderSide.BUY:
-            exposure = await self._platform_net_long_after(size)
+            if broker_errored:
+                # The single in-band ``get_positions()`` failed for a
+                # flag-ON engine. Pre-A1 the net-long check would have
+                # re-fetched and raised (fail CLOSED). We must NOT silently
+                # treat positions as ``[]`` here (that would under-count
+                # net-long → fail OPEN). BLOCK is strictly never-fail-open
+                # and avoids the forbidden second round-trip.
+                return CheckResult(
+                    RiskDecision.BLOCK,
+                    reason=(
+                        "broker positions unavailable — net-long exposure "
+                        "cannot be verified (fail closed; never fail open)"
+                    ),
+                )
+            exposure = await self._platform_net_long_after(
+                size, positions=broker_positions
+            )
             cap = limits.platform_net_long_cap_pct
             if self._platform_capital > 0 and exposure / self._platform_capital > cap:
                 return CheckResult(
@@ -440,9 +500,21 @@ class RiskGovernor:
             )
         return CheckResult(RiskDecision.ALLOW)
 
-    async def _platform_net_long_after(self, additional_long: Decimal) -> Decimal:
-        """Sum of current long position market values + ``additional_long``."""
-        positions = await self._broker.get_positions()
+    async def _platform_net_long_after(
+        self,
+        additional_long: Decimal,
+        *,
+        positions: list | None = None,
+    ) -> Decimal:
+        """Sum of current long position market values + ``additional_long``.
+
+        ``positions`` may be the list already fetched by :meth:`check_trade`'s
+        #251 Part A broker-floor step (reused so ``get_positions`` is called
+        AT MOST once per gate — no second round-trip). ``None`` ⇒ not
+        pre-fetched (flag-OFF path) → fetch here, byte-identical to pre-A1.
+        """
+        if positions is None:
+            positions = await self._broker.get_positions()
         existing_long = sum(
             (p.market_value or p.qty * p.avg_entry_price for p in positions if p.qty > 0),
             start=Decimal("0"),
