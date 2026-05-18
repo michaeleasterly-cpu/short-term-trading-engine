@@ -804,6 +804,10 @@ def test_engine_lane_consumes_only_public_surface() -> None:
     foot-gun (a future `ops.llm_data_triage` private rename would
     silently require an `ops/engine_llm_triage` change). If this bites,
     re-point the engine reference at the published public alias."""
+    engine_triage_src = (_HOST_REPO_ROOT / "ops" / "engine_llm_triage.py").read_text()
+    assert "_shipped" in engine_triage_src, (
+        "guard assumption broken: the _shipped accessor was renamed — "
+        "update _data_lane_private_attr_accesses + this guard together")
     leaks = _data_lane_private_attr_accesses(
         str(_HOST_REPO_ROOT / "ops" / "engine_llm_triage.py"))
     assert leaks == [], (
@@ -840,3 +844,47 @@ def test_private_spelunk_guard_actually_bites(tmp_path) -> None:
         "    m = _shipped()\n"
         "    return a, m.ANTHROPIC_MODEL\n")
     assert _data_lane_private_attr_accesses(str(clean)) == []
+
+
+def test_clockwork_guard_fails_loud_on_accessor_rename(tmp_path) -> None:
+    """Prove the hardened guard raises LOUD (not vacuous-pass) when the
+    ``_shipped`` accessor is benignly renamed.
+
+    Pre-fix behaviour: ``_data_lane_private_attr_accesses`` returned [] on a
+    renamed accessor because no ``_shipped`` calls existed to track —
+    ``test_engine_lane_consumes_only_public_surface`` would have passed
+    vacuously even if the module still spelunked a private via the new name.
+
+    Post-fix behaviour: the explicit ``assert "_shipped" in src`` guard fires
+    with an ``AssertionError`` BEFORE the scanner runs, so the rename is
+    caught loud instead of silently ignored.
+    """
+    # Synthetic engine module where the accessor is renamed to `_data_lane`
+    # but it still spelunks a private attribute — this is the benign-rename
+    # + live-spelunk scenario the guard must catch.
+    renamed = tmp_path / "engine_renamed.py"
+    renamed.write_text(
+        "def _data_lane():\n"
+        "    from ops import llm_data_triage\n"
+        "    return llm_data_triage\n"
+        "def f():\n"
+        "    m = _data_lane()\n"
+        "    return m._MODEL\n")
+
+    renamed_src = renamed.read_text()
+
+    # Pre-fix behaviour: scanner returns [] (no _shipped → nothing tracked)
+    # which means the old guard would have passed vacuously.
+    assert "_shipped" not in renamed_src, (
+        "test setup broken: renamed module must NOT contain '_shipped'")
+    pre_fix_leaks = _data_lane_private_attr_accesses(str(renamed))
+    assert pre_fix_leaks == [], (
+        "pre-fix scanner correctly returns empty on a renamed accessor "
+        "(confirming the vacuous-pass risk)")
+
+    # Post-fix behaviour: the hardened assertion fires as an AssertionError.
+    import pytest
+    with pytest.raises(AssertionError, match="guard assumption broken"):
+        assert "_shipped" in renamed_src, (
+            "guard assumption broken: the _shipped accessor was renamed — "
+            "update _data_lane_private_attr_accesses + this guard together")
