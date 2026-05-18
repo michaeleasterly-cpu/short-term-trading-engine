@@ -5,8 +5,10 @@ Pure: fabricated DefectRow-shaped namespaces. No DB, no Streamlit, no
 not even in play here — the classifier is duck-typed on the DefectRow
 field names DR1/DR2 froze). Mirrors tests/test_dashboard_escalation.py.
 
-Plus an import-smoke for ``dashboard.py`` (it must import with the new
-render-only panel wired in).
+Pure-component only: ``dashboard.py`` is intentionally NOT import-tested
+here because ``streamlit`` is not a CI dependency (it lives only in the
+local dev venv) — exactly the tests/test_dashboard_escalation.py
+precedent.
 """
 from __future__ import annotations
 
@@ -82,13 +84,3 @@ def test_review_defect_summary_includes_origin_and_state() -> None:
     row = detail[0]
     assert "review" in row[2] or "review" in row[0]
     assert "RiskGovernor weekly-cap" in row[2]
-
-
-def test_dashboard_imports_with_panel() -> None:
-    """Import-smoke: dashboard.py must import cleanly with the new
-    render-only Defect-Register panel wired in."""
-    import importlib
-
-    mod = importlib.import_module("dashboard")
-    assert hasattr(mod, "render_defect_register")
-    assert hasattr(mod, "_fetch_defect_register_cached")
