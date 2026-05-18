@@ -345,12 +345,12 @@ async def _run_supervised(
     name: str, factory, stop_event: asyncio.Event, backoff: float = 5.0
 ) -> None:
     """Run ``factory()`` (a 0-arg coroutine fn) until stop_event; an
-    Exception is logged and the lane restarted after ``backoff`` — one
-    crashed lane co-task must NEVER kill its sibling lane or the daemon
-    (mirrors ``engine_service._run_supervised`` verbatim; the engine
-    lane and the data lane are wrapped in SEPARATE _run_supervised co-
-    tasks so a hung/crashed engine LLM call cannot starve the data lane
-    or vice-versa). CancelledError propagates (clean shutdown)."""
+    Exception is logged and the lane restarted after ``backoff`` —
+    mirrors the crash-isolation CONTRACT of ``engine_service._run_supervised``
+    (CancelledError propagates; non-Cancelled Exception is logged +
+    backoff-restarted, never propagated), but deliberately OMITS the
+    engine-lane crash-loop Ladder escalation (advisory daemon must not
+    feed the engine Ladder). CancelledError propagates (clean shutdown)."""
     while not stop_event.is_set():
         try:
             await factory()

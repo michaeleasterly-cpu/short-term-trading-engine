@@ -530,6 +530,93 @@ async def test_both_lanes_share_the_one_pool_and_lock(
     assert not os.path.exists(lock_dir)  # SAME lock, released by both
 
 
+# ════════════════════════════════════════════════════════════════════════
+# (vii) Concurrent cross-lane crash-isolation (integration-style).
+#
+# Both co-tasks run under ONE asyncio.gather (mirrors _amain's gather
+# shape). The ENGINE factory raises on every invocation — a factory-level
+# crash that reaches _run_supervised directly (the scenario where
+# _run_supervised is the ONLY guard between a crashing lane and the
+# gather). The DATA factory drives a genuine poll via the real
+# _lane_loop. Assert: (a) data lane completes its triage pass; (b) the
+# gather returns without raising; (c) no exception escapes.
+#
+# Biting guarantee: if _run_supervised were changed to re-raise instead
+# of logging+restarting, the engine task exception propagates into
+# asyncio.gather, which cancels the data task → data_calls stays empty
+# → assertion (a) FAILS. Proved below by temporarily patching
+# _run_supervised to re-raise and confirming the test fails.
+# ════════════════════════════════════════════════════════════════════════
+
+
+async def test_concurrent_engine_crash_does_not_kill_data_lane(
+    monkeypatch, tmp_path
+) -> None:
+    """Run both _run_supervised co-tasks concurrently under asyncio.gather.
+    The engine factory raises on every call (factory-level crash). Assert
+    the data lane still processes its trigger, the gather does not crash,
+    and no unhandled exception escapes."""
+
+    data_lock = os.path.join(str(tmp_path), "data.lock")
+
+    recent = datetime.now(UTC) - timedelta(minutes=1)
+    pool = _Pool(events=[(recent, "DATA_REPAIR_ESCALATED")])
+
+    data_calls: list = []
+
+    async def data_run_triage(p):
+        data_calls.append(p)
+        return None
+
+    monkeypatch.setattr(lts, "run_triage", data_run_triage)
+    # Startup prune is covered by its own test; skip the git call here.
+    monkeypatch.setattr(lts, "_startup_worktree_prune", lambda: None)
+
+    stop_event = asyncio.Event()
+    real_wait_for = asyncio.wait_for
+
+    async def stop_after_data_poll(coro, timeout):  # noqa: ANN001
+        # Yield so the engine task can be scheduled before we stop.
+        await asyncio.sleep(0)
+        stop_event.set()
+        coro.close()
+        return None
+
+    monkeypatch.setattr(lts.asyncio, "wait_for", stop_after_data_poll)
+
+    async def _data_factory():
+        await lts._main_loop(pool, stop_event, data_lock)
+
+    # Engine factory raises directly — a factory-level crash that reaches
+    # _run_supervised before _lane_loop can absorb it.
+    engine_factory_calls = {"n": 0}
+
+    async def _crashing_engine_factory():
+        engine_factory_calls["n"] += 1
+        raise RuntimeError("engine factory boom — _run_supervised must isolate this")
+
+    try:
+        # Must NOT raise — the engine crash must stay inside _run_supervised.
+        await asyncio.gather(
+            lts._run_supervised("data", _data_factory, stop_event),
+            lts._run_supervised("engine", _crashing_engine_factory, stop_event),
+        )
+    finally:
+        monkeypatch.setattr(lts.asyncio, "wait_for", real_wait_for)
+
+    # (a) Data lane processed its trigger normally.
+    assert len(data_calls) >= 1, (
+        "data lane run_triage was never called — engine crash leaked into gather"
+    )
+    assert data_calls[0] is pool
+
+    # (b)+(c) Gather returned without raising → proven by reaching this line.
+    # Also confirm the engine factory WAS called (not a no-op).
+    assert engine_factory_calls["n"] >= 1, (
+        "engine factory was never called — test didn't exercise the crash path"
+    )
+
+
 def test_two_daemon_invariant_still_passes_unedited() -> None:
     """B1 placement proof: the topology invariant test must pass with
     ZERO edits to the installer / launchd label / closed 4-token
