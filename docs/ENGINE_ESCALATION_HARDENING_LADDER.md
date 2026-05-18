@@ -52,7 +52,46 @@ references the data-lane ladder (`docs/ESCALATION_HARDENING_LADDER.md`)
   `RiskGovernor.emergency_kill`/kill-switch, the DSR/credibility
   graduation gate, or `archive/<engine>/EULOGY.md` + the Engine SDLC
   snap-out.
-- **R5 — LLM/agentic triage:** OUT of scope (Epic E).
+- **R5 — LLM/agentic triage: BUILT 2026-05-18 (Epic E).**
+  `ops/engine_llm_triage.py` is an **advisory + human-gated** triage
+  analyst for genuinely-novel engine escalations — the engine-native
+  symmetric mirror of the shipped data-lane #187 (symmetry-of-approach,
+  NOT a clone). It triggers on `ENGINE_ESCALATED`, selects only
+  `hold_id`s in `engine_ladder.list_undispositioned()` (open +
+  undispositioned + past grace; the corrected §7 predicate — NOT an
+  "unknown class", structurally impossible) minus prior-proposal dedup,
+  reads the repo in a credential-starved ephemeral `git worktree`,
+  calls official Anthropic `messages.create` with **no `tools`**, emits
+  a non-authoritative `ENGINE_LLM_TRIAGE_PROPOSAL`, and produces only a
+  **draft, human-merge-only PR** (an additive, mechanism-free
+  `DISPOSITION_POLICIES` binding pointing an **existing**
+  `EngineEscalationDisposition` verb at the novel pattern + a dossier).
+  Bright lines: it **never** feeds the Ladder, never mutates, never
+  trades, never disposes, never edits the ladder/supervisor mechanism;
+  it is NOT a safety boundary (the fence is). Fenced deterministically
+  by the credential-starved label-gated `engine-llm-triage-fence` CI
+  job (provenance + hard-denied paths reused verbatim from the #187
+  pure `tpcore/llm_data_triage/{fence,canary}` — one fence object, no
+  twin) + two-human review + inert-until-merged + post-merge
+  canary/shadow. The LLM is **never** the detector: Phase 0 closed the
+  engine-daemon platform-service blind spot **deterministically** (a
+  small `ops/engine_service` emitter for co-hosted-task crash-loop /
+  swallowed-digest failure, see R1) so the LLM only triages what the
+  deterministic layer already escalated — "deterministic agents stay
+  deterministic", the LLM sits strictly atop the fail-closed Ladder.
+  Placement is **B1**: a second crash-isolated `_run_supervised`
+  co-task inside the existing process-isolated advisory daemon
+  `ops/llm_triage_service.py` (NOT in the live-trading `engine_service`,
+  NOT a 5th daemon — the installer/launchd label/4-token whitelist are
+  unchanged, the two-daemon topology invariant holds by construction).
+  The bounded silent-absence detectors (no-sweep-in-N-windows /
+  no-trade-updates-while-market-open / digest-key-stalled) are a
+  **tracked deterministic follow-up (#243)** — deliberately deferred
+  (no non-flaky predicate today on a live trading daemon), explicitly
+  NOT the LLM's job. Spec:
+  `docs/superpowers/specs/2026-05-18-engine-llm-triage-advisory-layer-design.md`;
+  persona `docs/engine_llm_triage_persona.md`; settings runbook
+  `docs/llm_data_triage_operator_runbook.md` (shared, both lanes).
 
 ## Operator workflow
 
