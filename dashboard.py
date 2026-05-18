@@ -2285,7 +2285,7 @@ def render_platform_health() -> None:
                 _render_health_row(name, color, text)
             st.caption(
                 "**One-button install:** `scripts/install_all_daemons.sh` "
-                "(installs trade_monitor, data_operations, allocator). "
+                "(installs engine_service, data_operations, allocator). "
                 "Logs: `~/Library/Logs/short-term-trading-engine/`."
             )
             not_installed = [d["name"] for d in daemons if not d["installed"]]
@@ -2293,7 +2293,7 @@ def render_platform_health() -> None:
                 if st.button(
                     "🔧 Install all daemons",
                     key="health_install_daemons",
-                    help="Runs scripts/install_all_daemons.sh — sets up trade_monitor + data_operations + allocator launchd agents.",
+                    help="Runs scripts/install_all_daemons.sh — sets up engine_service + data_operations + allocator launchd agents.",
                 ):
                     rc, output = run_blocking_script("scripts/install_all_daemons.sh", timeout=60)
                     _render_blocking_output("Install daemons", rc, output)
