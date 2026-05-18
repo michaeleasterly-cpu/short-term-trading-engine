@@ -22,8 +22,15 @@ strictly-newer events. On first start the cursor initializes to
 ``now() - 1h`` so a freshly-restarted daemon doesn't replay events
 older than the typical data-ops window.
 
-KeepAlive=true at the launchd layer restarts the process on crash;
-this loop has no internal restart, just clean exits + reconnection.
+Consolidated topology (DA-3): one engine daemon co-hosts (a) the
+``DATA_OPERATIONS_COMPLETE`` / green-``DATA_REPAIR_COMPLETE`` sweep
+poll-loop, (b) the ``TradeMonitor.run_forever()`` stream (Tier-2 OCO
+cascade), and (c) a deterministic UTC-day-rollover ``python -m
+ops.weekly_digest emit`` subprocess trigger. The two long-lived tasks
+run under a per-task supervisor that restarts a crashed task without
+killing its sibling (defense-in-depth atop launchd ``KeepAlive``); a
+single shared asyncpg pool backs all of them, with clean
+signal-driven shutdown.
 """
 from __future__ import annotations
 
@@ -106,12 +113,12 @@ async def _maybe_fire_weekly_digest(state: dict, today: date | None = None) -> N
         )
         rc = await proc.wait()
     except Exception as exc:  # noqa: BLE001 — isolate: never abort the daemon
-        logger.error("engine_daemon.weekly_digest_failed", error=str(exc))
+        logger.error("engine_service.weekly_digest_failed", error=str(exc))
         return
     if rc == 0:
-        logger.info("engine_daemon.weekly_digest_done")
+        logger.info("engine_service.weekly_digest_done")
     else:
-        logger.error("engine_daemon.weekly_digest_failed", returncode=rc)
+        logger.error("engine_service.weekly_digest_failed", returncode=rc)
 
 
 async def _run_supervised(name: str, factory, stop_event: asyncio.Event,
@@ -127,7 +134,7 @@ async def _run_supervised(name: str, factory, stop_event: asyncio.Event,
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 — restart, don't propagate
-            logger.error("engine_daemon.task_crashed", task=name,
+            logger.error("engine_service.task_crashed", task=name,
                          error=str(exc))
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=backoff)
