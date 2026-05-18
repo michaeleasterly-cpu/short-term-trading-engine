@@ -29,6 +29,7 @@ dependencies = [
     "scipy>=1.11",
     "croniter>=2.0",
     "xlrd>=2.0",
+    "anthropic>=0.40",
 ]
 
 [project.optional-dependencies]
@@ -74,7 +75,7 @@ ignore = ["E501"]
 # `l` for "low" is a natural OHLC variable name in test fixtures; the rule
 # (E741: ambiguous variable name) targets production code where one-letter
 # names hurt readability, not synthetic-bar generators.
-"**/tests/**" = ["E741"]
+"**/tests/**" = ["E741", "E702"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
