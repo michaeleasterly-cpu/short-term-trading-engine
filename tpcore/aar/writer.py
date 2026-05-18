@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from tpcore.lab.context import assert_not_in_lab
+
 from .models import AfterActionReport
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -28,6 +30,7 @@ class AARWriter:
     """
 
     def __init__(self, db_pool: asyncpg.Pool | None = None) -> None:
+        assert_not_in_lab()
         self._pool = db_pool
 
     @property

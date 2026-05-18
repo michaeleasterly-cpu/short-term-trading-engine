@@ -40,6 +40,7 @@ from tpcore.interfaces.broker import (
     OrderType,
     Position,
 )
+from tpcore.lab.context import assert_not_in_lab
 from tpcore.outage import OutageThresholds, OutageTier, classify_outage
 from tpcore.quality.execution_quality import ExecutionQualityScore, ExecutionQualityWriter
 
@@ -114,6 +115,7 @@ class AlpacaPaperBrokerAdapter(BrokerExecutionInterface):
         outage_thresholds: OutageThresholds | None = None,
         _client: Any | None = None,
     ) -> None:
+        assert_not_in_lab()
         self._api_key = api_key or os.getenv("ALPACA_KEY")
         self._api_secret = api_secret or os.getenv("ALPACA_SECRET")
         self._paper = paper if paper is not None else os.getenv("ALPACA_PAPER", "true").lower() == "true"

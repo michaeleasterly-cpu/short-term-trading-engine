@@ -28,6 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from tpcore.calendar import next_monday_open, next_open
 from tpcore.interfaces.broker import BrokerExecutionInterface, OrderSide
+from tpcore.lab.context import assert_not_in_lab
 
 if TYPE_CHECKING:  # pragma: no cover
     import asyncpg
@@ -170,6 +171,7 @@ class RiskGovernor:
         platform_capital: Decimal = Decimal("0"),
         pool: asyncpg.Pool | None = None,
     ) -> None:
+        assert_not_in_lab()
         self._store = state_store
         self._broker = broker
         self._default_limits = limits or RiskLimits()
