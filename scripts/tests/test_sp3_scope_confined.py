@@ -11,7 +11,32 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[2]
+
+
+def _resolve_sp3_base() -> str:
+    """Resolve the SP3 merge-base. Prefer ``origin/main`` (the ref CI's
+    PR checkout actually has — a bare local ``main`` does NOT exist in a
+    `actions/checkout` PR clone, only the PR HEAD + remote-tracking
+    refs). Fall back to a local ``main`` for a plain dev clone. Skip
+    (not fail) if neither base ref resolves — the scope gate must never
+    emit a false RED on a checkout that lacks the base ref entirely."""
+    for ref in ("origin/main", "main"):
+        rev = subprocess.run(  # noqa: S603
+            ["git", "rev-parse", "--verify", "--quiet", ref],
+            cwd=REPO, capture_output=True, text=True
+        )
+        if rev.returncode != 0:
+            continue
+        mb = subprocess.run(  # noqa: S603
+            ["git", "merge-base", "HEAD", ref],
+            cwd=REPO, capture_output=True, text=True
+        )
+        if mb.returncode == 0 and mb.stdout.strip():
+            return mb.stdout.strip()
+    pytest.skip("no SP3 base ref (origin/main / main) in this checkout")
 
 # SP4 / data-lane files SP3 must NEVER touch (spec §1.1, H-S3-10c).
 _FORBIDDEN_PREFIXES = (
@@ -53,10 +78,7 @@ _ALLOWED_PREFIXES = (
 
 
 def test_sp3_change_set_confined_to_net_new_surface():
-    base = subprocess.run(  # noqa: S603
-        ["git", "merge-base", "HEAD", "main"],
-        cwd=REPO, capture_output=True, text=True, check=True
-    ).stdout.strip()
+    base = _resolve_sp3_base()
     names = subprocess.run(  # noqa: S603 — read-only name-only diff
         ["git", "diff", "--name-only", base, "HEAD"],
         cwd=REPO, capture_output=True, text=True, check=True
