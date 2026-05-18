@@ -194,9 +194,13 @@ async def test_amain_smoke_survived_verdict(monkeypatch, tmp_path):
     async def _fake_runner(*a, **k):
         return _FakeRunResult()
 
-    monkeypatch.setattr(sp, "_context_runner_for", lambda e: _fake_ctx_runner)
-    monkeypatch.setattr(sp, "_context_loader_for", lambda e: _fake_ctx_loader)
-    monkeypatch.setattr(sp, "_runner_for", lambda e: _fake_runner)
+    # T5 retarget (plan-authorized — see this module's docstring "T5
+    # MIGRATION (binding)"): amain now lives in ops.lab.run; sp re-exports
+    # it. Patch where the names are USED (the defining module), not where
+    # they are re-exported, or this smoke silently no-ops.
+    monkeypatch.setattr("ops.lab.run._context_runner_for", lambda e: _fake_ctx_runner)
+    monkeypatch.setattr("ops.lab.run._context_loader_for", lambda e: _fake_ctx_loader)
+    monkeypatch.setattr("ops.lab.run._runner_for", lambda e: _fake_runner)
 
     persisted: dict = {}
 
