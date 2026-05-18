@@ -324,31 +324,37 @@ class _Journal:
 
 
 def _shadow_edit_remove(staged: Path, engine: str, jn: _Journal) -> None:
-    """Purge the engine from the two structurally-parseable shadows
-    (the ONLY non-SoT-derived sites — spec §4.2 fs_op 4)."""
-    smoke = staged / "scripts" / "run_smoke_test.sh"
-    jn.record_file(smoke)
-    s = smoke.read_text()
-    m = re.search(r"(for engine in )([^\n;]+)(;\s*do)", s)
-    if m:
-        toks = [t for t in m.group(2).split() if t != engine]
-        smoke.write_text(s.replace(
-            m.group(0), f"{m.group(1)}{' '.join(toks)}{m.group(3)}"))
-    pp = staged / "pyproject.toml"
-    jn.record_file(pp)
-    txt = pp.read_text()
-    # SP4 T2 (DDF-1, second instance): the pyproject include/testpaths
-    # engine rows are now sentinel-fenced multi-line arrays (one
-    # ``    "engine*",`` per line). The legacy single-line CSV purges
-    # (``"engine*", `` / ``, "engine*"``) silently no-op on that form —
-    # also strip the own-a-line row so the executor purge stays correct
-    # post-fence. (The general executor→renderer migration is T5; this
-    # is the minimal fence-safe purge so T2's SP3-atomicity gate is
-    # green.)
-    txt = txt.replace(f'"{engine}*", ', "").replace(f', "{engine}*"', "")
-    txt = re.sub(rf'\n\s*"{engine}\*",', "", txt)
-    txt = re.sub(rf'\n\s*"{engine}/tests",', "", txt)
-    pp.write_text(txt)
+    """Purge the engine from the non-Python shadows. SP4 T5: the new
+    shadow text is computed by the ONE renderer
+    (scripts.gen_engine_manifest.render_all) — there is exactly one
+    mechanism that knows how a shadow is shaped. This SUBSUMES (does
+    NOT keep alongside) both the legacy single-line ``.replace`` purges
+    AND the T2 DDF-1 fence-aware ``re.sub`` purge — one mechanism, no
+    double-apply. The journal+write ordering is UNCHANGED (record_file
+    BEFORE write_text); the renderer is pure str→str and is NEVER
+    given a path / NEVER writes (H-S4-1). The renderer owns all four
+    fenced shadows (run_smoke_test.sh, run_all_engines.sh,
+    ops/platform_pipeline.py, pyproject.toml) so a REMOVE regenerates
+    every one — the widened folded leg-6 (T4) then passes post-REMOVE.
+
+    Lazy in-body import (H-S4-9 / spec §14 — no eager engine-or-
+    collision import at planner module top; the generator imports only
+    ``tpcore.engine_profile`` + stdlib, never ``ops``)."""
+    import sys as _sys
+    _sys.path.insert(0, str(REPO_ROOT))
+    from scripts.gen_engine_manifest import _FILE_REGIONS, render_all
+    from tpcore.engine_profile import archived_engines, roster_for_dispatch
+    # REMOVE drops `engine` from the roster; the SoT flip to RETIRED
+    # happens later in _apply_remove (the engine_profile.py rewrite),
+    # so derive the post-removal roster by filtering it out of the
+    # current roster.
+    post_roster = tuple(e for e in roster_for_dispatch() if e != engine)
+    archived = archived_engines()
+    for rel in _FILE_REGIONS:
+        p = staged / rel
+        jn.record_file(p)
+        p.write_text(render_all(p.read_text(), rel,
+                                post_roster, archived))
 
 
 def _maybe_rewrite_frozen_literal(

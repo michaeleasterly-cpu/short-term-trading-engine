@@ -236,19 +236,37 @@ def _make_synthetic_engine_tree(tmp_path: Path) -> Path:
         'lifecycle_state=LifecycleState.PAPER),\n'
         '    # allocator: separate _dispatch_allocator path')
     ep.write_text(t)
-    # DDF-1 (SP4 T2): the shadows are sentinel-fenced; the old
+    # SP4 T4: the synthetic PAPER `throwaway` is now a roster engine, so
+    # the closed reverse clockwork leg (test_live_engine_has_engine_
+    # tables_row) requires it to carry an ENGINE_TABLES data-dep row —
+    # exactly as every real PAPER/LIVE engine does (a roster engine with
+    # no row is the silent un-gated half-state the reverse leg catches).
+    # Symmetric to _apply_remove, which strips this row on REMOVE.
+    cg = (staged / "tpcore" / "quality" / "validation"
+          / "capital_gate.py")
+    cgt = cg.read_text()
+    cg.write_text(cgt.replace(
+        '    "canary": frozenset({"prices_daily"}),\n}',
+        '    "canary": frozenset({"prices_daily"}),\n'
+        '    "throwaway": frozenset({"prices_daily"}),\n}'))
+    # DDF-1 (SP4 T2) + SP4 T5b: the shadows are sentinel-fenced; the old
     # str.replace on the un-fenced literal is now a silent no-op. Build
     # the synthetic `throwaway`-bearing shadows by the ONE renderer
     # against a throwaway-augmented roster, so the staged tree is green
-    # pre-REMOVE no matter the fence wording.
+    # pre-REMOVE no matter the fence wording. T5b widens this from the
+    # two structurally-parseable shadows to ALL FOUR the renderer owns
+    # (run_smoke_test.sh, run_all_engines.sh, ops/platform_pipeline.py,
+    # pyproject.toml) — the widened folded leg-6 (T4) checks all four,
+    # so the SP3 REMOVE dry-run would RED unless every fenced shadow
+    # carries `throwaway` pre-REMOVE. Lazy in-body import (H-S4-9).
     import sys as _sys
     _repo = Path(__file__).resolve().parents[2]
     _sys.path.insert(0, str(_repo))
-    from scripts.gen_engine_manifest import render_all
+    from scripts.gen_engine_manifest import _FILE_REGIONS, render_all
     _aug_roster = ("reversion", "vector", "momentum", "sentinel",
                    "canary", "throwaway")
     _aug_archived = ("sigma",)
-    for _rel in ("scripts/run_smoke_test.sh", "pyproject.toml"):
+    for _rel in _FILE_REGIONS:
         _p = staged / _rel
         _p.write_text(render_all(_p.read_text(), _rel,
                                  _aug_roster, _aug_archived))
@@ -1284,3 +1302,56 @@ def test_validate_modify_rejects_lifecycle_key_in_sot_diff():
             assert "lifecycle is immutable" in rej.rejection, (
                 f"reject for {bad_key!r} lacks the pinned H-S3-6d "
                 f"substring: {rej.rejection!r}")
+
+
+# ─── SP4 T5: SP3 executor shadow edits via the ONE renderer ───
+
+
+def test_planner_shadow_edit_uses_renderer_not_inline_regex():
+    """H-S4-1: _shadow_edit_remove computes the new shadow text via the
+    ONE renderer (scripts.gen_engine_manifest.render_all), NOT an inline
+    re.sub/str.replace — one mechanism that knows a shadow's shape.
+    Also proves the T2 fence-aware string-surgery purge is SUBSUMED,
+    not double-applied (no leftover .replace/re.sub on the shadow
+    text)."""
+    import inspect
+
+    from ops.engine_sdlc import planner
+    src = inspect.getsource(planner._shadow_edit_remove)
+    assert "render_all" in src or "render_region" in src, (
+        "_shadow_edit_remove must compute new text via the renderer")
+    assert "re.search(r\"(for engine in )" not in src, (
+        "the inline for-engine-in regex must be gone (one mechanism)")
+    # the T2 DDF-1 fence-aware re.sub purge must be SUBSUMED, not kept
+    # alongside the renderer call (the T2 reviewer + implementer flag).
+    assert ".replace(" not in src and "re.sub(" not in src, (
+        "the legacy/T2 string-surgery purge must be SUBSUMED by the "
+        "renderer, not double-applied")
+
+
+def test_renderer_never_called_with_a_path():
+    """H-S4-1: the renderer signature is str → str; it has no Path/open
+    in its body (a guard so a future refactor can't make it a writer)."""
+    import inspect
+
+    from scripts.gen_engine_manifest import render_all, render_region
+    for fn in (render_all, render_region):
+        body = inspect.getsource(fn)
+        assert "open(" not in body and ".write_text" not in body, (
+            f"{fn.__name__} must never touch the filesystem")
+
+
+def test_renderer_is_pure_no_filesystem_io_in_planner_path():
+    """The SP3 executor still journals OLD bytes BEFORE writing — the
+    record_file-before-write ordering in _shadow_edit_remove is intact
+    (the renderer only supplied the new string)."""
+    import inspect
+
+    from ops.engine_sdlc import planner
+    src = inspect.getsource(planner._shadow_edit_remove)
+    # record_file MUST appear before write_text for each shadow file.
+    rf = src.index("jn.record_file")
+    wt = src.index(".write_text")
+    assert rf < wt, (
+        "record_file must precede write_text — the journal-before-"
+        "mutate atomicity contract (H-S4-1)")
