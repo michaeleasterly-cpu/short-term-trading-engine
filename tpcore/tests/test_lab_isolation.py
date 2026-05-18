@@ -22,8 +22,25 @@ invariants are kept verbatim, only the call is aligned (mirrors the
 """
 import os
 import uuid
+from datetime import date
 
 import pytest
+
+from tpcore.backtest.credibility import CREDIBILITY_SOURCE_PREFIX
+
+# Derived source strings — mirrors T6's test_lab_no_gate_poison.py pinning
+# so there is zero drift if the prefix or format ever changes.
+#
+# NOTE: we do NOT import ops.lab.run at module level here. ops.lab.run is
+# an ops/ *package* module; importing it at collection time clobbers
+# sys.modules["ops"], which breaks test_ops.py — that test inserts
+# scripts/ into sys.path and does `import ops` to reach scripts/ops.py
+# (a different "ops"). _lab_credibility_engine_name is a pure one-liner
+# f"lab.{candidate}"; we inline the same format so the collection import
+# stays light while remaining drift-safe via the shared
+# CREDIBILITY_SOURCE_PREFIX constant.
+_REV_SOURCE = f"{CREDIBILITY_SOURCE_PREFIX}.reversion"
+_LAB_SOURCE = f"{CREDIBILITY_SOURCE_PREFIX}.lab.iso_probe"
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("DATABASE_URL") is None,
@@ -45,8 +62,6 @@ class _LabArgs:
     assertions are about ZERO live-write deltas, not about a SURVIVED
     verdict, so thresholds are floored and the window is short."""
 
-    from datetime import date
-
     engine = "reversion"
     trials = 2
     per_window_trials = 1
@@ -67,10 +82,24 @@ class _LabArgs:
 
 async def test_lab_run_zero_live_side_effects(tmp_path):
     """A real Lab run (``amain`` inside ``LabContext``, candidate set,
-    target reversion) yields ZERO row-delta on risk_state / open_orders /
-    aar_events / STARTUP, persists exactly one row under the
-    lab-namespaced source, and ZERO under the live engine's source
-    (H-S2-3 no-poison + H-S2-6 zero-side-effect, end-to-end)."""
+    target reversion) asserts:
+
+    BINDING SAFETY INVARIANTS (UNCONDITIONAL — the real contract, true
+    regardless of whether the search produced a rankable/persist result):
+    - risk_state / open_orders / aar_events row-count == before (zero live-write)
+    - application_log STARTUP row-count == before
+    - live reversion credibility source row-count == before (H-S2-3 no-poison)
+    - lab-namespaced source row-count >= before (never decreases — re-run-safe)
+
+    POSITIVE END-TO-END PROOF (rc==0-gated — SURVIVED ⇒ persist ran):
+    - lab_rows >= lab_before + 1 only when rc==0 because rc==1 means
+      FAILED-or-not-ranked and write_credibility_score may not have run;
+      asserting +1 on rc==1 would be a false-wolf that gets this safety
+      net disabled on thin CI data. The ABSENCE of poison is the real
+      contract and is asserted unconditionally above.
+
+    (H-S2-3 no-poison + H-S2-6 zero-side-effect, end-to-end)
+    """
     import ops.lab.run as lab_run
     from tpcore.db import build_asyncpg_pool
     from tpcore.lab.context import LabContext
@@ -87,10 +116,10 @@ async def test_lab_run_zero_live_side_effects(tmp_path):
             audit, "application_log", "WHERE event_type='STARTUP'")
         rev_before = await _rowcount(
             audit, "data_quality_log",
-            "WHERE source='backtest_credibility.reversion'")
+            f"WHERE source='{_REV_SOURCE}'")
         lab_before = await _rowcount(
             audit, "data_quality_log",
-            "WHERE source='backtest_credibility.lab.iso_probe'")
+            f"WHERE source='{_LAB_SOURCE}'")
 
         args = _LabArgs()
         args.output = tmp_path / "iso_probe_results.csv"
@@ -102,7 +131,8 @@ async def test_lab_run_zero_live_side_effects(tmp_path):
             rc = await lab_run.amain(args, candidate="iso_probe")
         assert rc in (0, 1), f"unexpected amain rc={rc}"
 
-        # ── Zero live-write deltas ────────────────────────────────────
+        # ── BINDING SAFETY INVARIANTS (UNCONDITIONAL) ─────────────────
+        # Zero live-write deltas — true regardless of search outcome.
         for t, b in before.items():
             assert await _rowcount(audit, t) == b, f"Lab wrote platform.{t}"
         assert await _rowcount(
@@ -110,19 +140,34 @@ async def test_lab_run_zero_live_side_effects(tmp_path):
             "WHERE event_type='STARTUP'") == startup_before, \
             "Lab emitted a STARTUP application_log row"
 
-        # ── H-S2-3 no-poison: live source byte-identical, lab row added ─
+        # H-S2-3 no-poison: live reversion source must be byte-identical.
         assert await _rowcount(
             audit, "data_quality_log",
-            "WHERE source='backtest_credibility.reversion'") == rev_before, \
-            "Lab poisoned backtest_credibility.reversion"
+            f"WHERE source='{_REV_SOURCE}'") == rev_before, \
+            f"Lab poisoned {_REV_SOURCE}"
+
+        # Lab-namespaced source must never decrease (re-run-safe).
         lab_rows = await _rowcount(
             audit, "data_quality_log",
-            "WHERE source='backtest_credibility.lab.iso_probe'")
-        assert lab_rows >= lab_before + 1, (
-            "Lab did not persist a row under "
-            "backtest_credibility.lab.iso_probe "
+            f"WHERE source='{_LAB_SOURCE}'")
+        assert lab_rows >= lab_before, (
+            f"Lab-namespaced source DECREASED: {_LAB_SOURCE} "
             f"(before={lab_before}, after={lab_rows})"
         )
+
+        # ── POSITIVE END-TO-END PROOF (rc==0-gated) ───────────────────
+        # rc==0 (SURVIVED) ⇒ the held-back run completed AND
+        # write_credibility_score ran — the namespaced row MUST exist.
+        # rc==1 (FAILED or not-ranked) ⇒ persist may not have occurred
+        # (early-exit paths: `not ranked`, credibility_rubric is None) —
+        # skip the +1 check to avoid false-wolf on thin CI data; the
+        # binding safety invariants above still hold and are asserted.
+        if rc == 0:
+            assert lab_rows >= lab_before + 1, (
+                f"SURVIVED run must have persisted exactly under the "
+                f"lab-namespaced source {_LAB_SOURCE} "
+                f"(before={lab_before}, after={lab_rows})"
+            )
     finally:
         await audit.close()
 
