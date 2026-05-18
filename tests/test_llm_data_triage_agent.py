@@ -124,6 +124,49 @@ async def test_api_error_is_crash_isolated(monkeypatch) -> None:
     assert out.proposed == []
 
 
+async def test_auth_error_is_safe_like_no_key(monkeypatch) -> None:
+    """AuthenticationError must behave exactly like a missing key:
+    zero retries (create called AT MOST once), zero emits, no error,
+    skipped_no_key=True, proposed=[].
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "invalid-key")
+
+    import anthropic
+
+    # Subclass so construction is trivial while isinstance check passes.
+    class _Auth(anthropic.AuthenticationError):
+        def __init__(self) -> None:
+            pass
+
+    assert isinstance(_Auth(), anthropic.AuthenticationError)
+
+    call_count = 0
+
+    class _AuthMessages:
+        def create(self, **kw):
+            nonlocal call_count
+            call_count += 1
+            raise _Auth()
+
+    class _AuthClient:
+        def __init__(self):
+            self.messages = _AuthMessages()
+
+    pool = _Pool(open_rows=[_row("h1")])
+    out = await lt.run_triage(pool, client_factory=lambda: _AuthClient())
+
+    # (a) create called at most once — zero retries
+    assert call_count == 1, f"expected 1 call, got {call_count} (retry bug)"
+    # (b) zero emits
+    assert pool.conn.emitted == []
+    # (c) no error recorded
+    assert out.error is None
+    # (d) flagged as skipped_no_key
+    assert out.skipped_no_key is True
+    # (e) no proposals
+    assert out.proposed == []
+
+
 async def test_import_isolation_no_actor_paths() -> None:
     # The agent must NOT import any actor/mutation path.
     import ast

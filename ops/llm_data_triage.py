@@ -36,6 +36,15 @@ from tpcore.outage import with_retry
 
 logger = structlog.get_logger(__name__)
 
+# Private sentinel: raised inside _call_api when the SDK raises
+# AuthenticationError so the exception escapes with_retry's retry_on
+# tuple WITHOUT triggering any retry loop. with_retry gates retries via
+# ``except retry_on as exc`` (isinstance check, retry.py:130); _AuthSkip
+# is NOT in retry_on, so it propagates immediately.
+class _AuthSkip(Exception):
+    """Signals that the Anthropic API key is invalid/exhausted (AuthenticationError).
+    Treated identically to a missing key: safe no-op, zero retries, zero emits."""
+
 _MODEL = "claude-sonnet-4-6"
 _MAX_TOKENS = 2048
 _PERSONA_PATH = (
@@ -129,28 +138,31 @@ async def run_triage(
             The synchronous SDK call is wrapped here — mirrors the
             @with_retry pattern on edgar_adapter / fred adapter call sites.
             pkt_arg is passed explicitly to avoid B023 loop-variable capture.
+
+            AuthenticationError is intercepted here and re-raised as
+            _AuthSkip so it escapes the retry_on tuple entirely (zero
+            retries, zero backoff delays). See _AuthSkip docstring.
             """
-            return client.messages.create(
-                model=_MODEL,
-                max_tokens=_MAX_TOKENS,
-                temperature=0.0,
-                system=_persona(),
-                messages=[{"role": "user", "content": pkt_arg.text}],
-            )
+            try:
+                return client.messages.create(
+                    model=_MODEL,
+                    max_tokens=_MAX_TOKENS,
+                    temperature=0.0,
+                    system=_persona(),
+                    messages=[{"role": "user", "content": pkt_arg.text}],
+                )
+            except AuthenticationError:
+                raise _AuthSkip() from None
 
         for esc in escs:
             pkt = await build_packet(pool, esc)
 
             try:
                 resp = await _call_api(pkt)
-            except AuthenticationError as auth_exc:
-                logger.warning(
-                    "llm_data_triage.auth_error",
-                    ref=esc.ref,
-                    error=str(auth_exc),
-                )
-                # Treat like no-key — safe no-op for this escalation.
-                continue
+            except _AuthSkip:
+                logger.warning("llm_data_triage.auth_error_skipped", ref=esc.ref)
+                out.skipped_no_key = True
+                return out
             except Exception as call_exc:  # noqa: BLE001 — isolate per-escalation
                 logger.error(
                     "llm_data_triage.call_error",
