@@ -283,3 +283,61 @@ def test_trigger_event_types_are_the_two_escalations() -> None:
         "DATA_REPAIR_ESCALATED",
         "DATA_SOURCE_ESCALATED",
     )
+
+
+# ────────────────────────────────────────────────────────────────────────
+# (vi) Startup `git worktree prune` — invoked ONCE before any work, and
+#      crash-isolated (a git failure must NOT abort the daemon; it
+#      proceeds into the poll loop). No real git ever runs (subprocess
+#      is monkeypatched).
+# ────────────────────────────────────────────────────────────────────────
+
+
+async def test_startup_worktree_prune_invoked_once(monkeypatch) -> None:
+    calls: list = []
+
+    def fake_run(args, **kwargs):  # noqa: ANN001
+        calls.append((args, kwargs))
+
+        class _R:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        return _R()
+
+    monkeypatch.setattr(lts.subprocess, "run", fake_run)
+    pool = _Pool(events=[])  # no trigger — loop runs one poll then stops
+    await _run_one_loop(monkeypatch, pool)
+
+    prune_calls = [
+        c for c in calls if c[0][:3] == ["git", "worktree", "prune"]
+    ]
+    assert len(prune_calls) == 1  # exactly once at startup
+    # no shell, list-args, cwd = repo root
+    assert prune_calls[0][1].get("shell") in (None, False)
+    assert str(prune_calls[0][1]["cwd"]) == str(lts._REPO_ROOT)
+
+
+async def test_startup_worktree_prune_failure_does_not_crash_daemon(
+    monkeypatch,
+) -> None:
+    def boom(*_a, **_k):
+        # Simulate git absent / non-zero / timeout at startup.
+        raise FileNotFoundError("[Errno 2] No such file or directory: 'git'")
+
+    monkeypatch.setattr(lts.subprocess, "run", boom)
+    pool = _Pool(events=[])
+    # The loop must complete normally (one poll, then stop) DESPITE the
+    # startup git failure — crash-isolated, never aborts startup.
+    calls = await _run_one_loop(monkeypatch, pool)
+    assert calls == []  # reached the poll loop; no run_triage (no trigger)
+
+
+def test_startup_prune_helper_is_crash_isolated_standalone(monkeypatch) -> None:
+    # Direct unit: _startup_worktree_prune NEVER raises, whatever git does.
+    def boom(*_a, **_k):
+        raise RuntimeError("git exploded")
+
+    monkeypatch.setattr(lts.subprocess, "run", boom)
+    lts._startup_worktree_prune()  # must NOT raise

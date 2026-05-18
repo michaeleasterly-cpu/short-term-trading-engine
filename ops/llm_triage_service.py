@@ -36,8 +36,10 @@ import asyncio
 import os
 import shutil
 import signal
+import subprocess
 import sys
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import structlog
 
@@ -45,6 +47,8 @@ from ops.llm_data_triage import run_triage
 from tpcore.db import build_asyncpg_pool
 
 logger = structlog.get_logger(__name__)
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
 
 POLL_INTERVAL_SEC = 60
 INITIAL_CURSOR_LOOKBACK = timedelta(hours=1)
@@ -154,9 +158,37 @@ def _release_lock(lock_dir: str, *, only_if_owned: bool = False) -> None:
     shutil.rmtree(lock_dir, ignore_errors=True)
 
 
+def _startup_worktree_prune() -> None:
+    """Best-effort, crash-isolated `git worktree prune` at daemon
+    startup. A prior cycle that hard-crashed mid `git worktree add`
+    leaves an orphaned worktree admin entry; this reclaims it once
+    before any work. NEVER raises — a git failure (git absent, not a
+    repo, timeout, non-zero) is logged at WARNING and the daemon
+    proceeds to the poll loop. No shell, list-args, cwd = repo root
+    (mirrors this daemon's crash-isolation idiom)."""
+    try:
+        subprocess.run(  # noqa: S603 — fixed list-args, no shell, no user input
+            ["git", "worktree", "prune", "-v"],
+            cwd=str(_REPO_ROOT),
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        logger.info("llm_triage_service.startup_worktree_prune_ok")
+    except Exception as exc:  # noqa: BLE001 — best-effort; NEVER abort startup
+        logger.warning(
+            "llm_triage_service.startup_worktree_prune_failed", error=str(exc)
+        )
+
+
 async def _main_loop(
     pool, stop_event: asyncio.Event, lock_dir: str = DEFAULT_LOCK_DIR
 ) -> None:
+    # Defensive, best-effort, ONCE at startup before any work: reclaim
+    # a hard-crashed prior cycle's leaked worktree admin entry. Fully
+    # crash-isolated — a git failure here never wedges the daemon.
+    _startup_worktree_prune()
     cursor = datetime.now(UTC) - INITIAL_CURSOR_LOOKBACK
     logger.info(
         "llm_triage_service.started",
