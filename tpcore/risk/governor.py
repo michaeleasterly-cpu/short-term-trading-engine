@@ -96,6 +96,36 @@ class RiskStateStore:
     ) -> None:  # pragma: no cover - interface
         raise NotImplementedError
 
+    async def record_close(
+        self,
+        engine: str,
+        trade_id: str | None,
+        realized_pnl: Decimal,
+    ) -> bool:
+        """Idempotently apply ONE position-close to ``engine``'s state.
+
+        The single arbiter for the ``-1``/realized-pnl of a closed
+        position. Both close callers (the scheduler rebalance-sell loop
+        and the trade-monitor stream) funnel through this so the same
+        real close decrements ``open_positions`` AT MOST ONCE — the
+        ``platform.risk_close_ledger`` ``(engine, trade_id)`` PK is the
+        sole, atomic dedupe key (see #251 spec §2b).
+
+        Contract (every uncertainty branch SKIPS — over-count → tight →
+        never fail open):
+
+        * ``trade_id is None`` → structlog WARN, return ``False``, NO
+          decrement, NO pnl change (a missing id is never guessed).
+        * Insert won (first time this ``(engine, trade_id)`` is seen) →
+          ``open_positions = GREATEST(0, open_positions - 1)``,
+          ``daily_pnl``/``weekly_pnl += realized_pnl``, return ``True``.
+        * Conflict / already-counted / race-loser → return ``False``,
+          NO decrement, NO pnl change.
+
+        Returns ``True`` iff this call applied the decrement.
+        """
+        raise NotImplementedError  # pragma: no cover - interface
+
     async def record_fill(
         self,
         *,
@@ -135,9 +165,43 @@ class InMemoryRiskStateStore(RiskStateStore):
 
     def __init__(self) -> None:
         self._states: dict[str, RiskState] = {}
+        # Mirror of platform.risk_close_ledger's (engine, trade_id) PK:
+        # a close whose key is already here was already counted → skip.
+        self._closed: set[tuple[str, str]] = set()
 
     async def get(self, engine_id: str) -> RiskState | None:
         return self._states.get(engine_id)
+
+    async def record_close(
+        self,
+        engine: str,
+        trade_id: str | None,
+        realized_pnl: Decimal,
+    ) -> bool:
+        if trade_id is None:
+            logger.warning(
+                "tpcore.risk.record_close_null_trade_id",
+                engine=engine,
+                detail="trade_id is None — skipping the decrement (over-count "
+                       "is safe; never guess a close id → never fail open)",
+            )
+            return False
+        key = (engine, trade_id)
+        if key in self._closed:  # already counted by the other path / a retry
+            return False
+        state = self._states.get(engine)
+        if state is None:
+            return False
+        self._closed.add(key)
+        self._states[engine] = state.model_copy(
+            update={
+                "open_positions": max(0, state.open_positions - 1),
+                "daily_pnl": state.daily_pnl + realized_pnl,
+                "weekly_pnl": state.weekly_pnl + realized_pnl,
+                "updated_at": datetime.now(UTC),
+            }
+        )
+        return True
 
     async def put(self, state: RiskState) -> None:
         self._states[state.engine] = state.model_copy(update={"updated_at": datetime.now(UTC)})

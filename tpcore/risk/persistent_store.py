@@ -99,6 +99,67 @@ class PostgresRiskStateStore(RiskStateStore):
                 state.kill_switch_reason,
             )
 
+    async def record_close(
+        self,
+        engine: str,
+        trade_id: str | None,
+        realized_pnl: Decimal,
+    ) -> bool:
+        """Idempotent close-decrement arbitrated by ``risk_close_ledger``.
+
+        ONE transaction: ``INSERT … ON CONFLICT DO NOTHING`` keyed by
+        ``(engine, trade_id)``; iff the insert won (rowcount == 1) →
+        ``open_positions = GREATEST(0, open_positions-1)`` and pnl applied
+        once, return ``True``; else (conflict / already counted / race
+        loser) → return ``False``, NO decrement, NO pnl change.
+
+        ``trade_id is None`` → WARN, return ``False``, NO decrement (a
+        missing id is never guessed — over-count is safe, never fail
+        open). See #251 spec §2b. Mirrors
+        :meth:`InMemoryRiskStateStore.record_close` exactly.
+        """
+        if trade_id is None:
+            logger.warning(
+                "tpcore.risk.record_close_null_trade_id",
+                engine=engine,
+                detail="trade_id is None — skipping the decrement (over-count "
+                       "is safe; never guess a close id → never fail open)",
+            )
+            return False
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                status = await conn.execute(
+                    "INSERT INTO platform.risk_close_ledger (engine, trade_id) "
+                    "VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                    engine,
+                    trade_id,
+                )
+                # asyncpg execute() returns e.g. "INSERT 0 1" (1 row) or
+                # "INSERT 0 0" (ON CONFLICT skipped).
+                try:
+                    inserted = int(status.split()[-1]) == 1
+                except (ValueError, IndexError):  # never fail open on a parse miss
+                    inserted = False
+                if not inserted:
+                    return False
+                await conn.execute(
+                    "UPDATE platform.risk_state "
+                    "SET open_positions = GREATEST(0, open_positions - 1), "
+                    "    daily_pnl = daily_pnl + $2, "
+                    "    weekly_pnl = weekly_pnl + $2, "
+                    "    updated_at = now() "
+                    "WHERE engine = $1",
+                    engine,
+                    realized_pnl,
+                )
+        logger.info(
+            "tpcore.risk.close_recorded",
+            engine=engine,
+            trade_id=trade_id,
+            realized_pnl=str(realized_pnl),
+        )
+        return True
+
     async def list_all(self) -> list[RiskState]:
         sql = f"SELECT {_SELECT_COLUMNS} FROM platform.risk_state ORDER BY engine"
         async with self._pool.acquire() as conn:
