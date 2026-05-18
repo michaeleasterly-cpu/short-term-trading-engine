@@ -41,6 +41,7 @@ import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
 from tpcore.aar import AARReader
+from tpcore.engine_profile import archived_engines
 from tpcore.indicators.chop import (
     CHOP_SIDEWAYS_STRONG,
     CHOP_SIDEWAYS_WEAK,
@@ -84,7 +85,7 @@ REGIME_CHOP_LOOKBACK_SESSIONS = 60
 # engines and can never delete a live engine's risk state, regardless
 # of how the allocator's managed-engine set is configured. Add an
 # engine here only when it is archived (see archive/<engine>/EULOGY.md).
-_ARCHIVED_ENGINES: tuple[str, ...] = ("sigma",)
+_ARCHIVED_ENGINES: tuple[str, ...] = archived_engines()
 
 
 class AllocationDecision(BaseModel):
