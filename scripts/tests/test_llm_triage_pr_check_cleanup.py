@@ -22,6 +22,7 @@ Host-guard: both tests assert that the real host repo has no new
 """
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import subprocess
 import sys
@@ -190,4 +191,109 @@ def test_load_specs_base_prune_fallback_when_remove_fails(tmp_path: Path) -> Non
     # Host guard: real host repo completely unaffected.
     assert not _worktree_has_llm_triage_entry(_HOST_REPO), (
         "Test leaked a worktree entry into the real host repo!"
+    )
+
+
+# ---------------------------------------------------------------------------
+# (C) Engine-lane base loader (Epic E Phase 3.2): the SAME #63-hardened
+# worktree-add + remove + defensive-prune-fallback path serves the
+# engine registries baseline (`ops.engine_ladder.DISPOSITION_POLICIES`
+# via `_ENGINE_REGISTRY_SNIPPETS`). It must keep the SAME isolation
+# guarantees — no stale admin entry, no real-host-repo worktree leak.
+# ---------------------------------------------------------------------------
+
+
+def test_engine_lane_load_specs_base_cleanup_invariant(
+    tmp_path: Path,
+) -> None:
+    """The engine snippets go through the SAME #63-hardened loader. The
+    `ops` package is NOT in the editable-install MAPPING (only `tpcore`
+    + engines are — verified), so unlike the data snippet the engine
+    snippet resolves `ops.engine_ladder` from the WORKTREE; a bare
+    tmp-fixture repo has no `ops/` so the snippet raises. That is
+    expected here — this test asserts the load-bearing INVARIANT (the
+    #63 hardening): even when the in-worktree subprocess fails, the
+    loader STILL leaves no stale admin entry and NEVER touches the real
+    host repo. (Real CI runs against origin/main, which DOES contain
+    ops/engine_ladder.py and PYTHONPATH=wt_path, so the snippet
+    succeeds there — proven by the engine fence unit tests.)"""
+    repo = _setup_tmp_repo(tmp_path)
+
+    with patch.object(_mod, "_REPO_ROOT", repo):
+        with contextlib.suppress(subprocess.CalledProcessError):
+            _mod._load_specs_base("main", _mod._ENGINE_REGISTRY_SNIPPETS)
+
+    # The load-bearing invariant: cleanup happened despite the failure.
+    assert _worktree_list_count(repo) == 1, (
+        "Engine-lane base load leaked a stale worktree admin entry"
+    )
+    assert not _stale_admin_entry_exists(repo)
+    # Host guard: the real host repo MUST be untouched.
+    assert not _worktree_has_llm_triage_entry(_HOST_REPO), (
+        "Engine-lane base load leaked a worktree entry into the host repo"
+    )
+
+
+def test_engine_lane_base_loader_succeeds_against_real_repo() -> None:
+    """Complementary positive: against the REAL host repo's origin/main
+    (which DOES contain ops/engine_ladder.py) the engine base loader
+    returns the normalised DISPOSITION_POLICIES baseline — proving the
+    engine snippet itself is correct (the bare-tmp-repo failure above is
+    purely a fixture artifact, not a loader defect). Still #63-clean:
+    asserts no llm_triage_base_ worktree leaks into the host repo."""
+    result = _mod._load_specs_base("main", _mod._ENGINE_REGISTRY_SNIPPETS)
+    expected_keys = {name for name, _ in _mod._ENGINE_REGISTRY_SNIPPETS}
+    assert isinstance(result, dict) and result
+    assert set(result.keys()) == expected_keys
+    pols = result["disposition_policies"]
+    assert "crashed_startup" in pols
+    assert pols["crashed_startup"]["stage"] == "structural"
+    assert pols["crashed_startup"]["act"] is True
+    # #63 host-guard: the loader cleaned up its own worktree.
+    assert not _worktree_has_llm_triage_entry(_HOST_REPO), (
+        "Engine-lane base load leaked a worktree entry into the host repo"
+    )
+
+
+def test_engine_lane_prune_fallback_when_remove_fails(
+    tmp_path: Path,
+) -> None:
+    """Engine lane: with ``git worktree remove`` swallowed, the
+    defensive prune fallback STILL reclaims the stale admin entry — the
+    #63 hardening is preserved on the engine path (no real-repo leak)."""
+    repo = _setup_tmp_repo(tmp_path)
+    real_subprocess_run = subprocess.run
+
+    def _intercept(args, **kwargs):  # noqa: ANN001
+        if isinstance(args, list) and args[:3] == [
+            "git", "worktree", "remove"
+        ]:
+            class _FakeOk:
+                returncode = 0
+                stdout = b""
+                stderr = b""
+
+            return _FakeOk()
+        return real_subprocess_run(args, **kwargs)
+
+    with patch.object(_mod, "_REPO_ROOT", repo):
+        with patch("subprocess.run", side_effect=_intercept):
+            # The in-worktree `ops.engine_ladder` import raises in a bare
+            # tmp repo (no ops/ — `ops` is not in the editable MAPPING);
+            # that is the fixture artifact. The point under test is that
+            # the #63 `finally:`-prune fallback STILL reclaims the stale
+            # admin entry even on that failure path.
+            with contextlib.suppress(subprocess.CalledProcessError):
+                _mod._load_specs_base(
+                    "main", _mod._ENGINE_REGISTRY_SNIPPETS
+                )
+
+    assert not _stale_admin_entry_exists(repo), (
+        "Engine-lane: stale .git/worktrees/ admin entry persisted — "
+        "the defensive `git worktree prune` fallback was lost on the "
+        "engine path."
+    )
+    assert _worktree_list_count(repo) == 1
+    assert not _worktree_has_llm_triage_entry(_HOST_REPO), (
+        "Engine-lane test leaked a worktree entry into the real host repo!"
     )

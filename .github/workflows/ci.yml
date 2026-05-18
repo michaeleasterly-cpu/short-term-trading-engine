@@ -91,3 +91,56 @@ jobs:
             change. Auto-closing. The escalation stays open for a human; \
             restoration only ever happens via the deterministic path."
           gh pr close "${{ github.event.pull_request.number }}"
+
+  # Engine-lane LLM-triage deterministic fence (Epic E Phase 3.2).
+  # Additive + label-gated on the SEPARATE 'engine-llm-triage' label
+  # (the data-lane 'llm-data-triage' job above is UNTOUCHED). Same
+  # mechanism, engine registries: baseline =
+  # ops.engine_ladder.DISPOSITION_POLICIES (an additive binding must
+  # point at an ALREADY-EXISTING EngineEscalationDisposition verb) +
+  # the engine hard-denied path set (engine deterministic-mechanism
+  # files + shared protected paths). DETERMINISTIC and credential-
+  # STARVED — like the data job it MUST NEVER reference any LLM API key
+  # or any secret (the LLM's self-judgement gates nothing; artifact
+  # properties do). On failure: auto-close + escalate (stays open for
+  # a human; restoration only via the deterministic Ladder path).
+  engine-llm-triage-fence:
+    name: engine-llm-triage deterministic fence
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: >-
+      github.event_name == 'pull_request' &&
+      contains(github.event.pull_request.labels.*.name, 'engine-llm-triage')
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need the base ref for the diff-based fence checks.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+          cache: pip
+
+      - name: Install package + dev deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev]
+
+      - name: Run engine-lane LLM-triage deterministic fence
+        run: python scripts/llm_triage_pr_check.py --lane engine
+
+      - name: Auto-close + escalate on fence failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment "${{ github.event.pull_request.number }}" --body \
+            "🚫 engine-llm-triage deterministic fence FAILED — this draft \
+            PR proposed a non-additive / new-mechanism / new-disposition \
+            / hard-denied change. Auto-closing. The escalation stays open \
+            for a human; restoration only ever happens via the \
+            deterministic Ladder path."
+          gh pr close "${{ github.event.pull_request.number }}"
