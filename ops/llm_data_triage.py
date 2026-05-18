@@ -443,7 +443,33 @@ async def run_triage(
     return out
 
 
-__all__ = ["TriageOutcome", "run_triage"]
+# --- Public shared-SDK surface (consumed by ops/engine_llm_triage —
+# Epic E reuse, #244). These are ADDITIVE aliases bound DIRECTLY to the
+# existing private objects above: object identity is preserved
+# (``AuthSkip is _AuthSkip``, ``scrubbed_env is _scrubbed_env``, …), so
+# the engine lane's `is`-identity parity tests stay valid and there is
+# ZERO behaviour change to the data lane (its own internal code keeps
+# using the privates). This is the published contract: do NOT inline-
+# rename the underlying privates without updating these aliases — a
+# clockwork guard in tests/test_engine_llm_triage_agent.py enforces that
+# the engine lane consumes ONLY this public surface.
+AuthSkip = _AuthSkip
+ANTHROPIC_MODEL = _MODEL
+ANTHROPIC_MAX_TOKENS = _MAX_TOKENS
+scrubbed_env = _scrubbed_env
+default_pr_runner = _default_pr_runner
+# --- end public shared-SDK surface ---
+
+
+__all__ = [
+    "ANTHROPIC_MAX_TOKENS",
+    "ANTHROPIC_MODEL",
+    "AuthSkip",
+    "TriageOutcome",
+    "default_pr_runner",
+    "run_triage",
+    "scrubbed_env",
+]
 
 
 def main() -> None:  # pragma: no cover
