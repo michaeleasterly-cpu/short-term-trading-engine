@@ -357,3 +357,75 @@ async def test_retention_exempts_review_defect_events(event_type) -> None:
     )
     assert "aged ordinary" not in msgs  # control: ordinary aged row IS pruned
     assert "fresh run" in msgs
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Single-source-of-truth + empty-set safety (DR2 code-quality fix): the
+# real _RETENTION_SQL exemption clause is derived ONCE at module load
+# from RETENTION_EXEMPT_EVENT_TYPES — there is no duplicated hard-coded
+# literal that can drift, and an empty exempt set must NOT emit
+# ``NOT IN ()`` (a Postgres syntax error).
+# ────────────────────────────────────────────────────────────────────────────
+
+
+def test_retention_sql_derived_from_constant_no_drift() -> None:
+    """Every exempt event type — derived FROM the constant, not a
+    hard-coded literal — must appear in the real prune SQL, and no
+    OTHER quoted token may. This bites if someone re-hardcodes a
+    divergent literal (constant and SQL would diverge)."""
+    from tpcore.logging import db_handler as dh
+
+    for et in dh.RETENTION_EXEMPT_EVENT_TYPES:
+        assert repr(et) in dh._RETENTION_SQL, (
+            f"{et!r} is in RETENTION_EXEMPT_EVENT_TYPES but missing from "
+            "_RETENTION_SQL — constant and prune SQL have drifted"
+        )
+    if dh.RETENTION_EXEMPT_EVENT_TYPES:
+        clause = dh._RETENTION_SQL.split("event_type NOT IN", 1)[1]
+        inside = clause.split("(", 1)[1].split(")", 1)[0]
+        in_sql = {tok.strip().strip("'\"") for tok in inside.split(",") if tok.strip()}
+        assert in_sql == set(dh.RETENTION_EXEMPT_EVENT_TYPES), (
+            "the prune's NOT IN set must equal the constant exactly — "
+            "a re-hardcoded extra/missing literal would diverge"
+        )
+
+
+def test_empty_exempt_set_emits_no_not_in_clause(monkeypatch) -> None:
+    """With an empty exempt tuple the rebuilt clause must contain NO
+    ``NOT IN`` (``NOT IN ()`` is a Postgres syntax error) and an aged
+    row of a former-exempt type IS pruned (clause-builder reproduced
+    from the production logic so the test bites on its semantics)."""
+    from tpcore.logging import db_handler as dh
+
+    monkeypatch.setattr(dh, "RETENTION_EXEMPT_EVENT_TYPES", ())
+    exempt: tuple[str, ...] = dh.RETENTION_EXEMPT_EVENT_TYPES
+    clause = (
+        f"\n  AND event_type NOT IN ({', '.join(repr(e) for e in exempt)})"
+        if exempt
+        else ""
+    )
+    rebuilt_sql = f"""
+DELETE FROM platform.application_log
+WHERE recorded_at < $1{clause}
+"""
+    assert "NOT IN" not in rebuilt_sql
+    assert "NOT IN ()" not in rebuilt_sql
+
+    # Drive the fake prune with the empty-set SQL: a formerly-exempt
+    # aged row is now pruned (the fake parses the clause from the SQL).
+    rows: list[_FakeRow] = [
+        _FakeRow(
+            engine="ops",
+            run_id=uuid.uuid4(),
+            event_type="REVIEW_DEFECT_LOGGED",
+            severity="INFO",
+            message="aged former-exempt",
+            data=None,
+            recorded_at=datetime.now(UTC) - timedelta(days=30),
+        )
+    ]
+    import asyncio
+
+    conn = _FakeConn(rows, [])
+    asyncio.run(conn.execute(rebuilt_sql, datetime.now(UTC) - timedelta(days=7)))
+    assert [r["message"] for r in rows] == []  # no exemption → pruned

@@ -53,10 +53,23 @@ RETENTION_EXEMPT_EVENT_TYPES: tuple[str, ...] = (
     "REVIEW_DEFECT_RESOLVED",
 )
 
-_RETENTION_SQL = """
+# Build the retention prune's exemption clause ONCE at module load from
+# RETENTION_EXEMPT_EVENT_TYPES so that constant is the single source of
+# truth (no duplicated literal that can silently drift when the exempt
+# set is extended). The tuple is a compile-time constant of string
+# literals — NOT user input — so formatting it into SQL has no injection
+# surface. When the tuple is empty we emit NO ``NOT IN`` clause at all
+# (``NOT IN ()`` is a Postgres syntax error); the prune then degrades
+# cleanly to the plain ``recorded_at < $1`` predicate.
+_RETENTION_EXEMPT_CLAUSE = (
+    f"\n  AND event_type NOT IN ({', '.join(repr(e) for e in RETENTION_EXEMPT_EVENT_TYPES)})"
+    if RETENTION_EXEMPT_EVENT_TYPES
+    else ""
+)
+
+_RETENTION_SQL = f"""
 DELETE FROM platform.application_log
-WHERE recorded_at < $1
-  AND event_type NOT IN ('REVIEW_DEFECT_LOGGED', 'REVIEW_DEFECT_RESOLVED')
+WHERE recorded_at < $1{_RETENTION_EXEMPT_CLAUSE}
 """
 
 
