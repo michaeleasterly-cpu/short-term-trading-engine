@@ -11,15 +11,13 @@ run end-to-end with NO network and NO real DB. ``TP_DATA_DIR`` is
 pointed at ``tmp_path`` so the archive is written under tmp and the
 real repo ``data/`` dir is never touched.
 
-NOTE (STOP/report, see PR description): against the *current* handler
-this test fails — ``handlers.py:64`` unpacks ``backfill_all()`` as a
-3-tuple while ``FundamentalsCache.backfill_all`` returns a 4-tuple
-``(rows, no_data, failures, skipped)`` (the 2026-05-13 resumable-refresh
-change updated ``scripts/ops.py:667`` but NOT this handler). The
-``ValueError`` raises *before* ``write_archive`` is reached, so the
-archive code path is currently dead. This test pins the correct
-end-to-end behaviour and will pass once the handler unpack is fixed to
-match the cache contract.
+FIXED (#250): ``handlers.py`` now unpacks ``backfill_all()`` as the
+real 4-tuple ``(rows, no_data, failures, skipped)`` (the 2026-05-13
+resumable-refresh change had updated ``scripts/ops.py:667`` but missed
+this handler — the ``ValueError`` raised *before* ``write_archive`` was
+reached, so the archive code path was dead in production). This test is
+now the real end-to-end proof that the handler runs to completion and
+the ``fmp_fundamentals`` CSV archive is written.
 """
 from __future__ import annotations
 
@@ -112,22 +110,6 @@ def tmp_archive(tmp_path, monkeypatch):
     return tmp_path
 
 
-@pytest.mark.xfail(
-    reason=(
-        "DEFECT (surfaced by #249, NOT fixed under a test task): "
-        "tpcore/ingestion/handlers.py:64 unpacks `await cache.backfill_all()` "
-        "as a 3-tuple, but FundamentalsCache.backfill_all returns a 4-tuple "
-        "(rows, no_data, failures, skipped) since the 2026-05-13 "
-        "resumable-refresh change (scripts/ops.py:667 was updated, this "
-        "handler was not). The ValueError raises BEFORE write_archive is "
-        "reached, so the fmp_fundamentals archive code path is dead in "
-        "production. xfail(strict) pins the gap and auto-fails (alerts) the "
-        "moment the handler unpack is corrected to match the cache contract "
-        "— at which point this becomes the real end-to-end archive proof."
-    ),
-    strict=True,
-    raises=ValueError,
-)
 async def test_handle_fundamentals_writes_csv_archive_end_to_end(tmp_archive):
     pool = _FakePool()
 

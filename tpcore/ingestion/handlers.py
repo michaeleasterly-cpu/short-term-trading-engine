@@ -61,7 +61,7 @@ async def handle_fundamentals_refresh(
     run_started = datetime.now(UTC)
     async with FMPFundamentalsAdapter() as adapter:
         cache = FundamentalsCache(pool, adapter=adapter)
-        rows, no_data, failures = await cache.backfill_all()
+        rows, no_data, failures, skipped = await cache.backfill_all()
 
     # CSV-first archive — pull rows touched in this run from the DB
     # and write them out. Schema mirrors fundamentals_quarterly so the
@@ -104,6 +104,7 @@ async def handle_fundamentals_refresh(
         rows=rows,
         no_data=len(no_data),
         failures=len(failures),
+        skipped_fresh=skipped,
         csv_archive=str(archive.path),
     )
     if failures:

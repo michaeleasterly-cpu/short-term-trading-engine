@@ -63,9 +63,10 @@ async def amain(args: argparse.Namespace) -> int:
                 # prices_daily universe. Delegates to cache.backfill_all
                 # which already handles per-symbol pacing, no-data ETF
                 # skips, and outage classification.
-                total_rows, no_data, failures = await cache.backfill_all(tickers=None)
+                total_rows, no_data, failures, skipped = await cache.backfill_all(tickers=None)
             else:
                 total_rows = 0
+                skipped = 0  # per-symbol path has no skip-if-fresh concept
                 no_data: list[tuple[str, str]] = []
                 failures: list[tuple[str, str]] = []
                 for i, symbol in enumerate(args.universe, start=1):
@@ -84,7 +85,10 @@ async def amain(args: argparse.Namespace) -> int:
 
     print()
     label = "active universe" if args.all_active else f"{len(args.universe)} symbols"
-    print(f"backfill complete  scope={label}  rows_upserted={total_rows}")
+    print(
+        f"backfill complete  scope={label}  "
+        f"rows_upserted={total_rows}  skipped_fresh={skipped}"
+    )
     if no_data:
         print(f"no_data ({len(no_data)}): ETFs/shells with no usable fundamentals (expected)")
     if failures:
