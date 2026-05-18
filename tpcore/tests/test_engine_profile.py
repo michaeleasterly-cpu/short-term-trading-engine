@@ -192,7 +192,8 @@ def test_lifecycle_state_enum_values():
 
 
 def test_profile_has_new_fields_all_seven_entries():
-    # all 5 live engines + allocator are PAPER; sigma is RETIRED
+    # all 5 live engines + allocator are PAPER; sigma is RETIRED;
+    # lab is the durable SP2 LAB sentinel (D-SP2-4 two-tier registry).
     expected = {
         "allocator": (0, LifecycleState.PAPER, False),
         "reversion": (1, LifecycleState.PAPER, True),
@@ -201,6 +202,7 @@ def test_profile_has_new_fields_all_seven_entries():
         "sentinel":  (4, LifecycleState.PAPER, False),
         "canary":    (5, LifecycleState.PAPER, False),
         "sigma":     (99, LifecycleState.RETIRED, False),
+        "lab":       (50, LifecycleState.LAB, False),
     }
     assert set(_PROFILE) == set(expected)
     for name, (order, state, elig) in expected.items():

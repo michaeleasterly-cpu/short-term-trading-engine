@@ -130,3 +130,26 @@ def test_structurally_parseable_shadows_match_sot():
     includes = pp["tool"]["setuptools"]["packages"]["find"]["include"]
     for e in live:
         assert f"{e}*" in includes, f"{e}* missing from packages.find.include"
+
+
+def test_lab_sentinel_is_not_wired():
+    """The durable LAB sentinel proves LifecycleState.LAB is a real
+    exercised state, but is NOT a runnable engine: absent from
+    dispatch/allocator, no top-level package, and LAB is the ONLY
+    non-{PAPER,LIVE,RETIRED} state (closes the half-state gap
+    symmetric to the RETIRED leg)."""
+    from tpcore.engine_profile import (
+        _PROFILE,
+        LifecycleState,
+        allocator_eligible_engines,
+        roster_for_dispatch,
+    )
+    lab = [n for n, p in _PROFILE.items()
+           if p.lifecycle_state is LifecycleState.LAB]
+    assert lab == ["lab"], f"expected exactly one LAB sentinel, got {lab}"
+    assert "lab" not in roster_for_dispatch()
+    assert "lab" not in allocator_eligible_engines()
+    assert not (REPO / "lab").is_dir()  # not a top-level package
+    states = {p.lifecycle_state for p in _PROFILE.values()}
+    assert states <= {LifecycleState.PAPER, LifecycleState.LIVE,
+                      LifecycleState.RETIRED, LifecycleState.LAB}
