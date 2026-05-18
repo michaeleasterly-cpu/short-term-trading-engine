@@ -742,10 +742,20 @@ async def _run_lab_core(
             if candidate is not None
             else args.engine
         )
-        persist_pool = await asyncpg.create_pool(db_url, min_size=1, max_size=1)
-        try:
+        # H-S3-8 / spec §7.2: under an active LabContext (a Lab run —
+        # candidate is not None) the credibility write goes through the
+        # context's ONE allowlisted RW handle, NOT a second ad-hoc RW
+        # asyncpg.create_pool inside the SP2 isolation boundary. The
+        # legacy search-CLI path (candidate is None — no active
+        # LabContext) stays byte-identical: it keeps opening its own
+        # pool. The write_credibility_score(engine_name=…, score=…) call
+        # args are unchanged in both paths.
+        from tpcore.lab.context import active_credibility_pool
+
+        ctx_pool = active_credibility_pool() if candidate is not None else None
+        if ctx_pool is not None:
             wrote = await write_credibility_score(
-                persist_pool,
+                ctx_pool,
                 engine_name=cred_engine_name,
                 score=final_result.credibility_rubric,
             )
@@ -753,8 +763,20 @@ async def _run_lab_core(
                 f"  → persisted credibility rubric to platform.data_quality_log "
                 f"(source=backtest_credibility.{cred_engine_name}, wrote={wrote})\n"
             )
-        finally:
-            await persist_pool.close()
+        else:
+            persist_pool = await asyncpg.create_pool(db_url, min_size=1, max_size=1)
+            try:
+                wrote = await write_credibility_score(
+                    persist_pool,
+                    engine_name=cred_engine_name,
+                    score=final_result.credibility_rubric,
+                )
+                print(
+                    f"  → persisted credibility rubric to platform.data_quality_log "
+                    f"(source=backtest_credibility.{cred_engine_name}, wrote={wrote})\n"
+                )
+            finally:
+                await persist_pool.close()
 
     # The 6-line held-back metrics block is rendered EXACTLY ONCE by the
     # caller that owns presentation: the legacy operator path prints it in
