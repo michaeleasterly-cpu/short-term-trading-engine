@@ -166,24 +166,35 @@ def test_sp3_change_set_confined_to_net_new_surface():
 # ---------------------------------------------------------------------------
 
 
-def test_skip_predicate_keys_on_integration_target_not_merge_base():
-    """The new predicate consults the integration ref (origin/main),
-    NOT the fork-point merge-base — proving the false-RED bug is fixed
-    and the new predicate is non-vacuous on this checkout."""
-    # 1. On this checkout origin/main genuinely contains the SP3
-    #    signature path (SP3 #81 is permanently merged), so the new
-    #    predicate is True → the scope gate correctly SKIPS. This is
-    #    the realistic #251-B2-like / post-SP3 scenario.
-    assert _sp3_in_integration_target() is True, (
-        "origin/main must contain the SP3 signature path post-#81; "
-        "the gate must skip on every post-SP3 branch")
+def _first_resolvable_integration_ref() -> str | None:
+    """The ref ``_sp3_in_integration_target`` would consult in THIS
+    environment, or None if neither resolves (a GitHub Actions
+    `actions/checkout` PR clone has no ``origin/main`` remote-tracking
+    ref and no local ``main`` — only the PR HEAD; a plain dev clone
+    resolves ``origin/main``)."""
+    for ref in ("origin/main", "main"):
+        if subprocess.run(  # noqa: S603 — read-only ref resolution
+            ["git", "rev-parse", "--verify", "--quiet", ref],
+            cwd=REPO, capture_output=True, text=True
+        ).returncode == 0:
+            return ref
+    return None
 
-    # 2. Structural non-regression: the new predicate takes NO `base`
-    #    argument — it is impossible for it to key off the fork-point
-    #    merge-base the way the old buggy predicate did. This is the
-    #    root-cause guard: the false-RED came from feeding the
-    #    merge-base tree (which a pre-SP3 non-SP3 branch lacks the SP3
-    #    path in) to the skip decision.
+
+def test_skip_predicate_keys_on_integration_target_not_merge_base():
+    """The new predicate consults the integration ref directly, NOT the
+    fork-point merge-base — proving the false-RED bug is fixed and the
+    predicate is non-vacuous. Environment-independent: a dev clone
+    resolves ``origin/main`` (predicate True → gate skips, the
+    #251-B2-like post-SP3 scenario); a GitHub Actions PR checkout has
+    NO ``origin/main``/``main`` (predicate False by design → the gate's
+    own ``_resolve_sp3_base`` no-ref ``pytest.skip`` covers it). Either
+    way the contract below holds."""
+    # 1. Structural root-cause guard: the new predicate takes NO `base`
+    #    argument — it is structurally impossible for it to key off the
+    #    fork-point merge-base the way the old buggy predicate did. The
+    #    false-RED came from feeding the merge-base tree (which a pre-SP3
+    #    non-SP3 branch lacks the SP3 path in) to the skip decision.
     import inspect
 
     sig = inspect.signature(_sp3_in_integration_target)
@@ -191,11 +202,38 @@ def test_skip_predicate_keys_on_integration_target_not_merge_base():
         "_sp3_in_integration_target must take no args — it must consult "
         "the integration ref directly, never a (merge-)base parameter")
 
-    # 3. Non-vacuity / the OLD-bug condition is genuinely gone: simulate
-    #    the exact scenario that false-RED'd. The old predicate fed a
-    #    tree-ish that lacks planner.py (a pre-SP3 merge-base of a
-    #    non-SP3 branch). The empty tree is a deterministic, read-only
-    #    stand-in for "a tree without the SP3 surface".
+    # 2. Behavioural contract, environment-aware: the predicate's value
+    #    equals "does the resolvable integration ref contain the SP3
+    #    signature path", and is INDEPENDENT of HEAD's merge-base.
+    ref = _first_resolvable_integration_ref()
+    if ref is None:
+        # GitHub Actions PR checkout: no integration ref at all → the
+        # predicate MUST be False (do not claim "merged" when we can't
+        # tell). `test_sp3_change_set_confined_to_net_new_surface` then
+        # skips via `_resolve_sp3_base`'s own no-ref pytest.skip — the
+        # documented, pre-existing behaviour.
+        assert _sp3_in_integration_target() is False, (
+            "with NO integration ref resolvable the predicate must be "
+            "False — the no-ref pytest.skip path handles the gate")
+    else:
+        ref_has_sig = subprocess.run(  # noqa: S603 — read-only probe
+            ["git", "cat-file", "-e", f"{ref}:{_SP3_SIGNATURE_PATH}"],
+            cwd=REPO, capture_output=True, text=True
+        ).returncode == 0
+        assert _sp3_in_integration_target() is ref_has_sig, (
+            f"predicate must equal '{_SP3_SIGNATURE_PATH} in {ref}' "
+            f"({ref_has_sig}) — it keys ONLY on the integration ref")
+        # On any normal post-#81 dev clone origin/main HAS the path, so
+        # this is the realistic #251-B2-like skip scenario.
+        assert ref_has_sig is True, (
+            f"{ref} must contain the SP3 signature path post-#81 in a "
+            "dev clone — the gate must skip on every post-SP3 branch")
+
+    # 3. Non-vacuity / before→after, fully deterministic & ref-free:
+    #    reproduce the EXACT scenario that false-RED'd. The old predicate
+    #    fed a tree-ish lacking planner.py (a pre-SP3 merge-base of a
+    #    non-SP3 branch). The well-known empty tree is a deterministic,
+    #    read-only stand-in for "a tree without the SP3 surface".
     empty_tree = subprocess.run(  # noqa: S603 — read-only object probe
         ["git", "hash-object", "-t", "tree", "--stdin"],
         cwd=REPO, input="", capture_output=True, text=True
@@ -205,31 +243,39 @@ def test_skip_predicate_keys_on_integration_target_not_merge_base():
         cwd=REPO, capture_output=True, text=True
     ).returncode == 0
     # Old logic: a pre-SP3 (non-SP3-branch) base tree lacks the path →
-    # the old `_sp3_already_merged_into_base` would be False → NO skip →
-    # false-RED on the unrelated change set. New logic ignores any such
-    # tree entirely and stays True (skip). This is the before→after.
+    # the old `_sp3_already_merged_into_base(base)` returned False → NO
+    # skip → false-RED on the unrelated change set. The NEW predicate
+    # never consults such a tree (no `base` arg, asserted in step 1) —
+    # this is the precise before→after of the bug.
     assert old_predicate_on_pre_sp3_tree is False, (
         "a tree without the SP3 surface must NOT satisfy the old "
-        "merge-base-keyed probe — this is the false-RED condition the "
-        "fix removes")
-    assert _sp3_in_integration_target() is True, (
-        "the new predicate must remain True (skip) regardless of any "
-        "pre-SP3 merge-base tree — it consults origin/main, not the base")
+        "merge-base-keyed probe — this is exactly the false-RED "
+        "condition the fix removes")
 
 
 def test_predicate_is_not_a_blanket_always_true_skip(monkeypatch):
     """Preserve the genuine-pre-merge-SP3-PR backstop semantics: the
     predicate returns False iff the resolved integration ref lacks the
-    SP3 signature. Monkeypatch the signature path to a definitely-absent
-    path → on a hypothetical pre-merge SP3 branch (origin/main WITHOUT
-    planner.py) the predicate is False → the §8 scope assertion runs
-    (the historical T9 behaviour), proving this is not a blanket skip."""
+    SP3 signature (it is NOT a blanket always-True skip). Monkeypatch
+    the signature path to a definitely-absent path → on a hypothetical
+    pre-merge SP3 branch (integration ref WITHOUT planner.py) the
+    predicate is False → the non-vacuous §8 scope assertion runs (the
+    historical T9 behaviour). Requires a resolvable integration ref to
+    be a meaningful (non-vacuous) assertion; a GitHub Actions PR
+    checkout has none, where the no-ref path already returns False —
+    skip there so this stays a real proof, not a vacuous pass."""
     import scripts.tests.test_sp3_scope_confined as mod
+
+    if _first_resolvable_integration_ref() is None:
+        pytest.skip(
+            "no integration ref resolvable here (GitHub Actions PR "
+            "checkout) — the not-a-blanket-skip proof needs a real ref; "
+            "covered on any dev clone / CI with full refs")
 
     monkeypatch.setattr(
         mod, "_SP3_SIGNATURE_PATH",
         "ops/engine_sdlc/__sp3_signature_definitely_absent__.py")
     assert mod._sp3_in_integration_target() is False, (
-        "with a signature path absent from origin/main the predicate "
-        "MUST be False so the non-vacuous §8 scope assertion runs — "
-        "this is the documented genuine-pre-merge-SP3-PR T9 backstop")
+        "with a signature path absent from the integration ref the "
+        "predicate MUST be False so the non-vacuous §8 scope assertion "
+        "runs — the documented genuine-pre-merge-SP3-PR T9 backstop")
