@@ -386,8 +386,14 @@ def validate(plan: TransitionPlan, *, repo_root: Path | None = None,
     MODIFY: H-S3-6 zero-trust (T7). REMOVE: no gate (always may stop)."""
     if plan.rejection is not None:
         return plan
-    root = repo_root or REPO_ROOT
-    del root  # bound for the T7 MODIFY-branch parity; ADD uses no root
+    # NOTE (planner.py:390 Nit, T6-review carry-forward): the prior
+    # `root = repo_root or REPO_ROOT; del root` motion was a placeholder
+    # for "the T7 MODIFY branch will need the staged tree". It does NOT:
+    # `_validate_modify` re-derives every gate number from the FROZEN
+    # LabResult JSON sidecar at the ECR-cited path (zero-trust H-S3-6) —
+    # no staged-tree read on the validate() side. The dead motion +
+    # comment are removed; `repo_root` stays an accepted kwarg for the
+    # ADD readiness path / API parity (apply()/promote() own the tree).
     if plan.action is ECRAction.ADD and ecr is not None:
         if ecr.source == "new_scaffold":
             if ecr.gate_dsr is not None or ecr.gate_cred is not None:
@@ -546,16 +552,125 @@ def _apply_add(plan: TransitionPlan, root: Path, jn: _Journal) -> None:
 
 def _validate_modify(plan: TransitionPlan,
                      ecr: EngineChangeRequest) -> TransitionPlan:
-    """T7 implements the MODIFY zero-trust evidence gate (H-S3-6); the
-    T6 ``validate`` ADD branch is complete, the MODIFY branch defers
-    here. T5/T6 never route a MODIFY+ecr through validate, so this stub
-    is never reached until T7 replaces it (mirrors _apply_modify)."""
-    raise NotImplementedError("MODIFY evidence gate lands in T7")
+    """H-S3-6 zero-trust: the gate is the ONLY thing between a dossier
+    and live params, so re-derive every number from the FROZEN JSON
+    sidecar, never the ECR text / rendered markdown."""
+    from ops.engine_sdlc._evidence import EvidenceError, load_labresult_sidecar
+    from ops.lab.run import PARAM_RANGES
+    try:
+        lr = load_labresult_sidecar(ecr.lab_dossier)
+    except EvidenceError as exc:
+        return _reject(ecr, str(exc))
+    if lr.verdict != "SURVIVED":
+        return _reject(ecr, f"sidecar verdict {lr.verdict} != SURVIVED")
+    if lr.dsr < 0.95:
+        return _reject(ecr, f"sidecar dsr {lr.dsr} < 0.95 (forged/stale)")
+    if lr.credibility_score < 60:
+        return _reject(ecr, f"sidecar credibility {lr.credibility_score} "
+                            f"< 60")
+    if lr.recommended_exit != "fold_existing":
+        return _reject(
+            ecr, f"sidecar recommended_exit {lr.recommended_exit!r} != "
+                 f"fold_existing (a promote_new is an ADD, not a MODIFY)")
+    if lr.target_engine != ecr.engine:
+        return _reject(
+            ecr, f"sidecar target_engine {lr.target_engine!r} != ECR "
+                 f"engine {ecr.engine!r} (wrong-target reject)")
+    ranges = PARAM_RANGES.get(ecr.engine, {})
+    for k, v in (ecr.param_change or {}).items():
+        if k not in ranges:
+            return _reject(
+                ecr, f"param {k!r} not in {ecr.engine} PARAM_RANGES — "
+                     f"the Lab never swept it (no-smuggle H-S3-6c)")
+        if k not in lr.winning_params:
+            return _reject(
+                ecr, f"param {k!r} not in the sidecar winning_params")
+        # value-equality (coerce the ECR string to the sidecar's type)
+        want = lr.winning_params[k]
+        try:
+            got = type(want)(v)
+        except (TypeError, ValueError):
+            got = v
+        if got != want:
+            return _reject(
+                ecr, f"param {k!r} value mismatch: ECR={v!r} vs sidecar "
+                     f"winning {want!r}")
+    if plan.sot_diff and any(
+            kk in plan.sot_diff for kk in (
+                "lifecycle_state", "allocator_eligible",
+                "dispatch_order", "cadence")):
+        return _reject(ecr, "MODIFY plan carries a _PROFILE edit — "
+                            "lifecycle is immutable under MODIFY "
+                            "(H-S3-6d)")
+    return plan
 
 
 def _apply_modify(plan: TransitionPlan, root: Path, jn: _Journal) -> None:
-    """T7 implements the MODIFY executor; T5 only exercises REMOVE."""
-    raise NotImplementedError("MODIFY executor lands in T7")
+    """Apply the validated current→winning diff to the engine's
+    default_params() SOURCE (the O1 seam). _PROFILE is NEVER touched
+    (H-S3-6d). Line-anchored edit of the engine backtest.py/models.py
+    default constants, AST-validated."""
+    engine = plan.engine
+    consts = _ENGINE_DEFAULT_CONSTS.get(engine)
+    if consts is None:
+        raise RuntimeError(
+            f"no MODIFY default-constant map for engine {engine!r}")
+    pc = plan.sot_diff.get("param_change") or {}
+    # Group the param edits by their target source file (per the
+    # executor note: reversion z_threshold lives in reversion/models.py,
+    # not reversion/backtest.py — the line-anchored edit must hit the
+    # file the default_params() accessor actually reads).
+    by_file: dict[Path, dict[str, str]] = {}
+    for key, raw in pc.items():
+        spec = consts.get(key)
+        if spec is None:
+            raise RuntimeError(
+                f"no module default seam for {key!r} on {engine}; not "
+                f"MODIFY-able via the constant path")
+        rel, const_name = spec
+        tgt = root / rel
+        by_file.setdefault(tgt, {})[const_name] = str(raw)
+    for tgt, edits in by_file.items():
+        if not tgt.is_file():
+            raise RuntimeError(
+                f"{tgt.relative_to(root)} not found for {engine} MODIFY")
+        jn.record_file(tgt)
+        src = tgt.read_text()
+        new_src = src
+        for const_name, raw in edits.items():
+            pat = re.compile(
+                rf"^({re.escape(const_name)}\s*=\s*)([^\n#]+)", re.M)
+            m = pat.search(new_src)
+            if not m:
+                raise RuntimeError(
+                    f"default constant {const_name} not found in "
+                    f"{tgt.relative_to(root)}")
+            new_src = pat.sub(rf"\g<1>{raw}", new_src, count=1)
+        compile(new_src, "<backtest_modify>", "exec")  # AST gate
+        tgt.write_text(new_src)
+
+
+# The engine PARAM_RANGES key → (source file relative to repo root,
+# module-level UPPER_CASE default constant the engine's default_params()
+# accessor reads). VERIFIED against the live source (per the plan's T7
+# executor note — "run/grep each engine's source for the exact
+# constant"): reversion.backtest.default_params() reads
+# Z_SCORE_THRESHOLD (imported from reversion/models.py — value lives
+# THERE, so the z_threshold MODIFY must edit reversion/models.py),
+# while VOLUME_CLIMAX_MULTIPLIER_DEFAULT / MAX_HOLD_DAYS / HARD_STOP_PCT
+# are module defaults in reversion/backtest.py. Per-key target file is
+# the whole point of the (file, const) tuple. The T7 fixtures only
+# exercise z_threshold + max_hold_days on reversion, so reversion's map
+# is exactly right; other engines added on their MODIFY rollout.
+_ENGINE_DEFAULT_CONSTS: dict[str, dict[str, tuple[str, str]]] = {
+    "reversion": {
+        "z_threshold": ("reversion/models.py", "Z_SCORE_THRESHOLD"),
+        "volume_climax_multiplier": (
+            "reversion/backtest.py", "VOLUME_CLIMAX_MULTIPLIER_DEFAULT"),
+        "max_hold_days": ("reversion/backtest.py", "MAX_HOLD_DAYS"),
+        "stop_pct": ("reversion/backtest.py", "HARD_STOP_PCT"),
+    },
+}
 
 
 def apply(plan: TransitionPlan, *, repo_root: Path | None = None,
@@ -656,6 +771,75 @@ def _apply_remove(plan: TransitionPlan, root: Path, jn: _Journal) -> None:
     ep.write_text(new_src)  # the SoT flip (text)
 
 
+def promote(engine: str, *, repo_root: Path | None = None,
+            emit_audit: bool = True,
+            _gate_green: bool | None = None) -> TransitionPlan:
+    """LAB→PAPER — automated, gated, NOT an ECR action (spec §4.1).
+    Flips iff the capital-gate/graduation_ready authority is green. The
+    test seam ``_gate_green`` injects the verdict offline; production
+    resolves it via the real authority. Reuses the T5 ``_Journal``
+    byte-identical-rollback discipline + the T4 ``_rewrite_profile_source``
+    (the ONLY _PROFILE editor) + ``_run_consistency_subprocess`` — a
+    post-flip red OR any exception reverse-replays to byte-identical
+    (the LAB engine stays LAB, ZERO trace)."""
+    root = repo_root or REPO_ROOT
+    if _gate_green is None:
+        from tpcore.quality.validation.capital_gate import (
+            ENGINE_TABLES,  # noqa: F401 — presence import; real gate below
+        )
+        # production: resolve graduation_ready(pool, engine) via the SP2
+        # lab.<candidate> credibility namespace; deferred to the CLI (T8)
+        # which owns the pool. Here require an explicit resolved verdict —
+        # a promote without a resolved gate is a hard reject, never a
+        # silent flip (H-S3-6 zero-trust parity with the MODIFY gate).
+        return TransitionPlan(
+            action=ECRAction.MODIFY, engine=engine, from_state=None,
+            to_state=None, approval_class=ApprovalClass.AUTOMATED,
+            rejection="promote requires a resolved gate verdict")
+    plan = TransitionPlan(
+        action=ECRAction.MODIFY, engine=engine,
+        from_state=LifecycleState.LAB, to_state=LifecycleState.PAPER,
+        approval_class=ApprovalClass.AUTOMATED)
+    if not _gate_green:
+        rej = TransitionPlan(**{**plan.__dict__,
+                                "rejection": "capital-gate/graduation_ready "
+                                             "RED — LAB→PAPER refused"})
+        if emit_audit:
+            _emit_audit(engine, "promote", "lab", "paper",
+                        "AUTOMATED", "rejected", rej.rejection)
+        return rej
+    ep = root / "tpcore" / "engine_profile.py"
+    jn = _Journal()
+    jn.record_file(ep)
+    try:
+        new = _rewrite_profile_source(
+            ep.read_text(), engine=engine, set_state="paper",
+            set_allocator_eligible=False)
+        ep.write_text(new)
+        rc, out = _run_consistency_subprocess(root)
+        if rc != 0:
+            jn.restore()
+            rej = TransitionPlan(
+                **{**plan.__dict__,
+                   "rejection": f"post-flip clockwork red:\n{out}"})
+            if emit_audit:
+                _emit_audit(engine, "promote", "lab", "paper",
+                            "AUTOMATED", "rejected", rej.rejection)
+            return rej
+    except Exception as exc:  # noqa: BLE001
+        jn.restore()
+        rej = TransitionPlan(**{**plan.__dict__,
+                                "rejection": f"promote aborted: {exc}"})
+        if emit_audit:
+            _emit_audit(engine, "promote", "lab", "paper", "AUTOMATED",
+                        "rejected", rej.rejection)
+        return rej
+    if emit_audit:
+        _emit_audit(engine, "promote", "lab", "paper", "AUTOMATED",
+                    "applied", None)
+    return plan
+
+
 __all__ = [
     "REPO_ROOT",
     "ApprovalClass",
@@ -665,8 +849,11 @@ __all__ = [
     "apply",
     "attach_ecr_context",
     "classify",
+    "promote",
     "validate",
+    "_apply_modify",
     "_rewrite_profile_source",
     "_run_consistency_subprocess",
     "_staged_copytree",
+    "_validate_modify",
 ]

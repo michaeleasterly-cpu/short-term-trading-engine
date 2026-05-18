@@ -680,3 +680,164 @@ def test_add_red_consistency_rolls_back_to_byte_identical(tmp_path):
         "failed ADD did not restore the package subtree byte-identical — "
         f"extra={set(after_pkg) - set(before_pkg)} "
         f"missing={set(before_pkg) - set(after_pkg)}")
+
+
+# ---- T7: MODIFY zero-trust + LAB->PAPER promote (H-S3-6) ----
+
+def _modify_sidecar(tmp_path, *, target="reversion",
+                     recommended="fold_existing", verdict="SURVIVED",
+                     dsr=0.97, cred=64,
+                     winning=None):
+    from tpcore.tests.test_lab_dossier_sidecar import _labresult
+    r = _labresult()
+    d = r.model_dump()
+    d["target_engine"] = target
+    d["recommended_exit"] = recommended
+    d["intent"] = recommended if recommended != "none" else "fold_existing"
+    d["verdict"] = verdict
+    d["dsr"] = dsr
+    d["credibility_score"] = cred
+    d["winning_params"] = winning or {"z_threshold": 3.1, "max_hold_days": 8}
+    from tpcore.lab.models import LabResult
+    r2 = LabResult.model_validate(d)
+    md = tmp_path / "2026-05-18-revc-SURVIVED-seed0.md"
+    md.write_text("# rendered")
+    md.with_suffix(".json").write_text(r2.model_dump_json())
+    return md
+
+
+def _modify_ecr(md, **over):
+    from ops.engine_sdlc.ecr import EngineChangeRequest
+    kw = dict(action="modify", engine="reversion", lab_dossier=str(md),
+              param_change={"z_threshold": "3.1", "max_hold_days": "8"},
+              gate_dsr=0.97, gate_cred=64)
+    kw.update(over)
+    return EngineChangeRequest(**kw)
+
+
+def test_modify_plan_sot_diff_is_always_empty(tmp_path):
+    """H-S3-6(d) lifecycle-immutability: a MODIFY plan must carry ZERO
+    _PROFILE edit -- strategy existence/lifecycle/allocator cannot be
+    touched by MODIFY by construction."""
+    from ops.engine_sdlc.planner import classify
+    md = _modify_sidecar(tmp_path)
+    plan = classify(_modify_ecr(md), {"reversion": LifecycleState.PAPER})
+    forbidden = {"lifecycle_state", "allocator_eligible", "dispatch_order",
+                 "cadence"}
+    assert not (set(plan.sot_diff) & forbidden)
+    assert plan.to_state == plan.from_state  # no lifecycle edge
+
+
+def test_modify_rejects_forged_numbers(tmp_path):
+    from ops.engine_sdlc.planner import attach_ecr_context, classify, validate
+    md = _modify_sidecar(tmp_path, dsr=0.40)  # sidecar disagrees
+    ecr = _modify_ecr(md, gate_dsr=0.97)
+    vp = validate(attach_ecr_context(
+        classify(ecr, {"reversion": LifecycleState.PAPER}), ecr),
+        ecr=ecr)
+    assert vp.rejection is not None and "dsr" in vp.rejection.lower()
+
+
+def test_modify_rejects_wrong_target(tmp_path):
+    from ops.engine_sdlc.planner import attach_ecr_context, classify, validate
+    md = _modify_sidecar(tmp_path, target="vector")
+    ecr = _modify_ecr(md, engine="reversion")
+    vp = validate(attach_ecr_context(
+        classify(ecr, {"reversion": LifecycleState.PAPER}), ecr),
+        ecr=ecr)
+    assert vp.rejection is not None and "target" in vp.rejection.lower()
+
+
+def test_modify_rejects_non_param_ranges_key(tmp_path):
+    from ops.engine_sdlc.planner import attach_ecr_context, classify, validate
+    md = _modify_sidecar(tmp_path, winning={"not_a_real_param": 9})
+    ecr = _modify_ecr(md, param_change={"not_a_real_param": "9"})
+    vp = validate(attach_ecr_context(
+        classify(ecr, {"reversion": LifecycleState.PAPER}), ecr),
+        ecr=ecr)
+    assert vp.rejection is not None
+    assert "PARAM_RANGES" in vp.rejection or "not.*swept" in vp.rejection
+
+
+def test_modify_rejects_value_mismatch(tmp_path):
+    from ops.engine_sdlc.planner import attach_ecr_context, classify, validate
+    md = _modify_sidecar(tmp_path, winning={"z_threshold": 9.9})
+    ecr = _modify_ecr(md, param_change={"z_threshold": "3.1"})
+    vp = validate(attach_ecr_context(
+        classify(ecr, {"reversion": LifecycleState.PAPER}), ecr),
+        ecr=ecr)
+    assert vp.rejection is not None and "mismatch" in vp.rejection.lower()
+
+
+def test_modify_rejects_promote_new_sidecar(tmp_path):
+    """A promote_new dossier is an ADD, never a MODIFY (H-S3-6) -- even
+    with SURVIVED/passing numbers it must hard-reject."""
+    from ops.engine_sdlc.planner import attach_ecr_context, classify, validate
+    md = _modify_sidecar(tmp_path, recommended="promote_new")
+    ecr = _modify_ecr(md)
+    vp = validate(attach_ecr_context(
+        classify(ecr, {"reversion": LifecycleState.PAPER}), ecr),
+        ecr=ecr)
+    assert vp.rejection is not None
+    assert "fold_existing" in vp.rejection
+
+
+def test_modify_clean_sidecar_passes(tmp_path):
+    """Non-vacuity guard: a clean fold_existing + SURVIVED + dsr>=0.95 +
+    cred>=60 + in-PARAM_RANGES + value-matching + right-target sidecar
+    must PASS (rejection is None) -- proves the gate is not a constant
+    reject (mirrors T5's transient-proof discipline)."""
+    from ops.engine_sdlc.planner import attach_ecr_context, classify, validate
+    md = _modify_sidecar(tmp_path)
+    ecr = _modify_ecr(md)
+    vp = validate(attach_ecr_context(
+        classify(ecr, {"reversion": LifecycleState.PAPER}), ecr),
+        ecr=ecr)
+    assert vp.rejection is None, vp.rejection
+    assert vp.action.value == "modify"
+    assert vp.to_state == vp.from_state  # no lifecycle edge
+
+
+def test_modify_rejects_stale_sidecar(tmp_path):
+    from ops.engine_sdlc.planner import attach_ecr_context, classify, validate
+    # write a REAL valid sidecar at md's path so the reject below is
+    # provably "the CITED path has no sidecar" (a different/stale
+    # dossier), not "no sidecar exists anywhere" — the md side-effect is
+    # the point; the value is intentionally unused.
+    _modify_sidecar(tmp_path)
+    # point the ECR at a DIFFERENT (nonexistent) dossier path
+    ecr2 = _modify_ecr(tmp_path / "other-SURVIVED-seed9.md")
+    vp = validate(attach_ecr_context(
+        classify(ecr2, {"reversion": LifecycleState.PAPER}), ecr2),
+        ecr=ecr2)
+    assert vp.rejection is not None  # missing sidecar
+
+
+def test_promote_flips_lab_to_paper_iff_gate_green(tmp_path):
+    """LAB->PAPER is automated/gated (spec 4.1) -- not an ECR action.
+    promote() flips iff the gate authority is green."""
+    from ops.engine_sdlc.planner import promote
+    staged = _make_synthetic_engine_tree(tmp_path)
+    ep = staged / "tpcore" / "engine_profile.py"
+    ep.write_text(ep.read_text().replace(
+        '"throwaway", cadence=Cadence.DAILY,\n'
+        '                               dispatch_order=6, '
+        'lifecycle_state=LifecycleState.PAPER)',
+        '"throwaway", cadence=Cadence.DAILY,\n'
+        '                               dispatch_order=6, '
+        'lifecycle_state=LifecycleState.LAB)'))
+    before = _snapshot_tree(staged / "tpcore")
+    res2 = promote("throwaway", repo_root=staged, emit_audit=False,
+                   _gate_green=False)
+    assert res2.rejection is not None  # gate red => no flip
+    assert _snapshot_tree(staged / "tpcore") == before, (
+        "a gate-red promote mutated the staged tree (must be a no-op)")
+    assert "LifecycleState.LAB" in ep.read_text()  # still LAB
+    res = promote("throwaway", repo_root=staged, emit_audit=False,
+                  _gate_green=True)
+    assert res.rejection is None, res.rejection
+    assert "LifecycleState.PAPER" in ep.read_text()
+    from ops.engine_sdlc.planner import _run_consistency_subprocess
+    rc, out = _run_consistency_subprocess(staged)
+    assert rc == 0, (
+        f"promote LAB->PAPER must leave the clockwork GREEN:\n{out}")
