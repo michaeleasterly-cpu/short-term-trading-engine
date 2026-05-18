@@ -67,18 +67,20 @@ async def _amain() -> int:
         try:
             cache = FundamentalsCache(pool, adapter=adapter)
             logger.info("fundamentals.cron.start")
-            total, no_data, failures = await cache.backfill_all(tickers=None)
+            total, no_data, failures, skipped = await cache.backfill_all(tickers=None)
             logger.info(
                 "fundamentals.cron.done",
                 rows_upserted=total,
                 no_data=len(no_data),
                 failures=len(failures),
+                skipped_fresh=skipped,
             )
             print(
                 f"fundamentals refresh complete  "
                 f"rows_upserted={total}  "
                 f"no_data={len(no_data)}  "
-                f"failures={len(failures)}"
+                f"failures={len(failures)}  "
+                f"skipped_fresh={skipped}"
             )
             for sym, why in no_data:
                 print(f"  skip  {sym}: {why}")
