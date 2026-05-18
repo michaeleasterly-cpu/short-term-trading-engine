@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import csv as _csv
 import gzip
+import os
 import shutil
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -63,7 +64,17 @@ logger = structlog.get_logger(__name__)
 
 
 def repo_data_dir() -> Path:
-    """Return the absolute path to ``<repo_root>/data/``."""
+    """Return the absolute path to the archive root ``data/`` directory.
+
+    Honours an optional ``TP_DATA_DIR`` env var: if set and non-empty
+    the archive root is relocated there (host-agnostic seam for the
+    deferred pre-Railway archive-substrate migration). When unset (the
+    local default, today's behaviour) it is byte-identical to the prior
+    ``<repo_root>/data`` expression — no behaviour change.
+    """
+    override = os.environ.get("TP_DATA_DIR")
+    if override:
+        return Path(override)
     return Path(__file__).resolve().parent.parent.parent / "data"
 
 

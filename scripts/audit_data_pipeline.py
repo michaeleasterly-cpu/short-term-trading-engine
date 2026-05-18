@@ -181,7 +181,7 @@ ARCHIVE_SOURCES = (
 )
 
 
-def _detect_archive_shrinkage() -> list[ShrinkageReport]:
+def _detect_archive_shrinkage() -> tuple[list[ShrinkageReport], list[dict]]:
     """Compare each archive source's latest snapshot to its predecessor.
 
     Pool-free and disk-only: this is the *real* persisted evidence of a
@@ -189,9 +189,15 @@ def _detect_archive_shrinkage() -> list[ShrinkageReport]:
     application_log query which keyed off a structlog event that has no
     structlog→DB bridge in this repo (it could never fire).
 
-    Returns one :class:`ShrinkageReport` per source that has a prior
-    archive to compare against. A source with <2 archives yields no
-    report (``detect_shrinkage`` returns ``None``) — not an alarm.
+    Returns ``(reports, uncheckable)``:
+
+    * ``reports`` — one :class:`ShrinkageReport` per source that had a
+      prior archive to *genuinely compare* against.
+    * ``uncheckable`` — one ``{"source", "reason"}`` dict per source
+      that could NOT be compared (no archive dir / no latest snapshot /
+      no prior snapshot / ``prev_rows==0``). Surfacing these is what
+      stops an empty/fresh ``data/`` reporting a silent green "I checked
+      nothing" all-clear on a live-money data-integrity guardrail.
     """
     from tpcore.ingestion.csv_archive import (
         count_archive_rows,
@@ -200,28 +206,54 @@ def _detect_archive_shrinkage() -> list[ShrinkageReport]:
     )
 
     reports: list[ShrinkageReport] = []
+    uncheckable: list[dict] = []
     for src in ARCHIVE_SOURCES:
         try:
             la = latest_archive(src)
             if la is None:
+                uncheckable.append(
+                    {"source": src, "reason": "no archive snapshot on disk"}
+                )
                 continue
             current_rows = count_archive_rows(la)
             report = detect_shrinkage(src, current_rows, exclude_path=la)
         except Exception:  # noqa: BLE001 — a broken archive must not abort the audit
+            uncheckable.append(
+                {"source": src, "reason": "archive read raised — broken/unreadable"}
+            )
             continue
         if report is not None:
             reports.append(report)
-    return reports
+        else:
+            # detect_shrinkage → None means no prior snapshot to compare
+            # against (or prev_rows==0): uncheckable, NOT a clean compare.
+            uncheckable.append(
+                {"source": src, "reason": "no prior snapshot to compare against"}
+            )
+    return reports, uncheckable
 
 
 def _append_shrinkage_finding(
-    findings: list[AuditFinding], reports: list[ShrinkageReport]
+    findings: list[AuditFinding],
+    reports: list[ShrinkageReport],
+    uncheckable: list[dict] | None = None,
 ) -> None:
     """Render the disk-based shrinkage check into an AuditFinding.
 
     Preserves the original finding shape exactly (phase/check_name/
-    source/severity/summary/evidence/recommended_action).
+    source/severity/summary/evidence/recommended_action). Severity
+    precedence is FAIL > WARN > OK:
+
+    * any source shrank > 20%  → **FAIL** (unchanged behaviour/shape).
+    * else any source was *uncheckable* (empty/fresh ``data/``, <2
+      snapshots, ``prev_rows==0``) → **WARN** — "not green, needs
+      attention" in this audit's OK|WARN|FAIL vocabulary. A WARN is NOT
+      treated as green, so an empty archive root can no longer report a
+      silent all-clear on a live-money data-integrity guardrail.
+    * else (ALL sources genuinely compared, none over) → **OK**. Only
+      now is green honest.
     """
+    uncheckable = uncheckable or []
     over = [r for r in reports if r.over_threshold]
     if over:
         findings.append(AuditFinding(
@@ -242,6 +274,29 @@ def _append_shrinkage_finding(
                 for r in over
             ]},
             recommended_action="inspect data/<source>_archive/ — vendor likely revoked history; the prior archive is the recovery source",
+        ))
+    elif uncheckable:
+        findings.append(AuditFinding(
+            phase="known_knowns", check_name="shrinkage_detector",
+            source="csv_archive", severity="WARN",
+            summary=(
+                f"{len(uncheckable)} of {len(ARCHIVE_SOURCES)} full-snapshot "
+                f"source(s) UNCHECKABLE for shrinkage — green here would be a "
+                f"false all-clear (nothing was actually compared)"
+            ),
+            evidence={
+                "uncheckable": list(uncheckable),
+                "compared": [
+                    {
+                        "source": r.source,
+                        "previous_rows": r.previous_rows,
+                        "current_rows": r.current_rows,
+                        "shrinkage_pct": round(r.shrinkage_pct, 4),
+                    }
+                    for r in reports
+                ],
+            },
+            recommended_action="confirm data/<source>_archive/ exists and holds ≥2 .csv.gz snapshots (fresh container / empty data dir / first-run source); the shrinkage guardrail cannot defend a source it has never compared",
         ))
     else:
         findings.append(AuditFinding(
@@ -612,7 +667,8 @@ async def run_known_knowns(pool, sink: _FindingSink | None = None) -> list[Audit
     # event with no structlog→DB bridge in this repo — it was vacuous
     # and could never fire.) Compares each full-snapshot source's latest
     # archive to its predecessor; FAIL if any shrank > 20%.
-    _append_shrinkage_finding(findings, _detect_archive_shrinkage())
+    _shrink_reports, _shrink_uncheckable = _detect_archive_shrinkage()
+    _append_shrinkage_finding(findings, _shrink_reports, _shrink_uncheckable)
 
     # insider_sentiment (Finnhub MSPR) — period-keyed, NOT date-keyed, so
     # it cannot ride the DATA_SOURCES date loop. Dedicated check mirroring
