@@ -20,12 +20,12 @@ import structlog
 
 from ops import aar_autotune, engine_supervisor
 from tpcore.db import build_asyncpg_pool
-from tpcore.engine_profile import cadence_window_start, should_fire
+from tpcore.engine_profile import cadence_window_start, roster_for_dispatch, should_fire
 from tpcore.quality.validation.capital_gate import failing_sources_for_engine
 
 logger = structlog.get_logger(__name__)
 
-ROSTER: tuple[str, ...] = ("reversion", "vector", "momentum", "sentinel", "canary")
+ROSTER: tuple[str, ...] = roster_for_dispatch()
 
 
 async def _invoke_scheduler(engine: str) -> int:
