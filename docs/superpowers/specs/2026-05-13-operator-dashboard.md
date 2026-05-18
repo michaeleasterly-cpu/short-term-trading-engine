@@ -283,6 +283,17 @@ After a successful order-submission action (force-rebalance, etc.), render a 5-s
 * Color + glyph on every red/green signal (P&L, gate status, signal direction).
 * Don't rely on color alone for any status indicator.
 
+### Escalation & data-integrity audit panel (#189)
+
+A second panel rendered inside the Health tab immediately after the platform-health rows surfaces the Escalation & Hardening Ladder (rungs 1/3) and the full data-integrity audit posture — four rows using the same `(color, summary, detail)` tuple shape as the existing health rows:
+
+- **Source holds** — open `DATA_SOURCE_HELD` with no subsequent `DATA_SOURCE_CLEARED` (Data Supervisor state; `tpcore/datasupervisor/state.py` reused verbatim).
+- **Undispositioned escalations** — `ops.weekly_digest.build_weekly_digest(pool).undispositioned`; rendered verbatim (already policy-annotated by `tpcore.ladder.policy_for`).
+- **Cross-table audit** — latest `data_quality_log` rows with `source LIKE 'cross_table_audit.%'`; red on `stale OR confidence < 1.0`. This is the auditheal layer that `classify_validation` was previously blind to. The pre-#189 `_q_cross_ref` consumed a stale pre-session `{check, table, count}` print shape; it is now repointed to the persisted `cross_table_audit.*` SoT (same row label in the panel — data-source correction, not a UX change).
+- **Recent escalations** — trailing-window `DATA_REPAIR_ESCALATED` + `AdapterContractDrift`; each annotated resolved vs OPEN.
+
+The **read-only-renderer-of-SoT principle** is what prevents future drift: `_fetch_escalation_state()` calls `build_weekly_digest()` and the platform's standard red predicates; it reimplements nothing. The pre-#189 console drifted precisely because it reimplemented predicates that had since changed; calling the same functions the weekly digest calls makes disagreement structurally impossible. Pure `classify_*` functions live in `dashboard_components/escalation.py` (mirrors `health.py`'s tested pattern; unit-testable with no DB or Streamlit). Full design: `docs/superpowers/specs/2026-05-18-dashboard-escalation-audit-panel-design.md`.
+
 ## What this dashboard does NOT do
 
 * No order entry. Period. Operator triggers rebalances via the action buttons; the buttons call existing schedulers; the schedulers contain all the business logic. Dashboard is presentation + dispatch only.
