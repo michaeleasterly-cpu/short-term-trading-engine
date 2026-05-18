@@ -87,11 +87,27 @@ Single focus until further notice — no engine/Sigma-redesign work. Sequence:
    covers the normal case). Each a one-entry/­one-wire increment.
 4. **Hardening pass** (some items NOT blocked on the verdict — run in
    parallel while SEC backfills):
-   - `prices_daily_gaps` audit check: close the 14-day-recency blind spot
-     (old un-backfilled liquid holes invisible).
+   - ✅ **`prices_daily_gaps` 14-day-recency blind spot — CLOSED (DONE-
+     stale).** Superseded by the ungameable zero-tolerance invariant
+     `tpcore/quality/validation/checks/prices_daily_completeness.py`
+     (its module docstring L1-9 names this exact blind spot; no recency
+     window, no >7d-run minimum — ANY missing (ticker, session) in the
+     30-session liquid window fails). The widening of the heuristic
+     `prices_daily_gaps` audit check is moot — the invariant gate is the
+     correct mechanism (registered in `KNOWN_CHECK_NAMES`, healable via
+     `daily_bars --param repair_gaps=true`).
    - sporadic `row_velocity`: tighten (currently only fires on total
      silence; misses sustained severe partial degradation).
+     `[lane: data-lane-mine] [gate: none] [needs operator decision: no]
+     [effort: S]` — VERIFIED still open: `scripts/audit_data_pipeline.py`
+     L1136-1144, sporadic branch WARNs only on `recent == 0 and prior > 0`.
    - FMP handler-path CSV archive: verify end-to-end (presence unproven).
+     `[lane: data-lane-mine] [gate: none] [needs operator decision: no]
+     [effort: S]` — the `csv_archive_presence` audit check now covers
+     `fmp_fundamentals` (`scripts/audit_data_pipeline.py` L584-607,
+     `ARCHIVE_SOURCES` L178-181); remaining work is the runtime end-to-end
+     proof that `handle_fundamentals_refresh` actually writes the archive
+     on a real pull (a verification task, not a missing-code gap).
    - ✅ **HY-spread recovery — DONE 2026-05-16.** ALFRED/Nasdaq ruled
      out empirically; full history recovered (eco-archive 1996-2021 +
      Scribd FRED-graph gap, validated 772/772 exact). `hy_spread`
@@ -226,7 +242,17 @@ completeness invariant + Step-4 auto-heal loop in
 *escalates to the operator* instead of self-healing. That residual
 babysitting is unacceptable per the mandate — close it.
 
-**Scope — bring each source to the same bar as `prices_daily`:**
+**Scope — bring each source to the same bar as `prices_daily`** —
+`[lane: data-lane-mine] [gate: none] [needs operator decision: no]
+[effort: L]` **VERIFIED GENUINELY OPEN 2026-05-18:** only
+`prices_daily_completeness.py` is an ungameable completeness invariant.
+The other 6 sources have `*_freshness` checks + `healable=True` re-pull
+HealSpecs (`tpcore/selfheal/registry.py` L114-177) but NO completeness
+invariant module — `ls tpcore/quality/validation/checks/` shows no
+`fundamentals/corporate_actions/earnings/sec/macro/liquidity/classif`
+`_completeness.py`. Auto-heal-via-re-pull exists; the *zero-tolerance
+physical-truth invariant* per source does not. This is the binding
+residual of the "runs on its own" mandate:
 1. **`fundamentals_quarterly`** (FMP) — define the ungameable
    completeness/correctness invariant (every addressable T1/T2 stock has
    the expected filed quarters within its active range, no missing
@@ -240,7 +266,11 @@ babysitting is unacceptable per the mandate — close it.
 4. **`sec_insider_transactions` / SEC filings** (EDGAR) — invariant +
    auto-heal via `ops.py --stage sec_filings --backfill`.
 5. **`macro_indicators`** (FRED) — invariant + auto-heal (re-pull); the
-   BAMLH0A0HYM2 truncation class must self-recover.
+   BAMLH0A0HYM2 truncation class must self-recover. **Partial:** the
+   auto-heal-re-pull half is DONE (`tpcore/selfheal/registry.py` L124-126,
+   `macro_indicators_freshness` → `healable=True` stage
+   `macro_indicators`); the *ungameable completeness invariant* half is
+   still open (no `macro_indicators_completeness.py`).
 6. **`liquidity_tiers`, `ticker_classifications`** — invariant +
    auto-heal/recompute.
 
@@ -344,7 +374,14 @@ but DSR/credibility gates remain structurally blocked.
   previously-queued HMM-regime path and the rejected 2026-05-15 OU gate
   are now moot — Sigma is closed.)
 
-- **Reversion PCA-residual switch (2026-05-17, IN PROGRESS #171-175).**
+- **Reversion PCA-residual switch (2026-05-17, #171-175).** `[lane:
+  engine-owned] [gate: operator verdict bar — held-back DSR≥0.95 etc.]
+  [needs operator decision: yes — adjudication on sweep results]
+  [effort: L]` **VERIFIED NOT STARTED IN CODE 2026-05-18:**
+  `tpcore/backtest/pca_residual.py` does not exist; no `signal_mode` /
+  `pca_residual` symbol anywhere under `reversion/`. Status line below
+  said "IN PROGRESS" — that is a plan, not shipped code. Engine-lane
+  work; do not action from the data lane.
   Switch Reversion's primary signal from earnings-gated price-z fades to
   daily PCA-residual mean reversion (rolling 252d PCA on T1+T2, top-K PC
   removal, OU s-score, PCA-implied statistical groups for
@@ -371,6 +408,44 @@ but DSR/credibility gates remain structurally blocked.
   / PF 1.755 / max DD −11.5% on 2018-2025 — strong per-trade metrics at
   a structurally bounded firing rate. See `docs/MASTER_PLAN.md` §4.2 and
   `backtests/reversion_satellite_backtest.json`.
+
+## ⚠ PRE-RAILWAY MIGRATION BLOCKER — archive substrate (LOCKED design 2026-05-18)
+
+**Do NOT let a Railway cutover silently ship the broken substrate.**
+The vendor-truncation `shrinkage_detector` + the whole CSV-first
+archive are hardwired to a persistent **local FS**
+(`csv_archive.repo_data_dir()` = `Path(__file__).parents[2]/"data"`;
+no env/volume override; `railway.json` has no volume). On Railway's
+**ephemeral container FS**: detection silently always-passes (empty
+`data/` → emits OK = "checked nothing" — worst class for live money),
+`csv_archive_presence` flaps, recovery substrate evaporates. Expert
+verdict (2026-05-18): snapshot-vs-single-prior-CSV is the wrong
+substrate even on the Mac (poisoned baseline; gradual <20%/snapshot
+erosion invisible; only 5 full-snapshot sources).
+
+**LOCKED design (operator-approved 2026-05-18; built AT migration,
+not now — Railway paused, re-enable deferred until an engine proves
+edge):** `[lane: data-mine][gate: Railway-re-enable][decision: made][effort: L]`
+- **Detection → D2:** persist per-source row-count / min-max-date /
+  coverage to **Postgres** each ingest; shrinkage = deviation vs
+  rolling-median of durable history (host-agnostic; reuses the
+  `prices_daily_completeness`/freshness pattern; fixes the local
+  flaws too). [D3 = fold full-snapshot sources into a completeness
+  physical invariant — stronger/larger; D2 is primary.]
+- **Recovery → R3:** CSV-first archive → an **S3-compatible
+  object-storage bucket attached to the service** (Railway-attached /
+  Supabase Storage / R2 / S3) via S3 API + env-injected creds. Keeps
+  the CSV-first canonical workflow; host-agnostic. [R2 Volume =
+  weaker fallback; R4 Postgres-BYTEA rejected — 8GB Supabase budget.]
+- A bucket alone is necessary-for-recovery, NOT sufficient: detection
+  must become DB-derived regardless. Exact Railway bucket wiring is a
+  migration-time detail to verify vs current Railway docs.
+- **Zero-risk preps done now (separate PR, no Railway infra):**
+  (1) `repo_data_dir()` honors `TP_DATA_DIR` env (default unchanged)
+  — the R2/R3 seam; (2) empty-archive shrinkage path → WARN/UNKNOWN,
+  never silent OK — a "no fake-green" latent-bug fix.
+- Memory: `project_railway_archive_substrate_migration`. Sequencing:
+  re-base detection onto Postgres BEFORE Railway re-enable.
 
 ## Data archival — CSV-first retrofit (DONE 2026-05-15)
 
@@ -457,34 +532,47 @@ Surfaced while making the RiskGovernor real + uniform (branch
 
 **Pre-existing bugs discovered (NOT introduced by this work; out of
 scope here, flagged honestly):**
-- **Allocator `_engines` default is stale.** `AllocatorService.__init__`
-  default `("sigma","reversion","vector","momentum")` includes ARCHIVED
-  sigma and OMITS live sentinel. Production constructs it without
-  `engines=`, so: the allocator never allocates capital to sentinel,
-  and it re-upserts a `sigma` risk_state row every run. Needs a design
-  decision (is sentinel in the inverse-vol capital set? it is a
-  defensive overlay — may be intentionally excluded) then fix the
-  default / unify with the canonical engine roster used by
-  `run_all_engines.sh` as a single shared SoT. (T9's prune was made
-  fail-safe via an explicit `_ARCHIVED_ENGINES` allowlist so this stale
-  default can no longer cause live-engine data loss.)
-- **`audit_pipeline.shrinkage_detector` is vacuous.** It counts
-  `csv_archive.shrinkage_detected` in `application_log.message`, but
-  that is a pure structlog event never written to `application_log`
-  (no structlog→DB bridge in the repo). Same false premise the new
-  `governor_enforcement` check was redesigned away from. Re-key it off
-  persisted evidence or it is audit theatre.
+- ✅ **Allocator `_engines` stale default — FIXED (DONE-stale).** The
+  design decision was made and the default unified to a canonical SoT:
+  `AllocatorService.__init__` now defaults to `_DEFAULT_ENGINES =
+  allocator_eligible_engines()` (`tpcore/allocator/service.py` L44,
+  L85-87, L151) — derived from `tpcore.engine_profile`, NOT the
+  hardcoded `("sigma","reversion","vector","momentum")`. Decision
+  recorded inline (service.py L141-150): **sigma removed** (archived),
+  **sentinel intentionally excluded** (defensive macro overlay budgeted
+  by `SentinelCapitalGate` 10–20% cap, not the inverse-vol pool),
+  **canary excluded by omission** (spec §5a). `_ARCHIVED_ENGINES =
+  archived_engines()` (L85) keeps the prune fail-safe. This was a
+  pre-existing bug, now closed.
+- ✅ **`audit_pipeline.shrinkage_detector` re-keyed — FIXED (DONE-
+  stale).** No longer keyed off the never-written `application_log`
+  structlog event. `scripts/audit_data_pipeline.py` `_detect_archive_
+  shrinkage()` (L184-214) is now **pool-free and disk-only**: it
+  compares each `ARCHIVE_SOURCES` source's latest on-disk `.csv.gz`
+  archive to its predecessor via `tpcore.ingestion.csv_archive.
+  detect_shrinkage` — real persisted evidence, not theatre. Finding
+  rendered at L217-260.
 
 **Governor follow-ups:**
 - **Batch-engine slot accounting.** `open_positions` for momentum/
   sentinel is a conservative proxy (gate records +1 per gated order,
   −1 per submitted close; stale prior-holding slots not reconciled).
   Errs tight/never fails open. Follow-up: reconcile against broker
-  positions / AAR for an exact concurrent count.
-- **`ALLOCATOR_PRUNED_RISK_STATE` audit payload** `live_engines` field
-  is informational-only and slightly misleading (lists `self._engines`
-  incl. stale sigma) — cosmetic cleanup.
+  positions / AAR for an exact concurrent count. `[lane: platform-
+  overlay (RiskGovernor)] [gate: none] [needs operator decision: no]
+  [effort: M]` — VERIFIED still open: no broker-position reconciliation
+  path exists. Errs safe-tight, so low urgency.
+- ✅ **`ALLOCATOR_PRUNED_RISK_STATE` `live_engines` payload — MOOT
+  (resolved as a side-effect).** `self._engines` no longer includes
+  stale sigma (now `allocator_eligible_engines()` — see the fixed
+  allocator default above), so the payload at
+  `tpcore/allocator/service.py` L242 is now accurate. No separate
+  cosmetic cleanup needed.
 - **Verify real-state substrate end-to-end once an engine graduates**
   (allocator feeds `engine_equity`; trade_monitor/AAR feed pnl/
   positions). The `tpcore.risk.equity_unallocated` WARNING surfaces a
-  still-placeholder equity — watch for it post-graduation.
+  still-placeholder equity — watch for it post-graduation. `[lane:
+  platform-overlay] [gate: blocked — no engine has graduated (all 4
+  fail DSR)] [needs operator decision: no] [effort: M]` — VERIFIED
+  genuinely open AND gated; cannot be actioned until a graduation
+  event exists. Park until then.
