@@ -620,3 +620,76 @@ async def test_gate_expression_byte_identical_and_reduces_to_per_run(
     assert seen[-1] == 37                          # exactly per-run
     # Same returns + same n_trials ⇒ DSR identical to pre-SP-A path.
     assert core.dsr == real_dsr(returns, n_trials=37)
+
+
+async def test_aborted_run_after_sampling_still_records_its_spend(
+        monkeypatch, tmp_path):
+    """MAKE-OR-BREAK · T-ABORT. The §3.2 under-count hole proven closed.
+
+    Run 1 samples args.trials then takes the no-rankable-trial rc path
+    (returns 1 BEFORE the DSR/credibility code — the credibility write
+    never runs). It MUST still have recorded its trial spend in the
+    ledger. Run 2 against the same target sees run 1's trials in
+    cumulative_n_trials. (Deriving the count from credibility rows would
+    have silently under-counted exactly this adversarial run — H-LL-1.)
+    """
+    import ops.lab.run as lab_run
+    from tpcore.lab.context import LabContext
+    from tpcore.lab.ledger import cumulative_n_trials
+
+    # Harness whose ctx-runner RAISES on every candidate ⇒ every
+    # TrialResult carries .error ⇒ rank_candidates skips all of them
+    # (it only retains non-errored trials — ops/lab/run.py:404) ⇒
+    # `ranked == []` ⇒ _run_lab_core hits `if not ranked: return 1`
+    # (ops/lab/run.py:725-727), the no-rankable-trial rc path, AFTER
+    # sample_parameters + the :649 unconditional spend emit but BEFORE
+    # any DSR/credibility code. (Plan deviation, aligned to the real
+    # shipped rank_candidates: a ZERO-trade non-errored result still
+    # scores -1.0 and IS rankable — only an errored trial is dropped —
+    # so the no-rankable path is reached by an erroring ctx-runner, not
+    # an empty trade_log. Same rc path / same assertions / still a
+    # genuine post-sample abort with no credibility write.)
+    class _EmptyResult:
+        credibility_score = 0
+        credibility_rubric = None
+        trade_log: list = []
+
+    def _ctx_runner(context, *, overrides=None):
+        raise RuntimeError("no rankable trial — every candidate errored")
+
+    async def _ctx_loader(*a, **k):
+        return object()
+
+    async def _runner(*a, **k):
+        return _EmptyResult()
+
+    monkeypatch.setattr("ops.lab.run._context_runner_for",
+                        lambda e: _ctx_runner)
+    monkeypatch.setattr("ops.lab.run._context_loader_for",
+                        lambda e: _ctx_loader)
+    monkeypatch.setattr("ops.lab.run._runner_for", lambda e: _runner)
+
+    shared = _SharedLedgerPool()
+
+    async def _fake_build(url, *, read_only, **k):
+        return shared
+
+    monkeypatch.setattr("tpcore.db.build_asyncpg_pool", _fake_build,
+                        raising=True)
+
+    # Run 1 — aborts at the no-rankable-trial rc path.
+    async with LabContext(db_url="postgres://fake/db"):
+        rc = await lab_run._run_lab_core(
+            _ns(tmp_path / "abort.csv", trials=64, seed=1),
+            candidate="abort_cand")
+    assert rc == 1, f"expected the no-rankable rc=1 abort path, got {rc}"
+
+    # The aborted run STILL recorded its 64-trial spend.
+    from datetime import UTC, datetime
+    now = datetime.now(UTC)
+    assert await cumulative_n_trials(shared, "reversion", now) == 64, (
+        "abort-after-fishing did NOT record its spend — the §3.2 "
+        "under-count hole is OPEN (H-LL-1 violated)")
+    assert len(shared.rows) == 1
+    import json
+    assert json.loads(shared.rows[0]["notes"])["trials"] == 64
