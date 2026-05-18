@@ -1261,11 +1261,11 @@ async def run_unknown_unknowns(pool, sink: _FindingSink | None = None) -> list[A
             )
             if silent:
                 summary = (
-                    f"{table} (sporadic): {recent:,} rows last 30d vs "
-                    f"{prior:,} prior 90d — SILENT (stalled ingest?)"
+                    f"{table} (sporadic): {recent:,} rows last {SPORADIC_RECENT_DAYS}d vs "
+                    f"{prior:,} prior {SPORADIC_PRIOR_BAND_DAYS}d — SILENT (stalled ingest?)"
                 )
                 recommended_action = (
-                    f"re-run the {table} stage — zero rows in 30d "
+                    f"re-run the {table} stage — zero rows in {SPORADIC_RECENT_DAYS}d "
                     f"but history shows activity"
                 )
             elif severe_partial:
@@ -1284,8 +1284,8 @@ async def run_unknown_unknowns(pool, sink: _FindingSink | None = None) -> list[A
                 )
             else:
                 summary = (
-                    f"{table} (sporadic): {recent:,} rows last 30d vs "
-                    f"{prior:,} prior 90d — within event-cadence variance"
+                    f"{table} (sporadic): {recent:,} rows last {SPORADIC_RECENT_DAYS}d vs "
+                    f"{prior:,} prior {SPORADIC_PRIOR_BAND_DAYS}d — within event-cadence variance"
                 )
                 recommended_action = None
             findings.append(AuditFinding(
@@ -1293,7 +1293,7 @@ async def run_unknown_unknowns(pool, sink: _FindingSink | None = None) -> list[A
                 source=table,
                 severity="WARN" if (silent or severe_partial) else "OK",
                 summary=summary,
-                evidence={"recent_30d": recent, "prior_90d": prior, "cadence": "sporadic"},
+                evidence={"recent_180d": recent, "prior_365d": prior, "cadence": "sporadic"},
                 recommended_action=recommended_action,
             ))
 

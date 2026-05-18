@@ -143,14 +143,14 @@ async def test_sporadic_total_silence_still_WARNs() -> None:
     assert f.severity == "WARN"
     # Preserved summary string (silence branch), byte-for-byte.
     assert f.summary == (
-        "corporate_actions (sporadic): 0 rows last 30d vs "
-        "900 prior 90d — SILENT (stalled ingest?)"
+        "corporate_actions (sporadic): 0 rows last 180d vs "
+        "900 prior 365d — SILENT (stalled ingest?)"
     )
     assert f.recommended_action == (
-        "re-run the corporate_actions stage — zero rows in 30d "
+        "re-run the corporate_actions stage — zero rows in 180d "
         "but history shows activity"
     )
-    assert f.evidence == {"recent_30d": 0, "prior_90d": 900,
+    assert f.evidence == {"recent_180d": 0, "prior_365d": 900,
                           "cadence": "sporadic"}
 
 
@@ -174,7 +174,7 @@ async def test_sustained_180d_collapse_WARNs() -> None:
     assert f.recommended_action is not None
     assert "silence check did not fire" in f.recommended_action
     assert "full-season window" in f.recommended_action
-    assert f.evidence == {"recent_30d": 20, "prior_90d": 1500,
+    assert f.evidence == {"recent_180d": 20, "prior_365d": 1500,
                           "cadence": "sporadic"}
 
 
