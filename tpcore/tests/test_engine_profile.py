@@ -259,3 +259,11 @@ async def test_should_fire_fails_closed_for_non_dispatchable_lifecycle():
     assert d.fire is False
     assert d.reason == "engine not dispatchable (lifecycle)"
     assert d.checks.get("dispatchable") is False
+
+
+def test_check_imports_engine_packages_derived_and_drift_fixed():
+    from tpcore.scripts.check_imports import ENGINE_PACKAGES
+    assert ENGINE_PACKAGES == frozenset(
+        {"reversion", "vector", "momentum", "sentinel", "canary"})
+    assert "sigma" not in ENGINE_PACKAGES   # archived drift fixed
+    assert "canary" in ENGINE_PACKAGES      # missing-live drift fixed
