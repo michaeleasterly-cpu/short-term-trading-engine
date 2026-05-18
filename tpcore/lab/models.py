@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 from tpcore.backtest.credibility import CredibilityScore
 
 
 class LabCandidate(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
-    name: str
+    name: Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]+$")]
     target_engine: str
     param_overrides: dict[str, Any]
     intent: Literal["promote_new", "fold_existing"]
