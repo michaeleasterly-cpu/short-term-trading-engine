@@ -71,6 +71,12 @@ _DIGEST_FAILED_CLASS = "engine_service_digest_failed"
 _CRASHLOOP_WINDOW_SEC = 600.0
 _CRASHLOOP_BUDGET = 3
 
+# #243 Phase 1: deterministic silent-absence detector classes (daemon
+# alive but a co-hosted service is silently not doing its job). Both
+# escalate-only (NO ENGINE_HELD), mirroring the Phase-0 emit pattern.
+_SWEEP_SILENT_CLASS = "engine_service_sweep_silent"
+_DIGEST_STALLED_CLASS = "engine_service_digest_stalled"
+
 
 def _engsvc_hold_id(failure_class: str, task_name: str) -> str:
     """Deterministic (NOT uuid4) hold_id so a re-escalation of the same

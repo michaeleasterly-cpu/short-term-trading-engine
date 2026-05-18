@@ -250,9 +250,12 @@ def _escalated_rows(pool):
 
 
 def test_platform_service_failure_classes_constant():
-    # The frozen SoT lives in ops/engine_supervisor (NOT engine_service)
+    # The frozen SoT lives in ops/engine_supervisor (NOT engine_service).
+    # Phase-0 shipped the crash classes; #243 Phase 1 adds the two
+    # deterministic silent-absence detector classes.
     assert _esup.PLATFORM_SERVICE_FAILURE_CLASSES == frozenset(
-        {"engine_service_task_crashloop", "engine_service_digest_failed"})
+        {"engine_service_task_crashloop", "engine_service_digest_failed",
+         "engine_service_sweep_silent", "engine_service_digest_stalled"})
     # NOT folded into the DA-1 infra set
     assert (_esup.PLATFORM_SERVICE_FAILURE_CLASSES
             & _esup.INFRA_FAILURE_CLASSES) == set()
