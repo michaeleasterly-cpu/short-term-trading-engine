@@ -27,12 +27,30 @@ DENIED_EXACT: tuple[str, ...] = (
 DENIED_GLOBS: tuple[str, ...] = ("*/providers.py", "tpcore/providers.py")
 
 
-def hard_denied_paths(paths: list[str]) -> list[str]:
+def hard_denied_paths(
+    paths: list[str],
+    *,
+    denied_exact: tuple[str, ...] | None = None,
+    denied_prefixes: tuple[str, ...] | None = None,
+    denied_globs: tuple[str, ...] | None = None,
+) -> list[str]:
+    """Lane-agnostic by parameter (FORK-A: one fence object, no clone).
+
+    The denied path set is INJECTED data. Omitting every keyword-only
+    arg reproduces today's data-lane behavior **byte-identically** (the
+    module-level DENIED_* constants are the defaults) — proven by the
+    UNCHANGED #187 fence suite still passing. The engine lane passes its
+    own denied set (the engine deterministic-mechanism files + the
+    shared protected paths) via these args; it is never hardcoded here.
+    """
+    de = DENIED_EXACT if denied_exact is None else denied_exact
+    dp = DENIED_PREFIXES if denied_prefixes is None else denied_prefixes
+    dg = DENIED_GLOBS if denied_globs is None else denied_globs
     out: list[str] = []
     for p in paths:
-        if (p in DENIED_EXACT
-                or any(p.startswith(d) for d in DENIED_PREFIXES)
-                or any(fnmatch(p, g) for g in DENIED_GLOBS)):
+        if (p in de
+                or any(p.startswith(d) for d in dp)
+                or any(fnmatch(p, g) for g in dg)):
             out.append(p)
     return out
 
