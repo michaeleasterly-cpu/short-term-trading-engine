@@ -34,21 +34,48 @@ class Cadence(StrEnum):
     WEEKLY_FIRST_TRADING_DAY = "weekly_first_trading_day"
 
 
+class LifecycleState(StrEnum):
+    LAB = "lab"          # SP2 territory; never dispatched/allocated
+    PAPER = "paper"      # graduated, paper-trading (current reality for all live engines)
+    LIVE = "live"        # reserved; no engine here yet (paper-only mandate)
+    RETIRED = "retired"  # snap-out complete; archive/EULOGY exists; never dispatched
+
+
+_DISPATCHABLE: frozenset[LifecycleState] = frozenset(
+    {LifecycleState.PAPER, LifecycleState.LIVE})
+
+
 class EngineProfile(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     engine: str
     cadence: Cadence
     market_closed_required: bool = True
+    dispatch_order: int
+    lifecycle_state: LifecycleState
+    allocator_eligible: bool = False
 
 
 _PROFILE: dict[str, EngineProfile] = {
-    "reversion": EngineProfile(engine="reversion", cadence=Cadence.DAILY),
-    "vector":    EngineProfile(engine="vector",    cadence=Cadence.DAILY),
-    "sentinel":  EngineProfile(engine="sentinel",  cadence=Cadence.DAILY),
-    "canary":    EngineProfile(engine="canary",    cadence=Cadence.DAILY),
-    "momentum":  EngineProfile(engine="momentum",  cadence=Cadence.MONTHLY_FIRST_TRADING_DAY),
-    # allocator profile present (this is the SoT); consumed in Sub-project C.
-    "allocator": EngineProfile(engine="allocator", cadence=Cadence.WEEKLY_FIRST_TRADING_DAY),
+    "reversion": EngineProfile(engine="reversion", cadence=Cadence.DAILY,
+                               dispatch_order=1, lifecycle_state=LifecycleState.PAPER,
+                               allocator_eligible=True),
+    "vector":    EngineProfile(engine="vector", cadence=Cadence.DAILY,
+                               dispatch_order=2, lifecycle_state=LifecycleState.PAPER,
+                               allocator_eligible=True),
+    "momentum":  EngineProfile(engine="momentum", cadence=Cadence.MONTHLY_FIRST_TRADING_DAY,
+                               dispatch_order=3, lifecycle_state=LifecycleState.PAPER,
+                               allocator_eligible=True),
+    "sentinel":  EngineProfile(engine="sentinel", cadence=Cadence.DAILY,
+                               dispatch_order=4, lifecycle_state=LifecycleState.PAPER),
+    "canary":    EngineProfile(engine="canary", cadence=Cadence.DAILY,
+                               dispatch_order=5, lifecycle_state=LifecycleState.PAPER),
+    # allocator: separate _dispatch_allocator path (NOT in the ROSTER loop, D-SDLC1-4).
+    "allocator": EngineProfile(engine="allocator", cadence=Cadence.WEEKLY_FIRST_TRADING_DAY,
+                               dispatch_order=0, lifecycle_state=LifecycleState.PAPER),
+    # sigma RETIRED (data-SDLC RETIRED symmetry); dispatch_order/cadence inert
+    # (filtered out of every dispatch/allocator accessor by construction, D-SDLC1-6).
+    "sigma":     EngineProfile(engine="sigma", cadence=Cadence.DAILY,
+                               dispatch_order=99, lifecycle_state=LifecycleState.RETIRED),
 }
 
 

@@ -23,6 +23,7 @@ def test_profile_for_known_engines():
     assert profile_for("sentinel").cadence is Cadence.DAILY
     assert profile_for("momentum").cadence is Cadence.MONTHLY_FIRST_TRADING_DAY
     assert profile_for("allocator").cadence is Cadence.WEEKLY_FIRST_TRADING_DAY
+    assert profile_for("canary").cadence is Cadence.DAILY
 
 
 def test_profile_for_unknown_returns_none():
@@ -38,8 +39,8 @@ def test_profiles_are_frozen_and_self_consistent():
 
 
 def test_profile_covers_live_engine_roster():
-    # SoT: scripts/run_all_engines.sh:73 (sigma archived — excluded).
-    live = {"reversion", "vector", "momentum", "sentinel"}
+    # SoT: tpcore.engine_profile._PROFILE (sigma RETIRED, excluded from live)
+    live = {"reversion", "vector", "momentum", "sentinel", "canary"}
     missing = live - set(_PROFILE)
     assert not missing, f"engines without an EngineProfile: {missing}"
 
@@ -183,3 +184,39 @@ async def test_should_fire_proceeds_when_not_held():
                               _FakePool(ran=False))
     assert d.fire is True and d.reason == "ready"
     assert d.checks["supervisor_held"] is True
+
+
+def test_lifecycle_state_enum_values():
+    from tpcore.engine_profile import LifecycleState
+    assert {s.value for s in LifecycleState} == {"lab", "paper", "live", "retired"}
+
+
+def test_profile_has_new_fields_all_seven_entries():
+    from tpcore.engine_profile import LifecycleState
+    # all 5 live engines + allocator are PAPER; sigma is RETIRED
+    expected = {
+        "allocator": (0, LifecycleState.PAPER, False),
+        "reversion": (1, LifecycleState.PAPER, True),
+        "vector":    (2, LifecycleState.PAPER, True),
+        "momentum":  (3, LifecycleState.PAPER, True),
+        "sentinel":  (4, LifecycleState.PAPER, False),
+        "canary":    (5, LifecycleState.PAPER, False),
+        "sigma":     (99, LifecycleState.RETIRED, False),
+    }
+    assert set(_PROFILE) == set(expected)
+    for name, (order, state, elig) in expected.items():
+        p = _PROFILE[name]
+        assert p.dispatch_order == order
+        assert p.lifecycle_state is state
+        assert p.allocator_eligible is elig
+
+
+def test_profile_for_sigma_returns_retired_profile():
+    from tpcore.engine_profile import LifecycleState
+    p = profile_for("sigma")
+    assert p is not None and p.lifecycle_state is LifecycleState.RETIRED
+
+
+def test_engine_profile_rejects_missing_required_fields():
+    with pytest.raises(ValidationError):
+        EngineProfile(engine="x", cadence=Cadence.DAILY)  # no dispatch_order/lifecycle_state
