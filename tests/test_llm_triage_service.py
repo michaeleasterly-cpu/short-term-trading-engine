@@ -44,7 +44,15 @@ import pytest
 # NEVER exercised), exec the daemon by file path, then RESTORE
 # sys.modules exactly — zero global side effects, collection-order safe.
 _LTS_PATH = Path(__file__).resolve().parent.parent / "ops" / "llm_triage_service.py"
-_SAVED = {k: sys.modules.get(k) for k in ("ops", "ops.llm_data_triage")}
+# Phase 3 (B1): the daemon now ALSO does ``from ops.engine_llm_triage
+# import run_triage`` at module top-level (the engine co-task) — the
+# SAME intra-package-import hazard under the scripts/ops.py shadow as
+# ``ops.llm_data_triage``. Snapshot + stub BOTH; every test
+# monkeypatches the real callables so neither real impl is exercised.
+_SAVED = {
+    k: sys.modules.get(k)
+    for k in ("ops", "ops.llm_data_triage", "ops.engine_llm_triage")
+}
 try:
     _ops = sys.modules.get("ops")
     if not isinstance(getattr(_ops, "__path__", None), list):
@@ -59,14 +67,24 @@ try:
     _stub.run_triage = _stub_run_triage
     sys.modules["ops.llm_data_triage"] = _stub
 
+    _estub = types.ModuleType("ops.engine_llm_triage")
+
+    async def _stub_engine_run_triage(*_a, **_k):  # pragma: no cover - replaced
+        raise AssertionError(
+            "engine_run_triage must be monkeypatched in this test"
+        )
+
+    _estub.run_triage = _stub_engine_run_triage
+    sys.modules["ops.engine_llm_triage"] = _estub
+
     _spec = importlib.util.spec_from_file_location("_lts_under_test", _LTS_PATH)
     assert _spec is not None and _spec.loader is not None
     lts = importlib.util.module_from_spec(_spec)
     sys.modules["_lts_under_test"] = lts
     _spec.loader.exec_module(lts)
 finally:
-    # Restore sys.modules['ops'] / ['ops.llm_data_triage'] EXACTLY so no
-    # later-collected test (e.g. test_ops_helpers) sees our scaffolding.
+    # Restore sys.modules entries EXACTLY so no later-collected test
+    # (e.g. test_ops_helpers) sees our scaffolding.
     for _k, _v in _SAVED.items():
         if _v is None:
             sys.modules.pop(_k, None)
@@ -85,12 +103,16 @@ class _Conn:
 
     async def fetchrow(self, sql: str, *args):
         # _find_new_trigger: newest trigger with recorded_at > cursor.
+        # args[0] is the event-type list the lane passed (data lane:
+        # TRIGGER_EVENT_TYPES; engine lane: ENGINE_TRIGGER_EVENT_TYPES) —
+        # filter on it so the ONE fake serves BOTH co-tasks.
         if "ORDER BY recorded_at DESC" in sql:
+            event_types = set(args[0])
             cursor = args[1]
             hits = [
                 ts
                 for ts, et in self._pool.events
-                if et in lts.TRIGGER_EVENT_TYPES and ts > cursor
+                if et in event_types and ts > cursor
             ]
             if not hits:
                 return None
@@ -341,3 +363,196 @@ def test_startup_prune_helper_is_crash_isolated_standalone(monkeypatch) -> None:
 
     monkeypatch.setattr(lts.subprocess, "run", boom)
     lts._startup_worktree_prune()  # must NOT raise
+
+
+# ════════════════════════════════════════════════════════════════════════
+# Phase 3 (B1) — the daemon co-hosts BOTH lanes' triage loops as two
+# independent _run_supervised co-tasks on the ONE advisory pool. The
+# engine co-task cursor-polls ENGINE_ESCALATED and fires
+# ops.engine_llm_triage.run_triage; it is crash-isolated from the data
+# co-task (and vice-versa); the lock + startup-prune idioms are reused
+# verbatim. test_two_daemon_invariant.py MUST stay green UNEDITED
+# (B1 placement: no installer/label/whitelist change).
+# ════════════════════════════════════════════════════════════════════════
+
+
+async def _run_one_engine_loop(
+    monkeypatch, pool, *, raises: bool = False, lock_dir: str | None = None
+) -> list:
+    """Drive the ENGINE lane loop for exactly one poll then stop.
+    Mirrors _run_one_loop but patches the engine triage callable."""
+    calls: list = []
+
+    async def fake_engine_run_triage(p):
+        calls.append(p)
+        if raises:
+            raise RuntimeError("engine triage boom")
+        return None
+
+    monkeypatch.setattr(lts, "engine_run_triage", fake_engine_run_triage)
+
+    stop_event = asyncio.Event()
+
+    async def stop_after_first(coro, timeout):  # noqa: ANN001
+        stop_event.set()
+        coro.close()
+        return None
+
+    real_wait_for = asyncio.wait_for
+    monkeypatch.setattr(lts.asyncio, "wait_for", stop_after_first)
+    ld = lock_dir if lock_dir is not None else lts.DEFAULT_LOCK_DIR
+    try:
+        await lts._engine_loop(pool, stop_event, ld)
+    finally:
+        monkeypatch.setattr(lts.asyncio, "wait_for", real_wait_for)
+    return calls
+
+
+def test_engine_trigger_event_types_is_engine_escalated() -> None:
+    # Structural: the engine co-task triggers on the engine-lane
+    # ENGINE_ESCALATED escalation (the deterministic-Phase-0 surface).
+    assert lts.ENGINE_TRIGGER_EVENT_TYPES == ("ENGINE_ESCALATED",)
+
+
+async def test_engine_escalated_triggers_engine_run_triage_once(
+    monkeypatch, lock_dir
+) -> None:
+    recent = datetime.now(UTC) - timedelta(minutes=1)
+    pool = _Pool(events=[(recent, "ENGINE_ESCALATED")])
+    calls = await _run_one_engine_loop(monkeypatch, pool, lock_dir=lock_dir)
+    assert len(calls) == 1  # engine triage fired exactly once
+    assert calls[0] is pool  # run_triage(pool) — the shared advisory pool
+    assert not os.path.exists(lock_dir)  # lock released after the pass
+
+
+async def test_engine_loop_ignores_data_lane_events(
+    monkeypatch, lock_dir
+) -> None:
+    # A data-lane escalation must NOT trigger the engine co-task.
+    recent = datetime.now(UTC) - timedelta(minutes=1)
+    pool = _Pool(events=[(recent, "DATA_REPAIR_ESCALATED")])
+    calls = await _run_one_engine_loop(monkeypatch, pool, lock_dir=lock_dir)
+    assert calls == []  # engine lane only consumes ENGINE_ESCALATED
+
+
+async def test_data_loop_ignores_engine_lane_events(monkeypatch) -> None:
+    # Symmetry: an ENGINE_ESCALATED must NOT trigger the data co-task.
+    recent = datetime.now(UTC) - timedelta(minutes=1)
+    pool = _Pool(events=[(recent, "ENGINE_ESCALATED")])
+    calls = await _run_one_loop(monkeypatch, pool)
+    assert calls == []  # data lane only consumes its two escalations
+
+
+async def test_engine_find_new_trigger_advances_cursor(monkeypatch) -> None:
+    recent = datetime.now(UTC) - timedelta(minutes=1)
+    pool = _Pool(events=[(recent, "ENGINE_ESCALATED")])
+    cursor = datetime.now(UTC) - timedelta(hours=1)
+    newest = await lts._find_new_trigger(
+        pool, cursor, lts.ENGINE_TRIGGER_EVENT_TYPES
+    )
+    assert newest == recent
+    # After advancing, the same event no longer re-triggers.
+    assert (
+        await lts._find_new_trigger(
+            pool, recent, lts.ENGINE_TRIGGER_EVENT_TYPES
+        )
+        is None
+    )
+
+
+async def test_engine_run_triage_exception_does_not_crash_loop(
+    monkeypatch, lock_dir
+) -> None:
+    recent = datetime.now(UTC) - timedelta(minutes=1)
+    pool = _Pool(events=[(recent, "ENGINE_ESCALATED")])
+    calls = await _run_one_engine_loop(
+        monkeypatch, pool, raises=True, lock_dir=lock_dir
+    )
+    assert len(calls) == 1  # called + raised, but loop survived
+    assert not os.path.exists(lock_dir)  # lock released on the finally path
+
+
+async def test_run_supervised_isolates_a_crashing_cotask(monkeypatch) -> None:
+    """_run_supervised: a crashing factory is logged + restarted after
+    backoff and NEVER propagates (one co-task crash must not kill its
+    sibling or the daemon). CancelledError propagates (clean shutdown)."""
+    stop_event = asyncio.Event()
+    attempts = {"n": 0}
+
+    async def crashing_factory():
+        attempts["n"] += 1
+        raise RuntimeError("co-task boom")
+
+    # Patch the backoff sleep to immediately stop after the first crash
+    # so the test is deterministic + fast.
+    async def stop_after_first(coro, timeout):  # noqa: ANN001
+        stop_event.set()
+        coro.close()
+        return None
+
+    monkeypatch.setattr(lts.asyncio, "wait_for", stop_after_first)
+    # Must return cleanly (no propagation) despite the factory raising.
+    await lts._run_supervised("engine", crashing_factory, stop_event)
+    assert attempts["n"] >= 1  # it ran (and crashed) at least once
+
+
+async def test_run_supervised_cancellederror_propagates() -> None:
+    """CancelledError must propagate out of _run_supervised (clean
+    shutdown path) — it is NOT swallowed like a normal Exception."""
+    stop_event = asyncio.Event()
+
+    async def cancel_factory():
+        raise asyncio.CancelledError()
+
+    with pytest.raises(asyncio.CancelledError):
+        await lts._run_supervised("engine", cancel_factory, stop_event)
+
+
+async def test_both_lanes_share_the_one_pool_and_lock(
+    monkeypatch, lock_dir
+) -> None:
+    """The data + engine co-tasks both fire on the SAME pool object and
+    serialize on the SAME mkdir-atomic self-exclusion lock (so an engine
+    pass and a data pass can never race `git worktree add`)."""
+    recent = datetime.now(UTC) - timedelta(minutes=1)
+    pool = _Pool(
+        events=[
+            (recent, "DATA_REPAIR_ESCALATED"),
+            (recent, "ENGINE_ESCALATED"),
+        ]
+    )
+    data_calls = await _run_one_loop(monkeypatch, pool, lock_dir=lock_dir)
+    eng_calls = await _run_one_engine_loop(
+        monkeypatch, pool, lock_dir=lock_dir
+    )
+    assert data_calls == [pool]  # data lane: shared pool
+    assert eng_calls == [pool]  # engine lane: SAME shared pool
+    assert not os.path.exists(lock_dir)  # SAME lock, released by both
+
+
+def test_two_daemon_invariant_still_passes_unedited() -> None:
+    """B1 placement proof: the topology invariant test must pass with
+    ZERO edits to the installer / launchd label / closed 4-token
+    whitelist. If this needs an edit, the placement is wrong."""
+    import subprocess as _sp
+
+    repo = Path(__file__).resolve().parent.parent
+    # The topology test + installer must be byte-unchanged on this branch.
+    diff = _sp.run(
+        ["git", "diff", "--stat", "HEAD", "--",
+         "scripts/tests/test_two_daemon_invariant.py",
+         "scripts/install_all_daemons.sh"],
+        cwd=str(repo), capture_output=True, text=True, check=False,
+    )
+    assert diff.stdout.strip() == "", (
+        "B1 violation: the topology test or installer was edited — "
+        f"placement is wrong:\n{diff.stdout}"
+    )
+    r = _sp.run(
+        [sys.executable, "-m", "pytest", "-q",
+         "scripts/tests/test_two_daemon_invariant.py"],
+        cwd=str(repo), capture_output=True, text=True, check=False,
+    )
+    assert r.returncode == 0, (
+        f"test_two_daemon_invariant.py FAILED:\n{r.stdout}\n{r.stderr}"
+    )
