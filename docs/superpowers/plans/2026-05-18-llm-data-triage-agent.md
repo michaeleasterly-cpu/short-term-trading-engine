@@ -300,29 +300,46 @@ STOP. Report DONE (test counts, the `tools`-never-passed assertion green, import
 
 ---
 
-## Phase 3 — sandbox + draft-PR + wire into existing ci.yml & data-ops & digest (PR 3)
+## Phase 3 — sandbox + draft-PR + ci.yml fence + EVENT-DRIVEN daemon + digest (PR 3)
+
+> **v2.1 amendment (operator directive 2026-05-18):** invocation is
+> **event-driven via a sibling daemon on the existing
+> `application_log` bus**, NOT a linear `run_data_operations.sh` step
+> and NOT a scheduled workflow. Step 4 below is rewritten accordingly;
+> the struck v2 wording is preserved for provenance.
 
 Branch: `feat/llm-triage-p3` off fresh `main`.
 
-### Task 3.1: ephemeral worktree + draft PR + CI checks + wiring
+### Task 3.1: ephemeral worktree + draft PR + CI checks + event-driven daemon
 
-- [ ] **Step 1: Read** `.github/workflows/ci.yml` fully; `scripts/run_data_operations.sh` Step 4d (datasupervisor) + the sibling-agent invocation idiom + how `wrapper_*`/`_log_event` work; `ops/weekly_digest.py` undispositioned line build (the `_disposition_label`/policy-annotation site).
+- [ ] **Step 1: Read** `.github/workflows/ci.yml` fully; `ops/data_repair_service.py` AND `ops/engine_service.py` in full (the canonical event-driven daemon pattern: `TRIGGER_EVENT_TYPES`/`COMPLETE_EVENT_TYPE` constants, `_find_new_trigger`/`_poll_new_requests` cursor-poll of `platform.application_log`, `_run_supervised` backoff, `_main_loop`, `_amain`/`main()` CLI shim, `POLL_INTERVAL_SEC`, the `mkdir`-atomic self-exclusion lock idiom if present); `scripts/install_all_daemons.sh` (how a daemon is registered as a launchd job); the existing daemon's unit test (find it: `ls tpcore/tests/*service* tests/*service* 2>/dev/null` or grep for `data_repair_service`/`engine_service` in tests) — the fake-pool cursor-advance technique to mirror; `ops/weekly_digest.py` undispositioned line build (the `_disposition_label`/policy-annotation site).
 
 - [ ] **Step 2: Sandbox + PR in `ops/llm_data_triage.py`** (extend P2's agent, behind the same crash-isolation): on a produced proposal, `git worktree add <tmp> -b llm-triage/<ref-short>`; write ONLY the additive HealSpec/RemediationSpec entry + the dossier file into the worktree; run the env-scrubbed read-only gate locally (`pytest -q`, `ruff`) with an explicit env allowlist (PATH/HOME/PYTHON*, NO `*DATABASE_URL*`/`ANTHROPIC*`/`ALPACA*`/`SUPABASE*`); if green, `gh pr create --draft --label llm-data-triage --title … --body <dossier+links>`; `git worktree remove`. The bot uses a `gh` auth with NO merge permission (operator runbook P4). All still crash-isolated; failure ⇒ proposal event still emitted (advisory preserved), no PR, escalation stays for the human.
 
 - [ ] **Step 3: Add the required CI checks to `.github/workflows/ci.yml`** — a new job `llm-triage-fence` (runs only `if: github.event.pull_request` and `contains(labels,'llm-data-triage')`): `python scripts/llm_triage_pr_check.py` (hard-denied + provenance; exit≠0 fails the PR) and an auto-close step (`gh pr close` + escalate comment) on failure. It is ADDED to the existing file (one job, not a new workflow). Non-LLM PRs skip it (label-gated) — zero impact on normal PRs. Document that "required check" + branch protection + the merge-less bot identity + CODEOWNERS(2 humans, one≠operator) are GitHub settings applied via the P4 runbook.
 
-- [ ] **Step 4: Wire the agent into the data-ops flow** — in `scripts/run_data_operations.sh`, AFTER Step 4d (datasupervisor) and BEFORE the digest build, a new thin step mirroring the sibling idiom: `_log_event INGESTION_START wrapper_llm_triage` / `DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python -m ops.llm_data_triage || true` / `_log_event INGESTION_COMPLETE wrapper_llm_triage`. `|| true` — advisory, never gates the cycle.
+- [ ] **Step 4 (v2.1 — EVENT-DRIVEN, replaces the struck v2 step):** ~~v2: a linear step in `scripts/run_data_operations.sh` after Step 4d.~~ Operator directive 2026-05-18: *"i dont want a scheduled workflow i want an event driven incantation."*
+
+  **Step 4a — `ops/llm_triage_service.py`** (new sibling daemon, structural mirror of `ops/data_repair_service.py`/`ops/engine_service.py` — same `_main_loop`/`_run_supervised`/`_amain`/`main()` shim/`POLL_INTERVAL_SEC` shape; reuse the exact idioms read in Step 1, do not re-author):
+  - `TRIGGER_EVENT_TYPES = ("DATA_REPAIR_ESCALATED", "DATA_SOURCE_ESCALATED")` — the novel-data-escalation events on `platform.application_log`.
+  - `_find_new_trigger(pool, cursor)`: the same cursor-poll query as `engine_service._find_new_trigger` but `WHERE event_type = ANY(TRIGGER_EVENT_TYPES)` and `recorded_at > cursor`; returns the newest `recorded_at` seen, else `None` (mirror its return contract exactly).
+  - On a new trigger: `await run_triage(pool)` (the P2 agent — which itself re-checks the open set via `select_novel_escalations`, so a same-cycle self-heal that already cleared the escalation is a safe no-op; NO data-ops step-ordering coupling needed). Wrap the call so a failure is logged and the loop continues (crash-isolated; advisory; never blocks).
+  - `_run_supervised` backoff + `stop_event` + `_amain` + `def main(): # pragma: no cover` CLI shim — byte-for-byte the sibling pattern. `POOL_MAX_SIZE` sized like the sibling (single poll-loop → small).
+  - Import-isolation still holds: the daemon imports only `ops.llm_data_triage.run_triage` + stdlib/asyncpg/structlog — NOT any actor path (the P2 import-isolation guard already covers `ops/llm_data_triage.py`; add the daemon file to that AST guard's checked set so the fence extends to the daemon too).
+
+  **Step 4b — register in `scripts/install_all_daemons.sh`**: add `llm_triage_service` to the daemon roster exactly as the siblings are registered (read the existing entries; mirror the launchd plist/`KeepAlive` idiom; `DATABASE_URL="$DATABASE_URL_IPV4"` like the others). No new installer, no toggle — one line in the existing roster.
+
+  **Step 4c — daemon unit test** `tpcore/tests/test_llm_triage_service.py` (mirror the existing daemon test's fake-pool cursor technique found in Step 1): (i) no trigger event ⇒ `run_triage` NOT called, cursor unchanged; (ii) a `DATA_REPAIR_ESCALATED` newer than cursor ⇒ `run_triage` called exactly once, cursor advances; (iii) `run_triage` raising ⇒ daemon does NOT crash (loop survives, logged); (iv) `DATA_SOURCE_ESCALATED` also triggers. Inject a fake `run_triage` (monkeypatch) so no LLM/DB. Each must bite.
 
 - [ ] **Step 5: Surface in the digest** — extend the `ops/weekly_digest.py` undispositioned line: if a `DATA_LLM_TRIAGE_PROPOSAL` exists for the ref, append ` | LLM: <proposed_disposition> (conf <c>) — PR <link>`. Reuse the existing line builder; do not re-query the open set (DRY).
 
-- [ ] **Step 6: Verify** — `bash -n scripts/run_data_operations.sh`; `python -c "import yaml,sys; yaml.safe_load(open('.github/workflows/ci.yml'))"` (valid YAML); the fence job is label-gated (non-LLM PRs unaffected — reason in the report); `python -m tpcore.… ` import smokes; full pytest collection clean; `ruff`. Commit:
+- [ ] **Step 6: Verify** — `python -c "import yaml; yaml.safe_load(open('.github/workflows/ci.yml'))"` (valid YAML) AND grep-confirm `ci.yml` NEVER references `ANTHROPIC_API_KEY`/secrets (the CI fence must stay credential-starved — hard requirement); the fence job is label-gated (non-LLM PRs unaffected — reason in the report); `bash -n scripts/install_all_daemons.sh`; `python -c "import ast; ast.parse(open('ops/llm_triage_service.py').read())"` + `python -c "import ops.llm_triage_service"` import smoke; the import-isolation guard now also covers `ops/llm_triage_service.py` (and still bites); `python -m pytest tpcore/tests/test_llm_triage_service.py -q` (4 pass); full pytest collection clean; `ruff check ops/llm_data_triage.py ops/llm_triage_service.py`. Commit:
 ```bash
 test "$(git branch --show-current)" = "feat/llm-triage-p3" || { echo WRONG; exit 1; }
-git add ops/llm_data_triage.py .github/workflows/ci.yml scripts/run_data_operations.sh ops/weekly_digest.py
-git commit -m "feat(llm-data-triage): sandbox+draft-PR, ci.yml fence job, data-ops wiring, digest surfacing"
+git add ops/llm_data_triage.py ops/llm_triage_service.py .github/workflows/ci.yml scripts/install_all_daemons.sh ops/weekly_digest.py tpcore/tests/test_llm_triage_service.py tpcore/tests/test_llm_data_triage_*.py
+git commit -m "feat(llm-data-triage): sandbox+draft-PR, ci.yml label-gated fence, event-driven daemon, digest surfacing"
 ```
-STOP. Report DONE (yaml valid, bash -n ok, label-gating confirmed, the exact wiring lines, ruff/collection, commit SHA) or BLOCKED.
+STOP. Report DONE (yaml valid + ci.yml key-starved confirmed, daemon mirrors the sibling pattern [name the sibling idioms reused], label-gating confirmed, the import-isolation guard extended to the daemon, 4/4 daemon tests bite, ruff/collection, commit SHA) or BLOCKED.
 
 ---
 
@@ -330,9 +347,9 @@ STOP. Report DONE (yaml valid, bash -n ok, label-gating confirmed, the exact wir
 
 Branch: `docs/llm-triage-p4` off fresh `main`.
 
-- [ ] **Step 1:** `CLAUDE.md` — one bullet: the LLM data triage agent (rung 5), its bright lines (advisory; data restoration NEVER via the LLM; starved sandbox; draft-PR-only; provenance/hard-denied CI fence; post-merge canary), data-lane only, pointer to the spec + persona doc.
+- [ ] **Step 1:** `CLAUDE.md` — one bullet: the LLM data triage agent (rung 5), invoked **event-driven by the `llm_triage_service` sibling daemon on the `application_log` bus** (mirrors `data_repair_service`/`engine_service`; NOT a scheduled workflow, NOT a `run_data_operations.sh` step; installed via `scripts/install_all_daemons.sh`), its bright lines (advisory; data restoration NEVER via the LLM; starved sandbox; draft-PR-only; provenance/hard-denied label-gated CI fence; post-merge canary), data-lane only, pointer to the spec + persona doc. Also add `llm_triage_service` to the `install_all_daemons.sh` daemon roster listing wherever CLAUDE.md enumerates the installed daemons.
 - [ ] **Step 2:** `docs/ESCALATION_HARDENING_LADDER.md` — rung 5 status → BUILT; record the expert-vetted envelope + the explicit vetoes; note the engine session will build a symmetric engine-native triage agent (symmetry-not-copy).
-- [ ] **Step 3:** Create `docs/llm_data_triage_operator_runbook.md` — the **config-not-code** GitHub settings the operator must apply: branch protection requiring the `llm-triage-fence` + `test` checks; CODEOWNERS so an LLM PR needs 2 human approvals, one ≠ the dispositioning operator; a dedicated bot GitHub identity/token with NO merge permission used by `gh` in the agent; the `llm-data-triage` label; `ANTHROPIC_API_KEY` provisioning (and that its absence = safe no-op). Honestly flagged: these are repo/GitHub settings, not enforceable purely in code; the code-side fence is independently sufficient to block a system-breaking *merge* without a human.
+- [ ] **Step 3:** Create `docs/llm_data_triage_operator_runbook.md` — the **config-not-code** GitHub settings the operator must apply: branch protection requiring the `llm-triage-fence` + `test` checks; CODEOWNERS so an LLM PR needs 2 human approvals, one ≠ the dispositioning operator; a dedicated bot GitHub identity/token with NO merge permission used by `gh` in the agent; the `llm-data-triage` label; `ANTHROPIC_API_KEY` provisioning (runtime-only in `.env`, gitignored — and that its absence = safe no-op); **explicitly: remove the unused `ANTHROPIC_API_KEY` GitHub Actions secret — CI/the fence must stay credential-starved (the key lives only in the daemon's runtime env, never in CI)**; and that the agent is invoked by the **`llm_triage_service` launchd daemon** (installed via `scripts/install_all_daemons.sh`, event-driven off `application_log` — no cron, no scheduled workflow). Honestly flagged: these are repo/GitHub settings, not enforceable purely in code; the code-side fence is independently sufficient to block a system-breaking *merge* without a human.
 - [ ] **Step 4:** spec `**Status:**` → `BUILT 2026-05-18` + Build record P1=#<p1>/P2=#<p2>/P3=#<p3>/P4=this.
 - [ ] **Step 5:** `git diff --stat` = exactly the doc files; collection clean; commit:
 ```bash
@@ -346,7 +363,7 @@ STOP. Report DONE.
 
 ## Self-Review
 
-**1. Spec coverage:** §1 (additive mechanism-free PR + dossier) → P1.1 packet/persona + P3.2 PR; §2 (data stays 100%, LLM never repairs) → agent has no creds/no repair call, P3 sandbox env-scrubbed, never runs a stage; §3 hard-denied + provenance + canary + two-human + inert-until-merged → P1.2 fence/canary + P3.3 ci.yml required job + P4 runbook; §4 vetoes → provenance rejects new/widened mechanism, no merge cred (P4), no real-tree write (worktree+scrub), persona-not-safety (persona doc states it, fence is the boundary); §5 persona created+versioned+lockstep → P1.1 Step 8; §6 official-doc Anthropic → ground-truth pinned from context7, P2 mocked-to-real-shape; §7 trigger reuses Ladder SoT → P1.1 select.py; §8 one canonical mechanism → single agent + one ci.yml job, no new pipeline/toggle; §9 data-lane only / runbook honest re config-not-code → P4; §10 fence-first phasing → P1 before P2 before wire. ✓ §11 items all assigned a read-step.
+**1. Spec coverage:** §1 (additive mechanism-free PR + dossier) → P1.1 packet/persona + P3.2 PR; §2 (data stays 100%, LLM never repairs) → agent has no creds/no repair call, P3 sandbox env-scrubbed, never runs a stage; §3 hard-denied + provenance + canary + two-human + inert-until-merged → P1.2 fence/canary + P3.3 ci.yml required job + P4 runbook; §4 vetoes → provenance rejects new/widened mechanism, no merge cred (P4), no real-tree write (worktree+scrub), persona-not-safety (persona doc states it, fence is the boundary); §5 persona created+versioned+lockstep → P1.1 Step 8; §6 official-doc Anthropic → ground-truth pinned from context7, P2 mocked-to-real-shape; §7 trigger reuses Ladder SoT → P1.1 select.py; §8 one canonical mechanism → single agent + **one event-driven sibling daemon on the existing `application_log` bus** (P3 Step 4, v2.1; reuses the existing `_main_loop`/`_run_supervised`/`install_all_daemons.sh` infra — not a parallel pipeline, not a scheduled workflow, not a linear data-ops step) + one label-gated ci.yml job, no new pipeline/toggle; §9 data-lane only / runbook honest re config-not-code → P4; §10 fence-first phasing → P1 before P2 before wire. ✓ §11 items all assigned a read-step (the v2.1 "exact event-driven trigger" bullet → P3 Step 1+4).
 
 **2. Placeholder scan:** packet.py Step 7 + fence.py Step 2–4 describe full pure logic + tests but compress the body to the established fake-pool/set-logic pattern rather than re-print 200 lines — every signature, the `_DENY` list contents, the provenance rules, the hash method, and the test assertions are concrete; this is "follow the verified mirrored pattern", not "TBD". The P1.1-Step-5 `cls` payload uncertainty is an explicit read-and-report, not a hidden gap. PR-number placeholders in P4 are controller-supplied.
 

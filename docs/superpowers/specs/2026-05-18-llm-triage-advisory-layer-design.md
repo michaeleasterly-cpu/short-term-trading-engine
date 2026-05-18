@@ -1,9 +1,23 @@
 # LLM Triage Advisory Layer (Ladder rung 5 / Epic E) — Design **v2**
 
-**Status:** spec **v2** 2026-05-18 (DATA lane). Brainstorm → spec
+**Status:** spec **v2.1** 2026-05-18 (DATA lane). Brainstorm → spec
 (v1) → operator scope escalation ×3 + **two independent expert
-opinions** → **spec v2 (this doc)** → plan → phased subagent build.
-#187 — Ladder rung 5 (`docs/ESCALATION_HARDENING_LADDER.md`).
+opinions** → **spec v2** → plan → phased subagent build (P1, P2
+merged) → **v2.1 invocation amendment (this rev)**. #187 — Ladder
+rung 5 (`docs/ESCALATION_HARDENING_LADDER.md`).
+
+**v2.1 amendment (operator directive 2026-05-18, after P2 merge):**
+the agent is invoked **event-driven** off the existing
+`platform.application_log` bus by a **sibling daemon** mirroring
+`ops/data_repair_service.py` / `ops/engine_service.py` (the
+`_main_loop` + `_run_supervised` + `scripts/install_all_daemons.sh`
+pattern) — **NOT** a linear step inside `scripts/run_data_operations.sh`
+and **NOT** a scheduled GitHub workflow. Operator: *"i dont want a
+scheduled workflow i want an event driven incantation."* This reuses
+the existing daemon infrastructure (same bus, same supervised-poll
+pattern, same launchd installer) — it is the canonical mechanism, not
+a second pipeline. §8/§9/§10(P3)/§11 below are amended accordingly;
+the superseded v2 wording is struck, not silently rewritten.
 
 **v2 supersedes v1.** v1 was "advisory text only, no tools." Operator
 escalated: (a) the LLM may *run tests to investigate*; (b) it must
@@ -156,15 +170,30 @@ blow the token budget; `packet_hash` recorded for reproducibility.
 
 ## 8. One canonical mechanism — no rat's nest (operator-required)
 
-A **single** triage agent on the existing `application_log` bus
-(sibling of `ops/cutover_agent.py` / `ops/data_repair_service.py`,
-invoked in the data-ops flow like the others) + **one** declarative
-`provenance` check wired into the **existing** `.github/workflows/
-ci.yml` (a new required job/step, not a parallel pipeline) + reuse of
-the existing PR / clockwork-drift / branch-protection / canary
-machinery. **No on/off bash toggles, no one-off scripts, no second
-pipeline.** Crash-isolated (any failure → structured log, cycle
-proceeds, escalation stays undispositioned — fails safe to "human").
+A **single** triage agent on the existing `application_log` bus,
+consumed **event-driven** by **one** sibling daemon
+(`ops/llm_triage_service.py`) that is a structural mirror of
+`ops/data_repair_service.py` / `ops/engine_service.py` — the same
+`_main_loop` cursor-poll of `platform.application_log`, the same
+`_run_supervised` backoff, the same `main()` CLI shim, installed by
+the same `scripts/install_all_daemons.sh`. It fires on a **novel
+data-escalation event** (`DATA_REPAIR_ESCALATED` /
+`DATA_SOURCE_ESCALATED`) landing on the bus; the P1
+`select_novel_escalations` open-set re-check (the weekly-digest
+`OPEN_ESCALATIONS` anti-join + no-prior-`DATA_LLM_TRIAGE_PROPOSAL`
+dedup) makes it safe against an escalation the same cycle's self-heal
+later resolves, so it needs no ordering coupling to the data-ops
+script. ~~v2: invoked in the data-ops flow like the others.~~
+**(v2.1 — operator: not a linear `run_data_operations.sh` step, not a
+scheduled workflow; event-driven on the existing bus.)** Plus **one**
+declarative `provenance` check wired into the **existing**
+`.github/workflows/ci.yml` (a new required job/step, not a parallel
+pipeline) + reuse of the existing PR / clockwork-drift /
+branch-protection / canary machinery. **No on/off bash toggles, no
+one-off scripts, no second pipeline** — it reuses the existing daemon
+infrastructure, not a parallel one. Crash-isolated (any failure →
+structured log, cycle proceeds, escalation stays undispositioned —
+fails safe to "human").
 
 ## 9. Non-goals / scope
 
@@ -172,7 +201,12 @@ proceeds, escalation stays undispositioned — fails safe to "human").
   Ladder).
 - Not in any deterministic-agent / repair / trading / data-mutation
   runtime path. No auto-apply, ever.
-- Not a new daemon. Not a dashboard write surface.
+- ~~v2: Not a new daemon.~~ **(v2.1 — operator directive
+  2026-05-18:** the canonical event-driven consumer **is** a sibling
+  daemon on the existing `application_log` bus, reusing the existing
+  `_main_loop`/`_run_supervised`/`install_all_daemons.sh`
+  infrastructure — this is the one canonical mechanism per §8, not a
+  parallel pipeline.) Not a dashboard write surface.
 - Branch-protection / CODEOWNERS / a merge-less bot identity are
   partly **GitHub repo settings**, not code: the code-side fence
   (provenance + hard-denied required checks + starved sandbox +
@@ -187,7 +221,7 @@ proceeds, escalation stays undispositioned — fails safe to "human").
 |---|---|
 | 1 | **Safety skeleton, deterministic, no LLM.** The "HealSpec provenance" check (additive-only / mechanism-free / stage-must-pre-exist / dossier-present / drift-in-fixture) as a pure module + its required-CI entrypoint + the **hard-denied protected-path check**; the post-merge **canary harness** (a merged LLM-authored spec is shadow-only until promoted); the trigger predicate (reuse `tpcore.ladder.policy_for` + weekly-digest open set + no-prior-proposal); the deterministic read-only context **packet** builder + `packet_hash`; **`docs/llm_data_triage_persona.md`** (created, versioned) + the `PERSONA_VERSION` lockstep test. Unit-tested; **landed dark**. |
 | 2 | **The sandboxed LLM agent.** Ephemeral starved worktree runner; the official-SDK `messages.create` call (per §6, doc-grounded) wrapped in `tpcore.outage.with_retry`, **no `tools`**, bounded `max_tokens`, no-key no-op, crash-isolated; produces the branch + dossier + `DATA_LLM_TRIAGE_PROPOSAL`. The **import-isolation clockwork guard** (the agent's import closure excludes `tpcore.risk`/`order_management`/`selfheal`/`auditheal`/`datasupervisor` actor paths). Client **mocked** in CI (no live calls). Landed dark (not wired). |
-| 3 | **Wire into the existing pipeline.** The thin agent in the data-ops flow (sibling-idiom; read the exact step); draft-PR open (merge-less identity); the provenance + protected-path checks added as **required** jobs in the existing `ci.yml`; auto-close on a hard-denied/provenance failure; the proposal surfaced on the escalation's weekly-digest line. Net: a novel escalation now yields a fenced, review-ready PR + advisory. |
+| 3 | **Wire event-driven (v2.1).** A new sibling daemon `ops/llm_triage_service.py` — structural mirror of `ops/data_repair_service.py`/`ops/engine_service.py` (`_main_loop` cursor-poll + `_run_supervised` + `main()` shim) — fires `ops.llm_data_triage.run_triage` on a novel-escalation event (`DATA_REPAIR_ESCALATED`/`DATA_SOURCE_ESCALATED`) on the existing `application_log` bus; registered in `scripts/install_all_daemons.sh` (the same launchd installer). **NOT** a linear `run_data_operations.sh` step, **NOT** a scheduled workflow. Then: draft-PR open (merge-less identity); the provenance + protected-path checks added as **required** label-gated jobs in the existing `ci.yml`; auto-close on a hard-denied/provenance failure; the proposal surfaced on the escalation's weekly-digest line. Net: a novel escalation event now triggers a fenced, review-ready PR + advisory. |
 | 4 | **Docs — "all of it".** CLAUDE.md (rung-5 + the bright lines + that data restoration never goes through the LLM); `docs/ESCALATION_HARDENING_LADDER.md` rung-5 → BUILT with the expert envelope + vetoes; the persona doc cross-links; the **operator runbook** for the GitHub branch-protection/CODEOWNERS/merge-less-identity repo settings (config-not-code, honestly flagged); spec → BUILT + build record. |
 
 ## 11. Open questions for the plan phase (resolve by READING code/docs, not guessing)
@@ -197,10 +231,17 @@ proceeds, escalation stays undispositioned — fails safe to "human").
   exact current model id, `anthropic-version`/SDK version, the
   `Message`/`content`/`stop_reason`/`usage` shape the mock must match.
   Capture URLs in the plan. Do not code from memory.
-- **Exact data-ops wiring point** — read how `ops/cutover_agent.py` /
-  the post-escalation siblings are invoked (`run_data_operations.sh`
-  step order; after the datasupervisor Step 4d?); place after the
-  cycle's escalation state is final, before the digest build.
+- **Exact event-driven trigger (v2.1)** — read the
+  `ops/data_repair_service.py` / `ops/engine_service.py` daemon
+  pattern (`TRIGGER_EVENT_TYPES`, `_find_new_trigger`/`_poll_new_*`
+  cursor-poll, `_run_supervised` backoff, `_main_loop`, `main()`
+  shim, `POLL_INTERVAL_SEC`) and `scripts/install_all_daemons.sh`.
+  Build `ops/llm_triage_service.py` as a structural sibling that
+  triggers on `DATA_REPAIR_ESCALATED`/`DATA_SOURCE_ESCALATED`. No
+  data-ops step-ordering coupling — the P1
+  `select_novel_escalations` open-set re-check makes a same-cycle
+  self-heal a no-op (the escalation is no longer open). NOT a
+  `run_data_operations.sh` step; NOT a scheduled workflow.
 - **Escalation-ref key per type** — confirm `request_id`
   (`DATA_REPAIR_ESCALATED`) / `hold_id` (`DATA_SOURCE_ESCALATED`) /
   feed (`AdapterContractDrift`) from the weekly-digest open-escalation

@@ -233,10 +233,9 @@ async def test_non_dict_json_skips_escalation_not_batch(monkeypatch) -> None:
     assert out.proposed == ["ref-good"]
 
 
-async def test_import_isolation_no_actor_paths() -> None:
-    # The agent must NOT import any actor/mutation path.
+def _imported_modules(path: str) -> set[str]:
     import ast
-    src = pathlib.Path("ops/llm_data_triage.py").read_text()
+    src = pathlib.Path(path).read_text()
     tree = ast.parse(src)
     imported: set[str] = set()
     for n in ast.walk(tree):
@@ -244,9 +243,31 @@ async def test_import_isolation_no_actor_paths() -> None:
             imported |= {a.name for a in n.names}
         elif isinstance(n, ast.ImportFrom) and n.module:
             imported.add(n.module)
-    forbidden = ("tpcore.risk", "tpcore.order_management",
-                 "tpcore.selfheal.orchestrator", "tpcore.selfheal.runner",
-                 "tpcore.auditheal", "tpcore.datasupervisor", "scripts.ops")
-    bad = [m for m in imported for f in forbidden
+    return imported
+
+
+_FORBIDDEN_ACTOR_PATHS = (
+    "tpcore.risk", "tpcore.order_management",
+    "tpcore.selfheal.orchestrator", "tpcore.selfheal.runner",
+    "tpcore.auditheal", "tpcore.datasupervisor", "scripts.ops",
+)
+
+
+async def test_import_isolation_no_actor_paths() -> None:
+    # The agent must NOT import any actor/mutation path.
+    imported = _imported_modules("ops/llm_data_triage.py")
+    bad = [m for m in imported for f in _FORBIDDEN_ACTOR_PATHS
            if m == f or m.startswith(f + ".")]
     assert bad == [], f"agent imports fenced actor path(s): {bad}"
+
+
+async def test_import_isolation_daemon_no_actor_paths() -> None:
+    # P3 §4c: the event-driven triage daemon must ALSO import no
+    # actor/mutation path — same forbidden set as the agent. (It
+    # imports only ops.llm_data_triage.run_triage + stdlib/asyncpg/
+    # structlog.) This test still BITES: adding any forbidden import
+    # to ops/llm_triage_service.py fails it.
+    imported = _imported_modules("ops/llm_triage_service.py")
+    bad = [m for m in imported for f in _FORBIDDEN_ACTOR_PATHS
+           if m == f or m.startswith(f + ".")]
+    assert bad == [], f"daemon imports fenced actor path(s): {bad}"

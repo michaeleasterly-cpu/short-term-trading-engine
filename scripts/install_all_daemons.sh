@@ -9,6 +9,10 @@
 #   * keep ops.data_repair_service running 24/7 (data-lane) — polls
 #     application_log for ENGINE_DATA_REQUEST, runs the canonical
 #     self-heal, and emits exactly one terminal reply per request_id
+#   * keep ops.llm_triage_service running 24/7 (advisory-lane) — polls
+#     application_log for DATA_REPAIR_ESCALATED / DATA_SOURCE_ESCALATED
+#     and fires one advisory triage pass (may open a draft, human-
+#     merge-only PR; never repairs/trades/merges)
 #   * run scripts/run_data_operations.sh every weekday at 21:30 UTC
 #     (data-lane cron; chains: data refresh → audit → validate →
 #     compress → emit event)
@@ -50,7 +54,7 @@ for stale in com.michael.trading.trade-monitor com.michael.trading.weekly-digest
     rm -f "$p"
 done
 
-for installer in install_launchd_engine_service install_launchd_data_repair_service install_launchd_data_operations; do
+for installer in install_launchd_engine_service install_launchd_data_repair_service install_launchd_llm_triage_service install_launchd_data_operations; do
     echo ""
     echo "▶ ${installer}"
     echo "────────────────────────────────────────────────────────────────────────"
