@@ -409,6 +409,104 @@ but DSR/credibility gates remain structurally blocked.
   a structurally bounded firing rate. See `docs/MASTER_PLAN.md` §4.2 and
   `backtests/reversion_satellite_backtest.json`.
 
+## Deep-research spike adjudication — Lab-candidate backlog (2026-05-19)
+
+Decision record from the two commissioned edge-research spikes
+(`deep-research-report.md` / `deep-research-report2.md`, expert-reviewed
+2026-05-19). Binding lens: the DSR/n_trials overfit verdict is THE
+constraint. Every accepted edge is ONE pre-registered single-primary-spec
+Lab candidate routed `python -m ops.lab` → DSR/credibility graduation gate
+→ ECR (`python -m ops.engine_sdlc`); honestly counted against n_trials; at
+most ONE pre-declared robustness check (counted as a trial, NOT a sweep);
+the reports' own success bars preserved/strengthened, never relaxed. NEVER
+bypass the gate. Meta-track cross-ref: #242. The reports' multi-value
+grids (`--pca-components 8,10,12,15`, `--family-weights` menus) ARE the
+n_trials hazard and are explicitly rejected — single config only.
+
+- **Reversion PCA-residual — CORROBORATED, folds into #171-175 (no new
+  item).** `[lane: engine-owned] [gate: operator verdict bar — held-back
+  DSR≥0.95/cred≥60/PBO≤0.20/trades-param≥25/≥150 held-back trades/no
+  single-crisis PnL] [decision: fold] [effort: L]` Both spikes' flagship
+  rec (Avellaneda–Lee daily PCA residuals) IS #171-175 — do NOT create a
+  duplicate. Literature Sharpe (1.44, 1997–2007) is NOT evidence it
+  survives THIS data/period/costs. Genuinely-new nuance captured as
+  sub-notes under #171-175 ONLY, each at most ONE pre-declared robustness
+  check (NOT sweep dimensions): (a) volume / "trading-time" overlay
+  (Avellaneda ETF 1.51); (b) ETF-residual crisis fallback when systematic
+  correlation dominates PCA. Cross-ref #171-175, #242.
+
+- **Vector — sector-relative composite score (single-spec Lab
+  candidate).** `[lane: engine-owned] [gate: held-back DSR≥0.95 + cred≥60
+  + PBO≤0.20 + ≥150 held-back trades + ≥3× current gate-model candidate
+  count + no family >70% score variance] [decision: ADOPT — route via
+  ops.lab] [effort: M]` Replace the AND-gate with ONE fixed-weight
+  sector-relative composite: target-engine vector; ONE primary config —
+  value/catalyst/technical weights = 0.35/0.40/0.25, sector-relative
+  standardization, top-decile selection, ONE pre-registered
+  sector-neutralization choice (reports disagree long-only vs long-short;
+  pick one, do NOT test both). Catalyst family = earnings_events +
+  insider-cluster (data live). Data prereq: none beyond live feeds. Via
+  `python -m ops.lab --candidate vector_composite --target-engine vector
+  --intent fold_existing` → graduation gate → ECR; counts against
+  n_trials; NEVER bypass the gate.
+
+- **Sentinel — graduated Bear Score (single-spec Lab candidate).**
+  `[lane: engine-owned] [gate: maxDD reduction ≥30% vs base + ulcer
+  improvement + median inverse-ETF hold <20d + no single-recession PnL
+  concentration] [decision: ADOPT — route via ops.lab] [effort: M]`
+  Graduated (scaled-defense) vs binary flip. ONE pre-registered config,
+  literature-anchored thresholds (Sahm ≥0.50, CFNAI-MA3 ≤−0.70,
+  SOS ≥0.20 — external, not fitted: the anti-overfit anchor): weights
+  0.30/0.15/0.20/0.15/0.20 (Sahm/SOS/curve/CFNAI/HY-OAS), bands
+  0.45/0.60/0.80, inverse-ETF cap 25% of defensive capital, Treasuries/
+  gold-first. n_trials caveat: weight×band surface is large — ONE spec
+  only, ONE pre-declared robustness check max. Data prereq: confirm
+  credit-spread (hy_spread/credit_spread) series wired into live FRED
+  ingestion BEFORE the Lab run. Via `python -m ops.lab --candidate
+  sentinel_bear_score --target-engine sentinel --intent fold_existing` →
+  graduation gate → ECR; counts against n_trials; NEVER bypass the gate.
+
+- **Catalyst — event-confirmed insider-cluster drift (single-spec Lab
+  candidate; 8-K leg data-gated).** `[lane: engine-owned] [gate:
+  held-back DSR≥0.95 + cred≥60 + PBO≤0.20 + ≥150 held-back trades +
+  positive post-2020 held-back alpha + better hit-rate than pure
+  post-beat drift] [decision: ADOPT (insider-cluster primary) — route via
+  ops.lab] [effort: M]` Plain large-cap PEAD discarded (both spikes;
+  too arbitraged). Primary leg = non-routine insider-cluster buying
+  (≥2 insiders, exclude routine, 30d window) confirming a positive
+  corporate event/earnings beat — DATA READY (WEEK-GOAL SEC backfill:
+  646,107 Form-345 rows 84.1% T1-T2). 8-K item-level drift leg is GATED:
+  do NOT run until 8-K item-code parsing is confirmed (backfill landed
+  237,680 filings 85.1% but item-level extraction not verified). ONE
+  primary config, entry filing+1, hold 20/60d. Via `python -m ops.lab
+  --candidate catalyst_insider_drift --target-engine catalyst --intent
+  promote_new` → graduation gate → ECR; counts against n_trials; NEVER
+  bypass the gate.
+
+- **Momentum — vol-managed 12-1 + earnings/revenue overlay.** `[lane:
+  engine-owned] [gate: held-back DSR≥0.95 + lower crash DD than current
+  paper spec] [decision: DEFER — paper-research lane] [effort: M]` Real
+  structural direction (vol-targeting + fundamental overlay) but lowest
+  (impact×prob)/effort vs the binding constraint; monthly rebalance ⇒
+  slow DSR evidence accrual; engine already paper-trading + self-gated.
+  Deferred to the paper-research lane; promote to a single-spec Lab
+  candidate only if a top-three slot frees and capacity exists.
+
+- **REJECTED: Sigma sector-neutral failed-break / compression+
+  failed-expansion residual fade.** Sigma ARCHIVED 2026-05-16 (two honest
+  FAILED gate attempts; `archive/sigma/EULOGY.md`). The sector-neutral
+  residual idea is already the Reversion enhancement #171-175 per the
+  EULOGY scoping caveat — NOT a Sigma revival, NOT a new item. Durable
+  decision; do not re-litigate.
+
+- **REJECTED: S2 systematic short-squeeze engine.** Data-parked
+  (point-in-time securities-lending + options-positioning history absent;
+  FINRA short-interest structurally bi-monthly). Both spikes independently
+  say archive/manual-only; matches the existing platform decision. Not
+  backtestable now — a DATA limitation, not modeling. Reopen ONLY if
+  point-in-time securities-lending + options-positioning history is
+  acquired; then route as a single-spec Lab candidate. Do not re-litigate.
+
 ## ⚠ PRE-RAILWAY MIGRATION BLOCKER — archive substrate (LOCKED design 2026-05-18)
 
 **Do NOT let a Railway cutover silently ship the broken substrate.**
