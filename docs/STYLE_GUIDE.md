@@ -195,6 +195,14 @@ Every new external-API adapter starts from `tpcore/templates/adapter_template.py
 - Mock external APIs via the `DataProviderInterface` / `BrokerExecutionInterface` ABCs. Never hit live Alpaca or FMP from tests or CI.
 - Deterministic fixtures: synthetic bars, frozen dates, fixed seeds. No "flaky tests are fine" — fix or delete.
 
+## Git hygiene
+
+This repo recurrently accumulates stale remote-tracking refs, leaked local branches (`[gone]` upstream), and orphaned worktree admin entries. The method below is durable + reviewed (replaces one-off `git config --local` per clone):
+
+- **Navigate with `git switch`, never `git checkout <sha|branch>`.** Use `git switch <branch>` to move and `git switch -c <branch>` to create+switch. `git switch` refuses to silently detach HEAD; a subagent's `git checkout <sha>` once produced a detached-HEAD incident. `git checkout` for *file restore* (`git checkout -- <path>`) is still fine; it's branch/commit *navigation* that is banned.
+- **Never run real `git`/`gh` against the working repo from tests or code.** A test that ran real `git`/`gh` once leaked branches into a live daemon's `llm-triage/<ref>` namespace (PR #61). Two sanctioned patterns: (a) fabricate a throwaway repo entirely in `tmp_path` and drive the code there via `subprocess` with `cwd=` that throwaway (see `scripts/tests/test_git_hygiene.py`); or (b) inject a fake runner AND add a host-repo guard that **fails loud** — it must be incapable of a silent false-negative (if git can't run it must ERROR, never return `[]`; see `tests/test_llm_data_triage_agent.py::test_leak_guard_fails_loud_when_git_absent`).
+- **`scripts/git_hygiene.sh` is the only canonical cleanup — no ad-hoc destructive git.** `--init` idempotently sets `fetch.prune true` + `gc.worktreePruneExpire 3.days.ago` (it is the reproducible source of that config across clones); `--dry-run` (the safe default) shows what would be pruned/deleted and changes nothing; `--apply` runs `git fetch --prune`, deletes ONLY local branches that are BOTH `[gone]` upstream AND merged into `main` (`git branch -d`, never `-D`; never `main`, never the current branch, never an unmerged branch), and `git worktree prune -v`. No `git remote prune`/branch-delete by hand.
+
 ## Ruff configuration
 
 This is what `pyproject.toml` already has — keep it in sync if you change it:
