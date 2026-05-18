@@ -708,9 +708,93 @@ Publication-gated phases (Phase 2 / 3) are *not built yet* — they're tracked i
 
 Full design rationale: `docs/superpowers/specs/2026-05-13-tip-sheet-plan.md`.
 
+## 5.4a Engine SDLC — the Engine Change Request + The Lab
+
+Trading engines have a lifecycle: `LAB → PAPER → LIVE → RETIRED`
+(`tpcore.engine_profile.LifecycleState`). The roster SoT is
+`tpcore.engine_profile._PROFILE`. Canonical spec:
+`docs/superpowers/specs/2026-05-18-engine-sdlc-design.md`.
+
+**The Engine Change Request (ECR) — the single operator touchpoint.**
+Fill `docs/superpowers/checklists/engine_change_request.md` and run:
+
+```bash
+set -a; source .env; set +a
+DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python -m ops.engine_sdlc --ecr docs/superpowers/checklists/engine_change_request.md
+```
+
+The operator approves **exactly two** operations — **ADD** an engine
+(new scaffold or Lab-graduated) and **REMOVE** one (retire/archive) —
+a binary `APPROVE? (y/n)` on a proven-consistent, dry-run-green diff
+(fail-closed: non-TTY / EOF / anything not `y`/`yes` ⇒ declined,
+nothing changed, audit emitted). A **MODIFY** (re-tuned params that
+already cleared DSR≥0.95 ∧ credibility≥60) and a **LAB→PAPER promote**
+(`--promote <engine>`; capital gate already green) are automated,
+deterministic, no approval. A request that cannot produce a consistent
+diff is rejected with the exact reason — never handed to the operator
+to force. Every terminal outcome emits one
+`platform.application_log` `ENGINE_CHANGE_REQUEST` row. This tool is
+on-demand, operator-driven, **NEVER wired into any daemon / dispatch /
+engine_service** (parity with `python -m ops.lab`).
+
+**The snap-out (REMOVE).** A REMOVE is atomic-or-abort: the SoT entry
+flips to RETIRED (AST-validated single-entry rewrite), the
+`ENGINE_TABLES` orphan is removed, the non-Python shadows are
+regenerated, the package CONTENTS are physically moved to
+`archive/<engine>/`, and an EULOGY is rendered from
+`tpcore/templates/eulogy_template.md`. A failed transition leaves ZERO
+trace (journaled byte-identical rollback).
+
+**The consistency clockwork + the manifest gate.**
+`tpcore/tests/test_engine_lifecycle_consistency.py` is the N-way
+half-state-fails-CI oracle (a new/removed/archived engine fails the
+build unless coherently wired or fully offboarded in the same change).
+`scripts/gen_engine_manifest.py --check` is the CI-divergence gate that
+regenerates every non-Python shadow from the SoT and fails on drift —
+run `python scripts/gen_engine_manifest.py` after any roster change.
+
+**Known-limitations (recorded, NOT fixed in SP4):** (a) MODIFY is
+reversion-only today (`planner._ENGINE_DEFAULT_CONSTS` maps only
+`reversion`; a vector/momentum MODIFY is a documented fail-loud
+reject). (b) `_validate_modify`'s `type(want)(v)` coercion is a bool
+footgun, harmless today (every Lab-swept param is numeric). Future-work
+only; out of SP4 scope.
+
+### The Lab runbook (`python -m ops.lab`)
+
+The Lab is the operable form of `LifecycleState.LAB`: an isolated,
+concurrent, shadow/candidate backtest harness for hunting parameter
+edges WITHOUT touching the live platform. It is the canonical on-demand
+edge-hunt entrypoint.
+
+```bash
+set -a; source .env; set +a
+DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python -m ops.lab \
+  --candidate myexp \
+  --target-engine reversion \
+  --intent fold_existing \
+  [--param-overrides '{"z_threshold": 3.1}'] [--trials 50] [--seed 0]
+```
+
+- A separate OS process, operator-driven, **NEVER wired into any
+  daemon / dispatch / engine_service**. No DSN ⇒ explicit non-zero rc
+  + a logged error (never a silent 0).
+- Isolation: `tpcore.lab.context.LabContext` forces the server pool
+  read-only for the duration, provides the single allowlisted RW
+  credibility pool, and installs a fail-closed reentrancy guard at
+  every live-side-effect boundary.
+- Output: a rendered `docs/lab/<day>-<candidate>-<verdict>-seed<seed>.md`
+  PLUS a byte-frozen `.json` sidecar (the machine-readable evidence the
+  ECR re-derives every gate number from). Credibility persists under
+  the `lab.<candidate>` namespace.
+- The dossier **recommends** a next step (`promote_new` → ADD a new
+  engine; `fold_existing` → MODIFY the target; `none` → iterate) but
+  the Lab **never applies it** — the ECR does, gated. Recommendation-
+  only.
+
 ## 5.5 Parameter-Search Pipeline
 
-Production edge-discovery runs are driven by `scripts/search_parameters.py`. Random search + walk-forward + final held-back DSR verdict. Imports each engine's `load_*_window_context()` / `run_*_with_context()` programmatically — no subprocess. Per-window data load is shared across all candidates.
+The canonical on-demand edge-hunt entrypoint is now **`python -m ops.lab`** (§5.4a — isolated, recommendation-only, ECR-gated). `scripts/search_parameters.py` is NOT deleted: it remains a thin compatibility shim preserving the historical `python scripts/search_parameters.py` CLI (and every public/underscore symbol the characterization oracle pins), delegating to `ops.lab.run` — which now hosts the walk-forward Lab engine (SDLC SP2 T5, H-S2-1). Random search + walk-forward + final held-back DSR verdict; imports each engine's `load_*_window_context()` / `run_*_with_context()` programmatically — no subprocess; per-window data load is shared across all candidates. The direct invocation below is the lower-level harness; prefer `python -m ops.lab` for an operator edge-hunt.
 
 **Run a search on one engine:**
 
@@ -752,9 +836,8 @@ The `-u` flag forces unbuffered stdout — otherwise nohup buffers all the progr
 
 **Convenience wrappers** in `scripts/`:
 
-- `scripts/run_sigma_search.sh` — Sigma 200-trial sweep.
-- `scripts/run_vector_search.sh` — Vector sweep on T1+T2 (currently expected to produce zero trades until earnings_events backfill).
-- `scripts/run_all_searches.sh` — sigma + reversion + vector back-to-back. **Note:** `set -e` is intentionally OFF; a FAILED verdict exits 1 but should not abort the multi-engine sweep.
+- `scripts/run_vector_search.sh` — Vector sweep on T1+T2. (`scripts/run_sigma_search.sh` was removed when Sigma was archived 2026-05-16.)
+- `scripts/run_all_searches.sh` — reversion + vector back-to-back. **Note:** `set -e` is intentionally OFF; a FAILED verdict exits 1 but should not abort the multi-engine sweep. These wrappers are the lower-level harness; the operator edge-hunt is `python -m ops.lab` (§5.4a).
 
 **Interpreting the verdict:**
 
