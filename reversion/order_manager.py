@@ -287,11 +287,31 @@ class ReversionOrderManager(BaseOrderManager):
                     await self._aar_writer.write_aar(final)
                 new_aars.append(final)
                 self._tier2_logged.add(trade_key)
-                await self._governor.record_fill(
-                    engine_id=ENGINE_ID,
-                    realized_pnl=final.pnl_net,
-                    position_delta=-1,
-                )
+                # #251 B2.1 — route the close through the idempotent
+                # arbiter with the SAME bare key
+                # ``_persist_tier1_to_open_orders`` wrote to
+                # ``open_orders.trade_id`` (``trade_key`` here is byte-
+                # identical to the submit-side
+                # ``parse_cid(...).trade_key or ...`` at L146, and to the
+                # trade-monitor stream's ``row.trade_id``). The
+                # ``risk_close_ledger`` ``(engine, trade_id)`` PK
+                # arbitrates this real close to AT MOST one decrement,
+                # killing the old reconcile+stream dual-decrement. A
+                # ``record_close`` raise must NOT abort the reconcile
+                # loop (mirror the per-row crash-isolation; over-count is
+                # safe, never fail open).
+                try:
+                    await self._governor.record_close(
+                        engine_id=ENGINE_ID,
+                        trade_id=trade_key,
+                        realized_pnl=final.pnl_net,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.error(
+                        "reversion.order_manager.record_close_failed",
+                        trade_key=trade_key,
+                        error=str(exc)[:300],
+                    )
 
         return new_aars
 

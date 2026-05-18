@@ -238,11 +238,29 @@ class VectorOrderManager(BaseOrderManager):
                 await self._aar_writer.write_aar(aar)
             new_aars.append(aar)
             self._aar_logged.add(cid)
-            await self._governor.record_fill(
-                engine_id=ENGINE_ID,
-                realized_pnl=aar.pnl_net,
-                position_delta=-1,
-            )
+            # #251 B2.1 — route the close through the idempotent arbiter
+            # with the SAME bare key ``_persist_tier1_to_open_orders``
+            # wrote to ``open_orders.trade_id`` (``cid`` here is byte-
+            # identical to the submit-side ``cid =
+            # tier1_order.client_order_id`` at L143/L147, and to the
+            # trade-monitor stream's ``row.trade_id``). The
+            # ``risk_close_ledger`` ``(engine, trade_id)`` PK arbitrates
+            # this real close to AT MOST one decrement, killing the old
+            # reconcile+stream dual-decrement. A ``record_close`` raise
+            # must NOT abort the reconcile loop (mirror per-row crash-
+            # isolation; over-count is safe, never fail open).
+            try:
+                await self._governor.record_close(
+                    engine_id=ENGINE_ID,
+                    trade_id=cid,
+                    realized_pnl=aar.pnl_net,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.error(
+                    "vector.order_manager.record_close_failed",
+                    client_order_id=cid,
+                    error=str(exc)[:300],
+                )
             logger.info(
                 "vector.order_manager.trade_closed",
                 client_order_id=cid,
