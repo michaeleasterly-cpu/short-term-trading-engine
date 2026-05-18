@@ -601,6 +601,23 @@ fully closed — no remaining items.
   metadata, set up `python -m build` + `twine upload`, decide on
   versioning scheme. Same key/PII review as the gist.
 
+## Review-found defects — the durable surface (#254 register)
+
+A review-found defect (found by verify-before-acting / a failing test /
+a code review — NOT a deterministic-agent escalation) no longer lives
+ONLY as an ad-hoc TODO line. ✅ **Consolidated Defect Register — BUILT
+2026-05-19 (#254: DR1 #90, DR2 #91, DR3 this PR).** The durable home is
+`python -m ops.defect_register log --ref <#NNN|slug> --summary "…"`
+(retention-exempt `REVIEW_DEFECT_LOGGED`; resolve with `… resolve --ref
+<r> --pr <#NNN|sha>`). It composes BOTH Escalation & Hardening Ladders
+verbatim + the review class, joined by `defect_ref`; surfaced read-only
+on the dashboard Health tab and via `python -m ops.defect_register
+list`. **Convention:** a TODO line for a still-open review-found defect
+carries a `[defect_ref: X]` tag and MUST have a matching open
+`REVIEW_DEFECT_LOGGED` (CI forcing-test — a review defect cannot live
+only in TODO.md and be forgotten). `[lane: ops] [gate: none] [needs
+operator decision: no] [effort: done]`
+
 ## Discovered follow-ups — RiskGovernor work + architecture review (2026-05-17)
 
 Surfaced while making the RiskGovernor real + uniform (branch

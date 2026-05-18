@@ -31,6 +31,7 @@ import streamlit as st
 # Reuse existing tip-sheet query helpers + broker adapter — same data layer,
 # same shape. Dashboard adds zero new business logic.
 from dashboard_components.charts import render_ticker_chart
+from dashboard_components.defect_register import classify_defect_register
 from dashboard_components.escalation import (
     classify_cross_table_audit,
     classify_recent_escalations,
@@ -2615,6 +2616,57 @@ def render_escalation_audit() -> None:
                     _render_health_row(dl, dc, dt)
 
 
+async def _fetch_defect_register() -> list:
+    """Read-only consolidated defect SoT for the panel. REUSES
+    ops.defect_register.consolidated_defects VERBATIM (it composes both
+    Escalation & Hardening Ladders + the review-found anti-join open-set
+    — the register, the weekly digest and this panel cannot disagree
+    because they call the same functions). Recomputes no predicate;
+    issues no escalation query of its own (the register owns that
+    boundary). Same fetch idiom as _fetch_escalation_state."""
+    from ops.defect_register import consolidated_defects
+
+    pool = await build_asyncpg_pool(_db_url(), max_size=4)
+    try:
+        return list(await consolidated_defects(pool))
+    finally:
+        await pool.close()
+
+
+@st.cache_data(ttl=180, show_spinner=False)
+def _fetch_defect_register_cached() -> list:
+    """Sync cache wrapper (same idiom/TTL as
+    _fetch_escalation_state_cached)."""
+    return run_async(_fetch_defect_register())
+
+
+def render_defect_register() -> None:
+    """Consolidated Defect Register — the console's view of #254's
+    derived read-model (escalation-class from both Ladders + the
+    review-found-defect class). Read-only render of existing SoT: NO
+    recompute, NO write button (spec §5 OUT). Same render pattern as
+    render_escalation_audit."""
+    hl, hr = st.columns([6, 1])
+    hl.subheader("Consolidated defect register")
+    if hr.button("↻ Refresh", help="Force-refresh (clears the 3-min cache)",
+                 key="defreg_force_refresh"):
+        _fetch_defect_register_cached.clear()
+        st.rerun()
+    try:
+        rows = _fetch_defect_register_cached()
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"Could not fetch defect register: {exc}")
+        return
+
+    c, s, d = classify_defect_register(rows)
+    _render_health_row("Defect register (#254)", c, s, row_key="defreg")
+    if c != "green" and d:
+        with st.expander("Defects — `python -m ops.defect_register list`",
+                         expanded=(c == "red")):
+            for dl, dc, dt in d:
+                _render_health_row(dl, dc, dt)
+
+
 def render_tip_sheet() -> None:
     """Phase 1 tip-sheet view — operator's private research tool.
 
@@ -3291,6 +3343,8 @@ def main():
         render_platform_health()
         st.divider()
         render_escalation_audit()
+        st.divider()
+        render_defect_register()
 
     with tab_trading:
         selected_ticker = render_holdings()

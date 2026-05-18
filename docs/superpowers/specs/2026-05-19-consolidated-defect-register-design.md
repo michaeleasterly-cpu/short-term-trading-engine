@@ -1,11 +1,24 @@
 # Consolidated Defect Register (#254) — Design **v1 (expert-scoped)**
 
-**Status:** spec **v1 (expert-scoped)** 2026-05-19 (ops-lane,
-read-model + one minimal primitive). Expert scope pass (skeptical
-staff-architect, code-grounded) → **spec (this doc)** → operator
-review gate → plan → phased subagent build. **Build held behind #253**
-(SP3-T9 guard false-REDs every non-SP3 branch — merge queue blocked);
-spec/plan proceed now.
+**Status:** **BUILT** 2026-05-19 (ops-lane, read-model + one minimal
+primitive). Expert scope pass (skeptical staff-architect,
+code-grounded) → spec → operator review gate → plan → phased subagent
+build, all three phases shipped.
+
+**Build record:**
+- **DR1 (PR #90)** — `ops/defect_register.py` derived read-model +
+  `list` CLI; composes both Ladders' read APIs verbatim; the parity
+  forcing-test (register escalation rows ≡ both Ladders'
+  undispositioned set). Dark.
+- **DR2 (PR #91)** — the missing primitive:
+  `REVIEW_DEFECT_LOGGED`/`REVIEW_DEFECT_RESOLVED` via the thin `_emit`
+  mirror + `log`/`resolve` CLI; retention-exemption for the two event
+  types; the TODO-parity forcing CI test.
+- **DR3 (this PR)** — render-only Health-tab panel
+  (`render_defect_register`, reuses the `_fetch_escalation_state`
+  fetch+cache idiom verbatim; pure classifier
+  `dashboard_components/defect_register.py`; recomputes nothing, NO
+  write button per §5 OUT) + this docs reconcile.
 
 ## 0. Problem
 
