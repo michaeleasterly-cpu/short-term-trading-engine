@@ -40,28 +40,45 @@ def _resolve_sp3_base() -> str:
 
 
 # An unambiguously SP3-introduced path that is also inside the SP3
-# allow-list (`ops/engine_sdlc/`). If this file is present in the
-# RESOLVED BASE TREE then SP3 has already merged into the base, the
-# SP3-introduced surface is IN the base (not in `git diff base...HEAD`),
-# and the "diff ⊆ SP3 allow-list" assertion is moot/historical — the
-# gate already did its one-shot PR-review job. NOT a blanket skip: it
-# only fires when SP3 is provably merged into the base; on a real
-# un-merged SP3 branch this path is ABSENT from the base, the predicate
-# is False, and the non-vacuous assertion below runs unchanged.
+# allow-list (`ops/engine_sdlc/`). If this path is present in the
+# AUTHORITATIVE INTEGRATION REF (`origin/main`, fallback local `main`)
+# then SP3 (#81) is permanently merged into the integration target, the
+# SP3-introduced surface is part of the trunk (not a net-new diff under
+# PR review), and the "diff ⊆ SP3 allow-list" assertion is
+# historical/N-A — the gate already did its one-shot SP3-PR-review job.
+# This deliberately keys off the integration target itself, NOT the
+# fork-point merge-base: a non-SP3 branch (e.g. a data/governor branch)
+# whose merge-base predates SP3 would lack this path in its merge-base
+# tree, so a merge-base-keyed predicate would WRONGLY fall through and
+# false-RED the unrelated change set. NOT a blanket skip: on a genuine
+# pre-merge SP3 PR the integration ref would NOT yet contain this path,
+# the predicate is False, and the non-vacuous assertion below runs
+# unchanged (the documented T9 backstop semantics).
 _SP3_SIGNATURE_PATH = "ops/engine_sdlc/planner.py"
 
 
-def _sp3_already_merged_into_base(base: str) -> bool:
-    """True iff the SP3-signature path exists in the resolved base
-    tree — i.e. SP3 is already merged into the base, so the scope-
-    confinement gate is historical (it correctly passed when SP3 was
-    the branch-under-review; it must NOT false-RED on every post-SP3
-    branch whose diff vs the now-SP3-inclusive base is unrelated SP4
-    surface)."""
-    return subprocess.run(  # noqa: S603 — read-only object existence probe
-        ["git", "cat-file", "-e", f"{base}:{_SP3_SIGNATURE_PATH}"],
-        cwd=REPO, capture_output=True, text=True
-    ).returncode == 0
+def _sp3_in_integration_target() -> bool:
+    """True iff the SP3-signature path exists in the authoritative
+    integration ref — ``origin/main`` (preferred; the ref CI's PR
+    checkout actually has), falling back to a local ``main``. When True,
+    SP3 (#81) is permanently merged into the trunk and this one-shot
+    scope-confinement gate is historical/N-A, so it must skip on EVERY
+    post-SP3 branch rather than false-RED unrelated workstreams. When
+    NEITHER ref resolves (a bare checkout) return False — do not claim
+    "merged" when we cannot tell; ``_resolve_sp3_base`` already
+    ``pytest.skip``s the no-ref case downstream (no double-skip)."""
+    for ref in ("origin/main", "main"):
+        rev = subprocess.run(  # noqa: S603 — read-only ref resolution
+            ["git", "rev-parse", "--verify", "--quiet", ref],
+            cwd=REPO, capture_output=True, text=True
+        )
+        if rev.returncode != 0:
+            continue
+        return subprocess.run(  # noqa: S603 — read-only object existence probe
+            ["git", "cat-file", "-e", f"{ref}:{_SP3_SIGNATURE_PATH}"],
+            cwd=REPO, capture_output=True, text=True
+        ).returncode == 0
+    return False
 
 
 # SP4 / data-lane files SP3 must NEVER touch (spec §1.1, H-S3-10c).
@@ -104,13 +121,19 @@ _ALLOWED_PREFIXES = (
 
 
 def test_sp3_change_set_confined_to_net_new_surface():
+    # `base` (the fork-point merge-base) is retained ONLY for the
+    # genuine-pre-merge-SP3-PR diff below — the historical T9 backstop.
+    # The skip decision keys off the authoritative integration ref
+    # DIRECTLY, never the merge-base (that was the false-RED bug: a
+    # non-SP3 branch's pre-SP3 merge-base lacks the SP3 signature path).
     base = _resolve_sp3_base()
-    if _sp3_already_merged_into_base(base):
+    if _sp3_in_integration_target():
         pytest.skip(
-            "SP3 merged into base; scope-confinement gate is "
-            "historical/N-A (one-shot PR-review gate — it correctly "
-            "passed on the SP3 branch-under-review; post-merge the "
-            "SP3 surface is in the base, not the diff)")
+            "SP3 (#81) is permanently merged into the integration "
+            "target (origin/main); this one-shot scope-confinement "
+            "gate is historical/N-A — it correctly gated SP3's own PR "
+            "pre-merge; it must skip on every post-SP3 branch, not "
+            "false-RED unrelated workstreams")
     names = subprocess.run(  # noqa: S603 — read-only name-only diff
         ["git", "diff", "--name-only", base, "HEAD"],
         cwd=REPO, capture_output=True, text=True, check=True
@@ -121,3 +144,138 @@ def test_sp3_change_set_confined_to_net_new_surface():
         assert n.startswith(_ALLOWED_PREFIXES), (
             f"SP3 touched a file outside the §8 net-new surface: {n} "
             f"(if this is intentional, the spec scope is wrong — escalate)")
+
+
+# ---------------------------------------------------------------------------
+# Regression-pinning tests for the false-RED hotfix.
+#
+# THE BUG (origin/main 4f7b4f5): the skip predicate was
+# ``_sp3_already_merged_into_base(base)`` where ``base`` is the
+# fork-point ``git merge-base HEAD origin/main``. SP3 (#81) is
+# permanently merged into origin/main, but a non-SP3 branch (e.g. the
+# data/governor #251 B2 branch) whose merge-base predates SP3 has NO
+# ``ops/engine_sdlc/planner.py`` in that pre-SP3 merge-base tree → the
+# old predicate returned False → no skip → it diffed ALL of the
+# unrelated governor/risk changes vs the pre-SP3 fork point → not ⊆ the
+# SP3 allow-list → false-RED → whole suite red → merge queue blocked.
+#
+# THE FIX: the skip decision now consults the authoritative integration
+# ref (origin/main) DIRECTLY via ``_sp3_in_integration_target()`` — it
+# takes NO ``base`` arg, so it is structurally independent of the
+# fork-point merge-base and cannot regress to the old false-RED path.
+# ---------------------------------------------------------------------------
+
+
+def _first_resolvable_integration_ref() -> str | None:
+    """The ref ``_sp3_in_integration_target`` would consult in THIS
+    environment, or None if neither resolves (a GitHub Actions
+    `actions/checkout` PR clone has no ``origin/main`` remote-tracking
+    ref and no local ``main`` — only the PR HEAD; a plain dev clone
+    resolves ``origin/main``)."""
+    for ref in ("origin/main", "main"):
+        if subprocess.run(  # noqa: S603 — read-only ref resolution
+            ["git", "rev-parse", "--verify", "--quiet", ref],
+            cwd=REPO, capture_output=True, text=True
+        ).returncode == 0:
+            return ref
+    return None
+
+
+def test_skip_predicate_keys_on_integration_target_not_merge_base():
+    """The new predicate consults the integration ref directly, NOT the
+    fork-point merge-base — proving the false-RED bug is fixed and the
+    predicate is non-vacuous. Environment-independent: a dev clone
+    resolves ``origin/main`` (predicate True → gate skips, the
+    #251-B2-like post-SP3 scenario); a GitHub Actions PR checkout has
+    NO ``origin/main``/``main`` (predicate False by design → the gate's
+    own ``_resolve_sp3_base`` no-ref ``pytest.skip`` covers it). Either
+    way the contract below holds."""
+    # 1. Structural root-cause guard: the new predicate takes NO `base`
+    #    argument — it is structurally impossible for it to key off the
+    #    fork-point merge-base the way the old buggy predicate did. The
+    #    false-RED came from feeding the merge-base tree (which a pre-SP3
+    #    non-SP3 branch lacks the SP3 path in) to the skip decision.
+    import inspect
+
+    sig = inspect.signature(_sp3_in_integration_target)
+    assert list(sig.parameters) == [], (
+        "_sp3_in_integration_target must take no args — it must consult "
+        "the integration ref directly, never a (merge-)base parameter")
+
+    # 2. Behavioural contract, environment-aware: the predicate's value
+    #    equals "does the resolvable integration ref contain the SP3
+    #    signature path", and is INDEPENDENT of HEAD's merge-base.
+    ref = _first_resolvable_integration_ref()
+    if ref is None:
+        # GitHub Actions PR checkout: no integration ref at all → the
+        # predicate MUST be False (do not claim "merged" when we can't
+        # tell). `test_sp3_change_set_confined_to_net_new_surface` then
+        # skips via `_resolve_sp3_base`'s own no-ref pytest.skip — the
+        # documented, pre-existing behaviour.
+        assert _sp3_in_integration_target() is False, (
+            "with NO integration ref resolvable the predicate must be "
+            "False — the no-ref pytest.skip path handles the gate")
+    else:
+        ref_has_sig = subprocess.run(  # noqa: S603 — read-only probe
+            ["git", "cat-file", "-e", f"{ref}:{_SP3_SIGNATURE_PATH}"],
+            cwd=REPO, capture_output=True, text=True
+        ).returncode == 0
+        assert _sp3_in_integration_target() is ref_has_sig, (
+            f"predicate must equal '{_SP3_SIGNATURE_PATH} in {ref}' "
+            f"({ref_has_sig}) — it keys ONLY on the integration ref")
+        # On any normal post-#81 dev clone origin/main HAS the path, so
+        # this is the realistic #251-B2-like skip scenario.
+        assert ref_has_sig is True, (
+            f"{ref} must contain the SP3 signature path post-#81 in a "
+            "dev clone — the gate must skip on every post-SP3 branch")
+
+    # 3. Non-vacuity / before→after, fully deterministic & ref-free:
+    #    reproduce the EXACT scenario that false-RED'd. The old predicate
+    #    fed a tree-ish lacking planner.py (a pre-SP3 merge-base of a
+    #    non-SP3 branch). The well-known empty tree is a deterministic,
+    #    read-only stand-in for "a tree without the SP3 surface".
+    empty_tree = subprocess.run(  # noqa: S603 — read-only object probe
+        ["git", "hash-object", "-t", "tree", "--stdin"],
+        cwd=REPO, input="", capture_output=True, text=True
+    ).stdout.strip()
+    old_predicate_on_pre_sp3_tree = subprocess.run(  # noqa: S603 read-only
+        ["git", "cat-file", "-e", f"{empty_tree}:{_SP3_SIGNATURE_PATH}"],
+        cwd=REPO, capture_output=True, text=True
+    ).returncode == 0
+    # Old logic: a pre-SP3 (non-SP3-branch) base tree lacks the path →
+    # the old `_sp3_already_merged_into_base(base)` returned False → NO
+    # skip → false-RED on the unrelated change set. The NEW predicate
+    # never consults such a tree (no `base` arg, asserted in step 1) —
+    # this is the precise before→after of the bug.
+    assert old_predicate_on_pre_sp3_tree is False, (
+        "a tree without the SP3 surface must NOT satisfy the old "
+        "merge-base-keyed probe — this is exactly the false-RED "
+        "condition the fix removes")
+
+
+def test_predicate_is_not_a_blanket_always_true_skip(monkeypatch):
+    """Preserve the genuine-pre-merge-SP3-PR backstop semantics: the
+    predicate returns False iff the resolved integration ref lacks the
+    SP3 signature (it is NOT a blanket always-True skip). Monkeypatch
+    the signature path to a definitely-absent path → on a hypothetical
+    pre-merge SP3 branch (integration ref WITHOUT planner.py) the
+    predicate is False → the non-vacuous §8 scope assertion runs (the
+    historical T9 behaviour). Requires a resolvable integration ref to
+    be a meaningful (non-vacuous) assertion; a GitHub Actions PR
+    checkout has none, where the no-ref path already returns False —
+    skip there so this stays a real proof, not a vacuous pass."""
+    import scripts.tests.test_sp3_scope_confined as mod
+
+    if _first_resolvable_integration_ref() is None:
+        pytest.skip(
+            "no integration ref resolvable here (GitHub Actions PR "
+            "checkout) — the not-a-blanket-skip proof needs a real ref; "
+            "covered on any dev clone / CI with full refs")
+
+    monkeypatch.setattr(
+        mod, "_SP3_SIGNATURE_PATH",
+        "ops/engine_sdlc/__sp3_signature_definitely_absent__.py")
+    assert mod._sp3_in_integration_target() is False, (
+        "with a signature path absent from the integration ref the "
+        "predicate MUST be False so the non-vacuous §8 scope assertion "
+        "runs — the documented genuine-pre-merge-SP3-PR T9 backstop")
