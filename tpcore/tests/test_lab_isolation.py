@@ -305,7 +305,7 @@ async def test_cumulative_n_trials_real_db_integer_correctness():
     (cross-target isolation), and the strict ``timestamp < before_ts``
     boundary. None of these are observable through the offline fakes.
     """
-    from datetime import UTC, datetime, timedelta
+    from datetime import UTC, datetime
 
     from tpcore.db import build_asyncpg_pool
     from tpcore.lab.ledger import cumulative_n_trials, record_trial_spend
@@ -313,24 +313,29 @@ async def test_cumulative_n_trials_real_db_integer_correctness():
     url = os.environ["DATABASE_URL"]
     pool = await build_asyncpg_pool(url, max_size=1)
     try:
-        # Unique target so the assertion is independent of any prior
-        # ledger history in this DB (the SUM is monotone/append-only).
-        tgt = f"revtest_{datetime.now(UTC):%Y%m%d%H%M%S%f}"
-        other = f"vectest_{datetime.now(UTC):%Y%m%d%H%M%S%f}"
+        # Unique throwaway targets so the assertion is independent of any
+        # prior ledger history in this DB (the SUM is monotone/append-only;
+        # uuid mirrors the file's existing uuid4 usage).
+        tgt = f"revtest_{uuid.uuid4().hex[:12]}"
+        other = f"vectest_{uuid.uuid4().hex[:12]}"
         base = await cumulative_n_trials(pool, tgt, datetime.now(UTC))
         assert base == 0, f"fresh target must be 0, got {base}"
 
-        t0 = datetime.now(UTC)
+        # Seed the 3 INCLUDED rows FIRST. record_trial_spend stamps a
+        # server-side datetime.now(UTC) and returns that exact ts.
         await record_trial_spend(
             pool, target=tgt, candidate="h-ll-9", trials=40, seed=1)
         await record_trial_spend(
             pool, target=tgt, candidate="h-ll-9", trials=60, seed=2)
-        # Cross-target row that must NOT be summed into `tgt`.
+        # Cross-target row that must NOT be summed into `tgt` (source=$1).
         await record_trial_spend(
             pool, target=other, candidate="h-ll-9", trials=999, seed=9)
-        cutoff = datetime.now(UTC) + timedelta(seconds=1)
-        # A strictly-after row that must be EXCLUDED by `< cutoff`.
-        await record_trial_spend(
+        # cutoff captured AFTER the 3 included rows and BEFORE the
+        # excluded write — so the trials=7 row's returned ts is strictly
+        # GREATER than cutoff (causal: capture-then-write, not now()-racy).
+        cutoff = datetime.now(UTC)
+        # Strictly-after row: its ts > cutoff ⇒ excluded by `< cutoff`.
+        spend7_ts = await record_trial_spend(
             pool, target=tgt, candidate="h-ll-9", trials=7, seed=3)
 
         got = await cumulative_n_trials(pool, tgt, cutoff)
@@ -342,8 +347,9 @@ async def test_cumulative_n_trials_real_db_integer_correctness():
             f"boundary) in cumulative_n_trials")
         # Cross-target isolation, asserted from the other side too.
         assert await cumulative_n_trials(pool, other, cutoff) == 999
-        # Strict-prior boundary: a before_ts == an existing row's ts
-        # excludes that row (proves '<' not '<=').
-        assert await cumulative_n_trials(pool, tgt, t0) == 0
+        # GENUINE `<` vs `<=` discriminator: a row exists EXACTLY at
+        # spend7_ts. With strict `<` that row is EXCLUDED ⇒ 100; a
+        # `<`→`<=` regression would INCLUDE it ⇒ 107.
+        assert await cumulative_n_trials(pool, tgt, spend7_ts) == 100
     finally:
         await pool.close()
