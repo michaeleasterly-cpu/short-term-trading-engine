@@ -50,7 +50,25 @@ class _FakeConn:
         if "DELETE FROM platform.application_log" in sql:
             (cutoff,) = args
             before = len(self._rows)
-            self._rows[:] = [r for r in self._rows if r["recorded_at"] >= cutoff]
+            # Honor the real prune's retention-exemption clause: rows
+            # whose event_type is named in an ``event_type NOT IN (...)``
+            # predicate survive regardless of age (DR2.1 — the
+            # REVIEW_DEFECT_* primitive must not silently expire). Parsed
+            # from the real SQL so the fake tracks the actual prune.
+            exempt: set[str] = set()
+            if "event_type NOT IN" in sql:
+                inside = sql.split("event_type NOT IN", 1)[1]
+                inside = inside.split("(", 1)[1].split(")", 1)[0]
+                exempt = {
+                    tok.strip().strip("'\"")
+                    for tok in inside.split(",")
+                    if tok.strip()
+                }
+            self._rows[:] = [
+                r
+                for r in self._rows
+                if r["recorded_at"] >= cutoff or r["event_type"] in exempt
+            ]
             removed = before - len(self._rows)
             return f"DELETE {removed}"
         return "OK"
@@ -287,3 +305,55 @@ async def test_retention_window_respects_constructor_value() -> None:
     assert "3 days ago" not in messages  # past 2-day window
     assert "1 day ago" in messages  # inside 2-day window
     assert "now" in messages
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Retention exemption — REVIEW_DEFECT_* rows survive past the window
+# (DR2.1, #254): the consolidated defect register's only durable
+# primitive lives on application_log; the 7-day prune must NEVER delete
+# an open review-found defect or it silently expires.
+# ────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "event_type", ["REVIEW_DEFECT_LOGGED", "REVIEW_DEFECT_RESOLVED"]
+)
+@pytest.mark.asyncio
+async def test_retention_exempts_review_defect_events(event_type) -> None:
+    """An aged REVIEW_DEFECT_* row is NOT pruned; a same-age ordinary
+    row IS (control). Drives the real prune SQL against the fake pool."""
+    pool = _FakePool()
+    aged = datetime.now(UTC) - timedelta(days=30)
+    pool.rows.append(
+        _FakeRow(
+            engine="ops",
+            run_id=uuid.uuid4(),
+            event_type=event_type,
+            severity="INFO",
+            message="aged review defect",
+            data={"defect_ref": "#254"},
+            recorded_at=aged,
+        )
+    )
+    pool.rows.append(
+        _FakeRow(
+            engine="sigma",
+            run_id=uuid.uuid4(),
+            event_type="STARTUP",  # control — ordinary, same age
+            severity="INFO",
+            message="aged ordinary",
+            data=None,
+            recorded_at=aged,
+        )
+    )
+
+    handler = DBLogHandler(pool, "ops", uuid.uuid4())  # type: ignore[arg-type]
+    await handler.log("STARTUP", "fresh run", severity="INFO")
+
+    msgs = [r["message"] for r in pool.rows]
+    assert "aged review defect" in msgs, (
+        f"{event_type} was pruned — an open review-found defect must "
+        "survive the retention window (it would silently expire)"
+    )
+    assert "aged ordinary" not in msgs  # control: ordinary aged row IS pruned
+    assert "fresh run" in msgs

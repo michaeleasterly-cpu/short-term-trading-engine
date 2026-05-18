@@ -41,9 +41,22 @@ VALUES
     ($1, $2, $3, $4, $5, $6::jsonb)
 """
 
+# Retention-exempt event types (DR2.1, #254). application_log is the
+# consolidated defect register's ONLY durable primitive for the
+# review-found-defect class; the 7-day prune must NEVER delete an open
+# REVIEW_DEFECT_LOGGED (or its REVIEW_DEFECT_RESOLVED closure) or the
+# defect silently expires. No existing exemption precedent existed —
+# this is the minimal surgical prune-predicate change (no schema
+# migration; the literals are compile-time constants, not user input).
+RETENTION_EXEMPT_EVENT_TYPES: tuple[str, ...] = (
+    "REVIEW_DEFECT_LOGGED",
+    "REVIEW_DEFECT_RESOLVED",
+)
+
 _RETENTION_SQL = """
 DELETE FROM platform.application_log
 WHERE recorded_at < $1
+  AND event_type NOT IN ('REVIEW_DEFECT_LOGGED', 'REVIEW_DEFECT_RESOLVED')
 """
 
 
