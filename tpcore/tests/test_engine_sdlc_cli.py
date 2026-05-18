@@ -308,6 +308,78 @@ async def test_modify_routes_automated_no_prompt(tmp_path, monkeypatch,
         "an automated MODIFY (stubbed apply) mutated the real tree")
 
 
+@pytest.mark.asyncio
+async def test_validate_dry_run_reject_no_fabricated_green(tmp_path,
+                                                           monkeypatch):
+    """BLOCKER 1 (spec §3.2 + §5.2 step 2 + H-S3-1 + H-S3-7b): when the
+    REAL ``validate()`` pre-approval dry consistency run REJECTS, the CLI
+    must: (1) NOT print a fabricated 'GREEN', (2) NOT prompt the
+    operator, (3) exit non-zero, (4) emit exactly one 'rejected' audit.
+    This drives the GENUINE ``validate()`` (NOT the
+    ``_validate_for_cli`` stub) end-to-end through ``_amain`` — the
+    holistic's "at least one test exercising the real validate-dry-run-
+    rejects path through the CLI".
+
+    Mechanism: an ADD ``new_scaffold`` for a brand-new engine. validate()
+    copytrees the repo, ``_apply_add`` scaffolds from the bare
+    ``engine_template`` (no ``<engine>/tests/`` — engine_readiness §6),
+    the staged readiness gate fails ⇒ the dry run returns a reject ⇒
+    validate() sets ``.rejection`` ⇒ the CLI returns 1 BEFORE the GREEN
+    print/prompt. NON-VACUOUS: a CLI that printed GREEN unconditionally
+    (the pre-BLOCKER-1 fabrication) or a validate() that skipped the dry
+    run would let this reach the prompt / print GREEN — both asserted
+    against. Byte-oracle proves zero real-tree mutation by validate()."""
+    import ops.engine_sdlc.__main__ as cli
+    import ops.engine_sdlc.planner as planner
+    ep = REPO_ROOT / "tpcore" / "engine_profile.py"
+    before = _snapshot_tree(ep)
+    events: list[tuple] = []
+    monkeypatch.setattr(planner, "_emit_audit",
+                        lambda *a, **k: events.append(a))
+    # _read_confirm is a TRIPWIRE — a rejected plan must never prompt.
+    monkeypatch.setattr(
+        cli, "_read_confirm",
+        lambda: pytest.fail("rejected dry run reached the y/n prompt"))
+    p = _write_ecr(
+        tmp_path,
+        "ECR\naction: ADD\nengine: brandnewengine_xyz\n"
+        "source: new_scaffold\ncadence: daily\nallocator: false\n"
+        "dispatch_order: 9\nneed: prove the dry-run-reject CLI path\n")
+    rc = await cli._amain(["--ecr", str(p)])
+    assert rc == 1, "a dry-run-rejected ECR must exit non-zero"
+    assert len(events) == 1, "exactly one rejected audit expected"
+    assert any("rejected" in str(e) for e in events)
+    assert _snapshot_tree(ep) == before, (
+        "validate()'s dry run mutated the REAL tpcore/engine_profile.py")
+
+
+@pytest.mark.asyncio
+async def test_validate_dry_run_reject_prints_no_green(tmp_path, capsys,
+                                                       monkeypatch):
+    """BLOCKER 1 companion: the CLI must NOT emit the 'GREEN' receipt
+    when validate()'s dry run rejected (the fabricated-GREEN bug). Drives
+    the real validate() (no stub) and asserts the GREEN line is absent
+    from stdout and the rejection reason is surfaced to stderr."""
+    import ops.engine_sdlc.__main__ as cli
+    import ops.engine_sdlc.planner as planner
+    monkeypatch.setattr(planner, "_emit_audit", lambda *a, **k: None)
+    monkeypatch.setattr(
+        cli, "_read_confirm",
+        lambda: pytest.fail("rejected dry run reached the y/n prompt"))
+    p = _write_ecr(
+        tmp_path,
+        "ECR\naction: ADD\nengine: brandnewengine_abc\n"
+        "source: new_scaffold\ncadence: daily\nallocator: false\n"
+        "dispatch_order: 9\nneed: prove no fabricated GREEN\n")
+    rc = await cli._amain(["--ecr", str(p)])
+    cap = capsys.readouterr()
+    assert rc == 1
+    assert "GREEN" not in cap.out, (
+        "the CLI fabricated a GREEN dry-run receipt on a REJECTED plan "
+        "(BLOCKER 1 — the unconditional print)")
+    assert "rejected on validation" in cap.err
+
+
 def test_importing_engine_sdlc_main_does_not_eager_import_an_engine():
     """H-S3-10 (the docstring's named proof): importing the entrypoint
     must NOT pull in any engine package — every engine import stays

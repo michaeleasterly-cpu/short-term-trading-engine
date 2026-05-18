@@ -219,11 +219,14 @@ def _run_consistency_subprocess(staged_tree: Path) -> tuple[int, str]:
     return proc.returncode, proc.stdout + proc.stderr
 
 
-def _staged_copytree(dest: Path) -> Path:
-    """copytree the worktree minus .git/.venv/__pycache__/backtests
-    (H-S3-1; R3 accepted: O(repo) but on-demand, not a daemon)."""
+def _staged_copytree(dest: Path, src: Path | None = None) -> Path:
+    """copytree the worktree (``src`` or REPO_ROOT) minus
+    .git/.venv/__pycache__/backtests (H-S3-1; R3 accepted: O(repo) but
+    on-demand, not a daemon). ``src`` lets validate()'s dry-run copy the
+    SAME root apply() will mutate (REPO_ROOT in production; an isolated
+    synthetic tree under test) — a faithful simulation, never a lie."""
     shutil.copytree(
-        REPO_ROOT, dest,
+        src or REPO_ROOT, dest,
         ignore=shutil.ignore_patterns(
             ".git", ".venv", "__pycache__", "backtests"))
     return dest
@@ -380,10 +383,74 @@ def _render_eulogy(engine: str, *, reason: str, eulogy_notes: str,
             .replace("{{GATE_RECORD}}", gate_record))
 
 
+def _stage_proposed_edits(plan: TransitionPlan, root: Path,
+                          jn: _Journal) -> None:
+    """The SINGLE staging dispatch (spec §5.2 step 2 / H-S3-1): apply the
+    EXACT proposed edits the executor would write into ``root``. Both
+    ``validate()``'s isolated dry-run (root=an ephemeral copytree, a
+    throwaway journal) and ``apply()``'s real run (root=REPO_ROOT, the
+    real rollback journal) route through the SAME ``_apply_*`` functions —
+    so the dry run is a FAITHFUL simulation of exactly what apply() will
+    write (it cannot diverge / lie). The journal is the rollback contract
+    of the REAL path only; the copytree dry-run's journal is discarded
+    untouched (the whole temp tree is removed)."""
+    if plan.action is ECRAction.REMOVE:
+        _apply_remove(plan, root, jn)
+    elif plan.action is ECRAction.ADD:
+        _apply_add(plan, root, jn)
+    elif plan.action is ECRAction.MODIFY:
+        _apply_modify(plan, root, jn)
+
+
+def _dry_consistency_run(plan: TransitionPlan,
+                         repo_root: Path | None = None) -> str | None:
+    """Spec §3.2 / §5.2 step 2 / H-S3-1 / H-S3-7(b): BEFORE the operator
+    y/n, copytree the SAME worktree apply() will mutate (``repo_root`` or
+    REPO_ROOT) into an isolated temp tree, stage the SAME proposed edits
+    ``apply()`` would write into THAT copy only, and run the REAL
+    ``test_engine_lifecycle_consistency.py`` clockwork as a fresh
+    subprocess with cwd=the temp tree. Returns the clockwork failure
+    text on rc≠0 (the caller turns it into ``plan.rejection`` — so the
+    operator only ever confirms a green-validated diff), else None. The
+    real repo is NEVER mutated; the temp tree is always cleaned up. A
+    wedged subprocess raises (bounded) → propagates as a reject, never a
+    false-green."""
+    import tempfile
+
+    tmp = Path(tempfile.mkdtemp(prefix="ecr_dryrun_"))
+    try:
+        staged = _staged_copytree(tmp / "tree", repo_root or REPO_ROOT)
+        # a THROWAWAY journal — the dry run never rolls back (the whole
+        # temp tree is rmtree'd); the journal exists only because the
+        # shared _apply_* staging functions take one.
+        try:
+            _stage_proposed_edits(plan, staged, _Journal())
+        except Exception as exc:  # noqa: BLE001 — a staging failure IS a
+            # validation failure (apply() would abort identically). The
+            # dry run NEVER lets it escape validate() as a false-green or
+            # an uncaught raise — it is faithfully reported as a reject.
+            return (f"pre-approval dry run could not stage the proposed "
+                    f"diff (apply() would abort identically); nothing "
+                    f"was mutated: {exc}")
+        rc, out = _run_consistency_subprocess(staged)
+        if rc != 0:
+            return (f"pre-approval dry consistency run RED (rc={rc}) — "
+                    f"the proposed diff fails the REAL "
+                    f"test_engine_lifecycle_consistency.py clockwork; "
+                    f"nothing was mutated:\n{out}")
+        return None
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def validate(plan: TransitionPlan, *, repo_root: Path | None = None,
              ecr: EngineChangeRequest | None = None) -> TransitionPlan:
     """§5.2 — reject, never force. ADD: H-S3-11 fail-closed gate.
-    MODIFY: H-S3-6 zero-trust (T7). REMOVE: no gate (always may stop)."""
+    MODIFY: H-S3-6 zero-trust (T7). REMOVE: no gate (always may stop).
+    Then (§3.2/§5.2 step 2/H-S3-1) the spec-mandated PRE-APPROVAL
+    isolated dry consistency run for every mutating action — so the
+    operator only ever confirms a green-validated diff (a red dry run
+    is a hard reject; the CLI never prints a fabricated GREEN)."""
     if plan.rejection is not None:
         return plan
     # NOTE (planner.py:390 Nit, T6-review carry-forward): the prior
@@ -402,9 +469,16 @@ def validate(plan: TransitionPlan, *, repo_root: Path | None = None,
                          "gate_cred — a new engine cannot present a gate "
                          "score it has not earned (fail-closed H-S3-11b)")
         elif ecr.source == "lab_candidate":
-            from ops.engine_sdlc._evidence import EvidenceError, load_labresult_sidecar
+            from ops.engine_sdlc._evidence import (
+                EvidenceError,
+                assert_identity_fresh,
+                load_labresult_sidecar,
+            )
             try:
                 lr = load_labresult_sidecar(ecr.lab_dossier)
+                # §5.4 / H-S3-6b: a valid sidecar from a DIFFERENT Lab
+                # run sitting at the cited path is a hard reject.
+                assert_identity_fresh(lr, ecr.lab_dossier)
             except EvidenceError as exc:
                 return _reject(ecr, str(exc))
             if lr.recommended_exit == "fold_existing":
@@ -423,7 +497,20 @@ def validate(plan: TransitionPlan, *, repo_root: Path | None = None,
         if plan.to_state is not LifecycleState.LAB:
             return _reject(ecr, "ADD must land LAB, never PAPER (H-S3-11a)")
     if plan.action is ECRAction.MODIFY and ecr is not None:
-        return _validate_modify(plan, ecr)  # T7
+        plan = _validate_modify(plan, ecr)  # T7 zero-trust
+        if plan.rejection is not None:
+            return plan
+    # §3.2/§5.2 step 2/H-S3-1/H-S3-7(b): the spec-mandated PRE-APPROVAL
+    # isolated dry consistency run for every MUTATING action — staged
+    # into an ephemeral copytree (the real repo is never touched), the
+    # SAME edits apply() would write, the REAL clockwork as a fresh
+    # subprocess. A red is a hard reject (the operator only ever
+    # confirms a green-validated diff; the CLI never fabricates GREEN).
+    if plan.action in (ECRAction.ADD, ECRAction.REMOVE, ECRAction.MODIFY):
+        dry = _dry_consistency_run(plan, repo_root)
+        if dry is not None:
+            return _reject(ecr, dry) if ecr is not None else TransitionPlan(
+                **{**plan.__dict__, "rejection": dry})
     return plan
 
 
@@ -555,10 +642,18 @@ def _validate_modify(plan: TransitionPlan,
     """H-S3-6 zero-trust: the gate is the ONLY thing between a dossier
     and live params, so re-derive every number from the FROZEN JSON
     sidecar, never the ECR text / rendered markdown."""
-    from ops.engine_sdlc._evidence import EvidenceError, load_labresult_sidecar
+    from ops.engine_sdlc._evidence import (
+        EvidenceError,
+        assert_identity_fresh,
+        load_labresult_sidecar,
+    )
     from ops.lab.run import PARAM_RANGES
     try:
         lr = load_labresult_sidecar(ecr.lab_dossier)
+        # §5.4 / H-S3-6b: identity-freshness — a valid sidecar from a
+        # DIFFERENT Lab run at the cited path is a hard reject (the only
+        # thing between a dossier and live params is this gate).
+        assert_identity_fresh(lr, ecr.lab_dossier)
     except EvidenceError as exc:
         return _reject(ecr, str(exc))
     if lr.verdict != "SURVIVED":

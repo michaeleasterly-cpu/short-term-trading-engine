@@ -127,12 +127,19 @@ async def _amain(argv: list[str]) -> int:
               file=sys.stderr)
         return 1
 
+    # vplan.rejection is None here ONLY because validate() actually ran
+    # the spec-mandated pre-approval isolated dry consistency run (§3.2/
+    # §5.2 step 2/H-S3-1) and it exited GREEN — a red dry run set
+    # .rejection above and we already returned non-zero. So this line is
+    # now a FACT (the prior unconditional print was a fabrication —
+    # BLOCKER 1).
     print(f"\n── Prepared transition ──\n"
           f"  action     : {ecr.action.name}\n"
           f"  engine     : {ecr.engine}\n"
           f"  {vplan.from_state} → {vplan.to_state}\n"
           f"  approval   : {vplan.approval_class}\n"
-          f"  dry consistency run: GREEN\n")
+          f"  pre-approval dry consistency run "
+          f"(REAL clockwork, isolated tree): GREEN\n")
 
     if vplan.approval_class == ApprovalClass.AUTOMATED:
         res = apply(vplan)

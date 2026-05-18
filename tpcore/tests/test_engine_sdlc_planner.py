@@ -81,11 +81,12 @@ def test_profile_rewrite_adds_no_import():
     assert new_imports == orig_imports, "the _PROFILE rewrite added/removed an import line"
 
 
-def test_validate_runs_real_clockwork_in_isolated_tree(tmp_path):
-    """H-S3-1 / D2: validate() stages the proposed tree into an isolated
-    copytree and runs the REAL test_engine_lifecycle_consistency.py as a
-    fresh subprocess with cwd=temp — a deliberately-introduced half-state
-    must make validate reject with the clockwork's own failure text."""
+def test_run_consistency_subprocess_catches_staged_half_state(tmp_path):
+    """H-S3-1 / D2 (the direct-subprocess leg, retained): a
+    deliberately-introduced half-state in a staged copytree must make the
+    REAL test_engine_lifecycle_consistency.py subprocess fail (rc≠0) with
+    the clockwork's own failure text. Pins _run_consistency_subprocess
+    itself; the validate()-level proof is the next test."""
     from ops.engine_sdlc.planner import _run_consistency_subprocess
     repo = Path(__file__).resolve().parents[2]
     staged = tmp_path / "tree"
@@ -105,6 +106,103 @@ def test_validate_runs_real_clockwork_in_isolated_tree(tmp_path):
     rc, out = _run_consistency_subprocess(staged)
     assert rc != 0, "a staged half-state must fail the real clockwork"
     assert "reversion" in out
+
+
+def test_validate_runs_real_clockwork_in_isolated_tree(tmp_path):
+    """BLOCKER 1 / spec §3.2 + §5.2 step 2 + H-S3-1 + H-S3-7(b):
+    ``validate()`` itself MUST run the spec-mandated PRE-APPROVAL
+    isolated dry consistency run — copytree the proposed tree, stage the
+    SAME edits apply() would write, run the REAL clockwork as a fresh
+    subprocess — and set ``.rejection`` (with the clockwork's own failure
+    text) on red, BEFORE the operator y/n.
+
+    NON-VACUOUS / transient-break proof: the staged synthetic tree's
+    frozen-literal pin is deliberately corrupted (an entry the SoT does
+    not justify) so the proposed REMOVE diff makes the REAL clockwork
+    RED. A ``validate()`` that SKIPS the dry run (or fabricates GREEN)
+    returns ``.rejection is None`` and this assertion fails — i.e.
+    deleting the ``_dry_consistency_run`` gate in ``validate()`` trips
+    this test. Paired with ``test_validate_clean_diff_dry_run_passes``
+    (a clean diff → ``.rejection is None``) so a constant-reject
+    validate cannot satisfy both."""
+    from ops.engine_sdlc.ecr import EngineChangeRequest
+    from ops.engine_sdlc.planner import (
+        attach_ecr_context,
+        classify,
+        validate,
+    )
+    staged = _make_synthetic_engine_tree(tmp_path)
+    # Corrupt the frozen-literal pin in the staged tree so that the
+    # proposed REMOVE of `throwaway` (which _maybe_rewrite_frozen_literal
+    # only drops `throwaway`) leaves a literal that no longer matches the
+    # SoT roster — the REAL clockwork's
+    # test_dispatch_order_invariant_is_the_frozen_literal goes RED.
+    tc = (staged / "tpcore" / "tests"
+          / "test_engine_lifecycle_consistency.py")
+    tc.write_text(tc.read_text().replace(
+        '"reversion", "vector", "momentum", "sentinel", "canary", '
+        '"throwaway")',
+        '"reversion", "vector", "momentum", "sentinel", "canary", '
+        '"throwaway", "ghost_never_in_sot")'))
+    ecr = EngineChangeRequest(
+        action="remove", engine="throwaway",
+        reason="synthetic — proves validate() runs the dry clockwork",
+        eulogy_notes="x")
+    snap = {"reversion": LifecycleState.PAPER,
+            "vector": LifecycleState.PAPER,
+            "momentum": LifecycleState.PAPER,
+            "sentinel": LifecycleState.PAPER,
+            "canary": LifecycleState.PAPER,
+            "throwaway": LifecycleState.PAPER,
+            "allocator": LifecycleState.PAPER,
+            "sigma": LifecycleState.RETIRED, "lab": LifecycleState.LAB}
+    plan = attach_ecr_context(classify(ecr, snap), ecr)
+    assert plan.rejection is None  # classify is happy — the dry run gates
+    vplan = validate(plan, repo_root=staged, ecr=ecr)
+    assert vplan.rejection is not None, (
+        "validate() did NOT run the spec-mandated pre-approval dry "
+        "consistency run — a staged clockwork-red diff slipped through "
+        "(BLOCKER 1: a skipped dry run / fabricated GREEN)")
+    assert "dry consistency run RED" in vplan.rejection
+    # the clockwork's OWN failure text is surfaced (not a fabricated msg)
+    assert ("frozen" in vplan.rejection
+            or "roster_for_dispatch" in vplan.rejection
+            or "ghost_never_in_sot" in vplan.rejection), vplan.rejection
+    # the REAL repo was never touched by validate()'s dry run.
+    assert (Path(__file__).resolve().parents[2] / "throwaway").exists() \
+        is False
+
+
+def test_validate_clean_diff_dry_run_passes(tmp_path):
+    """BLOCKER 1 positive leg (non-vacuity pair): a CLEAN REMOVE whose
+    proposed diff IS consistent must make validate()'s pre-approval dry
+    run PASS — ``.rejection is None``. So a constant-reject (or a
+    permanently-broken subprocess invocation) validate cannot satisfy
+    both this and the red test above (the T5 transient-proof discipline,
+    applied at the validate() layer)."""
+    from ops.engine_sdlc.ecr import EngineChangeRequest
+    from ops.engine_sdlc.planner import (
+        attach_ecr_context,
+        classify,
+        validate,
+    )
+    staged = _make_synthetic_engine_tree(tmp_path)
+    ecr = EngineChangeRequest(
+        action="remove", engine="throwaway",
+        reason="synthetic — a clean consistent REMOVE", eulogy_notes="x")
+    snap = {"reversion": LifecycleState.PAPER,
+            "vector": LifecycleState.PAPER,
+            "momentum": LifecycleState.PAPER,
+            "sentinel": LifecycleState.PAPER,
+            "canary": LifecycleState.PAPER,
+            "throwaway": LifecycleState.PAPER,
+            "allocator": LifecycleState.PAPER,
+            "sigma": LifecycleState.RETIRED, "lab": LifecycleState.LAB}
+    plan = attach_ecr_context(classify(ecr, snap), ecr)
+    vplan = validate(plan, repo_root=staged, ecr=ecr)
+    assert vplan.rejection is None, (
+        f"a clean consistent REMOVE diff must pass validate()'s "
+        f"pre-approval dry run: {vplan.rejection}")
 
 
 # ─── T5: REMOVE executor + atomicity + completed archive-leg clockwork ───
@@ -499,10 +597,14 @@ def test_add_lab_candidate_requires_promote_new(tmp_path):
     from ops.engine_sdlc.ecr import EngineChangeRequest
     from ops.engine_sdlc.planner import attach_ecr_context, classify, validate
 
-    # build a fold_existing sidecar
+    # build a fold_existing sidecar at an IDENTITY-FRESH path (spec
+    # §5.4/H-S3-6b is now enforced first; the path tokens must match the
+    # sidecar so this test still exercises the fold_existing→MODIFY
+    # redirect it is about, not the new identity gate).
     from tpcore.tests.test_lab_dossier_sidecar import _labresult
     r = _labresult()  # intent/recommended_exit == fold_existing
-    md = tmp_path / "2026-05-18-revcand-SURVIVED-seed0.md"
+    day = r.generated_at.strftime("%Y-%m-%d")
+    md = tmp_path / f"{day}-{r.candidate}-{r.verdict}-seed{r.seed}.md"
     md.write_text("# rendered")
     md.with_suffix(".json").write_text(r.model_dump_json())
     ecr = EngineChangeRequest(
@@ -700,7 +802,14 @@ def _modify_sidecar(tmp_path, *, target="reversion",
     d["winning_params"] = winning or {"z_threshold": 3.1, "max_hold_days": 8}
     from tpcore.lab.models import LabResult
     r2 = LabResult.model_validate(d)
-    md = tmp_path / "2026-05-18-revc-SURVIVED-seed0.md"
+    # The dossier filename MUST be identity-fresh (spec §5.4 / H-S3-6b):
+    # the real ops/lab/dossier.py format is
+    #   {generated_at:%Y-%m-%d}-{candidate}-{verdict}-seed{seed}.md
+    # _labresult() ⇒ candidate=rev_cand, seed=0, generated_at=2026-05-18.
+    # A path whose tokens disagree with the sidecar is now a hard reject
+    # (BLOCKER 2), so build the matching name from the model itself.
+    day = r2.generated_at.strftime("%Y-%m-%d")
+    md = tmp_path / f"{day}-{r2.candidate}-{r2.verdict}-seed{r2.seed}.md"
     md.write_text("# rendered")
     md.with_suffix(".json").write_text(r2.model_dump_json())
     return md
@@ -811,6 +920,88 @@ def test_modify_rejects_stale_sidecar(tmp_path):
         classify(ecr2, {"reversion": LifecycleState.PAPER}), ecr2),
         ecr=ecr2)
     assert vp.rejection is not None  # missing sidecar
+
+
+def _identity_mismatched_sidecar(tmp_path, *, target="reversion"):
+    """A perfectly-VALID SURVIVED fold_existing sidecar (passes every
+    zero-trust number) whose ``candidate``/``seed`` DISAGREE with the
+    cited dossier filename — the spec §5.4/H-S3-6b "a valid sidecar from
+    a DIFFERENT Lab run sitting at the cited path is a hard reject"
+    case. Returns the cited md path (its .json is the wrong-run sidecar);
+    the path's tokens are deliberately a real Lab dossier name for a
+    DIFFERENT (candidate, seed)."""
+    from tpcore.lab.models import LabResult
+    from tpcore.tests.test_lab_dossier_sidecar import _labresult
+    r = _labresult()  # candidate=rev_cand, seed=0, SURVIVED
+    d = r.model_dump()
+    d["target_engine"] = target
+    d["winning_params"] = {"z_threshold": 3.1, "max_hold_days": 8}
+    sidecar_lr = LabResult.model_validate(d)  # candidate rev_cand / seed 0
+    # the CITED filename names a DIFFERENT run (candidate + seed differ)
+    # but is a structurally-valid Lab dossier name.
+    md = tmp_path / "2026-05-18-other_candidate-SURVIVED-seed42.md"
+    md.write_text("# rendered")
+    md.with_suffix(".json").write_text(sidecar_lr.model_dump_json())
+    return md
+
+
+def test_modify_rejects_identity_mismatched_sidecar(tmp_path):
+    """BLOCKER 2 (spec §5.4 / H-S3-6b): a VALID SURVIVED fold_existing
+    sidecar whose candidate/seed differ from the ECR's CITED dossier
+    path is a HARD reject — a sidecar for a DIFFERENT Lab run cannot be
+    laundered through the cited path.
+
+    NON-VACUOUS: every gate NUMBER passes (SURVIVED/dsr0.97/cred64/
+    fold_existing/right-target/in-PARAM_RANGES/value-match), so the ONLY
+    thing that can reject is the identity-freshness check. Removing
+    ``assert_identity_fresh`` from ``_validate_modify`` makes this
+    pass-through (rejection is None) ⇒ the test fails. Complements the
+    existing missing-sidecar ``test_modify_rejects_stale_sidecar``."""
+    from ops.engine_sdlc.planner import attach_ecr_context, classify, validate
+    md = _identity_mismatched_sidecar(tmp_path)
+    ecr = _modify_ecr(md)  # engine=reversion, the standard param_change
+    vp = validate(attach_ecr_context(
+        classify(ecr, {"reversion": LifecycleState.PAPER}), ecr),
+        ecr=ecr)
+    assert vp.rejection is not None, (
+        "an identity-mismatched (different-run) sidecar at the cited "
+        "path was wrongly ACCEPTED — BLOCKER 2 unimplemented")
+    assert ("identity-stale" in vp.rejection
+            or "DIFFERENT Lab run" in vp.rejection), vp.rejection
+
+
+def test_add_lab_candidate_rejects_identity_mismatched_sidecar(tmp_path):
+    """BLOCKER 2 ADD-leg: the SAME identity-freshness gate guards the
+    ADD ``lab_candidate`` branch — a valid (promote_new) sidecar from a
+    DIFFERENT run at the cited path is a hard reject. NON-VACUOUS: the
+    sidecar is otherwise gate-clean; deleting the shared
+    ``assert_identity_fresh`` call in validate()'s ADD branch makes this
+    pass-through."""
+    from ops.engine_sdlc.ecr import EngineChangeRequest
+    from ops.engine_sdlc.planner import attach_ecr_context, classify, validate
+    from tpcore.lab.models import LabResult
+    from tpcore.tests.test_lab_dossier_sidecar import _labresult
+    r = _labresult()
+    d = r.model_dump()
+    d["recommended_exit"] = "promote_new"
+    d["intent"] = "promote_new"
+    sidecar_lr = LabResult.model_validate(d)  # candidate rev_cand, seed 0
+    # cited path names a DIFFERENT run.
+    md = tmp_path / "2026-05-18-different_cand-SURVIVED-seed7.md"
+    md.write_text("# rendered")
+    md.with_suffix(".json").write_text(sidecar_lr.model_dump_json())
+    ecr = EngineChangeRequest(
+        action="add", engine="newx", source="lab_candidate",
+        lab_dossier=str(md), cadence="daily", allocator=False,
+        dispatch_order=9, need="x")
+    vp = validate(attach_ecr_context(classify(ecr, {}), ecr),
+                  repo_root=None, ecr=ecr)
+    assert vp.rejection is not None, (
+        "an identity-mismatched promote_new sidecar at the cited path "
+        "was wrongly ACCEPTED in the ADD lab_candidate branch — "
+        "BLOCKER 2 ADD-leg unimplemented")
+    assert ("identity-stale" in vp.rejection
+            or "DIFFERENT Lab run" in vp.rejection), vp.rejection
 
 
 def test_promote_flips_lab_to_paper_iff_gate_green(tmp_path):
