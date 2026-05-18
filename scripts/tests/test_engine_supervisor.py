@@ -1,6 +1,9 @@
+import ast
 import contextlib
+import inspect
 import json
 import sys
+import textwrap
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -288,3 +291,61 @@ async def test_auto_clear_still_clears_each_infra_class():
                                AsyncMock())
         cleared = [a for _s, a in conn.inserts if a[2] == "ENGINE_CLEARED"]
         assert len(cleared) == 1, f"{fc} must still auto-clear"
+
+
+def test_classify_emittable_set_is_pinned_to_constant():
+    """GENUINE clockwork pin (spec §3/D-EL-9): AST-walk _classify and
+    collect every string literal returned as the failure-class element
+    of `return "<cls>", <bool>`. That set MUST equal
+    INFRA_FAILURE_CLASSES. A new DA-1 detector adding a `return
+    "new_cls", x` arm fails THIS test until INFRA_FAILURE_CLASSES (and,
+    via the engine-ladder drift test, a DispositionPolicy) is updated —
+    closing the most common add-a-class path. Not a hand-maintained
+    list: it reads the real function source."""
+    src = inspect.getsource(es._classify)
+    tree = ast.parse(textwrap.dedent(src))
+    emitted: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Return) and isinstance(node.value, ast.Tuple):
+            first = node.value.elts[0]
+            if isinstance(first, ast.Constant) and isinstance(first.value, str):
+                emitted.add(first.value)
+    assert emitted == set(es.INFRA_FAILURE_CLASSES), (
+        f"_classify emits {emitted} but INFRA_FAILURE_CLASSES is "
+        f"{set(es.INFRA_FAILURE_CLASSES)} — a DA-1 class changed "
+        f"without updating the SoT (R2 tooth)")
+
+
+async def test_classify_known_detectors_yield_their_class():
+    """Non-vacuous behavior smoke: each of the 5 known detectors, True
+    in isolation, drives _classify to its own class (the AST test above
+    is the actual clockwork tooth; this guards the wiring stays sane)."""
+    cases = (
+        ("_detect_crashed_startup", "crashed_startup"),
+        ("_detect_scheduler_crash", "scheduler_crash"),
+        ("_detect_data_request_timeout", "data_request_timeout"),
+        ("_detect_data_repair_escalated", "data_repair_escalated"),
+        ("_detect_missed_cycle", "missed_cycle"),
+    )
+    names = tuple(n for n, _ in cases)
+    for detector, expected in cases:
+        ctx = [patch.object(es, d, new=AsyncMock(return_value=(d == detector)))
+               for d in names]
+        for c in ctx:
+            c.__enter__()
+        try:
+            cls, _heal = await es._classify(
+                object(), "reversion",
+                datetime(2026, 5, 6, tzinfo=UTC),
+                datetime(2026, 5, 6, tzinfo=UTC))
+        finally:
+            for c in ctx:
+                c.__exit__(None, None, None)
+        assert cls == expected
+        assert cls in es.INFRA_FAILURE_CLASSES
+
+
+def test_infra_failure_classes_is_the_five_da1_classes():
+    assert es.INFRA_FAILURE_CLASSES == frozenset({
+        "crashed_startup", "scheduler_crash", "data_request_timeout",
+        "data_repair_escalated", "missed_cycle"})

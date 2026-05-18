@@ -38,6 +38,12 @@ _STALE_STARTUP_SECONDS = int(
 _NO_TERMINAL_TIMEOUT_SECONDS = int(
     os.environ.get("ENGINE_DISPATCH_REQUEST_TIMEOUT_SECONDS", "5400"))
 
+# The DA-1 infra failure-class SoT (the engine-ladder R2 clockwork
+# pins _classify's emittable set + the disposition registry to this).
+INFRA_FAILURE_CLASSES: frozenset[str] = frozenset({
+    "crashed_startup", "scheduler_crash", "data_request_timeout",
+    "data_repair_escalated", "missed_cycle"})
+
 _INSERT_SQL = """
     INSERT INTO platform.application_log
         (engine, run_id, event_type, severity, message, data)
@@ -149,9 +155,7 @@ async def _auto_clear(pool, engine: str, now: datetime, hold) -> None:
     # DA-2 seam guard: DA-1 only clears the infra classes it created.
     # Behavioral holds (failure_class="behavioral") are DA-2-owned and
     # operator-cleared — DA-1 must never auto-resume them.
-    if hold.failure_class not in (
-            "crashed_startup", "scheduler_crash", "data_request_timeout",
-            "data_repair_escalated", "missed_cycle"):
+    if hold.failure_class not in INFRA_FAILURE_CLASSES:
         return
     async with pool.acquire() as conn:
         if not await _clean_cycle_after(conn, engine, hold.held_at):
