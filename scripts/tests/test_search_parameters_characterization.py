@@ -247,8 +247,92 @@ async def test_amain_smoke_survived_verdict(monkeypatch, tmp_path):
 
     rc = await sp.amain(_NS())
     assert rc == 0  # SURVIVED (thresholds set permissive)
-    assert persisted["engine_name"] == "reversion"  # CURRENT behavior (pre-H-S2-3)
+    # Legacy search-CLI path (no candidate) is byte-identical: persists
+    # under backtest_credibility.<args.engine>. T6 (H-S2-3) namespaces
+    # ONLY the Lab path — the manual operator search contract is unchanged.
+    assert persisted["engine_name"] == "reversion"
     assert len(seen_overrides) >= 2
     assert all(isinstance(o, dict) for o in seen_overrides)
     assert len({_json.dumps(o, sort_keys=True) for o in seen_overrides}) == len(seen_overrides), \
         "successive candidates leaked/shared an overrides dict (O2)"
+
+
+async def test_amain_lab_path_namespaces_credibility(monkeypatch, tmp_path):
+    """H-S2-3 behaviour delta (oracle-pinned): when ``amain`` is called
+    with a ``candidate`` (the Lab path), the final credibility is
+    persisted under the Lab-namespaced ``lab.<candidate>`` engine_name,
+    NEVER the bare ``args.engine`` (which would poison
+    ``graduation_ready(pool, "reversion")`` for the live engine).
+
+    Same offline stub harness as ``test_amain_smoke_survived_verdict``;
+    the ONLY difference is ``candidate="exp1"`` is passed and the
+    persisted ``engine_name`` is asserted to be ``lab.exp1``.
+    """
+    class _FakeRubric:
+        score = 80
+
+    class _FakeRunResult:
+        credibility_score = 80
+        credibility_rubric = _FakeRubric()
+        trade_log = [_Trade(entry_date=date(2024, 6, 3), pnl_pct=0.02)
+                     for _ in range(8)]
+
+    def _fake_ctx_runner(context, *, overrides=None):
+        return _FakeRunResult()
+
+    async def _fake_ctx_loader(*a, **k):
+        return object()
+
+    async def _fake_runner(*a, **k):
+        return _FakeRunResult()
+
+    monkeypatch.setattr("ops.lab.run._context_runner_for", lambda e: _fake_ctx_runner)
+    monkeypatch.setattr("ops.lab.run._context_loader_for", lambda e: _fake_ctx_loader)
+    monkeypatch.setattr("ops.lab.run._runner_for", lambda e: _fake_runner)
+
+    persisted: dict = {}
+
+    async def _fake_write(pool, *, engine_name, score):
+        persisted["engine_name"] = engine_name
+        persisted["score"] = score
+        return True
+
+    monkeypatch.setattr(
+        "tpcore.backtest.statistical_validation.write_credibility_score",
+        _fake_write, raising=True)
+
+    class _FakePool:
+        async def close(self):
+            return None
+
+    async def _fake_create_pool(*a, **k):
+        return _FakePool()
+
+    import asyncpg
+    monkeypatch.setattr(asyncpg, "create_pool", _fake_create_pool,
+                        raising=True)
+
+    class _NS:
+        engine = "reversion"
+        trials = 4
+        per_window_trials = 2
+        train_start = date(2022, 1, 1)
+        holdout_end = date(2023, 12, 31)
+        final_holdout_start = date(2024, 1, 1)
+        final_holdout_end = date(2024, 12, 31)
+        walk_forward_step = 365
+        train_years = 1
+        holdout_years = 1
+        seed = 0
+        output = tmp_path / "o.csv"
+        database_url = "postgres://x/y"
+        dsr_threshold = 0.0
+        credibility_threshold = 0
+        universe_tier_max = None
+
+    rc = await sp.amain(_NS(), candidate="exp1")
+    assert rc == 0  # SURVIVED (thresholds permissive)
+    # H-S2-3: the Lab path is namespaced lab.<candidate>, NEVER the bare
+    # target_engine — graduation_ready(pool, "reversion") cannot be poisoned.
+    assert persisted["engine_name"] == "lab.exp1"
+    assert "backtest_credibility.reversion" != f"backtest_credibility.{persisted['engine_name']}"

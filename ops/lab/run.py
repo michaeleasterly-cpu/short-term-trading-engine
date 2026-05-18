@@ -473,6 +473,16 @@ def _norm_inv(p: float) -> float:
 # ────────────────────────────────────────────────────────────────────────────
 
 
+def _lab_credibility_engine_name(target_engine: str, candidate: str) -> str:
+    """Lab credibility is namespaced ``lab.<candidate>`` so
+    ``graduation_ready(pool, <target_engine>)`` can NEVER read an
+    experimental score (live-safety, H-S2-3). ``target_engine`` is
+    accepted for signature symmetry/future use; intentionally unused —
+    a ``fold_existing`` Lab run targeting ``target_engine="reversion"``
+    must leave ``backtest_credibility.reversion`` byte-identical."""
+    return f"lab.{candidate}"
+
+
 def write_results_csv(path: Path, trials: list[TrialResult]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="") as fh:
@@ -556,7 +566,17 @@ async def _load_universe_by_tier(db_url: str, max_tier: int) -> tuple[str, ...]:
     return tuple(r["ticker"] for r in rows)
 
 
-async def amain(args: argparse.Namespace) -> int:
+async def amain(args: argparse.Namespace, candidate: str | None = None) -> int:
+    """Walk-forward search + final held-back verdict.
+
+    ``candidate`` is the Lab seam (H-S2-3): when set (a Lab run), the
+    final credibility is persisted under the Lab-namespaced source
+    ``backtest_credibility.lab.<candidate>`` so it can NEVER poison
+    ``graduation_ready(pool, <live_engine>)``. When ``None`` (the legacy
+    ``python scripts/search_parameters.py`` manual operator search — NOT
+    a Lab run), the historical contract is preserved byte-identical:
+    persist under ``backtest_credibility.<args.engine>``.
+    """
     db_url = args.database_url or os.getenv("DATABASE_URL")
     if not db_url:
         print("DATABASE_URL not set — pass --database-url or export it.", file=sys.stderr)
@@ -675,16 +695,25 @@ async def amain(args: argparse.Namespace) -> int:
 
         from tpcore.backtest.statistical_validation import write_credibility_score
 
+        # H-S2-3 live-safety: the Lab path (candidate set) persists under
+        # the Lab-namespaced engine_name so graduation_ready(pool,
+        # <live_engine>) can never read an experimental score. The legacy
+        # search-CLI path (candidate None) stays byte-identical.
+        cred_engine_name = (
+            _lab_credibility_engine_name(args.engine, candidate)
+            if candidate is not None
+            else args.engine
+        )
         persist_pool = await asyncpg.create_pool(db_url, min_size=1, max_size=1)
         try:
             wrote = await write_credibility_score(
                 persist_pool,
-                engine_name=args.engine,
+                engine_name=cred_engine_name,
                 score=final_result.credibility_rubric,
             )
             print(
                 f"  → persisted credibility rubric to platform.data_quality_log "
-                f"(source=backtest_credibility.{args.engine}, wrote={wrote})\n"
+                f"(source=backtest_credibility.{cred_engine_name}, wrote={wrote})\n"
             )
         finally:
             await persist_pool.close()
