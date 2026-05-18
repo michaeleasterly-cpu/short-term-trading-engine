@@ -42,3 +42,11 @@ def test_exactly_one_engine_keepalive_and_data_ops_cron():
     assert "StartCalendarInterval" in dops
     drep = (SCRIPTS / "install_launchd_data_repair_service.sh").read_text()
     assert "<key>KeepAlive</key>" in drep  # data-lane daemon untouched
+
+
+def test_dashboard_daemon_spec_drops_phantom_trade_monitor():
+    dash = (REPO_ROOT / "dashboard.py").read_text()
+    # post-consolidation the standalone trade_monitor persistent row
+    # is a phantom (its log stops); the real persistent daemon is the
+    # consolidated engine-service.
+    assert '("trade_monitor", "persistent"' not in dash

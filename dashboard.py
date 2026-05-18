@@ -366,7 +366,7 @@ def _fetch_daemon_state() -> list[dict]:
     plist_dir = home / "Library" / "LaunchAgents"
     log_dir = home / "Library" / "Logs" / "short-term-trading-engine"
     specs = [
-        ("trade_monitor", "persistent", "trade-monitor.log"),
+        ("engine_service", "persistent", "engine-service.log"),
         ("data_operations", "scheduled", "data-operations.log"),
         ("allocator", "scheduled", "allocator.log"),
     ]
