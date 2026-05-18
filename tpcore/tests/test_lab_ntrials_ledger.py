@@ -461,3 +461,86 @@ def test_run_py_ledger_callsite_is_append_only_no_reset():
                    "zero_trial", "purge_trial", "rollback_trial",
                    "decrement_trial", "_reset_ledger", "_clear_ledger"):
         assert banned not in src, banned
+
+
+# ── SP-A T5 (T-CUM) — cumulative fails where per-run survived. The proof
+#    that the anti-laundering mechanism actually BITES: a candidate that
+#    clears DSR>=0.95 at the per-run trial count is correctly FAILED once
+#    the cumulative prior-fishing penalty is applied. The FAILED verdict
+#    is the honest outcome (spec §5); reverting it to per-run is the bug
+#    H-LL-7 forbids. ──────────────────────────────────────────────────
+
+
+async def test_cumulative_fails_where_per_run_would_have_survived(
+        monkeypatch, tmp_path):
+    """MAKE-OR-BREAK · T-CUM. A candidate that SURVIVES under the
+    per-run trial count but FAILS once the cumulative penalty is
+    applied. The FAILED verdict is the CORRECT, HONEST outcome — the
+    edge only "passed" because the multiple-testing penalty was being
+    laundered across small runs.
+
+    DO NOT "fix" this back to per-run n_trials. SP-A makes the gate
+    *correctly harder*; it does NOT weaken DSR>=0.95 / cred>=60 /
+    n_trades>=3 (those thresholds are byte-identical — see T6). If this
+    test "fails" because someone reverted _run_lab_core to
+    n_trials=args.trials, the bug is the revert, not this test (spec
+    §5 / H-LL-7)."""
+    import numpy as np
+
+    import ops.lab.run as lab_run
+    from tpcore.lab.context import LabContext
+
+    # Choose a returns slice + (per_run, prior_cumulative) such that the
+    # DSR crosses 0.95 between the per-run penalty and the cumulative
+    # one. Verified directly against the real compute_dsr_for_verdict
+    # (this exact slice: d_per_run(25)=1.0000 SURVIVES; d_cumulative
+    # (5025)=0.8962 FAILS) so the pin is not hand-waved. A high-Sharpe,
+    # low-noise slice is required — ordinary noisy normal slices never
+    # clear 0.95 under any n_trials, so the contrast would be vacuous.
+    rng = np.random.default_rng(11)
+    returns = [float(x) for x in rng.normal(0.015, 0.004, 60)]
+    per_run = 25
+    prior_cumulative = 5000  # a lot of prior fishing against the target
+    d_per_run = lab_run.compute_dsr_for_verdict(returns, n_trials=per_run)
+    d_cumulative = lab_run.compute_dsr_for_verdict(
+        returns, n_trials=prior_cumulative + per_run)
+    # The pin (asserts the constructed scenario is the right shape; if a
+    # future numpy/formula change moves these, retune returns/counts in
+    # THIS test only — never the gate threshold).
+    assert d_per_run >= 0.95, (
+        f"scenario invalid: per-run DSR {d_per_run} must SURVIVE 0.95")
+    assert d_cumulative < 0.95, (
+        f"scenario invalid: cumulative DSR {d_cumulative} must FAIL 0.95")
+
+    # Seed the shared ledger with prior_cumulative trials of prior
+    # fishing against reversion, then run THIS candidate.
+    shared = _SharedLedgerPool()
+    from tpcore.lab.ledger import record_trial_spend
+    seeded_ts = await record_trial_spend(
+        shared, target="reversion", candidate="prior_fishing",
+        trials=prior_cumulative, seed=99)
+    # Force the seeded row strictly BEFORE this run's spend.
+    shared.rows[-1]["timestamp"] = seeded_ts
+
+    _install_offline_harness(monkeypatch, lab_run, returns=returns,
+                             cred_score=80)
+
+    async def _fake_build(url, *, read_only, **k):
+        return shared
+
+    monkeypatch.setattr("tpcore.db.build_asyncpg_pool", _fake_build,
+                        raising=True)
+
+    async with LabContext(db_url="postgres://fake/db"):
+        core = await lab_run._run_lab_core(
+            _ns(tmp_path / "cum.csv", trials=per_run, seed=3),
+            candidate="rev_cand")
+
+    assert not isinstance(core, int)
+    assert core.effective_n_trials == prior_cumulative + per_run
+    # cred=80 >= 60, n_trades=48 >= 3 — so survival hinges PURELY on DSR.
+    # Per-run DSR would have SURVIVED; cumulative DSR FAILS → correct.
+    assert core.survived is False, (
+        "cumulative penalty must make this FAIL — the honest behaviour "
+        "(spec §5). If this asserts True, _run_lab_core regressed to "
+        "per-run n_trials.")
