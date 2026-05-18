@@ -409,6 +409,44 @@ but DSR/credibility gates remain structurally blocked.
   a structurally bounded firing rate. See `docs/MASTER_PLAN.md` §4.2 and
   `backtests/reversion_satellite_backtest.json`.
 
+## ⚠ PRE-RAILWAY MIGRATION BLOCKER — archive substrate (LOCKED design 2026-05-18)
+
+**Do NOT let a Railway cutover silently ship the broken substrate.**
+The vendor-truncation `shrinkage_detector` + the whole CSV-first
+archive are hardwired to a persistent **local FS**
+(`csv_archive.repo_data_dir()` = `Path(__file__).parents[2]/"data"`;
+no env/volume override; `railway.json` has no volume). On Railway's
+**ephemeral container FS**: detection silently always-passes (empty
+`data/` → emits OK = "checked nothing" — worst class for live money),
+`csv_archive_presence` flaps, recovery substrate evaporates. Expert
+verdict (2026-05-18): snapshot-vs-single-prior-CSV is the wrong
+substrate even on the Mac (poisoned baseline; gradual <20%/snapshot
+erosion invisible; only 5 full-snapshot sources).
+
+**LOCKED design (operator-approved 2026-05-18; built AT migration,
+not now — Railway paused, re-enable deferred until an engine proves
+edge):** `[lane: data-mine][gate: Railway-re-enable][decision: made][effort: L]`
+- **Detection → D2:** persist per-source row-count / min-max-date /
+  coverage to **Postgres** each ingest; shrinkage = deviation vs
+  rolling-median of durable history (host-agnostic; reuses the
+  `prices_daily_completeness`/freshness pattern; fixes the local
+  flaws too). [D3 = fold full-snapshot sources into a completeness
+  physical invariant — stronger/larger; D2 is primary.]
+- **Recovery → R3:** CSV-first archive → an **S3-compatible
+  object-storage bucket attached to the service** (Railway-attached /
+  Supabase Storage / R2 / S3) via S3 API + env-injected creds. Keeps
+  the CSV-first canonical workflow; host-agnostic. [R2 Volume =
+  weaker fallback; R4 Postgres-BYTEA rejected — 8GB Supabase budget.]
+- A bucket alone is necessary-for-recovery, NOT sufficient: detection
+  must become DB-derived regardless. Exact Railway bucket wiring is a
+  migration-time detail to verify vs current Railway docs.
+- **Zero-risk preps done now (separate PR, no Railway infra):**
+  (1) `repo_data_dir()` honors `TP_DATA_DIR` env (default unchanged)
+  — the R2/R3 seam; (2) empty-archive shrinkage path → WARN/UNKNOWN,
+  never silent OK — a "no fake-green" latent-bug fix.
+- Memory: `project_railway_archive_substrate_migration`. Sequencing:
+  re-base detection onto Postgres BEFORE Railway re-enable.
+
 ## Data archival — CSV-first retrofit (DONE 2026-05-15)
 
 **Closed.** The 2026-05-15 BAMLH0A0HYM2 incident exposed that the
