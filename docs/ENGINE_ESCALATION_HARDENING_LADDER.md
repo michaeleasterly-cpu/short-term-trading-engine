@@ -100,11 +100,11 @@ references the data-lane ladder (`docs/ESCALATION_HARDENING_LADDER.md`)
   — not a new detector (the `tpcore/trade_monitor` `daemon_heartbeats`
   substrate + dashboard `trade_monitor_heartbeat` probe +
   `engine_service_task_crashloop` already provide the coverage).
-  Spec:
-  `docs/superpowers/specs/2026-05-18-engine-silent-absence-detectors-design.md`.
-  Spec:
-  `docs/superpowers/specs/2026-05-18-engine-llm-triage-advisory-layer-design.md`;
-  persona `docs/engine_llm_triage_persona.md`; settings runbook
+  Specs:
+  `docs/superpowers/specs/2026-05-18-engine-silent-absence-detectors-design.md`
+  (#243 detectors) and
+  `docs/superpowers/specs/2026-05-18-engine-llm-triage-advisory-layer-design.md`
+  (Epic E); persona `docs/engine_llm_triage_persona.md`; settings runbook
   `docs/llm_data_triage_operator_runbook.md` (shared, both lanes).
 
 ## Operator workflow
