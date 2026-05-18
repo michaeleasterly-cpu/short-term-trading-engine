@@ -5,17 +5,35 @@ Checks two properties of a diff vs the base branch:
 2. provenance_violations — brain-gate (registry-only changes must be purely
    additive bindings to already-proven stages/params)
 
+Lane-agnostic by ``--lane`` (Epic E Phase 3.2): the SAME #63-hardened
+base-loader + the SAME shared pure fence evaluator serve BOTH lanes —
+zero clone (one fence object is a safety asset; two could silently
+diverge):
+
+* ``--lane data`` (default — byte-identical to the shipped #187
+  behaviour): baseline = the data-lane HealSpec/RemediationSpec
+  registries; hard-denied = the data protected-path set.
+* ``--lane engine``: baseline = ``ops.engine_ladder.DISPOSITION_POLICIES``
+  normalised into the shared spec-dict (the disposition *verb* in the
+  ``stage`` slot, ``baseline_stages`` = the existing
+  ``EngineEscalationDisposition`` values); hard-denied = the engine
+  protected-path set (the engine deterministic-mechanism files + the
+  shared protected paths) — via ``tpcore.engine_llm_triage.fence``.
+
 Usage (CI):
-    python scripts/llm_triage_pr_check.py
+    python scripts/llm_triage_pr_check.py            # data lane (default)
+    python scripts/llm_triage_pr_check.py --lane engine
 
 Env vars:
     GITHUB_BASE_REF  — base branch name (default: main)
 
 Fail-closed: any internal error exits 1.  A fence that silently passes on
-error defeats the purpose.
+error defeats the purpose. NEVER references any LLM API key / secret —
+the LLM's self-judgement gates nothing; these artifact properties do.
 """
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import subprocess
@@ -73,18 +91,59 @@ _REGISTRY_SNIPPETS = [
     ("auditheal", _AUDITHEAL_IMPORT),
 ]
 
+# Engine lane (Epic E Phase 3.2): the engine lane has NO
+# HealSpec/RemediationSpec set (confirmed by reading — spec §3/§11);
+# its sole declarative SoT is `ops.engine_ladder.DISPOSITION_POLICIES`.
+# Normalise each policy into the SHARED spec-dict shape so the SAME
+# `provenance_violations` evaluator gates it with zero clone: the
+# disposition VERB goes in the `stage` slot, `params` is always {}, the
+# binding is `act=True`, `max_attempts=0`. `baseline_stages` (computed
+# in main) = the set of existing disposition verbs ⇒ a new policy is
+# allowed iff it is additive AND binds an ALREADY-EXISTING
+# EngineEscalationDisposition value (never a new member / edited / removed
+# policy — exactly spec §3/§4).
+_ENGINE_DISPOSITION_IMPORT = (
+    "from ops.engine_ladder import DISPOSITION_POLICIES; "
+    "import json; "
+    "print(json.dumps({"
+    "k: {'stage': v.default.value, 'params': {}, "
+    "    'act': True, 'max_attempts': 0} "
+    "for k, v in DISPOSITION_POLICIES.items()}))"
+)
 
-def _load_specs_head() -> dict[str, dict[str, dict]]:
-    """Load both registries from the current HEAD (in-process import)."""
+_ENGINE_REGISTRY_SNIPPETS = [
+    ("disposition_policies", _ENGINE_DISPOSITION_IMPORT),
+]
+
+_LANE_SNIPPETS = {
+    "data": _REGISTRY_SNIPPETS,
+    "engine": _ENGINE_REGISTRY_SNIPPETS,
+}
+
+
+def _load_specs_head(
+    snippets: list[tuple[str, str]] = _REGISTRY_SNIPPETS,
+) -> dict[str, dict[str, dict]]:
+    """Load the lane's registries from the current HEAD (in-process
+    import). ``snippets`` defaults to the DATA-lane set so existing
+    callers/tests are byte-unchanged."""
     out: dict[str, dict[str, dict]] = {}
-    for name, snippet in _REGISTRY_SNIPPETS:
+    for name, snippet in snippets:
         raw = _run([sys.executable, "-c", snippet])
         out[name] = json.loads(raw)
     return out
 
 
-def _load_specs_base(base_ref: str) -> dict[str, dict[str, dict]]:
-    """Load both registries from the base branch via a git worktree."""
+def _load_specs_base(
+    base_ref: str,
+    snippets: list[tuple[str, str]] = _REGISTRY_SNIPPETS,
+) -> dict[str, dict[str, dict]]:
+    """Load the lane's registries from the base branch via a git
+    worktree. ``snippets`` defaults to the DATA-lane set (so the
+    existing #187 callers + the cleanup test are byte-unchanged). The
+    engine lane passes ``_ENGINE_REGISTRY_SNIPPETS`` — the SAME
+    #63-hardened worktree-add + remove + defensive-prune-fallback +
+    fail-loud host-guard path, zero clone."""
     try:
         with tempfile.TemporaryDirectory(prefix="llm_triage_base_") as tmpdir:
             wt_path = os.path.join(tmpdir, "base_wt")
@@ -92,7 +151,7 @@ def _load_specs_base(base_ref: str) -> dict[str, dict[str, dict]]:
                   f"origin/{base_ref}"])
             try:
                 out: dict[str, dict[str, dict]] = {}
-                for name, snippet in _REGISTRY_SNIPPETS:
+                for name, snippet in snippets:
                     raw = subprocess.run(
                         [sys.executable, "-c", snippet],
                         capture_output=True,
@@ -136,61 +195,106 @@ def _load_specs_base(base_ref: str) -> dict[str, dict[str, dict]]:
 # Main
 # ---------------------------------------------------------------------------
 
-def main() -> None:
+def _fence_callables(lane: str):
+    """Return ``(hard_denied_fn, provenance_fn)`` for the lane. Both
+    lanes resolve to the SAME shipped pure evaluator (zero clone): the
+    data lane via `tpcore.llm_data_triage.fence` directly; the engine
+    lane via the thin `tpcore.engine_llm_triage.fence` wrappers (which
+    inject the engine denied-set DATA into that SAME function — no new
+    fence logic). Imported lazily so a fence ERROR fails closed (exit 1)
+    rather than crashing at module import."""
+    if lane == "engine":
+        from tpcore.engine_llm_triage.fence import (
+            engine_hard_denied_paths,
+            engine_provenance_violations,
+        )
+
+        def _prov(baseline, head, baseline_stages):
+            return engine_provenance_violations(
+                baseline, head, baseline_stages=baseline_stages
+            )
+
+        return engine_hard_denied_paths, _prov
+
+    from tpcore.llm_data_triage.fence import (
+        hard_denied_paths,
+        provenance_violations,
+    )
+
+    return hard_denied_paths, provenance_violations
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="python scripts/llm_triage_pr_check.py"
+    )
+    parser.add_argument(
+        "--lane",
+        choices=("data", "engine"),
+        default="data",
+        help="which lane's registries/denied-set to fence "
+        "(default: data — byte-identical to the shipped #187 behaviour)",
+    )
+    args = parser.parse_args(argv)
+    lane = args.lane
+    snippets = _LANE_SNIPPETS[lane]
+
     base_ref = os.environ.get("GITHUB_BASE_REF", "main")
     failed = False
+
+    hard_denied_fn, provenance_fn = _fence_callables(lane)
 
     # ------------------------------------------------------------------
     # 1. Hard-denied path check
     # ------------------------------------------------------------------
     try:
-        from tpcore.llm_data_triage.fence import hard_denied_paths
         paths = _diff_paths(base_ref)
-        denied = hard_denied_paths(paths)
+        denied = hard_denied_fn(paths)
         if denied:
-            print("FENCE FAIL — hard-denied paths touched:")
+            print(f"FENCE FAIL [{lane}] — hard-denied paths touched:")
             for p in denied:
                 print(f"  {p}")
             failed = True
         else:
-            print(f"hard_denied_paths: OK ({len(paths)} path(s) checked)")
+            print(
+                f"hard_denied_paths [{lane}]: OK "
+                f"({len(paths)} path(s) checked)"
+            )
     except Exception as exc:
-        print(f"FENCE ERROR in hard_denied_paths: {exc}")
+        print(f"FENCE ERROR [{lane}] in hard_denied_paths: {exc}")
         sys.exit(1)
 
     # ------------------------------------------------------------------
     # 2. Provenance check
     # ------------------------------------------------------------------
     try:
-        from tpcore.llm_data_triage.fence import provenance_violations
-
-        head_specs = _load_specs_head()
-        base_specs = _load_specs_base(base_ref)
+        head_specs = _load_specs_head(snippets)
+        base_specs = _load_specs_base(base_ref, snippets)
 
         all_violations: list[str] = []
         for name in head_specs:
             baseline = base_specs.get(name, {})
             head = head_specs[name]
             baseline_stages = {v["stage"] for v in baseline.values()}
-            viols = provenance_violations(baseline, head, baseline_stages)
+            viols = provenance_fn(baseline, head, baseline_stages)
             for viol in viols:
                 all_violations.append(f"[{name}] {viol}")
 
         if all_violations:
-            print("FENCE FAIL — provenance violations:")
+            print(f"FENCE FAIL [{lane}] — provenance violations:")
             for viol in all_violations:
                 print(f"  {viol}")
             failed = True
         else:
-            print("provenance_violations: OK")
+            print(f"provenance_violations [{lane}]: OK")
     except Exception as exc:
-        print(f"FENCE ERROR in provenance_violations: {exc}")
+        print(f"FENCE ERROR [{lane}] in provenance_violations: {exc}")
         sys.exit(1)
 
     if failed:
         sys.exit(1)
 
-    print("fence: all checks passed")
+    print(f"fence [{lane}]: all checks passed")
 
 
 if __name__ == "__main__":

@@ -358,3 +358,131 @@ async def test_amain_dispatches_list_and_disposition(monkeypatch):
     assert seen["list"] == (True, 3)
     assert rc_disp == 0
     assert seen["disp"] == (True, "h1", "structural", "a note")
+
+
+# ════════════════════════════════════════════════════════════════════════
+# Epic E Phase 3.2 — surface the engine ENGINE_LLM_TRIAGE_PROPOSAL on the
+# engine escalation's EXISTING undispositioned digest line (the engine
+# equivalent of weekly_digest._llm_suffix). DRY: reuse the EXISTING line
+# builder (_fmt) + the EXISTING open set (list_undispositioned output) —
+# do NOT re-derive the engine overdue set. Annotation appears iff a
+# proposal exists for that hold_id.
+# ════════════════════════════════════════════════════════════════════════
+
+
+def _row_out(hold_id, **kw):
+    base = {
+        "hold_id": hold_id, "engine": "reversion",
+        "failure_class": "crashed_startup", "reason": "x",
+        "recorded_at": OLD, "shape": "held",
+        "policy_default": "structural", "policy_rationale": "r",
+    }
+    base.update(kw)
+    return base
+
+
+def test_fmt_no_llm_proposal_renders_no_suffix():
+    # A row WITHOUT an attached LLM proposal renders exactly the legacy
+    # line (no annotation) — the data-lane _llm_suffix "" parity.
+    rows = [_row_out("h1")]
+    out = el._fmt(rows)
+    assert "h1" in out
+    assert "LLM:" not in out  # no proposal → no suffix
+
+
+def test_fmt_llm_proposal_appended_when_present():
+    rows = [
+        _row_out(
+            "h2",
+            llm_proposal={
+                "proposed_disposition": "structural",
+                "confidence": "0.81",
+                "pr_link": "https://example/pr/9",
+            },
+        )
+    ]
+    out = el._fmt(rows)
+    assert "LLM: structural" in out
+    assert "conf 0.81" in out
+    assert "PR https://example/pr/9" in out
+
+
+def test_fmt_llm_proposal_no_pr_link_degrades_gracefully():
+    rows = [
+        _row_out(
+            "h3",
+            llm_proposal={
+                "proposed_disposition": "converted",
+                "confidence": "0.4",
+                "pr_link": None,
+            },
+        )
+    ]
+    out = el._fmt(rows)
+    assert "LLM: converted" in out
+    assert "(no PR)" in out
+
+
+async def test_attach_llm_proposals_reuses_open_set_no_rederive():
+    """_attach_llm_proposals annotates the GIVEN open-set rows in place
+    from ENGINE_LLM_TRIAGE_PROPOSAL — it does NOT re-query
+    list_undispositioned / re-derive the overdue set. Only rows whose
+    hold_id has a proposal get annotated; the rest stay clean."""
+    rows = [_row_out("hA"), _row_out("hB")]
+
+    class _C:
+        async def fetch(self, sql, *a):
+            assert "ENGINE_LLM_TRIAGE_PROPOSAL" in sql
+            # Only hA has a proposal.
+            return [{
+                "hold_id": "hA",
+                "proposed_disposition": "structural",
+                "confidence": "0.9",
+                "pr_link": "https://x/pr/1",
+            }]
+
+    class _P:
+        @contextlib.asynccontextmanager
+        async def acquire(self):
+            yield _C()
+
+    await el._attach_llm_proposals(_P(), rows)
+    assert rows[0]["llm_proposal"]["proposed_disposition"] == "structural"
+    assert "llm_proposal" not in rows[1] or rows[1]["llm_proposal"] is None
+    out = el._fmt(rows)
+    assert "hA" in out and "LLM: structural" in out
+    # hB has NO proposal → its line carries no LLM suffix.
+    hb_line = [ln for ln in out.splitlines() if "hold_id=hB" in ln][0]
+    assert "LLM:" not in hb_line
+
+
+async def test_amain_list_attaches_llm_proposals(monkeypatch):
+    """The `list` CLI path attaches LLM proposals to the open set
+    (reusing list_undispositioned's output) before _fmt renders it."""
+    monkeypatch.setenv("DATABASE_URL", "postgres://fake/db")
+
+    class _FakePool:
+        async def close(self): ...
+    fake_pool = _FakePool()
+
+    async def _fake_build(_dsn):
+        return fake_pool
+    monkeypatch.setattr(el, "build_asyncpg_pool", _fake_build)
+
+    open_rows = [_row_out("hZ")]
+
+    async def _fake_list(pool, *, grace_days=None):
+        return open_rows
+
+    seen = {}
+
+    async def _fake_attach(pool, rows):
+        seen["attach"] = (pool is fake_pool, rows is open_rows)
+
+    monkeypatch.setattr(el, "list_undispositioned", _fake_list)
+    monkeypatch.setattr(el, "_attach_llm_proposals", _fake_attach)
+
+    rc = await el._amain(["list"])
+    assert rc == 0
+    # Reused the SAME open-set list object — no re-derivation.
+    assert seen["attach"] == (True, True)

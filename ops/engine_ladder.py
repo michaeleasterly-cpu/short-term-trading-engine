@@ -332,6 +332,61 @@ async def disposition(pool, hold_id: str, verb: str, note: str) -> int:
     return 0
 
 
+# Epic E Phase 3.2: surface the engine LLM-triage advisory proposal
+# (ENGINE_LLM_TRIAGE_PROPOSAL — emitted by ops.engine_llm_triage) on
+# the EXISTING undispositioned digest line. Engine-native mirror of
+# the data-lane weekly_digest._llm_suffix (symmetry-of-approach, not a
+# clone — the data-lane file is untouched). Advisory ONLY: the human
+# still dispositions via the deterministic Ladder path.
+_LLM_PROPOSAL_SQL = """
+    SELECT data->>'hold_id'              AS hold_id,
+           data->>'proposed_disposition' AS proposed_disposition,
+           data->>'confidence'           AS confidence,
+           data->>'pr_link'              AS pr_link
+    FROM platform.application_log
+    WHERE event_type = 'ENGINE_LLM_TRIAGE_PROPOSAL'
+      AND (data->>'hold_id') = ANY($1::text[])
+"""
+
+
+async def _attach_llm_proposals(pool, rows: list[dict]) -> None:
+    """Annotate the GIVEN open-set rows IN PLACE with their advisory
+    ENGINE_LLM_TRIAGE_PROPOSAL (if any). DRY: it consumes the open set
+    `list_undispositioned` already computed — it does NOT re-query /
+    re-derive the engine overdue set; it only fetches proposals for the
+    exact hold_ids already in ``rows``. Only the latest proposal per
+    hold_id is kept (a re-triage supersedes)."""
+    if not rows:
+        return
+    hold_ids = [r["hold_id"] for r in rows]
+    async with pool.acquire() as conn:
+        prop_rows = await conn.fetch(_LLM_PROPOSAL_SQL, hold_ids)
+    by_hold: dict[str, dict] = {}
+    for p in prop_rows:
+        hid = p["hold_id"]
+        if hid is not None:
+            by_hold[hid] = {
+                "proposed_disposition": p["proposed_disposition"],
+                "confidence": p["confidence"],
+                "pr_link": p["pr_link"],
+            }
+    for r in rows:
+        r["llm_proposal"] = by_hold.get(r["hold_id"])
+
+
+def _llm_suffix(proposal: dict | None) -> str:
+    """The advisory LLM annotation appended to an undispositioned line
+    IFF a proposal exists for that hold_id (else ``""`` — exact parity
+    with weekly_digest._llm_suffix)."""
+    if not proposal:
+        return ""
+    link = proposal.get("pr_link") or "(no PR)"
+    return (
+        f" | LLM: {proposal.get('proposed_disposition')} "
+        f"(conf {proposal.get('confidence')}) — PR {link}"
+    )
+
+
 def _fmt(rows: list[dict]) -> str:
     head = (f"UNDISPOSITIONED ENGINE-LANE ESCALATIONS ({len(rows)}) — "
             "rung-3: each MUST be converted | structural | removed")
@@ -347,7 +402,8 @@ def _fmt(rows: list[dict]) -> str:
         lines.append(
             f"  [{r['shape']}] {r['engine']}/{r['failure_class']} "
             f"hold_id={r['hold_id']} since={r['recorded_at']} "
-            f"reason={r['reason']} -> policy={pol_str}")
+            f"reason={r['reason']} -> policy={pol_str}"
+            f"{_llm_suffix(r.get('llm_proposal'))}")
     return "\n".join(lines)
 
 
@@ -371,6 +427,9 @@ async def _amain(argv: list[str]) -> int:
         if args.cmd == "list":
             rows = await list_undispositioned(
                 pool, grace_days=args.grace_days)
+            # DRY: annotate the SAME open set with the advisory LLM
+            # proposal (Epic E Phase 3.2) — no re-derivation.
+            await _attach_llm_proposals(pool, rows)
             print(_fmt(rows))
             return 0
         if args.cmd == "disposition":
