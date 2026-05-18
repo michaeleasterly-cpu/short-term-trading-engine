@@ -9,11 +9,26 @@ follow-ups" item #251. **Live-money risk control — the
 never-fail-open invariant is sacred.**
 
 **v1.1 change:** the operator decided the dual-decrement close-path
-drift is fixed at the ROOT now, not deferred. #251 = **Part A**
-(`max(proxy, broker_floor)` never-fail-open raise) **+ Part B**
-(idempotent close-decrement — §2b). A focused expert pass designed B
-and found a fatal objection (no shared chokepoint) addressed by the
-funnel step below.
+drift is fixed at the ROOT now, not deferred.
+
+**v1.2 correction (post-B1 spec review — the premise was
+structurally false; corrected here, operator-approved "ship B1 as
+hardening + add B2"):** BOTH expert passes mis-identified the
+colliding paths. The trade-monitor stream `-1` is purely an
+`open_orders`/OCO-bracket consumer → it fires **only for the
+per-trade engines (reversion/vector)**, NEVER momentum/sentinel
+(those place MARKET/DAY orders, no brackets, no `open_orders`). The
+scheduler rebalance-sell `-1` is momentum/sentinel-only. **Those two
+are disjoint by engine and can never double-decrement the same
+close.** So **B1 (the funnel + idempotent `record_close` + ledger) is
+a correct, never-fail-open HARDENING + the reusable primitive — but
+it defends a collision that cannot occur and is NOT the root fix.**
+The REAL dual-decrement is **`reversion/order_manager.py:241` /
+`vector/order_manager.py:241` `reconcile()` `record_fill(-1)` vs the
+trade-monitor stream `-1` for the SAME per-trade OCO trade** (same
+engines, same close). #251 = **Part B1** (hardening + primitive,
+SHIPPED) **+ Part B2** (the real fix — §2c) **+ Part A**
+(`max(proxy, broker_floor)` raise — §2).
 
 ## 0. Locked constraints (do NOT re-litigate)
 
@@ -38,15 +53,23 @@ clobber (`governor.py:224-227`). **The proxy survives restarts — no
 latent restart fail-open.** This is correctly a *follow-up*, not an
 emergency.
 
+> **v1.2 — the bullet below was the structurally-false premise. Read
+> it as historical; the corrected topology is the v1.2 block above +
+> §2c.** The scheduler rebalance-sell `-1` (momentum/sentinel) and
+> the trade-monitor stream `-1` (reversion/vector OCO only) are
+> **disjoint by engine** — they never collide. The real colliding
+> pair is reversion/vector `order_manager.reconcile()` `-1` vs the
+> stream `-1` (§2c).
+
 **The actual defect is an open/close count-source asymmetry:**
 - **Open (synchronous, tight):** `gate_batch_order` does
   `record_fill(position_delta=+1)` on ALLOW *before* `broker.
   place_order` (`batch_gate.py:50-52`, momentum:411-426). A failed
   `place_order` leaves +1 with no position → over-count → safe.
-- **Close (asynchronous, drift):** `-1` arrives via **two
-  independent paths**: (a) the scheduler's own rebalance-sell
-  `record_fill(-1)` (momentum:440-444) **and** (b) the
-  `trade_monitor` stream on AAR close (`trade_monitor.py:616-621`).
+- **Close (asynchronous, drift):** ~~`-1` arrives via two independent
+  paths: (a) scheduler rebalance-sell + (b) trade_monitor stream for
+  the same close~~ — **FALSE (v1.2): disjoint by engine.** The true
+  collision is §2c.
   The same close can decrement **twice**; `max(0, …)`
   (`governor.py:397`) only floors at 0, never re-anchors to truth.
   Over rebalance cycles `open_positions` can **drift monotonically
@@ -157,11 +180,53 @@ broker_floor)`) is the independent last-line fail-safe for any
 prune edge). Neither weakens nor makes the other redundant — both
 ship.
 
+## 2c. Part B2 — the REAL dual-decrement (reversion/vector order_manager vs stream) [the actual root fix]
+
+**The genuine collision (verified):** for a per-trade OCO trade
+(reversion/vector), the close `-1` fires on BOTH:
+- `reversion/order_manager.py:241` / `vector/order_manager.py:241` —
+  the in-process `reconcile()` loop calling
+  `record_fill(position_delta=-1, trade_id=f"reversion-{trade_key}"
+  | f"vector-{cid}")`; AND
+- the `trade_monitor` stream close `-1` for that same OCO pair
+  (keyed by `row.trade_id` from `platform.open_orders`).
+
+Same engine, same close, **two decrements** → genuine under-drift →
+eventual fail-open. B1's `record_close`/ledger primitive is exactly
+the arbiter this needs; B1 just funneled the wrong (disjoint) pair.
+
+**B2 design (frozen):** route the reversion/vector
+`order_manager.reconcile()` close `-1` through the SAME
+`record_close(engine, trade_id, realized_pnl)` arbiter, with a
+dedupe key **provably identical** to the one the stream passes for
+the same OCO pair.
+
+> **MAKE-OR-BREAK key-identity gate (B2's first task, expert pass).**
+> The stream passes `open_orders.trade_id` (`row.trade_id`). The
+> order_manager currently uses `f"reversion-{trade_key}"` /
+> `f"vector-{cid}"`. **These must be the byte-identical string for
+> the same real close, or the ledger will not dedupe (silent
+> fail-open).** B2 begins with a focused expert pass that traces, in
+> real code, what `open_orders.trade_id` is written as at OCO submit
+> vs what `trade_key`/`cid` the order_manager holds at reconcile, and
+> establishes ONE shared canonical `trade_id`. If they differ today,
+> *that mismatch is the precise core bug* and B2's fix is to make
+> both sides emit the one shared id (do NOT paper over with a
+> derived composite — that was B1's mistake on the batch path). The
+> never-fail-open property is inherited from B1's `record_close`
+> (every uncertainty → skip → over-count → safe); B2 only adds the
+> third caller + proves the key identity.
+
+**Composition:** B1 (batch hardening) + B2 (per-trade real fix) +
+A (`max(proxy, broker_floor)` last-line raise) — three independent,
+all never-fail-open, none redundant.
+
 ## 4. Phasing (gated PR per phase; subagent-driven)
 
 | Phase | Deliverable |
 |---|---|
-| **B1** | **Part B — funnel + idempotent `record_close` + ledger (the root fix; lands FIRST — it removes the under-drift the rest relies on).** New `platform.risk_close_ledger` Alembic migration (PK `(engine,trade_id)`). One idempotent `RiskStateStore.record_close(engine, trade_id, realized_pnl)` doing the single-txn `INSERT … ON CONFLICT DO NOTHING` → decrement-iff-insert-won → else no-op; null `trade_id` → skip+WARN. Route BOTH `-1` close callers through it: the trade-monitor stream (`trade_monitor.py:618`) and the scheduler rebalance-sell loops (`momentum/scheduler.py:440`, `sentinel/scheduler.py:283`) — the scheduler must pass the originating `trade_id` (derive from the AAR-open/position row it sells out of). `record_fill` non-close (`+1`/pnl-only) behaviour byte-unchanged. Daily 14-day ledger prune (wire into the existing data-ops/maintenance cadence — no new daemon). TDD: the never-fail-open interleaving table (A→B, B→A, concurrent, one-path-missing, ledger-error→no-decrement, null-trade_id→skip) each a test that genuinely bites; an idempotency property test (same `(engine,trade_id)` N times ⇒ exactly one decrement); existing governor suite green. One gated PR. |
+| **B1 — SHIPPED (hardening + primitive, NOT the root fix)** | New `platform.risk_close_ledger` migration (PK `(engine,trade_id)`); idempotent `RiskStateStore.record_close` (single-txn `INSERT … ON CONFLICT DO NOTHING` → decrement-iff-insert-won; null→skip+WARN; both stores); 14-day prune on the existing `ops --update` cadence (no new daemon); funneled the trade-monitor stream + momentum/sentinel rebalance-sell loops (these are disjoint by engine — see v1.2: a correct never-fail-open hardening, but defends a non-occurring collision). `build_close_id` enforces `date.isoformat()` (no key drift). `record_fill` non-close byte-unchanged. Never-fail-open interleaving + idempotency suite (bites vs a dual-decrement stub). **Honest framing: B1 ships the reusable arbiter; the actual dual-decrement is B2.** |
+| **B2 — the REAL fix (§2c)** | **Task B2.0 (gate):** focused expert key-identity pass — trace `open_orders.trade_id` (stream side, written at OCO submit) vs the order_manager's `trade_key`/`cid` at `reconcile()`; establish ONE shared canonical `trade_id`. If they differ, that mismatch IS the core bug — fix both to emit the shared id (NO derived composite). **Task B2.1:** route `reversion/order_manager.py:241` + `vector/order_manager.py:241` `reconcile()` close `-1` through `record_close(engine, <shared trade_id>, realized_pnl)`; keep each caller's crash-isolation; the `+1` open path untouched. TDD: the genuine reversion/vector order_manager-vs-stream interleaving (same shared key) decrements exactly once; key-identity test asserting the order_manager id == the stream `open_orders.trade_id` for the same OCO pair (bites if they diverge); existing per-trade governor/order-manager suite green. One gated PR. |
 | **A1** | **Part A — `max(proxy, broker_floor)` raise + invariant test.** `tpcore/risk/limits_profile.py`: add `reconcile_open_floor` (default False; True for momentum+sentinel). `RiskGovernor.check_trade`: compute `broker_floor` (reuse the existing in-band `_broker.get_positions()` result — do NOT add a second round-trip; hoist/share if the existing call is after the position check), broker-error/timeout/empty→0, `effective = max(state.open_positions, broker_floor)`, used in the concurrent-position check ONLY when the per-engine flag is set (else byte-identical to today). TDD: broker-higher → tighter BLOCK; broker-down/timeout/exception/empty → identical to proxy-only; a **property test: NO input yields `effective < proxy`**; flag-off engines byte-unchanged; `test_max_concurrent_positions_blocks` + governor suite green. One gated PR. |
 | **D1** | **Docs reconciliation.** TODO §Governor-follow-ups item → resolved (A+B shipped, root fixed not deferred); risk/governor design note + CLAUDE.md risk line if it enumerates batch-gate behaviour; this spec → BUILT + build record; memory note. One gated PR. |
 

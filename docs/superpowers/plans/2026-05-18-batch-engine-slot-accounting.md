@@ -4,7 +4,7 @@
 
 **Goal:** Make the batch-engine (momentum/sentinel) concurrent-position count correct and provably never-fail-open: (B) an idempotent close-decrement that kills the dual-decrement under-drift at the root, then (A) a `max(proxy, broker_floor)` last-line raise.
 
-**Architecture:** Spec `docs/superpowers/specs/2026-05-18-batch-engine-slot-accounting-design.md` (v1.1, operator-approved incl. "fix the dual-decrement now"). Live-money RiskGovernor / `tpcore.risk`. The sacred invariant: **never fail open** — over-count (wrongly BLOCK) is safe; under-count (wrongly ALLOW > limit) is forbidden. Every uncertainty branch must skip/raise toward MORE strictness. Phases: **B1** (root fix — funnel both `-1` close paths through one idempotent `record_close` arbitrated by a `risk_close_ledger` unique key) → **A1** (`max(proxy, broker_floor)`, opt-in per batch engine) → **D1** (docs). B1 first (removes the structural under-drift).
+**Architecture:** Spec `docs/superpowers/specs/2026-05-18-batch-engine-slot-accounting-design.md` (**v1.2** — post-B1 review correction). Live-money RiskGovernor / `tpcore.risk`. Sacred invariant: **never fail open**. **v1.2 correction:** B1's funneled pair (scheduler-sell vs stream) is disjoint by engine — B1 is a correct never-fail-open **hardening + the reusable `record_close`/ledger primitive, NOT the root fix**. The REAL dual-decrement = reversion/vector `order_manager.reconcile()` `-1` vs the trade-monitor stream `-1` (same per-trade engines) — fixed in **Phase B2** (spec §2c). Phases: **B1** (hardening+primitive — SHIPPED) → **B2** (the real fix; starts with a make-or-break key-identity expert gate) → **A1** (`max(proxy, broker_floor)`) → **D1** (docs). B1 task text below is historical (it built the primitive); read §2c + the B2 section for the real fix.
 
 **Tech Stack:** Python 3.11, asyncpg, Alembic (`platform/migrations`), pydantic v2, structlog, pytest (`asyncio_mode=auto`), ruff. Gated PR per phase; CI-green before merge; branch-hygiene (`git switch -c`, verify branch before every commit; tests never touch real repo/`data/`/real DB — fake pool/store).
 
@@ -55,7 +55,17 @@ Branch `feat/risk-idempotent-close-b1` off fresh `main`.
 
 ---
 
-## Phase A1 — `max(proxy, broker_floor)` never-fail-open raise (gated PR #2)
+## Phase B2 — the REAL dual-decrement fix (reversion/vector order_manager vs stream) (gated PR #2)
+
+Branch `feat/risk-idempotent-close-b2` off fresh `main` (post-B1). Spec §2c authoritative.
+
+**Files:** Modify `reversion/order_manager.py` (~:241), `vector/order_manager.py` (~:241), and (only if the key-identity gate requires it) the OCO-submit site that writes `platform.open_orders.trade_id` and/or `tpcore/trade_monitor.py`. Test: `tpcore/tests/test_risk_close_b2_*.py`.
+
+- [ ] **Task B2.0 — MAKE-OR-BREAK key-identity expert gate (read-only first).** Dispatch a focused expert pass: trace, in real code, exactly what string is written to `platform.open_orders.trade_id` at OCO/tier-1 submit (the value the trade-monitor stream later passes to `record_close` as `row.trade_id`) vs the `trade_key`/`cid` the `order_manager` holds at `reconcile()` time (currently `f"reversion-{trade_key}"` / `f"vector-{cid}"`). Establish ONE shared canonical `trade_id`. If they already match → B2.1 just reroutes. If they differ → **that mismatch is the core bug**; the fix is to make BOTH sides emit the one shared id (NOT a derived composite — that was B1's batch-path mistake). Output the frozen shared-id definition + which file(s) must change. Controller reviews before B2.1.
+- [ ] **Task B2.1 — reroute + prove identity (TDD).** Route the `reversion/order_manager.py` + `vector/order_manager.py` `reconcile()` close `-1` through `record_close(engine, <shared trade_id>, realized_pnl)` (the B1 arbiter). Preserve each caller's existing crash-isolation; `+1` open path untouched. TDD: (a) a key-identity test asserting the order_manager's `record_close` trade_id == the `open_orders.trade_id` the stream uses for the SAME OCO pair — and it must genuinely bite if they diverge; (b) the real interleaving — order_manager-reconcile-then-stream, stream-then-reconcile, concurrent — for the same shared key decrements **exactly once**, fails (pre-B2) at twice; (c) existing reversion/vector order-manager + governor suites green; (d) never-fail-open inherited from `record_close` (uncertainty→skip→over-count). One gated PR.
+- [ ] **Task B2.2 — verify + PR.** FULL suite 0 failed; reversion/vector + governor suites green; ruff/no-leak/no-real-IO; `git diff --name-only` = the B2 files only; gated PR, CI-green (registered→watch), squash-merge, sync.
+
+## Phase A1 — `max(proxy, broker_floor)` never-fail-open raise (gated PR #3)
 
 Branch `feat/risk-broker-floor-a1` off fresh `main` (post-B1).
 
