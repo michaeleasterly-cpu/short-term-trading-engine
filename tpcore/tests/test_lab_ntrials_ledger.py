@@ -693,3 +693,74 @@ async def test_aborted_run_after_sampling_still_records_its_spend(
     assert len(shared.rows) == 1
     import json
     assert json.loads(shared.rows[0]["notes"])["trials"] == 64
+
+
+async def test_legacy_non_lab_path_emits_and_reads_no_ledger(
+        monkeypatch, tmp_path):
+    """T9. The legacy ``python scripts/search_parameters.py`` operator
+    path is candidate=None with NO active LabContext — it must stay
+    byte-identical: emit NO lab_trial_ledger.* row, read NO ledger, and
+    feed compute_dsr_for_verdict the per-run args.trials exactly as
+    today (H-S2-3 symmetry; the characterization oracle stays green)."""
+    import numpy as np
+
+    import ops.lab.run as lab_run
+    rng = np.random.default_rng(2)
+    returns = [float(x) for x in rng.normal(0.015, 0.01, 40)]
+    seen: list[int] = []
+    real_dsr = lab_run.compute_dsr_for_verdict
+
+    def _spy(r, *, n_trials):
+        seen.append(n_trials)
+        return real_dsr(r, n_trials=n_trials)
+
+    monkeypatch.setattr(lab_run, "compute_dsr_for_verdict", _spy)
+    _install_offline_harness(monkeypatch, lab_run, returns=returns)
+
+    # candidate=None, NO LabContext: legacy path. The credibility write
+    # opens its own ad-hoc asyncpg.create_pool — fake it so no socket.
+    import asyncpg
+
+    class _AdHoc:
+        async def close(self) -> None: ...
+
+    created: list[str] = []
+    ledger_touches: list[str] = []
+
+    async def _fake_create_pool(*a, **k):
+        created.append("create_pool")
+        return _AdHoc()
+
+    monkeypatch.setattr(asyncpg, "create_pool", _fake_create_pool,
+                        raising=True)
+
+    # Spy the ledger helpers — they must NEVER be called on the legacy
+    # path (candidate is None ⇒ _ledger_pool is None ⇒ no emit/read).
+    import tpcore.lab.ledger as ledger_mod
+    real_record = ledger_mod.record_trial_spend
+    real_cum = ledger_mod.cumulative_n_trials
+
+    async def _spy_record(*a, **k):
+        ledger_touches.append("record")
+        return await real_record(*a, **k)
+
+    async def _spy_cum(*a, **k):
+        ledger_touches.append("cumulative")
+        return await real_cum(*a, **k)
+
+    monkeypatch.setattr("ops.lab.run.record_trial_spend", _spy_record,
+                        raising=False)
+    monkeypatch.setattr("ops.lab.run.cumulative_n_trials", _spy_cum,
+                        raising=False)
+
+    core = await lab_run._run_lab_core(
+        _ns(tmp_path / "legacy.csv", trials=40, seed=0),
+        candidate=None)
+
+    assert not isinstance(core, int)
+    # No ledger interaction on the legacy path.
+    assert ledger_touches == [], (
+        f"legacy non-Lab path touched the ledger: {ledger_touches}")
+    # DSR fed the per-run args.trials, unchanged from today.
+    assert seen[-1] == 40
+    assert core.effective_n_trials == 40
