@@ -10,9 +10,10 @@ new build (the shadow-manifest generator + CI-divergence gate). This
 spec is the single authoritative description of the now-shipped Engine
 SDLC.
 
-Brainstorm → **spec (this doc)** → expert-harden (the §"Hardening"
-placeholder, filled by a separate pass with H-S4-* IDs + a T0–Tn
-decomposition) → writing-plans → subagent-driven build.
+Brainstorm → **spec (this doc)** → expert-harden (§14, now filled
+with the H-S4-\* register + the final T0–Tn decomposition + the one
+design defect DDF-1 the pass surfaced) → writing-plans →
+subagent-driven build.
 
 **Symmetry reference (READ-ONLY, NOT cloned):** the data-domain analog
 `docs/superpowers/specs/2026-05-17-data-provider-lifecycle-design.md`
@@ -778,38 +779,540 @@ it is truthful, not aspirational:
 
 ## 14. Hardening
 
-> **Placeholder — filled by a separate expert-harden pass.** This
-> section will carry the H-S4-* hardening IDs (failure modes, the
-> ungameability proof obligations for the `--check` gate, the
-> doc-accuracy verification protocol, the no-redundancy contract
-> enforcement) and the T0–Tn task decomposition for the writing-plans
-> pass. Indicative shape (the harden pass refines/renumbers):
->
-> - **T0** — this spec (already delivered) + expert-harden + plan.
-> - **T1** — `scripts/gen_engine_manifest.py` generator
->   (sentinel-region render from the SoT; `--write` default,
->   idempotent; imports no engine).
-> - **T2** — sentinel-fence the shadow regions in
->   `run_smoke_test.sh`, `run_all_engines.sh`, `platform_pipeline.py`,
->   `pyproject.toml`; generator round-trips byte-identical.
-> - **T3** — `--check` mode + `scripts/tests/test_engine_manifest_in_sync.py`
->   CI gate.
-> - **T4** — fold clockwork leg 6 into the manifest mechanism
->   (no-redundancy contract §10.5); close the reverse
->   `roster ⊆ ENGINE_TABLES` leg (§10.4).
-> - **T5** — migrate the SP3 executor's inline shadow edits to call
->   the one renderer (§10.3 dedup) + prove the pre-approval dry-run +
->   post-apply clockwork still green.
-> - **T6** — doc-closure: `CLAUDE.md` (§11.1).
-> - **T7** — doc-closure: `docs/OPERATIONS.md` (§11.2, incl. the stale
->   search-script reframe).
-> - **T8** — doc-closure: `engine_readiness.md` (§11.3).
-> - **T9** — doc-closure: `docs/glossary.md` (§11.4).
-> - **Tn (final)** — full-suite + CI-exact ruff/check_imports + lane
->   assertion (engine-only, data-lane untouched) +
->   finishing-a-development-branch; verify the spec's known-limitations
->   match the still-shipped code (the carry-forwards were not
->   accidentally fixed/regressed).
+This section is the binding output of the SP4 expert-harden pass. It
+carries the **H-S4-\*** register (each: the risk → the precise
+mitigation → where it is enforced) and the **final ordered T0–Tn TDD
+decomposition** (each task self-contained, CI-green on its own, the
+pinning test in the same task as its behavior, lane/collision-safe).
+The hardening below is grounded against the *actually shipped* code
+read during this pass (`ops/engine_sdlc/planner.py`,
+`tpcore/tests/test_engine_sdlc_planner.py`,
+`tpcore/tests/test_engine_lifecycle_consistency.py`,
+`tpcore/engine_profile.py`, `tpcore/quality/validation/capital_gate.py`,
+the four shadow files, `scripts/tests/test_lab_cli_entrypoint.py`,
+`scripts/tests/test_sp3_scope_confined.py`) — not assumed.
+
+### 14.1 Design defect found & fixed during this pass (DDF-1)
+
+**DDF-1 — the SP3 synthetic-tree builder hand-edits the *un-fenced*
+shadow byte-strings; T2 silently breaks the entire SP3 atomicity
+suite.** `tpcore/tests/test_engine_sdlc_planner.py::
+_make_synthetic_engine_tree` (and the per-test setup in
+`test_apply_red_consistency_rolls_back_to_byte_identical` /
+`test_apply_mid_move_loop_failure_byte_identical` etc.) constructs the
+pre-REMOVE staged tree by `str.replace()` on the *exact current
+un-fenced* shadow forms — literally
+`"for engine in reversion vector momentum sentinel canary; do"` and
+`'"canary*"]  # sigma archived 2026-05-16'`. The moment T2 wraps those
+spans in sentinel fences, those byte-strings change, every
+`.replace()` becomes a **silent no-op**, the synthetic tree's shadows
+no longer carry `throwaway`, the pre-REMOVE staged clockwork goes RED,
+and the **entire SP3 byte-identical-rollback suite fails** — a
+cross-task regression no per-task reviewer of T2 (which only edits
+shadow files) could ever see. The original §14 placeholder ordering
+(T2 then T5) does not surface or mitigate this. **Fix (folded into the
+decomposition below):** the SP3 `_shadow_edit_remove` and the
+synthetic-tree shadow construction are *both* migrated to the ONE
+renderer in **T5** (the SP3-coupled task), and **T2 is reordered to
+land *with* a same-task update to `_make_synthetic_engine_tree`** that
+re-expresses the `throwaway`-injection against the fenced form (or, as
+the decomposition specifies, makes the synthetic-tree shadows
+themselves a renderer call against a `throwaway`-augmented roster
+snapshot). T2's pinning test therefore includes
+`pytest tpcore/tests/test_engine_sdlc_planner.py -q` going GREEN, not
+only "the generator round-trips byte-identical" — so the cross-task
+break is caught *inside* T2. This is the single genuine design defect
+the hardening pass forced; the rest of the spec is sound.
+
+### 14.2 The H-S4-\* hardening register
+
+**H-S4-1 — the renderer must be a pure `str → str`; it must NEVER
+write, mutate, or own the journal (the T5 atomicity-preservation
+invariant).** *Risk:* migrating the SP3 executor's inline shadow edits
+(`_shadow_edit_remove`, the ADD `_PROFILE` insert,
+`_maybe_rewrite_frozen_literal`) to a shared renderer could let the
+renderer perform the file write, bypassing the `_Journal`
+record-before-mutate contract — silently regressing the SP3
+#C1/#C2/H-S3-4 byte-identical-rollback property (a failed transition
+must leave ZERO trace). *Mitigation:* the renderer's ONLY public seam
+is `render_region(file_text: str, region: str, roster: tuple[str,...],
+archived: tuple[str,...]) -> str` (and a `render_all(...)` over a
+file) — it takes bytes/text in and returns the regenerated bytes/text;
+it does **no** filesystem I/O, holds **no** journal, and is import-time
+engine-free. The SP3 executor seam is unchanged in shape: `_apply_*`
+still `jn.record_file(p)` **before** any write, then writes the
+renderer's *returned* new text, exactly as today — the renderer
+replaces only the `re.sub`/`str.replace` *computation* inside, never
+the journal+write+rollback ordering. The CI `--check` is a third,
+read-only caller (regenerate-in-memory + diff, never write). There are
+**exactly three callers and one writer-of-files-per-context**: (a) CI
+`--check` (reads, never writes), (b) the generator `--write` CLI
+(writes, no journal — it is the operator/idempotent-regen tool, not
+the transaction path), (c) the SP3 executor (journals OLD bytes →
+writes renderer's NEW bytes → rollback restores OLD). NO fourth write
+path. *Enforced at:* T5 — the renderer module has no `open(`/`.write_`/
+`Path.write` (a grep-assertion test
+`test_renderer_is_pure_no_filesystem_io`); and the SP3 atomicity
+tests `test_apply_red_consistency_rolls_back_to_byte_identical`,
+`test_apply_mid_move_loop_failure_byte_identical`,
+`test_apply_modify_edits_default_const_and_rolls_back_byte_identical`,
+`test_add_red_consistency_rolls_back_to_byte_identical`,
+`test_add_readiness_miss_rolls_back_to_byte_identical`,
+`test_apply_move_failure_restores_text_edits` must ALL stay GREEN
+post-T5 (re-run as the T5 pinning gate).
+
+**H-S4-2 — a generated region is rewritten ONLY between a matched
+sentinel pair; an unmatched / duplicated / missing sentinel FAILS LOUD,
+never silently no-ops or eats live text.** *Risk:* a regex/scan that
+silently skips a region with a typo'd or duplicated fence would let
+drift through (ungameability hole) OR a greedy match could clobber
+live un-fenced text between two unrelated fences. *Mitigation:* the
+renderer parses each file for *exactly one* `>>> engine-manifest:<id>
+>>>` open and *exactly one* matching `<<< engine-manifest:<id> <<<`
+close per declared region id; zero, >1, crossed, or nested ⇒ raise
+`ManifestFenceError(file, region, reason)` (LOUD); the rewrite
+replaces only the bytes strictly *between* the matched pair, leaving
+the sentinel lines and every byte outside untouched. *Enforced at:*
+T1 — `test_unmatched_sentinel_raises`,
+`test_duplicate_sentinel_raises`,
+`test_missing_close_sentinel_raises`,
+`test_text_outside_fence_is_never_touched` (a fixture file with live
+content on both sides of a region; assert byte-identical outside).
+
+**H-S4-3 — regeneration is idempotent and round-trip byte-identical
+(`--check` after a real `--write` is clean).** *Risk:* a generator
+whose emitted bytes differ from what its own parser accepts (trailing
+whitespace, newline, quoting) would make CI permanently red or require
+a "regenerate twice" ritual — and would break the `--check` gate's
+ungameability claim. *Mitigation:* `render_all` is a fixed point:
+`render_all(render_all(x)) == render_all(x)` for every shadow file;
+the emitted region bytes are exactly what the parser re-reads
+(including the exact join: `, ` for the smoke list / pyproject rows,
+` → ` for the dispatch-order prose, single-space for the bash `for
+engine in` loop, the trailing newline policy pinned per file).
+*Enforced at:* T2 — `test_generator_is_idempotent` (run `--write`,
+capture bytes, run `--write` again, assert byte-identical) and
+`test_check_clean_after_write` (`--write` then `--check` exits 0) for
+each of the four shadow files.
+
+**H-S4-4 — the generator reads ONLY `tpcore.engine_profile` SoT and
+imports NO engine (tpcore∌engine / H-S3-10 layering, import-time
+clean).** *Risk:* the generator pulling an engine package (e.g. to
+"discover" engines) would violate the layering invariant the platform
+mechanically enforces and could re-introduce import cycles. *Mitigation:*
+`scripts/gen_engine_manifest.py` imports `from tpcore.engine_profile
+import roster_for_dispatch, archived_engines` and stdlib only; no
+`import <engine>`, no `importlib` of an engine, no `ops.*`. *Enforced
+at:* T1 — `test_generator_imports_no_engine` (import the module, assert
+no engine package name in `sys.modules` attributable to it; mirrors
+the SP3 `test_importing_engine_sdlc_main_does_not_eager_import_an_
+engine` pattern) and the CI `check_imports` ruff step in the final
+task.
+
+**H-S4-5 — a hand-edit INSIDE a fenced region is clobbered by regen +
+caught by `--check`; a hand-edit OUTSIDE the fences is preserved.**
+*Risk:* if `--check` only diffed the whole file it could false-RED on
+legitimate out-of-fence edits; if it only checked fence presence it
+could miss in-fence tampering (the ungameability hole). *Mitigation:*
+`--check` regenerates **only** the fenced regions in memory and diffs
+*those* against on-disk; out-of-fence bytes are never part of the
+verdict. *Enforced at:* T3 —
+`test_hand_edit_in_fence_fails_check` (mutate a byte inside a region,
+assert `--check` rc≠0 with a unified diff naming that file/region),
+`test_hand_edit_out_of_fence_passes_check` (mutate a byte outside every
+region, assert `--check` rc==0).
+
+**H-S4-6 — the bash `for engine in …` loop and the `pyproject.toml`
+fenced rows must regenerate to *valid* bash / *parseable* TOML / a
+*valid* Python docstring; engine-name quoting/escaping is pinned even
+though names are `[a-z0-9_]`.** *Risk:* a generator that emits a fence
+comment or join that breaks `bash -n` / `tomllib.loads` / the module
+docstring (an unterminated string, a `#` where TOML wants a value, a
+`"""` inside the Python docstring fence) bricks the build in a way the
+`--check` byte-diff would *pass* (it only checks its own
+regeneration). *Mitigation:* the spec pins per-file fence syntax,
+verified against the real files read this pass: (a) `run_smoke_test.sh`
+/ `run_all_engines.sh` — `#`-comment sentinels (bash ignores `#`
+lines); the loop emits `for engine in <space-joined roster>; do`
+verbatim (names are `[a-z0-9_]`, no quoting needed, but the renderer
+still rejects any roster token not matching `^[a-z0-9_]+$` —
+fail-loud, never emit unsafe bash); (b) `pyproject.toml` — `#`-comment
+sentinels (legal, `tomllib`-ignored); the `testpaths` rows emit
+`    "<e>/tests",` and the `packages.find.include` emits the engine
+globs on the existing single `include = [...]` line as a fenced
+*sub-span* only if that stays valid TOML — **decision pinned here:**
+because the `include` array is one physical line shared with the
+hand-owned `"tpcore*"` and the `# sigma archived` trailing comment,
+the generator owns the engine glob tokens via a fenced **comment-block
+form is not viable on a single array line**, so the `include` line is
+re-expressed at T2 as a multi-line array where each engine glob is its
+own fenced row (`"<e>*",`), the `"tpcore*"` row and trailing comment
+stay outside the fence — `tomllib.loads` still parses (multi-line TOML
+arrays are legal); (c) `platform_pipeline.py` / `run_smoke_test.sh`
+header docstrings — the fenced span is plain prose lines that contain
+no `"""`; the renderer rejects any roster join that would introduce a
+`"""` (impossible with `[a-z0-9_]` names + ` → `/`, ` joins, but
+asserted). *Enforced at:* T2 — `test_smoke_sh_still_parses` (`bash -n
+scripts/run_smoke_test.sh` rc 0 post-fence+regen),
+`test_run_all_engines_sh_still_parses`,
+`test_pyproject_still_valid_toml` (`tomllib.loads` succeeds AND the
+parsed `testpaths`/`include` equal the SoT-derived expectation),
+`test_platform_pipeline_docstring_still_valid` (`ast.parse` the module,
+assert `ast.get_docstring` is non-None and contains the regenerated
+roster line).
+
+**H-S4-7 — folding clockwork leg 6 into a one-line delegation must NOT
+create a circular/oracle gap, must NOT weaken the lifecycle/structure
+legs, and must still FAIL CI on a roster/shadow drift.** *Risk:* (a) a
+delegation that imports/invokes the generator could hit the
+`scripts/ops.py`↔`ops` sys.modules collision or a pytest
+collection-order bootstrapping hazard; (b) replacing leg 6's parsed
+assertion with a generator call could *lose* coverage if the
+delegation is mis-wired (e.g. swallows the rc); (c) the structure legs
+(1–5, 7–11) must remain independent and intact. *Mitigation:* leg 6's
+body becomes a call to the generator's **pure in-process**
+regenerate-and-diff function (NOT a subprocess from inside the
+clockwork — the clockwork is itself run as a subprocess by the SP3
+executor, and a subprocess-in-subprocess plus the `ops`/`scripts`
+collision is the exact SP2-T9/SP3 hazard); the function returns the
+drift diff or `None`; leg 6 asserts it is `None` with the diff as the
+message. The generator's pure function imports only
+`tpcore.engine_profile` + stdlib (H-S4-4), so the clockwork (already
+importing `tpcore.engine_profile`) gains no new collision surface. The
+structure legs are untouched (only leg 6's *body* changes; legs 1–5,
+7–11 are read and re-asserted unchanged in the same task). The §10.4
+reverse `ENGINE_TABLES` leg is added to leg 5 (a Python invariant,
+*not* a regenerated shadow — zero overlap with the generator).
+*Enforced at:* T4 — `test_leg6_fails_on_roster_drift` (monkeypatch /
+fixture a drifted shadow in a temp tree, assert the delegated leg 6
+RED with the file/region named), `test_leg6_green_on_clean_tree`, and
+the *unchanged* legs 1–5/7–11 still GREEN in the same run (full
+`pytest tpcore/tests/test_engine_lifecycle_consistency.py` is the T4
+pinning gate); plus the collision-preemption stanza (H-S4-9) is NOT
+needed here because the delegation is in-process pure (no `ops`
+import) — explicitly asserted by `test_clockwork_imports_no_ops`.
+
+**H-S4-8 — the reverse `roster ⊆ ENGINE_TABLES` predicate is the
+*exact* grounded rule, not a vague "close the deferral".** *Risk:* a
+guessed predicate (full subset vs allowlist) that does not match the
+shipped `ENGINE_TABLES` would either false-RED today or fail to catch
+the real half-state. *Mitigation:* grounded against the shipped
+`tpcore/quality/validation/capital_gate.py::ENGINE_TABLES` read this
+pass — its keys are exactly `{reversion, vector, momentum, sentinel,
+allocator, canary}`; `roster_for_dispatch()` is exactly `(reversion,
+vector, momentum, sentinel, canary)`. **Every live roster engine has
+an `ENGINE_TABLES` row today** ⇒ the precise predicate is the *full
+subset* `set(roster_for_dispatch()) <= set(ENGINE_TABLES) -
+{allocator}` (allocator is excluded from the roster but legitimately
+keyed in `ENGINE_TABLES` via its own `_dispatch_allocator` path — it
+is on the existing forward leg's `allowed` set, not the reverse).
+**No allowlist is needed** (every current engine has a real per-engine
+data-dep; `canary`/`sentinel` both already carry `frozenset({...})`
+rows). The failure it catches: a future ADD that wires a PAPER/LIVE
+engine but forgets its `ENGINE_TABLES` data-dep row — a silent
+un-gated engine (the `_required_sources` fail-safe would fall back to
+`EXPECTED_SOURCES`, masking the omission; the reverse leg makes it a
+hard CI fail). The SP1 deferred comment at
+`test_engine_lifecycle_consistency.py:112-113` is **removed in the
+same task** (T4). *Enforced at:* T4 — extend
+`test_engine_tables_keys_are_known_engines` (or a sibling
+`test_live_engine_has_engine_tables_row`) asserting
+`set(roster_for_dispatch()) <= (set(ENGINE_TABLES) - {"allocator"})`
+with the precise diagnostic; the deferred comment lines are deleted.
+
+**H-S4-9 — every SP4 test that imports `ops`/the generator must
+pre-empt the `scripts/ops.py`↔`ops` sys.modules collision.** *Risk:*
+`scripts/ops.py` (a 160 KB non-package module) cached as `ops` in
+`sys.modules` by an earlier test in full-suite collection order makes
+`import ops.engine_sdlc.planner` (T5) and any `ops`-touching SP4 test
+resolve the wrong `ops` — the exact bug that bit SP2-T9/T10/SP3.
+*Mitigation:* the canonical eviction stanza already proven at
+`scripts/tests/test_lab_cli_entrypoint.py:25-31` is copied verbatim
+into every SP4 test module under `scripts/tests/` that imports `ops.*`
+(the new `test_engine_manifest_in_sync.py` and the SP4 scope-gate
+test): insert `REPO_ROOT` on `sys.path`, then evict any
+`sys.modules["ops"|"ops.*"]` lacking `__path__`. The generator itself
+is under `scripts/` and imports only `tpcore.*` (never `ops`), so it
+is collision-immune by construction; the manifest test invokes it as a
+**subprocess** (`[sys.executable, "scripts/gen_engine_manifest.py",
+"--check"]`, `cwd=REPO`) — the faithful CI shape, which also
+side-steps the in-process collision entirely (a fresh interpreter has
+a clean `sys.modules`). *Enforced at:* T3 — the stanza is present in
+`test_engine_manifest_in_sync.py`; a meta-assertion
+`test_collision_preemption_stanza_present` greps the SP4 test files
+for the eviction loop (symmetric to how SP3 pinned its own).
+
+**H-S4-10 — doc-closure must be code-ACCURATE, not aspirational (the
+operator hard-deliverable + the truthfulness mandate).** *Risk:* a doc
+edit claiming a command/behavior/state the shipped code does not have
+(e.g. an `ops.engine_sdlc` flag that doesn't exist, a `LifecycleState`
+value that isn't real, "engine X graduated" when all five FAIL the
+gate) is a defect that no per-doc-task reviewer can catch without
+cross-checking code. *Mitigation:* SP4 adds a lightweight **"docs
+match code" gate** —
+`scripts/tests/test_sdlc_docs_match_code.py` — asserting, against the
+real modules: (a) `python -m ops.engine_sdlc` and `python -m ops.lab`
+entrypoints import-resolve (`importlib.util.find_spec("ops.engine_sdlc.
+__main__")` / `"ops.lab.__main__"` not None) — with the H-S4-9
+collision stanza; (b) the documented lifecycle states in
+`docs/glossary.md`/`CLAUDE.md` (`LAB→PAPER→LIVE→RETIRED`) ==
+`{s.name for s in LifecycleState}` exactly; (c) the roster line any
+doc states == `roster_for_dispatch()` (parse the doc's
+`reversion → vector → momentum → sentinel → canary` mention; assert
+equality with the SoT join — SoT-derived, not hand-frozen); (d) the
+accuracy guard: `CLAUDE.md` SDLC text contains the "all five engines
+currently FAIL the DSR/credibility gate" honesty statement (a literal
+substring assert — prevents a future edit from implying a graduation);
+(e) the SP3 known-limitations (a)/(b) recorded in the spec still match
+the shipped code (`_ENGINE_DEFAULT_CONSTS` has exactly the
+`reversion` key — `set(planner._ENGINE_DEFAULT_CONSTS) == {"reversion"}`;
+`_validate_modify` still contains the `type(want)(v)` coercion line) —
+so the known-limitations section is provably truthful and a future
+accidental fix/regress fails this gate. *Enforced at:* T8 — this test
+lands in the SAME task as the last doc edit it validates (after T6/T7
+content exists), so the doc tasks are CI-green individually and the
+gate has real content to check.
+
+**H-S4-11 — the OPERATIONS.md stale `search_parameters.py`-as-prod
+reframe must not delete still-true content.** *Risk:* over-aggressively
+rewriting OPERATIONS.md lines 713/719/738/755-757 could remove the
+still-accurate description of `scripts/search_parameters.py` as the
+underlying walk-forward engine the Lab wraps. *Mitigation:* the
+reframe (T7) *adds* the `python -m ops.lab` canonical-entrypoint
+framing and *re-roles* (does not delete) the search-script prose:
+`scripts/search_parameters.py` is documented as the *underlying*
+walk-forward harness the Lab now wraps, not the operator entrypoint;
+the `scripts/run_*_search.sh` descriptions are kept where the scripts
+still exist (verified at T7 time with `ls`), only their *role* is
+corrected. *Enforced at:* T7 — `test_sdlc_docs_match_code` (H-S4-10)
+clause asserting `docs/OPERATIONS.md` contains both `python -m
+ops.lab` AND still references `scripts/search_parameters.py` (the
+re-role, not a delete); plus the T7 task explicitly `ls`-verifies the
+named search scripts before describing them.
+
+**H-S4-12 — lane discipline: SP4 is engine-lane ONLY; the 8
+data-lane-owned files + the data-SDLC spec/checklist are untouched;
+SP3 carry-forwards are RECORDED not implemented; a final
+scope-confinement gate (symmetric to SP3's T9, SP4's own allowlist).**
+*Risk:* an SP4 edit straying into a data-lane file, or "helpfully"
+fixing the SP3 (a)/(b) carry-forwards (turning a docs+manifest SP into
+a MODIFY-rollout — out of scope), is a scope breach a per-task
+reviewer cannot see holistically. *Mitigation:* a new
+`scripts/tests/test_sp4_scope_confined.py` (reusing the proven SP3 T9
+pattern: read-only `git diff --name-only` against the SP4 base,
+skip-not-fail if no base ref) with SP4's OWN allowlist (`scripts/
+gen_engine_manifest.py`, `scripts/tests/test_engine_manifest_in_sync.
+py`, `scripts/tests/test_sp4_scope_confined.py`, `scripts/tests/
+test_sdlc_docs_match_code.py`, `CLAUDE.md`, `docs/OPERATIONS.md`,
+`docs/superpowers/checklists/engine_readiness.md`, `docs/glossary.md`,
+`docs/superpowers/specs/2026-05-18-engine-sdlc-design.md`,
+`docs/superpowers/plans/2026-05-18-engine-sdlc.md`, the four shadow
+files `scripts/run_smoke_test.sh`/`scripts/run_all_engines.sh`/
+`ops/platform_pipeline.py`/`pyproject.toml`,
+`tpcore/tests/test_engine_lifecycle_consistency.py`,
+`ops/engine_sdlc/planner.py`,
+`tpcore/tests/test_engine_sdlc_planner.py`) and a FORBIDDEN list that
+includes the 8 data-lane files (`tpcore/calendar.py`, `tpcore/risk/`,
+`tpcore/risk/governor.py`, `ops/engine_supervisor.py`,
+`ops/engine_service.py`, `ops/engine_ladder.py`,
+`tpcore/supervisor_state.py`, `tpcore/trade_monitor.py`) AND the
+data-SDLC spec/checklist/registry (`tpcore/providers.py`,
+`tpcore/feeds/`, `tpcore/selfheal/`,
+`docs/superpowers/specs/2026-05-17-data-provider-lifecycle-design.md`,
+`docs/superpowers/checklists/data_feed_change_request.md`). The SP3
+carry-forwards are only *recorded* (§13.2, already in this spec) and
+their non-fix is the H-S4-10(e) assertion. *Enforced at:* Tn — the
+SP4 scope-gate test is GREEN (full diff confined to the allowlist; no
+forbidden prefix) and the H-S4-10(e) "carry-forwards unchanged" clause
+is GREEN.
+
+### 14.3 Final ordered T0–Tn TDD task decomposition
+
+TDD-correct sequencing: the renderer (T1) + fences (T2) land before
+the `--check` gate (T3), before the no-redundancy fold + reverse-leg
+(T4), and before the SP3 executor migration (T5). The doc tasks
+(T6–T8) are independent of the manifest core but the "docs match
+code" gate (T8) lands after the doc content exists. The two scope/
+suite gates are last (Tn). Every task is individually CI-green; the
+pinning test ships in the same task as its behavior.
+
+- **T0 — spec + expert-harden + plan (this).** *Files:* this spec
+  (§14 filled). *Behavior:* the H-S4-\* register + decomposition +
+  DDF-1 fix recorded. *Pin:* spec self-review (placeholder scan /
+  internal consistency / scope / ambiguity) clean; this commit.
+
+- **T1 — the pure renderer + generator skeleton.** *Create:*
+  `scripts/gen_engine_manifest.py` exposing the pure
+  `render_region(file_text, region, roster, archived) -> str` /
+  `render_all(file_text, file_kind, roster, archived) -> str` (NO
+  filesystem I/O, NO journal), the fence parser
+  (matched-pair-or-raise `ManifestFenceError`), and a `--write`
+  (default) / `--check` argparse CLI shell (the `--check` body wired
+  in T3 — T1 ships `--write` working + `--check` returning a
+  not-yet-fenced no-op-clean for files with no fences so T1 is
+  CI-green standalone). Imports `from tpcore.engine_profile import
+  roster_for_dispatch, archived_engines` + stdlib ONLY. *Create test:*
+  `scripts/tests/test_gen_engine_manifest_render.py` (collision stanza
+  H-S4-9). *Pin (H-S4-1/2/4):* `test_renderer_is_pure_no_filesystem_io`
+  (grep the module: no `open(`/`.write_text`/`.write_bytes`/`os.write`
+  outside the explicit `--write` CLI function which is the ONE
+  intentional writer; assert `render_*` functions touch no fs — call
+  with a string, assert pure return), `test_unmatched_sentinel_raises`,
+  `test_duplicate_sentinel_raises`, `test_missing_close_sentinel_raises`,
+  `test_text_outside_fence_is_never_touched`,
+  `test_generator_imports_no_engine`.
+
+- **T2 — sentinel-fence the four shadows + migrate the SP3
+  synthetic-tree builder (DDF-1).** *Modify:* `scripts/run_smoke_test.sh`
+  (fence the step-3 `for engine in` loop + the line 7-8 docstring
+  listing), `scripts/run_all_engines.sh` (fence the "Engines
+  dispatched: …" line), `ops/platform_pipeline.py` (fence the
+  docstring engine listing), `pyproject.toml` (re-express the
+  `include` array multi-line; fence the engine `testpaths` rows + the
+  engine `include` globs — `"tpcore*"` + trailing comment stay
+  outside, H-S4-6); **and `tpcore/tests/test_engine_sdlc_planner.py::
+  _make_synthetic_engine_tree`** — re-express the `throwaway`-shadow
+  injection against the fenced form (DDF-1: the simplest correct
+  form is to compute the synthetic shadows by calling the T1 renderer
+  with a `roster + ("throwaway",)` argument rather than `str.replace`
+  on now-stale literals). *Behavior:* the committed shadows carry the
+  fences with the SoT-correct content; the generator round-trips them
+  byte-identical; the SP3 synthetic tree still builds a green
+  pre-REMOVE tree. *Pin (H-S4-3/6 + DDF-1):*
+  `test_generator_is_idempotent`, `test_check_clean_after_write` (per
+  file), `test_smoke_sh_still_parses` (`bash -n`),
+  `test_run_all_engines_sh_still_parses`,
+  `test_pyproject_still_valid_toml` (`tomllib.loads` + parsed
+  testpaths/include == SoT), `test_platform_pipeline_docstring_still_
+  valid` (`ast.get_docstring` non-None + contains the roster line),
+  **AND `pytest tpcore/tests/test_engine_sdlc_planner.py -q` GREEN**
+  (the DDF-1 cross-task regression caught inside T2), plus the
+  existing `test_structurally_parseable_shadows_match_sot` /
+  `test_retired_engine_absent_from_structural_shadows` still GREEN
+  (leg 6 not yet folded — T4 owns that; T2 keeps it passing against
+  the fenced-but-equivalent content).
+
+- **T3 — the `--check` CI-divergence gate + the in-sync test.**
+  *Modify:* `scripts/gen_engine_manifest.py` (`--check`: regenerate
+  every fenced region in memory, diff vs on-disk, exit 0 iff every
+  region byte-identical, else non-zero + unified diff naming the
+  file/region; expose a pure `divergences() -> str | None` for the
+  T4 in-process delegation). *Create:* `scripts/tests/
+  test_engine_manifest_in_sync.py` (collision stanza H-S4-9; invokes
+  the generator as a **subprocess** `--check`, asserts rc 0). *Pin
+  (H-S4-5/9):* `test_check_clean_on_committed_tree` (subprocess
+  `--check` rc 0 on the real repo), `test_hand_edit_in_fence_fails_
+  check`, `test_hand_edit_out_of_fence_passes_check`,
+  `test_collision_preemption_stanza_present`.
+
+- **T4 — fold clockwork leg 6 (no-redundancy §10.5) + close the
+  reverse `roster ⊆ ENGINE_TABLES` leg (§10.4).** *Modify:*
+  `tpcore/tests/test_engine_lifecycle_consistency.py` — replace leg
+  6's body with a one-line delegation to the generator's **in-process
+  pure** `divergences()` (assert it returns `None`, message = the
+  diff); extend leg 5
+  (`test_engine_tables_keys_are_known_engines`) / add a sibling with
+  the grounded reverse predicate `set(roster_for_dispatch()) <=
+  (set(ENGINE_TABLES) - {"allocator"})`; **delete the SP1 deferred
+  comment lines 112-113**. Legs 1–5/7–11 bodies unchanged. *Pin
+  (H-S4-7/8):* `test_leg6_fails_on_roster_drift` (fixtured drift →
+  RED with file/region named), `test_leg6_green_on_clean_tree`,
+  `test_clockwork_imports_no_ops`, the new reverse-leg test GREEN
+  today + RED on a synthetic missing-`ENGINE_TABLES`-row fixture, and
+  full `pytest tpcore/tests/test_engine_lifecycle_consistency.py -q`
+  GREEN (legs 1–5/7–11 unregressed).
+
+- **T5 — migrate the SP3 executor's inline shadow edits to the ONE
+  renderer (atomicity-preserving, H-S4-1).** *Modify:*
+  `ops/engine_sdlc/planner.py` — `_shadow_edit_remove`,
+  `_maybe_rewrite_frozen_literal`, and the `_apply_add` `_PROFILE`/
+  shadow insert recompute the new file text via the T1 renderer
+  (`render_all`/`render_region`) *instead of* the inline
+  `re.sub`/`str.replace`; the journal+write+rollback ordering is
+  **byte-for-byte unchanged** (`jn.record_file(p)` BEFORE write; write
+  the renderer's returned text; rollback restores the recorded OLD
+  bytes). The renderer is NEVER given a path and NEVER writes. *Pin
+  (H-S4-1 — the make-or-break task):* the FULL SP3 atomicity suite
+  stays GREEN —
+  `test_apply_red_consistency_rolls_back_to_byte_identical`,
+  `test_apply_mid_move_loop_failure_byte_identical`,
+  `test_apply_modify_edits_default_const_and_rolls_back_byte_identical`,
+  `test_add_red_consistency_rolls_back_to_byte_identical`,
+  `test_add_readiness_miss_rolls_back_to_byte_identical`,
+  `test_apply_move_failure_restores_text_edits`,
+  `test_remove_rostered_engine_updates_frozen_literal`,
+  `test_remove_throwaway_engine_end_to_end` — re-run as the T5 gate;
+  plus a new `test_planner_shadow_edit_uses_renderer_not_inline_regex`
+  (assert `_shadow_edit_remove` calls the renderer; assert the renderer
+  is import-clean of engines) and `test_renderer_never_called_with_a_
+  path` (the renderer signature is `str → str`; a guard test that it
+  has no `Path`/`open` in its body). Full
+  `pytest tpcore/tests/test_engine_sdlc_planner.py
+  tpcore/tests/test_engine_lifecycle_consistency.py -q` GREEN.
+
+- **T6 — doc-closure: `CLAUDE.md` (§11.1).** *Modify:* `CLAUDE.md` —
+  Architecture/Conventions: the Engine SDLC entry (LAB→PAPER→LIVE→
+  RETIRED, `tpcore.engine_profile` SoT, all five PAPER, the
+  `sigma`(RETIRED)/`lab`(LAB) sentinels); Session Rules: the canonical
+  `python -m ops.engine_sdlc --ecr <file>` / `python -m ops.lab …`
+  commands + the "ECR/Lab only, never hand-edit `_PROFILE`/shadows"
+  rule; the engine-build shortlist cross-ref to `engine_readiness.md`
+  + the `scripts/gen_engine_manifest.py` generated-manifest discipline;
+  the accuracy guard ("all five engines currently FAIL the DSR/
+  credibility gate"). *Pin:* content lands; validated by T8's gate
+  (clauses b/c/d) — T6 alone is CI-green (no test added here; doc
+  edit only, lane-confined).
+
+- **T7 — doc-closure: `docs/OPERATIONS.md` (§11.2 + the stale
+  search-script reframe, H-S4-11).** *Modify:* `docs/OPERATIONS.md` —
+  new "Engine SDLC" section (ECR workflow, ADD/REMOVE y/n vs MODIFY/
+  promote automated, snap-out → archive/EULOGY, the clockwork, the
+  manifest gate); the Lab runbook (`python -m ops.lab` args, the
+  `docs/lab/…` + `.json` sidecar, recommendation-only / never
+  daemon-wired / isolation); re-role (NOT delete) the lines
+  713/719/738/755-757 `search_parameters.py`-as-prod framing — `python
+  -m ops.lab` is the canonical entrypoint, `search_parameters.py` the
+  underlying walk-forward harness it wraps; `ls`-verify the named
+  `run_*_search.sh` scripts before describing them. *Pin:* content
+  lands; validated by T8's gate (the OPERATIONS.md clause); T7 alone
+  CI-green.
+
+- **T8 — doc-closure: `engine_readiness.md` + `docs/glossary.md` +
+  the "docs match code" gate (H-S4-10).** *Modify:*
+  `docs/superpowers/checklists/engine_readiness.md` (header note: this
+  IS the ADD-path build gate §8; a `new_scaffold` ADD machine-checks
+  the `planner._check_readiness` subset — scaffold dir, `tests/`,
+  importable `.scheduler`, exactly 5 `BaseEnginePlug` subclasses —
+  the rest operator-verified; bidirectional cross-link to the SDLC
+  spec + the ECR checklist; mark items "enforced by the ECR" vs
+  "operator-verified" accurately to the shipped `_check_readiness`),
+  `docs/glossary.md` (the 8 engine-domain terms §11.4, symmetric in
+  form to the existing Data-lane entries). *Create:* `scripts/tests/
+  test_sdlc_docs_match_code.py` (collision stanza H-S4-9) — the
+  lightweight code-accuracy gate per H-S4-10 clauses (a)–(e),
+  validating T6/T7/T8 content against the shipped modules. *Pin
+  (H-S4-10):* the gate test GREEN — entrypoints import-resolve,
+  documented lifecycle states == `LifecycleState`, the documented
+  roster line == `roster_for_dispatch()`, the CLAUDE.md FAIL-the-gate
+  honesty substring present, OPERATIONS.md contains both `python -m
+  ops.lab` and the re-roled `search_parameters.py`, the SP3
+  carry-forwards (a)/(b) provably unchanged
+  (`set(planner._ENGINE_DEFAULT_CONSTS) == {"reversion"}`;
+  `type(want)(v)` line still present).
+
+- **Tn — SP4 scope-confinement gate + full-suite + CI-exact
+  ruff/check_imports + finish-branch (H-S4-12).** *Create:*
+  `scripts/tests/test_sp4_scope_confined.py` (reuse the proven SP3 T9
+  read-only `git diff --name-only` pattern; SP4's own allowlist +
+  the data-lane/data-SDLC FORBIDDEN list per H-S4-12; collision
+  stanza if it imports `ops`; skip-not-fail on no base ref). *Pin:*
+  the SP4 scope-gate GREEN (the full SP4 diff confined to the
+  allowlist, zero forbidden prefix); full `pytest -q` GREEN;
+  CI-exact `ruff check .` clean; `check_imports` (tpcore∌engine)
+  clean (the generator imports no engine — H-S4-4); the spec
+  known-limitations still match shipped code (the H-S4-10(e) clause);
+  `finishing-a-development-branch` (single CI-green-mergeable branch
+  to `main`).
 
 ---
 
