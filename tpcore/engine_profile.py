@@ -45,6 +45,8 @@ class LifecycleState(StrEnum):
 _DISPATCHABLE: frozenset[LifecycleState] = frozenset(
     {LifecycleState.PAPER, LifecycleState.LIVE})
 
+_ALLOCATOR_ENGINE = "allocator"  # the one structurally-separate engine (its own _dispatch_allocator path, D-SDLC1-4)
+
 
 class EngineProfile(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -84,12 +86,13 @@ def profile_for(engine: str) -> EngineProfile | None:
     return _PROFILE.get(engine)
 
 
-def _roster_sorted(profiles: dict[str, EngineProfile]) -> list[EngineProfile]:
+def _roster_sorted(profiles: dict[str, EngineProfile] | None = None) -> list[EngineProfile]:
     """Non-RETIRED, non-allocator profiles sorted by dispatch_order.
     Raises ValueError on a duplicate dispatch_order among them — the
     sort key MUST be total (ROSTER binds at import before tests run)."""
+    profiles = profiles if profiles is not None else _PROFILE
     live = [p for p in profiles.values()
-            if p.lifecycle_state in _DISPATCHABLE and p.engine != "allocator"]
+            if p.lifecycle_state in _DISPATCHABLE and p.engine != _ALLOCATOR_ENGINE]
     orders = [p.dispatch_order for p in live]
     if len(set(orders)) != len(orders):
         raise ValueError(f"duplicate dispatch_order among dispatchable engines: {orders}")
@@ -99,13 +102,13 @@ def _roster_sorted(profiles: dict[str, EngineProfile]) -> list[EngineProfile]:
 def roster_for_dispatch() -> tuple[str, ...]:
     """Engines dispatched in the ROSTER loop: PAPER/LIVE, non-allocator,
     ordered by dispatch_order. The authority for ops.engine_dispatch.ROSTER."""
-    return tuple(p.engine for p in _roster_sorted(_PROFILE))
+    return tuple(p.engine for p in _roster_sorted())
 
 
 def allocator_eligible_engines() -> tuple[str, ...]:
     """Inverse-vol-pool engines (allocator_eligible), ordered by dispatch_order.
     Replaces the hand-typed allocator `engines=` default."""
-    return tuple(p.engine for p in _roster_sorted(_PROFILE) if p.allocator_eligible)
+    return tuple(p.engine for p in _roster_sorted() if p.allocator_eligible)
 
 
 def archived_engines() -> tuple[str, ...]:
