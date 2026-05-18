@@ -20,17 +20,15 @@ import structlog
 
 from tpcore.risk.governor import (
     InMemoryRiskStateStore,
-    RiskGovernor,
     RiskState,
 )
 from tpcore.risk.persistent_store import PostgresRiskStateStore
-
 
 # ─── Fake asyncpg pool modelling the two tables + ON CONFLICT ────────────
 
 
 class _FakeConn:
-    def __init__(self, store: "_FakePool") -> None:
+    def __init__(self, store: _FakePool) -> None:
         self._store = store
         self._in_txn = False
 
