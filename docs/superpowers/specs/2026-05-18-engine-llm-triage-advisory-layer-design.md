@@ -1,15 +1,56 @@
 # Engine-Lane LLM Triage Advisory Layer (Engine Ladder R5 / Epic E) — Design **v1 (expert-hardened)**
 
-**Status:** spec **v1.1 (expert-hardened + parity-scoped)** 2026-05-18
-(ENGINE lane). Brainstorm-by-investigation (integration contract
+**Status:** BUILT 2026-05-18 (ENGINE lane). Spec **v1.1
+(expert-hardened + parity-scoped)** 2026-05-18.
+Brainstorm-by-investigation (integration contract
 locked, read-not-guessed) → spec (draft) → expert-harden (FORK A &
 FORK B resolved, §7 novelty premise FIXED after found structurally
 broken) → **operator parity-scope directive folded in (v1.1: §1
 coverage-parity, §7a deterministic detection-gap + Phase 0, §9/§10/§11
-updated)** → operator spec-review gate → plan → phased subagent build.
-Engine Escalation & Hardening Ladder **R5** (`docs/ENGINE_ESCALATION_
-HARDENING_LADDER.md`, currently "LLM/agentic triage: OUT of scope
-(Epic E)").
+updated)** → operator spec-review gate → plan → phased subagent build
+(P0–P4 merged). Engine Escalation & Hardening Ladder **R5**
+(`docs/ENGINE_ESCALATION_HARDENING_LADDER.md` — now "LLM/agentic
+triage: BUILT 2026-05-18 (Epic E)").
+
+**Build record:**
+- spec + plan (PR #64): Epic E spec v1.1 (this doc, §7a frozen-scope,
+  FORK B = B1, the vetoes/envelope) + phased implementation plan.
+- P0 (PR #65): deterministic detection-gap closure (NO LLM,
+  prerequisite, landed first) — `ops/engine_service` `_emit_escalated`
+  for the frozen `engine_service_task_crashloop` /
+  `engine_service_digest_failed` platform-service classes (new
+  `PLATFORM_SERVICE_FAILURE_CLASSES` frozenset) + their
+  `DISPOSITION_POLICIES` rows in the same change (R2
+  `escalation_drift()` forcing function); engine Ladder R1 doc updated.
+  The silent-absence detectors (a/b/c) deferred as a tracked
+  deterministic follow-up (#243), explicitly NOT the LLM's job.
+- P1 (PR #66): safety skeleton — engine-native
+  `tpcore/engine_llm_triage/{select,packet,fence}` that **import the
+  shipped pure `tpcore/llm_data_triage/{fence,canary}` verbatim** (no
+  package extraction/rename — out of scope per FORK A a-deferred;
+  provenance baseline = `engine_ladder.DISPOSITION_POLICIES` injected
+  by arg) + `docs/engine_llm_triage_persona.md` + `PERSONA_VERSION`
+  lockstep. Landed dark (no LLM).
+- P2 (PR #67): the agent `ops/engine_llm_triage.py` reusing the shipped
+  `ops.llm_data_triage` Anthropic-call / no-key / malformed-envelope
+  wrapper verbatim + `ENGINE_LLM_TRIAGE_PROPOSAL` emit + import-isolation
+  clockwork guard; client **mocked** in CI. Landed dark.
+- P3 (PR #69): wire event-driven (FORK B = B1) — second crash-isolated
+  `_run_supervised` co-task inside the existing
+  `ops/llm_triage_service.py` polling `ENGINE_ESCALATED`
+  (`test_two_daemon_invariant.py` passes with **zero edits** —
+  installer/launchd label/4-token whitelist unchanged); label-gated
+  credential-starved `engine-llm-triage-fence` CI job in `ci.yml`;
+  engine weekly-digest proposal surfacing via
+  `engine_ladder._attach_llm_proposals`.
+- P4 (this PR): docs — engine Ladder R5 OUT→BUILT (R1–R4 convention);
+  CLAUDE.md engine-lane bullet + daemon-roster reconcile; the shared
+  `docs/llm_data_triage_operator_runbook.md` extended (one runbook,
+  both lanes); this status + build record; memory
+  `project_engine_llm_triage_ownership` → BUILT. Tracked non-blocking
+  follow-ups: #243 (deferred deterministic silent-absence detectors),
+  #244 (cosmetic lane-neutral rename of the shared pure package — never
+  on this spec's critical path).
 
 **Ownership:** the engine-lane symmetric agent was never started
 (deferred Epic E); ownership was transferred to the data-lane session
