@@ -4,6 +4,21 @@ Pre-merge checklist for any new engine (or substantial change to an existing one
 
 Template: copy `tpcore/templates/engine_template/` as the starting point — it satisfies most of these by construction.
 
+> **This checklist IS the Engine SDLC ADD-path build gate (spec §8 —
+> `docs/superpowers/specs/2026-05-18-engine-sdlc-design.md`).** A
+> `new_scaffold` ADD filed via the Engine Change Request
+> (`docs/superpowers/checklists/engine_change_request.md` →
+> `python -m ops.engine_sdlc --ecr <file>`) **machine-checks the
+> programmatically-checkable subset** in
+> `ops.engine_sdlc.planner._check_readiness`: the scaffold dir
+> (`<engine>/`) exists, `<engine>/tests/` exists, `<engine>.scheduler`
+> is importable, and exactly **5 `BaseEnginePlug` subclasses** are
+> present in `<engine>/plugs/`. Every other item below is
+> **operator-verified before filing the ECR** (the ECR does not and
+> cannot machine-check human-judgement readiness). Items marked
+> *(ECR-enforced)* are checked by `_check_readiness`; all others are
+> *(operator-verified)*.
+
 ## 1. Five Plugs present
 
 - [ ] `<engine_name>/plugs/setup_detection.py` — scans universe, returns `PhaseAssessment`s.
@@ -11,7 +26,7 @@ Template: copy `tpcore/templates/engine_template/` as the starting point — it 
 - [ ] `<engine_name>/plugs/execution_risk.py` — sizing + Alpaca order payload construction.
 - [ ] `<engine_name>/plugs/aar_logging.py` — builds + logs `AfterActionReport`s.
 - [ ] `<engine_name>/plugs/capital_gate.py` — per-trade cap + daily loss freeze + graduation gate.
-- [ ] Every plug subclasses `tpcore.interfaces.engine_plug.BaseEnginePlug` and implements both `validate_dependencies` and `healthcheck`.
+- [ ] Every plug subclasses `tpcore.interfaces.engine_plug.BaseEnginePlug` and implements both `validate_dependencies` and `healthcheck`. *(ECR-enforced: exactly 5 BaseEnginePlug subclasses in <engine>/plugs/)*
 
 ## 2. Shared tpcore reuse (no duplication)
 
@@ -48,7 +63,7 @@ Template: copy `tpcore/templates/engine_template/` as the starting point — it 
 
 ## 6. Tests
 
-- [ ] `<engine_name>/tests/test_setup_detection.py` — happy path + each gate's reject branch.
+- [ ] `<engine_name>/tests/test_setup_detection.py` — happy path + each gate's reject branch. *(ECR-enforced: <engine>/tests/ dir exists)*
 - [ ] `<engine_name>/tests/test_execution_risk.py` — payload shape + SizingError on bad price + qty-below-min skip.
 - [ ] `<engine_name>/tests/test_order_manager.py` — submit_decision happy path, governor-block path, reconcile idempotence (calling twice doesn't double-log AARs).
 - [ ] `<engine_name>/tests/test_capital_gate.py` — daily-loss freeze, position-count cap, oversize reject, graduation rubric.
@@ -57,7 +72,7 @@ Template: copy `tpcore/templates/engine_template/` as the starting point — it 
 
 ## 7. Scheduler + daemon integration
 
-- [ ] `<engine_name>/scheduler.py` exposes a `run_once` (or analogous) async entry point.
+- [ ] `<engine_name>/scheduler.py` exposes a `run_once` (or analogous) async entry point. *(ECR-enforced: <engine>.scheduler importable)*
 - [ ] Engine is dispatched by `ops/engine_service.py` on the `DAILY_SCAN_COMPLETE` trigger. **Not** called from `scripts/run_data_operations.sh` — data ops and engine execution are decoupled.
 - [ ] Idempotent: re-running `run_once` within the same session doesn't duplicate orders (relies on `(engine, trade_id, order_type)` unique constraint on `platform.open_orders`).
 - [ ] Engine appears in the per-engine scheduler-dry-run loop in `scripts/run_smoke_test.sh` (step 3). One-line `for engine in ... <engine_name>; do` addition — operator must not need to remember a separate smoke command.
@@ -184,3 +199,15 @@ Reference implementations:
 Template:
 
 - `tpcore/templates/engine_template/` — copy-paste-start scaffold.
+
+## SDLC cross-reference
+
+This checklist is the ADD-path build gate of the Engine SDLC. See:
+
+- `docs/superpowers/specs/2026-05-18-engine-sdlc-design.md` — the
+  canonical Engine SDLC spec (§8 names this checklist the ADD build
+  gate).
+- `docs/superpowers/checklists/engine_change_request.md` — the
+  structured ECR touchpoint; `python -m ops.engine_sdlc --ecr <file>`
+  machine-checks the `planner._check_readiness` subset of this
+  checklist, the rest is operator-verified before filing.

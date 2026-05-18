@@ -109,27 +109,34 @@ def test_engine_tables_keys_are_known_engines():
     allowed = set(roster_for_dispatch()) | {"allocator"}
     assert set(ENGINE_TABLES) <= allowed, (
         f"ENGINE_TABLES keys not in the live roster: {set(ENGINE_TABLES) - allowed}")
-    # SP4 will also assert the reverse (roster_for_dispatch() ⊆ ENGINE_TABLES) — a live engine
-    # with no data-dep entry. Deferred per spec H-B6/§4 (ENGINE_TABLES is a documented seam in SP1).
+    # SP4 §10.4 / H-S4-8: the closed reverse — every live PAPER/LIVE
+    # roster engine MUST have an ENGINE_TABLES data-dep row. Grounded
+    # against the shipped ENGINE_TABLES keys ({reversion, vector,
+    # momentum, sentinel, allocator, canary}); allocator is excluded
+    # from the roster (its own _dispatch_allocator path) so it is
+    # subtracted here. A live engine with no row is a silent un-gated
+    # half-state (the _required_sources fail-safe would mask it).
+    missing = set(roster_for_dispatch()) - (set(ENGINE_TABLES) - {"allocator"})
+    assert not missing, (
+        f"live roster engines with NO ENGINE_TABLES data-dep row "
+        f"(silent un-gated engines): {missing}")
 
 
 def test_structurally_parseable_shadows_match_sot():
-    """Structural-shadow files (run_smoke_test.sh, pyproject.toml) must stay in sync with the SoT roster."""
-    live = set(roster_for_dispatch())
-    # scripts/run_smoke_test.sh step-3 loop
-    smoke = (REPO / "scripts" / "run_smoke_test.sh").read_text()
-    m = re.search(r"for engine in ([^\n;]+);\s*do", smoke)
-    assert m, "could not find the run_smoke_test.sh step-3 engine loop"
-    assert set(m.group(1).split()) == live, (
-        f"run_smoke_test.sh engine loop {set(m.group(1).split())} != SoT {live}")
-    # pyproject testpaths engine dirs + packages.find.include globs
-    pp = tomllib.loads((REPO / "pyproject.toml").read_text())
-    testpaths = set(pp["tool"]["pytest"]["ini_options"]["testpaths"])
-    for e in live:
-        assert f"{e}/tests" in testpaths, f"{e}/tests missing from pyproject testpaths"
-    includes = pp["tool"]["setuptools"]["packages"]["find"]["include"]
-    for e in live:
-        assert f"{e}*" in includes, f"{e}* missing from packages.find.include"
+    """Folded SP4 §10.5: leg 6 is no longer an independent parsed-roster
+    assertion (that would be a SECOND shadow mechanism that can disagree
+    with the generator's byte-identity verdict). It delegates to the
+    generator's PURE in-process regenerate-and-diff (one mechanism). The
+    clockwork stays the structure/lifecycle oracle; the generator is the
+    sole shadow-shape/bytes oracle; zero overlap."""
+    import sys
+    sys.path.insert(0, str(REPO))
+    from scripts.gen_engine_manifest import divergences
+    diff = divergences(REPO)
+    assert diff is None, (
+        f"engine shadow-manifest DRIFT — a roster/SoT change did not "
+        f"regenerate the non-Python shadows. Run "
+        f"`python scripts/gen_engine_manifest.py` and commit:\n{diff}")
 
 
 def test_lab_sentinel_is_not_wired():
@@ -218,3 +225,117 @@ def test_retired_engine_not_importable_as_live():
         assert spec is None, (
             f"{name}: RETIRED but {name}.scheduler still importable — "
             f"the package was not moved to archive/")
+
+
+# ─── SP4 T4: leg-6 fold → one generator mechanism + closed reverse leg ───
+
+
+def test_leg6_green_on_clean_tree():
+    """The folded leg 6 (manifest-delegation) passes on the committed
+    repo (the shadows are in sync — same diagnostic surface as the old
+    parsed assertion, one mechanism)."""
+    import sys
+    sys.path.insert(0, str(REPO))
+    from scripts.gen_engine_manifest import divergences
+    assert divergences(REPO) is None
+
+
+def test_leg6_fails_on_roster_drift(tmp_path):
+    """H-S4-7: a drifted shadow in a staged tree makes the delegated
+    in-process divergences() return a diff naming the file/region.
+
+    Roster-agnostic drift injection (APPROVED deviation from the plan's
+    hardcoded literal): the plan's literal
+    ``"for engine in reversion vector momentum sentinel canary; do"``
+    is a SILENT no-op the moment the smoke loop's roster changes or in
+    a fence-augmented staged tree (the regex below matches the
+    SoT-generated body regardless of the current roster), so the drift
+    is guaranteed to actually mutate the file — keeps the leg
+    NON-VACUOUS."""
+    import re as _re
+    import shutil
+    import sys
+    staged = tmp_path / "tree"
+    shutil.copytree(
+        REPO, staged,
+        ignore=shutil.ignore_patterns(
+            ".git", ".venv", "__pycache__", "backtests"))
+    smoke = staged / "scripts" / "run_smoke_test.sh"
+    txt = smoke.read_text()
+    drifted = _re.sub(
+        r"for engine in [^\n;]+;\s*do",
+        "for engine in reversion vector; do", txt)
+    assert drifted != txt, (
+        "drift injection was a no-op — the test would be vacuous")
+    smoke.write_text(drifted)
+    sys.path.insert(0, str(REPO))
+    from scripts.gen_engine_manifest import divergences
+    diff = divergences(staged)
+    assert diff is not None, "drift not detected by the folded leg 6"
+    assert "run_smoke_test.sh" in diff
+
+
+def test_clockwork_imports_no_ops():
+    """H-S4-7 / H-S4-9: the folded leg-6 delegation imports the
+    generator's PURE in-process divergences() (tpcore.engine_profile +
+    stdlib only) — exercising it pulls in NO ops.* (no subprocess-in-
+    subprocess + scripts/ops.py collision surface).
+
+    H-S4-9 deviation from the plan's literal in-process global-
+    sys.modules snapshot (APPROVED — non-vacuous + zero global side
+    effect): the plan's body either (a) false-REDs on an UNRELATED
+    earlier test's scripts/ops.py pollution, or (b) needs a global
+    ``del sys.modules[...]`` eviction which is itself a collection-
+    order side effect that perturbs other tests' (pre-existing,
+    fragile) isolation — empirically the SP2 oracle's _FakePool
+    monkeypatch leak. A PRISTINE subprocess is strictly more faithful
+    to H-S4-7's "in-process pure, no ops import": a fresh interpreter
+    has zero collection-order pollution AND this test mutates no
+    shared state. The subprocess does EXACTLY the folded-leg-6 import
+    and reports any non-package ``ops`` it pulled (non-vacuous: if
+    gen_engine_manifest imported ops, ``bad`` would be non-empty)."""
+    import json
+    import subprocess
+    import sys
+    probe = (
+        "import sys, json\n"
+        f"sys.path.insert(0, {str(REPO)!r})\n"
+        "from scripts.gen_engine_manifest import divergences\n"
+        "bad=[m for m in sys.modules "
+        "if m=='ops' or m.startswith('ops.')]\n"
+        "bad=[m for m in bad "
+        "if not hasattr(sys.modules[m],'__path__')]\n"
+        "print(json.dumps(bad))\n"
+    )
+    proc = subprocess.run(  # noqa: S603 — fixed argv, no shell
+        [sys.executable, "-c", probe],
+        cwd=str(REPO), capture_output=True, text=True, check=True)
+    bad = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert bad == [], (
+        f"the folded leg-6 delegation pulled a non-package ops into "
+        f"sys.modules: {bad}")
+
+
+def test_live_engine_has_engine_tables_row():
+    """H-S4-8: the closed reverse leg — every live PAPER/LIVE roster
+    engine MUST have an ENGINE_TABLES data-dep row (a live engine with
+    no row is a silent un-gated half-state). Grounded predicate (the
+    shipped ENGINE_TABLES keys are exactly {reversion, vector,
+    momentum, sentinel, allocator, canary}; allocator is excluded from
+    the roster but legitimately keyed via its own _dispatch_allocator
+    path, so it is subtracted on the reverse side)."""
+    missing = set(roster_for_dispatch()) - (set(ENGINE_TABLES) - {"allocator"})
+    assert not missing, (
+        f"live roster engines with NO ENGINE_TABLES data-dep row "
+        f"(silent un-gated engines): {missing}")
+
+
+def test_reverse_engine_tables_leg_catches_a_missing_row(tmp_path):
+    """H-S4-8: a synthetic roster with an engine absent from
+    ENGINE_TABLES trips the reverse predicate (proves the leg is a
+    real detector, not a tautology)."""
+    synthetic_roster = set(roster_for_dispatch()) | {"phantomengine"}
+    missing = synthetic_roster - (set(ENGINE_TABLES) - {"allocator"})
+    assert missing == {"phantomengine"}, (
+        "the reverse predicate must flag a roster engine that has no "
+        "ENGINE_TABLES row")

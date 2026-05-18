@@ -38,6 +38,32 @@ def _resolve_sp3_base() -> str:
             return mb.stdout.strip()
     pytest.skip("no SP3 base ref (origin/main / main) in this checkout")
 
+
+# An unambiguously SP3-introduced path that is also inside the SP3
+# allow-list (`ops/engine_sdlc/`). If this file is present in the
+# RESOLVED BASE TREE then SP3 has already merged into the base, the
+# SP3-introduced surface is IN the base (not in `git diff base...HEAD`),
+# and the "diff ⊆ SP3 allow-list" assertion is moot/historical — the
+# gate already did its one-shot PR-review job. NOT a blanket skip: it
+# only fires when SP3 is provably merged into the base; on a real
+# un-merged SP3 branch this path is ABSENT from the base, the predicate
+# is False, and the non-vacuous assertion below runs unchanged.
+_SP3_SIGNATURE_PATH = "ops/engine_sdlc/planner.py"
+
+
+def _sp3_already_merged_into_base(base: str) -> bool:
+    """True iff the SP3-signature path exists in the resolved base
+    tree — i.e. SP3 is already merged into the base, so the scope-
+    confinement gate is historical (it correctly passed when SP3 was
+    the branch-under-review; it must NOT false-RED on every post-SP3
+    branch whose diff vs the now-SP3-inclusive base is unrelated SP4
+    surface)."""
+    return subprocess.run(  # noqa: S603 — read-only object existence probe
+        ["git", "cat-file", "-e", f"{base}:{_SP3_SIGNATURE_PATH}"],
+        cwd=REPO, capture_output=True, text=True
+    ).returncode == 0
+
+
 # SP4 / data-lane files SP3 must NEVER touch (spec §1.1, H-S3-10c).
 _FORBIDDEN_PREFIXES = (
     "CLAUDE.md",
@@ -79,6 +105,12 @@ _ALLOWED_PREFIXES = (
 
 def test_sp3_change_set_confined_to_net_new_surface():
     base = _resolve_sp3_base()
+    if _sp3_already_merged_into_base(base):
+        pytest.skip(
+            "SP3 merged into base; scope-confinement gate is "
+            "historical/N-A (one-shot PR-review gate — it correctly "
+            "passed on the SP3 branch-under-review; post-merge the "
+            "SP3 surface is in the base, not the diff)")
     names = subprocess.run(  # noqa: S603 — read-only name-only diff
         ["git", "diff", "--name-only", base, "HEAD"],
         cwd=REPO, capture_output=True, text=True, check=True
