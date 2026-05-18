@@ -10,6 +10,7 @@ from tpcore.engine_profile import (
     Cadence,
     EngineProfile,
     FireDecision,
+    LifecycleState,
     _cadence_boundary,
     _cadence_window_start,
     profile_for,
@@ -187,12 +188,10 @@ async def test_should_fire_proceeds_when_not_held():
 
 
 def test_lifecycle_state_enum_values():
-    from tpcore.engine_profile import LifecycleState
     assert {s.value for s in LifecycleState} == {"lab", "paper", "live", "retired"}
 
 
 def test_profile_has_new_fields_all_seven_entries():
-    from tpcore.engine_profile import LifecycleState
     # all 5 live engines + allocator are PAPER; sigma is RETIRED
     expected = {
         "allocator": (0, LifecycleState.PAPER, False),
@@ -212,7 +211,6 @@ def test_profile_has_new_fields_all_seven_entries():
 
 
 def test_profile_for_sigma_returns_retired_profile():
-    from tpcore.engine_profile import LifecycleState
     p = profile_for("sigma")
     assert p is not None and p.lifecycle_state is LifecycleState.RETIRED
 

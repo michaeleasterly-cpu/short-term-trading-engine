@@ -41,6 +41,7 @@ class LifecycleState(StrEnum):
     RETIRED = "retired"  # snap-out complete; archive/EULOGY exists; never dispatched
 
 
+# Dispatchable states. Consumed by roster_for_dispatch() (T2) and the should_fire lifecycle guard (T3).
 _DISPATCHABLE: frozenset[LifecycleState] = frozenset(
     {LifecycleState.PAPER, LifecycleState.LIVE})
 
@@ -49,9 +50,9 @@ class EngineProfile(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     engine: str
     cadence: Cadence
-    market_closed_required: bool = True
     dispatch_order: int
     lifecycle_state: LifecycleState
+    market_closed_required: bool = True
     allocator_eligible: bool = False
 
 
@@ -72,8 +73,7 @@ _PROFILE: dict[str, EngineProfile] = {
     # allocator: separate _dispatch_allocator path (NOT in the ROSTER loop, D-SDLC1-4).
     "allocator": EngineProfile(engine="allocator", cadence=Cadence.WEEKLY_FIRST_TRADING_DAY,
                                dispatch_order=0, lifecycle_state=LifecycleState.PAPER),
-    # sigma RETIRED (data-SDLC RETIRED symmetry); dispatch_order/cadence inert
-    # (filtered out of every dispatch/allocator accessor by construction, D-SDLC1-6).
+    # sigma RETIRED (data-SDLC RETIRED symmetry, D-SDLC1-2). cadence/dispatch_order are arbitrary inert placeholders — RETIRED engines are filtered out of every dispatch/allocator accessor (T2) so these values are never consumed (D-SDLC1-6).
     "sigma":     EngineProfile(engine="sigma", cadence=Cadence.DAILY,
                                dispatch_order=99, lifecycle_state=LifecycleState.RETIRED),
 }
