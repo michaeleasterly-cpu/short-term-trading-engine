@@ -1397,7 +1397,7 @@ Production edge-discovery runs are driven by `scripts/search_parameters.py`. Ran
 with (re-role: the canonical on-demand edge-hunt is now `python -m ops.lab`; `search_parameters.py` is re-described as the *underlying* harness — NOT deleted, H-S4-11):
 
 ```
-The canonical on-demand edge-hunt entrypoint is now **`python -m ops.lab`** (§5.4a — isolated, recommendation-only, ECR-gated). `scripts/search_parameters.py` remains the *underlying* walk-forward harness the Lab wraps — NOT the operator entrypoint. Random search + walk-forward + final held-back DSR verdict; imports each engine's `load_*_window_context()` / `run_*_with_context()` programmatically — no subprocess; per-window data load is shared across all candidates. The direct invocation below is the lower-level harness; prefer `python -m ops.lab` for an operator edge-hunt.
+The canonical on-demand edge-hunt entrypoint is now **`python -m ops.lab`** (§5.4a — isolated, recommendation-only, ECR-gated). `ops.lab.run` hosts the walk-forward Lab engine; `scripts/search_parameters.py` is a thin re-export shim delegating to it (re-roled, NOT deleted) — NOT the operator entrypoint. Random search + walk-forward + final held-back DSR verdict; imports each engine's `load_*_window_context()` / `run_*_with_context()` programmatically — no subprocess; per-window data load is shared across all candidates. The direct invocation below is the lower-level harness; prefer `python -m ops.lab` for an operator edge-hunt.
 ```
 
 Replace line 755–757 (the convenience-wrappers list) — the H-S4-11 `ls`-verified reality is that `run_sigma_search.sh` does NOT exist. Replace:

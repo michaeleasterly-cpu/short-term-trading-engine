@@ -809,7 +809,7 @@ DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python -u scripts/search_parameters.
   --output backtests/momentum_search_results.csv
 ```
 
-- `--engine`: `sigma | reversion | vector | momentum`.
+- `--engine`: `reversion | vector | momentum`.
 - `--trials`: total parameter combinations pre-sampled (default 200; 50 is the practical sweet spot — DSR multiple-testing correction is friendlier at smaller N).
 - `--per-window-trials`: how many of the pre-sampled combos to evaluate per walk-forward window. Setting `--per-window-trials = --trials` makes every candidate run in every window → clean OOS averaging.
 - `--universe-tier-max`: pull tickers with tier ≤ N from `platform.liquidity_tiers`. Typical: 2 for T1+T2 (~1,281 names). Omit to use each engine's built-in default universe (~50 mega-caps).

@@ -648,8 +648,9 @@ tasks (planned later).
   framing** flagged in the SP2 holistic (OPERATIONS.md currently
   references `scripts/run_*_search.sh` / `scripts/replay_history.py`
   as the parameter-search path — reframe: the canonical on-demand
-  edge-hunt is now `python -m ops.lab`; `scripts/search_parameters.py`
-  remains the *underlying* walk-forward engine the Lab wraps, NOT the
+  edge-hunt is now `python -m ops.lab`; `ops.lab.run` hosts the
+  walk-forward engine and `scripts/search_parameters.py` is a thin
+  re-export shim delegating to it (re-roled, NOT deleted), NOT the
   operator entrypoint). Keep accurate: do not delete the search
   scripts' description if they still exist — reframe their role.
 - Accuracy guard: verify the daemon/Railway sections are not
