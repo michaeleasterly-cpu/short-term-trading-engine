@@ -1041,9 +1041,15 @@ pre-empt the `scripts/ops.py`↔`ops` sys.modules collision.** *Risk:*
 resolve the wrong `ops` — the exact bug that bit SP2-T9/T10/SP3.
 *Mitigation:* the canonical eviction stanza already proven at
 `scripts/tests/test_lab_cli_entrypoint.py:25-31` is copied verbatim
-into every SP4 test module under `scripts/tests/` that imports `ops.*`
-(the new `test_engine_manifest_in_sync.py` and the SP4 scope-gate
-test): insert `REPO_ROOT` on `sys.path`, then evict any
+into every SP4 test module under `scripts/tests/` that resolves
+`ops.*`/the generator package at collection time
+(`test_engine_manifest_in_sync.py`, `test_gen_engine_manifest_render.py`,
+`test_sdlc_docs_match_code.py`); the pure SP4 scope-gate test
+`test_sp4_scope_confined.py` is stdlib+subprocess only (it mirrors
+`test_sp3_scope_confined.py`'s exact stanza-free import shape and never
+imports `ops.*`), so per this hazard's own "IF it imports ops"
+rationale it deliberately carries NO stanza: insert `REPO_ROOT` on
+`sys.path`, then evict any
 `sys.modules["ops"|"ops.*"]` lacking `__path__`. The generator itself
 is under `scripts/` and imports only `tpcore.*` (never `ops`), so it
 is collision-immune by construction; the manifest test invokes it as a
