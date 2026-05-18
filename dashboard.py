@@ -31,12 +31,17 @@ import streamlit as st
 # Reuse existing tip-sheet query helpers + broker adapter — same data layer,
 # same shape. Dashboard adds zero new business logic.
 from dashboard_components.charts import render_ticker_chart
+from dashboard_components.escalation import (
+    classify_cross_table_audit,
+    classify_recent_escalations,
+    classify_source_holds,
+    classify_undispositioned,
+)
 from dashboard_components.health import (
     classify_bars,
     classify_catalyst,
     classify_corp_actions,
     classify_coverage_gaps,
-    classify_cross_ref,
     classify_daemons,
     classify_forensics,
     classify_fundamentals,
@@ -697,79 +702,25 @@ async def _fetch_platform_health() -> dict:
         }
 
     async def _q_cross_ref() -> list[dict]:
-        """One row per cross-reference / structural check. Surfaces the
-        same findings as ``scripts/audit_all_tables.py`` so the operator
-        sees full data-layer integrity in the dashboard."""
-        checks: list[tuple[str, str, str]] = [
-            (
-                "ticker_not_in_prices",
-                "earnings_events",
-                """SELECT COUNT(*) FROM platform.earnings_events ce
-                   LEFT JOIN platform.prices_daily_tickers p
-                     ON p.ticker = ce.ticker
-                   WHERE p.ticker IS NULL""",
-            ),
-            (
-                "ticker_not_in_prices",
-                "corporate_actions",
-                """SELECT COUNT(*) FROM platform.corporate_actions ca
-                   LEFT JOIN platform.prices_daily_tickers p
-                     ON p.ticker = ca.ticker
-                   WHERE p.ticker IS NULL""",
-            ),
-            (
-                "ticker_not_in_prices",
-                "fundamentals_quarterly",
-                """SELECT COUNT(*) FROM platform.fundamentals_quarterly fq
-                   LEFT JOIN platform.prices_daily_tickers p
-                     ON p.ticker = fq.ticker
-                   WHERE p.ticker IS NULL""",
-            ),
-            (
-                "ticker_not_in_prices",
-                "liquidity_tiers",
-                """SELECT COUNT(*) FROM platform.liquidity_tiers lt
-                   LEFT JOIN platform.prices_daily_tickers p
-                     ON p.ticker = lt.ticker
-                   WHERE p.ticker IS NULL""",
-            ),
-            (
-                "ticker_not_in_prices",
-                "universe_candidates",
-                """SELECT COUNT(*) FROM platform.universe_candidates uc
-                   LEFT JOIN platform.prices_daily_tickers p
-                     ON p.ticker = uc.ticker
-                   WHERE p.ticker IS NULL""",
-            ),
-            (
-                "expired",
-                "tradier_options_chains",
-                "SELECT COUNT(*) FROM platform.tradier_options_chains WHERE expiration_date < CURRENT_DATE",
-            ),
-            (
-                "ticker_not_in_prices",
-                "tradier_options_chains",
-                """SELECT COUNT(*) FROM platform.tradier_options_chains tc
-                   LEFT JOIN platform.prices_daily_tickers p
-                     ON p.ticker = tc.ticker
-                   WHERE p.ticker IS NULL""",
-            ),
-            (
-                "stale_30d",
-                "liquidity_tiers",
-                "SELECT COUNT(*) FROM platform.liquidity_tiers WHERE last_updated < now() - INTERVAL '30 days'",
-            ),
-        ]
+        """Latest cross_table_audit.* per source — the auditheal-
+        persisted SoT (replaces the pre-session inline COUNT checks
+        that drifted from tpcore/audit/cross_table.py)."""
         async with pool.acquire() as conn:
-            findings: list[dict] = []
-            for check_name, table_name, sql in checks:
-                n = await conn.fetchval(sql)
-                findings.append({
-                    "check": check_name,
-                    "table": table_name,
-                    "count": int(n or 0),
-                })
-        return findings
+            rows = await conn.fetch(
+                """
+                WITH latest AS (
+                    SELECT source, MAX(timestamp) AS t
+                    FROM platform.data_quality_log
+                    WHERE source LIKE 'cross_table_audit.%'
+                    GROUP BY source
+                )
+                SELECT q.source, q.stale, q.confidence
+                FROM platform.data_quality_log q
+                JOIN latest l ON l.source = q.source AND l.t = q.timestamp
+                ORDER BY q.source
+                """
+            )
+        return [dict(r) for r in rows]
 
     async def _q_validation() -> list[dict]:
         # Show ONLY the latest run per source. A 7-day aggregate would
@@ -2164,6 +2115,88 @@ def _fetch_platform_health_cached() -> dict:
     return h
 
 
+async def _fetch_escalation_state() -> dict:
+    """Read-only escalation/integrity SoT for the audit panel. REUSES
+    ops.weekly_digest.build_weekly_digest for the policy-annotated
+    undispositioned list (console & weekly digest cannot disagree);
+    the rest are small reads of the rows the platform already gates
+    on. Recomputes no predicate."""
+    from ops.weekly_digest import build_weekly_digest
+
+    pool = await build_asyncpg_pool(_db_url(), max_size=4)
+    try:
+        digest = await build_weekly_digest(pool)
+        async with pool.acquire() as conn:
+            holds = await conn.fetch(
+                """
+                SELECT h.data->>'source' AS source,
+                       h.data->>'reason'  AS reason,
+                       h.recorded_at      AS held_at
+                FROM platform.application_log h
+                LEFT JOIN platform.application_log c
+                  ON c.event_type = 'DATA_SOURCE_CLEARED'
+                 AND (c.data->>'hold_id') = (h.data->>'hold_id')
+                WHERE h.event_type = 'DATA_SOURCE_HELD'
+                  AND c.event_type IS NULL
+                ORDER BY h.recorded_at
+                """
+            )
+            ct = await conn.fetch(
+                """
+                WITH latest AS (
+                    SELECT source, MAX(timestamp) AS t
+                    FROM platform.data_quality_log
+                    WHERE source LIKE 'cross_table_audit.%'
+                    GROUP BY source
+                )
+                SELECT q.source, q.stale, q.confidence
+                FROM platform.data_quality_log q
+                JOIN latest l ON l.source=q.source AND l.t=q.timestamp
+                ORDER BY q.source
+                """
+            )
+            esc = await conn.fetch(
+                """
+                SELECT e.data->>'request_id' AS ref,
+                       'DATA_REPAIR_ESCALATED' AS etype,
+                       e.recorded_at, e.message,
+                       EXISTS (
+                         SELECT 1 FROM platform.application_log t
+                         WHERE t.event_type='DATA_REPAIR_COMPLETE'
+                           AND t.data->>'request_id'=e.data->>'request_id'
+                           AND t.recorded_at > e.recorded_at) AS resolved
+                FROM platform.application_log e
+                WHERE e.event_type='DATA_REPAIR_ESCALATED'
+                  AND e.recorded_at > now() - interval '7 days'
+                UNION ALL
+                SELECT e.data->>'feed' AS ref,
+                       'AdapterContractDrift' AS etype,
+                       e.recorded_at, e.message,
+                       false AS resolved
+                FROM platform.application_log e
+                WHERE e.event_type='INGESTION_FAILED'
+                  AND e.data->>'exception_type'='AdapterContractDrift'
+                  AND e.recorded_at > now() - interval '7 days'
+                ORDER BY recorded_at DESC
+                """
+            )
+    finally:
+        await pool.close()
+    return {
+        "undispositioned": list(digest.undispositioned),
+        "source_holds": [dict(r) for r in holds],
+        "cross_table_audit": [dict(r) for r in ct],
+        "recent_escalations": [dict(r) for r in esc],
+    }
+
+
+@st.cache_data(ttl=180, show_spinner=False)
+def _fetch_escalation_state_cached() -> dict:
+    """Sync cache wrapper (same idiom/TTL as
+    _fetch_platform_health_cached)."""
+    return run_async(_fetch_escalation_state())
+
+
 def render_daemon_progress() -> None:
     """Stage-by-stage progress of the most recent data_operations daemon run.
 
@@ -2465,7 +2498,7 @@ def render_platform_health() -> None:
     # Validation failures aren't one-click fixable (data quality is a
     # symptom, not a switch). Show the roll-up without a Fix button.
     # Cross-table integrity (was scripts/audit_all_tables.sh — now inline)
-    cr_color, cr_summary, cr_detail = classify_cross_ref(h["cross_ref"])
+    cr_color, cr_summary, cr_detail = classify_cross_table_audit(h["cross_ref"])
     _render_health_row(
         "Cross-table integrity",
         cr_color,
@@ -2543,6 +2576,43 @@ async def _mark_forensics_resolved(trigger_id: int) -> None:
             )
     finally:
         await pool.close()
+
+
+def render_escalation_audit() -> None:
+    """Escalation & integrity audit — the console's view of the
+    Escalation & Hardening Ladder (rung-1/3) + Data Supervisor +
+    auditheal layer. Read-only render of existing SoT (#189)."""
+    hl, hr = st.columns([6, 1])
+    hl.subheader("Escalation & data-integrity audit")
+    if hr.button("↻ Refresh", help="Force-refresh (clears the 3-min cache)",
+                 key="esc_force_refresh"):
+        _fetch_escalation_state_cached.clear()
+        st.rerun()
+    try:
+        e = _fetch_escalation_state_cached()
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"Could not fetch escalation state: {exc}")
+        return
+
+    for label, key, rows, fn, detail_title in (
+        ("Source holds (Data Supervisor)", "src_holds",
+         e["source_holds"], classify_source_holds, "Held sources"),
+        ("Undispositioned escalations (rung-3)", "undisp",
+         e["undispositioned"], classify_undispositioned,
+         "Undispositioned — disposition each"),
+        ("Cross-table audit (auditheal)", "ct_audit",
+         e["cross_table_audit"], classify_cross_table_audit,
+         "Per cross-table check"),
+        ("Recent escalations (7d)", "recent_esc",
+         e["recent_escalations"], classify_recent_escalations,
+         "Recent escalations"),
+    ):
+        c, s, d = fn(rows)
+        _render_health_row(label, c, s, row_key=key)
+        if c != "green" and d:
+            with st.expander(detail_title, expanded=(c == "red")):
+                for dl, dc, dt in d:
+                    _render_health_row(dl, dc, dt)
 
 
 def render_tip_sheet() -> None:
@@ -3219,6 +3289,8 @@ def main():
 
     with tab_health:
         render_platform_health()
+        st.divider()
+        render_escalation_audit()
 
     with tab_trading:
         selected_ticker = render_holdings()
