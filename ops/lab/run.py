@@ -756,14 +756,12 @@ async def _run_lab_core(
         finally:
             await persist_pool.close()
 
-    print(f"  Trade count        : {held_metrics.n_trades}")
-    print(f"  Sharpe (held-back) : {held_metrics.sharpe:+.3f}")
-    print(f"  Profit factor      : {held_metrics.profit_factor:+.3f}")
-    print(f"  Max drawdown       : {held_metrics.max_drawdown*100:+.2f}%")
-    print(f"  Credibility (full) : {final_result.credibility_score}/100")
-    print(f"  DSR (n_trials={args.trials:>3}): {dsr:.4f}")
-    print()
-
+    # The 6-line held-back metrics block is rendered EXACTLY ONCE by the
+    # caller that owns presentation: the legacy operator path prints it in
+    # ``amain``; the CLI path (``run_lab`` → ``_build_lab_result``) carries
+    # it in the written dossier instead. ``_run_lab_core`` (the shared
+    # spine) intentionally prints nothing here — printing it here too
+    # would double-print on the legacy path (T10 review #1).
     survived = (
         dsr >= args.dsr_threshold
         and final_result.credibility_score >= args.credibility_threshold
@@ -785,12 +783,16 @@ async def _run_lab_core(
 async def amain(args: argparse.Namespace, candidate: str | None = None) -> int:
     """Walk-forward search + final held-back verdict — prints the human
     report and returns the int rc (0 SURVIVED / 1 FAILED / 2 setup
-    error). Behaviour is byte-identical to the pre-T10 ``amain``: the
-    structured spine is computed once by :func:`_run_lab_core` (no
-    duplicated walk-forward); this function only renders the verdict
-    block and maps it to the historical exit code (T1 oracle pins
-    ``amain(args, candidate) -> int`` + the ``write_credibility_score``
-    call args). ``candidate`` is the H-S2-3 Lab-namespacing seam.
+    error). Behaviour matches the pre-T10 ``amain``: the rc and the
+    ``write_credibility_score`` call args are preserved exactly (T1
+    oracle pins ``amain(args, candidate) -> int`` + the credibility call
+    args). The structured spine is computed once by :func:`_run_lab_core`
+    (no duplicated walk-forward); the 6-line held-back metrics block is
+    printed once HERE (the pre-T10 single print is preserved — the spine
+    no longer prints it, so the legacy operator path is stdout-faithful
+    to pre-T10, not double-printed). This function then renders the
+    verdict block and maps it to the historical exit code. ``candidate``
+    is the H-S2-3 Lab-namespacing seam.
     """
     core = await _run_lab_core(args, candidate)
     if isinstance(core, int):
@@ -828,9 +830,18 @@ def _build_lab_result(
     T1–T9), so ``param_diff`` honestly carries the winning value with
     ``current=None`` (unknown — there is no engine-default seam to read).
     """
+    # LabResult.credibility_rubric is non-optional (spec §7). _LabCore
+    # carries it as Any | None; if a run produced none, raise the clean
+    # RuntimeError run_lab already maps to an explicit CLI rc1 rather
+    # than letting pydantic raise an unhandled ValidationError here.
+    if core.credibility_rubric is None:
+        raise RuntimeError(
+            "Lab run produced no credibility rubric — cannot build a LabResult"
+        )
     verdict = "SURVIVED" if core.survived else "FAILED"
     recommended_exit = candidate.intent if core.survived else "none"
     param_diff = [
+        # TODO(SP3): current=None until a per-engine default_params() accessor exists (spec O1, deferred from SP2 — see docstring).
         ParamDelta(name=k, current=None, winning=v)
         for k, v in sorted(core.winner_params.items())
     ]

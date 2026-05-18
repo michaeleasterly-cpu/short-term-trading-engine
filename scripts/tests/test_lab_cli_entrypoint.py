@@ -23,6 +23,12 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
+# Evict a non-package ``ops`` (scripts/ops.py) cached by an earlier test in
+# full-suite collection order, so ``import ops.lab.__main__`` resolves the
+# package — the scripts/ops.py vs ops/ collision that bit SP2-T9.
+for _m in [m for m in list(sys.modules) if m == "ops" or m.startswith("ops.")]:
+    if not hasattr(sys.modules[_m], "__path__"):
+        del sys.modules[_m]
 
 MAIN_PY = REPO_ROOT / "ops" / "lab" / "__main__.py"
 

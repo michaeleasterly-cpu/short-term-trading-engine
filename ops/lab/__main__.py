@@ -116,7 +116,7 @@ def _run_args(ns: argparse.Namespace, dsn: str) -> argparse.Namespace:
     )
 
 
-async def _amain(argv: list[str] | None = None) -> int:
+async def _amain(argv: list[str]) -> int:
     ns = _parse_args(argv)
 
     # Build + validate the candidate FIRST — a bad name (path traversal,
