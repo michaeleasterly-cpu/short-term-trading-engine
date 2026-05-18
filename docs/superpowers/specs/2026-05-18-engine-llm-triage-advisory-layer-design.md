@@ -320,6 +320,24 @@ Net: deterministic detection feeds the Ladder (Phase 0); the LLM
 triages the novel/undispositioned subset of the **now-complete**
 surface (Phases 1–4) — true symmetry with the data lane.
 
+### §7a — Phase-0 scope FROZEN (plan Task 0.1 expert sub-pass, code-grounded; build to this verbatim)
+
+| Decision | Frozen value |
+|---|---|
+| Class 1 (Task 0.2) | `engine_service_task_crashloop` — covers any co-hosted `_run_supervised` task (`sweep`, `monitor`) |
+| Class 2 (Task 0.3) | `engine_service_digest_failed` — swallowed weekly-digest failure path |
+| Class set | new `PLATFORM_SERVICE_FAILURE_CLASSES` frozenset in `ops/engine_supervisor.py`; `engine_ladder.KNOWN_ESCALATION_CLASSES = INFRA_FAILURE_CLASSES \| PLATFORM_SERVICE_FAILURE_CLASSES \| {_BEHAVIORAL}`. NOT added to `INFRA_FAILURE_CLASSES` (keeps `_auto_clear` correctly inert — these have no per-engine cycle/clearer) |
+| Crash-loop budget | **3 crashes within a rolling 600s window**, per-task `deque` of crash timestamps in `_run_supervised`, emit once per crossing, reset `escalated` flag when the deque empties (recovered task that re-loops re-escalates) |
+| `hold_id` | `"engsvc-" + hashlib.sha256(f"{failure_class}\|{task_name}".encode()).hexdigest()[:16]` — deterministic, stable per fault identity (NOT uuid4 — required for §7 prior-proposal dedup + Ladder open-set anti-join) |
+| `engine` column | `f"engine_service:{task_name}"` (e.g. `engine_service:sweep`, `engine_service:weekly_digest`) — human-legible Ladder/digest line |
+| Emit mechanism | reuse `ops.engine_supervisor._emit_escalated(pool, engine, hold_id, failure_class, reason, attempts)` **verbatim** (acyclic import; payload/`_INSERT_SQL` byte-parity). **Escalate-only — NO paired `_emit_held`** (no per-engine hold lifecycle/clearer; an empty-`triggers` escalate-only row is permanently open in `list_undispositioned` until R3 disposition — exactly the desired surface). Wrap the emit in `try/except Exception: logger.error` so an emit DB failure cannot defeat the "one crashed co-task must never kill its sibling" invariant |
+| Digest path | `_maybe_fire_weekly_digest` (`ops/engine_service.py` ~L101–121), BOTH the `except` and `else rc!=0` branches; success (`rc==0`) emits nothing; function already structurally never raises — keep it so |
+| Detectors IN | (0.2) crash-loop emitter; (0.3) digest-failure emitter — the only two with a crisp non-flaky deterministic predicate today |
+| Detectors DEFERRED (follow-up) | (a) no-sweep-in-N-windows, (b) no-trade-updates-while-market-open, (c) digest-key-stalled — each lacks a non-flaky deterministic predicate now (false-positive on a live trading daemon has real cost); when built they live in new `engine_supervisor._detect_*` (DA-1 is the detector home; `engine_service` stays a thin co-host). Record as a tracked follow-up. |
+| Disposition (both) | `EngineEscalationDisposition.STRUCTURAL` (identical semantics to `scheduler_crash`/`missed_cycle`); add `DISPOSITION_POLICIES` rows in the SAME PR (R2 `escalation_drift()` forces it) |
+| Plumbing | add `pool` param to `_run_supervised` (2 call sites in `_amain`, both hold `pool`) and to `_maybe_fire_weekly_digest` (2 call sites in `_main_loop`, both hold `pool`). Additive, no behavior change. No cycle (`engine_supervisor` does not import `ops.engine_service`). |
+| Fatal objection | NONE. Pool headroom (`POOL_MAX_SIZE=6`) absorbs the rare bounded emit. |
+
 ## 8. One canonical mechanism — invocation (**FORK B — RESOLVED: B1**)
 
 The data lane shipped a dedicated advisory daemon
