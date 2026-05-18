@@ -711,3 +711,132 @@ def test_leak_guard_fails_loud_on_nonzero_git(monkeypatch) -> None:
     with pytest.raises(RuntimeError,
                        match="host-repo leak guard could not run git"):
         _host_llm_triage_branches()
+
+
+# ── (#244) published shared-SDK surface — clockwork contract guard ──────
+#
+# The engine lane reuses the SHIPPED #187 `ops.llm_data_triage` SDK/PR
+# wrapper. Spec decision (Epic E §3 FORK-A pt 4 / follow-up #244): it
+# consumes ONLY a PUBLIC re-export surface, never the underscore privates
+# (the original `_AuthSkip`/`_MODEL`/`_MAX_TOKENS`/`_scrubbed_env`/
+# `_default_pr_runner` spelunking was a rename foot-gun). These guards
+# convert that into an ENFORCED contract: a regression to private
+# spelunking, or a broken (non-identity) alias, fails the build LOUD.
+
+
+_PUBLIC_SURFACE = (
+    # public name -> the shipped private it must be an identity alias of
+    ("AuthSkip", "_AuthSkip"),
+    ("ANTHROPIC_MODEL", "_MODEL"),
+    ("ANTHROPIC_MAX_TOKENS", "_MAX_TOKENS"),
+    ("scrubbed_env", "_scrubbed_env"),
+    ("default_pr_runner", "_default_pr_runner"),
+)
+
+
+def test_public_surface_is_identity_preserving_alias() -> None:
+    """Each published public name is bound to the EXACT SAME object as
+    the shipped private (object identity — `is`), so the engine lane's
+    `except _AuthSkip` / `_MODEL` reuse keeps matching the shipped
+    objects byte-for-byte. A duplicated/re-authored value (alias drift)
+    fails here."""
+    from ops import llm_data_triage as ldt
+
+    for pub, priv in _PUBLIC_SURFACE:
+        assert hasattr(ldt, pub), (
+            f"published #244 public name {pub!r} missing from "
+            "ops.llm_data_triage — the shared-SDK contract is broken")
+        assert getattr(ldt, pub) is getattr(ldt, priv), (
+            f"public {pub!r} is NOT the same object as private {priv!r} "
+            "— alias drift (value duplicated instead of aliased); the "
+            "engine lane's object-identity reuse breaks silently")
+        assert pub in ldt.__all__, (
+            f"{pub!r} missing from ops.llm_data_triage.__all__ — the "
+            "published shared-SDK surface must be in __all__")
+
+
+def _data_lane_private_attr_accesses(path: str) -> list[str]:
+    """Every ``<name>.<_underscore_attr>`` access in `path` where
+    ``<name>`` resolves to the shipped data-lane wrapper — i.e. the
+    `_shipped()` accessor result (or a var assigned from it). Returns the
+    list of private attribute names spelunked (empty == compliant)."""
+    import ast
+
+    tree = ast.parse(pathlib.Path(path).read_text())
+
+    # Names that hold the data-lane module: the `_shipped()` call result
+    # and any local bound directly to it (e.g. `m = _shipped()`).
+    shipped_bound: set[str] = set()
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Assign)
+                and isinstance(node.value, ast.Call)
+                and isinstance(node.value.func, ast.Name)
+                and node.value.func.id == "_shipped"):
+            for tgt in node.targets:
+                if isinstance(tgt, ast.Name):
+                    shipped_bound.add(tgt.id)
+
+    leaks: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Attribute):
+            continue
+        if not node.attr.startswith("_"):
+            continue
+        val = node.value
+        # `_shipped()._private` (Attribute on a direct Call to _shipped)
+        is_direct_call = (
+            isinstance(val, ast.Call)
+            and isinstance(val.func, ast.Name)
+            and val.func.id == "_shipped")
+        # `m._private` where `m = _shipped()`
+        is_bound_var = (
+            isinstance(val, ast.Name) and val.id in shipped_bound)
+        if is_direct_call or is_bound_var:
+            leaks.append(node.attr)
+    return leaks
+
+
+def test_engine_lane_consumes_only_public_surface() -> None:
+    """CLOCKWORK GUARD (#244): `ops/engine_llm_triage.py` accesses NO
+    underscore-prefixed attribute on the shipped `ops.llm_data_triage`
+    wrapper (reached via `_shipped()`). The engine lane must consume the
+    PUBLIC re-export surface ONLY — private spelunking is a rename
+    foot-gun (a future `ops.llm_data_triage` private rename would
+    silently require an `ops/engine_llm_triage` change). If this bites,
+    re-point the engine reference at the published public alias."""
+    leaks = _data_lane_private_attr_accesses(
+        str(_HOST_REPO_ROOT / "ops" / "engine_llm_triage.py"))
+    assert leaks == [], (
+        "engine lane spelunks ops.llm_data_triage PRIVATE symbol(s) "
+        f"{sorted(set(leaks))} — use the published public shared-SDK "
+        "surface (#244): "
+        + ", ".join(f"{priv}->{pub}" for pub, priv in _PUBLIC_SURFACE))
+
+
+def test_private_spelunk_guard_actually_bites(tmp_path) -> None:
+    """Prove the clockwork guard is NOT vacuous: a synthetic module that
+    spelunks a data-lane private (both the direct-call and the
+    bound-var form) IS flagged, while consuming only the public surface
+    is NOT."""
+    rogue = tmp_path / "rogue.py"
+    rogue.write_text(
+        "def _shipped():\n"
+        "    from ops import llm_data_triage\n"
+        "    return llm_data_triage\n"
+        "def f():\n"
+        "    a = _shipped()._AuthSkip\n"
+        "    m = _shipped()\n"
+        "    return a, m._MODEL\n")
+    leaks = _data_lane_private_attr_accesses(str(rogue))
+    assert "_AuthSkip" in leaks and "_MODEL" in leaks
+
+    clean = tmp_path / "clean.py"
+    clean.write_text(
+        "def _shipped():\n"
+        "    from ops import llm_data_triage\n"
+        "    return llm_data_triage\n"
+        "def f():\n"
+        "    a = _shipped().AuthSkip\n"
+        "    m = _shipped()\n"
+        "    return a, m.ANTHROPIC_MODEL\n")
+    assert _data_lane_private_attr_accesses(str(clean)) == []

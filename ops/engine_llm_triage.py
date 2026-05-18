@@ -99,11 +99,13 @@ def _default_pr_runner(
     cwd: str | None = None,
 ) -> tuple[int, str, str]:
     """The default `pr_runner` — delegates VERBATIM to the SHIPPED
-    `ops.llm_data_triage._default_pr_runner` (resolved lazily so the
-    kwarg default binds at def-time without binding `sys.modules['ops']`
-    under the test shadow). Tests inject a fake instead; this is never
-    exercised in CI."""
-    return _shipped()._default_pr_runner(argv, env=env, cwd=cwd)
+    `ops.llm_data_triage.default_pr_runner` (the published #244 public
+    shared-SDK surface — an identity-preserving alias of the shipped
+    private object; resolved lazily so the kwarg default binds at
+    def-time without binding `sys.modules['ops']` under the test
+    shadow). Tests inject a fake instead; this is never exercised in
+    CI."""
+    return _shipped().default_pr_runner(argv, env=env, cwd=cwd)
 
 logger = structlog.get_logger(__name__)
 
@@ -257,9 +259,11 @@ async def _open_draft_pr(
         dossier_path.write_text(dossier, encoding="utf-8")
 
         # Read-only local gate INSIDE the worktree with a fresh,
-        # credential-STARVED allowlist env (the SHIPPED _scrubbed_env —
-        # never os.environ.copy()).
-        gate_env = _shipped()._scrubbed_env()
+        # credential-STARVED allowlist env (the SHIPPED scrubbed_env —
+        # the published #244 public shared-SDK surface, an identity-
+        # preserving alias of the shipped private; never
+        # os.environ.copy()).
+        gate_env = _shipped().scrubbed_env()
         for gate_cmd in (
             [sys.executable, "-m", "pytest", "-q"],
             ["ruff", "check", "."],
@@ -351,17 +355,21 @@ async def run_triage(
             logger.info("engine_llm_triage.no_novel_escalations")
             return out
 
-        # Resolve the SHIPPED #187 wrapper symbols VERBATIM (lazy — only
-        # once we are actually triaging, so module-load never binds
-        # sys.modules['ops']). `_AuthSkip` is the SAME class object as
-        # `ops.llm_data_triage._AuthSkip` (the shipped sentinel — NOT a
-        # redefinition), so the `except _AuthSkip` below matches the
-        # exact shipped class; `_MODEL`/`_MAX_TOKENS` are the shipped
-        # pins (Task 2.1: never re-pin an engine-local constant).
+        # Resolve the SHIPPED #187 wrapper symbols VERBATIM via the
+        # published #244 public shared-SDK surface (lazy — only once we
+        # are actually triaging, so module-load never binds
+        # sys.modules['ops']). `AuthSkip` is an identity-preserving alias
+        # bound to the SAME class object as `ops.llm_data_triage._AuthSkip`
+        # (the shipped sentinel — NOT a redefinition), so the
+        # `except _AuthSkip` below matches the exact shipped class;
+        # `ANTHROPIC_MODEL`/`ANTHROPIC_MAX_TOKENS` are the shipped pins
+        # (Task 2.1: never re-pin an engine-local constant). The engine
+        # lane consumes ONLY this public surface — never the underscore
+        # privates (enforced by a clockwork guard test).
         _shipped_mod = _shipped()
-        _AuthSkip = _shipped_mod._AuthSkip
-        _model = _shipped_mod._MODEL
-        _max_tokens = _shipped_mod._MAX_TOKENS
+        _AuthSkip = _shipped_mod.AuthSkip
+        _model = _shipped_mod.ANTHROPIC_MODEL
+        _max_tokens = _shipped_mod.ANTHROPIC_MAX_TOKENS
 
         client = client_factory()
 
