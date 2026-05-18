@@ -613,13 +613,27 @@ class TradeMonitor:
             notes=f"trade_monitor tier1+tier2 close (trade_id={row.trade_id})",
         )
         await self._aar_writer.write_aar(aar)
-        # Bump risk_state. Position closed: position_delta = -1 (the trade,
-        # not the share count).
-        await self._risk_store.record_fill(
-            engine=row.engine,
-            realized_pnl=pnl_gross,
-            position_delta=-1,
-        )
+        # Free the risk_state slot via the idempotent close arbiter
+        # (#251 B1). A scheduler rebalance-sell loop may also record this
+        # same close; both funnel through record_close so the
+        # risk_close_ledger (engine, trade_id) PK ensures the slot
+        # decrements AT MOST once — killing the old dual-decrement
+        # under-drift that monotonically fails the never-fail-open open.
+        # A record_close failure must NOT kill the stream (mirror the
+        # surrounding per-row crash-isolation).
+        try:
+            await self._risk_store.record_close(
+                row.engine,
+                row.trade_id,
+                pnl_gross,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "trade_monitor.record_close_failed",
+                engine=row.engine,
+                trade_id=row.trade_id,
+                error=str(exc)[:300],
+            )
         await self._db_log.log(
             "AAR_WRITTEN",
             f"{row.engine} {row.ticker} pnl={pnl_gross}",

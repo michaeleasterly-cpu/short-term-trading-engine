@@ -479,6 +479,31 @@ class RiskGovernor:
         )
         return updated
 
+    async def record_close(
+        self,
+        engine_id: str,
+        trade_id: str | None,
+        realized_pnl: Decimal = Decimal("0"),
+    ) -> bool:
+        """Route a position-close through the idempotent ledger arbiter.
+
+        The ONLY sanctioned ``-1`` close path (#251 B1) — both the
+        scheduler rebalance-sell loop and the trade-monitor stream funnel
+        here so the same real close decrements ``open_positions`` at most
+        once (``risk_close_ledger`` ``(engine, trade_id)`` PK arbitrates).
+        The ``+1`` open path / ``record_fill`` non-close behaviour is
+        unchanged. Returns ``True`` iff this call applied the decrement.
+        """
+        applied = await self._store.record_close(engine_id, trade_id, realized_pnl)
+        logger.info(
+            "tpcore.risk.close_routed",
+            engine=engine_id,
+            trade_id=trade_id,
+            realized_pnl=str(realized_pnl),
+            applied=applied,
+        )
+        return applied
+
     async def emergency_kill(self, reason: str) -> int:
         """Activate the global kill switch and cancel every open broker order.
 

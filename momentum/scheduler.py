@@ -75,6 +75,7 @@ from tpcore.interfaces.broker import (
     TimeInForce,
 )
 from tpcore.logging import DBLogHandler
+from tpcore.order_ids import build_close_id
 from tpcore.risk.batch_gate import gate_batch_order
 from tpcore.risk.governor import RiskGovernor
 from tpcore.risk.limits_profile import limits_for
@@ -433,15 +434,27 @@ class MomentumScheduler:
                     )
                     continue
                 if side is OrderSide.SELL:
-                    # Realized P&L for batch day-market exits is reconciled
-                    # via the AAR / trade_monitor path; here we only free the
-                    # governor position slot so max_open_positions stays real.
-                    # Do NOT add realized_pnl here (would double-count).
-                    await governor.record_fill(
-                        engine_id="momentum",
-                        realized_pnl=Decimal("0"),
-                        position_delta=-1,
-                    )
+                    # Free the governor slot via the idempotent close
+                    # arbiter (#251 B1). The trade-monitor stream may also
+                    # record this same close; both funnel through
+                    # record_close keyed by the stable per-(engine,ticker,
+                    # rebalance-date) close-id so the risk_close_ledger PK
+                    # ensures the slot decrements AT MOST once — never the
+                    # old dual-decrement under-drift. Realized P&L stays
+                    # 0 here (reconciled via the AAR/trade_monitor path;
+                    # adding it here would double-count). A record_close
+                    # error must NOT abort the rebalance loop.
+                    try:
+                        await governor.record_close(
+                            engine_id="momentum",
+                            trade_id=build_close_id("momentum", order.ticker, as_of),
+                            realized_pnl=Decimal("0"),
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.error(
+                            "momentum.scheduler.record_close_failed",
+                            ticker=order.ticker, error=str(exc)[:200],
+                        )
                 if placed.broker_order_id is not None:
                     submitted.append(placed.broker_order_id)
                 logger.info(

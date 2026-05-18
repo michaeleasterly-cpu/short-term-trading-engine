@@ -94,6 +94,26 @@ def _ts(constructed_at: datetime | None = None) -> int:
     return int((constructed_at or datetime.now(UTC)).timestamp())
 
 
+def build_close_id(engine: str, ticker: str, as_of: object) -> str:
+    """Stable per-close dedupe key for a batch-engine position close.
+
+    Batch engines (momentum/sentinel) submit ONE day-market order per
+    ticker per rebalance and carry no per-trade entry record — so the
+    only identity that is (a) stable and (b) *identically derivable* by
+    BOTH close paths (the scheduler rebalance-sell loop and the
+    trade-monitor stream) for the same real close is
+    ``(engine, ticker, rebalance-date)``. This is the ``trade_id`` fed
+    to ``RiskGovernor.record_close`` so the ``risk_close_ledger``
+    ``(engine, trade_id)`` PK arbitrates a close to AT MOST one
+    decrement (#251 B1). ``as_of`` is the rebalance ``date`` (its
+    ISO ``YYYY-MM-DD`` string is used — deterministic, path-independent).
+    """
+    prefix = ENGINE_PREFIX.get(engine)
+    if prefix is None:
+        raise ValueError(f"unknown engine '{engine}'; expected one of {sorted(ENGINE_PREFIX)}")
+    return f"{prefix}{ticker}_close_{as_of}"
+
+
 def build_cid(
     engine: str,
     ticker: str,

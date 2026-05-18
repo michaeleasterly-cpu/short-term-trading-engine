@@ -109,11 +109,27 @@ class _StubAARWriter:
 class _StubRiskStore:
     def __init__(self) -> None:
         self.fills: list[dict] = []
+        self.closes: list[dict] = []
+        self._seen: set[tuple[str, str]] = set()
 
     async def record_fill(self, *, engine: str, realized_pnl, position_delta: int) -> None:
         self.fills.append(
             {"engine": engine, "realized_pnl": realized_pnl, "position_delta": position_delta}
         )
+
+    async def record_close(self, engine: str, trade_id, realized_pnl) -> bool:
+        # Mirror the real idempotent contract so trade_monitor tests bite:
+        # null trade_id → skip; duplicate (engine,trade_id) → skip.
+        if trade_id is None:
+            return False
+        key = (engine, trade_id)
+        if key in self._seen:
+            return False
+        self._seen.add(key)
+        self.closes.append(
+            {"engine": engine, "trade_id": trade_id, "realized_pnl": realized_pnl}
+        )
+        return True
 
 
 # ─── Fixtures ────────────────────────────────────────────────────────────
@@ -437,7 +453,8 @@ async def test_tier1_fill_for_vector_does_not_submit_tier2() -> None:
 @pytest.mark.asyncio
 async def test_tier2_fill_writes_aar_and_bumps_risk_state() -> None:
     """A Tier 2 fill closes the trade: AAR row written with combined entry/exit,
-    risk_store.record_fill called with position_delta=-1."""
+    risk_store.record_close called once for the closed trade (#251 B1 —
+    the stream close path now funnels through the idempotent arbiter)."""
     tier1_fill_time = datetime(2026, 5, 12, 19, 30, tzinfo=UTC)
     tier1_filled = OpenOrderRow(
         id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
@@ -504,9 +521,11 @@ async def test_tier2_fill_writes_aar_and_bumps_risk_state() -> None:
     # exit fill at 190.50 ≈ take_profit_far (190.00) within 50bps → TAKE_PROFIT.
     assert aar.exit_reason.value == "take_profit"
     assert aar.entry_ts < aar.exit_ts
-    assert len(risk_store.fills) == 1
-    assert risk_store.fills[0]["engine"] == "sigma"
-    assert risk_store.fills[0]["position_delta"] == -1
+    assert risk_store.fills == []  # no longer the raw record_fill(-1) path
+    assert len(risk_store.closes) == 1
+    assert risk_store.closes[0]["engine"] == "sigma"
+    assert risk_store.closes[0]["trade_id"] == "AAPL_1700000000"
+    assert risk_store.closes[0]["realized_pnl"] == Decimal("21.00")
 
 
 @pytest.mark.asyncio

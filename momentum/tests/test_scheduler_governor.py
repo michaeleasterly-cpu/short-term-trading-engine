@@ -87,6 +87,9 @@ class _StubGovernor:
     def __init__(self) -> None:
         self.registered: list[tuple[str, Decimal]] = []
         self.fills: list[tuple[str, Decimal, int]] = []
+        # #251 B1: closes now funnel through the idempotent record_close
+        # arbiter (not raw record_fill(-1)). Spy on (engine, trade_id, pnl).
+        self.closes: list[tuple[str, str, Decimal]] = []
 
     async def register_engine(self, engine_id, engine_equity, limits=None):
         self.registered.append((engine_id, engine_equity))
@@ -96,6 +99,10 @@ class _StubGovernor:
 
     async def record_fill(self, engine_id, realized_pnl, position_delta):
         self.fills.append((engine_id, realized_pnl, position_delta))
+
+    async def record_close(self, engine_id, trade_id, realized_pnl=Decimal("0")):
+        self.closes.append((engine_id, trade_id, realized_pnl))
+        return True
 
     async def check_trade(self, **_kwargs):  # pragma: no cover - patched out
         raise AssertionError("check_trade should go through gate_batch_order")
@@ -258,16 +265,18 @@ async def test_momentum_skips_governor_blocked_name(monkeypatch) -> None:
 
 async def test_momentum_decrements_governor_slot_on_close(monkeypatch) -> None:
     """Each successfully-submitted SELL (a closed prior holding) frees one
-    governor position slot via ``record_fill(position_delta=-1)``.
+    governor slot via the idempotent ``record_close`` arbiter (#251 B1) —
+    NOT the old raw ``record_fill(position_delta=-1)`` dual-decrement path.
 
     ``gate_batch_order`` is stubbed to True so its own ALLOW-side
-    ``record_fill(+1)`` accounting is out of the picture — the ONLY
-    ``record_fill`` calls the spy can see are the new exit-side decrements.
-    The decision yields exactly one SELL (AAA, RebalanceAction.CLOSE) and
-    two BUYs; only AAA must produce a decrement, and it must carry
-    ``realized_pnl == 0`` (P&L is reconciled via the AAR path — adding it
-    here would double-count).
+    accounting is out of the picture. The decision yields exactly one
+    SELL (AAA, RebalanceAction.CLOSE) and two BUYs; only AAA must produce
+    a ``record_close`` call, keyed by the stable per-(engine,ticker,
+    rebalance-date) close-id, with ``realized_pnl == 0`` (P&L is
+    reconciled via the AAR path — adding it here would double-count).
     """
+    from tpcore.order_ids import build_close_id
+
     governor, broker = _patch_scheduler(monkeypatch)
 
     with patch(
@@ -277,12 +286,13 @@ async def test_momentum_decrements_governor_slot_on_close(monkeypatch) -> None:
         sched = MomentumScheduler(submit_orders=True)
         await sched.run_once(as_of=date_t(2026, 5, 14))
 
-    # Exactly one SELL was submitted (AAA) → exactly one decrement.
-    assert governor.fills == [("momentum", Decimal("0"), -1)]
-    # The two BUYs (BBB, CCC) must NOT produce any decrement.
-    assert sum(1 for _e, _p, d in governor.fills if d == -1) == 1
-    # No realized P&L recorded here (double-count guard).
-    assert all(pnl == Decimal("0") for _e, pnl, _d in governor.fills)
+    # No raw record_fill(-1) dual-decrement any more.
+    assert governor.fills == []
+    # Exactly one SELL (AAA) → exactly one record_close, correctly keyed.
+    expected_tid = build_close_id("momentum", "AAA", date_t(2026, 5, 14))
+    assert governor.closes == [("momentum", expected_tid, Decimal("0"))]
+    # The two BUYs (BBB, CCC) must NOT produce any close.
+    assert len(governor.closes) == 1
 
 
 if __name__ == "__main__":  # pragma: no cover
