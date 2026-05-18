@@ -1184,9 +1184,11 @@ async def run_unknown_unknowns(pool, sink: _FindingSink | None = None) -> list[A
     # tables — corporate_actions (event-driven: splits/dividends
     # cluster around ex-div/earnings) and fundamentals_quarterly
     # (quarterly filings) legitimately swing 80%+ week to week. For
-    # those the only real failure is *sustained silence*: zero rows
-    # over 30d while the 90d history shows regular activity = a stalled
-    # ingest. (table, timestamp_col, cadence).
+    # those the only real failures are *sustained silence* or *severe
+    # sustained partial degradation* measured over a 180d cluster-robust
+    # window (see SPORADIC_* constants) — a 180d span cannot fit inside
+    # any inter-cluster off-season, so near-zero activity there vs the
+    # prior 365d cycle is unambiguous. (table, timestamp_col, cadence).
     velocity_targets = [
         ("prices_daily", "date", "daily"),
         ("sec_insider_transactions", "filing_date", "daily"),
