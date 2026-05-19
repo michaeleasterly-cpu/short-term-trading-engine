@@ -100,8 +100,27 @@ _INSERT_SQL = """
 # defect closes ONLY on a durable RESOLVED event — never by omission.
 # The clean defect_ref / fix linkage is read off the typed `data`
 # jsonb, never regex-scraped from the message.
+#
+# Determinism (#254 DR2 code-quality fix): the same defect_ref may be
+# REVIEW_DEFECT_LOGGED more than once (re-logged). Without a dedup +
+# ORDER BY the consumer's first-wins ``if ref in by_ref`` took
+# whichever row Postgres returned first (nondeterministic opened_at /
+# state / fix_ref). Semantics: the EARLIEST LOGGED per defect_ref wins
+# (``DISTINCT ON (defect_ref) … ORDER BY defect_ref, lg.recorded_at,
+# lg.id`` — earliest recorded_at, ``lg.id`` a stable last-resort
+# tiebreak), exactly mirroring the engine Ladder's
+# ``ORDER BY e.recorded_at`` deterministic-set discipline. Keying the
+# anti-join off the EARLIEST LOGGED is the strictly-correct open
+# predicate: the predicate (``∃ RESOLVED at/after this LOGGED``) is
+# monotone in the LOGGED timestamp, so the earliest LOGGED's result is
+# "resolved iff ANY later RESOLVED exists for the ref" — semantics
+# intact, never loosened. A trailing stable ORDER BY is also applied
+# in the consumer (mirroring the final consolidated
+# ``(opened_at, defect_ref)`` sort) so the open-set is deterministic
+# end-to-end even if a row source ever returns out of order.
 _REVIEW_OPEN_SQL = f"""
-    SELECT lg.data->>'defect_ref' AS defect_ref,
+    SELECT DISTINCT ON (lg.data->>'defect_ref')
+           lg.data->>'defect_ref' AS defect_ref,
            lg.data->>'summary'    AS summary,
            lg.data->>'lane'       AS lane,
            lg.data->>'logged_at'  AS logged_at,
@@ -118,6 +137,7 @@ _REVIEW_OPEN_SQL = f"""
               ORDER BY r2.recorded_at DESC LIMIT 1) AS fix_ref
     FROM platform.application_log lg
     WHERE lg.event_type = '{REVIEW_DEFECT_LOGGED}'
+    ORDER BY lg.data->>'defect_ref', lg.recorded_at, lg.id
 """
 
 
@@ -171,14 +191,33 @@ async def resolve_review_defect(pool, *, ref: str, pr: str) -> int:
     return 0
 
 
+def _review_sort_key(row) -> tuple[str, str, str]:
+    """Deterministic per-row order for the review open-set: earliest
+    LOGGED per defect_ref wins, summary a stable last-resort tiebreak.
+    Mirrors the engine Ladder's ``ORDER BY e.recorded_at`` ordered-set
+    discipline AND the final consolidated ``(opened_at, defect_ref)``
+    sort — so the consumer's first-wins ``if ref in by_ref`` is stable
+    even if a row source ever returns duplicate/out-of-order LOGGED
+    rows (the SQL ``DISTINCT ON``/``ORDER BY`` already collapses them
+    against the real DB; this is the symmetric consumer guarantee)."""
+    return (row.get("defect_ref") or "",
+            row.get("logged_at") or "",
+            row.get("summary") or "")
+
+
 async def _review_rows(pool) -> list[dict]:
     """The review-found-defect rows (open + resolved), keyed by
     defect_ref via the anti-join open-predicate. This is the ONE DB
     query the register itself owns — it is NOT an escalation
     re-derivation (escalation state is composed verbatim from the two
-    Ladder APIs and never re-queried here)."""
+    Ladder APIs and never re-queried here).
+
+    Returned in a deterministic order (``_review_sort_key``: earliest
+    LOGGED per defect_ref, then summary) so the consumer's first-wins
+    dedup is stable regardless of row return order."""
     async with pool.acquire() as conn:
-        return list(await conn.fetch(_REVIEW_OPEN_SQL))
+        rows = list(await conn.fetch(_REVIEW_OPEN_SQL))
+    return sorted(rows, key=_review_sort_key)
 
 
 async def consolidated_defects(pool) -> list[DefectRow]:
