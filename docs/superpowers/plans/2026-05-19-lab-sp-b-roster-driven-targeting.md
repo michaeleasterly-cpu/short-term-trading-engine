@@ -532,7 +532,7 @@ def test_lab_target_values_byte_match_old_param_ranges(engine):
     # characterization oracle pins reversion's keyset. Here we pin the
     # values are 3-tuples with a valid kind (LabTarget already enforces;
     # this is the engine-side regression pin).
-    for name, spec in mod.LAB_TARGET.param_ranges.items():
+    for _name, spec in mod.LAB_TARGET.param_ranges.items():
         assert isinstance(spec, tuple) and len(spec) == 3
         assert spec[2] in ("float", "int") or spec[2].startswith("choice:")
 
@@ -561,8 +561,9 @@ In `reversion/backtest.py`, immediately after `run_for_search` ends (line `:1102
 # SP-B — Lab targeting declaration (engine-OWNED; the live path never
 # imports this; resolved lazily by ops.lab.run._lab_target_for).
 # ────────────────────────────────────────────────────────────────────────────
-
-from tpcore.lab.target import LabTarget  # noqa: E402 — engine→tpcore, legal
+# NOTE (applied per Step-3 NOTE fallback): `from tpcore.lab.target import
+# LabTarget` is hoisted to the top `from tpcore...` import block with no
+# `# noqa` (this is what shipped — ruff E402 would red the mid-module form).
 
 LAB_TARGET = LabTarget(
     param_ranges={
@@ -578,7 +579,9 @@ LAB_TARGET = LabTarget(
 )
 ```
 
-> NOTE: `# noqa: E402` is for module-level-import-not-at-top (ruff E402), NOT `SLF001`. This is a sanctioned engine→tpcore import placed next to the symbols it references; it is not private-attribute access. If ruff still complains, move the `from tpcore.lab.target import LabTarget` to the top import block with the other `from tpcore...` imports and drop the `# noqa`.
+> NOTE: The mid-module `# noqa: E402` form (E402 = module-level-import-not-at-top, NOT `SLF001`) is the original sketch; this NOTE's fallback — move the `from tpcore.lab.target import LabTarget` to the top import block with the other `from tpcore...` imports and drop the `# noqa` — is the path that was actually applied (ruff E402 reds the mid-module form; `tests/**` only ignores E741/E702). The embedded Step-3/4/5 blocks above now show the shipped hoisted-import form.
+
+> Plan correction (applied during SP-B T3 exec): the embedded Step-1 test loop was changed from `for name, spec` to `for _name, spec` because the loop var is unused — ruff B007 (`B` is selected; `tests/**` ignores only E741/E702) reds the as-written block, and the shipped test uses `_name`. The embedded engine blocks (Step 3/4/5) were aligned to the hoisted top-import form with no `# noqa`, which is this NOTE's own sanctioned Step-3 fallback (ruff E402 forced it — not a free authoring choice) and matches what shipped.
 
 - [ ] **Step 4: Write minimal implementation — vector**
 
@@ -587,8 +590,8 @@ In `vector/backtest.py`, after `run_for_search` ends (it is the last def before 
 # ────────────────────────────────────────────────────────────────────────────
 # SP-B — Lab targeting declaration (engine-OWNED; live path never imports).
 # ────────────────────────────────────────────────────────────────────────────
-
-from tpcore.lab.target import LabTarget  # noqa: E402 — engine→tpcore, legal
+# NOTE (applied per Step-3 NOTE fallback): `from tpcore.lab.target import
+# LabTarget` is hoisted to the top `from tpcore...` import block, no `# noqa`.
 
 LAB_TARGET = LabTarget(
     param_ranges={
@@ -612,8 +615,8 @@ In `momentum/backtest.py`, after `run_for_search` ends, insert:
 # ────────────────────────────────────────────────────────────────────────────
 # SP-B — Lab targeting declaration (engine-OWNED; live path never imports).
 # ────────────────────────────────────────────────────────────────────────────
-
-from tpcore.lab.target import LabTarget  # noqa: E402 — engine→tpcore, legal
+# NOTE (applied per Step-3 NOTE fallback): `from tpcore.lab.target import
+# LabTarget` is hoisted to the top `from tpcore...` import block, no `# noqa`.
 
 LAB_TARGET = LabTarget(
     param_ranges={
@@ -641,7 +644,7 @@ Run:
 python -m tpcore.scripts.check_imports reversion vector momentum sentinel canary tpcore
 python -m ruff check reversion/backtest.py vector/backtest.py momentum/backtest.py
 ```
-Expected: both exit 0. (The `from tpcore.lab.target import LabTarget` is engine→tpcore — the legal direction. If ruff E402 reds, apply the Step-3 NOTE: hoist the import to the top block and drop the `# noqa`.)
+Expected: both exit 0. (The `from tpcore.lab.target import LabTarget` is engine→tpcore — the legal direction. As shipped, the Step-3 NOTE fallback was applied: the import is hoisted to the top block with no `# noqa`.)
 
 - [ ] **Step 8: Commit**
 
