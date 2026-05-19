@@ -570,7 +570,7 @@ def test_sp_a2_t_sig_compat_positional_calls_still_work() -> None:
     assert _expected_max_sharpe_under_null(50, 1) == 0.0  # genuine n_trials<=1/n_obs<2 threshold short-circuit (this one is real)
 
 
-def _sp_a2_make_trial_matrix(col_means, *, n_obs=250, seed=0):
+def _sp_a2_make_trial_matrix(col_means: list[float], *, n_obs=250, seed=0):
     """T×N matrix with controlled per-column Sharpe dispersion."""
     rng = np.random.default_rng(seed)
     cols = []
@@ -621,8 +621,11 @@ def test_sp_a2_t_crosstrial_matrix_changes_dsr_via_v() -> None:
 
 def test_sp_a2_t_degenerate_identical_columns_and_too_few_cols() -> None:
     """T-DEGENERATE (H-A2-8). All-identical columns ⇒ V=0 ⇒ floored, no
-    crash. < MIN_TRIALS_FOR_V columns ⇒ helper returns None ⇒ fallback +
-    WARNING (no raise). < 2-D / empty ⇒ None."""
+    crash. < MIN_TRIALS_FOR_V columns ⇒ helper returns None AND the
+    end-to-end ``run()`` path emits the loud
+    ``tpcore.overfitting.dsr.null_variance_approximation`` WARNING (never
+    silent — pins the live-money fallback end-to-end, not just the helper).
+    < 2-D / empty ⇒ None."""
     # Lazy imports — SP-A2 symbols not in module-level namespace (T1/T2 pattern).
     from tpcore.backtest.overfitting import MIN_TRIALS_FOR_V
     returns = list(np.random.default_rng(2).normal(0.01, 0.02, 120))
@@ -640,6 +643,15 @@ def test_sp_a2_t_degenerate_identical_columns_and_too_few_cols() -> None:
         trial_returns_matrix=few,
     )
     assert diag_few._trial_sharpe_variance() is None      # too few cols
+    # End-to-end: the too-few-cols path must drive run() → DSR →
+    # _expected_max_sharpe_under_null's logged 1/(n_obs-1) fallback, loud.
+    with _sp_a2_structlog.testing.capture_logs() as logs:
+        diag_few.run()
+    assert any(
+        e.get("event") == "tpcore.overfitting.dsr.null_variance_approximation"
+        and e.get("log_level") == "warning"
+        for e in logs
+    )
     diag_none = OverfittingDiagnostic(
         trades=trades, parameters={"p": 1}, sr_observed=0.1, n_trials=3,
     )

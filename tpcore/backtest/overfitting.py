@@ -413,25 +413,6 @@ class OverfittingDiagnostic:
     # public entrypoint
     # ─────────────────────────────────────────────────────────────────────
 
-    def _trial_sharpe_variance(self) -> float | None:
-        """V[ŜR_n] across the N searched trials, from the SAME per-column
-        Sharpe vector PBO already uses (``_column_sharpes``). One canonical
-        Sharpe-vector definition; no second estimator. ``None`` when no
-        matrix / not 2-D / < MIN_TRIALS_FOR_V columns (the §3.1 floor at
-        1/(n_obs-1) then keeps the gate safe — H-A2-10). Never raises
-        (module contract: sub-tests never raise)."""
-        if self._trial_matrix is None:
-            return None
-        arr = (
-            self._trial_matrix.values
-            if isinstance(self._trial_matrix, pd.DataFrame)
-            else np.asarray(self._trial_matrix)
-        )
-        if arr.ndim != 2 or arr.shape[1] < MIN_TRIALS_FOR_V:
-            return None
-        col_sharpes = _column_sharpes(arr)
-        return float(np.var(col_sharpes, ddof=1))
-
     def run(self) -> OverfittingReport:
         pnls = self._pnl_array()
         n = pnls.size
@@ -445,11 +426,11 @@ class OverfittingDiagnostic:
             # H-A2-4: the V-source trial count and the multiple-testing
             # count are deliberately distinct estimands — log side-by-side
             # so any divergence is visible, never silently reconciled.
-            _v_arr = (
-                self._trial_matrix.values
-                if isinstance(self._trial_matrix, pd.DataFrame)
-                else np.asarray(self._trial_matrix)
-            )
+            # Single source of truth for the matrix→2-D conversion: the same
+            # ``_trial_matrix_2d`` ``_trial_sharpe_variance`` used (V already
+            # non-None here ⇒ the helper's guards passed ⇒ never None).
+            _v_arr = self._trial_matrix_2d()
+            assert _v_arr is not None  # noqa: S101 — V non-None ⇒ guards passed
             logger.info(
                 "tpcore.overfitting.dsr.v_n_trial_population",
                 v_trial_count=int(_v_arr.shape[1]),
@@ -572,6 +553,39 @@ class OverfittingDiagnostic:
         if not self._trades:
             return np.zeros(0, dtype=float)
         return np.asarray([float(t["pnl_pct"]) for t in self._trades], dtype=float)
+
+    def _trial_matrix_2d(self) -> np.ndarray | None:
+        """The trial matrix as a 2-D ndarray, or ``None`` when it is absent /
+        not 2-D / has < MIN_TRIALS_FOR_V columns. Single source of truth for
+        the matrix→ndarray conversion shared by ``_trial_sharpe_variance``
+        (V) and ``run()``'s H-A2-4 v_trial_count log — so the two can never
+        diverge. Never raises (module contract: sub-tests never raise)."""
+        if self._trial_matrix is None:
+            return None
+        arr = (
+            self._trial_matrix.values
+            if isinstance(self._trial_matrix, pd.DataFrame)
+            else np.asarray(self._trial_matrix)
+        )
+        if arr.ndim != 2 or arr.shape[1] < MIN_TRIALS_FOR_V:
+            return None
+        return arr
+
+    def _trial_sharpe_variance(self) -> float | None:
+        """V[ŜR_n] across the N searched trials, from the SAME per-column
+        Sharpe vector PBO already uses (``_column_sharpes``). One canonical
+        Sharpe-vector definition; no second estimator. ``None`` when no
+        matrix / not 2-D / < MIN_TRIALS_FOR_V columns (delegated to the
+        shared ``_trial_matrix_2d``). On ``None`` the value is passed
+        through ``_deflated_sharpe_ratio`` to ``_expected_max_sharpe_under_null``,
+        which then takes its logged ``1/(n_obs-1)`` single-estimator fallback
+        — the §3.1 / H-A2-10 floor keeps the gate safe (tightening-or-equal).
+        Never raises (module contract: sub-tests never raise)."""
+        arr = self._trial_matrix_2d()
+        if arr is None:
+            return None
+        col_sharpes = _column_sharpes(arr)
+        return float(np.var(col_sharpes, ddof=1))
 
     def _run_pbo(self) -> tuple[float | None, bool | None, str | None]:
         if self._trial_matrix is None:
