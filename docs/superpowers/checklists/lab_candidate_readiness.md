@@ -18,11 +18,21 @@ named place in the flow where it is enforced.
 
 > **Reference worked example (the pilot).** The Vector composite spec —
 > `docs/superpowers/specs/2026-05-19-vector-composite-lab-candidate.md`
-> (commit `0a94414` on `lab-candidates-rollthrough`) — is the
-> hand-authored pilot this checklist generalizes. Every section below
-> cites the Vector pilot section that demonstrates the item. When in
-> doubt about the *shape* of an item, read that section of the pilot:
+> — is the hand-authored pilot this checklist generalizes. Every section
+> below cites the Vector pilot section that demonstrates the item. When
+> in doubt about the *shape* of an item, read that section of the pilot:
 > it is the canonical instance, this checklist is the rule.
+>
+> **Pilot location caveat (in-flight).** The pilot is not yet on `main`
+> / this branch — it currently lives only on the in-flight branch
+> `lab-candidates-rollthrough` (commit `0a94414`). To read it without
+> switching branches:
+> `git show 0a94414:docs/superpowers/specs/2026-05-19-vector-composite-lab-candidate.md`.
+> **Post-merge follow-up:** once the Vector composite lands on `main`,
+> repoint every `(Vector pilot §X)` reference to the on-`main` path and
+> **delete this branch/commit caveat** (here and the Sibling
+> cross-reference entry) — the dangling `0a94414` ref must not outlive
+> the merge.
 
 > **These ten sections are non-optional.** A candidate that cannot tick
 > every box is not Lab-ready — it is either an unscoped sweep, an
@@ -37,7 +47,9 @@ named place in the flow where it is enforced.
 ## 1. Single pre-registered primary hypothesis
 
 - [ ] The candidate has a written spec under
-      `docs/superpowers/specs/` (or `docs/lab/`) with **exactly ONE
+      `docs/superpowers/specs/` (the Vector-pilot precedent;
+      **not** `docs/lab/`, which is the machine-generated Lab dossier
+      output dir) with **exactly ONE
       pre-registered primary hypothesis** and **ONE primary metric/verdict**
       stated *before* the run. (Vector pilot §1–§2: "tests that
       structural fix once, honestly".)
@@ -328,8 +340,10 @@ run**, upstream of the dossier and the ECR.
   the epic that mandates this checklist (after SP-A, independent of
   SP-B).
 - `docs/superpowers/specs/2026-05-19-vector-composite-lab-candidate.md`
-  (commit `0a94414`) — the reference worked example every section
-  above cites.
+  — the reference worked example every section above cites. **In-flight:**
+  on branch `lab-candidates-rollthrough` (commit `0a94414`) until it
+  lands on `main`; see the "Pilot location caveat" callout near the top
+  (same post-merge repoint follow-up applies).
 - `tpcore/lab/ledger.py` — SP-A, the cumulative n_trials ledger this
   checklist's Section 4 mandates the author acknowledge.
 - `docs/DEV_PIPELINE_STANDARD.md` / `docs/STYLE_GUIDE.md` — the
