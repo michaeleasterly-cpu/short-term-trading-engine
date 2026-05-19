@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from tpcore.backtest.cost_model import capital_gate_healthcheck
 from tpcore.backtest.credibility import (
     CredibilityScoreInsufficientError,
     graduation_ready,
@@ -66,16 +67,12 @@ class VectorCapitalGate(BaseEnginePlug):
         return True
 
     def healthcheck(self) -> dict:
-        return {
-            "engine": self.engine_name,
-            "plug": "capital_gate",
-            "ok": True,
-            "details": {
-                "engine_equity_usd": str(self._engine_equity),
-                "max_position_usd": str(self._max_position_usd),
-                "max_positions": self._max_positions,
-            },
-        }
+        return capital_gate_healthcheck(
+            self.engine_name,
+            self._engine_equity,
+            self._max_position_usd,
+            self._max_positions,
+        )
 
     def check_trade(
         self,

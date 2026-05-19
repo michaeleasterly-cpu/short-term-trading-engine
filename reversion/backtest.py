@@ -87,6 +87,9 @@ from reversion.plugs.setup_detection import (
     _volume_ratio,
 )
 from tpcore.backtest.cli_overrides import overrides_from_args
+from tpcore.backtest.cost_model import (
+    slippage_per_side as _tpcore_slippage_per_side,
+)
 from tpcore.db import build_asyncpg_pool
 from tpcore.fundamentals.earnings_quality import (
     EarningsQualityGrade,
@@ -108,9 +111,14 @@ _TIER_ROUND_TRIP_COSTS: dict[str, float] = {}
 
 
 def _slippage_per_side(ticker: str) -> float:
-    """Per-side slippage for ``ticker``; T4 default for unknowns."""
-    rt = _TIER_ROUND_TRIP_COSTS.get(ticker)
-    return rt / 2.0 if rt is not None else SLIPPAGE_PER_SIDE
+    """Per-side slippage for ``ticker``; T4 default for unknowns.
+
+    Thin delegate to the shared :func:`tpcore.backtest.cost_model.
+    slippage_per_side` (Lean P5.2 consolidation, cluster #11).
+    """
+    return _tpcore_slippage_per_side(
+        ticker, _TIER_ROUND_TRIP_COSTS, SLIPPAGE_PER_SIDE
+    )
 
 
 HARD_STOP_PCT = 0.08

@@ -23,6 +23,7 @@ aggregation script changes.
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
@@ -135,10 +136,60 @@ async def load_tier_costs(pool: asyncpg.Pool) -> dict[str, float]:
     }
 
 
+# ── Shared backtest / capital-gate helpers (Lean P5.2 consolidation) ─────
+
+
+def slippage_per_side(
+    ticker: str,
+    tier_round_trip_costs: Mapping[str, float],
+    default: float,
+) -> float:
+    """Per-side slippage for ``ticker``; ``default`` for unknowns.
+
+    Consolidates the byte-identical ``_slippage_per_side`` previously
+    duplicated in ``reversion.backtest`` and ``vector.backtest`` (Lean
+    P5 cluster #11). The engine passes its own
+    ``_TIER_ROUND_TRIP_COSTS`` mapping and its module-level
+    ``SLIPPAGE_PER_SIDE`` constant — no engine state lives in tpcore.
+    """
+    rt = tier_round_trip_costs.get(ticker)
+    return rt / 2.0 if rt is not None else default
+
+
+def capital_gate_healthcheck(
+    engine_name: str,
+    engine_equity: Decimal,
+    max_position_usd: Decimal,
+    max_positions: int,
+) -> dict:
+    """Standard per-trade capital-gate ``healthcheck`` payload.
+
+    Consolidates the byte-identical cap-gate ``healthcheck`` dict
+    previously duplicated in ``reversion.plugs.capital_gate`` and
+    ``vector.plugs.capital_gate`` (Lean P5 cluster #7) — only the
+    ``engine`` value (the plug's ``engine_name``) differed. A focused
+    free helper, not a base class: ``PerTradeCapitalGateBase`` is
+    introduced later in P5.5; consolidating here avoids premature
+    coupling.
+    """
+    return {
+        "engine": engine_name,
+        "plug": "capital_gate",
+        "ok": True,
+        "details": {
+            "engine_equity_usd": str(engine_equity),
+            "max_position_usd": str(max_position_usd),
+            "max_positions": max_positions,
+        },
+    }
+
+
 __all__ = [
     "SimpleCostModel",
     "get_round_trip_cost",
     "load_tier_costs",
+    "slippage_per_side",
+    "capital_gate_healthcheck",
     "DEFAULT_ROUND_TRIP_COST_PCT",
     "DEFAULT_ROUND_TRIP_COST_BPS",
     "DEFAULT_PER_SIDE_SLIPPAGE_BPS",
