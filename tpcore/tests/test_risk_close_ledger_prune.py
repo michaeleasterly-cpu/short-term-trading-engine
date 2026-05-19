@@ -70,7 +70,7 @@ async def test_prune_deletes_only_older_than_14d_keeps_recent() -> None:
         ("momentum", "edge"): now - timedelta(days=13),    # keep
     }
     pool = _Pool(rows)
-    result = await ops._stage_risk_close_ledger_prune(pool)  # type: ignore[arg-type]
+    result = await ops._stage_risk_close_ledger_prune(pool)  # type: ignore[arg-type]  # noqa: SLF001
     assert result == {"pruned_settled_close_keys": 2}
     assert set(pool.rows) == {("sentinel", "fresh"), ("momentum", "edge")}
 
@@ -78,8 +78,8 @@ async def test_prune_deletes_only_older_than_14d_keeps_recent() -> None:
 async def test_prune_is_idempotent() -> None:
     now = datetime.now(UTC)
     pool = _Pool({("momentum", "old"): now - timedelta(days=20)})
-    first = await ops._stage_risk_close_ledger_prune(pool)  # type: ignore[arg-type]
-    second = await ops._stage_risk_close_ledger_prune(pool)  # type: ignore[arg-type]
+    first = await ops._stage_risk_close_ledger_prune(pool)  # type: ignore[arg-type]  # noqa: SLF001
+    second = await ops._stage_risk_close_ledger_prune(pool)  # type: ignore[arg-type]  # noqa: SLF001
     assert first == {"pruned_settled_close_keys": 1}
     assert second == {"pruned_settled_close_keys": 0}  # nothing left → no-op
     assert pool.rows == {}
@@ -91,7 +91,7 @@ def test_prune_wired_into_existing_update_cadence_not_a_new_daemon() -> None:
     assert "risk_close_ledger_prune" in ops.KNOWN_STAGES
     assert "risk_close_ledger_prune" in OPS_UPDATE_STAGES
     # cmd_update iterates _STAGE_SPECS, so registration there == wired in.
-    spec_names = [n for n, _, _ in ops._STAGE_SPECS]
+    spec_names = [n for n, _, _ in ops._STAGE_SPECS]  # noqa: SLF001
     assert "risk_close_ledger_prune" in spec_names
 
 
@@ -112,7 +112,7 @@ async def test_pruned_settled_trade_id_cannot_cause_re_decrement() -> None:
     )
     # Original close (counted), then the ledger row is pruned (settled).
     assert await store.record_close("momentum", "settled1", Decimal("0")) is True
-    store._closed.discard(("momentum", "settled1"))  # simulate the prune
+    store._closed.discard(("momentum", "settled1"))  # simulate the prune  # noqa: SLF001
     st = await store.get("momentum")
     assert st.open_positions == 2
 

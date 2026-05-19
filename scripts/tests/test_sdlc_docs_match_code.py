@@ -75,11 +75,11 @@ def test_clause_e_sp3_carry_forwards_provably_unchanged():
     import inspect
 
     from ops.engine_sdlc import planner
-    assert set(planner._ENGINE_DEFAULT_CONSTS) == {"reversion"}, (
+    assert set(planner._ENGINE_DEFAULT_CONSTS) == {"reversion"}, (  # noqa: SLF001
         "SP3 carry-forward (a) changed: _ENGINE_DEFAULT_CONSTS is no "
         "longer reversion-only — the docs' known-limitation is now "
         "false (or this is an out-of-scope SP4 fix)")
-    vm = inspect.getsource(planner._validate_modify)
+    vm = inspect.getsource(planner._validate_modify)  # noqa: SLF001
     assert "type(want)(v)" in vm, (
         "SP3 carry-forward (b) changed: the type(want)(v) coercion "
         "line is gone — the docs' known-limitation is now false")

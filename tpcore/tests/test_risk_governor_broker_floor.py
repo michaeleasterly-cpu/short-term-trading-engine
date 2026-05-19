@@ -56,7 +56,7 @@ async def test_flag_on_broker_higher_than_proxy_blocks_at_tighter_threshold() ->
     broker = _broker(_positions(5))
     gov = await _registered(broker, "momentum", limits)
     st = await gov.state_for("momentum")
-    await gov._store.put(st.model_copy(update={"open_positions": 2}))
+    await gov._store.put(st.model_copy(update={"open_positions": 2}))  # noqa: SLF001
 
     res = await gov.check_trade("momentum", Decimal("100"), OrderSide.BUY)
 
@@ -72,7 +72,7 @@ async def test_flag_on_broker_lower_than_proxy_uses_proxy() -> None:
     broker = _broker(_positions(1))  # broker stale/low
     gov = await _registered(broker, "momentum", limits)
     st = await gov.state_for("momentum")
-    await gov._store.put(st.model_copy(update={"open_positions": 5}))
+    await gov._store.put(st.model_copy(update={"open_positions": 5}))  # noqa: SLF001
 
     res = await gov.check_trade("momentum", Decimal("100"), OrderSide.BUY)
 
@@ -105,7 +105,7 @@ async def test_flag_on_broker_error_concurrent_check_is_proxy_only(
     broker.get_positions.side_effect = side_effect
     gov = await _registered(broker, "momentum", limits)
     st = await gov.state_for("momentum")
-    await gov._store.put(st.model_copy(update={"open_positions": 3}))
+    await gov._store.put(st.model_copy(update={"open_positions": 3}))  # noqa: SLF001
 
     res = await gov.check_trade("momentum", Decimal("100"), OrderSide.SELL)
 
@@ -128,7 +128,7 @@ async def test_flag_on_broker_error_buy_fails_closed_never_open(
     broker.get_positions.side_effect = side_effect
     gov = await _registered(broker, "momentum", limits)
     st = await gov.state_for("momentum")
-    await gov._store.put(st.model_copy(update={"open_positions": 3}))
+    await gov._store.put(st.model_copy(update={"open_positions": 3}))  # noqa: SLF001
 
     res = await gov.check_trade("momentum", Decimal("100"), OrderSide.BUY)
 
@@ -143,7 +143,7 @@ async def test_flag_on_broker_empty_or_none_is_proxy_only(empty: object) -> None
     broker.get_positions.return_value = empty
     gov = await _registered(broker, "momentum", limits)
     st = await gov.state_for("momentum")
-    await gov._store.put(st.model_copy(update={"open_positions": 3}))
+    await gov._store.put(st.model_copy(update={"open_positions": 3}))  # noqa: SLF001
 
     res = await gov.check_trade("momentum", Decimal("100"), OrderSide.BUY)
 
@@ -157,7 +157,7 @@ async def test_flag_on_broker_error_never_looser_than_proxy_block() -> None:
     broker.get_positions.side_effect = TimeoutError("down")
     gov = await _registered(broker, "momentum", limits)
     st = await gov.state_for("momentum")
-    await gov._store.put(st.model_copy(update={"open_positions": 5}))
+    await gov._store.put(st.model_copy(update={"open_positions": 5}))  # noqa: SLF001
 
     res = await gov.check_trade("momentum", Decimal("100"), OrderSide.BUY)
 
@@ -206,7 +206,7 @@ async def test_invariant_effective_never_below_proxy(
     )
     for gov, eng in ((on, "momentum"), (off, "reversion")):
         s = await gov.state_for(eng)
-        await gov._store.put(s.model_copy(update={"open_positions": proxy}))
+        await gov._store.put(s.model_copy(update={"open_positions": proxy}))  # noqa: SLF001
 
     # SELL isolates the concurrent-position check (the §3 invariant under
     # test); the BUY net-long fail-closed-on-error path is covered
@@ -245,7 +245,7 @@ async def test_flag_off_is_byte_identical_to_pre_a1(engine: str) -> None:
     broker = _broker(_positions(50))  # would dominate IF the flag leaked
     gov = await _registered(broker, engine, limits)
     st = await gov.state_for(engine)
-    await gov._store.put(st.model_copy(update={"open_positions": 7}))
+    await gov._store.put(st.model_copy(update={"open_positions": 7}))  # noqa: SLF001
 
     res = await gov.check_trade(engine, Decimal("100"), OrderSide.BUY)
 
@@ -258,7 +258,7 @@ async def test_flag_off_still_blocks_on_raw_proxy() -> None:
     limits = RiskLimits(max_open_positions=8, reconcile_open_floor=False)
     gov = await _registered(_broker(), "reversion", limits)
     st = await gov.state_for("reversion")
-    await gov._store.put(st.model_copy(update={"open_positions": 8}))
+    await gov._store.put(st.model_copy(update={"open_positions": 8}))  # noqa: SLF001
 
     res = await gov.check_trade("reversion", Decimal("100"), OrderSide.BUY)
 

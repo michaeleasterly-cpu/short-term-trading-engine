@@ -53,7 +53,7 @@ def _patch_feed(monkeypatch, feed: str, overrides: dict) -> None:
         return _cr(True)
 
     for cn in feed_checks(feed):
-        monkeypatch.setitem(per_feed._CHECK_FN, cn, overrides.get(cn, _ok))
+        monkeypatch.setitem(per_feed._CHECK_FN, cn, overrides.get(cn, _ok))  # noqa: SLF001
 
 
 def _rs(*, fail_rc: int = 0):
@@ -70,8 +70,8 @@ def _rs(*, fail_rc: int = 0):
 # --- drift guard (clockwork: a new check fails the build) -------------
 
 def test_check_registry_no_drift() -> None:
-    assert set(per_feed._CHECK_FN) == set(KNOWN_CHECK_NAMES)
-    assert set(per_feed._CHECK_FN) == set(HEAL_SPECS)
+    assert set(per_feed._CHECK_FN) == set(KNOWN_CHECK_NAMES)  # noqa: SLF001
+    assert set(per_feed._CHECK_FN) == set(HEAL_SPECS)  # noqa: SLF001
 
 
 def test_feed_checks_resolves_via_healspec_source() -> None:
@@ -92,9 +92,9 @@ async def test_validate_one_green_then_red(monkeypatch) -> None:
     async def bad(pool):
         return _cr(False)
 
-    monkeypatch.setitem(per_feed._CHECK_FN, "row_integrity", ok)
+    monkeypatch.setitem(per_feed._CHECK_FN, "row_integrity", ok)  # noqa: SLF001
     assert (await validate_one(_POOL, "row_integrity")).passed
-    monkeypatch.setitem(per_feed._CHECK_FN, "row_integrity", bad)
+    monkeypatch.setitem(per_feed._CHECK_FN, "row_integrity", bad)  # noqa: SLF001
     assert not (await validate_one(_POOL, "row_integrity")).passed
 
 
@@ -141,7 +141,7 @@ async def test_heal_one_heals_first_attempt(monkeypatch) -> None:
     async def chk(pool):
         return _cr(len(rs.calls) >= 1)  # green only after the repair ran
 
-    monkeypatch.setitem(per_feed._CHECK_FN, "X", chk)
+    monkeypatch.setitem(per_feed._CHECK_FN, "X", chk)  # noqa: SLF001
     r = await heal_one(_POOL, "X", rs)
     assert r.healed and r.attempts == 1
     assert rs.calls == [("daily_bars", {"k": "v"})]
@@ -153,7 +153,7 @@ async def test_heal_one_failed_repair_escalates(monkeypatch) -> None:
     async def chk(pool):
         return _cr(False)
 
-    monkeypatch.setitem(per_feed._CHECK_FN, "X", chk)
+    monkeypatch.setitem(per_feed._CHECK_FN, "X", chk)  # noqa: SLF001
     r = await heal_one(_POOL, "X", _rs(fail_rc=2))
     assert not r.healed and r.attempts == 1
     assert "exited 2" in (r.escalated_reason or "")
@@ -165,7 +165,7 @@ async def test_heal_one_exhausts_bounded(monkeypatch) -> None:
     async def chk(pool):
         return _cr(False)  # repair "succeeds" but never clears
 
-    monkeypatch.setitem(per_feed._CHECK_FN, "X", chk)
+    monkeypatch.setitem(per_feed._CHECK_FN, "X", chk)  # noqa: SLF001
     rs = _rs()
     r = await heal_one(_POOL, "X", rs)
     assert not r.healed and r.attempts == 2
@@ -217,8 +217,8 @@ def test_stage_feed_coverage_no_drift() -> None:
     # _STAGE_FEED is exactly the reverse of the FEED_STAGE SoT, and
     # every mapped feed resolves to >=1 canonical check (clockwork: a
     # misaligned new feed/stage fails the build, not silently no-ops).
-    assert per_feed._STAGE_FEED == {s: f for f, s in FEED_STAGE.items()}
-    for stage, feed in per_feed._STAGE_FEED.items():
+    assert per_feed._STAGE_FEED == {s: f for f, s in FEED_STAGE.items()}  # noqa: SLF001
+    for stage, feed in per_feed._STAGE_FEED.items():  # noqa: SLF001
         assert feed_checks(feed), f"{stage}->{feed} resolves to no check"
 
 
@@ -308,7 +308,7 @@ async def test_derived_validates_when_all_upstreams_green(
     async def ok(pool):
         return _cr(True)
 
-    monkeypatch.setitem(per_feed._CHECK_FN, "fear_greed_freshness", ok)
+    monkeypatch.setitem(per_feed._CHECK_FN, "fear_greed_freshness", ok)  # noqa: SLF001
 
     async def _never(stage, params):
         raise AssertionError("runner invoked on green derived feed")

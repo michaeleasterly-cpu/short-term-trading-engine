@@ -195,7 +195,7 @@ async def test_fundamentals_ingest_rejects_zero_shares():
             }
         ],
     }
-    written = await cache._upsert_payload("USAR", payload)
+    written = await cache._upsert_payload("USAR", payload)  # noqa: SLF001
     # Only the good history row should write; the zero-shares latest is dropped.
     assert written == 1
 
@@ -220,7 +220,7 @@ async def test_fundamentals_ingest_rejects_period_after_filing():
             }
         ],
     }
-    written = await cache._upsert_payload("VNOM", payload)
+    written = await cache._upsert_payload("VNOM", payload)  # noqa: SLF001
     assert written == 1
 
 
@@ -236,5 +236,5 @@ async def test_fundamentals_ingest_rejects_future_filing_date():
         "period": "fakeQ",
         "shares_outstanding": Decimal("1000000"),
     }
-    written = await cache._upsert_payload("FAKE", payload)
+    written = await cache._upsert_payload("FAKE", payload)  # noqa: SLF001
     assert written == 0

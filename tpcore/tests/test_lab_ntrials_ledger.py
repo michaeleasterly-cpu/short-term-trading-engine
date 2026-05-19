@@ -434,11 +434,11 @@ async def test_second_candidate_same_target_gets_strictly_larger_n_trials(
                         raising=True)
 
     async with LabContext(db_url="postgres://fake/db"):
-        core1 = await lab_run._run_lab_core(
+        core1 = await lab_run._run_lab_core(  # noqa: SLF001
             _ns(tmp_path / "r1.csv", trials=40, seed=1),
             candidate="rev_cand_a")
     async with LabContext(db_url="postgres://fake/db"):
-        core2 = await lab_run._run_lab_core(
+        core2 = await lab_run._run_lab_core(  # noqa: SLF001
             _ns(tmp_path / "r2.csv", trials=50, seed=2),
             candidate="rev_cand_b")
 
@@ -572,7 +572,7 @@ async def test_cumulative_fails_where_per_run_would_have_survived(
                         raising=True)
 
     async with LabContext(db_url="postgres://fake/db"):
-        core = await lab_run._run_lab_core(
+        core = await lab_run._run_lab_core(  # noqa: SLF001
             _ns(tmp_path / "cum.csv", trials=per_run, seed=3),
             candidate="rev_cand")
 
@@ -608,7 +608,7 @@ async def test_gate_expression_byte_identical_and_reduces_to_per_run(
     from tpcore.lab.context import LabContext
 
     # ── (a) source/AST pin of the gate ────────────────────────────────
-    src = inspect.getsource(lab_run._run_lab_core)
+    src = inspect.getsource(lab_run._run_lab_core)  # noqa: SLF001
     # The exact gate expression text must be present verbatim.
     assert (
         "survived = (\n"
@@ -619,11 +619,11 @@ async def test_gate_expression_byte_identical_and_reduces_to_per_run(
         "    )"
     ) in src, "the survived gate expression changed — H-LL-7 violated"
     # Default thresholds unchanged in _parse_args.
-    pa = inspect.getsource(lab_run._parse_args)
+    pa = inspect.getsource(lab_run._parse_args)  # noqa: SLF001
     assert '"--dsr-threshold", type=float, default=0.95' in pa
     assert '"--credibility-threshold", type=int, default=60' in pa
     # n_trades floor literal 3 still in the gate (not parameterised away).
-    tree = ast.parse(inspect.getsource(lab_run._run_lab_core))
+    tree = ast.parse(inspect.getsource(lab_run._run_lab_core))  # noqa: SLF001
     assert any(
         isinstance(n, ast.Constant) and n.value == 3
         for n in ast.walk(tree)
@@ -653,7 +653,7 @@ async def test_gate_expression_byte_identical_and_reduces_to_per_run(
                         raising=True)
 
     async with LabContext(db_url="postgres://fake/db"):
-        core = await lab_run._run_lab_core(
+        core = await lab_run._run_lab_core(  # noqa: SLF001
             _ns(tmp_path / "first.csv", trials=37, seed=4),
             candidate="rev_first")
 
@@ -744,7 +744,7 @@ async def test_aborted_run_after_sampling_still_records_its_spend(
 
     # Run 1 — aborts at the no-rankable-trial rc path.
     async with LabContext(db_url="postgres://fake/db"):
-        rc = await lab_run._run_lab_core(
+        rc = await lab_run._run_lab_core(  # noqa: SLF001
             _ns(tmp_path / "abort.csv", trials=64, seed=1),
             candidate="abort_cand")
     assert rc == 1, f"expected the no-rankable rc=1 abort path, got {rc}"
@@ -829,7 +829,7 @@ async def test_legacy_non_lab_path_emits_and_reads_no_ledger(
     monkeypatch.setattr("tpcore.lab.ledger.cumulative_n_trials",
                         _spy_cum, raising=True)
 
-    core = await lab_run._run_lab_core(
+    core = await lab_run._run_lab_core(  # noqa: SLF001
         _ns(tmp_path / "legacy.csv", trials=40, seed=0),
         candidate=None)
 

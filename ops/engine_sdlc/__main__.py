@@ -46,7 +46,7 @@ def _emit_audit(*args, **kwargs) -> None:
     ``ops.engine_sdlc.planner._emit_audit`` (the SP2 "patch where
     defined" lesson), so the CLI must resolve it at call time — never
     bind a stale reference at import."""
-    planner._emit_audit(*args, **kwargs)
+    planner._emit_audit(*args, **kwargs)  # noqa: SLF001
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:

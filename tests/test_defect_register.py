@@ -213,7 +213,7 @@ async def _run_cli(pool, argv: list[str]) -> int:
     os.environ["DATABASE_URL"] = "postgres://fake/db"
     dr.build_asyncpg_pool = _fake_build  # type: ignore[assignment]
     try:
-        return await dr._amain(argv)
+        return await dr._amain(argv)  # noqa: SLF001
     finally:
         dr.build_asyncpg_pool = saved_build  # type: ignore[assignment]
         if saved_env is None:
@@ -370,7 +370,7 @@ async def test_cli_list_prints_rows_deterministic_grepable(
 
     monkeypatch.setattr(dr, "build_asyncpg_pool", _fake_build)
     monkeypatch.setenv("DATABASE_URL", "postgres://fake/db")
-    rc = await dr._amain(["list"])
+    rc = await dr._amain(["list"])  # noqa: SLF001
     assert rc == 0
     out = capsys.readouterr().out
     # Stable, grep-able, deterministic order (opened_at, defect_ref).
@@ -381,7 +381,7 @@ async def test_cli_list_prints_rows_deterministic_grepable(
 async def test_cli_no_dsn_explicit_nonzero(monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("DATABASE_URL_IPV4", raising=False)
-    rc = await dr._amain(["list"])
+    rc = await dr._amain(["list"])  # noqa: SLF001
     assert rc == 1  # explicit no-DSN failure, NOT a silent 0
 
 
@@ -766,7 +766,7 @@ async def test_todo_parity_red_when_tagged_line_has_no_event(monkeypatch):
     todo = "- broken thing [defect_ref: #777] [lane: ops] [effort: S]\n"
     pool = _ReviewPool()  # no LOGGED events emitted
     review_refs = {r["defect_ref"]
-                   for r in await dr._review_rows(pool)}
+                   for r in await dr._review_rows(pool)}  # noqa: SLF001
     missing = _open_defect_refs_in_todo(todo) - review_refs
     assert missing == {"#777"}, (
         "predicate must flag a tagged-open TODO defect with no matching "
@@ -778,7 +778,7 @@ async def test_todo_parity_green_when_tagged_line_has_matching_event():
     pool = _ReviewPool()
     await dr.log_review_defect(pool, ref="#254", summary="tracked")
     review_refs = {r["defect_ref"]
-                   for r in await dr._review_rows(pool)}
+                   for r in await dr._review_rows(pool)}  # noqa: SLF001
     assert _open_defect_refs_in_todo(todo) - review_refs == set()
 
 

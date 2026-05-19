@@ -106,7 +106,17 @@ extend-exclude = ["./data", "./logs", "*_archive", "./.claude"]
 # once via `ruff check --select DTZ --add-noqa .` (genuinely-benign /
 # non-money paths only — every live-money-path noqa was spot-audited);
 # from here ALL NEW code must be tz-aware (no new naive datetimes).
-select = ["E", "F", "I", "B", "UP", "DTZ"]
+# SLF (flake8-self / SLF001) mechanizes the prose-only CLAUDE.md /
+# STYLE_GUIDE rule "Never access private attributes (._store/._pool
+# etc.) on tpcore classes — use a public accessor; if none exists,
+# extend the tpcore class — do NOT add a # noqa: SLF001". Pre-existing
+# violations were baselined ONCE via `ruff check --select SLF
+# --add-noqa .` (test/fixture/non-tpcore-private sites). From here NEW
+# code that needs a tpcore internal MUST add a public accessor — NOT a
+# new SLF001 noqa (a new noqa on production tpcore-private access is a
+# direct CLAUDE.md violation, not a baseline). See STYLE_GUIDE.md
+# "Private-attribute access on tpcore classes".
+select = ["E", "F", "I", "B", "UP", "DTZ", "SLF"]
 ignore = ["E501"]
 
 [tool.ruff.lint.per-file-ignores]
@@ -114,6 +124,16 @@ ignore = ["E501"]
 # (E741: ambiguous variable name) targets production code where one-letter
 # names hurt readability, not synthetic-bar generators.
 "**/tests/**" = ["E741", "E702"]
+# The SP2 characterization oracle is a MAKE-OR-BREAK BYTE-FROZEN
+# regression asset: `tpcore/tests/test_lab_dsr_delivered.py::
+# test_sp_a2_t_oracle_byte_unmodified_and_green` asserts it is
+# byte-identical to origin/main. The SLF001 hits there are non-tpcore
+# private access (`sp._norm_inv`, a local search-params module helper
+# — benign), but the file CANNOT carry an inline `# noqa: SLF001`
+# baseline without violating its byte-frozen §5 invariant. Ignore SLF
+# for this one frozen oracle instead (the only correct baseline form
+# for a deliberately-immutable asset).
+"scripts/tests/test_search_parameters_characterization.py" = ["SLF"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

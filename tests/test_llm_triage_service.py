@@ -179,7 +179,7 @@ async def _run_one_loop(
     monkeypatch.setattr(lts.asyncio, "wait_for", stop_after_first)
     ld = lock_dir if lock_dir is not None else lts.DEFAULT_LOCK_DIR
     try:
-        await lts._main_loop(pool, stop_event, ld)
+        await lts._main_loop(pool, stop_event, ld)  # noqa: SLF001
     finally:
         monkeypatch.setattr(lts.asyncio, "wait_for", real_wait_for)
     return calls
@@ -224,10 +224,10 @@ async def test_find_new_trigger_advances_cursor(monkeypatch) -> None:
     recent = datetime.now(UTC) - timedelta(minutes=1)
     pool = _Pool(events=[(recent, "DATA_REPAIR_ESCALATED")])
     cursor = datetime.now(UTC) - timedelta(hours=1)
-    newest = await lts._find_new_trigger(pool, cursor)
+    newest = await lts._find_new_trigger(pool, cursor)  # noqa: SLF001
     assert newest == recent  # the daemon advances its cursor to this
     # After advancing, the same event no longer re-triggers.
-    assert await lts._find_new_trigger(pool, recent) is None
+    assert await lts._find_new_trigger(pool, recent) is None  # noqa: SLF001
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -344,7 +344,7 @@ async def test_startup_worktree_prune_invoked_once(monkeypatch) -> None:
     assert len(prune_calls) == 1  # exactly once at startup
     # no shell, list-args, cwd = repo root
     assert prune_calls[0][1].get("shell") in (None, False)
-    assert str(prune_calls[0][1]["cwd"]) == str(lts._REPO_ROOT)
+    assert str(prune_calls[0][1]["cwd"]) == str(lts._REPO_ROOT)  # noqa: SLF001
 
 
 async def test_startup_worktree_prune_failure_does_not_crash_daemon(
@@ -368,7 +368,7 @@ def test_startup_prune_helper_is_crash_isolated_standalone(monkeypatch) -> None:
         raise RuntimeError("git exploded")
 
     monkeypatch.setattr(lts.subprocess, "run", boom)
-    lts._startup_worktree_prune()  # must NOT raise
+    lts._startup_worktree_prune()  # must NOT raise  # noqa: SLF001
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -408,7 +408,7 @@ async def _run_one_engine_loop(
     monkeypatch.setattr(lts.asyncio, "wait_for", stop_after_first)
     ld = lock_dir if lock_dir is not None else lts.DEFAULT_LOCK_DIR
     try:
-        await lts._engine_loop(pool, stop_event, ld)
+        await lts._engine_loop(pool, stop_event, ld)  # noqa: SLF001
     finally:
         monkeypatch.setattr(lts.asyncio, "wait_for", real_wait_for)
     return calls
@@ -453,13 +453,13 @@ async def test_engine_find_new_trigger_advances_cursor(monkeypatch) -> None:
     recent = datetime.now(UTC) - timedelta(minutes=1)
     pool = _Pool(events=[(recent, "ENGINE_ESCALATED")])
     cursor = datetime.now(UTC) - timedelta(hours=1)
-    newest = await lts._find_new_trigger(
+    newest = await lts._find_new_trigger(  # noqa: SLF001
         pool, cursor, lts.ENGINE_TRIGGER_EVENT_TYPES
     )
     assert newest == recent
     # After advancing, the same event no longer re-triggers.
     assert (
-        await lts._find_new_trigger(
+        await lts._find_new_trigger(  # noqa: SLF001
             pool, recent, lts.ENGINE_TRIGGER_EVENT_TYPES
         )
         is None
@@ -498,7 +498,7 @@ async def test_run_supervised_isolates_a_crashing_cotask(monkeypatch) -> None:
 
     monkeypatch.setattr(lts.asyncio, "wait_for", stop_after_first)
     # Must return cleanly (no propagation) despite the factory raising.
-    await lts._run_supervised("engine", crashing_factory, stop_event)
+    await lts._run_supervised("engine", crashing_factory, stop_event)  # noqa: SLF001
     assert attempts["n"] >= 1  # it ran (and crashed) at least once
 
 
@@ -511,7 +511,7 @@ async def test_run_supervised_cancellederror_propagates() -> None:
         raise asyncio.CancelledError()
 
     with pytest.raises(asyncio.CancelledError):
-        await lts._run_supervised("engine", cancel_factory, stop_event)
+        await lts._run_supervised("engine", cancel_factory, stop_event)  # noqa: SLF001
 
 
 async def test_both_lanes_share_the_one_pool_and_lock(
@@ -591,7 +591,7 @@ async def test_concurrent_engine_crash_does_not_kill_data_lane(
     monkeypatch.setattr(lts.asyncio, "wait_for", stop_after_data_poll)
 
     async def _data_factory():
-        await lts._main_loop(pool, stop_event, data_lock)
+        await lts._main_loop(pool, stop_event, data_lock)  # noqa: SLF001
 
     # Engine factory raises directly — a factory-level crash that reaches
     # _run_supervised before _lane_loop can absorb it.
@@ -604,8 +604,8 @@ async def test_concurrent_engine_crash_does_not_kill_data_lane(
     try:
         # Must NOT raise — the engine crash must stay inside _run_supervised.
         await asyncio.gather(
-            lts._run_supervised("data", _data_factory, stop_event),
-            lts._run_supervised("engine", _crashing_engine_factory, stop_event),
+            lts._run_supervised("data", _data_factory, stop_event),  # noqa: SLF001
+            lts._run_supervised("engine", _crashing_engine_factory, stop_event),  # noqa: SLF001
         )
     finally:
         monkeypatch.setattr(lts.asyncio, "wait_for", real_wait_for)

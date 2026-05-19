@@ -40,7 +40,7 @@ def test_candidate_re_matches_three_engines():
         "Vector candidates: 2\n"
         "done\n"
     )
-    matches = {m.group(1).strip().lower(): int(m.group(2)) for m in ops._CANDIDATE_RE.finditer(stdout)}
+    matches = {m.group(1).strip().lower(): int(m.group(2)) for m in ops._CANDIDATE_RE.finditer(stdout)}  # noqa: SLF001
     assert matches == {"sigma": 4, "reversion": 0, "vector": 2}
 
 
@@ -50,7 +50,7 @@ def test_candidate_re_tolerates_indentation_and_singular():
         "  Reversion candidates: 12\n"
         "Vector candidates: 0\n"
     )
-    matches = {m.group(1).strip().lower(): int(m.group(2)) for m in ops._CANDIDATE_RE.finditer(stdout)}
+    matches = {m.group(1).strip().lower(): int(m.group(2)) for m in ops._CANDIDATE_RE.finditer(stdout)}  # noqa: SLF001
     assert matches["sigma"] == 1
     assert matches["reversion"] == 12
     assert matches["vector"] == 0
@@ -63,7 +63,7 @@ def test_candidate_re_ignores_unrelated_lines():
         "ERROR: something\n"
         "candidates: 99\n"   # no engine name → should not match
     )
-    matches = list(ops._CANDIDATE_RE.finditer(stdout))
+    matches = list(ops._CANDIDATE_RE.finditer(stdout))  # noqa: SLF001
     assert len(matches) == 1
     assert matches[0].group(1).strip().lower() == "sigma"
 
@@ -135,7 +135,7 @@ def test_format_check_pretty_ok_run():
             "data_freshness": {"ok": True, "latest_bar": "2026-05-08", "age_days": 4},
         },
     }
-    out = ops._format_check_pretty(report)
+    out = ops._format_check_pretty(report)  # noqa: SLF001
     assert "Health check OK" in out
     assert "db_connectivity" in out
     assert "[OK]" in out
@@ -156,7 +156,7 @@ def test_format_check_pretty_degraded_run_marks_failed_checks():
             ]},
         },
     }
-    out = ops._format_check_pretty(report)
+    out = ops._format_check_pretty(report)  # noqa: SLF001
     assert "DEGRADED" in out
     assert "[!!" in out
     assert "count: 3" in out
@@ -178,7 +178,7 @@ def test_format_check_pretty_truncates_long_lists():
             },
         },
     }
-    out = ops._format_check_pretty(report)
+    out = ops._format_check_pretty(report)  # noqa: SLF001
     assert "12 item(s)" in out
     assert "… 7 more" in out
 

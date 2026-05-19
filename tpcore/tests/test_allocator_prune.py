@@ -160,7 +160,7 @@ async def test_prune_deletes_stale_sigma_and_keeps_live_engines() -> None:
         spy_bars=_spy_bars_trending(),
     )
     svc = _make_service(pool)
-    svc._load_histories = _empty_histories()  # type: ignore[method-assign]
+    svc._load_histories = _empty_histories()  # type: ignore[method-assign]  # noqa: SLF001
 
     await svc.run_once()
 
@@ -178,7 +178,7 @@ async def test_prune_emits_single_audit_row_with_sigma_in_payload() -> None:
         spy_bars=_spy_bars_trending(),
     )
     svc = _make_service(pool)
-    svc._load_histories = _empty_histories()  # type: ignore[method-assign]
+    svc._load_histories = _empty_histories()  # type: ignore[method-assign]  # noqa: SLF001
 
     await svc.run_once()
 
@@ -201,7 +201,7 @@ async def test_prune_is_idempotent_second_run_no_delete_no_audit() -> None:
         spy_bars=_spy_bars_trending(),
     )
     svc = _make_service(pool)
-    svc._load_histories = _empty_histories()  # type: ignore[method-assign]
+    svc._load_histories = _empty_histories()  # type: ignore[method-assign]  # noqa: SLF001
 
     await svc.run_once()
     assert len(_prune_log_writes(pool)) == 1
@@ -209,7 +209,7 @@ async def test_prune_is_idempotent_second_run_no_delete_no_audit() -> None:
 
     # Second run — clean state, nothing to prune.
     svc2 = _make_service(pool)
-    svc2._load_histories = _empty_histories()  # type: ignore[method-assign]
+    svc2._load_histories = _empty_histories()  # type: ignore[method-assign]  # noqa: SLF001
     await svc2.run_once()
 
     # The DELETE statement may still execute, but it returns zero rows and
@@ -259,7 +259,7 @@ async def test_production_default_prunes_sigma_keeps_sentinel() -> None:
     )
     svc = _make_service_production_default(pool)
     # The default managed set the allocator upserts rows for.
-    svc._load_histories = _empty_histories_for(  # type: ignore[method-assign]
+    svc._load_histories = _empty_histories_for(  # type: ignore[method-assign]  # noqa: SLF001
         ("sigma", "reversion", "vector", "momentum")
     )
 
@@ -286,7 +286,7 @@ async def test_production_default_prunes_sigma_keeps_sentinel() -> None:
     # Idempotent: a fresh service on the now-clean table prunes nothing
     # and emits no new prune-audit row.
     svc2 = _make_service_production_default(pool)
-    svc2._load_histories = _empty_histories_for(  # type: ignore[method-assign]
+    svc2._load_histories = _empty_histories_for(  # type: ignore[method-assign]  # noqa: SLF001
         ("sigma", "reversion", "vector", "momentum")
     )
     await svc2.run_once()
@@ -304,7 +304,7 @@ async def test_no_prune_when_no_stale_rows_no_audit() -> None:
         spy_bars=_spy_bars_trending(),
     )
     svc = _make_service(pool)
-    svc._load_histories = _empty_histories()  # type: ignore[method-assign]
+    svc._load_histories = _empty_histories()  # type: ignore[method-assign]  # noqa: SLF001
 
     await svc.run_once()
 

@@ -42,7 +42,7 @@ async def test_trading_day_round_trip_writes_one_aar_and_logs_lifecycle():
 
     async def _components(pool, broker, governor, db_log):
         # production threads the SAME real db_log through; mirror that.
-        return cs._Components(db_log=db_log, price=Decimal("500"),
+        return cs._Components(db_log=db_log, price=Decimal("500"),  # noqa: SLF001
                               prior_qty=1, aar_write=_aar_write,
                               place=_place, governor=_Gov())
 
@@ -163,7 +163,7 @@ async def test_dry_run_skips_real_order_placement():
         async def close(self): ...
 
     async def _components(pool, broker, governor, db_log):
-        return cs._Components(db_log=db_log, price=Decimal("500"),
+        return cs._Components(db_log=db_log, price=Decimal("500"),  # noqa: SLF001
                               prior_qty=1, aar_write=lambda a: None,
                               place=_place, governor=_Gov())
 

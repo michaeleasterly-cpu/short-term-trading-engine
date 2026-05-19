@@ -354,13 +354,13 @@ async def test_per_engine_limits_override_default(fake_broker: AsyncMock) -> Non
     )
     st = await gov.state_for("momentum")
     st = st.model_copy(update={"open_positions": 120})
-    await gov._store.put(st)
+    await gov._store.put(st)  # noqa: SLF001
     res = await gov.check_trade("momentum", Decimal("100"), OrderSide.BUY)
     assert res.decision.name == "ALLOW"
 
     rv = await gov.state_for("reversion")
     rv = rv.model_copy(update={"open_positions": 9})
-    await gov._store.put(rv)
+    await gov._store.put(rv)  # noqa: SLF001
     res2 = await gov.check_trade("reversion", Decimal("100"), OrderSide.BUY)
     assert res2.decision.name == "BLOCK"
     assert "max concurrent positions" in (res2.reason or "")

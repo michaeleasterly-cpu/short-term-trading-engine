@@ -208,7 +208,7 @@ async def test_undispositioned_string_is_byte_identical_pure_add() -> None:
     expected = (
         "2026-05-01 [DATA_SOURCE_ESCALATED] ref=h1 "
         "source prices_daily stuck | "
-        + wd._disposition_label("DATA_SOURCE_ESCALATED")
+        + wd._disposition_label("DATA_SOURCE_ESCALATED")  # noqa: SLF001
     )
     assert d.undispositioned == [expected]
 

@@ -118,7 +118,7 @@ async def test_ack_idempotent_and_nothing_to_ack() -> None:
     assert await wd.ack_digest(s, NOW) == ""        # nothing emitted yet
     await wd.emit_digest(s, NOW)
     wk = await wd.ack_digest(s, NOW)
-    assert wk == wd._iso_week(NOW)
+    assert wk == wd._iso_week(NOW)  # noqa: SLF001
     assert await wd.ack_digest(s, NOW) == wk        # idempotent
     acks = [r for r in s.applog if r["event_type"] == wd.ACK_EVENT]
     assert len(acks) == 1

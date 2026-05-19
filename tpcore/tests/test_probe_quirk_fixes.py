@@ -40,7 +40,7 @@ async def test_heartbeat_green_when_healthy_and_fresh() -> None:
         "last_heartbeat": datetime.now(UTC) - timedelta(minutes=5),
         "status": "healthy",
     }
-    result = await ops._check_trade_monitor_heartbeat(_hb_pool(row))
+    result = await ops._check_trade_monitor_heartbeat(_hb_pool(row))  # noqa: SLF001
     assert result["ok"] is True
     assert result["status"] == "healthy"
     assert result["age_minutes"] < 10
@@ -53,7 +53,7 @@ async def test_heartbeat_red_when_degraded_even_if_fresh() -> None:
         "last_heartbeat": datetime.now(UTC) - timedelta(minutes=5),
         "status": "degraded",
     }
-    result = await ops._check_trade_monitor_heartbeat(_hb_pool(row))
+    result = await ops._check_trade_monitor_heartbeat(_hb_pool(row))  # noqa: SLF001
     assert result["ok"] is False
     assert result["status"] == "degraded"
     assert "degraded" in result["reason"]
@@ -65,7 +65,7 @@ async def test_heartbeat_red_when_stale_even_if_healthy() -> None:
         "last_heartbeat": datetime.now(UTC) - timedelta(minutes=90),
         "status": "healthy",
     }
-    result = await ops._check_trade_monitor_heartbeat(_hb_pool(row))
+    result = await ops._check_trade_monitor_heartbeat(_hb_pool(row))  # noqa: SLF001
     assert result["ok"] is False
     assert result["status"] == "healthy"
     assert "stale" in result["reason"]
@@ -77,14 +77,14 @@ async def test_heartbeat_red_when_status_down() -> None:
         "last_heartbeat": datetime.now(UTC) - timedelta(minutes=5),
         "status": "down",
     }
-    result = await ops._check_trade_monitor_heartbeat(_hb_pool(row))
+    result = await ops._check_trade_monitor_heartbeat(_hb_pool(row))  # noqa: SLF001
     assert result["ok"] is False
     assert result["status"] == "down"
 
 
 @pytest.mark.asyncio
 async def test_heartbeat_red_when_row_missing() -> None:
-    result = await ops._check_trade_monitor_heartbeat(_hb_pool(None))
+    result = await ops._check_trade_monitor_heartbeat(_hb_pool(None))  # noqa: SLF001
     assert result["ok"] is False
     assert result["latest_event"] is None
     assert "no daemon_heartbeats row" in result["reason"]
@@ -114,7 +114,7 @@ async def test_recent_errors_filters_noise_and_self_healed() -> None:
     pool.fetch = AsyncMock(return_value=critical_rows)
     pool.fetchval = AsyncMock(return_value=3)  # 3 transient rows excluded
 
-    result = await ops._check_recent_errors(pool)
+    result = await ops._check_recent_errors(pool)  # noqa: SLF001
 
     assert result["ok"] is False  # one critical → not ok
     assert result["critical_count"] == 1
@@ -140,7 +140,7 @@ async def test_recent_errors_green_when_only_noise() -> None:
     pool.fetch = AsyncMock(return_value=[])
     pool.fetchval = AsyncMock(return_value=5)
 
-    result = await ops._check_recent_errors(pool)
+    result = await ops._check_recent_errors(pool)  # noqa: SLF001
     assert result["ok"] is True
     assert result["critical_count"] == 0
     assert result["transient_count"] == 5
@@ -152,7 +152,7 @@ async def test_daemon_progress_no_recent_run() -> None:
     """No STARTUP within 25h → state='no_recent_run', ok=True."""
     pool = AsyncMock()
     pool.fetchrow = AsyncMock(return_value=None)
-    result = await ops._check_daemon_progress(pool)
+    result = await ops._check_daemon_progress(pool)  # noqa: SLF001
     assert result["ok"] is True
     assert result["state"] == "no_recent_run"
     assert result["stages"] == []
@@ -186,7 +186,7 @@ async def test_daemon_progress_running_in_flight() -> None:
     ])
     pool.fetchval = AsyncMock(return_value=None)
 
-    result = await ops._check_daemon_progress(pool)
+    result = await ops._check_daemon_progress(pool)  # noqa: SLF001
     assert result["ok"] is True
     assert result["state"] == "running"
     assert result["n_stages_completed"] == 2
@@ -218,7 +218,7 @@ async def test_daemon_progress_completed_clean() -> None:
     ])
     pool.fetchval = AsyncMock(return_value=1)  # DATA_OPERATIONS_COMPLETE found
 
-    result = await ops._check_daemon_progress(pool)
+    result = await ops._check_daemon_progress(pool)  # noqa: SLF001
     assert result["ok"] is True
     assert result["state"] == "completed_clean"
     assert result["n_stages_completed"] == 1
@@ -245,7 +245,7 @@ async def test_daemon_progress_completed_with_failures() -> None:
     ])
     pool.fetchval = AsyncMock(return_value=None)
 
-    result = await ops._check_daemon_progress(pool)
+    result = await ops._check_daemon_progress(pool)  # noqa: SLF001
     assert result["ok"] is False
     assert result["state"] == "completed_with_failures"
     assert result["n_stages_failed"] == 1
@@ -260,6 +260,6 @@ async def test_recent_errors_handles_null_transient_count() -> None:
     pool.fetch = AsyncMock(return_value=[])
     pool.fetchval = AsyncMock(return_value=None)
 
-    result = await ops._check_recent_errors(pool)
+    result = await ops._check_recent_errors(pool)  # noqa: SLF001
     assert result["ok"] is True
     assert result["transient_count"] == 0

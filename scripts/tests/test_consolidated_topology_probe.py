@@ -36,7 +36,7 @@ pytestmark = pytest.mark.xdist_group("ops_shadow")
 
 
 def test_probe_registered_in_check_fns_not_audit() -> None:
-    names = [n for n, _ in opsmod._CHECK_FNS]
+    names = [n for n, _ in opsmod._CHECK_FNS]  # noqa: SLF001
     assert "consolidated_daemon_topology" in names
     # immediately after trade_monitor_heartbeat (precedented engine probe)
     idx = names.index("trade_monitor_heartbeat")
@@ -44,9 +44,9 @@ def test_probe_registered_in_check_fns_not_audit() -> None:
     # MUST NOT be in the data-lane data-pipeline audit. _AUDIT_CHECKS is a
     # tuple of (table, check_name, sql) 3-tuples — check the check-name
     # field too, and assert the probe name appears in none of the fields.
-    audit_names = [check for _table, check, _sql in opsmod._AUDIT_CHECKS]
+    audit_names = [check for _table, check, _sql in opsmod._AUDIT_CHECKS]  # noqa: SLF001
     assert "consolidated_daemon_topology" not in audit_names
-    flat = {f for row in opsmod._AUDIT_CHECKS for f in row}
+    flat = {f for row in opsmod._AUDIT_CHECKS for f in row}  # noqa: SLF001
     assert "consolidated_daemon_topology" not in flat
 
 
@@ -61,7 +61,7 @@ async def test_probe_ok_for_expected_label_set() -> None:
         "run",
         return_value=type("R", (), {"stdout": out, "returncode": 0, "stderr": ""})(),
     ):
-        res = await opsmod._check_consolidated_daemon_topology(None)
+        res = await opsmod._check_consolidated_daemon_topology(None)  # noqa: SLF001
     assert res["ok"] is True
 
 
@@ -77,7 +77,7 @@ async def test_probe_red_when_retired_daemon_present() -> None:
         "run",
         return_value=type("R", (), {"stdout": out, "returncode": 0, "stderr": ""})(),
     ):
-        res = await opsmod._check_consolidated_daemon_topology(None)
+        res = await opsmod._check_consolidated_daemon_topology(None)  # noqa: SLF001
     assert res["ok"] is False
     assert "trade-monitor" in str(res)
 
@@ -92,7 +92,7 @@ async def test_probe_red_when_expected_daemon_missing() -> None:
         "run",
         return_value=type("R", (), {"stdout": out, "returncode": 0, "stderr": ""})(),
     ):
-        res = await opsmod._check_consolidated_daemon_topology(None)
+        res = await opsmod._check_consolidated_daemon_topology(None)  # noqa: SLF001
     assert res["ok"] is False
     assert "data-operations" in str(res)
 
@@ -104,7 +104,7 @@ async def test_probe_red_when_launchctl_absent() -> None:
         "run",
         side_effect=FileNotFoundError("launchctl"),
     ):
-        res = await opsmod._check_consolidated_daemon_topology(None)
+        res = await opsmod._check_consolidated_daemon_topology(None)  # noqa: SLF001
     assert res["ok"] is False
     assert "launchctl" in res["reason"]
 
@@ -122,6 +122,6 @@ async def test_probe_red_when_unexpected_label_present() -> None:
         "run",
         return_value=type("R", (), {"stdout": out, "returncode": 0, "stderr": ""})(),
     ):
-        res = await opsmod._check_consolidated_daemon_topology(None)
+        res = await opsmod._check_consolidated_daemon_topology(None)  # noqa: SLF001
     assert res["ok"] is False
     assert "something-new" in str(res)

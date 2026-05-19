@@ -376,12 +376,12 @@ def test_retention_sql_derived_from_constant_no_drift() -> None:
     from tpcore.logging import db_handler as dh
 
     for et in dh.RETENTION_EXEMPT_EVENT_TYPES:
-        assert repr(et) in dh._RETENTION_SQL, (
+        assert repr(et) in dh._RETENTION_SQL, (  # noqa: SLF001
             f"{et!r} is in RETENTION_EXEMPT_EVENT_TYPES but missing from "
             "_RETENTION_SQL — constant and prune SQL have drifted"
         )
     if dh.RETENTION_EXEMPT_EVENT_TYPES:
-        clause = dh._RETENTION_SQL.split("event_type NOT IN", 1)[1]
+        clause = dh._RETENTION_SQL.split("event_type NOT IN", 1)[1]  # noqa: SLF001
         inside = clause.split("(", 1)[1].split(")", 1)[0]
         in_sql = {tok.strip().strip("'\"") for tok in inside.split(",") if tok.strip()}
         assert in_sql == set(dh.RETENTION_EXEMPT_EVENT_TYPES), (

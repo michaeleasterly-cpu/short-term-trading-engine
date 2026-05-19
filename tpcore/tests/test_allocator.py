@@ -52,8 +52,8 @@ def _hist(
 
 def test_bootstrap_equal_weights_when_all_engines_below_min_aar():
     svc = AllocatorService(pool=None, platform_capital=Decimal("40000"))  # type: ignore[arg-type]
-    hs = [_hist(e, pnls=[1.0, -1.0]) for e in svc._engines]
-    decisions = svc._decide(hs)
+    hs = [_hist(e, pnls=[1.0, -1.0]) for e in svc._engines]  # noqa: SLF001
+    decisions = svc._decide(hs)  # noqa: SLF001
     weights = {d.engine: d.weight for d in decisions}
     assert all(d.realized_vol is None for d in decisions), "no engine has enough AARs"
     # Equal-ish weight (after [0.10, 0.50] cap iteration, equal weight
@@ -66,8 +66,8 @@ def test_bootstrap_equal_weights_when_all_engines_below_min_aar():
 
 def test_bootstrap_allocates_proportional_capital():
     svc = AllocatorService(pool=None, platform_capital=Decimal("40000"))  # type: ignore[arg-type]
-    hs = [_hist(e, pnls=[1.0]) for e in svc._engines]
-    decisions = svc._decide(hs)
+    hs = [_hist(e, pnls=[1.0]) for e in svc._engines]  # noqa: SLF001
+    decisions = svc._decide(hs)  # noqa: SLF001
     total = sum(d.allocated_capital for d in decisions)
     # All-active equal weights across the managed engines (3 engines
     # → ≈$13,333 each); total still conserves the $40,000 platform capital.
@@ -86,7 +86,7 @@ def test_inverse_vol_when_two_engines_have_enough_history():
     # vector, momentum: bootstrap (insufficient AARs).
     vec_h = _hist("vector", pnls=[1.0])
     mom_h = _hist("momentum", pnls=[1.0])
-    decisions = {d.engine: d for d in svc._decide([sigma_h, rev_h, vec_h, mom_h])}
+    decisions = {d.engine: d for d in svc._decide([sigma_h, rev_h, vec_h, mom_h])}  # noqa: SLF001
     assert decisions["sigma"].realized_vol is not None
     assert decisions["reversion"].realized_vol is not None
     assert decisions["vector"].realized_vol is None
@@ -105,7 +105,7 @@ def test_weight_cap_prevents_one_engine_dominating():
     sigma_h = _hist("sigma", pnls=[0.001] * 50, aar_count=MIN_AARS_FOR_VOL + 5)
     others = [_hist(e, pnls=[5.0, -5.0] * 25, aar_count=MIN_AARS_FOR_VOL + 5)
               for e in ("reversion", "vector", "momentum")]
-    decisions = {d.engine: d for d in svc._decide([sigma_h] + others)}
+    decisions = {d.engine: d for d in svc._decide([sigma_h] + others)}  # noqa: SLF001
     assert decisions["sigma"].weight <= WEIGHT_CEILING + Decimal("0.001"), \
         f"sigma {decisions['sigma'].weight} broke ceiling {WEIGHT_CEILING}"
     # All-others combined still take ≥ 50%.
@@ -120,7 +120,7 @@ def test_soft_freeze_at_15pct_drawdown():
     svc = AllocatorService(pool=None, platform_capital=Decimal("40000"))  # type: ignore[arg-type]
     # Construct a history with a 16% drawdown.
     h = _hist("sigma", pnls=[1.0], peak_override=10_000.0, current_override=8_400.0)
-    decisions = {d.engine: d for d in svc._decide([h])}
+    decisions = {d.engine: d for d in svc._decide([h])}  # noqa: SLF001
     assert decisions["sigma"].freeze_state == "soft_frozen"
     assert decisions["sigma"].weight == Decimal("0")
     assert decisions["sigma"].allocated_capital == Decimal("0")
@@ -129,7 +129,7 @@ def test_soft_freeze_at_15pct_drawdown():
 def test_hard_freeze_at_25pct_drawdown():
     svc = AllocatorService(pool=None, platform_capital=Decimal("40000"))  # type: ignore[arg-type]
     h = _hist("sigma", pnls=[1.0], peak_override=10_000.0, current_override=7_400.0)
-    decisions = {d.engine: d for d in svc._decide([h])}
+    decisions = {d.engine: d for d in svc._decide([h])}  # noqa: SLF001
     assert decisions["sigma"].freeze_state == "hard_frozen"
 
 
@@ -137,7 +137,7 @@ def test_hard_freeze_from_persistent_soft():
     svc = AllocatorService(pool=None, platform_capital=Decimal("40000"))  # type: ignore[arg-type]
     h = _hist("sigma", pnls=[1.0], peak_override=10_000.0, current_override=8_500.0,
               soft_streak=HARD_FREEZE_SOFT_SESSIONS)
-    decisions = {d.engine: d for d in svc._decide([h])}
+    decisions = {d.engine: d for d in svc._decide([h])}  # noqa: SLF001
     assert decisions["sigma"].freeze_state == "hard_frozen"
 
 
@@ -147,7 +147,7 @@ def test_frozen_engine_capital_redistributes_to_active_engines():
     # Sigma soft-frozen; Reversion active.
     sigma_h = _hist("sigma", pnls=[1.0], peak_override=10_000.0, current_override=8_400.0)
     rev_h = _hist("reversion", pnls=[1.0], peak_override=10_000.0, current_override=10_000.0)
-    decisions = {d.engine: d for d in svc._decide([sigma_h, rev_h])}
+    decisions = {d.engine: d for d in svc._decide([sigma_h, rev_h])}  # noqa: SLF001
     # Reversion gets the full eligible pool (clamped to ceiling).
     assert decisions["sigma"].allocated_capital == Decimal("0")
     # Reversion gets ≥ floor; capital ≥ 4000.
@@ -157,7 +157,7 @@ def test_frozen_engine_capital_redistributes_to_active_engines():
 def test_active_when_drawdown_below_threshold():
     svc = AllocatorService(pool=None, platform_capital=Decimal("40000"))  # type: ignore[arg-type]
     h = _hist("sigma", pnls=[1.0], peak_override=10_000.0, current_override=9_500.0)  # 5% DD
-    decisions = {d.engine: d for d in svc._decide([h])}
+    decisions = {d.engine: d for d in svc._decide([h])}  # noqa: SLF001
     assert decisions["sigma"].freeze_state == "active"
 
 
@@ -165,14 +165,14 @@ def test_active_when_drawdown_below_threshold():
 
 
 def test_normalize_and_cap_converges_on_uniform_input():
-    out = AllocatorService._normalize_and_cap({"a": Decimal("1"), "b": Decimal("1"),
+    out = AllocatorService._normalize_and_cap({"a": Decimal("1"), "b": Decimal("1"),  # noqa: SLF001
                                                  "c": Decimal("1"), "d": Decimal("1")})
     assert all(WEIGHT_FLOOR <= v <= WEIGHT_CEILING for v in out.values())
     assert abs(sum(out.values()) - Decimal("1")) <= Decimal("0.0001")
 
 
 def test_normalize_and_cap_respects_ceiling_with_extreme_weight():
-    out = AllocatorService._normalize_and_cap({
+    out = AllocatorService._normalize_and_cap({  # noqa: SLF001
         "huge": Decimal("100"),
         "tiny1": Decimal("0.0001"),
         "tiny2": Decimal("0.0001"),
@@ -252,7 +252,7 @@ def test_inverse_vol_is_scale_invariant_on_absolute_pnl():
                          seed=100_000.0, aar_count=MIN_AARS_FOR_VOL + 4)
     # vector: bootstrap (insufficient AARs) so it doesn't perturb caps.
     vec_h = _hist("vector", pnls=[1.0])
-    decisions = {d.engine: d for d in svc._decide([rev_h, mom_h, vec_h])}
+    decisions = {d.engine: d for d in svc._decide([rev_h, mom_h, vec_h])}  # noqa: SLF001
     # Scale-invariant vol: equal despite 10x absolute-$ P&L difference.
     assert decisions["reversion"].realized_vol == decisions["momentum"].realized_vol
     # And therefore equal inverse-vol weight (no scale skew).
@@ -328,7 +328,7 @@ async def test_load_histories_uses_aar_reader_and_buckets_by_session() -> None:
         engines=("sigma",),
     )
 
-    histories = await svc._load_histories()
+    histories = await svc._load_histories()  # noqa: SLF001
     assert len(histories) == 1
     sigma = histories[0]
     assert sigma.aar_count == 3

@@ -43,9 +43,9 @@ total_sell_notional_usd  # unused variable (momentum/models.py:155)
 MomentumAARLogging  # unused class (momentum/plugs/aar_logging.py:32)
 _.write_rebalance_close  # unused method (momentum/plugs/aar_logging.py:52)
 model_config  # unused variable (momentum/plugs/capital_gate.py:56)
-_._hold_days  # unused attribute (momentum/plugs/execution_risk.py:70)
+_._hold_days  # unused attribute (momentum/plugs/execution_risk.py:70)  # noqa: SLF001
 MomentumLifecycleAnalysis  # unused class (momentum/plugs/lifecycle_analysis.py:32)
-_._force_rebalance  # unused attribute (momentum/scheduler.py:225)
+_._force_rebalance  # unused attribute (momentum/scheduler.py:225)  # noqa: SLF001
 __aenter__  # unused function (momentum/tests/test_scheduler_cadence_gate_removed.py:67)
 self_c  # unused variable (momentum/tests/test_scheduler_cadence_gate_removed.py:69)
 __aenter__  # unused function (momentum/tests/test_scheduler_governor.py:63)
@@ -58,7 +58,7 @@ model_config  # unused variable (ops/engine_ladder.py:60)
 escalation_drift  # unused function (ops/engine_ladder.py:139)
 model_config  # unused variable (ops/engine_sdlc/ecr.py:40)
 need  # unused variable (ops/engine_sdlc/ecr.py:51)
-_._exactly_the_selected_action_fields  # unused method (ops/engine_sdlc/ecr.py:58)
+_._exactly_the_selected_action_fields  # unused method (ops/engine_sdlc/ecr.py:58)  # noqa: SLF001
 model_config  # unused variable (ops/engine_sdlc/planner.py:50)
 fs_ops  # unused variable (ops/engine_sdlc/planner.py:57)
 gate_checks  # unused variable (ops/engine_sdlc/planner.py:58)
@@ -80,7 +80,7 @@ model_config  # unused variable (sentinel/models.py:213)
 model_config  # unused variable (sentinel/models.py:230)
 model_config  # unused variable (sentinel/models.py:246)
 allocation_cap_pct  # unused variable (sentinel/models.py:250)
-_._force  # unused attribute (sentinel/scheduler.py:119)
+_._force  # unused attribute (sentinel/scheduler.py:119)  # noqa: SLF001
 __aenter__  # unused function (sentinel/tests/test_scheduler_cadence_gate_removed.py:51)
 self_c  # unused variable (sentinel/tests/test_scheduler_cadence_gate_removed.py:53)
 __aenter__  # unused function (sentinel/tests/test_scheduler_governor.py:43)
@@ -134,8 +134,8 @@ mc_equity_percentiles  # unused variable (tpcore/backtest/overfitting.py:355)
 noise_skipped_reason  # unused variable (tpcore/backtest/overfitting.py:360)
 regime_skipped_reason  # unused variable (tpcore/backtest/overfitting.py:365)
 trades_per_param_risk  # unused variable (tpcore/backtest/overfitting.py:369)
-_._sr_observed  # unused attribute (tpcore/backtest/overfitting.py:400)
-_._benchmark_sr  # unused attribute (tpcore/backtest/overfitting.py:403)
+_._sr_observed  # unused attribute (tpcore/backtest/overfitting.py:400)  # noqa: SLF001
+_._benchmark_sr  # unused attribute (tpcore/backtest/overfitting.py:403)  # noqa: SLF001
 read_trade_log_csv  # unused function (tpcore/backtest/search.py:137)
 require_market_closed  # unused function (tpcore/calendar.py:72)
 first_sessions_of_each_month_in_range  # unused function (tpcore/calendar.py:159)
@@ -254,7 +254,7 @@ model_config  # unused variable (tpcore/tax/loss_harvester.py:36)
 unrealized_loss  # unused variable (tpcore/tax/loss_harvester.py:40)
 lifecycle_confidence  # unused variable (tpcore/tax/loss_harvester.py:41)
 lifecycle_phase  # unused variable (tpcore/tax/loss_harvester.py:42)
-_._wash  # unused attribute (tpcore/tax/loss_harvester.py:58)
+_._wash  # unused attribute (tpcore/tax/loss_harvester.py:58)  # noqa: SLF001
 CLOSED  # unused variable (tpcore/tax/lot_tracker.py:18)
 PARTIAL  # unused variable (tpcore/tax/lot_tracker.py:19)
 model_config  # unused variable (tpcore/tax/lot_tracker.py:23)
@@ -285,10 +285,10 @@ EngineNameExecutionRisk  # unused class (tpcore/templates/engine_template/plugs/
 EngineNameLifecycleAnalysis  # unused class (tpcore/templates/engine_template/plugs/lifecycle_analysis.py:17)
 EngineNameSetupDetection  # unused class (tpcore/templates/engine_template/plugs/setup_detection.py:27)
 _cancel_stale_ENGINE_NAME_orders  # unused function (tpcore/templates/engine_template/scheduler.py:57)
-_._in_tx  # unused attribute (tpcore/tests/test_allocator_drift_gating.py:38)
+_._in_tx  # unused attribute (tpcore/tests/test_allocator_drift_gating.py:38)  # noqa: SLF001
 __aenter__  # unused function (tpcore/tests/test_allocator_drift_gating.py:44)
-_._in_tx  # unused attribute (tpcore/tests/test_allocator_drift_gating.py:45)
-_._in_tx  # unused attribute (tpcore/tests/test_allocator_drift_gating.py:49)
+_._in_tx  # unused attribute (tpcore/tests/test_allocator_drift_gating.py:45)  # noqa: SLF001
+_._in_tx  # unused attribute (tpcore/tests/test_allocator_drift_gating.py:49)  # noqa: SLF001
 _.application_log_writes  # unused attribute (tpcore/tests/test_allocator_drift_gating.py:95)
 pytestmark  # unused variable (tpcore/tests/test_allocator_engine_default.py:34)
 __aenter__  # unused function (tpcore/tests/test_allocator_prune.py:37)
@@ -336,9 +336,9 @@ pytestmark  # unused variable (tpcore/tests/test_risk_close_b2_dual_decrement.py
 anyio_backend  # unused function (tpcore/tests/test_risk_close_b2_dual_decrement.py:66)
 _.return_value  # unused attribute (tpcore/tests/test_risk_close_funnel.py:36)
 _.return_value  # unused attribute (tpcore/tests/test_risk_close_funnel.py:37)
-_._in_txn  # unused attribute (tpcore/tests/test_risk_close_ledger.py:33)
-_._in_txn  # unused attribute (tpcore/tests/test_risk_close_ledger.py:40)
-_._in_txn  # unused attribute (tpcore/tests/test_risk_close_ledger.py:52)
+_._in_txn  # unused attribute (tpcore/tests/test_risk_close_ledger.py:33)  # noqa: SLF001
+_._in_txn  # unused attribute (tpcore/tests/test_risk_close_ledger.py:40)  # noqa: SLF001
+_._in_txn  # unused attribute (tpcore/tests/test_risk_close_ledger.py:52)  # noqa: SLF001
 _.return_value  # unused attribute (tpcore/tests/test_risk_governor.py:23)
 _.return_value  # unused attribute (tpcore/tests/test_risk_governor.py:24)
 _.return_value  # unused attribute (tpcore/tests/test_risk_governor_broker_floor.py:37)
