@@ -1,0 +1,36 @@
+{
+  "$schema": "https://code.claude.com/schema/settings.json",
+  "$comment": "Project-scoped Claude Code settings. The version-controlled architecture surface (rules/skills/agents/hooks here, settings.json itself) — per-machine state lives in .claude/settings.local.json (gitignored). Hooks wire the .claude/hooks/*.sh enforcement scripts. Authoritative external: https://code.claude.com/docs/en/hooks-guide.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {"type": "command", "command": ".claude/hooks/block-git-checkout.sh"},
+          {"type": "command", "command": ".claude/hooks/block-pytest-subset-when-ops.sh"}
+        ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {"type": "command", "command": ".claude/hooks/gate-ecr-dfcr-edits.sh"}
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {"type": "command", "command": ".claude/hooks/risk-path-reminder.sh"}
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {"type": "command", "command": ".claude/hooks/session-start.sh"}
+        ]
+      }
+    ]
+  }
+}
