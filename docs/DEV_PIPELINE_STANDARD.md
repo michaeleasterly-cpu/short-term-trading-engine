@@ -6,9 +6,45 @@ Both Claude Code sessions converged on this pipeline and the operator explicitly
 
 This standard is **descriptive of the process**, not a substitute for the operator and reviewer discipline that enforces it. The sentinel checks that the standard is present and intact; it cannot test that the process was followed.
 
-## §1 The Pipeline (numbered, non-optional)
+## §0 Scope-gated lanes (when to use which workflow)
 
-Every non-trivial change follows these steps in order. None is optional.
+The full §1 pipeline below is correct for high-risk work but is **not** the right default for every diff. The threshold, not the pipeline, is the lever. Anthropic's canonical Claude Code workflow is **Explore → Plan → Implement → Commit** (`https://code.claude.com/docs/en/best-practices`), and that doc explicitly says: *"Plan mode is useful, but also adds overhead… If you could describe the diff in one sentence, skip the plan."* The operator's standing 2026-05-20 memo (`feedback_cut_process_overhead_ship`) operationalizes this — *"ONE review/task, tests are the proof, no re-review-per-fix, lean default overrides heavy uniform pipeline."* The three lanes below encode that authority.
+
+### Fast lane (Implement → verify → Commit)
+
+Use the fast lane when **ALL** of the following hold:
+
+- the diff is describable in one sentence;
+- the change is one of: single file, doc-only, rename-only, log-line, or typo;
+- no migration;
+- no new public API.
+
+Fast-lane workflow: **Implement → verify (tests + CI) → Commit.** Explicitly omitted: no brainstorm, no `expert subagent` harden, no spec, no plan, no `split-review`. The `tests/test_dev_pipeline_standard_present.py` sentinel + CI (`gh pr checks`) remain the proof; the discipline rules in §2 still apply.
+
+### Heavy lane (mandatory full §1 pipeline)
+
+The full §1 pipeline (including the `expert subagent` harden, the `spec-read gate`, and the `split-review`) is **mandatory** when the change touches any of:
+
+- `tpcore/risk/` (the platform-wide RiskGovernor / capital-gate path)
+- `tpcore/selfheal/`
+- `tpcore/auditheal/`
+- `tpcore/quality/validation/` (the data-acceptance gate)
+- `ops/engine_service.py`
+- `ops/engine_sdlc.py` (or anything under `ops/engine_sdlc/`)
+- `ops/llm_data_triage.py`
+- `ops/engine_llm_triage.py`
+- `platform/migrations/`
+- a **new engine** — anything matching the `<engine>/` 5-plug structure at the repo root (setup_detection / lifecycle_analysis / execution_risk / aar_logging / capital_gate)
+- a **new data adapter**
+- the `tpcore/engine_profile._PROFILE` SoT (the engine roster)
+
+### Default lane (Anthropic's Explore → Plan → Implement → Commit)
+
+Everything outside the fast lane **and** outside the heavy-lane enumeration defaults to Anthropic's canonical workflow — **Explore → Plan → Implement → Commit** — with plan-mode optional per the one-sentence-diff rule above. The default lane uses **one** review (see §1 step 7); §2 still applies in full.
+
+## §1 The Pipeline (heavy-lane — numbered, non-optional)
+
+Heavy-lane changes (per §0) follow these steps in order. None is optional in the heavy lane.
 
 1. **Brainstorm.** Explore intent, requirements, and design before touching code.
 2. **Commission a skeptical expert subagent to harden the design.** A fresh-context expert subagent stress-tests the design, surfaces fatal objections, and tightens scope. The expert decides design/approach — do not over-ask the operator.
@@ -16,7 +52,7 @@ Every non-trivial change follows these steps in order. None is optional.
 4. **Operator spec-read gate.** An explicit human acknowledgement that the operator has read the spec. This is a `spec-read gate` — a hard checkpoint, not a courtesy.
 5. **Writing-plans = its own gated docs-only PR.** The implementation plan is written and lands as a separate, docs-only gated PR.
 6. **Subagent-driven execution.** A fresh implementer subagent executes the plan task by task.
-7. **SPLIT review.** Dispatch a fresh-context spec/intent reviewer. ONLY on its PASS, dispatch a SEPARATE fresh-context code-quality reviewer. Never one combined two-gate reviewer. This is the `split-review` rule: spec-compliance then, on PASS, a distinct fresh-context code-quality pass.
+7. **Review.** **Default lane (§0): ONE review** — a single fresh-context reviewer per change. The `split-review` rule (spec-compliance first; ONLY on its PASS a SEPARATE fresh-context code-quality reviewer; never one combined two-gate reviewer) applies **only when BOTH** (a) a written spec exists for the change AND (b) the change touches >1 module OR a risk-gate / capital-gate / data-acceptance-gate path (i.e. any heavy-lane trigger in §0). In every other case the `split-review` pattern is **explicitly omitted** — the lean directive (§0) is that one fresh-context review + the CI gate + the tests are the proof; re-reviewing every fix-loop iteration is the failure mode this standard now bans by default.
 8. **Implementer folds reviewer findings.** The implementer (not the reviewer) applies the review findings.
 9. **Gated PR.** The change lands as a gated pull request.
 10. **CI verified via `gh pr checks <n>`** — never `gh run watch`'s exit code. `gh run watch` has a documented misreport: its exit code does not faithfully reflect check status. Read `gh pr checks <n>` instead.
@@ -29,7 +65,7 @@ Every non-trivial change follows these steps in order. None is optional.
 
 Each rule with its *why*. These are repeatedly-violated failure modes; they are non-negotiable.
 
-- **Split-review separate dispatches.** Dispatch a fresh-context spec/intent reviewer; only on its PASS dispatch a SEPARATE fresh-context code-quality reviewer; never one combined two-gate reviewer. *Why:* a combined reviewer dilutes both gates and lets code-quality slip through on spec PASS (`feedback_split_review_dispatches`).
+- **`split-review` is heavy-lane only (default = one review).** Per §0, the `split-review` pattern (a fresh-context spec/intent reviewer; only on its PASS a SEPARATE fresh-context code-quality reviewer; never one combined two-gate reviewer) applies **only** in the heavy lane — i.e. when a written spec exists AND the change touches >1 module OR a risk-gate / capital-gate / data-acceptance-gate path. **Default lane and fast lane use one fresh-context review.** *Why:* `feedback_split_review_dispatches` proved a combined reviewer dilutes both gates on high-risk work; `feedback_cut_process_overhead_ship` (2026-05-20) proved applying that uniformly to every diff is the failure mode — the review spiral burns tokens and ships defects of its own. Two-gate rigor where it earns its cost; one review otherwise.
 - **`gh pr checks` not `gh run watch`.** Verify CI via `gh pr checks <n>`. *Why:* `gh run watch`'s exit code is a documented misreport — it can return success while checks are red.
 - **Whole-suite + order-flip is authoritative, never a subset.** Run the entire suite in one process plus the reversed module order; a subset-green result is not CI-green. *Why:* the `ops/` package-shadow — module import order and `sys.modules['ops']` state make subset runs unrepresentative of CI.
 - **Ops-shadow `xdist_group("ops_shadow")` sentinel discipline.** A new test that touches `sys.modules['ops']`, `spec_from_file_location(ops)`, or `importlib`-of-ops MUST carry the `xdist_group("ops_shadow")` mark. *Why:* without the mark `tests/test_xdist_group_manifest.py` reds CI, and the test can race other ops-touching tests under parallel execution.
