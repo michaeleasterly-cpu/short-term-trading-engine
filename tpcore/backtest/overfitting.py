@@ -105,8 +105,14 @@ def _psr_per_trade(
     return float(norm.cdf(z))
 
 
-MIN_TRIALS_FOR_V = 5  # H-A2-10: below this the cross-trial variance is too
-                      # noisy to trust as a selection-bias estimate.
+MIN_TRIALS_FOR_V = 5  # H-A2-10: advisory for CALLERS — below this the
+                      # cross-trial variance is too noisy to trust as a
+                      # selection-bias estimate, so callers (e.g.
+                      # OverfittingDiagnostic._trial_sharpe_variance /
+                      # compute_dsr_for_verdict) must pass
+                      # trial_sharpe_variance=None.
+                      # _expected_max_sharpe_under_null itself does NOT
+                      # enforce this guard; it applies only the floor.
 
 
 def _expected_max_sharpe_under_null(
@@ -144,6 +150,8 @@ def _expected_max_sharpe_under_null(
         # H-A2-10: honest cross-trial dispersion is used ONLY when it makes
         # the gate the SAME OR HARDER. A low-dispersion / degenerate sweep
         # (V < 1/(n_obs-1)) must NOT loosen the bar — clamp up to the floor.
+        # anti-laundering floor: NOT max(V,0.0) — V=0 collapses SR0->0,
+        # DSR->~1, spuriously clearing the 0.95 gate (T-STRICTER guards this).
         sr_variance = max(float(trial_sharpe_variance), floor)
     else:
         sr_variance = floor  # KNOWN APPROXIMATION — not the paper's V

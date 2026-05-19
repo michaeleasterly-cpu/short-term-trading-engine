@@ -543,22 +543,28 @@ def test_sp_a2_t_sig_compat_positional_calls_still_work() -> None:
     (the keyword-only ``trial_sharpe_variance`` addition is non-breaking)
     AND the positional/None path is *numerically byte-identical* to
     pre-SP-A2 — that byte-identity IS the backward-compat guarantee
-    (spec §3.1/§3.2 "backward-compatible by construction")."""
+    (spec §3.1/§3.2 "backward-compatible by construction").
+
+    Plan-correction history (controller, 2026-05-19): the original
+    assertion ``_deflated_sharpe_ratio(0.1, 250, 0.0, 3.0, 1) == 0.0``
+    was a plan-author factual error — there is NO DSR-level N=1
+    short-circuit. For ``n_trials<=1`` ``_expected_max_sharpe_under_null``
+    returns 0.0 as the *threshold*, then ``_psr_per_trade`` returns a
+    CDF (~0.9423) — the REAL pre-SP-A2 value (empirically verified
+    identical on origin/main, independent of SP-A2). T-SIG-COMPAT's true
+    intent is legacy byte-identity, so we pin THAT (the strongest
+    faithful form; spec §9 NON-GOALS forbids changing non-V numerics, so
+    adding an N=1 short-circuit is explicitly ruled out). The genuine
+    threshold short-circuit lives in ``_expected_max_sharpe_under_null``
+    (n_trials<=1 / n_obs<2 → 0.0), NOT at the DSR level."""
     from tpcore.backtest.overfitting import (
         _deflated_sharpe_ratio,
         _expected_max_sharpe_under_null,
     )
     assert _expected_max_sharpe_under_null(20, 250) >= 0.0     # reversion shape
     assert _deflated_sharpe_ratio(0.1, 250, 0.0, 3.0, 20) >= 0.0
-    # Plan-correction (controller, 2026-05-19): the original assertion
-    # `_deflated_sharpe_ratio(0.1, 250, 0.0, 3.0, 1) == 0.0` was a plan-author
-    # factual error — there is NO DSR-level N=1 short-circuit. For n_trials<=1
-    # `_expected_max_sharpe_under_null` returns 0.0 as the *threshold*, then
-    # `_psr_per_trade` returns a CDF (~0.9423) — the REAL pre-SP-A2 value
-    # (empirically verified identical on origin/main, independent of SP-A2).
-    # T-SIG-COMPAT's true intent is legacy byte-identity, so pin THAT (the
-    # strongest faithful form; spec §9 NON-GOALS forbids changing non-V
-    # numerics, so adding an N=1 short-circuit is explicitly ruled out).
+    # n_trials<=1 short-circuit lives in _expected_max_sharpe_under_null,
+    # NOT here; legacy CDF value pinned (see docstring).
     assert abs(_deflated_sharpe_ratio(0.1, 250, 0.0, 3.0, 1)
                - 0.942261266719699) < 1e-12   # legacy positional path byte-identical
     assert _expected_max_sharpe_under_null(50, 1) == 0.0  # genuine n_trials<=1/n_obs<2 threshold short-circuit (this one is real)
