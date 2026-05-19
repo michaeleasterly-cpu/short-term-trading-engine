@@ -10,6 +10,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 # Evict a non-package ``ops`` (scripts/ops.py) cached by an earlier test in
@@ -24,6 +26,12 @@ from tpcore.engine_profile import LifecycleState, roster_for_dispatch  # noqa: E
 CLAUDE = (REPO_ROOT / "CLAUDE.md").read_text()
 OPS = (REPO_ROOT / "docs" / "OPERATIONS.md").read_text()
 GLOSS = (REPO_ROOT / "docs" / "glossary.md").read_text()
+
+
+# pytest-xdist: pin this ops-shadow module to one worker so its
+# sys.modules['ops'] / scripts/ops.py loading stays single-process
+# (the ops/ package-shadow is a single-process invariant). P1.3.
+pytestmark = pytest.mark.xdist_group("ops_shadow")
 
 
 def test_clause_a_entrypoints_import_resolve():

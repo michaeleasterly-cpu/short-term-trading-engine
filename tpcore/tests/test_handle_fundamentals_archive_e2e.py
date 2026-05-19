@@ -56,6 +56,12 @@ _KNOWN_ROWS = [
 ]
 
 
+# pytest-xdist: pin this ops-shadow module to one worker so its
+# sys.modules['ops'] / scripts/ops.py loading stays single-process
+# (the ops/ package-shadow is a single-process invariant). P1.3.
+pytestmark = pytest.mark.xdist_group("ops_shadow")
+
+
 class _FakeConn:
     async def fetch(self, sql: str, *args):
         # The handler's only conn.fetch is the fundamentals_quarterly

@@ -6,6 +6,8 @@ path; the data-lane byte-no-op is proven by the UNCHANGED #187 suite
 """
 from __future__ import annotations
 
+import pytest
+
 from tpcore.engine_llm_triage.fence import (
     ENGINE_DENIED_EXACT,
     ENGINE_DENIED_GLOBS,
@@ -14,6 +16,11 @@ from tpcore.engine_llm_triage.fence import (
     engine_provenance_violations,
 )
 from tpcore.llm_data_triage.fence import hard_denied_paths
+
+# pytest-xdist: pin this ops-shadow module to one worker so its
+# sys.modules['ops'] / scripts/ops.py loading stays single-process
+# (the ops/ package-shadow is a single-process invariant). P1.3.
+pytestmark = pytest.mark.xdist_group("ops_shadow")
 
 
 def test_engine_denied_set_includes_engine_mechanism_files() -> None:

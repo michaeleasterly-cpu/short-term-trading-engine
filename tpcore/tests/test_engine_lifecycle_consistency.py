@@ -20,6 +20,8 @@ import re
 import tomllib
 from pathlib import Path
 
+import pytest
+
 from tpcore.engine_profile import (
     _PROFILE,
     LifecycleState,
@@ -30,6 +32,12 @@ from tpcore.engine_profile import (
 from tpcore.quality.validation.capital_gate import ENGINE_TABLES
 
 REPO = Path(__file__).resolve().parents[2]
+
+
+# pytest-xdist: pin this ops-shadow module to one worker so its
+# sys.modules['ops'] / scripts/ops.py loading stays single-process
+# (the ops/ package-shadow is a single-process invariant). P1.3.
+pytestmark = pytest.mark.xdist_group("ops_shadow")
 
 
 def test_dispatch_order_invariant_is_the_frozen_literal():

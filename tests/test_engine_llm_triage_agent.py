@@ -36,6 +36,12 @@ _spec.loader.exec_module(elt)
 _HOST_REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
+# pytest-xdist: pin this ops-shadow module to one worker so its
+# sys.modules['ops'] / scripts/ops.py loading stays single-process
+# (the ops/ package-shadow is a single-process invariant). P1.3.
+pytestmark = pytest.mark.xdist_group("ops_shadow")
+
+
 def _host_llm_triage_branches() -> list[str]:
     """Every `llm-triage/*` local branch in the LIVE host repo (empty on
     a clean repo). The regression bite: a test that leaks a real

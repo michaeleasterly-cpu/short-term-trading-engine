@@ -43,8 +43,24 @@ jobs:
       - name: Run ruff
         run: python -m ruff check reversion/ vector/ momentum/ sentinel/ canary/ tpcore/ scripts/ ops/
 
-      - name: Run pytest
-        run: python -m pytest -q
+      # Fast accelerator: pytest-xdist with --dist loadgroup keeps the
+      # ops-shadow modules (xdist_group("ops_shadow")) on one worker so
+      # their single-process sys.modules['ops'] invariant holds, while
+      # cross-module poisoning is per-worker process-isolated. This is
+      # NEVER the sole gate (live-money invariant) — the authoritative
+      # serial + order-flip step below is the gate of record.
+      - name: pytest (parallel accelerator)
+        run: python -m pytest -n auto --dist loadgroup -q
+
+      # AUTHORITATIVE correctness gate: the whole suite in ONE process
+      # (the ops/ package-shadow sys.modules poisoning + the streamlit
+      # "no dashboard.py import in CI" hazard are single-process
+      # properties) plus the order-flip pair both directions.
+      - name: pytest serial + order-flip (AUTHORITATIVE gate)
+        run: |
+          python -m pytest -p no:xdist -q
+          python -m pytest -p no:xdist -q tpcore/tests/test_ops.py tpcore/tests/test_ops_helpers.py tests/test_defect_register.py
+          python -m pytest -p no:xdist -q tests/test_defect_register.py tpcore/tests/test_ops_helpers.py tpcore/tests/test_ops.py
 
   # LLM-data-triage deterministic fence. Label-gated: runs ONLY on a
   # pull_request that carries the 'llm-data-triage' label, so non-LLM

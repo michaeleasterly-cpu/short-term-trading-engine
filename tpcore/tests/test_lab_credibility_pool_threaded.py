@@ -28,6 +28,13 @@ import argparse
 from dataclasses import dataclass
 from datetime import date
 
+import pytest
+
+# pytest-xdist: pin this ops-shadow module to one worker so its
+# sys.modules['ops'] / scripts/ops.py loading stays single-process
+# (the ops/ package-shadow is a single-process invariant). P1.3.
+pytestmark = pytest.mark.xdist_group("ops_shadow")
+
 
 @dataclass
 class _Trade:

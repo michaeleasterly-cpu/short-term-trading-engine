@@ -2,11 +2,18 @@
 'bug-fix-yes / system-breaking-no' boundary."""
 from __future__ import annotations
 
+import pytest
+
 from tpcore.llm_data_triage.fence import (
     DENIED_PREFIXES,
     hard_denied_paths,
     provenance_violations,
 )
+
+# pytest-xdist: pin this ops-shadow module to one worker so its
+# sys.modules['ops'] / scripts/ops.py loading stays single-process
+# (the ops/ package-shadow is a single-process invariant). P1.3.
+pytestmark = pytest.mark.xdist_group("ops_shadow")
 
 
 def test_hard_denied_flags_body_paths() -> None:

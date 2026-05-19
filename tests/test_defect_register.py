@@ -22,6 +22,8 @@ import types
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 _REPO = Path(__file__).resolve().parents[1]
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
@@ -53,6 +55,12 @@ if str(_REPO) not in sys.path:
 # under test, then RESTORE sys.modules EXACTLY — zero global side
 # effects, collection-order safe in BOTH directions.
 _DR_PATH = _REPO / "ops" / "defect_register.py"
+
+
+# pytest-xdist: pin this ops-shadow module to one worker so its
+# sys.modules['ops'] / scripts/ops.py loading stays single-process
+# (the ops/ package-shadow is a single-process invariant). P1.3.
+pytestmark = pytest.mark.xdist_group("ops_shadow")
 
 
 def _load_real_sibling(name: str) -> types.ModuleType:

@@ -10,6 +10,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
@@ -22,6 +24,13 @@ import ops  # noqa: E402 — sys.path adjusted above
 # scripts/simulate_universe.py. Brittle by nature: regression here is
 # silent (we'd report 0 candidates for every engine), so it deserves a test.
 # ────────────────────────────────────────────────────────────────────────
+
+
+# pytest-xdist: pin this ops-shadow module to one worker so its
+# sys.modules['ops'] / scripts/ops.py loading stays single-process
+# (the ops/ package-shadow is a single-process invariant). P1.3.
+pytestmark = pytest.mark.xdist_group("ops_shadow")
+
 
 def test_candidate_re_matches_three_engines():
     stdout = (

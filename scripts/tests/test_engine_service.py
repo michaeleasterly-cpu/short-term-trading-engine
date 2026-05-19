@@ -6,6 +6,8 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch  # noqa: F401
 
+import pytest
+
 # scripts/ops.py (data-ops CLI) and the ops/ daemons package share the
 # top-level name `ops`; tpcore/tests/test_ops.py does
 # `sys.path.insert(0, scripts/); import ops`, so under full-suite
@@ -23,6 +25,11 @@ for _m in [m for m in list(sys.modules) if m == "ops" or m.startswith("ops.")]:
         del sys.modules[_m]
 
 from ops import engine_service as es  # noqa: E402
+
+# pytest-xdist: pin this ops-shadow module to one worker so its
+# sys.modules['ops'] / scripts/ops.py loading stays single-process
+# (the ops/ package-shadow is a single-process invariant). P1.3.
+pytestmark = pytest.mark.xdist_group("ops_shadow")
 
 
 class _Conn:

@@ -25,6 +25,12 @@ for _m in [m for m in list(sys.modules) if m == "ops" or m.startswith("ops.")]:
         del sys.modules[_m]
 
 
+# pytest-xdist: pin this ops-shadow module to one worker so its
+# sys.modules['ops'] / scripts/ops.py loading stays single-process
+# (the ops/ package-shadow is a single-process invariant). P1.3.
+pytestmark = pytest.mark.xdist_group("ops_shadow")
+
+
 def _write_ecr(tmp_path: Path, body: str) -> Path:
     p = tmp_path / "ecr.txt"
     p.write_text(body)

@@ -21,6 +21,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 # ops/ vs scripts/ops.py name-collision guard (identical to
 # scripts/tests/test_aar_autotune.py).
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -41,6 +43,13 @@ _INJ_SOURCE = "canary_injection"
 # ---------------------------------------------------------------------------
 # In-memory store backing forensics_triggers + application_log
 # ---------------------------------------------------------------------------
+
+
+# pytest-xdist: pin this ops-shadow module to one worker so its
+# sys.modules['ops'] / scripts/ops.py loading stays single-process
+# (the ops/ package-shadow is a single-process invariant). P1.3.
+pytestmark = pytest.mark.xdist_group("ops_shadow")
+
 
 class _Store:
     """Shared in-memory backing store for all fake DB ops."""

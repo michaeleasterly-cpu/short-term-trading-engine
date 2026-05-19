@@ -36,6 +36,7 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
+    "pytest-xdist>=3.6,<4",
     "ruff>=0.4",
     "mypy>=1.10",
 ]
@@ -88,6 +89,9 @@ ignore = ["E501"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+markers = [
+    "xdist_group: pytest-xdist group pinning (ops-shadow single-worker isolation; P1.3)",
+]
 testpaths = [
     "tests",
     "tpcore/tests",

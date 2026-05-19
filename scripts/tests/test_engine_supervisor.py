@@ -8,6 +8,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 # ops/ vs scripts/ops.py top-level name collision guard (identical to
 # scripts/tests/test_engine_dispatch.py — repo root first, evict any
 # non-package `ops`/`ops.*` so the real ops/ package resolves).
@@ -18,6 +20,11 @@ for _m in [m for m in list(sys.modules) if m == "ops" or m.startswith("ops.")]:
         del sys.modules[_m]
 
 from ops import engine_supervisor as es  # noqa: E402
+
+# pytest-xdist: pin this ops-shadow module to one worker so its
+# sys.modules['ops'] / scripts/ops.py loading stays single-process
+# (the ops/ package-shadow is a single-process invariant). P1.3.
+pytestmark = pytest.mark.xdist_group("ops_shadow")
 
 
 class _RecConn:

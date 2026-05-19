@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 # Evict a non-package ``ops`` (scripts/ops.py) cached by an earlier test
@@ -31,6 +33,13 @@ for _m in [m for m in list(sys.modules) if m == "ops" or m.startswith("ops.")]:
 #    NOTHING RETURNING 1, plus the cumulative SUM. The real
 #    DataQualityWriter.write SQL (tpcore/quality/data_quality.py:48) is
 #    exercised against this; no socket. ──────────────────────────────
+
+# pytest-xdist: pin this ops-shadow module to one worker so its
+# sys.modules['ops'] / scripts/ops.py loading stays single-process
+# (the ops/ package-shadow is a single-process invariant). P1.3.
+pytestmark = pytest.mark.xdist_group("ops_shadow")
+
+
 class _FakeConn:
     def __init__(self, rows: list[dict]) -> None:
         self._rows = rows

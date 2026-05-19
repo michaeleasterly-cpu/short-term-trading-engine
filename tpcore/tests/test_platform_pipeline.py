@@ -33,6 +33,14 @@ platform_pipeline = importlib.util.module_from_spec(_SPEC)
 sys.modules["platform_pipeline_under_test"] = platform_pipeline
 _SPEC.loader.exec_module(platform_pipeline)
 
+# pytest-xdist: pin this ops-shadow module to one worker so its
+# sys.modules['ops'] / scripts/ops.py loading stays single-process
+# (the ops/ package-shadow is a single-process invariant). P1.3/P1.4 —
+# caught by the grep-derived test_xdist_group_manifest sentinel (the
+# P1.1 greps missed this multi-line spec_from_file_location of an
+# ops/ package module bound under a non-"ops" name).
+pytestmark = pytest.mark.xdist_group("ops_shadow")
+
 
 @pytest.fixture(autouse=True)
 def _set_dsn(monkeypatch):

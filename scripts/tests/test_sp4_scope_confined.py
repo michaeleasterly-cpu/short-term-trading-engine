@@ -24,6 +24,12 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 
 
+# pytest-xdist: pin this ops-shadow module to one worker so its
+# sys.modules['ops'] / scripts/ops.py loading stays single-process
+# (the ops/ package-shadow is a single-process invariant). P1.3.
+pytestmark = pytest.mark.xdist_group("ops_shadow")
+
+
 def _resolve_sp4_base() -> str:
     """Prefer origin/main (the ref CI's PR checkout actually has); fall
     back to a local main; skip (not fail) if neither resolves — the
