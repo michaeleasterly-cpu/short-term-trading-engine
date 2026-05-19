@@ -87,8 +87,8 @@ class _SharedPool:
 #   WINDOWED (final_holdout=False, span_days=365, n=8 for all three):
 #     A: sharpe_score=4.1666  max_drawdown=-0.045   <- SHARPE winner
 #     B: sharpe_score=2.9704  max_drawdown= 0.000   <- MAXDD winner
-#     C: sharpe_score=2.2459  max_drawdown=-0.015   <- wins NEITHER
-#   ⇒ SHARPE order A>B>C (A strictly max); MAXDD order B>C>A (strict).
+#     C: sharpe_score=3.6178  max_drawdown=-0.015   <- wins NEITHER
+#   ⇒ SHARPE order A>C>B (A strictly max); MAXDD order B>C>A (strict).
 #   FINAL HOLDOUT: A,B n_trades=8 (survive); C n_trades=2 (<3 ⇒ the
 #   metric-blind sacred-gate FAIL lever, §5.2). C's WINDOWED replay still
 #   has n=8 + a finite score so it is a real `ranked` member, not pre-
@@ -414,7 +414,7 @@ async def test_make_or_break_adversarial_through_both_gates(
 
     def _adversarial(m):
         # +1e9 for the C-shaped slice (n_trades small in final holdout but
-        # finite windowed score), -1e9 otherwise. Keyed off win_rate so it
+        # finite windowed score), -1e9 otherwise. Keyed off n_trades<5 so it
         # is metric-value adversarial without touching the gate.
         return 1e9 if m.n_trades < 5 else -1e9
 
