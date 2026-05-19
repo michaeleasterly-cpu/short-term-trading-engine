@@ -376,6 +376,86 @@ async def test_non_dict_json_skips_escalation_not_batch(monkeypatch) -> None:
     assert out.proposed == ["ref-good"]
 
 
+class _AclMessages:
+    """Async create that records calls; behaviour parameterised."""
+    def __init__(self, mode: str):
+        self._mode = mode
+        self.calls = 0
+
+    async def create(self, **kw):
+        self.calls += 1
+        if self._mode == "boom":
+            raise RuntimeError("non-auth api error")
+        if self._mode == "auth":
+            import anthropic
+
+            class _Auth(anthropic.AuthenticationError):
+                def __init__(self) -> None:
+                    pass
+
+            raise _Auth()
+        return _Msg(json.dumps({
+            "proposed_disposition": "converted", "confidence": "med",
+            "rationale": "r", "could_not_determine": "n"}))
+
+
+class _AclClient:
+    """Fake async client whose ``aclose`` is an AsyncMock — asserts
+    run_triage releases the client (httpx pool) on EVERY exit path."""
+    def __init__(self, mode: str = "ok"):
+        self.messages = _AclMessages(mode)
+        from unittest.mock import AsyncMock
+        self.aclose = AsyncMock()
+
+
+class _NoAcloseClient:
+    """Fake async client WITHOUT ``aclose`` — the defensive getattr in
+    the finally must not raise on a fake/SDK lacking the method."""
+    def __init__(self):
+        self.messages = _AclMessages("ok")
+
+
+async def test_client_closed_on_normal_path(monkeypatch) -> None:
+    """Bite: pre-fix run_triage never closes the client → AsyncMock
+    not awaited → assert_awaited_once() fails (red)."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    client = _AclClient("ok")
+    pool = _Pool(open_rows=[_row("h1")])
+    out = await lt.run_triage(pool, client_factory=lambda: client)
+    assert out.proposed == ["h1"]
+    client.aclose.assert_awaited_once()
+
+
+async def test_client_closed_on_auth_skip_early_return(monkeypatch) -> None:
+    """The _AuthSkip early `return out` path must still close the client."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "invalid")
+    client = _AclClient("auth")
+    pool = _Pool(open_rows=[_row("h1")])
+    out = await lt.run_triage(pool, client_factory=lambda: client)
+    assert out.skipped_no_key is True and out.proposed == []
+    client.aclose.assert_awaited_once()
+
+
+async def test_client_closed_when_call_raises_to_outer_except(monkeypatch) -> None:
+    """The non-auth raise → outer except → out.error path must close it."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    client = _AclClient("boom")
+    pool = _Pool(open_rows=[_row("h1")])
+    out = await lt.run_triage(pool, client_factory=lambda: client)
+    assert out.error is not None and out.proposed == []
+    client.aclose.assert_awaited_once()
+
+
+async def test_client_without_aclose_does_not_raise(monkeypatch) -> None:
+    """Defensive: a fake/SDK lacking ``aclose`` must not break the
+    finally (getattr-guarded close)."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    pool = _Pool(open_rows=[_row("h1")])
+    out = await lt.run_triage(
+        pool, client_factory=lambda: _NoAcloseClient())
+    assert out.error is None and out.proposed == ["h1"]
+
+
 def _imported_modules(path: str) -> set[str]:
     import ast
     src = pathlib.Path(path).read_text()
