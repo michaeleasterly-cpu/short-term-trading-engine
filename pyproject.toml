@@ -76,6 +76,7 @@ exclude = ["tests*"]
 [tool.ruff]
 line-length = 110
 target-version = "py311"
+extend-exclude = ["data", "logs", "*_archive", ".claude"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
@@ -89,6 +90,7 @@ ignore = ["E501"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+norecursedirs = ["data", "logs", ".claude", "*_archive", ".git", ".venv"]
 markers = [
     "xdist_group: pytest-xdist group pinning (ops-shadow single-worker isolation; P1.3)",
 ]
