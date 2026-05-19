@@ -1134,8 +1134,13 @@ git commit -m "refactor(lab-sp-b): roster-SoT dispatch resolver + lazy PARAM_RAN
 
 **Files:**
 - Modify: `ops/lab/__main__.py` (`:50-53`)
-- Modify: `ops/lab/run.py` (`:620`)
+- Modify: `ops/lab/run.py` (`:678` — plan said `:620`; actual `_parse_args` is `:676`, the `--engine` line `:678`)
+- Modify: `pyproject.toml` (add the `tpcore/tests/test_lab_cli_choices_from_roster.py = ["SLF"]` per-file-ignore — see Plan correction below)
 - Test: `tpcore/tests/test_lab_cli_choices_from_roster.py`
+
+> **Plan correction (T5, adjudicated consistent with the T1/T3/T4 precedent — controller-approved):**
+> 1. **Hollow red-proof.** As originally written the test SKIPS `sentinel` in the `run.py` loop (`if good == "sentinel": continue`) and never asserts `sentinel` acceptance on the `__main__.py` surface. With the pre-SP-B literal `("reversion","vector","momentum")` every assertion still PASSES (bad choices rejected; the three literal members accepted; sentinel never exercised), so Step-2 "Expected: FAIL" is FALSE — the test does not discriminate the literal from the accessor. Corrected: both surface tests now `assert "sentinel" in lab_targetable_engines()` and loop ALL accessor members (no skip), so accepting the eligible-but-undeclared `sentinel` is the genuine discriminator. **Verified red-proof:** the strengthened test FAILS against the old literal (argparse rejects `sentinel` → `SystemExit` where acceptance is asserted) and PASSES against the accessor.
+> 2. **Missing SLF baseline.** The test calls `ops.lab.run._parse_args` / `ops.lab.__main__._parse_args` (engine-lane-module-private, NOT tpcore-private — that IS its purpose). Per CLAUDE.md/STYLE_GUIDE the canonical form is a pyproject per-file-ignore (never an inline `# noqa: SLF001`), mirroring the `test_lab_dispatch_indirection.py` / frozen-oracle precedents already in `[tool.ruff.lint.per-file-ignores]`. Added `pyproject.toml` to the Files list + Step 4b below; Step 1's test body is unchanged in shape (only the sentinel-skip removed + the discriminator asserts added).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1173,15 +1178,18 @@ def test_run_py_engine_choices_are_the_accessor():
     for bad in ("canary", "sigma", "lab"):
         with pytest.raises(SystemExit):
             run._parse_args(["--engine", bad])
-    # And every accessor member is accepted.
+    # And every accessor member is accepted by argparse — including the
+    # eligible-but-undeclared "sentinel" (argparse accepts; the resolver
+    # rejects it later). Accepting "sentinel" is the discriminator that
+    # proves the choices ARE the accessor, not the stale literal triple.
+    assert "sentinel" in lab_targetable_engines()
     for good in lab_targetable_engines():
-        if good == "sentinel":
-            continue  # eligible-but-undeclared: argparse accepts; resolver rejects later
         run._parse_args(["--engine", good])
 
 
 def test_main_py_target_engine_choices_are_the_accessor():
     import ops.lab.__main__ as m
+    from tpcore.engine_profile import lab_targetable_engines
 
     ns = m._parse_args(["--candidate", "c", "--target-engine", "reversion",
                         "--intent", "promote_new"])
@@ -1190,6 +1198,12 @@ def test_main_py_target_engine_choices_are_the_accessor():
         with pytest.raises(SystemExit):
             m._parse_args(["--candidate", "c", "--target-engine", bad,
                            "--intent", "promote_new"])
+    # Accepting the eligible-but-undeclared "sentinel" is the discriminator
+    # that proves the choices ARE the accessor, not the stale literal.
+    assert "sentinel" in lab_targetable_engines()
+    for good in lab_targetable_engines():
+        m._parse_args(["--candidate", "c", "--target-engine", good,
+                       "--intent", "promote_new"])
 
 
 def test_import_ops_lab_main_eager_imports_no_engine():
@@ -1213,7 +1227,7 @@ def test_import_ops_lab_main_eager_imports_no_engine():
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `python -m pytest tpcore/tests/test_lab_cli_choices_from_roster.py -p no:xdist -q`
-Expected: FAIL — the literal `choices=("reversion","vector","momentum")` rejects nothing differently, so the "accessor membership accepted" / "sentinel accepted by argparse" assertions fail (`sentinel` is not in the literal tuple → `SystemExit` where the test expects acceptance).
+Expected: FAIL (with the **corrected** test — see Plan correction above) — the literal `choices=("reversion","vector","momentum")` rejects `sentinel`, so the "every accessor member accepted (incl. sentinel)" assertions fail on both surfaces (`sentinel` not in the literal tuple → `SystemExit` where the test asserts acceptance). (The plan's *original* test skipped/omitted the `sentinel` assertion and would have spuriously PASSED here — that hollow red-proof is what the Plan correction fixes.)
 
 - [ ] **Step 3: Implement — `ops/lab/run.py` argparse**
 
@@ -1250,6 +1264,22 @@ with:
 ```
 > `from tpcore.engine_profile import ...` is a `tpcore` import — always legal in `ops/`, engine-free, no eager engine import; the `__main__.py:18-20` no-eager-import contract is preserved (the subprocess test in Step 1 proves it).
 
+- [ ] **Step 4b: Add the canonical SLF per-file-ignore (Plan correction)**
+
+In `pyproject.toml` `[tool.ruff.lint.per-file-ignores]`, immediately after the `"tpcore/tests/test_lab_dispatch_indirection.py" = ["SLF"]` entry, add:
+```toml
+# SP-B T5 CLI-choices-from-roster test: proving both argparse surfaces
+# generate `--engine`/`--target-engine` choices from
+# `lab_targetable_engines()` REQUIRES calling the `ops.lab.run` /
+# `ops.lab.__main__`-private `_parse_args` (that IS the test's purpose —
+# it exercises the built parser). Engine-lane-module-private (NOT tpcore-
+# private) access in a CLI-contract test; the scoped per-file ignore is
+# the correct form (mirrors the char/dispatch-seam precedents above) —
+# never an inline `# noqa: SLF001` (CLAUDE.md / STYLE_GUIDE).
+"tpcore/tests/test_lab_cli_choices_from_roster.py" = ["SLF"]
+```
+(Without this the test reds ruff `SLF001`; an inline `# noqa: SLF001` is forbidden by CLAUDE.md/STYLE_GUIDE — the per-file-ignore is the canonical baseline form, mirroring the existing char/dispatch-seam precedents.)
+
 - [ ] **Step 5: Run test to verify it passes**
 
 Run: `python -m pytest tpcore/tests/test_lab_cli_choices_from_roster.py -p no:xdist -q`
@@ -1262,13 +1292,13 @@ Expected: PASS unmodified (the legacy `scripts/search_parameters.py` shim inheri
 
 - [ ] **Step 7: ruff**
 
-Run: `python -m ruff check ops/lab/run.py ops/lab/__main__.py`
-Expected: exit 0.
+Run: `python -m ruff check ops/lab/run.py ops/lab/__main__.py tpcore/tests/test_lab_cli_choices_from_roster.py`
+Expected: exit 0 (the test file is clean given the Step-4b per-file-ignore).
 
 - [ ] **Step 8: Commit**
 
 ```bash
-git add ops/lab/run.py ops/lab/__main__.py tpcore/tests/test_lab_cli_choices_from_roster.py
+git add ops/lab/run.py ops/lab/__main__.py tpcore/tests/test_lab_cli_choices_from_roster.py pyproject.toml
 git commit -m "feat(lab-sp-b): generate CLI --engine/--target-engine choices from the roster accessor"
 ```
 

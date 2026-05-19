@@ -675,7 +675,8 @@ def write_results_csv(path: Path, trials: list[TrialResult]) -> None:
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("--engine", choices=("reversion", "vector", "momentum"), required=True)
+    from tpcore.engine_profile import lab_targetable_engines
+    p.add_argument("--engine", choices=lab_targetable_engines(), required=True)
     p.add_argument("--trials", type=int, default=200,
                    help="Total parameter combinations to pre-sample (default 200).")
     p.add_argument("--per-window-trials", type=int, default=50,

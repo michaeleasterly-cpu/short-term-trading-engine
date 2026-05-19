@@ -47,10 +47,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument("--candidate", required=True,
                    help="Lab candidate name (validated [A-Za-z0-9_-]+).")
+    from tpcore.engine_profile import lab_targetable_engines
     p.add_argument("--target-engine", required=True,
-                   choices=("reversion", "vector", "momentum"),
-                   help="The existing engine whose backtest contract the "
-                        "Lab exercises.")
+                   choices=lab_targetable_engines(),
+                   help="The roster-Lab-targetable engine whose backtest "
+                        "contract the Lab exercises (choices generated from "
+                        "tpcore.engine_profile — SP-B). An eligible-but-"
+                        "undeclared engine (e.g. sentinel pre-SP-E) is a "
+                        "valid choice but the resolver rejects it with a "
+                        "clear LAB_TARGET message.")
     p.add_argument("--intent", required=True,
                    choices=("promote_new", "fold_existing"),
                    help="Recommended exit if the candidate SURVIVES.")
