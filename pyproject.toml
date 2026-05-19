@@ -204,6 +204,17 @@ ignore = ["E501"]
 # correct form (SP-B/SP-D precedent) — never an inline `# noqa: SLF001`
 # (CLAUDE.md / STYLE_GUIDE).
 "sentinel/tests/test_lab_maxdd_ranking_gate_sacred.py" = ["SLF"]
+# SP-F Catalyst proof case (lab_candidate_readiness §2/§3 C4): the
+# byte-identical / no-cross-trial-leakage characterization test
+# REQUIRES naming the `catalyst.backtest`-private
+# `_CLUSTER_WINDOW_OVERRIDE` to prove the per-call module-global reset
+# discipline (the SP-D/SP-E precedent for engine-OWNED Lab seams).
+# Engine-lane-module-private (NOT tpcore-private) access in a
+# characterization test; the scoped per-file ignore is the correct form
+# (mirrors the SP-B/SP-D/SP-E precedents above) — never an inline
+# `# noqa: SLF001` (CLAUDE.md / STYLE_GUIDE).
+"catalyst/tests/test_catalyst_backtest.py" = ["SLF"]
+"catalyst/tests/test_lab_cluster_window_byte_identical.py" = ["SLF"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

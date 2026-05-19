@@ -1,0 +1,10 @@
+ECR
+action:        ADD
+engine:        catalyst
+source:        new_scaffold
+cadence:       daily
+allocator:     true
+dispatch_order: 6
+gate_dsr:      0.95
+gate_cred:     60
+need:          Insider-cluster swing engine (SP-F): ≥3 distinct Form-4 insider BUYers + ≥$250k aggregate in a 30-day window on a trend-up name; flat-bracket exits (+12% TP / −7% SL); SP-B/SP-C end-to-end proof case for the Lab front-half epic.
