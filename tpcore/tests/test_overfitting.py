@@ -568,3 +568,77 @@ def test_sp_a2_t_sig_compat_positional_calls_still_work() -> None:
     assert abs(_deflated_sharpe_ratio(0.1, 250, 0.0, 3.0, 1)
                - 0.942261266719699) < 1e-12   # legacy positional path byte-identical
     assert _expected_max_sharpe_under_null(50, 1) == 0.0  # genuine n_trials<=1/n_obs<2 threshold short-circuit (this one is real)
+
+
+def _sp_a2_make_trial_matrix(col_means, *, n_obs=250, seed=0):
+    """T×N matrix with controlled per-column Sharpe dispersion."""
+    rng = np.random.default_rng(seed)
+    cols = []
+    for m in col_means:
+        c = rng.normal(m, 0.02, n_obs)
+        cols.append(c)
+    return np.column_stack(cols)
+
+
+def test_sp_a2_t_crosstrial_matrix_changes_dsr_via_v() -> None:
+    """T-CROSSTRIAL (MAKE-OR-BREAK). Supplying a trial_returns_matrix with
+    KNOWN per-column Sharpe dispersion makes OverfittingDiagnostic's DSR
+    equal the DSR computed from that V, and STRICTLY different from the
+    no-matrix fallback run on the same winner (i.e. it tightens)."""
+    # Lazy imports — SP-A2 symbols not in module-level namespace (T1/T2 pattern).
+    from tpcore.backtest.overfitting import (
+        _column_sharpes,
+        _deflated_sharpe_ratio,
+        _moments,
+        _per_trade_sharpe,
+    )
+    returns = list(np.random.default_rng(1).normal(0.01, 0.02, 200))
+    trades = _make_trades(returns)
+    matrix = _sp_a2_make_trial_matrix(
+        [0.0, 0.02, 0.04, 0.06, 0.08, 0.10, 0.12], n_obs=200, seed=3)
+    diag_v = OverfittingDiagnostic(
+        trades=trades, parameters={"p": 1}, sr_observed=0.1, n_trials=7,
+        trial_returns_matrix=matrix,
+    )
+    rep_v = diag_v.run()
+    diag_fb = OverfittingDiagnostic(
+        trades=trades, parameters={"p": 1}, sr_observed=0.1, n_trials=7,
+    )
+    rep_fb = diag_fb.run()
+    expected_v = float(np.var(_column_sharpes(matrix), ddof=1))
+    pnls = np.array([t["pnl_pct"] for t in trades], dtype=float)
+    sk, ku = _moments(pnls)
+    want = _deflated_sharpe_ratio(
+        _per_trade_sharpe(pnls), pnls.size, sk, ku, 7,
+        trial_sharpe_variance=expected_v,
+    )
+    assert abs(rep_v.dsr_value - want) < 1e-9
+    assert rep_v.dsr_value != rep_fb.dsr_value           # V actually changed DSR
+    assert rep_v.dsr_value <= rep_fb.dsr_value + 1e-12   # tightening direction
+
+
+def test_sp_a2_t_degenerate_identical_columns_and_too_few_cols() -> None:
+    """T-DEGENERATE (H-A2-8). All-identical columns ⇒ V=0 ⇒ floored, no
+    crash. < MIN_TRIALS_FOR_V columns ⇒ helper returns None ⇒ fallback +
+    WARNING (no raise). < 2-D / empty ⇒ None."""
+    # Lazy imports — SP-A2 symbols not in module-level namespace (T1/T2 pattern).
+    from tpcore.backtest.overfitting import MIN_TRIALS_FOR_V
+    returns = list(np.random.default_rng(2).normal(0.01, 0.02, 120))
+    trades = _make_trades(returns)
+    identical = np.column_stack([np.full(120, 0.01)] * 6)
+    rep_ident = OverfittingDiagnostic(
+        trades=trades, parameters={"p": 1}, sr_observed=0.1, n_trials=6,
+        trial_returns_matrix=identical,
+    ).run()
+    assert 0.0 <= rep_ident.dsr_value <= 1.0              # no crash, bounded
+    few = _sp_a2_make_trial_matrix([0.0, 0.05, 0.10], n_obs=120, seed=4)
+    assert few.shape[1] < MIN_TRIALS_FOR_V
+    diag_few = OverfittingDiagnostic(
+        trades=trades, parameters={"p": 1}, sr_observed=0.1, n_trials=3,
+        trial_returns_matrix=few,
+    )
+    assert diag_few._trial_sharpe_variance() is None      # too few cols
+    diag_none = OverfittingDiagnostic(
+        trades=trades, parameters={"p": 1}, sr_observed=0.1, n_trials=3,
+    )
+    assert diag_none._trial_sharpe_variance() is None      # no matrix

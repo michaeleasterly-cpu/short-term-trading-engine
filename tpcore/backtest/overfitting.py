@@ -413,6 +413,25 @@ class OverfittingDiagnostic:
     # public entrypoint
     # ─────────────────────────────────────────────────────────────────────
 
+    def _trial_sharpe_variance(self) -> float | None:
+        """V[ŜR_n] across the N searched trials, from the SAME per-column
+        Sharpe vector PBO already uses (``_column_sharpes``). One canonical
+        Sharpe-vector definition; no second estimator. ``None`` when no
+        matrix / not 2-D / < MIN_TRIALS_FOR_V columns (the §3.1 floor at
+        1/(n_obs-1) then keeps the gate safe — H-A2-10). Never raises
+        (module contract: sub-tests never raise)."""
+        if self._trial_matrix is None:
+            return None
+        arr = (
+            self._trial_matrix.values
+            if isinstance(self._trial_matrix, pd.DataFrame)
+            else np.asarray(self._trial_matrix)
+        )
+        if arr.ndim != 2 or arr.shape[1] < MIN_TRIALS_FOR_V:
+            return None
+        col_sharpes = _column_sharpes(arr)
+        return float(np.var(col_sharpes, ddof=1))
+
     def run(self) -> OverfittingReport:
         pnls = self._pnl_array()
         n = pnls.size
@@ -421,7 +440,29 @@ class OverfittingDiagnostic:
 
         # 1–2. PSR / DSR
         psr_at_zero = _psr_per_trade(sr_internal, 0.0, n, skew, kurt) if n >= 2 else 0.0
-        dsr = _deflated_sharpe_ratio(sr_internal, n, skew, kurt, self._n_trials) if n >= 2 else 0.0
+        trial_sharpe_var = self._trial_sharpe_variance()  # None ⇒ documented fallback
+        if trial_sharpe_var is not None:
+            # H-A2-4: the V-source trial count and the multiple-testing
+            # count are deliberately distinct estimands — log side-by-side
+            # so any divergence is visible, never silently reconciled.
+            _v_arr = (
+                self._trial_matrix.values
+                if isinstance(self._trial_matrix, pd.DataFrame)
+                else np.asarray(self._trial_matrix)
+            )
+            logger.info(
+                "tpcore.overfitting.dsr.v_n_trial_population",
+                v_trial_count=int(_v_arr.shape[1]),
+                n_trials=self._n_trials,
+            )
+        dsr = (
+            _deflated_sharpe_ratio(
+                sr_internal, n, skew, kurt, self._n_trials,
+                trial_sharpe_variance=trial_sharpe_var,
+            )
+            if n >= 2
+            else 0.0
+        )
 
         # 3. PBO via CSCV (only with a returns matrix)
         pbo_value, pbo_passes, pbo_reason = self._run_pbo()
