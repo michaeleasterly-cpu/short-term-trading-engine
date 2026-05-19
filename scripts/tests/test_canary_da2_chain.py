@@ -284,7 +284,7 @@ async def test_loss_cluster_hold_chain():
 
     # Step 1: inject
     await _stage_canary_inject_trigger(pool, {"kind": "loss_cluster", "streak": 5})
-    assert len(store._triggers) == 1
+    assert len(store._triggers) == 1  # noqa: SLF001
 
     # Step 2: autotune — must hold & escalate
     with patch.object(at, "current_hold", new=_make_current_hold_fn(store)):
@@ -294,7 +294,7 @@ async def test_loss_cluster_hold_chain():
     assert "ENGINE_HELD" in events, f"expected ENGINE_HELD, got {events}"
     assert "ENGINE_ESCALATED" in events, f"expected ENGINE_ESCALATED, got {events}"
 
-    held_rows = [r for r in store._app_log
+    held_rows = [r for r in store._app_log  # noqa: SLF001
                  if r["event_type"] == "ENGINE_HELD" and r["engine"] == _CANARY]
     assert len(held_rows) == 1
     assert held_rows[0]["data"]["failure_class"] == "behavioral"
@@ -332,7 +332,7 @@ async def test_drawdown_period_hold_chain():
     pool = _Pool(store)
 
     await _stage_canary_inject_trigger(pool, {"kind": "drawdown_period"})
-    assert len(store._triggers) == 1
+    assert len(store._triggers) == 1  # noqa: SLF001
 
     with patch.object(at, "current_hold", new=_make_current_hold_fn(store)):
         await at.autotune(pool, _CANARY, NOW)
@@ -341,7 +341,7 @@ async def test_drawdown_period_hold_chain():
     assert "ENGINE_HELD" in events
     assert "ENGINE_ESCALATED" in events
 
-    held_rows = [r for r in store._app_log
+    held_rows = [r for r in store._app_log  # noqa: SLF001
                  if r["event_type"] == "ENGINE_HELD" and r["engine"] == _CANARY]
     assert held_rows[0]["data"]["failure_class"] == "behavioral"
 
@@ -420,20 +420,20 @@ async def test_teardown_removes_only_injected_rows():
 
     # Seed a non-injection row that must survive
     store.seed_non_canary_trigger()
-    non_injection_count_before = len(store._triggers)
+    non_injection_count_before = len(store._triggers)  # noqa: SLF001
     assert non_injection_count_before == 1
 
     # Inject some canary rows
     await _stage_canary_inject_trigger(pool, {"kind": "loss_cluster", "streak": 5})
     await _stage_canary_inject_trigger(pool, {"kind": "drawdown_period"})
-    assert len(store._triggers) == 3
+    assert len(store._triggers) == 3  # noqa: SLF001
 
     # Teardown
     result = await _stage_canary_inject_trigger(pool, {"teardown": True})
     assert result["teardown"] is True
 
     # Only the non-injection row remains
-    remaining = store._triggers
+    remaining = store._triggers  # noqa: SLF001
     assert len(remaining) == 1
     assert remaining[0]["payload"]["source"] != _INJ_SOURCE
     assert remaining[0]["payload"]["engine"] == "reversion"

@@ -51,7 +51,7 @@ def _pool_for(conn):
 
 async def test_emit_held_writes_locked_behavioral_payload():
     rec = _rows_conn([])
-    await at._emit_held(_pool_for(rec), "reversion", "h-1",
+    await at._emit_held(_pool_for(rec), "reversion", "h-1",  # noqa: SLF001
                         "drawdown_period: fp-9", ["fp-9"])
     sql, args = rec.inserts[-1]
     assert "INSERT INTO platform.application_log" in sql

@@ -83,5 +83,5 @@ def _seams(monkeypatch):
 async def test_amain_unpacks_4tuple_and_exits_zero(_seams):
     # Pre-fix this raised ValueError ("too many values to unpack")
     # before returning. Now it must unpack 4 and exit 0 (no failures).
-    rc = await cron._amain()
+    rc = await cron._amain()  # noqa: SLF001
     assert rc == 0

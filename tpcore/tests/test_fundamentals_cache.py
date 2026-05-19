@@ -352,7 +352,7 @@ async def test_cache_integration_roundtrip() -> None:
             payload=_adapter_payload(date(2025, 10, 31), ni=100, fcf=95)
         )
         # Adapter payload uses symbol=AAPL by default; rebuild for our test ticker.
-        adapter._payload["symbol"] = test_ticker  # type: ignore[index]
+        adapter._payload["symbol"] = test_ticker  # type: ignore[index]  # noqa: SLF001
         cache = FundamentalsCache(pool, adapter=adapter)
 
         n = await cache.backfill(test_ticker)

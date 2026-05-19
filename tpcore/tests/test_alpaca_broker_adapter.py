@@ -640,7 +640,7 @@ async def test_call_read_rejects_non_allowlisted_op() -> None:
     sentinel = MagicMock(return_value="should-never-run")
 
     with pytest.raises(ValueError, match="not an allowlisted idempotent read"):
-        await adapter._call_read(sentinel, op="submit_order")
+        await adapter._call_read(sentinel, op="submit_order")  # noqa: SLF001
 
     # The func must never have been invoked — the guard rejects BEFORE the
     # retry-wrapped attempt runs.
@@ -654,7 +654,7 @@ async def test_call_read_accepts_every_allowlisted_op() -> None:
 
     adapter = _make_adapter()
     for op in _IDEMPOTENT_READ_OPS:
-        result = await adapter._call_read(lambda: "ok", op=op)
+        result = await adapter._call_read(lambda: "ok", op=op)  # noqa: SLF001
         assert result == "ok"
 
 

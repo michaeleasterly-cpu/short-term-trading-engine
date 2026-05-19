@@ -275,7 +275,7 @@ def test_predicate_is_not_a_blanket_always_true_skip(monkeypatch):
     monkeypatch.setattr(
         mod, "_SP3_SIGNATURE_PATH",
         "ops/engine_sdlc/__sp3_signature_definitely_absent__.py")
-    assert mod._sp3_in_integration_target() is False, (
+    assert mod._sp3_in_integration_target() is False, (  # noqa: SLF001
         "with a signature path absent from the integration ref the "
         "predicate MUST be False so the non-vacuous §8 scope assertion "
         "runs — the documented genuine-pre-merge-SP3-PR T9 backstop")

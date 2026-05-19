@@ -32,7 +32,7 @@ class _Conn:
         # with ORDER BY, never "SELECT 1").
         if "SELECT 1" in sql:
             hold_id = a[1]  # $2 is arg index 1 (0-based after sql)
-            if hold_id in self._p._already_escalated_hold_ids:
+            if hold_id in self._p._already_escalated_hold_ids:  # noqa: SLF001
                 return {"?column?": 1}
             return None
         return self._p.open_holds.get(a[2])
@@ -142,8 +142,8 @@ def test_contract_red_sql_uses_jsonb_exception_type() -> None:
     # column; it MUST be data->>'exception_type' (fake pools can't catch
     # this — the final holistic review did).
     import tpcore.datasupervisor.supervisor as S
-    assert "data->>'exception_type'" in S._CONTRACT_RED_SQL
-    assert "\n      AND exception_type" not in S._CONTRACT_RED_SQL
+    assert "data->>'exception_type'" in S._CONTRACT_RED_SQL  # noqa: SLF001
+    assert "\n      AND exception_type" not in S._CONTRACT_RED_SQL  # noqa: SLF001
 
 
 async def test_escalation_deduped_per_hold(monkeypatch) -> None:
@@ -166,6 +166,6 @@ async def test_escalation_deduped_per_hold(monkeypatch) -> None:
     p2 = _Pool(val_red=["prices_daily_freshness"],
                open_holds={"validation:prices_daily": row},
                cycles_since_hold=4)
-    p2._already_escalated_hold_ids = {"h1"}
+    p2._already_escalated_hold_ids = {"h1"}  # noqa: SLF001
     await datasupervise(p2, "rid")
     assert "DATA_SOURCE_ESCALATED" not in _ets(p2)

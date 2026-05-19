@@ -94,14 +94,14 @@ def _no_real_pr_path():
             return 0, "https://github.com/x/y/pull/1", ""
         return 0, "", ""
 
-    orig_attr = lt._default_pr_runner
+    orig_attr = lt._default_pr_runner  # noqa: SLF001
     orig_kwd = dict(lt.run_triage.__kwdefaults__)
-    lt._default_pr_runner = _fake_pr_runner
+    lt._default_pr_runner = _fake_pr_runner  # noqa: SLF001
     lt.run_triage.__kwdefaults__["pr_runner"] = _fake_pr_runner
     try:
         yield
     finally:
-        lt._default_pr_runner = orig_attr
+        lt._default_pr_runner = orig_attr  # noqa: SLF001
         lt.run_triage.__kwdefaults__["pr_runner"] = orig_kwd["pr_runner"]
         post = _host_llm_triage_branches()
         assert post == [], (
@@ -193,7 +193,7 @@ async def test_calls_sdk_no_tools_and_emits_proposal(monkeypatch) -> None:
     ev = [json.loads(a[5]) for a in pool.conn.emitted]
     prop = next(e for e in ev)
     assert prop["ref"] == "h1" and prop["proposed_disposition"] == "converted"
-    assert prop["persona_version"] == lt._PERSONA_VERSION
+    assert prop["persona_version"] == lt._PERSONA_VERSION  # noqa: SLF001
     assert "packet_hash" in prop
     assert out.proposed == ["h1"]
 
@@ -511,7 +511,7 @@ def test_default_client_is_async_anthropic() -> None:
     """
     import anthropic
 
-    client = lt._default_client()
+    client = lt._default_client()  # noqa: SLF001
     assert isinstance(client, anthropic.AsyncAnthropic), (
         f"_default_client must return AsyncAnthropic (non-blocking in "
         f"the daemon event loop), got {type(client).__name__}"

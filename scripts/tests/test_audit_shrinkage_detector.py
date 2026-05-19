@@ -61,7 +61,7 @@ def test_shrinkage_fail_when_archive_shrinks(archive_root):
     _write_archive(archive_root, src, "20260514T000000Z", 1000)
     _write_archive(archive_root, src, "20260515T000000Z", 600)
 
-    reports, uncheckable = audit._detect_archive_shrinkage()
+    reports, uncheckable = audit._detect_archive_shrinkage()  # noqa: SLF001
     over = [r for r in reports if r.over_threshold]
     assert len(over) == 1
     r = over[0]
@@ -71,7 +71,7 @@ def test_shrinkage_fail_when_archive_shrinks(archive_root):
     assert round(r.shrinkage_pct, 2) == 0.40
 
     findings: list = []
-    audit._append_shrinkage_finding(findings, reports, uncheckable)
+    audit._append_shrinkage_finding(findings, reports, uncheckable)  # noqa: SLF001
     f = _only(findings)
     assert f.phase == "known_knowns"
     assert f.source == "csv_archive"
@@ -92,13 +92,13 @@ def test_shrinkage_ok_when_all_sources_compared_and_stable(archive_root):
         _write_archive(archive_root, src, "20260514T000000Z", 1000)
         _write_archive(archive_root, src, "20260515T000000Z", 1000)
 
-    reports, uncheckable = audit._detect_archive_shrinkage()
+    reports, uncheckable = audit._detect_archive_shrinkage()  # noqa: SLF001
     assert uncheckable == []
     assert all(not r.over_threshold for r in reports)
     assert len(reports) == len(audit.ARCHIVE_SOURCES)
 
     findings: list = []
-    audit._append_shrinkage_finding(findings, reports, uncheckable)
+    audit._append_shrinkage_finding(findings, reports, uncheckable)  # noqa: SLF001
     f = _only(findings)
     assert f.severity == "OK"
 
@@ -106,12 +106,12 @@ def test_shrinkage_ok_when_all_sources_compared_and_stable(archive_root):
 def test_empty_archive_root_is_WARN_not_silent_OK(archive_root):
     # The bite: a fresh/empty data/ — NO source is checkable. Pre-fix
     # this produced severity OK ("I checked nothing" reported green).
-    reports, uncheckable = audit._detect_archive_shrinkage()
+    reports, uncheckable = audit._detect_archive_shrinkage()  # noqa: SLF001
     assert reports == []
     assert {u["source"] for u in uncheckable} == set(audit.ARCHIVE_SOURCES)
 
     findings: list = []
-    audit._append_shrinkage_finding(findings, reports, uncheckable)
+    audit._append_shrinkage_finding(findings, reports, uncheckable)  # noqa: SLF001
     f = _only(findings)
     # WARN is NOT green in this audit's OK|WARN|FAIL vocabulary.
     assert f.severity == "WARN"
@@ -121,7 +121,7 @@ def test_empty_archive_root_is_WARN_not_silent_OK(archive_root):
     # OLD signature (no uncheckable arg, empty reports) the else-branch
     # emitted OK. This assertion bites — it documents the fixed bug.
     pre_fix: list = []
-    audit._append_shrinkage_finding(pre_fix, [])  # uncheckable defaults []
+    audit._append_shrinkage_finding(pre_fix, [])  # uncheckable defaults []  # noqa: SLF001
     assert _only(pre_fix).severity == "OK"
 
     ev = f.evidence["uncheckable"]
@@ -137,7 +137,7 @@ def test_mixed_some_compared_some_uncheckable_none_over_is_WARN(archive_root):
     _write_archive(archive_root, compared_src, "20260514T000000Z", 500)
     _write_archive(archive_root, compared_src, "20260515T000000Z", 500)
 
-    reports, uncheckable = audit._detect_archive_shrinkage()
+    reports, uncheckable = audit._detect_archive_shrinkage()  # noqa: SLF001
     assert [r.source for r in reports] == [compared_src]
     assert all(not r.over_threshold for r in reports)
     uncheckable_srcs = {u["source"] for u in uncheckable}
@@ -145,7 +145,7 @@ def test_mixed_some_compared_some_uncheckable_none_over_is_WARN(archive_root):
     assert uncheckable_srcs == set(audit.ARCHIVE_SOURCES[1:])
 
     findings: list = []
-    audit._append_shrinkage_finding(findings, reports, uncheckable)
+    audit._append_shrinkage_finding(findings, reports, uncheckable)  # noqa: SLF001
     f = _only(findings)
     assert f.severity == "WARN"
     assert f.severity != "OK"
@@ -162,12 +162,12 @@ def test_FAIL_precedence_over_uncheckable(archive_root):
     _write_archive(archive_root, over_src, "20260514T000000Z", 1000)
     _write_archive(archive_root, over_src, "20260515T000000Z", 100)  # 90% drop
 
-    reports, uncheckable = audit._detect_archive_shrinkage()
+    reports, uncheckable = audit._detect_archive_shrinkage()  # noqa: SLF001
     assert any(r.over_threshold for r in reports)
     assert len(uncheckable) >= 1  # the other ARCHIVE_SOURCES
 
     findings: list = []
-    audit._append_shrinkage_finding(findings, reports, uncheckable)
+    audit._append_shrinkage_finding(findings, reports, uncheckable)  # noqa: SLF001
     f = _only(findings)
     assert f.severity == "FAIL"
     assert "over_threshold" in f.evidence
@@ -179,12 +179,12 @@ def test_single_archive_is_uncheckable_not_OK(archive_root):
     src = audit.ARCHIVE_SOURCES[0]
     _write_archive(archive_root, src, "20260515T000000Z", 600)
 
-    reports, uncheckable = audit._detect_archive_shrinkage()
+    reports, uncheckable = audit._detect_archive_shrinkage()  # noqa: SLF001
     assert reports == []
     assert src in {u["source"] for u in uncheckable}
 
     findings: list = []
-    audit._append_shrinkage_finding(findings, reports, uncheckable)
+    audit._append_shrinkage_finding(findings, reports, uncheckable)  # noqa: SLF001
     f = _only(findings)
     assert f.severity == "WARN"
     assert f.severity != "OK"

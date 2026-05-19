@@ -28,7 +28,7 @@ def test_setup_score_basic():
         {"date": date(2024, 1, 1) + __import__("datetime").timedelta(days=i), "close": 100.0 + i}
         for i in range(40)
     ]
-    score = plug._score_one(bars, as_of=date(2024, 2, 9))
+    score = plug._score_one(bars, as_of=date(2024, 2, 9))  # noqa: SLF001
     # We use the LAST bar's date as the actual reference, not the calendar
     # as_of. Last bar's date = 2024-01-01 + 39d = 2024-02-09. Step back 5d
     # calendar → ~2024-02-04 (close ~ 134). Step back another 20d → 2024-01-15
@@ -45,7 +45,7 @@ def test_setup_score_missing_data_returns_none():
         {"date": date(2024, 1, 1) + __import__("datetime").timedelta(days=i), "close": 100.0}
         for i in range(10)
     ]
-    score = plug._score_one(bars, as_of=date(2024, 1, 10))
+    score = plug._score_one(bars, as_of=date(2024, 1, 10))  # noqa: SLF001
     assert score is None
 
 
@@ -357,7 +357,7 @@ async def test_load_universe_prefers_candidates_table_when_present():
         liquidity_rows=[{"ticker": "OLD"}],
     )
     plug = MomentumSetupDetection()
-    universe = await plug._load_universe(pool, date(2026, 5, 13))
+    universe = await plug._load_universe(pool, date(2026, 5, 13))  # noqa: SLF001
     assert universe == {"AAPL", "MSFT"}
     # Only the candidates query should have been issued — fallback never ran.
     assert any("universe_candidates" in s for s in pool.conn.sql_seen)
@@ -371,7 +371,7 @@ async def test_load_universe_falls_back_to_liquidity_tiers_when_empty():
         liquidity_rows=[{"ticker": "AAPL"}, {"ticker": "MSFT"}],
     )
     plug = MomentumSetupDetection()
-    universe = await plug._load_universe(pool, date(2026, 5, 13))
+    universe = await plug._load_universe(pool, date(2026, 5, 13))  # noqa: SLF001
     assert universe == {"AAPL", "MSFT"}
     assert any("universe_candidates" in s for s in pool.conn.sql_seen)
     assert any("liquidity_tiers" in s for s in pool.conn.sql_seen)

@@ -489,7 +489,7 @@ class TestFilterDiagnosticsG2:
         spy = pd.Series(100.0, index=spy_idx, name="SPY")
 
         setup = SentinelSetupDetection()
-        breakdowns = setup._build_breakdowns(
+        breakdowns = setup._build_breakdowns(  # noqa: SLF001
             macro, spy, start=date_t(2024, 6, 1), end=date_t(2024, 6, 5),
         )
         assert len(breakdowns) > 0
@@ -562,7 +562,7 @@ class TestStaleOrderCancelG6:
     def test_scheduler_exposes_cancel_stale_helper(self) -> None:
         from sentinel.scheduler import SentinelScheduler
         assert hasattr(SentinelScheduler, "_cancel_stale_sentinel_orders")
-        assert callable(SentinelScheduler._cancel_stale_sentinel_orders)
+        assert callable(SentinelScheduler._cancel_stale_sentinel_orders)  # noqa: SLF001
 
     @pytest.mark.asyncio
     async def test_cancel_stale_silently_handles_broker_without_list_recent(self) -> None:
@@ -571,7 +571,7 @@ class TestStaleOrderCancelG6:
         class _StubBroker:
             pass  # no list_recent_orders
 
-        n = await SentinelScheduler._cancel_stale_sentinel_orders(_StubBroker())
+        n = await SentinelScheduler._cancel_stale_sentinel_orders(_StubBroker())  # noqa: SLF001
         assert n == 0
 
 

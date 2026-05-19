@@ -29,7 +29,7 @@ def test_analyse_is_deterministic_and_readonly() -> None:
     c2, f2, u2 = mod.analyse()
     assert (f1, u1) == (f2, u2)
     assert f1 > 0 and u1 > 0
-    assert mod._render(c1, f1, u1) == mod._render(c2, f2, u2)
+    assert mod._render(c1, f1, u1) == mod._render(c2, f2, u2)  # noqa: SLF001
 
 
 def test_dry_run_writes_no_doc(monkeypatch, tmp_path, capsys) -> None:
@@ -64,8 +64,8 @@ def test_write_mode_emits_markdown_into_tmp_path(
 
 def test_min_nodes_threshold_is_sane() -> None:
     """Guard the actionable-signal floor stays a positive constant."""
-    assert isinstance(mod._MIN_NODES, int)
-    assert mod._MIN_NODES >= 1
+    assert isinstance(mod._MIN_NODES, int)  # noqa: SLF001
+    assert mod._MIN_NODES >= 1  # noqa: SLF001
 
 
 @pytest.mark.parametrize("flag", ["--check", "--dry-run"])

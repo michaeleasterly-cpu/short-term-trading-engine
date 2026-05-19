@@ -60,12 +60,12 @@ async def test_trigger_set_includes_both_events():
 
 async def test_find_new_trigger_returns_recorded_at_for_either_event():
     ts = datetime.now(UTC)
-    got = await es._find_new_trigger(_Pool({"recorded_at": ts}), ts - timedelta(hours=1))
+    got = await es._find_new_trigger(_Pool({"recorded_at": ts}), ts - timedelta(hours=1))  # noqa: SLF001
     assert got == ts
 
 
 async def test_no_new_trigger_returns_none():
-    got = await es._find_new_trigger(_Pool(None), datetime.now(UTC))
+    got = await es._find_new_trigger(_Pool(None), datetime.now(UTC))  # noqa: SLF001
     assert got is None
 
 
@@ -85,7 +85,7 @@ async def test_non_green_repair_complete_filtered():
         async def acquire(self):
             yield _CapConn()
 
-    got = await es._find_new_trigger(_CapPool(), datetime.now(UTC))
+    got = await es._find_new_trigger(_CapPool(), datetime.now(UTC))  # noqa: SLF001
     assert got is None
     sql = captured["sql"]
     assert "DATA_REPAIR_COMPLETE" in sql
@@ -117,7 +117,7 @@ async def test_shared_pool_built_once_and_closed_once(monkeypatch):
     # both co-tasks return immediately so _amain falls through
     monkeypatch.setattr(es, "_run_supervised",
                         AsyncMock(return_value=None))
-    rc = await es._amain()
+    rc = await es._amain()  # noqa: SLF001
     assert rc == 0
     assert len(built) == 1                       # pool built exactly once
     assert built[0][1].get("max_size", 0) >= 5   # H-8 sizing
@@ -136,7 +136,7 @@ async def test_supervised_restarts_crashed_task_without_killing_sibling():
 
     # _run_supervised(name, factory, stop_event, backoff=0) must catch
     # the exception, log, and re-run until stop_event is set.
-    await es._run_supervised("flaky", _flaky, stop, backoff=0.0)
+    await es._run_supervised("flaky", _flaky, stop, backoff=0.0)  # noqa: SLF001
     assert calls["n"] == 2  # restarted after the crash, did not propagate
 
 
@@ -147,7 +147,7 @@ async def test_supervised_propagates_cancellation():
         await asyncio.sleep(3600)
 
     task = asyncio.create_task(
-        es._run_supervised("hang", _hang, stop, backoff=0.0))
+        es._run_supervised("hang", _hang, stop, backoff=0.0))  # noqa: SLF001
     await asyncio.sleep(0)
     task.cancel()
     with __import__("pytest").raises(asyncio.CancelledError):
@@ -175,7 +175,7 @@ async def test_slow_sweep_does_not_block_monitor_tick(monkeypatch):
         stop.set()
 
     pool = _Pool(None)
-    await asyncio.gather(es._main_loop(pool, stop), _ticker())
+    await asyncio.gather(es._main_loop(pool, stop), _ticker())  # noqa: SLF001
     # 5 ticks ~0.05s apart finished well within the 0.5s blocking sweep
     assert len(ticked) == 5
     assert ticked[-1] - ticked[0] < 0.45
@@ -194,9 +194,9 @@ async def test_digest_trigger_fires_once_per_utc_day(monkeypatch):
 
     state = {"last": None}
     d1 = date(2026, 5, 18)
-    await es._maybe_fire_weekly_digest(state, today=d1)
-    await es._maybe_fire_weekly_digest(state, today=d1)   # same day → no
-    await es._maybe_fire_weekly_digest(state, today=date(2026, 5, 19))
+    await es._maybe_fire_weekly_digest(state, today=d1)  # noqa: SLF001
+    await es._maybe_fire_weekly_digest(state, today=d1)   # same day → no  # noqa: SLF001
+    await es._maybe_fire_weekly_digest(state, today=date(2026, 5, 19))  # noqa: SLF001
     assert len(spawns) == 2
     # exact arg shape: (sys.executable, "-m", "ops.weekly_digest", "emit")
     assert spawns[0][:4] == (sys.executable, "-m", "ops.weekly_digest", "emit")
@@ -209,7 +209,7 @@ async def test_digest_trigger_crash_isolated(monkeypatch):
     monkeypatch.setattr(es.asyncio, "create_subprocess_exec", _boom)
     state = {"last": None}
     # must NOT raise — crash-isolated like _invoke_allocator
-    await es._maybe_fire_weekly_digest(state, today=date(2026, 5, 18))
+    await es._maybe_fire_weekly_digest(state, today=date(2026, 5, 18))  # noqa: SLF001
 
 
 # ---------------------------------------------------------------------------
@@ -267,8 +267,8 @@ def test_platform_service_failure_classes_constant():
     assert (_esup.PLATFORM_SERVICE_FAILURE_CLASSES
             & _esup.INFRA_FAILURE_CLASSES) == set()
     # the engine_service module uses the matching class-name literals
-    assert es._CRASHLOOP_CLASS in _esup.PLATFORM_SERVICE_FAILURE_CLASSES
-    assert es._DIGEST_FAILED_CLASS in _esup.PLATFORM_SERVICE_FAILURE_CLASSES
+    assert es._CRASHLOOP_CLASS in _esup.PLATFORM_SERVICE_FAILURE_CLASSES  # noqa: SLF001
+    assert es._DIGEST_FAILED_CLASS in _esup.PLATFORM_SERVICE_FAILURE_CLASSES  # noqa: SLF001
 
 
 def test_emit_escalated_importable_without_engine_service():
@@ -281,7 +281,7 @@ def test_emit_escalated_importable_without_engine_service():
         del sys.modules[k]
     try:
         mod = importlib.import_module("ops.engine_supervisor")
-        assert callable(mod._emit_escalated)
+        assert callable(mod._emit_escalated)  # noqa: SLF001
         assert "ops.engine_service" not in sys.modules
     finally:
         sys.modules.update(saved)
@@ -304,7 +304,7 @@ async def test_crashloop_under_budget_no_escalation():
             raise RuntimeError("boom")
         stop.set()  # 3rd run recovers, supervisor exits cleanly
 
-    await es._run_supervised("sweep", _flaky, stop, pool=pool, backoff=0.0)
+    await es._run_supervised("sweep", _flaky, stop, pool=pool, backoff=0.0)  # noqa: SLF001
     assert calls["n"] == 3
     assert _escalated_rows(pool) == []
 
@@ -323,7 +323,7 @@ async def test_crashloop_emits_once_on_third_crash_then_no_dup():
             return
         raise RuntimeError(f"boom-{calls['n']}")
 
-    await es._run_supervised("sweep", _flaky, stop, pool=pool, backoff=0.0)
+    await es._run_supervised("sweep", _flaky, stop, pool=pool, backoff=0.0)  # noqa: SLF001
     rows = _escalated_rows(pool)
     assert len(rows) == 1, rows
     r = rows[0]
@@ -372,7 +372,7 @@ async def test_crashloop_re_escalates_after_recovery():
         seq["i"] += 1
         return t
 
-    await es._run_supervised("sweep", _flaky, stop, pool=pool,
+    await es._run_supervised("sweep", _flaky, stop, pool=pool,  # noqa: SLF001
                              backoff=0.0, _monotonic=_fake_monotonic)
     rows = _escalated_rows(pool)
     assert len(rows) == 2, [r["payload"] for r in rows]
@@ -401,7 +401,7 @@ async def test_crashloop_emit_failure_does_not_kill_task(monkeypatch):
         raise RuntimeError("boom")
 
     # must complete (stop set) without raising despite emit failing
-    await es._run_supervised("sweep", _flaky, stop,
+    await es._run_supervised("sweep", _flaky, stop,  # noqa: SLF001
                              pool=_RecPool(), backoff=0.0)
     assert calls["n"] == 6
 
@@ -412,7 +412,7 @@ async def test_digest_spawn_exception_emits_escalated(monkeypatch):
     monkeypatch.setattr(es.asyncio, "create_subprocess_exec", _boom)
     pool = _RecPool()
     state = {"last": None}
-    await es._maybe_fire_weekly_digest(state, pool=pool,
+    await es._maybe_fire_weekly_digest(state, pool=pool,  # noqa: SLF001
                                        today=date(2026, 5, 18))
     rows = _escalated_rows(pool)
     assert len(rows) == 1
@@ -431,7 +431,7 @@ async def test_digest_nonzero_rc_emits_escalated(monkeypatch):
         return _P()
     monkeypatch.setattr(es.asyncio, "create_subprocess_exec", _fake_exec)
     pool = _RecPool()
-    await es._maybe_fire_weekly_digest({"last": None}, pool=pool,
+    await es._maybe_fire_weekly_digest({"last": None}, pool=pool,  # noqa: SLF001
                                        today=date(2026, 5, 18))
     rows = _escalated_rows(pool)
     assert len(rows) == 1
@@ -446,7 +446,7 @@ async def test_digest_success_emits_nothing(monkeypatch):
         return _P()
     monkeypatch.setattr(es.asyncio, "create_subprocess_exec", _fake_exec)
     pool = _RecPool()
-    await es._maybe_fire_weekly_digest({"last": None}, pool=pool,
+    await es._maybe_fire_weekly_digest({"last": None}, pool=pool,  # noqa: SLF001
                                        today=date(2026, 5, 18))
     assert _escalated_rows(pool) == []
 
@@ -460,7 +460,7 @@ async def test_digest_never_raises_even_if_emit_fails(monkeypatch):
         raise RuntimeError("emit DB down")
     monkeypatch.setattr(es, "_emit_escalated", _boom_emit)
     # must NOT raise
-    await es._maybe_fire_weekly_digest({"last": None}, pool=_RecPool(),
+    await es._maybe_fire_weekly_digest({"last": None}, pool=_RecPool(),  # noqa: SLF001
                                        today=date(2026, 5, 18))
 
 
@@ -494,14 +494,14 @@ async def _run_one_poll(pool, *, find_new_trigger, monkeypatch,
         monkeypatch.setattr(es, "datetime", _FixedDT)
     stop = asyncio.Event()
 
-    orig = es._find_new_trigger
+    orig = es._find_new_trigger  # noqa: SLF001
 
     async def _wrapped(p, c):
         r = await orig(p, c)
         stop.set()  # one iteration only
         return r
     monkeypatch.setattr(es, "_find_new_trigger", _wrapped)
-    await es._main_loop(pool, stop)
+    await es._main_loop(pool, stop)  # noqa: SLF001
 
 
 async def test_sweep_silent_bound_value():
@@ -618,7 +618,7 @@ async def test_sweep_silent_no_duplicate_on_repoll(monkeypatch):
             stop.set()
         return old  # same trigger every poll (cursor never advances it)
     monkeypatch.setattr(es, "_find_new_trigger", _ft)
-    await es._main_loop(pool, stop)
+    await es._main_loop(pool, stop)  # noqa: SLF001
     rows = _escalated_rows(pool)
     assert len(rows) == 1, [r["payload"] for r in rows]
 
@@ -713,7 +713,7 @@ async def test_digest_stalled_fires_trading_day_overdue_no_completion(
     (digest_stalled, weekly_digest hold_id, escalate-only)."""
     monkeypatch.setattr(es, "is_trading_day", lambda _dt: True)
     pool = _DigestPool(completed_weeks=())
-    await es._maybe_escalate_digest_stalled(pool, _WED, set())
+    await es._maybe_escalate_digest_stalled(pool, _WED, set())  # noqa: SLF001
     rows = _esc_rows_dp(pool)
     assert len(rows) == 1, rows
     r = rows[0]
@@ -730,7 +730,7 @@ async def test_digest_stalled_not_trading_day_no_escalation(monkeypatch):
     """(ii) is_trading_day False (weekend/holiday) ⇒ no escalation."""
     monkeypatch.setattr(es, "is_trading_day", lambda _dt: False)
     pool = _DigestPool(completed_weeks=())
-    await es._maybe_escalate_digest_stalled(pool, _WED, set())
+    await es._maybe_escalate_digest_stalled(pool, _WED, set())  # noqa: SLF001
     assert _esc_rows_dp(pool) == []
 
 
@@ -738,7 +738,7 @@ async def test_digest_stalled_already_emitted_no_escalation(monkeypatch):
     """(iii) digest already emitted this ISO-week ⇒ no escalation."""
     monkeypatch.setattr(es, "is_trading_day", lambda _dt: True)
     pool = _DigestPool(completed_weeks={_ISO_WK_WED})
-    await es._maybe_escalate_digest_stalled(pool, _WED, set())
+    await es._maybe_escalate_digest_stalled(pool, _WED, set())  # noqa: SLF001
     assert _esc_rows_dp(pool) == []
 
 
@@ -748,7 +748,7 @@ async def test_digest_stalled_within_grace_no_escalation(monkeypatch):
     monkeypatch.setattr(es, "is_trading_day", lambda _dt: True)
     just_after = datetime(2026, 5, 18, 3, 0, tzinfo=UTC)  # Mon, ~3h in
     pool = _DigestPool(completed_weeks=())
-    await es._maybe_escalate_digest_stalled(pool, just_after, set())
+    await es._maybe_escalate_digest_stalled(pool, just_after, set())  # noqa: SLF001
     assert _esc_rows_dp(pool) == []
 
 
@@ -762,7 +762,7 @@ async def test_digest_stalled_distinct_from_digest_failed(monkeypatch):
         return _P()
     monkeypatch.setattr(es.asyncio, "create_subprocess_exec", _fake_exec)
     pool = _RecPool()
-    await es._maybe_fire_weekly_digest({"last": None}, pool=pool,
+    await es._maybe_fire_weekly_digest({"last": None}, pool=pool,  # noqa: SLF001
                                        today=date(2026, 5, 20))
     rows = _escalated_rows(pool)
     assert len(rows) == 1
@@ -775,9 +775,9 @@ async def test_digest_stalled_no_duplicate_on_repoll(monkeypatch):
     monkeypatch.setattr(es, "is_trading_day", lambda _dt: True)
     pool = _DigestPool(completed_weeks=())
     emitted: set[str] = set()  # the loop-local one-shot dedup set
-    await es._maybe_escalate_digest_stalled(pool, _WED, emitted)
-    await es._maybe_escalate_digest_stalled(pool, _WED, emitted)
-    await es._maybe_escalate_digest_stalled(pool, _WED, emitted)
+    await es._maybe_escalate_digest_stalled(pool, _WED, emitted)  # noqa: SLF001
+    await es._maybe_escalate_digest_stalled(pool, _WED, emitted)  # noqa: SLF001
+    await es._maybe_escalate_digest_stalled(pool, _WED, emitted)  # noqa: SLF001
     assert len(_esc_rows_dp(pool)) == 1
 
 
@@ -789,7 +789,7 @@ async def test_digest_stalled_emit_failure_does_not_raise(monkeypatch):
         raise RuntimeError("emit DB down")
     monkeypatch.setattr(es, "_emit_escalated", _boom_emit)
     # must NOT raise
-    await es._maybe_escalate_digest_stalled(
+    await es._maybe_escalate_digest_stalled(  # noqa: SLF001
         _DigestPool(completed_weeks=()), _WED, set())
 
 
@@ -811,7 +811,7 @@ async def test_digest_stalled_wired_into_main_loop(monkeypatch):
         stop.set()
         return None
     monkeypatch.setattr(es, "_find_new_trigger", _ft)
-    await es._main_loop(_RecPool(), stop)
+    await es._main_loop(_RecPool(), stop)  # noqa: SLF001
     assert seen.get("called") is True
 
 

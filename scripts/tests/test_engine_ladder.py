@@ -25,7 +25,7 @@ def test_known_classes_derived_from_real_constants():
     # PLATFORM_SERVICE (engine-daemon co-hosted) + {behavioral} (DA-2).
     assert el.KNOWN_ESCALATION_CLASSES == (
         es.INFRA_FAILURE_CLASSES | es.PLATFORM_SERVICE_FAILURE_CLASSES
-        | {at._BEHAVIORAL})
+        | {at._BEHAVIORAL})  # noqa: SLF001
 
 
 def test_every_known_class_has_a_policy():
@@ -60,7 +60,7 @@ def test_platform_service_classes_in_known_set_and_have_structural_policy():
     assert psf & es.INFRA_FAILURE_CLASSES == set()
     # derived KNOWN set is the explicit 3-way union
     assert el.KNOWN_ESCALATION_CLASSES == (
-        es.INFRA_FAILURE_CLASSES | psf | {at._BEHAVIORAL})
+        es.INFRA_FAILURE_CLASSES | psf | {at._BEHAVIORAL})  # noqa: SLF001
     for cls in psf:
         assert cls in el.KNOWN_ESCALATION_CLASSES
         p = el.policy_for(cls)
@@ -94,7 +94,7 @@ def test_silent_absence_classes_in_known_set_and_have_structural_policy():
 
 
 def test_escalation_drift_reports_missing_for_uncovered_class():
-    missing, extra = el._drift_for(
+    missing, extra = el._drift_for(  # noqa: SLF001
         known=el.KNOWN_ESCALATION_CLASSES | {"_synthetic_probe"},
         policies=el.DISPOSITION_POLICIES)
     assert "_synthetic_probe" in missing
@@ -342,7 +342,7 @@ def test_module_has_main_entrypoint():
 async def test_amain_list_runs_dbless_clean(monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("DATABASE_URL_IPV4", raising=False)
-    rc = await el._amain(["list"])
+    rc = await el._amain(["list"])  # noqa: SLF001
     assert rc == 1  # explicit no-DSN failure, NOT a silent 0
 
 
@@ -373,8 +373,8 @@ async def test_amain_dispatches_list_and_disposition(monkeypatch):
     monkeypatch.setattr(el, "list_undispositioned", _fake_list)
     monkeypatch.setattr(el, "disposition", _fake_disp)
 
-    rc_list = await el._amain(["list", "--grace-days", "3"])
-    rc_disp = await el._amain(
+    rc_list = await el._amain(["list", "--grace-days", "3"])  # noqa: SLF001
+    rc_disp = await el._amain(  # noqa: SLF001
         ["disposition", "h1", "structural", "a", "note"])
 
     assert rc_list == 0
@@ -408,7 +408,7 @@ def test_fmt_no_llm_proposal_renders_no_suffix():
     # A row WITHOUT an attached LLM proposal renders exactly the legacy
     # line (no annotation) — the data-lane _llm_suffix "" parity.
     rows = [_row_out("h1")]
-    out = el._fmt(rows)
+    out = el._fmt(rows)  # noqa: SLF001
     assert "h1" in out
     assert "LLM:" not in out  # no proposal → no suffix
 
@@ -424,7 +424,7 @@ def test_fmt_llm_proposal_appended_when_present():
             },
         )
     ]
-    out = el._fmt(rows)
+    out = el._fmt(rows)  # noqa: SLF001
     assert "LLM: structural" in out
     assert "conf 0.81" in out
     assert "PR https://example/pr/9" in out
@@ -441,7 +441,7 @@ def test_fmt_llm_proposal_no_pr_link_degrades_gracefully():
             },
         )
     ]
-    out = el._fmt(rows)
+    out = el._fmt(rows)  # noqa: SLF001
     assert "LLM: converted" in out
     assert "(no PR)" in out
 
@@ -469,10 +469,10 @@ async def test_attach_llm_proposals_reuses_open_set_no_rederive():
         async def acquire(self):
             yield _C()
 
-    await el._attach_llm_proposals(_P(), rows)
+    await el._attach_llm_proposals(_P(), rows)  # noqa: SLF001
     assert rows[0]["llm_proposal"]["proposed_disposition"] == "structural"
     assert "llm_proposal" not in rows[1] or rows[1]["llm_proposal"] is None
-    out = el._fmt(rows)
+    out = el._fmt(rows)  # noqa: SLF001
     assert "hA" in out and "LLM: structural" in out
     # hB has NO proposal → its line carries no LLM suffix.
     hb_line = [ln for ln in out.splitlines() if "hold_id=hB" in ln][0]
@@ -505,7 +505,7 @@ async def test_amain_list_attaches_llm_proposals(monkeypatch):
     monkeypatch.setattr(el, "list_undispositioned", _fake_list)
     monkeypatch.setattr(el, "_attach_llm_proposals", _fake_attach)
 
-    rc = await el._amain(["list"])
+    rc = await el._amain(["list"])  # noqa: SLF001
     assert rc == 0
     # Reused the SAME open-set list object — no re-derivation.
     assert seen["attach"] == (True, True)

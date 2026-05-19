@@ -129,7 +129,7 @@ class TestMultiSymbolChunking:
 
 class TestParseParams:
     def test_type_coercion(self):
-        out = ops._parse_params([
+        out = ops._parse_params([  # noqa: SLF001
             "lookback_days=10", "end_offset_days=1",
             "min_price=5.5", "skip_guard=true", "universe=active",
         ])
@@ -142,9 +142,9 @@ class TestParseParams:
         assert out["skip_guard"] is True
 
     def test_empty_and_none(self):
-        assert ops._parse_params(None) == {}
-        assert ops._parse_params([]) == {}
+        assert ops._parse_params(None) == {}  # noqa: SLF001
+        assert ops._parse_params([]) == {}  # noqa: SLF001
 
     def test_missing_equals_raises(self):
         with pytest.raises(ValueError, match="KEY=VALUE"):
-            ops._parse_params(["lookback_days"])
+            ops._parse_params(["lookback_days"])  # noqa: SLF001

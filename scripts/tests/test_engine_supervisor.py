@@ -55,7 +55,7 @@ class _RecPool:
 
 async def test_emit_held_writes_locked_payload():
     pool = _RecPool()
-    await es._emit_held(pool, "reversion", "h-1", "crashed_startup", "stale")
+    await es._emit_held(pool, "reversion", "h-1", "crashed_startup", "stale")  # noqa: SLF001
     sql, args = pool.conn.inserts[-1]
     assert "INSERT INTO platform.application_log" in sql
     payload = json.loads(args[-1])
@@ -122,7 +122,7 @@ async def test_crashed_startup_unrecovered_escalates_and_holds():
     now = datetime(2026, 5, 5, 21, 30, tzinfo=UTC)
     stale = datetime(2026, 5, 5, 14, 0, tzinfo=UTC)
     rows = [None, {"started_at": stale, "completed": False}]
-    rows += [{"started_at": stale, "completed": False}] * (es._MAX_REINVOKE + 1)
+    rows += [{"started_at": stale, "completed": False}] * (es._MAX_REINVOKE + 1)  # noqa: SLF001
     conn = _rows_conn(rows)
     await es.supervise(_pool_for(conn), "reversion", now, AsyncMock())
     events = [a[2] for _s, a in conn.inserts]
@@ -191,7 +191,7 @@ async def test_missed_cycle_excludes_held_windows():
         {"crashed": False},                     # scheduler_crash: no
         {"open": False},                        # data_request_timeout: no
         {"escalated": False},                   # data_repair_escalated: no
-        {"startups": 0, "eligible_windows": es._MISSED_CYCLES_N},  # missed
+        {"startups": 0, "eligible_windows": es._MISSED_CYCLES_N},  # missed  # noqa: SLF001
     ])
     invoke = AsyncMock()
     await es.supervise(_pool_for(conn), "momentum", now, invoke)
@@ -236,7 +236,7 @@ async def test_auto_clear_repair_escalated_needs_repair_complete_green():
 
 async def test_crashed_startup_recent_incomplete_is_not_detected():
     now = datetime(2026, 5, 5, 21, 30, tzinfo=UTC)
-    recent = now - timedelta(seconds=es._STALE_STARTUP_SECONDS // 2)  # NOT stale
+    recent = now - timedelta(seconds=es._STALE_STARTUP_SECONDS // 2)  # NOT stale  # noqa: SLF001
     conn = _rows_conn([
         None,                                           # current_hold: not held
         {"started_at": recent, "completed": False},     # crashed_startup detect
@@ -253,7 +253,7 @@ async def test_crashed_startup_recent_incomplete_is_not_detected():
 
 async def test_crashed_startup_completed_run_is_not_detected():
     now = datetime(2026, 5, 5, 21, 30, tzinfo=UTC)
-    stale = now - timedelta(seconds=es._STALE_STARTUP_SECONDS * 2)
+    stale = now - timedelta(seconds=es._STALE_STARTUP_SECONDS * 2)  # noqa: SLF001
     conn = _rows_conn([
         None,                                           # current_hold: not held
         {"started_at": stale, "completed": True},       # completed → NOT crashed
@@ -309,7 +309,7 @@ def test_classify_emittable_set_is_pinned_to_constant():
     via the engine-ladder drift test, a DispositionPolicy) is updated —
     closing the most common add-a-class path. Not a hand-maintained
     list: it reads the real function source."""
-    src = inspect.getsource(es._classify)
+    src = inspect.getsource(es._classify)  # noqa: SLF001
     tree = ast.parse(textwrap.dedent(src))
     emitted: set[str] = set()
     for node in ast.walk(tree):
@@ -341,7 +341,7 @@ async def test_classify_known_detectors_yield_their_class():
         for c in ctx:
             c.__enter__()
         try:
-            cls, _heal = await es._classify(
+            cls, _heal = await es._classify(  # noqa: SLF001
                 object(), "reversion",
                 datetime(2026, 5, 6, tzinfo=UTC),
                 datetime(2026, 5, 6, tzinfo=UTC))

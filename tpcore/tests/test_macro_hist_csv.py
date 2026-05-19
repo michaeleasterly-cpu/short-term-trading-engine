@@ -64,7 +64,7 @@ def _csv(tmp_path: Path, body: str) -> str:
 async def test_parses_skips_missing_and_upserts(tmp_path) -> None:
     csv = _csv(tmp_path, "1996-12-31,3.13\n1997-01-01,.\n1997-01-02,3.06\n2008-11-21,19.92\n")
     pool = _Pool()
-    n = await handlers._ingest_macro_hist_csv(pool, csv, "hy_spread")
+    n = await handlers._ingest_macro_hist_csv(pool, csv, "hy_spread")  # noqa: SLF001
     assert n == 3  # the "." row skipped, not zeroed
     sql, rows = pool.sink[0]
     assert "ON CONFLICT (indicator, date) DO NOTHING" in sql
@@ -89,10 +89,10 @@ async def test_empty_csv_raises(tmp_path) -> None:
     p = tmp_path / "e.csv"
     p.write_text("DATE,BAMLH0A0HYM2\n")
     with pytest.raises(RuntimeError, match="empty or header-only"):
-        await handlers._ingest_macro_hist_csv(_Pool(), str(p), "hy_spread")
+        await handlers._ingest_macro_hist_csv(_Pool(), str(p), "hy_spread")  # noqa: SLF001
 
 
 async def test_all_missing_raises(tmp_path) -> None:
     csv = _csv(tmp_path, "1997-01-01,.\n1997-02-17,.\n")
     with pytest.raises(RuntimeError, match="zero parseable rows"):
-        await handlers._ingest_macro_hist_csv(_Pool(), csv, "hy_spread")
+        await handlers._ingest_macro_hist_csv(_Pool(), csv, "hy_spread")  # noqa: SLF001

@@ -378,7 +378,7 @@ class TradeMonitor:
         # same loop as the pool. Fixes the 2026-05-14 incident where
         # the launchd-respawned daemon kept crashing on every fill.
         try:
-            await stream._run_forever()
+            await stream._run_forever()  # noqa: SLF001
         finally:
             # Defensive cleanup so the next reconnect iteration in
             # ``run_forever()`` starts from a clean websocket state.

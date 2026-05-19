@@ -185,10 +185,10 @@ async def test_skip_when_drift_below_soft_band():
         _decision("vector",    Decimal("0.27")),  # +8% drift
         _decision("momentum",  Decimal("0.23")),  # -8% drift  — all < 25%
     ]
-    max_drift, _ = await svc._compute_drift(decisions)
+    max_drift, _ = await svc._compute_drift(decisions)  # noqa: SLF001
     assert max_drift < SOFT_BAND_DRIFT_PCT
     # Persist with active_skip=True (matches what run_once would do)
-    await svc._persist(decisions, active_skip=True)
+    await svc._persist(decisions, active_skip=True)  # noqa: SLF001
     assert len(_alloc_rows_persisted(pool)) == 0
 
 
@@ -208,9 +208,9 @@ async def test_skip_when_transitional_and_moderate_drift():
         spy_bars=_spy_bars_for_regime("transitional"),
     )
     svc = _make_service(pool)
-    regime, _ = await svc._fetch_market_regime()
+    regime, _ = await svc._fetch_market_regime()  # noqa: SLF001
     assert regime == "transitional"
-    skip, rebal = AllocatorService._classify_rebalance(Decimal("0.30"), regime)
+    skip, rebal = AllocatorService._classify_rebalance(Decimal("0.30"), regime)  # noqa: SLF001
     assert skip == "regime_transitional"
     assert rebal is None
 
@@ -223,17 +223,17 @@ async def test_rebalance_when_moderate_drift_and_favorable_regime():
     """30% drift + CHOP trending → rebalance (soft_band)."""
     pool = _FakePool(spy_bars=_spy_bars_for_regime("trending"))
     svc = _make_service(pool)
-    regime, _ = await svc._fetch_market_regime()
+    regime, _ = await svc._fetch_market_regime()  # noqa: SLF001
     assert regime == "trending"
-    skip, rebal = AllocatorService._classify_rebalance(Decimal("0.30"), regime)
+    skip, rebal = AllocatorService._classify_rebalance(Decimal("0.30"), regime)  # noqa: SLF001
     assert skip is None
     assert rebal == "soft_band"
     # Same outcome under choppy regime
     pool_choppy = _FakePool(spy_bars=_spy_bars_for_regime("choppy"))
     svc_choppy = _make_service(pool_choppy)
-    regime2, _ = await svc_choppy._fetch_market_regime()
+    regime2, _ = await svc_choppy._fetch_market_regime()  # noqa: SLF001
     assert regime2 == "choppy"
-    skip2, rebal2 = AllocatorService._classify_rebalance(Decimal("0.30"), regime2)
+    skip2, rebal2 = AllocatorService._classify_rebalance(Decimal("0.30"), regime2)  # noqa: SLF001
     assert skip2 is None
     assert rebal2 == "soft_band"
 
@@ -247,8 +247,8 @@ async def test_force_rebalance_when_drift_above_hard_band():
     for regime_name in ("trending", "transitional", "choppy"):
         pool = _FakePool(spy_bars=_spy_bars_for_regime(regime_name))
         svc = _make_service(pool)
-        regime, _ = await svc._fetch_market_regime()
-        skip, rebal = AllocatorService._classify_rebalance(Decimal("0.60"), regime)
+        regime, _ = await svc._fetch_market_regime()  # noqa: SLF001
+        skip, rebal = AllocatorService._classify_rebalance(Decimal("0.60"), regime)  # noqa: SLF001
         assert skip is None, f"skip should be None for hard-band, got {skip!r} in {regime_name}"
         assert rebal == "hard_band_override", f"got {rebal!r} in {regime_name}"
         assert Decimal("0.60") >= HARD_BAND_DRIFT_PCT
@@ -268,7 +268,7 @@ async def test_frozen_engine_always_persisted():
         _decision("vector",    Decimal("0"), freeze_state="soft_frozen"),
         _decision("momentum",  Decimal("0"), freeze_state="hard_frozen"),
     ]
-    await svc._persist(decisions, active_skip=True)
+    await svc._persist(decisions, active_skip=True)  # noqa: SLF001
     alloc_writes = _alloc_rows_persisted(pool)
     # Exactly 2 writes: vector + momentum (the frozen ones)
     assert len(alloc_writes) == 2
@@ -295,12 +295,12 @@ async def test_first_run_no_prior_allocations():
         _decision("vector",    Decimal("0.25")),
         _decision("momentum",  Decimal("0.25")),
     ]
-    max_drift, per_engine = await svc._compute_drift(decisions)
+    max_drift, per_engine = await svc._compute_drift(decisions)  # noqa: SLF001
     assert max_drift == Decimal("1")
     assert all(v == Decimal("1") for v in per_engine.values())
     # Classification → hard_band_override
-    regime, _ = await svc._fetch_market_regime()
-    skip, rebal = AllocatorService._classify_rebalance(max_drift, regime)
+    regime, _ = await svc._fetch_market_regime()  # noqa: SLF001
+    skip, rebal = AllocatorService._classify_rebalance(max_drift, regime)  # noqa: SLF001
     assert skip is None
     assert rebal == "hard_band_override"
 
@@ -332,7 +332,7 @@ async def test_log_events_written_skip():
             )
             for e in ("sigma", "reversion", "vector", "momentum")
         ]
-    svc._load_histories = _empty_histories  # type: ignore[method-assign]
+    svc._load_histories = _empty_histories  # type: ignore[method-assign]  # noqa: SLF001
     await svc.run_once()
     log_writes = _app_log_writes(pool)
     # run_once now emits STARTUP + domain event + SHUTDOWN (3 total)
@@ -370,7 +370,7 @@ async def test_log_events_written_rebalance():
             )
             for e in ("sigma", "reversion", "vector", "momentum")
         ]
-    svc._load_histories = _empty_histories  # type: ignore[method-assign]
+    svc._load_histories = _empty_histories  # type: ignore[method-assign]  # noqa: SLF001
     await svc.run_once()
     log_writes = _app_log_writes(pool)
     # run_once now emits STARTUP + domain event + SHUTDOWN (3 total)

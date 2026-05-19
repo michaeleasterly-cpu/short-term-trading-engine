@@ -614,7 +614,7 @@ async def test_consume_stream_awaits_run_forever_in_current_loop() -> None:
         run_id=uuid.UUID("00000000-0000-0000-0000-000000000def"),
     )
 
-    await monitor._consume_stream()
+    await monitor._consume_stream()  # noqa: SLF001
 
     # _run_forever was awaited in the test's loop (= same loop the pool
     # lives in). If a future refactor re-introduces to_thread(stream.run),

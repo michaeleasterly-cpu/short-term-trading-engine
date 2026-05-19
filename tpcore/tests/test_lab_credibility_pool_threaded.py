@@ -192,7 +192,7 @@ async def test_active_labcontext_write_uses_context_pool_no_second_rw_pool(
     _patch_context_pools(monkeypatch)
 
     async with LabContext(db_url="postgres://fake/db"):
-        await lab_run._run_lab_core(
+        await lab_run._run_lab_core(  # noqa: SLF001
             _ns(tmp_path / "o.csv"), candidate="rev_cand")
 
     assert used_pool_tags == ["context_credibility"], (
@@ -220,7 +220,7 @@ async def test_legacy_path_no_labcontext_byte_identical(
     _patch_context_pools(monkeypatch)
 
     # No `async with LabContext(...)`: candidate=None ⇒ legacy path.
-    await lab_run._run_lab_core(_ns(tmp_path / "o.csv"), candidate=None)
+    await lab_run._run_lab_core(_ns(tmp_path / "o.csv"), candidate=None)  # noqa: SLF001
 
     assert used_pool_tags == ["create_pool"], (
         f"the legacy non-Lab path must stay byte-identical (its own "
@@ -246,7 +246,7 @@ async def test_active_labcontext_but_candidate_none_stays_legacy(
     _patch_context_pools(monkeypatch)
 
     async with LabContext(db_url="postgres://fake/db"):
-        await lab_run._run_lab_core(_ns(tmp_path / "o.csv"),
+        await lab_run._run_lab_core(_ns(tmp_path / "o.csv"),  # noqa: SLF001
                                     candidate=None)
 
     assert used_pool_tags == ["create_pool"], (

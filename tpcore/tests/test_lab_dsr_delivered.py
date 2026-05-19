@@ -79,8 +79,8 @@ def test_sp_a2_t_verdict_fallback_warns_and_byte_identical() -> None:
     skew = float(((arr - arr.mean()) ** 3).mean() / (arr.std() ** 3))
     kurt = float(((arr - arr.mean()) ** 4).mean() / (arr.std() ** 4))
     EULER = 0.5772156649015329
-    e_max = ((1.0 - EULER) * lab_run._norm_inv(1.0 - 1.0 / 37)
-             + EULER * lab_run._norm_inv(1.0 - 1.0 / (37 * math.e)))
+    e_max = ((1.0 - EULER) * lab_run._norm_inv(1.0 - 1.0 / 37)  # noqa: SLF001
+             + EULER * lab_run._norm_inv(1.0 - 1.0 / (37 * math.e)))  # noqa: SLF001
     denom = math.sqrt(
         max(1.0 - skew * sr + (kurt - 1.0) / 4.0 * (sr ** 2), 1e-12)
         / max(n - 1, 1)
@@ -340,7 +340,7 @@ async def test_sp_a2_t_delivered_lab_verdict_strictly_tightened(
 
     # candidate=None ⇒ legacy non-ledger path (effective_n_trials =
     # args.trials); the V wiring is orthogonal to the SP-A ledger.
-    core = await lab_run._run_lab_core(
+    core = await lab_run._run_lab_core(  # noqa: SLF001
         _ns(tmp_path / "d.csv", trials=8, seed=1), candidate=None)
     assert not isinstance(core, int)
     assert seen["v"] is not None                       # real V threaded
@@ -402,7 +402,7 @@ async def test_sp_a2_t_units_coherent_v_uses_per_period_not_annualized(
     monkeypatch.setattr(asyncpg, "create_pool", _fake_create_pool,
                         raising=True)
 
-    core = await lab_run._run_lab_core(
+    core = await lab_run._run_lab_core(  # noqa: SLF001
         _ns(tmp_path / "u.csv", trials=8, seed=2), candidate=None)
     assert not isinstance(core, int)
     v = captured["v"]

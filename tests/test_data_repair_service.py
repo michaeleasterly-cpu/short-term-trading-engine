@@ -177,7 +177,7 @@ async def test_already_green_completes_without_heal(monkeypatch, lock_dir):
     _patch_heal(monkeypatch, outcome=None, calls=calls)
     pool = _Pool(red_sequence=[[]])  # nothing red
 
-    terminated = await drs._handle_request(
+    terminated = await drs._handle_request(  # noqa: SLF001
         pool, _request("r1", ["prices_daily"]), lock_dir
     )
 
@@ -212,7 +212,7 @@ async def test_heal_makes_green(monkeypatch, lock_dir):
     # red before heal (validate-first), green after heal re-query.
     pool = _Pool(red_sequence=[["prices_daily_completeness"], []])
 
-    terminated = await drs._handle_request(
+    terminated = await drs._handle_request(  # noqa: SLF001
         pool, _request("r2", ["prices_daily"]), lock_dir
     )
 
@@ -247,7 +247,7 @@ async def test_partial_heal_complete_green_false(monkeypatch, lock_dir):
         ]
     )
 
-    await drs._handle_request(
+    await drs._handle_request(  # noqa: SLF001
         pool,
         _request("r3", ["earnings_events", "sec_insider_transactions"]),
         lock_dir,
@@ -286,7 +286,7 @@ async def test_escalation_emits_escalated(monkeypatch, lock_dir):
         ]
     )
 
-    await drs._handle_request(
+    await drs._handle_request(  # noqa: SLF001
         pool, _request("r4", ["fundamentals_quarterly"]), lock_dir
     )
 
@@ -321,7 +321,7 @@ async def test_preexisting_terminal_skips_no_second_emit(
         }
     )
 
-    terminated = await drs._handle_request(
+    terminated = await drs._handle_request(  # noqa: SLF001
         pool, _request("r5", ["prices_daily"]), lock_dir
     )
 
@@ -357,7 +357,7 @@ async def test_lock_held_by_live_pid_defers_then_heals(
     cursor = t0 - timedelta(seconds=1)
 
     # Tick 1: lock held by a live pid → defer.
-    new_cursor = await drs._process_batch(pool, cursor, lock_dir)
+    new_cursor = await drs._process_batch(pool, cursor, lock_dir)  # noqa: SLF001
     assert new_cursor == cursor  # cursor NOT advanced past deferred req
     assert pool.emitted == []  # no terminal emitted
     assert calls == []  # no validation, no heal
@@ -365,10 +365,10 @@ async def test_lock_held_by_live_pid_defers_then_heals(
     assert os.path.exists(lock_dir)
 
     # Other process finishes — release the lock.
-    drs._release_lock(lock_dir)
+    drs._release_lock(lock_dir)  # noqa: SLF001
 
     # Tick 2: lock free → request is retried and heals (green path).
-    new_cursor = await drs._process_batch(pool, cursor, lock_dir)
+    new_cursor = await drs._process_batch(pool, cursor, lock_dir)  # noqa: SLF001
     assert new_cursor == t0  # advanced past now-terminated request
     assert len(pool.emitted) == 1
     assert pool.emitted[0]["event_type"] == drs.COMPLETE_EVENT_TYPE
@@ -386,7 +386,7 @@ async def test_dead_pid_lock_is_reclaimed(monkeypatch, lock_dir):
     with open(os.path.join(lock_dir, "pid"), "w", encoding="utf-8") as fh:
         fh.write(str(2**31 - 1))
 
-    terminated = await drs._handle_request(
+    terminated = await drs._handle_request(  # noqa: SLF001
         pool, _request("r7", ["prices_daily"]), lock_dir
     )
 
@@ -408,7 +408,7 @@ async def test_malformed_request_advances_without_emit(
     pool = _Pool(red_sequence=[[]])
 
     # No request_id — cannot correlate a reply; drop (advance past).
-    terminated = await drs._handle_request(
+    terminated = await drs._handle_request(  # noqa: SLF001
         pool, {"schema": 1, "engine": "vector", "sources": ["prices_daily"]},
         lock_dir,
     )
@@ -436,7 +436,7 @@ async def test_duplicate_request_id_in_batch_idempotent(
     )
     cursor = t0 - timedelta(seconds=1)
 
-    new_cursor = await drs._process_batch(pool, cursor, lock_dir)
+    new_cursor = await drs._process_batch(pool, cursor, lock_dir)  # noqa: SLF001
 
     # Exactly ONE terminal for request_id 'dup' — the 2nd occurrence
     # sees the terminal the 1st emitted and is skipped.

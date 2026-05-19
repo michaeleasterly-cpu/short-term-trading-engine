@@ -117,11 +117,11 @@ def test_load_specs_base_cleanup_normal_path(tmp_path: Path) -> None:
     repo = _setup_tmp_repo(tmp_path)
 
     with patch.object(_mod, "_REPO_ROOT", repo):
-        result = _mod._load_specs_base("main")  # succeeds (tpcore on venv PYTHONPATH)
+        result = _mod._load_specs_base("main")  # succeeds (tpcore on venv PYTHONPATH)  # noqa: SLF001
 
     # Return-contract: must be a non-empty dict keyed by every _REGISTRY_SNIPPETS
     # name — currently {"selfheal", "auditheal"} — derived from the SoT directly.
-    expected_keys = {name for name, _ in _mod._REGISTRY_SNIPPETS}
+    expected_keys = {name for name, _ in _mod._REGISTRY_SNIPPETS}  # noqa: SLF001
     assert isinstance(result, dict), "_load_specs_base must return a dict"
     assert result, "_load_specs_base must return a non-empty dict"
     assert set(result.keys()) == expected_keys, (
@@ -177,7 +177,7 @@ def test_load_specs_base_prune_fallback_when_remove_fails(tmp_path: Path) -> Non
 
     with patch.object(_mod, "_REPO_ROOT", repo):
         with patch("subprocess.run", side_effect=_intercept):
-            _mod._load_specs_base("main")
+            _mod._load_specs_base("main")  # noqa: SLF001
 
     # The admin entry MUST be gone (prune reclaimed it even though remove
     # was a no-op).  Pre-fix: this assertion FAILS (entry persists).
@@ -221,7 +221,7 @@ def test_engine_lane_load_specs_base_cleanup_invariant(
 
     with patch.object(_mod, "_REPO_ROOT", repo):
         with contextlib.suppress(subprocess.CalledProcessError):
-            _mod._load_specs_base("main", _mod._ENGINE_REGISTRY_SNIPPETS)
+            _mod._load_specs_base("main", _mod._ENGINE_REGISTRY_SNIPPETS)  # noqa: SLF001
 
     # The load-bearing invariant: cleanup happened despite the failure.
     assert _worktree_list_count(repo) == 1, (
@@ -302,9 +302,9 @@ def test_engine_lane_base_loader_succeeds_tmp_isolated(tmp_path: Path) -> None:
     repo = _setup_tmp_repo_with_ops(tmp_path)
 
     with patch.object(_mod, "_REPO_ROOT", repo):
-        result = _mod._load_specs_base("main", _mod._ENGINE_REGISTRY_SNIPPETS)
+        result = _mod._load_specs_base("main", _mod._ENGINE_REGISTRY_SNIPPETS)  # noqa: SLF001
 
-    expected_keys = {name for name, _ in _mod._ENGINE_REGISTRY_SNIPPETS}
+    expected_keys = {name for name, _ in _mod._ENGINE_REGISTRY_SNIPPETS}  # noqa: SLF001
     assert isinstance(result, dict) and result, (
         "_load_specs_base must return a non-empty dict"
     )
@@ -357,8 +357,8 @@ def test_engine_lane_prune_fallback_when_remove_fails(
             # the #63 `finally:`-prune fallback STILL reclaims the stale
             # admin entry even on that failure path.
             with contextlib.suppress(subprocess.CalledProcessError):
-                _mod._load_specs_base(
-                    "main", _mod._ENGINE_REGISTRY_SNIPPETS
+                _mod._load_specs_base(  # noqa: SLF001
+                    "main", _mod._ENGINE_REGISTRY_SNIPPETS  # noqa: SLF001
                 )
 
     assert not _stale_admin_entry_exists(repo), (

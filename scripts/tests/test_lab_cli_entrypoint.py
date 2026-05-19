@@ -52,7 +52,7 @@ def test_no_dsn_returns_explicit_nonzero_not_silent_zero(monkeypatch, capsys):
     import ops.lab.__main__ as cli
 
     monkeypatch.delenv("DATABASE_URL", raising=False)
-    rc = asyncio.run(cli._amain([
+    rc = asyncio.run(cli._amain([  # noqa: SLF001
         "--candidate", "exp1",
         "--target-engine", "reversion",
         "--intent", "fold_existing",
@@ -69,7 +69,7 @@ def test_bad_candidate_name_fails_loud(monkeypatch, capsys):
     import ops.lab.__main__ as cli
 
     monkeypatch.setenv("DATABASE_URL", "postgres://unused/forbidden")
-    rc = asyncio.run(cli._amain([
+    rc = asyncio.run(cli._amain([  # noqa: SLF001
         "--candidate", "../../etc/x",
         "--target-engine", "reversion",
         "--intent", "fold_existing",
@@ -84,7 +84,7 @@ def test_bad_param_overrides_json_fails_loud(monkeypatch, capsys):
     import ops.lab.__main__ as cli
 
     monkeypatch.setenv("DATABASE_URL", "postgres://unused/forbidden")
-    rc = asyncio.run(cli._amain([
+    rc = asyncio.run(cli._amain([  # noqa: SLF001
         "--candidate", "exp1",
         "--target-engine", "reversion",
         "--intent", "fold_existing",
@@ -99,7 +99,7 @@ def test_help_exits_zero():
     import ops.lab.__main__ as cli
 
     with pytest.raises(SystemExit) as ei:
-        cli._parse_args(["--help"])
+        cli._parse_args(["--help"])  # noqa: SLF001
     assert ei.value.code == 0
 
 

@@ -1936,7 +1936,7 @@ async def cmd_update(
     per_feed_validate: bool = True,
 ) -> UpdateSummary:
     started_at = datetime.now(UTC)
-    summary = UpdateSummary(run_id=db_log._run_id, started_at=started_at, finished_at=started_at)
+    summary = UpdateSummary(run_id=db_log._run_id, started_at=started_at, finished_at=started_at)  # noqa: SLF001 — TODO(P3e): tpcore-private access (CLAUDE.md/STYLE_GUIDE violation); fix = add a public DBLogHandler.run_id property and use it here
 
     # Pre-flight — refuse to run during the NYSE regular session unless
     # explicitly forced. --update includes daily_bars, which would corrupt
@@ -2105,7 +2105,7 @@ async def cmd_run_stage(
     structured FAILED event if the lock is held — clear signal, not a
     silent merge."""
     started_at = datetime.now(UTC)
-    summary = UpdateSummary(run_id=db_log._run_id, started_at=started_at, finished_at=started_at)
+    summary = UpdateSummary(run_id=db_log._run_id, started_at=started_at, finished_at=started_at)  # noqa: SLF001 — TODO(P3e): tpcore-private access (CLAUDE.md/STYLE_GUIDE violation); fix = add a public DBLogHandler.run_id property and use it here
 
     matched = [s for s in _STAGE_SPECS if s[0] == stage_name]
     if not matched:
@@ -3347,7 +3347,7 @@ async def cmd_check(
     db_log,
 ) -> dict[str, Any]:
     report: dict[str, Any] = {
-        "run_id": str(db_log._run_id),
+        "run_id": str(db_log._run_id),  # noqa: SLF001 — TODO(P3e): tpcore-private access (CLAUDE.md/STYLE_GUIDE violation); fix = add a public DBLogHandler.run_id property and use it here
         "timestamp": datetime.now(UTC).isoformat(),
         "checks": {},
     }

@@ -685,7 +685,7 @@ def test_sp_a2_t_crosstrial_matrix_changes_dsr_via_v() -> None:
     rep_fb = diag_fb.run()
     expected_v = float(np.var(_column_sharpes(matrix), ddof=1))
     # ddof-pin (underflow-immune): direct V compare; T-CROSSTRIAL's DSR-level assert is masked by ~1e-239 underflow (spec-review SP-A2 T3).
-    assert abs(diag_v._trial_sharpe_variance() - float(np.var(_column_sharpes(matrix), ddof=1))) < 1e-12
+    assert abs(diag_v._trial_sharpe_variance() - float(np.var(_column_sharpes(matrix), ddof=1))) < 1e-12  # noqa: SLF001
     pnls = np.array([t["pnl_pct"] for t in trades], dtype=float)
     sk, ku = _moments(pnls)
     want = _deflated_sharpe_ratio(
@@ -720,7 +720,7 @@ def test_sp_a2_t_degenerate_identical_columns_and_too_few_cols() -> None:
         trades=trades, parameters={"p": 1}, sr_observed=0.1, n_trials=3,
         trial_returns_matrix=few,
     )
-    assert diag_few._trial_sharpe_variance() is None      # too few cols
+    assert diag_few._trial_sharpe_variance() is None      # too few cols  # noqa: SLF001
     # End-to-end: the too-few-cols path must drive run() → DSR →
     # _expected_max_sharpe_under_null's logged 1/(n_obs-1) fallback, loud.
     with _sp_a2_structlog.testing.capture_logs() as logs:
@@ -733,7 +733,7 @@ def test_sp_a2_t_degenerate_identical_columns_and_too_few_cols() -> None:
     diag_none = OverfittingDiagnostic(
         trades=trades, parameters={"p": 1}, sr_observed=0.1, n_trials=3,
     )
-    assert diag_none._trial_sharpe_variance() is None      # no matrix
+    assert diag_none._trial_sharpe_variance() is None      # no matrix  # noqa: SLF001
 
 
 def test_sp_a2_slice_metrics_per_period_field_is_unannualized() -> None:

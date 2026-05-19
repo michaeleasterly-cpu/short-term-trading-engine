@@ -482,7 +482,7 @@ def test_apply_restore_failure_escalates_loudly(tmp_path, monkeypatch):
     def boom(self):
         raise RuntimeError("restore detonated")
 
-    monkeypatch.setattr(P._Journal, "restore", boom)
+    monkeypatch.setattr(P._Journal, "restore", boom)  # noqa: SLF001
     ecr = EngineChangeRequest(
         action="remove", engine="throwaway", reason="x", eulogy_notes="y")
     res = apply(attach_ecr_context(
@@ -1317,7 +1317,7 @@ def test_planner_shadow_edit_uses_renderer_not_inline_regex():
     import inspect
 
     from ops.engine_sdlc import planner
-    src = inspect.getsource(planner._shadow_edit_remove)
+    src = inspect.getsource(planner._shadow_edit_remove)  # noqa: SLF001
     assert "render_all" in src or "render_region" in src, (
         "_shadow_edit_remove must compute new text via the renderer")
     assert "re.search(r\"(for engine in )" not in src, (
@@ -1348,7 +1348,7 @@ def test_renderer_is_pure_no_filesystem_io_in_planner_path():
     import inspect
 
     from ops.engine_sdlc import planner
-    src = inspect.getsource(planner._shadow_edit_remove)
+    src = inspect.getsource(planner._shadow_edit_remove)  # noqa: SLF001
     # record_file MUST appear before write_text for each shadow file.
     rf = src.index("jn.record_file")
     wt = src.index(".write_text")

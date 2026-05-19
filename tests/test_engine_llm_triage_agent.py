@@ -91,14 +91,14 @@ def _no_real_pr_path():
             return 0, "https://github.com/x/y/pull/1", ""
         return 0, "", ""
 
-    orig_attr = elt._default_pr_runner
+    orig_attr = elt._default_pr_runner  # noqa: SLF001
     orig_kwd = dict(elt.run_triage.__kwdefaults__)
-    elt._default_pr_runner = _fake_pr_runner
+    elt._default_pr_runner = _fake_pr_runner  # noqa: SLF001
     elt.run_triage.__kwdefaults__["pr_runner"] = _fake_pr_runner
     try:
         yield
     finally:
-        elt._default_pr_runner = orig_attr
+        elt._default_pr_runner = orig_attr  # noqa: SLF001
         elt.run_triage.__kwdefaults__["pr_runner"] = orig_kwd["pr_runner"]
         post = _host_llm_triage_branches()
         assert post == [], (
@@ -293,7 +293,7 @@ async def test_proposed_disposition_is_existing_engine_verb(
 
 def test_insert_sql_byte_mirrors_engine_ladder() -> None:
     from ops import engine_ladder
-    assert elt._INSERT_SQL == engine_ladder._INSERT_SQL, (
+    assert elt._INSERT_SQL == engine_ladder._INSERT_SQL, (  # noqa: SLF001
         "engine agent _INSERT_SQL must byte-mirror "
         "ops.engine_ladder._INSERT_SQL (engine-lane insert convention)")
 
@@ -374,7 +374,7 @@ def test_default_client_is_async_anthropic() -> None:
     """
     import anthropic
 
-    client = elt._default_client()
+    client = elt._default_client()  # noqa: SLF001
     assert isinstance(client, anthropic.AsyncAnthropic), (
         f"_default_client must return AsyncAnthropic (non-blocking in "
         f"the daemon event loop), got {type(client).__name__}"

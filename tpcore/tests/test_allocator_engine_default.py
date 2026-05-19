@@ -40,7 +40,7 @@ def test_production_default_engine_set_is_reversion_vector_momentum() -> None:
     "momentum")`` — archived ``sigma`` absent, ``sentinel`` absent."""
     svc = AllocatorService(pool=None, platform_capital=Decimal("40000"))  # type: ignore[arg-type]
 
-    assert svc._engines == ("reversion", "vector", "momentum")
+    assert svc._engines == ("reversion", "vector", "momentum")  # noqa: SLF001
 
 
 def test_production_default_excludes_archived_sigma() -> None:
@@ -49,7 +49,7 @@ def test_production_default_excludes_archived_sigma() -> None:
     ``risk_state`` row keeps getting re-upserted every allocator run."""
     svc = AllocatorService(pool=None, platform_capital=Decimal("40000"))  # type: ignore[arg-type]
 
-    assert "sigma" not in svc._engines, (
+    assert "sigma" not in svc._engines, (  # noqa: SLF001
         "archived sigma must not be in the allocator's managed set — "
         "the per-engine upsert loop would resurrect its risk_state row"
     )
@@ -60,7 +60,7 @@ def test_production_default_excludes_sentinel_by_design() -> None:
     budgeted by SentinelCapitalGate, not the inverse-vol pool."""
     svc = AllocatorService(pool=None, platform_capital=Decimal("40000"))  # type: ignore[arg-type]
 
-    assert "sentinel" not in svc._engines, (
+    assert "sentinel" not in svc._engines, (  # noqa: SLF001
         "sentinel is intentionally OUT of the inverse-vol pool "
         "(SentinelCapitalGate owns its budget)"
     )

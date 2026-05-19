@@ -116,7 +116,7 @@ async def test_non_y_declines_zero_mutation(tmp_path, monkeypatch):
     # stub validate so the dry-run subprocess is not actually executed
     monkeypatch.setattr(cli, "_validate_for_cli",
                         lambda plan, ecr: plan)  # green
-    rc = await cli._amain(["--ecr", str(p)])
+    rc = await cli._amain(["--ecr", str(p)])  # noqa: SLF001
     assert rc == 1
     assert called["apply"] == 0, "apply ran despite a non-y answer"
     assert _snapshot_tree(ep, pkg, arc) == before, (
@@ -141,7 +141,7 @@ async def test_eof_declines(tmp_path, monkeypatch):
 
     monkeypatch.setattr(cli, "_read_confirm", _eof)
     monkeypatch.setattr(cli, "_validate_for_cli", lambda plan, ecr: plan)
-    rc = await cli._amain(["--ecr", str(p)])
+    rc = await cli._amain(["--ecr", str(p)])  # noqa: SLF001
     assert rc == 1
     assert called["apply"] == 0
     assert _snapshot_tree(ep, pkg, arc) == before, (
@@ -155,7 +155,7 @@ async def test_rejected_plan_never_prompts(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "_read_confirm",
                         lambda: prompted.__setitem__("n", 1) or "y")
     p = _write_ecr(tmp_path, _REMOVE_GHOST)  # classify → reject
-    rc = await cli._amain(["--ecr", str(p)])
+    rc = await cli._amain(["--ecr", str(p)])  # noqa: SLF001
     assert rc == 1
     assert prompted["n"] == 0, "a rejected plan must never reach the prompt"
 
@@ -176,7 +176,7 @@ async def test_every_outcome_emits_audit(tmp_path, monkeypatch):
     monkeypatch.setattr(planner, "_emit_audit",
                         lambda *a, **k: events.append(a))
     p = _write_ecr(tmp_path, _REMOVE_GHOST)
-    rc = await cli._amain(["--ecr", str(p)])
+    rc = await cli._amain(["--ecr", str(p)])  # noqa: SLF001
     assert rc == 1
     assert len(events) == 1, "a rejected ECR must emit exactly one audit"
     assert any("rejected" in str(e) for e in events)
@@ -189,7 +189,7 @@ async def test_every_outcome_emits_audit(tmp_path, monkeypatch):
                                "rejection": "synthetic validation reject"}))
     p2 = _write_ecr(tmp_path, "ECR\naction: REMOVE\nengine: sentinel\n"
                               "reason: x\neulogy_notes: y\n")
-    rc = await cli._amain(["--ecr", str(p2)])
+    rc = await cli._amain(["--ecr", str(p2)])  # noqa: SLF001
     assert rc == 1
     assert len(events) == 1, "a validation reject must emit exactly one audit"
     assert any("rejected" in str(e) for e in events)
@@ -202,7 +202,7 @@ async def test_every_outcome_emits_audit(tmp_path, monkeypatch):
         "apply ran on a declined ECR"))
     p3 = _write_ecr(tmp_path, "ECR\naction: REMOVE\nengine: sentinel\n"
                               "reason: x\neulogy_notes: y\n")
-    rc = await cli._amain(["--ecr", str(p3)])
+    rc = await cli._amain(["--ecr", str(p3)])  # noqa: SLF001
     assert rc == 1
     assert len(events) == 1, "a declined ECR must emit exactly one audit"
     assert any("operator_declined" in str(e) for e in events)
@@ -218,7 +218,7 @@ async def test_every_outcome_emits_audit(tmp_path, monkeypatch):
             **{**plan.__dict__, "rejection": "post-stage clockwork red"}))
     p4 = _write_ecr(tmp_path, "ECR\naction: REMOVE\nengine: sentinel\n"
                               "reason: x\neulogy_notes: y\n")
-    rc = await cli._amain(["--ecr", str(p4)])
+    rc = await cli._amain(["--ecr", str(p4)])  # noqa: SLF001
     assert rc == 1, "a gate-failed apply must not exit silently 0"
 
 
@@ -248,7 +248,7 @@ async def test_apply_rc0(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(
         cli, "apply",
         lambda plan, **k: applied.__setitem__("n", 1) or plan)
-    rc = await cli._amain(["--ecr", str(p)])
+    rc = await cli._amain(["--ecr", str(p)])  # noqa: SLF001
     assert rc == 0, "a fully-successful apply must return EXACTLY rc 0"
     assert applied["n"] == 1, "the success leg never invoked apply()"
     assert "APPLIED" in capsys.readouterr().out, (
@@ -302,7 +302,7 @@ async def test_modify_routes_automated_no_prompt(tmp_path, monkeypatch,
     monkeypatch.setattr(
         cli, "apply",
         lambda plan, **k: applied.__setitem__("n", 1) or plan)
-    rc = await cli._amain(["--ecr", str(p)])
+    rc = await cli._amain(["--ecr", str(p)])  # noqa: SLF001
     assert called["prompt"] == 0, (
         "a valid MODIFY (AUTOMATED) reached the operator y/n prompt — "
         "the `== ApprovalClass.AUTOMATED` routing regressed to `is` "
@@ -351,7 +351,7 @@ async def test_validate_dry_run_reject_no_fabricated_green(tmp_path,
         "ECR\naction: ADD\nengine: brandnewengine_xyz\n"
         "source: new_scaffold\ncadence: daily\nallocator: false\n"
         "dispatch_order: 9\nneed: prove the dry-run-reject CLI path\n")
-    rc = await cli._amain(["--ecr", str(p)])
+    rc = await cli._amain(["--ecr", str(p)])  # noqa: SLF001
     assert rc == 1, "a dry-run-rejected ECR must exit non-zero"
     assert len(events) == 1, "exactly one rejected audit expected"
     assert any("rejected" in str(e) for e in events)
@@ -377,7 +377,7 @@ async def test_validate_dry_run_reject_prints_no_green(tmp_path, capsys,
         "ECR\naction: ADD\nengine: brandnewengine_abc\n"
         "source: new_scaffold\ncadence: daily\nallocator: false\n"
         "dispatch_order: 9\nneed: prove no fabricated GREEN\n")
-    rc = await cli._amain(["--ecr", str(p)])
+    rc = await cli._amain(["--ecr", str(p)])  # noqa: SLF001
     cap = capsys.readouterr()
     assert rc == 1
     assert "GREEN" not in cap.out, (

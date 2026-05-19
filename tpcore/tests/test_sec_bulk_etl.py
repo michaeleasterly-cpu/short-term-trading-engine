@@ -74,7 +74,7 @@ async def test_extract_then_transform_load(monkeypatch, tmp_path) -> None:
     calls: list[str] = []
     _patch_fetch(monkeypatch, calls)
     pool = _Pool()
-    n = await handlers._sec_bulk_form345_backfill(
+    n = await handlers._sec_bulk_form345_backfill(  # noqa: SLF001
         pool, {"AAA"}, date(2024, 1, 1), dest_dir=tmp_path,
     )
     # Each spanned quarter contributes exactly one surviving row: the
@@ -98,11 +98,11 @@ async def test_extract_is_resumable_no_redownload(monkeypatch, tmp_path) -> None
         return zbytes
     monkeypatch.setattr(handlers, "_sec_bulk_fetch_zip", fake)
     args = ({"AAA"}, date(2025, 1, 1))
-    await handlers._sec_bulk_form345_backfill(_Pool(), *args, dest_dir=tmp_path)
+    await handlers._sec_bulk_form345_backfill(_Pool(), *args, dest_dir=tmp_path)  # noqa: SLF001
     first = len(calls)
     assert first > 0
     # Second run: every zip already on disk → zero new fetches.
-    await handlers._sec_bulk_form345_backfill(_Pool(), *args, dest_dir=tmp_path)
+    await handlers._sec_bulk_form345_backfill(_Pool(), *args, dest_dir=tmp_path)  # noqa: SLF001
     assert len(calls) == first, "cached zips must not be re-downloaded"
 
 
@@ -111,7 +111,7 @@ async def test_unpublished_quarter_404_skipped(monkeypatch, tmp_path) -> None:
     calls: list[str] = []
     _patch_fetch(monkeypatch, calls)
     # since spanning into 2026q1 (the mocked 404) must not raise.
-    n = await handlers._sec_bulk_form345_backfill(
+    n = await handlers._sec_bulk_form345_backfill(  # noqa: SLF001
         _Pool(), {"AAA"}, date(2026, 1, 1), dest_dir=tmp_path,
     )
     assert n >= 0  # completed despite the 404 quarter

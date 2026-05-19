@@ -31,7 +31,7 @@ from tpcore.engine_profile import FireDecision  # noqa: E402
 
 # Save the real _invoke_allocator before the autouse fixture replaces it,
 # so the three unit tests below can call the real implementation directly.
-_real_invoke_allocator = ed._invoke_allocator
+_real_invoke_allocator = ed._invoke_allocator  # noqa: SLF001
 
 
 # pytest-xdist: pin this ops-shadow module to one worker so its
@@ -386,7 +386,7 @@ async def test_dispatch_once_delegates_each_roster_engine_to_dispatch_engine():
         await dispatch_once(pool, now)
 
     assert [c[0] for c in calls] == list(ROSTER)
-    assert all(c[1] is ed._safe_invoke for c in calls)
+    assert all(c[1] is ed._safe_invoke for c in calls)  # noqa: SLF001
 
 
 async def test_invoke_allocator_runs_canonical_command_exit_zero():

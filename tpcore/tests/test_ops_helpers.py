@@ -36,7 +36,7 @@ import ops  # noqa: E402  — sys.path adjusted above
 def test_market_blocked_during_regular_session():
     # 2024-07-15 18:00 UTC = 14:00 ET — mid-session on a Monday.
     now = datetime(2024, 7, 15, 18, 0, tzinfo=UTC)
-    reason = ops._market_open_block_reason(now)
+    reason = ops._market_open_block_reason(now)  # noqa: SLF001
     assert reason is not None
     assert "NYSE" in reason
     assert "open" in reason.lower()
@@ -45,25 +45,25 @@ def test_market_blocked_during_regular_session():
 def test_market_open_after_close():
     # 2024-07-15 21:00 UTC = 17:00 ET — 1h after close.
     now = datetime(2024, 7, 15, 21, 0, tzinfo=UTC)
-    assert ops._market_open_block_reason(now) is None
+    assert ops._market_open_block_reason(now) is None  # noqa: SLF001
 
 
 def test_market_open_pre_market():
     # 2024-07-15 12:00 UTC = 08:00 ET — before 09:30 open.
     now = datetime(2024, 7, 15, 12, 0, tzinfo=UTC)
-    assert ops._market_open_block_reason(now) is None
+    assert ops._market_open_block_reason(now) is None  # noqa: SLF001
 
 
 def test_market_open_weekend():
     # 2024-07-13 is a Saturday — no session at all.
     now = datetime(2024, 7, 13, 18, 0, tzinfo=UTC)
-    assert ops._market_open_block_reason(now) is None
+    assert ops._market_open_block_reason(now) is None  # noqa: SLF001
 
 
 def test_market_open_holiday_thanksgiving():
     # 2024-11-28 was Thanksgiving — NYSE closed.
     now = datetime(2024, 11, 28, 18, 0, tzinfo=UTC)
-    assert ops._market_open_block_reason(now) is None
+    assert ops._market_open_block_reason(now) is None  # noqa: SLF001
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -75,14 +75,14 @@ def test_retryable_set_covers_observed_failures():
     """Grounded in the 14-day survey: transient failures we saw must be retryable."""
     # Every one of these substrings appeared in real INGESTION_FAILED messages.
     for token in ("timeout", "ReadError", "429", "ConnectError"):
-        assert token in ops._RETRYABLE_FAILURE_REASONS, f"{token!r} missing from retryable set"
+        assert token in ops._RETRYABLE_FAILURE_REASONS, f"{token!r} missing from retryable set"  # noqa: SLF001
 
 
 def test_retryable_set_excludes_logical_failures():
     """Logical errors (real data state, not transient) MUST NOT auto-retry."""
     # These are real failure shapes we don't want retried automatically.
     for token in ("no_data", "validation_failed", "RuntimeError"):
-        assert token not in ops._RETRYABLE_FAILURE_REASONS
+        assert token not in ops._RETRYABLE_FAILURE_REASONS  # noqa: SLF001
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -104,7 +104,7 @@ def _async_noop_log():
     """Minimal db_log stand-in: any await call resolves to None."""
     m = MagicMock()
     m.log = AsyncMock(return_value=None)
-    m._run_id = uuid.uuid4()
+    m._run_id = uuid.uuid4()  # noqa: SLF001
     return m
 
 
@@ -128,12 +128,12 @@ async def test_self_heal_retries_transient_timeout():
         retry_calls.append((name, timeout, dry_run))
         return ops.StageResult(name=name, status="OK", duration_ms=42, detail={"rows_upserted": 7})
 
-    orig = ops._run_stage
-    ops._run_stage = fake_run_stage
+    orig = ops._run_stage  # noqa: SLF001
+    ops._run_stage = fake_run_stage  # noqa: SLF001
     try:
-        await ops._self_heal_failed_stages(summary, pool_stub, {}, log=log, db_log=db_log)
+        await ops._self_heal_failed_stages(summary, pool_stub, {}, log=log, db_log=db_log)  # noqa: SLF001
     finally:
-        ops._run_stage = orig
+        ops._run_stage = orig  # noqa: SLF001
 
     # Retried exactly once for the failed stage.
     assert len(retry_calls) == 1
@@ -165,12 +165,12 @@ async def test_self_heal_skips_non_retryable():
         retry_calls.append(name)
         return ops.StageResult(name=name, status="OK", duration_ms=1)
 
-    orig = ops._run_stage
-    ops._run_stage = fake_run_stage
+    orig = ops._run_stage  # noqa: SLF001
+    ops._run_stage = fake_run_stage  # noqa: SLF001
     try:
-        await ops._self_heal_failed_stages(summary, pool_stub, {}, log=log, db_log=db_log)
+        await ops._self_heal_failed_stages(summary, pool_stub, {}, log=log, db_log=db_log)  # noqa: SLF001
     finally:
-        ops._run_stage = orig
+        ops._run_stage = orig  # noqa: SLF001
 
     assert retry_calls == [], "validation suite failure must NOT auto-retry"
     # The original failed result is preserved (not silently green-flipped).
@@ -196,12 +196,12 @@ async def test_self_heal_only_processes_failed_or_timeout():
         calls.append(args)
         return ops.StageResult(name="x", status="OK", duration_ms=1)
 
-    orig = ops._run_stage
-    ops._run_stage = fake_run_stage
+    orig = ops._run_stage  # noqa: SLF001
+    ops._run_stage = fake_run_stage  # noqa: SLF001
     try:
-        await ops._self_heal_failed_stages(summary, pool_stub, {}, log=log, db_log=db_log)
+        await ops._self_heal_failed_stages(summary, pool_stub, {}, log=log, db_log=db_log)  # noqa: SLF001
     finally:
-        ops._run_stage = orig
+        ops._run_stage = orig  # noqa: SLF001
 
     assert calls == []
 
@@ -272,7 +272,7 @@ async def test_daily_bars_skips_when_already_ingested(monkeypatch):
     import tpcore.ingestion.handlers as h
     monkeypatch.setattr(h, "handle_daily_bars", fake_handler)
 
-    result = await ops._stage_daily_bars(pool, {"universe": "active"})
+    result = await ops._stage_daily_bars(pool, {"universe": "active"})  # noqa: SLF001
     assert result["rows_upserted"] == 0
     assert result.get("skipped") == "already_ingested"
     assert handler_calls == [], "handler must NOT be called when idempotency check passes"
@@ -291,7 +291,7 @@ async def test_daily_bars_runs_when_under_threshold(monkeypatch):
     import tpcore.ingestion.handlers as h
     monkeypatch.setattr(h, "handle_daily_bars", fake_handler)
 
-    result = await ops._stage_daily_bars(pool, {"universe": "active"})
+    result = await ops._stage_daily_bars(pool, {"universe": "active"})  # noqa: SLF001
     assert result["rows_upserted"] == 4_242
     assert "skipped" not in result
     assert len(handler_calls) == 1
@@ -312,7 +312,7 @@ def test_audit_checks_cover_every_dependent_table():
         "liquidity_tiers", "universe_candidates", "tradier_options_chains",
     }
     audited = {
-        table for table, check, _ in ops._AUDIT_CHECKS
+        table for table, check, _ in ops._AUDIT_CHECKS  # noqa: SLF001
         if check == "ticker_not_in_prices"
     }
     missing = expected_tables - audited
@@ -320,7 +320,7 @@ def test_audit_checks_cover_every_dependent_table():
 
 
 def test_audit_includes_freshness_and_expiry_checks():
-    by_kind = {(t, c) for t, c, _ in ops._AUDIT_CHECKS}
+    by_kind = {(t, c) for t, c, _ in ops._AUDIT_CHECKS}  # noqa: SLF001
     # The historical pain points — keep these wired.
     assert ("tradier_options_chains", "expired") in by_kind
     assert ("liquidity_tiers", "stale_30d") in by_kind
@@ -334,7 +334,7 @@ def test_audit_includes_freshness_and_expiry_checks():
 def test_cli_has_audit_reconcile_allocate_status_modes():
     """Regression guard: each consolidated command must remain
     parseable so the dashboard's daemon-status fetchers don't break."""
-    parser = ops._build_parser()
+    parser = ops._build_parser()  # noqa: SLF001
     for mode in ("--audit", "--reconcile", "--allocate", "--status"):
         args = parser.parse_args([mode])
         # exactly one boolean mode flag should be True
@@ -348,7 +348,7 @@ def test_cli_enforce_freeze_flag_paired_with_allocate():
     """--enforce-freeze is a modifier only useful with --allocate.
     Parser accepts it standalone (no validation there), but the spec
     requires this combination is the live-mode path."""
-    parser = ops._build_parser()
+    parser = ops._build_parser()  # noqa: SLF001
     args = parser.parse_args(["--allocate", "--enforce-freeze"])
     assert args.allocate is True
     assert args.enforce_freeze is True
