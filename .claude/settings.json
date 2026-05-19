@@ -1,5 +1,5 @@
 {
-  "$schema": "https://code.claude.com/schema/settings.json",
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "$comment": "Project-scoped Claude Code settings. The version-controlled architecture surface (rules/skills/agents/hooks here, settings.json itself) — per-machine state lives in .claude/settings.local.json (gitignored). Hooks wire the .claude/hooks/*.sh enforcement scripts. Authoritative external: https://code.claude.com/docs/en/hooks-guide.",
   "hooks": {
     "PreToolUse": [
