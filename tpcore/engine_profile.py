@@ -46,6 +46,7 @@ _DISPATCHABLE: frozenset[LifecycleState] = frozenset(
     {LifecycleState.PAPER, LifecycleState.LIVE})
 
 _ALLOCATOR_ENGINE = "allocator"  # the one structurally-separate engine (its own _dispatch_allocator path, D-SDLC1-4)
+_LAB_SENTINEL = "lab"  # the durable LifecycleState.LAB sentinel — NOT a runnable engine (no package; test_lab_sentinel_is_not_wired)
 
 
 class EngineProfile(BaseModel):
@@ -127,6 +128,38 @@ def archived_engines() -> tuple[str, ...]:
     so order is behavior-equivalent; sorted for stable test diffs."""
     return tuple(sorted(p.engine for p in _PROFILE.values()
                         if p.lifecycle_state is LifecycleState.RETIRED))
+
+
+# SP-B: the Lab-targetable lifecycle set. Distinct from _DISPATCHABLE —
+# it INCLUDES LifecycleState.LAB because targeting a LAB candidate is the
+# whole point of the SDLC LAB state (epic §1 SP-B: LAB ∪ PAPER ∪ LIVE).
+_LAB_TARGETABLE: frozenset[LifecycleState] = frozenset(
+    {LifecycleState.LAB, LifecycleState.PAPER, LifecycleState.LIVE})
+
+
+def lab_targetable_engines() -> tuple[str, ...]:
+    """Engines the Lab MAY fish against: LAB/PAPER/LIVE, non-allocator,
+    EXCLUDING the durable ``lab`` sentinel (not a runnable engine — no
+    package/backtest, test_lab_sentinel_is_not_wired) and EXCLUDING
+    ``canary`` (non-graduating by construction — CLAUDE.md / canary spec
+    §4b / canary test_backtest_deliberately_never_writes_credibility; a
+    Lab graduation verdict against it is a category error that would
+    still spend SP-A ledger budget). RETIRED and allocator are excluded.
+    Ordered by dispatch_order for stable diffs.
+
+    This is a DERIVED VIEW over the single SoT (``_PROFILE``), NOT a
+    parallel SoT (spec §6). Sentinel is PAPER ⇒ included-but-undeclared
+    until SP-E declares its LAB_TARGET (the resolver hard-rejects it with
+    a clear SP-E-pointing message — a visible, tested state, not a silent
+    gap; spec §2.1, §4.1)."""
+    return tuple(
+        p.engine
+        for p in sorted(_PROFILE.values(), key=lambda p: p.dispatch_order)
+        if p.lifecycle_state in _LAB_TARGETABLE
+        and p.engine != _ALLOCATOR_ENGINE
+        and p.engine != _LAB_SENTINEL
+        and p.engine != "canary"  # spec §4b, N=1 — explicit clause + test
+    )
 
 
 def engine_package_names() -> frozenset[str]:
