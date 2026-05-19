@@ -457,3 +457,108 @@ def test_sp_a2_fallback_math_byte_unchanged_no_variance_arg() -> None:
     assert abs(got - legacy) < 1e-12
     # §2.2 worked number for the fallback branch.
     assert abs(got - 0.10190) < 1e-4
+
+
+def test_sp_a2_t_worked_cross_trial_variance_pins_2_2_numbers() -> None:
+    """T-WORKED (MAKE-OR-BREAK). §2.2: N=50, n_obs=500, V=0.01 ⇒ SR₀≈0.22763;
+    fallback ⇒ SR₀≈0.10190; the per-impl ε (H-A2-14: this is the
+    overfitting.py / scipy.norm.ppf impl)."""
+    # Lazy imports — SP-A2 symbols don't exist until Task 2.
+    from tpcore.backtest.overfitting import (
+        _deflated_sharpe_ratio,
+        _expected_max_sharpe_under_null,
+    )
+    sr0_v = _expected_max_sharpe_under_null(50, 500, trial_sharpe_variance=0.01)
+    assert abs(sr0_v - 0.22763) < 1e-4
+    sr0_fb = _expected_max_sharpe_under_null(50, 500)
+    assert abs(sr0_fb - 0.10190) < 1e-4
+    # The candidate-SR=0.15 DSR pair (skew 0, kurt 3, n=500).
+    d_bug = _deflated_sharpe_ratio(0.15, 500, 0.0, 3.0, 50)
+    d_fix = _deflated_sharpe_ratio(0.15, 500, 0.0, 3.0, 50,
+                                   trial_sharpe_variance=0.01)
+    assert abs(d_bug - 0.8573) < 1e-3
+    assert abs(d_fix - 0.0423) < 1e-3
+
+
+def test_sp_a2_t_fallback_warns_loud_and_numeric_backward_compat() -> None:
+    """T-FALLBACK-WARNS (MAKE-OR-BREAK, H-A2-1). No variance ⇒ legacy
+    numeric AND a loud structlog WARNING (never silent)."""
+    from tpcore.backtest.overfitting import _expected_max_sharpe_under_null
+    with _sp_a2_structlog.testing.capture_logs() as logs:
+        got = _expected_max_sharpe_under_null(50, 500)
+    assert abs(got - 0.10190) < 1e-4
+    assert any(
+        e.get("event") == "tpcore.overfitting.dsr.null_variance_approximation"
+        and e.get("log_level") == "warning"
+        and e.get("n_trials") == 50 and e.get("n_obs") == 500
+        for e in logs
+    )
+
+
+def test_sp_a2_t_fallback_no_warn_when_variance_supplied() -> None:
+    """The honest path is silent (no spurious WARNING when V is given)."""
+    from tpcore.backtest.overfitting import _expected_max_sharpe_under_null
+    with _sp_a2_structlog.testing.capture_logs() as logs:
+        _expected_max_sharpe_under_null(50, 500, trial_sharpe_variance=0.01)
+    assert not any(
+        e.get("event") == "tpcore.overfitting.dsr.null_variance_approximation"
+        for e in logs
+    )
+
+
+def test_sp_a2_t_stricter_floor_makes_change_tightening_or_equal() -> None:
+    """T-STRICTER (MAKE-OR-BREAK, H-A2-10). Over a grid incl. the
+    low-dispersion / degenerate band, DSR_with_V ≤ DSR_fallback + 1e-12
+    — the floor max(V, 1/(n_obs-1)) makes the change provably
+    tightening-or-equal for EVERY input (never looser)."""
+    from tpcore.backtest.overfitting import _deflated_sharpe_ratio
+    for n_obs in (250, 500, 1000):
+        d_fb = _deflated_sharpe_ratio(0.15, n_obs, 0.0, 3.0, 50)
+        for v in (0.0, 1e-9, 1e-6, 0.0005, 0.001, 0.01, 0.04, 0.10):
+            d_v = _deflated_sharpe_ratio(0.15, n_obs, 0.0, 3.0, 50,
+                                         trial_sharpe_variance=v)
+            assert d_v <= d_fb + 1e-12, (n_obs, v, d_v, d_fb)
+
+
+def test_sp_a2_t_ortho_v_and_n_compose_multiplicatively() -> None:
+    """T-ORTHO (§6). Hold V fixed, sweep n_trials ⇒ SR₀ monotone-up in N
+    (the untouched Φ⁻¹ bracket); hold N fixed, increase V ⇒ SR₀
+    monotone-up in V. They multiply."""
+    from tpcore.backtest.overfitting import _expected_max_sharpe_under_null
+    base = _expected_max_sharpe_under_null(50, 500, trial_sharpe_variance=0.01)
+    more_n = _expected_max_sharpe_under_null(2000, 500, trial_sharpe_variance=0.01)
+    assert more_n > base                       # monotone in N (SP-A term)
+    more_v = _expected_max_sharpe_under_null(50, 500, trial_sharpe_variance=0.04)
+    assert more_v > base                       # monotone in V (SP-A2 term)
+    # Multiplicative separability: SR0(N,V) / SR0(N,V0) is N-independent.
+    r1 = (_expected_max_sharpe_under_null(50, 500, trial_sharpe_variance=0.04)
+          / _expected_max_sharpe_under_null(50, 500, trial_sharpe_variance=0.01))
+    r2 = (_expected_max_sharpe_under_null(200, 500, trial_sharpe_variance=0.04)
+          / _expected_max_sharpe_under_null(200, 500, trial_sharpe_variance=0.01))
+    assert abs(r1 - r2) < 1e-9
+
+
+def test_sp_a2_t_sig_compat_positional_calls_still_work() -> None:
+    """T-SIG-COMPAT. Every legacy positional call still type-checks/runs
+    (the keyword-only ``trial_sharpe_variance`` addition is non-breaking)
+    AND the positional/None path is *numerically byte-identical* to
+    pre-SP-A2 — that byte-identity IS the backward-compat guarantee
+    (spec §3.1/§3.2 "backward-compatible by construction")."""
+    from tpcore.backtest.overfitting import (
+        _deflated_sharpe_ratio,
+        _expected_max_sharpe_under_null,
+    )
+    assert _expected_max_sharpe_under_null(20, 250) >= 0.0     # reversion shape
+    assert _deflated_sharpe_ratio(0.1, 250, 0.0, 3.0, 20) >= 0.0
+    # Plan-correction (controller, 2026-05-19): the original assertion
+    # `_deflated_sharpe_ratio(0.1, 250, 0.0, 3.0, 1) == 0.0` was a plan-author
+    # factual error — there is NO DSR-level N=1 short-circuit. For n_trials<=1
+    # `_expected_max_sharpe_under_null` returns 0.0 as the *threshold*, then
+    # `_psr_per_trade` returns a CDF (~0.9423) — the REAL pre-SP-A2 value
+    # (empirically verified identical on origin/main, independent of SP-A2).
+    # T-SIG-COMPAT's true intent is legacy byte-identity, so pin THAT (the
+    # strongest faithful form; spec §9 NON-GOALS forbids changing non-V
+    # numerics, so adding an N=1 short-circuit is explicitly ruled out).
+    assert abs(_deflated_sharpe_ratio(0.1, 250, 0.0, 3.0, 1)
+               - 0.942261266719699) < 1e-12   # legacy positional path byte-identical
+    assert _expected_max_sharpe_under_null(50, 1) == 0.0  # genuine n_trials<=1/n_obs<2 threshold short-circuit (this one is real)

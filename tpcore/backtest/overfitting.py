@@ -105,24 +105,75 @@ def _psr_per_trade(
     return float(norm.cdf(z))
 
 
-def _expected_max_sharpe_under_null(n_trials: int, n_obs: int) -> float:
-    """Expected max sample Sharpe across ``n_trials`` independent trials under null.
+MIN_TRIALS_FOR_V = 5  # H-A2-10: below this the cross-trial variance is too
+                      # noisy to trust as a selection-bias estimate.
 
-    Bailey & López de Prado (2014) approximation with Euler–Mascheroni
-    constant. Variance of sample Sharpe under null SR=0 is ≈ 1/(n_obs - 1).
+
+def _expected_max_sharpe_under_null(
+    n_trials: int,
+    n_obs: int,
+    *,
+    trial_sharpe_variance: float | None = None,
+) -> float:
+    """Expected max sample Sharpe across ``n_trials`` trials under the null.
+
+    Bailey & López de Prado (2014), SSRN 2460551, eqn for SR₀:
+        SR₀ = √V · ((1−γ)·Φ⁻¹[1−1/N] + γ·Φ⁻¹[1−1/(N·e)])
+    where **V = V[ŜR_n] is the cross-trial variance of the per-trial
+    Sharpe estimates across the N searched trials** (selection-bias
+    dispersion), NOT the single-estimator sampling variance.
+
+    ``trial_sharpe_variance`` — pass V[ŜR_n] computed from the sweep's
+    per-trial Sharpe vector (the statistically-correct path). When
+    ``None`` (a count-only / single-strategy caller that has no trial
+    vector), fall back to the single-estimator null approximation
+    ``1/(n_obs-1)`` AND emit a structlog WARNING — this branch is a
+    documented approximation, never silent (§1.3, H-A2-1).
+
+    The H-A2-10 floor ``max(V, 1/(n_obs-1))`` makes the change provably
+    tightening-or-equal for every input: a low-dispersion / degenerate
+    sweep can NOT loosen the (already-too-lenient) legacy bar. See the
+    sibling impl ``ops/lab/run.py::compute_dsr_for_verdict`` — both must
+    stay coherent (H-A2-7); the V-term is the cross-trial dispersion,
+    ``ddof=1``, distinct from the multiple-testing count ``n_trials``.
     """
     if n_trials <= 1 or n_obs < 2:
         return 0.0
-    sr_variance = 1.0 / (n_obs - 1)
+    floor = 1.0 / (n_obs - 1)  # legacy single-estimator value — now a FLOOR
+    if trial_sharpe_variance is not None:
+        # H-A2-10: honest cross-trial dispersion is used ONLY when it makes
+        # the gate the SAME OR HARDER. A low-dispersion / degenerate sweep
+        # (V < 1/(n_obs-1)) must NOT loosen the bar — clamp up to the floor.
+        sr_variance = max(float(trial_sharpe_variance), floor)
+    else:
+        sr_variance = floor  # KNOWN APPROXIMATION — not the paper's V
+        logger.warning(
+            "tpcore.overfitting.dsr.null_variance_approximation",
+            reason="no per-trial Sharpe vector available; using "
+                   "single-estimator 1/(n_obs-1) instead of "
+                   "cross-trial V[SR_n]",
+            n_trials=n_trials,
+            n_obs=n_obs,
+        )
     z1 = float(norm.ppf(1.0 - 1.0 / n_trials))
     z2 = float(norm.ppf(1.0 - 1.0 / (n_trials * math.e)))
-    return math.sqrt(sr_variance) * ((1.0 - EULER_MASCHERONI) * z1 + EULER_MASCHERONI * z2)
+    return math.sqrt(sr_variance) * (
+        (1.0 - EULER_MASCHERONI) * z1 + EULER_MASCHERONI * z2
+    )
 
 
 def _deflated_sharpe_ratio(
-    sr: float, n: int, skew: float, kurt: float, n_trials: int
+    sr: float,
+    n: int,
+    skew: float,
+    kurt: float,
+    n_trials: int,
+    *,
+    trial_sharpe_variance: float | None = None,
 ) -> float:
-    threshold = _expected_max_sharpe_under_null(n_trials, n)
+    threshold = _expected_max_sharpe_under_null(
+        n_trials, n, trial_sharpe_variance=trial_sharpe_variance
+    )
     return _psr_per_trade(sr, threshold, n, skew, kurt)
 
 
