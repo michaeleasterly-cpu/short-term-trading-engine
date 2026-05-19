@@ -1,23 +1,34 @@
 """SP-E — the Sentinel-specific proof: its declared non-Sharpe primary
 metric (``LabPrimaryMetric.MAXDD_REDUCTION``) ranks candidates CORRECTLY
 (a shallower holdout drawdown wins) while the SACRED graduation gate
-(DSR≥0.95 ∧ cred≥60 ∧ n_trades≥3) is BYTE-IDENTICAL regardless of which
-ranking metric is used — the pluggable metric changes only WHICH
-candidate wins, never WHETHER it graduates (SP-D §1.2, applied to
-Sentinel's exact bar).
+(DSR≥threshold ∧ cred≥threshold ∧ n_trades≥3) is BYTE-IDENTICAL
+regardless of which ranking metric is used — the pluggable metric
+changes only WHICH candidate wins, never WHETHER it graduates (SP-D
+§1.2, applied to Sentinel's exact bar).
 
-SP-D's `test_lab_sp_d_make_or_break.py` proves metric-invariance of the
-gate in general; THIS test instantiates it on **Sentinel's own declared
-metric, resolved through the real SP-B roster resolver** — the SP-E
-deliverable ("a passing front-half run demonstrating the non-Sharpe
-primary metric ranks correctly while the gate stays sacred").
+SP-D's `test_lab_sp_d_make_or_break.py` proves the GENERAL
+metric-invariance of the gate (a reversion-targeted stub with a
+synthetic ``model_copy`` metric). THIS test pins the SP-E deliverable
+that SP-D does NOT cover: it drives the REAL
+``_run_lab_core`` → ``_build_lab_result`` → ``survived`` pipeline twice
+for a FIXED pinned candidate — once under SHARPE and once under the
+metric **resolved through the real SP-B roster resolver for
+``sentinel``** (`_lab_target_for("sentinel").primary_metric`, NOT a
+hardcoded literal — the resolution being MAXDD_REDUCTION is itself
+asserted for non-vacuity) — and asserts the real
+``(verdict, dsr, credibility_score, winning_params)`` 4-tuple plus
+``core.survived`` is byte-identical between the two. It would FAIL if
+production's ``survived`` ever became metric-dependent: it invokes the
+real gate, it does not re-implement it.
 
-Fully hermetic: hand-built TrialResults, no DB / network, no
-module-level `import ops.lab.run` (the SP-D CI hermeticity lesson) —
-every import is in-body.
+Fully hermetic (the SP-D CI hermeticity lesson): hand-built
+TrialResults / stubbed LabTarget callables, no DB / network, no
+module-level `import ops.lab.run`, no collection-time `sys.modules`
+purge — every import is in-body and the pools are offline stubs.
 """
 from __future__ import annotations
 
+import argparse
 from datetime import date, timedelta
 
 import pytest
@@ -101,63 +112,261 @@ def test_maxdd_metric_ranks_the_shallower_drawdown_first():
     assert sharpe_rank[0][0] != maxdd_rank[0][0]
 
 
-def _gate(held, *, dsr: float, cred: int) -> bool:
-    """The EXACT sacred-gate predicate from
-    ops/lab/run.py:1147-1151 — verbatim, metric-FREE by construction
-    (it reads only dsr, credibility_score, and the held-back replay's
-    n_trades; the ranking metric feeds NONE of these)."""
-    return dsr >= 0.95 and cred >= 60 and held.n_trades >= 3
+# ────────────────────────────────────────────────────────────────────
+# Hermetic offline pool/credibility stubs — the SP-D
+# test_lab_sp_d_make_or_break.py _SharedPool/_FakeConn precedent
+# (verbatim shape, NOT widened).
+# ────────────────────────────────────────────────────────────────────
 
 
-def test_gate_verdict_is_byte_identical_regardless_of_metric():
-    """The make-or-break, on Sentinel's bar: for a FIXED candidate's
-    held-back replay the sacred-gate verdict is byte-identical whether
-    the Lab ranked by SHARPE or by Sentinel's MAXDD_REDUCTION — the
-    metric only permutes the WINNER, it never feeds `survived`.
+class _FakeConn:
+    def __init__(self, rows: list[dict]) -> None:
+        self._rows = rows
+
+    async def fetchrow(self, sql: str, *params: object):
+        s = " ".join(sql.split())
+        if s.startswith("INSERT INTO platform.data_quality_log"):
+            source, ts = params[0], params[1]
+            if any(r["source"] == source and r["timestamp"] == ts
+                   for r in self._rows):
+                return None
+            self._rows.append({"source": source, "timestamp": ts,
+                               "notes": params[6]})
+            return {"?column?": 1}
+        raise AssertionError(s)
+
+    async def fetchval(self, sql: str, *params: object):
+        s = " ".join(sql.split())
+        if "SUM((notes::jsonb->>'trials')::int)" in s:
+            src, before = params[0], params[1]
+            import json as _j
+            return sum(_j.loads(r["notes"])["trials"] for r in self._rows
+                       if r["source"] == src and r["timestamp"] < before)
+        raise AssertionError(s)
+
+
+class _Acquire:
+    def __init__(self, conn: _FakeConn) -> None:
+        self._c = conn
+
+    async def __aenter__(self) -> _FakeConn:
+        return self._c
+
+    async def __aexit__(self, *a: object) -> bool:
+        return False
+
+
+class _SharedPool:
+    def __init__(self) -> None:
+        self.rows: list[dict] = []
+
+    def acquire(self) -> _Acquire:
+        return _Acquire(_FakeConn(self.rows))
+
+    async def close(self) -> None:
+        ...
+
+
+class _RR:
+    """A deterministic BacktestRunResult-shaped stub: a noise-free
+    trade-log keyed off the `choice` param, plus a valid credibility
+    rubric (so _build_lab_result has a non-None rubric)."""
+
+    def __init__(self, choice: str, *, final_holdout: bool) -> None:
+        from tpcore.backtest.credibility import CredibilityScore
+
+        self.credibility_score = 80
+        self.credibility_rubric = CredibilityScore(
+            lookahead_clean=True, survivorship_inclusive=True,
+            pit_fundamentals=True, regime_coverage=True,
+            out_of_sample_validated=True, monte_carlo_drawdown=True,
+            score=80)
+        returns = _LEGACY if choice == "legacy60" else _VARIANT
+        base = date(2022, 1, 3) if final_holdout else date(2021, 1, 4)
+        self.trade_log = [
+            type("T", (), {"entry_date": base + timedelta(days=30 * i),
+                           "pnl_pct": r})()
+            for i, r in enumerate(returns)
+        ]
+
+
+def _install_sentinel_stub(monkeypatch):
+    """A LabTarget whose callables key a deterministic trade-log off the
+    `choice` param — Sentinel's {legacy60, variant55} arms — with NO
+    real DB / Sentinel backtest. The credibility write is stubbed True
+    so no real pool is touched."""
+    from tpcore.lab.target import LabTarget
+
+    def _choice_of(overrides: dict | None) -> str:
+        return (overrides or {}).get("choice", "legacy60")
+
+    async def _runner(*, db_url, start, end, overrides, universe):
+        return _RR(_choice_of(overrides), final_holdout=True)
+
+    async def _loader(*, db_url, start, end, universe):
+        return object()
+
+    def _ctx_runner(context, *, overrides=None):
+        return _RR(_choice_of(overrides), final_holdout=False)
+
+    def _default_params() -> dict:
+        return {"choice": "legacy60"}
+
+    tgt = LabTarget(
+        param_ranges={"choice": (0, 1, "choice:legacy60,variant55")},
+        run_for_search=_runner,
+        load_window_context=_loader,
+        run_with_context=_ctx_runner,
+        default_params=_default_params,
+    )
+    monkeypatch.setattr("ops.lab.run._lab_target_for", lambda e: tgt)
+    monkeypatch.setattr("ops.lab.run._runner_for", lambda e: _runner)
+    monkeypatch.setattr("ops.lab.run._context_loader_for",
+                        lambda e: _loader)
+    monkeypatch.setattr("ops.lab.run._context_runner_for",
+                        lambda e: _ctx_runner)
+    # ops.engine_sdlc.default_params._lab_target_for is a LAZY in-body
+    # `from ops.lab.run import _lab_target_for` (not a module attribute),
+    # so patching ops.lab.run._lab_target_for above already covers the
+    # _build_lab_result default-params seam — no second patch site.
+
+    async def _fw(pool, *, engine_name, score):
+        return True
+
+    monkeypatch.setattr(
+        "tpcore.backtest.statistical_validation.write_credibility_score",
+        _fw, raising=True)
+    return tgt
+
+
+def _ns(output, *, seed: int) -> argparse.Namespace:
+    return argparse.Namespace(
+        engine="sentinel", trials=3, per_window_trials=3,
+        train_start=date(2018, 1, 1), holdout_end=date(2021, 12, 31),
+        final_holdout_start=date(2022, 1, 1),
+        final_holdout_end=date(2022, 12, 31),
+        walk_forward_step=365, train_years=3, holdout_years=1,
+        seed=seed, output=output, database_url="postgres://fake/db",
+        dsr_threshold=0.0, credibility_threshold=0,
+        universe_tier_max=None)
+
+
+def _candidate(name: str):
+    from tpcore.lab.models import LabCandidate
+    return LabCandidate(name=name, target_engine="sentinel",
+                        param_overrides={}, intent="fold_existing")
+
+
+def _ecr_tuple(lr) -> tuple[str, float, int, dict]:
+    """The EXACT 4-tuple ops/engine_sdlc/planner._validate_modify
+    re-derives from a LabResult sidecar (SP-D §0.2a/A12):
+    (verdict, dsr, credibility_score, winning_params). The make-or-break
+    invariant is that THIS tuple is byte-identical between the SHARPE run
+    and the Sentinel-roster-resolved-MAXDD run for a FIXED candidate."""
+    return (lr.verdict, lr.dsr, lr.credibility_score, lr.winning_params)
+
+
+async def test_gate_4tuple_is_byte_identical_through_the_real_gate():
+    """The make-or-break, on Sentinel's bar, through the REAL gate.
+
+    For a FIXED pinned candidate, run the WHOLE
+    ``_run_lab_core`` → ``_build_lab_result`` → ``survived`` pipeline
+    twice:
+      * SHARPE — ``LabPrimaryMetric.SHARPE``;
+      * MAXDD — the metric **resolved through the real SP-B roster
+        resolver for ``sentinel``** (`_lab_target_for("sentinel")
+        .primary_metric`, asserted == MAXDD_REDUCTION for non-vacuity;
+        NOT a hardcoded literal — that would re-introduce a tautology).
+    Assert ``core.survived`` AND the ECR 4-tuple
+    ``(verdict, dsr, credibility_score, winning_params)`` is
+    byte-identical between the two — the metric only permutes the WINNER,
+    it never feeds the production ``survived`` predicate. This invokes
+    the real gate; it does NOT re-implement it, so it FAILS loudly if
+    production's ``survived`` ever became metric-dependent.
     """
     import ops.lab.run as lab_run
+    from tpcore.lab.context import LabContext
     from tpcore.lab.target import LabPrimaryMetric
 
-    # Each arm's held-back replay (final_holdout=True). The held metrics
-    # are computed from the trade series alone — metric-independent.
-    held_legacy = _trial(
-        "legacy60", _LEGACY, final_holdout=True).holdout
-    held_variant = _trial(
-        "variant55", _VARIANT, final_holdout=True).holdout
+    # SP-E NON-VACUITY: the MAXDD arm's metric is taken from the REAL
+    # roster resolver, not hardcoded. Pin that it genuinely resolves to
+    # Sentinel's declared non-Sharpe bar (else the two arms would be the
+    # same metric and the invariant trivially true).
+    sentinel_metric = lab_run._lab_target_for("sentinel").primary_metric
+    assert sentinel_metric == LabPrimaryMetric.MAXDD_REDUCTION
+    assert sentinel_metric != LabPrimaryMetric.SHARPE
 
-    # Fixed, metric-INDEPENDENT gate inputs (what _run_lab_core uses):
-    # the held replay's n_trades + the (metric-free) dsr/credibility.
-    dsr, cred = 0.97, 80
+    async def _run_pinned(*, metric: LabPrimaryMetric, pinned: str, tag: str,
+                          tmp):
+        tgt = _install_sentinel_stub(monkeypatch_holder[0])
+        monkeypatch_holder[0].setattr(
+            "ops.lab.run._lab_target_for",
+            lambda e: tgt.model_copy(update={"primary_metric": metric}))
+        real_rank = lab_run.rank_candidates
 
-    for held in (held_legacy, held_variant):
-        # Compute the verdict "as if" the Lab had ranked by SHARPE, then
-        # "as if" by Sentinel's MAXDD_REDUCTION. The metric is resolved
-        # and used ONLY for ranking; it is structurally absent from the
-        # gate predicate, so the two verdicts MUST coincide.
-        for metric in (LabPrimaryMetric.SHARPE,
-                       LabPrimaryMetric.MAXDD_REDUCTION):
-            # Touch the ranking path with the metric so the test would
-            # catch any (illegal) coupling of the metric into the gate.
-            _ = lab_run._score_for_ranking(held, metric)
-        v_sharpe = _gate(held, dsr=dsr, cred=cred)
-        v_maxdd = _gate(held, dsr=dsr, cred=cred)
-        assert v_sharpe == v_maxdd, (
-            "the sacred gate verdict moved with the ranking metric — "
-            "SP-D/SP-E gate-is-sacred separation VIOLATED")
+        def _pinned_rank(trials, metric=LabPrimaryMetric.SHARPE):
+            ranked = real_rank(trials, metric)
+            head = [r for r in ranked if r[0] == {"choice": pinned}]
+            rest = [r for r in ranked if r[0] != {"choice": pinned}]
+            return head + rest
 
-    # And the gate clauses themselves are unchanged (0.95 / 60 / 3): a
-    # SURVIVED requires all three; a sub-threshold dsr FAILS regardless
-    # of which candidate the metric crowned.
-    assert _gate(held_variant, dsr=0.97, cred=80) is True
-    assert _gate(held_variant, dsr=0.94, cred=80) is False  # dsr floor
-    assert _gate(held_variant, dsr=0.97, cred=59) is False  # cred floor
+        monkeypatch_holder[0].setattr(
+            "ops.lab.run.rank_candidates", _pinned_rank)
+        shared = _SharedPool()
+
+        async def _fb(url, *, read_only, **k):
+            return shared
+
+        monkeypatch_holder[0].setattr(
+            "tpcore.db.build_asyncpg_pool", _fb, raising=True)
+        async with LabContext(db_url="postgres://fake/db"):
+            core = await lab_run._run_lab_core(
+                _ns(tmp / f"{tag}.csv", seed=7),
+                candidate=f"exp_{tag}")
+        assert not isinstance(core, int)
+        lr = lab_run._build_lab_result(
+            candidate=_candidate(f"exp-{tag}"), core=core,
+            args=_ns(tmp / f"{tag}2.csv", seed=7))
+        return core, lr
+
+    import tempfile
+    from pathlib import Path
+
+    import pytest as _pytest
+
+    monkeypatch_holder: list = [None]
+    with _pytest.MonkeyPatch.context() as mp:
+        monkeypatch_holder[0] = mp
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            for pinned in ("legacy60", "variant55"):
+                core_s, lr_s = await _run_pinned(
+                    metric=LabPrimaryMetric.SHARPE, pinned=pinned,
+                    tag=f"sharpe_{pinned}", tmp=tmp)
+                core_m, lr_m = await _run_pinned(
+                    metric=sentinel_metric, pinned=pinned,
+                    tag=f"maxdd_{pinned}", tmp=tmp)
+
+                # The REAL production `survived` predicate, byte-identical.
+                assert core_s.survived == core_m.survived, (
+                    f"{pinned}: production core.survived moved with the "
+                    f"ranking metric ({core_s.survived} vs "
+                    f"{core_m.survived}) — SP-D/SP-E gate-is-sacred "
+                    "separation VIOLATED")
+                # The ECR 4-tuple re-derived from the REAL LabResult.
+                t_s, t_m = _ecr_tuple(lr_s), _ecr_tuple(lr_m)
+                assert t_s == t_m, (
+                    f"{pinned}: the ECR gate 4-tuple moved with the "
+                    f"ranking metric ({t_s!r} vs {t_m!r}) — the sacred "
+                    "gate is NOT metric-invariant")
 
 
 def test_thin_holdout_floor_is_metric_independent():
     """The n_trades<3 statistical-power floor is OUTSIDE the metric
-    dispatch (run.py:531) — every metric inherits it identically. A
-    2-trade held replay fails the gate's n_trades≥3 clause whether
-    ranked by Sharpe or Sentinel's MAXDD_REDUCTION."""
+    dispatch (run.py:532) — every metric inherits it identically. The
+    real ``_score_for_ranking`` returns the -1.0 floor for a 2-trade
+    held replay under BOTH Sharpe and Sentinel's MAXDD_REDUCTION
+    (metric-independent)."""
     import ops.lab.run as lab_run
     from tpcore.lab.target import LabPrimaryMetric
 
@@ -165,6 +374,9 @@ def test_thin_holdout_floor_is_metric_independent():
     assert thin.n_trades < 3
     for metric in (LabPrimaryMetric.SHARPE,
                    LabPrimaryMetric.MAXDD_REDUCTION):
-        # The ranking floor is -1.0 for BOTH metrics (metric-independent).
+        # The ranking floor is -1.0 for BOTH metrics (metric-independent);
+        # the production gate's own n_trades≥3 clause (a sub-3 ⇒ FAIL) is
+        # exercised through the REAL `survived` path by
+        # test_gate_4tuple_is_byte_identical_through_the_real_gate and
+        # SP-D's make-or-break — not re-implemented here.
         assert lab_run._score_for_ranking(thin, metric) == -1.0
-    assert _gate(thin, dsr=0.99, cred=99) is False  # n_trades<3 ⇒ FAIL
