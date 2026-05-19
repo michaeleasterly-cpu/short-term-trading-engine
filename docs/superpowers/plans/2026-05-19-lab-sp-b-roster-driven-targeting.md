@@ -1349,9 +1349,16 @@ git commit -m "feat(lab-sp-b): generate CLI --engine/--target-engine choices fro
 **Files:**
 - Test: `tpcore/tests/test_lab_targeting_consistency.py`
 
+> **Plan correction (controller-adjudicated, T1/T3/T4/T5 precedent — applied at impl, plan patched to stay truthful):** three internal defects in the original Task-6 code block were corrected; the shipped test reflects these and the block below is updated to match:
+> 1. **Module-level `sys.modules` `ops`/`ops.*` purge DELETED.** The original block opened with a collection-time GLOBAL module eviction (`for _m in [...]: del sys.modules[_m]`). That is precisely the T5 oracle-drift footgun — it perturbs other `ops_shadow` tests' (pre-existing, fragile) isolation and was already removed from the T5 sibling `test_lab_cli_choices_from_roster.py` in commit `b59bf74`. It is empirically unnecessary (the resolver/parser/ledger paths import cleanly under normal import — verified during impl). Removed entirely; only function-scoped `monkeypatch` is used.
+> 2. **`test_synthetic_roster_drift_propagates_to_lab` assertion corrected (was a hollow/wrong red-proof).** The original asserted `pytest.raises(ValueError, match="has not.*declared.*LAB_TARGET")`. A synthetic package-less PAPER engine (`phantompaper`) has no `phantompaper.backtest` module, so `_lab_target_for` hits the resolver's `ModuleNotFoundError`/`ImportError` branch (`"...has a phantompaper.backtest module that failed to import/parse (ModuleNotFoundError)..."`) — it NEVER reaches the undeclared-`LAB_TARGET` branch, so the original regex can never match even against correct code (verified empirically). The faithful, genuinely-non-vacuous assertion that captures the plan's stated intent ("recognised as a roster Lab target, NOT KeyError/'unknown engine'") against the real resolver: the raised `ValueError` is the **post-roster-gate** SP-F-path message and is explicitly **NOT** the `"not Lab-targetable"` roster-**gate** rejection (proving the synthetic engine propagated THROUGH the roster gate — exactly what SP-B roster propagation must do) and references the engine by name.
+> 3. **Scoped SLF per-file-ignore added (Task-6 had no pyproject step — the SLF-baseline plan-defect class, T5 Step-4b precedent).** The test names `ops.lab.run`/`ops.lab.__main__`-private `_parse_args`/`_lab_target_for`/`_run_lab_core`/`compute_dsr_for_verdict` and `tpcore.engine_profile`-private `_PROFILE` (that IS its purpose). Added `"tpcore/tests/test_lab_targeting_consistency.py" = ["SLF"]` to `[tool.ruff.lint.per-file-ignores]`, mirroring the existing char/dispatch/CLI-choices precedents — never an inline `# noqa: SLF001`. The original block's unused `UTC, datetime` imports (F401) were also dropped (the original block would have red ruff at Step 5).
+>
+> The Step-6 commit must therefore also `git add pyproject.toml`.
+
 - [ ] **Step 1: Write the failing test — the clockwork + red-proof + SP-A non-regression**
 
-Create `tpcore/tests/test_lab_targeting_consistency.py`:
+Create `tpcore/tests/test_lab_targeting_consistency.py` (the truthful, corrected version — three adjudicated corrections applied per the Plan correction above):
 ```python
 """SP-B clockwork (mirrors SP4 test_leg6_fails_on_roster_drift INTENT,
 NOT a byte-shadow — argued spec §1): the Lab target set IS the roster
@@ -1366,16 +1373,15 @@ from __future__ import annotations
 import argparse
 import sys
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
-for _m in [m for m in list(sys.modules) if m == "ops" or m.startswith("ops.")]:
-    if not hasattr(sys.modules[_m], "__path__"):
-        del sys.modules[_m]
+# Plan correction #1: NO module-level sys.modules purge / global eviction
+# (the T5 oracle-drift footgun — see the Plan correction block above).
 
 pytestmark = pytest.mark.xdist_group("ops_shadow")
 
@@ -1420,10 +1426,19 @@ def test_cli_choices_are_generated_both_sites():
 def test_synthetic_roster_drift_propagates_to_lab(monkeypatch):
     """Mirrors test_leg6_fails_on_roster_drift: inject a fake PAPER
     engine into _PROFILE; lab_targetable_engines() + CLI choices +
-    _lab_target_for ALL track it with NO Lab-file edit. Non-vacuous: the
-    synthetic engine is recognised as a roster Lab target AWAITING
-    LAB_TARGET (exactly the SP-F path) — a clear undeclared-LAB_TARGET
-    ValueError, NOT KeyError / 'unknown engine'."""
+    _lab_target_for ALL track it with NO Lab-file edit.
+
+    Non-vacuous (Plan correction #2 — see the Plan correction block):
+    the synthetic engine is recognised as a roster Lab target that
+    PROPAGATED THROUGH the roster gate — the resolver raises a clear
+    POST-gate SP-F-path ValueError, explicitly NOT the
+    `"not Lab-targetable"` roster-GATE rejection and NOT a raw
+    KeyError / 'unknown engine'. (A package-less synthetic engine
+    reaches the resolver's import branch, not the LAB_TARGET-declaration
+    branch — both are the same clear-ValueError class; the
+    discriminating, non-vacuous property is that it got PAST the roster
+    gate, exactly what SP-B roster propagation must do.)"""
+    import ops.lab.run as run
     import tpcore.engine_profile as ep
 
     fake = ep.EngineProfile(
@@ -1435,14 +1450,21 @@ def test_synthetic_roster_drift_propagates_to_lab(monkeypatch):
 
     assert "phantompaper" in ep.lab_targetable_engines()
 
-    # CLI choices see it (generated, not a literal).
-    import ops.lab.run as run
+    # CLI choices see it (generated from the accessor, not a literal).
     run._parse_args(["--engine", "phantompaper"])  # argparse accepts it
 
-    # The resolver recognises it as a roster Lab target awaiting its
-    # LAB_TARGET declaration — the SP-F path, NOT 'unknown engine'.
-    with pytest.raises(ValueError, match="has not.*declared.*LAB_TARGET"):
+    # The resolver recognises it as a roster Lab target (it propagated
+    # THROUGH the roster gate) — a clear POST-gate SP-F-path ValueError,
+    # explicitly NOT the `"not Lab-targetable"` roster-GATE rejection
+    # (that would mean it never propagated) and NOT KeyError/unknown.
+    with pytest.raises(ValueError) as ei:
         run._lab_target_for("phantompaper")
+    msg = str(ei.value)
+    assert "not Lab-targetable" not in msg, (
+        "the synthetic PAPER engine must propagate THROUGH the roster "
+        "gate, not be rejected as non-targetable — the SP-B propagation "
+        f"red-proof would be vacuous otherwise; got: {msg!r}")
+    assert "phantompaper" in msg  # resolved via the roster, by name
 
     # Conversely: flipping a real engine to RETIRED drops it automatically.
     retired = dict(ep._PROFILE)
@@ -1672,13 +1694,13 @@ Expected: PASS (7 tests: predicate-equality, CLI-generated, synthetic-drift red-
 
 - [ ] **Step 5: ruff**
 
-Run: `python -m ruff check tpcore/tests/test_lab_targeting_consistency.py`
+Run: `python -m ruff check tpcore/tests/test_lab_targeting_consistency.py pyproject.toml`
 Expected: exit 0.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: Commit** (includes `pyproject.toml` — Plan correction #3 SLF entry)
 
 ```bash
-git add tpcore/tests/test_lab_targeting_consistency.py
+git add tpcore/tests/test_lab_targeting_consistency.py pyproject.toml
 git commit -m "test(lab-sp-b): roster-Lab consistency clockwork + synthetic-drift red-proof + SP-A non-regression"
 ```
 
