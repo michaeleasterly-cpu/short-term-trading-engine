@@ -426,3 +426,34 @@ def test_credibility_rubric_overfitting_report_drops_score_when_dsr_fails() -> N
     # Existing graduation gate is 60 — random strategies with too many params
     # may or may not clear it, but they must score lower than the profitable case.
     assert not score.trades_per_param_passes
+
+
+# ─── SP-A2: DSR null-variance estimator correction ─────────────────────────
+import math as _sp_a2_math  # noqa: E402
+
+import structlog as _sp_a2_structlog  # noqa: E402, F401
+
+
+def test_sp_a2_fallback_math_byte_unchanged_no_variance_arg() -> None:
+    """H-A2-6 / §9: with NO trial_sharpe_variance the result equals the
+    legacy 1/(n_obs-1) formula EXACTLY — the norm.ppf bracket + EULER
+    blend are byte-unchanged; only the V semantics change."""
+    # Lazy imports — SP-A2 symbols don't exist until Task 2.
+    from tpcore.backtest.overfitting import (  # noqa: F401
+        MIN_TRIALS_FOR_V,  # noqa: F401
+        _column_sharpes,  # noqa: F401
+        _deflated_sharpe_ratio,  # noqa: F401
+        _expected_max_sharpe_under_null,
+    )
+    n_trials, n_obs = 50, 500
+    # The exact legacy expression (pre-SP-A2), recomputed inline.
+    from scipy.stats import norm
+    sr_variance = 1.0 / (n_obs - 1)
+    z1 = float(norm.ppf(1.0 - 1.0 / n_trials))
+    z2 = float(norm.ppf(1.0 - 1.0 / (n_trials * _sp_a2_math.e)))
+    euler = 0.5772156649015329
+    legacy = _sp_a2_math.sqrt(sr_variance) * ((1.0 - euler) * z1 + euler * z2)
+    got = _expected_max_sharpe_under_null(n_trials, n_obs)
+    assert abs(got - legacy) < 1e-12
+    # §2.2 worked number for the fallback branch.
+    assert abs(got - 0.10190) < 1e-4
