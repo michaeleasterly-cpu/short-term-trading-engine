@@ -144,3 +144,49 @@ jobs:
             for a human; restoration only ever happens via the \
             deterministic Ladder path."
           gh pr close "${{ github.event.pull_request.number }}"
+
+  # Fail-CLOSED agent-PR label guard (MED security fix). The two fence
+  # jobs above are LABEL-GATED — they run ONLY when the agent's own
+  # automation applied the label. Failure mode = fail-OPEN: an
+  # agent-produced draft PR that omits/loses the label triggers NEITHER
+  # fence and merges UNFENCED. This ADDITIVE job (the existing fence
+  # jobs are UNTOUCHED — the engine fence is co-owned by another
+  # session) closes that hole: it runs on EVERY pull_request and FAILS
+  # iff the PR is agent-produced (head ref ~ `llm-triage/*` OR commits a
+  # docs/{llm_triage_proposals,engine_llm_triage_proposals}/ provenance
+  # artifact — the signals the agent's _open_draft_pr cannot both emit
+  # and suppress) yet carries NEITHER fence label. A human maintenance
+  # PR to the same files (e.g. #97/#98) has no agent signal ⇒ no-op
+  # pass. Pure-deterministic, NO secrets, read-only token,
+  # `pull_request` (NOT pull_request_target) — same hardening as the
+  # fence jobs.
+  agent-pr-label-guard:
+    name: fail-closed agent-PR label guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need the base ref for the diff-based agent-artifact check
+          # (mirrors the fence jobs' fetch-depth).
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
+          cache: pip
+
+      - name: Run fail-closed agent-PR label guard
+        env:
+          GUARD_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          GUARD_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: |
+          GUARD_CHANGED_PATHS="$(git -c core.quotepath=false diff \
+            --name-only \
+            "origin/${{ github.event.pull_request.base.ref }}...HEAD")"
+          export GUARD_CHANGED_PATHS
+          python scripts/agent_pr_label_guard.py
