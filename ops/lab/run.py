@@ -80,6 +80,7 @@ from tpcore.lab.models import (
     ParamDelta,
     WalkWindowRecord,
 )
+from tpcore.lab.target import LabTarget
 
 logger = structlog.get_logger(__name__)
 
@@ -100,14 +101,15 @@ logger = structlog.get_logger(__name__)
 # ────────────────────────────────────────────────────────────────────────────
 
 
-def _lab_target_for(engine: str) -> Any:
+def _lab_target_for(engine: str) -> LabTarget:
     """Resolve the engine's declared LabTarget via the roster SoT.
 
     Engine import is LAZY (legal in ops/, H-S2-1 — the resolver lives in
     ops/, NOT tpcore/). Hard-rejects an engine that is not
-    roster-Lab-targetable OR has not declared LAB_TARGET with a CLEAR
-    ValueError — never a raw KeyError/ImportError to the operator. The
-    reject fires inside sample_parameters BEFORE the SP-A
+    roster-Lab-targetable OR has not declared LAB_TARGET OR declared a
+    LAB_TARGET that is not a ``LabTarget`` instance — all with a CLEAR
+    ValueError, never a raw KeyError/ImportError/AttributeError to the
+    operator. The reject fires inside sample_parameters BEFORE the SP-A
     record_trial_spend block (run.py:752-759) so no partial ledger write
     is possible (spec §4.5, §8-A4)."""
     from tpcore.engine_profile import lab_targetable_engines
@@ -147,6 +149,24 @@ def _lab_target_for(engine: str) -> Any:
             f"declared a module-level LAB_TARGET in {engine}.backtest "
             f"(see tpcore/lab/target.py:LabTarget). This is the SP-E/SP-F "
             f"forward step: the engine must declare its Lab contract."
+        )
+    if not isinstance(target, LabTarget):
+        # A declared-but-malformed LAB_TARGET (present, non-None, but not
+        # a LabTarget instance) would let `_LazyParamRanges.__getitem__`'s
+        # `.param_ranges` raise AttributeError — NOT caught by the
+        # __getitem__ `except ValueError`, so it would leak straight onto
+        # the live-adjacent planner.py:693 `PARAM_RANGES.get(ecr.engine,
+        # {})` MODIFY-ECR validator and crash it. Self-fence here with the
+        # SAME clear ValueError shape the resolver already raises so
+        # __getitem__ converts it to KeyError and `.get(...)` cleanly
+        # returns {} (spec §2.3 / EC / §2.4 / §8-HARDEN-T4). The resolver
+        # — not an out-of-band CI isinstance test — is the ONLY fence.
+        raise ValueError(
+            f"engine {engine!r} has a {engine}.backtest module-level "
+            f"LAB_TARGET present but it is not a LabTarget instance "
+            f"(got {type(target).__name__}; see tpcore/lab/target.py:"
+            f"LabTarget). The engine must declare its Lab contract as a "
+            f"LabTarget."
         )
     return target
 

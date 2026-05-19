@@ -768,6 +768,8 @@ def test_param_ranges_membership_iteration_len_and_set():
 >
 > Plan correction (applied during SP-B T4 spec-review hardening, 2026-05-19): the Step-3 `_lab_target_for` resolver's import-failure catch shipped as `except (ImportError, SyntaxError) as exc:` (clear-`ValueError` message reworded to "…has a `<engine>.backtest` module that failed to import/parse (`<ExcType>`): …"), NOT the as-planned `except ModuleNotFoundError` — spec-review found that post-SP-B `planner.py:693`'s `PARAM_RANGES.get(ecr.engine, {})` is itself a NEW lazy-import trigger on the live-adjacent MODIFY-ECR validator, so a `SyntaxError`/non-`ModuleNotFoundError` `ImportError` under the narrow catch would crash it (the spec §2.3↔EC7 inconsistency, now reconciled — see spec §8-HARDEN-T4); a parametrized `(ImportError, SyntaxError)` no-crash test was added to `tpcore/tests/test_lab_dispatch_indirection.py` (proven non-tautological vs the pre-fix narrow catch). Step-3 pseudocode above updated to match shipped.
 
+> Plan correction (applied during SP-B T4 code-quality review, 2026-05-19): the Step-3 `_lab_target_for` resolver additionally shipped an `isinstance(target, LabTarget)` guard after the `target is None` check (return annotation tightened `Any`→`LabTarget`; runtime `from tpcore.lab.target import LabTarget` added to the top imports — ops→tpcore is the legal direction, tpcore stays engine-free) — code-quality review found a malformed (present, non-`None`, non-`LabTarget`) `LAB_TARGET` would let `__getitem__`'s `.param_ranges` raise an `AttributeError` (NOT caught by its `except ValueError`) and leak onto the live-adjacent `planner.py:693` `.get()` MODIFY-ECR validator, crashing it (spec §8-HARDEN-T4-b / EC7b — the same crash class EC7 prevents, via a different exception type); a parametrized non-`LabTarget` (`object()`/int/str/dict) no-crash test was added to `tpcore/tests/test_lab_dispatch_indirection.py`, proven non-tautological (guard removed ⇒ all cases fail with the `AttributeError` leak). Step-3 pseudocode + embedded test list above updated to match shipped.
+
 - [ ] **Step 2: Run the char pins against the UN-refactored tree to confirm they hold**
 
 Run: `python -m pytest tpcore/tests/test_lab_dispatch_indirection.py -p no:xdist -q`
@@ -832,6 +834,45 @@ def test_lab_target_for_rejects_eligible_but_undeclared_sentinel():
         _lab_target_for("sentinel")
 
 
+# ── HARDENING: declared engine whose LAB_TARGET is a non-LabTarget ───────
+# (spec §8-HARDEN-T4-b / EC7b) — the resolver self-fences a malformed
+# (present, non-None, NOT a LabTarget) LAB_TARGET so `.param_ranges` in
+# __getitem__ never raises an AttributeError that would leak onto the
+# live-adjacent planner.py:693 .get().
+@pytest.mark.parametrize(
+    "bad_target", [object(), 42, "not-a-labtarget", {"param_ranges": {}}],
+    ids=["object", "int", "str", "dict"],
+)
+def test_declared_engine_malformed_lab_target_is_keyerror_not_attributeerror(
+    monkeypatch, bad_target
+):
+    """reversion.backtest imports fine but LAB_TARGET is NOT a LabTarget:
+    (a) _lab_target_for raises the clear ValueError; (b)
+    PARAM_RANGES['reversion'] → KeyError (NOT the AttributeError leak
+    class); (c) PARAM_RANGES.get('reversion', {}) == {} (planner.py:693).
+    The resolver — not an out-of-band CI isinstance test — is the ONLY
+    fence."""
+    import importlib
+    import types
+
+    import ops.lab.run as run
+    real_import = importlib.import_module
+
+    def _fake_import(name, *a, **kw):
+        if name == "reversion.backtest":
+            fake = types.ModuleType("reversion.backtest")
+            fake.LAB_TARGET = bad_target
+            return fake
+        return real_import(name, *a, **kw)
+
+    monkeypatch.setattr(importlib, "import_module", _fake_import)
+    with pytest.raises(ValueError, match=r"reversion.*LAB_TARGET.*not a LabTarget"):
+        run._lab_target_for("reversion")
+    with pytest.raises(KeyError):
+        run.PARAM_RANGES["reversion"]
+    assert run.PARAM_RANGES.get("reversion", {}) == {}
+
+
 def test_sample_parameters_clear_error_on_bad_engine():
     import ops.lab.run as run
     with pytest.raises(ValueError, match="not Lab-targetable"):
@@ -888,13 +929,14 @@ Replace the literal `PARAM_RANGES` dict (`:95-131`) with the resolver + lazy Map
 # ────────────────────────────────────────────────────────────────────────────
 
 
-def _lab_target_for(engine: str) -> "Any":
+def _lab_target_for(engine: str) -> "LabTarget":
     """Resolve the engine's declared LabTarget via the roster SoT.
 
     Engine import is LAZY (legal in ops/, H-S2-1 — the resolver lives in
     ops/, NOT tpcore/). Hard-rejects an engine that is not
-    roster-Lab-targetable OR has not declared LAB_TARGET with a CLEAR
-    ValueError — never a raw KeyError/ImportError to the operator. The
+    roster-Lab-targetable OR has not declared LAB_TARGET OR declared a
+    non-LabTarget LAB_TARGET, all with a CLEAR ValueError — never a raw
+    KeyError/ImportError/AttributeError to the operator. The
     reject fires inside sample_parameters BEFORE the SP-A
     record_trial_spend block (run.py:752-759) so no partial ledger write
     is possible (spec §4.5, §8-A4)."""
@@ -922,6 +964,17 @@ def _lab_target_for(engine: str) -> "Any":
             f"declared a module-level LAB_TARGET in {engine}.backtest "
             f"(see tpcore/lab/target.py:LabTarget). This is the SP-E/SP-F "
             f"forward step: the engine must declare its Lab contract."
+        )
+    if not isinstance(target, LabTarget):
+        # malformed: present, non-None, NOT a LabTarget ⇒ `.param_ranges`
+        # in __getitem__ raises AttributeError (NOT caught by its
+        # `except ValueError`) → leaks onto planner.py:693. Self-fence
+        # with the SAME ValueError shape (§8-HARDEN-T4-b).
+        raise ValueError(
+            f"engine {engine!r} has a {engine}.backtest module-level "
+            f"LAB_TARGET present but it is not a LabTarget instance "
+            f"(got {type(target).__name__}; see tpcore/lab/target.py:"
+            f"LabTarget)."
         )
     return target
 

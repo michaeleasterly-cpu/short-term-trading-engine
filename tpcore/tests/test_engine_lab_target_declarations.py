@@ -20,9 +20,11 @@ _T0_PARAM_RANGES_KEYSETS: dict[str, list[str]] = {
 
 # FULL-TUPLE T0 byte-parity oracle: the exact {key: (low, high, kind)} dicts
 # as they lived in ops.lab.run.PARAM_RANGES on the un-refactored tree (Task 0),
-# captured verbatim. Exact dict equality below means a single-location bound
-# edit (engine LAB_TARGET *or* run.py mirror) reds CI — the spec's byte-parity
-# requirement is now guarded at the value level, not just shape/keyset.
+# captured verbatim. T4 deleted the run.py PARAM_RANGES mirror; the engine
+# LAB_TARGET is now the SOLE source. Exact dict equality below means a bound
+# edit to any engine's LAB_TARGET reds CI against this inlined oracle — the
+# spec's byte-parity requirement, guarded at the value level not just
+# shape/keyset.
 _T0_PARAM_RANGES_FULL: dict[str, dict[str, tuple]] = {
     "reversion": {
         "z_threshold": (2.0, 4.0, "float"),
@@ -66,9 +68,10 @@ def test_engine_declares_valid_lab_target(engine):
 def test_lab_target_param_ranges_full_value_byte_parity(engine):
     """The full {key: (low, high, kind)} dict is byte-identical to the
     inlined T0 oracle (the values that lived in ops.lab.run.PARAM_RANGES
-    pre-refactor). Exact dict equality — a single-location bound edit in
-    either the engine LAB_TARGET or the run.py mirror reds CI (the spec's
-    byte-parity requirement, guarded at the value level not just shape)."""
+    pre-refactor; T4 deleted that mirror — the engine LAB_TARGET is now
+    the sole source). Exact dict equality — a bound edit to the engine
+    LAB_TARGET reds CI against this oracle (the spec's byte-parity
+    requirement, guarded at the value level not just shape)."""
     mod = importlib.import_module(f"{engine}.backtest")
     assert mod.LAB_TARGET.param_ranges == _T0_PARAM_RANGES_FULL[engine]
 

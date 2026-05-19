@@ -189,6 +189,66 @@ def test_declared_engine_import_failure_is_keyerror_not_raw(
         run._lab_target_for("reversion")
 
 
+@pytest.mark.parametrize(
+    "bad_target",
+    [object(), 42, "not-a-labtarget", {"param_ranges": {}}],
+    ids=["object", "int", "str", "dict"],
+)
+def test_declared_engine_malformed_lab_target_is_keyerror_not_attributeerror(
+    monkeypatch, bad_target
+):
+    """A declared+targetable engine (reversion) whose ``reversion.backtest``
+    imports fine but exposes a ``LAB_TARGET`` that is NOT a ``LabTarget``
+    instance must: (a) ``_lab_target_for('reversion')`` raise the clear
+    ``ValueError`` (names the engine + that LAB_TARGET is not a LabTarget),
+    (b) ``PARAM_RANGES['reversion']`` → ``KeyError`` (NOT the
+    ``AttributeError`` that ``.param_ranges`` on a non-LabTarget would
+    raise — that class is exactly the unhandled leak onto the
+    live-adjacent planner.py:693 ``PARAM_RANGES.get(ecr.engine, {})``
+    MODIFY-ECR validator), and (c) the exact planner.py:693 call
+    ``.get('reversion', {}) == {}``. The resolver — not an out-of-band
+    CI isinstance test — is the ONLY fence (spec §2.3 / EC / §2.4 /
+    §8-HARDEN-T4)."""
+    import importlib
+    import types
+
+    import ops.lab.run as run
+
+    real_import = importlib.import_module
+
+    def _fake_import(name, *a, **kw):
+        if name == "reversion.backtest":
+            fake = types.ModuleType("reversion.backtest")
+            fake.LAB_TARGET = bad_target  # present, non-None, NOT a LabTarget
+            return fake
+        return real_import(name, *a, **kw)
+
+    monkeypatch.setattr(importlib, "import_module", _fake_import)
+
+    # (a) the direct resolver raises the clear, actionable ValueError.
+    with pytest.raises(
+        ValueError, match=r"reversion.*LAB_TARGET.*not a LabTarget"
+    ):
+        run._lab_target_for("reversion")
+
+    # (b) subscript → KeyError, NOT AttributeError (the leak class) /
+    #     ValueError / anything else.
+    with pytest.raises(KeyError):
+        run.PARAM_RANGES["reversion"]
+    try:
+        run.PARAM_RANGES["reversion"]
+    except KeyError:
+        pass
+    except (AttributeError, ValueError) as exc:  # pragma: no cover
+        pytest.fail(
+            f"malformed LAB_TARGET leaked as {type(exc).__name__} "
+            f"(planner.py:693 .get() would crash): {exc}"
+        )
+
+    # (c) the exact planner.py:693 live-adjacent call cleanly returns {}.
+    assert run.PARAM_RANGES.get("reversion", {}) == {}
+
+
 def test_sample_parameters_clear_error_on_bad_engine():
     import ops.lab.run as run
     with pytest.raises(ValueError, match="not Lab-targetable"):
