@@ -8,6 +8,12 @@ import pathlib
 import sys
 from datetime import UTC, datetime
 
+import pytest
+
+# Multi-line spec_from_file_location of an ops/ module — grouped by the
+# over-inclusion rule (verified non-poisoning, but safe to co-locate).
+pytestmark = pytest.mark.xdist_group("ops_shadow")
+
 _spec = importlib.util.spec_from_file_location(
     "wd", pathlib.Path(__file__).resolve().parents[1] / "ops" / "weekly_digest.py")
 wd = importlib.util.module_from_spec(_spec)
