@@ -1355,6 +1355,8 @@ git commit -m "feat(lab-sp-b): generate CLI --engine/--target-engine choices fro
 > 3. **Scoped SLF per-file-ignore added (Task-6 had no pyproject step — the SLF-baseline plan-defect class, T5 Step-4b precedent).** The test names `ops.lab.run`/`ops.lab.__main__`-private `_parse_args`/`_lab_target_for`/`_run_lab_core`/`compute_dsr_for_verdict` and `tpcore.engine_profile`-private `_PROFILE` (that IS its purpose). Added `"tpcore/tests/test_lab_targeting_consistency.py" = ["SLF"]` to `[tool.ruff.lint.per-file-ignores]`, mirroring the existing char/dispatch/CLI-choices precedents — never an inline `# noqa: SLF001`. The original block's unused `UTC, datetime` imports (F401) were also dropped (the original block would have red ruff at Step 5).
 >
 > The Step-6 commit must therefore also `git add pyproject.toml`.
+>
+> **Plan correction (code-quality-review follow-ups, 2026-05-20):** two non-blocking test-only polish items applied to the shipped clockwork (no behavior change, SP-A untouched): (4) the dead/redundant first (sync) `monkeypatch.setattr("ops.lab.run._context_loader_for", lambda e: (lambda **k: _RR()))` in `_install_offline` — immediately overwritten by the async `_aloader` patch and never observable (`_run_lab_core` awaits the loader; monkeypatch is last-write-wins) — was removed as misleading sync→async iteration leftover. (5) a frozen-literal anchor `test_lab_targetable_set_frozen_anchor` was added asserting `set(lab_targetable_engines()) == {"reversion","vector","momentum","sentinel"}` — every other assertion RECOMPUTES the predicate (structural mirror) so a roster add/remove flows through invisibly; this ONE pinned literal (symmetric to the SP4 sibling's `test_dispatch_order_invariant_is_the_frozen_literal`) makes a legitimate engine add/remove a high-risk change that MUST be an explicit, reviewed edit, tightening the false-red/false-green boundary.
 
 - [ ] **Step 1: Write the failing test — the clockwork + red-proof + SP-A non-regression**
 
@@ -1402,6 +1404,25 @@ def test_target_set_equals_roster_predicate():
         and n not in {"allocator", "lab", "canary"}
     }
     assert set(lab_targetable_engines()) == expected
+
+
+def test_lab_targetable_set_frozen_anchor():
+    """Lab-targetable set is frozen; changes are high-risk and must be explicit.
+
+    Symmetric to the SP4 sibling's
+    test_dispatch_order_invariant_is_the_frozen_literal: every other
+    assertion in this clockwork RECOMPUTES the predicate (structural
+    mirror), so a roster add/remove silently flows through with no
+    visible test edit. This ONE pinned literal makes a legitimate engine
+    add/remove a high-risk change that MUST be an explicit, reviewed edit
+    to this set — tightening the false-red/false-green boundary vs. pure
+    recomputation.
+    """
+    from tpcore.engine_profile import lab_targetable_engines
+
+    # roster-driven Lab-target changes are high-risk; pin it.
+    assert set(lab_targetable_engines()) == {
+        "reversion", "vector", "momentum", "sentinel"}
 
 
 # ── (2) CLI choices are GENERATED from the accessor (both sites) ─────────
@@ -1573,8 +1594,6 @@ def _install_offline(monkeypatch, lab_run, returns):
 
     monkeypatch.setattr("ops.lab.run._context_runner_for",
                         lambda e: (lambda c, *, overrides=None: _RR()))
-    monkeypatch.setattr("ops.lab.run._context_loader_for",
-                        lambda e: (lambda **k: _RR()))
 
     async def _aloader(**k):
         return _RR()
