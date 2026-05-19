@@ -409,6 +409,77 @@ but DSR/credibility gates remain structurally blocked.
   a structurally bounded firing rate. See `docs/MASTER_PLAN.md` §4.2 and
   `backtests/reversion_satellite_backtest.json`.
 
+## Lab-isolation DB proofs not CI-enforced (follow-up, 2026-05-19)
+
+INHERITED from SP2 (predates SP-A; SP-A only added tpcore/lab/ledger.py).
+`.github/workflows/ci.yml` `test` job has no `services: postgres` / no
+`DATABASE_URL`, so 5 DB-gated suites skip in CI: test_lab_isolation,
+test_db_read_only, test_aar_writer, test_fundamentals_cache,
+test_persistent_store. The make-or-break SP-A proofs
+(test_cumulative_n_trials_real_db_integer_correctness [H-LL-9],
+test_lab_ledger_disjoint_from_live_graduation [T-LIVE/H-LL-4]) are merge-time
+proven by the mandatory operator-run compensating control, NOT by CI.
+
+- **Dedicated `lab-isolation-db` CI job (scoped, zero repo-wide blast radius).**
+  `[lane: shared-infra] [decision: build separately, NOT in SP-A] [effort: M]`
+  Add a NEW ci.yml job (NOT a repo-wide pytest-with-DB): `services: postgres:16`,
+  `env: DATABASE_URL=postgres://...localhost`, that (1) runs Alembic upgrade head
+  (schema bootstrap), (2) seeds a minimal `platform.prices_daily` fixture for the
+  reversion walk-forward, (3) runs ONLY `pytest tpcore/tests/test_lab_isolation.py
+  tpcore/tests/test_lab_credibility_pool_threaded.py -q`. Pin to those node IDs —
+  do NOT un-skip the other 4 dormant DB suites (data-lane-owned; separate
+  adjudication). KNOWN: test_read_pool_rejects_write_and_guards_fire fails
+  against pooled Supabase but should pass against a direct ephemeral Postgres
+  (no pgbouncer) — verify when building. Cross-ref SP-A, #242.
+
+## Code-sweep findings — engine-lane-owned (handoff 2026-05-19)
+
+Data-lane sweep handoff; engine lane owns these (in our working set). Data
+lane tracks in project_code_sweep_findings_2026_05_19.md, will not duplicate.
+Recorded here at SP-A merge; worked AFTER SP-A lands.
+
+- **[HIGH] DSR null-variance estimator too lenient — folds into the Lab
+  front-half n_trials-ledger epic (next phase).** `[lane: engine] [effort: M]`
+  tpcore/backtest/overfitting.py:108-119 _expected_max_sharpe_under_null uses
+  single-estimator variance sr_variance=1/(n_obs-1). Bailey & López de Prado,
+  The Deflated Sharpe Ratio (SSRN 2460551), requires V[SR̂ₙ] = variance of the
+  per-trial Sharpe estimates across the N searched trials (selection-bias
+  dispersion), NOT the one-estimator sampling variance. Effect: large n_obs ⇒
+  E[max] understated ⇒ DSR passes too easily ⇒ a future tuned candidate could
+  spuriously clear the live gate. NOT yet exploited (all engines currently fail
+  DSR). Pre-existing & orthogonal to SP-A (SP-A correctly feeds cumulative
+  n_trials into the norm.ppf(1-1/(n_trials·e)) term, which the finding confirms
+  is correct — "leave it"; the variance term is the separate defect). Fix
+  direction: pass var(per-trial Sharpe vector) from the sweep's existing
+  trial_returns_matrix into _deflated_sharpe_ratio/_expected_max_sharpe_under_null;
+  fall back to 1/(n-1) only for the single-trial case + document as a known
+  approximation. Line 118 norm.ppf is correct — leave it.
+- **[MED] Credibility rubric mislabels the gate threshold.** `[lane: engine]
+  [effort: S]` tpcore/backtest/credibility.py:81 flag dsr_above_0_90 / "Deflated
+  Sharpe Ratio > 0.90" but real threshold is DSR_PASS_THRESHOLD=0.95
+  (overfitting.py:56; CLAUDE.md "DSR ≥ 0.95"). Math fine (gate uses 0.95) but the
+  persisted auditable rubric row shows the wrong threshold. Fix: rename to
+  dsr_above_pass_threshold / "≥ 0.95", key description off the constant.
+- **[MED] Inverse-vol allocator volatility estimator.** `[lane: engine]
+  [effort: S]` tpcore/allocator/service.py:127-130 realized_vol uses
+  statistics.pstdev (population ÷N) over raw per-session P&L. Standard
+  inverse-vol/risk-parity uses sample stdev (ddof=1) on returns; codebase
+  internally inconsistent (overfitting.py _per_trade_sharpe correctly uses
+  ddof=1). Fix: statistics.stdev (ddof=1); confirm daily_pnls are normalized
+  returns not absolute P&L before inverse-weighting (else weights conflate
+  position size with volatility). MIN_AARS_FOR_VOL bootstrap only partly
+  mitigates small-N bias.
+- **[HIGH] Blocking sync Anthropic client in async engine-triage daemon —
+  CROSS-LANE SYMMETRY COORDINATION (#244).** `[lane: engine, coordinate-with:data]
+  [effort: S]` ops/engine_llm_triage.py:391 (_call_api): a synchronous
+  Anthropic() client (_default_client) is awaited inside the llm_triage_service
+  event loop, blocking it for the full LLM round-trip and starving the
+  crash-isolated co-tasks in-process. Fix: anthropic.AsyncAnthropic + await
+  client.messages.create(...), OR await asyncio.to_thread(...). Data lane is
+  fixing the IDENTICAL defect in the twin ops/llm_data_triage.py — keep the
+  shared LLM-triage SDK surface (#244) symmetric; ALIGN with data lane on
+  AsyncAnthropic vs to_thread before either fix lands so the twins don't diverge.
+
 ## Deep-research spike adjudication — Lab-candidate backlog (2026-05-19)
 
 Decision record from the two commissioned edge-research spikes
