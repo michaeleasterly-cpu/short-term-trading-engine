@@ -71,6 +71,9 @@ import structlog
 
 # tpcore.lab is the engine-FREE contract layer (H-S2-1) — safe to import
 # at module top; only the engine packages stay lazy in _runner_for etc.
+# MIN_TRIALS_FOR_V is a pure constant; tpcore.backtest.overfitting is
+# module-top-safe (no circular import) so it lives here, not lazy in-body.
+from tpcore.backtest.overfitting import MIN_TRIALS_FOR_V
 from tpcore.lab.models import (
     LabCandidate,
     LabResult,
@@ -877,19 +880,18 @@ async def _run_lab_core(
     # H-A2-4: V-source trial count and the SP-A cumulative n_trials are
     # deliberately distinct estimands — logged side-by-side, not
     # silently reconciled (the floor bounds the residual seam, H-A2-13).
-    from tpcore.backtest.overfitting import MIN_TRIALS_FOR_V
-    _pp_sharpes = [
+    pp_sharpes = [
         t.holdout.holdout_sharpe_per_period
         for t in trials
         if not t.error
     ]
-    if len(_pp_sharpes) >= MIN_TRIALS_FOR_V:
+    if len(pp_sharpes) >= MIN_TRIALS_FOR_V:
         trial_sharpe_var: float | None = float(
-            np.var(np.asarray(_pp_sharpes, dtype=float), ddof=1)
+            np.var(np.asarray(pp_sharpes, dtype=float), ddof=1)
         )
         logger.info(
-            "tpcore.lab.dsr.v_n_trial_population",
-            v_trial_count=len(_pp_sharpes),
+            "ops.lab.dsr.v_n_trial_population",
+            v_trial_count=len(pp_sharpes),
             n_trials=effective_n_trials,
         )
     else:

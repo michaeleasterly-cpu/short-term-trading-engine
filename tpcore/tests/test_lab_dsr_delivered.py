@@ -223,7 +223,21 @@ async def test_sp_a2_t_delivered_lab_verdict_strictly_tightened(
     """T-DELIVERED (MAKE-OR-BREAK, the crux pin). With ≥ MIN_TRIALS_FOR_V
     dispersed trials, the Lab verdict DSR is STRICTLY LOWER than the same
     run with the V path disabled — a real numeric tightening, not inert
-    plumbing."""
+    plumbing.
+
+    SELF-DISCRIMINATING (SP-A2 T6 review #1): the per-trial means are
+    NARROWED so the cross-trial V lands in the CONTINUOUS DSR band
+    (recomputed against the real walk-forward-sliced harness: means
+    0.018,0.019,…,0.025 / σ=0.012 / n=40 / seed=11 ⇒ V≈0.075370,
+    floor 1/(n-1)≈0.025641 so this is the real-V path NOT the clamp,
+    DSR_with_v≈0.001820, DSR_fallback≈0.652677). Because DSR_with_v is
+    NON-SATURATED (strictly > 0), this single test now catches BOTH
+    failure modes: (a) inert plumbing (V never threaded / no tightening
+    — the `seen["v"] is not None` + strict-`<` assertions) AND (b) the
+    H-A2-11 annualized-units regression (a swap to the annualized
+    `.sharpe` inflates V≫0.1 ⇒ DSR→0.0 ⇒ the magnitude-sensitive
+    `dsr_with_v > 1e-9` assertion FAILS). It no longer delegates
+    H-A2-11 detection solely to the sibling T-UNITS-COHERENT."""
     import ops.lab.run as lab_run
     # DEVIATION (plan-vs-real): the plan's literal T6 body also did
     # `from tpcore.lab.context import LabContext`, but the legacy
@@ -231,9 +245,13 @@ async def test_sp_a2_t_delivered_lab_verdict_strictly_tightened(
     # Removed; the verdict-path behaviour + every assertion unchanged.
     rng = np.random.default_rng(11)
     # 8 distinct candidate return series (real cross-trial dispersion).
+    # NARROW means (review #1): V lands in the continuous DSR band
+    # (≈0.075, strictly above the 1/(n-1) floor ⇒ real-V path, and
+    # DSR_with_v strictly in (1e-9, DSR_fallback)) so the non-saturation
+    # assertion below is magnitude-sensitive to the annualized bug.
     per_trial = [
         [float(x) for x in rng.normal(m, 0.012, 40)]
-        for m in (0.002, 0.006, 0.010, 0.014, 0.018, 0.022, 0.026, 0.030)
+        for m in (0.018, 0.019, 0.020, 0.021, 0.022, 0.023, 0.024, 0.025)
     ]
     held = [float(x) for x in rng.normal(0.02, 0.012, 40)]
 
@@ -289,6 +307,11 @@ async def test_sp_a2_t_delivered_lab_verdict_strictly_tightened(
     dsr_with_v = core.dsr
     dsr_fallback = real(held, n_trials=core.effective_n_trials)
     assert dsr_with_v < dsr_fallback - 1e-9            # STRICTLY tightened
+    # NON-SATURATED / magnitude-sensitive (review #1): V is in the
+    # continuous band so DSR_with_v is strictly positive. The H-A2-11
+    # annualized-units regression inflates V≫0.1 ⇒ DSR collapses to 0.0
+    # ⇒ this assertion FAILS — T-DELIVERED is now self-discriminating.
+    assert dsr_with_v > 1e-9                            # NON-saturated
 
 
 async def test_sp_a2_t_units_coherent_v_uses_per_period_not_annualized(
