@@ -557,33 +557,38 @@ def rank_candidates(
     return ranked
 
 
-def _resolve_ranking_metric(
-    engine: str,
-) -> tuple[LabPrimaryMetric, Callable[[SliceMetrics], float]]:
+def _resolve_ranking_metric(engine: str) -> LabPrimaryMetric:
     """SP-D §4.3 — the PURE, side-effect-free pre-spend fence.
 
-    Resolves the engine's declared ``primary_metric`` via the already-
-    idempotent ``_lab_target_for`` and proves its ``_RANKING_METRICS``
-    entry is a real implementation (NOT the ``_unimplemented_metric``
-    sentinel) WITHOUT executing it. A reserved-but-unimplemented
-    declaration raises the clear ``ValueError`` HERE — invoked strictly
-    before the SP-A ``record_trial_spend`` block — so a reserved
-    declaration never burns a cumulative-trial increment (the SP-B
-    'spend then crash' footgun class, §8-A4). Returns the metric + its
-    resolved callable so the caller threads it into ``rank_candidates``
-    without re-resolving."""
+    Resolves the engine's declared ``LabTarget.primary_metric`` (default
+    ``SHARPE``) via the already-idempotent ``_lab_target_for`` and proves
+    its ``_RANKING_METRICS`` entry is a real implementation (NOT the
+    ``_unimplemented_metric`` sentinel) by invoking it on a probe value.
+    A reserved-but-unimplemented declaration fail-louds with the clear
+    ``ValueError`` HERE — invoked strictly before the SP-A
+    ``record_trial_spend`` block — so a reserved declaration never burns
+    a cumulative-trial increment (the SP-B 'spend then crash' footgun
+    class, §8-A4). Returns ONLY the resolved ``LabPrimaryMetric`` enum;
+    the caller threads that enum into ``rank_candidates(trials, metric)``
+    (``rank_candidates`` takes the enum, never a callable — the
+    ``_RANKING_METRICS`` lookup is its own internal concern). The
+    reserved-metric fail-loud is the internal ``_RANKING_METRICS`` probe
+    below (a local), NOT a returned callable."""
     metric = _lab_target_for(engine).primary_metric
     fn = _RANKING_METRICS[metric]
-    # Probe-only: a 1-trade SliceMetrics is below the n_trades<3 floor so
-    # _score_for_ranking would never call fn — but the SENTINEL must
-    # still fail-loud here, so call fn directly on a probe metrics value.
-    # A real mapping (SHARPE/MAXDD_REDUCTION) is a pure arithmetic lambda;
-    # the sentinel raises. This proves implementability without a ledger
-    # spend and without depending on _score_for_ranking's floor.
+    # Probe-only: the probe SliceMetrics value is irrelevant — the real
+    # SHARPE/MAXDD_REDUCTION lambdas are pure arithmetic and the
+    # reserved-metric sentinel raises unconditionally. We call the
+    # _RANKING_METRICS callable directly so this fence never depends on
+    # _score_for_ranking's n_trades<3 floor (a within-floor metrics
+    # value would otherwise short-circuit before fn ran). `fn` is a
+    # load-bearing LOCAL — only used here for the fail-loud probe; it is
+    # deliberately NOT returned (rank_candidates re-derives its own
+    # callable from the enum).
     _probe = SliceMetrics(n_trades=3, sharpe=0.0, profit_factor=1.0,
                           max_drawdown=0.0, win_rate=0.0)
     fn(_probe)  # raises ValueError iff `metric` is reserved-unimplemented
-    return metric, fn
+    return metric
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -893,7 +898,7 @@ async def _run_lab_core(
     # (the SP-B 'spend then crash' footgun class, §8-A4). Resolved ONCE
     # and threaded into rank_candidates below; NOT re-resolved at the
     # winner-selection call site.
-    _ranking_metric, _ = _resolve_ranking_metric(args.engine)
+    _ranking_metric = _resolve_ranking_metric(args.engine)
 
     # SP-A H-LL-1 (the §3.2 spine): record this run's trial SPEND as its
     # own UNCONDITIONAL append-only fact, RIGHT HERE — before the DSR
