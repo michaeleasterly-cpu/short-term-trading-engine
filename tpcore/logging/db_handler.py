@@ -72,6 +72,78 @@ DELETE FROM platform.application_log
 WHERE recorded_at < $1{_RETENTION_EXEMPT_CLAUSE}
 """
 
+# ── P4 (#254 D4): bounded SECONDARY cap so "retention-exempt" ≠ "∞" ──
+#
+# The DR2 exemption above keeps REVIEW_DEFECT_* rows out of the 7-day
+# primary prune entirely → unbounded growth. P4 adds a SECOND, narrower
+# prune (same DBLogHandler write path — no new mechanism/daemon) that
+# deletes a REVIEW_DEFECT_* row ONLY when ALL of:
+#
+#   1. recorded_at < $1  (older than _REVIEW_DEFECT_MAX_AGE_DAYS), AND
+#   2. it is NOT among the most-recent-$2 REVIEW_DEFECT_* rows by
+#      recorded_at DESC (deterministic: ROW_NUMBER() OVER (ORDER BY
+#      recorded_at DESC, id DESC) — id is the stable last-resort
+#      tiebreak, mirroring _REVIEW_OPEN_SQL's ``lg.id`` discipline), AND
+#   3. it is NOT part of an OPEN (unresolved) defect.
+#
+# Decision D4 is the more-retentive UNION: a row is RETAINED iff young
+# (<180d) OR within the recent-2000 set — equivalently, it is pruned
+# only when aged AND beyond-the-2000, which is exactly predicates 1∧2.
+#
+# Predicate 3 is the never-prune-open invariant and is ABSOLUTE: the
+# anti-join below mirrors ops.defect_register._REVIEW_OPEN_SQL verbatim
+# in shape — a REVIEW_DEFECT_LOGGED is OPEN iff there is NO later
+# matching REVIEW_DEFECT_RESOLVED (recorded_at >=) for the same
+# data->>'defect_ref'. A defect closes ONLY on a durable RESOLVED, never
+# by omission; an open defect the consolidated register's anti-join
+# open-predicate depends on must NEVER be pruned or it silently expires
+# (the whole reason DR2 made these event types retention-exempt). A
+# RESOLVED-pair (closed) is NOT protected by predicate 3 and so becomes
+# prunable once aged AND beyond-the-2000.
+#
+# The capped event-type IN-list is built ONCE at module load from
+# RETENTION_EXEMPT_EVENT_TYPES (same single-source-of-truth,
+# constant-derived, empty-set-safe, no-injection pattern as
+# _RETENTION_EXEMPT_CLAUSE — the tuple is compile-time string literals,
+# never user input; an empty tuple emits NO cap SQL at all). The age
+# and row bounds are bound params ($1/$2), not interpolated, so there is
+# no injection surface on the bounds either.
+_REVIEW_DEFECT_MAX_AGE_DAYS = 180
+_REVIEW_DEFECT_MAX_ROWS = 2000
+
+_REVIEW_DEFECT_IN_LIST = ", ".join(
+    repr(e) for e in RETENTION_EXEMPT_EVENT_TYPES
+)
+_REVIEW_DEFECT_CAP_SQL = (
+    f"""
+DELETE FROM platform.application_log AS a
+WHERE a.event_type IN ({_REVIEW_DEFECT_IN_LIST})  -- REVIEW_DEFECT_SECONDARY_CAP
+  AND a.recorded_at < $1
+  AND a.id NOT IN (
+        SELECT id FROM (
+            SELECT id,
+                   ROW_NUMBER() OVER (
+                       ORDER BY recorded_at DESC, id DESC
+                   ) AS rn
+            FROM platform.application_log
+            WHERE event_type IN ({_REVIEW_DEFECT_IN_LIST})
+        ) ranked
+        WHERE ranked.rn <= $2
+  )
+  AND NOT (
+        a.event_type = 'REVIEW_DEFECT_LOGGED'
+        AND NOT EXISTS (
+            SELECT 1 FROM platform.application_log r
+            WHERE r.event_type = 'REVIEW_DEFECT_RESOLVED'
+              AND (r.data->>'defect_ref') = (a.data->>'defect_ref')
+              AND r.recorded_at >= a.recorded_at
+        )
+  )
+"""
+    if RETENTION_EXEMPT_EVENT_TYPES
+    else ""
+)
+
 
 class DBLogHandler:
     """Async writer for ``platform.application_log`` with auto-retention.
@@ -112,7 +184,13 @@ class DBLogHandler:
         Railway's log pipeline.
         """
         data_json = json.dumps(data, default=str) if data is not None else None
-        cutoff = datetime.now(UTC) - timedelta(days=self._retention_days)
+        now = datetime.now(UTC)
+        cutoff = now - timedelta(days=self._retention_days)
+        # P4 (#254 D4): the bounded secondary cap's age cutoff — passed
+        # as a bound param (parity with the primary prune) so the
+        # detector/healer share one Python-derived clock, no DB now()
+        # skew. Open defects are protected by the SQL anti-join itself.
+        review_cutoff = now - timedelta(days=_REVIEW_DEFECT_MAX_AGE_DAYS)
         try:
             async with self._pool.acquire() as conn:
                 await conn.execute(
@@ -125,6 +203,12 @@ class DBLogHandler:
                     data_json,
                 )
                 await conn.execute(_RETENTION_SQL, cutoff)
+                if _REVIEW_DEFECT_CAP_SQL:
+                    await conn.execute(
+                        _REVIEW_DEFECT_CAP_SQL,
+                        review_cutoff,
+                        _REVIEW_DEFECT_MAX_ROWS,
+                    )
         except Exception as exc:  # pragma: no cover - DB failure path
             logger.warning(
                 "tpcore.logging.db_write_failed",
