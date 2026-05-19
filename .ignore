@@ -1,0 +1,5 @@
+data/
+logs/
+*_archive/
+.claude/worktrees/
+.venv/
