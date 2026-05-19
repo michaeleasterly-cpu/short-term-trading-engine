@@ -25,7 +25,7 @@ for l in open(".env"):
         k,v=l.split("=",1); e[k]=v.strip().strip('"').strip("'")
 import asyncpg
 async def m():
-    c=await asyncpg.connect(e.get("DATABASE_URL_IPV4") or e["DATABASE_URL"], timeout=30)
+    c=await asyncpg.connect(e.get("DATABASE_URL_IPV4") or e["DATABASE_URL"], timeout=30, statement_cache_size=0, server_settings={"jit": "off"})
     try:
         rows=await c.fetch("""
           SELECT p14.ticker FROM
