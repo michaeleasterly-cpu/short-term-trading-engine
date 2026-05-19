@@ -720,6 +720,8 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 
 Adds the engine-free vocabulary + the defaulted optional field. `model_post_init` gains NO new logic (the enum type already constrains; implementability is validated Lab-side at resolve, §2.1). reversion/vector/momentum `LAB_TARGET` declarations are **NOT edited** (A11 rationale — a defaulted field needs no edit there).
 
+> **Plan correction (T3 contract hardened, 2026-05-20, code-quality review):** T3 contract hardened — exhaustive-vocabulary pin (`test_vocabulary_is_exactly_pinned`) + gate-separation doc clause on `primary_metric`; the Step-1 test block and Step-3 field comment above reflect the shipped code.
+
 **Files:**
 - Modify: `tpcore/lab/target.py:17-85`
 - Test: `tpcore/tests/test_lab_target.py` (existing — must stay green; frozen/extra-forbid unchanged) + a new focused assertion file `tpcore/tests/test_lab_primary_metric.py`
@@ -760,6 +762,25 @@ def test_enum_members_and_str_values():
     assert LabPrimaryMetric.INVERSE_ETF_HOLD == "inverse_etf_hold"
     # StrEnum -> serializes as a plain string for the dossier JSON.
     assert isinstance(LabPrimaryMetric.SHARPE.value, str)
+
+
+def test_vocabulary_is_exactly_pinned():
+    """Persisted-value contract: ``LabPrimaryMetric`` member NAMES and
+    string VALUES are written into ``LabResult`` JSON sidecars and
+    compared in the make-or-break. This asserts the enum is EXACTLY
+    these four (name, value) pairs — no more, no fewer, none renamed.
+    Any add/rename/remove is a deliberate persisted-state migration and
+    MUST be a conscious edit to this set, never an incidental enum
+    change; this test reds the build until that edit is made.
+    """
+    from tpcore.lab.target import LabPrimaryMetric
+
+    assert {(m.name, m.value) for m in LabPrimaryMetric} == {
+        ("SHARPE", "sharpe"),
+        ("MAXDD_REDUCTION", "maxdd_reduction"),
+        ("ULCER", "ulcer"),
+        ("INVERSE_ETF_HOLD", "inverse_etf_hold"),
+    }
 
 
 def test_labtarget_primary_metric_defaults_to_sharpe():
@@ -867,7 +888,9 @@ Then add the field to `LabTarget` immediately after the `default_params` field (
     # defaulted ⇒ reversion/vector/momentum (which omit it) are
     # byte-identical (Sharpe). model_post_init needs NO new logic — the
     # StrEnum type already constrains; implementability is validated
-    # Lab-side at resolve (spec §2.1, §4.3).
+    # Lab-side at resolve (spec §2.1, §4.3). This selects the candidate
+    # RANKING objective ONLY and NEVER affects the DSR/credibility
+    # graduation gate — the SP-D sacred-gate separation is absolute.
     primary_metric: LabPrimaryMetric = LabPrimaryMetric.SHARPE
 ```
 

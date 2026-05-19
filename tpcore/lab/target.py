@@ -66,7 +66,9 @@ class LabTarget(BaseModel):
     # defaulted ⇒ reversion/vector/momentum (which omit it) are
     # byte-identical (Sharpe). model_post_init needs NO new logic — the
     # StrEnum type already constrains; implementability is validated
-    # Lab-side at resolve (spec §2.1, §4.3).
+    # Lab-side at resolve (spec §2.1, §4.3). This selects the candidate
+    # RANKING objective ONLY and NEVER affects the DSR/credibility
+    # graduation gate — the SP-D sacred-gate separation is absolute.
     primary_metric: LabPrimaryMetric = LabPrimaryMetric.SHARPE
 
     def model_post_init(self, _ctx: object) -> None:  # noqa: D401

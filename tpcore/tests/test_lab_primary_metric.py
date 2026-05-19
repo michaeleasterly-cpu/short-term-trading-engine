@@ -31,6 +31,25 @@ def test_enum_members_and_str_values():
     assert isinstance(LabPrimaryMetric.SHARPE.value, str)
 
 
+def test_vocabulary_is_exactly_pinned():
+    """Persisted-value contract: ``LabPrimaryMetric`` member NAMES and
+    string VALUES are written into ``LabResult`` JSON sidecars and
+    compared in the make-or-break. This asserts the enum is EXACTLY
+    these four (name, value) pairs — no more, no fewer, none renamed.
+    Any add/rename/remove is a deliberate persisted-state migration and
+    MUST be a conscious edit to this set, never an incidental enum
+    change; this test reds the build until that edit is made.
+    """
+    from tpcore.lab.target import LabPrimaryMetric
+
+    assert {(m.name, m.value) for m in LabPrimaryMetric} == {
+        ("SHARPE", "sharpe"),
+        ("MAXDD_REDUCTION", "maxdd_reduction"),
+        ("ULCER", "ulcer"),
+        ("INVERSE_ETF_HOLD", "inverse_etf_hold"),
+    }
+
+
 def test_labtarget_primary_metric_defaults_to_sharpe():
     from tpcore.lab.target import LabPrimaryMetric, LabTarget
 
