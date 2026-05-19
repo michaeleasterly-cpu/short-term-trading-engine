@@ -39,6 +39,7 @@ dev = [
     "pytest-xdist>=3.6,<4",
     "ruff>=0.4",
     "mypy>=1.10",
+    "vulture>=2.11,<3",
 ]
 dashboard = [
     # Operator dashboard — see docs/superpowers/specs/2026-05-13-operator-dashboard.md.
