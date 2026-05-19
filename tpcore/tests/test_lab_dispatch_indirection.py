@@ -123,6 +123,72 @@ def test_lab_target_for_rejects_eligible_but_undeclared_sentinel():
         _lab_target_for("sentinel")
 
 
+# ── HARDENING: declared engine whose <engine>.backtest fails to import ───
+# (spec §2.3 / Edge case 7 / §2.4 / §8-A2 / §8-HARDEN-T4) — the resolver's
+# import-failure catch is now (ImportError, SyntaxError), not just
+# ModuleNotFoundError. This is the ONLY fence on the post-SP-B
+# planner.py:693 lazy-import path (`PARAM_RANGES.get(ecr.engine, {})` on
+# the live-adjacent MODIFY-ECR validator): a non-ModuleNotFoundError
+# ImportError or a SyntaxError anywhere in a declared engine's transitive
+# backtest import surface MUST surface as KeyError off the Mapping, never
+# the raw import error, or that validator crashes.
+
+
+@pytest.mark.parametrize(
+    ("exc_factory", "label"),
+    [
+        (lambda: ImportError("cannot import name 'missing_y' from 'x'"), "ImportError"),
+        (lambda: SyntaxError("invalid syntax"), "SyntaxError"),
+    ],
+)
+def test_declared_engine_import_failure_is_keyerror_not_raw(
+    monkeypatch, exc_factory, label
+):
+    """A declared+targetable engine (reversion) whose ``reversion.backtest``
+    import raises a non-ModuleNotFoundError ``ImportError`` OR a
+    ``SyntaxError`` must: (a) ``PARAM_RANGES['reversion']`` → ``KeyError``
+    (NOT ImportError/SyntaxError/ValueError), (b) ``PARAM_RANGES.get(...,
+    {}) == {}`` (the exact planner.py:693 live-adjacent call), and (c) a
+    direct ``_lab_target_for`` raise the clear ``ValueError`` naming the
+    engine + that its backtest failed to import/parse. Pins the
+    planner-path no-crash guarantee for the broadened catch."""
+    import importlib
+
+    import ops.lab.run as run
+
+    real_import = importlib.import_module
+
+    def _fake_import(name, *a, **kw):
+        if name == "reversion.backtest":
+            raise exc_factory()
+        return real_import(name, *a, **kw)
+
+    monkeypatch.setattr(importlib, "import_module", _fake_import)
+
+    # (a) subscript → KeyError, NOT the raw import error or a ValueError.
+    with pytest.raises(KeyError):
+        run.PARAM_RANGES["reversion"]
+    try:
+        run.PARAM_RANGES["reversion"]
+    except KeyError:
+        pass
+    except (ImportError, SyntaxError, ValueError) as exc:  # pragma: no cover
+        pytest.fail(
+            f"{label} leaked as {type(exc).__name__} "
+            f"(planner.py:693 .get() would crash): {exc}"
+        )
+
+    # (b) the exact planner.py:693 call cleanly returns the default.
+    assert run.PARAM_RANGES.get("reversion", {}) == {}
+
+    # (c) the direct resolver raises the clear, actionable ValueError
+    #     (names the engine + that its backtest failed to import/parse).
+    with pytest.raises(
+        ValueError, match=r"reversion.*backtest.*failed to import/parse"
+    ):
+        run._lab_target_for("reversion")
+
+
 def test_sample_parameters_clear_error_on_bad_engine():
     import ops.lab.run as run
     with pytest.raises(ValueError, match="not Lab-targetable"):

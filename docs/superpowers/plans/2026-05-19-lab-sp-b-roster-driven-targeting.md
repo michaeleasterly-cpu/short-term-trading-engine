@@ -765,6 +765,8 @@ def test_param_ranges_membership_iteration_len_and_set():
 ```
 
 > Plan correction (applied during SP-B T4 exec): `tpcore/tests/test_lab_dispatch_indirection.py` necessarily names the `ops.lab.run`-private seam symbols `_runner_for`/`_context_loader_for`/`_context_runner_for`/`_lab_target_for` (that IS the test's spec §6/§8 purpose — pinning the private seam the oracle's by-name monkeypatch binds), which reds the globally-selected ruff `SLF001` (`SLF` is in `[tool.ruff.lint] select`; `**/tests/**` ignores only `E741,E702`). CLAUDE.md / STYLE_GUIDE forbids an inline `# noqa: SLF001`; the repo-canonical form for an engine-module-private (NOT tpcore-private) char/parity test is a scoped `[tool.ruff.lint.per-file-ignores]` entry — exactly the precedent `scripts/tests/test_search_parameters_characterization.py` and `tpcore/tests/test_stale_order_cancel.py` already use. The as-written plan omitted this required pyproject entry; the shipped change adds `"tpcore/tests/test_lab_dispatch_indirection.py" = ["SLF"]` alongside the two existing precedents (and `pyproject.toml` is included in the Step-13 commit). No test code changed — the plan's Step-1/Step-3 test bodies shipped verbatim.
+>
+> Plan correction (applied during SP-B T4 spec-review hardening, 2026-05-19): the Step-3 `_lab_target_for` resolver's import-failure catch shipped as `except (ImportError, SyntaxError) as exc:` (clear-`ValueError` message reworded to "…has a `<engine>.backtest` module that failed to import/parse (`<ExcType>`): …"), NOT the as-planned `except ModuleNotFoundError` — spec-review found that post-SP-B `planner.py:693`'s `PARAM_RANGES.get(ecr.engine, {})` is itself a NEW lazy-import trigger on the live-adjacent MODIFY-ECR validator, so a `SyntaxError`/non-`ModuleNotFoundError` `ImportError` under the narrow catch would crash it (the spec §2.3↔EC7 inconsistency, now reconciled — see spec §8-HARDEN-T4); a parametrized `(ImportError, SyntaxError)` no-crash test was added to `tpcore/tests/test_lab_dispatch_indirection.py` (proven non-tautological vs the pre-fix narrow catch). Step-3 pseudocode above updated to match shipped.
 
 - [ ] **Step 2: Run the char pins against the UN-refactored tree to confirm they hold**
 
@@ -908,10 +910,10 @@ def _lab_target_for(engine: str) -> "Any":
 
     try:
         mod = importlib.import_module(f"{engine}.backtest")
-    except ModuleNotFoundError as exc:
+    except (ImportError, SyntaxError) as exc:
         raise ValueError(
-            f"engine {engine!r} has no importable {engine}.backtest "
-            f"module: {exc}"
+            f"engine {engine!r} has a {engine}.backtest module that "
+            f"failed to import/parse ({type(exc).__name__}): {exc}"
         ) from exc
     target = getattr(mod, "LAB_TARGET", None)
     if target is None:

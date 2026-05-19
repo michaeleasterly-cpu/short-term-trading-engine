@@ -122,10 +122,23 @@ def _lab_target_for(engine: str) -> Any:
 
     try:
         mod = importlib.import_module(f"{engine}.backtest")
-    except ModuleNotFoundError as exc:
+    except (ImportError, SyntaxError) as exc:
+        # ImportError is the superclass of ModuleNotFoundError (a missing
+        # module preserves the existing not-targetable/undeclared message
+        # shape) AND covers a partial/circular `from x import missing_y`;
+        # SyntaxError is NOT an ImportError subclass so it must be named
+        # explicitly. Post-SP-B this catch is the ONLY fence on the new
+        # planner.py:693 lazy-import path (`PARAM_RANGES.get(ecr.engine,
+        # {})` on the live-adjacent MODIFY-ECR validator): any
+        # non-ModuleNotFoundError ImportError or a SyntaxError anywhere in
+        # a declared engine's transitive `<engine>.backtest` import
+        # surface MUST become the same clear fail-loud ValueError so
+        # __getitem__ converts it to KeyError and `.get(...)` cleanly
+        # returns {} instead of crashing that validator (spec §2.3 / EC7
+        # / §2.4 / §8-A2). Deliberately NOT a bare `except Exception`.
         raise ValueError(
-            f"engine {engine!r} has no importable {engine}.backtest "
-            f"module: {exc}"
+            f"engine {engine!r} has a {engine}.backtest module that "
+            f"failed to import/parse ({type(exc).__name__}): {exc}"
         ) from exc
     target = getattr(mod, "LAB_TARGET", None)
     if target is None:
