@@ -736,6 +736,13 @@ async def test_legacy_non_lab_path_emits_and_reads_no_ledger(
 
     # Spy the ledger helpers — they must NEVER be called on the legacy
     # path (candidate is None ⇒ _ledger_pool is None ⇒ no emit/read).
+    # _run_lab_core binds these via a lazy in-body
+    # ``from tpcore.lab.ledger import …`` (run.py ~:642), so the spy MUST
+    # patch the SOURCE module (tpcore.lab.ledger) — patching the
+    # ops.lab.run namespace is dead (it has no module-level binding;
+    # raising=True is itself the guard that the install target is real,
+    # mirroring the working compute_dsr_for_verdict / write_credibility
+    # SOURCE-module patches in this file).
     import tpcore.lab.ledger as ledger_mod
     real_record = ledger_mod.record_trial_spend
     real_cum = ledger_mod.cumulative_n_trials
@@ -748,10 +755,10 @@ async def test_legacy_non_lab_path_emits_and_reads_no_ledger(
         ledger_touches.append("cumulative")
         return await real_cum(*a, **k)
 
-    monkeypatch.setattr("ops.lab.run.record_trial_spend", _spy_record,
-                        raising=False)
-    monkeypatch.setattr("ops.lab.run.cumulative_n_trials", _spy_cum,
-                        raising=False)
+    monkeypatch.setattr("tpcore.lab.ledger.record_trial_spend",
+                        _spy_record, raising=True)
+    monkeypatch.setattr("tpcore.lab.ledger.cumulative_n_trials",
+                        _spy_cum, raising=True)
 
     core = await lab_run._run_lab_core(
         _ns(tmp_path / "legacy.csv", trials=40, seed=0),
@@ -761,6 +768,9 @@ async def test_legacy_non_lab_path_emits_and_reads_no_ledger(
     # No ledger interaction on the legacy path.
     assert ledger_touches == [], (
         f"legacy non-Lab path touched the ledger: {ledger_touches}")
+    # The legacy credibility write still goes through its OWN ad-hoc
+    # asyncpg.create_pool exactly once (no LabContext pool to reuse).
+    assert created == ["create_pool"]
     # DSR fed the per-run args.trials, unchanged from today.
     assert seen[-1] == 40
     assert core.effective_n_trials == 40
