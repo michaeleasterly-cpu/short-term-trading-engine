@@ -46,5 +46,13 @@ data/*_archive/
 logs/
 backtests/
 
-# Claude Code per-user state (skills are regenerated from skills-lock.json)
-.claude/
+# Claude Code extension surface — local-only state (worktrees /
+# project session caches / machine-specific permissions / dotfiles) is
+# ignored; the version-controlled architecture surface (rules / skills
+# / agents / hooks / project settings.json) is explicitly un-ignored.
+.claude/*
+!.claude/rules/
+!.claude/skills/
+!.claude/agents/
+!.claude/hooks/
+!.claude/settings.json
