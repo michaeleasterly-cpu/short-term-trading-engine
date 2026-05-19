@@ -12,6 +12,7 @@ through BOTH the in-core gate AND planner._validate_modify.
 from __future__ import annotations
 
 import argparse
+import math
 from dataclasses import dataclass
 from datetime import date, timedelta
 
@@ -77,14 +78,33 @@ class _SharedPool:
         ...
 
 
-# A: deep DD, higher Sharpe, survives.  B: shallow DD, lower Sharpe,
-# survives (orders invert under -max_drawdown).  C: final-holdout
-# n_trades<3 (metric-blind fail lever) but a finite windowed score so C
-# is a real ranked member, not pre-killed by the n_trades<3 -> -1.0 floor.
+# Spec §5.2 step-0 / §8-A15 construction. The corrected MAXDD_REDUCTION
+# mapping is `m.max_drawdown` itself (≤0 by run.py:370 construction);
+# under rank_candidates' descending reverse=True sort a SHALLOWER
+# (less-negative) drawdown ranks FIRST. The lever set is offline-proven
+# satisfiable under that corrected mapping:
+#
+#   WINDOWED (final_holdout=False, span_days=365, n=8 for all three):
+#     A: sharpe_score=4.1666  max_drawdown=-0.045   <- SHARPE winner
+#     B: sharpe_score=2.9704  max_drawdown= 0.000   <- MAXDD winner
+#     C: sharpe_score=2.2459  max_drawdown=-0.015   <- wins NEITHER
+#   ⇒ SHARPE order A>B>C (A strictly max); MAXDD order B>C>A (strict).
+#   FINAL HOLDOUT: A,B n_trades=8 (survive); C n_trades=2 (<3 ⇒ the
+#   metric-blind sacred-gate FAIL lever, §5.2). C's WINDOWED replay still
+#   has n=8 + a finite score so it is a real `ranked` member, not pre-
+#   killed by the n_trades<3 -> -1.0 ranking floor.
+#
+# The earlier set (A:0.030+-0.18, B:0.012+-0.01) was UNSATISFIABLE under
+# the corrected mapping (a deep loss tanks Sharpe so B outscored A on
+# Sharpe; C's zero-DD windowed slice won corrected MAXDD) — §8-A15.
+#
+#   kind="loss":   constant `ret`, one `loss` at the mid index.
+#   kind="volpos": alternating hi/lo, strictly positive ⇒ zero drawdown,
+#                  high variance ⇒ a modest (not blown-up) Sharpe.
 _PROFILES = {
-    "A": {"sharpe_lever": 0.030, "dd_trades": 8},   # high ret, deep DD
-    "B": {"sharpe_lever": 0.012, "dd_trades": 8},   # lower ret, shallow DD
-    "C": {"sharpe_lever": 0.020, "dd_trades": 2},   # final-holdout n<3
+    "A": {"kind": "loss", "ret": 0.080, "loss": -0.045, "dd_trades": 8},
+    "B": {"kind": "volpos", "hi": 0.040, "lo": 0.002, "dd_trades": 8},
+    "C": {"kind": "loss", "ret": 0.020, "loss": -0.015, "dd_trades": 2},
 }
 
 
@@ -94,12 +114,17 @@ def _trade_log(choice: str, *, final_holdout: bool) -> list[_Trade]:
     base = date(2022, 1, 3) if final_holdout else date(2019, 1, 3)
     log = []
     for i in range(n):
-        r = p["sharpe_lever"]
-        # A gets one deep loss (deep max_drawdown); B stays shallow.
-        if choice == "A" and i == n // 2:
-            r = -0.18
-        if choice == "B" and i == n // 2:
-            r = -0.01
+        if p["kind"] == "volpos":
+            # Strictly positive ⇒ equity never retraces ⇒ max_drawdown==0
+            # (shallowest); the hi/lo spread keeps Sharpe modest, NOT the
+            # near-constant blow-up that broke the earlier construction.
+            r = p["hi"] if i % 2 == 0 else p["lo"]
+        else:
+            r = p["ret"]
+            # One moderate loss at the mid index: deep-ish drawdown that
+            # still leaves a high-mean series a strong Sharpe.
+            if i == n // 2:
+                r = p["loss"]
         log.append(_Trade(entry_date=base + timedelta(days=30 * i),
                            pnl_pct=r))
     return log
@@ -231,43 +256,147 @@ async def test_step0_non_vacuity_preconditions(monkeypatch, tmp_path):
                     "longer invert; proof would be meaningless")
     if sharpe_rank[0][0] == maxdd_rank[0][0]:
         pytest.fail("VACUOUS: SHARPE and MAXDD winners coincide")
+    # §8-A15: pin the *strict* disagreement, not just the winners. A
+    # future lever drift that re-introduces a tie (A==C on Sharpe) or
+    # collapses the MAXDD order must ERROR loudly here, never silently
+    # pass on Timsort insertion-order luck.
+    sharpe_score = {tuple(sorted(p.items())): s for p, s, _ in sharpe_rank}
+    maxdd_score = {tuple(sorted(p.items())): s for p, s, _ in maxdd_rank}
+    a, b, c = (("choice", "A"),), (("choice", "B"),), (("choice", "C"),)
+    if not (sharpe_score[a] > sharpe_score[b]
+            and sharpe_score[a] > sharpe_score[c]):
+        pytest.fail("VACUOUS: A's SHARPE score is not STRICTLY maximal "
+                    f"(A={sharpe_score[a]} B={sharpe_score[b]} "
+                    f"C={sharpe_score[c]}) — a tie makes the winner "
+                    "Timsort-order-dependent; proof would be flaky")
+    # Corrected MAXDD_REDUCTION score == m.max_drawdown itself (≤0);
+    # shallower = larger. Strict order must be B > C > A.
+    if not (maxdd_score[b] > maxdd_score[c] > maxdd_score[a]):
+        pytest.fail("VACUOUS: corrected-MAXDD score order is not STRICTLY "
+                    f"B>C>A (A={maxdd_score[a]} B={maxdd_score[b]} "
+                    f"C={maxdd_score[c]}) — the drawdown contrast that "
+                    "makes the winners invert is gone")
     # C's final-holdout replay must fail the gate via n_trades<3.
     held = lab_run.compute_slice_metrics_from_trades(
         _trade_log("C", final_holdout=True), span_days=365)
     if held.n_trades >= 3:
         pytest.fail("VACUOUS: C's final-holdout replay has n_trades>=3 — "
                     "the metric-blind fail lever is gone")
+    # C's WINDOWED replay must still be a real ranked member (n>=3 ⇒ NOT
+    # pre-killed by the n_trades<3 -> -1.0 floor), else the windowed
+    # MAXDD ranking would never even consider C.
+    c_windowed = lab_run.compute_slice_metrics_from_trades(
+        _trade_log("C", final_holdout=False), span_days=365)
+    if c_windowed.n_trades < 3:
+        pytest.fail("VACUOUS: C's WINDOWED replay has n_trades<3 — C is "
+                    "pre-killed by the ranking floor, not a real member")
+
+
+def _ecr_tuple(lr) -> tuple[str, float, int, dict]:
+    """The EXACT 4-tuple ops/engine_sdlc/planner._validate_modify
+    re-derives from a LabResult sidecar (§0.2a/A12): verdict, dsr,
+    credibility_score, winning_params. The make-or-break invariant is
+    that THIS tuple is byte-identical between the SHARPE run and the
+    MAXDD run for a FIXED candidate — the gate must not move when only
+    the ranking metric changes."""
+    return (lr.verdict, lr.dsr, lr.credibility_score, lr.winning_params)
 
 
 async def test_make_or_break_gate_invariant_over_ecr_tuple(
         monkeypatch, tmp_path):
-    """Steps 2-4: run the WHOLE pipeline twice (SHARPE vs MAXDD_REDUCTION).
-    The §0.2a ECR-re-derived 4-tuple is byte-identical per candidate; only
-    the WINNER differs."""
+    """Steps 2-4 + §0.2a/A12: run the WHOLE pipeline twice (SHARPE vs
+    MAXDD_REDUCTION). For a FIXED candidate the ECR-re-derived 4-tuple
+    (verdict, dsr, credibility_score, winning_params) is BYTE-IDENTICAL
+    between the two metric runs — the gate verdict does NOT move when
+    only the ranking metric changes (that IS the make-or-break). Only
+    WHICH candidate sits at ranked[0] (the headline) differs."""
     core_s, lr_s = await _run_once(
         monkeypatch, tmp_path, metric_name="sharpe", seed=1)
     core_m, lr_m = await _run_once(
         monkeypatch, tmp_path, metric_name="maxdd_reduction", seed=1)
 
-    # Step 3: gate-invariance over the EXACT ECR-re-derived surface for
-    # the chosen winner of each run is the SAME predicate; the headline
-    # 4-tuple differs ONLY because a different candidate is winner.
-    assert lr_s.winning_params != lr_m.winning_params  # step 4 pluggability
+    # Step 4 (pluggability): the metric genuinely re-orders — the two
+    # runs' headline winners DIFFER (else the proof is vacuous: nothing
+    # was permuted, so metric-invariance would be trivially true).
+    assert lr_s.winning_params != lr_m.winning_params
     assert lr_s.winning_params == {"choice": "A"}
     assert lr_m.winning_params == {"choice": "B"}
-    # Step 3: independently drive A and B as winner_params through the
-    # gate; the verdict/dsr/credibility for a FIXED param-set is
-    # metric-invariant (same final-holdout replay, same gate functions).
-    for choice in ("A", "B"):
-        held = lab_run.compute_slice_metrics_from_trades(
-            _trade_log(choice, final_holdout=True), span_days=365)
-        rets = lab_run.period_returns_from_trades(
-            _trade_log(choice, final_holdout=True))
-        dsr = lab_run.compute_dsr_for_verdict(rets, n_trials=3)
-        # The gate predicate is byte-identical regardless of metric: it is
-        # a pure fn of the replayed winner_params, never of the metric.
-        assert isinstance(dsr, float)
-        assert held.n_trades >= 3
+
+    # §0.2a/A12 CORE INVARIANT — the make-or-break itself. For each fixed
+    # candidate independently driven as the winner through the FULL
+    # _build_lab_result gate path, the ECR-re-derived 4-tuple is
+    # byte-identical between the SHARPE-run context and the MAXDD-run
+    # context. We pin the winner deterministically by monkeypatching
+    # rank_candidates so ranked[0] is the chosen candidate, then run the
+    # pipeline once per (candidate, metric) and compare the 4-tuples.
+    from tpcore.lab.target import LabPrimaryMetric
+
+    async def _run_pinned(*, metric_name: str, pinned: str):
+        tgt = _install_choice_stub(monkeypatch)
+        monkeypatch.setattr(
+            "ops.lab.run._lab_target_for",
+            lambda e: tgt.model_copy(
+                update={"primary_metric": LabPrimaryMetric(metric_name)}))
+        real_rank = lab_run.rank_candidates
+
+        def _pinned_rank(trials, metric=LabPrimaryMetric.SHARPE):
+            ranked = real_rank(trials, metric)
+            head = [r for r in ranked if r[0] == {"choice": pinned}]
+            rest = [r for r in ranked if r[0] != {"choice": pinned}]
+            return head + rest
+
+        monkeypatch.setattr("ops.lab.run.rank_candidates", _pinned_rank)
+        shared = _SharedPool()
+
+        async def _fb(url, *, read_only, **k):
+            return shared
+
+        monkeypatch.setattr("tpcore.db.build_asyncpg_pool", _fb,
+                            raising=True)
+        async with LabContext(db_url="postgres://fake/db"):
+            core = await lab_run._run_lab_core(
+                _ns(tmp_path / f"{metric_name}_{pinned}.csv", seed=1),
+                candidate=f"exp_{metric_name}_{pinned}")
+        assert not isinstance(core, int)
+        lr = lab_run._build_lab_result(
+            candidate=_candidate(f"exp-{metric_name}-{pinned}"), core=core,
+            args=_ns(tmp_path / f"{metric_name}_{pinned}2.csv", seed=1))
+        return lr
+
+    for pinned in ("A", "B", "C"):
+        lr_sharpe = await _run_pinned(metric_name="sharpe", pinned=pinned)
+        lr_maxdd = await _run_pinned(
+            metric_name="maxdd_reduction", pinned=pinned)
+        t_s = _ecr_tuple(lr_sharpe)
+        t_m = _ecr_tuple(lr_maxdd)
+        # verdict / credibility_score / winning_params: EXACT equality.
+        assert t_s[0] == t_m[0], (
+            f"{pinned}: verdict moved with the ranking metric "
+            f"({t_s[0]!r} vs {t_m[0]!r}) — gate is NOT metric-invariant")
+        assert t_s[2] == t_m[2], (
+            f"{pinned}: credibility_score moved ({t_s[2]} vs {t_m[2]})")
+        assert t_s[3] == t_m[3], (
+            f"{pinned}: winning_params moved ({t_s[3]} vs {t_m[3]})")
+        # dsr: NaN must FAIL (not pass). Exact equality is the contract —
+        # same final-holdout replay, same compute_dsr_for_verdict, same
+        # n_trials; the tolerance is 0.0 (bit-identical) because nothing
+        # metric-dependent feeds the DSR computation. A tolerance is
+        # justified ONLY if a future float-path change makes it ≤1 ULP;
+        # today it is provably exact, so we assert exact and additionally
+        # reject NaN explicitly (== would silently pass NaN!=NaN as
+        # "not equal" → assertion failure, which is the desired FAIL, but
+        # we make the NaN rejection explicit and loud).
+        assert not math.isnan(t_s[1]) and not math.isnan(t_m[1]), (
+            f"{pinned}: dsr is NaN ({t_s[1]} / {t_m[1]}) — a degenerate "
+            "gate number must FAIL the invariant, never pass")
+        assert t_s[1] == t_m[1], (
+            f"{pinned}: dsr moved with the ranking metric "
+            f"({t_s[1]!r} vs {t_m[1]!r}) — gate is NOT metric-invariant")
+
+    # The ONLY thing the metric changed is which candidate is the
+    # headline — the gate 4-tuple for any fixed candidate is invariant.
+    assert _ecr_tuple(lr_s) != _ecr_tuple(lr_m)  # headlines differ
+    assert lr_s.winning_params != lr_m.winning_params
 
 
 async def test_make_or_break_adversarial_through_both_gates(

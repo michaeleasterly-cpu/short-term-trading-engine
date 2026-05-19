@@ -203,6 +203,7 @@ through BOTH the in-core gate AND planner._validate_modify.
 from __future__ import annotations
 
 import argparse
+import math
 from dataclasses import dataclass
 from datetime import date, timedelta
 
@@ -268,14 +269,17 @@ class _SharedPool:
         ...
 
 
-# A: deep DD, higher Sharpe, survives.  B: shallow DD, lower Sharpe,
-# survives (orders invert under -max_drawdown).  C: final-holdout
-# n_trades<3 (metric-blind fail lever) but a finite windowed score so C
-# is a real ranked member, not pre-killed by the n_trades<3 -> -1.0 floor.
+# §8-A15 satisfiable construction (corrected MAXDD_REDUCTION = the
+# m.max_drawdown value itself; shallower=less-negative=larger=ranks-first
+# under the descending reverse=True sort). Offline-proven:
+#   WINDOWED (n=8 all): A sharpe=4.1666 mdd=-0.045 (SHARPE winner);
+#   B sharpe=2.9704 mdd=0.000 (MAXDD winner); C sharpe=3.6178 mdd=-0.015
+#   (wins neither). SHARPE A>C>B (A strictly max); MAXDD B>C>A (strict).
+#   FINAL HOLDOUT: A,B n=8 survive; C n=2 (<3 ⇒ metric-blind gate FAIL).
 _PROFILES = {
-    "A": {"sharpe_lever": 0.030, "dd_trades": 8},   # high ret, deep DD
-    "B": {"sharpe_lever": 0.012, "dd_trades": 8},   # lower ret, shallow DD
-    "C": {"sharpe_lever": 0.020, "dd_trades": 2},   # final-holdout n<3
+    "A": {"kind": "loss", "ret": 0.080, "loss": -0.045, "dd_trades": 8},
+    "B": {"kind": "volpos", "hi": 0.040, "lo": 0.002, "dd_trades": 8},
+    "C": {"kind": "loss", "ret": 0.020, "loss": -0.015, "dd_trades": 2},
 }
 
 
@@ -285,12 +289,14 @@ def _trade_log(choice: str, *, final_holdout: bool) -> list[_Trade]:
     base = date(2022, 1, 3) if final_holdout else date(2019, 1, 3)
     log = []
     for i in range(n):
-        r = p["sharpe_lever"]
-        # A gets one deep loss (deep max_drawdown); B stays shallow.
-        if choice == "A" and i == n // 2:
-            r = -0.18
-        if choice == "B" and i == n // 2:
-            r = -0.01
+        if p["kind"] == "volpos":
+            # Strictly positive ⇒ zero drawdown (shallowest); hi/lo
+            # spread keeps Sharpe modest (not a near-constant blow-up).
+            r = p["hi"] if i % 2 == 0 else p["lo"]
+        else:
+            r = p["ret"]
+            if i == n // 2:  # one moderate loss ⇒ deep-ish drawdown
+                r = p["loss"]
         log.append(_Trade(entry_date=base + timedelta(days=30 * i),
                            pnl_pct=r))
     return log
@@ -401,7 +407,7 @@ async def test_step0_non_vacuity_preconditions(monkeypatch, tmp_path):
     """
     from tpcore.lab.target import LabPrimaryMetric
 
-    tgt = _install_choice_stub(monkeypatch)
+    _install_choice_stub(monkeypatch)  # side-effect: stub install only
 
     def _tr(choice):
         return lab_run.TrialResult(
@@ -422,43 +428,100 @@ async def test_step0_non_vacuity_preconditions(monkeypatch, tmp_path):
                     "longer invert; proof would be meaningless")
     if sharpe_rank[0][0] == maxdd_rank[0][0]:
         pytest.fail("VACUOUS: SHARPE and MAXDD winners coincide")
+    # §8-A15: pin the *strict* disagreement so a future lever drift that
+    # re-introduces a tie or collapses the order ERRORs loudly.
+    sharpe_score = {tuple(sorted(p.items())): s for p, s, _ in sharpe_rank}
+    maxdd_score = {tuple(sorted(p.items())): s for p, s, _ in maxdd_rank}
+    a, b, c = (("choice", "A"),), (("choice", "B"),), (("choice", "C"),)
+    if not (sharpe_score[a] > sharpe_score[b]
+            and sharpe_score[a] > sharpe_score[c]):
+        pytest.fail("VACUOUS: A's SHARPE score is not STRICTLY maximal")
+    if not (maxdd_score[b] > maxdd_score[c] > maxdd_score[a]):
+        pytest.fail("VACUOUS: corrected-MAXDD order is not STRICTLY B>C>A")
     # C's final-holdout replay must fail the gate via n_trades<3.
     held = lab_run.compute_slice_metrics_from_trades(
         _trade_log("C", final_holdout=True), span_days=365)
     if held.n_trades >= 3:
         pytest.fail("VACUOUS: C's final-holdout replay has n_trades>=3 — "
                     "the metric-blind fail lever is gone")
+    # C's WINDOWED replay must still be a real ranked member (n>=3).
+    c_windowed = lab_run.compute_slice_metrics_from_trades(
+        _trade_log("C", final_holdout=False), span_days=365)
+    if c_windowed.n_trades < 3:
+        pytest.fail("VACUOUS: C's WINDOWED replay has n_trades<3 — C is "
+                    "pre-killed by the ranking floor, not a real member")
+
+
+def _ecr_tuple(lr) -> tuple[str, float, int, dict]:
+    """The EXACT 4-tuple planner._validate_modify re-derives (§0.2a/A12):
+    verdict, dsr, credibility_score, winning_params. The make-or-break
+    invariant: byte-identical between the SHARPE and MAXDD runs for a
+    FIXED candidate — the gate must not move when only the metric does."""
+    return (lr.verdict, lr.dsr, lr.credibility_score, lr.winning_params)
 
 
 async def test_make_or_break_gate_invariant_over_ecr_tuple(
         monkeypatch, tmp_path):
-    """Steps 2-4: run the WHOLE pipeline twice (SHARPE vs MAXDD_REDUCTION).
-    The §0.2a ECR-re-derived 4-tuple is byte-identical per candidate; only
-    the WINNER differs."""
+    """Steps 2-4 + §0.2a/A12: run the WHOLE pipeline twice. For a FIXED
+    candidate the ECR-re-derived 4-tuple is BYTE-IDENTICAL between the
+    two metric runs (the gate verdict does NOT move when only ranking
+    changes — that IS the make-or-break); only the headline differs."""
     core_s, lr_s = await _run_once(
         monkeypatch, tmp_path, metric_name="sharpe", seed=1)
     core_m, lr_m = await _run_once(
         monkeypatch, tmp_path, metric_name="maxdd_reduction", seed=1)
 
-    # Step 3: gate-invariance over the EXACT ECR-re-derived surface for
-    # the chosen winner of each run is the SAME predicate; the headline
-    # 4-tuple differs ONLY because a different candidate is winner.
-    assert lr_s.winning_params != lr_m.winning_params  # step 4 pluggability
+    # Step 4 (pluggability anti-vacuity): the metric genuinely re-orders.
+    assert lr_s.winning_params != lr_m.winning_params
     assert lr_s.winning_params == {"choice": "A"}
     assert lr_m.winning_params == {"choice": "B"}
-    # Step 3: independently drive A and B as winner_params through the
-    # gate; the verdict/dsr/credibility for a FIXED param-set is
-    # metric-invariant (same final-holdout replay, same gate functions).
-    for choice in ("A", "B"):
-        held = lab_run.compute_slice_metrics_from_trades(
-            _trade_log(choice, final_holdout=True), span_days=365)
-        rets = lab_run.period_returns_from_trades(
-            _trade_log(choice, final_holdout=True))
-        dsr = lab_run.compute_dsr_for_verdict(rets, n_trials=3)
-        # The gate predicate is byte-identical regardless of metric: it is
-        # a pure fn of the replayed winner_params, never of the metric.
-        assert isinstance(dsr, float)
-        assert held.n_trades >= 3
+
+    from tpcore.lab.target import LabPrimaryMetric
+
+    async def _run_pinned(*, metric_name: str, pinned: str):
+        tgt = _install_choice_stub(monkeypatch)
+        monkeypatch.setattr(
+            "ops.lab.run._lab_target_for",
+            lambda e: tgt.model_copy(
+                update={"primary_metric": LabPrimaryMetric(metric_name)}))
+        real_rank = lab_run.rank_candidates
+
+        def _pinned_rank(trials, metric=LabPrimaryMetric.SHARPE):
+            ranked = real_rank(trials, metric)
+            head = [r for r in ranked if r[0] == {"choice": pinned}]
+            rest = [r for r in ranked if r[0] != {"choice": pinned}]
+            return head + rest
+
+        monkeypatch.setattr("ops.lab.run.rank_candidates", _pinned_rank)
+        shared = _SharedPool()
+
+        async def _fb(url, *, read_only, **k):
+            return shared
+
+        monkeypatch.setattr("tpcore.db.build_asyncpg_pool", _fb,
+                            raising=True)
+        async with LabContext(db_url="postgres://fake/db"):
+            core = await lab_run._run_lab_core(
+                _ns(tmp_path / f"{metric_name}_{pinned}.csv", seed=1),
+                candidate=f"exp_{metric_name}_{pinned}")
+        assert not isinstance(core, int)
+        return lab_run._build_lab_result(
+            candidate=_candidate(f"exp-{metric_name}-{pinned}"), core=core,
+            args=_ns(tmp_path / f"{metric_name}_{pinned}2.csv", seed=1))
+
+    for pinned in ("A", "B", "C"):
+        lr_sharpe = await _run_pinned(metric_name="sharpe", pinned=pinned)
+        lr_maxdd = await _run_pinned(
+            metric_name="maxdd_reduction", pinned=pinned)
+        t_s, t_m = _ecr_tuple(lr_sharpe), _ecr_tuple(lr_maxdd)
+        assert t_s[0] == t_m[0], f"{pinned}: verdict moved with metric"
+        assert t_s[2] == t_m[2], f"{pinned}: credibility moved"
+        assert t_s[3] == t_m[3], f"{pinned}: winning_params moved"
+        assert not math.isnan(t_s[1]) and not math.isnan(t_m[1]), (
+            f"{pinned}: dsr is NaN — must FAIL the invariant, not pass")
+        assert t_s[1] == t_m[1], f"{pinned}: dsr moved with metric"
+
+    assert _ecr_tuple(lr_s) != _ecr_tuple(lr_m)  # headlines differ
 
 
 async def test_make_or_break_adversarial_through_both_gates(
@@ -527,6 +590,11 @@ async def test_make_or_break_adversarial_through_both_gates(
 > **Plan correction (T2 impl, 2026-05-20, controller-adjudicated — SP-B/T1 SLF-baseline/plan-defect precedent):** two verbatim-code-block defects in this Task-2 section were corrected during implementation to keep the plan truthful:
 > 1. **Final assert was trivially-true (vacuous).** The literal block had `assert rejected is not _Plan` — `_Plan` is the *class*, so a `TransitionPlan` instance is never identical to it and the assertion is always-true (it pins nothing). The implementer Note immediately below it already sanctions the fix: bind `plan_instance = _Plan()` and assert `rejected is not plan_instance`. Applied as written. (Not the T2 RED lever — the test REDs earlier on the absent `LabPrimaryMetric` import — but the assertion is now non-vacuous for when the symbol lands in T5/T7.)
 > 2. **`F841` ruff violation in `test_step0_non_vacuity_preconditions`.** The block bound `tgt = _install_choice_stub(monkeypatch)` but never used `tgt` (step-0 uses only the call's monkeypatch side-effects, unlike `_run_once`/the adversarial test which use the return). `**/tests/**` ignores only `E741`/`E702` — `F841` is enforced. Changed to `_install_choice_stub(monkeypatch)  # side-effect: stub install only` (no inline noqa; intent unchanged).
+>
+> **Plan correction addendum (T2 systematic-debugging pass, 2026-05-20 — three substantive defects, RE-VERIFIED by direct computation against `ops/lab/run.py` before fixing; spec §8-A15):**
+> 3. **(SPEC ROOT CAUSE) `MAXDD_REDUCTION` sign inverted.** The spec specified `lambda m: -float(m.max_drawdown)` ("higher=shallower=better"). RE-VERIFIED: `compute_slice_metrics_from_trades` (`run.py:370`) is `((equity-peak)/peak).min()` with `equity ≤ peak` ⇒ `max_drawdown ≤ 0` always; under `rank_candidates`' descending `reverse=True` sort (`run.py:494`, "higher=better" per `_score_for_ranking` docstring `run.py:469`), `-max_drawdown` gives the DEEPER drawdown (`-(-0.18)=+0.18 > -(-0.01)=+0.01`) the larger score ⇒ would rank the WORSE candidate first (a live-money-adjacent ranking defect). **Corrected the merged spec** (§2.2 mapping+prose, §5.2 claim, §5.5 unit form, new §8-A15 hardening line, §8 self-review contradiction-check-3) to `lambda m: float(m.max_drawdown)` (the value itself; `-abs(...)` rejected as it hides the load-bearing ≤0 invariant). Plan Task-4 `_RANKING_METRICS` impl + `test_score_maxdd_reduction_*` unit assertions corrected to match (was `pytest.approx(-0.30 * -1)`/`approx(0.05)` → `approx(-0.30)`/`approx(-0.05)`).
+> 4. **(CRITICAL) the make-or-break construction was unsatisfiable under the corrected mapping.** RE-VERIFIED by direct computation against the real metric math: at the old levers (A `sharpe_lever=0.030`+a `−0.18` loss, B `0.012`+a `−0.01` loss, C `n=2`) the single deep loss tanks A's windowed Sharpe (0.143) far BELOW B's near-constant series (3.365) ⇒ `sharpe_rank[0]=B≠A`; and C's all-positive windowed slice has `max_drawdown=0.0` ⇒ wins the corrected MAXDD ranking, so `maxdd_rank[0]=C≠B`. `test_step0_non_vacuity_preconditions` could never go green. **Re-tuned to a provably-satisfiable construction** (`kind="loss"` A: `ret=0.080`+one `−0.045`; `kind="volpos"` B: alternating `0.040`/`0.002`, strictly positive ⇒ zero drawdown + modest Sharpe; C: `ret=0.020`+`−0.015`, final-holdout `dd_trades=2`). Offline-proven against the exact `_trade_log`+`rank_candidates` math: WINDOWED SHARPE A=4.1666 > C=3.6178 > B=2.9704 (A strictly max); corrected MAXDD B=0.0 > C=−0.015 > A=−0.045 (strict B>C>A); FINAL-HOLDOUT A,B n=8 survive, C n=2<3 fails the sacred gate (metric-blind). The Task-2 embedded `_PROFILES`/`_trade_log` updated to match. `test_step0_non_vacuity_preconditions` **strengthened**: it now pins the STRICT Sharpe-max and STRICT B>C>A drawdown order (not just the winners) plus C's windowed-`n≥3` real-member precondition, so a future lever drift that collapses the disagreement ERRORs loudly instead of silently passing on Timsort luck.
+> 5. **(HIGH) `test_make_or_break_gate_invariant_over_ecr_tuple` did not assert the §0.2a/A12 invariant.** It only asserted `winning_params !=` and `isinstance(dsr, float)` (which passes for NaN) — it never pinned the core make-or-break: the ECR-re-derived 4-tuple `(verdict, dsr, credibility_score, winning_params)` must be byte-identical between the SHARPE run and the MAXDD run for a FIXED candidate. **Rewritten** to drive each of {A,B,C} as the pinned winner (via a `rank_candidates` monkeypatch that lifts the chosen candidate to `ranked[0]`) through the full `_build_lab_result` gate path under BOTH metrics and assert exact equality of verdict/credibility_score/winning_params, an explicit-and-loud NaN rejection, and exact `dsr` equality (tolerance 0.0 justified: nothing metric-dependent feeds `compute_dsr_for_verdict` — the replay is metric-invariant by construction, so it is provably bit-identical, not merely ≤1 ULP). The adversarial sibling `test_make_or_break_adversarial_through_both_gates` was assessed structurally sound and preserved verbatim (the re-tuning does not change C's windowed `n=8`, so its `m.n_trades < 5` predicate behaves exactly as before — no adjustment required).
 
 - [ ] **Step 2: Write ONLY the pre-SP-D-sidecar regression test (§5.5 forcing regression) into `test_lab_sp_d_units.py`**
 
@@ -859,7 +927,9 @@ def test_score_sharpe_metric_equals_pre_refactor_closed_form():
     assert sp._score_for_ranking(m) == expected  # defaulted == SHARPE
 
 
-def test_score_maxdd_reduction_is_negated_drawdown():
+def test_score_maxdd_reduction_is_the_drawdown_value_itself():
+    # §8-A15: MAXDD_REDUCTION == m.max_drawdown itself (≤0 by the
+    # run.py:370 .min() construction). NOT -max_drawdown (sign-inverted).
     import ops.lab.run as sp
     from tpcore.lab.target import LabPrimaryMetric
 
@@ -868,10 +938,11 @@ def test_score_maxdd_reduction_is_negated_drawdown():
     shallow = sp.SliceMetrics(n_trades=10, sharpe=0.1, profit_factor=1.0,
                               max_drawdown=-0.05, win_rate=0.5)
     assert sp._score_for_ranking(
-        deep, LabPrimaryMetric.MAXDD_REDUCTION) == pytest.approx(-0.30 * -1)
+        deep, LabPrimaryMetric.MAXDD_REDUCTION) == pytest.approx(-0.30)
     assert sp._score_for_ranking(
-        shallow, LabPrimaryMetric.MAXDD_REDUCTION) == pytest.approx(0.05)
-    # shallower drawdown ranks HIGHER (consistent with descending sort).
+        shallow, LabPrimaryMetric.MAXDD_REDUCTION) == pytest.approx(-0.05)
+    # Shallower (less-negative) drawdown ranks HIGHER under the
+    # descending reverse=True sort: -0.05 > -0.30.
     assert sp._score_for_ranking(
         shallow, LabPrimaryMetric.MAXDD_REDUCTION) > sp._score_for_ranking(
         deep, LabPrimaryMetric.MAXDD_REDUCTION)
@@ -960,11 +1031,16 @@ _RANKING_METRICS: Mapping[LabPrimaryMetric, Callable[[SliceMetrics], float]] = {
     LabPrimaryMetric.SHARPE: lambda m: _clamp(
         float(m.sharpe) + 0.05 * math.log10(max(m.n_trades, 1))
     ),
-    # max_drawdown is <=0 by convention (run.py:370) ⇒ -max_drawdown >=0;
-    # higher = shallower drawdown = better (consistent with the
-    # descending sort). The §0.5 SP-E need, from the existing universe.
+    # §8-A15: max_drawdown is <=0 by construction (run.py:370,
+    # ((equity-peak)/peak).min(), equity<=peak). Return the VALUE ITSELF
+    # — a shallower (less-negative) drawdown is the LARGER score, so
+    # under rank_candidates' descending reverse=True sort the shallowest-
+    # drawdown candidate ranks first (the correct "minimize drawdown"
+    # objective). `-float(m.max_drawdown)` was sign-INVERTED (it ranked
+    # the DEEPER drawdown first). The §0.5 SP-E need, from the existing
+    # universe.
     LabPrimaryMetric.MAXDD_REDUCTION: lambda m: _clamp(
-        -float(m.max_drawdown)
+        float(m.max_drawdown)
     ),
     # Reserved vocabulary, no speculative impl (§1.3 YAGNI / §4.3).
     LabPrimaryMetric.ULCER: _unimplemented_metric("ULCER"),
