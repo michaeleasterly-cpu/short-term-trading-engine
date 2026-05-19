@@ -100,6 +100,8 @@ There is no file to `git add` — the T0 oracle ships as the inlined constant in
 
 ## Task 1: `tpcore/lab/target.py::LabTarget` — the engine-free contract — spec §2.2 / §7 T1
 
+> Plan correction (applied during SP-B T1 exec): two adjudicated fixes — (A) dropped the `bad3` `{"z": [2.0, 4.0, "float"]}` parametrize case: pydantic v2 idiomatically coerces the list to a valid `(2.0, 4.0, "float")` tuple so it is unsatisfiable and tested an implementation artifact, not the validation contract (no `strict=True`/pre-coercion check — YAGNI); (B) replaced bare `pytest.raises(Exception)` (ruff B017) with the empirically-verified `pytest.raises(pydantic.ValidationError)` — pydantic v2 wraps the `model_post_init` `ValueError`, and frozen-mutation + `extra="forbid"` also raise `pydantic.ValidationError`.
+
 **Files:**
 - Create: `tpcore/lab/target.py`
 - Test: `tpcore/tests/test_lab_target.py`
@@ -114,6 +116,7 @@ validation of the (low, high, kind) tuple/kind contract.
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 
 def _callables():
@@ -153,9 +156,9 @@ def test_labtarget_is_frozen_and_extra_forbid():
     t = LabTarget(param_ranges={"z": (2.0, 4.0, "float")},
                   run_for_search=afn, load_window_context=afn,
                   run_with_context=sfn, default_params=dp)
-    with pytest.raises(Exception):  # pydantic frozen → ValidationError
+    with pytest.raises(ValidationError):  # pydantic frozen instance
         t.param_ranges = {}
-    with pytest.raises(Exception):  # extra="forbid"
+    with pytest.raises(ValidationError):  # extra="forbid"
         LabTarget(param_ranges={}, run_for_search=afn,
                   load_window_context=afn, run_with_context=sfn,
                   default_params=dp, bogus=1)
@@ -165,16 +168,16 @@ def test_labtarget_is_frozen_and_extra_forbid():
     {"z": (2.0, 4.0)},                       # 2-tuple, not 3
     {"z": (2.0, 4.0, "floar")},              # typo kind
     {"z": (2.0, 4.0, "choice")},             # choice w/o ":"
-    {"z": [2.0, 4.0, "float"]},              # list not tuple
     {"z": (2.0, 4.0, 7)},                    # kind not str
 ])
 def test_labtarget_rejects_malformed_param_ranges_at_construction(bad):
     """Fail-loud at DECLARATION time (model_post_init), not at sample
-    time on a live-money-adjacent path (spec §2.2)."""
+    time on a live-money-adjacent path (spec §2.2). pydantic v2 wraps the
+    ``model_post_init`` ``ValueError`` in ``pydantic.ValidationError``."""
     from tpcore.lab.target import LabTarget
 
     afn, sfn, dp = _callables()
-    with pytest.raises(ValueError):
+    with pytest.raises(ValidationError):
         LabTarget(param_ranges=bad, run_for_search=afn,
                   load_window_context=afn, run_with_context=sfn,
                   default_params=dp)
@@ -280,7 +283,7 @@ __all__ = ["LabTarget"]
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `python -m pytest tpcore/tests/test_lab_target.py -p no:xdist -q`
-Expected: PASS (all 6 cases incl. the 5 parametrized malformed ones).
+Expected: PASS (all cases incl. the 4 parametrized malformed ones).
 
 - [ ] **Step 5: Verify the layering invariant stays green**
 
