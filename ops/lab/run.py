@@ -867,8 +867,38 @@ async def _run_lab_core(
         effective_n_trials = cumulative + args.trials
     else:
         effective_n_trials = args.trials
+    # SP-A2 / H-A2-9 + H-A2-11: V[ŜR_n] is the cross-trial dispersion of
+    # the per-trial *per-period* (NON-annualized) holdout Sharpes across
+    # this run's searched trials — the same per-period space as
+    # compute_dsr_for_verdict's internal SR̂. NOT t.holdout.sharpe (that
+    # is ANNUALIZED — feeding it would inflate SR₀ by ≈periods_per_year).
+    # Guarded by MIN_TRIALS_FOR_V (H-A2-10): too few non-errored trials ⇒
+    # None ⇒ the documented 1/(n-1) fallback + WARNING inside the call.
+    # H-A2-4: V-source trial count and the SP-A cumulative n_trials are
+    # deliberately distinct estimands — logged side-by-side, not
+    # silently reconciled (the floor bounds the residual seam, H-A2-13).
+    from tpcore.backtest.overfitting import MIN_TRIALS_FOR_V
+    _pp_sharpes = [
+        t.holdout.holdout_sharpe_per_period
+        for t in trials
+        if not t.error
+    ]
+    if len(_pp_sharpes) >= MIN_TRIALS_FOR_V:
+        trial_sharpe_var: float | None = float(
+            np.var(np.asarray(_pp_sharpes, dtype=float), ddof=1)
+        )
+        logger.info(
+            "tpcore.lab.dsr.v_n_trial_population",
+            v_trial_count=len(_pp_sharpes),
+            n_trials=effective_n_trials,
+        )
+    else:
+        trial_sharpe_var = None
     dsr = compute_dsr_for_verdict(
-        held_period_returns, n_trials=effective_n_trials)
+        held_period_returns,
+        n_trials=effective_n_trials,
+        trial_sharpe_variance=trial_sharpe_var,
+    )
 
     # Persist the winner's CredibilityScore to platform.data_quality_log so
     # downstream tools (tip sheet, capital gate) can read it. Without this,
