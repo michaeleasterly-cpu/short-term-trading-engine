@@ -53,3 +53,37 @@
 - Created platform schema migrations
 - Ran Alpaca asset ingestion script
 - Decision: FMP free tier for now; upgrade to Starter before July backtesting
+
+## 2026-05-20 — Status Checkpoint
+
+Catching the log up after 14 days of work (last entry: 2026-05-13).
+Major work shipped 2026-05-13 → 2026-05-20:
+
+- **Data**: SEC EDGAR bulk Form-345 ETL (2026-05-16); 14-stage
+  autonomous data-operations pipeline with bounded self-heal
+  (tpcore/selfheal/, 2026-05-16); CSV-first ingestion contract +
+  shrinkage detection (2026-05-15); per-engine data gates
+  (2026-05-16); 7 new feeds (ApeWisdom, Fear & Greed, greeks.pro,
+  Finnhub, FINRA, IBorrowDesk, AAII) 2026-05-14..16.
+- **Engines**: Sigma archived (2026-05-16, archive/sigma/EULOGY.md);
+  Canary heartbeat engine added (2026-05-17); Engine SDLC framework
+  LAB→PAPER→LIVE→RETIRED with _PROFILE SoT + ECR (2026-05-18,
+  docs/superpowers/specs/2026-05-18-engine-sdlc-design.md).
+- **Safety**: RiskGovernor uniform check_trade across all engines;
+  batch-engine slot accounting (#251, PRs #82/#87/#88, 2026-05-19);
+  reconcile_open_floor never-fail-open.
+- **Governance**: Data-lane + Engine-lane Escalation & Hardening
+  Ladders (2026-05-17, 2026-05-18); Data Provider Lifecycle with
+  ProviderBinding SoT (2026-05-17); Consolidated Defect Register
+  (#254, 2026-05-19); two-daemon consolidation DA-3 (2026-05-18);
+  allocator event-driven via ops/engine_dispatch.py (2026-05-17).
+- **Advisory**: LLM data-triage agent (#187, 2026-05-18); LLM
+  engine-triage agent (Epic E, 2026-05-18) — both advisory-only,
+  credential-starved, draft-PR-only.
+- **Research**: Lab front-half epic SP-A through SP-F
+  (2026-05-19..20); SP-A2 batch slot accounting + n_trials ledger.
+
+Per-engine credibility status: all 5 PAPER engines produce
+positive OOS edge candidates (~0.78–1.26) but fail the DSR≥0.95 ∧
+credibility≥60 gate. No engine has graduated. Capital remains in
+paper mode.
