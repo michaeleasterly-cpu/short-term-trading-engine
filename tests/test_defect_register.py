@@ -601,6 +601,109 @@ async def test_collision_observability_counter(monkeypatch):
     assert collisions[0]["defect_ref"] == "shared"
 
 
+# ── DR2.6: re-logged defect_ref determinism ─────────────────────────
+#
+# Bug-fix (#254 DR2 code-quality sweep): _REVIEW_OPEN_SQL had no
+# ORDER BY and no per-defect_ref dedup. If the SAME defect_ref is
+# REVIEW_DEFECT_LOGGED more than once (re-logged with a different
+# summary/timestamp), the consumer's first-wins ``if ref in by_ref``
+# took whichever row Postgres returned FIRST (nondeterministic) — so
+# opened_at / state / fix_ref for that ref were unstable. The module's
+# stated contract is deterministic ordering (it already orders the
+# final consolidated rows by (opened_at, defect_ref) and the engine
+# loop iterates a deterministically-ordered set). Semantics chosen:
+# EARLIEST REVIEW_DEFECT_LOGGED per defect_ref wins (earliest
+# logged_at), tiebroken by summary; resolved iff ANY later RESOLVED
+# exists for that ref (the anti-join open-predicate, intact).
+
+
+class _DupReviewConn:
+    """Fake conn that returns the SAME defect_ref TWICE (re-logged,
+    different logged_at + summary) in a caller-chosen row order, to
+    bite on consumer-side nondeterminism. fix_ref/is_resolved differ
+    per row so a wrong (last/arbitrary) pick is observable."""
+
+    def __init__(self, flip: bool) -> None:
+        self._flip = flip
+
+    async def fetch(self, sql: str, *a):
+        if "REVIEW_DEFECT_LOGGED" not in sql:
+            raise AssertionError(  # pragma: no cover - guard
+                f"non-review escalation SQL issued: {sql}")
+        # is_resolved/fix_ref are SQL correlated-subquery outputs keyed
+        # off each row's own LOGGED recorded_at. The anti-join predicate
+        # ("any RESOLVED at/after this LOGGED") is monotone in the LOGGED
+        # timestamp, so the EARLIEST LOGGED's is_resolved is the answer
+        # we want (resolved iff ANY later RESOLVED for the ref). Here a
+        # RESOLVED(PR-fix) lands after the earliest log but the late
+        # re-log carries a DISTINCT (wrong-if-picked) fix_ref/summary.
+        early = {
+            "defect_ref": "#re", "summary": "first/earliest log",
+            "lane": "data",
+            "logged_at": (NOW - timedelta(days=9)).isoformat(),
+            "is_resolved": True, "fix_ref": "PR-fix",
+        }
+        late = {
+            "defect_ref": "#re", "summary": "second/later re-log",
+            "lane": "data",
+            "logged_at": (NOW - timedelta(days=2)).isoformat(),
+            "is_resolved": False, "fix_ref": None,
+        }
+        return [late, early] if self._flip else [early, late]
+
+    async def execute(self, sql: str, *a):  # pragma: no cover - guard
+        raise AssertionError("consolidated_defects executed its OWN SQL")
+
+
+class _DupReviewPool:
+    def __init__(self, flip: bool) -> None:
+        self._flip = flip
+
+    def acquire(self):
+        flip = self._flip
+
+        class _CM:
+            async def __aenter__(_s):
+                return _DupReviewConn(flip)
+
+            async def __aexit__(_s, *e):
+                return None
+
+        return _CM()
+
+
+async def test_relogged_ref_is_deterministic_regardless_of_row_order(
+        monkeypatch):
+    """A re-logged defect_ref must collapse to ONE row whose
+    opened_at/state/fix_ref are STABLE regardless of the order
+    Postgres returns the LOGGED rows in. We feed the fake rows in
+    BOTH orders and assert byte-identical DefectRows. Pre-fix: the
+    first-wins consumer picked whichever came first → the two orders
+    disagree → this test reds."""
+    _patch(monkeypatch, engine_rows=[], data_entries=[])
+
+    out_fwd = await dr.consolidated_defects(_DupReviewPool(flip=False))
+    out_rev = await dr.consolidated_defects(_DupReviewPool(flip=True))
+
+    for out in (out_fwd, out_rev):
+        assert len(out) == 1, f"re-logged ref must collapse to ONE: {out}"
+        assert out[0].defect_ref == "#re"
+
+    a, b = out_fwd[0], out_rev[0]
+    assert a == b, (
+        f"re-logged ref nondeterministic across row order: {a} != {b}")
+    # Earliest-logged-wins: opened_at is the EARLIER log's timestamp.
+    earliest = (NOW - timedelta(days=9))
+    assert a.opened_at == earliest, a.opened_at
+    # Resolved iff ANY later RESOLVED exists for the ref (anti-join
+    # predicate, intact) — the EARLIEST log's is_resolved row carried
+    # the resolved/fix_ref result; the late re-log's stale (None) value
+    # must NOT be the one chosen.
+    assert a.state == "fixed"
+    assert a.fix_ref == "PR-fix"
+    assert a.summary == "first/earliest log"
+
+
 # ── DR2.5: TODO-parity forcing CI test ──────────────────────────────
 #
 # A review-found defect must NOT be able to live only in TODO.md and be
