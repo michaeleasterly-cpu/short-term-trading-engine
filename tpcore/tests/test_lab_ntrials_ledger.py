@@ -318,12 +318,34 @@ def _install_offline_harness(monkeypatch, lab_run, *, returns,
     ``tpcore/tests/test_lab_credibility_pool_threaded.py`` uses (the
     SP2 oracle exposes no reusable harness; inline our own; the oracle
     file is NOT modified)."""
-    class _Rubric:
-        score = cred_score
+    # T10/H-LL-6 alignment: the SP2→SP3 ``LabResult`` (spec §7) pydantic
+    # contract validates ``credibility_rubric`` strictly against
+    # ``CredibilityScore``. Prior T-tasks only exercise the spine
+    # (``_run_lab_core``), which carries the rubric opaquely (``Any |
+    # None``) and never constructs a ``LabResult`` — so a bare stub
+    # sufficed. T10 is the first to drive ``run_lab`` →
+    # ``_build_lab_result`` → ``LabResult(...)``, which rejects a
+    # non-``CredibilityScore``. A real (minimal-valid) ``CredibilityScore``
+    # is behaviour-identical for every spine-only test (rubric is opaque
+    # there) and unblocks the ``run_lab`` half of T10. Plan deviation
+    # noted: the plan's harness ``_Rubric`` stub predates the
+    # ``run_lab``-path coverage; aligned to the real shipped pydantic
+    # contract, T10 intent + non-vacuity preserved.
+    from tpcore.backtest.credibility import CredibilityScore
+
+    _rubric = CredibilityScore(
+        lookahead_clean=True,
+        survivorship_inclusive=True,
+        pit_fundamentals=True,
+        regime_coverage=True,
+        out_of_sample_validated=True,
+        monte_carlo_drawdown=True,
+        score=cred_score,
+    )
 
     class _RunResult:
         credibility_score = cred_score
-        credibility_rubric = _Rubric()
+        credibility_rubric = _rubric
         # one trade per return on a distinct in-window entry_date →
         # period_returns_from_trades == returns (grouping is by
         # entry_date; distinct dates ⇒ no period collapse). timedelta
@@ -774,3 +796,72 @@ async def test_legacy_non_lab_path_emits_and_reads_no_ledger(
     # DSR fed the per-run args.trials, unchanged from today.
     assert seen[-1] == 40
     assert core.effective_n_trials == 40
+
+
+async def test_amain_line_and_labresult_carry_effective_cumulative(
+        monkeypatch, tmp_path, capsys):
+    """T10 / H-LL-6. With prior trials on the shared ledger (cumulative
+    > 0), the amain ``DSR (n_trials=…)`` human line AND
+    ``LabResult.n_trials`` carry the EFFECTIVE cumulative value that
+    actually deflated the verdict — NOT the per-run args.trials. The
+    dossier must not lie about the applied penalty."""
+    import numpy as np
+
+    import ops.lab.run as lab_run
+    from tpcore.lab.context import LabContext
+    from tpcore.lab.ledger import record_trial_spend
+    from tpcore.lab.models import LabCandidate
+
+    rng = np.random.default_rng(7)
+    returns = [float(x) for x in rng.normal(0.02, 0.01, 40)]
+    _install_offline_harness(monkeypatch, lab_run, returns=returns,
+                             cred_score=80)
+
+    shared = _SharedLedgerPool()
+    seeded_ts = await record_trial_spend(
+        shared, target="reversion", candidate="prior", trials=300,
+        seed=1)
+    shared.rows[-1]["timestamp"] = seeded_ts
+
+    async def _fake_build(url, *, read_only, **k):
+        return shared
+
+    monkeypatch.setattr("tpcore.db.build_asyncpg_pool", _fake_build,
+                        raising=True)
+
+    # ── amain human line carries the effective cumulative ─────────────
+    async with LabContext(db_url="postgres://fake/db"):
+        rc = await lab_run.amain(
+            _ns(tmp_path / "h.csv", trials=40, seed=2),
+            candidate="rev_cand")
+    out = capsys.readouterr().out
+    assert rc in (0, 1)
+    # 300 prior + 40 this run == 340 effective — NOT 40.
+    assert "DSR (n_trials=340)" in out, (
+        f"amain must surface the effective cumulative n_trials (340), "
+        f"not args.trials (40). stdout:\n{out}")
+    assert "DSR (n_trials= 40)" not in out
+    assert "DSR (n_trials=40)" not in out
+
+    # ── LabResult.n_trials carries the effective cumulative ───────────
+    shared2 = _SharedLedgerPool()
+    s2 = await record_trial_spend(
+        shared2, target="reversion", candidate="prior2", trials=300,
+        seed=1)
+    shared2.rows[-1]["timestamp"] = s2
+
+    async def _fake_build2(url, *, read_only, **k):
+        return shared2
+
+    monkeypatch.setattr("tpcore.db.build_asyncpg_pool", _fake_build2,
+                        raising=True)
+    cand = LabCandidate(
+        name="rev_cand", target_engine="reversion",
+        param_overrides={}, intent="fold_existing")
+    async with LabContext(db_url="postgres://fake/db"):
+        result = await lab_run.run_lab(
+            _ns(tmp_path / "lr.csv", trials=40, seed=2),
+            candidate=cand)
+    assert result.n_trials == 340, (
+        f"LabResult.n_trials must be the effective cumulative (340), "
+        f"not args.trials (40); got {result.n_trials}")
