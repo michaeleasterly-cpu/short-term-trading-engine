@@ -1253,6 +1253,10 @@ def _build_lab_result(
         n_trials=core.effective_n_trials,
         seed=args.seed,
         generated_at=datetime.now(UTC),
+        # SP-D §2.4 — the TRUE objective on every new run; the default
+        # only services the read of legacy artifacts. Resolved via the
+        # idempotent _lab_target_for (the SP-B resolver, no new dispatch).
+        primary_metric=_lab_target_for(args.engine).primary_metric,
     )
 
 
