@@ -86,6 +86,7 @@ from reversion.plugs.setup_detection import (
     _spy_realized_vol_proxy,
     _volume_ratio,
 )
+from tpcore.backtest.cli_overrides import overrides_from_args
 from tpcore.db import build_asyncpg_pool
 from tpcore.fundamentals.earnings_quality import (
     EarningsQualityGrade,
@@ -889,12 +890,7 @@ _EARNINGS_QUALITY_TO_FILTER = {
 
 
 def _overrides_from_args(args: argparse.Namespace) -> dict:
-    out: dict = {}
-    for k in REVERSION_OVERRIDE_KEYS:
-        v = getattr(args, k, None)
-        if v is not None:
-            out[k] = v
-    return out
+    return overrides_from_args(args, REVERSION_OVERRIDE_KEYS)
 
 
 def _apply_overrides_from_args(args: argparse.Namespace) -> None:
