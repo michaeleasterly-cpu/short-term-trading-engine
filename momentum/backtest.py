@@ -55,6 +55,7 @@ import structlog
 
 from tpcore.backtest.cli_overrides import overrides_from_args
 from tpcore.db import build_asyncpg_pool
+from tpcore.lab.target import LabTarget
 
 if TYPE_CHECKING:  # pragma: no cover
     from tpcore.backtest.search import BacktestRunResult
@@ -546,6 +547,24 @@ async def run_for_search(
         db_url=db_url, start=start, end=end, universe=universe,
     )
     return run_momentum_with_context(ctx, overrides=overrides, trade_log_path=trade_log_path)
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# SP-B — Lab targeting declaration (engine-OWNED; live path never imports).
+# ────────────────────────────────────────────────────────────────────────────
+
+LAB_TARGET = LabTarget(
+    param_ranges={
+        "lookback_days": (200, 280, "int"),
+        "skip_days": (15, 30, "int"),
+        "hold_days": (15, 30, "int"),
+        "top_decile_pct": (0.05, 0.20, "float"),
+    },
+    run_for_search=run_for_search,
+    load_window_context=load_momentum_window_context,
+    run_with_context=run_momentum_with_context,
+    default_params=default_params,
+)
 
 
 # ────────────────────────────────────────────────────────────────────────────
