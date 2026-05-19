@@ -59,38 +59,64 @@ def test_seam_funcs_raise_valueerror_on_unknown_engine():
 
 def test_param_ranges_membership_iteration_len_and_set():
     import ops.lab.run as run
-    # Membership + iteration order == the T0 literal insertion order.
-    assert list(run.PARAM_RANGES) == ["reversion", "vector", "momentum"]
+    # SP-E: sentinel gained a declared LAB_TARGET, so it is now a
+    # declared PARAM_RANGES member (after the T0 trio, dispatch_order).
+    assert list(run.PARAM_RANGES) == [
+        "reversion", "vector", "momentum", "sentinel"]
     assert "reversion" in run.PARAM_RANGES
-    assert "sentinel" not in run.PARAM_RANGES
-    assert len(run.PARAM_RANGES) == 3
+    assert "sentinel" in run.PARAM_RANGES         # SP-E: now declared
+    assert len(run.PARAM_RANGES) == 4
     for e in ("reversion", "vector", "momentum"):
         assert set(run.PARAM_RANGES[e]) == set(_T0_PARAM_RANGES_KEYSETS[e])
+    # SP-E: sentinel's single pre-registered toggle.
+    assert set(run.PARAM_RANGES["sentinel"]) == {"activation_score_threshold"}
 
 
 # ── BINDING CONTRACT pins (spec §2.4 — the §8 highest residual risk) ─────
 
-def test_param_ranges_subscript_undeclared_raises_KEYERROR_not_valueerror():
+def test_param_ranges_subscript_undeclared_raises_KEYERROR_not_valueerror(
+        monkeypatch):
     """planner.py:694 does PARAM_RANGES.get(ecr.engine, {}). Mapping.get
     catches KeyError ONLY. The lazy __getitem__ MUST re-raise the
     _lab_target_for ValueError as KeyError or that live-adjacent
-    MODIFY-ECR validator crashes (spec §2.4, §8-A2)."""
+    MODIFY-ECR validator crashes (spec §2.4, §8-A2).
+
+    SP-E: sentinel is now declared, so the *eligible-but-undeclared*
+    branch is exercised via a synthetic PAPER engine (the SP-B clockwork
+    pattern) — a package-less roster member with no LAB_TARGET."""
     import ops.lab.run as run
+    import tpcore.engine_profile as ep
+
+    fake = ep.EngineProfile(
+        engine="phantompaper", cadence=ep.Cadence.DAILY,
+        dispatch_order=7, lifecycle_state=ep.LifecycleState.PAPER)
+    monkeypatch.setattr(ep, "_PROFILE", {**ep._PROFILE, "phantompaper": fake})
+
     with pytest.raises(KeyError):
-        run.PARAM_RANGES["sentinel"]            # eligible-but-undeclared
+        run.PARAM_RANGES["phantompaper"]        # eligible-but-undeclared
     # NOT a ValueError leaking through:
     try:
-        run.PARAM_RANGES["sentinel"]
+        run.PARAM_RANGES["phantompaper"]
     except KeyError:
         pass
     except ValueError as exc:  # pragma: no cover - regression tripwire
         pytest.fail(f"ValueError leaked (planner.py:694 would crash): {exc}")
 
 
-def test_param_ranges_get_returns_default_for_undeclared_engine():
-    """The exact planner.py:694 call: .get(<undeclared>, {}) == {}."""
+def test_param_ranges_get_returns_default_for_undeclared_engine(monkeypatch):
+    """The exact planner.py:694 call: .get(<undeclared>, {}) == {}.
+
+    SP-E: sentinel is declared now; the eligible-but-undeclared default
+    is exercised via the synthetic PAPER engine. Non-targetable engines
+    (canary/sigma/nope) still return the default via the other branch."""
     import ops.lab.run as run
-    assert run.PARAM_RANGES.get("sentinel", {}) == {}
+    import tpcore.engine_profile as ep
+
+    fake = ep.EngineProfile(
+        engine="phantompaper", cadence=ep.Cadence.DAILY,
+        dispatch_order=7, lifecycle_state=ep.LifecycleState.PAPER)
+    monkeypatch.setattr(ep, "_PROFILE", {**ep._PROFILE, "phantompaper": fake})
+    assert run.PARAM_RANGES.get("phantompaper", {}) == {}
     assert run.PARAM_RANGES.get("canary", {}) == {}
     assert run.PARAM_RANGES.get("sigma", {}) == {}
     assert run.PARAM_RANGES.get("nope", {}) == {}
@@ -100,7 +126,9 @@ def test_lab_target_for_resolves_declared_engines():
     import importlib
 
     from ops.lab.run import _lab_target_for
-    for engine in ("reversion", "vector", "momentum"):
+    # SP-E: sentinel joined the declared set (its LAB_TARGET resolves
+    # exactly like the others through the SP-B roster resolver).
+    for engine in ("reversion", "vector", "momentum", "sentinel"):
         mod = importlib.import_module(f"{engine}.backtest")
         t = _lab_target_for(engine)
         assert t.run_for_search is mod.run_for_search
@@ -114,13 +142,41 @@ def test_lab_target_for_rejects_non_targetable_with_clear_valueerror():
             _lab_target_for(bad)
 
 
-def test_lab_target_for_rejects_eligible_but_undeclared_sentinel():
-    """Sentinel is PAPER (eligible) but exports no LAB_TARGET → the clear
-    SP-E/SP-F-pointing message, NOT KeyError/'unknown engine' (spec
-    §4.1)."""
+def test_lab_target_for_resolves_sentinel_post_sp_e():
+    """SP-E deliverable: sentinel is PAPER AND now declares a LAB_TARGET
+    (the activation-threshold toggle, primary_metric=MAXDD_REDUCTION) so
+    the resolver RESOLVES it (it no longer hard-rejects with the
+    SP-E-pointing message — SP-E IS that resolution)."""
+    import sentinel.backtest as sb
     from ops.lab.run import _lab_target_for
-    with pytest.raises(ValueError, match="has not.*declared.*LAB_TARGET"):
-        _lab_target_for("sentinel")
+    from tpcore.lab.target import LabPrimaryMetric
+
+    t = _lab_target_for("sentinel")
+    assert t.run_for_search is sb.run_for_search
+    assert t.default_params is sb.default_params
+    assert t.primary_metric == LabPrimaryMetric.MAXDD_REDUCTION
+
+
+def test_lab_target_for_rejects_eligible_but_undeclared_synthetic(
+        monkeypatch):
+    """The eligible-but-undeclared branch (post-SP-E, every real
+    targetable engine is declared, so this is exercised via a synthetic
+    package-less PAPER roster member): the clear SP-E/SP-F-pointing
+    message, NOT the 'not Lab-targetable' roster-gate rejection and NOT a
+    raw KeyError/'unknown engine' (spec §4.1)."""
+    import tpcore.engine_profile as ep
+    from ops.lab.run import _lab_target_for
+
+    fake = ep.EngineProfile(
+        engine="phantompaper", cadence=ep.Cadence.DAILY,
+        dispatch_order=7, lifecycle_state=ep.LifecycleState.PAPER)
+    monkeypatch.setattr(ep, "_PROFILE", {**ep._PROFILE, "phantompaper": fake})
+    with pytest.raises(ValueError) as ei:
+        _lab_target_for("phantompaper")
+    msg = str(ei.value)
+    # Propagated THROUGH the roster gate (not rejected as non-targetable).
+    assert "not Lab-targetable" not in msg
+    assert "phantompaper" in msg
 
 
 # ── HARDENING: declared engine whose <engine>.backtest fails to import ───
@@ -265,15 +321,19 @@ def test_default_params_shim_byte_equal_for_declared_engines():
     import importlib
 
     from ops.engine_sdlc.default_params import default_params
-    for engine in ("reversion", "vector", "momentum"):
+    # SP-E: sentinel joined the declared set; the shim is byte-equal to
+    # its backtest.default_params() exactly like the other engines.
+    for engine in ("reversion", "vector", "momentum", "sentinel"):
         mod = importlib.import_module(f"{engine}.backtest")
         assert default_params(engine) == mod.default_params()
 
 
-def test_default_params_shim_rejects_sentinel_with_clear_message():
+def test_default_params_shim_resolves_sentinel_post_sp_e():
+    """SP-E: sentinel now declares a LAB_TARGET, so the shim resolves it
+    to its single pre-registered toggle's legacy default (the dossier
+    param-diff seam), no longer the SP-E-pointing rejection."""
     from ops.engine_sdlc.default_params import default_params
-    with pytest.raises(ValueError, match="has not.*declared.*LAB_TARGET"):
-        default_params("sentinel")
+    assert default_params("sentinel") == {"activation_score_threshold": 60}
 
 
 def test_no_import_cycle_default_params_shim_to_run():

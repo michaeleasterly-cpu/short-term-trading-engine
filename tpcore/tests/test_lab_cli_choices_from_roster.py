@@ -63,10 +63,11 @@ def test_run_py_engine_choices_are_the_accessor():
     for bad in ("canary", "sigma", "lab"):
         with pytest.raises(SystemExit):
             run._parse_args(["--engine", bad])
-    # And every accessor member is accepted by argparse — including the
-    # eligible-but-undeclared "sentinel" (argparse accepts; the resolver
-    # rejects it later). Accepting "sentinel" is the discriminator that
-    # proves the choices ARE the accessor, not the stale literal triple.
+    # And every accessor member is accepted by argparse — including
+    # "sentinel" (post-SP-E it is both targetable AND declared, and was
+    # never in the stale literal triple). Accepting "sentinel" is the
+    # discriminator that proves the choices ARE the accessor, not the
+    # stale literal triple.
     assert "sentinel" in lab_targetable_engines()
     for good in lab_targetable_engines():
         run._parse_args(["--engine", good])
@@ -89,8 +90,9 @@ def test_main_py_target_engine_choices_are_the_accessor():
         with pytest.raises(SystemExit):
             m._parse_args(["--candidate", "c", "--target-engine", bad,
                            "--intent", "promote_new"])
-    # Accepting the eligible-but-undeclared "sentinel" is the discriminator
-    # that proves the choices ARE the accessor, not the stale literal.
+    # Accepting "sentinel" (post-SP-E targetable AND declared; never in
+    # the stale literal) is the discriminator that proves the choices
+    # ARE the accessor, not the stale literal.
     assert "sentinel" in lab_targetable_engines()
     for good in lab_targetable_engines():
         m._parse_args(["--candidate", "c", "--target-engine", good,

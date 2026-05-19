@@ -188,9 +188,10 @@ class _LazyParamRanges(Mapping):
             raise KeyError(engine) from exc
 
     def __iter__(self):
-        # Declared targets only, dispatch_order — same membership+order
-        # as the old literal dict's insertion order (reversion, vector,
-        # momentum). Eligible-but-undeclared (sentinel) is skipped.
+        # Declared targets only, dispatch_order — post-SP-E this is
+        # (reversion, vector, momentum, sentinel); sentinel joined when
+        # it declared its LAB_TARGET. An eligible-but-undeclared engine
+        # (e.g. a future scaffold before its LAB_TARGET) is still skipped.
         from tpcore.engine_profile import lab_targetable_engines
 
         for engine in lab_targetable_engines():

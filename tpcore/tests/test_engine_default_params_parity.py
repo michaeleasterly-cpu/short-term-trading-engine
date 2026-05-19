@@ -5,7 +5,11 @@ from __future__ import annotations
 
 import pytest
 
-_PARAM_RANGES_ENGINES = ("reversion", "vector", "momentum")
+# SP-E: sentinel gained a declared LAB_TARGET (a single choice:60,55
+# activation-threshold toggle) so it is now a PARAM_RANGES engine with a
+# default_params() accessor — same parity contract as the other declared
+# engines. canary remains intentionally non-targetable (no accessor).
+_PARAM_RANGES_ENGINES = ("reversion", "vector", "momentum", "sentinel")
 
 
 @pytest.mark.parametrize("engine", _PARAM_RANGES_ENGINES)
@@ -21,15 +25,16 @@ def test_each_param_ranges_engine_default_keyset_equals_param_ranges(engine):
         assert v is not None
 
 
-def test_sentinel_canary_have_no_accessor():
-    # sentinel/canary have NO search space (not in PARAM_RANGES) ⇒ no
-    # backtest.default_params accessor (spec §7.1).
+def test_canary_has_no_accessor():
+    # canary has NO search space (not in PARAM_RANGES, non-graduating by
+    # construction) ⇒ no backtest.default_params accessor (spec §7.1).
+    # sentinel MOVED into the parametrized parity set above (SP-E gave it
+    # a declared LAB_TARGET — it is now a real Lab target).
     import importlib
-    for engine in ("sentinel", "canary"):
-        mod = importlib.import_module(f"{engine}.backtest")
-        assert not hasattr(mod, "default_params"), (
-            f"{engine}: has no PARAM_RANGES search space — must NOT expose "
-            f"default_params()")
+    mod = importlib.import_module("canary.backtest")
+    assert not hasattr(mod, "default_params"), (
+        "canary: has no PARAM_RANGES search space — must NOT expose "
+        "default_params()")
 
 
 def test_dispatcher_rejects_unknown_engine():
