@@ -59,10 +59,20 @@ def _next_step(r: LabResult) -> str:
     if r.recommended_exit == "none":
         return "- Verdict FAILED — iterate; nothing to graduate."
     if r.recommended_exit == "fold_existing":
-        return (f"- Fold the §2 param diff into `{r.target_engine}` "
-                f"(SP3 Engine Change Request → re-gate). Lab does not apply it.")
-    return ("- Promote to a new engine via tpcore/templates/engine_template/ "
-            "+ engine_readiness (SP3). Lab does not scaffold it.")
+        return (
+            f"- Fold the §2 param diff into `{r.target_engine}` "
+            f"(SP3 Engine Change Request → re-gate). Lab does not apply it.\n"
+            "- Readiness gate: this candidate must have passed "
+            "`docs/superpowers/checklists/lab_candidate_readiness.md` "
+            "BEFORE the run (the Lab-lane sibling of engine_readiness; "
+            "a candidate cannot bypass it the way an engine ADD cannot "
+            "bypass engine_readiness).")
+    return (
+        "- Promote to a new engine via tpcore/templates/engine_template/ "
+        "+ engine_readiness (SP3). Lab does not scaffold it.\n"
+        "- Readiness gate: this candidate must have passed "
+        "`docs/superpowers/checklists/lab_candidate_readiness.md` BEFORE "
+        "the run (the pre-run Lab-lane sibling of engine_readiness).")
 
 
 def dossier_path(r: LabResult) -> Path:
