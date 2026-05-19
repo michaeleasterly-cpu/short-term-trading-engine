@@ -606,6 +606,8 @@ def test_sp_a2_t_crosstrial_matrix_changes_dsr_via_v() -> None:
     )
     rep_fb = diag_fb.run()
     expected_v = float(np.var(_column_sharpes(matrix), ddof=1))
+    # ddof-pin (underflow-immune): direct V compare; T-CROSSTRIAL's DSR-level assert is masked by ~1e-239 underflow (spec-review SP-A2 T3).
+    assert abs(diag_v._trial_sharpe_variance() - float(np.var(_column_sharpes(matrix), ddof=1))) < 1e-12
     pnls = np.array([t["pnl_pct"] for t in trades], dtype=float)
     sk, ku = _moments(pnls)
     want = _deflated_sharpe_ratio(
