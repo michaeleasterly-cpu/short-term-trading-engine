@@ -92,6 +92,10 @@ logger = structlog.get_logger(__name__)
 # ────────────────────────────────────────────────────────────────────────────
 
 
+# TRANSITIONAL (until SP-B T4 makes this a lazy view): each entry is a
+# byte-mirror of <engine>.backtest.LAB_TARGET.param_ranges. Edit the engine's
+# LAB_TARGET, NOT here — they must stay byte-identical (T3↔T4 desync =
+# live-money param drift).
 PARAM_RANGES: dict[str, dict[str, tuple]] = {
     # Sigma archived 2026-05-16 — its FINAL test (#168, failed-expansion
     # redesign) FAILED decisively (DSR 0.0000, held-back 2020-2026

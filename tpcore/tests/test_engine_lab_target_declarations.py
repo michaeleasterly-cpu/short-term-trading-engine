@@ -18,6 +18,33 @@ _T0_PARAM_RANGES_KEYSETS: dict[str, list[str]] = {
     "momentum": ["hold_days", "lookback_days", "skip_days", "top_decile_pct"],
 }
 
+# FULL-TUPLE T0 byte-parity oracle: the exact {key: (low, high, kind)} dicts
+# as they lived in ops.lab.run.PARAM_RANGES on the un-refactored tree (Task 0),
+# captured verbatim. Exact dict equality below means a single-location bound
+# edit (engine LAB_TARGET *or* run.py mirror) reds CI — the spec's byte-parity
+# requirement is now guarded at the value level, not just shape/keyset.
+_T0_PARAM_RANGES_FULL: dict[str, dict[str, tuple]] = {
+    "reversion": {
+        "z_threshold": (2.0, 4.0, "float"),
+        "volume_climax_multiplier": (1.2, 3.0, "float"),
+        "max_hold_days": (3, 12, "int"),
+        "stop_pct": (0.04, 0.12, "float"),
+    },
+    "vector": {
+        "pb_ceiling": (1.5, 3.5, "float"),
+        "de_ceiling": (1.5, 4.0, "float"),
+        "catalyst_window_days": (3, 10, "int"),
+        "swing_score_threshold": (55.0, 75.0, "float"),
+        "stop_pct": (0.04, 0.10, "float"),
+    },
+    "momentum": {
+        "lookback_days": (200, 280, "int"),
+        "skip_days": (15, 30, "int"),
+        "hold_days": (15, 30, "int"),
+        "top_decile_pct": (0.05, 0.20, "float"),
+    },
+}
+
 
 @pytest.mark.parametrize("engine", ["reversion", "vector", "momentum"])
 def test_engine_declares_valid_lab_target(engine):
@@ -36,20 +63,14 @@ def test_engine_declares_valid_lab_target(engine):
 
 
 @pytest.mark.parametrize("engine", ["reversion", "vector", "momentum"])
-def test_lab_target_values_byte_match_old_param_ranges(engine):
-    """The (low, high, kind) tuples are byte-identical to the values
-    that lived in ops.lab.run.PARAM_RANGES — no behavioural drift."""
-    import importlib as _il
-
-    mod = _il.import_module(f"{engine}.backtest")
-    # Reconstruct the OLD literal from git's pre-refactor copy is overkill;
-    # the run.py lazy Mapping (Task 4) will resolve THROUGH these, and the
-    # characterization oracle pins reversion's keyset. Here we pin the
-    # values are 3-tuples with a valid kind (LabTarget already enforces;
-    # this is the engine-side regression pin).
-    for _name, spec in mod.LAB_TARGET.param_ranges.items():
-        assert isinstance(spec, tuple) and len(spec) == 3
-        assert spec[2] in ("float", "int") or spec[2].startswith("choice:")
+def test_lab_target_param_ranges_full_value_byte_parity(engine):
+    """The full {key: (low, high, kind)} dict is byte-identical to the
+    inlined T0 oracle (the values that lived in ops.lab.run.PARAM_RANGES
+    pre-refactor). Exact dict equality — a single-location bound edit in
+    either the engine LAB_TARGET or the run.py mirror reds CI (the spec's
+    byte-parity requirement, guarded at the value level not just shape)."""
+    mod = importlib.import_module(f"{engine}.backtest")
+    assert mod.LAB_TARGET.param_ranges == _T0_PARAM_RANGES_FULL[engine]
 
 
 def test_live_import_surface_does_not_import_lab_target():

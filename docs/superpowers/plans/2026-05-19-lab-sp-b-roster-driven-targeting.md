@@ -503,6 +503,33 @@ _T0_PARAM_RANGES_KEYSETS: dict[str, list[str]] = {
     "momentum": ["hold_days", "lookback_days", "skip_days", "top_decile_pct"],
 }
 
+# FULL-TUPLE T0 byte-parity oracle: the exact {key: (low, high, kind)} dicts
+# as they lived in ops.lab.run.PARAM_RANGES on the un-refactored tree (Task 0),
+# captured verbatim. Exact dict equality below means a single-location bound
+# edit (engine LAB_TARGET *or* run.py mirror) reds CI — the spec's byte-parity
+# requirement is now guarded at the value level, not just shape/keyset.
+_T0_PARAM_RANGES_FULL: dict[str, dict[str, tuple]] = {
+    "reversion": {
+        "z_threshold": (2.0, 4.0, "float"),
+        "volume_climax_multiplier": (1.2, 3.0, "float"),
+        "max_hold_days": (3, 12, "int"),
+        "stop_pct": (0.04, 0.12, "float"),
+    },
+    "vector": {
+        "pb_ceiling": (1.5, 3.5, "float"),
+        "de_ceiling": (1.5, 4.0, "float"),
+        "catalyst_window_days": (3, 10, "int"),
+        "swing_score_threshold": (55.0, 75.0, "float"),
+        "stop_pct": (0.04, 0.10, "float"),
+    },
+    "momentum": {
+        "lookback_days": (200, 280, "int"),
+        "skip_days": (15, 30, "int"),
+        "hold_days": (15, 30, "int"),
+        "top_decile_pct": (0.05, 0.20, "float"),
+    },
+}
+
 
 @pytest.mark.parametrize("engine", ["reversion", "vector", "momentum"])
 def test_engine_declares_valid_lab_target(engine):
@@ -521,20 +548,14 @@ def test_engine_declares_valid_lab_target(engine):
 
 
 @pytest.mark.parametrize("engine", ["reversion", "vector", "momentum"])
-def test_lab_target_values_byte_match_old_param_ranges(engine):
-    """The (low, high, kind) tuples are byte-identical to the values
-    that lived in ops.lab.run.PARAM_RANGES — no behavioural drift."""
-    import importlib as _il
-
-    mod = _il.import_module(f"{engine}.backtest")
-    # Reconstruct the OLD literal from git's pre-refactor copy is overkill;
-    # the run.py lazy Mapping (Task 4) will resolve THROUGH these, and the
-    # characterization oracle pins reversion's keyset. Here we pin the
-    # values are 3-tuples with a valid kind (LabTarget already enforces;
-    # this is the engine-side regression pin).
-    for _name, spec in mod.LAB_TARGET.param_ranges.items():
-        assert isinstance(spec, tuple) and len(spec) == 3
-        assert spec[2] in ("float", "int") or spec[2].startswith("choice:")
+def test_lab_target_param_ranges_full_value_byte_parity(engine):
+    """The full {key: (low, high, kind)} dict is byte-identical to the
+    inlined T0 oracle (the values that lived in ops.lab.run.PARAM_RANGES
+    pre-refactor). Exact dict equality — a single-location bound edit in
+    either the engine LAB_TARGET or the run.py mirror reds CI (the spec's
+    byte-parity requirement, guarded at the value level not just shape)."""
+    mod = importlib.import_module(f"{engine}.backtest")
+    assert mod.LAB_TARGET.param_ranges == _T0_PARAM_RANGES_FULL[engine]
 
 
 def test_live_import_surface_does_not_import_lab_target():
@@ -558,8 +579,8 @@ Expected: FAIL — `AssertionError: reversion: no module-level LAB_TARGET` (the 
 In `reversion/backtest.py`, immediately after `run_for_search` ends (line `:1102`, the blank line before the `# Main` divider at `:1104`), insert:
 ```python
 # ────────────────────────────────────────────────────────────────────────────
-# SP-B — Lab targeting declaration (engine-OWNED; the live path never
-# imports this; resolved lazily by ops.lab.run._lab_target_for).
+# SP-B — Lab targeting declaration (engine-OWNED; resolved by ops.lab.run
+# (SP-B T4 roster-driven resolver); the live trading path never imports this).
 # ────────────────────────────────────────────────────────────────────────────
 # NOTE (applied per Step-3 NOTE fallback): `from tpcore.lab.target import
 # LabTarget` is hoisted to the top `from tpcore...` import block with no
@@ -583,12 +604,15 @@ LAB_TARGET = LabTarget(
 
 > Plan correction (applied during SP-B T3 exec): the embedded Step-1 test loop was changed from `for name, spec` to `for _name, spec` because the loop var is unused — ruff B007 (`B` is selected; `tests/**` ignores only E741/E702) reds the as-written block, and the shipped test uses `_name`. The embedded engine blocks (Step 3/4/5) were aligned to the hoisted top-import form with no `# noqa`, which is this NOTE's own sanctioned Step-3 fallback (ruff E402 forced it — not a free authoring choice) and matches what shipped.
 
+> Plan correction (applied during SP-B T3 code-quality review): four adjudicated fixes — (1) Important #1: a one-line TRANSITIONAL banner was added immediately above `ops/lab/run.py::PARAM_RANGES` flagging each entry as a byte-mirror of `<engine>.backtest.LAB_TARGET.param_ranges` (edit the engine, not run.py) until T4 makes it a lazy view — closing a silent T3↔T4 live-money desync hole (no tuple value changed). (2) Important #2: `test_lab_target_values_byte_match_old_param_ranges` only asserted 3-tuple shape + valid kind (already enforced by `LabTarget.model_post_init`) so a single-location bound edit would NOT red CI; it was renamed `test_lab_target_param_ranges_full_value_byte_parity` and rewritten to assert exact dict equality against a new FULL-TUPLE inlined `_T0_PARAM_RANGES_FULL` oracle (captured verbatim from the un-refactored tree), proven non-tautological (a throwaway reversion `z_threshold` bound edit reds it, then reverted). (3) Minor #3: the three engine `LAB_TARGET` banner comments were made identical and the forward-reference softened (no longer pins the not-yet-existing `_lab_target_for`; now "resolved by ops.lab.run (SP-B T4 roster-driven resolver); the live trading path never imports this") — the copy-pattern for future engine authors; embedded Step 1/3/4/5 blocks above updated to match. (4) Minor #4: the dead `import importlib as _il` aliased re-import was removed in favour of the module-level `import importlib` already in scope.
+
 - [ ] **Step 4: Write minimal implementation — vector**
 
 In `vector/backtest.py`, after `run_for_search` ends (it is the last def before `if __name__`), insert the same block but with vector's params + symbols:
 ```python
 # ────────────────────────────────────────────────────────────────────────────
-# SP-B — Lab targeting declaration (engine-OWNED; live path never imports).
+# SP-B — Lab targeting declaration (engine-OWNED; resolved by ops.lab.run
+# (SP-B T4 roster-driven resolver); the live trading path never imports this).
 # ────────────────────────────────────────────────────────────────────────────
 # NOTE (applied per Step-3 NOTE fallback): `from tpcore.lab.target import
 # LabTarget` is hoisted to the top `from tpcore...` import block, no `# noqa`.
@@ -613,7 +637,8 @@ LAB_TARGET = LabTarget(
 In `momentum/backtest.py`, after `run_for_search` ends, insert:
 ```python
 # ────────────────────────────────────────────────────────────────────────────
-# SP-B — Lab targeting declaration (engine-OWNED; live path never imports).
+# SP-B — Lab targeting declaration (engine-OWNED; resolved by ops.lab.run
+# (SP-B T4 roster-driven resolver); the live trading path never imports this).
 # ────────────────────────────────────────────────────────────────────────────
 # NOTE (applied per Step-3 NOTE fallback): `from tpcore.lab.target import
 # LabTarget` is hoisted to the top `from tpcore...` import block, no `# noqa`.

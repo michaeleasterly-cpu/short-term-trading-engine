@@ -550,7 +550,8 @@ async def run_for_search(
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# SP-B — Lab targeting declaration (engine-OWNED; live path never imports).
+# SP-B — Lab targeting declaration (engine-OWNED; resolved by ops.lab.run
+# (SP-B T4 roster-driven resolver); the live trading path never imports this).
 # ────────────────────────────────────────────────────────────────────────────
 
 LAB_TARGET = LabTarget(
