@@ -1142,10 +1142,11 @@ git commit -m "refactor(lab-sp-b): roster-SoT dispatch resolver + lazy PARAM_RAN
 > 1. **Hollow red-proof.** As originally written the test SKIPS `sentinel` in the `run.py` loop (`if good == "sentinel": continue`) and never asserts `sentinel` acceptance on the `__main__.py` surface. With the pre-SP-B literal `("reversion","vector","momentum")` every assertion still PASSES (bad choices rejected; the three literal members accepted; sentinel never exercised), so Step-2 "Expected: FAIL" is FALSE — the test does not discriminate the literal from the accessor. Corrected: both surface tests now `assert "sentinel" in lab_targetable_engines()` and loop ALL accessor members (no skip), so accepting the eligible-but-undeclared `sentinel` is the genuine discriminator. **Verified red-proof:** the strengthened test FAILS against the old literal (argparse rejects `sentinel` → `SystemExit` where acceptance is asserted) and PASSES against the accessor.
 > 2. **Missing SLF baseline.** The test calls `ops.lab.run._parse_args` / `ops.lab.__main__._parse_args` (engine-lane-module-private, NOT tpcore-private — that IS its purpose). Per CLAUDE.md/STYLE_GUIDE the canonical form is a pyproject per-file-ignore (never an inline `# noqa: SLF001`), mirroring the `test_lab_dispatch_indirection.py` / frozen-oracle precedents already in `[tool.ruff.lint.per-file-ignores]`. Added `pyproject.toml` to the Files list + Step 4b below; Step 1's test body is unchanged in shape (only the sentinel-skip removed + the discriminator asserts added).
 > 3. **Module-level `sys.modules` purge removed (spec-review BLOCKER, 2026-05-20).** The collection-time `del sys.modules["ops"|"ops.*"]` (originally lines 15-17, shown above pre-correction) was removed as an oracle-drift footgun found in spec review: under single-process `-p no:xdist` it diverged `sys.modules['ops.lab.run']` from the byte-frozen oracle's `sp.amain.__globals__` and red the oracle's `test_amain_*` — and the no-eager-import guarantee was never carried by that in-process eviction anyway but by the already-present pristine-subprocess probe (`test_import_ops_lab_main_eager_imports_no_engine`), which needs no in-process purge. (The residual `test_lab_ntrials_ledger.py`/`test_overfitting.py`↔oracle collection-isolation fragility is a SEPARATE pre-existing #148-class defect — reproduced at base `862b64f`/`ab07f13` with zero SP-B-T4/T5 files — not introduced or fixed here.)
+> 4. **T5 code-quality hardening (2026-05-20, post-merge regression-net strengthening — no re-architecture).** Three adjudicated items applied to the shipped test + `ops/lab/run.py` (the embedded Step-1 test body + Step-3 snippet below were updated to match shipped): **(Important #1)** the test now introspects the SHIPPED parser (via a transient `argparse.ArgumentParser.parse_args` spy that captures the real built parser instance `_parse_args` constructs) and asserts the `--engine` (run.py) / `--target-engine` (`__main__.py`) action `choices` equal `tuple(lab_targetable_engines())` EXACTLY (order-sensitive tuple equality) — accept/reject probing alone could not catch a SUPERSET drift (accessor + a re-added stale literal); proven non-tautological (a throwaway `choices=tuple(lab_targetable_engines())+("zzz",)` on run.py reds the exact-tuple assert with `Left contains one more item: 'zzz'`, then reverted, `git diff` clean). The engine-module-private parser introspection is covered by the existing scoped per-file SLF ignore — no inline `# noqa`, ignore not widened. **(Important #2)** the no-eager-import pristine-subprocess probe now builds BOTH shipped parsers in-subprocess (`run._parse_args(['--engine','reversion'])` and `m._parse_args(['--candidate','c','--target-engine','reversion','--intent','promote_new'])`) BEFORE the `sys.modules` engine-leak scan, so the guarantee actually covers the SP-B-changed path (the `lab_targetable_engines()` call happens at parser build, which the old import-only probe never exercised); still a single clean subprocess; proven non-tautological (a throwaway `import reversion.backtest` inside `run._parse_args` reds the probe with the leaked `reversion.*` modules, then reverted). **(Minor)** `ops/lab/run.py`'s `--engine` gained a concise `help=` mirroring the `__main__.py` `--target-engine` SP-B help intent (roster-derived; choices from the engine_profile SoT). `pyproject.toml` SLF per-file-ignore unchanged/not-widened; no SP-A or other-task files touched.
 
 - [ ] **Step 1: Write the failing test**
 
-Create `tpcore/tests/test_lab_cli_choices_from_roster.py`:
+Create `tpcore/tests/test_lab_cli_choices_from_roster.py` (shown as SHIPPED — includes the Plan-correction-4 Important #1/#2 hardening):
 ```python
 """SP-B — both argparse choices sites are GENERATED from
 lab_targetable_engines() (not a literal copy) and importing
@@ -1153,6 +1154,7 @@ ops.lab.__main__ still eager-imports NO engine (spec §2.5, §4.8).
 """
 from __future__ import annotations
 
+import argparse
 import subprocess
 import sys
 from pathlib import Path
@@ -1165,24 +1167,48 @@ sys.path.insert(0, str(REPO_ROOT))
 pytestmark = pytest.mark.xdist_group("ops_shadow")
 
 
+def _capture_built_parser(parse_args_fn, argv: list[str]):
+    """Call ``parse_args_fn(argv)`` and return the argparse parser object it
+    actually built (transient ``ArgumentParser.parse_args`` spy capturing
+    ``self``) — pins the SHIPPED parser so a SUPERSET drift reds."""
+    captured: dict[str, argparse.ArgumentParser] = {}
+    orig = argparse.ArgumentParser.parse_args
+
+    def _spy(self, *a, **kw):
+        captured["parser"] = self
+        return orig(self, *a, **kw)
+
+    argparse.ArgumentParser.parse_args = _spy
+    try:
+        parse_args_fn(argv)
+    finally:
+        argparse.ArgumentParser.parse_args = orig
+    return captured["parser"]
+
+
+def _choices_of(parser: argparse.ArgumentParser, option: str) -> tuple:
+    for act in parser._actions:
+        if option in act.option_strings:
+            return tuple(act.choices)
+    raise AssertionError(f"no argparse action with option {option!r}")
+
+
 def test_run_py_engine_choices_are_the_accessor():
     import ops.lab.run as run
     from tpcore.engine_profile import lab_targetable_engines
 
     a = run._parse_args(["--engine", "reversion"])
     assert a.engine == "reversion"
-    # A non-targetable choice is rejected by argparse (SystemExit) ⇒ the
-    # choices ARE the accessor, not a stale literal.
     for bad in ("canary", "sigma", "lab"):
         with pytest.raises(SystemExit):
             run._parse_args(["--engine", bad])
-    # And every accessor member is accepted by argparse — including the
-    # eligible-but-undeclared "sentinel" (argparse accepts; the resolver
-    # rejects it later). Accepting "sentinel" is the discriminator that
-    # proves the choices ARE the accessor, not the stale literal triple.
     assert "sentinel" in lab_targetable_engines()
     for good in lab_targetable_engines():
         run._parse_args(["--engine", good])
+    # EXACT-equality pin (Important #1): order-sensitive tuple equality
+    # vs the accessor — catches a SUPERSET drift accept/reject can't.
+    parser = _capture_built_parser(run._parse_args, ["--engine", "reversion"])
+    assert _choices_of(parser, "--engine") == tuple(lab_targetable_engines())
 
 
 def test_main_py_target_engine_choices_are_the_accessor():
@@ -1196,22 +1222,34 @@ def test_main_py_target_engine_choices_are_the_accessor():
         with pytest.raises(SystemExit):
             m._parse_args(["--candidate", "c", "--target-engine", bad,
                            "--intent", "promote_new"])
-    # Accepting the eligible-but-undeclared "sentinel" is the discriminator
-    # that proves the choices ARE the accessor, not the stale literal.
     assert "sentinel" in lab_targetable_engines()
     for good in lab_targetable_engines():
         m._parse_args(["--candidate", "c", "--target-engine", good,
                        "--intent", "promote_new"])
+    parser = _capture_built_parser(
+        m._parse_args,
+        ["--candidate", "c", "--target-engine", "reversion",
+         "--intent", "promote_new"],
+    )
+    assert (
+        _choices_of(parser, "--target-engine")
+        == tuple(lab_targetable_engines())
+    )
 
 
 def test_import_ops_lab_main_eager_imports_no_engine():
-    """__main__.py:18-20 invariant: import ops.lab.__main__ pulls in NO
-    engine package (the choices accessor is engine-free; resolution is
-    lazy). Pristine subprocess (zero collection-order pollution)."""
+    """Importing ops.lab.__main__ AND building BOTH CLI parsers (the path
+    SP-B changed — the lab_targetable_engines() call happens at parser
+    build) pulls in NO engine. Pristine subprocess; parser-build path
+    exercised in-subprocess (Important #2)."""
     probe = (
         f"import sys; sys.path.insert(0, {str(REPO_ROOT)!r})\n"
-        "import ops.lab.__main__\n"
-        "bad=[m for m in sys.modules if m.split('.')[0] in "
+        "import ops.lab.__main__ as m\n"
+        "import ops.lab.run as run\n"
+        "m._parse_args(['--candidate','c','--target-engine','reversion',"
+        "'--intent','promote_new'])\n"
+        "run._parse_args(['--engine','reversion'])\n"
+        "bad=[mod for mod in sys.modules if mod.split('.')[0] in "
         "('reversion','vector','momentum','sentinel','canary')]\n"
         "print(bad)\n"
     )
@@ -1219,7 +1257,7 @@ def test_import_ops_lab_main_eager_imports_no_engine():
                          capture_output=True, text=True, cwd=REPO_ROOT)
     assert out.returncode == 0, out.stderr
     assert out.stdout.strip() == "[]", (
-        f"eager engine import leaked: {out.stdout!r}")
+        f"eager engine import leaked through parser build: {out.stdout!r}")
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -1233,10 +1271,14 @@ In `ops/lab/run.py` `_parse_args` (`:620`), replace:
 ```python
     p.add_argument("--engine", choices=("reversion", "vector", "momentum"), required=True)
 ```
-with:
+with (SHIPPED — includes the Plan-correction-4 Minor `help=`):
 ```python
     from tpcore.engine_profile import lab_targetable_engines
-    p.add_argument("--engine", choices=lab_targetable_engines(), required=True)
+    p.add_argument("--engine", choices=lab_targetable_engines(), required=True,
+                   help="The roster-Lab-targetable engine to search "
+                        "(choices generated from tpcore.engine_profile — "
+                        "SP-B; an eligible-but-undeclared engine is a valid "
+                        "choice but the resolver rejects it later).")
 ```
 
 - [ ] **Step 4: Implement — `ops/lab/__main__.py` argparse**
