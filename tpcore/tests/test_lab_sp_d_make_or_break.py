@@ -111,7 +111,26 @@ _PROFILES = {
 def _trade_log(choice: str, *, final_holdout: bool) -> list[_Trade]:
     p = _PROFILES[choice]
     n = p["dd_trades"] if final_holdout else 8
-    base = date(2022, 1, 3) if final_holdout else date(2019, 1, 3)
+    # > Plan correction (T5): the windowed-branch base was a T2
+    # construction defect — date(2019, 1, 3) (+ 30·i, i<8 ⇒
+    # 2019-01-03…2019-08-01) lies ENTIRELY outside the real
+    # build_walk_windows holdout window. Under the test's _ns
+    # (train_start=2018-01-01, holdout_end=2021-12-31, train_years=3,
+    # holdout_years=1, step=365) build_walk_windows yields exactly ONE
+    # window with holdout 2020-12-31…2021-12-30, and
+    # _evaluate_candidate_with_context slices trades to
+    # [holdout_start, holdout_end]. base=2019-01-03 ⇒ 0 in-window
+    # windowed trades for every candidate ⇒ _score_for_ranking returns
+    # the n_trades<3 → -1.0 floor for ALL of A/B/C ⇒ SHARPE and MAXDD
+    # both pick {'choice':'A'} ⇒ the integration make-or-break was
+    # VACUOUSLY red. date(2021, 1, 4) (+ 30·i ⇒ 2021-01-04…2021-08-02)
+    # lands ALL 8 windowed trades inside 2020-12-31…2021-12-30 so the
+    # SHARPE↔MAXDD ranking genuinely inverts through the integration
+    # path. Same defect-class + correction precedent as the prior
+    # `7c1fe4f` re-tune. The final_holdout=True branch base
+    # (date(2022, 1, 3), in the 2022-01-01…2022-12-31 final-holdout
+    # window) was already correct and is left UNCHANGED.
+    base = date(2022, 1, 3) if final_holdout else date(2021, 1, 4)
     log = []
     for i in range(n):
         if p["kind"] == "volpos":
@@ -187,6 +206,31 @@ def _install_choice_stub(monkeypatch):
     return tgt
 
 
+# > Plan correction (T5): the headline + pinned runs were authored with
+# seed=1, but the SP-D pre-spend-fence T5 wiring re-enabled the real
+# integration path and exposed a SECOND facet of the SAME T2
+# construction defect (windowed-base-date class, prior `7c1fe4f`
+# precedent). PARAM_RANGES is the lazy `_lab_target_for(engine)
+# .param_ranges` proxy, so under the choice-stub
+# `sample_parameters("reversion", 3, seed=1)` draws choices [A, C, A] —
+# `B` is NEVER sampled. With the windowed-base collapse (all candidates
+# floored to -1.0) this was masked: SHARPE and MAXDD both stable-sorted
+# to A. Once the windowed base is corrected so the windowed slice is
+# non-empty, seed=1 still cannot satisfy the offline-proven
+# `lr_m.winning_params == {"choice": "B"}` (B absent) NOR the
+# `pinned == "B"` loop (no ranked member for B). seed=6 is the smallest
+# seed for which `sample_parameters(..., 3, seed)` + the per-window
+# `random.Random(seed+1).sample` together draw ALL THREE of A/B/C, so
+# the §8-A15 offline proof (SHARPE→A, MAXDD→B) holds through the REAL
+# _run_lab_core path. This changes ONLY T2 test scaffolding (the `_ns`
+# seed at the headline/pinned call sites) — NOT the levers/_PROFILES,
+# the final_holdout=True branch, the scorers, the SACRED gate, or the
+# T5 wiring. The adversarial test stays seed=1: it keys off n_trades<5
+# (not on B being sampled) and only needs C as a real windowed member,
+# which it is under the corrected base.
+_CANDIDATE_COMPLETE_SEED = 6
+
+
 def _ns(output, *, seed):
     return argparse.Namespace(
         engine="reversion", trials=3, per_window_trials=3,
@@ -227,6 +271,81 @@ async def _run_once(monkeypatch, tmp_path, *, metric_name, seed):
         candidate=_candidate(f"exp-{metric_name}"), core=core,
         args=_ns(tmp_path / f"{metric_name}2.csv", seed=seed))
     return core, lr
+
+
+async def _assert_integration_non_vacuity(monkeypatch, tmp_path):
+    """> Plan correction (T5): an INTEGRATION-level non-vacuity guard.
+
+    `test_step0_non_vacuity_preconditions` calls `rank_candidates`
+    DIRECTLY on hand-built TrialResults, so it structurally CANNOT catch
+    a window-date-slicing collapse on the real
+    `_run_lab_core`/`_evaluate_candidate_with_context` path — that is
+    exactly the blind spot that let the windowed-base-date T2 defect
+    (every windowed slice → 0 in-window trades → all candidates floored
+    → SHARPE and MAXDD both pick A) hide as a VACUOUS green.
+
+    This guard closes that gap: it drives the REAL `_run_lab_core`
+    integration path (via `_run_once`) with a spy wrapped around the
+    real `_evaluate_candidate_with_context`, recording the
+    in-window windowed trade count actually produced by the production
+    window-slicing for EACH of A/B/C, and asserts BEFORE the main
+    make-or-break assertion that (i) every one of A/B/C has ≥3 in-window
+    windowed trades on the integration path (NOT the ranking floor) and
+    (ii) the SHARPE-run headline winner ≠ the MAXDD-run headline winner
+    (a genuine metric-driven inversion). Either failure is a HARD
+    `pytest.fail` (ERROR, never a silent/skip pass) so a future
+    construction regression that re-collapses the integration path is
+    caught loudly here, not laundered as a vacuous green.
+    """
+    seen: dict[str, int] = {}
+    real_eval = lab_run._evaluate_candidate_with_context
+
+    def _spy(*, trial_id, window, parameters, context, ctx_runner):
+        tr = real_eval(
+            trial_id=trial_id, window=window, parameters=parameters,
+            context=context, ctx_runner=ctx_runner)
+        # tr.holdout.n_trades is the count AFTER the production
+        # window.holdout_start<=t.entry_date<=window.holdout_end slice —
+        # i.e. the genuine in-window windowed trade count.
+        ch = (parameters or {}).get("choice", "A")
+        seen[ch] = max(seen.get(ch, 0), tr.holdout.n_trades)
+        return tr
+
+    monkeypatch.setattr(
+        "ops.lab.run._evaluate_candidate_with_context", _spy)
+    _cs, lr_s = await _run_once(
+        monkeypatch, tmp_path, metric_name="sharpe",
+        seed=_CANDIDATE_COMPLETE_SEED)
+    _cm, lr_m = await _run_once(
+        monkeypatch, tmp_path, metric_name="maxdd_reduction",
+        seed=_CANDIDATE_COMPLETE_SEED)
+    monkeypatch.undo()
+
+    missing = [c for c in ("A", "B", "C") if seen.get(c, 0) < 3]
+    if missing:
+        pytest.fail(
+            "VACUOUS (integration path): candidate(s) "
+            f"{missing} have <3 in-window windowed trades through the "
+            f"REAL _run_lab_core/_evaluate_candidate_with_context slice "
+            f"(seen={seen}) — every windowed trial is ranking-floored, "
+            "so SHARPE and MAXDD cannot genuinely disagree. This is the "
+            "windowed-base-date T2 collapse class; the make-or-break "
+            "below would be a vacuous green.")
+    if lr_s.winning_params == lr_m.winning_params:
+        pytest.fail(
+            "VACUOUS (integration path): the SHARPE-run and MAXDD-run "
+            f"headline winners COINCIDE ({lr_s.winning_params!r}) "
+            "through the real integration path — the ranking metric did "
+            "NOT re-order anything, so metric-invariance of the gate "
+            "4-tuple would be trivially (vacuously) true.")
+    # The same offline-proven inversion, but proven HERE through the
+    # real integration path (not rank_candidates in isolation).
+    assert lr_s.winning_params == {"choice": "A"}, (
+        f"integration SHARPE winner {lr_s.winning_params!r} != "
+        "{'choice': 'A'} — §8-A15 offline proof broken on the real path")
+    assert lr_m.winning_params == {"choice": "B"}, (
+        f"integration MAXDD winner {lr_m.winning_params!r} != "
+        "{'choice': 'B'} — §8-A15 offline proof broken on the real path")
 
 
 async def test_step0_non_vacuity_preconditions(monkeypatch, tmp_path):
@@ -310,10 +429,21 @@ async def test_make_or_break_gate_invariant_over_ecr_tuple(
     between the two metric runs — the gate verdict does NOT move when
     only the ranking metric changes (that IS the make-or-break). Only
     WHICH candidate sits at ranked[0] (the headline) differs."""
+    # > Plan correction (T5): INTEGRATION-level non-vacuity guard FIRST —
+    # closes the coverage gap the windowed-base-date T2 defect exploited
+    # (the unit step-0 guard calls rank_candidates directly and cannot
+    # see a real-path window-slicing collapse). Hard-ERRORs (never a
+    # silent pass) if any of A/B/C has <3 in-window windowed trades on
+    # the REAL _run_lab_core path or the SHARPE/MAXDD winners stop
+    # diverging.
+    await _assert_integration_non_vacuity(monkeypatch, tmp_path)
+
     core_s, lr_s = await _run_once(
-        monkeypatch, tmp_path, metric_name="sharpe", seed=1)
+        monkeypatch, tmp_path, metric_name="sharpe",
+        seed=_CANDIDATE_COMPLETE_SEED)
     core_m, lr_m = await _run_once(
-        monkeypatch, tmp_path, metric_name="maxdd_reduction", seed=1)
+        monkeypatch, tmp_path, metric_name="maxdd_reduction",
+        seed=_CANDIDATE_COMPLETE_SEED)
 
     # Step 4 (pluggability): the metric genuinely re-orders — the two
     # runs' headline winners DIFFER (else the proof is vacuous: nothing
@@ -355,12 +485,14 @@ async def test_make_or_break_gate_invariant_over_ecr_tuple(
                             raising=True)
         async with LabContext(db_url="postgres://fake/db"):
             core = await lab_run._run_lab_core(
-                _ns(tmp_path / f"{metric_name}_{pinned}.csv", seed=1),
+                _ns(tmp_path / f"{metric_name}_{pinned}.csv",
+                    seed=_CANDIDATE_COMPLETE_SEED),
                 candidate=f"exp_{metric_name}_{pinned}")
         assert not isinstance(core, int)
         lr = lab_run._build_lab_result(
             candidate=_candidate(f"exp-{metric_name}-{pinned}"), core=core,
-            args=_ns(tmp_path / f"{metric_name}_{pinned}2.csv", seed=1))
+            args=_ns(tmp_path / f"{metric_name}_{pinned}2.csv",
+                     seed=_CANDIDATE_COMPLETE_SEED))
         return lr
 
     for pinned in ("A", "B", "C"):
@@ -413,10 +545,24 @@ async def test_make_or_break_adversarial_through_both_gates(
             update={"primary_metric": LabPrimaryMetric.MAXDD_REDUCTION}))
 
     def _adversarial(m):
-        # +1e9 for the C-shaped slice (n_trades small in final holdout but
-        # finite windowed score), -1e9 otherwise. Keyed off n_trades<5 so it
-        # is metric-value adversarial without touching the gate.
-        return 1e9 if m.n_trades < 5 else -1e9
+        # > Plan correction (T5): the prior `n_trades < 5` predicate was a
+        # THIRD facet of the windowed-base-date T2 defect — it only ever
+        # singled C out because the broken base made EVERY windowed slice
+        # n_trades==0 (<5). With the corrected windowed base every
+        # windowed slice has n_trades==8, so `n_trades<5` is uniformly
+        # False and the adversarial degenerates to a stable-sort no-op
+        # (it would pick A, not C). The adversarial intent is unchanged
+        # (maximize the gate-FAILING C-shaped slice); we now key off C's
+        # UNIQUE windowed max_drawdown signature instead: C's windowed
+        # slice is the only one with -0.045 < max_drawdown < 0.0
+        # (A==-0.045 → `> -0.045` excludes it; B==0.0 → `< 0.0` excludes
+        # it; C==-0.015 selected). Still purely metric-VALUE adversarial,
+        # still keyed off a windowed-slice attribute, still does NOT touch
+        # the SACRED gate (the ranking value never reaches `survived`,
+        # §1.2). The 1-trade resolve-fence probe (n_trades=3, all-0.0
+        # metrics) yields max_drawdown==0.0 → not in the open interval →
+        # -1e9, so the pre-spend fence still passes (no exception).
+        return 1e9 if -0.045 < m.max_drawdown < 0.0 else -1e9
 
     monkeypatch.setitem(
         lab_run._RANKING_METRICS, LabPrimaryMetric.MAXDD_REDUCTION,
@@ -429,13 +575,14 @@ async def test_make_or_break_adversarial_through_both_gates(
     monkeypatch.setattr("tpcore.db.build_asyncpg_pool", _fb, raising=True)
     async with LabContext(db_url="postgres://fake/db"):
         core = await lab_run._run_lab_core(
-            _ns(tmp_path / "adv.csv", seed=1), candidate="exp_adv")
+            _ns(tmp_path / "adv.csv", seed=_CANDIDATE_COMPLETE_SEED),
+            candidate="exp_adv")
     assert not isinstance(core, int)
     assert core.winner_params == {"choice": "C"}      # adversarial picked C
     assert core.survived is False                     # in-core gate rejects
     lr = lab_run._build_lab_result(
         candidate=_candidate("exp-adv"), core=core,
-        args=_ns(tmp_path / "adv2.csv", seed=1))
+        args=_ns(tmp_path / "adv2.csv", seed=_CANDIDATE_COMPLETE_SEED))
     assert lr.verdict == "FAILED"
     assert lr.recommended_exit == "none"
 
@@ -443,10 +590,30 @@ async def test_make_or_break_adversarial_through_both_gates(
     # lr.verdict != "SURVIVED" inside planner._validate_modify.
     from ops.engine_sdlc.planner import _validate_modify
 
-    sidecar = tmp_path / "2026-05-20-exp-adv-FAILED-seed1.json"
+    # > Plan correction (T5): the sidecar filename's `seedN` token must
+    # match the seed embedded in the LabResult JSON (H-S3-6b identity
+    # freshness: planner re-parses the seed from the cited dossier path
+    # and hard-rejects a mismatch). It is derived from
+    # _CANDIDATE_COMPLETE_SEED — not the stale literal `seed1` — so the
+    # T5 seed correction does not desync the downstream identity check.
+    sidecar = (
+        tmp_path
+        / f"2026-05-20-exp-adv-FAILED-seed{_CANDIDATE_COMPLETE_SEED}.json"
+    )
     sidecar.write_text(lr.model_dump_json())
 
+    # > Plan correction (T5): the prior `_ECR` stub omitted `action`,
+    # which `planner._reject` reads to build the rejection TransitionPlan
+    # (`TransitionPlan(action=ecr.action, …)`). This was masked because
+    # the windowed-base-date defect + the stale `seed1` sidecar token
+    # short-circuited the test before it ever reached the §0.2a
+    # `_reject(ecr, f"sidecar verdict {lr.verdict} != SURVIVED")` branch.
+    # With the integration path now genuinely exercised, the stub must
+    # carry a real ECRAction (MODIFY — this drives `_validate_modify`).
+    from ops.engine_sdlc.ecr import ECRAction
+
     class _ECR:
+        action = ECRAction.MODIFY
         engine = "reversion"
         lab_dossier = str(sidecar.with_suffix(".md"))
         param_change = {}

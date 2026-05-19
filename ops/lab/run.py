@@ -557,6 +557,35 @@ def rank_candidates(
     return ranked
 
 
+def _resolve_ranking_metric(
+    engine: str,
+) -> tuple[LabPrimaryMetric, Callable[[SliceMetrics], float]]:
+    """SP-D §4.3 — the PURE, side-effect-free pre-spend fence.
+
+    Resolves the engine's declared ``primary_metric`` via the already-
+    idempotent ``_lab_target_for`` and proves its ``_RANKING_METRICS``
+    entry is a real implementation (NOT the ``_unimplemented_metric``
+    sentinel) WITHOUT executing it. A reserved-but-unimplemented
+    declaration raises the clear ``ValueError`` HERE — invoked strictly
+    before the SP-A ``record_trial_spend`` block — so a reserved
+    declaration never burns a cumulative-trial increment (the SP-B
+    'spend then crash' footgun class, §8-A4). Returns the metric + its
+    resolved callable so the caller threads it into ``rank_candidates``
+    without re-resolving."""
+    metric = _lab_target_for(engine).primary_metric
+    fn = _RANKING_METRICS[metric]
+    # Probe-only: a 1-trade SliceMetrics is below the n_trades<3 floor so
+    # _score_for_ranking would never call fn — but the SENTINEL must
+    # still fail-loud here, so call fn directly on a probe metrics value.
+    # A real mapping (SHARPE/MAXDD_REDUCTION) is a pure arithmetic lambda;
+    # the sentinel raises. This proves implementability without a ledger
+    # spend and without depending on _score_for_ranking's floor.
+    _probe = SliceMetrics(n_trades=3, sharpe=0.0, profit_factor=1.0,
+                          max_drawdown=0.0, win_rate=0.0)
+    fn(_probe)  # raises ValueError iff `metric` is reserved-unimplemented
+    return metric, fn
+
+
 # ────────────────────────────────────────────────────────────────────────────
 # DSR for final verdict
 # ────────────────────────────────────────────────────────────────────────────
@@ -855,6 +884,17 @@ async def _run_lab_core(
     candidates = sample_parameters(args.engine, args.trials, seed=args.seed)
     print(f"  → sampled {len(candidates)} parameter combinations  (seed={args.seed})")
 
+    # SP-D §4.3 — the PINNED pre-spend fence. Resolve (and prove
+    # implementable) the declared ranking metric HERE: strictly AFTER
+    # sample_parameters (so a malformed-param_ranges _lab_target_for
+    # reject still precedes it, unchanged) and strictly BEFORE the SP-A
+    # record_trial_spend block below — a reserved-but-unimplemented
+    # metric fail-louds before any cumulative-ledger increment is burned
+    # (the SP-B 'spend then crash' footgun class, §8-A4). Resolved ONCE
+    # and threaded into rank_candidates below; NOT re-resolved at the
+    # winner-selection call site.
+    _ranking_metric, _ = _resolve_ranking_metric(args.engine)
+
     # SP-A H-LL-1 (the §3.2 spine): record this run's trial SPEND as its
     # own UNCONDITIONAL append-only fact, RIGHT HERE — before the DSR
     # code and before EVERY non-result rc return below (no DSN already
@@ -950,7 +990,7 @@ async def _run_lab_core(
     write_results_csv(out_path, trials)
     print(f"per-trial results → {out_path}\n")
 
-    ranked = rank_candidates(trials)
+    ranked = rank_candidates(trials, _ranking_metric)
     if not ranked:
         print("FAILED: no trial produced any rankable result (all errored or had < 3 trades).")
         return 1  # noqa: RET504 — oracle-pinned non-result rc

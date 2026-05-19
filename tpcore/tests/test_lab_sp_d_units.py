@@ -179,3 +179,73 @@ def test_score_maxdd_reduction_zero_drawdown_is_finite_max_and_ranks_first():
     assert math.isfinite(flawless_score)
     assert flawless_score > sp._score_for_ranking(
         drawn, LabPrimaryMetric.MAXDD_REDUCTION)
+
+
+async def test_reserved_metric_rejects_before_any_ledger_spend(
+        monkeypatch, tmp_path):
+    """SP-D §4.3 / §8-A4 — a stub engine declaring ULCER raises the clear
+    ValueError BEFORE record_trial_spend (the SP-B 'spend then crash'
+    footgun class). Asserts NO lab_trial_ledger row is ever written —
+    mirrors test_lab_targeting_consistency.py::
+    test_undeclared_target_hard_rejects_before_any_ledger_spend verbatim
+    (same _SharedPool/_FakeConn ledger-spy)."""
+    import argparse
+    from datetime import date
+
+    import ops.lab.run as lab_run
+    from tpcore.lab.context import LabContext
+    from tpcore.lab.target import LabPrimaryMetric, LabTarget
+
+    # Reuse the make-or-break ledger-spy doubles.
+    from tpcore.tests.test_lab_sp_d_make_or_break import _SharedPool
+
+    async def _runner(*a, **k):
+        raise AssertionError("must not reach runner — reject is pre-spend")
+
+    async def _loader(*a, **k):
+        return object()
+
+    def _ctx_runner(c, *, overrides=None):
+        raise AssertionError("must not reach ctx_runner")
+
+    tgt = LabTarget(
+        param_ranges={"choice": (0, 1, "choice:A,B")},
+        run_for_search=_runner, load_window_context=_loader,
+        run_with_context=_ctx_runner, default_params=lambda: {"choice": "A"},
+        primary_metric=LabPrimaryMetric.ULCER,
+    )
+    monkeypatch.setattr("ops.lab.run._lab_target_for", lambda e: tgt)
+    monkeypatch.setattr("ops.lab.run._runner_for", lambda e: _runner)
+    monkeypatch.setattr("ops.lab.run._context_loader_for",
+                        lambda e: _loader)
+    monkeypatch.setattr("ops.lab.run._context_runner_for",
+                        lambda e: _ctx_runner)
+
+    shared = _SharedPool()
+
+    async def _fb(url, *, read_only, **k):
+        return shared
+
+    monkeypatch.setattr("tpcore.db.build_asyncpg_pool", _fb, raising=True)
+
+    ns = argparse.Namespace(
+        engine="reversion", trials=10, per_window_trials=2,
+        train_start=date(2018, 1, 1), holdout_end=date(2021, 12, 31),
+        final_holdout_start=date(2022, 1, 1),
+        final_holdout_end=date(2022, 12, 31),
+        walk_forward_step=365, train_years=3, holdout_years=1,
+        seed=0, output=tmp_path / "x.csv",
+        database_url="postgres://fake/db",
+        dsr_threshold=0.95, credibility_threshold=60,
+        universe_tier_max=None)
+
+    async with LabContext(db_url="postgres://fake/db"):
+        with pytest.raises(ValueError, match="reserved objective"):
+            await lab_run._run_lab_core(ns, candidate="bad_reserved")
+
+    # The reserved-metric reject is PRE-SPEND: no ledger row exists.
+    assert not any(
+        str(r["source"]).startswith("lab_trial_ledger")
+        for r in shared.rows), (
+        "a reserved-metric reject must NOT spend SP-A ledger budget "
+        "(spec §4.3 / §8-A4)")
