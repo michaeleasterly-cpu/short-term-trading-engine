@@ -18,10 +18,21 @@ from datetime import date, timedelta
 
 import pytest
 
-import ops.lab.run as lab_run
-from tpcore.lab.context import LabContext
-
 pytestmark = pytest.mark.xdist_group("ops_shadow")
+
+# scripts/ops.py vs ops/ package collision (SP2-T9/T10): a non-package
+# ``ops`` (scripts/ops.py) cached by an earlier co-grouped ``test_ops*``
+# test would make a module-level ``import ops.lab.run`` either fail at
+# collection (``'ops' is not a package``) or — worse — resolve a
+# divergent ``ops.lab.run`` whose monkeypatch targets miss, letting the
+# REAL ``build_asyncpg_pool`` reach a socket. The module-load eviction
+# stanza is itself a footgun in the full single-process suite (it evicts
+# the shadow already-collected SP2-oracle monkeypatches bind to —
+# test_lab_dsr_delivered.py:7-16). Precedent for this file: mirror the
+# GREEN SP-D sibling test_lab_sp_d_units.py / test_lab_no_gate_poison.py
+# — NO module-level ``import ops.lab.run``, NO eviction guard; every
+# ``ops.lab.run`` / ``LabContext`` import is in-body (deferred to call
+# time) so collection never touches sys.modules['ops'].
 
 
 @dataclass
@@ -250,6 +261,8 @@ def _candidate(name: str):
 
 
 async def _run_once(monkeypatch, tmp_path, *, metric_name, seed):
+    import ops.lab.run as lab_run
+    from tpcore.lab.context import LabContext
     from tpcore.lab.target import LabPrimaryMetric
     tgt = _install_choice_stub(monkeypatch)
     monkeypatch.setattr(
@@ -297,6 +310,8 @@ async def _assert_integration_non_vacuity(monkeypatch, tmp_path):
     construction regression that re-collapses the integration path is
     caught loudly here, not laundered as a vacuous green.
     """
+    import ops.lab.run as lab_run
+
     seen: dict[str, int] = {}
     real_eval = lab_run._evaluate_candidate_with_context
 
@@ -352,6 +367,7 @@ async def test_step0_non_vacuity_preconditions(monkeypatch, tmp_path):
     """Step 0: the stub MUST create gate/ranking disagreement, else the
     proof is vacuous. ERROR (not silently pass) if any precondition fails.
     """
+    import ops.lab.run as lab_run
     from tpcore.lab.target import LabPrimaryMetric
 
     _install_choice_stub(monkeypatch)  # side-effect: stub install only
@@ -429,6 +445,9 @@ async def test_make_or_break_gate_invariant_over_ecr_tuple(
     between the two metric runs — the gate verdict does NOT move when
     only the ranking metric changes (that IS the make-or-break). Only
     WHICH candidate sits at ranked[0] (the headline) differs."""
+    import ops.lab.run as lab_run
+    from tpcore.lab.context import LabContext
+
     # > Plan correction (T5): INTEGRATION-level non-vacuity guard FIRST —
     # closes the coverage gap the windowed-base-date T2 defect exploited
     # (the unit step-0 guard calls rank_candidates directly and cannot
@@ -536,6 +555,8 @@ async def test_make_or_break_adversarial_through_both_gates(
     """Step 5: an adversarial _RANKING_METRICS entry that maximizes the
     GATE-FAILING candidate C cannot launder it past the in-core gate OR
     the downstream planner._validate_modify (§0.2a)."""
+    import ops.lab.run as lab_run
+    from tpcore.lab.context import LabContext
     from tpcore.lab.target import LabPrimaryMetric
 
     tgt = _install_choice_stub(monkeypatch)
