@@ -180,6 +180,85 @@ def test_normalize_and_cap_respects_ceiling_with_extreme_weight():
     assert out["huge"] <= WEIGHT_CEILING + Decimal("0.001")
 
 
+# ── realized_vol estimator correctness (code-sweep #3) ──────────────────
+#
+# Two distinct defects fixed here, both pinned against regression:
+#   (a) sample stdev (ddof=1) NOT population pstdev (ddof=0) — biased
+#       low at small N; inconsistent with the codebase convention
+#       (tpcore.backtest.overfitting._per_trade_sharpe uses std(ddof=1)).
+#   (b) inverse-vol must weight on RETURNS not absolute $ P&L —
+#       daily_pnls is absolute dollars ((exit-entry)*qty-fees, see
+#       reversion/vector .plugs.aar_logging), so vol must be computed
+#       on per-session returns or a larger engine is mis-weighted on a
+#       live-money rebalance purely from position scale.
+
+
+def _hist_seeded(
+    engine: str,
+    *,
+    pnls: list[float],
+    seed: float,
+    aar_count: int,
+) -> _EngineHistory:
+    """Like ``_hist`` but with an explicit equity seed so two engines
+    with identical *return shapes* at different absolute $ scale can be
+    constructed (the (b) scale-invariance pin)."""
+    eq = seed
+    curve: list[float] = []
+    for p in pnls:
+        eq += p
+        curve.append(eq)
+    return _EngineHistory(
+        engine=engine,
+        aar_count=aar_count,
+        daily_pnls=pnls,
+        equity_curve=curve,
+        peak_equity=max(curve) if curve else seed,
+        current_equity=curve[-1] if curve else seed,
+        soft_frozen_sessions=0,
+    )
+
+
+def test_realized_vol_is_sample_stdev_not_population():
+    """(a) realized_vol == SAMPLE stdev (ddof=1) of session returns,
+    NOT population pstdev (ddof=0). FAILS if reverted to pstdev."""
+    import statistics
+
+    pnls = [200.0, -150.0, 100.0, -50.0] * 6  # 24 sessions ≥ MIN_AARS_FOR_VOL
+    h = _hist_seeded("reversion", pnls=pnls, seed=10_000.0,
+                     aar_count=MIN_AARS_FOR_VOL + 4)
+    rets = h.session_returns
+    sample = Decimal(str(statistics.stdev(rets)))
+    population = Decimal(str(statistics.pstdev(rets)))
+    # The two estimators differ measurably at this N (sample
+    # 0.01331301371630763 vs population 0.013032708350600818, Δ≈2.8e-4):
+    # a test that would FAIL if realized_vol used pstdev.
+    assert sample != population
+    assert h.realized_vol == sample
+    assert h.realized_vol != population
+
+
+def test_inverse_vol_is_scale_invariant_on_absolute_pnl():
+    """(b) Two engines with identical return-shapes but 10x different
+    absolute $ P&L scale get EQUAL realized_vol → EQUAL inverse-vol
+    weight. Under the old pstdev-on-absolute-$-P&L this was a 10x
+    mis-weighting of live capital."""
+    svc = AllocatorService(pool=None, platform_capital=Decimal("40000"))  # type: ignore[arg-type]
+    # reversion: small scale (seed $10k). momentum: 10x P&L AND 10x
+    # equity base → identical *return* series, only the $ scale differs.
+    rev_h = _hist_seeded("reversion", pnls=[100.0, -80.0, 60.0, -40.0] * 6,
+                         seed=10_000.0, aar_count=MIN_AARS_FOR_VOL + 4)
+    mom_h = _hist_seeded("momentum", pnls=[1000.0, -800.0, 600.0, -400.0] * 6,
+                         seed=100_000.0, aar_count=MIN_AARS_FOR_VOL + 4)
+    # vector: bootstrap (insufficient AARs) so it doesn't perturb caps.
+    vec_h = _hist("vector", pnls=[1.0])
+    decisions = {d.engine: d for d in svc._decide([rev_h, mom_h, vec_h])}
+    # Scale-invariant vol: equal despite 10x absolute-$ P&L difference.
+    assert decisions["reversion"].realized_vol == decisions["momentum"].realized_vol
+    # And therefore equal inverse-vol weight (no scale skew).
+    assert decisions["reversion"].weight == decisions["momentum"].weight
+
+
 # ── _load_histories via AARReader (covers the tpcore.aar refactor) ──────
 
 

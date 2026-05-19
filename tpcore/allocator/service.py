@@ -107,7 +107,7 @@ class AllocationDecision(BaseModel):
 class _EngineHistory:
     engine: str
     aar_count: int
-    daily_pnls: list[float]   # per-session sums; len ≤ VOL_LOOKBACK_SESSIONS
+    daily_pnls: list[float]   # absolute $ per-session P&L sums; len ≤ VOL_LOOKBACK_SESSIONS
     equity_curve: list[float]  # cumulative equity per session
     peak_equity: float
     current_equity: float
@@ -124,10 +124,49 @@ class _EngineHistory:
         return self.aar_count >= MIN_AARS_FOR_VOL and len(self.daily_pnls) >= 2
 
     @property
+    def session_returns(self) -> list[float]:
+        """Per-session returns = session P&L / equity at start of session.
+
+        ``daily_pnls`` is **absolute per-session P&L in dollars**
+        (``(exit_price-entry_price)*qty-fees`` summed by exit session —
+        see ``reversion/vector .plugs.aar_logging``). Inverse-vol /
+        risk-parity weighting must operate on *returns*, not absolute
+        P&L: a larger engine would otherwise show a spuriously larger
+        "vol" purely from position scale and be mis-weighted on a
+        live-money rebalance. We normalize using the equity base the
+        allocator already reconstructs in ``_load_histories``: the
+        start-of-session equity is ``equity_curve[i-1]`` for i≥1, and
+        for i=0 it is ``equity_curve[0] - daily_pnls[0]`` (the window's
+        opening equity). A non-positive base is skipped (can't form a
+        meaningful return) rather than silently treated as zero.
+        """
+        rets: list[float] = []
+        for i, pnl in enumerate(self.daily_pnls):
+            if i == 0:
+                base = (
+                    self.equity_curve[0] - self.daily_pnls[0]
+                    if self.equity_curve
+                    else 0.0
+                )
+            else:
+                base = self.equity_curve[i - 1]
+            if base > 0:
+                rets.append(pnl / base)
+        return rets
+
+    @property
     def realized_vol(self) -> Decimal | None:
         if not self.has_enough_for_vol:
             return None
-        return Decimal(str(statistics.pstdev(self.daily_pnls)))
+        rets = self.session_returns
+        # Sample stdev (ddof=1, ÷(N−1)) — consistent with the codebase
+        # convention (tpcore.backtest.overfitting._per_trade_sharpe uses
+        # std(ddof=1) and guards size<2). statistics.stdev raises at
+        # n<2; mirror overfitting.py's n<2 guard rather than swallow
+        # into a 0/None that would mis-weight live capital.
+        if len(rets) < 2:
+            return None
+        return Decimal(str(statistics.stdev(rets)))
 
 
 class AllocatorService:
