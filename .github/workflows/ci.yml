@@ -43,6 +43,15 @@ jobs:
       - name: Run ruff
         run: python -m ruff check reversion/ vector/ momentum/ sentinel/ canary/ tpcore/ scripts/ ops/
 
+      # Dead-code gate. Complements ruff F401/F841 (unused imports/locals
+      # only) by catching unused functions/methods/classes/attributes.
+      # Allowlist-BASELINED: vulture_allowlist.py encodes today's
+      # intentional dark / feature-flagged code (canary non-graduation,
+      # LLM-triage fenced paths). This step fails ONLY on NEW
+      # un-allowlisted dead code — the committed tree is clean day one.
+      - name: vulture (fail on new dead code)
+        run: vulture --min-confidence 80 tpcore ops reversion vector momentum sentinel canary dashboard_components vulture_allowlist.py
+
       # Fast accelerator: pytest-xdist with --dist loadgroup keeps the
       # ops-shadow modules (xdist_group("ops_shadow")) on one worker so
       # their single-process sys.modules['ops'] invariant holds, while
