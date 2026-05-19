@@ -27,8 +27,8 @@ from typing import Any
 
 import structlog
 from anthropic import (
-    Anthropic,
     APIError,
+    AsyncAnthropic,
     AuthenticationError,
     RateLimitError,
 )
@@ -105,8 +105,19 @@ class TriageOutcome:
     error: str | None = None
 
 
-def _default_client() -> Anthropic:
-    return Anthropic()
+def _default_client() -> AsyncAnthropic:
+    """The official ASYNC SDK client.
+
+    This module's ``run_triage`` is invoked inside the long-lived
+    ``ops/llm_triage_service.py`` asyncio daemon event loop. A *sync*
+    ``anthropic.Anthropic`` whose ``messages.create`` is ``await``ed
+    blocks the entire event loop for the full LLM round-trip (seconds),
+    starving the crash-isolated co-tasks + the poll loop in the same
+    process. ``AsyncAnthropic`` makes the round-trip a true awaitable
+    that yields to the loop. ``tpcore.outage.with_retry`` already
+    ``await``s the wrapped fn, so retry/backoff semantics are unchanged.
+    """
+    return AsyncAnthropic()
 
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -329,16 +340,20 @@ async def run_triage(
         async def _call_api(pkt_arg: TriagePacket) -> Any:
             """Thin async wrapper so @with_retry (async decorator) applies.
 
-            The synchronous SDK call is wrapped here — mirrors the
-            @with_retry pattern on edgar_adapter / fred adapter call sites.
-            pkt_arg is passed explicitly to avoid B023 loop-variable capture.
+            The official AsyncAnthropic SDK call is ``await``ed here so
+            the (seconds-long) LLM round-trip yields to the daemon event
+            loop instead of blocking it — @with_retry itself ``await``s
+            this coroutine, so retry/backoff is unchanged. Mirrors the
+            @with_retry pattern on edgar_adapter / fred adapter call
+            sites. pkt_arg is passed explicitly to avoid B023
+            loop-variable capture.
 
             AuthenticationError is intercepted here and re-raised as
             _AuthSkip so it escapes the retry_on tuple entirely (zero
             retries, zero backoff delays). See _AuthSkip docstring.
             """
             try:
-                return client.messages.create(
+                return await client.messages.create(
                     model=_MODEL,
                     max_tokens=_MAX_TOKENS,
                     temperature=0.0,
