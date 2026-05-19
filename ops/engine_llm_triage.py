@@ -169,9 +169,22 @@ class EngineTriageOutcome:
 
 
 def _default_client() -> Any:
-    from anthropic import Anthropic
+    """The official ASYNC SDK client.
 
-    return Anthropic()
+    This module's ``run_triage`` is invoked inside the long-lived
+    ``ops/llm_triage_service.py`` asyncio daemon as a second
+    crash-isolated co-task. A *sync* ``anthropic.Anthropic`` whose
+    ``messages.create`` is ``await``ed blocks the entire event loop for
+    the full LLM round-trip (seconds), starving the crash-isolated
+    co-tasks + the poll loop in the same process.
+    ``AsyncAnthropic`` makes the round-trip a true awaitable that yields
+    to the loop. ``tpcore.outage.with_retry`` already ``await``s the
+    wrapped fn, so retry/backoff semantics are unchanged. Symmetric
+    mirror of the data-lane twin fix (PR #97, #244 shared-SDK-surface
+    contract)."""
+    from anthropic import AsyncAnthropic
+
+    return AsyncAnthropic()
 
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -388,7 +401,7 @@ async def run_triage(
             `ops.llm_data_triage._AuthSkip` (resolved lazily above, NOT
             redefined)."""
             try:
-                return client.messages.create(
+                return await client.messages.create(
                     model=_model,
                     max_tokens=_max_tokens,
                     temperature=0.0,
@@ -398,95 +411,110 @@ async def run_triage(
             except AuthenticationError:
                 raise _AuthSkip() from None
 
-        for esc in escs:
-            pkt = await build_packet(pool, esc)
+        try:
+            for esc in escs:
+                pkt = await build_packet(pool, esc)
 
-            try:
-                resp = await _call_api(pkt)
-            except _AuthSkip:
-                logger.warning("engine_llm_triage.auth_error_skipped",
-                               hold_id=esc.hold_id)
-                out.skipped_no_key = True
-                return out
-            except Exception as call_exc:  # noqa: BLE001 — isolate
-                logger.error(
-                    "engine_llm_triage.call_error",
-                    hold_id=esc.hold_id,
-                    error=str(call_exc),
-                )
-                raise  # propagate to outer try/except → sets out.error
-
-            try:
-                txt = resp.content[0].text
                 try:
-                    prop = json.loads(txt)
-                except json.JSONDecodeError as json_exc:
+                    resp = await _call_api(pkt)
+                except _AuthSkip:
+                    logger.warning("engine_llm_triage.auth_error_skipped",
+                                   hold_id=esc.hold_id)
+                    out.skipped_no_key = True
+                    return out
+                except Exception as call_exc:  # noqa: BLE001 — isolate
+                    logger.error(
+                        "engine_llm_triage.call_error",
+                        hold_id=esc.hold_id,
+                        error=str(call_exc),
+                    )
+                    raise  # propagate to outer try/except → sets out.error
+
+                try:
+                    txt = resp.content[0].text
+                    try:
+                        prop = json.loads(txt)
+                    except json.JSONDecodeError as json_exc:
+                        logger.warning(
+                            "engine_llm_triage.malformed_response",
+                            hold_id=esc.hold_id,
+                            error=str(json_exc),
+                            response_preview=txt[:200],
+                        )
+                        continue  # skip this escalation, don't abort the loop
+
+                    if not isinstance(prop, dict):
+                        logger.warning(
+                            "engine_llm_triage.non_dict_response",
+                            hold_id=esc.hold_id,
+                            response_preview=txt[:200],
+                        )
+                        continue  # skip this escalation, don't abort the loop
+
+                    # Sandbox + draft, human-merge-only PR FIRST so the
+                    # proposal event can carry pr_link. Fully
+                    # crash-isolated: ANY failure ⇒ pr_link is None and
+                    # the advisory proposal below is STILL emitted
+                    # (invariant: advisory preserved), no leaked
+                    # worktree, escalation stays for the R3 human, NO
+                    # raise.
+                    pr_link = await _open_draft_pr(
+                        pool, esc, pkt, prop, pr_runner
+                    )
+
+                    await _emit(
+                        pool,
+                        "ENGINE_LLM_TRIAGE_PROPOSAL",
+                        f"engine LLM triage proposal for hold_id={esc.hold_id}",
+                        {
+                            "schema": 1,
+                            "hold_id": esc.hold_id,
+                            "failure_class": esc.failure_class,
+                            "engine": esc.engine,
+                            "persona_version": PERSONA_VERSION,
+                            "packet_hash": pkt.packet_hash,
+                            "proposed_disposition": prop.get(
+                                "proposed_disposition"),
+                            "confidence": prop.get("confidence"),
+                            "could_not_determine": prop.get(
+                                "could_not_determine"),
+                            "rationale": prop.get("rationale"),
+                            "model": _model,
+                            "pr_link": pr_link,
+                            "usage": {
+                                "in": resp.usage.input_tokens,
+                                "out": resp.usage.output_tokens,
+                            },
+                        },
+                    )
+                    out.proposed.append(esc.hold_id)
+                    logger.info(
+                        "engine_llm_triage.proposal_emitted",
+                        hold_id=esc.hold_id,
+                        model=_model,
+                        persona_version=PERSONA_VERSION,
+                        pr_link=pr_link,
+                    )
+                except (IndexError, AttributeError, KeyError,
+                        TypeError) as exc:
                     logger.warning(
                         "engine_llm_triage.malformed_response",
                         hold_id=esc.hold_id,
-                        error=str(json_exc),
-                        response_preview=txt[:200],
+                        error=str(exc),
                     )
                     continue  # skip this escalation, don't abort the loop
-
-                if not isinstance(prop, dict):
-                    logger.warning(
-                        "engine_llm_triage.non_dict_response",
-                        hold_id=esc.hold_id,
-                        response_preview=txt[:200],
-                    )
-                    continue  # skip this escalation, don't abort the loop
-
-                # Sandbox + draft, human-merge-only PR FIRST so the
-                # proposal event can carry pr_link. Fully crash-isolated:
-                # ANY failure ⇒ pr_link is None and the advisory proposal
-                # below is STILL emitted (invariant: advisory preserved),
-                # no leaked worktree, escalation stays for the R3 human,
-                # NO raise.
-                pr_link = await _open_draft_pr(
-                    pool, esc, pkt, prop, pr_runner
-                )
-
-                await _emit(
-                    pool,
-                    "ENGINE_LLM_TRIAGE_PROPOSAL",
-                    f"engine LLM triage proposal for hold_id={esc.hold_id}",
-                    {
-                        "schema": 1,
-                        "hold_id": esc.hold_id,
-                        "failure_class": esc.failure_class,
-                        "engine": esc.engine,
-                        "persona_version": PERSONA_VERSION,
-                        "packet_hash": pkt.packet_hash,
-                        "proposed_disposition": prop.get(
-                            "proposed_disposition"),
-                        "confidence": prop.get("confidence"),
-                        "could_not_determine": prop.get(
-                            "could_not_determine"),
-                        "rationale": prop.get("rationale"),
-                        "model": _model,
-                        "pr_link": pr_link,
-                        "usage": {
-                            "in": resp.usage.input_tokens,
-                            "out": resp.usage.output_tokens,
-                        },
-                    },
-                )
-                out.proposed.append(esc.hold_id)
-                logger.info(
-                    "engine_llm_triage.proposal_emitted",
-                    hold_id=esc.hold_id,
-                    model=_model,
-                    persona_version=PERSONA_VERSION,
-                    pr_link=pr_link,
-                )
-            except (IndexError, AttributeError, KeyError, TypeError) as exc:
-                logger.warning(
-                    "engine_llm_triage.malformed_response",
-                    hold_id=esc.hold_id,
-                    error=str(exc),
-                )
-                continue  # skip this escalation, don't abort the loop
+        finally:
+            # Release the AsyncAnthropic httpx connection pool on EVERY
+            # exit path (normal completion, the _AuthSkip early `return
+            # out`, and the propagate-to-outer-except `raise`). In the
+            # long-lived ops/llm_triage_service.py daemon each event-
+            # driven run_triage would otherwise leak a pool until GC.
+            # Matches the codebase-wide aclose() discipline + the
+            # data-lane twin (#97). Defensive getattr so injected test
+            # fakes lacking aclose don't break.
+            aclose = getattr(client, "aclose", None)
+            if aclose is not None:
+                await aclose()
 
     except Exception as exc:  # noqa: BLE001 — never raises; crash-isolated
         logger.error("engine_llm_triage.error", error=str(exc))
