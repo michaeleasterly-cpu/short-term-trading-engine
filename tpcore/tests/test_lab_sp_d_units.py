@@ -249,3 +249,67 @@ async def test_reserved_metric_rejects_before_any_ledger_spend(
         for r in shared.rows), (
         "a reserved-metric reject must NOT spend SP-A ledger budget "
         "(spec §4.3 / §8-A4)")
+
+
+def _labresult(metric_name: str):
+    from datetime import UTC, datetime
+
+    from tpcore.backtest.credibility import CredibilityScore
+    from tpcore.lab.models import LabResult
+    from tpcore.lab.target import LabPrimaryMetric
+
+    rubric = CredibilityScore(
+        lookahead_clean=True, survivorship_inclusive=True,
+        pit_fundamentals=True, regime_coverage=True,
+        out_of_sample_validated=True, monte_carlo_drawdown=True,
+        score=80)
+    return LabResult(
+        candidate="exp1", target_engine="reversion",
+        intent="fold_existing", verdict="SURVIVED", dsr=0.97,
+        credibility_score=72, credibility_rubric=rubric,
+        held_metrics={"sharpe": 1.1, "profit_factor": 1.6,
+                      "max_drawdown": -0.08, "n_trades": 12,
+                      "win_rate": 0.55},
+        winning_params={"z_threshold": 3.2},
+        param_diff=[], recommended_exit="fold_existing",
+        ranked_alternatives=[], walk_windows=[], n_trials=200, seed=7,
+        generated_at=datetime(2026, 5, 18, tzinfo=UTC),
+        primary_metric=LabPrimaryMetric(metric_name))
+
+
+def test_dossier_sharpe_is_byte_identical_to_pre_sp_d():
+    """For a SHARPE LabResult the three live engines' dossier text is
+    UNCHANGED — no objective line, no '## 2a' block (spec §5.5)."""
+    from ops.lab.dossier import render_lab_dossier
+
+    out = render_lab_dossier(_labresult("sharpe"))
+    assert "## 2a" not in out
+    assert "Primary objective" not in out
+    # SP-C _next_step cross-link is untouched.
+    assert "## 4. Next step (SP3 — NOT applied by the Lab)" in out
+    assert "lab_candidate_readiness.md" in out
+
+
+def test_dossier_maxdd_reduction_adds_objective_block():
+    """For MAXDD_REDUCTION the objective line (with the mandatory
+    ranking-only parenthetical) + the '## 2a' block appear; the SP-C
+    _next_step block is still present (cross-link not disturbed)."""
+    from ops.lab.dossier import render_lab_dossier
+
+    out = render_lab_dossier(_labresult("maxdd_reduction"))
+    assert ("**Primary objective:** maxdd_reduction "
+            "(ranking metric — does NOT affect the gate)") in out
+    assert "## 2a. Objective-appropriate summary" in out
+    assert "max_drawdown" in out
+    assert "## 4. Next step (SP3 — NOT applied by the Lab)" in out
+    assert "lab_candidate_readiness.md" in out
+
+
+def test_dossier_json_sidecar_carries_primary_metric():
+    """The SP3 .json sidecar (model_dump_json) carries primary_metric;
+    the derivation itself (write_lab_dossier) is unchanged."""
+    from tpcore.lab.models import LabResult
+
+    r = _labresult("maxdd_reduction")
+    round_trip = LabResult.model_validate_json(r.model_dump_json())
+    assert round_trip.primary_metric == r.primary_metric
