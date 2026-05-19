@@ -432,53 +432,60 @@ proven by the mandatory operator-run compensating control, NOT by CI.
   against pooled Supabase but should pass against a direct ephemeral Postgres
   (no pgbouncer) — verify when building. Cross-ref SP-A, #242.
 
-## Code-sweep findings — engine-lane-owned (handoff 2026-05-19)
+## Code-sweep findings — engine-lane-owned (CONSOLIDATED v2 2026-05-19)
 
-Data-lane sweep handoff; engine lane owns these (in our working set). Data
-lane tracks in project_code_sweep_findings_2026_05_19.md, will not duplicate.
-Recorded here at SP-A merge; worked AFTER SP-A lands.
+Data-lane sweep handoff v2 (supersedes the prior 4-item). Engine lane owns
+these. Data lane tracks in project_code_sweep_findings_2026_05_19.md, fixes
+its own side (FIX-1 #94 merged, FIX-2 tpcore/db.py #95 merged, FIX-3..5 in
+progress), will not duplicate.
 
-- **[HIGH] DSR null-variance estimator too lenient — folds into the Lab
-  front-half n_trials-ledger epic (next phase).** `[lane: engine] [effort: M]`
+- **#1 [HIGH] DSR null-variance estimator too lenient.** `[lane: engine]
+  [effort: M] [status: IN PROGRESS = SP-A2, task #147]`
   tpcore/backtest/overfitting.py:108-119 _expected_max_sharpe_under_null uses
   single-estimator variance sr_variance=1/(n_obs-1). Bailey & López de Prado,
   The Deflated Sharpe Ratio (SSRN 2460551), requires V[SR̂ₙ] = variance of the
   per-trial Sharpe estimates across the N searched trials (selection-bias
-  dispersion), NOT the one-estimator sampling variance. Effect: large n_obs ⇒
-  E[max] understated ⇒ DSR passes too easily ⇒ a future tuned candidate could
-  spuriously clear the live gate. NOT yet exploited (all engines currently fail
-  DSR). Pre-existing & orthogonal to SP-A (SP-A correctly feeds cumulative
-  n_trials into the norm.ppf(1-1/(n_trials·e)) term, which the finding confirms
-  is correct — "leave it"; the variance term is the separate defect). Fix
-  direction: pass var(per-trial Sharpe vector) from the sweep's existing
-  trial_returns_matrix into _deflated_sharpe_ratio/_expected_max_sharpe_under_null;
-  fall back to 1/(n-1) only for the single-trial case + document as a known
-  approximation. Line 118 norm.ppf is correct — leave it.
-- **[MED] Credibility rubric mislabels the gate threshold.** `[lane: engine]
-  [effort: S]` tpcore/backtest/credibility.py:81 flag dsr_above_0_90 / "Deflated
-  Sharpe Ratio > 0.90" but real threshold is DSR_PASS_THRESHOLD=0.95
-  (overfitting.py:56; CLAUDE.md "DSR ≥ 0.95"). Math fine (gate uses 0.95) but the
-  persisted auditable rubric row shows the wrong threshold. Fix: rename to
+  dispersion). Effect: large n_obs ⇒ E[max] understated ⇒ DSR too lenient ⇒ a
+  future tuned candidate could spuriously clear the live gate. NOT yet
+  exploited (all engines fail DSR). Pre-existing & orthogonal to SP-A.
+  Hardened spec on branch sp-a2-dsr-variance (fa43f8a + self-harden WIP
+  4b0ae86); expert-harden→plan→exec pending. Line 118 norm.ppf is correct.
+- **#2 [MED] Credibility rubric mislabels the gate threshold.** `[lane: engine]
+  [effort: S] [status: backlog]` tpcore/backtest/credibility.py:81 flag
+  dsr_above_0_90 / "Deflated Sharpe Ratio > 0.90" but real threshold is
+  DSR_PASS_THRESHOLD=0.95 (overfitting.py:56). Math fine; the persisted
+  auditable rubric row shows the wrong threshold. Fix: rename to
   dsr_above_pass_threshold / "≥ 0.95", key description off the constant.
-- **[MED] Inverse-vol allocator volatility estimator.** `[lane: engine]
-  [effort: S]` tpcore/allocator/service.py:127-130 realized_vol uses
-  statistics.pstdev (population ÷N) over raw per-session P&L. Standard
-  inverse-vol/risk-parity uses sample stdev (ddof=1) on returns; codebase
-  internally inconsistent (overfitting.py _per_trade_sharpe correctly uses
-  ddof=1). Fix: statistics.stdev (ddof=1); confirm daily_pnls are normalized
-  returns not absolute P&L before inverse-weighting (else weights conflate
-  position size with volatility). MIN_AARS_FOR_VOL bootstrap only partly
-  mitigates small-N bias.
-- **[HIGH] Blocking sync Anthropic client in async engine-triage daemon —
-  CROSS-LANE SYMMETRY COORDINATION (#244).** `[lane: engine, coordinate-with:data]
-  [effort: S]` ops/engine_llm_triage.py:391 (_call_api): a synchronous
-  Anthropic() client (_default_client) is awaited inside the llm_triage_service
-  event loop, blocking it for the full LLM round-trip and starving the
-  crash-isolated co-tasks in-process. Fix: anthropic.AsyncAnthropic + await
-  client.messages.create(...), OR await asyncio.to_thread(...). Data lane is
-  fixing the IDENTICAL defect in the twin ops/llm_data_triage.py — keep the
-  shared LLM-triage SDK surface (#244) symmetric; ALIGN with data lane on
-  AsyncAnthropic vs to_thread before either fix lands so the twins don't diverge.
+- **#3 [MED] Inverse-vol allocator volatility estimator.** `[lane: engine]
+  [effort: S] [status: backlog]` tpcore/allocator/service.py:127-130
+  realized_vol uses statistics.pstdev (population ÷N) over raw per-session
+  P&L. Standard inverse-vol uses sample stdev (ddof=1) on returns; codebase
+  internally inconsistent (overfitting.py _per_trade_sharpe uses ddof=1). Fix:
+  statistics.stdev (ddof=1); confirm daily_pnls are normalized returns not
+  absolute P&L before inverse-weighting. MIN_AARS_FOR_VOL bootstrap only
+  partly mitigates small-N bias.
+- **#4 [HIGH] Blocking sync Anthropic client in async engine-triage daemon —
+  CROSS-LANE #244.** `[lane: engine, coordinate-with:data] [effort: S]
+  [status: backlog, GATED on cross-lane alignment]`
+  ops/engine_llm_triage.py:391 (_call_api/_default_client): synchronous
+  Anthropic() awaited inside the llm_triage_service loop, starving the
+  crash-isolated co-tasks. Fix: anthropic.AsyncAnthropic + await
+  client.messages.create(...), OR await asyncio.to_thread(...). Data lane
+  fixing the twin ops/llm_data_triage.py (FIX-3). ALIGN on
+  AsyncAnthropic-vs-to_thread before either lands (#244 symmetry). My rec:
+  AsyncAnthropic (async-native, cleaner) — relay to data lane.
+- **#5 [HIGH] asyncpg pooler-safety missing in 3 direct create_pool sites.**
+  `[lane: engine] [effort: S] [status: DONE — this PR]`
+  ops/engine_sdlc/planner.py:545, ops/lab/run.py:565 & :811. Supabase
+  txn-pooler fails auto-prepared statements. Resolution: planner._emit_audit
+  (read_only=False) + lab.run._load_universe_by_tier (read_only=True) routed
+  through tpcore.db.build_asyncpg_pool (canonical, post-FIX-2 #95); the
+  legacy credibility-write at :811 MUST stay a raw asyncpg.create_pool to
+  preserve the SP-A H-S3-8 byte-identical-legacy isolation invariant
+  (test_lab_credibility_pool_threaded.py) — so the pooler-safety kwargs
+  (statement_cache_size=0 + server_settings jit:off) are mirrored inline
+  there + a "keep in sync with tpcore.db.build_asyncpg_pool" comment (the
+  handoff's prescribed not-feasible-to-route fallback).
 
 ## Deep-research spike adjudication — Lab-candidate backlog (2026-05-19)
 

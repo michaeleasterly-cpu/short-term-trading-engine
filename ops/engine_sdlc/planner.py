@@ -538,11 +538,16 @@ def _emit_audit(engine: str, action: str, from_state, to_state,
     import asyncio
 
     async def _go() -> None:
-        import asyncpg
+        from tpcore.db import build_asyncpg_pool
         url = os.environ.get("DATABASE_URL")
         if not url:
             return
-        pool = await asyncpg.create_pool(url, min_size=1, max_size=1)
+        # ECR executor — an on-demand CLI tool. read_only=False: the
+        # application_log INSERT below needs write; explicit read/write
+        # intent is mandatory on the isolation boundary (H-S3-8).
+        # Canonical pooler-safety lives in tpcore.db.
+        pool = await build_asyncpg_pool(
+            url, min_size=1, max_size=1, read_only=False)
         try:
             async with pool.acquire() as conn:
                 await conn.execute(
