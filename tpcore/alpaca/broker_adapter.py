@@ -25,10 +25,12 @@ from __future__ import annotations
 import asyncio
 import os
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import TYPE_CHECKING, Any
 
+import httpx
 import structlog
+from alpaca.common.exceptions import APIError
 
 from tpcore.interfaces.broker import (
     AccountInfo,
@@ -41,10 +43,59 @@ from tpcore.interfaces.broker import (
     Position,
 )
 from tpcore.lab.context import assert_not_in_lab
-from tpcore.outage import OutageThresholds, OutageTier, classify_outage
+from tpcore.outage import OutageThresholds, OutageTier, classify_outage, with_retry
 from tpcore.quality.execution_quality import ExecutionQualityScore, ExecutionQualityWriter
 
 from .exceptions import BrokerUnavailableError
+
+# Price tick: Alpaca rejects sub-penny limit/stop prices (≥ $1.00 names
+# trade in $0.01 increments). The adapter is the last line of defense —
+# upstream sizing math can produce e.g. 10.12345 — so every limit/stop
+# price is quantized here, at the broker boundary, before float().
+_PRICE_TICK = Decimal("0.01")
+
+
+def _quantize_price(value: Decimal) -> Decimal:
+    """Round a price to the $0.01 tick (ROUND_HALF_UP — the project's
+    convention for the slippage_bps quantize and the standard for
+    half-cent rounding). No tpcore price-quantize helper exists today;
+    this is the single boundary that needs it."""
+    return value.quantize(_PRICE_TICK, rounding=ROUND_HALF_UP)
+
+
+class _TransientBrokerError(RuntimeError):
+    """Internal marker: a *retryable* transient broker failure.
+
+    Raised only inside the retry-wrapped idempotent-read path so
+    ``with_retry`` (configured with ``retry_on=(_TransientBrokerError,)``)
+    retries transient 429/5xx/connection failures WITHOUT also catching —
+    and wrongly retrying — a permanent 4xx auth/bad-request ``APIError``.
+    The original ``APIError`` is restored as ``__cause__`` and re-raised at
+    the read boundary so callers see the real exception, never this marker.
+    """
+
+
+def _is_transient_alpaca_error(exc: BaseException) -> bool:
+    """True iff ``exc`` is a transient broker failure worth retrying.
+
+    Transient = HTTP 429, HTTP 5xx, or a connection-level failure with no
+    HTTP response (``APIError.status_code`` is ``None`` — alpaca-py raises
+    this for network/timeout where no response arrived). A 4xx-not-429
+    (auth, bad request, not found) is permanent: retrying just wastes time
+    and delays the kill-switch. ``httpx`` network/timeout errors (alpaca-py
+    uses httpx under the hood) are always transient.
+    """
+    if isinstance(exc, httpx.HTTPStatusError):
+        code = exc.response.status_code
+        return code == 429 or 500 <= code < 600
+    if isinstance(exc, (httpx.NetworkError, httpx.TimeoutException)):
+        return True
+    if isinstance(exc, APIError):
+        status = exc.status_code  # None when no HTTP response arrived
+        if status is None:
+            return True
+        return status == 429 or 500 <= status < 600
+    return False
 
 if TYPE_CHECKING:  # pragma: no cover
     # Structural duck-typed shape — tpcore must not depend on an engine
@@ -138,15 +189,83 @@ class AlpacaPaperBrokerAdapter(BrokerExecutionInterface):
 
     # ─── Outage tracking ────────────────────────────────────────────────
 
+    async def _call_read(self, func, *args, **kwargs):
+        """Idempotent-read entry point: transient-retry, then outage-count.
+
+        ONLY for idempotent reads (``get_account`` / ``get_all_positions``
+        / ``get_orders`` / ``get_order_by_id``) and the idempotent cancels
+        (``cancel_order_by_id`` / ``cancel_orders``). A transient 429 / 5xx
+        / connection failure is retried in-place via
+        ``tpcore.outage.with_retry`` (the CLAUDE.md mandate — no local retry
+        loops); a permanent 4xx is NOT retried (``_is_transient_alpaca_error``).
+
+        **Composition with the kill-switch counter (explicit & correct):**
+        the retry sits *inside* one logical ``_call``. ``with_retry``
+        exhausting all attempts re-raises the marker, which this method
+        unwraps back to the original ``APIError`` and hands to ``_call`` —
+        so a fully-failed read counts as exactly **one** consecutive outage
+        failure, never N. The kill-switch therefore still trips on N
+        *logical* failures, and transient blips that self-heal on retry
+        never touch the counter at all.
+
+        **The order-submit path is deliberately NOT routed here** — see
+        ``place_order``. Retrying a live-money submit risks a double order
+        even with ``client_order_id``; submit keeps its own bare ``_call``.
+        """
+
+        @with_retry(
+            max_attempts=3,
+            backoff_base_sec=1.0,
+            backoff_cap_sec=30.0,
+            retry_on=(_TransientBrokerError,),
+        )
+        async def _attempt():
+            try:
+                return await asyncio.to_thread(func, *args, **kwargs)
+            except (APIError, httpx.HTTPStatusError, httpx.NetworkError, httpx.TimeoutException) as exc:
+                if _is_transient_alpaca_error(exc):
+                    raise _TransientBrokerError(str(exc)) from exc
+                raise  # permanent — propagate immediately, no retry
+
+        try:
+            return await self._track_outage(_attempt(), func=func)
+        except _TransientBrokerError as marker:
+            # Retries exhausted. Restore the real exception so callers and
+            # the outage classifier see the genuine APIError, not the
+            # internal marker. ``_track_outage`` has already counted this as
+            # exactly one consecutive failure (one logical read).
+            cause = marker.__cause__
+            # ``from None``: the internal marker is an implementation
+            # detail; callers should see the genuine APIError as the read
+            # failure, not a confusing "during handling of …" chain.
+            raise (cause if cause is not None else marker) from None
+
     async def _call(self, func, *args, **kwargs):
         """Run ``func(*args, **kwargs)`` in a worker thread with outage tracking.
 
         Re-raises the underlying exception unless the failure pushes the
         outage classifier into ``KILL_SWITCH``, in which case the failure is
         re-wrapped as ``BrokerUnavailableError`` so the engine halts.
+
+        This is the bare, **non-retrying** primitive. The order-submit path
+        (``place_order``) calls this directly so a transient submit failure
+        is never retried (double-order safety). Idempotent reads go through
+        :py:meth:`_call_read`, which adds transient-only retry on top.
+        """
+        return await self._track_outage(
+            asyncio.to_thread(func, *args, **kwargs), func=func
+        )
+
+    async def _track_outage(self, awaitable, *, func):
+        """Await ``awaitable`` while maintaining the consecutive-failure
+        kill-switch counter. Shared by :py:meth:`_call` (bare submit/sync
+        path) and :py:meth:`_call_read` (retry-wrapped reads) so the
+        kill-switch semantics are byte-identical for both: a fully-failed
+        logical call counts as exactly one consecutive failure; any success
+        resets the counter.
         """
         try:
-            result = await asyncio.to_thread(func, *args, **kwargs)
+            result = await awaitable
         except Exception as exc:
             self._consecutive_failures += 1
             staleness = datetime.now(UTC) - (self._last_success_at or datetime.now(UTC))
@@ -176,7 +295,7 @@ class AlpacaPaperBrokerAdapter(BrokerExecutionInterface):
     # ─── BrokerExecutionInterface ───────────────────────────────────────
 
     async def get_account(self) -> AccountInfo:
-        raw = await self._call(self._client.get_account)
+        raw = await self._call_read(self._client.get_account)
         return AccountInfo(
             account_id=str(raw.id),
             cash=Decimal(str(raw.cash)),
@@ -188,7 +307,7 @@ class AlpacaPaperBrokerAdapter(BrokerExecutionInterface):
         )
 
     async def get_positions(self) -> list[Position]:
-        raw_list = await self._call(self._client.get_all_positions)
+        raw_list = await self._call_read(self._client.get_all_positions)
         return [
             Position(
                 symbol=str(p.symbol),
@@ -225,11 +344,11 @@ class AlpacaPaperBrokerAdapter(BrokerExecutionInterface):
         return placed
 
     async def cancel_order(self, order_id: str) -> None:
-        await self._call(self._client.cancel_order_by_id, order_id)
+        await self._call_read(self._client.cancel_order_by_id, order_id)
         logger.info("tpcore.alpaca.cancel_order", broker_order_id=order_id)
 
     async def get_order(self, order_id: str) -> Order:
-        raw = await self._call(self._client.get_order_by_id, order_id)
+        raw = await self._call_read(self._client.get_order_by_id, order_id)
         # We don't have the originating Order, so build a minimal one from
         # what the SDK returns and let the caller layer side/qty back on.
         skeleton = Order(
@@ -242,7 +361,7 @@ class AlpacaPaperBrokerAdapter(BrokerExecutionInterface):
         return self._merge_response(skeleton, raw)
 
     async def emergency_cancel_all(self) -> int:
-        raw = await self._call(self._client.cancel_orders)
+        raw = await self._call_read(self._client.cancel_orders)
         cancelled = sum(1 for r in (raw or []) if getattr(r, "status", 0) == 200)
         logger.warning("tpcore.alpaca.emergency_cancel_all", cancelled=cancelled)
         return cancelled
@@ -258,7 +377,7 @@ class AlpacaPaperBrokerAdapter(BrokerExecutionInterface):
         from alpaca.trading.requests import GetOrdersRequest
 
         request = GetOrdersRequest(status=QueryOrderStatus.ALL, limit=limit, nested=False)
-        raw_list = await self._call(self._client.get_orders, filter=request)
+        raw_list = await self._call_read(self._client.get_orders, filter=request)
         out: list[Order] = []
         for raw in raw_list or []:
             skeleton = Order(
@@ -398,8 +517,12 @@ class AlpacaPaperBrokerAdapter(BrokerExecutionInterface):
                 raise ValueError(
                     "bracket order requires both take_profit_limit_price and stop_loss_stop_price"
                 )
-            tp = TakeProfitRequest(limit_price=float(order.take_profit_limit_price))
-            sl = StopLossRequest(stop_price=float(order.stop_loss_stop_price))
+            tp = TakeProfitRequest(
+                limit_price=float(_quantize_price(order.take_profit_limit_price))
+            )
+            sl = StopLossRequest(
+                stop_price=float(_quantize_price(order.stop_loss_stop_price))
+            )
             ac = _AOC.BRACKET
         else:
             tp = sl = None
@@ -420,7 +543,9 @@ class AlpacaPaperBrokerAdapter(BrokerExecutionInterface):
         if order.order_type is OrderType.LIMIT:
             if order.limit_price is None:
                 raise ValueError("limit order requires limit_price")
-            return LimitOrderRequest(limit_price=float(order.limit_price), **common)
+            return LimitOrderRequest(
+                limit_price=float(_quantize_price(order.limit_price)), **common
+            )
         return MarketOrderRequest(**common)
 
     @staticmethod

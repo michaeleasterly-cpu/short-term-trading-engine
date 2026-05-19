@@ -437,3 +437,186 @@ async def test_emergency_cancel_all_returns_count() -> None:
     adapter = _make_adapter(client=client)
     cancelled = await adapter.emergency_cancel_all()
     assert cancelled == 2
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Transient-error retry on idempotent reads (MED) + the submit-never-retry
+# safety invariant. Sleeps are patched out so the suite stays fast.
+# ────────────────────────────────────────────────────────────────────────────
+
+
+def _api_error_with_status(message: str, status_code: int | None) -> APIError:
+    """An ``APIError`` whose ``.status_code`` resolves to ``status_code``.
+
+    ``APIError.status_code`` reads ``_http_error.response.status_code`` so we
+    inject a duck-typed http_error. ``None`` models a connection-level failure
+    (no HTTP response) — which alpaca-py surfaces with no ``_http_error``.
+    """
+    http_error = None
+    if status_code is not None:
+        http_error = SimpleNamespace(
+            response=SimpleNamespace(status_code=status_code),
+            request=SimpleNamespace(),
+        )
+    return APIError(message, http_error=http_error)
+
+
+@pytest.fixture(autouse=True)
+def _no_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make ``with_retry``'s backoff instantaneous for these tests."""
+    import tpcore.outage.retry as _retry_mod
+
+    async def _instant(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(_retry_mod.asyncio, "sleep", _instant)
+
+
+async def test_transient_5xx_read_is_retried_then_succeeds() -> None:
+    """An idempotent read (get_account) that raises a transient 503 twice
+    then succeeds returns the success after retrying — pre-fix it raised
+    immediately on the first 503."""
+    client = MagicMock()
+    good = SimpleNamespace(
+        id="acct-1",
+        cash="10000.00",
+        equity="10500.00",
+        buying_power="20000.00",
+        portfolio_value="10500.00",
+        pattern_day_trader=False,
+    )
+    client.get_account.side_effect = [
+        _api_error_with_status("503 Service Unavailable", 503),
+        _api_error_with_status("503 Service Unavailable", 503),
+        good,
+    ]
+    adapter = _make_adapter(client=client)
+
+    info = await adapter.get_account()
+
+    assert info.account_id == "acct-1"
+    assert client.get_account.call_count == 3  # 1 + 2 retries
+
+
+async def test_transient_429_read_is_retried() -> None:
+    client = MagicMock()
+    client.get_all_positions.side_effect = [
+        _api_error_with_status("429 Too Many Requests", 429),
+        [],
+    ]
+    adapter = _make_adapter(client=client)
+
+    positions = await adapter.get_positions()
+
+    assert positions == []
+    assert client.get_all_positions.call_count == 2
+
+
+async def test_non_transient_4xx_read_is_not_retried() -> None:
+    """A 401 auth error on a read must NOT be retried — it propagates as the
+    original APIError immediately (retrying a bad credential just wastes time
+    and delays the kill-switch)."""
+    client = MagicMock()
+    client.get_account.side_effect = _api_error_with_status("401 Unauthorized", 401)
+    adapter = _make_adapter(client=client)
+
+    with pytest.raises(APIError):
+        await adapter.get_account()
+    assert client.get_account.call_count == 1
+
+
+async def test_exhausted_retries_count_as_one_outage_failure() -> None:
+    """Retry sits *inside* one logical ``_call``: a read that exhausts all
+    retries counts as exactly ONE consecutive failure, not N — so the
+    kill-switch still trips on N *logical* failures, not N transient blips."""
+    client = MagicMock()
+    client.get_account.side_effect = _api_error_with_status("503", 503)
+    thresholds = OutageThresholds(
+        availability_consecutive_failures=2,
+        kill_consecutive_failures=2,
+    )
+    adapter = _make_adapter(client=client, outage_thresholds=thresholds)
+
+    # First fully-failed read = 1 consecutive failure (still under kill=2),
+    # so it surfaces the original APIError, NOT BrokerUnavailableError.
+    with pytest.raises(APIError):
+        await adapter.get_account()
+    # Second fully-failed read = 2 → kill-switch tier.
+    with pytest.raises(BrokerUnavailableError):
+        await adapter.get_account()
+
+
+async def test_order_submit_transient_error_is_NOT_retried() -> None:
+    """SAFETY INVARIANT: a transient error on the order-submit path must
+    raise after exactly ONE attempt. Retrying a live-money order submit
+    risks a double order even with client_order_id. This test must bite if
+    anyone later wraps submit in with_retry."""
+    client = MagicMock()
+    client.submit_order.side_effect = _api_error_with_status("503", 503)
+    adapter = _make_adapter(client=client)
+
+    with pytest.raises(APIError):
+        await adapter.place_order(_market_order())
+    assert client.submit_order.call_count == 1
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Sub-penny TP/SL quantization (LOW)
+# ────────────────────────────────────────────────────────────────────────────
+
+
+async def test_bracket_tp_sl_quantized_to_two_decimals() -> None:
+    """A TP of 10.123 / SL of 9.874 must reach Alpaca as 10.12 / 9.87 —
+    Alpaca rejects sub-penny prices; the adapter is the last line of
+    defense. ROUND_HALF_UP: .124->.12, .875->.88, .126->.13."""
+    client = MagicMock()
+    client.submit_order.return_value = _fake_alpaca_order()
+    adapter = _make_adapter(client=client)
+
+    await adapter.place_order(
+        _market_order(
+            order_class=OrderClass.BRACKET,
+            take_profit_limit_price=Decimal("10.123"),
+            stop_loss_stop_price=Decimal("9.876"),
+        )
+    )
+
+    req = client.submit_order.call_args.kwargs.get("order_data") or client.submit_order.call_args.args[0]
+    assert req.take_profit.limit_price == 10.12
+    assert req.stop_loss.stop_price == 9.88  # 9.876 → ROUND_HALF_UP → 9.88
+
+
+async def test_limit_price_quantized_to_two_decimals() -> None:
+    client = MagicMock()
+    client.submit_order.return_value = _fake_alpaca_order()
+    adapter = _make_adapter(client=client)
+
+    order = _market_order(
+        order_type=OrderType.LIMIT,
+        limit_price=Decimal("188.005"),
+    )
+    await adapter.place_order(order)
+
+    req = client.submit_order.call_args.kwargs.get("order_data") or client.submit_order.call_args.args[0]
+    assert isinstance(req, LimitOrderRequest)
+    assert req.limit_price == 188.01  # ROUND_HALF_UP
+
+
+async def test_subpenny_price_cannot_reach_broker() -> None:
+    """Belt-and-suspenders: whatever the upstream caller sends, the request
+    object handed to alpaca-py never carries more than 2 decimal places."""
+    client = MagicMock()
+    client.submit_order.return_value = _fake_alpaca_order()
+    adapter = _make_adapter(client=client)
+
+    await adapter.place_order(
+        _market_order(
+            order_class=OrderClass.BRACKET,
+            take_profit_limit_price=Decimal("123.456789"),
+            stop_loss_stop_price=Decimal("0.001"),
+        )
+    )
+    req = client.submit_order.call_args.kwargs.get("order_data") or client.submit_order.call_args.args[0]
+    for px in (req.take_profit.limit_price, req.stop_loss.stop_price):
+        # No more than 2 decimal places once back in Decimal space.
+        assert Decimal(str(px)) == Decimal(str(px)).quantize(Decimal("0.01"))
