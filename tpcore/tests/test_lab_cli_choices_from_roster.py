@@ -12,9 +12,6 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
-for _m in [m for m in list(sys.modules) if m == "ops" or m.startswith("ops.")]:
-    if not hasattr(sys.modules[_m], "__path__"):
-        del sys.modules[_m]
 
 pytestmark = pytest.mark.xdist_group("ops_shadow")
 

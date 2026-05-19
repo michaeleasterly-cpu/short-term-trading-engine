@@ -1141,6 +1141,7 @@ git commit -m "refactor(lab-sp-b): roster-SoT dispatch resolver + lazy PARAM_RAN
 > **Plan correction (T5, adjudicated consistent with the T1/T3/T4 precedent — controller-approved):**
 > 1. **Hollow red-proof.** As originally written the test SKIPS `sentinel` in the `run.py` loop (`if good == "sentinel": continue`) and never asserts `sentinel` acceptance on the `__main__.py` surface. With the pre-SP-B literal `("reversion","vector","momentum")` every assertion still PASSES (bad choices rejected; the three literal members accepted; sentinel never exercised), so Step-2 "Expected: FAIL" is FALSE — the test does not discriminate the literal from the accessor. Corrected: both surface tests now `assert "sentinel" in lab_targetable_engines()` and loop ALL accessor members (no skip), so accepting the eligible-but-undeclared `sentinel` is the genuine discriminator. **Verified red-proof:** the strengthened test FAILS against the old literal (argparse rejects `sentinel` → `SystemExit` where acceptance is asserted) and PASSES against the accessor.
 > 2. **Missing SLF baseline.** The test calls `ops.lab.run._parse_args` / `ops.lab.__main__._parse_args` (engine-lane-module-private, NOT tpcore-private — that IS its purpose). Per CLAUDE.md/STYLE_GUIDE the canonical form is a pyproject per-file-ignore (never an inline `# noqa: SLF001`), mirroring the `test_lab_dispatch_indirection.py` / frozen-oracle precedents already in `[tool.ruff.lint.per-file-ignores]`. Added `pyproject.toml` to the Files list + Step 4b below; Step 1's test body is unchanged in shape (only the sentinel-skip removed + the discriminator asserts added).
+> 3. **Module-level `sys.modules` purge removed (spec-review BLOCKER, 2026-05-20).** The collection-time `del sys.modules["ops"|"ops.*"]` (originally lines 15-17, shown above pre-correction) was removed as an oracle-drift footgun found in spec review: under single-process `-p no:xdist` it diverged `sys.modules['ops.lab.run']` from the byte-frozen oracle's `sp.amain.__globals__` and red the oracle's `test_amain_*` — and the no-eager-import guarantee was never carried by that in-process eviction anyway but by the already-present pristine-subprocess probe (`test_import_ops_lab_main_eager_imports_no_engine`), which needs no in-process purge. (The residual `test_lab_ntrials_ledger.py`/`test_overfitting.py`↔oracle collection-isolation fragility is a SEPARATE pre-existing #148-class defect — reproduced at base `862b64f`/`ab07f13` with zero SP-B-T4/T5 files — not introduced or fixed here.)
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1160,9 +1161,6 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
-for _m in [m for m in list(sys.modules) if m == "ops" or m.startswith("ops.")]:
-    if not hasattr(sys.modules[_m], "__path__"):
-        del sys.modules[_m]
 
 pytestmark = pytest.mark.xdist_group("ops_shadow")
 
