@@ -456,6 +456,17 @@ async def test_make_or_break_adversarial_through_both_gates(
 
     plan_instance = _Plan()
     rejected = _validate_modify(plan_instance, _ECR())
-    # _reject returns a plan whose status carries the rejection; the only
-    # contract we pin is that it did NOT pass through unchanged.
+    # _reject returns a plan whose status carries the rejection; defense in
+    # depth — it did NOT pass through unchanged...
     assert rejected is not plan_instance  # a rejection object, not the input
+    # ...AND the rejection is the §0.2a verdict-gate predicate
+    # (planner._validate_modify: `if lr.verdict != "SURVIVED": _reject(ecr,
+    # f"sidecar verdict {lr.verdict} != SURVIVED")`), NOT some unrelated
+    # earlier EvidenceError / dossier-name / identity-freshness reject. The
+    # substring "!= SURVIVED" is unique to that one branch: the identity
+    # verdict-mismatch reject is "...!= cited dossier path verdict 'FAILED'"
+    # (verdict is `!r`-quoted, no bare "!= SURVIVED"), so this assertion
+    # genuinely discriminates the make-or-break (C cannot launder past the
+    # verdict gate) from any future false-green earlier reject.
+    assert rejected.rejection  # truthy reject reason
+    assert "!= SURVIVED" in rejected.rejection
