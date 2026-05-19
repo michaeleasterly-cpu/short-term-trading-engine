@@ -76,6 +76,7 @@ from tpcore.interfaces.broker import (
 )
 from tpcore.logging import DBLogHandler
 from tpcore.order_ids import build_close_id
+from tpcore.order_management.stale_order_cancel import cancel_stale_orders
 from tpcore.risk.batch_gate import gate_batch_order
 from tpcore.risk.governor import RiskGovernor
 from tpcore.risk.limits_profile import limits_for
@@ -496,42 +497,17 @@ class MomentumScheduler:
         """Cancel any open orders we own (client_order_id starts with ``mo_``)
         so positions held_for_orders are released before the new rebalance.
 
+        Thin delegate to the shared
+        :func:`tpcore.order_management.stale_order_cancel.cancel_stale_orders`
+        (Lean P5 #1) — behavior (cancelled-ID set, count, structlog event
+        names) is byte-equivalent to the prior inlined implementation.
         Returns the number of orders cancelled. Silently degrades when the
         broker doesn't expose ``list_recent_orders`` (non-Alpaca brokers)."""
-        list_fn = getattr(broker, "list_recent_orders", None)
-        if list_fn is None:
-            return 0
-        try:
-            recent = await list_fn(limit=500)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("momentum.scheduler.list_orders_failed", error=str(exc)[:200])
-            return 0
-        # Open statuses worth cancelling: NEW, PARTIALLY_FILLED (cancel
-        # cancels the remainder). Already-filled / cancelled / rejected are
-        # terminal and left alone.
-        open_statuses = {"new", "partially_filled", "accepted", "pending_new"}
-        cancelled = 0
-        for o in recent:
-            cid = (o.client_order_id or "").lower()
-            if not cid.startswith(ENGINE_ORDER_PREFIX):
-                continue
-            status_val = getattr(o.status, "value", str(o.status)).lower()
-            if status_val not in open_statuses:
-                continue
-            if not o.broker_order_id:
-                continue
-            try:
-                await broker.cancel_order(o.broker_order_id)
-                cancelled += 1
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "momentum.scheduler.cancel_failed",
-                    broker_order_id=o.broker_order_id,
-                    client_order_id=o.client_order_id, error=str(exc)[:200],
-                )
-        if cancelled:
-            logger.info("momentum.scheduler.stale_orders_cancelled", n=cancelled)
-        return cancelled
+        return await cancel_stale_orders(
+            broker,
+            order_prefix=ENGINE_ORDER_PREFIX,
+            log_namespace="momentum.scheduler",
+        )
 
     @staticmethod
     def _payload_to_order(order):
