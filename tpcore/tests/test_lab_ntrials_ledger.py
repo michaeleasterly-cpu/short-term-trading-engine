@@ -412,9 +412,9 @@ async def test_second_candidate_same_target_gets_strictly_larger_n_trials(
 
     def _spy_dsr(r, *, n_trials, trial_sharpe_variance=None):
         # SP-A2: the production call site now passes
-        # trial_sharpe_variance=. Widen the stub signature so it does
-        # not raise TypeError; forward it so the wrapped real DSR sees
-        # the same V the production path computed (H-A2-12).
+        # trial_sharpe_variance=<V>; widen the stub signature to accept
+        # it (SP-A2 H-A2-12) or it raises TypeError. Forward it so the
+        # wrapped real DSR sees the same V the production path computed.
         seen_n_trials.append(n_trials)
         return real_dsr(r, n_trials=n_trials,
                         trial_sharpe_variance=trial_sharpe_variance)
@@ -671,12 +671,17 @@ async def test_gate_expression_byte_identical_and_reduces_to_per_run(
     #    NOT revert toward the old equality without the V arg — that
     #    would mask the corrected defect. Editable SP-A test, NOT the
     #    byte-frozen SP2 oracle (§5 / H-A2-12). ───────────────────────
-    # Harness reality: _install_offline_harness replays one repeated
-    # config ⇒ fewer than MIN_TRIALS_FOR_V non-errored trials ⇒ the
-    # production verdict site passes trial_sharpe_variance=None ⇒ the
+    # Harness reality: _install_offline_harness produces 1 walk-forward
+    # window (train_start=2018 / holdout_end=2021 / walk_forward_step=365)
+    # × per_window_trials=4 = 4 non-errored trials.  4 < MIN_TRIALS_FOR_V=5
+    # ⇒ production verdict site passes trial_sharpe_variance=None ⇒ the
     # documented 1/(n-1) fallback, BYTE-IDENTICAL to pre-SP-A2. So the
     # original equality still holds verbatim (the WARNING is a logging
     # side-effect, numerically inert — T-VERDICT-FALLBACK-WARNS).
+    # GUARD: if you raise per_window_trials >= 5 or widen the date span to
+    # produce >= 2 windows, V becomes real, the DSR genuinely moves, and
+    # the equality below no longer holds — this is NOT a test bug, it is a
+    # harness-premise invalidation that must be re-baselined deliberately.
     # Step 3 (post _spy widening) empirically confirmed this assertion
     # did NOT move — the value is deliberately kept, only documented.
     assert core.dsr == real_dsr(returns, n_trials=37)
