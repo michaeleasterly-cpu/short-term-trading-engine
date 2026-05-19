@@ -76,7 +76,23 @@ exclude = ["tests*"]
 [tool.ruff]
 line-length = 110
 target-version = "py311"
-extend-exclude = ["data", "logs", "*_archive", ".claude"]
+# Shared 3-way exclude triplet — keep this coherent with the
+# [tool.pytest.ini_options] norecursedirs below and the tracked `.ignore`
+# file. The three deliberately near-duplicate; their divergences are
+# intentional (see `.ignore`). FIX-2 shell-kwarg cross-ref precedent.
+#
+# `respect-gitignore = false`: ruff reads `.ignore` (ripgrep semantics) by
+# default, and its bare `data/` matches a `data/` dir at ANY depth —
+# silently dropping the first-party package tpcore/data/ from CI lint. With
+# ignore-file discovery off, these explicit patterns are authoritative.
+# `./x` = root-relative (a pattern containing a slash is "relative to the
+# project root" per ruff docs; verified empirically on ruff 0.15.12 that
+# leading-"/" does NOT root-anchor but "./x" / "x/" do) — the 1.4 GB root
+# data/ + root logs/ + root .claude/ ONLY, NOT tpcore/data/. "*_archive"
+# stays unanchored: a suffix glob for the data/*_archive/ dirs at any depth
+# (verified: no first-party package matches *_archive).
+respect-gitignore = false
+extend-exclude = ["./data", "./logs", "*_archive", "./.claude"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
@@ -90,7 +106,13 @@ ignore = ["E501"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-norecursedirs = ["data", "logs", ".claude", "*_archive", ".git", ".venv"]
+# Part of the 3-way exclude triplet (see [tool.ruff] extend-exclude above and
+# the tracked `.ignore`). norecursedirs is basename-fnmatch ONLY (cannot
+# root-anchor), so "data"/"logs" would also match the first-party package
+# tpcore/data/ — and they were redundant anyway: `testpaths` below already
+# scopes collection to explicit dirs, so root data/ + logs/ are never walked.
+# Dropped them; only basename-safe non-package entries remain.
+norecursedirs = [".claude", "*_archive", ".git", ".venv"]
 markers = [
     "xdist_group: pytest-xdist group pinning (ops-shadow single-worker isolation; P1.3)",
 ]
