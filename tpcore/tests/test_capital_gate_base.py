@@ -36,12 +36,17 @@ import structlog
 
 import reversion.plugs.capital_gate as rev_mod
 import tpcore.interfaces.capital_gate_base as base_mod
+import vector.plugs.capital_gate as vec_mod
 from reversion.plugs.capital_gate import GraduationStats, ReversionCapitalGate
 from tpcore.backtest.credibility import CredibilityScoreInsufficientError
 from tpcore.quality.validation.capital_gate import (
     ValidationFailedError,
     ValidationStaleError,
 )
+from vector.plugs.capital_gate import (
+    GraduationStats as VectorGraduationStats,
+)
+from vector.plugs.capital_gate import VectorCapitalGate
 
 
 def _patch_deps(
@@ -52,6 +57,17 @@ def _patch_deps(
     (rev_mod) code paths resolve these from their own module globals, so
     a parity test must mock both for an apples-to-apples comparison."""
     for mod in (base_mod, rev_mod):
+        monkeypatch.setattr(mod, "assert_passed_for_engine", val)
+        monkeypatch.setattr(mod, "graduation_ready", cred)
+
+
+def _patch_deps_vector(
+    monkeypatch: pytest.MonkeyPatch, val: object, cred: object
+) -> None:
+    """Vector counterpart of :func:`_patch_deps` — patches the I/O deps in
+    BOTH the consolidated base module and the vector module so the new
+    (base) and `_legacy_*` (vec_mod) paths compare apples-to-apples."""
+    for mod in (base_mod, vec_mod):
         monkeypatch.setattr(mod, "assert_passed_for_engine", val)
         monkeypatch.setattr(mod, "graduation_ready", cred)
 
@@ -322,4 +338,266 @@ async def test_assert_can_graduate_equals_legacy_over_grid(
 
     new = await _outcome(ReversionCapitalGate.assert_can_graduate)
     old = await _outcome(ReversionCapitalGate._legacy_assert_can_graduate)
+    assert new == old
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Lean P5.5b — VECTOR cutover (SECOND staged per-engine cutover of the live
+# risk gate). Identical structure to the reversion families above, with an
+# INDEPENDENT expectation for vector: the exact `vector.gate.*` event names,
+# the same `-0.05` boundary, vector's 3-threshold `is_graduated` (NO
+# profit_factor — vector's GraduationStats is the plain
+# PerTradeGraduationStats), and the `_legacy_*` parallel-diff proving the
+# consolidated base == vector's pre-refactor implementation.
+# ════════════════════════════════════════════════════════════════════════════
+
+
+# ── 1. vector check_trade characterization (independent expectation) ────────
+#
+# Defaults: engine_equity=10000, max_position_usd=2000, max_positions=5,
+# DAILY_LOSS_FREEZE_PCT=0.05 → boundary engine_pnl at equity 10000 is -500.
+
+
+@pytest.mark.parametrize(
+    ("size", "engine_pnl", "open_positions", "kwargs", "expected", "events"),
+    [
+        # nonpositive size (zero and negative)
+        (Decimal("0"), Decimal("0"), 0, {}, False, ["vector.gate.reject_nonpositive"]),
+        (Decimal("-1"), Decimal("0"), 0, {}, False, ["vector.gate.reject_nonpositive"]),
+        # oversize vs max_position_usd (strictly greater)
+        (Decimal("2000.01"), Decimal("0"), 0, {}, False, ["vector.gate.reject_oversize"]),
+        # exactly at the cap is allowed (not > cap)
+        (Decimal("2000"), Decimal("0"), 0, {}, True, []),
+        # position-count limit: >= max_positions rejects
+        (Decimal("100"), Decimal("0"), 5, {}, False, ["vector.gate.reject_position_count"]),
+        (Decimal("100"), Decimal("0"), 6, {}, False, ["vector.gate.reject_position_count"]),
+        # one below the count cap is allowed
+        (Decimal("100"), Decimal("0"), 4, {}, True, []),
+        # daily-loss: drawdown strictly past the threshold rejects (-600/10000=-0.06)
+        (Decimal("100"), Decimal("-600"), 0, {}, False, ["vector.gate.reject_daily_loss"]),
+        # the EXACT drawdown == -0.05 boundary: -500/10000 == -0.05 → <= → REJECT
+        (Decimal("100"), Decimal("-500"), 0, {}, False, ["vector.gate.reject_daily_loss"]),
+        # just inside the boundary: -499.99/10000 > -0.05 → ALLOW
+        (Decimal("100"), Decimal("-499.99"), 0, {}, True, []),
+        # engine_equity == 0 → drawdown block skipped entirely (no divide), ALLOW
+        (Decimal("100"), Decimal("-99999"), 0, {"engine_equity": Decimal("0")}, True, []),
+        # clean pass, no events
+        (Decimal("1000"), Decimal("50"), 2, {}, True, []),
+    ],
+)
+def test_vector_check_trade_characterization(
+    size: Decimal,
+    engine_pnl: Decimal,
+    open_positions: int,
+    kwargs: dict,
+    expected: bool,
+    events: list[str],
+) -> None:
+    gate = VectorCapitalGate(**kwargs)
+    cap = _capture()
+    try:
+        result = gate.check_trade(size, engine_pnl, open_positions)
+    finally:
+        structlog.reset_defaults()
+    assert result is expected
+    assert _event_names(cap) == events
+
+
+def test_vector_check_trade_branch_precedence_nonpositive_before_oversize() -> None:
+    """A nonpositive size that is also 'oversize' must emit ONLY the
+    nonpositive event — branch order is observable behavior."""
+    gate = VectorCapitalGate()
+    cap = _capture()
+    try:
+        result = gate.check_trade(Decimal("-9999"), Decimal("0"), 0)
+    finally:
+        structlog.reset_defaults()
+    assert result is False
+    assert _event_names(cap) == ["vector.gate.reject_nonpositive"]
+
+
+def test_vector_healthcheck_payload_unchanged() -> None:
+    assert VectorCapitalGate().healthcheck() == {
+        "engine": "vector",
+        "plug": "capital_gate",
+        "ok": True,
+        "details": {
+            "engine_equity_usd": "10000",
+            "max_position_usd": "2000",
+            "max_positions": 5,
+        },
+    }
+
+
+# ── 2. vector assert_can_graduate raise/return matrix ───────────────────────
+#
+# Vector's GraduationStats has NO profit_factor (unlike reversion); grad
+# thresholds are n_trades>=30, win_rate>=0.55, avg_return>=0.03.
+
+_VEC_PASS_STATS = VectorGraduationStats(
+    n_trades=30, win_rate=0.6, avg_return=0.05
+)
+_VEC_FAIL_STATS = VectorGraduationStats(
+    n_trades=1, win_rate=0.6, avg_return=0.05
+)
+
+
+async def test_vector_assert_can_graduate_short_circuits_when_not_graduated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called = {"validation": False, "cred": False}
+
+    async def _val(*a: object, **k: object) -> None:
+        called["validation"] = True
+
+    async def _cred(*a: object, **k: object) -> bool:
+        called["cred"] = True
+        return True
+
+    _patch_deps_vector(monkeypatch, _val, _cred)
+
+    result = await VectorCapitalGate.assert_can_graduate(
+        _VEC_FAIL_STATS, _SentinelPool()
+    )
+    assert result is False
+    assert called == {"validation": False, "cred": False}
+
+
+async def test_vector_assert_can_graduate_true_when_all_pass(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _val(*a: object, **k: object) -> None:
+        return None
+
+    async def _cred(*a: object, **k: object) -> bool:
+        return True
+
+    _patch_deps_vector(monkeypatch, _val, _cred)
+
+    assert (
+        await VectorCapitalGate.assert_can_graduate(
+            _VEC_PASS_STATS, _SentinelPool()
+        )
+        is True
+    )
+
+
+async def test_vector_assert_can_graduate_raises_credibility_when_not_ready(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _val(*a: object, **k: object) -> None:
+        return None
+
+    async def _cred(*a: object, **k: object) -> bool:
+        return False
+
+    _patch_deps_vector(monkeypatch, _val, _cred)
+
+    with pytest.raises(CredibilityScoreInsufficientError):
+        await VectorCapitalGate.assert_can_graduate(
+            _VEC_PASS_STATS, _SentinelPool()
+        )
+
+
+@pytest.mark.parametrize("exc", [ValidationStaleError, ValidationFailedError])
+async def test_vector_assert_can_graduate_propagates_validation_errors(
+    monkeypatch: pytest.MonkeyPatch, exc: type[Exception]
+) -> None:
+    async def _val(*a: object, **k: object) -> None:
+        raise exc("data gate not satisfied")
+
+    async def _cred(*a: object, **k: object) -> bool:  # pragma: no cover
+        return True
+
+    _patch_deps_vector(monkeypatch, _val, _cred)
+
+    with pytest.raises(exc):
+        await VectorCapitalGate.assert_can_graduate(
+            _VEC_PASS_STATS, _SentinelPool()
+        )
+
+
+@pytest.mark.parametrize(
+    ("stats", "expected"),
+    [
+        (VectorGraduationStats(n_trades=30, win_rate=0.55, avg_return=0.03), True),
+        (VectorGraduationStats(n_trades=29, win_rate=0.55, avg_return=0.03), False),
+        (VectorGraduationStats(n_trades=30, win_rate=0.54, avg_return=0.03), False),
+        (VectorGraduationStats(n_trades=30, win_rate=0.55, avg_return=0.029), False),
+        (VectorGraduationStats(n_trades=0, win_rate=0.0, avg_return=0.0), False),
+    ],
+)
+def test_vector_is_graduated_thresholds(
+    stats: VectorGraduationStats, expected: bool
+) -> None:
+    assert VectorCapitalGate.is_graduated(stats) is expected
+
+
+# ── 3. vector `_legacy_*` parallel-diff (new == legacy over a fuzzed grid) ──
+
+_VEC_GRAD_STATES = [
+    _VEC_PASS_STATS,
+    _VEC_FAIL_STATS,
+    VectorGraduationStats(n_trades=30, win_rate=0.55, avg_return=0.03),
+    VectorGraduationStats(n_trades=30, win_rate=0.55, avg_return=0.029),
+]
+
+
+def test_vector_check_trade_equals_legacy_over_fuzzed_grid() -> None:
+    for equity in _EQUITIES:
+        gate = VectorCapitalGate(engine_equity=equity)
+        for size in _SIZES:
+            for pnl in _PNLS:
+                for n in _POSCOUNTS:
+                    cap_new = _capture()
+                    try:
+                        new = gate.check_trade(size, pnl, n)
+                    finally:
+                        structlog.reset_defaults()
+                    cap_old = _capture()
+                    try:
+                        old = gate._legacy_check_trade(size, pnl, n)
+                    finally:
+                        structlog.reset_defaults()
+                    ctx = f"equity={equity} size={size} pnl={pnl} n={n}"
+                    assert new == old, ctx
+                    assert _event_names(cap_new) == _event_names(cap_old), ctx
+
+
+@pytest.mark.parametrize("stats", _VEC_GRAD_STATES)
+@pytest.mark.parametrize(
+    ("val_behavior", "cred_ready"),
+    [
+        ("ok", True),
+        ("ok", False),
+        ("stale", True),
+        ("failed", True),
+    ],
+)
+async def test_vector_assert_can_graduate_equals_legacy_over_grid(
+    monkeypatch: pytest.MonkeyPatch,
+    stats: VectorGraduationStats,
+    val_behavior: str,
+    cred_ready: bool,
+) -> None:
+    async def _val(*a: object, **k: object) -> None:
+        if val_behavior == "stale":
+            raise ValidationStaleError("stale")
+        if val_behavior == "failed":
+            raise ValidationFailedError("failed")
+        return None
+
+    async def _cred(*a: object, **k: object) -> bool:
+        return cred_ready
+
+    _patch_deps_vector(monkeypatch, _val, _cred)
+
+    async def _outcome(fn) -> object:
+        try:
+            return ("return", await fn(stats, _SentinelPool()))
+        except Exception as exc:  # noqa: BLE001 — parity comparison of any raise
+            return ("raise", type(exc))
+
+    new = await _outcome(VectorCapitalGate.assert_can_graduate)
+    old = await _outcome(VectorCapitalGate._legacy_assert_can_graduate)
     assert new == old
