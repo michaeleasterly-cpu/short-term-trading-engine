@@ -217,3 +217,60 @@ zero-collision); Pillar A is the official, doc-grounded coordination
 target with honest experimental risk, correctly deferred with a
 zero-cost human-relay fallback. Every live-money / determinism /
 cross-session invariant is preserved by construction.
+
+## 7. Decision Record — Pillar A adoption: **SKIP (single-session), 2026-05-19**
+
+**Status of this doc:** Pillar B = SHIPPED (`docs/DEV_PIPELINE_STANDARD.md`
++ `tests/test_dev_pipeline_standard_present.py`, PRs #109/#110/#111).
+Pillar A = **adoption decided AGAINST single-session.** This section is
+the terminal decision for §3 Phase B / §6 row B.
+
+**Trigger.** Pillar A's design premise (§0/§1) was *replacing the
+two-session human relay*. The operator permanently collapsed to ONE
+session (`[[cross-session-coordination]]`), so that premise is moot.
+The master remaining-program kept "Agent-Teams adoption" as a sequence
+step on the operator's broader durable intent ("new dev environment /
+develop with agents / make everything faster / accelerate the Lab
+front-half epic") and prescribed an **expert-led brainstorm**
+(claude-code-guide = the verdict source) to resolve the moot-ness
+rather than pre-deciding.
+
+**Verdict (claude-code-guide, current official docs fetched 2026-05-19,
+code.claude.com/docs/en/agent-teams.md):** **Skip Agent Teams
+single-session.** Evidence:
+
+- Agent Teams' only novel delta over the already-in-use
+  subagent-driven-development + dispatching-parallel-agents + per-feature
+  git worktrees is *teammate-to-teammate messaging*. It adds **no**
+  capability the existing stack lacks for ~6 sequential
+  brainstorm→spec→plan→build sub-projects: parallelism (subagents +
+  parallel-agents already), isolation (worktrees already, **strictly
+  safer** — filesystem-level vs Teams' advisory file-ownership
+  partition), or a better merge path (the serialized PR+CI+squash gate
+  is unchanged).
+- Teams uses a **single shared working tree with no automatic
+  isolation** (docs: *"Agent teams don't isolate teammates in
+  worktrees"*; *"Two teammates editing the same file leads to
+  overwrites"*). On a live-money platform this reintroduces a same-file
+  race the serialized relay implicitly prevented, contained only by
+  advisory (non-enforced) partition + hooks — net risk without
+  commensurate single-session benefit.
+- The operator's durable intent ("develop with agents / faster") is
+  **already realized** by the shipped Pillar B pipeline + the existing
+  agent tooling. Relay-replacement, Teams' raison d'être here, is moot.
+
+**Decision.** Do **not** set `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`;
+do **not** build the lead+teammates topology / `TaskCompleted` hook /
+relay-retirement adoption. Zero repo artifact depends on Teams, so this
+is a no-op (not a rollback). The §3 Phase B *design* is retained as the
+documented official target **iff** a future multi-human / multi-session
+topology re-creates the premise — re-open this Decision Record then;
+until then it is closed.
+
+**Scope discipline.** The expert's ancillary "tighten the existing
+flow" suggestions (consolidate subagent definitions, pre-checklists,
+`/loop` health checks) are **explicitly OUT** — unsolicited scope
+beyond the operator's step; the shipped DEV_PIPELINE_STANDARD already
+codifies the split-review / parallel-accelerator / worktree-isolation
+contract. No action. Master sequence advances to the Lab front-half
+epic (`[[lab-front-half-epic]]`).
