@@ -656,3 +656,45 @@ def test_sp_a2_t_degenerate_identical_columns_and_too_few_cols() -> None:
         trades=trades, parameters={"p": 1}, sr_observed=0.1, n_trials=3,
     )
     assert diag_none._trial_sharpe_variance() is None      # no matrix
+
+
+def test_sp_a2_slice_metrics_per_period_field_is_unannualized() -> None:
+    """H-A2-11. compute_slice_metrics_from_trades exposes an additive
+    holdout_sharpe_per_period == mean/std(ddof=1) (NO √periods_per_year);
+    the annualized `sharpe` field is byte-IDENTICAL (rankings/oracle
+    untouched)."""
+    # DEVIATION (plan intent + every assertion byte-identical): the plan's
+    # literal in-test `del sys.modules["ops"|"ops.*"]` collision-eviction
+    # guard, run in the full single-process suite, *deletes* the
+    # scripts/ops.py↔ops/ shadow the SP2 oracle's already-collected `sp`
+    # bound its monkeypatch targets to → breaks two SP2 oracle tests
+    # (proven: full suite 1744/0 with this test deselected; the eviction
+    # guard, not the import, is the perturbation). The canonical repo
+    # pattern for a tpcore-test that needs ops.lab.run is a plain in-body
+    # import with NO eviction guard (see test_lab_no_gate_poison.py:25,
+    # green in the same full suite). Adopt that pattern — hermetic,
+    # oracle-neutral, intent/assertions unchanged.
+    from datetime import date as _date
+
+    import ops.lab.run as _lr
+
+    class _T:
+        def __init__(self, d, p):
+            self.entry_date = d
+            self.pnl_pct = p
+
+    rng = np.random.default_rng(7)
+    rs = [float(x) for x in rng.normal(0.01, 0.02, 30)]
+    trades = [_T(_date(2022, 1, 3) + timedelta(days=i), r)
+              for i, r in enumerate(rs)]
+    span_days = 364
+    sm = _lr.compute_slice_metrics_from_trades(trades, span_days)
+    arr = np.array(rs, dtype=float)
+    want_pp = float(arr.mean() / arr.std(ddof=1))
+    assert abs(sm.holdout_sharpe_per_period - want_pp) < 1e-12
+    # Annualized sharpe = per-period · √periods_per_year, byte-unchanged.
+    ppy = 30 / (span_days / 365.25)
+    assert abs(sm.sharpe - want_pp * _sp_a2_math.sqrt(ppy)) < 1e-9
+    # Empty-trades path keeps the additive default (0.0), no crash.
+    sm0 = _lr.compute_slice_metrics_from_trades([], 1)
+    assert sm0.holdout_sharpe_per_period == 0.0

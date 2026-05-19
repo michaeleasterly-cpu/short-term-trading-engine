@@ -202,6 +202,13 @@ class SliceMetrics:
     profit_factor: float
     max_drawdown: float
     win_rate: float
+    # SP-A2 / H-A2-11: the UN-annualized per-period Sharpe
+    # (mean/std(ddof=1), the same quantity BEFORE the √periods_per_year
+    # factor). Additive + ranking-neutral + oracle-neutral: the
+    # annualized `sharpe` above is byte-IDENTICAL; this field exists
+    # ONLY so compute_dsr_for_verdict's V-term is units-coherent with
+    # its per-period SR̂ (annualized V would inflate SR₀ by ≈ppy).
+    holdout_sharpe_per_period: float = 0.0
 
     def to_dict(self) -> dict:
         return {
@@ -210,6 +217,10 @@ class SliceMetrics:
             "profit_factor": float(self.profit_factor) if math.isfinite(self.profit_factor) else 0.0,
             "max_drawdown": float(self.max_drawdown),
             "win_rate": float(self.win_rate),
+            "holdout_sharpe_per_period": (
+                float(self.holdout_sharpe_per_period)
+                if math.isfinite(self.holdout_sharpe_per_period) else 0.0
+            ),
         }
 
 
@@ -252,11 +263,15 @@ def compute_slice_metrics_from_trades(
     win_rate = float(len(wins) / n_periods)
     periods_per_year = n_periods / (span_days / 365.25) if span_days else n_periods
     if period_returns_arr.std(ddof=1) > 0 and n_periods > 1:
-        sharpe = float(
+        # SP-A2 / H-A2-11: the per-period (un-annualized) Sharpe is the
+        # base quantity; the annualized `sharpe` is it × √periods_per_year
+        # — the annualized expression is byte-IDENTICAL to before.
+        sharpe_per_period = float(
             period_returns_arr.mean() / period_returns_arr.std(ddof=1)
-            * math.sqrt(periods_per_year)
         )
+        sharpe = float(sharpe_per_period * math.sqrt(periods_per_year))
     else:
+        sharpe_per_period = 0.0
         sharpe = 0.0
 
     # Geometric equity curve = ∏(1 + r_period).
@@ -270,6 +285,7 @@ def compute_slice_metrics_from_trades(
     return SliceMetrics(
         n_trades=len(trades), sharpe=sharpe, profit_factor=pf,
         max_drawdown=max_dd, win_rate=win_rate,
+        holdout_sharpe_per_period=sharpe_per_period,
     )
 
 
