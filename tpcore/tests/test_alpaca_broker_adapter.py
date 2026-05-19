@@ -245,7 +245,7 @@ async def test_submit_execution_decision_places_two_orders() -> None:
     assert placed[1].time_in_force is TimeInForce.GTC
 
     # Touch the unused import so ruff doesn't strip it on autoformat.
-    assert date_t.today().year >= 2025
+    assert date_t.today().year >= 2025  # noqa: DTZ011
 
 
 # ────────────────────────────────────────────────────────────────────────────

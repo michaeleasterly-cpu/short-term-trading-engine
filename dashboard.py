@@ -965,7 +965,7 @@ async def _fetch_signals_all_engines(days: int = 30) -> list[dict]:
                 all_signals.append(r)
     finally:
         await pool.close()
-    all_signals.sort(key=lambda r: r.get("recorded_at") or datetime.min, reverse=True)
+    all_signals.sort(key=lambda r: r.get("recorded_at") or datetime.min, reverse=True)  # noqa: DTZ901
     return all_signals
 
 

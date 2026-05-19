@@ -29,7 +29,7 @@ def _coerce_date(value: Any) -> Any:
     if isinstance(value, str):
         for fmt in ("%Y-%m-%d", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
             try:
-                return datetime.strptime(value, fmt).date()
+                return datetime.strptime(value, fmt).date()  # noqa: DTZ007
             except ValueError:
                 continue
     return value

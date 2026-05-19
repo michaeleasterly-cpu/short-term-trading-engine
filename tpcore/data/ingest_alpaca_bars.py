@@ -306,7 +306,7 @@ async def run() -> None:
     headers = _alpaca_headers()
     pool = await build_asyncpg_pool(os.environ["DATABASE_URL"])
 
-    end = date.today()
+    end = date.today()  # noqa: DTZ011
     start = date(2016, 1, 1)  # Alpaca IEX free history cutoff
 
     try:

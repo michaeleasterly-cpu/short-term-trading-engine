@@ -31,8 +31,8 @@ async def amain(args: argparse.Namespace) -> int:
     if not symbols:
         print("FAILED — no tickers", file=sys.stderr)
         return 1
-    start_d = date.fromisoformat(args.since) if args.since else date.today() - timedelta(days=30)
-    end_d = date.today() - timedelta(days=1)
+    start_d = date.fromisoformat(args.since) if args.since else date.today() - timedelta(days=30)  # noqa: DTZ011
+    end_d = date.today() - timedelta(days=1)  # noqa: DTZ011
 
     async with httpx.AsyncClient(
         headers={

@@ -82,8 +82,8 @@ class AlpacaDataAdapter(DataProviderInterface):
         request = StockBarsRequest(
             symbol_or_symbols=symbol,
             timeframe=TimeFrame.Day,
-            start=datetime(start.year, start.month, start.day),
-            end=datetime(end.year, end.month, end.day),
+            start=datetime(start.year, start.month, start.day),  # noqa: DTZ001
+            end=datetime(end.year, end.month, end.day),  # noqa: DTZ001
             feed=self._feed,
             adjustment="raw",
         )

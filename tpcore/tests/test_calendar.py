@@ -104,7 +104,7 @@ def test_trading_days_between_simple_week() -> None:
 
 
 def test_naive_datetime_raises() -> None:
-    naive = datetime(2024, 1, 8, 18, 0)
+    naive = datetime(2024, 1, 8, 18, 0)  # noqa: DTZ001
     with pytest.raises(ValueError):
         session_contains(naive)
 

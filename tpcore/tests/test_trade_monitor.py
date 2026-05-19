@@ -237,7 +237,7 @@ def test_decimal_handles_none_empty_and_numeric() -> None:
 
 
 def test_aware_normalizes_naive_to_utc() -> None:
-    naive = datetime(2026, 5, 12, 13, 30)
+    naive = datetime(2026, 5, 12, 13, 30)  # noqa: DTZ001
     out = _aware(naive)
     assert out is not None
     assert out.tzinfo == UTC
