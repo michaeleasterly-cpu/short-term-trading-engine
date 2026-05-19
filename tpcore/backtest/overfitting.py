@@ -105,24 +105,83 @@ def _psr_per_trade(
     return float(norm.cdf(z))
 
 
-def _expected_max_sharpe_under_null(n_trials: int, n_obs: int) -> float:
-    """Expected max sample Sharpe across ``n_trials`` independent trials under null.
+MIN_TRIALS_FOR_V = 5  # H-A2-10: advisory for CALLERS — below this the
+                      # cross-trial variance is too noisy to trust as a
+                      # selection-bias estimate, so callers (e.g.
+                      # OverfittingDiagnostic._trial_sharpe_variance /
+                      # compute_dsr_for_verdict) must pass
+                      # trial_sharpe_variance=None.
+                      # _expected_max_sharpe_under_null itself does NOT
+                      # enforce this guard; it applies only the floor.
 
-    Bailey & López de Prado (2014) approximation with Euler–Mascheroni
-    constant. Variance of sample Sharpe under null SR=0 is ≈ 1/(n_obs - 1).
+
+def _expected_max_sharpe_under_null(
+    n_trials: int,
+    n_obs: int,
+    *,
+    trial_sharpe_variance: float | None = None,
+) -> float:
+    """Expected max sample Sharpe across ``n_trials`` trials under the null.
+
+    Bailey & López de Prado (2014), SSRN 2460551, eqn for SR₀:
+        SR₀ = √V · ((1−γ)·Φ⁻¹[1−1/N] + γ·Φ⁻¹[1−1/(N·e)])
+    where **V = V[ŜR_n] is the cross-trial variance of the per-trial
+    Sharpe estimates across the N searched trials** (selection-bias
+    dispersion), NOT the single-estimator sampling variance.
+
+    ``trial_sharpe_variance`` — pass V[ŜR_n] computed from the sweep's
+    per-trial Sharpe vector (the statistically-correct path). When
+    ``None`` (a count-only / single-strategy caller that has no trial
+    vector), fall back to the single-estimator null approximation
+    ``1/(n_obs-1)`` AND emit a structlog WARNING — this branch is a
+    documented approximation, never silent (§1.3, H-A2-1).
+
+    The H-A2-10 floor ``max(V, 1/(n_obs-1))`` makes the change provably
+    tightening-or-equal for every input: a low-dispersion / degenerate
+    sweep can NOT loosen the (already-too-lenient) legacy bar. See the
+    sibling impl ``ops/lab/run.py::compute_dsr_for_verdict`` — both must
+    stay coherent (H-A2-7); the V-term is the cross-trial dispersion,
+    ``ddof=1``, distinct from the multiple-testing count ``n_trials``.
     """
     if n_trials <= 1 or n_obs < 2:
         return 0.0
-    sr_variance = 1.0 / (n_obs - 1)
+    floor = 1.0 / (n_obs - 1)  # legacy single-estimator value — now a FLOOR
+    if trial_sharpe_variance is not None:
+        # H-A2-10: honest cross-trial dispersion is used ONLY when it makes
+        # the gate the SAME OR HARDER. A low-dispersion / degenerate sweep
+        # (V < 1/(n_obs-1)) must NOT loosen the bar — clamp up to the floor.
+        # anti-laundering floor: NOT max(V,0.0) — V=0 collapses SR0->0,
+        # DSR->~1, spuriously clearing the 0.95 gate (T-STRICTER guards this).
+        sr_variance = max(float(trial_sharpe_variance), floor)
+    else:
+        sr_variance = floor  # KNOWN APPROXIMATION — not the paper's V
+        logger.warning(
+            "tpcore.overfitting.dsr.null_variance_approximation",
+            reason="no per-trial Sharpe vector available; using "
+                   "single-estimator 1/(n_obs-1) instead of "
+                   "cross-trial V[SR_n]",
+            n_trials=n_trials,
+            n_obs=n_obs,
+        )
     z1 = float(norm.ppf(1.0 - 1.0 / n_trials))
     z2 = float(norm.ppf(1.0 - 1.0 / (n_trials * math.e)))
-    return math.sqrt(sr_variance) * ((1.0 - EULER_MASCHERONI) * z1 + EULER_MASCHERONI * z2)
+    return math.sqrt(sr_variance) * (
+        (1.0 - EULER_MASCHERONI) * z1 + EULER_MASCHERONI * z2
+    )
 
 
 def _deflated_sharpe_ratio(
-    sr: float, n: int, skew: float, kurt: float, n_trials: int
+    sr: float,
+    n: int,
+    skew: float,
+    kurt: float,
+    n_trials: int,
+    *,
+    trial_sharpe_variance: float | None = None,
 ) -> float:
-    threshold = _expected_max_sharpe_under_null(n_trials, n)
+    threshold = _expected_max_sharpe_under_null(
+        n_trials, n, trial_sharpe_variance=trial_sharpe_variance
+    )
     return _psr_per_trade(sr, threshold, n, skew, kurt)
 
 
@@ -362,7 +421,29 @@ class OverfittingDiagnostic:
 
         # 1–2. PSR / DSR
         psr_at_zero = _psr_per_trade(sr_internal, 0.0, n, skew, kurt) if n >= 2 else 0.0
-        dsr = _deflated_sharpe_ratio(sr_internal, n, skew, kurt, self._n_trials) if n >= 2 else 0.0
+        trial_sharpe_var = self._trial_sharpe_variance()  # None ⇒ documented fallback
+        if trial_sharpe_var is not None:
+            # H-A2-4: the V-source trial count and the multiple-testing
+            # count are deliberately distinct estimands — log side-by-side
+            # so any divergence is visible, never silently reconciled.
+            # Single source of truth for the matrix→2-D conversion: the same
+            # ``_trial_matrix_2d`` ``_trial_sharpe_variance`` used (V already
+            # non-None here ⇒ the helper's guards passed ⇒ never None).
+            _v_arr = self._trial_matrix_2d()
+            assert _v_arr is not None  # noqa: S101 — V non-None ⇒ guards passed
+            logger.info(
+                "tpcore.overfitting.dsr.v_n_trial_population",
+                v_trial_count=int(_v_arr.shape[1]),
+                n_trials=self._n_trials,
+            )
+        dsr = (
+            _deflated_sharpe_ratio(
+                sr_internal, n, skew, kurt, self._n_trials,
+                trial_sharpe_variance=trial_sharpe_var,
+            )
+            if n >= 2
+            else 0.0
+        )
 
         # 3. PBO via CSCV (only with a returns matrix)
         pbo_value, pbo_passes, pbo_reason = self._run_pbo()
@@ -472,6 +553,39 @@ class OverfittingDiagnostic:
         if not self._trades:
             return np.zeros(0, dtype=float)
         return np.asarray([float(t["pnl_pct"]) for t in self._trades], dtype=float)
+
+    def _trial_matrix_2d(self) -> np.ndarray | None:
+        """The trial matrix as a 2-D ndarray, or ``None`` when it is absent /
+        not 2-D / has < MIN_TRIALS_FOR_V columns. Single source of truth for
+        the matrix→ndarray conversion shared by ``_trial_sharpe_variance``
+        (V) and ``run()``'s H-A2-4 v_trial_count log — so the two can never
+        diverge. Never raises (module contract: sub-tests never raise)."""
+        if self._trial_matrix is None:
+            return None
+        arr = (
+            self._trial_matrix.values
+            if isinstance(self._trial_matrix, pd.DataFrame)
+            else np.asarray(self._trial_matrix)
+        )
+        if arr.ndim != 2 or arr.shape[1] < MIN_TRIALS_FOR_V:
+            return None
+        return arr
+
+    def _trial_sharpe_variance(self) -> float | None:
+        """V[ŜR_n] across the N searched trials, from the SAME per-column
+        Sharpe vector PBO already uses (``_column_sharpes``). One canonical
+        Sharpe-vector definition; no second estimator. ``None`` when no
+        matrix / not 2-D / < MIN_TRIALS_FOR_V columns (delegated to the
+        shared ``_trial_matrix_2d``). On ``None`` the value is passed
+        through ``_deflated_sharpe_ratio`` to ``_expected_max_sharpe_under_null``,
+        which then takes its logged ``1/(n_obs-1)`` single-estimator fallback
+        — the §3.1 / H-A2-10 floor keeps the gate safe (tightening-or-equal).
+        Never raises (module contract: sub-tests never raise)."""
+        arr = self._trial_matrix_2d()
+        if arr is None:
+            return None
+        col_sharpes = _column_sharpes(arr)
+        return float(np.var(col_sharpes, ddof=1))
 
     def _run_pbo(self) -> tuple[float | None, bool | None, str | None]:
         if self._trial_matrix is None:

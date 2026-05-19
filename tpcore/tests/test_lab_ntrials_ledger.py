@@ -410,9 +410,14 @@ async def test_second_candidate_same_target_gets_strictly_larger_n_trials(
     seen_n_trials: list[int] = []
     real_dsr = lab_run.compute_dsr_for_verdict
 
-    def _spy_dsr(r, *, n_trials):
+    def _spy_dsr(r, *, n_trials, trial_sharpe_variance=None):
+        # SP-A2: the production call site now passes
+        # trial_sharpe_variance=<V>; widen the stub signature to accept
+        # it (SP-A2 H-A2-12) or it raises TypeError. Forward it so the
+        # wrapped real DSR sees the same V the production path computed.
         seen_n_trials.append(n_trials)
-        return real_dsr(r, n_trials=n_trials)
+        return real_dsr(r, n_trials=n_trials,
+                        trial_sharpe_variance=trial_sharpe_variance)
 
     monkeypatch.setattr(lab_run, "compute_dsr_for_verdict", _spy_dsr)
     _install_offline_harness(monkeypatch, lab_run, returns=returns)
@@ -447,6 +452,10 @@ async def test_second_candidate_same_target_gets_strictly_larger_n_trials(
     assert core2.effective_n_trials == 90           # carried on the spine
     assert core1.effective_n_trials == 40
     # Monotone-harder: more trials ⇒ DSR no higher on identical returns.
+    # SP-A2: still holds — V is N-independent and floored, monotone-in-N
+    # preserved (H-LL-7). Step 3 (post _spy widening) showed this
+    # assertion did NOT move: re-baselining its value would be a
+    # weakening, so it is deliberately left byte-unchanged.
     assert core2.dsr <= core1.dsr
 
 
@@ -627,9 +636,11 @@ async def test_gate_expression_byte_identical_and_reduces_to_per_run(
     seen: list[int] = []
     real_dsr = lab_run.compute_dsr_for_verdict
 
-    def _spy(r, *, n_trials):
+    def _spy(r, *, n_trials, trial_sharpe_variance=None):
+        # SP-A2 H-A2-12 — signature widening (see _spy_dsr note above).
         seen.append(n_trials)
-        return real_dsr(r, n_trials=n_trials)
+        return real_dsr(r, n_trials=n_trials,
+                        trial_sharpe_variance=trial_sharpe_variance)
 
     monkeypatch.setattr(lab_run, "compute_dsr_for_verdict", _spy)
     _install_offline_harness(monkeypatch, lab_run, returns=returns)
@@ -649,7 +660,30 @@ async def test_gate_expression_byte_identical_and_reduces_to_per_run(
     assert not isinstance(core, int)
     assert core.effective_n_trials == 37          # 0 + args.trials
     assert seen[-1] == 37                          # exactly per-run
-    # Same returns + same n_trials ⇒ DSR identical to pre-SP-A path.
+    # ── SP-A2 H-LL-7 RE-BASELINE (deliberate, reviewed — NOT a
+    #    weakening). Pre-SP-A2 this pinned the bare 1/(n-1)-fallback
+    #    number. SP-A2 threads real cross-trial per-period V at the
+    #    verdict site (a genuine tightening; T-DELIVERED proves the
+    #    direction). The honest like-for-like pin compares the verdict
+    #    DSR against real_dsr called with the SAME V the production path
+    #    used (None ⇒ the offline harness yielded < MIN_TRIALS_FOR_V
+    #    non-errored trials ⇒ documented fallback, byte-identical). Do
+    #    NOT revert toward the old equality without the V arg — that
+    #    would mask the corrected defect. Editable SP-A test, NOT the
+    #    byte-frozen SP2 oracle (§5 / H-A2-12). ───────────────────────
+    # Harness reality: _install_offline_harness produces 1 walk-forward
+    # window (train_start=2018 / holdout_end=2021 / walk_forward_step=365)
+    # × per_window_trials=4 = 4 non-errored trials.  4 < MIN_TRIALS_FOR_V=5
+    # ⇒ production verdict site passes trial_sharpe_variance=None ⇒ the
+    # documented 1/(n-1) fallback, BYTE-IDENTICAL to pre-SP-A2. So the
+    # original equality still holds verbatim (the WARNING is a logging
+    # side-effect, numerically inert — T-VERDICT-FALLBACK-WARNS).
+    # GUARD: if you raise per_window_trials >= 5 or widen the date span to
+    # produce >= 2 windows, V becomes real, the DSR genuinely moves, and
+    # the equality below no longer holds — this is NOT a test bug, it is a
+    # harness-premise invalidation that must be re-baselined deliberately.
+    # Step 3 (post _spy widening) empirically confirmed this assertion
+    # did NOT move — the value is deliberately kept, only documented.
     assert core.dsr == real_dsr(returns, n_trials=37)
 
 
@@ -741,9 +775,13 @@ async def test_legacy_non_lab_path_emits_and_reads_no_ledger(
     seen: list[int] = []
     real_dsr = lab_run.compute_dsr_for_verdict
 
-    def _spy(r, *, n_trials):
+    def _spy(r, *, n_trials, trial_sharpe_variance=None):
+        # SP-A2 H-A2-12 — signature widening (legacy non-Lab path: the
+        # production site passes trial_sharpe_variance=None here since
+        # candidate is None ⇒ the offline harness yields < MIN_TRIALS).
         seen.append(n_trials)
-        return real_dsr(r, n_trials=n_trials)
+        return real_dsr(r, n_trials=n_trials,
+                        trial_sharpe_variance=trial_sharpe_variance)
 
     monkeypatch.setattr(lab_run, "compute_dsr_for_verdict", _spy)
     _install_offline_harness(monkeypatch, lab_run, returns=returns)

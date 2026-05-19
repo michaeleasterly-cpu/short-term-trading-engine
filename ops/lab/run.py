@@ -67,15 +67,21 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import structlog
 
 # tpcore.lab is the engine-FREE contract layer (H-S2-1) — safe to import
 # at module top; only the engine packages stay lazy in _runner_for etc.
+# MIN_TRIALS_FOR_V is a pure constant; tpcore.backtest.overfitting is
+# module-top-safe (no circular import) so it lives here, not lazy in-body.
+from tpcore.backtest.overfitting import MIN_TRIALS_FOR_V
 from tpcore.lab.models import (
     LabCandidate,
     LabResult,
     ParamDelta,
     WalkWindowRecord,
 )
+
+logger = structlog.get_logger(__name__)
 
 # Each engine's run_for_search is imported lazily inside _runner_for so the
 # orchestrator stays importable even when an engine module is being refactored.
@@ -202,6 +208,13 @@ class SliceMetrics:
     profit_factor: float
     max_drawdown: float
     win_rate: float
+    # SP-A2 / H-A2-11: the UN-annualized per-period Sharpe
+    # (mean/std(ddof=1), the same quantity BEFORE the √periods_per_year
+    # factor). Additive + ranking-neutral + oracle-neutral: the
+    # annualized `sharpe` above is byte-IDENTICAL; this field exists
+    # ONLY so compute_dsr_for_verdict's V-term is units-coherent with
+    # its per-period SR̂ (annualized V would inflate SR₀ by ≈ppy).
+    holdout_sharpe_per_period: float = 0.0
 
     def to_dict(self) -> dict:
         return {
@@ -210,6 +223,10 @@ class SliceMetrics:
             "profit_factor": float(self.profit_factor) if math.isfinite(self.profit_factor) else 0.0,
             "max_drawdown": float(self.max_drawdown),
             "win_rate": float(self.win_rate),
+            "holdout_sharpe_per_period": (
+                float(self.holdout_sharpe_per_period)
+                if math.isfinite(self.holdout_sharpe_per_period) else 0.0
+            ),
         }
 
 
@@ -252,11 +269,15 @@ def compute_slice_metrics_from_trades(
     win_rate = float(len(wins) / n_periods)
     periods_per_year = n_periods / (span_days / 365.25) if span_days else n_periods
     if period_returns_arr.std(ddof=1) > 0 and n_periods > 1:
-        sharpe = float(
+        # SP-A2 / H-A2-11: the per-period (un-annualized) Sharpe is the
+        # base quantity; the annualized `sharpe` is it × √periods_per_year
+        # — the annualized expression is byte-IDENTICAL to before.
+        sharpe_per_period = float(
             period_returns_arr.mean() / period_returns_arr.std(ddof=1)
-            * math.sqrt(periods_per_year)
         )
+        sharpe = float(sharpe_per_period * math.sqrt(periods_per_year))
     else:
+        sharpe_per_period = 0.0
         sharpe = 0.0
 
     # Geometric equity curve = ∏(1 + r_period).
@@ -270,6 +291,7 @@ def compute_slice_metrics_from_trades(
     return SliceMetrics(
         n_trades=len(trades), sharpe=sharpe, profit_factor=pf,
         max_drawdown=max_dd, win_rate=win_rate,
+        holdout_sharpe_per_period=sharpe_per_period,
     )
 
 
@@ -420,11 +442,30 @@ def rank_candidates(trials: list[TrialResult]) -> list[tuple[dict, float, int]]:
 # ────────────────────────────────────────────────────────────────────────────
 
 
-def compute_dsr_for_verdict(returns: list[float], n_trials: int) -> float:
-    """Deflated Sharpe Ratio corrected for the total number of search trials.
+def compute_dsr_for_verdict(
+    returns: list[float],
+    n_trials: int,
+    *,
+    trial_sharpe_variance: float | None = None,
+) -> float:
+    """Deflated Sharpe Ratio corrected for the total number of search
+    trials. Returns a probability ≥ 0.0; ≥ 0.95 is the "survived"
+    threshold. Same formula as
+    :func:`tpcore.backtest.overfitting._expected_max_sharpe_under_null`
+    — the two impls MUST stay coherent (H-A2-7).
 
-    Returns a probability ≥ 0.0; ≥ 0.95 is the "survived" threshold.
-    Computed via the same formula in :mod:`tpcore.backtest.overfitting`."""
+    ``trial_sharpe_variance`` — V[ŜR_n], the **cross-trial** variance
+    of the per-trial *per-period* Sharpe estimates across the searched
+    trials (``ddof=1``; the same per-period space as ``sr`` below — NOT
+    the annualized ``SliceMetrics.sharpe`` — H-A2-11). When ``None`` (a
+    count-only / non-Lab caller, e.g. the SP2 oracle's two-arg call),
+    fall back to the single-estimator ``1/(n-1)`` approximation AND emit
+    a structlog WARNING — documented, never silent (§1.3, H-A2-1). The
+    H-A2-10 floor ``max(V, 1/(n-1))`` makes the change tightening-or-
+    equal for every input. The V-source trial population and ``n_trials``
+    (the SP-A cumulative selection budget) are deliberately distinct
+    estimands (H-A2-4/§6) — the floor bounds the residual seam (H-A2-13).
+    """
     if len(returns) < 2:
         return 0.0
     arr = np.asarray(returns, dtype=float)
@@ -436,11 +477,69 @@ def compute_dsr_for_verdict(returns: list[float], n_trials: int) -> float:
         if arr.std() > 0 else 3.0
     )
     # Threshold from López de Prado (Deflated Sharpe Ratio, eqn 8/9). Same
-    # formula as in tpcore/backtest/overfitting.py.
+    # formula as tpcore/backtest/overfitting.py.
     EULER = 0.5772156649015329
-    e_max = ((1.0 - EULER) * _norm_inv(1.0 - 1.0 / max(n_trials, 1))
-             + EULER * _norm_inv(1.0 - 1.0 / (max(n_trials, 1) * math.e)))
-    denom = math.sqrt(max(1.0 - skew * sr + (kurt - 1.0) / 4.0 * (sr ** 2), 1e-12) / max(n - 1, 1))
+    e_max_bracket = (
+        (1.0 - EULER) * _norm_inv(1.0 - 1.0 / max(n_trials, 1))
+        + EULER * _norm_inv(1.0 - 1.0 / (max(n_trials, 1) * math.e))
+    )
+    floor = 1.0 / max(n - 1, 1)  # legacy single-estimator value — now a FLOOR
+    if trial_sharpe_variance is not None:
+        # H-A2-10: clamp up to the floor — an honest low-dispersion sweep
+        # must NOT loosen the (already-too-lenient) legacy bar.
+        sr_variance = max(float(trial_sharpe_variance), floor)
+    else:
+        sr_variance = floor  # KNOWN APPROXIMATION — not the paper's V
+        logger.warning(
+            "tpcore.overfitting.dsr.null_variance_approximation",
+            reason="no per-trial Sharpe vector available; using "
+                   "single-estimator 1/(n_obs-1) instead of "
+                   "cross-trial V[SR_n]",
+            n_trials=n_trials,
+            n_obs=n,
+        )
+    # The √V factor is now supplied solely by the V-term (the legacy
+    # 1/(n-1) is REMOVED from the V role — it conflated within-strategy
+    # estimation noise into the selection-bias term, the same defect
+    # expressed differently). The non-normality term stays in `denom`.
+    #
+    # DEVIATION (plan Task-5 Step-3, real-code-aligned per SP-A2 brief
+    # "PLAN'S INTENT wins but align to the REAL code + spec §3.4"):
+    # the plan's literal `e_max = √(sr_variance)·bracket` was authored
+    # against overfitting.py's structure, where the legacy 1/(n-1)-
+    # equivalent scaled `e_max`. In THIS impl the legacy `e_max` is the
+    # PURE Φ⁻¹ bracket (unscaled) and the 1/(n-1) lived entirely inside
+    # `denom` (§3.4/H-A2-7 / §summary 372a: "folds 1/(n-1) into `denom`
+    # rather than `e_max`"). Literally scaling `e_max` by √(1/(n-1)) on
+    # the fallback would NOT be byte-identical — it double-counts 1/(n-1)
+    # (also in `denom`) and inflated the fallback DSR 0.112→1.0 on a
+    # representative input (catastrophic LOOSENING of a live-money gate;
+    # the plan's "Note (H-A2-15)" algebraic-identity claim is provably
+    # false for this impl, |diff|=0.888). The factor √(sr_variance/floor)
+    # is the symmetric correction that satisfies BOTH binding
+    # requirements: on the fallback (sr_variance == floor) it is exactly
+    # 1.0 ⇒ `e_max == bracket` ⇒ None/default path BYTE-IDENTICAL to
+    # pre-SP-A2 (spec §5/§8 T-VERDICT-FALLBACK-WARNS; HARD CONSTRAINT);
+    # with a supplied V the H-A2-10 clamp makes sr_variance ≥ floor ⇒
+    # factor ≥ 1 ⇒ `e_max` ≥ bracket ⇒ DSR ≤ fallback (tightening-or-
+    # equal — the H-A2-10 floor semantics, correction-symmetric with
+    # tpcore/backtest/overfitting.py::_expected_max_sharpe_under_null).
+    # Plan intent + every T5 assertion preserved byte-identical.
+    e_max = math.sqrt(sr_variance / floor) * e_max_bracket
+    # `denom` is the non-normality ESTIMATION term — NOT the V/selection-
+    # bias role. Kept in its EXACT legacy single-sqrt arithmetic form
+    # (`sqrt(nonnorm / (n-1))`) rather than the plan's split
+    # `sqrt(nonnorm)/sqrt(n-1)`: the split is algebraically equal but not
+    # universally bit-identical (≤1 ULP on some inputs) and the §5/§8
+    # HARD CONSTRAINT is bit-for-bit byte-identity on the None/default
+    # path. The plan's intent (move the V role OFF `denom` onto the V-
+    # term) is fully preserved — the V role is the `√(sr_variance/floor)`
+    # factor on `e_max`; this line's `1/(n-1)` is the non-normality
+    # estimator, untouched, deliberately kept legacy-exact.
+    denom = math.sqrt(
+        max(1.0 - skew * sr + (kurt - 1.0) / 4.0 * (sr ** 2), 1e-12)
+        / max(n - 1, 1)
+    )
     if denom <= 0:
         return 0.0
     z = (sr - e_max) / denom
@@ -771,8 +870,37 @@ async def _run_lab_core(
         effective_n_trials = cumulative + args.trials
     else:
         effective_n_trials = args.trials
+    # SP-A2 / H-A2-9 + H-A2-11: V[ŜR_n] is the cross-trial dispersion of
+    # the per-trial *per-period* (NON-annualized) holdout Sharpes across
+    # this run's searched trials — the same per-period space as
+    # compute_dsr_for_verdict's internal SR̂. NOT t.holdout.sharpe (that
+    # is ANNUALIZED — feeding it would inflate SR₀ by ≈periods_per_year).
+    # Guarded by MIN_TRIALS_FOR_V (H-A2-10): too few non-errored trials ⇒
+    # None ⇒ the documented 1/(n-1) fallback + WARNING inside the call.
+    # H-A2-4: V-source trial count and the SP-A cumulative n_trials are
+    # deliberately distinct estimands — logged side-by-side, not
+    # silently reconciled (the floor bounds the residual seam, H-A2-13).
+    pp_sharpes = [
+        t.holdout.holdout_sharpe_per_period
+        for t in trials
+        if not t.error
+    ]
+    if len(pp_sharpes) >= MIN_TRIALS_FOR_V:
+        trial_sharpe_var: float | None = float(
+            np.var(np.asarray(pp_sharpes, dtype=float), ddof=1)
+        )
+        logger.info(
+            "ops.lab.dsr.v_n_trial_population",
+            v_trial_count=len(pp_sharpes),
+            n_trials=effective_n_trials,
+        )
+    else:
+        trial_sharpe_var = None
     dsr = compute_dsr_for_verdict(
-        held_period_returns, n_trials=effective_n_trials)
+        held_period_returns,
+        n_trials=effective_n_trials,
+        trial_sharpe_variance=trial_sharpe_var,
+    )
 
     # Persist the winner's CredibilityScore to platform.data_quality_log so
     # downstream tools (tip sheet, capital gate) can read it. Without this,
