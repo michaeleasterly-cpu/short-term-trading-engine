@@ -20,7 +20,7 @@ Every non-trivial change follows these steps in order. None is optional.
 8. **Implementer folds reviewer findings.** The implementer (not the reviewer) applies the review findings.
 9. **Gated PR.** The change lands as a gated pull request.
 10. **CI verified via `gh pr checks <n>`** — never `gh run watch`'s exit code. `gh run watch` has a documented misreport: its exit code does not faithfully reflect check status. Read `gh pr checks <n>` instead.
-11. **The whole single-process `pytest` + bidirectional module-order-flip is the AUTHORITATIVE gate.** The fast parallel run (`-n auto --dist loadgroup`) is an accelerator only; the serial run plus the reversed-module-order run is the gate of record (see §3 for the `-n auto --dist loadgroup` / `no:xdist` distinction).
+11. **The whole single-process `pytest` + bidirectional module-order-flip is the AUTHORITATIVE gate.** The fast parallel run (`-n auto --dist loadgroup`) is an accelerator only; the serial run plus the reversed-module-order run is the gate of record (see §3 for the accelerator-vs-authoritative-gate distinction).
 12. **Squash-merge `--delete-branch`.**
 13. **`git switch main && git pull` sync.**
 14. **Emit a paste-ready cross-session handoff message.** A copy-paste-ready handoff so the other lane can pick up cleanly.
@@ -42,14 +42,14 @@ Each rule with its *why*. These are repeatedly-violated failure modes; they are 
 
 ## §3 Lean Integration
 
-The Lean Dev Env work (spec 1 of 2) added a fast test path and tool-walk excludes. This subsection records what is the accelerator and what is the gate of record so no future session re-derives or re-enables what was deliberately disabled.
+The Lean Dev Env spec added a fast test path and tool-walk excludes. This subsection records what is the accelerator and what is the gate of record so no future session re-derives or re-enables what was deliberately disabled.
 
 - **`pytest -n auto --dist loadgroup` is the FAST ACCELERATOR.** It is for the local inner loop and CI speed only. It is NOT the gate.
-- **The serial + order-flip pair is the GATE OF RECORD.** The `ci.yml` "AUTHORITATIVE gate" step runs the whole suite serially plus the reversed module order. A green parallel run with a red serial/order-flip run is a FAIL.
+- **`pytest -p no:xdist` (whole suite, one process) + the reversed module order is the AUTHORITATIVE GATE OF RECORD.** The `ci.yml` "AUTHORITATIVE gate" step runs the whole suite serially via `pytest -p no:xdist` — `-p no:xdist` disables the xdist plugin entirely so there is exactly one process and zero parallel scheduling — plus the reversed module order. A green parallel run with a red serial `pytest -p no:xdist` / order-flip run is a FAIL.
 - **The tool-walk excludes are why grep/ruff are fast — do not re-derive, do not re-enable.** The `pyproject.toml` ruff `extend-exclude`, the pytest `norecursedirs`, the tracked `.ignore` file, and `respect-gitignore=false` are deliberate. In particular, do NOT re-enable `respect-gitignore`; the tracked `.ignore` is the intended walk-exclusion source of truth.
 
 ## §4 Scope of this standard / pointer to Agent Teams
 
 This standard is **topology-agnostic**: it holds unchanged whether the work is done by a single session, the two-session human-relay (the current cross-session coordination), or a future Agent Teams topology. The pipeline (§1), the Standing Discipline Rules (§2), and the Lean integration (§3) do not change with the coordination mechanism — Agent Teams reorganize who types, not the authoritative gate.
 
-Agent Teams adoption is the deferred **Pillar A** (see the spec `docs/superpowers/specs/2026-05-19-agents-dev-environment-design.md` §3 Phase B). Its adoption is gated, canary-one-task-first, and operator-green-lit; it is explicitly **out of scope for this standard** and does not modify §1–§3.
+Agent Teams adoption is the deferred Agent-Teams pillar of the Agents+Dev-Env spec (`docs/superpowers/specs/2026-05-19-agents-dev-environment-design.md`). Its adoption is gated, canary-one-task-first, and operator-green-lit; it is explicitly **out of scope for this standard** and does not modify §1–§3.
