@@ -23,9 +23,44 @@ from datetime import date, timedelta
 from pathlib import Path
 
 import numpy as np
+import pytest
 import structlog
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _resolve_oracle_base_ref() -> str:
+    """Resolve the byte-frozen base ref for the SP2-oracle diff. Prefer
+    ``origin/main`` (the ref CI's `actions/checkout` PR clone actually
+    has — a bare local ``main`` does NOT exist there, only the PR HEAD +
+    remote-tracking refs). Fall back to a local ``main`` for a plain dev
+    clone. ``pytest.skip`` (NOT a confusing ``CalledProcessError`` exit
+    128) if neither base ref resolves in this checkout (shallow / offline
+    / unfetched remote-tracking ref) — the byte-frozen gate must never
+    hard-error on a checkout that lacks the base ref entirely.
+
+    DEVIATION (mirror-not-reuse, precedent cited): this is a local mirror
+    of the canonical resolver ``_resolve_sp3_base`` in
+    ``scripts/tests/test_sp3_scope_confined.py`` (same ref-tuple, same
+    ``git rev-parse --verify --quiet`` mechanism, same skip-not-fail
+    policy). It is mirrored — NOT imported — because ``tpcore/`` must not
+    take a ``scripts/`` (cross-lane / test-to-test) dependency; the
+    minimal shape is reproduced here per the SP3 precedent. Unlike SP3
+    this returns the ref NAME (not a fork-point merge-base): the
+    byte-frozen contract compares the oracle against the integration
+    ref's tree directly (the original ``git diff origin/main``
+    semantics), so ANY oracle modification still bites loudly."""
+    for ref in ("origin/main", "main"):
+        rev = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", ref],
+            cwd=str(REPO_ROOT), capture_output=True, text=True,
+        )
+        if rev.returncode == 0:
+            return ref
+    pytest.skip(
+        "origin/main (and fallback main) unresolvable — cannot assert "
+        "SP2-oracle byte-frozen in this checkout"
+    )
 
 
 def test_sp_a2_t_verdict_fallback_warns_and_byte_identical() -> None:
@@ -402,14 +437,27 @@ def test_sp_a2_t_oracle_byte_unmodified_and_green() -> None:
     (the established ``Path(__file__).resolve().parents[2]`` repo pattern).
     The ``git diff`` invocation is the plan's exact literal and is
     READ-ONLY (no mutation of the working repo). Plan intent + both
-    assertions byte-identical."""
+    assertions byte-identical.
+
+    REVIEW NOTE (SP-A2 T8, Minor — robustness): the base ref is now
+    resolved via ``_resolve_oracle_base_ref`` (the mirrored canonical
+    SP3 resolver) and the diff runs with ``check=False``: an unresolvable
+    ``origin/main``/``main`` ⇒ a clean ``pytest.skip`` instead of a
+    confusing ``CalledProcessError`` (exit 128). When the base IS
+    resolvable (the normal local + GitHub-Actions ``actions/checkout``
+    case) the behavior is IDENTICAL: a non-empty diff (oracle modified)
+    still fails this assertion loudly — the byte-frozen contract is
+    UNWEAKENED."""
+    base = _resolve_oracle_base_ref()
     diff = subprocess.run(
-        ["git", "diff", "origin/main", "--",
+        ["git", "diff", base, "--",
          "scripts/tests/test_search_parameters_characterization.py"],
-        cwd=str(REPO_ROOT), capture_output=True, text=True, check=True,
+        cwd=str(REPO_ROOT), capture_output=True, text=True, check=False,
     )
-    assert diff.stdout.strip() == "", (
-        "SP2 oracle was modified — §5 invariant violated:\n" + diff.stdout
+    assert diff.returncode == 0 and diff.stdout.strip() == "", (
+        "SP2 oracle was modified — §5 invariant violated "
+        f"(git diff {base} rc={diff.returncode}):\n"
+        + diff.stdout + diff.stderr
     )
     run = subprocess.run(
         [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
