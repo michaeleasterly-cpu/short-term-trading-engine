@@ -17,10 +17,15 @@ plan's intent + every assertion below are kept byte-identical.
 from __future__ import annotations
 
 import math
+import subprocess
+import sys
 from datetime import date, timedelta
+from pathlib import Path
 
 import numpy as np
 import structlog
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_sp_a2_t_verdict_fallback_warns_and_byte_identical() -> None:
@@ -383,3 +388,36 @@ async def test_sp_a2_t_units_coherent_v_uses_per_period_not_annualized(
     # And the realized verdict DSR is finite/sane (not the DSR≈0-always
     # collapse the annualized bug causes).
     assert 0.0 <= core.dsr <= 1.0
+
+
+def test_sp_a2_t_oracle_byte_unmodified_and_green() -> None:
+    """T-ORACLE (MAKE-OR-BREAK, §5/H-A2-2). The SP2 characterization
+    oracle stays BYTE-UNMODIFIED (empty diff vs origin/main) AND green by
+    property. Distinct from the editable SP-A ledger tests (Task 7,
+    H-A2-12) — conflating them was the original spec defect.
+
+    DEVIATION (house style / plan Step 5): ``import subprocess`` lives in
+    the module-top stdlib block (isort I001), NOT in the test body as the
+    plan's literal shows; ``sys``/``REPO_ROOT`` are likewise module-level
+    (the established ``Path(__file__).resolve().parents[2]`` repo pattern).
+    The ``git diff`` invocation is the plan's exact literal and is
+    READ-ONLY (no mutation of the working repo). Plan intent + both
+    assertions byte-identical."""
+    diff = subprocess.run(
+        ["git", "diff", "origin/main", "--",
+         "scripts/tests/test_search_parameters_characterization.py"],
+        cwd=str(REPO_ROOT), capture_output=True, text=True, check=True,
+    )
+    assert diff.stdout.strip() == "", (
+        "SP2 oracle was modified — §5 invariant violated:\n" + diff.stdout
+    )
+    run = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+         "scripts/tests/test_search_parameters_characterization.py"],
+        cwd=str(REPO_ROOT), capture_output=True, text=True,
+    )
+    assert run.returncode == 0, (
+        "SP2 oracle property/parity contract went RED under SP-A2 — that "
+        "is a real regression in the fix, NOT a signal to edit the "
+        "oracle:\n" + run.stdout[-3000:] + run.stderr[-2000:]
+    )

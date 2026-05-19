@@ -698,3 +698,31 @@ def test_sp_a2_slice_metrics_per_period_field_is_unannualized() -> None:
     # Empty-trades path keeps the additive default (0.0), no crash.
     sm0 = _lr.compute_slice_metrics_from_trades([], 1)
     assert sm0.holdout_sharpe_per_period == 0.0
+
+
+def test_sp_a2_t_vn_coherence_floor_bounds_the_cross_run_seam() -> None:
+    """T-VN-COHERENCE (H-A2-4/H-A2-13). Holding a small single-run
+    dispersion fixed while growing the cumulative N: SR₀ still increases
+    monotonically via the untouched Φ⁻¹ bracket (SP-A's anti-laundering
+    term is NOT defeated by a small √V), AND the H-A2-10 floor at
+    1/(n_obs-1) is active so a tight fine-grid sweep cannot drive SR₀
+    below the fallback. Encodes the §6/H-A2-13 accepted-limitation as an
+    executable contract."""
+    # DEVIATION (house style, T1-T7): lazy in-body import of
+    # ``_expected_max_sharpe_under_null`` instead of the plan's bare call
+    # — it is NOT in the module-top import block; every SP-A2 sibling
+    # (T-ORTHO/T-STRICTER/T-SIG-COMPAT) imports it in-body. Plan intent +
+    # both assertions byte-identical.
+    from tpcore.backtest.overfitting import _expected_max_sharpe_under_null
+    tiny_v = 1e-6  # a degenerately-tight fine-grid sweep
+    n_obs = 250
+    prev = -1.0
+    for cum_n in (50, 200, 800, 2000):
+        sr0_v = _expected_max_sharpe_under_null(
+            cum_n, n_obs, trial_sharpe_variance=tiny_v)
+        sr0_fb = _expected_max_sharpe_under_null(cum_n, n_obs)
+        # Monotone-up in the cumulative N (SP-A bracket not defeated).
+        assert sr0_v > prev
+        prev = sr0_v
+        # The floor: tiny V can NOT drop SR₀ below the legacy fallback.
+        assert sr0_v >= sr0_fb - 1e-12
