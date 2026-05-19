@@ -80,7 +80,7 @@ from tpcore.lab.models import (
     ParamDelta,
     WalkWindowRecord,
 )
-from tpcore.lab.target import LabTarget
+from tpcore.lab.target import LabPrimaryMetric, LabTarget
 
 logger = structlog.get_logger(__name__)
 
@@ -463,22 +463,84 @@ def _evaluate_candidate_with_context(
 # ────────────────────────────────────────────────────────────────────────────
 
 
-def _score_for_ranking(metrics: SliceMetrics) -> float:
-    """OOS score used to rank candidates.
+def _unimplemented_metric(name: str) -> Callable[[SliceMetrics], float]:
+    """SP-D §4.3 — a reserved-but-unimplemented objective. Returns a
+    callable that fail-louds at resolve/score time (NEVER a silent
+    fallback). The pre-spend `_resolve_ranking_metric` fence (run.py,
+    §4.3) detects this BEFORE the SP-A ledger spend so a reserved
+    declaration never burns a cumulative-trial increment."""
 
-    Combines OOS Sharpe + a soft penalty for trade-count thinness. Higher is
-    better. We avoid using credibility-from-full-window for ranking because
-    that conflates train and holdout."""
+    def _raise(_m: SliceMetrics) -> float:
+        raise ValueError(
+            f"LabPrimaryMetric.{name} is a reserved objective with no "
+            f"Lab implementation yet — declare it only when its scoring "
+            f"function ships (SP-E owns the Sentinel bar). See spec "
+            f"2026-05-20-lab-sp-d §4.3."
+        )
+
+    return _raise
+
+
+def _clamp(v: float) -> float:
+    """SP-D §4.5 — a non-finite metric value sorts a candidate LAST
+    (same semantics as the n_trades<3 floor) instead of poisoning
+    np.mean / the sort with nan. Gate-invariant (the ranking value never
+    reaches `survived`, §1.2) and oracle-neutral (pinned inputs are
+    finite ⇒ the SHARPE clamp is never exercised on them)."""
+    return v if math.isfinite(v) else -1.0
+
+
+_RANKING_METRICS: Mapping[LabPrimaryMetric, Callable[[SliceMetrics], float]] = {
+    # The EXACT current expression, character-for-character (Task-1 char
+    # anchor + the byte-frozen oracle pin this).
+    LabPrimaryMetric.SHARPE: lambda m: _clamp(
+        float(m.sharpe) + 0.05 * math.log10(max(m.n_trades, 1))
+    ),
+    # §8-A15: max_drawdown is <=0 by construction (run.py:370,
+    # ((equity-peak)/peak).min(), equity<=peak). Return the VALUE ITSELF
+    # — a shallower (less-negative) drawdown is the LARGER score, so
+    # under rank_candidates' descending reverse=True sort the shallowest-
+    # drawdown candidate ranks first (the correct "minimize drawdown"
+    # objective). `-float(m.max_drawdown)` was sign-INVERTED (it ranked
+    # the DEEPER drawdown first). The §0.5 SP-E need, from the existing
+    # universe.
+    LabPrimaryMetric.MAXDD_REDUCTION: lambda m: _clamp(
+        float(m.max_drawdown)
+    ),
+    # Reserved vocabulary, no speculative impl (§1.3 YAGNI / §4.3).
+    LabPrimaryMetric.ULCER: _unimplemented_metric("ULCER"),
+    LabPrimaryMetric.INVERSE_ETF_HOLD: _unimplemented_metric(
+        "INVERSE_ETF_HOLD"
+    ),
+}
+
+
+def _score_for_ranking(
+    metrics: SliceMetrics,
+    metric: LabPrimaryMetric = LabPrimaryMetric.SHARPE,
+) -> float:
+    """OOS score used to rank candidates. Higher is better.
+
+    The ``n_trades < 3 -> -1.0`` guard is OUTSIDE the metric dispatch,
+    UNCHANGED — a statistical-power floor on *rankability*, metric-
+    independent (every metric inherits it identically; it is also below
+    any sane metric score so a thin candidate always sorts last). The
+    per-metric mapping lives in the frozen ``_RANKING_METRICS`` table;
+    ``SHARPE`` is the current expression character-for-character so the
+    defaulted call is byte-identical (spec §2.2)."""
     if metrics.n_trades < 3:
         return -1.0  # trade count too low to be statistically meaningful
-    base = float(metrics.sharpe)
-    # Mild bonus for higher trade counts (statistical power).
-    return base + 0.05 * math.log10(max(metrics.n_trades, 1))
+    return _RANKING_METRICS[metric](metrics)
 
 
-def rank_candidates(trials: list[TrialResult]) -> list[tuple[dict, float, int]]:
-    """Aggregate trials by parameters (deterministic key), return ranked list of
-    (parameters, mean_score, n_windows_evaluated)."""
+def rank_candidates(
+    trials: list[TrialResult],
+    metric: LabPrimaryMetric = LabPrimaryMetric.SHARPE,
+) -> list[tuple[dict, float, int]]:
+    """Aggregate trials by parameters (deterministic key), return ranked
+    list of (parameters, mean_score, n_windows_evaluated). ``metric``
+    defaults to ``SHARPE`` so the byte-frozen characterization oracle's
+    no-arg call is byte-identical (spec §2.3, §8-A6)."""
     by_param: dict[str, list[TrialResult]] = {}
     for t in trials:
         if t.error:
@@ -487,7 +549,7 @@ def rank_candidates(trials: list[TrialResult]) -> list[tuple[dict, float, int]]:
         by_param.setdefault(key, []).append(t)
     ranked: list[tuple[dict, float, int]] = []
     for key, group in by_param.items():
-        scores = [_score_for_ranking(t.holdout) for t in group]
+        scores = [_score_for_ranking(t.holdout, metric) for t in group]
         if not scores:
             continue
         ranked.append((json.loads(key), float(np.mean(scores)), len(group)))

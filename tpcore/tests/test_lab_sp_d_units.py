@@ -69,3 +69,77 @@ def test_pre_sp_d_sidecar_still_accepted_by_evidence_loader(tmp_path):
     assert lr.verdict == "SURVIVED"
     assert lr.dsr == 0.97
     assert lr.credibility_score == 72
+
+
+def test_score_sharpe_metric_equals_pre_refactor_closed_form():
+    import math
+
+    import ops.lab.run as sp
+    from tpcore.lab.target import LabPrimaryMetric
+
+    m = sp.SliceMetrics(n_trades=10, sharpe=1.4, profit_factor=1.5,
+                         max_drawdown=-0.1, win_rate=0.5)
+    expected = 1.4 + 0.05 * math.log10(max(10, 1))
+    assert sp._score_for_ranking(m, LabPrimaryMetric.SHARPE) == expected
+    assert sp._score_for_ranking(m) == expected  # defaulted == SHARPE
+
+
+def test_score_maxdd_reduction_is_the_drawdown_value_itself():
+    # §8-A15: MAXDD_REDUCTION == m.max_drawdown itself (≤0 by the
+    # run.py:370 .min() construction). NOT -max_drawdown (sign-inverted).
+    import ops.lab.run as sp
+    from tpcore.lab.target import LabPrimaryMetric
+
+    deep = sp.SliceMetrics(n_trades=10, sharpe=0.1, profit_factor=1.0,
+                            max_drawdown=-0.30, win_rate=0.5)
+    shallow = sp.SliceMetrics(n_trades=10, sharpe=0.1, profit_factor=1.0,
+                              max_drawdown=-0.05, win_rate=0.5)
+    assert sp._score_for_ranking(
+        deep, LabPrimaryMetric.MAXDD_REDUCTION) == pytest.approx(-0.30)
+    assert sp._score_for_ranking(
+        shallow, LabPrimaryMetric.MAXDD_REDUCTION) == pytest.approx(-0.05)
+    # Shallower (less-negative) drawdown ranks HIGHER under the
+    # descending reverse=True sort: -0.05 > -0.30.
+    assert sp._score_for_ranking(
+        shallow, LabPrimaryMetric.MAXDD_REDUCTION) > sp._score_for_ranking(
+        deep, LabPrimaryMetric.MAXDD_REDUCTION)
+
+
+def test_score_n_trades_floor_is_metric_independent():
+    import ops.lab.run as sp
+    from tpcore.lab.target import LabPrimaryMetric
+
+    thin = sp.SliceMetrics(n_trades=2, sharpe=9.9, profit_factor=9.0,
+                            max_drawdown=-0.01, win_rate=1.0)
+    for mt in (LabPrimaryMetric.SHARPE, LabPrimaryMetric.MAXDD_REDUCTION):
+        assert sp._score_for_ranking(thin, mt) == -1.0
+
+
+def test_non_finite_metric_value_clamps_to_floor_not_nan():
+    import math
+
+    import numpy as np
+
+    import ops.lab.run as sp
+    from tpcore.lab.target import LabPrimaryMetric
+
+    m = sp.SliceMetrics(n_trades=10, sharpe=float("nan"),
+                        profit_factor=1.0, max_drawdown=-0.1,
+                        win_rate=0.5)
+    v = sp._score_for_ranking(m, LabPrimaryMetric.SHARPE)
+    assert v == -1.0
+    assert math.isfinite(v)
+    # never poisons np.mean / the sort
+    assert math.isfinite(float(np.mean([v, 1.0, 2.0])))
+
+
+def test_reserved_metric_score_raises_clear_value_error():
+    import ops.lab.run as sp
+    from tpcore.lab.target import LabPrimaryMetric
+
+    m = sp.SliceMetrics(n_trades=10, sharpe=1.0, profit_factor=1.0,
+                        max_drawdown=-0.1, win_rate=0.5)
+    with pytest.raises(ValueError, match="reserved objective"):
+        sp._score_for_ranking(m, LabPrimaryMetric.ULCER)
+    with pytest.raises(ValueError, match="reserved objective"):
+        sp._score_for_ranking(m, LabPrimaryMetric.INVERSE_ETF_HOLD)
