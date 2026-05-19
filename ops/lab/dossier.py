@@ -24,6 +24,47 @@ def _fmt_rubric(r: CredibilityScore) -> str:
     return "\n".join(rows)
 
 
+def _objective_line(r: LabResult) -> str:
+    """SP-D §2.4 — for a non-SHARPE objective, an operator-facing line in
+    '## 1. Verdict' naming the objective. The parenthetical is MANDATORY
+    copy (the 'the gate is sacred' doctrine, SP-C §6): the metric is
+    ranking-only and provably does NOT affect the gate. For SHARPE the
+    dossier is byte-identical to pre-SP-D (no line emitted)."""
+    from tpcore.lab.target import LabPrimaryMetric
+
+    if r.primary_metric == LabPrimaryMetric.SHARPE:
+        return ""
+    return (f"\n- **Primary objective:** {r.primary_metric.value} "
+            f"(ranking metric — does NOT affect the gate)")
+
+
+def _objective_block(r: LabResult) -> str:
+    """SP-D §2.4 — a '## 2a' block keyed off the declared metric. SHARPE:
+    empty (byte-identical pre-SP-D). MAXDD_REDUCTION: max_drawdown is the
+    headline, Sharpe demoted. Pure fn of held_metrics + the declared
+    metric — no new data, no query, no gate read."""
+    from tpcore.lab.target import LabPrimaryMetric
+
+    if r.primary_metric == LabPrimaryMetric.SHARPE:
+        return ""
+    if r.primary_metric == LabPrimaryMetric.MAXDD_REDUCTION:
+        hm = r.held_metrics
+        return (
+            "\n## 2a. Objective-appropriate summary"
+            f"\n- **Headline (max_drawdown):** {hm.get('max_drawdown')}"
+            f"\n- Sharpe (secondary): {hm.get('sharpe')}"
+            f"\n- Profit factor (secondary): {hm.get('profit_factor')}\n"
+        )
+    # Reserved objectives have no dossier block until their scorer ships
+    # (SP-E). Naming them is harmless (the run could never have ranked —
+    # the §4.3 pre-spend fence rejects before any LabResult is built).
+    return (
+        f"\n## 2a. Objective-appropriate summary"
+        f"\n- (objective {r.primary_metric.value} has no dossier block "
+        f"yet — reserved, SP-E)\n"
+    )
+
+
 def render_lab_dossier(r: LabResult) -> str:
     diff = "\n".join(
         f"- `{d.name}`: {d.current} → **{d.winning}**" for d in r.param_diff
@@ -36,11 +77,11 @@ def render_lab_dossier(r: LabResult) -> str:
 
 ## 1. Verdict
 - DSR: {r.dsr:.4f}  (gate ≥ 0.95)
-- Credibility: {r.credibility_score}  (gate ≥ 60)
+- Credibility: {r.credibility_score}  (gate ≥ 60){_objective_line(r)}
 - Held metrics:
 
 {_fmt_metrics(r.held_metrics)}
-
+{_objective_block(r)}
 ## 2. Winning parameters vs current engine defaults
 {diff}
 

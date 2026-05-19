@@ -6,6 +6,7 @@ from typing import Annotated, Any, Literal
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 from tpcore.backtest.credibility import CredibilityScore
+from tpcore.lab.target import LabPrimaryMetric
 
 
 class LabCandidate(BaseModel):
@@ -55,3 +56,14 @@ class LabResult(BaseModel):
     n_trials: int
     seed: int
     generated_at: AwareDatetime
+    # SP-D §2.4 / §8-A11 — DEFAULTED (NOT required). LabResult is
+    # extra="forbid" and ops/engine_sdlc/_evidence.py model_validates
+    # pre-existing on-disk sidecars that have NO `primary_metric` key
+    # (verified: docs/lab/2026-05-18-exp1-SURVIVED-seed7.json). pydantic
+    # v2 fills the default for an ABSENT key under extra="forbid" (forbid
+    # rejects UNKNOWN keys, not absent defaulted ones), so legacy
+    # sidecars validate -> SHARPE (semantically exact: every pre-SP-D run
+    # WAS Sharpe-ranked). Display/provenance ONLY — the planner/ECR
+    # NEVER reads this for a gate decision (it re-derives
+    # verdict/dsr/credibility_score/winning_params, §0.2a).
+    primary_metric: LabPrimaryMetric = LabPrimaryMetric.SHARPE

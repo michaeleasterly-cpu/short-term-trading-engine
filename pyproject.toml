@@ -175,6 +175,24 @@ ignore = ["E501"]
 # controller-adjudicated Plan correction (the SLF-baseline plan-defect
 # class, T5 Step-4b precedent).
 "tpcore/tests/test_lab_targeting_consistency.py" = ["SLF"]
+# SP-D §5.1 char-before-refactor anchor: pinning the CURRENT Sharpe
+# ranking REQUIRES naming the `ops.lab.run`-private `_score_for_ranking`
+# (that IS the test's purpose — it freezes the private scorer's closed
+# form). Engine-lane-module-private (NOT tpcore-private) access in a
+# char-oracle; the scoped per-file ignore is the correct form (mirrors
+# the SP-B char/dispatch precedents above) — never an inline
+# `# noqa: SLF001` (CLAUDE.md / STYLE_GUIDE).
+"tpcore/tests/test_lab_sp_d_char_anchor.py" = ["SLF"]
+# SP-D §5.2 make-or-break + §5.5 units: proving gate-invariance + the
+# pre-SP-D-sidecar regression REQUIRES naming `ops.lab.run`-private
+# symbols (`_run_lab_core`, `_build_lab_result`, `_RANKING_METRICS`,
+# `_lab_target_for`, `_score_for_ranking`, `rank_candidates`,
+# `compute_slice_metrics_from_trades`, `period_returns_from_trades`,
+# `compute_dsr_for_verdict`) — that IS the tests' purpose. Engine-lane-
+# module-private (NOT tpcore-private) access; the scoped per-file ignore
+# is the correct form (SP-B precedent) — never an inline `# noqa: SLF001`.
+"tpcore/tests/test_lab_sp_d_make_or_break.py" = ["SLF"]
+"tpcore/tests/test_lab_sp_d_units.py" = ["SLF"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
