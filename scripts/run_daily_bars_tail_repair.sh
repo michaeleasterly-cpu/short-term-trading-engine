@@ -25,7 +25,8 @@ for l in open(".env"):
         k,v=l.split("=",1); e[k]=v.strip().strip('"').strip("'")
 import asyncpg
 async def m():
-    c=await asyncpg.connect(e.get("DATABASE_URL_IPV4") or e["DATABASE_URL"], timeout=30)
+    # statement_cache_size/jit: keep in sync with tpcore.db.build_asyncpg_pool (Supabase pooler safety)
+    c=await asyncpg.connect(e.get("DATABASE_URL_IPV4") or e["DATABASE_URL"], timeout=30, statement_cache_size=0, server_settings={"jit": "off"})
     try:
         rows=await c.fetch("""
           SELECT p14.ticker FROM

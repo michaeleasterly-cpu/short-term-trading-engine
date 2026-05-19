@@ -214,7 +214,8 @@ _log_event INGESTION_START wrapper_matview_refresh
 if DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python -c "
 import asyncio, asyncpg, os
 async def main():
-    conn = await asyncpg.connect(os.environ['DATABASE_URL'])
+    # statement_cache_size/jit: keep in sync with tpcore.db.build_asyncpg_pool (Supabase pooler safety)
+    conn = await asyncpg.connect(os.environ['DATABASE_URL'], statement_cache_size=0, server_settings={'jit': 'off'})
     await conn.execute('REFRESH MATERIALIZED VIEW CONCURRENTLY platform.prices_daily_tickers')
     print('✓ prices_daily_tickers refreshed')
     await conn.close()
@@ -312,7 +313,8 @@ else
     DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python -c "
 import asyncio, asyncpg, os, uuid
 async def main():
-    conn = await asyncpg.connect(os.environ['DATABASE_URL'])
+    # statement_cache_size/jit: keep in sync with tpcore.db.build_asyncpg_pool (Supabase pooler safety)
+    conn = await asyncpg.connect(os.environ['DATABASE_URL'], statement_cache_size=0, server_settings={'jit': 'off'})
     await conn.execute(
         '''
         INSERT INTO platform.application_log

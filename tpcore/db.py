@@ -73,7 +73,15 @@ async def build_asyncpg_pool(
         def lab_is_active() -> bool:
             return False
 
-    server_settings: dict[str, str] = {}
+    # ``statement_cache_size=0`` + ``jit: off``: the canonical local DSN is the
+    # Supabase Supavisor transaction-mode pooler (``:6543``), across which
+    # asyncpg's auto-prepared statements do not survive pooled backends
+    # ("prepared statement "__asyncpg_*__" does not exist"); server-side JIT
+    # can likewise misbehave through poolers. Both are unconditionally safe:
+    # on a direct connection a 0 cache only forgoes a micro-optimization. The
+    # ``jit`` key seeds ``server_settings`` so the read-only / Lab branch below
+    # MERGES into it (does not clobber it) — official asyncpg / Supabase guidance.
+    server_settings: dict[str, str] = {"jit": "off"}
     if read_only or lab_is_active():
         server_settings["default_transaction_read_only"] = "on"
     kwargs: dict = dict(
@@ -81,9 +89,9 @@ async def build_asyncpg_pool(
         min_size=min_size,
         max_size=max_size,
         timeout=timeout,
+        statement_cache_size=0,
+        server_settings=server_settings,
     )
-    if server_settings:
-        kwargs["server_settings"] = server_settings
     return await asyncpg.create_pool(**kwargs)
 
 
