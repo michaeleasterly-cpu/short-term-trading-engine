@@ -31,12 +31,11 @@ from reversion.models import (
     MAX_CONCURRENT_POSITIONS,
     PRE_GRAD_POSITION_CAP_USD,
 )
-from tpcore.backtest.cost_model import capital_gate_healthcheck
 from tpcore.backtest.credibility import (
     CredibilityScoreInsufficientError,
     graduation_ready,
 )
-from tpcore.interfaces.engine_plug import BaseEnginePlug
+from tpcore.interfaces.capital_gate_base import PerTradeCapitalGateBase
 
 # Reversion's GraduationStats subclasses the shared
 # PerTradeGraduationStats (n_trades / win_rate / avg_return) and adds
@@ -63,10 +62,20 @@ class GraduationStats(PerTradeGraduationStats):
     profit_factor: float = 0.0
 
 
-class ReversionCapitalGate(BaseEnginePlug):
-    """Plug 5 of Reversion."""
+class ReversionCapitalGate(PerTradeCapitalGateBase):
+    """Plug 5 of Reversion.
+
+    Lean P5.5a: ``check_trade`` / ``healthcheck`` / ``assert_can_graduate``
+    are now the consolidated :class:`PerTradeCapitalGateBase` implementations
+    (cluster #3/#4/#7); only ``is_graduated`` (the reversion-specific
+    thresholds incl. the profit-factor floor) stays engine-owned. The
+    pre-consolidation bodies are kept verbatim as ``_legacy_*`` for the
+    P5.5a parallel-diff equivalence proof (deleted at the staged cutover,
+    plan P5.5c).
+    """
 
     engine_name = "reversion"
+    _daily_loss_freeze_pct = DAILY_LOSS_FREEZE_PCT
 
     def __init__(
         self,
@@ -74,22 +83,25 @@ class ReversionCapitalGate(BaseEnginePlug):
         max_position_usd: Decimal = PRE_GRAD_POSITION_CAP_USD,
         max_positions: int = MAX_CONCURRENT_POSITIONS,
     ) -> None:
-        self._engine_equity = engine_equity
-        self._max_position_usd = max_position_usd
-        self._max_positions = max_positions
+        super().__init__(engine_equity, max_position_usd, max_positions)
 
-    def validate_dependencies(self) -> bool:
-        return True
-
-    def healthcheck(self) -> dict:
-        return capital_gate_healthcheck(
-            self.engine_name,
-            self._engine_equity,
-            self._max_position_usd,
-            self._max_positions,
+    @staticmethod
+    def is_graduated(stats: GraduationStats) -> bool:
+        """Reversion graduates from paper to live iff plan §4.2 thresholds met."""
+        return (
+            stats.n_trades >= GRAD_MIN_TRADES
+            and stats.win_rate >= GRAD_MIN_WIN_RATE
+            and stats.avg_return >= GRAD_MIN_AVG_RETURN
+            and stats.profit_factor >= GRAD_MIN_PROFIT_FACTOR
         )
 
-    def check_trade(
+    # ── `_legacy_*` parallel-diff oracles (Lean P5.5a) ──────────────────
+    # Verbatim pre-consolidation bodies. The P5.5a differential test
+    # asserts the consolidated base methods == these over a fuzzed grid
+    # (same return / exception type / emitted event name). Removed at the
+    # staged cutover (plan P5.5c) once equivalence is locked in CI.
+
+    def _legacy_check_trade(
         self,
         size: Decimal,
         engine_pnl: Decimal,
@@ -125,17 +137,9 @@ class ReversionCapitalGate(BaseEnginePlug):
         return True
 
     @staticmethod
-    def is_graduated(stats: GraduationStats) -> bool:
-        """Reversion graduates from paper to live iff plan §4.2 thresholds met."""
-        return (
-            stats.n_trades >= GRAD_MIN_TRADES
-            and stats.win_rate >= GRAD_MIN_WIN_RATE
-            and stats.avg_return >= GRAD_MIN_AVG_RETURN
-            and stats.profit_factor >= GRAD_MIN_PROFIT_FACTOR
-        )
-
-    @staticmethod
-    async def assert_can_graduate(stats: GraduationStats, pool: asyncpg.Pool) -> bool:
+    async def _legacy_assert_can_graduate(
+        stats: GraduationStats, pool: asyncpg.Pool
+    ) -> bool:
         """Combined gate: stats thresholds AND Data Validation Suite AND credibility ≥ 60.
 
         Returns ``False`` (without raising) if the stats thresholds aren't met
