@@ -17,9 +17,29 @@ Lab contract layer (H-S2-1).
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict
+
+
+class LabPrimaryMetric(StrEnum):
+    """SP-D — the engine-FREE Lab ranking-objective vocabulary.
+
+    The engine names its single pre-registered ranking objective here;
+    the metric->scalar IMPLEMENTATION is Lab-resident
+    (`ops/lab/run.py::_RANKING_METRICS`) because it reads `SliceMetrics`,
+    a Lab dataclass (spec §1.1). SHARPE is the default ⇒ an engine that
+    does not declare it gets today's behaviour byte-identically.
+    ULCER/INVERSE_ETF_HOLD are RESERVED vocabulary: declared so the enum
+    is forward-complete, but unimplemented (fail-loud at resolve, §4.3) —
+    SP-E owns Sentinel's exact bar.
+    """
+
+    SHARPE = "sharpe"
+    MAXDD_REDUCTION = "maxdd_reduction"
+    ULCER = "ulcer"
+    INVERSE_ETF_HOLD = "inverse_etf_hold"
 
 
 class LabTarget(BaseModel):
@@ -42,6 +62,12 @@ class LabTarget(BaseModel):
     load_window_context: Callable[..., Awaitable[Any]]
     run_with_context: Callable[..., Any]
     default_params: Callable[[], dict[str, Any]]
+    # SP-D: the engine's single declared ranking objective. Optional +
+    # defaulted ⇒ reversion/vector/momentum (which omit it) are
+    # byte-identical (Sharpe). model_post_init needs NO new logic — the
+    # StrEnum type already constrains; implementability is validated
+    # Lab-side at resolve (spec §2.1, §4.3).
+    primary_metric: LabPrimaryMetric = LabPrimaryMetric.SHARPE
 
     def model_post_init(self, _ctx: object) -> None:  # noqa: D401
         for name, spec in self.param_ranges.items():
@@ -81,4 +107,4 @@ class LabTarget(BaseModel):
                 )
 
 
-__all__ = ["LabTarget"]
+__all__ = ["LabPrimaryMetric", "LabTarget"]
