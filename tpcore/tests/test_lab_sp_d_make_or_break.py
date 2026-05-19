@@ -438,10 +438,10 @@ async def test_make_or_break_gate_invariant_over_ecr_tuple(
     # diverging.
     await _assert_integration_non_vacuity(monkeypatch, tmp_path)
 
-    core_s, lr_s = await _run_once(
+    _, lr_s = await _run_once(
         monkeypatch, tmp_path, metric_name="sharpe",
         seed=_CANDIDATE_COMPLETE_SEED)
-    core_m, lr_m = await _run_once(
+    _, lr_m = await _run_once(
         monkeypatch, tmp_path, metric_name="maxdd_reduction",
         seed=_CANDIDATE_COMPLETE_SEED)
 
