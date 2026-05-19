@@ -10,6 +10,8 @@ import sys
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 # `scripts/ops.py` (the data-ops CLI module) and the `ops/` daemons
 # package share the top-level name `ops`. Under full-suite collection
 # another test (e.g. test_engine_service.py) may bind sys.modules['ops']
@@ -26,6 +28,11 @@ for _m in [m for m in list(sys.modules) if m == "ops" or m.startswith("ops.")]:
         del sys.modules[_m]
 
 import ops as opsmod  # noqa: E402 — scripts/ops.py (sys.path/modules fixed above)
+
+# pytest-xdist: pin this ops-shadow module to one worker so its
+# sys.modules['ops'] / scripts/ops.py loading stays single-process
+# (the ops/ package-shadow is a single-process invariant). P1.3.
+pytestmark = pytest.mark.xdist_group("ops_shadow")
 
 
 def test_probe_registered_in_check_fns_not_audit() -> None:

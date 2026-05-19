@@ -33,6 +33,12 @@ for _m in [m for m in list(sys.modules) if m == "ops" or m.startswith("ops.")]:
 MAIN_PY = REPO_ROOT / "ops" / "lab" / "__main__.py"
 
 
+# pytest-xdist: pin this ops-shadow module to one worker so its
+# sys.modules['ops'] / scripts/ops.py loading stays single-process
+# (the ops/ package-shadow is a single-process invariant). P1.3.
+pytestmark = pytest.mark.xdist_group("ops_shadow")
+
+
 def test_entrypoint_file_has_canonical_cli_shape():
     src = MAIN_PY.read_text()
     assert 'if __name__ == "__main__":' in src

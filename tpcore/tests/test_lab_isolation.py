@@ -53,15 +53,21 @@ from tpcore.backtest.credibility import CREDIBILITY_SOURCE_PREFIX
 _REV_SOURCE = f"{CREDIBILITY_SOURCE_PREFIX}.reversion"
 _LAB_SOURCE = f"{CREDIBILITY_SOURCE_PREFIX}.lab.iso_probe"
 
-pytestmark = pytest.mark.skipif(
-    os.environ.get("DATABASE_URL") is None,
-    reason="Lab isolation test needs a DB. This DB gate is INHERITED "
-    "from SP2; the repo's ci.yml `test` job has NO Postgres service / "
-    "DATABASE_URL, so this skips in CI exactly as it skips locally. "
-    "The make-or-break proofs are enforced at merge by the mandatory "
-    "operator-run compensating control (see spec H-LL-9 / TODO.md "
-    "'Lab-isolation DB proofs not CI-enforced'), NOT by automated CI.",
-)
+# pytest-xdist: pin this ops-shadow module to one worker so its
+# sys.modules['ops'] / scripts/ops.py loading stays single-process
+# (the ops/ package-shadow is a single-process invariant). P1.3.
+pytestmark = [
+    pytest.mark.skipif(
+        os.environ.get("DATABASE_URL") is None,
+        reason="Lab isolation test needs a DB. This DB gate is INHERITED "
+        "from SP2; the repo's ci.yml `test` job has NO Postgres service / "
+        "DATABASE_URL, so this skips in CI exactly as it skips locally. "
+        "The make-or-break proofs are enforced at merge by the mandatory "
+        "operator-run compensating control (see spec H-LL-9 / TODO.md "
+        "'Lab-isolation DB proofs not CI-enforced'), NOT by automated CI.",
+    ),
+    pytest.mark.xdist_group("ops_shadow"),
+]
 
 
 async def _rowcount(pool, table, where=""):

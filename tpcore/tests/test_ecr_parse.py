@@ -35,6 +35,12 @@ gate_cred:     64
 """
 
 
+# pytest-xdist: pin this ops-shadow module to one worker so its
+# sys.modules['ops'] / scripts/ops.py loading stays single-process
+# (the ops/ package-shadow is a single-process invariant). P1.3.
+pytestmark = pytest.mark.xdist_group("ops_shadow")
+
+
 def test_valid_add_parses():
     from ops.engine_sdlc.ecr import ECRAction, parse_ecr
     ecr = parse_ecr(_VALID_ADD)

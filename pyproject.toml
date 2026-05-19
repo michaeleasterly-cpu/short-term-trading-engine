@@ -89,6 +89,9 @@ ignore = ["E501"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+markers = [
+    "xdist_group: pytest-xdist group pinning (ops-shadow single-worker isolation; P1.3)",
+]
 testpaths = [
     "tests",
     "tpcore/tests",

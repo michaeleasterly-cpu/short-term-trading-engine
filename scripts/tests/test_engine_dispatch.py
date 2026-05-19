@@ -34,6 +34,12 @@ from tpcore.engine_profile import FireDecision  # noqa: E402
 _real_invoke_allocator = ed._invoke_allocator
 
 
+# pytest-xdist: pin this ops-shadow module to one worker so its
+# sys.modules['ops'] / scripts/ops.py loading stays single-process
+# (the ops/ package-shadow is a single-process invariant). P1.3.
+pytestmark = pytest.mark.xdist_group("ops_shadow")
+
+
 @pytest.fixture(autouse=True)
 def _no_real_allocator():
     """Sub-project C: dispatch_once now runs the allocator first.
@@ -135,7 +141,6 @@ async def test_stale_startup_without_completion_is_refired():
     assert engines_supervised[1:] == list(ROSTER)
     # dispatch path only logs skip (no re-invoke from _dispatch_engine)
     inv.assert_not_called()
-
 
 
 async def test_already_ran_branch_is_skip_only_never_reinvokes():

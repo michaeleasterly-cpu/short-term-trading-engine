@@ -47,6 +47,12 @@ _spec.loader.exec_module(drs)
 # ────────────────────────────────────────────────────────────────────────
 
 
+# pytest-xdist: pin this ops-shadow module to one worker so its
+# sys.modules['ops'] / scripts/ops.py loading stays single-process
+# (the ops/ package-shadow is a single-process invariant). P1.3.
+pytestmark = pytest.mark.xdist_group("ops_shadow")
+
+
 class _Conn:
     def __init__(self, pool: _Pool) -> None:
         self._pool = pool
