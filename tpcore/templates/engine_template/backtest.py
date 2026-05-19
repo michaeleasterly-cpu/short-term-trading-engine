@@ -46,3 +46,27 @@ async def run_backtest(*args, **kwargs):
          before the function returns.
     """
     raise NotImplementedError("wire run_backtest for this engine")
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# SP-B forward dep — Lab targeting declaration. Uncomment + fill the
+# param ranges once this engine has a backtest contract; the four
+# callables below are the uniform Lab dispatch contract every engine
+# already implements (run_for_search / load_<engine>_window_context /
+# run_<engine>_with_context / default_params). Resolved lazily by
+# ops.lab.run._lab_target_for via the roster SoT — being added to
+# tpcore.engine_profile._PROFILE (PAPER/LAB/LIVE) + declaring this
+# constant is ALL that is needed to be Lab-targetable (spec §7 T7).
+# ────────────────────────────────────────────────────────────────────────────
+#
+# from tpcore.lab.target import LabTarget
+#
+# LAB_TARGET = LabTarget(
+#     param_ranges={
+#         # "my_param": (low, high, "float"),   # "float" | "int" | "choice:a,b"
+#     },
+#     run_for_search=run_for_search,
+#     load_window_context=load_<engine>_window_context,
+#     run_with_context=run_<engine>_with_context,
+#     default_params=default_params,
+# )

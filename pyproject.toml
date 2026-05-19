@@ -141,6 +141,40 @@ ignore = ["E501"]
 # scoped per-file ignore is the correct form (mirrors the frozen-oracle
 # precedent above) — never an inline `# noqa: SLF001`.
 "tpcore/tests/test_stale_order_cancel.py" = ["SLF"]
+# SP-B T4 dispatch-seam characterization test: pinning that the lazy
+# PARAM_RANGES + `_lab_target_for` resolver + the `_runner_for`/
+# `_context_loader_for`/`_context_runner_for` thin views preserve the
+# spec §6/§8 private seam names REQUIRES naming those `ops.lab.run`-
+# private symbols (that IS the test's purpose — the oracle's by-name
+# monkeypatch binds them). Engine-lane-module-private (NOT tpcore-
+# private) access in a char-test; the scoped per-file ignore is the
+# correct form (mirrors the two frozen/char-oracle precedents above) —
+# never an inline `# noqa: SLF001` (CLAUDE.md / STYLE_GUIDE).
+"tpcore/tests/test_lab_dispatch_indirection.py" = ["SLF"]
+# SP-B T5 CLI-choices-from-roster test: proving both argparse surfaces
+# generate `--engine`/`--target-engine` choices from
+# `lab_targetable_engines()` REQUIRES calling the `ops.lab.run` /
+# `ops.lab.__main__`-private `_parse_args` (that IS the test's purpose —
+# it exercises the built parser). Engine-lane-module-private (NOT tpcore-
+# private) access in a CLI-contract test; the scoped per-file ignore is
+# the correct form (mirrors the char/dispatch-seam precedents above) —
+# never an inline `# noqa: SLF001` (CLAUDE.md / STYLE_GUIDE).
+"tpcore/tests/test_lab_cli_choices_from_roster.py" = ["SLF"]
+# SP-B T6 roster-Lab consistency clockwork: the runtime-equality
+# clockwork + synthetic-drift red-proof + SP-A non-regression REQUIRES
+# naming the `ops.lab.run` / `ops.lab.__main__`-private `_parse_args` /
+# `_lab_target_for` / `_run_lab_core` / `compute_dsr_for_verdict` and the
+# `tpcore.engine_profile`-private `_PROFILE` (that IS the test's purpose
+# — it exercises the built parsers, the resolver seam, and the ledger
+# spine, and injects a synthetic _PROFILE entry to prove the clockwork
+# reds on drift). Engine-lane-module-private (NOT tpcore-private) access
+# in a consistency-clockwork test; the scoped per-file ignore is the
+# correct form (mirrors the char/dispatch/CLI-choices precedents above)
+# — never an inline `# noqa: SLF001` (CLAUDE.md / STYLE_GUIDE). Task-6
+# in the plan had no pyproject step; this entry was added as a
+# controller-adjudicated Plan correction (the SLF-baseline plan-defect
+# class, T5 Step-4b precedent).
+"tpcore/tests/test_lab_targeting_consistency.py" = ["SLF"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

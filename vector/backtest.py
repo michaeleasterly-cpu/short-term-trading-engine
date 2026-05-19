@@ -59,6 +59,7 @@ from tpcore.backtest.cost_model import (
 )
 from tpcore.backtest.price_loader import load_prices
 from tpcore.db import build_asyncpg_pool
+from tpcore.lab.target import LabTarget
 
 if TYPE_CHECKING:  # pragma: no cover
     from tpcore.backtest.search import BacktestRunResult
@@ -974,6 +975,26 @@ async def run_for_search(
         db_url=db_url, start=start, end=end, universe=universe,
     )
     return run_vector_with_context(ctx, overrides=overrides, trade_log_path=trade_log_path)
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# SP-B — Lab targeting declaration (engine-OWNED; resolved by ops.lab.run
+# (SP-B T4 roster-driven resolver); the live trading path never imports this).
+# ────────────────────────────────────────────────────────────────────────────
+
+LAB_TARGET = LabTarget(
+    param_ranges={
+        "pb_ceiling": (1.5, 3.5, "float"),
+        "de_ceiling": (1.5, 4.0, "float"),
+        "catalyst_window_days": (3, 10, "int"),
+        "swing_score_threshold": (55.0, 75.0, "float"),
+        "stop_pct": (0.04, 0.10, "float"),
+    },
+    run_for_search=run_for_search,
+    load_window_context=load_vector_window_context,
+    run_with_context=run_vector_with_context,
+    default_params=default_params,
+)
 
 
 # ────────────────────────────────────────────────────────────────────────────

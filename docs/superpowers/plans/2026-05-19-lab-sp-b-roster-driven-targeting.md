@@ -100,6 +100,10 @@ There is no file to `git add` — the T0 oracle ships as the inlined constant in
 
 ## Task 1: `tpcore/lab/target.py::LabTarget` — the engine-free contract — spec §2.2 / §7 T1
 
+> Plan correction (applied during SP-B T1 exec): two adjudicated fixes — (A) dropped the `bad3` `{"z": [2.0, 4.0, "float"]}` parametrize case: pydantic v2 idiomatically coerces the list to a valid `(2.0, 4.0, "float")` tuple so it is unsatisfiable and tested an implementation artifact, not the validation contract (no `strict=True`/pre-coercion check — YAGNI); (B) replaced bare `pytest.raises(Exception)` (ruff B017) with the empirically-verified `pytest.raises(pydantic.ValidationError)` — pydantic v2 wraps the `model_post_init` `ValueError`, and frozen-mutation + `extra="forbid"` also raise `pydantic.ValidationError`.
+>
+> Plan correction (applied during SP-B T1 code-quality review): two more adjudicated fixes — (C) `model_post_init` signature aligned to the established tpcore convention `def model_post_init(self, _ctx: object) -> None:  # noqa: D401` (verified vs `tpcore/providers.py:68`, `tpcore/selfheal/spec.py:66`, `tpcore/auditheal/spec.py:32`) — was `__context: Any`, a convention divergence (`Any` import retained: still used by the `Callable` annotations); (D) closed a real live-money silent-corruption hole — an empty `choice:` / `choice:,` kind was accepted by the bare `.startswith("choice:")` check but `ops/lab/run.py::_sample_value` would `rng.choice([''])` and silently sample an empty-string parameter value; the validator now requires `[c for c in kind.split(":",1)[1].split(",") if c.strip()]` non-empty, fail-loud at DECLARATION time, with two new parametrized rows (`"choice:"`, `"choice:,"`). Code-quality items #3 `low > high` semantic check, #4 the by-design-unreachable `not isinstance(spec, tuple)` half (pydantic coerces before `model_post_init`), #5 `dict[str, tuple]` loose vs `tuple[Any,Any,str]`, #6 AST guard not catching `importlib.import_module("reversion")` — reviewed and DEFERRED as scoped design choices for SP-B (T1's contract is kind/tuple-shape + the choice-emptiness safety hole; arity/bounds-tightening would move validation into pydantic and is out of T1 scope; the AST test is a fast local tripwire, CI `check_imports tpcore` is the real backstop).
+
 **Files:**
 - Create: `tpcore/lab/target.py`
 - Test: `tpcore/tests/test_lab_target.py`
@@ -114,6 +118,7 @@ validation of the (low, high, kind) tuple/kind contract.
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 
 def _callables():
@@ -153,9 +158,9 @@ def test_labtarget_is_frozen_and_extra_forbid():
     t = LabTarget(param_ranges={"z": (2.0, 4.0, "float")},
                   run_for_search=afn, load_window_context=afn,
                   run_with_context=sfn, default_params=dp)
-    with pytest.raises(Exception):  # pydantic frozen → ValidationError
+    with pytest.raises(ValidationError):  # pydantic frozen instance
         t.param_ranges = {}
-    with pytest.raises(Exception):  # extra="forbid"
+    with pytest.raises(ValidationError):  # extra="forbid"
         LabTarget(param_ranges={}, run_for_search=afn,
                   load_window_context=afn, run_with_context=sfn,
                   default_params=dp, bogus=1)
@@ -165,16 +170,18 @@ def test_labtarget_is_frozen_and_extra_forbid():
     {"z": (2.0, 4.0)},                       # 2-tuple, not 3
     {"z": (2.0, 4.0, "floar")},              # typo kind
     {"z": (2.0, 4.0, "choice")},             # choice w/o ":"
-    {"z": [2.0, 4.0, "float"]},              # list not tuple
     {"z": (2.0, 4.0, 7)},                    # kind not str
+    {"z": (0, 1, "choice:")},                # empty CSV → [''] silent corruption
+    {"z": (0, 1, "choice:,")},               # all-empty members
 ])
 def test_labtarget_rejects_malformed_param_ranges_at_construction(bad):
     """Fail-loud at DECLARATION time (model_post_init), not at sample
-    time on a live-money-adjacent path (spec §2.2)."""
+    time on a live-money-adjacent path (spec §2.2). pydantic v2 wraps the
+    ``model_post_init`` ``ValueError`` in ``pydantic.ValidationError``."""
     from tpcore.lab.target import LabTarget
 
     afn, sfn, dp = _callables()
-    with pytest.raises(ValueError):
+    with pytest.raises(ValidationError):
         LabTarget(param_ranges=bad, run_for_search=afn,
                   load_window_context=afn, run_with_context=sfn,
                   default_params=dp)
@@ -252,7 +259,7 @@ class LabTarget(BaseModel):
     run_with_context: Callable[..., Any]
     default_params: Callable[[], dict[str, Any]]
 
-    def model_post_init(self, __context: Any) -> None:
+    def model_post_init(self, _ctx: object) -> None:  # noqa: D401
         for name, spec in self.param_ranges.items():
             if not isinstance(spec, tuple) or len(spec) != 3:
                 raise ValueError(
@@ -265,12 +272,28 @@ class LabTarget(BaseModel):
                     f"LabTarget.param_ranges[{name!r}] kind must be str; "
                     f"got {kind!r}"
                 )
-            if kind not in ("float", "int") and not kind.startswith(
-                "choice:"
-            ):
+            if kind in ("float", "int"):
+                continue
+            if not kind.startswith("choice:"):
                 raise ValueError(
                     f"LabTarget.param_ranges[{name!r}] kind {kind!r} not "
                     f"in 'float'|'int'|'choice:<csv>'"
+                )
+            # choice:<csv> — _sample_value (run.py) does
+            # kind.split(":",1)[1].split(",") then rng.choice(...). An
+            # empty CSV ("choice:" / "choice:,") would yield [''] and
+            # rng.choice would silently return an empty-string "param
+            # value" — silent corruption of what the Lab fishes. Require
+            # ≥1 non-empty member, fail-loud at DECLARATION time.
+            members = [
+                c for c in kind.split(":", 1)[1].split(",") if c.strip()
+            ]
+            if not members:
+                raise ValueError(
+                    f"LabTarget.param_ranges[{name!r}] kind {kind!r}: a "
+                    f"'choice:' kind needs ≥1 non-empty member "
+                    f"(e.g. 'choice:a,b'); an empty choice list would "
+                    f"silently sample an empty-string parameter value"
                 )
 
 
@@ -280,7 +303,7 @@ __all__ = ["LabTarget"]
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `python -m pytest tpcore/tests/test_lab_target.py -p no:xdist -q`
-Expected: PASS (all 6 cases incl. the 5 parametrized malformed ones).
+Expected: PASS (all cases incl. the 4 parametrized malformed ones).
 
 - [ ] **Step 5: Verify the layering invariant stays green**
 
@@ -347,6 +370,20 @@ def test_retired_and_allocator_excluded():
     assert "allocator" not in targetable   # reuse _ALLOCATOR_ENGINE filter
 
 
+def test_lab_state_inclusion_is_real_not_vestigial(monkeypatch):
+    """Positively pin LifecycleState.LAB ∈ _LAB_TARGETABLE via a synthetic
+    LAB engine named ≠ "lab" (monkeypatch.setitem auto-restores _PROFILE)."""
+    from tpcore.engine_profile import (
+        _PROFILE, Cadence, EngineProfile, LifecycleState,
+        lab_targetable_engines,
+    )
+    synthetic = EngineProfile(engine="labcandidate", cadence=Cadence.DAILY,
+                              dispatch_order=51,
+                              lifecycle_state=LifecycleState.LAB)
+    monkeypatch.setitem(_PROFILE, "labcandidate", synthetic)
+    assert "labcandidate" in lab_targetable_engines()
+
+
 def test_accessor_equals_recomputed_predicate_over_profile():
     """The accessor IS the predicate over _PROFILE — not a hand-list."""
     from tpcore.engine_profile import (
@@ -363,6 +400,8 @@ def test_accessor_equals_recomputed_predicate_over_profile():
     }
     assert set(lab_targetable_engines()) == expected
 ```
+
+> Plan correction (applied during SP-B T2 code-quality review hardening): added `test_lab_state_inclusion_is_real_not_vestigial` — code-quality review item #2. Today the only LAB profile is the `lab` sentinel (excluded by name), so every other test nets to *exclusion*: a silent narrowing of `_LAB_TARGETABLE` to `_DISPATCHABLE` (dropping `LifecycleState.LAB`) would leave the whole suite green. The new test injects a synthetic non-`"lab"` LAB profile via `monkeypatch.setitem(_PROFILE, …)` (auto-restored; matches the existing direct-`_PROFILE`-import pattern in this file — no SLF001) and asserts it IS targetable; verified non-tautological (fails under the scratch `_LAB_TARGETABLE = _DISPATCHABLE` collapse while the other 5 stay green). Step 4's "PASS (5 tests)" is now 6. Code-quality item #1 (promote the bare `"canary"` literal to a named `_CANARY_*` constant) was reviewed and DEFERRED: the literal is also bare in `order_ids.py`/`capital_gate.py` with no shared constant, so a proper consolidation is a cross-file concern of its own out of T2 scope; the inline `# spec §4b, N=1` comment already makes intent legible and the design deliberately rejected a `_PROFILE` bool field.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -414,7 +453,7 @@ def lab_targetable_engines() -> tuple[str, ...]:
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `python -m pytest tpcore/tests/test_lab_targetable_accessor.py -p no:xdist -q`
-Expected: PASS (5 tests).
+Expected: PASS (6 tests — see the T2 code-quality-review Plan correction below).
 
 - [ ] **Step 5: Verify the existing lifecycle clockwork is still green (no regression to roster_for_dispatch/archived_engines)**
 
@@ -464,6 +503,33 @@ _T0_PARAM_RANGES_KEYSETS: dict[str, list[str]] = {
     "momentum": ["hold_days", "lookback_days", "skip_days", "top_decile_pct"],
 }
 
+# FULL-TUPLE T0 byte-parity oracle: the exact {key: (low, high, kind)} dicts
+# as they lived in ops.lab.run.PARAM_RANGES on the un-refactored tree (Task 0),
+# captured verbatim. Exact dict equality below means a single-location bound
+# edit (engine LAB_TARGET *or* run.py mirror) reds CI — the spec's byte-parity
+# requirement is now guarded at the value level, not just shape/keyset.
+_T0_PARAM_RANGES_FULL: dict[str, dict[str, tuple]] = {
+    "reversion": {
+        "z_threshold": (2.0, 4.0, "float"),
+        "volume_climax_multiplier": (1.2, 3.0, "float"),
+        "max_hold_days": (3, 12, "int"),
+        "stop_pct": (0.04, 0.12, "float"),
+    },
+    "vector": {
+        "pb_ceiling": (1.5, 3.5, "float"),
+        "de_ceiling": (1.5, 4.0, "float"),
+        "catalyst_window_days": (3, 10, "int"),
+        "swing_score_threshold": (55.0, 75.0, "float"),
+        "stop_pct": (0.04, 0.10, "float"),
+    },
+    "momentum": {
+        "lookback_days": (200, 280, "int"),
+        "skip_days": (15, 30, "int"),
+        "hold_days": (15, 30, "int"),
+        "top_decile_pct": (0.05, 0.20, "float"),
+    },
+}
+
 
 @pytest.mark.parametrize("engine", ["reversion", "vector", "momentum"])
 def test_engine_declares_valid_lab_target(engine):
@@ -482,20 +548,14 @@ def test_engine_declares_valid_lab_target(engine):
 
 
 @pytest.mark.parametrize("engine", ["reversion", "vector", "momentum"])
-def test_lab_target_values_byte_match_old_param_ranges(engine):
-    """The (low, high, kind) tuples are byte-identical to the values
-    that lived in ops.lab.run.PARAM_RANGES — no behavioural drift."""
-    import importlib as _il
-
-    mod = _il.import_module(f"{engine}.backtest")
-    # Reconstruct the OLD literal from git's pre-refactor copy is overkill;
-    # the run.py lazy Mapping (Task 4) will resolve THROUGH these, and the
-    # characterization oracle pins reversion's keyset. Here we pin the
-    # values are 3-tuples with a valid kind (LabTarget already enforces;
-    # this is the engine-side regression pin).
-    for name, spec in mod.LAB_TARGET.param_ranges.items():
-        assert isinstance(spec, tuple) and len(spec) == 3
-        assert spec[2] in ("float", "int") or spec[2].startswith("choice:")
+def test_lab_target_param_ranges_full_value_byte_parity(engine):
+    """The full {key: (low, high, kind)} dict is byte-identical to the
+    inlined T0 oracle (the values that lived in ops.lab.run.PARAM_RANGES
+    pre-refactor). Exact dict equality — a single-location bound edit in
+    either the engine LAB_TARGET or the run.py mirror reds CI (the spec's
+    byte-parity requirement, guarded at the value level not just shape)."""
+    mod = importlib.import_module(f"{engine}.backtest")
+    assert mod.LAB_TARGET.param_ranges == _T0_PARAM_RANGES_FULL[engine]
 
 
 def test_live_import_surface_does_not_import_lab_target():
@@ -519,11 +579,12 @@ Expected: FAIL — `AssertionError: reversion: no module-level LAB_TARGET` (the 
 In `reversion/backtest.py`, immediately after `run_for_search` ends (line `:1102`, the blank line before the `# Main` divider at `:1104`), insert:
 ```python
 # ────────────────────────────────────────────────────────────────────────────
-# SP-B — Lab targeting declaration (engine-OWNED; the live path never
-# imports this; resolved lazily by ops.lab.run._lab_target_for).
+# SP-B — Lab targeting declaration (engine-OWNED; resolved by ops.lab.run
+# (SP-B T4 roster-driven resolver); the live trading path never imports this).
 # ────────────────────────────────────────────────────────────────────────────
-
-from tpcore.lab.target import LabTarget  # noqa: E402 — engine→tpcore, legal
+# NOTE (applied per Step-3 NOTE fallback): `from tpcore.lab.target import
+# LabTarget` is hoisted to the top `from tpcore...` import block with no
+# `# noqa` (this is what shipped — ruff E402 would red the mid-module form).
 
 LAB_TARGET = LabTarget(
     param_ranges={
@@ -539,17 +600,22 @@ LAB_TARGET = LabTarget(
 )
 ```
 
-> NOTE: `# noqa: E402` is for module-level-import-not-at-top (ruff E402), NOT `SLF001`. This is a sanctioned engine→tpcore import placed next to the symbols it references; it is not private-attribute access. If ruff still complains, move the `from tpcore.lab.target import LabTarget` to the top import block with the other `from tpcore...` imports and drop the `# noqa`.
+> NOTE: The mid-module `# noqa: E402` form (E402 = module-level-import-not-at-top, NOT `SLF001`) is the original sketch; this NOTE's fallback — move the `from tpcore.lab.target import LabTarget` to the top import block with the other `from tpcore...` imports and drop the `# noqa` — is the path that was actually applied (ruff E402 reds the mid-module form; `tests/**` only ignores E741/E702). The embedded Step-3/4/5 blocks above now show the shipped hoisted-import form.
+
+> Plan correction (applied during SP-B T3 exec): the embedded Step-1 test loop was changed from `for name, spec` to `for _name, spec` because the loop var is unused — ruff B007 (`B` is selected; `tests/**` ignores only E741/E702) reds the as-written block, and the shipped test uses `_name`. The embedded engine blocks (Step 3/4/5) were aligned to the hoisted top-import form with no `# noqa`, which is this NOTE's own sanctioned Step-3 fallback (ruff E402 forced it — not a free authoring choice) and matches what shipped.
+
+> Plan correction (applied during SP-B T3 code-quality review): four adjudicated fixes — (1) Important #1: a one-line TRANSITIONAL banner was added immediately above `ops/lab/run.py::PARAM_RANGES` flagging each entry as a byte-mirror of `<engine>.backtest.LAB_TARGET.param_ranges` (edit the engine, not run.py) until T4 makes it a lazy view — closing a silent T3↔T4 live-money desync hole (no tuple value changed). (2) Important #2: `test_lab_target_values_byte_match_old_param_ranges` only asserted 3-tuple shape + valid kind (already enforced by `LabTarget.model_post_init`) so a single-location bound edit would NOT red CI; it was renamed `test_lab_target_param_ranges_full_value_byte_parity` and rewritten to assert exact dict equality against a new FULL-TUPLE inlined `_T0_PARAM_RANGES_FULL` oracle (captured verbatim from the un-refactored tree), proven non-tautological (a throwaway reversion `z_threshold` bound edit reds it, then reverted). (3) Minor #3: the three engine `LAB_TARGET` banner comments were made identical and the forward-reference softened (no longer pins the not-yet-existing `_lab_target_for`; now "resolved by ops.lab.run (SP-B T4 roster-driven resolver); the live trading path never imports this") — the copy-pattern for future engine authors; embedded Step 1/3/4/5 blocks above updated to match. (4) Minor #4: the dead `import importlib as _il` aliased re-import was removed in favour of the module-level `import importlib` already in scope.
 
 - [ ] **Step 4: Write minimal implementation — vector**
 
 In `vector/backtest.py`, after `run_for_search` ends (it is the last def before `if __name__`), insert the same block but with vector's params + symbols:
 ```python
 # ────────────────────────────────────────────────────────────────────────────
-# SP-B — Lab targeting declaration (engine-OWNED; live path never imports).
+# SP-B — Lab targeting declaration (engine-OWNED; resolved by ops.lab.run
+# (SP-B T4 roster-driven resolver); the live trading path never imports this).
 # ────────────────────────────────────────────────────────────────────────────
-
-from tpcore.lab.target import LabTarget  # noqa: E402 — engine→tpcore, legal
+# NOTE (applied per Step-3 NOTE fallback): `from tpcore.lab.target import
+# LabTarget` is hoisted to the top `from tpcore...` import block, no `# noqa`.
 
 LAB_TARGET = LabTarget(
     param_ranges={
@@ -571,10 +637,11 @@ LAB_TARGET = LabTarget(
 In `momentum/backtest.py`, after `run_for_search` ends, insert:
 ```python
 # ────────────────────────────────────────────────────────────────────────────
-# SP-B — Lab targeting declaration (engine-OWNED; live path never imports).
+# SP-B — Lab targeting declaration (engine-OWNED; resolved by ops.lab.run
+# (SP-B T4 roster-driven resolver); the live trading path never imports this).
 # ────────────────────────────────────────────────────────────────────────────
-
-from tpcore.lab.target import LabTarget  # noqa: E402 — engine→tpcore, legal
+# NOTE (applied per Step-3 NOTE fallback): `from tpcore.lab.target import
+# LabTarget` is hoisted to the top `from tpcore...` import block, no `# noqa`.
 
 LAB_TARGET = LabTarget(
     param_ranges={
@@ -602,7 +669,7 @@ Run:
 python -m tpcore.scripts.check_imports reversion vector momentum sentinel canary tpcore
 python -m ruff check reversion/backtest.py vector/backtest.py momentum/backtest.py
 ```
-Expected: both exit 0. (The `from tpcore.lab.target import LabTarget` is engine→tpcore — the legal direction. If ruff E402 reds, apply the Step-3 NOTE: hoist the import to the top block and drop the `# noqa`.)
+Expected: both exit 0. (The `from tpcore.lab.target import LabTarget` is engine→tpcore — the legal direction. As shipped, the Step-3 NOTE fallback was applied: the import is hoisted to the top block with no `# noqa`.)
 
 - [ ] **Step 8: Commit**
 
@@ -697,6 +764,12 @@ def test_param_ranges_membership_iteration_len_and_set():
         assert set(run.PARAM_RANGES[e]) == set(_T0_PARAM_RANGES_KEYSETS[e])
 ```
 
+> Plan correction (applied during SP-B T4 exec): `tpcore/tests/test_lab_dispatch_indirection.py` necessarily names the `ops.lab.run`-private seam symbols `_runner_for`/`_context_loader_for`/`_context_runner_for`/`_lab_target_for` (that IS the test's spec §6/§8 purpose — pinning the private seam the oracle's by-name monkeypatch binds), which reds the globally-selected ruff `SLF001` (`SLF` is in `[tool.ruff.lint] select`; `**/tests/**` ignores only `E741,E702`). CLAUDE.md / STYLE_GUIDE forbids an inline `# noqa: SLF001`; the repo-canonical form for an engine-module-private (NOT tpcore-private) char/parity test is a scoped `[tool.ruff.lint.per-file-ignores]` entry — exactly the precedent `scripts/tests/test_search_parameters_characterization.py` and `tpcore/tests/test_stale_order_cancel.py` already use. The as-written plan omitted this required pyproject entry; the shipped change adds `"tpcore/tests/test_lab_dispatch_indirection.py" = ["SLF"]` alongside the two existing precedents (and `pyproject.toml` is included in the Step-13 commit). No test code changed — the plan's Step-1/Step-3 test bodies shipped verbatim.
+>
+> Plan correction (applied during SP-B T4 spec-review hardening, 2026-05-19): the Step-3 `_lab_target_for` resolver's import-failure catch shipped as `except (ImportError, SyntaxError) as exc:` (clear-`ValueError` message reworded to "…has a `<engine>.backtest` module that failed to import/parse (`<ExcType>`): …"), NOT the as-planned `except ModuleNotFoundError` — spec-review found that post-SP-B `planner.py:693`'s `PARAM_RANGES.get(ecr.engine, {})` is itself a NEW lazy-import trigger on the live-adjacent MODIFY-ECR validator, so a `SyntaxError`/non-`ModuleNotFoundError` `ImportError` under the narrow catch would crash it (the spec §2.3↔EC7 inconsistency, now reconciled — see spec §8-HARDEN-T4); a parametrized `(ImportError, SyntaxError)` no-crash test was added to `tpcore/tests/test_lab_dispatch_indirection.py` (proven non-tautological vs the pre-fix narrow catch). Step-3 pseudocode above updated to match shipped.
+
+> Plan correction (applied during SP-B T4 code-quality review, 2026-05-19): the Step-3 `_lab_target_for` resolver additionally shipped an `isinstance(target, LabTarget)` guard after the `target is None` check (return annotation tightened `Any`→`LabTarget`; runtime `from tpcore.lab.target import LabTarget` added to the top imports — ops→tpcore is the legal direction, tpcore stays engine-free) — code-quality review found a malformed (present, non-`None`, non-`LabTarget`) `LAB_TARGET` would let `__getitem__`'s `.param_ranges` raise an `AttributeError` (NOT caught by its `except ValueError`) and leak onto the live-adjacent `planner.py:693` `.get()` MODIFY-ECR validator, crashing it (spec §8-HARDEN-T4-b / EC7b — the same crash class EC7 prevents, via a different exception type); a parametrized non-`LabTarget` (`object()`/int/str/dict) no-crash test was added to `tpcore/tests/test_lab_dispatch_indirection.py`, proven non-tautological (guard removed ⇒ all cases fail with the `AttributeError` leak). Step-3 pseudocode + embedded test list above updated to match shipped.
+
 - [ ] **Step 2: Run the char pins against the UN-refactored tree to confirm they hold**
 
 Run: `python -m pytest tpcore/tests/test_lab_dispatch_indirection.py -p no:xdist -q`
@@ -761,6 +834,45 @@ def test_lab_target_for_rejects_eligible_but_undeclared_sentinel():
         _lab_target_for("sentinel")
 
 
+# ── HARDENING: declared engine whose LAB_TARGET is a non-LabTarget ───────
+# (spec §8-HARDEN-T4-b / EC7b) — the resolver self-fences a malformed
+# (present, non-None, NOT a LabTarget) LAB_TARGET so `.param_ranges` in
+# __getitem__ never raises an AttributeError that would leak onto the
+# live-adjacent planner.py:693 .get().
+@pytest.mark.parametrize(
+    "bad_target", [object(), 42, "not-a-labtarget", {"param_ranges": {}}],
+    ids=["object", "int", "str", "dict"],
+)
+def test_declared_engine_malformed_lab_target_is_keyerror_not_attributeerror(
+    monkeypatch, bad_target
+):
+    """reversion.backtest imports fine but LAB_TARGET is NOT a LabTarget:
+    (a) _lab_target_for raises the clear ValueError; (b)
+    PARAM_RANGES['reversion'] → KeyError (NOT the AttributeError leak
+    class); (c) PARAM_RANGES.get('reversion', {}) == {} (planner.py:693).
+    The resolver — not an out-of-band CI isinstance test — is the ONLY
+    fence."""
+    import importlib
+    import types
+
+    import ops.lab.run as run
+    real_import = importlib.import_module
+
+    def _fake_import(name, *a, **kw):
+        if name == "reversion.backtest":
+            fake = types.ModuleType("reversion.backtest")
+            fake.LAB_TARGET = bad_target
+            return fake
+        return real_import(name, *a, **kw)
+
+    monkeypatch.setattr(importlib, "import_module", _fake_import)
+    with pytest.raises(ValueError, match=r"reversion.*LAB_TARGET.*not a LabTarget"):
+        run._lab_target_for("reversion")
+    with pytest.raises(KeyError):
+        run.PARAM_RANGES["reversion"]
+    assert run.PARAM_RANGES.get("reversion", {}) == {}
+
+
 def test_sample_parameters_clear_error_on_bad_engine():
     import ops.lab.run as run
     with pytest.raises(ValueError, match="not Lab-targetable"):
@@ -817,13 +929,14 @@ Replace the literal `PARAM_RANGES` dict (`:95-131`) with the resolver + lazy Map
 # ────────────────────────────────────────────────────────────────────────────
 
 
-def _lab_target_for(engine: str) -> "Any":
+def _lab_target_for(engine: str) -> "LabTarget":
     """Resolve the engine's declared LabTarget via the roster SoT.
 
     Engine import is LAZY (legal in ops/, H-S2-1 — the resolver lives in
     ops/, NOT tpcore/). Hard-rejects an engine that is not
-    roster-Lab-targetable OR has not declared LAB_TARGET with a CLEAR
-    ValueError — never a raw KeyError/ImportError to the operator. The
+    roster-Lab-targetable OR has not declared LAB_TARGET OR declared a
+    non-LabTarget LAB_TARGET, all with a CLEAR ValueError — never a raw
+    KeyError/ImportError/AttributeError to the operator. The
     reject fires inside sample_parameters BEFORE the SP-A
     record_trial_spend block (run.py:752-759) so no partial ledger write
     is possible (spec §4.5, §8-A4)."""
@@ -839,10 +952,10 @@ def _lab_target_for(engine: str) -> "Any":
 
     try:
         mod = importlib.import_module(f"{engine}.backtest")
-    except ModuleNotFoundError as exc:
+    except (ImportError, SyntaxError) as exc:
         raise ValueError(
-            f"engine {engine!r} has no importable {engine}.backtest "
-            f"module: {exc}"
+            f"engine {engine!r} has a {engine}.backtest module that "
+            f"failed to import/parse ({type(exc).__name__}): {exc}"
         ) from exc
     target = getattr(mod, "LAB_TARGET", None)
     if target is None:
@@ -851,6 +964,17 @@ def _lab_target_for(engine: str) -> "Any":
             f"declared a module-level LAB_TARGET in {engine}.backtest "
             f"(see tpcore/lab/target.py:LabTarget). This is the SP-E/SP-F "
             f"forward step: the engine must declare its Lab contract."
+        )
+    if not isinstance(target, LabTarget):
+        # malformed: present, non-None, NOT a LabTarget ⇒ `.param_ranges`
+        # in __getitem__ raises AttributeError (NOT caught by its
+        # `except ValueError`) → leaks onto planner.py:693. Self-fence
+        # with the SAME ValueError shape (§8-HARDEN-T4-b).
+        raise ValueError(
+            f"engine {engine!r} has a {engine}.backtest module-level "
+            f"LAB_TARGET present but it is not a LabTarget instance "
+            f"(got {type(target).__name__}; see tpcore/lab/target.py:"
+            f"LabTarget)."
         )
     return target
 
@@ -1010,12 +1134,19 @@ git commit -m "refactor(lab-sp-b): roster-SoT dispatch resolver + lazy PARAM_RAN
 
 **Files:**
 - Modify: `ops/lab/__main__.py` (`:50-53`)
-- Modify: `ops/lab/run.py` (`:620`)
+- Modify: `ops/lab/run.py` (`:678` — plan said `:620`; actual `_parse_args` is `:676`, the `--engine` line `:678`)
+- Modify: `pyproject.toml` (add the `tpcore/tests/test_lab_cli_choices_from_roster.py = ["SLF"]` per-file-ignore — see Plan correction below)
 - Test: `tpcore/tests/test_lab_cli_choices_from_roster.py`
+
+> **Plan correction (T5, adjudicated consistent with the T1/T3/T4 precedent — controller-approved):**
+> 1. **Hollow red-proof.** As originally written the test SKIPS `sentinel` in the `run.py` loop (`if good == "sentinel": continue`) and never asserts `sentinel` acceptance on the `__main__.py` surface. With the pre-SP-B literal `("reversion","vector","momentum")` every assertion still PASSES (bad choices rejected; the three literal members accepted; sentinel never exercised), so Step-2 "Expected: FAIL" is FALSE — the test does not discriminate the literal from the accessor. Corrected: both surface tests now `assert "sentinel" in lab_targetable_engines()` and loop ALL accessor members (no skip), so accepting the eligible-but-undeclared `sentinel` is the genuine discriminator. **Verified red-proof:** the strengthened test FAILS against the old literal (argparse rejects `sentinel` → `SystemExit` where acceptance is asserted) and PASSES against the accessor.
+> 2. **Missing SLF baseline.** The test calls `ops.lab.run._parse_args` / `ops.lab.__main__._parse_args` (engine-lane-module-private, NOT tpcore-private — that IS its purpose). Per CLAUDE.md/STYLE_GUIDE the canonical form is a pyproject per-file-ignore (never an inline `# noqa: SLF001`), mirroring the `test_lab_dispatch_indirection.py` / frozen-oracle precedents already in `[tool.ruff.lint.per-file-ignores]`. Added `pyproject.toml` to the Files list + Step 4b below; Step 1's test body is unchanged in shape (only the sentinel-skip removed + the discriminator asserts added).
+> 3. **Module-level `sys.modules` purge removed (spec-review BLOCKER, 2026-05-20).** The collection-time `del sys.modules["ops"|"ops.*"]` (originally lines 15-17, shown above pre-correction) was removed as an oracle-drift footgun found in spec review: under single-process `-p no:xdist` it diverged `sys.modules['ops.lab.run']` from the byte-frozen oracle's `sp.amain.__globals__` and red the oracle's `test_amain_*` — and the no-eager-import guarantee was never carried by that in-process eviction anyway but by the already-present pristine-subprocess probe (`test_import_ops_lab_main_eager_imports_no_engine`), which needs no in-process purge. (The residual `test_lab_ntrials_ledger.py`/`test_overfitting.py`↔oracle collection-isolation fragility is a SEPARATE pre-existing #148-class defect — reproduced at base `862b64f`/`ab07f13` with zero SP-B-T4/T5 files — not introduced or fixed here.)
+> 4. **T5 code-quality hardening (2026-05-20, post-merge regression-net strengthening — no re-architecture).** Three adjudicated items applied to the shipped test + `ops/lab/run.py` (the embedded Step-1 test body + Step-3 snippet below were updated to match shipped): **(Important #1)** the test now introspects the SHIPPED parser (via a transient `argparse.ArgumentParser.parse_args` spy that captures the real built parser instance `_parse_args` constructs) and asserts the `--engine` (run.py) / `--target-engine` (`__main__.py`) action `choices` equal `tuple(lab_targetable_engines())` EXACTLY (order-sensitive tuple equality) — accept/reject probing alone could not catch a SUPERSET drift (accessor + a re-added stale literal); proven non-tautological (a throwaway `choices=tuple(lab_targetable_engines())+("zzz",)` on run.py reds the exact-tuple assert with `Left contains one more item: 'zzz'`, then reverted, `git diff` clean). The engine-module-private parser introspection is covered by the existing scoped per-file SLF ignore — no inline `# noqa`, ignore not widened. **(Important #2)** the no-eager-import pristine-subprocess probe now builds BOTH shipped parsers in-subprocess (`run._parse_args(['--engine','reversion'])` and `m._parse_args(['--candidate','c','--target-engine','reversion','--intent','promote_new'])`) BEFORE the `sys.modules` engine-leak scan, so the guarantee actually covers the SP-B-changed path (the `lab_targetable_engines()` call happens at parser build, which the old import-only probe never exercised); still a single clean subprocess; proven non-tautological (a throwaway `import reversion.backtest` inside `run._parse_args` reds the probe with the leaked `reversion.*` modules, then reverted). **(Minor)** `ops/lab/run.py`'s `--engine` gained a concise `help=` mirroring the `__main__.py` `--target-engine` SP-B help intent (roster-derived; choices from the engine_profile SoT). `pyproject.toml` SLF per-file-ignore unchanged/not-widened; no SP-A or other-task files touched.
 
 - [ ] **Step 1: Write the failing test**
 
-Create `tpcore/tests/test_lab_cli_choices_from_roster.py`:
+Create `tpcore/tests/test_lab_cli_choices_from_roster.py` (shown as SHIPPED — includes the Plan-correction-4 Important #1/#2 hardening):
 ```python
 """SP-B — both argparse choices sites are GENERATED from
 lab_targetable_engines() (not a literal copy) and importing
@@ -1023,6 +1154,7 @@ ops.lab.__main__ still eager-imports NO engine (spec §2.5, §4.8).
 """
 from __future__ import annotations
 
+import argparse
 import subprocess
 import sys
 from pathlib import Path
@@ -1031,11 +1163,34 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
-for _m in [m for m in list(sys.modules) if m == "ops" or m.startswith("ops.")]:
-    if not hasattr(sys.modules[_m], "__path__"):
-        del sys.modules[_m]
 
 pytestmark = pytest.mark.xdist_group("ops_shadow")
+
+
+def _capture_built_parser(parse_args_fn, argv: list[str]):
+    """Call ``parse_args_fn(argv)`` and return the argparse parser object it
+    actually built (transient ``ArgumentParser.parse_args`` spy capturing
+    ``self``) — pins the SHIPPED parser so a SUPERSET drift reds."""
+    captured: dict[str, argparse.ArgumentParser] = {}
+    orig = argparse.ArgumentParser.parse_args
+
+    def _spy(self, *a, **kw):
+        captured["parser"] = self
+        return orig(self, *a, **kw)
+
+    argparse.ArgumentParser.parse_args = _spy
+    try:
+        parse_args_fn(argv)
+    finally:
+        argparse.ArgumentParser.parse_args = orig
+    return captured["parser"]
+
+
+def _choices_of(parser: argparse.ArgumentParser, option: str) -> tuple:
+    for act in parser._actions:
+        if option in act.option_strings:
+            return tuple(act.choices)
+    raise AssertionError(f"no argparse action with option {option!r}")
 
 
 def test_run_py_engine_choices_are_the_accessor():
@@ -1044,20 +1199,21 @@ def test_run_py_engine_choices_are_the_accessor():
 
     a = run._parse_args(["--engine", "reversion"])
     assert a.engine == "reversion"
-    # A non-targetable choice is rejected by argparse (SystemExit) ⇒ the
-    # choices ARE the accessor, not a stale literal.
     for bad in ("canary", "sigma", "lab"):
         with pytest.raises(SystemExit):
             run._parse_args(["--engine", bad])
-    # And every accessor member is accepted.
+    assert "sentinel" in lab_targetable_engines()
     for good in lab_targetable_engines():
-        if good == "sentinel":
-            continue  # eligible-but-undeclared: argparse accepts; resolver rejects later
         run._parse_args(["--engine", good])
+    # EXACT-equality pin (Important #1): order-sensitive tuple equality
+    # vs the accessor — catches a SUPERSET drift accept/reject can't.
+    parser = _capture_built_parser(run._parse_args, ["--engine", "reversion"])
+    assert _choices_of(parser, "--engine") == tuple(lab_targetable_engines())
 
 
 def test_main_py_target_engine_choices_are_the_accessor():
     import ops.lab.__main__ as m
+    from tpcore.engine_profile import lab_targetable_engines
 
     ns = m._parse_args(["--candidate", "c", "--target-engine", "reversion",
                         "--intent", "promote_new"])
@@ -1066,16 +1222,34 @@ def test_main_py_target_engine_choices_are_the_accessor():
         with pytest.raises(SystemExit):
             m._parse_args(["--candidate", "c", "--target-engine", bad,
                            "--intent", "promote_new"])
+    assert "sentinel" in lab_targetable_engines()
+    for good in lab_targetable_engines():
+        m._parse_args(["--candidate", "c", "--target-engine", good,
+                       "--intent", "promote_new"])
+    parser = _capture_built_parser(
+        m._parse_args,
+        ["--candidate", "c", "--target-engine", "reversion",
+         "--intent", "promote_new"],
+    )
+    assert (
+        _choices_of(parser, "--target-engine")
+        == tuple(lab_targetable_engines())
+    )
 
 
 def test_import_ops_lab_main_eager_imports_no_engine():
-    """__main__.py:18-20 invariant: import ops.lab.__main__ pulls in NO
-    engine package (the choices accessor is engine-free; resolution is
-    lazy). Pristine subprocess (zero collection-order pollution)."""
+    """Importing ops.lab.__main__ AND building BOTH CLI parsers (the path
+    SP-B changed — the lab_targetable_engines() call happens at parser
+    build) pulls in NO engine. Pristine subprocess; parser-build path
+    exercised in-subprocess (Important #2)."""
     probe = (
         f"import sys; sys.path.insert(0, {str(REPO_ROOT)!r})\n"
-        "import ops.lab.__main__\n"
-        "bad=[m for m in sys.modules if m.split('.')[0] in "
+        "import ops.lab.__main__ as m\n"
+        "import ops.lab.run as run\n"
+        "m._parse_args(['--candidate','c','--target-engine','reversion',"
+        "'--intent','promote_new'])\n"
+        "run._parse_args(['--engine','reversion'])\n"
+        "bad=[mod for mod in sys.modules if mod.split('.')[0] in "
         "('reversion','vector','momentum','sentinel','canary')]\n"
         "print(bad)\n"
     )
@@ -1083,13 +1257,13 @@ def test_import_ops_lab_main_eager_imports_no_engine():
                          capture_output=True, text=True, cwd=REPO_ROOT)
     assert out.returncode == 0, out.stderr
     assert out.stdout.strip() == "[]", (
-        f"eager engine import leaked: {out.stdout!r}")
+        f"eager engine import leaked through parser build: {out.stdout!r}")
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `python -m pytest tpcore/tests/test_lab_cli_choices_from_roster.py -p no:xdist -q`
-Expected: FAIL — the literal `choices=("reversion","vector","momentum")` rejects nothing differently, so the "accessor membership accepted" / "sentinel accepted by argparse" assertions fail (`sentinel` is not in the literal tuple → `SystemExit` where the test expects acceptance).
+Expected: FAIL (with the **corrected** test — see Plan correction above) — the literal `choices=("reversion","vector","momentum")` rejects `sentinel`, so the "every accessor member accepted (incl. sentinel)" assertions fail on both surfaces (`sentinel` not in the literal tuple → `SystemExit` where the test asserts acceptance). (The plan's *original* test skipped/omitted the `sentinel` assertion and would have spuriously PASSED here — that hollow red-proof is what the Plan correction fixes.)
 
 - [ ] **Step 3: Implement — `ops/lab/run.py` argparse**
 
@@ -1097,10 +1271,14 @@ In `ops/lab/run.py` `_parse_args` (`:620`), replace:
 ```python
     p.add_argument("--engine", choices=("reversion", "vector", "momentum"), required=True)
 ```
-with:
+with (SHIPPED — includes the Plan-correction-4 Minor `help=`):
 ```python
     from tpcore.engine_profile import lab_targetable_engines
-    p.add_argument("--engine", choices=lab_targetable_engines(), required=True)
+    p.add_argument("--engine", choices=lab_targetable_engines(), required=True,
+                   help="The roster-Lab-targetable engine to search "
+                        "(choices generated from tpcore.engine_profile — "
+                        "SP-B; an eligible-but-undeclared engine is a valid "
+                        "choice but the resolver rejects it later).")
 ```
 
 - [ ] **Step 4: Implement — `ops/lab/__main__.py` argparse**
@@ -1126,6 +1304,22 @@ with:
 ```
 > `from tpcore.engine_profile import ...` is a `tpcore` import — always legal in `ops/`, engine-free, no eager engine import; the `__main__.py:18-20` no-eager-import contract is preserved (the subprocess test in Step 1 proves it).
 
+- [ ] **Step 4b: Add the canonical SLF per-file-ignore (Plan correction)**
+
+In `pyproject.toml` `[tool.ruff.lint.per-file-ignores]`, immediately after the `"tpcore/tests/test_lab_dispatch_indirection.py" = ["SLF"]` entry, add:
+```toml
+# SP-B T5 CLI-choices-from-roster test: proving both argparse surfaces
+# generate `--engine`/`--target-engine` choices from
+# `lab_targetable_engines()` REQUIRES calling the `ops.lab.run` /
+# `ops.lab.__main__`-private `_parse_args` (that IS the test's purpose —
+# it exercises the built parser). Engine-lane-module-private (NOT tpcore-
+# private) access in a CLI-contract test; the scoped per-file ignore is
+# the correct form (mirrors the char/dispatch-seam precedents above) —
+# never an inline `# noqa: SLF001` (CLAUDE.md / STYLE_GUIDE).
+"tpcore/tests/test_lab_cli_choices_from_roster.py" = ["SLF"]
+```
+(Without this the test reds ruff `SLF001`; an inline `# noqa: SLF001` is forbidden by CLAUDE.md/STYLE_GUIDE — the per-file-ignore is the canonical baseline form, mirroring the existing char/dispatch-seam precedents.)
+
 - [ ] **Step 5: Run test to verify it passes**
 
 Run: `python -m pytest tpcore/tests/test_lab_cli_choices_from_roster.py -p no:xdist -q`
@@ -1138,13 +1332,13 @@ Expected: PASS unmodified (the legacy `scripts/search_parameters.py` shim inheri
 
 - [ ] **Step 7: ruff**
 
-Run: `python -m ruff check ops/lab/run.py ops/lab/__main__.py`
-Expected: exit 0.
+Run: `python -m ruff check ops/lab/run.py ops/lab/__main__.py tpcore/tests/test_lab_cli_choices_from_roster.py`
+Expected: exit 0 (the test file is clean given the Step-4b per-file-ignore).
 
 - [ ] **Step 8: Commit**
 
 ```bash
-git add ops/lab/run.py ops/lab/__main__.py tpcore/tests/test_lab_cli_choices_from_roster.py
+git add ops/lab/run.py ops/lab/__main__.py tpcore/tests/test_lab_cli_choices_from_roster.py pyproject.toml
 git commit -m "feat(lab-sp-b): generate CLI --engine/--target-engine choices from the roster accessor"
 ```
 
@@ -1155,9 +1349,18 @@ git commit -m "feat(lab-sp-b): generate CLI --engine/--target-engine choices fro
 **Files:**
 - Test: `tpcore/tests/test_lab_targeting_consistency.py`
 
+> **Plan correction (controller-adjudicated, T1/T3/T4/T5 precedent — applied at impl, plan patched to stay truthful):** three internal defects in the original Task-6 code block were corrected; the shipped test reflects these and the block below is updated to match:
+> 1. **Module-level `sys.modules` `ops`/`ops.*` purge DELETED.** The original block opened with a collection-time GLOBAL module eviction (`for _m in [...]: del sys.modules[_m]`). That is precisely the T5 oracle-drift footgun — it perturbs other `ops_shadow` tests' (pre-existing, fragile) isolation and was already removed from the T5 sibling `test_lab_cli_choices_from_roster.py` in commit `b59bf74`. It is empirically unnecessary (the resolver/parser/ledger paths import cleanly under normal import — verified during impl). Removed entirely; only function-scoped `monkeypatch` is used.
+> 2. **`test_synthetic_roster_drift_propagates_to_lab` assertion corrected (was a hollow/wrong red-proof).** The original asserted `pytest.raises(ValueError, match="has not.*declared.*LAB_TARGET")`. A synthetic package-less PAPER engine (`phantompaper`) has no `phantompaper.backtest` module, so `_lab_target_for` hits the resolver's `ModuleNotFoundError`/`ImportError` branch (`"...has a phantompaper.backtest module that failed to import/parse (ModuleNotFoundError)..."`) — it NEVER reaches the undeclared-`LAB_TARGET` branch, so the original regex can never match even against correct code (verified empirically). The faithful, genuinely-non-vacuous assertion that captures the plan's stated intent ("recognised as a roster Lab target, NOT KeyError/'unknown engine'") against the real resolver: the raised `ValueError` is the **post-roster-gate** SP-F-path message and is explicitly **NOT** the `"not Lab-targetable"` roster-**gate** rejection (proving the synthetic engine propagated THROUGH the roster gate — exactly what SP-B roster propagation must do) and references the engine by name.
+> 3. **Scoped SLF per-file-ignore added (Task-6 had no pyproject step — the SLF-baseline plan-defect class, T5 Step-4b precedent).** The test names `ops.lab.run`/`ops.lab.__main__`-private `_parse_args`/`_lab_target_for`/`_run_lab_core`/`compute_dsr_for_verdict` and `tpcore.engine_profile`-private `_PROFILE` (that IS its purpose). Added `"tpcore/tests/test_lab_targeting_consistency.py" = ["SLF"]` to `[tool.ruff.lint.per-file-ignores]`, mirroring the existing char/dispatch/CLI-choices precedents — never an inline `# noqa: SLF001`. The original block's unused `UTC, datetime` imports (F401) were also dropped (the original block would have red ruff at Step 5).
+>
+> The Step-6 commit must therefore also `git add pyproject.toml`.
+>
+> **Plan correction (code-quality-review follow-ups, 2026-05-20):** two non-blocking test-only polish items applied to the shipped clockwork (no behavior change, SP-A untouched): (4) the dead/redundant first (sync) `monkeypatch.setattr("ops.lab.run._context_loader_for", lambda e: (lambda **k: _RR()))` in `_install_offline` — immediately overwritten by the async `_aloader` patch and never observable (`_run_lab_core` awaits the loader; monkeypatch is last-write-wins) — was removed as misleading sync→async iteration leftover. (5) a frozen-literal anchor `test_lab_targetable_set_frozen_anchor` was added asserting `set(lab_targetable_engines()) == {"reversion","vector","momentum","sentinel"}` — every other assertion RECOMPUTES the predicate (structural mirror) so a roster add/remove flows through invisibly; this ONE pinned literal (symmetric to the SP4 sibling's `test_dispatch_order_invariant_is_the_frozen_literal`) makes a legitimate engine add/remove a high-risk change that MUST be an explicit, reviewed edit, tightening the false-red/false-green boundary.
+
 - [ ] **Step 1: Write the failing test — the clockwork + red-proof + SP-A non-regression**
 
-Create `tpcore/tests/test_lab_targeting_consistency.py`:
+Create `tpcore/tests/test_lab_targeting_consistency.py` (the truthful, corrected version — three adjudicated corrections applied per the Plan correction above):
 ```python
 """SP-B clockwork (mirrors SP4 test_leg6_fails_on_roster_drift INTENT,
 NOT a byte-shadow — argued spec §1): the Lab target set IS the roster
@@ -1172,16 +1375,15 @@ from __future__ import annotations
 import argparse
 import sys
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
-for _m in [m for m in list(sys.modules) if m == "ops" or m.startswith("ops.")]:
-    if not hasattr(sys.modules[_m], "__path__"):
-        del sys.modules[_m]
+# Plan correction #1: NO module-level sys.modules purge / global eviction
+# (the T5 oracle-drift footgun — see the Plan correction block above).
 
 pytestmark = pytest.mark.xdist_group("ops_shadow")
 
@@ -1202,6 +1404,25 @@ def test_target_set_equals_roster_predicate():
         and n not in {"allocator", "lab", "canary"}
     }
     assert set(lab_targetable_engines()) == expected
+
+
+def test_lab_targetable_set_frozen_anchor():
+    """Lab-targetable set is frozen; changes are high-risk and must be explicit.
+
+    Symmetric to the SP4 sibling's
+    test_dispatch_order_invariant_is_the_frozen_literal: every other
+    assertion in this clockwork RECOMPUTES the predicate (structural
+    mirror), so a roster add/remove silently flows through with no
+    visible test edit. This ONE pinned literal makes a legitimate engine
+    add/remove a high-risk change that MUST be an explicit, reviewed edit
+    to this set — tightening the false-red/false-green boundary vs. pure
+    recomputation.
+    """
+    from tpcore.engine_profile import lab_targetable_engines
+
+    # roster-driven Lab-target changes are high-risk; pin it.
+    assert set(lab_targetable_engines()) == {
+        "reversion", "vector", "momentum", "sentinel"}
 
 
 # ── (2) CLI choices are GENERATED from the accessor (both sites) ─────────
@@ -1226,10 +1447,19 @@ def test_cli_choices_are_generated_both_sites():
 def test_synthetic_roster_drift_propagates_to_lab(monkeypatch):
     """Mirrors test_leg6_fails_on_roster_drift: inject a fake PAPER
     engine into _PROFILE; lab_targetable_engines() + CLI choices +
-    _lab_target_for ALL track it with NO Lab-file edit. Non-vacuous: the
-    synthetic engine is recognised as a roster Lab target AWAITING
-    LAB_TARGET (exactly the SP-F path) — a clear undeclared-LAB_TARGET
-    ValueError, NOT KeyError / 'unknown engine'."""
+    _lab_target_for ALL track it with NO Lab-file edit.
+
+    Non-vacuous (Plan correction #2 — see the Plan correction block):
+    the synthetic engine is recognised as a roster Lab target that
+    PROPAGATED THROUGH the roster gate — the resolver raises a clear
+    POST-gate SP-F-path ValueError, explicitly NOT the
+    `"not Lab-targetable"` roster-GATE rejection and NOT a raw
+    KeyError / 'unknown engine'. (A package-less synthetic engine
+    reaches the resolver's import branch, not the LAB_TARGET-declaration
+    branch — both are the same clear-ValueError class; the
+    discriminating, non-vacuous property is that it got PAST the roster
+    gate, exactly what SP-B roster propagation must do.)"""
+    import ops.lab.run as run
     import tpcore.engine_profile as ep
 
     fake = ep.EngineProfile(
@@ -1241,14 +1471,21 @@ def test_synthetic_roster_drift_propagates_to_lab(monkeypatch):
 
     assert "phantompaper" in ep.lab_targetable_engines()
 
-    # CLI choices see it (generated, not a literal).
-    import ops.lab.run as run
+    # CLI choices see it (generated from the accessor, not a literal).
     run._parse_args(["--engine", "phantompaper"])  # argparse accepts it
 
-    # The resolver recognises it as a roster Lab target awaiting its
-    # LAB_TARGET declaration — the SP-F path, NOT 'unknown engine'.
-    with pytest.raises(ValueError, match="has not.*declared.*LAB_TARGET"):
+    # The resolver recognises it as a roster Lab target (it propagated
+    # THROUGH the roster gate) — a clear POST-gate SP-F-path ValueError,
+    # explicitly NOT the `"not Lab-targetable"` roster-GATE rejection
+    # (that would mean it never propagated) and NOT KeyError/unknown.
+    with pytest.raises(ValueError) as ei:
         run._lab_target_for("phantompaper")
+    msg = str(ei.value)
+    assert "not Lab-targetable" not in msg, (
+        "the synthetic PAPER engine must propagate THROUGH the roster "
+        "gate, not be rejected as non-targetable — the SP-B propagation "
+        f"red-proof would be vacuous otherwise; got: {msg!r}")
+    assert "phantompaper" in msg  # resolved via the roster, by name
 
     # Conversely: flipping a real engine to RETIRED drops it automatically.
     retired = dict(ep._PROFILE)
@@ -1357,8 +1594,6 @@ def _install_offline(monkeypatch, lab_run, returns):
 
     monkeypatch.setattr("ops.lab.run._context_runner_for",
                         lambda e: (lambda c, *, overrides=None: _RR()))
-    monkeypatch.setattr("ops.lab.run._context_loader_for",
-                        lambda e: (lambda **k: _RR()))
 
     async def _aloader(**k):
         return _RR()
@@ -1478,13 +1713,13 @@ Expected: PASS (7 tests: predicate-equality, CLI-generated, synthetic-drift red-
 
 - [ ] **Step 5: ruff**
 
-Run: `python -m ruff check tpcore/tests/test_lab_targeting_consistency.py`
+Run: `python -m ruff check tpcore/tests/test_lab_targeting_consistency.py pyproject.toml`
 Expected: exit 0.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: Commit** (includes `pyproject.toml` — Plan correction #3 SLF entry)
 
 ```bash
-git add tpcore/tests/test_lab_targeting_consistency.py
+git add tpcore/tests/test_lab_targeting_consistency.py pyproject.toml
 git commit -m "test(lab-sp-b): roster-Lab consistency clockwork + synthetic-drift red-proof + SP-A non-regression"
 ```
 
@@ -1549,11 +1784,13 @@ Append to `tpcore/templates/engine_template/backtest.py` (commented so the scaff
 #         # "my_param": (low, high, "float"),   # "float" | "int" | "choice:a,b"
 #     },
 #     run_for_search=run_for_search,
-#     load_window_context=load_window_context,
-#     run_with_context=run_with_context,
+#     load_window_context=load_<engine>_window_context,
+#     run_with_context=run_<engine>_with_context,
 #     default_params=default_params,
 # )
 ```
+
+> Plan correction (applied during SP-B T7 code-quality review): aligned the commented skeleton's code-block RHS to the real `<engine>`-prefixed dispatch idiom — confirmed against `reversion/backtest.py:1117-1120` (and identically `vector/backtest.py:993-996`, `momentum/backtest.py:564-567`): `run_for_search`/`default_params` are bare while `load_window_context`/`run_with_context` bind the engine-prefixed `load_<engine>_window_context`/`run_<engine>_with_context`, so a copy-paste author following the banner gets a correct `LAB_TARGET` with zero guesswork (the prior bare RHS would have `NameError`d against banner-conformant function names).
 
 - [ ] **Step 5: Run test to verify it passes**
 

@@ -97,6 +97,7 @@ from tpcore.fundamentals.earnings_quality import (
     EarningsQualityResult,
     check_earnings_quality,
 )
+from tpcore.lab.target import LabTarget
 
 if TYPE_CHECKING:  # pragma: no cover
     from tpcore.backtest.search import BacktestRunResult
@@ -1099,6 +1100,25 @@ async def run_for_search(
         db_url=db_url, start=start, end=end, universe=universe,
     )
     return run_reversion_with_context(ctx, overrides=overrides, trade_log_path=trade_log_path)
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# SP-B — Lab targeting declaration (engine-OWNED; resolved by ops.lab.run
+# (SP-B T4 roster-driven resolver); the live trading path never imports this).
+# ────────────────────────────────────────────────────────────────────────────
+
+LAB_TARGET = LabTarget(
+    param_ranges={
+        "z_threshold": (2.0, 4.0, "float"),
+        "volume_climax_multiplier": (1.2, 3.0, "float"),
+        "max_hold_days": (3, 12, "int"),
+        "stop_pct": (0.04, 0.12, "float"),
+    },
+    run_for_search=run_for_search,
+    load_window_context=load_reversion_window_context,
+    run_with_context=run_reversion_with_context,
+    default_params=default_params,
+)
 
 
 # ────────────────────────────────────────────────────────────────────────────
