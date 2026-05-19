@@ -430,7 +430,7 @@ def test_cron_eval_advances_to_next_sunday_for_sun_only_expr() -> None:
 
 def test_cron_eval_rejects_naive_datetime() -> None:
     with pytest.raises(ValueError, match="timezone-aware"):
-        next_run_after("0 3 * * SUN", datetime(2026, 5, 11, 12))
+        next_run_after("0 3 * * SUN", datetime(2026, 5, 11, 12))  # noqa: DTZ001
 
 
 # ────────────────────────────────────────────────────────────────────────────

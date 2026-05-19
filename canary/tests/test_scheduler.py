@@ -9,7 +9,7 @@ from canary import scheduler as cs
 
 async def test_non_trading_day_early_return():
     with patch.object(cs, "is_trading_day", return_value=False):
-        out = await cs.run_once(as_of=datetime(2026, 5, 17).date())
+        out = await cs.run_once(as_of=datetime(2026, 5, 17).date())  # noqa: DTZ001
     assert out["action"] == "non_trading_day"
 
 
@@ -56,7 +56,7 @@ async def test_trading_day_round_trip_writes_one_aar_and_logs_lifecycle():
          patch.object(cs, "RiskGovernor", lambda *a, **k: _Gov()), \
          patch.object(cs, "PostgresRiskStateStore", lambda *a, **k: object()), \
          patch.dict("os.environ", {"DATABASE_URL": "postgres://x"}):
-        out = await cs.run_once(as_of=datetime(2026, 5, 6).date())
+        out = await cs.run_once(as_of=datetime(2026, 5, 6).date())  # noqa: DTZ001
 
     assert out["action"] == "round_trip"
     assert rec["startup"] == 1 and rec["shutdown"] == 1
@@ -90,7 +90,7 @@ async def test_startup_emitted_before_setup_crash():
          patch.object(cs, "AlpacaPaperBrokerAdapter", _boom), \
          patch.dict("os.environ", {"DATABASE_URL": "postgres://x"}):
         with pytest.raises(RuntimeError, match="broker setup blew up"):
-            await cs.run_once(as_of=datetime(2026, 5, 6).date())
+            await cs.run_once(as_of=datetime(2026, 5, 6).date())  # noqa: DTZ001
 
     assert rec["startup"] == 1  # STARTUP emitted BEFORE the crash
     assert rec["shutdown"] == 1  # SHUTDOWN emitted in finally (exit_code=1)
@@ -178,7 +178,7 @@ async def test_dry_run_skips_real_order_placement():
          patch.object(cs, "RiskGovernor", lambda *a, **k: _Gov()), \
          patch.object(cs, "PostgresRiskStateStore", lambda *a, **k: object()), \
          patch.dict("os.environ", {"DATABASE_URL": "postgres://x"}):
-        out = await cs.run_once(as_of=datetime(2026, 5, 6).date(),
+        out = await cs.run_once(as_of=datetime(2026, 5, 6).date(),  # noqa: DTZ001
                                 dry_run=True)
 
     assert out["action"] == "round_trip"

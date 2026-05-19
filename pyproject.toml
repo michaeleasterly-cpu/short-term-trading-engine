@@ -100,7 +100,13 @@ respect-gitignore = false
 extend-exclude = ["./data", "./logs", "*_archive", "./.claude"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP"]
+# DTZ (flake8-datetimez) mechanizes the prose-only CLAUDE.md "all
+# timestamps UTC" mandate — a naive datetime on a live trade/risk/data
+# path is a #245-class real bug. Pre-existing violations were baselined
+# once via `ruff check --select DTZ --add-noqa .` (genuinely-benign /
+# non-money paths only — every live-money-path noqa was spot-audited);
+# from here ALL NEW code must be tz-aware (no new naive datetimes).
+select = ["E", "F", "I", "B", "UP", "DTZ"]
 ignore = ["E501"]
 
 [tool.ruff.lint.per-file-ignores]

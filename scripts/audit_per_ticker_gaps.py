@@ -79,7 +79,7 @@ async def amain(args: argparse.Namespace) -> int:
                 last_d = min(last_d, r["delisting_date"])
             # Clamp to the calendar's available range.
             audit_start = max(first_d, _CALENDAR_FLOOR)
-            audit_end = min(last_d, date.today())
+            audit_end = min(last_d, date.today())  # noqa: DTZ011
             if audit_end < audit_start:
                 continue
             sessions = sessions_in_range(audit_start, audit_end)

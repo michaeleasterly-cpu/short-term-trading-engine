@@ -240,7 +240,7 @@ def test_banner_hidden_when_bars_cover_most_recent_close():
     # 2026-05-12 was a regular Tuesday session. After its close, bars dated
     # 2026-05-12 should require no banner.
     now = datetime(2026, 5, 12, 22, 0, tzinfo=UTC)  # 18:00 ET
-    banner = update_required_banner(datetime(2026, 5, 12).date(), now)
+    banner = update_required_banner(datetime(2026, 5, 12).date(), now)  # noqa: DTZ001
     assert banner is None
 
 
@@ -250,7 +250,7 @@ def test_banner_required_for_overnight_manila_wakeup():
     # (~28h ago), and bars are from the previous Thursday → 1 trading day
     # behind, well past grace → "required".
     now = datetime(2026, 5, 11, 1, 0, tzinfo=UTC)  # ET Sun 21:00
-    banner = update_required_banner(datetime(2026, 5, 7).date(), now)
+    banner = update_required_banner(datetime(2026, 5, 7).date(), now)  # noqa: DTZ001
     assert banner is not None
     severity, message = banner
     assert severity == "required"
@@ -260,7 +260,7 @@ def test_banner_required_for_overnight_manila_wakeup():
 def test_banner_warn_within_publication_grace():
     # 30 minutes after the close, bars not yet available → warn, not required.
     now = datetime(2026, 5, 12, 20, 30, tzinfo=UTC)  # ~30m after 16:00 ET close
-    banner = update_required_banner(datetime(2026, 5, 11).date(), now)
+    banner = update_required_banner(datetime(2026, 5, 11).date(), now)  # noqa: DTZ001
     assert banner is not None
     severity, _ = banner
     assert severity == "warn"

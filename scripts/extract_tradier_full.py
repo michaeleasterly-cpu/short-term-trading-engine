@@ -343,7 +343,7 @@ def _parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--end",
         type=date.fromisoformat,
-        default=date.today(),
+        default=date.today(),  # noqa: DTZ011
         help="End date for bars (default: today).",
     )
     return p.parse_args(list(argv) if argv is not None else None)

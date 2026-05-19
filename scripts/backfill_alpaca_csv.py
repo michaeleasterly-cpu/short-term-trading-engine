@@ -183,7 +183,7 @@ async def amain(args: argparse.Namespace) -> int:
             return 1
         logger.info("backfill: %d tickers", len(tickers))
 
-        end_d = date.today() - timedelta(days=1)  # don't pull today's bar mid-session
+        end_d = date.today() - timedelta(days=1)  # don't pull today's bar mid-session  # noqa: DTZ011
         start_d = date.fromisoformat(args.since) if args.since else date(2012, 1, 1)
         gap_windows = await _gap_dates_for(pool, tickers, start_d, end_d)
 

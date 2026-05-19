@@ -71,7 +71,7 @@ async def amain(args: argparse.Namespace) -> int:
     logger.info("writing to %s", out_path)
 
     start_d = date.fromisoformat(args.since) if args.since else date(2012, 1, 1)
-    end_d = date.today()
+    end_d = date.today()  # noqa: DTZ011
 
     pool = await build_asyncpg_pool(db_url, max_size=2)
     try:

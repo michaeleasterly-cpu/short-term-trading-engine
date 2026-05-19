@@ -676,7 +676,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--as-of",
         type=date.fromisoformat,
-        default=date.today(),
+        default=date.today(),  # noqa: DTZ011
         help="As-of date (YYYY-MM-DD). Defaults to today; bars are read up to and including this date.",
     )
     p.add_argument(

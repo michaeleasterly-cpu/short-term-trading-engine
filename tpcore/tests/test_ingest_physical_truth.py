@@ -95,7 +95,7 @@ async def test_corp_actions_ingest_rejects_zero_or_negative_ratio():
 async def test_corp_actions_ingest_rejects_far_future_date():
     from tpcore.data.ingest_corporate_actions import upsert_corporate_actions
     pool = _FakePool()
-    too_far = date.today() + timedelta(days=365 * 10)
+    too_far = date.today() + timedelta(days=365 * 10)  # noqa: DTZ011
     good = {
         "ticker": "AAPL", "action_date": date(2024, 1, 1),
         "action_type": "split", "ratio": Decimal("4"), "raw_data": {},
@@ -231,8 +231,8 @@ async def test_fundamentals_ingest_rejects_future_filing_date():
     pool = _FakePool()
     cache = FundamentalsCache(pool)  # type: ignore[arg-type]
     payload = {
-        "filing_date": date.today() + timedelta(days=10),  # future
-        "period_end_date": date.today(),
+        "filing_date": date.today() + timedelta(days=10),  # future  # noqa: DTZ011
+        "period_end_date": date.today(),  # noqa: DTZ011
         "period": "fakeQ",
         "shares_outstanding": Decimal("1000000"),
     }

@@ -1020,7 +1020,7 @@ def _sec_bulk_parse_date(s: str) -> Any:
     if not s:
         return None
     try:
-        return _dt.strptime(s.title(), "%d-%b-%Y").date()
+        return _dt.strptime(s.title(), "%d-%b-%Y").date()  # noqa: DTZ007
     except ValueError:
         return None
 

@@ -180,7 +180,7 @@ async def upsert_corporate_actions(
     if not actions:
         return 0
 
-    today = date.today()
+    today = date.today()  # noqa: DTZ011
     far_future = today + timedelta(days=365 * 5)
     accepted: list[tuple] = []
     rejected = 0
@@ -258,7 +258,7 @@ def _parse_args(argv: list[str] | None = None) -> _CLIArgs:
         help="Comma-separated tickers.",
     )
     p.add_argument("--start", type=date.fromisoformat, default=date(2018, 1, 1))
-    p.add_argument("--end", type=date.fromisoformat, default=date.today())
+    p.add_argument("--end", type=date.fromisoformat, default=date.today())  # noqa: DTZ011
     p.add_argument(
         "--types",
         type=lambda s: [t.strip() for t in s.split(",") if t.strip()],

@@ -1491,8 +1491,8 @@ async def _stage_coverage_fill(pool: asyncpg.Pool) -> dict[str, Any]:
     if not gap_tickers:
         return {"gap_tickers": 0, "rows_upserted": 0}
 
-    start_d = date.today() - timedelta(days=14)
-    end_d = date.today() - timedelta(days=1)
+    start_d = date.today() - timedelta(days=14)  # noqa: DTZ011
+    end_d = date.today() - timedelta(days=1)  # noqa: DTZ011
 
     async with httpx.AsyncClient(
         headers={
@@ -1553,7 +1553,7 @@ async def _stage_universe_prescreener(pool: asyncpg.Pool) -> dict[str, Any]:
     """
     from tpcore.universe.prescreener import prescreen_momentum
 
-    counters = await prescreen_momentum(pool, date.today())
+    counters = await prescreen_momentum(pool, date.today())  # noqa: DTZ011
     return {"engine": "momentum", **counters}
 
 
@@ -2213,7 +2213,7 @@ async def _check_freshness(pool: asyncpg.Pool) -> dict[str, Any]:
     latest = await pool.fetchval("SELECT MAX(date) FROM platform.prices_daily")
     if latest is None:
         return {"ok": False, "latest_bar": None, "reason": "table empty"}
-    today = date.today()
+    today = date.today()  # noqa: DTZ011
     age_days = (today - latest).days
     return {
         "ok": age_days <= DATA_FRESHNESS_MAX_DAYS,
@@ -2244,7 +2244,7 @@ async def _check_corp_actions_freshness(pool: asyncpg.Pool) -> dict[str, Any]:
     latest = await pool.fetchval("SELECT MAX(action_date) FROM platform.corporate_actions")
     if latest is None:
         return {"ok": False, "latest_event": None, "reason": "table empty"}
-    today = date.today()
+    today = date.today()  # noqa: DTZ011
     age_days = (today - latest).days
     return {
         "ok": age_days <= CORP_ACTIONS_FRESHNESS_MAX_DAYS,
@@ -2305,7 +2305,7 @@ async def _check_fundamentals_freshness(pool: asyncpg.Pool) -> dict[str, Any]:
             "tickers": tickers,
             "reason": "table empty",
         }
-    today = date.today()
+    today = date.today()  # noqa: DTZ011
     age_days = (today - latest).days
     pb_pct = (pb_filled / rows_total) if rows_total else 0.0
     de_pct = (de_filled / rows_total) if rows_total else 0.0
@@ -2341,7 +2341,7 @@ async def _check_earnings_events_freshness(pool: asyncpg.Pool) -> dict[str, Any]
             "tickers": tickers,
             "reason": "table empty",
         }
-    today = date.today()
+    today = date.today()  # noqa: DTZ011
     age_days = (today - latest).days
     return {
         "ok": age_days <= EARNINGS_EVENTS_FRESHNESS_MAX_DAYS,
@@ -2456,7 +2456,7 @@ async def _check_sec_filings_freshness(pool: asyncpg.Pool) -> dict[str, Any]:
             "material_rows": material_rows,
             "reason": "tables empty",
         }
-    today = date.today()
+    today = date.today()  # noqa: DTZ011
     age_days = (today - newest).days
     return {
         "ok": age_days <= SEC_FILINGS_FRESHNESS_MAX_DAYS,
@@ -2665,7 +2665,7 @@ async def _check_macro_indicators_freshness(pool: asyncpg.Pool) -> dict[str, Any
         GROUP BY indicator
         """
     )
-    today = date.today()
+    today = date.today()  # noqa: DTZ011
     by_ind: dict[str, dict[str, Any]] = {}
     max_age = 0
     for r in rows:
@@ -3118,7 +3118,7 @@ async def _check_greeks_max_pain(pool: asyncpg.Pool) -> dict[str, Any]:
     total = int(row["rows_total"]) if row and row["rows_total"] else 0
     if latest is None:
         return {"ok": False, "reason": "no SPY max-pain rows", "rows_total": 0}
-    age = (date.today() - latest).days
+    age = (date.today() - latest).days  # noqa: DTZ011
     return {
         "ok": age <= 7,
         "warn": 7 < age <= 14,
@@ -3145,7 +3145,7 @@ async def _check_finnhub_insider_sentiment(pool: asyncpg.Pool) -> dict[str, Any]
     newest = row["newest_period"] if row else None
     if not total or newest is None:
         return {"ok": False, "reason": "no insider_sentiment rows", "rows_total": 0}
-    now = date.today()
+    now = date.today()  # noqa: DTZ011
     age = (now.year * 12 + now.month) - int(newest)
     return {
         "ok": age <= 3,
@@ -3176,7 +3176,7 @@ async def _check_apewisdom_social_sentiment(pool: asyncpg.Pool) -> dict[str, Any
     if latest is None:
         return {"ok": False, "reason": "no social_sentiment rows",
                 "summary": "ApeWisdom sentiment: 0 tickers / latest none"}
-    age = (date.today() - latest).days
+    age = (date.today() - latest).days  # noqa: DTZ011
     return {
         "ok": age <= 3,
         "warn": 3 < age <= 7,
@@ -3208,7 +3208,7 @@ async def _check_fear_greed(pool: asyncpg.Pool) -> dict[str, Any]:
         "Extreme Fear": "red", "Fear": "yellow",
         "Neutral": "green", "Greed": "green", "Extreme Greed": "gray",
     }.get(label, "gray")
-    age = (date.today() - row["date"]).days
+    age = (date.today() - row["date"]).days  # noqa: DTZ011
     return {
         "ok": age <= 5,  # ~3 trading days incl. a weekend
         "summary": f"Fear & Greed: {score:.1f} ({label}) as of {row['date'].isoformat()}",
@@ -3232,7 +3232,7 @@ async def _check_finra_short_interest(pool: asyncpg.Pool) -> dict[str, Any]:
     latest = row["latest"] if row else None
     if latest is None:
         return {"ok": False, "reason": "no short_interest rows", "rows": 0}
-    age = (date.today() - latest).days
+    age = (date.today() - latest).days  # noqa: DTZ011
     return {
         "ok": age <= 21, "warn": 21 < age <= 35,
         "summary": f"FINRA short interest: latest settlement {latest.isoformat()} ({age}d)",
@@ -3256,7 +3256,7 @@ async def _check_iborrowdesk_borrow_rates(pool: asyncpg.Pool) -> dict[str, Any]:
     if latest is None:
         return {"ok": False, "reason": "no borrow_rates rows (scrape blocked?)",
                 "summary": "Borrow rates: no data"}
-    age = (date.today() - latest).days
+    age = (date.today() - latest).days  # noqa: DTZ011
     return {
         "ok": age <= 2, "warn": 2 < age <= 5,
         "summary": f"Borrow rates: {int(row['tickers'])} tickers / latest {latest.isoformat()}",
@@ -3285,7 +3285,7 @@ async def _check_aaii_sentiment(pool: asyncpg.Pool) -> dict[str, Any]:
         return {"ok": False, "reason": "no aaii_sentiment rows",
                 "summary": "AAII Sentiment: no data"}
     latest = row["date"]
-    age = (date.today() - latest).days
+    age = (date.today() - latest).days  # noqa: DTZ011
     bull = float(row["bullish_pct"])
     bear = float(row["bearish_pct"])
     summary = (
