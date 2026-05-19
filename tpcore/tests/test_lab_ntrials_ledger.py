@@ -818,10 +818,9 @@ async def test_amain_line_and_labresult_carry_effective_cumulative(
                              cred_score=80)
 
     shared = _SharedLedgerPool()
-    seeded_ts = await record_trial_spend(
+    await record_trial_spend(
         shared, target="reversion", candidate="prior", trials=300,
         seed=1)
-    shared.rows[-1]["timestamp"] = seeded_ts
 
     async def _fake_build(url, *, read_only, **k):
         return shared
@@ -836,19 +835,22 @@ async def test_amain_line_and_labresult_carry_effective_cumulative(
             candidate="rev_cand")
     out = capsys.readouterr().out
     assert rc in (0, 1)
-    # 300 prior + 40 this run == 340 effective — NOT 40.
-    assert "DSR (n_trials=340)" in out, (
+    # 300 prior + 40 this run == 340 effective — NOT 40. The amain line
+    # right-justifies n_trials to width 4 (H-LL-6 column alignment), so a
+    # 3-digit cumulative renders with one leading space ("= 340").
+    assert "DSR (n_trials= 340)" in out, (
         f"amain must surface the effective cumulative n_trials (340), "
         f"not args.trials (40). stdout:\n{out}")
-    assert "DSR (n_trials= 40)" not in out
+    # The understated per-run value (40) would render "=  40" under the
+    # same width-4 padding — assert that bug form is absent.
+    assert "DSR (n_trials=  40)" not in out
     assert "DSR (n_trials=40)" not in out
 
     # ── LabResult.n_trials carries the effective cumulative ───────────
     shared2 = _SharedLedgerPool()
-    s2 = await record_trial_spend(
+    await record_trial_spend(
         shared2, target="reversion", candidate="prior2", trials=300,
         seed=1)
-    shared2.rows[-1]["timestamp"] = s2
 
     async def _fake_build2(url, *, read_only, **k):
         return shared2

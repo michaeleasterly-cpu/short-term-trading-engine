@@ -870,7 +870,7 @@ async def amain(args: argparse.Namespace, candidate: str | None = None) -> int:
     print(f"  Profit factor      : {core.held_metrics.profit_factor:+.3f}")
     print(f"  Max drawdown       : {core.held_metrics.max_drawdown*100:+.2f}%")
     print(f"  Credibility (full) : {core.full_credibility_score}/100")
-    print(f"  DSR (n_trials={core.effective_n_trials:>3}): {core.dsr:.4f}")
+    print(f"  DSR (n_trials={core.effective_n_trials:>4}): {core.dsr:.4f}")
     print()
 
     if core.survived:
