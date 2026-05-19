@@ -142,3 +142,24 @@ class FilterDiagnostics(BaseModel):
     vix_proxy_blocked: int | None = Field(
         default=None, description="Sentinel: VIX proxy not above 25",
     )
+
+    # ─── Catalyst-specific gates ────────────────────────────────────────────
+    cluster_size_blocked: int | None = Field(
+        default=None,
+        description="Catalyst: fewer than MIN_DISTINCT_INSIDERS distinct "
+                    "insider BUYers in the cluster window",
+    )
+    cluster_value_blocked: int | None = Field(
+        default=None,
+        description="Catalyst: aggregate insider-BUY $ in the cluster window "
+                    "below MIN_AGGREGATE_USD",
+    )
+    catalyst_liquidity_blocked: int | None = Field(
+        default=None,
+        description="Catalyst: blocked by price/volume liquidity gate or "
+                    "insufficient price history for the SMA",
+    )
+    catalyst_trend_blocked: int | None = Field(
+        default=None,
+        description="Catalyst: last close at or below the trend-filter SMA",
+    )

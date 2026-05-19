@@ -49,7 +49,7 @@ def test_ci_vulture_gate_uses_min_confidence_60() -> None:
     ci = CI_WORKFLOW.read_text(encoding="utf-8")
     assert (
         "vulture --min-confidence 60 tpcore ops reversion vector "
-        "momentum sentinel canary dashboard_components "
+        "momentum sentinel canary catalyst dashboard_components "
         "vulture_allowlist.py" in ci
     ), (
         "The ci.yml vulture step must invoke --min-confidence 60 "

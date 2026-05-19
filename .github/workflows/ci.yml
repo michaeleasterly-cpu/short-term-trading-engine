@@ -38,10 +38,10 @@ jobs:
           pip install -e .[dev]
 
       - name: Run forbidden-imports check
-        run: python -m tpcore.scripts.check_imports reversion vector momentum sentinel canary tpcore
+        run: python -m tpcore.scripts.check_imports reversion vector momentum sentinel canary catalyst tpcore
 
       - name: Run ruff
-        run: python -m ruff check reversion/ vector/ momentum/ sentinel/ canary/ tpcore/ scripts/ ops/
+        run: python -m ruff check reversion/ vector/ momentum/ sentinel/ canary/ catalyst/ tpcore/ scripts/ ops/
 
       # Dead-code gate. Complements ruff F401/F841 (unused imports/locals
       # only) by catching unused functions/methods/classes/attributes.
@@ -57,7 +57,7 @@ jobs:
       # a newly-added unused module-level function reliably exits
       # non-zero (empirically verified on the installed vulture 2.16).
       - name: vulture (fail on new dead code)
-        run: vulture --min-confidence 60 tpcore ops reversion vector momentum sentinel canary dashboard_components vulture_allowlist.py
+        run: vulture --min-confidence 60 tpcore ops reversion vector momentum sentinel canary catalyst dashboard_components vulture_allowlist.py
 
       # Fast accelerator: pytest-xdist with --dist loadgroup keeps the
       # ops-shadow modules (xdist_group("ops_shadow")) on one worker so
