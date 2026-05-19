@@ -490,8 +490,8 @@ def compute_dsr_for_verdict(
         logger.warning(
             "tpcore.overfitting.dsr.null_variance_approximation",
             reason="no per-trial Sharpe vector available; using "
-                   "single-estimator 1/(n-1) instead of cross-trial "
-                   "V[SR_n]",
+                   "single-estimator 1/(n_obs-1) instead of "
+                   "cross-trial V[SR_n]",
             n_trials=n_trials,
             n_obs=n,
         )

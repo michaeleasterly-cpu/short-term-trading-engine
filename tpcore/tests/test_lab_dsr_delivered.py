@@ -27,7 +27,7 @@ def test_sp_a2_t_verdict_fallback_warns_and_byte_identical() -> None:
     trial_sharpe_variance) is byte-identical to pre-SP-A2 AND emits the
     single documented WARNING. Per-impl ε (H-A2-14: this is the
     compute_dsr_for_verdict / Acklam _norm_inv impl)."""
-    import ops.lab.run as lr
+    import ops.lab.run as lab_run
     rng = np.random.default_rng(0)
     returns = [float(x) for x in rng.normal(0.015, 0.01, 40)]
     # Recompute the legacy (pre-SP-A2) expression inline: e_max bracket
@@ -38,8 +38,8 @@ def test_sp_a2_t_verdict_fallback_warns_and_byte_identical() -> None:
     skew = float(((arr - arr.mean()) ** 3).mean() / (arr.std() ** 3))
     kurt = float(((arr - arr.mean()) ** 4).mean() / (arr.std() ** 4))
     EULER = 0.5772156649015329
-    e_max = ((1.0 - EULER) * lr._norm_inv(1.0 - 1.0 / 37)
-             + EULER * lr._norm_inv(1.0 - 1.0 / (37 * math.e)))
+    e_max = ((1.0 - EULER) * lab_run._norm_inv(1.0 - 1.0 / 37)
+             + EULER * lab_run._norm_inv(1.0 - 1.0 / (37 * math.e)))
     denom = math.sqrt(
         max(1.0 - skew * sr + (kurt - 1.0) / 4.0 * (sr ** 2), 1e-12)
         / max(n - 1, 1)
@@ -47,7 +47,7 @@ def test_sp_a2_t_verdict_fallback_warns_and_byte_identical() -> None:
     z = (sr - e_max) / denom
     legacy = float(0.5 * (1.0 + math.erf(z / math.sqrt(2.0))))
     with structlog.testing.capture_logs() as logs:
-        got = lr.compute_dsr_for_verdict(returns, n_trials=37)
+        got = lab_run.compute_dsr_for_verdict(returns, n_trials=37)
     assert abs(got - legacy) < 1e-12
     assert any(
         e.get("event") == "tpcore.overfitting.dsr.null_variance_approximation"
@@ -56,17 +56,55 @@ def test_sp_a2_t_verdict_fallback_warns_and_byte_identical() -> None:
     )
 
 
-def test_sp_a2_t_verdict_v_arg_tightens_and_no_warn() -> None:
-    """Supplying trial_sharpe_variance applies the floor and is silent
-    (no spurious WARNING); the V path is ≤ the fallback (tightening)."""
-    import ops.lab.run as lr
+def test_sp_a2_t_verdict_v_below_floor_clamps_equal_and_no_warn() -> None:
+    """FLOOR-CLAMP/EQUAL case. With trial_sharpe_variance STRICTLY BELOW
+    the floor 1/(n-1) the H-A2-10 clamp fires ⇒ sr_variance == floor ⇒
+    √(sr_variance/floor) == 1.0 ⇒ d_v is bit-EQUAL to the fallback
+    (tightening-OR-equal, the floor lower-bound). Supplying V is still
+    silent (no spurious fallback WARNING). This pins the clamp path; the
+    strict-tightening (V>floor) bite is the SEPARATE test below."""
+    import ops.lab.run as lab_run
     rng = np.random.default_rng(1)
     returns = [float(x) for x in rng.normal(0.02, 0.01, 40)]
-    d_fb = lr.compute_dsr_for_verdict(returns, n_trials=50)
+    n = len(returns)
+    floor = 1.0 / (n - 1)  # ≈ 0.025641 for n=40
+    v_below = 0.01
+    assert v_below < floor  # clamp path, NOT real-V
+    d_fb = lab_run.compute_dsr_for_verdict(returns, n_trials=50)
     with structlog.testing.capture_logs() as logs:
-        d_v = lr.compute_dsr_for_verdict(
-            returns, n_trials=50, trial_sharpe_variance=0.01)
-    assert d_v <= d_fb + 1e-12
+        d_v = lab_run.compute_dsr_for_verdict(
+            returns, n_trials=50, trial_sharpe_variance=v_below)
+    # Clamped to the floor ⇒ EXACTLY equal (bit-equal, the OR-equal arm).
+    assert d_v == d_fb
+    assert not any(
+        e.get("event") == "tpcore.overfitting.dsr.null_variance_approximation"
+        for e in logs
+    )
+
+
+def test_sp_a2_t_verdict_v_above_floor_strictly_tightens_and_no_warn() -> None:
+    """STRICT-TIGHTENING case (the verdict-path analog of T2's
+    T-STRICTER — it must genuinely bite). With trial_sharpe_variance
+    STRICTLY GREATER than the floor 1/(n-1), √(sr_variance/floor) > 1.0
+    ⇒ e_max > bracket ⇒ a REAL DSR reduction: d_v STRICTLY < d_fb (NOT
+    merely ≤). This exercises the real-V path, NOT the floor clamp.
+    Supplying V is still silent (no spurious fallback WARNING)."""
+    import ops.lab.run as lab_run
+    rng = np.random.default_rng(1)
+    returns = [float(x) for x in rng.normal(0.02, 0.01, 40)]
+    n = len(returns)
+    floor = 1.0 / (n - 1)  # ≈ 0.025641 for n=40
+    v_above = 0.10
+    # Real-V path (NOT the clamp): V strictly above the floor ⇒
+    # √(V/floor) > 1 ⇒ a strictly higher e_max ⇒ strictly lower DSR.
+    assert v_above > floor
+    assert math.sqrt(v_above / floor) > 1.0
+    d_fb = lab_run.compute_dsr_for_verdict(returns, n_trials=50)
+    with structlog.testing.capture_logs() as logs:
+        d_v = lab_run.compute_dsr_for_verdict(
+            returns, n_trials=50, trial_sharpe_variance=v_above)
+    # STRICT: a genuine DSR reduction on the real-V path (not bit-equal).
+    assert d_v < d_fb
     assert not any(
         e.get("event") == "tpcore.overfitting.dsr.null_variance_approximation"
         for e in logs
