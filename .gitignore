@@ -50,9 +50,24 @@ backtests/
 # project session caches / machine-specific permissions / dotfiles) is
 # ignored; the version-controlled architecture surface (rules / skills
 # / agents / hooks / project settings.json) is explicitly un-ignored.
+#
+# Skills are narrowly whitelisted: only the project-authored skill
+# dirs are tracked. Plugin-installed skills (Supabase, Vercel, etc.)
+# are copied/linked into .claude/skills/ at install time and must NOT
+# enter version control (they belong to the user's plugin install).
 .claude/*
 !.claude/rules/
-!.claude/skills/
 !.claude/agents/
 !.claude/hooks/
 !.claude/settings.json
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/engine-readiness/
+!.claude/skills/adapter-readiness/
+!.claude/skills/lab-target-run/
+!.claude/skills/ecr/
+!.claude/skills/dfcr/
+!.claude/skills/audit-data-pipeline/
+!.claude/skills/run-data-ops/
+!.claude/skills/weekly-digest/
+!.claude/skills/defect-register/
