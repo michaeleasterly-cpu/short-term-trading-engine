@@ -76,6 +76,21 @@ def test_lab_target_param_ranges_full_value_byte_parity(engine):
     assert mod.LAB_TARGET.param_ranges == _T0_PARAM_RANGES_FULL[engine]
 
 
+def test_engine_template_has_lab_target_skeleton():
+    """SP-F forward dep: a new engine scaffolded from the template is
+    Lab-targetable by construction — the template carries a commented
+    LAB_TARGET skeleton + the 4 uniform symbol names so the SP-F engine
+    only fills in its param ranges (spec §7 T7)."""
+    from pathlib import Path
+
+    src = Path("tpcore/templates/engine_template/backtest.py").read_text()
+    assert "LAB_TARGET" in src
+    assert "from tpcore.lab.target import LabTarget" in src
+    for sym in ("run_for_search", "load_window_context",
+                "run_with_context", "default_params"):
+        assert sym in src
+
+
 def test_live_import_surface_does_not_import_lab_target():
     """The scheduler/order-manager/plug never import backtest.LAB_TARGET —
     the live path is byte-identical (spec §6). Proxy: importing each
