@@ -560,9 +560,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 async def _load_universe_by_tier(db_url: str, max_tier: int) -> tuple[str, ...]:
     """Query platform.liquidity_tiers for tickers with tier ≤ max_tier."""
-    import asyncpg
+    from tpcore.db import build_asyncpg_pool
 
-    pool = await asyncpg.create_pool(db_url, min_size=1, max_size=1)
+    # Pooler-safety (statement_cache_size=0 + jit:off + URL normalization)
+    # lives in the ONE canonical builder — Supabase txn-pooler note in
+    # tpcore.db. SELECT-only ⇒ read_only=True (explicit read/write intent
+    # is mandatory on the SP2/SP3 isolation boundary — H-S3-8).
+    pool = await build_asyncpg_pool(
+        db_url, min_size=1, max_size=1, read_only=True)
     try:
         async with pool.acquire() as conn:
             rows = await conn.fetch(
@@ -808,7 +813,20 @@ async def _run_lab_core(
                 f"(source=backtest_credibility.{cred_engine_name}, wrote={wrote})\n"
             )
         else:
-            persist_pool = await asyncpg.create_pool(db_url, min_size=1, max_size=1)
+            # H-S3-8 byte-identical-legacy invariant: the legacy non-Lab
+            # path (candidate is None / no active LabContext) MUST open its
+            # OWN ad-hoc raw asyncpg.create_pool — deliberately NOT routed
+            # through build_asyncpg_pool / any context handle (the SP-A SP2
+            # isolation guarantee, enforced by
+            # test_lab_credibility_pool_threaded.py). So the canonical
+            # pooler-safety kwargs are mirrored inline here instead.
+            # keep in sync with tpcore.db.build_asyncpg_pool (Supabase
+            # txn-pooler: statement_cache_size=0 + server_settings jit:off).
+            persist_pool = await asyncpg.create_pool(
+                db_url, min_size=1, max_size=1,
+                statement_cache_size=0,
+                server_settings={"jit": "off"},
+            )
             try:
                 wrote = await write_credibility_score(
                     persist_pool,
