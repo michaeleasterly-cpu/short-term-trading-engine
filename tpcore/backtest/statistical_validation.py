@@ -24,6 +24,7 @@ from .credibility import (
     CredibilityScore,
 )
 from .monte_carlo import SHARPE_NULL_DECISION_THRESHOLD, MCResult
+from .overfitting import DSR_PASS_THRESHOLD
 from .sensitivity import FLATNESS_ROBUST_THRESHOLD, SensitivityResult
 from .statistical_significance import (
     deflated_sharpe_ratio,
@@ -52,7 +53,7 @@ class StatValidationReport:
         return (
             flat
             and self.mc.observed_is_significant
-            and self.dsr >= 0.90
+            and self.dsr >= DSR_PASS_THRESHOLD
             and self.backtest_periods >= self.minbtl_periods
         )
 
@@ -126,7 +127,7 @@ def render(report: StatValidationReport, *, title: str = "Statistical Validation
     # ── PSR / DSR / MinBTL ───────────────────────────────────────────────
     out.write("Significance after multiple-testing\n")
     psr_v = "PASS" if report.psr >= 0.95 else "FAIL"
-    dsr_v = "PASS" if report.dsr >= 0.90 else "FAIL"
+    dsr_v = "PASS" if report.dsr >= DSR_PASS_THRESHOLD else "FAIL"
     minbtl_v = "PASS" if report.backtest_periods >= report.minbtl_periods else "FAIL"
     out.write(
         f"  PSR (P[true SR > 0])                 {report.psr:.3f}  "
@@ -134,7 +135,7 @@ def render(report: StatValidationReport, *, title: str = "Statistical Validation
     )
     out.write(
         f"  DSR (n_trials = {report.n_trials})            "
-        f"        {report.dsr:.3f}  (threshold ≥ 0.90 → {dsr_v})\n"
+        f"        {report.dsr:.3f}  (threshold ≥ {DSR_PASS_THRESHOLD} → {dsr_v})\n"
     )
     if report.minbtl_periods >= 1_000_000:
         minbtl_str = "∞ (Sharpe ≤ 0 — no length suffices)"
@@ -171,7 +172,7 @@ def evaluate_rubric_from_report(
 
     * ``sensitivity_surface_flat`` — every sweep's flatness is below threshold.
     * ``monte_carlo_sequence_passed`` — observed Sharpe in top decile of null.
-    * ``dsr_above_0_90`` — deflated Sharpe ≥ 0.90.
+    * ``dsr_above_pass_threshold`` — deflated Sharpe ≥ ``DSR_PASS_THRESHOLD``.
     * ``backtest_length_above_minbtl`` — observed periods ≥ MinBTL.
 
     The other six are caller-asserted because they depend on backtest
@@ -187,7 +188,7 @@ def evaluate_rubric_from_report(
         monte_carlo_drawdown=monte_carlo_drawdown,
         sensitivity_surface_flat=all(s.is_flat for s in report.sweeps),
         monte_carlo_sequence_passed=report.mc.observed_is_significant,
-        dsr_above_0_90=report.dsr >= 0.90,
+        dsr_above_pass_threshold=report.dsr >= DSR_PASS_THRESHOLD,
         backtest_length_above_minbtl=report.backtest_periods >= report.minbtl_periods,
         notes=notes,
     )
@@ -233,7 +234,7 @@ def render_rubric(score: CredibilityScore) -> str:
         ("monte_carlo_drawdown", score.monte_carlo_drawdown),
         ("sensitivity_surface_flat", score.sensitivity_surface_flat),
         ("monte_carlo_sequence_passed", score.monte_carlo_sequence_passed),
-        ("dsr_above_0_90", score.dsr_above_0_90),
+        ("dsr_above_pass_threshold", score.dsr_above_pass_threshold),
         ("backtest_length_above_minbtl", score.backtest_length_above_minbtl),
     ]
     weights = BacktestCredibilityRubric.WEIGHTS

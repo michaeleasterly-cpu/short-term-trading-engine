@@ -392,7 +392,7 @@ def test_credibility_rubric_with_overfitting_report_uses_30_pt_bundle() -> None:
     # Available pts: integrity(70) + DSR(10) + trades_per_param(5) + minBTL(5) = 90
     assert score.score <= 90
     assert score.score >= 80, f"unexpectedly low score: {score.score}"
-    assert score.dsr_above_0_90
+    assert score.dsr_above_pass_threshold
     assert score.trades_per_param_passes
     assert score.backtest_length_above_minbtl
 
@@ -426,6 +426,84 @@ def test_credibility_rubric_overfitting_report_drops_score_when_dsr_fails() -> N
     # Existing graduation gate is 60 — random strategies with too many params
     # may or may not clear it, but they must score lower than the profitable case.
     assert not score.trades_per_param_passes
+
+
+def test_credibility_rubric_dsr_flag_keyed_off_pass_threshold_not_mislabeled_0_90() -> None:
+    """code-sweep #2: the persisted, auditable rubric must reflect the REAL
+    DSR gate (``DSR_PASS_THRESHOLD`` = 0.95), never the historical mislabel
+    "0.90".
+
+    Three independent regressions are pinned, so this test FAILS if either
+    the label or the value-comparison drifts back to 0.90:
+
+    1. The pydantic field is ``dsr_above_pass_threshold`` (the old
+       ``dsr_above_0_90`` name no longer exists on the model).
+    2. The field's description renders the real constant (``≥ 0.95``) and
+       contains NO "0.90" literal — it is keyed off ``DSR_PASS_THRESHOLD``.
+    3. The non-overfitting ``evaluate`` path's threshold logic is the real
+       gate: a DSR-above-0.90-but-below-0.95 backtest must NOT earn the DSR
+       points (it would have under the old ``>= 0.90`` value bug).
+    """
+    from tpcore.backtest.credibility import (
+        DSR_PASS_THRESHOLD,
+        BacktestCredibilityRubric,
+        CredibilityScore,
+    )
+    from tpcore.backtest.statistical_validation import (
+        StatValidationReport,
+        evaluate_rubric_from_report,
+    )
+
+    assert DSR_PASS_THRESHOLD == 0.95
+
+    fields = CredibilityScore.model_fields
+    assert "dsr_above_pass_threshold" in fields
+    assert "dsr_above_0_90" not in fields
+
+    desc = fields["dsr_above_pass_threshold"].description or ""
+    assert "0.90" not in desc, f"rubric description regressed to 0.90: {desc!r}"
+    assert str(DSR_PASS_THRESHOLD) in desc, (
+        f"rubric description must render the real constant: {desc!r}"
+    )
+
+    rubric = BacktestCredibilityRubric()
+    # DSR = 0.92 is above the old (wrong) 0.90 cut but below the real 0.95
+    # gate → the flag MUST be False (the latent value-bug regression guard).
+    score = rubric.evaluate(
+        lookahead_clean=True,
+        survivorship_inclusive=True,
+        pit_fundamentals=True,
+        regime_coverage=True,
+        out_of_sample_validated=True,
+        monte_carlo_drawdown=True,
+        dsr_above_pass_threshold=0.92 >= DSR_PASS_THRESHOLD,
+    )
+    assert not score.dsr_above_pass_threshold
+
+    # And evaluate_rubric_from_report (the path that carried the hardcoded
+    # `report.dsr >= 0.90` value bug) must now gate off the real constant:
+    # a DSR=0.92 report sits in the 0.90–0.95 dead-band → flag False.
+    class _Sweep:
+        is_flat = True
+
+    class _MC:
+        observed_is_significant = True
+
+    rep = StatValidationReport(
+        sweeps=[_Sweep()],
+        mc=_MC(),
+        psr=0.99,
+        dsr=0.92,
+        n_trials=5,
+        minbtl_periods=1,
+        backtest_periods=10_000,
+        sharpe_annualized=1.5,
+    )
+    combined = evaluate_rubric_from_report(rep, out_of_sample_validated=True)
+    assert not combined.dsr_above_pass_threshold, (
+        "evaluate_rubric_from_report must gate DSR off DSR_PASS_THRESHOLD "
+        "(0.95), not the mislabeled 0.90"
+    )
 
 
 # ─── SP-A2: DSR null-variance estimator correction ─────────────────────────

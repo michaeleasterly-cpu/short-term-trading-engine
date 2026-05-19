@@ -26,7 +26,7 @@ statistical-validation suite added in 2026 (see
 | monte_carlo_drawdown           |  5 |
 | sensitivity_surface_flat       | 10 |
 | monte_carlo_sequence_passed    | 15 |
-| dsr_above_0_90                 | 10 |
+| dsr_above_pass_threshold       | 10 |
 | backtest_length_above_minbtl   |  5 |
 """
 from __future__ import annotations
@@ -35,6 +35,8 @@ from typing import TYPE_CHECKING
 
 import structlog
 from pydantic import BaseModel, ConfigDict, Field
+
+from .overfitting import DSR_PASS_THRESHOLD
 
 if TYPE_CHECKING:  # pragma: no cover
     import asyncpg
@@ -78,9 +80,13 @@ class CredibilityScore(BaseModel):
         default=False,
         description="Block-bootstrap MC: observed Sharpe in top decile of null distribution (p < 0.10).",
     )
-    dsr_above_0_90: bool = Field(
+    dsr_above_pass_threshold: bool = Field(
         default=False,
-        description="Deflated Sharpe Ratio > 0.90 after accounting for n_trials parameter combinations.",
+        description=(
+            f"Deflated Sharpe Ratio ≥ {DSR_PASS_THRESHOLD} (the real gate "
+            "DSR_PASS_THRESHOLD) after accounting for n_trials parameter "
+            "combinations."
+        ),
     )
     backtest_length_above_minbtl: bool = Field(
         default=False,
@@ -119,7 +125,7 @@ class BacktestCredibilityRubric:
         # Statistical validation
         "sensitivity_surface_flat": 10,
         "monte_carlo_sequence_passed": 15,
-        "dsr_above_0_90": 10,
+        "dsr_above_pass_threshold": 10,
         "backtest_length_above_minbtl": 5,
     }
 
@@ -138,7 +144,7 @@ class BacktestCredibilityRubric:
         "monte_carlo_drawdown": 5,
         "sensitivity_surface_flat": 10,
         # Overfitting bundle (30 pts)
-        "dsr_above_0_90": 10,
+        "dsr_above_pass_threshold": 10,
         "pbo_passes": 10,
         "trades_per_param_passes": 5,
         "backtest_length_above_minbtl": 5,
@@ -155,7 +161,7 @@ class BacktestCredibilityRubric:
         monte_carlo_drawdown: bool,
         sensitivity_surface_flat: bool = False,
         monte_carlo_sequence_passed: bool = False,
-        dsr_above_0_90: bool = False,
+        dsr_above_pass_threshold: bool = False,
         backtest_length_above_minbtl: bool = False,
         notes: str | None = None,
     ) -> CredibilityScore:
@@ -168,7 +174,7 @@ class BacktestCredibilityRubric:
             "monte_carlo_drawdown": monte_carlo_drawdown,
             "sensitivity_surface_flat": sensitivity_surface_flat,
             "monte_carlo_sequence_passed": monte_carlo_sequence_passed,
-            "dsr_above_0_90": dsr_above_0_90,
+            "dsr_above_pass_threshold": dsr_above_pass_threshold,
             "backtest_length_above_minbtl": backtest_length_above_minbtl,
         }
         score = sum(self.WEIGHTS[k] for k, v in flags.items() if v)
@@ -192,7 +198,7 @@ class BacktestCredibilityRubric:
         overfitting-bundle flags are read off ``overfitting_report``:
 
         * ``sensitivity_surface_flat`` ← report.sensitivity_passes (or False if skipped)
-        * ``dsr_above_0_90``           ← report.dsr_passes
+        * ``dsr_above_pass_threshold`` ← report.dsr_passes
         * ``pbo_passes``               ← report.pbo_passes (or False if skipped)
         * ``trades_per_param_passes``  ← report.trades_per_param_passes
         * ``backtest_length_above_minbtl`` ← report.min_btl_passes
@@ -211,7 +217,7 @@ class BacktestCredibilityRubric:
             "out_of_sample_validated": out_of_sample_validated,
             "monte_carlo_drawdown": monte_carlo_drawdown,
             "sensitivity_surface_flat": bool(sens) if sens is not None else False,
-            "dsr_above_0_90": overfitting_report.dsr_passes,
+            "dsr_above_pass_threshold": overfitting_report.dsr_passes,
             "pbo_passes": bool(overfitting_report.pbo_passes) if overfitting_report.pbo_passes is not None else False,
             "trades_per_param_passes": overfitting_report.trades_per_param_passes,
             "backtest_length_above_minbtl": overfitting_report.min_btl_passes,

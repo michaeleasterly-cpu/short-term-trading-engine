@@ -50,7 +50,7 @@ def _make_score(score: int) -> CredibilityScore:
         monte_carlo_drawdown=True,
         sensitivity_surface_flat=score >= 70,
         monte_carlo_sequence_passed=score >= 80,
-        dsr_above_0_90=score >= 85,
+        dsr_above_pass_threshold=score >= 85,
         backtest_length_above_minbtl=score >= 90,
         score=score,
     )

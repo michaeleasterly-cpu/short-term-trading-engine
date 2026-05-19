@@ -61,6 +61,7 @@ from scripts.generate_tip_sheet import (
 )
 from tpcore.alpaca import AlpacaPaperBrokerAdapter
 from tpcore.backtest.credibility import MIN_LIVE_SCORE
+from tpcore.backtest.overfitting import DSR_PASS_THRESHOLD
 from tpcore.db import build_asyncpg_pool
 
 # Phase 5 — auto-refresh (opt-in, off by default per spec).
@@ -1262,7 +1263,7 @@ RUBRIC_LABELS: dict[str, str] = {
     "monte_carlo_drawdown": "Monte-Carlo drawdown",
     "sensitivity_surface_flat": "Sensitivity surface flat",
     "monte_carlo_sequence_passed": "Monte-Carlo sequence",
-    "dsr_above_0_90": "DSR ≥ 0.90",
+    "dsr_above_pass_threshold": f"DSR ≥ {DSR_PASS_THRESHOLD}",
     "backtest_length_above_minbtl": "Length ≥ MinBTL",
     "pbo_passes": "PBO passes",
     "trades_per_param_passes": "Trades/parameter ratio",
