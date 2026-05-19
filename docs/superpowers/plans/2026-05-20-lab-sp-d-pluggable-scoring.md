@@ -1011,7 +1011,45 @@ def test_reserved_metric_score_raises_clear_value_error():
         sp._score_for_ranking(m, LabPrimaryMetric.ULCER)
     with pytest.raises(ValueError, match="reserved objective"):
         sp._score_for_ranking(m, LabPrimaryMetric.INVERSE_ETF_HOLD)
+
+
+def test_ranking_metrics_table_is_exhaustive_over_the_enum():
+    # Hardening: a future LabPrimaryMetric member added without a
+    # _RANKING_METRICS entry must red LOUDLY and PRECISELY here, not as a
+    # cryptic bare KeyError deep inside _score_for_ranking on a
+    # live-money-adjacent ranking path. Also rejects a stray table key
+    # with no enum member (set equality both directions).
+    import ops.lab.run as sp
+    from tpcore.lab.target import LabPrimaryMetric
+
+    assert set(sp._RANKING_METRICS) == set(LabPrimaryMetric)
+
+
+def test_score_maxdd_reduction_zero_drawdown_is_finite_max_and_ranks_first():
+    # §8-A15 boundary: a flawless equity curve (max_drawdown == 0.0)
+    # scores exactly 0.0 — the MAXIMUM possible MAXDD_REDUCTION value
+    # (every real drawdown is <0 by the run.py:370 .min() construction)
+    # — and is finite (the _clamp identity holds at the boundary, no
+    # nan/inf). A 0.0-DD candidate must therefore rank ABOVE any
+    # negative-DD one under the descending reverse=True sort.
+    import math
+
+    import ops.lab.run as sp
+    from tpcore.lab.target import LabPrimaryMetric
+
+    flawless = sp.SliceMetrics(n_trades=10, sharpe=0.1, profit_factor=1.0,
+                               max_drawdown=0.0, win_rate=0.5)
+    drawn = sp.SliceMetrics(n_trades=10, sharpe=0.1, profit_factor=1.0,
+                            max_drawdown=-0.05, win_rate=0.5)
+    flawless_score = sp._score_for_ranking(
+        flawless, LabPrimaryMetric.MAXDD_REDUCTION)
+    assert flawless_score == 0.0
+    assert math.isfinite(flawless_score)
+    assert flawless_score > sp._score_for_ranking(
+        drawn, LabPrimaryMetric.MAXDD_REDUCTION)
 ```
+
+> **Plan correction (T4 hardened, 2026-05-20, code-quality review):** T4 hardened — table-exhaustiveness guard (`test_ranking_metrics_table_is_exhaustive_over_the_enum`, test-form chosen: no build-time `set(...)==set(Enum)` dispatch-table precedent in the repo, lower blast radius, `ops/lab/run.py` byte-untouched) + MAXDD-0.0 boundary unit (`test_score_maxdd_reduction_zero_drawdown_is_finite_max_and_ranks_first`); the Step-1 test block above reflects the shipped code.
 
 - [ ] **Step 2: Run the new units — expect RED**
 
