@@ -141,14 +141,6 @@ ignore = ["E501"]
 # scoped per-file ignore is the correct form (mirrors the frozen-oracle
 # precedent above) — never an inline `# noqa: SLF001`.
 "tpcore/tests/test_stale_order_cancel.py" = ["SLF"]
-# Lean P5.5a live-money risk-gate `_legacy_*` parallel-diff: proving the
-# consolidated reversion cutover is byte-equivalent REQUIRES calling the
-# kept private `ReversionCapitalGate._legacy_check_trade` /
-# `_legacy_assert_can_graduate` (the parity oracle — that IS the test's
-# purpose). Engine-private (NOT tpcore-private) access in a char-test;
-# the scoped per-file ignore is the correct form (mirrors the
-# test_stale_order_cancel.py precedent above) — never an inline noqa.
-"tpcore/tests/test_capital_gate_base.py" = ["SLF"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

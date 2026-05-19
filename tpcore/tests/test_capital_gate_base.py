@@ -1,31 +1,30 @@
-"""Lean P5.5a — EXHAUSTIVE characterization + `_legacy_*` parallel-diff for
-the per-trade capital gate (HIGHEST-RISK live risk gate; cluster #3/#4).
+"""Permanent characterization suite for the consolidated capital gate
+(HIGHEST-RISK live-money risk gate; clusters #3/#4/#7) plus momentum's
+shared graduate gate.
 
-Two test families, both in this one file:
+This file was the Lean P5.5a/b TDD + `_legacy_*` parallel-diff harness
+for the staged reversion→vector→momentum cutover onto
+:class:`tpcore.interfaces.capital_gate_base.PerTradeCapitalGateBase` and
+the shared ``assert_can_graduate`` free function. The staged cutover is
+complete: the `_legacy_*` parallel-diff scaffolding (kept verbatim
+pre-refactor bodies + the differential grid tests) was **retired
+post-cutover at Lean P5.5c** once byte-equivalence was locked in CI. What
+remains is the PERMANENT regression asset — pure characterization with an
+*independent* expectation (the plug is NOT used as its own oracle):
 
-1. **Characterization (TDD, written BEFORE the refactor):** pins
-   ``reversion.plugs.capital_gate.ReversionCapitalGate``'s CURRENT
-   observable behavior with an *independent* expectation (the plug is
-   NOT used as its own oracle): every ``check_trade`` reject branch, the
-   exact ``drawdown == -0.05`` boundary (both sides), the
-   ``engine_equity == 0`` skip, and the EXACT emitted structlog event
-   NAME per branch (forensics/dashboards key on the event string — it is
-   observable behavior). Plus ``assert_can_graduate``'s full
-   raise-vs-return matrix (``is_graduated`` short-circuit,
-   ``assert_passed_for_engine`` path, ``graduation_ready`` true/false)
-   with the I/O dependencies mocked — no real DB/network.
-
-2. **Differential (`_legacy_*` parallel-diff):** over a fuzzed input
-   grid (sizes, equities, position counts, drawdowns incl. the exact
-   boundary, graduation states), asserts the consolidated method ==
-   the kept ``_legacy_*`` method for EVERY case — same return / same
-   exception type / same emitted event name. This proves byte-equivalence
-   of the staged reversion cutover.
-
-Engine-private access (``ReversionCapitalGate._legacy_*``) is the
-documented purpose of the parallel-diff oracle — covered by the scoped
-per-file ``SLF`` ignore in ``pyproject.toml`` (mirrors the
-``test_stale_order_cancel.py`` precedent; never an inline noqa).
+* Reversion / vector ``check_trade``: every reject branch, the exact
+  ``drawdown == -0.05`` boundary (both sides), the ``engine_equity == 0``
+  skip, and the EXACT emitted structlog event NAME per branch
+  (forensics/dashboards key on the event string — observable behavior).
+* Reversion / vector / momentum ``assert_can_graduate``: the full
+  raise-vs-return matrix (``is_graduated`` short-circuit,
+  ``assert_passed_for_engine`` path, ``graduation_ready`` true/false)
+  with the I/O dependencies mocked — no real DB/network. Momentum is a
+  BATCH engine: it reuses ONLY the shared ``assert_can_graduate`` free
+  fn, NOT per-trade ``check_trade`` (it must NOT subclass the per-trade
+  base — spec §7 D2).
+* ``is_graduated`` thresholds per engine (incl. reversion's PF floor and
+  momentum's rebalance/sharpe/PF triple).
 """
 from __future__ import annotations
 
@@ -34,9 +33,21 @@ from decimal import Decimal
 import pytest
 import structlog
 
-import reversion.plugs.capital_gate as rev_mod
+import momentum.plugs.capital_gate as mom_mod
 import tpcore.interfaces.capital_gate_base as base_mod
-import vector.plugs.capital_gate as vec_mod
+from momentum.models import (
+    GRAD_MIN_PROFIT_FACTOR as MOM_GRAD_MIN_PROFIT_FACTOR,
+)
+from momentum.models import (
+    GRAD_MIN_REBALANCES as MOM_GRAD_MIN_REBALANCES,
+)
+from momentum.models import (
+    GRAD_MIN_SHARPE as MOM_GRAD_MIN_SHARPE,
+)
+from momentum.plugs.capital_gate import (
+    MomentumCapitalGate,
+    MomentumGraduationStats,
+)
 from reversion.plugs.capital_gate import GraduationStats, ReversionCapitalGate
 from tpcore.backtest.credibility import CredibilityScoreInsufficientError
 from tpcore.quality.validation.capital_gate import (
@@ -52,24 +63,27 @@ from vector.plugs.capital_gate import VectorCapitalGate
 def _patch_deps(
     monkeypatch: pytest.MonkeyPatch, val: object, cred: object
 ) -> None:
-    """Patch the validation/credibility I/O deps in BOTH the consolidated
-    base module and the reversion module — the new (base) and `_legacy_*`
-    (rev_mod) code paths resolve these from their own module globals, so
-    a parity test must mock both for an apples-to-apples comparison."""
-    for mod in (base_mod, rev_mod):
-        monkeypatch.setattr(mod, "assert_passed_for_engine", val)
-        monkeypatch.setattr(mod, "graduation_ready", cred)
+    """Patch the validation/credibility I/O deps for the consolidated
+    gate. Post-P5.5c the single shared ``assert_can_graduate`` free
+    function (and the base classmethod that delegates to it) resolves
+    these from the ``base_mod`` globals ONLY — reversion/vector/momentum
+    inherit/delegate and no longer carry their own module-level copies.
+    Asserting that decoupling here (``not hasattr`` on every engine
+    module) is a structural regression guard: a re-introduced engine-local
+    copy would silently escape the mock."""
+    for mod in (mom_mod,):
+        assert not hasattr(mod, "assert_passed_for_engine")
+        assert not hasattr(mod, "graduation_ready")
+    monkeypatch.setattr(base_mod, "assert_passed_for_engine", val)
+    monkeypatch.setattr(base_mod, "graduation_ready", cred)
 
 
-def _patch_deps_vector(
-    monkeypatch: pytest.MonkeyPatch, val: object, cred: object
-) -> None:
-    """Vector counterpart of :func:`_patch_deps` — patches the I/O deps in
-    BOTH the consolidated base module and the vector module so the new
-    (base) and `_legacy_*` (vec_mod) paths compare apples-to-apples."""
-    for mod in (base_mod, vec_mod):
-        monkeypatch.setattr(mod, "assert_passed_for_engine", val)
-        monkeypatch.setattr(mod, "graduation_ready", cred)
+# Reversion/vector inherit the same consolidated base path; momentum
+# delegates to the same free function. All three resolve the I/O deps
+# from ``base_mod`` only, so the patch helper is identical — kept under
+# the per-engine names the §2 raise/return-matrix tests already call.
+_patch_deps_vector = _patch_deps
+_patch_deps_momentum = _patch_deps
 
 
 def _capture() -> structlog.testing.LogCapture:
@@ -258,97 +272,15 @@ def test_is_graduated_thresholds(stats: GraduationStats, expected: bool) -> None
     assert ReversionCapitalGate.is_graduated(stats) is expected
 
 
-# ── 3. `_legacy_*` parallel-diff (new == legacy over a fuzzed grid) ─────────
-#
-# The kept `_legacy_check_trade` / `_legacy_assert_can_graduate` are the
-# pre-refactor reversion implementations. The consolidated overrides MUST
-# be byte-equivalent: same return, same exception type, same emitted
-# structlog event name, for EVERY grid point.
-
-_SIZES = [Decimal("-50"), Decimal("0"), Decimal("1"), Decimal("2000"),
-          Decimal("2000.01"), Decimal("5000")]
-_PNLS = [Decimal("100"), Decimal("0"), Decimal("-499.99"), Decimal("-500"),
-         Decimal("-500.01"), Decimal("-600"), Decimal("-99999")]
-_POSCOUNTS = [0, 1, 4, 5, 6, 99]
-_EQUITIES = [Decimal("10000"), Decimal("0"), Decimal("1")]
-
-
-def test_check_trade_equals_legacy_over_fuzzed_grid() -> None:
-    for equity in _EQUITIES:
-        gate = ReversionCapitalGate(engine_equity=equity)
-        for size in _SIZES:
-            for pnl in _PNLS:
-                for n in _POSCOUNTS:
-                    cap_new = _capture()
-                    try:
-                        new = gate.check_trade(size, pnl, n)
-                    finally:
-                        structlog.reset_defaults()
-                    cap_old = _capture()
-                    try:
-                        old = gate._legacy_check_trade(size, pnl, n)
-                    finally:
-                        structlog.reset_defaults()
-                    ctx = f"equity={equity} size={size} pnl={pnl} n={n}"
-                    assert new == old, ctx
-                    assert _event_names(cap_new) == _event_names(cap_old), ctx
-
-
-@pytest.mark.parametrize(
-    "stats",
-    [
-        _PASS_STATS,
-        _FAIL_STATS,
-        GraduationStats(n_trades=10, win_rate=0.55, avg_return=0.02, profit_factor=1.5),
-        GraduationStats(n_trades=10, win_rate=0.55, avg_return=0.02, profit_factor=1.49),
-    ],
-)
-@pytest.mark.parametrize(
-    ("val_behavior", "cred_ready"),
-    [
-        ("ok", True),
-        ("ok", False),
-        ("stale", True),
-        ("failed", True),
-    ],
-)
-async def test_assert_can_graduate_equals_legacy_over_grid(
-    monkeypatch: pytest.MonkeyPatch,
-    stats: GraduationStats,
-    val_behavior: str,
-    cred_ready: bool,
-) -> None:
-    async def _val(*a: object, **k: object) -> None:
-        if val_behavior == "stale":
-            raise ValidationStaleError("stale")
-        if val_behavior == "failed":
-            raise ValidationFailedError("failed")
-        return None
-
-    async def _cred(*a: object, **k: object) -> bool:
-        return cred_ready
-
-    _patch_deps(monkeypatch, _val, _cred)
-
-    async def _outcome(fn) -> object:
-        try:
-            return ("return", await fn(stats, _SentinelPool()))
-        except Exception as exc:  # noqa: BLE001 — parity comparison of any raise
-            return ("raise", type(exc))
-
-    new = await _outcome(ReversionCapitalGate.assert_can_graduate)
-    old = await _outcome(ReversionCapitalGate._legacy_assert_can_graduate)
-    assert new == old
-
-
 # ════════════════════════════════════════════════════════════════════════════
 # Lean P5.5b — VECTOR cutover (SECOND staged per-engine cutover of the live
 # risk gate). Identical structure to the reversion families above, with an
 # INDEPENDENT expectation for vector: the exact `vector.gate.*` event names,
 # the same `-0.05` boundary, vector's 3-threshold `is_graduated` (NO
 # profit_factor — vector's GraduationStats is the plain
-# PerTradeGraduationStats), and the `_legacy_*` parallel-diff proving the
-# consolidated base == vector's pre-refactor implementation.
+# PerTradeGraduationStats). The P5.5b `_legacy_*` parallel-diff was retired
+# post-cutover (plan P5.5c); this is now the permanent characterization
+# suite for the consolidated gate.
 # ════════════════════════════════════════════════════════════════════════════
 
 
@@ -533,71 +465,156 @@ def test_vector_is_graduated_thresholds(
     assert VectorCapitalGate.is_graduated(stats) is expected
 
 
-# ── 3. vector `_legacy_*` parallel-diff (new == legacy over a fuzzed grid) ──
-
-_VEC_GRAD_STATES = [
-    _VEC_PASS_STATS,
-    _VEC_FAIL_STATS,
-    VectorGraduationStats(n_trades=30, win_rate=0.55, avg_return=0.03),
-    VectorGraduationStats(n_trades=30, win_rate=0.55, avg_return=0.029),
-]
-
-
-def test_vector_check_trade_equals_legacy_over_fuzzed_grid() -> None:
-    for equity in _EQUITIES:
-        gate = VectorCapitalGate(engine_equity=equity)
-        for size in _SIZES:
-            for pnl in _PNLS:
-                for n in _POSCOUNTS:
-                    cap_new = _capture()
-                    try:
-                        new = gate.check_trade(size, pnl, n)
-                    finally:
-                        structlog.reset_defaults()
-                    cap_old = _capture()
-                    try:
-                        old = gate._legacy_check_trade(size, pnl, n)
-                    finally:
-                        structlog.reset_defaults()
-                    ctx = f"equity={equity} size={size} pnl={pnl} n={n}"
-                    assert new == old, ctx
-                    assert _event_names(cap_new) == _event_names(cap_old), ctx
+# ════════════════════════════════════════════════════════════════════════════
+# Lean P5.5c — MOMENTUM assert_can_graduate consolidation. Momentum is a
+# BATCH engine: it shares ONLY the `assert_can_graduate` shape (via the
+# shared free function), NOT per-trade `check_trade` (it must NOT subclass
+# `PerTradeCapitalGateBase` — that would wrongly inherit per-trade
+# `check_trade`; spec §7 D2). This characterization family pins momentum's
+# CURRENT observable `assert_can_graduate` behavior (raise/return matrix +
+# `is_graduated` thresholds over `MomentumGraduationStats`) with the I/O
+# dependencies mocked — independent expectation, no real DB/network.
+#
+# Consistent with the reversion/vector §2 blocks above, the credibility
+# assertion pins the exception TYPE (`CredibilityScoreInsufficientError`),
+# NOT the message text. The one-word `row`→`run` message normalization
+# (momentum's lone pre-existing outlier vs the canonical
+# `{engine.capitalize()} ... rubric run on record` form used by the base /
+# reversion / vector / engine_template) is the intended, documented dedup
+# outcome of consolidating onto the shared free function — NOT masking.
+# ════════════════════════════════════════════════════════════════════════════
 
 
-@pytest.mark.parametrize("stats", _VEC_GRAD_STATES)
-@pytest.mark.parametrize(
-    ("val_behavior", "cred_ready"),
-    [
-        ("ok", True),
-        ("ok", False),
-        ("stale", True),
-        ("failed", True),
-    ],
+_MOM_PASS_STATS = MomentumGraduationStats(
+    n_rebalances=6, sharpe_annualized=1.5, profit_factor=2.0
 )
-async def test_vector_assert_can_graduate_equals_legacy_over_grid(
+_MOM_FAIL_STATS = MomentumGraduationStats(
+    n_rebalances=1, sharpe_annualized=1.5, profit_factor=2.0
+)
+
+
+async def test_momentum_assert_can_graduate_short_circuits_when_not_graduated(
     monkeypatch: pytest.MonkeyPatch,
-    stats: VectorGraduationStats,
-    val_behavior: str,
-    cred_ready: bool,
+) -> None:
+    called = {"validation": False, "cred": False}
+
+    async def _val(*a: object, **k: object) -> None:
+        called["validation"] = True
+
+    async def _cred(*a: object, **k: object) -> bool:
+        called["cred"] = True
+        return True
+
+    _patch_deps_momentum(monkeypatch, _val, _cred)
+
+    result = await MomentumCapitalGate.assert_can_graduate(
+        _MOM_FAIL_STATS, _SentinelPool()
+    )
+    assert result is False
+    # Short-circuit: neither I/O dependency is consulted.
+    assert called == {"validation": False, "cred": False}
+
+
+async def test_momentum_assert_can_graduate_true_when_all_pass(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def _val(*a: object, **k: object) -> None:
-        if val_behavior == "stale":
-            raise ValidationStaleError("stale")
-        if val_behavior == "failed":
-            raise ValidationFailedError("failed")
         return None
 
     async def _cred(*a: object, **k: object) -> bool:
-        return cred_ready
+        return True
 
-    _patch_deps_vector(monkeypatch, _val, _cred)
+    _patch_deps_momentum(monkeypatch, _val, _cred)
 
-    async def _outcome(fn) -> object:
-        try:
-            return ("return", await fn(stats, _SentinelPool()))
-        except Exception as exc:  # noqa: BLE001 — parity comparison of any raise
-            return ("raise", type(exc))
+    assert (
+        await MomentumCapitalGate.assert_can_graduate(
+            _MOM_PASS_STATS, _SentinelPool()
+        )
+        is True
+    )
 
-    new = await _outcome(VectorCapitalGate.assert_can_graduate)
-    old = await _outcome(VectorCapitalGate._legacy_assert_can_graduate)
-    assert new == old
+
+async def test_momentum_assert_can_graduate_raises_credibility_when_not_ready(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _val(*a: object, **k: object) -> None:
+        return None
+
+    async def _cred(*a: object, **k: object) -> bool:
+        return False
+
+    _patch_deps_momentum(monkeypatch, _val, _cred)
+
+    # Pins the exception TYPE (consistent with reversion/vector §2) — the
+    # message text is the deliberately-normalized `row`→`run` consolidation.
+    with pytest.raises(CredibilityScoreInsufficientError):
+        await MomentumCapitalGate.assert_can_graduate(
+            _MOM_PASS_STATS, _SentinelPool()
+        )
+
+
+@pytest.mark.parametrize("exc", [ValidationStaleError, ValidationFailedError])
+async def test_momentum_assert_can_graduate_propagates_validation_errors(
+    monkeypatch: pytest.MonkeyPatch, exc: type[Exception]
+) -> None:
+    async def _val(*a: object, **k: object) -> None:
+        raise exc("data gate not satisfied")
+
+    async def _cred(*a: object, **k: object) -> bool:  # pragma: no cover
+        return True
+
+    _patch_deps_momentum(monkeypatch, _val, _cred)
+
+    with pytest.raises(exc):
+        await MomentumCapitalGate.assert_can_graduate(
+            _MOM_PASS_STATS, _SentinelPool()
+        )
+
+
+@pytest.mark.parametrize(
+    ("stats", "expected"),
+    [
+        (
+            MomentumGraduationStats(
+                n_rebalances=MOM_GRAD_MIN_REBALANCES,
+                sharpe_annualized=MOM_GRAD_MIN_SHARPE,
+                profit_factor=MOM_GRAD_MIN_PROFIT_FACTOR,
+            ),
+            True,
+        ),
+        (
+            MomentumGraduationStats(
+                n_rebalances=MOM_GRAD_MIN_REBALANCES - 1,
+                sharpe_annualized=MOM_GRAD_MIN_SHARPE,
+                profit_factor=MOM_GRAD_MIN_PROFIT_FACTOR,
+            ),
+            False,
+        ),
+        (
+            MomentumGraduationStats(
+                n_rebalances=MOM_GRAD_MIN_REBALANCES,
+                sharpe_annualized=MOM_GRAD_MIN_SHARPE - 0.01,
+                profit_factor=MOM_GRAD_MIN_PROFIT_FACTOR,
+            ),
+            False,
+        ),
+        (
+            MomentumGraduationStats(
+                n_rebalances=MOM_GRAD_MIN_REBALANCES,
+                sharpe_annualized=MOM_GRAD_MIN_SHARPE,
+                profit_factor=MOM_GRAD_MIN_PROFIT_FACTOR - 0.01,
+            ),
+            False,
+        ),
+        (
+            MomentumGraduationStats(
+                n_rebalances=0, sharpe_annualized=0.0, profit_factor=0.0
+            ),
+            False,
+        ),
+    ],
+)
+def test_momentum_is_graduated_thresholds(
+    stats: MomentumGraduationStats, expected: bool
+) -> None:
+    assert MomentumCapitalGate.is_graduated(stats) is expected

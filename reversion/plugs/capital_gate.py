@@ -21,19 +21,11 @@ natural firing rate.
 """
 from __future__ import annotations
 
-import os
 from decimal import Decimal
-from typing import TYPE_CHECKING
-
-import structlog
 
 from reversion.models import (
     MAX_CONCURRENT_POSITIONS,
     PRE_GRAD_POSITION_CAP_USD,
-)
-from tpcore.backtest.credibility import (
-    CredibilityScoreInsufficientError,
-    graduation_ready,
 )
 from tpcore.interfaces.capital_gate_base import PerTradeCapitalGateBase
 
@@ -42,12 +34,6 @@ from tpcore.interfaces.capital_gate_base import PerTradeCapitalGateBase
 # profit_factor. Refactored 2026-05-14 to consolidate the shared fields
 # in tpcore.models.graduation.
 from tpcore.models.graduation import PerTradeGraduationStats
-from tpcore.quality.validation.capital_gate import assert_passed_for_engine
-
-if TYPE_CHECKING:  # pragma: no cover
-    import asyncpg
-
-logger = structlog.get_logger(__name__)
 
 DAILY_LOSS_FREEZE_PCT = Decimal("0.05")
 GRAD_MIN_TRADES = 10
@@ -65,13 +51,13 @@ class GraduationStats(PerTradeGraduationStats):
 class ReversionCapitalGate(PerTradeCapitalGateBase):
     """Plug 5 of Reversion.
 
-    Lean P5.5a: ``check_trade`` / ``healthcheck`` / ``assert_can_graduate``
-    are now the consolidated :class:`PerTradeCapitalGateBase` implementations
-    (cluster #3/#4/#7); only ``is_graduated`` (the reversion-specific
-    thresholds incl. the profit-factor floor) stays engine-owned. The
-    pre-consolidation bodies are kept verbatim as ``_legacy_*`` for the
-    P5.5a parallel-diff equivalence proof (deleted at the staged cutover,
-    plan P5.5c).
+    Lean P5.5a/c: ``check_trade`` / ``healthcheck`` /
+    ``assert_can_graduate`` are the consolidated
+    :class:`PerTradeCapitalGateBase` implementations (cluster #3/#4/#7);
+    only ``is_graduated`` (the reversion-specific thresholds incl. the
+    profit-factor floor) stays engine-owned. The P5.5a ``_legacy_*``
+    parallel-diff scaffolding was retired at the staged cutover
+    (plan P5.5c) once byte-equivalence was locked in CI.
     """
 
     engine_name = "reversion"
@@ -94,72 +80,3 @@ class ReversionCapitalGate(PerTradeCapitalGateBase):
             and stats.avg_return >= GRAD_MIN_AVG_RETURN
             and stats.profit_factor >= GRAD_MIN_PROFIT_FACTOR
         )
-
-    # ── `_legacy_*` parallel-diff oracles (Lean P5.5a) ──────────────────
-    # Verbatim pre-consolidation bodies. The P5.5a differential test
-    # asserts the consolidated base methods == these over a fuzzed grid
-    # (same return / exception type / emitted event name). Removed at the
-    # staged cutover (plan P5.5c) once equivalence is locked in CI.
-
-    def _legacy_check_trade(
-        self,
-        size: Decimal,
-        engine_pnl: Decimal,
-        open_positions: int = 0,
-    ) -> bool:
-        """Return True iff the proposed trade obeys engine-local limits."""
-        if size <= 0:
-            logger.info("reversion.gate.reject_nonpositive", size=str(size))
-            return False
-        if size > self._max_position_usd:
-            logger.info(
-                "reversion.gate.reject_oversize",
-                size=str(size),
-                cap=str(self._max_position_usd),
-            )
-            return False
-        if open_positions >= self._max_positions:
-            logger.info(
-                "reversion.gate.reject_position_count",
-                open_positions=open_positions,
-                cap=self._max_positions,
-            )
-            return False
-        if self._engine_equity > 0:
-            drawdown_pct = engine_pnl / self._engine_equity
-            if drawdown_pct <= -DAILY_LOSS_FREEZE_PCT:
-                logger.warning(
-                    "reversion.gate.reject_daily_loss",
-                    drawdown_pct=float(drawdown_pct),
-                    threshold=float(-DAILY_LOSS_FREEZE_PCT),
-                )
-                return False
-        return True
-
-    @staticmethod
-    async def _legacy_assert_can_graduate(
-        stats: GraduationStats, pool: asyncpg.Pool
-    ) -> bool:
-        """Combined gate: stats thresholds AND Data Validation Suite AND credibility ≥ 60.
-
-        Returns ``False`` (without raising) if the stats thresholds aren't met
-        (normal pre-grad case). Returns ``True`` only after a fresh successful
-        validation run *and* a credibility-rubric score ≥ 60 in
-        ``platform.data_quality_log``. Raises ``ValidationStaleError`` or
-        ``ValidationFailedError`` if the data gate isn't satisfied; raises
-        ``CredibilityScoreInsufficientError`` if the latest backtest
-        credibility row is < 60 or absent.
-        """
-        if not ReversionCapitalGate.is_graduated(stats):
-            return False
-        await assert_passed_for_engine(
-            pool, "reversion",
-            require_all_green=os.getenv(
-                "CAPITAL_GATE_REQUIRE_ALL_GREEN", "").strip().lower()
-            in ("1", "true", "yes", "on"),
-        )
-        if not await graduation_ready(pool, engine_name="reversion"):
-            raise CredibilityScoreInsufficientError(
-                "Reversion backtest credibility score < 60 (or no rubric run on record)"
-            )
-        return True
