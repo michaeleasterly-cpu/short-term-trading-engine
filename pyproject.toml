@@ -134,6 +134,13 @@ ignore = ["E501"]
 # for this one frozen oracle instead (the only correct baseline form
 # for a deliberately-immutable asset).
 "scripts/tests/test_search_parameters_characterization.py" = ["SLF"]
+# Lean P5.4a live-money characterization test: proving the momentum delegate
+# is byte-equivalent REQUIRES calling its private
+# `_cancel_stale_momentum_orders` (the parity oracle — that IS the test's
+# purpose). Engine-private (NOT tpcore-private) access in a char-test; the
+# scoped per-file ignore is the correct form (mirrors the frozen-oracle
+# precedent above) — never an inline `# noqa: SLF001`.
+"tpcore/tests/test_stale_order_cancel.py" = ["SLF"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
