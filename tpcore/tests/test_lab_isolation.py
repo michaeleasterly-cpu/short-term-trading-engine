@@ -2,8 +2,19 @@
 
 Lives in ``tpcore/tests`` (a COLLECTED pyproject testpath), NOT
 ``tpcore/lab/tests`` (uncollected — a safety test there would silently
-never run). DB-gated: skips locally with no ``DATABASE_URL``; CI has one
-and runs it fully (``asyncio_mode = auto`` — no decorator needed).
+never run). DB-gated: skips with no ``DATABASE_URL`` (``asyncio_mode =
+auto`` — no decorator needed). This DB gate is INHERITED from SP2 and the
+repo's ``.github/workflows/ci.yml`` ``test`` job has NO ``services:
+postgres`` / ``DATABASE_URL`` — so this suite skips in automated CI
+exactly as it skips locally. The make-or-break SP-A proofs
+(``test_cumulative_n_trials_real_db_integer_correctness`` [H-LL-9],
+``test_lab_ledger_disjoint_from_live_graduation`` [T-LIVE/H-LL-4]) are
+NOT exercised by CI on merge; they are enforced at merge time by the
+mandatory operator-run compensating control (the recorded
+``DATABASE_URL=$DATABASE_URL_IPV4 .venv/bin/python -m pytest
+tpcore/tests/test_lab_isolation.py -q`` run against the live Postgres).
+A dedicated scoped CI-Postgres job is a tracked TODO.md follow-up — see
+spec H-LL-9 / TODO.md "Lab-isolation DB proofs not CI-enforced".
 
 This composes the shipped pieces end-to-end: a REAL Lab walk-forward run
 (``ops.lab.run.amain`` inside an active ``LabContext``, candidate set)
@@ -44,8 +55,12 @@ _LAB_SOURCE = f"{CREDIBILITY_SOURCE_PREFIX}.lab.iso_probe"
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("DATABASE_URL") is None,
-    reason="Lab isolation test needs a DB (CI has DATABASE_URL; "
-    "local skips by design — do NOT force it locally, CI runs it)",
+    reason="Lab isolation test needs a DB. This DB gate is INHERITED "
+    "from SP2; the repo's ci.yml `test` job has NO Postgres service / "
+    "DATABASE_URL, so this skips in CI exactly as it skips locally. "
+    "The make-or-break proofs are enforced at merge by the mandatory "
+    "operator-run compensating control (see spec H-LL-9 / TODO.md "
+    "'Lab-isolation DB proofs not CI-enforced'), NOT by automated CI.",
 )
 
 
