@@ -57,6 +57,7 @@ from tpcore.backtest.cli_overrides import overrides_from_args
 from tpcore.backtest.cost_model import (
     slippage_per_side as _tpcore_slippage_per_side,
 )
+from tpcore.backtest.price_loader import load_prices
 from tpcore.db import build_asyncpg_pool
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -235,33 +236,10 @@ class VariantSummary:
 
 
 async def _load_prices(pool, tickers: list[str], start: date, end: date) -> dict[str, pd.DataFrame]:
-    sql = """
-        SELECT ticker, date, open, high, low, close, volume
-        FROM platform.prices_daily
-        WHERE ticker = ANY($1) AND date BETWEEN $2 AND $3
-        ORDER BY ticker, date
-    """
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(sql, tickers, start, end)
-    by_ticker: dict[str, list[dict]] = defaultdict(list)
-    for r in rows:
-        by_ticker[r["ticker"]].append(
-            {
-                "date": r["date"],
-                "open": float(r["open"]),
-                "high": float(r["high"]),
-                "low": float(r["low"]),
-                "close": float(r["close"]),
-                "volume": int(r["volume"]),
-            }
-        )
-    out: dict[str, pd.DataFrame] = {}
-    for ticker, ticker_rows in by_ticker.items():
-        if len(ticker_rows) < SMA_200 + 5:
-            continue
-        df = pd.DataFrame(ticker_rows).set_index("date").sort_index()
-        out[ticker] = df
-    return out
+    # Lean P5.3 (#2): thin delegate to the shared tpcore loader. The
+    # min-bar floor (SMA_200 + 5) is vector's intentional divergence,
+    # preserved via the explicit ``min_bars`` parameter.
+    return await load_prices(pool, tickers, start, end, min_bars=SMA_200 + 5)
 
 
 async def _load_fundamentals(pool, tickers: list[str]) -> dict[str, list[dict]]:
