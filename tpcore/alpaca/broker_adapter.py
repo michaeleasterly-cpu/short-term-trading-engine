@@ -56,11 +56,38 @@ _PRICE_TICK = Decimal("0.01")
 
 
 def _quantize_price(value: Decimal) -> Decimal:
-    """Round a price to the $0.01 tick (ROUND_HALF_UP — the project's
-    convention for the slippage_bps quantize and the standard for
-    half-cent rounding). No tpcore price-quantize helper exists today;
-    this is the single boundary that needs it."""
+    """Round a price to the $0.01 tick using ``ROUND_HALF_UP``.
+
+    ``ROUND_HALF_UP`` is chosen deliberately for **deterministic half-cent
+    rounding of money sent to the broker**: a price ending in exactly half a
+    cent (e.g. ``10.125``) always rounds the same way (``→ 10.13``) regardless
+    of the preceding digit, so the limit/stop price the broker receives is a
+    pure function of the input. (This is NOT the ``_slippage_bps`` quantize
+    convention — that path uses ``.quantize(Decimal("0.01"))`` with the
+    decimal default ``ROUND_HALF_EVEN`` / banker's rounding.) No tpcore
+    price-quantize helper exists today; this is the single boundary that
+    needs it."""
     return value.quantize(_PRICE_TICK, rounding=ROUND_HALF_UP)
+
+
+# Frozen allowlist of idempotent-read operation identities permitted on the
+# ``_call_read`` (transient-retry) seam. ``_call_read`` wraps the call in
+# ``with_retry``; routing a submit-like method through it would silently get
+# live-money retry → double-order risk. Every ``_call_read`` caller MUST pass
+# an ``op`` tag from this set; anything else raises at the call site so a
+# mis-route fails LOUDLY instead of silently retrying. Classification of
+# reads-vs-submit is already correctness-reviewed — this guard only enforces
+# that the existing classification cannot be silently bypassed.
+_IDEMPOTENT_READ_OPS: frozenset[str] = frozenset(
+    {
+        "get_account",
+        "get_all_positions",
+        "get_order_by_id",
+        "get_orders",
+        "cancel_order_by_id",
+        "cancel_orders",
+    }
+)
 
 
 class _TransientBrokerError(RuntimeError):
@@ -189,7 +216,7 @@ class AlpacaPaperBrokerAdapter(BrokerExecutionInterface):
 
     # ─── Outage tracking ────────────────────────────────────────────────
 
-    async def _call_read(self, func, *args, **kwargs):
+    async def _call_read(self, func, *args, op: str, **kwargs):
         """Idempotent-read entry point: transient-retry, then outage-count.
 
         ONLY for idempotent reads (``get_account`` / ``get_all_positions``
@@ -198,6 +225,15 @@ class AlpacaPaperBrokerAdapter(BrokerExecutionInterface):
         / connection failure is retried in-place via
         ``tpcore.outage.with_retry`` (the CLAUDE.md mandate — no local retry
         loops); a permanent 4xx is NOT retried (``_is_transient_alpaca_error``).
+
+        **Structural guard (live-money double-order foot-gun):** the caller
+        MUST pass ``op`` — an operation-identity tag from the frozen
+        :data:`_IDEMPOTENT_READ_OPS` set. Anything not in that set raises
+        ``ValueError`` BEFORE the retry-wrapped attempt runs, so a future dev
+        accidentally routing a submit-like method through here fails loudly at
+        the call site instead of silently inheriting live-money retry. The
+        read-vs-submit classification itself is already correctness-reviewed;
+        this only makes the classification impossible to bypass silently.
 
         **Composition with the kill-switch counter (explicit & correct):**
         the retry sits *inside* one logical ``_call``. ``with_retry``
@@ -212,6 +248,13 @@ class AlpacaPaperBrokerAdapter(BrokerExecutionInterface):
         ``place_order``. Retrying a live-money submit risks a double order
         even with ``client_order_id``; submit keeps its own bare ``_call``.
         """
+        if op not in _IDEMPOTENT_READ_OPS:
+            raise ValueError(
+                f"_call_read received op={op!r} which is not an allowlisted "
+                f"idempotent read (allowed: {sorted(_IDEMPOTENT_READ_OPS)}). "
+                "Routing a submit-like call through the retry seam risks a "
+                "live-money double order — submit MUST use the bare _call."
+            )
 
         @with_retry(
             max_attempts=3,
@@ -295,7 +338,7 @@ class AlpacaPaperBrokerAdapter(BrokerExecutionInterface):
     # ─── BrokerExecutionInterface ───────────────────────────────────────
 
     async def get_account(self) -> AccountInfo:
-        raw = await self._call_read(self._client.get_account)
+        raw = await self._call_read(self._client.get_account, op="get_account")
         return AccountInfo(
             account_id=str(raw.id),
             cash=Decimal(str(raw.cash)),
@@ -307,7 +350,7 @@ class AlpacaPaperBrokerAdapter(BrokerExecutionInterface):
         )
 
     async def get_positions(self) -> list[Position]:
-        raw_list = await self._call_read(self._client.get_all_positions)
+        raw_list = await self._call_read(self._client.get_all_positions, op="get_all_positions")
         return [
             Position(
                 symbol=str(p.symbol),
@@ -344,11 +387,11 @@ class AlpacaPaperBrokerAdapter(BrokerExecutionInterface):
         return placed
 
     async def cancel_order(self, order_id: str) -> None:
-        await self._call_read(self._client.cancel_order_by_id, order_id)
+        await self._call_read(self._client.cancel_order_by_id, order_id, op="cancel_order_by_id")
         logger.info("tpcore.alpaca.cancel_order", broker_order_id=order_id)
 
     async def get_order(self, order_id: str) -> Order:
-        raw = await self._call_read(self._client.get_order_by_id, order_id)
+        raw = await self._call_read(self._client.get_order_by_id, order_id, op="get_order_by_id")
         # We don't have the originating Order, so build a minimal one from
         # what the SDK returns and let the caller layer side/qty back on.
         skeleton = Order(
@@ -361,7 +404,7 @@ class AlpacaPaperBrokerAdapter(BrokerExecutionInterface):
         return self._merge_response(skeleton, raw)
 
     async def emergency_cancel_all(self) -> int:
-        raw = await self._call_read(self._client.cancel_orders)
+        raw = await self._call_read(self._client.cancel_orders, op="cancel_orders")
         cancelled = sum(1 for r in (raw or []) if getattr(r, "status", 0) == 200)
         logger.warning("tpcore.alpaca.emergency_cancel_all", cancelled=cancelled)
         return cancelled
@@ -377,7 +420,7 @@ class AlpacaPaperBrokerAdapter(BrokerExecutionInterface):
         from alpaca.trading.requests import GetOrdersRequest
 
         request = GetOrdersRequest(status=QueryOrderStatus.ALL, limit=limit, nested=False)
-        raw_list = await self._call_read(self._client.get_orders, filter=request)
+        raw_list = await self._call_read(self._client.get_orders, filter=request, op="get_orders")
         out: list[Order] = []
         for raw in raw_list or []:
             skeleton = Order(

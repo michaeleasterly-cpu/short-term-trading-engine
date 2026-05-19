@@ -620,3 +620,81 @@ async def test_subpenny_price_cannot_reach_broker() -> None:
     for px in (req.take_profit.limit_price, req.stop_loss.stop_price):
         # No more than 2 decimal places once back in Decimal space.
         assert Decimal(str(px)) == Decimal(str(px)).quantize(Decimal("0.01"))
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Structural guard on the _call_read seam (live-money double-order foot-gun).
+#
+# _call (submit path) is NEVER retried; _call_read (idempotent reads) is
+# wrapped in with_retry. The split was only naming/docstring-guarded — a
+# future dev routing a submit-like method through _call_read would silently
+# get live-money retry. The guard makes a mis-route fail LOUDLY at the call.
+# ────────────────────────────────────────────────────────────────────────────
+
+
+async def test_call_read_rejects_non_allowlisted_op() -> None:
+    """A mis-routed submit-like op passed to _call_read must RAISE, not
+    silently retry. Pre-guard this call would NOT raise (it would happily
+    wrap the func in with_retry) — proving the guard is what stops it."""
+    adapter = _make_adapter()
+    sentinel = MagicMock(return_value="should-never-run")
+
+    with pytest.raises(ValueError, match="not an allowlisted idempotent read"):
+        await adapter._call_read(sentinel, op="submit_order")
+
+    # The func must never have been invoked — the guard rejects BEFORE the
+    # retry-wrapped attempt runs.
+    sentinel.assert_not_called()
+
+
+async def test_call_read_accepts_every_allowlisted_op() -> None:
+    """Every op in the frozen allowlist must pass the guard (regression-safe:
+    the existing read call sites must still work through the guard)."""
+    from tpcore.alpaca.broker_adapter import _IDEMPOTENT_READ_OPS
+
+    adapter = _make_adapter()
+    for op in _IDEMPOTENT_READ_OPS:
+        result = await adapter._call_read(lambda: "ok", op=op)
+        assert result == "ok"
+
+
+def test_static_scan_every_call_read_caller_is_allowlisted() -> None:
+    """CI backstop: parse broker_adapter.py, find every ``self._call_read(``
+    call site, and assert each passes an ``op=`` tag drawn from the frozen
+    allowlist. Bites if someone adds a _call_read route without updating the
+    allowlist (the live-money double-order regression)."""
+    import ast
+    import inspect
+
+    from tpcore.alpaca import broker_adapter as mod
+    from tpcore.alpaca.broker_adapter import _IDEMPOTENT_READ_OPS
+
+    source = inspect.getsource(mod)
+    tree = ast.parse(source)
+
+    callers: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        fn = node.func
+        # Match ``self._call_read(...)`` / ``adapter._call_read(...)``.
+        if not (isinstance(fn, ast.Attribute) and fn.attr == "_call_read"):
+            continue
+        op_kw = next((kw for kw in node.keywords if kw.arg == "op"), None)
+        assert op_kw is not None, (
+            f"_call_read call at line {node.lineno} passes no op= tag — "
+            "every read caller MUST declare its idempotent-read op identity"
+        )
+        assert isinstance(op_kw.value, ast.Constant) and isinstance(op_kw.value.value, str), (
+            f"_call_read call at line {node.lineno} op= is not a string literal"
+        )
+        callers.append(op_kw.value.value)
+
+    # The method definition itself is not a call; we expect exactly the
+    # six production read call sites.
+    assert len(callers) >= 6, f"expected ≥6 _call_read callers, found {callers}"
+    for op in callers:
+        assert op in _IDEMPOTENT_READ_OPS, (
+            f"_call_read called with non-allowlisted op {op!r} — a new read "
+            f"route must be added to _IDEMPOTENT_READ_OPS (live-money guard)"
+        )
