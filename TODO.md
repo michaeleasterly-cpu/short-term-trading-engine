@@ -432,60 +432,92 @@ proven by the mandatory operator-run compensating control, NOT by CI.
   against pooled Supabase but should pass against a direct ephemeral Postgres
   (no pgbouncer) — verify when building. Cross-ref SP-A, #242.
 
-## Code-sweep findings — engine-lane-owned (CONSOLIDATED v2 2026-05-19)
+## ✅ Code-sweep findings — engine-lane-owned — ALL SHIPPED 2026-05-19 (CONSOLIDATED v2)
 
-Data-lane sweep handoff v2 (supersedes the prior 4-item). Engine lane owns
-these. Data lane tracks in project_code_sweep_findings_2026_05_19.md, fixes
-its own side (FIX-1 #94 merged, FIX-2 tpcore/db.py #95 merged, FIX-3..5 in
-progress), will not duplicate.
+Data-lane sweep handoff v2 (superseded the prior 4-item). Engine lane owned
+these. **All 5 findings SHIPPED to origin/main 2026-05-19** (operator
+decision: "findings only — stop after #3"; the Lab front-half epic remainder
+is paused — see the Lab-front-half epic block below). Data lane tracks/fixes
+its own side in project_code_sweep_findings_2026_05_19.md (will not
+duplicate). Closed record kept legible for cross-session history:
 
-- **#1 [HIGH] DSR null-variance estimator too lenient.** `[lane: engine]
-  [effort: M] [status: IN PROGRESS = SP-A2, task #147]`
-  tpcore/backtest/overfitting.py:108-119 _expected_max_sharpe_under_null uses
-  single-estimator variance sr_variance=1/(n_obs-1). Bailey & López de Prado,
-  The Deflated Sharpe Ratio (SSRN 2460551), requires V[SR̂ₙ] = variance of the
-  per-trial Sharpe estimates across the N searched trials (selection-bias
-  dispersion). Effect: large n_obs ⇒ E[max] understated ⇒ DSR too lenient ⇒ a
-  future tuned candidate could spuriously clear the live gate. NOT yet
-  exploited (all engines fail DSR). Pre-existing & orthogonal to SP-A.
-  Hardened spec on branch sp-a2-dsr-variance (fa43f8a + self-harden WIP
-  4b0ae86); expert-harden→plan→exec pending. Line 118 norm.ppf is correct.
-- **#2 [MED] Credibility rubric mislabels the gate threshold.** `[lane: engine]
-  [effort: S] [status: backlog]` tpcore/backtest/credibility.py:81 flag
-  dsr_above_0_90 / "Deflated Sharpe Ratio > 0.90" but real threshold is
-  DSR_PASS_THRESHOLD=0.95 (overfitting.py:56). Math fine; the persisted
-  auditable rubric row shows the wrong threshold. Fix: rename to
-  dsr_above_pass_threshold / "≥ 0.95", key description off the constant.
-- **#3 [MED] Inverse-vol allocator volatility estimator.** `[lane: engine]
-  [effort: S] [status: backlog]` tpcore/allocator/service.py:127-130
-  realized_vol uses statistics.pstdev (population ÷N) over raw per-session
-  P&L. Standard inverse-vol uses sample stdev (ddof=1) on returns; codebase
-  internally inconsistent (overfitting.py _per_trade_sharpe uses ddof=1). Fix:
-  statistics.stdev (ddof=1); confirm daily_pnls are normalized returns not
-  absolute P&L before inverse-weighting. MIN_AARS_FOR_VOL bootstrap only
-  partly mitigates small-N bias.
-- **#4 [HIGH] Blocking sync Anthropic client in async engine-triage daemon —
-  CROSS-LANE #244.** `[lane: engine, coordinate-with:data] [effort: S]
-  [status: backlog, GATED on cross-lane alignment]`
-  ops/engine_llm_triage.py:391 (_call_api/_default_client): synchronous
-  Anthropic() awaited inside the llm_triage_service loop, starving the
-  crash-isolated co-tasks. Fix: anthropic.AsyncAnthropic + await
-  client.messages.create(...), OR await asyncio.to_thread(...). Data lane
-  fixing the twin ops/llm_data_triage.py (FIX-3). ALIGN on
-  AsyncAnthropic-vs-to_thread before either lands (#244 symmetry). My rec:
-  AsyncAnthropic (async-native, cleaner) — relay to data lane.
-- **#5 [HIGH] asyncpg pooler-safety missing in 3 direct create_pool sites.**
-  `[lane: engine] [effort: S] [status: DONE — this PR]`
-  ops/engine_sdlc/planner.py:545, ops/lab/run.py:565 & :811. Supabase
-  txn-pooler fails auto-prepared statements. Resolution: planner._emit_audit
-  (read_only=False) + lab.run._load_universe_by_tier (read_only=True) routed
-  through tpcore.db.build_asyncpg_pool (canonical, post-FIX-2 #95); the
-  legacy credibility-write at :811 MUST stay a raw asyncpg.create_pool to
-  preserve the SP-A H-S3-8 byte-identical-legacy isolation invariant
-  (test_lab_credibility_pool_threaded.py) — so the pooler-safety kwargs
-  (statement_cache_size=0 + server_settings jit:off) are mirrored inline
-  there + a "keep in sync with tpcore.db.build_asyncpg_pool" comment (the
-  handoff's prescribed not-feasible-to-route fallback).
+- ✅ **SHIPPED PR #104 (096ff68) — #1 [HIGH] DSR null-variance estimator too
+  lenient (= SP-A2, task #147).** tpcore/backtest/overfitting.py
+  _expected_max_sharpe_under_null used single-estimator variance
+  sr_variance=1/(n_obs-1); corrected to the Bailey & López de Prado (SSRN
+  2460551) selection-bias dispersion V[SR̂ₙ] across the N searched trials —
+  the live DSR gate genuinely tightens (was too lenient, not yet exploited:
+  all engines fail DSR). Pre-existing & orthogonal to SP-A. Spec
+  `docs/superpowers/specs/2026-05-19-dsr-null-variance-fix.md`, plan
+  `docs/superpowers/plans/2026-05-19-dsr-null-variance-fix.md`.
+- ✅ **SHIPPED PR #106 (bdd8736) — #2 [MED] Credibility rubric mislabelled
+  the gate threshold (+ latent VALUE bug).** tpcore/backtest/credibility.py
+  flag/description said "> 0.90" but the real gate is DSR_PASS_THRESHOLD=0.95;
+  renamed to key off the constant. **Worse than first stated:** the sweep
+  also surfaced a latent VALUE bug in statistical_validation.py (hardcoded
+  0.90 → DSR_PASS_THRESHOLD) — not just a label, an actual wrong threshold
+  fixed in the same PR.
+- ✅ **SHIPPED PR #107 (edadf12) — #3 [MED] Inverse-vol allocator volatility
+  estimator.** tpcore/allocator/service.py realized_vol used
+  statistics.pstdev (population ÷N); **two coupled defects fixed:** (a)
+  pstdev → statistics.stdev sample (ddof=1), consistent with
+  overfitting.py _per_trade_sharpe; (b) the estimator ran over raw
+  absolute per-session P&L — normalized to returns before inverse-weighting
+  (the worse-than-stated half: the input, not just ddof, was wrong).
+- ✅ **SHIPPED PR #105 (680cb44) — #4 [HIGH] Blocking sync Anthropic client
+  in async engine-triage daemon (CROSS-LANE #244).**
+  ops/engine_llm_triage.py synchronous Anthropic() awaited inside the
+  llm_triage_service loop → migrated to anthropic.AsyncAnthropic + await
+  client.messages.create(...). Engine twin / symmetric mirror of the
+  data-lane fix #97 (twin ops/llm_data_triage.py); AsyncAnthropic chosen
+  (async-native) per the #244 cross-lane alignment.
+- ✅ **SHIPPED PR #96 (40bd8a5) — #5 [HIGH] asyncpg pooler-safety missing in
+  3 direct create_pool sites.** ops/engine_sdlc/planner.py + ops/lab/run.py
+  (×2). planner._emit_audit + lab.run._load_universe_by_tier routed through
+  the canonical tpcore.db.build_asyncpg_pool (post data-lane FIX-2 #95); the
+  legacy credibility-write site kept a raw asyncpg.create_pool to preserve
+  the SP-A H-S3-8 byte-identical-legacy isolation invariant
+  (test_lab_credibility_pool_threaded.py) with the pooler-safety kwargs
+  (statement_cache_size=0 + server_settings jit:off) mirrored inline + a
+  "keep in sync with tpcore.db.build_asyncpg_pool" comment.
+
+## Lab front-half epic — PAUSED at a clean milestone (2026-05-19)
+
+Operator-approved epic (memory `project_lab_front_half_epic.md` is the
+**authoritative full state** — cross-ref it before resuming). The Lab is
+half-built (back-half correct); the front-half builds the anti-overfit
+safety floor + roster-driven plug-and-play targeting + readiness checklist
++ pluggable scoring; absorbs Sentinel/Catalyst; prerequisite for #242 (now
+engine-lane). `[lane: engine-owned] [needs operator decision: YES — explicit
+go to resume]`
+
+**Safety floor SHIPPED (the only part operator authorised this session):**
+- ✅ **SP-A — cross-candidate n_trials ledger — SHIPPED PR #93 (96e6ce6).**
+  The anti-overfit-laundering safety floor: every Lab candidate honestly
+  counted against a persistent cumulative n_trials so a tuned spec can't be
+  laundered past the DSR gate by splitting trials across runs.
+- ✅ **SP-A2 — DSR null-variance estimator correction — SHIPPED PR #104
+  (096ff68)** (= code-sweep Finding #1, task #147; see the shipped
+  code-sweep block above). With SP-A, this completes the safety floor: the
+  gate now counts trials honestly AND deflates correctly.
+
+**EPIC PAUSED — operator decision 2026-05-19: "findings only — stop after
+#3".** SP-B..SP-G are **DEFERRED to an explicit future go — do NOT
+auto-start SP-B.** This is a clean milestone: the safety floor (SP-A +
+SP-A2) is the only piece that needed to land before pausing; nothing is
+half-built.
+
+**RESUME POINT (when the operator gives the explicit go):**
+- **SP-B = roster-driven plug-and-play Lab targeting.** Replace the
+  hardcoded 3-tuple in `ops/lab/run.py` (`_runner_for` / `PARAM_RANGES`)
+  and the `ops.lab` CLI `--target-engine` choices — drive all of it from
+  `tpcore.engine_profile` (the roster SoT) so a new/retuned engine is
+  Lab-targetable without editing the Lab. This is the first step on
+  resume.
+- Then SP-C — Lab Candidate Readiness checklist (seeded by the Vector
+  pilot spec, commit `0a94414` on branch `lab-candidates-rollthrough`) →
+  SP-D → SP-E → SP-F → SP-G (= #242, research-LLM edge-discovery,
+  engine-lane-owned per `project_research_llm_edge_discovery.md`).
 
 ## Deep-research spike adjudication — Lab-candidate backlog (2026-05-19)
 
@@ -695,6 +727,17 @@ carries a `[defect_ref: X]` tag and MUST have a matching open
 `REVIEW_DEFECT_LOGGED` (CI forcing-test — a review defect cannot live
 only in TODO.md and be forgotten). `[lane: ops] [gate: none] [needs
 operator decision: no] [effort: done]`
+
+- **OPEN — `test_lab_ntrials_ledger.py` collection-time `del sys.modules`
+  eviction defect.** `[lane: engine] [defect_ref: #148] [gate: none]
+  [needs operator decision: no] [effort: S]` Pre-existing engine-lane
+  defect (NOT a code-sweep finding — its own tracked task #148, surfaced
+  alongside the SP-A n_trials ledger work): `tpcore/tests/
+  test_lab_ntrials_ledger.py` does a collection-time `del sys.modules[...]`
+  that evicts a shared module — **subset-collection-order-only**; the full
+  single-process suite is GREEN (no production / CI-gate impact).
+  Canonical fix = scope the eviction per-test (not at collection time).
+  Do **NOT** fix opportunistically — it is its own task.
 
 ## Discovered follow-ups — RiskGovernor work + architecture review (2026-05-17)
 
