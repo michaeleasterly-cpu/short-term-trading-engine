@@ -39,6 +39,37 @@ def test_retired_and_allocator_excluded():
     assert "allocator" not in targetable   # reuse _ALLOCATOR_ENGINE filter
 
 
+def test_lab_state_inclusion_is_real_not_vestigial(monkeypatch):
+    """Positively pin that LifecycleState.LAB is genuinely IN _LAB_TARGETABLE.
+
+    Today the only LAB profile is the ``lab`` sentinel, excluded BY NAME —
+    so every other test nets to *exclusion* and a silent narrowing of
+    _LAB_TARGETABLE to _DISPATCHABLE (dropping LifecycleState.LAB) would
+    leave the whole suite green. This test injects a synthetic LAB engine
+    with a name ≠ "lab" (so no name-clause excludes it) and asserts it IS
+    targetable — it FAILS iff _LAB_TARGETABLE no longer contains LAB.
+
+    monkeypatch.setitem auto-restores the module-global _PROFILE dict
+    after the test (no permanent mutation of the real roster)."""
+    from tpcore.engine_profile import (
+        _PROFILE,
+        Cadence,
+        EngineProfile,
+        LifecycleState,
+        lab_targetable_engines,
+    )
+
+    synthetic = EngineProfile(
+        engine="labcandidate",
+        cadence=Cadence.DAILY,
+        dispatch_order=51,  # unique among non-RETIRED (lab sentinel=50)
+        lifecycle_state=LifecycleState.LAB,
+    )
+    monkeypatch.setitem(_PROFILE, "labcandidate", synthetic)
+
+    assert "labcandidate" in lab_targetable_engines()
+
+
 def test_accessor_equals_recomputed_predicate_over_profile():
     """The accessor IS the predicate over _PROFILE — not a hand-list."""
     from tpcore.engine_profile import (

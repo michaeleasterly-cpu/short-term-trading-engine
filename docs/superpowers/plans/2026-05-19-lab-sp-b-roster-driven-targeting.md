@@ -370,6 +370,20 @@ def test_retired_and_allocator_excluded():
     assert "allocator" not in targetable   # reuse _ALLOCATOR_ENGINE filter
 
 
+def test_lab_state_inclusion_is_real_not_vestigial(monkeypatch):
+    """Positively pin LifecycleState.LAB ∈ _LAB_TARGETABLE via a synthetic
+    LAB engine named ≠ "lab" (monkeypatch.setitem auto-restores _PROFILE)."""
+    from tpcore.engine_profile import (
+        _PROFILE, Cadence, EngineProfile, LifecycleState,
+        lab_targetable_engines,
+    )
+    synthetic = EngineProfile(engine="labcandidate", cadence=Cadence.DAILY,
+                              dispatch_order=51,
+                              lifecycle_state=LifecycleState.LAB)
+    monkeypatch.setitem(_PROFILE, "labcandidate", synthetic)
+    assert "labcandidate" in lab_targetable_engines()
+
+
 def test_accessor_equals_recomputed_predicate_over_profile():
     """The accessor IS the predicate over _PROFILE — not a hand-list."""
     from tpcore.engine_profile import (
@@ -386,6 +400,8 @@ def test_accessor_equals_recomputed_predicate_over_profile():
     }
     assert set(lab_targetable_engines()) == expected
 ```
+
+> Plan correction (applied during SP-B T2 code-quality review hardening): added `test_lab_state_inclusion_is_real_not_vestigial` — code-quality review item #2. Today the only LAB profile is the `lab` sentinel (excluded by name), so every other test nets to *exclusion*: a silent narrowing of `_LAB_TARGETABLE` to `_DISPATCHABLE` (dropping `LifecycleState.LAB`) would leave the whole suite green. The new test injects a synthetic non-`"lab"` LAB profile via `monkeypatch.setitem(_PROFILE, …)` (auto-restored; matches the existing direct-`_PROFILE`-import pattern in this file — no SLF001) and asserts it IS targetable; verified non-tautological (fails under the scratch `_LAB_TARGETABLE = _DISPATCHABLE` collapse while the other 5 stay green). Step 4's "PASS (5 tests)" is now 6. Code-quality item #1 (promote the bare `"canary"` literal to a named `_CANARY_*` constant) was reviewed and DEFERRED: the literal is also bare in `order_ids.py`/`capital_gate.py` with no shared constant, so a proper consolidation is a cross-file concern of its own out of T2 scope; the inline `# spec §4b, N=1` comment already makes intent legible and the design deliberately rejected a `_PROFILE` bool field.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -437,7 +453,7 @@ def lab_targetable_engines() -> tuple[str, ...]:
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `python -m pytest tpcore/tests/test_lab_targetable_accessor.py -p no:xdist -q`
-Expected: PASS (5 tests).
+Expected: PASS (6 tests — see the T2 code-quality-review Plan correction below).
 
 - [ ] **Step 5: Verify the existing lifecycle clockwork is still green (no regression to roster_for_dispatch/archived_engines)**
 
