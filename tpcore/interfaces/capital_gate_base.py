@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import os
 from abc import abstractmethod
+from collections.abc import Callable
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
@@ -51,6 +52,49 @@ if TYPE_CHECKING:  # pragma: no cover
     import asyncpg
 
 logger = structlog.get_logger(__name__)
+
+
+async def assert_can_graduate(
+    *,
+    stats: object,
+    pool: asyncpg.Pool,
+    engine_name: str,
+    is_graduated: Callable[[object], bool],
+) -> bool:
+    """Combined paper→live gate: per-engine stats thresholds AND a fresh
+    Data Validation Suite pass AND a credibility-rubric score ≥ 60.
+
+    The single shared implementation of the ``assert_can_graduate`` shape
+    that was byte-triplicated across the per-trade base
+    (reversion/vector inherit it) and the batch ``momentum`` plug
+    (spec §2 row 4: "Identical shape; only engine-name string + message
+    differ; ``is_graduated`` stays per-engine"). Momentum reuses this
+    free function WITHOUT inheriting the per-trade ``check_trade`` (it is
+    a batch engine — spec §7 D2).
+
+    Returns ``False`` (without raising) if the per-engine stats
+    thresholds aren't met (the normal pre-grad case). Otherwise requires
+    a fresh successful validation run *and* a credibility rubric score;
+    raises ``ValidationStaleError`` / ``ValidationFailedError`` if the
+    data gate isn't satisfied, and ``CredibilityScoreInsufficientError``
+    if the latest backtest credibility row is below threshold or absent.
+    """
+    if not is_graduated(stats):
+        return False
+    await assert_passed_for_engine(
+        pool,
+        engine_name,
+        require_all_green=os.getenv(
+            "CAPITAL_GATE_REQUIRE_ALL_GREEN", ""
+        ).strip().lower()
+        in ("1", "true", "yes", "on"),
+    )
+    if not await graduation_ready(pool, engine_name=engine_name):
+        raise CredibilityScoreInsufficientError(
+            f"{engine_name.capitalize()} backtest credibility score < 60 "
+            "(or no rubric run on record)"
+        )
+    return True
 
 
 class PerTradeCapitalGateBase(BaseEnginePlug):
@@ -155,23 +199,12 @@ class PerTradeCapitalGateBase(BaseEnginePlug):
         ``CredibilityScoreInsufficientError`` if the latest backtest
         credibility row is below threshold or absent.
         """
-        if not cls.is_graduated(stats):
-            return False
-        engine = cls.engine_name
-        await assert_passed_for_engine(
-            pool,
-            engine,
-            require_all_green=os.getenv(
-                "CAPITAL_GATE_REQUIRE_ALL_GREEN", ""
-            ).strip().lower()
-            in ("1", "true", "yes", "on"),
+        return await assert_can_graduate(
+            stats=stats,
+            pool=pool,
+            engine_name=cls.engine_name,
+            is_graduated=cls.is_graduated,
         )
-        if not await graduation_ready(pool, engine_name=engine):
-            raise CredibilityScoreInsufficientError(
-                f"{engine.capitalize()} backtest credibility score < 60 "
-                "(or no rubric run on record)"
-            )
-        return True
 
 
-__all__ = ["PerTradeCapitalGateBase"]
+__all__ = ["PerTradeCapitalGateBase", "assert_can_graduate"]

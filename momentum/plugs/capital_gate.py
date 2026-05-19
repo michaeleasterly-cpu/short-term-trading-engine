@@ -20,7 +20,6 @@ Graduation (paper → live) requires three things:
 """
 from __future__ import annotations
 
-import os
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
@@ -32,12 +31,8 @@ from momentum.models import (
     GRAD_MIN_REBALANCES,
     GRAD_MIN_SHARPE,
 )
-from tpcore.backtest.credibility import (
-    CredibilityScoreInsufficientError,
-    graduation_ready,
-)
+from tpcore.interfaces.capital_gate_base import assert_can_graduate
 from tpcore.interfaces.engine_plug import BaseEnginePlug
-from tpcore.quality.validation.capital_gate import assert_passed_for_engine
 
 # Drawdown circuit breaker — pause new rebalances when portfolio is more
 # than this much below its rolling-window peak. Lookback window is the
@@ -140,17 +135,24 @@ class MomentumCapitalGate(BaseEnginePlug):
     async def assert_can_graduate(
         stats: MomentumGraduationStats, pool: asyncpg.Pool,
     ) -> bool:
-        """Combined gate: stats AND Data Validation Suite AND credibility ≥ 60."""
-        if not MomentumCapitalGate.is_graduated(stats):
-            return False
-        await assert_passed_for_engine(
-            pool, "momentum",
-            require_all_green=os.getenv(
-                "CAPITAL_GATE_REQUIRE_ALL_GREEN", "").strip().lower()
-            in ("1", "true", "yes", "on"),
+        """Combined gate: stats AND Data Validation Suite AND credibility ≥ 60.
+
+        Lean P5.5c: delegates to the shared
+        :func:`tpcore.interfaces.capital_gate_base.assert_can_graduate`
+        free function (spec §2 row 4 — identical shape, only the
+        engine-name string differed). Momentum reuses the shared
+        ``assert_can_graduate`` shape WITHOUT inheriting
+        :class:`PerTradeCapitalGateBase` (it is a batch engine; inheriting
+        per-trade ``check_trade`` would be a correctness bug — spec §7 D2).
+        The ``CredibilityScoreInsufficientError`` message is the canonical
+        ``{engine.capitalize()} ... rubric run on record`` form; momentum's
+        pre-consolidation ``rubric row on record`` outlier wording was
+        normalized to the canonical ``run`` here (deliberate, reviewed
+        dedup — exception type is unchanged).
+        """
+        return await assert_can_graduate(
+            stats=stats,
+            pool=pool,
+            engine_name=MomentumCapitalGate.engine_name,
+            is_graduated=MomentumCapitalGate.is_graduated,
         )
-        if not await graduation_ready(pool, engine_name="momentum"):
-            raise CredibilityScoreInsufficientError(
-                "Momentum backtest credibility score < 60 (or no rubric row on record)"
-            )
-        return True
