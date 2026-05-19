@@ -114,7 +114,7 @@ Operator says **"clean up your memories"** / **"cleanup your memories"**
 - **No memory restates `CLAUDE.md` / repo code / docs** without adding
   non-obvious operator context (the **step 3a** repo-shadow deletion
   criterion).
-- **`MEMORY.md` line count matches the surviving memory file count**
+- **MEMORY.md line count matches the surviving memory file count**
   (mechanical invariant: `wc -l MEMORY.md` == `ls memory/*.md | wc -l`
   minus 1 for `MEMORY.md` itself).
 
