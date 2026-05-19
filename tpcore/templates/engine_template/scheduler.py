@@ -2,7 +2,7 @@
 
 Composes the 5 plugs + order_manager and exposes ``run_once`` so the
 :mod:`ops.engine_service` daemon can invoke the engine on the
-``DAILY_SCAN_COMPLETE`` trigger.
+``DATA_OPERATIONS_COMPLETE`` trigger.
 
 For per-trade engines (sigma/reversion/vector), ``run_once`` typically:
 

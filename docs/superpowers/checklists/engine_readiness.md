@@ -73,7 +73,7 @@ Template: copy `tpcore/templates/engine_template/` as the starting point — it 
 ## 7. Scheduler + daemon integration
 
 - [ ] `<engine_name>/scheduler.py` exposes a `run_once` (or analogous) async entry point. *(ECR-enforced: <engine>.scheduler importable)*
-- [ ] Engine is dispatched by `ops/engine_service.py` on the `DAILY_SCAN_COMPLETE` trigger. **Not** called from `scripts/run_data_operations.sh` — data ops and engine execution are decoupled.
+- [ ] Engine is dispatched by `ops/engine_service.py` on the `DATA_OPERATIONS_COMPLETE` trigger. **Not** called from `scripts/run_data_operations.sh` — data ops and engine execution are decoupled.
 - [ ] Idempotent: re-running `run_once` within the same session doesn't duplicate orders (relies on `(engine, trade_id, order_type)` unique constraint on `platform.open_orders`).
 - [ ] Engine appears in the per-engine scheduler-dry-run loop in `scripts/run_smoke_test.sh` (step 3). One-line `for engine in ... <engine_name>; do` addition — operator must not need to remember a separate smoke command.
 
