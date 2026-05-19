@@ -125,9 +125,15 @@ class _Msg:
         self.model = "claude-sonnet-4-6"
 
 
+# Mocks mirror the REAL anthropic.AsyncAnthropic surface: ``messages``
+# is an object whose ``create`` is an ``async def`` coroutine fn
+# (verified against the official anthropic-sdk-python docs — the agent
+# ``await``s it inside the daemon event loop). A *sync* ``create`` mock
+# would let a sync-client regression pass silently, so every mock here
+# is async by construction.
 class _Messages:
     def __init__(self, rec): self._rec = rec
-    def create(self, **kw):
+    async def create(self, **kw):
         self._rec.append(kw)
         return _Msg(json.dumps({
             "proposed_disposition": "converted", "confidence": "med",
@@ -204,7 +210,7 @@ async def test_api_error_is_crash_isolated(monkeypatch) -> None:
         @property
         def messages(self):
             class M:
-                def create(self, **kw): raise RuntimeError("api down")
+                async def create(self, **kw): raise RuntimeError("api down")
             return M()
 
     pool = _Pool(open_rows=[_row("h1")])
@@ -233,7 +239,7 @@ async def test_auth_error_is_safe_like_no_key(monkeypatch) -> None:
     call_count = 0
 
     class _AuthMessages:
-        def create(self, **kw):
+        async def create(self, **kw):
             nonlocal call_count
             call_count += 1
             raise _Auth()
@@ -257,12 +263,59 @@ async def test_auth_error_is_safe_like_no_key(monkeypatch) -> None:
     assert out.proposed == []
 
 
+async def test_with_retry_wraps_async_client_and_retries(monkeypatch) -> None:
+    """tpcore.outage.with_retry must still retry correctly around the
+    AWAITED async client: a transient retryable APIError on the first
+    awaited ``messages.create`` is retried and the second call succeeds
+    → exactly one proposal, no error. Bite: a retry layer that no longer
+    awaits the async call (or stops retrying) fails this.
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    import anthropic
+
+    class _Transient(anthropic.APIError):
+        def __init__(self) -> None:
+            self.request = None
+            self.body = None
+            self.message = "transient"
+
+    valid = json.dumps({
+        "proposed_disposition": "converted", "confidence": "high",
+        "rationale": "ok", "could_not_determine": "n"})
+    calls = {"n": 0}
+
+    class _FlakyMessages:
+        async def create(self, **kw):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise _Transient()
+            return _Msg(valid)
+
+    class _FlakyClient:
+        def __init__(self): self.messages = _FlakyMessages()
+
+    # Collapse backoff so the test is fast (with_retry awaits asyncio.sleep).
+    import asyncio as _aio
+    real_sleep = _aio.sleep
+
+    async def _no_sleep(_s):
+        await real_sleep(0)
+
+    monkeypatch.setattr(_aio, "sleep", _no_sleep)
+
+    pool = _Pool(open_rows=[_row("h1")])
+    out = await lt.run_triage(pool, client_factory=lambda: _FlakyClient())
+    assert calls["n"] == 2, f"expected 1 retry (2 calls), got {calls['n']}"
+    assert out.error is None
+    assert out.proposed == ["h1"]
+
+
 class _MultiMessages:
     """Returns responses from a list, one per call."""
     def __init__(self, responses):
         self._responses = list(responses)
         self._idx = 0
-    def create(self, **kw):
+    async def create(self, **kw):
         r = self._responses[self._idx]
         self._idx += 1
         return r
@@ -323,6 +376,86 @@ async def test_non_dict_json_skips_escalation_not_batch(monkeypatch) -> None:
     assert out.proposed == ["ref-good"]
 
 
+class _AclMessages:
+    """Async create that records calls; behaviour parameterised."""
+    def __init__(self, mode: str):
+        self._mode = mode
+        self.calls = 0
+
+    async def create(self, **kw):
+        self.calls += 1
+        if self._mode == "boom":
+            raise RuntimeError("non-auth api error")
+        if self._mode == "auth":
+            import anthropic
+
+            class _Auth(anthropic.AuthenticationError):
+                def __init__(self) -> None:
+                    pass
+
+            raise _Auth()
+        return _Msg(json.dumps({
+            "proposed_disposition": "converted", "confidence": "med",
+            "rationale": "r", "could_not_determine": "n"}))
+
+
+class _AclClient:
+    """Fake async client whose ``aclose`` is an AsyncMock — asserts
+    run_triage releases the client (httpx pool) on EVERY exit path."""
+    def __init__(self, mode: str = "ok"):
+        self.messages = _AclMessages(mode)
+        from unittest.mock import AsyncMock
+        self.aclose = AsyncMock()
+
+
+class _NoAcloseClient:
+    """Fake async client WITHOUT ``aclose`` — the defensive getattr in
+    the finally must not raise on a fake/SDK lacking the method."""
+    def __init__(self):
+        self.messages = _AclMessages("ok")
+
+
+async def test_client_closed_on_normal_path(monkeypatch) -> None:
+    """Bite: pre-fix run_triage never closes the client → AsyncMock
+    not awaited → assert_awaited_once() fails (red)."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    client = _AclClient("ok")
+    pool = _Pool(open_rows=[_row("h1")])
+    out = await lt.run_triage(pool, client_factory=lambda: client)
+    assert out.proposed == ["h1"]
+    client.aclose.assert_awaited_once()
+
+
+async def test_client_closed_on_auth_skip_early_return(monkeypatch) -> None:
+    """The _AuthSkip early `return out` path must still close the client."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "invalid")
+    client = _AclClient("auth")
+    pool = _Pool(open_rows=[_row("h1")])
+    out = await lt.run_triage(pool, client_factory=lambda: client)
+    assert out.skipped_no_key is True and out.proposed == []
+    client.aclose.assert_awaited_once()
+
+
+async def test_client_closed_when_call_raises_to_outer_except(monkeypatch) -> None:
+    """The non-auth raise → outer except → out.error path must close it."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    client = _AclClient("boom")
+    pool = _Pool(open_rows=[_row("h1")])
+    out = await lt.run_triage(pool, client_factory=lambda: client)
+    assert out.error is not None and out.proposed == []
+    client.aclose.assert_awaited_once()
+
+
+async def test_client_without_aclose_does_not_raise(monkeypatch) -> None:
+    """Defensive: a fake/SDK lacking ``aclose`` must not break the
+    finally (getattr-guarded close)."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    pool = _Pool(open_rows=[_row("h1")])
+    out = await lt.run_triage(
+        pool, client_factory=lambda: _NoAcloseClient())
+    assert out.error is None and out.proposed == ["h1"]
+
+
 def _imported_modules(path: str) -> set[str]:
     import ast
     src = pathlib.Path(path).read_text()
@@ -361,6 +494,46 @@ async def test_import_isolation_daemon_no_actor_paths() -> None:
     bad = [m for m in imported for f in _FORBIDDEN_ACTOR_PATHS
            if m == f or m.startswith(f + ".")]
     assert bad == [], f"daemon imports fenced actor path(s): {bad}"
+
+
+def test_default_client_is_async_anthropic() -> None:
+    """The data-lane triage agent runs inside the long-lived
+    ``ops/llm_triage_service.py`` async daemon event loop. A *sync*
+    ``anthropic.Anthropic`` whose ``messages.create`` is ``await``ed
+    blocks the whole event loop for the full LLM round-trip (seconds),
+    starving the crash-isolated co-tasks + the poll loop. The default
+    client MUST be the official async client so the round-trip yields.
+    Bite: revert ``_default_client`` to ``Anthropic()`` → this fails.
+    """
+    import anthropic
+
+    client = lt._default_client()
+    assert isinstance(client, anthropic.AsyncAnthropic), (
+        f"_default_client must return AsyncAnthropic (non-blocking in "
+        f"the daemon event loop), got {type(client).__name__}"
+    )
+
+
+async def test_awaits_async_client_create_and_emits(monkeypatch) -> None:
+    """End-to-end with the async-create client (``_Client.messages.create``
+    is an ``async def`` — the real AsyncAnthropic shape): the agent must
+    ``await`` ``messages.create`` — a coroutine — and still produce the
+    proposal incl. the ``usage`` token counts off the awaited Message. If
+    the agent ever stops awaiting (sync-client regression), this breaks.
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    rec: list = []
+    pool = _Pool(open_rows=[_row("h1")])
+    out = await lt.run_triage(pool, client_factory=lambda: _Client(rec))
+    assert len(rec) == 1
+    kw = rec[0]
+    assert kw["model"] == "claude-sonnet-4-6"
+    assert "tools" not in kw
+    ev = [json.loads(a[5]) for a in pool.conn.emitted]
+    prop = next(e for e in ev)
+    assert prop["ref"] == "h1" and prop["proposed_disposition"] == "converted"
+    assert prop["usage"] == {"in": 11, "out": 22}
+    assert out.proposed == ["h1"]
 
 
 def test_leak_guard_fails_loud_when_git_absent(monkeypatch) -> None:  # noqa: ANN001

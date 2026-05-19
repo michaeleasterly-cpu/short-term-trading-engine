@@ -47,7 +47,9 @@ class _Msg:
 
 
 class _Messages:
-    def create(self, **kw):
+    # async — mirrors the real anthropic.AsyncAnthropic.messages.create
+    # coroutine fn the agent now awaits inside the daemon event loop.
+    async def create(self, **kw):
         return _Msg(json.dumps({
             "proposed_disposition": "converted", "confidence": "high",
             "rationale": "r", "could_not_determine": "n"}))
