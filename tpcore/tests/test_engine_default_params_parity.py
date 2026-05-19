@@ -34,5 +34,9 @@ def test_sentinel_canary_have_no_accessor():
 
 def test_dispatcher_rejects_unknown_engine():
     from ops.engine_sdlc.default_params import default_params
-    with pytest.raises(ValueError, match="unknown engine: nope"):
+    # SP-B: the message moved from the old "unknown engine: nope" hand-
+    # ladder text to the clear roster-aware resolver message; the
+    # exception TYPE (ValueError) is unchanged — a deliberate, beneficial
+    # delta (spec §4.11, §8-B6).
+    with pytest.raises(ValueError, match="not Lab-targetable"):
         default_params("nope")

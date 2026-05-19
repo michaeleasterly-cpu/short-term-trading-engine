@@ -141,6 +141,16 @@ ignore = ["E501"]
 # scoped per-file ignore is the correct form (mirrors the frozen-oracle
 # precedent above) — never an inline `# noqa: SLF001`.
 "tpcore/tests/test_stale_order_cancel.py" = ["SLF"]
+# SP-B T4 dispatch-seam characterization test: pinning that the lazy
+# PARAM_RANGES + `_lab_target_for` resolver + the `_runner_for`/
+# `_context_loader_for`/`_context_runner_for` thin views preserve the
+# spec §6/§8 private seam names REQUIRES naming those `ops.lab.run`-
+# private symbols (that IS the test's purpose — the oracle's by-name
+# monkeypatch binds them). Engine-lane-module-private (NOT tpcore-
+# private) access in a char-test; the scoped per-file ignore is the
+# correct form (mirrors the two frozen/char-oracle precedents above) —
+# never an inline `# noqa: SLF001` (CLAUDE.md / STYLE_GUIDE).
+"tpcore/tests/test_lab_dispatch_indirection.py" = ["SLF"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

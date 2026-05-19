@@ -764,6 +764,8 @@ def test_param_ranges_membership_iteration_len_and_set():
         assert set(run.PARAM_RANGES[e]) == set(_T0_PARAM_RANGES_KEYSETS[e])
 ```
 
+> Plan correction (applied during SP-B T4 exec): `tpcore/tests/test_lab_dispatch_indirection.py` necessarily names the `ops.lab.run`-private seam symbols `_runner_for`/`_context_loader_for`/`_context_runner_for`/`_lab_target_for` (that IS the test's spec §6/§8 purpose — pinning the private seam the oracle's by-name monkeypatch binds), which reds the globally-selected ruff `SLF001` (`SLF` is in `[tool.ruff.lint] select`; `**/tests/**` ignores only `E741,E702`). CLAUDE.md / STYLE_GUIDE forbids an inline `# noqa: SLF001`; the repo-canonical form for an engine-module-private (NOT tpcore-private) char/parity test is a scoped `[tool.ruff.lint.per-file-ignores]` entry — exactly the precedent `scripts/tests/test_search_parameters_characterization.py` and `tpcore/tests/test_stale_order_cancel.py` already use. The as-written plan omitted this required pyproject entry; the shipped change adds `"tpcore/tests/test_lab_dispatch_indirection.py" = ["SLF"]` alongside the two existing precedents (and `pyproject.toml` is included in the Step-13 commit). No test code changed — the plan's Step-1/Step-3 test bodies shipped verbatim.
+
 - [ ] **Step 2: Run the char pins against the UN-refactored tree to confirm they hold**
 
 Run: `python -m pytest tpcore/tests/test_lab_dispatch_indirection.py -p no:xdist -q`

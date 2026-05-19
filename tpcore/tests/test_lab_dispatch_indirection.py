@@ -1,0 +1,162 @@
+"""SP-B — _lab_target_for resolver + lazy PARAM_RANGES Mapping + the
+BINDING ValueError→KeyError re-raise contract (spec §2.4, the §8
+highest residual risk) + the default_params shim + no-import-cycle.
+
+Char-before-refactor: the *_for callables return the engine's
+run_for_search/load_*/run_* symbols for the declared three and raise for
+an unknown engine; PARAM_RANGES supports in/get/iteration-order/len/set.
+These pins hold pre- AND post-refactor (the refactor is provably
+behaviour-preserving on the declared three).
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT))
+# Evict a non-package ``ops`` (scripts/ops.py) so ``import ops.lab.run``
+# resolves the real ops/ package (the ops-shadow single-process rule).
+for _m in [m for m in list(sys.modules) if m == "ops" or m.startswith("ops.")]:
+    if not hasattr(sys.modules[_m], "__path__"):
+        del sys.modules[_m]
+
+pytestmark = pytest.mark.xdist_group("ops_shadow")
+
+# T0 byte-parity baseline: PARAM_RANGES keysets captured on the un-refactored
+# tree (Task 0). Inlined deliberately — a 3-key snapshot of a fully-known
+# constant needs no file artifact (YAGNI), and a runtime fixture must never
+# live under the docs/ plans tree (#252 docs-to-reality).
+_T0_PARAM_RANGES_KEYSETS: dict[str, list[str]] = {
+    "reversion": ["max_hold_days", "stop_pct", "volume_climax_multiplier", "z_threshold"],
+    "vector": ["catalyst_window_days", "de_ceiling", "pb_ceiling", "stop_pct", "swing_score_threshold"],
+    "momentum": ["hold_days", "lookback_days", "skip_days", "top_decile_pct"],
+}
+
+
+# ── CHARACTERIZATION pins (true pre- AND post-refactor) ──────────────────
+
+def test_seam_funcs_return_declared_engine_symbols():
+    import importlib
+
+    import ops.lab.run as run
+    for engine in ("reversion", "vector", "momentum"):
+        mod = importlib.import_module(f"{engine}.backtest")
+        assert run._runner_for(engine) is mod.run_for_search
+        assert callable(run._context_loader_for(engine))
+        assert callable(run._context_runner_for(engine))
+
+
+def test_seam_funcs_raise_valueerror_on_unknown_engine():
+    import ops.lab.run as run
+    for fn in (run._runner_for, run._context_loader_for,
+               run._context_runner_for):
+        with pytest.raises(ValueError):
+            fn("nope")
+
+
+def test_param_ranges_membership_iteration_len_and_set():
+    import ops.lab.run as run
+    # Membership + iteration order == the T0 literal insertion order.
+    assert list(run.PARAM_RANGES) == ["reversion", "vector", "momentum"]
+    assert "reversion" in run.PARAM_RANGES
+    assert "sentinel" not in run.PARAM_RANGES
+    assert len(run.PARAM_RANGES) == 3
+    for e in ("reversion", "vector", "momentum"):
+        assert set(run.PARAM_RANGES[e]) == set(_T0_PARAM_RANGES_KEYSETS[e])
+
+
+# ── BINDING CONTRACT pins (spec §2.4 — the §8 highest residual risk) ─────
+
+def test_param_ranges_subscript_undeclared_raises_KEYERROR_not_valueerror():
+    """planner.py:694 does PARAM_RANGES.get(ecr.engine, {}). Mapping.get
+    catches KeyError ONLY. The lazy __getitem__ MUST re-raise the
+    _lab_target_for ValueError as KeyError or that live-adjacent
+    MODIFY-ECR validator crashes (spec §2.4, §8-A2)."""
+    import ops.lab.run as run
+    with pytest.raises(KeyError):
+        run.PARAM_RANGES["sentinel"]            # eligible-but-undeclared
+    # NOT a ValueError leaking through:
+    try:
+        run.PARAM_RANGES["sentinel"]
+    except KeyError:
+        pass
+    except ValueError as exc:  # pragma: no cover - regression tripwire
+        pytest.fail(f"ValueError leaked (planner.py:694 would crash): {exc}")
+
+
+def test_param_ranges_get_returns_default_for_undeclared_engine():
+    """The exact planner.py:694 call: .get(<undeclared>, {}) == {}."""
+    import ops.lab.run as run
+    assert run.PARAM_RANGES.get("sentinel", {}) == {}
+    assert run.PARAM_RANGES.get("canary", {}) == {}
+    assert run.PARAM_RANGES.get("sigma", {}) == {}
+    assert run.PARAM_RANGES.get("nope", {}) == {}
+
+
+def test_lab_target_for_resolves_declared_engines():
+    import importlib
+
+    from ops.lab.run import _lab_target_for
+    for engine in ("reversion", "vector", "momentum"):
+        mod = importlib.import_module(f"{engine}.backtest")
+        t = _lab_target_for(engine)
+        assert t.run_for_search is mod.run_for_search
+        assert t.default_params is mod.default_params
+
+
+def test_lab_target_for_rejects_non_targetable_with_clear_valueerror():
+    from ops.lab.run import _lab_target_for
+    for bad in ("canary", "sigma", "lab"):
+        with pytest.raises(ValueError, match="not Lab-targetable"):
+            _lab_target_for(bad)
+
+
+def test_lab_target_for_rejects_eligible_but_undeclared_sentinel():
+    """Sentinel is PAPER (eligible) but exports no LAB_TARGET → the clear
+    SP-E/SP-F-pointing message, NOT KeyError/'unknown engine' (spec
+    §4.1)."""
+    from ops.lab.run import _lab_target_for
+    with pytest.raises(ValueError, match="has not.*declared.*LAB_TARGET"):
+        _lab_target_for("sentinel")
+
+
+def test_sample_parameters_clear_error_on_bad_engine():
+    import ops.lab.run as run
+    with pytest.raises(ValueError, match="not Lab-targetable"):
+        run.sample_parameters("canary", 4, seed=0)
+    # Declared engine still samples deterministically (no behaviour drift).
+    a = run.sample_parameters("reversion", 8, seed=7)
+    b = run.sample_parameters("reversion", 8, seed=7)
+    assert a == b and set(a[0]) == set(_T0_PARAM_RANGES_KEYSETS["reversion"])
+
+
+# ── default_params shim (the sixth surface, spec §0.1 / §2.3) ────────────
+
+def test_default_params_shim_byte_equal_for_declared_engines():
+    import importlib
+
+    from ops.engine_sdlc.default_params import default_params
+    for engine in ("reversion", "vector", "momentum"):
+        mod = importlib.import_module(f"{engine}.backtest")
+        assert default_params(engine) == mod.default_params()
+
+
+def test_default_params_shim_rejects_sentinel_with_clear_message():
+    from ops.engine_sdlc.default_params import default_params
+    with pytest.raises(ValueError, match="has not.*declared.*LAB_TARGET"):
+        default_params("sentinel")
+
+
+def test_no_import_cycle_default_params_shim_to_run():
+    """ops.engine_sdlc.default_params → ops.lab.run is ops→ops, lazy,
+    legal, no cycle. Import each first, then exercise."""
+    import importlib
+
+    m1 = importlib.import_module("ops.engine_sdlc.default_params")
+    m2 = importlib.import_module("ops.lab.run")
+    assert m1.default_params("momentum") == \
+        importlib.import_module("momentum.backtest").default_params()
+    assert callable(m2._lab_target_for)

@@ -60,7 +60,7 @@ import os
 import random
 import sys
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -92,47 +92,86 @@ logger = structlog.get_logger(__name__)
 # ────────────────────────────────────────────────────────────────────────────
 
 
-# TRANSITIONAL (until SP-B T4 makes this a lazy view): each entry is a
-# byte-mirror of <engine>.backtest.LAB_TARGET.param_ranges. Edit the engine's
-# LAB_TARGET, NOT here — they must stay byte-identical (T3↔T4 desync =
-# live-money param drift).
-PARAM_RANGES: dict[str, dict[str, tuple]] = {
-    # Sigma archived 2026-05-16 — its FINAL test (#168, failed-expansion
-    # redesign) FAILED decisively (DSR 0.0000, held-back 2020-2026
-    # Sharpe -1.208, 50/50 trials negative). See archive/sigma/EULOGY.md.
-    "reversion": {
-        "z_threshold": (2.0, 4.0, "float"),
-        "volume_climax_multiplier": (1.2, 3.0, "float"),
-        "max_hold_days": (3, 12, "int"),
-        "stop_pct": (0.04, 0.12, "float"),
-        # Earnings-quality removed from the search ranges — current
-        # fundamentals_quarterly coverage on the wider universe is sparse
-        # enough that any HIGH/MEDIUM filter produces near-zero trades.
-        # Reversion's run_*_with_context defaults to filter_mode="none" when
-        # the override is absent, so the search sweeps the technical knobs
-        # against a no-EQ-gate baseline.
-    },
-    "vector": {
-        # pb_ceiling lower-bound 1.5 (was 1.0) per the 2026-05-14
-        # recalibration sweep: pb<1.5 is the known-overly-restrictive
-        # zone that produced 0 candidates on the prior sweep. The point
-        # of this run is to find the P/B threshold at which Vector
-        # actually fires AND maintains a credible edge.
-        "pb_ceiling": (1.5, 3.5, "float"),
-        "de_ceiling": (1.5, 4.0, "float"),
-        "catalyst_window_days": (3, 10, "int"),
-        "swing_score_threshold": (55.0, 75.0, "float"),
-        "stop_pct": (0.04, 0.10, "float"),
-    },
-    "momentum": {
-        # Deliberately low-dim: 4 knobs, narrow ranges around the standard
-        # 12-1 academic spec. DSR correction is much friendlier at small N.
-        "lookback_days": (200, 280, "int"),
-        "skip_days": (15, 30, "int"),
-        "hold_days": (15, 30, "int"),
-        "top_decile_pct": (0.05, 0.20, "float"),
-    },
-}
+# ────────────────────────────────────────────────────────────────────────────
+# SP-B — roster-SoT-driven dispatch resolver. Replaces the stale hardwired
+# (reversion, vector, momentum) 3-tuple across all six surfaces. Engine
+# add/remove is a tpcore.engine_profile._PROFILE edit + the engine
+# declaring LAB_TARGET — NEVER Lab surgery (spec §1, §2.3).
+# ────────────────────────────────────────────────────────────────────────────
+
+
+def _lab_target_for(engine: str) -> Any:
+    """Resolve the engine's declared LabTarget via the roster SoT.
+
+    Engine import is LAZY (legal in ops/, H-S2-1 — the resolver lives in
+    ops/, NOT tpcore/). Hard-rejects an engine that is not
+    roster-Lab-targetable OR has not declared LAB_TARGET with a CLEAR
+    ValueError — never a raw KeyError/ImportError to the operator. The
+    reject fires inside sample_parameters BEFORE the SP-A
+    record_trial_spend block (run.py:752-759) so no partial ledger write
+    is possible (spec §4.5, §8-A4)."""
+    from tpcore.engine_profile import lab_targetable_engines
+
+    targetable = lab_targetable_engines()
+    if engine not in targetable:
+        raise ValueError(
+            f"engine {engine!r} is not Lab-targetable; choose one of "
+            f"{targetable} (roster SoT: tpcore.engine_profile)"
+        )
+    import importlib
+
+    try:
+        mod = importlib.import_module(f"{engine}.backtest")
+    except ModuleNotFoundError as exc:
+        raise ValueError(
+            f"engine {engine!r} has no importable {engine}.backtest "
+            f"module: {exc}"
+        ) from exc
+    target = getattr(mod, "LAB_TARGET", None)
+    if target is None:
+        raise ValueError(
+            f"engine {engine!r} is roster-Lab-eligible but has not "
+            f"declared a module-level LAB_TARGET in {engine}.backtest "
+            f"(see tpcore/lab/target.py:LabTarget). This is the SP-E/SP-F "
+            f"forward step: the engine must declare its Lab contract."
+        )
+    return target
+
+
+class _LazyParamRanges(Mapping):
+    """``PARAM_RANGES`` kept as a NAME (oracle/planner compat) but driven
+    by the roster SoT. The BINDING contract (spec §2.4, the §8 highest
+    residual risk): ``__getitem__`` re-raises ``_lab_target_for``'s
+    ``ValueError`` as ``KeyError`` so ``collections.abc.Mapping.get`` (which
+    catches ``KeyError`` ONLY) keeps ``planner.py:694``'s
+    ``.get(ecr.engine, {})`` returning ``{}`` for a non-targetable engine
+    instead of crashing the live-adjacent MODIFY-ECR validator with an
+    unhandled ``ValueError``."""
+
+    def __getitem__(self, engine: str) -> dict[str, tuple]:
+        try:
+            return _lab_target_for(engine).param_ranges
+        except ValueError as exc:
+            raise KeyError(engine) from exc
+
+    def __iter__(self):
+        # Declared targets only, dispatch_order — same membership+order
+        # as the old literal dict's insertion order (reversion, vector,
+        # momentum). Eligible-but-undeclared (sentinel) is skipped.
+        from tpcore.engine_profile import lab_targetable_engines
+
+        for engine in lab_targetable_engines():
+            try:
+                _lab_target_for(engine)
+            except ValueError:
+                continue
+            yield engine
+
+    def __len__(self) -> int:
+        return sum(1 for _ in self)
+
+
+PARAM_RANGES: Mapping = _LazyParamRanges()
 
 
 def _sample_value(spec: tuple, rng: random.Random) -> Any:
@@ -148,7 +187,15 @@ def _sample_value(spec: tuple, rng: random.Random) -> Any:
 
 
 def sample_parameters(engine: str, n: int, seed: int = 0) -> list[dict]:
-    ranges = PARAM_RANGES[engine]
+    try:
+        ranges = PARAM_RANGES[engine]
+    except KeyError:
+        # Re-raise as the CLEAR operator-facing ValueError (defence in
+        # depth for the programmatic run_lab() path + legacy shim; the
+        # argparse choices gate rejects bad engines far earlier on every
+        # real CLI path). spec §2.4.
+        _lab_target_for(engine)  # raises the clear ValueError
+        raise  # unreachable — _lab_target_for always raises here
     rng = random.Random(seed)
     return [{k: _sample_value(spec, rng) for k, spec in ranges.items()} for _ in range(n)]
 
@@ -318,46 +365,20 @@ def period_returns_from_trades(trades: list[Any]) -> list[float]:
 
 
 def _runner_for(engine: str) -> Callable[..., Awaitable[Any]]:
-    """Legacy single-call entry; loads context per call. Used for the final
-    held-back run where we don't reuse context across many trials."""
-    if engine == "reversion":
-        from reversion.backtest import run_for_search
-        return run_for_search
-    if engine == "vector":
-        from vector.backtest import run_for_search
-        return run_for_search
-    if engine == "momentum":
-        from momentum.backtest import run_for_search
-        return run_for_search
-    raise ValueError(f"unknown engine: {engine}")
+    """Legacy single-call entry; loads context per call. SP-B: a thin
+    view over the roster-SoT resolver (name + signature unchanged so the
+    characterization oracle's by-name monkeypatch still binds)."""
+    return _lab_target_for(engine).run_for_search
 
 
 def _context_loader_for(engine: str) -> Callable[..., Awaitable[Any]]:
-    """Returns the async ``load_*_window_context`` function for the engine."""
-    if engine == "reversion":
-        from reversion.backtest import load_reversion_window_context
-        return load_reversion_window_context
-    if engine == "vector":
-        from vector.backtest import load_vector_window_context
-        return load_vector_window_context
-    if engine == "momentum":
-        from momentum.backtest import load_momentum_window_context
-        return load_momentum_window_context
-    raise ValueError(f"unknown engine: {engine}")
+    """Returns the async ``load_*_window_context``. SP-B thin view."""
+    return _lab_target_for(engine).load_window_context
 
 
 def _context_runner_for(engine: str) -> Callable[..., Any]:
-    """Returns the sync ``run_*_with_context`` function for the engine."""
-    if engine == "reversion":
-        from reversion.backtest import run_reversion_with_context
-        return run_reversion_with_context
-    if engine == "vector":
-        from vector.backtest import run_vector_with_context
-        return run_vector_with_context
-    if engine == "momentum":
-        from momentum.backtest import run_momentum_with_context
-        return run_momentum_with_context
-    raise ValueError(f"unknown engine: {engine}")
+    """Returns the sync ``run_*_with_context``. SP-B thin view."""
+    return _lab_target_for(engine).run_with_context
 
 
 # ────────────────────────────────────────────────────────────────────────────
