@@ -3,8 +3,10 @@
 Pins the exact current behaviour of each engine's private ``_overrides_from_args``
 BEFORE the refactor: the new pure ``tpcore.backtest.cli_overrides.overrides_from_args``
 must return the byte-identical dict each engine produces today, given that engine's
-own ``*_OVERRIDE_KEYS`` tuple. The engine private fns are imported and used to
-capture the golden expectation (no hand-written golden — the engine IS the oracle).
+own ``*_OVERRIDE_KEYS`` tuple. Expected dicts are HAND-WRITTEN literals (not the
+engine fn as oracle — post-refactor that would be tautological); we also assert
+each engine's delegate returns the same literal, proving the delegate passes its
+correct keys.
 """
 
 from __future__ import annotations
@@ -46,23 +48,41 @@ _REPRESENTATIVE_NS = argparse.Namespace(
 )
 
 
+# Hand-written expected dicts: independently computed from
+# _REPRESENTATIVE_NS × each engine's *_OVERRIDE_KEYS (include key iff
+# getattr(ns, k, None) is not None). NOT derived from the code under
+# test or the engine delegate — a literal so a future logic drift of
+# the shared fn (or a wrong delegate keys tuple) fails on a value
+# mismatch.
 @pytest.mark.parametrize(
-    ("engine_private_fn", "keys"),
+    ("engine_private_fn", "keys", "expected"),
     [
-        (reversion_overrides, REVERSION_OVERRIDE_KEYS),
-        (vector_overrides, VECTOR_OVERRIDE_KEYS),
-        (momentum_overrides, MOMENTUM_OVERRIDE_KEYS),
+        (
+            reversion_overrides,
+            REVERSION_OVERRIDE_KEYS,
+            {"z_threshold": 2.5, "volume_climax_multiplier": 1.75, "stop_pct": 0.0},
+        ),
+        (
+            vector_overrides,
+            VECTOR_OVERRIDE_KEYS,
+            {"pb_ceiling": 3.0, "catalyst_window_days": 5, "stop_pct": 0.0},
+        ),
+        (
+            momentum_overrides,
+            MOMENTUM_OVERRIDE_KEYS,
+            {"lookback_days": 252, "hold_days": 21},
+        ),
     ],
     ids=["reversion", "vector", "momentum"],
 )
-def test_overrides_from_args_byte_equivalent_to_engine_private_fn(
+def test_overrides_from_args_matches_hardcoded_expected_and_engine_delegate(
     engine_private_fn: object,
     keys: tuple[str, ...],
+    expected: dict[str, object],
 ) -> None:
-    """``overrides_from_args(ns, KEYS)`` == engine's current ``_overrides_from_args(ns)``."""
-    golden = engine_private_fn(_REPRESENTATIVE_NS)  # type: ignore[operator]
-    result = overrides_from_args(_REPRESENTATIVE_NS, keys)
-    assert result == golden
+    """Shared fn AND the engine delegate each equal the independent literal."""
+    assert overrides_from_args(_REPRESENTATIVE_NS, keys) == expected
+    assert engine_private_fn(_REPRESENTATIVE_NS) == expected  # type: ignore[operator]
 
 
 def test_empty_namespace_yields_empty_dict() -> None:
