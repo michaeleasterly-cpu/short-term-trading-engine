@@ -57,6 +57,8 @@ def test_labtarget_is_frozen_and_extra_forbid():
     {"z": (2.0, 4.0, "floar")},              # typo kind
     {"z": (2.0, 4.0, "choice")},             # choice w/o ":"
     {"z": (2.0, 4.0, 7)},                    # kind not str
+    {"z": (0, 1, "choice:")},                # empty CSV → [''] silent corruption
+    {"z": (0, 1, "choice:,")},               # all-empty members
 ])
 def test_labtarget_rejects_malformed_param_ranges_at_construction(bad):
     """Fail-loud at DECLARATION time (model_post_init), not at sample

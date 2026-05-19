@@ -43,7 +43,7 @@ class LabTarget(BaseModel):
     run_with_context: Callable[..., Any]
     default_params: Callable[[], dict[str, Any]]
 
-    def model_post_init(self, __context: Any) -> None:
+    def model_post_init(self, _ctx: object) -> None:  # noqa: D401
         for name, spec in self.param_ranges.items():
             if not isinstance(spec, tuple) or len(spec) != 3:
                 raise ValueError(
@@ -56,12 +56,28 @@ class LabTarget(BaseModel):
                     f"LabTarget.param_ranges[{name!r}] kind must be str; "
                     f"got {kind!r}"
                 )
-            if kind not in ("float", "int") and not kind.startswith(
-                "choice:"
-            ):
+            if kind in ("float", "int"):
+                continue
+            if not kind.startswith("choice:"):
                 raise ValueError(
                     f"LabTarget.param_ranges[{name!r}] kind {kind!r} not "
                     f"in 'float'|'int'|'choice:<csv>'"
+                )
+            # choice:<csv> — _sample_value (run.py) does
+            # kind.split(":",1)[1].split(",") then rng.choice(...). An
+            # empty CSV ("choice:" / "choice:,") would yield [''] and
+            # rng.choice would silently return an empty-string "param
+            # value" — silent corruption of what the Lab fishes. Require
+            # ≥1 non-empty member, fail-loud at DECLARATION time.
+            members = [
+                c for c in kind.split(":", 1)[1].split(",") if c.strip()
+            ]
+            if not members:
+                raise ValueError(
+                    f"LabTarget.param_ranges[{name!r}] kind {kind!r}: a "
+                    f"'choice:' kind needs ≥1 non-empty member "
+                    f"(e.g. 'choice:a,b'); an empty choice list would "
+                    f"silently sample an empty-string parameter value"
                 )
 
 

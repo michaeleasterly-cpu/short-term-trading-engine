@@ -101,6 +101,8 @@ There is no file to `git add` — the T0 oracle ships as the inlined constant in
 ## Task 1: `tpcore/lab/target.py::LabTarget` — the engine-free contract — spec §2.2 / §7 T1
 
 > Plan correction (applied during SP-B T1 exec): two adjudicated fixes — (A) dropped the `bad3` `{"z": [2.0, 4.0, "float"]}` parametrize case: pydantic v2 idiomatically coerces the list to a valid `(2.0, 4.0, "float")` tuple so it is unsatisfiable and tested an implementation artifact, not the validation contract (no `strict=True`/pre-coercion check — YAGNI); (B) replaced bare `pytest.raises(Exception)` (ruff B017) with the empirically-verified `pytest.raises(pydantic.ValidationError)` — pydantic v2 wraps the `model_post_init` `ValueError`, and frozen-mutation + `extra="forbid"` also raise `pydantic.ValidationError`.
+>
+> Plan correction (applied during SP-B T1 code-quality review): two more adjudicated fixes — (C) `model_post_init` signature aligned to the established tpcore convention `def model_post_init(self, _ctx: object) -> None:  # noqa: D401` (verified vs `tpcore/providers.py:68`, `tpcore/selfheal/spec.py:66`, `tpcore/auditheal/spec.py:32`) — was `__context: Any`, a convention divergence (`Any` import retained: still used by the `Callable` annotations); (D) closed a real live-money silent-corruption hole — an empty `choice:` / `choice:,` kind was accepted by the bare `.startswith("choice:")` check but `ops/lab/run.py::_sample_value` would `rng.choice([''])` and silently sample an empty-string parameter value; the validator now requires `[c for c in kind.split(":",1)[1].split(",") if c.strip()]` non-empty, fail-loud at DECLARATION time, with two new parametrized rows (`"choice:"`, `"choice:,"`). Code-quality items #3 `low > high` semantic check, #4 the by-design-unreachable `not isinstance(spec, tuple)` half (pydantic coerces before `model_post_init`), #5 `dict[str, tuple]` loose vs `tuple[Any,Any,str]`, #6 AST guard not catching `importlib.import_module("reversion")` — reviewed and DEFERRED as scoped design choices for SP-B (T1's contract is kind/tuple-shape + the choice-emptiness safety hole; arity/bounds-tightening would move validation into pydantic and is out of T1 scope; the AST test is a fast local tripwire, CI `check_imports tpcore` is the real backstop).
 
 **Files:**
 - Create: `tpcore/lab/target.py`
@@ -169,6 +171,8 @@ def test_labtarget_is_frozen_and_extra_forbid():
     {"z": (2.0, 4.0, "floar")},              # typo kind
     {"z": (2.0, 4.0, "choice")},             # choice w/o ":"
     {"z": (2.0, 4.0, 7)},                    # kind not str
+    {"z": (0, 1, "choice:")},                # empty CSV → [''] silent corruption
+    {"z": (0, 1, "choice:,")},               # all-empty members
 ])
 def test_labtarget_rejects_malformed_param_ranges_at_construction(bad):
     """Fail-loud at DECLARATION time (model_post_init), not at sample
@@ -255,7 +259,7 @@ class LabTarget(BaseModel):
     run_with_context: Callable[..., Any]
     default_params: Callable[[], dict[str, Any]]
 
-    def model_post_init(self, __context: Any) -> None:
+    def model_post_init(self, _ctx: object) -> None:  # noqa: D401
         for name, spec in self.param_ranges.items():
             if not isinstance(spec, tuple) or len(spec) != 3:
                 raise ValueError(
@@ -268,12 +272,28 @@ class LabTarget(BaseModel):
                     f"LabTarget.param_ranges[{name!r}] kind must be str; "
                     f"got {kind!r}"
                 )
-            if kind not in ("float", "int") and not kind.startswith(
-                "choice:"
-            ):
+            if kind in ("float", "int"):
+                continue
+            if not kind.startswith("choice:"):
                 raise ValueError(
                     f"LabTarget.param_ranges[{name!r}] kind {kind!r} not "
                     f"in 'float'|'int'|'choice:<csv>'"
+                )
+            # choice:<csv> — _sample_value (run.py) does
+            # kind.split(":",1)[1].split(",") then rng.choice(...). An
+            # empty CSV ("choice:" / "choice:,") would yield [''] and
+            # rng.choice would silently return an empty-string "param
+            # value" — silent corruption of what the Lab fishes. Require
+            # ≥1 non-empty member, fail-loud at DECLARATION time.
+            members = [
+                c for c in kind.split(":", 1)[1].split(",") if c.strip()
+            ]
+            if not members:
+                raise ValueError(
+                    f"LabTarget.param_ranges[{name!r}] kind {kind!r}: a "
+                    f"'choice:' kind needs ≥1 non-empty member "
+                    f"(e.g. 'choice:a,b'); an empty choice list would "
+                    f"silently sample an empty-string parameter value"
                 )
 
 
