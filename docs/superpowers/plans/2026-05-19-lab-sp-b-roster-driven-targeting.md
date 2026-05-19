@@ -1784,11 +1784,13 @@ Append to `tpcore/templates/engine_template/backtest.py` (commented so the scaff
 #         # "my_param": (low, high, "float"),   # "float" | "int" | "choice:a,b"
 #     },
 #     run_for_search=run_for_search,
-#     load_window_context=load_window_context,
-#     run_with_context=run_with_context,
+#     load_window_context=load_<engine>_window_context,
+#     run_with_context=run_<engine>_with_context,
 #     default_params=default_params,
 # )
 ```
+
+> Plan correction (applied during SP-B T7 code-quality review): aligned the commented skeleton's code-block RHS to the real `<engine>`-prefixed dispatch idiom — confirmed against `reversion/backtest.py:1117-1120` (and identically `vector/backtest.py:993-996`, `momentum/backtest.py:564-567`): `run_for_search`/`default_params` are bare while `load_window_context`/`run_with_context` bind the engine-prefixed `load_<engine>_window_context`/`run_<engine>_with_context`, so a copy-paste author following the banner gets a correct `LAB_TARGET` with zero guesswork (the prior bare RHS would have `NameError`d against banner-conformant function names).
 
 - [ ] **Step 5: Run test to verify it passes**
 

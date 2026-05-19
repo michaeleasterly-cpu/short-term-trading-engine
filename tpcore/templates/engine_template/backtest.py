@@ -66,7 +66,7 @@ async def run_backtest(*args, **kwargs):
 #         # "my_param": (low, high, "float"),   # "float" | "int" | "choice:a,b"
 #     },
 #     run_for_search=run_for_search,
-#     load_window_context=load_window_context,
-#     run_with_context=run_with_context,
+#     load_window_context=load_<engine>_window_context,
+#     run_with_context=run_<engine>_with_context,
 #     default_params=default_params,
 # )
