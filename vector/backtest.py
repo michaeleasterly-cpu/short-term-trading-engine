@@ -53,6 +53,7 @@ import numpy as np
 import pandas as pd
 import structlog
 
+from tpcore.backtest.cli_overrides import overrides_from_args
 from tpcore.db import build_asyncpg_pool
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -734,12 +735,7 @@ VECTOR_OVERRIDE_KEYS = (
 
 
 def _overrides_from_args(args: argparse.Namespace) -> dict:
-    out: dict = {}
-    for k in VECTOR_OVERRIDE_KEYS:
-        v = getattr(args, k, None)
-        if v is not None:
-            out[k] = v
-    return out
+    return overrides_from_args(args, VECTOR_OVERRIDE_KEYS)
 
 
 def _apply_overrides_from_args(args: argparse.Namespace) -> None:
