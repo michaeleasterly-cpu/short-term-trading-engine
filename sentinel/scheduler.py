@@ -72,6 +72,7 @@ from tpcore.interfaces.broker import (
 )
 from tpcore.logging import DBLogHandler
 from tpcore.order_ids import ENGINE_PREFIX, build_cid, build_close_id, is_engine_cid
+from tpcore.order_management.stale_order_cancel import cancel_stale_orders
 from tpcore.risk.batch_gate import gate_batch_order
 from tpcore.risk.governor import RiskGovernor
 from tpcore.risk.limits_profile import limits_for
@@ -348,38 +349,17 @@ class SentinelScheduler:
         Returns the number of orders cancelled. Silently degrades when the
         broker doesn't expose ``list_recent_orders`` (non-Alpaca brokers).
         Mirrors ``MomentumScheduler._cancel_stale_momentum_orders``.
+
+        Lean P5.4b: delegates to the shared
+        ``tpcore.order_management.stale_order_cancel.cancel_stale_orders``.
+        Byte-equivalent behavior (cancelled-ID set, count, structlog event
+        names) is pinned by ``tpcore/tests/test_stale_order_cancel.py``.
         """
-        list_fn = getattr(broker, "list_recent_orders", None)
-        if list_fn is None:
-            return 0
-        try:
-            recent = await list_fn(limit=500)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("sentinel.scheduler.list_orders_failed", error=str(exc)[:200])
-            return 0
-        open_statuses = {"new", "partially_filled", "accepted", "pending_new"}
-        cancelled = 0
-        for o in recent:
-            cid = (o.client_order_id or "").lower()
-            if not cid.startswith(ENGINE_ORDER_PREFIX):
-                continue
-            status_val = getattr(o.status, "value", str(o.status)).lower()
-            if status_val not in open_statuses:
-                continue
-            if not o.broker_order_id:
-                continue
-            try:
-                await broker.cancel_order(o.broker_order_id)
-                cancelled += 1
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "sentinel.scheduler.cancel_failed",
-                    broker_order_id=o.broker_order_id,
-                    client_order_id=o.client_order_id, error=str(exc)[:200],
-                )
-        if cancelled:
-            logger.info("sentinel.scheduler.stale_orders_cancelled", n=cancelled)
-        return cancelled
+        return await cancel_stale_orders(
+            broker,
+            order_prefix=ENGINE_ORDER_PREFIX,
+            log_namespace="sentinel.scheduler",
+        )
 
 
 async def _latest_prices(pool, as_of: date_t, tickers: list[str]) -> dict[str, Decimal]:

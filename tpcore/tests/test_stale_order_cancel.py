@@ -25,6 +25,11 @@ from tpcore.order_management.stale_order_cancel import cancel_stale_orders
 MOMENTUM_PREFIX = "mo_"
 MOMENTUM_NS = "momentum.scheduler"
 
+# Sentinel's existing prefix constant (``ENGINE_PREFIX["sentinel"]``) + the
+# exact namespace it logs under (P5.4b).
+SENTINEL_PREFIX = "sn_"
+SENTINEL_NS = "sentinel.scheduler"
+
 
 class _Status:
     """Mimics an Alpaca order status enum exposing ``.value``."""
@@ -240,3 +245,157 @@ async def test_momentum_delegate_list_failure_event_name_unchanged() -> None:
         structlog.reset_defaults()
     assert n == 0
     assert [e["event"] for e in cap.entries] == ["momentum.scheduler.list_orders_failed"]
+
+
+# ── P5.4b: sentinel cases (mirror the momentum ones, sentinel prefix/ns) ─────
+
+
+def _sentinel_mixed_orders() -> list[_Order]:
+    """A representative mix for the SENTINEL prefix (``sn_``).
+
+    Independently, ONLY these two qualify (prefix match + open status +
+    non-empty broker_order_id): ``bk-sn-open-new`` and ``bk-sn-open-partial``.
+    """
+    return [
+        # qualifies — prefix + new + has broker id
+        _Order(client_order_id="sn_a", status="new", broker_order_id="bk-sn-open-new"),
+        # qualifies — prefix + partially_filled + has broker id
+        _Order(
+            client_order_id="SN_B",  # case-insensitive prefix match
+            status="partially_filled",
+            broker_order_id="bk-sn-open-partial",
+        ),
+        # wrong prefix (momentum) — skip
+        _Order(client_order_id="mo_c", status="new", broker_order_id="bk-mo"),
+        # no prefix at all — skip
+        _Order(client_order_id="xx_d", status="new", broker_order_id="bk-xx"),
+        # prefix but terminal status (filled) — skip
+        _Order(client_order_id="sn_e", status="filled", broker_order_id="bk-sn-filled"),
+        # prefix but terminal status (canceled) — skip
+        _Order(client_order_id="sn_f", status="canceled", broker_order_id="bk-sn-cxl"),
+        # prefix + open but no broker_order_id — skip
+        _Order(client_order_id="sn_g", status="new", broker_order_id=None),
+        # prefix + None client id edge — skip
+        _Order(client_order_id=None, status="new", broker_order_id="bk-sn-none"),
+    ]
+
+
+# Independently-derived expectations for the sentinel fixture (NOT via the fn).
+SENTINEL_EXPECTED_CANCELLED_IDS = ["bk-sn-open-new", "bk-sn-open-partial"]
+SENTINEL_EXPECTED_COUNT = 2
+
+
+async def test_sentinel_cancels_exact_id_set_and_count() -> None:
+    broker = _FakeBroker(_sentinel_mixed_orders())
+    cap = _capture()
+    try:
+        n = await cancel_stale_orders(
+            broker, order_prefix=SENTINEL_PREFIX, log_namespace=SENTINEL_NS
+        )
+    finally:
+        structlog.reset_defaults()
+    assert broker.cancelled == SENTINEL_EXPECTED_CANCELLED_IDS
+    assert n == SENTINEL_EXPECTED_COUNT
+    assert broker.list_calls == [500]
+    summary = [
+        e for e in cap.entries if e["event"] == f"{SENTINEL_NS}.stale_orders_cancelled"
+    ]
+    assert len(summary) == 1
+    assert summary[0]["n"] == SENTINEL_EXPECTED_COUNT
+
+
+async def test_sentinel_no_list_recent_orders_returns_zero_no_events() -> None:
+    cap = _capture()
+    try:
+        n = await cancel_stale_orders(
+            _NoListBroker(), order_prefix=SENTINEL_PREFIX, log_namespace=SENTINEL_NS
+        )
+    finally:
+        structlog.reset_defaults()
+    assert n == 0
+    assert cap.entries == []
+
+
+async def test_sentinel_list_failure_warns_and_returns_zero() -> None:
+    cap = _capture()
+    try:
+        n = await cancel_stale_orders(
+            _ListFailsBroker(), order_prefix=SENTINEL_PREFIX, log_namespace=SENTINEL_NS
+        )
+    finally:
+        structlog.reset_defaults()
+    assert n == 0
+    events = [e["event"] for e in cap.entries]
+    assert events == [f"{SENTINEL_NS}.list_orders_failed"]
+    assert cap.entries[0]["log_level"] == "warning"
+
+
+async def test_sentinel_cancel_failure_is_contained_and_warns() -> None:
+    broker = _FakeBroker(_sentinel_mixed_orders(), raise_on="bk-sn-open-new")
+    cap = _capture()
+    try:
+        n = await cancel_stale_orders(
+            broker, order_prefix=SENTINEL_PREFIX, log_namespace=SENTINEL_NS
+        )
+    finally:
+        structlog.reset_defaults()
+    assert broker.cancelled == ["bk-sn-open-partial"]
+    assert n == 1
+    names = [e["event"] for e in cap.entries]
+    assert f"{SENTINEL_NS}.cancel_failed" in names
+    assert f"{SENTINEL_NS}.stale_orders_cancelled" in names
+    cf = next(e for e in cap.entries if e["event"] == f"{SENTINEL_NS}.cancel_failed")
+    assert cf["log_level"] == "warning"
+    assert cf["broker_order_id"] == "bk-sn-open-new"
+
+
+async def test_sentinel_nothing_to_cancel_emits_no_summary_event() -> None:
+    orders = [
+        _Order(client_order_id="sn_x", status="filled", broker_order_id="bk1"),
+        _Order(client_order_id="mo_y", status="new", broker_order_id="bk2"),
+    ]
+    broker = _FakeBroker(orders)
+    cap = _capture()
+    try:
+        n = await cancel_stale_orders(
+            broker, order_prefix=SENTINEL_PREFIX, log_namespace=SENTINEL_NS
+        )
+    finally:
+        structlog.reset_defaults()
+    assert n == 0
+    assert broker.cancelled == []
+    assert [e["event"] for e in cap.entries] == []
+
+
+# ── sentinel delegate produces the SAME independently-expected results ───────
+
+
+async def test_sentinel_delegate_matches_independent_expectation() -> None:
+    from sentinel.scheduler import SentinelScheduler
+
+    broker = _FakeBroker(_sentinel_mixed_orders())
+    cap = _capture()
+    try:
+        n = await SentinelScheduler._cancel_stale_sentinel_orders(broker)
+    finally:
+        structlog.reset_defaults()
+    assert broker.cancelled == SENTINEL_EXPECTED_CANCELLED_IDS
+    assert n == SENTINEL_EXPECTED_COUNT
+    # Sentinel's exact current event name, unchanged by the delegation.
+    summary = [
+        e for e in cap.entries if e["event"] == "sentinel.scheduler.stale_orders_cancelled"
+    ]
+    assert len(summary) == 1
+    assert summary[0]["n"] == SENTINEL_EXPECTED_COUNT
+
+
+async def test_sentinel_delegate_list_failure_event_name_unchanged() -> None:
+    cap = _capture()
+    try:
+        from sentinel.scheduler import SentinelScheduler
+
+        n = await SentinelScheduler._cancel_stale_sentinel_orders(_ListFailsBroker())
+    finally:
+        structlog.reset_defaults()
+    assert n == 0
+    assert [e["event"] for e in cap.entries] == ["sentinel.scheduler.list_orders_failed"]
