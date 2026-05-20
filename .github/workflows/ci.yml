@@ -177,6 +177,92 @@ jobs:
             deterministic Ladder path."
           gh pr close "${{ github.event.pull_request.number }}"
 
+  # Lab-isolation DB-gated CI job. The `test` job above runs WITHOUT a
+  # Postgres service, so five suites currently `pytest.skipif` at
+  # collection time when `DATABASE_URL` / `RUN_DB_INTEGRATION_TESTS` are
+  # absent:
+  #   - tpcore/tests/test_db_read_only.py        (skipif DATABASE_URL is None)
+  #   - tpcore/tests/test_lab_isolation.py       (skipif DATABASE_URL is None)
+  #   - tpcore/tests/test_persistent_store.py    (skipif RUN_DB_INTEGRATION_TESTS)
+  #   - tpcore/tests/test_fundamentals_cache.py  (skipif RUN_DB_INTEGRATION_TESTS)
+  #   - tpcore/tests/test_aar_writer.py          (skipif RUN_DB_INTEGRATION_TESTS)
+  # This sibling job provisions Postgres 15 via the GitHub Actions
+  # `services:` block (free-tier runners only — no self-hosted), applies
+  # the alembic migration stack against the freshly-provisioned DB, and
+  # runs ONLY those five files with the env vars set so the skips do not
+  # fire. The existing `test` job is intentionally LEFT ALONE: it keeps
+  # its no-DB behaviour and continues to skip these suites; this job is
+  # the place where they actually execute. `-p no:cacheprovider` matches
+  # the project's full-suite pattern (no `-n`, no `-x`).
+  # GitHub Actions `services:` syntax reference:
+  #   <https://docs.github.com/en/actions/using-containerized-services/about-service-containers>
+  lab-isolation-db:
+    name: lab-isolation-db (Postgres-gated suites)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: ste_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # SQLAlchemy-style URL: alembic's env.py reads $DATABASE_URL and
+      # passes it through `async_engine_from_config` (asyncpg driver),
+      # while `tpcore.db.build_asyncpg_pool` accepts the same shape and
+      # strips the `+asyncpg` suffix internally. Single SoT for both
+      # migration + test sides.
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/ste_test
+      RUN_DB_INTEGRATION_TESTS: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          # Match the existing `test` job: pin from .python-version (the
+          # Railway/Railpack SoT — never drift the CI Python version
+          # between jobs).
+          python-version-file: .python-version
+          cache: pip
+
+      - name: Install package + dev deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev]
+
+      - name: Bootstrap platform schema (alembic version table lives in 'platform')
+        # platform/migrations/env.py sets version_table_schema="platform", so
+        # alembic tries to CREATE platform.alembic_version BEFORE running the
+        # first migration (which is what would create the schema). Pre-create
+        # the schema here to break the chicken-and-egg on a fresh DB.
+        run: |
+          PGPASSWORD=postgres psql -h localhost -U postgres -d ste_test \
+            -c "CREATE SCHEMA IF NOT EXISTS platform;"
+
+      - name: Apply alembic migrations
+        run: alembic -c platform/migrations/alembic.ini upgrade head
+
+      - name: Run DB-isolated suites
+        run: |
+          python -m pytest -p no:cacheprovider \
+            tpcore/tests/test_db_read_only.py \
+            tpcore/tests/test_lab_isolation.py \
+            tpcore/tests/test_persistent_store.py \
+            tpcore/tests/test_fundamentals_cache.py \
+            tpcore/tests/test_aar_writer.py
+
   # Fail-CLOSED agent-PR label guard (MED security fix). The two fence
   # jobs above are LABEL-GATED — they run ONLY when the agent's own
   # automation applied the label. Failure mode = fail-OPEN: an
