@@ -62,6 +62,12 @@ from .checks.fundamentals_quarterly_completeness import (
 )
 from .checks.insider_sentiment_freshness import CHECK_NAME as INSIDER_SENTIMENT_NAME
 from .checks.insider_sentiment_freshness import check_insider_sentiment_freshness
+from .checks.liquidity_tiers_completeness import (
+    CHECK_NAME as LIQUIDITY_COMPLETENESS_NAME,
+)
+from .checks.liquidity_tiers_completeness import (
+    check_liquidity_tiers_completeness,
+)
 from .checks.liquidity_tiers_freshness import CHECK_NAME as LIQUIDITY_FRESHNESS_NAME
 from .checks.liquidity_tiers_freshness import check_liquidity_tiers_freshness
 from .checks.macro_indicators_completeness import (
@@ -120,6 +126,7 @@ KNOWN_CHECK_NAMES: tuple[str, ...] = (
     SEC_FRESHNESS_NAME,
     SEC_INSIDER_MONOTONE_NAME,
     LIQUIDITY_FRESHNESS_NAME,
+    LIQUIDITY_COMPLETENESS_NAME,
     CLASSIFICATIONS_NAME,
     MACRO_FRESHNESS_NAME,
     MACRO_COMPLETENESS_NAME,
@@ -192,6 +199,9 @@ async def run_suite(
     liquidity_task = _safe_run(
         LIQUIDITY_FRESHNESS_NAME, check_liquidity_tiers_freshness, pool, None
     )
+    liquidity_completeness_task = _safe_run(
+        LIQUIDITY_COMPLETENESS_NAME, check_liquidity_tiers_completeness, pool, None
+    )
     classifications_task = _safe_run(
         CLASSIFICATIONS_NAME, check_ticker_classifications_coverage, pool, None
     )
@@ -232,7 +242,8 @@ async def run_suite(
         delistings_result, constituent_result, splits_result,
         row_integrity_result, fund_integrity_result, fund_completeness_result, ca_integrity_result, ca_completeness_result,
         earnings_events_result, earnings_events_monotone_result,
-        sec_result, sec_insider_monotone_result, liquidity_result, classifications_result,
+        sec_result, sec_insider_monotone_result,
+        liquidity_result, liquidity_completeness_result, classifications_result,
         macro_result, macro_completeness_result, prices_result, completeness_result,
         options_maxpain_result, insider_sentiment_result,
         social_sentiment_result, fear_greed_result,
@@ -242,7 +253,8 @@ async def run_suite(
         delistings_task, constituent_task, splits_task,
         row_integrity_task, fund_integrity_task, fund_completeness_task, ca_integrity_task, ca_completeness_task,
         earnings_events_task, earnings_events_monotone_task,
-        sec_task, sec_insider_monotone_task, liquidity_task, classifications_task,
+        sec_task, sec_insider_monotone_task,
+        liquidity_task, liquidity_completeness_task, classifications_task,
         macro_task, macro_completeness_task, prices_task, completeness_task,
         options_maxpain_task, insider_sentiment_task,
         social_sentiment_task, fear_greed_task,
@@ -253,7 +265,8 @@ async def run_suite(
         delistings_result, constituent_result, splits_result,
         row_integrity_result, fund_integrity_result, fund_completeness_result, ca_integrity_result, ca_completeness_result,
         earnings_events_result, earnings_events_monotone_result,
-        sec_result, sec_insider_monotone_result, liquidity_result, classifications_result,
+        sec_result, sec_insider_monotone_result,
+        liquidity_result, liquidity_completeness_result, classifications_result,
         macro_result, macro_completeness_result, prices_result, completeness_result,
         options_maxpain_result, insider_sentiment_result,
         social_sentiment_result, fear_greed_result,

@@ -197,6 +197,19 @@ _SPECS: tuple[HealSpec, ...] = (
     HealSpec(check_name="liquidity_tiers_freshness", source="liquidity_tiers",
              healable=True, stage="tier_refresh",
              params={"skip_guard_days": "0"}, max_attempts=2),
+    # Universe-survives-the-cut completeness invariant on
+    # platform.liquidity_tiers. The table is DERIVED + RECOMPUTED
+    # quarterly by tier_refresh — rows are NOT append-only, so the
+    # per-ticker monotone-non-decrease pattern (sec_insider/earnings)
+    # does NOT apply (a recompute can legitimately drop a delisted
+    # ticker). The correct invariant is universe coverage: every
+    # active-universe stock (stock asset_class + active in trailing
+    # 30 NYSE sessions) must have a row. ONE missing → FAIL. Heal via
+    # the same canonical tier_refresh stage with skip_guard_days=0
+    # the freshness HealSpec already uses; bounded by max_attempts=2.
+    HealSpec(check_name="liquidity_tiers_completeness", source="liquidity_tiers",
+             healable=True, stage="tier_refresh",
+             params={"skip_guard_days": "0"}, max_attempts=2),
     HealSpec(check_name="ticker_classifications_coverage", source="ticker_classifications",
              healable=True, stage="classify_tickers",
              params={"skip_guard_days": "0"}, max_attempts=2),
