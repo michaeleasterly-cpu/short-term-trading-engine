@@ -169,6 +169,11 @@ class DBLogHandler:
         self._run_id = run_id
         self._retention_days = retention_days
 
+    @property
+    def run_id(self) -> uuid.UUID:
+        """Public accessor for the run_id assigned to this handler."""
+        return self._run_id
+
     async def log(
         self,
         event_type: str,
