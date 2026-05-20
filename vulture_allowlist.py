@@ -423,3 +423,14 @@ _stub_csv_archive_detect_shrinkage  # unused function (tpcore/quality/validation
 # momentum vol-managed Lab candidate: pytest autouse fixture invoked by
 # pytest itself; same idiom as the other byte-identical-when-off seams.
 _reset_vol_managed_override  # unused function (momentum/tests/test_lab_vol_managed_byte_identical.py:115)
+# reversion PCA-residual Lab candidate: dataclass field consumed only
+# at construction time (every PCAResidualTrade(...) call sets it; the
+# dossier carries it via the search_trades round-trip — nothing READS
+# the attribute back). Same idiom as ``score_at_entry`` on the momentum
+# side (line 40 above).
+s_score_at_entry  # unused variable (reversion/lab_pca_residual.py:113)
+# reversion PCA-residual Lab candidate: pytest autouse fixtures invoked
+# by pytest itself; same idiom as the vector / momentum byte-identical
+# seams above.
+_reset_signal_mode_override  # unused function (reversion/tests/test_lab_pca_residual_byte_identical.py:109)
+_reset_signal_mode_override  # unused function (reversion/tests/test_lab_pca_residual_integration.py:104)

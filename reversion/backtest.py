@@ -138,6 +138,15 @@ VOLUME_CLIMAX_MULTIPLIER_DEFAULT = 1.0  # 1.0 ≈ "no climax gate" (always passe
 _HARD_STOP_PCT_OVERRIDE: float | None = None
 _MAX_HOLD_DAYS_OVERRIDE: int | None = None
 _VOLUME_CLIMAX_OVERRIDE: float | None = None
+# Lab-only PCA-residual + OU s-score variant (see
+# docs/superpowers/specs/2026-05-20-reversion-pca-residual-lab-candidate.md).
+# Default None ⇒ legacy price_z code path (byte-identical with the flag
+# off). Set ONLY by an explicit Lab override
+# (``overrides={"signal_mode": "pca_residual"}``); never by the live
+# scheduler — which does not import this module. Reset per call in
+# ``run_reversion_with_context`` so module-global state cannot bleed
+# across trials (mirror of momentum.lab_vol_managed H-MVM-8).
+_SIGNAL_MODE_OVERRIDE: str | None = None
 
 
 def _hard_stop_pct() -> float:
@@ -156,16 +165,35 @@ def _volume_climax_threshold() -> float:
     )
 
 
+# Lab-only signal-mode accessor. Returns ``"pca_residual"`` iff the
+# override is exactly that string; else ``"price_z"`` (the legacy
+# default when the override is ``None``). See the Lab candidate spec
+# §4.3 for the live-safety contract.
+DEFAULT_SIGNAL_MODE = "price_z"
+
+
+def _signal_mode() -> str:
+    if _SIGNAL_MODE_OVERRIDE == "pca_residual":
+        return "pca_residual"
+    return DEFAULT_SIGNAL_MODE
+
+
 def default_params() -> dict[str, Any]:
     """Current live defaults for EXACTLY this engine's
     ops.lab.run.PARAM_RANGES keys (SP3 O1 seam, spec §7.1). Pure — reads
     the module accessors, no DB. The parity test pins the keyset ==
-    PARAM_RANGES['reversion']."""
+    PARAM_RANGES['reversion'].
+
+    Includes ``signal_mode`` with its legacy default so the Lab
+    dossier's ``param_diff`` carries the true ``price_z → pca_residual``
+    delta (mirror of momentum H-MVM-10).
+    """
     return {
         "z_threshold": float(Z_SCORE_THRESHOLD),
         "volume_climax_multiplier": float(_volume_climax_threshold()),
         "max_hold_days": int(_max_hold_days()),
         "stop_pct": float(_hard_stop_pct()),
+        "signal_mode": DEFAULT_SIGNAL_MODE,
     }
 
 
@@ -868,6 +896,7 @@ REVERSION_OVERRIDE_KEYS = (
     "volume_climax_multiplier",
     "max_hold_days",
     "stop_pct",
+    "signal_mode",
 )
 
 
@@ -884,6 +913,7 @@ def _overrides_from_args(args: argparse.Namespace) -> dict:
 
 def _apply_overrides_from_args(args: argparse.Namespace) -> None:
     global _HARD_STOP_PCT_OVERRIDE, _MAX_HOLD_DAYS_OVERRIDE, _VOLUME_CLIMAX_OVERRIDE
+    global _SIGNAL_MODE_OVERRIDE
     _HARD_STOP_PCT_OVERRIDE = (
         float(args.stop_pct) if getattr(args, "stop_pct", None) is not None else None
     )
@@ -894,6 +924,9 @@ def _apply_overrides_from_args(args: argparse.Namespace) -> None:
         float(args.volume_climax_multiplier)
         if getattr(args, "volume_climax_multiplier", None) is not None
         else None
+    )
+    _SIGNAL_MODE_OVERRIDE = (
+        str(args.signal_mode) if getattr(args, "signal_mode", None) is not None else None
     )
 
 
@@ -1008,6 +1041,7 @@ def run_reversion_with_context(
     )
 
     global _HARD_STOP_PCT_OVERRIDE, _MAX_HOLD_DAYS_OVERRIDE, _VOLUME_CLIMAX_OVERRIDE
+    global _SIGNAL_MODE_OVERRIDE
     overrides = dict(overrides or {})
     _HARD_STOP_PCT_OVERRIDE = (
         float(overrides["stop_pct"]) if "stop_pct" in overrides else None
@@ -1019,8 +1053,25 @@ def run_reversion_with_context(
         float(overrides["volume_climax_multiplier"])
         if "volume_climax_multiplier" in overrides else None
     )
+    # Lab-only signal-mode override — reset per call (mirror of momentum
+    # H-MVM-8). When absent / "price_z" the rest of this function runs
+    # the existing price_z code path verbatim (byte-identical with the
+    # flag off, C1).
+    _SIGNAL_MODE_OVERRIDE = (
+        str(overrides["signal_mode"]) if "signal_mode" in overrides else None
+    )
     _TIER_ROUND_TRIP_COSTS.clear()
     _TIER_ROUND_TRIP_COSTS.update(context.tier_round_trip_costs)
+
+    # Lab-only branch — dispatch to the PCA-residual + OU s-score
+    # variant. The live scheduler does NOT import this module, so this
+    # branch is unreachable from the live trading path by construction.
+    if _signal_mode() == "pca_residual":
+        from reversion.lab_pca_residual import run_pca_residual_with_context
+
+        return run_pca_residual_with_context(
+            context, overrides=overrides, trade_log_path=trade_log_path,
+        )
 
     z_thr = float(overrides.get("z_threshold", 3.0))
     # Default to "NONE" (no EQ filter) when caller doesn't specify — the
@@ -1059,6 +1110,7 @@ def run_reversion_with_context(
         "volume_climax_multiplier": _volume_climax_threshold(),
         "max_hold_days": int(_max_hold_days()),
         "stop_pct": float(_hard_stop_pct()),
+        "signal_mode": _signal_mode(),
     }
     trades_for_diag = _trades_to_diagnostic_dicts(trades)
     price_data = _panels_to_price_data(context.panels, context.spy_panel)
@@ -1113,6 +1165,12 @@ LAB_TARGET = LabTarget(
         "volume_climax_multiplier": (1.2, 3.0, "float"),
         "max_hold_days": (3, 12, "int"),
         "stop_pct": (0.04, 0.12, "float"),
+        # ONE new pre-registered choice toggle (Lab candidate spec §4.3):
+        # ``price_z`` re-measures the existing earnings-gated price-z
+        # path verbatim; ``pca_residual`` reaches the Avellaneda–Lee
+        # PCA-residual + OU s-score variant. No other Lab-sampled knob
+        # is added (n_trials discipline — spec §1, §7).
+        "signal_mode": (0, 0, "choice:price_z,pca_residual"),
     },
     run_for_search=run_for_search,
     load_window_context=load_reversion_window_context,
@@ -1589,6 +1647,17 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="Override max holding period in trading days (default 30).")
     p.add_argument("--stop-pct", type=float, default=None,
                    help="Override hard-stop percentage (default 0.08).")
+    p.add_argument(
+        "--signal-mode", type=str, default=None,
+        choices=["price_z", "pca_residual"],
+        help=(
+            "Lab-only candidate toggle. 'price_z' (default) runs the "
+            "existing earnings-gated price-z fade; 'pca_residual' runs "
+            "the Avellaneda-Lee PCA-residual + OU s-score variant. See "
+            "docs/superpowers/specs/2026-05-20-reversion-pca-residual-"
+            "lab-candidate.md."
+        ),
+    )
     return p.parse_args(argv)
 
 

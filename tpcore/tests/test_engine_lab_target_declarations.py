@@ -70,6 +70,12 @@ def test_engine_declares_valid_lab_target(engine):
         expected = sorted([*expected, "composite_mode"])
     if engine == "momentum":
         expected = sorted([*expected, "vol_managed_mode"])
+    # Reversion's `signal_mode` toggle was added by the reversion PCA-
+    # residual Lab candidate (spec
+    # docs/superpowers/specs/2026-05-20-reversion-pca-residual-lab-candidate.md
+    # §4.3) — the SAME PR that lands the toggle updates this assertion.
+    if engine == "reversion":
+        expected = sorted([*expected, "signal_mode"])
     assert sorted(lt.param_ranges) == expected
     # The 4 callables resolve to the engine's already-defined symbols.
     assert lt.run_for_search is mod.run_for_search
@@ -103,6 +109,11 @@ def test_lab_target_param_ranges_full_value_byte_parity(engine):
         expected["composite_mode"] = (0, 0, "choice:and_gate,composite")
     if engine == "momentum":
         expected["vol_managed_mode"] = (0, 0, "choice:legacy,vol_managed")
+    if engine == "reversion":
+        # Reversion PCA-residual Lab candidate (spec
+        # docs/superpowers/specs/2026-05-20-reversion-pca-residual-lab-
+        # candidate.md §4.3) — single new toggle.
+        expected["signal_mode"] = (0, 0, "choice:price_z,pca_residual")
     assert mod.LAB_TARGET.param_ranges == expected
 
 

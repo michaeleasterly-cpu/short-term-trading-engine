@@ -71,8 +71,12 @@ def test_param_ranges_membership_iteration_len_and_set():
     assert "carver" in run.PARAM_RANGES            # LAB target, day-zero
     assert "catalyst" in run.PARAM_RANGES          # PAPER 2026-05-20 (H-S3-12)
     assert len(run.PARAM_RANGES) == 6
-    for e in ("reversion",):
-        assert set(run.PARAM_RANGES[e]) == set(_T0_PARAM_RANGES_KEYSETS[e])
+    # reversion PCA-residual Lab candidate (spec
+    # docs/superpowers/specs/2026-05-20-reversion-pca-residual-lab-candidate.md
+    # §4.3): EXACTLY ONE new key added to reversion — the signal_mode
+    # choice toggle. Same pattern as vector_composite + momentum.
+    assert set(run.PARAM_RANGES["reversion"]) == (
+        set(_T0_PARAM_RANGES_KEYSETS["reversion"]) | {"signal_mode"})
     # vector_composite Lab candidate (spec
     # docs/superpowers/specs/2026-05-20-vector-composite-lab-candidate.md
     # §4.1, H-VC-2): EXACTLY ONE new key added to vector — the
@@ -334,9 +338,14 @@ def test_sample_parameters_clear_error_on_bad_engine():
     with pytest.raises(ValueError, match="not Lab-targetable"):
         run.sample_parameters("canary", 4, seed=0)
     # Declared engine still samples deterministically (no behaviour drift).
+    # Reversion's keyset includes the new ``signal_mode`` toggle landed
+    # by the PCA-residual Lab candidate; the post-candidate complete
+    # set is T0 keys + {"signal_mode"} (spec §4.3).
     a = run.sample_parameters("reversion", 8, seed=7)
     b = run.sample_parameters("reversion", 8, seed=7)
-    assert a == b and set(a[0]) == set(_T0_PARAM_RANGES_KEYSETS["reversion"])
+    assert a == b and set(a[0]) == (
+        set(_T0_PARAM_RANGES_KEYSETS["reversion"]) | {"signal_mode"}
+    )
 
 
 # ── default_params shim (the sixth surface, spec §0.1 / §2.3) ────────────
