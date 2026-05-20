@@ -80,7 +80,24 @@ Single focus until further notice — no engine/Sigma-redesign work. Sequence:
    registered + tested as the mechanism. 891 tests; ruff/imports
    clean; no engine code modified.
    **Honest remaining (incremental adoption, not unbuilt design):**
-   per-constrained-feed targeting rollout beyond IBorrowDesk.
+   ✅ **Per-constrained-feed targeting rollout beyond IBorrowDesk —
+   DONE 2026-05-20.** Surveyed the four other CONSTRAINED_DEMAND_DRIVEN
+   feeds; only `finnhub_insider_sentiment` shares the IBorrowDesk
+   structural fit (per-ticker API loop + rate cap). Wired it: the
+   handler calls `demand_targets` + `prioritise` so demand tickers
+   land at the front of the ~27-min loop (Finnhub free-tier
+   60/min → 1.1s/ticker × ~1500 T1/T2 = 27 min wall-clock; a mid-run
+   interruption still covers the demand set). The other three are
+   intentionally probe-less + carry inline notes explaining the
+   structural mismatch: `finra_short_interest` + `apewisdom_social_sentiment`
+   are single bulk pulls (vendor's global response ceiling, no
+   per-ticker API call to prioritise); `greeks_max_pain` is a
+   single-symbol snapshot (no universe to prioritise; engines
+   consume specific symbols). They stay CONSTRAINED_DEMAND_DRIVEN
+   because their budget constraint is real, but the wedge is in DFCR
+   provider augmentation / cadence, not ticker prioritisation. The
+   targeting docstring + the inline NOTEs in handlers.py document
+   the rollout state.
    ✅ **Self-heal-orchestrator probe consult — DONE 2026-05-20.**
    `tpcore/selfheal/probes.py` owns the per-source vendor-state probes
    (`VENDOR_PROBES["aaii_sentiment"]`, `VENDOR_PROBES["macro_indicators"]`

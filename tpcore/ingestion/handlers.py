@@ -1475,6 +1475,15 @@ async def handle_greeks_max_pain(
             )
             return 0
 
+    # NOTE — targeting wedge intentionally absent here. greeks.pro is
+    # profiled CONSTRAINED_DEMAND_DRIVEN because the free-tier 600/day
+    # call cap is finite, but the handler shape is a SINGLE-symbol
+    # snapshot (default "SPY"). There is no universe to prioritise.
+    # Demand-driven dynamic symbol selection (pick the most-demanded
+    # ticker when ``config.symbol`` is unset) is conceivable but the
+    # engines that consume options_max_pain read SPECIFIC symbols —
+    # switching the daily target on transient demand would miss the
+    # symbol the engine actually needs. Stay explicit.
     async with GreeksProAdapter() as adapter:
         snap = await adapter.get_max_pain(symbol)
 
@@ -1585,6 +1594,21 @@ async def handle_finnhub_insider_sentiment(
     if not universe:
         logger.info("ingestion.handler.insider_sentiment.empty_universe")
         return 0
+    # Demand-driven targeting (#165 facet 3 — IBorrowDesk precedent).
+    # Finnhub free-tier is rate-capped at ~60 calls/min (1.1s sleep × N
+    # tickers = ~27 min wall-clock for the full T1/T2 universe) — a
+    # mid-run interruption (Supabase pooler drop, OOM, kill) truncates
+    # the pull. Demand-driven prioritisation puts tickers the engines
+    # are actually acting on (open_orders ∪ recent AAR ∪ recent
+    # candidates) at the FRONT of the loop, so a truncated run still
+    # covers the demand set. Empty demand (paper/early) → universe
+    # unchanged. Targeting must never break the pull.
+    from tpcore.feeds.targeting import demand_targets, prioritise
+    try:
+        _demand = await demand_targets(pool, "finnhub_insider_sentiment")
+        universe = prioritise(universe, _demand)
+    except Exception:
+        pass  # targeting is an optimisation, never load-bearing
 
     today = datetime.now(UTC).date()
     lookback_months = int(config.get("lookback_months", 12))
@@ -1687,6 +1711,15 @@ async def handle_apewisdom_social_sentiment(
         logger.info("ingestion.handler.social_sentiment.empty_universe")
         return 0
 
+    # NOTE — targeting wedge intentionally absent here. ApeWisdom is
+    # profiled CONSTRAINED_DEMAND_DRIVEN because the API has a global
+    # mentions ceiling (~23% of T1/T2 reachable post-recalibration),
+    # but its shape is a single bulk pull (``get_all_sentiment()``)
+    # with a server-side ranking we can't influence per-ticker. There
+    # is no per-ticker loop to prioritise; demand prioritisation here
+    # would re-order the local INSERT only — no wedge against the
+    # binding constraint. Augmentation belongs in the DFCR provider
+    # roster (a second sentiment source), not in this handler.
     async with ApeWisdomAdapter() as adapter:
         records = await adapter.get_all_sentiment()
 
@@ -1926,6 +1959,15 @@ async def handle_finra_short_interest(
         logger.info("ingestion.handler.short_interest.empty_universe")
         return 0
 
+    # NOTE — targeting wedge intentionally absent here. FINRA is
+    # profiled CONSTRAINED_DEMAND_DRIVEN because the consolidated
+    # short-interest feed has a finite bi-monthly cadence + offset-
+    # pagination, but its shape is a single bulk pull
+    # (``get_short_interest(since=...)``) returning ALL tickers for
+    # the window — there is no per-ticker API call to prioritise.
+    # The cap is the API's bi-monthly window, not our per-ticker
+    # budget; demand prioritisation would re-order the local filter
+    # only, no wedge against the binding constraint.
     async with FinraAdapter() as adapter:
         records = [r for r in await adapter.get_short_interest(since=since)
                    if r.ticker in universe]
