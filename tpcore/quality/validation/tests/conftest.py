@@ -73,10 +73,28 @@ class FakePool:
     def acquire(self) -> _FakeAcquireCM:
         return _FakeAcquireCM(self)
 
+    def transaction(self) -> _FakeTxCM:
+        """No-op transaction context for checks that wrap multi-stmt
+        reads/writes (e.g. sec_insider_monotone's read+compare+UPSERT
+        single-tx)."""
+        return _FakeTxCM()
+
     # ------------------------------ query routing (used by checks + writer)
     async def fetch(self, sql: str, *args) -> list[dict[str, Any]]:
         self.calls.append((sql, args))
         sql_lower = sql.lower()
+        # sec_insider_monotone — live per-ticker counts. Return a single
+        # ticker with a count that matches the seeded snapshot below so
+        # the monotone invariant passes in unrelated e2e tests.
+        if (
+            "from platform.sec_insider_transactions" in sql_lower
+            and "group by ticker" in sql_lower
+        ):
+            return [{"ticker": "AAPL", "rowcount": 100}]
+        # sec_insider_monotone — prior snapshot (FOR UPDATE locked).
+        # Return a matching baseline so the invariant passes.
+        if "platform.sec_insider_row_counts_snapshot" in sql_lower:
+            return [{"ticker": "AAPL", "rowcount": 100}]
         # prices_daily_completeness check: return one liquid live ticker
         # whose single active session is fully covered, so the
         # zero-tolerance invariant passes for e2e tests focused on
@@ -275,6 +293,14 @@ class FakePool:
             return datetime.now(UTC).date()
         return None
 
+    async def execute(self, sql: str, *args) -> str:
+        """Stub execute() — checks that UPSERT (e.g. sec_insider_monotone
+        seeding ``platform.sec_insider_row_counts_snapshot``) need this
+        to be present. Records the call for assertions; returns a
+        plausible asyncpg command tag."""
+        self.calls.append((sql, args))
+        return "INSERT 0 1"
+
 
 class _FakeAcquireCM:
     def __init__(self, pool: FakePool) -> None:
@@ -282,6 +308,17 @@ class _FakeAcquireCM:
 
     async def __aenter__(self) -> FakePool:
         return self._pool
+
+    async def __aexit__(self, *exc) -> None:
+        return None
+
+
+class _FakeTxCM:
+    """No-op transaction context — checks that ``async with
+    conn.transaction()`` (e.g. sec_insider_monotone) need this to be a
+    valid async ctx mgr; commit/rollback are not modelled."""
+    async def __aenter__(self) -> _FakeTxCM:
+        return self
 
     async def __aexit__(self, *exc) -> None:
         return None

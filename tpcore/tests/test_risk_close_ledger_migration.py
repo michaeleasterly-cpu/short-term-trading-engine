@@ -39,15 +39,23 @@ def _scan_graph() -> tuple[set[str], dict[str, str]]:
 
 
 def test_migration_graph_is_single_linear_head() -> None:
-    """Exactly one head; every down_revision points at a real revision."""
+    """Exactly one head; every down_revision points at a real revision.
+
+    The current head bumps with each new migration; the invariant is the
+    *linearity* (a single head, no fork), not the specific revision id.
+    A multi-head graph would silently skip the ledger on upgrade → re-
+    open the dual-decrement fail-open.
+    """
     revs, edges = _scan_graph()
     pointed_to = set(edges.values())
     heads = revs - pointed_to
-    assert heads == {"20260519_0000"}, (
-        f"expected the ledger migration to be the sole head, got heads={sorted(heads)} "
-        f"(a multi-head graph would skip risk_close_ledger on upgrade → re-opens "
-        f"the dual-decrement fail-open)"
+    assert len(heads) == 1, (
+        f"expected a single linear head, got heads={sorted(heads)} (a "
+        f"multi-head graph would skip risk_close_ledger on upgrade → "
+        f"re-opens the dual-decrement fail-open)"
     )
+    # The ledger migration must remain reachable on the linear chain.
+    assert "20260519_0000" in revs
     # No dangling down_revision (every parent must exist).
     for rev, down in edges.items():
         assert down in revs, f"{rev} chains to unknown down_revision {down!r}"
