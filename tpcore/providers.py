@@ -202,6 +202,12 @@ _BINDINGS: tuple[ProviderBinding, ...] = (
                  "+ prices_daily (SPY) — no external vendor; depends_on "
                  "those feeds (see HealSpec).",
     ),
+    ProviderBinding(
+        feed='fundamentals_quarterly', provider='fmp',
+        adapter_module='tpcore.ingestion.handlers.handle_fundamentals_refresh',
+        status=ProviderStatus.ACTIVE,
+        evidence='financial fundamentals (pb/de/revenue/net_income/fcf/etc) for value-engine setup detection — already ingested via FMP for months; formal ProviderBinding registration was missing (surfaced 2026-05-20 by the autonomous-self-heal P0 completeness invariant work).',
+    ),
 )
 
 

@@ -1,0 +1,8 @@
+DATA FEED CHANGE REQUEST
+operation: ADD
+feed: fundamentals_quarterly
+kind: external
+provider: fmp
+adapter: tpcore.fmp.handle_fundamentals_quarterly
+need: financial fundamentals (pb/de/revenue/net_income/fcf/etc) for value-engine setup detection — already ingested via FMP for months; formal ProviderBinding registration was missing (surfaced 2026-05-20 by the autonomous-self-heal P0 completeness invariant work).
+cadence: quarterly
