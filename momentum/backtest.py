@@ -87,6 +87,15 @@ _LOOKBACK_OVERRIDE: int | None = None
 _SKIP_OVERRIDE: int | None = None
 _HOLD_OVERRIDE: int | None = None
 _TOP_DECILE_OVERRIDE: float | None = None
+# Lab-only vol-managed-12-1 + earnings-beat overlay variant (see
+# docs/superpowers/specs/2026-05-20-momentum-vol-managed-lab-candidate.md).
+# Default None ⇒ legacy 12-1 code path (byte-identical with the flag
+# off). Set ONLY by an explicit Lab override
+# (``overrides={"vol_managed_mode": "vol_managed"}``); never by the live
+# scheduler — which does not import this module. Reset per call in
+# ``run_momentum_with_context`` so module-global state cannot bleed
+# across trials (H-MVM-8).
+_VOL_MANAGED_OVERRIDE: str | None = None
 
 
 def _lookback() -> int:
@@ -105,14 +114,33 @@ def _top_decile() -> float:
     return _TOP_DECILE_OVERRIDE if _TOP_DECILE_OVERRIDE is not None else DEFAULT_TOP_DECILE_PCT
 
 
+# Lab-only vol-managed variant flag accessor. Returns ``"vol_managed"``
+# iff the override is exactly that string; else ``"legacy"`` (the legacy
+# default when the override is ``None``). See the Lab candidate spec
+# §3.1 for the live-safety contract.
+DEFAULT_VOL_MANAGED_MODE = "legacy"
+
+
+def _vol_managed_mode() -> str:
+    if _VOL_MANAGED_OVERRIDE == "vol_managed":
+        return "vol_managed"
+    return DEFAULT_VOL_MANAGED_MODE
+
+
 def default_params() -> dict[str, Any]:
     """Current live defaults for EXACTLY this engine's
-    ops.lab.run.PARAM_RANGES keys (SP3 O1 seam, spec §7.1). Pure."""
+    ops.lab.run.PARAM_RANGES keys (SP3 O1 seam, spec §7.1). Pure.
+
+    Includes ``vol_managed_mode`` with its legacy default so the Lab
+    dossier's ``param_diff`` carries the true ``legacy → vol_managed``
+    delta (H-MVM-10).
+    """
     return {
         "lookback_days": int(_lookback()),
         "skip_days": int(_skip()),
         "hold_days": int(_hold()),
         "top_decile_pct": float(_top_decile()),
+        "vol_managed_mode": DEFAULT_VOL_MANAGED_MODE,
     }
 
 
@@ -121,6 +149,7 @@ MOMENTUM_OVERRIDE_KEYS = (
     "skip_days",
     "hold_days",
     "top_decile_pct",
+    "vol_managed_mode",
 )
 
 
@@ -397,6 +426,7 @@ def _overrides_from_args(args: argparse.Namespace) -> dict:
 
 def _apply_overrides_from_args(args: argparse.Namespace) -> None:
     global _LOOKBACK_OVERRIDE, _SKIP_OVERRIDE, _HOLD_OVERRIDE, _TOP_DECILE_OVERRIDE
+    global _VOL_MANAGED_OVERRIDE
     _LOOKBACK_OVERRIDE = (
         int(args.lookback_days) if getattr(args, "lookback_days", None) is not None else None
     )
@@ -409,6 +439,9 @@ def _apply_overrides_from_args(args: argparse.Namespace) -> None:
     _TOP_DECILE_OVERRIDE = (
         float(args.top_decile_pct) if getattr(args, "top_decile_pct", None) is not None else None
     )
+    _VOL_MANAGED_OVERRIDE = (
+        str(args.vol_managed_mode) if getattr(args, "vol_managed_mode", None) is not None else None
+    )
 
 
 @dataclass
@@ -417,7 +450,16 @@ class MomentumWindowContext:
 
     Note: ``start`` here is the rebalance-window start; ``raw_start`` reaches
     back ``lookback + skip`` trading days further so 12-1 momentum can be
-    computed on the first rebalance date."""
+    computed on the first rebalance date.
+
+    ``earnings_by_ticker`` (optional, default ``None``) — Lab-only
+    per-ticker ``[(event_date, magnitude_pct), …]`` rows from
+    ``platform.earnings_events`` (``event_type='EARNINGS_BEAT'``) used
+    exclusively by the vol-managed Lab candidate's earnings-beat
+    overlay. The legacy 12-1 code path NEVER reads this field, so a
+    populated dict on a legacy call is a no-op (the C1 byte-identical
+    test pins this). See the Lab candidate spec §6.
+    """
 
     panels: dict[str, pd.DataFrame]
     tier_round_trip_costs: dict[str, float]
@@ -425,6 +467,36 @@ class MomentumWindowContext:
     end: date
     universe: tuple[str, ...]
     raw_start: date  # actual bar-load start (= start - warmup)
+    earnings_by_ticker: dict[str, list[tuple[date, float]]] | None = None
+
+
+async def _load_earnings_beats(
+    pool, tickers: tuple[str, ...],
+) -> dict[str, list[tuple[date, float]]]:
+    """Load EARNINGS_BEAT events for the candidate universe.
+
+    Strictly-additive read used by the vol-managed Lab candidate's
+    earnings-beat overlay. The legacy 12-1 code path never consumes
+    this output; populating it on a legacy run is a no-op (C1
+    byte-identical test pins this).
+    """
+    sql = """
+        SELECT ticker, event_date, magnitude_pct
+        FROM platform.earnings_events
+        WHERE ticker = ANY($1) AND event_type = 'EARNINGS_BEAT'
+        ORDER BY ticker, event_date
+    """
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(sql, list(tickers))
+    out: dict[str, list[tuple[date, float]]] = defaultdict(list)
+    for r in rows:
+        out[r["ticker"]].append(
+            (
+                r["event_date"],
+                float(r["magnitude_pct"]) if r["magnitude_pct"] is not None else 0.0,
+            ),
+        )
+    return dict(out)
 
 
 async def load_momentum_window_context(
@@ -434,10 +506,15 @@ async def load_momentum_window_context(
     end: date,
     universe: tuple[str, ...] | None = None,
 ) -> MomentumWindowContext:
-    """Load bars + tier costs for [start - 1y warmup, end].
+    """Load bars + tier costs (+ earnings-beat rows) for [start - 1y warmup, end].
 
     The 1-year warmup ensures the first rebalance date has a complete
-    lookback window. Heavy I/O — call once per walk-forward window."""
+    lookback window. Heavy I/O — call once per walk-forward window.
+
+    Earnings-beat rows are loaded strictly-additively and stored on the
+    optional ``earnings_by_ticker`` context field; the legacy 12-1 code
+    path never reads them. See the Lab candidate spec §6.
+    """
     from datetime import timedelta as _td
 
     from tpcore.backtest.cost_model import load_tier_costs
@@ -449,11 +526,13 @@ async def load_momentum_window_context(
         if universe is None:
             universe = await _load_universe_t12(pool)
         raw = await _load_bars(pool, universe, raw_start, end)
+        earnings = await _load_earnings_beats(pool, universe)
     finally:
         await pool.close()
     return MomentumWindowContext(
         panels=raw, tier_round_trip_costs=tier_costs,
         start=start, end=end, universe=universe, raw_start=raw_start,
+        earnings_by_ticker=earnings,
     )
 
 
@@ -471,6 +550,7 @@ def run_momentum_with_context(
     )
 
     global _LOOKBACK_OVERRIDE, _SKIP_OVERRIDE, _HOLD_OVERRIDE, _TOP_DECILE_OVERRIDE
+    global _VOL_MANAGED_OVERRIDE
     overrides = dict(overrides or {})
     _LOOKBACK_OVERRIDE = (
         int(overrides["lookback_days"]) if "lookback_days" in overrides else None
@@ -484,8 +564,27 @@ def run_momentum_with_context(
     _TOP_DECILE_OVERRIDE = (
         float(overrides["top_decile_pct"]) if "top_decile_pct" in overrides else None
     )
+    # Lab-only vol-managed override — reset per call (H-MVM-8). When
+    # absent / "legacy" the rest of this function runs the existing 12-1
+    # code path verbatim (byte-identical with the flag off, C1).
+    _VOL_MANAGED_OVERRIDE = (
+        str(overrides["vol_managed_mode"]) if "vol_managed_mode" in overrides else None
+    )
     _TIER_ROUND_TRIP_COSTS.clear()
     _TIER_ROUND_TRIP_COSTS.update(context.tier_round_trip_costs)
+
+    # Lab-only branch — dispatch to the vol-managed variant. The live
+    # scheduler does NOT import this module, so this branch is
+    # unreachable from the live trading path by construction.
+    if _vol_managed_mode() == "vol_managed":
+        from momentum.lab_vol_managed import run_vol_managed_with_context
+
+        return run_vol_managed_with_context(
+            context,
+            lookback=_lookback(), skip=_skip(),
+            hold=_hold(), top_decile_pct=_top_decile(),
+            trade_log_path=trade_log_path,
+        )
 
     if not context.panels:
         return BacktestRunResult(
@@ -510,6 +609,7 @@ def run_momentum_with_context(
         "skip_days": int(_skip()),
         "hold_days": int(_hold()),
         "top_decile_pct": float(_top_decile()),
+        "vol_managed_mode": _vol_managed_mode(),
     }
     trades_for_diag = _trades_to_diagnostic_dicts(trades)
     price_data = _panels_to_price_data(context.panels)
@@ -560,6 +660,11 @@ LAB_TARGET = LabTarget(
         "skip_days": (15, 30, "int"),
         "hold_days": (15, 30, "int"),
         "top_decile_pct": (0.05, 0.20, "float"),
+        # ONE new pre-registered choice toggle (Lab candidate spec §2.5):
+        # ``legacy`` re-measures the existing 12-1 path verbatim;
+        # ``vol_managed`` reaches the vol-managed 12-1 + earnings-beat
+        # overlay variant. No other Lab-sampled knob is added.
+        "vol_managed_mode": (0, 0, "choice:legacy,vol_managed"),
     },
     run_for_search=run_for_search,
     load_window_context=load_momentum_window_context,
@@ -622,6 +727,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="Override holding period in trading days (default 21).")
     p.add_argument("--top-decile-pct", type=float, default=None,
                    help="Top decile fraction (default 0.10).")
+    p.add_argument(
+        "--vol-managed-mode", type=str, default=None, choices=["legacy", "vol_managed"],
+        help=(
+            "Lab-only candidate toggle. 'legacy' (default) runs the standard "
+            "12-1 backtest; 'vol_managed' runs the vol-managed 12-1 + "
+            "earnings-beat overlay variant. See "
+            "docs/superpowers/specs/2026-05-20-momentum-vol-managed-lab-candidate.md."
+        ),
+    )
     return p.parse_args(argv)
 
 

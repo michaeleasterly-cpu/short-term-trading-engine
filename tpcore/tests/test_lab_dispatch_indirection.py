@@ -71,7 +71,7 @@ def test_param_ranges_membership_iteration_len_and_set():
     assert "carver" in run.PARAM_RANGES            # LAB target, day-zero
     assert "catalyst" in run.PARAM_RANGES          # PAPER 2026-05-20 (H-S3-12)
     assert len(run.PARAM_RANGES) == 6
-    for e in ("reversion", "momentum"):
+    for e in ("reversion",):
         assert set(run.PARAM_RANGES[e]) == set(_T0_PARAM_RANGES_KEYSETS[e])
     # vector_composite Lab candidate (spec
     # docs/superpowers/specs/2026-05-20-vector-composite-lab-candidate.md
@@ -82,6 +82,12 @@ def test_param_ranges_membership_iteration_len_and_set():
     # update this assertion in the SAME PR that lands the candidate.
     assert set(run.PARAM_RANGES["vector"]) == (
         set(_T0_PARAM_RANGES_KEYSETS["vector"]) | {"composite_mode"})
+    # momentum vol-managed Lab candidate (spec
+    # docs/superpowers/specs/2026-05-20-momentum-vol-managed-lab-candidate.md
+    # §4.1, H-MVM-2): EXACTLY ONE new key added to momentum — the
+    # vol_managed_mode choice toggle. Same pattern as vector_composite.
+    assert set(run.PARAM_RANGES["momentum"]) == (
+        set(_T0_PARAM_RANGES_KEYSETS["momentum"]) | {"vol_managed_mode"})
     # SP-E: sentinel's single pre-registered toggle.
     assert set(run.PARAM_RANGES["sentinel"]) == {"activation_score_threshold"}
     # carver's six pre-registered toggles (spec §6 PARAM_RANGES).
