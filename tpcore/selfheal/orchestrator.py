@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING
 import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
+from .probes import VENDOR_PROBES, VendorState
 from .registry import spec_for
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -61,7 +62,20 @@ _RED_SQL = """
 
 class SelfHealOutcome(BaseModel):
     """Structured result. ``green`` is the ONLY thing the wrapper needs
-    to decide whether to emit DATA_OPERATIONS_COMPLETE."""
+    to decide whether to emit DATA_OPERATIONS_COMPLETE.
+
+    ``vendor_late`` carries sources where a per-source probe positively
+    showed the vendor has nothing newer than what we hold — the heal
+    cycle would be wasted churn (no newer rows to pull). The
+    orchestrator skips heal for those sources AND skips re-classifying
+    them as ``escalated`` (they're not an our-defect to investigate).
+    The wrapper emits a distinct INFO event (TRIGGER_VENDOR_LATE) per
+    entry so the dashboard distinguishes "the vendor missed a publish"
+    from "our ingestion is broken." **The 100%-green-or-don't-trade
+    invariant is unchanged: ``green=True`` still requires no remaining
+    reds in the data_quality_log — vendor-late entries leave the row
+    red, so the gate stays sacred.**
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -70,6 +84,9 @@ class SelfHealOutcome(BaseModel):
     healed: list[str] = Field(default_factory=list)
     # (source, reason) — everything a human must look at, by-design or bug.
     escalated: list[tuple[str, str]] = Field(default_factory=list)
+    # (source, our_latest_iso, vendor_latest_iso) — vendor-MISSED edge,
+    # informational only, the wrapper emits TRIGGER_VENDOR_LATE for each.
+    vendor_late: list[tuple[str, str, str]] = Field(default_factory=list)
 
 
 async def _red_checks(pool: asyncpg.Pool) -> list[str]:
@@ -87,6 +104,10 @@ async def run_self_heal(
 ) -> SelfHealOutcome:
     """Drive the data layer to 100% green or an honest escalation."""
     healed: list[str] = []
+    # Across iterations: keep the latest (our_latest, vendor_latest) per
+    # source for the wrapper's INFO event. Re-probed each iteration in
+    # case the heal of another source advances the snapshot.
+    vendor_late_acc: dict[str, VendorState] = {}
 
     for iteration in range(1, max_iterations + 1):
         rc = await run_stage(VALIDATION_STAGE, {})
@@ -100,11 +121,16 @@ async def run_self_heal(
         reds = await _red_checks(pool)
         if not reds:
             logger.info("selfheal.green", iterations=iteration, healed=healed)
-            return SelfHealOutcome(green=True, iterations=iteration, healed=healed)
+            return SelfHealOutcome(
+                green=True, iterations=iteration, healed=healed,
+                vendor_late=_vendor_late_payload(vendor_late_acc),
+            )
 
         # Resolve dispositions.
         unhealable: list[tuple[str, str]] = []
         actions: dict[tuple[str, frozenset], tuple[str, dict[str, str]]] = {}
+        # vendor-late classifications recorded this iteration (deduped by source).
+        vendor_late_this_iter: dict[str, VendorState] = {}
         for check in reds:
             spec = spec_for(check)
             if spec is None:
@@ -114,8 +140,33 @@ async def run_self_heal(
             elif not spec.healable:
                 unhealable.append((spec.source, f"{check}: {spec.unhealable_reason}"))
             else:
+                # Vendor-late consult — BEFORE adding a heal action,
+                # ask the per-source probe whether the vendor actually
+                # has anything newer than we hold. If positively False,
+                # the heal would be wasted churn — skip and classify as
+                # vendor_late (the wrapper emits TRIGGER_VENDOR_LATE for
+                # visibility). None / probe-unavailable → fall back to
+                # the existing heal-as-usual behaviour.
+                probe = VENDOR_PROBES.get(spec.source)
+                if probe is not None and spec.source not in vendor_late_this_iter:
+                    state = await probe(pool)
+                    if state is not None and not state.has_newer:
+                        vendor_late_this_iter[spec.source] = state
+                        logger.info(
+                            "selfheal.vendor_late",
+                            source=spec.source, check=check,
+                            our_latest=state.our_latest.isoformat(),
+                            vendor_latest=state.vendor_latest.isoformat(),
+                            iteration=iteration,
+                        )
+                        continue
                 key = (spec.stage, frozenset(spec.params.items()))
                 actions[key] = (spec.stage, spec.params)
+
+        # Latest vendor_late wins (re-probed each iter). Stale entries
+        # from prior iterations stay around so a vendor-MISSED red
+        # healed-then-rebrowed-as-late still surfaces.
+        vendor_late_acc.update(vendor_late_this_iter)
 
         if unhealable:
             # A human is needed regardless — escalate the full picture
@@ -124,10 +175,25 @@ async def run_self_heal(
                 "selfheal.escalate_unhealable",
                 iteration=iteration, unhealable=unhealable,
                 deferred_healable=[a[0] for a in actions.values()],
+                vendor_late=list(vendor_late_acc.keys()),
             )
             return SelfHealOutcome(
                 green=False, iterations=iteration, healed=healed,
                 escalated=unhealable,
+                vendor_late=_vendor_late_payload(vendor_late_acc),
+            )
+
+        # If every remaining red is vendor-late, no heal action is
+        # possible this iteration — exit instead of looping until
+        # max_iterations exhausts on a hopeless re-probe.
+        if not actions:
+            logger.info(
+                "selfheal.vendor_late_exit",
+                iteration=iteration, vendor_late=list(vendor_late_acc.keys()),
+            )
+            return SelfHealOutcome(
+                green=False, iterations=iteration, healed=healed,
+                vendor_late=_vendor_late_payload(vendor_late_acc),
             )
 
         # Run each distinct bounded canonical repair.
@@ -150,7 +216,20 @@ async def run_self_heal(
         green=False, iterations=max_iterations, healed=healed,
         escalated=[(c, f"auto-heal exhausted after {max_iterations} iterations")
                    for c in final_reds],
+        vendor_late=_vendor_late_payload(vendor_late_acc),
     )
+
+
+def _vendor_late_payload(
+    acc: dict[str, VendorState],
+) -> list[tuple[str, str, str]]:
+    """Freeze the dict into the SelfHealOutcome tuple shape: (source,
+    our_latest_iso, vendor_latest_iso). Sorted by source for stable
+    test assertions and for the wrapper's deterministic INFO emission."""
+    return [
+        (src, st.our_latest.isoformat(), st.vendor_latest.isoformat())
+        for src, st in sorted(acc.items())
+    ]
 
 
 __all__ = ["DEFAULT_MAX_ITERATIONS", "RunStage", "SelfHealOutcome", "run_self_heal"]
