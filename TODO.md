@@ -81,10 +81,21 @@ Single focus until further notice — no engine/Sigma-redesign work. Sequence:
    clean; no engine code modified.
    **Honest remaining (incremental adoption, not unbuilt design):**
    per-constrained-feed targeting rollout beyond IBorrowDesk;
-   per-adapter probes beyond AAII (FINRA has no cheap latest-probe);
    self-heal-orchestrator probe consult for the vendor-MISSED-a-
    scheduled-publish-beyond-lag edge (schedule anchoring already
    covers the normal case). Each a one-entry/­one-wire increment.
+   **FRED probe added 2026-05-20:** `tpcore.fred.FREDAdapter.latest_published(series_id)`
+   reads `observation_end` from `/fred/series` (one small JSON GET per
+   series, NO observations downloaded); the feed-level `_fred_probe`
+   in `tpcore.feeds.publication` composes per-series answers into a
+   conservative MIN-across-series verdict (taking MAX would silently
+   green a stuck series); registered as `PUBLICATION_PROBES["macro_indicators"]`.
+   Per the AAII precedent, validation stays offline — the live probe
+   is for the self-heal-orchestrator to consult before spending a
+   heal cycle on a stale macro_indicators result. FINRA still has
+   no cheap latest-probe (its API exposes no max-settlement without
+   full pagination) — intentionally absent; the strict cadence
+   fallback already honest post-recalibration.
 4. **Hardening pass** (some items NOT blocked on the verdict — run in
    parallel while SEC backfills):
    - ✅ **`prices_daily_gaps` 14-day-recency blind spot — CLOSED (DONE-

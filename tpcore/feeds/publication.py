@@ -45,9 +45,37 @@ async def _aaii_probe() -> date | None:
         return await a.latest_published()
 
 
+async def _fred_probe() -> date | None:
+    """Feed-level probe for ``macro_indicators``: ask FRED for each
+    series's ``observation_end`` and return MIN across them.
+
+    Multi-series feeds need a conservative composition: ``False`` from
+    ``source_has_newer`` means "the vendor has nothing newer than we
+    hold" — for a multi-series feed, that only holds if EVERY series
+    has nothing newer. Taking MIN means the probe answers True (heal
+    is honest) as soon as ANY series has moved past our ``our_latest``
+    floor; the more permissive "MAX" would silently green when one
+    laggard series alone covered for an entire stuck feed.
+
+    Returns ``None`` if any series probe fails — strict-behind
+    fallback per the publication-gate contract."""
+    from tpcore.fred import INDICATOR_SERIES, FREDAdapter
+
+    earliest: date | None = None
+    async with FREDAdapter() as a:
+        for _name, series_id in INDICATOR_SERIES:
+            d = await a.latest_published(series_id)
+            if d is None:
+                return None
+            if earliest is None or d < earliest:
+                earliest = d
+    return earliest
+
+
 # feed (matches FeedProfile key / HealSpec.source) → probe.
 PUBLICATION_PROBES: dict[str, PublicationProbe] = {
     "aaii_sentiment": _aaii_probe,
+    "macro_indicators": _fred_probe,
 }
 
 

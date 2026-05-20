@@ -235,3 +235,88 @@ async def test_get_observations_idempotent_same_input_same_output():
 def test_missing_api_key_raises_fail_fast():
     with patch.dict(os.environ, {}, clear=True), pytest.raises(DataProviderOutage):
         FREDAdapter()
+
+
+# ── 10. latest_published probe (#165 facet 4 — FRED parallel of AAII) ──
+
+
+_SERIES_METADATA_PAYLOAD = {
+    "seriess": [
+        {
+            "id": "DGS10",
+            "observation_start": "1962-01-02",
+            "observation_end": "2026-05-18",
+            "last_updated": "2026-05-19 15:16:43-05",
+        }
+    ],
+}
+
+
+@pytest.mark.asyncio
+async def test_latest_published_happy_returns_observation_end():
+    """The cheap probe hits ``/fred/series`` (NOT ``/series/observations``)
+    and returns the parsed ``observation_end`` date."""
+    seen_paths: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen_paths.append(req.url.path)
+        return httpx.Response(200, json=_SERIES_METADATA_PAYLOAD)
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        base_url="https://api.stlouisfed.org/fred",
+    )
+    with patch.dict(os.environ, _ua_env(), clear=False):
+        async with FREDAdapter(client=client) as fred:
+            d = await fred.latest_published("DGS10")
+
+    assert d == date(2026, 5, 18)
+    # Cheap-probe contract: hits the metadata endpoint, NOT observations.
+    assert seen_paths == ["/fred/series"]
+
+
+@pytest.mark.asyncio
+async def test_latest_published_missing_observation_end_returns_none():
+    """Malformed metadata (no observation_end) ⇒ None ⇒ caller stays
+    strict (never silently-green)."""
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"seriess": [{"id": "DGS10"}]})
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        base_url="https://api.stlouisfed.org/fred",
+    )
+    with patch.dict(os.environ, _ua_env(), clear=False):
+        async with FREDAdapter(client=client) as fred:
+            assert await fred.latest_published("DGS10") is None
+
+
+@pytest.mark.asyncio
+async def test_latest_published_empty_seriess_returns_none():
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"seriess": []})
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        base_url="https://api.stlouisfed.org/fred",
+    )
+    with patch.dict(os.environ, _ua_env(), clear=False):
+        async with FREDAdapter(client=client) as fred:
+            assert await fred.latest_published("UNKNOWN_SERIES") is None
+
+
+@pytest.mark.asyncio
+async def test_latest_published_404_returns_none_not_raise():
+    """Permanent failure becomes None (probe is best-effort; strict-
+    behind is the caller's fallback). Mirrors the AAII probe's
+    ``except httpx.HTTPError: return None`` contract."""
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, text="series_id not found")
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        base_url="https://api.stlouisfed.org/fred",
+    )
+    with patch.dict(os.environ, _ua_env(), clear=False):
+        async with FREDAdapter(client=client) as fred:
+            assert await fred.latest_published("BOGUS") is None
