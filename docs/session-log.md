@@ -144,3 +144,13 @@ the other building carver from scratch + the first real Lab candidate).
 - PR #156 — worktree cleanup convention: when a worktree's PR merges,
   remove it the same turn.
 - PR #162 — TODO.md drift sync: this entry's bookkeeping.
+- PR #187 — Reversion PCA-residual Lab candidate (Avellaneda-Lee 2010,
+  `signal_mode` opt-in, byte-identical-when-off, live plug UNTOUCHED per
+  the Sigma lesson). New shared primitive `tpcore/backtest/pca_residual.py`
+  (rolling 252d PCA + OU s-score + k-means PCA-implied groups substituting
+  for GICS sectors). Survivorship leg: terminal-delisting full wipe-out
+  per Shumway 1997, `survivorship_inclusive=False`. Single config + ONE
+  pre-declared volume-overlay robustness arm = 2 n_trials spend against
+  the SP-A cumulative ledger. Sweep run + adjudication + #173 live
+  setup_detection parity remain (operator-deferred until the sweep
+  clears the verdict bar).
