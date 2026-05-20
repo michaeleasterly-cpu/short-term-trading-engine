@@ -361,31 +361,25 @@ Sigma archive scoping caveat: the sector-neutral residual idea
 below, NOT a Sigma revival. See `archive/sigma/EULOGY.md` for the
 archival record.
 
-- **Reversion PCA-residual switch (2026-05-17, #171-175).** `[lane:
-  engine-owned] [gate: operator verdict bar — held-back DSR≥0.95 etc.]
-  [needs operator decision: yes — adjudication on sweep results]
-  [effort: L]` **VERIFIED NOT STARTED IN CODE 2026-05-18:**
-  `tpcore/backtest/pca_residual.py` does not exist; no `signal_mode` /
-  `pca_residual` symbol anywhere under `reversion/`. Status line below
-  said "IN PROGRESS" — that is a plan, not shipped code. Engine-lane
-  work; do not action from the data lane.
-  Switch Reversion's primary signal from earnings-gated price-z fades to
-  daily PCA-residual mean reversion (rolling 252d PCA on T1+T2, top-K PC
-  removal, OU s-score, PCA-implied statistical groups for
-  market/sector-neutral matched book, volume overlays). Shared primitive
-  `tpcore/backtest/pca_residual.py`; sweep via canonical
-  `search_parameters.py --engine reversion` (signal_mode adjudicates
-  pca_residual vs retained price_z baseline). Train 2011-01-01,
-  held-back 2022-01-01 (data can't honor the literature's 1999 start —
-  28 tickers pre-2000; sector-neutral has no GICS source so PCA-implied
-  groups substitute). Survivorship is the dominant risk (prices_daily
-  logs ~54 delistings of 7,730 true-hundreds): terminal delisting leg
-  injected AND `survivorship_inclusive=False` so credibility is capped.
-  Verdict bar (operator): held-back DSR≥0.95, credibility≥60, PBO≤0.20,
-  trades/param≥25, ≥150 held-back trades, no single-crisis PnL
-  concentration. Live setup_detection parity (#173) is deferred until
-  the sweep clears the battery — do not wire a live plug to an
-  unvalidated signal (the Sigma lesson).
+- **Reversion PCA-residual sweep run + adjudication (#171-175).** `[lane:
+  engine-owned] [gate: operator verdict bar — held-back DSR≥0.95 /
+  cred≥60 / PBO≤0.20 / trades-param≥25 / ≥150 held-back trades / no
+  single-crisis PnL concentration] [needs operator decision: yes —
+  adjudication on sweep results] [effort: operator-run sweep]` The Lab-
+  candidate **build** shipped 2026-05-20 (PR #187 — Avellaneda-Lee PCA-
+  residual `signal_mode` opt-in, byte-identical-when-off; spec
+  `docs/superpowers/specs/2026-05-20-reversion-pca-residual-lab-
+  candidate.md`). Live `reversion/scheduler.py` + plugs UNTOUCHED per the
+  Sigma lesson. **Remaining:** (a) operator runs the sweep via
+  `python -m ops.lab --candidate reversion_pca_residual --target-engine
+  reversion --intent fold_existing`, spending 2 trials against the SP-A
+  cumulative ledger (primary signal + the ONE pre-declared volume-overlay
+  robustness arm); (b) operator reads the dossier verdict against the
+  bar above; (c) on SURVIVED → ECR-MODIFY `signal_mode=pca_residual` +
+  follow-up #173 live `setup_detection` parity (deferred until sweep
+  clears). Survivorship leg already wired (full wipe-out at terminal-
+  delisting close per Shumway 1997; `survivorship_inclusive=False` caps
+  credibility).
 
 ## Task #25 — autonomous LLM+quant edge finder (follow-on epic)
 
