@@ -59,6 +59,10 @@ Multi-engine automated trading platform. US equities, daily timeframe, fully aut
 - **Lab candidate readiness** (feature-flag-variant; single pre-registered hypothesis; n_trials-ledger acknowledgement) → `docs/superpowers/checklists/lab_candidate_readiness.md`.
 - **Escalation & Hardening Ladders:** `docs/ESCALATION_HARDENING_LADDER.md` (data lane), `docs/ENGINE_ESCALATION_HARDENING_LADDER.md` (engine lane). Every escalation class has a disposition; clockwork-enforced.
 
+## Parallel sessions = worktrees (per `code.claude.com/docs/en/worktrees`)
+
+Two-session work (one Claude window per task) is the lock-in. Each session gets its own worktree under `.claude/worktrees/<name>/`. New session: `claude --worktree <name>`. Mid-session: `EnterWorktree`. Background implementer subagents auto-isolate via `worktree.bgIsolation: "worktree"` in `.claude/settings.json` + `isolation: worktree` on the engine/adapter implementer profiles. `.worktreeinclude` carries `.env` into each new worktree so DB-touching work has credentials. Don't dispatch mutation work into the shared main checkout.
+
 ## Work-tracking source of truth
 
 - **`TODO.md`** (git-tracked) is the canonical task list. **ALWAYS consult it before any "what's next" decision** — never drive next-work choices from memory alone. Memory entries describe rationale and constraints; task state lives in TODO.md.

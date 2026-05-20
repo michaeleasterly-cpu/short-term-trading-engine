@@ -1,6 +1,11 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
-  "$comment": "Project-scoped Claude Code settings. The version-controlled architecture surface (rules/skills/agents/hooks here, settings.json itself) — per-machine state lives in .claude/settings.local.json (gitignored). Hooks wire the .claude/hooks/*.sh enforcement scripts. Authoritative external: https://code.claude.com/docs/en/hooks-guide.",
+  "$comment": "Project-scoped Claude Code settings. The version-controlled architecture surface (rules/skills/agents/hooks here, settings.json itself) — per-machine state lives in .claude/settings.local.json (gitignored). Hooks wire the .claude/hooks/*.sh enforcement scripts. Worktree config locks in the parallel-session workflow (.claude/rules/parallel-sessions.md). Authoritative external: https://code.claude.com/docs/en/hooks-guide + https://code.claude.com/docs/en/worktrees.",
+  "worktree": {
+    "baseRef": "head",
+    "symlinkDirectories": [".venv"],
+    "bgIsolation": "worktree"
+  },
   "hooks": {
     "PreToolUse": [
       {

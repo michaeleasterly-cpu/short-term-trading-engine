@@ -3,6 +3,7 @@ name: adapter-implementer
 description: "Fresh-context data-adapter implementer. Use when building a new adapter (under tpcore/ingestion/handlers.py or a new scripts/ops.py stage) or modifying the adapter template. Preloads the adapter-readiness 6-stage checklist skill; the data-adapter path-scoped rule auto-applies on every adapter file touch."
 tools: Bash, Read, Edit, Write, Grep, Glob
 model: opus
+isolation: worktree
 skills:
   - adapter-readiness
 ---
