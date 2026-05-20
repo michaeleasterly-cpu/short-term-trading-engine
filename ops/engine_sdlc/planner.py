@@ -131,7 +131,14 @@ def attach_ecr_context(plan: TransitionPlan,
                  "cadence": ecr.cadence.value if ecr.cadence else None,
                  "allocator": ecr.allocator,
                  "dispatch_order": ecr.dispatch_order,
-                 "gate_dsr": ecr.gate_dsr, "gate_cred": ecr.gate_cred}
+                 "gate_dsr": ecr.gate_dsr, "gate_cred": ecr.gate_cred,
+                 # Spec §7.2 (2026-05-20): thread the ECR's declared
+                 # per-engine data reads onto plan.sot_diff so _apply_add
+                 # can render the EngineProfile.data_dependencies kwarg
+                 # into the new _PROFILE line. None when the ECR omits
+                 # the key (new_scaffold/lab_candidate optional path);
+                 # frozenset[str] otherwise.
+                 "data_dependencies": ecr.data_dependencies}
     elif ecr.action is ECRAction.MODIFY:
         extra = {"lab_dossier": ecr.lab_dossier,
                  "param_change": ecr.param_change,
@@ -829,11 +836,33 @@ def _apply_add(plan: TransitionPlan, root: Path, jn: _Journal) -> None:
     allocator_eligible = bool(
         target_state is LifecycleState.PAPER
         and plan.sot_diff.get("allocator", False))
-    profile_tail = (
-        f"lifecycle_state={state_token}"
-        if not allocator_eligible
-        else f"lifecycle_state={state_token},\n"
-             f"                               allocator_eligible=True")
+    # Spec §7.2 (2026-05-20): render the data_dependencies kwarg iff the
+    # ECR carried a non-empty frozenset. Empty/None → omit the kwarg so
+    # the EngineProfile field default (frozenset()) is the SoT for "no
+    # declared reads" — one mechanism, no double-tracking. The literal is
+    # built from a SORTED tuple so the rendered byte sequence is
+    # deterministic (a frozenset's set-iteration order is hash-randomized
+    # — sorting pins the line content across runs).
+    dd = plan.sot_diff.get("data_dependencies")
+    if dd:
+        dd_literal = ", ".join(f'"{t}"' for t in sorted(dd))
+        data_deps_token = (
+            f"data_dependencies=frozenset({{{dd_literal}}})")
+    else:
+        data_deps_token = None
+    # The _PROFILE line tail: append the allocator_eligible token (if
+    # PAPER+allocator) and the data_dependencies token (if non-empty),
+    # each on its own continuation line aligned with the existing kwarg
+    # column (31 spaces) — matches the byte shape of the hand-curated
+    # entries in _PROFILE (verified against `reversion` / `vector` /
+    # `catalyst` post-2026-05-20 fold).
+    profile_tail = f"lifecycle_state={state_token}"
+    if allocator_eligible:
+        profile_tail += (
+            ",\n                               allocator_eligible=True")
+    if data_deps_token is not None:
+        profile_tail += (
+            f",\n                               {data_deps_token}")
     new_entry = (
         f'    "{engine}":   EngineProfile(engine="{engine}", '
         f'cadence={cad_enum},\n'

@@ -188,9 +188,9 @@ Heavy lane: whole single-process pytest + reversed order-flip; ruff statistics; 
 
 ## §7. Follow-up (out of scope here)
 
-1. **ECR `data_dependencies` field.** Add to `EngineChangeRequest`; valid for ADD; required for `source: existing_code`, optional for `new_scaffold`, inheritable for `lab_candidate`.
-2. **Planner threading.** `_apply_add` accepts `data_dependencies` in `sot_diff`, renders it into the new-engine line literal.
-3. **Wire-format docs.** Update `docs/superpowers/checklists/engine_change_request.md` with the new key.
-4. **Optional: remove the derived `ENGINE_TABLES` constant.** After all three external consumers migrate to `engine_data_dependencies()`. Pure cleanup, no behavior change.
+1. **ECR `data_dependencies` field.** Add to `EngineChangeRequest`; valid for ADD; required for `source: existing_code`, optional for `new_scaffold`, inheritable for `lab_candidate`. **SHIPPED 2026-05-20 (companion PR — items §7.1 + §7.2 + §7.3 landed together).**
+2. **Planner threading.** `_apply_add` accepts `data_dependencies` in `sot_diff`, renders it into the new-engine line literal. **SHIPPED 2026-05-20 (same PR as §7.1).** Render shape: `data_dependencies=frozenset({"x", "y"})` with a sorted-tuple literal so the byte sequence is deterministic; empty/None → kwarg omitted (the `EngineProfile.data_dependencies` field default is the SoT for "no declared reads").
+3. **Wire-format docs.** Update `docs/superpowers/checklists/engine_change_request.md` with the new key. **SHIPPED 2026-05-20 (same PR as §7.1).**
+4. **Optional: remove the derived `ENGINE_TABLES` constant.** After all three external consumers migrate to `engine_data_dependencies()`. Pure cleanup, no behavior change. **STILL OPEN — next clean follow-up.**
 
-These four follow-ups are mechanical and can land independently in a small PR each. They are not gating this PR (the constraint "the migration is mechanical-byte-equivalent or it's wrong" is satisfied as-is — the field lands and the byte-equivalent migration is mechanical).
+Follow-ups §7.1–§7.3 are mechanically coupled (the field + the threading + the docs) and landed in ONE companion PR (cadence: lean per `feedback_cut_process_overhead_ship`). §7.4 remains the next standalone follow-up: it has zero behavior change but touches three external consumers and is best landed solo with its own consumer-migration commits.
