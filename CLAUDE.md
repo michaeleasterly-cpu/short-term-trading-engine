@@ -63,6 +63,8 @@ Multi-engine automated trading platform. US equities, daily timeframe, fully aut
 
 Two-session work (one Claude window per task) is the lock-in. Each session gets its own worktree under `.claude/worktrees/<name>/`. New session: `claude --worktree <name>`. Mid-session: `EnterWorktree`. Background implementer subagents auto-isolate via `worktree.bgIsolation: "worktree"` in `.claude/settings.json` + `isolation: worktree` on the engine/adapter implementer profiles. `.worktreeinclude` carries `.env` into each new worktree so DB-touching work has credentials. Don't dispatch mutation work into the shared main checkout.
 
+**Cleanup is mandatory, not optional.** When a worktree's PR merges (the task is done), remove the worktree the same turn: from inside the worktree session, `ExitWorktree action: "remove"`; from another session or the main checkout, `git worktree remove .claude/worktrees/<name>` + `git branch -d <branch>`. On session close, Claude prompts keep/remove if the worktree has changes — don't accumulate stale worktrees, the next session's `EnterWorktree` should start from a clean roster.
+
 ## Work-tracking source of truth
 
 - **`TODO.md`** (git-tracked) is the canonical task list. **ALWAYS consult it before any "what's next" decision** — never drive next-work choices from memory alone. Memory entries describe rationale and constraints; task state lives in TODO.md.
