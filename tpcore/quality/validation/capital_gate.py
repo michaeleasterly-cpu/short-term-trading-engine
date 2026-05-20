@@ -243,14 +243,6 @@ __all__ = [
     "assert_passed",
     "assert_passed_for_engine",
     "failing_sources_for_engine",
-    # ``ENGINE_TABLES`` is a public symbol resolved via module
-    # ``__getattr__`` (PEP 562) to break the engine_profile ↔
-    # capital_gate import cycle — direct ``from
-    # tpcore.quality.validation.capital_gate import ENGINE_TABLES``
-    # works at every call-site. It is intentionally NOT in ``__all__``
-    # because ruff F822 cannot see a dynamic resolver as an "exported
-    # name" — the three external consumers import it by name, not via
-    # ``from ... import *``.
     "ValidationFailedError",
     "ValidationStaleError",
     "EXPECTED_SOURCES",
