@@ -71,3 +71,4 @@ backtests/
 !.claude/skills/run-data-ops/
 !.claude/skills/weekly-digest/
 !.claude/skills/defect-register/
+!.claude/skills/lab-spec-emit/

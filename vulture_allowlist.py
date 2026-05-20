@@ -386,3 +386,10 @@ model_config  # unused variable (vector/models.py:146)
 risk_amount_usd  # unused variable (vector/models.py:151)
 vq_reason  # unused variable (vector/plugs/setup_detection.py:352)
 cat_reason  # unused variable (vector/plugs/setup_detection.py:356)
+# SP-G — pydantic v2 @field_validator / @model_validator methods are
+# called by pydantic itself, not directly — vulture cannot see the
+# binding. Allowlisted as intentional pydantic-idiom validators
+# (mirrors the model_config pattern already enumerated above).
+_._non_negative  # unused method (tpcore/lab/llm_emitter/models.py:61)
+_._quota_non_negative  # unused method (tpcore/lab/llm_emitter/models.py:109)
+_._validate_param_ranges_shape  # unused method (tpcore/lab/llm_emitter/models.py:150)
