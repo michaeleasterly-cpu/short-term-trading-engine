@@ -127,10 +127,24 @@ Single focus until further notice — no engine/Sigma-redesign work. Sequence:
    green a stuck series); registered as `PUBLICATION_PROBES["macro_indicators"]`.
    Per the AAII precedent, validation stays offline — the live probe
    is for the self-heal-orchestrator to consult before spending a
-   heal cycle on a stale macro_indicators result. FINRA still has
-   no cheap latest-probe (its API exposes no max-settlement without
-   full pagination) — intentionally absent; the strict cadence
-   fallback already honest post-recalibration.
+   heal cycle on a stale macro_indicators result.
+   **Alpaca prices_daily probe added 2026-05-20:**
+   `tpcore.alpaca.AlpacaDataAdapter.latest_published(symbol="SPY")`
+   uses the SDK's `get_stock_latest_bar` against the IEX feed (the
+   Algo Trader Plus tier 403s the latest-bar endpoint on SIP —
+   historical SIP queries still work for production ingestion; this
+   one is a separate cheap "is there a new session?" question).
+   Single-anchor design (SPY only, NOT MIN-across-universe): a
+   delisted/halted ticker in a universe-MIN would peg the answer to
+   its last-trade-date forever. SPY is the universal anchor
+   (CRITICAL_TICKERS member, every NYSE session, never delisted).
+   Registered as `PUBLICATION_PROBES["prices_daily"]` and
+   `VENDOR_PROBES["prices_daily"]` (the orchestrator's vendor-late
+   consult layer) — high-leverage because prices_daily is the data
+   substrate every engine reads through the per-engine data gate.
+   FINRA still has no cheap latest-probe (its API exposes no
+   max-settlement without full pagination) — intentionally absent;
+   the strict cadence fallback already honest post-recalibration.
 4. **Hardening pass** (some items NOT blocked on the verdict — run in
    parallel while SEC backfills):
    - ✅ **`prices_daily_gaps` 14-day-recency blind spot — CLOSED (DONE-

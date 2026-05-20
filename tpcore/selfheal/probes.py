@@ -122,12 +122,49 @@ async def _macro_indicators_probe(pool: asyncpg.Pool) -> VendorState | None:
     )
 
 
+async def _prices_daily_probe(pool: asyncpg.Pool) -> VendorState | None:
+    """Vendor-state probe for Alpaca prices_daily.
+
+    Our latest = MAX(date) FROM platform.prices_daily WHERE ticker='SPY'.
+    SPY is the universal anchor (in CRITICAL_TICKERS, every NYSE
+    session, never delisted) — symmetric with the publication.py
+    _alpaca_probe which queries Alpaca's latest bar on SPY. Querying
+    MIN-across-universe would be wrong here: a delisted/halted ticker
+    would peg our_latest to its last-trade-date forever.
+
+    Vendor latest = Alpaca's latest SPY bar (publication.py probe).
+    Returns None if either side is undeterminable (empty DB, probe
+    failure)."""
+    async with pool.acquire() as conn:
+        our_latest = await conn.fetchval(
+            "SELECT MAX(date) FROM platform.prices_daily WHERE ticker = 'SPY'"
+        )
+    if our_latest is None:
+        return None
+    has_newer = await source_has_newer("prices_daily", our_latest)
+    if has_newer is None:
+        return None
+    from tpcore.feeds.publication import PUBLICATION_PROBES
+    probe = PUBLICATION_PROBES.get("prices_daily")
+    if probe is None:
+        return None
+    vendor_latest = await probe()
+    if vendor_latest is None:
+        return None
+    return VendorState(
+        our_latest=our_latest,
+        vendor_latest=vendor_latest,
+        has_newer=has_newer,
+    )
+
+
 # feed/HealSpec.source → vendor-state probe. Sources without an entry
 # fall back to the orchestrator's existing behaviour (heal as usual);
 # adding a probe is one entry, no orchestrator edits.
 VENDOR_PROBES: dict[str, VendorProbe] = {
     "aaii_sentiment": _aaii_sentiment_probe,
     "macro_indicators": _macro_indicators_probe,
+    "prices_daily": _prices_daily_probe,
 }
 
 

@@ -123,6 +123,56 @@ async def test_macro_indicators_probe_registered_by_default() -> None:
     assert "macro_indicators" in publication.PUBLICATION_PROBES
 
 
+# ── prices_daily (Alpaca) feed-level probe — single SPY anchor ─────────
+
+
+async def test_prices_daily_probe_registered_by_default() -> None:
+    """The Alpaca prices_daily probe must be registered alongside
+    AAII + FRED. The orchestrator's vendor-late consult discovers it
+    automatically through this registry; the registration is the
+    one-entry contract."""
+    assert "prices_daily" in publication.PUBLICATION_PROBES
+
+
+async def test_alpaca_probe_returns_spy_latest_via_adapter(monkeypatch) -> None:
+    """The registered probe calls AlpacaDataAdapter.latest_published('SPY')
+    and returns that date. Exercised end-to-end through
+    source_has_newer to prove the probe is composable with the gate
+    just like the AAII + FRED probes."""
+    from tpcore import alpaca as alpaca_mod
+
+    class _FakeAdapter:
+        def __init__(self, *a, **k): pass
+        async def latest_published(self, symbol="SPY") -> date:
+            assert symbol == "SPY", "single-anchor invariant — SPY only"
+            return date(2026, 5, 19)
+
+    monkeypatch.setattr(alpaca_mod, "AlpacaDataAdapter", _FakeAdapter)
+    # we hold 05-18: vendor 05-19 → True (our gap, heal honestly)
+    assert await publication.source_has_newer(
+        "prices_daily", date(2026, 5, 18)
+    ) is True
+    # we already hold 05-19: vendor has nothing newer → False (quiet)
+    assert await publication.source_has_newer(
+        "prices_daily", date(2026, 5, 19)
+    ) is False
+
+
+async def test_alpaca_probe_returns_none_on_adapter_failure(monkeypatch) -> None:
+    """Adapter construction failure (e.g. ALPACA_KEY unset) ⇒ probe
+    returns None ⇒ caller stays strict. Mirrors the FRED probe's
+    "returns None on any series failure" contract."""
+    from tpcore import alpaca as alpaca_mod
+
+    def _raise(*a, **k):
+        raise RuntimeError("ALPACA_KEY / ALPACA_SECRET not set")
+    monkeypatch.setattr(alpaca_mod, "AlpacaDataAdapter", _raise)
+    # source_has_newer returns None — caller stays strict.
+    assert await publication.source_has_newer(
+        "prices_daily", date(2026, 5, 18)
+    ) is None
+
+
 # ── targeting: demand-driven, no engine code ───────────────────────────
 
 class _Conn:

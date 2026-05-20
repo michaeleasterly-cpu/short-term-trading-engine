@@ -288,21 +288,26 @@ async def test_probe_unavailable_falls_back_to_existing_heal(monkeypatch) -> Non
     """A source with NO entry in VENDOR_PROBES falls back to the
     existing heal-as-usual flow — no vendor_late classification, the
     repair stage runs (proves backward-compat for the majority of
-    feeds that don't have a probe yet)."""
+    feeds that don't have a probe yet).
+
+    Exercises a finra_short_interest red — finra's per-bulk-pull
+    structural mismatch with the IBorrowDesk pattern (see
+    tpcore.feeds.targeting docstring) means it has no
+    latest_published / publication probe, so the source is also
+    absent from VENDOR_PROBES."""
     from tpcore.selfheal import orchestrator, probes
 
     # Sanity: source we exercise has NO probe.
-    assert "prices_daily" not in probes.VENDOR_PROBES
+    assert "finra_short_interest" not in probes.VENDOR_PROBES
 
     rs = _runner()
     out = await orchestrator.run_self_heal(
-        _Pool([["prices_daily_completeness"], []]), rs,
+        _Pool([["short_interest_freshness"], []]), rs,
     )
     assert out.green is True
     assert out.vendor_late == []
-    # The repair stage ran exactly as the existing test_heals_on_retry
-    # asserted — probe-less sources go through the unchanged path.
-    assert ("daily_bars", {"repair_gaps": "true"}) in rs.calls
+    # The repair stage ran — probe-less sources go through the unchanged path.
+    assert ("finra_short_interest", {"skip_guard_days": "0"}) in rs.calls
 
 
 async def test_vendor_late_with_unhealable_escalates_both_separately(

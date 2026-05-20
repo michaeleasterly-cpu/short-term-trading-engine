@@ -72,10 +72,44 @@ async def _fred_probe() -> date | None:
     return earliest
 
 
+async def _alpaca_probe() -> date | None:
+    """Feed-level probe for ``prices_daily``: ask Alpaca for the date
+    of its latest daily bar on SPY.
+
+    Single-anchor design (not MIN-across-universe): the prices_daily
+    feed has thousands of tickers, but the question this probe
+    answers is "has a new NYSE session published yet?" — answered
+    deterministically by any always-trading anchor. SPY is the
+    natural choice: high-liquidity, every NYSE session, never
+    delisted, already in ``CRITICAL_TICKERS`` for
+    prices_daily_freshness. MIN-across-universe (the FRED pattern)
+    would be wrong here: a single delisted/halted ticker would peg
+    the answer to its last bar's date forever.
+
+    The adapter pins the call to the IEX feed (the Algo Trader Plus
+    tier 403s the latest-bar endpoint on SIP; IEX is unrestricted +
+    SPY is universally traded so coverage is complete for the
+    anchor). Production ingestion still uses SIP for the historical
+    bars pull — this probe is a separate cheap "is there a new
+    session?" question.
+
+    Returns ``None`` if the probe fails (e.g. ALPACA_KEY unset, API
+    outage) — caller stays strict per the publication-gate contract."""
+    from tpcore.alpaca import AlpacaDataAdapter
+
+    try:
+        adapter = AlpacaDataAdapter()
+    except RuntimeError:
+        # ALPACA_KEY / ALPACA_SECRET unset — can't probe; stay strict.
+        return None
+    return await adapter.latest_published("SPY")
+
+
 # feed (matches FeedProfile key / HealSpec.source) → probe.
 PUBLICATION_PROBES: dict[str, PublicationProbe] = {
     "aaii_sentiment": _aaii_probe,
     "macro_indicators": _fred_probe,
+    "prices_daily": _alpaca_probe,
 }
 
 
