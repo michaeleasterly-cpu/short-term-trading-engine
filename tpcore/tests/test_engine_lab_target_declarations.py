@@ -60,10 +60,16 @@ def test_engine_declares_valid_lab_target(engine):
     # vector_composite Lab candidate (spec
     # docs/superpowers/specs/2026-05-20-vector-composite-lab-candidate.md
     # §4.1, H-VC-2) — the SAME PR that lands the toggle updates this
-    # assertion. Other engines remain at their T0 keysets.
+    # assertion. Momentum's `vol_managed_mode` toggle was added by the
+    # momentum vol-managed Lab candidate (spec
+    # docs/superpowers/specs/2026-05-20-momentum-vol-managed-lab-candidate.md
+    # §4.1, H-MVM-2) — same pattern. Other engines remain at their T0
+    # keysets.
     expected = list(_T0_PARAM_RANGES_KEYSETS[engine])
     if engine == "vector":
         expected = sorted([*expected, "composite_mode"])
+    if engine == "momentum":
+        expected = sorted([*expected, "vol_managed_mode"])
     assert sorted(lt.param_ranges) == expected
     # The 4 callables resolve to the engine's already-defined symbols.
     assert lt.run_for_search is mod.run_for_search
@@ -85,13 +91,18 @@ def test_lab_target_param_ranges_full_value_byte_parity(engine):
     vector_composite Lab candidate (spec
     docs/superpowers/specs/2026-05-20-vector-composite-lab-candidate.md
     §4.1, H-VC-2) — the SAME PR that lands the toggle updates this
-    expected dict. The candidate-OWNED augmentation is the ONLY allowed
-    drift; every other tuple stays at its T0 byte.
+    expected dict. Momentum's `vol_managed_mode` toggle was added by
+    the momentum vol-managed Lab candidate (spec
+    docs/superpowers/specs/2026-05-20-momentum-vol-managed-lab-candidate.md
+    §4.1, H-MVM-2) — same pattern. The candidate-OWNED augmentation is
+    the ONLY allowed drift; every other tuple stays at its T0 byte.
     """
     mod = importlib.import_module(f"{engine}.backtest")
     expected = dict(_T0_PARAM_RANGES_FULL[engine])
     if engine == "vector":
         expected["composite_mode"] = (0, 0, "choice:and_gate,composite")
+    if engine == "momentum":
+        expected["vol_managed_mode"] = (0, 0, "choice:legacy,vol_managed")
     assert mod.LAB_TARGET.param_ranges == expected
 
 
