@@ -70,8 +70,17 @@ def test_param_ranges_membership_iteration_len_and_set():
     assert "sentinel" in run.PARAM_RANGES         # SP-E: now declared
     assert "carver" in run.PARAM_RANGES            # LAB target, day-zero
     assert len(run.PARAM_RANGES) == 5
-    for e in ("reversion", "vector", "momentum"):
+    for e in ("reversion", "momentum"):
         assert set(run.PARAM_RANGES[e]) == set(_T0_PARAM_RANGES_KEYSETS[e])
+    # vector_composite Lab candidate (spec
+    # docs/superpowers/specs/2026-05-20-vector-composite-lab-candidate.md
+    # §4.1, H-VC-2): EXACTLY ONE new key added to vector — the
+    # composite_mode choice toggle. The T0 keyset + that ONE key is the
+    # post-candidate complete set. No hidden grid (the spec's binding
+    # n_trials discipline). If a future Lab candidate adds another key,
+    # update this assertion in the SAME PR that lands the candidate.
+    assert set(run.PARAM_RANGES["vector"]) == (
+        set(_T0_PARAM_RANGES_KEYSETS["vector"]) | {"composite_mode"})
     # SP-E: sentinel's single pre-registered toggle.
     assert set(run.PARAM_RANGES["sentinel"]) == {"activation_score_threshold"}
     # carver's six pre-registered toggles (spec §6 PARAM_RANGES).

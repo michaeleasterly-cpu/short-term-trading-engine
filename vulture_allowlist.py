@@ -396,3 +396,9 @@ _._validate_param_ranges_shape  # unused method (tpcore/lab/llm_emitter/models.p
 # H-S3-12 autonomous Lab criteria: pytest autouse fixture is invoked by
 # pytest itself, not directly — vulture cannot see the binding.
 _install_reversion_incumbent_dossier  # unused function (tpcore/tests/conftest.py:46)
+# vector_composite Lab candidate: pytest autouse fixture — discovered
+# by pytest's collector, NOT by static analysis (the @pytest.fixture
+# decorator wires it into every test in the file, no explicit call
+# site). Allowlisted with the same idiom as other pytest fixtures
+# elsewhere in the suite.
+_reset_composite_override  # unused function (vector/tests/test_composite_flag_byte_identical.py:134)
