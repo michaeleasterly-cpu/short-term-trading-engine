@@ -208,6 +208,12 @@ _BINDINGS: tuple[ProviderBinding, ...] = (
         status=ProviderStatus.ACTIVE,
         evidence='financial fundamentals (pb/de/revenue/net_income/fcf/etc) for value-engine setup detection — already ingested via FMP for months; formal ProviderBinding registration was missing (surfaced 2026-05-20 by the autonomous-self-heal P0 completeness invariant work).',
     ),
+    ProviderBinding(
+        feed='corporate_actions', provider='alpaca',
+        adapter_module='tpcore.ingestion.handlers.handle_corporate_actions',
+        status=ProviderStatus.ACTIVE,
+        evidence='splits + dividends from Alpaca corporate-actions API — already ingested for months; formal ProviderBinding registration was missing (surfaced 2026-05-20 by the autonomous-self-heal P0 completeness invariant work, mirroring the fundamentals_quarterly gap).',
+    ),
 )
 
 

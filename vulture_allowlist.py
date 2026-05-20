@@ -410,3 +410,7 @@ PROVIDERS_PATH  # unused variable (ops/data_feed_sdlc/planner.py:55)
 FEED_PROFILES_PATH  # unused variable (ops/data_feed_sdlc/planner.py:56)
 _._read_feed_profiles_keys  # unused function (ops/data_feed_sdlc/planner.py:184)
 _PlanModel  # unused class (ops/data_feed_sdlc/planner.py:760)
+# corporate_actions_completeness suite-test stub — pytest autouse
+# fixture invoked by collection, not direct caller. Same idiom as
+# _reset_composite_override above.
+_stub_csv_archive_detect_shrinkage  # unused function (tpcore/quality/validation/tests/conftest.py:35)
