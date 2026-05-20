@@ -13,15 +13,28 @@ horizon if neither bracket fires. Mirrors the Vector pattern.
 
 Lab targeting
 -------------
-Single pre-registered Lab toggle: ``cluster_window_days`` — a
-``choice:`` over ``{30 (legacy default), 45}``. The default 30 mirrors
-``CATALYST_CLUSTER_WINDOW_DAYS`` in :mod:`catalyst.models`; 45 is the
-single pre-registered alternative-window variant. The byte-identical-
-when-off seam is the module-level ``_CLUSTER_WINDOW_OVERRIDE`` global
-(reset per call inside :func:`run_catalyst_with_context`) — the LIVE
-trading path (``catalyst/scheduler.py``) never imports this backtest
-module and so is byte-identical when the flag is off (proven by
-``catalyst/tests/test_lab_cluster_window_byte_identical.py``).
+Two pre-registered Lab toggles (each independent, each its own
+single-spec candidate):
+
+1. ``cluster_window_days`` (SP-F, PR #159) — ``choice:30,45``. The
+   default 30 mirrors ``CATALYST_CLUSTER_WINDOW_DAYS`` in
+   :mod:`catalyst.models`; 45 is the alternative-window variant.
+   Seam: ``_CLUSTER_WINDOW_OVERRIDE``. Test:
+   ``catalyst/tests/test_lab_cluster_window_byte_identical.py``.
+2. ``event_confirmation_mode`` (event-confirmed insider-cluster drift,
+   spec ``docs/superpowers/specs/2026-05-20-catalyst-insider-cluster-
+   event-lab-candidate.md``) — ``choice:off,positive_beat_30d``. The
+   default ``"off"`` is the legacy cluster-only fire-rule;
+   ``"positive_beat_30d"`` adds the strictly-backward 30d positive
+   earnings-beat confirmation predicate. Seam:
+   ``_EVENT_CONFIRMATION_MODE_OVERRIDE``. Test:
+   ``catalyst/tests/test_lab_event_confirmation_byte_identical.py``.
+
+Both overrides are module-level globals reset per call inside
+:func:`run_catalyst_with_context`. The LIVE trading path
+(``catalyst/scheduler.py``) never imports this backtest module and so
+is byte-identical when both flags are off (proven by the two
+characterization tests above).
 
 This module declares ``LAB_TARGET`` with ``primary_metric=SHARPE`` —
 catalyst is a swing engine whose success bar IS Sharpe (the
@@ -41,7 +54,7 @@ import csv
 import os
 import sys
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from datetime import date as date_t
 from decimal import Decimal
@@ -107,12 +120,92 @@ def _cluster_window() -> int:
     )
 
 
+# ════════════════════════════════════════════════════════════════════════
+# Event-confirmed insider-cluster drift — second Lab toggle (single-spec
+# Lab candidate; spec
+# docs/superpowers/specs/2026-05-20-catalyst-insider-cluster-event-lab-
+# candidate.md).
+#
+# When the override is "positive_beat_30d", a cluster fires ONLY IF the
+# same ticker has a positive earnings beat
+# (``earnings_events.event_type='EARNINGS_BEAT' AND magnitude_pct > 0``)
+# in the strictly-backward 30-calendar-day window ``[cursor - 30,
+# cursor]``. When the override is None or "off" (the default + legacy),
+# the legacy cluster-only fire-rule is used — byte-identical to today.
+# The live trading path never enters this module; the override is a
+# backtest-only global, so the live constants
+# (``catalyst.models.CATALYST_*``) are byte-identical when the flag is
+# off (proven by ``catalyst/tests/
+# test_lab_event_confirmation_byte_identical.py``).
+# ════════════════════════════════════════════════════════════════════════
+
+_EVENT_CONFIRMATION_MODE_OVERRIDE: str | None = None
+_EVENT_CONFIRMATION_WINDOW_DAYS: int = 30  # pinned; not Lab-sampled.
+_EVENT_CONFIRMATION_OFF = "off"
+_EVENT_CONFIRMATION_POSITIVE_BEAT_30D = "positive_beat_30d"
+
+
+def _event_confirmation_mode() -> str:
+    """The active event-confirmation mode for THIS backtest run.
+
+    Returns the legacy ``"off"`` unless the off-by-default Lab override
+    is set to ``"positive_beat_30d"``. Pure. An explicit ``"off"``
+    override is accepted as a synonym for ``None`` (so the
+    ``choice:off,positive_beat_30d`` toggle has a real legacy-default
+    value to flip to in the Lab sampler)."""
+    if _EVENT_CONFIRMATION_MODE_OVERRIDE == _EVENT_CONFIRMATION_POSITIVE_BEAT_30D:
+        return _EVENT_CONFIRMATION_POSITIVE_BEAT_30D
+    return _EVENT_CONFIRMATION_OFF
+
+
+def _has_positive_beat(
+    earnings_events: pd.DataFrame,
+    *,
+    ticker: str,
+    cursor: date_t,
+    window_days: int = _EVENT_CONFIRMATION_WINDOW_DAYS,
+) -> bool:
+    """Pure: does ``ticker`` have a positive earnings beat in the
+    strictly-backward ``[cursor - window_days, cursor]`` window?
+
+    The predicate is strictly backward — no row dated after ``cursor``
+    enters the result (lookahead-honest, spec §9). Only rows with
+    ``event_type='EARNINGS_BEAT' AND magnitude_pct > 0`` count.
+
+    Args:
+        earnings_events: dataframe with columns
+            ``{ticker, event_date, event_type, magnitude_pct}`` (the
+            schema of ``platform.earnings_events``). Empty / None
+            inputs return ``False`` — a degenerate-but-honest empty
+            window predicate (no blow-up).
+        ticker: the ticker to test.
+        cursor: the right edge of the window (inclusive).
+        window_days: calendar days back from ``cursor``. Defaults to
+            ``_EVENT_CONFIRMATION_WINDOW_DAYS`` (30, pinned).
+
+    Returns: ``True`` iff at least one matching row exists.
+    """
+    if earnings_events is None or earnings_events.empty:
+        return False
+    start = cursor - timedelta(days=window_days)
+    df = earnings_events
+    mask = (
+        (df["ticker"] == ticker)
+        & (df["event_type"] == "EARNINGS_BEAT")
+        & (df["magnitude_pct"] > 0)
+        & (df["event_date"] >= start)
+        & (df["event_date"] <= cursor)
+    )
+    return bool(mask.any())
+
+
 def default_params() -> dict[str, Any]:
     """Current live defaults for the Lab-sampled keys (the SP3 O1
     dossier-param-diff seam). The legacy default carries the true
     ``legacy → variant`` delta into the dossier ``param_diff``."""
     return {
         "cluster_window_days": int(CATALYST_CLUSTER_WINDOW_DAYS),
+        "event_confirmation_mode": _EVENT_CONFIRMATION_OFF,
     }
 
 
@@ -176,6 +269,45 @@ async def _fetch_prices(
             index=idx,
         )
     return out
+
+
+async def _fetch_earnings_events(
+    pool,
+    *,
+    universe: tuple[str, ...],
+    start: date_t,
+    end: date_t,
+) -> pd.DataFrame:
+    """Strictly-additive: load ``platform.earnings_events`` rows for
+    the universe, restricted to ``event_type='EARNINGS_BEAT'`` AND
+    ``magnitude_pct > 0`` (positive beats).
+
+    Consumed only by the ``event_confirmation_mode="positive_beat_30d"``
+    variant (spec §8). The legacy code path ignores the returned
+    DataFrame, so adding this read is byte-identical to the legacy
+    behaviour (proven by the C1 characterization test).
+    """
+    sql = """
+        SELECT ticker, event_date, event_type, magnitude_pct
+        FROM platform.earnings_events
+        WHERE ticker = ANY($1)
+          AND event_type = 'EARNINGS_BEAT'
+          AND magnitude_pct > 0
+          AND event_date BETWEEN $2 AND $3
+    """
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(sql, list(universe), start, end)
+    if not rows:
+        return pd.DataFrame(
+            columns=["ticker", "event_date", "event_type", "magnitude_pct"]
+        )
+    return pd.DataFrame([
+        {"ticker": r["ticker"],
+         "event_date": r["event_date"],
+         "event_type": r["event_type"],
+         "magnitude_pct": float(r["magnitude_pct"]) if r["magnitude_pct"] is not None else 0.0}
+        for r in rows
+    ])
 
 
 async def _round_trip_cost_by_ticker(
@@ -267,14 +399,28 @@ def _build_trades(
     round_trip_costs: dict[str, Decimal],
     start: date_t,
     end: date_t,
+    earnings_events: pd.DataFrame | None = None,
+    event_confirmation_mode: str = _EVENT_CONFIRMATION_OFF,
 ) -> tuple[list[SearchTrade], list[dict[str, Any]]]:
     """Walk every (ticker, signal-date) pair in the window where the
     cluster floor + the liquidity/trend gates pass; emit one
-    :class:`SearchTrade` per qualified signal."""
+    :class:`SearchTrade` per qualified signal.
+
+    When ``event_confirmation_mode == "positive_beat_30d"`` an
+    additional gate is applied: the cluster fires only if the same
+    ticker has a positive earnings beat in the strictly-backward 30d
+    window ``[cursor - 30, cursor]`` (spec §2.2). When the mode is
+    ``"off"`` (the default + legacy), this is a no-op and the
+    behaviour is byte-identical to the legacy code path.
+    """
     trades: list[SearchTrade] = []
     trades_for_diag: list[dict[str, Any]] = []
     if not prices_by_ticker:
         return trades, trades_for_diag
+
+    apply_event_confirmation = (
+        event_confirmation_mode == _EVENT_CONFIRMATION_POSITIVE_BEAT_30D
+    )
 
     # Walk monthly to keep run-time bounded; a fresh re-cluster every
     # session would re-fire the same trade. One signal per ticker per
@@ -293,6 +439,15 @@ def _build_trades(
             if cl.distinct_insiders < CATALYST_MIN_DISTINCT_INSIDERS:
                 continue
             if cl.aggregate_value_usd < CATALYST_MIN_AGGREGATE_USD:
+                continue
+            # Event-confirmation gate (spec §2.2) — strictly-backward
+            # 30d window; the predicate is False for any ticker
+            # without a positive earnings beat in the window. The
+            # legacy path skips this entire branch (mode=="off").
+            if apply_event_confirmation and not _has_positive_beat(
+                earnings_events, ticker=ticker, cursor=cursor,
+                window_days=_EVENT_CONFIRMATION_WINDOW_DAYS,
+            ):
                 continue
             prices = prices_by_ticker.get(ticker)
             if prices is None or prices.empty:
@@ -367,6 +522,12 @@ class CatalystWindowContext:
 
     Heavy I/O amortised across the window's Lab trials; the per-trial
     work is the cluster recomputation under the active window setting.
+
+    ``earnings_events`` is the strictly-additive read consumed only by
+    the ``event_confirmation_mode="positive_beat_30d"`` variant (spec
+    §8); the legacy code path ignores it. Defaults to an empty
+    DataFrame so existing callers (and the legacy code path) remain
+    byte-identical without any modification.
     """
 
     universe: tuple[str, ...]
@@ -375,6 +536,11 @@ class CatalystWindowContext:
     round_trip_costs: dict[str, Decimal]
     start: date_t
     end: date_t
+    earnings_events: pd.DataFrame = field(
+        default_factory=lambda: pd.DataFrame(
+            columns=["ticker", "event_date", "event_type", "magnitude_pct"]
+        )
+    )
 
 
 async def load_catalyst_window_context(
@@ -408,6 +574,15 @@ async def load_catalyst_window_context(
         round_trip_costs = await _round_trip_cost_by_ticker(
             pool, tickers=u,
         )
+        # Strictly-additive: consumed only by the
+        # ``event_confirmation_mode="positive_beat_30d"`` variant.
+        # The window is widened by ``_EVENT_CONFIRMATION_WINDOW_DAYS``
+        # so the first cursor's backward 30d window is fully covered.
+        earnings_events = await _fetch_earnings_events(
+            pool, universe=u,
+            start=start - timedelta(days=_EVENT_CONFIRMATION_WINDOW_DAYS),
+            end=end,
+        )
     finally:
         await pool.close()
     return CatalystWindowContext(
@@ -415,6 +590,7 @@ async def load_catalyst_window_context(
         prices_by_ticker=prices_by_ticker,
         round_trip_costs=round_trip_costs,
         start=start, end=end,
+        earnings_events=earnings_events,
     )
 
 
@@ -426,18 +602,31 @@ def run_catalyst_with_context(
 ) -> BacktestRunResult:
     """Run catalyst against a pre-loaded :class:`CatalystWindowContext`.
 
-    The single Lab toggle ``cluster_window_days`` is read into the
-    off-by-default module override and **reset per call** so no
-    module-global state bleeds across Lab trials."""
-    global _CLUSTER_WINDOW_OVERRIDE
+    Lab toggles read into off-by-default module overrides and **reset
+    per call** in the ``finally:`` block so no module-global state
+    bleeds across Lab trials (the per-call reset discipline):
+
+    - ``cluster_window_days`` (legacy SP-F toggle): ``choice:30,45``.
+    - ``event_confirmation_mode`` (the event-confirmed insider-cluster
+      drift candidate): ``choice:off,positive_beat_30d``. When
+      ``"positive_beat_30d"`` a cluster fires only if the same ticker
+      has a positive earnings beat in the strictly-backward 30d window.
+    """
+    global _CLUSTER_WINDOW_OVERRIDE, _EVENT_CONFIRMATION_MODE_OVERRIDE
     overrides = dict(overrides or {})
     _CLUSTER_WINDOW_OVERRIDE = (
         int(overrides["cluster_window_days"])
         if "cluster_window_days" in overrides
         else None
     )
+    _EVENT_CONFIRMATION_MODE_OVERRIDE = (
+        str(overrides["event_confirmation_mode"])
+        if "event_confirmation_mode" in overrides
+        else None
+    )
     try:
         active_window = _cluster_window()
+        active_event_mode = _event_confirmation_mode()
         trades, trades_for_diag = _build_trades(
             universe=context.universe,
             insider_rows=context.insider_rows,
@@ -445,9 +634,12 @@ def run_catalyst_with_context(
             cluster_window_days=active_window,
             round_trip_costs=context.round_trip_costs,
             start=context.start, end=context.end,
+            earnings_events=context.earnings_events,
+            event_confirmation_mode=active_event_mode,
         )
     finally:
         _CLUSTER_WINDOW_OVERRIDE = None
+        _EVENT_CONFIRMATION_MODE_OVERRIDE = None
 
     sharpe, pf, max_dd = _compute_summary(trades)
 
@@ -467,7 +659,10 @@ def run_catalyst_with_context(
         prices_for_diag = pd.DataFrame(
             columns=["ticker", "date", "close"])
 
-    parameters: dict[str, Any] = {"cluster_window_days": int(active_window)}
+    parameters: dict[str, Any] = {
+        "cluster_window_days": int(active_window),
+        "event_confirmation_mode": str(active_event_mode),
+    }
     return compute_search_metrics(
         engine="catalyst",
         parameters=parameters,
@@ -595,9 +790,18 @@ def _format_human_summary(
 
 LAB_TARGET = LabTarget(
     param_ranges={
-        # The ONE pre-registered toggle: legacy default 30 vs the single
-        # alternative-window variant 45. choice:<csv> (NOT a range/grid).
+        # SP-F (PR #159) — alternative cluster-window toggle.
+        # choice:<csv> (NOT a range/grid).
         "cluster_window_days": (30, 45, "choice:30,45"),
+        # Event-confirmed insider-cluster drift (single-spec Lab
+        # candidate; spec
+        # docs/superpowers/specs/2026-05-20-catalyst-insider-cluster-
+        # event-lab-candidate.md). choice:off,positive_beat_30d — the
+        # legacy "off" arm is the denominator re-measurement; the
+        # "positive_beat_30d" arm is the one variant.
+        "event_confirmation_mode": (
+            0, 0, "choice:off,positive_beat_30d",
+        ),
     },
     run_for_search=run_for_search,
     load_window_context=load_catalyst_window_context,
