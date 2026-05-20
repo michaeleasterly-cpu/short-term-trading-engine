@@ -65,6 +65,8 @@ Two-session work (one Claude window per task) is the lock-in. Each session gets 
 
 **Cleanup is mandatory, not optional.** When a worktree's PR merges (the task is done), remove the worktree the same turn: from inside the worktree session, `ExitWorktree action: "remove"`; from another session or the main checkout, `git worktree remove .claude/worktrees/<name>` + `git branch -d <branch>`. On session close, Claude prompts keep/remove if the worktree has changes — don't accumulate stale worktrees, the next session's `EnterWorktree` should start from a clean roster.
 
+**Subagent worktrees: same-turn cleanup from the parent.** Background subagents dispatched with `isolation: "worktree"` cannot call `ExitWorktree` themselves — that's a parent-only tool. **The moment a subagent's task notification reports its PR is merged, the parent session MUST run `git worktree remove -f -f .claude/worktrees/<agent-worktree>` + `git branch -D <branch>` the same turn.** Do NOT defer to "the harness will GC eventually" — that leaves locked dirs the operator has to delete manually, which violates the no-direct-deletion principle (engine retirement goes through the SDLC; worktree retirement goes through this convention).
+
 ## Work-tracking source of truth
 
 - **`TODO.md`** (git-tracked) is the canonical task list. **ALWAYS consult it before any "what's next" decision** — never drive next-work choices from memory alone. Memory entries describe rationale and constraints; task state lives in TODO.md.
