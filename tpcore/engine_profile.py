@@ -57,30 +57,48 @@ class EngineProfile(BaseModel):
     lifecycle_state: LifecycleState
     market_closed_required: bool = True
     allocator_eligible: bool = False
+    # Declarative per-engine data-precondition SoT (folded from the
+    # operator-curated capital_gate.ENGINE_TABLES, 2026-05-20). HealSpec-
+    # source-vocabulary ``platform.<table>`` names; the capital gate
+    # derives required ``validation.<check>`` sources from this via
+    # tpcore.selfheal.registry.HEAL_SPECS. Empty default = engine has no
+    # validation-gated reads (LAB sentinel; RETIRED engines; LAB engines
+    # until they declare and graduate). The drift clockwork
+    # (test_dispatchable_engine_declares_data_dependencies) forbids
+    # PAPER/LIVE with an empty set. Same pattern as tpcore.feeds.profile
+    # / tpcore.risk.limits_profile.
+    data_dependencies: frozenset[str] = frozenset()
 
 
 _PROFILE: dict[str, EngineProfile] = {
     "reversion": EngineProfile(engine="reversion", cadence=Cadence.DAILY,
                                dispatch_order=1, lifecycle_state=LifecycleState.PAPER,
-                               allocator_eligible=True),
+                               allocator_eligible=True,
+                               data_dependencies=frozenset({"prices_daily", "fundamentals_quarterly"})),
     "vector":    EngineProfile(engine="vector", cadence=Cadence.DAILY,
                                dispatch_order=2, lifecycle_state=LifecycleState.PAPER,
-                               allocator_eligible=True),
+                               allocator_eligible=True,
+                               data_dependencies=frozenset({"prices_daily", "fundamentals_quarterly", "earnings_events"})),
     "momentum":  EngineProfile(engine="momentum", cadence=Cadence.MONTHLY_FIRST_TRADING_DAY,
                                dispatch_order=3, lifecycle_state=LifecycleState.PAPER,
-                               allocator_eligible=True),
+                               allocator_eligible=True,
+                               data_dependencies=frozenset({"prices_daily", "liquidity_tiers"})),
     "sentinel":  EngineProfile(engine="sentinel", cadence=Cadence.DAILY,
-                               dispatch_order=4, lifecycle_state=LifecycleState.PAPER),
+                               dispatch_order=4, lifecycle_state=LifecycleState.PAPER,
+                               data_dependencies=frozenset({"prices_daily", "macro_indicators"})),
     "canary":    EngineProfile(engine="canary", cadence=Cadence.DAILY,
-                               dispatch_order=5, lifecycle_state=LifecycleState.PAPER),
+                               dispatch_order=5, lifecycle_state=LifecycleState.PAPER,
+                               data_dependencies=frozenset({"prices_daily"})),
     "carver":   EngineProfile(engine="carver", cadence=Cadence.MONTHLY_FIRST_TRADING_DAY,
                                dispatch_order=6, lifecycle_state=LifecycleState.LAB),
     "catalyst":   EngineProfile(engine="catalyst", cadence=Cadence.DAILY,
                                dispatch_order=7, lifecycle_state=LifecycleState.PAPER,
-                               allocator_eligible=True),
+                               allocator_eligible=True,
+                               data_dependencies=frozenset({"prices_daily", "sec_insider_transactions"})),
     # allocator: separate _dispatch_allocator path (NOT in the ROSTER loop, D-SDLC1-4).
     "allocator": EngineProfile(engine="allocator", cadence=Cadence.WEEKLY_FIRST_TRADING_DAY,
-                               dispatch_order=0, lifecycle_state=LifecycleState.PAPER),
+                               dispatch_order=0, lifecycle_state=LifecycleState.PAPER,
+                               data_dependencies=frozenset({"prices_daily"})),
     # sigma RETIRED (data-SDLC RETIRED symmetry, D-SDLC1-2). cadence/dispatch_order are arbitrary inert placeholders — RETIRED engines are filtered out of every dispatch/allocator accessor (T2) so these values are never consumed (D-SDLC1-6).
     "sigma":     EngineProfile(engine="sigma", cadence=Cadence.DAILY,
                                dispatch_order=99, lifecycle_state=LifecycleState.RETIRED),
@@ -171,6 +189,24 @@ def engine_package_names() -> frozenset[str]:
     """Top-level engine package dirs (PAPER/LIVE, non-allocator) — for the
     tpcore-never-imports-an-engine layering invariant (check_imports)."""
     return frozenset(roster_for_dispatch())
+
+
+def engine_data_dependencies(engine: str) -> frozenset[str]:
+    """The ``platform.<table>`` reads ``engine`` declares as preconditions
+    (HealSpec.source vocabulary; the same names
+    ``capital_gate.ENGINE_TABLES`` used pre-migration). Empty frozenset
+    for unprofiled or un-declared engines — the fail-SAFE fallback in
+    :func:`tpcore.quality.validation.capital_gate._required_sources`
+    (gate on EVERY source, the old global behaviour) is preserved
+    byte-equivalently.
+
+    This is the canonical single-SoT accessor for the per-engine data
+    gate (extends, not parallels, the existing per-engine gate — folded
+    in 2026-05-20 per TODO L540-544 + spec
+    docs/superpowers/specs/2026-05-20-declarative-engine-profile-data-
+    dependencies.md)."""
+    p = _PROFILE.get(engine)
+    return p.data_dependencies if p is not None else frozenset()
 
 
 def _week_start_date(d: date) -> date:

@@ -35,53 +35,54 @@ logger = structlog.get_logger(__name__)
 EXPECTED_SOURCES = frozenset(f"validation.{name}" for name in KNOWN_CHECK_NAMES)
 
 # ── Per-engine data dependency map (#166) ─────────────────────────────
-# EVIDENCE-DERIVED, not invented: each engine→table pair is a real
-# ``platform.<table>`` read in that engine's own code (grep 2026-05-16,
-# /tests/ excluded). Internal/meta tables (data_quality_log,
-# application_log, open_orders, risk_state, aar_events,
-# universe_candidates) are platform STATE, not validation-gated feeds,
-# so they are intentionally absent.
+# DERIVED read-model over the SINGLE SoT in tpcore.engine_profile._PROFILE
+# (folded 2026-05-20 per TODO L540-544 + spec docs/superpowers/specs/
+# 2026-05-20-declarative-engine-profile-data-dependencies.md). Each
+# engine's EngineProfile.data_dependencies is the canonical authoritative
+# declaration of which ``platform.<table>`` reads it has — evidence-
+# derived from the engine's real reads (the per-engine commentary that
+# lived here pre-migration was preserved into the original SoT-curation
+# context and remains available in git history; the contemporary
+# canonical declaration is the EngineProfile field).
 #
-#   reversion prices_daily          backtest.py:18,223; scheduler.py:112
-#             fundamentals_quarterly backtest.py:19,38,257,976,1167,1176
-#   vector    prices_daily          backtest.py:216; scheduler.py:89,194
-#             fundamentals_quarterly backtest.py:247,843,1024;
-#                                    scheduler.py:132
-#             earnings_events        backtest.py:269,847,1028
-#   momentum  prices_daily          backtest.py:31,167;
-#                                    plugs/setup_detection.py:186
-#             liquidity_tiers        backtest.py:154,157;
-#                                    plugs/setup_detection.py:5,144,165,172
-#   sentinel  prices_daily          backtest.py:5,83,89; models.py:267;
-#                                    plugs/setup_detection.py:297;
-#                                    scheduler.py:320
-#             macro_indicators       backtest.py:4; models.py:34;
-#                                    plugs/setup_detection.py:63,260
-ENGINE_TABLES: dict[str, frozenset[str]] = {
-    "reversion": frozenset({"prices_daily", "fundamentals_quarterly"}),
-    "vector": frozenset({
-        "prices_daily", "fundamentals_quarterly", "earnings_events",
-    }),
-    "momentum": frozenset({"prices_daily", "liquidity_tiers"}),
-    "sentinel": frozenset({"prices_daily", "macro_indicators"}),
-    # Sub-project C (D-C5): the allocator's only validation-gated input
-    # is prices_daily (SPY regime/CHOP). AAR/risk_state are engine
-    # *output* tables, not validation-gated. Gating here on the REAL
-    # dependency per the per-engine-gate model (not the global
-    # fail-safe) makes failing_sources_for_engine("allocator") return
-    # the right HealSpec.source for the ENGINE_DATA_REQUEST path.
-    "allocator": frozenset({"prices_daily"}),
-    # Canary heartbeat: trades SPY → only validation-gated input is
-    # prices_daily (C-T5 pattern; SPY already in CRITICAL_TICKERS).
-    "canary": frozenset({"prices_daily"}),
-    # Catalyst insider-cluster swing engine: needs prices_daily +
-    # sec_insider_transactions (Form-4 cluster floor). The H-S3-12
-    # autonomous Lab criteria gate activates catalyst in PAPER via the
-    # `source: existing_code` ECR path (PR-2 of the autonomous-Lab-
-    # criteria roll-out — see docs/superpowers/specs/2026-05-20-
-    # autonomous-lab-criteria.md).
-    "catalyst": frozenset({"prices_daily", "sec_insider_transactions"}),
-}
+# This module-level name is KEPT as the back-compat read-model at the
+# old import path — three external consumers
+# (canary/tests/test_wiring.py; tpcore/quality/validation/tests/
+# test_capital_gate.py; tpcore/tests/test_engine_lifecycle_consistency.py)
+# still import it. It is NOT a parallel SoT — re-deriving it always
+# yields exactly {(name, profile.data_dependencies) :
+# profile.data_dependencies}. Resolved lazily via PEP 562 module
+# ``__getattr__`` to break the engine_profile ↔ capital_gate import
+# cycle (engine_profile imports ``assert_passed_for_engine`` at top-
+# level; deriving the table at capital_gate import time would re-enter
+# the partially-initialised engine_profile module).
+def _derive_engine_tables() -> dict[str, frozenset[str]]:
+    """Derive the back-compat ENGINE_TABLES dict from the engine_profile
+    SoT. Engines with empty data_dependencies are absent (preserves the
+    byte-equivalent pre-migration membership: engines with no declared
+    reads were never in the hand-curated dict). RETIRED engines are
+    EXCLUDED (the documented D-SDLC1-1 seam: ENGINE_TABLES is keyed by
+    LIVE engines; the planner's _apply_remove stripped the row at
+    retire-time pre-migration — this filter preserves that semantics
+    structurally so a no-op regex sub against the derived constant is
+    not load-bearing)."""
+    from tpcore.engine_profile import _PROFILE, LifecycleState
+    return {
+        name: p.data_dependencies for name, p in _PROFILE.items()
+        if p.data_dependencies
+        and p.lifecycle_state is not LifecycleState.RETIRED
+    }
+
+
+def __getattr__(name: str) -> object:
+    """PEP 562 lazy attribute resolver — used to defer ENGINE_TABLES
+    derivation until first access so the engine_profile ↔ capital_gate
+    import cycle (engine_profile imports assert_passed_for_engine at
+    top-level) does not fire at capital_gate-import-time."""
+    if name == "ENGINE_TABLES":
+        return _derive_engine_tables()
+    raise AttributeError(
+        f"module {__name__!r} has no attribute {name!r}")
 
 
 class ValidationStaleError(RuntimeError):
@@ -98,10 +99,14 @@ def _required_sources(engine: str) -> frozenset[str]:
     Table→checks is taken from the selfheal registry's ``source``
     field — the existing single source of truth (the registry-coverage
     test guarantees it == KNOWN_CHECK_NAMES, so this can never drift).
-    An unknown engine fails SAFE: gated on EVERY source (the old
-    global behaviour), never on an empty set.
+    Data-dependencies come from the SINGLE SoT
+    :func:`tpcore.engine_profile.engine_data_dependencies` (folded
+    2026-05-20). An unknown / un-declared engine fails SAFE: gated on
+    EVERY source (the old global behaviour), never on an empty set.
     """
-    tables = ENGINE_TABLES.get(engine)
+    from tpcore.engine_profile import engine_data_dependencies  # lazy: avoid cycle
+
+    tables = engine_data_dependencies(engine)
     if not tables:
         return EXPECTED_SOURCES
     from tpcore.selfheal.registry import HEAL_SPECS  # lazy: avoid cycle
@@ -182,12 +187,12 @@ async def assert_passed_for_engine(
     max_age_days: int = 7,
 ) -> None:
     """Per-engine gate (#166): block ``engine`` ONLY if a source IT
-    actually reads (``ENGINE_TABLES`` → registry) is missing/stale/
-    failed at the latest run. A red check on data this engine never
-    reads does NOT block it. This is a REFINEMENT of "100% data or
-    don't trade" — the engine still needs 100% of ITS data — not a
-    weakening. ``require_all_green=True`` restores the global all-green
-    behaviour (operator safety override)."""
+    actually reads (``EngineProfile.data_dependencies`` → registry) is
+    missing/stale/failed at the latest run. A red check on data this
+    engine never reads does NOT block it. This is a REFINEMENT of "100%
+    data or don't trade" — the engine still needs 100% of ITS data —
+    not a weakening. ``require_all_green=True`` restores the global
+    all-green behaviour (operator safety override)."""
     rows = await _fetch_validation_rows(pool)
     required = EXPECTED_SOURCES if require_all_green else _required_sources(engine)
     _evaluate(rows, required, max_age_days)
@@ -201,18 +206,20 @@ async def failing_sources_for_engine(
 ) -> list[str]:
     """NON-raising. Return ``engine``'s failing data sources in the
     HealSpec.source vocabulary (the selfheal-registry ``source``
-    namespace ``ENGINE_TABLES`` is built from) — the locked inter-lane
-    contract vocabulary for Sub-project B.
+    namespace ``EngineProfile.data_dependencies`` is built from) — the
+    locked inter-lane contract vocabulary for Sub-project B.
 
     A source is failing if any required ``validation.<check>`` that
     maps to it (via the SAME ``HEAL_SPECS``→source iteration
     :func:`_required_sources` uses) is missing from the latest run or
     is :func:`_is_red`. A globally-stale or empty run is treated as
-    "no trustworthy data" → every required source fails. An unknown
-    engine has no ``ENGINE_TABLES`` entry, so there is nothing to
-    heal/report → ``[]``.
+    "no trustworthy data" → every required source fails. An unknown /
+    un-declared engine has no ``data_dependencies`` entry, so there is
+    nothing to heal/report → ``[]``.
     """
-    tables = ENGINE_TABLES.get(engine)
+    from tpcore.engine_profile import engine_data_dependencies  # lazy: avoid cycle
+
+    tables = engine_data_dependencies(engine)
     if not tables:  # unknown / unmapped engine: nothing to report
         return []
     from tpcore.selfheal.registry import HEAL_SPECS  # lazy: avoid cycle
@@ -264,7 +271,14 @@ __all__ = [
     "assert_passed",
     "assert_passed_for_engine",
     "failing_sources_for_engine",
-    "ENGINE_TABLES",
+    # ``ENGINE_TABLES`` is a public symbol resolved via module
+    # ``__getattr__`` (PEP 562) to break the engine_profile ↔
+    # capital_gate import cycle — direct ``from
+    # tpcore.quality.validation.capital_gate import ENGINE_TABLES``
+    # works at every call-site. It is intentionally NOT in ``__all__``
+    # because ruff F822 cannot see a dynamic resolver as an "exported
+    # name" — the three external consumers import it by name, not via
+    # ``from ... import *``.
     "ValidationFailedError",
     "ValidationStaleError",
     "EXPECTED_SOURCES",
