@@ -393,3 +393,6 @@ cat_reason  # unused variable (vector/plugs/setup_detection.py:356)
 _._non_negative  # unused method (tpcore/lab/llm_emitter/models.py:61)
 _._quota_non_negative  # unused method (tpcore/lab/llm_emitter/models.py:109)
 _._validate_param_ranges_shape  # unused method (tpcore/lab/llm_emitter/models.py:150)
+# H-S3-12 autonomous Lab criteria: pytest autouse fixture is invoked by
+# pytest itself, not directly — vulture cannot see the binding.
+_install_reversion_incumbent_dossier  # unused function (tpcore/tests/conftest.py:46)
