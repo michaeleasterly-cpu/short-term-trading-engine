@@ -64,6 +64,7 @@ escalation_drift  # unused function (ops/engine_ladder.py:139)
 model_config  # unused variable (ops/engine_sdlc/ecr.py:40)
 need  # unused variable (ops/engine_sdlc/ecr.py:51)
 _._exactly_the_selected_action_fields  # unused method (ops/engine_sdlc/ecr.py:58)  # noqa: SLF001
+_._data_dependencies_required_for_existing_code  # unused method (ops/engine_sdlc/ecr.py:91)  # noqa: SLF001
 model_config  # unused variable (ops/engine_sdlc/planner.py:50)
 fs_ops  # unused variable (ops/engine_sdlc/planner.py:57)
 gate_checks  # unused variable (ops/engine_sdlc/planner.py:58)
