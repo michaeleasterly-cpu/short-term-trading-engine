@@ -285,15 +285,26 @@ class FakePool:
                 "t1_t2_count": 1000,  # 20% — well above 3% floor
                 "active_universe": 5000,
             }
-        # Ticker classifications coverage check.
-        if "ticker_classifications" in sql_lower and "unclassified" in sql_lower:
+        # ticker_classifications_coverage — Path D drift invariant.
+        # Two distinct probes: latest snapshot row + live COUNT(*). The
+        # FakePool returns a matching pair so the suite stays green in
+        # e2e tests focused on unrelated checks. Routes on the
+        # distinctive snapshot-table substring + the live-COUNT shape.
+        if (
+            "platform.ticker_classifications_source_count" in sql_lower
+            and "order by snapshot_at desc" in sql_lower
+        ):
             from datetime import UTC, datetime, timedelta
             return {
-                "latest_update": datetime.now(UTC) - timedelta(days=10),
-                "classified_rows": 13000,
-                "active_universe": 5000,
-                "unclassified": 100,  # 98% coverage — above 90% floor
+                "snapshot_at": datetime.now(UTC) - timedelta(days=10),
+                "source_count": 13000,
             }
+        if (
+            "count(*)" in sql_lower
+            and "from platform.ticker_classifications" in sql_lower
+            and "source_count" not in sql_lower
+        ):
+            return {"n": 13000}
         rows = await self.fetch(sql, *args)
         return rows[0] if rows else None
 

@@ -30,10 +30,9 @@ apply:
   universe must be a subset of liquidity_tiers, regardless of which
   specific rows the recompute added/removed.
 
-Active universe (intersection of two filters — matches the existing
-``ticker_classifications_freshness._COVERAGE_SQL`` shape + the
+Active universe (intersection of two filters — matches the
 ``sec_filings_freshness`` addressable CTE; this check does NOT
-introduce a third definition):
+introduce a new definition):
 
 * ``platform.ticker_classifications.asset_class = 'stock'`` — ETFs,
   SPACs, and funds are deliberately NOT tiered (the liquidity-tier
@@ -78,9 +77,8 @@ MAX_REPORTED = 5
 # Anti-join: active-universe tickers (stock asset_class + active in the
 # trailing 30 NYSE sessions per prices_daily) that have NO row in
 # liquidity_tiers. The two-filter active-universe definition mirrors
-# the ticker_classifications_freshness._COVERAGE_SQL shape and the
-# sec_filings_freshness addressable CTE; this check deliberately does
-# NOT introduce a third definition.
+# the sec_filings_freshness addressable CTE; this check deliberately
+# does NOT introduce a new definition.
 _MISSING_ACTIVE_SQL = """
     WITH active_universe AS (
         SELECT DISTINCT pd.ticker

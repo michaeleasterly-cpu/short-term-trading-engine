@@ -211,6 +211,16 @@ _UPSERT_SQL = """
         last_updated = now()
 """
 
+# Source-count snapshot — one row per refresh, gates the zero-tolerance
+# ticker_classifications_coverage drift invariant. CHECK_NAME and write
+# in the SAME transaction as the upserts so a partial write can't poison
+# the next check.
+_INSERT_SOURCE_COUNT_SQL = """
+    INSERT INTO platform.ticker_classifications_source_count
+        (source_count)
+    VALUES ($1)
+"""
+
 
 async def upsert_classifications(
     pool: asyncpg.Pool,
@@ -224,6 +234,50 @@ async def upsert_classifications(
     return len(rows)
 
 
+async def upsert_classifications_with_source_snapshot(
+    pool: asyncpg.Pool,
+    rows: list[tuple[str, str, bool | None, Decimal | None, str | None, str]],
+    *,
+    source_count: int,
+) -> int:
+    """Atomically upsert classifications + record the source-of-truth
+    row count snapshot.
+
+    Both writes happen in a single transaction. A partial write (upserts
+    succeed, snapshot fails) would silently corrupt the next drift-
+    check's view of "what Alpaca said the row count was last time"; the
+    single-transaction guarantees that can't happen.
+
+    ``source_count`` is the number of assets the upstream (Alpaca
+    ``/v2/assets``) returned BEFORE filtering / classification — it is
+    the ground truth the live ``COUNT(*)`` on
+    ``platform.ticker_classifications`` must equal. A row with that
+    count is appended to ``platform.ticker_classifications_source_count``
+    (one row per refresh — history is kept).
+    """
+    if not rows:
+        # Defensive: a zero-row classify run is itself a vendor failure
+        # we want the check to surface. Don't write a misleading
+        # source_count=0 snapshot (the CHECK constraint forbids it
+        # anyway).
+        return 0
+    if source_count <= 0:
+        raise ValueError(
+            f"source_count must be > 0 (Alpaca returned {source_count}); "
+            "an empty upstream response is a vendor failure and must NOT "
+            "be persisted as a baseline."
+        )
+    async with pool.acquire() as conn, conn.transaction():
+        await conn.executemany(_UPSERT_SQL, rows)
+        await conn.execute(_INSERT_SOURCE_COUNT_SQL, source_count)
+    logger.info(
+        "classify_tickers.source_snapshot_recorded",
+        source_count=source_count,
+        upserted=len(rows),
+    )
+    return len(rows)
+
+
 async def classify_all_tickers(
     pool: asyncpg.Pool,
     *,
@@ -232,7 +286,14 @@ async def classify_all_tickers(
 ) -> dict[str, int]:
     """One-shot backfill from Alpaca's full asset list.
 
-    Returns ``{'rows': N, 'stocks': S, 'etfs': E, 'inverse': I}``.
+    Returns ``{'rows': N, 'stocks': S, 'etfs': E, 'inverse': I,
+    'source_count': SC}`` where ``source_count`` is the total Alpaca-
+    derived rows persisted on this refresh (bulk + per-ticker fallback).
+    The snapshot row written to
+    ``platform.ticker_classifications_source_count`` gates the
+    zero-tolerance ``ticker_classifications_coverage`` drift invariant
+    (live ``COUNT(*)`` must equal the most recent snapshot's
+    ``source_count``).
     """
     async with httpx.AsyncClient(
         base_url=alpaca_base_url, headers=alpaca_headers, timeout=60.0
@@ -260,11 +321,14 @@ async def classify_all_tickers(
         rows.append((
             symbol, asset_class, etf_inverse, leverage, None, "alpaca_name",
         ))
-    n = await upsert_classifications(pool, rows)
 
     # Follow-up: T1+T2 tickers Alpaca's bulk /v2/assets didn't return
     # (delisted-but-still-trading, special status) get a per-ticker
-    # lookup. Caught NZUS / similar gaps on 2026-05-14.
+    # lookup. Caught NZUS / similar gaps on 2026-05-14. The bulk upsert
+    # has NOT been issued yet — we defer ALL writes until both batches
+    # are assembled, so the source-count snapshot can be recorded in
+    # the SAME transaction as the full row set the
+    # ticker_classifications_coverage drift invariant gates against.
     async with pool.acquire() as conn:
         unclassified = await conn.fetch(
             """
@@ -297,19 +361,35 @@ async def classify_all_tickers(
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("classify_tickers.per_ticker_failed", symbol=sym, error=str(exc))
                     follow_up_stats["still_unclassified"] += 1
-    if follow_up_rows:
-        await upsert_classifications(pool, follow_up_rows)
-        n += len(follow_up_rows)
+
+    # source_count = bulk + per-ticker-resolved (the full Alpaca-sourced
+    # roster this refresh saw). The ticker_classifications_coverage
+    # drift invariant compares this to the live COUNT(*); on a fresh
+    # table both equal source_count by construction, on subsequent runs
+    # any difference is a real drift signal.
+    combined_rows = rows + follow_up_rows
+    source_count = len(combined_rows)
+    if source_count == 0:
+        # Zero-row Alpaca response is a vendor failure — surface it.
+        # Don't write a misleading source_count=0 snapshot (the CHECK
+        # constraint on the table forbids it anyway).
+        logger.warning("tpcore.classify_tickers.empty_alpaca_response")
+        return {"rows": 0, **stats, **follow_up_stats, "source_count": 0}
+
+    n = await upsert_classifications_with_source_snapshot(
+        pool, combined_rows, source_count=source_count,
+    )
 
     logger.info(
         "tpcore.classify_tickers.done",
-        upserted=n, **stats, **follow_up_stats,
+        upserted=n, source_count=source_count, **stats, **follow_up_stats,
     )
-    return {"rows": n, **stats, **follow_up_stats}
+    return {"rows": n, **stats, **follow_up_stats, "source_count": source_count}
 
 
 __all__ = [
     "classify_all_tickers",
     "fetch_alpaca_assets",
     "upsert_classifications",
+    "upsert_classifications_with_source_snapshot",
 ]
