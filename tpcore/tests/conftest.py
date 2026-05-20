@@ -43,7 +43,7 @@ _SYNTHETIC_INCUMBENT = {
 }
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture(scope="session", autouse=True)
 def _install_reversion_incumbent_dossier():
     """Install a stable, intentionally-beatable reversion incumbent
     dossier at ``backtests/reversion_backtest_results.json`` for tests
@@ -51,13 +51,18 @@ def _install_reversion_incumbent_dossier():
 
     The fixture is conditional: it only creates the file if absent, and
     only removes it if it created it (so a real backtest run's dossier
-    is never disturbed). This is the SP-D test-isolation pattern."""
+    is never disturbed). This is the SP-D test-isolation pattern.
+
+    Session-scoped + no-teardown-delete to avoid a per-test AND a
+    cross-worker race under ``pytest-xdist``: each worker runs its
+    own session, so a function-scoped or even session-scoped delete
+    on teardown lets worker A's teardown unlink the file mid-flight
+    on worker B, flipping ``_validate_modify`` red for tests still
+    running there. We leave the synthetic dossier in place at exit —
+    ``backtests/`` is gitignored, so a left-over synthetic file does
+    not dirty the repo, and a real backtest run will overwrite it."""
     path = REPO_ROOT / "backtests" / "reversion_backtest_results.json"
-    created = False
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(_SYNTHETIC_INCUMBENT, indent=2))
-        created = True
     yield
-    if created and path.exists():
-        path.unlink()
