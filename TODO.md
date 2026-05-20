@@ -170,10 +170,11 @@ The data feed was renamed `catalyst_* → earnings_*` (DONE 2026-05-16; see sess
 > the prerequisite; this P0 round adds the ZERO-TOLERANCE invariant
 > half — what `prices_daily_completeness` is for daily bars, now
 > generalized to every other source. P1 follow-ons: (a) liquidity_tiers
-> + ticker_classifications completeness shape (item 6 below); (b) the
-> earnings_events NO_BEAT-sentinel KNOWN GAP (Path B of the
-> earnings design — emit non-beat rows so per-quarter completeness
-> becomes auditable, today's invariant catches truncation only).
+> + ticker_classifications completeness shape (item 6 below);
+> (b) ✅ DONE 2026-05-20 — earnings_events NO_BEAT-sentinel ingestion
+> (Path B) resolves the prior KNOWN GAP, monotone invariant now
+> filters on `event_type IN ('EARNINGS_BEAT','EARNINGS_NO_BEAT')` so
+> truncation AND missed-detection both gated.
 >
 > Prior STATUS 2026-05-16 (preserved for rationale): bounded heal
 > shipped; 14/20 genuinely self-heal, 6/20 escalate-for-investigation;
@@ -230,29 +231,31 @@ residual of the "runs on its own" mandate:
 3. ✅ **`earnings_events`** (FMP) — SHIPPED PR #181
    (`earnings_events_monotone.py`, `platform.earnings_events_count_snapshot`,
    per-ticker EARNINGS_BEAT count monotone-non-decrease, HealSpec routed
-   to `earnings_refresh`). **KNOWN GAP (filed as P1 follow-on):**
-   `_classify_beat` is BEAT-only ⇒ monotone catches truncation, NOT
-   missed-detection; emit NO_BEAT sentinel rows so per-quarter
-   completeness becomes auditable.
-   - **P1 follow-on (surfaced 2026-05-20 by the
-     `earnings_events_monotone` P0 source 3/5 PR):** emit a `NO_BEAT`
-     sentinel row per `(ticker, quarter)` when `actual_eps` is present
-     but doesn't clear the >5% beat threshold, so per-quarter
-     completeness becomes auditable (every active T1/T2 ticker has a
-     row — BEAT or NO_BEAT — for every fiscal quarter in its active
-     range). Resolves the KNOWN GAP in `earnings_events_monotone`:
-     `scripts/backfill_earnings_events.py::_classify_beat` is
-     BEAT-only, so today's monotone invariant catches **vendor
-     truncation** but NOT **missed detection** from an FMP outage that
-     would have written a beat row had the feed responded. Touches
-     `scripts/backfill_earnings_events.py` (emit sentinels),
-     `platform/migrations/` (optional enum extension or just rely on
-     the existing free-text `event_type` column), the downstream
-     consumers (`vector/backtest.py`, `catalyst/backtest.py`) that
-     filter `event_type='EARNINGS_BEAT'` (no change needed — they
-     already filter, NO_BEAT is invisible to them), and a new
-     `earnings_events_quarterly_completeness` check. `[lane: data-lane-mine]
-     [gate: none] [needs operator decision: no] [effort: M]`
+   to `earnings_refresh`). KNOWN GAP resolved 2026-05-20 — see follow-on.
+   - ✅ **DONE 2026-05-20 — NO_BEAT sentinel ingestion (Path B,
+     surfaced 2026-05-20 by the `earnings_events_monotone` P0 source
+     3/5 PR):** `scripts/backfill_earnings_events.py::_classify_earnings`
+     now emits a `NO_BEAT` sentinel row when `actual_eps` is present
+     but doesn't clear the >5% beat threshold (miss, in-line,
+     zero-estimate-with-non-positive-actual, negative-estimate);
+     `magnitude_pct = NULL` on NO_BEAT rows. The monotone invariant
+     SQL filter widened to
+     `event_type IN ('EARNINGS_BEAT','EARNINGS_NO_BEAT')` so the
+     monotone-on-the-union now gates against truncation AND
+     missed-detection from FMP outages. Downstream consumers
+     (`vector/backtest.py`, `catalyst/backtest.py`) still filter
+     `event_type='EARNINGS_BEAT'` — NO_BEAT is invisible to them, no
+     change needed. No schema migration (free-text `event_type`
+     column accommodates the new literal; snapshot column
+     `beat_count` retains its name with documented semantics shift to
+     reported-earnings count). Rationale preserved here rather than
+     deleted: the KNOWN GAP was "BEAT-only ingestion can't catch
+     missed-detection from FMP outages" — Path B (NO_BEAT sentinel)
+     was the chosen resolution over Path A (per-quarter completeness
+     check) because it requires no quarter inference and is honest
+     about the underlying ingestion population.
+     `[lane: data-lane-mine] [gate: none] [needs operator decision: no]
+     [effort: M] [resolved: 2026-05-20]`
 4. ✅ **`sec_insider_transactions` / SEC filings** (EDGAR) — SHIPPED PR
    #179 (`sec_insider_monotone.py`,
    `platform.sec_insider_row_counts_snapshot`, per-ticker COUNT(*)

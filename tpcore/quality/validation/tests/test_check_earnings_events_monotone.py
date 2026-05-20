@@ -1,20 +1,21 @@
 """Tests for the zero-tolerance earnings_events_monotone invariant.
 
 The check compares per-ticker live ``COUNT(*) WHERE
-event_type='EARNINGS_BEAT'`` on ``platform.earnings_events`` against
-the prior baseline in ``platform.earnings_events_count_snapshot``,
-then UPSERTs the new baseline on PASS — all in a single transaction.
-Tests pin behavior with a fake asyncpg pool that records the SQL it
-sees + the UPSERT writes, mirroring the
-test_check_sec_insider_monotone fake-pool pattern but driving the
-test through ``_evaluate``'s real transactional shape (no
-module-level patching).
+event_type IN ('EARNINGS_BEAT','EARNINGS_NO_BEAT')`` on
+``platform.earnings_events`` against the prior baseline in
+``platform.earnings_events_count_snapshot``, then UPSERTs the new
+baseline on PASS — all in a single transaction. Tests pin behavior
+with a fake asyncpg pool that records the SQL it sees + the UPSERT
+writes, mirroring the test_check_sec_insider_monotone fake-pool
+pattern but driving the test through ``_evaluate``'s real
+transactional shape (no module-level patching).
 
-KNOWN GAP CAVEAT: these tests verify the monotone invariant on
-EARNINGS_BEAT counts as scaffolded. They do NOT exercise the
-missed-detection case (BEAT-only ingestion can't write a row for an
-FMP-outage'd quarter) — that is by design; resolution requires the
-NO_BEAT-sentinel P1 follow-on tracked in TODO.md.
+The fake pool's ``fetch`` routes the live-count SELECT on the
+``EARNINGS_BEAT`` substring (the SQL emits the BEAT + NO_BEAT IN
+list) — fixture callers feed in the live total (BEAT + NO_BEAT
+combined) under the ``live_counts`` mapping. The snapshot table
+column is ``beat_count`` for column-name history reasons but the
+semantics today are the full reported-earnings count.
 """
 from __future__ import annotations
 
@@ -35,11 +36,20 @@ class _Conn:
         self, sql: str, *args: object
     ) -> list[dict[str, Any]]:
         # Two distinct SELECTs are issued — route by SQL substring.
-        # Live per-ticker EARNINGS_BEAT counts.
+        # Live per-ticker reported-earnings counts (BEAT + NO_BEAT
+        # union). The check's SQL filter is
+        # ``event_type IN ('EARNINGS_BEAT', 'EARNINGS_NO_BEAT')``; we
+        # assert both literals appear so a regression to BEAT-only
+        # reds the test rather than silently working.
         if (
             "FROM platform.earnings_events" in sql
             and "EARNINGS_BEAT" in sql
         ):
+            assert "EARNINGS_NO_BEAT" in sql, (
+                "live-counts SQL must filter on the BEAT + NO_BEAT "
+                "union; BEAT-only is the prior KNOWN GAP and would "
+                "miss FMP-outage'd quarters."
+            )
             return [
                 {"ticker": t, "beat_count": c}
                 for t, c in self._owner.live_counts.items()
@@ -124,7 +134,7 @@ async def test_C1_all_counts_at_or_above_snapshot_passes() -> None:
 async def test_C2_one_ticker_decreased_fails() -> None:
     """Any negative delta on ANY ticker fails — zero tolerance."""
     pool = _Pool(
-        live_counts={"AAPL": 11, "MSFT": 9},  # AAPL lost a beat
+        live_counts={"AAPL": 11, "MSFT": 9},  # AAPL lost an earnings row
         snapshot={"AAPL": 12, "MSFT": 9},
     )
     result = await check_earnings_events_monotone(pool)
@@ -132,7 +142,7 @@ async def test_C2_one_ticker_decreased_fails() -> None:
     assert result.failed == 1
     fail = result.failures[0]
     assert fail.ticker == "AAPL"
-    assert fail.reason == "beat_count_decreased"
+    assert fail.reason == "earnings_count_decreased"
     # Snapshot must NOT be downgraded on FAIL — keeps the original floor.
     assert pool.snapshot == {"AAPL": 12, "MSFT": 9}
     assert pool.upserts == []
@@ -206,3 +216,35 @@ async def test_C6b_repair_targets_lists_decreased() -> None:
     )
     targets = await compute_earnings_events_repair_targets(pool)
     assert set(targets) == {"AAPL", "GOOG"}
+
+
+# ── C7 — NO_BEAT rows count toward the monotone gate ─────────────────
+
+
+async def test_C7_no_beat_rows_increment_count_alongside_beats() -> None:
+    """A delisting / quarter-of-misses scenario: the most recent
+    reporting event was a NO_BEAT, not a BEAT. The new live count
+    (BEAT + NO_BEAT union) is the prior + 1 — that's a legitimate
+    monotone increment, NOT a regression.
+
+    Pre-NO_BEAT-sentinel, this same scenario would have left the
+    invariant blind (no row written for the miss). Post-sentinel, the
+    NO_BEAT row lands in ``platform.earnings_events`` and the live
+    union count reflects it. The fake pool routes the live-counts
+    SELECT only when the SQL filter includes both ``EARNINGS_BEAT``
+    AND ``EARNINGS_NO_BEAT`` (asserted in ``_Conn.fetch``), so this
+    test simultaneously pins the SQL shape and the count semantics.
+    """
+    # AAPL had 12 BEATs at last snapshot; this quarter reported a
+    # miss → NO_BEAT row inserted. Live union = 12 BEAT + 1 NO_BEAT
+    # = 13. MSFT unchanged. Both monotone-non-decrease.
+    pool = _Pool(
+        live_counts={"AAPL": 13, "MSFT": 9},
+        snapshot={"AAPL": 12, "MSFT": 9},
+    )
+    result = await check_earnings_events_monotone(pool)
+    assert result.passed is True, [f.observed for f in result.failures]
+    assert result.failed == 0
+    # New baseline absorbs the NO_BEAT — next run gates against 13.
+    assert pool.snapshot == {"AAPL": 13, "MSFT": 9}
+    assert sorted(pool.upserts) == [("AAPL", 13), ("MSFT", 9)]

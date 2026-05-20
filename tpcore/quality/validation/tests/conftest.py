@@ -95,12 +95,13 @@ class FakePool:
         # Return a matching baseline so the invariant passes.
         if "platform.sec_insider_row_counts_snapshot" in sql_lower:
             return [{"ticker": "AAPL", "rowcount": 100}]
-        # earnings_events_monotone — live per-ticker EARNINGS_BEAT
-        # counts. Return a single ticker with a count that matches the
-        # seeded snapshot below so the invariant passes in unrelated
-        # e2e tests. Routes on the EARNINGS_BEAT WHERE-clause shape so
-        # it doesn't collide with the freshness check's CTE shape
-        # (which uses fetchrow on a CTE with "addressable").
+        # earnings_events_monotone — live per-ticker reported-earnings
+        # counts (BEAT + NO_BEAT union). Return a single ticker with a
+        # count that matches the seeded snapshot below so the invariant
+        # passes in unrelated e2e tests. Routes on the
+        # ``earnings_beat`` WHERE-clause substring (the union SQL still
+        # contains it) so it doesn't collide with the freshness check's
+        # CTE shape (which uses fetchrow on a CTE with "addressable").
         if (
             "platform.earnings_events" in sql_lower
             and "earnings_beat" in sql_lower

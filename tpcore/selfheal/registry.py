@@ -123,21 +123,19 @@ _SPECS: tuple[HealSpec, ...] = (
              healable=True, stage="earnings_refresh",
              params={"skip_guard_days": "0"}, max_attempts=2),
     # Per-ticker zero-tolerance monotone-non-decrease invariant on
-    # EARNINGS_BEAT row counts in platform.earnings_events.
-    # EARNINGS_BEAT rows are append-only — any per-ticker rowcount drop
-    # vs the prior snapshot is vendor truncation / deletion. Heal via
-    # the canonical earnings_refresh stage with skip_guard_days=0 so
-    # the bounded re-pull actually fires. Bounded by max_attempts=2.
-    # Baseline lives in platform.earnings_events_count_snapshot
-    # (per-ticker PK; UPSERT on PASS; the check's read+compare+UPSERT
-    # runs in a single tx so a partial write can't poison the next
-    # cycle).
-    # KNOWN GAP (P1 follow-on): backfill_earnings_events._classify_beat
-    # is BEAT-only (actual > estimate * 1.05) — this invariant catches
-    # truncation but NOT missed-detection from FMP outages. Tracked in
-    # TODO.md autonomous self-heal section; resolution is to emit a
-    # NO_BEAT sentinel per quarter so per-quarter completeness becomes
-    # auditable.
+    # reported-earnings row counts (BEAT + NO_BEAT union) in
+    # platform.earnings_events. Reported earnings rows are append-only —
+    # any per-ticker rowcount drop vs the prior snapshot is vendor
+    # truncation / deletion. Heal via the canonical earnings_refresh
+    # stage with skip_guard_days=0 so the bounded re-pull actually fires.
+    # Bounded by max_attempts=2. Baseline lives in
+    # platform.earnings_events_count_snapshot (per-ticker PK; UPSERT on
+    # PASS; the check's read+compare+UPSERT runs in a single tx so a
+    # partial write can't poison the next cycle).
+    # History: the prior BEAT-only KNOWN GAP (P1 follow-on) was resolved
+    # 2026-05-20 by the NO_BEAT sentinel ingestion in
+    # scripts/backfill_earnings_events.py — the invariant now gates on
+    # truncation AND missed-detection from FMP outages.
     HealSpec(check_name="earnings_events_monotone",
              source="earnings_events",
              healable=True, stage="earnings_refresh",

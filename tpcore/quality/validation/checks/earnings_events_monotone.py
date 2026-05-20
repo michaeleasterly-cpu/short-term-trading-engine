@@ -1,49 +1,47 @@
 """earnings_events monotone — per-ticker zero-tolerance non-decrease
-invariant on EARNINGS_BEAT row counts.
+invariant on reported-earnings row counts (BEAT + NO_BEAT union).
 
 ``earnings_events_freshness`` validates that the table is *recent* and
 that *coverage* across the active universe meets a floor. It is
-structurally blind to a vendor TRUNCATION on the historical beat set:
-a re-ingest that loses 30% of a ticker's older EARNINGS_BEAT rows
-leaves the freshness check green (newest event still fresh, coverage
-floor still met) while the engines silently lose historical earnings-
-beat signal.
+structurally blind to a vendor TRUNCATION on the historical event set:
+a re-ingest that loses 30% of a ticker's older rows leaves the
+freshness check green (newest event still fresh, coverage floor still
+met) while the engines silently lose historical earnings signal.
 
 This check closes that hole with a *physical-truth invariant* mirroring
 the prices_daily_completeness + corporate_actions_completeness +
-sec_insider_monotone shape but keyed on per-ticker EARNINGS_BEAT
-counts:
+sec_insider_monotone shape but keyed on per-ticker reported-earnings
+counts (BEAT + NO_BEAT, the full ingestion population):
 
     For every ticker in ``platform.earnings_events``, the live
-    ``COUNT(*) WHERE event_type='EARNINGS_BEAT'`` must be >= the
-    snapshot recorded on the prior run. ANY per-ticker negative
-    delta -> FAIL.
+    ``COUNT(*) WHERE event_type IN ('EARNINGS_BEAT','EARNINGS_NO_BEAT')``
+    must be >= the snapshot recorded on the prior run. ANY per-ticker
+    negative delta -> FAIL.
 
-Why this exact shape:
+Why on the union (resolves the prior BEAT-only KNOWN GAP):
 
-* EARNINGS_BEAT rows are *historical events* — a Q2 2023 beat does not
+* FMP returns one row per actual reporting event; ingestion classifies
+  it BEAT or NO_BEAT but never silently drops a reported event.
+  Monotone-non-decrease on the union catches both vendor truncation
+  AND missed-detection (an FMP outage that would have written a row
+  had the feed responded now shows up as a missing NO_BEAT-or-BEAT row
+  in the next pull).
+* Earnings rows are *historical events* — a Q2 2023 report does not
   unhappen. Rows are never legitimately deleted.
-* A re-ingestion that yields fewer beat rows for ANY ticker is a
+* A re-ingestion that yields fewer reported rows for ANY ticker is a
   vendor truncation / API contract change — exactly the
   BAMLH0A0HYM2 / Sigma 22-site-drift failure mode the lifecycle is
   designed to surface.
-* Zero-tolerance, no knob: even ONE beat row lost on ONE ticker is a
-  fail. No percentage threshold (would hide small-cap truncations
-  under mega-cap noise), no window (the invariant has nothing to do
-  with recency — that belongs in ``earnings_events_freshness``).
+* Zero-tolerance, no knob: even ONE row lost on ONE ticker is a fail.
+  No percentage threshold (would hide small-cap truncations under
+  mega-cap noise), no window (the invariant has nothing to do with
+  recency — that belongs in ``earnings_events_freshness``).
 
-KNOWN GAP — caveated explicitly (P1 follow-on, tracked in TODO.md):
-
-    ``scripts/backfill_earnings_events.py::_classify_beat`` only emits
-    a row when ``actual_eps > estimated_eps * 1.05``. MISS / IN-LINE
-    earnings produce NO ROW. So this per-ticker monotone-non-decrease
-    invariant catches **vendor truncation** (a re-ingest that drops
-    historical beats), but it does NOT catch a **missed detection**
-    from an FMP outage that would have written a beat row had the
-    feed responded. The honest fix is to emit a ``NO_BEAT`` sentinel
-    per quarter so per-quarter completeness becomes auditable — that
-    is tracked as a P1 follow-on under the "Autonomous self-heal"
-    section of TODO.md.
+History: a prior revision filtered on ``event_type='EARNINGS_BEAT'``
+only, which left a structural blind spot for missed-detection
+(documented as KNOWN GAP, resolved by the NO_BEAT sentinel ingestion in
+``scripts/backfill_earnings_events.py``). Today the invariant covers
+the full reported-earnings population.
 
 Architectural pair with sec_insider_monotone:
 
@@ -92,17 +90,24 @@ CHECK_NAME = "earnings_events_monotone"
 # sec_insider_monotone cap.
 MAX_REPORTED = 5
 
-# Live per-ticker EARNINGS_BEAT counts on platform.earnings_events.
+# Live per-ticker reported-earnings counts on platform.earnings_events
+# across the BEAT + NO_BEAT union (the full ingestion population).
 _LIVE_COUNTS_SQL = (
     "SELECT ticker, COUNT(*) AS beat_count "
     "FROM platform.earnings_events "
-    "WHERE event_type = 'EARNINGS_BEAT' "
+    "WHERE event_type IN ('EARNINGS_BEAT', 'EARNINGS_NO_BEAT') "
     "GROUP BY ticker"
 )
 
 # Prior per-ticker baseline. Locked FOR UPDATE inside the transaction so
 # two concurrent runs cannot read-then-overwrite each other's view of
 # the prior (UPSERT race protection).
+#
+# Column-name history: ``beat_count`` is preserved from the prior
+# BEAT-only revision (no migration). The semantics today are the
+# reported-earnings count (BEAT + NO_BEAT) — the column name is
+# vestigial, kept to avoid a schema rename + downstream coordination
+# churn for what is otherwise a free-text-column population expansion.
 _PRIOR_COUNTS_SQL = (
     "SELECT ticker, beat_count "
     "FROM platform.earnings_events_count_snapshot "
@@ -112,7 +117,9 @@ _PRIOR_COUNTS_SQL = (
 # UPSERT one row per ticker — PRIMARY KEY (ticker) drives the conflict
 # target. ``snapshot_at`` is server-defaulted to now() on insert and
 # explicitly bumped on conflict so a debugging operator can see when
-# the baseline was last refreshed.
+# the baseline was last refreshed. (``beat_count`` column carries
+# history — see _PRIOR_COUNTS_SQL note; semantics today are
+# reported-earnings count, BEAT + NO_BEAT.)
 _UPSERT_SNAPSHOT_SQL = (
     "INSERT INTO platform.earnings_events_count_snapshot "
     "(ticker, beat_count, snapshot_at) "
@@ -127,8 +134,10 @@ class _Evaluation:
     """One monotone evaluation — shared by check + healer.
 
     The 4-tuples in ``decreased_tickers`` are
-    ``(ticker, prior_beat_count, current_beat_count, delta)`` where
-    ``delta = current - prior`` (negative on a shrink).
+    ``(ticker, prior_earnings_count, current_earnings_count, delta)``
+    where ``delta = current - prior`` (negative on a shrink). Counts
+    are on the BEAT + NO_BEAT union — the full reported-earnings
+    population.
     ``current_counts`` carries the FULL live-DB per-ticker snapshot —
     the check uses it to UPSERT the new baseline on PASS, and it is
     also informative to a triage operator on FAIL (universe size).
@@ -199,11 +208,13 @@ async def check_earnings_events_monotone(
     pool: asyncpg.Pool,
     source: Any = None,
 ) -> CheckResult:
-    """Zero-tolerance: every ticker's live EARNINGS_BEAT row count >=
-    its prior snapshot. First run seeds the baseline and passes.
+    """Zero-tolerance: every ticker's live reported-earnings row count
+    (BEAT + NO_BEAT union) >= its prior snapshot. First run seeds the
+    baseline and passes.
 
-    KNOWN GAP: BEAT-only ingestion means this catches truncation but
-    not missed-detection. See module docstring + TODO.md P1 follow-on.
+    Population covers BEAT + NO_BEAT — see module docstring for why
+    the union is the right gate (catches truncation AND
+    missed-detection).
     """
     del source
     started = time.perf_counter()
@@ -234,17 +245,18 @@ async def check_earnings_events_monotone(
     for ticker, prior, current, delta in ev.decreased_tickers[:MAX_REPORTED]:
         failures.append(FailureDetail(
             ticker=ticker,
-            reason="beat_count_decreased",
+            reason="earnings_count_decreased",
             expected=(
-                f"earnings_events EARNINGS_BEAT COUNT(*) for {ticker} "
-                f">= prior snapshot ({prior})"
+                f"earnings_events COUNT(*) "
+                f"WHERE event_type IN ('EARNINGS_BEAT','EARNINGS_NO_BEAT') "
+                f"for {ticker} >= prior snapshot ({prior})"
             ),
             observed=(
-                f"current beat_count={current} (delta={delta}, "
-                f"snapshot={prior}). EARNINGS_BEAT is append-only — a "
-                f"negative per-ticker delta is vendor truncation / "
-                f"deletion event. Heal via canonical earnings_refresh "
-                f"stage with skip_guard_days=0."
+                f"current earnings_count={current} (delta={delta}, "
+                f"snapshot={prior}). Reported earnings (BEAT + NO_BEAT) "
+                f"are append-only — a negative per-ticker delta is "
+                f"vendor truncation / deletion event. Heal via canonical "
+                f"earnings_refresh stage with skip_guard_days=0."
             ),
         ))
     logger.warning(
@@ -267,7 +279,8 @@ async def compute_earnings_events_repair_targets(
     pool: asyncpg.Pool,
 ) -> list[str]:
     """Targets for the bounded auto-heal: the tickers whose
-    EARNINGS_BEAT count decreased vs the prior snapshot.
+    reported-earnings count (BEAT + NO_BEAT) decreased vs the prior
+    snapshot.
 
     Returns ``[]`` when nothing to repair (clean OR first-run seed) —
     those are NOT a re-pull-fixable problem. Shares :func:`_evaluate`
