@@ -130,7 +130,8 @@ async def test_run_suite_passes_when_all_checks_pass() -> None:
         "delistings", "constituent", "splits", "row_integrity",
         "fundamentals_integrity", "fundamentals_quarterly_completeness",
         "corporate_actions_integrity", "corporate_actions_completeness",
-        "earnings_events_freshness", "sec_filings_freshness",
+        "earnings_events_freshness", "earnings_events_monotone",
+        "sec_filings_freshness",
         "sec_insider_monotone",
         "liquidity_tiers_freshness", "ticker_classifications_coverage",
         "macro_indicators_freshness", "macro_indicators_completeness",
@@ -149,7 +150,7 @@ async def test_run_suite_writes_one_score_per_check() -> None:
     await run_suite(
         pool, delistings=delistings, constituents=constituents, splits=splits, writer=writer
     )
-    assert len(writer.scores) == 24  # +sec_insider_monotone (2026-05-20)
+    assert len(writer.scores) == 25  # +earnings_events_monotone (2026-05-20)
     sources = {s.source for s in writer.scores}
     assert sources == {
         "validation.delistings",
@@ -161,6 +162,7 @@ async def test_run_suite_writes_one_score_per_check() -> None:
         "validation.corporate_actions_completeness",
         "validation.corporate_actions_integrity",
         "validation.earnings_events_freshness",
+        "validation.earnings_events_monotone",
         "validation.sec_filings_freshness",
         "validation.sec_insider_monotone",
         "validation.liquidity_tiers_freshness",
@@ -213,8 +215,8 @@ async def test_run_suite_aggregates_failures() -> None:
     failed_checks = [c for c in result.checks if not c.passed]
     assert len(failed_checks) == 1
     assert failed_checks[0].name == "delistings"
-    # All 24 rows still written (+sec_insider_monotone 2026-05-20)
-    assert len(writer.scores) == 24
+    # All 25 rows still written (+earnings_events_monotone 2026-05-20)
+    assert len(writer.scores) == 25
 
 
 async def test_run_suite_wraps_check_exception() -> None:

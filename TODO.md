@@ -217,6 +217,25 @@ residual of the "runs on its own" mandate:
    wire it into the heal loop.
 3. **`earnings_events`** (FMP) — completeness invariant + auto-heal via
    `earnings_refresh`.
+   - **P1 follow-on (surfaced 2026-05-20 by the
+     `earnings_events_monotone` P0 source 3/5 PR):** emit a `NO_BEAT`
+     sentinel row per `(ticker, quarter)` when `actual_eps` is present
+     but doesn't clear the >5% beat threshold, so per-quarter
+     completeness becomes auditable (every active T1/T2 ticker has a
+     row — BEAT or NO_BEAT — for every fiscal quarter in its active
+     range). Resolves the KNOWN GAP in `earnings_events_monotone`:
+     `scripts/backfill_earnings_events.py::_classify_beat` is
+     BEAT-only, so today's monotone invariant catches **vendor
+     truncation** but NOT **missed detection** from an FMP outage that
+     would have written a beat row had the feed responded. Touches
+     `scripts/backfill_earnings_events.py` (emit sentinels),
+     `platform/migrations/` (optional enum extension or just rely on
+     the existing free-text `event_type` column), the downstream
+     consumers (`vector/backtest.py`, `catalyst/backtest.py`) that
+     filter `event_type='EARNINGS_BEAT'` (no change needed — they
+     already filter, NO_BEAT is invisible to them), and a new
+     `earnings_events_quarterly_completeness` check. `[lane: data-lane-mine]
+     [gate: none] [needs operator decision: no] [effort: M]`
 4. **`sec_insider_transactions` / SEC filings** (EDGAR) — invariant +
    auto-heal via `ops.py --stage sec_filings --backfill`.
 5. **`macro_indicators`** (FRED) — invariant + auto-heal (re-pull); the

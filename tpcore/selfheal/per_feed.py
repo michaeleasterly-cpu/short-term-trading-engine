@@ -43,6 +43,9 @@ from tpcore.quality.validation.checks.delistings import check_delistings
 from tpcore.quality.validation.checks.earnings_events_freshness import (
     check_earnings_events_freshness,
 )
+from tpcore.quality.validation.checks.earnings_events_monotone import (
+    check_earnings_events_monotone,
+)
 from tpcore.quality.validation.checks.fear_greed_freshness import (
     check_fear_greed_freshness,
 )
@@ -131,6 +134,7 @@ _CHECK_FN: dict[str, _CheckCallable] = {
     "corporate_actions_integrity": _src(check_corporate_actions_integrity, None),
     "corporate_actions_completeness": _src(check_corporate_actions_completeness, None),
     "earnings_events_freshness": _src(check_earnings_events_freshness, None),
+    "earnings_events_monotone": _src(check_earnings_events_monotone, None),
     "sec_filings_freshness": _src(check_sec_filings_freshness, None),
     "sec_insider_monotone": _src(check_sec_insider_monotone, None),
     "liquidity_tiers_freshness": _src(check_liquidity_tiers_freshness, None),
