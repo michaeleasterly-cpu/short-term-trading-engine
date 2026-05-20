@@ -253,6 +253,20 @@ operable form of `LifecycleState.LAB`.
 
 ## 5. The graduation gate (DSR ≥ 0.95 ∧ credibility ≥ 60)
 
+> **Superseded (2026-05-20) for the LAB→PAPER and MODIFY paths:** the
+> absolute `DSR ≥ 0.95 ∧ credibility ≥ 60` threshold is replaced by the
+> autonomous criteria sets defined in
+> `docs/superpowers/specs/2026-05-20-autonomous-lab-criteria.md`. The
+> structural-defense role (the engine-domain analog of the data-parity
+> cutover gate) is unchanged; the **mechanism** is now (a) a
+> framework-evaluated signal-presence criteria set for new engines
+> (LAB→PAPER, ADD `source: existing_code`) and (b) a comparative
+> improvement criteria set for MODIFY (`fold_existing`). The Lab's own
+> internal DSR/credibility verdict is preserved as the
+> `LabResult.verdict` field but is no longer the binding gate clause at
+> the SDLC validator. PAPER→LIVE remains reserved by the paper-only
+> mandate; criteria thresholds for that future transition are unspecified.
+
 The structural defense against overfit — the engine-domain analog of
 the data lane's data-parity cutover gate (§9: same *role*, different
 *mechanism*). An engine candidate may not advance into the live roster

@@ -503,6 +503,46 @@ def validate(plan: TransitionPlan, *, repo_root: Path | None = None,
                              f"already exist on disk — got nothing. Use "
                              f"source: new_scaffold to scaffold from the "
                              f"template, or ship the engine code first.")
+                # H-S3-12: autonomous Lab criteria. existing_code ADD reads
+                # the engine's most-recent backtest dossier from
+                # backtests/<engine>_backtest_results.json (the canonical
+                # artifact every <engine>.backtest writes) and evaluates
+                # the new-engine signal-presence criteria. On pass the
+                # planner lands the engine PAPER (autonomous gate); on
+                # fail the rejection cites the specific criterion. See
+                # docs/superpowers/specs/2026-05-20-autonomous-lab-criteria.md.
+                from ops.engine_sdlc.lab_criteria import (
+                    _assess_new_engine_signal,
+                    load_engine_dossier,
+                )
+                try:
+                    dossier = load_engine_dossier(repo_root, ecr.engine)
+                except ValueError as exc:
+                    return _reject(
+                        ecr, f"existing_code ADD: backtest dossier at "
+                             f"backtests/{ecr.engine}_backtest_results.json "
+                             f"is unparseable — {exc}")
+                if dossier is None:
+                    return _reject(
+                        ecr, f"existing_code ADD: no recent backtest "
+                             f"dossier found at "
+                             f"backtests/{ecr.engine}_backtest_results.json "
+                             f"— run `python -m {ecr.engine}.backtest --json` "
+                             f"first to produce the dossier the planner "
+                             f"reads autonomously.")
+                passed, reason = _assess_new_engine_signal(dossier)
+                if not passed:
+                    return _reject(
+                        ecr, f"existing_code ADD: autonomous Lab criteria "
+                             f"failed — {reason}")
+                # Criteria pass ⇒ promote the plan's to_state to PAPER (the
+                # operator-style ADD already gated the binary y/n; the
+                # framework no longer needs a second human gate for "did
+                # this engine earn its way out of LAB?" because the
+                # dossier-read criteria already decided).
+                plan = TransitionPlan(
+                    **{**plan.__dict__,
+                       "to_state": LifecycleState.PAPER})
         elif ecr.source == "lab_candidate":
             from ops.engine_sdlc._evidence import (
                 EvidenceError,
@@ -529,10 +569,21 @@ def validate(plan: TransitionPlan, *, repo_root: Path | None = None,
                          f"verdict={lr.verdict} dsr={lr.dsr} "
                          f"cred={lr.credibility_score} "
                          f"recommended_exit={lr.recommended_exit}")
-        if plan.to_state is not LifecycleState.LAB:
+        # H-S3-11a / H-S3-12: ADD lands LAB by default; the ONE exception
+        # is source: existing_code whose autonomous Lab criteria passed —
+        # validate() above promoted plan.to_state to PAPER in that case
+        # (the framework's autonomous gate decided). Every other ADD
+        # source (new_scaffold / lab_candidate) MUST still land LAB.
+        if plan.to_state is LifecycleState.PAPER:
+            if ecr.source != "existing_code":
+                return _reject(
+                    ecr, "ADD must land LAB, never PAPER, except via "
+                         "source: existing_code whose autonomous Lab "
+                         "criteria pass (H-S3-11a / H-S3-12)")
+        elif plan.to_state is not LifecycleState.LAB:
             return _reject(ecr, "ADD must land LAB, never PAPER (H-S3-11a)")
     if plan.action is ECRAction.MODIFY and ecr is not None:
-        plan = _validate_modify(plan, ecr)  # T7 zero-trust
+        plan = _validate_modify(plan, ecr, repo_root=repo_root)  # T7 zero-trust
         if plan.rejection is not None:
             return plan
     # §3.2/§5.2 step 2/H-S3-1/H-S3-7(b): the spec-mandated PRE-APPROVAL
@@ -678,11 +729,32 @@ def _apply_add(plan: TransitionPlan, root: Path, jn: _Journal) -> None:
         "weekly_first_trading_day": "Cadence.WEEKLY_FIRST_TRADING_DAY",
         "monthly_first_trading_day": "Cadence.MONTHLY_FIRST_TRADING_DAY",
     }[cad]
+    # H-S3-12: lifecycle_state is plan.to_state (validate() promoted to
+    # PAPER for source: existing_code on criteria pass; LAB otherwise).
+    # allocator_eligible is True iff (a) lifecycle is PAPER AND (b) the
+    # ECR's allocator: field is true — a LAB engine can NEVER be
+    # allocator_eligible (test_no_half_state enforces this when
+    # _DISPATCHABLE filters; the explicit invariant here is the SoT).
+    target_state = (plan.to_state
+                    if plan.to_state is LifecycleState.PAPER
+                    else LifecycleState.LAB)
+    state_token = (
+        "LifecycleState.PAPER"
+        if target_state is LifecycleState.PAPER
+        else "LifecycleState.LAB")
+    allocator_eligible = bool(
+        target_state is LifecycleState.PAPER
+        and plan.sot_diff.get("allocator", False))
+    profile_tail = (
+        f"lifecycle_state={state_token}"
+        if not allocator_eligible
+        else f"lifecycle_state={state_token},\n"
+             f"                               allocator_eligible=True")
     new_entry = (
         f'    "{engine}":   EngineProfile(engine="{engine}", '
         f'cadence={cad_enum},\n'
         f'                               dispatch_order={order}, '
-        f'lifecycle_state=LifecycleState.LAB),\n')
+        f'{profile_tail}),\n')
     src = ep.read_text()
     anchor = "    # allocator: separate _dispatch_allocator path"
     if anchor not in src:
@@ -696,14 +768,34 @@ def _apply_add(plan: TransitionPlan, root: Path, jn: _Journal) -> None:
 
 
 def _validate_modify(plan: TransitionPlan,
-                     ecr: EngineChangeRequest) -> TransitionPlan:
+                     ecr: EngineChangeRequest,
+                     *, repo_root: Path | None = None,
+                     _incumbent_dossier: Any | None = None,
+                     ) -> TransitionPlan:
     """H-S3-6 zero-trust: the gate is the ONLY thing between a dossier
     and live params, so re-derive every number from the FROZEN JSON
-    sidecar, never the ECR text / rendered markdown."""
+    sidecar, never the ECR text / rendered markdown.
+
+    H-S3-12: the absolute DSR/credibility threshold is replaced by the
+    autonomous improvement criteria (`_assess_improvement`) — strict
+    better than the incumbent on the declared primary metric, plus the
+    new-engine signal-presence floor, plus a trade-count drift bound.
+    The incumbent dossier is read from
+    ``backtests/<engine>_backtest_results.json`` under ``repo_root or
+    REPO_ROOT``; ``_incumbent_dossier`` is a test seam (offline tests
+    inject the incumbent ``NewEngineDossier`` directly so the criteria
+    can be exercised without touching the live backtests/ directory).
+    See docs/superpowers/specs/2026-05-20-autonomous-lab-criteria.md.
+    """
     from ops.engine_sdlc._evidence import (
         EvidenceError,
         assert_identity_fresh,
         load_labresult_sidecar,
+    )
+    from ops.engine_sdlc.lab_criteria import (
+        _assess_improvement,
+        dossier_from_lab_held_metrics,
+        load_engine_dossier,
     )
     from ops.lab.run import PARAM_RANGES
     try:
@@ -716,11 +808,6 @@ def _validate_modify(plan: TransitionPlan,
         return _reject(ecr, str(exc))
     if lr.verdict != "SURVIVED":
         return _reject(ecr, f"sidecar verdict {lr.verdict} != SURVIVED")
-    if lr.dsr < 0.95:
-        return _reject(ecr, f"sidecar dsr {lr.dsr} < 0.95 (forged/stale)")
-    if lr.credibility_score < 60:
-        return _reject(ecr, f"sidecar credibility {lr.credibility_score} "
-                            f"< 60")
     if lr.recommended_exit != "fold_existing":
         return _reject(
             ecr, f"sidecar recommended_exit {lr.recommended_exit!r} != "
@@ -729,6 +816,31 @@ def _validate_modify(plan: TransitionPlan,
         return _reject(
             ecr, f"sidecar target_engine {lr.target_engine!r} != ECR "
                  f"engine {ecr.engine!r} (wrong-target reject)")
+    # H-S3-12: autonomous improvement criteria. Replace the absolute
+    # DSR≥0.95 ∧ cred≥60 gate with: candidate strictly beats incumbent
+    # on the declared primary metric + candidate passes the new-engine
+    # signal-presence floor + trade-count drift bounded. The incumbent
+    # is read from backtests/<engine>_backtest_results.json (the
+    # canonical artifact <engine>.backtest writes). See
+    # docs/superpowers/specs/2026-05-20-autonomous-lab-criteria.md.
+    candidate_dossier = dossier_from_lab_held_metrics(lr.held_metrics)
+    incumbent_dossier = (
+        _incumbent_dossier
+        if _incumbent_dossier is not None
+        else load_engine_dossier(repo_root or REPO_ROOT, ecr.engine))
+    if incumbent_dossier is None:
+        return _reject(
+            ecr, f"MODIFY: no incumbent backtest dossier found at "
+                 f"backtests/{ecr.engine}_backtest_results.json — the "
+                 f"improvement criteria require an incumbent to compare "
+                 f"against; run `python -m {ecr.engine}.backtest --json` "
+                 f"first.")
+    passed, reason = _assess_improvement(
+        candidate_dossier, incumbent_dossier, lr.primary_metric)
+    if not passed:
+        return _reject(
+            ecr, f"MODIFY: autonomous improvement criteria failed — "
+                 f"{reason}")
     ranges = PARAM_RANGES.get(ecr.engine, {})
     for k, v in (ecr.param_change or {}).items():
         if k not in ranges:
@@ -928,32 +1040,68 @@ def promote(engine: str, *, repo_root: Path | None = None,
             emit_audit: bool = True,
             _gate_green: bool | None = None) -> TransitionPlan:
     """LAB→PAPER — automated, gated, NOT an ECR action (spec §4.1).
-    Flips iff the capital-gate/graduation_ready authority is green. The
-    test seam ``_gate_green`` injects the verdict offline; production
-    resolves it via the real authority. Reuses the T5 ``_Journal``
-    byte-identical-rollback discipline + the T4 ``_rewrite_profile_source``
-    (the ONLY _PROFILE editor) + ``_run_consistency_subprocess`` — a
-    post-flip red OR any exception reverse-replays to byte-identical
-    (the LAB engine stays LAB, ZERO trace)."""
+
+    H-S3-12: the absolute DSR≥0.95 ∧ cred≥60 gate is replaced by the
+    autonomous new-engine signal-presence criteria (``_assess_new_engine_signal``)
+    evaluated against the engine's most-recent backtest dossier at
+    ``backtests/<engine>_backtest_results.json``. The test seam
+    ``_gate_green`` is preserved for offline tests; production calls
+    ``promote()`` with ``_gate_green=None`` and the planner resolves the
+    verdict from the dossier autonomously. See
+    docs/superpowers/specs/2026-05-20-autonomous-lab-criteria.md.
+
+    Reuses the T5 ``_Journal`` byte-identical-rollback discipline + the
+    T4 ``_rewrite_profile_source`` (the ONLY _PROFILE editor) +
+    ``_run_consistency_subprocess`` — a post-flip red OR any exception
+    reverse-replays to byte-identical (the LAB engine stays LAB, ZERO
+    trace)."""
     root = repo_root or REPO_ROOT
-    if _gate_green is None:
-        from tpcore.quality.validation.capital_gate import (
-            ENGINE_TABLES,  # noqa: F401 — presence import; real gate below
-        )
-        # production: resolve graduation_ready(pool, engine) via the SP2
-        # lab.<candidate> credibility namespace; deferred to the CLI (T8)
-        # which owns the pool. Here require an explicit resolved verdict —
-        # a promote without a resolved gate is a hard reject, never a
-        # silent flip (H-S3-6 zero-trust parity with the MODIFY gate).
-        return TransitionPlan(
-            action=ECRAction.MODIFY, engine=engine, from_state=None,
-            to_state=None, approval_class=ApprovalClass.AUTOMATED,
-            rejection="promote requires a resolved gate verdict")
     plan = TransitionPlan(
         action=ECRAction.MODIFY, engine=engine,
         from_state=LifecycleState.LAB, to_state=LifecycleState.PAPER,
         approval_class=ApprovalClass.AUTOMATED)
-    if not _gate_green:
+    # H-S3-12: resolve the gate verdict from the dossier (the framework's
+    # autonomous gate). ``_gate_green`` overrides as a test seam.
+    if _gate_green is None:
+        from ops.engine_sdlc.lab_criteria import (
+            _assess_new_engine_signal,
+            load_engine_dossier,
+        )
+        try:
+            dossier = load_engine_dossier(root, engine)
+        except ValueError as exc:
+            rej = TransitionPlan(**{
+                **plan.__dict__,
+                "rejection": (f"promote: backtest dossier at "
+                              f"backtests/{engine}_backtest_results.json "
+                              f"is unparseable — {exc}")})
+            if emit_audit:
+                _emit_audit(engine, "promote", "lab", "paper",
+                            "AUTOMATED", "rejected", rej.rejection)
+            return rej
+        if dossier is None:
+            rej = TransitionPlan(**{
+                **plan.__dict__,
+                "rejection": (f"promote: no recent backtest dossier at "
+                              f"backtests/{engine}_backtest_results.json "
+                              f"— run `python -m {engine}.backtest --json` "
+                              f"first to produce the dossier the planner "
+                              f"reads autonomously.")})
+            if emit_audit:
+                _emit_audit(engine, "promote", "lab", "paper",
+                            "AUTOMATED", "rejected", rej.rejection)
+            return rej
+        passed, reason = _assess_new_engine_signal(dossier)
+        if not passed:
+            rej = TransitionPlan(**{
+                **plan.__dict__,
+                "rejection": (f"promote: autonomous Lab criteria failed "
+                              f"— {reason}")})
+            if emit_audit:
+                _emit_audit(engine, "promote", "lab", "paper",
+                            "AUTOMATED", "rejected", rej.rejection)
+            return rej
+    elif not _gate_green:
         rej = TransitionPlan(**{**plan.__dict__,
                                 "rejection": "capital-gate/graduation_ready "
                                              "RED — LAB→PAPER refused"})

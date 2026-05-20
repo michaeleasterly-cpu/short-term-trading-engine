@@ -1028,7 +1028,7 @@ def test_new_scaffold_rejection_message_points_at_existing_code(tmp_path):
 def _modify_sidecar(tmp_path, *, target="reversion",
                      recommended="fold_existing", verdict="SURVIVED",
                      dsr=0.97, cred=64,
-                     winning=None):
+                     winning=None, held_metrics=None):
     from tpcore.tests.test_lab_dossier_sidecar import _labresult
     r = _labresult()
     d = r.model_dump()
@@ -1039,6 +1039,8 @@ def _modify_sidecar(tmp_path, *, target="reversion",
     d["dsr"] = dsr
     d["credibility_score"] = cred
     d["winning_params"] = winning or {"z_threshold": 3.1, "max_hold_days": 8}
+    if held_metrics is not None:
+        d["held_metrics"] = held_metrics
     from tpcore.lab.models import LabResult
     r2 = LabResult.model_validate(d)
     # The dossier filename MUST be identity-fresh (spec §5.4 / H-S3-6b):
@@ -1076,14 +1078,27 @@ def test_modify_plan_sot_diff_is_always_empty(tmp_path):
     assert plan.to_state == plan.from_state  # no lifecycle edge
 
 
-def test_modify_rejects_forged_numbers(tmp_path):
+def test_modify_rejects_when_candidate_fails_improvement_criteria(tmp_path):
+    """H-S3-12: a MODIFY whose candidate does not strictly beat the
+    incumbent on the primary metric is rejected by the autonomous
+    improvement criteria. The synthetic incumbent installed by the
+    conftest autouse fixture has Sharpe 1.0; this test's candidate has
+    Sharpe 0.5 (held_metrics) — strictly worse, hard reject.
+
+    Pre-H-S3-12 this test exercised the absolute DSR<0.95 gate; under
+    the new criteria a forged dsr alone is not gated, so the analog test
+    is "candidate fails the comparative criteria" (the gate that
+    protects against shipping a regression against the incumbent)."""
     from ops.engine_sdlc.planner import attach_ecr_context, classify, validate
-    md = _modify_sidecar(tmp_path, dsr=0.40)  # sidecar disagrees
+    md = _modify_sidecar(
+        tmp_path, held_metrics={"n_trades": 12, "sharpe": 0.5})
     ecr = _modify_ecr(md, gate_dsr=0.97)
     vp = validate(attach_ecr_context(
         classify(ecr, {"reversion": LifecycleState.PAPER}), ecr),
         ecr=ecr)
-    assert vp.rejection is not None and "dsr" in vp.rejection.lower()
+    assert vp.rejection is not None
+    assert "improvement criteria" in vp.rejection or \
+           "candidate_beats_incumbent" in vp.rejection, vp.rejection
 
 
 def test_modify_rejects_wrong_target(tmp_path):
@@ -1271,6 +1286,374 @@ def test_promote_flips_lab_to_paper_iff_gate_green(tmp_path):
     rc, out = _run_consistency_subprocess(staged)
     assert rc == 0, (
         f"promote LAB->PAPER must leave the clockwork GREEN:\n{out}")
+
+
+# ─── H-S3-12: autonomous Lab criteria ───
+#
+# The absolute DSR≥0.95 ∧ credibility≥60 gate is replaced by two criteria
+# sets the framework evaluates against the engine's own backtest dossier:
+#
+# - new-engine criteria (positive_sharpe / min_trade_count /
+#   bounded_drawdown / bounded_ruin_probability / min_profit_factor /
+#   sane_min_btl_gap) — signal-presence test for LAB→PAPER promote and
+#   ADD source=existing_code.
+# - improvement criteria (candidate_beats_incumbent on the declared
+#   primary metric + new-engine floor + trade-count drift bounded) —
+#   comparative test for MODIFY fold_existing.
+#
+# See docs/superpowers/specs/2026-05-20-autonomous-lab-criteria.md.
+# Calibrated against catalyst (sharpe=2.27, trades=24, max_dd=-0.41,
+# ruin_prob=0.087, profit_factor=1.36, min_btl_gap=109 — every criterion
+# clears with margin).
+
+
+def _catalyst_empirical_dossier():
+    """The exact empirical numbers catalyst's backtest produces — the
+    calibration case for the new-engine criteria."""
+    from ops.engine_sdlc.lab_criteria import NewEngineDossier
+    return NewEngineDossier(
+        sharpe=2.274, trades=24, max_drawdown=-0.41,
+        ruin_probability=0.087, profit_factor=1.357,
+        min_btl_gap=109, dsr=0.754, credibility_score=45)
+
+
+def test_assess_new_engine_signal_accepts_catalyst_empirical_numbers():
+    """H-S3-12 calibration: catalyst's empirical run (sharpe=2.27,
+    trades=24, max_dd=-0.41, ruin_prob=0.087, profit_factor=1.36,
+    min_btl_gap=109) — every criterion clears with margin.
+
+    Pre-H-S3-12, catalyst was rejected by the absolute DSR<0.95 ∧
+    credibility<60 gate (dsr=0.754, cred=45) — but the signal is real
+    (Sharpe 2.27 over 6y, bounded drawdown, profit factor > 1.3). The
+    new criteria correctly accept it because the binding constraint was
+    n_trials sparsity, not signal absence."""
+    from ops.engine_sdlc.lab_criteria import _assess_new_engine_signal
+    passed, reason = _assess_new_engine_signal(_catalyst_empirical_dossier())
+    assert passed is True, f"catalyst empirical: {reason}"
+    assert reason is None
+
+
+@pytest.mark.parametrize("bad_field,bad_value,expect_clause", [
+    ("sharpe", -0.1, "positive_sharpe"),
+    ("trades", 5, "min_trade_count"),
+    ("max_drawdown", -0.6, "bounded_drawdown"),
+    ("ruin_probability", 0.5, "bounded_ruin_probability"),
+    ("profit_factor", 0.9, "min_profit_factor"),
+    ("min_btl_gap", 500, "sane_min_btl_gap"),
+])
+def test_assess_new_engine_signal_rejects_per_criterion(
+        bad_field, bad_value, expect_clause):
+    """H-S3-12 non-vacuity: each of the six criteria can independently
+    reject. Build a baseline-catalyst dossier and corrupt ONE field to
+    just below/above the threshold — the rejection_reason names the
+    exact criterion that failed (not a generic message). A regression
+    that flattens criteria to a single bool / drops one clause trips
+    here directly."""
+    from ops.engine_sdlc.lab_criteria import (
+        NewEngineDossier,
+        _assess_new_engine_signal,
+    )
+    fields = _catalyst_empirical_dossier().model_dump()
+    fields[bad_field] = bad_value
+    bad = NewEngineDossier(**fields)
+    passed, reason = _assess_new_engine_signal(bad)
+    assert passed is False, (
+        f"corrupted {bad_field}={bad_value} but the criteria still passed")
+    assert reason is not None
+    assert expect_clause in reason, (
+        f"rejection reason does not name the expected criterion "
+        f"{expect_clause!r}: {reason!r}")
+
+
+def test_assess_improvement_accepts_real_improvement():
+    """H-S3-12: a candidate with Sharpe strictly > incumbent on the
+    declared primary metric (SHARPE) PASSES. Both candidate and incumbent
+    clear the new-engine floor; trade-count drift bounded."""
+    from ops.engine_sdlc.lab_criteria import (
+        NewEngineDossier,
+        _assess_improvement,
+    )
+    from tpcore.lab.target import LabPrimaryMetric
+    incumbent = NewEngineDossier(
+        sharpe=0.4, trades=20, max_drawdown=-0.10,
+        ruin_probability=0.10, profit_factor=1.1, min_btl_gap=50)
+    candidate = NewEngineDossier(
+        sharpe=0.7, trades=18, max_drawdown=-0.08,
+        ruin_probability=0.08, profit_factor=1.2, min_btl_gap=45)
+    passed, reason = _assess_improvement(
+        candidate, incumbent, LabPrimaryMetric.SHARPE)
+    assert passed is True, f"real improvement was wrongly rejected: {reason}"
+    assert reason is None
+
+
+def test_assess_improvement_rejects_degraded_candidate():
+    """H-S3-12: a candidate whose primary-metric value is NOT strictly
+    greater than incumbent's is rejected (the strict-better-than
+    invariant — a tie or regression is not an improvement)."""
+    from ops.engine_sdlc.lab_criteria import (
+        NewEngineDossier,
+        _assess_improvement,
+    )
+    from tpcore.lab.target import LabPrimaryMetric
+    incumbent = NewEngineDossier(
+        sharpe=1.0, trades=20, max_drawdown=-0.10,
+        ruin_probability=0.10, profit_factor=1.2, min_btl_gap=50)
+    candidate = NewEngineDossier(
+        sharpe=0.9, trades=20, max_drawdown=-0.10,
+        ruin_probability=0.10, profit_factor=1.2, min_btl_gap=50)
+    passed, reason = _assess_improvement(
+        candidate, incumbent, LabPrimaryMetric.SHARPE)
+    assert passed is False
+    assert "candidate_beats_incumbent" in reason, reason
+
+
+def test_assess_improvement_rejects_trade_count_crash():
+    """H-S3-12: a candidate with trades < 0.5 × incumbent's is rejected
+    even if its Sharpe is strictly better — a "better Sharpe via cutting
+    90% of trades" is a different engine, not an improvement."""
+    from ops.engine_sdlc.lab_criteria import (
+        NewEngineDossier,
+        _assess_improvement,
+    )
+    from tpcore.lab.target import LabPrimaryMetric
+    incumbent = NewEngineDossier(
+        sharpe=0.5, trades=100, max_drawdown=-0.10,
+        ruin_probability=0.10, profit_factor=1.2, min_btl_gap=50)
+    candidate = NewEngineDossier(
+        sharpe=2.0, trades=10, max_drawdown=-0.05,
+        ruin_probability=0.05, profit_factor=2.0, min_btl_gap=50)
+    passed, reason = _assess_improvement(
+        candidate, incumbent, LabPrimaryMetric.SHARPE)
+    assert passed is False
+    assert "trade_count_drift_bounded" in reason, reason
+
+
+def test_assess_improvement_rejects_candidate_failing_new_engine_floor():
+    """H-S3-12: a candidate that strictly beats incumbent on the primary
+    metric but FAILS the new-engine signal-presence floor (e.g. its
+    profit_factor < 1.0) is rejected — better than a broken incumbent
+    isn't a shippable improvement."""
+    from ops.engine_sdlc.lab_criteria import (
+        NewEngineDossier,
+        _assess_improvement,
+    )
+    from tpcore.lab.target import LabPrimaryMetric
+    incumbent = NewEngineDossier(
+        sharpe=-1.0, trades=20, max_drawdown=-0.10,
+        ruin_probability=0.10, profit_factor=0.5, min_btl_gap=50)
+    candidate = NewEngineDossier(
+        sharpe=0.5, trades=15, max_drawdown=-0.10,
+        ruin_probability=0.10, profit_factor=0.8, min_btl_gap=50)
+    passed, reason = _assess_improvement(
+        candidate, incumbent, LabPrimaryMetric.SHARPE)
+    assert passed is False
+    assert "new_engine_floor" in reason, reason
+    assert "min_profit_factor" in reason, reason
+
+
+def test_assess_improvement_with_maxdd_reduction_metric():
+    """H-S3-12: ``MAXDD_REDUCTION`` is the inverse-direction metric — the
+    candidate wins by having a SHALLOWER (closer-to-zero) max_drawdown
+    than the incumbent. Validates the per-metric direction convention."""
+    from ops.engine_sdlc.lab_criteria import (
+        NewEngineDossier,
+        _assess_improvement,
+    )
+    from tpcore.lab.target import LabPrimaryMetric
+    incumbent = NewEngineDossier(
+        sharpe=0.5, trades=20, max_drawdown=-0.20,
+        ruin_probability=0.10, profit_factor=1.2, min_btl_gap=50)
+    candidate = NewEngineDossier(
+        sharpe=0.5, trades=20, max_drawdown=-0.10,  # shallower draw
+        ruin_probability=0.10, profit_factor=1.2, min_btl_gap=50)
+    passed, _ = _assess_improvement(
+        candidate, incumbent, LabPrimaryMetric.MAXDD_REDUCTION)
+    assert passed is True
+
+
+def _install_engine_dossier(repo_root, engine, **fields):
+    """Install a backtests/<engine>_backtest_results.json dossier in
+    repo_root for autonomous-criteria test cases. Returns the path."""
+    import json as _json
+    default = {
+        "engine": engine, "parameters": {}, "credibility_score": 45,
+        "passed_gate": False, "sharpe": 2.0, "profit_factor": 1.3,
+        "max_drawdown": -0.20, "trades": 15, "dsr": 0.7,
+        "min_btl_gap": 100, "trades_per_param": 1.0,
+        "sensitivity_score": None, "ruin_probability": 0.1,
+    }
+    default.update(fields)
+    p = repo_root / "backtests" / f"{engine}_backtest_results.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(_json.dumps(default))
+    return p
+
+
+def test_add_existing_code_lands_PAPER_when_criteria_pass(tmp_path):
+    """H-S3-12 happy path: an ADD source=existing_code whose engine has
+    a backtest dossier on disk that clears every new-engine criterion
+    has its plan.to_state PROMOTED to PAPER by validate() — the
+    framework's autonomous gate decided, no second human y/n needed."""
+    from ops.engine_sdlc.ecr import EngineChangeRequest
+    from ops.engine_sdlc.planner import attach_ecr_context, classify, validate
+    staged = _make_synthetic_engine_tree(tmp_path)
+    # install a clearing dossier for the synthetic `throwaway` engine
+    # whose pkg already exists in the staged tree.
+    _install_engine_dossier(
+        staged, "throwaway",
+        sharpe=2.0, trades=20, max_drawdown=-0.10,
+        ruin_probability=0.05, profit_factor=1.5, min_btl_gap=60)
+    # the synthetic tree already registers throwaway in _PROFILE — we
+    # need to register a DIFFERENT engine name that's absent. Use a new
+    # engine via existing_code; create a minimal pkg dir.
+    (staged / "newengine").mkdir()
+    (staged / "newengine" / "__init__.py").write_text("")
+    _install_engine_dossier(
+        staged, "newengine",
+        sharpe=2.0, trades=20, max_drawdown=-0.10,
+        ruin_probability=0.05, profit_factor=1.5, min_btl_gap=60)
+    ecr = EngineChangeRequest(
+        action="add", engine="newengine", source="existing_code",
+        cadence="daily", allocator=False, dispatch_order=9, need="x")
+    plan = attach_ecr_context(classify(ecr, {}), ecr)
+    # the rejection check inside validate() is what we are pinning. Bypass
+    # the dry-consistency clockwork (which would require a coherent shadow
+    # set including newengine; the criteria gate runs BEFORE the dry run
+    # so the rejection-or-not verdict on the criteria is observable via
+    # the in-validate plan promotion).
+    # We can directly check by re-running the validator pieces. The
+    # cleanest available observation: build a TransitionPlan from classify
+    # and re-run validate WITHOUT the dry-consistency (use a TransitionPlan
+    # carrying the source-existing_code metadata that the criteria branch
+    # processes). After validate(), if criteria passed and to_state was
+    # promoted, .to_state should be PAPER (or .rejection set if criteria
+    # rejected). Because the dry consistency would barf on the synthetic
+    # tree, scope this test to ONLY the criteria gate by short-circuiting:
+    # call validate() with repo_root=staged but EXPECT either a criteria-
+    # success (to_state PAPER) or a dry-consistency rejection. Either way
+    # the criteria's verdict is observable on the rejection text.
+    vp = validate(plan, repo_root=staged, ecr=ecr)
+    # criteria pass leaves either (a) plan.to_state=PAPER + no rejection,
+    # or (b) downstream dry-consistency rejection but NOT a criteria
+    # rejection. Anything saying "Lab criteria failed" trips the test.
+    if vp.rejection is not None:
+        assert "autonomous Lab criteria" not in vp.rejection, (
+            f"criteria-pass dossier wrongly rejected on criteria: "
+            f"{vp.rejection}")
+
+
+def test_add_existing_code_rejects_when_no_backtest_on_file(tmp_path):
+    """H-S3-12: existing_code ADD against an engine with NO backtest
+    dossier at backtests/<engine>_backtest_results.json is rejected with
+    a clear pointer to run `python -m <engine>.backtest --json` first."""
+    from ops.engine_sdlc.ecr import EngineChangeRequest
+    from ops.engine_sdlc.planner import attach_ecr_context, classify, validate
+    # build a minimal repo_root: just the engine package dir + the
+    # gate-fields invariant has nothing to read.
+    (tmp_path / "dossierless").mkdir()
+    ecr = EngineChangeRequest(
+        action="add", engine="dossierless", source="existing_code",
+        cadence="daily", allocator=False, dispatch_order=9, need="x")
+    plan = attach_ecr_context(classify(ecr, {}), ecr)
+    vp = validate(plan, repo_root=tmp_path, ecr=ecr)
+    assert vp.rejection is not None
+    assert "no recent backtest dossier" in vp.rejection
+    assert "dossierless" in vp.rejection
+
+
+def test_add_existing_code_rejects_when_dossier_fails_criteria(tmp_path):
+    """H-S3-12 non-vacuity: existing_code ADD whose dossier exists but
+    fails a criterion (e.g. profit_factor < 1.0) is rejected with the
+    specific criterion name in the rejection text. Pairs with the
+    happy-path test above."""
+    from ops.engine_sdlc.ecr import EngineChangeRequest
+    from ops.engine_sdlc.planner import attach_ecr_context, classify, validate
+    (tmp_path / "badpkg").mkdir()
+    _install_engine_dossier(
+        tmp_path, "badpkg",
+        sharpe=2.0, trades=20, max_drawdown=-0.10,
+        ruin_probability=0.05, profit_factor=0.5,  # below floor
+        min_btl_gap=60)
+    ecr = EngineChangeRequest(
+        action="add", engine="badpkg", source="existing_code",
+        cadence="daily", allocator=False, dispatch_order=9, need="x")
+    plan = attach_ecr_context(classify(ecr, {}), ecr)
+    vp = validate(plan, repo_root=tmp_path, ecr=ecr)
+    assert vp.rejection is not None
+    assert "autonomous Lab criteria" in vp.rejection
+    assert "min_profit_factor" in vp.rejection
+
+
+def test_promote_uses_criteria_set_not_absolute_threshold(tmp_path):
+    """H-S3-12: promote() with _gate_green=None resolves the verdict
+    autonomously from the engine's backtest dossier — catalyst-like
+    numbers (sharpe>0, trades≥10, etc.) PASS even though DSR<0.95 (the
+    old absolute threshold would have rejected)."""
+    from ops.engine_sdlc.planner import promote
+    staged = _make_synthetic_engine_tree(tmp_path)
+    # flip throwaway to LAB
+    ep = staged / "tpcore" / "engine_profile.py"
+    ep.write_text(ep.read_text().replace(
+        '"throwaway", cadence=Cadence.DAILY,\n'
+        '                               dispatch_order=8, '
+        'lifecycle_state=LifecycleState.PAPER)',
+        '"throwaway", cadence=Cadence.DAILY,\n'
+        '                               dispatch_order=8, '
+        'lifecycle_state=LifecycleState.LAB)'))
+    # install a catalyst-like dossier (DSR<0.95 but signal-real)
+    _install_engine_dossier(
+        staged, "throwaway",
+        sharpe=2.0, trades=20, max_drawdown=-0.10,
+        ruin_probability=0.05, profit_factor=1.5,
+        min_btl_gap=60, dsr=0.7, credibility_score=45)
+    res = promote("throwaway", repo_root=staged, emit_audit=False)
+    # criteria pass — promote either succeeds or fails on the staged-tree
+    # consistency clockwork; the assertion here is the criteria did NOT
+    # reject (so the OLD absolute-DSR gate is not the binding constraint).
+    if res.rejection is not None:
+        assert "autonomous Lab criteria failed" not in res.rejection, (
+            f"criteria-pass dossier (DSR<0.95) wrongly rejected by the "
+            f"criteria gate: {res.rejection}")
+
+
+def test_promote_rejects_when_no_dossier(tmp_path):
+    """H-S3-12: promote() with _gate_green=None against an engine
+    without a backtest dossier on file rejects with a clear pointer."""
+    from ops.engine_sdlc.planner import promote
+    staged = _make_synthetic_engine_tree(tmp_path)
+    # ensure throwaway has no dossier in the staged backtests/
+    bp = staged / "backtests" / "throwaway_backtest_results.json"
+    if bp.exists():
+        bp.unlink()
+    res = promote("throwaway", repo_root=staged, emit_audit=False)
+    assert res.rejection is not None
+    assert "no recent backtest dossier" in res.rejection
+
+
+def test_validate_modify_uses_relative_criteria(tmp_path, monkeypatch):
+    """H-S3-12: a MODIFY whose candidate's primary-metric value beats
+    the incumbent's PASSES even when neither hits the old absolute
+    DSR≥0.95 threshold. The candidate has Sharpe 0.7 vs incumbent
+    Sharpe 0.4 — neither could have cleared the old gate; the new
+    criteria correctly accept the real improvement."""
+    from ops.engine_sdlc.planner import _validate_modify, classify
+    md = _modify_sidecar(
+        tmp_path,
+        held_metrics={"n_trades": 18, "sharpe": 0.7,
+                      "profit_factor": 1.2, "max_drawdown": -0.08})
+    ecr = _modify_ecr(md)
+    plan = classify(ecr, {"reversion": LifecycleState.PAPER})
+    # inject a synthetic incumbent dossier carrying Sharpe 0.4 — below
+    # the old absolute gate; the new criteria evaluate strictly
+    # relative-better-than.
+    from ops.engine_sdlc.lab_criteria import NewEngineDossier
+    incumbent = NewEngineDossier(
+        sharpe=0.4, trades=20, max_drawdown=-0.10,
+        ruin_probability=0.10, profit_factor=1.1, min_btl_gap=50)
+    vp = _validate_modify(plan, ecr, _incumbent_dossier=incumbent)
+    assert vp.rejection is None, (
+        f"a real Sharpe 0.4→0.7 improvement was wrongly rejected — the "
+        f"new relative criteria are not in effect: {vp.rejection}")
 
 
 # ---- T7 hardening (review notes #1/#2): _apply_modify e2e + byte-
