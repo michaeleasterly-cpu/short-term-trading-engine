@@ -62,9 +62,12 @@ def test_clause_c_documented_roster_matches_sot():
 
 
 def test_clause_d_claude_fail_the_gate_honesty_substring():
-    """(d) CLAUDE.md states all five engines FAIL the gate (prevents a
-    future edit implying a graduation)."""
-    assert "all five engines currently FAIL the DSR/credibility gate" in CLAUDE
+    """(d) CLAUDE.md states PAPER→LIVE remains a separate reserved gate
+    (prevents a future edit implying a LIVE graduation). The absolute
+    DSR/cred gate was superseded for ADD/promote by the autonomous Lab
+    criteria (PR #158, 2026-05-20); the LIVE-reserved claim is the
+    durable honesty anchor."""
+    assert "PAPER→LIVE remains a separate, future-reserved gate" in CLAUDE
 
 
 def test_clause_e_sp3_carry_forwards_provably_unchanged():
