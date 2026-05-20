@@ -136,3 +136,24 @@ async def test_handle_fundamentals_writes_csv_archive_end_to_end(tmp_archive):
     # Row count must match the payload (validator passes: every known
     # row has ticker + period_end_date).
     assert csv_archive.count_archive_rows(gz) == len(_KNOWN_ROWS)
+
+    # Schema assertion (operator task verbatim: "(c) sane schema —
+    # column names match the live DB schema for fmp_fundamentals").
+    # Read the gzipped CSV header and assert exact equality (order +
+    # set) with the canonical FUNDAMENTALS_ARCHIVE_FIELDS tuple. The
+    # sibling DB-gated test (test_handle_fundamentals_archive_db_schema)
+    # pins that tuple to the live platform.fundamentals_quarterly
+    # information_schema — so an end-to-end "archive on disk reflects
+    # the DB schema" invariant is provable across this pair without
+    # needing a live DB in the in-memory test.
+    import csv as _csv
+    import gzip as _gzip
+    with _gzip.open(gz, "rt", newline="", encoding="utf-8") as fh:
+        reader = _csv.reader(fh)
+        header = tuple(next(reader))
+    assert header == handlers.FUNDAMENTALS_ARCHIVE_FIELDS, (
+        f"CSV-archive header drifted from FUNDAMENTALS_ARCHIVE_FIELDS — "
+        f"the handler's fieldnames= must equal the canonical tuple.\n"
+        f"  CSV header:  {header}\n"
+        f"  Canonical:   {handlers.FUNDAMENTALS_ARCHIVE_FIELDS}"
+    )

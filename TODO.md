@@ -111,13 +111,21 @@ Single focus until further notice — no engine/Sigma-redesign work. Sequence:
      lull stays OK, daily branch unchanged, constants cluster-robust).
      TODO entry stale — the surface-snippet line numbers (L1136-1144)
      referred to a pre-#78 layout that no longer exists.
-   - FMP handler-path CSV archive: verify end-to-end (presence unproven).
-     `[lane: data-lane-mine] [gate: none] [needs operator decision: no]
-     [effort: S]` — the `csv_archive_presence` audit check now covers
-     `fmp_fundamentals` (`scripts/audit_data_pipeline.py` L584-607,
-     `ARCHIVE_SOURCES` L178-181); remaining work is the runtime end-to-end
-     proof that `handle_fundamentals_refresh` actually writes the archive
-     on a real pull (a verification task, not a missing-code gap).
+   - ✅ **FMP handler-path CSV archive: verify end-to-end — DONE
+     2026-05-20.** End-to-end proof + schema-drift fence both in place.
+     `tpcore/tests/test_handle_fundamentals_archive_e2e.py` exercises
+     `handle_fundamentals_refresh` (fake adapter/cache/pool, `TP_DATA_DIR`
+     seam to tmp_path) and asserts (a) gzipped CSV archive lands in
+     `data/fmp_fundamentals_archive/`, (b) non-zero bytes, (c) CSV
+     header equals the canonical `FUNDAMENTALS_ARCHIVE_FIELDS` tuple
+     extracted to module scope in `tpcore/ingestion/handlers.py`.
+     Sibling DB-gated test `test_handle_fundamentals_archive_db_schema.py`
+     (wired into the `lab-isolation-db` CI job) pins that tuple to the
+     live `platform.fundamentals_quarterly` information_schema — both
+     directions: every DB data column (excluding the surrogate `id`)
+     must appear in the tuple, every tuple entry must be a real DB
+     column. A future migration that adds a column without updating
+     the archive tuple fails CI loud.
    - ✅ **Wire `CFNAIMA3` (Chicago Fed National Activity Index, 3mo MA) to
      FRED ingestion — DONE 2026-05-20.** Appended `("cfnai_ma3",
      "CFNAIMA3")` to `INDICATOR_SERIES` in `tpcore/fred/adapter.py`; added
