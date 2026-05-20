@@ -46,6 +46,9 @@ from tpcore.quality.validation.checks.fear_greed_freshness import (
 from tpcore.quality.validation.checks.fundamentals_integrity import (
     check_fundamentals_integrity,
 )
+from tpcore.quality.validation.checks.fundamentals_quarterly_completeness import (
+    check_fundamentals_quarterly_completeness,
+)
 from tpcore.quality.validation.checks.insider_sentiment_freshness import (
     check_insider_sentiment_freshness,
 )
@@ -118,6 +121,7 @@ _CHECK_FN: dict[str, _CheckCallable] = {
     "splits": _src(check_splits, FixtureSplitsSource()),
     "row_integrity": _src(check_row_integrity, None),
     "fundamentals_integrity": _src(check_fundamentals_integrity, None),
+    "fundamentals_quarterly_completeness": _src(check_fundamentals_quarterly_completeness, None),
     "corporate_actions_integrity": _src(check_corporate_actions_integrity, None),
     "earnings_events_freshness": _src(check_earnings_events_freshness, None),
     "sec_filings_freshness": _src(check_sec_filings_freshness, None),

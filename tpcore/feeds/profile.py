@@ -174,6 +174,11 @@ FEED_PROFILES: dict[str, FeedProfile] = {
         evidence="computed from existing platform data (no external "
                  "pull); 3 NYSE sessions max-age.",
     ),
+    'fundamentals_quarterly': FeedProfile(
+        feed='fundamentals_quarterly', trigger=FeedTrigger.VENDOR_RELEASE,
+        cadence_days=91, freshness_max_age_days=120, skip_guard_days=6,
+        evidence='financial fundamentals (pb/de/revenue/net_income/fcf/etc) for value-engine setup detection — already ingested via FMP for months; formal ProviderBinding registration was missing (surfaced 2026-05-20 by the autonomous-self-heal P0 completeness invariant work).',
+    ),
 }
 
 
