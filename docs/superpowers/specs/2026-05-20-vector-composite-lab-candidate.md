@@ -101,7 +101,11 @@ For each eligible ticker `t` at `sim_date`:
     values with `transaction_type = 'BUY'` in `platform.sec_insider_transactions`
     for `t` with `filing_date` in `[sim_date - 30, sim_date]` (strictly
     backward, 30 calendar-day window — the literature-standard non-routine
-    cluster window, also used by the Catalyst candidate per TODO.md). "Distinct
+    cluster window per **Cohen-Malloy-Pomorski 2012** "Decoding Inside
+    Information" and **Lakonishok-Lee 2001** "Are Insider Trades
+    Informative?"; the same window the Catalyst candidate spec
+    (`2026-05-20-catalyst-insider-cluster-event-lab-candidate.md` §2.2)
+    uses — citation kept consistent across both specs). "Distinct
     insiders" is the cluster-ness proxy; SELL rows are ignored. No
     routine-exclusion sub-filter is added (the platform has no Form-4
     transaction-code routine flag; adding one would be a new feed = scope

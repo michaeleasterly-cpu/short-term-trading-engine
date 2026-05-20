@@ -10,6 +10,14 @@ engine — momentum is currently paper-trading and self-gated on its own
 credibility row).
 **Readiness checklist:** `docs/superpowers/checklists/lab_candidate_readiness.md`
 (every section ticked below; §10 mechanical set at the end).
+**Autonomous adjudication gate:** for a `fold_existing` MODIFY candidate
+the adjudication path is `_assess_improvement` per
+`docs/superpowers/specs/2026-05-20-autonomous-lab-criteria.md` (PR #158)
+— the candidate dossier must beat the incumbent on `primary_metric =
+SHARPE` (strict), pass the new-engine signal floor as a safety floor,
+and keep the trade-count drift bounded (no "better Sharpe by trading
+90% less"). The absolute `DSR ≥ 0.95 ∧ credibility ≥ 60` clauses in §5
+below are still recorded but are no longer the binding gate.
 **Operator decision (TODO.md L463-470):** `[lane: engine-owned] [gate:
 held-back DSR≥0.95 + lower crash DD than current paper spec] [decision:
 DEFER — paper-research lane] [effort: M]`. DEFER was about
