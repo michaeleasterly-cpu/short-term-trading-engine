@@ -409,28 +409,30 @@ but DSR/credibility gates remain structurally blocked.
   a structurally bounded firing rate. See `docs/MASTER_PLAN.md` §4.2 and
   `backtests/reversion_satellite_backtest.json`.
 
-## Lab-isolation DB proofs not CI-enforced (follow-up, 2026-05-19)
+## ✅ Lab-isolation DB job — DONE 2026-05-20 (PR #147)
 
-INHERITED from SP2 (predates SP-A; SP-A only added tpcore/lab/ledger.py).
-`.github/workflows/ci.yml` `test` job has no `services: postgres` / no
-`DATABASE_URL`, so 5 DB-gated suites skip in CI: test_lab_isolation,
-test_db_read_only, test_aar_writer, test_fundamentals_cache,
-test_persistent_store. The make-or-break SP-A proofs
-(test_cumulative_n_trials_real_db_integer_correctness [H-LL-9],
-test_lab_ledger_disjoint_from_live_graduation [T-LIVE/H-LL-4]) are merge-time
-proven by the mandatory operator-run compensating control, NOT by CI.
+Shipped: `.github/workflows/ci.yml` now has a sibling `lab-isolation-db`
+job that provisions Postgres 15 via the GitHub Actions `services:` block,
+pre-creates the `platform` schema (alembic version-table chicken-and-egg
+fix), runs `alembic upgrade head`, then runs five DB-gated suites against
+the real DB:
+`tpcore/tests/test_db_read_only.py`,
+`tpcore/tests/test_lab_isolation.py`,
+`tpcore/tests/test_persistent_store.py`,
+`tpcore/tests/test_fundamentals_cache.py`,
+`tpcore/tests/test_aar_writer.py`. The existing `pytest + ruff +
+check_imports` job is untouched and continues to skip these suites when
+no DB is available. First successful run: 1m1s. Cross-ref SP-A, #242.
 
-- **Dedicated `lab-isolation-db` CI job (scoped, zero repo-wide blast radius).**
-  `[lane: shared-infra] [decision: build separately, NOT in SP-A] [effort: M]`
-  Add a NEW ci.yml job (NOT a repo-wide pytest-with-DB): `services: postgres:16`,
-  `env: DATABASE_URL=postgres://...localhost`, that (1) runs Alembic upgrade head
-  (schema bootstrap), (2) seeds a minimal `platform.prices_daily` fixture for the
-  reversion walk-forward, (3) runs ONLY `pytest tpcore/tests/test_lab_isolation.py
-  tpcore/tests/test_lab_credibility_pool_threaded.py -q`. Pin to those node IDs —
-  do NOT un-skip the other 4 dormant DB suites (data-lane-owned; separate
-  adjudication). KNOWN: test_read_pool_rejects_write_and_guards_fire fails
-  against pooled Supabase but should pass against a direct ephemeral Postgres
-  (no pgbouncer) — verify when building. Cross-ref SP-A, #242.
+**Note for historical context:** the original 2026-05-19 scope named two
+specific files (`test_lab_isolation.py`,
+`test_lab_credibility_pool_threaded.py`) and "minimal `platform.prices_daily`
+fixture for the reversion walk-forward"; the shipped form covers the five
+files that actually have `skipif(DATABASE_URL is None / RUN_DB_INTEGRATION_TESTS
+not set)` markers — verified by repo-wide grep at build time. The proofs
+named in the original (test_cumulative_n_trials_real_db_integer_correctness
+[H-LL-9], test_lab_ledger_disjoint_from_live_graduation [T-LIVE/H-LL-4]) are
+covered by `test_lab_isolation.py`, which is in the shipped job.
 
 ## ✅ Code-sweep findings — engine-lane-owned — ALL SHIPPED 2026-05-19 (CONSOLIDATED v2)
 
@@ -481,43 +483,119 @@ duplicate). Closed record kept legible for cross-session history:
   (statement_cache_size=0 + server_settings jit:off) mirrored inline + a
   "keep in sync with tpcore.db.build_asyncpg_pool" comment.
 
-## Lab front-half epic — PAUSED at a clean milestone (2026-05-19)
+## Lab front-half epic — RESUMED 2026-05-19..05-20 (SP-A..F SHIPPED, SP-G in flight)
 
-Operator-approved epic (memory `project_lab_front_half_epic.md` is the
-**authoritative full state** — cross-ref it before resuming). The Lab is
-half-built (back-half correct); the front-half builds the anti-overfit
-safety floor + roster-driven plug-and-play targeting + readiness checklist
-+ pluggable scoring; absorbs Sentinel/Catalyst; prerequisite for #242 (now
-engine-lane). `[lane: engine-owned] [needs operator decision: YES — explicit
-go to resume]`
+Operator-approved epic. The 2026-05-19 pause cleared 2026-05-19..05-20;
+SP-B through SP-F shipped this period, and SP-G's hardened design spec
+landed 2026-05-20. The Lab front-half is now substantially built;
+remaining work is the SP-G build and the follow-on autonomous-quant
+epic (task #25 — separate, see its own section below).
 
-**Safety floor SHIPPED (the only part operator authorised this session):**
+**Safety floor (the 2026-05-19 milestone):**
 - ✅ **SP-A — cross-candidate n_trials ledger — SHIPPED PR #93 (96e6ce6).**
   The anti-overfit-laundering safety floor: every Lab candidate honestly
   counted against a persistent cumulative n_trials so a tuned spec can't be
   laundered past the DSR gate by splitting trials across runs.
 - ✅ **SP-A2 — DSR null-variance estimator correction — SHIPPED PR #104
   (096ff68)** (= code-sweep Finding #1, task #147; see the shipped
-  code-sweep block above). With SP-A, this completes the safety floor: the
-  gate now counts trials honestly AND deflates correctly.
+  code-sweep block above). Completes the safety floor: the gate now
+  counts trials honestly AND deflates correctly.
 
-**EPIC PAUSED — operator decision 2026-05-19: "findings only — stop after
-#3".** SP-B..SP-G are **DEFERRED to an explicit future go — do NOT
-auto-start SP-B.** This is a clean milestone: the safety floor (SP-A +
-SP-A2) is the only piece that needed to land before pausing; nothing is
-half-built.
+**Sub-projects shipped this period (2026-05-19..05-20):**
+- ✅ **SP-B — roster-driven plug-and-play Lab targeting — SHIPPED PR #131.**
+  `ops/lab/run.py` `_runner_for` / `PARAM_RANGES` + CLI `--target-engine`
+  driven from `tpcore.engine_profile` (the roster SoT); new/retuned engines
+  are Lab-targetable without editing the Lab.
+- ✅ **SP-C — Lab Candidate Readiness checklist — SHIPPED PR #132.**
+  `docs/superpowers/checklists/lab_candidate_readiness.md`; feature-flag
+  variant + single pre-registered hypothesis + n_trials-ledger
+  acknowledgement.
+- ✅ **SP-D — pluggable per-engine success scoring + richer dossier —
+  SHIPPED PR #135.**
+- ✅ **SP-E — Sentinel validation case (MAXDD_REDUCTION non-Sharpe Lab
+  target) — SHIPPED PR #136.**
+- ✅ **SP-F — Catalyst engine scaffold + ECR-ADD prepared — SHIPPED PR
+  #137.** (Engine code shipped; the actual `python -m ops.engine_sdlc
+  --ecr ecr_catalyst.txt` activation that flips the roster is deferred —
+  see the open follow-up at the end of this section.)
+- ✅ **SP-G design spec — SHIPPED PR #146 (2026-05-20).** Hardened design
+  spec for the thin advisory LLM spec-emitter
+  (`docs/superpowers/specs/2026-05-20-lab-sp-g-llm-spec-emitter-design.md`).
+  Operator confirmed 2026-05-20 to "ship with my recommendations" on the
+  six §10 decision-points: thin scope (Q1), `EMISSION_QUOTA_PER_TARGET=20`
+  (Q2), per-emission `--reference-bundle <name>` (Q3), SP-E spec-landing
+  path (Q4), `/lab-spec-emit` skill name (Q5),
+  `LAB_LEDGER_CAPACITY_AVAILABLE` event deferred (Q6).
 
-**RESUME POINT (when the operator gives the explicit go):**
-- **SP-B = roster-driven plug-and-play Lab targeting.** Replace the
-  hardcoded 3-tuple in `ops/lab/run.py` (`_runner_for` / `PARAM_RANGES`)
-  and the `ops.lab` CLI `--target-engine` choices — drive all of it from
-  `tpcore.engine_profile` (the roster SoT) so a new/retuned engine is
-  Lab-targetable without editing the Lab. This is the first step on
-  resume.
-- Then SP-C — Lab Candidate Readiness checklist (seeded by the Vector
-  pilot spec, commit `0a94414` on branch `lab-candidates-rollthrough`) →
-  SP-D → SP-E → SP-F → SP-G (= #242, research-LLM edge-discovery,
-  engine-lane-owned per `project_research_llm_edge_discovery.md`).
+**In flight:**
+- **SP-G build.** Subagent-driven heavy-lane build of the thin advisory
+  LLM spec-emitter per the merged design spec. One PR expected:
+  `tpcore/lab/llm_emitter/` (models / emitter / diff_fence) +
+  `ops/llm_lab_emitter.py` (the agent, credential-starved, draft-PR-only)
+  + third co-task in `ops/llm_triage_service.py` +
+  `.claude/skills/lab-spec-emit.md` + reference bundles +
+  orphaned-spend recovery runbook. `[lane: engine-owned] [needs operator
+  decision: no (decisions locked)] [effort: L]`
+
+**Deferred follow-up (engine roster activation):**
+- **Catalyst ECR activation.** `python -m ops.engine_sdlc --ecr
+  ecr_catalyst.txt` to flip Catalyst's lifecycle in the `_PROFILE`
+  roster. The engine code shipped via PR #137; the ECR activation is
+  the remaining step. `[lane: engine-owned via /ecr skill] [gate:
+  none] [needs operator decision: no] [effort: S]`
+
+## Task #25 — autonomous LLM+quant edge finder (follow-on epic)
+
+The richer ambition the operator raised 2026-05-20 when SP-G's scope was
+locked: an LLM that finds tradeable edges **on its own**, driving a real
+quantitative toolkit (statsmodels / arch / linearmodels / scikit-learn /
+scipy.stats — factor / time-series / regime models), internalising
+trading-environment context from the curated reference set
+([[ref_carver_systematic_trading]], [[ref_chan_algorithmic_trading]],
+future adds), and operating a disciplined
+**data → analysis → idea → Lab → graduation gate** pipeline. Distinct
+from SP-G (the thin advisory spec-emitter that JUST shipped its design
+spec via PR #146 and is in build); SP-G is the minimum, hardest-fenced
+form of the LLM-proposes / deterministic-gate-disposes fence, task #25
+inherits that fence verbatim and extends it with autonomous search.
+
+**Status:** backlog. Gated on (a) SP-G build landing, and (b) operator's
+explicit go to start the brainstorm. Operator answered "keep going /
+stick to the plan" 2026-05-20 when offered an early restructure of
+SP-G into this larger ambition — i.e. NO restructure now, task #25 is
+its own follow-on epic with its own brainstorm → spec → plan → build
+sequence.
+
+**HARD CONSTRAINT (inherited from
+[[project_research_llm_edge_discovery]] + [[project_ml_research_track]]
+— binding, non-negotiable):** the commissioned-expert verdict is that
+naïve automated edge-search inflates the DSR `n_trials` /
+multiple-testing count and manufactures overfit "edges" that die
+out-of-sample. The LLM proposes; the deterministic gate (DSR ≥ 0.95 ∧
+credibility ≥ 60, cumulatively deflated via the SP-A ledger) disposes.
+Specifically:
+- (a) Every candidate routes through the existing graduation gate; the
+  LLM never bypasses or re-weights the gate.
+- (b) The LLM's exploration IS counted against `n_trials` honestly.
+- (c) Prefer expert-blessed framings (meta-labeling / cross-engine
+  combiner) over free-form strategy mining.
+- (d) Forensics / allocator / governor / graduation-gate stay
+  deterministic. The autonomous finder sits ATOP them, never
+  re-implements them.
+
+**Operator framing 2026-05-20 (carry into the brainstorm):** the
+reference toolkit is chosen to teach TWO things — (1) the **trading
+environment**: market structure / micro-structure and how everything
+interconnects; (2) a **repeatable workflow**: collect data → analyse →
+find trade ideas to automate. Operator: *"this is what the LLM edge
+finder will do … future roadmap."* The autonomous finder is intended
+to internalise (1) as domain context and operate (2) as its loop —
+NOT free-form strategy mining but a disciplined environment-aware
+pipeline.
+
+`[lane: engine-owned] [gate: SP-G build landed + operator explicit go]
+[needs operator decision: YES — kick-off brainstorm] [effort: XL —
+multi-PR epic]`
 
 ## Deep-research spike adjudication — Lab-candidate backlog (2026-05-19)
 
