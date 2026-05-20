@@ -63,6 +63,40 @@ class FakePool:
         if "platform.prices_daily" in sql_lower and "ticker = $1" in sql_lower:
             ticker = args[0]
             return [r for r in self.rows if r["ticker"] == ticker]
+        # macro_indicators_completeness: per-indicator first_date /
+        # last_date / row_count over the EXPECTED set. The range SQL
+        # uses MIN(date)/MAX(date); the freshness SQL only MAX(date).
+        # Disambiguate on "min(date)".
+        if "platform.macro_indicators" in sql_lower and "min(date)" in sql_lower:
+            from datetime import UTC, datetime, timedelta
+            today = datetime.now(UTC).date() - timedelta(days=5)
+            first = today - timedelta(days=60)
+            return [
+                {"indicator": name, "first_date": first, "last_date": today,
+                 "row_count": 100}
+                for name in (
+                    "sahm_rule", "industrial_production", "initial_claims",
+                    "yield_curve", "credit_spread", "hy_spread", "vix",
+                )
+            ]
+        # macro_indicators_completeness: per-indicator present-dates
+        # query (one indicator at a time). Return every expected
+        # publication date per the indicator's cadence so the
+        # zero-tolerance invariant passes for e2e tests focused on
+        # unrelated checks.
+        if "platform.macro_indicators" in sql_lower and "between $2 and $3" in sql_lower:
+            from tpcore.quality.validation.checks.macro_indicators_completeness import (
+                INDICATOR_CADENCE,
+                _expected_dates_for_cadence,
+            )
+            indicator, first_d, last_d = args
+            cadence = INDICATOR_CADENCE.get(indicator)
+            if cadence is None:
+                return []
+            return [
+                {"date": d}
+                for d in _expected_dates_for_cadence(cadence, first_d, last_d)
+            ]
         # macro_indicators_freshness check: return one fresh row per
         # expected indicator so the suite passes when running e2e
         # tests focused on unrelated checks.

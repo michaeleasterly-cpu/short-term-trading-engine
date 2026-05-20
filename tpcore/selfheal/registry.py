@@ -124,6 +124,18 @@ _SPECS: tuple[HealSpec, ...] = (
     HealSpec(check_name="macro_indicators_freshness", source="macro_indicators",
              healable=True, stage="macro_indicators",
              params={"skip_guard_days": "0"}, max_attempts=2),
+    # The completeness invariant catches gaps INSIDE the active range
+    # of each FRED series (the 2026-05-15 BAMLH0A0HYM2 truncation class
+    # — freshness stays green when latest_date is current but the
+    # mid-range is gutted). Heal via the same canonical
+    # ``macro_indicators`` stage with skip-guard off; the stage already
+    # re-pulls all 7 series (universe = the 7 series), so per-indicator
+    # subsetting is not meaningful at the stage level. Bounded by
+    # max_attempts=2. Spec:
+    # docs/superpowers/specs/2026-05-20-macro-indicators-completeness-invariant.md.
+    HealSpec(check_name="macro_indicators_completeness", source="macro_indicators",
+             healable=True, stage="macro_indicators",
+             params={"skip_guard_days": "0"}, max_attempts=2),
     # Force param added to tier_refresh / classify_tickers
     # (skip_guard_days=0) → now honestly healable via canonical re-run.
     HealSpec(check_name="liquidity_tiers_freshness", source="liquidity_tiers",

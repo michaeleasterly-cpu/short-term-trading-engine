@@ -131,8 +131,9 @@ async def test_run_suite_passes_when_all_checks_pass() -> None:
         "fundamentals_integrity", "corporate_actions_integrity",
         "earnings_events_freshness", "sec_filings_freshness",
         "liquidity_tiers_freshness", "ticker_classifications_coverage",
-        "macro_indicators_freshness", "prices_daily_freshness",
-        "prices_daily_completeness", "options_max_pain_freshness",
+        "macro_indicators_freshness", "macro_indicators_completeness",
+        "prices_daily_freshness", "prices_daily_completeness",
+        "options_max_pain_freshness",
         "insider_sentiment_freshness", "social_sentiment_freshness",
         "fear_greed_freshness", "short_interest_freshness",
         "borrow_rates_freshness", "aaii_sentiment_freshness",
@@ -146,7 +147,7 @@ async def test_run_suite_writes_one_score_per_check() -> None:
     await run_suite(
         pool, delistings=delistings, constituents=constituents, splits=splits, writer=writer
     )
-    assert len(writer.scores) == 20  # +aaii_sentiment (2026-05-16)
+    assert len(writer.scores) == 21  # +macro_indicators_completeness (2026-05-20)
     sources = {s.source for s in writer.scores}
     assert sources == {
         "validation.delistings",
@@ -160,6 +161,7 @@ async def test_run_suite_writes_one_score_per_check() -> None:
         "validation.liquidity_tiers_freshness",
         "validation.ticker_classifications_coverage",
         "validation.macro_indicators_freshness",
+        "validation.macro_indicators_completeness",
         "validation.prices_daily_freshness",
         "validation.prices_daily_completeness",
         "validation.options_max_pain_freshness",
@@ -206,8 +208,8 @@ async def test_run_suite_aggregates_failures() -> None:
     failed_checks = [c for c in result.checks if not c.passed]
     assert len(failed_checks) == 1
     assert failed_checks[0].name == "delistings"
-    # All 20 rows still written (+aaii_sentiment 2026-05-16)
-    assert len(writer.scores) == 20
+    # All 21 rows still written (+macro_indicators_completeness 2026-05-20)
+    assert len(writer.scores) == 21
 
 
 async def test_run_suite_wraps_check_exception() -> None:
