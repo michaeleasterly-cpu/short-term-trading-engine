@@ -73,6 +73,29 @@ def test_models_are_frozen_and_extra_forbid() -> None:
         CarverForecast(rule="trend", scaled=1.0, raw=1.0, bogus_field=True)
 
 
+def test_carver_aar_uses_classify_exit_reason_and_resolves_time_stop() -> None:
+    from datetime import UTC, datetime
+
+    from carver.plugs.aar_logging import CarverAARLogging
+    from tpcore.aar.models import ExitReason
+
+    plug = CarverAARLogging()
+    # Portfolio engines pass take_profit=None, stop_loss=None -> TIME_STOP.
+    aar = plug.build_aar(
+        trade_id="cv_AAPL_20260520_001",
+        ticker="AAPL",
+        entry_price=Decimal("150"),
+        exit_price=Decimal("152"),
+        qty=10,
+        entry_time=datetime(2026, 1, 1, tzinfo=UTC),
+        exit_time=datetime(2026, 2, 1, tzinfo=UTC),
+        take_profit=None,
+        stop_loss=None,
+    )
+    assert aar.exit_reason == ExitReason.TIME_STOP
+    assert aar.engine == "carver"
+
+
 def test_rebalance_decision_count_buckets() -> None:
     from carver.models import (
         CarverTarget,
