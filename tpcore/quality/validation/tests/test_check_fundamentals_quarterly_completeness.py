@@ -11,8 +11,6 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-import pytest
-
 from tpcore.quality.validation.checks.fundamentals_quarterly_completeness import (
     LIVE_WITHIN_DAYS,
     MAX_QUARTERLY_GAP_DAYS,
