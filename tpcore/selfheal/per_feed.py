@@ -52,6 +52,9 @@ from tpcore.quality.validation.checks.insider_sentiment_freshness import (
 from tpcore.quality.validation.checks.liquidity_tiers_freshness import (
     check_liquidity_tiers_freshness,
 )
+from tpcore.quality.validation.checks.macro_indicators_completeness import (
+    check_macro_indicators_completeness,
+)
 from tpcore.quality.validation.checks.macro_indicators_freshness import (
     check_macro_indicators_freshness,
 )
@@ -123,6 +126,7 @@ _CHECK_FN: dict[str, _CheckCallable] = {
         check_ticker_classifications_coverage, None
     ),
     "macro_indicators_freshness": _src(check_macro_indicators_freshness, None),
+    "macro_indicators_completeness": _src(check_macro_indicators_completeness, None),
     "prices_daily_freshness": _src(check_prices_daily_freshness, None),
     "prices_daily_completeness": _src(check_prices_daily_completeness, None),
     "options_max_pain_freshness": _src(check_options_max_pain_freshness, None),

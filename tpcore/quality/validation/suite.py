@@ -48,6 +48,12 @@ from .checks.insider_sentiment_freshness import CHECK_NAME as INSIDER_SENTIMENT_
 from .checks.insider_sentiment_freshness import check_insider_sentiment_freshness
 from .checks.liquidity_tiers_freshness import CHECK_NAME as LIQUIDITY_FRESHNESS_NAME
 from .checks.liquidity_tiers_freshness import check_liquidity_tiers_freshness
+from .checks.macro_indicators_completeness import (
+    CHECK_NAME as MACRO_COMPLETENESS_NAME,
+)
+from .checks.macro_indicators_completeness import (
+    check_macro_indicators_completeness,
+)
 from .checks.macro_indicators_freshness import CHECK_NAME as MACRO_FRESHNESS_NAME
 from .checks.macro_indicators_freshness import check_macro_indicators_freshness
 from .checks.options_max_pain_freshness import CHECK_NAME as OPTIONS_MAXPAIN_NAME
@@ -94,6 +100,7 @@ KNOWN_CHECK_NAMES: tuple[str, ...] = (
     LIQUIDITY_FRESHNESS_NAME,
     CLASSIFICATIONS_NAME,
     MACRO_FRESHNESS_NAME,
+    MACRO_COMPLETENESS_NAME,
     PRICES_FRESHNESS_NAME,
     PRICES_COMPLETENESS_NAME,
     OPTIONS_MAXPAIN_NAME,
@@ -157,6 +164,9 @@ async def run_suite(
     macro_task = _safe_run(
         MACRO_FRESHNESS_NAME, check_macro_indicators_freshness, pool, None
     )
+    macro_completeness_task = _safe_run(
+        MACRO_COMPLETENESS_NAME, check_macro_indicators_completeness, pool, None
+    )
     prices_task = _safe_run(
         PRICES_FRESHNESS_NAME, check_prices_daily_freshness, pool, None
     )
@@ -188,7 +198,7 @@ async def run_suite(
         delistings_result, constituent_result, splits_result,
         row_integrity_result, fund_integrity_result, ca_integrity_result,
         earnings_events_result, sec_result, liquidity_result, classifications_result,
-        macro_result, prices_result, completeness_result,
+        macro_result, macro_completeness_result, prices_result, completeness_result,
         options_maxpain_result, insider_sentiment_result,
         social_sentiment_result, fear_greed_result,
         short_interest_result, borrow_rates_result,
@@ -197,7 +207,7 @@ async def run_suite(
         delistings_task, constituent_task, splits_task,
         row_integrity_task, fund_integrity_task, ca_integrity_task,
         earnings_events_task, sec_task, liquidity_task, classifications_task,
-        macro_task, prices_task, completeness_task,
+        macro_task, macro_completeness_task, prices_task, completeness_task,
         options_maxpain_task, insider_sentiment_task,
         social_sentiment_task, fear_greed_task,
         short_interest_task, borrow_rates_task,
@@ -207,7 +217,7 @@ async def run_suite(
         delistings_result, constituent_result, splits_result,
         row_integrity_result, fund_integrity_result, ca_integrity_result,
         earnings_events_result, sec_result, liquidity_result, classifications_result,
-        macro_result, prices_result, completeness_result,
+        macro_result, macro_completeness_result, prices_result, completeness_result,
         options_maxpain_result, insider_sentiment_result,
         social_sentiment_result, fear_greed_result,
         short_interest_result, borrow_rates_result,
