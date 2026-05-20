@@ -61,15 +61,23 @@ def test_param_ranges_membership_iteration_len_and_set():
     import ops.lab.run as run
     # SP-E: sentinel gained a declared LAB_TARGET, so it is now a
     # declared PARAM_RANGES member (after the T0 trio, dispatch_order).
+    # carver (the first LAB engine ever planner-ADDed; dispatch_order=6)
+    # ships its LAB_TARGET from day-zero so SP-B's roster-driven resolver
+    # picks it up the moment _PROFILE includes it.
     assert list(run.PARAM_RANGES) == [
-        "reversion", "vector", "momentum", "sentinel"]
+        "reversion", "vector", "momentum", "sentinel", "carver"]
     assert "reversion" in run.PARAM_RANGES
     assert "sentinel" in run.PARAM_RANGES         # SP-E: now declared
-    assert len(run.PARAM_RANGES) == 4
+    assert "carver" in run.PARAM_RANGES            # LAB target, day-zero
+    assert len(run.PARAM_RANGES) == 5
     for e in ("reversion", "vector", "momentum"):
         assert set(run.PARAM_RANGES[e]) == set(_T0_PARAM_RANGES_KEYSETS[e])
     # SP-E: sentinel's single pre-registered toggle.
     assert set(run.PARAM_RANGES["sentinel"]) == {"activation_score_threshold"}
+    # carver's six pre-registered toggles (spec §6 PARAM_RANGES).
+    assert set(run.PARAM_RANGES["carver"]) == {
+        "trend_fast", "trend_slow", "value_lookback_months",
+        "meanrev_window", "annualized_vol_target", "idm_cap"}
 
 
 # ── BINDING CONTRACT pins (spec §2.4 — the §8 highest residual risk) ─────
