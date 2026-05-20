@@ -261,7 +261,8 @@ jobs:
             tpcore/tests/test_lab_isolation.py \
             tpcore/tests/test_persistent_store.py \
             tpcore/tests/test_fundamentals_cache.py \
-            tpcore/tests/test_aar_writer.py
+            tpcore/tests/test_aar_writer.py \
+            tpcore/tests/test_handle_fundamentals_archive_db_schema.py
 
   # Fail-CLOSED agent-PR label guard (MED security fix). The two fence
   # jobs above are LABEL-GATED — they run ONLY when the agent's own

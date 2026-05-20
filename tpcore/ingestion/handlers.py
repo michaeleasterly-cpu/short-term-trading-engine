@@ -31,6 +31,24 @@ e.g. validation). The engine threads the value into the application_log
 ``INGESTION_COMPLETE`` event so daily ops checks can see throughput."""
 
 
+FUNDAMENTALS_ARCHIVE_FIELDS: tuple[str, ...] = (
+    "ticker", "filing_date", "period_end_date", "period_label",
+    "net_income", "fcf", "operating_cash_flow", "capex", "revenue",
+    "total_assets", "total_liabilities", "current_assets",
+    "current_liabilities", "receivables", "cash_and_equivalents",
+    "shares_outstanding", "pb", "de", "recorded_at",
+)
+"""Canonical CSV-archive column order for ``fmp_fundamentals``.
+
+Must stay in lockstep with the data columns of
+``platform.fundamentals_quarterly`` (minus the surrogate ``id``).
+Exposed at module level so the schema-drift tests
+(``test_handle_fundamentals_archive_e2e`` for CSV-header parity,
+``test_handle_fundamentals_archive_db_schema`` for live-DB parity)
+can import and assert against it — adding a column to the table
+requires updating this tuple and the assertion will surface the gap."""
+
+
 async def handle_data_validation(pool: asyncpg.Pool, config: dict[str, Any]) -> int | None:
     """Run the Data Validation Suite. Raises if the suite fails.
 
@@ -89,13 +107,7 @@ async def handle_fundamentals_refresh(
     from tpcore.ingestion.csv_archive import write_archive
     archive = write_archive(
         "fmp_fundamentals", archive_rows,
-        fieldnames=[
-            "ticker", "filing_date", "period_end_date", "period_label",
-            "net_income", "fcf", "operating_cash_flow", "capex", "revenue",
-            "total_assets", "total_liabilities", "current_assets",
-            "current_liabilities", "receivables", "cash_and_equivalents",
-            "shares_outstanding", "pb", "de", "recorded_at",
-        ],
+        fieldnames=list(FUNDAMENTALS_ARCHIVE_FIELDS),
         validator=lambda r: bool(r.get("ticker")) and bool(r.get("period_end_date")),
     )
 
