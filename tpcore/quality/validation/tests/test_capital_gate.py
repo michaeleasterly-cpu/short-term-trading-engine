@@ -301,14 +301,14 @@ async def test_failing_sources_for_engine_missing_required_row_is_failing() -> N
 
 
 def test_engine_tables_has_allocator_prices_daily():
-    from tpcore.quality.validation.capital_gate import ENGINE_TABLES
+    from tpcore.engine_profile import engine_data_dependencies
 
-    assert ENGINE_TABLES["allocator"] == frozenset({"prices_daily"})
+    assert engine_data_dependencies("allocator") == frozenset({"prices_daily"})
 
 
 def test_allocator_source_is_a_real_healspec_source():
-    from tpcore.quality.validation.capital_gate import ENGINE_TABLES
+    from tpcore.engine_profile import engine_data_dependencies
     from tpcore.selfheal.registry import HEAL_SPECS
 
     known_sources = {spec.source for spec in HEAL_SPECS.values()}
-    assert ENGINE_TABLES["allocator"] <= known_sources
+    assert engine_data_dependencies("allocator") <= known_sources

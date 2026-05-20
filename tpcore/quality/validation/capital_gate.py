@@ -45,44 +45,16 @@ EXPECTED_SOURCES = frozenset(f"validation.{name}" for name in KNOWN_CHECK_NAMES)
 # context and remains available in git history; the contemporary
 # canonical declaration is the EngineProfile field).
 #
-# This module-level name is KEPT as the back-compat read-model at the
-# old import path — three external consumers
-# (canary/tests/test_wiring.py; tpcore/quality/validation/tests/
-# test_capital_gate.py; tpcore/tests/test_engine_lifecycle_consistency.py)
-# still import it. It is NOT a parallel SoT — re-deriving it always
-# yields exactly {(name, profile.data_dependencies) :
-# profile.data_dependencies}. Resolved lazily via PEP 562 module
-# ``__getattr__`` to break the engine_profile ↔ capital_gate import
-# cycle (engine_profile imports ``assert_passed_for_engine`` at top-
-# level; deriving the table at capital_gate import time would re-enter
-# the partially-initialised engine_profile module).
-def _derive_engine_tables() -> dict[str, frozenset[str]]:
-    """Derive the back-compat ENGINE_TABLES dict from the engine_profile
-    SoT. Engines with empty data_dependencies are absent (preserves the
-    byte-equivalent pre-migration membership: engines with no declared
-    reads were never in the hand-curated dict). RETIRED engines are
-    EXCLUDED (the documented D-SDLC1-1 seam: ENGINE_TABLES is keyed by
-    LIVE engines; the planner's _apply_remove stripped the row at
-    retire-time pre-migration — this filter preserves that semantics
-    structurally so a no-op regex sub against the derived constant is
-    not load-bearing)."""
-    from tpcore.engine_profile import _PROFILE, LifecycleState
-    return {
-        name: p.data_dependencies for name, p in _PROFILE.items()
-        if p.data_dependencies
-        and p.lifecycle_state is not LifecycleState.RETIRED
-    }
-
-
-def __getattr__(name: str) -> object:
-    """PEP 562 lazy attribute resolver — used to defer ENGINE_TABLES
-    derivation until first access so the engine_profile ↔ capital_gate
-    import cycle (engine_profile imports assert_passed_for_engine at
-    top-level) does not fire at capital_gate-import-time."""
-    if name == "ENGINE_TABLES":
-        return _derive_engine_tables()
-    raise AttributeError(
-        f"module {__name__!r} has no attribute {name!r}")
+# The back-compat `ENGINE_TABLES` module attribute was REMOVED in the §7.4
+# follow-up to the declarative engine_profile data_dependencies migration
+# (PRs #171/#191 + this PR). All external consumers now call
+# `tpcore.engine_profile.engine_data_dependencies(engine)` directly, which
+# reads EngineProfile.data_dependencies — the canonical SoT. A drift
+# sentinel (`tpcore/tests/test_engine_profile.py
+# ::test_engine_tables_shim_removed`) reds CI on any future re-introduction
+# of the parallel read-model. See:
+# `docs/superpowers/specs/2026-05-20-declarative-engine-profile-data-dependencies.md`
+# §7.4.
 
 
 class ValidationStaleError(RuntimeError):

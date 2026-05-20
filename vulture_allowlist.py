@@ -15,11 +15,6 @@
 # trade_monitor path; pre-existing since the momentum build). Allowlisted
 # as intentional parity-scaffold + flagged for separate handling; do NOT
 # delete the scaffold on the assumption it is mere dead code.
-# PEP 562 module-level lazy attribute resolver — back-compat shim for
-# capital_gate.ENGINE_TABLES (folded to engine_profile.data_dependencies
-# 2026-05-20). Called by the import system, never by name in our code,
-# so vulture flags it; legitimate.
-__getattr__  # unused function (tpcore/quality/validation/capital_gate.py:77)
 model_config  # unused variable (canary/models.py:16)
 model_config  # unused variable (canary/models.py:22)
 __aenter__  # unused function (canary/tests/test_scheduler.py:121)
