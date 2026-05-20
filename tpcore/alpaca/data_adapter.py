@@ -106,6 +106,49 @@ class AlpacaDataAdapter(DataProviderInterface):
             for r in rows
         ]
 
+    async def latest_published(self, symbol: str = "SPY") -> date_t | None:
+        """Cheap publication-availability probe (#165 facet 4): ask
+        Alpaca for the freshest daily bar Alpaca has for ``symbol``
+        and return its session date. Lets the self-heal orchestrator
+        distinguish "we are stale (our defect → heal)" from "Alpaca
+        simply has nothing newer yet (vendor-late → quiet, no churn)"
+        per the no-lazy-vendor-blame rule.
+
+        The probe pins ``symbol`` to SPY (the canonical liquid anchor
+        already in ``CRITICAL_TICKERS`` for prices_daily_freshness) by
+        default — high-liquidity, every NYSE session, never delisted.
+        If Alpaca has a bar for SPY for session N, the feed's
+        "latest" anchor is N.
+
+        **IEX feed override** — the Algo Trader Plus tier 403s the
+        latest-bar endpoint on the SIP feed ("subscription does not
+        permit querying recent SIP data"). Historical SIP works fine
+        (older than 15 min) which is what the production ingestion
+        uses; for the "is there a new session?" probe specifically we
+        use the unrestricted IEX feed. SPY trades on IEX every
+        session, so IEX coverage is complete for the anchor symbol.
+
+        Returns ``None`` on any failure — caller stays strict
+        (never silently green on an undeterminable signal).
+        """
+        from alpaca.data.requests import StockLatestBarRequest
+
+        request = StockLatestBarRequest(symbol_or_symbols=symbol, feed="iex")
+        try:
+            raw = await asyncio.to_thread(
+                self._client.get_stock_latest_bar, request,
+            )
+        except Exception as exc:  # noqa: BLE001 — probe must never raise
+            logger.debug(
+                "tpcore.alpaca.latest_published_failed",
+                symbol=symbol, error=str(exc),
+            )
+            return None
+        bar = raw.get(symbol) if hasattr(raw, "get") else None
+        if bar is None or getattr(bar, "timestamp", None) is None:
+            return None
+        return bar.timestamp.date()
+
     async def get_quote(self, symbol: str) -> Quote:
         """Fetch the latest NBBO quote for ``symbol`` via Alpaca's SIP feed.
 
