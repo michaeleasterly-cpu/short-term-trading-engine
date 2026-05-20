@@ -192,8 +192,12 @@ def test_lifecycle_state_enum_values():
 
 
 def test_profile_has_new_fields_all_entries():
-    # all 5 live engines + allocator are PAPER; sigma is RETIRED;
-    # lab is the durable SP2 LAB sentinel (D-SP2-4 two-tier registry).
+    # 5 live PAPER engines + allocator are PAPER; carver is the first
+    # LAB engine (planner-ADDed via ecr_carver.txt; LAB → PAPER is a
+    # future automated ECR-MODIFY once the Lab dossier clears the gate);
+    # sigma is RETIRED; lab is the durable SP2 LAB sentinel (D-SP2-4
+    # two-tier registry). planner._apply_add forces
+    # allocator_eligible=False on LAB ADDs.
     expected = {
         "allocator": (0, LifecycleState.PAPER, False),
         "reversion": (1, LifecycleState.PAPER, True),
@@ -201,6 +205,7 @@ def test_profile_has_new_fields_all_entries():
         "momentum":  (3, LifecycleState.PAPER, True),
         "sentinel":  (4, LifecycleState.PAPER, False),
         "canary":    (5, LifecycleState.PAPER, False),
+        "carver":    (6, LifecycleState.LAB, False),
         "sigma":     (99, LifecycleState.RETIRED, False),
         "lab":       (50, LifecycleState.LAB, False),
     }

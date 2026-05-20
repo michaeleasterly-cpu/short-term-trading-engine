@@ -148,14 +148,18 @@ def test_structurally_parseable_shadows_match_sot():
 
 
 def test_lab_sentinel_is_not_wired():
-    """The durable LAB sentinel proves LifecycleState.LAB is a real
-    exercised state, but is NOT a runnable engine: absent from
-    dispatch/allocator, no top-level package, and LAB is the ONLY
-    non-{PAPER,LIVE,RETIRED} state (closes the half-state gap
-    symmetric to the RETIRED leg)."""
+    """The durable LAB sentinel ``"lab"`` proves LifecycleState.LAB is a
+    real exercised state, but the SENTINEL itself is NOT a runnable
+    engine: absent from dispatch/allocator and from the top-level
+    package surface. Other LAB entries — real engines registered via
+    the SDLC planner's ADD path (which always lands LAB; see
+    ``ops.engine_sdlc.planner._apply_add``) — ARE allowed and DO have
+    top-level packages; they're Lab-targetable until they graduate to
+    PAPER. This test pins ONLY the sentinel's inertness, not the
+    population of LAB."""
     lab = [n for n, p in _PROFILE.items()
            if p.lifecycle_state is LifecycleState.LAB]
-    assert lab == ["lab"], f"expected exactly one LAB sentinel, got {lab}"
+    assert "lab" in lab, f"durable LAB sentinel missing from _PROFILE: {lab}"
     assert "lab" not in roster_for_dispatch()
     assert "lab" not in allocator_eligible_engines()
     assert not (REPO / "lab").is_dir()  # not a top-level package

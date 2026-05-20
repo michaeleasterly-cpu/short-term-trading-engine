@@ -346,11 +346,19 @@ async def test_validate_dry_run_reject_no_fabricated_green(tmp_path,
     monkeypatch.setattr(
         cli, "_read_confirm",
         lambda: pytest.fail("rejected dry run reached the y/n prompt"))
+    # dispatch_order=6 collides with carver in the live _PROFILE (planner-
+    # ADDed via ecr_carver.txt) — the post-stage consistency subprocess
+    # reds on test_no_half_state's duplicate-dispatch_order leg. Pre-
+    # carver, this test relied on the bare engine_template lacking a
+    # tests/ dir to force a readiness miss; the live template now ships
+    # tests/__init__.py (commit 340960e), so we switch to the duplicate-
+    # dispatch_order red trigger — same goal (drive the real validate()
+    # reject path through the CLI), different mechanism.
     p = _write_ecr(
         tmp_path,
         "ECR\naction: ADD\nengine: brandnewengine_xyz\n"
         "source: new_scaffold\ncadence: daily\nallocator: false\n"
-        "dispatch_order: 9\nneed: prove the dry-run-reject CLI path\n")
+        "dispatch_order: 6\nneed: prove the dry-run-reject CLI path\n")
     rc = await cli._amain(["--ecr", str(p)])  # noqa: SLF001
     assert rc == 1, "a dry-run-rejected ECR must exit non-zero"
     assert len(events) == 1, "exactly one rejected audit expected"
@@ -372,11 +380,13 @@ async def test_validate_dry_run_reject_prints_no_green(tmp_path, capsys,
     monkeypatch.setattr(
         cli, "_read_confirm",
         lambda: pytest.fail("rejected dry run reached the y/n prompt"))
+    # dispatch_order=6 collides with carver in the live _PROFILE — see
+    # the sibling test's longer note. Same goal, same mechanism switch.
     p = _write_ecr(
         tmp_path,
         "ECR\naction: ADD\nengine: brandnewengine_abc\n"
         "source: new_scaffold\ncadence: daily\nallocator: false\n"
-        "dispatch_order: 9\nneed: prove no fabricated GREEN\n")
+        "dispatch_order: 6\nneed: prove no fabricated GREEN\n")
     rc = await cli._amain(["--ecr", str(p)])  # noqa: SLF001
     cap = capsys.readouterr()
     assert rc == 1

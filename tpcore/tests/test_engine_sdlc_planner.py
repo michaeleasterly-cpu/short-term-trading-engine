@@ -232,7 +232,7 @@ def _make_synthetic_engine_tree(tmp_path: Path) -> Path:
         '    # allocator: separate _dispatch_allocator path',
         '    "throwaway": EngineProfile(engine="throwaway", '
         'cadence=Cadence.DAILY,\n'
-        '                               dispatch_order=6, '
+        '                               dispatch_order=8, '
         'lifecycle_state=LifecycleState.PAPER),\n'
         '    # allocator: separate _dispatch_allocator path')
     ep.write_text(t)
@@ -722,17 +722,27 @@ def test_add_leaves_frozen_literal_untouched(tmp_path):
 
 
 def test_add_readiness_miss_rolls_back_to_byte_identical(tmp_path):
-    """H-S3-4 ADD leg (readiness-reject path): a `new_scaffold` ADD from
-    the bare engine_template legitimately fails the readiness gate (no
-    `<engine>/tests/` dir — spec H-S3-11d; the template is a START point,
-    the operator adds tests). The RuntimeError must reverse-replay the
-    journaled scaffold-copy + _PROFILE write so the tree is BYTE-IDENTICAL
-    — ZERO trace: no stray brandnew/, no _PROFILE entry. Proven with the
-    T5 recursive-byte-map oracle so it is non-vacuous: scaffold residue,
-    a surviving _PROFILE entry, or any drifted byte trips it."""
+    """H-S3-4 ADD leg (readiness-reject path): a `new_scaffold` ADD whose
+    staged engine_template is missing the `tests/` dir legitimately fails
+    the readiness gate (spec H-S3-11d). The RuntimeError must reverse-
+    replay the journaled scaffold-copy + _PROFILE write so the tree is
+    BYTE-IDENTICAL — ZERO trace: no stray brandnew/, no _PROFILE entry.
+    Proven with the T5 recursive-byte-map oracle so it is non-vacuous:
+    scaffold residue, a surviving _PROFILE entry, or any drifted byte
+    trips it. The live engine_template now ships ``tests/__init__.py``
+    (unblocks the first ECR-ADD ever); the staged copy is stripped of it
+    here so this test recreates the historical bare-template condition
+    that triggers the readiness miss."""
     from ops.engine_sdlc.ecr import EngineChangeRequest
     from ops.engine_sdlc.planner import apply, attach_ecr_context, classify
     staged = _make_synthetic_engine_tree(tmp_path)
+    # Recreate the "bare-template-without-tests/" condition this test pins
+    # (the live template now ships tests/__init__.py to unblock the first
+    # ECR-ADD ever — see commit 340960e).
+    tmpl_tests = (staged / "tpcore" / "templates" / "engine_template"
+                  / "tests")
+    if tmpl_tests.exists():
+        shutil.rmtree(tmpl_tests)
     ep = staged / "tpcore" / "engine_profile.py"
     pkg = staged / "brandnew"
     before_ep = ep.read_bytes()
@@ -763,22 +773,31 @@ def test_add_readiness_miss_rolls_back_to_byte_identical(tmp_path):
 
 def test_add_red_consistency_rolls_back_to_byte_identical(tmp_path):
     """H-S3-4 ADD leg (post-stage clockwork-red path): with a scaffold
-    that PASSES readiness (a `tests/` dir injected into the staged
-    engine_template), the staged ADD→LAB still makes the consistency
-    subprocess red (the SP1 `test_lab_sentinel_is_not_wired` pins exactly
-    one LAB sentinel — a 2nd LAB engine is correctly a half-state until
-    promoted). apply() must reverse-replay every journaled scaffold-copy
-    + _PROFILE write to a BYTE-IDENTICAL pre-state — ZERO trace. Proven
-    with the T5 recursive-byte-map oracle: scaffold residue, a surviving
-    _PROFILE entry, or any drifted byte trips it (non-vacuous)."""
+    that PASSES readiness, the staged ADD→LAB makes the consistency
+    subprocess red via the duplicate-dispatch_order leg of
+    test_no_half_state (the synthetic ECR is filed with the SAME
+    dispatch_order as the synthetic `throwaway` engine the staged tree
+    already carries). apply() must reverse-replay every journaled
+    scaffold-copy + _PROFILE write to a BYTE-IDENTICAL pre-state — ZERO
+    trace. Proven with the T5 recursive-byte-map oracle: scaffold
+    residue, a surviving _PROFILE entry, or any drifted byte trips it
+    (non-vacuous). Historical note: this test originally relied on the
+    strict ``lab == ["lab"]`` pin in test_lab_sentinel_is_not_wired to
+    trigger red on a 2nd LAB engine. That pin was relaxed when carver
+    became the first real LAB engine ever ADDed via the planner — the
+    sentinel-inertness pin is preserved, but a 2nd LAB engine is now
+    legitimately allowed. Red is re-routed through the duplicate-
+    dispatch_order leg, which is the next-most-natural consistency
+    failure for a staged ADD."""
     from ops.engine_sdlc.ecr import EngineChangeRequest
     from ops.engine_sdlc.planner import apply, attach_ecr_context, classify
     staged = _make_synthetic_engine_tree(tmp_path)
-    # make the staged engine_template readiness-complete so the reject
-    # comes from the post-stage subprocess, NOT the readiness gate.
+    # Live template now ships tests/ (commit 340960e); ensure it's there in
+    # the staged copy so readiness passes (the test wants the post-stage
+    # consistency subprocess to be the red trigger, NOT the readiness gate).
     tmpl_tests = (staged / "tpcore" / "templates"
                   / "engine_template" / "tests")
-    tmpl_tests.mkdir(parents=True)
+    tmpl_tests.mkdir(parents=True, exist_ok=True)
     (tmpl_tests / "__init__.py").write_text("")
     (tmpl_tests / "test_smoke.py").write_text("def test_ok():\n    pass\n")
     ep = staged / "tpcore" / "engine_profile.py"
@@ -786,9 +805,17 @@ def test_add_red_consistency_rolls_back_to_byte_identical(tmp_path):
     before_ep = ep.read_bytes()
     before_pkg = _snapshot_tree(pkg)  # T5 discipline (see sibling test)
     assert not pkg.exists(), "brandnew/ must be absent pre-apply"
+    # Collide brandnew's dispatch_order with the staged synthetic
+    # throwaway engine (_make_synthetic_engine_tree uses 8 — bumped from
+    # the pre-carver value of 6 because carver now occupies 6 in the live
+    # tree) so the post-stage consistency subprocess reds on
+    # test_no_half_state's duplicate-dispatch_order leg. Pre-carver this
+    # test used the strict test_lab_sentinel_is_not_wired pin (relaxed in
+    # commit 340960e because a 2nd LAB engine is now legitimately allowed
+    # — carver itself is one).
     ecr = EngineChangeRequest(
         action="add", engine="brandnew", source="new_scaffold",
-        cadence="daily", allocator=False, dispatch_order=7, need="x")
+        cadence="daily", allocator=False, dispatch_order=8, need="x")
     plan = attach_ecr_context(classify(ecr, {
         "reversion": LifecycleState.PAPER}), ecr)
     res = apply(plan, repo_root=staged, emit_audit=False,

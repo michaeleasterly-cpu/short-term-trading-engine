@@ -87,7 +87,7 @@ def test_lab_targetable_set_frozen_anchor():
 
     # roster-driven Lab-target changes are high-risk; pin it.
     assert set(lab_targetable_engines()) == {
-        "reversion", "vector", "momentum", "sentinel"}
+        "reversion", "vector", "momentum", "sentinel", "carver"}
 
 
 # ── (2) CLI choices are GENERATED from the accessor (both sites) ─────────

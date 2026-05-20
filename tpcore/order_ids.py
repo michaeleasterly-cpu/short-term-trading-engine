@@ -58,6 +58,7 @@ ENGINE_PREFIX: dict[str, str] = {
     "sentinel": "sn_",
     "canary": "ca_",  # pipeline-exercise heartbeat engine
     "catalyst": "ct_",  # SP-F: insider-cluster swing engine (LAB until operator ECR)
+    "carver": "cv_",    # Carver-method multi-forecast monthly portfolio (LAB until operator ECR)
 }
 
 # Legacy → canonical engine. Parsers walk this AFTER checking ENGINE_PREFIX
