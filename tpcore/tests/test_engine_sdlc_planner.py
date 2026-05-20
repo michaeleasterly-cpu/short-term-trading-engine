@@ -852,7 +852,8 @@ def test_add_existing_code_rejects_gate_fields():
     ecr = EngineChangeRequest(
         action="add", engine="newx", source="existing_code",
         cadence="daily", allocator=False, dispatch_order=9,
-        gate_dsr=0.99, gate_cred=80, need="x")
+        gate_dsr=0.99, gate_cred=80, need="x",
+        data_dependencies=frozenset({"prices_daily"}))
     plan = attach_ecr_context(classify(ecr, {}), ecr)
     vp = validate(plan, repo_root=None, ecr=ecr)
     assert vp.rejection is not None
@@ -867,7 +868,8 @@ def test_add_existing_code_rejects_when_engine_dir_absent(tmp_path):
     from ops.engine_sdlc.planner import attach_ecr_context, classify, validate
     ecr = EngineChangeRequest(
         action="add", engine="ghostengine", source="existing_code",
-        cadence="daily", allocator=False, dispatch_order=9, need="x")
+        cadence="daily", allocator=False, dispatch_order=9, need="x",
+        data_dependencies=frozenset({"prices_daily"}))
     plan = attach_ecr_context(classify(ecr, {}), ecr)
     vp = validate(plan, repo_root=tmp_path, ecr=ecr)
     assert vp.rejection is not None
@@ -886,7 +888,8 @@ def test_add_existing_code_passes_validate_when_engine_dir_present(tmp_path):
     (tmp_path / "newpkg").mkdir()
     ecr = EngineChangeRequest(
         action="add", engine="newpkg", source="existing_code",
-        cadence="daily", allocator=False, dispatch_order=9, need="x")
+        cadence="daily", allocator=False, dispatch_order=9, need="x",
+        data_dependencies=frozenset({"prices_daily"}))
     plan = attach_ecr_context(classify(ecr, {}), ecr)
     # Bypass the dry-consistency run by using the source-specific gate in
     # isolation — manually call the gate logic via the public API by
@@ -905,7 +908,8 @@ def test_add_existing_code_classify_lands_LAB():
     from ops.engine_sdlc.planner import classify
     ecr = EngineChangeRequest(
         action="add", engine="newx", source="existing_code",
-        cadence="daily", allocator=True, dispatch_order=9, need="x")
+        cadence="daily", allocator=True, dispatch_order=9, need="x",
+        data_dependencies=frozenset({"prices_daily"}))
     plan = classify(ecr, {})
     assert plan.to_state is LifecycleState.LAB
 
@@ -1519,7 +1523,8 @@ def test_add_existing_code_lands_PAPER_when_criteria_pass(tmp_path):
         ruin_probability=0.05, profit_factor=1.5, min_btl_gap=60)
     ecr = EngineChangeRequest(
         action="add", engine="newengine", source="existing_code",
-        cadence="daily", allocator=False, dispatch_order=9, need="x")
+        cadence="daily", allocator=False, dispatch_order=9, need="x",
+        data_dependencies=frozenset({"prices_daily"}))
     plan = attach_ecr_context(classify(ecr, {}), ecr)
     vp = validate(plan, repo_root=staged, ecr=ecr)
     if vp.rejection is not None:
@@ -1539,7 +1544,8 @@ def test_add_existing_code_rejects_when_no_backtest_on_file(tmp_path):
     (tmp_path / "dossierless").mkdir()
     ecr = EngineChangeRequest(
         action="add", engine="dossierless", source="existing_code",
-        cadence="daily", allocator=False, dispatch_order=9, need="x")
+        cadence="daily", allocator=False, dispatch_order=9, need="x",
+        data_dependencies=frozenset({"prices_daily"}))
     plan = attach_ecr_context(classify(ecr, {}), ecr)
     vp = validate(plan, repo_root=tmp_path, ecr=ecr)
     assert vp.rejection is not None
@@ -1562,7 +1568,8 @@ def test_add_existing_code_rejects_when_dossier_fails_criteria(tmp_path):
         min_btl_gap=60)
     ecr = EngineChangeRequest(
         action="add", engine="badpkg", source="existing_code",
-        cadence="daily", allocator=False, dispatch_order=9, need="x")
+        cadence="daily", allocator=False, dispatch_order=9, need="x",
+        data_dependencies=frozenset({"prices_daily"}))
     plan = attach_ecr_context(classify(ecr, {}), ecr)
     vp = validate(plan, repo_root=tmp_path, ecr=ecr)
     assert vp.rejection is not None
@@ -1940,3 +1947,130 @@ def test_renderer_is_pure_no_filesystem_io_in_planner_path():
     assert rf < wt, (
         "record_file must precede write_text — the journal-before-"
         "mutate atomicity contract (H-S4-1)")
+
+
+# ─── Spec §7 follow-up: planner threading data_dependencies (2026-05-20) ───
+# _apply_add reads data_dependencies from sot_diff and renders the literal
+# `data_dependencies=frozenset({"x", "y"})` into the new _PROFILE line.
+
+
+def test_attach_ecr_context_threads_data_dependencies():
+    """ECR's data_dependencies field must flow through attach_ecr_context
+    into plan.sot_diff so _apply_add can read it (§7.2)."""
+    from ops.engine_sdlc.ecr import EngineChangeRequest
+    from ops.engine_sdlc.planner import attach_ecr_context, classify
+    ecr = EngineChangeRequest(
+        action="add", engine="brandnew", source="new_scaffold",
+        cadence="daily", allocator=False, dispatch_order=9, need="x",
+        data_dependencies=frozenset({"prices_daily", "liquidity_tiers"}))
+    plan = attach_ecr_context(classify(ecr, {}), ecr)
+    assert plan.sot_diff.get("data_dependencies") == frozenset(
+        {"prices_daily", "liquidity_tiers"})
+
+
+def _make_ready_engine_tree(tmp_path: Path, engine: str) -> Path:
+    """A staged tree where ``engine`` already exists on disk with a
+    readiness-passing scaffold (5 BaseEnginePlug subclasses, tests/, and a
+    scheduler.py). The _PROFILE has the allocator sentinel anchor. Calling
+    _apply_add with source: existing_code should write the _PROFILE entry
+    cleanly through readiness."""
+    staged = tmp_path / "staged"
+    staged.mkdir()
+    ep_dir = staged / "tpcore"
+    ep_dir.mkdir()
+    ep = ep_dir / "engine_profile.py"
+    ep.write_text(
+        "from enum import Enum\n"
+        "class Cadence(Enum):\n    DAILY = 'daily'\n"
+        "class LifecycleState(Enum):\n    LAB = 'lab'\n"
+        "class EngineProfile:\n    def __init__(self, **kw): self.__dict__.update(kw)\n"
+        "_PROFILE = {\n"
+        "    # allocator: separate _dispatch_allocator path\n"
+        "}\n")
+    pkg = staged / engine
+    (pkg / "tests").mkdir(parents=True)
+    (pkg / "tests" / "__init__.py").write_text("")
+    (pkg / "__init__.py").write_text("")
+    (pkg / "scheduler.py").write_text(
+        "async def run_once(*a, **k):\n    return {}\n")
+    # 5 BaseEnginePlug subclasses to satisfy _check_readiness.
+    plugs = pkg / "plugs"
+    plugs.mkdir()
+    (plugs / "__init__.py").write_text("")
+    (plugs / "all.py").write_text(
+        "class BaseEnginePlug:\n    pass\n"
+        "class P1(BaseEnginePlug):\n    pass\n"
+        "class P2(BaseEnginePlug):\n    pass\n"
+        "class P3(BaseEnginePlug):\n    pass\n"
+        "class P4(BaseEnginePlug):\n    pass\n"
+        "class P5(BaseEnginePlug):\n    pass\n")
+    return staged
+
+
+def test_apply_add_renders_data_dependencies_frozenset_literal(tmp_path):
+    """§7.2: when sot_diff carries data_dependencies (a frozenset), the
+    rendered _PROFILE line must contain the kwarg
+    `data_dependencies=frozenset({"x", "y"})` and the new source MUST
+    parse + compile (the planner gates with compile() already)."""
+    import ast
+
+    from ops.engine_sdlc.planner import (
+        ApprovalClass,
+        ECRAction,
+        TransitionPlan,
+        _apply_add,
+        _Journal,
+    )
+    staged = _make_ready_engine_tree(tmp_path, "newx")
+    plan = TransitionPlan(
+        action=ECRAction.ADD, engine="newx", from_state=None,
+        to_state=LifecycleState.LAB, approval_class=ApprovalClass.OPERATOR,
+        source="existing_code",
+        sot_diff={"source": "existing_code", "cadence": "daily",
+                  "allocator": False, "dispatch_order": 9,
+                  "data_dependencies": frozenset(
+                      {"prices_daily", "fundamentals_quarterly"})})
+    jn = _Journal()
+    _apply_add(plan, staged, jn)  # readiness must pass
+    ep = staged / "tpcore" / "engine_profile.py"
+    txt = ep.read_text()
+    # Rendered shape: contains the kwarg with a sorted frozenset literal
+    # (so the rendering is deterministic — see the implementation).
+    assert "data_dependencies=frozenset(" in txt, (
+        f"_apply_add did NOT render data_dependencies kwarg into the "
+        f"new _PROFILE line:\n{txt}")
+    assert '"prices_daily"' in txt and '"fundamentals_quarterly"' in txt
+    # The whole rendered source must still be a valid Python module.
+    ast.parse(txt)
+
+
+def test_apply_add_no_data_dependencies_omits_kwarg(tmp_path):
+    """§7.2 (empty/None case): when sot_diff does NOT carry
+    data_dependencies, the rendered _PROFILE line MUST omit the kwarg —
+    the EngineProfile field default (frozenset()) is the SoT for "no
+    declared reads". Routed through the existing_code source for test
+    isolation (avoids the new_scaffold template copytree)."""
+    import ast
+
+    from ops.engine_sdlc.planner import (
+        ApprovalClass,
+        ECRAction,
+        TransitionPlan,
+        _apply_add,
+        _Journal,
+    )
+    staged = _make_ready_engine_tree(tmp_path, "newx")
+    plan = TransitionPlan(
+        action=ECRAction.ADD, engine="newx", from_state=None,
+        to_state=LifecycleState.LAB, approval_class=ApprovalClass.OPERATOR,
+        source="existing_code",
+        sot_diff={"source": "existing_code", "cadence": "daily",
+                  "allocator": False, "dispatch_order": 9})
+    jn = _Journal()
+    _apply_add(plan, staged, jn)
+    ep = staged / "tpcore" / "engine_profile.py"
+    txt = ep.read_text()
+    assert "data_dependencies=" not in txt, (
+        f"_apply_add rendered data_dependencies kwarg even though sot_diff "
+        f"carried no value — should omit (default is the SoT):\n{txt}")
+    ast.parse(txt)

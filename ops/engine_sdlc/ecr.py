@@ -25,7 +25,8 @@ class ECRAction(StrEnum):
 # ``engine`` are always required; the rest are action-scoped.
 _COMMON = {"action", "engine"}
 _ADD_KEYS = {"source", "lab_dossier", "cadence", "allocator",
-             "dispatch_order", "gate_dsr", "gate_cred", "need"}
+             "dispatch_order", "gate_dsr", "gate_cred", "need",
+             "data_dependencies"}
 _REMOVE_KEYS = {"reason", "eulogy_notes"}
 _MODIFY_KEYS = {"lab_dossier", "param_change", "gate_dsr", "gate_cred"}
 _KEYS_FOR = {
@@ -49,6 +50,24 @@ class EngineChangeRequest(BaseModel):
     gate_dsr: float | None = None
     gate_cred: int | None = None
     need: str | None = None
+    # Spec 2026-05-20 §7.1: data_dependencies declares the
+    # ``platform.<table>`` reads the engine has, threaded into the
+    # _PROFILE row's EngineProfile.data_dependencies frozenset.
+    # Source-kind-aware (see _data_dependencies_required_for_existing_code):
+    #   - existing_code: REQUIRED (non-empty) — the operator-shipped engine
+    #     code already reads from specific platform tables; the ECR MUST
+    #     declare them so the per-engine data gate can run on first dispatch
+    #     (fail-closed: a freshly-registered engine without declared reads
+    #     is a silent un-gated half-state).
+    #   - new_scaffold: OPTIONAL — a fresh scaffold may have no data wiring
+    #     yet; the operator extends it via a later MODIFY once the engine
+    #     is wired to data.
+    #   - lab_candidate: INHERITABLE — today's LabResult schema does not
+    #     carry data_dependencies, so for now the ECR's value wins when
+    #     explicitly provided; otherwise empty (the EngineProfile field
+    #     default). A future LabResult extension may carry the inherited
+    #     value; the ECR override remains.
+    data_dependencies: frozenset[str] | None = None
     # REMOVE
     reason: str | None = None
     eulogy_notes: str | None = None
@@ -67,6 +86,27 @@ class EngineChangeRequest(BaseModel):
             raise ValueError(
                 f"field(s) {sorted(stray)} not valid for action "
                 f"{self.action.name}")
+        return self
+
+    @model_validator(mode="after")
+    def _data_dependencies_required_for_existing_code(
+            self) -> EngineChangeRequest:
+        """Spec §7.1: source: existing_code REQUIRES a non-empty
+        data_dependencies set. The operator-shipped engine code already
+        reads from specific platform.<table>s; the ECR MUST declare them
+        (fail-closed — same posture as the H-S3-11e on-disk gate).
+
+        new_scaffold + lab_candidate make data_dependencies OPTIONAL (the
+        EngineProfile field default frozenset() is the SoT for "no
+        declared reads")."""
+        if (self.action is ECRAction.ADD
+                and self.source == "existing_code"
+                and not self.data_dependencies):
+            raise ValueError(
+                "data_dependencies is required for source: existing_code "
+                "(the operator-shipped engine code already reads from "
+                "specific platform tables — declare them; fail-closed per "
+                "spec §7.1)")
         return self
 
 
@@ -115,6 +155,13 @@ def _coerce(raw: dict[str, str]) -> dict[str, Any]:
                 pk, _, pv = pair.partition("=")
                 d[pk.strip()] = pv.strip()
             out[k] = d
+        elif k == "data_dependencies":
+            # Spec §7.1 / §7.3: comma-separated list of platform.<table>
+            # names → frozenset[str]. An empty value yields an empty
+            # frozenset (the source-kind validator then rejects it for
+            # existing_code; optional otherwise).
+            out[k] = frozenset(
+                tok.strip() for tok in v.split(",") if tok.strip())
         else:
             out[k] = v
     return out

@@ -42,6 +42,25 @@ gate_dsr:      <float ≥ 0.95>               # ONLY for source=lab_candidate;
                                             #   FORBIDDEN for new_scaffold/existing_code.
 gate_cred:     <int ≥ 60>                   # same scoping as gate_dsr.
 need:          <one line: the edge / why this engine exists>
+data_dependencies: <comma-separated platform.<table> names>
+                                            # the per-engine data gate's SoT — threaded
+                                            # into EngineProfile.data_dependencies on
+                                            # the new _PROFILE row. Source-kind-aware:
+                                            #   - existing_code: REQUIRED (non-empty).
+                                            #     The operator-shipped engine code already
+                                            #     reads from specific platform.<table>s;
+                                            #     declare them up-front or the planner
+                                            #     hard-rejects (fail-closed).
+                                            #   - new_scaffold: OPTIONAL. A fresh scaffold
+                                            #     may have no data wiring yet; extend it
+                                            #     via a later MODIFY once the engine is
+                                            #     wired to data.
+                                            #   - lab_candidate: INHERITABLE. Today's
+                                            #     LabResult schema does not yet carry
+                                            #     data_dependencies; ECR-provided value
+                                            #     wins when present, empty otherwise.
+                                            # Vocabulary: HealSpec source names (see
+                                            # tpcore.selfheal.registry.HEAL_SPECS.source).
 # ── REMOVE only (retire / archive) ────────────────────────────────
 reason:        <one line: cause of death>
 eulogy_notes:  <free text → seeds the EULOGY template>
@@ -56,5 +75,26 @@ gate_cred:     <int ≥ 60>
 block is **rejected** (not ignored). All numeric gate evidence is
 **re-verified by the planner against the cited Lab dossier's JSON
 sidecar — never trusted from this text** (spec §5.4 / H-S3-6).
+
+### Pre-conditions for `data_dependencies` (spec 2026-05-20 §7.1)
+
+Each `source` kind imposes a distinct posture on the `data_dependencies`
+key. The planner enforces these at ECR parse time (fail-closed —
+`existing_code` without `data_dependencies` is a hard reject, never
+inferred or coerced from later context):
+
+- **`source: existing_code` → REQUIRED, non-empty.** The operator-shipped
+  engine code already reads from specific `platform.<table>` rows
+  (verified by the per-engine data gate). Declaring them in the ECR is
+  the only way the gate can run on first dispatch; omitting them is a
+  silent un-gated half-state and the planner refuses.
+- **`source: new_scaffold` → OPTIONAL.** A fresh scaffold may have no
+  data wiring yet. The empty default is the SoT for "no declared reads
+  yet"; the operator extends it via a later MODIFY once the engine reads
+  real data.
+- **`source: lab_candidate` → INHERITABLE.** Today's `LabResult` schema
+  does not yet carry `data_dependencies`; the ECR's value wins when
+  present, otherwise the empty default applies. A future `LabResult`
+  extension may carry the inherited value; the ECR override remains.
 
 Run it: `python -m ops.engine_sdlc --ecr <path-to-this-filled-file>`
