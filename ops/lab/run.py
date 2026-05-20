@@ -1047,8 +1047,12 @@ async def _run_lab_core(
         # Non-transient errors (schema, permission, logic) still propagate
         # on the first attempt — see _is_transient_db_error's substring
         # contract in tpcore/tests/test_lab_run_retry_transient_db.py.
+        # ruff B023: bind ``w`` explicitly via default args so the lambda
+        # closure captures THIS iteration's window, not the loop variable
+        # by reference (would be a real bug if a future refactor moves
+        # the call out of the loop body).
         context = await _retry_transient_db(
-            lambda: ctx_loader(
+            lambda w=w: ctx_loader(
                 db_url=db_url, start=w.train_start, end=w.holdout_end,
                 universe=universe,
             ),
