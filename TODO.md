@@ -118,6 +118,27 @@ Single focus until further notice — no engine/Sigma-redesign work. Sequence:
      `ARCHIVE_SOURCES` L178-181); remaining work is the runtime end-to-end
      proof that `handle_fundamentals_refresh` actually writes the archive
      on a real pull (a verification task, not a missing-code gap).
+   - **Wire `CFNAIMA3` (Chicago Fed National Activity Index, 3mo MA) to
+     FRED ingestion.** `[lane: data-lane-mine] [gate: none] [needs
+     operator decision: no] [effort: S]` Append `("cfnai_ma3",
+     "CFNAIMA3")` to `INDICATOR_SERIES` in `tpcore/fred/adapter.py`; add
+     to `EXPECTED_INDICATORS` + `INDICATOR_CADENCE` (monthly) in
+     `tpcore/quality/validation/checks/macro_indicators_completeness.py`;
+     add freshness coverage. Surfaced 2026-05-20 by the Sentinel Bear
+     Score Lab-candidate subagent — the candidate's `CFNAI ≤ -0.70` band
+     anchor can't fire without this series ingested. Unblocks the
+     Sentinel graduated Bear Score Lab candidate (TODO §Deep-research).
+   - **Decide on SOS (Sum-of-States diffusion) substrate.** `[lane:
+     data-lane-mine] [gate: none] [needs operator decision: YES — pick
+     the substrate] [effort: M]` The Sentinel Bear Score candidate
+     requires an SOS series (≥0.20 anchor). Not a single off-the-shelf
+     FRED series. Options: (a) Philadelphia Fed `SOSADV` /
+     `USPHCI`-family pull, (b) `SLIND`-family pull, (c) constructed
+     diffusion index from state coincident series (`SMU*`). Pick one,
+     wire as a derived indicator (likely a separate adapter step). Then
+     add to `macro_indicators_completeness` invariant with ≥1y history
+     before re-dispatching the Sentinel Bear Score candidate. Surfaced
+     2026-05-20 by the Sentinel Bear Score subagent.
    - ✅ **HY-spread recovery — DONE 2026-05-16.** ALFRED/Nasdaq ruled
      out empirically; full history recovered (eco-archive 1996-2021 +
      Scribd FRED-graph gap, validated 772/772 exact). `hy_spread`
