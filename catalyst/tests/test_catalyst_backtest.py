@@ -63,18 +63,37 @@ def _synthetic_context():
     )
 
 
-def test_lab_target_is_the_single_pre_registered_toggle():
-    """lab_candidate_readiness §1 / §2 / §10: exactly ONE toggle, a
-    choice: over {legacy_default, the_one_variant}; default_params
-    carries the legacy default."""
+def test_lab_target_pre_registered_toggles():
+    """lab_candidate_readiness §1 / §2 / §10: each toggle is a single
+    ``choice:`` over ``{legacy_default, the_one_variant}``;
+    ``default_params`` carries the legacy default for every toggle.
+
+    Two pre-registered toggles co-exist on ``catalyst.backtest.LAB_TARGET``:
+
+    - ``cluster_window_days`` — SP-F (PR #159): legacy 30 vs alternative
+      45 cluster window.
+    - ``event_confirmation_mode`` — event-confirmed insider-cluster
+      drift (this candidate): legacy ``"off"`` vs the one variant
+      ``"positive_beat_30d"``.
+
+    Each toggle's two values are exactly ``{legacy_default, the_one_
+    variant}``. No third value. The two toggles are independent
+    hypotheses, each one pre-registered.
+    """
     from catalyst.backtest import LAB_TARGET, default_params
     from tpcore.lab.target import LabPrimaryMetric
 
-    assert list(LAB_TARGET.param_ranges) == ["cluster_window_days"]
+    assert set(LAB_TARGET.param_ranges) == {
+        "cluster_window_days", "event_confirmation_mode",
+    }
     assert LAB_TARGET.param_ranges["cluster_window_days"] == (
         30, 45, "choice:30,45")
-    assert default_params() == {"cluster_window_days":
-                                int(CATALYST_CLUSTER_WINDOW_DAYS)}
+    assert LAB_TARGET.param_ranges["event_confirmation_mode"] == (
+        0, 0, "choice:off,positive_beat_30d")
+    assert default_params() == {
+        "cluster_window_days": int(CATALYST_CLUSTER_WINDOW_DAYS),
+        "event_confirmation_mode": "off",
+    }
     # Catalyst is a swing engine — SP-D default SHARPE.
     assert LAB_TARGET.primary_metric == LabPrimaryMetric.SHARPE
 
