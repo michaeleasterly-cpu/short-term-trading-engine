@@ -538,10 +538,29 @@ async def test_allocator_off_cadence_skips_no_invoke():
 # ---------------------------------------------------------------------------
 
 def test_install_all_daemons_no_longer_references_allocator_launchd():
+    """The PRIMARY-TRIGGER allocator launchd daemon is retired (Sub-project
+    C, 2026-05-17). The allocator's primary trigger is now event-driven
+    via ``_dispatch_allocator`` in ``ops/engine_dispatch.py``.
+
+    The legacy ``install_launchd_allocator.sh`` (= the primary-trigger
+    daemon) must NOT exist or be referenced. The
+    ``install_launchd_allocator_heartbeat.sh`` (= the THIN safety-net
+    cron added 2026-05-20) IS allowed — it gates on
+    ``tpcore.engine_profile.should_fire`` (same canonical gate as the
+    dispatcher) so a daemon-up day is a no-op; it is a sibling cron, NOT
+    a primary trigger. The two are structurally distinct.
+    """
     repo = REPO_ROOT
     sh = (repo / "scripts" / "install_all_daemons.sh").read_text()
-    assert "install_launchd_allocator" not in sh
+    # The legacy primary-trigger installer is gone.
     assert not (repo / "scripts" / "install_launchd_allocator.sh").exists()
+    # Strip the heartbeat references (sibling cron, explicitly allowed)
+    # before asserting no other allocator-launchd references remain. A
+    # substring search would mis-flag the heartbeat as a re-introduction
+    # of the retired primary-trigger daemon.
+    sh_without_heartbeat = sh.replace(
+        "install_launchd_allocator_heartbeat", "")
+    assert "install_launchd_allocator" not in sh_without_heartbeat
 
 
 # ---------------------------------------------------------------------------

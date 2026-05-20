@@ -17,9 +17,14 @@
 #     (data-lane cron; chains: data refresh → audit → validate →
 #     compress → emit event)
 #
-# Note: the allocator is no longer a launchd daemon (retired 2026-05-17,
-# Sub-project C). It now runs as the first gated step in
-# ops/engine_dispatch.py (event-driven, WEEKLY_FIRST_TRADING_DAY).
+# Note: the allocator is no longer a primary-trigger launchd daemon
+# (retired 2026-05-17, Sub-project C). Its primary trigger is now the
+# first gated step in ops/engine_dispatch.py (event-driven on
+# DATA_OPERATIONS_COMPLETE, WEEKLY_FIRST_TRADING_DAY). A thin SAFETY-NET
+# cron (com.michael.trading.allocator-heartbeat) fires daily at 22:30
+# UTC and exits clean unless tpcore.engine_profile.should_fire returns
+# fire=True (i.e. engine_service was down and the cycle's allocation
+# never landed). Installed OUTSIDE the closed-whitelist for-loop below.
 #
 # Note: trade_monitor + the weekly-digest cron-trigger are no longer
 # their own launchd daemons (retired 2026-05-18, DA-3). Both are folded
@@ -60,6 +65,17 @@ for installer in install_launchd_engine_service install_launchd_data_repair_serv
     echo "────────────────────────────────────────────────────────────────────────"
     scripts/${installer}.sh
 done
+
+# ── Sibling installers (OUTSIDE the closed-whitelist loop) ──────────────
+# scripts/tests/test_two_daemon_invariant.py pins the loop tokens above
+# to exactly the 4 long-lived/cron installers (engine-service +
+# data-repair-service + llm-triage-service + data-operations). Anything
+# below this line is a thin sibling cron / safety-net, NOT a member of
+# the closed whitelist; the test deliberately ignores out-of-loop calls.
+echo ""
+echo "▶ install_launchd_allocator_heartbeat (sibling cron — safety-net only)"
+echo "────────────────────────────────────────────────────────────────────────"
+scripts/install_launchd_allocator_heartbeat.sh
 
 echo ""
 echo "════════════════════════════════════════════════════════════════════════"
