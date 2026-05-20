@@ -18,7 +18,7 @@ Multi-engine automated trading platform. US equities, daily timeframe, fully aut
 
 **Engine lifecycle:** `LAB → PAPER → LIVE → RETIRED` (`tpcore.engine_profile.LifecycleState`). All live engines are PAPER. `LIVE` is reserved (paper-only mandate). Spec: `docs/superpowers/specs/2026-05-18-engine-sdlc-design.md`.
 
-**Engine credibility status (accuracy guard):** all five engines currently FAIL the DSR/credibility gate (DSR ≥ 0.95 ∧ credibility ≥ 60) — signal strength, not data quality, is the binding constraint. No engine has graduated; `canary` is the one documented non-graduating heartbeat (never calls `write_credibility_score`, spec §4b).
+**Engine credibility status (accuracy guard):** six PAPER engines (reversion, vector, momentum, sentinel, canary, catalyst) — the autonomous Lab criteria gate (`docs/superpowers/specs/2026-05-20-autonomous-lab-criteria.md`) replaces the absolute DSR ≥ 0.95 ∧ credibility ≥ 60 absolute gate for ADD/promote. carver is in LAB (PR #154); sigma is RETIRED (`archive/sigma/EULOGY.md`); `canary` is the documented non-graduating heartbeat (never calls `write_credibility_score`, spec §4b). PAPER→LIVE remains a separate, future-reserved gate per the paper-only mandate.
 
 ## Universal invariants (hold every session, regardless of path)
 

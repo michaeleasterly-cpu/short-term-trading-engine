@@ -6,7 +6,7 @@ Multi-engine quantitative trading platform built around three layers:
   parity harness, backtest harness, fundamentals/valuation toolkits, tax tracking, outage policy.
 - **`platform/`** — Postgres schema and Alembic migrations for cross-engine state (AAR events,
   quality logs, parity drift, risk state, allocations, tax lots).
-- **engines** — five PAPER engines: `reversion/`, `vector/`, `momentum/`, `sentinel/`, `canary/` (heartbeat); plus `lab/` (LAB on-demand search). `sigma/` — Range Scalping, daily timeframe. ARCHIVED 2026-05-16 after two honest gate attempts failed DSR; see `archive/sigma/EULOGY.md` for the post-mortem.
+- **engines** — six PAPER engines: `reversion/`, `vector/`, `momentum/`, `sentinel/`, `canary/` (heartbeat), `catalyst/` (insider-cluster swing; activated 2026-05-20 via PR #159); plus `carver/` (LAB lifecycle; PR #154) and `lab/` (LAB sentinel). `sigma/` — Range Scalping, daily timeframe. ARCHIVED 2026-05-16 after two honest gate attempts failed DSR; see `archive/sigma/EULOGY.md` for the post-mortem.
 
 ## Ground rules
 
