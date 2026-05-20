@@ -84,6 +84,77 @@ from tpcore.lab.target import LabPrimaryMetric, LabTarget
 
 logger = structlog.get_logger(__name__)
 
+
+# ── Transient-DB retry (Supabase pooler resilience) ──────────────────────
+# Pinned 2026-05-20 after three consecutive vector_composite probes died
+# at the inter-window panel-load with "connection was closed in the
+# middle of operation" — the Supabase transaction pooler dropping the
+# connection during a long-running (~50-80s) panel-load query. Without
+# retry, the whole run dies, partial ledger budget is spent, and NO
+# dossier verdict is produced — gate-discipline failure. The retry is
+# narrow: it wraps ONLY the per-window ``ctx_loader`` call, never the
+# per-trial scoring math or the dossier write (deterministic CPU work
+# whose failure modes are NOT transient — retrying them masks bugs).
+
+# Canonical transient-DB message families. Substring match (case-
+# insensitive) — asyncpg / Supabase / postgres family-wide. The list is
+# the contract tested by tpcore/tests/test_lab_run_retry_transient_db.py.
+_TRANSIENT_DB_SUBSTRINGS: tuple[str, ...] = (
+    "connection was closed",          # asyncpg + Supabase pooler drop
+    "connection is closed",
+    "server closed the connection",
+    "connection refused",
+    "cannot get connection",
+)
+
+
+def _is_transient_db_error(exc: BaseException) -> bool:
+    """Return True iff ``exc`` matches a known transient-DB pattern.
+
+    Substring match against ``_TRANSIENT_DB_SUBSTRINGS`` (case-
+    insensitive). Deliberately narrow — non-transient errors (schema,
+    permissions, logic) MUST propagate so a real bug is never silently
+    retried into ledger-budget waste.
+    """
+    msg = str(exc).lower()
+    return any(s in msg for s in _TRANSIENT_DB_SUBSTRINGS)
+
+
+async def _retry_transient_db(
+    fn: Callable[[], Awaitable[Any]],
+    *,
+    max_attempts: int = 3,
+    backoff_secs: float = 5.0,
+    label: str = "db_operation",
+) -> Any:
+    """Retry a coroutine on transient asyncpg/Supabase connection errors.
+
+    The helper sits next to the ONE long-running DB query that observed
+    the failure (the Lab core's per-window ``ctx_loader``). Re-raises
+    on non-transient errors or after ``max_attempts`` exhausted —
+    failure is loud, not silent.
+    """
+    last_exc: BaseException | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return await fn()
+        except BaseException as exc:  # noqa: BLE001 — narrow filter follows
+            if not _is_transient_db_error(exc) or attempt == max_attempts:
+                raise
+            last_exc = exc
+            logger.warning(
+                "ops.lab.retry_transient_db",
+                label=label, attempt=attempt, max_attempts=max_attempts,
+                error=str(exc)[:200], backoff_secs=backoff_secs,
+            )
+            await asyncio.sleep(backoff_secs)
+    # Unreachable — every loop iteration either returns or raises. The
+    # assertion is defence-in-depth against a future refactor that
+    # mistakenly drops the raise.
+    raise RuntimeError(  # pragma: no cover
+        f"_retry_transient_db exhausted without raise/return: {last_exc!r}")
+
+
 # Each engine's run_for_search is imported lazily inside _runner_for so the
 # orchestrator stays importable even when an engine module is being refactored.
 
@@ -968,9 +1039,20 @@ async def _run_lab_core(
         idxs = rng.sample(range(len(candidates)), min(args.per_window_trials, len(candidates)))
         print(f"── window {w.label()}: loading panels + indicators (one-time per window) ──")
         load_start = time.time()
-        context = await ctx_loader(
-            db_url=db_url, start=w.train_start, end=w.holdout_end,
-            universe=universe,
+        # Wrap the panel-load in the transient-DB retry helper: the
+        # Supabase transaction pooler is documented to drop the
+        # connection during long-running queries (~50-80s), and the
+        # per-window panel-load is ONE such query. Three vector_composite
+        # probes (2026-05-20) died at this exact call without retry.
+        # Non-transient errors (schema, permission, logic) still propagate
+        # on the first attempt — see _is_transient_db_error's substring
+        # contract in tpcore/tests/test_lab_run_retry_transient_db.py.
+        context = await _retry_transient_db(
+            lambda: ctx_loader(
+                db_url=db_url, start=w.train_start, end=w.holdout_end,
+                universe=universe,
+            ),
+            label=f"ctx_loader[{w.label()}]",
         )
         load_secs = time.time() - load_start
         print(f"   panels loaded in {load_secs:.1f}s — evaluating {len(idxs)} candidates against shared context\n")
