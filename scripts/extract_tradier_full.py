@@ -1,9 +1,10 @@
 """Wide Tradier extractor — every accessible US equity & ETF, daily bars to CSV.
 
-Companion to ``scripts/extract_tradier.py`` (which is scoped to the 50-name
-backtest universe). This one walks the full Tradier-tradable universe via
-``/v1/markets/lookup`` and pulls daily history from 2000-01-01 to today
-for each name, streaming results into a single CSV.
+Walks the full Tradier-tradable universe via ``/v1/markets/lookup`` and
+pulls daily history from 2000-01-01 to today for each name, streaming
+results into a single CSV. (The 50-name predecessor
+``scripts/extract_tradier.py`` was deleted 2026-05-20 — this wide
+universe extractor wholly supersedes it.)
 
 The script does **not** touch Postgres. It produces a flat file the
 operator can audit, hash, and ingest later.
@@ -60,8 +61,7 @@ BARS_START = date(2000, 1, 1)
 def _configure_logging(level: int = logging.INFO) -> structlog.stdlib.BoundLogger:
     """structlog → stdlib bridge so the script's logs render as plain text in CI/foreground.
 
-    ``KeyValueRenderer`` keeps the line greppable while still being structured,
-    which matches the tone of the existing ``scripts/extract_tradier.py``.
+    ``KeyValueRenderer`` keeps the line greppable while still being structured.
     """
     logging.basicConfig(level=level, format="%(message)s", stream=sys.stderr)
     # httpx logs every GET at INFO; in an 8.6k-symbol run that's noise that

@@ -23,13 +23,12 @@ detector counts a script as referenced ONLY when:
 
 A bare-stem substring match is **rejected** for two reasons proven in
 the wild: (1) a docstring/comment mention ("Companion to
-``scripts/extract_tradier.py``") is prose, not wiring — the docstring of
-this very module says a script named only in a comment IS an orphan; and
-(2) a shorter stem is a substring of a longer script name
-(``extract_tradier`` ⊂ ``extract_tradier_full``), so a stem match
-silently cross-counts. The exact path-token match kills both: a
-``scripts/extract_tradier.py`` token never matches
-``scripts/extract_tradier_full.py``.
+``scripts/foo.py``") is prose, not wiring — the docstring of this very
+module says a script named only in a comment IS an orphan; and (2) a
+shorter stem is a substring of a longer script name (e.g. ``foo`` ⊂
+``foo_full``), so a stem match silently cross-counts. The exact
+path-token match kills both: a ``scripts/foo.py`` token never matches
+``scripts/foo_full.py``.
 
 For each ``scripts/*.py`` (excluding ``scripts/tests/`` and
 ``__init__.py``) this test asserts such a genuine reference exists in at
@@ -134,16 +133,6 @@ _ALLOWLIST: frozenset[str] = frozenset(
         # mention in a migration docstring. 0 genuine references.
         "compute_fundamental_ratios",
         # TODO(P5): migrate to ops.py stage or remove — flagged
-        # 2026-05-19. One-shot corporate-actions all-active driver,
-        # superseded by ``ops.py``; only prose mentions in ops.py /
-        # run_daily_bars_all_active docstrings. 0 genuine references.
-        "run_corporate_actions_all_active",
-        # TODO(P5): migrate to ops.py stage or remove — flagged
-        # 2026-05-19. One-shot daily-bars all-active driver, superseded
-        # by ``ops.py``; only a prose mention in ops.py docstring. 0
-        # genuine references.
-        "run_daily_bars_all_active",
-        # TODO(P5): migrate to ops.py stage or remove — flagged
         # 2026-05-19. End-to-end AAR-pipeline manual smoke against the
         # live DB; only a prose mention in audit_data_pipeline.py
         # docstring (not invoked by it). 0 genuine references.
@@ -154,13 +143,6 @@ _ALLOWLIST: frozenset[str] = frozenset(
         # collides with ``test_kill_switch_blocks_all_trades`` in
         # tpcore/tests/test_risk_governor.py. 0 genuine references.
         "test_kill_switch",
-        # TODO(P5): migrate to ops.py stage or remove — flagged
-        # 2026-05-19. One-shot Tradier CSV extractor (50-name backtest
-        # universe). Previously false-passed only because its name is a
-        # substring of ``extract_tradier_full`` AND that file's
-        # docstring says "Companion to scripts/extract_tradier.py"
-        # (prose). 0 genuine references.
-        "extract_tradier",
         # TODO(P5): migrate to ops.py stage or remove — flagged
         # 2026-05-19. Wide one-shot Tradier CSV extractor (full US
         # equity/ETF universe). Only prose mentions in

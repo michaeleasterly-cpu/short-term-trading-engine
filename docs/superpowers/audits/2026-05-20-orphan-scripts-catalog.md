@@ -44,30 +44,14 @@ live wiring, no launchd, no test, no docs as an active harness — and
 are functionally superseded. The operator should rubber-stamp these
 two in a follow-up PR (or veto if there's hidden reasoning).
 
-### `scripts/extract_tradier.py` (699 lines, scripts/test_no_orphan_scripts.py:163)
-- One-shot Tradier extractor scoped to the 50-name backtest universe.
-  Pulls option chains / corporate calendars / pre-2020 bars / company
-  profiles to CSV in `data/tradier_export/`. No DB writes.
-- **Superseded by:** `scripts/extract_tradier_full.py` (the wide
-  universe extractor; its own docstring calls itself a "companion to"
-  the 50-name version). The 50-name CSV's role was absorbed when the
-  full-universe extractor shipped — `docs/session-log.md:42` shows the
-  full export (22M rows, 7,710 tickers) was completed and ingested via
-  `ingest_tradier_csv.py`, with no follow-up reference to the 50-name
-  output.
-- **Last activity:** 2026-04-19 `b1d9236` "ops: one-shot Tradier
-  extractor → CSV (no DB)" (the lint-pass touch `dd67972` was a
-  repo-wide ruff drift cleanup, not functional). Effectively cold for
-  ~6 weeks.
-- **Callers grep:** 0 in code/launchd/CI/pyproject. The only mentions
-  are self-mentions in `extract_tradier_full.py:3,64` ("Companion to
-  scripts/extract_tradier.py" — prose only) and `EDGE_VALIDATION_PLAN.md`
-  which references **only** `extract_tradier_full.py`, not this 50-name
-  variant.
-- **Recommended action:** `git rm scripts/extract_tradier.py` and
-  remove the `extract_tradier` `_ALLOWLIST` entry +
-  `test_no_orphan_scripts.py:158-163` TODO comment block in the same
-  follow-up PR.
+### ✅ `scripts/extract_tradier.py` — DELETED 2026-05-20
+50-name predecessor wholly superseded by the wide-universe
+`scripts/extract_tradier_full.py`. The 50-name CSV's role was
+absorbed when the full export shipped (22M rows, 7,710 tickers via
+`ingest_tradier_csv.py`). `git rm`'d + allowlist entry removed + the
+two dangling "Companion to scripts/extract_tradier.py" prose
+references in `extract_tradier_full.py:3,64` rewritten in the same
+PR.
 
 ### `scripts/test_aar_pipeline.py` and `scripts/test_kill_switch.py` — see "Keep as ops helper" below
 
@@ -78,39 +62,19 @@ documentation.)
 
 ## Migrate to ops.py stage (4 scripts) — operator decision
 
-### `scripts/run_daily_bars_all_active.py` (60 lines, scripts/test_no_orphan_scripts.py:141-145)
-- One-shot local driver that invokes `tpcore.ingestion.handlers.handle_daily_bars`
-  with `{"universe":"all_active","min_price":5.0,...}` against the local
-  process holding the DB pool.
-- **Already superseded.** `scripts/ops.py:12` docstring explicitly says
-  *"replaces the previous mix of ad-hoc scripts (run_daily_bars_all_active.py,
-  run_corporate_actions_all_active.py, etc.)"*. `ops.py --stage daily_bars`
-  exists at `scripts/ops.py:382 _stage_daily_bars`.
-- **Last activity:** `b0b0d1e` "scripts: local driver for daily_bars
-  all_active sweep" — single commit, ~3 months cold.
-- **Callers grep:** 0 — only prose mentions in `ops.py:12` (in the
-  "replaces…" docstring), `EDGE_VALIDATION_PLAN.md:63`, and
-  `session-log.md:41`.
-- **Recommended stage:** already covered by `--stage daily_bars`. The
-  script is dead code.
-- **Effort: S** — confirm the existing `_stage_daily_bars` covers the
-  exact `min_price=5.0 / min_volume=250_000 / lookback_days=7` config,
-  then `git rm` the script + drop the allowlist entry.
+### ✅ `scripts/run_daily_bars_all_active.py` — DELETED 2026-05-20
+Wholly superseded by `ops.py --stage daily_bars` per the ops.py:12
+"replaces the previous mix of ad-hoc scripts" docstring. `git rm`'d
++ allowlist entry removed. Historical prose references in
+`EDGE_VALIDATION_PLAN.md`, `session-log.md`, and the ops.py
+"replaces…" docstring read correctly as supersession history and
+are preserved.
 
-### `scripts/run_corporate_actions_all_active.py` (53 lines, scripts/test_no_orphan_scripts.py:136-140)
-- One-shot local driver for `handle_corporate_actions` with
-  `{"universe":"all_active","ingest_start":"2018-01-01"}`. Mirror of
-  `run_daily_bars_all_active.py`.
-- **Already superseded.** `scripts/ops.py:610 _stage_corporate_actions`
-  exists; the ops.py docstring explicitly lists this script as part of
-  the "replaced" set.
-- **Last activity:** `1f6680b` "feat(ingestion): corporate_actions
-  handler supports all_active universe" — single commit, cold.
-- **Callers grep:** 0 — prose in `ops.py:13` (the "replaces" docstring)
-  and `MASTER_PLAN.md:762` (historical "Complete" status note).
-- **Recommended stage:** already covered by `--stage corporate_actions`.
-- **Effort: S** — same as above; verify the existing stage's config
-  parity, then `git rm` + drop allowlist entry.
+### ✅ `scripts/run_corporate_actions_all_active.py` — DELETED 2026-05-20
+Wholly superseded by `ops.py --stage corporate_actions` per the
+ops.py:13 "replaces" docstring. `git rm`'d + allowlist entry
+removed. `MASTER_PLAN.md:762` "Complete" status note updated from
+active-tense reference to the new stage + the deletion note.
 
 ### `scripts/compute_fundamental_ratios.py` (133 lines, scripts/test_no_orphan_scripts.py:132-135)
 - Set-based UPDATE that populates `platform.fundamentals_quarterly.pb`
