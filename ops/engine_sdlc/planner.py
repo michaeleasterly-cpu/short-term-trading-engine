@@ -357,6 +357,84 @@ def _shadow_edit_remove(staged: Path, engine: str, jn: _Journal) -> None:
                                 post_roster, archived))
 
 
+def _shadow_edit_add_to_paper(staged: Path, engine: str, *,
+                              dispatch_order: int,
+                              jn: _Journal) -> None:
+    """H-S3-12: regenerate the non-Python shadows when an ADD lands
+    PAPER (the new ``source: existing_code`` autonomous-criteria path).
+    Mirrors ``_shadow_edit_remove``'s ONE-renderer discipline + the same
+    journal-before-write ordering.
+
+    The post-ADD roster is computed by inserting ``engine`` into the
+    current roster sorted by ``dispatch_order`` — the planner does the
+    in-memory _PROFILE edit BEFORE this is called, but the engine_profile
+    module is already imported in this process (frozen pydantic; the
+    rewritten source on disk has not yet been reloaded). So we compute
+    the post-state roster directly from current_roster + the proposed
+    insert."""
+    import sys as _sys
+    _sys.path.insert(0, str(REPO_ROOT))
+    from scripts.gen_engine_manifest import _FILE_REGIONS, render_all
+    from tpcore.engine_profile import (
+        _PROFILE,
+        archived_engines,
+        roster_for_dispatch,
+    )
+    cur = list(roster_for_dispatch())
+    if engine in cur:
+        post_roster = tuple(cur)
+    else:
+        # insert preserving dispatch_order ordering. Build (order, name)
+        # pairs from _PROFILE for the current roster engines (we already
+        # know cur is dispatch_order-sorted) and splice in the new one.
+        cur_pairs = [(_PROFILE[n].dispatch_order, n) for n in cur]
+        cur_pairs.append((dispatch_order, engine))
+        cur_pairs.sort(key=lambda p: p[0])
+        post_roster = tuple(n for _, n in cur_pairs)
+    archived = archived_engines()
+    for rel in _FILE_REGIONS:
+        p = staged / rel
+        jn.record_file(p)
+        p.write_text(render_all(p.read_text(), rel,
+                                post_roster, archived))
+
+
+def _maybe_rewrite_frozen_literal_add(
+    staged: Path, *, added_engine: str, dispatch_order: int,
+    jn: _Journal,
+) -> None:
+    """H-S3-12 ADD-leg companion to ``_maybe_rewrite_frozen_literal``: an
+    ADD that lands PAPER changes ``roster_for_dispatch()`` (LAB is filtered
+    by _DISPATCHABLE; PAPER is not), so the frozen-literal pin in
+    test_dispatch_order_invariant_is_the_frozen_literal must be rewritten
+    in the SAME staged diff — never a hand-edit. Inserts ``added_engine``
+    at its dispatch_order position."""
+    tc = (staged / "tpcore" / "tests"
+          / "test_engine_lifecycle_consistency.py")
+    jn.record_file(tc)
+    src = tc.read_text()
+    m = re.search(
+        r"roster_for_dispatch\(\) == \(\s*([^)]+)\)", src)
+    if not m:
+        return
+    toks = [t.strip().strip('"') for t in m.group(1).split(",")
+            if t.strip()]
+    if added_engine in toks:
+        return
+    # splice the new engine in by dispatch_order
+    import sys as _sys
+    _sys.path.insert(0, str(REPO_ROOT))
+    from tpcore.engine_profile import _PROFILE
+    pairs = [(_PROFILE[n].dispatch_order, n) for n in toks
+             if n in _PROFILE]
+    pairs.append((dispatch_order, added_engine))
+    pairs.sort(key=lambda p: p[0])
+    new_toks = [n for _, n in pairs]
+    new_tuple = ", ".join(f'"{t}"' for t in new_toks)
+    tc.write_text(src.replace(m.group(0),
+                  f"roster_for_dispatch() == ({new_tuple})"))
+
+
 def _maybe_rewrite_frozen_literal(
     staged: Path, *, retired_engine: str | None, jn: _Journal,
 ) -> None:
@@ -495,54 +573,60 @@ def validate(plan: TransitionPlan, *, repo_root: Path | None = None,
                          "gate_cred — a freshly-registered engine has not "
                          "earned a gate score (fail-closed; same invariant "
                          "as new_scaffold).")
-            if repo_root is not None:
-                pkg = repo_root / ecr.engine
-                if not pkg.is_dir():
-                    return _reject(
-                        ecr, f"existing_code ADD requires {ecr.engine}/ to "
-                             f"already exist on disk — got nothing. Use "
-                             f"source: new_scaffold to scaffold from the "
-                             f"template, or ship the engine code first.")
-                # H-S3-12: autonomous Lab criteria. existing_code ADD reads
-                # the engine's most-recent backtest dossier from
-                # backtests/<engine>_backtest_results.json (the canonical
-                # artifact every <engine>.backtest writes) and evaluates
-                # the new-engine signal-presence criteria. On pass the
-                # planner lands the engine PAPER (autonomous gate); on
-                # fail the rejection cites the specific criterion. See
-                # docs/superpowers/specs/2026-05-20-autonomous-lab-criteria.md.
-                from ops.engine_sdlc.lab_criteria import (
-                    _assess_new_engine_signal,
-                    load_engine_dossier,
-                )
-                try:
-                    dossier = load_engine_dossier(repo_root, ecr.engine)
-                except ValueError as exc:
-                    return _reject(
-                        ecr, f"existing_code ADD: backtest dossier at "
-                             f"backtests/{ecr.engine}_backtest_results.json "
-                             f"is unparseable — {exc}")
-                if dossier is None:
-                    return _reject(
-                        ecr, f"existing_code ADD: no recent backtest "
-                             f"dossier found at "
-                             f"backtests/{ecr.engine}_backtest_results.json "
-                             f"— run `python -m {ecr.engine}.backtest --json` "
-                             f"first to produce the dossier the planner "
-                             f"reads autonomously.")
-                passed, reason = _assess_new_engine_signal(dossier)
-                if not passed:
-                    return _reject(
-                        ecr, f"existing_code ADD: autonomous Lab criteria "
-                             f"failed — {reason}")
-                # Criteria pass ⇒ promote the plan's to_state to PAPER (the
-                # operator-style ADD already gated the binary y/n; the
-                # framework no longer needs a second human gate for "did
-                # this engine earn its way out of LAB?" because the
-                # dossier-read criteria already decided).
-                plan = TransitionPlan(
-                    **{**plan.__dict__,
-                       "to_state": LifecycleState.PAPER})
+            # H-S3-11e + H-S3-12: pkg-on-disk + autonomous Lab criteria
+            # are evaluated against `effective_root` — explicit repo_root
+            # when given (tests), REPO_ROOT in production (the CLI passes
+            # no repo_root). The criteria MUST run on the production path,
+            # not be gated on `repo_root is not None` (which would
+            # silently skip the autonomous gate in production).
+            effective_root = repo_root or REPO_ROOT
+            pkg = effective_root / ecr.engine
+            if not pkg.is_dir():
+                return _reject(
+                    ecr, f"existing_code ADD requires {ecr.engine}/ to "
+                         f"already exist on disk — got nothing. Use "
+                         f"source: new_scaffold to scaffold from the "
+                         f"template, or ship the engine code first.")
+            # H-S3-12: autonomous Lab criteria. existing_code ADD reads
+            # the engine's most-recent backtest dossier from
+            # backtests/<engine>_backtest_results.json (the canonical
+            # artifact every <engine>.backtest writes) and evaluates
+            # the new-engine signal-presence criteria. On pass the
+            # planner lands the engine PAPER (autonomous gate); on
+            # fail the rejection cites the specific criterion. See
+            # docs/superpowers/specs/2026-05-20-autonomous-lab-criteria.md.
+            from ops.engine_sdlc.lab_criteria import (
+                _assess_new_engine_signal,
+                load_engine_dossier,
+            )
+            try:
+                dossier = load_engine_dossier(effective_root, ecr.engine)
+            except ValueError as exc:
+                return _reject(
+                    ecr, f"existing_code ADD: backtest dossier at "
+                         f"backtests/{ecr.engine}_backtest_results.json "
+                         f"is unparseable — {exc}")
+            if dossier is None:
+                return _reject(
+                    ecr, f"existing_code ADD: no recent backtest "
+                         f"dossier found at "
+                         f"backtests/{ecr.engine}_backtest_results.json "
+                         f"— run `python -m {ecr.engine}.backtest --json` "
+                         f"first to produce the dossier the planner "
+                         f"reads autonomously.")
+            passed, reason = _assess_new_engine_signal(dossier)
+            if not passed:
+                return _reject(
+                    ecr, f"existing_code ADD: autonomous Lab criteria "
+                         f"failed — {reason}")
+            # Criteria pass ⇒ promote the plan's to_state to PAPER (the
+            # operator-style ADD already gated the binary y/n; the
+            # framework no longer needs a second human gate for "did
+            # this engine earn its way out of LAB?" because the
+            # dossier-read criteria already decided).
+            plan = TransitionPlan(
+                **{**plan.__dict__,
+                   "to_state": LifecycleState.PAPER})
         elif ecr.source == "lab_candidate":
             from ops.engine_sdlc._evidence import (
                 EvidenceError,
@@ -765,6 +849,16 @@ def _apply_add(plan: TransitionPlan, root: Path, jn: _Journal) -> None:
     if miss is not None:
         raise RuntimeError(miss)  # apply()'s except → full restore
     ep.write_text(new_src)
+    # H-S3-12: when ADD lands PAPER (the new existing_code criteria-pass
+    # path), regenerate the non-Python shadows AND rewrite the frozen-
+    # literal pin in test_engine_lifecycle_consistency.py — same single-
+    # mechanism discipline as REMOVE. LAB landing is byte-identical (LAB
+    # is filtered out of roster_for_dispatch by _DISPATCHABLE).
+    if target_state is LifecycleState.PAPER:
+        _shadow_edit_add_to_paper(
+            root, engine, dispatch_order=int(order), jn=jn)
+        _maybe_rewrite_frozen_literal_add(
+            root, added_engine=engine, dispatch_order=int(order), jn=jn)
 
 
 def _validate_modify(plan: TransitionPlan,

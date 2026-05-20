@@ -53,7 +53,8 @@ def test_clause_b_documented_lifecycle_states_match_enum():
 def test_clause_c_documented_roster_matches_sot():
     """(c) the roster line any doc states == roster_for_dispatch()."""
     sot = " → ".join(roster_for_dispatch())
-    assert sot == "reversion → vector → momentum → sentinel → canary"
+    assert sot == ("reversion → vector → momentum → sentinel → "
+                   "canary → catalyst")
     # CLAUDE.md states the live engines; assert the SoT-derived names
     # all appear in the SDLC entry's engine list.
     for e in roster_for_dispatch():

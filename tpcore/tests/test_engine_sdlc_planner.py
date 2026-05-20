@@ -141,9 +141,9 @@ def test_validate_runs_real_clockwork_in_isolated_tree(tmp_path):
           / "test_engine_lifecycle_consistency.py")
     tc.write_text(tc.read_text().replace(
         '"reversion", "vector", "momentum", "sentinel", "canary", '
-        '"throwaway")',
+        '"catalyst", "throwaway")',
         '"reversion", "vector", "momentum", "sentinel", "canary", '
-        '"throwaway", "ghost_never_in_sot")'))
+        '"catalyst", "throwaway", "ghost_never_in_sot")'))
     ecr = EngineChangeRequest(
         action="remove", engine="throwaway",
         reason="synthetic — proves validate() runs the dry clockwork",
@@ -245,9 +245,13 @@ def _make_synthetic_engine_tree(tmp_path: Path) -> Path:
     cg = (staged / "tpcore" / "quality" / "validation"
           / "capital_gate.py")
     cgt = cg.read_text()
+    # H-S3-12: anchor on the canary row + the close brace was a single-
+    # line invariant pre-catalyst. Catalyst (PAPER 2026-05-20) now sits
+    # between canary and the close brace, so the anchor is updated to
+    # the new immediate-pre-close line (the catalyst row).
     cg.write_text(cgt.replace(
-        '    "canary": frozenset({"prices_daily"}),\n}',
-        '    "canary": frozenset({"prices_daily"}),\n'
+        '    "catalyst": frozenset({"prices_daily", "sec_insider_transactions"}),\n}',
+        '    "catalyst": frozenset({"prices_daily", "sec_insider_transactions"}),\n'
         '    "throwaway": frozenset({"prices_daily"}),\n}'))
     # DDF-1 (SP4 T2) + SP4 T5b: the shadows are sentinel-fenced; the old
     # str.replace on the un-fenced literal is now a silent no-op. Build
@@ -264,7 +268,7 @@ def _make_synthetic_engine_tree(tmp_path: Path) -> Path:
     _sys.path.insert(0, str(_repo))
     from scripts.gen_engine_manifest import _FILE_REGIONS, render_all
     _aug_roster = ("reversion", "vector", "momentum", "sentinel",
-                   "canary", "throwaway")
+                   "canary", "catalyst", "throwaway")
     _aug_archived = ("sigma",)
     for _rel in _FILE_REGIONS:
         _p = staged / _rel
@@ -274,9 +278,9 @@ def _make_synthetic_engine_tree(tmp_path: Path) -> Path:
     # the staged tree is green pre-REMOVE (H-S3-2: REMOVE then drops it).
     tc = staged / "tpcore" / "tests" / "test_engine_lifecycle_consistency.py"
     tc.write_text(tc.read_text().replace(
-        '"reversion", "vector", "momentum", "sentinel", "canary")',
+        '"reversion", "vector", "momentum", "sentinel", "canary", "catalyst")',
         '"reversion", "vector", "momentum", "sentinel", "canary", '
-        '"throwaway")'))
+        '"catalyst", "throwaway")'))
     return staged
 
 
@@ -564,7 +568,8 @@ def test_remove_rostered_engine_updates_frozen_literal(tmp_path):
           / "test_engine_lifecycle_consistency.py").read_text()
     assert '"throwaway")' not in tc, (
         "the frozen-literal was not updated to drop the retired engine")
-    assert '"reversion", "vector", "momentum", "sentinel", "canary")' in tc
+    assert ('"reversion", "vector", "momentum", "sentinel", "canary", '
+            '"catalyst")') in tc
 
 
 # ─── T6: ADD executor + readiness build gate (H-S3-11) ───
@@ -1493,19 +1498,18 @@ def test_add_existing_code_lands_PAPER_when_criteria_pass(tmp_path):
     """H-S3-12 happy path: an ADD source=existing_code whose engine has
     a backtest dossier on disk that clears every new-engine criterion
     has its plan.to_state PROMOTED to PAPER by validate() — the
-    framework's autonomous gate decided, no second human y/n needed."""
+    framework's autonomous gate decided, no second human y/n needed.
+
+    Scoped to the criteria gate inside validate() — the full dry-
+    consistency clockwork has additional cross-table requirements
+    (ENGINE_TABLES row, shadows, frozen-literal) that the criteria gate
+    is upstream of. Anything reporting "Lab criteria failed" trips
+    this test; downstream clockwork rejections (which are about a
+    different invariant) do not."""
     from ops.engine_sdlc.ecr import EngineChangeRequest
     from ops.engine_sdlc.planner import attach_ecr_context, classify, validate
     staged = _make_synthetic_engine_tree(tmp_path)
-    # install a clearing dossier for the synthetic `throwaway` engine
-    # whose pkg already exists in the staged tree.
-    _install_engine_dossier(
-        staged, "throwaway",
-        sharpe=2.0, trades=20, max_drawdown=-0.10,
-        ruin_probability=0.05, profit_factor=1.5, min_btl_gap=60)
-    # the synthetic tree already registers throwaway in _PROFILE — we
-    # need to register a DIFFERENT engine name that's absent. Use a new
-    # engine via existing_code; create a minimal pkg dir.
+    # newengine: a separate dir + dossier; not yet in _PROFILE.
     (staged / "newengine").mkdir()
     (staged / "newengine" / "__init__.py").write_text("")
     _install_engine_dossier(
@@ -1516,26 +1520,7 @@ def test_add_existing_code_lands_PAPER_when_criteria_pass(tmp_path):
         action="add", engine="newengine", source="existing_code",
         cadence="daily", allocator=False, dispatch_order=9, need="x")
     plan = attach_ecr_context(classify(ecr, {}), ecr)
-    # the rejection check inside validate() is what we are pinning. Bypass
-    # the dry-consistency clockwork (which would require a coherent shadow
-    # set including newengine; the criteria gate runs BEFORE the dry run
-    # so the rejection-or-not verdict on the criteria is observable via
-    # the in-validate plan promotion).
-    # We can directly check by re-running the validator pieces. The
-    # cleanest available observation: build a TransitionPlan from classify
-    # and re-run validate WITHOUT the dry-consistency (use a TransitionPlan
-    # carrying the source-existing_code metadata that the criteria branch
-    # processes). After validate(), if criteria passed and to_state was
-    # promoted, .to_state should be PAPER (or .rejection set if criteria
-    # rejected). Because the dry consistency would barf on the synthetic
-    # tree, scope this test to ONLY the criteria gate by short-circuiting:
-    # call validate() with repo_root=staged but EXPECT either a criteria-
-    # success (to_state PAPER) or a dry-consistency rejection. Either way
-    # the criteria's verdict is observable on the rejection text.
     vp = validate(plan, repo_root=staged, ecr=ecr)
-    # criteria pass leaves either (a) plan.to_state=PAPER + no rejection,
-    # or (b) downstream dry-consistency rejection but NOT a criteria
-    # rejection. Anything saying "Lab criteria failed" trips the test.
     if vp.rejection is not None:
         assert "autonomous Lab criteria" not in vp.rejection, (
             f"criteria-pass dossier wrongly rejected on criteria: "

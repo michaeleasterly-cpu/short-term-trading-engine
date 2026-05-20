@@ -6,14 +6,16 @@ def test_lab_targetable_is_the_roster_predicate_today():
     from tpcore.engine_profile import lab_targetable_engines
 
     # PAPER/LIVE/LAB ∧ not allocator ∧ not 'lab' sentinel ∧ not 'canary'.
-    # Today: reversion, vector, momentum, sentinel, carver. Sentinel is
-    # eligible by predicate even though undeclared (SP-E forward dep);
-    # carver is the first real LAB engine — registered via the ECR-ADD
-    # planner path (which always lands LAB) so the LAB→PAPER promotion
-    # is the Lab dossier's verdict, not a hand edit. Ordered by
-    # dispatch_order for stable diffs (carver dispatch_order=6).
+    # Today: reversion, vector, momentum, sentinel, carver, catalyst.
+    # Sentinel is eligible by predicate even though undeclared (SP-E
+    # forward dep); carver is the first real LAB engine (dispatch_order=6,
+    # ECR-ADD lands LAB); catalyst is the first engine activated via the
+    # autonomous Lab criteria path (dispatch_order=7, PAPER via
+    # source=existing_code criteria pass — see
+    # docs/superpowers/specs/2026-05-20-autonomous-lab-criteria.md).
+    # Ordered by dispatch_order for stable diffs.
     assert lab_targetable_engines() == (
-        "reversion", "vector", "momentum", "sentinel", "carver")
+        "reversion", "vector", "momentum", "sentinel", "carver", "catalyst")
 
 
 def test_canary_excluded_by_explicit_clause():

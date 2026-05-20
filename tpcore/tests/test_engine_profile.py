@@ -195,6 +195,9 @@ def test_profile_has_new_fields_all_entries():
     # 5 live PAPER engines + allocator are PAPER; carver is the first
     # LAB engine (planner-ADDed via ecr_carver.txt; LAB → PAPER is a
     # future automated ECR-MODIFY once the Lab dossier clears the gate);
+    # catalyst is the first engine activated via the autonomous Lab
+    # criteria path (source=existing_code criteria pass → PAPER, see
+    # docs/superpowers/specs/2026-05-20-autonomous-lab-criteria.md);
     # sigma is RETIRED; lab is the durable SP2 LAB sentinel (D-SP2-4
     # two-tier registry). planner._apply_add forces
     # allocator_eligible=False on LAB ADDs.
@@ -206,6 +209,7 @@ def test_profile_has_new_fields_all_entries():
         "sentinel":  (4, LifecycleState.PAPER, False),
         "canary":    (5, LifecycleState.PAPER, False),
         "carver":    (6, LifecycleState.LAB, False),
+        "catalyst":  (7, LifecycleState.PAPER, True),
         "sigma":     (99, LifecycleState.RETIRED, False),
         "lab":       (50, LifecycleState.LAB, False),
     }
@@ -234,11 +238,11 @@ def test_accessors_return_exact_frozen_literals():
         engine_package_names,
         roster_for_dispatch,
     )
-    assert roster_for_dispatch() == ("reversion", "vector", "momentum", "sentinel", "canary")
-    assert allocator_eligible_engines() == ("reversion", "vector", "momentum")
+    assert roster_for_dispatch() == ("reversion", "vector", "momentum", "sentinel", "canary", "catalyst")
+    assert allocator_eligible_engines() == ("reversion", "vector", "momentum", "catalyst")
     assert archived_engines() == ("sigma",)
     assert engine_package_names() == frozenset(
-        {"reversion", "vector", "momentum", "sentinel", "canary"})
+        {"reversion", "vector", "momentum", "sentinel", "canary", "catalyst"})
 
 
 def test_roster_excludes_allocator_and_retired():
@@ -271,6 +275,6 @@ async def test_should_fire_fails_closed_for_non_dispatchable_lifecycle():
 def test_check_imports_engine_packages_derived_and_drift_fixed():
     from tpcore.scripts.check_imports import ENGINE_PACKAGES
     assert ENGINE_PACKAGES == frozenset(
-        {"reversion", "vector", "momentum", "sentinel", "canary"})
+        {"reversion", "vector", "momentum", "sentinel", "canary", "catalyst"})
     assert "sigma" not in ENGINE_PACKAGES   # archived drift fixed
     assert "canary" in ENGINE_PACKAGES      # missing-live drift fixed

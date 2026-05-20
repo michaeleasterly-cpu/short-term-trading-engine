@@ -74,6 +74,13 @@ ENGINE_TABLES: dict[str, frozenset[str]] = {
     # Canary heartbeat: trades SPY → only validation-gated input is
     # prices_daily (C-T5 pattern; SPY already in CRITICAL_TICKERS).
     "canary": frozenset({"prices_daily"}),
+    # Catalyst insider-cluster swing engine: needs prices_daily +
+    # sec_insider_transactions (Form-4 cluster floor). The H-S3-12
+    # autonomous Lab criteria gate activates catalyst in PAPER via the
+    # `source: existing_code` ECR path (PR-2 of the autonomous-Lab-
+    # criteria roll-out — see docs/superpowers/specs/2026-05-20-
+    # autonomous-lab-criteria.md).
+    "catalyst": frozenset({"prices_daily", "sec_insider_transactions"}),
 }
 
 
