@@ -59,6 +59,12 @@ Multi-engine automated trading platform. US equities, daily timeframe, fully aut
 - **Lab candidate readiness** (feature-flag-variant; single pre-registered hypothesis; n_trials-ledger acknowledgement) → `docs/superpowers/checklists/lab_candidate_readiness.md`.
 - **Escalation & Hardening Ladders:** `docs/ESCALATION_HARDENING_LADDER.md` (data lane), `docs/ENGINE_ESCALATION_HARDENING_LADDER.md` (engine lane). Every escalation class has a disposition; clockwork-enforced.
 
+## Work-tracking source of truth
+
+- **`TODO.md`** (git-tracked) is the canonical task list. **ALWAYS consult it before any "what's next" decision** — never drive next-work choices from memory alone. Memory entries describe rationale and constraints; task state lives in TODO.md.
+- **`docs/MASTER_PLAN.md §9 Build Order`** is the sequenced rollout plan.
+- The `.claude/hooks/session-start.sh` SessionStart hook auto-extracts open TODO.md H2 sections and injects them at session open — that summary is the trustworthy in-context view; consult `TODO.md` directly for sub-item detail.
+
 ## Style + glossary
 - Read `docs/STYLE_GUIDE.md` before writing any code.
 - Read `docs/glossary.md` if present.
