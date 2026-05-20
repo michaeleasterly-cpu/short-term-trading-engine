@@ -20,6 +20,22 @@ class _Conn:
         self._pool.cycle = min(self._pool.cycle + 1, len(self._pool.red_sequence) - 1)
         return [{"source": f"validation.{c}"} for c in reds]
 
+    async def fetchval(self, sql: str, *args):
+        # The vendor-late probes call MAX(date) FROM platform.aaii_sentiment;
+        # the fake pool returns whatever the test put in our_latest_by_table.
+        for table, value in self._pool.our_latest_by_table.items():
+            if table in sql:
+                return value
+        return None
+
+    async def fetchrow(self, sql: str, *args):
+        # The macro_indicators probe uses a per-series MIN(MAX) query.
+        # Route by table substring.
+        for table, value in self._pool.our_latest_by_table.items():
+            if table in sql:
+                return {"our_latest": value}
+        return None
+
 
 class _AcquireCM:
     def __init__(self, conn: _Conn) -> None:
@@ -36,9 +52,18 @@ class _Pool:
     """red_sequence[i] = bare check names red after the i-th
     data_validation run."""
 
-    def __init__(self, red_sequence: list[list[str]]) -> None:
+    def __init__(
+        self,
+        red_sequence: list[list[str]],
+        *,
+        our_latest_by_table: dict[str, object] | None = None,
+    ) -> None:
         self.red_sequence = red_sequence or [[]]
         self.cycle = 0
+        # Mock per-table MAX(date) responses for the vendor-late probes.
+        # Test passes {"aaii_sentiment": date(...), "macro_indicators":
+        # date(...)} to drive the fake fetchval/fetchrow.
+        self.our_latest_by_table = our_latest_by_table or {}
 
     def acquire(self) -> _AcquireCM:
         return _AcquireCM(_Conn(self))
@@ -186,3 +211,151 @@ def test_depends_on_graph_is_acyclic() -> None:
 
 def test_spec_for_unknown_is_none() -> None:
     assert spec_for("no_such_check") is None
+
+
+# ── Vendor-late probe consult (#165 facet 4 self-heal wiring) ──────────
+
+
+async def test_vendor_late_skips_heal_and_classifies(monkeypatch) -> None:
+    """When the probe positively says the vendor has nothing newer than
+    our_latest, the orchestrator skips the heal stage AND records the
+    source under vendor_late — distinct from escalated (not our defect)
+    and distinct from healed (no work was done). The sacred green gate
+    stays sacred: vendor-late reds leave the data_quality_log row red
+    so green=False; the wrapper emits TRIGGER_VENDOR_LATE for INFO."""
+    from datetime import date
+
+    from tpcore.selfheal import orchestrator, probes
+
+    async def vendor_late_probe(pool):
+        return probes.VendorState(
+            our_latest=date(2026, 5, 14),
+            vendor_latest=date(2026, 5, 14),  # equal ⇒ vendor has nothing newer
+            has_newer=False,
+        )
+    monkeypatch.setitem(
+        probes.VENDOR_PROBES, "aaii_sentiment", vendor_late_probe,
+    )
+
+    rs = _runner()
+    out = await orchestrator.run_self_heal(
+        _Pool([["aaii_sentiment_freshness"]]), rs, max_iterations=2,
+    )
+
+    # Sacred gate preserved — green=False because the row is still red.
+    assert out.green is False
+    # Heal stage NEVER ran for aaii (the probe spared the cycle).
+    assert "aaii" not in {c[0] for c in rs.calls}
+    # vendor_late surfaces the source + dates for the wrapper's INFO event.
+    assert out.vendor_late == [
+        ("aaii_sentiment", "2026-05-14", "2026-05-14"),
+    ]
+    # NOT classified as escalated (vendor-MISSED is not our defect).
+    assert out.escalated == []
+    # Early-exit instead of burning max_iterations on a hopeless re-probe.
+    assert out.iterations == 1
+
+
+async def test_vendor_has_newer_heals_as_usual(monkeypatch) -> None:
+    """Probe says vendor HAS newer ⇒ existing heal-as-usual path runs
+    (no vendor_late classification)."""
+    from datetime import date
+
+    from tpcore.selfheal import orchestrator, probes
+
+    async def vendor_ahead_probe(pool):
+        return probes.VendorState(
+            our_latest=date(2026, 5, 7),
+            vendor_latest=date(2026, 5, 14),
+            has_newer=True,
+        )
+    monkeypatch.setitem(
+        probes.VENDOR_PROBES, "aaii_sentiment", vendor_ahead_probe,
+    )
+
+    rs = _runner()
+    # First cycle red, second clears — heal stage advances state.
+    out = await orchestrator.run_self_heal(
+        _Pool([["aaii_sentiment_freshness"], []]), rs,
+    )
+    assert out.green is True
+    assert out.vendor_late == []
+    # The heal stage WAS run (probe said yes, do the heal).
+    assert any("aaii" in c[0] for c in rs.calls)
+
+
+async def test_probe_unavailable_falls_back_to_existing_heal(monkeypatch) -> None:
+    """A source with NO entry in VENDOR_PROBES falls back to the
+    existing heal-as-usual flow — no vendor_late classification, the
+    repair stage runs (proves backward-compat for the majority of
+    feeds that don't have a probe yet)."""
+    from tpcore.selfheal import orchestrator, probes
+
+    # Sanity: source we exercise has NO probe.
+    assert "prices_daily" not in probes.VENDOR_PROBES
+
+    rs = _runner()
+    out = await orchestrator.run_self_heal(
+        _Pool([["prices_daily_completeness"], []]), rs,
+    )
+    assert out.green is True
+    assert out.vendor_late == []
+    # The repair stage ran exactly as the existing test_heals_on_retry
+    # asserted — probe-less sources go through the unchanged path.
+    assert ("daily_bars", {"repair_gaps": "true"}) in rs.calls
+
+
+async def test_vendor_late_with_unhealable_escalates_both_separately(
+    monkeypatch,
+) -> None:
+    """A mixed iteration with one vendor-late + one unhealable red
+    must escalate the unhealable AND surface the vendor-late entry —
+    the wrapper needs to see both classifications independently."""
+    from datetime import date
+
+    from tpcore.selfheal import orchestrator, probes
+
+    async def vendor_late_probe(pool):
+        return probes.VendorState(
+            our_latest=date(2026, 5, 14),
+            vendor_latest=date(2026, 5, 14),
+            has_newer=False,
+        )
+    monkeypatch.setitem(
+        probes.VENDOR_PROBES, "aaii_sentiment", vendor_late_probe,
+    )
+
+    rs = _runner()
+    out = await orchestrator.run_self_heal(
+        _Pool([["aaii_sentiment_freshness", "fundamentals_integrity"]]),
+        rs,
+    )
+    assert out.green is False
+    # vendor_late surfaced.
+    assert out.vendor_late == [
+        ("aaii_sentiment", "2026-05-14", "2026-05-14"),
+    ]
+    # Unhealable also surfaced — both classifications coexist.
+    assert any("fundamentals" in s for s, _ in out.escalated)
+
+
+async def test_probe_returning_none_falls_back_to_heal(monkeypatch) -> None:
+    """If the probe returns None (vendor probe failed, our DB empty,
+    malformed) the orchestrator stays strict — runs the heal as usual.
+    A probe failure must never silently silence a heal cycle."""
+    from tpcore.selfheal import orchestrator, probes
+
+    async def broken_probe(pool):
+        return None  # undeterminable
+    monkeypatch.setitem(
+        probes.VENDOR_PROBES, "aaii_sentiment", broken_probe,
+    )
+
+    rs = _runner()
+    out = await orchestrator.run_self_heal(
+        _Pool([["aaii_sentiment_freshness"], []]), rs,
+    )
+    assert out.green is True
+    assert out.vendor_late == []
+    # The aaii heal WAS run (probe was None ⇒ fall back).
+    assert any("aaii" in c[0] for c in rs.calls)

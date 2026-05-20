@@ -80,10 +80,28 @@ Single focus until further notice — no engine/Sigma-redesign work. Sequence:
    registered + tested as the mechanism. 891 tests; ruff/imports
    clean; no engine code modified.
    **Honest remaining (incremental adoption, not unbuilt design):**
-   per-constrained-feed targeting rollout beyond IBorrowDesk;
-   self-heal-orchestrator probe consult for the vendor-MISSED-a-
-   scheduled-publish-beyond-lag edge (schedule anchoring already
-   covers the normal case). Each a one-entry/­one-wire increment.
+   per-constrained-feed targeting rollout beyond IBorrowDesk.
+   ✅ **Self-heal-orchestrator probe consult — DONE 2026-05-20.**
+   `tpcore/selfheal/probes.py` owns the per-source vendor-state probes
+   (`VENDOR_PROBES["aaii_sentiment"]`, `VENDOR_PROBES["macro_indicators"]`
+   — the two adapters with a `latest_published()` method). Each probe
+   queries our DB for `our_latest` (MAX(date) for AAII;
+   MIN-across-series for FRED, matching the publication.py MIN
+   composition) and consults `source_has_newer()`. Orchestrator
+   classifies each red BEFORE heal: probe-says-vendor-newer → heal
+   as usual; probe-says-vendor-nothing-newer → vendor_late
+   classification, skip heal, emit `selfheal.vendor_late` distinct
+   event; probe unavailable / probe returns None → fall back to the
+   existing heal flow unchanged.
+   `SelfHealOutcome.vendor_late: list[tuple[source, our_iso, vendor_iso]]`
+   surfaces the data for the wrapper's TRIGGER_VENDOR_LATE INFO event.
+   Early exit when every remaining red is vendor-late (no point
+   looping until max_iterations on a hopeless re-probe).
+   **Sacred 100%-green invariant preserved:** vendor-late reds leave
+   the data_quality_log row red so `green=False` and
+   `DATA_OPERATIONS_COMPLETE` stays gated; the orchestrator-internal
+   "RED→WARN" downgrade is the visibility/cycle-saving win, not a
+   gate change.
    **FRED probe added 2026-05-20:** `tpcore.fred.FREDAdapter.latest_published(series_id)`
    reads `observation_end` from `/fred/series` (one small JSON GET per
    series, NO observations downloaded); the feed-level `_fred_probe`
