@@ -29,7 +29,14 @@ from tpcore.engine_profile import (
     archived_engines,
     roster_for_dispatch,
 )
-from tpcore.quality.validation.capital_gate import ENGINE_TABLES
+
+
+def _engines_with_data_dependencies() -> set[str]:
+    """Engines whose `data_dependencies` is non-empty. Mirrors the
+    pre-shim-removal `set(ENGINE_TABLES)` semantics: ENGINE_TABLES was
+    keyed by engines that READ from a platform table; engines with empty
+    `data_dependencies` (LAB sentinels, archived RETIRED) were absent."""
+    return {n for n, p in _PROFILE.items() if p.data_dependencies}
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -110,22 +117,22 @@ def test_no_half_state():
 
 
 def test_engine_tables_keys_are_known_engines():
-    """Every ENGINE_TABLES key must be a known live engine (documented seam D-SDLC1-1)."""
-    # Documented seam (D-SDLC1-1): ENGINE_TABLES is a data-dep map, not
-    # collapsed into the SoT — but every key MUST be a known engine.
+    """Every engine carrying data_dependencies must be a known live engine
+    (documented seam D-SDLC1-1, post-#191 ENGINE_TABLES shim removal)."""
+    # Documented seam (D-SDLC1-1): the data-dep map lives on EngineProfile
+    # now (declarative SoT, PR #171); the constraint stays — every engine
+    # with non-empty data_dependencies MUST be a known engine.
     allowed = set(roster_for_dispatch()) | {"allocator"}
-    assert set(ENGINE_TABLES) <= allowed, (
-        f"ENGINE_TABLES keys not in the live roster: {set(ENGINE_TABLES) - allowed}")
+    with_deps = _engines_with_data_dependencies()
+    assert with_deps <= allowed, (
+        f"engines with data_dependencies not in the live roster: {with_deps - allowed}")
     # SP4 §10.4 / H-S4-8: the closed reverse — every live PAPER/LIVE
-    # roster engine MUST have an ENGINE_TABLES data-dep row. Grounded
-    # against the shipped ENGINE_TABLES keys ({reversion, vector,
-    # momentum, sentinel, allocator, canary}); allocator is excluded
-    # from the roster (its own _dispatch_allocator path) so it is
-    # subtracted here. A live engine with no row is a silent un-gated
-    # half-state (the _required_sources fail-safe would mask it).
-    missing = set(roster_for_dispatch()) - (set(ENGINE_TABLES) - {"allocator"})
+    # roster engine MUST have a non-empty data_dependencies row. A live
+    # engine with no row is a silent un-gated half-state (the
+    # _required_sources fail-safe would mask it).
+    missing = set(roster_for_dispatch()) - (with_deps - {"allocator"})
     assert not missing, (
-        f"live roster engines with NO ENGINE_TABLES data-dep row "
+        f"live roster engines with NO data_dependencies row "
         f"(silent un-gated engines): {missing}")
 
 
@@ -329,24 +336,23 @@ def test_clockwork_imports_no_ops():
 
 def test_live_engine_has_engine_tables_row():
     """H-S4-8: the closed reverse leg — every live PAPER/LIVE roster
-    engine MUST have an ENGINE_TABLES data-dep row (a live engine with
-    no row is a silent un-gated half-state). Grounded predicate (the
-    shipped ENGINE_TABLES keys are exactly {reversion, vector,
-    momentum, sentinel, allocator, canary}; allocator is excluded from
-    the roster but legitimately keyed via its own _dispatch_allocator
-    path, so it is subtracted on the reverse side)."""
-    missing = set(roster_for_dispatch()) - (set(ENGINE_TABLES) - {"allocator"})
+    engine MUST have a non-empty data_dependencies row (a live engine
+    with no row is a silent un-gated half-state). Post-#191 the SoT
+    lives on EngineProfile.data_dependencies; allocator is keyed there
+    too but is excluded from roster_for_dispatch (its own
+    _dispatch_allocator path), so it is subtracted on the reverse side."""
+    missing = set(roster_for_dispatch()) - (_engines_with_data_dependencies() - {"allocator"})
     assert not missing, (
-        f"live roster engines with NO ENGINE_TABLES data-dep row "
+        f"live roster engines with NO data_dependencies row "
         f"(silent un-gated engines): {missing}")
 
 
 def test_reverse_engine_tables_leg_catches_a_missing_row(tmp_path):
     """H-S4-8: a synthetic roster with an engine absent from
-    ENGINE_TABLES trips the reverse predicate (proves the leg is a
+    data_dependencies trips the reverse predicate (proves the leg is a
     real detector, not a tautology)."""
     synthetic_roster = set(roster_for_dispatch()) | {"phantomengine"}
-    missing = synthetic_roster - (set(ENGINE_TABLES) - {"allocator"})
+    missing = synthetic_roster - (_engines_with_data_dependencies() - {"allocator"})
     assert missing == {"phantomengine"}, (
         "the reverse predicate must flag a roster engine that has no "
-        "ENGINE_TABLES row")
+        "data_dependencies row")

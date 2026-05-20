@@ -341,12 +341,13 @@ def test_engine_data_dependencies_accessor_matches_field():
     assert engine_data_dependencies("does_not_exist") == frozenset()
 
 
-def test_engine_tables_back_compat_is_derived_from_profile():
-    """capital_gate.ENGINE_TABLES is the back-compat read-model
-    (3 external import sites; spec §3.4). It MUST be derived from the
-    SoT — re-deriving it yields the same dict. NOT a parallel SoT."""
-    from tpcore.engine_profile import _PROFILE as _P
-    from tpcore.quality.validation.capital_gate import ENGINE_TABLES
-    derived = {n: p.data_dependencies for n, p in _P.items()
-               if p.data_dependencies}
-    assert ENGINE_TABLES == derived
+def test_engine_tables_shim_removed():
+    """§7.4 follow-up (post-#191 + this PR): the back-compat
+    `capital_gate.ENGINE_TABLES` shim is gone. Imports of it raise
+    AttributeError; consumers now call `engine_data_dependencies()`
+    on `tpcore.engine_profile` directly. Prevents a future re-introduction
+    of the parallel-SoT read-model."""
+    import pytest
+    from tpcore.quality.validation import capital_gate
+    with pytest.raises(AttributeError):
+        _ = capital_gate.ENGINE_TABLES
