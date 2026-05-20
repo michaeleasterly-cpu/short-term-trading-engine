@@ -122,6 +122,26 @@ _SPECS: tuple[HealSpec, ...] = (
     HealSpec(check_name="earnings_events_freshness", source="earnings_events",
              healable=True, stage="earnings_refresh",
              params={"skip_guard_days": "0"}, max_attempts=2),
+    # Per-ticker zero-tolerance monotone-non-decrease invariant on
+    # EARNINGS_BEAT row counts in platform.earnings_events.
+    # EARNINGS_BEAT rows are append-only — any per-ticker rowcount drop
+    # vs the prior snapshot is vendor truncation / deletion. Heal via
+    # the canonical earnings_refresh stage with skip_guard_days=0 so
+    # the bounded re-pull actually fires. Bounded by max_attempts=2.
+    # Baseline lives in platform.earnings_events_count_snapshot
+    # (per-ticker PK; UPSERT on PASS; the check's read+compare+UPSERT
+    # runs in a single tx so a partial write can't poison the next
+    # cycle).
+    # KNOWN GAP (P1 follow-on): backfill_earnings_events._classify_beat
+    # is BEAT-only (actual > estimate * 1.05) — this invariant catches
+    # truncation but NOT missed-detection from FMP outages. Tracked in
+    # TODO.md autonomous self-heal section; resolution is to emit a
+    # NO_BEAT sentinel per quarter so per-quarter completeness becomes
+    # auditable.
+    HealSpec(check_name="earnings_events_monotone",
+             source="earnings_events",
+             healable=True, stage="earnings_refresh",
+             params={"skip_guard_days": "0"}, max_attempts=2),
     # {skip_guard_days:0} was a FAKE heal: _stage_sec_filings never
     # overlaid cfg on the default path so the param was silently
     # dropped, AND defaults (max_tickers=200, lookback=90) cannot clear

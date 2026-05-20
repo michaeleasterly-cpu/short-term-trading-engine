@@ -1,3 +1,27 @@
+# KNOWN GAP — caveat for the earnings_events_monotone invariant (P1 follow-on):
+#
+# ``_classify_beat`` below only writes a row to ``platform.earnings_events``
+# when ``actual_eps > estimated_eps * 1.05`` (i.e. a >5% beat). MISS and
+# IN-LINE earnings produce NO ROW at all — they are filtered out at
+# classification time, not stored as a sentinel.
+#
+# Consequence for the ``earnings_events_monotone`` validation check
+# (``tpcore/quality/validation/checks/earnings_events_monotone.py``):
+# the per-ticker monotone-non-decrease invariant on EARNINGS_BEAT row
+# counts catches **vendor truncation** (a re-ingest that loses a
+# ticker's historical beats), but it does NOT catch **missed detection**
+# from an FMP outage that would have written a beat row had the feed
+# responded. The invariant is honest within its stated shape; the gap
+# is in the ingestion contract, not in the check.
+#
+# P1 follow-on (tracked in TODO.md, Autonomous self-heal section):
+# emit a ``NO_BEAT`` sentinel per (ticker, quarter) when actual_eps is
+# present but doesn't clear the beat threshold, so a per-quarter
+# completeness invariant becomes auditable (every active T1/T2 ticker
+# has a row — BEAT or NO_BEAT — for every fiscal quarter in its active
+# range). Until then, the monotone invariant is the deliberate floor
+# and is structurally insufficient to detect FMP outages.
+
 """Backfill ``platform.earnings_events`` with FMP earnings beats.
 
 MVP catalyst proxy for Vector's Gate 2: an earnings report where
