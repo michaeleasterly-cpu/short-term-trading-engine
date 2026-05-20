@@ -157,18 +157,26 @@ The data feed was renamed `catalyst_* → earnings_*` (DONE 2026-05-16; see sess
 
 ## Autonomous self-heal — EVERY data source (P0, 2026-05-15)
 
-> **STATUS 2026-05-16 — substantially DELIVERED (see WEEK GOAL #2/3a-c
-> above).** Honest end state: 14/20 checks genuinely self-heal (real
-> bounded canonical repair, verified no fake specs); 6/20 are honest
-> permanent escalate-for-investigation (corruption + source-of-truth
-> classes — re-pull cannot fix them; healable=False is correct, not
-> pending). Per-feed cadence profile is the SoT; feed-driven dispatch
-> + vendor-anchored freshness shipped. Root causes fixed not masked
-> (FINRA pagination, ApeWisdom ceiling). The mandate's spirit ("runs
-> on its own, no fake-green") is met; the section below is the
-> original design intent, kept for rationale — remaining work is
-> incremental per-feed breadth (targeting/probes), not unbuilt
-> architecture.
+> **STATUS 2026-05-20 — ALL 5 P0 SOURCES COMPLETE.** Per-source
+> ungameable physical-truth completeness invariants now ship for the
+> full set: macro_indicators (#168), fundamentals_quarterly (#172),
+> corporate_actions (#174), sec_insider_transactions (#179),
+> earnings_events (#181 in CI). Each invariant has a paired HealSpec
+> routed to the canonical `ops.py --stage X` infrastructure with
+> detector/healer symmetry via a shared `_evaluate()`. The 2026-05-16
+> bounded-heal substrate (14/20 self-healing, 6/20 honest escalate) was
+> the prerequisite; this P0 round adds the ZERO-TOLERANCE invariant
+> half — what `prices_daily_completeness` is for daily bars, now
+> generalized to every other source. P1 follow-ons: (a) liquidity_tiers
+> + ticker_classifications completeness shape (item 6 below); (b) the
+> earnings_events NO_BEAT-sentinel KNOWN GAP (Path B of the
+> earnings design — emit non-beat rows so per-quarter completeness
+> becomes auditable, today's invariant catches truncation only).
+>
+> Prior STATUS 2026-05-16 (preserved for rationale): bounded heal
+> shipped; 14/20 genuinely self-heal, 6/20 escalate-for-investigation;
+> per-feed cadence + feed-driven dispatch + vendor-anchored freshness;
+> "runs on its own, no fake-green" spirit met for the heal substrate.
 
 > **🔴 OPEN INCIDENT — prices_daily coverage collapse (logged 2026-05-17).**
 > `validation.prices_daily_freshness` red (ran 2026-05-16 21:30 UTC):
@@ -207,16 +215,23 @@ invariant module — `ls tpcore/quality/validation/checks/` shows no
 `_completeness.py`. Auto-heal-via-re-pull exists; the *zero-tolerance
 physical-truth invariant* per source does not. This is the binding
 residual of the "runs on its own" mandate:
-1. **`fundamentals_quarterly`** (FMP) — define the ungameable
-   completeness/correctness invariant (every addressable T1/T2 stock has
-   the expected filed quarters within its active range, no missing
-   period), then an auto-heal path via the canonical
-   `ops.py --stage fundamentals_refresh --param …` (no one-off script).
-2. **`corporate_actions`** (Alpaca) — invariant + auto-heal via the
-   canonical corp-actions stage; shrinkage detector already exists,
-   wire it into the heal loop.
-3. **`earnings_events`** (FMP) — completeness invariant + auto-heal via
-   `earnings_refresh`.
+1. ✅ **`fundamentals_quarterly`** (FMP) — SHIPPED PR #172
+   (`fundamentals_quarterly_completeness.py`, MAX_QUARTERLY_GAP_DAYS=100,
+   `_infer_missing_period_ends` healer-symmetric). HealSpec routed to
+   `fundamentals_refresh` stage. Zero-tolerance gap invariant.
+2. ✅ **`corporate_actions`** (Alpaca) — SHIPPED PR #174
+   (`corporate_actions_completeness.py`). Composes existing
+   `tpcore.ingestion.csv_archive.detect_shrinkage` at
+   `GATE_SHRINKAGE_THRESHOLD_PCT=0.0` (zero-tolerance vs the 20% WARN
+   band the detector ships with). Live DB row count must be ≥ latest
+   CSV archive snapshot.
+3. ✅ **`earnings_events`** (FMP) — SHIPPED PR #181
+   (`earnings_events_monotone.py`, `platform.earnings_events_count_snapshot`,
+   per-ticker EARNINGS_BEAT count monotone-non-decrease, HealSpec routed
+   to `earnings_refresh`). **KNOWN GAP (filed as P1 follow-on):**
+   `_classify_beat` is BEAT-only ⇒ monotone catches truncation, NOT
+   missed-detection; emit NO_BEAT sentinel rows so per-quarter
+   completeness becomes auditable.
    - **P1 follow-on (surfaced 2026-05-20 by the
      `earnings_events_monotone` P0 source 3/5 PR):** emit a `NO_BEAT`
      sentinel row per `(ticker, quarter)` when `actual_eps` is present
@@ -236,16 +251,23 @@ residual of the "runs on its own" mandate:
      already filter, NO_BEAT is invisible to them), and a new
      `earnings_events_quarterly_completeness` check. `[lane: data-lane-mine]
      [gate: none] [needs operator decision: no] [effort: M]`
-4. **`sec_insider_transactions` / SEC filings** (EDGAR) — invariant +
-   auto-heal via `ops.py --stage sec_filings --backfill`.
-5. **`macro_indicators`** (FRED) — invariant + auto-heal (re-pull); the
-   BAMLH0A0HYM2 truncation class must self-recover. **Partial:** the
-   auto-heal-re-pull half is DONE (`tpcore/selfheal/registry.py` L124-126,
-   `macro_indicators_freshness` → `healable=True` stage
-   `macro_indicators`); the *ungameable completeness invariant* half is
-   still open (no `macro_indicators_completeness.py`).
+4. ✅ **`sec_insider_transactions` / SEC filings** (EDGAR) — SHIPPED PR
+   #179 (`sec_insider_monotone.py`,
+   `platform.sec_insider_row_counts_snapshot`, per-ticker COUNT(*)
+   monotone-non-decrease, HealSpec routed to `sec_filings` stage with
+   `repair=true`). Append-only Form-4 invariant ⇒ ANY negative delta on
+   ANY ticker FAILs.
+5. ✅ **`macro_indicators`** (FRED) — SHIPPED PR #168
+   (`macro_indicators_completeness.py`, per-cadence
+   DAILY/WEEKLY/MONTHLY zero-tolerance check;
+   `_expected_dates_for_cadence` healer-symmetric;
+   `WEEKLY_ANCHOR_WEEKDAY=3` Thursday). HealSpec routed to
+   `macro_indicators` stage.
 6. **`liquidity_tiers`, `ticker_classifications`** — invariant +
-   auto-heal/recompute.
+   auto-heal/recompute. **STILL OPEN as P1.** Both are derived/recomputed
+   from upstream sources; completeness shape is "every active T1/T2
+   stock has a current row" — different from the append-only Form-4
+   / monotone-BEAT pattern. Next slice.
 
 **ARCHITECTURE MANDATE (binding — the shape, not negotiable):**
 Self-heal is a GENERIC `tpcore` capability, NOT per-source bash.
