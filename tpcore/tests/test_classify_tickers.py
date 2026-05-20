@@ -12,6 +12,7 @@ from tpcore.data.classify_tickers import (
     _classify_from_name,
     fetch_alpaca_assets,
     upsert_classifications,
+    upsert_classifications_with_source_snapshot,
 )
 
 # ─── Stocks (no ETF marker) ─────────────────────────────────────────────
@@ -243,9 +244,25 @@ def test_classify_pimco_fund_is_etf():
 class _FakeConn:
     def __init__(self) -> None:
         self.executemany_calls: list[tuple] = []
+        self.execute_calls: list[tuple] = []
 
     async def executemany(self, sql: str, rows: list[tuple]) -> None:
         self.executemany_calls.append((sql, list(rows)))
+
+    async def execute(self, sql: str, *args) -> str:
+        self.execute_calls.append((sql, args))
+        return "INSERT 0 1"
+
+    def transaction(self) -> _FakeTxCM:
+        return _FakeTxCM()
+
+
+class _FakeTxCM:
+    async def __aenter__(self) -> _FakeTxCM:
+        return self
+
+    async def __aexit__(self, *exc) -> None:
+        return None
 
 
 class _FakeAcquireCM:
@@ -346,3 +363,81 @@ async def test_fetch_alpaca_assets_filters_inactive():
     # present at minimum.
     symbols = {a["symbol"] for a in assets}
     assert "AAPL" in symbols
+
+
+# ─── source-snapshot atomic write (Path D drift invariant) ──────────────
+#
+# upsert_classifications_with_source_snapshot writes the classifications
+# rows AND a source_count snapshot row in a single transaction. The
+# snapshot gates the zero-tolerance ticker_classifications_coverage
+# drift invariant: live COUNT(*) on platform.ticker_classifications
+# must equal the most recent snapshot's source_count.
+
+
+@pytest.mark.asyncio
+async def test_upsert_with_source_snapshot_writes_both_in_one_tx():
+    """One executemany (upserts) + one execute (snapshot INSERT) inside
+    a single ``conn.transaction()`` context."""
+    pool = _FakePool()
+    rows = [
+        ("AAPL", "stock", None, None, None, "alpaca_name"),
+        ("SPY",  "etf",   False, None, "equity_broad", "alpaca_name"),
+    ]
+    n = await upsert_classifications_with_source_snapshot(
+        pool, rows, source_count=2,
+    )
+    assert n == 2
+    # One executemany call for the upserts.
+    assert len(pool.conn.executemany_calls) == 1
+    # One execute call for the source_count snapshot INSERT.
+    assert len(pool.conn.execute_calls) == 1
+    snap_sql, snap_args = pool.conn.execute_calls[0]
+    assert "ticker_classifications_source_count" in snap_sql
+    assert snap_args == (2,)
+
+
+@pytest.mark.asyncio
+async def test_upsert_with_source_snapshot_zero_rows_noop():
+    """Empty payload returns 0 and NEVER writes a snapshot (we don't
+    want a misleading source_count=0 baseline; the CHECK constraint on
+    the table forbids it anyway)."""
+    pool = _FakePool()
+    n = await upsert_classifications_with_source_snapshot(
+        pool, [], source_count=0,
+    )
+    assert n == 0
+    assert pool.conn.executemany_calls == []
+    assert pool.conn.execute_calls == []
+
+
+@pytest.mark.asyncio
+async def test_upsert_with_source_snapshot_rejects_nonpositive():
+    """A non-positive source_count with non-empty rows is a programmer
+    error — refuse to write a misleading baseline."""
+    pool = _FakePool()
+    rows = [("AAPL", "stock", None, None, None, "alpaca_name")]
+    with pytest.raises(ValueError):
+        await upsert_classifications_with_source_snapshot(
+            pool, rows, source_count=0,
+        )
+    # Critically: NOTHING was written — not even the upserts.
+    assert pool.conn.executemany_calls == []
+    assert pool.conn.execute_calls == []
+
+
+@pytest.mark.asyncio
+async def test_upsert_with_source_snapshot_records_actual_count():
+    """source_count argument is what gets persisted to the snapshot
+    table (NOT len(rows) — they can differ during a partial-failure
+    retry; the caller decides the authoritative count)."""
+    pool = _FakePool()
+    rows = [
+        ("AAPL", "stock", None, None, None, "alpaca_name"),
+        ("MSFT", "stock", None, None, None, "alpaca_name"),
+        ("GOOG", "stock", None, None, None, "alpaca_name"),
+    ]
+    await upsert_classifications_with_source_snapshot(
+        pool, rows, source_count=12345,
+    )
+    snap_sql, snap_args = pool.conn.execute_calls[0]
+    assert snap_args == (12345,)
