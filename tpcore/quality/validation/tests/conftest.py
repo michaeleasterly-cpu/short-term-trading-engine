@@ -128,6 +128,15 @@ class FakePool:
                 "last_bar": latest,
                 "window_dates": [latest],
             }]
+        # liquidity_tiers_completeness — anti-join "active universe ticker
+        # missing from liquidity_tiers". Return empty so unrelated e2e
+        # tests see the universe-survives-the-cut invariant pass. Routes
+        # on the distinctive WHERE-NULL anti-join shape on lt.ticker.
+        if (
+            "platform.liquidity_tiers" in sql_lower
+            and "lt.ticker is null" in sql_lower
+        ):
+            return []
         if "platform.prices_daily" in sql_lower and "ticker = any($1)" in sql_lower:
             tickers = set(args[0])
             return [r for r in self.rows if r["ticker"] in tickers]
@@ -251,6 +260,18 @@ class FakePool:
                 "covered_count": 25,  # 50% — well above 30% floor
                 "insider_rows": 500,
                 "material_rows": 700,
+            }
+        # liquidity_tiers_completeness universe-counts probe. Return a
+        # passing snapshot (active universe fully covered) so unrelated
+        # e2e tests don't false-fail. Routes on the distinctive
+        # "active_universe_size" column name.
+        if (
+            "platform.liquidity_tiers" in sql_lower
+            and "active_universe_size" in sql_lower
+        ):
+            return {
+                "active_universe_size": 5000,
+                "in_tiers": 5000,
             }
         # Liquidity tiers freshness check probes the table + universe.
         # Return a passing snapshot so unrelated tests don't false-fail.

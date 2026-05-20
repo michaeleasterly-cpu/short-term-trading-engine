@@ -58,6 +58,9 @@ from tpcore.quality.validation.checks.fundamentals_quarterly_completeness import
 from tpcore.quality.validation.checks.insider_sentiment_freshness import (
     check_insider_sentiment_freshness,
 )
+from tpcore.quality.validation.checks.liquidity_tiers_completeness import (
+    check_liquidity_tiers_completeness,
+)
 from tpcore.quality.validation.checks.liquidity_tiers_freshness import (
     check_liquidity_tiers_freshness,
 )
@@ -138,6 +141,7 @@ _CHECK_FN: dict[str, _CheckCallable] = {
     "sec_filings_freshness": _src(check_sec_filings_freshness, None),
     "sec_insider_monotone": _src(check_sec_insider_monotone, None),
     "liquidity_tiers_freshness": _src(check_liquidity_tiers_freshness, None),
+    "liquidity_tiers_completeness": _src(check_liquidity_tiers_completeness, None),
     "ticker_classifications_coverage": _src(
         check_ticker_classifications_coverage, None
     ),
