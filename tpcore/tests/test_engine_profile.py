@@ -348,6 +348,7 @@ def test_engine_tables_shim_removed():
     on `tpcore.engine_profile` directly. Prevents a future re-introduction
     of the parallel-SoT read-model."""
     import pytest
+
     from tpcore.quality.validation import capital_gate
     with pytest.raises(AttributeError):
         _ = capital_gate.ENGINE_TABLES
