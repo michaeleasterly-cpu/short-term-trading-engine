@@ -245,9 +245,13 @@ def _make_synthetic_engine_tree(tmp_path: Path) -> Path:
     cg = (staged / "tpcore" / "quality" / "validation"
           / "capital_gate.py")
     cgt = cg.read_text()
+    # H-S3-12: anchor on the canary row + the close brace was a single-
+    # line invariant pre-catalyst. Catalyst (PAPER 2026-05-20) now sits
+    # between canary and the close brace, so the anchor is updated to
+    # the new immediate-pre-close line (the catalyst row).
     cg.write_text(cgt.replace(
-        '    "canary": frozenset({"prices_daily"}),\n}',
-        '    "canary": frozenset({"prices_daily"}),\n'
+        '    "catalyst": frozenset({"prices_daily", "sec_insider_transactions"}),\n}',
+        '    "catalyst": frozenset({"prices_daily", "sec_insider_transactions"}),\n'
         '    "throwaway": frozenset({"prices_daily"}),\n}'))
     # DDF-1 (SP4 T2) + SP4 T5b: the shadows are sentinel-fenced; the old
     # str.replace on the un-fenced literal is now a silent no-op. Build
