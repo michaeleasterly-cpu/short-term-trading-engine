@@ -1095,12 +1095,20 @@ async def _run_lab_core(
     # Final held-back validation on the WINNER.
     winner_params, winner_score, _ = ranked[0]
     print(f"═══ Final held-back: replaying winner on {args.final_holdout_start} → {args.final_holdout_end} ═══\n")
-    final_result = await runner(
-        db_url=db_url,
-        start=args.train_start,
-        end=args.final_holdout_end,
-        overrides=winner_params,
-        universe=universe,
+    # The final-holdout replay loads a panel spanning train_start →
+    # final_holdout_end (~7 years) — even longer than a single window
+    # load, and observed to drop the Supabase pooler connection in
+    # vector_composite probe 4 (2026-05-20). Wrap with the same
+    # transient-DB retry that survives the per-window ctx_loader drop.
+    final_result = await _retry_transient_db(
+        lambda: runner(
+            db_url=db_url,
+            start=args.train_start,
+            end=args.final_holdout_end,
+            overrides=winner_params,
+            universe=universe,
+        ),
+        label="final_holdout_runner",
     )
     # Slice to held-back only. DSR is computed on period-aggregated returns
     # (one observation per rebalance), which is the statistically-meaningful
