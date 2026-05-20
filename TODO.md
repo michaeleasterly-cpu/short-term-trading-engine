@@ -96,11 +96,21 @@ Single focus until further notice — no engine/Sigma-redesign work. Sequence:
      `prices_daily_gaps` audit check is moot — the invariant gate is the
      correct mechanism (registered in `KNOWN_CHECK_NAMES`, healable via
      `daily_bars --param repair_gaps=true`).
-   - sporadic `row_velocity`: tighten (currently only fires on total
-     silence; misses sustained severe partial degradation).
-     `[lane: data-lane-mine] [gate: none] [needs operator decision: no]
-     [effort: S]` — VERIFIED still open: `scripts/audit_data_pipeline.py`
-     L1136-1144, sporadic branch WARNs only on `recent == 0 and prior > 0`.
+   - ✅ **sporadic `row_velocity` — DONE in PR #78 (b61c1ce, 2026-05-18).**
+     The sporadic branch now WARNs on BOTH (a) total silence
+     (`recent == 0 and prior > 0`, preserved byte-for-byte) and (b)
+     severe sustained partial degradation: `recent < expected *
+     SPORADIC_SEVERE_FRAC` with `expected = prior * SPORADIC_RATE_FACTOR`
+     and the `prior >= SPORADIC_PRIOR_FLOOR` guardrail, measured over a
+     cluster-robust 180d-recent / 365d-prior-band window
+     (`scripts/audit_data_pipeline.py` L222-228 constants; L1257-1300
+     branch). Closes the gap where a sustained ~98% partial collapse
+     read OK because it was not strictly zero. Test coverage:
+     `scripts/tests/test_audit_row_velocity_sporadic.py` (12 cases:
+     silence preserved, severe partial bites, clustered inter-cluster
+     lull stays OK, daily branch unchanged, constants cluster-robust).
+     TODO entry stale — the surface-snippet line numbers (L1136-1144)
+     referred to a pre-#78 layout that no longer exists.
    - FMP handler-path CSV archive: verify end-to-end (presence unproven).
      `[lane: data-lane-mine] [gate: none] [needs operator decision: no]
      [effort: S]` — the `csv_archive_presence` audit check now covers
