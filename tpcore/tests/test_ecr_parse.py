@@ -52,6 +52,27 @@ def test_valid_add_parses():
     assert ecr.reason is None and ecr.param_change is None
 
 
+def test_valid_add_existing_code_parses():
+    """H-S3-11e: existing_code is the third valid source value for ADD."""
+    from ops.engine_sdlc.ecr import ECRAction, parse_ecr
+    txt = (
+        "ECR\n"
+        "action:        ADD\n"
+        "engine:        existing\n"
+        "source:        existing_code\n"
+        "cadence:       daily\n"
+        "allocator:     true\n"
+        "dispatch_order: 7\n"
+        "need:          engine shipped via a separate scaffolding PR\n"
+    )
+    ecr = parse_ecr(txt)
+    assert ecr.action is ECRAction.ADD
+    assert ecr.source == "existing_code"
+    assert ecr.engine == "existing"
+    # gate fields must not be carried for existing_code (same as new_scaffold)
+    assert ecr.gate_dsr is None and ecr.gate_cred is None
+
+
 def test_valid_remove_parses():
     from ops.engine_sdlc.ecr import ECRAction, parse_ecr
     ecr = parse_ecr(_VALID_REMOVE)

@@ -483,6 +483,26 @@ def validate(plan: TransitionPlan, *, repo_root: Path | None = None,
                     ecr, "new_scaffold ADD must NOT carry gate_dsr/"
                          "gate_cred — a new engine cannot present a gate "
                          "score it has not earned (fail-closed H-S3-11b)")
+        elif ecr.source == "existing_code":
+            # H-S3-11e: post-hoc roster registration of engine code shipped
+            # via a separate PR (the SP-F → catalyst pattern). Same gate-
+            # field invariant as new_scaffold (a freshly-registered engine
+            # has not earned its gate yet); ADDITIONAL discriminating
+            # constraint: the engine package MUST already exist on disk.
+            if ecr.gate_dsr is not None or ecr.gate_cred is not None:
+                return _reject(
+                    ecr, "existing_code ADD must NOT carry gate_dsr/"
+                         "gate_cred — a freshly-registered engine has not "
+                         "earned a gate score (fail-closed; same invariant "
+                         "as new_scaffold).")
+            if repo_root is not None:
+                pkg = repo_root / ecr.engine
+                if not pkg.is_dir():
+                    return _reject(
+                        ecr, f"existing_code ADD requires {ecr.engine}/ to "
+                             f"already exist on disk — got nothing. Use "
+                             f"source: new_scaffold to scaffold from the "
+                             f"template, or ship the engine code first.")
         elif ecr.source == "lab_candidate":
             from ops.engine_sdlc._evidence import (
                 EvidenceError,
@@ -616,20 +636,38 @@ def _apply_add(plan: TransitionPlan, root: Path, jn: _Journal) -> None:
     restore is ``rmtree(dst)`` (there is no prior package).
     """
     engine = plan.engine
-    src_tmpl = root / "tpcore" / "templates" / "engine_template"
-    if not src_tmpl.is_dir():
-        raise RuntimeError(
-            "engine_template scaffold missing — cannot ADD(new_scaffold)")
     pkg = root / engine
-    if pkg.exists():
-        raise RuntimeError(
-            f"ADD target {engine}/ already exists on disk — refusing to "
-            f"clobber (classify should have rejected; defence-in-depth)")
-    # scaffold: there is no prior package, so the whole new tree is
-    # journaled as one sentinel-move (restore = rmtree pkg). Journal
-    # BEFORE the copytree so a failure mid-copy is still fully reversible.
-    jn.record_move(pkg / "__sentinel_absent__", pkg)
-    shutil.copytree(src_tmpl, pkg)
+    is_existing_code = plan.sot_diff.get("source") == "existing_code"
+    if is_existing_code:
+        # H-S3-11e: post-hoc roster registration of engine code shipped via
+        # a separate PR. The engine tree is operator-shipped; we MUST NOT
+        # journal a sentinel_absent move (which would cause reverse-replay
+        # to rmtree the existing engine code on failure). Only the
+        # _PROFILE write is journaled below. Defence-in-depth: re-verify
+        # the directory exists; validate() should have gated this already.
+        if not pkg.is_dir():
+            raise RuntimeError(
+                f"existing_code ADD requires {engine}/ to exist on disk — "
+                f"got nothing (validate should have rejected; defence-in-"
+                f"depth).")
+    else:
+        # new_scaffold / lab_candidate: scaffold from template. There is no
+        # prior package, so the whole new tree is journaled as one
+        # sentinel-move (restore = rmtree pkg). Journal BEFORE the copytree
+        # so a failure mid-copy is still fully reversible.
+        src_tmpl = root / "tpcore" / "templates" / "engine_template"
+        if not src_tmpl.is_dir():
+            raise RuntimeError(
+                "engine_template scaffold missing — cannot ADD(new_scaffold)")
+        if pkg.exists():
+            raise RuntimeError(
+                f"ADD target {engine}/ already exists on disk — use "
+                f"source: existing_code for post-hoc roster registration "
+                f"of engine code shipped via a separate PR, or remove the "
+                f"directory and re-run with new_scaffold (classify should "
+                f"have rejected; defence-in-depth)")
+        jn.record_move(pkg / "__sentinel_absent__", pkg)
+        shutil.copytree(src_tmpl, pkg)
     # AST-safe _PROFILE insert BEFORE the allocator sentinel comment.
     ep = root / "tpcore" / "engine_profile.py"
     jn.record_file(ep)
