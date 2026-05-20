@@ -51,6 +51,78 @@ async def test_source_has_newer_true_false_via_probe(monkeypatch) -> None:
     assert await publication.source_has_newer("aaii_sentiment", date(2026, 5, 14)) is False
 
 
+# ── macro_indicators (FRED) feed-level probe — MIN across series ───────
+
+
+async def test_fred_probe_returns_min_observation_end_across_series(monkeypatch) -> None:
+    """The registered macro_indicators probe MUST return the earliest
+    observation_end across the configured series — taking MAX would
+    silently green a feed where ONE series is stuck behind, masking
+    the very vendor-MISSED-a-publish edge the probe exists to surface.
+
+    Exercised end-to-end through ``source_has_newer`` (the public
+    surface) — patches the FREDAdapter source module so the in-body
+    ``from tpcore.fred import FREDAdapter`` inside the probe resolves
+    to the fake.
+    """
+    from tpcore import fred as fred_mod
+    from tpcore.fred import INDICATOR_SERIES
+
+    fake_ends = {sid: date(2026, 5, 20) for _name, sid in INDICATOR_SERIES}
+    # One series lags a week behind — MIN must reflect that.
+    laggard_sid = INDICATOR_SERIES[2][1]
+    fake_ends[laggard_sid] = date(2026, 5, 13)
+
+    class _FakeFRED:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *e): return None
+        async def latest_published(self, series_id: str) -> date | None:
+            return fake_ends.get(series_id)
+
+    monkeypatch.setattr(fred_mod, "FREDAdapter", _FakeFRED)
+    # we hold 05-12: vendor (05-13 laggard) is newer → True (heal).
+    assert await publication.source_has_newer(
+        "macro_indicators", date(2026, 5, 12)
+    ) is True
+    # we hold 05-13: vendor's MIN matches → False (vendor-late, quiet).
+    # If the probe had returned MAX=05-20, this would have wrongly
+    # fired True and burned a heal cycle on a feed where the laggard
+    # series has NOTHING newer.
+    assert await publication.source_has_newer(
+        "macro_indicators", date(2026, 5, 13)
+    ) is False
+
+
+async def test_fred_probe_returns_none_on_any_series_failure(monkeypatch) -> None:
+    """If ANY series probe returns None (network/malformed/auth),
+    the feed-level probe returns None so the caller stays strict —
+    a partial answer would silently silence the heal cycle."""
+    from tpcore import fred as fred_mod
+    from tpcore.fred import INDICATOR_SERIES
+
+    first_sid = INDICATOR_SERIES[0][1]
+
+    class _PartialFakeFRED:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *e): return None
+        async def latest_published(self, series_id: str) -> date | None:
+            return date(2026, 5, 20) if series_id == first_sid else None
+
+    monkeypatch.setattr(fred_mod, "FREDAdapter", _PartialFakeFRED)
+    # source_has_newer returns None — caller stays strict (red, not green).
+    assert await publication.source_has_newer(
+        "macro_indicators", date(2026, 5, 13)
+    ) is None
+
+
+async def test_macro_indicators_probe_registered_by_default() -> None:
+    """Registration-pin: the FRED probe is in PUBLICATION_PROBES under
+    the canonical feed name. The drift sentinel for "adding a feed's
+    probe is one registry entry" goes through here — a future refactor
+    that drops the registration trips this test."""
+    assert "macro_indicators" in publication.PUBLICATION_PROBES
+
+
 # ── targeting: demand-driven, no engine code ───────────────────────────
 
 class _Conn:

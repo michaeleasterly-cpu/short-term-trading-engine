@@ -218,6 +218,44 @@ class FREDAdapter:
         )
         return rows
 
+    async def latest_published(self, series_id: str) -> date | None:
+        """Cheap publication-availability probe (#165 facet 4): GET
+        ``/fred/series?series_id=X`` and read ``observation_end`` — the
+        date of FRED's latest observation for that series — WITHOUT
+        downloading any actual observations. Lets the self-heal
+        orchestrator distinguish "we are stale (our defect → heal)"
+        from "FRED simply hasn't published a newer observation yet
+        (vendor-late → quiet, no churn)" per the no-lazy-vendor-blame
+        rule.
+
+        Returns ``None`` if the response is malformed or the probe
+        fails — caller falls back to the strict (assume-behind)
+        behaviour, never silently green.
+
+        Per-series rather than the AAII single-HEAD pattern because
+        FRED is a multi-series feed (one ``observation_end`` per
+        series). The feed-level probe in
+        ``tpcore.feeds.publication`` composes per-series answers into
+        a conservative "feed has nothing newer" verdict (MIN across
+        series).
+        """
+        params: dict[str, Any] = {
+            "series_id": series_id,
+            "api_key": self._api_key,
+            "file_type": "json",
+        }
+        try:
+            payload = await self._fetch_raw("/series", params)
+        except (DataProviderOutage, httpx.HTTPError):
+            return None
+        seriess = (payload or {}).get("seriess", []) or []
+        if not seriess:
+            return None
+        raw_end = seriess[0].get("observation_end")
+        if not raw_end:
+            return None
+        return _parse_observation_date(str(raw_end))
+
     async def get_all_indicators(
         self,
         *,
