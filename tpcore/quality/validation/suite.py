@@ -34,6 +34,12 @@ from .checks.constituent import (
 from .checks.constituent import (
     check_constituent_snapshot,
 )
+from .checks.corporate_actions_completeness import (
+    CHECK_NAME as CA_COMPLETENESS_NAME,
+)
+from .checks.corporate_actions_completeness import (
+    check_corporate_actions_completeness,
+)
 from .checks.corporate_actions_integrity import CHECK_NAME as CA_INTEGRITY_NAME
 from .checks.corporate_actions_integrity import check_corporate_actions_integrity
 from .checks.delistings import CHECK_NAME as DELISTINGS_NAME
@@ -102,6 +108,7 @@ KNOWN_CHECK_NAMES: tuple[str, ...] = (
     FUND_INTEGRITY_NAME,
     FUND_COMPLETENESS_NAME,
     CA_INTEGRITY_NAME,
+    CA_COMPLETENESS_NAME,
     EARNINGS_EVENTS_NAME,
     SEC_FRESHNESS_NAME,
     LIQUIDITY_FRESHNESS_NAME,
@@ -163,6 +170,9 @@ async def run_suite(
         FUND_COMPLETENESS_NAME, check_fundamentals_quarterly_completeness, pool, None
     )
     ca_integrity_task = _safe_run(CA_INTEGRITY_NAME, check_corporate_actions_integrity, pool, None)
+    ca_completeness_task = _safe_run(
+        CA_COMPLETENESS_NAME, check_corporate_actions_completeness, pool, None
+    )
     earnings_events_task = _safe_run(EARNINGS_EVENTS_NAME, check_earnings_events_freshness, pool, None)
     sec_task = _safe_run(SEC_FRESHNESS_NAME, check_sec_filings_freshness, pool, None)
     liquidity_task = _safe_run(
@@ -206,7 +216,7 @@ async def run_suite(
     )
     (
         delistings_result, constituent_result, splits_result,
-        row_integrity_result, fund_integrity_result, fund_completeness_result, ca_integrity_result,
+        row_integrity_result, fund_integrity_result, fund_completeness_result, ca_integrity_result, ca_completeness_result,
         earnings_events_result, sec_result, liquidity_result, classifications_result,
         macro_result, macro_completeness_result, prices_result, completeness_result,
         options_maxpain_result, insider_sentiment_result,
@@ -215,7 +225,7 @@ async def run_suite(
         aaii_sentiment_result,
     ) = await asyncio.gather(
         delistings_task, constituent_task, splits_task,
-        row_integrity_task, fund_integrity_task, fund_completeness_task, ca_integrity_task,
+        row_integrity_task, fund_integrity_task, fund_completeness_task, ca_integrity_task, ca_completeness_task,
         earnings_events_task, sec_task, liquidity_task, classifications_task,
         macro_task, macro_completeness_task, prices_task, completeness_task,
         options_maxpain_task, insider_sentiment_task,
@@ -225,7 +235,7 @@ async def run_suite(
     )
     checks: list[CheckResult] = [
         delistings_result, constituent_result, splits_result,
-        row_integrity_result, fund_integrity_result, fund_completeness_result, ca_integrity_result,
+        row_integrity_result, fund_integrity_result, fund_completeness_result, ca_integrity_result, ca_completeness_result,
         earnings_events_result, sec_result, liquidity_result, classifications_result,
         macro_result, macro_completeness_result, prices_result, completeness_result,
         options_maxpain_result, insider_sentiment_result,

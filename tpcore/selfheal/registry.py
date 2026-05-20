@@ -107,6 +107,15 @@ _SPECS: tuple[HealSpec, ...] = (
              healable=False, unhealable_reason=_CORRUPTION),
     HealSpec(check_name="corporate_actions_integrity", source="corporate_actions",
              healable=False, unhealable_reason=_CORRUPTION),
+    # Zero-tolerance live-DB-vs-archive shrinkage gate (the
+    # BAMLH0A0HYM2 / vendor-truncation failure class). Healable via
+    # the canonical ``corporate_actions`` Alpaca re-pull stage with
+    # skip_guard disabled. Bounded by max_attempts=2. Spec:
+    # docs/superpowers/specs/2026-05-20-corporate-actions-completeness-invariant.md.
+    HealSpec(check_name="corporate_actions_completeness",
+             source="corporate_actions",
+             healable=True, stage="corporate_actions",
+             params={"skip_guard_days": "0"}, max_attempts=2),
     # Re-pullable freshness, bounded canonical stage, real
     # skip_guard_days=0 force → honestly healable. A red means stale →
     # forced re-pull genuinely clears it.

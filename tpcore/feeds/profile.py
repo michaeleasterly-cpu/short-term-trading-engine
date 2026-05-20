@@ -179,6 +179,11 @@ FEED_PROFILES: dict[str, FeedProfile] = {
         cadence_days=91, freshness_max_age_days=120, skip_guard_days=6,
         evidence='financial fundamentals (pb/de/revenue/net_income/fcf/etc) for value-engine setup detection — already ingested via FMP for months; formal ProviderBinding registration was missing (surfaced 2026-05-20 by the autonomous-self-heal P0 completeness invariant work).',
     ),
+    'corporate_actions': FeedProfile(
+        feed='corporate_actions', trigger=FeedTrigger.VENDOR_RELEASE,
+        cadence_days=1, freshness_max_age_days=7, skip_guard_days=1,
+        evidence='splits + dividends from Alpaca corporate-actions API — already ingested for months; formal ProviderBinding registration was missing (surfaced 2026-05-20 by the autonomous-self-heal P0 completeness invariant work, mirroring the fundamentals_quarterly gap).',
+    ),
 }
 
 

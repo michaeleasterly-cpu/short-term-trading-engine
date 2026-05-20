@@ -3,15 +3,52 @@
 Provides:
 - a fake asyncpg pool (rows-as-dict store) for check tests
 - temp YAML writers used by source/check/end-to-end tests
+- an autouse stub for ``tpcore.ingestion.csv_archive.detect_shrinkage``
+  so the corporate_actions_completeness check passes in suite tests
+  (the real detector reads on-disk CSV archives which aren't present
+  in the test env; the stub returns "no shrinkage" — the dedicated
+  unit tests in test_check_corporate_actions_completeness.py exercise
+  the shrinkage-detected branches explicitly).
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 import pytest
+
+
+@dataclass
+class _FakeShrinkReport:
+    """Mock ShrinkageReport — clean (0% shrinkage) for suite tests."""
+    source: str
+    current_rows: int
+    previous_rows: int
+    previous_archive: str = "data/archive/test_baseline.csv.gz"
+    shrinkage_pct: float = 0.0
+    over_threshold: bool = False
+
+
+@pytest.fixture(autouse=True)
+def _stub_csv_archive_detect_shrinkage(monkeypatch):
+    """Suite-test autouse: stub detect_shrinkage to return a clean
+    (no-shrinkage) report so the corporate_actions_completeness check
+    passes in suite/e2e tests for unrelated checks. The dedicated
+    unit-test file for corporate_actions_completeness uses its own
+    targeted patches and is unaffected by this autouse (it patches
+    `_evaluate` directly, bypassing detect_shrinkage)."""
+    def _fake_detect_shrinkage(source, current_rows, **kwargs):
+        return _FakeShrinkReport(
+            source=source, current_rows=current_rows,
+            previous_rows=current_rows,
+        )
+    monkeypatch.setattr(
+        "tpcore.ingestion.csv_archive.detect_shrinkage",
+        _fake_detect_shrinkage,
+    )
 
 # ────────────────────────────────────────────────────────────────────────────
 # Fake asyncpg pool
@@ -135,8 +172,18 @@ class FakePool:
             ]
         return []
 
+
     async def fetchrow(self, sql: str, *args) -> dict[str, Any] | None:
         sql_lower = sql.lower()
+        # corporate_actions_completeness: live DB row count for the
+        # shrinkage gate. Return a positive count so the check has a
+        # non-empty live snapshot to compare against the (mocked or
+        # absent) archive.
+        if (
+            "platform.corporate_actions" in sql_lower
+            and "count(*)" in sql_lower
+        ):
+            return {"n": 109581}
         # insider_sentiment_freshness: a current-month record so the
         # suite passes in e2e tests for unrelated checks.
         if "platform.insider_sentiment" in sql_lower:

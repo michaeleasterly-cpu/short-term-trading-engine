@@ -33,6 +33,9 @@ from tpcore.quality.validation.checks.borrow_rates_freshness import (
     check_borrow_rates_freshness,
 )
 from tpcore.quality.validation.checks.constituent import check_constituent_snapshot
+from tpcore.quality.validation.checks.corporate_actions_completeness import (
+    check_corporate_actions_completeness,
+)
 from tpcore.quality.validation.checks.corporate_actions_integrity import (
     check_corporate_actions_integrity,
 )
@@ -123,6 +126,7 @@ _CHECK_FN: dict[str, _CheckCallable] = {
     "fundamentals_integrity": _src(check_fundamentals_integrity, None),
     "fundamentals_quarterly_completeness": _src(check_fundamentals_quarterly_completeness, None),
     "corporate_actions_integrity": _src(check_corporate_actions_integrity, None),
+    "corporate_actions_completeness": _src(check_corporate_actions_completeness, None),
     "earnings_events_freshness": _src(check_earnings_events_freshness, None),
     "sec_filings_freshness": _src(check_sec_filings_freshness, None),
     "liquidity_tiers_freshness": _src(check_liquidity_tiers_freshness, None),
