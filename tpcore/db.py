@@ -84,6 +84,17 @@ async def build_asyncpg_pool(
     server_settings: dict[str, str] = {"jit": "off"}
     if read_only or lab_is_active():
         server_settings["default_transaction_read_only"] = "on"
+        # Lab on-demand experimental queries (e.g. ops/lab/run.py's per-
+        # window + final-holdout panel-load over ~50 mega-caps × ~7 years
+        # = ~87k rows in a single SELECT) routinely exceed Supabase's
+        # default statement_timeout. vector_composite probe 5 (2026-05-20)
+        # died with "canceling statement due to statement timeout" on the
+        # final-holdout. Raising it here ONLY for read-only / Lab paths
+        # preserves the safety stop on the live order-submit path (which
+        # uses the default statement_timeout — a runaway query there is a
+        # real hazard). 30min = generous-but-finite — a stuck Lab query
+        # still fails loud after half an hour, not silently forever.
+        server_settings["statement_timeout"] = "30min"
     kwargs: dict = dict(
         dsn=normalize_database_url(database_url),
         min_size=min_size,
