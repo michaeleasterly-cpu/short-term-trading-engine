@@ -34,13 +34,15 @@ from tpcore.allocator.service import AllocatorService
 pytestmark = pytest.mark.xdist_group("ops_shadow")
 
 
-def test_production_default_engine_set_is_reversion_vector_momentum() -> None:
+def test_production_default_engine_set_is_reversion_vector_momentum_catalyst() -> None:
     """Construct EXACTLY as production does (no ``engines=`` kwarg) and
     assert the default managed set is ``("reversion", "vector",
-    "momentum")`` — archived ``sigma`` absent, ``sentinel`` absent."""
+    "momentum", "catalyst")`` — archived ``sigma`` absent, ``sentinel``
+    absent. Catalyst joined 2026-05-20 as allocator_eligible=True via
+    the autonomous Lab criteria activation (H-S3-12)."""
     svc = AllocatorService(pool=None, platform_capital=Decimal("40000"))  # type: ignore[arg-type]
 
-    assert svc._engines == ("reversion", "vector", "momentum")  # noqa: SLF001
+    assert svc._engines == ("reversion", "vector", "momentum", "catalyst")  # noqa: SLF001
 
 
 def test_production_default_excludes_archived_sigma() -> None:

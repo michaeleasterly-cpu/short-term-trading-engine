@@ -407,7 +407,7 @@ def test_importing_engine_sdlc_main_does_not_eager_import_an_engine():
     import importlib
 
     engines = ("reversion", "vector", "momentum", "sentinel", "canary",
-               "sigma")
+               "catalyst", "sigma")
     for mod in engines:
         sys.modules.pop(mod, None)
     importlib.import_module("ops.engine_sdlc.__main__")

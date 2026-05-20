@@ -85,9 +85,10 @@ def test_lab_targetable_set_frozen_anchor():
     """
     from tpcore.engine_profile import lab_targetable_engines
 
-    # roster-driven Lab-target changes are high-risk; pin it.
+    # roster-driven Lab-target changes are high-risk; pin it. Catalyst
+    # joined 2026-05-20 via the autonomous Lab criteria path.
     assert set(lab_targetable_engines()) == {
-        "reversion", "vector", "momentum", "sentinel", "carver"}
+        "reversion", "vector", "momentum", "sentinel", "carver", "catalyst"}
 
 
 # ── (2) CLI choices are GENERATED from the accessor (both sites) ─────────

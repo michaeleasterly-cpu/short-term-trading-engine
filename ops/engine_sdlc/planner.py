@@ -573,54 +573,60 @@ def validate(plan: TransitionPlan, *, repo_root: Path | None = None,
                          "gate_cred — a freshly-registered engine has not "
                          "earned a gate score (fail-closed; same invariant "
                          "as new_scaffold).")
-            if repo_root is not None:
-                pkg = repo_root / ecr.engine
-                if not pkg.is_dir():
-                    return _reject(
-                        ecr, f"existing_code ADD requires {ecr.engine}/ to "
-                             f"already exist on disk — got nothing. Use "
-                             f"source: new_scaffold to scaffold from the "
-                             f"template, or ship the engine code first.")
-                # H-S3-12: autonomous Lab criteria. existing_code ADD reads
-                # the engine's most-recent backtest dossier from
-                # backtests/<engine>_backtest_results.json (the canonical
-                # artifact every <engine>.backtest writes) and evaluates
-                # the new-engine signal-presence criteria. On pass the
-                # planner lands the engine PAPER (autonomous gate); on
-                # fail the rejection cites the specific criterion. See
-                # docs/superpowers/specs/2026-05-20-autonomous-lab-criteria.md.
-                from ops.engine_sdlc.lab_criteria import (
-                    _assess_new_engine_signal,
-                    load_engine_dossier,
-                )
-                try:
-                    dossier = load_engine_dossier(repo_root, ecr.engine)
-                except ValueError as exc:
-                    return _reject(
-                        ecr, f"existing_code ADD: backtest dossier at "
-                             f"backtests/{ecr.engine}_backtest_results.json "
-                             f"is unparseable — {exc}")
-                if dossier is None:
-                    return _reject(
-                        ecr, f"existing_code ADD: no recent backtest "
-                             f"dossier found at "
-                             f"backtests/{ecr.engine}_backtest_results.json "
-                             f"— run `python -m {ecr.engine}.backtest --json` "
-                             f"first to produce the dossier the planner "
-                             f"reads autonomously.")
-                passed, reason = _assess_new_engine_signal(dossier)
-                if not passed:
-                    return _reject(
-                        ecr, f"existing_code ADD: autonomous Lab criteria "
-                             f"failed — {reason}")
-                # Criteria pass ⇒ promote the plan's to_state to PAPER (the
-                # operator-style ADD already gated the binary y/n; the
-                # framework no longer needs a second human gate for "did
-                # this engine earn its way out of LAB?" because the
-                # dossier-read criteria already decided).
-                plan = TransitionPlan(
-                    **{**plan.__dict__,
-                       "to_state": LifecycleState.PAPER})
+            # H-S3-11e + H-S3-12: pkg-on-disk + autonomous Lab criteria
+            # are evaluated against `effective_root` — explicit repo_root
+            # when given (tests), REPO_ROOT in production (the CLI passes
+            # no repo_root). The criteria MUST run on the production path,
+            # not be gated on `repo_root is not None` (which would
+            # silently skip the autonomous gate in production).
+            effective_root = repo_root or REPO_ROOT
+            pkg = effective_root / ecr.engine
+            if not pkg.is_dir():
+                return _reject(
+                    ecr, f"existing_code ADD requires {ecr.engine}/ to "
+                         f"already exist on disk — got nothing. Use "
+                         f"source: new_scaffold to scaffold from the "
+                         f"template, or ship the engine code first.")
+            # H-S3-12: autonomous Lab criteria. existing_code ADD reads
+            # the engine's most-recent backtest dossier from
+            # backtests/<engine>_backtest_results.json (the canonical
+            # artifact every <engine>.backtest writes) and evaluates
+            # the new-engine signal-presence criteria. On pass the
+            # planner lands the engine PAPER (autonomous gate); on
+            # fail the rejection cites the specific criterion. See
+            # docs/superpowers/specs/2026-05-20-autonomous-lab-criteria.md.
+            from ops.engine_sdlc.lab_criteria import (
+                _assess_new_engine_signal,
+                load_engine_dossier,
+            )
+            try:
+                dossier = load_engine_dossier(effective_root, ecr.engine)
+            except ValueError as exc:
+                return _reject(
+                    ecr, f"existing_code ADD: backtest dossier at "
+                         f"backtests/{ecr.engine}_backtest_results.json "
+                         f"is unparseable — {exc}")
+            if dossier is None:
+                return _reject(
+                    ecr, f"existing_code ADD: no recent backtest "
+                         f"dossier found at "
+                         f"backtests/{ecr.engine}_backtest_results.json "
+                         f"— run `python -m {ecr.engine}.backtest --json` "
+                         f"first to produce the dossier the planner "
+                         f"reads autonomously.")
+            passed, reason = _assess_new_engine_signal(dossier)
+            if not passed:
+                return _reject(
+                    ecr, f"existing_code ADD: autonomous Lab criteria "
+                         f"failed — {reason}")
+            # Criteria pass ⇒ promote the plan's to_state to PAPER (the
+            # operator-style ADD already gated the binary y/n; the
+            # framework no longer needs a second human gate for "did
+            # this engine earn its way out of LAB?" because the
+            # dossier-read criteria already decided).
+            plan = TransitionPlan(
+                **{**plan.__dict__,
+                   "to_state": LifecycleState.PAPER})
         elif ecr.source == "lab_candidate":
             from ops.engine_sdlc._evidence import (
                 EvidenceError,

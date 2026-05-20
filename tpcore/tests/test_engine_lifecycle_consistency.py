@@ -43,8 +43,7 @@ pytestmark = pytest.mark.xdist_group("ops_shadow")
 def test_dispatch_order_invariant_is_the_frozen_literal():
     """Roster order is frozen; changes are high-risk (Sub-C/DA-3) and must be explicit."""
     # roster-order changes are high-risk (Sub-C/DA-3); pin it.
-    assert roster_for_dispatch() == (
-        "reversion", "vector", "momentum", "sentinel", "canary")
+    assert roster_for_dispatch() == ("reversion", "vector", "momentum", "sentinel", "canary", "catalyst")
 
 
 def test_live_engine_is_wired():

@@ -65,11 +65,12 @@ def test_param_ranges_membership_iteration_len_and_set():
     # ships its LAB_TARGET from day-zero so SP-B's roster-driven resolver
     # picks it up the moment _PROFILE includes it.
     assert list(run.PARAM_RANGES) == [
-        "reversion", "vector", "momentum", "sentinel", "carver"]
+        "reversion", "vector", "momentum", "sentinel", "carver", "catalyst"]
     assert "reversion" in run.PARAM_RANGES
     assert "sentinel" in run.PARAM_RANGES         # SP-E: now declared
     assert "carver" in run.PARAM_RANGES            # LAB target, day-zero
-    assert len(run.PARAM_RANGES) == 5
+    assert "catalyst" in run.PARAM_RANGES          # PAPER 2026-05-20 (H-S3-12)
+    assert len(run.PARAM_RANGES) == 6
     for e in ("reversion", "momentum"):
         assert set(run.PARAM_RANGES[e]) == set(_T0_PARAM_RANGES_KEYSETS[e])
     # vector_composite Lab candidate (spec

@@ -1,10 +1,8 @@
 ECR
 action:        ADD
 engine:        catalyst
-source:        new_scaffold
+source:        existing_code
 cadence:       daily
 allocator:     true
-dispatch_order: 6
-gate_dsr:      0.95
-gate_cred:     60
-need:          Insider-cluster swing engine (SP-F): ≥3 distinct Form-4 insider BUYers + ≥$250k aggregate in a 30-day window on a trend-up name; flat-bracket exits (+12% TP / −7% SL); SP-B/SP-C end-to-end proof case for the Lab front-half epic.
+dispatch_order: 7
+need:          Activate the insider-cluster swing engine (SP-F, shipped via PR #137) in PAPER via the autonomous Lab criteria path. Catalyst's backtest dossier (sharpe=2.27/trades=24/max_dd=-0.41/ruin_prob=0.087/profit_factor=1.36/min_btl_gap=109) clears every criterion in docs/superpowers/specs/2026-05-20-autonomous-lab-criteria.md with margin; the framework's autonomous gate makes the call. First real test of the new path.

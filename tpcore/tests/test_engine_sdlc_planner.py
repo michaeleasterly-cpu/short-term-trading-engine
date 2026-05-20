@@ -141,9 +141,9 @@ def test_validate_runs_real_clockwork_in_isolated_tree(tmp_path):
           / "test_engine_lifecycle_consistency.py")
     tc.write_text(tc.read_text().replace(
         '"reversion", "vector", "momentum", "sentinel", "canary", '
-        '"throwaway")',
+        '"catalyst", "throwaway")',
         '"reversion", "vector", "momentum", "sentinel", "canary", '
-        '"throwaway", "ghost_never_in_sot")'))
+        '"catalyst", "throwaway", "ghost_never_in_sot")'))
     ecr = EngineChangeRequest(
         action="remove", engine="throwaway",
         reason="synthetic — proves validate() runs the dry clockwork",
@@ -264,7 +264,7 @@ def _make_synthetic_engine_tree(tmp_path: Path) -> Path:
     _sys.path.insert(0, str(_repo))
     from scripts.gen_engine_manifest import _FILE_REGIONS, render_all
     _aug_roster = ("reversion", "vector", "momentum", "sentinel",
-                   "canary", "throwaway")
+                   "canary", "catalyst", "throwaway")
     _aug_archived = ("sigma",)
     for _rel in _FILE_REGIONS:
         _p = staged / _rel
@@ -274,9 +274,9 @@ def _make_synthetic_engine_tree(tmp_path: Path) -> Path:
     # the staged tree is green pre-REMOVE (H-S3-2: REMOVE then drops it).
     tc = staged / "tpcore" / "tests" / "test_engine_lifecycle_consistency.py"
     tc.write_text(tc.read_text().replace(
-        '"reversion", "vector", "momentum", "sentinel", "canary")',
+        '"reversion", "vector", "momentum", "sentinel", "canary", "catalyst")',
         '"reversion", "vector", "momentum", "sentinel", "canary", '
-        '"throwaway")'))
+        '"catalyst", "throwaway")'))
     return staged
 
 
@@ -564,7 +564,8 @@ def test_remove_rostered_engine_updates_frozen_literal(tmp_path):
           / "test_engine_lifecycle_consistency.py").read_text()
     assert '"throwaway")' not in tc, (
         "the frozen-literal was not updated to drop the retired engine")
-    assert '"reversion", "vector", "momentum", "sentinel", "canary")' in tc
+    assert ('"reversion", "vector", "momentum", "sentinel", "canary", '
+            '"catalyst")') in tc
 
 
 # ─── T6: ADD executor + readiness build gate (H-S3-11) ───

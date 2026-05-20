@@ -59,7 +59,7 @@ def test_hand_edit_in_fence_fails_check(tmp_path):
     smoke = staged / "scripts" / "run_smoke_test.sh"
     txt = smoke.read_text()
     smoke.write_text(txt.replace(
-        "for engine in reversion vector momentum sentinel canary; do",
+        "for engine in reversion vector momentum sentinel canary catalyst; do",
         "for engine in reversion vector momentum; do"))  # in-fence drift
     res = _check(staged)
     assert res.returncode != 0, "an in-fence hand-edit must fail --check"
