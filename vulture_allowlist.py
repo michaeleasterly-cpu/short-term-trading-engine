@@ -407,6 +407,7 @@ _install_reversion_incumbent_dossier  # unused function (tpcore/tests/conftest.p
 # site). Allowlisted with the same idiom as other pytest fixtures
 # elsewhere in the suite.
 _reset_composite_override  # unused function (vector/tests/test_composite_flag_byte_identical.py:134)
+_reset_vol_managed_override  # unused function (momentum/tests/test_lab_vol_managed_byte_identical.py:115)
 # DFCR planner module — module-level path constants + a forward-compat
 # pydantic plan-model + a feed-profiles-keys reader that future REMOVE
 # CSV-archive provenance and 3-way HealSpec drift validation will use.
