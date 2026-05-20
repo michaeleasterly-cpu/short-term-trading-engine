@@ -121,7 +121,8 @@ thresholds are read from there (no per-check guessed constants).
 
 **Per-engine data gate + operator override.** Graduation/trade gating
 is now per-engine: an engine is blocked only if a validation source
-IT reads is red (`capital_gate.ENGINE_TABLES`, evidence-documented).
+IT reads is red (per `EngineProfile.data_dependencies` — folded from
+the prior `ENGINE_TABLES` dict 2026-05-20 via PRs #171/#191/#195).
 To force the old global all-green behaviour (block every engine on
 ANY red — e.g. during an incident):
 
