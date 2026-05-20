@@ -66,7 +66,6 @@ include = [
     "momentum*",
     "sentinel*",
     "canary*",
-    "catalyst*",
 # <<< engine-manifest:pyproject-include <<<
 ]
 exclude = ["tests*"]
@@ -252,7 +251,6 @@ testpaths = [
     "momentum/tests",
     "sentinel/tests",
     "canary/tests",
-    "catalyst/tests",
 # <<< engine-manifest:pyproject-testpaths <<<
     "scripts/tests",
 ]
