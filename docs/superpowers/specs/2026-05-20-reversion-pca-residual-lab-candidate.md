@@ -10,6 +10,18 @@ build.
 PAPER on the earnings-gated price-z fade; this candidate proposes the
 **Avellaneda–Lee statistical-arbitrage signal** as the production
 ranking primitive).
+**Readiness checklist:** `docs/superpowers/checklists/lab_candidate_readiness.md`
+— the canonical 10-section non-optional checklist this spec ticks
+(every section's intent is honoured in §1–§9 below; the mechanical
+grep-set is the implementation checklist at §9).
+**Autonomous adjudication gate:** for a `fold_existing` MODIFY
+candidate the adjudication path is `_assess_improvement` per
+`docs/superpowers/specs/2026-05-20-autonomous-lab-criteria.md` (PR
+#158) — the candidate must beat the incumbent on `primary_metric =
+SHARPE` (strict), pass the new-engine signal floor, and keep the
+trade-count drift bounded. The operator verdict bar below is recorded
+on the dossier for additional human-readable evidence; the binding
+machine-checked gate is the autonomous-criteria evaluation.
 **Operator verdict bar (TODO L262-282):** held-back DSR ≥ 0.95 ∧
 credibility ≥ 60 ∧ PBO ≤ 0.20 ∧ trades/param ≥ 25 ∧ ≥ 150 held-back
 trades ∧ no single-crisis PnL concentration.
@@ -430,6 +442,15 @@ expansion, no second robustness arm.
   Economics*, 21(2), 213–254.
 - TODO.md L262-282 (#171-175) — operator verdict bar + design
   directive.
+- `docs/superpowers/checklists/lab_candidate_readiness.md` — the
+  canonical 10-section non-optional checklist this spec ticks (SP-C).
+- `docs/superpowers/specs/2026-05-20-autonomous-lab-criteria.md`
+  (PR #158) — the autonomous `_assess_improvement` adjudication gate
+  this `fold_existing` candidate routes through.
+- `tpcore/lab/ledger.py` (SP-A) — the cumulative n_trials ledger
+  §1 / §7 acknowledge.
+- `tpcore/lab/target.py` (SP-B) — the engine-FREE `LabTarget`
+  contract `reversion.backtest.LAB_TARGET` declares against.
 - Sibling Lab-candidate precedents (the byte-identical-when-off
   pattern):
   - `docs/superpowers/specs/2026-05-20-momentum-vol-managed-lab-
