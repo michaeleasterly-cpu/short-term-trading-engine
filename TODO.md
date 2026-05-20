@@ -142,6 +142,18 @@ Single focus until further notice — no engine/Sigma-redesign work. Sequence:
    `VENDOR_PROBES["prices_daily"]` (the orchestrator's vendor-late
    consult layer) — high-leverage because prices_daily is the data
    substrate every engine reads through the per-engine data gate.
+   **ApeWisdom probed 2026-05-20 — honest-stop, no usable
+   timestamp.** Verified live: the JSON response top-level keys are
+   only `count` / `current_page` / `pages` / `results`; per-record
+   has no `updated_at` / `scraped_at`. HTTP headers from Cloudflare
+   carry only `Date` (no `Last-Modified`, no `ETag`,
+   `cf-cache-status: DYNAMIC`). The `rank_24h_ago` /
+   `mentions_24h_ago` fields are rate-of-change values, not a
+   publish timestamp. ApeWisdom stays probe-less — the
+   strict-cadence + 15%-floor recalibration (2026-05-16) is the
+   canonical mechanism. Documented in
+   `tpcore/apewisdom/adapter.py` + `tpcore/feeds/publication.py`
+   docstrings so the finding doesn't get re-investigated.
    FINRA still has no cheap latest-probe (its API exposes no
    max-settlement without full pagination) — intentionally absent;
    the strict cadence fallback already honest post-recalibration.

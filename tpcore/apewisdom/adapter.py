@@ -9,6 +9,24 @@ fail-fast-on-key; base URL is still env-overridable for tests.
 ``{"count","pages","current_page","results":[{rank,ticker,name,
 mentions,upvotes,rank_24h_ago,mentions_24h_ago}]}``. Paginate to
 ``pages``; ~1-2 req/s courtesy (rate limits undocumented).
+
+**No ``latest_published()`` probe — intentionally absent.** The
+ApeWisdom JSON exposes NO timestamp field on the response or any
+record (verified live 2026-05-20: top-level keys are only ``count``,
+``current_page``, ``pages``, ``results``; per-record fields are only
+``rank``, ``ticker``, ``name``, ``mentions``, ``upvotes``,
+``rank_24h_ago``, ``mentions_24h_ago``). The HTTP headers also lack
+a usable freshness signal — Cloudflare returns ``Date`` only, no
+``Last-Modified``, no ``ETag``, ``cf-cache-status: DYNAMIC``. The
+24h-ago fields describe rate-of-change values, not a publish
+timestamp we could compare against. So no cheap "is the vendor
+newer than what we hold?" probe exists for this feed — the strict
+cadence/freshness fallback already in
+``social_sentiment_freshness`` (post-recalibration to a 15% floor
+2026-05-16) stays the canonical mechanism, and the feed is
+intentionally absent from ``tpcore.feeds.publication.PUBLICATION_PROBES``
++ ``tpcore.selfheal.probes.VENDOR_PROBES``. Same disposition as
+FINRA (no max-settlement-without-pagination).
 """
 from __future__ import annotations
 

@@ -18,12 +18,25 @@ small request, NOT a full download). ``source_has_newer`` consults it:
   fall back to the strict (assume-behind) behaviour. Never silently
   green: an unprovable "maybe vendor-late" stays red.
 
-Honest scope: the generic gate + the AAII exemplar (HEAD
-``Last-Modified`` on its .xls — cheap, no auth, live-verifiable) are
-built and enforced. Other feeds have no cheap "latest available"
-probe yet (e.g. FINRA's API exposes no max-settlement without full
-pagination) — they are intentionally absent here and fall back to
-the strict cadence behaviour (already honest post-recalibration).
+Honest scope: the generic gate + four exemplar wirings shipped —
+AAII (HEAD ``Last-Modified`` on its .xls), FRED (per-series
+``observation_end`` via ``/fred/series``, composed MIN-across-
+series), Alpaca prices_daily (latest-bar timestamp on the SPY
+anchor via IEX feed), and the orchestrator-side ``VENDOR_PROBES``
+consult in ``tpcore.selfheal.probes``. Probe-less feeds fall back
+to the strict cadence behaviour (already honest post-recalibration);
+each falls into one of two structural classes:
+
+* **No max-publish endpoint** — FINRA (no max-settlement without
+  full pagination); FMP earnings/fundamentals (per-ticker only).
+* **No timestamp anywhere on the response** — ApeWisdom social
+  sentiment (verified 2026-05-20: JSON exposes no ``updated_at`` /
+  ``scraped_at``; HTTP headers carry only ``Date``, no
+  ``Last-Modified`` from the Cloudflare front). The
+  ``rank_24h_ago``/``mentions_24h_ago`` fields describe rate-of-
+  change, not a publish timestamp we could compare against. See
+  ``tpcore.apewisdom.adapter`` module docstring.
+
 Adding a feed's probe is one registry entry — no gate edits.
 """
 from __future__ import annotations
