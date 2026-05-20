@@ -105,7 +105,7 @@ def compute_rolling_pca_residuals(
     log_prices = np.log(prices_panel.where(prices_panel > 0))
     returns = log_prices.diff()
 
-    n_rows, n_cols = returns.shape
+    n_rows = returns.shape[0]
     if n_rows < window + 1:
         return pd.DataFrame(np.nan, index=returns.index, columns=returns.columns)
 
