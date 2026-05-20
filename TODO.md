@@ -118,16 +118,18 @@ Single focus until further notice — no engine/Sigma-redesign work. Sequence:
      `ARCHIVE_SOURCES` L178-181); remaining work is the runtime end-to-end
      proof that `handle_fundamentals_refresh` actually writes the archive
      on a real pull (a verification task, not a missing-code gap).
-   - **Wire `CFNAIMA3` (Chicago Fed National Activity Index, 3mo MA) to
-     FRED ingestion.** `[lane: data-lane-mine] [gate: none] [needs
-     operator decision: no] [effort: S]` Append `("cfnai_ma3",
-     "CFNAIMA3")` to `INDICATOR_SERIES` in `tpcore/fred/adapter.py`; add
-     to `EXPECTED_INDICATORS` + `INDICATOR_CADENCE` (monthly) in
-     `tpcore/quality/validation/checks/macro_indicators_completeness.py`;
-     add freshness coverage. Surfaced 2026-05-20 by the Sentinel Bear
-     Score Lab-candidate subagent — the candidate's `CFNAI ≤ -0.70` band
-     anchor can't fire without this series ingested. Unblocks the
-     Sentinel graduated Bear Score Lab candidate (TODO §Deep-research).
+   - ✅ **Wire `CFNAIMA3` (Chicago Fed National Activity Index, 3mo MA) to
+     FRED ingestion — DONE 2026-05-20.** Appended `("cfnai_ma3",
+     "CFNAIMA3")` to `INDICATOR_SERIES` in `tpcore/fred/adapter.py`; added
+     to `EXPECTED_INDICATORS` + `INDICATOR_CADENCE` (monthly) in both
+     `tpcore/quality/validation/checks/macro_indicators_completeness.py`
+     and the sibling `macro_indicators_freshness.py`; conftest fake-pool
+     indicator lists extended for e2e coverage. Surfaced 2026-05-20 by
+     the Sentinel Bear Score Lab-candidate subagent — the candidate's
+     `CFNAI ≤ -0.70` band anchor needs this series ingested. Unblocks
+     the Sentinel graduated Bear Score Lab candidate (TODO §Deep-research).
+     Next FRED ingestion cycle populates rows (no historical backfill
+     bundled with the wire-up PR).
    - **Decide on SOS (Sum-of-States diffusion) substrate.** `[lane:
      data-lane-mine] [gate: none] [needs operator decision: YES — pick
      the substrate] [effort: M]` The Sentinel Bear Score candidate

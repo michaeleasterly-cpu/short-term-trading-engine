@@ -157,6 +157,7 @@ class FakePool:
                 for name in (
                     "sahm_rule", "industrial_production", "initial_claims",
                     "yield_curve", "credit_spread", "hy_spread", "vix",
+                    "cfnai_ma3",
                 )
             ]
         # macro_indicators_completeness: per-indicator present-dates
@@ -188,6 +189,7 @@ class FakePool:
                 for name in (
                     "sahm_rule", "industrial_production", "initial_claims",
                     "yield_curve", "credit_spread", "hy_spread", "vix",
+                    "cfnai_ma3",
                 )
             ]
         # options_max_pain_freshness: one fresh snapshot per expected
