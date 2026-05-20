@@ -41,6 +41,12 @@ knob that hides failures:
 
 The healer's symmetry ``compute_macro_repair_targets`` calls the
 SAME ``_evaluate`` — detector and healer cannot disagree.
+
+``cfnai_ma3`` (Chicago Fed National Activity Index, 3-month MA;
+FRED series ``CFNAIMA3``, monthly publication) was added 2026-05-20
+to unblock the Sentinel graduated Bear Score Lab candidate (TODO
+§Deep-research) — the candidate's ``CFNAI ≤ -0.70`` band anchor
+cannot fire without this series ingested.
 """
 
 from __future__ import annotations
@@ -74,6 +80,7 @@ EXPECTED_INDICATORS: tuple[str, ...] = (
     "initial_claims",
     "industrial_production",
     "sahm_rule",
+    "cfnai_ma3",
 )
 
 # FRED publication cadence per series. DAILY = every NYSE session;
@@ -93,6 +100,7 @@ INDICATOR_CADENCE: dict[str, str] = {
     "initial_claims": CADENCE_WEEKLY,
     "industrial_production": CADENCE_MONTHLY,
     "sahm_rule": CADENCE_MONTHLY,
+    "cfnai_ma3": CADENCE_MONTHLY,
 }
 
 # Weekly cadence anchor day. ICSA (initial_claims) publishes Thursday

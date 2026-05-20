@@ -1,7 +1,7 @@
 """FRED macro-indicators adapter.
 
-Pulls daily/weekly/monthly observations for the five macro series
-listed in :data:`INDICATOR_SERIES` from the St. Louis Fed FRED API:
+Pulls daily/weekly/monthly observations for the macro series listed
+in :data:`INDICATOR_SERIES` from the St. Louis Fed FRED API:
 
 * ``sahm_rule``            — SAHMREALTIME (monthly recession indicator)
 * ``industrial_production`` — INDPRO (monthly PMI proxy)
@@ -10,6 +10,12 @@ listed in :data:`INDICATOR_SERIES` from the St. Louis Fed FRED API:
 * ``credit_spread``        — BAA10Y (Moody's Seasoned Baa Corporate Bond
                               Yield relative to the 10-Year Treasury,
                               daily — credit stress proxy)
+* ``hy_spread``            — BAMLH0A0HYM2 (daily HY OAS; FRED-rolling
+                              tail + recovered pre-2023 history)
+* ``vix``                  — VIXCLS (daily CBOE Volatility Index close)
+* ``cfnai_ma3``            — CFNAIMA3 (monthly Chicago Fed National
+                              Activity Index, 3-month MA — Sentinel
+                              Bear Score band anchor, added 2026-05-20)
 
 **2026-05-15 — BAA10Y replaces BAMLH0A0HYM2.** FRED permanently truncated
 the HY OAS series (``BAMLH0A0HYM2``) to a rolling 3-year window starting
@@ -71,6 +77,12 @@ INDICATOR_SERIES: tuple[tuple[str, str], ...] = (
     # Fear & Greed volatility component. FRED VIXCLS has full daily
     # history from 1990-01-02; no new provider (FRED is existing).
     ("vix",                  "VIXCLS"),
+    # Chicago Fed National Activity Index, 3-month moving average —
+    # added 2026-05-20 to unblock the Sentinel graduated Bear Score Lab
+    # candidate, which uses a ``CFNAI ≤ -0.70`` band anchor. CFNAIMA3
+    # publishes MONTHLY (FRED release calendar: monthly, around the 4th
+    # week of the following month). No new provider (FRED existing).
+    ("cfnai_ma3",            "CFNAIMA3"),
 )
 """(canonical_name, FRED series_id) pairs — the platform's vocabulary
 on the left, FRED's identifier on the right. Adding a new indicator
