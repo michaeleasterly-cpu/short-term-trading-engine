@@ -1183,29 +1183,29 @@ If every box is checked: report **"all green"** and stop. If anything fails: jum
 
 ## 10. Verification Scripts
 
-Two standalone harnesses prove specific safety paths work end-to-end against the live database without waiting for an engine to actually fire a real trade. Use these any time a "the wiring exists but the table is empty" question comes up.
+Two operator-on-demand `scripts/ops.py` stages prove specific safety paths work end-to-end against the live database without waiting for an engine to actually fire a real trade. Use these any time a "the wiring exists but the table is empty" question comes up.
 
-### `scripts/test_aar_pipeline.py`
+### `ops.py --stage aar_pipeline_smoke`
 
-Proves `tpcore.aar.writer.AARWriter` correctly persists `AfterActionReport` rows to `platform.aar_events`. Builds a synthetic AAR with `engine='synthetic_test'` and a UUID `trade_id`, calls `write_aar` twice, asserts (1) first call returns `True` (insert), (2) round-trip read matches the original JSON, (3) second call returns `False` (idempotent skip via the `UNIQUE (engine, trade_id)` constraint), (4) row count is exactly 1, (5) cleanup `DELETE` runs in a `finally` block so the production table never accumulates harness data.
-
-```bash
-DATABASE_URL=$(grep '^DATABASE_URL_IPV4=' .env | cut -d= -f2-) \
-  .venv/bin/python scripts/test_aar_pipeline.py
-```
-
-A `PASS` line + `cleanup: deleted 1 synthetic row(s)` is the green signal.
-
-### `scripts/test_kill_switch.py`
-
-Proves the engine schedulers' startup kill-switch short-circuit fires. Flips `kill_switch_active=true` for the named engine in `platform.risk_state`, runs that engine's `scheduler.run_once()`, asserts `n_candidates == 0` and `n_submitted == 0`, then resets the switch in a `try/finally` so the live engine isn't left frozen on test failure.
+Proves `tpcore.aar.writer.AARWriter` correctly persists `AfterActionReport` rows to `platform.aar_events`. Builds a synthetic AAR with `engine='synthetic_test'` and a UUID `trade_id`, calls `write_aar` twice, asserts (1) first call returns `True` (insert), (2) round-trip read matches the original JSON, (3) second call returns `False` (idempotent skip via the `UNIQUE (engine, trade_id)` constraint), (4) row count is exactly 1, (5) cleanup `DELETE` runs in a `finally` block so the production table never accumulates harness data. Migrated 2026-05-20 from the legacy `scripts/test_aar_pipeline.py`.
 
 ```bash
 DATABASE_URL=$(grep '^DATABASE_URL_IPV4=' .env | cut -d= -f2-) \
-  .venv/bin/python scripts/test_kill_switch.py --engine sigma
+  .venv/bin/python scripts/ops.py --stage aar_pipeline_smoke
 ```
 
-Run with `--engine reversion` or `--engine vector` for the other two. Each engine's startup check must be exercised independently.
+A stage-success row in `platform.application_log` with `verified=True` is the green signal.
+
+### `ops.py --stage kill_switch_smoke`
+
+Proves the engine schedulers' startup kill-switch short-circuit fires. Flips `kill_switch_active=true` for the named engine in `platform.risk_state`, runs that engine's `scheduler.run_once()`, asserts `n_candidates == 0` and `n_submitted == 0`, then resets the switch in a `try/finally` so the live engine isn't left frozen on test failure. Migrated 2026-05-20 from the legacy `scripts/test_kill_switch.py`.
+
+```bash
+DATABASE_URL=$(grep '^DATABASE_URL_IPV4=' .env | cut -d= -f2-) \
+  .venv/bin/python scripts/ops.py --stage kill_switch_smoke --param engine=reversion
+```
+
+Run with `--param engine=reversion` or `--param engine=vector`. Each engine's startup check must be exercised independently.
 
 ### `scripts/smoke_test.py`
 

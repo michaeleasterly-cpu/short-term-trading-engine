@@ -32,85 +32,38 @@ the tree.** No launchd installer references any of the 10 scripts.
 
 ---
 
-## Deleted in this PR (0 scripts)
+## Zero-allowlist sweep — END STATE 2026-05-21
 
-None. Conservative-deletion rule applied: when in doubt, catalog
-rather than delete.
+Operator overruled both the "keep-as-helper" disposition AND the
+conservative-deletion rule. Every remaining orphan was either
+migrated to a stage (then the script deleted) or deleted outright
+when wholly superseded by an existing stage. The zero-allowlist
+invariant (`scripts/tests/test_no_orphan_scripts.py::test_allowlist_is_empty`)
+locks the end-state in.
 
-## Delete-safe candidates (operator decision) — 2 scripts
-
-These two meet the strict DELETE criteria — zero genuine callers, no
-live wiring, no launchd, no test, no docs as an active harness — and
-are functionally superseded. The operator should rubber-stamp these
-two in a follow-up PR (or veto if there's hidden reasoning).
-
-### `scripts/extract_tradier.py` (699 lines, scripts/test_no_orphan_scripts.py:163)
-- One-shot Tradier extractor scoped to the 50-name backtest universe.
-  Pulls option chains / corporate calendars / pre-2020 bars / company
-  profiles to CSV in `data/tradier_export/`. No DB writes.
-- **Superseded by:** `scripts/extract_tradier_full.py` (the wide
-  universe extractor; its own docstring calls itself a "companion to"
-  the 50-name version). The 50-name CSV's role was absorbed when the
-  full-universe extractor shipped — `docs/session-log.md:42` shows the
-  full export (22M rows, 7,710 tickers) was completed and ingested via
-  `ingest_tradier_csv.py`, with no follow-up reference to the 50-name
-  output.
-- **Last activity:** 2026-04-19 `b1d9236` "ops: one-shot Tradier
-  extractor → CSV (no DB)" (the lint-pass touch `dd67972` was a
-  repo-wide ruff drift cleanup, not functional). Effectively cold for
-  ~6 weeks.
-- **Callers grep:** 0 in code/launchd/CI/pyproject. The only mentions
-  are self-mentions in `extract_tradier_full.py:3,64` ("Companion to
-  scripts/extract_tradier.py" — prose only) and `EDGE_VALIDATION_PLAN.md`
-  which references **only** `extract_tradier_full.py`, not this 50-name
-  variant.
-- **Recommended action:** `git rm scripts/extract_tradier.py` and
-  remove the `extract_tradier` `_ALLOWLIST` entry +
-  `test_no_orphan_scripts.py:158-163` TODO comment block in the same
-  follow-up PR.
-
-### `scripts/test_aar_pipeline.py` and `scripts/test_kill_switch.py` — see "Keep as ops helper" below
-
-(Listed under helper, not deletion — these have live OPERATIONS.md
-documentation.)
+### ✅ `scripts/extract_tradier.py` — DELETED 2026-05-21
+50-name predecessor wholly superseded by the new
+`ops.py --stage extract_tradier_full` (migrated from
+`scripts/extract_tradier_full.py`). The 50-name CSV's role was
+absorbed when the full export shipped (22M rows, 7,710 tickers
+via the paired `ops.py --stage ingest_tradier_csv`). `git rm`'d +
+allowlist entry removed.
 
 ---
 
-## Migrate to ops.py stage (4 scripts) — operator decision
+## Migrate to ops.py stage / delete — END STATE 2026-05-21
 
-### `scripts/run_daily_bars_all_active.py` (60 lines, scripts/test_no_orphan_scripts.py:141-145)
-- One-shot local driver that invokes `tpcore.ingestion.handlers.handle_daily_bars`
-  with `{"universe":"all_active","min_price":5.0,...}` against the local
-  process holding the DB pool.
-- **Already superseded.** `scripts/ops.py:12` docstring explicitly says
-  *"replaces the previous mix of ad-hoc scripts (run_daily_bars_all_active.py,
-  run_corporate_actions_all_active.py, etc.)"*. `ops.py --stage daily_bars`
-  exists at `scripts/ops.py:382 _stage_daily_bars`.
-- **Last activity:** `b0b0d1e` "scripts: local driver for daily_bars
-  all_active sweep" — single commit, ~3 months cold.
-- **Callers grep:** 0 — only prose mentions in `ops.py:12` (in the
-  "replaces…" docstring), `EDGE_VALIDATION_PLAN.md:63`, and
-  `session-log.md:41`.
-- **Recommended stage:** already covered by `--stage daily_bars`. The
-  script is dead code.
-- **Effort: S** — confirm the existing `_stage_daily_bars` covers the
-  exact `min_price=5.0 / min_volume=250_000 / lookback_days=7` config,
-  then `git rm` the script + drop the allowlist entry.
+### ✅ `scripts/run_daily_bars_all_active.py` — DELETED 2026-05-21
+Wholly superseded by `ops.py --stage daily_bars` per the ops.py:12
+"replaces the previous mix of ad-hoc scripts" docstring. `git rm`'d
++ allowlist entry removed. Historical prose references in
+`EDGE_VALIDATION_PLAN.md` and `session-log.md` read correctly as
+supersession history and are preserved.
 
-### `scripts/run_corporate_actions_all_active.py` (53 lines, scripts/test_no_orphan_scripts.py:136-140)
-- One-shot local driver for `handle_corporate_actions` with
-  `{"universe":"all_active","ingest_start":"2018-01-01"}`. Mirror of
-  `run_daily_bars_all_active.py`.
-- **Already superseded.** `scripts/ops.py:610 _stage_corporate_actions`
-  exists; the ops.py docstring explicitly lists this script as part of
-  the "replaced" set.
-- **Last activity:** `1f6680b` "feat(ingestion): corporate_actions
-  handler supports all_active universe" — single commit, cold.
-- **Callers grep:** 0 — prose in `ops.py:13` (the "replaces" docstring)
-  and `MASTER_PLAN.md:762` (historical "Complete" status note).
-- **Recommended stage:** already covered by `--stage corporate_actions`.
-- **Effort: S** — same as above; verify the existing stage's config
-  parity, then `git rm` + drop allowlist entry.
+### ✅ `scripts/run_corporate_actions_all_active.py` — DELETED 2026-05-21
+Wholly superseded by `ops.py --stage corporate_actions` per the
+ops.py:13 "replaces" docstring. `git rm`'d + allowlist entry
+removed. `MASTER_PLAN.md:762` "Complete" status note updated.
 
 ### ✅ `scripts/compute_fundamental_ratios.py` — MIGRATED 2026-05-20
 Set-based UPDATE migrated to `ops.py --stage compute_fundamental_ratios`
@@ -120,137 +73,66 @@ NULL until someone re-ran the script. Script deleted; orphan-allowlist
 entry removed. Prose references updated in the migration docstring,
 `DATABASE_AND_DATAFLOW.md`, and `MASTER_PLAN.md`.
 
-### `scripts/backfill_backtest_universe.py` (145 lines, scripts/test_no_orphan_scripts.py:124-127)
-- One-shot 2018-2025 daily-bars backfill for a hardcoded 50-name
-  backtest universe via direct Alpaca API calls. Sleeps 0.3s per symbol
-  for rate-limit politeness.
-- **Functionally superseded** by `ops.py --stage daily_bars` (the
-  all-active sweep) — every name in `DEFAULT_UNIVERSE` is in
-  `prices_daily` now. BUT the script has a **documented
-  source-of-truth role**: `ops/cron_corporate_actions.py:48-50` comment
-  reads *"50-name backtest universe — kept in sync with
-  `scripts/backfill_backtest_universe.py:DEFAULT_UNIVERSE`. Hardcoded
-  rather than imported because `scripts/` is intentionally not part of
-  the installed package"*. **Deleting the script would orphan that
-  comment.**
-- **Last activity:** `0a89270` "feat(data): finish prices_daily
-  ingestion + run CHOP backtest" — single commit, cold.
-- **Callers grep:** 0 wiring; the prose mention above is a
-  documentation cross-reference, not an import.
-- **Recommended action:** rather than migrating to a stage, **promote
-  the `DEFAULT_UNIVERSE` constant to `tpcore/backtest/universe.py`** and
-  import it from `ops/cron_corporate_actions.py` (fixing the comment's
-  rationale: scripts/ is not on path, but `tpcore.backtest` is). Once
-  the constant is moved, the script's only justification is gone and
-  it can be deleted.
-- **Effort: M** — extract constant + update import site + verify the
-  daily_bars stage covers 2018-2025 history for the 50 names (the
-  `all_active` sweep should already have it). ~1 hour.
+### ✅ `scripts/backfill_backtest_universe.py` — MIGRATED 2026-05-20
+Operator overruled the keep-as-helper disposition; migrated to
+`tpcore/backtest/universe.py::DEFAULT_BACKTEST_UNIVERSE`. The 50-name
+constant now lives on the installed package path; the duplicated tuple
+in `ops/cron_corporate_actions.py` was replaced with an import. The
+script's only justification is gone — `git rm`'d + allowlist entry
+removed.
 
 ---
 
-## Keep as ops helper (4 scripts) — un-orphan with docstring polish
+## Keep as ops helper — OVERRULED 2026-05-20 (5 scripts migrated to stages)
 
-These are legitimate operator-on-demand tools that don't fit the
-`ops.py --stage X` model: each is an ad-hoc diagnostic / live-DB
-verification harness that's invoked by hand when a specific question
-comes up.
+The catalog originally classified five scripts (`test_aar_pipeline`,
+`test_kill_switch`, `ingest_tradier_csv`, `compare_baselines`,
+`extract_tradier_full`) as "keep as ops helper / un-orphan with
+docstring polish". **The operator overruled that disposition** as
+"too conservative" and wanted the full kill — every remaining orphan
+migrates to an `ops.py --stage <name>` then gets deleted. The
+zero-allowlist invariant (`test_allowlist_is_empty` in
+`scripts/tests/test_no_orphan_scripts.py`) locks the end-state in.
 
-### `scripts/test_aar_pipeline.py` (186 lines, scripts/test_no_orphan_scripts.py:146-150)
-- **Documented operator harness** at `docs/OPERATIONS.md:1188-1196`
-  ("Verification Scripts" §10). Proves `AARWriter.write_aar` persists
-  to `platform.aar_events` against the **live database** (synthetic
-  `engine='synthetic_test'` + UUID trade_id + idempotent cleanup
-  in a `finally` block). Used "any time a 'the wiring exists but the
-  table is empty' question comes up".
-- Also referenced in `MASTER_PLAN.md:722` ("AAR persistence: …Pipeline
-  verified end-to-end against the live database via
-  `scripts/test_aar_pipeline.py`") and `audit_data_pipeline.py:6`.
-- **NOT an orphan** — it's a deliberate live-DB harness that touches
-  the production pool, so it CANNOT be a CI test and shouldn't be a
-  cron stage.
-- **Last activity:** `485a4ac` "feat(scripts): synthetic end-to-end AAR
-  pipeline test against live DB" — single commit, intentionally stable.
-- **Suggested action:** **promote from `# TODO(P5)` to
-  `# OPS_HELPER`** in `_ALLOWLIST`. Replace the TODO(P5) comment block
-  with a comment like "Live-DB AAR-pipeline verification harness;
-  documented in `docs/OPERATIONS.md` §10. Operator-on-demand by design
-  — no wrapper / no stage / no CI test." Same pattern as the existing
-  `agent_pr_label_guard` / `gen_engine_manifest` entries (deliberate
-  standalones, recorded decision).
+### ✅ `scripts/test_aar_pipeline.py` — MIGRATED 2026-05-20
+Operator overruled the keep-as-helper disposition; migrated to
+`ops.py --stage aar_pipeline_smoke`. Synthetic round-trip AAR
+verification against the live `platform.aar_events`, self-cleaning
+in a `finally` block. `docs/OPERATIONS.md` §10 and
+`MASTER_PLAN.md:722` references updated to the new stage. Script
+deleted; allowlist entry removed.
 
-### `scripts/test_kill_switch.py` (146 lines, scripts/test_no_orphan_scripts.py:151-156)
-- **Documented operator harness** at `docs/OPERATIONS.md:1199-1207`
-  and `MASTER_PLAN.md:714`. Flips `platform.risk_state.kill_switch_active`
-  for one engine, runs `scheduler.run_once()`, asserts
-  `n_candidates == 0` and `n_submitted == 0`, resets the kill switch
-  in `finally`. Verifies the startup-kill-switch short-circuit in every
-  engine scheduler.
-- **NOT an orphan** — same reasoning as `test_aar_pipeline.py`: live-DB
-  harness, must touch production `platform.risk_state`, can't be a
-  CI test or a cron.
-- **The "0 references" finding in the detector is correct** (the
-  `test_kill_switch` substring only collides with
-  `test_kill_switch_blocks_all_trades` in `tpcore/tests/test_risk_governor.py`
-  + `carver/tests/test_scheduler.py:231` — substring collision, not a
-  reference). But "zero references" doesn't mean "orphan" — the
-  detector is structurally correct, the **classification** is wrong:
-  this is a deliberate standalone, not a one-off accretion.
-- **Last activity:** `26717a6` "feat(risk): startup kill-switch check
-  in all three engine schedulers" + lint touches; intentionally stable.
-- **Suggested action:** same as `test_aar_pipeline.py` — promote from
-  `# TODO(P5)` to `# OPS_HELPER` in `_ALLOWLIST` with a recorded
-  rationale referencing `docs/OPERATIONS.md` §10.
+### ✅ `scripts/test_kill_switch.py` — MIGRATED 2026-05-20
+Operator overruled the keep-as-helper disposition; migrated to
+`ops.py --stage kill_switch_smoke --param engine=<reversion|vector>`.
+Live `platform.risk_state` flip + `scheduler.run_once()` + zero-work
+assertion + reset-in-finally. `docs/OPERATIONS.md` §10 and
+`MASTER_PLAN.md:714` references updated. Script deleted; allowlist
+entry removed.
 
-### `scripts/ingest_tradier_csv.py` (254 lines, scripts/test_no_orphan_scripts.py:116-122)
-- **One-shot but recently-active** Tradier-CSV → `platform.prices_daily`
-  ingester. Reads the CSV from `extract_tradier_full.py`, filters to
-  Alpaca-active tickers, idempotent INSERT with `ON CONFLICT DO NOTHING`.
-- **Last activity:** `d5faea8` "fix(scripts/ingest_tradier_csv): skip
-  non-finite and overflow OHLC rows" — recent (post-initial-load patch
-  for the 50k overflow rows mentioned in `session-log.md:42`).
-- **Documented in** `EDGE_VALIDATION_PLAN.md:67` and `session-log.md:42`
-  as the canonical Tradier-CSV → DB loader. The actual data load was
-  **completed** (20.56M rows, 7,710 tickers).
-- **Classification call:** this is a borderline DELETE candidate — the
-  load is finished, the path is unlikely to re-run because Tradier
-  changes need re-extraction first — BUT keeping it as an
-  operator-on-demand re-ingest tool is cheap (254 lines, well-documented)
-  and matches how the operator handles Tradier (the wide extractor +
-  this loader are a paired ad-hoc pipeline). Be conservative: keep.
-- **Suggested action:** promote from `# TODO(P5)` to `# OPS_HELPER`
-  with the rationale "Tradier-CSV → prices_daily ad-hoc loader; paired
-  with `extract_tradier_full.py`. Operator-on-demand re-ingest tool
-  documented in EDGE_VALIDATION_PLAN.md".
+### ✅ `scripts/ingest_tradier_csv.py` — MIGRATED 2026-05-20
+Operator overruled the keep-as-helper disposition; migrated to
+`ops.py --stage ingest_tradier_csv`. Streams the wide Tradier CSV
+into `platform.prices_daily` with the Alpaca-active filter +
+ON-CONFLICT-DO-NOTHING idempotency. Paired with the new
+`--stage extract_tradier_full`. `EDGE_VALIDATION_PLAN.md:67` updated.
+Script deleted; allowlist entry removed.
 
-### `scripts/compare_baselines.py` (72 lines, scripts/test_no_orphan_scripts.py:128-131)
-- Tiny argparse wrapper around `tpcore.backtest.compare_trade_lists`.
-  Used as a regression-safety gate when refactoring engines or
-  migrating strategy constructions (compare two trade-log CSVs within
-  tolerance).
-- **Documented operator harness** at `tpcore/backtest/equivalence.py:22`
-  *"Usage in a diff CLI (`scripts/compare_baselines.py`)"*. The
-  underlying `compare_trade_lists` API is in `tpcore.backtest`.
-- **Suggested action:** keep as ops helper. Promote from `# TODO(P5)`
-  to `# OPS_HELPER` with rationale "Regression-safety diff CLI for
-  baseline trade logs; wraps `tpcore.backtest.compare_trade_lists`.
-  Operator-on-demand."
-- Alternative (operator decision): if the operator rarely uses this
-  by hand and the `compare_trade_lists` API is enough, delete the
-  script. The functionality is trivially re-creatable from a 5-line
-  inline invocation.
+### ✅ `scripts/compare_baselines.py` — MIGRATED 2026-05-20
+Operator overruled the keep-as-helper disposition; migrated to
+`ops.py --stage compare_baselines --param baseline=… --param candidate=…`.
+Thin wrapper around `tpcore.backtest.compare_trade_lists`; no DB
+touch. `tpcore/backtest/equivalence.py:22` docstring updated from the
+old script path to the new stage. Script deleted; allowlist entry
+removed.
 
-### `scripts/extract_tradier_full.py` (412 lines, scripts/test_no_orphan_scripts.py:164-169)
-- Wide-universe Tradier CSV extractor (NYSE/NASDAQ/AMEX stocks+ETFs,
-  2000-01-01 → today). Streaming + resumable. Produced the 1.07 GB / 22.36M
-  row dataset in `EDGE_VALIDATION_PLAN.md:66`.
-- **Functionally cold** (the dataset was extracted in a single run,
-  per session-log.md) but the operator-on-demand re-extraction pattern
-  is the same as `ingest_tradier_csv.py` (which is its downstream
-  loader). Both should be classified together: keep as a paired ad-hoc
-  pipeline OR delete both.
-- **Suggested action:** keep as ops helper alongside
-  `ingest_tradier_csv.py`. Promote from `# TODO(P5)` to `# OPS_HELPER`.
+### ✅ `scripts/extract_tradier_full.py` — MIGRATED 2026-05-20
+Operator overruled the keep-as-helper disposition; migrated to
+`ops.py --stage extract_tradier_full`. Wide-universe Tradier CSV
+extractor (NYSE/NASDAQ/AMEX stocks+ETFs, 2000-01-01 → today), no DB
+writes. Paired with the new `--stage ingest_tradier_csv` (its
+downstream loader). `EDGE_VALIDATION_PLAN.md:66` updated. Script
+deleted; allowlist entry removed.
 
 ---
 
@@ -281,28 +163,47 @@ The other three migration candidates are either already-superseded
 naturally resolved by promoting a constant
 (backfill_backtest_universe → `tpcore.backtest.universe.DEFAULT_UNIVERSE`).
 
-## Followup PR scope (operator-gated, NOT in this PR)
+## Followup PR scope — SHIPPED 2026-05-21
 
-1. (`S`) `git rm scripts/extract_tradier.py` + drop `extract_tradier`
-   allowlist entry — superseded by `extract_tradier_full.py`, no live
-   wiring, 50-name dataset role absorbed.
-2. (`S`) `git rm scripts/run_daily_bars_all_active.py` + drop entry —
-   superseded by `--stage daily_bars`.
-3. (`S`) `git rm scripts/run_corporate_actions_all_active.py` + drop
-   entry — superseded by `--stage corporate_actions`.
-4. (`M`) Promote `DEFAULT_UNIVERSE` to
-   `tpcore.backtest.universe.BACKTEST_UNIVERSE_50`, import from
-   `ops/cron_corporate_actions.py`, then `git rm
-   scripts/backfill_backtest_universe.py`.
-5. (`M`) Add `_stage_compute_fundamental_ratios` to `ops.py`, register
-   in `_STAGE_SPECS` + `OPS_UPDATE_STAGES`, then `git rm
-   scripts/compute_fundamental_ratios.py`.
-6. (`XS`) Re-comment the four KEEP_AS_OPS_HELPER allowlist entries
-   (`test_aar_pipeline`, `test_kill_switch`, `ingest_tradier_csv`,
-   `compare_baselines`, `extract_tradier_full`) from `# TODO(P5)` to
-   `# OPS_HELPER` with one-line rationale each, mirroring the existing
-   `agent_pr_label_guard` / `gen_engine_manifest` recorded-decision
-   pattern.
+The operator overruled the keep-as-helper disposition. All ten
+P5-track orphans plus the three "deliberate standalone" allowlist
+entries were resolved across two PRs (this catalog's audit PR + the
+zero-allowlist sweep PR). Final state:
 
-Total scope: ~half-day. Result: 10 P5 orphans → 0 (5 deleted, 5
-promoted to operator-helper allowlist entries with recorded rationale).
+1. ✅ `scripts/extract_tradier.py` — DELETED (superseded by the new
+   `--stage extract_tradier_full`).
+2. ✅ `scripts/run_daily_bars_all_active.py` — DELETED (superseded by
+   `--stage daily_bars`).
+3. ✅ `scripts/run_corporate_actions_all_active.py` — DELETED
+   (superseded by `--stage corporate_actions`).
+4. ✅ `scripts/backfill_backtest_universe.py` — DELETED; constant
+   promoted to `tpcore.backtest.universe.DEFAULT_BACKTEST_UNIVERSE`;
+   `ops/cron_corporate_actions.py` imports it directly.
+5. ✅ `scripts/compute_fundamental_ratios.py` — MIGRATED to
+   `ops.py --stage compute_fundamental_ratios`, chained immediately
+   after `fundamentals_refresh` in `OPS_UPDATE_STAGES`; script
+   deleted.
+6. ✅ `scripts/test_aar_pipeline.py` — MIGRATED to
+   `ops.py --stage aar_pipeline_smoke`; script deleted.
+7. ✅ `scripts/test_kill_switch.py` — MIGRATED to
+   `ops.py --stage kill_switch_smoke`; script deleted.
+8. ✅ `scripts/compare_baselines.py` — MIGRATED to
+   `ops.py --stage compare_baselines`; script deleted.
+9. ✅ `scripts/extract_tradier_full.py` — MIGRATED to
+   `ops.py --stage extract_tradier_full`; script deleted.
+10. ✅ `scripts/ingest_tradier_csv.py` — MIGRATED to
+    `ops.py --stage ingest_tradier_csv`; script deleted.
+11. ✅ `agent_pr_label_guard` allowlist entry — REMOVED; the script
+    has genuine wiring via ``.github/workflows/ci.yml``.
+12. ✅ `gen_engine_manifest` allowlist entry — REMOVED; the script
+    has genuine wiring via ``pyproject.toml`` sentinel-fenced
+    comments + shell wrappers.
+13. ✅ `audit_code_duplication` allowlist entry — REMOVED;
+    ``scripts/tests/test_audit_code_duplication.py`` switched from
+    ``importlib.import_module("scripts.audit_code_duplication")`` to
+    a real ``import scripts.audit_code_duplication`` so the
+    detector recognises the wiring.
+
+**End state:** ``_ALLOWLIST`` is empty; ``test_allowlist_is_empty``
+locks the invariant in. Every legitimate operator helper is now
+reachable through ``scripts/ops.py --stage <name>``.
