@@ -3,6 +3,7 @@ name: engine-implementer
 description: "Fresh-context engine implementer. Use when scaffolding or modifying an engine package (5-plug structure). Preloads the engine-readiness checklist skill so the 10 non-optional sections are present from the start; the engine-build path-scoped rule auto-applies as the implementer touches engine files."
 tools: Bash, Read, Edit, Write, Grep, Glob
 model: opus
+isolation: worktree
 skills:
   - engine-readiness
 ---
