@@ -27,13 +27,20 @@ ECR
 action:        ADD | REMOVE | MODIFY        # exactly one
 engine:        <engine name>                # _PROFILE key vocabulary
 # ── ADD only (onboard / graduate) ─────────────────────────────────
-source:        new_scaffold | lab_candidate # brand-new vs Lab-graduated
+source:        new_scaffold | lab_candidate | existing_code
+                                            # new_scaffold: copy from tpcore/templates/engine_template/
+                                            # lab_candidate: Lab-graduated (dossier-gated)
+                                            # existing_code: register engine code shipped via a
+                                            #   separate PR — the SP-F → catalyst pattern.
+                                            #   Engine dir MUST already exist on disk.
 lab_dossier:   <path under docs/lab/…>      # required iff source=lab_candidate
 cadence:       daily | weekly_first_trading_day | monthly_first_trading_day
 allocator:     true | false                 # allocator_eligible
 dispatch_order: <int>                        # unique among non-RETIRED
-gate_dsr:      <float ≥ 0.95>               # re-verified from the dossier
-gate_cred:     <int ≥ 60>                   # re-verified from the dossier
+gate_dsr:      <float ≥ 0.95>               # ONLY for source=lab_candidate;
+                                            #   re-verified from the dossier.
+                                            #   FORBIDDEN for new_scaffold/existing_code.
+gate_cred:     <int ≥ 60>                   # same scoping as gate_dsr.
 need:          <one line: the edge / why this engine exists>
 # ── REMOVE only (retire / archive) ────────────────────────────────
 reason:        <one line: cause of death>

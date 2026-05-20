@@ -41,7 +41,7 @@ class EngineChangeRequest(BaseModel):
     action: ECRAction
     engine: str
     # ADD
-    source: Literal["new_scaffold", "lab_candidate"] | None = None
+    source: Literal["new_scaffold", "lab_candidate", "existing_code"] | None = None
     lab_dossier: str | None = None
     cadence: Cadence | None = None
     allocator: bool | None = None
