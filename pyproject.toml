@@ -215,6 +215,17 @@ ignore = ["E501"]
 # `# noqa: SLF001` (CLAUDE.md / STYLE_GUIDE).
 "catalyst/tests/test_catalyst_backtest.py" = ["SLF"]
 "catalyst/tests/test_lab_cluster_window_byte_identical.py" = ["SLF"]
+# vector_composite Lab candidate (spec
+# docs/superpowers/specs/2026-05-20-vector-composite-lab-candidate.md
+# §3.3): the byte-identical / no-cross-trial-leakage C1-C4
+# characterization test REQUIRES naming the ``vector.backtest``-private
+# `_COMPOSITE_MODE_OVERRIDE` to prove the per-call module-global reset
+# discipline (H-VC-8 — the same SP-D/SP-E/SP-F precedent for engine-
+# OWNED Lab seams). Engine-lane-module-private (NOT tpcore-private)
+# access; the scoped per-file ignore is the correct form (mirrors the
+# SP-B/SP-D/SP-E/SP-F precedents above) — never an inline
+# `# noqa: SLF001` (CLAUDE.md / STYLE_GUIDE).
+"vector/tests/test_composite_flag_byte_identical.py" = ["SLF"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

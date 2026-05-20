@@ -117,6 +117,17 @@ _DE_CEILING_OVERRIDE: float | None = None
 _CATALYST_WINDOW_OVERRIDE: int | None = None
 _HARD_STOP_PCT_OVERRIDE: float | None = None
 _SWING_SCORE_THRESHOLD_OVERRIDE: float | None = None  # None = no gate
+# vector_composite Lab candidate (spec
+# docs/superpowers/specs/2026-05-20-vector-composite-lab-candidate.md
+# §3.1): off-by-default flag selecting AND-gate (legacy) vs composite
+# (top-decile selection of value/catalyst/technical z-score weighted
+# 0.35/0.40/0.25). None ⇒ "and_gate"; explicit "composite" ⇒ the
+# Lab candidate branch. Reset per call to run_vector_with_context (§4.2,
+# H-VC-8) so no module-global state bleeds across trials.
+_COMPOSITE_MODE_OVERRIDE: str | None = None
+
+# Legacy default for the composite_mode toggle (the AND-gate path).
+COMPOSITE_MODE_DEFAULT: str = "and_gate"
 
 
 def _pb_ceiling() -> float:
@@ -143,11 +154,24 @@ def _swing_score_threshold() -> float | None:
     return _SWING_SCORE_THRESHOLD_OVERRIDE
 
 
+def _composite_mode() -> str:
+    """Active composite mode: ``"composite"`` iff the override is the
+    exact string ``"composite"``, else ``"and_gate"`` (the legacy default
+    and the value when no Lab override is supplied). Pure accessor;
+    callers MUST NOT branch on the raw module global."""
+    if _COMPOSITE_MODE_OVERRIDE == "composite":
+        return "composite"
+    return COMPOSITE_MODE_DEFAULT
+
+
 def default_params() -> dict[str, Any]:
     """Current live defaults for EXACTLY this engine's
     ops.lab.run.PARAM_RANGES keys (SP3 O1 seam, spec §7.1). Pure. The
     swing-score default mirrors run_vector_with_context's 0.0-when-None
-    convention so the diff is well-defined."""
+    convention so the diff is well-defined. ``composite_mode`` reports
+    the legacy AND-gate default — the Lab dossier's ``param_diff`` then
+    carries the true ``and_gate → composite`` delta (spec §4.2,
+    H-VC-10)."""
     swing = _swing_score_threshold()
     return {
         "pb_ceiling": float(_pb_ceiling()),
@@ -155,6 +179,12 @@ def default_params() -> dict[str, Any]:
         "catalyst_window_days": int(_catalyst_window_days()),
         "swing_score_threshold": float(swing) if swing is not None else 0.0,
         "stop_pct": float(_hard_stop_pct()),
+        # ALWAYS the legacy default (NOT _composite_mode() — that would
+        # report the current override state, polluting the Lab dossier's
+        # ``param_diff`` between trials. The dossier needs the engine's
+        # static legacy default so the delta is the true variant choice,
+        # not "default == current override".) Spec §4.2, H-VC-10.
+        "composite_mode": COMPOSITE_MODE_DEFAULT,
     }
 
 
@@ -617,6 +647,254 @@ def _run(
 
 
 # ────────────────────────────────────────────────────────────────────────────
+# vector_composite Lab candidate — composite scorer (spec §2.2–2.4 +
+# §3.1; off-by-default; reached only when ``_composite_mode()=="composite"``)
+# ────────────────────────────────────────────────────────────────────────────
+
+# Spec §2.4 — pinned weights (no grid).
+COMPOSITE_W_VALUE: float = 0.35
+COMPOSITE_W_CATALYST: float = 0.40
+COMPOSITE_W_TECHNICAL: float = 0.25
+
+# Spec §2.3 — zero-variance guard for cross-sectional z-score.
+COMPOSITE_ZERO_VAR_EPS: float = 1e-9
+
+# Spec §2.2 — insider-cluster window (strictly backward).
+COMPOSITE_INSIDER_LOOKBACK_DAYS: int = 30
+
+# Spec §2.4 — top-decile selection.
+COMPOSITE_TOP_DECILE_PCT: float = 0.10
+
+# Spec §2.2 — value sub-weight on D/E (P/B is the primary value axis).
+COMPOSITE_DE_SUB_WEIGHT: float = 0.5
+
+# Spec §2.2 — technical category → graded raw signal.
+_COMPOSITE_TECH_MAP: dict[str | None, float] = {
+    "breakout_above_50ma": 1.0,
+    "pullback_to_10ma": 0.7,
+    "pullback_to_20ma": 0.6,
+    None: 0.0,
+}
+
+
+def _zscore_with_guard(values: list[float]) -> list[float]:
+    """Cross-sectional z-score with the spec §2.3 zero-variance guard:
+    ``std <= eps → z := 0.0`` for every entry. Pure, deterministic."""
+    n = len(values)
+    if n == 0:
+        return []
+    arr = np.asarray(values, dtype=float)
+    mu = float(arr.mean())
+    sigma = float(arr.std(ddof=1)) if n > 1 else 0.0
+    if sigma <= COMPOSITE_ZERO_VAR_EPS:
+        return [0.0] * n
+    return ((arr - mu) / sigma).tolist()
+
+
+def _composite_per_ticker_signals(
+    *,
+    ticker: str,
+    today: date,
+    row: pd.Series,
+    prior_close: float,
+    funds: dict | None,
+    catalysts_for_ticker: list[tuple[date, float]],
+    insider_dates: list[date],
+    catalyst_window_days: int,
+) -> dict[str, float] | None:
+    """Per-ticker raw signal trio (value / earnings / insider / technical).
+
+    Strictly point-in-time / backward windows per spec §2.2 + H-VC-6.
+    Returns None when value-family inputs are missing (pb / de / revenue
+    null) — matches the live AND-gate's null-guard (no imputation; that
+    would be a silent lookahead/quality hazard).
+    """
+    if not funds:
+        return None
+    pb = funds.get("pb")
+    de = funds.get("de")
+    rev = funds.get("revenue")
+    if pb is None or de is None or rev is None:
+        return None
+    pb_f = float(pb)
+    de_f = float(de)
+    # Spec §2.2 raw value signal: cheaper (lower P/B) and less-levered
+    # (lower D/E) is better; D/E sub-weighted by COMPOSITE_DE_SUB_WEIGHT.
+    # Sign is applied at the raw step; z-standardisation happens
+    # cross-sectionally over the eligible universe (§2.3).
+    v_raw_pre = -pb_f - COMPOSITE_DE_SUB_WEIGHT * de_f
+
+    # Strictly-backward earnings window [today - w, today].
+    earn_signal = 0.0
+    backward_cutoff = today - timedelta(days=int(catalyst_window_days))
+    for evt_date, mag in catalysts_for_ticker:
+        if backward_cutoff <= evt_date <= today:
+            earn_signal = max(earn_signal, max(0.0, float(mag)))
+
+    # Strictly-backward insider-cluster window [today - 30, today].
+    insider_signal = 0.0
+    if insider_dates:
+        insider_cutoff = today - timedelta(days=COMPOSITE_INSIDER_LOOKBACK_DAYS)
+        if any(insider_cutoff <= d <= today for d in insider_dates):
+            insider_signal = 1.0
+
+    trigger = _technical_trigger(row, prior_close)
+    tech_raw = _COMPOSITE_TECH_MAP.get(trigger, 0.0)
+
+    return {
+        "v_raw_pre": v_raw_pre,
+        "earn_signal": earn_signal,
+        "insider_signal": insider_signal,
+        "tech_raw": tech_raw,
+        "trigger": trigger or "",
+    }
+
+
+def _run_composite(
+    *,
+    panels: dict[str, pd.DataFrame],
+    spy_panel: pd.DataFrame | None,
+    spy_rv_pct: pd.Series | None,
+    fundamentals: dict[str, list[dict]],
+    catalysts: dict[str, list[tuple[date, float]]],
+    start: date,
+    end: date,
+    eligible_tickers: list[str],
+    insider_clusters: dict[str, list[date]] | None = None,
+) -> list[TradeRecord]:
+    """Spec §2 composite scorer + top-decile selection. Replaces the
+    AND-gate's pass/fail chain with a graded ranking; everything
+    downstream (sizing / crash-guard / cost model / `_simulate_trade`)
+    is unchanged."""
+    insider_clusters = insider_clusters or {}
+    all_dates = sorted({d for df in panels.values() for d in df.index})
+    all_dates = [d for d in all_dates if start <= d <= end]
+    trades: list[TradeRecord] = []
+    next_eligible_idx = 0
+    cooldown_state: dict[str, date] = {}
+    catalyst_window = int(_catalyst_window_days())
+
+    for di, today in enumerate(all_dates):
+        if di < next_eligible_idx:
+            continue
+        if spy_panel is not None and _spy_in_cooldown(spy_panel, today, cooldown_state):
+            continue
+        rv_today = float(spy_rv_pct.loc[today]) if (spy_rv_pct is not None and today in spy_rv_pct.index) else None
+        size_factor = _size_factor_from_rv(rv_today)
+
+        # Per-sim_date cross-sectional scoring — for each eligible
+        # ticker compute the raw signal trio, then standardise
+        # cross-sectionally, then rank, then top-decile-select.
+        per_ticker_raw: list[tuple[str, pd.DataFrame, int, dict]] = []
+        for ticker, df in panels.items():
+            if today not in df.index:
+                continue
+            idx = df.index.get_loc(today)
+            if idx < SMA_200 + 5:
+                continue
+            row = df.iloc[idx]
+            prior_close = float(row["prior_close"])
+            if math.isnan(prior_close):
+                continue
+            funds = _pit_fundamentals(fundamentals.get(ticker, []), today)
+            signals = _composite_per_ticker_signals(
+                ticker=ticker,
+                today=today,
+                row=row,
+                prior_close=prior_close,
+                funds=funds,
+                catalysts_for_ticker=catalysts.get(ticker, []),
+                insider_dates=insider_clusters.get(ticker, []),
+                catalyst_window_days=catalyst_window,
+            )
+            if signals is None:
+                continue
+            per_ticker_raw.append((ticker, df, idx, {**signals, "funds": funds or {}}))
+
+        if not per_ticker_raw:
+            continue
+
+        # Cross-sectional standardisation (spec §2.3 — single-group
+        # full-universe; the §6.1 BLOCKER fallback for the absent GICS
+        # source) + zero-variance guard.
+        v_raws = [d["v_raw_pre"] for _, _, _, d in per_ticker_raw]
+        earn_raws = [d["earn_signal"] for _, _, _, d in per_ticker_raw]
+        insider_raws = [d["insider_signal"] for _, _, _, d in per_ticker_raw]
+        tech_raws = [d["tech_raw"] for _, _, _, d in per_ticker_raw]
+        v_zs = _zscore_with_guard(v_raws)
+        earn_zs = _zscore_with_guard(earn_raws)
+        insider_zs = _zscore_with_guard(insider_raws)
+        tech_zs = _zscore_with_guard(tech_raws)
+
+        # Composite = 0.35*v_z + 0.40*(earn_z + insider_z) + 0.25*tech_z
+        composites: list[tuple[float, str, pd.DataFrame, int, dict]] = []
+        for i, (ticker, df, idx, sig) in enumerate(per_ticker_raw):
+            c_z = earn_zs[i] + insider_zs[i]
+            composite = (
+                COMPOSITE_W_VALUE * v_zs[i]
+                + COMPOSITE_W_CATALYST * c_z
+                + COMPOSITE_W_TECHNICAL * tech_zs[i]
+            )
+            composites.append((composite, ticker, df, idx, sig))
+
+        # Top-decile selection: ceil(0.10*N), minimum 1.
+        composites.sort(key=lambda x: x[0], reverse=True)
+        n_decile = max(1, int(math.ceil(COMPOSITE_TOP_DECILE_PCT * len(composites))))
+        top = composites[:n_decile]
+
+        # Single position at a time — first match in the top decile.
+        chosen: tuple[str, pd.DataFrame, int, dict] | None = None
+        for _, ticker, df, idx, sig in top:
+            # Swing-score floor (search-only, mirrors _run) — applied to
+            # the same synthetic score so the toggle remains comparable
+            # across modes when a Lab trial pins a swing floor.
+            swing_floor = _swing_score_threshold()
+            if swing_floor is not None:
+                mag = sig.get("earn_signal") if sig.get("earn_signal", 0.0) > 0 else None
+                if _synth_swing_score(mag) < swing_floor:
+                    continue
+            chosen = (ticker, df, idx, sig)
+            break
+
+        if chosen is None:
+            continue
+
+        ticker, df, idx, sig = chosen
+        if idx + 1 >= len(df):
+            continue
+        next_open = float(df.iloc[idx + 1]["open"])
+        entry_price = next_open * (1 + _slippage_per_side(ticker))
+        funds = sig.get("funds", {})
+        trigger = sig.get("trigger") or None
+        magnitude = sig.get("earn_signal") if sig.get("earn_signal", 0.0) > 0 else None
+        record = _simulate_trade(
+            df,
+            entry_idx=idx + 1,
+            entry_price=entry_price,
+            ticker=ticker,
+            entry_date=df.index[idx + 1],
+            trigger=trigger or "composite_top_decile",
+            catalyst_mag=magnitude,
+            pb_at_entry=funds.get("pb"),
+            de_at_entry=funds.get("de"),
+            rv20_at_entry_pct=rv_today,
+            size_factor=size_factor,
+        )
+        trades.append(record)
+
+        if record.exit_date is not None:
+            try:
+                exit_idx = all_dates.index(record.exit_date)
+            except ValueError:
+                exit_idx = di + record.holding_days
+            next_eligible_idx = exit_idx + 1
+        else:
+            next_eligible_idx = di + 1
+
+    return trades
+
+
+# ────────────────────────────────────────────────────────────────────────────
 # Metrics + rendering — same shape as Sigma/Reversion
 # ────────────────────────────────────────────────────────────────────────────
 
@@ -718,6 +996,7 @@ VECTOR_OVERRIDE_KEYS = (
     "catalyst_window_days",
     "swing_score_threshold",
     "stop_pct",
+    "composite_mode",
 )
 
 
@@ -807,7 +1086,14 @@ def _build_diagnostic_inputs_for_search(
 
 @dataclass
 class VectorWindowContext:
-    """Pre-loaded panels + fundamentals + catalysts for one walk-forward window."""
+    """Pre-loaded panels + fundamentals + catalysts for one walk-forward window.
+
+    ``insider_clusters`` (added 2026-05-20) is an additive, default-empty
+    payload consumed only by the ``composite_mode=composite`` Lab branch
+    (spec docs/superpowers/specs/2026-05-20-vector-composite-lab-candidate.md
+    §2.2). The legacy AND-gate path does not read it — the default
+    ``{}`` keeps every pre-composite call site byte-identical.
+    """
 
     panels: dict[str, pd.DataFrame]
     spy_panel: pd.DataFrame | None
@@ -819,6 +1105,11 @@ class VectorWindowContext:
     start: date
     end: date
     universe: tuple[str, ...] | None
+    # Composite-only PIT signal — strictly backward 30d insider-cluster
+    # dates per ticker (≥2 distinct BUY insiders / 30d window). Empty
+    # dict ⇒ insider sub-signal is zero for all names that sim_date,
+    # the zero-variance z-guard handles it safely (spec §2.3, H-VC-7).
+    insider_clusters: dict[str, list[date]] = field(default_factory=dict)
 
 
 async def load_vector_window_context(
@@ -881,6 +1172,7 @@ def run_vector_with_context(
 
     global _PB_CEILING_OVERRIDE, _DE_CEILING_OVERRIDE, _CATALYST_WINDOW_OVERRIDE
     global _HARD_STOP_PCT_OVERRIDE, _SWING_SCORE_THRESHOLD_OVERRIDE
+    global _COMPOSITE_MODE_OVERRIDE
     overrides = dict(overrides or {})
     _PB_CEILING_OVERRIDE = (
         float(overrides["pb_ceiling"]) if "pb_ceiling" in overrides else None
@@ -899,10 +1191,19 @@ def run_vector_with_context(
         float(overrides["swing_score_threshold"])
         if "swing_score_threshold" in overrides else None
     )
+    # vector_composite Lab candidate flag (spec §4.2, H-VC-8): the override
+    # MUST be reset every call so module-global state does not bleed across
+    # Lab trials. Mirrors every sibling _*_OVERRIDE reset above.
+    _COMPOSITE_MODE_OVERRIDE = (
+        str(overrides["composite_mode"]) if "composite_mode" in overrides else None
+    )
     _TIER_ROUND_TRIP_COSTS.clear()
     _TIER_ROUND_TRIP_COSTS.update(context.tier_round_trip_costs)
 
     if not context.panels or not context.eligible_tickers:
+        # Reset flag before early-return so a second call sees a clean
+        # module-global (H-VC-8 — no leakage even on degenerate inputs).
+        _COMPOSITE_MODE_OVERRIDE = None
         return BacktestRunResult(
             engine="vector", parameters=overrides, credibility_score=0, passed_gate=False,
             sharpe=0.0, profit_factor=0.0, max_drawdown=0.0, trades=0, dsr=0.0,
@@ -910,15 +1211,31 @@ def run_vector_with_context(
             ruin_probability=0.0, trade_log=[],
         )
 
-    trades = _run(
-        panels=context.panels,
-        spy_panel=context.spy_panel,
-        spy_rv_pct=context.spy_rv_pct,
-        fundamentals=context.fundamentals,
-        catalysts=context.catalysts,
-        start=context.start,
-        end=context.end,
-    )
+    # Mode selection — the make-or-break invariant (spec §3): the live
+    # AND-gate path is the default; ``composite`` reaches the candidate's
+    # top-decile branch via the additive scorer.
+    if _composite_mode() == "composite":
+        trades = _run_composite(
+            panels=context.panels,
+            spy_panel=context.spy_panel,
+            spy_rv_pct=context.spy_rv_pct,
+            fundamentals=context.fundamentals,
+            catalysts=context.catalysts,
+            start=context.start,
+            end=context.end,
+            eligible_tickers=context.eligible_tickers,
+            insider_clusters=context.insider_clusters,
+        )
+    else:
+        trades = _run(
+            panels=context.panels,
+            spy_panel=context.spy_panel,
+            spy_rv_pct=context.spy_rv_pct,
+            fundamentals=context.fundamentals,
+            catalysts=context.catalysts,
+            start=context.start,
+            end=context.end,
+        )
     summary = _summary(trades)
 
     search_trades = _trade_records_to_search_trades(trades)
@@ -933,6 +1250,10 @@ def run_vector_with_context(
             float(_swing_score_threshold()) if _swing_score_threshold() is not None else 0.0
         ),
         "stop_pct": float(_hard_stop_pct()),
+        # Echo the active mode into the result so the Lab dossier's
+        # ``param_diff`` carries the true legacy → variant delta
+        # (spec §4.2, H-VC-10).
+        "composite_mode": _composite_mode(),
     }
     trade_dicts, price_data = _build_diagnostic_inputs_for_search(
         trades, context.panels, context.spy_panel,
@@ -989,6 +1310,15 @@ LAB_TARGET = LabTarget(
         "catalyst_window_days": (3, 10, "int"),
         "swing_score_threshold": (55.0, 75.0, "float"),
         "stop_pct": (0.04, 0.10, "float"),
+        # vector_composite Lab candidate (spec §4.1, H-VC-2): the ONE
+        # new sampled key — a binary choice toggle between the legacy
+        # AND-gate path and the §2 composite top-decile scorer. The
+        # (0, 0) low/high is the established placeholder for
+        # ``choice:`` specs; the sampler ignores low/high for choice
+        # kinds and samples from the comma-separated value list.
+        # Weights/sector-method/cluster-window/decile/long-only stay
+        # code constants — never sampled (H-VC-2).
+        "composite_mode": (0, 0, "choice:and_gate,composite"),
     },
     run_for_search=run_for_search,
     load_window_context=load_vector_window_context,

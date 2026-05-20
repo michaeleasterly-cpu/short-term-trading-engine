@@ -56,7 +56,15 @@ def test_engine_declares_valid_lab_target(engine):
     lt = getattr(mod, "LAB_TARGET", None)
     assert isinstance(lt, LabTarget), f"{engine}: no module-level LAB_TARGET"
     # param_ranges byte-match the T0 literal keyset (no drift on the move).
-    assert sorted(lt.param_ranges) == _T0_PARAM_RANGES_KEYSETS[engine]
+    # Exception: vector's `composite_mode` toggle was added by the
+    # vector_composite Lab candidate (spec
+    # docs/superpowers/specs/2026-05-20-vector-composite-lab-candidate.md
+    # §4.1, H-VC-2) — the SAME PR that lands the toggle updates this
+    # assertion. Other engines remain at their T0 keysets.
+    expected = list(_T0_PARAM_RANGES_KEYSETS[engine])
+    if engine == "vector":
+        expected = sorted([*expected, "composite_mode"])
+    assert sorted(lt.param_ranges) == expected
     # The 4 callables resolve to the engine's already-defined symbols.
     assert lt.run_for_search is mod.run_for_search
     assert lt.default_params is mod.default_params
@@ -71,9 +79,20 @@ def test_lab_target_param_ranges_full_value_byte_parity(engine):
     pre-refactor; T4 deleted that mirror — the engine LAB_TARGET is now
     the sole source). Exact dict equality — a bound edit to the engine
     LAB_TARGET reds CI against this oracle (the spec's byte-parity
-    requirement, guarded at the value level not just shape)."""
+    requirement, guarded at the value level not just shape).
+
+    Exception: vector's `composite_mode` toggle was added by the
+    vector_composite Lab candidate (spec
+    docs/superpowers/specs/2026-05-20-vector-composite-lab-candidate.md
+    §4.1, H-VC-2) — the SAME PR that lands the toggle updates this
+    expected dict. The candidate-OWNED augmentation is the ONLY allowed
+    drift; every other tuple stays at its T0 byte.
+    """
     mod = importlib.import_module(f"{engine}.backtest")
-    assert mod.LAB_TARGET.param_ranges == _T0_PARAM_RANGES_FULL[engine]
+    expected = dict(_T0_PARAM_RANGES_FULL[engine])
+    if engine == "vector":
+        expected["composite_mode"] = (0, 0, "choice:and_gate,composite")
+    assert mod.LAB_TARGET.param_ranges == expected
 
 
 def test_engine_template_has_lab_target_skeleton():
