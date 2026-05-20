@@ -77,6 +77,9 @@ from tpcore.quality.validation.checks.row_integrity import check_row_integrity
 from tpcore.quality.validation.checks.sec_filings_freshness import (
     check_sec_filings_freshness,
 )
+from tpcore.quality.validation.checks.sec_insider_monotone import (
+    check_sec_insider_monotone,
+)
 from tpcore.quality.validation.checks.short_interest_freshness import (
     check_short_interest_freshness,
 )
@@ -129,6 +132,7 @@ _CHECK_FN: dict[str, _CheckCallable] = {
     "corporate_actions_completeness": _src(check_corporate_actions_completeness, None),
     "earnings_events_freshness": _src(check_earnings_events_freshness, None),
     "sec_filings_freshness": _src(check_sec_filings_freshness, None),
+    "sec_insider_monotone": _src(check_sec_insider_monotone, None),
     "liquidity_tiers_freshness": _src(check_liquidity_tiers_freshness, None),
     "ticker_classifications_coverage": _src(
         check_ticker_classifications_coverage, None

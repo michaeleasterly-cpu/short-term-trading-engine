@@ -130,6 +130,21 @@ _SPECS: tuple[HealSpec, ...] = (
     HealSpec(check_name="sec_filings_freshness", source="sec_insider_transactions",
              healable=True, stage="sec_filings",
              params={"repair": "true"}, max_attempts=2),
+    # Per-ticker zero-tolerance monotone-non-decrease invariant on
+    # platform.sec_insider_transactions. Form 4 is append-only — any
+    # per-ticker rowcount drop vs the prior snapshot is vendor
+    # truncation / deletion. Heal via the same canonical sec_filings
+    # `repair=true` stage the freshness check already uses (full T1+T2
+    # stock universe, 200d lookback, skip-guard off) — that's the
+    # broad re-pull most likely to restore truncated rows. Bounded by
+    # max_attempts=2. Baseline lives in
+    # platform.sec_insider_row_counts_snapshot (per-ticker PK; UPSERT
+    # on PASS; the check's read+compare+UPSERT runs in a single tx so
+    # a partial write can't poison the next cycle).
+    HealSpec(check_name="sec_insider_monotone",
+             source="sec_insider_transactions",
+             healable=True, stage="sec_filings",
+             params={"repair": "true"}, max_attempts=2),
     HealSpec(check_name="macro_indicators_freshness", source="macro_indicators",
              healable=True, stage="macro_indicators",
              params={"skip_guard_days": "0"}, max_attempts=2),
