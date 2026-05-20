@@ -1,9 +1,11 @@
 """triage-service daemon — event-driven advisory triage (data + engine
-lanes; LT-P3 §4 + Epic E Phase 3 / FORK B = B1).
++ lab-emitter lanes; LT-P3 §4 + Epic E Phase 3 / FORK B = B1 + SP-G).
 
 Structural sibling of ``ops/engine_service.py`` / ``ops/data_repair_service.py``,
-serving the *advisory* path. It co-hosts BOTH lanes' triage loops as
-two independent ``_run_supervised`` co-tasks on the ONE advisory pool:
+serving the *advisory* path. It co-hosts THREE lanes' triage loops as
+three independent ``_run_supervised`` co-tasks on the ONE advisory
+pool (SP-G added the third co-task; the daemon is still a SINGLE
+daemon — the two-daemon invariant is preserved):
 
   * DATA lane — when the data lane gives up on a data problem and emits
     a ``DATA_REPAIR_ESCALATED`` (bounded self-heal exhausted) or a
@@ -14,6 +16,11 @@ two independent ``_run_supervised`` co-tasks on the ONE advisory pool:
     swallowed-digest) emits an ``ENGINE_ESCALATED`` that the Ladder
     leaves open + undispositioned, this fires one
     ``ops.engine_llm_triage.run_triage``.
+  * LAB-EMITTER lane (SP-G) — the third co-task fires on the
+    ``LAB_LEDGER_CAPACITY_AVAILABLE`` event class (per operator Q6
+    decision the event class is DEFERRED in v1 — the co-task is
+    structurally present with an empty trigger tuple; the
+    operator-command path ``/lab-spec-emit`` is the v1 trigger).
 
 Why B1 (Epic E spec §8): the advisory daemon ALREADY exists, is
 ALREADY in the closed 4-token installer whitelist, and is ALREADY
@@ -63,6 +70,10 @@ import structlog
 
 from ops.engine_llm_triage import run_triage as engine_run_triage
 from ops.llm_data_triage import run_triage
+from ops.llm_lab_emitter import (
+    LAB_EMITTER_TRIGGER_EVENT_TYPES,
+    run_lab_emitter_cotask,
+)
 from tpcore.db import build_asyncpg_pool
 
 logger = structlog.get_logger(__name__)
@@ -96,8 +107,9 @@ TRIGGER_EVENT_TYPES: tuple[str, ...] = (
 # re-checks the Ladder open set itself (no ordering coupling).
 ENGINE_TRIGGER_EVENT_TYPES: tuple[str, ...] = ("ENGINE_ESCALATED",)
 # poll (1 per lane) + each lane's run_triage acquires + headroom; with
-# two co-hosted lanes sharing the one advisory pool we widen the cap.
-POOL_MAX_SIZE = 4
+# THREE co-hosted lanes (data, engine, lab_emitter — SP-G) sharing the
+# one advisory pool we widen the cap once more.
+POOL_MAX_SIZE = 5
 
 
 async def _find_new_trigger(
@@ -341,6 +353,40 @@ async def _engine_loop(
     )
 
 
+async def _lab_emitter_loop(
+    pool, stop_event: asyncio.Event, lock_dir: str = DEFAULT_LOCK_DIR
+) -> None:
+    """LAB-EMITTER co-task (SP-G Phase 1; spec §4.2). The third crash-
+    isolated ``_run_supervised`` co-task on the ONE advisory pool.
+
+    Per operator Q6 decision (spec §10): the
+    ``LAB_LEDGER_CAPACITY_AVAILABLE`` event class is DEFERRED in this
+    PR. The co-task is structurally present (mirrors data + engine
+    lanes for symmetry), but its trigger event-type set
+    (``LAB_EMITTER_TRIGGER_EVENT_TYPES``) is empty by design — the
+    poll runs every ``POLL_INTERVAL_SEC`` and sees nothing to do; the
+    operator-command path (the ``/lab-spec-emit`` skill calling
+    ``python -m ops.llm_lab_emitter``) is the v1 trigger.
+
+    When the operator decides to populate
+    ``LAB_EMITTER_TRIGGER_EVENT_TYPES`` (task #25 / a future
+    event-emitter PR), this co-task starts firing
+    ``run_lab_emitter_cotask`` on the trigger — zero code change here.
+    The two-daemon invariant test
+    (``scripts/tests/test_two_daemon_invariant.py``) MUST stay green
+    UNEDITED — SP-G adds a co-task, not a daemon (the installer
+    whitelist + launchd label are unchanged).
+    """
+    await _lane_loop(
+        pool,
+        stop_event,
+        lock_dir,
+        event_types=LAB_EMITTER_TRIGGER_EVENT_TYPES,
+        triage_fn=run_lab_emitter_cotask,
+        lane="lab_emitter",
+    )
+
+
 async def _run_supervised(
     name: str, factory, stop_event: asyncio.Event, backoff: float = 5.0
 ) -> None:
@@ -388,41 +434,49 @@ async def _amain() -> int:
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, _handle_signal, sig)
 
-    # FORK B = B1: TWO independent _run_supervised co-tasks on the ONE
-    # advisory pool — the DATA lane and the ENGINE lane. Each is crash-
-    # isolated from the other (a crash in one is logged + restarted by
-    # its own _run_supervised and never propagates to the sibling or the
-    # daemon). Both share this ``pool`` and the single ``lock_dir``
-    # self-exclusion lock. Mirrors engine_service._amain's two-co-task
-    # gather/shutdown shape verbatim.
+    # FORK B = B1: THREE independent _run_supervised co-tasks on the
+    # ONE advisory pool — the DATA lane, the ENGINE lane, and (SP-G)
+    # the LAB-EMITTER lane. Each is crash-isolated from the others (a
+    # crash in one is logged + restarted by its own _run_supervised and
+    # never propagates to a sibling or the daemon). All share this
+    # ``pool`` and the single ``lock_dir`` self-exclusion lock. The
+    # two-daemon invariant test
+    # (``scripts/tests/test_two_daemon_invariant.py``) MUST stay green
+    # UNEDITED — SP-G adds a co-task, not a daemon (the installer
+    # whitelist + launchd label are unchanged).
     async def _data_factory():
         await _main_loop(pool, stop_event, lock_dir)
 
     async def _engine_factory():
         await _engine_loop(pool, stop_event, lock_dir)
 
+    async def _lab_emitter_factory():
+        await _lab_emitter_loop(pool, stop_event, lock_dir)
+
     data_task = asyncio.create_task(
         _run_supervised("data", _data_factory, stop_event))
     engine_task = asyncio.create_task(
         _run_supervised("engine", _engine_factory, stop_event))
+    lab_emitter_task = asyncio.create_task(
+        _run_supervised("lab_emitter", _lab_emitter_factory, stop_event))
     try:
-        # Exit on signal (stop_event) OR if both lanes have exited
+        # Exit on signal (stop_event) OR if all lanes have exited
         # (nothing left to supervise — don't zombie the process).
         stop_waiter = asyncio.ensure_future(stop_event.wait())
-        both_done = asyncio.gather(data_task, engine_task)
+        all_done = asyncio.gather(data_task, engine_task, lab_emitter_task)
         done, _pending = await asyncio.wait(
-            {stop_waiter, both_done},
+            {stop_waiter, all_done},
             return_when=asyncio.FIRST_COMPLETED)
         stop_waiter.cancel()
-        both_done.cancel()
+        all_done.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await stop_waiter
         with contextlib.suppress(BaseException):
-            await both_done
+            await all_done
     finally:
-        for t in (data_task, engine_task):
+        for t in (data_task, engine_task, lab_emitter_task):
             t.cancel()
-        await asyncio.gather(data_task, engine_task,
+        await asyncio.gather(data_task, engine_task, lab_emitter_task,
                              return_exceptions=True)
         # Defensive: never leave the lock held on shutdown if a triage
         # pass was interrupted mid-flight (the per-pass finally already

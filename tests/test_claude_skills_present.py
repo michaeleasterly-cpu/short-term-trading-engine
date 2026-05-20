@@ -23,6 +23,7 @@ _SKILLS = (
     ("engine-readiness", True),
     ("adapter-readiness", True),
     ("lab-target-run", False),
+    ("lab-spec-emit", False),  # SP-G — operator command path for the LLM spec-emitter
     ("ecr", False),
     ("dfcr", False),
     ("audit-data-pipeline", False),
