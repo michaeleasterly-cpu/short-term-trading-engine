@@ -420,3 +420,6 @@ _PlanModel  # unused class (ops/data_feed_sdlc/planner.py:760)
 # fixture invoked by collection, not direct caller. Same idiom as
 # _reset_composite_override above.
 _stub_csv_archive_detect_shrinkage  # unused function (tpcore/quality/validation/tests/conftest.py:35)
+# momentum vol-managed Lab candidate: pytest autouse fixture invoked by
+# pytest itself; same idiom as the other byte-identical-when-off seams.
+_reset_vol_managed_override  # unused function (momentum/tests/test_lab_vol_managed_byte_identical.py:115)
