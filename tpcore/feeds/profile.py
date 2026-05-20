@@ -143,6 +143,15 @@ FEED_PROFILES: dict[str, FeedProfile] = {
         evidence="earnings beats are quarterly; 90d max-age = ~one "
                  "earnings cycle (FMP).",
     ),
+    "fundamentals_quarterly": FeedProfile(
+        feed="fundamentals_quarterly", trigger=FeedTrigger.VENDOR_QUARTERLY,
+        cadence_days=91, freshness_max_age_days=120, skip_guard_days=6,
+        evidence="FMP fundamentals are quarterly (Q1/Q2/Q3/Q4 period_end "
+                 "dates ~91d apart); 120d max-age tolerates the SEC 10-Q "
+                 "deadline (40-45d after period-end) plus FMP ingest lag. "
+                 "Healable via fundamentals_refresh stage — completeness "
+                 "invariant catches missing-quarter class.",
+    ),
     "sec_insider_transactions": FeedProfile(
         feed="sec_insider_transactions", trigger=FeedTrigger.CONTINUOUS,
         cadence_days=1, freshness_max_age_days=14, skip_guard_days=3,

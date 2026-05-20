@@ -116,6 +116,23 @@ class FakePool:
             from datetime import UTC, datetime, timedelta
             fresh = datetime.now(UTC).date() - timedelta(days=1)
             return [{"symbol": "SPY", "latest": fresh}]
+        # fundamentals_quarterly_completeness: synthesize a clean
+        # quarterly cadence for one T1 stock so e2e tests for unrelated
+        # checks aren't false-failed by an empty universe sentinel or
+        # by a gap. Routes on the distinctive CTE+JOIN shape of the
+        # completeness check (the integrity check uses different SQL —
+        # no liquid-universe CTE, no JOIN).
+        if (
+            "platform.fundamentals_quarterly" in sql_lower
+            and "join liquid using (ticker)" in sql_lower
+        ):
+            from datetime import UTC, datetime, timedelta
+            today = datetime.now(UTC).date()
+            return [
+                {"ticker": "AAPL",
+                 "period_end_date": today - timedelta(days=91 * (7 - i))}
+                for i in range(8)
+            ]
         return []
 
     async def fetchrow(self, sql: str, *args) -> dict[str, Any] | None:

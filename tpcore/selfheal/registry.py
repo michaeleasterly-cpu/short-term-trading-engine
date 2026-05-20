@@ -136,6 +136,18 @@ _SPECS: tuple[HealSpec, ...] = (
     HealSpec(check_name="macro_indicators_completeness", source="macro_indicators",
              healable=True, stage="macro_indicators",
              params={"skip_guard_days": "0"}, max_attempts=2),
+    # Per-ticker quarterly-gap completeness: every consecutive pair of
+    # period_end_date rows for T1/T2 live stocks is ≤100 days apart
+    # (math-derived bound: Q4=92 days + 8-day slack). A gap > 100 days
+    # is a missing quarter — the engines silently lose a quarter's
+    # signal even though fundamentals_integrity is GREEN (each row is
+    # well-formed). Heal via the canonical ``fundamentals_refresh``
+    # stage with skip-guard off; bounded by max_attempts=2. Spec:
+    # docs/superpowers/specs/2026-05-20-fundamentals-quarterly-completeness-invariant.md.
+    HealSpec(check_name="fundamentals_quarterly_completeness",
+             source="fundamentals_quarterly",
+             healable=True, stage="fundamentals_refresh",
+             params={"skip_guard_days": "0"}, max_attempts=2),
     # Force param added to tier_refresh / classify_tickers
     # (skip_guard_days=0) → now honestly healable via canonical re-run.
     HealSpec(check_name="liquidity_tiers_freshness", source="liquidity_tiers",
