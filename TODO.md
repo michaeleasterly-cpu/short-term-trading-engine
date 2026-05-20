@@ -537,11 +537,24 @@ Surfaced while making the RiskGovernor real + uniform (branch
   daemon (emits readiness event) + engine daemon. AAR, forensics, and
   the allocator all move INTO the engine daemon (no separate launchd
   jobs).
-- **Declarative `engine_profile` (the vehicle).** Per-engine cadence +
-  precondition SoT, same proven pattern as `tpcore.feeds` /
-  `tpcore.risk.limits_profile`. MUST extend the existing per-engine
-  data gate ("Per-engine data gates — DONE 2026-05-16"), NOT a parallel
-  mechanism. First step: inventory the existing per-engine gate.
+- ✅ **Declarative `engine_profile` (the vehicle) — DONE 2026-05-20.**
+  Per-engine cadence + precondition SoT, same proven pattern as
+  `tpcore.feeds` / `tpcore.risk.limits_profile`. Extends the existing
+  per-engine data gate ("Per-engine data gates — DONE 2026-05-16"),
+  NOT a parallel mechanism: `EngineProfile.data_dependencies:
+  frozenset[str]` field added; 7 engines (`reversion`, `vector`,
+  `momentum`, `sentinel`, `allocator`, `canary`, `catalyst`) migrated
+  byte-equivalent from the hand-curated
+  `capital_gate.ENGINE_TABLES`; that dict is now a PEP-562-derived
+  read-model over `_PROFILE.data_dependencies` (3 external import
+  sites preserved). `capital_gate._required_sources` +
+  `failing_sources_for_engine` read from `engine_data_dependencies()`
+  directly. New drift clockwork
+  `test_dispatchable_engine_declares_data_dependencies` reds CI on
+  any PAPER/LIVE engine with an empty declaration. Spec:
+  `docs/superpowers/specs/2026-05-20-declarative-engine-profile-
+  data-dependencies.md`. Follow-up (out of scope here, tracked in
+  spec §7): ECR `data_dependencies` key + planner threading.
 - ✅ **Allocator → event-driven — DONE (Sub-project C 2026-05-17, PR #17;
   safety-net heartbeat added 2026-05-20).** Primary trigger: the
   allocator is the first gated step in `ops/engine_dispatch.py`

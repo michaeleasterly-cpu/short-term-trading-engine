@@ -278,3 +278,75 @@ def test_check_imports_engine_packages_derived_and_drift_fixed():
         {"reversion", "vector", "momentum", "sentinel", "canary", "catalyst"})
     assert "sigma" not in ENGINE_PACKAGES   # archived drift fixed
     assert "canary" in ENGINE_PACKAGES      # missing-live drift fixed
+
+
+# ─── Declarative data_dependencies (folded 2026-05-20) ────────────────
+
+
+def test_engine_profile_has_data_dependencies_field():
+    """SP-folded 2026-05-20: EngineProfile carries the per-engine data
+    precondition declaration as a typed field (frozenset[str], default
+    empty). Pin the field exists + is a frozenset so a regression
+    would red here, not silently lose the SoT."""
+    p = profile_for("reversion")
+    assert hasattr(p, "data_dependencies")
+    assert isinstance(p.data_dependencies, frozenset)
+
+
+def test_data_dependencies_byte_equivalent_to_pre_migration_engine_tables():
+    """The migration is byte-equivalent (spec §3.2 / §4.1). For every
+    engine that pre-migration had an ENGINE_TABLES row, the same
+    frozenset is present on EngineProfile.data_dependencies. Pinned
+    against the evidence-derived literal that capital_gate.py used
+    pre-fold (2026-05-16 evidence)."""
+    expected = {
+        "reversion": frozenset({"prices_daily", "fundamentals_quarterly"}),
+        "vector": frozenset({"prices_daily", "fundamentals_quarterly", "earnings_events"}),
+        "momentum": frozenset({"prices_daily", "liquidity_tiers"}),
+        "sentinel": frozenset({"prices_daily", "macro_indicators"}),
+        "canary": frozenset({"prices_daily"}),
+        "catalyst": frozenset({"prices_daily", "sec_insider_transactions"}),
+        "allocator": frozenset({"prices_daily"}),
+    }
+    for name, deps in expected.items():
+        assert _PROFILE[name].data_dependencies == deps, (
+            f"{name}: data_dependencies drift "
+            f"{_PROFILE[name].data_dependencies} != expected {deps}")
+
+
+def test_dispatchable_engine_declares_data_dependencies():
+    """Drift-proof clockwork: every PAPER/LIVE engine in _PROFILE MUST
+    declare a non-empty data_dependencies set. The LAB sentinel + LAB
+    engines + the RETIRED sigma are exempt (they are never dispatched;
+    an empty set is correct). A half-state engine (PAPER/LIVE with
+    empty data_dependencies) is a silent un-gated half-state — fails
+    CI. Spec §3.5."""
+    for name, p in _PROFILE.items():
+        if p.lifecycle_state in (LifecycleState.PAPER, LifecycleState.LIVE):
+            assert p.data_dependencies, (
+                f"{name}: PAPER/LIVE engine with empty data_dependencies — "
+                f"declare its `platform.<table>` reads in _PROFILE "
+                f"(see the engine's backtest.py / scheduler.py for actual "
+                f"reads, evidence-derive the frozenset)")
+
+
+def test_engine_data_dependencies_accessor_matches_field():
+    """The accessor is the canonical single-SoT read; pin it equals the
+    field for known engines AND returns the empty frozenset (fail-SAFE)
+    for unknown engines — preserving the pre-migration
+    `_required_sources` fallback to EXPECTED_SOURCES."""
+    from tpcore.engine_profile import engine_data_dependencies
+    for name, p in _PROFILE.items():
+        assert engine_data_dependencies(name) == p.data_dependencies
+    assert engine_data_dependencies("does_not_exist") == frozenset()
+
+
+def test_engine_tables_back_compat_is_derived_from_profile():
+    """capital_gate.ENGINE_TABLES is the back-compat read-model
+    (3 external import sites; spec §3.4). It MUST be derived from the
+    SoT — re-deriving it yields the same dict. NOT a parallel SoT."""
+    from tpcore.engine_profile import _PROFILE as _P
+    from tpcore.quality.validation.capital_gate import ENGINE_TABLES
+    derived = {n: p.data_dependencies for n, p in _P.items()
+               if p.data_dependencies}
+    assert ENGINE_TABLES == derived

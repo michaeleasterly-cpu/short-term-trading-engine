@@ -96,12 +96,17 @@ def test_run_consistency_subprocess_catches_staged_half_state(tmp_path):
             ".git", ".venv", "__pycache__", "backtests"))
     # Introduce a half-state: flip reversion to RETIRED but DON'T move
     # the package / write an EULOGY — the clockwork must catch it.
+    # Anchor on the lifecycle_state line only (drift-resilient against
+    # the data_dependencies field that now follows allocator_eligible —
+    # 2026-05-20 spec).
     ep = staged / "tpcore" / "engine_profile.py"
     txt = ep.read_text().replace(
-        'dispatch_order=1, lifecycle_state=LifecycleState.PAPER,\n'
-        '                               allocator_eligible=True)',
-        'dispatch_order=1, lifecycle_state=LifecycleState.RETIRED,\n'
-        '                               allocator_eligible=False)')
+        '"reversion": EngineProfile(engine="reversion", cadence=Cadence.DAILY,\n'
+        '                               dispatch_order=1, lifecycle_state=LifecycleState.PAPER,\n'
+        '                               allocator_eligible=True,',
+        '"reversion": EngineProfile(engine="reversion", cadence=Cadence.DAILY,\n'
+        '                               dispatch_order=1, lifecycle_state=LifecycleState.RETIRED,\n'
+        '                               allocator_eligible=False,')
     ep.write_text(txt)
     rc, out = _run_consistency_subprocess(staged)
     assert rc != 0, "a staged half-state must fail the real clockwork"
@@ -226,33 +231,29 @@ def _make_synthetic_engine_tree(tmp_path: Path) -> Path:
     (pkg / "tests" / "__init__.py").write_text("")
     (pkg / "scheduler.py").write_text(
         "async def run_once(*a, **k):\n    return {}\n")
-    # add a PAPER _PROFILE entry + the shadow tokens
+    # add a PAPER _PROFILE entry + the shadow tokens. The
+    # data_dependencies field is the data-dep SoT post-fold (2026-05-20
+    # spec); a synthetic PAPER engine MUST declare a non-empty set or
+    # the new test_dispatchable_engine_declares_data_dependencies
+    # clockwork (and the reverse ENGINE_TABLES leg, which derives from
+    # the same SoT) reds the staged tree. ``prices_daily`` mirrors the
+    # canary minimal pattern.
     ep = staged / "tpcore" / "engine_profile.py"
     t = ep.read_text().replace(
         '    # allocator: separate _dispatch_allocator path',
         '    "throwaway": EngineProfile(engine="throwaway", '
         'cadence=Cadence.DAILY,\n'
         '                               dispatch_order=8, '
-        'lifecycle_state=LifecycleState.PAPER),\n'
+        'lifecycle_state=LifecycleState.PAPER,\n'
+        '                               '
+        'data_dependencies=frozenset({"prices_daily"})),\n'
         '    # allocator: separate _dispatch_allocator path')
     ep.write_text(t)
-    # SP4 T4: the synthetic PAPER `throwaway` is now a roster engine, so
-    # the closed reverse clockwork leg (test_live_engine_has_engine_
-    # tables_row) requires it to carry an ENGINE_TABLES data-dep row —
-    # exactly as every real PAPER/LIVE engine does (a roster engine with
-    # no row is the silent un-gated half-state the reverse leg catches).
-    # Symmetric to _apply_remove, which strips this row on REMOVE.
-    cg = (staged / "tpcore" / "quality" / "validation"
-          / "capital_gate.py")
-    cgt = cg.read_text()
-    # H-S3-12: anchor on the canary row + the close brace was a single-
-    # line invariant pre-catalyst. Catalyst (PAPER 2026-05-20) now sits
-    # between canary and the close brace, so the anchor is updated to
-    # the new immediate-pre-close line (the catalyst row).
-    cg.write_text(cgt.replace(
-        '    "catalyst": frozenset({"prices_daily", "sec_insider_transactions"}),\n}',
-        '    "catalyst": frozenset({"prices_daily", "sec_insider_transactions"}),\n'
-        '    "throwaway": frozenset({"prices_daily"}),\n}'))
+    # Post-fold (spec docs/superpowers/specs/2026-05-20-declarative-
+    # engine-profile-data-dependencies.md): ENGINE_TABLES is a derived
+    # read-model over _PROFILE.data_dependencies, so the
+    # ``throwaway`` ENGINE_TABLES row is provided automatically by the
+    # _PROFILE injection above — no separate capital_gate edit needed.
     # DDF-1 (SP4 T2) + SP4 T5b: the shadows are sentinel-fenced; the old
     # str.replace on the un-fenced literal is now a silent no-op. Build
     # the synthetic `throwaway`-bearing shadows by the ONE renderer
