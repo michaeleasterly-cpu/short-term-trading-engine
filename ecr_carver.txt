@@ -5,6 +5,4 @@ source:        new_scaffold
 cadence:       monthly_first_trading_day
 allocator:     true
 dispatch_order: 6
-gate_dsr:      0.95
-gate_cred:     60
 need:          Carver-method multi-forecast volatility-targeted monthly equity portfolio (Robert Carver, Systematic Trading 2015). Three orthogonal forecasts (EWMAC trend / 12m value proxy / 20d Bollinger Z) → equal-weight combined × FDM → vol-targeted sizing → speed-limited turnover. Registered initially in LifecycleState.LAB per operator confirmation 2026-05-20.
