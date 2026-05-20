@@ -29,6 +29,14 @@ from pydantic import BaseModel, ConfigDict, Field
 from tpcore.calendar import next_monday_open, next_open
 from tpcore.interfaces.broker import BrokerExecutionInterface, OrderSide
 from tpcore.lab.context import assert_not_in_lab
+from tpcore.order_ids import ENGINE_PREFIX, is_engine_cid
+
+# Frozen view over the canonical engine-prefix registry. Used by the
+# broker-floor attribution helper to detect "some OTHER engine owns this
+# symbol" without re-walking the dict on every position. The order_ids
+# registry is the single source of truth — this is purely a read-only
+# alias for symmetry with the helper's loop body.
+_ALL_ENGINE_NAMES: tuple[str, ...] = tuple(ENGINE_PREFIX.keys())
 
 if TYPE_CHECKING:  # pragma: no cover
     import asyncpg
@@ -389,14 +397,15 @@ class RiskGovernor:
         # raise. Fetch the broker's open positions ONCE here (the single
         # in-band ``get_positions()`` round-trip — its result is also
         # reused for the BUY net-long check below; NO second round-trip).
-        # ``broker_floor`` is the cross-engine open-position COUNT (no
-        # per-engine attribution — over-counting one engine is strictly
-        # TIGHTER, still never-fail-open). On ANY broker
-        # error/timeout/exception/empty/None → ``broker_floor = 0`` (a
-        # no-op against the ``max``: the conservative proxy stands). The
-        # raise is applied to the concurrent-position check ONLY when the
-        # per-engine ``reconcile_open_floor`` flag is set; otherwise the
-        # check is byte-identical to pre-A1 (raw ``state.open_positions``).
+        # ``broker_floor`` is the PER-ENGINE open-position COUNT
+        # (positions whose ``symbol`` correlates to a recent order
+        # carrying ``engine_id``'s ``client_order_id`` prefix). On ANY
+        # broker error/timeout/exception/empty/None → ``broker_floor = 0``
+        # (a no-op against the ``max``: the conservative proxy stands).
+        # The raise is applied to the concurrent-position check ONLY
+        # when the per-engine ``reconcile_open_floor`` flag is set;
+        # otherwise the check is byte-identical to pre-A1 (raw
+        # ``state.open_positions``).
         # ``None`` ⇒ NOT pre-fetched (flag-OFF) → the BUY net-long check
         # below does its own single fetch = byte-identical pre-A1 path.
         # A list (possibly ``[]``) ⇒ pre-fetched here and reused below so
@@ -424,7 +433,15 @@ class RiskGovernor:
             # error/None/empty → [] (broker_floor stays 0 — the proxy
             # stands; no second round-trip below).
             broker_positions = list(fetched) if fetched else []
-            broker_floor = len(broker_positions)
+            # Per-engine attribution: count only positions whose symbol
+            # correlates to a recent engine-tagged order. Unattributed
+            # positions still count against ``engine_id`` (over-count →
+            # tighter → never-fail-open) plus emit a WARNING. Broker
+            # lacking ``list_recent_orders`` degrades to the pre-change
+            # cross-engine count.
+            broker_floor = await self._count_engine_broker_floor(
+                engine_id, broker_positions,
+            )
 
         effective_open = max(state.open_positions, broker_floor)
         if effective_open >= limits.max_open_positions:
@@ -497,6 +514,129 @@ class RiskGovernor:
                 ),
             )
         return CheckResult(RiskDecision.ALLOW)
+
+    async def _count_engine_broker_floor(
+        self,
+        engine_id: str,
+        broker_positions: list,
+    ) -> int:
+        """Count ``broker_positions`` attributable to ``engine_id``.
+
+        Attribution joins on the position's ``symbol`` against the
+        ``client_order_id`` prefix of recent broker orders (mirrors the
+        canonical precedent at ``momentum/scheduler.py``
+        ``_filter_to_engine_holdings`` — Position carries ``symbol`` but
+        not ``client_order_id``, so the recent-orders list is the
+        attribution substrate).
+
+        Behaviour:
+
+        * Broker exposes ``list_recent_orders`` → fetch with
+          ``limit=500`` (matches the momentum/canary callers); build
+          ``engine_symbols = {o.symbol for o in recent if
+          is_engine_cid(o.client_order_id, engine_id)}``; count
+          positions whose symbol is in ``engine_symbols``.
+        * Unattributed position (symbol not in ``engine_symbols``) →
+          COUNTS against ``engine_id`` (over-count → tighter →
+          never-fail-open) AND emits
+          ``tpcore.risk.unattributed_broker_position`` WARNING so the
+          operator can clean up. NOT silently ignored.
+        * Broker lacks ``list_recent_orders`` (non-Alpaca / smoke
+          fixtures) → emit ``tpcore.risk.broker_attribution_unavailable``
+          WARNING and return the pre-change cross-engine count
+          (``len(broker_positions)``) — degraded but still tighter than
+          proxy-only; never-fail-open.
+        * ``list_recent_orders`` call errors → same degraded fallback as
+          missing primitive (logged separately so the operator can
+          distinguish transient broker hiccups from non-Alpaca adapters).
+
+        Never raises; the broker-floor invariant is "tighter is safe,
+        looser is forbidden" — a buggy helper returning 0 on real
+        positions is still bounded by the ``max(proxy, broker_floor)``
+        raise in ``check_trade`` (proxy still wins).
+        """
+        if not broker_positions:
+            return 0
+        list_fn = getattr(self._broker, "list_recent_orders", None)
+        if list_fn is None:
+            logger.warning(
+                "tpcore.risk.broker_attribution_unavailable",
+                engine=engine_id,
+                n_positions=len(broker_positions),
+                detail="broker has no list_recent_orders — degrading to "
+                       "cross-engine count (tighter than proxy-only; "
+                       "never fail open)",
+            )
+            return len(broker_positions)
+        try:
+            recent = await list_fn(limit=500)
+        except Exception as exc:  # noqa: BLE001 — broker call: never raise out
+            logger.warning(
+                "tpcore.risk.broker_attribution_unavailable",
+                engine=engine_id,
+                n_positions=len(broker_positions),
+                error=str(exc),
+                detail="list_recent_orders failed — degrading to "
+                       "cross-engine count (tighter than proxy-only; "
+                       "never fail open)",
+            )
+            return len(broker_positions)
+        if not recent:
+            # No recent orders → every current position is unattributed
+            # by definition. Count all of them against engine_id (the
+            # over-count fail-safe) and log once per gate, not per
+            # position, so a busy account doesn't spam.
+            logger.warning(
+                "tpcore.risk.unattributed_broker_position",
+                engine=engine_id,
+                n_positions=len(broker_positions),
+                symbols=[p.symbol for p in broker_positions],
+                detail="no recent orders on file — every open position "
+                       "is unattributable; counting all against "
+                       f"{engine_id} (over-count fail-safe; never fail open)",
+            )
+            return len(broker_positions)
+        # Build per-symbol attribution in ONE pass over recent orders:
+        # ``symbol_to_engines[sym]`` = set of engines whose CID prefixes
+        # match an order on that symbol. Empty set ⇒ no engine claims it
+        # (legacy / manual / corporate-action — unattributed).
+        symbol_to_engines: dict[str, set[str]] = {}
+        for o in recent:
+            cid = getattr(o, "client_order_id", None)
+            sym = getattr(o, "symbol", None)
+            if not sym:
+                continue
+            owners = symbol_to_engines.setdefault(sym, set())
+            for eng in _ALL_ENGINE_NAMES:
+                if is_engine_cid(cid, eng):
+                    owners.add(eng)
+                    break
+        # Track unattributed for one WARNING per gate (not per position).
+        attributed = 0
+        unattributed_symbols: list[str] = []
+        for pos in broker_positions:
+            owners = symbol_to_engines.get(pos.symbol, set())
+            if engine_id in owners:
+                attributed += 1
+                continue
+            if owners:
+                # Genuine cross-engine isolation — some other engine
+                # owns this symbol; do NOT count it against engine_id.
+                continue
+            # No engine claims this symbol → over-count fail-safe.
+            unattributed_symbols.append(pos.symbol)
+        if unattributed_symbols:
+            logger.warning(
+                "tpcore.risk.unattributed_broker_position",
+                engine=engine_id,
+                symbols=unattributed_symbols,
+                n_unattributed=len(unattributed_symbols),
+                detail="open broker positions with no recent "
+                       "engine-tagged order — counting against "
+                       f"{engine_id} (over-count fail-safe; operator "
+                       "should investigate)",
+            )
+        return attributed + len(unattributed_symbols)
 
     async def _platform_net_long_after(
         self,
