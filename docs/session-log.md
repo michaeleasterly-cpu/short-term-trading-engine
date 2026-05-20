@@ -87,3 +87,60 @@ Per-engine credibility status: all 5 PAPER engines produce
 positive OOS edge candidates (~0.78–1.26) but fail the DSR≥0.95 ∧
 credibility≥60 gate. No engine has graduated. Capital remains in
 paper mode.
+
+## 2026-05-20 — Session shipments (14 PRs, two parallel sessions)
+
+This session shipped a lot across two parallel Claude windows (one
+driving Lab front-half completion + SDLC reform + worktree lock-in,
+the other building carver from scratch + the first real Lab candidate).
+
+**Lab front-half epic — completed end-to-end (SP-A through SP-G):**
+- PR #146 — SP-G hardened design spec (thin advisory LLM spec-emitter).
+- PR #152 — SP-G build (~3900 LOC): `tpcore/lab/llm_emitter/` models +
+  emitter + diff_fence + ledger_gate + tests; `ops/llm_lab_emitter.py`
+  agent (credential-starved, draft-PR-only, ledger-before-PR
+  ordering); third co-task in `ops/llm_triage_service.py`;
+  `.claude/skills/lab-spec-emit/SKILL.md`; Carver + Chan reference
+  bundles; orphaned-spend recovery runbook.
+
+**Engine SDLC reform:**
+- PR #153 — ECR `source: existing_code` for post-hoc roster
+  registration (the SP-F → catalyst pattern that had no SDLC path).
+- PR #154 — carver engine shipped (LAB; PRs #149 spec + #151 plan).
+  First real ECR-ADD ever — surfaced the LAB-sentinel uniqueness
+  over-constraint and relaxed it to presence-only.
+- PR #158 — autonomous Lab criteria: replaces the absolute DSR≥0.95 ∧
+  credibility≥60 gate with framework-evaluated signal-presence (new
+  engines) + comparative-improvement (`fold_existing`) criteria sets.
+  Spec at `docs/superpowers/specs/2026-05-20-autonomous-lab-criteria.md`.
+- PR #159 — catalyst activated in PAPER (`dispatch_order=7`,
+  `allocator_eligible=True`, in `roster_for_dispatch()`). Lands via
+  the new `source: existing_code` ECR path + the autonomous Lab
+  criteria. Backtest 2020-2026: sharpe 2.27, pf 1.36, max_dd −41%,
+  24 trades over 6 years (~4/yr sparse signal).
+
+**First real Lab candidate (Carver window):**
+- PR #157 — Vector sector-relative composite Lab candidate
+  (`vector_composite`, `fold_existing` intent, ranking-only with
+  byte-identical-when-off seam).
+- PR #160 — transient-DB retry on Lab per-window panel-load (Supabase
+  pooler resilience).
+- PR #161 — ruff B023 fix on the retry lambda.
+
+**Workflow + governance:**
+- PR #145 — `/doctor` $schema fix + MD drift sync (README sigma-archived,
+  session-log checkpoint, `DAILY_SCAN_COMPLETE` → `DATA_OPERATIONS_COMPLETE`).
+- PR #147 — new `lab-isolation-db` CI job runs 5 DB-gated suites with a
+  real Postgres + alembic schema-bootstrap fix.
+- PR #148 — `DBLogHandler.run_id` public accessor (closes TODO P3e
+  noqa SLF001 debt at 3 scripts/ops.py sites).
+- PR #150 — TODO.md as canonical work-tracking source: SessionStart
+  hook auto-injects open H2 sections; CLAUDE.md gets the 5-line
+  pointer; task #25 + missing engine items migrated out of memory.
+- PR #155 — worktree workflow lock-in: `.worktreeinclude` carries
+  `.env` into new worktrees; `worktree.bgIsolation: "worktree"` +
+  `isolation: worktree` on implementer agent profiles; one CLAUDE.md
+  paragraph at the workflow.
+- PR #156 — worktree cleanup convention: when a worktree's PR merges,
+  remove it the same turn.
+- PR #162 — TODO.md drift sync: this entry's bookkeeping.
