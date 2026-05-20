@@ -73,6 +73,8 @@ _PROFILE: dict[str, EngineProfile] = {
                                dispatch_order=4, lifecycle_state=LifecycleState.PAPER),
     "canary":    EngineProfile(engine="canary", cadence=Cadence.DAILY,
                                dispatch_order=5, lifecycle_state=LifecycleState.PAPER),
+    "carver":   EngineProfile(engine="carver", cadence=Cadence.MONTHLY_FIRST_TRADING_DAY,
+                               dispatch_order=6, lifecycle_state=LifecycleState.LAB),
     # allocator: separate _dispatch_allocator path (NOT in the ROSTER loop, D-SDLC1-4).
     "allocator": EngineProfile(engine="allocator", cadence=Cadence.WEEKLY_FIRST_TRADING_DAY,
                                dispatch_order=0, lifecycle_state=LifecycleState.PAPER),
