@@ -1,33 +1,32 @@
-# KNOWN GAP — caveat for the earnings_events_monotone invariant (P1 follow-on):
-#
-# ``_classify_beat`` below only writes a row to ``platform.earnings_events``
-# when ``actual_eps > estimated_eps * 1.05`` (i.e. a >5% beat). MISS and
-# IN-LINE earnings produce NO ROW at all — they are filtered out at
-# classification time, not stored as a sentinel.
-#
-# Consequence for the ``earnings_events_monotone`` validation check
-# (``tpcore/quality/validation/checks/earnings_events_monotone.py``):
-# the per-ticker monotone-non-decrease invariant on EARNINGS_BEAT row
-# counts catches **vendor truncation** (a re-ingest that loses a
-# ticker's historical beats), but it does NOT catch **missed detection**
-# from an FMP outage that would have written a beat row had the feed
-# responded. The invariant is honest within its stated shape; the gap
-# is in the ingestion contract, not in the check.
-#
-# P1 follow-on (tracked in TODO.md, Autonomous self-heal section):
-# emit a ``NO_BEAT`` sentinel per (ticker, quarter) when actual_eps is
-# present but doesn't clear the beat threshold, so a per-quarter
-# completeness invariant becomes auditable (every active T1/T2 ticker
-# has a row — BEAT or NO_BEAT — for every fiscal quarter in its active
-# range). Until then, the monotone invariant is the deliberate floor
-# and is structurally insufficient to detect FMP outages.
+"""Backfill ``platform.earnings_events`` with FMP earnings events.
 
-"""Backfill ``platform.earnings_events`` with FMP earnings beats.
+Emits **two** ``event_type`` values, never silently drops a reported
+event:
 
-MVP catalyst proxy for Vector's Gate 2: an earnings report where
-``actual_eps > estimated_eps × 1.05`` becomes an EARNINGS_BEAT row with
-``magnitude_pct = (actual − estimated) / estimated``. The full catalyst
-NLP pipeline (contract awards, raised guidance, etc.) is Phase 3.
+* ``EARNINGS_BEAT`` — ``actual_eps > estimated_eps × (1 + 0.05)``
+  (i.e. a >5% beat). ``magnitude_pct = (actual − estimated) /
+  estimated`` (sentinel ``999999`` on a zero-estimate / positive-actual
+  edge).
+* ``EARNINGS_NO_BEAT`` — actual + estimated both present but not a beat
+  (miss, in-line, zero-estimate-with-non-positive-actual, negative-
+  estimate). ``magnitude_pct = NULL`` (the beat magnitude is undefined
+  for misses).
+
+Rows where ``epsActual`` OR ``epsEstimated`` is ``None`` are STILL
+skipped — no event happened (pre-announcement / calendar-only /
+suspended).
+
+Why both populations: the per-ticker monotone-non-decrease invariant
+(``earnings_events_monotone``) gates on the UNION
+``event_type IN ('EARNINGS_BEAT','EARNINGS_NO_BEAT')``. Storing only
+beats let an FMP outage silently miss-detect a quarter (no row at all)
+without ever tripping the invariant. With NO_BEAT sentinels, every
+reported event lands as a row — the monotone-on-the-union invariant
+now catches both vendor truncation AND missed-detection.
+
+Downstream consumers (``vector/backtest.py``, ``catalyst/backtest.py``)
+filter ``event_type='EARNINGS_BEAT'`` so they are unaffected by
+NO_BEAT rows.
 
 Run::
 
@@ -91,32 +90,54 @@ async def fetch_earnings(client: httpx.AsyncClient, symbol: str, api_key: str) -
     return body if isinstance(body, list) else []
 
 
-def _classify_beat(row: dict) -> tuple[bool, Decimal | None]:
-    """True iff actual EPS > estimate × (1 + threshold). Returns (is_beat, magnitude).
+def _classify_earnings(row: dict) -> tuple[str, Decimal | None] | None:
+    """Classify one FMP earnings row.
 
-    Negative-estimate beats are treated as "not a catalyst" — actual − estimate > 0
-    can mean "less of a loss than expected" which doesn't carry the same momentum.
-    Zero-estimate beats with a positive actual surface as a sentinel magnitude.
+    Returns:
+        ``None`` if ``epsActual`` OR ``epsEstimated`` is missing — no
+        event happened (pre-announcement / calendar-only / suspended).
+        Skipping these is intentional: there is nothing to record.
+
+        ``("EARNINGS_BEAT", magnitude)`` if
+        ``actual > estimated × (1 + threshold)``. Magnitude is
+        ``(actual − estimated) / estimated`` quantized to 6 places.
+        Zero-estimate + positive-actual surfaces as sentinel magnitude
+        ``999999`` to flag the edge for downstream attention.
+        Negative-estimate beats are treated as NO_BEAT — "less of a
+        loss than expected" doesn't carry the same momentum.
+
+        ``("EARNINGS_NO_BEAT", None)`` for every other case where both
+        sides were reported but the row is not a beat (miss, in-line,
+        zero-estimate-with-non-positive-actual, negative-estimate).
+        ``magnitude_pct`` is NULL because beat magnitude is undefined
+        for misses.
+
+    The NO_BEAT sentinel is what closes the BEAT-only ingestion gap
+    that the ``earnings_events_monotone`` invariant flagged: every
+    reported event lands as a row so the monotone-on-the-union check
+    catches both vendor truncation AND missed-detection from FMP
+    outages.
     """
     actual = row.get("epsActual")
     estimated = row.get("epsEstimated")
     if actual is None or estimated is None:
-        return False, None
+        return None
     try:
         a = Decimal(str(actual))
         e = Decimal(str(estimated))
     except Exception:
-        return False, None
+        return None
     if e == 0:
         if a > 0:
-            return True, Decimal("999999")
-        return False, None
-    if e <= 0:
-        return False, None
+            return "EARNINGS_BEAT", Decimal("999999")
+        return "EARNINGS_NO_BEAT", None
+    if e < 0:
+        # Negative-estimate "beats" treated as NO_BEAT — see docstring.
+        return "EARNINGS_NO_BEAT", None
     pct = (a - e) / e
     if pct > BEAT_THRESHOLD:
-        return True, pct.quantize(Decimal("0.000001"))
-    return False, None
+        return "EARNINGS_BEAT", pct.quantize(Decimal("0.000001"))
+    return "EARNINGS_NO_BEAT", None
 
 
 async def amain(args: argparse.Namespace) -> int:
@@ -143,7 +164,9 @@ async def amain(args: argparse.Namespace) -> int:
                     await asyncio.sleep(INTER_SYMBOL_SLEEP_S)
                     continue
 
-                beats: list[tuple] = []
+                events: list[tuple] = []
+                beats_in_window = 0
+                no_beats_in_window = 0
                 for r in rows:
                     raw_date = r.get("date")
                     if not raw_date:
@@ -154,33 +177,46 @@ async def amain(args: argparse.Namespace) -> int:
                         continue
                     if ev_date < args.start or ev_date > args.end:
                         continue
-                    is_beat, magnitude = _classify_beat(r)
-                    if not is_beat:
+                    classification = _classify_earnings(r)
+                    if classification is None:
                         continue
-                    beats.append((symbol, ev_date, "EARNINGS_BEAT", magnitude, "fmp"))
+                    event_type, magnitude = classification
+                    events.append(
+                        (symbol, ev_date, event_type, magnitude, "fmp")
+                    )
+                    if event_type == "EARNINGS_BEAT":
+                        beats_in_window += 1
+                    else:
+                        no_beats_in_window += 1
 
-                if beats:
+                if events:
                     async with pool.acquire() as conn:
-                        await conn.executemany(_INSERT_SQL, beats)
-                    inserted_total += len(beats)
+                        await conn.executemany(_INSERT_SQL, events)
+                    inserted_total += len(events)
                 logger.info(
-                    "[%d/%d] %s earnings_rows=%d beats_in_window=%d",
-                    i, len(universe), symbol, len(rows), len(beats),
+                    "[%d/%d] %s earnings_rows=%d beats_in_window=%d no_beats_in_window=%d",
+                    i, len(universe), symbol, len(rows), beats_in_window, no_beats_in_window,
                 )
                 await asyncio.sleep(INTER_SYMBOL_SLEEP_S)
 
         async with pool.acquire() as conn:
             r = await conn.fetchrow(
-                "SELECT COUNT(*) AS n, COUNT(DISTINCT ticker) AS t, "
+                "SELECT "
+                "COUNT(*) FILTER (WHERE event_type='EARNINGS_BEAT') AS beats, "
+                "COUNT(*) FILTER (WHERE event_type='EARNINGS_NO_BEAT') AS no_beats, "
+                "COUNT(*) AS n_total, "
+                "COUNT(DISTINCT ticker) AS t, "
                 "MIN(event_date) AS mn, MAX(event_date) AS mx "
-                "FROM platform.earnings_events WHERE event_type='EARNINGS_BEAT'"
+                "FROM platform.earnings_events "
+                "WHERE event_type IN ('EARNINGS_BEAT','EARNINGS_NO_BEAT')"
             )
     finally:
         await pool.close()
 
-    print(f"\nbackfill complete  symbols={len(universe)}  beats_inserted_this_run={inserted_total}")
+    print(f"\nbackfill complete  symbols={len(universe)}  rows_inserted_this_run={inserted_total}")
     print(
-        f"earnings_events EARNINGS_BEAT total: {r['n']:,} rows / "
+        f"earnings_events total: {r['n_total']:,} rows "
+        f"(BEAT={r['beats']:,}, NO_BEAT={r['no_beats']:,}) / "
         f"{r['t']} tickers / span {r['mn']}..{r['mx']}"
     )
     if skipped_no_data:
