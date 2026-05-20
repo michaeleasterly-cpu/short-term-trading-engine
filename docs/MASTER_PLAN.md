@@ -628,7 +628,7 @@ Full database schema and data flow documentation: [`docs/DATABASE_AND_DATAFLOW.m
 
 - Alpaca free tier → survivorship-free daily bars (delisted stocks included).
 - Tradier historical export → pre-2020 daily bars merged into `platform.prices_daily` (Tradier brokerage account closed; data extracted before closure).
-- FMP Starter → quarterly fundamentals, with `pb`/`de` ratios computed via `scripts/compute_fundamental_ratios.py`.
+- FMP Starter → quarterly fundamentals, with `pb`/`de` ratios computed via `ops.py --stage compute_fundamental_ratios` (chained after `fundamentals_refresh`; migrated from the prior `scripts/compute_fundamental_ratios.py` orphan on 2026-05-20).
 - FMP earnings-beats → `platform.earnings_events` (Vector's catalyst proxy).
 - Self-built corporate-actions pipeline (Alpaca free endpoint) → `platform.corporate_actions` with split + dividend records; AAPL split adjustment verified.
 - Built in Phases 0–4. See §6.4 for current row counts and §6.5 for upgrade triggers.

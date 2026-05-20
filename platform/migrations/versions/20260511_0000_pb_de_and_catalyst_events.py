@@ -8,7 +8,7 @@ Two structural changes for Vector's three-gate backtest:
 
 1. ``platform.fundamentals_quarterly`` gains ``pb`` and ``de`` columns —
    point-in-time book-to-price and debt-to-equity ratios. Both are
-   nullable; ``scripts/compute_fundamental_ratios.py`` populates them
+   nullable; ``ops.py --stage compute_fundamental_ratios`` populates them
    using ``close`` on each row's ``filing_date`` (or nearest prior
    trading day).
 

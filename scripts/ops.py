@@ -684,6 +684,92 @@ async def _stage_fundamentals_refresh(pool: asyncpg.Pool, config: dict[str, Any]
     return detail
 
 
+async def _stage_compute_fundamental_ratios(
+    pool: asyncpg.Pool, config: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Compute point-in-time P/B and D/E on ``platform.fundamentals_quarterly``.
+
+    Joins each filing to the most recent ``platform.prices_daily`` close
+    on-or-before ``filing_date`` and writes ``pb``/``de`` via a single
+    set-based UPDATE — scales to 100k+ rows without holding a pool
+    connection long enough for the Supabase pooler to drop it.
+
+    Definitions::
+
+        book_value_per_share = (total_assets − total_liabilities) / shares_outstanding
+        pb = close / book_value_per_share
+        de = total_liabilities / (total_assets − total_liabilities)
+
+    Idempotent: rows where both ratios are already populated are skipped
+    on subsequent runs. ``config.force == "true"`` overwrites existing
+    pb/de (mirrors the ``--force`` flag on the prior script).
+
+    The ``total_assets > 0 AND total_liabilities >= 0`` predicates reject
+    degenerate FMP rows (ta=0, tl<0 inverted accounting) where the naive
+    ``(ta - tl) > 0`` check would let bogus ratios through (e.g. de=-1.0
+    from tl/book = -x/x). 51 rows had this shape post-Phase-1 backfill
+    and were nulled by a one-shot cleanup; this filter keeps re-runs
+    clean.
+
+    **Validation/freshness note:** this is a derived-column
+    *computation*, not an ingestion. The ungameable substrate is
+    ``fundamentals_quarterly_completeness`` (PR #172) which gates the
+    parent table; pb/de NULL rows are expected on filings that fail the
+    WHERE predicates (negative book value, missing shares, no prior
+    price). No separate freshness check is appropriate.
+
+    Chained AFTER ``fundamentals_refresh`` in ``_STAGE_SPECS`` so a fresh
+    FMP pull's new rows get ratios in the same update cycle — closes the
+    "operator forgot to re-run the script" manual step.
+    """
+    force = str((config or {}).get("force", "")).lower() == "true"
+    where = "" if force else "AND (pb IS NULL OR de IS NULL)"
+    sql = """
+        WITH targets AS (
+            SELECT ticker, filing_date, total_assets, total_liabilities, shares_outstanding
+            FROM platform.fundamentals_quarterly
+            WHERE total_assets IS NOT NULL
+              AND total_liabilities IS NOT NULL
+              AND shares_outstanding IS NOT NULL
+              AND total_assets > 0
+              AND total_liabilities >= 0
+              AND shares_outstanding > 0
+              AND (total_assets - total_liabilities) > 0
+              """ + where + """
+        ),
+        priced AS (
+            SELECT DISTINCT ON (t.ticker, t.filing_date)
+                t.ticker, t.filing_date, t.total_assets, t.total_liabilities,
+                t.shares_outstanding, pd.close
+            FROM targets t
+            JOIN platform.prices_daily pd
+              ON pd.ticker = t.ticker AND pd.date <= t.filing_date
+            ORDER BY t.ticker, t.filing_date, pd.date DESC
+        )
+        UPDATE platform.fundamentals_quarterly fq
+        SET pb = round(p.close / ((p.total_assets - p.total_liabilities) / p.shares_outstanding), 6),
+            de = round(p.total_liabilities / (p.total_assets - p.total_liabilities), 6)
+        FROM priced p
+        WHERE fq.ticker = p.ticker
+          AND fq.filing_date = p.filing_date
+        RETURNING fq.ticker
+    """
+    async with pool.acquire() as conn:
+        updated = await conn.fetch(sql)
+        populated = await conn.fetchrow(
+            "SELECT COUNT(*) FILTER (WHERE pb IS NOT NULL) AS pb_n, "
+            "COUNT(*) FILTER (WHERE de IS NOT NULL) AS de_n, "
+            "COUNT(*) AS total FROM platform.fundamentals_quarterly"
+        )
+    return {
+        "rows_updated": len(updated),
+        "pb_populated": int((populated or {}).get("pb_n", 0) or 0),
+        "de_populated": int((populated or {}).get("de_n", 0) or 0),
+        "total_rows": int((populated or {}).get("total", 0) or 0),
+        "force": force,
+    }
+
+
 async def _stage_cross_ref_cleanup(pool: asyncpg.Pool) -> dict[str, Any]:
     """Auto-clean known-safe cross-table integrity violations.
 
@@ -1734,6 +1820,16 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # trade_id is never re-closed. No new daemon — rides --update.
     ("risk_close_ledger_prune", lambda pool, cfg: (lambda: _stage_risk_close_ledger_prune(pool)), STAGE_TIMEOUT_SEC),
     ("fundamentals_refresh",lambda pool, cfg: (lambda: _stage_fundamentals_refresh(pool, cfg)),HEAVY_STAGE_TIMEOUT_SEC),
+    # Compute point-in-time P/B + D/E on the rows fundamentals_refresh
+    # just landed. Set-based UPDATE — closes the manual operator step
+    # where pb/de sat NULL until someone ran scripts/compute_fundamental_ratios.py.
+    # Chained immediately after fundamentals_refresh so the new rows get
+    # ratios in the same cycle (cmd_update runs stages sequentially +
+    # asyncpg writes commit per-statement, so the read-after-write
+    # semantics hold without an explicit transaction boundary). Migrated
+    # 2026-05-20 from scripts/compute_fundamental_ratios.py (orphan-
+    # scripts audit; see docs/superpowers/audits/2026-05-20-orphan-scripts-catalog.md).
+    ("compute_fundamental_ratios", lambda pool, cfg: (lambda: _stage_compute_fundamental_ratios(pool, cfg)), STAGE_TIMEOUT_SEC),
     # Order corrected 2026-05-14 (audit O-1/O-2/O-3): tier_refresh +
     # classify_tickers must run BEFORE earnings_refresh + sec_filings
     # because the latter two filter by ticker_classifications.asset_class.

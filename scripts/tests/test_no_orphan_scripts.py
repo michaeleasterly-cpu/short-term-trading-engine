@@ -130,10 +130,6 @@ _ALLOWLIST: frozenset[str] = frozenset(
         # ``tpcore/backtest/equivalence.py``. 0 genuine references.
         "compare_baselines",
         # TODO(P5): migrate to ops.py stage or remove — flagged
-        # 2026-05-19. Point-in-time P/B & D/E populator; only a prose
-        # mention in a migration docstring. 0 genuine references.
-        "compute_fundamental_ratios",
-        # TODO(P5): migrate to ops.py stage or remove — flagged
         # 2026-05-19. One-shot corporate-actions all-active driver,
         # superseded by ``ops.py``; only prose mentions in ops.py /
         # run_daily_bars_all_active docstrings. 0 genuine references.

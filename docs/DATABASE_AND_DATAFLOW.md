@@ -54,7 +54,7 @@ List every table under the `platform` schema. For each, provide columns, types, 
 
 #### `platform.fundamentals_quarterly`
 
-**Purpose:** Point-in-time quarterly fundamentals (FMP Starter). Used by Reversion for earnings-quality gate and Vector for Gate 1 (P/B, D/E). As of 2026-05-14: **178,608 rows** across **5,984 tickers** (post-Phase-1 backfill); `pb` + `de` populated on 152,907 rows (~85%), the rest are explainable NULLs (negative book value, no price on filing date, missing balance/share fields). `compute_fundamental_ratios.py` writes both ratios with a single set-based UPDATE; degenerate FMP rows (`total_assets=0`, `total_liabilities<0`) are rejected up front. Adapter (`tpcore/fmp/fundamentals_adapter.py`) uses centralized `@with_retry` (Phase 2 of adapter normalization, 2026-05-14) — `tenacity` dependency removed.
+**Purpose:** Point-in-time quarterly fundamentals (FMP Starter). Used by Reversion for earnings-quality gate and Vector for Gate 1 (P/B, D/E). As of 2026-05-14: **178,608 rows** across **5,984 tickers** (post-Phase-1 backfill); `pb` + `de` populated on 152,907 rows (~85%), the rest are explainable NULLs (negative book value, no price on filing date, missing balance/share fields). `ops.py --stage compute_fundamental_ratios` writes both ratios with a single set-based UPDATE chained immediately after `fundamentals_refresh` in the canonical `--update` cadence (migrated 2026-05-20 from the prior orphan `scripts/compute_fundamental_ratios.py`); degenerate FMP rows (`total_assets=0`, `total_liabilities<0`) are rejected up front. Adapter (`tpcore/fmp/fundamentals_adapter.py`) uses centralized `@with_retry` (Phase 2 of adapter normalization, 2026-05-14) — `tenacity` dependency removed.
 
 **Columns:**
 

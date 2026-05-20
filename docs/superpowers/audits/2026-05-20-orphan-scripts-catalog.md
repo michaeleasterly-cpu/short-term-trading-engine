@@ -112,30 +112,13 @@ documentation.)
 - **Effort: S** — same as above; verify the existing stage's config
   parity, then `git rm` + drop allowlist entry.
 
-### `scripts/compute_fundamental_ratios.py` (133 lines, scripts/test_no_orphan_scripts.py:132-135)
-- Set-based UPDATE that populates `platform.fundamentals_quarterly.pb`
-  and `de` columns by joining to the closing price on `filing_date`.
-  Idempotent (skip rows where ratios are already filled).
-- **Not yet superseded** but unambiguously a recurring maintenance step —
-  every new quarterly filing pulled by FMP appears with `pb`/`de` NULL
-  until this is run. Currently invoked by hand after each
-  `backfill_fundamentals.py --all-active` sweep.
-- **Last activity:** `dd7db40` "fix(scripts/compute_fundamental_ratios):
-  set-based UPDATE + tighter validation" — actively maintained.
-- **Callers grep:** 0 wiring. Prose-only references in
-  `platform/migrations/versions/20260511_0000_pb_de_and_catalyst_events.py:11`
-  (migration note: *"scripts/compute_fundamental_ratios.py populates
-  them"*), `MASTER_PLAN.md:631`, `DATABASE_AND_DATAFLOW.md:57`,
-  `session-log.md:45`.
-- **Recommended stage:** new `--stage compute_fundamental_ratios`,
-  natural sibling of `_stage_fundamentals_refresh` (ops.py:645). Should
-  chain after `fundamentals_refresh` in `OPS_UPDATE_STAGES` so the
-  ratios get populated automatically after each FMP refresh.
-- **Effort: M** — wrap the existing `UPDATE_SQL` and the `--force`
-  argparse switch into an `async def _stage_compute_fundamental_ratios(pool, config)`,
-  add the stage spec to `_STAGE_SPECS`, add to
-  `OPS_UPDATE_STAGES` after `fundamentals_refresh`, update the migration
-  docstring's prose reference. ~2 hours.
+### ✅ `scripts/compute_fundamental_ratios.py` — MIGRATED 2026-05-20
+Set-based UPDATE migrated to `ops.py --stage compute_fundamental_ratios`
+(chained immediately after `fundamentals_refresh` in `_STAGE_SPECS` +
+`OPS_UPDATE_STAGES`). Closes the manual operator step where pb/de sat
+NULL until someone re-ran the script. Script deleted; orphan-allowlist
+entry removed. Prose references updated in the migration docstring,
+`DATABASE_AND_DATAFLOW.md`, and `MASTER_PLAN.md`.
 
 ### `scripts/backfill_backtest_universe.py` (145 lines, scripts/test_no_orphan_scripts.py:124-127)
 - One-shot 2018-2025 daily-bars backfill for a hardcoded 50-name
