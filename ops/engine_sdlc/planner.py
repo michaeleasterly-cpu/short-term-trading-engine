@@ -357,6 +357,84 @@ def _shadow_edit_remove(staged: Path, engine: str, jn: _Journal) -> None:
                                 post_roster, archived))
 
 
+def _shadow_edit_add_to_paper(staged: Path, engine: str, *,
+                              dispatch_order: int,
+                              jn: _Journal) -> None:
+    """H-S3-12: regenerate the non-Python shadows when an ADD lands
+    PAPER (the new ``source: existing_code`` autonomous-criteria path).
+    Mirrors ``_shadow_edit_remove``'s ONE-renderer discipline + the same
+    journal-before-write ordering.
+
+    The post-ADD roster is computed by inserting ``engine`` into the
+    current roster sorted by ``dispatch_order`` — the planner does the
+    in-memory _PROFILE edit BEFORE this is called, but the engine_profile
+    module is already imported in this process (frozen pydantic; the
+    rewritten source on disk has not yet been reloaded). So we compute
+    the post-state roster directly from current_roster + the proposed
+    insert."""
+    import sys as _sys
+    _sys.path.insert(0, str(REPO_ROOT))
+    from scripts.gen_engine_manifest import _FILE_REGIONS, render_all
+    from tpcore.engine_profile import (
+        _PROFILE,
+        archived_engines,
+        roster_for_dispatch,
+    )
+    cur = list(roster_for_dispatch())
+    if engine in cur:
+        post_roster = tuple(cur)
+    else:
+        # insert preserving dispatch_order ordering. Build (order, name)
+        # pairs from _PROFILE for the current roster engines (we already
+        # know cur is dispatch_order-sorted) and splice in the new one.
+        cur_pairs = [(_PROFILE[n].dispatch_order, n) for n in cur]
+        cur_pairs.append((dispatch_order, engine))
+        cur_pairs.sort(key=lambda p: p[0])
+        post_roster = tuple(n for _, n in cur_pairs)
+    archived = archived_engines()
+    for rel in _FILE_REGIONS:
+        p = staged / rel
+        jn.record_file(p)
+        p.write_text(render_all(p.read_text(), rel,
+                                post_roster, archived))
+
+
+def _maybe_rewrite_frozen_literal_add(
+    staged: Path, *, added_engine: str, dispatch_order: int,
+    jn: _Journal,
+) -> None:
+    """H-S3-12 ADD-leg companion to ``_maybe_rewrite_frozen_literal``: an
+    ADD that lands PAPER changes ``roster_for_dispatch()`` (LAB is filtered
+    by _DISPATCHABLE; PAPER is not), so the frozen-literal pin in
+    test_dispatch_order_invariant_is_the_frozen_literal must be rewritten
+    in the SAME staged diff — never a hand-edit. Inserts ``added_engine``
+    at its dispatch_order position."""
+    tc = (staged / "tpcore" / "tests"
+          / "test_engine_lifecycle_consistency.py")
+    jn.record_file(tc)
+    src = tc.read_text()
+    m = re.search(
+        r"roster_for_dispatch\(\) == \(\s*([^)]+)\)", src)
+    if not m:
+        return
+    toks = [t.strip().strip('"') for t in m.group(1).split(",")
+            if t.strip()]
+    if added_engine in toks:
+        return
+    # splice the new engine in by dispatch_order
+    import sys as _sys
+    _sys.path.insert(0, str(REPO_ROOT))
+    from tpcore.engine_profile import _PROFILE
+    pairs = [(_PROFILE[n].dispatch_order, n) for n in toks
+             if n in _PROFILE]
+    pairs.append((dispatch_order, added_engine))
+    pairs.sort(key=lambda p: p[0])
+    new_toks = [n for _, n in pairs]
+    new_tuple = ", ".join(f'"{t}"' for t in new_toks)
+    tc.write_text(src.replace(m.group(0),
+                  f"roster_for_dispatch() == ({new_tuple})"))
+
+
 def _maybe_rewrite_frozen_literal(
     staged: Path, *, retired_engine: str | None, jn: _Journal,
 ) -> None:
@@ -765,6 +843,16 @@ def _apply_add(plan: TransitionPlan, root: Path, jn: _Journal) -> None:
     if miss is not None:
         raise RuntimeError(miss)  # apply()'s except → full restore
     ep.write_text(new_src)
+    # H-S3-12: when ADD lands PAPER (the new existing_code criteria-pass
+    # path), regenerate the non-Python shadows AND rewrite the frozen-
+    # literal pin in test_engine_lifecycle_consistency.py — same single-
+    # mechanism discipline as REMOVE. LAB landing is byte-identical (LAB
+    # is filtered out of roster_for_dispatch by _DISPATCHABLE).
+    if target_state is LifecycleState.PAPER:
+        _shadow_edit_add_to_paper(
+            root, engine, dispatch_order=int(order), jn=jn)
+        _maybe_rewrite_frozen_literal_add(
+            root, added_engine=engine, dispatch_order=int(order), jn=jn)
 
 
 def _validate_modify(plan: TransitionPlan,
