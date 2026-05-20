@@ -15,10 +15,26 @@ candidates). An empty demand set is valid (paper/early stage) — the
 caller then keeps its existing bounded behaviour; demand only
 RE-ORDERS within the budget, it never widens or zeroes a pull.
 
-Honest scope: the primitive + the IBorrowDesk exemplar wiring are
-built. Other constrained feeds adopt ``demand_targets`` as their
-handler is touched — declared per-feed via FeedProfile.targeting,
-rolled out incrementally (no engine coupling, no sprawl).
+Rollout state (2026-05-20):
+
+* **Wedge fits + wired:** ``iborrowdesk_borrow_rates`` (per-ticker
+  scrape loop with a max_tickers cap) and ``finnhub_insider_sentiment``
+  (per-ticker API loop with a ~60/min free-tier rate cap). Demand
+  tickers land at the FRONT of the loop so a truncated run still
+  covers what the engines care about.
+* **Wedge does NOT fit — intentionally probe-less:**
+  ``apewisdom_social_sentiment`` and ``finra_short_interest`` are
+  single bulk pulls (no per-ticker API call to prioritise — the
+  constraint is the vendor's global response ceiling, not our per-
+  ticker budget). ``greeks_max_pain`` is a single-symbol snapshot
+  (no universe to prioritise — engines read specific symbols, so
+  dynamic demand-driven symbol-switching would mismatch consumers).
+  These remain CONSTRAINED_DEMAND_DRIVEN in FeedProfile because the
+  budget constraint is real, but addressed via cadence + DFCR
+  provider augmentation (not ticker prioritisation).
+
+Adding a probe-fits constrained feed = one ``demand_targets``/
+``prioritise`` call in the handler, mirroring the exemplars above.
 """
 from __future__ import annotations
 
