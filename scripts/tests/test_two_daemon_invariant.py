@@ -78,6 +78,32 @@ def test_exactly_one_engine_keepalive_and_data_ops_cron():
     assert "<key>KeepAlive</key>" in drep  # data-lane daemon untouched
 
 
+def test_allocator_heartbeat_is_sibling_cron_not_in_closed_whitelist_loop():
+    """The allocator heartbeat (safety-net cron for the event-driven
+    allocator) is installed OUTSIDE the closed-whitelist for-loop. It is
+    a sibling installer call — NOT a member of the 4-installer
+    long-lived/cron whitelist that `_installer_loop_tokens` pins.
+
+    The two-daemon invariant: one long-lived daemon per lane + one
+    data-ops cron + the advisory llm-triage daemon. The heartbeat is a
+    thin SAFETY-NET cron, not a primary trigger, so it is structurally
+    distinct (gates on tpcore.engine_profile.should_fire and exits clean
+    when the daemon path already ran the allocator this cycle).
+    """
+    sh = (SCRIPTS / "install_all_daemons.sh").read_text()
+    # 1) The heartbeat installer exists.
+    assert (SCRIPTS / "install_launchd_allocator_heartbeat.sh").exists()
+    # 2) It is invoked from install_all_daemons.sh as a SIBLING call —
+    #    `scripts/install_launchd_allocator_heartbeat.sh` appears in the
+    #    file (callable) but NOT as a token in the for-loop.
+    assert "install_launchd_allocator_heartbeat" in sh
+    assert "install_launchd_allocator_heartbeat" not in _installer_loop_tokens()
+    # 3) The plist has a calendar interval (cron), NOT KeepAlive (daemon).
+    hb = (SCRIPTS / "install_launchd_allocator_heartbeat.sh").read_text()
+    assert "StartCalendarInterval" in hb
+    assert "<key>KeepAlive</key>" in hb and "<false/>" in hb  # explicitly NOT a daemon
+
+
 def test_dashboard_daemon_spec_drops_phantom_trade_monitor():
     dash = (REPO_ROOT / "dashboard.py").read_text()
     # post-consolidation the standalone trade_monitor persistent row

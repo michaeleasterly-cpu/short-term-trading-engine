@@ -839,10 +839,21 @@ Surfaced while making the RiskGovernor real + uniform (branch
   `tpcore.risk.limits_profile`. MUST extend the existing per-engine
   data gate ("Per-engine data gates — DONE 2026-05-16"), NOT a parallel
   mechanism. First step: inventory the existing per-engine gate.
-- **Allocator → event-driven.** Fire on the readiness event + an
-  idempotent "first-trading-day-of-week / already-ran-this-cycle"
-  guard (it is weekly, not daily — today it has NO such guard, only the
-  `(engine, allocation_date)` unique constraint prevents corruption).
+- ✅ **Allocator → event-driven — DONE (Sub-project C 2026-05-17, PR #17;
+  safety-net heartbeat added 2026-05-20).** Primary trigger: the
+  allocator is the first gated step in `ops/engine_dispatch.py`
+  (`_dispatch_allocator`), event-driven on `DATA_OPERATIONS_COMPLETE`
+  via `ops/engine_service.py` → `scripts/run_all_engines.sh`. The
+  idempotency guard is structural and uses
+  `tpcore.engine_profile.should_fire` (cadence boundary
+  `WEEKLY_FIRST_TRADING_DAY` + `_already_ran` STARTUP-row check +
+  fail-CLOSED). Safety net: `ops/allocator_heartbeat.py` +
+  `scripts/install_launchd_allocator_heartbeat.sh` (daily cron at
+  22:30 UTC; reuses `should_fire` so a daemon-up day is a no-op, a
+  daemon-down first-trading-day-of-week fires inline). Two-daemon
+  invariant preserved (heartbeat is a sibling cron, NOT in the
+  `install_all_daemons.sh` closed-whitelist for-loop). `(engine,
+  allocation_date)` unique constraint remains the last-line backstop.
 
 **Pre-existing bugs discovered (NOT introduced by this work; out of
 scope here, flagged honestly):**
