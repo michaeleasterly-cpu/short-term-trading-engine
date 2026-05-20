@@ -120,86 +120,9 @@ Single focus until further notice — no engine/Sigma-redesign work. Sequence:
      before going live. NOT done; awaiting explicit go + validation.
    - then the tracked `catalyst→earnings` rename (below).
 
-## ✅ Per-engine data gates — DONE 2026-05-16 (operator-authorised)
+## Vector engine — internal "Catalyst" vocabulary rename (operator decision pending)
 
-Shipped: `tpcore/quality/validation/capital_gate.py` gains
-`ENGINE_TABLES` (EVIDENCE-derived engine→table map, every pair a real
-`platform.<table>` read with file:line documented in the module) +
-`assert_passed_for_engine(pool, engine, *, require_all_green=False)`.
-Table→checks is derived from the selfheal registry `source` field
-(existing SoT; registry-coverage test makes it drift-proof). An
-engine is blocked ONLY if a source IT reads is missing/stale/failed
-at the latest run; an unrelated red no longer blocks it. Refinement,
-not weakening — each engine still needs 100% of ITS data; run-
-staleness still blocks everyone (safety). `assert_passed` (global
-all-green) unchanged and retained as the operator override
-(`CAPITAL_GATE_REQUIRE_ALL_GREEN` env, read by each plug). The
-suite-gated engine plugs (reversion/vector/momentum; sigma archived
-2026-05-16) call the
-per-engine variant; sentinel has no suite gate (satellite model) —
-untouched. NO engine strategy logic modified (gating call only). 897
-tests (12 capital_gate incl. unrelated-red-doesn't-block, own-red-
-blocks, override-restores-global, unknown-engine-fails-safe); ruff/
-check_imports clean.
-
---- superseded design notes below (kept for rationale) ---
-
-**Merit: real and growing.** Today the gate is global all-or-nothing —
-`DATA_OPERATIONS_COMPLETE` / `run_all_engines.sh` / `capital_gate`
-require ALL validation checks green or NO engine trades. But each
-engine consumes a different data subset: Sentinel→macro/credit
-(hy_spread, credit_spread, macro_indicators); Vector→earnings_events +
-fundamentals; Momentum→prices_daily only; etc. `options_max_pain` and
-`insider_sentiment` (added today) are consumed by **no current engine**
-— yet under the global gate a red `insider_sentiment_freshness` would
-block even Momentum. Over-blocks now; worse with every new adapter.
-
-**Design:** a per-engine data-dependency map → engine X trades iff the
-checks for the data X actually reads are green. Synergizes with the
-selfheal orchestrator (per-engine escalation scoping).
-
-**Constraints / why not now:**
-- This is a **production trade-gating change** (touches capital_gate /
-  emit / run_all_engines). NO PRODUCTION CHANGE without validation +
-  explicit operator go (SCOPE DISCIPLINE).
-- Stays consistent with the "100% data or don't trade" mandate — it's
-  a *refinement* (each engine still needs 100% of ITS data), not a
-  weakening. State that explicitly when built.
-- The per-engine dependency map must be **derived from each engine's
-  actual data reads** (grep the plugs), NOT invented. That derivation
-  is the first sub-task.
-- Sits behind the WEEK GOAL data-layer work + #132 in priority.
-
-## ✅ Rename: `catalyst_* → earnings_*` — FEED DONE 2026-05-16
-
-The data **feed** was renamed in lockstep (operator picked
-`earnings_events`): `platform.catalyst_events → platform.earnings_events`
-(idempotent migration `20260516_0800`, table + index + PK constraint,
-no data dropped — 13,848 rows / 1,104 tickers verified intact); stage
-`catalyst_refresh → earnings_refresh` (+ `_stage_*`/`handle_*` fns);
-validation check + module file (`checks/earnings_events_freshness.py`,
-`CHECK_NAME="earnings_events_freshness"`) + `KNOWN_CHECK_NAMES` +
-suite vars + conftest routing + test_suite/e2e source sets; selfheal
-`HealSpec(source="earnings_events")`; `audit_data_pipeline.py`; the two
-one-off backfill scripts (git-mv'd); Vector's data-loading queries;
-docs. `earnings_events_freshness` verified GREEN on the live renamed
-table via the validation suite.
-
-**OPEN — deliberate scope boundary, operator decision pending:** the
-Vector engine's **internal scoring vocabulary** is *not* renamed —
-the `VectorScore.catalyst` Pydantic field (0–35 component), the
-`catalyst_magnitude` backtest CSV column header, `_has_catalyst` /
-`_catalyst_window_days`, and "Catalyst-Driven Swing" branding. That is
-the engine's model concept, not the feed; renaming it touches a
-serialized model field + CSV schema + dashboard reads (artifact-
-breaking) and was out of scope for "rename the feed." Flagged to
-operator: decide whether to also purge Vector's internal "Catalyst"
-vocabulary or leave the engine concept as-is.
-
-Note: the misnomer's threshold-reasoning confusion (the
-`earnings_events_freshness` "≥X% of T1/T2 in 180d" floor reasons as a
-broad catalyst stream but it is quarterly earnings *beats*) remains
-relevant to the still-owed SEC/earnings coverage verdict (WEEK GOAL #1).
+The data feed was renamed `catalyst_* → earnings_*` (DONE 2026-05-16; see session-log). The Vector engine's **internal scoring vocabulary** is still NOT renamed — `VectorScore.catalyst` Pydantic field (0–35 component), `catalyst_magnitude` backtest CSV column header, `_has_catalyst` / `_catalyst_window_days`, "Catalyst-Driven Swing" branding. Touches a serialized model field + CSV schema + dashboard reads (artifact-breaking). Operator decides: purge Vector's internal "Catalyst" vocabulary, or leave the engine concept as-is. `[lane: engine-owned] [needs operator decision: yes] [effort: M (artifact-breaking)]`
 
 ## Autonomous self-heal — EVERY data source (P0, 2026-05-15)
 
@@ -348,31 +271,10 @@ The 2026-05-15 parameter sweeps validated the targeted fixes (Sigma SPY-
 regime filter, Reversion Z-relaxation + T3 expansion) at the metric level
 but DSR/credibility gates remain structurally blocked.
 
-- **Sigma — ⚰️ ARCHIVED 2026-05-16 (CLOSED).** The "final test before
-  permanent retirement" was run this session — not the queued HMM path
-  but the operator-approved **failed-expansion redesign** (#168:
-  volatility-compression → attempted-then-failed breakout entry →
-  VWAP/value-mid exit, with VIX>25 + Fear&Greed Extreme-Fear
-  suppressors). Run end-to-end through the **canonical**
-  `scripts/search_parameters.py` pipeline (no one-off script).
-  **Verdict — decisive FAILED:** 50/50 trials negative held-back
-  Sharpe (best −0.1185, mean −2.55), credibility pinned at 45 (gate is
-  60), DSR 0.0000. Smoke confirmed real trades with VIX/F&G series
-  loaded → true negative, not a dead-signal artifact. Operator
-  confirmed archival. Engine moved `sigma/`→`archive/sigma/`; removed
-  from `pyproject.toml`, `run_all_engines.sh`, `run_smoke_test.sh`,
-  `run_all_searches.sh`, `ENGINE_TABLES`, tip-sheet registry, and all
-  real importers (tpcore tests now duck-type `ExecutionDecision`).
-  Canonical record + raw sweep CSV: `archive/sigma/EULOGY.md` /
-  `archive/sigma/sigma_failed_expansion_search.csv`.
-  **Scoping caveat (carried into the eulogy):** this adjudicates only
-  the *directional* failed-expansion form. The **sector-neutral
-  residual idea** is pursued (operator decision 2026-05-17) as a
-  **Reversion enhancement** — the PCA-residual signal switch (Avellaneda
-  & Lee), NOT a new standalone engine and NOT a Sigma un-archiving.
-  "Sigma failed" ≠ "compression/residual mean-reversion is dead." (The
-  previously-queued HMM-regime path and the rejected 2026-05-15 OU gate
-  are now moot — Sigma is closed.)
+Sigma archive scoping caveat: the sector-neutral residual idea
+(Avellaneda & Lee) is pursued as the Reversion PCA-residual enhancement
+below, NOT a Sigma revival. See `archive/sigma/EULOGY.md` for the
+archival record.
 
 - **Reversion PCA-residual switch (2026-05-17, #171-175).** `[lane:
   engine-owned] [gate: operator verdict bar — held-back DSR≥0.95 etc.]
@@ -400,150 +302,6 @@ but DSR/credibility gates remain structurally blocked.
   the sweep clears the battery — do not wire a live plug to an
   unvalidated signal (the Sigma lesson).
 
-- **Reversion — reclassified as satellite 2026-05-15 (closed).** The
-  signal-class-redesign decision was resolved by reclassifying Reversion
-  as a satellite engine alongside S2: permanent 5–10% capital cap,
-  per-trade graduation criteria, DSR gate retired. The combined filter
-  (Z ≥ 3.0 + HIGH earnings quality) produces 19 trades / Sharpe +0.312
-  / PF 1.755 / max DD −11.5% on 2018-2025 — strong per-trade metrics at
-  a structurally bounded firing rate. See `docs/MASTER_PLAN.md` §4.2 and
-  `backtests/reversion_satellite_backtest.json`.
-
-## ✅ Lab-isolation DB job — DONE 2026-05-20 (PR #147)
-
-Shipped: `.github/workflows/ci.yml` now has a sibling `lab-isolation-db`
-job that provisions Postgres 15 via the GitHub Actions `services:` block,
-pre-creates the `platform` schema (alembic version-table chicken-and-egg
-fix), runs `alembic upgrade head`, then runs five DB-gated suites against
-the real DB:
-`tpcore/tests/test_db_read_only.py`,
-`tpcore/tests/test_lab_isolation.py`,
-`tpcore/tests/test_persistent_store.py`,
-`tpcore/tests/test_fundamentals_cache.py`,
-`tpcore/tests/test_aar_writer.py`. The existing `pytest + ruff +
-check_imports` job is untouched and continues to skip these suites when
-no DB is available. First successful run: 1m1s. Cross-ref SP-A, #242.
-
-**Note for historical context:** the original 2026-05-19 scope named two
-specific files (`test_lab_isolation.py`,
-`test_lab_credibility_pool_threaded.py`) and "minimal `platform.prices_daily`
-fixture for the reversion walk-forward"; the shipped form covers the five
-files that actually have `skipif(DATABASE_URL is None / RUN_DB_INTEGRATION_TESTS
-not set)` markers — verified by repo-wide grep at build time. The proofs
-named in the original (test_cumulative_n_trials_real_db_integer_correctness
-[H-LL-9], test_lab_ledger_disjoint_from_live_graduation [T-LIVE/H-LL-4]) are
-covered by `test_lab_isolation.py`, which is in the shipped job.
-
-## ✅ Code-sweep findings — engine-lane-owned — ALL SHIPPED 2026-05-19 (CONSOLIDATED v2)
-
-Data-lane sweep handoff v2 (superseded the prior 4-item). Engine lane owned
-these. **All 5 findings SHIPPED to origin/main 2026-05-19** (operator
-decision: "findings only — stop after #3"; the Lab front-half epic remainder
-is paused — see the Lab-front-half epic block below). Data lane tracks/fixes
-its own side in project_code_sweep_findings_2026_05_19.md (will not
-duplicate). Closed record kept legible for cross-session history:
-
-- ✅ **SHIPPED PR #104 (096ff68) — #1 [HIGH] DSR null-variance estimator too
-  lenient (= SP-A2, task #147).** tpcore/backtest/overfitting.py
-  _expected_max_sharpe_under_null used single-estimator variance
-  sr_variance=1/(n_obs-1); corrected to the Bailey & López de Prado (SSRN
-  2460551) selection-bias dispersion V[SR̂ₙ] across the N searched trials —
-  the live DSR gate genuinely tightens (was too lenient, not yet exploited:
-  all engines fail DSR). Pre-existing & orthogonal to SP-A. Spec
-  `docs/superpowers/specs/2026-05-19-dsr-null-variance-fix.md`, plan
-  `docs/superpowers/plans/2026-05-19-dsr-null-variance-fix.md`.
-- ✅ **SHIPPED PR #106 (bdd8736) — #2 [MED] Credibility rubric mislabelled
-  the gate threshold (+ latent VALUE bug).** tpcore/backtest/credibility.py
-  flag/description said "> 0.90" but the real gate is DSR_PASS_THRESHOLD=0.95;
-  renamed to key off the constant. **Worse than first stated:** the sweep
-  also surfaced a latent VALUE bug in statistical_validation.py (hardcoded
-  0.90 → DSR_PASS_THRESHOLD) — not just a label, an actual wrong threshold
-  fixed in the same PR.
-- ✅ **SHIPPED PR #107 (edadf12) — #3 [MED] Inverse-vol allocator volatility
-  estimator.** tpcore/allocator/service.py realized_vol used
-  statistics.pstdev (population ÷N); **two coupled defects fixed:** (a)
-  pstdev → statistics.stdev sample (ddof=1), consistent with
-  overfitting.py _per_trade_sharpe; (b) the estimator ran over raw
-  absolute per-session P&L — normalized to returns before inverse-weighting
-  (the worse-than-stated half: the input, not just ddof, was wrong).
-- ✅ **SHIPPED PR #105 (680cb44) — #4 [HIGH] Blocking sync Anthropic client
-  in async engine-triage daemon (CROSS-LANE #244).**
-  ops/engine_llm_triage.py synchronous Anthropic() awaited inside the
-  llm_triage_service loop → migrated to anthropic.AsyncAnthropic + await
-  client.messages.create(...). Engine twin / symmetric mirror of the
-  data-lane fix #97 (twin ops/llm_data_triage.py); AsyncAnthropic chosen
-  (async-native) per the #244 cross-lane alignment.
-- ✅ **SHIPPED PR #96 (40bd8a5) — #5 [HIGH] asyncpg pooler-safety missing in
-  3 direct create_pool sites.** ops/engine_sdlc/planner.py + ops/lab/run.py
-  (×2). planner._emit_audit + lab.run._load_universe_by_tier routed through
-  the canonical tpcore.db.build_asyncpg_pool (post data-lane FIX-2 #95); the
-  legacy credibility-write site kept a raw asyncpg.create_pool to preserve
-  the SP-A H-S3-8 byte-identical-legacy isolation invariant
-  (test_lab_credibility_pool_threaded.py) with the pooler-safety kwargs
-  (statement_cache_size=0 + server_settings jit:off) mirrored inline + a
-  "keep in sync with tpcore.db.build_asyncpg_pool" comment.
-
-## Lab front-half epic — RESUMED 2026-05-19..05-20 (SP-A..F SHIPPED, SP-G in flight)
-
-Operator-approved epic. The 2026-05-19 pause cleared 2026-05-19..05-20;
-SP-B through SP-F shipped this period, and SP-G's hardened design spec
-landed 2026-05-20. The Lab front-half is now substantially built;
-remaining work is the SP-G build and the follow-on autonomous-quant
-epic (task #25 — separate, see its own section below).
-
-**Safety floor (the 2026-05-19 milestone):**
-- ✅ **SP-A — cross-candidate n_trials ledger — SHIPPED PR #93 (96e6ce6).**
-  The anti-overfit-laundering safety floor: every Lab candidate honestly
-  counted against a persistent cumulative n_trials so a tuned spec can't be
-  laundered past the DSR gate by splitting trials across runs.
-- ✅ **SP-A2 — DSR null-variance estimator correction — SHIPPED PR #104
-  (096ff68)** (= code-sweep Finding #1, task #147; see the shipped
-  code-sweep block above). Completes the safety floor: the gate now
-  counts trials honestly AND deflates correctly.
-
-**Sub-projects shipped this period (2026-05-19..05-20):**
-- ✅ **SP-B — roster-driven plug-and-play Lab targeting — SHIPPED PR #131.**
-  `ops/lab/run.py` `_runner_for` / `PARAM_RANGES` + CLI `--target-engine`
-  driven from `tpcore.engine_profile` (the roster SoT); new/retuned engines
-  are Lab-targetable without editing the Lab.
-- ✅ **SP-C — Lab Candidate Readiness checklist — SHIPPED PR #132.**
-  `docs/superpowers/checklists/lab_candidate_readiness.md`; feature-flag
-  variant + single pre-registered hypothesis + n_trials-ledger
-  acknowledgement.
-- ✅ **SP-D — pluggable per-engine success scoring + richer dossier —
-  SHIPPED PR #135.**
-- ✅ **SP-E — Sentinel validation case (MAXDD_REDUCTION non-Sharpe Lab
-  target) — SHIPPED PR #136.**
-- ✅ **SP-F — Catalyst engine scaffold + ECR-ADD prepared — SHIPPED PR
-  #137.** (Engine code shipped; the actual `python -m ops.engine_sdlc
-  --ecr ecr_catalyst.txt` activation that flips the roster is deferred —
-  see the open follow-up at the end of this section.)
-- ✅ **SP-G design spec — SHIPPED PR #146 (2026-05-20).** Hardened design
-  spec for the thin advisory LLM spec-emitter
-  (`docs/superpowers/specs/2026-05-20-lab-sp-g-llm-spec-emitter-design.md`).
-  Operator confirmed 2026-05-20 to "ship with my recommendations" on the
-  six §10 decision-points: thin scope (Q1), `EMISSION_QUOTA_PER_TARGET=20`
-  (Q2), per-emission `--reference-bundle <name>` (Q3), SP-E spec-landing
-  path (Q4), `/lab-spec-emit` skill name (Q5),
-  `LAB_LEDGER_CAPACITY_AVAILABLE` event deferred (Q6).
-
-**In flight:**
-- **SP-G build.** Subagent-driven heavy-lane build of the thin advisory
-  LLM spec-emitter per the merged design spec. One PR expected:
-  `tpcore/lab/llm_emitter/` (models / emitter / diff_fence) +
-  `ops/llm_lab_emitter.py` (the agent, credential-starved, draft-PR-only)
-  + third co-task in `ops/llm_triage_service.py` +
-  `.claude/skills/lab-spec-emit.md` + reference bundles +
-  orphaned-spend recovery runbook. `[lane: engine-owned] [needs operator
-  decision: no (decisions locked)] [effort: L]`
-
-**Deferred follow-up (engine roster activation):**
-- **Catalyst ECR activation.** `python -m ops.engine_sdlc --ecr
-  ecr_catalyst.txt` to flip Catalyst's lifecycle in the `_PROFILE`
-  roster. The engine code shipped via PR #137; the ECR activation is
-  the remaining step. `[lane: engine-owned via /ecr skill] [gate:
-  none] [needs operator decision: no] [effort: S]`
-
 ## Task #25 — autonomous LLM+quant edge finder (follow-on epic)
 
 The richer ambition the operator raised 2026-05-20 when SP-G's scope was
@@ -559,12 +317,7 @@ spec via PR #146 and is in build); SP-G is the minimum, hardest-fenced
 form of the LLM-proposes / deterministic-gate-disposes fence, task #25
 inherits that fence verbatim and extends it with autonomous search.
 
-**Status:** backlog. Gated on (a) SP-G build landing, and (b) operator's
-explicit go to start the brainstorm. Operator answered "keep going /
-stick to the plan" 2026-05-20 when offered an early restructure of
-SP-G into this larger ambition — i.e. NO restructure now, task #25 is
-its own follow-on epic with its own brainstorm → spec → plan → build
-sequence.
+**Status:** backlog, **unblocked** — SP-G build landed via PR #152 (2026-05-20). Only remaining gate is the operator's explicit go to start the brainstorm. Operator answered "keep going / stick to the plan" 2026-05-20 when offered an early restructure of SP-G into this larger ambition — task #25 stays its own follow-on epic with its own brainstorm → spec → plan → build sequence.
 
 **HARD CONSTRAINT (inherited from
 [[project_research_llm_edge_discovery]] + [[project_ml_research_track]]
@@ -622,21 +375,6 @@ n_trials hazard and are explicitly rejected — single config only.
   check (NOT sweep dimensions): (a) volume / "trading-time" overlay
   (Avellaneda ETF 1.51); (b) ETF-residual crisis fallback when systematic
   correlation dominates PCA. Cross-ref #171-175, #242.
-
-- **Vector — sector-relative composite score (single-spec Lab
-  candidate).** `[lane: engine-owned] [gate: held-back DSR≥0.95 + cred≥60
-  + PBO≤0.20 + ≥150 held-back trades + ≥3× current gate-model candidate
-  count + no family >70% score variance] [decision: ADOPT — route via
-  ops.lab] [effort: M]` Replace the AND-gate with ONE fixed-weight
-  sector-relative composite: target-engine vector; ONE primary config —
-  value/catalyst/technical weights = 0.35/0.40/0.25, sector-relative
-  standardization, top-decile selection, ONE pre-registered
-  sector-neutralization choice (reports disagree long-only vs long-short;
-  pick one, do NOT test both). Catalyst family = earnings_events +
-  insider-cluster (data live). Data prereq: none beyond live feeds. Via
-  `python -m ops.lab --candidate vector_composite --target-engine vector
-  --intent fold_existing` → graduation gate → ECR; counts against
-  n_trials; NEVER bypass the gate.
 
 - **Sentinel — graduated Bear Score (single-spec Lab candidate).**
   `[lane: engine-owned] [gate: maxDD reduction ≥30% vs base + ulcer
@@ -732,41 +470,6 @@ edge):** `[lane: data-mine][gate: Railway-re-enable][decision: made][effort: L]`
   never silent OK — a "no fake-green" latent-bug fix.
 - Memory: `project_railway_archive_substrate_migration`. Sequencing:
   re-base detection onto Postgres BEFORE Railway re-enable.
-
-## Data archival — CSV-first retrofit (DONE 2026-05-15)
-
-**Closed.** The 2026-05-15 BAMLH0A0HYM2 incident exposed that the
-CSV-first sub-protocol was implemented for only one handler. Rather
-than patch FRED alone, all five ingest handlers were retrofitted to a
-shared archive layer.
-
-**Shipped:**
-- `tpcore/ingestion/csv_archive.py` — shared write + gzip + shrinkage
-  detection. 8 unit tests including the BAMLH0A0HYM2 truncation
-  scenario (7,500 → 785 rows → `over_threshold=True`).
-- All 5 handlers write a gzipped CSV archive before/after the DB
-  upsert: `handle_macro_indicators`, `handle_daily_bars`,
-  `handle_corporate_actions`, `handle_fundamentals_refresh`,
-  `_stage_earnings_refresh`.
-- **Shrinkage detection** (the vendor-truncation alarm) is wired into
-  the two *full-snapshot* sources only — `fred_macro` and
-  `alpaca_corporate_actions` — which re-pull their entire history every
-  run, so a row-count drop unambiguously means truncation. The three
-  *incremental* sources (`alpaca_daily_bars`, `fmp_fundamentals`,
-  `fmp_earnings_events`) pull a variable window each run, so row-count
-  shrinkage there is noise — they get the audit-trail archive but no
-  alarm (a full-table baseline would false-flag their next incremental
-  run; this was caught and corrected during the build).
-- `scripts/dump_baseline_archives.py` — seeds baseline snapshots for
-  the two full-snapshot sources so shrinkage detection has a real
-  predecessor from run 1. Run once 2026-05-15.
-
-**Compliance-matrix re-grade — DONE 2026-05-15.** The `fred` row in
-`docs/superpowers/pipelines/data_adapter_pipeline.md` now rests on the
-real CSV-first implementation (the ✅ previously sat on the
-"trivial first pull" carve-out, which the BAA10Y backfill invalidated).
-Matrix audit note + FRED row + cross-cutting summary updated. Section
-fully closed — no remaining items.
 
 ## Publishing
 
