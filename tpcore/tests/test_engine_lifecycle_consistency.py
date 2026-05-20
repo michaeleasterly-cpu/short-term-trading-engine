@@ -32,11 +32,15 @@ from tpcore.engine_profile import (
 
 
 def _engines_with_data_dependencies() -> set[str]:
-    """Engines whose `data_dependencies` is non-empty. Mirrors the
-    pre-shim-removal `set(ENGINE_TABLES)` semantics: ENGINE_TABLES was
-    keyed by engines that READ from a platform table; engines with empty
-    `data_dependencies` (LAB sentinels, archived RETIRED) were absent."""
-    return {n for n, p in _PROFILE.items() if p.data_dependencies}
+    """Engines whose `data_dependencies` is non-empty AND not RETIRED.
+    Mirrors the pre-shim-removal `set(ENGINE_TABLES)` semantics: the
+    pre-migration `_derive_engine_tables` filtered RETIRED out (the
+    D-SDLC1-1 seam — ENGINE_TABLES was keyed by LIVE engines; the SDLC
+    REMOVE flow transitions an engine to RETIRED but preserves the
+    frozen EngineProfile.data_dependencies value, so the filter is
+    structurally required to keep the keys-in-roster predicate honest)."""
+    return {n for n, p in _PROFILE.items()
+            if p.data_dependencies and p.lifecycle_state is not LifecycleState.RETIRED}
 
 REPO = Path(__file__).resolve().parents[2]
 
