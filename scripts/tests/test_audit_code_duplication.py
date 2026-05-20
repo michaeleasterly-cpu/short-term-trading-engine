@@ -16,11 +16,15 @@ into ``tmp_path``.
 """
 from __future__ import annotations
 
-import importlib
-
 import pytest
 
-mod = importlib.import_module("scripts.audit_code_duplication")
+# Real import (rather than ``importlib.import_module``) so the
+# orphan-script detector recognises the wiring — the detector matches
+# ``import scripts.<name>`` / ``from scripts.<name> import …`` tokens,
+# not a string argument to ``importlib``. Switching to a real import
+# is the cheapest way to keep ``audit_code_duplication`` out of the
+# orphan allowlist now that the zero-allowlist invariant is in force.
+import scripts.audit_code_duplication as mod
 
 
 def test_analyse_is_deterministic_and_readonly() -> None:

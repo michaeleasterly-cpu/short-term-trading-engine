@@ -23,13 +23,12 @@ detector counts a script as referenced ONLY when:
 
 A bare-stem substring match is **rejected** for two reasons proven in
 the wild: (1) a docstring/comment mention ("Companion to
-``scripts/extract_tradier.py``") is prose, not wiring — the docstring of
-this very module says a script named only in a comment IS an orphan; and
-(2) a shorter stem is a substring of a longer script name
-(``extract_tradier`` ⊂ ``extract_tradier_full``), so a stem match
-silently cross-counts. The exact path-token match kills both: a
-``scripts/extract_tradier.py`` token never matches
-``scripts/extract_tradier_full.py``.
+``scripts/foo.py``") is prose, not wiring — the docstring of this very
+module says a script named only in a comment IS an orphan; and (2) a
+shorter stem is a substring of a longer script name (e.g. ``foo`` ⊂
+``foo_full``), so a stem match silently cross-counts. The exact
+path-token match kills both: a ``scripts/foo.py`` token never matches
+``scripts/foo_full.py``.
 
 For each ``scripts/*.py`` (excluding ``scripts/tests/`` and
 ``__init__.py``) this test asserts such a genuine reference exists in at
@@ -80,91 +79,18 @@ _EXCLUDE_DIR_NAMES = frozenset(
 
 _REF_GLOBS = ("*.py", "*.sh", "*.yml", "*.yaml", "*.toml", "*.plist")
 
-# Deliberate standalone tools — invoked by hand / out-of-band, no
-# wrapper or stage registry by design. Each entry is a recorded
-# decision. Bare script name (no ``.py``).
-_ALLOWLIST: frozenset[str] = frozenset(
-    {
-        # NOTE: git_hygiene is intentionally NOT here — it is
-        # scripts/git_hygiene.sh (a shell tool), not a scripts/*.py, so
-        # it is outside this .py-only gate's scope entirely. Adding it
-        # would be a stale (no scripts/git_hygiene.py) allowlist entry.
-        # CI guard for the agent PR label fence — a standalone gate
-        # invoked directly from ci.yml; deliberate, listed for
-        # defense-in-depth if that ci ref is ever refactored.
-        "agent_pr_label_guard",
-        # Roster manifest generator — the engine-domain generated-shadow
-        # tool, run on-demand (``--check`` in CI); deliberate standalone.
-        "gen_engine_manifest",
-        # P3c read-only duplication audit — an analysis command by
-        # registered intent (it MUST NOT mutate source); deliberate
-        # standalone tool, allowlisted per the P3b plan.
-        "audit_code_duplication",
-        # ---------------------------------------------------------------
-        # Suspected-dead one-off scripts. Each is self-described as a
-        # "one-shot"/hand-run tool with ZERO genuine code-level wiring
-        # (no *.sh wrapper, no ops.py stage, no plist, no ci.yml, no
-        # pyproject, no import, no test). The previous bare-substring
-        # matcher false-PASSED every one of these by counting a prose
-        # mention or a substring-of-a-longer-stem collision; the
-        # path-token/import matcher correctly exposes them. Deletion is
-        # Phase-5-class (code-mutating, out of this plan's scope), so
-        # each is tracked HERE, NOT silently buried — the allowlist
-        # entry + TODO + PR report are the honest record, mirroring how
-        # ``ingest_tradier_csv`` is handled.
-        # ---------------------------------------------------------------
-        # TODO(P5): migrate to ops.py stage or remove — flagged
-        # 2026-05-19 (one-off script, CLAUDE.md bans these). The P3b
-        # sweep found 0 references. Deletion is Phase-5-class
-        # (code-mutating, out of this plan's scope), so it is tracked
-        # here, NOT silently buried: the allowlist entry + this comment
-        # + the PR report are the honest record.
-        "ingest_tradier_csv",
-        # TODO(P5): migrate to ops.py stage or remove — flagged
-        # 2026-05-19. One-shot backtest-universe daily-bar backfill;
-        # canonical path is ``ops.py --stage daily_bars``. 0 genuine
-        # references.
-        "backfill_backtest_universe",
-        # TODO(P5): migrate to ops.py stage or remove — flagged
-        # 2026-05-19. Trade-log diff CLI; only a prose mention in
-        # ``tpcore/backtest/equivalence.py``. 0 genuine references.
-        "compare_baselines",
-        # TODO(P5): migrate to ops.py stage or remove — flagged
-        # 2026-05-19. One-shot corporate-actions all-active driver,
-        # superseded by ``ops.py``; only prose mentions in ops.py /
-        # run_daily_bars_all_active docstrings. 0 genuine references.
-        "run_corporate_actions_all_active",
-        # TODO(P5): migrate to ops.py stage or remove — flagged
-        # 2026-05-19. One-shot daily-bars all-active driver, superseded
-        # by ``ops.py``; only a prose mention in ops.py docstring. 0
-        # genuine references.
-        "run_daily_bars_all_active",
-        # TODO(P5): migrate to ops.py stage or remove — flagged
-        # 2026-05-19. End-to-end AAR-pipeline manual smoke against the
-        # live DB; only a prose mention in audit_data_pipeline.py
-        # docstring (not invoked by it). 0 genuine references.
-        "test_aar_pipeline",
-        # TODO(P5): migrate to ops.py stage or remove — flagged
-        # 2026-05-19. End-to-end kill-switch manual verification against
-        # the production pool; the ``test_kill_switch`` substring only
-        # collides with ``test_kill_switch_blocks_all_trades`` in
-        # tpcore/tests/test_risk_governor.py. 0 genuine references.
-        "test_kill_switch",
-        # TODO(P5): migrate to ops.py stage or remove — flagged
-        # 2026-05-19. One-shot Tradier CSV extractor (50-name backtest
-        # universe). Previously false-passed only because its name is a
-        # substring of ``extract_tradier_full`` AND that file's
-        # docstring says "Companion to scripts/extract_tradier.py"
-        # (prose). 0 genuine references.
-        "extract_tradier",
-        # TODO(P5): migrate to ops.py stage or remove — flagged
-        # 2026-05-19. Wide one-shot Tradier CSV extractor (full US
-        # equity/ETF universe). Only prose mentions in
-        # ingest_tradier_csv / extract_tradier docstrings. 0 genuine
-        # references.
-        "extract_tradier_full",
-    }
-)
+# Zero-allowlist end-state (2026-05-20). The operator overruled the
+# prior "keep-as-helper" disposition for the remaining one-off scripts;
+# the end-state is an EMPTY allowlist. Every legitimate operator helper
+# is now a ``scripts/ops.py --stage <name>``; every superseded driver
+# was deleted. ``test_allowlist_is_empty`` (below) locks the invariant.
+#
+# Previously-allowlisted deliberate standalones (``agent_pr_label_guard``,
+# ``gen_engine_manifest``, ``audit_code_duplication``) were removed
+# because each has a genuine code-level reference — ``ci.yml``,
+# ``pyproject.toml``, or a test import — so they pass the orphan check
+# on the actual wiring, not on a defence-in-depth allowlist entry.
+_ALLOWLIST: frozenset[str] = frozenset()
 
 
 def _is_excluded(path: Path) -> bool:
@@ -349,6 +275,26 @@ def test_allowlist_entries_are_real_scripts() -> None:
     assert not stale, (
         f"_ALLOWLIST names that no longer have a scripts/<name>.py: "
         f"{stale} — remove the stale entries."
+    )
+
+
+def test_allowlist_is_empty() -> None:
+    """Zero-allowlist invariant (operator end-state, 2026-05-20).
+
+    Every legitimate operator helper must be reachable through
+    ``scripts/ops.py --stage <name>``; superseded one-off drivers must
+    be deleted. Adding a new ``_ALLOWLIST`` entry — even a "deliberate
+    standalone" — silently re-opens the door CLAUDE.md closed on
+    one-off ``scripts/foo.py`` accretion. If a new tool genuinely
+    cannot fit the stage model, the right answer is a focused
+    discussion (and an explicit operator override) — NOT bypassing the
+    sentinel.
+    """
+    assert _ALLOWLIST == frozenset(), (
+        "_ALLOWLIST must be empty (zero-orphan-allowlist end-state). "
+        f"Found entries: {sorted(_ALLOWLIST)}. Migrate each to "
+        "ops.py --stage <name> or delete the script + remove the "
+        "allowlist entry."
     )
 
 

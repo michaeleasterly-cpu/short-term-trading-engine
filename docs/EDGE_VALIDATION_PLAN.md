@@ -63,8 +63,8 @@ No strategy graduates from paper to live capital until it passes the full overfi
    - Handler `_handle_daily_bars_all_active` in `tpcore/ingestion/handlers.py`; local driver `scripts/run_daily_bars_all_active.py`.
    - Last sweep: 8,297 active assets enumerated → 533 passed coarse → 2,665 rows upserted (2026-05-12).
 2. **A2 – Tradier historical bar extraction + ingest** ✓
-   - `scripts/extract_tradier_full.py` produced `data/tradier_export/tradier_bars_full.csv` (1.07 GB, 22.36M rows, 8,640 symbols).
-   - `scripts/ingest_tradier_csv.py` merged into `platform.prices_daily` with Inf/overflow guards (≈50k bad-data rows skipped, 0.23% of source). Latest run: 20.56M rows attempted, 7,710 tickers seen.
+   - `ops.py --stage extract_tradier_full` produced `data/tradier_export/tradier_bars_full.csv` (1.07 GB, 22.36M rows, 8,640 symbols). (Migrated 2026-05-20 from the legacy `scripts/extract_tradier_full.py`.)
+   - `ops.py --stage ingest_tradier_csv` merged into `platform.prices_daily` with Inf/overflow guards (≈50k bad-data rows skipped, 0.23% of source). Latest run: 20.56M rows attempted, 7,710 tickers seen. (Migrated 2026-05-20 from the legacy `scripts/ingest_tradier_csv.py`.)
 3. **A3 – Universe simulation** ✓
    - `scripts/simulate_universe.py` rewritten to batched SQL — 32 min → 57 s.
    - Result (2026-05-12, 7,694-ticker universe): **Sigma 187, Reversion 4, Vector 0**.

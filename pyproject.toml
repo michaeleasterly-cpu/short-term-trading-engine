@@ -227,6 +227,22 @@ ignore = ["E501"]
 # SP-B/SP-D/SP-E/SP-F precedents above) — never an inline
 # `# noqa: SLF001` (CLAUDE.md / STYLE_GUIDE).
 "vector/tests/test_composite_flag_byte_identical.py" = ["SLF"]
+# Orphan-script zero-allowlist migration tests (2026-05-21). Each
+# stage test asserts the new ``ops.py``-private ``_stage_<name>``
+# coroutine is registered in ``_STAGE_SPECS`` + ``KNOWN_STAGES`` and
+# smoke-tests its body via a FakePool/FakeConn double — that IS the
+# tests' purpose (mirror of the just-shipped
+# ``test_compute_fundamental_ratios_stage.py`` precedent). Engine-
+# lane-module-private (NOT tpcore-private) access in registration-pin
+# + body-smoke tests; the scoped per-file ignore is the correct form
+# (mirrors every other SP-B/SP-D/SP-E/SP-F char-test precedent above)
+# — never an inline ``# noqa: SLF001`` (CLAUDE.md / STYLE_GUIDE).
+"tpcore/tests/test_compute_fundamental_ratios_stage.py" = ["SLF"]
+"tpcore/tests/test_compare_baselines_stage.py" = ["SLF"]
+"tpcore/tests/test_aar_pipeline_smoke_stage.py" = ["SLF"]
+"tpcore/tests/test_kill_switch_smoke_stage.py" = ["SLF"]
+"tpcore/tests/test_extract_tradier_full_stage.py" = ["SLF"]
+"tpcore/tests/test_ingest_tradier_csv_stage.py" = ["SLF"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

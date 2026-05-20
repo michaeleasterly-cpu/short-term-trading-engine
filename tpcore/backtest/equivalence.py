@@ -19,7 +19,7 @@ Usage in a regression test::
     candidate = run_engine_and_get_trades(...)
     assert_trade_lists_equal(baseline, candidate)  # raises on mismatch
 
-Usage in a diff CLI (``scripts/compare_baselines.py``)::
+Usage in a diff stage (``ops.py --stage compare_baselines``)::
 
     report = compare_trade_lists(baseline, candidate)
     if not report.equivalent:

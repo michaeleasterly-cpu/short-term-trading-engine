@@ -847,6 +847,809 @@ async def _stage_risk_close_ledger_prune(pool: asyncpg.Pool) -> dict[str, Any]:
     return {"pruned_settled_close_keys": pruned}
 
 
+# ────────────────────────────────────────────────────────────────────────
+# Operator-on-demand verification + utility stages
+# ────────────────────────────────────────────────────────────────────────
+# Migrated 2026-05-20 from the legacy one-off ``scripts/*.py`` orphans
+# (catalog at ``docs/superpowers/audits/2026-05-20-orphan-scripts-catalog.md``)
+# as part of the zero-allowlist sweep. These stages run on-demand
+# (``--stage <name>``) — NOT registered in ``OPS_UPDATE_STAGES`` and
+# never invoked by the daily ``--update`` cadence.
+
+
+async def _stage_compare_baselines(
+    pool: asyncpg.Pool, config: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Diff two trade-log CSVs and report whether they are equivalent.
+
+    Regression-safety wrapper around ``tpcore.backtest.compare_trade_lists``
+    used when refactoring an engine or migrating between strategy
+    constructions (e.g. monthly-rebalance → rolling). Tolerances are
+    absolute, not relative; defaults match the underlying API's defaults
+    (1e-6 on pnl_pct, 1e-4 on prices).
+
+    Operator-on-demand only. Migrated from
+    ``scripts/compare_baselines.py`` (orphan-scripts sweep 2026-05-20).
+    Pool arg unused — no DB writes.
+
+    Config (``--param key=value``)::
+
+        baseline   = path to known-good trade-log CSV (REQUIRED)
+        candidate  = path to candidate trade-log CSV (REQUIRED)
+        tol_pnl_pct = absolute tol on pnl_pct (default 1e-6)
+        tol_price   = absolute tol on entry/exit prices (default 1e-4)
+    """
+    del pool  # no DB touch — pure file I/O against the equivalence API.
+    from pathlib import Path as _Path
+
+    from tpcore.backtest import compare_trade_lists
+    from tpcore.backtest.equivalence import (
+        DEFAULT_TOL_PNL_PCT,
+        DEFAULT_TOL_PRICE,
+    )
+    from tpcore.backtest.search import read_trade_log_csv
+
+    cfg = config or {}
+    baseline_arg = cfg.get("baseline")
+    candidate_arg = cfg.get("candidate")
+    if not baseline_arg or not candidate_arg:
+        raise SystemExit(
+            "compare_baselines: both --param baseline=… and "
+            "--param candidate=… are required"
+        )
+    baseline_path = _Path(str(baseline_arg))
+    candidate_path = _Path(str(candidate_arg))
+    if not baseline_path.exists():
+        raise SystemExit(f"baseline file not found: {baseline_path}")
+    if not candidate_path.exists():
+        raise SystemExit(f"candidate file not found: {candidate_path}")
+    tol_pnl_pct = float(cfg.get("tol_pnl_pct", DEFAULT_TOL_PNL_PCT))
+    tol_price = float(cfg.get("tol_price", DEFAULT_TOL_PRICE))
+
+    baseline = read_trade_log_csv(baseline_path)
+    candidate = read_trade_log_csv(candidate_path)
+    report = compare_trade_lists(
+        baseline, candidate,
+        tol_pnl_pct=tol_pnl_pct, tol_price=tol_price,
+    )
+    return {
+        "equivalent": bool(report.equivalent),
+        "baseline_path": str(baseline_path),
+        "candidate_path": str(candidate_path),
+        "baseline_trades": len(baseline),
+        "candidate_trades": len(candidate),
+        "tol_pnl_pct": tol_pnl_pct,
+        "tol_price": tol_price,
+        "summary": report.summary(),
+    }
+
+
+async def _stage_aar_pipeline_smoke(
+    pool: asyncpg.Pool, config: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """End-to-end synthetic verification of the AAR persistence pipeline.
+
+    Proves ``tpcore.aar.writer.AARWriter`` writes ``AfterActionReport``
+    rows to ``platform.aar_events`` against the live database without
+    waiting for an engine to actually fill a real trade. Useful when the
+    trading-side prerequisites aren't met (no live broker, paper engines
+    haven't fired) but the operator still needs to verify the AAR
+    plumbing works.
+
+    Behaviour:
+
+    1. Build a clearly-synthetic ``AfterActionReport`` with
+       ``engine='synthetic_test'`` and a UUID ``trade_id`` (cannot
+       collide with any real engine row, past or future).
+    2. ``write_aar(aar)`` — first call must return ``True`` (new row).
+    3. Read row back from ``platform.aar_events``; round-trip equality
+       check against the original JSON.
+    4. ``write_aar(aar)`` — second call with the SAME object; must
+       return ``False`` (idempotent skip via the ``UNIQUE(engine,
+       trade_id)`` + ``ON CONFLICT DO NOTHING`` constraint).
+    5. Verify the row count is exactly 1 after the dup write.
+    6. ``DELETE`` the synthetic row in a ``finally`` block — the
+       production table never accumulates harness data.
+
+    Operator-on-demand only. Migrated from
+    ``scripts/test_aar_pipeline.py`` (orphan-scripts sweep 2026-05-20).
+    """
+    del config  # no tunables — the synthetic shape is fixed.
+    import json as _json
+    import uuid as _uuid
+    from datetime import UTC as _UTC
+    from datetime import datetime as _dt
+    from decimal import Decimal as _D
+
+    from tpcore.aar.models import AfterActionReport, ExitReason
+    from tpcore.aar.writer import AARWriter
+
+    synthetic_engine = "synthetic_test"
+    now = _dt.now(_UTC)
+    aar = AfterActionReport(
+        engine=synthetic_engine,
+        trade_id=f"aar_pipeline_test_{_uuid.uuid4()}",
+        ticker="ZZZZ",  # not a real ticker
+        entry_ts=now,
+        exit_ts=now,
+        entry_price=_D("100.00"),
+        exit_price=_D("101.50"),
+        qty=_D("1"),
+        confidence_at_entry=_D("0.75"),
+        confidence_at_exit=_D("0.80"),
+        sizing_pct_of_engine_equity=_D("0.05"),
+        pnl_gross=_D("1.50"),
+        pnl_net=_D("1.45"),
+        fees=_D("0.05"),
+        slippage_bps=_D("2.0"),
+        regime_tags=["synthetic", "harness_test"],
+        exit_reason=ExitReason.OTHER,
+        rule_compliance=True,
+        notes="Generated by ops.py --stage aar_pipeline_smoke — safe to ignore.",
+    )
+
+    writer = AARWriter(pool)
+    deleted = 0
+    try:
+        # Count rows before (sanity baseline).
+        async with pool.acquire() as conn:
+            rows_before = await conn.fetchval(
+                "SELECT COUNT(*) FROM platform.aar_events "
+                "WHERE engine = $1 AND trade_id = $2",
+                aar.engine, aar.trade_id,
+            )
+        if rows_before != 0:
+            raise SystemExit(
+                f"aar_pipeline_smoke: synthetic key already exists "
+                f"(rows_before={rows_before}); cleanup leak from a "
+                "previous run."
+            )
+
+        # 1. First write — expect INSERT True.
+        wrote_first = await writer.write_aar(aar)
+        if not wrote_first:
+            raise SystemExit(
+                "aar_pipeline_smoke: first write_aar returned False "
+                "(expected True for a new row)"
+            )
+
+        # 2. Round-trip read.
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT engine, trade_id, ticker, aar_data "
+                "FROM platform.aar_events "
+                "WHERE engine = $1 AND trade_id = $2",
+                aar.engine, aar.trade_id,
+            )
+        if row is None:
+            raise SystemExit(
+                "aar_pipeline_smoke: row not found after insert"
+            )
+        read_back = _json.loads(row["aar_data"])
+        original = _json.loads(aar.model_dump_json())
+        if read_back != original:
+            raise SystemExit(
+                "aar_pipeline_smoke: round-trip mismatch between "
+                "written and read AAR JSON"
+            )
+
+        # 3. Second (duplicate) write — expect idempotent skip False.
+        wrote_second = await writer.write_aar(aar)
+        if wrote_second:
+            raise SystemExit(
+                "aar_pipeline_smoke: second write_aar returned True "
+                "(expected False — idempotent skip)"
+            )
+
+        # 4. Final row count — exactly one synthetic row.
+        async with pool.acquire() as conn:
+            rows_after = await conn.fetchval(
+                "SELECT COUNT(*) FROM platform.aar_events "
+                "WHERE engine = $1 AND trade_id = $2",
+                aar.engine, aar.trade_id,
+            )
+        if rows_after != 1:
+            raise SystemExit(
+                f"aar_pipeline_smoke: expected exactly 1 row after "
+                f"idempotent re-write, found {rows_after}"
+            )
+
+        return {
+            "verified": True,
+            "rows_before": int(rows_before or 0),
+            "rows_after": int(rows_after or 0),
+            "synthetic_engine": synthetic_engine,
+            "synthetic_trade_id": aar.trade_id,
+        }
+    finally:
+        async with pool.acquire() as conn:
+            cleanup_rows = await conn.fetch(
+                "DELETE FROM platform.aar_events "
+                "WHERE engine = $1 AND trade_id = $2 "
+                "RETURNING id",
+                aar.engine, aar.trade_id,
+            )
+        deleted = len(cleanup_rows)
+        structlog.get_logger("scripts.ops").info(
+            "ops.stage.aar_pipeline_smoke.cleanup",
+            deleted=deleted,
+            engine=aar.engine,
+            trade_id=aar.trade_id,
+        )
+
+
+async def _stage_kill_switch_smoke(
+    pool: asyncpg.Pool, config: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """End-to-end verification of the engine-scheduler kill-switch
+    short-circuit against the live database.
+
+    Flips ``platform.risk_state.kill_switch_active`` to ``true`` for the
+    named engine, runs that engine's ``scheduler.run_once()`` against
+    the production pool, and asserts the startup kill-switch check
+    short-circuits (zero candidates scanned, zero trades submitted).
+    Resets the kill switch to ``false`` in a ``finally`` block, even on
+    failure, so the live engine is never left frozen.
+
+    Operator-on-demand only. Migrated from
+    ``scripts/test_kill_switch.py`` (orphan-scripts sweep 2026-05-20).
+
+    Config (``--param key=value``)::
+
+        engine = reversion | vector  (REQUIRED)
+    """
+    cfg = config or {}
+    engine = str(cfg.get("engine", "")).strip().lower()
+    if engine not in {"reversion", "vector"}:
+        raise SystemExit(
+            "kill_switch_smoke: --param engine=… required "
+            "(choices: reversion, vector)"
+        )
+
+    from datetime import UTC as _UTC
+    from datetime import date as _date
+    from datetime import datetime as _dt
+    from decimal import Decimal as _D
+
+    from tpcore.risk.persistent_store import PostgresRiskStateStore
+
+    async def _ensure_engine_row(p: asyncpg.Pool, eng: str, equity: _D) -> None:
+        sql = """
+            INSERT INTO platform.risk_state (
+                engine, engine_equity, daily_pnl, weekly_pnl, open_positions,
+                daily_reset_at, weekly_reset_at, kill_switch_active, updated_at
+            )
+            VALUES ($1, $2, 0, 0, 0, now() + interval '1 day',
+                    now() + interval '7 days', false, now())
+            ON CONFLICT (engine) DO NOTHING
+        """
+        async with p.acquire() as conn:
+            await conn.execute(sql, eng, equity)
+
+    async def _set_kill_switch(
+        p: asyncpg.Pool, eng: str, *, active: bool, reason: str | None,
+    ) -> None:
+        sql = """
+            UPDATE platform.risk_state
+               SET kill_switch_active = $2,
+                   kill_switch_reason = $3,
+                   updated_at         = now()
+             WHERE engine = $1
+        """
+        async with p.acquire() as conn:
+            await conn.execute(sql, eng, active, reason)
+
+    async def _run_engine(eng: str, as_of: _date) -> object:
+        if eng == "reversion":
+            from reversion.scheduler import ReversionScheduler
+            return await ReversionScheduler().run_once(as_of=as_of)
+        from vector.scheduler import VectorScheduler
+        return await VectorScheduler().run_once(as_of=as_of)
+
+    log = structlog.get_logger("scripts.ops")
+    try:
+        await _ensure_engine_row(pool, engine, equity=_D("10000"))
+        await _set_kill_switch(
+            pool, engine, active=True,
+            reason="ops.py --stage kill_switch_smoke harness",
+        )
+        store = PostgresRiskStateStore(pool)
+        before = await store.get(engine)
+        if not (before is not None and before.kill_switch_active):
+            raise SystemExit(
+                f"kill_switch_smoke: failed to set kill switch on "
+                f"{engine}; got {before}"
+            )
+        log.info("ops.stage.kill_switch_smoke.set_active", engine=engine)
+
+        as_of = _dt.now(_UTC).date()
+        summary = await _run_engine(engine, as_of)
+        n_candidates = int(getattr(summary, "n_candidates", -1))
+        n_submitted = int(getattr(summary, "n_submitted", -1))
+        if n_candidates != 0:
+            raise SystemExit(
+                f"kill_switch_smoke: {engine} scanned {n_candidates} "
+                f"candidates despite kill switch — startup check "
+                "missing or broken"
+            )
+        if n_submitted != 0:
+            raise SystemExit(
+                f"kill_switch_smoke: {engine} submitted {n_submitted} "
+                "trades despite kill switch"
+            )
+        log.info(
+            "ops.stage.kill_switch_smoke.short_circuited",
+            engine=engine,
+            n_candidates=n_candidates, n_submitted=n_submitted,
+        )
+        return {
+            "verified": True,
+            "engine": engine,
+            "n_candidates": n_candidates,
+            "n_submitted": n_submitted,
+        }
+    finally:
+        await _set_kill_switch(pool, engine, active=False, reason=None)
+        log.info("ops.stage.kill_switch_smoke.reset", engine=engine)
+
+
+async def _stage_ingest_tradier_csv(
+    pool: asyncpg.Pool, config: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Ingest ``tradier_bars_full.csv`` into ``platform.prices_daily``.
+
+    Streams the wide Tradier CSV produced by
+    ``--stage extract_tradier_full`` (22M rows, ~1GB on disk), filters
+    to tickers that also appear in Alpaca's active-asset list
+    (NYSE/NASDAQ), and inserts with ``source='tradier'`` using ``ON
+    CONFLICT (ticker, date) DO NOTHING``. Existing Alpaca rows are
+    never overwritten — Tradier fills gaps, primarily the pre-2020
+    history Alpaca's IEX free tier doesn't cover.
+
+    Idempotent — re-running after a crash or partial run is safe.
+    The CSV is streamed so memory stays bounded regardless of file
+    size. ``prices_daily.{open,high,low,close,adjusted_close}`` are
+    ``NUMERIC(20,6)`` (14 integer digits) so any ``|value| >= 1e14`` or
+    non-finite OHLC row is skipped (the wide export occasionally emits
+    Inf or absurd values — ~50k bad rows skipped on the production
+    load, ~0.23% of the source).
+
+    Operator-on-demand only. Migrated 2026-05-20 from
+    ``scripts/ingest_tradier_csv.py`` (orphan-scripts zero-allowlist
+    sweep). Paired with ``--stage extract_tradier_full`` (also migrated
+    in the same sweep).
+
+    Config (``--param key=value``)::
+
+        csv               = path to the Tradier wide-export CSV
+                            (default: ``data/tradier_export/tradier_bars_full.csv``)
+        no_alpaca_filter  = "true" → load every ticker in the CSV;
+                            skip the Alpaca active-asset gate
+                            (default: "false")
+    """
+    import csv as _csv
+    import time as _time
+    from datetime import date as _date
+    from decimal import Decimal as _D
+    from pathlib import Path as _Path
+
+    import httpx as _httpx
+
+    from tpcore.data.ingest_alpaca_bars import (
+        _alpaca_broker_base,
+        _alpaca_headers,
+        fetch_active_us_equities,
+    )
+
+    cfg = config or {}
+    csv_path = _Path(str(cfg.get("csv", "data/tradier_export/tradier_bars_full.csv")))
+    no_alpaca_filter = str(cfg.get("no_alpaca_filter", "")).lower() == "true"
+
+    if not csv_path.exists():
+        raise SystemExit(
+            f"ingest_tradier_csv: CSV not found: {csv_path}"
+        )
+
+    copy_batch = 5_000
+    numeric_max = _D("1e14")
+    insert_sql = """
+        INSERT INTO platform.prices_daily (
+            ticker, date, open, high, low, close, volume,
+            adjusted_close, delisted, delisting_date, source
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'tradier')
+        ON CONFLICT (ticker, date) DO NOTHING
+    """
+
+    log = structlog.get_logger("scripts.ops")
+
+    def _row_to_tuple(row: list[str]) -> tuple | None:
+        if len(row) < 7:
+            return None
+        ticker, date_str, o, h, low, c, v = row[:7]
+        if not ticker or not date_str:
+            return None
+        try:
+            d = _date.fromisoformat(date_str)
+            open_ = _D(o) if o else None
+            high = _D(h) if h else None
+            low_ = _D(low) if low else None
+            close = _D(c) if c else None
+            volume = int(v) if v else 0
+        except (ValueError, ArithmeticError):
+            return None
+        if open_ is None or high is None or low_ is None or close is None:
+            return None
+        for x in (open_, high, low_, close):
+            if not x.is_finite() or abs(x) >= numeric_max:
+                return None
+        return (
+            ticker, d, open_, high, low_, close, volume,
+            close,  # adjusted_close — Tradier history is split-adjusted
+            False,  # delisted: unknown from CSV; assume active
+            None,   # delisting_date
+        )
+
+    # Resolve the Alpaca-active filter unless explicitly disabled.
+    allowed: set[str] | None
+    if no_alpaca_filter:
+        log.info("ops.stage.ingest_tradier_csv.alpaca_filter_disabled")
+        allowed = None
+    else:
+        log.info("ops.stage.ingest_tradier_csv.alpaca_filter.fetching")
+        headers = _alpaca_headers()
+        async with _httpx.AsyncClient(
+            headers=headers, base_url=_alpaca_broker_base(), timeout=60.0,
+        ) as client:
+            assets = await fetch_active_us_equities(client)
+        allowed = {a["symbol"] for a in assets}
+        log.info(
+            "ops.stage.ingest_tradier_csv.alpaca_filter.fetched",
+            count=len(allowed),
+        )
+
+    counters: dict[str, int] = {
+        "rows_read": 0,
+        "rows_skipped_filter": 0,
+        "rows_skipped_malformed": 0,
+        "rows_attempted": 0,
+        "tickers_seen": 0,
+    }
+    seen_tickers: set[str] = set()
+    batch: list[tuple] = []
+    started = _time.monotonic()
+
+    with csv_path.open(newline="", encoding="utf-8") as fh:
+        reader = _csv.reader(fh)
+        try:
+            next(reader)  # header
+        except StopIteration:
+            return {**counters, "csv_path": str(csv_path)}
+
+        async with pool.acquire() as conn:
+            for row in reader:
+                counters["rows_read"] += 1
+                if allowed is not None and row and row[0] not in allowed:
+                    counters["rows_skipped_filter"] += 1
+                    continue
+                tup = _row_to_tuple(row)
+                if tup is None:
+                    counters["rows_skipped_malformed"] += 1
+                    continue
+                seen_tickers.add(tup[0])
+                batch.append(tup)
+                if len(batch) >= copy_batch:
+                    await conn.executemany(insert_sql, batch)
+                    counters["rows_attempted"] += len(batch)
+                    batch.clear()
+                    if counters["rows_attempted"] % (copy_batch * 20) == 0:
+                        elapsed = _time.monotonic() - started
+                        rate = counters["rows_attempted"] / max(elapsed, 1e-3)
+                        log.info(
+                            "ops.stage.ingest_tradier_csv.progress",
+                            rows_attempted=counters["rows_attempted"],
+                            rows_read=counters["rows_read"],
+                            tickers=len(seen_tickers),
+                            rate_per_sec=round(rate, 0),
+                        )
+
+            if batch:
+                await conn.executemany(insert_sql, batch)
+                counters["rows_attempted"] += len(batch)
+                batch.clear()
+
+    counters["tickers_seen"] = len(seen_tickers)
+    return {**counters, "csv_path": str(csv_path)}
+
+
+async def _stage_extract_tradier_full(
+    pool: asyncpg.Pool, config: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Wide-universe Tradier daily-bar extractor → flat CSV (no DB writes).
+
+    Walks the full Tradier-tradable US equity + ETF universe via
+    ``/v1/markets/lookup`` and pulls daily history from 2000-01-01
+    through the configured ``end_date`` for each name, streaming bars
+    into a single CSV. Operator-on-demand re-extraction tool; pairs
+    with the downstream ``ingest_tradier_csv`` loader.
+
+    The stage does NOT touch Postgres. It produces a flat file the
+    operator can audit, hash, and ingest later. Behaviour mirrors the
+    legacy script:
+
+    * One symbol-enumeration call → ``<out_dir>/tradier_symbols_full.csv``
+      (saved on first run, reused on resume so the universe is stable
+      across restarts).
+    * Bars stream into ``<out_dir>/tradier_bars_full.csv`` as each
+      symbol completes — a crash mid-run leaves a partial-but-valid
+      CSV.
+    * Resumable: scans the existing bars CSV for distinct tickers and
+      skips those.
+    * Rate limit: 0.5s sleep between bars requests (~120 req/min
+      ceiling), 5s backoff on HTTP 429.
+
+    Operator-on-demand only. Migrated from
+    ``scripts/extract_tradier_full.py`` (orphan-scripts sweep
+    2026-05-20). Pool arg ignored — no DB writes.
+
+    Config (``--param key=value``)::
+
+        out_dir          = output directory
+                           (default: ``data/tradier_export``)
+        max_symbols      = stop after N new symbols (smoke-test knob;
+                           default: no limit)
+        refresh_symbols  = "true" → re-enumerate universe even if cache
+                           exists (default: "false")
+        end_date         = ISO date for bars end window
+                           (default: today UTC)
+
+    Token env var: ``TRADIER_PRODUCTION_TOKEN`` (preferred) or
+    ``TRADIER_TOKEN`` (alias).
+    """
+    del pool  # CSV-only — no DB.
+    import csv as _csv
+    from datetime import UTC as _UTC
+    from datetime import date as _date
+    from datetime import datetime as _dt
+    from pathlib import Path as _Path
+    from typing import Any as _Any
+
+    import httpx as _httpx
+
+    cfg = config or {}
+    out_dir_str = str(cfg.get("out_dir", "data/tradier_export"))
+    max_symbols_raw = cfg.get("max_symbols")
+    max_symbols = int(max_symbols_raw) if max_symbols_raw not in (None, "") else None
+    refresh_symbols = str(cfg.get("refresh_symbols", "")).lower() == "true"
+    end_raw = cfg.get("end_date")
+    end_date: _date = (
+        _date.fromisoformat(str(end_raw))
+        if end_raw
+        else _dt.now(_UTC).date()
+    )
+
+    token = (
+        os.environ.get("TRADIER_PRODUCTION_TOKEN")
+        or os.environ.get("TRADIER_TOKEN")
+    )
+    if not token:
+        raise SystemExit(
+            "extract_tradier_full: TRADIER_PRODUCTION_TOKEN (or "
+            "TRADIER_TOKEN) not set in environment."
+        )
+
+    tradier_base = "https://api.tradier.com"
+    inter_request_sleep_s = 0.5
+    rate_limit_backoff_s = 5.0
+    exchanges = "N,Q,A"
+    symbol_types = "stock,etf"
+    bars_start = _date(2000, 1, 1)
+    symbols_csv_name = "tradier_symbols_full.csv"
+    bars_csv_name = "tradier_bars_full.csv"
+    symbols_columns = ["symbol", "exchange", "type", "description"]
+    bars_columns = ["ticker", "date", "open", "high", "low", "close", "volume"]
+
+    log = structlog.get_logger("scripts.ops")
+
+    def _ensure_list(x: _Any) -> list:
+        if x is None:
+            return []
+        return x if isinstance(x, list) else [x]
+
+    async def _get(
+        client: _httpx.AsyncClient,
+        path: str,
+        params: dict[str, _Any] | None = None,
+    ) -> dict | None:
+        try:
+            resp = await client.get(path, params=params or {})
+        except (_httpx.RequestError, _httpx.HTTPError) as exc:
+            log.warning(
+                "tradier.network_error", path=path,
+                params=params, error=str(exc),
+            )
+            return None
+        if resp.status_code == 429:
+            log.warning(
+                "tradier.rate_limited", path=path,
+                sleep=rate_limit_backoff_s,
+            )
+            await asyncio.sleep(rate_limit_backoff_s)
+            try:
+                resp = await client.get(path, params=params or {})
+            except Exception as exc:  # noqa: BLE001 - retry-then-skip is the only sane move
+                log.warning(
+                    "tradier.retry_failed", path=path, error=str(exc),
+                )
+                return None
+        if resp.status_code != 200:
+            log.warning(
+                "tradier.http_error", path=path,
+                status=resp.status_code, body=resp.text[:200],
+            )
+            return None
+        try:
+            return resp.json()
+        except ValueError:
+            log.warning(
+                "tradier.non_json_response", path=path,
+                body=resp.text[:200],
+            )
+            return None
+
+    out_dir = _Path(out_dir_str)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    symbols_csv = out_dir / symbols_csv_name
+    bars_csv = out_dir / bars_csv_name
+
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    async with _httpx.AsyncClient(
+        base_url=tradier_base, headers=headers, timeout=30.0,
+    ) as client:
+        if refresh_symbols or not symbols_csv.exists():
+            log.info("tradier.symbols.fetch_start")
+            body = await _get(
+                client, "/v1/markets/lookup",
+                {"exchanges": exchanges, "types": symbol_types},
+            )
+            universe_raw = (
+                _ensure_list((body or {}).get("securities", {}).get("security"))
+                if body else []
+            )
+            if not universe_raw:
+                raise SystemExit(
+                    "extract_tradier_full: symbol enumeration returned empty"
+                )
+            with symbols_csv.open("w", newline="", encoding="utf-8") as fh:
+                w = _csv.writer(fh, quoting=_csv.QUOTE_MINIMAL)
+                w.writerow(symbols_columns)
+                for s in universe_raw:
+                    w.writerow([
+                        s.get("symbol", ""),
+                        s.get("exchange", ""),
+                        s.get("type", ""),
+                        (s.get("description") or "").replace("\n", " "),
+                    ])
+            log.info(
+                "tradier.symbols.fetched", count=len(universe_raw),
+                path=str(symbols_csv),
+            )
+        else:
+            log.info("tradier.symbols.cached", path=str(symbols_csv))
+
+        symbols: list[str] = []
+        with symbols_csv.open(newline="", encoding="utf-8") as fh:
+            for row in _csv.DictReader(fh):
+                sym = (row.get("symbol") or "").strip()
+                if sym:
+                    symbols.append(sym)
+        if not symbols:
+            raise SystemExit(
+                f"extract_tradier_full: symbols CSV is empty: {symbols_csv}"
+            )
+
+        done: set[str] = set()
+        if bars_csv.exists():
+            with bars_csv.open(newline="", encoding="utf-8") as fh:
+                r = _csv.reader(fh)
+                try:
+                    next(r)  # header
+                except StopIteration:
+                    pass
+                else:
+                    for row in r:
+                        if row:
+                            done.add(row[0])
+
+        work = [s for s in symbols if s not in done]
+        if max_symbols is not None:
+            work = work[:max_symbols]
+
+        log.info(
+            "tradier.extract.start",
+            total=len(symbols),
+            already_done=len(done),
+            to_process=len(work),
+            max_symbols=max_symbols,
+        )
+
+        bars_csv.parent.mkdir(parents=True, exist_ok=True)
+        write_header = not bars_csv.exists() or bars_csv.stat().st_size == 0
+        summary = {
+            "tickers_fetched": 0, "tickers_no_data": 0,
+            "tickers_failed": 0, "rows_appended": 0,
+        }
+        with bars_csv.open("a", newline="", encoding="utf-8") as fh:
+            w = _csv.writer(fh, quoting=_csv.QUOTE_MINIMAL)
+            if write_header:
+                w.writerow(bars_columns)
+                fh.flush()
+
+            for i, symbol in enumerate(work, 1):
+                try:
+                    body = await _get(
+                        client, "/v1/markets/history",
+                        {
+                            "symbol": symbol,
+                            "interval": "daily",
+                            "start": bars_start.isoformat(),
+                            "end": end_date.isoformat(),
+                        },
+                    )
+                except Exception as exc:  # noqa: BLE001 - per-symbol isolation
+                    log.warning(
+                        "tradier.extract.symbol_exception",
+                        symbol=symbol, error=str(exc),
+                    )
+                    summary["tickers_failed"] += 1
+                    await asyncio.sleep(inter_request_sleep_s)
+                    continue
+
+                days = (
+                    _ensure_list((body or {}).get("history", {}).get("day"))
+                    if body else []
+                )
+                if not days:
+                    summary["tickers_no_data"] += 1
+                    log.info(
+                        "tradier.extract.no_data",
+                        progress=f"{i}/{len(work)}", symbol=symbol,
+                    )
+                    await asyncio.sleep(inter_request_sleep_s)
+                    continue
+
+                for d in days:
+                    w.writerow([
+                        symbol, d.get("date"), d.get("open"),
+                        d.get("high"), d.get("low"), d.get("close"),
+                        d.get("volume"),
+                    ])
+                fh.flush()
+                summary["tickers_fetched"] += 1
+                summary["rows_appended"] += len(days)
+
+                if i % 50 == 0 or i == len(work):
+                    size_mb = bars_csv.stat().st_size / 1_000_000
+                    log.info(
+                        "tradier.extract.progress",
+                        progress=f"{i}/{len(work)}",
+                        last_symbol=symbol,
+                        rows_so_far=summary["rows_appended"],
+                        file_mb=round(size_mb, 2),
+                    )
+
+                await asyncio.sleep(inter_request_sleep_s)
+
+    return {
+        "out_dir": str(out_dir),
+        "bars_csv": str(bars_csv),
+        "symbols_total": len(symbols),
+        "tickers_already_done": len(done),
+        "tickers_processed": len(work),
+        **summary,
+    }
+
+
 async def _stage_earnings_refresh(
     pool: asyncpg.Pool, config: dict[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -1901,6 +2704,36 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # Use: --stage canary_inject_trigger --param kind=loss_cluster [--param streak=5]
     #      --stage canary_inject_trigger --param teardown=true
     ("canary_inject_trigger", lambda pool, cfg: (lambda: _stage_canary_inject_trigger(pool, cfg)), STAGE_TIMEOUT_SEC),
+    # ── Operator-on-demand verification + utility stages ──
+    # NOT in OPS_UPDATE_STAGES — never invoked by the daily --update
+    # cadence. Migrated 2026-05-20 from orphan one-off scripts
+    # (docs/superpowers/audits/2026-05-20-orphan-scripts-catalog.md);
+    # operator overruled the keep-as-helper disposition in favour of
+    # the zero-allowlist end-state.
+    #
+    # compare_baselines — diff two trade-log CSVs via
+    # ``tpcore.backtest.compare_trade_lists``. Pure file I/O, no DB.
+    # Use: --stage compare_baselines --param baseline=… --param candidate=…
+    ("compare_baselines",   lambda pool, cfg: (lambda: _stage_compare_baselines(pool, cfg)),     STAGE_TIMEOUT_SEC),
+    # aar_pipeline_smoke — synthetic round-trip verification of
+    # ``AARWriter.write_aar`` against the live ``platform.aar_events``.
+    # Self-cleaning (DELETE in finally). Operator-on-demand.
+    ("aar_pipeline_smoke",  lambda pool, cfg: (lambda: _stage_aar_pipeline_smoke(pool, cfg)),    STAGE_TIMEOUT_SEC),
+    # kill_switch_smoke — flip kill_switch_active=true for one engine,
+    # run scheduler.run_once(), assert zero candidates/submissions,
+    # reset in finally. Use: --stage kill_switch_smoke --param engine=reversion
+    ("kill_switch_smoke",   lambda pool, cfg: (lambda: _stage_kill_switch_smoke(pool, cfg)),     STAGE_TIMEOUT_SEC),
+    # extract_tradier_full — wide-universe Tradier CSV extractor
+    # (NYSE/NASDAQ/AMEX stocks+ETFs, 2000-01-01 → today). No DB writes,
+    # streaming + resumable. Long-running, bounded — uses
+    # HEAVY_STAGE_TIMEOUT_SEC.
+    ("extract_tradier_full", lambda pool, cfg: (lambda: _stage_extract_tradier_full(pool, cfg)), HEAVY_STAGE_TIMEOUT_SEC),
+    # ingest_tradier_csv — downstream of extract_tradier_full; streams
+    # the wide CSV into platform.prices_daily with ON CONFLICT DO
+    # NOTHING idempotency + an Alpaca-active-asset filter gate. Long-
+    # running, bounded — uses HEAVY_STAGE_TIMEOUT_SEC. Operator-on-
+    # demand only.
+    ("ingest_tradier_csv",  lambda pool, cfg: (lambda: _stage_ingest_tradier_csv(pool, cfg)),    HEAVY_STAGE_TIMEOUT_SEC),
 )
 KNOWN_STAGES: tuple[str, ...] = tuple(name for name, _, _ in _STAGE_SPECS)
 

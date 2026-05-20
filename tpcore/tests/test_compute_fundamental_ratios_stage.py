@@ -82,7 +82,7 @@ async def test_default_incremental_only_writes_null_rows() -> None:
         updated_returning=[{"ticker": "AAPL"}, {"ticker": "MSFT"}],
         populated_row={"pb_n": 152_909, "de_n": 152_909, "total": 178_610},
     )
-    result = await ops._stage_compute_fundamental_ratios(  # noqa: SLF001
+    result = await ops._stage_compute_fundamental_ratios(
         _Pool(conn), {},
     )
     assert result == {
@@ -101,7 +101,7 @@ async def test_force_true_overwrites_existing_rows() -> None:
     semantics changes (e.g. the 2026-05-14 degenerate-row tightening
     required a full re-write)."""
     conn = _Conn(updated_returning=[{"ticker": "X"}])
-    result = await ops._stage_compute_fundamental_ratios(  # noqa: SLF001
+    result = await ops._stage_compute_fundamental_ratios(
         _Pool(conn), {"force": "true"},
     )
     assert result["force"] is True
@@ -118,7 +118,7 @@ async def test_degenerate_row_filter_present_in_sql() -> None:
     that would otherwise produce de=-1.0. Pin it explicitly so a
     future SQL refactor can't silently drop it."""
     conn = _Conn()
-    await ops._stage_compute_fundamental_ratios(_Pool(conn), {})  # noqa: SLF001
+    await ops._stage_compute_fundamental_ratios(_Pool(conn), {})
     update_sql = _norm(conn.fetch_sqls[0])
     assert "total_assets > 0" in update_sql
     assert "total_liabilities >= 0" in update_sql
@@ -131,7 +131,7 @@ async def test_pit_price_join_uses_distinct_on_most_recent_close() -> None:
     ``filing_date`` — the DISTINCT ON pattern. A naive INNER JOIN would
     produce N rows per filing × prior session and wreck the UPDATE."""
     conn = _Conn()
-    await ops._stage_compute_fundamental_ratios(_Pool(conn), {})  # noqa: SLF001
+    await ops._stage_compute_fundamental_ratios(_Pool(conn), {})
     update_sql = _norm(conn.fetch_sqls[0])
     assert "DISTINCT ON (t.ticker, t.filing_date)" in update_sql
     assert "pd.date <= t.filing_date" in update_sql
@@ -145,7 +145,7 @@ async def test_returns_zero_rows_when_no_targets() -> None:
         updated_returning=[],
         populated_row={"pb_n": 0, "de_n": 0, "total": 0},
     )
-    result = await ops._stage_compute_fundamental_ratios(  # noqa: SLF001
+    result = await ops._stage_compute_fundamental_ratios(
         _Pool(conn), None,
     )
     assert result == {
@@ -159,7 +159,7 @@ def test_stage_wired_into_existing_update_cadence_after_fundamentals_refresh() -
     immediately after ``fundamentals_refresh`` so fresh FMP rows get
     ratios in the same cycle. Closes the manual operator step the
     orphan-script catalog flagged."""
-    spec_names = [n for n, _, _ in ops._STAGE_SPECS]  # noqa: SLF001
+    spec_names = [n for n, _, _ in ops._STAGE_SPECS]
     assert "compute_fundamental_ratios" in spec_names
     assert "compute_fundamental_ratios" in ops.KNOWN_STAGES
     assert "compute_fundamental_ratios" in OPS_UPDATE_STAGES

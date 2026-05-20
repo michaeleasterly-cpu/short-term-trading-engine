@@ -3,8 +3,9 @@
 Scope: the **data** pipeline only (ingestion → platform tables →
 validation → freshness/anomalies). This is NOT the engine pipeline
 (covered by the smoke tests) nor the AAR pipeline (covered by
-``test_aar_pipeline`` + the live forensics scanner) — engines/AAR
-appear here only as data artifacts (SIGNAL/aar_events observability).
+``ops.py --stage aar_pipeline_smoke`` + the live forensics scanner) —
+engines/AAR appear here only as data artifacts (SIGNAL/aar_events
+observability).
 
 Single CLI that audits every layer of the data pipeline across four
 categories of knowledge:

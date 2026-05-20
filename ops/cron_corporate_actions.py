@@ -30,6 +30,7 @@ from datetime import UTC, date, datetime
 import httpx
 import structlog
 
+from tpcore.backtest.universe import DEFAULT_BACKTEST_UNIVERSE
 from tpcore.data.apply_splits import apply_all_splits
 from tpcore.data.ingest_alpaca_bars import _alpaca_headers
 from tpcore.data.ingest_corporate_actions import (
@@ -45,20 +46,12 @@ _DATA_BASE = "https://data.alpaca.markets"
 _INGEST_START = date(2018, 1, 1)
 _CHUNK_SIZE = 20
 
-# 50-name backtest universe — kept in sync with
-# `scripts/backfill_backtest_universe.py:DEFAULT_UNIVERSE`. Hardcoded
-# rather than imported because `scripts/` is intentionally not part of
-# the installed package (see `pyproject.toml`).
-UNIVERSE: tuple[str, ...] = (
-    "SPY", "QQQ", "IWM",
-    "AAPL", "MSFT", "AMZN", "GOOGL", "META", "TSLA", "NVDA",
-    "JPM", "V", "WMT", "DIS", "NFLX", "BA", "CAT", "GE", "GM", "F",
-    "XOM", "CVX", "PFE", "JNJ", "MRK", "ABBV", "PG", "KO", "PEP",
-    "MCD", "SBUX", "HD", "LOW", "TGT", "COST",
-    "LMT", "RTX", "NOC", "GD",
-    "SO", "DUK", "NEE",
-    "PLTR", "UBER", "ABNB", "SNAP", "RBLX", "RIVN", "LCID", "FSLR",
-)
+# 50-name backtest universe — single source of truth at
+# ``tpcore.backtest.universe.DEFAULT_BACKTEST_UNIVERSE``. The previous
+# duplicated-with-comment pattern (rationale: "scripts/ isn't on the
+# installed package path") was retired 2026-05-20 once the constant
+# moved into ``tpcore.backtest``.
+UNIVERSE: tuple[str, ...] = DEFAULT_BACKTEST_UNIVERSE
 
 
 async def _ingest_universe(pool, *, end: date) -> int:
