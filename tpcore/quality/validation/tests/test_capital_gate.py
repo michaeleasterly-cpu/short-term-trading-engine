@@ -220,7 +220,7 @@ async def test_engine_gate_still_blocks_on_stale_run() -> None:
 
 
 async def test_failing_sources_for_engine_returns_healspec_source_names() -> None:
-    """reversion's ENGINE_TABLES = {prices_daily, fundamentals_quarterly}.
+    """reversion's data_dependencies = {prices_daily, fundamentals_quarterly}.
 
     The validation checks mapping to prices_daily
     (prices_daily_freshness / prices_daily_completeness / row_integrity)
@@ -296,7 +296,7 @@ async def test_failing_sources_for_engine_missing_required_row_is_failing() -> N
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# ENGINE_TABLES["allocator"] — C-T5
+# allocator data_dependencies — C-T5
 # ────────────────────────────────────────────────────────────────────────────
 
 
