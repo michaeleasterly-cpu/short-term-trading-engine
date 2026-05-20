@@ -7,6 +7,7 @@ asyncpg pools for them would be more brittle than the code itself.
 """
 from __future__ import annotations
 
+import importlib
 import sys
 from pathlib import Path
 
@@ -14,10 +15,6 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS_DIR = REPO_ROOT / "scripts"
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
-
-import ops  # noqa: E402 — sys.path adjusted above
 
 # ────────────────────────────────────────────────────────────────────────
 # _CANDIDATE_RE — parses lines like "Sigma candidates: 4" emitted by
@@ -32,7 +29,47 @@ import ops  # noqa: E402 — sys.path adjusted above
 pytestmark = pytest.mark.xdist_group("ops_shadow")
 
 
-def test_candidate_re_matches_three_engines():
+@pytest.fixture
+def ops_module():
+    """Hermetic re-import of ``scripts/ops.py`` as the top-level ``ops``.
+
+    Operator memory ``feedback_ops_package_shadow_full_suite_gate`` and
+    ``.claude/rules/tests-and-ci.md`` forbid a collection-time
+    ``sys.modules`` purge. This fixture moves the purge IN-BODY (test
+    execution, not module collection) so each test gets a fresh,
+    file-shadow ``ops`` even when an earlier test cached the ``ops/``
+    package. The ``xdist_group("ops_shadow")`` mark above keeps every
+    user of this fixture pinned to a single worker.
+
+    The fixture also forces ``scripts/`` ahead of the repo root on
+    ``sys.path`` because ``scripts/search_parameters.py`` (loaded by
+    ``scripts/tests/test_search_parameters_characterization.py``)
+    deliberately reorders sys.path to put the repo root FIRST so its
+    ``from ops.lab.run import …`` resolves the ``ops/`` package — a
+    no-op ``insert(0, …)`` check is not enough; we must remove every
+    existing scripts entry and re-insert at position 0. sys.path is
+    restored on teardown so downstream tests are unaffected.
+    """
+    scripts_str = str(SCRIPTS_DIR)
+    saved_path = list(sys.path)
+    saved_ops = sys.modules.pop("ops", None)
+    # Drop any cached scripts entry and re-pin at index 0 — beats any
+    # search_parameters-style reorder that put the repo root first.
+    sys.path[:] = [p for p in sys.path if p != scripts_str]
+    sys.path.insert(0, scripts_str)
+    try:
+        yield importlib.import_module("ops")
+    finally:
+        # Restore: drop our file-shadow ops and revert sys.path so the
+        # next test that wants the ops/ package isn't poisoned.
+        sys.modules.pop("ops", None)
+        if saved_ops is not None:
+            sys.modules["ops"] = saved_ops
+        sys.path[:] = saved_path
+
+
+def test_candidate_re_matches_three_engines(ops_module):
+    ops = ops_module
     stdout = (
         "Universe simulation as of 2026-05-12\n"
         "Sigma candidates: 4\n"
@@ -44,7 +81,8 @@ def test_candidate_re_matches_three_engines():
     assert matches == {"sigma": 4, "reversion": 0, "vector": 2}
 
 
-def test_candidate_re_tolerates_indentation_and_singular():
+def test_candidate_re_tolerates_indentation_and_singular(ops_module):
+    ops = ops_module
     stdout = (
         "  Sigma candidate: 1\n"      # singular form
         "  Reversion candidates: 12\n"
@@ -56,7 +94,8 @@ def test_candidate_re_tolerates_indentation_and_singular():
     assert matches["vector"] == 0
 
 
-def test_candidate_re_ignores_unrelated_lines():
+def test_candidate_re_ignores_unrelated_lines(ops_module):
+    ops = ops_module
     stdout = (
         "Loaded 47 tickers\n"
         "Sigma candidates: 3\n"
@@ -73,7 +112,7 @@ def test_candidate_re_ignores_unrelated_lines():
 # SKIPPED do not. The CLI's process exit code depends on this.
 # ────────────────────────────────────────────────────────────────────────
 
-def _summary(stages):
+def _summary(ops, stages):
     import uuid
     from datetime import UTC, datetime
     s = ops.UpdateSummary(run_id=uuid.uuid4(), started_at=datetime.now(UTC), finished_at=datetime.now(UTC))
@@ -81,23 +120,27 @@ def _summary(stages):
     return s
 
 
-def test_exit_code_zero_when_all_ok():
-    s = _summary([ops.StageResult("a", "OK", 100), ops.StageResult("b", "OK", 200)])
+def test_exit_code_zero_when_all_ok(ops_module):
+    ops = ops_module
+    s = _summary(ops, [ops.StageResult("a", "OK", 100), ops.StageResult("b", "OK", 200)])
     assert s.exit_code == 0
 
 
-def test_exit_code_one_when_any_failed():
-    s = _summary([ops.StageResult("a", "OK", 100), ops.StageResult("b", "FAILED", 50, error="boom")])
+def test_exit_code_one_when_any_failed(ops_module):
+    ops = ops_module
+    s = _summary(ops, [ops.StageResult("a", "OK", 100), ops.StageResult("b", "FAILED", 50, error="boom")])
     assert s.exit_code == 1
 
 
-def test_exit_code_one_when_any_timeout():
-    s = _summary([ops.StageResult("a", "TIMEOUT", 120_000, error="t/o"), ops.StageResult("b", "OK", 50)])
+def test_exit_code_one_when_any_timeout(ops_module):
+    ops = ops_module
+    s = _summary(ops, [ops.StageResult("a", "TIMEOUT", 120_000, error="t/o"), ops.StageResult("b", "OK", 50)])
     assert s.exit_code == 1
 
 
-def test_exit_code_zero_for_dry_run_only():
-    s = _summary([ops.StageResult("a", "DRY_RUN", 0), ops.StageResult("b", "DRY_RUN", 0)])
+def test_exit_code_zero_for_dry_run_only(ops_module):
+    ops = ops_module
+    s = _summary(ops, [ops.StageResult("a", "DRY_RUN", 0), ops.StageResult("b", "DRY_RUN", 0)])
     assert s.exit_code == 0
 
 
@@ -105,8 +148,9 @@ def test_exit_code_zero_for_dry_run_only():
 # UpdateSummary.to_table — terminal-facing format.
 # ────────────────────────────────────────────────────────────────────────
 
-def test_to_table_renders_header_and_rows():
-    s = _summary([
+def test_to_table_renders_header_and_rows(ops_module):
+    ops = ops_module
+    s = _summary(ops, [
         ops.StageResult("daily_bars", "OK", 1234, detail={"rows_upserted": 42}),
         ops.StageResult("validation", "FAILED", 999, error="boom"),
     ])
@@ -125,7 +169,8 @@ def test_to_table_renders_header_and_rows():
 # _format_check_pretty — operator-facing health report.
 # ────────────────────────────────────────────────────────────────────────
 
-def test_format_check_pretty_ok_run():
+def test_format_check_pretty_ok_run(ops_module):
+    ops = ops_module
     report = {
         "run_id": "abc",
         "timestamp": "2026-05-12T00:00:00+00:00",
@@ -142,7 +187,8 @@ def test_format_check_pretty_ok_run():
     assert "latest_bar: 2026-05-08" in out
 
 
-def test_format_check_pretty_degraded_run_marks_failed_checks():
+def test_format_check_pretty_degraded_run_marks_failed_checks(ops_module):
+    ops = ops_module
     report = {
         "run_id": "abc",
         "timestamp": "2026-05-12T00:00:00+00:00",
@@ -165,7 +211,8 @@ def test_format_check_pretty_degraded_run_marks_failed_checks():
     assert "bzzt" in out
 
 
-def test_format_check_pretty_truncates_long_lists():
+def test_format_check_pretty_truncates_long_lists(ops_module):
+    ops = ops_module
     report = {
         "run_id": "abc",
         "timestamp": "2026-05-12T00:00:00+00:00",
@@ -187,7 +234,8 @@ def test_format_check_pretty_truncates_long_lists():
 # StageResult defaults — `detail` must be a fresh dict per instance.
 # ────────────────────────────────────────────────────────────────────────
 
-def test_stage_result_detail_is_per_instance():
+def test_stage_result_detail_is_per_instance(ops_module):
+    ops = ops_module
     a = ops.StageResult("a", "OK", 1)
     b = ops.StageResult("b", "OK", 1)
     a.detail["x"] = 1
