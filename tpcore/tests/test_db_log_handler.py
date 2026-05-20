@@ -208,6 +208,15 @@ def test_init_rejects_zero_retention() -> None:
         DBLogHandler(pool=_FakePool(), engine="sigma", run_id=uuid.uuid4(), retention_days=0)  # type: ignore[arg-type]
 
 
+def test_run_id_property_returns_constructor_value() -> None:
+    """The public ``run_id`` property exposes the UUID passed at
+    construction — call sites must never have to reach through
+    ``_run_id`` to read the tag the handler is bound to."""
+    expected = uuid.uuid4()
+    handler = DBLogHandler(pool=_FakePool(), engine="sigma", run_id=expected)  # type: ignore[arg-type]
+    assert handler.run_id == expected
+
+
 # ────────────────────────────────────────────────────────────────────────────
 # log() inserts a row and the row is queryable via the simulation
 # ────────────────────────────────────────────────────────────────────────────
