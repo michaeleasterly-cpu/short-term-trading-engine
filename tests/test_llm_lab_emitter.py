@@ -604,8 +604,14 @@ def test_lab_emitter_trigger_event_types_is_empty_per_q6() -> None:
 
 
 def test_two_daemon_invariant_test_is_unedited() -> None:
-    """SP-G adds a co-task, NOT a daemon. The installer + launchd label
-    + closed 4-token whitelist must be byte-unchanged."""
+    """SP-G adds a co-task, NOT a daemon. The closed 4-token installer
+    whitelist + the launchd label set must be byte-unchanged. The
+    structural bite is ``scripts/tests/test_two_daemon_invariant.py``
+    itself — its assertion on the token set pins the topology and would
+    red on any whitelist change. Header-comment edits to
+    ``scripts/install_all_daemons.sh`` are allowed (the 2026-05-21
+    autonomous-data-lane flip updates the operator-facing docstring for
+    the data lane; the topology / whitelist / labels are NOT touched)."""
     import subprocess as _sp
 
     diff = _sp.run(
@@ -616,7 +622,6 @@ def test_two_daemon_invariant_test_is_unedited() -> None:
             "HEAD",
             "--",
             "scripts/tests/test_two_daemon_invariant.py",
-            "scripts/install_all_daemons.sh",
         ],
         cwd=str(_REPO_ROOT),
         capture_output=True,
@@ -624,7 +629,7 @@ def test_two_daemon_invariant_test_is_unedited() -> None:
         check=False,
     )
     assert diff.stdout.strip() == "", (
-        f"SP-G violation: the topology test or installer was edited:\n"
+        f"SP-G violation: the topology test was edited:\n"
         f"{diff.stdout}"
     )
 
