@@ -399,3 +399,83 @@ __all__ = [
     "run_edge_finder_cotask",
     "run_finder",
 ]
+
+
+# ───────────────────────── CLI entry point (T11) ─────────────────────────
+
+
+async def _amain(argv: list[str]) -> int:
+    """`python -m ops.llm_edge_finder` entry point — invoked by `/lab-edge-find`."""
+    import argparse
+    import asyncio  # noqa: F401 - imported for the running loop's context
+    import os
+    from datetime import datetime as _datetime
+
+    from tpcore.db import build_asyncpg_pool
+
+    parser = argparse.ArgumentParser(
+        prog="ops.llm_edge_finder",
+        description="Task #25 Path B autonomous LLM edge-finder (one run).",
+    )
+    parser.add_argument(
+        "--trigger",
+        choices=("operator_command", "ledger_capacity_event", "regime_change_event"),
+        default="operator_command",
+    )
+    parser.add_argument(
+        "--target",
+        help="Optional target engine; if omitted, the LLM picks from snapshot.roster.",
+    )
+    parser.add_argument(
+        "--reference-bundle",
+        default="",
+        help="Comma-separated list of caller-named bundles to include alongside the 3 mandatory bundles.",
+    )
+    args = parser.parse_args(argv)
+
+    dsn = os.environ.get("DATABASE_URL") or os.environ.get("DATABASE_URL_IPV4")
+    if not dsn:
+        log.error("edge_finder.no_dsn", note="set DATABASE_URL or DATABASE_URL_IPV4")
+        return 1
+
+    pool = await build_asyncpg_pool(dsn, max_size=2, read_only=True)
+    try:
+        extra_bundles: tuple[str, ...] = tuple(
+            b.strip() for b in args.reference_bundle.split(",") if b.strip()
+        )
+        # Build the LLM callable lazily so AuthSkip degrades cleanly.
+        llm_callable: LLMCallable | None
+        try:
+            from ops.llm_edge_finder_sdk import make_sdk_llm_callable
+            llm_callable = make_sdk_llm_callable()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("edge_finder.sdk_unavailable", error=str(exc))
+            llm_callable = None
+
+        run = await run_finder(
+            pool,
+            trigger=args.trigger,
+            session_date=_datetime.now(UTC).date(),
+            target_engine=args.target,
+            extra_reference_bundles=extra_bundles,
+            llm_callable=llm_callable,
+        )
+        log.info(
+            "edge_finder.cli.done",
+            run_id=str(run.run_id),
+            emissions=run.proposed_spec_count,
+            trigger=args.trigger,
+        )
+        return 0
+    finally:
+        await pool.close()
+
+
+def main() -> None:  # pragma: no cover - CLI shim
+    import asyncio
+    import sys
+    sys.exit(asyncio.run(_amain(sys.argv[1:])))
+
+
+if __name__ == "__main__":  # pragma: no cover
+    main()
