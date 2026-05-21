@@ -10,5 +10,11 @@ Reference implementation: ``tpcore.sec.SECEdgarAdapter``.
 """
 
 from .adapter import INDICATOR_SERIES, FREDAdapter
+from .diffusion import DEFAULT_SPAN_MONTHS, compute_sos_diffusion
 
-__all__ = ["FREDAdapter", "INDICATOR_SERIES"]
+__all__ = [
+    "DEFAULT_SPAN_MONTHS",
+    "FREDAdapter",
+    "INDICATOR_SERIES",
+    "compute_sos_diffusion",
+]

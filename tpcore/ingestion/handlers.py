@@ -1303,7 +1303,9 @@ async def handle_macro_indicators(
 ) -> int | None:
     """FRED macro-indicators ingest. Weekly stage (Monday 08:00 UTC).
 
-    Pulls the five canonical series via ``tpcore.fred.FREDAdapter`` and
+    Pulls every series declared in ``tpcore.fred.INDICATOR_SERIES`` via
+    ``tpcore.fred.FREDAdapter``, derives ``sos_state_diffusion`` from
+    the 50 ``phci_<state>`` series (Crone/Clayton-Matthews 2005), and
     upserts into ``platform.macro_indicators`` with ``ON CONFLICT
     (indicator, date) DO NOTHING``. Idempotent — second run within the
     7-day skip-guard window returns 0 new rows.
@@ -1365,11 +1367,42 @@ async def handle_macro_indicators(
         [o for lst in per_indicator.values() for o in lst],
     )
 
-    # ── 2. Bulk upsert ───────────────────────────────────────────────
+    # ── 2. Derived: SOS state diffusion ──────────────────────────────
+    # The 50 ``phci_<state>`` raw series above are the substrate for
+    # the derived ``sos_state_diffusion`` series — Crone/Clayton-
+    # Matthews 2005 sum-of-states diffusion (share of states with
+    # PHCI(t) < PHCI(t-3mo)). Pure function; no I/O. Added 2026-05-21
+    # for the Sentinel graduated Bear Score Lab candidate. Derived
+    # rows ride the same idempotent ON CONFLICT path as raw rows.
+    from decimal import Decimal as _Decimal
+
+    from tpcore.fred.diffusion import DEFAULT_SPAN_MONTHS, compute_sos_diffusion
+
+    phci_by_state: dict[str, list[dict[str, Any]]] = {
+        name: per_indicator.get(name, [])
+        for name, _ in INDICATOR_SERIES
+        if name.startswith("phci_")
+    }
+    sos_rows = compute_sos_diffusion(
+        phci_by_state, span_months=DEFAULT_SPAN_MONTHS,
+    )
+    # Inject the derived series alongside the raw fetched series so
+    # the rest of the handler (CSV archive + upsert + summary log)
+    # treats it uniformly.
+    per_indicator["sos_state_diffusion"] = [
+        {"date": r["date"], "value": _Decimal(repr(r["value"]))}
+        for r in sos_rows
+    ]
+
+    # ── 3. Bulk upsert ───────────────────────────────────────────────
     upsert_rows: list[tuple] = []
     for name, _ in INDICATOR_SERIES:
         for obs in per_indicator.get(name, []):
             upsert_rows.append((name, obs["date"], obs["value"]))
+    # Append the derived series rows (NOT in INDICATOR_SERIES — it has
+    # no FRED series_id).
+    for obs in per_indicator.get("sos_state_diffusion", []):
+        upsert_rows.append(("sos_state_diffusion", obs["date"], obs["value"]))
 
     if not upsert_rows:
         logger.info(
@@ -1378,7 +1411,7 @@ async def handle_macro_indicators(
         )
         return 0
 
-    # ── 2a. CSV-first archive (BAMLH0A0HYM2 truncation defence) ──────
+    # ── 4. CSV-first archive (BAMLH0A0HYM2 truncation defence) ───────
     # Write the full vendor response to a gzipped CSV BEFORE the upsert.
     # If FRED retroactively truncates a series again, this archive is
     # the only place the pre-truncation history survives. Shrinkage
@@ -1406,7 +1439,7 @@ async def handle_macro_indicators(
         log_shrinkage_warning(shrinkage)
         assert_not_shrunk(shrinkage)  # producer hard-stop (FRED-truncation class)
 
-    # ── 3. Load CSV → DB (ON CONFLICT DO NOTHING) ────────────────────
+    # ── 5. Load CSV → DB (ON CONFLICT DO NOTHING) ────────────────────
     async with pool.acquire() as conn:
         await conn.executemany(
             """
@@ -1428,6 +1461,20 @@ async def handle_macro_indicators(
             }
         else:
             summary[name] = {"rows": 0, "reason": "no observations returned"}
+    # Include the derived series in the per-indicator summary so the
+    # operator-visible log mirrors what landed in the DB.
+    derived_obs = per_indicator.get("sos_state_diffusion", [])
+    if derived_obs:
+        summary["sos_state_diffusion"] = {
+            "rows": len(derived_obs),
+            "date_min": derived_obs[0]["date"].isoformat(),
+            "date_max": derived_obs[-1]["date"].isoformat(),
+            "derived_from": "phci_<state> × 50 (Crone/Clayton-Matthews 2005)",
+        }
+    else:
+        summary["sos_state_diffusion"] = {
+            "rows": 0, "reason": "no aligned state PHCI observations",
+        }
 
     logger.info(
         "ingestion.handler.macro_indicators.done",

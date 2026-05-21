@@ -20,6 +20,16 @@ from typing import Any
 
 import pytest
 
+# Source the fake-pool macro-indicator universe from the canonical
+# EXPECTED_INDICATORS tuple so the conftest cannot drift from the
+# check's view of the universe (the 1:1 invariant is enforced by
+# test_every_expected_indicator_has_a_cadence; this import keeps the
+# fake pool in lockstep automatically rather than via a hand-edited
+# parallel list).
+from tpcore.quality.validation.checks.macro_indicators_completeness import (
+    EXPECTED_INDICATORS as _MACRO_INDICATOR_NAMES,
+)
+
 
 @dataclass
 class _FakeShrinkReport:
@@ -155,11 +165,7 @@ class FakePool:
             return [
                 {"indicator": name, "first_date": first, "last_date": today,
                  "row_count": 100}
-                for name in (
-                    "sahm_rule", "industrial_production", "initial_claims",
-                    "yield_curve", "credit_spread", "hy_spread", "vix",
-                    "cfnai_ma3",
-                )
+                for name in _MACRO_INDICATOR_NAMES
             ]
         # macro_indicators_completeness: per-indicator present-dates
         # query (one indicator at a time). Return every expected
@@ -187,11 +193,7 @@ class FakePool:
             today = datetime.now(UTC).date() - timedelta(days=5)
             return [
                 {"indicator": name, "latest_date": today, "rows_total": 100}
-                for name in (
-                    "sahm_rule", "industrial_production", "initial_claims",
-                    "yield_curve", "credit_spread", "hy_spread", "vix",
-                    "cfnai_ma3",
-                )
+                for name in _MACRO_INDICATOR_NAMES
             ]
         # options_max_pain_freshness: one fresh snapshot per expected
         # symbol so the suite passes in e2e tests for unrelated checks.
