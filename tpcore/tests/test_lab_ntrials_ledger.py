@@ -609,11 +609,15 @@ async def test_gate_expression_byte_identical_and_reduces_to_per_run(
 
     # ── (a) source/AST pin of the gate ────────────────────────────────
     src = inspect.getsource(lab_run._run_lab_core)  # noqa: SLF001
-    # The exact gate expression text must be present verbatim.
+    # The exact gate expression text must be present verbatim. The
+    # ``final_credibility_score`` rename is the 2026-05-21 chunked-replay
+    # variable name (the chunker returns the LAST chunk's credibility on
+    # the AGGREGATE; the gate semantics + threshold ≥60 invariant are
+    # IDENTICAL to the pre-chunking ``final_result.credibility_score``).
     assert (
         "survived = (\n"
         "        dsr >= args.dsr_threshold\n"
-        "        and final_result.credibility_score "
+        "        and final_credibility_score "
         ">= args.credibility_threshold\n"
         "        and held_metrics.n_trades >= 3\n"
         "    )"

@@ -243,6 +243,16 @@ ignore = ["E501"]
 "tpcore/tests/test_kill_switch_smoke_stage.py" = ["SLF"]
 "tpcore/tests/test_extract_tradier_full_stage.py" = ["SLF"]
 "tpcore/tests/test_ingest_tradier_csv_stage.py" = ["SLF"]
+# Lab final-holdout chunking test (statement_timeout fix, 2026-05-21).
+# Proving the chunked replay partitions the holdout disjointly + does
+# NOT multiply the SP-A ledger spend REQUIRES naming the
+# ``ops.lab.run``-private ``chunk_final_holdout``,
+# ``_run_final_holdout_chunked`` and ``_run_lab_core`` (that IS the
+# test's purpose — the transport invariant lives at that seam).
+# Engine-lane-module-private (NOT tpcore-private) access; the scoped
+# per-file ignore is the correct form (mirrors the SP-B/SP-D/SP-E/SP-F
+# precedents above) — never an inline ``# noqa: SLF001``.
+"tpcore/tests/test_lab_final_holdout_chunking.py" = ["SLF"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
