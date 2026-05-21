@@ -1,41 +1,33 @@
-"""Offline Sentinel activation-score distribution probe (one-off).
+"""Sentinel activation-score distribution probe — read-only offline diagnostic.
 
 Diagnoses whether the FAILED ``sentinel_bear_score`` Lab probe
-(dossier ``docs/lab/2026-05-21-sentinel_bear_score-FAILED-seed0.md``)
-failed because the graduated activation gate is **structurally dormant**
-(composite < 0.45 floor across the OOS window) OR merely
-**threshold-clipped** (composite fires but the binary
-``ACTIVATION_SCORE_THRESHOLD=60`` path / band-to-execution wiring drops
-the trade).
+(``docs/lab/2026-05-21-sentinel_bear_score-FAILED-seed0.md``) failed
+because the graduated activation gate is **structurally dormant**
+(composite < 0.45 across the OOS window) OR merely **threshold-clipped**
+(composite fires but binary ``ACTIVATION_SCORE_THRESHOLD=60`` / band-
+to-execution wiring drops the trade).
 
-This is a read-only probe. It reuses the PURE composite + band-scale
-helpers from ``sentinel.backtest`` and the wide-panel loader; it does
-NOT touch ``_run_graduated_bear_score`` (which requires the full
+Read-only. Reuses the PURE composite + band helpers from
+``sentinel.backtest`` and the wide-panel loader; does NOT touch
+``_run_graduated_bear_score`` (needs the full
 ``SentinelWindowContext`` setup-detection I/O).
 
-PIT semantics mirror the live behavior (``sentinel/backtest.py``
-1071-1077): per-date row is the most-recent observation at or before
-the date in the panel — NOT a naive ``.loc[d]``.
+PIT semantics mirror live behaviour (``sentinel/backtest.py`` 1071-1077):
+per-date row is the most-recent observation at-or-before the date.
 
-Outputs
--------
-- One-line floor stdout: sample count + OOS p50 / p95 + verdict + rationale.
-- JSON sidecar ``data/sentinel_activation_probe/<probe-date>.json``
-  with full distribution stats (verdict / per-bucket counts + percentiles
-  + max contiguous DORMANT streak + indicator coverage).
+Invocation (canonical, post-PR #220 hotfix):
+``python scripts/ops.py --stage probe_sentinel_activation``.
+The stage is operator-on-demand — NOT in OPS_UPDATE_STAGES.
 
 No Lab spend, no n_trials increment, no dossier. Defect ref:
 ``SENTINEL-ACTIVATION-DORMANT-2026-05-21``.
 """
 from __future__ import annotations
 
-import asyncio
 import json
-import os
-import sys
 from datetime import date as date_t
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 import structlog
@@ -48,15 +40,15 @@ from sentinel.backtest import (
     _fetch_graduated_macro_panel,
     _grad_composite,
 )
-from tpcore.db import build_asyncpg_pool
+
+if TYPE_CHECKING:  # pragma: no cover
+    import asyncpg
 
 log = structlog.get_logger(__name__)
 
-_PROBE_DATE = date_t(2026, 5, 21)
-_FULL_START = date_t(2018, 1, 1)
-_FULL_END = _PROBE_DATE
-_OOS_START = date_t(2024, 1, 1)
-_OOS_END = _PROBE_DATE
+DEFAULT_PROBE_DATE = date_t(2026, 5, 21)
+DEFAULT_FULL_START = date_t(2018, 1, 1)
+DEFAULT_OOS_START = date_t(2024, 1, 1)
 
 # Authoritative weights — pinned from sentinel.backtest._GRAD_W_* (spec §2.3).
 _WEIGHTS = {
@@ -67,11 +59,11 @@ _WEIGHTS = {
     "hy_oas": 0.20,
 }
 
-_OUT_DIR = Path("data/sentinel_activation_probe")
+DEFAULT_OUT_DIR = Path("data/sentinel_activation_probe")
 
 
 def _bucket(composite: float) -> str:
-    """Classify ``composite`` into the four activation buckets (spec §2.4)."""
+    """Classify ``composite`` into the four activation buckets."""
     if composite < _GRAD_BAND_LIGHT_LO:
         return "DORMANT"
     if composite < _GRAD_BAND_HEAVY_LO:
@@ -86,11 +78,7 @@ def _composites_for_window(
     start: date_t,
     end: date_t,
 ) -> list[tuple[date_t, float]]:
-    """Per-date PIT composite over the daily index in ``[start, end]``.
-
-    Reproduces ``sentinel/backtest.py`` 1071-1077 verbatim: row =
-    ``panel.loc[panel.index <= d].iloc[-1]``; missing ⇒ all-None dict
-    (composite = 0)."""
+    """Per-date PIT composite over the daily index in ``[start, end]``."""
     out: list[tuple[date_t, float]] = []
     daily_idx = pd.date_range(start, end, freq="D").date
     for d in daily_idx:
@@ -127,7 +115,6 @@ def _window_stats(samples: list[tuple[date_t, float]]) -> dict[str, Any]:
         "p95": float(series.quantile(0.95)),
         "p99": float(series.quantile(0.99)),
     }
-    # Max contiguous DORMANT streak (consecutive calendar days < LIGHT_LO).
     max_streak = 0
     cur = 0
     for b in buckets:
@@ -146,8 +133,7 @@ def _window_stats(samples: list[tuple[date_t, float]]) -> dict[str, Any]:
 
 
 def _indicator_coverage(panel: pd.DataFrame) -> dict[str, dict[str, Any]]:
-    """Per-indicator first/last non-null date + non-null pct (over the
-    full daily index of the loaded panel)."""
+    """Per-indicator first/last non-null date + non-null pct."""
     cov: dict[str, dict[str, Any]] = {}
     if panel.empty:
         for ind in _GRAD_INDICATORS:
@@ -162,7 +148,6 @@ def _indicator_coverage(panel: pd.DataFrame) -> dict[str, dict[str, Any]]:
             cov[ind] = {"first_date": None, "last_date": None, "non_null_pct": 0.0}
             continue
         first_idx = panel.index[non_null.values.argmax()]
-        # last non-null = reverse-search
         last_idx = panel.index[len(panel.index) - 1 - non_null.values[::-1].argmax()]
         cov[ind] = {
             "first_date": str(first_idx),
@@ -177,7 +162,7 @@ def _verdict(
     oos_start: date_t,
     oos_end: date_t,
 ) -> tuple[str, str]:
-    """Verdict per spec.
+    """Verdict.
 
     PASS: ``oos.p95(composite) >= 0.45`` AND
           ``max_contiguous_dormant_streak < (oos_end - oos_start days)``.
@@ -202,41 +187,46 @@ def _verdict(
     )
 
 
-async def _run() -> int:
-    db_url = os.getenv("DATABASE_URL") or os.getenv("DATABASE_URL_IPV4")
-    if not db_url:
-        print("FAILED — DATABASE_URL not set (and no DATABASE_URL_IPV4 fallback)", file=sys.stderr)
-        return 1
+async def run_probe(
+    pool: asyncpg.Pool,
+    *,
+    probe_date: date_t = DEFAULT_PROBE_DATE,
+    full_start: date_t = DEFAULT_FULL_START,
+    oos_start: date_t = DEFAULT_OOS_START,
+    out_dir: Path = DEFAULT_OUT_DIR,
+) -> dict[str, Any]:
+    """Run the probe + write the JSON sidecar.
+
+    Returns the payload dict (the same content as the sidecar).
+    """
+    full_end = probe_date
+    oos_end = probe_date
 
     log.info("probe.start",
-             full_window=(str(_FULL_START), str(_FULL_END)),
-             oos_window=(str(_OOS_START), str(_OOS_END)))
+             full_window=(str(full_start), str(full_end)),
+             oos_window=(str(oos_start), str(oos_end)))
 
-    pool = await build_asyncpg_pool(db_url, max_size=2, read_only=True)
-    try:
-        panel = await _fetch_graduated_macro_panel(
-            pool, start=_FULL_START, end=_FULL_END
-        )
-    finally:
-        await pool.close()
+    panel = await _fetch_graduated_macro_panel(
+        pool, start=full_start, end=full_end
+    )
 
     log.info("probe.panel_loaded",
              rows=len(panel.index),
              columns=list(panel.columns))
 
-    full_samples = _composites_for_window(panel, _FULL_START, _FULL_END)
-    oos_samples = _composites_for_window(panel, _OOS_START, _OOS_END)
+    full_samples = _composites_for_window(panel, full_start, full_end)
+    oos_samples = _composites_for_window(panel, oos_start, oos_end)
 
     full_stats = _window_stats(full_samples)
     oos_stats = _window_stats(oos_samples)
     coverage = _indicator_coverage(panel)
-    verdict, rationale = _verdict(oos_stats, _OOS_START, _OOS_END)
+    verdict, rationale = _verdict(oos_stats, oos_start, oos_end)
 
     payload = {
         "candidate": "sentinel_bear_score",
-        "probe_date": str(_PROBE_DATE),
-        "window": {"start": str(_FULL_START), "end": str(_FULL_END)},
-        "oos_window": {"start": str(_OOS_START), "end": str(_OOS_END)},
+        "probe_date": str(probe_date),
+        "window": {"start": str(full_start), "end": str(full_end)},
+        "oos_window": {"start": str(oos_start), "end": str(oos_end)},
         "bucket_thresholds": {
             "LIGHT_LO": _GRAD_BAND_LIGHT_LO,
             "HEAVY_LO": _GRAD_BAND_HEAVY_LO,
@@ -251,32 +241,19 @@ async def _run() -> int:
         "verdict_rationale": rationale,
     }
 
-    # Floor print — operator sees the answer at the terminal BEFORE the
-    # JSON write (visible-progress rule). Plain print is the deliberate
-    # operator-visibility channel.
-    oos_p50 = oos_stats["composite_percentiles"].get("p50", 0.0)
-    oos_p95 = oos_stats["composite_percentiles"].get("p95", 0.0)
-    print("=== Sentinel Activation-Score Distribution Probe ===")
-    print(f"full window: {_FULL_START} → {_FULL_END}  "
-          f"samples={full_stats['total_samples']}")
-    print(f"oos  window: {_OOS_START} → {_OOS_END}  "
-          f"samples={oos_stats['total_samples']}")
-    print(f"OOS composite p50={oos_p50:.4f}  p95={oos_p95:.4f}")
-    print(f"OOS DORMANT pct={oos_stats['per_bucket'].get('DORMANT', {}).get('pct', 0.0):.3%}  "
-          f"max_contiguous_dormant_streak_days={oos_stats['max_contiguous_dormant_streak_days']}")
-    print(f"VERDICT: {verdict} — {rationale}")
-
-    _OUT_DIR.mkdir(parents=True, exist_ok=True)
-    out_path = _OUT_DIR / f"{_PROBE_DATE}.json"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"{probe_date}.json"
     out_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
     log.info("probe.wrote_sidecar", path=str(out_path), verdict=verdict)
-    print(f"wrote: {out_path}")
-    return 0
+
+    payload["_sidecar_path"] = str(out_path)
+    return payload
 
 
-def main() -> int:
-    return asyncio.run(_run())
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+__all__ = [
+    "DEFAULT_FULL_START",
+    "DEFAULT_OOS_START",
+    "DEFAULT_OUT_DIR",
+    "DEFAULT_PROBE_DATE",
+    "run_probe",
+]
