@@ -170,6 +170,26 @@ set ⊆ `EngineProfile.data_dependencies` (modulo the
 `universe_candidates`/`allocations` allowlist enumerated in PR #171's
 docstring). This would have red'd both PR #178 and PR #180 at merge time.
 
+✅ SHIPPED 2026-05-21 as `tpcore/tests/test_engine_data_dependencies_drift.py`.
+Forcing test reds the build on any future engine adding a
+`platform.<feed-table>` reference not declared in its
+`EngineProfile.data_dependencies`. The platform-overlay allowlist is
+pinned as a module-level `PLATFORM_OVERLAY_ALLOWLIST` constant in the
+test (the seven tables enumerated above); a separate
+`test_platform_overlay_allowlist_is_pinned_constant` reds the build on
+any silent expansion of that set. A non-vacuity proof
+(`test_drift_extractor_is_not_vacuously_passing`) confirms the source-walk
+finds at least `platform.prices_daily` per dispatchable engine, so a
+future refactor that moves SQL into a shared helper can't silently void
+the gate.
+
+Current main state: the test reds on the two audit-found drifts above
+(catalyst + momentum missing `earnings_events`) — i.e. it works. The
+ratchet unblocks once the staged ECRs
+(`ecr_catalyst_data_dependencies_2026-05-20.txt`,
+`ecr_momentum_data_dependencies_2026-05-20.txt`) are applied via the
+planner-MODIFY extension follow-up above.
+
 ## Graduation watch — carver LAB → PAPER
 
 When carver graduates from LAB to PAPER, the drift sentinel
