@@ -39,6 +39,21 @@ EXPECTED_INDICATORS: tuple[str, ...] = (
     "hy_spread",
     "vix",
     "cfnai_ma3",
+    # 50 Philadelphia Fed state coincident indices (substrate for the
+    # derived sos_state_diffusion below) — added 2026-05-21 for the
+    # Sentinel graduated Bear Score Lab candidate. All MONTHLY.
+    "phci_al", "phci_ak", "phci_az", "phci_ar", "phci_ca",
+    "phci_co", "phci_ct", "phci_de", "phci_fl", "phci_ga",
+    "phci_hi", "phci_id", "phci_il", "phci_in", "phci_ia",
+    "phci_ks", "phci_ky", "phci_la", "phci_me", "phci_md",
+    "phci_ma", "phci_mi", "phci_mn", "phci_ms", "phci_mo",
+    "phci_mt", "phci_ne", "phci_nv", "phci_nh", "phci_nj",
+    "phci_nm", "phci_ny", "phci_nc", "phci_nd", "phci_oh",
+    "phci_ok", "phci_or", "phci_pa", "phci_ri", "phci_sc",
+    "phci_sd", "phci_tn", "phci_tx", "phci_ut", "phci_vt",
+    "phci_va", "phci_wa", "phci_wv", "phci_wi", "phci_wy",
+    # Crone/Clayton-Matthews 2005 sum-of-states diffusion (derived).
+    "sos_state_diffusion",
 )
 # ``hy_spread`` (BAMLH0A0HYM2) was truncated by FRED 2026-05-15 to a
 # rolling 3-year window. Its full pre-truncation history was recovered

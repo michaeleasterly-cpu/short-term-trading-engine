@@ -47,6 +47,13 @@ FRED series ``CFNAIMA3``, monthly publication) was added 2026-05-20
 to unblock the Sentinel graduated Bear Score Lab candidate (TODO
 §Deep-research) — the candidate's ``CFNAI ≤ -0.70`` band anchor
 cannot fire without this series ingested.
+
+``phci_<state>`` × 50 + the derived ``sos_state_diffusion`` were
+added 2026-05-21 — same Sentinel candidate needs a ≥0.20 SOS
+anchor. The 50 raw ``{XX}PHCI`` series feed the derived
+``sos_state_diffusion`` (Crone/Clayton-Matthews 2005 sum-of-states
+diffusion, 3-month span) via ``tpcore.fred.diffusion``. All 51
+are MONTHLY.
 """
 
 from __future__ import annotations
@@ -81,6 +88,20 @@ EXPECTED_INDICATORS: tuple[str, ...] = (
     "industrial_production",
     "sahm_rule",
     "cfnai_ma3",
+    # ── Philadelphia Fed state coincident indices — 50 USPS states
+    # (substrate for the derived sos_state_diffusion below).
+    "phci_al", "phci_ak", "phci_az", "phci_ar", "phci_ca",
+    "phci_co", "phci_ct", "phci_de", "phci_fl", "phci_ga",
+    "phci_hi", "phci_id", "phci_il", "phci_in", "phci_ia",
+    "phci_ks", "phci_ky", "phci_la", "phci_me", "phci_md",
+    "phci_ma", "phci_mi", "phci_mn", "phci_ms", "phci_mo",
+    "phci_mt", "phci_ne", "phci_nv", "phci_nh", "phci_nj",
+    "phci_nm", "phci_ny", "phci_nc", "phci_nd", "phci_oh",
+    "phci_ok", "phci_or", "phci_pa", "phci_ri", "phci_sc",
+    "phci_sd", "phci_tn", "phci_tx", "phci_ut", "phci_vt",
+    "phci_va", "phci_wa", "phci_wv", "phci_wi", "phci_wy",
+    # Derived: Crone/Clayton-Matthews 2005 sum-of-states diffusion.
+    "sos_state_diffusion",
 )
 
 # FRED publication cadence per series. DAILY = every NYSE session;
@@ -101,6 +122,36 @@ INDICATOR_CADENCE: dict[str, str] = {
     "industrial_production": CADENCE_MONTHLY,
     "sahm_rule": CADENCE_MONTHLY,
     "cfnai_ma3": CADENCE_MONTHLY,
+    # 50 state PHCI series — each publishes monthly (Phila Fed).
+    "phci_al": CADENCE_MONTHLY, "phci_ak": CADENCE_MONTHLY,
+    "phci_az": CADENCE_MONTHLY, "phci_ar": CADENCE_MONTHLY,
+    "phci_ca": CADENCE_MONTHLY, "phci_co": CADENCE_MONTHLY,
+    "phci_ct": CADENCE_MONTHLY, "phci_de": CADENCE_MONTHLY,
+    "phci_fl": CADENCE_MONTHLY, "phci_ga": CADENCE_MONTHLY,
+    "phci_hi": CADENCE_MONTHLY, "phci_id": CADENCE_MONTHLY,
+    "phci_il": CADENCE_MONTHLY, "phci_in": CADENCE_MONTHLY,
+    "phci_ia": CADENCE_MONTHLY, "phci_ks": CADENCE_MONTHLY,
+    "phci_ky": CADENCE_MONTHLY, "phci_la": CADENCE_MONTHLY,
+    "phci_me": CADENCE_MONTHLY, "phci_md": CADENCE_MONTHLY,
+    "phci_ma": CADENCE_MONTHLY, "phci_mi": CADENCE_MONTHLY,
+    "phci_mn": CADENCE_MONTHLY, "phci_ms": CADENCE_MONTHLY,
+    "phci_mo": CADENCE_MONTHLY, "phci_mt": CADENCE_MONTHLY,
+    "phci_ne": CADENCE_MONTHLY, "phci_nv": CADENCE_MONTHLY,
+    "phci_nh": CADENCE_MONTHLY, "phci_nj": CADENCE_MONTHLY,
+    "phci_nm": CADENCE_MONTHLY, "phci_ny": CADENCE_MONTHLY,
+    "phci_nc": CADENCE_MONTHLY, "phci_nd": CADENCE_MONTHLY,
+    "phci_oh": CADENCE_MONTHLY, "phci_ok": CADENCE_MONTHLY,
+    "phci_or": CADENCE_MONTHLY, "phci_pa": CADENCE_MONTHLY,
+    "phci_ri": CADENCE_MONTHLY, "phci_sc": CADENCE_MONTHLY,
+    "phci_sd": CADENCE_MONTHLY, "phci_tn": CADENCE_MONTHLY,
+    "phci_tx": CADENCE_MONTHLY, "phci_ut": CADENCE_MONTHLY,
+    "phci_vt": CADENCE_MONTHLY, "phci_va": CADENCE_MONTHLY,
+    "phci_wa": CADENCE_MONTHLY, "phci_wv": CADENCE_MONTHLY,
+    "phci_wi": CADENCE_MONTHLY, "phci_wy": CADENCE_MONTHLY,
+    # Derived sum-of-states diffusion — also monthly (one row per
+    # month where all 50 anchor states have an aligned PHCI(t) and
+    # PHCI(t-3)).
+    "sos_state_diffusion": CADENCE_MONTHLY,
 }
 
 # Weekly cadence anchor day. ICSA (initial_claims) publishes Thursday

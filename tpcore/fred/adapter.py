@@ -16,6 +16,12 @@ in :data:`INDICATOR_SERIES` from the St. Louis Fed FRED API:
 * ``cfnai_ma3``            — CFNAIMA3 (monthly Chicago Fed National
                               Activity Index, 3-month MA — Sentinel
                               Bear Score band anchor, added 2026-05-20)
+* ``phci_<state>`` × 50    — {XX}PHCI (monthly Coincident Economic
+                              Activity Index per US state, Phila Fed;
+                              1979→present; substrate for the derived
+                              ``sos_state_diffusion`` series consumed
+                              by the Sentinel graduated Bear Score Lab
+                              candidate, added 2026-05-21)
 
 **2026-05-15 — BAA10Y replaces BAMLH0A0HYM2.** FRED permanently truncated
 the HY OAS series (``BAMLH0A0HYM2``) to a rolling 3-year window starting
@@ -83,6 +89,30 @@ INDICATOR_SERIES: tuple[tuple[str, str], ...] = (
     # publishes MONTHLY (FRED release calendar: monthly, around the 4th
     # week of the following month). No new provider (FRED existing).
     ("cfnai_ma3",            "CFNAIMA3"),
+    # ── Philadelphia Fed state coincident indices — 50 USPS states,
+    # monthly, 1979→present. Substrate for the derived
+    # ``sos_state_diffusion`` series (Crone/Clayton-Matthews 2005
+    # 3-month span) consumed by the Sentinel graduated Bear Score Lab
+    # candidate. Live-probed 2026-05-21: all 50 series valid, frequency
+    # Monthly, observation_start 1979-01-01 (TX 1979-04-01). No new
+    # provider (FRED existing); license-free.
+    ("phci_al", "ALPHCI"), ("phci_ak", "AKPHCI"), ("phci_az", "AZPHCI"),
+    ("phci_ar", "ARPHCI"), ("phci_ca", "CAPHCI"), ("phci_co", "COPHCI"),
+    ("phci_ct", "CTPHCI"), ("phci_de", "DEPHCI"), ("phci_fl", "FLPHCI"),
+    ("phci_ga", "GAPHCI"), ("phci_hi", "HIPHCI"), ("phci_id", "IDPHCI"),
+    ("phci_il", "ILPHCI"), ("phci_in", "INPHCI"), ("phci_ia", "IAPHCI"),
+    ("phci_ks", "KSPHCI"), ("phci_ky", "KYPHCI"), ("phci_la", "LAPHCI"),
+    ("phci_me", "MEPHCI"), ("phci_md", "MDPHCI"), ("phci_ma", "MAPHCI"),
+    ("phci_mi", "MIPHCI"), ("phci_mn", "MNPHCI"), ("phci_ms", "MSPHCI"),
+    ("phci_mo", "MOPHCI"), ("phci_mt", "MTPHCI"), ("phci_ne", "NEPHCI"),
+    ("phci_nv", "NVPHCI"), ("phci_nh", "NHPHCI"), ("phci_nj", "NJPHCI"),
+    ("phci_nm", "NMPHCI"), ("phci_ny", "NYPHCI"), ("phci_nc", "NCPHCI"),
+    ("phci_nd", "NDPHCI"), ("phci_oh", "OHPHCI"), ("phci_ok", "OKPHCI"),
+    ("phci_or", "ORPHCI"), ("phci_pa", "PAPHCI"), ("phci_ri", "RIPHCI"),
+    ("phci_sc", "SCPHCI"), ("phci_sd", "SDPHCI"), ("phci_tn", "TNPHCI"),
+    ("phci_tx", "TXPHCI"), ("phci_ut", "UTPHCI"), ("phci_vt", "VTPHCI"),
+    ("phci_va", "VAPHCI"), ("phci_wa", "WAPHCI"), ("phci_wv", "WVPHCI"),
+    ("phci_wi", "WIPHCI"), ("phci_wy", "WYPHCI"),
 )
 """(canonical_name, FRED series_id) pairs — the platform's vocabulary
 on the left, FRED's identifier on the right. Adding a new indicator

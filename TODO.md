@@ -210,17 +210,24 @@ Single focus until further notice — no engine/Sigma-redesign work. Sequence:
      the Sentinel graduated Bear Score Lab candidate (TODO §Deep-research).
      Next FRED ingestion cycle populates rows (no historical backfill
      bundled with the wire-up PR).
-   - **Decide on SOS (Sum-of-States diffusion) substrate.** `[lane:
-     data-lane-mine] [gate: none] [needs operator decision: YES — pick
-     the substrate] [effort: M]` The Sentinel Bear Score candidate
-     requires an SOS series (≥0.20 anchor). Not a single off-the-shelf
-     FRED series. Options: (a) Philadelphia Fed `SOSADV` /
-     `USPHCI`-family pull, (b) `SLIND`-family pull, (c) constructed
-     diffusion index from state coincident series (`SMU*`). Pick one,
-     wire as a derived indicator (likely a separate adapter step). Then
-     add to `macro_indicators_completeness` invariant with ≥1y history
-     before re-dispatching the Sentinel Bear Score candidate. Surfaced
-     2026-05-20 by the Sentinel Bear Score subagent.
+   - ✅ **SOS (Sum-of-States diffusion) substrate — DONE 2026-05-21.**
+     Operator picked option (c): construct the diffusion index from
+     the 50 Philadelphia Fed state coincident series (`{XX}PHCI`,
+     monthly, 1979→present, license-free). Live-probed all 50: every
+     series valid, monthly cadence, observation_start 1979-01-01
+     (TX 1979-04-01). Wired as 50 raw `phci_<state>` entries in
+     `tpcore/fred/adapter.py::INDICATOR_SERIES` + the derived
+     `sos_state_diffusion` indicator computed via the new pure
+     `tpcore/fred/diffusion.py::compute_sos_diffusion` (Crone/Clayton-
+     Matthews 2005, default 3-month span; zero-tolerance month
+     exclusion when ANY anchor state is missing the anchor pair).
+     Persisted by `handle_macro_indicators` on the same ON CONFLICT
+     idempotent path as raw series. EXPECTED_INDICATORS +
+     INDICATOR_CADENCE extended in both `macro_indicators_completeness`
+     and the sibling `macro_indicators_freshness` (all 51 monthly).
+     Unblocks the Sentinel graduated Bear Score Lab candidate (TODO
+     §Deep-research). Next FRED ingestion cycle populates the
+     historical rows (no manual backfill bundled with the wire-up PR).
    - ✅ **HY-spread recovery — DONE 2026-05-16.** ALFRED/Nasdaq ruled
      out empirically; full history recovered (eco-archive 1996-2021 +
      Scribd FRED-graph gap, validated 772/772 exact). `hy_spread`
