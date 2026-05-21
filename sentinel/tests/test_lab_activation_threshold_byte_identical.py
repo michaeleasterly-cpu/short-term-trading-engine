@@ -177,15 +177,23 @@ def test_live_walk_states_is_byte_identical_after_variant_run():
         "the backtest seam leaked into the live path (NOT byte-identical)")
 
 
-def test_lab_target_is_the_single_pre_registered_toggle():
-    """Compliance §10: exactly ONE toggle, a choice:60,55 whose values
-    are {legacy 60, the one variant 55}; default_params carries 60."""
+def test_lab_target_carries_activation_score_threshold_toggle():
+    """Compliance §10 (sentinel_maxdd candidate slice): the
+    ``activation_score_threshold`` toggle is the pre-registered
+    ``choice:60,55`` whose values are ``{legacy 60, the one variant 55}``;
+    ``default_params`` carries the legacy default ``60``.
+
+    The sibling ``sentinel_bear_score`` candidate (spec
+    ``docs/superpowers/specs/2026-05-21-sentinel-bear-score-lab-candidate.md``)
+    adds a SECOND pre-registered toggle (``bear_score_mode``) to the
+    same ``LAB_TARGET.param_ranges``; this test asserts THIS
+    candidate's slice without forbidding the sibling's presence."""
     from sentinel.backtest import LAB_TARGET, default_params
     from tpcore.lab.target import LabPrimaryMetric
 
-    assert list(LAB_TARGET.param_ranges) == ["activation_score_threshold"]
+    assert "activation_score_threshold" in LAB_TARGET.param_ranges
     assert LAB_TARGET.param_ranges["activation_score_threshold"] == (
         60, 55, "choice:60,55")
-    assert default_params() == {"activation_score_threshold": 60}
+    assert default_params()["activation_score_threshold"] == 60
     # SP-E: Sentinel's success bar is drawdown reduction, NOT Sharpe.
     assert LAB_TARGET.primary_metric == LabPrimaryMetric.MAXDD_REDUCTION

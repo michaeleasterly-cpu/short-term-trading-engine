@@ -19,6 +19,25 @@ The "trade" granularity is one ETF position per activation cycle:
 Tier-aware costs (``tpcore.backtest.cost_model.get_round_trip_cost``)
 are applied per ETF. ETFs are typically T1 (narrow spread), so costs
 are small but non-zero.
+
+This module also hosts TWO sibling pre-registered Lab candidates,
+declared via the engine-OWNED ``LAB_TARGET`` (resolved roster-driven by
+``ops.lab.run``); the live trading path NEVER imports this module:
+
+* ``sentinel_maxdd`` (sibling candidate, MERGED) — toggle
+  ``activation_score_threshold`` ``choice:60,55``; tests whether
+  earlier activation reduces holdout drawdown. Spec:
+  ``docs/superpowers/specs/2026-05-20-sentinel-maxdd-lab-candidate.md``.
+* ``sentinel_bear_score`` (THIS candidate) — toggle ``bear_score_mode``
+  ``choice:current,graduated``; tests whether a five-factor graduated
+  Bear-Score composite (Sahm/SOS/curve/CFNAI-MA3/HY-OAS with
+  literature-anchored thresholds and three action bands) reduces
+  holdout drawdown vs the legacy binary activation. Spec:
+  ``docs/superpowers/specs/2026-05-21-sentinel-bear-score-lab-candidate.md``.
+
+Both candidates are off-by-default backtest seams; the LIVE trading path
+is byte-identical when neither override is supplied (proven by the C1
+characterization tests in ``sentinel/tests/``).
 """
 from __future__ import annotations
 
@@ -506,6 +525,72 @@ def _write_phase_history(path: Path, rows: list[dict[str, Any]]) -> None:
 # constant (ACTIVATION_SCORE_THRESHOLD) — the live path's value.
 _ACTIVATION_THRESHOLD_OVERRIDE: int | None = None
 
+# Off-by-default backtest-only override for the sentinel_bear_score Lab
+# candidate. None / "current" / any unknown value ⇒ the legacy binary
+# activation path (BYTE-IDENTICAL to pre-candidate behaviour). Only the
+# exact string "graduated" reaches the variant branch (defense-in-depth
+# against silent corruption from a malformed override).
+_BEAR_SCORE_MODE_OVERRIDE: str | None = None
+
+# ── Graduated Bear Score (sentinel_bear_score candidate) — pinned constants ──
+#
+# Every constant below is operator-pinned (TODO.md L537-552; spec §2).
+# NONE of these is Lab-sampled. The ONE Lab-sampled value added by this
+# candidate is the bear_score_mode choice toggle; the composite is fully
+# determined by these constants when the variant fires.
+
+# Composite weights — sum to 1.00 by construction.
+_GRAD_W_SAHM = 0.30
+_GRAD_W_SOS = 0.15
+_GRAD_W_CURVE = 0.20
+_GRAD_W_CFNAI = 0.15
+_GRAD_W_HY_OAS = 0.20
+
+# Anchor thresholds (literature-published recession signals, NOT fitted):
+#   Sahm rule trigger ≥ 0.50  (Sahm 2019)
+#   CFNAI-MA3 trigger ≤ -0.70 (Chicago Fed)
+#   SOS state diffusion ≥ 0.20 (Crone/Clayton-Matthews 2005)
+# These anchors live as comments — the [0,1] sub-score mappings below
+# encode them via the choice of floor/ceiling.
+
+# Per-factor [0, 1] sub-score linear-clip mappings (spec §2.2).
+_GRAD_SAHM_FLOOR = 0.20
+_GRAD_SAHM_CEIL = 0.80
+_GRAD_SOS_FLOOR = 0.05
+_GRAD_SOS_CEIL = 0.40
+# yield_curve: inversion is value ≤ 0; saturate at -1.00.
+_GRAD_CURVE_CEIL = 1.00
+# CFNAI-MA3 is *negative* in contractions; we score -value.
+_GRAD_CFNAI_FLOOR = 0.20
+_GRAD_CFNAI_CEIL = 1.20
+_GRAD_HY_FLOOR = 3.00
+_GRAD_HY_CEIL = 8.00
+
+# Action bands (spec §2.4) — graduated escalation, monotone-increasing.
+_GRAD_BAND_LIGHT_LO = 0.45  # DORMANT → LIGHT
+_GRAD_BAND_HEAVY_LO = 0.60  # LIGHT → HEAVY
+_GRAD_BAND_DEEP_LO = 0.80   # HEAVY → DEEP
+
+# Band → basket-scale (monotone non-decreasing).
+_GRAD_SCALE_DORMANT = 0.00
+_GRAD_SCALE_LIGHT = 0.40
+_GRAD_SCALE_HEAVY = 0.80
+_GRAD_SCALE_DEEP = 1.00
+
+# Inverse-ETF cap — 25% of defensive capital (spec §2.5; Treasuries/gold
+# first). Pinned.
+_GRAD_INVERSE_ETF_CAP = 0.25
+
+# Indicator names read from platform.macro_indicators (these are the
+# canonical names in tpcore.fred.adapter.INDICATOR_SERIES).
+_GRAD_INDICATORS: tuple[str, ...] = (
+    "sahm_rule",
+    "sos_state_diffusion",
+    "yield_curve",
+    "cfnai_ma3",
+    "hy_spread",
+)
+
 
 def _activation_score_threshold() -> int:
     """The active Bear-Score activation threshold for THIS backtest run.
@@ -519,6 +604,20 @@ def _activation_score_threshold() -> int:
     )
 
 
+def _bear_score_mode() -> str:
+    """The active Bear-Score MODE for THIS backtest run.
+
+    Returns ``"graduated"`` ONLY when the off-by-default override is
+    exactly the string ``"graduated"`` (defense-in-depth against silent
+    corruption from a malformed override). Else ``"current"`` (the
+    legacy binary-activation path). Pure."""
+    return (
+        "graduated"
+        if _BEAR_SCORE_MODE_OVERRIDE == "graduated"
+        else "current"
+    )
+
+
 def default_params() -> dict[str, Any]:
     """Current live defaults for EXACTLY this engine's Lab-sampled keys
     (the SP3 O1 dossier-param-diff seam). The legacy default carries the
@@ -526,7 +625,204 @@ def default_params() -> dict[str, Any]:
     (lab_candidate_readiness §2). Pure."""
     return {
         "activation_score_threshold": int(ACTIVATION_SCORE_THRESHOLD),
+        "bear_score_mode": "current",
     }
+
+
+# ── Graduated Bear Score helpers (sentinel_bear_score candidate) ─────────
+#
+# Pure functions consumed ONLY by the bear_score_mode="graduated" variant
+# branch. The legacy "current" path never enters any of them — they are
+# additive, not in the legacy code path. Each helper is unit-testable in
+# isolation via the synthetic-fixture characterization test.
+
+
+async def _fetch_graduated_macro_panel(
+    pool,
+    *,
+    start: date_t,
+    end: date_t,
+) -> pd.DataFrame:
+    """PIT-safe wide panel of the five graduated-Bear-Score indicators
+    from ``platform.macro_indicators``.
+
+    Returns a DataFrame indexed by ``date`` with columns
+    ``(sahm_rule, sos_state_diffusion, yield_curve, cfnai_ma3, hy_spread)``.
+    Forward-filled across the full daily index of the backtest window
+    (padded back 365 days so monthly indicators have a value on day 0).
+    Missing indicators yield an all-NaN column (the per-factor sub-score
+    falls back to 0 in :func:`_grad_subscore_*`).
+
+    Strictly-additive read: this loader is invoked unconditionally by
+    :func:`load_sentinel_window_context` but the resulting panel is
+    consumed ONLY in the graduated branch — the legacy path is unchanged.
+    """
+    sql = """
+        SELECT date, indicator, value
+        FROM platform.macro_indicators
+        WHERE date BETWEEN $1 AND $2
+          AND indicator = ANY($3)
+        ORDER BY date
+    """
+    pad_start = start - timedelta(days=365)
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(sql, pad_start, end, list(_GRAD_INDICATORS))
+    if not rows:
+        return pd.DataFrame(columns=list(_GRAD_INDICATORS))
+    df = pd.DataFrame(
+        [
+            {"date": r["date"], "indicator": r["indicator"], "value": float(r["value"])}
+            for r in rows
+        ]
+    )
+    wide = df.pivot(index="date", columns="indicator", values="value").sort_index()
+    for ind in _GRAD_INDICATORS:
+        if ind not in wide.columns:
+            wide[ind] = float("nan")
+    daily_idx = pd.date_range(pad_start, end, freq="D").date
+    wide = wide.reindex(daily_idx).ffill()
+    wide.index.name = "date"
+    return wide[list(_GRAD_INDICATORS)]
+
+
+def _clip01(x: float) -> float:
+    """Clamp ``x`` to ``[0, 1]``. Pure."""
+    if x <= 0.0:
+        return 0.0
+    if x >= 1.0:
+        return 1.0
+    return float(x)
+
+
+def _grad_sub_sahm(value: float | None) -> float:
+    """Sahm sub-score (spec §2.2). ``None`` ⇒ 0."""
+    if value is None:
+        return 0.0
+    return _clip01((value - _GRAD_SAHM_FLOOR) / (_GRAD_SAHM_CEIL - _GRAD_SAHM_FLOOR))
+
+
+def _grad_sub_sos(value: float | None) -> float:
+    """SOS state-diffusion sub-score (spec §2.2). ``None`` ⇒ 0."""
+    if value is None:
+        return 0.0
+    return _clip01((value - _GRAD_SOS_FLOOR) / (_GRAD_SOS_CEIL - _GRAD_SOS_FLOOR))
+
+
+def _grad_sub_curve(value: float | None) -> float:
+    """Yield-curve inversion sub-score (spec §2.2). ``None`` ⇒ 0.
+
+    ``yield_curve`` is the T10Y2Y spread (percent). Inversion is
+    ``value ≤ 0``; we score ``-value`` (so a more inverted curve scores
+    higher) and saturate at -1.00 (sub-score = 1.0)."""
+    if value is None:
+        return 0.0
+    return _clip01(-value / _GRAD_CURVE_CEIL)
+
+
+def _grad_sub_cfnai(value: float | None) -> float:
+    """CFNAI-MA3 sub-score (spec §2.2). ``None`` ⇒ 0.
+
+    CFNAI-MA3 is *negative* in contractions; we score ``-value``."""
+    if value is None:
+        return 0.0
+    neg = -value
+    return _clip01((neg - _GRAD_CFNAI_FLOOR) / (_GRAD_CFNAI_CEIL - _GRAD_CFNAI_FLOOR))
+
+
+def _grad_sub_hy_oas(value: float | None) -> float:
+    """HY-OAS sub-score (spec §2.2). ``None`` ⇒ 0.
+
+    ``hy_spread`` is in percent (BAMLH0A0HYM2)."""
+    if value is None:
+        return 0.0
+    return _clip01((value - _GRAD_HY_FLOOR) / (_GRAD_HY_CEIL - _GRAD_HY_FLOOR))
+
+
+def _grad_composite(panel_row: Mapping[str, float | None]) -> float:
+    """Weighted composite of the five sub-scores (spec §2.3). Pure.
+
+    ``panel_row`` is a Mapping with keys exactly ``_GRAD_INDICATORS`` and
+    float-or-None values (a ``None`` entry — or NaN — is treated as
+    missing and contributes 0 to that factor). Result is in ``[0, 1]``."""
+    def _coerce(key: str) -> float | None:
+        v = panel_row.get(key)
+        if v is None:
+            return None
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            return None
+        if fv != fv:  # NaN
+            return None
+        return fv
+
+    sahm = _grad_sub_sahm(_coerce("sahm_rule"))
+    sos = _grad_sub_sos(_coerce("sos_state_diffusion"))
+    curve = _grad_sub_curve(_coerce("yield_curve"))
+    cfnai = _grad_sub_cfnai(_coerce("cfnai_ma3"))
+    hy_oas = _grad_sub_hy_oas(_coerce("hy_spread"))
+    return (
+        _GRAD_W_SAHM * sahm
+        + _GRAD_W_SOS * sos
+        + _GRAD_W_CURVE * curve
+        + _GRAD_W_CFNAI * cfnai
+        + _GRAD_W_HY_OAS * hy_oas
+    )
+
+
+def _grad_band_scale(composite: float) -> float:
+    """Action-band → basket scale (spec §2.4). Pure, monotone."""
+    if composite < _GRAD_BAND_LIGHT_LO:
+        return _GRAD_SCALE_DORMANT
+    if composite < _GRAD_BAND_HEAVY_LO:
+        return _GRAD_SCALE_LIGHT
+    if composite < _GRAD_BAND_DEEP_LO:
+        return _GRAD_SCALE_HEAVY
+    return _GRAD_SCALE_DEEP
+
+
+def _grad_basket_weights() -> dict[str, Decimal]:
+    """Pinned graduated-mode basket weights (spec §2.5): the legacy
+    Sentinel basket renormalized with the **inverse-ETF cap of 25 % of
+    defensive capital**; Treasuries/gold first absorbs the surplus.
+
+    Returns a fresh dict keyed by ticker → fractional weight summing to
+    1.00. Pure."""
+    # Legacy basket from sentinel.models.BASKET_WEIGHTS_DEFAULT:
+    #   SH=0.35, PSQ=0.25, TLT=0.20, GLD=0.10, SQQQ=0.10
+    # Inverse-ETFs (SH+PSQ+SQQQ) currently = 0.70, far above the 0.25
+    # cap. Treasuries/gold (TLT+GLD) currently = 0.30. We cap inverse at
+    # 0.25 and reallocate the surplus to TLT/GLD pro-rata.
+    inverse_target = Decimal(str(_GRAD_INVERSE_ETF_CAP))
+    inverse = {"SH", "PSQ", "SQQQ"}
+    legacy = dict(BASKET_WEIGHTS_DEFAULT)
+
+    inverse_legacy_total = sum(legacy[t] for t in inverse if t in legacy)
+    treasury_gold_legacy_total = sum(
+        legacy[t] for t in legacy if t not in inverse
+    )
+
+    # Scale inverse leg down to the cap, preserving relative shape.
+    scaled: dict[str, Decimal] = {}
+    if inverse_legacy_total > 0:
+        for t in inverse:
+            if t in legacy:
+                scaled[t] = legacy[t] * inverse_target / inverse_legacy_total
+
+    # Treasuries/gold leg absorbs the surplus pro-rata.
+    treasury_gold_target = Decimal("1") - inverse_target
+    if treasury_gold_legacy_total > 0:
+        for t in legacy:
+            if t in inverse:
+                continue
+            scaled[t] = (
+                legacy[t] * treasury_gold_target / treasury_gold_legacy_total
+            )
+    # Renormalize to absorb any rounding drift.
+    total = sum(scaled.values())
+    if total <= 0:
+        return {}
+    return {t: (w / total) for t, w in scaled.items()}
 
 
 @dataclass
@@ -535,7 +831,19 @@ class SentinelWindowContext:
     window. Bear-Score breakdowns + SPY + ETF prices + costs are loaded
     ONCE; the threshold toggle is applied per-run in
     :func:`run_sentinel_with_context` (heavy I/O amortised across the
-    window's Lab trials, mirroring the Momentum/Vector context idiom)."""
+    window's Lab trials, mirroring the Momentum/Vector context idiom).
+
+    ``macro_panel`` is the strictly-additive raw five-factor indicator
+    panel consumed ONLY by the ``sentinel_bear_score`` candidate's
+    ``bear_score_mode="graduated"`` variant branch (the graduated
+    composite reads point-in-time raw ``sahm_rule``,
+    ``sos_state_diffusion``, ``yield_curve``, ``cfnai_ma3``,
+    ``hy_spread`` values). The legacy path NEVER reads it, so adding
+    it is byte-identical for ``bear_score_mode="current"`` (lab_candidate
+    _readiness §8). Defaults to ``None`` so pre-existing callers /
+    fixtures continue to construct contexts without touching the new
+    attribute; the graduated branch falls back to the legacy path when
+    the panel is missing (defense-in-depth)."""
 
     breakdowns: Mapping[date_t, Any]
     spy_close: pd.Series
@@ -544,6 +852,7 @@ class SentinelWindowContext:
     start: date_t
     end: date_t
     graduated: bool
+    macro_panel: pd.DataFrame | None = None
 
 
 async def load_sentinel_window_context(
@@ -559,7 +868,13 @@ async def load_sentinel_window_context(
 
     ``universe`` is accepted for the uniform Lab dispatch signature but
     unused: Sentinel's traded set is the fixed defensive ETF basket
-    (``BASKET_WEIGHTS_DEFAULT``), not a roster-derived universe."""
+    (``BASKET_WEIGHTS_DEFAULT``), not a roster-derived universe.
+
+    Strictly-additive read: ``macro_panel`` is loaded from
+    ``platform.macro_indicators`` for the five graduated-Bear-Score
+    factors. The legacy ``bear_score_mode="current"`` path NEVER reads
+    this attribute (byte-identical contract preserved); only the
+    ``bear_score_mode="graduated"`` variant branch consumes it."""
     _ = universe  # uniform-signature only; Sentinel's basket is fixed.
     pool = await build_asyncpg_pool(db_url)
     try:
@@ -570,12 +885,15 @@ async def load_sentinel_window_context(
         round_trip_costs = await _round_trip_cost_by_ticker(
             pool, tickers=list(BASKET_WEIGHTS_DEFAULT.keys()),
         )
+        macro_panel = await _fetch_graduated_macro_panel(
+            pool, start=start, end=end,
+        )
     finally:
         await pool.close()
     return SentinelWindowContext(
         breakdowns=breakdowns, spy_close=spy, etf_prices=etf_prices,
         round_trip_costs=round_trip_costs, start=start, end=end,
-        graduated=graduated,
+        graduated=graduated, macro_panel=macro_panel,
     )
 
 
@@ -587,18 +905,27 @@ def run_sentinel_with_context(
 ) -> BacktestRunResult:
     """Run Sentinel against a pre-loaded :class:`SentinelWindowContext`.
 
-    The single Lab toggle ``activation_score_threshold`` is read into the
-    off-by-default module override and **reset per call** so no
-    module-global state bleeds across Lab trials. When the toggle is
-    absent / equal to the legacy default the result is the legacy
-    behaviour (proven byte-identical by the characterization test)."""
-    import sentinel.plugs.lifecycle_analysis as _lifecycle_mod
+    Reads two off-by-default Lab toggles from ``overrides`` into module
+    globals and **resets them per call** so no module-global state bleeds
+    across Lab trials:
 
-    global _ACTIVATION_THRESHOLD_OVERRIDE
+    * ``activation_score_threshold`` (sibling ``sentinel_maxdd`` candidate)
+    * ``bear_score_mode`` (THIS ``sentinel_bear_score`` candidate)
+
+    When both toggles are absent / equal to their legacy defaults the
+    result is the legacy behaviour (proven byte-identical by
+    ``sentinel/tests/test_lab_activation_threshold_byte_identical.py``
+    and ``sentinel/tests/test_bear_score_byte_identical.py``)."""
+    global _ACTIVATION_THRESHOLD_OVERRIDE, _BEAR_SCORE_MODE_OVERRIDE
     overrides = dict(overrides or {})
     _ACTIVATION_THRESHOLD_OVERRIDE = (
         int(overrides["activation_score_threshold"])
         if "activation_score_threshold" in overrides
+        else None
+    )
+    _BEAR_SCORE_MODE_OVERRIDE = (
+        str(overrides["bear_score_mode"])
+        if "bear_score_mode" in overrides
         else None
     )
 
@@ -610,6 +937,42 @@ def run_sentinel_with_context(
             trades_per_param=0.0, sensitivity_score=None,
             ruin_probability=0.0, trade_log=[],
         )
+
+    # bear_score_mode dispatch. _bear_score_mode() returns "graduated"
+    # ONLY when the override is exactly the string "graduated" AND the
+    # macro_panel is available; any unknown value / missing panel falls
+    # back to the byte-identical legacy path. The effective_mode
+    # reported in `parameters` reflects WHICH BRANCH ACTUALLY RAN so
+    # the dossier `param_diff` carries the honest variant truth (not
+    # the requested override the panel could not satisfy).
+    if _bear_score_mode() == "graduated" and context.macro_panel is not None:
+        return _run_graduated_bear_score(
+            context=context, trade_log_path=trade_log_path,
+            effective_mode="graduated",
+        )
+
+    return _run_legacy_bear_score(
+        context=context, trade_log_path=trade_log_path,
+        effective_mode="current",
+    )
+
+
+def _run_legacy_bear_score(
+    *,
+    context: SentinelWindowContext,
+    trade_log_path: Path | None,
+    effective_mode: str = "current",
+) -> BacktestRunResult:
+    """Legacy binary-activation Sentinel path (the ``bear_score_mode=
+    "current"`` arm; also the live-trading-path-byte-identical contract).
+
+    Hoisted out of :func:`run_sentinel_with_context` so the graduated
+    branch can sit alongside it without inlining; ALL behaviour is
+    byte-identical to the pre-candidate code path that previously lived
+    in ``run_sentinel_with_context`` directly. The C1 characterization
+    golden in ``test_bear_score_byte_identical.py`` reds on any drift.
+    """
+    import sentinel.plugs.lifecycle_analysis as _lifecycle_mod
 
     lifecycle = SentinelLifecycleAnalysis()
     # Backtest-only seam: shadow the module constant the plug bound at
@@ -658,6 +1021,7 @@ def run_sentinel_with_context(
     prices_for_diag["ticker"] = "SPY"
     parameters = {
         "activation_score_threshold": int(_activation_score_threshold()),
+        "bear_score_mode": effective_mode,
     }
     return compute_search_metrics(
         engine="sentinel",
@@ -673,6 +1037,150 @@ def run_sentinel_with_context(
             "survivorship_inclusive": True,
             "pit_fundamentals": True,
             "regime_coverage": False,  # few cycles — flagged honestly.
+            "monte_carlo_drawdown": True,
+        },
+        search_trades=trades,
+    )
+
+
+def _run_graduated_bear_score(
+    *,
+    context: SentinelWindowContext,
+    trade_log_path: Path | None,
+    effective_mode: str = "graduated",
+) -> BacktestRunResult:
+    """Graduated five-factor Bear-Score variant
+    (``bear_score_mode="graduated"``; sentinel_bear_score Lab candidate).
+
+    Computes the per-date composite from the macro_panel (spec §2.2–§2.3),
+    maps to action bands (§2.4), and runs the simulator on the
+    band-scaled basket (§2.5: Treasuries/gold first, inverse-ETF cap
+    25 %). Reuses ``_simulate`` and ``compute_search_metrics`` so trade
+    accounting, cost model, sizing, and the credibility rubric are
+    IDENTICAL to the legacy path — only "which days carry which
+    positions and at what scale" differs.
+    """
+    panel = context.macro_panel
+    assert panel is not None  # guarded by the caller
+
+    grad_weights = _grad_basket_weights()
+    sorted_dates = sorted(context.breakdowns.keys())
+
+    # Per-date band determination.
+    band_for_date: dict[date_t, float] = {}
+    for d in sorted_dates:
+        # PIT lookup — most recent observation at or before d.
+        try:
+            row = panel.loc[panel.index <= d].iloc[-1]
+            row_dict = {k: row.get(k) for k in _GRAD_INDICATORS}
+        except (IndexError, KeyError):
+            row_dict = {k: None for k in _GRAD_INDICATORS}
+        composite = _grad_composite(row_dict)
+        band_for_date[d] = _grad_band_scale(composite)
+
+    # Cycle detection + trade simulation (analog of _simulate's
+    # state-based cycle accounting but driven by band_scale instead of
+    # the SentinelPhase machine).
+    trades: list[SearchTrade] = []
+    trades_for_diag: list[dict[str, Any]] = []
+    open_positions: dict[str, dict[str, Any]] = {}
+
+    def _close_all(close_date: date_t, exit_reason: str) -> None:
+        for ticker, pos in list(open_positions.items()):
+            price_series = context.etf_prices.get(ticker)
+            if price_series is None or len(price_series) == 0:
+                continue
+            sub = price_series.loc[price_series.index <= pd.Timestamp(close_date)].dropna()
+            if len(sub) == 0:
+                continue
+            exit_price = float(sub.iloc[-1])
+            entry_price = pos["entry_price"]
+            gross_ret = (exit_price - entry_price) / entry_price
+            rtc = float(context.round_trip_costs.get(ticker, Decimal("0.001")))
+            net_ret = gross_ret - rtc
+            trades.append(SearchTrade(
+                ticker=ticker,
+                entry_date=pos["entry_date"],
+                entry_price=entry_price,
+                exit_date=close_date,
+                exit_price=exit_price,
+                pnl_pct=net_ret,
+                direction="LONG",
+                exit_reason=exit_reason,
+            ))
+            trades_for_diag.append({
+                "ticker": ticker,
+                "entry_date": pos["entry_date"],
+                "exit_date": close_date,
+                "entry_price": entry_price,
+                "exit_price": exit_price,
+                "pnl_pct": net_ret,
+                "direction": "LONG",
+            })
+            del open_positions[ticker]
+
+    prev_scale: float = _GRAD_SCALE_DORMANT
+    for d in sorted_dates:
+        scale = band_for_date[d]
+        if scale <= 0.0:
+            if open_positions:
+                _close_all(d, exit_reason="GRADUATED_DORMANT")
+            prev_scale = scale
+            continue
+        # Band became (or stayed) non-zero. Open positions only on the
+        # FIRST non-zero day of a cycle (transition from DORMANT). The
+        # variant is "set and hold within a cycle" — basket re-sizing on
+        # band changes is NOT modelled (mirrors the legacy "no
+        # per-cycle rebalance" discipline; spec §10 no-trade-machinery
+        # change).
+        if prev_scale <= 0.0 and not open_positions:
+            for ticker, weight in grad_weights.items():
+                if float(weight) * scale <= 0.0:
+                    continue
+                price_series = context.etf_prices.get(ticker)
+                if price_series is None or len(price_series) == 0:
+                    continue
+                sub = price_series.loc[price_series.index <= pd.Timestamp(d)].dropna()
+                if len(sub) == 0:
+                    continue
+                entry_price = float(sub.iloc[-1])
+                open_positions[ticker] = {
+                    "entry_date": d,
+                    "entry_price": entry_price,
+                }
+        prev_scale = scale
+
+    if open_positions:
+        _close_all(sorted_dates[-1], exit_reason="BACKTEST_END")
+
+    sharpe, pf, max_dd = _compute_summary(trades)
+
+    if trade_log_path is not None:
+        write_trade_log_csv(trade_log_path, trades)
+
+    prices_for_diag = (
+        context.etf_prices.get("SPY", pd.Series(dtype=float))
+        .to_frame(name="close").rename_axis("date").reset_index()
+    )
+    prices_for_diag["ticker"] = "SPY"
+    parameters = {
+        "activation_score_threshold": int(_activation_score_threshold()),
+        "bear_score_mode": effective_mode,
+    }
+    return compute_search_metrics(
+        engine="sentinel",
+        parameters=parameters,
+        trades_for_diag=trades_for_diag,
+        sharpe=sharpe,
+        profit_factor=pf,
+        max_drawdown=max_dd,
+        n_trials=len(parameters),
+        price_data=prices_for_diag,
+        rubric_inputs={
+            "lookahead_clean": True,
+            "survivorship_inclusive": True,
+            "pit_fundamentals": True,
+            "regime_coverage": False,
             "monte_carlo_drawdown": True,
         },
         search_trades=trades,
@@ -711,9 +1219,18 @@ async def run_for_search(
 
 LAB_TARGET = LabTarget(
     param_ranges={
-        # The ONE pre-registered toggle: legacy default 60 vs the single
-        # earlier-activation variant 55. choice:<csv> (NOT a range/grid).
+        # sentinel_maxdd candidate (sibling, MERGED): legacy default 60
+        # vs the single earlier-activation variant 55. choice:<csv> (NOT
+        # a range/grid). Spec:
+        # docs/superpowers/specs/2026-05-20-sentinel-maxdd-lab-candidate.md
         "activation_score_threshold": (60, 55, "choice:60,55"),
+        # sentinel_bear_score candidate (THIS spec): legacy default
+        # "current" (binary activation) vs the single graduated
+        # five-factor composite variant "graduated". (low, high) are the
+        # established (0, 0) placeholder for choice: kinds; the runtime
+        # values are read from kind.split(":",1)[1].split(","). Spec:
+        # docs/superpowers/specs/2026-05-21-sentinel-bear-score-lab-candidate.md
+        "bear_score_mode": (0, 0, "choice:current,graduated"),
     },
     run_for_search=run_for_search,
     load_window_context=load_sentinel_window_context,
