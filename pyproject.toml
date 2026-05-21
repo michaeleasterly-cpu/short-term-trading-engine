@@ -253,6 +253,19 @@ ignore = ["E501"]
 # per-file ignore is the correct form (mirrors the SP-B/SP-D/SP-E/SP-F
 # precedents above) — never an inline ``# noqa: SLF001``.
 "tpcore/tests/test_lab_final_holdout_chunking.py" = ["SLF"]
+# daily_bars coverage_collapse → repair_gaps auto-cascade regression
+# (operator-reproduced 2026-05-18 → 2026-05-20). Proving the cascade
+# fires on coverage_collapse but NOT on other FAILED modes REQUIRES
+# naming ``scripts/ops.py``-private symbols (``_stage_daily_bars``,
+# ``_load_daily_bars_config``, ``_market_open_block_reason``,
+# ``_per_feed_tripwire``, ``_self_heal_failed_stages``,
+# ``_STAGE_SPECS``, ``_DAILY_BARS_COVERAGE_COLLAPSE_TOKEN``) — that
+# IS the test's purpose (it monkeypatches the live pipeline down to a
+# single-stage harness so the cascade decision can be observed). Engine-
+# lane-module-private (NOT tpcore-private) access; the scoped per-file
+# ignore is the correct form (mirrors every other SP-B/SP-D/SP-E/SP-F
+# char-test precedent above) — never an inline ``# noqa: SLF001``.
+"tests/test_daily_bars_coverage_collapse_auto_cascade.py" = ["SLF"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
