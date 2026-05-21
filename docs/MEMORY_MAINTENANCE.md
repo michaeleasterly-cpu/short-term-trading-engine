@@ -2,8 +2,25 @@
 
 Canonical procedure for pruning Claude's persistent memory store.
 
-**Memory store:** `~/.claude/projects/-Users-michael-short-term-trading-engine/memory/`
-(one fact per file + `MEMORY.md` index).
+**Memory store (canonical, machine-local):**
+`~/.claude/projects/-Users-michael-short-term-trading-engine/memory/`
+(one fact per file + `MEMORY.md` index). This is the path Claude Code
+reads from at session start.
+
+**In-repo snapshot (tracked, recoverable):** `docs/memory/`.
+A one-way mirror of the canonical store, synced via
+`bash scripts/sync_claude_memory.sh`. The snapshot lets memory
+changes show up in `git diff` / `git log` and recover from history
+if a memory file is lost / corrupted / accidentally `/forget`-ed.
+
+**Sync workflow:**
+- After writing or editing memories, run `bash scripts/sync_claude_memory.sh`.
+- Review with `git diff docs/memory/`; commit when you want the snapshot pinned.
+- To restore on a fresh machine or recover a lost memory:
+  `cp docs/memory/<file>.md ~/.claude/projects/-Users-michael-short-term-trading-engine/memory/<file>.md`
+- The sync is **one-way live → repo**. The canonical store is still the
+  machine-local dir; never edit `docs/memory/` files directly and expect
+  Claude to read them (Claude reads only the live dir).
 
 ## Trigger
 
