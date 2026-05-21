@@ -793,6 +793,20 @@ DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python -m ops.lab \
   the Lab **never applies it** — the ECR does, gated. Recommendation-
   only.
 
+#### Currently shipped Lab candidates (2026-05-20)
+
+Five Lab candidates exist on `main`; each ships with its own spec at `docs/superpowers/specs/2026-05-20-*-lab-candidate.md`. The canonical invocations:
+
+| Candidate | Target engine | Intent | Canonical command | Spec |
+|---|---|---|---|---|
+| `vector_composite` | vector | `fold_existing` | `python -m ops.lab --candidate vector_composite --target-engine vector --intent fold_existing` | `2026-05-20-vector-composite-lab-candidate.md` |
+| `catalyst_insider_event` | catalyst | `fold_existing` | `python -m ops.lab --candidate catalyst_insider_event --target-engine catalyst --intent fold_existing --param-overrides '{"event_confirmation_mode":"positive_beat_30d"}'` | `2026-05-20-catalyst-insider-cluster-event-lab-candidate.md` |
+| `momentum_vol_managed` | momentum | `fold_existing` | `python -m ops.lab --candidate momentum_vol_managed --target-engine momentum --intent fold_existing` | `2026-05-20-momentum-vol-managed-lab-candidate.md` |
+| `sentinel_maxdd` | sentinel | `fold_existing` | `python -m ops.lab --candidate sentinel_maxdd --target-engine sentinel --intent fold_existing` | `2026-05-20-sentinel-maxdd-lab-candidate.md` |
+| reversion PCA-residual (override mode) | reversion | `fold_existing` | `python -m ops.lab --candidate reversion --target-engine reversion --intent fold_existing --param-overrides '{"signal_mode":"pca_residual"}'` | `2026-05-20-reversion-pca-residual-lab-candidate.md` |
+
+Each probe spends honestly against the SP-A cumulative `n_trials` ledger (`tpcore.lab.ledger`); the autonomous Lab criteria spec (`docs/superpowers/specs/2026-05-20-autonomous-lab-criteria.md`) is the adjudication path for any `fold_existing` MODIFY that follows a SURVIVED dossier. The Sentinel graduated Bear Score candidate (TODO §Deep-research-adjudication) is BLOCKED on the SOS substrate decision + CFNAIMA3 wire (the latter shipped via PR #184; SOS is operator-pick); the catalyst insider-cluster 8-K leg is BLOCKED on 8-K item-code parsing verification (out of scope per the catalyst candidate spec §10).
+
 ## 5.5 Parameter-Search Pipeline
 
 The canonical on-demand edge-hunt entrypoint is now **`python -m ops.lab`** (§5.4a — isolated, recommendation-only, ECR-gated). `scripts/search_parameters.py` is NOT deleted: it remains a thin compatibility shim preserving the historical `python scripts/search_parameters.py` CLI (and every public/underscore symbol the characterization oracle pins), delegating to `ops.lab.run` — which now hosts the walk-forward Lab engine (SDLC SP2 T5, H-S2-1). Random search + walk-forward + final held-back DSR verdict; imports each engine's `load_*_window_context()` / `run_*_with_context()` programmatically — no subprocess; per-window data load is shared across all candidates. The direct invocation below is the lower-level harness; prefer `python -m ops.lab` for an operator edge-hunt.
