@@ -2074,3 +2074,184 @@ def test_apply_add_no_data_dependencies_omits_kwarg(tmp_path):
         f"_apply_add rendered data_dependencies kwarg even though sot_diff "
         f"carried no value — should omit (default is the SoT):\n{txt}")
     ast.parse(txt)
+
+
+def _reparse_data_dependencies(engine_profile_src: str,
+                                engine: str) -> frozenset[str]:
+    """Round-trip the rewritten ``tpcore/engine_profile.py`` source by
+    exec-ing it in an isolated namespace and reading the resulting
+    ``_PROFILE[engine].data_dependencies`` — the in-process
+    ``engine_data_dependencies(engine)`` reads the IMPORT-TIME-bound
+    dict, so it cannot observe the post-edit value of a staged copytree
+    on disk. This helper is the on-disk equivalent: re-bind the SoT
+    from the rewritten bytes and inspect it directly. Identical
+    discipline to the consistency subprocess in spirit (re-execute
+    against the rewritten source), but in-process so the test stays
+    hermetic (no subprocess / no tmp-tree clockwork dependency).
+    """
+    ns: dict[str, object] = {}
+    exec(compile(engine_profile_src, "<roundtrip_engine_profile>", "exec"),
+         ns)
+    profile = ns["_PROFILE"]
+    assert isinstance(profile, dict)
+    return profile[engine].data_dependencies  # type: ignore[no-any-return]
+
+
+def test_modify_data_dependencies_round_trip(tmp_path):
+    """Spec §7 follow-up (2026-05-21, audit
+    docs/superpowers/audits/2026-05-20-engine-data-dependencies-
+    accuracy.md): a MODIFY ECR with a non-empty ``data_dependencies``
+    set round-trips end-to-end through
+
+       parse_ecr → attach_ecr_context → _apply_modify
+
+    and the rewritten ``tpcore/engine_profile.py`` re-parses to a
+    ``_PROFILE[engine].data_dependencies`` exactly equal to the
+    declared set. Pins the contract the audit follow-up requires.
+
+    NON-VACUOUS: asserts on (a) the rendered byte shape (the kwarg is
+    a sorted ``frozenset({...})`` literal — deterministic), (b) the
+    rewrite is targeted to the named engine ONLY (a sibling's
+    data_dependencies stays unchanged), (c) the re-parsed value equals
+    the ECR-declared set, and (d) the rewritten source still parses /
+    compiles (the H-S3-3 AST gate fired). The control assertion that
+    ``catalyst`` is the target prevents a refactor that accidentally
+    rewrites the wrong engine's row from passing silently.
+    """
+    import ast
+
+    from ops.engine_sdlc.ecr import parse_ecr
+    from ops.engine_sdlc.planner import (
+        _apply_modify,
+        _Journal,
+        _staged_copytree,
+        attach_ecr_context,
+        classify,
+    )
+    # Real-source round-trip — copytree the worktree so the rewriter
+    # works against the actual hand-curated byte shape of _PROFILE
+    # (catalyst's data_dependencies kwarg, the staged-ECR's motivating
+    # case from the 2026-05-20 audit). Catalyst's pre-edit declared set
+    # in the live source is {"prices_daily", "sec_insider_transactions"};
+    # this MODIFY adds "earnings_events" (the accuracy correction).
+    staged = _staged_copytree(tmp_path / "tree")
+    ep = staged / "tpcore" / "engine_profile.py"
+    pre_src = ep.read_text()
+    # Sanity: confirm the pre-edit catalyst row + sibling state. A
+    # refactor that drifted catalyst's literal would silently flip this
+    # test to vacuous; the explicit pre-assert pins the baseline.
+    pre_catalyst = _reparse_data_dependencies(pre_src, "catalyst")
+    pre_momentum = _reparse_data_dependencies(pre_src, "momentum")
+    assert "earnings_events" not in pre_catalyst, (
+        f"baseline drift: catalyst already declares earnings_events "
+        f"({pre_catalyst}) — this test's accuracy-correction premise "
+        f"no longer holds; pick a different MODIFY target.")
+    declared = frozenset(
+        {"prices_daily", "sec_insider_transactions", "earnings_events"})
+
+    # The 4-step round trip: parse_ecr → classify → attach → apply.
+    # We deliberately route around validate() — its zero-trust Lab
+    # dossier gate (load_labresult_sidecar / _assess_improvement) is
+    # the param_change tuning-evidence path, NOT the data-deps
+    # accuracy-correction path. The drift test pins the apply
+    # contract; the validate widening for pure-accuracy MODIFYs is
+    # the next follow-up scope.
+    ecr_text = (
+        "ECR\n"
+        "action: MODIFY\n"
+        "engine: catalyst\n"
+        "data_dependencies: prices_daily, sec_insider_transactions, "
+        "earnings_events\n"
+        "need: Accuracy fix — catalyst backtest.py reads "
+        "platform.earnings_events but _PROFILE omits it (audit "
+        "2026-05-20).\n"
+    )
+    ecr = parse_ecr(ecr_text)
+    assert ecr.data_dependencies == declared, (
+        "parse_ecr did not coerce the data_dependencies CSV into the "
+        "declared frozenset — the _coerce path is the source of the "
+        "round trip's input")
+    assert ecr.need is not None, "parse_ecr dropped need on MODIFY"
+
+    # snapshot has catalyst PAPER — the real lifecycle.
+    snapshot = {"catalyst": LifecycleState.PAPER,
+                "momentum": LifecycleState.PAPER}
+    plan = attach_ecr_context(classify(ecr, snapshot), ecr)
+    assert plan.sot_diff.get("data_dependencies") == declared, (
+        f"attach_ecr_context did not thread data_dependencies onto the "
+        f"MODIFY plan's sot_diff: {plan.sot_diff}")
+    assert plan.sot_diff.get("need") is not None, (
+        "attach_ecr_context did not thread need onto the MODIFY plan")
+
+    jn = _Journal()
+    _apply_modify(plan, staged, jn)
+
+    # rendered byte shape: a sorted frozenset literal containing the
+    # three names. Sorting is part of the contract — non-sorted
+    # iteration would make the rendered line non-deterministic.
+    new_src = ep.read_text()
+    assert (
+        'data_dependencies=frozenset({"earnings_events", '
+        '"prices_daily", "sec_insider_transactions"})' in new_src
+    ), (f"rewritten _PROFILE source missing the expected sorted "
+        f"frozenset literal for catalyst:\n{new_src}")
+    # AST + compile gate: the rewritten source must still be a valid
+    # Python module (the H-S3-3 discipline mirrored in
+    # _rewrite_profile_data_dependencies).
+    ast.parse(new_src)
+    compile(new_src, "<roundtrip>", "exec")
+
+    # Re-parse → round-trip equality. exec-ing the rewritten source
+    # binds a fresh _PROFILE dict; we read catalyst's
+    # data_dependencies and assert it matches the declared set
+    # exactly (a partial overwrite, or a rewrite that drifted any
+    # member, would diff here).
+    post_catalyst = _reparse_data_dependencies(new_src, "catalyst")
+    assert post_catalyst == declared, (
+        f"round-trip data_dependencies mismatch on catalyst: "
+        f"declared={declared} got={post_catalyst}")
+    # targeted-line discipline: a sibling engine's data_dependencies
+    # is unchanged (the rewriter is anchored to the catalyst row only).
+    post_momentum = _reparse_data_dependencies(new_src, "momentum")
+    assert post_momentum == pre_momentum, (
+        f"data_dependencies MODIFY for catalyst leaked into momentum: "
+        f"pre={pre_momentum} post={post_momentum}")
+
+
+def test_modify_data_dependencies_inject_when_absent(tmp_path):
+    """Companion to the round-trip test: when the target row does NOT
+    yet declare a ``data_dependencies=`` kwarg (e.g. ``carver`` LAB),
+    the rewriter must INJECT it before the closing ``)`` (mirroring
+    ``_replace_kw``'s inject-when-absent path). Pins the second
+    structural branch in ``_rewrite_profile_data_dependencies``.
+    """
+    import ast
+
+    from ops.engine_sdlc.planner import (
+        _rewrite_profile_data_dependencies,
+        _staged_copytree,
+    )
+    staged = _staged_copytree(tmp_path / "tree")
+    ep = staged / "tpcore" / "engine_profile.py"
+    pre_src = ep.read_text()
+    # carver is LAB with no declared data_dependencies (the audit's
+    # graduation-watch case). Confirm the baseline so a refactor that
+    # added a carver kwarg surfaces here, not silently.
+    pre_carver = _reparse_data_dependencies(pre_src, "carver")
+    assert pre_carver == frozenset(), (
+        f"baseline drift: carver already declares "
+        f"data_dependencies={pre_carver} — test premise broken")
+    declared = frozenset({"prices_daily", "liquidity_tiers"})
+    new_src = _rewrite_profile_data_dependencies(
+        pre_src, engine="carver", deps=declared)
+    ast.parse(new_src)
+    compile(new_src, "<roundtrip_inject>", "exec")
+    assert (
+        'data_dependencies=frozenset({"liquidity_tiers", '
+        '"prices_daily"})' in new_src
+    ), (f"injected data_dependencies kwarg missing or non-sorted in "
+        f"rewritten source:\n{new_src}")
+    post_carver = _reparse_data_dependencies(new_src, "carver")
+    assert post_carver == declared, (
+        f"round-trip data_dependencies inject mismatch on carver: "
+        f"declared={declared} got={post_carver}")

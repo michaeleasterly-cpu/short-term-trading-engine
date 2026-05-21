@@ -239,13 +239,44 @@ def test_data_dependencies_rejected_for_existing_code_when_empty_str():
         parse_ecr(bad)
 
 
-def test_data_dependencies_rejected_on_remove_and_modify():
-    """The field is ADD-only. Specifying it on REMOVE or MODIFY is a hard
-    reject (same cross-block rule as the other ADD-only fields)."""
+def test_data_dependencies_rejected_on_remove():
+    """``data_dependencies`` is valid on ADD (declares the engine's
+    initial per-engine ``platform.<table>`` reads) and on MODIFY (the
+    in-place accuracy-correction path — see the 2026-05-20 audit
+    follow-up + ``_apply_modify``'s _PROFILE rewriter). It is NEVER
+    valid on REMOVE — retiring an engine doesn't need a data-deps
+    declaration."""
     from ops.engine_sdlc.ecr import parse_ecr
     bad_remove = _VALID_REMOVE + "data_dependencies: prices_daily\n"
     with pytest.raises(ValueError, match=r"data_dependencies|not valid for action REMOVE"):
         parse_ecr(bad_remove)
-    bad_modify = _VALID_MODIFY + "data_dependencies: prices_daily\n"
-    with pytest.raises(ValueError, match=r"data_dependencies|not valid for action MODIFY"):
-        parse_ecr(bad_modify)
+
+
+def test_data_dependencies_accepted_on_modify():
+    """Spec §7 follow-up (2026-05-21, audit
+    docs/superpowers/audits/2026-05-20-engine-data-dependencies-
+    accuracy.md): ``data_dependencies`` is now valid on MODIFY (the
+    in-place accuracy correction path — catalyst + momentum
+    earnings_events). The CSV value is coerced to a frozenset[str] by
+    the same _coerce path the ADD branch uses."""
+    from ops.engine_sdlc.ecr import ECRAction, parse_ecr
+    good = _VALID_MODIFY + "data_dependencies: prices_daily, earnings_events\n"
+    ecr = parse_ecr(good)
+    assert ecr.action is ECRAction.MODIFY
+    assert ecr.data_dependencies == frozenset(
+        {"prices_daily", "earnings_events"})
+
+
+def test_need_accepted_on_modify():
+    """Spec §7 follow-up (2026-05-21): ``need`` is now valid on MODIFY
+    so an in-place change can carry the operator-readable rationale
+    free-text symmetrically with ADD (the staged ECRs in the 2026-05-20
+    audit already use it). It remains forbidden on REMOVE."""
+    from ops.engine_sdlc.ecr import ECRAction, parse_ecr
+    good = _VALID_MODIFY + "need: accuracy correction per audit\n"
+    ecr = parse_ecr(good)
+    assert ecr.action is ECRAction.MODIFY
+    assert ecr.need == "accuracy correction per audit"
+    bad_remove = _VALID_REMOVE + "need: should be rejected on REMOVE\n"
+    with pytest.raises(ValueError, match=r"need|not valid for action REMOVE"):
+        parse_ecr(bad_remove)

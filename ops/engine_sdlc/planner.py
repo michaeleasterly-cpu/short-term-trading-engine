@@ -140,9 +140,20 @@ def attach_ecr_context(plan: TransitionPlan,
                  # frozenset[str] otherwise.
                  "data_dependencies": ecr.data_dependencies}
     elif ecr.action is ECRAction.MODIFY:
+        # Spec §7 follow-up (2026-05-21, audit
+        # docs/superpowers/audits/2026-05-20-engine-data-dependencies-
+        # accuracy.md): thread ``data_dependencies`` + ``need`` onto a
+        # MODIFY plan's sot_diff so ``_apply_modify`` can re-render the
+        # existing _PROFILE row's ``data_dependencies=frozenset({...})``
+        # kwarg (the in-place data-deps accuracy correction). None when
+        # the ECR omits the key (the common param-change-only path) —
+        # _apply_modify skips the _PROFILE rewrite when the value is
+        # None / empty so the byte-identical existing tests stay green.
         extra = {"lab_dossier": ecr.lab_dossier,
                  "param_change": ecr.param_change,
-                 "gate_dsr": ecr.gate_dsr, "gate_cred": ecr.gate_cred}
+                 "gate_dsr": ecr.gate_dsr, "gate_cred": ecr.gate_cred,
+                 "data_dependencies": ecr.data_dependencies,
+                 "need": ecr.need}
     return TransitionPlan(**{**plan.__dict__,
                              "sot_diff": {**plan.sot_diff, **extra}})
 
@@ -185,6 +196,80 @@ def _rewrite_profile_source(
     new_src = "".join(lines[:start]) + new_block + "".join(lines[end + 1:])
     # H-S3-3 gate: the rewritten source must parse AND compile.
     compile(new_src, "<engine_profile_rewrite>", "exec")
+    return new_src
+
+
+def _render_data_dependencies_literal(deps: frozenset[str]) -> str:
+    """Render a ``data_dependencies=frozenset({...})`` kwarg value
+    deterministically (sorted), matching the byte shape of the hand-
+    curated _PROFILE entries. Mirrors the same sorting discipline used
+    by ``_apply_add`` (a frozenset's set-iteration order is hash-
+    randomized — sorting pins the line content across runs)."""
+    inner = ", ".join(f'"{t}"' for t in sorted(deps))
+    return f"frozenset({{{inner}}})"
+
+
+# Spec §7 follow-up (2026-05-21): match ``data_dependencies=`` plus its
+# RHS value. The RHS can be either:
+#   - the hand-curated ``frozenset({...})`` literal — balanced braces
+#   - the default ``frozenset()`` (an absent declaration)
+# The non-greedy ``\{[^{}]*\}`` is sufficient because the literal never
+# nests braces inside the frozenset call (one set, string members).
+_DATA_DEPS_KW_RE = re.compile(
+    r"data_dependencies\s*=\s*frozenset\(\s*(?:\{[^{}]*\})?\s*\)")
+
+
+def _rewrite_profile_data_dependencies(
+    src: str, *, engine: str, deps: frozenset[str],
+) -> str:
+    """H-S3-3-style targeted-line + AST-validated rewrite of the SINGLE
+    target EngineProfile(...) entry's ``data_dependencies=`` kwarg.
+    Mirrors ``_rewrite_profile_source`` discipline: parse the pre-state,
+    locate the entry by its quoted-key anchor, scan to the matching ``)``
+    of the EngineProfile call, rewrite (or inject) the kwarg inside that
+    block ONLY, then compile() the full new source as the gate.
+
+    Touches no sibling engine, adds no import (H-S3-10), preserves the
+    surrounding kwargs / comments. ``deps`` may be empty: an empty
+    frozenset round-trips as ``frozenset()`` (the EngineProfile default).
+    The lifecycle / dispatch_order / allocator_eligible / cadence kwargs
+    are NEVER touched by this rewriter — the lifecycle-immutable
+    invariant (H-S3-6d) is preserved structurally."""
+    ast.parse(src)  # pre-edit parse — proves the baseline is sane
+    lines = src.splitlines(keepends=True)
+    key_anchor = f'"{engine}":'
+    start = next((i for i, ln in enumerate(lines)
+                  if key_anchor in ln and "EngineProfile(" in ln), None)
+    if start is None:
+        raise ValueError(
+            f"_PROFILE entry for {engine!r} not found (key anchor "
+            f"{key_anchor!r}) — cannot rewrite data_dependencies")
+    depth = 0
+    end = start
+    for i in range(start, len(lines)):
+        depth += lines[i].count("(") - lines[i].count(")")
+        if depth == 0:
+            end = i
+            break
+    block = "".join(lines[start:end + 1])
+    new_value = _render_data_dependencies_literal(deps)
+    new_kw = f"data_dependencies={new_value}"
+    if _DATA_DEPS_KW_RE.search(block):
+        new_block = _DATA_DEPS_KW_RE.sub(new_kw, block, count=1)
+    else:
+        # absent → inject before the final ')' of the EngineProfile call.
+        # Match the existing kwarg column (31 spaces) so the byte shape
+        # mirrors the hand-curated entries — verified against catalyst /
+        # momentum / reversion / vector / sentinel / canary / allocator
+        # in tpcore/engine_profile.py.
+        idx = block.rfind(")")
+        injection = (",\n                               "
+                     f"{new_kw}")
+        new_block = block[:idx] + injection + block[idx:]
+    new_src = ("".join(lines[:start]) + new_block
+               + "".join(lines[end + 1:]))
+    # H-S3-3 gate: the rewritten source must parse AND compile.
+    compile(new_src, "<engine_profile_data_deps_rewrite>", "exec")
     return new_src
 
 
@@ -995,47 +1080,90 @@ def _validate_modify(plan: TransitionPlan,
 
 def _apply_modify(plan: TransitionPlan, root: Path, jn: _Journal) -> None:
     """Apply the validated current→winning diff to the engine's
-    default_params() SOURCE (the O1 seam). _PROFILE is NEVER touched
-    (H-S3-6d). Line-anchored edit of the engine backtest.py/models.py
-    default constants, AST-validated."""
+    default_params() SOURCE (the O1 seam). _PROFILE's lifecycle /
+    dispatch_order / allocator_eligible / cadence kwargs are NEVER
+    touched (H-S3-6d); the lifecycle-immutable invariant is preserved
+    structurally — ``_validate_modify`` rejects any of those keys
+    organically, and the data_dependencies rewriter below is dedicated
+    + cannot see those tokens. Line-anchored edits of the engine
+    backtest.py / models.py default constants, AST-validated.
+
+    Spec §7 follow-up (2026-05-21, audit
+    docs/superpowers/audits/2026-05-20-engine-data-dependencies-
+    accuracy.md): a MODIFY ECR may also carry a non-empty
+    ``data_dependencies`` set, in which case the engine's _PROFILE row's
+    ``data_dependencies=frozenset({...})`` kwarg is re-rendered through
+    the same targeted-line + AST-validated discipline as
+    ``_rewrite_profile_source``. The catalyst / momentum 2026-05-20
+    earnings_events accuracy fix is the motivating case — applied via
+    the canonical ECR path, never a hand-edit of _PROFILE (the hook
+    blocks it).
+    """
     engine = plan.engine
-    consts = _ENGINE_DEFAULT_CONSTS.get(engine)
-    if consts is None:
-        raise RuntimeError(
-            f"no MODIFY default-constant map for engine {engine!r}")
     pc = plan.sot_diff.get("param_change") or {}
-    # Group the param edits by their target source file (per the
-    # executor note: reversion z_threshold lives in reversion/models.py,
-    # not reversion/backtest.py — the line-anchored edit must hit the
-    # file the default_params() accessor actually reads).
-    by_file: dict[Path, dict[str, str]] = {}
-    for key, raw in pc.items():
-        spec = consts.get(key)
-        if spec is None:
+    dd = plan.sot_diff.get("data_dependencies")
+    # Either path may apply alone or together — a pure param_change is
+    # the historical case; a pure data_dependencies MODIFY is the new
+    # accuracy-correction case; a combined MODIFY (both keys present)
+    # threads through both branches deterministically below. At least
+    # one side must do real work — the validate() pipeline upstream
+    # already excludes empty MODIFYs.
+    if pc:
+        consts = _ENGINE_DEFAULT_CONSTS.get(engine)
+        if consts is None:
             raise RuntimeError(
-                f"no module default seam for {key!r} on {engine}; not "
-                f"MODIFY-able via the constant path")
-        rel, const_name = spec
-        tgt = root / rel
-        by_file.setdefault(tgt, {})[const_name] = str(raw)
-    for tgt, edits in by_file.items():
-        if not tgt.is_file():
-            raise RuntimeError(
-                f"{tgt.relative_to(root)} not found for {engine} MODIFY")
-        jn.record_file(tgt)
-        src = tgt.read_text()
-        new_src = src
-        for const_name, raw in edits.items():
-            pat = re.compile(
-                rf"^({re.escape(const_name)}\s*=\s*)([^\n#]+)", re.M)
-            m = pat.search(new_src)
-            if not m:
+                f"no MODIFY default-constant map for engine {engine!r}")
+        # Group the param edits by their target source file (per the
+        # executor note: reversion z_threshold lives in reversion/
+        # models.py, not reversion/backtest.py — the line-anchored edit
+        # must hit the file the default_params() accessor actually
+        # reads).
+        by_file: dict[Path, dict[str, str]] = {}
+        for key, raw in pc.items():
+            spec = consts.get(key)
+            if spec is None:
                 raise RuntimeError(
-                    f"default constant {const_name} not found in "
-                    f"{tgt.relative_to(root)}")
-            new_src = pat.sub(rf"\g<1>{raw}", new_src, count=1)
-        compile(new_src, "<backtest_modify>", "exec")  # AST gate
-        tgt.write_text(new_src)
+                    f"no module default seam for {key!r} on {engine}; not "
+                    f"MODIFY-able via the constant path")
+            rel, const_name = spec
+            tgt = root / rel
+            by_file.setdefault(tgt, {})[const_name] = str(raw)
+        for tgt, edits in by_file.items():
+            if not tgt.is_file():
+                raise RuntimeError(
+                    f"{tgt.relative_to(root)} not found for {engine} "
+                    f"MODIFY")
+            jn.record_file(tgt)
+            src = tgt.read_text()
+            new_src = src
+            for const_name, raw in edits.items():
+                pat = re.compile(
+                    rf"^({re.escape(const_name)}\s*=\s*)([^\n#]+)", re.M)
+                m = pat.search(new_src)
+                if not m:
+                    raise RuntimeError(
+                        f"default constant {const_name} not found in "
+                        f"{tgt.relative_to(root)}")
+                new_src = pat.sub(rf"\g<1>{raw}", new_src, count=1)
+            compile(new_src, "<backtest_modify>", "exec")  # AST gate
+            tgt.write_text(new_src)
+    if dd is not None:
+        # Re-render the existing _PROFILE row's data_dependencies kwarg
+        # to the declared set. ``dd`` is a frozenset (the ECR parser
+        # coerces the comma-separated value); attach_ecr_context threads
+        # it onto sot_diff. The byte-rendered literal is sorted so the
+        # output is deterministic across runs (set hash-randomization).
+        # An empty frozenset is a legitimate value — it rolls the engine
+        # back to the EngineProfile field default, rendered as
+        # ``frozenset()``. The same _Journal record-before-write
+        # ordering as the param_change branch gives the
+        # byte-identical rollback on a post-stage clockwork red.
+        ep = root / "tpcore" / "engine_profile.py"
+        jn.record_file(ep)
+        new_ep = _rewrite_profile_data_dependencies(
+            ep.read_text(), engine=engine,
+            deps=frozenset(dd))
+        ep.write_text(new_ep)
 
 
 # The engine PARAM_RANGES key → (source file relative to repo root,
