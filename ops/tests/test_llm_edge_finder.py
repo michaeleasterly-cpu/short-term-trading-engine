@@ -14,21 +14,14 @@ from __future__ import annotations
 import json
 import re
 from datetime import date as date_t
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 import pytest
 
-pytestmark = pytest.mark.xdist_group("ops_shadow")
-
-from tpcore.lab.llm_finder import (
-    ANALYSIS_TURN_QUOTA,
-    EDGE_FINDER_RUN_QUOTA,
-)
 from tpcore.lab.llm_finder.models import _compute_regime_tuple_id
 
+pytestmark = pytest.mark.xdist_group("ops_shadow")
 
 # ───────────────────────── Fake pool (mirrors run_writer test pattern) ─────
 
@@ -202,7 +195,8 @@ async def test_run_finder_truncates_to_quota() -> None:
     # specs that PASS the pydantic cap but exceed the run quota — which
     # can't happen via the LLM envelope. So we test the truncation helper
     # directly via the public API instead.
-    with pytest.raises(Exception):
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
         # Direct LLM-envelope with 4 specs raises ValidationError from
         # AnalysisResult's max_length=3 — defense in depth verified.
         await run_finder(

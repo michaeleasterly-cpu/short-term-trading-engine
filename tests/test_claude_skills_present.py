@@ -24,6 +24,7 @@ _SKILLS = (
     ("adapter-readiness", True),
     ("lab-target-run", False),
     ("lab-spec-emit", False),  # SP-G — operator command path for the LLM spec-emitter
+    ("lab-edge-find", False),  # Task #25 T11 — autonomous LLM edge-finder operator command
     ("ecr", False),
     ("dfcr", False),
     ("audit-data-pipeline", False),
