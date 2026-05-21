@@ -623,10 +623,14 @@ def test_whitelist_excludes_engine_and_roster_mutation_paths() -> None:
     assert allowed_stage_names.isdisjoint(forbidden)
 
 
-def test_persona_file_exists_and_v1_pinned() -> None:
-    assert rec.PERSONA_VERSION == "v1"
-    persona_path = _REPO_ROOT / "docs" / "llm_triage_personas" / "data_recovery_v1.md"
-    assert persona_path.exists()
+def test_persona_file_exists_and_v2_default_pinned() -> None:
+    # v2 is the default (PR-#NNN ship); v1 file MUST also still exist
+    # for the env-var rollback path (LLM_DATA_RECOVERY_PERSONA_VERSION=v1).
+    assert rec.PERSONA_VERSION == "v2"
+    v1_path = _REPO_ROOT / "docs" / "llm_triage_personas" / "data_recovery_v1.md"
+    v2_path = _REPO_ROOT / "docs" / "llm_triage_personas" / "data_recovery_v2.md"
+    assert v1_path.exists(), "v1 persona must remain for rollback"
+    assert v2_path.exists(), "v2 persona is the default"
 
 
 def test_validate_recovery_action_accepts_canonical_repair_gaps() -> None:
@@ -650,3 +654,352 @@ def test_validate_recovery_action_rejects_unknown_universe_csv_too_long() -> Non
     )
     ok, reason = rec.validate_recovery_action(action)
     assert not ok and "csv length" in reason
+
+
+# ────────────────────────────────────────────────────────────────────────
+# v2 — six pattern-mapped cases + one negative-pattern + one regression.
+# Each test mocks the LLM returning the action the v2 persona documents
+# for the pattern, then asserts the dispatcher behavior matches the
+# operator-locked decision for that pattern.
+# ────────────────────────────────────────────────────────────────────────
+
+
+def _trigger_event_with_message(
+    event_type: str, message: str, *, data: dict | None = None
+) -> dict:
+    return {
+        "event_type": event_type,
+        "message": message,
+        "recorded_at": datetime.now(UTC),
+        "data": data or {"request_id": "req-syn-1"},
+    }
+
+
+async def test_v2_pattern_1_timeout_3600s_repair_coverage(monkeypatch) -> None:
+    """Pattern 1 — daily_bars 3600s timeout → narrow-scope
+    daily_bars(force_refresh=true, repair_coverage=true)."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    pool = _Pool()
+    resp = _Resp(
+        json.dumps(
+            {
+                "stage_name": "daily_bars",
+                "params": {"force_refresh": True, "repair_coverage": True},
+                "rationale": "pattern=timeout_3600s_narrow_scope",
+                "confidence": 0.85,
+            }
+        )
+    )
+    factory = _make_client_factory(resp)
+    runner_calls: list = []
+
+    def fake_runner(argv, *, env, cwd, timeout):
+        runner_calls.append(argv)
+        return 0, "", ""
+
+    out = await rec.handle_data_recovery_escalation(
+        pool,
+        _trigger_event_with_message(
+            "INGESTION_AUTO_RECOVERY_FAILED",
+            "daily_bars timed out after 3600.0s on chunk 4/12",
+        ),
+        client_factory=factory,
+        runner=fake_runner,
+    )
+    assert out == "DATA_RECOVERY_ACTION_SUCCEEDED"
+    assert len(runner_calls) == 1
+    argv = runner_calls[0]
+    assert "daily_bars" in argv
+    assert "force_refresh=true" in argv
+    assert "repair_coverage=true" in argv
+
+
+async def test_v2_pattern_2_pooler_drop_full_refresh_sip(monkeypatch) -> None:
+    """Pattern 2 — Supabase pooler drop → daily_bars force_refresh active sip e1."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    pool = _Pool()
+    resp = _Resp(
+        json.dumps(
+            {
+                "stage_name": "daily_bars",
+                "params": {
+                    "force_refresh": True,
+                    "universe": "active",
+                    "feed": "sip",
+                    "end_offset_days": 1,
+                },
+                "rationale": "pattern=pooler_drop_reinvoke",
+                "confidence": 0.9,
+            }
+        )
+    )
+    factory = _make_client_factory(resp)
+    runner_calls: list = []
+
+    def fake_runner(argv, *, env, cwd, timeout):
+        runner_calls.append(argv)
+        return 0, "", ""
+
+    out = await rec.handle_data_recovery_escalation(
+        pool,
+        _trigger_event_with_message(
+            "INGESTION_AUTO_RECOVERY_FAILED",
+            "daily_bars failed: connection was closed in the middle of operation",
+        ),
+        client_factory=factory,
+        runner=fake_runner,
+    )
+    assert out == "DATA_RECOVERY_ACTION_SUCCEEDED"
+    assert len(runner_calls) == 1
+    argv = runner_calls[0]
+    assert "force_refresh=true" in argv
+    assert "universe=active" in argv
+    assert "feed=sip" in argv
+    assert "end_offset_days=1" in argv
+
+
+async def test_v2_pattern_3_sip_403_iex_failover_degraded(monkeypatch) -> None:
+    """Pattern 3 — Alpaca SIP 403 → LLM picks IEX failover → dispatcher
+    emits INGESTION_AUTO_RECOVERY_DEGRADED alongside the stage run."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    pool = _Pool()
+    resp = _Resp(
+        json.dumps(
+            {
+                "stage_name": "daily_bars",
+                "params": {
+                    "force_refresh": True,
+                    "universe": "active",
+                    "feed": "iex",
+                    "end_offset_days": 1,
+                },
+                "rationale": "pattern=sip_403_to_iex",
+                "confidence": 0.75,
+            }
+        )
+    )
+    factory = _make_client_factory(resp)
+    runner_calls: list = []
+
+    def fake_runner(argv, *, env, cwd, timeout):
+        runner_calls.append(argv)
+        return 0, "", ""
+
+    out = await rec.handle_data_recovery_escalation(
+        pool,
+        _trigger_event_with_message(
+            "INGESTION_AUTO_RECOVERY_FAILED",
+            "daily_bars 403 alpaca: subscription does not permit querying recent SIP data",
+        ),
+        client_factory=factory,
+        runner=fake_runner,
+    )
+    assert out == "DATA_RECOVERY_ACTION_SUCCEEDED"
+    assert len(runner_calls) == 1
+    # Degraded marker emitted alongside the SUCCEEDED — both must land
+    # on the bus so the operator sees the IEX failover cause.
+    degraded = [
+        e
+        for e in pool.emitted
+        if e["event_type"] == "INGESTION_AUTO_RECOVERY_DEGRADED"
+    ]
+    assert len(degraded) == 1
+    assert "IEX failover" in degraded[0]["message"]
+    assert degraded[0]["data"]["action"]["params"]["feed"] == "iex"
+    terminal = [
+        e
+        for e in pool.emitted
+        if e["event_type"].startswith("DATA_RECOVERY_ACTION_")
+    ]
+    assert len(terminal) == 1
+    assert terminal[0]["event_type"] == "DATA_RECOVERY_ACTION_SUCCEEDED"
+
+
+async def test_v2_pattern_4_greeks_pro_401_skipped(monkeypatch) -> None:
+    """Pattern 4 — greeks_pro 401: the LLM picks greeks_max_pain (skip-with-
+    warning stage). Dispatcher emits DATA_RECOVERY_ACTION_SKIPPED and does
+    NOT invoke the runner."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    pool = _Pool()
+    resp = _Resp(
+        json.dumps(
+            {
+                "stage_name": "greeks_max_pain",
+                "params": {},
+                "rationale": "pattern=provider_auth_failure",
+                "confidence": 0.95,
+            }
+        )
+    )
+    factory = _make_client_factory(resp)
+    runner_calls: list = []
+
+    def fake_runner(argv, *, env, cwd, timeout):  # pragma: no cover
+        runner_calls.append(argv)
+        return 0, "", ""
+
+    out = await rec.handle_data_recovery_escalation(
+        pool,
+        _trigger_event_with_message(
+            "DATA_REPAIR_ESCALATED",
+            "greeks_max_pain failed: greeks_pro /api/analytics/maxpain returned 401",
+        ),
+        client_factory=factory,
+        runner=fake_runner,
+    )
+    assert out == "DATA_RECOVERY_ACTION_SKIPPED"
+    assert runner_calls == []  # NO subprocess
+    skipped = [
+        e for e in pool.emitted if e["event_type"] == "DATA_RECOVERY_ACTION_SKIPPED"
+    ]
+    assert len(skipped) == 1
+    assert skipped[0]["data"]["reason"] == "provider_auth_failure"
+    # ``greeks_max_pain`` is NOT in the autonomous whitelist — pure
+    # skip-only landmine. The skip happens BEFORE the validator that
+    # would otherwise reject it on whitelist-miss; both fences working
+    # is fine, but the SKIPPED event should be the terminal that lands.
+    assert "greeks_max_pain" in rec.SKIP_WITH_WARNING_ACTIONS
+
+
+async def test_v2_pattern_5_fundamentals_refresh_dispatch(monkeypatch) -> None:
+    """Pattern 5 — fundamentals_quarterly_complete validation defect →
+    fundamentals_refresh stage (now in whitelist)."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    pool = _Pool()
+    resp = _Resp(
+        json.dumps(
+            {
+                "stage_name": "fundamentals_refresh",
+                "params": {},
+                "rationale": "pattern=fundamentals_completeness_refresh",
+                "confidence": 0.8,
+            }
+        )
+    )
+    factory = _make_client_factory(resp)
+    runner_calls: list = []
+
+    def fake_runner(argv, *, env, cwd, timeout):
+        runner_calls.append(argv)
+        return 0, "", ""
+
+    out = await rec.handle_data_recovery_escalation(
+        pool,
+        _trigger_event_with_message(
+            "DATA_REPAIR_ESCALATED",
+            "data_validation failed: validation suite failed: ['fundamentals_quarterly_complete']",
+        ),
+        client_factory=factory,
+        runner=fake_runner,
+    )
+    assert out == "DATA_RECOVERY_ACTION_SUCCEEDED"
+    assert len(runner_calls) == 1
+    argv = runner_calls[0]
+    assert "fundamentals_refresh" in argv
+    # Whitelist self-check — fundamentals_refresh must be present now.
+    allowed = {name for name, _ in rec._AUTONOMOUS_DATA_ACTIONS}
+    assert "fundamentals_refresh" in allowed
+
+
+async def test_v2_pattern_6_negative_coverage_collapse_repair_gaps_rejected(
+    monkeypatch,
+) -> None:
+    """Pattern 6 (NEGATIVE) — error contains 'coverage collapse' AND the
+    LLM returns repair_gaps → REJECTED with reason=negative_pattern_match.
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    pool = _Pool()
+    resp = _Resp(
+        json.dumps(
+            {
+                "stage_name": "daily_bars",
+                "params": {"repair_gaps": True},
+                "rationale": "wrong pick — repair_gaps on coverage_collapse",
+                "confidence": 0.4,
+            }
+        )
+    )
+    factory = _make_client_factory(resp)
+    runner_calls: list = []
+
+    def fake_runner(argv, *, env, cwd, timeout):  # pragma: no cover
+        runner_calls.append(argv)
+        return 0, "", ""
+
+    out = await rec.handle_data_recovery_escalation(
+        pool,
+        _trigger_event_with_message(
+            "INGESTION_AUTO_RECOVERY_FAILED",
+            "daily_bars coverage collapse: 2026-05-21 has 6900 tickers",
+        ),
+        client_factory=factory,
+        runner=fake_runner,
+    )
+    assert out == "DATA_RECOVERY_ACTION_REJECTED"
+    assert runner_calls == []
+    terminal = [
+        e
+        for e in pool.emitted
+        if e["event_type"].startswith("DATA_RECOVERY_ACTION_")
+    ]
+    assert len(terminal) == 1
+    assert terminal[0]["event_type"] == "DATA_RECOVERY_ACTION_REJECTED"
+    assert terminal[0]["data"]["reason"] == "negative_pattern_match"
+    # The matched (substring, banned_stage) tuple is in the payload for
+    # the audit log — operator can correlate.
+    assert (
+        terminal[0]["data"]["negative_pattern"]["banned_stage_name"]
+        == "repair_gaps"
+    )
+
+
+async def test_v2_pattern_regression_unknown_failure_falls_through(
+    monkeypatch,
+) -> None:
+    """Pattern 7 (regression) — unfamiliar failure shape; the LLM returns a
+    valid whitelisted action via general reasoning. The dispatcher MUST
+    dispatch it normally (no pattern-match was required)."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    pool = _Pool()
+    resp = _Resp(
+        json.dumps(
+            {
+                "stage_name": "data_validation",
+                "params": {},
+                "rationale": "no pattern match — re-run the suite",
+                "confidence": 0.6,
+            }
+        )
+    )
+    factory = _make_client_factory(resp)
+    runner_calls: list = []
+
+    def fake_runner(argv, *, env, cwd, timeout):
+        runner_calls.append(argv)
+        return 0, "", ""
+
+    out = await rec.handle_data_recovery_escalation(
+        pool,
+        _trigger_event_with_message(
+            "DATA_REPAIR_ESCALATED",
+            "unknown new failure shape — nothing pattern-mapped",
+        ),
+        client_factory=factory,
+        runner=fake_runner,
+    )
+    assert out == "DATA_RECOVERY_ACTION_SUCCEEDED"
+    assert len(runner_calls) == 1
+    assert "data_validation" in runner_calls[0]
+
+
+def test_v2_negative_patterns_set_contains_coverage_collapse_repair_gaps() -> None:
+    """Public surface check — the documented negative pattern is present
+    in the frozen ``NEGATIVE_PATTERNS`` set."""
+    assert ("coverage collapse", "repair_gaps") in rec.NEGATIVE_PATTERNS
+
+
+def test_v2_skip_actions_set_contains_greeks_max_pain() -> None:
+    """Public surface check — greeks_max_pain is skip-only, not whitelisted."""
+    assert "greeks_max_pain" in rec.SKIP_WITH_WARNING_ACTIONS
+    allowed = {name for name, _ in rec._AUTONOMOUS_DATA_ACTIONS}
+    assert "greeks_max_pain" not in allowed
