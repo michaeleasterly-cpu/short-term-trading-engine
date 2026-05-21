@@ -239,6 +239,35 @@ async def handle_corporate_actions(
         log_shrinkage_warning(shrinkage)
         assert_not_shrunk(shrinkage)  # producer hard-stop on a short snapshot
 
+    # D2 substrate: durable per-source metrics + rolling-median check
+    # in PARALLEL with the v1 single-prior detector. Emit
+    # ``SHRINKAGE_DETECTORS_DISAGREE`` when the two reach different
+    # conclusions; v2 PR retires the v1 detector after soak.
+    from tpcore.ingestion.d2_metrics import (
+        check_shrinkage_vs_rolling_median,
+        detectors_disagree,
+        record_ingestion_metrics,
+    )
+    v2_verdict = await check_shrinkage_vs_rolling_median(
+        pool, "alpaca_corporate_actions", archive.rows_written,
+    )
+    if shrinkage is not None and detectors_disagree(
+        shrinkage.over_threshold, v2_verdict,
+    ):
+        logger.warning(
+            "SHRINKAGE_DETECTORS_DISAGREE",
+            source="alpaca_corporate_actions",
+            v1_over_threshold=shrinkage.over_threshold,
+            v2_shrunk=v2_verdict.shrunk,
+            v1_shrinkage_pct=round(shrinkage.shrinkage_pct, 4),
+            v2_shrinkage_pct=round(v2_verdict.shrinkage_pct, 4),
+            v2_median_rows=v2_verdict.median_rows,
+            v2_samples_used=v2_verdict.samples_used,
+        )
+    await record_ingestion_metrics(
+        pool, "alpaca_corporate_actions", archive.rows_written,
+    )
+
     split_summary = await apply_all_splits(pool, only_tickers=apply_filter)
     logger.info(
         "ingestion.handler.corporate_actions_done",
@@ -1438,6 +1467,38 @@ async def handle_macro_indicators(
     if shrinkage is not None:
         log_shrinkage_warning(shrinkage)
         assert_not_shrunk(shrinkage)  # producer hard-stop (FRED-truncation class)
+
+    # ── 4b. D2 substrate: durable per-source metrics + rolling-median ──
+    # Record THIS run's metrics in platform.ingestion_metrics so the
+    # next FRED ingest's shrinkage check can compare against the
+    # rolling median rather than the single-prior CSV. Run the new
+    # detector in PARALLEL with the v1 single-prior detector — when
+    # they disagree emit ``SHRINKAGE_DETECTORS_DISAGREE`` for forensic
+    # visibility. A v2 PR retires the v1 detector after a soak period.
+    from tpcore.ingestion.d2_metrics import (
+        check_shrinkage_vs_rolling_median,
+        detectors_disagree,
+        record_ingestion_metrics,
+    )
+    v2_verdict = await check_shrinkage_vs_rolling_median(
+        pool, "fred_macro", archive.rows_written,
+    )
+    if shrinkage is not None and detectors_disagree(
+        shrinkage.over_threshold, v2_verdict,
+    ):
+        logger.warning(
+            "SHRINKAGE_DETECTORS_DISAGREE",
+            source="fred_macro",
+            v1_over_threshold=shrinkage.over_threshold,
+            v2_shrunk=v2_verdict.shrunk,
+            v1_shrinkage_pct=round(shrinkage.shrinkage_pct, 4),
+            v2_shrinkage_pct=round(v2_verdict.shrinkage_pct, 4),
+            v2_median_rows=v2_verdict.median_rows,
+            v2_samples_used=v2_verdict.samples_used,
+        )
+    await record_ingestion_metrics(
+        pool, "fred_macro", archive.rows_written,
+    )
 
     # ── 5. Load CSV → DB (ON CONFLICT DO NOTHING) ────────────────────
     async with pool.acquire() as conn:
