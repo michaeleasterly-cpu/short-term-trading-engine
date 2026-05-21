@@ -154,3 +154,37 @@ the other building carver from scratch + the first real Lab candidate).
   the SP-A cumulative ledger. Sweep run + adjudication + #173 live
   setup_detection parity remain (operator-deferred until the sweep
   clears the verdict bar).
+
+## 2026-05-21 — Reversion PCA-residual sweep: FALSIFIED in walk-forward
+
+Operator ran the canonical sweep (per spec
+`docs/superpowers/specs/2026-05-20-reversion-pca-residual-lab-candidate.md`)
+via `/tmp/run_reversion_sweep.sh` 2026-05-21.
+
+**Walk-forward result (3 windows, top-5 by mean OOS score):**
+1. score=+0.934 windows=3 `{signal_mode: price_z, max_hold_days: 6, stop_pct: 0.044, vol_climax: 1.46, z_threshold: 2.20}` — **winner = the existing live baseline**
+2. score=+0.891 windows=2 `{signal_mode: pca_residual, max_hold_days: 9, stop_pct: 0.043, vol_climax: 2.41, z_threshold: 3.42}`
+3. score=+0.817 windows=4 `{signal_mode: price_z, max_hold_days: 12, stop_pct: 0.106, vol_climax: 2.34, z_threshold: 2.05}`
+4. score=+0.694 windows=4 `{signal_mode: pca_residual, max_hold_days: 11, ...}`
+5. score=+0.670 windows=4 `{signal_mode: pca_residual, max_hold_days: 7, ...}`
+
+The final held-back replay (2022-01-01 → 2026-05-15) crashed on Postgres
+`statement_timeout`:
+```
+2026-05-21 05:15:19 [error] lab.run_failed error='canceling statement due to statement timeout'
+```
+No `VERDICT:` line, no dossier written. **40 trials burned on the SP-A
+`reversion` ledger** (cumulative ~68 post-prior-probes).
+
+**Honest interpretation:** The walk-forward result is sufficient to
+falsify the PCA-residual hypothesis at this trial count. PCA-residual
+did not beat the price_z baseline in the universe / period / cost-model.
+Per operator standing rule (falsification is final; n_trials honest
+accounting): **no MODIFY shipped, no re-run, no parameter tweaking**.
+Live `reversion/setup_detection` parity (#173) stays deferred
+indefinitely on the price_z baseline.
+
+Engineering follow-up dispatched (subagent): chunk the Lab final-holdout
+replay so the same statement_timeout doesn't bite future heavy Lab runs
+(Sentinel Bear Score, Catalyst insider-cluster, Momentum vol-managed
+all face the same risk). Not a reason to re-test PCA-residual.

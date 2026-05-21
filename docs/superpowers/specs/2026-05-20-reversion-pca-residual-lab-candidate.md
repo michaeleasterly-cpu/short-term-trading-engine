@@ -1,6 +1,8 @@
 # Reversion — PCA-residual mean-reversion signal (Lab candidate)
 
-**Status:** PRE-REGISTERED (single hypothesis, pinned). Single-spec Lab
+**Status (post-sweep 2026-05-21):** **FALSIFIED in walk-forward.** Operator ran the canonical sweep via `/tmp/run_reversion_sweep.sh` 2026-05-21. Walk-forward (3 windows) top-5 candidates by mean OOS score: winner = `signal_mode=price_z` (the existing live baseline, score 0.934); pca_residual placed 2nd (0.891), 4th (0.694), 5th (0.670). The final held-back replay (2022-01-01 → 2026-05-15) crashed on Postgres `statement_timeout` BEFORE a dossier was written — no SURVIVED/FAILED `VERDICT:` line was emitted, no dossier sidecar `.json` produced. The walk-forward result alone is sufficient to honestly conclude the PCA-residual hypothesis did not beat the existing live signal in this universe / period / cost-model. **40 trials burned on the SP-A `reversion` ledger** (cumulative ~68 post-prior-probes). Per operator standing rule (falsification is final; n_trials honest accounting): **no MODIFY ships, no re-run planned, no parameter tweaking**. Live `reversion/setup_detection` parity (#173) stays deferred indefinitely on the price_z baseline. The Lab final-holdout chunking fix (separate engineering PR — operator dispatched 2026-05-21) addresses the infrastructure side of the timeout but is not a reason to re-test PCA-residual.
+
+**Status (pre-sweep, original):** PRE-REGISTERED (single hypothesis, pinned). Single-spec Lab
 candidate per TODO.md L262-282 + GitHub #171-175.
 **Lane:** engine-owned (Lab). Heavy lane — biggest open engine-lane
 build.
