@@ -560,7 +560,30 @@ n_trials hazard and are explicitly rejected — single config only.
   defect.
 
 - **Catalyst — event-confirmed insider-cluster drift (single-spec Lab
-  candidate; 8-K leg data-gated).** `[lane: engine-owned] [gate:
+  candidate; 8-K leg data-gated).**
+  🔴 **FAILED 2026-05-21.** Probe ran via `event_confirmation_mode=
+  positive_beat_30d`. Verdict: DSR=0.0000, credibility=45, held-back
+  n_trades=**1** (vs gate ≥150). Crucially: the legacy `off` arm
+  ALSO FAILS (n=1 held-back trade) — the underlying catalyst engine
+  itself does not currently pass the Lab gate; the variant cannot
+  improve on a non-viable base. Root cause: 15-ticker
+  `CATALYST_TEST_UNIVERSE` × cluster gate floors
+  (≥3 distinct insiders + min aggregate USD) produces too few
+  eligible events in the 2024-2025 window. 80 trials spent →
+  `lab_trial_ledger.catalyst` cumulative = 80 (subsequent Catalyst
+  probes face a strictly harder DSR-deflated gate). Dossier:
+  `docs/lab/2026-05-21-catalyst_insider_drift-FAILED-seed0.md`.
+  Genuine falsification; NOT re-run with tweaked params
+  (n_trials laundering). **Open follow-up:** signal-strength is the
+  binding constraint — fix is universe-expansion + cluster-floor
+  re-calibration (NOT a candidate edit). Matches the standing
+  CLAUDE.md note "all engines currently FAIL the DSR/credibility
+  gate — signal strength is the binding constraint" — empirically
+  reconfirmed across all 4 deep-research candidates this week
+  (Vector / Reversion / Sentinel / Catalyst all FAILED).
+  Defect logged: `[defect_ref: CATALYST-SIGNAL-SPARSITY-2026-05-21]`
+  Original spec preserved below for reference:
+  `[lane: engine-owned] [gate:
   held-back DSR≥0.95 + cred≥60 + PBO≤0.20 + ≥150 held-back trades +
   positive post-2020 held-back alpha + better hit-rate than pure
   post-beat drift] [decision: ADOPT (insider-cluster primary) — route via
