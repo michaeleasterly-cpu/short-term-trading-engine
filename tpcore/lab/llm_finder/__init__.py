@@ -56,6 +56,13 @@ MANDATORY_REFERENCE_BUNDLES: tuple[str, ...] = (
 PERSONA_VERSION: str = "v2.0"
 """Bumped for Path B reversal (spec §7.1)."""
 
+PERSONA_SHA256: str = "f95a8e56ee5d77dc7d7f53b0d258a567216b875b35738da410a08a0df8051466"
+"""SHA256 of docs/lab_finder_persona.md at PERSONA_VERSION='v2.0'.
+
+Persona edits MUST update both PERSONA_VERSION AND this constant.
+The sentinel test test_persona_versioned.py reds the build on drift.
+"""
+
 from tpcore.lab.llm_finder.models import (  # noqa: E402
     AnalysisRequest,
     AnalysisResult,
@@ -80,6 +87,7 @@ from tpcore.lab.llm_finder.models import (  # noqa: E402
 
 __all__ = [
     "ANALYSIS_TURN_QUOTA",
+    "PERSONA_SHA256",
     "AnalysisRequest",
     "AnalysisResult",
     "BLEED_CAP_PER_ENGINE_USD",
