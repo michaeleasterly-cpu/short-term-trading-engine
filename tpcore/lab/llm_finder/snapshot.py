@@ -44,10 +44,10 @@ if TYPE_CHECKING:  # pragma: no cover
 
 log = structlog.get_logger(__name__)
 
-_PRICE_WINDOW_SESSIONS: Final[int] = 252
-_SPREAD_WINDOW_SESSIONS: Final[int] = 30
-_SENTIMENT_WINDOW_SESSIONS: Final[int] = 30
-_MACRO_WINDOW_SESSIONS: Final[int] = 90
+_PRICE_WINDOW_SESSIONS: Final[int] = 60
+_SPREAD_WINDOW_SESSIONS: Final[int] = 10
+_SENTIMENT_WINDOW_SESSIONS: Final[int] = 10
+_MACRO_WINDOW_SESSIONS: Final[int] = 30
 
 # Regime thresholds (spec §4.2 + regime_aware_trading.md §1).
 _VIX_CALM_HI: Final[float] = 15.0
@@ -127,40 +127,47 @@ async def assemble_snapshot(
 # ───────────────────────── Sub-reads (asyncpg) ─────────────────────────
 
 
+# v1 universe sourcing: platform.liquidity_tiers is the canonical
+# tier-classification table. universe='sp500' maps to tier=1 (the most
+# liquid set; 2k+ names — bigger than the literal S&P 500). Capped to
+# _UNIVERSE_SIZE_LIMIT to fit the 512 KiB MAX_SNAPSHOT_BYTES.
+_UNIVERSE_SIZE_LIMIT: Final[int] = 15
+
 _SP500_UNIVERSE_SQL: Final[str] = """
-    SELECT DISTINCT ticker
-      FROM platform.universe_membership
-     WHERE universe = $1
-       AND effective_date <= $2
-       AND (expiry_date IS NULL OR expiry_date > $2)
-     ORDER BY ticker
+    SELECT ticker
+      FROM platform.liquidity_tiers
+     WHERE tier = 1
+     ORDER BY observations DESC
+     LIMIT $1
 """
 
 
 async def _read_universe_tickers(
     pool: asyncpg.Pool, universe: str, session_date: date
 ) -> tuple[str, ...]:
+    del universe, session_date  # v1: tier=1 only; universe arg reserved for v1.5
     async with pool.acquire() as conn:
-        rows = await conn.fetch(_SP500_UNIVERSE_SQL, universe, session_date)
+        rows = await conn.fetch(_SP500_UNIVERSE_SQL, _UNIVERSE_SIZE_LIMIT)
     return tuple(r["ticker"] for r in rows)
 
 
 _PRICE_WINDOW_SQL: Final[str] = """
     SELECT pd.ticker,
-           pd.session_date,
-           pd.adj_open,
-           pd.adj_high,
-           pd.adj_low,
-           pd.adj_close,
+           pd.date AS session_date,
+           pd.open AS adj_open,
+           pd.high AS adj_high,
+           pd.low AS adj_low,
+           COALESCE(pd.adjusted_close, pd.close) AS adj_close,
            pd.volume,
-           pd.adj_close * pd.volume AS dollar_volume,
-           pd.log_return,
-           COALESCE(lt.tier, 'T3') AS liquidity_tier
+           COALESCE(pd.adjusted_close, pd.close) * pd.volume AS dollar_volume,
+           CASE WHEN lt.tier <= 2 THEN 'T1'
+                WHEN lt.tier <= 4 THEN 'T2'
+                ELSE 'T3' END AS liquidity_tier
       FROM platform.prices_daily pd
       LEFT JOIN platform.liquidity_tiers lt USING (ticker)
      WHERE pd.ticker = ANY($1::text[])
-       AND pd.session_date BETWEEN $2 AND $3
-     ORDER BY pd.ticker, pd.session_date
+       AND pd.date BETWEEN $2 AND $3
+     ORDER BY pd.ticker, pd.date
 """
 
 
@@ -178,36 +185,44 @@ async def _read_price_window(
         rows = await conn.fetch(
             _PRICE_WINDOW_SQL, list(tickers), window_start, session_date
         )
-    return tuple(
-        PricePanelRow(
-            ticker=r["ticker"],
-            session_date=r["session_date"],
-            adj_open=float(r["adj_open"]),
-            adj_high=float(r["adj_high"]),
-            adj_low=float(r["adj_low"]),
-            adj_close=float(r["adj_close"]),
-            volume=int(r["volume"]),
-            dollar_volume=float(r["dollar_volume"]),
-            log_return=float(r["log_return"] or 0.0),
-            liquidity_tier=r["liquidity_tier"],
+    # Compute log_return on the fly (prev-close per (ticker, ordered date)).
+    import math as _math
+    out: list[PricePanelRow] = []
+    prev_close_by_ticker: dict[str, float] = {}
+    for r in rows:
+        ticker = r["ticker"]
+        adj_close = float(r["adj_close"])
+        prev = prev_close_by_ticker.get(ticker)
+        log_return = _math.log(adj_close / prev) if prev and prev > 0 else 0.0
+        prev_close_by_ticker[ticker] = adj_close
+        out.append(
+            PricePanelRow(
+                ticker=ticker,
+                session_date=r["session_date"],
+                adj_open=float(r["adj_open"]) if r["adj_open"] is not None else adj_close,
+                adj_high=float(r["adj_high"]) if r["adj_high"] is not None else adj_close,
+                adj_low=float(r["adj_low"]) if r["adj_low"] is not None else adj_close,
+                adj_close=adj_close,
+                volume=int(r["volume"]) if r["volume"] is not None else 0,
+                dollar_volume=float(r["dollar_volume"]) if r["dollar_volume"] is not None else 0.0,
+                log_return=log_return,
+                liquidity_tier=r["liquidity_tier"],
+            )
         )
-        for r in rows
-    )
+    return tuple(out)
 
 
 _FUNDAMENTALS_SQL: Final[str] = """
     SELECT DISTINCT ON (ticker)
            ticker,
-           fiscal_period_end,
+           period_end_date AS fiscal_period_end,
            revenue,
            net_income,
-           eps_diluted,
-           book_value,
-           debt_to_equity,
-           pb_ratio
+           pb,
+           de
       FROM platform.fundamentals_quarterly
      WHERE ticker = ANY($1::text[])
-     ORDER BY ticker, fiscal_period_end DESC
+     ORDER BY ticker, period_end_date DESC
 """
 
 
@@ -224,21 +239,23 @@ async def _read_fundamentals(
             fiscal_period_end=r["fiscal_period_end"],
             revenue=float(r["revenue"]) if r["revenue"] is not None else None,
             net_income=float(r["net_income"]) if r["net_income"] is not None else None,
-            eps_diluted=float(r["eps_diluted"]) if r["eps_diluted"] is not None else None,
-            book_value=float(r["book_value"]) if r["book_value"] is not None else None,
-            debt_to_equity=float(r["debt_to_equity"]) if r["debt_to_equity"] is not None else None,
-            pb_ratio=float(r["pb_ratio"]) if r["pb_ratio"] is not None else None,
+            eps_diluted=None,  # not in this codebase's schema
+            book_value=None,   # not in this codebase's schema
+            debt_to_equity=float(r["de"]) if r["de"] is not None else None,
+            pb_ratio=float(r["pb"]) if r["pb"] is not None else None,
         )
         for r in rows
     )
 
 
 _SPREADS_SQL: Final[str] = """
-    SELECT ticker, session_date, effective_spread_bps, roll_implied_spread_bps
+    SELECT ticker,
+           DATE(observed_at) AS session_date,
+           spread_pct * 10000.0 AS effective_spread_bps
       FROM platform.spread_observations
      WHERE ticker = ANY($1::text[])
-       AND session_date BETWEEN $2 AND $3
-     ORDER BY ticker, session_date
+       AND DATE(observed_at) BETWEEN $2 AND $3
+     ORDER BY ticker, observed_at
 """
 
 
@@ -258,29 +275,25 @@ async def _read_spreads(
         SpreadObs(
             ticker=r["ticker"],
             session_date=r["session_date"],
-            effective_spread_bps=float(r["effective_spread_bps"]),
-            roll_implied_spread_bps=(
-                float(r["roll_implied_spread_bps"])
-                if r["roll_implied_spread_bps"] is not None
-                else None
-            ),
+            effective_spread_bps=float(r["effective_spread_bps"] or 0.0),
+            roll_implied_spread_bps=None,  # not in this codebase's schema
         )
         for r in rows
     )
 
 
 _AAII_SQL: Final[str] = """
-    SELECT as_of_date, bull_pct, bear_pct, neutral_pct
+    SELECT date AS as_of_date, bullish_pct, bearish_pct, neutral_pct
       FROM platform.aaii_sentiment
-     WHERE as_of_date BETWEEN $1 AND $2
-     ORDER BY as_of_date
+     WHERE date BETWEEN $1 AND $2
+     ORDER BY date
 """
 
 _FEAR_GREED_SQL: Final[str] = """
-    SELECT as_of_date, fear_greed_score
+    SELECT date AS as_of_date, score
       FROM platform.fear_greed
-     WHERE as_of_date BETWEEN $1 AND $2
-     ORDER BY as_of_date
+     WHERE date BETWEEN $1 AND $2
+     ORDER BY date
 """
 
 
@@ -298,15 +311,15 @@ async def _read_sentiment(
         aaii_rows = await conn.fetch(_AAII_SQL, window_start, session_date)
         fg_rows = await conn.fetch(_FEAR_GREED_SQL, window_start, session_date)
 
-    fg_by_date = {r["as_of_date"]: r["fear_greed_score"] for r in fg_rows}
+    fg_by_date = {r["as_of_date"]: r["score"] for r in fg_rows}
     for r in aaii_rows:
         out.append(
             SentimentRow(
                 as_of_date=r["as_of_date"],
-                aaii_bull_pct=float(r["bull_pct"]) if r["bull_pct"] is not None else None,
-                aaii_bear_pct=float(r["bear_pct"]) if r["bear_pct"] is not None else None,
+                aaii_bull_pct=float(r["bullish_pct"]) if r["bullish_pct"] is not None else None,
+                aaii_bear_pct=float(r["bearish_pct"]) if r["bearish_pct"] is not None else None,
                 aaii_neutral_pct=float(r["neutral_pct"]) if r["neutral_pct"] is not None else None,
-                fear_greed_score=fg_by_date.get(r["as_of_date"]),
+                fear_greed_score=int(fg_by_date[r["as_of_date"]]) if r["as_of_date"] in fg_by_date and fg_by_date[r["as_of_date"]] is not None else None,
                 apewisdom_mention_rank=None,
                 ticker=None,
             )
@@ -315,10 +328,10 @@ async def _read_sentiment(
 
 
 _MACRO_SQL: Final[str] = """
-    SELECT series_id, observation_date, value
+    SELECT indicator AS series_id, date AS observation_date, value
       FROM platform.macro_indicators
-     WHERE observation_date BETWEEN $1 AND $2
-     ORDER BY series_id, observation_date
+     WHERE date BETWEEN $1 AND $2
+     ORDER BY indicator, date
 """
 
 
@@ -334,7 +347,7 @@ async def _read_macro(pool: asyncpg.Pool, session_date: date) -> tuple[MacroRow,
         MacroRow(
             series_id=r["series_id"],
             observation_date=r["observation_date"],
-            value=float(r["value"]),
+            value=float(r["value"]) if r["value"] is not None else 0.0,
         )
         for r in rows
     )
@@ -528,7 +541,7 @@ def compute_market_regime(
 _EARNINGS_DENSITY_SQL: Final[str] = """
     SELECT COUNT(*) AS report_count
       FROM platform.earnings_events
-     WHERE report_date BETWEEN $1 AND $2
+     WHERE event_date BETWEEN $1 AND $2
 """
 
 

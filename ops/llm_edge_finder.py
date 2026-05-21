@@ -198,11 +198,15 @@ async def _drive_llm_loop(
             return result, tuple(tool_results_accumulated)
 
         # AnalysisRequest → dispatch all tool_calls + extend transcript.
+        # LLM natural shape: {"tool": "X", "params": {...}} OR
+        # {"name": "X", "args": {...}}. Normalize to ToolCall's
+        # {"callable_name": "X", "args_json": "..."}.
         request = AnalysisRequest(
             turn=turn,
             rationale=decoded.get("rationale", "(empty)"),
             tool_calls=tuple(
-                ToolCall(**c) for c in decoded.get("tool_calls", ())
+                ToolCall(**_normalize_tool_call(c))
+                for c in decoded.get("tool_calls", ())
             ),
         )
         turn_results: list[ToolResult] = []
@@ -301,6 +305,33 @@ def _compose_user_prompt(
         "  {'kind': 'AnalysisResult', 'proposed_specs': [{...}, ...], 'finder_rationale': '...'}\n"
         "Refer to the persona §7 workflow for what each phase requires."
     )
+
+
+def _normalize_tool_call(call_dict: dict[str, Any]) -> dict[str, Any]:
+    """Translate the LLM's natural shape into ToolCall's pydantic schema.
+
+    LLM often emits {"tool": "X", "params": {...}} or {"name": "X",
+    "args": {...}} instead of the spec's {"callable_name": "X",
+    "args_json": "..."}. This normalizer accepts both.
+    """
+    import json as _json
+    if "callable_name" in call_dict and "args_json" in call_dict:
+        return call_dict  # already canonical
+    name = (
+        call_dict.get("callable_name")
+        or call_dict.get("tool")
+        or call_dict.get("name")
+        or ""
+    )
+    args = (
+        call_dict.get("args_json")
+        or call_dict.get("params")
+        or call_dict.get("args")
+        or {}
+    )
+    if not isinstance(args, str):
+        args = _json.dumps(args)
+    return {"callable_name": name, "args_json": args}
 
 
 def _decode_llm_response(envelope: dict[str, Any], turn: int) -> dict[str, Any]:
