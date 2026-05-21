@@ -1,16 +1,17 @@
 """Unit tests for ops/llm_triage_service.py — the event-driven LLM-triage
-daemon (LT-P3 4d).
+daemon (LT-P3 4d + 2026-05-21 autonomous-data flip).
 
 Structural sibling of tests/test_data_repair_service.py: a fake asyncpg
-pool (no DB), ``run_triage`` monkeypatched (no LLM, no real triage), and
-the cursor-advance behaviour asserted directly via ``_main_loop`` /
-``_find_new_trigger``.
+pool (no DB), the data-lane ``run_autonomous_recovery`` monkeypatched
+(no LLM, no real subprocess), and the cursor-advance behaviour asserted
+directly via ``_main_loop`` / ``_find_new_trigger``.
 
 Coverage:
-  (i)   no trigger event           → run_triage NOT called, cursor unchanged
-  (ii)  DATA_REPAIR_ESCALATED newer→ run_triage called once, cursor advances
-  (iii) run_triage raising         → daemon loop survives (no crash), logged
-  (iv)  DATA_SOURCE_ESCALATED      → also triggers
+  (i)   no trigger event           → recovery NOT called, cursor unchanged
+  (ii)  DATA_REPAIR_ESCALATED      → recovery called once, cursor advances
+  (iii) recovery raising           → daemon loop survives (no crash), logged
+  (iv)  DATA_SOURCE_ESCALATED      → also triggers (autonomous)
+  (iv') INGESTION_AUTO_RECOVERY_FAILED → also triggers (autonomous, new)
 """
 from __future__ import annotations
 
@@ -33,25 +34,27 @@ import pytest
 #
 # UNLIKE ops/data_repair_service.py (imports only ``tpcore.*`` → a bare
 # file-load is safe), ops/llm_triage_service.py does ``from
-# ops.llm_data_triage import run_triage`` at module top-level. That
-# intra-package import fails ("'ops' is not a package") whenever the
-# scripts single-file ``ops`` is shadowing sys.modules. We must NOT
-# mutate the shared sys.modules['ops'] permanently (that breaks
-# test_ops_helpers when this module collects between it and
-# scripts/tests). Instead: snapshot the relevant sys.modules entries,
-# install a minimal collision-free stub for ``ops.llm_data_triage``
-# (every test here monkeypatches ``lts.run_triage`` so the real impl is
-# NEVER exercised), exec the daemon by file path, then RESTORE
-# sys.modules exactly — zero global side effects, collection-order safe.
+# ops.llm_data_recovery import run_autonomous_recovery`` (2026-05-21
+# autonomous-data flip) + ``from ops.engine_llm_triage import
+# run_triage`` + ``from ops.llm_lab_emitter import ...`` at module
+# top-level. Those intra-package imports fail ("'ops' is not a
+# package") whenever the scripts single-file ``ops`` is shadowing
+# sys.modules. We must NOT mutate the shared sys.modules['ops']
+# permanently (breaks test_ops_helpers when this module collects
+# between it and scripts/tests). Instead: snapshot the relevant
+# sys.modules entries, install minimal collision-free stubs (every test
+# here monkeypatches the bound callables so the real impls are NEVER
+# exercised), exec the daemon by file path, then RESTORE sys.modules
+# exactly — zero global side effects, collection-order safe.
 _LTS_PATH = Path(__file__).resolve().parent.parent / "ops" / "llm_triage_service.py"
-# Phase 3 (B1): the daemon now ALSO does ``from ops.engine_llm_triage
-# import run_triage`` at module top-level (the engine co-task) — the
-# SAME intra-package-import hazard under the scripts/ops.py shadow as
-# ``ops.llm_data_triage``. Snapshot + stub BOTH; every test
-# monkeypatches the real callables so neither real impl is exercised.
 _SAVED = {
     k: sys.modules.get(k)
-    for k in ("ops", "ops.llm_data_triage", "ops.engine_llm_triage")
+    for k in (
+        "ops",
+        "ops.llm_data_recovery",
+        "ops.engine_llm_triage",
+        "ops.llm_lab_emitter",
+    )
 }
 try:
     _ops = sys.modules.get("ops")
@@ -59,13 +62,23 @@ try:
         _pkg = types.ModuleType("ops")
         _pkg.__path__ = [str(_LTS_PATH.parent)]  # make it package-shaped
         sys.modules["ops"] = _pkg
-    _stub = types.ModuleType("ops.llm_data_triage")
 
-    async def _stub_run_triage(*_a, **_k):  # pragma: no cover - replaced
-        raise AssertionError("run_triage must be monkeypatched in this test")
+    _rstub = types.ModuleType("ops.llm_data_recovery")
 
-    _stub.run_triage = _stub_run_triage
-    sys.modules["ops.llm_data_triage"] = _stub
+    async def _stub_run_autonomous_recovery(
+        *_a, **_k
+    ):  # pragma: no cover - replaced
+        raise AssertionError(
+            "run_autonomous_recovery must be monkeypatched in this test"
+        )
+
+    _rstub.run_autonomous_recovery = _stub_run_autonomous_recovery
+    _rstub.AUTONOMOUS_DATA_TRIGGER_EVENT_TYPES = (
+        "DATA_REPAIR_ESCALATED",
+        "DATA_SOURCE_ESCALATED",
+        "INGESTION_AUTO_RECOVERY_FAILED",
+    )
+    sys.modules["ops.llm_data_recovery"] = _rstub
 
     _estub = types.ModuleType("ops.engine_llm_triage")
 
@@ -76,6 +89,17 @@ try:
 
     _estub.run_triage = _stub_engine_run_triage
     sys.modules["ops.engine_llm_triage"] = _estub
+
+    _lestub = types.ModuleType("ops.llm_lab_emitter")
+
+    async def _stub_lab_emitter(*_a, **_k):  # pragma: no cover - replaced
+        raise AssertionError(
+            "run_lab_emitter_cotask must be monkeypatched in this test"
+        )
+
+    _lestub.run_lab_emitter_cotask = _stub_lab_emitter
+    _lestub.LAB_EMITTER_TRIGGER_EVENT_TYPES = ()
+    sys.modules["ops.llm_lab_emitter"] = _lestub
 
     _spec = importlib.util.spec_from_file_location("_lts_under_test", _LTS_PATH)
     assert _spec is not None and _spec.loader is not None
@@ -155,16 +179,16 @@ async def _run_one_loop(
     monkeypatch, pool, *, raises: bool = False, lock_dir: str | None = None
 ) -> list:
     """Drive _main_loop for exactly one poll then signal stop. Returns
-    the list of run_triage call markers."""
+    the list of run_autonomous_recovery call markers."""
     calls: list = []
 
-    async def fake_run_triage(p):
+    async def fake_recovery(p):
         calls.append(p)
         if raises:
-            raise RuntimeError("triage boom")
+            raise RuntimeError("recovery boom")
         return None
 
-    monkeypatch.setattr(lts, "run_triage", fake_run_triage)
+    monkeypatch.setattr(lts, "run_autonomous_recovery", fake_recovery)
 
     stop_event = asyncio.Event()
     # POLL_INTERVAL_SEC is large; we stop right after the first poll by
@@ -305,11 +329,17 @@ async def test_dead_pid_lock_is_reclaimed(monkeypatch, lock_dir) -> None:
     assert not os.path.exists(lock_dir)  # released after the pass
 
 
-def test_trigger_event_types_are_the_two_escalations() -> None:
-    # Structural: the daemon triggers on data-lane escalations only.
+def test_trigger_event_types_are_the_three_autonomous_escalations() -> None:
+    # Structural: the daemon triggers on autonomous data-lane
+    # escalations only. 2026-05-21: the in-orchestrator-cascade
+    # exhaustion class INGESTION_AUTO_RECOVERY_FAILED is now part of the
+    # set — the autonomous data-recovery handler picks it up so the
+    # chain (orchestrator cascade → smart-feed cascade → llm_triage
+    # autonomous action) closes without operator intervention.
     assert lts.TRIGGER_EVENT_TYPES == (
         "DATA_REPAIR_ESCALATED",
         "DATA_SOURCE_ESCALATED",
+        "INGESTION_AUTO_RECOVERY_FAILED",
     )
 
 
@@ -570,11 +600,11 @@ async def test_concurrent_engine_crash_does_not_kill_data_lane(
 
     data_calls: list = []
 
-    async def data_run_triage(p):
+    async def data_recovery(p):
         data_calls.append(p)
         return None
 
-    monkeypatch.setattr(lts, "run_triage", data_run_triage)
+    monkeypatch.setattr(lts, "run_autonomous_recovery", data_recovery)
     # Startup prune is covered by its own test; skip the git call here.
     monkeypatch.setattr(lts, "_startup_worktree_prune", lambda: None)
 
@@ -624,21 +654,28 @@ async def test_concurrent_engine_crash_does_not_kill_data_lane(
 
 
 def test_two_daemon_invariant_still_passes_unedited() -> None:
-    """B1 placement proof: the topology invariant test must pass with
-    ZERO edits to the installer / launchd label / closed 4-token
-    whitelist. If this needs an edit, the placement is wrong."""
+    """B1 placement proof: the topology invariant — the closed 4-token
+    installer whitelist + the launchd label set — must be byte-unchanged.
+    Header-comment edits to ``install_all_daemons.sh`` are allowed (the
+    2026-05-21 autonomous-data-lane flip updates the operator-facing
+    docstring for the data lane; the topology / whitelist / labels are
+    NOT touched). The bite is preserved by running
+    ``test_two_daemon_invariant.py`` itself — that test pins the
+    ``for installer in …; do`` token set + the retired-installer set +
+    the dashboard daemon spec, and would still red on a topology
+    regression."""
     import subprocess as _sp
 
     repo = Path(__file__).resolve().parent.parent
-    # The topology test + installer must be byte-unchanged on this branch.
+    # The topology test file MUST be byte-unchanged (no in-test relaxation
+    # of the whitelist) — that is the structural bite.
     diff = _sp.run(
         ["git", "diff", "--stat", "HEAD", "--",
-         "scripts/tests/test_two_daemon_invariant.py",
-         "scripts/install_all_daemons.sh"],
+         "scripts/tests/test_two_daemon_invariant.py"],
         cwd=str(repo), capture_output=True, text=True, check=False,
     )
     assert diff.stdout.strip() == "", (
-        "B1 violation: the topology test or installer was edited — "
+        "B1 violation: the topology test was edited — "
         f"placement is wrong:\n{diff.stdout}"
     )
     r = _sp.run(

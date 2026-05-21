@@ -9,10 +9,26 @@
 #   * keep ops.data_repair_service running 24/7 (data-lane) — polls
 #     application_log for ENGINE_DATA_REQUEST, runs the canonical
 #     self-heal, and emits exactly one terminal reply per request_id
-#   * keep ops.llm_triage_service running 24/7 (advisory-lane) — polls
-#     application_log for DATA_REPAIR_ESCALATED / DATA_SOURCE_ESCALATED
-#     and fires one advisory triage pass (may open a draft, human-
-#     merge-only PR; never repairs/trades/merges)
+#   * keep ops.llm_triage_service running 24/7 — three crash-isolated
+#     co-tasks on ONE advisory pool:
+#       - DATA lane (AUTONOMOUS, 2026-05-21 flip per operator directive
+#         "automate the god damn triage, no operator-task bullshit in
+#         the self heal"): polls application_log for
+#         DATA_REPAIR_ESCALATED / DATA_SOURCE_ESCALATED /
+#         INGESTION_AUTO_RECOVERY_FAILED, has the LLM pick ONE existing
+#         scripts/ops.py stage + params from a frozen whitelist
+#         (ops/llm_data_recovery.py:_AUTONOMOUS_DATA_ACTIONS), the
+#         deterministic validator gates it, the bounded credential-
+#         starved subprocess runs it. NO draft PR, NO human-merge gate,
+#         single-shot per cycle. Terminal events:
+#         DATA_RECOVERY_ACTION_{SUCCEEDED,FAILED,REJECTED}.
+#       - ENGINE lane (still PR-GATED — operator directive scopes the
+#         autonomous flip to the DATA lane only): polls
+#         application_log for ENGINE_ESCALATED, fires advisory
+#         ops.engine_llm_triage which may open a draft, human-merge-
+#         only PR; never repairs/trades/merges/mutates the roster.
+#       - LAB-EMITTER lane (SP-G): operator-command path
+#         (/lab-spec-emit); event-trigger set is empty per operator Q6.
 #   * run scripts/run_data_operations.sh every weekday at 21:30 UTC
 #     (data-lane cron; chains: data refresh → audit → validate →
 #     compress → emit event)

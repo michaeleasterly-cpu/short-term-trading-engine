@@ -266,6 +266,17 @@ ignore = ["E501"]
 # ignore is the correct form (mirrors every other SP-B/SP-D/SP-E/SP-F
 # char-test precedent above) — never an inline ``# noqa: SLF001``.
 "tests/test_daily_bars_coverage_collapse_auto_cascade.py" = ["SLF"]
+# Autonomous data-lane recovery (2026-05-21 flip per operator directive
+# "automate the god damn triage, no operator-task bullshit in the
+# self heal"). Proving the whitelist scope + the daemon's wiring
+# REQUIRES naming the ``ops.llm_data_recovery``-private
+# ``_AUTONOMOUS_DATA_ACTIONS`` — that IS the test's purpose (the
+# whitelist is the action surface; without an assertion that
+# engine/roster paths are excluded the autonomy claim has no bite).
+# Engine-lane-module-private (NOT tpcore-private) access; the scoped
+# per-file ignore is the correct form (mirrors every SP-B/SP-D/SP-E/SP-F
+# char-test precedent above) — never an inline ``# noqa: SLF001``.
+"tests/test_llm_triage_autonomous_data_recovery.py" = ["SLF"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

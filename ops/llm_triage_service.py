@@ -1,21 +1,31 @@
-"""triage-service daemon — event-driven advisory triage (data + engine
-+ lab-emitter lanes; LT-P3 §4 + Epic E Phase 3 / FORK B = B1 + SP-G).
+"""triage-service daemon — event-driven autonomous-data + advisory-engine
++ lab-emitter lanes (LT-P3 §4 + Epic E Phase 3 / FORK B = B1 + SP-G + the
+2026-05-21 autonomous-data-recovery flip).
 
 Structural sibling of ``ops/engine_service.py`` / ``ops/data_repair_service.py``,
-serving the *advisory* path. It co-hosts THREE lanes' triage loops as
-three independent ``_run_supervised`` co-tasks on the ONE advisory
-pool (SP-G added the third co-task; the daemon is still a SINGLE
-daemon — the two-daemon invariant is preserved):
+co-hosting THREE lanes' loops as three independent ``_run_supervised``
+co-tasks on the ONE pool (SP-G added the third co-task; the daemon is
+still a SINGLE daemon — the two-daemon invariant is preserved):
 
-  * DATA lane — when the data lane gives up on a data problem and emits
-    a ``DATA_REPAIR_ESCALATED`` (bounded self-heal exhausted) or a
-    ``DATA_SOURCE_ESCALATED`` (a source stuck ≥3 held cycles by the
-    datasupervisor), this fires one ``ops.llm_data_triage.run_triage``.
-  * ENGINE lane — when the deterministic engine lane (Phase-0
-    detection: DA-1/DA-2/engine-daemon platform-service crash-loop /
-    swallowed-digest) emits an ``ENGINE_ESCALATED`` that the Ladder
-    leaves open + undispositioned, this fires one
-    ``ops.engine_llm_triage.run_triage``.
+  * DATA lane (AUTONOMOUS — 2026-05-21 flip per operator directive
+    "automate the god damn triage, no operator-task bullshit in the
+    self heal"): when the in-orchestrator cascade (scripts/ops.py
+    auto-cascade + the smart-feed cascade) exhausts on a data-lane
+    failure and emits ``DATA_REPAIR_ESCALATED`` /
+    ``DATA_SOURCE_ESCALATED`` / ``INGESTION_AUTO_RECOVERY_FAILED``,
+    this fires ``ops.llm_data_recovery.run_autonomous_recovery``. The
+    LLM picks ONE stage + params from a frozen whitelist
+    (``_AUTONOMOUS_DATA_ACTIONS``), the deterministic validator gates
+    it, the bounded subprocess runs it. NO draft PR. NO human-merge
+    gate. Single-shot per cycle. Engine roster / engine-code mutations
+    are NOT in scope — those stay on the engine lane's PR-gated path.
+  * ENGINE lane (still PR-GATED — operator directive scopes the
+    autonomous flip to the DATA lane only): when the deterministic
+    engine lane (Phase-0 detection: DA-1/DA-2/engine-daemon
+    platform-service crash-loop / swallowed-digest) emits an
+    ``ENGINE_ESCALATED`` that the Ladder leaves open + undispositioned,
+    this fires one ``ops.engine_llm_triage.run_triage`` — advisory +
+    draft-PR + human-merge.
   * LAB-EMITTER lane (SP-G) — the third co-task fires on the
     ``LAB_LEDGER_CAPACITY_AVAILABLE`` event class (per operator Q6
     decision the event class is DEFERRED in v1 — the co-task is
@@ -42,10 +52,14 @@ auto-clear that already resolved the escalation makes triage a safe
 no-op. The daemon never blocks anything and is fully crash-isolated.
 
 Safety boundary: this daemon imports ONLY
-``ops.llm_data_triage.run_triage`` + ``ops.engine_llm_triage.run_triage``
-+ stdlib/asyncpg/structlog — NO actor/mutation path (asserted by the
-import-isolation AST test; both triage modules are themselves
-no-mutation advisory modules — never repair/trade/dispose/merge;
+``ops.llm_data_recovery.run_autonomous_recovery`` (data lane —
+autonomous, 2026-05-21) + ``ops.engine_llm_triage.run_triage`` (engine
+lane — still advisory + PR-gated) + ``ops.llm_lab_emitter`` (SP-G) +
+stdlib/asyncpg/structlog. The data-lane autonomous action surface is
+NOT this daemon — it is the frozen whitelist + the deterministic
+validator + the bounded subprocess in ``ops.llm_data_recovery``. The
+engine-lane import is still the advisory module
+(``ops.engine_llm_triage`` — never repair/trade/dispose/merge;
 restoration only ever happens via the deterministic path).
 
 Idempotence: each lane tracks the latest ``recorded_at`` seen and only
@@ -69,7 +83,10 @@ from pathlib import Path
 import structlog
 
 from ops.engine_llm_triage import run_triage as engine_run_triage
-from ops.llm_data_triage import run_triage
+from ops.llm_data_recovery import (
+    AUTONOMOUS_DATA_TRIGGER_EVENT_TYPES,
+    run_autonomous_recovery,
+)
 from ops.llm_lab_emitter import (
     LAB_EMITTER_TRIGGER_EVENT_TYPES,
     run_lab_emitter_cotask,
@@ -92,13 +109,19 @@ INITIAL_CURSOR_LOOKBACK = timedelta(hours=1)
 DEFAULT_LOCK_DIR = os.path.join(
     os.environ.get("TMPDIR", "/tmp"), "ste-llm-triage-service.lock"
 )
-# The two DATA-lane escalation classes: the deterministic lane gave up
-# (DATA_REPAIR_ESCALATED — bounded self-heal exhausted) or a source is
-# stuck held (DATA_SOURCE_ESCALATED — datasupervisor ≥3 held cycles).
-TRIGGER_EVENT_TYPES: tuple[str, ...] = (
-    "DATA_REPAIR_ESCALATED",
-    "DATA_SOURCE_ESCALATED",
-)
+# The DATA-lane autonomous-recovery escalation set (2026-05-21 flip per
+# operator directive "automate the god damn triage, no operator-task
+# bullshit in the self heal"). The previous two classes
+# (DATA_REPAIR_ESCALATED — bounded self-heal exhausted;
+# DATA_SOURCE_ESCALATED — datasupervisor ≥3 held cycles) PLUS the
+# in-orchestrator-cascade exhaustion class (INGESTION_AUTO_RECOVERY_FAILED
+# — auto-cascade + smart-feed cascade gave up). All three now route
+# through ``ops.llm_data_recovery.run_autonomous_recovery`` — no draft
+# PR, no human-merge gate, single-shot per cycle. The set is owned by
+# ``ops.llm_data_recovery``; this module's name is preserved as the
+# DATA-lane trigger alias so the existing daemon tests continue to read
+# the same constant.
+TRIGGER_EVENT_TYPES: tuple[str, ...] = AUTONOMOUS_DATA_TRIGGER_EVENT_TYPES
 # The ENGINE-lane escalation class (Epic E Phase 3). DA-1/DA-2 +
 # engine-daemon platform-service detection (Phase 0) emit a single
 # ``ENGINE_ESCALATED``; the engine Ladder
@@ -316,19 +339,22 @@ async def _lane_loop(
 async def _main_loop(
     pool, stop_event: asyncio.Event, lock_dir: str = DEFAULT_LOCK_DIR
 ) -> None:
-    """DATA-lane co-task. Defensive, best-effort, ONCE at startup before
-    any work: reclaim a hard-crashed prior cycle's leaked worktree admin
-    entry (fully crash-isolated). The data lane owns the single
-    process-global startup prune; the engine lane shares the same repo
-    and must NOT double-prune. Then runs the shared poll loop on the
-    DATA escalation set."""
+    """DATA-lane co-task (AUTONOMOUS — 2026-05-21 flip). Defensive,
+    best-effort, ONCE at startup before any work: reclaim a hard-crashed
+    prior cycle's leaked worktree admin entry (fully crash-isolated).
+    The data lane owns the single process-global startup prune; the
+    engine lane shares the same repo and must NOT double-prune. Then
+    runs the shared poll loop on the DATA escalation set —
+    ``run_autonomous_recovery`` picks ONE whitelisted stage + params via
+    one LLM call and runs it in a bounded credential-starved subprocess.
+    No draft PR. No human-merge gate."""
     _startup_worktree_prune()
     await _lane_loop(
         pool,
         stop_event,
         lock_dir,
         event_types=TRIGGER_EVENT_TYPES,
-        triage_fn=run_triage,
+        triage_fn=run_autonomous_recovery,
         lane="data",
     )
 
