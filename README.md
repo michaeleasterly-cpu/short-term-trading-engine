@@ -14,7 +14,7 @@ Multi-engine quantitative trading platform built around three layers:
 - Free data stack only: **Alpaca** (IEX free tier) for prices, **SEC EDGAR** for fundamentals,
   **FMP** (free → paid) for historical fundamentals, **ApeWisdom** for social, **FRED** for macro,
   **FINRA/NASDAQ** for short interest, **IBorrowDesk** for borrow rates.
-- **No `yfinance`. No Tradier in production. No Discord. No manual execution.** All orders go
+- ** All orders go
   through the Alpaca broker interface.
 
 ## Quick start
