@@ -1078,6 +1078,55 @@ async def _stage_aar_pipeline_smoke(
         )
 
 
+async def _stage_probe_sentinel_activation(
+    pool: asyncpg.Pool, config: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Offline activation-score distribution probe for the Sentinel
+    graduated-composite path.
+
+    Diagnoses whether the FAILED ``sentinel_bear_score`` Lab probe
+    (``docs/lab/2026-05-21-sentinel_bear_score-FAILED-seed0.md``) failed
+    because the gate is structurally dormant (composite < 0.45 floor
+    across the OOS window) OR threshold-clipped (composite fires but
+    band-to-execution wiring drops the trade). Read-only — no Lab
+    spend, no n_trials increment, no dossier. Operator-on-demand
+    (NOT in OPS_UPDATE_STAGES).
+
+    Implementation lives in ``sentinel.activation_probe.run_probe`` for
+    clean engine-module homing; this stage is a thin wrapper.
+
+    Defect ref: ``SENTINEL-ACTIVATION-DORMANT-2026-05-21``.
+    """
+    del config  # accepted-but-unused per the stage contract
+    from sentinel.activation_probe import run_probe
+
+    payload = await run_probe(pool)
+
+    # Floor print — operator-visibility for "did the gate fire on OOS?"
+    # before they need to open the JSON sidecar (visible-progress rule).
+    oos = payload.get("oos_window_stats", {})
+    oos_pcts = oos.get("composite_percentiles", {})
+    bucket = oos.get("per_bucket", {}).get("DORMANT", {})
+    print("=== Sentinel Activation-Score Distribution Probe ===")
+    print(f"OOS samples={oos.get('total_samples', 0)}  "
+          f"p50={oos_pcts.get('p50', 0.0):.4f}  "
+          f"p95={oos_pcts.get('p95', 0.0):.4f}")
+    print(f"OOS DORMANT pct={bucket.get('pct', 0.0):.3%}  "
+          f"max_dormant_streak={oos.get('max_contiguous_dormant_streak_days', 0)}d")
+    print(f"VERDICT: {payload.get('verdict')} — "
+          f"{payload.get('verdict_rationale')}")
+    print(f"wrote: {payload.get('_sidecar_path')}")
+
+    return {
+        "verdict": payload.get("verdict"),
+        "verdict_rationale": payload.get("verdict_rationale"),
+        "oos_samples": oos.get("total_samples", 0),
+        "oos_p95": oos_pcts.get("p95", 0.0),
+        "oos_dormant_pct": bucket.get("pct", 0.0),
+        "sidecar_path": payload.get("_sidecar_path"),
+    }
+
+
 async def _stage_kill_switch_smoke(
     pool: asyncpg.Pool, config: dict[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -2723,6 +2772,14 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # run scheduler.run_once(), assert zero candidates/submissions,
     # reset in finally. Use: --stage kill_switch_smoke --param engine=reversion
     ("kill_switch_smoke",   lambda pool, cfg: (lambda: _stage_kill_switch_smoke(pool, cfg)),     STAGE_TIMEOUT_SEC),
+    # Offline Sentinel activation-score distribution probe (one-off
+    # diagnostic; operator-on-demand). Read-only — no Lab spend, no
+    # n_trials increment, no dossier. Used to diagnose whether a FAILED
+    # Sentinel Lab probe is structurally-dormant (composite < 0.45
+    # floor) vs threshold-clipped. Migrated 2026-05-21 from the orphan
+    # scripts/probe_sentinel_activation.py per the no-orphan-scripts
+    # gate.
+    ("probe_sentinel_activation", lambda pool, cfg: (lambda: _stage_probe_sentinel_activation(pool, cfg)), STAGE_TIMEOUT_SEC),
     # extract_tradier_full — wide-universe Tradier CSV extractor
     # (NYSE/NASDAQ/AMEX stocks+ETFs, 2000-01-01 → today). No DB writes,
     # streaming + resumable. Long-running, bounded — uses
