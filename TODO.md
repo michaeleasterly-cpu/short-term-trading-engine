@@ -4,6 +4,21 @@ Cross-cutting personal action items that don't fit existing docs. Operational
 build queues belong in `docs/DATABASE_AND_DATAFLOW.md §5 Implementation Queue`
 or `docs/MASTER_PLAN.md §9 Build Order`.
 
+## ⚠ PUBLIC REPO — recurring secret-audit gate (2026-05-21)
+
+The repo went public 2026-05-21 (operator's GitHub Actions quota was exhausted; public repos get unlimited free Actions, hence the flip). Preliminary in-thread scan today found **zero committed secrets** in either current code or git history (no `sk-ant-*`, no `AKIA*`, no SSH/RSA private keys, no real Postgres credentials, no Alpaca/Finnhub/FMP/Tradier/Greeks-pro env-var assignments). `.env` is gitignored — only `.env.example` is tracked. The only PII-shaped strings are the public repo identifier itself (`michaeleasterly-cpu/short-term-trading-engine` in `railway.json` × 3 + one spec doc), which is necessarily public on a public repo.
+
+`[lane: platform-wide] [gate: pre-commit hook + CI sentinel] [needs operator decision: which scanner — gitleaks vs trufflehog vs custom regex] [effort: S — install + one config file + CI step]`
+
+**What to ship (now that the repo is public — defense in depth):**
+
+1. **Recurring CI gate** — every PR scans for secret patterns. Recommended: `gitleaks` (industry standard, regex-based, fast) or `trufflehog` (also scans git history blob-by-blob, slower but more thorough). Add as a `.github/workflows/secret-scan.yml` step on every push.
+2. **Pre-commit hook** — block accidental local commits before they hit origin. `.pre-commit-config.yaml` with the same scanner.
+3. **Audit existing PRs/commits in the last N days** — operator-discretion on whether to retroactively scan PRs that landed 2026-05-19 → 2026-05-21 (the Carver task-25 series in particular touched many new LLM files; verify those don't have accidental SDK examples with real keys).
+4. **Operator pre-flight checklist before next public-repo session** — read of `.env`/`.envrc` ensures no work-in-progress credentials are sitting in tracked files.
+
+**Trigger context:** operator 2026-05-21: "make sure that none of my api keys are in the repo... its public now". Initial scan green; this entry captures the recurring-gate work so the next leak (when it happens) gets caught BEFORE it hits public history.
+
 ## WEEK GOAL (2026-05-16): Data layer finalization + hardening
 
 Single focus until further notice — no engine/Sigma-redesign work. Sequence:
