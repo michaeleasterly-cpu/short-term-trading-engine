@@ -2818,11 +2818,92 @@ _RETRYABLE_FAILURE_REASONS: frozenset[str] = frozenset({
 #   "daily_bars coverage collapse: <date> has <n> tickers = <pct>% of …"
 # (see the RuntimeError raise near the COVERAGE_COLLAPSE_PCT block).
 # The token is matched case-insensitively against StageResult.error so a
-# coverage_collapse RuntimeError triggers the one-shot repair_gaps
+# coverage_collapse RuntimeError triggers the one-shot force-refresh
 # cascade — NOT a blanket retry of every INGESTION_FAILED. Other
 # failures (auth, schema drift) need different handling and are left
 # alone here.
 _DAILY_BARS_COVERAGE_COLLAPSE_TOKEN: str = "coverage collapse"
+
+
+# Live SIP-availability probe. Single GET against the Alpaca data
+# endpoint with feed=sip; bounded 10s timeout, no retry, no cache. The
+# probe is cheap (one request) and the cascade is one-shot, so we re-
+# probe every time the cascade fires — that's deliberate, because the
+# operator demonstrated 2026-05-21 that SIP entitlement can transiently
+# 403 and then recover within ~20min. A cached "False" would freeze the
+# cascade to IEX-only for the duration of the cache, which is exactly
+# what we DON'T want during a recovery window.
+_SIP_PROBE_URL: str = "https://data.alpaca.markets/v2/stocks/AAPL/bars"
+_SIP_PROBE_TIMEOUT_SEC: float = 10.0
+
+
+async def _alpaca_sip_available(client: Any | None = None) -> bool:
+    """Probe Alpaca SIP feed availability for the current account.
+
+    Returns True iff a recent (≤5 trading days ago) AAPL bar pull with
+    ``feed=sip`` returns HTTP 200 with a non-empty bar list. Returns
+    False on:
+
+    * HTTP 403 (any reason — typically "subscription does not permit
+      querying recent SIP data"; the operator observed this both
+      transiently and persistently between 2026-05-21 04:38 → 04:55 UTC)
+    * Any other non-200 (5xx, 429, etc.)
+    * Network error / timeout (bounded 10s)
+    * HTTP 200 with empty bars (entitlement permits the request but
+      returns nothing — also unsafe to assume SIP works)
+
+    The probe is INTENTIONALLY uncached: the SIP entitlement state
+    flapped within a 17-minute window in the operator's 2026-05-21
+    incident, so caching the negative answer would freeze the cascade
+    into IEX-only mode through a recovery. Cost of a live probe is
+    1 HTTP request per cascade — and the cascade itself only fires on
+    a coverage_collapse, which is rare.
+
+    ``client`` is an optional ``httpx.AsyncClient`` injection seam for
+    tests; when None, a 10s-timeout client is built internally with the
+    canonical Alpaca headers from env.
+    """
+    import httpx
+
+    from tpcore.data.ingest_alpaca_bars import _alpaca_headers
+
+    # Probe window: 5 calendar-days back to 1 day back. SIP bars for the
+    # most-recent closed session exist immediately after market close;
+    # the 5-day window is wide enough to span a weekend or holiday so
+    # the probe never gets a false-negative from "no bars yet today".
+    today = datetime.now(UTC).date()
+    start = (today - timedelta(days=5)).isoformat()
+    end = (today - timedelta(days=1)).isoformat()
+    params = {
+        "timeframe": "1Day",
+        "start": start,
+        "end": end,
+        "feed": "sip",
+        "limit": "10",
+    }
+
+    async def _do(c: httpx.AsyncClient) -> bool:
+        try:
+            resp = await c.get(_SIP_PROBE_URL, params=params)
+        except (httpx.RequestError, httpx.HTTPError):
+            return False
+        if resp.status_code != 200:
+            return False
+        try:
+            payload = resp.json()
+        except (ValueError, TypeError):
+            return False
+        bars = payload.get("bars") if isinstance(payload, dict) else None
+        return bool(bars)
+
+    if client is not None:
+        return await _do(client)
+
+    async with httpx.AsyncClient(
+        headers=_alpaca_headers(),
+        timeout=_SIP_PROBE_TIMEOUT_SEC,
+    ) as c:
+        return await _do(c)
 
 # Stages that depend on today's regular session having closed. Running
 # these mid-session produces partial / wrong-state bars and contaminates
@@ -3059,25 +3140,54 @@ async def _auto_cascade_coverage_collapse(
     log: structlog.stdlib.BoundLogger,
     db_log,
 ) -> None:
-    """Auto-cascade daily_bars coverage_collapse → repair_gaps (one-shot).
+    """Auto-cascade daily_bars coverage_collapse → SIP/IEX force_refresh.
 
     Scans ``summary.stages`` for a FAILED ``daily_bars`` entry whose
     error message matches ``_DAILY_BARS_COVERAGE_COLLAPSE_TOKEN``. If
-    found, runs ``_stage_daily_bars`` ONCE more with
-    ``repair_gaps=true`` (the targeted-tickers, completeness-derived
-    heal path that closes the same gap the safety check refuses to
-    report OK on). Behaviour:
+    found, picks the recovery feed via a live SIP-availability probe
+    and runs ``_stage_daily_bars`` ONCE more with
+    ``force_refresh=true`` (the actual recovery the operator runs
+    manually — verified 2026-05-21 to restore full coverage when SIP
+    entitlement is active).
 
-    * One-shot — never loops. If repair_gaps also fails, the overall
-      stage stays FAILED with an ``INGESTION_AUTO_RECOVERY_FAILED``
-      escalation event (operator sees a clear escalation, not a silent
-      give-up).
+    History — why force_refresh, not repair_gaps:
+
+    * PR #227 (2026-05-20) wired the cascade trigger but cascaded to
+      ``repair_gaps`` — which is BLIND to the coverage_collapse failure
+      mode. The completeness check that drives repair_gaps' target list
+      doesn't see partial sessions as "gaps" (the partial sessions
+      don't meet its threshold for a "valid session"), so the cascade
+      returned ``skipped: no_gaps_or_not_bars_fixable`` and proudly
+      logged ``INGESTION_AUTO_RECOVERED`` while the data stayed broken
+      at 7%. Operator-reproduced 2026-05-21 07:39 UTC.
+    * The actual recovery: ``--stage daily_bars --param force_refresh
+      =true --param universe=active --param feed=sip
+      --param end_offset_days=1`` — which is what this cascade now does.
+
+    Feed-selection logic (the fix this docstring exists for):
+
+    * Live SIP probe (``_alpaca_sip_available``) — single 10s GET. Not
+      cached. The operator observed the SIP entitlement flap inside a
+      17-minute window 2026-05-21 04:38 → 04:55 UTC, so a cached "False"
+      would freeze us in IEX-only mode through a recovery.
+    * Probe True  → ``feed="sip"`` — full universe recovery available.
+    * Probe False → ``feed="iex"`` — degraded recovery; IEX has fewer
+      tickers than SIP, so coverage may still land below the floor
+      after the cascade. That's still strictly better than no cascade,
+      and the dedicated ``INGESTION_AUTO_RECOVERY_DEGRADED`` event
+      flags it so the operator knows to investigate SIP entitlement.
+
+    Behaviour:
+
+    * One-shot — never loops. If the chosen-feed force_refresh ALSO
+      fails entirely (no fetch landed), the stage stays FAILED with an
+      ``INGESTION_AUTO_RECOVERY_FAILED`` escalation event.
     * Fires ONLY on coverage_collapse — not on auth/schema/other
       RuntimeError modes. The discriminator is the message token raised
       by the producer-self-validation block in ``_stage_daily_bars``.
-    * Counts as ONE additional stage execution in the daemon's STAGE
-      SUMMARY: the original ``daily_bars`` FAILED entry is REPLACED with
-      the cascade result, annotated ``cascade=True`` + ``cascade_mode``
+    * Counts as ONE additional stage execution: the original
+      ``daily_bars`` FAILED entry is REPLACED with the cascade result,
+      annotated ``cascade=True`` + ``cascade_mode`` + ``feed``
       + ``first_error`` (mirrors ``_self_heal_failed_stages`` so the
       table reader is honest about what was healed vs first-try green).
     * Does NOT touch the Lab n_trials ledger — the data daemon never
@@ -3085,10 +3195,15 @@ async def _auto_cascade_coverage_collapse(
 
     Logged events (engine=ops, run_id = summary.run_id):
 
-    * ``INGESTION_AUTO_RECOVERY_START`` — cascade fires.
-    * ``INGESTION_AUTO_RECOVERED`` — cascade succeeds (stage now OK).
-    * ``INGESTION_AUTO_RECOVERY_FAILED`` — cascade itself fails
-      (escalation surface).
+    * ``INGESTION_AUTO_RECOVERY_START`` — cascade fires (data.feed
+      records which feed was picked).
+    * ``INGESTION_AUTO_RECOVERED`` — SIP probe passed, force_refresh
+      feed=sip recovered to ≥ floor (stage now OK).
+    * ``INGESTION_AUTO_RECOVERY_DEGRADED`` — SIP probe failed,
+      force_refresh feed=iex ran but coverage stayed below floor (IEX
+      subset only — partial recovery, operator investigation needed).
+    * ``INGESTION_AUTO_RECOVERY_FAILED`` — both probe + fallback failed
+      entirely (no fetch landed at all).
     """
     spec_by_name = {n: (n, fb, to) for n, fb, to in _STAGE_SPECS}
     token = _DAILY_BARS_COVERAGE_COLLAPSE_TOKEN.lower()
@@ -3107,30 +3222,53 @@ async def _auto_cascade_coverage_collapse(
         name, factory_builder, timeout = spec_by_name[result.name]
         first_error = (result.error or "")[:240]
 
+        # Feed selection — the load-bearing decision this PR exists for.
+        # Live probe, no cache. See docstring.
+        try:
+            sip_ok = await _alpaca_sip_available()
+        except Exception as exc:  # noqa: BLE001 — probe must never break the cascade
+            log.warning("ops.auto_cascade.probe_error", error=str(exc))
+            sip_ok = False
+        feed = "sip" if sip_ok else "iex"
+        probe_reason = "sip_probe_ok" if sip_ok else "sip_probe_fail"
+
         await db_log.log(
             "INGESTION_AUTO_RECOVERY_START",
-            "auto-cascade: daily_bars coverage_collapse → repair_gaps",
+            (
+                f"auto-cascade: daily_bars coverage_collapse → "
+                f"force_refresh feed={feed}"
+            ),
             severity="INFO",
             data={
                 "stage": name,
-                "cascade_mode": "repair_gaps",
+                "cascade_mode": "force_refresh",
                 "trigger": "coverage_collapse",
+                "feed": feed,
+                "reason": probe_reason,
                 "first_error": first_error,
             },
         )
         log.info(
             "ops.auto_cascade.start",
             stage=name,
-            cascade_mode="repair_gaps",
+            cascade_mode="force_refresh",
+            feed=feed,
+            reason=probe_reason,
             first_error=first_error,
         )
 
-        # Build the cascade config: same daily_bars_config base + the
-        # repair_gaps switch. The repair_gaps branch in _stage_daily_bars
-        # reads its targets from compute_gap_repair_targets, so this is
-        # bounded (typically a handful of tickers, never a full-universe
-        # force_refresh).
-        cascade_config = {**daily_bars_config, "repair_gaps": True}
+        # Build the cascade config: same daily_bars_config base +
+        # force_refresh=True + universe=active + the probe-selected feed
+        # + a bounded lookback. Matches the operator-verified manual
+        # recovery one-liner.
+        cascade_config = {
+            **daily_bars_config,
+            "force_refresh": True,
+            "universe": "active",
+            "feed": feed,
+            "lookback_days": int(daily_bars_config.get("lookback_days", 7)),
+            "end_offset_days": int(daily_bars_config.get("end_offset_days", 1)),
+        }
         cascade_result = await _run_stage(
             name,
             factory_builder(pool, cascade_config),
@@ -3145,19 +3283,49 @@ async def _auto_cascade_coverage_collapse(
         cascade_result.detail = {
             **(cascade_result.detail or {}),
             "cascade": True,
-            "cascade_mode": "repair_gaps",
+            "cascade_mode": "force_refresh",
+            "feed": feed,
+            "sip_probe": sip_ok,
             "first_error": first_error,
         }
         summary.stages[i] = cascade_result
 
-        if cascade_result.status == "OK":
+        # Outcome triage:
+        #   OK                                 → RECOVERED (SIP) or
+        #                                        DEGRADED (IEX — fetch
+        #                                        landed but IEX has a
+        #                                        narrower universe so
+        #                                        coverage is partial by
+        #                                        construction; the
+        #                                        operator must
+        #                                        investigate SIP)
+        #   FAILED w/ coverage_collapse error  → DEGRADED (the fetch
+        #                                        DID land, just landed
+        #                                        below the floor —
+        #                                        IEX-subset only; this
+        #                                        is the honest
+        #                                        partial-recovery
+        #                                        outcome the spec
+        #                                        names DEGRADED)
+        #   FAILED w/ other error              → FAILED (no fetch
+        #                                        landed: auth, network,
+        #                                        schema drift, etc.)
+        #   TIMEOUT                            → FAILED (no fetch
+        #                                        landed in time)
+        cascade_err_lower = (cascade_result.error or "").lower()
+        coverage_collapse_again = token in cascade_err_lower
+        if cascade_result.status == "OK" and sip_ok:
             await db_log.log(
                 "INGESTION_AUTO_RECOVERED",
-                "auto-cascade healed daily_bars coverage_collapse via repair_gaps",
+                (
+                    "auto-cascade healed daily_bars coverage_collapse "
+                    "via force_refresh feed=sip"
+                ),
                 severity="INFO",
                 data={
                     "stage": name,
-                    "cascade_mode": "repair_gaps",
+                    "cascade_mode": "force_refresh",
+                    "feed": "sip",
                     "first_error": first_error,
                     "duration_ms": cascade_result.duration_ms,
                     **(cascade_result.detail or {}),
@@ -3166,6 +3334,42 @@ async def _auto_cascade_coverage_collapse(
             log.info(
                 "ops.auto_cascade.recovered",
                 stage=name,
+                feed="sip",
+                duration_ms=cascade_result.duration_ms,
+            )
+        elif (
+            (cascade_result.status == "OK" and not sip_ok)
+            or (cascade_result.status == "FAILED" and coverage_collapse_again)
+        ):
+            # IEX path: either it landed OK (rare — IEX would have to
+            # somehow cover the full active universe) or it landed but
+            # the producer-self-validation refused on still-too-low
+            # coverage. Both are the DEGRADED outcome: cascade DID run
+            # an action; coverage may still be below floor on IEX.
+            await db_log.log(
+                "INGESTION_AUTO_RECOVERY_DEGRADED",
+                (
+                    f"auto-cascade ran with feed={feed} (sip_ok={sip_ok}); "
+                    f"coverage may still be below floor — partial recovery"
+                ),
+                severity="WARNING",
+                data={
+                    "stage": name,
+                    "cascade_mode": "force_refresh",
+                    "feed": feed,
+                    "reason": probe_reason,
+                    "cascade_status": cascade_result.status,
+                    "cascade_error": (cascade_result.error or "")[:240],
+                    "first_error": first_error,
+                    "duration_ms": cascade_result.duration_ms,
+                    **(cascade_result.detail or {}),
+                },
+            )
+            log.warning(
+                "ops.auto_cascade.degraded",
+                stage=name,
+                feed=feed,
+                cascade_status=cascade_result.status,
                 duration_ms=cascade_result.duration_ms,
             )
         else:
@@ -3173,13 +3377,14 @@ async def _auto_cascade_coverage_collapse(
                 "INGESTION_AUTO_RECOVERY_FAILED",
                 (
                     f"auto-cascade FAILED: daily_bars coverage_collapse "
-                    f"→ repair_gaps did not recover "
+                    f"→ force_refresh feed={feed} did not recover "
                     f"(status={cascade_result.status})"
                 ),
                 severity="ERROR",
                 data={
                     "stage": name,
-                    "cascade_mode": "repair_gaps",
+                    "cascade_mode": "force_refresh",
+                    "feed": feed,
                     "first_error": first_error,
                     "cascade_status": cascade_result.status,
                     "cascade_error": (cascade_result.error or "")[:240],
@@ -3189,6 +3394,7 @@ async def _auto_cascade_coverage_collapse(
             log.error(
                 "ops.auto_cascade.failed",
                 stage=name,
+                feed=feed,
                 cascade_status=cascade_result.status,
                 cascade_error=cascade_result.error,
             )
