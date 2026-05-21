@@ -36,7 +36,7 @@ _REPRESENTATIVE_NS = argparse.Namespace(
     # vector keys
     pb_ceiling=3.0,
     de_ceiling=None,
-    catalyst_window_days=5,
+    earnings_window_days=5,
     # swing_score_threshold absent
     # momentum keys
     lookback_days=252,
@@ -65,7 +65,7 @@ _REPRESENTATIVE_NS = argparse.Namespace(
         (
             vector_overrides,
             VECTOR_OVERRIDE_KEYS,
-            {"pb_ceiling": 3.0, "catalyst_window_days": 5, "stop_pct": 0.0},
+            {"pb_ceiling": 3.0, "earnings_window_days": 5, "stop_pct": 0.0},
         ),
         (
             momentum_overrides,

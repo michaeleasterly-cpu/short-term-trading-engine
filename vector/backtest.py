@@ -11,7 +11,7 @@ Gates (all point-in-time):
        with ``filing_date <= sim_date`` must satisfy
        ``pb < 1.5 AND de < 3 AND revenue > $500M`` AND last close above
        the 200-SMA.
-    2. **Catalyst** — at least one ``earnings_events`` row for the
+    2. **Earnings** — at least one ``earnings_events`` row for the
        ticker with ``event_date`` within ±5 trading days of sim_date.
     3. **Technical trigger** — pullback to 10-/20-MA on volume > 1.2× avg
        OR breakout above 50-MA on volume > 1.5× avg (mirrors
@@ -79,7 +79,7 @@ DE_CEILING = 3.0
 REVENUE_FLOOR = 500_000_000.0  # $500M
 
 # Gate 2 window (trading days, applied in calendar days for simplicity).
-CATALYST_WINDOW_DAYS = 5
+EARNINGS_WINDOW_DAYS = 5
 
 # Gate 3 windows / volume multipliers.
 SMA_10 = 10
@@ -114,13 +114,13 @@ def _slippage_per_side(ticker: str) -> float:
 # runs; reset between trials.
 _PB_CEILING_OVERRIDE: float | None = None
 _DE_CEILING_OVERRIDE: float | None = None
-_CATALYST_WINDOW_OVERRIDE: int | None = None
+_EARNINGS_WINDOW_OVERRIDE: int | None = None
 _HARD_STOP_PCT_OVERRIDE: float | None = None
 _SWING_SCORE_THRESHOLD_OVERRIDE: float | None = None  # None = no gate
 # vector_composite Lab candidate (spec
 # docs/superpowers/specs/2026-05-20-vector-composite-lab-candidate.md
 # §3.1): off-by-default flag selecting AND-gate (legacy) vs composite
-# (top-decile selection of value/catalyst/technical z-score weighted
+# (top-decile selection of value/earnings/technical z-score weighted
 # 0.35/0.40/0.25). None ⇒ "and_gate"; explicit "composite" ⇒ the
 # Lab candidate branch. Reset per call to run_vector_with_context (§4.2,
 # H-VC-8) so no module-global state bleeds across trials.
@@ -138,11 +138,11 @@ def _de_ceiling() -> float:
     return _DE_CEILING_OVERRIDE if _DE_CEILING_OVERRIDE is not None else DE_CEILING
 
 
-def _catalyst_window_days() -> int:
+def _earnings_window_days() -> int:
     return (
-        _CATALYST_WINDOW_OVERRIDE
-        if _CATALYST_WINDOW_OVERRIDE is not None
-        else CATALYST_WINDOW_DAYS
+        _EARNINGS_WINDOW_OVERRIDE
+        if _EARNINGS_WINDOW_OVERRIDE is not None
+        else EARNINGS_WINDOW_DAYS
     )
 
 
@@ -176,7 +176,7 @@ def default_params() -> dict[str, Any]:
     return {
         "pb_ceiling": float(_pb_ceiling()),
         "de_ceiling": float(_de_ceiling()),
-        "catalyst_window_days": int(_catalyst_window_days()),
+        "earnings_window_days": int(_earnings_window_days()),
         "swing_score_threshold": float(swing) if swing is not None else 0.0,
         "stop_pct": float(_hard_stop_pct()),
         # ALWAYS the legacy default (NOT _composite_mode() — that would
@@ -193,7 +193,7 @@ def _synth_swing_score(magnitude: float | None) -> float:
 
     The live engine computes swing_score in ``vector.plugs.setup_detection``;
     the backtest's gate-pass-through machinery doesn't, so for the search
-    we synthesise: 30 (technical trigger passed) + 100 × |catalyst growth|,
+    we synthesise: 30 (technical trigger passed) + 100 × |earnings growth|,
     clamped to [30, 90]. None / 0 magnitude → 30 (technical only)."""
     base = 30.0
     mag = abs(float(magnitude)) if magnitude is not None else 0.0
@@ -238,7 +238,7 @@ class TradeRecord:
     size_factor: float = 1.0  # 1.0 / 0.5 / 0.25 from VIX-aware crash guard
     rv20_at_entry_pct: float | None = None  # SPY 20-day realized vol at entry, %
     trigger: str = ""  # pullback_to_10ma | pullback_to_20ma | breakout_above_50ma
-    catalyst_magnitude: float | None = None
+    earnings_magnitude: float | None = None
     pb_at_entry: float | None = None
     de_at_entry: float | None = None
 
@@ -262,7 +262,7 @@ class VariantSummary:
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# Data loading — bars + fundamentals + catalyst events
+# Data loading — bars + fundamentals + earnings events
 # ────────────────────────────────────────────────────────────────────────────
 
 
@@ -296,7 +296,7 @@ async def _load_fundamentals(pool, tickers: list[str]) -> dict[str, list[dict]]:
     return out
 
 
-async def _load_catalysts(pool, tickers: list[str]) -> dict[str, list[date]]:
+async def _load_earnings(pool, tickers: list[str]) -> dict[str, list[date]]:
     sql = """
         SELECT ticker, event_date, magnitude_pct
         FROM platform.earnings_events
@@ -359,12 +359,12 @@ def _passes_gate1(fundamentals: dict | None, last_close: float, sma_200: float) 
     return True
 
 
-def _has_catalyst(events: list[tuple[date, float]], as_of: date) -> tuple[bool, float | None]:
+def _has_earnings(events: list[tuple[date, float]], as_of: date) -> tuple[bool, float | None]:
     if not events:
         return False, None
-    lo = as_of - timedelta(days=_catalyst_window_days())
-    hi = as_of + timedelta(days=_catalyst_window_days())
-    # Catalyst window. The "+5 days" half is technically lookahead, but
+    lo = as_of - timedelta(days=_earnings_window_days())
+    hi = as_of + timedelta(days=_earnings_window_days())
+    # Earnings window. The "+5 days" half is technically lookahead, but
     # for momentum strategies the *anticipation* of an upcoming earnings
     # beat is itself the signal. The Gate 2 spec explicitly says ±5 days
     # — we honor it. PIT integrity comes from the price/fundamentals side.
@@ -471,7 +471,7 @@ def _simulate_trade(
     ticker: str,
     entry_date: date,
     trigger: str,
-    catalyst_mag: float | None,
+    earnings_mag: float | None,
     pb_at_entry: float | None,
     de_at_entry: float | None,
     rv20_at_entry_pct: float | None = None,
@@ -489,7 +489,7 @@ def _simulate_trade(
         entry_date=entry_date,
         entry_price=entry_price,
         trigger=trigger,
-        catalyst_magnitude=catalyst_mag,
+        earnings_magnitude=earnings_mag,
         pb_at_entry=pb_at_entry,
         de_at_entry=de_at_entry,
         rv20_at_entry_pct=rv20_at_entry_pct,
@@ -561,7 +561,7 @@ def _run(
     spy_panel: pd.DataFrame | None,
     spy_rv_pct: pd.Series | None,
     fundamentals: dict[str, list[dict]],
-    catalysts: dict[str, list[tuple[date, float]]],
+    earnings: dict[str, list[tuple[date, float]]],
     start: date,
     end: date,
 ) -> list[TradeRecord]:
@@ -597,7 +597,7 @@ def _run(
             funds = _pit_fundamentals(fundamentals.get(ticker, []), today)
             if not _passes_gate1(funds, last_close, sma_200):
                 continue
-            ok_cat, magnitude = _has_catalyst(catalysts.get(ticker, []), today)
+            ok_cat, magnitude = _has_earnings(earnings.get(ticker, []), today)
             if not ok_cat:
                 continue
             trigger = _technical_trigger(row, prior_close)
@@ -626,7 +626,7 @@ def _run(
             ticker=ticker,
             entry_date=df.index[idx + 1],
             trigger=trigger,
-            catalyst_mag=magnitude,
+            earnings_mag=magnitude,
             pb_at_entry=funds.get("pb"),
             de_at_entry=funds.get("de"),
             rv20_at_entry_pct=rv_today,
@@ -653,7 +653,7 @@ def _run(
 
 # Spec §2.4 — pinned weights (no grid).
 COMPOSITE_W_VALUE: float = 0.35
-COMPOSITE_W_CATALYST: float = 0.40
+COMPOSITE_W_EARNINGS: float = 0.40
 COMPOSITE_W_TECHNICAL: float = 0.25
 
 # Spec §2.3 — zero-variance guard for cross-sectional z-score.
@@ -698,9 +698,9 @@ def _composite_per_ticker_signals(
     row: pd.Series,
     prior_close: float,
     funds: dict | None,
-    catalysts_for_ticker: list[tuple[date, float]],
+    earnings_for_ticker: list[tuple[date, float]],
     insider_dates: list[date],
-    catalyst_window_days: int,
+    earnings_window_days: int,
 ) -> dict[str, float] | None:
     """Per-ticker raw signal trio (value / earnings / insider / technical).
 
@@ -726,8 +726,8 @@ def _composite_per_ticker_signals(
 
     # Strictly-backward earnings window [today - w, today].
     earn_signal = 0.0
-    backward_cutoff = today - timedelta(days=int(catalyst_window_days))
-    for evt_date, mag in catalysts_for_ticker:
+    backward_cutoff = today - timedelta(days=int(earnings_window_days))
+    for evt_date, mag in earnings_for_ticker:
         if backward_cutoff <= evt_date <= today:
             earn_signal = max(earn_signal, max(0.0, float(mag)))
 
@@ -756,7 +756,7 @@ def _run_composite(
     spy_panel: pd.DataFrame | None,
     spy_rv_pct: pd.Series | None,
     fundamentals: dict[str, list[dict]],
-    catalysts: dict[str, list[tuple[date, float]]],
+    earnings: dict[str, list[tuple[date, float]]],
     start: date,
     end: date,
     eligible_tickers: list[str],
@@ -772,7 +772,7 @@ def _run_composite(
     trades: list[TradeRecord] = []
     next_eligible_idx = 0
     cooldown_state: dict[str, date] = {}
-    catalyst_window = int(_catalyst_window_days())
+    earnings_window = int(_earnings_window_days())
 
     for di, today in enumerate(all_dates):
         if di < next_eligible_idx:
@@ -803,9 +803,9 @@ def _run_composite(
                 row=row,
                 prior_close=prior_close,
                 funds=funds,
-                catalysts_for_ticker=catalysts.get(ticker, []),
+                earnings_for_ticker=earnings.get(ticker, []),
                 insider_dates=insider_clusters.get(ticker, []),
-                catalyst_window_days=catalyst_window,
+                earnings_window_days=earnings_window,
             )
             if signals is None:
                 continue
@@ -832,7 +832,7 @@ def _run_composite(
             c_z = earn_zs[i] + insider_zs[i]
             composite = (
                 COMPOSITE_W_VALUE * v_zs[i]
-                + COMPOSITE_W_CATALYST * c_z
+                + COMPOSITE_W_EARNINGS * c_z
                 + COMPOSITE_W_TECHNICAL * tech_zs[i]
             )
             composites.append((composite, ticker, df, idx, sig))
@@ -874,7 +874,7 @@ def _run_composite(
             ticker=ticker,
             entry_date=df.index[idx + 1],
             trigger=trigger or "composite_top_decile",
-            catalyst_mag=magnitude,
+            earnings_mag=magnitude,
             pb_at_entry=funds.get("pb"),
             de_at_entry=funds.get("de"),
             rv20_at_entry_pct=rv_today,
@@ -961,7 +961,7 @@ def _render(s: VariantSummary) -> str:
 _TRADE_COLS = [
     "ticker", "trigger", "entry_date", "entry_price",
     "exit_date", "exit_price", "exit_reason", "holding_days",
-    "pnl", "return_pct", "catalyst_magnitude",
+    "pnl", "return_pct", "earnings_magnitude",
     "pb_at_entry", "de_at_entry",
 ]
 
@@ -979,7 +979,7 @@ def _write_trades_csv(path: Path, trades: list[TradeRecord]) -> None:
                 f"{t.exit_price:.4f}" if t.exit_price is not None else "",
                 t.exit_reason, t.holding_days,
                 f"{t.pnl:.6f}", f"{t.return_pct:.6f}",
-                f"{t.catalyst_magnitude:.6f}" if t.catalyst_magnitude is not None else "",
+                f"{t.earnings_magnitude:.6f}" if t.earnings_magnitude is not None else "",
                 f"{t.pb_at_entry:.6f}" if t.pb_at_entry is not None else "",
                 f"{t.de_at_entry:.6f}" if t.de_at_entry is not None else "",
             ])
@@ -993,7 +993,7 @@ def _write_trades_csv(path: Path, trades: list[TradeRecord]) -> None:
 VECTOR_OVERRIDE_KEYS = (
     "pb_ceiling",
     "de_ceiling",
-    "catalyst_window_days",
+    "earnings_window_days",
     "swing_score_threshold",
     "stop_pct",
     "composite_mode",
@@ -1005,7 +1005,7 @@ def _overrides_from_args(args: argparse.Namespace) -> dict:
 
 
 def _apply_overrides_from_args(args: argparse.Namespace) -> None:
-    global _PB_CEILING_OVERRIDE, _DE_CEILING_OVERRIDE, _CATALYST_WINDOW_OVERRIDE
+    global _PB_CEILING_OVERRIDE, _DE_CEILING_OVERRIDE, _EARNINGS_WINDOW_OVERRIDE
     global _HARD_STOP_PCT_OVERRIDE, _SWING_SCORE_THRESHOLD_OVERRIDE
     _PB_CEILING_OVERRIDE = (
         float(args.pb_ceiling) if getattr(args, "pb_ceiling", None) is not None else None
@@ -1013,9 +1013,9 @@ def _apply_overrides_from_args(args: argparse.Namespace) -> None:
     _DE_CEILING_OVERRIDE = (
         float(args.de_ceiling) if getattr(args, "de_ceiling", None) is not None else None
     )
-    _CATALYST_WINDOW_OVERRIDE = (
-        int(args.catalyst_window_days)
-        if getattr(args, "catalyst_window_days", None) is not None
+    _EARNINGS_WINDOW_OVERRIDE = (
+        int(args.earnings_window_days)
+        if getattr(args, "earnings_window_days", None) is not None
         else None
     )
     _HARD_STOP_PCT_OVERRIDE = (
@@ -1086,7 +1086,7 @@ def _build_diagnostic_inputs_for_search(
 
 @dataclass
 class VectorWindowContext:
-    """Pre-loaded panels + fundamentals + catalysts for one walk-forward window.
+    """Pre-loaded panels + fundamentals + earnings for one walk-forward window.
 
     ``insider_clusters`` (added 2026-05-20) is an additive, default-empty
     payload consumed only by the ``composite_mode=composite`` Lab branch
@@ -1099,7 +1099,7 @@ class VectorWindowContext:
     spy_panel: pd.DataFrame | None
     spy_rv_pct: pd.Series | None
     fundamentals: dict[str, list[dict]]
-    catalysts: dict[str, list[tuple[date, float]]]
+    earnings: dict[str, list[tuple[date, float]]]
     tier_round_trip_costs: dict[str, float]
     eligible_tickers: list[str]
     start: date
@@ -1119,7 +1119,7 @@ async def load_vector_window_context(
     end: date,
     universe: tuple[str, ...] | None = None,
 ) -> VectorWindowContext:
-    """Load prices + fundamentals + catalysts + tier costs; precompute indicators.
+    """Load prices + fundamentals + earnings + tier costs; precompute indicators.
 
     Heavy I/O — call once per walk-forward window."""
     from tpcore.backtest.cost_model import load_tier_costs
@@ -1132,17 +1132,17 @@ async def load_vector_window_context(
                 "SELECT DISTINCT ticker FROM platform.fundamentals_quarterly "
                 "WHERE pb IS NOT NULL AND de IS NOT NULL AND revenue IS NOT NULL"
             )]
-            with_catalyst = [r["ticker"] for r in await conn.fetch(
+            with_earnings = [r["ticker"] for r in await conn.fetch(
                 "SELECT DISTINCT ticker FROM platform.earnings_events "
                 "WHERE event_type='EARNINGS_BEAT'"
             )]
-        eligible = sorted(set(funded) & set(with_catalyst))
+        eligible = sorted(set(funded) & set(with_earnings))
         if universe is not None:
             eligible = [t for t in eligible if t in universe]
         load_tickers = list({*eligible, SPY_SYMBOL})
         prices = await _load_prices(pool, load_tickers, start, end)
         fundamentals = await _load_fundamentals(pool, eligible)
-        catalysts = await _load_catalysts(pool, eligible)
+        earnings = await _load_earnings(pool, eligible)
     finally:
         await pool.close()
 
@@ -1151,7 +1151,7 @@ async def load_vector_window_context(
     spy_rv_pct = _spy_realized_vol_pct(spy_panel) if spy_panel is not None else None
     return VectorWindowContext(
         panels=panels, spy_panel=spy_panel, spy_rv_pct=spy_rv_pct,
-        fundamentals=fundamentals, catalysts=catalysts,
+        fundamentals=fundamentals, earnings=earnings,
         tier_round_trip_costs=tier_costs, eligible_tickers=eligible,
         start=start, end=end, universe=universe,
     )
@@ -1170,19 +1170,34 @@ def run_vector_with_context(
         write_trade_log_csv,
     )
 
-    global _PB_CEILING_OVERRIDE, _DE_CEILING_OVERRIDE, _CATALYST_WINDOW_OVERRIDE
+    global _PB_CEILING_OVERRIDE, _DE_CEILING_OVERRIDE, _EARNINGS_WINDOW_OVERRIDE
     global _HARD_STOP_PCT_OVERRIDE, _SWING_SCORE_THRESHOLD_OVERRIDE
     global _COMPOSITE_MODE_OVERRIDE
     overrides = dict(overrides or {})
+    # Back-compat read shim — legacy CSV ``vector_search_results*.csv`` rows
+    # carry ``catalyst_window_days`` inside their parameters_json strings.
+    # We accept the old key on read (emit a deprecation warning) and forward
+    # it to the new key. The CSV files themselves are NOT rewritten — the
+    # catalyst→earnings rename ships forward-only for new artifacts.
+    if "catalyst_window_days" in overrides and "earnings_window_days" not in overrides:
+        import warnings
+        warnings.warn(
+            "vector.backtest: 'catalyst_window_days' override key is deprecated; "
+            "use 'earnings_window_days' (the legacy key is still accepted for "
+            "backward-compat reads of persisted parameters_json blobs).",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        overrides["earnings_window_days"] = overrides.pop("catalyst_window_days")
     _PB_CEILING_OVERRIDE = (
         float(overrides["pb_ceiling"]) if "pb_ceiling" in overrides else None
     )
     _DE_CEILING_OVERRIDE = (
         float(overrides["de_ceiling"]) if "de_ceiling" in overrides else None
     )
-    _CATALYST_WINDOW_OVERRIDE = (
-        int(overrides["catalyst_window_days"])
-        if "catalyst_window_days" in overrides else None
+    _EARNINGS_WINDOW_OVERRIDE = (
+        int(overrides["earnings_window_days"])
+        if "earnings_window_days" in overrides else None
     )
     _HARD_STOP_PCT_OVERRIDE = (
         float(overrides["stop_pct"]) if "stop_pct" in overrides else None
@@ -1220,7 +1235,7 @@ def run_vector_with_context(
             spy_panel=context.spy_panel,
             spy_rv_pct=context.spy_rv_pct,
             fundamentals=context.fundamentals,
-            catalysts=context.catalysts,
+            earnings=context.earnings,
             start=context.start,
             end=context.end,
             eligible_tickers=context.eligible_tickers,
@@ -1232,7 +1247,7 @@ def run_vector_with_context(
             spy_panel=context.spy_panel,
             spy_rv_pct=context.spy_rv_pct,
             fundamentals=context.fundamentals,
-            catalysts=context.catalysts,
+            earnings=context.earnings,
             start=context.start,
             end=context.end,
         )
@@ -1245,7 +1260,7 @@ def run_vector_with_context(
     parameters = {
         "pb_ceiling": float(_pb_ceiling()),
         "de_ceiling": float(_de_ceiling()),
-        "catalyst_window_days": int(_catalyst_window_days()),
+        "earnings_window_days": int(_earnings_window_days()),
         "swing_score_threshold": (
             float(_swing_score_threshold()) if _swing_score_threshold() is not None else 0.0
         ),
@@ -1307,7 +1322,7 @@ LAB_TARGET = LabTarget(
     param_ranges={
         "pb_ceiling": (1.5, 3.5, "float"),
         "de_ceiling": (1.5, 4.0, "float"),
-        "catalyst_window_days": (3, 10, "int"),
+        "earnings_window_days": (3, 10, "int"),
         "swing_score_threshold": (55.0, 75.0, "float"),
         "stop_pct": (0.04, 0.10, "float"),
         # vector_composite Lab candidate (spec §4.1, H-VC-2): the ONE
@@ -1366,17 +1381,17 @@ async def amain(args: argparse.Namespace) -> int:
             "vector.backtest.tier_costs_loaded",
             n=len(_TIER_ROUND_TRIP_COSTS),
         )
-        # Universe: anything that has fundamentals + a catalyst event.
+        # Universe: anything that has fundamentals + an earnings event.
         async with pool.acquire() as conn:
             funded = [r["ticker"] for r in await conn.fetch(
                 "SELECT DISTINCT ticker FROM platform.fundamentals_quarterly "
                 "WHERE pb IS NOT NULL AND de IS NOT NULL AND revenue IS NOT NULL"
             )]
-            with_catalyst = [r["ticker"] for r in await conn.fetch(
+            with_earnings = [r["ticker"] for r in await conn.fetch(
                 "SELECT DISTINCT ticker FROM platform.earnings_events "
                 "WHERE event_type='EARNINGS_BEAT'"
             )]
-        eligible = sorted(set(funded) & set(with_catalyst))
+        eligible = sorted(set(funded) & set(with_earnings))
         if not eligible:
             print("no eligible tickers — populate fundamentals + earnings_events first", file=sys.stderr)
             return 2
@@ -1391,7 +1406,7 @@ async def amain(args: argparse.Namespace) -> int:
         prices = await _load_prices(pool, load_tickers, args.start, args.end)
         logger.info("vector.backtest.loading_fundamentals", tickers=len(eligible))
         fundamentals = await _load_fundamentals(pool, eligible)
-        catalysts = await _load_catalysts(pool, eligible)
+        earnings = await _load_earnings(pool, eligible)
     finally:
         await pool.close()
 
@@ -1410,7 +1425,7 @@ async def amain(args: argparse.Namespace) -> int:
         spy_panel=spy_panel,
         spy_rv_pct=spy_rv_pct,
         fundamentals=fundamentals,
-        catalysts=catalysts,
+        earnings=earnings,
         start=args.start,
         end=args.end,
     )
@@ -1452,7 +1467,7 @@ async def amain(args: argparse.Namespace) -> int:
             spy_panel=spy_panel,
             spy_rv_pct=spy_rv_pct,
             fundamentals=fundamentals,
-            catalysts=catalysts,
+            earnings=earnings,
             start=args.start,
             end=args.end,
             winner_summary=summary,
@@ -1471,7 +1486,7 @@ async def _print_statistical_validation_vector(
     spy_panel,
     spy_rv_pct,
     fundamentals,
-    catalysts,
+    earnings,
     start: date,
     end: date,
     winner_summary: VariantSummary,
@@ -1480,7 +1495,7 @@ async def _print_statistical_validation_vector(
     output_dir: Path,
     n_trials: int,
 ) -> None:
-    """Sweep PB, DE, and catalyst-window thresholds; MC + PSR/DSR/MinBTL; rubric."""
+    """Sweep PB, DE, and earnings-window thresholds; MC + PSR/DSR/MinBTL; rubric."""
     from tpcore.backtest.sensitivity import sweep_parameter
     from tpcore.backtest.statistical_validation import (
         build_report,
@@ -1499,7 +1514,7 @@ async def _print_statistical_validation_vector(
             spy_panel=spy_panel,
             spy_rv_pct=spy_rv_pct,
             fundamentals=fundamentals,
-            catalysts=catalysts,
+            earnings=earnings,
             start=start,
             end=end,
             pb_ceiling=nonlocal_pb,
@@ -1642,7 +1657,7 @@ def _run_with_thresholds(
     spy_panel: pd.DataFrame | None,
     spy_rv_pct: pd.Series | None,
     fundamentals: dict[str, list[dict]],
-    catalysts: dict[str, list[tuple[date, float]]],
+    earnings: dict[str, list[tuple[date, float]]],
     start: date,
     end: date,
     pb_ceiling: float,
@@ -1687,7 +1702,7 @@ def _run_with_thresholds(
                 continue
             if math.isnan(sma_200) or last_close < sma_200:
                 continue
-            ok_cat, magnitude = _has_catalyst(catalysts.get(ticker, []), today)
+            ok_cat, magnitude = _has_earnings(earnings.get(ticker, []), today)
             if not ok_cat:
                 continue
             trigger = _technical_trigger(row, prior_close)
@@ -1709,7 +1724,7 @@ def _run_with_thresholds(
             ticker=ticker,
             entry_date=df.index[idx + 1],
             trigger=trigger,
-            catalyst_mag=magnitude,
+            earnings_mag=magnitude,
             pb_at_entry=funds.get("pb"),
             de_at_entry=funds.get("de"),
             rv20_at_entry_pct=rv_today,
@@ -1752,8 +1767,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="Override P/B ceiling for Gate 1 (default 1.5).")
     p.add_argument("--de-ceiling", type=float, default=None,
                    help="Override D/E ceiling for Gate 1 (default 3.0).")
-    p.add_argument("--catalyst-window-days", type=int, default=None,
-                   help="Override catalyst window in calendar days (default 5).")
+    p.add_argument("--earnings-window-days", type=int, default=None,
+                   help="Override earnings window in calendar days (default 5).")
     p.add_argument("--swing-score-threshold", type=float, default=None,
                    help="Synthetic swing-score floor for the search pipeline (default: no gate).")
     p.add_argument("--stop-pct", type=float, default=None,

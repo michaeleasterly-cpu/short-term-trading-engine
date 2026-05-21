@@ -393,8 +393,8 @@ def classify_open_orders(
     return "red", f"{pending_count} pending — {stale_24h_count} older than 24h"
 
 
-def classify_catalyst(state: dict[str, Any]) -> tuple[str, str]:
-    """Catalyst-events coverage + freshness row.
+def classify_earnings(state: dict[str, Any]) -> tuple[str, str]:
+    """Earnings-events coverage + freshness row.
 
     Mirrors ``validation.earnings_events_freshness``: green when newest
     event ≤ 90d AND ≥ 20% of T1+T2 stocks have an event in last 180d;

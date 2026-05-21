@@ -40,10 +40,10 @@ from dashboard_components.escalation import (
 )
 from dashboard_components.health import (
     classify_bars,
-    classify_catalyst,
     classify_corp_actions,
     classify_coverage_gaps,
     classify_daemons,
+    classify_earnings,
     classify_forensics,
     classify_fundamentals,
     classify_open_orders,
@@ -763,8 +763,8 @@ async def _fetch_platform_health() -> dict:
                 for r in rows
             ]
 
-    async def _q_catalyst() -> dict:
-        """Catalyst-events coverage + freshness against T1+T2 stock subset.
+    async def _q_earnings() -> dict:
+        """Earnings-events coverage + freshness against T1+T2 stock subset.
 
         Counts mirror what ``validation.earnings_events_freshness``
         checks — so the dashboard row stays in lockstep with the suite
@@ -844,7 +844,7 @@ async def _fetch_platform_health() -> dict:
         }
 
     try:
-        bars, fund, ca, uni, run, val, coverage, orders, cross_ref, forensics, catalyst = await asyncio.gather(
+        bars, fund, ca, uni, run, val, coverage, orders, cross_ref, forensics, earnings = await asyncio.gather(
             _q_bars(),
             _q_fundamentals(),
             _q_corp_actions(),
@@ -855,7 +855,7 @@ async def _fetch_platform_health() -> dict:
             _q_open_orders(),
             _q_cross_ref(),
             _q_forensics(),
-            _q_catalyst(),
+            _q_earnings(),
         )
         out["bars"] = bars
         out["fundamentals"] = fund
@@ -867,7 +867,7 @@ async def _fetch_platform_health() -> dict:
         out["open_orders"] = orders
         out["cross_ref"] = cross_ref
         out["forensics"] = forensics
-        out["catalyst"] = catalyst
+        out["earnings"] = earnings
     finally:
         await pool.close()
     return out
@@ -2532,9 +2532,9 @@ def render_platform_health() -> None:
                     notes = notes_by_source.get(f"validation.{source}") or notes_by_source.get(source)
                     _render_validation_failure_detail(source, notes)
 
-    # Catalyst events — vector engine's earnings-beat source.
-    cat_color, cat_summary = classify_catalyst(h["catalyst"])
-    _render_health_row("Catalyst events (vector)", cat_color, cat_summary, row_key="catalyst")
+    # Earnings events — vector engine's earnings-beat source.
+    cat_color, cat_summary = classify_earnings(h["earnings"])
+    _render_health_row("Earnings events (vector)", cat_color, cat_summary, row_key="earnings")
 
     # Forensics — open triggers from per-engine AAR scans.
     f_color, f_summary = classify_forensics(h["forensics"])
@@ -2791,12 +2791,12 @@ def render_tip_sheet() -> None:
         },
         {
             "engine": "vector",
-            "title": "Vector — Catalyst-Driven Swing",
+            "title": "Vector — Earnings-Driven Swing",
             "score_label": "Setup Score",
             "extras": "Direction",
             "notes": (
                 "Long-only on liquid (T1+T2) names that pair an earnings "
-                "catalyst with cheap fundamentals (P/B + D/E) and a clean "
+                "event with cheap fundamentals (P/B + D/E) and a clean "
                 "technical setup. Single-tier bracket: TP at target, stop "
                 "below entry."
             ),

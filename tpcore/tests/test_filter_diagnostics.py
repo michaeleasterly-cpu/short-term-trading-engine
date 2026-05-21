@@ -78,7 +78,7 @@ def test_model_instantiates_with_defaults():
     assert diag.candidates_passed == 0
     # Engine-specific counters default to None
     assert diag.gate1_value_blocked is None
-    assert diag.gate2_catalyst_blocked is None
+    assert diag.gate2_earnings_blocked is None
     assert diag.adx_blocked is None
     assert diag.z_score_blocked is None
 
@@ -110,7 +110,7 @@ def test_model_excludes_none_on_dump():
 def test_model_json_roundtrip():
     diag = FilterDiagnostics(
         universe_total=15, coarse_liquidity_blocked=2, candidates_passed=4,
-        gate1_value_blocked=3, gate2_catalyst_blocked=5, gate3_technical_blocked=1,
+        gate1_value_blocked=3, gate2_earnings_blocked=5, gate3_technical_blocked=1,
     )
     js = diag.model_dump_json()
     rebuilt = FilterDiagnostics.model_validate_json(js)
@@ -142,7 +142,7 @@ async def test_signal_extra_data_merge():
     assert payload["filter_diagnostics"]["universe_total"] == 15
     assert payload["filter_diagnostics"]["gate1_value_blocked"] == 4
     # None-defaulted keys still absent in the round-trip
-    assert "gate2_catalyst_blocked" not in payload["filter_diagnostics"]
+    assert "gate2_earnings_blocked" not in payload["filter_diagnostics"]
 
 
 # ────────────────────────────────────────────────────────────────────────────

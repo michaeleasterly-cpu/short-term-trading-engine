@@ -1,7 +1,7 @@
 """Shared filter-diagnostic counters for engine setup-detection plugs.
 
 Every engine's setup-detection pipeline filters its universe down through
-a series of gates (liquidity → fundamentals → catalyst → technical → score
+a series of gates (liquidity → fundamentals → earnings → technical → score
 floor, in different orders per engine). When debugging a quiet day — "why
 did no signals fire?" — the operator wants a count of *how many tickers
 were rejected at each gate*, not just a list of survivors.
@@ -55,8 +55,8 @@ class FilterDiagnostics(BaseModel):
     gate1_value_blocked: int | None = Field(
         default=None, description="Vector: blocked by P/B, D/E, or Revenue gate",
     )
-    gate2_catalyst_blocked: int | None = Field(
-        default=None, description="Vector: blocked by missing catalyst event",
+    gate2_earnings_blocked: int | None = Field(
+        default=None, description="Vector: blocked by missing earnings event",
     )
     gate3_technical_blocked: int | None = Field(
         default=None, description="Vector: blocked by technical-trigger failure",
