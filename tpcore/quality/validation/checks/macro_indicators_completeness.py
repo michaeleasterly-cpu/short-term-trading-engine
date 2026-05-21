@@ -322,7 +322,21 @@ async def _evaluate(pool: asyncpg.Pool) -> _Evaluation:
                 gaps={},
             )
 
-        expected_dates = _expected_dates_for_cadence(cadence, first_d, last_d)
+        # Clamp first_d to the XNYS calendar's first known session.
+        # exchange_calendars' default XNYS calendar starts 2006-05-22;
+        # macro indicators with longer history (e.g. SOS PHCI series back
+        # to 1979, vix back to 1990) would otherwise blow up
+        # _expected_dates_for_cadence with "Parameter `start` cannot be
+        # earlier than the first session of calendar 'XNYS'". Completeness
+        # is only checked from the calendar's known range onward —
+        # earlier rows are fine, they're just not subject to NYSE-session
+        # gap detection. WEEKLY + MONTHLY cadences don't use the
+        # calendar, so the clamp is safe for them too.
+        clamped_first_d = max(first_d, cal.first_session())
+        if clamped_first_d > last_d:
+            evaluated += 1
+            continue
+        expected_dates = _expected_dates_for_cadence(cadence, clamped_first_d, last_d)
         if not expected_dates:
             evaluated += 1
             continue

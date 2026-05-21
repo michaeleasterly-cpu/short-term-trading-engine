@@ -156,6 +156,15 @@ def sessions_in_range(start: date, end: date) -> list[date]:
     return [ts.date() for ts in sessions]
 
 
+def first_session() -> date:
+    """Earliest NYSE trading session the bundled exchange_calendars
+    knows about (typically ~20 years before "today"). Callers that
+    validate completeness over historical macro data should clamp to
+    this — anything older than the calendar can't be NYSE-session-
+    expanded so the check has nothing to compare against."""
+    return _calendar().first_session.date()
+
+
 def first_sessions_of_each_month_in_range(start: date, end: date) -> list[date]:
     """Return the first trading session of each calendar month touched by
     [start, end]. Used by backtests that need to know the rebalance dates
