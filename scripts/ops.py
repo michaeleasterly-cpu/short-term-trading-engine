@@ -2582,6 +2582,81 @@ async def _stage_data_validation(pool: asyncpg.Pool) -> dict[str, Any]:
     raise RuntimeError(f"validation suite failed: {failed_names}")
 
 
+async def _stage_seed_monotone_snapshots(
+    pool: asyncpg.Pool, cfg: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """One-shot bulk-seed the per-ticker monotone-baseline snapshot tables.
+
+    Both ``platform.sec_insider_row_counts_snapshot`` and
+    ``platform.earnings_events_count_snapshot`` hold a per-ticker rowcount
+    baseline that the corresponding validation checks (``sec_insider_monotone``,
+    ``earnings_events_monotone``) gate against. The checks themselves seed the
+    baseline on first run by UPSERTing one row per ticker in a Python loop —
+    correct, but at ~1000-1300 tickers × pooler latency (Manila → Supabase) the
+    loop routinely exceeds the 2-min Supavisor statement_timeout, leaving the
+    baseline empty and the check stuck in "exception" red.
+
+    This stage performs the seed via a single set-based ``INSERT ... SELECT``
+    bulk statement per table — one server round-trip, sub-second. After this
+    runs, the next validation cycle finds an existing baseline and proceeds in
+    a normal compare-against-prior path.
+
+    Idempotent: ``ON CONFLICT (ticker) DO UPDATE`` makes a re-run a refresh of
+    the snapshot to the current live counts (the same semantic the checks
+    apply on a clean PASS). Safe to call any time.
+
+    Use:
+        python scripts/ops.py --stage seed_monotone_snapshots
+
+    Returns per-table row counts written for the audit log.
+    """
+    del cfg
+    log = structlog.get_logger("scripts.ops")
+    async with pool.acquire() as conn:
+        sec_rows = await conn.execute(
+            """
+            INSERT INTO platform.sec_insider_row_counts_snapshot
+                (ticker, rowcount, snapshot_at)
+            SELECT ticker, COUNT(*), now()
+            FROM platform.sec_insider_transactions
+            GROUP BY ticker
+            ON CONFLICT (ticker) DO UPDATE
+              SET rowcount = EXCLUDED.rowcount,
+                  snapshot_at = EXCLUDED.snapshot_at
+            """
+        )
+        earnings_rows = await conn.execute(
+            """
+            INSERT INTO platform.earnings_events_count_snapshot
+                (ticker, beat_count, snapshot_at)
+            SELECT ticker, COUNT(*), now()
+            FROM platform.earnings_events
+            WHERE event_type IN ('EARNINGS_BEAT', 'EARNINGS_NO_BEAT')
+            GROUP BY ticker
+            ON CONFLICT (ticker) DO UPDATE
+              SET beat_count = EXCLUDED.beat_count,
+                  snapshot_at = EXCLUDED.snapshot_at
+            """
+        )
+        sec_count = await conn.fetchval(
+            "SELECT COUNT(*) FROM platform.sec_insider_row_counts_snapshot"
+        )
+        earnings_count = await conn.fetchval(
+            "SELECT COUNT(*) FROM platform.earnings_events_count_snapshot"
+        )
+    log.info(
+        "ops.stage.seed_monotone_snapshots.done",
+        sec_insider_status=sec_rows,
+        earnings_events_status=earnings_rows,
+        sec_insider_rows=int(sec_count or 0),
+        earnings_events_rows=int(earnings_count or 0),
+    )
+    return {
+        "sec_insider_row_counts_snapshot_rows": int(sec_count or 0),
+        "earnings_events_count_snapshot_rows": int(earnings_count or 0),
+    }
+
+
 async def _stage_coverage_fill(pool: asyncpg.Pool) -> dict[str, Any]:
     """Self-healing — backfill any tier ≤ 2 ticker missing a bar in the last
     7 days via Alpaca SIP feed. Runs after ``corporate_actions`` (so split
@@ -3071,6 +3146,12 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # at the current 20M-row prices_daily it consistently runs ~120-
     # 130s. Bumping to 5 min gives headroom without masking a true hang.
     ("data_validation",     lambda pool, cfg: (lambda: _stage_data_validation(pool)),          300.0),
+    # seed_monotone_snapshots — one-shot bulk-seed the per-ticker monotone-
+    # baseline snapshot tables (sec_insider_row_counts_snapshot +
+    # earnings_events_count_snapshot). Resolves the structural blocker where
+    # the in-check Python UPSERT loop times out against the Supavisor pooler
+    # before the seed baseline lands. Operator-on-demand; NOT in --update.
+    ("seed_monotone_snapshots", lambda pool, cfg: (lambda: _stage_seed_monotone_snapshots(pool, cfg)), STAGE_TIMEOUT_SEC),
     ("universe_prescreener",lambda pool, cfg: (lambda: _stage_universe_prescreener(pool)),     STAGE_TIMEOUT_SEC),
     ("universe_simulation", lambda pool, cfg: _stage_simulate_universe,                        STAGE_TIMEOUT_SEC),
     # Forensics — read-side analysis over platform.aar_events. Runs last

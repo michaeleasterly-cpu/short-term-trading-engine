@@ -38,6 +38,34 @@ when none of these patterns matches.
 - If error contains "coverage collapse" AND prior cascade action was repair_gaps:
     pick: daily_bars(force_refresh=true, repair_coverage=true)
     why: NEGATIVE PATTERN — repair_gaps is blind to coverage_collapse (completeness check threshold); never re-pick repair_gaps here
+- If error contains "UndefinedTableError" OR "relation \"platform." (AND "snapshot" OR "_source_count") OR "does not exist":
+    pick: SKIP (DATA_RECOVERY_ACTION_SKIPPED, reason=migration_not_applied)
+    why: the validation snapshot/baseline table is missing — an unapplied alembic migration, NOT a data gap. Re-running any ingest stage won't create the table; operator runs `alembic upgrade head`. Derived 2026-05-21 audit of data_validation 9-failures (sec_insider_row_counts_snapshot, earnings_events_count_snapshot, ticker_classifications_source_count all reported "does not exist" → all three migrations were pending at 20260516_0800 → head).
+- If error contains "<aaii_sentiment>" AND reason "stale" AND vendor probe says source_has_newer=True:
+    pick: aaii_sentiment(skip_guard_days=0)
+    why: vendor publication probe confirmed our-gap (not vendor_late); force the bounded re-pull past the 5d skip-guard. Per the publication-gate contract: True from source_has_newer is the honest "our gap" signal.
+- If error contains "<aaii_sentiment>" AND reason "stale" AND vendor probe says source_has_newer=False:
+    pick: SKIP (DATA_RECOVERY_ACTION_SKIPPED, reason=vendor_late)
+    why: AAII publishes weekly Thursday; vendor probe confirmed vendor has nothing newer than us. Re-pull would burn rate-limit on no new data. The selfheal.vendor_late event records the state for triage.
+- If error contains "<fear_greed>" AND reason "stale":
+    pick: fear_greed
+    why: fear_greed is computed locally from existing platform data — no external provider; one re-run lands a fresh row per session.
+- If error contains "<corporate_actions>" AND reason "no_prior_archive":
+    pick: corporate_actions
+    why: SENTINEL state — the validation check needs a CSV archive baseline to compare against. The canonical corporate_actions stage writes a fresh archive on every run; one invocation lands the baseline + clears the sentinel. NOT shrinkage.
+- If error contains "missing_from_liquidity_tiers":
+    pick: tier_refresh(skip_guard_days=0)
+    why: validation surfaced active-universe tickers absent from liquidity_tiers — force the quarterly recompute past the 90d skip-guard.
+    caveat: `skip_guard_days=0` flips ONLY the outer 90d gate. The INNER 60d bootstrap gate (writes fresh spread_observations) is NOT bypassed by this param — newly-listed tickers without prior observations stay missing until the bootstrap re-runs naturally. Operator escalation lands when re-run leaves the same tickers missing. A future PR exposing `force_bootstrap=true` would close the gap; today it is documented STILL_RED.
+- If error contains "source_count_drift" AND "ticker_classifications":
+    pick: classify_tickers(skip_guard_days=0)
+    why: drift = live row count diverged from the last classify-time snapshot; force the monthly re-pull past the 30d skip-guard to re-sync.
+- If error contains "missing_publication" AND ("yield_curve" OR "credit_spread" OR "initial_claims" OR "sahm_rule" OR "cfnai_ma3" OR "vix"):
+    pick: macro_indicators(skip_guard_days=0, start_date=2006-01-01)
+    why: FRED series gap inside active range — re-pull from 2006-01-01 (the XNYS calendar lower bound) past the 7d skip-guard. Idempotent ON CONFLICT.
+- If error contains "missing_publication" AND "hy_spread":
+    pick: SKIP (DATA_RECOVERY_ACTION_SKIPPED, reason=fred_rolling_window_truncation)
+    why: NEGATIVE PATTERN — BAMLH0A0HYM2 was permanently truncated to a 3yr rolling window by FRED/ALFRED (verified 2026-05-16). Any gap older than the rolling window cannot be re-pulled; recovery requires the `--param hist_csv_path=…` branch with a pre-truncation CSV (operator action).
 
 When you pick a pattern-mapped action, include the pattern reference (e.g.
 "pattern=sip_403_to_iex") at the start of your `rationale` so the audit
