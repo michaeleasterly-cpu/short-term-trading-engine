@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import csv as _csv
 import gzip
+import io as _io
 import os
 import shutil
 from collections.abc import Callable, Iterable
@@ -95,7 +96,15 @@ def _run_stamp(now: datetime | None = None) -> str:
 
 @dataclass(frozen=True)
 class ArchiveWriteResult:
-    path: Path           # final ``.csv.gz`` path
+    # ``Path`` when the LocalFSBackend wrote a file (default, today's
+    # behaviour — every caller that does ``res.path.exists()`` /
+    # ``res.path.parent`` keeps working). For the S3Backend the value
+    # is the ``s3://<bucket>/<source>_archive/<filename>`` URI as a
+    # plain ``str`` (Path() would collapse the ``//`` to ``/`` —
+    # documented surprise, R3 substrate migration 2026-05-21).
+    # Callers that only do ``str(res.path)`` / logging are
+    # transparent across both modes.
+    path: Path | str     # final ``.csv.gz`` path or s3:// URI
     rows_written: int    # rows after physical-truth filtering
     rows_rejected: int   # rows that failed validation
 
@@ -124,34 +133,75 @@ def write_archive(
         :class:`ArchiveWriteResult` with the final ``.csv.gz`` path and
         row counts. Empty input still produces an archive file (zero
         rows) so the operator can prove the ingest ran.
+
+    Implementation note (R3 substrate seam — 2026-05-21): writes go
+    through the env-selected backend (local FS default, S3-compatible
+    bucket when ``CSV_ARCHIVE_BACKEND=s3``). With no env vars set the
+    behaviour is BYTE-IDENTICAL to the prior local-only path:
+    archive_dir_for() creates the dir, write+gzip happen on local
+    disk through the LocalFSBackend, ArchiveWriteResult.path is the
+    same ``Path`` to the same ``.csv.gz`` file. The local default
+    keeps the test_csv_archive.py contract unchanged.
     """
-    archive = archive_dir_for(source)
+    from tpcore.ingestion.csv_archive_backends import (
+        LocalFSBackend,
+        select_backend,
+    )
+
     stamp = _run_stamp(now)
-    csv_path = archive / f"{source}_{stamp}.csv"
+    filename = f"{source}_{stamp}.csv.gz"
+
+    # Build the gzipped CSV body in-memory. For the local backend this
+    # is functionally identical to the prior "write CSV → gzip in place"
+    # path (the byte output is the same gzip stream); for the S3 backend
+    # it's the single-stream upload contract we need.
     written = rejected = 0
-    with csv_path.open("w", newline="", encoding="utf-8") as fh:
-        w = _csv.DictWriter(fh, fieldnames=fieldnames, extrasaction="ignore")
-        w.writeheader()
-        for row in rows:
-            if validator is not None:
-                try:
-                    if not validator(row):
-                        rejected += 1
-                        continue
-                except Exception:  # noqa: BLE001 — bad row → reject, don't crash
+    csv_buf = _io.StringIO()
+    w = _csv.DictWriter(csv_buf, fieldnames=fieldnames, extrasaction="ignore")
+    w.writeheader()
+    for row in rows:
+        if validator is not None:
+            try:
+                if not validator(row):
                     rejected += 1
                     continue
-            # Fill missing keys with empty string.
-            w.writerow({k: row.get(k, "") for k in fieldnames})
-            written += 1
-    # Gzip in place.
-    gz_path = _gzip_in_place(csv_path)
+            except Exception:  # noqa: BLE001 — bad row → reject, don't crash
+                rejected += 1
+                continue
+        w.writerow({k: row.get(k, "") for k in fieldnames})
+        written += 1
+
+    # Note ``mtime=0`` for byte-stable gzip output (no embedded run
+    # timestamp inside the gzip header — the run timestamp lives in
+    # the filename). Keeps the on-disk bytes deterministic for
+    # reproducibility audits.
+    payload = csv_buf.getvalue().encode("utf-8")
+    body = gzip.compress(payload, mtime=0)
+
+    backend = select_backend()
+    written_id = backend.write(source, body, filename)
+
+    # For the local backend, ``written_id`` is a filesystem path —
+    # wrap in ``Path`` so the existing ``res.path.exists()`` /
+    # ``res.path.parent`` / ``res.path.suffix`` test contract stays
+    # byte-identical. For the S3 backend ``written_id`` is the
+    # ``s3://<bucket>/<source>_archive/<filename>`` URI — leave it as
+    # a plain ``str``; pathlib collapses the URI's double slash so
+    # ``Path("s3://b/k") → s3:/b/k`` which is wrong (verified surprise,
+    # documented above on ``ArchiveWriteResult.path``).
+    result_path: Path | str
+    if isinstance(backend, LocalFSBackend):
+        result_path = Path(written_id)
+    else:
+        result_path = written_id
+
     logger.info(
         "csv_archive.write_done",
         source=source, rows_written=written, rows_rejected=rejected,
-        path=str(gz_path),
+        path=str(result_path),
+        backend=type(backend).__name__,
     )
-    return ArchiveWriteResult(path=gz_path, rows_written=written, rows_rejected=rejected)
+    return ArchiveWriteResult(path=result_path, rows_written=written, rows_rejected=rejected)
 
 
 def _gzip_in_place(path: Path) -> Path:

@@ -2605,6 +2605,150 @@ async def _stage_canary_inject_trigger(
     return {"injected": kind, "fingerprint": fp, "engine": "canary"}
 
 
+async def _stage_rebuild_from_archive(
+    pool: asyncpg.Pool, cfg: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Replay the most-recent ``<source>_archive`` into the live DB.
+
+    Catastrophic-recovery path — the canonical way to rebuild
+    ``platform.prices_daily`` (and other archive-backed tables) from
+    the CSV-first archive after a DB loss / restore-from-scratch.
+    Reads through the env-selected backend
+    (``CSV_ARCHIVE_BACKEND=local|s3``), so the same one-liner works
+    on the local Mac (today) and on Railway-after-migration (with
+    ``CSV_ARCHIVE_BACKEND=s3`` pointed at the bucket).
+
+    Bounded, idempotent, operator-on-demand. Use:
+        ``python scripts/ops.py --stage rebuild_from_archive \
+            --param source=alpaca_daily_bars``
+
+    Idempotency: the underlying upsert uses
+    ``ON CONFLICT (ticker, date) DO UPDATE`` (the same statement as
+    the daily ingest path) so re-running is safe.
+
+    Currently shipped sources:
+        * ``alpaca_daily_bars`` → ``platform.prices_daily``
+
+    Other sources can be added as their authoritative upsert paths
+    get factored out of the daily handlers; for now the rebuild is
+    the daily_bars path because that's the table whose loss is
+    catastrophic. AAR / forensics / engine state are NOT rebuilt
+    here — they regenerate from the prices replay on the next sweep.
+    """
+    cfg = cfg or {}
+    source = cfg.get("source")
+    if not source:
+        raise ValueError(
+            "rebuild_from_archive: --param source=<name> is required "
+            "(e.g. alpaca_daily_bars). No default — the operator MUST "
+            "name the source being rebuilt so a typo doesn't silently "
+            "replay the wrong archive into the live table."
+        )
+
+    log = structlog.get_logger("scripts.ops")
+    log.info("ops.stage.rebuild_from_archive.start", source=source)
+
+    from tpcore.ingestion.csv_archive_backends import select_backend
+    backend = select_backend()
+    body = backend.read_latest(source)
+    if body is None:
+        log.warning(
+            "ops.stage.rebuild_from_archive.no_archive",
+            source=source,
+            backend=type(backend).__name__,
+        )
+        return {
+            "source": source,
+            "rows_replayed": 0,
+            "skipped": True,
+            "reason": "no_archive_found",
+            "backend": type(backend).__name__,
+        }
+
+    # Decompress + parse the CSV in memory. The archives are
+    # gzip-compressed CSV (the LocalFSBackend wrote the file; the
+    # S3Backend uploaded the same gzip bytes); decompress→csv reader
+    # works identically against both bodies.
+    import csv as _csv
+    import gzip
+    import io
+    text = gzip.decompress(body).decode("utf-8", errors="replace")
+    reader = _csv.DictReader(io.StringIO(text))
+    rows = list(reader)
+
+    if source != "alpaca_daily_bars":
+        # Fail-loud rather than silently no-op on an unknown source —
+        # the operator may have typo'd or be asking for a not-yet-shipped
+        # rebuild path; either way the right answer is to surface the
+        # gap, not pretend to recover.
+        raise NotImplementedError(
+            f"rebuild_from_archive: source={source!r} has no shipped "
+            "upsert path. Currently shipped: alpaca_daily_bars."
+        )
+
+    # Replay into platform.prices_daily via the canonical idempotent
+    # upsert (mirrors tpcore.data.ingest_alpaca_bars.upsert_bars). The
+    # archive rows already passed physical-truth validation at write
+    # time, so this loop just normalises types and pushes through.
+    sql = """
+        INSERT INTO platform.prices_daily (
+            ticker, date, open, high, low, close, volume,
+            adjusted_close, delisted, delisting_date, source
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'alpaca')
+        ON CONFLICT (ticker, date) DO UPDATE SET
+            open = EXCLUDED.open,
+            high = EXCLUDED.high,
+            low = EXCLUDED.low,
+            close = EXCLUDED.close,
+            volume = EXCLUDED.volume,
+            adjusted_close = EXCLUDED.adjusted_close,
+            delisted = EXCLUDED.delisted,
+            delisting_date = EXCLUDED.delisting_date,
+            source = 'alpaca'
+    """
+    from datetime import datetime as _dt
+    args: list[tuple] = []
+    rejected = 0
+    for row in rows:
+        try:
+            ts = _dt.fromisoformat(row["date"].replace("Z", "+00:00"))
+            session_date = ts.date()
+            close = float(row["close"])
+            args.append((
+                row["ticker"],
+                session_date,
+                float(row["open"]),
+                float(row["high"]),
+                float(row["low"]),
+                close,
+                int(row["volume"]),
+                close,           # adjusted_close mirrors close (same convention as ingest)
+                False,           # delisted: rebuild path treats rows as currently active
+                None,            # delisting_date
+            ))
+        except (ValueError, KeyError, TypeError):
+            rejected += 1
+
+    if args:
+        async with pool.acquire() as conn:
+            await conn.executemany(sql, args)
+
+    log.info(
+        "ops.stage.rebuild_from_archive.done",
+        source=source,
+        rows_replayed=len(args),
+        rows_rejected=rejected,
+        backend=type(backend).__name__,
+    )
+    return {
+        "source": source,
+        "rows_replayed": len(args),
+        "rows_rejected": rejected,
+        "backend": type(backend).__name__,
+    }
+
+
 async def _stage_simulate_universe() -> dict[str, Any]:
     """Run scripts/simulate_universe.py as a subprocess and parse counts.
 
@@ -2791,6 +2935,16 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # running, bounded — uses HEAVY_STAGE_TIMEOUT_SEC. Operator-on-
     # demand only.
     ("ingest_tradier_csv",  lambda pool, cfg: (lambda: _stage_ingest_tradier_csv(pool, cfg)),    HEAVY_STAGE_TIMEOUT_SEC),
+    # rebuild_from_archive — replay the latest <source>_archive into
+    # the live DB via the canonical upsert. Catastrophic-recovery path
+    # for the R3 substrate migration (env-pluggable backend; works
+    # identically against local FS today and an S3-compatible bucket
+    # after Railway migration). Operator-on-demand:
+    # --stage rebuild_from_archive --param source=alpaca_daily_bars.
+    # NOT in --update; idempotent; bounded per-source. Heavy timeout
+    # because the alpaca_daily_bars archive holds ~50k rows/run × N
+    # historical archives — a full replay can move millions of rows.
+    ("rebuild_from_archive", lambda pool, cfg: (lambda: _stage_rebuild_from_archive(pool, cfg)),  HEAVY_STAGE_TIMEOUT_SEC),
 )
 KNOWN_STAGES: tuple[str, ...] = tuple(name for name, _, _ in _STAGE_SPECS)
 

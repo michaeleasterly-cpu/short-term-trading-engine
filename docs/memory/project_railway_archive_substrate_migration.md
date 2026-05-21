@@ -56,11 +56,41 @@ uncheckable/empty-archive shrinkage path now emits **WARN (non-green:
 persists `stale=True`), never silent OK** (FAIL>WARN>OK precedence,
 FAIL path byte-unchanged) — the "no fake-green" latent-bug fix. So
 the migration cutover is "set env + mount/bucket", not a code change
-under pressure. **The D2/R3 build itself remains the deferred blocker
-(NOT done) — built AT migration.**
+under pressure.
+
+**R3 — DEPLOYED 2026-05-21 (PR feat/csv-archive-pluggable-backend-r3,
+operator autonomous-lane directive "implement directly, ship"):**
+`tpcore/ingestion/csv_archive.py` now routes write/read through
+`tpcore.ingestion.csv_archive_backends.select_backend()`. Two
+backends: `LocalFSBackend` (the default — byte-identical to the
+prior local-only behaviour, every existing test stays green) and
+`S3Backend` (env-driven via `CSV_ARCHIVE_BACKEND=s3` +
+`CSV_ARCHIVE_S3_{ENDPOINT,BUCKET,KEY_ID,SECRET,REGION,SECURE}`). S3
+client: `minio>=7.2,<8` (chosen over boto3 for transitive-dep weight
+— single package, no awscli tree, natively works against ANY
+S3-compatible). Operator-on-demand `_stage_rebuild_from_archive`
+shipped (`scripts/ops.py`) replays the latest `<source>_archive` into
+`platform.prices_daily` via the canonical idempotent upsert; works
+identically against both backends. `railway.json` documents the env
+vars in `_csv_archive_env_vars`; `docs/OPERATIONS.md` has the
+rebuild runbook. **Railway cutover is now config (set env vars +
+provision bucket), not a code change.** Actual data-migration to the
+bucket is still a one-shot operator action at Railway re-enable time
+— NOT done in this PR (memory rule, don't build Railway infra until
+re-enable).
+
+**D2 — STILL PENDING (NOT done in PR feat/csv-archive-pluggable-
+backend-r3, separate follow-up).** Detection-rebase onto Postgres
+rolling-median remains the pre-Railway blocker. The current
+single-prior-CSV detector still works on local disk (where the
+archive is durable) and works correctly when reading from S3 (the
+backend's `list_archives` + `read_latest` are content-equivalent to
+the local glob) — but the original "single-prior is the wrong
+substrate even on the Mac" verdict stands. D2 is the next PR in this
+epic.
 
 **Migration trigger/sequencing:** re-base detection onto Postgres
-(D2) BEFORE Railway re-enable; the bucket (R3) wiring is part of the
-Railway migration epic. Tracked in `TODO.md` as a pre-Railway
-blocker. Don't build Railway infra until the operator re-enables
-Railway (memory rule, [[project_railway_hobby_tier]]).
+(D2) BEFORE Railway re-enable; bucket provisioning + env-var set is
+now a Railway-config task (R3 code is in). Tracked in `TODO.md` as a
+pre-Railway blocker. Don't build Railway infra until the operator
+re-enables Railway (memory rule, [[project_railway_hobby_tier]]).

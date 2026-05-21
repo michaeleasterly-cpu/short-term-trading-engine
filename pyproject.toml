@@ -30,6 +30,17 @@ dependencies = [
     "croniter>=2.0",
     "xlrd>=2.0",
     "anthropic>=0.100,<1",
+    # S3-compatible object-storage client for the R3 substrate migration
+    # (env-pluggable archive backend). Lazy-imported inside
+    # ``tpcore.ingestion.csv_archive_backends.S3Backend`` so the local-
+    # default code path pays zero import cost. Chosen over boto3 for
+    # transitive-dep weight: minio is a single package with no
+    # botocore/awscli/jmespath/s3transfer tail, and natively accepts an
+    # ``endpoint=`` arg — works against ANY S3-compatible service
+    # (Railway native object store, R2, Supabase Storage, MinIO, S3
+    # proper), which is exactly the R3 design's "S3-compatible bucket
+    # attached to the service".
+    "minio>=7.2,<8",
 ]
 
 [project.optional-dependencies]
