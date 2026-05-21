@@ -69,6 +69,12 @@ logging excluded; SELECT/FROM reads retained):
 
 ## Corrections (staged ECR artifacts)
 
+APPLIED 2026-05-21 via PR #210 (planner threading) + the accuracy-only
+validate-gate widening + canonical end-to-end ECR application. Catalyst
+and momentum now declare `earnings_events`. The staged artifact files
+have been removed from the repo root (the audit doc is the durable
+record of the change; the live SoT is `tpcore/engine_profile.py`).
+
 Both corrections derive from PRs landed on 2026-05-20 AFTER PR #171
 backfilled `data_dependencies` from the 2026-05-16 audit:
 
@@ -84,32 +90,26 @@ strictly post-audit drift that the existing drift sentinel
 
 ### catalyst — add `earnings_events`
 
-Staged ECR: `ecr_catalyst_data_dependencies_2026-05-20.txt` at the repo
-root. **Not applied** — the planner currently rejects MODIFY ECRs that
-carry `data_dependencies` (see Follow-up below).
-
-Planner output:
-
-```
-$ .venv/bin/python -m ops.engine_sdlc --ecr ecr_catalyst_data_dependencies_2026-05-20.txt
-ecr.parse_fail error="1 validation error for EngineChangeRequest
-  Value error, field(s) ['data_dependencies', 'need'] not valid for action MODIFY
-   [type=value_error, input_value={'action': <ECRAction.MOD...e audit captured in PR'}, input_type=dict]"
-ECR parse failed: …
-```
+APPLIED 2026-05-21 via `python -m ops.engine_sdlc --ecr
+ecr_catalyst_data_dependencies_2026-05-20.txt` (the canonical
+hook-respecting CLI). Post-apply
+`_PROFILE["catalyst"].data_dependencies` =
+`frozenset({"earnings_events", "prices_daily",
+"sec_insider_transactions"})` (verified in `tpcore/engine_profile.py`).
 
 ### momentum — add `earnings_events`
 
-Staged ECR: `ecr_momentum_data_dependencies_2026-05-20.txt` at the repo
-root. **Not applied** — same planner limitation. The legacy 12-1 path
-ignores `earnings_by_ticker`, but `_load_earnings_beats` itself executes
-the SQL every window load, so the dependency is real for any window
-context the live engine instantiates.
+APPLIED 2026-05-21 via `python -m ops.engine_sdlc --ecr
+ecr_momentum_data_dependencies_2026-05-20.txt` (same CLI). Post-apply
+`_PROFILE["momentum"].data_dependencies` =
+`frozenset({"earnings_events", "liquidity_tiers", "prices_daily"})`.
+The legacy 12-1 path ignores `earnings_by_ticker`, but
+`_load_earnings_beats` itself executes the SQL every window load, so
+the dependency is real for any window context the live engine
+instantiates.
 
-Both ECR files are shipped staged so the operator can apply them after
-the planner-extension follow-up below lands. Until then, the per-engine
-capital gate under-protects the `earnings_events`-dependent paths in
-catalyst and momentum.
+Both staged ECR artifact files have been deleted from the repo root
+(applied → no longer needed; this audit is the durable record).
 
 ## Follow-up: extend ECR MODIFY to thread `data_dependencies`
 
@@ -152,6 +152,13 @@ hook-respecting path — no hand-edit of `_PROFILE`.
 SHIPPED 2026-05-21 — `_MODIFY_KEYS` extended; `attach_ecr_context` +
 `_apply_modify` round-trip data_dependencies; drift test pins the
 contract.
+
+COMPLETE 2026-05-21 — Part 1 shipped in PR #210 (planner threading);
+Part 2 shipped in this PR (accuracy-only validate-gate + canonical
+end-to-end application via `python -m ops.engine_sdlc --ecr <file>`).
+The two staged ECR artifact files have been removed from the repo
+root; catalyst and momentum now declare `earnings_events` in
+`tpcore/engine_profile.py::_PROFILE`.
 
 ### Drift-prevention follow-up — source-match audit clockwork
 

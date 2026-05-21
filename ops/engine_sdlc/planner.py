@@ -975,6 +975,49 @@ def _apply_add(plan: TransitionPlan, root: Path, jn: _Journal) -> None:
             root, added_engine=engine, dispatch_order=int(order), jn=jn)
 
 
+def _is_accuracy_only_modify(ecr: EngineChangeRequest) -> bool:
+    """Spec §7 follow-up (2026-05-21, audit
+    docs/superpowers/audits/2026-05-20-engine-data-dependencies-
+    accuracy.md): an ACCURACY-ONLY MODIFY is one that corrects a
+    documentation drift (the EngineProfile.data_dependencies tuple
+    diverged from the engine's actual ``platform.<table>`` reads) — no
+    Lab dossier, no param tuning, no behaviour change. The wire-format
+    discriminator:
+
+        ecr.action == MODIFY
+        ecr.param_change is None
+        ecr.lab_dossier is None
+        ecr.gate_dsr is None
+        ecr.gate_cred is None
+        ecr.data_dependencies is not None   (at least one accuracy field
+                                              MUST be set — see below)
+
+    The ``need`` free-text is allowed alongside (it's the operator-
+    readable rationale, not a behaviour change). At least one of
+    ``data_dependencies`` / ``need`` must be set — a MODIFY ECR with
+    NOTHING set is rejected upstream by the action-key validator
+    (``_exactly_the_selected_action_fields``), and even if it slipped
+    through here a degenerate accept-noop is anti-pattern. We require
+    at least ``data_dependencies`` because ``need`` alone applies no
+    on-disk change — there would be nothing for ``_apply_modify`` to do.
+
+    Returns False (route to the existing param-change zero-trust gate)
+    when any param-tuning / lab-dossier field is set. Returns True only
+    when EXACTLY the accuracy-only shape is present.
+    """
+    if ecr.action is not ECRAction.MODIFY:
+        return False
+    if ecr.param_change is not None:
+        return False
+    if ecr.lab_dossier is not None:
+        return False
+    if ecr.gate_dsr is not None or ecr.gate_cred is not None:
+        return False
+    if ecr.data_dependencies is None:
+        return False  # need-only is a no-op; reject via param-change gate
+    return True
+
+
 def _validate_modify(plan: TransitionPlan,
                      ecr: EngineChangeRequest,
                      *, repo_root: Path | None = None,
@@ -994,7 +1037,39 @@ def _validate_modify(plan: TransitionPlan,
     inject the incumbent ``NewEngineDossier`` directly so the criteria
     can be exercised without touching the live backtests/ directory).
     See docs/superpowers/specs/2026-05-20-autonomous-lab-criteria.md.
+
+    Spec §7 follow-up (2026-05-21, audit
+    docs/superpowers/audits/2026-05-20-engine-data-dependencies-
+    accuracy.md): accuracy-only MODIFYs (``data_dependencies`` correction
+    with NO ``param_change`` / ``lab_dossier`` / ``gate_*``) bypass the
+    zero-trust Lab-dossier gate — there is no signal change to validate,
+    only a documentation drift to correct. The H-S3-6d lifecycle-
+    immutable guard STILL fires (every MODIFY plan with a lifecycle key
+    in sot_diff is rejected, accuracy-only or not). Discriminator:
+    ``_is_accuracy_only_modify(ecr)``.
     """
+    # H-S3-6d lifecycle-immutable guard — runs FIRST for BOTH MODIFY
+    # branches (accuracy-only AND param-change). A sot_diff that carries
+    # a lifecycle / allocator / dispatch_order / cadence key is a hard
+    # reject regardless of which MODIFY discriminator below the ECR
+    # matches. The structural invariant outranks the branch dispatch.
+    if plan.sot_diff and any(
+            kk in plan.sot_diff for kk in (
+                "lifecycle_state", "allocator_eligible",
+                "dispatch_order", "cadence")):
+        return _reject(ecr, "MODIFY plan carries a _PROFILE edit — "
+                            "lifecycle is immutable under MODIFY "
+                            "(H-S3-6d)")
+    # Accuracy-only MODIFY branch: no Lab dossier required. The
+    # _apply_modify path's data_dependencies rewriter is dedicated and
+    # CANNOT touch lifecycle/allocator/dispatch_order/cadence tokens
+    # (H-S3-6d preserved structurally — see _rewrite_profile_data_
+    # dependencies's docstring). Wrong-target is NOT a possible failure
+    # mode here: there is no Lab sidecar carrying a target_engine that
+    # could disagree with ecr.engine; the engine identifier on the ECR
+    # IS the target, and classify() already rejected absent / retired.
+    if _is_accuracy_only_modify(ecr):
+        return plan
     from ops.engine_sdlc._evidence import (
         EvidenceError,
         assert_identity_fresh,
@@ -1006,6 +1081,20 @@ def _validate_modify(plan: TransitionPlan,
         load_engine_dossier,
     )
     from ops.lab.run import PARAM_RANGES
+    # A MODIFY that reaches this branch carries a param-change or
+    # gate_* (or it would have routed through the accuracy-only branch
+    # above). The zero-trust gate REQUIRES the Lab dossier; ``None`` is
+    # a hard reject with a clear message — never propagate to
+    # ``load_labresult_sidecar`` which would TypeError on a None path
+    # (the prior implicit invariant relied on the operator checklist;
+    # making it explicit here closes a latent crash mode and gives a
+    # readable rejection instead of a stack trace).
+    if ecr.lab_dossier is None:
+        return _reject(
+            ecr, "MODIFY with param_change / gate_* requires a "
+                 "lab_dossier (the zero-trust Lab gate has nothing to "
+                 "load); accuracy-only MODIFYs (data_dependencies / "
+                 "need only) are the only MODIFY shape that may omit it")
     try:
         lr = load_labresult_sidecar(ecr.lab_dossier)
         # §5.4 / H-S3-6b: identity-freshness — a valid sidecar from a
@@ -1068,13 +1157,6 @@ def _validate_modify(plan: TransitionPlan,
             return _reject(
                 ecr, f"param {k!r} value mismatch: ECR={v!r} vs sidecar "
                      f"winning {want!r}")
-    if plan.sot_diff and any(
-            kk in plan.sot_diff for kk in (
-                "lifecycle_state", "allocator_eligible",
-                "dispatch_order", "cadence")):
-        return _reject(ecr, "MODIFY plan carries a _PROFILE edit — "
-                            "lifecycle is immutable under MODIFY "
-                            "(H-S3-6d)")
     return plan
 
 
@@ -1404,6 +1486,7 @@ __all__ = [
     "promote",
     "validate",
     "_apply_modify",
+    "_is_accuracy_only_modify",
     "_rewrite_profile_source",
     "_run_consistency_subprocess",
     "_staged_copytree",
