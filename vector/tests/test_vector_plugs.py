@@ -12,6 +12,8 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 import pandas as pd
+import pytest
+from pydantic import ValidationError
 
 from tpcore.aar.models import ExitReason
 from vector.models import (
@@ -94,7 +96,7 @@ def test_setup_detection_finds_candidate_when_all_gates_pass() -> None:
     c = candidates[0]
     assert c.ticker == "AAA"
     assert c.pullback_or_breakout == "breakout_above_50ma"
-    assert c.swing_score >= 30  # technical + catalyst > 30 (sentiment 0)
+    assert c.swing_score >= 30  # technical + earnings > 30 (sentiment 0)
 
 
 def test_setup_detection_rejects_when_revenue_below_floor() -> None:
@@ -143,7 +145,7 @@ def _candidate(*, last_close: Decimal = Decimal("100"), vix: float | None = 18.0
         as_of=date(2026, 5, 1),
         swing_score=70.0,
         technical=35.0,
-        catalyst=25.0,
+        earnings=25.0,
         sentiment=10.0,
         last_close=last_close,
         sma_50=Decimal("95"),
@@ -310,6 +312,38 @@ def test_capital_gate_is_graduated_thresholds() -> None:
     assert VectorCapitalGate.is_graduated(
         GraduationStats(n_trades=GRAD_MIN_TRADES, win_rate=GRAD_MIN_WIN_RATE, avg_return=GRAD_MIN_AVG_RETURN)
     )
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Vocabulary rename guard — SetupCandidate uses ``earnings``, not ``catalyst``
+# (catalyst/-engine namespace collision; see PR refactor brief 2026-05-21).
+# ConfigDict(extra="forbid") is what enforces the rejection — this test
+# captures the actual rejection so a future contributor cannot quietly
+# resurrect the old vocabulary without burning the suite.
+# ────────────────────────────────────────────────────────────────────────────
+
+
+def test_setup_candidate_rejects_legacy_catalyst_field() -> None:
+    """Resurrecting the legacy ``catalyst=`` kwarg must be a loud
+    ValidationError, not a silent extra-field acceptance."""
+    base_kwargs = dict(
+        ticker="AAA",
+        as_of=date(2026, 5, 1),
+        swing_score=70.0,
+        technical=35.0,
+        sentiment=10.0,
+        last_close=Decimal("100"),
+        sma_50=Decimal("95"),
+        sma_200=Decimal("80"),
+        avg_volume=5_000_000,
+    )
+    # Sanity — the new vocab succeeds.
+    ok = SetupCandidate(**base_kwargs, earnings=25.0)
+    assert ok.earnings == 25.0
+    # The legacy field name is rejected by extra="forbid".
+    with pytest.raises(ValidationError) as exc:
+        SetupCandidate(**base_kwargs, catalyst=25.0)
+    assert "catalyst" in str(exc.value)
 
 
 # ────────────────────────────────────────────────────────────────────────────

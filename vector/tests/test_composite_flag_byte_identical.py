@@ -108,21 +108,21 @@ def _make_synthetic_context() -> bt.VectorWindowContext:
                     "revenue": Decimal("600000000"),
                 })
         fundamentals[t] = rows
-    # Catalysts: one EARNINGS_BEAT per quarter centered mid-month so
+    # Earnings: one EARNINGS_BEAT per quarter centered mid-month so
     # the ±5d AND-gate window catches at least one sim_date per quarter.
-    catalysts: dict[str, list[tuple[date, float]]] = {}
+    earnings: dict[str, list[tuple[date, float]]] = {}
     for t in ("AAA", "BBB", "CCC"):
-        catalyst_dates: list[tuple[date, float]] = []
+        earnings_dates: list[tuple[date, float]] = []
         for y in (2023, 2024):
             for q_month in (3, 6, 9, 12):
-                catalyst_dates.append((date(y, q_month, 15), 0.08))
-        catalysts[t] = catalyst_dates
+                earnings_dates.append((date(y, q_month, 15), 0.08))
+        earnings[t] = earnings_dates
     return bt.VectorWindowContext(
         panels=panels,
         spy_panel=spy,
         spy_rv_pct=None,
         fundamentals=fundamentals,
-        catalysts=catalysts,
+        earnings=earnings,
         tier_round_trip_costs={},
         eligible_tickers=["AAA", "BBB", "CCC"],
         start=start,

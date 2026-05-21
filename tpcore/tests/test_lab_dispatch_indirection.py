@@ -31,7 +31,7 @@ pytestmark = pytest.mark.xdist_group("ops_shadow")
 # live under the docs/ plans tree (#252 docs-to-reality).
 _T0_PARAM_RANGES_KEYSETS: dict[str, list[str]] = {
     "reversion": ["max_hold_days", "stop_pct", "volume_climax_multiplier", "z_threshold"],
-    "vector": ["catalyst_window_days", "de_ceiling", "pb_ceiling", "stop_pct", "swing_score_threshold"],
+    "vector": ["de_ceiling", "earnings_window_days", "pb_ceiling", "stop_pct", "swing_score_threshold"],
     "momentum": ["hold_days", "lookback_days", "skip_days", "top_decile_pct"],
 }
 

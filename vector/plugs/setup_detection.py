@@ -6,7 +6,7 @@ Scope (plan §4.3):
 2. **Three-gate model**:
    * Value & Quality — `_check_value_quality`. P/B < 1.5, D/E < 3, revenue
      > $500M, last close above 200-SMA *or* recently crossed back above.
-   * Catalyst — `_check_catalyst`. *MVP proxy*: YoY net-income growth ≥ 5%
+   * Earnings — `_check_earnings`. *MVP proxy*: YoY net-income growth ≥ 5%
      (the plan calls for EPS-beats-estimate from FMP's earnings_surprise
      endpoint plus raised-guidance NLP; both deferred — see CALLOUTS below).
    * Technical Trigger — `_check_technical_trigger`. Pullback to 10-/20-MA
@@ -14,7 +14,7 @@ Scope (plan §4.3):
      above 50-MA on volume > 1.5× avg.
 3. **Trend filter** — SPY > 50-MA AND 50-MA > 200-MA.
 4. **VIX filter** — VIX < 28 (above this level: no new entries).
-5. **Score** — Technical (0–40) + Catalyst (0–35) + Sentiment (0–25);
+5. **Score** — Technical (0–40) + Earnings (0–35) + Sentiment (0–25);
    ≥ 65 strong, 50–64 weak, < 50 no trade.
 
 CALLOUTS (deferred to follow-up tasks):
@@ -61,7 +61,7 @@ PB_CEILING = Decimal("1.5")
 DE_CEILING = Decimal("3")
 REVENUE_FLOOR = Decimal("500000000")  # $500M
 
-# Catalyst gate (MVP proxy)
+# Earnings gate (MVP proxy)
 EARNINGS_GROWTH_FLOOR_YOY = 0.05  # +5% YoY net income
 
 # Technical trigger
@@ -174,7 +174,7 @@ def _check_value_quality(
     return True, None
 
 
-def _check_catalyst(fundamentals: dict[str, Any] | None) -> tuple[bool, float | None, str | None]:
+def _check_earnings(fundamentals: dict[str, Any] | None) -> tuple[bool, float | None, str | None]:
     """MVP proxy: positive YoY net-income growth ≥ floor.
 
     Returns (pass, growth_pct_or_None, reason_if_fail).
@@ -231,7 +231,7 @@ def _technical_score(stats: _PanelStats, trigger: str | None) -> float:
     return min(40.0, base + posture)
 
 
-def _catalyst_score(growth_yoy: float | None) -> float:
+def _earnings_score(growth_yoy: float | None) -> float:
     """0–35 — proportional to YoY earnings growth (capped). MVP proxy."""
     if growth_yoy is None or growth_yoy < EARNINGS_GROWTH_FLOOR_YOY:
         return 0.0
@@ -311,7 +311,7 @@ class VectorSetupDetection(BaseEnginePlug):
         diag = FilterDiagnostics(
             universe_total=len(self._universe),
             gate1_value_blocked=0,
-            gate2_catalyst_blocked=0,
+            gate2_earnings_blocked=0,
             gate3_technical_blocked=0,
         )
 
@@ -353,9 +353,9 @@ class VectorSetupDetection(BaseEnginePlug):
             if not ok_vq:
                 diag.gate1_value_blocked = (diag.gate1_value_blocked or 0) + 1
                 continue
-            ok_cat, growth, cat_reason = _check_catalyst(fundamentals)
+            ok_cat, growth, cat_reason = _check_earnings(fundamentals)
             if not ok_cat:
-                diag.gate2_catalyst_blocked = (diag.gate2_catalyst_blocked or 0) + 1
+                diag.gate2_earnings_blocked = (diag.gate2_earnings_blocked or 0) + 1
                 continue
             ok_tech, trigger = _check_technical_trigger(df, stats)
             if not ok_tech:
@@ -363,7 +363,7 @@ class VectorSetupDetection(BaseEnginePlug):
                 continue
 
             tech_score = _technical_score(stats, trigger)
-            cat_score = _catalyst_score(growth)
+            cat_score = _earnings_score(growth)
             sent_score = _sentiment_score()
             total = tech_score + cat_score + sent_score
             if total < self._score_floor_weak:
@@ -381,7 +381,7 @@ class VectorSetupDetection(BaseEnginePlug):
                     as_of=as_of,
                     swing_score=float(total),
                     technical=float(tech_score),
-                    catalyst=float(cat_score),
+                    earnings=float(cat_score),
                     sentiment=float(sent_score),
                     last_close=stats.last_close,
                     sma_50=Decimal(str(stats.sma_50)),

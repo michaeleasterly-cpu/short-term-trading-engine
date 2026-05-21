@@ -14,7 +14,7 @@ import pytest
 # live under the docs/ plans tree (#252 docs-to-reality).
 _T0_PARAM_RANGES_KEYSETS: dict[str, list[str]] = {
     "reversion": ["max_hold_days", "stop_pct", "volume_climax_multiplier", "z_threshold"],
-    "vector": ["catalyst_window_days", "de_ceiling", "pb_ceiling", "stop_pct", "swing_score_threshold"],
+    "vector": ["de_ceiling", "earnings_window_days", "pb_ceiling", "stop_pct", "swing_score_threshold"],
     "momentum": ["hold_days", "lookback_days", "skip_days", "top_decile_pct"],
 }
 
@@ -35,7 +35,7 @@ _T0_PARAM_RANGES_FULL: dict[str, dict[str, tuple]] = {
     "vector": {
         "pb_ceiling": (1.5, 3.5, "float"),
         "de_ceiling": (1.5, 4.0, "float"),
-        "catalyst_window_days": (3, 10, "int"),
+        "earnings_window_days": (3, 10, "int"),
         "swing_score_threshold": (55.0, 75.0, "float"),
         "stop_pct": (0.04, 0.10, "float"),
     },

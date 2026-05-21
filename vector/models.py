@@ -57,10 +57,10 @@ class SetupCandidate(BaseModel):
     as_of: date
     swing_score: float = Field(
         ge=0, le=100,
-        description="Composite of Technical (0–40) + Catalyst (0–35) + Sentiment (0–25).",
+        description="Composite of Technical (0–40) + Earnings (0–35) + Sentiment (0–25).",
     )
     technical: float = Field(ge=0, le=40)
-    catalyst: float = Field(ge=0, le=35)
+    earnings: float = Field(ge=0, le=35)
     sentiment: float = Field(ge=0, le=25)
 
     last_close: Decimal
@@ -78,7 +78,7 @@ class SetupCandidate(BaseModel):
     )
     earnings_growth_yoy: float | None = Field(
         default=None,
-        description="YoY net-income growth used as MVP catalyst proxy (plan §4.3 calls "
+        description="YoY net-income growth used as MVP earnings proxy (plan §4.3 calls "
         "for EPS-beats-estimate; deferred to FMP earnings_surprise endpoint).",
     )
     pullback_or_breakout: str | None = Field(
