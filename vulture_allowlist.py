@@ -538,3 +538,12 @@ pair_pre_registered  # unused variable (tpcore/lab/llm_finder/tool_sandbox.py)
 # Task #25 §6 — fama_macbeth's per-session loop key is the dict key;
 # vulture sees `session` unused because we only iterate ticker_returns.
 session  # unused variable (tpcore/lab/llm_finder/tool_sandbox.py)
+
+# Task #25 T9 — test_llm_edge_finder_sdk.py uses inline FakePool/FakeConn
+# stubs to satisfy run_finder's asyncpg API surface; vulture sees the
+# methods as unused because the agent calls them indirectly via the
+# pool.acquire() context manager. Same idiom as run_writer/snapshot tests.
+execute  # unused method (ops/tests/test_llm_edge_finder_sdk.py)
+fetch  # unused method (ops/tests/test_llm_edge_finder_sdk.py)
+fetchrow  # unused method (ops/tests/test_llm_edge_finder_sdk.py)
+acquire  # unused method (ops/tests/test_llm_edge_finder_sdk.py)
