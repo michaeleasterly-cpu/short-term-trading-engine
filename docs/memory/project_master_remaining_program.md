@@ -208,10 +208,25 @@ HONEST FAILURES.** All four spec'd Lab candidates from the
   inappropriate** for defensive engines.
 - Catalyst event-confirmed insider-cluster drift
   (`catalyst_insider_drift`, `event_confirmation_mode=positive_beat_30d`):
-  **probe IN-FLIGHT 2026-05-21**, last shot before the wave is
-  fully exhausted.
+  **FAILED 2026-05-21**. DSR=0.0000, credibility=45, held-back
+  n_trades=1 (vs gate ≥150). Crucially: the legacy `off` arm ALSO
+  FAILS (n=1 held-back trade) — the underlying catalyst engine
+  itself does not currently pass; the variant cannot improve on a
+  non-viable base. Root cause: 15-ticker `CATALYST_TEST_UNIVERSE` ×
+  cluster gate floors (≥3 distinct insiders + min aggregate USD)
+  produces too few eligible events. 80 trials spent →
+  `lab_trial_ledger.catalyst` cumulative = 80.
 - Momentum vol-managed 12-1 + earnings overlay: DEFER per TODO
   (slowest DSR-accrual cadence; lowest impact×prob/effort).
+
+**WAVE EXHAUSTED 4/4.** All four spec'd deep-research candidates have
+now failed the sacred gate. The common signature is signal sparsity
+under the chosen test universe / window — matches the standing
+CLAUDE.md note "all engines currently FAIL the DSR/credibility gate —
+signal strength, not data quality, is the binding constraint."
+Every subsequent candidate against any of the four targets faces a
+strictly harder DSR-deflated gate now (sentinel 40, catalyst 80
+cumulative as of 2026-05-21; vector + reversion previously).
 
 **Strategic open question:** Lab-evaluability for defensive engines
 needs a re-frame — three honest paths (1) declare defensive engines
