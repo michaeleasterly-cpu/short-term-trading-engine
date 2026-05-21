@@ -311,6 +311,22 @@ ignore = ["E501"]
 # file ignore is the correct form (mirrors every SP-B/SP-D/SP-E/SP-F
 # char-test precedent above) — never an inline ``# noqa: SLF001``.
 "tests/test_lane_service.py" = ["SLF"]
+# Wave-1 deterministic self-heal validation cascade (D6..D10 — spec
+# docs/superpowers/specs/2026-05-21-deterministic-self-heal-coverage-
+# expansion-design.md). The test pins the cascade dispatch + the
+# parse-helper + the dedupe-stage shape by NAMING ``scripts/ops.py``-
+# private symbols (``_stage_data_validation``, ``_parse_failed_check_names``,
+# ``_stage_dedupe_monotone``, ``_OFF_CYCLE_STAGES``,
+# ``_load_daily_bars_config``, ``_market_open_block_reason``,
+# ``_per_feed_tripwire``, ``_self_heal_failed_stages``,
+# ``_auto_cascade_coverage_collapse``, ``_STAGE_SPECS``) — that IS
+# the test's purpose (it monkeypatches the live pipeline down to a
+# minimal data_validation + cascade-target harness so the dispatch
+# decision can be observed per row). Engine-lane-module-private (NOT
+# tpcore-private) access; the scoped per-file ignore is the correct
+# form (mirrors the daily_bars coverage_collapse cascade precedent
+# immediately above) — never an inline ``# noqa: SLF001``.
+"tests/test_validation_failures_auto_cascade_wave1.py" = ["SLF"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

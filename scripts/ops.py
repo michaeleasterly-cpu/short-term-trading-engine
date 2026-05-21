@@ -2174,6 +2174,128 @@ async def _stage_classify_tickers(
     return {str(k): int(v) for k, v in stats.items()}
 
 
+async def _stage_dedupe_monotone(
+    pool: asyncpg.Pool, cfg: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """D7 — clean rogue duplicate rows on monotone-watched tables.
+
+    Per spec §4 ANSWERED Q3: dedupe rule is **latest event_date wins**,
+    tiebreaker on latest ``recorded_at``. The earnings_events table is
+    keyed on ``(ticker, event_date, event_type)`` and sec_insider on the
+    ``ticker, filing_date, insider_name, transaction_type, shares``
+    uniqueness key — under those constraints rogue rows are only
+    possible if the constraint was ever dropped or bulk-loaded around.
+    The stage acts as a safety net: scans the dedupe-key groups, keeps
+    the row with the latest ``recorded_at`` per group, deletes the rest.
+
+    ``cfg`` knobs (all optional):
+        * ``table``: if provided, restrict to one of
+          ``platform.earnings_events`` or
+          ``platform.sec_insider_transactions``. Default is BOTH.
+        * ``dry_run``: bool — when True, count rogues but emit no
+          DELETE. Default False.
+
+    Returns ``{table: {found: int, deleted: int}}`` — telemetry for the
+    cascade. ``found == 0`` is the steady-state expectation.
+
+    The stage is idempotent and side-effect-free when no rogues exist.
+    It is wired into ``_auto_cascade_validation_failures`` for D7 and
+    can also be invoked standalone via the ops CLI for operator-driven
+    audits.
+    """
+    log = structlog.get_logger("scripts.ops")
+    cfg = cfg or {}
+    only_table = cfg.get("table")
+    dry_run = bool(cfg.get("dry_run", False))
+
+    # Per-table dedupe specs:
+    #   key_cols       — the equality columns defining "same row"
+    #   table          — qualified table name
+    #   tiebreaker     — recorded_at (latest wins; spec §4 Q3)
+    specs: list[dict[str, Any]] = [
+        {
+            "name": "earnings_events",
+            "table": "platform.earnings_events",
+            "key_cols": ["ticker", "event_date", "event_type"],
+        },
+        {
+            "name": "sec_insider_transactions",
+            "table": "platform.sec_insider_transactions",
+            "key_cols": [
+                "ticker", "filing_date", "insider_name",
+                "transaction_type", "shares",
+            ],
+        },
+    ]
+
+    out: dict[str, dict[str, int]] = {}
+
+    for spec in specs:
+        if only_table is not None and only_table != spec["table"]:
+            continue
+        key_csv = ", ".join(spec["key_cols"])
+        # Count rogues: rows beyond the per-group latest recorded_at.
+        count_sql = f"""
+            WITH ranked AS (
+                SELECT ctid,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY {key_csv}
+                           ORDER BY recorded_at DESC, ctid DESC
+                       ) AS rn
+                FROM {spec["table"]}
+            )
+            SELECT COUNT(*) AS rogues FROM ranked WHERE rn > 1
+        """
+        delete_sql = f"""
+            WITH ranked AS (
+                SELECT ctid,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY {key_csv}
+                           ORDER BY recorded_at DESC, ctid DESC
+                       ) AS rn
+                FROM {spec["table"]}
+            )
+            DELETE FROM {spec["table"]} t
+            USING ranked r
+            WHERE t.ctid = r.ctid AND r.rn > 1
+        """
+        async with pool.acquire() as conn:
+            try:
+                rogues = await conn.fetchval(count_sql) or 0
+            except Exception as exc:  # noqa: BLE001 — never crash the cycle
+                log.warning(
+                    "ops.stage.dedupe_monotone.count_failed",
+                    table=spec["table"], error=str(exc),
+                )
+                out[spec["name"]] = {"found": -1, "deleted": 0}
+                continue
+            rogues = int(rogues)
+            deleted = 0
+            if rogues > 0 and not dry_run:
+                try:
+                    res = await conn.execute(delete_sql)
+                    # asyncpg returns "DELETE <N>"; parse the trailing N.
+                    try:
+                        deleted = int(res.split()[-1])
+                    except (ValueError, IndexError):
+                        deleted = rogues
+                except Exception as exc:  # noqa: BLE001
+                    log.error(
+                        "ops.stage.dedupe_monotone.delete_failed",
+                        table=spec["table"], error=str(exc),
+                    )
+                    out[spec["name"]] = {"found": rogues, "deleted": 0}
+                    continue
+            out[spec["name"]] = {"found": rogues, "deleted": deleted}
+            log.info(
+                "ops.stage.dedupe_monotone.scanned",
+                table=spec["table"], found=rogues, deleted=deleted,
+                dry_run=dry_run,
+            )
+
+    return out
+
+
 async def _stage_delist_stale(pool: asyncpg.Pool) -> dict[str, Any]:
     """Auto-promote stale SPAC / fund tickers to ``delisted=true``.
 
@@ -3131,8 +3253,20 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # because the alpaca_daily_bars archive holds ~50k rows/run × N
     # historical archives — a full replay can move millions of rows.
     ("rebuild_from_archive", lambda pool, cfg: (lambda: _stage_rebuild_from_archive(pool, cfg)),  HEAVY_STAGE_TIMEOUT_SEC),
+    # D7 — dedupe rogue rows on monotone-watched tables. NOT in the
+    # default daily cycle; invoked by the validation cascade
+    # (``_auto_cascade_validation_failures``) when a *_monotone check
+    # reds, and operator-callable via the ops CLI for audits.
+    ("dedupe_monotone",     lambda pool, cfg: (lambda: _stage_dedupe_monotone(pool, cfg)),       STAGE_TIMEOUT_SEC),
 )
 KNOWN_STAGES: tuple[str, ...] = tuple(name for name, _, _ in _STAGE_SPECS)
+# Stages that are NOT part of the default daily ``cmd_update`` cycle —
+# they are only invoked on-demand (operator CLI) or by the auto-cascade.
+# Keeps the daily cycle bounded; new self-heal stages live here.
+_OFF_CYCLE_STAGES: frozenset[str] = frozenset({
+    "rebuild_from_archive",
+    "dedupe_monotone",
+})
 
 # Reasons (from INGESTION_FAILED.data->>'reason' or exception_type) that
 # we'll auto-retry exactly once after the main --update pipeline finishes.
@@ -3163,6 +3297,89 @@ _RETRYABLE_FAILURE_REASONS: frozenset[str] = frozenset({
 # failures (auth, schema drift) need different handling and are left
 # alone here.
 _DAILY_BARS_COVERAGE_COLLAPSE_TOKEN: str = "coverage collapse"
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Wave-1 deterministic self-heal cascade (D6..D10) — see
+# docs/superpowers/specs/2026-05-21-deterministic-self-heal-coverage-expansion-design.md
+# ─────────────────────────────────────────────────────────────────────────
+
+# Discriminator token (lowercased) that identifies a data_validation
+# stage failure. The exact message raised by ``_stage_data_validation``
+# is "validation suite failed: [<check_name>, …]". Matched case-insensitively
+# against StageResult.error so a validation-suite RuntimeError triggers the
+# D6 cascade.
+_VALIDATION_SUITE_FAILED_TOKEN: str = "validation suite failed"
+
+# D6 — canonical refresh stage for each known validation check name.
+# When ``data_validation`` reds on a check listed here, the cascade
+# dispatches the named stage with the listed params. ``skip_guard_days=0``
+# forces the refresh past the stage's own freshness skip-guard so the
+# cascade can actually heal in the same cycle. Checks NOT in this map are
+# left to the LLM-side backstop (the long-tail per the spec §0).
+#
+# D7 dedupe is wired through a separate stage (``_stage_dedupe_monotone``)
+# because monotone violations have a distinct recovery shape (delete-then-
+# re-pull); the dedupe stage chains a canonical refresh on success.
+_VALIDATION_CASCADE_MAP: dict[str, tuple[str, dict[str, Any]]] = {
+    # D6 — completeness checks → canonical refresh stages
+    "fundamentals_quarterly_completeness": (
+        "fundamentals_refresh",
+        {"skip_guard_days": 0},
+    ),
+    "corporate_actions_completeness": (
+        "corporate_actions",
+        {"skip_guard_days": 0},
+    ),
+    # D9 — liquidity-tier ticker missing → tier_refresh with skip_guard=0
+    "liquidity_tiers_completeness": (
+        "tier_refresh",
+        {"skip_guard_days": 0},
+    ),
+    "liquidity_tiers_freshness": (
+        "tier_refresh",
+        {"skip_guard_days": 0},
+    ),
+    # D10 — ticker classifications drift → classify_tickers force re-pull
+    "ticker_classifications_coverage": (
+        "classify_tickers",
+        {"force": True, "skip_guard_days": 0},
+    ),
+    # D6 — earnings completeness → canonical earnings_refresh
+    "earnings_events_freshness": (
+        "earnings_refresh",
+        {"skip_guard_days": 0},
+    ),
+    # D6 — SEC filings → canonical refresh
+    "sec_filings_freshness": (
+        "sec_filings",
+        {"skip_guard_days": 0},
+    ),
+}
+
+# D7 monotone violations → dedupe-then-refresh. The dedupe stage runs
+# FIRST (cleans rogue rows per the spec rule), then the canonical refresh
+# stage is invoked to re-pull truncated history.
+_MONOTONE_CASCADE_MAP: dict[str, tuple[str, str, dict[str, Any]]] = {
+    # check_name → (dedupe_target_table, refresh_stage, refresh_params)
+    "earnings_events_monotone": (
+        "platform.earnings_events",
+        "earnings_refresh",
+        {"skip_guard_days": 0},
+    ),
+    "sec_insider_monotone": (
+        "platform.sec_insider_transactions",
+        "sec_filings",
+        {"skip_guard_days": 0},
+    ),
+}
+
+# D8 — macro_indicators_completeness fires when one or more FRED series
+# have a per-publication-date gap. The cascade resolves the targeted
+# indicator list + lookback via ``compute_macro_repair_targets`` and
+# routes through ``_per_indicator_fred_repull`` (NOT the full macro
+# stage — the spec calls for a per-indicator targeted re-pull).
+_MACRO_COMPLETENESS_CHECK: str = "macro_indicators_completeness"
 
 
 # Live SIP-availability probe. Single GET against the Alpaca data
@@ -3417,6 +3634,11 @@ async def cmd_update(
             "data_validation", "forensics", "reconcile",
         ):
             continue
+        # Off-cycle stages (operator-on-demand or cascade-only) are
+        # skipped by the daily ``cmd_update`` loop. ``only`` overrides
+        # this — passing ``only={"dedupe_monotone"}`` runs it.
+        if only is None and name in _OFF_CYCLE_STAGES:
+            continue
         result = await _run_stage(
             name,
             factory_builder(pool, daily_bars_config),
@@ -3454,6 +3676,16 @@ async def cmd_update(
     # other RuntimeError modes need different handling).
     if not dry_run:
         await _auto_cascade_coverage_collapse(
+            summary, pool, daily_bars_config, log=log, db_log=db_log,
+        )
+
+    # Wave-1 deterministic self-heal cascade (D6..D10) — parse the
+    # data_validation red-check list + dispatch the canonical refresh
+    # per check. See ``_auto_cascade_validation_failures`` docstring +
+    # docs/superpowers/specs/2026-05-21-deterministic-self-heal-coverage-
+    # expansion-design.md.
+    if not dry_run:
+        await _auto_cascade_validation_failures(
             summary, pool, daily_bars_config, log=log, db_log=db_log,
         )
 
@@ -3741,6 +3973,397 @@ async def _auto_cascade_coverage_collapse(
         # One-shot: do not iterate beyond the first match. (Only one
         # `daily_bars` entry exists per cmd_update cycle by manifest.)
         return
+
+
+def _parse_failed_check_names(error_text: str | None) -> list[str]:
+    """Extract failed check names from a data_validation RuntimeError.
+
+    ``_stage_data_validation`` raises:
+        RuntimeError(f"validation suite failed: {failed_names}")
+    where ``failed_names`` is a Python ``list[str]`` repr. We use a
+    permissive token extraction (single-quoted names) rather than
+    ast.literal_eval — keeps the parser robust to the python repr's
+    own punctuation drift and tolerant of truncation. Returns the empty
+    list if the token can't be parsed, which is the safe degrade (the
+    cascade is a NO-OP rather than mis-routing).
+    """
+    import re
+    if not error_text:
+        return []
+    if _VALIDATION_SUITE_FAILED_TOKEN not in error_text.lower():
+        return []
+    # Capture quoted names. The repr emits 'fundamentals_quarterly_completeness'
+    # with single quotes; allow double-quotes too for resilience.
+    names = re.findall(r"['\"]([a-z][a-z0-9_]+)['\"]", error_text)
+    # Drop duplicates while preserving order — same check name shouldn't
+    # appear twice but be defensive.
+    out: list[str] = []
+    seen: set[str] = set()
+    for n in names:
+        if n not in seen:
+            out.append(n)
+            seen.add(n)
+    return out
+
+
+async def _auto_cascade_validation_failures(
+    summary: UpdateSummary,
+    pool: asyncpg.Pool,
+    daily_bars_config: dict[str, Any],
+    *,
+    log: structlog.stdlib.BoundLogger,
+    db_log,
+) -> None:
+    """Deterministic auto-cascade for ``data_validation`` red checks (D6..D10).
+
+    Spec: ``docs/superpowers/specs/2026-05-21-deterministic-self-heal-coverage-
+    expansion-design.md``. Wave-1 rows:
+
+    * **D6** validation-suite-partial-failure → parse the red-check list,
+      dispatch the canonical refresh stage per check.
+    * **D7** ``*_monotone`` red → run ``dedupe_monotone`` stage first
+      (cleans rogue rows per spec §4 Q3: latest event_date, recorded_at
+      tiebreaker) then the canonical refresh stage.
+    * **D8** ``macro_indicators_completeness`` red → per-indicator
+      targeted FRED re-pull via ``per_indicator_fred_repull`` for the
+      affected series + window from ``compute_macro_repair_targets``.
+    * **D9** ``liquidity_tiers_completeness`` red → ``tier_refresh``
+      with ``skip_guard_days=0``. The targeted-ticker list from
+      ``compute_liquidity_tiers_repair_targets`` is carried in the
+      cascade telemetry (advisory until tier_refresh gains --tickers).
+    * **D10** ``ticker_classifications_coverage`` red → ``classify_tickers``
+      with ``force=True, skip_guard_days=0``.
+
+    Logged events (engine=ops, run_id = summary.run_id):
+
+    * ``INGESTION_AUTO_RECOVERED_VALIDATION`` — D6 generic completeness
+      recovery (fundamentals/corp-actions/earnings/sec/etc.).
+    * ``INGESTION_AUTO_RECOVERED_MONOTONE`` — D7 dedupe-then-refresh.
+    * ``INGESTION_AUTO_RECOVERED_MACRO_GAP`` — D8 per-indicator pull.
+    * ``INGESTION_AUTO_RECOVERED_TIER`` — D9 liquidity tier refresh.
+    * ``INGESTION_AUTO_RECOVERED_CLASSIFICATION`` — D10 classify-tickers.
+    * ``INGESTION_AUTO_RECOVERY_VALIDATION_SKIPPED`` — failed-check name
+      not in the cascade map (long-tail; LLM-side backstop catches it).
+
+    Behaviour:
+
+    * One-shot per check name within a cycle (no loops).
+    * Does NOT re-run ``data_validation`` after recovery — the next
+      cmd_update cycle's validation suite is the authoritative gate.
+    * Cascade NEVER raises into the caller; logs + returns on any
+      sub-cascade error so the daemon stays alive (matches the
+      ``_auto_cascade_coverage_collapse`` invariant).
+    """
+    # Locate the data_validation FAILED entry, if any.
+    val_idx: int | None = None
+    val_result: StageResult | None = None
+    for i, result in enumerate(summary.stages):
+        if result.name != "data_validation":
+            continue
+        if result.status != "FAILED":
+            continue
+        if _VALIDATION_SUITE_FAILED_TOKEN not in (result.error or "").lower():
+            continue
+        val_idx = i
+        val_result = result
+        break
+    if val_idx is None or val_result is None:
+        return
+
+    failed_checks = _parse_failed_check_names(val_result.error)
+    if not failed_checks:
+        log.warning(
+            "ops.auto_cascade.validation.parse_failed",
+            error=(val_result.error or "")[:240],
+        )
+        return
+
+    spec_by_name = {n: (n, fb, to) for n, fb, to in _STAGE_SPECS}
+
+    await db_log.log(
+        "INGESTION_AUTO_RECOVERY_START",
+        f"validation cascade: {len(failed_checks)} red check(s)",
+        severity="INFO",
+        data={
+            "stage": "data_validation",
+            "cascade_mode": "validation_failures",
+            "failed_checks": failed_checks,
+        },
+    )
+    log.info(
+        "ops.auto_cascade.validation.start",
+        failed_checks=failed_checks,
+    )
+
+    handled: list[str] = []
+    skipped: list[str] = []
+
+    for check_name in failed_checks:
+        # D8 — macro: per-indicator targeted re-pull (NOT the full
+        # macro_indicators stage; per spec §1 D8).
+        if check_name == _MACRO_COMPLETENESS_CHECK:
+            try:
+                from tpcore.fred import per_indicator_fred_repull
+                from tpcore.quality.validation.checks.macro_indicators_completeness import (
+                    compute_macro_repair_targets,
+                )
+                indicators, lookback_days = await compute_macro_repair_targets(pool)
+                if not indicators:
+                    log.info(
+                        "ops.auto_cascade.macro_gap.no_targets",
+                        check=check_name,
+                    )
+                    skipped.append(check_name)
+                    continue
+                start_d: date | None = None
+                if lookback_days > 0:
+                    start_d = date.today() - timedelta(days=int(lookback_days))  # noqa: DTZ011
+                results = await per_indicator_fred_repull(
+                    pool, indicators, start=start_d,
+                )
+                await db_log.log(
+                    "INGESTION_AUTO_RECOVERED_MACRO_GAP",
+                    (
+                        f"macro per-indicator re-pull: "
+                        f"{len(indicators)} indicator(s) "
+                        f"(lookback={lookback_days}d)"
+                    ),
+                    severity="INFO",
+                    data={
+                        "check": check_name,
+                        "indicators": indicators,
+                        "lookback_days": int(lookback_days),
+                        "per_indicator_rows": results,
+                    },
+                )
+                log.info(
+                    "ops.auto_cascade.macro_gap.recovered",
+                    indicators=indicators,
+                    rows_per_indicator=results,
+                )
+                handled.append(check_name)
+            except Exception as exc:  # noqa: BLE001 — never crash the cycle
+                log.error(
+                    "ops.auto_cascade.macro_gap.failed",
+                    check=check_name, error=str(exc),
+                )
+                skipped.append(check_name)
+            continue
+
+        # D7 — monotone violations: dedupe THEN canonical refresh.
+        if check_name in _MONOTONE_CASCADE_MAP:
+            target_table, refresh_stage, refresh_params = (
+                _MONOTONE_CASCADE_MAP[check_name]
+            )
+            # Phase 1 — dedupe rogue rows.
+            try:
+                dedupe_out = await _stage_dedupe_monotone(
+                    pool, {"table": target_table},
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.error(
+                    "ops.auto_cascade.monotone.dedupe_failed",
+                    check=check_name, table=target_table, error=str(exc),
+                )
+                dedupe_out = {}
+            # Phase 2 — canonical refresh (force past skip-guard).
+            refresh_outcome = await _invoke_cascade_stage(
+                refresh_stage,
+                refresh_params,
+                daily_bars_config,
+                spec_by_name,
+                pool=pool, log=log, db_log=db_log,
+            )
+            await db_log.log(
+                "INGESTION_AUTO_RECOVERED_MONOTONE",
+                (
+                    f"monotone cascade {check_name}: "
+                    f"dedupe + {refresh_stage}"
+                ),
+                severity="INFO",
+                data={
+                    "check": check_name,
+                    "target_table": target_table,
+                    "dedupe": dedupe_out,
+                    "refresh_stage": refresh_stage,
+                    "refresh_status": refresh_outcome.get("status"),
+                    "refresh_error": refresh_outcome.get("error"),
+                },
+            )
+            log.info(
+                "ops.auto_cascade.monotone.recovered",
+                check=check_name, dedupe=dedupe_out,
+                refresh=refresh_outcome,
+            )
+            handled.append(check_name)
+            continue
+
+        # D9 — liquidity_tiers_completeness: tier_refresh + carry the
+        # targeted-ticker list as telemetry.
+        if check_name == "liquidity_tiers_completeness":
+            try:
+                from tpcore.quality.validation.checks.liquidity_tiers_completeness import (
+                    compute_liquidity_tiers_repair_targets,
+                )
+                missing = await compute_liquidity_tiers_repair_targets(pool)
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "ops.auto_cascade.tier.target_compute_failed",
+                    error=str(exc),
+                )
+                missing = []
+            stage_name, params = _VALIDATION_CASCADE_MAP[check_name]
+            refresh_outcome = await _invoke_cascade_stage(
+                stage_name, params, daily_bars_config,
+                spec_by_name,
+                pool=pool, log=log, db_log=db_log,
+            )
+            await db_log.log(
+                "INGESTION_AUTO_RECOVERED_TIER",
+                (
+                    f"tier_refresh cascade: {len(missing)} missing ticker(s) "
+                    f"(advisory)"
+                ),
+                severity="INFO",
+                data={
+                    "check": check_name,
+                    "missing_tickers_count": len(missing),
+                    "missing_tickers_sample": missing[:25],
+                    "refresh_stage": stage_name,
+                    "refresh_status": refresh_outcome.get("status"),
+                    "refresh_error": refresh_outcome.get("error"),
+                },
+            )
+            log.info(
+                "ops.auto_cascade.tier.recovered",
+                check=check_name,
+                missing_tickers=len(missing),
+                refresh=refresh_outcome,
+            )
+            handled.append(check_name)
+            continue
+
+        # D10 — ticker_classifications_coverage: classify_tickers + force.
+        if check_name == "ticker_classifications_coverage":
+            stage_name, params = _VALIDATION_CASCADE_MAP[check_name]
+            refresh_outcome = await _invoke_cascade_stage(
+                stage_name, params, daily_bars_config,
+                spec_by_name,
+                pool=pool, log=log, db_log=db_log,
+            )
+            await db_log.log(
+                "INGESTION_AUTO_RECOVERED_CLASSIFICATION",
+                "classify_tickers cascade: force re-sync",
+                severity="INFO",
+                data={
+                    "check": check_name,
+                    "refresh_stage": stage_name,
+                    "refresh_status": refresh_outcome.get("status"),
+                    "refresh_error": refresh_outcome.get("error"),
+                },
+            )
+            log.info(
+                "ops.auto_cascade.classification.recovered",
+                check=check_name, refresh=refresh_outcome,
+            )
+            handled.append(check_name)
+            continue
+
+        # D6 — generic completeness check → canonical refresh stage.
+        if check_name in _VALIDATION_CASCADE_MAP:
+            stage_name, params = _VALIDATION_CASCADE_MAP[check_name]
+            refresh_outcome = await _invoke_cascade_stage(
+                stage_name, params, daily_bars_config,
+                spec_by_name,
+                pool=pool, log=log, db_log=db_log,
+            )
+            await db_log.log(
+                "INGESTION_AUTO_RECOVERED_VALIDATION",
+                f"validation cascade {check_name} → {stage_name}",
+                severity="INFO",
+                data={
+                    "check": check_name,
+                    "refresh_stage": stage_name,
+                    "refresh_status": refresh_outcome.get("status"),
+                    "refresh_error": refresh_outcome.get("error"),
+                },
+            )
+            log.info(
+                "ops.auto_cascade.validation.recovered",
+                check=check_name, stage=stage_name,
+                refresh=refresh_outcome,
+            )
+            handled.append(check_name)
+            continue
+
+        # Unknown check — long-tail; LLM-side backstop will see it.
+        await db_log.log(
+            "INGESTION_AUTO_RECOVERY_VALIDATION_SKIPPED",
+            f"no deterministic cascade for {check_name}",
+            severity="WARNING",
+            data={
+                "check": check_name,
+                "note": "long-tail — LLM-side backstop handles this",
+            },
+        )
+        log.info(
+            "ops.auto_cascade.validation.skipped_unmapped",
+            check=check_name,
+        )
+        skipped.append(check_name)
+
+    # Annotate the data_validation stage result so dashboard readers see
+    # which checks were auto-recovered vs deferred to the LLM backstop.
+    val_result.detail = {
+        **(val_result.detail or {}),
+        "cascade": True,
+        "cascade_mode": "validation_failures",
+        "failed_checks": failed_checks,
+        "handled": handled,
+        "skipped": skipped,
+    }
+    summary.stages[val_idx] = val_result
+
+
+async def _invoke_cascade_stage(
+    stage_name: str,
+    extra_params: dict[str, Any],
+    daily_bars_config: dict[str, Any],
+    spec_by_name: dict[str, tuple],
+    *,
+    pool: asyncpg.Pool,
+    log: structlog.stdlib.BoundLogger,
+    db_log,
+) -> dict[str, Any]:
+    """Helper: run a single stage by name in the validation cascade.
+
+    Returns ``{"status": "...", "error": "...", "duration_ms": int}``
+    so the cascade telemetry can report the outcome without bubbling an
+    exception. The actual stage run uses ``_run_stage`` so the
+    structured INGESTION_START/COMPLETE/FAILED events are emitted on
+    the cascade run too — matches the coverage_collapse cascade.
+    """
+    if stage_name not in spec_by_name:
+        log.error(
+            "ops.auto_cascade.unknown_stage",
+            stage=stage_name,
+        )
+        return {"status": "UNKNOWN_STAGE", "error": stage_name, "duration_ms": 0}
+    name, factory_builder, timeout = spec_by_name[stage_name]
+    cascade_config = {**daily_bars_config, **extra_params}
+    result = await _run_stage(
+        name,
+        factory_builder(pool, cascade_config),
+        log=log,
+        db_log=db_log,
+        dry_run=False,
+        timeout=timeout,
+    )
+    return {
+        "status": result.status,
+        "error": result.error,
+        "duration_ms": result.duration_ms,
+    }
 
 
 async def _self_heal_failed_stages(
