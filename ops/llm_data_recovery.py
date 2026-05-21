@@ -1081,13 +1081,26 @@ async def run_autonomous_recovery(
     )
 
 
+# Public, frozen helper re-exports for test/spec inspection (v2). The
+# leading-underscore variants stay the canonical names; these aliases let
+# tests assert against a stable public surface without an inline
+# ``noqa: SLF001`` (per-file SLF ignore is the policy form). Listed in
+# ``__all__`` below so vulture sees them as exported (the v2 test file
+# loads this module via ``spec_from_file_location`` which vulture's
+# static walk does not follow).
+NEGATIVE_PATTERNS: frozenset[tuple[str, str]] = _NEGATIVE_PATTERNS
+SKIP_WITH_WARNING_ACTIONS: frozenset[str] = _SKIP_WITH_WARNING_ACTIONS
+
+
 __all__ = [
     "AUTONOMOUS_DATA_TRIGGER_EVENT_TYPES",
     "AuthSkip",
+    "NEGATIVE_PATTERNS",
     "PERSONA_VERSION",
     "RecoveryAction",
     "RecoveryContext",
     "RecoveryResult",
+    "SKIP_WITH_WARNING_ACTIONS",
     "build_data_recovery_context",
     "emit_event",
     "handle_data_recovery_escalation",
@@ -1096,11 +1109,3 @@ __all__ = [
     "run_ops_stage",
     "validate_recovery_action",
 ]
-
-
-# Public, frozen helper re-exports for test/spec inspection (v2). The
-# leading-underscore variants stay the canonical names; these aliases let
-# tests assert against a stable public surface without an inline
-# ``noqa: SLF001`` (per-file SLF ignore is the policy form).
-NEGATIVE_PATTERNS: frozenset[tuple[str, str]] = _NEGATIVE_PATTERNS
-SKIP_WITH_WARNING_ACTIONS: frozenset[str] = _SKIP_WITH_WARNING_ACTIONS
