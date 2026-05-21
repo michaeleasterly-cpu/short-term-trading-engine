@@ -496,6 +496,89 @@ archival record.
   delisting close per Shumway 1997; `survivorship_inclusive=False` caps
   credibility).
 
+## ⚠ LOCAL-LLM-BRIDGE — required for all 4 LLM lanes (operator decision 2026-05-21)
+
+**Operator binding 2026-05-21 post-gate-pilot:** **no Anthropic API credit
+top-up**. All LLM lanes that currently call `AsyncAnthropic.messages.create`
+via the API key path must instead route through the **operator's local
+Claude Max Pro session** (i.e. the same Claude Code session the operator
+is actively running). The build proved (gate pilot PASS, dossier
+`docs/lab/gate_pilot/2026-05-21-gate-pilot-PASS.md`) that the loop CAN
+find edges; the API billing path is rejected as a production posture.
+
+**Affected lanes (all 4 — same fix shape applies to each):**
+1. `ops/llm_edge_finder_sdk.py` (Task #25 T9) — `make_sdk_llm_callable`
+2. `ops/llm_lab_emitter.py` (SP-G PR #152) — uses `_default_pr_runner` →
+   `default_pr_runner` shared via `ops.llm_data_triage`
+3. `ops/llm_data_triage.py` (Epic E Phase 3, data lane) — shared SDK surface
+4. `ops/engine_llm_triage.py` (Epic E Phase 3, engine lane)
+
+**Design sketch (single-source the bridge):**
+- New module `ops/llm_local_bridge.py` — implements the same async callable
+  contract (`(system_prompt, user_prompt, transcript) -> dict`) but
+  delegates to the operator's local Claude session via the Claude Code
+  Agent SDK or via a structured prompt-paste-to-file → operator-reply
+  round-trip.
+- Reuse the existing shared surface (`ANTHROPIC_MODEL`, `_AuthSkip`,
+  `scrubbed_env`) — replace the `AsyncAnthropic` instantiation with the
+  bridge.
+- Fallback path: if the operator is offline, lane co-task sleeps + emits
+  a `LAB_FINDER_BRIDGE_OFFLINE` event for the §12 dashboard.
+
+**Order of work (most-load-bearing first):**
+- `[lane: ops] [decision: made] [effort: M]` Task #25 edge finder bridge
+  first — this is the only lane that's autonomous-loop-critical AND was
+  built to call the API last (T9).
+- `[lane: ops] [decision: made] [effort: M-S each]` Then SP-G emitter +
+  data-triage + engine-triage in parallel since they share `default_pr_runner`.
+
+**Hosting posture (post-bridge):**
+- **Edge finder + 3 other LLM lanes: LOCAL-ONLY** via the bridge. NOT on
+  Railway (Railway can't reach the operator's Claude Max session).
+- **Rest of the platform (data ops + engines + daemons): Railway** per
+  the existing Pre-Railway migration roadmap (TODO L662 archive substrate
+  + R3 object storage). The LLM lanes stay on the operator's Mac.
+
+**Why this is the right call:** API credits at scale ($0.01-0.05/turn ×
+10 turns × 3 specs × N runs/day × 4 lanes) compounds to real money the
+operator already pays for via the Max subscription. Routing the lanes
+through the same session avoids double-billing.
+
+---
+
+## ⚠ RUN-EVERYTHING-TO-SURFACE-BUGS (operator directive 2026-05-21)
+
+**Operator directive post-gate-pilot:** **run EVERY component end-to-end
+against the real system** so we surface all the design-vs-real-data
+drift bugs (like today's 7 column-name mismatches + LLM-shape gap) +
+make the self-heal layer airtight before scaling up.
+
+The gate pilot exposed bugs no mocked test could catch. The next
+discoveries land via THE SAME PATTERN: actually-run.
+
+**Components to actually run:**
+- `python -m ops.llm_edge_finder` (post-bridge) — exercise Phase A→F end-to-end
+- `python -m ops.llm_lab_emitter` against each PAPER engine
+- `python -m ops.llm_data_triage` against a synthetic data escalation
+- `python -m ops.engine_llm_triage` against a synthetic engine escalation
+- `python scripts/ops.py --update` — full data sweep — surface column drift
+- `bash scripts/run_all_engines.sh` — every PAPER engine fires
+- `python -m ops.engine_service` — DA-3 consolidated daemon
+- `python -m ops.data_repair_service` — recovery lane
+- `python -m ops.llm_triage_service` — 5-cotask daemon
+
+**Per actual-run discovery cadence:**
+1. Run the component.
+2. Capture every error.
+3. Decide: real-bug-to-fix vs design-vs-data drift.
+4. If self-heal coverage MISSING: add the HealSpec.
+5. Re-run until green-as-cat-piss.
+6. Commit fixes + log to defect_register if appropriate.
+
+Self-heal coverage shouldn't have any "we'll find it in production" gaps.
+
+---
+
 ## Task #25 — autonomous LLM+quant edge finder (follow-on epic)
 
 The richer ambition the operator raised 2026-05-20 when SP-G's scope was

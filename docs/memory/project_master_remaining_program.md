@@ -167,6 +167,27 @@ docs/best-practice > CLAUDE.md ([[authoritative-docs-override-claudemd]]).
   split spec/intent then code-quality review), authoritative-docs>CLAUDE.md.
 - Update THIS Status block as each track lands (compaction-safe).
 
+**2026-05-21 OPERATOR DECISION — local-LLM-bridge + run-everything-to-find-bugs.**
+Post-gate-pilot (PR #254 dossier — Task #25 §10.6.b PASS): operator
+rejected Anthropic API credit top-up. ALL 4 LLM lanes (edge finder
+T9, SP-G emitter, data triage, engine triage) must route through the
+operator's local Claude Max Pro session via `ops/llm_local_bridge.py`
+(NEW MODULE — single-source the bridge contract). Hosting split:
+edge finder + 3 LLM lanes = LOCAL-ONLY on operator's Mac; rest of
+platform (data ops + engines + daemons) = Railway per the
+[[project_railway_archive_substrate_migration]] roadmap. Why: API
+billing compounds to real $$ when the Max subscription already pays
+for the same model access. Backlog captured in TODO.md L499 (above
+the Task #25 epic block).
+
+Parallel directive: **run EVERY component end-to-end** (not just
+mocked tests) to surface design-vs-real-data drift bugs (today's
+gate pilot exposed 7 column-name mismatches + LLM-shape gap — bugs
+no FakePool test could catch). Cadence: actually-run → capture error
+→ classify (real-bug / design-drift / missing self-heal coverage) →
+add HealSpec if missing → re-run green-as-cat-piss → commit + defect-
+register-log if applicable.
+
 **SIDE-EPIC 2026-05-20: AUTONOMOUS SELF-HEAL P0 = 5/5 SOURCES SHIPPED.**
 Distinct workstream from SP-A..SP-G (operator-prompted in-session, not
 on the master sequence). Each P0 source got an ungameable
