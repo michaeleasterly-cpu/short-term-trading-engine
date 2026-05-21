@@ -87,6 +87,10 @@ from ops.llm_data_recovery import (
     AUTONOMOUS_DATA_TRIGGER_EVENT_TYPES,
     run_autonomous_recovery,
 )
+from ops.llm_edge_finder import (
+    EDGE_FINDER_TRIGGER_EVENT_TYPES,
+    run_edge_finder_cotask,
+)
 from ops.llm_lab_emitter import (
     LAB_EMITTER_TRIGGER_EVENT_TYPES,
     run_lab_emitter_cotask,
@@ -130,9 +134,9 @@ TRIGGER_EVENT_TYPES: tuple[str, ...] = AUTONOMOUS_DATA_TRIGGER_EVENT_TYPES
 # re-checks the Ladder open set itself (no ordering coupling).
 ENGINE_TRIGGER_EVENT_TYPES: tuple[str, ...] = ("ENGINE_ESCALATED",)
 # poll (1 per lane) + each lane's run_triage acquires + headroom; with
-# THREE co-hosted lanes (data, engine, lab_emitter — SP-G) sharing the
-# one advisory pool we widen the cap once more.
-POOL_MAX_SIZE = 5
+# FOUR co-hosted lanes (data, engine, lab_emitter — SP-G, edge_finder
+# — Task #25 T10) sharing the one advisory pool we widen the cap to 6.
+POOL_MAX_SIZE = 6
 
 
 async def _find_new_trigger(
@@ -413,6 +417,34 @@ async def _lab_emitter_loop(
     )
 
 
+async def _edge_finder_loop(
+    pool, stop_event: asyncio.Event, lock_dir: str = DEFAULT_LOCK_DIR
+) -> None:
+    """EDGE-FINDER co-task (Task #25 T10; spec §3.4). The fourth crash-
+    isolated ``_run_supervised`` co-task on the ONE advisory pool.
+
+    ``EDGE_FINDER_TRIGGER_EVENT_TYPES`` is empty in this PR by design
+    (mirrors the SP-G pattern). The triggers
+    (``LAB_LEDGER_CAPACITY_AVAILABLE`` + ``REGIME_CHANGE_OBSERVED``)
+    require event-emitter PRs that follow. v1 trigger is the operator
+    slash-skill (``/lab-edge-find``, shipped in T11) which invokes the
+    finder directly — bypasses this poll loop.
+
+    The two-daemon invariant test
+    (``scripts/tests/test_two_daemon_invariant.py``) MUST stay green
+    UNEDITED beyond the cotask count — Task #25 adds a co-task, not a
+    daemon (the installer whitelist + launchd label are unchanged).
+    """
+    await _lane_loop(
+        pool,
+        stop_event,
+        lock_dir,
+        event_types=EDGE_FINDER_TRIGGER_EVENT_TYPES,
+        triage_fn=run_edge_finder_cotask,
+        lane="edge_finder",
+    )
+
+
 async def _run_supervised(
     name: str, factory, stop_event: asyncio.Event, backoff: float = 5.0
 ) -> None:
@@ -479,18 +511,25 @@ async def _amain() -> int:
     async def _lab_emitter_factory():
         await _lab_emitter_loop(pool, stop_event, lock_dir)
 
+    async def _edge_finder_factory():
+        await _edge_finder_loop(pool, stop_event, lock_dir)
+
     data_task = asyncio.create_task(
         _run_supervised("data", _data_factory, stop_event))
     engine_task = asyncio.create_task(
         _run_supervised("engine", _engine_factory, stop_event))
     lab_emitter_task = asyncio.create_task(
         _run_supervised("lab_emitter", _lab_emitter_factory, stop_event))
+    edge_finder_task = asyncio.create_task(
+        _run_supervised("edge_finder", _edge_finder_factory, stop_event))
     try:
         # Exit on signal (stop_event) OR if all lanes have exited
         # (nothing left to supervise — don't zombie the process).
         stop_waiter = asyncio.ensure_future(stop_event.wait())
-        all_done = asyncio.gather(data_task, engine_task, lab_emitter_task)
-        done, _pending = await asyncio.wait(
+        all_done = asyncio.gather(
+            data_task, engine_task, lab_emitter_task, edge_finder_task
+        )
+        _done, _pending = await asyncio.wait(
             {stop_waiter, all_done},
             return_when=asyncio.FIRST_COMPLETED)
         stop_waiter.cancel()
@@ -500,10 +539,11 @@ async def _amain() -> int:
         with contextlib.suppress(BaseException):
             await all_done
     finally:
-        for t in (data_task, engine_task, lab_emitter_task):
+        for t in (data_task, engine_task, lab_emitter_task, edge_finder_task):
             t.cancel()
-        await asyncio.gather(data_task, engine_task, lab_emitter_task,
-                             return_exceptions=True)
+        await asyncio.gather(
+            data_task, engine_task, lab_emitter_task, edge_finder_task,
+            return_exceptions=True)
         # Defensive: never leave the lock held on shutdown if a triage
         # pass was interrupted mid-flight (the per-pass finally already
         # releases on the normal path). Only release if WE own it.

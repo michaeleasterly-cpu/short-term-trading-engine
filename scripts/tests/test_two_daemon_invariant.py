@@ -22,7 +22,7 @@ def test_manifest_loop_is_exactly_the_railway_2_daemon_budget_set():
     # crash-isolated co-tasks under one asyncio.gather()). The closed
     # whitelist is now:
     #   * engine-service  — consolidated long-lived daemon
-    #   * lane-service    — data-repair + 3 triage lanes (one daemon)
+    #   * lane-service    — data-repair + 4 triage lanes (one daemon)
     #   * data-operations — data-lane cron (NOT a daemon)
     # Two long-lived daemons (engine + lane) + one cron fits Railway's
     # 2-daemon constraint. The set is still a CLOSED whitelist: any
