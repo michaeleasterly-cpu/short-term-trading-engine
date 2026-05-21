@@ -288,6 +288,28 @@ ignore = ["E501"]
 # per-file ignore is the correct form (mirrors every SP-B/SP-D/SP-E/SP-F
 # char-test precedent above) — never an inline ``# noqa: SLF001``.
 "tests/test_llm_triage_autonomous_data_recovery.py" = ["SLF"]
+# daily_bars force_refresh chunking regression (2026-05-21 — the
+# 3600s timeout fix). The test pins the chunker's partition + the
+# stage-level dispatch by NAMING ``scripts/ops.py``-private symbols
+# (``_resolve_force_refresh_universe``, ``_force_refresh_chunked``,
+# ``_stage_daily_bars``) — that IS the test's purpose (a transport-
+# layer fix's invariant lives at exactly those seams). Engine-lane-
+# module-private (NOT tpcore-private) access; the scoped per-file
+# ignore is the correct form (mirrors the auto-cascade precedent
+# immediately above) — never an inline ``# noqa: SLF001``.
+"tests/test_daily_bars_force_refresh_chunked.py" = ["SLF"]
+# Consolidated lane-service daemon (2026-05-21 Railway 2-daemon
+# budget). The test pins the supervisor's crash-isolation contract +
+# the factory-delegation invariant by NAMING ``ops.lane_service``-
+# private symbols (``_run_supervised``, ``_data_repair_main_loop``,
+# ``_triage_data_main_loop``, ``_triage_engine_loop``,
+# ``_triage_lab_emitter_loop``) — that IS the test's purpose (the
+# consolidation's contract is "delegate to source modules without
+# behavioural rewrite", witnessed via callable identity). Engine-
+# lane-module-private (NOT tpcore-private) access; the scoped per-
+# file ignore is the correct form (mirrors every SP-B/SP-D/SP-E/SP-F
+# char-test precedent above) — never an inline ``# noqa: SLF001``.
+"tests/test_lane_service.py" = ["SLF"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

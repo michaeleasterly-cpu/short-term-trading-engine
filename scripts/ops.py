@@ -379,6 +379,167 @@ async def _run_stage(
 # ────────────────────────────────────────────────────────────────────────
 
 
+# ────────────────────────────────────────────────────────────────────────
+# daily_bars force_refresh chunking (3600s timeout mitigation, 2026-05-21)
+# ────────────────────────────────────────────────────────────────────────
+#
+# The `--param force_refresh=true --param universe=active` whole-universe
+# path provably exceeds the 3600s stage timeout: two runs at 08:43 and
+# 09:19 UTC on 2026-05-21 both timed out, leaving prices_daily stuck at
+# ~5180 tickers/session vs the full ~7600. Root cause: a single
+# `handle_daily_bars` call covering ~7000 tickers — bounded by Alpaca's
+# multi-symbol endpoint (100 tickers/call) AND the per-call rate-limit
+# sleep, so a whole-universe pull is many minutes regardless of cores.
+#
+# Fix mirrors the PR #222 Lab final-holdout chunking pattern: split the
+# universe into bounded ticker slices, each its own `handle_daily_bars`
+# call, aggregate the rows-upserted total at the stage level. 500-ticker
+# slices ≈ 14 chunks × ~4 min ≈ comfortably under 3600s with margin.
+# Per-chunk failure does NOT abort the run — we emit `CHUNK_FAILED`
+# via structlog (the stage's own `db_log` would require threading
+# another parameter — out of scope for a transport-layer fix) and
+# continue. The producer-self-validation (coverage_collapse) runs ONCE
+# at the end against the aggregate state.
+#
+# Idempotency: `handle_daily_bars` upserts, so re-running a chunk that
+# already landed is a no-op on the row set.
+FORCE_REFRESH_CHUNK_SIZE = 500
+
+
+async def _resolve_force_refresh_universe(
+    pool: asyncpg.Pool, universe_cfg: Any,
+) -> list[str]:
+    """Materialise the force_refresh universe BEFORE chunking.
+
+    Mirrors the resolution `_handle_daily_bars_explicit` does internally
+    but lifts it to the stage so the chunker can slice deterministically.
+    Returns a sorted ticker list. Supports the same shapes the underlying
+    handler does (``"active"`` / explicit list / CSV string).
+    """
+    if isinstance(universe_cfg, list):
+        return [str(s).upper() for s in universe_cfg]
+    if isinstance(universe_cfg, str) and "," in universe_cfg:
+        return [s.strip().upper() for s in universe_cfg.split(",") if s.strip()]
+    if universe_cfg == "active":
+        sql = """
+            SELECT DISTINCT ticker
+            FROM platform.prices_daily
+            WHERE date >= CURRENT_DATE - INTERVAL '90 days'
+              AND delisted = false
+            ORDER BY ticker
+        """
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(sql)
+        return [r["ticker"] for r in rows]
+    # `all_active` is not chunked here — that path is the discovery sweep
+    # and has its own batched implementation in
+    # `_handle_daily_bars_all_active`. Force-refresh against a discovery
+    # sweep is not a documented mode.
+    raise ValueError(
+        f"force_refresh chunking: unsupported universe {universe_cfg!r} — "
+        "expected 'active', explicit list, or CSV string"
+    )
+
+
+async def _force_refresh_chunked(
+    pool: asyncpg.Pool,
+    config: dict[str, Any],
+    target_session: date,
+) -> dict[str, Any]:
+    """Run `handle_daily_bars` over the universe in ``FORCE_REFRESH_CHUNK_SIZE``
+    ticker slices. Aggregate rows_upserted across chunks; per-chunk
+    failure is logged + a ``CHUNK_FAILED`` structlog event is emitted +
+    the run continues. The aggregate state is the input to the
+    producer-self-validation that the caller still runs once.
+    """
+    from tpcore.ingestion.handlers import handle_daily_bars
+
+    log = structlog.get_logger("scripts.ops.daily_bars_chunked")
+    universe_cfg = config.get("universe", "active")
+    symbols = await _resolve_force_refresh_universe(pool, universe_cfg)
+    if not symbols:
+        return {
+            "rows_upserted": 0,
+            "chunks_total": 0,
+            "chunks_ok": 0,
+            "chunks_failed": 0,
+            "universe_size": 0,
+            "target_session": target_session.isoformat(),
+        }
+
+    n_chunks = (len(symbols) + FORCE_REFRESH_CHUNK_SIZE - 1) // FORCE_REFRESH_CHUNK_SIZE
+    log.info(
+        "ops.daily_bars.force_refresh_chunked_start",
+        universe_size=len(symbols),
+        chunk_size=FORCE_REFRESH_CHUNK_SIZE,
+        chunks_total=n_chunks,
+        target_session=target_session.isoformat(),
+    )
+
+    total_rows = 0
+    chunks_ok = 0
+    chunks_failed: list[dict[str, Any]] = []
+    # Carry forward every config key (lookback_days, end_offset_days,
+    # feed, ...) except `universe` which the chunker overrides.
+    base_config = {k: v for k, v in config.items() if k != "universe"}
+    # Strip `force_refresh` from the per-chunk config — the chunker
+    # has already taken responsibility for force-refresh semantics and
+    # the underlying handler does not branch on it.
+    base_config.pop("force_refresh", None)
+
+    for i in range(0, len(symbols), FORCE_REFRESH_CHUNK_SIZE):
+        chunk = symbols[i : i + FORCE_REFRESH_CHUNK_SIZE]
+        chunk_idx = i // FORCE_REFRESH_CHUNK_SIZE + 1
+        try:
+            chunk_rows = await handle_daily_bars(
+                pool, {**base_config, "universe": list(chunk)}
+            )
+            total_rows += int(chunk_rows or 0)
+            chunks_ok += 1
+            log.info(
+                "ops.daily_bars.force_refresh_chunk_done",
+                chunk_idx=chunk_idx,
+                chunk_total=n_chunks,
+                chunk_size=len(chunk),
+                rows_upserted=int(chunk_rows or 0),
+            )
+        except Exception as exc:  # noqa: BLE001 — one chunk's failure
+            # MUST NOT abort the whole run. Log, continue.
+            chunks_failed.append({
+                "chunk_idx": chunk_idx,
+                "first_ticker": chunk[0],
+                "last_ticker": chunk[-1],
+                "error": str(exc)[:200],
+            })
+            log.error(
+                "CHUNK_FAILED",
+                chunk_idx=chunk_idx,
+                chunk_total=n_chunks,
+                chunk_size=len(chunk),
+                first_ticker=chunk[0],
+                last_ticker=chunk[-1],
+                error=str(exc),
+            )
+
+    log.info(
+        "ops.daily_bars.force_refresh_chunked_done",
+        chunks_total=n_chunks,
+        chunks_ok=chunks_ok,
+        chunks_failed=len(chunks_failed),
+        rows_upserted=total_rows,
+    )
+
+    return {
+        "rows_upserted": total_rows,
+        "chunks_total": n_chunks,
+        "chunks_ok": chunks_ok,
+        "chunks_failed": len(chunks_failed),
+        "chunks_failed_detail": chunks_failed[:5],
+        "universe_size": len(symbols),
+        "target_session": target_session.isoformat(),
+    }
+
+
 async def _stage_daily_bars(pool: asyncpg.Pool, config: dict[str, Any]) -> dict[str, Any]:
     # Fast-path: if the most recent CLOSED NYSE session already has bars
     # for a healthy fraction of the active universe, this stage has
@@ -544,7 +705,24 @@ async def _stage_daily_bars(pool: asyncpg.Pool, config: dict[str, Any]) -> dict[
             "tickers_present": already_ingested,
         }
 
-    rows = await handle_daily_bars(pool, config)
+    # 2026-05-21 chunking fix: the `--param force_refresh=true --param
+    # universe=active` path issues ONE multi-symbol `handle_daily_bars`
+    # call covering the full ~7,000-ticker active universe over the
+    # `lookback_days` window. Two operator runs on 2026-05-21 (08:43 +
+    # 09:19 UTC) EACH timed out at the stage's 3600s budget — the
+    # whole-universe call provably exceeds that ceiling on a
+    # rate-limited multi-symbol Alpaca pull. Mirrors the PR #222 Lab
+    # final-holdout chunking pattern: a transport-layer split into
+    # bounded ticker slices, each its own `handle_daily_bars` call,
+    # aggregated at the stage level. NOT a Lab probe → no ledger
+    # entry; idempotency is preserved by the upsert.
+    if force_refresh:
+        chunk_result = await _force_refresh_chunked(
+            pool, config, target_session
+        )
+        rows = chunk_result["rows_upserted"]
+    else:
+        rows = await handle_daily_bars(pool, config)
 
     # Producer self-validation (2026-05-17 incident hardening): a pull
     # can exit "OK" while having written only a fraction of the
@@ -599,12 +777,20 @@ async def _stage_daily_bars(pool: asyncpg.Pool, config: dict[str, Any]) -> dict[
                 f"--param universe=active --param end_offset_days=1"
             )
 
-    return {
+    result: dict[str, Any] = {
         "rows_upserted": rows or 0,
         "universe": config.get("universe", "active"),
         "target_session": target_session.isoformat(),
         "coverage_tickers": latest_n,
     }
+    if force_refresh:
+        result["mode"] = "force_refresh_chunked"
+        result["chunks_total"] = chunk_result["chunks_total"]
+        result["chunks_ok"] = chunk_result["chunks_ok"]
+        result["chunks_failed"] = chunk_result["chunks_failed"]
+        if chunk_result["chunks_failed"]:
+            result["chunks_failed_detail"] = chunk_result["chunks_failed_detail"]
+    return result
 
 
 async def _stage_corporate_actions(pool: asyncpg.Pool) -> dict[str, Any]:
