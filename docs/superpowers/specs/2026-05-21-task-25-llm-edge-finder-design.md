@@ -259,15 +259,68 @@ cannot land). **Constraint 4 is reversed; 14–16 are NEW.**
     operator-discretion via §12 marker; see §1.2).
 
 16. **(NEW) Provenance is non-negotiable.** Every autonomous action
-    (draft, undraft, merge, ecr_add, ecr_modify, ecr_retire,
-    outcome_proven) writes one append-only row to `application_log`
-    with `category='LAB_FINDER_ACTION'`, payload fields `action`,
+    (draft, undraft, merge, ecr_modify, ecr_retire, outcome_proven)
+    writes one append-only row to `application_log` with
+    `category='LAB_FINDER_ACTION'`, payload fields `action`,
     `triggered_by` (one of `operator_command|ledger_capacity_event|
     regime_change_event|outcome_monitor_check|ci_green|gate_pass|
-    bleed_cap|operator_verdict`), `human_override` (always `'none'`
-    in v1 — Path B has no per-step override; operator's Tier 2
-    verdict via §12 IS the human surface, posted after-the-fact).
-    The §12 dashboard reads from this.
+    bleed_cap|operator_verdict|inactivity_timeout|global_bleed_cap`),
+    `human_override` (always `'none'` in v1 — Path B has no per-step
+    override; operator's Tier 2 verdict via §12 IS the human surface,
+    posted after-the-fact). The §12 dashboard reads from this.
+
+17. **(NEW; FOLDED outcome-expert §4) Aggregate-ledger hard fence.**
+    The per-regime ledger (constraint 14) refreshes the search space
+    across ~243 regime tuples. To prevent autonomous-scale DSR
+    laundering by "novel regime" hypothesis-relabeling, the SP-A
+    gate now reads BOTH `cumulative_n_trials_by_regime(target,
+    regime)` AND the existing `cumulative_n_trials(target)`
+    aggregate. Gate rejects if EITHER breaches the deflation floor.
+    Backwards-compat: SP-A's aggregate `cumulative_n_trials(target)`
+    remains the secondary check, BUT it is now a **HARD fence**
+    (was "secondary" per pre-fold v1.0). Carver §15 correlation
+    ceiling argument: re-tuning the same rule across regimes
+    pollutes correlation — aggregate fence prevents the per-regime
+    refresh from disguising it.
+
+18. **(NEW; FOLDED outcome-expert §6) Global bleed-budget cap.**
+    Per-engine bleed cap (constraint 15) is $5,000; the **GLOBAL**
+    cap across ALL finder-emitted PAPER engines is `GLOBAL_FINDER_
+    BLEED_CAP_USD = $15,000` (3-engine slot equivalent). Phase E
+    monitors aggregate bleed; at 80% of global ($12,000), the
+    sibling-bleed circuit-breaker (§3.5) is REPLACED with a
+    **co-task pause** — the finder daemon (`ops.llm_triage_service`)
+    stops accepting trigger events; existing PAPER engines continue;
+    no NEW emissions until aggregate bleed drops back under 50%
+    ($7,500) via auto-retires or operator-verdict-success markers.
+    Defense against autonomous-scale cohort-cascade capital
+    destruction in the first 24-48h before per-engine breakers
+    stabilize.
+
+19. **(NEW; FOLDED outcome-expert §8) Inactivity auto-retire.**
+    A finder-emitted PAPER engine that is `not bleeding AND not
+    making money` (flat) consumes a $25k capital slot indefinitely
+    if the operator stays silent. Defense (NOT operator-judgment,
+    purely activity-mechanical): after `INACTIVITY_AUTO_RETIRE_
+    SESSIONS = 60` NYSE sessions in PAPER with `trade_count <
+    MIN_TRADE_COUNT_FOR_NO_VERDICT = 30` AND no operator-verdict
+    posted, auto-retire fires with `auto_retire_reason=
+    'inactivity_timeout'`. This protects capital-slot scarcity
+    without judgment. Pairs with constraint 18: at global-bleed-cap
+    breach, LRU eviction (oldest un-verdict-marked engine
+    auto-retires to free its slot).
+
+20. **(NEW; FOLDED outcome-expert §8c) Analysis-turn soft ledger.**
+    Constraint 10's "LLM analysis NOT formally in n_trials" creates
+    a loophole: the LLM can spend 10 turns × 4 tool calls × 243
+    regime axes shopping for a hypothesis that passes in *some*
+    regime, and the analysis spend never hits the ledger. v1
+    closes the loophole with `cumulative_analysis_turns_by_regime`
+    (a soft ledger; per-regime per-target). The gate DE-WEIGHTS
+    the DSR threshold for the candidate's regime by
+    `0.5 * log10(1 + analysis_turns / 100)` (soft penalty, capped
+    at +0.05 deflation). Hard ledger (`cumulative_n_trials`)
+    remains primary.
 
 ---
 
@@ -355,11 +408,13 @@ read dossier sidecar; if SURVIVED:
   ops.engine_sdlc --ecr <file>`; log `action='ecr_modify'`.
 - `promote_new` + existing roster slot → ECR-MODIFY on the slot;
   log `action='ecr_modify'`.
-- `promote_new` + ENGINE-ADD (new from `engine_template`) → scaffold
-  engine from `tpcore/templates/engine_template/`; generate ECR-ADD
-  with `_PROFILE` row addition; auto-issue via the machine path; the
-  `engine_readiness` checklist runs as part of that path; log
-  `action='ecr_add'`.
+- `promote_new` against an existing-engine slot → generate ECR-MODIFY
+  with the new candidate's `LAB_TARGET` arm added to the existing
+  engine's `backtest.py` LAB_TARGET; auto-issue via machine path; log
+  `action='ecr_modify'`. (ENGINE-ADD via `engine_template` is **v1.5
+  scope** — FOLDED outcome-expert §7 BLOCKS; template plugs are
+  empty-body and the autonomous loop cannot fill them without code-
+  generation, deferred to a separate spec.)
 
 Engine SDLC moves engine LAB → PAPER deterministically. **Tier 1
 (reach) success satisfied.**
@@ -494,13 +549,16 @@ per-ticker effective spread), `short_interest`, `borrow_rates`,
 
 Five sub-states, all derivable from already-ingested tables:
 
-- `vol_regime: Literal["calm","stress","crisis"]` — VIX bands (calm
-  < 20; stress 20–30; crisis > 30).
-- `trend_regime: Literal["range","trend"]` — SPY 200d slope sign ∧
-  ADX(14) > 25 → trend; else range.
-- `macro_regime: Literal["expansion","contraction"]` — composite of
-  Sahm rule + CFNAI + yield-curve inversion (thresholds pinned in
-  plan PR; spec pins the inputs).
+- `vol_regime: Literal["calm","normal","stress","crisis"]` — VIX bands
+  (calm < 15; normal 15–20; stress 20–30; crisis > 30). Reconciled
+  with `market_structure_primer.md` §8 (4 states).
+- `trend_regime: Literal["range","trend_up","trend_down"]` — SPY 200d
+  slope sign ∧ ADX(14) > 25 → `trend_up` / `trend_down` per slope
+  sign; else `range`. Reconciled with primer §8 (3 states).
+- `macro_regime: Literal["expansion","slowing","contraction"]` —
+  composite of Sahm rule + CFNAI + yield-curve inversion; primer §8
+  adds the intermediate `slowing` state for non-binary regime
+  detection (yield-curve <0 with 6-month-lead = `slowing`).
 - `sentiment_regime: Literal["extreme_bull","extreme_bear","neutral"]`
   — AAII bull-bear spread × Fear & Greed cross thresholds.
 - `cycle_position: tuple[Literal["earnings_season","fomc_week",
@@ -563,6 +621,19 @@ class ToolCall(BaseModel):
         "variance_ratio",      # Lo-MacKinlay 1988
         "hurst_exponent",
         "ljung_box",
+        # FOLDED outcome-expert §5 RISKS — IC-stability + cross-section primitives
+        # (all statsmodels-native; no new deps).
+        "rolling_spearmanr",   # Rolling-window Spearman IC with bootstrap CI.
+        "rolling_pearsonr",    # Rolling-window Pearson IC with bootstrap CI.
+        "fama_macbeth",        # Panel cross-sectional OLS_HAC_NW wrapper.
+        # FOLDED outcome-expert §5 BLOCKS — cost-net P&L projection.
+        # Reads PricePanelRow + SpreadObs from snapshot + ProposedSpec
+        # entries/exits; returns ToolResult.numeric_summary carrying
+        # `gross_sharpe`, `cost_net_sharpe`, `total_cost_bps_roundtrip`,
+        # `bleed_projection_usd` (mean + 95% bootstrap CI over the
+        # holdout window). The SP-A gate's primary metric reads
+        # `cost_net_sharpe`, NOT gross.
+        "cost_net_simulation",
     ]
     args_json: Annotated[str, Field(max_length=16_000)]
 ```
@@ -573,19 +644,33 @@ class ToolCall(BaseModel):
 
 `ProposedSpec` (upstream of SP-G `EmittedSpec`) carries:
 `candidate_name`, `target_engine` (∈ snapshot.roster), `intent`
-(`fold_existing | promote_new`), **`engine_add_path: bool`** (NEW
-— True iff `intent=promote_new` AND the spec wants a new engine
-scaffold from `engine_template`), `primary_hypothesis`,
-`primary_metric` (`LabPrimaryMetric`), `param_ranges`, `rationale`
-(MUST cite tool result or bundle excerpt — trained-knowledge alone
-disallowed per constraint 8), `falsification_criterion`,
-`expected_trials`, **`regime_tuple_id`** (NEW; MUST match
-snapshot.market_regime; tagged onto `record_trial_spend_with_
-regime`), `analysis_evidence_refs: tuple[EvidenceRef, ...]` (rich
-per expert review §3.11; each carries `tool_result_index`,
-`callable_name`, `claimed_statistic`, `claimed_value`,
-`claimed_threshold` — build-time CI sentinel asserts claimed value
-matches actual tool result).
+(`fold_existing | promote_new`), `primary_hypothesis`,
+`primary_metric` (`LabPrimaryMetric` — for v1 the gate reads
+**`cost_net_sharpe`** per the §6 `cost_net_simulation` callable; raw
+`sharpe` rejected), `param_ranges`, `rationale` (MUST cite tool
+result or bundle excerpt — trained-knowledge alone disallowed per
+constraint 8), `falsification_criterion`, `expected_trials`,
+**`cost_assumption_bps_roundtrip`** (NEW, FOLDED outcome-expert §5
+BLOCKS; default 8 bps T1, 12 bps T2; the LLM MUST set this
+explicitly; SP-A backtest nets it from gross-return computation),
+**`regime_tuple_id`** (NEW; MUST match snapshot.market_regime;
+tagged onto `record_trial_spend_with_regime`),
+`analysis_evidence_refs: tuple[EvidenceRef, ...]` (rich per expert
+review §3.11; each carries `tool_result_index`, `callable_name`,
+`claimed_statistic`, `claimed_value`, `claimed_threshold` — build-
+time CI sentinel asserts claimed value matches actual tool result).
+
+**ENGINE-ADD path scope reduction (FOLDED outcome-expert §7 BLOCKS).**
+The `engine_add_path: bool` field is REMOVED from v1; ENGINE-ADD via
+`tpcore/templates/engine_template/` is moved to v1.5 (§9.2). Reason:
+the template's 5 plugs + scheduler + backtest + order_manager all
+raise `NotImplementedError` — the autonomous loop cannot fill the
+scaffolds without LLM code-generation, which is a much bigger spec
+than v1 covers. **v1 emissions are `fold_existing` (existing engine
+MODIFY) and `promote_new` against an existing engine slot only.**
+The "find edges → automate (new engines)" operator framing remains
+the v1.5 target; v1 produces the autonomous-edge-finding mechanism
++ proves it on the MODIFY path first.
 
 `coint` fences (expert review §3.14): `coint_calls ≤ 3` per run;
 each `coint` `ToolCall.args` MUST declare `pair_pre_registered=True`
@@ -1021,10 +1106,31 @@ Bounded, audit-able, regime-aware-n_trials-fenced.
   across all five axes; `regime_tuple_id` SHA-12 deterministic.
 - `test_sibling_bleed_circuit_breaker.py` — sibling within 80% of
   bleed cap → new emission's auto-merge held.
-- `test_engine_add_path.py` — `intent=promote_new` with
-  `engine_add_path=True` scaffolds engine from
-  `tpcore/templates/engine_template/`, auto-issues ECR-ADD, engine
-  SDLC moves to LAB.
+- `test_no_engine_add_in_v1.py` — `intent=promote_new` with
+  `engine_add_path=True` (or any attempt to scaffold from
+  `tpcore/templates/engine_template/`) raises `ValueError("ENGINE-ADD
+  is v1.5 scope")`. The pydantic validator rejects the field
+  altogether in v1. (FOLDED outcome-expert §7 BLOCKS — template
+  plug bodies are empty; the autonomous loop cannot fill them
+  without LLM code-generation, deferred to v1.5 separate spec.)
+- `test_cost_net_simulation_gate_input.py` (NEW per outcome-expert
+  §5 BLOCKS) — synthetic `ProposedSpec` with `cost_assumption_bps_
+  roundtrip=8`; assert SP-A gate reads `cost_net_sharpe` from the
+  `cost_net_simulation` ToolResult, NOT raw `sharpe`. Synthetic
+  candidate whose gross-Sharpe = 0.6 but cost-net = 0.0 must FAIL
+  the gate.
+- `test_aggregate_ledger_hard_fence.py` (NEW per outcome-expert §4)
+  — synthetic per-regime ledger = 5 trials in regime X; aggregate
+  ledger across all regimes = 150 trials; gate rejects emission
+  because aggregate breaches even though per-regime is fresh.
+- `test_global_bleed_cap_breach.py` (NEW per outcome-expert §6) —
+  synthetic 3 active PAPER engines at $4k bleed each (aggregate
+  $12k = 80% of $15k cap); finder co-task auto-pauses; next
+  emission attempt logs `triggered_by='global_bleed_cap'` reject.
+- `test_inactivity_timeout_auto_retire.py` (NEW per outcome-expert
+  §8) — synthetic PAPER engine at session 60 with `trade_count=12`
+  and no operator-verdict event; auto-retire fires with
+  `auto_retire_reason='inactivity_timeout'`.
 
 ### §10.3 Safety (the make-or-break)
 
@@ -1065,6 +1171,38 @@ Bounded, audit-able, regime-aware-n_trials-fenced.
 All new tests under `tpcore/tests/` and `ops/tests/` that import
 `ops.llm_triage_service` or touch `sys.modules['ops']` carry
 `pytestmark = pytest.mark.xdist_group("ops_shadow")`.
+
+### §10.6.b Empirical gate-pilot (NEW per outcome-expert §1 BLOCKS — pre-build gate)
+
+**Before T8 (agent core) lands**, the plan must demonstrate the
+persona + toolkit produces qualitatively-different hypotheses than
+the 4 hand-designed candidates that FAILED on 2026-05-21
+(`vector_composite`, `reversion_pca_residual`, `sentinel_bear_score`,
+`catalyst_insider_drift`). The pilot is a one-time mocked dry-run:
+
+1. Construct `MarketSnapshot` matching the 2024-2025 holdout window
+   each failed candidate saw.
+2. Inject the v1 persona + reference bundles (`dsr_ntrials_
+   discipline.md`, `market_structure_primer.md`,
+   `regime_aware_trading.md`, `carver_*`, `chan_*`).
+3. Dispatch ANTHROPIC API (operator-authorized for the pilot only)
+   with the §3.2 Phase B loop.
+4. Inspect the `proposed_specs` against the 4 failed candidates'
+   designs.
+5. Pilot PASSES iff ≥1 of the 4 emissions is **structurally
+   distinct** (not a McLean-Pontiff-decay-class re-implementation,
+   per the persona §7.5 framing).
+
+Pilot FAILURE = build does not proceed. v1.5 spec needed to either
+(a) enrich the substrate (more ingested tables) or (b) widen the
+toolkit or (c) acknowledge v1 success rate may be zero. The
+operator audits the pilot output before T8.
+
+This fence directly addresses the outcome-expert's load-bearing
+finding: the spec assumes "richer surface + regime-conditioning =
+qualitatively better hypotheses" — the pilot is the empirical proof
+of (or honest falsification of) that assumption, BEFORE building
+the autonomous loop on top of it.
 
 ### §10.6 The load-bearing E2E proof (v1 success criterion, mock-driven)
 
