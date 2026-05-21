@@ -1,48 +1,49 @@
-"""Regression test for the daily_bars coverage_collapse → repair_gaps
-auto-cascade (operator-reproduced failure 2026-05-18 → 2026-05-20).
+"""Regression test for the daily_bars coverage_collapse → force_refresh
+auto-cascade with live SIP-vs-IEX feed selection (operator-reproduced
+2026-05-18 → 2026-05-21).
 
-Failure mode being closed:
+Why this rewrite (vs. the PR #227 shape):
 
-* nightly data daemon ran 21:30 UTC Mon/Tue/Wed
-* each night ``_stage_daily_bars`` produced
-  ``RuntimeError("daily_bars coverage collapse: <date> has <n> tickers = 6%")``
-  via the producer-self-validation block
-* the StageResult became ``FAILED`` and the orchestrator returned exit 1
-* **zero** auto-recovery fired despite the codebase already shipping the
-  bounded ``repair_gaps`` heal that is the canonical fix
-* the operator had to intervene every morning
+PR #227 wired the cascade *trigger* but cascaded to the WRONG mechanism:
+``_stage_daily_bars`` with ``repair_gaps=true``. The operator demonstrated
+2026-05-21 07:39 UTC that the repair_gaps branch is BLIND to this exact
+failure mode — its completeness-derived target list returns
+``skipped: no_gaps_or_not_bars_fixable``, so the cascade would have
+proudly logged ``INGESTION_AUTO_RECOVERED`` while the data stayed broken
+at 7%.
 
-What the cascade ships (in ``scripts/ops.py:cmd_update``):
+The actual recovery the operator ran by hand and verified:
 
-* exactly-once recovery — coverage_collapse only (not auth, not schema
-  drift, not other RuntimeError modes)
-* runs ``_stage_daily_bars(repair_gaps=true)`` once
-* logs ``INGESTION_AUTO_RECOVERY_START``, then either
-  ``INGESTION_AUTO_RECOVERED`` (success) or
-  ``INGESTION_AUTO_RECOVERY_FAILED`` (escalation surface)
-* replaces the failed ``daily_bars`` StageResult with the cascade
-  result, annotated ``cascade=True`` + ``cascade_mode=repair_gaps``
-* never burns Lab n_trials
+    --param force_refresh=true --param universe=active --param feed=sip
+    --param end_offset_days=1
 
-These tests construct a minimal harness — they monkey-patch
-``_stage_daily_bars`` itself so the test stays hermetic (no DB, no
-network) and the cascade's INVOCATION can be observed independently of
-the heal's internals (the heal already has its own unit tests).
+So the cascade now:
 
-Three behaviours pinned:
+1. Probes SIP availability via a live 10s GET against the Alpaca data
+   endpoint with ``feed=sip``.
+2. Picks ``feed="sip"`` if probe → True, else ``feed="iex"`` (degraded).
+3. Re-runs ``_stage_daily_bars`` with ``force_refresh=True`` +
+   ``universe="active"`` + the chosen feed.
 
-1. coverage_collapse → cascade fires → daily_bars entry replaced by an
-   OK cascade result + ``INGESTION_AUTO_RECOVERED`` logged.
-2. coverage_collapse + cascade ALSO fails → daily_bars entry stays
-   FAILED + ``INGESTION_AUTO_RECOVERY_FAILED`` logged (operator sees
-   the escalation, not a silent give-up).
-3. non-coverage_collapse FAILED (e.g. an auth failure) → cascade does
-   NOT fire (no second invocation, no auto-recovery event).
+Events:
 
-A fourth structural test pins that the cascade's discriminator token
-matches the actual RuntimeError message format raised by
-``_stage_daily_bars`` (so the cascade can never silently miss the
-exact wording it's keyed off).
+* ``INGESTION_AUTO_RECOVERY_START`` — cascade fires (data.feed is the
+  picked feed).
+* ``INGESTION_AUTO_RECOVERED`` — SIP probe passed, force_refresh
+  feed=sip recovered to ≥ floor.
+* ``INGESTION_AUTO_RECOVERY_DEGRADED`` — SIP probe failed (or
+  coverage still below floor on IEX), feed=iex ran — partial recovery.
+* ``INGESTION_AUTO_RECOVERY_FAILED`` — fetch did not land at all
+  (network/auth, NOT a coverage-collapse re-fail).
+
+The five behaviours pinned (one of which is the structural pin):
+
+A. SIP-available cascade — probe True → feed=sip → RECOVERED.
+B. SIP-unavailable degraded cascade — probe False → feed=iex → DEGRADED.
+C. Cascade-fully-fails escalation — both paths fail with non-coverage
+   errors (network down) → FAILED.
+D. Non-coverage_collapse failure (auth) — cascade does NOT fire.
+E. Discriminator-token structural pin.
 """
 from __future__ import annotations
 
@@ -110,14 +111,26 @@ class _FakeDBLog:
 class _CountingStubStage:
     """Stand-in for ``_stage_daily_bars`` that records every call.
 
-    First call: raises ``RuntimeError`` with the operator-observed
-    coverage_collapse message. Second call (the cascade): if
-    ``recover`` is True, returns an OK result with mode=repair_gaps;
-    else raises a fresh failure (escalation path)."""
+    First call (non-cascade): raises ``RuntimeError`` with the
+    operator-observed coverage_collapse message. Second call (cascade,
+    identified by ``force_refresh=True``):
 
-    def __init__(self, *, recover: bool, raise_cls: type[Exception] = RuntimeError,
-                 first_error: str | None = None) -> None:
-        self.recover = recover
+    * ``cascade_outcome="recover"`` → return OK dict
+    * ``cascade_outcome="coverage_collapse"`` → raise the same
+      coverage-collapse RuntimeError (IEX-subset-only outcome: fetch
+      ran but coverage still below floor — DEGRADED)
+    * ``cascade_outcome="network_down"`` → raise a NON-coverage-collapse
+      error (Alpaca unreachable — FAILED escalation)
+    """
+
+    def __init__(
+        self,
+        *,
+        cascade_outcome: str = "recover",
+        raise_cls: type[Exception] = RuntimeError,
+        first_error: str | None = None,
+    ) -> None:
+        self.cascade_outcome = cascade_outcome
         self.raise_cls = raise_cls
         # Operator's actual message (2026-05-18 application_log).
         # The cascade discriminator must match this format.
@@ -130,22 +143,42 @@ class _CountingStubStage:
 
     async def __call__(self, pool, config):
         self.calls.append({
-            "repair_gaps": bool(config.get("repair_gaps", False)),
-            "repair_coverage": bool(config.get("repair_coverage", False)),
             "force_refresh": bool(config.get("force_refresh", False)),
+            "repair_gaps": bool(config.get("repair_gaps", False)),
+            "feed": config.get("feed"),
+            "universe": config.get("universe"),
+            "lookback_days": config.get("lookback_days"),
+            "end_offset_days": config.get("end_offset_days"),
         })
-        is_cascade = bool(config.get("repair_gaps", False))
+        is_cascade = bool(config.get("force_refresh", False))
         if not is_cascade:
             # First-pass producer-self-validation failure.
             raise self.raise_cls(self.first_error)
-        if self.recover:
+        # The cascade invocation — branch on the requested outcome.
+        if self.cascade_outcome == "recover":
             return {
-                "rows_upserted": 480,
-                "mode": "repair_gaps",
-                "tickers_repaired": 480,
-                "lookback_days": 14,
+                "rows_upserted": 7300,
+                "mode": "force_refresh",
+                "feed": config.get("feed"),
+                "target_session": "2026-05-21",
+                "coverage_tickers": 7300,
             }
-        raise RuntimeError("repair_gaps also failed: SEC EDGAR rate-limited")
+        if self.cascade_outcome == "coverage_collapse":
+            # IEX-subset cascade landed but coverage still below floor.
+            # _stage_daily_bars raises a coverage_collapse RuntimeError
+            # in this case (fetch DID run; producer self-validation
+            # refused to report OK).
+            raise self.raise_cls(self.first_error)
+        if self.cascade_outcome == "network_down":
+            # Both the SIP probe failed AND the IEX-fallback fetch
+            # raised a non-coverage error (Alpaca unreachable). This is
+            # the FAILED-escalation surface, distinct from DEGRADED.
+            raise self.raise_cls(
+                "alpaca unreachable: ConnectError(\"timed out\")"
+            )
+        raise AssertionError(  # pragma: no cover — test bug
+            f"unknown cascade_outcome={self.cascade_outcome!r}"
+        )
 
 
 def _install_logger(monkeypatch):
@@ -154,7 +187,13 @@ def _install_logger(monkeypatch):
     return structlog.get_logger("test.auto_cascade")
 
 
-def _patch_minimal_pipeline(monkeypatch, stub, *, only_daily_bars: bool = True):
+def _patch_minimal_pipeline(
+    monkeypatch,
+    stub,
+    *,
+    sip_ok: bool | Exception = True,
+    only_daily_bars: bool = True,
+):
     """Reduce ``cmd_update`` to a single-stage pipeline so the test can
     focus on the cascade decision without dragging every other stage
     into the harness. Achieved by:
@@ -165,10 +204,17 @@ def _patch_minimal_pipeline(monkeypatch, stub, *, only_daily_bars: bool = True):
     * patching ``_self_heal_failed_stages`` → no-op (this exercises the
       coverage_collapse cascade in isolation, NOT the transient retry)
     * patching the stage spec list to just ``daily_bars`` with our stub
+    * patching ``_alpaca_sip_available`` → fixed bool / raise
+
+    ``sip_ok`` controls the SIP-probe stub:
+    * ``True`` → probe returns True (SIP available — cascade picks sip)
+    * ``False`` → probe returns False (SIP unavailable — cascade picks iex)
+    * ``Exception`` instance → probe raises (cascade must tolerate +
+      fall back to iex)
     """
 
     async def _fake_load_config(_pool):
-        return {"universe": "active", "lookback_days": 10}
+        return {"universe": "active", "lookback_days": 7}
 
     monkeypatch.setattr(ops, "_load_daily_bars_config", _fake_load_config)
     monkeypatch.setattr(ops, "_market_open_block_reason", lambda *a, **k: None)
@@ -185,6 +231,16 @@ def _patch_minimal_pipeline(monkeypatch, stub, *, only_daily_bars: bool = True):
 
     monkeypatch.setattr(ops, "_stage_daily_bars", stub)
 
+    # SIP probe stub.
+    if isinstance(sip_ok, Exception):
+        async def _probe_raises(*a, **k):
+            raise sip_ok
+        monkeypatch.setattr(ops, "_alpaca_sip_available", _probe_raises)
+    else:
+        async def _probe_const(*a, **k):
+            return bool(sip_ok)
+        monkeypatch.setattr(ops, "_alpaca_sip_available", _probe_const)
+
     if only_daily_bars:
         # Build a single-stage spec list using the LIVE timeout constant
         # so we exercise the real _run_stage path.
@@ -199,15 +255,13 @@ def _patch_minimal_pipeline(monkeypatch, stub, *, only_daily_bars: bool = True):
 
 
 # ────────────────────────────────────────────────────────────────────────
-# 1. Happy path — coverage_collapse → cascade fires → recovery.
+# A. SIP-available cascade — probe True → feed=sip → RECOVERED.
 # ────────────────────────────────────────────────────────────────────────
 
 
-async def test_coverage_collapse_triggers_repair_gaps_cascade_and_recovers(
-    monkeypatch,
-):
-    stub = _CountingStubStage(recover=True)
-    _patch_minimal_pipeline(monkeypatch, stub)
+async def test_sip_available_cascade_uses_sip_and_recovers(monkeypatch):
+    stub = _CountingStubStage(cascade_outcome="recover")
+    _patch_minimal_pipeline(monkeypatch, stub, sip_ok=True)
     log = _install_logger(monkeypatch)
     db_log = _FakeDBLog()
 
@@ -220,10 +274,16 @@ async def test_coverage_collapse_triggers_repair_gaps_cascade_and_recovers(
         f"expected 2 _stage_daily_bars calls (first-pass + cascade), "
         f"got {len(stub.calls)}: {stub.calls}"
     )
-    # 1a. First call: NOT repair_gaps (the normal pull).
+    # 1a. First call: NOT force_refresh (the normal pull).
+    assert stub.calls[0]["force_refresh"] is False
     assert stub.calls[0]["repair_gaps"] is False
-    # 1b. Second call: repair_gaps=true (the cascade).
-    assert stub.calls[1]["repair_gaps"] is True
+    # 1b. Second call: the cascade — force_refresh=True + universe=active
+    #     + feed=sip. NOT repair_gaps (that was PR #227's broken cascade
+    #     target; this PR replaces it with the operator-verified shape).
+    assert stub.calls[1]["force_refresh"] is True, stub.calls[1]
+    assert stub.calls[1]["repair_gaps"] is False, stub.calls[1]
+    assert stub.calls[1]["feed"] == "sip", stub.calls[1]
+    assert stub.calls[1]["universe"] == "active", stub.calls[1]
 
     # 2. The summary contains exactly ONE daily_bars row (replaced, not
     #    duplicated) and it reflects the RECOVERY, not the original
@@ -232,7 +292,9 @@ async def test_coverage_collapse_triggers_repair_gaps_cascade_and_recovers(
     assert len(db_rows) == 1
     assert db_rows[0].status == "OK"
     assert db_rows[0].detail.get("cascade") is True
-    assert db_rows[0].detail.get("cascade_mode") == "repair_gaps"
+    assert db_rows[0].detail.get("cascade_mode") == "force_refresh"
+    assert db_rows[0].detail.get("feed") == "sip"
+    assert db_rows[0].detail.get("sip_probe") is True
     assert "coverage collapse" in (db_rows[0].detail.get("first_error") or "")
 
     # 3. Overall exit_code is 0 (recovered, no FAILED entries).
@@ -242,27 +304,90 @@ async def test_coverage_collapse_triggers_repair_gaps_cascade_and_recovers(
     event_types = [e["event_type"] for e in db_log.events]
     assert "INGESTION_AUTO_RECOVERY_START" in event_types, event_types
     assert "INGESTION_AUTO_RECOVERED" in event_types, event_types
+    assert "INGESTION_AUTO_RECOVERY_DEGRADED" not in event_types
     assert "INGESTION_AUTO_RECOVERY_FAILED" not in event_types
 
-    # 5. The escalation event was NOT emitted (this is the green path).
     start = next(e for e in db_log.events
                  if e["event_type"] == "INGESTION_AUTO_RECOVERY_START")
-    assert start["data"].get("cascade_mode") == "repair_gaps"
+    assert start["data"].get("cascade_mode") == "force_refresh"
     assert start["data"].get("trigger") == "coverage_collapse"
+    assert start["data"].get("feed") == "sip"
+    assert start["data"].get("reason") == "sip_probe_ok"
+
     recovered = next(e for e in db_log.events
                      if e["event_type"] == "INGESTION_AUTO_RECOVERED")
     assert recovered["severity"] == "INFO"
+    assert recovered["data"].get("feed") == "sip"
     assert "coverage collapse" in (recovered["data"].get("first_error") or "")
 
 
 # ────────────────────────────────────────────────────────────────────────
-# 2. Escalation — cascade ALSO fails.
+# B. SIP-unavailable degraded cascade — probe False → feed=iex → DEGRADED.
 # ────────────────────────────────────────────────────────────────────────
 
 
-async def test_cascade_also_fails_emits_escalation_event(monkeypatch):
-    stub = _CountingStubStage(recover=False)
-    _patch_minimal_pipeline(monkeypatch, stub)
+async def test_sip_unavailable_cascade_falls_back_to_iex_degraded(monkeypatch):
+    # SIP probe returns False (simulating the 403 "subscription does not
+    # permit" response). IEX cascade lands but coverage is still below
+    # the floor → producer self-validation raises coverage_collapse
+    # again. The cascade should emit AUTO_RECOVERY_DEGRADED (NOT FAILED,
+    # because the fetch DID run — it just landed below floor on the
+    # narrower IEX universe).
+    stub = _CountingStubStage(cascade_outcome="coverage_collapse")
+    _patch_minimal_pipeline(monkeypatch, stub, sip_ok=False)
+    log = _install_logger(monkeypatch)
+    db_log = _FakeDBLog()
+
+    summary = await ops.cmd_update(
+        _FakePool(), log, db_log, dry_run=False, force=True,
+    )
+
+    # Cascade fired exactly once with feed=iex.
+    assert len(stub.calls) == 2
+    assert stub.calls[1]["force_refresh"] is True
+    assert stub.calls[1]["feed"] == "iex", stub.calls[1]
+    assert stub.calls[1]["universe"] == "active"
+
+    # Stage stays FAILED (the IEX fetch produced sub-floor coverage)
+    # but with the cascade annotation so dashboard readers see this was
+    # an attempted recovery on the IEX feed.
+    db_rows = [s for s in summary.stages if s.name == "daily_bars"]
+    assert len(db_rows) == 1
+    assert db_rows[0].status == "FAILED"
+    assert db_rows[0].detail.get("cascade") is True
+    assert db_rows[0].detail.get("feed") == "iex"
+    assert db_rows[0].detail.get("sip_probe") is False
+
+    # Events: START → DEGRADED. NOT RECOVERED, NOT FAILED.
+    event_types = [e["event_type"] for e in db_log.events]
+    assert "INGESTION_AUTO_RECOVERY_START" in event_types, event_types
+    assert "INGESTION_AUTO_RECOVERY_DEGRADED" in event_types, event_types
+    assert "INGESTION_AUTO_RECOVERED" not in event_types
+    assert "INGESTION_AUTO_RECOVERY_FAILED" not in event_types
+
+    start = next(e for e in db_log.events
+                 if e["event_type"] == "INGESTION_AUTO_RECOVERY_START")
+    assert start["data"].get("feed") == "iex"
+    assert start["data"].get("reason") == "sip_probe_fail"
+
+    degraded = next(e for e in db_log.events
+                    if e["event_type"] == "INGESTION_AUTO_RECOVERY_DEGRADED")
+    assert degraded["severity"] == "WARNING"
+    assert degraded["data"].get("feed") == "iex"
+    assert degraded["data"].get("reason") == "sip_probe_fail"
+
+
+# ────────────────────────────────────────────────────────────────────────
+# C. Cascade-fully-fails escalation — both probe + IEX fallback fail.
+# ────────────────────────────────────────────────────────────────────────
+
+
+async def test_cascade_fully_fails_emits_recovery_failed(monkeypatch):
+    # SIP probe False (entitlement issue or network) AND the IEX
+    # fallback fetch raises a non-coverage error (Alpaca network down).
+    # No fetch landed at all → FAILED escalation.
+    stub = _CountingStubStage(cascade_outcome="network_down")
+    _patch_minimal_pipeline(monkeypatch, stub, sip_ok=False)
     log = _install_logger(monkeypatch)
     db_log = _FakeDBLog()
 
@@ -272,7 +397,8 @@ async def test_cascade_also_fails_emits_escalation_event(monkeypatch):
 
     # ONE-SHOT: cascade fired exactly once, did not loop.
     assert len(stub.calls) == 2
-    assert stub.calls[1]["repair_gaps"] is True
+    assert stub.calls[1]["force_refresh"] is True
+    assert stub.calls[1]["feed"] == "iex"
 
     # Final stage state: FAILED (escalated honestly), with the cascade
     # annotation so the dashboard reader can tell this was an attempted
@@ -281,21 +407,62 @@ async def test_cascade_also_fails_emits_escalation_event(monkeypatch):
     assert len(db_rows) == 1
     assert db_rows[0].status == "FAILED"
     assert db_rows[0].detail.get("cascade") is True
+    assert db_rows[0].detail.get("feed") == "iex"
     assert summary.exit_code == 1
 
-    # Escalation event was logged with severity=ERROR.
+    # FAILED event was logged with severity=ERROR.
     event_types = [e["event_type"] for e in db_log.events]
     assert "INGESTION_AUTO_RECOVERY_START" in event_types
     assert "INGESTION_AUTO_RECOVERY_FAILED" in event_types
     assert "INGESTION_AUTO_RECOVERED" not in event_types
+    assert "INGESTION_AUTO_RECOVERY_DEGRADED" not in event_types
     failed = next(e for e in db_log.events
                   if e["event_type"] == "INGESTION_AUTO_RECOVERY_FAILED")
     assert failed["severity"] == "ERROR"
-    assert failed["data"].get("cascade_mode") == "repair_gaps"
+    assert failed["data"].get("cascade_mode") == "force_refresh"
+    assert failed["data"].get("feed") == "iex"
+    # The cascade_error must reflect the network-down failure, NOT
+    # coverage_collapse (the discriminator that pins us to DEGRADED
+    # instead would be "coverage collapse" being present in the error).
+    err = (failed["data"].get("cascade_error") or "").lower()
+    assert "coverage collapse" not in err
+    assert "alpaca" in err or "connect" in err
+
+
+async def test_probe_exception_is_tolerated_as_sip_unavailable(monkeypatch):
+    """If the SIP probe itself raises (e.g. a transient network error
+    inside the httpx client setup), the cascade must NOT crash — it must
+    treat the probe as False and fall through to the IEX-degraded
+    path."""
+    stub = _CountingStubStage(cascade_outcome="coverage_collapse")
+    _patch_minimal_pipeline(
+        monkeypatch,
+        stub,
+        sip_ok=RuntimeError("probe blew up: DNS"),
+    )
+    log = _install_logger(monkeypatch)
+    db_log = _FakeDBLog()
+
+    summary = await ops.cmd_update(
+        _FakePool(), log, db_log, dry_run=False, force=True,
+    )
+
+    # Cascade fell through to IEX.
+    assert len(stub.calls) == 2
+    assert stub.calls[1]["feed"] == "iex"
+
+    event_types = [e["event_type"] for e in db_log.events]
+    assert "INGESTION_AUTO_RECOVERY_DEGRADED" in event_types, event_types
+
+    # Sanity — the original summary still has the daily_bars cascade
+    # row with feed=iex annotation.
+    db_rows = [s for s in summary.stages if s.name == "daily_bars"]
+    assert len(db_rows) == 1
+    assert db_rows[0].detail.get("feed") == "iex"
 
 
 # ────────────────────────────────────────────────────────────────────────
-# 3. Non-coverage_collapse failure — cascade must NOT fire.
+# D. Non-coverage_collapse failure — cascade must NOT fire.
 # ────────────────────────────────────────────────────────────────────────
 
 
@@ -305,10 +472,10 @@ async def test_non_coverage_collapse_failure_does_not_trigger_cascade(
     # Different failure surface — auth/credential — explicitly NOT the
     # cascade's target.
     stub = _CountingStubStage(
-        recover=True,  # would recover if cascade fired (it must not)
+        cascade_outcome="recover",  # would recover if cascade fired (it must not)
         first_error="daily_bars failed: AlpacaAuth 401 unauthorized",
     )
-    _patch_minimal_pipeline(monkeypatch, stub)
+    _patch_minimal_pipeline(monkeypatch, stub, sip_ok=True)
     log = _install_logger(monkeypatch)
     db_log = _FakeDBLog()
 
@@ -331,11 +498,12 @@ async def test_non_coverage_collapse_failure_does_not_trigger_cascade(
     event_types = [e["event_type"] for e in db_log.events]
     assert "INGESTION_AUTO_RECOVERY_START" not in event_types
     assert "INGESTION_AUTO_RECOVERED" not in event_types
+    assert "INGESTION_AUTO_RECOVERY_DEGRADED" not in event_types
     assert "INGESTION_AUTO_RECOVERY_FAILED" not in event_types
 
 
 # ────────────────────────────────────────────────────────────────────────
-# 4. Discriminator token matches the producer-self-validation raise.
+# E. Discriminator token matches the producer-self-validation raise.
 # ────────────────────────────────────────────────────────────────────────
 
 
@@ -355,3 +523,11 @@ def test_cascade_token_matches_stage_self_validation_raise():
         f"Token: {token!r}"
     )
     assert token.lower() in "daily_bars coverage collapse:".lower()
+
+
+def test_sip_probe_helper_is_exported():
+    """The SIP probe helper must be importable from ops — it's the
+    load-bearing decision the cascade keys off of. Removing it should
+    break this test loudly."""
+    assert hasattr(ops, "_alpaca_sip_available")
+    assert callable(ops._alpaca_sip_available)
