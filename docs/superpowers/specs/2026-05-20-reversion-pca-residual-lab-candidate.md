@@ -203,14 +203,11 @@ That is the desired property.
 
 ### 3.3 Train / held-back
 
-- **Train start: 2026-01-01** → train end: 2021-12-31. ≈ 10 years
-  pre-COVID + the COVID/post-COVID regime; honors the platform's
-  oldest data (~ 28 tickers pre-2000 makes the literature's 1999
-  start dishonest; 2011-01-01 train start is the **honest floor**).
-  *(NOTE: corrected from TODO's "2011-01-01" given the 28-ticker pre-
-  2000 floor — TODO wording was clarified during spec authorship; the
-  honest train start is **2011-01-01**, matching the existing
-  reversion backtest substrate.)*
+- **Train start: 2011-01-01** → train end: 2021-12-31. ≈ 10 years
+  pre-COVID; honors the platform's oldest data (~ 28 tickers pre-2000
+  makes the literature's 1999 start dishonest; 2011-01-01 train start
+  is the **honest floor**, matching the existing reversion backtest
+  substrate).
 - **Held-back start: 2022-01-01**, end = present.
 
 Both are the canonical reversion held-back boundaries. The TODO

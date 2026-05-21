@@ -219,14 +219,30 @@ Exactly ONE robustness check is pre-registered. It is run **once**, reported
 in the dossier, and **counted as one additional trial** in the n_trials
 accounting (§5). It is NOT a parameter the Lab samples.
 
-> **Robustness check: catalyst-family ablation.** Re-run the held-back
-> evaluation ONCE with the catalyst family forced to its earnings-only
-> sub-signal (`c_raw = z(earn_signal)`, insider-cluster term zeroed),
-> weights unchanged. Purpose: the "**no family > 70% of score variance**"
-> gate clause (§5) requires evidence that no single family (and within
-> catalyst, no single sub-signal) dominates. This ablation is the pre-
-> declared instrument for that clause. It does not change the primary
-> verdict; it produces the family-variance evidence the gate consumes.
+> **Robustness check: equal-weight ablation.** Re-run the held-back
+> evaluation ONCE with the composite weights flattened to
+> `(1/3, 1/3, 1/3)` (i.e. `composite(t) = (v_z(t) + c_z(t) + tech_z(t)) / 3`)
+> instead of the adjudicated `(0.35, 0.40, 0.25)`. All other code constants
+> unchanged. Purpose: the weights are the spec's least-anchored choice —
+> they are pinned by the adjudication, not by a single literature paper
+> (the value / catalyst / technical families each have literature anchors;
+> the specific `0.35 / 0.40 / 0.25` mix does not). The equal-weight ablation
+> tests sensitivity to that least-anchored choice directly. It does not
+> change the primary verdict; it produces the weight-robustness evidence
+> the verdict reports alongside the primary configuration.
+
+> *Swap note (2026-05-21).* The originally pre-declared ablation in this
+> §2.6 was the catalyst-family ablation (re-run with the catalyst family
+> forced to its earnings-only sub-signal). Per the lab-candidate audit
+> 2026-05-20 §4 G1 follow-up, swapped to the equal-weight ablation:
+> weights are the spec's least-anchored choice, and the equal-weight
+> ablation tests that anchor directly. The "no family > 70% of score
+> variance" gate clause (§5) is unchanged in form; its evidence is now
+> sourced from the primary composite's per-family contribution
+> decomposition (computable on the primary run alone — the per-name
+> per-family `v_z / c_z / tech_z` contributions are already produced by
+> the composite path), with the equal-weight ablation reporting the
+> weight-perturbation robustness alongside it.
 
 Two configurations total: the primary composite + this ONE ablation ⇒ the
 candidate honestly contributes its own internal trial budget on top of the
@@ -368,7 +384,7 @@ adjudication bar, restated and never relaxed:
 | PBO | **≤ 0.20** | See §5.1 — strengthened from the platform default 0.50 to the adjudication's 0.20; reported in the dossier and gate-checked. |
 | Held-back trades | **≥ 150** | `core.held_metrics.n_trades` (`SliceMetrics.n_trades`, in `LabResult.held_metrics`). Strengthened from the Lab's structural `>= 3` floor to the adjudication's `>= 150`. |
 | Candidate count | **≥ 3× current gate-model candidate count** | Trade-count proxy: the composite must select/trade ≥ 3× the AND-gate's held-back trade count on the SAME held-back window. Measured by running the AND-gate (`composite_mode=and_gate`) once on the held-back window as the denominator (this is the pre-declared robustness check's sibling measurement — see §5.2; it does NOT add a third primary config, it reuses the C1/ablation runs' AND-gate evaluation). |
-| Family variance | **no family > 70% of score variance** | From the §2.6 catalyst-ablation: decompose held-back composite variance into the value/catalyst/technical contributions; assert `max(share) <= 0.70`. The ablation supplies the catalyst-vs-rest evidence. |
+| Family variance | **no family > 70% of score variance** | Decompose held-back composite variance into the value/catalyst/technical contributions from the primary composite run (per-name per-family `v_z / c_z / tech_z` are already produced on the composite path); assert `max(share) <= 0.70`. The §2.6 equal-weight ablation supplies the companion weight-robustness evidence reported alongside the primary verdict. |
 
 **The gate is preserved-or-strengthened on every clause. No clause is
 relaxed. The gate is never bypassed — the candidate routes through
@@ -393,8 +409,9 @@ against the code:
   (unlike Sentinel):** Vector's gate clauses are all Sharpe/DSR/trade-count
   /variance quantities that are *already computed on the Lab held-back
   slice* — `held_metrics` (n_trades, sharpe, profit_factor, max_drawdown,
-  win_rate), `dsr`, `credibility_score`, plus the ablation-derived variance
-  decomposition. PBO≤0.20 is satisfiable from the **Lab's own walk-forward
+  win_rate), `dsr`, `credibility_score`, plus the per-family variance
+  decomposition (from the primary composite's `v_z / c_z / tech_z`
+  contributions; §5). PBO≤0.20 is satisfiable from the **Lab's own walk-forward
   trial matrix**: `_run_lab_core` already evaluates `per_window_trials`
   candidates per window producing per-trial holdout return series; the build
   task (T5) assembles those per-trial holdout `period_returns` into the
@@ -422,8 +439,9 @@ against the code:
   whatever is used is the honest deflation N.
 - This candidate adds **exactly TWO configurations** to the engine-lane
   research ledger: (1) the primary composite spec, (2) the ONE pre-declared
-  catalyst-ablation robustness check (§2.6). The AND-gate denominator run
-  for the "≥3× candidate count" clause (§5) is **not a third hypothesis** —
+  equal-weight ablation robustness check (§2.6). The AND-gate denominator
+  run for the "≥3× candidate count" clause (§5) is **not a third
+  hypothesis** —
   it is a measurement of the existing live baseline on the held-back
   window, reusing the `composite_mode=and_gate` evaluation, claiming no
   edge of its own.
@@ -528,7 +546,7 @@ dispatch/daemon/SoT/roster changes.**
 | **H-VC-2** | n_trials inflation via a hidden grid (the platform constraint). | `composite_mode` is the ONLY added Lab-sampled key; weights/sector-method/cluster-window/decile/long-only are CODE CONSTANTS (§2), never sampled. Exactly 2 configs (primary + 1 ablation) recorded against n_trials (§5.2). The rejected `--family-weights` menu is explicitly NOT added (§4.1). A test asserts `PARAM_RANGES["vector"]` gained exactly one key and it is the choice toggle. |
 | **H-VC-3** | Sector-source BLOCKER hand-waved. | §6.1 states the exact gap (information_schema = []) + the ONE pre-registered conservative fallback (full-universe single-group standardization), zero new feeds; true per-sector deferred to a separate future candidate. The fallback is pinned in code, not a runtime choice. |
 | **H-VC-4** | The graduation gate relaxed or bypassed. | §5 restates every clause preserved-or-strengthened (PBO 0.50→0.20, trades 3→150); routes through `python -m ops.lab` → `_run_lab_core` → `survived` → dossier → ECR like every candidate; experimental credibility namespaced `lab.vector_composite` (H-S2-3, reused) so `graduation_ready(pool,"vector")` can never read it. No `--credibility-threshold`/`--dsr-threshold` override below the gate is permitted in the run command. |
-| **H-VC-5** | PBO/family-variance not actually expressible ⇒ silent gate gap (the Sentinel failure mode). | §5.1 verifies by code inspection every clause maps to an existing/trivially-derivable `LabResult` field; PBO uses the Lab's own per-trial walk-forward holdout returns as the CSCV matrix (T5); degenerate CSCV ⇒ **FAIL** (skipped ≠ pass, pre-registered fail-closed). Family-variance from the §2.6 ablation. |
+| **H-VC-5** | PBO/family-variance not actually expressible ⇒ silent gate gap (the Sentinel failure mode). | §5.1 verifies by code inspection every clause maps to an existing/trivially-derivable `LabResult` field; PBO uses the Lab's own per-trial walk-forward holdout returns as the CSCV matrix (T5); degenerate CSCV ⇒ **FAIL** (skipped ≠ pass, pre-registered fail-closed). Family-variance is decomposed from the primary composite's per-family `v_z / c_z / tech_z` contributions (§5); the §2.6 equal-weight ablation is the companion weight-robustness evidence. |
 | **H-VC-6** | Lookahead via the catalyst forward half-window or insider-filing-date timing. | The composite uses STRICTLY-BACKWARD windows: earnings `[sim_date - w, sim_date]`, insider `[sim_date - 30, sim_date]` (§2.2) — NOT the live AND-gate's documented ±window. Entry remains next-bar-open. The held-back DSR is therefore lookahead-honest. A unit test pins that no row with date > `sim_date` ever enters a score. |
 | **H-VC-7** | Insider-cluster degenerate column blows up z-scores when a `sim_date` has no clusters. | Per-family zero-variance guard `std<=1e-9 → z:=0.0` for every name (§2.3); `insider_signal` standardized independently before being summed into `c_z`; unit-tested. |
 | **H-VC-8** | Module-global override bleeds across Lab trials (the existing `_*_OVERRIDE` hazard). | `_COMPOSITE_MODE_OVERRIDE` reset per `run_vector_with_context` call exactly like `_SWING_SCORE_THRESHOLD_OVERRIDE`; C4 characterization test pins no cross-trial bleed. |
@@ -619,11 +637,14 @@ task.
   CSCV-PBO that lands in `LabResult.credibility_rubric`/dossier. Test:
   exactly one key added & it is the choice toggle; PBO populated (not
   skipped) on a non-degenerate fixture; degenerate ⇒ FAIL. H-VC-2, H-VC-5.
-- **T6 — Pre-declared catalyst ablation + family-variance.** Implement the
-  §2.6 ONE ablation run and the held-back composite-variance decomposition
-  feeding the "no family > 70%" gate clause. Test: variance shares sum to 1,
-  `max <= 0.70` assertion wired into the verdict, ablation counted as one
-  trial in the ledger.
+- **T6 — Pre-declared equal-weight ablation + family-variance.** Implement
+  the §2.6 ONE ablation run (composite re-evaluated on the held-back
+  window with weights `(1/3, 1/3, 1/3)`) and the held-back
+  composite-variance decomposition (from the primary run's per-family
+  contributions) feeding the "no family > 70%" gate clause. Test:
+  variance shares sum to 1, `max <= 0.70` assertion wired into the
+  verdict, equal-weight ablation reported in the dossier alongside the
+  primary verdict, ablation counted as one trial in the ledger.
 - **T7 — Gate assembly + dossier.** Extend the verdict so SURVIVED requires
   ALL §5 clauses (DSR≥0.95 ∧ cred≥60 ∧ PBO≤0.20 ∧ trades≥150 ∧ ≥3×AND-gate
   ∧ family≤70%); skipped-PBO ⇒ FAIL. Test the full §9 truth table on
@@ -676,13 +697,13 @@ task.
 
 `docs/superpowers/checklists/lab_candidate_readiness.md` is the abstracting checklist this spec's pilot inspired. Walking each of its 10 sections against this 2026-05-20 refresh:
 
-**§1 Single pre-registered primary hypothesis.** ✅ This spec, ONE primary metric (held-back DSR ≥ 0.95 ∧ cred ≥ 60 ∧ PBO ≤ 0.20 ∧ n_trades ≥ 150 ∧ ≥3× AND-gate ∧ family ≤ 70% — §5 truth table). At most ONE pre-declared robustness check (§2.6 catalyst ablation). Placeholder scan empty (§12). Every numeric constant pinned (§2). NOT a sweep (§10).
+**§1 Single pre-registered primary hypothesis.** ✅ This spec, ONE primary metric (held-back DSR ≥ 0.95 ∧ cred ≥ 60 ∧ PBO ≤ 0.20 ∧ n_trades ≥ 150 ∧ ≥3× AND-gate ∧ family ≤ 70% — §5 truth table). At most ONE pre-declared robustness check (§2.6 equal-weight ablation; swapped from the original catalyst-family ablation on 2026-05-21 per the lab-candidate audit G1 follow-up). Placeholder scan empty (§12). Every numeric constant pinned (§2). NOT a sweep (§10).
 
 **§2 Feature-flag-variant pattern.** ✅ `_COMPOSITE_MODE_OVERRIDE` in `vector/backtest.py` only (§3.1). Exactly ONE new `PARAM_RANGES["vector"]` key (`"composite_mode": (0, 0, "choice:and_gate,composite")` — §4.1). Override reset per call (§4.2, H-VC-8). `VECTOR_OVERRIDE_KEYS` + `default_params()` gain the new key with the legacy default (§4.2, H-VC-10).
 
 **§3 Byte-identical live path.** ✅ `vector/tests/test_composite_flag_byte_identical.py` C1–C4 (§3.3). C1 pins `BacktestRunResult` field-for-field against a committed pre-candidate golden; C2 default-is-and_gate; C3 composite reachable+distinct; C4 no cross-trial leakage. Golden captured RED-first (§11 T0).
 
-**§4 n_trials ledger acknowledgement.** ✅ Cumulative-not-per-run DSR deflation per §5.2 / SP-A `tpcore.lab.ledger.record_trial_spend` → `lab_trial_ledger.vector`. Exactly TWO configurations added to the ledger (primary + one catalyst ablation). No hidden grid; weights/sector-method/cluster-window/decile/long-only are code constants (§2).
+**§4 n_trials ledger acknowledgement.** ✅ Cumulative-not-per-run DSR deflation per §5.2 / SP-A `tpcore.lab.ledger.record_trial_spend` → `lab_trial_ledger.vector`. Exactly TWO configurations added to the ledger (primary + one equal-weight ablation). No hidden grid; weights/sector-method/cluster-window/decile/long-only are code constants (§2).
 
 **§5 Roster-targeting prerequisite (post-SP-B).** ✅ `vector ∈ lab_targetable_engines()` — verified post-carver (the roster now returns `(reversion, vector, momentum, sentinel, carver)`). No edits to Lab CLI / dispatch / `tpcore/lab/` / any SoT/roster (§4.3). Only Lab-side edit is the ONE `PARAM_RANGES["vector"]` key.
 
@@ -708,7 +729,7 @@ task.
 
 H-VC-11 in §8 lists the lane-clean files this candidate MUST NOT touch. The 2026-05-20 list (replacing the pilot's "8 forbidden files"):
 
-- `ops/engine_sdlc/` (any file) — parallel session is shipping the autonomous-criteria-set gate (`feat/autonomous-lab-criteria`).
+- `ops/engine_sdlc/` (any file) — the autonomous-criteria-set gate shipped via PR #158 (`feat/autonomous-lab-criteria` — merged); referenced here for the lane-clean discipline that held when this spec was written.
 - `tpcore/lab/llm_emitter/` — SP-G build (#152) just shipped; downstream future work.
 - `catalyst/` — catalyst PAPER activation is queued (parallel-session).
 - `tpcore/engine_profile.py` — engine roster (ECR-only, hook-blocked).
