@@ -92,8 +92,13 @@ def test_param_ranges_membership_iteration_len_and_set():
     # vol_managed_mode choice toggle. Same pattern as vector_composite.
     assert set(run.PARAM_RANGES["momentum"]) == (
         set(_T0_PARAM_RANGES_KEYSETS["momentum"]) | {"vol_managed_mode"})
-    # SP-E: sentinel's single pre-registered toggle.
-    assert set(run.PARAM_RANGES["sentinel"]) == {"activation_score_threshold"}
+    # SP-E: sentinel's pre-registered toggles. Sibling candidates:
+    #   * `activation_score_threshold` — sentinel_maxdd (spec
+    #     docs/superpowers/specs/2026-05-20-sentinel-maxdd-lab-candidate.md)
+    #   * `bear_score_mode` — sentinel_bear_score (spec
+    #     docs/superpowers/specs/2026-05-21-sentinel-bear-score-lab-candidate.md)
+    assert set(run.PARAM_RANGES["sentinel"]) == {
+        "activation_score_threshold", "bear_score_mode"}
     # carver's six pre-registered toggles (spec §6 PARAM_RANGES).
     assert set(run.PARAM_RANGES["carver"]) == {
         "trend_fast", "trend_slow", "value_lookback_months",
@@ -362,11 +367,17 @@ def test_default_params_shim_byte_equal_for_declared_engines():
 
 
 def test_default_params_shim_resolves_sentinel_post_sp_e():
-    """SP-E: sentinel now declares a LAB_TARGET, so the shim resolves it
-    to its single pre-registered toggle's legacy default (the dossier
-    param-diff seam), no longer the SP-E-pointing rejection."""
+    """SP-E: sentinel declares a LAB_TARGET, so the shim resolves it to
+    its pre-registered toggles' legacy defaults (the dossier param-diff
+    seam). The sentinel_bear_score candidate (spec
+    docs/superpowers/specs/2026-05-21-sentinel-bear-score-lab-candidate.md)
+    added the `bear_score_mode` toggle alongside the SP-E
+    `activation_score_threshold`."""
     from ops.engine_sdlc.default_params import default_params
-    assert default_params("sentinel") == {"activation_score_threshold": 60}
+    assert default_params("sentinel") == {
+        "activation_score_threshold": 60,
+        "bear_score_mode": "current",
+    }
 
 
 def test_no_import_cycle_default_params_shim_to_run():
