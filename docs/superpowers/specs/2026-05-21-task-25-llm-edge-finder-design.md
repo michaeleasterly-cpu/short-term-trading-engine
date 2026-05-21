@@ -74,33 +74,33 @@ emitted candidate passes (a) SP-A-deflated DSR / autonomous Lab
 criteria gate; (b) SP-G fence stack; (c) readiness gate; (d) lands
 in PAPER via the standard or finder-ADD ECR machine path.
 
-**Tier 2 — Outcome criterion (BINDING success bar).** A finder-emitted
-PAPER engine produces sustained positive risk-adjusted P&L over the
-pre-registered outcome window:
+**Tier 2 — Outcome (operator-discretion success; "I know it when I see it").**
+A finder-emitted PAPER engine surfaces its live performance to the operator
+via the §12 audit dashboard. The operator audits AFTER-THE-FACT and marks
+each finder-emitted PAPER engine `outcome_success` / `outcome_failure` via
+a `LAB_FINDER_OUTCOME_VERDICT` event the autonomous loop reads. There is
+**no pre-registered numeric Sharpe / drawdown / trade-count threshold**
+gating Tier 2 — operator-discretion is the criterion, by construction.
 
-- **Window:** 30 NYSE sessions of continuous PAPER dispatch
-  (60-session enrichment is v1.5).
-- **P&L floor:** rolling 30-session **net-of-cost Sharpe ≥ 0.5**
-  (Newey-West HAC-adjusted SE; t-stat-on-Sharpe must clear 1.65
-  one-sided at α=0.05 — Hayashi 2000 ch. 6).
-- **Drawdown ceiling:** no single-session realised drawdown >
-  **3% of allocated PAPER capital**.
-- **Trade floor:** ≥ 10 closed trades over the window (defends
-  against a dormant-engine accidental pass).
-- **Bleed budget:** cumulative unrealised + realised drawdown ≤
-  **$5,000** (operator-pinned; 20% of the $25k per-engine PAPER
-  slot) over the window — see constraint 15.
+**The autonomous loop does NOT gate on Tier 2** — it surfaces, then acts on
+the operator's eventual marking:
+- `outcome_success` marker arrives → engine carries `outcome_proven=True`
+  on its `EngineProfile` (data-only; behaviour unchanged). The paper-only
+  mandate keeps it PAPER; LIVE graduation is a separate operator-only gate.
+- `outcome_failure` marker arrives → finder auto-retires via ECR-RETIRE.
+- No marker (operator silent) → engine continues PAPER; the finder neither
+  promotes nor retires on Tier-2 inactivity.
 
-**Failure mode (NEW in Path B).** A PAPER engine that violates ANY
-clause AT ANY TIME in the window **auto-retires via the new ECR-
-RETIRE machine path** (§3 Phase F). Operator audits the retirement
-event but does not approve it pre-commit.
-
-**Outcome-proven (NEW).** A PAPER engine satisfying every clause
-through the full 30-session window receives an `outcome_proven=True`
-marker on its `EngineProfile` (data-only; behaviour unchanged). Per
-the paper-only mandate the engine stays PAPER; operator decides LIVE
-graduation separately — never the finder.
+**Bleed-budget circuit-breaker (mechanical capital safety, NOT Tier 2).**
+Independently of Tier 2 (which is operator-eyes), the autonomous loop
+auto-retires any finder-emitted PAPER engine that exceeds a **structural
+$5,000 cumulative-bleed cap** (20% of the $25k per-engine PAPER capital
+slot — constraint 15). This is mechanical, not judgment: an engine
+losing real money faster than the operator can audit must auto-retire
+to bound capital destruction. It is the survival floor, not the success
+ceiling. The cap is operator-pinned and lives in code; the LLM cannot
+relax it via any emitted PR (SP-G `enforce_diff_scope` rejects edits to
+the `ops/lab/finder_outcome.py` module).
 
 ### §1.3 What v1 holds at autonomy and what it does not
 
@@ -245,12 +245,18 @@ cannot land). **Constraint 4 is reversed; 14–16 are NEW.**
     aggregate, used as a secondary check by autonomous Lab criteria
     PR #158).
 
-15. **(NEW) Bleed-budget per finder-emitted PAPER engine.** Structural
-    max-bleed of **$5,000** (operator-pinned; 20% of the $25k per-
-    engine PAPER slot) over the 30-session outcome window. Computed
+15. **(NEW) Bleed-budget per finder-emitted PAPER engine — mechanical
+    capital safety floor.** Structural max-bleed of **$5,000**
+    (operator-pinned; 20% of the $25k per-engine PAPER slot)
+    measured as `cumulative_unrealised_drawdown_usd + cumulative_
+    realised_loss_usd` since the engine reached PAPER. Computed
     continuously by the Phase E outcome monitor; auto-retire ECR
-    fires the moment the bleed cap is reached, NOT end-of-window.
-    Defense against autonomous-scale capital destruction.
+    fires the moment the bleed cap is reached. Open-ended in time
+    (no 30-session window) — the engine runs PAPER as long as it
+    stays within budget. This is the survival floor, NOT the
+    success ceiling — strictly defense against autonomous-scale
+    capital destruction. NOT a Tier 2 outcome gate (Tier 2 is
+    operator-discretion via §12 marker; see §1.2).
 
 16. **(NEW) Provenance is non-negotiable.** Every autonomous action
     (draft, undraft, merge, ecr_add, ecr_modify, ecr_retire,
@@ -258,9 +264,10 @@ cannot land). **Constraint 4 is reversed; 14–16 are NEW.**
     with `category='LAB_FINDER_ACTION'`, payload fields `action`,
     `triggered_by` (one of `operator_command|ledger_capacity_event|
     regime_change_event|outcome_monitor_check|ci_green|gate_pass|
-    bleed_cap|window_close`), `human_override` (always `'none'` in
-    v1 — Path B has no override mechanism; operator audits AFTER the
-    fact). The §12 dashboard reads from this.
+    bleed_cap|operator_verdict`), `human_override` (always `'none'`
+    in v1 — Path B has no per-step override; operator's Tier 2
+    verdict via §12 IS the human surface, posted after-the-fact).
+    The §12 dashboard reads from this.
 
 ---
 
@@ -294,7 +301,7 @@ docs/lab_emitter_references/                 # SHARED with SP-G
     carver_systematic_trading.md             # SHIPPED (SP-G v1.0)
     chan_algorithmic_trading.md              # SHIPPED (SP-G v1.0)
     dsr_ntrials_discipline.md                # NEW; outline §7.4; mandatory
-    market_structure_primer.md               # NEW; outline §7.5
+    market_structure_primer.md               # SHIPPED in same PR as this spec (Path B v1.0)
     regime_aware_trading.md                  # NEW; outline §7.6; mandatory
 .claude/skills/lab-edge-find/SKILL.md        # operator slash-skill
 dashboard_components/finder_audit.py         # NEW read-only renderer
@@ -362,25 +369,43 @@ Engine SDLC moves engine LAB → PAPER deterministically. **Tier 1
 enumerate finder-emitted PAPER engines (read from `application_log
 LAB_FINDER_ACTION(action='ecr_add'|'ecr_modify')` and
 `EngineProfile.outcome_proven=False`). E2 for each, compute
-`LiveOutcome` (rolling 30-session net-of-cost Sharpe HAC-adjusted;
-max single-session DD; cumulative bleed; trade count). E3 emit
-`LAB_FINDER_OUTCOME_CHECK` event for the §12 dashboard. E4 evaluate
-outcome criterion (§1.2):
-- all clauses met AT WINDOW CLOSE → Phase F1.
-- ANY clause violated AT ANY TIME → Phase F2.
-- intra-window, not yet violated, not closed → loop.
+`LiveOutcome` (rolling 30-session P&L curve; cumulative bleed in USD;
+trade count; the rolling stats are SURFACED on the §12 dashboard,
+NOT used as auto-decision gates). E3 emit `LAB_FINDER_OUTCOME_CHECK`
+event for the §12 dashboard. E4 evaluate the TWO autonomous-loop
+inputs (NOT pre-registered thresholds):
 
-**Phase F — AUTO-RETIRE / OUTCOME-PROVEN.** F1 outcome-proven: write
+- **(i) Mechanical bleed-budget check (capital safety floor).**
+  If `cumulative_bleed_usd ≥ $5,000` → Phase F2 (auto-retire). This
+  is the survival floor, not the success ceiling — strictly capital
+  protection. The cap is operator-pinned in `ops/lab/finder_outcome.py`
+  + cannot be relaxed by any LLM-emitted PR (SP-G `enforce_diff_scope`).
+- **(ii) Operator outcome-verdict marker.** If the operator has
+  posted a `LAB_FINDER_OUTCOME_VERDICT(verdict='success')` event
+  for the engine via the §12 dashboard → Phase F1 (outcome-proven).
+  If the operator has posted `verdict='failure'` → Phase F2
+  (auto-retire). If no verdict is posted, the engine continues
+  PAPER and the loop re-checks on the next session.
+
+There is **no time-bound on operator silence** — the engine runs
+PAPER as long as the bleed-budget is intact and the operator has not
+marked it. Operator runs on their own cadence.
+
+**Phase F — AUTO-RETIRE / OUTCOME-PROVEN.** F1 outcome-proven (only
+fires on operator-posted `verdict='success'`): write
 `EngineProfile.outcome_proven=True` (data-only marker; engine STAYS
 PAPER per paper-only mandate); log `action='outcome_proven'`. F2
-outcome-violated: generate ECR-RETIRE; auto-issue via the machine
-path; engine SDLC transitions PAPER → RETIRED; write EULOGY from
-`tpcore/templates/eulogy_template.md` with the `LiveOutcome` metrics
-that triggered retirement; log `action='ecr_retire'`.
+auto-retire (fires on bleed-budget breach OR operator-posted
+`verdict='failure'`): generate ECR-RETIRE; auto-issue via the
+machine path; engine SDLC transitions PAPER → RETIRED; write EULOGY
+from `tpcore/templates/eulogy_template.md` with the `LiveOutcome`
+metrics at retirement time + the retirement trigger
+(`bleed_cap|operator_failure`); log `action='ecr_retire'`.
 
-Operator audits via §12 dashboard. LIVE graduation remains operator-
-only (paper-only mandate). The chain is no longer discontinuous at
-every gate — only at the LIVE boundary.
+LIVE graduation remains operator-only (paper-only mandate). The
+chain is no longer discontinuous at every gate — only at the LIVE
+boundary AND at the operator-outcome-verdict moment (which is
+explicitly operator-discretion: "I know it when I see it").
 
 ### §3.3 Composition with SP-G
 
@@ -580,14 +605,18 @@ refs`**, `rejection_reason`. Persisted append-only under
 (no migration).
 
 `LiveOutcome` (Phase E rolling snapshot per finder-emitted PAPER
-engine): `engine`, `as_of_session`, `session_count_in_window` (0..30),
-`pnl_realised_total_usd`, `pnl_unrealised_total_usd`,
-`sharpe_30d_net_costs_hac` (None until ≥ 10 sessions),
-`sharpe_30d_t_stat_hac`, `max_single_session_drawdown_pct`,
-`cumulative_bleed_usd`, `trade_count_in_window`, `outcome_criterion_
-status` (`pending|met|violated`), `violation_clause` (e.g.
-`bleed_cap|drawdown_cap|sharpe_floor|trade_floor`),
-`auto_retire_triggered`. Persisted per session-close under
+engine — SURFACED on §12 dashboard for operator-eye; NOT used as
+auto-decision gates other than the mechanical bleed-budget floor):
+`engine`, `as_of_session`, `session_count`, `pnl_realised_total_usd`,
+`pnl_unrealised_total_usd`, `sharpe_30d_net_costs_hac` (descriptive
+stat for the dashboard; not a gate), `max_single_session_drawdown_pct`
+(descriptive), `cumulative_bleed_usd` (the binding mechanical-safety
+field; ≥ $5k triggers auto-retire — see constraint 15),
+`trade_count_total`, `operator_verdict`
+(`none|success|failure` — read from the latest
+`LAB_FINDER_OUTCOME_VERDICT` event posted by the operator via the
+§12 dashboard), `auto_retire_triggered`, `auto_retire_reason`
+(`bleed_cap|operator_failure`). Persisted per session-close under
 `lab_finder_live_outcome.<engine>` (no migration).
 
 ---
@@ -742,12 +771,18 @@ Authoring delegated to an expert subagent at brainstorm time per
    (constraint 10) — but the LLM should budget AS IF they were.
 
 6. **Outcome-criterion contract (operator binding 1).** The binding
-   success bar is **30-session net-of-cost HAC-Sharpe ≥ 0.5** with
-   bleed cap **$5k**, NOT gate-reach. The LLM is told explicitly: a
-   candidate that passes the SP-A gate but is designed to barely-
-   pass Tier 2 is a WORSE emission than one that fails the SP-A
-   gate. The persona's job is to bias the LLM toward economically-
-   defensible-in-expectation hypotheses, not statistically-
+   success bar is the operator's after-the-fact judgment on the
+   §12 dashboard — "I know it when I see it" (operator framing
+   2026-05-21). NOT gate-reach. NOT a pre-registered Sharpe / DD /
+   trade-count threshold. The mechanical bleed-budget cap ($5k) is
+   the survival floor, never the success ceiling. The LLM is told
+   explicitly: a candidate that PASSES the SP-A gate but does not
+   convince the operator on the §12 surface (operator posts
+   `verdict='failure'` or stays silent + the engine eventually
+   hits bleed-budget) is a WORSE emission than one that fails the
+   SP-A gate at emission. The persona's job is to bias the LLM
+   toward economically-defensible-in-expectation hypotheses, not
+   statistically-
    defensible-at-gate-floor-minimum.
 
 The persona is NOT a directive on engine internals (sizing /
@@ -962,13 +997,25 @@ Bounded, audit-able, regime-aware-n_trials-fenced.
 - **(NEW per operator binding) `test_auto_promote_path_e2e.py`** —
   emitted spec walks Phases A→F with mocked Anthropic + DB. Happy
   path: auto-undraft → auto-merge → auto-ECR → LAB → PAPER →
-  outcome stream positive → `outcome_proven=True`. Violation path:
-  same up to PAPER → outcome stream breaches bleed cap → auto-ECR-
-  RETIRE → engine PAPER → RETIRED → EULOGY written with violating
-  `LiveOutcome` metrics.
+  operator posts `LAB_FINDER_OUTCOME_VERDICT(verdict='success')`
+  via §12 → Phase F1 sets `outcome_proven=True`. Bleed-cap path:
+  same up to PAPER → outcome stream breaches $5k bleed cap →
+  auto-ECR-RETIRE → engine PAPER → RETIRED → EULOGY written with
+  `auto_retire_reason='bleed_cap'`. Operator-failure path: same
+  up to PAPER → operator posts `verdict='failure'` via §12 →
+  auto-ECR-RETIRE → EULOGY written with `auto_retire_reason=
+  'operator_failure'`.
 - **(NEW per operator binding) `test_bleed_budget_fence.py`** —
   synthetic outcome stream monotonically losing → bleed cap hit at
-  session 12 → auto-retire fires at session 12, not at window close.
+  session N → auto-retire fires the same session, irrespective of
+  whether the operator has posted a verdict (mechanical safety
+  supersedes silence).
+- **(NEW per operator binding) `test_operator_verdict_path.py`** —
+  Phase E surfaces `LiveOutcome`; operator posts
+  `LAB_FINDER_OUTCOME_VERDICT(verdict='success')` event; next Phase
+  E tick reads the verdict + transitions to Phase F1. Same with
+  `verdict='failure'` → Phase F2. Operator-silence path: no verdict
+  posted + bleed within budget → engine stays PAPER indefinitely.
 - **(NEW per operator binding) `test_regime_aware_snapshot.py`** —
   synthetic regime input changes `MarketSnapshot.market_regime`
   across all five axes; `regime_tuple_id` SHA-12 deterministic.
@@ -1022,13 +1069,16 @@ All new tests under `tpcore/tests/` and `ops/tests/` that import
 ### §10.6 The load-bearing E2E proof (v1 success criterion, mock-driven)
 
 `ops/tests/test_llm_edge_finder_to_outcome_proven.py` — mocks
-Anthropic + `ops.lab` dispatch + ECR machine path + outcome stream;
-demonstrates a finder-emitted `ProposedSpec` walks ALL TEN §8 steps
-with the outcome stream satisfying every Tier 2 clause, ending at
+Anthropic + `ops.lab` dispatch + ECR machine path + outcome stream +
+operator-verdict event injection; demonstrates a finder-emitted
+`ProposedSpec` walks ALL TEN §8 steps, the engine lands in PAPER,
+the §12 dashboard surfaces a positive `LiveOutcome`, the mock
+operator-verdict event is posted, Phase F1 fires, ending at
 `outcome_proven=True`. **This is the v1 success-criterion proof at
 mock scale.** The real-data version runs once at v1 GA — operator
-audits Tier 2 via §12 after one finder-emitted PAPER engine
-completes its 30-session window.
+posts the actual verdict via the §12 dashboard on a finder-emitted
+PAPER engine after the operator has eyes-on satisfied "I know it
+when I see it."
 
 ---
 
@@ -1059,9 +1109,16 @@ deflation.
 Per operator binding 2: *"operator becomes the auditor of OUTCOMES,
 not the gate-keeper of EACH STEP."* The operator no longer reviews
 each PR, undrafts each PR, opens each ECR, makes each retire
-decision. The operator **reads the §12 dashboard daily** and decides
-ONLY:
+decision. The operator **reads the §12 dashboard at their own
+cadence** and decides ONLY:
 
+- **Post a Tier-2 verdict** on a finder-emitted PAPER engine via the
+  §12 surface — `verdict='success'` (engine becomes `outcome_proven=
+  True`) or `verdict='failure'` (engine auto-retires via ECR-RETIRE).
+  The verdict is "I know it when I see it" — no pre-registered
+  numeric threshold. Operator can also stay silent, in which case
+  the engine continues PAPER until the mechanical bleed-budget
+  retires it.
 - Pause the finder (disable the co-task) if outcomes look
   systematically wrong.
 - Manually graduate a `outcome_proven=True` engine to LIVE (paper-
@@ -1081,12 +1138,17 @@ Read-only Streamlit component (no writes; mirrors
   trigger, snapshot regime tuple, proposed-spec count, auto-merged
   PRs, auto-issued ECRs.
 - **Active finder-emitted PAPER engines (`outcome_proven=False`).**
-  Per-engine `LiveOutcome` table: rolling Sharpe HAC, drawdown,
-  bleed-budget usage (% of $5k cap), trade count, sessions-in-window,
-  outcome-criterion-status.
-- **Outcome-proven engines.** Archived list with final `LiveOutcome`.
-- **Auto-retired engines.** Archived list with violating
-  `LiveOutcome` clause + auto-ECR-RETIRE PR URL.
+  Per-engine `LiveOutcome` table: rolling P&L, descriptive Sharpe HAC,
+  drawdown, bleed-budget usage (% of $5k cap), trade count, days-in-
+  PAPER, current `operator_verdict` (`none|success|failure`). PER
+  ROW: a **`Post Verdict`** action surface (the §12 channel that
+  emits `LAB_FINDER_OUTCOME_VERDICT`) — operator clicks
+  success/failure when they're ready ("I know it when I see it").
+- **Outcome-proven engines.** Archived list with final `LiveOutcome`
+  at the moment of the operator's success-verdict.
+- **Auto-retired engines.** Archived list with retire-reason
+  (`bleed_cap|operator_failure`) + auto-ECR-RETIRE PR URL +
+  `LiveOutcome` at retirement.
 - **`LAB_FINDER_ACTION` audit feed.** Time-ordered log of every
   autonomous action with `triggered_by` + linked PR URL +
   `human_override` (always 'none' in v1).
@@ -1114,7 +1176,7 @@ an auto-action (issue counter-ECR by hand).
 
 | Version | Scope | Status |
 | --- | --- | --- |
-| **Path B v1.0** | This spec: event-driven finder; HAC-default toolkit; 3 specs/run × ≤5 runs/day; 5 bundles; auto-promote / auto-merge / auto-ECR (ADD + MODIFY + RETIRE); regime-aware ledger; bleed budget; outcome criterion; §12 audit dashboard; ENGINE-ADD via `engine_template` | THIS SPEC (DESIGN) |
+| **Path B v1.0** | This spec: event-driven finder; HAC-default toolkit; 3 specs/run × ≤5 runs/day; 5 bundles; auto-promote / auto-merge / auto-ECR (ADD + MODIFY + RETIRE); regime-aware ledger; **mechanical $5k bleed-budget safety floor**; **operator Tier-2 verdict via §12 dashboard ("I know it when I see it" — no pre-registered numeric outcome thresholds)**; §12 audit dashboard; ENGINE-ADD via `engine_template` | THIS SPEC (DESIGN) |
 | **v1.5** | Bigger universe; subprocess tool-sandbox; 60-session outcome window; CPCV; insider/SEC-material/catalyst/options chains in `MarketSnapshot` | Deferred |
 | **v2.0** | Cross-engine combiner framing (`project_ml_research_track` use 2) | Deferred |
 | **v2.5** | Meta-labeling framing (use 1) — `scikit-learn` shallow classifiers as `lifecycle_analysis` guards | Deferred |
