@@ -419,3 +419,11 @@ s_score_at_entry  # unused variable (reversion/lab_pca_residual.py:113)
 # seams above.
 _reset_signal_mode_override  # unused function (reversion/tests/test_lab_pca_residual_byte_identical.py:109)
 _reset_signal_mode_override  # unused function (reversion/tests/test_lab_pca_residual_integration.py:104)
+# Autonomous data-lane recovery (2026-05-21 flip). RecoveryResult is a
+# frozen Pydantic v2 contract — stdout_tail / stderr_tail are populated
+# at construction time and surface to consumers via .model_dump() (the
+# terminal event payload). Vulture cannot see model_dump() reflection,
+# so the fields look unused from the static view. Same idiom as every
+# model_config entry above — Pydantic-backed-fields allowlist.
+stdout_tail  # unused variable (ops/llm_data_recovery.py)
+stderr_tail  # unused variable (ops/llm_data_recovery.py)
