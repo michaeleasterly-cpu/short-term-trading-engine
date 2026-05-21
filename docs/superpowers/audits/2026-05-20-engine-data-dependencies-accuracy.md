@@ -149,6 +149,10 @@ and `ecr_momentum_data_dependencies_2026-05-20.txt`) can be applied via
 `python -m ops.engine_sdlc --ecr <file>` through the canonical
 hook-respecting path — no hand-edit of `_PROFILE`.
 
+SHIPPED 2026-05-21 — `_MODIFY_KEYS` extended; `attach_ecr_context` +
+`_apply_modify` round-trip data_dependencies; drift test pins the
+contract.
+
 ### Drift-prevention follow-up — source-match audit clockwork
 
 Recommend a second drift test that ratchets this audit's logic into CI:

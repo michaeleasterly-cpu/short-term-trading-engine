@@ -28,7 +28,20 @@ _ADD_KEYS = {"source", "lab_dossier", "cadence", "allocator",
              "dispatch_order", "gate_dsr", "gate_cred", "need",
              "data_dependencies"}
 _REMOVE_KEYS = {"reason", "eulogy_notes"}
-_MODIFY_KEYS = {"lab_dossier", "param_change", "gate_dsr", "gate_cred"}
+# Spec 2026-05-21 follow-up to the 2026-05-20 audit
+# (docs/superpowers/audits/2026-05-20-engine-data-dependencies-accuracy.md
+# §"Follow-up: extend ECR MODIFY to thread data_dependencies"):
+# ``data_dependencies`` is also valid on MODIFY so an in-place change to
+# an existing engine's per-engine ``platform.<table>`` reads can be
+# applied via the canonical hook-respecting ECR path (the catalyst /
+# momentum 2026-05-20 earnings_events accuracy fix) — no hand-edit of
+# _PROFILE. ``need`` is added in the same hop so a MODIFY can carry the
+# operator-readable rationale free-text symmetrically with ADD (the
+# staged ECRs already use ``need:`` for that — keep the wire format
+# stable across the two actions). Both stay OPTIONAL — the existing
+# zero-trust dossier+param_change gate (_validate_modify) is unchanged.
+_MODIFY_KEYS = {"lab_dossier", "param_change", "gate_dsr", "gate_cred",
+                "data_dependencies", "need"}
 _KEYS_FOR = {
     ECRAction.ADD: _ADD_KEYS,
     ECRAction.REMOVE: _REMOVE_KEYS,
