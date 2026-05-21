@@ -80,12 +80,27 @@ logger = structlog.get_logger(__name__)
 # ────────────────────────────────────────────────────────────────────────
 
 
-PERSONA_VERSION = "v1"
+# Persona version selection — v2 is the default (pattern-matching catalogue
+# for the 2026-05-21 incident shapes); v1 stays available for rollback via
+# the ``LLM_DATA_RECOVERY_PERSONA_VERSION=v1`` environment override.
+_PERSONA_VERSION_ENV = "LLM_DATA_RECOVERY_PERSONA_VERSION"
+_PERSONA_DEFAULT_VERSION = "v2"
+_PERSONA_VALID_VERSIONS = frozenset({"v1", "v2"})
+
+
+def _resolve_persona_version() -> str:
+    requested = os.environ.get(_PERSONA_VERSION_ENV, _PERSONA_DEFAULT_VERSION)
+    if requested not in _PERSONA_VALID_VERSIONS:
+        return _PERSONA_DEFAULT_VERSION
+    return requested
+
+
+PERSONA_VERSION = _resolve_persona_version()
 _PERSONA_PATH = (
     pathlib.Path(__file__).resolve().parents[1]
     / "docs"
     / "llm_triage_personas"
-    / "data_recovery_v1.md"
+    / f"data_recovery_{PERSONA_VERSION}.md"
 )
 _PERSONA_TEXT: str = _PERSONA_PATH.read_text(encoding="utf-8")
 _PERSONA_SHA = hashlib.sha256(_PERSONA_TEXT.encode("utf-8")).hexdigest()
@@ -162,6 +177,56 @@ _AUTONOMOUS_DATA_ACTIONS: frozenset[tuple[str, frozenset[str]]] = frozenset({
     # operational re-runs allowed).
     ("extract_tradier_full", frozenset()),
     ("ingest_tradier_csv", frozenset()),
+    # fundamentals_refresh (v2 / Pattern 5): the
+    # ``fundamentals_quarterly_completeness`` validation check (PR #172)
+    # is the gate; when it fails, refreshing the source then re-running
+    # validation on the next cycle is the bounded heal. The stage's
+    # config keys (min_price/min_volume/lookback_days) are intentionally
+    # NOT exposed to the LLM — defaults are operator-tuned, and the LLM
+    # has no evidence that would justify overriding them.
+    ("fundamentals_refresh", frozenset()),
+})
+
+
+# ────────────────────────────────────────────────────────────────────────
+# v2 pattern guards (operator decisions 2026-05-21):
+#
+#   * ``_SKIP_WITH_WARNING_ACTIONS`` — stages where there IS NO LLM-runnable
+#     recovery (Pattern 4: greeks_pro 401 = operator-credential, not LLM-
+#     recoverable). If the LLM returns one of these, the dispatcher emits
+#     ``DATA_RECOVERY_ACTION_SKIPPED`` instead of invoking the stage. These
+#     stages are NOT in the autonomous whitelist either — they are pure
+#     skip-only landmines for when the LLM tries general reasoning.
+#
+#   * ``_NEGATIVE_PATTERNS`` — ``(error_substring, banned_stage_name)``
+#     pairs. When the current escalation message contains ``error_substring``
+#     AND the LLM returns an action whose ``stage_name`` matches
+#     ``banned_stage_name``, the action is REJECTED with
+#     ``reason=negative_pattern_match``. Pattern 6: ``repair_gaps`` on
+#     ``coverage collapse`` is the documented anti-pattern (completeness
+#     check threshold is blind to coverage_collapse).
+#
+# The dispatcher VALIDATES against these guards; it does NOT pattern-match
+# itself. Pattern matching is the LLM's job (the v2 persona's first
+# section); the dispatcher is the safety boundary that catches a wrong
+# pick the LLM made anyway.
+# ────────────────────────────────────────────────────────────────────────
+
+
+_SKIP_WITH_WARNING_ACTIONS: frozenset[str] = frozenset({
+    # Pattern 4: greeks_max_pain 401 — third-party API auth. Operator
+    # rotates the credential; the LLM cannot. Stage is also absent from
+    # ``_AUTONOMOUS_DATA_ACTIONS`` — double-fence.
+    "greeks_max_pain",
+})
+
+
+_NEGATIVE_PATTERNS: frozenset[tuple[str, str]] = frozenset({
+    # Pattern 6: "coverage collapse" + repair_gaps is the documented
+    # blind-spot. The completeness check threshold (PR #231 cascade)
+    # routes around this for the orchestrator; the LLM must NEVER re-pick
+    # repair_gaps on a coverage_collapse escalation.
+    ("coverage collapse", "repair_gaps"),
 })
 
 # O(1) lookup map derived from the frozen whitelist.
@@ -486,6 +551,42 @@ async def llm_recovery_decision(
 # ────────────────────────────────────────────────────────────────────────
 
 
+def _match_negative_pattern(
+    escalation_message: str, action: RecoveryAction
+) -> tuple[str, str] | None:
+    """Return the matched (error_substring, banned_token) pair from
+    ``_NEGATIVE_PATTERNS`` when the current escalation's message contains
+    ``error_substring`` AND the action picks the banned token (either as
+    the ``stage_name`` itself OR as a truthy param name on the action);
+    ``None`` if no negative pattern is hit.
+
+    The dual stage_name / params-key match handles two ways the LLM can
+    re-pick a documented anti-pattern:
+
+      1. ``stage_name == banned_token`` — token is itself a stage in the
+         whitelist (general case).
+      2. ``params.get(banned_token) is True`` — token is a mode/param
+         on a parent stage (Pattern 6: ``repair_gaps=true`` on
+         ``daily_bars`` for a coverage_collapse escalation; ``repair_gaps``
+         is the mode name, not a stage name).
+
+    Case-insensitive substring match on the message; exact match on the
+    stage / param name. The check is a constant-size loop over a frozen
+    set — structurally bounded.
+    """
+    if not escalation_message:
+        return None
+    msg_lc = escalation_message.lower()
+    for err_sub, banned_token in _NEGATIVE_PATTERNS:
+        if err_sub.lower() not in msg_lc:
+            continue
+        if action.stage_name == banned_token:
+            return err_sub, banned_token
+        if action.params.get(banned_token) is True:
+            return err_sub, banned_token
+    return None
+
+
 def validate_recovery_action(action: RecoveryAction) -> tuple[bool, str]:
     """Gate: (stage in whitelist) AND (every param in stage's allowed
     set) AND (per-param value passes sanity). Returns ``(ok, reason)``.
@@ -748,6 +849,67 @@ async def handle_data_recovery_escalation(
         )
         return "DATA_RECOVERY_ACTION_REJECTED"
 
+    # v2 guard: skip-with-warning. Some stages have no LLM-runnable
+    # recovery (Pattern 4: third-party API auth). If the LLM picks one
+    # of these anyway, emit SKIPPED and do NOT invoke the subprocess.
+    if action.stage_name in _SKIP_WITH_WARNING_ACTIONS:
+        await emit_event(
+            pool,
+            "DATA_RECOVERY_ACTION_SKIPPED",
+            (
+                f"recovery skipped: stage={action.stage_name} has no "
+                f"LLM-runnable recovery (operator credential / provider auth)"
+            ),
+            {
+                "schema": 1,
+                "persona_version": PERSONA_VERSION,
+                "persona_sha": _PERSONA_SHA,
+                "reason": "provider_auth_failure",
+                "action": action.model_dump(),
+                "packet_hash": context.packet_hash,
+                "trigger_event_type": context.escalation_event_type,
+                "trigger_message": context.escalation_message,
+                "cost": dict(_COST_LEDGER),
+            },
+            severity="WARNING",
+        )
+        return "DATA_RECOVERY_ACTION_SKIPPED"
+
+    # v2 guard: negative-pattern match. Some (error_substring, stage)
+    # pairs are documented blind spots — Pattern 6: repair_gaps is
+    # blind to coverage_collapse. If the LLM picks a banned combination,
+    # REJECT before invoking.
+    negative_match = _match_negative_pattern(
+        context.escalation_message, action
+    )
+    if negative_match is not None:
+        err_sub, banned_stage = negative_match
+        await emit_event(
+            pool,
+            "DATA_RECOVERY_ACTION_REJECTED",
+            (
+                f"action rejected: negative pattern match "
+                f"(error substring={err_sub!r}, banned stage={banned_stage!r})"
+            ),
+            {
+                "schema": 1,
+                "persona_version": PERSONA_VERSION,
+                "persona_sha": _PERSONA_SHA,
+                "reason": "negative_pattern_match",
+                "negative_pattern": {
+                    "error_substring": err_sub,
+                    "banned_stage_name": banned_stage,
+                },
+                "action": action.model_dump(),
+                "packet_hash": context.packet_hash,
+                "trigger_event_type": context.escalation_event_type,
+                "trigger_message": context.escalation_message,
+                "cost": dict(_COST_LEDGER),
+            },
+            severity="WARNING",
+        )
+        return "DATA_RECOVERY_ACTION_REJECTED"
+
     ok, reason = validate_recovery_action(action)
     if not ok:
         await emit_event(
@@ -767,6 +929,35 @@ async def handle_data_recovery_escalation(
             severity="WARNING",
         )
         return "DATA_RECOVERY_ACTION_REJECTED"
+
+    # v2 Pattern 3: an IEX failover (LLM picked feed=iex on daily_bars
+    # to route around a SIP-subscription 403) is a degraded recovery —
+    # partial coverage > nothing, but the operator still needs to see
+    # the SIP outage. Emit the degraded marker BEFORE running so the
+    # bus carries the cause-of-degradation even if the stage itself
+    # then succeeds.
+    if (
+        action.stage_name == "daily_bars"
+        and str(action.params.get("feed", "")) == "iex"
+    ):
+        await emit_event(
+            pool,
+            "INGESTION_AUTO_RECOVERY_DEGRADED",
+            (
+                "autonomous recovery picked IEX failover — partial coverage; "
+                "SIP-subscription / 403 likely; operator: investigate"
+            ),
+            {
+                "schema": 1,
+                "persona_version": PERSONA_VERSION,
+                "persona_sha": _PERSONA_SHA,
+                "action": action.model_dump(),
+                "packet_hash": context.packet_hash,
+                "trigger_event_type": context.escalation_event_type,
+                "trigger_message": context.escalation_message,
+            },
+            severity="WARNING",
+        )
 
     result = await run_ops_stage(action, runner=runner)
     if result.ok:
@@ -905,3 +1096,11 @@ __all__ = [
     "run_ops_stage",
     "validate_recovery_action",
 ]
+
+
+# Public, frozen helper re-exports for test/spec inspection (v2). The
+# leading-underscore variants stay the canonical names; these aliases let
+# tests assert against a stable public surface without an inline
+# ``noqa: SLF001`` (per-file SLF ignore is the policy form).
+NEGATIVE_PATTERNS: frozenset[tuple[str, str]] = _NEGATIVE_PATTERNS
+SKIP_WITH_WARNING_ACTIONS: frozenset[str] = _SKIP_WITH_WARNING_ACTIONS
