@@ -316,9 +316,86 @@ def _decode_llm_response(envelope: dict[str, Any], turn: int) -> dict[str, Any]:
 # Default mandatory bundles used by callers needing the canonical set.
 DEFAULT_REFERENCE_BUNDLES = MANDATORY_REFERENCE_BUNDLES
 
+
+# ───────────────────────── Co-task entry point (T10) ─────────────────────────
+
+# Per spec §3.4: the daemon polls application_log for these event classes.
+# v1 keeps the set EMPTY by design (mirror SP-G's original posture):
+# - LAB_LEDGER_CAPACITY_AVAILABLE: requires SP-A ledger-decay emitter (separate PR)
+# - REGIME_CHANGE_OBSERVED: requires a regime-classifier event emitter (separate PR)
+# Until those emitters ship, the co-task is structurally present but its
+# trigger set is empty — the operator-command path (the /lab-edge-find slash
+# skill in T11) is the v1 trigger.
+EDGE_FINDER_TRIGGER_EVENT_TYPES: tuple[str, ...] = ()
+
+
+async def run_edge_finder_cotask(pool: asyncpg.Pool, trigger_event: Any) -> None:
+    """Co-task entry — invoked by the llm_triage_service daemon.
+
+    Called when an event in EDGE_FINDER_TRIGGER_EVENT_TYPES is observed on
+    application_log. Wraps run_finder() with a default trigger derived from
+    the event class. The LLM seam is the production Anthropic SDK callable
+    (T9). This function is the daemon ↔ finder boundary.
+
+    Per spec §3.4 + .claude/rules/llm-triage.md:
+    - Event-driven only (NOT scheduled).
+    - Advisory; no `tools` param.
+    - Draft-PR only (Phase D auto-promote ships in a follow-up PR).
+    - Crash-isolated (raises propagate to _run_supervised, which restarts
+      this co-task on backoff — sibling co-tasks unaffected).
+    """
+    # Default to current UTC session_date; the real triggers will carry
+    # session_date in their payloads (event-emitter PR).
+    from datetime import datetime
+
+    from ops.llm_edge_finder_sdk import AuthSkip, make_sdk_llm_callable
+
+    trigger_class: Literal[
+        "operator_command",
+        "ledger_capacity_event",
+        "regime_change_event",
+    ]
+    event_type = (
+        trigger_event.get("event_type", "") if isinstance(trigger_event, dict)
+        else getattr(trigger_event, "event_type", "")
+    )
+    if event_type == "LAB_LEDGER_CAPACITY_AVAILABLE":
+        trigger_class = "ledger_capacity_event"
+    elif event_type == "REGIME_CHANGE_OBSERVED":
+        trigger_class = "regime_change_event"
+    else:
+        trigger_class = "operator_command"
+
+    session_date = datetime.now(UTC).date()
+    try:
+        llm_callable = make_sdk_llm_callable()
+    except Exception as exc:  # noqa: BLE001 - degrade to smoke mode
+        log.warning("edge_finder_cotask.sdk_init_failed", error=str(exc))
+        llm_callable = None
+
+    try:
+        await run_finder(
+            pool,
+            trigger=trigger_class,
+            session_date=session_date,
+            llm_callable=llm_callable,
+        )
+    except AuthSkip:
+        log.warning("edge_finder_cotask.auth_skip", note="no ANTHROPIC_API_KEY")
+        # Re-run in smoke mode (no LLM) so the provenance row still lands.
+        await run_finder(
+            pool,
+            trigger=trigger_class,
+            session_date=session_date,
+            llm_callable=None,
+        )
+
+
 __all__ = [
     "DEFAULT_REFERENCE_BUNDLES",
+    "EDGE_FINDER_TRIGGER_EVENT_TYPES",
     "AgentError",
     "LLMCallable",
+    "run_edge_finder_cotask",
     "run_finder",
 ]
