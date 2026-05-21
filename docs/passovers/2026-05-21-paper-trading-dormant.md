@@ -83,3 +83,25 @@ The autonomous edge finder (just shipped end-to-end in PR sequence #232 → #251
 I have the paper-trading lane (per operator 2026-05-21). The right NEXT-action given operator's "run everything to find errors + self-heal" cadence is **(4) from §7** — run a single engine manually to surface engine-side bugs WITHOUT touching the engine_service daemon (which is its own investigation). Pick the smallest engine path (likely `canary`) since it's never fired and there's likely a discoverable reason.
 
 Filing this as a passover for now in case operator wants me on a different lane.
+
+## §9 Investigation update — root cause + scope (2026-05-21 15:38 UTC)
+
+A heavy-lane diagnosis of `ops/engine_service.py` against the live DB found the situation is **two distinct issues** — the operator's "engines are dormant" framing conflated them:
+
+**Issue 1 (the observability gap — fixable here):** `ops/engine_service.py` emits ONLY to structlog → `~/Library/Logs/short-term-trading-engine/engine-service.log`. It never wrote a single row to `platform.application_log` under `engine='engine_service'`. So `SELECT * FROM platform.application_log WHERE engine='engine_service'` correctly returned zero rows — even though the daemon was alive and polling correctly. **The operator's "the daemon is silent" finding was an observability gap, not a dispatch bug.**
+
+**Issue 2 (the data lane is red — out-of-scope for engine_service):** The daemon's trigger predicate (`DATA_OPERATIONS_COMPLETE` OR green `DATA_REPAIR_COMPLETE`) has had nothing to fire on since 2026-05-14 22:52 UTC. Exactly **ONE** `DATA_OPERATIONS_COMPLETE` row exists in the last 14 days, and the daemon's cursor advanced past it long ago. No `DATA_REPAIR_COMPLETE` has EVER been written.
+
+The reason no trigger has emitted: `scripts/run_data_operations.sh` Step 4/4c has been **failing data_validation repeatedly** (most-recent fails 2026-05-21 14:19 UTC and earlier — `fundamentals_quarterly_completeness`, `corporate_actions_completeness`, `earnings_events_monotone`, `sec_insider_monotone`, `liquidity_tiers_completeness`, `ticker_classifications_coverage`, `macro_indicators_completeness`, `fear_greed_freshness`, `aaii_sentiment_freshness`; plus `daily_bars` timeouts + coverage-collapse refusals + a `greeks_max_pain` 401). The "100% green or don't trade" invariant is correctly preventing the pipeline from reaching Step 6 emit. Engines correctly are NOT firing — the data substrate is red.
+
+**The engine_service daemon is doing exactly what it should**: polling for a trigger that hasn't legitimately arrived. There is no engine-dispatch bug to fix in `ops/engine_service.py`.
+
+**The fix landing in this session** (the in-scope observability fix): add daemon-lifecycle emits to `application_log` under `engine='engine_service'` — `ENGINE_SERVICE_STARTED` / `ENGINE_SERVICE_STOPPED` / `ENGINE_SERVICE_TRIGGER_SEEN` / `ENGINE_SERVICE_SWEEP_START` / `ENGINE_SERVICE_SWEEP_DONE` / `ENGINE_SERVICE_POLL_FAILED`. Crash-isolated (a failed write logs to structlog and is swallowed — observability must never break the supervisor loop). One stable `run_id` per daemon-process lifetime ties the row family together. Verified end-to-end against the live DB: a foreground `python -m ops.engine_service` for 5s now produces matching STARTED + STOPPED rows in `application_log` under `engine='engine_service'`.
+
+**Out of scope for this session** (separate lane(s)):
+
+- **The data_validation red set** — operator's other session owns this. The data layer being red is the real cause of "no engine activity"; until data_validation goes green and `DATA_OPERATIONS_COMPLETE` emits, no scheduled engine sweep will fire (correct safety behavior, by design).
+- **Production daemon reload** — the launchd-managed `com.michael.trading.engine-service` (PID 77455 at investigation time) is still running the pre-fix code. The operator should bounce the daemon (`launchctl kickstart -k system/com.michael.trading.engine-service`) to pick up the new observability emits.
+- **The 5 unexpected launchd labels** (allocator, allocator-heartbeat, llm-triage-service-as-separate-daemon, momentum-oneshot-2026-05-27, pipeline-smoke-test) — secondary cleanup, operator-directed scope.
+- **`data_repair_service` / `llm_triage_service` observability gap** — same pattern (structlog-only); follow-on for the same fix shape.
+- **The missing `platform.allocator_budget` table** — separate sub-bug.

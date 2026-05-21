@@ -38,11 +38,13 @@ import asyncio
 import collections
 import contextlib
 import hashlib
+import json
 import os
 import signal
 import subprocess
 import sys
 import time
+import uuid
 from datetime import UTC, date, datetime, timedelta
 
 import structlog
@@ -62,6 +64,65 @@ INITIAL_CURSOR_LOOKBACK = timedelta(hours=1)
 TRIGGER_EVENT_TYPES: tuple[str, ...] = ("DATA_OPERATIONS_COMPLETE", "DATA_REPAIR_COMPLETE")
 SWEEP_SCRIPT = "scripts/run_all_engines.sh"
 POOL_MAX_SIZE = 6  # sweep-poll (1) + co-hosted monitor (~4) + headroom (H-8)
+
+# Engine-service daemon observability (2026-05-21 fix). The daemon
+# previously emitted ONLY to structlog/stderr → file
+# (~/Library/Logs/short-term-trading-engine/engine-service.log), so its
+# heartbeat / triggers / sweep results were INVISIBLE to any
+# platform.application_log query. The dormant-engines discovery
+# (docs/passovers/2026-05-21-paper-trading-dormant.md) surfaced this as
+# the §3 "Daemon observability gap" — operator can't tell whether the
+# daemon is healthy-and-waiting (correct safety behavior when data_ops
+# is red) or stuck/crashed. We now ALSO emit a small set of structured
+# events to application_log under engine='engine_service' so the
+# canonical event substrate carries the daemon's liveness story.
+# Emits are crash-isolated (a failed write must never break the loop)
+# and use json.dumps(default=str)/::jsonb in mirror of engine_supervisor
+# ._emit (same INSERT_SQL shape; no new mechanism). The engine label is
+# the DAEMON name 'engine_service' — DISTINCT from per-engine STARTUP
+# rows (engine ∈ {reversion, vector, ...}) DA-1 already consumes; the
+# new rows do not feed any DA-1 detector.
+DAEMON_ENGINE_LABEL = "engine_service"
+DAEMON_STARTUP_EVENT = "ENGINE_SERVICE_STARTED"
+DAEMON_SHUTDOWN_EVENT = "ENGINE_SERVICE_STOPPED"
+DAEMON_TRIGGER_EVENT = "ENGINE_SERVICE_TRIGGER_SEEN"
+DAEMON_SWEEP_START_EVENT = "ENGINE_SERVICE_SWEEP_START"
+DAEMON_SWEEP_DONE_EVENT = "ENGINE_SERVICE_SWEEP_DONE"
+DAEMON_POLL_FAILED_EVENT = "ENGINE_SERVICE_POLL_FAILED"
+
+_ENGINE_SERVICE_INSERT_SQL = """
+    INSERT INTO platform.application_log
+        (engine, run_id, event_type, severity, message, data)
+    VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+"""
+
+
+async def _emit_engine_service_event(pool, run_id: uuid.UUID,
+                                     event_type: str, severity: str,
+                                     message: str,
+                                     data: dict | None = None) -> None:
+    """Emit one application_log row under engine='engine_service'.
+
+    Crash-isolated: a write failure logs to structlog and is swallowed
+    — daemon-lifecycle observability is best-effort and must NEVER
+    abort the supervisor loop, mirroring the
+    tpcore.logging.db_handler.DBLogHandler.log contract. ``run_id`` is
+    the stable per-daemon-process UUID assigned in ``_amain`` so every
+    row in one daemon lifetime shares one row family (the same
+    convention as the per-engine schedulers' DBLogHandler run_id)."""
+    if pool is None:
+        return
+    payload = json.dumps(data, default=str) if data is not None else None
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                _ENGINE_SERVICE_INSERT_SQL,
+                DAEMON_ENGINE_LABEL, run_id, event_type, severity,
+                message, payload,
+            )
+    except Exception as exc:  # noqa: BLE001 — observability is best-effort
+        logger.warning("engine_service.observability_emit_failed",
+                       event_type=event_type, error=str(exc))
 
 # Epic E Phase-0: engine-daemon co-hosted platform-service failures
 # escalate (advisory) into the engine Ladder via ENGINE_ESCALATED. Two
@@ -154,6 +215,33 @@ def _run_engine_sweep() -> int:
     result = subprocess.run(cmd, cwd=repo_root, check=False)
     logger.info("engine_service.sweep_done", returncode=result.returncode)
     return result.returncode
+
+
+async def _run_sweep_with_observability(pool, run_id: uuid.UUID,
+                                        trigger_at: datetime) -> int:
+    """Run the engine sweep with a SWEEP_START/SWEEP_DONE application_log
+    pair so the daemon's dispatch is durably observable. The sweep itself
+    runs in an executor (sync subprocess) — UNCHANGED from the original
+    ``await asyncio.get_event_loop().run_in_executor(None,
+    _run_engine_sweep)`` call shape — the wrapper only adds emit rows
+    around it. Both emits are crash-isolated by
+    ``_emit_engine_service_event``."""
+    started = datetime.now(UTC)
+    await _emit_engine_service_event(
+        pool, run_id, DAEMON_SWEEP_START_EVENT, "INFO",
+        f"engine sweep starting (trigger recorded_at={trigger_at.isoformat()})",
+        {"trigger_recorded_at": trigger_at.isoformat(),
+         "sweep_script": SWEEP_SCRIPT})
+    rc = await asyncio.get_event_loop().run_in_executor(
+        None, _run_engine_sweep)
+    duration_ms = int((datetime.now(UTC) - started).total_seconds() * 1000)
+    severity = "INFO" if rc == 0 else "ERROR"
+    await _emit_engine_service_event(
+        pool, run_id, DAEMON_SWEEP_DONE_EVENT, severity,
+        f"engine sweep finished (returncode={rc}, duration_ms={duration_ms})",
+        {"returncode": rc, "duration_ms": duration_ms,
+         "trigger_recorded_at": trigger_at.isoformat()})
+    return rc
 
 
 async def _maybe_fire_weekly_digest(state: dict, pool=None,
@@ -341,11 +429,25 @@ async def _maybe_escalate_digest_stalled(
         attempts=1)
 
 
-async def _main_loop(pool, stop_event: asyncio.Event) -> None:
+async def _main_loop(pool, stop_event: asyncio.Event,
+                     run_id: uuid.UUID | None = None) -> None:
     cursor = datetime.now(UTC) - INITIAL_CURSOR_LOOKBACK
     digest_state: dict = {"last": None}
     sweep_silent_emitted: set[datetime] = set()
     digest_stalled_emitted: set[str] = set()
+    # Stable per-daemon-process run_id so all rows in this lifetime share
+    # one row family (mirrors the per-engine DBLogHandler convention).
+    # The ``_amain`` caller passes the same UUID it used for the STARTUP
+    # row; tests that drive _main_loop directly may omit it and the
+    # observability emits become structlog-only no-ops (pool gate).
+    if run_id is None:
+        run_id = uuid.uuid4()
+    # Poll-failure observability: emit AT MOST once per failure burst —
+    # a transient DB blip can produce many consecutive failed polls and
+    # we don't want to flood application_log. Reset on the first
+    # successful poll. (Structured logging mirrors the existing
+    # logger.error breadcrumb; this only adds the DB-visible row.)
+    poll_failed_emitted = False
     logger.info(
         "engine_service.started",
         triggers=list(TRIGGER_EVENT_TYPES),
@@ -360,6 +462,16 @@ async def _main_loop(pool, stop_event: asyncio.Event) -> None:
         except Exception as exc:
             logger.error("engine_service.poll_failed", error=str(exc))
             newest = None
+            if not poll_failed_emitted:
+                poll_failed_emitted = True
+                await _emit_engine_service_event(
+                    pool, run_id, DAEMON_POLL_FAILED_EVENT, "ERROR",
+                    f"engine_service trigger poll failed: {exc}",
+                    {"error": str(exc),
+                     "exception_type": type(exc).__name__})
+        else:
+            # A clean poll closes the burst — next failure re-emits.
+            poll_failed_emitted = False
 
         # #243 Phase 1 (a): a qualifying trigger that produced no sweep
         # within the bound is a silent dispatch defect — escalate-only,
@@ -374,11 +486,16 @@ async def _main_loop(pool, stop_event: asyncio.Event) -> None:
 
         if newest is not None and newest > cursor:
             logger.info("engine_service.trigger_seen", recorded_at=newest.isoformat())
+            await _emit_engine_service_event(
+                pool, run_id, DAEMON_TRIGGER_EVENT, "INFO",
+                f"qualifying trigger seen (recorded_at={newest.isoformat()})",
+                {"trigger_recorded_at": newest.isoformat(),
+                 "prev_cursor": cursor.isoformat()})
             cursor = newest
             # Run the sweep synchronously — we don't want to fire
             # overlapping sweeps if data-ops emits two events close
             # together. The next poll picks up any newer trigger.
-            await asyncio.get_event_loop().run_in_executor(None, _run_engine_sweep)
+            await _run_sweep_with_observability(pool, run_id, newest)
 
         await _maybe_fire_weekly_digest(digest_state, pool=pool)
 
@@ -407,6 +524,21 @@ async def _amain() -> int:
     pool = await build_asyncpg_pool(dsn, max_size=POOL_MAX_SIZE)
     stop_event = asyncio.Event()
 
+    # One stable run_id per daemon-process lifetime (mirrors the
+    # per-engine DBLogHandler convention) so the operator can correlate
+    # a STARTED → ... → STOPPED row family in application_log for one
+    # daemon incarnation. The 2026-05-21 observability fix.
+    daemon_run_id = uuid.uuid4()
+    daemon_started_at = datetime.now(UTC)
+    await _emit_engine_service_event(
+        pool, daemon_run_id, DAEMON_STARTUP_EVENT, "INFO",
+        "engine_service daemon started",
+        {"pid": os.getpid(),
+         "poll_interval_sec": POLL_INTERVAL_SEC,
+         "pool_max_size": POOL_MAX_SIZE,
+         "triggers": list(TRIGGER_EVENT_TYPES),
+         "sweep_script": SWEEP_SCRIPT})
+
     def _handle_signal(signum):
         logger.info("engine_service.signal_received", signum=signum)
         stop_event.set()
@@ -422,7 +554,7 @@ async def _amain() -> int:
         aar_writer=AARWriter(pool))
 
     async def _sweep_factory():
-        await _main_loop(pool, stop_event)
+        await _main_loop(pool, stop_event, run_id=daemon_run_id)
 
     async def _monitor_factory():
         await monitor.run_forever()
@@ -450,6 +582,15 @@ async def _amain() -> int:
             t.cancel()
         await asyncio.gather(sweep_task, monitor_task,
                              return_exceptions=True)
+        # Best-effort STOPPED row BEFORE pool.close() — once the pool
+        # is closed, the emit helper's acquire() raises and the
+        # observability row is lost. Crash-isolated either way.
+        duration_ms = int(
+            (datetime.now(UTC) - daemon_started_at).total_seconds() * 1000)
+        await _emit_engine_service_event(
+            pool, daemon_run_id, DAEMON_SHUTDOWN_EVENT, "INFO",
+            f"engine_service daemon stopped (duration_ms={duration_ms})",
+            {"pid": os.getpid(), "duration_ms": duration_ms})
         await pool.close()
         logger.info("engine_service.stopped")
     return 0
