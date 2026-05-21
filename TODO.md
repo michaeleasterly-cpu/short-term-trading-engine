@@ -549,6 +549,15 @@ n_trials hazard and are explicitly rejected — single config only.
   ingestion BEFORE the Lab run. Via `python -m ops.lab --candidate
   sentinel_bear_score --target-engine sentinel --intent fold_existing` →
   graduation gate → ECR; counts against n_trials; NEVER bypass the gate.
+  Offline probe verdict (`scripts/probe_sentinel_activation.py`,
+  `data/sentinel_activation_probe/2026-05-21.json`,
+  `[defect_ref: SENTINEL-ACTIVATION-DORMANT-2026-05-21]`): FAIL —
+  structurally dormant; OOS (2024-01-01 → 2026-05-21) composite
+  p95=0.237 < 0.45 LIGHT floor, 100% DORMANT (872/872 days);
+  full-window (2018-01-01 → 2026-05-21) DORMANT=96.2% with only
+  0.4% DEEP days — the FAILED Lab probe's zero trades is the
+  composite never lighting up, NOT a downstream threshold-clipping
+  defect.
 
 - **Catalyst — event-confirmed insider-cluster drift (single-spec Lab
   candidate; 8-K leg data-gated).** `[lane: engine-owned] [gate:
