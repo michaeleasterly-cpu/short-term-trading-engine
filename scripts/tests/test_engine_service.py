@@ -1,7 +1,9 @@
 import asyncio
 import contextlib
+import os
 import sys
 import time
+import uuid
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch  # noqa: F401
@@ -823,3 +825,237 @@ def test_run_engine_service_wrapper_has_env_for_monitor():
     assert "source .env" in sh, "wrapper must source .env for ALPACA creds"
     assert 'DATABASE_URL="${DATABASE_URL_IPV4:-$DATABASE_URL}"' in sh
     assert "-m ops.engine_service" in sh
+
+
+# ---------------------------------------------------------------------------
+# 2026-05-21 observability fix — engine_service emits its own lifecycle
+# rows to platform.application_log under engine='engine_service' so the
+# canonical event substrate carries the daemon's liveness story. Prior
+# to this the daemon was alive but emitted nothing to application_log,
+# producing a 5-day "dormant?" visibility gap (see
+# docs/passovers/2026-05-21-paper-trading-dormant.md §3).
+# ---------------------------------------------------------------------------
+
+def _engine_service_rows(pool, event_type: str | None = None):
+    """Decode application_log INSERTs from a _RecPool/_DigestPool, keep
+    only engine='engine_service' rows (the daemon-lifecycle observability
+    family) and optionally narrow to one event_type."""
+    out = []
+    for sql, args in pool.conn.execs:
+        if "INSERT INTO platform.application_log" not in sql:
+            continue
+        engine, _rid, etype, sev, msg, data_json = args
+        if engine != es.DAEMON_ENGINE_LABEL:
+            continue
+        if event_type is not None and etype != event_type:
+            continue
+        out.append({
+            "engine": engine, "event_type": etype, "severity": sev,
+            "message": msg,
+            "payload": __import__("json").loads(data_json) if data_json else None,
+            "run_id": _rid,
+        })
+    return out
+
+
+async def test_emit_engine_service_event_writes_one_row():
+    """The helper writes exactly one application_log row tagged
+    engine='engine_service' with the given event_type/severity/payload."""
+    pool = _RecPool()
+    rid = uuid.uuid4()
+    await es._emit_engine_service_event(  # noqa: SLF001
+        pool, rid, "ENGINE_SERVICE_TEST", "INFO", "hello",
+        {"k": "v", "n": 1})
+    rows = _engine_service_rows(pool)
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["engine"] == "engine_service"
+    assert r["event_type"] == "ENGINE_SERVICE_TEST"
+    assert r["severity"] == "INFO"
+    assert r["message"] == "hello"
+    assert r["payload"] == {"k": "v", "n": 1}
+    assert r["run_id"] == rid
+
+
+async def test_emit_engine_service_event_crash_isolated():
+    """A pool whose acquire/execute raises must NOT propagate — daemon
+    observability is best-effort (mirrors DBLogHandler.log)."""
+
+    class _BoomConn:
+        async def execute(self, *a, **k):
+            raise RuntimeError("DB down")
+
+    class _BoomPool:
+        @contextlib.asynccontextmanager
+        async def acquire(self):
+            yield _BoomConn()
+
+    # must NOT raise
+    await es._emit_engine_service_event(  # noqa: SLF001
+        _BoomPool(), uuid.uuid4(), "X", "INFO", "msg", None)
+
+
+async def test_emit_engine_service_event_pool_none_no_op():
+    """pool=None ⇒ silent no-op (tests that drive _main_loop without
+    threading a run_id pass a None-emitting path)."""
+    # Should not raise.
+    await es._emit_engine_service_event(  # noqa: SLF001
+        None, uuid.uuid4(), "X", "INFO", "msg", None)
+
+
+async def test_run_sweep_with_observability_emits_start_and_done(
+        monkeypatch):
+    """The sweep wrapper emits a SWEEP_START before and a SWEEP_DONE
+    after the sweep, with returncode + duration_ms in the DONE payload."""
+    pool = _RecPool()
+    rid = uuid.uuid4()
+    monkeypatch.setattr(es, "_run_engine_sweep", lambda: 0)
+    trigger_at = datetime(2026, 5, 21, 23, 0, tzinfo=UTC)
+    await es._run_sweep_with_observability(pool, rid, trigger_at)  # noqa: SLF001
+    starts = _engine_service_rows(pool, es.DAEMON_SWEEP_START_EVENT)
+    dones = _engine_service_rows(pool, es.DAEMON_SWEEP_DONE_EVENT)
+    assert len(starts) == 1
+    assert len(dones) == 1
+    assert starts[0]["payload"]["trigger_recorded_at"] == trigger_at.isoformat()
+    assert dones[0]["payload"]["returncode"] == 0
+    assert dones[0]["payload"]["trigger_recorded_at"] == trigger_at.isoformat()
+    assert dones[0]["severity"] == "INFO"
+    assert isinstance(dones[0]["payload"]["duration_ms"], int)
+
+
+async def test_run_sweep_with_observability_nonzero_rc_is_error(monkeypatch):
+    """A non-zero sweep returncode flips SWEEP_DONE severity to ERROR
+    (the daemon's "the sweep failed" surface for operator queries)."""
+    pool = _RecPool()
+    monkeypatch.setattr(es, "_run_engine_sweep", lambda: 7)
+    await es._run_sweep_with_observability(  # noqa: SLF001
+        pool, uuid.uuid4(), datetime(2026, 5, 21, 23, 0, tzinfo=UTC))
+    dones = _engine_service_rows(pool, es.DAEMON_SWEEP_DONE_EVENT)
+    assert len(dones) == 1
+    assert dones[0]["payload"]["returncode"] == 7
+    assert dones[0]["severity"] == "ERROR"
+
+
+async def test_main_loop_emits_trigger_seen_when_trigger_consumed(monkeypatch):
+    """A qualifying trigger > cursor ⇒ a TRIGGER_SEEN row under
+    engine='engine_service' precedes the sweep (so an operator can
+    correlate trigger-arrival ↔ sweep-fire in application_log)."""
+    pool = _RecPool()
+    rid = uuid.uuid4()
+    monkeypatch.setattr(es, "POLL_INTERVAL_SEC", 0)
+    monkeypatch.setattr(es, "_run_engine_sweep", lambda: 0)
+    monkeypatch.setattr(es, "_maybe_fire_weekly_digest",
+                        AsyncMock(return_value=None))
+    monkeypatch.setattr(es, "_maybe_escalate_digest_stalled",
+                        AsyncMock(return_value=None))
+    monkeypatch.setattr(es, "_maybe_escalate_sweep_silent",
+                        AsyncMock(return_value=None))
+    stop = asyncio.Event()
+    ts = datetime.now(UTC)
+
+    async def _ft(p, c):
+        # one trigger, then stop the loop
+        if not getattr(_ft, "fired", False):
+            _ft.fired = True
+            return ts
+        stop.set()
+        return None
+    monkeypatch.setattr(es, "_find_new_trigger", _ft)
+    await es._main_loop(pool, stop, run_id=rid)  # noqa: SLF001
+    triggers = _engine_service_rows(pool, es.DAEMON_TRIGGER_EVENT)
+    assert len(triggers) == 1
+    assert triggers[0]["payload"]["trigger_recorded_at"] == ts.isoformat()
+    assert triggers[0]["run_id"] == rid
+    # the SWEEP_DONE row follows the TRIGGER_SEEN row (same run_id)
+    dones = _engine_service_rows(pool, es.DAEMON_SWEEP_DONE_EVENT)
+    assert len(dones) == 1
+    assert dones[0]["run_id"] == rid
+
+
+async def test_main_loop_emits_poll_failed_once_per_burst(monkeypatch):
+    """Multiple consecutive DB poll failures collapse to ONE
+    POLL_FAILED row (no flood); a recovery resets the burst latch so
+    the next failure re-emits."""
+    pool = _RecPool()
+    monkeypatch.setattr(es, "POLL_INTERVAL_SEC", 0)
+    monkeypatch.setattr(es, "_run_engine_sweep", lambda: 0)
+    monkeypatch.setattr(es, "_maybe_fire_weekly_digest",
+                        AsyncMock(return_value=None))
+    monkeypatch.setattr(es, "_maybe_escalate_digest_stalled",
+                        AsyncMock(return_value=None))
+    monkeypatch.setattr(es, "_maybe_escalate_sweep_silent",
+                        AsyncMock(return_value=None))
+    stop = asyncio.Event()
+    state = {"i": 0}
+
+    async def _ft(p, c):
+        state["i"] += 1
+        # first three: fail; fourth: clean None (no trigger); fifth: fail
+        if state["i"] in (1, 2, 3):
+            raise RuntimeError(f"poll fail {state['i']}")
+        if state["i"] == 4:
+            return None
+        if state["i"] == 5:
+            raise RuntimeError("poll fail again")
+        stop.set()
+        return None
+    monkeypatch.setattr(es, "_find_new_trigger", _ft)
+    await es._main_loop(pool, stop, run_id=uuid.uuid4())  # noqa: SLF001
+    fails = _engine_service_rows(pool, es.DAEMON_POLL_FAILED_EVENT)
+    # one row for burst-1 (three consecutive fails) + one for burst-2
+    # (a single fail after a clean poll reset the latch)
+    assert len(fails) == 2, fails
+    assert fails[0]["severity"] == "ERROR"
+    assert "poll fail 1" in fails[0]["payload"]["error"]
+    assert "poll fail again" in fails[1]["payload"]["error"]
+
+
+async def test_amain_emits_startup_and_shutdown(monkeypatch):
+    """_amain emits ENGINE_SERVICE_STARTED at startup and
+    ENGINE_SERVICE_STOPPED at shutdown (both under
+    engine='engine_service'). The pool is built once and closed once
+    (the existing invariant) — we don't break that."""
+    monkeypatch.setenv("DATABASE_URL", "postgres://fake/db")
+
+    class _P:
+        def __init__(self):
+            self.closed = 0
+            self.conn = _RecConn()
+
+        @contextlib.asynccontextmanager
+        async def acquire(self):
+            yield self.conn
+
+        async def close(self):
+            self.closed += 1
+
+    built = []
+
+    async def _fake_build(dsn, **kw):
+        p = _P()
+        built.append(p)
+        return p
+    monkeypatch.setattr(es, "build_asyncpg_pool", _fake_build)
+    monkeypatch.setattr(es, "AlpacaPaperBrokerAdapter", MagicMock())
+    monkeypatch.setattr(es, "TradeMonitor", MagicMock())
+    monkeypatch.setattr(es, "AARWriter", MagicMock())
+    monkeypatch.setattr(es, "_run_supervised", AsyncMock(return_value=None))
+    rc = await es._amain()  # noqa: SLF001
+    assert rc == 0
+    assert len(built) == 1
+    pool = built[0]
+    assert pool.closed == 1
+    startups = _engine_service_rows(pool, es.DAEMON_STARTUP_EVENT)
+    shutdowns = _engine_service_rows(pool, es.DAEMON_SHUTDOWN_EVENT)
+    assert len(startups) == 1
+    assert len(shutdowns) == 1
+    # one stable run_id ties the row family together
+    assert startups[0]["run_id"] == shutdowns[0]["run_id"]
+    # startup payload carries the basic diagnostic context
+    sp = startups[0]["payload"]
+    assert sp["pid"] == os.getpid()
+    assert sp["poll_interval_sec"] == es.POLL_INTERVAL_SEC
+    assert set(sp["triggers"]) == set(es.TRIGGER_EVENT_TYPES)
+    # shutdown payload carries duration_ms ≥ 0
+    assert shutdowns[0]["payload"]["duration_ms"] >= 0
+    assert shutdowns[0]["payload"]["pid"] == os.getpid()
