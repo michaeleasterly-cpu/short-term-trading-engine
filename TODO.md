@@ -429,6 +429,27 @@ and that must be stated plainly, not glossed.
   (each a one-entry increment, not unbuilt architecture).
 - ✅ **candidate (6): schema/contract-drift sentinel — DONE 2026-05-17.** `tpcore/ingestion/adapter_contract.py` — declared `ADAPTER_CONTRACTS` SoT (all 12 CSV-first feeds; clockwork drift test == CSV-first feed set); `assert_contract_populated` raises before load when a required adapter-output field is systematically empty across a non-empty pull (producer hard-stop; symptom-level detection; escalate-only, no auto-heal); 4 high-risk feeds enforced (fred_macro/iborrowdesk_borrow_rates/finra_short_interest/apewisdom_social_sentiment), rest `guard_pending`; thin Step-4c `adapter_contract` known_knowns check adds coverage/visibility + 24h-escalation FAIL. PRs #32 (P1 registry+helper dark) / #33 (P2 enforce 4 high-risk handlers) / #35 (P3 thin Step-4c check). (3)/(4) realized by #165; (5) auditheal done; **(6) done** ⇒ remaining deterministic-agents work = the Data Supervisor (Escalation & Hardening Ladder rung 2) + #187 LLM triage (rung 3).
 
+## Naming convention sweep — across the board (2026-05-21)
+
+The operator noticed module naming drift: `engine_llm_triage.py` puts the lane FIRST, while `llm_data_triage.py` / `llm_data_recovery.py` / `llm_lab_emitter.py` put the `llm_` prefix FIRST. Same logical kind of module, different filename pattern. The drift snuck in because `docs/STYLE_GUIDE.md` §Naming only documents engine/score/service IDENTIFIER conventions (glossary-pinned, deprecated-blacklist) — there's **no rule for Python module filename patterns**.
+
+`[lane: docs + tpcore + ops] [gate: structural sentinel test] [needs operator decision: pick the canonical pattern] [effort: M — convention doc + sentinel + ~25-30 file renames]`
+
+**Scope (across-the-board sweep):**
+
+1. **Document the convention** in `docs/STYLE_GUIDE.md` §Naming. Pick one canonical pattern. Recommended: `llm_<lane>_<purpose>.py` everywhere (puts the LLM prefix first universally; matches the majority that already follow this — `llm_data_triage`, `llm_data_recovery`, `llm_lab_emitter`). Engine-lane outlier renames to `llm_engine_triage.py`.
+2. **Add a structural sentinel test** that walks `ops/` + `tpcore/` and asserts every `llm_*` / `*_llm_*` file matches the convention. Fails CI on the next drift.
+3. **Rename the engine-lane outliers:**
+   - `ops/engine_llm_triage.py` → `ops/llm_engine_triage.py`
+   - `tpcore/engine_llm_triage/` → `tpcore/llm_engine_triage/`
+4. **Audit other module families for hidden inconsistencies:** the `lab_*` family (`tpcore/lab/`, `ops/lab/`, persona files), the `engine_*` family, the validation `check_*` family, the ingestion `handle_*` family. Surface any further drift.
+5. **Update the CI check job names** that reference the old paths (`engine-llm-triage deterministic fence` → `llm-engine-triage` per the rename) — `.github/workflows/*.yml`.
+6. **Update operator memory + docs** that reference the old names.
+
+**Why now-ish, not blocking:** the inconsistency is cosmetic until someone reaches for the wrong form and produces a third pattern. The sentinel test makes it impossible to drift further. Operator decision needed on canonical pattern (lane-first vs llm-first); rest is mechanical.
+
+**Trigger context:** noticed 2026-05-21 while reviewing the autonomous self-heal stack (PRs #227 / #231 / #233 / #235 / #236 / #239). Operator verbatim: "why didn't they name them consistently?" / "i thought we had naming conventions".
+
 ## Engine structural redesign (post-2026-05-15 sweep)
 
 The 2026-05-15 parameter sweeps validated the targeted fixes (Sigma SPY-
