@@ -528,3 +528,13 @@ turn  # unused variable (tpcore/lab/llm_finder/models.py)
 universe  # unused variable (tpcore/lab/llm_finder/models.py)
 value  # unused variable (tpcore/lab/llm_finder/models.py)
 volume  # unused variable (tpcore/lab/llm_finder/models.py)
+
+# Task #25 §6 — tool_sandbox.CointArgs.pair_pre_registered is a pydantic
+# Literal[True] fence (spec §6.1) — set by callers, read by the
+# validator, not directly accessed in the dispatcher. Same idiom as
+# the model_config + every other pydantic-field allowlist above.
+pair_pre_registered  # unused variable (tpcore/lab/llm_finder/tool_sandbox.py)
+
+# Task #25 §6 — fama_macbeth's per-session loop key is the dict key;
+# vulture sees `session` unused because we only iterate ticker_returns.
+session  # unused variable (tpcore/lab/llm_finder/tool_sandbox.py)

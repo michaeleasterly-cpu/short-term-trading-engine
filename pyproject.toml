@@ -27,6 +27,7 @@ dependencies = [
     "alpaca-py>=0.30",
     "PyYAML>=6.0",
     "scipy>=1.11",
+    "statsmodels>=0.14,<1",
     "croniter>=2.0",
     "xlrd>=2.0",
     "anthropic>=0.100,<1",
