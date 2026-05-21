@@ -91,6 +91,10 @@ from ops.llm_edge_finder import (
     EDGE_FINDER_TRIGGER_EVENT_TYPES,
     run_edge_finder_cotask,
 )
+from ops.llm_finder_outcome_monitor import (
+    OUTCOME_MONITOR_TRIGGER_EVENT_TYPES,
+    run_outcome_monitor_cotask,
+)
 from ops.llm_lab_emitter import (
     LAB_EMITTER_TRIGGER_EVENT_TYPES,
     run_lab_emitter_cotask,
@@ -134,9 +138,10 @@ TRIGGER_EVENT_TYPES: tuple[str, ...] = AUTONOMOUS_DATA_TRIGGER_EVENT_TYPES
 # re-checks the Ladder open set itself (no ordering coupling).
 ENGINE_TRIGGER_EVENT_TYPES: tuple[str, ...] = ("ENGINE_ESCALATED",)
 # poll (1 per lane) + each lane's run_triage acquires + headroom; with
-# FOUR co-hosted lanes (data, engine, lab_emitter — SP-G, edge_finder
-# — Task #25 T10) sharing the one advisory pool we widen the cap to 6.
-POOL_MAX_SIZE = 6
+# FIVE co-hosted lanes (data, engine, lab_emitter — SP-G, edge_finder
+# — Task #25 T10, outcome_monitor — Task #25 Phase E/F) sharing the
+# one advisory pool we widen the cap to 7.
+POOL_MAX_SIZE = 7
 
 
 async def _find_new_trigger(
@@ -417,6 +422,34 @@ async def _lab_emitter_loop(
     )
 
 
+async def _outcome_monitor_loop(
+    pool, stop_event: asyncio.Event, lock_dir: str = DEFAULT_LOCK_DIR
+) -> None:
+    """OUTCOME-MONITOR co-task (Task #25 Phase E + F; spec §3.2).
+
+    Fifth crash-isolated ``_run_supervised`` co-task. Reads finder-emitted
+    PAPER engines from ``application_log`` LAB_FINDER_ACTION rows,
+    computes ``LiveOutcome`` per engine, emits LAB_FINDER_OUTCOME_CHECK
+    events for the §12 dashboard, drives Phase F1 (outcome_proven on
+    operator success-verdict) / F2 (auto-retire on bleed-cap / operator
+    failure / inactivity timeout).
+
+    Trigger event types ``OUTCOME_MONITOR_TRIGGER_EVENT_TYPES`` is empty
+    in v1 by design (mirrors SP-G + edge-finder pattern). The session-
+    close trigger event class (``NYSE_SESSION_CLOSE``) ships in a
+    follow-up event-emitter PR; v1's monitor is invoked via the
+    operator slash-skill or cron.
+    """
+    await _lane_loop(
+        pool,
+        stop_event,
+        lock_dir,
+        event_types=OUTCOME_MONITOR_TRIGGER_EVENT_TYPES,
+        triage_fn=run_outcome_monitor_cotask,
+        lane="outcome_monitor",
+    )
+
+
 async def _edge_finder_loop(
     pool, stop_event: asyncio.Event, lock_dir: str = DEFAULT_LOCK_DIR
 ) -> None:
@@ -514,6 +547,9 @@ async def _amain() -> int:
     async def _edge_finder_factory():
         await _edge_finder_loop(pool, stop_event, lock_dir)
 
+    async def _outcome_monitor_factory():
+        await _outcome_monitor_loop(pool, stop_event, lock_dir)
+
     data_task = asyncio.create_task(
         _run_supervised("data", _data_factory, stop_event))
     engine_task = asyncio.create_task(
@@ -522,12 +558,15 @@ async def _amain() -> int:
         _run_supervised("lab_emitter", _lab_emitter_factory, stop_event))
     edge_finder_task = asyncio.create_task(
         _run_supervised("edge_finder", _edge_finder_factory, stop_event))
+    outcome_monitor_task = asyncio.create_task(
+        _run_supervised("outcome_monitor", _outcome_monitor_factory, stop_event))
     try:
         # Exit on signal (stop_event) OR if all lanes have exited
         # (nothing left to supervise — don't zombie the process).
         stop_waiter = asyncio.ensure_future(stop_event.wait())
         all_done = asyncio.gather(
-            data_task, engine_task, lab_emitter_task, edge_finder_task
+            data_task, engine_task, lab_emitter_task,
+            edge_finder_task, outcome_monitor_task,
         )
         _done, _pending = await asyncio.wait(
             {stop_waiter, all_done},
@@ -539,10 +578,12 @@ async def _amain() -> int:
         with contextlib.suppress(BaseException):
             await all_done
     finally:
-        for t in (data_task, engine_task, lab_emitter_task, edge_finder_task):
+        for t in (data_task, engine_task, lab_emitter_task,
+                  edge_finder_task, outcome_monitor_task):
             t.cancel()
         await asyncio.gather(
-            data_task, engine_task, lab_emitter_task, edge_finder_task,
+            data_task, engine_task, lab_emitter_task,
+            edge_finder_task, outcome_monitor_task,
             return_exceptions=True)
         # Defensive: never leave the lock held on shutdown if a triage
         # pass was interrupted mid-flight (the per-pass finally already
