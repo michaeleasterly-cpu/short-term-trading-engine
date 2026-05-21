@@ -294,18 +294,34 @@ def test_engine_profile_has_data_dependencies_field():
 
 
 def test_data_dependencies_byte_equivalent_to_pre_migration_engine_tables():
-    """The migration is byte-equivalent (spec §3.2 / §4.1). For every
-    engine that pre-migration had an ENGINE_TABLES row, the same
-    frozenset is present on EngineProfile.data_dependencies. Pinned
-    against the evidence-derived literal that capital_gate.py used
-    pre-fold (2026-05-16 evidence)."""
+    """The migration is byte-equivalent (spec §3.2 / §4.1) AS CORRECTED
+    BY THE 2026-05-20 AUDIT. For every engine that pre-migration had an
+    ENGINE_TABLES row, the same frozenset is present on
+    EngineProfile.data_dependencies — modulo two accuracy corrections
+    applied 2026-05-21 (the post-PR-#171 drift caught by the audit at
+    docs/superpowers/audits/2026-05-20-engine-data-dependencies-
+    accuracy.md):
+
+      - momentum: + earnings_events (`_load_earnings_beats` added by
+        PR #180; reads `platform.earnings_events` unconditionally per
+        `backtest.py:485`).
+      - catalyst: + earnings_events (`_fetch_earnings_events` added by
+        PR #178; reads `platform.earnings_events` unconditionally per
+        `backtest.py:292`).
+
+    Both corrections were applied via the canonical ECR path (no hand-
+    edit of _PROFILE), so the pinned literal here reflects the
+    corrected SoT — a refactor that re-drifted either back to the
+    pre-fix value would red this test (the audit's documented
+    invariant).
+    """
     expected = {
         "reversion": frozenset({"prices_daily", "fundamentals_quarterly"}),
         "vector": frozenset({"prices_daily", "fundamentals_quarterly", "earnings_events"}),
-        "momentum": frozenset({"prices_daily", "liquidity_tiers"}),
+        "momentum": frozenset({"prices_daily", "liquidity_tiers", "earnings_events"}),
         "sentinel": frozenset({"prices_daily", "macro_indicators"}),
         "canary": frozenset({"prices_daily"}),
-        "catalyst": frozenset({"prices_daily", "sec_insider_transactions"}),
+        "catalyst": frozenset({"prices_daily", "sec_insider_transactions", "earnings_events"}),
         "allocator": frozenset({"prices_daily"}),
     }
     for name, deps in expected.items():

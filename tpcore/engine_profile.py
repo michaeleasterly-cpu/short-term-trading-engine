@@ -82,7 +82,7 @@ _PROFILE: dict[str, EngineProfile] = {
     "momentum":  EngineProfile(engine="momentum", cadence=Cadence.MONTHLY_FIRST_TRADING_DAY,
                                dispatch_order=3, lifecycle_state=LifecycleState.PAPER,
                                allocator_eligible=True,
-                               data_dependencies=frozenset({"prices_daily", "liquidity_tiers"})),
+                               data_dependencies=frozenset({"earnings_events", "liquidity_tiers", "prices_daily"})),
     "sentinel":  EngineProfile(engine="sentinel", cadence=Cadence.DAILY,
                                dispatch_order=4, lifecycle_state=LifecycleState.PAPER,
                                data_dependencies=frozenset({"prices_daily", "macro_indicators"})),
@@ -94,7 +94,7 @@ _PROFILE: dict[str, EngineProfile] = {
     "catalyst":   EngineProfile(engine="catalyst", cadence=Cadence.DAILY,
                                dispatch_order=7, lifecycle_state=LifecycleState.PAPER,
                                allocator_eligible=True,
-                               data_dependencies=frozenset({"prices_daily", "sec_insider_transactions"})),
+                               data_dependencies=frozenset({"earnings_events", "prices_daily", "sec_insider_transactions"})),
     # allocator: separate _dispatch_allocator path (NOT in the ROSTER loop, D-SDLC1-4).
     "allocator": EngineProfile(engine="allocator", cadence=Cadence.WEEKLY_FIRST_TRADING_DAY,
                                dispatch_order=0, lifecycle_state=LifecycleState.PAPER,

@@ -2131,9 +2131,11 @@ def test_modify_data_dependencies_round_trip(tmp_path):
     # Real-source round-trip — copytree the worktree so the rewriter
     # works against the actual hand-curated byte shape of _PROFILE
     # (catalyst's data_dependencies kwarg, the staged-ECR's motivating
-    # case from the 2026-05-20 audit). Catalyst's pre-edit declared set
-    # in the live source is {"prices_daily", "sec_insider_transactions"};
-    # this MODIFY adds "earnings_events" (the accuracy correction).
+    # case from the 2026-05-20 audit). Catalyst's post-2026-05-21 live
+    # declared set is
+    # {"prices_daily", "sec_insider_transactions", "earnings_events"};
+    # this MODIFY round-trips to a DIFFERENT (smaller) set so the test
+    # premise stays non-vacuous regardless of the current SoT.
     staged = _staged_copytree(tmp_path / "tree")
     ep = staged / "tpcore" / "engine_profile.py"
     pre_src = ep.read_text()
@@ -2142,29 +2144,27 @@ def test_modify_data_dependencies_round_trip(tmp_path):
     # test to vacuous; the explicit pre-assert pins the baseline.
     pre_catalyst = _reparse_data_dependencies(pre_src, "catalyst")
     pre_momentum = _reparse_data_dependencies(pre_src, "momentum")
-    assert "earnings_events" not in pre_catalyst, (
-        f"baseline drift: catalyst already declares earnings_events "
-        f"({pre_catalyst}) — this test's accuracy-correction premise "
-        f"no longer holds; pick a different MODIFY target.")
-    declared = frozenset(
-        {"prices_daily", "sec_insider_transactions", "earnings_events"})
+    # The MODIFY target is a DIFFERENT set than the pre-state — that is
+    # the contract being pinned (a rewrite to a *new* declared set
+    # round-trips). We pick a two-member subset so a rewrite that
+    # accidentally preserved or duplicated the pre-state would diff.
+    declared = frozenset({"prices_daily", "sec_insider_transactions"})
+    assert declared != pre_catalyst, (
+        f"baseline drift: catalyst already declares exactly "
+        f"{declared} — pick a different MODIFY target to keep the "
+        f"round-trip premise non-vacuous (pre={pre_catalyst}).")
 
     # The 4-step round trip: parse_ecr → classify → attach → apply.
-    # We deliberately route around validate() — its zero-trust Lab
-    # dossier gate (load_labresult_sidecar / _assess_improvement) is
-    # the param_change tuning-evidence path, NOT the data-deps
-    # accuracy-correction path. The drift test pins the apply
-    # contract; the validate widening for pure-accuracy MODIFYs is
-    # the next follow-up scope.
+    # We deliberately route around validate() — its pre-approval dry
+    # consistency subprocess is exercised by the end-to-end test below;
+    # this test pins the apply contract directly (the rewriter's byte
+    # shape + the sibling-isolation discipline).
     ecr_text = (
         "ECR\n"
         "action: MODIFY\n"
         "engine: catalyst\n"
-        "data_dependencies: prices_daily, sec_insider_transactions, "
-        "earnings_events\n"
-        "need: Accuracy fix — catalyst backtest.py reads "
-        "platform.earnings_events but _PROFILE omits it (audit "
-        "2026-05-20).\n"
+        "data_dependencies: prices_daily, sec_insider_transactions\n"
+        "need: round-trip test — drop earnings_events from declared\n"
     )
     ecr = parse_ecr(ecr_text)
     assert ecr.data_dependencies == declared, (
@@ -2187,12 +2187,12 @@ def test_modify_data_dependencies_round_trip(tmp_path):
     _apply_modify(plan, staged, jn)
 
     # rendered byte shape: a sorted frozenset literal containing the
-    # three names. Sorting is part of the contract — non-sorted
-    # iteration would make the rendered line non-deterministic.
+    # two names. Sorting is part of the contract — non-sorted iteration
+    # would make the rendered line non-deterministic.
     new_src = ep.read_text()
     assert (
-        'data_dependencies=frozenset({"earnings_events", '
-        '"prices_daily", "sec_insider_transactions"})' in new_src
+        'data_dependencies=frozenset({"prices_daily", '
+        '"sec_insider_transactions"})' in new_src
     ), (f"rewritten _PROFILE source missing the expected sorted "
         f"frozenset literal for catalyst:\n{new_src}")
     # AST + compile gate: the rewritten source must still be a valid
@@ -2255,3 +2255,311 @@ def test_modify_data_dependencies_inject_when_absent(tmp_path):
     assert post_carver == declared, (
         f"round-trip data_dependencies inject mismatch on carver: "
         f"declared={declared} got={post_carver}")
+
+
+# ─── Spec §7 follow-up: accuracy-only MODIFY validate-gate (2026-05-21) ───
+# An accuracy-only MODIFY corrects a documentation drift (the engine's
+# declared EngineProfile.data_dependencies tuple diverged from its actual
+# platform.<table> reads). It carries ONLY ``data_dependencies`` (and an
+# optional ``need`` free-text) — no Lab dossier, no param_change, no
+# gate_*. _validate_modify routes around the zero-trust Lab-dossier gate
+# for these (no signal change to validate), but the H-S3-6d
+# lifecycle-immutable guard STILL fires.
+
+
+def _accuracy_only_ecr(engine: str, deps: frozenset[str], *,
+                        need: str = "audit correction"):
+    """Build an accuracy-only MODIFY ECR (the catalyst/momentum
+    earnings_events case): only ``data_dependencies`` + ``need``, no
+    Lab dossier, no param_change, no gate_*."""
+    from ops.engine_sdlc.ecr import EngineChangeRequest
+    return EngineChangeRequest(
+        action="modify", engine=engine,
+        data_dependencies=deps, need=need)
+
+
+def test_is_accuracy_only_modify_discriminator():
+    """The discriminator helper must accept the accuracy-only shape and
+    reject anything that carries a param-change / Lab-dossier / gate_*
+    field. Non-vacuous: each rejecting field is tested independently so
+    a regression that flips the gate open to (e.g.) ``lab_dossier``
+    surfaces on a specific assertion, not a generic clean-pass.
+    """
+    from ops.engine_sdlc.ecr import EngineChangeRequest
+    from ops.engine_sdlc.planner import _is_accuracy_only_modify
+    # Accept: data_dependencies + need only.
+    ok = _accuracy_only_ecr(
+        "catalyst", frozenset({"prices_daily", "earnings_events"}))
+    assert _is_accuracy_only_modify(ok) is True, (
+        "accuracy-only ECR (data_dependencies only) must be accepted")
+    # Reject: ADD ECR (action is not MODIFY).
+    add = EngineChangeRequest(
+        action="add", engine="brandnew", source="new_scaffold",
+        cadence="daily", allocator=False, dispatch_order=9, need="x")
+    assert _is_accuracy_only_modify(add) is False
+    # Reject: any param-tuning / Lab-dossier / gate_* field set.
+    with_param = EngineChangeRequest(
+        action="modify", engine="catalyst",
+        data_dependencies=frozenset({"prices_daily"}),
+        param_change={"z_threshold": "3.1"})
+    assert _is_accuracy_only_modify(with_param) is False, (
+        "MODIFY with param_change must NOT be accuracy-only")
+    with_lab = EngineChangeRequest(
+        action="modify", engine="catalyst",
+        data_dependencies=frozenset({"prices_daily"}),
+        lab_dossier="docs/lab/x.md")
+    assert _is_accuracy_only_modify(with_lab) is False, (
+        "MODIFY with lab_dossier must NOT be accuracy-only")
+    with_dsr = EngineChangeRequest(
+        action="modify", engine="catalyst",
+        data_dependencies=frozenset({"prices_daily"}),
+        gate_dsr=0.97)
+    assert _is_accuracy_only_modify(with_dsr) is False, (
+        "MODIFY with gate_dsr must NOT be accuracy-only")
+    with_cred = EngineChangeRequest(
+        action="modify", engine="catalyst",
+        data_dependencies=frozenset({"prices_daily"}),
+        gate_cred=64)
+    assert _is_accuracy_only_modify(with_cred) is False, (
+        "MODIFY with gate_cred must NOT be accuracy-only")
+    # Reject: data_dependencies absent (need-only is a no-op).
+    need_only = EngineChangeRequest(
+        action="modify", engine="catalyst", need="just thinking")
+    assert _is_accuracy_only_modify(need_only) is False, (
+        "MODIFY with need-only (no data_dependencies) must NOT be "
+        "accuracy-only — there is nothing for _apply_modify to do")
+
+
+def test_validate_modify_accuracy_only_accepts_without_lab_dossier():
+    """Happy path: an accuracy-only MODIFY (data_dependencies only, no
+    Lab dossier) must be ACCEPTED by ``_validate_modify``. Removing the
+    accuracy-only branch makes this test fail — the zero-trust Lab
+    dossier gate would reject ``ecr.lab_dossier=None`` instantly."""
+    from ops.engine_sdlc.planner import (
+        _validate_modify,
+        attach_ecr_context,
+        classify,
+    )
+    ecr = _accuracy_only_ecr(
+        "catalyst",
+        frozenset({"prices_daily", "sec_insider_transactions",
+                   "earnings_events"}),
+        need="Accuracy fix — backtest.py reads earnings_events")
+    plan = attach_ecr_context(
+        classify(ecr, {"catalyst": LifecycleState.PAPER}), ecr)
+    vp = _validate_modify(plan, ecr)
+    assert vp.rejection is None, (
+        f"accuracy-only MODIFY wrongly rejected by validate-gate: "
+        f"{vp.rejection}")
+
+
+def test_validate_modify_param_change_still_requires_lab_dossier(
+        tmp_path):
+    """Regression guard: a param-change MODIFY (lab_dossier=None,
+    param_change set) MUST still be rejected by the zero-trust Lab
+    dossier gate. The accuracy-only branch widening MUST NOT loosen the
+    existing param-tuning gate. Inverse of the happy-path test.
+
+    Pinned message: ``requires a lab_dossier`` so a refactor that
+    routed a param-change MODIFY through the accuracy-only branch by
+    accident surfaces as a different rejection text (or a None
+    rejection, which the assert above catches first)."""
+    from ops.engine_sdlc.ecr import EngineChangeRequest
+    from ops.engine_sdlc.planner import (
+        _validate_modify,
+        attach_ecr_context,
+        classify,
+    )
+    ecr = EngineChangeRequest(
+        action="modify", engine="reversion",
+        param_change={"z_threshold": "3.1"})  # NO lab_dossier
+    plan = attach_ecr_context(
+        classify(ecr, {"reversion": LifecycleState.PAPER}), ecr)
+    vp = _validate_modify(plan, ecr)
+    assert vp.rejection is not None, (
+        "param-change MODIFY without a Lab dossier must STILL be "
+        "rejected — the accuracy-only widening must not loosen the "
+        "param-tuning gate")
+    assert "requires a lab_dossier" in vp.rejection, (
+        f"unexpected rejection text — the param-change-without-dossier "
+        f"reject should pin the readable message, not a stack trace: "
+        f"{vp.rejection!r}")
+
+
+def test_validate_modify_mixed_routes_through_param_change_gate(tmp_path):
+    """A MIXED MODIFY (data_dependencies + param_change both set) MUST
+    NOT be treated as accuracy-only — it carries a param tuning
+    decision, which still requires a Lab dossier. The accuracy-only
+    branch fires ONLY when ONLY data_dependencies / need are set.
+    Forced fail mode here: param_change is set so the branch routes
+    to the zero-trust gate, which rejects because lab_dossier is None
+    (the sidecar load fails)."""
+    from ops.engine_sdlc.ecr import EngineChangeRequest
+    from ops.engine_sdlc.planner import (
+        _is_accuracy_only_modify,
+        _validate_modify,
+        attach_ecr_context,
+        classify,
+    )
+    ecr = EngineChangeRequest(
+        action="modify", engine="reversion",
+        data_dependencies=frozenset({"prices_daily"}),
+        param_change={"z_threshold": "3.1"})  # mixed shape
+    assert _is_accuracy_only_modify(ecr) is False, (
+        "mixed (data_dependencies + param_change) MODIFY must NOT be "
+        "classified as accuracy-only")
+    plan = attach_ecr_context(
+        classify(ecr, {"reversion": LifecycleState.PAPER}), ecr)
+    vp = _validate_modify(plan, ecr)
+    assert vp.rejection is not None, (
+        "mixed MODIFY with no Lab dossier wrongly accepted — the "
+        "accuracy-only branch leaked into the param-change path")
+    # The reject must come from the param-change gate (the explicit
+    # missing-lab_dossier message), not a different path — proving the
+    # mixed shape is treated as param-change for routing purposes.
+    assert "requires a lab_dossier" in vp.rejection, (
+        f"mixed MODIFY rejection should come from the param-change "
+        f"gate's missing-lab_dossier path: {vp.rejection!r}")
+
+
+def test_validate_modify_accuracy_only_still_rejects_lifecycle_key():
+    """H-S3-6d guard: an accuracy-only MODIFY whose plan.sot_diff
+    carries a lifecycle / allocator / dispatch_order / cadence key MUST
+    still be REJECTED — lifecycle is immutable under MODIFY regardless
+    of accuracy-only vs param-change discriminator. The guard runs
+    BEFORE the accuracy-only branch dispatch by design (structural
+    invariant outranks branch choice).
+
+    NON-VACUOUS: each forbidden key is asserted independently; a clean
+    accuracy-only sot_diff (no lifecycle key) is asserted to PASS, so
+    deleting the lifecycle guard makes the reject-asserts fail while
+    the clean-pass control proves the gate is not a constant reject.
+    """
+    from ops.engine_sdlc.ecr import ECRAction
+    from ops.engine_sdlc.planner import (
+        ApprovalClass,
+        TransitionPlan,
+        _validate_modify,
+    )
+    ecr = _accuracy_only_ecr(
+        "catalyst",
+        frozenset({"prices_daily", "earnings_events",
+                   "sec_insider_transactions"}))
+    base_kw = dict(
+        action=ECRAction.MODIFY, engine="catalyst",
+        from_state=LifecycleState.PAPER, to_state=LifecycleState.PAPER,
+        approval_class=ApprovalClass.AUTOMATED,
+        gate_checks=["modify_evidence"])
+    # control: a clean accuracy-only sot_diff PASSES.
+    clean = TransitionPlan(
+        **base_kw,
+        sot_diff={
+            "data_dependencies": frozenset(
+                {"prices_daily", "earnings_events",
+                 "sec_insider_transactions"}),
+            "need": "audit fix",
+            "lab_dossier": None, "param_change": None,
+            "gate_dsr": None, "gate_cred": None})
+    ok = _validate_modify(clean, ecr)
+    assert ok.rejection is None, (
+        f"clean accuracy-only MODIFY sot_diff must pass: {ok.rejection}")
+    # each forbidden lifecycle key in sot_diff is a HARD reject.
+    for bad_key, bad_val in (
+            ("lifecycle_state", "PAPER"),
+            ("allocator_eligible", True),
+            ("dispatch_order", 9),
+            ("cadence", "daily")):
+        tampered = TransitionPlan(
+            **base_kw,
+            sot_diff={
+                "data_dependencies": frozenset(
+                    {"prices_daily", "earnings_events",
+                     "sec_insider_transactions"}),
+                "need": "audit fix",
+                "lab_dossier": None, "param_change": None,
+                "gate_dsr": None, "gate_cred": None,
+                bad_key: bad_val})
+        rej = _validate_modify(tampered, ecr)
+        assert rej.rejection is not None, (
+            f"accuracy-only MODIFY plan carrying lifecycle key "
+            f"{bad_key!r} was NOT rejected — H-S3-6d guard broken")
+        assert "lifecycle is immutable" in rej.rejection, (
+            f"reject for {bad_key!r} lacks the pinned H-S3-6d substring: "
+            f"{rej.rejection!r}")
+
+
+def test_accuracy_only_modify_end_to_end_round_trip(tmp_path):
+    """End-to-end round-trip: parse(staged ECR text) → classify →
+    attach_ecr_context → _validate_modify → _apply_modify, then re-parse
+    the rewritten ``tpcore/engine_profile.py`` and assert
+    ``_PROFILE["catalyst"].data_dependencies`` equals the declared set.
+
+    The point of this test: the FULL canonical path from CLI input
+    (the same text the staged ECR file carried at the repo root) to
+    on-disk SoT mutation works end-to-end. Mirrors the operator's
+    ``python -m ops.engine_sdlc --ecr <file>`` invocation but stays
+    hermetic via _staged_copytree (no real-tree mutation, no
+    subprocess clockwork required for the test pin).
+    """
+    import ast
+
+    from ops.engine_sdlc.ecr import parse_ecr
+    from ops.engine_sdlc.planner import (
+        _apply_modify,
+        _Journal,
+        _staged_copytree,
+        _validate_modify,
+        attach_ecr_context,
+        classify,
+    )
+    staged = _staged_copytree(tmp_path / "tree")
+    ep = staged / "tpcore" / "engine_profile.py"
+    pre_src = ep.read_text()
+    # baseline — catalyst already declares earnings_events post-2026-05-21
+    # (this PR applies the staged ECRs); we re-MODIFY-back to the
+    # *pre-fix* set to keep the test premise non-vacuous (a re-mutation
+    # that lands at a different set proves the rewriter is the source of
+    # the change, not a fixture quirk).
+    pre_catalyst = _reparse_data_dependencies(pre_src, "catalyst")
+    declared = frozenset(
+        {"prices_daily", "sec_insider_transactions"})  # the pre-fix set
+    assert declared != pre_catalyst, (
+        f"test premise broken: declared={declared} already equals "
+        f"pre-state={pre_catalyst} — pick a different MODIFY target")
+    # Build the canonical ECR wire format (exactly what the operator
+    # would put in a staged file).
+    ecr_text = (
+        "ECR\n"
+        "action: MODIFY\n"
+        "engine: catalyst\n"
+        "data_dependencies: prices_daily, sec_insider_transactions\n"
+        "need: round-trip test — drop earnings_events from declared\n"
+    )
+    ecr = parse_ecr(ecr_text)
+    assert ecr.data_dependencies == declared
+    assert ecr.lab_dossier is None
+    assert ecr.param_change is None
+    # classify → attach_ecr_context → _validate_modify (accuracy-only
+    # branch) → _apply_modify (the data_dependencies rewrite path).
+    snapshot = {"catalyst": LifecycleState.PAPER}
+    plan = attach_ecr_context(classify(ecr, snapshot), ecr)
+    vp = _validate_modify(plan, ecr)
+    assert vp.rejection is None, (
+        f"accuracy-only MODIFY end-to-end validate rejected: {vp.rejection}")
+    jn = _Journal()
+    _apply_modify(vp, staged, jn)
+    new_src = ep.read_text()
+    # rendered byte shape: sorted frozenset literal (deterministic).
+    assert (
+        'data_dependencies=frozenset({"prices_daily", '
+        '"sec_insider_transactions"})' in new_src
+    ), (f"rewritten _PROFILE source missing the expected sorted literal "
+        f"for catalyst:\n{new_src}")
+    # AST + compile gate fired (the rewriter compiles its output).
+    ast.parse(new_src)
+    compile(new_src, "<accuracy_only_e2e>", "exec")
+    # re-parse → equality.
+    post_catalyst = _reparse_data_dependencies(new_src, "catalyst")
+    assert post_catalyst == declared, (
+        f"end-to-end accuracy-only MODIFY did not round-trip: "
+        f"declared={declared} got={post_catalyst}")
