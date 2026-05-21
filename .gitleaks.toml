@@ -1,0 +1,67 @@
+# gitleaks configuration — public-repo secret-scanner gate
+#
+# Inherits the gitleaks 8.x default ruleset (every built-in detector — see
+# https://github.com/gitleaks/gitleaks/blob/master/config/gitleaks.toml ) and
+# layers a project-specific allowlist for confirmed-clean false positives
+# documented in `docs/audits/2026-05-21-public-repo-secret-audit.md`.
+#
+# Conventions:
+# - Allowlist entries cite the audit doc (Finding ID) so a future operator
+#   can chase the original triage decision rather than re-classifying.
+# - Entries are NARROW: ``regexes`` always coupled with ``paths`` to a
+#   single file, never a broad path-only suppression. A new secret in
+#   ``tpcore/tests/test_order_ids.py`` MUST still red the gate; only the
+#   three exact deterministic fixtures audited 2026-05-21 are excused.
+# - The gate config is committed; do NOT add a real key here even briefly.
+#
+# Reference: https://github.com/gitleaks/gitleaks#configuration
+
+[extend]
+# Layer on top of the upstream default ruleset — do not replace it.
+useDefault = true
+
+# Operator-local environment files. These are ``.gitignore``d (verified
+# 2026-05-21) so CI checkouts never see them, but a local ``gitleaks
+# detect --no-git`` would otherwise red on the operator's working tree.
+# Defense-in-depth: refusing to scan known-secret-bearing local files
+# means an accidental ``git add`` of one still surfaces via the standard
+# pre-commit hook on the FILE itself (because adding it removes the
+# gitignore protection — gitleaks scans staged files).
+[[allowlists]]
+description = "Operator-local .env / .envrc — gitignored, never in a CI checkout"
+paths = [
+    '''^\.env$''',
+    '''^\.env\..+$''',
+    '''^\.envrc$''',
+]
+
+# Finding F1, F2, F3 — deterministic ledger / client-order-id test
+# fixtures in tpcore.order_ids unit tests. Format is
+# ``{engine_prefix}_{TICKER}_close_{ISO_DATE}`` (close-ledger keys) or
+# ``{TICKER}_{TS}`` (legacy CID parser regression fixture). Public ticker
+# symbols + timestamps; no entropy, no secret. See audit doc §3 / F1–F3.
+[[allowlists]]
+description = "F1/F2/F3 — order_ids deterministic ledger-key + CID test fixtures"
+paths = ['''tpcore/tests/test_order_ids\.py''']
+regexes = [
+    '''mo_AAPL_close_2026-05-19''',
+    '''sn_TLT_close_2026-01-03''',
+    '''YUMC_1778582356''',
+]
+
+# Documented placeholder DSN used to assert that ``normalize_database_url``
+# produces a canonical shape and that the asyncpg pool gets the expected
+# ``dsn`` keyword. Username ``u`` / password ``p`` / host ``h`` / db ``d``
+# — no real credential. Did not red the 2026-05-21 baseline scan (entropy
+# below ``generic-api-key`` threshold) but allowlisted defensively against
+# future rule tightening.
+[[allowlists]]
+description = "Documented test DSN placeholder (u:p@h/d) in tpcore.db tests"
+paths = [
+    '''tpcore/db\.py''',
+    '''tpcore/tests/test_db_statement_cache\.py''',
+    '''tpcore/tests/test_persistent_store\.py''',
+]
+regexes = [
+    '''postgresql://u:p@h(:\d+)?/d''',
+]

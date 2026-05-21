@@ -1,0 +1,38 @@
+# Pre-commit hook config — local secret-scan + ruff gate.
+#
+# Optional adoption (the CI gate in .github/workflows/secret-scan.yml is
+# the authoritative line of defense), but installing it locally catches
+# a leak BEFORE it lands on GitHub — meaningful for a public repo where
+# even a brief push leaks the secret to the public timeline.
+#
+# Setup (one-time, per operator workstation):
+#
+#     pip install pre-commit
+#     pre-commit install
+#
+# Then every ``git commit`` runs the hooks against staged files.  To
+# bypass (emergency only), ``git commit --no-verify``.
+#
+# Hooks are pinned to specific revs (NOT a moving tag).  Bump
+# deliberately and re-test; ``pre-commit autoupdate`` rewrites the rev
+# line — review the diff before committing.
+
+repos:
+  # gitleaks — secret scanner.  Pinned to v8.30.1 (matches the CI gate
+  # in .github/workflows/secret-scan.yml; bump both together).
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+        # The committed .gitleaks.toml + .gitleaksignore are the same
+        # config CI uses; the hook auto-discovers .gitleaks.toml in the
+        # repo root.
+        name: gitleaks (staged-file secret scan)
+
+  # ruff — same linter the ci.yml uses, run pre-commit to short-circuit
+  # the obvious red.
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.4
+    hooks:
+      - id: ruff
+        args: [--fix]

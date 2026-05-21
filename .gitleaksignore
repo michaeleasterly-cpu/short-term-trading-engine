@@ -1,0 +1,19 @@
+# Fingerprint pins for confirmed-clean historical false positives.
+#
+# Each line is ``<commit-sha>:<file-path>:<rule-id>:<line>``.  Gitleaks
+# matches this format from any scan output (``Fingerprint`` field).  The
+# .gitleaks.toml [[allowlists]] block already redacts these on a
+# worktree scan; this file extends the suppression to ``gitleaks detect``
+# (full git-history mode) so the CI gate stays green even if it ever
+# pivots to a history-walk variant.
+#
+# Source: docs/audits/2026-05-21-public-repo-secret-audit.md §3 (F1, F2, F3).
+# Each fingerprint is a deterministic ledger-key / client-order-id test
+# fixture in tpcore.order_ids unit tests; classified CONFIRMED-CLEAN.
+
+# F1 — mo_AAPL_close_2026-05-19 (build_close_id momentum fixture)
+7ec7867d5a4bad751d437008fbfc8a31911e553c:tpcore/tests/test_order_ids.py:generic-api-key:29
+# F2 — sn_TLT_close_2026-01-03 (build_close_id sentinel fixture)
+7ec7867d5a4bad751d437008fbfc8a31911e553c:tpcore/tests/test_order_ids.py:generic-api-key:34
+# F3 — YUMC_1778582356 (parse_cid legacy CID regression fixture)
+f019a0b3b2ddd5a98c8bce1ae6b600bfddaaca3d:tpcore/tests/test_order_ids.py:generic-api-key:102

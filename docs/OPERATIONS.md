@@ -1175,6 +1175,35 @@ Fixed monthly cost: **$52** (FMP Starter $22 + Railway Hobby $5 + Supabase Pro $
 
 ---
 
+## 8.5 Secret hygiene (public repo)
+
+The repo flipped public on 2026-05-21 to keep CI running under GitHub Actions' public-repo quota. Any committed credential is now visible on the public timeline — so we run a recurring secret scanner on every push and PR.
+
+### Baseline audit
+
+- `docs/audits/2026-05-21-public-repo-secret-audit.md` — full git-history scan, 0 critical / 0 review / 3 confirmed-clean test fixtures. Re-run from the canonical checkout if a forensic re-audit is ever needed (the doc carries the exact reproduction command).
+
+### Recurring CI gate
+
+- `.github/workflows/secret-scan.yml` — gitleaks pinned to `8.30.1`, triggers on every push to `main` + every PR, fails on any un-allowlisted hit, uploads SARIF to the GitHub Security → Code scanning tab, JSON report archived as a workflow artifact for 14 days.
+- `.gitleaks.toml` + `.gitleaksignore` — the project-level allowlist for the three confirmed-clean test fixtures (F1, F2, F3 in the audit doc). Narrow path+regex scoping: a NEW secret in `tpcore/tests/test_order_ids.py` still reds the gate.
+
+### Operator pre-flight (every session)
+
+- Treat `.env`, `.env.local`, `.envrc` as write-only. Never `git add` one; they are gitignored, but `git add -A` (or a shell-tab-completion misclick) could stage them.
+- Use the operator-side env files for credentials. If a tool wants a key inline (smoke script, one-off curl), source it from `.env` — never paste into a tracked file.
+- After installing a new vendor SDK or signing up for a new service, confirm the credential lands in `.env` (or a vault), not into a committed file.
+- Optional local pre-commit hook: `pip install pre-commit && pre-commit install` (uses `.pre-commit-config.yaml`). Catches a leak BEFORE the push lands on the public timeline.
+
+### If the scanner reds
+
+1. Pull the artifact from the failed workflow run for the file/line/rule.
+2. If the hit is a REAL key: rotate at the vendor FIRST (the leaked credential is the threat surface; git history is secondary). Then purge from history via `git filter-repo` (preferred) or BFG, force-push, and confirm rotation took.
+3. If the hit is a benign false-positive: add a narrow allowlist entry to `.gitleaks.toml` + a fingerprint pin to `.gitleaksignore`, with a new F-id documented in the audit doc.
+4. The full operator playbook is `docs/audits/2026-05-21-public-repo-secret-audit.md §5`.
+
+---
+
 ## 9. Daily Checklist
 
 The operator works through this from the local Mac while Railway is paused. Substitute today's UTC date.
