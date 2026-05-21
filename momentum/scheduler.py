@@ -34,9 +34,16 @@ What this scheduler does NOT do (deliberately)
 ----------------------------------------------
 * No bracket orders. Momentum doesn't use per-name stops — risk is managed
   by the monthly rebalance discipline.
-* No trade-monitor handoff. There are no Tier 2 legs to submit reactively.
-* No per-fill AAR write. AARs are written when a position is CLOSED on a
-  subsequent rebalance — see :class:`MomentumAARLogging`.
+* No trade-monitor handoff. There are no Tier 2 legs to submit reactively
+  (trade_monitor only reconciles tier1/tier2 bracket fills — reversion +
+  vector — so a momentum SELL never lands there).
+* No per-fill AAR write at order submission. AARs are written when a
+  position is CLOSED on a subsequent rebalance — in the SELL branch of
+  this scheduler — by directly invoking :class:`MomentumAARLogging` with
+  the entry price + qty pulled from the broker's open-position record
+  and an ``exit_reason`` derived from :func:`tpcore.aar.classify_exit_reason`
+  (CLAUDE.md "AAR uses tpcore.aar.classify_exit_reason — no hardcoded
+  ExitReason literals").
 
 Dry-run mode
 ------------
@@ -59,12 +66,15 @@ from typing import TYPE_CHECKING, Any
 import structlog
 
 from momentum.models import RebalanceDecision
+from momentum.plugs.aar_logging import MomentumAARLogging
 from momentum.plugs.capital_gate import (
     DRAWDOWN_BREAKER_LOOKBACK_DAYS,
     MomentumCapitalGate,
 )
 from momentum.plugs.execution_risk import MomentumExecutionRisk
+from momentum.plugs.lifecycle_analysis import MomentumLifecycleAnalysis
 from momentum.plugs.setup_detection import MomentumSetupDetection
+from tpcore.aar import classify_exit_reason
 from tpcore.alpaca import AlpacaPaperBrokerAdapter
 from tpcore.db import build_asyncpg_pool
 from tpcore.interfaces.broker import (
@@ -296,6 +306,19 @@ class MomentumScheduler:
             # remains for direct manual `python -m momentum.scheduler` runs
             # (it now has no internal cadence to bypass, but stays a
             # documented accepted operator escape hatch).
+            #
+            # Lifecycle plug is still invoked (purely for the structlog
+            # audit trail) so each rebalance run records "this IS the
+            # first trading day of the month" structurally — without
+            # re-implementing the calendar lookup. Its is_rebalance_day
+            # signal is informational here; the cadence gate is the
+            # dispatcher's job.
+            lifecycle = MomentumLifecycleAnalysis()
+            await lifecycle.assess(pool, as_of)
+
+            # Plug 5 — AAR writer (constructed once, used in the SELL
+            # branch below for every CLOSE / DECREASE).
+            aar = MomentumAARLogging(pool=pool)
 
             # Plug 1 — rank candidates.
             setup = MomentumSetupDetection()
@@ -305,6 +328,12 @@ class MomentumScheduler:
             account = await broker.get_account()
             equity = account.equity if account.equity > 0 else self._engine_equity
             positions = await broker.get_positions()
+            # Per-symbol lookup of the broker's Position record so the
+            # SELL branch below can populate the AAR row's entry_price +
+            # qty from ``avg_entry_price`` / ``qty`` (the operator's
+            # "extra Alpaca call" caveat resolved by reusing this already-
+            # fetched result rather than calling ``get_open_position``).
+            positions_by_symbol = {p.symbol: p for p in positions}
             # Filter to momentum-owned positions only. Without this filter
             # the rebalance diffs against the WHOLE account and emits sell
             # orders for any non-momentum position whose ticker isn't in
@@ -436,25 +465,88 @@ class MomentumScheduler:
                     continue
                 if side is OrderSide.SELL:
                     # Free the governor slot via the idempotent close
-                    # arbiter (#251 B1). The trade-monitor stream may also
-                    # record this same close; both funnel through
-                    # record_close keyed by the stable per-(engine,ticker,
-                    # rebalance-date) close-id so the risk_close_ledger PK
-                    # ensures the slot decrements AT MOST once — never the
-                    # old dual-decrement under-drift. Realized P&L stays
-                    # 0 here (reconciled via the AAR/trade_monitor path;
-                    # adding it here would double-count). A record_close
-                    # error must NOT abort the rebalance loop.
+                    # arbiter (#251 B1). trade_monitor reconciles only
+                    # tier-1/tier-2 bracket fills (reversion + vector);
+                    # momentum uses plain day-market orders so
+                    # trade_monitor never observes this close — hence
+                    # the AAR write below is the ONLY path that lands
+                    # a momentum AAR row. record_close is keyed by the
+                    # stable per (engine,ticker,rebalance-date) close-id
+                    # so the risk_close_ledger PK ensures the slot
+                    # decrements AT MOST once — never the old dual
+                    # decrement under-drift. Realized P&L stays 0 here
+                    # on the governor side (the AAR row below carries
+                    # gross + net). A record_close error must NOT abort
+                    # the rebalance loop.
+                    trade_id = build_close_id("momentum", order.ticker, as_of)
                     try:
                         await governor.record_close(
                             engine_id="momentum",
-                            trade_id=build_close_id("momentum", order.ticker, as_of),
+                            trade_id=trade_id,
                             realized_pnl=Decimal("0"),
                         )
                     except Exception as exc:  # noqa: BLE001
                         logger.error(
                             "momentum.scheduler.record_close_failed",
                             ticker=order.ticker, error=str(exc)[:200],
+                        )
+                    # AAR write — one row per closed momentum position.
+                    # Replaces the old "reconciled via trade_monitor"
+                    # aspirational comment that was never factual (the
+                    # trade_monitor reconciles only bracket fills;
+                    # momentum uses plain day-market orders so
+                    # trade_monitor never observes the close — momentum
+                    # was emitting ZERO AARs prior to this wire-up).
+                    #
+                    # exit_reason derived via tpcore.aar.classify_exit_reason
+                    # — momentum has no per-name TP / SL legs (no brackets),
+                    # so passing take_profit=None and stop_loss=None routes
+                    # to ExitReason.TIME_STOP, the canonical "exited outside
+                    # the planned brackets" bucket. This satisfies the
+                    # engine-readiness §10 invariant "AAR uses
+                    # classify_exit_reason — no hardcoded ExitReason
+                    # literals" structurally (the prior
+                    # ExitReason.SCHEDULED_REBALANCE default in
+                    # MomentumAARLogging.write_rebalance_close has been
+                    # removed; the caller now MUST supply a classifier
+                    # derived value).
+                    pos = positions_by_symbol.get(order.ticker)
+                    exit_price = (
+                        placed.avg_fill_price
+                        if placed.avg_fill_price is not None
+                        else (pos.market_value / pos.qty if pos is not None and pos.qty > 0 and pos.market_value is not None else None)
+                    )
+                    if pos is not None and exit_price is not None:
+                        exit_reason = classify_exit_reason(
+                            exit_price=exit_price,
+                            take_profit=None,
+                            stop_loss=None,
+                        )
+                        now_utc = datetime.now(UTC)
+                        try:
+                            await aar.write_rebalance_close(
+                                trade_id=trade_id,
+                                ticker=order.ticker,
+                                entry_ts=now_utc,
+                                exit_ts=now_utc,
+                                entry_price=pos.avg_entry_price,
+                                exit_price=exit_price,
+                                qty=pos.qty,
+                                engine_equity_usd=equity,
+                                exit_reason=exit_reason,
+                                notes=None,
+                            )
+                        except Exception as exc:  # noqa: BLE001
+                            logger.error(
+                                "momentum.scheduler.aar_write_failed",
+                                ticker=order.ticker, error=str(exc)[:200],
+                            )
+                    else:
+                        logger.warning(
+                            "momentum.scheduler.aar_skipped_no_position",
+                            ticker=order.ticker,
+                            had_position=pos is not None,
+                            had_exit_price=exit_price is not None,
                         )
                 if placed.broker_order_id is not None:
                     submitted.append(placed.broker_order_id)

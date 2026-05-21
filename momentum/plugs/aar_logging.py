@@ -60,13 +60,20 @@ class MomentumAARLogging(BaseEnginePlug):
         exit_price: Decimal,
         qty: Decimal,
         engine_equity_usd: Decimal,
-        exit_reason: ExitReason = ExitReason.SCHEDULED_REBALANCE,
+        exit_reason: ExitReason,
         notes: str | None = None,
     ) -> bool:
         """Persist one AAR row for a closed Momentum position.
 
         Returns ``True`` if the write succeeded (or no writer is attached,
-        in which case the call is a no-op for dry-run tests)."""
+        in which case the call is a no-op for dry-run tests).
+
+        ``exit_reason`` is REQUIRED — the caller MUST pass a value derived
+        from :func:`tpcore.aar.classify_exit_reason` per the engine-readiness
+        §10 invariant "AAR uses classify_exit_reason — no hardcoded
+        ExitReason literals". The prior default of
+        ``ExitReason.SCHEDULED_REBALANCE`` was removed when the scheduler
+        was wired to invoke this plug for real (2026-05-21)."""
         if self._writer is None:
             logger.debug("momentum.aar.dry_run", ticker=ticker, trade_id=trade_id)
             return True

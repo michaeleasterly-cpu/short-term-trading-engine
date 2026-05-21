@@ -7,14 +7,6 @@
 # --min-confidence 60 (vulture 2.16 reports unused functions at the 60%
 # band; tightening to 80 silently re-inerts the gate — see that step's
 # inline rationale).
-# NOTE: the momentum/plugs/{aar_logging,lifecycle_analysis}.py entries
-# below (MomentumAARLogging / MomentumLifecycleAnalysis /
-# write_rebalance_close) are NOT plain dead code — they are the
-# SEPARATELY-TRACKED momentum-AAR parity-scaffold finding (the plugs are
-# not instantiated in momentum/scheduler.py, which reconciles via the
-# trade_monitor path; pre-existing since the momentum build). Allowlisted
-# as intentional parity-scaffold + flagged for separate handling; do NOT
-# delete the scaffold on the assumption it is mere dead code.
 model_config  # unused variable (canary/models.py:16)
 model_config  # unused variable (canary/models.py:22)
 __aenter__  # unused function (canary/tests/test_scheduler.py:121)
@@ -40,11 +32,8 @@ model_config  # unused variable (momentum/models.py:116)
 model_config  # unused variable (momentum/models.py:133)
 model_config  # unused variable (momentum/models.py:149)
 total_sell_notional_usd  # unused variable (momentum/models.py:155)
-MomentumAARLogging  # unused class (momentum/plugs/aar_logging.py:32)
-_.write_rebalance_close  # unused method (momentum/plugs/aar_logging.py:52)
 model_config  # unused variable (momentum/plugs/capital_gate.py:56)
 _._hold_days  # unused attribute (momentum/plugs/execution_risk.py:70)  # noqa: SLF001
-MomentumLifecycleAnalysis  # unused class (momentum/plugs/lifecycle_analysis.py:32)
 _._force_rebalance  # unused attribute (momentum/scheduler.py:225)  # noqa: SLF001
 __aenter__  # unused function (momentum/tests/test_scheduler_cadence_gate_removed.py:67)
 self_c  # unused variable (momentum/tests/test_scheduler_cadence_gate_removed.py:69)
