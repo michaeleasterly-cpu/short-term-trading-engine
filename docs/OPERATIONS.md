@@ -70,6 +70,31 @@ scripts/run_full_backfill.sh
 
 The CSV-first download → upload → verify → fix → compress pattern across all three sources (Alpaca bars, FMP fundamentals, Alpaca corp actions). Used after large cleanups or universe expansion. Long-running (30-60 min). NOT the daily cadence — that's `run_data_operations.sh`.
 
+### Catastrophic recovery — rebuild from the CSV-first archive (R3 substrate, 2026-05-21)
+
+The CSV-first archive is the canonical recovery artifact: every successful ingest writes a gzipped CSV under `data/<source>_archive/<source>_<stamp>.csv.gz` (or, when `CSV_ARCHIVE_BACKEND=s3` is set, the same layout in an S3-compatible bucket). If `platform.prices_daily` is destroyed (DB loss, accidental TRUNCATE, restore-from-scratch), replay the latest archive back into the live table via the canonical idempotent upsert:
+
+```bash
+DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python scripts/ops.py \
+  --stage rebuild_from_archive --param source=alpaca_daily_bars
+```
+
+Idempotent (uses the same `ON CONFLICT (ticker, date) DO UPDATE` statement as the daily ingest), bounded per-source, NOT in `--update` — operator-on-demand only. Currently shipped sources: `alpaca_daily_bars` (→ `platform.prices_daily`). Other archive-backed tables (corporate actions, fundamentals, macro) replay via their daily handlers re-running against the live DB once `prices_daily` is back.
+
+**Env-pluggable backend** — same one-liner works on the local Mac (today) and on Railway-after-migration:
+
+| Env var | Purpose | Default | Required when `BACKEND=s3` |
+|---------|---------|---------|----------------------------|
+| `CSV_ARCHIVE_BACKEND` | Backend selector — `local` (or unset) / `s3` | local | always |
+| `CSV_ARCHIVE_S3_ENDPOINT` | S3-compatible host (e.g. `s3.amazonaws.com`, `bucket.r2.cloudflarestorage.com`) — no scheme | — | yes |
+| `CSV_ARCHIVE_S3_BUCKET` | Destination bucket name | — | yes |
+| `CSV_ARCHIVE_S3_KEY_ID` | Access key ID | — | yes |
+| `CSV_ARCHIVE_S3_SECRET` | Secret access key | — | yes |
+| `CSV_ARCHIVE_S3_REGION` | Region hint (optional for non-AWS S3-compatibles) | blank | no |
+| `CSV_ARCHIVE_S3_SECURE` | `false` only for in-cluster plain-HTTP MinIO | `true` | no |
+
+Unset / `local` keeps today's behaviour byte-identical (writes to `<repo>/data/<source>_archive/`). The `TP_DATA_DIR` override still works (PR #76 seam, retained for local-dev pointing at an external disk). See `docs/memory/project_railway_archive_substrate_migration.md` for the LOCKED design (R3 = recovery via S3-compatible bucket; D2 = detection via Postgres rolling-median is a separate follow-up PR).
+
 ### Targeted backfill / special pull (parameterised stage — NOT a script)
 
 A single-stage backfill or special pull is the canonical stage run
