@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stelib"
+version = "0.1.0"
+description = "Short-term trading engine library: risk governor, AAR, parity, backtest, lab, forensics, indicators, and order management primitives carved from the short-term-trading-engine monorepo."
+readme = "PACKAGE_README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [
+    { name = "short-term-trading-engine contributors" },
+]
+keywords = [
+    "trading",
+    "backtest",
+    "risk-management",
+    "quant",
+    "finance",
+    "after-action-report",
+    "n-trials",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business :: Financial :: Investment",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "pydantic>=2",
+    "numpy",
+    "pandas",
+    "scipy",
+    "exchange_calendars",
+    "structlog",
+    "python-dotenv",
+]
+
+[project.urls]
+Source = "https://github.com/<github-handle>/<repo>"
+Documentation = "https://github.com/<github-handle>/<repo>#readme"
+Issues = "https://github.com/<github-handle>/<repo>/issues"
+
+[tool.setuptools.packages.find]
+include = ["stelib*"]
+exclude = ["tests*", "*.tests", "*.tests.*"]
+
+[tool.setuptools.package-data]
+stelib = ["py.typed"]
