@@ -2812,6 +2812,18 @@ _RETRYABLE_FAILURE_REASONS: frozenset[str] = frozenset({
     "TooManyRequests",
 })
 
+# Discriminator token (lowercased) that identifies a daily_bars
+# coverage-collapse producer-self-validation failure. The exact message
+# raised by ``_stage_daily_bars`` is
+#   "daily_bars coverage collapse: <date> has <n> tickers = <pct>% of …"
+# (see the RuntimeError raise near the COVERAGE_COLLAPSE_PCT block).
+# The token is matched case-insensitively against StageResult.error so a
+# coverage_collapse RuntimeError triggers the one-shot repair_gaps
+# cascade — NOT a blanket retry of every INGESTION_FAILED. Other
+# failures (auth, schema drift) need different handling and are left
+# alone here.
+_DAILY_BARS_COVERAGE_COLLAPSE_TOKEN: str = "coverage collapse"
+
 # Stages that depend on today's regular session having closed. Running
 # these mid-session produces partial / wrong-state bars and contaminates
 # downstream queries — refuse unless the operator passes --force.
@@ -3008,6 +3020,22 @@ async def cmd_update(
                 log=log, db_log=db_log, cycle_green=cycle_green,
             )
 
+    # Coverage-collapse auto-cascade — operator-reproduced 2026-05-18 →
+    # 2026-05-20 (three consecutive nights INGESTION_FAILED with
+    # "daily_bars coverage collapse: <date> has <n> tickers = 6–7%",
+    # ZERO auto-recovery despite the codebase already shipping the
+    # repair_gaps targeted heal). The producer-self-validation refuses
+    # to report OK on a sub-floor target session; the heal that closes
+    # exactly that gap (`_stage_daily_bars(repair_gaps=true)`) is then
+    # NEVER invoked from the failure path. This one-shot cascade closes
+    # the gap WITHOUT changing the safety check thresholds and WITHOUT
+    # blanket-retrying every INGESTION_FAILED (auth / schema drift /
+    # other RuntimeError modes need different handling).
+    if not dry_run:
+        await _auto_cascade_coverage_collapse(
+            summary, pool, daily_bars_config, log=log, db_log=db_log,
+        )
+
     # Self-healing — retry FAILED/TIMEOUT stages once if their error matches
     # the transient class (timeouts, network blips, 429). This addresses the
     # observed pattern in application_log: a single network hiccup leaves
@@ -3021,6 +3049,152 @@ async def cmd_update(
 
     summary.finished_at = datetime.now(UTC)
     return summary
+
+
+async def _auto_cascade_coverage_collapse(
+    summary: UpdateSummary,
+    pool: asyncpg.Pool,
+    daily_bars_config: dict[str, Any],
+    *,
+    log: structlog.stdlib.BoundLogger,
+    db_log,
+) -> None:
+    """Auto-cascade daily_bars coverage_collapse → repair_gaps (one-shot).
+
+    Scans ``summary.stages`` for a FAILED ``daily_bars`` entry whose
+    error message matches ``_DAILY_BARS_COVERAGE_COLLAPSE_TOKEN``. If
+    found, runs ``_stage_daily_bars`` ONCE more with
+    ``repair_gaps=true`` (the targeted-tickers, completeness-derived
+    heal path that closes the same gap the safety check refuses to
+    report OK on). Behaviour:
+
+    * One-shot — never loops. If repair_gaps also fails, the overall
+      stage stays FAILED with an ``INGESTION_AUTO_RECOVERY_FAILED``
+      escalation event (operator sees a clear escalation, not a silent
+      give-up).
+    * Fires ONLY on coverage_collapse — not on auth/schema/other
+      RuntimeError modes. The discriminator is the message token raised
+      by the producer-self-validation block in ``_stage_daily_bars``.
+    * Counts as ONE additional stage execution in the daemon's STAGE
+      SUMMARY: the original ``daily_bars`` FAILED entry is REPLACED with
+      the cascade result, annotated ``cascade=True`` + ``cascade_mode``
+      + ``first_error`` (mirrors ``_self_heal_failed_stages`` so the
+      table reader is honest about what was healed vs first-try green).
+    * Does NOT touch the Lab n_trials ledger — the data daemon never
+      burns Lab trials.
+
+    Logged events (engine=ops, run_id = summary.run_id):
+
+    * ``INGESTION_AUTO_RECOVERY_START`` — cascade fires.
+    * ``INGESTION_AUTO_RECOVERED`` — cascade succeeds (stage now OK).
+    * ``INGESTION_AUTO_RECOVERY_FAILED`` — cascade itself fails
+      (escalation surface).
+    """
+    spec_by_name = {n: (n, fb, to) for n, fb, to in _STAGE_SPECS}
+    token = _DAILY_BARS_COVERAGE_COLLAPSE_TOKEN.lower()
+    for i, result in enumerate(summary.stages):
+        if result.name != "daily_bars":
+            continue
+        if result.status != "FAILED":
+            continue
+        err = (result.error or "").lower()
+        if token not in err:
+            # Different failure mode (auth, schema drift, unknown) —
+            # the cascade is coverage_collapse-only by design.
+            continue
+        if result.name not in spec_by_name:
+            continue  # pragma: no cover — manifest invariant
+        name, factory_builder, timeout = spec_by_name[result.name]
+        first_error = (result.error or "")[:240]
+
+        await db_log.log(
+            "INGESTION_AUTO_RECOVERY_START",
+            "auto-cascade: daily_bars coverage_collapse → repair_gaps",
+            severity="INFO",
+            data={
+                "stage": name,
+                "cascade_mode": "repair_gaps",
+                "trigger": "coverage_collapse",
+                "first_error": first_error,
+            },
+        )
+        log.info(
+            "ops.auto_cascade.start",
+            stage=name,
+            cascade_mode="repair_gaps",
+            first_error=first_error,
+        )
+
+        # Build the cascade config: same daily_bars_config base + the
+        # repair_gaps switch. The repair_gaps branch in _stage_daily_bars
+        # reads its targets from compute_gap_repair_targets, so this is
+        # bounded (typically a handful of tickers, never a full-universe
+        # force_refresh).
+        cascade_config = {**daily_bars_config, "repair_gaps": True}
+        cascade_result = await _run_stage(
+            name,
+            factory_builder(pool, cascade_config),
+            log=log,
+            db_log=db_log,
+            dry_run=False,
+            timeout=timeout,
+        )
+
+        # Annotate so STAGE SUMMARY / dashboard readers see this was an
+        # auto-cascade, not a first-try result.
+        cascade_result.detail = {
+            **(cascade_result.detail or {}),
+            "cascade": True,
+            "cascade_mode": "repair_gaps",
+            "first_error": first_error,
+        }
+        summary.stages[i] = cascade_result
+
+        if cascade_result.status == "OK":
+            await db_log.log(
+                "INGESTION_AUTO_RECOVERED",
+                "auto-cascade healed daily_bars coverage_collapse via repair_gaps",
+                severity="INFO",
+                data={
+                    "stage": name,
+                    "cascade_mode": "repair_gaps",
+                    "first_error": first_error,
+                    "duration_ms": cascade_result.duration_ms,
+                    **(cascade_result.detail or {}),
+                },
+            )
+            log.info(
+                "ops.auto_cascade.recovered",
+                stage=name,
+                duration_ms=cascade_result.duration_ms,
+            )
+        else:
+            await db_log.log(
+                "INGESTION_AUTO_RECOVERY_FAILED",
+                (
+                    f"auto-cascade FAILED: daily_bars coverage_collapse "
+                    f"→ repair_gaps did not recover "
+                    f"(status={cascade_result.status})"
+                ),
+                severity="ERROR",
+                data={
+                    "stage": name,
+                    "cascade_mode": "repair_gaps",
+                    "first_error": first_error,
+                    "cascade_status": cascade_result.status,
+                    "cascade_error": (cascade_result.error or "")[:240],
+                    "duration_ms": cascade_result.duration_ms,
+                },
+            )
+            log.error(
+                "ops.auto_cascade.failed",
+                stage=name,
+                cascade_status=cascade_result.status,
+                cascade_error=cascade_result.error,
+            )
+        # One-shot: do not iterate beyond the first match. (Only one
+        # `daily_bars` entry exists per cmd_update cycle by manifest.)
+        return
 
 
 async def _self_heal_failed_stages(
