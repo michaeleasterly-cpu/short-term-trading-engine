@@ -17,9 +17,17 @@ sys.path.insert(0, str(REPO_ROOT))
 # Evict a non-package ``ops`` (scripts/ops.py) cached by an earlier test in
 # full-suite collection order, so ``import ops.*`` resolves the package —
 # the scripts/ops.py vs ops/ collision that bit SP2-T9.
-for _m in [m for m in list(sys.modules) if m == "ops" or m.startswith("ops.")]:
-    if not hasattr(sys.modules[_m], "__path__"):
-        del sys.modules[_m]
+#
+# REVERSE-ORDER ISOLATION (PR fix mirror of #165): the previous loop
+# evicted EVERY non-package ``ops*`` entry — including REGULAR MODULES
+# inside the real package (``ops.lab.run``, ``ops.lab.dossier`` etc.,
+# none of which carry ``__path__``). That broke
+# ``scripts/tests/test_search_parameters_characterization.py``'s
+# reverse-order gate (the §13.2(d) ``_FakePool`` collection-order
+# fragility called out below in test_collision_preemption_stanza_present).
+# Only ``sys.modules['ops']`` itself needs the eviction.
+if "ops" in sys.modules and not hasattr(sys.modules["ops"], "__path__"):
+    del sys.modules["ops"]
 
 import scripts.gen_engine_manifest as gm  # noqa: E402
 

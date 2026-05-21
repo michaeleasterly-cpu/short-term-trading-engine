@@ -19,9 +19,20 @@ sys.path.insert(0, str(REPO_ROOT))
 # Evict a non-package ``ops`` (scripts/ops.py) cached by an earlier test in
 # full-suite collection order, so ``import ops.*`` resolves the package —
 # the scripts/ops.py vs ops/ collision that bit SP2-T9.
-for _m in [m for m in list(sys.modules) if m == "ops" or m.startswith("ops.")]:
-    if not hasattr(sys.modules[_m], "__path__"):
-        del sys.modules[_m]
+#
+# REVERSE-ORDER ISOLATION (PR fix mirror of #165): the previous loop
+# evicted EVERY non-package ``ops*`` entry — including REGULAR MODULES
+# inside the real package (``ops.lab.run``, ``ops.lab.dossier`` etc.,
+# none of which carry ``__path__``). That broke
+# ``scripts/tests/test_search_parameters_characterization.py``'s
+# reverse-order gate: search_parameters held a reference to ``sp.amain``
+# whose ``__globals__`` is the OLD ``ops.lab.run`` namespace; this loop
+# evicted that module from sys.modules; a later
+# ``monkeypatch.setattr("ops.lab.run.…", …)`` then re-imported it (NEW
+# namespace) and patched the wrong dict — ``sp.amain`` silently took the
+# live-DB path. Only ``sys.modules['ops']`` itself needs the eviction.
+if "ops" in sys.modules and not hasattr(sys.modules["ops"], "__path__"):
+    del sys.modules["ops"]
 
 GEN = "scripts/gen_engine_manifest.py"
 
@@ -84,7 +95,7 @@ def test_hand_edit_out_of_fence_passes_check(tmp_path):
 
 def test_collision_preemption_stanza_present():
     """H-S4-9: every SP4 scripts/tests file *that imports ops/the
-    generator* carries the proven sys.modules eviction loop verbatim.
+    generator* carries the proven sys.modules eviction stanza verbatim.
 
     ``test_sp4_scope_confined.py`` is DELIBERATELY excluded: like its
     proven SP3 sibling ``scripts/tests/test_sp3_scope_confined.py`` it
@@ -92,12 +103,26 @@ def test_collision_preemption_stanza_present():
     resolves ``ops.*`` and so does not need (and must not carry) the
     stanza. Per H-S4-9 the stanza is for files that import ops/the
     generator; carrying it in the pure scope-gate would needlessly
-    mutate global ``sys.modules`` at collection time and perturb the
-    locked SP2 oracle (the §13.2(d) ``_FakePool`` collection-order
-    fragility). Its own scope-confinement is asserted by
-    ``test_sp4_scope_confined.py`` itself."""
-    needle = ('for _m in [m for m in list(sys.modules) if m == "ops" '
-              'or m.startswith("ops.")]:')
+    mutate global ``sys.modules`` at collection time.
+
+    REVERSE-ORDER ISOLATION (PR fix mirror of #165): the stanza was
+    previously a broad ``for _m in […if m == 'ops' or m.startswith(
+    'ops.')]: del sys.modules[_m]`` loop. That over-evicted REGULAR
+    MODULES inside the real ``ops`` package (``ops.lab.run``,
+    ``ops.lab.dossier`` — neither carries ``__path__``), which caused
+    the §13.2(d) ``_FakePool`` collection-order fragility:
+    ``scripts/tests/test_search_parameters_characterization.py``'s
+    ``sp.amain.__globals__`` is the OLD ``ops.lab.run`` namespace; the
+    over-eviction unhooked that module from sys.modules; a subsequent
+    ``monkeypatch.setattr("ops.lab.run.…", …)`` re-imported it (NEW
+    namespace) and patched a dict ``sp.amain`` no longer reads from, so
+    the smoke silently took the live-DB path and crashed on the fake
+    pool. The narrowed stanza preserves the original intent (evict the
+    scripts/ops.py shadow at top-level ``ops``) without touching
+    package submodules — the byte-frozen SP2 oracle is no longer
+    perturbed."""
+    needle = ('if "ops" in sys.modules and not hasattr('
+              'sys.modules["ops"], "__path__"):\n    del sys.modules["ops"]')
     for fn in ("test_engine_manifest_in_sync.py",
                "test_gen_engine_manifest_render.py",
                "test_sdlc_docs_match_code.py"):

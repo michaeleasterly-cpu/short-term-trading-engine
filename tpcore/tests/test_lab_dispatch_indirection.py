@@ -19,9 +19,17 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 # Evict a non-package ``ops`` (scripts/ops.py) so ``import ops.lab.run``
 # resolves the real ops/ package (the ops-shadow single-process rule).
-for _m in [m for m in list(sys.modules) if m == "ops" or m.startswith("ops.")]:
-    if not hasattr(sys.modules[_m], "__path__"):
-        del sys.modules[_m]
+#
+# REVERSE-ORDER ISOLATION (PR fix mirror of #165): the previous loop
+# evicted EVERY non-package ``ops*`` entry — including REGULAR MODULES
+# inside the real package (``ops.lab.run``, ``ops.lab.dossier`` etc.,
+# none of which carry ``__path__``). That broke
+# ``scripts/tests/test_search_parameters_characterization.py``'s
+# reverse-order gate (see the sibling guards in test_engine_sdlc_cli /
+# test_engine_manifest_in_sync / test_lab_ntrials_ledger for the full
+# write-up). Only ``sys.modules['ops']`` itself needs the eviction.
+if "ops" in sys.modules and not hasattr(sys.modules["ops"], "__path__"):
+    del sys.modules["ops"]
 
 pytestmark = pytest.mark.xdist_group("ops_shadow")
 

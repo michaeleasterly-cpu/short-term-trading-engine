@@ -20,9 +20,22 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 # Evict a non-package ``ops`` (scripts/ops.py) cached by an earlier test
 # so ``import ops.engine_sdlc.__main__`` resolves the real package.
-for _m in [m for m in list(sys.modules) if m == "ops" or m.startswith("ops.")]:
-    if not hasattr(sys.modules[_m], "__path__"):
-        del sys.modules[_m]
+#
+# REVERSE-ORDER ISOLATION (PR fix mirror of #165): the previous loop
+# evicted EVERY non-package ``ops*`` entry — including REGULAR MODULES
+# inside the real package (``ops.lab.run``, ``ops.lab.dossier`` etc.,
+# none of which carry ``__path__``). That broke
+# ``scripts/tests/test_search_parameters_characterization.py``'s
+# reverse-order gate: search_parameters held a reference to ``sp.amain``
+# whose ``__globals__`` is the OLD ``ops.lab.run`` namespace; this loop
+# evicted that module from sys.modules; a later
+# ``monkeypatch.setattr("ops.lab.run.…", …)`` then re-imported it (NEW
+# namespace) and patched the wrong dict — ``sp.amain`` silently took the
+# live-DB path. Only ``sys.modules['ops']`` itself needs the eviction
+# (the scripts/ops.py↔ops/ collision is a top-level-key conflict; the
+# submodules of the REAL package were never the targets of this guard).
+if "ops" in sys.modules and not hasattr(sys.modules["ops"], "__path__"):
+    del sys.modules["ops"]
 
 
 # pytest-xdist: pin this ops-shadow module to one worker so its
