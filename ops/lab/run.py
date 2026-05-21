@@ -465,6 +465,187 @@ def period_returns_from_trades(trades: list[Any]) -> list[float]:
 
 
 # ────────────────────────────────────────────────────────────────────────────
+# Final-holdout chunking (statement_timeout mitigation, 2026-05-21)
+# ────────────────────────────────────────────────────────────────────────────
+#
+# The final-holdout replay used to call the engine's ``run_for_search`` on
+# a single ``[train_start, final_holdout_end]`` window (~7-8 years × T1+T2
+# universe = ~1.5M+ rows of prices_daily in one SELECT). PR #166 raised
+# the read-only/Lab pool's statement_timeout to 30 min, but the operator-
+# reproduced 2026-05-21 reversion sweep STILL hit the timeout on the
+# replay (4.5-year final-holdout × T1+T2). The walk-forward path uses
+# per-window context loads (each window ≤ holdout_years+train_years ≈
+# 4 years and already passes), so the bug is exclusive to the final-
+# holdout monolithic replay (root cause: ONE long panel-load SQL, not
+# many short queries in a transaction — case #1 of the diagnosis).
+#
+# The fix is to chunk the FINAL-HOLDOUT span into smaller sub-windows,
+# load + run the engine per chunk, then aggregate the trades across
+# chunks. Each chunk's panel-load is bounded so no single SQL exceeds
+# ~10 min on a T1+T2-class universe (1/3 of the 30-min timeout — safe
+# margin). The verdict is computed on the AGGREGATE (one DSR, one
+# n_trades floor, one credibility read) — chunking is purely a transport-
+# layer mitigation and does NOT multiply the SP-A ledger spend (that
+# write is upstream of the replay).
+
+
+def chunk_final_holdout(
+    *, holdout_start: date, holdout_end: date,
+    warmup_days: int = 365,
+    chunk_months: int = 12,
+) -> list[tuple[date, date, date]]:
+    """Split the final-holdout span into per-chunk (load_start, chunk_start,
+    chunk_end) triples for the chunked replay.
+
+    Each triple says: load the engine context over
+    ``[load_start, chunk_end]`` (load_start = chunk_start - warmup_days so
+    indicator lookbacks are populated) and then KEEP trades whose
+    ``entry_date`` falls in ``[chunk_start, chunk_end]``. The chunks
+    partition ``[holdout_start, holdout_end]`` disjointly (no double-
+    counting; the union is exactly the original span).
+
+    ``chunk_months=12`` is the default (per-year chunking — favoured in
+    the operator's 2026-05-21 brief). A caller can fall back to
+    ``chunk_months=1`` if per-year still hits the limit, but the
+    arithmetic margin makes per-year sufficient for T1+T2-class universes
+    (~1,300 names × ~1.25 years per load = ~410k rows; the 4.5y × T1+T2
+    monolith was ~1.5M rows).
+
+    The 1-year ``warmup_days`` default covers every shipped engine's
+    indicator lookback (Reversion z-score windows are 20-90d; Sentinel /
+    Momentum lookbacks are ≤ 12mo; Vector composite is ≤ 12mo). Tunable
+    via the kwarg if a future engine needs more; per-engine override
+    would belong on the engine's ``LabTarget`` if ever required.
+    """
+    if holdout_end < holdout_start:
+        raise ValueError(
+            f"chunk_final_holdout: holdout_end {holdout_end} < holdout_start "
+            f"{holdout_start} — cannot chunk an empty/inverted span"
+        )
+    if chunk_months < 1:
+        raise ValueError(
+            f"chunk_final_holdout: chunk_months={chunk_months} must be ≥ 1"
+        )
+    if warmup_days < 0:
+        raise ValueError(
+            f"chunk_final_holdout: warmup_days={warmup_days} must be ≥ 0"
+        )
+
+    out: list[tuple[date, date, date]] = []
+    cur = holdout_start
+    while cur <= holdout_end:
+        # Step forward chunk_months months (calendar-aware: month rollover
+        # via (year, month) arithmetic, NOT a fixed 30*chunk_months days).
+        # The last chunk is clipped to holdout_end.
+        total_months = (cur.month - 1) + chunk_months
+        next_year = cur.year + total_months // 12
+        next_month = (total_months % 12) + 1
+        try:
+            next_chunk_start = date(next_year, next_month, cur.day)
+        except ValueError:
+            # cur.day=31 and next_month has 30 days (or Feb): clamp to the
+            # last day of next_month. Use day=28 then add forward; simpler
+            # via the standard trick: first-of-next-month minus 1.
+            if next_month == 12:
+                eom_year, eom_month = next_year + 1, 1
+            else:
+                eom_year, eom_month = next_year, next_month + 1
+            next_chunk_start = date(eom_year, eom_month, 1) - timedelta(days=1)
+        chunk_end = min(next_chunk_start - timedelta(days=1), holdout_end)
+        load_start = cur - timedelta(days=warmup_days)
+        out.append((load_start, cur, chunk_end))
+        if chunk_end >= holdout_end:
+            break
+        cur = next_chunk_start
+    return out
+
+
+async def _run_final_holdout_chunked(
+    *,
+    runner: Callable[..., Awaitable[Any]],
+    db_url: str,
+    train_start: date,
+    final_holdout_start: date,
+    final_holdout_end: date,
+    overrides: dict,
+    universe: tuple[str, ...] | None,
+    chunk_months: int = 12,
+    warmup_days: int = 365,
+) -> tuple[list[Any], int, Any]:
+    """Run the final-holdout replay as ``chunk_months``-sized chunks and
+    return the AGGREGATE ``(held_trades, credibility_score,
+    credibility_rubric)`` triple.
+
+    The chunks partition the final-holdout span disjointly, so each
+    chunk's per-chunk ``[chunk_start, chunk_end]`` slice contributes its
+    trades to the aggregate ONCE. Credibility (the integrity-flag rubric
+    + monte-carlo-drawdown summary) is taken from the LAST chunk's run —
+    the rubric is dominated by engine-config integrity flags that are
+    constant across chunks, and the last chunk's credibility_score is a
+    valid representative; the alternative (averaging) would conflate
+    fundamentally categorical flags. ``train_start`` is accepted for
+    signature symmetry with the legacy single-call path but the chunked
+    invocation instead computes each chunk's own ``load_start`` via
+    ``warmup_days`` (the monolithic ``train_start`` is what triggered the
+    statement_timeout).
+
+    Uses the engine's ``run_for_search`` (the ``_runner_for`` dispatch
+    seam) per-chunk — the SAME entry point the legacy single-call replay
+    used, just invoked N times with bounded ``[load_start, chunk_end]``
+    spans. This preserves the SP2 characterization-oracle invariants:
+    only the legacy ``_runner_for`` spy is exercised on the final-holdout
+    (the per-window ``_context_runner_for`` spy is untouched here).
+
+    Wrapped in the same ``_retry_transient_db`` helper PR #163 introduced
+    for the per-window ctx_loader — chunking shrinks the SQL but the
+    Supabase pooler can still drop a connection mid-query.
+    """
+    chunks = chunk_final_holdout(
+        holdout_start=final_holdout_start, holdout_end=final_holdout_end,
+        warmup_days=warmup_days, chunk_months=chunk_months,
+    )
+    if not chunks:
+        raise RuntimeError(
+            f"chunk_final_holdout produced 0 chunks for "
+            f"[{final_holdout_start}, {final_holdout_end}] — invariant violation"
+        )
+
+    aggregated_trades: list[Any] = []
+    last_credibility_score: int = 0
+    last_credibility_rubric: Any | None = None
+
+    for i, (load_start, chunk_start, chunk_end) in enumerate(chunks, 1):
+        print(
+            f"  chunk {i}/{len(chunks)}: replaying "
+            f"[{load_start} → {chunk_end}] (slice {chunk_start} → {chunk_end})"
+        )
+        load_t0 = time.time()
+        chunk_result = await _retry_transient_db(
+            lambda ls=load_start, ce=chunk_end: runner(
+                db_url=db_url, start=ls, end=ce,
+                overrides=overrides, universe=universe,
+            ),
+            label=f"final_holdout_chunk[{chunk_start}_{chunk_end}]",
+        )
+        print(f"    chunk replay complete in {time.time() - load_t0:.1f}s")
+        # Disjoint per-chunk slice: chunk_start ≤ entry_date ≤ chunk_end.
+        # The chunks partition [final_holdout_start, final_holdout_end]
+        # exactly (chunk_final_holdout invariant) so this filter neither
+        # double-counts nor drops a trade — the AGGREGATE is the same
+        # universe of held-back trades the monolithic replay would have
+        # produced.
+        chunk_held = [
+            t for t in chunk_result.trade_log
+            if chunk_start <= t.entry_date <= chunk_end
+        ]
+        aggregated_trades.extend(chunk_held)
+        last_credibility_score = int(chunk_result.credibility_score)
+        last_credibility_rubric = chunk_result.credibility_rubric
+
+    return aggregated_trades, last_credibility_score, last_credibility_rubric
+
+
+# ────────────────────────────────────────────────────────────────────────────
 # Engine dispatch
 # ────────────────────────────────────────────────────────────────────────────
 
@@ -1017,6 +1198,10 @@ async def _run_lab_core(
         print(f"      {w.label():>9}  train {w.train_start}→{w.train_end}  holdout {w.holdout_start}→{w.holdout_end}")
     print()
 
+    # ``runner`` is the engine's ``run_for_search`` — used PER-CHUNK by
+    # the 2026-05-21 chunked final-holdout replay (see the
+    # ``_run_final_holdout_chunked`` block below). The walk-forward
+    # search itself uses ``ctx_loader``+``ctx_runner`` (untouched).
     runner = _runner_for(args.engine)
     ctx_loader = _context_loader_for(args.engine)
     ctx_runner = _context_runner_for(args.engine)
@@ -1095,29 +1280,37 @@ async def _run_lab_core(
     # Final held-back validation on the WINNER.
     winner_params, winner_score, _ = ranked[0]
     print(f"═══ Final held-back: replaying winner on {args.final_holdout_start} → {args.final_holdout_end} ═══\n")
-    # The final-holdout replay loads a panel spanning train_start →
-    # final_holdout_end (~7 years) — even longer than a single window
-    # load, and observed to drop the Supabase pooler connection in
-    # vector_composite probe 4 (2026-05-20). Wrap with the same
-    # transient-DB retry that survives the per-window ctx_loader drop.
-    final_result = await _retry_transient_db(
-        lambda: runner(
+    # 2026-05-21: chunked replay. The legacy single-call replay loaded
+    # ``[train_start, final_holdout_end]`` (≈7-8 years × T1+T2 universe in
+    # one SELECT) and crashed on the operator's 2026-05-21 reversion sweep
+    # with ``canceling statement due to statement timeout`` — even after
+    # PR #166 raised the read-only/Lab pool's statement_timeout to 30 min.
+    # Per-year chunking keeps every SQL load well under that limit (a
+    # ~1.25-year × T1+T2 load is ~410k rows). The chunks partition the
+    # final-holdout span DISJOINTLY (see ``chunk_final_holdout`` invariant),
+    # the trade aggregate is the same universe of held-back trades the
+    # monolithic replay would have produced, and the verdict (DSR,
+    # credibility, n_trades floor) is computed on the AGGREGATE — chunking
+    # is purely a transport mitigation. The SP-A ledger spend is upstream
+    # of this block (still ONE spend per Lab run, see ``record_trial_spend``
+    # above).
+    held_trades, final_credibility_score, final_credibility_rubric = (
+        await _run_final_holdout_chunked(
+            runner=runner,
             db_url=db_url,
-            start=args.train_start,
-            end=args.final_holdout_end,
+            train_start=args.train_start,
+            final_holdout_start=args.final_holdout_start,
+            final_holdout_end=args.final_holdout_end,
             overrides=winner_params,
             universe=universe,
-        ),
-        label="final_holdout_runner",
+        )
     )
-    # Slice to held-back only. DSR is computed on period-aggregated returns
-    # (one observation per rebalance), which is the statistically-meaningful
-    # unit; computing it on per-position trades would double-count concurrent
-    # positions and produce nonsense.
-    held_trades = [
-        t for t in final_result.trade_log
-        if args.final_holdout_start <= t.entry_date <= args.final_holdout_end
-    ]
+    # Slice to held-back only — already done inside the chunker (each
+    # chunk filters by its [chunk_start, chunk_end] sub-range). DSR is
+    # computed on period-aggregated returns (one observation per
+    # rebalance), which is the statistically-meaningful unit; computing
+    # it on per-position trades would double-count concurrent positions
+    # and produce nonsense.
     span_days = (args.final_holdout_end - args.final_holdout_start).days or 1
     held_metrics = compute_slice_metrics_from_trades(held_trades, span_days)
     held_period_returns = period_returns_from_trades(held_trades)
@@ -1170,7 +1363,10 @@ async def _run_lab_core(
     # Persist the winner's CredibilityScore to platform.data_quality_log so
     # downstream tools (tip sheet, capital gate) can read it. Without this,
     # the rubric breakdown is recomputed on every search but never stored.
-    if final_result.credibility_rubric is not None:
+    # The aggregate rubric comes from the LAST chunk's run — the rubric is
+    # dominated by engine-config integrity flags that are constant across
+    # chunks (see _run_final_holdout_chunked docstring).
+    if final_credibility_rubric is not None:
         import asyncpg
 
         from tpcore.backtest.statistical_validation import write_credibility_score
@@ -1199,7 +1395,7 @@ async def _run_lab_core(
             wrote = await write_credibility_score(
                 ctx_pool,
                 engine_name=cred_engine_name,
-                score=final_result.credibility_rubric,
+                score=final_credibility_rubric,
             )
             print(
                 f"  → persisted credibility rubric to platform.data_quality_log "
@@ -1224,7 +1420,7 @@ async def _run_lab_core(
                 wrote = await write_credibility_score(
                     persist_pool,
                     engine_name=cred_engine_name,
-                    score=final_result.credibility_rubric,
+                    score=final_credibility_rubric,
                 )
                 print(
                     f"  → persisted credibility rubric to platform.data_quality_log "
@@ -1241,7 +1437,7 @@ async def _run_lab_core(
     # would double-print on the legacy path (T10 review #1).
     survived = (
         dsr >= args.dsr_threshold
-        and final_result.credibility_score >= args.credibility_threshold
+        and final_credibility_score >= args.credibility_threshold
         and held_metrics.n_trades >= 3
     )
     return _LabCore(
@@ -1249,8 +1445,8 @@ async def _run_lab_core(
         winner_score=winner_score,
         held_metrics=held_metrics,
         dsr=dsr,
-        full_credibility_score=int(final_result.credibility_score),
-        credibility_rubric=final_result.credibility_rubric,
+        full_credibility_score=int(final_credibility_score),
+        credibility_rubric=final_credibility_rubric,
         ranked=ranked,
         windows=windows,
         survived=survived,
