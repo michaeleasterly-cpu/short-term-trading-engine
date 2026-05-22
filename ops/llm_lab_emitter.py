@@ -123,21 +123,6 @@ _ENV_ALLOWLIST = ("PATH", "HOME", "LANG")
 _ENV_ALLOWLIST_PREFIXES = ("PYTHON",)
 
 
-def scrubbed_env() -> dict[str, str]:
-    """A fresh dict of ONLY the allowlisted vars from os.environ.
-
-    Built additively from an allowlist — a forbidden var (a *KEY*, a
-    *TOKEN*, any *DATABASE_URL*, ANTHROPIC*/ALPACA*/SUPABASE*) is never
-    even read into the result, so it CANNOT leak. This is the
-    credential-starve guarantee for any local sandbox gate."""
-    env: dict[str, str] = {}
-    for k, v in os.environ.items():
-        if k in _ENV_ALLOWLIST or any(
-            k.upper().startswith(p) for p in _ENV_ALLOWLIST_PREFIXES
-        ):
-            env[k] = v
-    return env
-
 
 def _default_pr_runner(
     argv: list[str], *, env: dict[str, str] | None = None,
