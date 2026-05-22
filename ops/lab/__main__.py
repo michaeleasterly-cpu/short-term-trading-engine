@@ -118,6 +118,12 @@ def _run_args(ns: argparse.Namespace, dsn: str) -> argparse.Namespace:
         dsr_threshold=ns.dsr_threshold,
         credibility_threshold=ns.credibility_threshold,
         universe_tier_max=ns.universe_tier_max,
+        # Forward --param-overrides (raw JSON string) so _run_lab_core can
+        # merge it into per-trial parameters. Was missing entirely — Lab
+        # accepted the CLI flag but never threaded it to the engine.
+        # Fixed 2026-05-22 after reversion partial-axis probe FAILED with
+        # 30/30 trials erroring on missing regime_target.
+        param_overrides=ns.param_overrides,
     )
 
 
