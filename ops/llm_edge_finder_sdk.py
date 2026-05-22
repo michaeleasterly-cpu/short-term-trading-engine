@@ -83,11 +83,6 @@ class AuthSkip(Exception):
     smoke mode" — safe no-op, zero retries."""
 
 
-# Finder needs larger output budget than data-triage. Full AnalysisResult
-# with 1-3 ProposedSpecs + falsification criteria + evidence refs +
-# rationale CAN exceed 8000 chars at the structural caps.
-EDGE_FINDER_MAX_TOKENS: int = 8192
-
 # Memstore mount path inside the agent's session container — derived
 # from the memstore's name (``lab-finder``). The persona references
 # ``/mnt/memory/lab-finder/`` so the agent uses absolute paths.
@@ -134,14 +129,8 @@ class _SessionLLMState:
         self._memstore_id = memstore_id
         self._title_hint = title_hint or f"edge-finder-{uuid4().hex[:8]}"
         self._session_id: str | None = None
-        # The application's outer loop appends entries to the transcript
-        # list each turn; we track its length so each ``__call__`` knows
-        # whether this is the first turn (empty transcript) or a follow-up
-        # (transcript grew since last call → send the latest tool_results
-        # as the next user.message).
-        self._last_seen_transcript_len = 0
 
-    async def _ensure_session(self) -> str:
+    async def ensure_session(self) -> str:
         if self._session_id is None:
             session = await self._client.beta.sessions.create(
                 agent=self._agent_id,
@@ -167,7 +156,7 @@ class _SessionLLMState:
             )
         return self._session_id
 
-    async def _send_user_message(self, session_id: str, text: str) -> None:
+    async def send_user_message(self, session_id: str, text: str) -> None:
         await self._client.beta.sessions.events.send(
             session_id=session_id,
             events=[
@@ -179,7 +168,7 @@ class _SessionLLMState:
             betas=[MANAGED_AGENTS_BETA],
         )
 
-    async def _consume_until_idle(self, session_id: str) -> str:
+    async def consume_until_idle(self, session_id: str) -> str:
         """Stream events until the session goes idle. Return the latest
         ``agent.message`` text body. If multiple agent.message events fire
         in one turn (which can happen with thinking blocks), the LAST one
@@ -233,7 +222,6 @@ class AgentSessionError(RuntimeError):
 def make_sdk_llm_callable(
     client: AsyncAnthropic | None = None,
     *,
-    max_tokens: int = EDGE_FINDER_MAX_TOKENS,  # noqa: ARG001 — preserved for compat
     agent_id: str | None = None,
     environment_id: str | None = None,
     memstore_id: str | None = None,
@@ -249,8 +237,6 @@ def make_sdk_llm_callable(
     Args:
         client: pre-constructed AsyncAnthropic. When None, the wrapper
             defers construction to first use (tests monkey-patch).
-        max_tokens: kept for compat with the v1 messages-API signature;
-            unused under Sessions (the Agent's server-side config wins).
         agent_id: defaults to the provisioned ``EDGE_FINDER_AGENT_ID``.
         environment_id: defaults to ``EDGE_FINDER_ENVIRONMENT_ID``.
         memstore_id: defaults to ``EDGE_FINDER_MEMSTORE_ID``.
@@ -305,15 +291,9 @@ def make_sdk_llm_callable(
         agent_text = ""
         for attempt in range(4):  # initial + 3 retries
             try:
-                session_id = await _state._ensure_session()
-                await _state._send_user_message(session_id, user_text)
-                agent_text = await _state._consume_until_idle(session_id)
-                # Account for the fact that the application appends a new
-                # transcript entry AFTER this call returns; bump our
-                # last-seen length so the next call's mode decision is
-                # transcript-len-relative (defensive, not load-bearing
-                # under current loop semantics).
-                _state._last_seen_transcript_len = len(transcript) + 1
+                session_id = await _state.ensure_session()
+                await _state.send_user_message(session_id, user_text)
+                agent_text = await _state.consume_until_idle(session_id)
                 break
             except AuthenticationError as exc:
                 raise AuthSkip(str(exc)) from None
