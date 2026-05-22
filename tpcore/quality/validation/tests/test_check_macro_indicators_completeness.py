@@ -8,7 +8,7 @@ to avoid bug-for-bug duplication; what tests pin is BEHAVIOR
 """
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -82,7 +82,12 @@ def _full_coverage_pool(
     present_by_indicator: dict[str, set[date]] = {}
     for ind in EXPECTED_INDICATORS:
         cadence = INDICATOR_CADENCE[ind]
-        expected = _expected_dates_for_cadence(cadence, first, last)
+        # Per-indicator anchor matters for WEEKLY series — pass the
+        # indicator hint so the fixture matches the production shape
+        # (initial_claims → Saturday-anchored per FRED IC4WSA).
+        expected = _expected_dates_for_cadence(
+            cadence, first, last, indicator=ind,
+        )
         # Some indicators have shorter active ranges in production; for
         # this fixture every series spans [first, last] fully.
         range_rows.append({
@@ -133,8 +138,16 @@ async def test_C2_daily_gap_fails() -> None:
 
 async def test_C3_weekly_gap_on_initial_claims_fails() -> None:
     pool = _full_coverage_pool()
-    # Pull one Thursday out of initial_claims.
-    drop_d = sorted(pool.present_by_indicator["initial_claims"])[3]
+    # initial_claims is Saturday-anchored (FRED IC4WSA observation_date).
+    # Pull one Saturday out of the present set; the check must flag the
+    # gap against the per-indicator anchor calendar.
+    present = sorted(pool.present_by_indicator["initial_claims"])
+    assert present, "fixture invariant: initial_claims must have rows"
+    assert all(d.weekday() == 5 for d in present), (
+        "fixture invariant: initial_claims rows must be Saturday-anchored "
+        "(per FRED IC4WSA observation_date)"
+    )
+    drop_d = present[3]
     pool.present_by_indicator["initial_claims"].discard(drop_d)
     result = await check_macro_indicators_completeness(pool)
     assert result.passed is False
@@ -282,12 +295,63 @@ def test_expected_dates_for_cadence_daily_uses_nyse_sessions() -> None:
 
 
 def test_expected_dates_for_cadence_weekly_thursdays_only() -> None:
+    # No-indicator-hint path: weekly defaults to Thursday (legacy
+    # behavior preserved for any future WEEKLY series that hasn't
+    # declared a per-series anchor in
+    # ``INDICATOR_WEEKLY_ANCHOR_WEEKDAY``).
     first = date(2024, 1, 1)  # Monday
     last = date(2024, 2, 29)
     out = _expected_dates_for_cadence(CADENCE_WEEKLY, first, last)
     assert all(d.weekday() == 3 for d in out), [d.isoformat() for d in out]
     # First Thursday on or after 2024-01-01 is 2024-01-04.
     assert out[0] == date(2024, 1, 4)
+
+
+def test_expected_dates_for_cadence_weekly_initial_claims_saturday_anchored() -> None:
+    """Wave-1 critical-path fix — ``initial_claims`` is FRED IC4WSA, whose
+    ``observation_date`` is the Saturday ending the reference week. The
+    pre-fix check generated Thursdays and false-flagged 1042+ missing
+    publications. Pin the Saturday anchor so a future tuning doesn't
+    silently re-introduce the defect.
+    """
+    first = date(2024, 1, 1)  # Monday
+    last = date(2024, 2, 29)
+    out = _expected_dates_for_cadence(
+        CADENCE_WEEKLY, first, last, indicator="initial_claims",
+    )
+    # Every expected date must be a Saturday (weekday() == 5).
+    assert all(d.weekday() == 5 for d in out), [d.isoformat() for d in out]
+    # First Saturday on or after 2024-01-01 is 2024-01-06.
+    assert out[0] == date(2024, 1, 6)
+
+
+async def test_initial_claims_full_saturday_run_passes_under_per_indicator_anchor() -> None:
+    """End-to-end pin against the live-shape: when the DB carries
+    Saturday-anchored ``initial_claims`` rows (which FRED IC4WSA always
+    does), the check must NOT flag them as missing publications. Pre-
+    fix the check expected Thursdays and reported every Saturday row
+    as a missing-Thursday + every Thursday-absence as a gap; this is
+    the regression sentinel.
+    """
+    first = date(2024, 1, 6)  # Saturday
+    last = date(2024, 12, 28)  # Saturday
+    pool = _full_coverage_pool(first=first, last=last)
+    # Rebuild ``initial_claims`` with the SATURDAY anchor (live shape).
+    saturdays: list[date] = []
+    d = first
+    while d <= last:
+        if d.weekday() == 5:
+            saturdays.append(d)
+        d += timedelta(days=1)
+    pool.present_by_indicator["initial_claims"] = set(saturdays)
+    # Run the check end-to-end.
+    result = await check_macro_indicators_completeness(pool)
+    # initial_claims must NOT appear in the failures.
+    ic_failures = [f for f in result.failures if f.ticker == "initial_claims"]
+    assert ic_failures == [], (
+        f"initial_claims falsely flagged as gappy despite full Saturday "
+        f"coverage: {ic_failures}"
+    )
 
 
 def test_expected_dates_for_cadence_monthly_first_of_month_only() -> None:

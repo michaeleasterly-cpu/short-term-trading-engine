@@ -154,9 +154,42 @@ INDICATOR_CADENCE: dict[str, str] = {
     "sos_state_diffusion": CADENCE_MONTHLY,
 }
 
-# Weekly cadence anchor day. ICSA (initial_claims) publishes Thursday
-# 8:30 ET. Python weekday() Monday=0, Thursday=3.
-WEEKLY_ANCHOR_WEEKDAY: int = 3  # Thursday
+# Weekly cadence anchor weekday per indicator. FRED's ``observation_date``
+# (NOT the press-release date) is the field that lands in
+# ``platform.macro_indicators.date``; the invariant must match that.
+#
+# * ``initial_claims`` (FRED series ``IC4WSA``, the 4-week MA) and
+#   ``ICSA`` are both indexed by FRED on the **Saturday** ending the
+#   reference week — verified against the FRED API metadata + the
+#   live ``platform.macro_indicators`` rows (every existing
+#   ``initial_claims`` row's date.weekday() == 5). The Thursday 8:30 ET
+#   *release* time is when the press release lands; FRED still stores
+#   the observation under the week-ending Saturday. The 2026-05-22
+#   full-spectrum data-feed hardening audit caught this defect:
+#   1042+ false-positive "missing Thursdays" on a check that expected
+#   Thursday-anchored observations that FRED never publishes that way.
+#
+# Python weekday() — Monday=0, Thursday=3, Saturday=5. New WEEKLY
+# indicators must add an entry here AND in INDICATOR_CADENCE; the
+# completeness check raises ``cadence_unmapped`` if a WEEKLY indicator
+# is missing here (the principled fail-loud invariant — no silent
+# fall-back to a wrong default).
+INDICATOR_WEEKLY_ANCHOR_WEEKDAY: dict[str, int] = {
+    "initial_claims": 5,  # Saturday — FRED IC4WSA observation_date
+}
+
+# Backwards-compat: a WEEKLY indicator with no per-series anchor
+# declared defaults to Thursday — preserves the pre-2026-05-22 behavior
+# for any new WEEKLY series whose anchor weekday hasn't been declared,
+# but the cadence-unmapped-style invariant below makes the missing entry
+# loud enough to catch in CI on the very next run.
+DEFAULT_WEEKLY_ANCHOR_WEEKDAY: int = 3  # Thursday
+
+# Legacy public alias — preserved for downstream test imports that
+# pinned the Thursday-anchor expectation directly (the old constant
+# name documented the legacy assumption). Now an alias for the
+# DEFAULT value above; per-indicator anchors are the SoT.
+WEEKLY_ANCHOR_WEEKDAY: int = DEFAULT_WEEKLY_ANCHOR_WEEKDAY
 
 # Failure list is capped for log size; CheckResult.failed always carries
 # the TRUE total count so confidence reflects reality.
@@ -189,12 +222,20 @@ def _expected_dates_for_cadence(
     cadence: str,
     first: date,
     last: date,
+    *,
+    indicator: str | None = None,
 ) -> list[date]:
     """Pure helper — the canonical expected-publication-dates for a
     cadence between [first, last] inclusive.
 
     DAILY  → every NYSE session in range (XNYS via tpcore.calendar).
-    WEEKLY → every Thursday in range (DOL initial-claims release day).
+    WEEKLY → every observation-anchor-weekday in range. The anchor is
+             per-indicator (``INDICATOR_WEEKLY_ANCHOR_WEEKDAY``);
+             unmapped WEEKLY indicators fall back to
+             ``DEFAULT_WEEKLY_ANCHOR_WEEKDAY`` (Thursday) to preserve
+             the legacy expectation for any new series whose anchor is
+             not yet declared. ``initial_claims`` (IC4WSA) anchors on
+             Saturday per FRED's observation_date field.
     MONTHLY → first day of every month touched by [first, last].
     """
     if first > last:
@@ -202,12 +243,16 @@ def _expected_dates_for_cadence(
     if cadence == CADENCE_DAILY:
         return cal.sessions_in_range(first, last)
     if cadence == CADENCE_WEEKLY:
-        # First Thursday ≥ first.
-        first_thursday = first + timedelta(
-            days=(WEEKLY_ANCHOR_WEEKDAY - first.weekday()) % 7
+        anchor = (
+            INDICATOR_WEEKLY_ANCHOR_WEEKDAY.get(indicator, DEFAULT_WEEKLY_ANCHOR_WEEKDAY)
+            if indicator is not None else DEFAULT_WEEKLY_ANCHOR_WEEKDAY
+        )
+        # First anchor-day on-or-after `first`.
+        first_anchor = first + timedelta(
+            days=(anchor - first.weekday()) % 7
         )
         out: list[date] = []
-        d = first_thursday
+        d = first_anchor
         while d <= last:
             out.append(d)
             d += timedelta(days=7)
@@ -336,7 +381,9 @@ async def _evaluate(pool: asyncpg.Pool) -> _Evaluation:
         if clamped_first_d > last_d:
             evaluated += 1
             continue
-        expected_dates = _expected_dates_for_cadence(cadence, clamped_first_d, last_d)
+        expected_dates = _expected_dates_for_cadence(
+            cadence, clamped_first_d, last_d, indicator=indicator,
+        )
         if not expected_dates:
             evaluated += 1
             continue
@@ -481,8 +528,11 @@ __all__ = [
     "CADENCE_MONTHLY",
     "CADENCE_WEEKLY",
     "CHECK_NAME",
+    "DEFAULT_WEEKLY_ANCHOR_WEEKDAY",
     "EXPECTED_INDICATORS",
     "INDICATOR_CADENCE",
+    "INDICATOR_WEEKLY_ANCHOR_WEEKDAY",
+    "WEEKLY_ANCHOR_WEEKDAY",
     "check_macro_indicators_completeness",
     "compute_macro_repair_targets",
 ]

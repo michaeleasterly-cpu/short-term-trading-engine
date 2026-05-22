@@ -183,7 +183,9 @@ class FakePool:
                 return []
             return [
                 {"date": d}
-                for d in _expected_dates_for_cadence(cadence, first_d, last_d)
+                for d in _expected_dates_for_cadence(
+                    cadence, first_d, last_d, indicator=indicator,
+                )
             ]
         # macro_indicators_freshness check: return one fresh row per
         # expected indicator so the suite passes when running e2e
