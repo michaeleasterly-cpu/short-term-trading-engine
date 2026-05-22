@@ -218,6 +218,7 @@ async def _upsert_bars(
     bars: list[dict],
     delisted: bool,
     delisting_date: date | None = None,
+    source: str = "alpaca",
 ) -> int:
     """Insert/update bars in ``platform.prices_daily``. Returns rows written.
 
@@ -226,18 +227,23 @@ async def _upsert_bars(
     ``adjustment="all"``, so the returned prices are already adjusted; the
     column is kept distinct for forward compatibility with a future raw+adj
     dual ingestion.
+
+    ``source`` is the canonical provenance tag written to
+    ``platform.prices_daily.source`` for every row touched by this call.
+    Callers MUST pass the provider that actually fetched the bars — the
+    FMP-feed path passes ``source='fmp'`` so its rows aren't mislabeled
+    'alpaca' (the prior bug). The kwarg defaults to ``'alpaca'`` only for
+    back-compat with the legacy Alpaca-only callers; new code should pass
+    the source explicitly.
     """
     if not bars:
         return 0
-    # source = 'alpaca' on both INSERT and UPDATE — if a Tradier import
-    # landed this (ticker, date) first, an Alpaca refresh promotes it back
-    # to alpaca-provenance now that we have the authoritative bar.
     sql = """
         INSERT INTO platform.prices_daily (
             ticker, date, open, high, low, close, volume,
             adjusted_close, delisted, delisting_date, source
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'alpaca')
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
         ON CONFLICT (ticker, date) DO UPDATE SET
             open = EXCLUDED.open,
             high = EXCLUDED.high,
@@ -247,7 +253,7 @@ async def _upsert_bars(
             adjusted_close = EXCLUDED.adjusted_close,
             delisted = EXCLUDED.delisted,
             delisting_date = EXCLUDED.delisting_date,
-            source = 'alpaca'
+            source = EXCLUDED.source
     """
     # Physical-truth gate — matches validation.row_integrity expectations.
     # Bad rows MUST NEVER reach the database (per the data-acceptance rule
@@ -282,7 +288,7 @@ async def _upsert_bars(
         rows.append((
             symbol, session_date, o, h, low, close, int(v),
             close,  # adjusted_close — same as close because adjustment=all
-            delisted, delisting_date,
+            delisted, delisting_date, source,
         ))
     if rejected:
         logger.warning(
