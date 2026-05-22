@@ -331,10 +331,16 @@ async def run_triage(
 
         client = client_factory()
         try:
+            # backoff bumped 2026-05-22 after Anthropic 529 platform-
+            # overload incident — 30s cap + 2s base gave only ~14s
+            # total sleep budget, far too short for a 5xx incident
+            # that typically lasts minutes per status.claude.com. New
+            # (15/30/60s capped at 300) gives ~105s budget, enough to
+            # ride out short spikes without burning the retry budget.
             @with_retry(
                 max_attempts=3,
-                backoff_base_sec=2.0,
-                backoff_cap_sec=30.0,
+                backoff_base_sec=15.0,
+                backoff_cap_sec=300.0,
                 retry_on=(RateLimitError, APIError),
             )
             async def _call_api(pkt_arg: TriagePacket) -> Any:

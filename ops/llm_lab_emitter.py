@@ -403,10 +403,13 @@ async def _call_anthropic(
     _model = _shipped_mod.ANTHROPIC_MODEL
     _max_tokens = _shipped_mod.ANTHROPIC_MAX_TOKENS
 
+    # backoff bumped 2026-05-22 — Anthropic 5xx incidents last minutes
+    # not seconds (status.claude.com); the prior 2s/30s cap gave only
+    # ~14s budget before raising. New 15s/300s cap = ~105s budget.
     @with_retry(
         max_attempts=3,
-        backoff_base_sec=2.0,
-        backoff_cap_sec=30.0,
+        backoff_base_sec=15.0,
+        backoff_cap_sec=300.0,
         retry_on=(RateLimitError, APIError),
     )
     async def _call() -> Any:

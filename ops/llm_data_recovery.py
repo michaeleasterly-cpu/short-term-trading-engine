@@ -474,10 +474,12 @@ async def llm_recovery_decision(
     client = client_factory()
     try:
 
+        # backoff bumped 2026-05-22 (Anthropic 529 self-heal) —
+        # 5xx incidents last minutes; 15s/300s cap = ~105s budget.
         @with_retry(
             max_attempts=3,
-            backoff_base_sec=2.0,
-            backoff_cap_sec=30.0,
+            backoff_base_sec=15.0,
+            backoff_cap_sec=300.0,
             retry_on=(RateLimitError, APIError),
         )
         async def _call_api() -> Any:

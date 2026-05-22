@@ -24,7 +24,13 @@ import json
 from typing import TYPE_CHECKING, Any
 
 import structlog
-from anthropic import AsyncAnthropic, AuthenticationError, RateLimitError
+from anthropic import (
+    APIStatusError,
+    AsyncAnthropic,
+    AuthenticationError,
+    InternalServerError,
+    RateLimitError,
+)
 
 from ops.llm_edge_finder import LLMCallable
 
@@ -100,20 +106,19 @@ def make_sdk_llm_callable(
         # 30k-tokens/min input-rate-limit pressure.
         system_blocks = _system_blocks_with_cache(system_prompt)
         messages = _build_messages_with_cache(user_prompt_first_turn, transcript)
-        # Retry on 429 (rate limit) with exponential backoff. Caching
-        # should make 429s extremely rare on this path, but the safety
-        # net stays.
-        backoff_seconds = (15, 30, 60)
+        # Retry on transient Anthropic platform errors with backoff:
+        # - 429 (RateLimitError) → 15/30/60s; rare with caching active
+        # - 529 / 5xx (Overloaded / InternalServerError / APIStatusError)
+        #   → 60/120/300s; platform overload incidents typically last
+        #   minutes-to-hours per status.claude.com. Longer backoff
+        #   avoids burning retries during an active incident.
+        # Confirmed 2026-05-22: Anthropic posted active "elevated error
+        # rate on multiple models" incident at 04:16 UTC during this
+        # session's pilot work — operator added 529 to the known
+        # self-heal surface.
         last_exc: Exception | None = None
         response = None
-        for attempt, sleep_s in enumerate((0,) + backoff_seconds):
-            if sleep_s:
-                log.warning(
-                    "llm_edge_finder_sdk.rate_limited_retry",
-                    attempt=attempt,
-                    sleep_seconds=sleep_s,
-                )
-                await asyncio.sleep(sleep_s)
+        for attempt in range(4):  # initial + 3 retries
             try:
                 response = await _client.messages.create(
                     model=model,
@@ -139,8 +144,32 @@ def make_sdk_llm_callable(
             except AuthenticationError as exc:
                 raise AuthSkip(str(exc)) from None
             except RateLimitError as exc:
+                # 429: short backoff (15/30/60s) — token-bucket recovers fast
                 last_exc = exc
-                continue
+                sleep_s = (15, 30, 60)[min(attempt, 2)]
+                log.warning(
+                    "llm_edge_finder_sdk.rate_limited_retry",
+                    attempt=attempt + 1, sleep_seconds=sleep_s,
+                )
+                if attempt < 3:
+                    await asyncio.sleep(sleep_s)
+            except (InternalServerError, APIStatusError) as exc:
+                # 529 / 5xx: long backoff (60/120/300s) — platform-overload
+                # incidents typically resolve over minutes; quick retries
+                # just burn the retry budget. status.claude.com posts these.
+                status = getattr(exc, "status_code", None)
+                if status is not None and status < 500:
+                    # 4xx that isn't AuthError/RateLimit is permanent — don't retry
+                    raise
+                last_exc = exc
+                sleep_s = (60, 120, 300)[min(attempt, 2)]
+                log.warning(
+                    "llm_edge_finder_sdk.platform_error_retry",
+                    attempt=attempt + 1, sleep_seconds=sleep_s,
+                    status=status, error=str(exc)[:200],
+                )
+                if attempt < 3:
+                    await asyncio.sleep(sleep_s)
         if response is None:
             raise last_exc or RuntimeError("LLM call failed without exception")
 
