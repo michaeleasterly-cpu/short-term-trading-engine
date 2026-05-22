@@ -197,7 +197,8 @@ async def test_monitor_happy_path_with_trades() -> None:
     # Provenance: one LAB_FINDER_OUTCOME_CHECK row written.
     check_rows = [s for s in pool.sink if "LAB_FINDER_OUTCOME_CHECK" in s[1]]
     assert len(check_rows) == 1
-    payload = json.loads(check_rows[0][2][0])
+    # OUTCOME_CHECK SQL: ($1 run_id, $2 message, $3 data jsonb) — payload at index 2.
+    payload = json.loads(check_rows[0][2][2])
     assert payload["engine"] == "momentum"
 
 
@@ -220,7 +221,8 @@ async def test_monitor_operator_success_writes_outcome_proven() -> None:
     # outcome_proven LAB_FINDER_ACTION row written.
     action_rows = [s for s in pool.sink if "LAB_FINDER_ACTION" in s[1]]
     assert len(action_rows) == 1
-    payload = json.loads(action_rows[0][2][0])
+    # LAB_FINDER_ACTION SQL: ($1 run_id, $2 message, $3 data jsonb) — payload at index 2.
+    payload = json.loads(action_rows[0][2][2])
     assert payload["action"] == "outcome_proven"
     assert payload["triggered_by"] == "operator_verdict"
     assert payload["engine"] == "momentum"
@@ -246,7 +248,8 @@ async def test_monitor_bleed_cap_breach_writes_ecr_retire() -> None:
 
     action_rows = [s for s in pool.sink if "LAB_FINDER_ACTION" in s[1]]
     assert len(action_rows) == 1
-    payload = json.loads(action_rows[0][2][0])
+    # LAB_FINDER_ACTION SQL: ($1 run_id, $2 message, $3 data jsonb) — payload at index 2.
+    payload = json.loads(action_rows[0][2][2])
     assert payload["action"] == "ecr_retire"
     assert payload["triggered_by"] == "bleed_cap"
 
@@ -275,7 +278,7 @@ async def test_monitor_inactivity_timeout_writes_ecr_retire() -> None:
     assert out[0].auto_retire_reason == "inactivity_timeout"
 
     action_rows = [s for s in pool.sink if "LAB_FINDER_ACTION" in s[1]]
-    assert any(json.loads(r[2][0])["triggered_by"] == "inactivity_timeout" for r in action_rows)
+    assert any(json.loads(r[2][2])["triggered_by"] == "inactivity_timeout" for r in action_rows)
 
 
 @pytest.mark.asyncio

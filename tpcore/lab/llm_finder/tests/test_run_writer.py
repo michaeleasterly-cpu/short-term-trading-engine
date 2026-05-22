@@ -73,9 +73,10 @@ async def test_record_finder_run_writes_lab_finder_run_event() -> None:
     sql, args = pool.sink[0]
     assert "LAB_FINDER_RUN" in sql
     assert "llm_edge_finder" in sql
-    # Payload is the model_dump_json string passed as first arg.
-    assert len(args) == 1
-    payload = json.loads(args[0])
+    # Post-fix SQL: ($1 run_id UUID, $2 data jsonb) — 2 args.
+    assert len(args) == 2
+    assert args[0] == run.run_id
+    payload = json.loads(args[1])
     assert payload["trigger"] == "operator_command"
     assert payload["proposed_spec_count"] == 1
 
@@ -85,8 +86,8 @@ async def test_record_finder_run_payload_includes_run_id() -> None:
     pool = _FakePool()
     run = _finder_run()
     await record_finder_run(pool, run)  # type: ignore[arg-type]
-    payload = json.loads(pool.sink[0][1][0])
-    assert payload["run_id"] == str(run.run_id)
+    # run_id is now in the dedicated UUID column (args[0]) — not in the data payload.
+    assert pool.sink[0][1][0] == run.run_id
 
 
 # ───────────────────────── record_finder_action ─────────────────────────
@@ -105,7 +106,9 @@ async def test_record_finder_action_writes_lab_finder_action_event() -> None:
     assert len(pool.sink) == 1
     sql, args = pool.sink[0]
     assert "LAB_FINDER_ACTION" in sql
-    payload = json.loads(args[0])
+    # Post-fix SQL: ($1 run_id, $2 message, $3 data jsonb) — 3 args.
+    assert len(args) == 3
+    payload = json.loads(args[2])
     assert payload["action"] == "draft"
     assert payload["triggered_by"] == "operator_command"
     assert payload["human_override"] == "none"
@@ -121,7 +124,8 @@ async def test_record_finder_action_with_extra_payload() -> None:
         triggered_by="ci_green",
         extra={"pr_url": "https://github.com/foo/bar/pull/456"},
     )
-    payload = json.loads(pool.sink[0][1][0])
+    # Post-fix SQL: data payload is args[2] (after run_id, message).
+    payload = json.loads(pool.sink[0][1][2])
     assert payload["pr_url"] == "https://github.com/foo/bar/pull/456"
 
 
@@ -135,7 +139,8 @@ async def test_record_finder_action_human_override_always_none() -> None:
         action="merge",
         triggered_by="gate_pass",
     )
-    payload = json.loads(pool.sink[0][1][0])
+    # Post-fix SQL: data payload is args[2] (after run_id, message).
+    payload = json.loads(pool.sink[0][1][2])
     assert payload["human_override"] == "none"
 
 
@@ -152,6 +157,7 @@ async def test_record_finder_action_extra_does_not_override_human_field() -> Non
         triggered_by="bleed_cap",
         extra={"human_override": "operator_revert"},  # operator-initiated override
     )
-    payload = json.loads(pool.sink[0][1][0])
+    # Post-fix SQL: data payload is args[2] (after run_id, message).
+    payload = json.loads(pool.sink[0][1][2])
     # Document the actual behaviour: extra IS allowed to override.
     assert payload["human_override"] == "operator_revert"

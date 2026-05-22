@@ -177,7 +177,8 @@ async def test_auto_promote_pr_happy_path() -> None:
     assert len(pool.sink) == 1
     sql, args = pool.sink[0]
     assert "LAB_FINDER_ACTION" in sql
-    payload = json.loads(args[0])
+    # Post-fix SQL: ($1 run_id, $2 message, $3 data jsonb) — payload is args[2].
+    payload = json.loads(args[2])
     assert payload["action"] == "merge"
     assert payload["triggered_by"] == "ci_green"
 
@@ -232,7 +233,7 @@ async def test_auto_promote_pr_skips_when_ci_red() -> None:
         )
     # undraft_skip provenance was written before the raise.
     assert len(pool.sink) == 1
-    payload = json.loads(pool.sink[0][1][0])
+    payload = json.loads(pool.sink[0][1][2])
     assert payload["action"] == "undraft_skip"
     assert payload["triggered_by"] == "ci_failed"
 

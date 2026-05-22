@@ -90,10 +90,10 @@ _OPERATOR_VERDICT_SQL = """
 
 _OUTCOME_CHECK_INSERT_SQL = """
     INSERT INTO platform.application_log
-        (engine, event_type, ts, payload)
+        (engine, run_id, event_type, severity, message, data)
     VALUES
-        ('llm_edge_finder', 'LAB_FINDER_OUTCOME_CHECK',
-         NOW() AT TIME ZONE 'UTC', $1::jsonb)
+        ('llm_edge_finder', $1, 'LAB_FINDER_OUTCOME_CHECK', 'INFO',
+         $2, $3::jsonb)
 """
 
 
@@ -237,9 +237,16 @@ def _classify_auto_retire(
 
 async def _emit_outcome_check(pool: asyncpg.Pool, lo: LiveOutcome) -> None:
     """Phase E.3 — write LAB_FINDER_OUTCOME_CHECK for the §12 dashboard."""
+    import uuid as _uuid
     payload = lo.model_dump(mode="json")
+    # Monitor-tick rows use the NIL UUID — the row family is the
+    # LiveOutcome state (per engine) not the run-id chain.
+    rid_nil = _uuid.UUID(int=0)
+    message = f"{lo.engine} bleed={lo.cumulative_bleed_usd:.2f} verdict={lo.operator_verdict}"
     async with pool.acquire() as conn:
-        await conn.execute(_OUTCOME_CHECK_INSERT_SQL, json.dumps(payload))
+        await conn.execute(
+            _OUTCOME_CHECK_INSERT_SQL, rid_nil, message, json.dumps(payload)
+        )
     log.info(
         "outcome_monitor.check.emitted",
         engine=lo.engine,

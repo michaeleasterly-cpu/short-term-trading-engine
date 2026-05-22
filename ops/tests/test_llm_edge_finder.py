@@ -293,5 +293,6 @@ async def test_run_finder_records_trigger(trigger: str) -> None:
     assert run.trigger == trigger
     # Provenance row carries the trigger.
     finder_row = [s for s in pool.sink if "LAB_FINDER_RUN" in s[1]][0]
-    payload = json.loads(finder_row[2][0])
+    # LAB_FINDER_RUN SQL: ($1 run_id, $2 data jsonb) — payload at index 1.
+    payload = json.loads(finder_row[2][1])
     assert payload["trigger"] == trigger
