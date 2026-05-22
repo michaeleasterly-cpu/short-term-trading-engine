@@ -1,6 +1,6 @@
 """Persona file SHA sentinel — Task #25 §7.
 
-The LLM's system prompt is ``docs/lab_finder_persona.md``. Edits MUST
+The LLM's system prompt is ``docs/personas/lab_finder_persona.md``. Edits MUST
 bump ``PERSONA_VERSION`` in ``tpcore.lab.llm_finder.__init__``. The
 SHA-pin sentinel (``test_persona_versioned.py``) reds the build if
 the file's SHA256 doesn't match the recorded constant for the current
@@ -19,7 +19,8 @@ from typing import Final
 from tpcore.lab.llm_finder import PERSONA_VERSION
 
 _PERSONA_PATH: Final[Path] = (
-    Path(__file__).resolve().parents[3] / "docs" / "lab_finder_persona.md"
+    Path(__file__).resolve().parents[3]
+    / "docs" / "personas" / "lab_finder_persona.md"
 )
 
 
