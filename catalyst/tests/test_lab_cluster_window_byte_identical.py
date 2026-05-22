@@ -1,6 +1,6 @@
 """SP-F / lab_candidate_readiness §3 — the make-or-break: catalyst's
-LIVE trading path is BYTE-IDENTICAL when the off-by-default Lab flag
-is off.
+LIVE trading path is BYTE-IDENTICAL when every off-by-default Lab flag
+is off (cluster_window_days, event_confirmation_mode, hold_days).
 
 C1  committed golden: ``run_catalyst_with_context(ctx, overrides={})``
     == a frozen golden of the pre-candidate (legacy) BacktestRunResult.
@@ -9,7 +9,9 @@ C2  default-is-legacy: identical when the override is None, when the
 C3  variant reachable + distinct: the 45 toggle changes the parameter
     record (the branch is wired, not dead).
 C4  no cross-trial leakage: variant-then-legacy in the same process
-    yields the legacy golden (the per-call module-global reset).
+    yields the legacy golden (the per-call module-global reset for ALL
+    three overrides: _CLUSTER_WINDOW_OVERRIDE,
+    _EVENT_CONFIRMATION_MODE_OVERRIDE, _HOLD_DAYS_OVERRIDE).
 LIVE the scheduler's own module constant
     (``catalyst.models.CATALYST_CLUSTER_WINDOW_DAYS``) is byte-identical
     after a variant run — the backtest seam never mutates it (no

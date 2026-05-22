@@ -13,7 +13,7 @@ horizon if neither bracket fires. Mirrors the Vector pattern.
 
 Lab targeting
 -------------
-Two pre-registered Lab toggles (each independent, each its own
+Three pre-registered Lab toggles (each independent, each its own
 single-spec candidate):
 
 1. ``cluster_window_days`` (SP-F, PR #159) — ``choice:30,45``. The
@@ -23,18 +23,28 @@ single-spec candidate):
    ``catalyst/tests/test_lab_cluster_window_byte_identical.py``.
 2. ``event_confirmation_mode`` (event-confirmed insider-cluster drift,
    spec ``docs/superpowers/specs/2026-05-20-catalyst-insider-cluster-
-   event-lab-candidate.md``) — ``choice:off,positive_beat_30d``. The
-   default ``"off"`` is the legacy cluster-only fire-rule;
-   ``"positive_beat_30d"`` adds the strictly-backward 30d positive
-   earnings-beat confirmation predicate. Seam:
+   event-lab-candidate.md``) — ``choice:off,positive_beat_30d,
+   beat_30d_only``. The default ``"off"`` is the legacy cluster-only
+   fire-rule; ``"positive_beat_30d"`` adds the strictly-backward 30d
+   positive earnings-beat confirmation predicate ON TOP of the
+   cluster requirement; ``"beat_30d_only"`` is the pure-PEAD branch
+   that bypasses the insider cluster entirely and fires on each
+   positive BEAT event (no cluster floor, no aggregate-$ floor). The
+   beat_30d_only arm was added 2026-05-22 to express the autonomous
+   finder's PEAD hypothesis (3-probe scorecard, candidate
+   ``catalyst_pead_expansion_range``). Seam:
    ``_EVENT_CONFIRMATION_MODE_OVERRIDE``. Test:
    ``catalyst/tests/test_lab_event_confirmation_byte_identical.py``.
+3. ``hold_days`` (post-2026-05-22 surface enrichment) — ``int 5..30``.
+   The hard time-stop horizon when neither TP nor SL fires. Default
+   20 sessions (matches the PEAD hypothesis's "20-session hold").
+   Seam: ``_HOLD_DAYS_OVERRIDE``.
 
-Both overrides are module-level globals reset per call inside
+All overrides are module-level globals reset per call inside
 :func:`run_catalyst_with_context`. The LIVE trading path
 (``catalyst/scheduler.py``) never imports this backtest module and so
-is byte-identical when both flags are off (proven by the two
-characterization tests above).
+is byte-identical when every flag is at its default (proven by the
+characterization tests above + the hold_days byte-identical test).
 
 This module declares ``LAB_TARGET`` with ``primary_metric=SHARPE`` —
 catalyst is a swing engine whose success bar IS Sharpe (the
@@ -94,6 +104,12 @@ DEFAULT_RESULTS_FILE = "catalyst_backtest_results.json"
 DEFAULT_TRADES_FILE = "catalyst_trades.csv"
 DEFAULT_PLATFORM_EQUITY_USD = Decimal("100000")
 HOLDING_PERIOD_DAYS = 30  # hard exit horizon if neither TP nor SL fires
+# When the Lab override (``_HOLD_DAYS_OVERRIDE``) is None we fall back
+# to ``HOLDING_PERIOD_DAYS`` (30) so byte-identicality vs the
+# pre-enrichment behaviour is preserved for legacy callers. The
+# ``catalyst_pead_expansion_range`` finder hypothesis recommends 20
+# sessions; that value is supplied at probe time via the
+# ``--param-overrides '{"hold_days": 20}'`` flag, NOT hard-coded here.
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -143,19 +159,56 @@ _EVENT_CONFIRMATION_MODE_OVERRIDE: str | None = None
 _EVENT_CONFIRMATION_WINDOW_DAYS: int = 30  # pinned; not Lab-sampled.
 _EVENT_CONFIRMATION_OFF = "off"
 _EVENT_CONFIRMATION_POSITIVE_BEAT_30D = "positive_beat_30d"
+# Pure-PEAD: fire on each strictly-positive earnings BEAT event, no
+# insider-cluster requirement (cluster floor + aggregate-$ floor BOTH
+# skipped). Added 2026-05-22 (engine surface enrichment) to let the
+# autonomous finder express the catalyst_pead_expansion_range
+# hypothesis — the prior off/positive_beat_30d arms both REQUIRED the
+# insider cluster, stripping pure-PEAD candidates to n_trades=2.
+_EVENT_CONFIRMATION_BEAT_30D_ONLY = "beat_30d_only"
 
 
 def _event_confirmation_mode() -> str:
     """The active event-confirmation mode for THIS backtest run.
 
     Returns the legacy ``"off"`` unless the off-by-default Lab override
-    is set to ``"positive_beat_30d"``. Pure. An explicit ``"off"``
-    override is accepted as a synonym for ``None`` (so the
-    ``choice:off,positive_beat_30d`` toggle has a real legacy-default
-    value to flip to in the Lab sampler)."""
+    is set to one of the three declared arms (``"positive_beat_30d"``,
+    ``"beat_30d_only"``). Pure. An explicit ``"off"`` override is
+    accepted as a synonym for ``None`` (so the
+    ``choice:off,positive_beat_30d,beat_30d_only`` toggle has a real
+    legacy-default value to flip to in the Lab sampler).
+    """
     if _EVENT_CONFIRMATION_MODE_OVERRIDE == _EVENT_CONFIRMATION_POSITIVE_BEAT_30D:
         return _EVENT_CONFIRMATION_POSITIVE_BEAT_30D
+    if _EVENT_CONFIRMATION_MODE_OVERRIDE == _EVENT_CONFIRMATION_BEAT_30D_ONLY:
+        return _EVENT_CONFIRMATION_BEAT_30D_ONLY
     return _EVENT_CONFIRMATION_OFF
+
+
+# ════════════════════════════════════════════════════════════════════════
+# Hold-days knob — third Lab toggle (post-2026-05-22 enrichment).
+#
+# The hard time-stop horizon when neither TP nor SL fires. Lab-sampled
+# int in [5, 30]; off-by-default override is reset per call inside
+# ``run_catalyst_with_context``. None ⇒ the legacy
+# ``HOLDING_PERIOD_DAYS`` constant (30) — byte-identical to the
+# pre-enrichment behaviour.
+# ════════════════════════════════════════════════════════════════════════
+
+_HOLD_DAYS_OVERRIDE: int | None = None
+
+
+def _hold_days() -> int:
+    """The active hold-days horizon for THIS backtest run.
+
+    Returns the legacy ``HOLDING_PERIOD_DAYS`` unless the off-by-default
+    Lab override is set. Pure.
+    """
+    return (
+        _HOLD_DAYS_OVERRIDE
+        if _HOLD_DAYS_OVERRIDE is not None
+        else HOLDING_PERIOD_DAYS
+    )
 
 
 def _has_positive_beat(
@@ -206,6 +259,11 @@ def default_params() -> dict[str, Any]:
     return {
         "cluster_window_days": int(CATALYST_CLUSTER_WINDOW_DAYS),
         "event_confirmation_mode": _EVENT_CONFIRMATION_OFF,
+        # The hold_days knob defaults to the legacy HOLDING_PERIOD_DAYS
+        # constant (30) so the dossier reflects "current engine" as the
+        # legacy time-stop horizon, while the Lab samples 5..30. Test:
+        # `test_catalyst_backtest.py::test_default_params_carries_legacy_hold_days`.
+        "hold_days": int(HOLDING_PERIOD_DAYS),
     }
 
 
@@ -337,13 +395,20 @@ def _simulate_trade(
     entry_date: date_t,
     prices: pd.DataFrame,
     round_trip_cost: float,
+    hold_days: int = HOLDING_PERIOD_DAYS,
 ) -> SearchTrade | None:
     """Single-entry flat-bracket simulator.
 
     Enter at the next available close on/after ``entry_date``; exit on
     the first session whose intra-bar (close used as a conservative
     proxy here — same as Vector's first-cut path) hits the TP, SL, or
-    trailing-stop trigger; or at ``HOLDING_PERIOD_DAYS`` (time stop)."""
+    trailing-stop trigger; or at ``hold_days`` (time stop).
+
+    ``hold_days`` defaults to the legacy ``HOLDING_PERIOD_DAYS`` (30) so
+    pre-enrichment callers stay byte-identical. The Lab-sampled value
+    (range 5..30, post-2026-05-22 enrichment) is threaded in via
+    :func:`_build_trades`.
+    """
     cut = prices[prices.index >= pd.Timestamp(entry_date)].dropna(
         subset=["close"])
     if len(cut) < 2:
@@ -356,7 +421,7 @@ def _simulate_trade(
     exit_idx = -1
     exit_reason = "TIME_STOP"
     high_water = entry_price
-    horizon = min(len(cut) - 1, HOLDING_PERIOD_DAYS)
+    horizon = min(len(cut) - 1, max(1, int(hold_days)))
     for i in range(1, horizon + 1):
         close = float(cut["close"].iloc[i])
         if close <= sl:
@@ -390,6 +455,132 @@ def _simulate_trade(
     )
 
 
+def _passes_universe_filters(
+    *,
+    prices_by_ticker: dict[str, pd.DataFrame],
+    ticker: str,
+    cursor: date_t,
+) -> bool:
+    """Shared universe / liquidity / trend gate. Pure.
+
+    Returns True iff ``ticker`` at ``cursor`` clears
+        - has at least ``SMA_TREND_PERIOD`` sessions of price data
+          strictly up to and including ``cursor``;
+        - last close ≥ ``MIN_PRICE``;
+        - 20-session average volume ≥ ``MIN_AVG_VOLUME``;
+        - last close > 50-SMA (uptrend confirmation).
+
+    Mirrors the gate that the legacy cluster path enforced inline, so
+    every mode (off / positive_beat_30d / beat_30d_only) sees the same
+    universe-membership rules at entry time.
+    """
+    prices = prices_by_ticker.get(ticker)
+    if prices is None or prices.empty:
+        return False
+    cut = prices[prices.index <= pd.Timestamp(cursor)].dropna(
+        subset=["close"])
+    if len(cut) < SMA_TREND_PERIOD:
+        return False
+    last_close = float(cut["close"].iloc[-1])
+    if last_close < float(MIN_PRICE):
+        return False
+    avg_vol_series = cut["volume"].rolling(20, min_periods=20).mean()
+    avg_vol_raw = avg_vol_series.iloc[-1]
+    if pd.isna(avg_vol_raw) or int(avg_vol_raw) < MIN_AVG_VOLUME:
+        return False
+    sma_series = cut["close"].rolling(
+        SMA_TREND_PERIOD, min_periods=SMA_TREND_PERIOD).mean()
+    sma_val = sma_series.iloc[-1]
+    if pd.isna(sma_val) or last_close <= float(sma_val):
+        return False
+    return True
+
+
+def _build_trades_beat_only(
+    *,
+    universe: tuple[str, ...],
+    earnings_events: pd.DataFrame | None,
+    prices_by_ticker: dict[str, pd.DataFrame],
+    round_trip_costs: dict[str, Decimal],
+    start: date_t,
+    end: date_t,
+    hold_days: int,
+) -> tuple[list[SearchTrade], list[dict[str, Any]]]:
+    """Pure-PEAD branch: iterate ``platform.earnings_events`` BEAT events
+    in [start, end]; for each, enter the next session and hold for
+    ``hold_days`` (subject to TP/SL/trailing-stop inside the
+    :func:`_simulate_trade` flat-bracket).
+
+    NO insider-cluster requirement (``CATALYST_MIN_DISTINCT_INSIDERS``
+    skipped) and NO aggregate-value requirement
+    (``CATALYST_MIN_AGGREGATE_USD`` skipped). Universe + liquidity +
+    SMA gates are applied at entry time (same gates the cluster path
+    uses), so the engine still trades only liquid uptrending names.
+
+    Added 2026-05-22 (engine surface enrichment) to express the
+    autonomous finder's PEAD hypothesis (3-probe scorecard, candidate
+    ``catalyst_pead_expansion_range``). The prior off/positive_beat_30d
+    arms both REQUIRED the insider cluster, stripping pure-PEAD
+    candidates to n_trades=2.
+    """
+    trades: list[SearchTrade] = []
+    trades_for_diag: list[dict[str, Any]] = []
+    if not prices_by_ticker:
+        return trades, trades_for_diag
+    if earnings_events is None or earnings_events.empty:
+        return trades, trades_for_diag
+
+    universe_set = set(universe)
+    # Filter the loaded events to the [start, end] window AND the
+    # universe; the loader already restricted to event_type='BEAT' AND
+    # magnitude_pct > 0 so the in-DataFrame predicate is just the date
+    # / universe slice.
+    df = earnings_events
+    mask = (
+        df["ticker"].isin(universe_set)
+        & (df["event_date"] >= start)
+        & (df["event_date"] <= end)
+    )
+    qualifying = df[mask].sort_values(["event_date", "ticker"])
+
+    for _, row in qualifying.iterrows():
+        ticker = str(row["ticker"])
+        event_date = row["event_date"]
+        # Apply universe / liquidity / SMA gates AT THE EVENT DATE
+        # (the same point-in-time cut the legacy cluster path used).
+        if not _passes_universe_filters(
+            prices_by_ticker=prices_by_ticker,
+            ticker=ticker, cursor=event_date,
+        ):
+            continue
+        prices = prices_by_ticker.get(ticker)
+        if prices is None or prices.empty:
+            continue
+        # Entry on event_date+1 (next available session) — strictly
+        # forward (no lookahead). ``_simulate_trade`` already advances
+        # from the first row on/after entry_date.
+        entry_cursor = event_date + timedelta(days=1)
+        rtc = float(round_trip_costs.get(ticker, Decimal("0.001")))
+        trade = _simulate_trade(
+            ticker=ticker, entry_date=entry_cursor,
+            prices=prices, round_trip_cost=rtc,
+            hold_days=hold_days,
+        )
+        if trade is None:
+            continue
+        trades.append(trade)
+        trades_for_diag.append({
+            "ticker": trade.ticker,
+            "entry_date": trade.entry_date,
+            "exit_date": trade.exit_date,
+            "entry_price": trade.entry_price,
+            "exit_price": trade.exit_price,
+            "pnl_pct": trade.pnl_pct,
+            "direction": "LONG",
+        })
+    return trades, trades_for_diag
+
+
 def _build_trades(
     *,
     universe: tuple[str, ...],
@@ -401,6 +592,7 @@ def _build_trades(
     end: date_t,
     earnings_events: pd.DataFrame | None = None,
     event_confirmation_mode: str = _EVENT_CONFIRMATION_OFF,
+    hold_days: int = HOLDING_PERIOD_DAYS,
 ) -> tuple[list[SearchTrade], list[dict[str, Any]]]:
     """Walk every (ticker, signal-date) pair in the window where the
     cluster floor + the liquidity/trend gates pass; emit one
@@ -410,9 +602,28 @@ def _build_trades(
     additional gate is applied: the cluster fires only if the same
     ticker has a positive earnings beat in the strictly-backward 30d
     window ``[cursor - 30, cursor]`` (spec §2.2). When the mode is
-    ``"off"`` (the default + legacy), this is a no-op and the
-    behaviour is byte-identical to the legacy code path.
+    ``"beat_30d_only"`` the insider-cluster loop is BYPASSED entirely
+    and trades are driven by ``platform.earnings_events`` BEAT rows
+    (pure PEAD). When the mode is ``"off"`` (the default + legacy),
+    both branches are no-ops and the behaviour is byte-identical to
+    the legacy code path.
+
+    ``hold_days`` (post-2026-05-22 enrichment) sets the time-stop
+    horizon; defaults to the legacy ``HOLDING_PERIOD_DAYS`` so
+    pre-enrichment callers stay byte-identical.
     """
+    # Pure-PEAD branch (beat_30d_only): event-driven, not cluster-driven.
+    # Short-circuits the cluster loop entirely.
+    if event_confirmation_mode == _EVENT_CONFIRMATION_BEAT_30D_ONLY:
+        return _build_trades_beat_only(
+            universe=universe,
+            earnings_events=earnings_events,
+            prices_by_ticker=prices_by_ticker,
+            round_trip_costs=round_trip_costs,
+            start=start, end=end,
+            hold_days=hold_days,
+        )
+
     trades: list[SearchTrade] = []
     trades_for_diag: list[dict[str, Any]] = []
     if not prices_by_ticker:
@@ -449,30 +660,19 @@ def _build_trades(
                 window_days=_EVENT_CONFIRMATION_WINDOW_DAYS,
             ):
                 continue
+            if not _passes_universe_filters(
+                prices_by_ticker=prices_by_ticker,
+                ticker=ticker, cursor=cursor,
+            ):
+                continue
             prices = prices_by_ticker.get(ticker)
             if prices is None or prices.empty:
-                continue
-            cut = prices[prices.index <= pd.Timestamp(cursor)].dropna(
-                subset=["close"])
-            if len(cut) < SMA_TREND_PERIOD:
-                continue
-            last_close = float(cut["close"].iloc[-1])
-            if last_close < float(MIN_PRICE):
-                continue
-            avg_vol_series = cut["volume"].rolling(
-                20, min_periods=20).mean()
-            avg_vol_raw = avg_vol_series.iloc[-1]
-            if pd.isna(avg_vol_raw) or int(avg_vol_raw) < MIN_AVG_VOLUME:
-                continue
-            sma_series = cut["close"].rolling(
-                SMA_TREND_PERIOD, min_periods=SMA_TREND_PERIOD).mean()
-            sma_val = sma_series.iloc[-1]
-            if pd.isna(sma_val) or last_close <= float(sma_val):
                 continue
             rtc = float(round_trip_costs.get(ticker, Decimal("0.001")))
             trade = _simulate_trade(
                 ticker=ticker, entry_date=cursor,
                 prices=prices, round_trip_cost=rtc,
+                hold_days=hold_days,
             )
             if trade is None:
                 continue
@@ -574,10 +774,15 @@ async def load_catalyst_window_context(
         round_trip_costs = await _round_trip_cost_by_ticker(
             pool, tickers=u,
         )
-        # Strictly-additive: consumed only by the
-        # ``event_confirmation_mode="positive_beat_30d"`` variant.
-        # The window is widened by ``_EVENT_CONFIRMATION_WINDOW_DAYS``
-        # so the first cursor's backward 30d window is fully covered.
+        # Strictly-additive: consumed by both
+        # ``event_confirmation_mode="positive_beat_30d"`` (predicate
+        # over the strictly-backward 30d window) AND
+        # ``event_confirmation_mode="beat_30d_only"`` (event-driven
+        # entries on each BEAT in [start, end]). The window is widened
+        # by ``_EVENT_CONFIRMATION_WINDOW_DAYS`` so the first cursor's
+        # backward 30d window is fully covered for the positive_beat_30d
+        # predicate; the beat_30d_only branch's [start, end] slice is a
+        # subset of this and trivially covered.
         earnings_events = await _fetch_earnings_events(
             pool, universe=u,
             start=start - timedelta(days=_EVENT_CONFIRMATION_WINDOW_DAYS),
@@ -608,11 +813,19 @@ def run_catalyst_with_context(
 
     - ``cluster_window_days`` (legacy SP-F toggle): ``choice:30,45``.
     - ``event_confirmation_mode`` (the event-confirmed insider-cluster
-      drift candidate): ``choice:off,positive_beat_30d``. When
+      drift candidate + the post-2026-05-22 pure-PEAD arm):
+      ``choice:off,positive_beat_30d,beat_30d_only``. When
       ``"positive_beat_30d"`` a cluster fires only if the same ticker
-      has a positive earnings beat in the strictly-backward 30d window.
+      has a positive earnings beat in the strictly-backward 30d window;
+      when ``"beat_30d_only"`` the insider-cluster requirement is
+      bypassed and trades fire on each positive BEAT event.
+    - ``hold_days`` (post-2026-05-22 enrichment): ``int 5..30``. The
+      time-stop horizon used by :func:`_simulate_trade`. Defaults to
+      the legacy ``HOLDING_PERIOD_DAYS`` (30) when the override is
+      None (byte-identical to pre-enrichment behaviour).
     """
     global _CLUSTER_WINDOW_OVERRIDE, _EVENT_CONFIRMATION_MODE_OVERRIDE
+    global _HOLD_DAYS_OVERRIDE
     overrides = dict(overrides or {})
     _CLUSTER_WINDOW_OVERRIDE = (
         int(overrides["cluster_window_days"])
@@ -624,9 +837,15 @@ def run_catalyst_with_context(
         if "event_confirmation_mode" in overrides
         else None
     )
+    _HOLD_DAYS_OVERRIDE = (
+        int(overrides["hold_days"])
+        if "hold_days" in overrides
+        else None
+    )
     try:
         active_window = _cluster_window()
         active_event_mode = _event_confirmation_mode()
+        active_hold_days = _hold_days()
         trades, trades_for_diag = _build_trades(
             universe=context.universe,
             insider_rows=context.insider_rows,
@@ -636,10 +855,12 @@ def run_catalyst_with_context(
             start=context.start, end=context.end,
             earnings_events=context.earnings_events,
             event_confirmation_mode=active_event_mode,
+            hold_days=active_hold_days,
         )
     finally:
         _CLUSTER_WINDOW_OVERRIDE = None
         _EVENT_CONFIRMATION_MODE_OVERRIDE = None
+        _HOLD_DAYS_OVERRIDE = None
 
     sharpe, pf, max_dd = _compute_summary(trades)
 
@@ -662,6 +883,7 @@ def run_catalyst_with_context(
     parameters: dict[str, Any] = {
         "cluster_window_days": int(active_window),
         "event_confirmation_mode": str(active_event_mode),
+        "hold_days": int(active_hold_days),
     }
     return compute_search_metrics(
         engine="catalyst",
@@ -793,15 +1015,29 @@ LAB_TARGET = LabTarget(
         # SP-F (PR #159) — alternative cluster-window toggle.
         # choice:<csv> (NOT a range/grid).
         "cluster_window_days": (30, 45, "choice:30,45"),
-        # Event-confirmed insider-cluster drift (single-spec Lab
-        # candidate; spec
-        # docs/superpowers/specs/2026-05-20-catalyst-insider-cluster-
-        # event-lab-candidate.md). choice:off,positive_beat_30d — the
-        # legacy "off" arm is the denominator re-measurement; the
-        # "positive_beat_30d" arm is the one variant.
+        # Event-confirmed insider-cluster drift + pure-PEAD arm.
+        # choice:off,positive_beat_30d,beat_30d_only —
+        #   - ``off`` is the legacy cluster-only fire rule (denominator);
+        #   - ``positive_beat_30d`` requires BOTH the cluster AND a
+        #     positive earnings beat in the strictly-backward 30d
+        #     window (spec
+        #     docs/superpowers/specs/2026-05-20-catalyst-insider-cluster-
+        #     event-lab-candidate.md);
+        #   - ``beat_30d_only`` (added 2026-05-22 — engine surface
+        #     enrichment) bypasses the cluster entirely and fires on
+        #     each positive BEAT event (pure PEAD). The autonomous
+        #     finder's ``catalyst_pead_expansion_range`` candidate
+        #     needs this arm — the prior two arms stripped pure-PEAD
+        #     candidates to n_trades=2.
         "event_confirmation_mode": (
-            0, 0, "choice:off,positive_beat_30d",
+            0, 0, "choice:off,positive_beat_30d,beat_30d_only",
         ),
+        # Lab-sampled time-stop horizon (post-2026-05-22 enrichment).
+        # The legacy hardcoded value was 30 sessions; the PEAD
+        # hypothesis explicitly tests 20-session holds. Range
+        # [5, 30] lets the sampler explore the band the hypothesis
+        # space defines without prejudging the optimum.
+        "hold_days": (5, 30, "int"),
     },
     run_for_search=run_for_search,
     load_window_context=load_catalyst_window_context,

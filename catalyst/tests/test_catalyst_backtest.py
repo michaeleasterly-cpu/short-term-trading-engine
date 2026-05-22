@@ -65,34 +65,40 @@ def _synthetic_context():
 
 def test_lab_target_pre_registered_toggles():
     """lab_candidate_readiness §1 / §2 / §10: each toggle is a single
-    ``choice:`` over ``{legacy_default, the_one_variant}``;
+    ``choice:`` over its declared arms (or an int range);
     ``default_params`` carries the legacy default for every toggle.
 
-    Two pre-registered toggles co-exist on ``catalyst.backtest.LAB_TARGET``:
+    Three pre-registered toggles co-exist on
+    ``catalyst.backtest.LAB_TARGET``:
 
     - ``cluster_window_days`` — SP-F (PR #159): legacy 30 vs alternative
       45 cluster window.
     - ``event_confirmation_mode`` — event-confirmed insider-cluster
-      drift (this candidate): legacy ``"off"`` vs the one variant
-      ``"positive_beat_30d"``.
+      drift + pure-PEAD arm: legacy ``"off"``, the cluster-confirmed
+      ``"positive_beat_30d"`` arm, and the post-2026-05-22 pure-PEAD
+      ``"beat_30d_only"`` arm (the autonomous finder's
+      ``catalyst_pead_expansion_range`` hypothesis).
+    - ``hold_days`` — post-2026-05-22 enrichment: Lab-sampled int
+      time-stop horizon over [5, 30] (default 30, the legacy
+      ``HOLDING_PERIOD_DAYS``).
 
-    Each toggle's two values are exactly ``{legacy_default, the_one_
-    variant}``. No third value. The two toggles are independent
-    hypotheses, each one pre-registered.
+    All toggles are independent hypotheses, each one pre-registered.
     """
-    from catalyst.backtest import LAB_TARGET, default_params
+    from catalyst.backtest import HOLDING_PERIOD_DAYS, LAB_TARGET, default_params
     from tpcore.lab.target import LabPrimaryMetric
 
     assert set(LAB_TARGET.param_ranges) == {
-        "cluster_window_days", "event_confirmation_mode",
+        "cluster_window_days", "event_confirmation_mode", "hold_days",
     }
     assert LAB_TARGET.param_ranges["cluster_window_days"] == (
         30, 45, "choice:30,45")
     assert LAB_TARGET.param_ranges["event_confirmation_mode"] == (
-        0, 0, "choice:off,positive_beat_30d")
+        0, 0, "choice:off,positive_beat_30d,beat_30d_only")
+    assert LAB_TARGET.param_ranges["hold_days"] == (5, 30, "int")
     assert default_params() == {
         "cluster_window_days": int(CATALYST_CLUSTER_WINDOW_DAYS),
         "event_confirmation_mode": "off",
+        "hold_days": int(HOLDING_PERIOD_DAYS),
     }
     # Catalyst is a swing engine — SP-D default SHARPE.
     assert LAB_TARGET.primary_metric == LabPrimaryMetric.SHARPE
