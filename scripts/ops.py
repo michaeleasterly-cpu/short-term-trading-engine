@@ -2779,6 +2779,190 @@ async def _stage_seed_monotone_snapshots(
     }
 
 
+async def _stage_historical_delisted_universe(
+    pool: asyncpg.Pool, cfg: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """One-shot survivorship backfill — populate ``platform.prices_daily``
+    with complete historical bars for KNOWN US-equity delistings via FMP.
+
+    The 2026-05-22 corpus-fitness audit (PR #281) found 18 of 20 known
+    historical delistings completely absent from ``prices_daily``,
+    structurally biasing every backtest credibility score. This stage is
+    THE survivorship-gap closer: it enumerates the delisted universe from
+    five sources (existing corpus markers, historical-corpus orphans,
+    operator-curated KNOWN_DELISTINGS manifest, validation-suite fixtures,
+    and best-effort probes of FMP ``/symbol-change`` + ``/delisted-companies``
+    when those endpoints are accessible at the operator's tier), then per-
+    ticker GETs FMP's ``/historical-price-eod/full`` over each ticker's
+    trading life and upserts every bar with ``delisted=true`` +
+    ``delisting_date`` set to the ticker's final bar.
+
+    Resumable via ``application_log`` events
+    (``SURVIVORSHIP_BACKFILL_TICKER_DONE``) — a crash mid-run keeps
+    completed work; the next invocation skips already-done tickers.
+
+    Operator-on-demand only (NOT in ``OPS_UPDATE_STAGES``). Run after
+    PR merge to populate the corpus, then re-run as needed when the
+    universe-enumeration sources surface new delistings.
+
+    Optional ``--param`` knobs:
+        * ``start_date=YYYY-MM-DD`` — override the 2010-01-01 default
+        * ``end_date=YYYY-MM-DD`` — override today's date
+        * ``resume=false`` — re-process every enumerated ticker (default true)
+        * ``limit=N`` — process at most N tickers (handy for live spot-checks)
+        * ``probe_fmp=false`` — skip the FMP enumeration probes (testing)
+
+    Use:
+        DATABASE_URL=… FMP_API_KEY=… .venv/bin/python scripts/ops.py \\
+            --stage historical_delisted_universe
+    """
+    from tpcore.data.survivorship_backfill import (
+        backfill_universe,
+        enumerate_delisted_universe,
+    )
+    from tpcore.logging.db_handler import DBLogHandler
+
+    cfg = cfg or {}
+    log = structlog.get_logger("scripts.ops")
+    probe_fmp = bool(cfg.get("probe_fmp", True))
+    resume = bool(cfg.get("resume", True))
+    limit = int(cfg.get("limit", 0)) or None
+    start = (
+        date.fromisoformat(str(cfg["start_date"]))
+        if cfg.get("start_date") else date(2010, 1, 1)
+    )
+    end = (
+        date.fromisoformat(str(cfg["end_date"]))
+        if cfg.get("end_date") else None
+    )
+
+    candidates = await enumerate_delisted_universe(pool, probe_fmp=probe_fmp)
+    log.info(
+        "ops.stage.historical_delisted_universe.enumerated",
+        total=len(candidates),
+        sources={
+            src: sum(1 for c in candidates if c.source == src)
+            for src in {c.source for c in candidates}
+        },
+    )
+    if len(candidates) < 500:
+        # Per operator instructions: "if the universe enumeration finds
+        # <500 delisted tickers, that's suspiciously low — most US-equity
+        # historical universes have ~3000-5000 delistings/M&A events over
+        # 15 years." Warn but don't crash — corpus may be sparse early on.
+        log.warning(
+            "ops.stage.historical_delisted_universe.universe_below_floor",
+            count=len(candidates),
+            note="expected ~3000-5000 over a 15-year window — re-check enumeration sources",
+        )
+    universe = [c.ticker for c in candidates]
+    if limit:
+        universe = universe[:limit]
+        log.info(
+            "ops.stage.historical_delisted_universe.limited", limit=limit,
+        )
+
+    # We need a DBLogHandler for the per-ticker progress events. Re-use
+    # the ops engine + a fresh run_id so the audit trail is self-contained.
+    db_log = DBLogHandler(
+        pool, engine=ENGINE_NAME, run_id=uuid.uuid4(),
+    )
+    result = await backfill_universe(
+        pool, db_log, universe,
+        start=start, end=end, resume=resume,
+    )
+    log.info("ops.stage.historical_delisted_universe.done", **result)
+    return {
+        "universe_enumerated": len(candidates),
+        "enumeration_sources": sorted({c.source for c in candidates}),
+        **result,
+    }
+
+
+async def _stage_daily_delisted_universe_check(
+    pool: asyncpg.Pool, cfg: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Nightly newly-delisted detection — silent-disappearance catcher.
+
+    Queries ``platform.prices_daily`` for tickers that had a bar 5+
+    trading days ago, were T1/T2 on the most recent
+    ``platform.liquidity_tiers`` snapshot, and have NO bar in the past
+    5 sessions. For each candidate, probes FMP one more time over the
+    recent window; if FMP also has no bar, marks the ticker
+    ``delisted=true`` with today's date (the silent-disappearance
+    delisting). If FMP DOES have bars, this is a vendor gap that the
+    ``daily_bars --param repair_coverage=true`` path is the canonical
+    recovery for — we log and leave it alone (no marking).
+
+    Operator-on-demand (NOT in OPS_UPDATE_STAGES today — the operator
+    can promote it to the daily cadence once the structural backfill is
+    stable). Idempotent.
+
+    Use:
+        DATABASE_URL=… FMP_API_KEY=… .venv/bin/python scripts/ops.py \\
+            --stage daily_delisted_universe_check
+    """
+    import httpx
+
+    from tpcore.data.ingest_fmp_bars import fetch_daily_bars_multi as fmp_fetch
+    from tpcore.data.survivorship_backfill import (
+        detect_newly_delisted,
+        mark_delisted,
+    )
+
+    cfg = cfg or {}
+    log = structlog.get_logger("scripts.ops")
+    candidates = await detect_newly_delisted(pool)
+    today = datetime.now(UTC).date()
+    if not candidates:
+        log.info("ops.stage.daily_delisted_universe_check.no_candidates")
+        return {"candidates": 0, "marked_delisted": 0, "vendor_gap": 0}
+
+    marked = 0
+    vendor_gap = 0
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        # Probe a 14-day window — wide enough to clear any single-week
+        # vendor blip but tight enough that an FMP-empty result is
+        # decisive evidence of delisting.
+        probe_start = today - timedelta(days=14)
+        try:
+            by_symbol = await fmp_fetch(client, candidates, probe_start, today)
+        except Exception as exc:  # noqa: BLE001 — defensive
+            log.error(
+                "ops.stage.daily_delisted_universe_check.fmp_failed",
+                error=str(exc)[:200],
+            )
+            raise
+    for ticker in candidates:
+        bars = by_symbol.get(ticker, [])
+        if bars:
+            vendor_gap += 1
+            log.info(
+                "ops.stage.daily_delisted_universe_check.vendor_gap",
+                ticker=ticker,
+                note="FMP has bars; canonical recovery: daily_bars repair_coverage",
+            )
+            continue
+        # Newly delisted — final bar date is whatever the corpus shows
+        # as the ticker's last-seen session (NOT today; the ticker
+        # already stopped trading).
+        async with pool.acquire() as conn:
+            final_date = await conn.fetchval(
+                "SELECT MAX(date) FROM platform.prices_daily WHERE ticker = $1",
+                ticker,
+            )
+        delist_on = final_date or today
+        if await mark_delisted(pool, ticker, delist_on):
+            marked += 1
+    out = {
+        "candidates": len(candidates),
+        "marked_delisted": marked,
+        "vendor_gap": vendor_gap,
+    }
+    log.info("ops.stage.daily_delisted_universe_check.done", **out)
+    return out
+
+
 async def _stage_coverage_fill(pool: asyncpg.Pool) -> dict[str, Any]:
     """Self-healing — backfill any tier ≤ 2 ticker missing a bar in the last
     7 days via Alpaca SIP feed. Runs after ``corporate_actions`` (so split
@@ -3386,6 +3570,25 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # (``_auto_cascade_validation_failures``) when a *_monotone check
     # reds, and operator-callable via the ops CLI for audits.
     ("dedupe_monotone",     lambda pool, cfg: (lambda: _stage_dedupe_monotone(pool, cfg)),       STAGE_TIMEOUT_SEC),
+    # historical_delisted_universe — survivorship-bias backfill via FMP
+    # (operator one-shot, NOT in OPS_UPDATE_STAGES). Enumerates the
+    # known delisted universe across five sources + per-ticker FMP
+    # /historical-price-eod/full GETs, upserts each bar with
+    # delisted=true + delisting_date set to FMP's final-bar date.
+    # Resumable via SURVIVORSHIP_BACKFILL_TICKER_DONE events.
+    # Heavy timeout: ~3000-5000 enumerated tickers × ~0.2s/call ≈
+    # 10-15 min wall time; gives 60min headroom.
+    ("historical_delisted_universe",
+        lambda pool, cfg: (lambda: _stage_historical_delisted_universe(pool, cfg)),
+        HEAVY_STAGE_TIMEOUT_SEC),
+    # daily_delisted_universe_check — nightly silent-disappearance
+    # catcher. T1/T2 ticker missing 5+ sessions + FMP confirms no bars
+    # → mark delisted with the corpus's final-seen date. Operator-on-
+    # demand for now; promote to daily cadence once the structural
+    # backfill above is stable. Standard timeout (probes are bounded).
+    ("daily_delisted_universe_check",
+        lambda pool, cfg: (lambda: _stage_daily_delisted_universe_check(pool, cfg)),
+        STAGE_TIMEOUT_SEC),
 )
 KNOWN_STAGES: tuple[str, ...] = tuple(name for name, _, _ in _STAGE_SPECS)
 # Stages that are NOT part of the default daily ``cmd_update`` cycle —
@@ -3398,6 +3601,12 @@ _OFF_CYCLE_STAGES: frozenset[str] = frozenset({
     # replay path runs on every engine cycle via AARWriter so this is
     # the bulk-drain knob, not the only recovery path).
     "aar_replay",
+    # Survivorship-bias backfill stages — operator-on-demand. The
+    # one-shot historical fill runs once after PR merge; the nightly
+    # delta probe stays out of the daily cadence until the structural
+    # backfill stabilises.
+    "historical_delisted_universe",
+    "daily_delisted_universe_check",
 })
 
 # Reasons (from INGESTION_FAILED.data->>'reason' or exception_type) that
