@@ -6,23 +6,19 @@
 #   * keep ops.engine_service running 24/7 — the single consolidated
 #     engine daemon: DATA_OPERATIONS_COMPLETE-triggered sweep + co-hosted
 #     trade-monitor stream + day-rollover weekly-digest trigger
-#   * keep ops.lane_service running 24/7 — the consolidated
-#     data-lane + advisory-lane daemon (2026-05-21 Railway 2-daemon
-#     budget fix: fuses the previous data-repair-service and
-#     llm-triage-service into ONE asyncio process under
-#     ``asyncio.gather()``). Four crash-isolated co-tasks on ONE pool:
+#   * keep ops.lane_service running 24/7 — the DEPLOYED data-lane
+#     daemon. As of 2026-05-22 (operator directive "we wont be
+#     deploying the llm data triage it will run locally with my max
+#     account") this daemon runs DETERMINISTIC SELF-HEAL ONLY:
 #       - data_repair: polls application_log for ENGINE_DATA_REQUEST,
 #         runs the canonical self-heal, emits exactly one terminal
 #         reply per request_id (the previous data-repair-service).
-#       - triage_data: AUTONOMOUS data-recovery on
-#         DATA_REPAIR_ESCALATED / DATA_SOURCE_ESCALATED /
-#         INGESTION_AUTO_RECOVERY_FAILED via the frozen whitelist in
-#         ops/llm_data_recovery.py (single-shot per cycle; no draft
-#         PR, no human-merge gate).
-#       - triage_engine: still PR-GATED engine triage on
-#         ENGINE_ESCALATED via ops.engine_llm_triage.
-#       - triage_lab_emitter: SP-G operator-command path
-#         (/lab-spec-emit); event-trigger set is empty per operator Q6.
+#     The three previous LLM-invoking co-tasks (triage_data /
+#     triage_engine / triage_lab_emitter) have been REMOVED from the
+#     deployed daemon. The LLM-side is invoked OPERATOR-LOCALLY via
+#     the slash skills /triage-data-failures, /triage-engine-failures,
+#     and /lab-spec-emit (operator's Claude Max account). See
+#     docs/audits/2026-05-22-llm-triage-removal-from-deployed-daemon.md.
 #   * run scripts/run_data_operations.sh every weekday at 21:30 UTC
 #     (data-lane cron; chains: data refresh → audit → validate →
 #     compress → emit event)
@@ -42,12 +38,15 @@
 #
 # Note: data-repair-service + llm-triage-service are no longer their
 # own launchd daemons (retired 2026-05-21, Railway 2-daemon budget).
-# Both are folded into the single lane daemon (ops/lane_service.py)
-# as four crash-isolated asyncio.gather() co-tasks. The daemon set is
-# now: engine-service (consolidated sweep + trade-monitor +
-# weekly-digest trigger), lane-service (data-repair + 3 triage lanes),
-# data-operations (data-lane cron). Two long-lived daemons + one cron
-# = fits Railway's 2-daemon limit.
+# The data-repair lane is folded into the single lane daemon
+# (ops/lane_service.py) as the ONLY co-task. The LLM-triage lanes have
+# been REMOVED from the deployed daemon as of 2026-05-22 (operator
+# directive — LLM runs locally on the operator's Max account, NEVER
+# deployed). The daemon set is now: engine-service (consolidated sweep
+# + trade-monitor + weekly-digest trigger), lane-service (deterministic
+# data-repair only), data-operations (data-lane cron). Two long-lived
+# daemons + one cron = fits Railway's 2-daemon limit; the LLM is not
+# a deployed daemon at all.
 #
 # Logs go to ~/Library/Logs/short-term-trading-engine/.
 #

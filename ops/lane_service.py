@@ -1,60 +1,51 @@
-"""Consolidated data-lane + advisory-lane daemon — the 2-daemon Railway
-budget fix (2026-05-21).
+"""Deployed data-lane daemon — DETERMINISTIC SELF-HEAL ONLY.
 
-Background: Railway's 2-daemon limit clashes with the local
-``install_all_daemons.sh`` whitelist that installs THREE long-lived
-daemons:
+Operator directive 2026-05-21 ("we wont be deploying the llm data triage
+it will run locally with my max account") + the audit in
+``docs/audits/2026-05-22-llm-triage-removal-from-deployed-daemon.md``:
+the deployed ``lane-service`` daemon hosts ONLY the deterministic data-
+repair responder. ANY code path that calls Anthropic at runtime has been
+REMOVED from this daemon — the LLM-side invocations now run OPERATOR-
+LOCALLY (operator's Claude Max account) via the slash skills
+``/triage-data-failures`` / ``/triage-engine-failures`` /
+``/lab-spec-emit``.
 
-  1. engine-service                 (sweep + monitor + digest)
-  2. data-repair-service            (DATA lane — ENGINE_DATA_REQUEST)
-  3. llm-triage-service             (advisory: data/engine/lab co-tasks)
+Background (predecessor PR #236): the previous lane_service hosted FOUR
+co-tasks (``data_repair`` + the three LLM-invoking triage co-tasks
+``triage_data`` / ``triage_engine`` / ``triage_lab_emitter``). All three
+LLM co-tasks pulled the Anthropic SDK into the deployed process at
+module-load time (transitively via ``ops.llm_data_recovery`` /
+``ops.engine_llm_triage`` / ``ops.llm_lab_emitter``). This PR removes
+them — the LLM-invoking modules stay in the repo as importable
+libraries, but the DEPLOYED daemon never loads them.
 
-This module fuses (2) and (3) into ONE daemon process running FOUR
-co-tasks under one ``asyncio.gather()`` — the canonical sibling of
-``engine_service``'s sweep/monitor pair:
+Architecture:
 
-  * ``data_repair`` — the deterministic data-repair responder
-    (``ops.data_repair_service._main_loop`` polls ``ENGINE_DATA_REQUEST``
-    and emits exactly one terminal reply per request_id).
-  * ``triage_data`` — the AUTONOMOUS data-recovery co-task
-    (``ops.llm_triage_service._main_loop``).
-  * ``triage_engine`` — the advisory engine triage co-task
-    (``ops.llm_triage_service._engine_loop``).
-  * ``triage_lab_emitter`` — the SP-G lab-emitter co-task
-    (``ops.llm_triage_service._lab_emitter_loop``).
+  * DEPLOYED daemon (this file): ONE co-task — ``data_repair`` — runs the
+    deterministic self-heal responder
+    (``ops.data_repair_service._main_loop`` polls
+    ``ENGINE_DATA_REQUEST`` and emits exactly one terminal reply per
+    request_id). NO Anthropic. NO LLM. NO triage.
 
-Both source modules (``ops.data_repair_service`` /
-``ops.llm_triage_service``) remain intact as importable libraries —
-this daemon is a thin orchestrator that imports + supervises their
-existing main loops. NO behavioural rewrite of the lanes: the
-autonomous-data-recovery surface (frozen whitelist + deterministic
-validator + bounded subprocess in ``ops.llm_data_recovery``), the
-engine-lane PR-gated advisory module, and the SP-G operator-command
-path are ALL preserved unchanged.
+  * OPERATOR-LOCAL (NOT this file): the operator's machine runs the
+    LLM-side via slash skills that read recent escalations from
+    ``platform.application_log`` and fire the respective recovery /
+    triage / emitter — ``ops.llm_data_recovery`` (data lane),
+    ``ops.engine_llm_triage`` (engine lane), ``ops.llm_lab_emitter``
+    (SP-G). The deterministic cascade
+    (``scripts/ops.py::_auto_cascade_*``) STILL emits the escalation
+    events; the operator-local LLM-side observes them.
 
-Why one process: the four co-tasks are I/O-bound poll loops on
-``platform.application_log`` with non-overlapping event-type filters.
-They never compete for shared mutable state. The combined steady-state
-pool footprint is ≤ 6 connections; the asyncpg pool max is set to that
-ceiling here.
+Two-daemon Railway invariant: PRESERVED — ``install_all_daemons.sh``
+still installs exactly ``{engine-service, lane-service,
+data-operations}``. lane-service is still ONE long-lived daemon; it
+just hosts ONE deterministic co-task now instead of four.
 
-Locks: the data-repair lane keeps its OWN ``ste-data-operations.lock``
-(serializes vs ``run_data_operations.sh`` Step-4 self-heal). The three
-triage lanes share the ``ste-llm-triage-service.lock`` (serializes vs
-ad-hoc ``python -m ops.llm_triage_service``). The two lock names stay
-distinct on purpose — different mutual-exclusion domains.
-
-Crash isolation: each co-task is wrapped in a ``_run_supervised``
-restart-on-error loop (mirrors engine_service / the prior llm_triage
-container). A single lane crashing logs + restarts in-process; never
-brings down a sibling or the daemon.
-
-Two-daemon invariant: after this PR ``install_all_daemons.sh``'s closed
-whitelist is ``{engine-service, lane-service, data-operations}`` — two
-long-lived daemons (engine + lane) plus one cron (data-operations) →
-fits Railway's 2-daemon budget. The retired installers
-(``install_launchd_data_repair_service.sh``,
-``install_launchd_llm_triage_service.sh``) are deleted in the same PR.
+Crash isolation: the single ``data_repair`` co-task is wrapped in
+``_run_supervised`` (restart-on-error). With only one lane the
+supervisor is a no-op safety net in practice (a deterministic-handler
+crash that the lane itself does not self-heal would be a hard bug, not
+an everyday event).
 """
 from __future__ import annotations
 
@@ -77,34 +68,18 @@ from ops.data_repair_service import (
 from ops.data_repair_service import (
     _main_loop as _data_repair_main_loop,
 )
-from ops.llm_triage_service import (
-    DEFAULT_LOCK_DIR as TRIAGE_LOCK_DIR,
-)
-from ops.llm_triage_service import (
-    _engine_loop as _triage_engine_loop,
-)
-from ops.llm_triage_service import (
-    _lab_emitter_loop as _triage_lab_emitter_loop,
-)
-from ops.llm_triage_service import (
-    _main_loop as _triage_data_main_loop,
-)
 from tpcore.db import build_asyncpg_pool
 
 logger = structlog.get_logger(__name__)
 
-# Two-daemon-budget rollup pool size: one acquire per co-task's poll
-# tick + each lane's run_triage / heal can take an extra acquire +
-# headroom for the deterministic self-heal acquire-while-poll. Sized
-# loosely; asyncpg reuses connections so the actual concurrent count
-# is far below this ceiling.
-POOL_MAX_SIZE = 6
+# One co-task in the deployed daemon (data_repair). One acquire per poll
+# tick + headroom for the in-flight self-heal acquire-while-poll. Sized
+# loosely; asyncpg reuses connections so the actual concurrent count is
+# well below this ceiling.
+POOL_MAX_SIZE = 3
 
 LANE_NAMES = (
     "data_repair",
-    "triage_data",
-    "triage_engine",
-    "triage_lab_emitter",
 )
 
 
@@ -117,8 +92,8 @@ async def _run_supervised(
     """Run ``factory()`` (a 0-arg coroutine fn) until stop_event. A
     non-Cancelled exception is logged and the lane restarted after
     ``backoff`` seconds — mirrors the crash-isolation contract of
-    ``engine_service._run_supervised`` / ``llm_triage_service._run_supervised``.
-    CancelledError propagates (clean shutdown)."""
+    ``engine_service._run_supervised``. CancelledError propagates
+    (clean shutdown)."""
     while not stop_event.is_set():
         try:
             await factory()
@@ -144,14 +119,12 @@ async def _amain() -> int:
         )
         return 1
 
-    # The two locks stay distinct — the data-lane lock serializes vs
-    # run_data_operations.sh Step-4 self-heal; the triage lock
-    # serializes vs ad-hoc `python -m ops.llm_triage_service`.
+    # Data-repair lock serializes vs run_data_operations.sh Step-4
+    # self-heal (operator's data-ops cron path); the deployed daemon
+    # only holds this one lock now (the triage lock is operator-local
+    # responsibility).
     data_repair_lock_dir = os.environ.get(
         "STE_DATA_OPS_LOCK_DIR", DATA_REPAIR_LOCK_DIR
-    )
-    triage_lock_dir = os.environ.get(
-        "STE_LLM_TRIAGE_LOCK_DIR", TRIAGE_LOCK_DIR
     )
 
     pool = await build_asyncpg_pool(dsn, max_size=POOL_MAX_SIZE)
@@ -174,40 +147,14 @@ async def _amain() -> int:
             INITIAL_CURSOR_LOOKBACK.total_seconds()
         ),
         data_repair_lock_dir=data_repair_lock_dir,
-        triage_lock_dir=triage_lock_dir,
     )
 
-    # Lane factories — each is a 0-arg coroutine that delegates into
-    # the source module's main loop. NO behavioural rewrite: the
-    # daemon is a thin orchestrator.
     async def _data_repair_factory():
         await _data_repair_main_loop(pool, stop_event, data_repair_lock_dir)
-
-    async def _triage_data_factory():
-        await _triage_data_main_loop(pool, stop_event, triage_lock_dir)
-
-    async def _triage_engine_factory():
-        await _triage_engine_loop(pool, stop_event, triage_lock_dir)
-
-    async def _triage_lab_emitter_factory():
-        await _triage_lab_emitter_loop(pool, stop_event, triage_lock_dir)
 
     tasks = {
         "data_repair": asyncio.create_task(
             _run_supervised("data_repair", _data_repair_factory, stop_event)
-        ),
-        "triage_data": asyncio.create_task(
-            _run_supervised("triage_data", _triage_data_factory, stop_event)
-        ),
-        "triage_engine": asyncio.create_task(
-            _run_supervised("triage_engine", _triage_engine_factory, stop_event)
-        ),
-        "triage_lab_emitter": asyncio.create_task(
-            _run_supervised(
-                "triage_lab_emitter",
-                _triage_lab_emitter_factory,
-                stop_event,
-            )
         ),
     }
 

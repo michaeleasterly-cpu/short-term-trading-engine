@@ -73,6 +73,8 @@ backtests/
 !.claude/skills/defect-register/
 !.claude/skills/lab-spec-emit/
 !.claude/skills/lab-edge-find/
+!.claude/skills/triage-data-failures/
+!.claude/skills/triage-engine-failures/
 
 # Publishing — `python -m build` artifacts are operator-local; the
 # carved `publishing/stelib/stelib/` Python source IS tracked.
