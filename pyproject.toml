@@ -345,6 +345,26 @@ ignore = ["E501"]
 # ignore is the correct form (mirrors the Wave-1 precedent immediately
 # above) — never an inline ``# noqa: SLF001``.
 "tests/test_stage_robustness_auto_cascade_wave2.py" = ["SLF"]
+# D11 (vendor_late classification) + D14 (data_validation TIMEOUT →
+# chunked re-run) deterministic self-heal cascade pins (spec
+# docs/superpowers/specs/2026-05-21-deterministic-self-heal-coverage-
+# expansion-design.md §1 rows D11 D14). The test pins the cascade
+# dispatch + the synthesised FAILED-shape contract + the per-chunk
+# timeout safe-degrade + the vendor_late detail wiring by NAMING
+# ``scripts/ops.py``-private symbols (``_load_daily_bars_config``,
+# ``_market_open_block_reason``, ``_per_feed_tripwire``,
+# ``_auto_cascade_coverage_collapse``, ``_auto_cascade_validation_failures``,
+# ``_auto_cascade_stage_robustness``, ``_self_heal_failed_stages``,
+# ``_chunk_validation_suite``, ``_VENDOR_LATE_CHECK_MAP``,
+# ``_VALIDATION_CHUNK_SPECS``, ``_STAGE_SPECS``,
+# ``_stage_data_validation``, ``_parse_failed_check_names``) — that IS
+# the test's purpose (the cascade decision + the synthesised-FAILED
+# contract + the chunk partitioning are exactly at those seams; without
+# naming them the D11/D14 contracts have no anchor). Data-lane-module-
+# private (NOT tpcore-private) access; the scoped per-file ignore is
+# the correct form (mirrors the Wave-1/Wave-2 precedents immediately
+# above) — never an inline ``# noqa: SLF001``.
+"tests/test_validation_vendor_late_and_chunked_cascade.py" = ["SLF"]
 # Wave-3 engine-lane deterministic self-heal cascade pins (2026-05-22 —
 # docs/superpowers/specs/2026-05-21-deterministic-self-heal-coverage-
 # expansion-design.md rows E1/E2/E3/E9). The test pins the cascade
