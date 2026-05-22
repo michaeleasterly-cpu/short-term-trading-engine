@@ -243,11 +243,10 @@ async def test_sdk_aar_uses_managed_agents_beta() -> None:
 @pytest.mark.asyncio
 async def test_sdk_aar_persona_sha_mismatch_warns_only() -> None:
     """Persona SHA mismatch logs a warning; does NOT raise (mirrors finder SDK)."""
-    from ops.llm_aar_critic_sdk import make_sdk_aar_callable
-
     # Bypass the PENDING_PROVISION early return by patching the module
     # constant for this test only.
     import ops.llm_aar_critic_sdk as sdk_mod
+    from ops.llm_aar_critic_sdk import make_sdk_aar_callable
     original = sdk_mod.PROVISIONED_PERSONA_SHA256
     sdk_mod.PROVISIONED_PERSONA_SHA256 = "deadbeef" * 8
     try:

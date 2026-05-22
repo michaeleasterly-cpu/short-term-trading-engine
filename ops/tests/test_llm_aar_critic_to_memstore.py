@@ -188,21 +188,17 @@ async def test_run_aar_critic_to_memstore_e2e() -> None:
     assert sum("LAB_AAR_CRITIC_FINDING" in s for s in sqls) == 2
 
     # Now mimic what the daemon does: write each finding to AAR memstore +
-    # curated-copy to finder memstore. (run_aar_critic doesn't do this
-    # itself — the memstore writes are a separate concern.)
+    # curated-copy to finder memstore.
+    # (The full run_aar_critic does this in Phase D when anthropic_client +
+    # memstore_ids are passed; here we exercise the writers directly so the
+    # E2E assertion is independent of that wiring.)
     from tpcore.lab.llm_aar.models import (
         AARFinding,
         compute_finding_id,
     )
 
-    findings = []
-    for fid in run.findings_emitted:
-        # We can synthesise the AARFinding objects from envelope shape;
-        # in the main loop they're constructed in _drive_llm_call.
-        # For this E2E we just construct them again to test the writers.
-        pass
-
-    # Build the two findings explicitly for memstore-write assertions
+    # Construct the same two findings explicitly for memstore-write assertions
+    # (matches the IDs the LLM-side envelope would have produced).
     findings = [
         AARFinding(
             engine="catalyst",

@@ -26,15 +26,15 @@ from tpcore.lab.llm_aar import (
     MAX_FINDINGS_PER_ENGINE_PER_RUN,
     PERSONA_VERSION,
 )
+from tpcore.lab.llm_aar.memstore_writer import (
+    archive_finding_to_aar_memstore,
+    copy_finding_to_finder_memstore,
+)
 from tpcore.lab.llm_aar.models import (
     AARCriticRun,
     AARFinding,
     EnginePerformanceWindow,
     compute_finding_id,
-)
-from tpcore.lab.llm_aar.memstore_writer import (
-    archive_finding_to_aar_memstore,
-    copy_finding_to_finder_memstore,
 )
 from tpcore.lab.llm_aar.payload_assembler import assemble_aar_payload
 from tpcore.lab.llm_aar.persona import persona_text

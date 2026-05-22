@@ -5,7 +5,7 @@ via the LAB_AAR_CRITIC_RUN + LAB_AAR_CRITIC_FINDING event types.
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from typing import Any
 from uuid import uuid4
 
@@ -22,13 +22,13 @@ from tpcore.lab.llm_aar.run_writer import (
 class _FakeConn:
     def __init__(self, capture: list[tuple[str, tuple[Any, ...]]] | None = None) -> None:
         self._capture = capture if capture is not None else []
-        self._count_value: int = 0
+        self.count_value: int = 0  # public; tests drive the fetchval helper
 
     async def execute(self, sql: str, *args: Any) -> None:
         self._capture.append((sql, args))
 
     async def fetchval(self, _sql: str, *_args: Any) -> int:
-        return self._count_value
+        return self.count_value
 
 
 class _AcquireCM:
@@ -45,10 +45,10 @@ class _AcquireCM:
 class _FakePool:
     def __init__(self) -> None:
         self._captured: list[tuple[str, tuple[Any, ...]]] = []
-        self._conn = _FakeConn(self._captured)
+        self.conn = _FakeConn(self._captured)  # public; tests configure the conn
 
     def acquire(self) -> _AcquireCM:
-        return _AcquireCM(self._conn)
+        return _AcquireCM(self.conn)
 
     @property
     def captured(self) -> list[tuple[str, tuple[Any, ...]]]:
@@ -60,8 +60,8 @@ async def test_record_aar_critic_run_writes_provenance() -> None:
     pool = _FakePool()
     run = AARCriticRun(
         run_id=uuid4(),
-        started_ts=datetime.now(timezone.utc),
-        completed_ts=datetime.now(timezone.utc),
+        started_ts=datetime.now(UTC),
+        completed_ts=datetime.now(UTC),
         trigger="operator_command",
         as_of_session=date(2026, 5, 22),
         engines_examined=("catalyst", "vector"),
@@ -134,7 +134,7 @@ async def test_record_aar_finding_handles_bad_run_id() -> None:
 async def test_count_runs_in_utc_day_returns_int() -> None:
     """Rate-ceiling check helper returns a non-negative integer."""
     pool = _FakePool()
-    pool._conn._count_value = 1
+    pool.conn.count_value = 1
     n = await count_runs_in_utc_day(
         pool,  # type: ignore[arg-type]
         "2026-05-22T00:00:00",

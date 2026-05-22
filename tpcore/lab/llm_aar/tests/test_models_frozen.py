@@ -1,7 +1,7 @@
 """LLM-AAR model invariants — spec §3 + §6 fence #4 (evidence) + #11 (closed-vocab) + #12 (confidence band)."""
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from uuid import uuid4
 
@@ -15,7 +15,6 @@ from tpcore.lab.llm_aar.models import (
     EnginePerformanceWindow,
     compute_finding_id,
 )
-
 
 # ───────────────────────── AARFinding ─────────────────────────
 
@@ -232,7 +231,7 @@ def test_aar_row_summary_frozen() -> None:
 
 
 def test_aar_critic_run_frozen() -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     run = AARCriticRun(
         run_id=uuid4(),
         started_ts=now,
@@ -250,7 +249,7 @@ def test_aar_critic_run_frozen() -> None:
 
 
 def test_aar_critic_run_trigger_closed_vocab() -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     with pytest.raises(ValidationError):
         AARCriticRun(
             run_id=uuid4(),

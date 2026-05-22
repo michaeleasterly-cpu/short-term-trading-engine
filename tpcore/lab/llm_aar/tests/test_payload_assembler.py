@@ -22,7 +22,6 @@ from tpcore.lab.llm_aar.payload_assembler import (
     assemble_aar_payload,
 )
 
-
 # ───────────────────────── Fake pool ─────────────────────────
 
 
