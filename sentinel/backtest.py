@@ -28,16 +28,29 @@ declared via the engine-OWNED ``LAB_TARGET`` (resolved roster-driven by
   ``activation_score_threshold`` ``choice:60,55``; tests whether
   earlier activation reduces holdout drawdown. Spec:
   ``docs/superpowers/specs/2026-05-20-sentinel-maxdd-lab-candidate.md``.
-* ``sentinel_bear_score`` (THIS candidate) — toggle ``bear_score_mode``
+* ``sentinel_bear_score`` (sibling candidate) — toggle ``bear_score_mode``
   ``choice:current,graduated``; tests whether a five-factor graduated
   Bear-Score composite (Sahm/SOS/curve/CFNAI-MA3/HY-OAS with
   literature-anchored thresholds and three action bands) reduces
   holdout drawdown vs the legacy binary activation. Spec:
   ``docs/superpowers/specs/2026-05-21-sentinel-bear-score-lab-candidate.md``.
+* ``sentinel_macro_stress_gate`` (post-2026-05-22 surface enrichment) —
+  extends ``bear_score_mode`` with the third choice
+  ``macro_stress_count``: a multi-signal COUNT trigger that opens the
+  defensive basket when ≥ ``macro_stress_signal_count`` of the four
+  macro-stress signals fire concurrently
+  (``yield_curve <= yield_curve_inversion_threshold``,
+  ``hy_spread >= hy_spread_stress_threshold_bps / 100``,
+  ``sahm_rule >= sahm_stress_threshold``,
+  ``vix_proxy > vix_stress_threshold``). Each per-signal threshold is an
+  independent Lab-sampled float; the count is a Lab-sampled
+  ``choice:2,3,4``. Origin: autonomous finder candidate
+  ``sentinel_macro_stress_gate_v1`` (run_id
+  91100f12-0674-41dc-9b2b-09c00cc5e507).
 
-Both candidates are off-by-default backtest seams; the LIVE trading path
-is byte-identical when neither override is supplied (proven by the C1
-characterization tests in ``sentinel/tests/``).
+All three candidates are off-by-default backtest seams; the LIVE trading
+path is byte-identical when neither override is supplied (proven by the
+C1 characterization tests in ``sentinel/tests/``).
 """
 from __future__ import annotations
 
@@ -68,6 +81,7 @@ from sentinel.plugs.execution_risk import SentinelExecutionRisk
 from sentinel.plugs.lifecycle_analysis import SentinelLifecycleAnalysis
 from sentinel.plugs.setup_detection import (
     SentinelSetupDetection,
+    compute_vix_proxy_series,
     fetch_spy_close,
 )
 from tpcore.backtest.cost_model import get_round_trip_cost
@@ -528,9 +542,49 @@ _ACTIVATION_THRESHOLD_OVERRIDE: int | None = None
 # Off-by-default backtest-only override for the sentinel_bear_score Lab
 # candidate. None / "current" / any unknown value ⇒ the legacy binary
 # activation path (BYTE-IDENTICAL to pre-candidate behaviour). Only the
-# exact string "graduated" reaches the variant branch (defense-in-depth
-# against silent corruption from a malformed override).
+# exact strings "graduated" or "macro_stress_count" reach a variant
+# branch (defense-in-depth against silent corruption from a malformed
+# override).
 _BEAR_SCORE_MODE_OVERRIDE: str | None = None
+
+# ── sentinel_macro_stress_gate candidate — knob defaults + overrides ────
+#
+# Five new Lab-sampled knobs ONLY active when bear_score_mode is
+# "macro_stress_count". Each defaults to None (off) and reads the
+# canonical default from the constants below — chosen to match the
+# autonomous finder's hypothesis text (run_id
+# 91100f12-0674-41dc-9b2b-09c00cc5e507): ≥3 of {yield_curve<0,
+# hy_spread>400bp, vix>22, sahm_rule>0.3}.
+#
+# Per-call reset discipline (Vector pilot §3.1 / §4.2): each override
+# below is cleared to None at the top of run_sentinel_with_context so no
+# cross-trial state leaks between Lab trials.
+
+# Default count: 3 signals (the LLM's hypothesis-text default).
+_MACRO_STRESS_COUNT_DEFAULT = 3
+
+# Default thresholds (hypothesis-text values).
+_VIX_STRESS_DEFAULT = 22.0
+_HY_SPREAD_STRESS_BPS_DEFAULT = 400.0
+_SAHM_STRESS_DEFAULT = 0.3
+_YIELD_CURVE_INVERSION_DEFAULT = 0.0
+
+# Off-by-default Lab overrides (None ⇒ use the *_DEFAULT constant above).
+_MACRO_STRESS_COUNT_OVERRIDE: int | None = None
+_VIX_STRESS_THRESHOLD_OVERRIDE: float | None = None
+_HY_SPREAD_STRESS_THRESHOLD_BPS_OVERRIDE: float | None = None
+_SAHM_STRESS_THRESHOLD_OVERRIDE: float | None = None
+_YIELD_CURVE_INVERSION_THRESHOLD_OVERRIDE: float | None = None
+
+# Indicators consumed by the macro_stress_count branch — three of the
+# four also overlap _GRAD_INDICATORS, but the count branch treats VIX
+# differently (raw vix_proxy series from SPY, not a sub-score). Listed
+# here for spec clarity; the actual access reads each name lazily.
+_MACRO_STRESS_INDICATORS: tuple[str, ...] = (
+    "yield_curve",
+    "hy_spread",
+    "sahm_rule",
+)
 
 # ── Graduated Bear Score (sentinel_bear_score candidate) — pinned constants ──
 #
@@ -607,14 +661,70 @@ def _activation_score_threshold() -> int:
 def _bear_score_mode() -> str:
     """The active Bear-Score MODE for THIS backtest run.
 
-    Returns ``"graduated"`` ONLY when the off-by-default override is
-    exactly the string ``"graduated"`` (defense-in-depth against silent
-    corruption from a malformed override). Else ``"current"`` (the
-    legacy binary-activation path). Pure."""
+    Returns ``"graduated"`` / ``"macro_stress_count"`` ONLY when the
+    off-by-default override is exactly that string (defense-in-depth
+    against silent corruption from a malformed override). Any other
+    value — None, ``"current"``, empty string, unknown string — falls
+    back to ``"current"`` (the legacy binary-activation path). Pure."""
+    if _BEAR_SCORE_MODE_OVERRIDE == "graduated":
+        return "graduated"
+    if _BEAR_SCORE_MODE_OVERRIDE == "macro_stress_count":
+        return "macro_stress_count"
+    return "current"
+
+
+def _macro_stress_count() -> int:
+    """The active macro-stress signal-count gate. Pure.
+
+    Returns the override when set, else :data:`_MACRO_STRESS_COUNT_DEFAULT`."""
     return (
-        "graduated"
-        if _BEAR_SCORE_MODE_OVERRIDE == "graduated"
-        else "current"
+        _MACRO_STRESS_COUNT_OVERRIDE
+        if _MACRO_STRESS_COUNT_OVERRIDE is not None
+        else _MACRO_STRESS_COUNT_DEFAULT
+    )
+
+
+def _vix_stress_threshold() -> float:
+    """Active VIX-proxy stress threshold (percent). Pure."""
+    return (
+        _VIX_STRESS_THRESHOLD_OVERRIDE
+        if _VIX_STRESS_THRESHOLD_OVERRIDE is not None
+        else _VIX_STRESS_DEFAULT
+    )
+
+
+def _hy_spread_stress_threshold_bps() -> float:
+    """Active HY-OAS stress threshold (basis points). Pure.
+
+    The macro_indicators ``hy_spread`` value is stored in *percent*
+    (e.g. 4.0 ⇒ 400 bps). The knob is exposed in bps for hypothesis
+    legibility — the comparator divides by 100 internally."""
+    return (
+        _HY_SPREAD_STRESS_THRESHOLD_BPS_OVERRIDE
+        if _HY_SPREAD_STRESS_THRESHOLD_BPS_OVERRIDE is not None
+        else _HY_SPREAD_STRESS_BPS_DEFAULT
+    )
+
+
+def _sahm_stress_threshold() -> float:
+    """Active Sahm-rule stress threshold (unitless, e.g. 0.3). Pure."""
+    return (
+        _SAHM_STRESS_THRESHOLD_OVERRIDE
+        if _SAHM_STRESS_THRESHOLD_OVERRIDE is not None
+        else _SAHM_STRESS_DEFAULT
+    )
+
+
+def _yield_curve_inversion_threshold() -> float:
+    """Active yield-curve inversion threshold (percent). Pure.
+
+    The macro_indicators ``yield_curve`` value is the T10Y2Y spread in
+    percent; inversion fires when ``value <= threshold``. Default 0.0
+    encodes "any inversion" — the LLM's hypothesis-text value."""
+    return (
+        _YIELD_CURVE_INVERSION_THRESHOLD_OVERRIDE
+        if _YIELD_CURVE_INVERSION_THRESHOLD_OVERRIDE is not None
+        else _YIELD_CURVE_INVERSION_DEFAULT
     )
 
 
@@ -626,6 +736,11 @@ def default_params() -> dict[str, Any]:
     return {
         "activation_score_threshold": int(ACTIVATION_SCORE_THRESHOLD),
         "bear_score_mode": "current",
+        "macro_stress_signal_count": int(_MACRO_STRESS_COUNT_DEFAULT),
+        "vix_stress_threshold": float(_VIX_STRESS_DEFAULT),
+        "hy_spread_stress_threshold_bps": float(_HY_SPREAD_STRESS_BPS_DEFAULT),
+        "sahm_stress_threshold": float(_SAHM_STRESS_DEFAULT),
+        "yield_curve_inversion_threshold": float(_YIELD_CURVE_INVERSION_DEFAULT),
     }
 
 
@@ -853,6 +968,15 @@ class SentinelWindowContext:
     end: date_t
     graduated: bool
     macro_panel: pd.DataFrame | None = None
+    # Strictly-additive: SPY-derived VIX-proxy series consumed ONLY by
+    # the macro_stress_count branch (post-2026-05-22 sentinel surface
+    # enrichment). The legacy "current" and the "graduated" branches
+    # never read this attribute, so adding it is byte-identical for
+    # them. Defaults to None so pre-existing fixtures continue to build
+    # contexts without touching the new attribute; the
+    # macro_stress_count branch falls back to the legacy path when
+    # vix_proxy_series is None (defense-in-depth).
+    vix_proxy_series: pd.Series | None = None
 
 
 async def load_sentinel_window_context(
@@ -890,10 +1014,18 @@ async def load_sentinel_window_context(
         )
     finally:
         await pool.close()
+    # Strictly-additive: derive the SPY 20-day annualized-realized-vol
+    # series from the already-fetched SPY close. Consumed ONLY by the
+    # macro_stress_count branch; the legacy / graduated branches never
+    # read it.
+    vix_proxy_series = (
+        compute_vix_proxy_series(spy) if len(spy) > 0 else None
+    )
     return SentinelWindowContext(
         breakdowns=breakdowns, spy_close=spy, etf_prices=etf_prices,
         round_trip_costs=round_trip_costs, start=start, end=end,
         graduated=graduated, macro_panel=macro_panel,
+        vix_proxy_series=vix_proxy_series,
     )
 
 
@@ -905,18 +1037,32 @@ def run_sentinel_with_context(
 ) -> BacktestRunResult:
     """Run Sentinel against a pre-loaded :class:`SentinelWindowContext`.
 
-    Reads two off-by-default Lab toggles from ``overrides`` into module
+    Reads off-by-default Lab toggles from ``overrides`` into module
     globals and **resets them per call** so no module-global state bleeds
     across Lab trials:
 
     * ``activation_score_threshold`` (sibling ``sentinel_maxdd`` candidate)
-    * ``bear_score_mode`` (THIS ``sentinel_bear_score`` candidate)
+    * ``bear_score_mode`` (the ``sentinel_bear_score`` candidate; also
+      the dispatch knob for the ``sentinel_macro_stress_gate`` candidate)
+    * ``macro_stress_signal_count`` /
+      ``vix_stress_threshold`` /
+      ``hy_spread_stress_threshold_bps`` /
+      ``sahm_stress_threshold`` /
+      ``yield_curve_inversion_threshold``
+      — the five ``sentinel_macro_stress_gate`` candidate knobs (active
+      ONLY when ``bear_score_mode == "macro_stress_count"``; otherwise
+      stored but unread).
 
-    When both toggles are absent / equal to their legacy defaults the
-    result is the legacy behaviour (proven byte-identical by
-    ``sentinel/tests/test_lab_activation_threshold_byte_identical.py``
-    and ``sentinel/tests/test_bear_score_byte_identical.py``)."""
+    When every toggle is absent / equal to its legacy default the result
+    is the legacy behaviour (proven byte-identical by
+    ``sentinel/tests/test_lab_activation_threshold_byte_identical.py``,
+    ``sentinel/tests/test_bear_score_byte_identical.py``, and
+    ``sentinel/tests/test_macro_stress_gate_byte_identical.py``)."""
     global _ACTIVATION_THRESHOLD_OVERRIDE, _BEAR_SCORE_MODE_OVERRIDE
+    global _MACRO_STRESS_COUNT_OVERRIDE, _VIX_STRESS_THRESHOLD_OVERRIDE
+    global _HY_SPREAD_STRESS_THRESHOLD_BPS_OVERRIDE
+    global _SAHM_STRESS_THRESHOLD_OVERRIDE
+    global _YIELD_CURVE_INVERSION_THRESHOLD_OVERRIDE
     overrides = dict(overrides or {})
     _ACTIVATION_THRESHOLD_OVERRIDE = (
         int(overrides["activation_score_threshold"])
@@ -926,6 +1072,31 @@ def run_sentinel_with_context(
     _BEAR_SCORE_MODE_OVERRIDE = (
         str(overrides["bear_score_mode"])
         if "bear_score_mode" in overrides
+        else None
+    )
+    _MACRO_STRESS_COUNT_OVERRIDE = (
+        int(overrides["macro_stress_signal_count"])
+        if "macro_stress_signal_count" in overrides
+        else None
+    )
+    _VIX_STRESS_THRESHOLD_OVERRIDE = (
+        float(overrides["vix_stress_threshold"])
+        if "vix_stress_threshold" in overrides
+        else None
+    )
+    _HY_SPREAD_STRESS_THRESHOLD_BPS_OVERRIDE = (
+        float(overrides["hy_spread_stress_threshold_bps"])
+        if "hy_spread_stress_threshold_bps" in overrides
+        else None
+    )
+    _SAHM_STRESS_THRESHOLD_OVERRIDE = (
+        float(overrides["sahm_stress_threshold"])
+        if "sahm_stress_threshold" in overrides
+        else None
+    )
+    _YIELD_CURVE_INVERSION_THRESHOLD_OVERRIDE = (
+        float(overrides["yield_curve_inversion_threshold"])
+        if "yield_curve_inversion_threshold" in overrides
         else None
     )
 
@@ -938,17 +1109,28 @@ def run_sentinel_with_context(
             ruin_probability=0.0, trade_log=[],
         )
 
-    # bear_score_mode dispatch. _bear_score_mode() returns "graduated"
-    # ONLY when the override is exactly the string "graduated" AND the
-    # macro_panel is available; any unknown value / missing panel falls
-    # back to the byte-identical legacy path. The effective_mode
-    # reported in `parameters` reflects WHICH BRANCH ACTUALLY RAN so
-    # the dossier `param_diff` carries the honest variant truth (not
-    # the requested override the panel could not satisfy).
-    if _bear_score_mode() == "graduated" and context.macro_panel is not None:
+    # bear_score_mode dispatch. _bear_score_mode() returns the variant
+    # name ONLY when the override exactly matches AND the variant's
+    # required additive context attribute is available; any unknown
+    # value / missing context falls back to the byte-identical legacy
+    # path. The effective_mode reported in `parameters` reflects WHICH
+    # BRANCH ACTUALLY RAN so the dossier `param_diff` carries the
+    # honest variant truth (not the requested override the data could
+    # not satisfy).
+    mode = _bear_score_mode()
+    if mode == "graduated" and context.macro_panel is not None:
         return _run_graduated_bear_score(
             context=context, trade_log_path=trade_log_path,
             effective_mode="graduated",
+        )
+    if (
+        mode == "macro_stress_count"
+        and context.macro_panel is not None
+        and context.vix_proxy_series is not None
+    ):
+        return _run_macro_stress_count(
+            context=context, trade_log_path=trade_log_path,
+            effective_mode="macro_stress_count",
         )
 
     return _run_legacy_bear_score(
@@ -1187,6 +1369,229 @@ def _run_graduated_bear_score(
     )
 
 
+def _count_stress_signals_at(
+    *,
+    panel: pd.DataFrame,
+    vix_series: pd.Series,
+    as_of: date_t,
+    vix_threshold: float,
+    hy_spread_threshold_bps: float,
+    sahm_threshold: float,
+    yield_curve_threshold: float,
+) -> int:
+    """Count how many of the four macro-stress signals fire at ``as_of``.
+
+    Pure. PIT-safe: each indicator reads the most recent observation at
+    or before ``as_of``. A missing / NaN value contributes zero (the
+    signal "does not fire" — defense-in-depth on data gaps; the entire
+    count branch was opt-in already so a quietly-zero count merely
+    keeps the basket DORMANT rather than flipping it to defensive).
+
+    - ``yield_curve <= yield_curve_threshold`` ⇒ +1 (inversion)
+    - ``hy_spread (percent) * 100 >= hy_spread_threshold_bps`` ⇒ +1
+    - ``sahm_rule >= sahm_threshold`` ⇒ +1
+    - ``vix_proxy > vix_threshold`` ⇒ +1
+    """
+    n = 0
+
+    # PIT lookup helper for the macro-indicator panel (date-indexed).
+    def _at_or_before(series_name: str) -> float | None:
+        if series_name not in panel.columns:
+            return None
+        sub = panel.loc[panel.index <= as_of, series_name]
+        if len(sub) == 0:
+            return None
+        v = sub.iloc[-1]
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            return None
+        if fv != fv:  # NaN
+            return None
+        return fv
+
+    yc = _at_or_before("yield_curve")
+    if yc is not None and yc <= yield_curve_threshold:
+        n += 1
+
+    hy = _at_or_before("hy_spread")
+    if hy is not None and (hy * 100.0) >= hy_spread_threshold_bps:
+        n += 1
+
+    sahm = _at_or_before("sahm_rule")
+    if sahm is not None and sahm >= sahm_threshold:
+        n += 1
+
+    # VIX-proxy series is timestamp-indexed; convert as_of for lookup.
+    ts = pd.Timestamp(as_of)
+    vix_sub = vix_series.loc[vix_series.index <= ts].dropna()
+    if len(vix_sub) > 0:
+        vix_now = float(vix_sub.iloc[-1])
+        if vix_now > vix_threshold:
+            n += 1
+
+    return n
+
+
+def _run_macro_stress_count(
+    *,
+    context: SentinelWindowContext,
+    trade_log_path: Path | None,
+    effective_mode: str = "macro_stress_count",
+) -> BacktestRunResult:
+    """Multi-signal macro-stress-count Sentinel path
+    (``bear_score_mode="macro_stress_count"``; sentinel_macro_stress_gate
+    Lab candidate).
+
+    On each session in the window, counts the number of four
+    pre-registered macro-stress signals firing (yield-curve inversion,
+    HY-OAS blow-out, Sahm-rule recession, VIX-proxy spike). When the
+    count meets-or-exceeds the Lab-sampled ``_macro_stress_count()`` the
+    legacy defensive basket opens; when the count drops below, the
+    basket closes (set-and-hold within a stress regime, mirroring the
+    legacy cycle discipline — no intra-cycle rebalance).
+
+    Reuses ``_compute_summary`` and ``compute_search_metrics`` so trade
+    accounting, cost model, and credibility rubric are IDENTICAL to the
+    legacy path — only "which days hold the basket" differs."""
+    panel = context.macro_panel
+    vix_series = context.vix_proxy_series
+    assert panel is not None  # guarded by the caller
+    assert vix_series is not None  # guarded by the caller
+
+    threshold_count = _macro_stress_count()
+    vix_th = _vix_stress_threshold()
+    hy_th_bps = _hy_spread_stress_threshold_bps()
+    sahm_th = _sahm_stress_threshold()
+    yc_th = _yield_curve_inversion_threshold()
+
+    sorted_dates = sorted(context.breakdowns.keys())
+
+    # Per-date "is the basket armed today?" boolean.
+    armed_for_date: dict[date_t, bool] = {}
+    for d in sorted_dates:
+        count = _count_stress_signals_at(
+            panel=panel, vix_series=vix_series, as_of=d,
+            vix_threshold=vix_th,
+            hy_spread_threshold_bps=hy_th_bps,
+            sahm_threshold=sahm_th,
+            yield_curve_threshold=yc_th,
+        )
+        armed_for_date[d] = count >= threshold_count
+
+    # Cycle detection + trade simulation: open on transition from
+    # DORMANT (armed False → True), close on transition back (True →
+    # False). Set-and-hold within a cycle.
+    trades: list[SearchTrade] = []
+    trades_for_diag: list[dict[str, Any]] = []
+    open_positions: dict[str, dict[str, Any]] = {}
+
+    def _close_all(close_date: date_t, exit_reason: str) -> None:
+        for ticker, pos in list(open_positions.items()):
+            price_series = context.etf_prices.get(ticker)
+            if price_series is None or len(price_series) == 0:
+                continue
+            sub = price_series.loc[
+                price_series.index <= pd.Timestamp(close_date)
+            ].dropna()
+            if len(sub) == 0:
+                continue
+            exit_price = float(sub.iloc[-1])
+            entry_price = pos["entry_price"]
+            gross_ret = (exit_price - entry_price) / entry_price
+            rtc = float(
+                context.round_trip_costs.get(ticker, Decimal("0.001"))
+            )
+            net_ret = gross_ret - rtc
+            trades.append(SearchTrade(
+                ticker=ticker,
+                entry_date=pos["entry_date"],
+                entry_price=entry_price,
+                exit_date=close_date,
+                exit_price=exit_price,
+                pnl_pct=net_ret,
+                direction="LONG",
+                exit_reason=exit_reason,
+            ))
+            trades_for_diag.append({
+                "ticker": ticker,
+                "entry_date": pos["entry_date"],
+                "exit_date": close_date,
+                "entry_price": entry_price,
+                "exit_price": exit_price,
+                "pnl_pct": net_ret,
+                "direction": "LONG",
+            })
+            del open_positions[ticker]
+
+    prev_armed = False
+    for d in sorted_dates:
+        armed = armed_for_date[d]
+        if not armed:
+            if open_positions:
+                _close_all(d, exit_reason="STRESS_COUNT_BELOW_THRESHOLD")
+            prev_armed = armed
+            continue
+        # armed is True. Open on transition (prev False → curr True).
+        if not prev_armed and not open_positions:
+            for ticker, _weight in BASKET_WEIGHTS_DEFAULT.items():
+                price_series = context.etf_prices.get(ticker)
+                if price_series is None or len(price_series) == 0:
+                    continue
+                sub = price_series.loc[
+                    price_series.index <= pd.Timestamp(d)
+                ].dropna()
+                if len(sub) == 0:
+                    continue
+                entry_price = float(sub.iloc[-1])
+                open_positions[ticker] = {
+                    "entry_date": d,
+                    "entry_price": entry_price,
+                }
+        prev_armed = armed
+
+    if open_positions:
+        _close_all(sorted_dates[-1], exit_reason="BACKTEST_END")
+
+    sharpe, pf, max_dd = _compute_summary(trades)
+
+    if trade_log_path is not None:
+        write_trade_log_csv(trade_log_path, trades)
+
+    prices_for_diag = (
+        context.etf_prices.get("SPY", pd.Series(dtype=float))
+        .to_frame(name="close").rename_axis("date").reset_index()
+    )
+    prices_for_diag["ticker"] = "SPY"
+    parameters = {
+        "activation_score_threshold": int(_activation_score_threshold()),
+        "bear_score_mode": effective_mode,
+        "macro_stress_signal_count": int(threshold_count),
+        "vix_stress_threshold": float(vix_th),
+        "hy_spread_stress_threshold_bps": float(hy_th_bps),
+        "sahm_stress_threshold": float(sahm_th),
+        "yield_curve_inversion_threshold": float(yc_th),
+    }
+    return compute_search_metrics(
+        engine="sentinel",
+        parameters=parameters,
+        trades_for_diag=trades_for_diag,
+        sharpe=sharpe,
+        profit_factor=pf,
+        max_drawdown=max_dd,
+        n_trials=len(parameters),
+        price_data=prices_for_diag,
+        rubric_inputs={
+            "lookahead_clean": True,
+            "survivorship_inclusive": True,
+            "pit_fundamentals": True,
+            "regime_coverage": False,
+            "monte_carlo_drawdown": True,
+        },
+        search_trades=trades,
+    )
+
+
 async def run_for_search(
     *,
     db_url: str,
@@ -1224,13 +1629,27 @@ LAB_TARGET = LabTarget(
         # a range/grid). Spec:
         # docs/superpowers/specs/2026-05-20-sentinel-maxdd-lab-candidate.md
         "activation_score_threshold": (60, 55, "choice:60,55"),
-        # sentinel_bear_score candidate (THIS spec): legacy default
-        # "current" (binary activation) vs the single graduated
-        # five-factor composite variant "graduated". (low, high) are the
-        # established (0, 0) placeholder for choice: kinds; the runtime
-        # values are read from kind.split(":",1)[1].split(","). Spec:
+        # sentinel_bear_score / sentinel_macro_stress_gate dispatch knob.
+        # ``current`` (binary activation) is the legacy live-path default.
+        # ``graduated`` (sentinel_bear_score candidate) is the five-factor
+        # composite path. ``macro_stress_count`` (sentinel_macro_stress_gate
+        # candidate, post-2026-05-22) is the multi-signal-count path. Specs:
         # docs/superpowers/specs/2026-05-21-sentinel-bear-score-lab-candidate.md
-        "bear_score_mode": (0, 0, "choice:current,graduated"),
+        # finder run_id 91100f12-0674-41dc-9b2b-09c00cc5e507
+        "bear_score_mode": (
+            0, 0, "choice:current,graduated,macro_stress_count",
+        ),
+        # ── sentinel_macro_stress_gate knobs ─────────────────────────
+        # Active ONLY when bear_score_mode == "macro_stress_count".
+        # Sampled INDEPENDENTLY (the Lab sampler does not coordinate
+        # them with the mode dispatch); when the mode is "current" or
+        # "graduated" the values are stored on overrides but the count
+        # branch is never entered so they do not affect the run.
+        "macro_stress_signal_count": (0, 0, "choice:2,3,4"),
+        "vix_stress_threshold": (18.0, 30.0, "float"),
+        "hy_spread_stress_threshold_bps": (300.0, 500.0, "float"),
+        "sahm_stress_threshold": (0.2, 0.5, "float"),
+        "yield_curve_inversion_threshold": (-0.5, 0.0, "float"),
     },
     run_for_search=run_for_search,
     load_window_context=load_sentinel_window_context,

@@ -187,27 +187,61 @@ def test_unknown_bear_score_mode_falls_back_to_legacy() -> None:
         ctx, overrides={"bear_score_mode": ""})) == golden
 
 
-def test_lab_target_carries_both_pre_registered_toggles() -> None:
-    """Compliance §13: the LAB_TARGET carries TWO sibling toggles:
+def test_lab_target_carries_all_pre_registered_toggles() -> None:
+    """Compliance §13: the LAB_TARGET carries the sibling toggles for
+    every Sentinel Lab candidate currently in flight:
 
-    1. ``activation_score_threshold`` — the sibling ``sentinel_maxdd``
-       candidate's pre-registered ``choice:60,55`` toggle (MERGED).
-    2. ``bear_score_mode`` — THIS candidate's pre-registered
-       ``choice:current,graduated`` toggle.
+    1. ``activation_score_threshold`` — sibling ``sentinel_maxdd``
+       (MERGED) ``choice:60,55``.
+    2. ``bear_score_mode`` — dispatch knob for
+       ``sentinel_bear_score`` (``graduated``) AND
+       ``sentinel_macro_stress_gate`` (``macro_stress_count``);
+       ``choice:current,graduated,macro_stress_count`` with the legacy
+       default ``"current"``.
+    3. ``macro_stress_signal_count`` + four per-signal float thresholds
+       (vix / hy-spread / sahm / yield-curve) — the
+       ``sentinel_macro_stress_gate`` candidate's surface (post-2026-05-22).
 
-    Both default to their legacy value in ``default_params()`` so the
-    dossier ``param_diff`` carries the true ``legacy → variant`` delta
-    for whichever candidate is being probed.
+    Every key defaults to its legacy value in ``default_params()`` so
+    the dossier ``param_diff`` carries the true ``legacy → variant``
+    delta for whichever candidate is being probed.
     """
     from sentinel.backtest import LAB_TARGET, default_params
     from tpcore.lab.target import LabPrimaryMetric
 
     assert set(LAB_TARGET.param_ranges.keys()) == {
-        "activation_score_threshold", "bear_score_mode",
+        "activation_score_threshold",
+        "bear_score_mode",
+        "macro_stress_signal_count",
+        "vix_stress_threshold",
+        "hy_spread_stress_threshold_bps",
+        "sahm_stress_threshold",
+        "yield_curve_inversion_threshold",
     }
     assert LAB_TARGET.param_ranges["bear_score_mode"] == (
-        0, 0, "choice:current,graduated")
-    assert default_params()["bear_score_mode"] == "current"
+        0, 0, "choice:current,graduated,macro_stress_count")
+    assert LAB_TARGET.param_ranges["macro_stress_signal_count"] == (
+        0, 0, "choice:2,3,4")
+    # Each per-signal threshold is an INDEPENDENT float (not a choice);
+    # the Lab sampler explores the range when the count branch is active.
+    for k in (
+        "vix_stress_threshold",
+        "hy_spread_stress_threshold_bps",
+        "sahm_stress_threshold",
+        "yield_curve_inversion_threshold",
+    ):
+        assert LAB_TARGET.param_ranges[k][2] == "float", (
+            f"{k} must be a float-range Lab knob"
+        )
+    # Defaults match the live-path legacy values (count branch is OFF
+    # at default — bear_score_mode defaults to "current").
+    dp = default_params()
+    assert dp["bear_score_mode"] == "current"
+    assert dp["macro_stress_signal_count"] == 3
+    assert dp["vix_stress_threshold"] == 22.0
+    assert dp["hy_spread_stress_threshold_bps"] == 400.0
+    assert dp["sahm_stress_threshold"] == 0.3
+    assert dp["yield_curve_inversion_threshold"] == 0.0
     # SP-E: Sentinel's success bar remains drawdown reduction, NOT Sharpe.
     assert LAB_TARGET.primary_metric == LabPrimaryMetric.MAXDD_REDUCTION
 
