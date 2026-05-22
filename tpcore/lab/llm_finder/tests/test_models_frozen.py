@@ -62,7 +62,7 @@ def test_constants_pinned_per_spec() -> None:
     assert MIN_TRADE_COUNT_FOR_NO_VERDICT == 30
     assert DEFAULT_COST_BPS_ROUNDTRIP_T1 == 8
     assert DEFAULT_COST_BPS_ROUNDTRIP_T2 == 12
-    assert PERSONA_VERSION == "v2.1"
+    assert PERSONA_VERSION == "v2.2"
 
 
 def test_mandatory_bundles_present() -> None:
@@ -422,7 +422,7 @@ def test_finder_run_minimal() -> None:
         snapshot_regime_tuple_id=_compute_regime_tuple_id(
             "normal", "range", "expansion", "neutral"
         ),
-        persona_version="v2.1",
+        persona_version="v2.2",
         reference_bundles=("dsr_ntrials_discipline", "regime_aware_trading"),
         analysis_turn_count=3,
         proposed_spec_count=1,

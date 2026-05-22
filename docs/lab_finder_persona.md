@@ -114,6 +114,7 @@ Per `dsr_ntrials_discipline.md` (mandatory-always-include):
 - `expected_trials` claim is not pre-registered (single primary hypothesis, single primary metric, single threshold).
 - Requires un-ingested data (institutional positioning / vol surface / FX) — flag the gap, suggest DFCR, don't emit a hypothesis you can't actually backtest.
 - `engine_add_path` smuggle in rationale (v1.5 scope; the validator rejects but don't waste a turn).
+- `target_engine='canary'`. Canary is the platform's end-to-end heartbeat — non-graduating per spec §4b, never calls `write_credibility_score`, has no graduation gate to satisfy. Pick from `{reversion, vector, momentum, sentinel, catalyst}` only. (Operator directive 2026-05-22.)
 
 **Prefer:**
 - Conditional hypotheses on regime axes + cycle position.
