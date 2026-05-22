@@ -39,6 +39,7 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
+from tpcore.feeds import freshness_max_age_days
 from tpcore.quality.validation.models import CheckResult, FailureDetail
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -59,8 +60,20 @@ CRITICAL_TICKERS: tuple[str, ...] = (
     "PSQ",          # Sentinel basket
     "GLD",          # Sentinel basket
 )
-CRITICAL_MAX_AGE_DAYS = 5     # calendar days; ~3 trading days
-UNIVERSE_MAX_AGE_DAYS = 14    # calendar days
+# Single-source-of-truth: tpcore.feeds.profile FeedProfile for prices_daily.
+# A future bump in the profile propagates here automatically — no second
+# place to forget to update. The 5d default is the SoT-fallback (drift
+# sentinel would already be red if the profile entry were missing).
+CRITICAL_MAX_AGE_DAYS = freshness_max_age_days("prices_daily", 5)
+# Universe-wide max-age — looser than the critical-ticker window because
+# some legitimate names (in-flight delistings before the delist_stale ops
+# stage picks them up, low-liquidity tail tickers) can sit behind the
+# critical window without being broken. 14d is the historical operator-
+# tuned value; no separate FeedProfile entry exists for it (the profile
+# tracks the critical/SLA threshold, not the universe-tail tolerance). If
+# a profile facet ever models the universe-tail separately, this constant
+# becomes a second freshness_max_age_days() call.
+UNIVERSE_MAX_AGE_DAYS = 14
 UNIVERSE_STALE_PCT_MAX = 0.02  # 2% of the active universe
 
 # Coverage-collapse guard (added 2026-05-15 after the daily_bars
