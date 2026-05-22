@@ -61,7 +61,9 @@ import structlog
 from tpcore.backtest.credibility import (
     CREDIBILITY_SOURCE_PREFIX,
     MIN_LIVE_SCORE,
+    MIN_PAPER_SCORE,
 )
+from tpcore.engine_profile import LifecycleState, profile_for
 from tpcore.supervisor_state import (
     HELD_EVENT,
     SCHEMA_VERSION,
@@ -95,13 +97,21 @@ _LIFECYCLE_DEGRADED_THRESHOLD: int = int(
 
 # Lifecycle health is encoded into ``data_quality_log.confidence`` as a
 # 0..1 float (mirrors the credibility shape — score/100). The
-# degraded floor is the same MIN_LIVE_SCORE/100 default (0.60) so a
-# single source-of-truth threshold gates both rows. Env-tunable for
-# the engine roster's first month of Wave-4 in case the operator
-# wants a different floor.
-_LIFECYCLE_DEGRADED_FLOOR_PCT: float = float(
+# degraded floor defaults are now mode-aware (PR feat/lifecycle-pause-
+# mode-aware-credibility-floor, 2026-05-22) — PAPER engines get the
+# MIN_PAPER_SCORE floor (autonomous-Lab admit pathway lands engines at
+# ~0.40-0.50; immediate pause defeats paper trade-history accumulation),
+# LIVE engines retain the MIN_LIVE_SCORE floor. Env-tunable knobs below
+# still override the default for operator runtime control.
+_LIFECYCLE_DEGRADED_FLOOR_PCT_LIVE: float = float(
     os.environ.get(
         "ENGINE_LIFECYCLE_DEGRADED_FLOOR_PCT", str(MIN_LIVE_SCORE / 100),
+    )
+)
+_LIFECYCLE_DEGRADED_FLOOR_PCT_PAPER: float = float(
+    os.environ.get(
+        "ENGINE_LIFECYCLE_DEGRADED_FLOOR_PCT_PAPER",
+        str(MIN_PAPER_SCORE / 100),
     )
 )
 
@@ -114,6 +124,68 @@ ENGINE_LIFECYCLE_SOURCE_PREFIX: str = "engine_lifecycle"
 
 _BEHAVIORAL_CREDIBILITY: str = "behavioral_credibility"
 _BEHAVIORAL_LIFECYCLE: str = "behavioral_lifecycle"
+
+
+def _credibility_floor_pct_for(engine: str) -> tuple[float, int, str]:
+    """Resolve the mode-aware credibility-drop floor (E7) for an engine.
+
+    Returns ``(floor_pct, floor_score, applied_state)`` where:
+
+    * ``floor_pct`` is the 0..1 threshold to compare ``confidence``
+      against (strict ``<``);
+    * ``floor_score`` is the same value as a 0..100 int for human-
+      readable payload/message rendering;
+    * ``applied_state`` is the LifecycleState string used to pick
+      the floor (e.g. ``"paper"``, ``"live"``) — surfaced in the
+      pause-event payload for operator debugging clarity.
+
+    Behaviour:
+
+    * ``LifecycleState.PAPER`` → ``MIN_PAPER_SCORE`` (0.30 default).
+      Paper engines are admitted via the autonomous-Lab criteria
+      (PR #158) at credibility ~0.40-0.50; gating them at 0.60
+      bricks paper trade-history accumulation, which is the whole
+      point of paper trading. Operator directive 2026-05-22.
+    * ``LifecycleState.LIVE`` → ``MIN_LIVE_SCORE`` (0.60 default).
+      Live-promoted engines retain the strict gate.
+    * Unprofiled / ``LifecycleState.LAB`` / ``LifecycleState.RETIRED``
+      / any other state → ``MIN_LIVE_SCORE``. Conservative default:
+      unprofiled engines (e.g. canary smoke-test names that bypass
+      the SoT) get the strict floor so an out-of-band engine cannot
+      accidentally evade the pause. RETIRED engines are never
+      dispatched anyway (engine_profile filters them out of the
+      roster) so the floor value is inert; LAB engines likewise.
+    """
+    profile = profile_for(engine)
+    if profile is not None and profile.lifecycle_state is LifecycleState.PAPER:
+        return MIN_PAPER_SCORE / 100, MIN_PAPER_SCORE, LifecycleState.PAPER.value
+    # Conservative default for LIVE, LAB, RETIRED, and unprofiled engines.
+    state_value = (
+        profile.lifecycle_state.value if profile is not None else "unprofiled"
+    )
+    return MIN_LIVE_SCORE / 100, MIN_LIVE_SCORE, state_value
+
+
+def _lifecycle_floor_pct_for(engine: str) -> tuple[float, str]:
+    """Resolve the mode-aware lifecycle-degraded floor (E11) for an engine.
+
+    Mirrors :func:`_credibility_floor_pct_for` shape but returns
+    ``(floor_pct, applied_state)`` (E11 surfaces the float floor, not
+    a 0..100 score, in its existing payload).
+
+    PAPER → ``_LIFECYCLE_DEGRADED_FLOOR_PCT_PAPER``;
+    LIVE / LAB / RETIRED / unprofiled → ``_LIFECYCLE_DEGRADED_FLOOR_PCT_LIVE``.
+    """
+    profile = profile_for(engine)
+    if profile is not None and profile.lifecycle_state is LifecycleState.PAPER:
+        return (
+            _LIFECYCLE_DEGRADED_FLOOR_PCT_PAPER,
+            LifecycleState.PAPER.value,
+        )
+    state_value = (
+        profile.lifecycle_state.value if profile is not None else "unprofiled"
+    )
+    return _LIFECYCLE_DEGRADED_FLOOR_PCT_LIVE, state_value
 
 
 _INSERT_APP_LOG_SQL = """
@@ -261,10 +333,19 @@ async def check_credibility_drop(
 
     Reads the most-recent ``threshold`` rows of
     ``platform.data_quality_log`` for source
-    ``f"{CREDIBILITY_SOURCE_PREFIX}.{engine}"``. If every row's
-    ``confidence < MIN_LIVE_SCORE/100``, emits
+    ``f"{CREDIBILITY_SOURCE_PREFIX}.{engine}"``. The floor is MODE-AWARE
+    per the engine's ``EngineProfile.lifecycle_state``:
+
+    * PAPER → ``MIN_PAPER_SCORE`` (0.30 default) — paper engines accumulate
+      trade history; gating on the live-promotion floor bricks the
+      autonomous-Lab admit pathway (PR #158, operator directive 2026-05-22).
+    * LIVE / LAB / RETIRED / unprofiled → ``MIN_LIVE_SCORE`` (0.60 default).
+
+    If every row's ``confidence < floor_pct``, emits
     ``ENGINE_CREDIBILITY_DROP`` + ``ENGINE_HELD`` (failure_class
-    ``behavioral_credibility``).
+    ``behavioral_credibility``). The detection-event payload includes
+    ``applied_floor_score`` + ``applied_lifecycle_state`` so the operator
+    can attribute the pause to the floor that fired.
 
     The "one-hold rule" is observed: if any uncleared hold already
     exists for this engine (regardless of failure_class), the check
@@ -288,14 +369,15 @@ async def check_credibility_drop(
     confidences = await _read_recent_confidences(
         pool, source=source, limit=required_n,
     )
-    threshold_pct = MIN_LIVE_SCORE / 100
+    threshold_pct, floor_score, applied_state = _credibility_floor_pct_for(engine)
     if not _all_degraded(
         confidences, threshold_pct=threshold_pct, required_n=required_n,
     ):
         return False
     reason = (
         f"{required_n} consecutive credibility scores < "
-        f"{MIN_LIVE_SCORE}/100 (latest={confidences[0]:.3f})"
+        f"{floor_score}/100 (latest={confidences[0]:.3f}, "
+        f"lifecycle={applied_state})"
     )
     await _emit_pause(
         pool,
@@ -305,7 +387,9 @@ async def check_credibility_drop(
         reason=reason,
         detection_payload={
             "threshold_consecutive_cycles": required_n,
-            "floor_score": MIN_LIVE_SCORE,
+            "floor_score": floor_score,
+            "applied_floor_score": floor_score,
+            "applied_lifecycle_state": applied_state,
             "recent_confidences": [round(c, 4) for c in confidences],
             "source": source,
         },
@@ -324,9 +408,18 @@ async def check_lifecycle_degraded(
 
     Reads the most-recent ``threshold`` rows of
     ``platform.data_quality_log`` for source
-    ``f"{ENGINE_LIFECYCLE_SOURCE_PREFIX}.{engine}"``. If every row's
-    ``confidence < floor_pct``, emits ``ENGINE_LIFECYCLE_DEGRADED`` +
-    ``ENGINE_HELD`` (failure_class ``behavioral_lifecycle``).
+    ``f"{ENGINE_LIFECYCLE_SOURCE_PREFIX}.{engine}"``. The floor is
+    MODE-AWARE per the engine's ``EngineProfile.lifecycle_state``:
+
+    * PAPER → ``_LIFECYCLE_DEGRADED_FLOOR_PCT_PAPER`` (0.30 default).
+    * LIVE / LAB / RETIRED / unprofiled → ``_LIFECYCLE_DEGRADED_FLOOR_PCT_LIVE``
+      (0.60 default).
+
+    Caller-supplied ``floor_pct`` always wins (test-injection +
+    operator-on-demand probes). If every row's ``confidence < floor_pct``,
+    emits ``ENGINE_LIFECYCLE_DEGRADED`` + ``ENGINE_HELD`` (failure_class
+    ``behavioral_lifecycle``). The detection-event payload includes
+    ``applied_lifecycle_state`` for operator debugging clarity.
 
     One-hold rule observed. Returns ``True`` iff a fresh pause was
     emitted.
@@ -342,7 +435,11 @@ async def check_lifecycle_degraded(
     required_n = threshold if threshold is not None else _LIFECYCLE_DEGRADED_THRESHOLD
     if required_n <= 0:
         return False
-    threshold_pct = floor_pct if floor_pct is not None else _LIFECYCLE_DEGRADED_FLOOR_PCT
+    if floor_pct is not None:
+        threshold_pct = floor_pct
+        applied_state = "caller_override"
+    else:
+        threshold_pct, applied_state = _lifecycle_floor_pct_for(engine)
 
     hold = await current_hold(pool, engine)
     if hold is not None:
@@ -358,7 +455,8 @@ async def check_lifecycle_degraded(
         return False
     reason = (
         f"{required_n} consecutive lifecycle scores < "
-        f"{threshold_pct:.3f} (latest={confidences[0]:.3f})"
+        f"{threshold_pct:.3f} (latest={confidences[0]:.3f}, "
+        f"lifecycle={applied_state})"
     )
     await _emit_pause(
         pool,
@@ -369,6 +467,7 @@ async def check_lifecycle_degraded(
         detection_payload={
             "threshold_consecutive_cycles": required_n,
             "floor_pct": threshold_pct,
+            "applied_lifecycle_state": applied_state,
             "recent_confidences": [round(c, 4) for c in confidences],
             "source": source,
         },

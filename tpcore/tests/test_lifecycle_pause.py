@@ -97,6 +97,15 @@ async def test_credibility_drop_no_pool_returns_false() -> None:
 
 
 async def test_credibility_drop_three_sub_floor_rows_pauses() -> None:
+    """A LIVE-state engine (sigma is RETIRED but its lifecycle state
+    routes to the live floor — see ``_credibility_floor_pct_for``)
+    pauses when three consecutive scores fall below the 0.60 floor.
+
+    Reversion is a PAPER engine so it now uses the lower paper floor
+    (0.30) — its 0.45/0.50/0.55 history is ABOVE that floor and does
+    NOT pause. The mode-aware behaviour is exercised end-to-end in
+    ``test_lifecycle_pause_mode_aware.py``.
+    """
     pool = _FakePool()
     # current_hold's fetchrow returns None ⇒ no existing hold.
     pool.conn.fetchrow_queue.append(None)
@@ -108,7 +117,10 @@ async def test_credibility_drop_three_sub_floor_rows_pauses() -> None:
             _confidence_row(0.55, datetime(2026, 5, 20, 12, 0, tzinfo=UTC)),
         ]
     )
-    paused = await check_credibility_drop(pool, engine="reversion")
+    # Use an unprofiled engine name so the conservative-default floor
+    # (MIN_LIVE_SCORE=0.60) applies — preserves the legacy "60 floor
+    # trips on 0.45/0.50/0.55" assertion contract.
+    paused = await check_credibility_drop(pool, engine="unprofiled_test_engine")
     assert paused is True
     inserts = _app_log_inserts(pool.conn)
     # One ENGINE_CREDIBILITY_DROP + one ENGINE_HELD.
@@ -125,9 +137,12 @@ async def test_credibility_drop_three_sub_floor_rows_pauses() -> None:
         args for (_, args) in inserts if args[2] == ENGINE_CREDIBILITY_DROP_EVENT
     )
     drop_payload = json.loads(drop[5])
-    assert drop_payload["source"] == "backtest_credibility.reversion"
+    assert drop_payload["source"] == "backtest_credibility.unprofiled_test_engine"
     assert drop_payload["recent_confidences"] == [0.45, 0.50, 0.55]
     assert drop_payload["floor_score"] == 60
+    # Mode-aware payload includes which lifecycle state was applied.
+    assert drop_payload["applied_lifecycle_state"] == "unprofiled"
+    assert drop_payload["applied_floor_score"] == 60
 
 
 async def test_credibility_drop_one_above_floor_is_noop() -> None:
@@ -140,7 +155,9 @@ async def test_credibility_drop_one_above_floor_is_noop() -> None:
             _confidence_row(0.55, datetime(2026, 5, 20, 12, 0, tzinfo=UTC)),
         ]
     )
-    paused = await check_credibility_drop(pool, engine="reversion")
+    # Unprofiled engine → live floor (0.60). 0.70 in the window is
+    # above the live floor so the window is NOT all-degraded.
+    paused = await check_credibility_drop(pool, engine="unprofiled_test_engine")
     assert paused is False
     assert _app_log_inserts(pool.conn) == []
 
@@ -193,7 +210,12 @@ async def test_lifecycle_degraded_five_sub_floor_rows_pauses() -> None:
             for i in range(5)
         ]
     )
-    paused = await check_lifecycle_degraded(pool, engine="vector")
+    # Use unprofiled engine so the conservative-default live floor
+    # (0.60) applies — preserves "0.40 below floor → pause" assertion.
+    # Vector is a PAPER engine and its paper floor (0.30) would keep
+    # the 0.40 window above the floor; the PAPER-floor case is covered
+    # in test_lifecycle_pause_mode_aware.py.
+    paused = await check_lifecycle_degraded(pool, engine="unprofiled_test_engine")
     assert paused is True
     inserts = _app_log_inserts(pool.conn)
     events = [args[2] for (_, args) in inserts]
@@ -202,6 +224,14 @@ async def test_lifecycle_degraded_five_sub_floor_rows_pauses() -> None:
     held = next(args for (_, args) in inserts if args[2] == HELD_EVENT)
     payload = json.loads(held[5])
     assert payload["failure_class"] == "behavioral_lifecycle"
+    # E11 detection-event payload carries the applied lifecycle state.
+    degraded = next(
+        args
+        for (_, args) in inserts
+        if args[2] == ENGINE_LIFECYCLE_DEGRADED_EVENT
+    )
+    degraded_payload = json.loads(degraded[5])
+    assert degraded_payload["applied_lifecycle_state"] == "unprofiled"
 
 
 async def test_lifecycle_degraded_existing_hold_skips() -> None:
@@ -230,8 +260,9 @@ async def test_lifecycle_degraded_explicit_threshold_overrides_default() -> None
         ]
     )
     # Lower the threshold to 2 → 2 sub-floor rows trip the pause.
+    # Unprofiled engine name → conservative live floor (0.60); 0.40 < 0.60.
     paused = await check_lifecycle_degraded(
-        pool, engine="vector", threshold=2,
+        pool, engine="unprofiled_test_engine", threshold=2,
     )
     assert paused is True
 

@@ -48,6 +48,15 @@ logger = structlog.get_logger(__name__)
 # Minimum score required to permit live promotion.
 MIN_LIVE_SCORE = 60
 
+# Minimum score for engines in LifecycleState.PAPER — the Wave-4 E7/E11
+# lifecycle-pause floor applies this lower bar to paper-trading engines
+# so the autonomous-Lab admit pathway (PR #158, credibility ~0.40-0.50
+# at admit time) can accumulate trade history without immediate pause.
+# MIN_LIVE_SCORE stays the live-promotion gate (Lab → LIVE).
+# Operator directive 2026-05-22: paper engines must NOT be paused by
+# the live-promotion floor.
+MIN_PAPER_SCORE = 30
+
 # Source-prefix used when each engine's backtest writes its credibility
 # score to platform.data_quality_log. The full source key is
 # ``f"{CREDIBILITY_SOURCE_PREFIX}.{engine_name}"``.
