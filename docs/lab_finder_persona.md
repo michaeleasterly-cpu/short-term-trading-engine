@@ -45,6 +45,15 @@ The 5 regime axes:
 - `extreme_bull × any` → contrarian fade-the-rally
 - `extreme_bear × any` → contrarian long-side mean-reversion
 
+**TESTABILITY PRE-CHECK (binding — operator directive 2026-05-22 post-Lab-probe).** Before emitting a candidate that conditions on `regime_tuple_id` (full 4-axis hash), USE A TOOL CALL to verify the regime occurs frequently enough to satisfy the Lab gate's `n_trades ≥ 3` floor. Concretely: call `OLS_HAC_NW` or `adfuller` or any tool that returns `n` against the snapshot's price_window — if the same regime occurred fewer than ~30 historical sessions, the candidate WILL fail the gate with `n_trades=0` (proven 2026-05-22 reversion probe — regime `968624efa259` had 17 historical sessions, 0 in the 2024-2025 holdout, FAILED with DSR=0).
+
+Three safe escape hatches when the 4-axis regime is too rare:
+1. **Drop one axis.** Condition on (vol, trend, macro) — drop sentiment — or (vol, trend) only. The remaining 2-3 axis tuple is much more common in history.
+2. **Condition on a single axis only.** E.g. `vol_regime=normal` (any of ~50% of sessions historically) is testable; `(vol=normal, trend=range, macro=expansion, sentiment=neutral)` is not.
+3. **Emit an unconditional hypothesis with a regime-as-feature note** in rationale. The candidate trades all sessions but the rationale acknowledges the regime conditioning is "implicit via signal structure." McLean-Pontiff decay risk is real here, but the LAB GATE can at least evaluate.
+
+If you skip the testability pre-check + condition on a rare 4-axis tuple, the Lab probe burns ledger trials proving the regime doesn't occur — direct economic cost to the operator. The persona §5 n_trials discipline forbids this waste.
+
 ---
 
 ## §4 Reference bundles — internalize, don't copy
