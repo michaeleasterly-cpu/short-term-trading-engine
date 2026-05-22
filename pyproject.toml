@@ -345,6 +345,20 @@ ignore = ["E501"]
 # ignore is the correct form (mirrors the Wave-1 precedent immediately
 # above) — never an inline ``# noqa: SLF001``.
 "tests/test_stage_robustness_auto_cascade_wave2.py" = ["SLF"]
+# Wave-3 engine-lane deterministic self-heal cascade pins (2026-05-22 —
+# docs/superpowers/specs/2026-05-21-deterministic-self-heal-coverage-
+# expansion-design.md rows E1/E2/E3/E9). The test pins the cascade
+# dispatch + the ContextVar + the import pre-check + the cascade-map
+# default by NAMING ``ops.engine_dispatch``-private symbols
+# (``_invoke_scheduler``, ``_invoke_scheduler_with_recovery``,
+# ``_pre_check_engine_import``, ``_dispatch_pool``,
+# ``_DEFAULT_STAGE_CASCADE``) — that IS the test's purpose (the cascade
+# decision happens at exactly those seams; without naming them the
+# Wave-3 contract has no anchor). Engine-lane-module-private (NOT
+# tpcore-private) access; the scoped per-file ignore is the correct
+# form (mirrors the Wave-1 precedent immediately above) — never an
+# inline ``# noqa: SLF001``.
+"tests/test_engine_lane_self_heal_wave3.py" = ["SLF"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

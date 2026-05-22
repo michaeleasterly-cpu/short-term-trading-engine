@@ -46,6 +46,7 @@ from reversion.models import (
     SetupCandidate,
 )
 from tpcore.backtest.filter_diagnostics import FilterDiagnostics
+from tpcore.engine.transient_retry import fetch_with_transient_retry
 from tpcore.interfaces.data import Bar, DataProviderInterface
 from tpcore.interfaces.engine_plug import BaseEnginePlug
 
@@ -329,7 +330,17 @@ class ReversionSetupDetection(BaseEnginePlug):
 
         candidates: list[SetupCandidate] = []
         for symbol in self._universe:
-            bars = await self._data.get_daily_bars(symbol, start, as_of)
+            # Wave-3 E2: per-symbol panel-load with transient-DB retry
+            # (3 attempts + exponential backoff). A transient pool blip
+            # used to escalate straight out of the plug; now the cycle
+            # absorbs the blip and continues. Non-transient exceptions
+            # propagate unchanged (no behavior delta on real failures).
+            bars = await fetch_with_transient_retry(
+                lambda symbol=symbol: self._data.get_daily_bars(
+                    symbol, start, as_of),
+                engine=self.engine_name,
+                op="get_daily_bars",
+            )
             try:
                 cand = self._evaluate(symbol, as_of, bars, spy_z=spy_z, vix=vix, diag=diag)
             except Exception as exc:  # pragma: no cover - defensive
@@ -345,7 +356,14 @@ class ReversionSetupDetection(BaseEnginePlug):
     async def _market_context(self, start: date, as_of: date) -> tuple[float, float]:
         """Compute SPY z-score and the VIX value (or its realized-vol proxy)."""
         try:
-            spy_bars = await self._data.get_daily_bars(SPY_SYMBOL, start, as_of)
+            # Wave-3 E2: SPY context fetch with transient-DB retry. SPY
+            # is the gate symbol — losing it on a transient blip used to
+            # NaN out the whole market-context branch.
+            spy_bars = await fetch_with_transient_retry(
+                lambda: self._data.get_daily_bars(SPY_SYMBOL, start, as_of),
+                engine=self.engine_name,
+                op="get_daily_bars[SPY]",
+            )
         except Exception as exc:
             logger.warning("reversion.setup.spy_fetch_failed", error=str(exc))
             return float("nan"), float("nan")
@@ -356,7 +374,15 @@ class ReversionSetupDetection(BaseEnginePlug):
 
         # Try real VIX first, fall back to SPY realized-vol proxy.
         try:
-            vix_bars = await self._data.get_daily_bars(VIX_PROXY_SYMBOL, start, as_of)
+            # Wave-3 E2: VIX fetch with transient-DB retry. A transient
+            # blip here used to force the proxy path even when real VIX
+            # was about to come back on attempt #2.
+            vix_bars = await fetch_with_transient_retry(
+                lambda: self._data.get_daily_bars(
+                    VIX_PROXY_SYMBOL, start, as_of),
+                engine=self.engine_name,
+                op="get_daily_bars[VIX]",
+            )
             vix_df = _bars_to_frame(vix_bars)
             if len(vix_df) > 0:
                 vix = float(vix_df["close"].iloc[-1])
