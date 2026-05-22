@@ -51,11 +51,21 @@ except Exception:  # pragma: no cover - defensive
         """Local fallback if the shared symbol is unreachable."""
 
 
+# Finder needs larger output budget than data-triage. Full AnalysisResult
+# with 1-3 ProposedSpecs + falsification criteria + evidence refs +
+# rationale CAN exceed 8000 chars at the structural caps: each spec is
+# up to 4096 (rationale) + 2048 (hypothesis) + 2048 (falsification) =
+# ~8k chars; finder_rationale max 8192. Sonnet 4.6 caps at 8192 output
+# tokens. We use the max + the prompt nudges for ONE best candidate
+# rather than 3 to fit reliably.
+EDGE_FINDER_MAX_TOKENS: int = 8192
+
+
 def make_sdk_llm_callable(
     client: AsyncAnthropic | None = None,
     *,
     model: str = ANTHROPIC_MODEL,
-    max_tokens: int = ANTHROPIC_MAX_TOKENS,
+    max_tokens: int = EDGE_FINDER_MAX_TOKENS,
 ) -> LLMCallable:
     """Return an async LLM callable bound to the Anthropic SDK.
 

@@ -110,4 +110,52 @@ async def record_finder_action(
     )
 
 
-__all__ = ["record_finder_action", "record_finder_run"]
+_FINDER_EMISSION_INSERT_SQL = """
+    INSERT INTO platform.application_log
+        (engine, run_id, event_type, severity, message, data)
+    VALUES
+        ('llm_edge_finder', $1, 'LAB_FINDER_EMISSION', 'INFO',
+         $2, $3::jsonb)
+"""
+
+
+async def record_finder_emission(
+    pool: asyncpg.Pool,
+    *,
+    run_id: str,
+    spec_index: int,
+    spec_dict: dict,
+) -> None:
+    """Write ONE LAB_FINDER_EMISSION row per ProposedSpec the LLM emitted.
+
+    The operator inspects these to judge structural distinctness against
+    the 4 failed deep-research candidates (per spec §10.6.b gate pilot).
+    Each row carries the FULL ProposedSpec content (rationale, hypothesis,
+    falsification, evidence refs) as JSON in the `data` column.
+    """
+    import uuid as _uuid
+    try:
+        rid_uuid = _uuid.UUID(run_id)
+    except (ValueError, AttributeError):
+        rid_uuid = _uuid.UUID(int=0)
+    candidate = spec_dict.get("candidate_name", "?")
+    target = spec_dict.get("target_engine", "?")
+    message = f"emission[{spec_index}] candidate={candidate} target={target}"
+    async with pool.acquire() as conn:
+        await conn.execute(
+            _FINDER_EMISSION_INSERT_SQL, rid_uuid, message, json.dumps(spec_dict)
+        )
+    log.info(
+        "finder_emission.recorded",
+        run_id=run_id,
+        spec_index=spec_index,
+        candidate=candidate,
+        target=target,
+    )
+
+
+__all__ = [
+    "record_finder_action",
+    "record_finder_emission",
+    "record_finder_run",
+]
