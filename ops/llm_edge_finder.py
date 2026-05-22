@@ -201,15 +201,38 @@ async def _drive_llm_loop(
         # LLM natural shape: {"tool": "X", "params": {...}} OR
         # {"name": "X", "args": {...}}. Normalize to ToolCall's
         # {"callable_name": "X", "args_json": "..."}.
+        # If the LLM invents a tool name outside the whitelist, the
+        # ToolCall pydantic Literal rejects — we catch + emit a
+        # synthetic ToolResult.error so the LLM sees the rejection in
+        # the transcript and can correct on the next turn.
+        from pydantic import ValidationError
+        validated_calls: list[ToolCall] = []
+        synthetic_errors: list[ToolResult] = []
+        for c in decoded.get("tool_calls", ()):
+            normalized = _normalize_tool_call(c)
+            try:
+                validated_calls.append(ToolCall(**normalized))
+            except ValidationError:
+                synthetic_call = ToolCall(
+                    callable_name="OLS_HAC_NW",  # placeholder; error supersedes
+                    args_json="{}",
+                )
+                synthetic_errors.append(
+                    ToolResult(
+                        call=synthetic_call,
+                        error=f"invalid_tool: {normalized.get('callable_name', '?')[:64]}",
+                    )
+                )
+        # Truncate rationale to the pydantic max_length=4096 (defense
+        # against the LLM producing long-form analysis prose).
+        raw_rationale = decoded.get("rationale", "(empty)")
+        rationale = raw_rationale[:4096] if isinstance(raw_rationale, str) else "(empty)"
         request = AnalysisRequest(
             turn=turn,
-            rationale=decoded.get("rationale", "(empty)"),
-            tool_calls=tuple(
-                ToolCall(**_normalize_tool_call(c))
-                for c in decoded.get("tool_calls", ())
-            ),
+            rationale=rationale,
+            tool_calls=tuple(validated_calls),
         )
-        turn_results: list[ToolResult] = []
+        turn_results: list[ToolResult] = list(synthetic_errors)
         for call in request.tool_calls:
             turn_results.append(dispatch(call, snapshot))
         tool_results_accumulated.extend(turn_results)
@@ -298,12 +321,30 @@ def _compose_user_prompt(
         f"{target_directive}\n\n"
         "# Reference bundles (mandatory + caller-requested)\n\n"
         f"{bundle_blocks}\n\n"
-        "# Output contract\n\n"
+        "# Output contract — JSON envelope only\n\n"
         "Respond ONLY with a JSON envelope. Either:\n"
-        "  {'kind': 'AnalysisRequest', 'rationale': '...', 'tool_calls': [{...}, ...]}\n"
+        "  {'kind': 'AnalysisRequest', 'rationale': '...', 'tool_calls': [{'callable_name': '<one-of-the-14>', 'args_json': '<JSON-encoded-args-object>'}]}\n"
         "OR (when ready to emit):\n"
-        "  {'kind': 'AnalysisResult', 'proposed_specs': [{...}, ...], 'finder_rationale': '...'}\n"
-        "Refer to the persona §7 workflow for what each phase requires."
+        "  {'kind': 'AnalysisResult', 'proposed_specs': [{...}, ...], 'finder_rationale': '...'}\n\n"
+        "## Tool-call whitelist (14 callables — ONLY THESE)\n\n"
+        "The snapshot is ALREADY LOADED. You do NOT query for data — the\n"
+        "tools below operate on the in-scope `snapshot` (price_window /\n"
+        "fundamentals / spreads / sentiment / macro / ledger_state / roster).\n"
+        "Reference `ticker` strings + column names from the snapshot's\n"
+        "rows in args_json.\n\n"
+        "- OLS_HAC_NW: Newey-West-HAC OLS regression. args: {y_ticker, y_series∈[adj_close,log_return], x_tickers:[...], x_series∈[adj_close,log_return], hac_maxlags:int, add_constant:bool}\n"
+        "- adfuller: ADF stationarity test. args: {ticker, series∈[adj_close,log_return], maxlag:int}\n"
+        "- coint: cointegration (pair PRE-REGISTERED, max 3 calls/run). args: {ticker_a, ticker_b, series∈[adj_close,log_return], pair_pre_registered:true}\n"
+        "- ARIMA_1_0_0: bounded ARIMA(1,0,0). args: {ticker, series∈[adj_close,log_return]}\n"
+        "- spearmanr / pearsonr: correlation. args: {ticker_a, ticker_b, series_a, series_b}\n"
+        "- ttest_1samp_HAC: HAC-adjusted one-sample t-test. args: {ticker, series:log_return, popmean, hac_maxlags}\n"
+        "- variance_ratio: Lo-MacKinlay VR. args: {ticker, q:int, series:log_return}\n"
+        "- hurst_exponent: R/S-analysis Hurst. args: {ticker, series:log_return, max_lag:int}\n"
+        "- ljung_box: serial-correlation test. args: {ticker, series:log_return, lags:int}\n"
+        "- rolling_spearmanr / rolling_pearsonr: rolling-window correlation w/ bootstrap CI. args: {ticker_a, ticker_b, window:int, series:log_return}\n"
+        "- fama_macbeth: panel cross-section OLS_HAC_NW wrapper. args: {y_series:log_return, x_tickers:[...], x_series:log_return}\n"
+        "- cost_net_simulation: BINDING outcome gate — compute cost-net Sharpe + bootstrap CI on synthetic entry/exit. args: {ticker, entry_sessions:[ISO-date-strings], exit_sessions:[ISO-date-strings, same length], cost_assumption_bps_roundtrip:float, bootstrap_iterations:int}\n\n"
+        "Refer to the persona §7 workflow for sequencing. NO tool calls outside this whitelist — invalid calls return synthetic errors + count against your 10-turn budget."
     )
 
 

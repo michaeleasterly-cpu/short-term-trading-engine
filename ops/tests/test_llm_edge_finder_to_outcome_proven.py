@@ -163,7 +163,8 @@ async def test_finder_emission_to_outcome_proven_e2e() -> None:
         if kind == "execute" and "LAB_FINDER_RUN" in sql
     ]
     assert len(finder_run_writes) == 1
-    payload = json.loads(finder_run_writes[0][1][0])
+    # LAB_FINDER_RUN SQL: ($1 run_id, $2 data jsonb) — payload at index 1.
+    payload = json.loads(finder_run_writes[0][1][1])
     assert payload["trigger"] == "operator_command"
     assert payload["proposed_spec_count"] == 1
 

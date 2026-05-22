@@ -1027,44 +1027,6 @@ If `notes` lists unfamiliar tickers, run the suite locally to reproduce and read
 
 ---
 
-## 6.5 Self-heal cascade events (deterministic-first, 2026-05-21 → 2026-05-22)
-
-The orchestrator runs deterministic recovery BEFORE the LLM persona sees a failure. Each cascade emits ONE terminal event to `platform.application_log` so the operator can see what happened without spelunking. Catalog:
-
-### Data-lane (Wave 1 + 2 on main)
-
-| Event | Means | What to do |
-|---|---|---|
-| `INGESTION_AUTO_RECOVERED_VALIDATION` | data_validation check red → canonical refresh stage re-ran successfully | Nothing. Self-healed. |
-| `INGESTION_AUTO_RECOVERED_MONOTONE` | earnings_events / sec_insider monotonicity violation → dedupe stage ran | Nothing. Self-healed. |
-| `INGESTION_AUTO_RECOVERED_MACRO_GAP` | macro_indicators specific indicator gaps → per-indicator FRED re-pull | Nothing. |
-| `INGESTION_AUTO_RECOVERED_TIER` | liquidity_tiers_completeness missing tickers → tier_refresh ran | Nothing. |
-| `INGESTION_AUTO_RECOVERED_CLASSIFICATION` | ticker_classifications_coverage gap → classify_tickers force=True ran | Nothing. |
-| `INGESTION_AUTO_RECOVERED_TIMEOUT` | daily_bars non-chunked stage timeout → re-invoked with chunked path | Nothing. |
-| `INGESTION_AUTO_RECOVERED_CONNDROP` | Supabase pooler dropped mid-stage → orchestrator-level re-invoke succeeded | Nothing. |
-| `INGESTION_AUTO_RECOVERED_AUTH` | provider 401 transient → second attempt succeeded (creds were rotating) | Nothing. |
-| `INGESTION_AUTO_RECOVERED_POOL` | asyncpg pool exhaustion → recycle_asyncpg_pool reset + retry succeeded | Nothing. |
-| `PROVIDER_AUTH_ESCALATED` | provider 401 persisted across two attempts (FAILED-shape) | **Rotate the provider's API key.** Daemon stays alive; other stages continue. |
-| `POOL_CIRCUIT_BREAKER_TRIPPED` | pool exhaustion detected; daemon's local pool got recycled | Informational — recovery follows via `INGESTION_AUTO_RECOVERED_POOL`. |
-| `INGESTION_AUTO_RECOVERY_FAILED` | cascade itself failed (network down, second timeout, etc.) | **Operator review** — the cascade exhausted; investigate the underlying provider/infra. |
-| `INGESTION_AUTO_RECOVERY_DEGRADED` | SIP feed unavailable → IEX failover (partial coverage) | **Check Alpaca subscription** — SIP entitlement may have lapsed. |
-
-### Engine-lane (Wave 3 in flight 2026-05-22)
-
-Engine-lane events ship via Wave 3 PR — table will be filled in once the PR lands.
-
-### How to add a new cascade event
-
-1. Add the failure-mode row to `docs/superpowers/specs/2026-05-21-deterministic-self-heal-coverage-expansion-design.md` §1 (data) or §2 (engine)
-2. Implement the cascade in `scripts/ops.py::_auto_cascade_*` (data) or `ops/engine_service.py` (engine)
-3. Add the event name to this table
-4. Add a regression test (fail-on-main / pass-on-branch contract)
-5. Mark the row DONE in the spec
-
-Memory: [[deterministic-cascade-architecture]] covers the architectural pattern; [[llm-triage-runs-local-on-max]] explains why deterministic-first matters (LLM runs operator-local, not deployed).
-
----
-
 ## 7. Corporate Actions Pipeline
 
 Two scripts run on `corporate-actions-scheduler` (Sunday 04:00 UTC):

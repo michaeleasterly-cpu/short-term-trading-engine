@@ -31,9 +31,10 @@ log = structlog.get_logger(__name__)
 
 _FINDER_RUN_INSERT_SQL = """
     INSERT INTO platform.application_log
-        (engine, event_type, ts, payload)
+        (engine, run_id, event_type, severity, message, data)
     VALUES
-        ('llm_edge_finder', 'LAB_FINDER_RUN', NOW() AT TIME ZONE 'UTC', $1::jsonb)
+        ('llm_edge_finder', $1, 'LAB_FINDER_RUN', 'INFO',
+         'finder run completed', $2::jsonb)
 """
 
 
@@ -44,7 +45,7 @@ async def record_finder_run(pool: asyncpg.Pool, run: FinderRun) -> None:
     """
     payload_json = run.model_dump_json()
     async with pool.acquire() as conn:
-        await conn.execute(_FINDER_RUN_INSERT_SQL, payload_json)
+        await conn.execute(_FINDER_RUN_INSERT_SQL, run.run_id, payload_json)
     log.info(
         "finder_run.recorded",
         run_id=str(run.run_id),
@@ -55,9 +56,10 @@ async def record_finder_run(pool: asyncpg.Pool, run: FinderRun) -> None:
 
 _FINDER_ACTION_INSERT_SQL = """
     INSERT INTO platform.application_log
-        (engine, event_type, ts, payload)
+        (engine, run_id, event_type, severity, message, data)
     VALUES
-        ('llm_edge_finder', 'LAB_FINDER_ACTION', NOW() AT TIME ZONE 'UTC', $1::jsonb)
+        ('llm_edge_finder', $1, 'LAB_FINDER_ACTION', 'INFO',
+         $2, $3::jsonb)
 """
 
 
@@ -88,8 +90,18 @@ async def record_finder_action(
     }
     if extra:
         payload.update(extra)
+    # The application_log run_id column is UUID; convert from str defensively.
+    # Bare string run_id (e.g. "(monitor)" from Phase E) → use NIL UUID.
+    import uuid as _uuid
+    try:
+        rid_uuid = _uuid.UUID(run_id)
+    except (ValueError, AttributeError):
+        rid_uuid = _uuid.UUID(int=0)
+    message = f"{action} triggered_by={triggered_by}"
     async with pool.acquire() as conn:
-        await conn.execute(_FINDER_ACTION_INSERT_SQL, json.dumps(payload))
+        await conn.execute(
+            _FINDER_ACTION_INSERT_SQL, rid_uuid, message, json.dumps(payload)
+        )
     log.info(
         "finder_action.recorded",
         run_id=run_id,

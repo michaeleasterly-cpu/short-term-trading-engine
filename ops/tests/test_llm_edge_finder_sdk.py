@@ -106,11 +106,14 @@ async def test_sdk_llm_callable_json_decode_failure_returns_synthetic_request() 
     from ops.llm_edge_finder_sdk import make_sdk_llm_callable
 
     callable_ = make_sdk_llm_callable(
+        # No '{' or '}' in the response → markdown-fence-stripper can't recover
+        # → json.loads fails → synthetic AnalysisRequest with corrective prose.
         client=_FakeAnthropicClient(response_text="this is not JSON"),  # type: ignore[arg-type]
     )
     result = await callable_("sys", "user", [])
     assert result["kind"] == "AnalysisRequest"
-    assert "json_decode_failed" in result["rationale"]
+    # Post-hardening: rationale now carries corrective guidance for the LLM.
+    assert "JSON" in result["rationale"]
     assert result["tool_calls"] == []
 
 
@@ -164,7 +167,9 @@ async def test_sdk_uses_system_prompt() -> None:
         client=_FakeAnthropicClient(capture=capture),  # type: ignore[arg-type]
     )
     await callable_("PERSONA_HERE", "user", [])
-    assert capture[0]["system"] == "PERSONA_HERE"
+    # Post-caching: system is wrapped as a single cached text block.
+    assert capture[0]["system"][0]["text"] == "PERSONA_HERE"
+    assert capture[0]["system"][0]["cache_control"]["type"] == "ephemeral"
 
 
 # ───────────────────────── transcript → messages shape ─────────────────────────
@@ -189,9 +194,10 @@ async def test_transcript_serializes_into_messages() -> None:
     ]
     await callable_("sys", "user", transcript)
     msgs = capture[0]["messages"]
-    # First message = first-turn user prompt
+    # First message = first-turn user prompt (now a cached text block list).
     assert msgs[0]["role"] == "user"
-    assert msgs[0]["content"] == "user"
+    assert msgs[0]["content"][0]["text"] == "user"
+    assert msgs[0]["content"][0]["cache_control"]["type"] == "ephemeral"
     # Second = assistant's prior emission
     assert msgs[1]["role"] == "assistant"
     assert "AnalysisRequest" in msgs[1]["content"]
@@ -211,7 +217,9 @@ async def test_empty_transcript_messages_first_user_only() -> None:
     await callable_("sys", "first turn user", [])
     msgs = capture[0]["messages"]
     assert len(msgs) == 1
-    assert msgs[0]["content"] == "first turn user"
+    # Post-caching: content is a list with one cached text block.
+    assert msgs[0]["content"][0]["text"] == "first turn user"
+    assert msgs[0]["content"][0]["cache_control"]["type"] == "ephemeral"
 
 
 # ───────────────────────── end-to-end with the agent ─────────────────────────
