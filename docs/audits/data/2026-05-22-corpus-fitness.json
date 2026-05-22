@@ -1,0 +1,411 @@
+{
+  "generated_at": "2026-05-22T07:21:23.955801",
+  "A_broad": {
+    "sample_n": 100,
+    "comparable_n": 98,
+    "missing_from_fmp": [
+      "BPACU",
+      "JAPN"
+    ],
+    "missing_from_corpus": [],
+    "ohlc_diff_p50": 0.0007057163020465622,
+    "ohlc_diff_p95": 0.03772336201191266,
+    "ohlc_diff_max": 0.10104529616724739,
+    "ohlc_diff_max_ticker": "JEM",
+    "ohlc_breaches": [
+      "AVX.open FMP=0.46 DB=0.4802 diff=4.2066%",
+      "AVX.high FMP=0.5546 DB=0.5387 diff=2.9516%",
+      "AVX.low FMP=0.46 DB=0.4802 diff=4.2066%",
+      "AVX.close FMP=0.539 DB=0.5228 diff=3.0987%",
+      "AZYY.low FMP=16.55 DB=16.69 diff=0.8388%",
+      "CORZW.open FMP=17.09 DB=17.0 diff=0.5294%",
+      "CORZW.high FMP=17.67 DB=17.56 diff=0.6264%",
+      "CORZW.low FMP=16.68 DB=17.0 diff=1.8824%",
+      "CUZ.open FMP=26.12 DB=25.945 diff=0.6745%",
+      "CUZ.high FMP=26.2 DB=26.03 diff=0.6531%",
+      "DAN.open FMP=34.03 DB=33.38 diff=1.9473%",
+      "DAN.high FMP=34.33 DB=33.615 diff=2.1270%",
+      "EDHL.open FMP=2.31 DB=2.36 diff=2.1186%",
+      "EDHL.high FMP=2.33 DB=2.36 diff=1.2712%",
+      "EDHL.low FMP=2.26 DB=2.36 diff=4.2373%",
+      "EDHL.close FMP=2.26 DB=2.36 diff=4.2373%",
+      "FIGS.open FMP=11.69 DB=11.835 diff=1.2252%",
+      "FIGS.low FMP=11.65 DB=11.72 diff=0.5973%",
+      "FLN.open FMP=25.55 DB=26.08 diff=2.0322%",
+      "FLN.high FMP=25.74 DB=26.08 diff=1.3037%",
+      "FLN.low FMP=25.45 DB=26.08 diff=2.4156%",
+      "FLN.close FMP=25.53 DB=26.08 diff=2.1089%",
+      "FOFO.open FMP=2.45 DB=2.41 diff=1.6598%",
+      "FOFO.low FMP=2.32 DB=2.41 diff=3.7344%",
+      "FOFO.close FMP=2.35 DB=2.44 diff=3.6885%",
+      "FORR.low FMP=6.31 DB=6.38 diff=1.0972%",
+      "GF.open FMP=11.84 DB=11.76 diff=0.6803%",
+      "GF.high FMP=11.84 DB=11.76 diff=0.6803%",
+      "GF.low FMP=11.65 DB=11.76 diff=0.9354%",
+      "GF.close FMP=11.82 DB=11.76 diff=0.5102%",
+      "GH.high FMP=98.0 DB=97.465 diff=0.5489%",
+      "GNOM.open FMP=45.38 DB=45.76 diff=0.8304%",
+      "GNOM.high FMP=45.38 DB=45.76 diff=0.8304%",
+      "GNOM.low FMP=44.3 DB=45.76 diff=3.1906%",
+      "GNOM.close FMP=44.31 DB=45.76 diff=3.1687%",
+      "GTLB.open FMP=22.58 DB=22.765 diff=0.8127%",
+      "HGLB.open FMP=8.12 DB=7.987 diff=1.6652%",
+      "HGLB.high FMP=8.12 DB=7.992 diff=1.6016%",
+      "HGLB.close FMP=8.03 DB=7.888 diff=1.8002%",
+      "HNST.open FMP=3.16 DB=3.18 diff=0.6289%",
+      "HUBG.open FMP=36.96 DB=37.905 diff=2.4931%",
+      "HYFT.open FMP=1.26 DB=1.24 diff=1.6129%",
+      "HYFT.high FMP=1.27 DB=1.24 diff=2.4194%",
+      "HYFT.low FMP=1.18 DB=1.2 diff=1.6667%",
+      "HYFT.close FMP=1.19 DB=1.2 diff=0.8333%",
+      "IBEX.open FMP=29.99 DB=30.365 diff=1.2350%",
+      "IBEX.low FMP=29.08 DB=30.22 diff=3.7723%",
+      "IBGB.open FMP=23.75 DB=24.03 diff=1.1652%",
+      "IBGB.high FMP=23.76 DB=24.03 diff=1.1236%",
+      "IBGB.low FMP=23.7 DB=24.03 diff=1.3733%",
+      "IBGB.close FMP=23.7 DB=24.03 diff=1.3733%",
+      "ILPT.open FMP=7.91 DB=7.705 diff=2.6606%",
+      "ILPT.high FMP=7.99 DB=7.945 diff=0.5664%",
+      "IMCR.high FMP=28.75 DB=28.6 diff=0.5245%",
+      "JEM.open FMP=1.47 DB=1.435 diff=2.4390%",
+      "JEM.high FMP=1.58 DB=1.435 diff=10.1045%",
+      "JEM.low FMP=1.39 DB=1.42 diff=2.1127%",
+      "JEM.close FMP=1.54 DB=1.42 diff=8.4507%",
+      "KQQQ.open FMP=30.72 DB=30.55 diff=0.5565%",
+      "KQQQ.high FMP=30.72 DB=30.55 diff=0.5565%",
+      "KQQQ.low FMP=30.21 DB=30.55 diff=1.1129%",
+      "KQQQ.close FMP=30.35 DB=30.55 diff=0.6547%",
+      "LFMD.open FMP=4.38 DB=4.42 diff=0.9050%",
+      "LIMN.open FMP=0.18 DB=0.1856 diff=3.0172%",
+      "LIMN.high FMP=0.189 DB=0.1856 diff=1.8319%",
+      "LIMN.low FMP=0.177 DB=0.1807 diff=2.0476%",
+      "LIMN.close FMP=0.18 DB=0.1817 diff=0.9356%",
+      "LVWR.open FMP=1.4 DB=1.45 diff=3.4483%",
+      "LVWR.high FMP=1.48 DB=1.46 diff=1.3699%",
+      "LVWR.low FMP=1.4 DB=1.42 diff=1.4085%",
+      "MNDR.open FMP=0.9686 DB=0.98 diff=1.1633%",
+      "MNDR.high FMP=1.01 DB=0.98 diff=3.0612%",
+      "MNDR.low FMP=0.9644 DB=0.9772 diff=1.3099%",
+      "MNDR.close FMP=0.9859 DB=0.9772 diff=0.8903%",
+      "MPC.open FMP=252.23 DB=250.09 diff=0.8557%",
+      "MTH.high FMP=62.14 DB=61.57 diff=0.9258%",
+      "NEXM.open FMP=3.02 DB=3.08 diff=1.9481%",
+      "NEXM.low FMP=2.79 DB=3.08 diff=9.4156%",
+      "NEXM.close FMP=2.85 DB=3.08 diff=7.4675%",
+      "NSA.open FMP=42.25 DB=41.925 diff=0.7752%",
+      "NSA.high FMP=42.25 DB=41.925 diff=0.7752%",
+      "NUVB.open FMP=4.61 DB=4.68 diff=1.4957%"
+    ],
+    "volume_ratio_p50": 7.873697916666667,
+    "volume_ratio_p95": 182.4561403508772,
+    "volume_ratio_max": 405.3333333333333,
+    "volume_breaches_n": 46
+  },
+  "B_splits": [
+    {
+      "ticker": "AAPL",
+      "split_date": "2020-08-31",
+      "ratio": 4.0,
+      "fmp_close": 129.04,
+      "fmp_adj_close": null,
+      "db_close": 125.23,
+      "db_adj_close": 125.23,
+      "diff_close_pct": 0.03042401980356135,
+      "diff_adj_close_pct": null,
+      "verdict": "DISAGREE_CLOSE (3.04%)"
+    },
+    {
+      "ticker": "TSLA",
+      "split_date": "2020-08-31",
+      "ratio": 5.0,
+      "fmp_close": 166.11,
+      "fmp_adj_close": null,
+      "db_close": 166.24,
+      "db_adj_close": 166.24,
+      "diff_close_pct": 0.0007820019249277878,
+      "diff_adj_close_pct": null,
+      "verdict": "AGREE_CLOSE (0.08%)"
+    },
+    {
+      "ticker": "GOOGL",
+      "split_date": "2022-07-15",
+      "ratio": 20.0,
+      "fmp_close": 111.78,
+      "fmp_adj_close": null,
+      "db_close": 110.86,
+      "db_adj_close": 110.86,
+      "diff_close_pct": 0.008298755186722007,
+      "diff_adj_close_pct": null,
+      "verdict": "DISAGREE_CLOSE (0.83%)"
+    },
+    {
+      "ticker": "NVDA",
+      "split_date": "2024-06-07",
+      "ratio": 10.0,
+      "fmp_close": 120.89,
+      "fmp_adj_close": null,
+      "db_close": 120.77,
+      "db_adj_close": 120.77,
+      "diff_close_pct": 0.0009936242444316017,
+      "diff_adj_close_pct": null,
+      "verdict": "AGREE_CLOSE (0.10%)"
+    }
+  ],
+  "C_survivorship": {
+    "delisted_count": 54,
+    "delisted_with_late_capture_count": 0,
+    "pre_2020_tickers_count": 4539,
+    "pre_2020_tickers_in_classifications": 4535,
+    "pre_2020_tickers_missing_from_classifications": 4,
+    "delisted_ticker_examples": [],
+    "spot_check": [
+      {
+        "ticker": "WORK",
+        "expected_delist": "2021-07-21",
+        "rowcount": 0,
+        "last_bar": null,
+        "marked_delisted": false,
+        "delisting_date_recorded": null,
+        "note": "Slack \u2192 CRM merger",
+        "verdict": "NO_RECORD"
+      },
+      {
+        "ticker": "ATVI",
+        "expected_delist": "2023-10-13",
+        "rowcount": 811,
+        "last_bar": "2023-10-13",
+        "marked_delisted": true,
+        "delisting_date_recorded": "2023-10-13",
+        "note": "Activision \u2192 MSFT",
+        "verdict": "OK (marked)"
+      },
+      {
+        "ticker": "AABA",
+        "expected_delist": "2017-06-13",
+        "rowcount": 0,
+        "last_bar": null,
+        "marked_delisted": false,
+        "delisting_date_recorded": null,
+        "note": "Altaba (post-Yahoo\u2192OATH)",
+        "verdict": "NO_RECORD"
+      },
+      {
+        "ticker": "OSTK",
+        "expected_delist": "2023-08-21",
+        "rowcount": 0,
+        "last_bar": null,
+        "marked_delisted": false,
+        "delisting_date_recorded": null,
+        "note": "Overstock \u2192 BYON ticker change",
+        "verdict": "NO_RECORD"
+      },
+      {
+        "ticker": "LNKD",
+        "expected_delist": "2016-12-08",
+        "rowcount": 0,
+        "last_bar": null,
+        "marked_delisted": false,
+        "delisting_date_recorded": null,
+        "note": "LinkedIn \u2192 MSFT",
+        "verdict": "NO_RECORD"
+      },
+      {
+        "ticker": "WLTW",
+        "expected_delist": "2022-07-01",
+        "rowcount": 0,
+        "last_bar": null,
+        "marked_delisted": false,
+        "delisting_date_recorded": null,
+        "note": "WTW merger",
+        "verdict": "NO_RECORD"
+      },
+      {
+        "ticker": "CTXS",
+        "expected_delist": "2022-09-30",
+        "rowcount": 0,
+        "last_bar": null,
+        "marked_delisted": false,
+        "delisting_date_recorded": null,
+        "note": "Citrix \u2192 private",
+        "verdict": "NO_RECORD"
+      },
+      {
+        "ticker": "MGI",
+        "expected_delist": "2023-06-01",
+        "rowcount": 0,
+        "last_bar": null,
+        "marked_delisted": false,
+        "delisting_date_recorded": null,
+        "note": "MoneyGram \u2192 private",
+        "verdict": "NO_RECORD"
+      },
+      {
+        "ticker": "TIF",
+        "expected_delist": "2021-01-07",
+        "rowcount": 0,
+        "last_bar": null,
+        "marked_delisted": false,
+        "delisting_date_recorded": null,
+        "note": "Tiffany \u2192 LVMH",
+        "verdict": "NO_RECORD"
+      },
+      {
+        "ticker": "XLNX",
+        "expected_delist": "2022-02-14",
+        "rowcount": 0,
+        "last_bar": null,
+        "marked_delisted": false,
+        "delisting_date_recorded": null,
+        "note": "Xilinx \u2192 AMD",
+        "verdict": "NO_RECORD"
+      },
+      {
+        "ticker": "FB",
+        "expected_delist": "2022-06-09",
+        "rowcount": 0,
+        "last_bar": null,
+        "marked_delisted": false,
+        "delisting_date_recorded": null,
+        "note": "Facebook \u2192 META rebrand",
+        "verdict": "NO_RECORD"
+      },
+      {
+        "ticker": "TWTR",
+        "expected_delist": "2022-10-27",
+        "rowcount": 0,
+        "last_bar": null,
+        "marked_delisted": false,
+        "delisting_date_recorded": null,
+        "note": "Twitter \u2192 private (Musk)",
+        "verdict": "NO_RECORD"
+      },
+      {
+        "ticker": "RDS-A",
+        "expected_delist": "2022-01-28",
+        "rowcount": 0,
+        "last_bar": null,
+        "marked_delisted": false,
+        "delisting_date_recorded": null,
+        "note": "Royal Dutch Shell unification",
+        "verdict": "NO_RECORD"
+      },
+      {
+        "ticker": "CTL",
+        "expected_delist": "2020-09-18",
+        "rowcount": 0,
+        "last_bar": null,
+        "marked_delisted": false,
+        "delisting_date_recorded": null,
+        "note": "CenturyLink \u2192 Lumen",
+        "verdict": "NO_RECORD"
+      },
+      {
+        "ticker": "CELG",
+        "expected_delist": "2019-11-20",
+        "rowcount": 0,
+        "last_bar": null,
+        "marked_delisted": false,
+        "delisting_date_recorded": null,
+        "note": "Celgene \u2192 BMY",
+        "verdict": "NO_RECORD"
+      },
+      {
+        "ticker": "XEC",
+        "expected_delist": "2021-10-01",
+        "rowcount": 0,
+        "last_bar": null,
+        "marked_delisted": false,
+        "delisting_date_recorded": null,
+        "note": "Cimarex \u2192 Coterra",
+        "verdict": "NO_RECORD"
+      },
+      {
+        "ticker": "BHGE",
+        "expected_delist": "2019-12-31",
+        "rowcount": 0,
+        "last_bar": null,
+        "marked_delisted": false,
+        "delisting_date_recorded": null,
+        "note": "Baker Hughes \u2192 BKR rebrand",
+        "verdict": "NO_RECORD"
+      },
+      {
+        "ticker": "DPS",
+        "expected_delist": "2018-07-09",
+        "rowcount": 0,
+        "last_bar": null,
+        "marked_delisted": false,
+        "delisting_date_recorded": null,
+        "note": "Dr Pepper Snapple merger",
+        "verdict": "NO_RECORD"
+      },
+      {
+        "ticker": "RTN",
+        "expected_delist": "2020-04-03",
+        "rowcount": 0,
+        "last_bar": null,
+        "marked_delisted": false,
+        "delisting_date_recorded": null,
+        "note": "Raytheon \u2192 RTX",
+        "verdict": "NO_RECORD"
+      },
+      {
+        "ticker": "UTX",
+        "expected_delist": "2020-04-03",
+        "rowcount": 0,
+        "last_bar": null,
+        "marked_delisted": false,
+        "delisting_date_recorded": null,
+        "note": "United Technologies \u2192 RTX",
+        "verdict": "NO_RECORD"
+      }
+    ]
+  },
+  "D_validation": [
+    {
+      "name": "fundamentals_quarterly_completeness",
+      "state": "STILL_RED",
+      "detail": "285/1090 failed: ABCL:missing_quarter expected=no consecutive filing gap > 100 days in active range observed=2 inferred missing quarter(s) at: 2019-07-01, 2019-09-30 | ACT:missing_quarter expected=no consecutive filing gap > 100 days in active range observed=2 inferred missing quarter(s) at: 2020-03-31, 2021-03-31 |"
+    },
+    {
+      "name": "corporate_actions_completeness",
+      "state": "STILL_RED",
+      "detail": "1/1 failed: <corporate_actions>:db_shrunk_vs_archive expected=live DB rows \u2265 archived snapshot rows (110630 from /Users/michael/short-term-trading-engine/data/alpaca_corporate_actions_archive/alpaca_corporate_actions_20260515T214505Z.csv.gz) observed=live DB has 109737 rows \u2014 0.81% smaller than archive (110630 "
+    },
+    {
+      "name": "earnings_events_monotone",
+      "state": "HEALED",
+      "detail": "passed 1104/1104"
+    },
+    {
+      "name": "sec_insider_monotone",
+      "state": "HEALED",
+      "detail": "passed 1306/1306"
+    },
+    {
+      "name": "liquidity_tiers_completeness",
+      "state": "STILL_RED",
+      "detail": "15/4729 failed: BMNR:missing_from_liquidity_tiers expected=every active-universe stock has a row in platform.liquidity_tiers (any tier 1/2/3) observed=BMNR is in the active universe (asset_class=stock + \u22651 bar in trailing 30 sessions) but has NO row in liquidity_tiers. Total missing: 15 / 4729 active tickers. Heal "
+    },
+    {
+      "name": "ticker_classifications_coverage",
+      "state": "STILL_RED",
+      "detail": "1/1 failed: <drift>:source_count_drift expected=live COUNT(*)=13722 (matches last classify_tickers source snapshot) observed=live row count drifted from last sync snapshot: live=13763, snapshot=13722 (delta=41, snapshot_at=2026-05-21T15:09:20.833597+00:00). Re-run classify_tickers to re-sync."
+    },
+    {
+      "name": "macro_indicators_completeness",
+      "state": "STILL_RED",
+      "detail": "5/59 failed: credit_spread:missing_publication expected=a row for every daily publication date in [2006-10-09 \u2026 latest] observed=39 missing date(s): 2006-10-09, 2007-10-08, 2007-11-12, 2008-10-13, 2008-11-11, 2009-10-12, 2009-11-11, 2010-10-11 (+31 more) | hy_spread:missing_publication expected=a row for every d"
+    },
+    {
+      "name": "fear_greed_freshness",
+      "state": "HEALED",
+      "detail": "passed 1/1"
+    },
+    {
+      "name": "aaii_sentiment_freshness",
+      "state": "HEALED",
+      "detail": "passed 1/1"
+    }
+  ]
+}
