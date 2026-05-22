@@ -398,6 +398,7 @@ asyncio_mode = "auto"
 norecursedirs = [".claude", "*_archive", ".git", ".venv"]
 markers = [
     "xdist_group: pytest-xdist group pinning (ops-shadow single-worker isolation; P1.3)",
+    "integration: live-API + live-DB integration tests (skipped in CI when FMP_API_KEY/DATABASE_URL absent)",
 ]
 testpaths = [
     "tests",

@@ -7,6 +7,11 @@ These tests pin the chunking, per-symbol upsert, archive collection,
 and per-chunk failure handling — plus ``_parse_params`` (the
 canonical parameterised-backfill channel that replaced the one-off
 backfill scripts).
+
+2026-05-22: with FMP as the default daily-bars feed, every test here
+that exercises the Alpaca multi-symbol code path explicitly pins
+``feed="iex"`` so the legacy chunking semantics still get covered.
+The FMP path has its own dedicated suite in ``test_ingest_fmp_bars*``.
 """
 from __future__ import annotations
 
@@ -91,7 +96,9 @@ class TestMultiSymbolChunking:
         monkeypatch.setattr(ab, "fetch_daily_bars_multi", _fake_multi)
 
         universe = [f"T{i:04d}" for i in range(250)]  # 250 → chunks 100/100/50
-        rows = await handle_daily_bars(_FakePool(), {"universe": universe})
+        rows = await handle_daily_bars(
+            _FakePool(), {"universe": universe, "feed": "iex"},
+        )
 
         assert [len(c) for c in calls] == [100, 100, 50]
         assert rows == 250  # 1 bar/symbol upserted
@@ -111,8 +118,10 @@ class TestMultiSymbolChunking:
         monkeypatch.setattr(ab, "fetch_daily_bars_multi", _fake_multi)
 
         universe = [f"T{i:04d}" for i in range(250)]
-        with pytest.raises(RuntimeError, match="chunk fetch failure"):
-            await handle_daily_bars(_FakePool(), {"universe": universe})
+        with pytest.raises(RuntimeError, match="fetch failure"):
+            await handle_daily_bars(
+                _FakePool(), {"universe": universe, "feed": "iex"},
+            )
 
     @pytest.mark.asyncio
     async def test_symbols_with_no_bars_skipped(self, monkeypatch, _fast_and_stubbed):
@@ -122,7 +131,10 @@ class TestMultiSymbolChunking:
                     for i, s in enumerate(symbols)}
 
         monkeypatch.setattr(ab, "fetch_daily_bars_multi", _fake_multi)
-        rows = await handle_daily_bars(_FakePool(), {"universe": [f"S{i}" for i in range(40)]})
+        rows = await handle_daily_bars(
+            _FakePool(),
+            {"universe": [f"S{i}" for i in range(40)], "feed": "iex"},
+        )
         assert rows == 20  # only even-indexed symbols had a bar
         assert len(_fast_and_stubbed["upserts"]) == 20
 

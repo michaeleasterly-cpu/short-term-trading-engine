@@ -327,38 +327,32 @@ async def _handle_daily_bars_explicit(
 
     Lifted out of ``handle_daily_bars`` so the discovery sweep
     (``all_active``) can live as its own helper without making the entry
-    point unreadable. Uses Alpaca's ``/v2/stocks/bars?symbols=…`` multi
-    endpoint in 100-symbol chunks (2026-05-15) — the prior per-symbol
-    loop was a ~45-min rate-limit floor on the ~7,669-ticker universe.
+    point unreadable.
+
+    Two adapter paths gated on ``config["feed"]`` (default ``"fmp"``):
+
+    * ``feed="fmp"`` (DEFAULT 2026-05-22+): per-ticker calls to FMP's
+      ``/stable/historical-price-eod/full`` endpoint. Full CTA
+      consolidated tape on the operator's $200/year Starter tier (no
+      batch endpoint at that tier — per-symbol only). ~25 min wall
+      time for the ~7,600-ticker universe at 200ms/call.
+    * ``feed="iex" | "sip"`` (legacy / diagnostic): Alpaca's
+      ``/v2/stocks/bars?symbols=…`` multi endpoint in 100-symbol chunks
+      (2026-05-15). Kept available so the operator can A/B against the
+      Alpaca path without redeploying.
+
+    Each path uses the same downstream ``_upsert_bars`` + CSV-archive
+    collector — the only difference is which transport fans out the
+    universe and at what granularity. Per-chunk (Alpaca) or per-symbol
+    (FMP) failure is logged + the run continues; the aggregate
+    ``RuntimeError`` only fires when ≥1 chunk/symbol permanently fails.
     """
-    import asyncio
     from datetime import timedelta
 
-    import httpx
-
-    from tpcore.data.ingest_alpaca_bars import (
-        _RATE_LIMIT_SLEEP_SEC,
-        _alpaca_headers,
-        _upsert_bars,
-        fetch_daily_bars_multi,
-    )
-
-    # Alpaca's /v2/stocks/bars multi endpoint accepts up to 100 symbols
-    # per call. Chunking the universe collapses ~7,669 single-symbol
-    # calls (a ~45-min rate-limit floor) into ~77 calls — minutes, not
-    # hours. Same endpoint handle_corporate_actions + the all_active
-    # sweep already use.
-    _MULTI_CHUNK = 100
-
+    feed = str(config.get("feed", "fmp"))
     lookback_days = int(config.get("lookback_days", 7))
     end_offset_days = int(config.get("end_offset_days", 0))
-    # Free-tier Alpaca has no SIP entitlement. fetch_daily_bars_multi's
-    # signature defaults feed="sip"; this explicit path previously
-    # omitted the arg and inherited that default → 403 on every chunk
-    # (2026-05-17). The all_active path already passes feed="iex" for
-    # this reason. Default to iex here too; keep it config-overridable
-    # for if/when a SIP subscription is added.
-    feed = str(config.get("feed", "iex"))
+
     if universe_cfg == "active":
         sql = """
             SELECT DISTINCT ticker
@@ -391,13 +385,143 @@ async def _handle_daily_bars_explicit(
     end = today - timedelta(days=end_offset_days)
     start = end - timedelta(days=lookback_days)
 
+    # CSV-first audit archive. daily_bars pulls a VARIABLE window
+    # (7-day incremental refresh vs 6000-day backfill), so row-count
+    # shrinkage detection is noise here — the archive's value is the
+    # audit trail (reconstruct what the vendor returned on a given
+    # run), not a vendor-truncation alarm. Shrinkage detection is
+    # reserved for the full-snapshot sources (fred_macro, corporate_actions).
+    #
+    # Per-feed `write_archive` literals (not a single variable) so the
+    # contract-drift sentinel (``tpcore.ingestion.adapter_contract.
+    # contract_drift``) can grep the call sites for the canonical feed
+    # name. Each branch passes its own string literal.
+    from tpcore.ingestion.csv_archive import write_archive
+    _bars_fields = ["ticker", "date", "open", "high", "low", "close", "volume", "vwap"]
+
+    def _bars_validator(r: dict) -> bool:
+        return bool(r.get("ticker")) and r.get("date") not in ("", None)
+
+    if feed == "fmp":
+        total_rows, failures, archive_rows = await _fetch_via_fmp(
+            pool, symbols, start, end,
+        )
+        archive = write_archive(
+            "fmp_daily_bars", archive_rows,
+            fieldnames=_bars_fields,
+            validator=_bars_validator,
+        )
+    else:
+        total_rows, failures, archive_rows = await _fetch_via_alpaca(
+            pool, symbols, start, end, feed=feed,
+        )
+        archive = write_archive(
+            "alpaca_daily_bars", archive_rows,
+            fieldnames=_bars_fields,
+            validator=_bars_validator,
+        )
+
+    logger.info(
+        "ingestion.handler.daily_bars_done",
+        feed=feed,
+        symbols=len(symbols),
+        rows_upserted=total_rows,
+        failures=len(failures),
+        csv_archive=str(archive.path),
+    )
+    if failures:
+        raise RuntimeError(
+            f"daily_bars[{feed}]: {len(failures)} fetch failure(s); first: {failures[0]}"
+        )
+    return total_rows
+
+
+async def _fetch_via_fmp(
+    pool: asyncpg.Pool,
+    symbols: list[str],
+    start,  # noqa: ANN001 — date; avoiding circular forward-decl friction
+    end,  # noqa: ANN001
+) -> tuple[int, list[str], list[dict]]:
+    """Per-symbol FMP daily-bars fan-out.
+
+    FMP's /stable tier has no multi-symbol EOD batch — we issue one
+    call per ticker. The adapter's internal 200ms inter-call sleep
+    keeps us under the 300 req/min Starter cap. A single ticker's
+    permanent failure (auth, malformed key) is recorded and the run
+    continues; the aggregate failure list reaches the caller for
+    final disposition.
+    """
+    import httpx
+
+    from tpcore.data.ingest_alpaca_bars import _upsert_bars
+    from tpcore.data.ingest_fmp_bars import fetch_daily_bars_multi as fmp_fetch
+
+    total_rows = 0
+    failures: list[str] = []
+    archive_rows: list[dict] = []
+
+    # FMP per-symbol calls are not chunked by transport — we hand
+    # the whole symbol list to the adapter which paces itself.
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        try:
+            by_symbol = await fmp_fetch(client, symbols, start, end)
+        except Exception as exc:  # noqa: BLE001 — adapter raised a permanent failure
+            failures.append(f"fmp_fetch_aborted({type(exc).__name__}:{str(exc)[:120]})")
+            return total_rows, failures, archive_rows
+
+    for symbol, bars in by_symbol.items():
+        if not bars:
+            continue
+        for b in bars:
+            archive_rows.append({
+                "ticker": symbol, "date": b.get("t", ""),
+                "open": b.get("o", ""), "high": b.get("h", ""),
+                "low": b.get("l", ""), "close": b.get("c", ""),
+                "volume": b.get("v", ""), "vwap": b.get("vw", ""),
+            })
+        inserted = await _upsert_bars(pool, symbol, bars, delisted=False)
+        total_rows += inserted
+
+    return total_rows, failures, archive_rows
+
+
+async def _fetch_via_alpaca(
+    pool: asyncpg.Pool,
+    symbols: list[str],
+    start,  # noqa: ANN001
+    end,  # noqa: ANN001
+    *,
+    feed: str,
+) -> tuple[int, list[str], list[dict]]:
+    """Legacy 100-symbol-chunked Alpaca path.
+
+    Kept available behind ``--param feed=iex|sip`` so the operator can
+    A/B against FMP without redeploying. Same upsert + archive shape
+    as the FMP path — the only difference is the transport.
+    """
+    import asyncio
+
+    import httpx
+
+    from tpcore.data.ingest_alpaca_bars import (
+        _RATE_LIMIT_SLEEP_SEC,
+        _alpaca_headers,
+        _upsert_bars,
+        fetch_daily_bars_multi,
+    )
+
+    # Alpaca's /v2/stocks/bars multi endpoint accepts up to 100 symbols
+    # per call. Chunking the universe collapses ~7,669 single-symbol
+    # calls (a ~45-min rate-limit floor) into ~77 calls — minutes, not
+    # hours. Same endpoint handle_corporate_actions + the all_active
+    # sweep already use.
+    _MULTI_CHUNK = 100
+
     headers = _alpaca_headers()
     total_rows = 0
     failures: list[str] = []
-    # CSV-first archive: collect every bar across symbols, write once
-    # at the end (one archive per run). The shrinkage detector picks up
-    # if Alpaca silently drops bars next run.
     archive_rows: list[dict] = []
+
     async with httpx.AsyncClient(
         headers=headers,
         base_url="https://data.alpaca.markets",
@@ -407,7 +531,7 @@ async def _handle_daily_bars_explicit(
             chunk = symbols[i : i + _MULTI_CHUNK]
             try:
                 by_symbol = await fetch_daily_bars_multi(
-                    client, chunk, start, end, feed=feed
+                    client, chunk, start, end, feed=feed,
                 )
             except httpx.HTTPStatusError as exc:
                 # Whole chunk failed (e.g. SIP end=today 403 mid-session,
@@ -433,33 +557,7 @@ async def _handle_daily_bars_explicit(
                 total_rows += inserted
             await asyncio.sleep(_RATE_LIMIT_SLEEP_SEC)
 
-    # CSV-first audit archive. daily_bars pulls a VARIABLE window
-    # (7-day incremental refresh vs 6000-day backfill), so row-count
-    # shrinkage detection is noise here — the archive's value is the
-    # audit trail (reconstruct what Alpaca returned on a given run),
-    # not a vendor-truncation alarm. Shrinkage detection is reserved
-    # for the full-snapshot sources (fred_macro, corporate_actions).
-    from tpcore.ingestion.csv_archive import write_archive
-    archive = write_archive(
-        "alpaca_daily_bars", archive_rows,
-        fieldnames=["ticker", "date", "open", "high", "low", "close", "volume", "vwap"],
-        validator=lambda r: bool(r.get("ticker")) and r.get("date") not in ("", None),
-    )
-
-    n_chunks = (len(symbols) + _MULTI_CHUNK - 1) // _MULTI_CHUNK
-    logger.info(
-        "ingestion.handler.daily_bars_done",
-        symbols=len(symbols),
-        chunks=n_chunks,
-        rows_upserted=total_rows,
-        failures=len(failures),
-        csv_archive=str(archive.path),
-    )
-    if failures:
-        raise RuntimeError(
-            f"daily_bars: {len(failures)} chunk fetch failure(s); first: {failures[0]}"
-        )
-    return total_rows
+    return total_rows, failures, archive_rows
 
 
 async def _handle_daily_bars_all_active(
