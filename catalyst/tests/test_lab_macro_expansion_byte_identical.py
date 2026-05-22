@@ -240,9 +240,9 @@ def test_m1_macro_expansion_reachable_when_bundle_is_expansion():
     assert result.parameters["event_confirmation_mode"] == (
         "beat_30d_only_macro_expansion")
     assert result.trades > 0, (
-        f"macro_expansion arm produced 0 trades against an "
-        f"expansion-bundle + 5-BEAT fixture — branch is wired but "
-        f"the macro gate is stripping every event"
+        "macro_expansion arm produced 0 trades against an "
+        "expansion-bundle + 5-BEAT fixture — branch is wired but "
+        "the macro gate is stripping every event"
     )
 
 

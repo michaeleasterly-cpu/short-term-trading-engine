@@ -235,6 +235,11 @@ ignore = ["E501"]
 # engine-lane-module-private access is the same SP-B/SP-D/SP-E/SP-F
 # precedent (the scoped per-file ignore, never inline `# noqa`).
 "catalyst/tests/test_lab_pead_and_hold_days.py" = ["SLF"]
+# Catalyst regime-conditional PEAD arm (2026-05-22). The per-call
+# module-global reset test names `_EVENT_CONFIRMATION_MODE_OVERRIDE` +
+# `_HOLD_DAYS_OVERRIDE` from `catalyst.backtest` to prove the per-call
+# discipline (same SP-B/SP-D/SP-E/SP-F precedent above).
+"catalyst/tests/test_lab_macro_expansion_byte_identical.py" = ["SLF"]
 # Reversion partial-axis regime-filter Lab enrichment (2026-05-22). The
 # per-call module-global reset test names `_REGIME_FILTER_OVERRIDE` +
 # `_REGIME_TARGET_OVERRIDE`, and the mask-builder smoke test calls the
