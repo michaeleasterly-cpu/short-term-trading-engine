@@ -3512,6 +3512,92 @@ async def _stage_daily_insider_sentiment_delta(
     return result
 
 
+async def _stage_historical_prices_daily_fmp_rebuild(
+    pool: asyncpg.Pool, cfg: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """One-shot full-corpus FMP rebuild for ``platform.prices_daily``.
+
+    Force the corpus to single-source (FMP) post-2026-05-22 audit.
+    The audit (PR #281) found the corpus is dual-sourced — Alpaca-IEX
+    pre-2026-05-22 history + FMP-CTA post — causing p95 1.5-2% OHLC
+    drift on broad T2 sampling and a 3.04% AAPL split-day disagreement
+    on 2020-08-31. This stage re-pulls FULL FMP history for every
+    ticker known to ``prices_daily`` and upserts it via the canonical
+    (ticker, date) PK, overwriting Alpaca-sourced rows in place.
+
+    Mirrors the survivorship / insider patterns:
+    * Enumerates ``platform.prices_daily`` distinct tickers (active +
+      delisted) — one-for-one re-source, NOT universe expansion.
+    * Per-ticker FMP ``/stable/historical-price-eod/full`` fetch via
+      ``fetch_daily_bars_multi`` (the same transport ingest_fmp_bars
+      uses — no code duplication).
+    * Resumable via ``application_log`` events
+      (``CORPUS_REBUILD_TICKER_DONE``) — a crash mid-run keeps
+      completed work; the next invocation skips already-done tickers.
+    * Idempotent — re-running on the same data writes the same rows.
+
+    Operator-on-demand only (NOT in ``OPS_UPDATE_STAGES``). Run once
+    after PR merge; the existing daily-bars cadence (already on FMP
+    since PR #276) keeps the corpus single-source going forward.
+
+    Per-ticker × ~7,000 tickers @ ~0.2s/call ≈ 25 min wall time, well
+    inside the HEAVY 60-min budget.
+
+    Optional ``--param`` knobs:
+        * ``start_date=YYYY-MM-DD`` — override the 2010-01-01 default.
+        * ``end_date=YYYY-MM-DD`` — override today's date.
+        * ``resume=false`` — re-process every ticker (default true).
+        * ``limit=N`` — process at most N tickers (smoke).
+
+    Use:
+        DATABASE_URL=… FMP_API_KEY=… .venv/bin/python scripts/ops.py \\
+            --stage historical_prices_daily_fmp_rebuild
+    """
+    from tpcore.data.corpus_rebuild import (
+        enumerate_corpus_universe,
+        rebuild_universe,
+    )
+    from tpcore.logging.db_handler import DBLogHandler
+
+    cfg = cfg or {}
+    log = structlog.get_logger("scripts.ops")
+    resume = bool(cfg.get("resume", True))
+    limit = int(cfg.get("limit", 0)) or None
+    start = (
+        date.fromisoformat(str(cfg["start_date"]))
+        if cfg.get("start_date") else date(2010, 1, 1)
+    )
+    end = (
+        date.fromisoformat(str(cfg["end_date"]))
+        if cfg.get("end_date") else None
+    )
+
+    universe = await enumerate_corpus_universe(pool)
+    log.info(
+        "ops.stage.historical_prices_daily_fmp_rebuild.enumerated",
+        total=len(universe),
+    )
+    if limit:
+        universe = universe[:limit]
+        log.info(
+            "ops.stage.historical_prices_daily_fmp_rebuild.limited",
+            limit=limit,
+        )
+
+    db_log = DBLogHandler(pool, engine=ENGINE_NAME, run_id=uuid.uuid4())
+    result = await rebuild_universe(
+        pool, db_log, universe,
+        start=start, end=end, resume=resume,
+    )
+    log.info(
+        "ops.stage.historical_prices_daily_fmp_rebuild.done", **result,
+    )
+    return {
+        "universe_enumerated": len(universe),
+        **result,
+    }
+
+
 async def _stage_coverage_fill(pool: asyncpg.Pool) -> dict[str, Any]:
     """Self-healing — backfill any tier ≤ 2 ticker missing a bar in the last
     7 days via Alpaca SIP feed. Runs after ``corporate_actions`` (so split
@@ -4364,6 +4450,17 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     ("daily_insider_sentiment_delta",
         lambda pool, cfg: (lambda: _stage_daily_insider_sentiment_delta(pool, cfg)),
         HEAVY_STAGE_TIMEOUT_SEC),
+    # historical_prices_daily_fmp_rebuild — full-corpus FMP rebuild
+    # (one-shot). Re-sources every (ticker, date) row in
+    # platform.prices_daily from FMP /stable/historical-price-eod/full,
+    # overwriting the dual-source Alpaca-IEX + FMP-CTA mix surfaced by
+    # the 2026-05-22 corpus-fitness audit (PR #281). Resumable via
+    # CORPUS_REBUILD_TICKER_DONE events. Heavy timeout: ~7,000 tickers
+    # × ~0.2s/call ≈ 25 min wall — fits inside the 60-min HEAVY budget
+    # with margin for FMP slow days.
+    ("historical_prices_daily_fmp_rebuild",
+        lambda pool, cfg: (lambda: _stage_historical_prices_daily_fmp_rebuild(pool, cfg)),
+        HEAVY_STAGE_TIMEOUT_SEC),
 )
 KNOWN_STAGES: tuple[str, ...] = tuple(name for name, _, _ in _STAGE_SPECS)
 # Stages that are NOT part of the default daily ``cmd_update`` cycle —
@@ -4404,6 +4501,10 @@ _OFF_CYCLE_STAGES: frozenset[str] = frozenset({
     # the daily cadence (NOT in this off-cycle set) and rides the feed
     # dispatcher via FEED_PROFILES['insider_sentiment_daily'].
     "historical_insider_sentiment_daily",
+    # Full-corpus FMP rebuild — 2026-05-22 PR #281 follow-up. Operator-
+    # on-demand only; the daily-bars cadence is already FMP-sourced post-
+    # 2026-05-22 so the corpus stays single-source after this one-shot.
+    "historical_prices_daily_fmp_rebuild",
 })
 
 # Reasons (from INGESTION_FAILED.data->>'reason' or exception_type) that

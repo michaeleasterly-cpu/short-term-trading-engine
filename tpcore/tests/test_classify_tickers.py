@@ -441,3 +441,111 @@ async def test_upsert_with_source_snapshot_records_actual_count():
     )
     snap_sql, snap_args = pool.conn.execute_calls[0]
     assert snap_args == (12345,)
+
+
+# ─── DELETE-not-in-source (Path D drift-fix, PR #281 §D row 7) ──────────
+#
+# The producer-side completion of the zero-tolerance drift invariant.
+# Pre-fix the upsert path only INSERT/UPDATE'd, never DELETE'd, so any
+# ticker Alpaca removed between runs accumulated as drift (live=13763
+# vs snapshot=13722, delta +41 on 2026-05-22). The fix: extend
+# upsert_classifications_with_source_snapshot to take a source_tickers
+# list + DELETE rows not in that set, in the same transaction.
+
+
+@pytest.mark.asyncio
+async def test_upsert_with_source_snapshot_deletes_not_in_source():
+    """When ``source_tickers`` is passed, the upsert emits a DELETE
+    against rows whose ticker is NOT in that set — in the SAME
+    transaction as the upsert + snapshot. This is the audit-PR-#281
+    §D row 7 drift-fix."""
+    pool = _FakePool()
+    rows = [
+        ("AAPL", "stock", None, None, None, "alpaca_name"),
+        ("MSFT", "stock", None, None, None, "alpaca_name"),
+    ]
+    source_tickers = ["AAPL", "MSFT"]
+    n = await upsert_classifications_with_source_snapshot(
+        pool, rows, source_count=2, source_tickers=source_tickers,
+    )
+    assert n == 2
+    # Two execute calls now: one DELETE, one INSERT (snapshot).
+    assert len(pool.conn.execute_calls) == 2
+    delete_sql, delete_args = pool.conn.execute_calls[0]
+    assert "DELETE" in delete_sql.upper()
+    assert "ticker_classifications" in delete_sql
+    # The source-set is what's passed to the DELETE's NOT IN predicate.
+    assert delete_args == (source_tickers,)
+    # The snapshot INSERT still runs in the same tx.
+    snap_sql, snap_args = pool.conn.execute_calls[1]
+    assert "ticker_classifications_source_count" in snap_sql
+    assert snap_args == (2,)
+
+
+@pytest.mark.asyncio
+async def test_upsert_with_source_snapshot_no_source_tickers_legacy_path():
+    """Legacy callsite without ``source_tickers`` (None / unset) skips
+    the DELETE step — back-compat with the pre-fix shape. Documented
+    explicitly so a future refactor that drops the kwarg doesn't
+    silently re-introduce the drift defect."""
+    pool = _FakePool()
+    rows = [("AAPL", "stock", None, None, None, "alpaca_name")]
+    n = await upsert_classifications_with_source_snapshot(
+        pool, rows, source_count=1,
+    )
+    assert n == 1
+    # Only the snapshot INSERT, no DELETE.
+    assert len(pool.conn.execute_calls) == 1
+    snap_sql, _ = pool.conn.execute_calls[0]
+    assert "ticker_classifications_source_count" in snap_sql
+
+
+@pytest.mark.asyncio
+async def test_upsert_with_source_snapshot_delete_runs_in_transaction():
+    """All three writes (upserts, DELETE, snapshot INSERT) MUST execute
+    inside a single ``conn.transaction()`` context — a partial write
+    would silently corrupt the drift baseline. This test asserts the
+    write-call ordering inside the same connection."""
+    pool = _FakePool()
+    rows = [("AAPL", "stock", None, None, None, "alpaca_name")]
+    await upsert_classifications_with_source_snapshot(
+        pool, rows, source_count=1, source_tickers=["AAPL"],
+    )
+    # One executemany (upsert), two executes (DELETE then snapshot).
+    assert len(pool.conn.executemany_calls) == 1
+    assert len(pool.conn.execute_calls) == 2
+    # DELETE first, then snapshot INSERT (deterministic order — the
+    # snapshot is the COMMIT-time stamp, written AFTER the table is
+    # at its post-DELETE row count).
+    assert "DELETE" in pool.conn.execute_calls[0][0].upper()
+    assert (
+        "ticker_classifications_source_count"
+        in pool.conn.execute_calls[1][0]
+    )
+
+
+@pytest.mark.asyncio
+async def test_upsert_with_source_snapshot_empty_source_tickers_deletes_all():
+    """Edge case — if Alpaca returns a non-empty row set BUT the caller
+    passes ``source_tickers=[]``, every existing classification row is
+    deleted. This documents the contract: the caller MUST pass a
+    source-set whose union covers every ticker in ``rows``. An empty
+    source-set with non-empty rows is a caller bug — we still run the
+    DELETE because that's what the contract says (and a bug-deleting-
+    every-row will surface immediately in the next drift check)."""
+    pool = _FakePool()
+    rows = [("AAPL", "stock", None, None, None, "alpaca_name")]
+    await upsert_classifications_with_source_snapshot(
+        pool, rows, source_count=1, source_tickers=[],
+    )
+    # DELETE-not-in-source still ran (against the empty source-set).
+    assert any(
+        "DELETE" in call[0].upper()
+        for call in pool.conn.execute_calls
+    )
+    # The empty list was forwarded as the predicate arg — the caller
+    # contract is that they OWN passing a sane source-set.
+    delete_calls = [
+        c for c in pool.conn.execute_calls if "DELETE" in c[0].upper()
+    ]
+    assert delete_calls[0][1] == ([],)

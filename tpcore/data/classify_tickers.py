@@ -221,6 +221,21 @@ _INSERT_SOURCE_COUNT_SQL = """
     VALUES ($1)
 """
 
+# DELETE-not-in-source — the producer-side completion of the zero-
+# tolerance ticker_classifications_coverage drift invariant. Pre-2026-
+# 05-22 the upsert path only INSERT/UPDATE'd, never DELETE'd, so any
+# ticker Alpaca removed between runs (delistings, ticker-change OLD-
+# symbol retirement, etc.) accumulated as drift (audit PR #281 §D row 7
+# + PR #293 row 6 both flagged "live=13763 vs snapshot=13722, delta
+# +41"). The producer now tracks the source-set + DELETE's anything in
+# the live table that's NOT in that set, in the SAME transaction as
+# the upsert + source_count snapshot — so the drift invariant holds
+# end-to-end and freshness check live-count == source_count post-run.
+_DELETE_NOT_IN_SOURCE_SQL = """
+    DELETE FROM platform.ticker_classifications
+    WHERE ticker NOT IN (SELECT unnest($1::text[]))
+"""
+
 
 async def upsert_classifications(
     pool: asyncpg.Pool,
@@ -239,14 +254,23 @@ async def upsert_classifications_with_source_snapshot(
     rows: list[tuple[str, str, bool | None, Decimal | None, str | None, str]],
     *,
     source_count: int,
+    source_tickers: list[str] | None = None,
 ) -> int:
-    """Atomically upsert classifications + record the source-of-truth
-    row count snapshot.
+    """Atomically upsert classifications + DELETE rows not in source +
+    record the source-of-truth row count snapshot.
 
-    Both writes happen in a single transaction. A partial write (upserts
-    succeed, snapshot fails) would silently corrupt the next drift-
-    check's view of "what Alpaca said the row count was last time"; the
-    single-transaction guarantees that can't happen.
+    Three writes happen in a single transaction:
+      1. Upsert every (ticker, classification) row Alpaca returned.
+      2. DELETE every existing ticker_classifications row whose ticker
+         is NOT in the upstream source-set Alpaca returned this run
+         (the audit-PR-#281 §D row 7 / PR #293 row 6 drift-fix —
+         tickers Alpaca removed between runs were leaking).
+      3. Insert a source_count snapshot row that gates the zero-
+         tolerance drift invariant.
+
+    A partial write (upserts succeed, DELETE fails, snapshot succeeds)
+    would silently corrupt the next drift-check; the single-transaction
+    guarantee makes that impossible.
 
     ``source_count`` is the number of assets the upstream (Alpaca
     ``/v2/assets``) returned BEFORE filtering / classification — it is
@@ -254,6 +278,14 @@ async def upsert_classifications_with_source_snapshot(
     ``platform.ticker_classifications`` must equal. A row with that
     count is appended to ``platform.ticker_classifications_source_count``
     (one row per refresh — history is kept).
+
+    ``source_tickers`` is the full set of tickers Alpaca returned this
+    run (the same domain ``rows`` was built from — passed explicitly so
+    the DELETE-not-in-source predicate is the authoritative source-set,
+    not a re-derivation from ``rows``). When ``None`` (legacy callers
+    that haven't been updated yet), the DELETE step is skipped and we
+    fall back to the pre-fix behavior — the test suite catches any
+    callsite drift via test_upsert_with_source_snapshot_deletes_*.
     """
     if not rows:
         # Defensive: a zero-row classify run is itself a vendor failure
@@ -267,13 +299,29 @@ async def upsert_classifications_with_source_snapshot(
             "an empty upstream response is a vendor failure and must NOT "
             "be persisted as a baseline."
         )
+    deleted = 0
     async with pool.acquire() as conn, conn.transaction():
         await conn.executemany(_UPSERT_SQL, rows)
+        if source_tickers is not None:
+            # DELETE every ticker_classifications row whose ticker is
+            # NOT in the source-set Alpaca returned this run. Atomic
+            # with the upsert so the live count == source_count
+            # invariant holds the instant the transaction commits.
+            result = await conn.execute(
+                _DELETE_NOT_IN_SOURCE_SQL, list(source_tickers),
+            )
+            # asyncpg returns "DELETE N" — strip to int.
+            try:
+                deleted = int(result.split()[-1])
+            except (ValueError, IndexError, AttributeError):
+                deleted = 0
         await conn.execute(_INSERT_SOURCE_COUNT_SQL, source_count)
     logger.info(
         "classify_tickers.source_snapshot_recorded",
         source_count=source_count,
         upserted=len(rows),
+        deleted_not_in_source=deleted,
+        source_tickers_passed=source_tickers is not None,
     )
     return len(rows)
 
@@ -376,8 +424,15 @@ async def classify_all_tickers(
         logger.warning("tpcore.classify_tickers.empty_alpaca_response")
         return {"rows": 0, **stats, **follow_up_stats, "source_count": 0}
 
+    # Source-set = every ticker Alpaca returned this run (bulk + per-
+    # ticker-resolved). Passed to the upsert so the same transaction
+    # DELETE's any ticker_classifications row whose ticker is NOT in
+    # this set — the drift-fix from audit PR #281 §D row 7.
+    source_tickers = [r[0] for r in combined_rows]
     n = await upsert_classifications_with_source_snapshot(
-        pool, combined_rows, source_count=source_count,
+        pool, combined_rows,
+        source_count=source_count,
+        source_tickers=source_tickers,
     )
 
     logger.info(
