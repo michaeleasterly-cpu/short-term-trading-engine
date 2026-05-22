@@ -479,7 +479,7 @@ async def _fetch_via_fmp(
                 "low": b.get("l", ""), "close": b.get("c", ""),
                 "volume": b.get("v", ""), "vwap": b.get("vw", ""),
             })
-        inserted = await _upsert_bars(pool, symbol, bars, delisted=False)
+        inserted = await _upsert_bars(pool, symbol, bars, delisted=False, source="fmp")
         total_rows += inserted
 
     return total_rows, failures, archive_rows
