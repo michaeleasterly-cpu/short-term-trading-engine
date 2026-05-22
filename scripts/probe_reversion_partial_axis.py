@@ -286,7 +286,8 @@ async def _amain() -> int:
         ``regime_filter_v1 is set but context.regime_bundle is None``).
         """
         from reversion.backtest import (
-            load_reversion_window_context, run_reversion_with_context,
+            load_reversion_window_context,
+            run_reversion_with_context,
         )
         ctx_kwargs = {
             k: v for k, v in kwargs.items()
