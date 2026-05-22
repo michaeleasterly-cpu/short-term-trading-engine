@@ -1,25 +1,22 @@
-"""Unit tests for the consolidated ``ops.lane_service`` daemon (2026-05-21).
+"""Unit tests for the deployed ``ops.lane_service`` daemon — slimmed to
+DETERMINISTIC SELF-HEAL ONLY (2026-05-22).
 
-The 2-daemon Railway-budget fix: the previous data-repair-service and
-llm-triage-service are fused into ONE daemon hosting FOUR co-tasks
-under one ``asyncio.gather()``. Both source modules
-(``ops.data_repair_service`` / ``ops.llm_triage_service``) remain
-intact as importable libraries — lane_service is a thin orchestrator.
+Operator directive 2026-05-21 ("we wont be deploying the llm data
+triage it will run locally with my max account"): the deployed
+``lane-service`` daemon hosts ONLY the deterministic ``data_repair``
+co-task. The three previous LLM-invoking co-tasks (``triage_data`` /
+``triage_engine`` / ``triage_lab_emitter``) are REMOVED from the
+deployed daemon and now run OPERATOR-LOCALLY via slash skills.
 
 Coverage:
-  (a) Module surface: ``LANE_NAMES`` is exactly the four lanes the
-      docstring + design pin (``data_repair``, ``triage_data``,
-      ``triage_engine``, ``triage_lab_emitter``).
-  (b) ``POOL_MAX_SIZE`` accommodates one acquire per co-task plus
-      headroom.
-  (c) The two lock dirs stay DISTINCT (different mutual-exclusion
-      domains: data-ops lock vs triage lock).
-  (d) ``_run_supervised`` mirrors the engine-service crash-isolation
+  (a) Module surface: ``LANE_NAMES`` is exactly ``("data_repair",)``
+      (the deterministic co-task; no triage co-tasks here).
+  (b) ``POOL_MAX_SIZE`` accommodates the single co-task plus headroom.
+  (c) ``_run_supervised`` mirrors the engine-service crash-isolation
       contract: a non-Cancelled exception is logged and the lane is
       restarted after backoff; CancelledError propagates.
-  (e) The lane factories delegate to the SOURCE modules' main loops
-      (no behavioural rewrite of the lanes — the orchestrator only
-      composes).
+  (d) The lane factory delegates to the SOURCE module's main loop
+      (``ops.data_repair_service._main_loop``).
 """
 from __future__ import annotations
 
@@ -59,37 +56,25 @@ def lane_service_mod():
     return mod
 
 
-def test_lane_names_exactly_four(lane_service_mod) -> None:
-    """Behaviour (a): the four co-tasks the daemon hosts."""
-    assert lane_service_mod.LANE_NAMES == (
-        "data_repair",
-        "triage_data",
-        "triage_engine",
-        "triage_lab_emitter",
-    )
+def test_lane_names_exactly_data_repair(lane_service_mod) -> None:
+    """Behaviour (a): the ONLY co-task the deployed daemon hosts is
+    the deterministic ``data_repair`` lane. The three LLM-invoking
+    co-tasks were removed (2026-05-22, operator directive — see
+    ``docs/audits/2026-05-22-llm-triage-removal-from-deployed-daemon.md``)."""
+    assert lane_service_mod.LANE_NAMES == ("data_repair",)
 
 
 def test_pool_max_size_at_least_one_per_lane(lane_service_mod) -> None:
     """Behaviour (b): pool sized ≥ one connection per co-task plus
-    headroom for in-flight repair/triage acquires."""
+    headroom for in-flight repair acquires."""
     assert lane_service_mod.POOL_MAX_SIZE >= len(lane_service_mod.LANE_NAMES)
-
-
-def test_lock_dirs_are_distinct(lane_service_mod) -> None:
-    """Behaviour (c): the data-ops lock and the triage lock are
-    DIFFERENT directories — they guard different mutual-exclusion
-    domains (vs run_data_operations.sh vs ad-hoc
-    `python -m ops.llm_triage_service`)."""
-    from ops.data_repair_service import DEFAULT_LOCK_DIR as DR
-    from ops.llm_triage_service import DEFAULT_LOCK_DIR as TR
-    assert DR != TR
 
 
 @pytest.mark.asyncio
 async def test_run_supervised_restarts_on_non_cancelled_exception(
     lane_service_mod,
 ) -> None:
-    """Behaviour (d): a non-Cancelled exception is caught, logged, and
+    """Behaviour (c): a non-Cancelled exception is caught, logged, and
     the lane is restarted after backoff. Sets the stop_event on the
     second attempt to keep the test bounded."""
     attempts = {"n": 0}
@@ -115,7 +100,7 @@ async def test_run_supervised_restarts_on_non_cancelled_exception(
 async def test_run_supervised_propagates_cancellederror(
     lane_service_mod,
 ) -> None:
-    """Behaviour (d): CancelledError propagates (clean shutdown
+    """Behaviour (c): CancelledError propagates (clean shutdown
     semantics — the supervisor must NOT swallow it)."""
     stop_event = asyncio.Event()
 
@@ -128,20 +113,39 @@ async def test_run_supervised_propagates_cancellederror(
         )
 
 
-def test_factories_delegate_to_source_modules(lane_service_mod) -> None:
-    """Behaviour (e): the lane factories import the SAME main loops
-    that the (now retired) standalone daemons used. Asserting via the
-    imported symbol identities — no behavioural rewrite."""
+def test_factory_delegates_to_data_repair_main_loop(lane_service_mod) -> None:
+    """Behaviour (d): the deployed daemon's lane factory imports the
+    SAME main loop the (now retired) standalone data-repair-service
+    used. Asserting via the imported symbol identity — no behavioural
+    rewrite of the deterministic lane."""
     from ops.data_repair_service import _main_loop as src_data_repair
-    from ops.llm_triage_service import _engine_loop as src_triage_engine
-    from ops.llm_triage_service import (
-        _lab_emitter_loop as src_triage_lab_emitter,
-    )
-    from ops.llm_triage_service import _main_loop as src_triage_data
 
-    # The orchestrator's imported names (visible via module globals)
-    # are bound to the same callables the source modules expose.
+    # The orchestrator's imported name (visible via module globals)
+    # is bound to the same callable the source module exposes.
     assert lane_service_mod._data_repair_main_loop is src_data_repair
-    assert lane_service_mod._triage_data_main_loop is src_triage_data
-    assert lane_service_mod._triage_engine_loop is src_triage_engine
-    assert lane_service_mod._triage_lab_emitter_loop is src_triage_lab_emitter
+
+
+def test_deployed_daemon_does_not_import_llm_triage_modules(
+    lane_service_mod,
+) -> None:
+    """Operator directive 2026-05-21: the deployed daemon must NOT pull
+    any LLM-invoking module into the deployed process. This asserts
+    structurally that ``ops.lane_service``'s globals do NOT carry any
+    binding from the LLM-triage source modules (the four prior co-task
+    factories that pulled ``ops.llm_triage_service`` /
+    ``ops.llm_data_recovery`` / ``ops.engine_llm_triage`` /
+    ``ops.llm_lab_emitter`` are gone)."""
+    forbidden_names = {
+        "_triage_data_main_loop",
+        "_triage_engine_loop",
+        "_triage_lab_emitter_loop",
+        "run_autonomous_recovery",
+        "engine_run_triage",
+        "run_lab_emitter_cotask",
+    }
+    leaked = forbidden_names & set(vars(lane_service_mod).keys())
+    assert not leaked, (
+        f"LLM-triage symbols leaked into the deployed daemon: {leaked}. "
+        "Per operator directive 2026-05-21 the deployed daemon must run "
+        "deterministic-only; LLM invocation is operator-local."
+    )
