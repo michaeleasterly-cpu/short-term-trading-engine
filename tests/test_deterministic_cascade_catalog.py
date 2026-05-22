@@ -22,7 +22,15 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_OPS = REPO_ROOT / "scripts" / "ops.py"
+ENGINE_DISPATCH = REPO_ROOT / "ops" / "engine_dispatch.py"
+ORDER_TRANSIENT_RETRY = REPO_ROOT / "tpcore" / "order_management" / "transient_retry.py"
 SPEC = REPO_ROOT / "docs" / "superpowers" / "specs" / "2026-05-21-deterministic-self-heal-coverage-expansion-design.md"
+# Search across all cascade-hosting source files. Data-lane lives in scripts/ops.py;
+# engine-lane lives in ops/engine_dispatch.py (E1/E9) + tpcore/order_management/
+# transient_retry.py (E3). E2 (per-engine setup_detection retry) lives in
+# tpcore/engine/transient_retry.py — the helper is opted-into by individual engine
+# plugs.
+CASCADE_SOURCE_FILES = [SCRIPTS_OPS, ENGINE_DISPATCH, ORDER_TRANSIENT_RETRY]
 
 
 # ROW_ID → (must-have-symbol-in-scripts/ops.py, must-have-event-name-in-scripts/ops.py)
@@ -56,11 +64,18 @@ EXPECTED_CASCADES: dict[str, tuple[str, str]] = {
     "D10": ("ticker_classifications_coverage", "INGESTION_AUTO_RECOVERED_CLASSIFICATION"),
     # D13 pool exhaustion → recycle_asyncpg_pool + retry (PR #262)
     "D13": ("_cascade_d13_pool_exhaustion", "POOL_CIRCUIT_BREAKER_TRIPPED"),
+    # E1 engine scheduler stage failure → retry once + ENGINE_STAGE_ESCALATED (PR #267)
+    "E1": ("ENGINE_STAGE_ESCALATED_EVENT", "ENGINE_STAGE_ESCALATED"),
+    # E3 order placement transient → retry + ORDER_ESCALATED (PR #267)
+    "E3": ("submit_with_transient_retry", "ORDER_ESCALATED"),
+    # E9 engine package import error → ENGINE_IMPORT_FAILED + skip cycle (PR #267)
+    "E9": ("ENGINE_IMPORT_FAILED_EVENT", "ENGINE_IMPORT_FAILED"),
 }
 
 
 def _ops_py_source() -> str:
-    return SCRIPTS_OPS.read_text(encoding="utf-8")
+    """Concatenated source across all cascade-hosting files."""
+    return "\n".join(p.read_text(encoding="utf-8") for p in CASCADE_SOURCE_FILES)
 
 
 def _spec_source() -> str:
@@ -129,14 +144,15 @@ def test_catalog_matches_spec_done_rows() -> None:
 
     # Every row marked DONE in the spec must be in EXPECTED_CASCADES.
     # Exclusions — rows whose "deterministic recovery" exists but lives outside
-    # scripts/ops.py (so the symbol-search-in-ops.py model doesn't apply):
+    # the CASCADE_SOURCE_FILES set (so the symbol+event search model doesn't apply):
     #   D12 — CSV archive R3 is env-pluggable backend, not a cascade
+    #   E2 — per-engine setup_detection retry uses tpcore/engine/transient_retry.py
+    #        but the per-engine opt-in lives in each engine's setup_detection plug;
+    #        a dedicated test_engine_transient_retry_pilot pins reversion's wire
     #   E5 — capital_gate raise → skip-cycle behavior in tpcore/quality/validation/capital_gate.py
     #   E6 — drawdown breach → RiskGovernor auto-pause in tpcore/risk/
     #   E8 — stale-order auto-cancel in tpcore/order_management/stale_order_cancel.py
-    # When Wave 3 lands the engine-lane cascade in ops/engine_service.py, extend
-    # _ops_py_source() to search there too + remove these exclusions.
-    backend_done = {"D12", "E5", "E6", "E8"}
+    backend_done = {"D12", "E2", "E5", "E6", "E8"}
     spec_done_missing = (done_in_spec - set(EXPECTED_CASCADES)) - backend_done
     assert not spec_done_missing, (
         f"Spec marks these rows DONE but they're missing from EXPECTED_CASCADES: "

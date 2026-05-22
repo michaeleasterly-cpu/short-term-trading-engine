@@ -39,19 +39,19 @@ Engines (reversion, vector, momentum, sentinel, canary, catalyst, carver) all ru
 
 | # | Failure shape | Detection signal | Current deterministic recovery | Proposed deterministic recovery |
 |---|---|---|---|---|
-| E1 | Engine scheduler stage failure | `engine_service` stage retval non-OK | None — log + continue | **NEW:** retry once with same params; if still fails, emit `ENGINE_STAGE_ESCALATED` and skip cycle (don't abort engine_service) |
-| E2 | setup_detection panel-load failure | DB-fetch exception | None | **NEW:** transient-DB retry pattern (PR #163 mirror) — 3 attempts with exponential backoff |
-| E3 | Order placement failure | Alpaca API error during order submit | RiskGovernor blocks on hard rejects | **EXTEND:** retry ONCE on transient Alpaca network error; on second failure, mark engine_position degraded + emit `ORDER_ESCALATED` |
+| E1 | Engine scheduler stage failure | `engine_service` stage retval non-OK | **DONE-VIA-#267** — `_invoke_scheduler_with_recovery` in `ops/engine_dispatch.py` retries once + emits `ENGINE_STAGE_ESCALATED` | — |
+| E2 | setup_detection panel-load failure | DB-fetch exception | **DONE-VIA-#267 (pilot)** — `tpcore/engine/transient_retry.py` shared helper + opt-in wire on `reversion/plugs/setup_detection.py` | EXTEND to other engines in follow-on PR (per Wave-3 scope decision) |
+| E3 | Order placement failure | Alpaca API error during order submit | **DONE-VIA-#267** — `submit_with_transient_retry` in `tpcore/order_management/transient_retry.py` retries once + emits `ORDER_ESCALATED` on second-failure | — |
 | E4 | AAR write failure | `aar_logging` plug exception | None | **NEW:** defer AAR to next cycle's deferred-AAR queue (new table `platform.aar_deferred`); don't fail the engine cycle |
 | E5 | Capital gate failure | `assert_passed_for_engine` raises | Skip cycle (existing behavior) | **DONE** — current behavior is correct |
 | E6 | Drawdown breach | engine PnL vs RiskGovernor breach threshold | RiskGovernor auto-pauses engine (existing) | **DONE** |
 | E7 | Credibility drop | post-cycle `write_credibility_score` < threshold | None — Lab/AAR captures it, but no auto-action | **NEW:** if credibility < threshold for N consecutive cycles, auto-emit `ENGINE_CREDIBILITY_DROP` event + RiskGovernor pauses the engine pending operator review |
 | E8 | Stale-order accumulation | `stale_order_cancel` finds orders past TTL | Auto-cancel stale orders (existing) | **DONE** |
-| E9 | Engine package import error | scheduler raises ImportError | None — daemon crashes | **NEW:** wrap engine-imports in try/except; emit `ENGINE_IMPORT_FAILED` event + skip the engine for the cycle (don't crash engine_service) |
+| E9 | Engine package import error | scheduler raises ImportError | **DONE-VIA-#267** — `_pre_check_engine_import` in `ops/engine_dispatch.py` wraps + emits `ENGINE_IMPORT_FAILED` + skips engine (other engines continue) | — |
 | E10 | Per-trade execution_risk failure | `execution_risk` plug raises mid-cycle | None | **NEW:** cancel any in-flight orders for the trade, emit `EXECUTION_RISK_ESCALATED`, skip the trade (not the whole cycle) |
 | E11 | Lifecycle analysis stale | `lifecycle_analysis` reports degradation | None — captured by AAR but no auto-action | **NEW:** if lifecycle score < threshold for N cycles, RiskGovernor pauses the engine |
 
-**Coverage today:** 3/11 (E5, E6, E8 fully; E3 partially). **Coverage after this spec:** 11/11 deterministic.
+**Coverage today:** 7/11 — E1/E2(pilot)/E3/E9 shipped via PR #267; pre-existing E5/E6/E8. Remaining: E4 (deferred-AAR), E7 (credibility-pause), E10 (execution_risk-skip), E11 (lifecycle-pause) — Wave 4 (pending operator authorization). **Coverage after this spec:** 11/11 deterministic.
 
 ## 3. What this spec is NOT
 
