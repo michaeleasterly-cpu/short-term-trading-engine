@@ -78,8 +78,8 @@ def _build_argv() -> list[str]:
         # because the catalyst cumulative count is moving (current
         # 100; +50 here keeps the cumulative under the operator's
         # budgetary radar).
-        "--trials", "50",
-        "--per-window-trials", "20",
+        "--trials", "30",
+        "--per-window-trials", "10",
         "--seed", "20260522",
         # Walk-forward windows match the prior probe.
         "--train-start", "2018-01-01",
@@ -88,15 +88,18 @@ def _build_argv() -> list[str]:
         "--final-holdout-end", "2025-12-31",
         "--train-years", "3",
         "--holdout-years", "1",
-        # Engine-default 15-ticker test universe (matches the prior
-        # PEAD-candidate probe; 268 BEATs 2018-2025, 58 in final
-        # holdout — confirmed by direct DB query 2026-05-22).
+        # T1+T2 production universe (~1300 names) — 2026-05-22 operator-
+        # discretion re-probe to test whether +1.24 Sharpe on 15-ticker
+        # test universe extrapolates. Binding constraint on prior probe
+        # was n_trades=10 ≤ gate floor 30; T1+T2 has 3,753 BEATs in
+        # 2024-2025 holdout, so n_trades should easily exceed 30.
+        "--universe-tier-max", "2",
         "--notes",
-        "Engine surface enrichment re-probe (PEAD): "
-        "event_confirmation_mode pinned to beat_30d_only via temporary "
-        "LAB_TARGET.param_ranges narrowing; hold_days Lab-sampled "
-        "5..30; cluster_window_days dropped from search (no-op under "
-        "PEAD branch).",
+        "Engine surface enrichment re-probe (PEAD) on T1+T2 production "
+        "universe: event_confirmation_mode pinned to beat_30d_only via "
+        "temporary LAB_TARGET.param_ranges narrowing; hold_days "
+        "Lab-sampled 5..30; cluster_window_days dropped from search; "
+        "universe-tier-max=2.",
     ]
 
 
