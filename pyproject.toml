@@ -395,6 +395,20 @@ ignore = ["E501"]
 # form (mirrors the Wave-1 precedent immediately above) — never an
 # inline ``# noqa: SLF001``.
 "tests/test_engine_lane_self_heal_wave3.py" = ["SLF"]
+# Wave-1 full-spectrum data-feed hardening critical-path stage pins
+# (2026-05-22 PR fix/feed-audit-wave-1-critical-path-blockers). The
+# tests name three ``scripts/ops.py``-private stage symbols
+# (``_stage_historical_macro_indicators``,
+# ``_stage_rebuild_corporate_actions_from_archive``,
+# ``_stage_historical_fundamentals_quarterly``) — that IS the test's
+# purpose: pin the new per-blocker stage contracts (params parsing,
+# dispatch to underlying primitives, no-silent-skip on missing input)
+# at exactly those seams. Data-lane-module-private (NOT tpcore-
+# private) access; the scoped per-file ignore is the correct form
+# (mirrors the Wave-1/Wave-2/Wave-3 precedents immediately above) —
+# never an inline ``# noqa: SLF001``.
+"tests/test_stage_historical_macro_indicators.py" = ["SLF"]
+"tests/test_rebuild_corporate_actions_from_archive.py" = ["SLF"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

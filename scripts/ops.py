@@ -3067,6 +3067,328 @@ async def _stage_historical_earnings_events_t1_t2(
     return result
 
 
+async def _stage_historical_fundamentals_quarterly(
+    pool: asyncpg.Pool, cfg: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """One-shot historical-quarter backfill for fundamentals_quarterly.
+
+    The 2026-05-22 full-spectrum data-feed hardening audit
+    (``docs/audits/2026-05-22-full-spectrum-data-feed-hardening.md``)
+    flagged this as the largest single corpus integrity red on ``main``:
+
+        fundamentals_quarterly_completeness — 285 of 1090 active T1/T2
+        stock tickers failing.
+
+    The canonical ``fundamentals_refresh`` stage cannot heal these gaps:
+    its ``backfill_all`` skips tickers whose newest ``recorded_at`` is
+    fresh (<24h), and the FMP adapter's default 40-quarter limit
+    bounds the historical depth.
+
+    This stage:
+
+    * Reads target tickers from ``compute_fundamentals_repair_targets``
+      (the SAME function the D6 validation cascade consults). Detector
+      and healer cannot disagree.
+    * Per-ticker FMP fetch via ``FMPFundamentalsAdapter`` (the existing
+      adapter — no schema change). Resumable via the
+      ``FUNDAMENTALS_BACKFILL_TICKER_DONE`` event in
+      ``platform.application_log``.
+    * Idempotent upsert via ``FundamentalsCache._upsert_payload`` —
+      same physical-truth gate path as the daily refresh.
+
+    Operator-on-demand only (NOT in ``OPS_UPDATE_STAGES``). Run after
+    PR merge to populate the missing quarters; the weekly
+    ``fundamentals_refresh`` stage keeps the tail fresh post-backfill.
+
+    Optional ``--param`` knobs:
+        * ``resume=false`` — re-process every gap-ticker (default true).
+        * ``limit=N`` — process at most N tickers (handy for spot-checks).
+        * ``end_date=YYYY-MM-DD`` — point-in-time cutoff (default today).
+        * ``tickers=AAPL,MSFT,…`` — explicit override of the gap-target
+          list (handy when the operator wants to pre-empt the next
+          completeness probe).
+
+    Use:
+        DATABASE_URL=… FMP_API_KEY=… .venv/bin/python scripts/ops.py \\
+            --stage historical_fundamentals_quarterly
+    """
+    from tpcore.data.fundamentals_backfill import (
+        backfill_universe,
+        enumerate_gap_tickers,
+    )
+    from tpcore.logging.db_handler import DBLogHandler
+
+    cfg = cfg or {}
+    log = structlog.get_logger("scripts.ops")
+    resume = bool(cfg.get("resume", True))
+    limit = int(cfg.get("limit", 0)) or None
+    end = (
+        date.fromisoformat(str(cfg["end_date"]))
+        if cfg.get("end_date") else None
+    )
+    explicit_tickers = cfg.get("tickers")
+    if explicit_tickers:
+        if isinstance(explicit_tickers, str):
+            universe = [
+                t.strip().upper()
+                for t in explicit_tickers.split(",") if t.strip()
+            ]
+        else:
+            universe = [str(t).upper() for t in explicit_tickers]
+        log.info(
+            "ops.stage.historical_fundamentals_quarterly.explicit_universe",
+            count=len(universe),
+        )
+    else:
+        universe = await enumerate_gap_tickers(pool)
+        log.info(
+            "ops.stage.historical_fundamentals_quarterly.gap_targets",
+            count=len(universe),
+        )
+        if not universe:
+            log.info(
+                "ops.stage.historical_fundamentals_quarterly.nothing_to_repair",
+                note="compute_fundamentals_repair_targets returned []",
+            )
+            return {
+                "universe_size": 0,
+                "resumed_skipped": 0,
+                "tickers_attempted": 0,
+                "tickers_succeeded": 0,
+                "tickers_failed": 0,
+                "rows_written": 0,
+                "history_limit_quarters": 0,
+                "failures_sample": [],
+            }
+    if limit:
+        universe = universe[:limit]
+        log.info(
+            "ops.stage.historical_fundamentals_quarterly.limited", limit=limit,
+        )
+
+    db_log = DBLogHandler(
+        pool, engine=ENGINE_NAME, run_id=uuid.uuid4(),
+    )
+    result = await backfill_universe(
+        pool, db_log, universe, end=end, resume=resume,
+    )
+    log.info(
+        "ops.stage.historical_fundamentals_quarterly.done", **result,
+    )
+    return result
+
+
+async def _stage_historical_macro_indicators(
+    pool: asyncpg.Pool, cfg: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Per-indicator historical FRED re-pull stage.
+
+    The 2026-05-22 full-spectrum data-feed hardening audit
+    (``docs/audits/2026-05-22-full-spectrum-data-feed-hardening.md``)
+    flagged ``macro_indicators`` as missing a one-shot historical
+    stage. The canonical ``macro_indicators`` stage runs a rolling
+    refresh; the D8 cascade computes per-indicator targets at heal
+    time. This stage is the operator-invokable shape for the same
+    primitive: name an indicator (+ optional date range) and pull
+    its full FRED observation set into ``platform.macro_indicators``.
+
+    Wraps ``per_indicator_fred_repull`` (the existing D8 primitive)
+    so the operator path and the auto-cascade path land identical
+    rows.
+
+    Optional ``--param`` knobs:
+        * ``indicator=initial_claims`` — single canonical indicator
+          name (left-side of ``INDICATOR_SERIES``). Required when
+          ``indicators`` is not given.
+        * ``indicators=vix,credit_spread,…`` — comma-separated batch.
+        * ``since=YYYY-MM-DD`` — ``observation_start``; default = full
+          history (None).
+        * ``until=YYYY-MM-DD`` — ``observation_end``; default = today.
+
+    Use:
+        DATABASE_URL=… FRED_API_KEY=… .venv/bin/python scripts/ops.py \\
+            --stage historical_macro_indicators \\
+            --param indicator=initial_claims --param since=1967-01-01
+    """
+    from tpcore.fred.targeted_repull import per_indicator_fred_repull
+
+    cfg = cfg or {}
+    log = structlog.get_logger("scripts.ops")
+    indicator = cfg.get("indicator")
+    indicators_csv = cfg.get("indicators")
+    if indicators_csv:
+        if isinstance(indicators_csv, str):
+            indicators = [
+                s.strip() for s in indicators_csv.split(",") if s.strip()
+            ]
+        else:
+            indicators = [str(s) for s in indicators_csv]
+    elif indicator:
+        indicators = [str(indicator)]
+    else:
+        raise RuntimeError(
+            "_stage_historical_macro_indicators: pass --param indicator=<name> "
+            "or --param indicators=<csv>"
+        )
+    since: date | None = (
+        date.fromisoformat(str(cfg["since"])) if cfg.get("since") else None
+    )
+    until: date | None = (
+        date.fromisoformat(str(cfg["until"])) if cfg.get("until") else None
+    )
+    log.info(
+        "ops.stage.historical_macro_indicators.start",
+        indicators=indicators,
+        since=since.isoformat() if since else None,
+        until=until.isoformat() if until else None,
+    )
+    results = await per_indicator_fred_repull(
+        pool, indicators, start=since, end=until,
+    )
+    rows_total = sum(v for v in results.values() if v >= 0)
+    log.info(
+        "ops.stage.historical_macro_indicators.done",
+        indicators=indicators,
+        rows_per_indicator=results,
+        rows_total=rows_total,
+    )
+    return {
+        "indicators": indicators,
+        "rows_per_indicator": results,
+        "rows_total": rows_total,
+    }
+
+
+async def _stage_rebuild_corporate_actions_from_archive(
+    pool: asyncpg.Pool, cfg: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Replay the latest CSV-archive snapshot into platform.corporate_actions.
+
+    The 2026-05-22 full-spectrum data-feed hardening audit
+    (``docs/audits/2026-05-22-full-spectrum-data-feed-hardening.md``)
+    flagged ``corporate_actions_completeness`` as RED on ``main`` —
+    live DB 109737 rows vs archive 110630 rows (0.81% shrinkage,
+    archive 2026-05-15). The standard D6 cascade fires the canonical
+    ``corporate_actions`` stage which re-pulls from Alpaca, but
+    Alpaca's *current* response no longer contains the 893 missing
+    rows (the typical shape: a ticker delisted between archive-
+    snapshot and now, so the vendor stopped serving its corp-actions
+    history).
+
+    This stage is the structural recovery: read the most recent
+    on-disk CSV archive (``data/csv_archives/alpaca_corporate_actions/
+    alpaca_corporate_actions_*.csv.gz``) and idempotently upsert every
+    row back into ``platform.corporate_actions`` via the canonical
+    ``upsert_corporate_actions`` path (which keeps the physical-truth
+    gate intact — ratio bounds, NULL filters, etc.).
+
+    Operator-on-demand only (NOT in ``OPS_UPDATE_STAGES``); the D6
+    cascade already dispatches the canonical ``corporate_actions``
+    stage on a shrinkage red — this stage is the *manual* archive-
+    replay path for when the operator confirms the vendor change is
+    permanent and wants the historical truth restored.
+
+    Optional ``--param`` knobs:
+        * ``archive_path=…`` — explicit ``.csv.gz`` path; default =
+          ``latest_archive("alpaca_corporate_actions")``.
+        * ``dry_run=true`` — log row count + sample without upsert
+          (default false).
+
+    Use:
+        DATABASE_URL=… .venv/bin/python scripts/ops.py \\
+            --stage rebuild_corporate_actions_from_archive
+    """
+    from decimal import Decimal
+    from pathlib import Path
+
+    from tpcore.data.ingest_corporate_actions import upsert_corporate_actions
+    from tpcore.ingestion.csv_archive import latest_archive, read_archive_rows
+
+    cfg = cfg or {}
+    log = structlog.get_logger("scripts.ops")
+    archive_path_arg = cfg.get("archive_path")
+    dry_run = bool(cfg.get("dry_run", False))
+
+    if archive_path_arg:
+        archive_path: Path | None = Path(str(archive_path_arg))
+        if not archive_path.exists():
+            raise RuntimeError(
+                f"rebuild_corporate_actions_from_archive: archive_path "
+                f"{archive_path} does not exist"
+            )
+    else:
+        archive_path = latest_archive("alpaca_corporate_actions")
+        if archive_path is None:
+            raise RuntimeError(
+                "rebuild_corporate_actions_from_archive: no prior archive "
+                "found for source='alpaca_corporate_actions'. Run --stage "
+                "corporate_actions first to write a baseline snapshot."
+            )
+    log.info(
+        "ops.stage.rebuild_corporate_actions_from_archive.start",
+        archive=str(archive_path),
+        dry_run=dry_run,
+    )
+
+    # Re-shape archive rows back into the canonical
+    # upsert_corporate_actions input dict (matches _normalize_*).
+    actions: list[dict[str, Any]] = []
+    parse_failures = 0
+    for r in read_archive_rows(archive_path):
+        ticker = r.get("ticker") or ""
+        action_date_str = r.get("action_date") or ""
+        action_type = r.get("action_type") or ""
+        ratio_str = r.get("ratio") or ""
+        if not ticker or not action_date_str or not action_type or not ratio_str:
+            parse_failures += 1
+            continue
+        try:
+            action_date_v = date.fromisoformat(action_date_str)
+            ratio_d = Decimal(str(ratio_str))
+        except Exception:  # noqa: BLE001 — bad-row, count and skip
+            parse_failures += 1
+            continue
+        actions.append({
+            "ticker": ticker,
+            "action_date": action_date_v,
+            "action_type": action_type,
+            "ratio": ratio_d,
+            "raw_data": {"replayed_from_archive": str(archive_path)},
+        })
+
+    log.info(
+        "ops.stage.rebuild_corporate_actions_from_archive.parsed",
+        archive=str(archive_path),
+        rows_parsed=len(actions),
+        parse_failures=parse_failures,
+    )
+
+    if dry_run:
+        return {
+            "archive": str(archive_path),
+            "rows_parsed": len(actions),
+            "rows_inserted": 0,
+            "parse_failures": parse_failures,
+            "dry_run": True,
+        }
+
+    rows_inserted = await upsert_corporate_actions(pool, actions)
+    log.info(
+        "ops.stage.rebuild_corporate_actions_from_archive.done",
+        archive=str(archive_path),
+        rows_parsed=len(actions),
+        rows_inserted=rows_inserted,
+        parse_failures=parse_failures,
+    )
+    return {
+        "archive": str(archive_path),
+        "rows_parsed": len(actions),
+        "rows_inserted": rows_inserted,
+        "parse_failures": parse_failures,
+        "dry_run": False,
+    }
+
+
 async def _stage_coverage_fill(pool: asyncpg.Pool) -> dict[str, Any]:
     """Self-healing — backfill any tier ≤ 2 ticker missing a bar in the last
     7 days via Alpaca SIP feed. Runs after ``corporate_actions`` (so split
@@ -3703,6 +4025,35 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     ("historical_earnings_events_t1_t2",
         lambda pool, cfg: (lambda: _stage_historical_earnings_events_t1_t2(pool, cfg)),
         HEAVY_STAGE_TIMEOUT_SEC),
+    # historical_fundamentals_quarterly — Wave-1 critical-path blocker
+    # heal (one-shot). Reads gap-target tickers from
+    # compute_fundamentals_repair_targets (the same source the D6
+    # validation cascade consults) and per-ticker FMP fetches via
+    # FMPFundamentalsAdapter; resumable via
+    # FUNDAMENTALS_BACKFILL_TICKER_DONE events. 285 gap-tickers × ~1s
+    # cadence ≈ 5 min wall time; HEAVY headroom for FMP slowness.
+    ("historical_fundamentals_quarterly",
+        lambda pool, cfg: (lambda: _stage_historical_fundamentals_quarterly(pool, cfg)),
+        HEAVY_STAGE_TIMEOUT_SEC),
+    # historical_macro_indicators — Wave-1 critical-path blocker heal
+    # (per-indicator targeted re-pull). Wraps per_indicator_fred_repull
+    # so the operator can backfill ANY missing FRED-observation date
+    # range for a single (or batch of) indicator(s). Standard timeout —
+    # FRED is fast (5-50 series, courtesy 0.5s/req) and the upsert is
+    # bounded by the indicator's history depth.
+    ("historical_macro_indicators",
+        lambda pool, cfg: (lambda: _stage_historical_macro_indicators(pool, cfg)),
+        STAGE_TIMEOUT_SEC),
+    # rebuild_corporate_actions_from_archive — Wave-1 critical-path
+    # blocker heal (archive-replay). Reads the latest CSV archive and
+    # upserts back into platform.corporate_actions via the canonical
+    # upsert path (physical-truth gate preserved). The D6 cascade
+    # already covers the "re-pull from Alpaca" path; THIS stage is the
+    # structural recovery for vendor-shrinkage cases where Alpaca no
+    # longer serves the historical rows.
+    ("rebuild_corporate_actions_from_archive",
+        lambda pool, cfg: (lambda: _stage_rebuild_corporate_actions_from_archive(pool, cfg)),
+        STAGE_TIMEOUT_SEC),
 )
 KNOWN_STAGES: tuple[str, ...] = tuple(name for name, _, _ in _STAGE_SPECS)
 # Stages that are NOT part of the default daily ``cmd_update`` cycle —
@@ -3726,6 +4077,14 @@ _OFF_CYCLE_STAGES: frozenset[str] = frozenset({
     # the weekly earnings_refresh stage keeps the tail fresh post-
     # backfill.
     "historical_earnings_events_t1_t2",
+    # Wave-1 feed-audit critical-path one-shots (PR fix/feed-audit-
+    # wave-1-critical-path-blockers): historical fundamentals + macro
+    # per-indicator + corporate-actions archive replay. Operator-on-
+    # demand only — the daily refresh stages keep the tail fresh
+    # post-backfill.
+    "historical_fundamentals_quarterly",
+    "historical_macro_indicators",
+    "rebuild_corporate_actions_from_archive",
 })
 
 # Reasons (from INGESTION_FAILED.data->>'reason' or exception_type) that
@@ -5731,6 +6090,9 @@ _STAGE_PROVIDER_MAP: dict[str, str] = {
     "fundamentals_refresh": "fmp",
     "earnings_refresh": "fmp",
     "historical_earnings_events_t1_t2": "fmp",
+    "historical_fundamentals_quarterly": "fmp",
+    "historical_macro_indicators": "fred",
+    "rebuild_corporate_actions_from_archive": "csv_archive",
     "sec_filings": "sec",
     "macro_indicators": "fred",
     "finnhub_insider_sentiment": "finnhub",
