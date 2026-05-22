@@ -3614,6 +3614,166 @@ async def _stage_universe_prescreener(pool: asyncpg.Pool) -> dict[str, Any]:
 _CANDIDATE_RE = re.compile(r"^\s*(\w[\w ]*?)\s+candidates?:\s*(\d+)", re.MULTILINE)
 
 
+async def _stage_release_paper_holds_above_paper_floor(
+    pool: asyncpg.Pool, config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Operator-on-demand — clear stale ENGINE_HELD rows for PAPER
+    engines whose latest credibility is at or above the new paper floor.
+
+    Companion to PR ``feat/lifecycle-pause-mode-aware-credibility-floor``
+    (operator directive 2026-05-22). PR #272 (Wave-4 E7/E11) applied the
+    live-promotion floor (``MIN_LIVE_SCORE`` = 60) to ALL engines,
+    paper-or-live. That bricked the autonomous-Lab admit pathway (PR
+    #158) where engines land in PAPER at credibility ~0.40-0.50.
+
+    Engines currently paused at credibility 0.40-0.55 should resume
+    dispatching the moment the mode-aware logic ships. This stage emits
+    a canonical ``ENGINE_CLEARED`` event (the same vocabulary the
+    supervisor uses, mirroring ``ops.engine_supervisor._emit_cleared``)
+    for each PAPER engine whose latest credibility ≥ the new paper
+    floor (``MIN_PAPER_SCORE`` / 100 = 0.30).
+
+    Behaviour:
+
+    * Enumerates all open holds via ``current_hold`` per profiled engine.
+    * For each ``LifecycleState.PAPER`` engine: reads the latest
+      ``confidence`` from ``platform.data_quality_log`` for source
+      ``backtest_credibility.<engine>``; if at or above the paper floor,
+      emits ``ENGINE_CLEARED`` keyed on the open hold's ``hold_id``.
+    * For each ``LifecycleState.LIVE`` engine: NEVER auto-clears (leaves
+      the hold for the supervisor's own clear-predicate or operator).
+    * Idempotent — clearing a hold means the next ``current_hold`` call
+      returns ``None`` so a re-run is a no-op.
+    * RETIRED + LAB engines never appear (they're not in the dispatchable
+      set; ``current_hold`` may still return rows but they're filtered
+      out here by ``lifecycle_state`` check).
+
+    Operator-on-demand only (NOT in ``OPS_UPDATE_STAGES``). Run after
+    the mode-aware-floor PR merges to unstick the four paper engines
+    (reversion, vector, sentinel, momentum) that PR #272 paused.
+
+    Returns a per-engine action map for audit + operator clarity.
+    """
+    from tpcore.backtest.credibility import (
+        CREDIBILITY_SOURCE_PREFIX,
+        MIN_PAPER_SCORE,
+    )
+    from tpcore.engine_profile import (
+        LifecycleState,
+        profile_for,
+        roster_for_dispatch,
+    )
+    from tpcore.supervisor_state import (
+        CLEARED_EVENT,
+        SCHEMA_VERSION,
+        current_hold,
+    )
+
+    paper_floor_pct = MIN_PAPER_SCORE / 100
+    results: dict[str, dict[str, Any]] = {}
+
+    # Iterate the dispatchable roster (PAPER + LIVE engines, the only
+    # actors that can carry an active hold). The allocator is dispatched
+    # via a separate path and gets the same hold check at runtime, so we
+    # include it explicitly here too. RETIRED + LAB engines are never
+    # dispatched (filtered out by ``_DISPATCHABLE``) so any stale held
+    # rows on them are inert — we leave those untouched.
+    engines_to_scan = (*roster_for_dispatch(), "allocator")
+
+    select_latest_sql = """
+        SELECT confidence
+        FROM platform.data_quality_log
+        WHERE source = $1
+        ORDER BY timestamp DESC
+        LIMIT 1
+    """
+
+    for engine_name in sorted(engines_to_scan):
+        profile = profile_for(engine_name)
+        if profile is None:
+            continue
+        hold = await current_hold(pool, engine_name)
+        if hold is None:
+            # No open hold — nothing to do.
+            continue
+        if profile.lifecycle_state is not LifecycleState.PAPER:
+            # LIVE / LAB / RETIRED — never auto-clear here.
+            results[engine_name] = {
+                "action": "skipped_non_paper",
+                "lifecycle_state": profile.lifecycle_state.value,
+                "hold_id": hold.hold_id,
+                "failure_class": hold.failure_class,
+            }
+            continue
+
+        # Read the latest credibility for the engine.
+        source = f"{CREDIBILITY_SOURCE_PREFIX}.{engine_name}"
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(select_latest_sql, source)
+        if row is None:
+            results[engine_name] = {
+                "action": "skipped_no_credibility_row",
+                "lifecycle_state": "paper",
+                "hold_id": hold.hold_id,
+            }
+            continue
+        latest_confidence = float(row["confidence"])
+        if latest_confidence < paper_floor_pct:
+            results[engine_name] = {
+                "action": "skipped_below_paper_floor",
+                "lifecycle_state": "paper",
+                "hold_id": hold.hold_id,
+                "latest_confidence": round(latest_confidence, 4),
+                "paper_floor_pct": paper_floor_pct,
+            }
+            continue
+
+        # Above paper floor → clear the hold via the canonical
+        # ENGINE_CLEARED event keyed on the open hold's hold_id.
+        clear_reason = (
+            f"mode_aware_floor_release: paper engine latest credibility "
+            f"{latest_confidence:.3f} >= paper floor {paper_floor_pct:.2f}"
+        )
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO platform.application_log
+                    (engine, run_id, event_type, severity, message, data)
+                VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+                """,
+                engine_name,
+                uuid.uuid4(),
+                CLEARED_EVENT,
+                "INFO",
+                f"{engine_name} cleared: {clear_reason}",
+                json.dumps({
+                    "schema": SCHEMA_VERSION,
+                    "hold_id": hold.hold_id,
+                    "engine": engine_name,
+                    "clear_reason": clear_reason,
+                    "released_by_stage": (
+                        "release_paper_holds_above_paper_floor"),
+                }),
+            )
+        results[engine_name] = {
+            "action": "released",
+            "lifecycle_state": "paper",
+            "hold_id": hold.hold_id,
+            "failure_class": hold.failure_class,
+            "latest_confidence": round(latest_confidence, 4),
+            "paper_floor_pct": paper_floor_pct,
+        }
+
+    released_count = sum(
+        1 for r in results.values() if r["action"] == "released"
+    )
+    return {
+        "released_count": released_count,
+        "paper_floor_pct": paper_floor_pct,
+        "engines": results,
+    }
+
+
 async def _stage_aar_replay(
     pool: asyncpg.Pool, config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -4085,6 +4245,15 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # run scheduler.run_once(), assert zero candidates/submissions,
     # reset in finally. Use: --stage kill_switch_smoke --param engine=reversion
     ("kill_switch_smoke",   lambda pool, cfg: (lambda: _stage_kill_switch_smoke(pool, cfg)),     STAGE_TIMEOUT_SEC),
+    # release_paper_holds_above_paper_floor — one-shot companion to PR
+    # feat/lifecycle-pause-mode-aware-credibility-floor (operator
+    # directive 2026-05-22). Clears stale ENGINE_HELD rows for PAPER
+    # engines whose latest credibility is at or above the new paper
+    # floor (MIN_PAPER_SCORE/100). LIVE engines are NEVER auto-cleared
+    # here. Idempotent; operator-on-demand only (NOT in --update).
+    ("release_paper_holds_above_paper_floor",
+        lambda pool, cfg: (lambda: _stage_release_paper_holds_above_paper_floor(pool, cfg)),
+        STAGE_TIMEOUT_SEC),
     # Offline Sentinel activation-score distribution probe (one-off
     # diagnostic; operator-on-demand). Read-only — no Lab spend, no
     # n_trials increment, no dossier. Used to diagnose whether a FAILED
@@ -4226,6 +4395,10 @@ _OFF_CYCLE_STAGES: frozenset[str] = frozenset({
     "historical_fundamentals_quarterly",
     "historical_macro_indicators",
     "rebuild_corporate_actions_from_archive",
+    # Mode-aware-floor hold-release (PR 2026-05-22 companion). Operator-
+    # on-demand only; clears stale paper-engine holds whose credibility
+    # is at or above the new paper floor.
+    "release_paper_holds_above_paper_floor",
     # Insider-filings one-shot backfill — Carver 2026-05-22. Operator-on-
     # demand. The SISTER stage ``daily_insider_sentiment_delta`` IS in
     # the daily cadence (NOT in this off-cycle set) and rides the feed
