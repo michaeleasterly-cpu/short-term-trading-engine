@@ -106,4 +106,55 @@ async def build_asyncpg_pool(
     return await asyncpg.create_pool(**kwargs)
 
 
-__all__ = ["build_asyncpg_pool", "normalize_database_url"]
+async def recycle_asyncpg_pool(
+    pool: asyncpg.Pool,
+    database_url: str,
+    *,
+    min_size: int = 1,
+    max_size: int = 4,
+    timeout: float = 10.0,
+    read_only: bool = False,
+) -> asyncpg.Pool:
+    """Close ``pool`` and return a freshly-built pool with the same shape.
+
+    The D13 deterministic self-heal (Wave 2) calls this when an asyncpg
+    pool-exhaustion / connection-drop signal lands on a stage's error
+    string (``TooManyConnectionsError``, ``PostgresConnectionError``,
+    ``PoolTimeout``, ``connection slots are reserved``). The recycle is
+    bounded to the daemon's *local* pool — sibling processes
+    (engine_service, lane-service, the LLM triage daemon) hold their own
+    pools that are NOT touched by this call. That's deliberate: a
+    cross-process pool reset would need coordinated drain semantics
+    (graceful in-flight task handoff, IPC fencing) that are far heavier
+    than this row's scope. Per the Wave-2 spec:
+
+        D13 pool-reset must be safe under concurrent in-flight tasks ...
+        scope it down to JUST 'close+reopen the daemon's local pool'
+        (don't propagate to other processes).
+
+    The closed pool's in-flight queries fail with
+    ``asyncpg.exceptions.InterfaceError`` ("pool is closed"). Callers
+    that may have queries outstanding against the old pool MUST hold
+    that pool alive until those tasks complete; this helper does NOT
+    drain — it closes immediately. The cascade's call-site, which has
+    just *failed* on a pool-exhaustion error, has no in-flight queries
+    against this pool by construction.
+    """
+    try:
+        await pool.close()
+    except Exception:  # noqa: BLE001 — best-effort close; pool may already be torn down
+        pass
+    return await build_asyncpg_pool(
+        database_url,
+        min_size=min_size,
+        max_size=max_size,
+        timeout=timeout,
+        read_only=read_only,
+    )
+
+
+__all__ = [
+    "build_asyncpg_pool",
+    "normalize_database_url",
+    "recycle_asyncpg_pool",
+]

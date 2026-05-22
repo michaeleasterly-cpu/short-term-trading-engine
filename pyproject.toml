@@ -327,6 +327,24 @@ ignore = ["E501"]
 # form (mirrors the daily_bars coverage_collapse cascade precedent
 # immediately above) — never an inline ``# noqa: SLF001``.
 "tests/test_validation_failures_auto_cascade_wave1.py" = ["SLF"]
+# Wave-2 deterministic self-heal stage-robustness cascade (D2 / D3 /
+# D5 / D13 — spec docs/superpowers/specs/2026-05-21-deterministic-self-
+# heal-coverage-expansion-design.md §1 rows D2 D3 D5 D13 + §4 ANSWERED).
+# The test pins the cascade dispatch per failure shape + the daemon-
+# alive invariant for D5 + the local-pool recycle for D13 by NAMING
+# ``scripts/ops.py``-private symbols (``_load_daily_bars_config``,
+# ``_market_open_block_reason``, ``_per_feed_tripwire``,
+# ``_auto_cascade_coverage_collapse``, ``_auto_cascade_validation_failures``,
+# ``_self_heal_failed_stages``, ``_STAGE_SPECS``, ``_AUTH_401_TOKENS``,
+# ``_matches_any``, ``_extract_failed_url_snippet``,
+# ``_infer_provider_from_stage``, ``HEAVY_STAGE_TIMEOUT_SEC``) — that
+# IS the test's purpose (it monkeypatches the live pipeline down to a
+# single-stage harness per Wave-2 row so the dispatch decision + the
+# event shape + the daemon-alive contract can be observed). Engine-
+# lane-module-private (NOT tpcore-private) access; the scoped per-file
+# ignore is the correct form (mirrors the Wave-1 precedent immediately
+# above) — never an inline ``# noqa: SLF001``.
+"tests/test_stage_robustness_auto_cascade_wave2.py" = ["SLF"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

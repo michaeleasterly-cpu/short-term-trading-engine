@@ -122,6 +122,13 @@ def _patch_data_validation_only_pipeline(
     monkeypatch.setattr(
         ops, "_auto_cascade_coverage_collapse", _noop_self_heal,
     )
+    # Wave-2 cascades (D2/D3/D5/D13) — neutralised so Wave-1 tests
+    # exercise validation-cascade in isolation. Wave-2 has its own
+    # regression suite (tests/test_stage_robustness_auto_cascade_wave2.py).
+    if hasattr(ops, "_auto_cascade_stage_robustness"):
+        monkeypatch.setattr(
+            ops, "_auto_cascade_stage_robustness", _noop_self_heal,
+        )
 
     # data_validation stub — raises with the requested failed-check list.
     async def _failing_data_validation(_pool):
