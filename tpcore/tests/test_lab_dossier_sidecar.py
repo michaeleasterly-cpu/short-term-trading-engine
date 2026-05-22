@@ -33,7 +33,12 @@ def _labresult() -> LabResult:
         dsr=0.97,
         credibility_score=64,
         credibility_rubric=_RUBRIC,
-        held_metrics={"n_trades": 12, "sharpe": 1.1},
+        # 2026-05-22 expert recalibration: n_trades raised from 12 to 40
+        # to clear the new MIN_TRADE_COUNT=30 floor; sharpe unchanged so
+        # downstream criteria-gate tests that assert "candidate Sharpe 1.1
+        # beats incumbent Sharpe 1.0" stay correct.
+        held_metrics={"n_trades": 40, "sharpe": 1.1,
+                      "profit_factor": 1.20, "max_drawdown": -0.08},
         winning_params={"z_threshold": 3.1, "max_hold_days": 8},
         param_diff=[ParamDelta(name="z_threshold", current=2.5, winning=3.1)],
         recommended_exit="fold_existing",
