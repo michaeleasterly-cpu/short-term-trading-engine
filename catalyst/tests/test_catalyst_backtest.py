@@ -74,10 +74,12 @@ def test_lab_target_pre_registered_toggles():
     - ``cluster_window_days`` — SP-F (PR #159): legacy 30 vs alternative
       45 cluster window.
     - ``event_confirmation_mode`` — event-confirmed insider-cluster
-      drift + pure-PEAD arm: legacy ``"off"``, the cluster-confirmed
-      ``"positive_beat_30d"`` arm, and the post-2026-05-22 pure-PEAD
+      drift + pure-PEAD arms: legacy ``"off"``, the cluster-confirmed
+      ``"positive_beat_30d"`` arm, the post-2026-05-22 pure-PEAD
       ``"beat_30d_only"`` arm (the autonomous finder's
-      ``catalyst_pead_expansion_range`` hypothesis).
+      ``catalyst_pead_expansion_range`` hypothesis), and the
+      ``"beat_30d_only_macro_expansion"`` arm (PR B 2026-05-22, gates
+      pure-PEAD on per-event macro_regime == 'expansion').
     - ``hold_days`` — post-2026-05-22 enrichment: Lab-sampled int
       time-stop horizon over [5, 30] (default 30, the legacy
       ``HOLDING_PERIOD_DAYS``).
@@ -93,7 +95,8 @@ def test_lab_target_pre_registered_toggles():
     assert LAB_TARGET.param_ranges["cluster_window_days"] == (
         30, 45, "choice:30,45")
     assert LAB_TARGET.param_ranges["event_confirmation_mode"] == (
-        0, 0, "choice:off,positive_beat_30d,beat_30d_only")
+        0, 0, "choice:off,positive_beat_30d,beat_30d_only,"
+              "beat_30d_only_macro_expansion")
     assert LAB_TARGET.param_ranges["hold_days"] == (5, 30, "int")
     assert default_params() == {
         "cluster_window_days": int(CATALYST_CLUSTER_WINDOW_DAYS),

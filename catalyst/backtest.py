@@ -24,17 +24,24 @@ single-spec candidate):
 2. ``event_confirmation_mode`` (event-confirmed insider-cluster drift,
    spec ``docs/superpowers/specs/2026-05-20-catalyst-insider-cluster-
    event-lab-candidate.md``) — ``choice:off,positive_beat_30d,
-   beat_30d_only``. The default ``"off"`` is the legacy cluster-only
-   fire-rule; ``"positive_beat_30d"`` adds the strictly-backward 30d
-   positive earnings-beat confirmation predicate ON TOP of the
-   cluster requirement; ``"beat_30d_only"`` is the pure-PEAD branch
-   that bypasses the insider cluster entirely and fires on each
-   positive BEAT event (no cluster floor, no aggregate-$ floor). The
-   beat_30d_only arm was added 2026-05-22 to express the autonomous
-   finder's PEAD hypothesis (3-probe scorecard, candidate
-   ``catalyst_pead_expansion_range``). Seam:
+   beat_30d_only,beat_30d_only_macro_expansion``. The default ``"off"``
+   is the legacy cluster-only fire-rule; ``"positive_beat_30d"`` adds
+   the strictly-backward 30d positive earnings-beat confirmation
+   predicate ON TOP of the cluster requirement; ``"beat_30d_only"`` is
+   the pure-PEAD branch that bypasses the insider cluster entirely and
+   fires on each positive BEAT event (no cluster floor, no aggregate-$
+   floor); ``"beat_30d_only_macro_expansion"`` (added 2026-05-22, PR B
+   of the catalyst money-engine delivery) is ``"beat_30d_only"`` +
+   a per-event macro-regime gate (fire only if classified macro at the
+   event date is 'expansion'). The beat_30d_only arm was added
+   2026-05-22 to express the autonomous finder's PEAD hypothesis
+   (3-probe scorecard, candidate ``catalyst_pead_expansion_range``);
+   the beat_30d_only_macro_expansion arm refines it by conditioning on
+   the macro regime where PEAD's empirical edge is strongest
+   (lab_finder_references/regime_aware_trading.md §2.3). Seam:
    ``_EVENT_CONFIRMATION_MODE_OVERRIDE``. Test:
-   ``catalyst/tests/test_lab_event_confirmation_byte_identical.py``.
+   ``catalyst/tests/test_lab_event_confirmation_byte_identical.py`` +
+   ``catalyst/tests/test_lab_macro_expansion_byte_identical.py``.
 3. ``hold_days`` (post-2026-05-22 surface enrichment) — ``int 5..30``.
    The hard time-stop horizon when neither TP nor SL fires. Default
    20 sessions (matches the PEAD hypothesis's "20-session hold").
@@ -166,22 +173,46 @@ _EVENT_CONFIRMATION_POSITIVE_BEAT_30D = "positive_beat_30d"
 # hypothesis — the prior off/positive_beat_30d arms both REQUIRED the
 # insider cluster, stripping pure-PEAD candidates to n_trades=2.
 _EVENT_CONFIRMATION_BEAT_30D_ONLY = "beat_30d_only"
+# Pure-PEAD + macro-expansion regime gate: same as ``beat_30d_only``
+# (event-driven, no cluster requirement, hold for ``hold_days``) PLUS
+# fire ONLY IF the per-session classified macro_regime is 'expansion'.
+# Added 2026-05-22 (PR B of the catalyst money-engine delivery, operator
+# brief). Hypothesis: PEAD's strongest empirical edge is in expansion
+# macro regimes (Schmeling 2009; Lyon et al. 1999; per the lab-finder
+# regime-aware-trading reference §2.3). Conditioning entries on
+# macro=expansion should both LIFT Sharpe (more directional beat-drift)
+# AND REDUCE drawdown (avoiding the slowing/contraction tails where
+# beat-drift mean-reverts more aggressively). The classification
+# infrastructure is reused as-is from ``reversion/regime_filter.py``
+# (Sahm + CFNAI-MA3 + yield-curve composite → 3-axis macro
+# classification — cross-engine concern; the architecturally-cleaner
+# move-to-tpcore is future spec). Requires a ``regime_bundle`` attached
+# to the ``CatalystWindowContext`` — when absent the mode treats every
+# session as not-expansion (zero trades, defensive: fail-closed not
+# fail-open).
+_EVENT_CONFIRMATION_BEAT_30D_ONLY_MACRO_EXPANSION = (
+    "beat_30d_only_macro_expansion"
+)
 
 
 def _event_confirmation_mode() -> str:
     """The active event-confirmation mode for THIS backtest run.
 
     Returns the legacy ``"off"`` unless the off-by-default Lab override
-    is set to one of the three declared arms (``"positive_beat_30d"``,
-    ``"beat_30d_only"``). Pure. An explicit ``"off"`` override is
-    accepted as a synonym for ``None`` (so the
-    ``choice:off,positive_beat_30d,beat_30d_only`` toggle has a real
-    legacy-default value to flip to in the Lab sampler).
+    is set to one of the four declared arms (``"positive_beat_30d"``,
+    ``"beat_30d_only"``, ``"beat_30d_only_macro_expansion"``). Pure.
+    An explicit ``"off"`` override is accepted as a synonym for
+    ``None`` (so the ``choice:off,positive_beat_30d,beat_30d_only,
+    beat_30d_only_macro_expansion`` toggle has a real legacy-default
+    value to flip to in the Lab sampler).
     """
     if _EVENT_CONFIRMATION_MODE_OVERRIDE == _EVENT_CONFIRMATION_POSITIVE_BEAT_30D:
         return _EVENT_CONFIRMATION_POSITIVE_BEAT_30D
     if _EVENT_CONFIRMATION_MODE_OVERRIDE == _EVENT_CONFIRMATION_BEAT_30D_ONLY:
         return _EVENT_CONFIRMATION_BEAT_30D_ONLY
+    if (_EVENT_CONFIRMATION_MODE_OVERRIDE
+            == _EVENT_CONFIRMATION_BEAT_30D_ONLY_MACRO_EXPANSION):
+        return _EVENT_CONFIRMATION_BEAT_30D_ONLY_MACRO_EXPANSION
     return _EVENT_CONFIRMATION_OFF
 
 
@@ -581,6 +612,132 @@ def _build_trades_beat_only(
     return trades, trades_for_diag
 
 
+def _macro_regime_at(regime_bundle: Any, session_date: date_t) -> str | None:
+    """Classify the macro regime at ``session_date`` from the bundle.
+
+    Returns one of ``{"expansion", "slowing", "contraction"}`` (the
+    classifier vocabulary from ``reversion.regime_filter``) or ``None``
+    when ``regime_bundle`` is absent.
+
+    The predicate is per-session (NOT per-monthly cursor): the classifier
+    reads the most-recent macro indicator value at-or-before
+    ``session_date``, so the macro label is PIT-correct for the entry
+    date. ``classify_session(...)`` is already strictly-backward
+    (``_latest_pit`` filters on ``index <= as_of``) — no lookahead
+    bias is introduced.
+
+    Defensive: an empty / partial bundle (e.g. SPY-only) still returns a
+    real ``macro`` label because the underlying classifier defaults
+    absent macro series to ``"expansion"`` per its own SoT contract.
+    This module does NOT inject any further default — the classifier's
+    fail-soft is the right policy here.
+    """
+    if regime_bundle is None:
+        return None
+    # Lazy import avoids a top-level cross-engine dependency on import
+    # (the import itself is still cross-engine — the architecturally
+    # cleaner move is to relocate ``regime_filter`` to ``tpcore/`` in a
+    # future spec; for this delivery PR the cross-engine import is the
+    # pragmatic minimum to ship the macro-expansion arm).
+    from reversion.regime_filter import classify_session
+    return classify_session(regime_bundle, session_date).macro
+
+
+def _build_trades_beat_only_macro_expansion(
+    *,
+    universe: tuple[str, ...],
+    earnings_events: pd.DataFrame | None,
+    prices_by_ticker: dict[str, pd.DataFrame],
+    round_trip_costs: dict[str, Decimal],
+    regime_bundle: Any | None,
+    start: date_t,
+    end: date_t,
+    hold_days: int,
+) -> tuple[list[SearchTrade], list[dict[str, Any]]]:
+    """Pure-PEAD + macro-expansion gate: same as
+    :func:`_build_trades_beat_only` (event-driven, no cluster
+    requirement, hold for ``hold_days``) PLUS fire ONLY IF the
+    per-event-date classified macro regime is 'expansion'.
+
+    The gate is applied AT THE EVENT DATE (same PIT cut as the universe
+    / liquidity / SMA gates the legacy cluster path uses), so the macro
+    classification is strictly backward — no lookahead bias.
+
+    Defensive (fail-closed): if ``regime_bundle`` is None, NO trades
+    fire. The mode is opt-in and requires the bundle to be attached to
+    the ``CatalystWindowContext`` (typically by the probe driver or a
+    future per-engine loader). A fail-open default (treat every session
+    as expansion) would silently degrade to the existing
+    ``beat_30d_only`` arm and confound any probe verdict — fail-closed
+    keeps the mode's semantics auditable.
+
+    Added 2026-05-22 (PR B of the catalyst money-engine delivery). The
+    hypothesis: PEAD's strongest empirical edge is in expansion macro
+    regimes (lab_finder_references/regime_aware_trading.md §2.3);
+    conditioning entries on macro=expansion should lift Sharpe AND
+    reduce drawdown (avoiding the slowing/contraction tails where
+    beat-drift mean-reverts more aggressively).
+    """
+    trades: list[SearchTrade] = []
+    trades_for_diag: list[dict[str, Any]] = []
+    if not prices_by_ticker:
+        return trades, trades_for_diag
+    if earnings_events is None or earnings_events.empty:
+        return trades, trades_for_diag
+    if regime_bundle is None:
+        # Fail-closed: the macro-expansion mode requires a regime bundle.
+        # No bundle ⇒ no trades. The probe driver attaches the bundle;
+        # tests synthesize one in-body.
+        return trades, trades_for_diag
+
+    universe_set = set(universe)
+    df = earnings_events
+    mask = (
+        df["ticker"].isin(universe_set)
+        & (df["event_date"] >= start)
+        & (df["event_date"] <= end)
+    )
+    qualifying = df[mask].sort_values(["event_date", "ticker"])
+
+    for _, row in qualifying.iterrows():
+        ticker = str(row["ticker"])
+        event_date = row["event_date"]
+        # Macro-expansion gate: classify the macro regime at the event
+        # date (strictly-backward PIT). Only fire if macro == 'expansion'.
+        if _macro_regime_at(regime_bundle, event_date) != "expansion":
+            continue
+        # Apply universe / liquidity / SMA gates AT THE EVENT DATE
+        # (same PIT cut the legacy cluster path uses).
+        if not _passes_universe_filters(
+            prices_by_ticker=prices_by_ticker,
+            ticker=ticker, cursor=event_date,
+        ):
+            continue
+        prices = prices_by_ticker.get(ticker)
+        if prices is None or prices.empty:
+            continue
+        entry_cursor = event_date + timedelta(days=1)
+        rtc = float(round_trip_costs.get(ticker, Decimal("0.001")))
+        trade = _simulate_trade(
+            ticker=ticker, entry_date=entry_cursor,
+            prices=prices, round_trip_cost=rtc,
+            hold_days=hold_days,
+        )
+        if trade is None:
+            continue
+        trades.append(trade)
+        trades_for_diag.append({
+            "ticker": trade.ticker,
+            "entry_date": trade.entry_date,
+            "exit_date": trade.exit_date,
+            "entry_price": trade.entry_price,
+            "exit_price": trade.exit_price,
+            "pnl_pct": trade.pnl_pct,
+            "direction": "LONG",
+        })
+    return trades, trades_for_diag
+
+
 def _build_trades(
     *,
     universe: tuple[str, ...],
@@ -593,6 +750,7 @@ def _build_trades(
     earnings_events: pd.DataFrame | None = None,
     event_confirmation_mode: str = _EVENT_CONFIRMATION_OFF,
     hold_days: int = HOLDING_PERIOD_DAYS,
+    regime_bundle: Any | None = None,
 ) -> tuple[list[SearchTrade], list[dict[str, Any]]]:
     """Walk every (ticker, signal-date) pair in the window where the
     cluster floor + the liquidity/trend gates pass; emit one
@@ -620,6 +778,21 @@ def _build_trades(
             earnings_events=earnings_events,
             prices_by_ticker=prices_by_ticker,
             round_trip_costs=round_trip_costs,
+            start=start, end=end,
+            hold_days=hold_days,
+        )
+
+    # Pure-PEAD + macro-expansion gate (beat_30d_only_macro_expansion):
+    # event-driven AND macro_regime == 'expansion' at the event date.
+    # Short-circuits the cluster loop entirely; fail-closed if the
+    # regime_bundle is absent.
+    if event_confirmation_mode == _EVENT_CONFIRMATION_BEAT_30D_ONLY_MACRO_EXPANSION:
+        return _build_trades_beat_only_macro_expansion(
+            universe=universe,
+            earnings_events=earnings_events,
+            prices_by_ticker=prices_by_ticker,
+            round_trip_costs=round_trip_costs,
+            regime_bundle=regime_bundle,
             start=start, end=end,
             hold_days=hold_days,
         )
@@ -728,6 +901,13 @@ class CatalystWindowContext:
     §8); the legacy code path ignores it. Defaults to an empty
     DataFrame so existing callers (and the legacy code path) remain
     byte-identical without any modification.
+
+    ``regime_bundle`` (added 2026-05-22, PR B) is consumed ONLY by the
+    ``event_confirmation_mode="beat_30d_only_macro_expansion"`` arm. The
+    other three arms ignore it. Defaults to ``None`` — the probe driver
+    or a future per-engine loader attaches it; the live scheduler never
+    enters this module so the live path is byte-identical regardless of
+    whether a bundle is attached.
     """
 
     universe: tuple[str, ...]
@@ -741,6 +921,7 @@ class CatalystWindowContext:
             columns=["ticker", "event_date", "event_type", "magnitude_pct"]
         )
     )
+    regime_bundle: Any | None = None
 
 
 async def load_catalyst_window_context(
@@ -813,12 +994,16 @@ def run_catalyst_with_context(
 
     - ``cluster_window_days`` (legacy SP-F toggle): ``choice:30,45``.
     - ``event_confirmation_mode`` (the event-confirmed insider-cluster
-      drift candidate + the post-2026-05-22 pure-PEAD arm):
-      ``choice:off,positive_beat_30d,beat_30d_only``. When
-      ``"positive_beat_30d"`` a cluster fires only if the same ticker
-      has a positive earnings beat in the strictly-backward 30d window;
-      when ``"beat_30d_only"`` the insider-cluster requirement is
-      bypassed and trades fire on each positive BEAT event.
+      drift candidate + the post-2026-05-22 pure-PEAD + macro-expansion
+      arms): ``choice:off,positive_beat_30d,beat_30d_only,
+      beat_30d_only_macro_expansion``. When ``"positive_beat_30d"`` a
+      cluster fires only if the same ticker has a positive earnings
+      beat in the strictly-backward 30d window; when ``"beat_30d_only"``
+      the insider-cluster requirement is bypassed and trades fire on
+      each positive BEAT event; when
+      ``"beat_30d_only_macro_expansion"`` the cluster is bypassed AND
+      the firing predicate adds a macro-regime gate (fire only if the
+      classified macro at the event date is 'expansion').
     - ``hold_days`` (post-2026-05-22 enrichment): ``int 5..30``. The
       time-stop horizon used by :func:`_simulate_trade`. Defaults to
       the legacy ``HOLDING_PERIOD_DAYS`` (30) when the override is
@@ -856,6 +1041,7 @@ def run_catalyst_with_context(
             earnings_events=context.earnings_events,
             event_confirmation_mode=active_event_mode,
             hold_days=active_hold_days,
+            regime_bundle=context.regime_bundle,
         )
     finally:
         _CLUSTER_WINDOW_OVERRIDE = None
@@ -1015,8 +1201,8 @@ LAB_TARGET = LabTarget(
         # SP-F (PR #159) — alternative cluster-window toggle.
         # choice:<csv> (NOT a range/grid).
         "cluster_window_days": (30, 45, "choice:30,45"),
-        # Event-confirmed insider-cluster drift + pure-PEAD arm.
-        # choice:off,positive_beat_30d,beat_30d_only —
+        # Event-confirmed insider-cluster drift + pure-PEAD arms.
+        # choice:off,positive_beat_30d,beat_30d_only,beat_30d_only_macro_expansion —
         #   - ``off`` is the legacy cluster-only fire rule (denominator);
         #   - ``positive_beat_30d`` requires BOTH the cluster AND a
         #     positive earnings beat in the strictly-backward 30d
@@ -1029,8 +1215,20 @@ LAB_TARGET = LabTarget(
         #     finder's ``catalyst_pead_expansion_range`` candidate
         #     needs this arm — the prior two arms stripped pure-PEAD
         #     candidates to n_trades=2.
+        #   - ``beat_30d_only_macro_expansion`` (added 2026-05-22 — PR
+        #     B of the catalyst money-engine delivery) is
+        #     ``beat_30d_only`` + a per-event macro-regime gate: fire
+        #     ONLY IF the classified macro_regime at the event date is
+        #     'expansion' (per the Sahm + CFNAI-MA3 + yield-curve
+        #     composite classifier in ``reversion.regime_filter``).
+        #     Hypothesis: PEAD's strongest edge is in expansion
+        #     regimes; conditioning entries lifts Sharpe AND reduces
+        #     drawdown vs the unconditional ``beat_30d_only`` arm. The
+        #     mode is fail-closed when no ``regime_bundle`` is attached
+        #     to the context.
         "event_confirmation_mode": (
-            0, 0, "choice:off,positive_beat_30d,beat_30d_only",
+            0, 0, "choice:off,positive_beat_30d,beat_30d_only,"
+                  "beat_30d_only_macro_expansion",
         ),
         # Lab-sampled time-stop horizon (post-2026-05-22 enrichment).
         # The legacy hardcoded value was 30 sessions; the PEAD
