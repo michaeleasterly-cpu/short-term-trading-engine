@@ -280,12 +280,18 @@ def test_h2_recorded_parameter_reflects_active_override():
     assert legacy.parameters != variant.parameters
 
 
-def test_l1_lab_target_declares_three_arms_and_hold_days_range():
-    """L1 — LAB_TARGET surface mirrors the enrichment."""
+def test_l1_lab_target_declares_four_arms_and_hold_days_range():
+    """L1 — LAB_TARGET surface mirrors the enrichment.
+
+    2026-05-22 PR B (catalyst money-engine delivery): the
+    ``beat_30d_only_macro_expansion`` arm joins the choice menu (PEAD
+    + per-event macro-regime gate).
+    """
     from catalyst.backtest import LAB_TARGET
 
     assert LAB_TARGET.param_ranges["event_confirmation_mode"] == (
-        0, 0, "choice:off,positive_beat_30d,beat_30d_only",
+        0, 0, "choice:off,positive_beat_30d,beat_30d_only,"
+              "beat_30d_only_macro_expansion",
     )
     assert LAB_TARGET.param_ranges["hold_days"] == (5, 30, "int")
 
