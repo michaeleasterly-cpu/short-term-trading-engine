@@ -627,6 +627,44 @@ pipeline.
 [needs operator decision: YES — kick-off brainstorm] [effort: XL —
 multi-PR epic]`
 
+### Task #25 — STATE UPDATE 2026-05-22 (v1.0 SHIPPED + first real edge signal)
+
+**v1.0 SHIPPED end-to-end** (all 12 build tasks + Phase D-F + persona v2.0 → v2.1):
+- T1-T12 + Phase D auto-promote + Phase E/F outcome monitor + auto-retire all landed
+- Real-API gate pilot PASSED (PR #270): 5 emissions across 5 engines, all structurally distinct from the 4 failed deep-research candidates, operator-judged ✓
+- Prompt caching: 3.7x token cost reduction (PR #266)
+- v2.1 persona: testability pre-check directive after first Lab probe FAIL (PR #273)
+- 529 self-heal added (PR #275) — known platform-overload error has recovery logic now
+
+**First real edge signal from autonomous finder — 2026-05-22:**
+
+Engine surface enrichment (PR #277 — catalyst PEAD-only mode + hold_days knob) unblocked the `catalyst_pead_expansion_range` candidate. Re-probe verdict:
+- Sharpe **+1.24** (was +0.18 pre-enrichment)
+- Profit factor **3.50** (was 1.69)
+- Win rate **70%** (was 50%)
+- n_trades 10 (was 2; gate ≥30)
+- DSR still ~0 (gate ≥ 0.95) — fails because (a) test universe = 15 names; (b) cumulative trial count
+
+**Headline:** the autonomous finder DID find a real edge. The constraint isn't hypothesis quality — it's engine surface (LAB_TARGET expressiveness) + test universe scope.
+
+### Engine-surface-enrichment epic (active, in progress)
+
+Goal: open enough LAB_TARGET knobs in each engine for the LLM's structurally-distinct hypotheses to be testable. Pattern established by catalyst PR #277.
+
+- [x] **catalyst** — `beat_30d_only` PEAD arm + `hold_days` Lab knob (PR #277, merged 2026-05-22)
+- [ ] **reversion** — partial-axis `regime_filter_v1` choice (off/vol_only/trend_only/macro_only/sentiment_only/vol_trend/full) — IN FLIGHT subagent `a9da039f...`
+- [ ] **vector** — BLOCKED on `insider_sentiment` daily-granularity backfill (currently monthly, pre-2025 empty). Adapter work.
+- [ ] **sentinel** — `macro_stress_signal_count` knob (3-of-N stress signals) + arming-threshold knobs (vix, hy_spread, sahm, yield_curve)
+- [ ] **canary** — same partial-axis regime pattern as reversion; possibly delete (non-graduating engine per spec)
+
+After all 4 land: re-probe each candidate with the new engine surfaces, get honest DSR/credibility verdicts on whether the LLM's hypotheses have REAL edges that survive the gate.
+
+### Production-universe probe (deferred, ledger discipline)
+
+Once engine surface enrichment lands: re-probe `catalyst_pead_expansion_range` with `--universe-tier-max=T2` (~1300 names vs 15). Expected to lift n_trades into the ≥30 band; DSR will still be constrained by cumulative trial count.
+
+`[lane: engine-owned] [gate: open] [effort: M — per-engine work] [signal: real-edge-found 2026-05-22]`
+
 ## Deep-research spike adjudication — Lab-candidate backlog (2026-05-19)
 
 Decision record from the two commissioned edge-research spikes

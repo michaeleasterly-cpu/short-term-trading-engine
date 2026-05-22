@@ -147,6 +147,22 @@ _VOLUME_CLIMAX_OVERRIDE: float | None = None
 # ``run_reversion_with_context`` so module-global state cannot bleed
 # across trials (mirror of momentum.lab_vol_managed H-MVM-8).
 _SIGNAL_MODE_OVERRIDE: str | None = None
+# Lab-only partial-axis regime-filter variant (2026-05-22). Default
+# None ⇒ no regime gate (byte-identical with the flag off, mirror of
+# ``_SIGNAL_MODE_OVERRIDE``). Set ONLY by an explicit Lab override
+# (``overrides={"regime_filter_v1": "trend_only", "regime_target":
+# "968624efa259"}``); never by the live scheduler - which does not
+# import this module. Reset per call in ``run_reversion_with_context``
+# so module-global state cannot bleed across trials.
+_REGIME_FILTER_OVERRIDE: str | None = None
+_REGIME_TARGET_OVERRIDE: str | None = None
+# Live-bound regime bundle for the Lab probe path - populated by the
+# probe via ``load_regime_bundle`` and passed in on the
+# ``ReversionWindowContext`` (see __init__ default below). Module-level
+# constant kept for documentation only - the bundle lives ON the
+# context, not as a free-standing global, so the per-trial reset
+# discipline is automatic.
+DEFAULT_REGIME_FILTER = "off"
 
 
 def _hard_stop_pct() -> float:
@@ -178,6 +194,18 @@ def _signal_mode() -> str:
     return DEFAULT_SIGNAL_MODE
 
 
+def _regime_filter_v1() -> str:
+    """Return the active regime_filter_v1 choice. Default ``off``."""
+    if _REGIME_FILTER_OVERRIDE is None:
+        return DEFAULT_REGIME_FILTER
+    return _REGIME_FILTER_OVERRIDE
+
+
+def _regime_target() -> str | None:
+    """Return the probe-pinned target regime hash (12-char SHA12) or None."""
+    return _REGIME_TARGET_OVERRIDE
+
+
 def default_params() -> dict[str, Any]:
     """Current live defaults for EXACTLY this engine's
     ops.lab.run.PARAM_RANGES keys (SP3 O1 seam, spec §7.1). Pure — reads
@@ -194,6 +222,7 @@ def default_params() -> dict[str, Any]:
         "max_hold_days": int(_max_hold_days()),
         "stop_pct": float(_hard_stop_pct()),
         "signal_mode": DEFAULT_SIGNAL_MODE,
+        "regime_filter_v1": DEFAULT_REGIME_FILTER,
     }
 
 
@@ -609,6 +638,7 @@ def _run_variant(
     end: date,
     z_threshold: float = Z_SCORE_THRESHOLD,
     filter_mode: str = "none",
+    session_regime_mask: dict[date, bool] | None = None,
 ) -> tuple[list[TradeRecord], list[TradeRecord]]:
     """Walk every trading day. Returns ``(trades, rejected_trades)``.
 
@@ -618,6 +648,11 @@ def _run_variant(
     * ``"none"``       — no EQ filter (baseline).
     * ``"not_low"``    — reject LOW or no-data (current production gate).
     * ``"high_only"``  — require HIGH (combined-filter variant).
+
+    ``session_regime_mask`` (2026-05-22, partial-axis regime-filter Lab
+    enrichment) optionally restricts the set of sessions that may emit
+    a trade. ``None`` ⇒ no gate (legacy behaviour). When provided,
+    sessions absent from the map OR mapped to False are skipped.
 
     ``rejected_trades`` is non-empty only on the baseline pass — for
     each baseline trade whose grade *would* have failed the
@@ -632,6 +667,13 @@ def _run_variant(
 
     for di, today in enumerate(all_dates):
         if di < next_eligible_idx:
+            continue
+        if (
+            session_regime_mask is not None
+            and not session_regime_mask.get(today, False)
+        ):
+            # Regime-gated: this session's classified regime doesn't
+            # match the candidate's target on the selected axes.
             continue
         candidates = _scan_day(today, panels, spy_panel, z_threshold=z_threshold)
         if not candidates:
@@ -897,6 +939,8 @@ REVERSION_OVERRIDE_KEYS = (
     "max_hold_days",
     "stop_pct",
     "signal_mode",
+    "regime_filter_v1",
+    "regime_target",
 )
 
 
@@ -914,6 +958,7 @@ def _overrides_from_args(args: argparse.Namespace) -> dict:
 def _apply_overrides_from_args(args: argparse.Namespace) -> None:
     global _HARD_STOP_PCT_OVERRIDE, _MAX_HOLD_DAYS_OVERRIDE, _VOLUME_CLIMAX_OVERRIDE
     global _SIGNAL_MODE_OVERRIDE
+    global _REGIME_FILTER_OVERRIDE, _REGIME_TARGET_OVERRIDE
     _HARD_STOP_PCT_OVERRIDE = (
         float(args.stop_pct) if getattr(args, "stop_pct", None) is not None else None
     )
@@ -927,6 +972,16 @@ def _apply_overrides_from_args(args: argparse.Namespace) -> None:
     )
     _SIGNAL_MODE_OVERRIDE = (
         str(args.signal_mode) if getattr(args, "signal_mode", None) is not None else None
+    )
+    _REGIME_FILTER_OVERRIDE = (
+        str(args.regime_filter_v1)
+        if getattr(args, "regime_filter_v1", None) is not None
+        else None
+    )
+    _REGIME_TARGET_OVERRIDE = (
+        str(args.regime_target)
+        if getattr(args, "regime_target", None) is not None
+        else None
     )
 
 
@@ -974,7 +1029,16 @@ _REVERSION_SEARCH_UNIVERSE = (
 
 @dataclass
 class ReversionWindowContext:
-    """Pre-loaded panels + fundamentals for one walk-forward window."""
+    """Pre-loaded panels + fundamentals for one walk-forward window.
+
+    ``regime_bundle`` (2026-05-22, partial-axis regime-filter Lab
+    enrichment) is optional and Lab-only - populated by the probe
+    driver via :func:`reversion.regime_filter.load_regime_bundle` and
+    consumed by ``run_reversion_with_context`` only when
+    ``overrides['regime_filter_v1']`` is set to a non-``off`` choice.
+    Defaults to None ⇒ no regime gate (byte-identical with the flag
+    off, mirror of ``signal_mode`` defaulting to ``price_z``).
+    """
 
     panels: dict[str, pd.DataFrame]
     spy_panel: pd.DataFrame | None
@@ -984,6 +1048,7 @@ class ReversionWindowContext:
     start: date
     end: date
     universe: tuple[str, ...]
+    regime_bundle: object | None = None  # reversion.regime_filter.RegimeBundle | None
 
 
 async def load_reversion_window_context(
@@ -995,7 +1060,18 @@ async def load_reversion_window_context(
 ) -> ReversionWindowContext:
     """Load prices + fundamentals + tier costs; precompute indicators.
 
-    Heavy I/O — call once per walk-forward window."""
+    Heavy I/O - call once per walk-forward window.
+
+    The partial-axis regime-filter Lab variant requires a
+    ``regime_bundle`` to be attached to the returned context AFTER
+    this call - the probe driver
+    (``scripts/probe_reversion_partial_axis.py``) loads it from a
+    short-lived pool and mutates the dataclass field. This indirection
+    keeps the engine-data-dependencies drift clockwork green without
+    an ECR-MODIFY on `_PROFILE['reversion'].data_dependencies` (the
+    `aaii_sentiment` / `macro_indicators` SQL strings live in the
+    probe driver, not under any engine path).
+    """
     from tpcore.backtest.cost_model import load_tier_costs
 
     universe = universe or _REVERSION_SEARCH_UNIVERSE
@@ -1042,6 +1118,7 @@ def run_reversion_with_context(
 
     global _HARD_STOP_PCT_OVERRIDE, _MAX_HOLD_DAYS_OVERRIDE, _VOLUME_CLIMAX_OVERRIDE
     global _SIGNAL_MODE_OVERRIDE
+    global _REGIME_FILTER_OVERRIDE, _REGIME_TARGET_OVERRIDE
     overrides = dict(overrides or {})
     _HARD_STOP_PCT_OVERRIDE = (
         float(overrides["stop_pct"]) if "stop_pct" in overrides else None
@@ -1059,6 +1136,19 @@ def run_reversion_with_context(
     # flag off, C1).
     _SIGNAL_MODE_OVERRIDE = (
         str(overrides["signal_mode"]) if "signal_mode" in overrides else None
+    )
+    # Lab-only partial-axis regime-filter overrides (2026-05-22). Reset
+    # per call - the live path never imports this module, so the
+    # module-globals never affect production. The mask is materialised
+    # below INSIDE a try/finally so the reset happens even if the
+    # variant runner raises.
+    _REGIME_FILTER_OVERRIDE = (
+        str(overrides["regime_filter_v1"])
+        if "regime_filter_v1" in overrides else None
+    )
+    _REGIME_TARGET_OVERRIDE = (
+        str(overrides["regime_target"])
+        if "regime_target" in overrides else None
     )
     _TIER_ROUND_TRIP_COSTS.clear()
     _TIER_ROUND_TRIP_COSTS.update(context.tier_round_trip_costs)
@@ -1081,6 +1171,11 @@ def run_reversion_with_context(
     filter_mode = _EARNINGS_QUALITY_TO_FILTER.get(eq, "none")
 
     if not context.panels or not context.funded_tickers:
+        # Reset module globals even on the empty-context short-circuit
+        # so per-call discipline is preserved.
+        _REGIME_FILTER_OVERRIDE = None
+        _REGIME_TARGET_OVERRIDE = None
+        _SIGNAL_MODE_OVERRIDE = None
         return BacktestRunResult(
             engine="reversion", parameters=overrides, credibility_score=0, passed_gate=False,
             sharpe=0.0, profit_factor=0.0, max_drawdown=0.0, trades=0, dsr=0.0,
@@ -1088,50 +1183,133 @@ def run_reversion_with_context(
             ruin_probability=0.0, trade_log=[],
         )
 
-    trades, _ = _run_variant(
-        variant="search",
-        panels=context.panels,
-        spy_panel=context.spy_panel,
-        fundamentals=context.fundamentals,
-        start=context.start,
-        end=context.end,
-        z_threshold=z_thr,
-        filter_mode=filter_mode,
-    )
-    summary = _compute_summary("search", trades)
+    # Build the per-session regime mask when the gate is on. Captured
+    # BEFORE try/finally so a malformed override fails-loud rather than
+    # silently passing through.
+    session_regime_mask = _build_session_regime_mask(context)
 
-    search_trades = _trade_records_to_search_trades(trades)
-    if trade_log_path is not None:
-        write_trade_log_csv(trade_log_path, search_trades)
+    try:
+        trades, _ = _run_variant(
+            variant="search",
+            panels=context.panels,
+            spy_panel=context.spy_panel,
+            fundamentals=context.fundamentals,
+            start=context.start,
+            end=context.end,
+            z_threshold=z_thr,
+            filter_mode=filter_mode,
+            session_regime_mask=session_regime_mask,
+        )
+        summary = _compute_summary("search", trades)
 
-    parameters = {
-        "z_threshold": z_thr,
-        "earnings_quality": eq,
-        "volume_climax_multiplier": _volume_climax_threshold(),
-        "max_hold_days": int(_max_hold_days()),
-        "stop_pct": float(_hard_stop_pct()),
-        "signal_mode": _signal_mode(),
-    }
-    trades_for_diag = _trades_to_diagnostic_dicts(trades)
-    price_data = _panels_to_price_data(context.panels, context.spy_panel)
-    return compute_search_metrics(
-        engine="reversion",
-        parameters=parameters,
-        trades_for_diag=trades_for_diag,
-        sharpe=summary.sharpe_annualized,
-        profit_factor=summary.profit_factor,
-        max_drawdown=summary.max_drawdown_pct,
-        n_trials=len(parameters),
-        price_data=price_data,
-        rubric_inputs={
-            "lookahead_clean": True,
-            "survivorship_inclusive": True,
-            "pit_fundamentals": True,
-            "regime_coverage": True,
-            "monte_carlo_drawdown": True,
-        },
-        search_trades=search_trades,
+        search_trades = _trade_records_to_search_trades(trades)
+        if trade_log_path is not None:
+            write_trade_log_csv(trade_log_path, search_trades)
+
+        parameters = {
+            "z_threshold": z_thr,
+            "earnings_quality": eq,
+            "volume_climax_multiplier": _volume_climax_threshold(),
+            "max_hold_days": int(_max_hold_days()),
+            "stop_pct": float(_hard_stop_pct()),
+            "signal_mode": _signal_mode(),
+            "regime_filter_v1": _regime_filter_v1(),
+        }
+        if _regime_target() is not None:
+            parameters["regime_target"] = _regime_target()
+        trades_for_diag = _trades_to_diagnostic_dicts(trades)
+        price_data = _panels_to_price_data(context.panels, context.spy_panel)
+        result = compute_search_metrics(
+            engine="reversion",
+            parameters=parameters,
+            trades_for_diag=trades_for_diag,
+            sharpe=summary.sharpe_annualized,
+            profit_factor=summary.profit_factor,
+            max_drawdown=summary.max_drawdown_pct,
+            n_trials=len(parameters),
+            price_data=price_data,
+            rubric_inputs={
+                "lookahead_clean": True,
+                "survivorship_inclusive": True,
+                "pit_fundamentals": True,
+                "regime_coverage": True,
+                "monte_carlo_drawdown": True,
+            },
+            search_trades=search_trades,
+        )
+    finally:
+        # Per-call reset discipline (mirror of momentum H-MVM-8 + the
+        # signal_mode C4 no-leak test). The variant runner reads these
+        # globals via _hard_stop_pct() / _signal_mode() / ... so they
+        # MUST be reset before this function returns; otherwise the
+        # next Lab trial inherits the previous trial's settings.
+        _HARD_STOP_PCT_OVERRIDE = None
+        _MAX_HOLD_DAYS_OVERRIDE = None
+        _VOLUME_CLIMAX_OVERRIDE = None
+        _SIGNAL_MODE_OVERRIDE = None
+        _REGIME_FILTER_OVERRIDE = None
+        _REGIME_TARGET_OVERRIDE = None
+    return result
+
+
+def _build_session_regime_mask(
+    context: ReversionWindowContext,
+) -> dict[date, bool] | None:
+    """Build the per-session pass/block mask for the partial-axis
+    regime filter, OR return None when the gate is off.
+
+    Reads ``_regime_filter_v1()`` and ``_regime_target()`` accessors,
+    classifies each session in ``context``, and returns a
+    ``date -> bool`` dict. ``None`` ⇒ no gate, byte-identical with the
+    flag off.
+    """
+    choice = _regime_filter_v1()
+    if choice == DEFAULT_REGIME_FILTER:
+        return None
+    target_hash = _regime_target()
+    if target_hash is None:
+        raise ValueError(
+            "regime_filter_v1 is set but regime_target is None. Pass "
+            "overrides={'regime_filter_v1': ..., 'regime_target': "
+            "'<sha12-hash>'} together; the choice selects WHICH axes "
+            "to match, the target says WHICH regime to match against."
+        )
+    # Late-import the Lab-only classifier so the legacy path (flag off)
+    # never pays the cost.
+    from reversion.regime_filter import (
+        RegimeBundle,
+        classify_session,
+        decompose_regime_tuple_id,
+        session_matches_target,
     )
+    target_class = decompose_regime_tuple_id(target_hash)
+    bundle = context.regime_bundle
+    if bundle is None:
+        raise ValueError(
+            "regime_filter_v1 is set but context.regime_bundle is None. "
+            "Pass load_regime_bundle=True to load_reversion_window_context "
+            "(or attach a synthesized RegimeBundle for tests)."
+        )
+    if not isinstance(bundle, RegimeBundle):
+        raise ValueError(
+            f"context.regime_bundle must be a RegimeBundle; got {type(bundle)!r}"
+        )
+
+    # Materialise per-session classification across every date in the
+    # union of panel indices that falls inside [context.start,
+    # context.end]. We don't constrain to the panels here so the mask
+    # covers any session the variant runner might iterate.
+    all_dates = sorted({d for df in context.panels.values() for d in df.index})
+    all_dates = [d for d in all_dates if context.start <= d <= context.end]
+    mask: dict[date, bool] = {}
+    for d in all_dates:
+        session_class = classify_session(bundle, d)
+        mask[d] = session_matches_target(
+            session_class=session_class,
+            target_class=target_class,
+            choice=choice,
+        )
+    return mask
 
 
 async def run_for_search(
@@ -1171,6 +1349,21 @@ LAB_TARGET = LabTarget(
         # PCA-residual + OU s-score variant. No other Lab-sampled knob
         # is added (n_trials discipline — spec §1, §7).
         "signal_mode": (0, 0, "choice:price_z,pca_residual"),
+        # Partial-axis regime-filter (2026-05-22). The choice value
+        # specifies WHICH AXES of the candidate's pre-registered regime
+        # to match per-session. ``off`` ⇒ no gate (live default and
+        # default for Lab trials that don't sample this knob);
+        # ``vol_only`` / ``trend_only`` / ``macro_only`` /
+        # ``sentiment_only`` ⇒ single-axis (most permissive);
+        # ``vol_trend`` ⇒ 2-axis; ``full`` ⇒ 4-axis (the original
+        # full-match probe behaviour). The candidate's regime hash
+        # itself is passed via the non-LAB_TARGET override
+        # ``regime_target`` at probe time, not Lab-sampled.
+        "regime_filter_v1": (
+            0,
+            0,
+            "choice:off,vol_only,trend_only,macro_only,sentiment_only,vol_trend,full",
+        ),
     },
     run_for_search=run_for_search,
     load_window_context=load_reversion_window_context,
@@ -1656,6 +1849,34 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "the Avellaneda-Lee PCA-residual + OU s-score variant. See "
             "docs/superpowers/specs/2026-05-20-reversion-pca-residual-"
             "lab-candidate.md."
+        ),
+    )
+    p.add_argument(
+        "--regime-filter-v1", type=str, default=None,
+        choices=[
+            "off",
+            "vol_only",
+            "trend_only",
+            "macro_only",
+            "sentiment_only",
+            "vol_trend",
+            "full",
+        ],
+        help=(
+            "Lab-only partial-axis regime gate (2026-05-22). 'off' "
+            "(default) disables the gate; the other choices select WHICH "
+            "axes of the --regime-target SHA12 hash must match the "
+            "per-session classified regime. See "
+            "reversion/regime_filter.py."
+        ),
+    )
+    p.add_argument(
+        "--regime-target", type=str, default=None,
+        help=(
+            "Lab-only 12-char SHA12 regime_tuple_id the gate matches "
+            "against. Required when --regime-filter-v1 is not 'off'. "
+            "Decomposed back to (vol, trend, macro, sentiment) via the "
+            "108-row enumeration table in reversion.regime_filter."
         ),
     )
     return p.parse_args(argv)

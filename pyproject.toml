@@ -235,6 +235,15 @@ ignore = ["E501"]
 # engine-lane-module-private access is the same SP-B/SP-D/SP-E/SP-F
 # precedent (the scoped per-file ignore, never inline `# noqa`).
 "catalyst/tests/test_lab_pead_and_hold_days.py" = ["SLF"]
+# Reversion partial-axis regime-filter Lab enrichment (2026-05-22). The
+# per-call module-global reset test names `_REGIME_FILTER_OVERRIDE` +
+# `_REGIME_TARGET_OVERRIDE`, and the mask-builder smoke test calls the
+# `_build_session_regime_mask` private helper to confirm the gate-off
+# short-circuit returns None. Engine-lane-module-private access (NOT
+# tpcore-private) — the same SP-B/SP-D/SP-E/SP-F precedent for engine-
+# OWNED Lab seams; the scoped per-file ignore is the correct form (never
+# inline `# noqa: SLF001`).
+"reversion/tests/test_regime_filter.py" = ["SLF"]
 # vector_composite Lab candidate (spec
 # docs/superpowers/specs/2026-05-20-vector-composite-lab-candidate.md
 # §3.3): the byte-identical / no-cross-trial-leakage C1-C4

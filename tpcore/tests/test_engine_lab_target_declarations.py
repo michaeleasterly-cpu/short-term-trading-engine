@@ -74,8 +74,12 @@ def test_engine_declares_valid_lab_target(engine):
     # residual Lab candidate (spec
     # docs/superpowers/specs/2026-05-20-reversion-pca-residual-lab-candidate.md
     # §4.3) — the SAME PR that lands the toggle updates this assertion.
+    # Reversion's `regime_filter_v1` partial-axis toggle was added by
+    # the 2026-05-22 engine-surface enrichment (the failed full-4-axis
+    # finder probe → partial-axis menu); the SAME PR that lands the
+    # toggle updates this assertion.
     if engine == "reversion":
-        expected = sorted([*expected, "signal_mode"])
+        expected = sorted([*expected, "signal_mode", "regime_filter_v1"])
     assert sorted(lt.param_ranges) == expected
     # The 4 callables resolve to the engine's already-defined symbols.
     assert lt.run_for_search is mod.run_for_search
@@ -114,6 +118,15 @@ def test_lab_target_param_ranges_full_value_byte_parity(engine):
         # docs/superpowers/specs/2026-05-20-reversion-pca-residual-lab-
         # candidate.md §4.3) — single new toggle.
         expected["signal_mode"] = (0, 0, "choice:price_z,pca_residual")
+        # Reversion partial-axis regime-filter engine-surface
+        # enrichment (2026-05-22). The 7-arm choice menu lets the
+        # autonomous finder condition on FEWER axes when the full
+        # 4-axis match is non-actionable.
+        expected["regime_filter_v1"] = (
+            0,
+            0,
+            "choice:off,vol_only,trend_only,macro_only,sentiment_only,vol_trend,full",
+        )
     assert mod.LAB_TARGET.param_ranges == expected
 
 
