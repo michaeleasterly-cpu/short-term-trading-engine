@@ -312,6 +312,22 @@ async def _detect_and_act(pool, engine: str, now: datetime, invoke) -> None:
     prof = profile_for(engine)
     window_start = cadence_window_start(engine, now) if prof else now
 
+    # Canary exemption (operator binding 2026-05-23): canary is the
+    # pipeline-test heartbeat (non-graduating per spec §4b), NOT a
+    # trading engine. Its sole purpose is to fire every trading day
+    # to prove the end-to-end dispatch chain works. The
+    # data_repair_escalated cascade hold is a category error against
+    # canary — "100% data or don't trade" applies to engines that
+    # make trading decisions on real data; canary trades a
+    # deterministic test signal that does not depend on data quality.
+    # If canary cannot fire because the data lane is red, we lose the
+    # daily end-to-end signal — exactly when we most need it. Mirrors
+    # the explicit ``p.engine != "canary"`` clause in
+    # ``tpcore.engine_profile.lab_targetable_engines()`` (spec §4b,
+    # N=1 — explicit clause + test).
+    if engine == "canary":
+        return
+
     hold = await current_hold(pool, engine)
     if hold is not None:
         await _auto_clear(pool, engine, now, hold)

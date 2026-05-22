@@ -183,6 +183,29 @@ async def test_data_repair_escalated_holds_without_selfheal():
     assert "ENGINE_ESCALATED" in events and "ENGINE_HELD" in events
 
 
+async def test_canary_exempt_from_cascade_holds():
+    """Operator binding 2026-05-23: canary is the pipeline-test heartbeat,
+    not a trading engine. The data_repair_escalated cascade hold must
+    NEVER apply to canary — even when data validation is red, canary
+    must continue firing daily to preserve the end-to-end signal."""
+    now = datetime(2026, 5, 5, 21, 30, tzinfo=UTC)
+    # Even with data_repair_escalated TRUE, canary must produce no
+    # ENGINE_ESCALATED + no ENGINE_HELD events.
+    conn = _rows_conn([
+        None,                                   # current_hold
+        {"started_at": None, "completed": False},  # crashed_startup: no
+        {"crashed": False},                     # scheduler_crash: no
+        {"open": False},                        # data_request_timeout: no
+        {"escalated": True},                    # data_repair_escalated: yes
+    ])
+    invoke = AsyncMock()
+    await es.supervise(_pool_for(conn), "canary", now, invoke)
+    invoke.assert_not_awaited()
+    events = [a[2] for _s, a in conn.inserts]
+    assert "ENGINE_ESCALATED" not in events
+    assert "ENGINE_HELD" not in events
+
+
 async def test_missed_cycle_excludes_held_windows():
     now = datetime(2026, 5, 5, 21, 30, tzinfo=UTC)
     conn = _rows_conn([
