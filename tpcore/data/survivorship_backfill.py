@@ -428,7 +428,7 @@ async def already_completed_tickers(
             SELECT DISTINCT data->>'ticker' AS ticker
             FROM platform.application_log
             WHERE event_type = $1
-              AND timestamp >= now() - ($2::int * INTERVAL '1 day')
+              AND recorded_at >= now() - ($2::int * INTERVAL '1 day')
             """,
             PROGRESS_EVENT_TYPE,
             lookback_days,
