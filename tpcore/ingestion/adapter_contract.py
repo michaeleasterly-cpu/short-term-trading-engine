@@ -81,6 +81,12 @@ ADAPTER_CONTRACTS: dict[str, AdapterContract] = {
         feed="alpaca_daily_bars", accessor="key", guard_pending=True,
         required_fields=frozenset({"ticker"}),
         evidence="guard_pending: declared for coverage; wiring later."),
+    "fmp_daily_bars": AdapterContract(
+        feed="fmp_daily_bars", accessor="key", guard_pending=True,
+        required_fields=frozenset({"ticker"}),
+        evidence="guard_pending: declared for coverage; wiring later. "
+                 "FMP /stable/historical-price-eod/full is the primary "
+                 "daily-bars feed 2026-05-22+."),
     "fred_macro_hist": AdapterContract(
         feed="fred_macro_hist", accessor="key", guard_pending=True,
         required_fields=frozenset({"date"}),

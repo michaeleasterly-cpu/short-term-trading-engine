@@ -23,7 +23,7 @@ Multi-engine automated trading platform. US equities, daily timeframe, fully aut
 ## Universal invariants (hold every session, regardless of path)
 
 - **All timestamps UTC.** Market hours via `tpcore.calendar` (XNYS via `exchange_calendars`).
-- **No yfinance. No Discord. No manual execution.** All orders via Alpaca API. Default data feed is **SIP** (not IEX — IEX silently misses tickers that trade off-IEX). Paper-then-live.
+- **No yfinance. No Discord. No manual execution.** All orders via Alpaca API. Default daily-bars feed is **FMP** (full CTA consolidated tape via `/stable/historical-price-eod/full` on the operator's $200/year Starter tier; Alpaca IEX/SIP available via `--param feed=iex|sip` for fallback/diagnostics). Paper-then-live.
 - **All code type-hinted.** Pydantic v2 for data models. structlog for logging. `from __future__ import annotations`.
 - **Backtest with the self-built survivorship-free database** before any live trading (`prices_daily` is the substrate; partial survivorship-clean — known caveat in `momentum/backtest.py`).
 - **Never access private attributes** (`._store`, `._pool`, etc.) on `tpcore.*` classes. Use the public accessor; extend the class with one if missing; never add `# noqa: SLF001`. See `docs/STYLE_GUIDE.md`.

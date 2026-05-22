@@ -3738,6 +3738,17 @@ def _matches_any(error_text: str | None, tokens: frozenset[str]) -> bool:
 # 403 and then recover within ~20min. A cached "False" would freeze the
 # cascade to IEX-only for the duration of the cache, which is exactly
 # what we DON'T want during a recovery window.
+#
+# NOTE 2026-05-22: With FMP as the primary daily-bars feed, this
+# SIP/IEX probe-and-failover cascade becomes a SECONDARY fallback —
+# it fires only when an FMP-driven daily_bars pull raises
+# coverage_collapse. The probe-and-fall-back-to-IEX semantics are
+# kept intact (option A — leave the SIP cascade in place) so the
+# operator has a deterministic Alpaca-side recovery path if FMP
+# itself goes down. Option B (strip SIP probing) was rejected
+# because the SIP entitlement is free with the existing Alpaca
+# subscription; keeping the probe costs one HTTP call per cascade
+# fire (rare) for non-zero recovery value.
 _SIP_PROBE_URL: str = "https://data.alpaca.markets/v2/stocks/AAPL/bars"
 _SIP_PROBE_TIMEOUT_SEC: float = 10.0
 
