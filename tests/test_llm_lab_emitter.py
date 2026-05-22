@@ -48,14 +48,16 @@ pytestmark = pytest.mark.xdist_group("ops_shadow")
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
-# Snapshot + stub the ops.* shadow defensively (mirrors test_llm_triage_service).
+# Snapshot + stub the ops.* shadow defensively. 2026-05-22 — the LLM-
+# triage modules (``ops.llm_data_triage`` / ``ops.engine_llm_triage``)
+# have been DELETED entirely, so the lab-emitter no longer goes through
+# the lazy ``_shipped()`` accessor. The shadow defence remains for the
+# ``ops`` package itself (the ``scripts/ops.py`` ↔ ``ops/`` collision).
 _LAB_PATH = _REPO_ROOT / "ops" / "llm_lab_emitter.py"
 _SAVED = {
     k: sys.modules.get(k)
     for k in (
         "ops",
-        "ops.llm_data_triage",
-        "ops.engine_llm_triage",
         "ops.llm_lab_emitter",
     )
 }
@@ -65,8 +67,6 @@ try:
         _pkg = types.ModuleType("ops")
         _pkg.__path__ = [str(_LAB_PATH.parent)]
         sys.modules["ops"] = _pkg
-    # Ensure ops.llm_data_triage is importable (the lazy _shipped() needs it).
-    import ops.llm_data_triage  # noqa: F401
 
     _spec = importlib.util.spec_from_file_location(
         "_lab_emitter_under_test", _LAB_PATH

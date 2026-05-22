@@ -8,8 +8,6 @@ paths:
   - "ops/engine_service.py"
   - "ops/engine_sdlc.py"
   - "ops/engine_sdlc/**"
-  - "ops/llm_data_triage.py"
-  - "ops/engine_llm_triage.py"
   - "platform/migrations/**"
   - "tpcore/engine_profile.py"
   - "tpcore/providers.py"
@@ -42,7 +40,6 @@ Triggers (this rule's `paths:`):
 - `tpcore/selfheal/**`, `tpcore/auditheal/**` — autonomous repair / cross-table audit (100%-green-or-don't-trade invariant)
 - `tpcore/quality/validation/**` — data-acceptance gate (`DATA_OPERATIONS_COMPLETE` predicate)
 - `ops/engine_service.py`, `ops/engine_sdlc.py`/`ops/engine_sdlc/**` — engine dispatch + SDLC ECR mutator
-- `ops/llm_data_triage.py`, `ops/engine_llm_triage.py` — advisory LLM lanes (advisory-only is a safety contract; spec change ≠ implementation change)
 - `platform/migrations/**` — Alembic (schema is the durable substrate; rollback discipline)
 - `tpcore/engine_profile.py` — the engine roster SoT
 - `tpcore/providers.py` — the data-feed ProviderBinding SoT

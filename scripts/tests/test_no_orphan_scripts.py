@@ -85,11 +85,12 @@ _REF_GLOBS = ("*.py", "*.sh", "*.yml", "*.yaml", "*.toml", "*.plist")
 # is now a ``scripts/ops.py --stage <name>``; every superseded driver
 # was deleted. ``test_allowlist_is_empty`` (below) locks the invariant.
 #
-# Previously-allowlisted deliberate standalones (``agent_pr_label_guard``,
-# ``gen_engine_manifest``, ``audit_code_duplication``) were removed
-# because each has a genuine code-level reference — ``ci.yml``,
-# ``pyproject.toml``, or a test import — so they pass the orphan check
-# on the actual wiring, not on a defence-in-depth allowlist entry.
+# Previously-allowlisted deliberate standalones (``gen_engine_manifest``,
+# ``audit_code_duplication``) were removed because each has a genuine
+# code-level reference — ``ci.yml``, ``pyproject.toml``, or a test
+# import — so they pass the orphan check on the actual wiring, not on a
+# defence-in-depth allowlist entry. (``agent_pr_label_guard`` was
+# removed entirely 2026-05-22 alongside the LLM-triage stack.)
 _ALLOWLIST: frozenset[str] = frozenset()
 
 

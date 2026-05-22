@@ -27,9 +27,11 @@ _RULES = (
     "daemons",
     "engine-roster",
     "data-feed-roster",
-    "llm-triage",
     "dashboard",
     "tests-and-ci",
+    # `llm-triage` was REMOVED 2026-05-22 alongside the deleted LLM-
+    # triage stack (operator directive "we aren't going to use the llm
+    # triage... take it out").
 )
 
 

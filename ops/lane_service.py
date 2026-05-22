@@ -1,40 +1,36 @@
 """Deployed data-lane daemon — DETERMINISTIC SELF-HEAL ONLY.
 
-Operator directive 2026-05-21 ("we wont be deploying the llm data triage
-it will run locally with my max account") + the audit in
-``docs/audits/2026-05-22-llm-triage-removal-from-deployed-daemon.md``:
-the deployed ``lane-service`` daemon hosts ONLY the deterministic data-
-repair responder. ANY code path that calls Anthropic at runtime has been
-REMOVED from this daemon — the LLM-side invocations now run OPERATOR-
-LOCALLY (operator's Claude Max account) via the slash skills
-``/triage-data-failures`` / ``/triage-engine-failures`` /
-``/lab-spec-emit``.
+Operator directives:
 
-Background (predecessor PR #236): the previous lane_service hosted FOUR
-co-tasks (``data_repair`` + the three LLM-invoking triage co-tasks
-``triage_data`` / ``triage_engine`` / ``triage_lab_emitter``). All three
-LLM co-tasks pulled the Anthropic SDK into the deployed process at
-module-load time (transitively via ``ops.llm_data_recovery`` /
-``ops.engine_llm_triage`` / ``ops.llm_lab_emitter``). This PR removes
-them — the LLM-invoking modules stay in the repo as importable
-libraries, but the DEPLOYED daemon never loads them.
+  * 2026-05-21 ("we wont be deploying the llm data triage it will run
+    locally with my max account") — the deployed lane-service daemon
+    hosts ONLY the deterministic data-repair responder; ANY code path
+    that calls Anthropic at runtime has been REMOVED.
+
+  * 2026-05-22 ("we aren't going to use the llm triage... take it out")
+    — the LLM-TRIAGE stack has been DELETED ENTIRELY from the repo
+    (``ops.llm_data_recovery``, ``ops.llm_data_triage``,
+    ``ops.engine_llm_triage``, ``tpcore.llm_data_triage``,
+    ``tpcore.engine_llm_triage`` are GONE). The deterministic cascade
+    catalog (Waves 1-4 + sentinel) is the COMPLETE self-heal layer; no
+    LLM backstop, no operator-local triage. The SP-G lab-emitter and
+    Task #25 finder remain (different purpose — Lab spec generation /
+    edge discovery, NOT triage) and run operator-locally only.
 
 Architecture:
 
-  * DEPLOYED daemon (this file): ONE co-task — ``data_repair`` — runs the
-    deterministic self-heal responder
+  * DEPLOYED daemon (this file): ONE co-task — ``data_repair`` — runs
+    the deterministic self-heal responder
     (``ops.data_repair_service._main_loop`` polls
     ``ENGINE_DATA_REQUEST`` and emits exactly one terminal reply per
-    request_id). NO Anthropic. NO LLM. NO triage.
+    request_id). On exhausted self-heal: emits
+    ``INGESTION_AUTO_RECOVERY_FAILED`` (or equivalent terminal event)
+    and STOPS. Operator sees the event in ``application_log``. NO
+    Anthropic. NO LLM. NO triage. NO autonomous fallback.
 
-  * OPERATOR-LOCAL (NOT this file): the operator's machine runs the
-    LLM-side via slash skills that read recent escalations from
-    ``platform.application_log`` and fire the respective recovery /
-    triage / emitter — ``ops.llm_data_recovery`` (data lane),
-    ``ops.engine_llm_triage`` (engine lane), ``ops.llm_lab_emitter``
-    (SP-G). The deterministic cascade
-    (``scripts/ops.py::_auto_cascade_*``) STILL emits the escalation
-    events; the operator-local LLM-side observes them.
+  * OPERATOR-LOCAL (NOT this file): the operator's machine may run the
+    SP-G Lab spec-emitter (``/lab-spec-emit``) and the Task #25 edge-
+    finder (``/lab-edge-find``) — both Lab-side, NOT triage.
 
 Two-daemon Railway invariant: PRESERVED — ``install_all_daemons.sh``
 still installs exactly ``{engine-service, lane-service,

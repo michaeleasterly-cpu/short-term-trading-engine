@@ -45,8 +45,10 @@ if str(_REPO) not in sys.path:
 # suite, one process, fails ~40 test_ops* with ``module 'ops' has no
 # attribute _CANDIDATE_RE`` etc.). A targeted subset masked it.
 #
-# Fix (the proven test_llm_triage_service.py precedent for the IDENTICAL
-# hazard): snapshot EXACTLY the sys.modules keys we touch, ensure
+# Fix (the previously-proven precedent for the IDENTICAL hazard, last
+# seen in the now-deleted ``test_llm_triage_service.py`` —
+# 2026-05-22 LLM-triage removal): snapshot EXACTLY the sys.modules keys
+# we touch, ensure
 # ``ops`` is package-shaped + the real siblings are bound by file path
 # (so ``from ops import engine_ladder, weekly_digest`` resolves to the
 # REAL modules the tests monkeypatch — NOT raising stubs, since the

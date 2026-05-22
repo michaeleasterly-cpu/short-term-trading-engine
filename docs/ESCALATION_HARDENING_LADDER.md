@@ -14,7 +14,7 @@ Every data-lane escalation must terminate in exactly one of — `converted` (a n
 | 2 | Coverage forcing-functions | BUILT | `HEAL_SPECS`/`REMEDIATION_SPECS`/`ADAPTER_CONTRACTS` clockwork registry-drift tests — a new check fails the build until a decision is recorded. |
 | 3 | Discovery → disposition → convert | BUILT | `tpcore/ladder` disposition SoT + clockwork drift-test + weekly-digest undispositioned section + `disposition` verb (PRs #44, #45). |
 | 4 | Structural removal | BUILT | `RiskGovernor` kill-switch; `live_clearance` auto-de-escalation; DSR/credibility gate; provider RETIRE (Data Provider Lifecycle). |
-| 5 | LLM/agentic triage | BUILT 2026-05-18 | `ops/llm_data_triage.py` + the event-driven `ops/llm_triage_service.py` daemon (#187, Epic E). Advisory-only: produces a draft, human-merge-only PR (additive mechanism-free HealSpec/RemediationSpec binding + dossier) + a non-authoritative `DATA_LLM_TRIAGE_PROPOSAL`; fenced by the deterministic label-gated `llm-triage-fence` CI job (provenance + hard-denied paths) + two-human review + post-merge canary/shadow. Spec: `docs/superpowers/specs/2026-05-18-llm-triage-advisory-layer-design.md`. |
+| 5 | REMOVED 2026-05-22 | Operator directive *"we aren't going to use the llm triage... take it out"* deleted the entire LLM-triage stack (`ops/llm_data_triage.py`, `ops/llm_data_recovery.py`, `tpcore/llm_data_triage/`, the CI fence, the slash skills, the persona docs). Rungs 1-4 are the COMPLETE escalation surface; the deterministic cascade catalog (Waves 1-4 + sentinel) is the complete self-heal layer with no LLM backstop. |
 
 ## Disposition vocabulary
 
@@ -41,19 +41,9 @@ The existing non-skippable weekly ack and the existing **>=2 consecutive unacked
 
 - Does NOT auto-convert anything. It forces the disposition decision to be recorded and surfaced; humans/PRs still do the converting (a new HealSpec, a structural fix, a RETIRE). Rung 3 is a forcing function, not an actor.
 - No new gate, daemon, or table. Class SoT is code (clockwork test); instance teeth ride the existing weekly-digest event reads.
-- Rung 5 (LLM/Epic E, BUILT 2026-05-18) is advisory-only and never auto-applies — see the responsible envelope below.
+- Rung 5 was REMOVED 2026-05-22 (operator directive). The deterministic cascade catalog (Waves 1-4 + sentinel) is the complete recovery layer; on cascade exhaustion the daemon emits `INGESTION_AUTO_RECOVERY_FAILED` and the operator reviews the event. No LLM backstop.
 - Data lane only. No engine/aar files touched; no cross-lane convention prescribed.
 
-## Rung 5 — the expert-vetted responsible envelope (LLM data-triage)
+## Rung 5 — REMOVED 2026-05-22
 
-The LLM data-triage agent (`ops/llm_data_triage.py`, fired event-driven by `ops/llm_triage_service.py`) operates inside the maximal envelope two independent skeptical staff-architect expert passes defined, adopted verbatim from the spec §3/§4:
-
-- **Advisory / human-gated.** The agent's sole deliverable is a **draft, human-merge-only PR** + a non-authoritative `DATA_LLM_TRIAGE_PROPOSAL`. It has no merge authority.
-- **The LLM is never the mutating actor.** Data "stays 100%" only via the existing deterministic bounded path or a human running an existing canonical stage — exactly as before #187. The LLM/its PR never triggers, runs, queues, or schedules a repair and holds no creds or real tree to do so.
-- **Additive, mechanism-free PR only.** Allowed change is an additive HealSpec / RemediationSpec / Ladder binding pointing an already-existing, already-proven, non-LLM-authored canonical `ops.py --stage` (with already-shipped bounded params) at the novel class. **Vetoed outright:** any new or widened repair mechanism (new stage, new/loosened param or bound, `healable` false→true, edit to an existing spec); any merge authority; any live credential in the sandbox; any real-working-tree write; treating the persona as a safety boundary.
-- **Deterministic provenance / hard-denied fence.** A required label-gated `llm-triage-fence` CI job fails-and-auto-closes the PR on any hard-denied path or non-additive/new-mechanism diff; the LLM's self-classification of "minor vs major" gates nothing — the boundary is a property of the artifact, evaluated by code the LLM never runs on a tree it cannot write. The CI fence is credential-starved.
-- **Two-human review, one ≠ the dispositioning operator** (CODEOWNERS). The change is **inert until merged**.
-- **Post-merge canary/shadow.** A newly-merged LLM-authored spec fires but does NOT mutate (diffed vs no-op baseline) until a human promotes it after N cycles of detector-vs-healer agreement.
-- **Credential-starved sandbox & CI.** The agent runs in an ephemeral `git worktree` with a credential-starved allowlisted env, official Anthropic `messages.create` with **no `tools`**, no-key/AuthenticationError safe no-op; any failure ⇒ proposal still emitted, no PR, no merge.
-
-The engine/aar lane will, in a separate session, build a SYMMETRIC engine-native triage agent (symmetry-of-approach, not a clone) — it does not exist yet and is not implied here.
+The LLM/agentic triage rung was removed entirely. Operator directive *"we aren't going to use the llm triage... take it out"* deleted `ops/llm_data_triage.py`, `ops/llm_data_recovery.py`, `tpcore/llm_data_triage/`, the slash skills `/triage-data-failures`, the CI fence script `scripts/llm_triage_pr_check.py`, the label guard `scripts/agent_pr_label_guard.py`, and the persona docs. The deterministic cascade catalog (Waves 1-4 + sentinel) is the COMPLETE self-heal layer with no LLM backstop. Sentinel: `tests/test_lane_service_no_anthropic.py` reds if any of the deleted modules becomes importable again.

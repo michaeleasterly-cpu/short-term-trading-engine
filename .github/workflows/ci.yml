@@ -78,104 +78,16 @@ jobs:
           python -m pytest -p no:xdist -q tpcore/tests/test_ops.py tpcore/tests/test_ops_helpers.py tests/test_defect_register.py
           python -m pytest -p no:xdist -q tests/test_defect_register.py tpcore/tests/test_ops_helpers.py tpcore/tests/test_ops.py
 
-  # LLM-data-triage deterministic fence. Label-gated: runs ONLY on a
-  # pull_request that carries the 'llm-data-triage' label, so non-LLM
-  # PRs are completely unaffected. The fence is DETERMINISTIC and
-  # credential-STARVED — it must NEVER reference any LLM API key or
-  # any secret (the LLM's self-judgement gates nothing; artifact
-  # properties do). On failure it auto-closes the PR + escalates.
-  llm-triage-fence:
-    name: llm-data-triage deterministic fence
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    if: >-
-      github.event_name == 'pull_request' &&
-      contains(github.event.pull_request.labels.*.name, 'llm-data-triage')
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          # Need the base ref for the diff-based fence checks.
-          fetch-depth: 0
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version-file: .python-version
-          cache: pip
-
-      - name: Install package + dev deps
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e .[dev]
-
-      - name: Run LLM-triage deterministic fence
-        run: python scripts/llm_triage_pr_check.py
-
-      - name: Auto-close + escalate on fence failure
-        if: failure()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh pr comment "${{ github.event.pull_request.number }}" --body \
-            "🚫 LLM-data-triage deterministic fence FAILED — this draft \
-            PR proposed a non-additive / new-mechanism / hard-denied \
-            change. Auto-closing. The escalation stays open for a human; \
-            restoration only ever happens via the deterministic path."
-          gh pr close "${{ github.event.pull_request.number }}"
-
-  # Engine-lane LLM-triage deterministic fence (Epic E Phase 3.2).
-  # Additive + label-gated on the SEPARATE 'engine-llm-triage' label
-  # (the data-lane 'llm-data-triage' job above is UNTOUCHED). Same
-  # mechanism, engine registries: baseline =
-  # ops.engine_ladder.DISPOSITION_POLICIES (an additive binding must
-  # point at an ALREADY-EXISTING EngineEscalationDisposition verb) +
-  # the engine hard-denied path set (engine deterministic-mechanism
-  # files + shared protected paths). DETERMINISTIC and credential-
-  # STARVED — like the data job it MUST NEVER reference any LLM API key
-  # or any secret (the LLM's self-judgement gates nothing; artifact
-  # properties do). On failure: auto-close + escalate (stays open for
-  # a human; restoration only via the deterministic Ladder path).
-  engine-llm-triage-fence:
-    name: engine-llm-triage deterministic fence
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    if: >-
-      github.event_name == 'pull_request' &&
-      contains(github.event.pull_request.labels.*.name, 'engine-llm-triage')
-
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          # Need the base ref for the diff-based fence checks.
-          fetch-depth: 0
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version-file: .python-version
-          cache: pip
-
-      - name: Install package + dev deps
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e .[dev]
-
-      - name: Run engine-lane LLM-triage deterministic fence
-        run: python scripts/llm_triage_pr_check.py --lane engine
-
-      - name: Auto-close + escalate on fence failure
-        if: failure()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh pr comment "${{ github.event.pull_request.number }}" --body \
-            "🚫 engine-llm-triage deterministic fence FAILED — this draft \
-            PR proposed a non-additive / new-mechanism / new-disposition \
-            / hard-denied change. Auto-closing. The escalation stays open \
-            for a human; restoration only ever happens via the \
-            deterministic Ladder path."
-          gh pr close "${{ github.event.pull_request.number }}"
+  # 2026-05-22 — The LLM-triage deterministic-fence jobs (data lane +
+  # engine lane) and the fail-closed agent-PR label guard have been
+  # REMOVED. Operator directive ("we aren't going to use the llm
+  # triage... take it out") deleted the entire LLM-triage stack from
+  # the repo (``ops.llm_data_triage``, ``ops.engine_llm_triage``,
+  # ``ops.llm_data_recovery``, ``tpcore.llm_data_triage``,
+  # ``tpcore.engine_llm_triage``, ``scripts/llm_triage_pr_check.py``,
+  # ``scripts/agent_pr_label_guard.py``). There is no LLM-triage path
+  # left to fence; the deterministic cascade catalog (Waves 1-4 +
+  # sentinel) is the COMPLETE self-heal layer.
 
   # Lab-isolation DB-gated CI job. The `test` job above runs WITHOUT a
   # Postgres service, so five suites currently `pytest.skipif` at
@@ -264,48 +176,8 @@ jobs:
             tpcore/tests/test_aar_writer.py \
             tpcore/tests/test_handle_fundamentals_archive_db_schema.py
 
-  # Fail-CLOSED agent-PR label guard (MED security fix). The two fence
-  # jobs above are LABEL-GATED — they run ONLY when the agent's own
-  # automation applied the label. Failure mode = fail-OPEN: an
-  # agent-produced draft PR that omits/loses the label triggers NEITHER
-  # fence and merges UNFENCED. This ADDITIVE job (the existing fence
-  # jobs are UNTOUCHED — the engine fence is co-owned by another
-  # session) closes that hole: it runs on EVERY pull_request and FAILS
-  # iff the PR is agent-produced (head ref ~ `llm-triage/*` OR commits a
-  # docs/{llm_triage_proposals,engine_llm_triage_proposals}/ provenance
-  # artifact — the signals the agent's _open_draft_pr cannot both emit
-  # and suppress) yet carries NEITHER fence label. A human maintenance
-  # PR to the same files (e.g. #97/#98) has no agent signal ⇒ no-op
-  # pass. Pure-deterministic, NO secrets, read-only token,
-  # `pull_request` (NOT pull_request_target) — same hardening as the
-  # fence jobs.
-  agent-pr-label-guard:
-    name: fail-closed agent-PR label guard
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    if: github.event_name == 'pull_request'
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          # Need the base ref for the diff-based agent-artifact check
-          # (mirrors the fence jobs' fetch-depth).
-          fetch-depth: 0
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version-file: .python-version
-          cache: pip
-
-      - name: Run fail-closed agent-PR label guard
-        env:
-          GUARD_HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          GUARD_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
-        run: |
-          GUARD_CHANGED_PATHS="$(git -c core.quotepath=false diff \
-            --name-only \
-            "origin/${{ github.event.pull_request.base.ref }}...HEAD")"
-          export GUARD_CHANGED_PATHS
-          python scripts/agent_pr_label_guard.py
+  # 2026-05-22 — the fail-CLOSED agent-PR label guard job has been
+  # REMOVED. Operator directive ("we aren't going to use the llm
+  # triage... take it out") deleted ``scripts/agent_pr_label_guard.py``
+  # along with the LLM-triage stack. There is no agent-produced
+  # triage PR to guard against.

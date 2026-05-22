@@ -266,20 +266,21 @@ Service-level error handling: each engine and each trigger is isolated — a sin
 
 `scripts/run_data_operations.sh` now fires a macOS Notification Center alert (`osascript`) on any non-zero exit — from `ops.py --update`, the cross-table audit, validation suite red, or a trap-caught unexpected exit. The notification points at `~/Library/Logs/short-term-trading-engine/data-operations.log`. Safe no-op on non-Mac hosts (CI).
 
-### Self-heal patterns (data_recovery_v2, 2026-05-21)
+### Self-heal — deterministic cascade catalog only (2026-05-22)
 
-The autonomous data-recovery LLM (`ops/llm_data_recovery.py` + `docs/llm_triage_personas/data_recovery_v2.md`) carries an evidence-derived pattern catalogue. v2 is the default; v1 stays available via `LLM_DATA_RECOVERY_PERSONA_VERSION=v1` for rollback. The orchestrator cascade in `scripts/ops.py` is the deterministic layer — v2 sits BEHIND it (escalations that exhaust the cascade hit the LLM).
+**Operator directive 2026-05-22** ("we aren't going to use the llm triage... take it out") removed the entire LLM-triage stack from the repo. The deterministic cascade catalog (Waves 1-4 + sentinel — `tests/test_deterministic_cascade_catalog.py`) is the COMPLETE self-heal layer. There is NO LLM backstop. The previous `ops/llm_data_recovery.py` + `docs/llm_triage_personas/data_recovery_v2.md` files have been DELETED.
 
-| # | Log shape (substring) | Recovery action | Handled by |
-|---|---|---|---|
-| 1 | `daily_bars timed out after 3600.0s` | `daily_bars(force_refresh=true, repair_coverage=true)` — narrow-scope heal | LLM (v2 persona Pattern 1) |
-| 2 | `connection was closed in the middle of operation` | `daily_bars(force_refresh=true, universe=active, feed=sip, end_offset_days=1)` — per-chunk retry (PR #163) absorbs the drop | LLM (v2 persona Pattern 2) |
-| 3 | `subscription does not permit` (Alpaca SIP 403) | `daily_bars(... feed=iex, ...)` — immediate IEX failover + `INGESTION_AUTO_RECOVERY_DEGRADED` marker | Cascade probes SIP first (PR #231); LLM (v2 persona Pattern 3) on remainder |
-| 4 | `greeks_pro` + `401` | `DATA_RECOVERY_ACTION_SKIPPED` — operator rotates the credential; `greeks_max_pain` is NOT in the autonomous whitelist and is in `_SKIP_WITH_WARNING_ACTIONS` | LLM dispatcher (v2 persona Pattern 4) |
-| 5 | `fundamentals_quarterly_complete` | `fundamentals_refresh` stage — validation suite (PR #172) re-runs on next cycle | LLM (v2 persona Pattern 5) |
-| 6 | `coverage collapse` + LLM picks `repair_gaps` (NEGATIVE PATTERN) | `DATA_RECOVERY_ACTION_REJECTED` with `reason=negative_pattern_match` — `_NEGATIVE_PATTERNS` enforces the documented blind spot | LLM dispatcher (v2 persona Pattern 6) |
+The chain is now:
 
-Pattern matching is the LLM's job — it pattern-matches inside the persona. The dispatcher VALIDATES against the whitelist + `_SKIP_WITH_WARNING_ACTIONS` + `_NEGATIVE_PATTERNS` and emits terminal events on `platform.application_log`: `DATA_RECOVERY_ACTION_SUCCEEDED` / `..._FAILED` / `..._REJECTED` / `..._SKIPPED` + `INGESTION_AUTO_RECOVERY_DEGRADED` for the IEX-failover marker. Single-shot — a FAILED outcome does not retry in-process; the next escalation cycle decides.
+```
+1. daily_bars / data_validation / engine_service / etc. fails
+2. Deterministic cascade fires (one of D1-D14 / E1-E11 — Waves 1-4)
+3. Recovery succeeds → INGESTION_AUTO_RECOVERED_* event
+4. Recovery fails    → INGESTION_AUTO_RECOVERY_FAILED + STOP
+                       (no LLM fallback; operator reviews the event)
+```
+
+The generic retry layer `_self_heal_failed_stages` (PR #200) stays. On `INGESTION_AUTO_RECOVERY_FAILED` the operator sees the event in `application_log` and decides — there is no autonomous fallback.
 
 ### Lessons learned (2026-05-13 data-cleanup post-mortem)
 

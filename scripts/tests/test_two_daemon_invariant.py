@@ -18,11 +18,13 @@ def _installer_loop_tokens() -> set[str]:
 def test_manifest_loop_is_exactly_the_railway_2_daemon_budget_set():
     # 2026-05-21 Railway 2-daemon budget consolidation:
     # ``ops.data_repair_service`` + ``ops.llm_triage_service`` were
-    # folded into the single ``ops.lane_service`` daemon (four
-    # crash-isolated co-tasks under one asyncio.gather()). The closed
-    # whitelist is now:
+    # folded into the single ``ops.lane_service`` daemon. 2026-05-22
+    # operator directive ("we aren't going to use the llm triage...
+    # take it out") then REMOVED the LLM-triage lanes entirely; the
+    # deployed lane-service now hosts ONLY the deterministic
+    # data-repair co-task. The closed whitelist is:
     #   * engine-service  — consolidated long-lived daemon
-    #   * lane-service    — data-repair + 5 triage lanes (one daemon)
+    #   * lane-service    — deterministic data-repair only (no LLM)
     #   * data-operations — data-lane cron (NOT a daemon)
     # Two long-lived daemons (engine + lane) + one cron fits Railway's
     # 2-daemon constraint. The set is still a CLOSED whitelist: any

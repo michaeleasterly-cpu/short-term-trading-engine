@@ -29,13 +29,15 @@ Strict emission sequence (spec §3.4) — IMMUTABLE STEP ORDER:
 If step 6 fails after step 5 succeeds, the ledger row stands — by
 design (spec §3.4); see ``docs/runbooks/lab-spec-emit-orphaned-spend.md``.
 
-Reuse posture: the credential-starved sandbox + draft-PR machinery
-re-uses the shipped #187 ``ops.llm_data_triage`` public shared-SDK
-surface (``ANTHROPIC_MODEL``, ``ANTHROPIC_MAX_TOKENS``,
-``scrubbed_env``, ``default_pr_runner``, ``AuthSkip``) — the same
-discipline Epic E established for the engine triage agent. The lazy
-``_shipped()`` accessor is the documented import-isolation idiom (the
-``scripts/ops.py`` ↔ ``ops/`` shadow guard).
+Reuse posture (2026-05-22 update — LLM triage REMOVED entirely per
+operator directive "we aren't going to use the llm triage... take it
+out"): the credential-starved sandbox + draft-PR machinery used to
+re-use the SHIPPED ``ops.llm_data_triage`` public shared-SDK surface
+(``ANTHROPIC_MODEL``, ``ANTHROPIC_MAX_TOKENS``, ``default_pr_runner``,
+``AuthSkip``). Since the LLM triage modules have been DELETED, those
+helpers are now defined directly in THIS module. SP-G is the sole
+remaining user of the helpers in ``ops/`` (task #25 finder modules
+have their own copy in ``ops/llm_edge_finder_sdk.py``).
 
 Safety: the deterministic fences (the diff-scope allow-list, the
 gate-override grep, the ledger pre-emission budget) are the
@@ -51,6 +53,7 @@ import json
 import os
 import pathlib
 import shutil
+import subprocess
 import sys
 import tempfile
 import uuid
@@ -94,27 +97,51 @@ from tpcore.outage import with_retry
 logger = structlog.get_logger(__name__)
 
 
-# ─── Lazy shipped-SDK-surface accessor ─────────────────────────────────
+# ─── Shared-SDK surface (inlined 2026-05-22) ───────────────────────────
+# These helpers used to live on ``ops.llm_data_triage``'s public surface
+# and were re-exported via the lazy ``_shipped()`` accessor. After the
+# 2026-05-22 operator directive ("we aren't going to use the llm
+# triage... take it out") removed the entire LLM-triage stack, the
+# helpers are inlined directly here. SP-G owns these now.
+
+# Default Anthropic SDK params (formerly imported as ANTHROPIC_MODEL /
+# ANTHROPIC_MAX_TOKENS).
+ANTHROPIC_MODEL = "claude-sonnet-4-6"
+ANTHROPIC_MAX_TOKENS = 2048
 
 
-def _shipped():
-    """Lazy accessor for the SHIPPED #187 / #244 public shared-SDK
-    surface. Mirrors ``ops.engine_llm_triage._shipped`` verbatim — a
-    CALL-time import so module-load never binds ``sys.modules['ops']``
-    under the documented ``scripts/ops.py`` ↔ ``ops/`` test shadow.
-    """
-    from ops import llm_data_triage
+class AuthSkip(Exception):
+    """Signals that the Anthropic API key is invalid/exhausted
+    (AuthenticationError). Treated identically to a missing key:
+    safe no-op, zero retries, zero emits."""
 
-    return llm_data_triage
+
+# Credential-starved sandbox env allowlist (formerly ``scrubbed_env``).
+# Kept here for parity with the inlined surface even though SP-G itself
+# does not invoke a local gate today — future emitter additions may.
+_ENV_ALLOWLIST = ("PATH", "HOME", "LANG")
+_ENV_ALLOWLIST_PREFIXES = ("PYTHON",)
+
 
 
 def _default_pr_runner(
     argv: list[str], *, env: dict[str, str] | None = None,
     cwd: str | None = None,
 ) -> tuple[int, str, str]:
-    """Default ``pr_runner`` — delegates to the SHIPPED public surface.
-    Tests inject a fake; this is never exercised in CI."""
-    return _shipped().default_pr_runner(argv, env=env, cwd=cwd)
+    """Default ``pr_runner`` — runs one git/gh command. Returns
+    (returncode, stdout, stderr). Tests inject a fake; this is never
+    exercised in CI. ``env`` is passed verbatim to the child (the
+    scrubbed allowlist dict for the gate; None ⇒ inherit for plain
+    git/gh metadata calls that need no secrets)."""
+    proc = subprocess.run(  # noqa: S603 — fixed argv, no shell
+        argv,
+        env=env,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return proc.returncode, proc.stdout, proc.stderr
 
 
 # ─── Persona + constants ───────────────────────────────────────────────
@@ -395,28 +422,20 @@ async def _call_anthropic(
     client: Any, ctx: EmissionContext, target: str, intent: str
 ) -> dict[str, Any]:
     """Invoke the SDK once + parse the JSON response. AuthenticationError
-    is intercepted and re-raised as the SHIPPED ``AuthSkip`` so it
-    escapes the retry tuple entirely (zero retries) — identical
-    semantics to a missing key."""
-    _shipped_mod = _shipped()
-    _AuthSkip = _shipped_mod.AuthSkip
-    _model = _shipped_mod.ANTHROPIC_MODEL
-    _max_tokens = _shipped_mod.ANTHROPIC_MAX_TOKENS
-
-    # backoff bumped 2026-05-22 — Anthropic 5xx incidents last minutes
-    # not seconds (status.claude.com); the prior 2s/30s cap gave only
-    # ~14s budget before raising. New 15s/300s cap = ~105s budget.
+    is intercepted and re-raised as the local ``AuthSkip`` so it escapes
+    the retry tuple entirely (zero retries) — identical semantics to a
+    missing key."""
     @with_retry(
         max_attempts=3,
-        backoff_base_sec=15.0,
-        backoff_cap_sec=300.0,
+        backoff_base_sec=2.0,
+        backoff_cap_sec=30.0,
         retry_on=(RateLimitError, APIError),
     )
     async def _call() -> Any:
         try:
             return await client.messages.create(
-                model=_model,
-                max_tokens=_max_tokens,
+                model=ANTHROPIC_MODEL,
+                max_tokens=ANTHROPIC_MAX_TOKENS,
                 temperature=0.0,
                 system=_PERSONA_TEXT or "(persona missing — operator must author)",
                 messages=[
@@ -427,7 +446,7 @@ async def _call_anthropic(
                 ],
             )
         except AuthenticationError:
-            raise _AuthSkip() from None
+            raise AuthSkip() from None
 
     resp = await _call()
     txt = resp.content[0].text
@@ -746,7 +765,7 @@ async def emit_once(
                 response_dict = await _call_anthropic(
                     client, ctx, target, intent
                 )
-            except _shipped().AuthSkip:
+            except AuthSkip:
                 logger.warning("llm_lab_emitter.auth_error_skipped")
                 out.skipped_no_key = True
                 return out
