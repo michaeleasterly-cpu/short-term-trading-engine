@@ -109,8 +109,19 @@ def test_param_ranges_membership_iteration_len_and_set():
     #     docs/superpowers/specs/2026-05-20-sentinel-maxdd-lab-candidate.md)
     #   * `bear_score_mode` — sentinel_bear_score (spec
     #     docs/superpowers/specs/2026-05-21-sentinel-bear-score-lab-candidate.md)
+    #     PLUS the post-2026-05-22 surface enrichment for
+    #     sentinel_macro_stress_gate (finder run_id
+    #     91100f12-0674-41dc-9b2b-09c00cc5e507) which extends
+    #     bear_score_mode with a third arm and adds 5 new knobs.
     assert set(run.PARAM_RANGES["sentinel"]) == {
-        "activation_score_threshold", "bear_score_mode"}
+        "activation_score_threshold",
+        "bear_score_mode",
+        "macro_stress_signal_count",
+        "vix_stress_threshold",
+        "hy_spread_stress_threshold_bps",
+        "sahm_stress_threshold",
+        "yield_curve_inversion_threshold",
+    }
     # carver's six pre-registered toggles (spec §6 PARAM_RANGES).
     assert set(run.PARAM_RANGES["carver"]) == {
         "trend_fast", "trend_slow", "value_lookback_months",
@@ -387,11 +398,20 @@ def test_default_params_shim_resolves_sentinel_post_sp_e():
     seam). The sentinel_bear_score candidate (spec
     docs/superpowers/specs/2026-05-21-sentinel-bear-score-lab-candidate.md)
     added the `bear_score_mode` toggle alongside the SP-E
-    `activation_score_threshold`."""
+    `activation_score_threshold`. The post-2026-05-22 macro-stress-gate
+    surface enrichment added five more knobs (count + four per-signal
+    thresholds), all of which carry their legacy-default values here so
+    the dossier param-diff for a non-stress-count candidate shows zero
+    delta on those five knobs."""
     from ops.engine_sdlc.default_params import default_params
     assert default_params("sentinel") == {
         "activation_score_threshold": 60,
         "bear_score_mode": "current",
+        "macro_stress_signal_count": 3,
+        "vix_stress_threshold": 22.0,
+        "hy_spread_stress_threshold_bps": 400.0,
+        "sahm_stress_threshold": 0.3,
+        "yield_curve_inversion_threshold": 0.0,
     }
 
 
