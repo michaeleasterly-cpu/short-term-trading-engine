@@ -261,6 +261,13 @@ _SPECS: tuple[HealSpec, ...] = (
     HealSpec(check_name="aaii_sentiment_freshness", source="aaii_sentiment",
              healable=True, stage="aaii_sentiment",
              params={"skip_guard_days": "0"}, max_attempts=2),
+    # Stale insider-filings (the daily-granularity Form-4 table for the
+    # vector engine's 30d-rolling MSPR signal) → re-run the bounded
+    # canonical delta stage. Idempotent under the table PK.
+    HealSpec(check_name="insider_filings_freshness",
+             source="insider_sentiment_daily",
+             healable=True, stage="daily_insider_sentiment_delta",
+             params={}, max_attempts=2),
 )
 
 HEAL_SPECS: dict[str, HealSpec] = {s.check_name: s for s in _SPECS}

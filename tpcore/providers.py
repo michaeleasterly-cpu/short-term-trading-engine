@@ -174,6 +174,17 @@ _BINDINGS: tuple[ProviderBinding, ...] = (
                  "loop; monthly cadence.",
     ),
     ProviderBinding(
+        feed="insider_sentiment_daily", provider="fmp",
+        adapter_module="tpcore.data.insider_backfill.daily_delta",
+        status=ProviderStatus.ACTIVE,
+        evidence="FMP /stable/insider-trading/search — per-filing Form-4 "
+                 "rows at DAILY granularity for the vector engine's "
+                 "30d-rolling MSPR signal (Carver 2026-05-22). Sibling "
+                 "to the monthly finnhub_insider_sentiment feed — both "
+                 "ACTIVE, different tables (insider_filings vs "
+                 "insider_sentiment), different consumers.",
+    ),
+    ProviderBinding(
         feed="greeks_max_pain", provider="tradier",
         adapter_module="tpcore.ingestion.handlers.handle_greeks_max_pain",
         status=ProviderStatus.ACTIVE,

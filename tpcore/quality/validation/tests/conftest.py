@@ -338,6 +338,14 @@ class FakePool:
         if "max(date)" in sql.lower() and "platform.borrow_rates" in sql.lower():
             from datetime import UTC, datetime, timedelta
             return datetime.now(UTC).date() - timedelta(days=1)
+        # insider_filings_freshness MAX(transaction_date): fresh date so
+        # the suite is green in e2e tests for unrelated checks.
+        if (
+            "max(transaction_date)" in sql.lower()
+            and "platform.insider_filings" in sql.lower()
+        ):
+            from datetime import UTC, datetime, timedelta
+            return datetime.now(UTC).date() - timedelta(days=1)
         # aaii_sentiment_freshness is now VENDOR-ANCHORED (≥ the last
         # scheduled Thursday publish, UTC — not today−N). Return today
         # so the synthetic "healthy data" suite is deterministically

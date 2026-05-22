@@ -130,6 +130,17 @@ FEED_PROFILES: dict[str, FeedProfile] = {
         evidence="Finnhub MSPR is monthly-period (age measured in months "
                  "by its check); free-tier ticker-limited → demand-driven.",
     ),
+    "insider_sentiment_daily": FeedProfile(
+        feed="insider_sentiment_daily", trigger=FeedTrigger.CONTINUOUS,
+        cadence_days=1, freshness_max_age_days=5, skip_guard_days=1,
+        evidence="FMP /stable/insider-trading/search — per-filing Form-4 "
+                 "rows at DAILY granularity (Carver 2026-05-22 vector "
+                 "engine unblock; the monthly finnhub_insider_sentiment "
+                 "lost information for the 30d-rolling MSPR signal). "
+                 "Continuous trigger: Form 4 has a 2-business-day "
+                 "filing deadline so a daily pull catches every new "
+                 "filing the day after it lands at FMP.",
+    ),
     "greeks_max_pain": FeedProfile(
         feed="greeks_max_pain", trigger=FeedTrigger.MARKET_CLOSE,
         cadence_days=1, freshness_max_age_days=7, skip_guard_days=1,
