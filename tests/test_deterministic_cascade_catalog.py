@@ -24,13 +24,28 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_OPS = REPO_ROOT / "scripts" / "ops.py"
 ENGINE_DISPATCH = REPO_ROOT / "ops" / "engine_dispatch.py"
 ORDER_TRANSIENT_RETRY = REPO_ROOT / "tpcore" / "order_management" / "transient_retry.py"
+# Wave-4 cascade-hosting source files.
+AAR_DEFERRED = REPO_ROOT / "tpcore" / "aar" / "deferred.py"
+AAR_WRITER = REPO_ROOT / "tpcore" / "aar" / "writer.py"
+LIFECYCLE_PAUSE = REPO_ROOT / "tpcore" / "risk" / "lifecycle_pause.py"
+EXECUTION_RISK_SKIP = REPO_ROOT / "tpcore" / "order_management" / "execution_risk_skip.py"
 SPEC = REPO_ROOT / "docs" / "superpowers" / "specs" / "2026-05-21-deterministic-self-heal-coverage-expansion-design.md"
 # Search across all cascade-hosting source files. Data-lane lives in scripts/ops.py;
 # engine-lane lives in ops/engine_dispatch.py (E1/E9) + tpcore/order_management/
 # transient_retry.py (E3). E2 (per-engine setup_detection retry) lives in
 # tpcore/engine/transient_retry.py — the helper is opted-into by individual engine
-# plugs.
-CASCADE_SOURCE_FILES = [SCRIPTS_OPS, ENGINE_DISPATCH, ORDER_TRANSIENT_RETRY]
+# plugs. Wave-4 added E4 (tpcore/aar/deferred.py + writer.py), E7+E11
+# (tpcore/risk/lifecycle_pause.py), E10 (tpcore/order_management/
+# execution_risk_skip.py).
+CASCADE_SOURCE_FILES = [
+    SCRIPTS_OPS,
+    ENGINE_DISPATCH,
+    ORDER_TRANSIENT_RETRY,
+    AAR_DEFERRED,
+    AAR_WRITER,
+    LIFECYCLE_PAUSE,
+    EXECUTION_RISK_SKIP,
+]
 
 
 # ROW_ID → (must-have-symbol-in-scripts/ops.py, must-have-event-name-in-scripts/ops.py)
@@ -68,8 +83,16 @@ EXPECTED_CASCADES: dict[str, tuple[str, str]] = {
     "E1": ("ENGINE_STAGE_ESCALATED_EVENT", "ENGINE_STAGE_ESCALATED"),
     # E3 order placement transient → retry + ORDER_ESCALATED (PR #267)
     "E3": ("submit_with_transient_retry", "ORDER_ESCALATED"),
+    # E4 AAR write failure → defer to platform.aar_deferred + AAR_DEFERRED (Wave-4)
+    "E4": ("DeferredAARWriter", "AAR_DEFERRED"),
+    # E7 credibility drop → N=3 consecutive sub-floor scores → ENGINE_CREDIBILITY_DROP + ENGINE_HELD (Wave-4)
+    "E7": ("check_credibility_drop", "ENGINE_CREDIBILITY_DROP"),
     # E9 engine package import error → ENGINE_IMPORT_FAILED + skip cycle (PR #267)
     "E9": ("ENGINE_IMPORT_FAILED_EVENT", "ENGINE_IMPORT_FAILED"),
+    # E10 per-trade execution_risk failure → cancel + EXECUTION_RISK_ESCALATED + skip trade (Wave-4)
+    "E10": ("execute_with_risk_skip", "EXECUTION_RISK_ESCALATED"),
+    # E11 lifecycle degraded → N=5 consecutive sub-floor scores → ENGINE_LIFECYCLE_DEGRADED + ENGINE_HELD (Wave-4)
+    "E11": ("check_lifecycle_degraded", "ENGINE_LIFECYCLE_DEGRADED"),
 }
 
 

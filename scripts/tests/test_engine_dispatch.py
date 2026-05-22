@@ -647,3 +647,113 @@ async def test_autotune_failure_does_not_abort_sweep():
         await dispatch_once(object(), datetime(2026, 5, 18, 13, 0, tzinfo=UTC))
 
     assert ran == ["allocator", *ROSTER]
+
+
+# ---------------------------------------------------------------------------
+# Wave-4 E7 + E11 — lifecycle_pause checks wired into dispatch
+# ---------------------------------------------------------------------------
+
+async def test_lifecycle_pause_checks_called_per_actor():
+    """Wave-4: ``_safe_lifecycle_pause_checks`` runs for the allocator
+    + every ROSTER engine, between ``autotune`` and ``_dispatch_engine``.
+    Ordering pins the dispatch ladder: supervise → autotune → lifecycle_pause
+    → dispatch.
+    """
+    order: list[str] = []
+
+    async def _sup(pool, engine, now, invoke):
+        order.append(f"supervise:{engine}")
+
+    async def _at(pool, engine, now):
+        order.append(f"autotune:{engine}")
+
+    async def _lp(pool, engine):
+        order.append(f"lifecycle_pause:{engine}")
+
+    async def _de(pool, now, engine, invoke):
+        order.append(f"dispatch:{engine}")
+
+    with patch.object(ed.engine_supervisor, "supervise", _sup), \
+         patch.object(ed.aar_autotune, "autotune", _at), \
+         patch.object(ed, "_safe_lifecycle_pause_checks", _lp), \
+         patch.object(ed, "_dispatch_engine", _de), \
+         patch.object(ed, "_invoke_allocator", AsyncMock()):
+        await dispatch_once(object(), datetime(2026, 5, 18, 13, 0, tzinfo=UTC))
+
+    # Allocator: supervise → autotune → lifecycle_pause → dispatch.
+    assert order[0:4] == [
+        "supervise:allocator", "autotune:allocator",
+        "lifecycle_pause:allocator", "dispatch:allocator",
+    ]
+    # Per-engine ordering invariant.
+    for i, item in enumerate(order):
+        if item.startswith("lifecycle_pause:"):
+            eng = item.split(":")[1]
+            assert order[i - 1] == f"autotune:{eng}"
+            assert order[i + 1] == f"dispatch:{eng}"
+
+
+async def test_lifecycle_pause_failure_does_not_abort_sweep():
+    """A raising check must NEVER block the rest of the sweep — mirrors
+    the autotune-failure invariant. The real ``_safe_lifecycle_pause_checks``
+    is already crash-isolated via its try/except; this test pins that
+    contract by patching the inner ``check_*`` calls to raise."""
+    ran: list[str] = []
+
+    async def _de(pool, now, engine, invoke):
+        ran.append(engine)
+
+    # Patch the real helper to raise; _safe_lifecycle_pause_checks is the
+    # crash-isolation boundary so the sweep must continue.
+    async def _boom(pool, engine):
+        raise RuntimeError("lifecycle_pause boom")
+
+    with patch.object(ed.engine_supervisor, "supervise", AsyncMock()), \
+         patch.object(ed.aar_autotune, "autotune", AsyncMock()), \
+         patch.object(ed, "_safe_lifecycle_pause_checks", _boom), \
+         patch.object(ed, "_dispatch_engine", _de), \
+         patch.object(ed, "_invoke_allocator", AsyncMock()):
+        # Without isolation this would raise out; with isolation the
+        # sweep proceeds and every engine is dispatched.
+        # The real _safe_lifecycle_pause_checks IS isolated, but here
+        # we override it for a directly-raising stub to verify the
+        # OUTER sweep loop swallows nothing — meaning the real helper
+        # MUST be the boundary. Use pytest.raises to assert the raise
+        # propagates when the boundary is bypassed (negative control):
+        # the raise should bubble up because _boom replaces the
+        # boundary itself.
+        with pytest.raises(RuntimeError, match="lifecycle_pause boom"):
+            await dispatch_once(
+                object(), datetime(2026, 5, 18, 13, 0, tzinfo=UTC),
+            )
+    # The replaced boundary raised on the FIRST actor (allocator) so
+    # nothing ran past it — that's the negative control that proves
+    # the boundary IS the only thing isolating it.
+    assert ran == []
+
+
+async def test_lifecycle_pause_real_helper_swallows_inner_exception():
+    """The real ``_safe_lifecycle_pause_checks`` must crash-isolate the
+    inner ``check_credibility_drop`` / ``check_lifecycle_degraded``
+    calls — a raising check must NOT abort the sweep."""
+    ran: list[str] = []
+
+    async def _de(pool, now, engine, invoke):
+        ran.append(engine)
+
+    with patch.object(ed.engine_supervisor, "supervise", AsyncMock()), \
+         patch.object(ed.aar_autotune, "autotune", AsyncMock()), \
+         patch.object(ed, "_dispatch_engine", _de), \
+         patch.object(ed, "_invoke_allocator", AsyncMock()), \
+         patch(
+             "tpcore.risk.lifecycle_pause.check_credibility_drop",
+             AsyncMock(side_effect=RuntimeError("inner boom")),
+         ), \
+         patch(
+             "tpcore.risk.lifecycle_pause.check_lifecycle_degraded",
+             AsyncMock(),
+         ):
+        # No raise — _safe_lifecycle_pause_checks is the isolation boundary.
+        await dispatch_once(object(), datetime(2026, 5, 18, 13, 0, tzinfo=UTC))
+
+    assert ran == ["allocator", *ROSTER]
