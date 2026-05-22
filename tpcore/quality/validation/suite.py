@@ -60,6 +60,10 @@ from .checks.fundamentals_quarterly_completeness import (
 from .checks.fundamentals_quarterly_completeness import (
     check_fundamentals_quarterly_completeness,
 )
+from .checks.insider_filings_freshness import (
+    CHECK_NAME as INSIDER_FILINGS_FRESHNESS_NAME,
+)
+from .checks.insider_filings_freshness import check_insider_filings_freshness
 from .checks.insider_sentiment_freshness import CHECK_NAME as INSIDER_SENTIMENT_NAME
 from .checks.insider_sentiment_freshness import check_insider_sentiment_freshness
 from .checks.liquidity_tiers_completeness import (
@@ -139,6 +143,7 @@ KNOWN_CHECK_NAMES: tuple[str, ...] = (
     SHORT_INTEREST_NAME,
     BORROW_RATES_NAME,
     AAII_SENTIMENT_NAME,
+    INSIDER_FILINGS_FRESHNESS_NAME,
 )
 
 
@@ -238,6 +243,10 @@ async def run_suite(
     aaii_sentiment_task = _safe_run(
         AAII_SENTIMENT_NAME, check_aaii_sentiment_freshness, pool, None
     )
+    insider_filings_task = _safe_run(
+        INSIDER_FILINGS_FRESHNESS_NAME,
+        check_insider_filings_freshness, pool, None,
+    )
     (
         delistings_result, constituent_result, splits_result,
         row_integrity_result, fund_integrity_result, fund_completeness_result, ca_integrity_result, ca_completeness_result,
@@ -248,7 +257,7 @@ async def run_suite(
         options_maxpain_result, insider_sentiment_result,
         social_sentiment_result, fear_greed_result,
         short_interest_result, borrow_rates_result,
-        aaii_sentiment_result,
+        aaii_sentiment_result, insider_filings_result,
     ) = await asyncio.gather(
         delistings_task, constituent_task, splits_task,
         row_integrity_task, fund_integrity_task, fund_completeness_task, ca_integrity_task, ca_completeness_task,
@@ -259,7 +268,7 @@ async def run_suite(
         options_maxpain_task, insider_sentiment_task,
         social_sentiment_task, fear_greed_task,
         short_interest_task, borrow_rates_task,
-        aaii_sentiment_task,
+        aaii_sentiment_task, insider_filings_task,
     )
     checks: list[CheckResult] = [
         delistings_result, constituent_result, splits_result,
@@ -271,7 +280,7 @@ async def run_suite(
         options_maxpain_result, insider_sentiment_result,
         social_sentiment_result, fear_greed_result,
         short_interest_result, borrow_rates_result,
-        aaii_sentiment_result,
+        aaii_sentiment_result, insider_filings_result,
     ]
 
     finished_at = datetime.now(UTC)

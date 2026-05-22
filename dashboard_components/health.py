@@ -31,6 +31,7 @@ OPS_UPDATE_STAGES: tuple[str, ...] = (
     "earnings_refresh",
     "sec_filings",
     "macro_indicators",
+    "daily_insider_sentiment_delta",
     "data_validation",
     "universe_prescreener",
     "universe_simulation",
