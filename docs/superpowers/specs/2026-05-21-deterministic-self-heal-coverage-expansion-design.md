@@ -30,8 +30,11 @@ Each row: failure shape, current deterministic coverage, proposed coverage.
 | D11 | Freshness vendor_late | `latest_published` probe returns ≤ our_latest | Memory-documented selfheal.vendor_late event; partial | **EXTEND:** orchestrator-level recognition + skip-without-failing for known weekly-publish feeds (AAII Thursday, fear_greed daily) |
 | D12 | CSV archive substrate dead (Railway) | `write_archive` raises filesystem error | None | **DONE-VIA-#235** R3 substrate is env-pluggable; fails over to S3 backend |
 | D13 | Postgres pool exhaustion | asyncpg PoolTimeout | None | **NEW:** circuit-breaker stage timeout that closes idle conns + re-opens pool, then retries the stage |
+| D14 | `data_validation` stage timeout | `ops.stage.timeout` event on data_validation (300s cap exceeded) | None — Wave 1 cascade is keyed on FAILED check_name list which a TIMEOUT does not produce | **NEW:** detect TIMEOUT on data_validation specifically (not generic). Re-invoke per-check by chunking the suite into smaller sub-stages, each with its own 60s budget; aggregate failed-check list across chunks then route to existing `_VALIDATION_CASCADE_MAP` |
 
-**Coverage today:** 3/13 (D1, D4, D12 fully; D2/D3/D11 partially). **Coverage after this spec:** 13/13 deterministic; LLM is the long-tail.
+**Coverage today:** 12/14 — Wave 1 (D6-D10) shipped via PR #261; Wave 2 (D2/D3/D5/D13) shipped via PR #262; pre-existing D1/D4/D12. **Coverage after this spec (incl. D14):** 14/14 deterministic; LLM is the long-tail.
+
+**D14 trigger context (2026-05-22):** Live exercise of the cascade post-Wave-1 found data_validation timing out at 300s before completing the 25-check suite (which now includes 50 new SOS PHCI series per PR #216). The cascade can't fire because TIMEOUT doesn't produce a failed-check list. Documented gap.
 
 ## 2. Engine-lane deterministic self-heal — failure mode catalog
 
