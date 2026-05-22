@@ -1,18 +1,22 @@
 """Anthropic SDK wiring for the LLM edge-finder — Task #25 T9 + spec §3.2.
 
 Binds the ``LLMCallable`` seam in ``ops/llm_edge_finder.py`` to the real
-Anthropic ``AsyncAnthropic.messages.create`` call. Reuses the shared
-SDK surface from ``ops.llm_data_triage`` (``ANTHROPIC_MODEL``,
-``ANTHROPIC_MAX_TOKENS``, ``AuthSkip``) — the same posture #187
-established for the lab emitter (PR #152).
+Anthropic ``AsyncAnthropic.messages.create`` call.
 
-Safety contract (per spec §2 + ``.claude/rules/llm-triage.md``):
+2026-05-22 update — LLM triage REMOVED entirely (operator directive "we
+aren't going to use the llm triage... take it out"). The previous
+versions of this module imported ``ANTHROPIC_MODEL``,
+``ANTHROPIC_MAX_TOKENS``, and ``AuthSkip`` from the (now-deleted)
+``ops.llm_data_triage`` shared surface. The helpers are now defined
+inline here — task #25 owns them locally.
+
+Safety contract (per spec §2):
 - NO ``tools`` param to the SDK — advisory text only.
 - ``temperature=0.0`` for deterministic-as-possible replies.
 - ``system`` = persona text; ``messages`` = user-prompt + transcript
   rounds.
 - ``AuthSkip`` raised on auth error → caller treats as "no API key,
-  finder runs in smoke mode" (mirrors existing triage pattern).
+  finder runs in smoke mode".
 
 The `make_sdk_llm_callable` factory returns an `LLMCallable` compatible
 with `ops.llm_edge_finder.run_finder(..., llm_callable=...)`.
@@ -40,21 +44,16 @@ if TYPE_CHECKING:  # pragma: no cover
 log = structlog.get_logger(__name__)
 
 
-# Reuse the shared SDK surface from #187 (ops.llm_data_triage public symbols).
-# Defensive: tolerate test environments where the triage module's lazy
-# import path has been stubbed.
-try:
-    from ops.llm_data_triage import (
-        ANTHROPIC_MAX_TOKENS,
-        ANTHROPIC_MODEL,
-        AuthSkip,
-    )
-except Exception:  # pragma: no cover - defensive
-    ANTHROPIC_MODEL = "claude-sonnet-4-6"
-    ANTHROPIC_MAX_TOKENS = 2048
+# Default Anthropic SDK params. Previously imported from the (deleted)
+# ``ops.llm_data_triage`` shared surface; inlined here 2026-05-22.
+ANTHROPIC_MODEL = "claude-sonnet-4-6"
+ANTHROPIC_MAX_TOKENS = 2048
 
-    class AuthSkip(Exception):
-        """Local fallback if the shared symbol is unreachable."""
+
+class AuthSkip(Exception):
+    """Signals that the Anthropic API key is invalid/exhausted
+    (AuthenticationError). Caller treats as "no API key, finder runs in
+    smoke mode" — safe no-op, zero retries."""
 
 
 # Finder needs larger output budget than data-triage. Full AnalysisResult

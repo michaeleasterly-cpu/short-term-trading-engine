@@ -117,47 +117,32 @@ async def test_unregistered_etype_degrades_gracefully() -> None:
     assert "UNREGISTERED" in line
 
 
-async def test_undispositioned_line_annotated_with_llm_proposal() -> None:
-    # LT-P3 §5: when a DATA_LLM_TRIAGE_PROPOSAL exists for the ref, the
-    # undispositioned line gains a ` | LLM: <disp> (conf <c>) — PR <l>`
-    # suffix. DRY: same open set, just annotated.
-    pool = _Pool({
-        "OPEN_ESCALATIONS": [
-            {"ref": "h1", "etype": "DATA_SOURCE_ESCALATED",
-             "recorded_at": datetime(2026, 5, 1, tzinfo=UTC),
-             "message": "source prices_daily stuck"},
-        ],
-        "DATA_LLM_TRIAGE_PROPOSAL": [
-            {"ref": "h1", "proposed_disposition": "converted",
-             "confidence": "high",
-             "pr_link": "https://github.com/x/y/pull/9"},
-        ],
-    })
-    d = await wd.build_weekly_digest(pool, datetime(2026, 5, 17, tzinfo=UTC))
-    line = next(x for x in d.undispositioned if "h1" in x)
-    assert "LLM: converted (conf high)" in line
-    assert "PR https://github.com/x/y/pull/9" in line
-    # the existing policy annotation is still there too
-    assert "escalate_operator" in line
+# 2026-05-22 — the LT-P3 §5 LLM-triage proposal annotation tests have
+# been REMOVED. Operator directive ("we aren't going to use the llm
+# triage... take it out") deleted ``ops.llm_data_triage`` and the
+# ``DATA_LLM_TRIAGE_PROPOSAL`` event class. The undispositioned digest
+# line is now purely deterministic — no LLM suffix, ever.
 
 
-async def test_undispositioned_line_has_no_llm_suffix_when_absent() -> None:
-    # No proposal for the ref → NO ` | LLM:` suffix (annotation absent).
+async def test_undispositioned_line_has_no_llm_suffix() -> None:
+    """The undispositioned digest line is purely deterministic.
+
+    Sentinel against accidental re-introduction of the LLM-triage suffix
+    (the entire LLM-triage stack was REMOVED 2026-05-22 per operator
+    directive)."""
     pool = _Pool({
         "OPEN_ESCALATIONS": [
-            {"ref": "h2", "etype": "DATA_SOURCE_ESCALATED",
+            {"ref": "h-sentinel", "etype": "DATA_SOURCE_ESCALATED",
              "recorded_at": datetime(2026, 5, 1, tzinfo=UTC),
              "message": "source x stuck"},
         ],
-        # proposal exists but for a DIFFERENT ref — must not annotate h2
-        "DATA_LLM_TRIAGE_PROPOSAL": [
-            {"ref": "other", "proposed_disposition": "converted",
-             "confidence": "high", "pr_link": "p"},
-        ],
     })
     d = await wd.build_weekly_digest(pool, datetime(2026, 5, 17, tzinfo=UTC))
-    line = next(x for x in d.undispositioned if "h2" in x)
-    assert "LLM:" not in line
+    line = next(x for x in d.undispositioned if "h-sentinel" in x)
+    assert "LLM:" not in line, (
+        "weekly_digest undispositioned line re-acquired an LLM suffix — "
+        "the entire LLM-triage stack was REMOVED 2026-05-22."
+    )
 
 
 async def test_undispositioned_entries_exposes_structured_ref() -> None:

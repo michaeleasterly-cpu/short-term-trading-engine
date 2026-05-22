@@ -5238,8 +5238,8 @@ async def _cascade_d13_pool_exhaustion(
     """D13 — pool exhaustion: close+reopen LOCAL pool + retry stage once.
 
     Scope-down per spec: this resets ONLY the daemon's local pool. Sibling
-    processes (engine_service, lane-service, llm_triage_service) hold their
-    own pools — those are NOT touched. A cross-process pool reset would
+    processes (engine_service, lane-service) hold their own pools — those
+    are NOT touched. A cross-process pool reset would
     need IPC fencing + graceful drain semantics that are out of scope for
     a single-row Wave-2 cascade. The cascade emits
     ``POOL_CIRCUIT_BREAKER_TRIPPED`` so the operator can see if the

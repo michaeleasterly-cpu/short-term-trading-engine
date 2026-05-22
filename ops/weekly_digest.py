@@ -274,30 +274,11 @@ async def build_weekly_digest(pool: Any, now: datetime | None = None) -> WeeklyD
         """,
         start,
     )
-    # LT-P3 §5: annotate an undispositioned line with the LLM advisory
-    # proposal (if one exists for that ref). DRY: reuse the SAME open
-    # set above — no re-query / re-derivation. The proposal is advisory
-    # only; the human still dispositions via the deterministic path.
-    proposals = await _q(
-        pool,
-        """SELECT data->>'ref' AS ref,
-                  data->>'proposed_disposition' AS proposed_disposition,
-                  data->>'confidence' AS confidence,
-                  data->>'pr_link' AS pr_link
-           FROM platform.application_log
-           WHERE event_type = 'DATA_LLM_TRIAGE_PROPOSAL'""",
-    )
-    proposal_by_ref = {p["ref"]: p for p in proposals if p.get("ref")}
-
-    def _llm_suffix(ref: str) -> str:
-        p = proposal_by_ref.get(ref)
-        if not p:
-            return ""
-        link = p.get("pr_link") or "(no PR)"
-        return (
-            f" | LLM: {p.get('proposed_disposition')} "
-            f"(conf {p.get('confidence')}) — PR {link}"
-        )
+    # 2026-05-22 — the LT-P3 §5 LLM-triage advisory-proposal annotation
+    # has been REMOVED. Operator directive ("we aren't going to use the
+    # llm triage... take it out") deleted ``ops.llm_data_triage`` and
+    # the ``DATA_LLM_TRIAGE_PROPOSAL`` event class is no longer emitted.
+    # The digest line is now purely deterministic with no LLM suffix.
 
     # Single source: build the structured entry per open_esc row and
     # derive the human line from it. The rendered string and the struct
@@ -307,7 +288,7 @@ async def build_weekly_digest(pool: Any, now: datetime | None = None) -> WeeklyD
         policy = _disposition_label(r["etype"])
         rendered = (
             f"{r['recorded_at']:%Y-%m-%d} [{r['etype']}] ref={r['ref']} "
-            f"{r['message']} | {policy}{_llm_suffix(r['ref'])}"
+            f"{r['message']} | {policy}"
         )
         undispositioned_entries.append(
             UndispositionedEntry(

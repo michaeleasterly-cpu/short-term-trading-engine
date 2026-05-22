@@ -1,15 +1,16 @@
 # Deterministic Self-Heal Coverage Expansion (design spec)
 
-**Status:** APPROVED (autonomous — Wave 1 scope decisions answered in §4 ANSWERED; standing rule [[ask-expert-then-execute]] + [[stop-over-asking-use-expert]] + [[self-heal-autonomous-no-operator-task]]).
-**Trigger:** operator directive 2026-05-21 — *"we wont be deploying the llm data triage it will run locally with my max account... we need to update the self healing with as much use cases as possible for the deterministic agents ... we need to do the same for the engines"*
-**Predecessor:** PRs #227 / #231 / #236 (data cascade), PR #239 (LLM data_recovery_v2 with 6 patterns), PR #235 (CSV archive R3), PR #233 (LLM autonomous action), PR #252 (gitleaks gate).
-**Memory:** [[llm-triage-runs-local-on-max]] — the LLM-side runs operator-local on Max, not deployed.
+**Status:** APPROVED + SHIPPED. 2026-05-22 update — operator directive ("we aren't going to use the llm triage... take it out") REMOVED the LLM backstop entirely. The deterministic cascade catalog shipped under this spec (Waves 1-4 + sentinel — D1-D14 / E1-E11) is the COMPLETE self-heal layer. **There is no LLM backstop. AUTO_RECOVERY_FAILED is terminal.**
+**Trigger:** operator directive 2026-05-21 — *"we wont be deploying the llm data triage it will run locally with my max account... we need to update the self healing with as much use cases as possible for the deterministic agents ... we need to do the same for the engines"* — superseded 2026-05-22 by the deletion directive.
+**Predecessor:** PRs #227 / #231 / #236 (data cascade), PR #235 (CSV archive R3), PR #252 (gitleaks gate). (PRs #233 / #239 — the LLM autonomous-action stack — were REVERTED by deletion 2026-05-22.)
 
 ## 0. Why now
 
-Today's data-lane incident (2026-05-18 → 21) exposed: the system has self-heal scaffolding (`repair_coverage`, `repair_gaps`, `force_refresh`, `data_repair_service`, `llm_triage_service`) but the deterministic cascade only handled ONE failure shape (`coverage_collapse`). Every other failure mode either escalated to the LLM or did nothing. The operator's directive: **maximize deterministic coverage; the LLM is the long-tail backstop**, not the first line.
+Today's data-lane incident (2026-05-18 → 21) exposed: the system has self-heal scaffolding (`repair_coverage`, `repair_gaps`, `force_refresh`, `data_repair_service`, `llm_triage_service`) but the deterministic cascade only handled ONE failure shape (`coverage_collapse`). Every other failure mode either escalated to the LLM or did nothing.
 
-The same pattern should apply to engines — deterministic engine-side recovery for as many failure shapes as possible; `ops/engine_llm_triage.py` becomes the long-tail backstop.
+The 2026-05-21 directive was "maximize deterministic coverage; the LLM is the long-tail backstop". The 2026-05-22 directive went further and REMOVED the LLM entirely. The deterministic cascade catalog stands; the LLM-as-backstop language elsewhere in this spec is historical only.
+
+The same pattern applies to engines — deterministic engine-side recovery for as many failure shapes as possible; there is NO LLM fallback for engines either.
 
 ## 1. Data-lane deterministic self-heal — failure mode catalog
 
@@ -32,7 +33,7 @@ Each row: failure shape, current deterministic coverage, proposed coverage.
 | D13 | Postgres pool exhaustion | asyncpg PoolTimeout | None | **DONE-VIA-#262** circuit-breaker stage timeout that closes idle conns + re-opens pool, then retries the stage |
 | D14 | `data_validation` stage timeout | `ops.stage.timeout` event on data_validation (300s cap exceeded) | None — Wave 1 cascade is keyed on FAILED check_name list which a TIMEOUT does not produce | **DONE-VIA-#271** `_chunk_validation_suite` partitions the 25-check suite into 6 chunks each with a 60s budget; aggregate failed-check list is synthesised into the canonical `"validation suite failed: [<names>]"` shape consumed by `_auto_cascade_validation_failures` (no contract change); emits `INGESTION_AUTO_RECOVERED_VALIDATION_CHUNKED` |
 
-**Coverage today:** 14/14 deterministic (D1, D4, D12 pre-existing; D6-D10 Wave 1 via PR #261; D2/D3/D5/D13 Wave 2 via PR #262; D11+D14 via PR #271). **LLM is the long-tail backstop only.**
+**Coverage today:** 14/14 deterministic (D1, D4, D12 pre-existing; D6-D10 Wave 1 via PR #261; D2/D3/D5/D13 Wave 2 via PR #262; D11+D14 via PR #271). **2026-05-22 — LLM backstop REMOVED entirely; on cascade exhaustion the daemon emits `INGESTION_AUTO_RECOVERY_FAILED` and STOPS for operator review.**
 
 ## 2. Engine-lane deterministic self-heal — failure mode catalog
 

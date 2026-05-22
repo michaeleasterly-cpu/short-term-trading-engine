@@ -31,8 +31,6 @@ The full §1 pipeline (including the `expert subagent` harden, the `spec-read ga
 - `tpcore/quality/validation/` (the data-acceptance gate)
 - `ops/engine_service.py`
 - `ops/engine_sdlc.py` (or anything under `ops/engine_sdlc/`)
-- `ops/llm_data_triage.py`
-- `ops/engine_llm_triage.py`
 - `platform/migrations/`
 - a **new engine** — anything matching the `<engine>/` 5-plug structure at the repo root (setup_detection / lifecycle_analysis / execution_risk / aar_logging / capital_gate)
 - a **new data adapter**

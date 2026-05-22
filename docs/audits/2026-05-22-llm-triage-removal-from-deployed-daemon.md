@@ -5,6 +5,19 @@
 **Driver memory:** `llm-triage-runs-local-on-max` + `deterministic-cascade-architecture` + `self-heal-autonomous-no-operator-task`
 **Predecessor PR:** #236 (PR that introduced the consolidated `lane-service` with 4 co-tasks).
 
+> **2026-05-22 SUPERSEDED — operator escalated to full removal:** the
+> follow-on directive *"we aren't going to use the llm triage... take
+> it out"* DELETED the LLM-triage stack entirely. The "KEPT in repo
+> as importable library" rows below for the TRIAGE modules
+> (`ops.llm_data_recovery`, `ops.llm_data_triage`,
+> `ops.engine_llm_triage`, `tpcore.llm_data_triage`,
+> `tpcore.engine_llm_triage`) are now wrong — those files have been
+> deleted. The deterministic cascade catalog (Waves 1-4 + sentinel)
+> is the COMPLETE self-heal layer. The SP-G (`ops.llm_lab_emitter`)
+> and Task #25 (`ops.llm_edge_finder*`) modules SURVIVE — they are
+> Lab-side, not triage. See PR `feat/remove-llm-triage-entirely` and
+> the `llm-triage-runs-local-on-max` memory (re-statused DEPRECATED).
+
 ## TL;DR
 
 The deployed `lane-service` daemon (running on Railway) currently hosts FOUR co-tasks under one `asyncio.gather()`:
