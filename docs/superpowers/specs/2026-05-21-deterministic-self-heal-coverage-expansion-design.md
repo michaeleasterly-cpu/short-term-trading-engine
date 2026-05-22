@@ -43,16 +43,16 @@ Engines (reversion, vector, momentum, sentinel, canary, catalyst, carver) all ru
 | E1 | Engine scheduler stage failure | `engine_service` stage retval non-OK | **DONE-VIA-#267** — `_invoke_scheduler_with_recovery` in `ops/engine_dispatch.py` retries once + emits `ENGINE_STAGE_ESCALATED` | — |
 | E2 | setup_detection panel-load failure | DB-fetch exception | **DONE-VIA-#267 (pilot)** — `tpcore/engine/transient_retry.py` shared helper + opt-in wire on `reversion/plugs/setup_detection.py` | EXTEND to other engines in follow-on PR (per Wave-3 scope decision) |
 | E3 | Order placement failure | Alpaca API error during order submit | **DONE-VIA-#267** — `submit_with_transient_retry` in `tpcore/order_management/transient_retry.py` retries once + emits `ORDER_ESCALATED` on second-failure | — |
-| E4 | AAR write failure | `aar_logging` plug exception | None | **NEW:** defer AAR to next cycle's deferred-AAR queue (new table `platform.aar_deferred`); don't fail the engine cycle |
+| E4 | AAR write failure | `aar_logging` plug exception | None | **DONE-VIA-#WAVE4** — `DeferredAARWriter` queues to `platform.aar_deferred` + emits `AAR_DEFERRED`; `replay_deferred_aars` (`ops.py --stage aar_replay`) drains pending rows |
 | E5 | Capital gate failure | `assert_passed_for_engine` raises | Skip cycle (existing behavior) | **DONE** — current behavior is correct |
 | E6 | Drawdown breach | engine PnL vs RiskGovernor breach threshold | RiskGovernor auto-pauses engine (existing) | **DONE** |
-| E7 | Credibility drop | post-cycle `write_credibility_score` < threshold | None — Lab/AAR captures it, but no auto-action | **NEW:** if credibility < threshold for N consecutive cycles, auto-emit `ENGINE_CREDIBILITY_DROP` event + RiskGovernor pauses the engine pending operator review |
+| E7 | Credibility drop | post-cycle `write_credibility_score` < threshold | None — Lab/AAR captures it, but no auto-action | **DONE-VIA-#WAVE4** — `check_credibility_drop` reads N=3 recent `platform.data_quality_log` rows; on full degradation emits `ENGINE_CREDIBILITY_DROP` + `ENGINE_HELD` (failure_class `behavioral_credibility`); wired in `ops/engine_dispatch.py` |
 | E8 | Stale-order accumulation | `stale_order_cancel` finds orders past TTL | Auto-cancel stale orders (existing) | **DONE** |
 | E9 | Engine package import error | scheduler raises ImportError | **DONE-VIA-#267** — `_pre_check_engine_import` in `ops/engine_dispatch.py` wraps + emits `ENGINE_IMPORT_FAILED` + skips engine (other engines continue) | — |
-| E10 | Per-trade execution_risk failure | `execution_risk` plug raises mid-cycle | None | **NEW:** cancel any in-flight orders for the trade, emit `EXECUTION_RISK_ESCALATED`, skip the trade (not the whole cycle) |
-| E11 | Lifecycle analysis stale | `lifecycle_analysis` reports degradation | None — captured by AAR but no auto-action | **NEW:** if lifecycle score < threshold for N cycles, RiskGovernor pauses the engine |
+| E10 | Per-trade execution_risk failure | `execution_risk` plug raises mid-cycle | None | **DONE-VIA-#WAVE4** — `execute_with_risk_skip` catches the plug exception, calls a best-effort `cancel_in_flight` hook, emits `EXECUTION_RISK_ESCALATED`, returns `None` so the scheduler skips the trade and continues |
+| E11 | Lifecycle analysis stale | `lifecycle_analysis` reports degradation | None — captured by AAR but no auto-action | **DONE-VIA-#WAVE4** — `check_lifecycle_degraded` reads N=5 recent `engine_lifecycle.<engine>` rows in `platform.data_quality_log`; on full degradation emits `ENGINE_LIFECYCLE_DEGRADED` + `ENGINE_HELD` (failure_class `behavioral_lifecycle`); wired in `ops/engine_dispatch.py` |
 
-**Coverage today:** 7/11 — E1/E2(pilot)/E3/E9 shipped via PR #267; pre-existing E5/E6/E8. Remaining: E4 (deferred-AAR), E7 (credibility-pause), E10 (execution_risk-skip), E11 (lifecycle-pause) — Wave 4 (pending operator authorization). **Coverage after this spec:** 11/11 deterministic.
+**Coverage today:** 11/11 — E1/E2(pilot)/E3/E9 shipped via PR #267; E4/E7/E10/E11 shipped via Wave 4; pre-existing E5/E6/E8. **Coverage after this spec:** 11/11 deterministic.
 
 ## 3. What this spec is NOT
 

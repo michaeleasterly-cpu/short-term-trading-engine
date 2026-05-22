@@ -2881,6 +2881,46 @@ async def _stage_universe_prescreener(pool: asyncpg.Pool) -> dict[str, Any]:
 _CANDIDATE_RE = re.compile(r"^\s*(\w[\w ]*?)\s+candidates?:\s*(\d+)", re.MULTILINE)
 
 
+async def _stage_aar_replay(
+    pool: asyncpg.Pool, config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Wave-4 E4 replay — drain ``platform.aar_deferred`` into ``aar_events``.
+
+    Reads pending deferred AAR rows (``replayed_at IS NULL``) oldest-
+    first and re-attempts the canonical ``aar_events`` insert via
+    :class:`tpcore.aar.writer.AARWriter`. Successful rows are marked
+    ``replayed_at = now()``; rows that still raise stay queued for the
+    next run (the substrate is presumed still degraded).
+
+    Bounded per call by ``--param limit=<int>`` (default 100) so the
+    stage never exceeds the standard timeout when a large backlog has
+    accumulated. The next run drains the next slice.
+
+    Operator-on-demand AND wired as an off-cycle stage (not in
+    ``OPS_UPDATE_STAGES``) — the replay is also triggered implicitly on
+    the next engine cycle by anything that constructs an
+    :class:`AARWriter`, so the off-cycle stage is the bulk-drain knob
+    rather than the only path.
+    """
+    cfg = config or {}
+    try:
+        limit = int(cfg.get("limit", 100))
+    except (TypeError, ValueError):
+        limit = 100
+    if limit <= 0:
+        limit = 100
+
+    from tpcore.aar.deferred import replay_deferred_aars
+
+    counts = await replay_deferred_aars(pool, limit=limit)
+    return {
+        "limit": limit,
+        "pending": counts.get("pending", 0),
+        "replayed": counts.get("replayed", 0),
+        "still_failing": counts.get("still_failing", 0),
+    }
+
+
 async def _stage_forensics(pool: asyncpg.Pool) -> dict[str, Any]:
     """Run the Forensics service against ``platform.aar_events``.
 
@@ -3301,6 +3341,13 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # ``AARWriter.write_aar`` against the live ``platform.aar_events``.
     # Self-cleaning (DELETE in finally). Operator-on-demand.
     ("aar_pipeline_smoke",  lambda pool, cfg: (lambda: _stage_aar_pipeline_smoke(pool, cfg)),    STAGE_TIMEOUT_SEC),
+    # aar_replay — Wave-4 E4 drain of platform.aar_deferred into
+    # platform.aar_events via tpcore.aar.deferred.replay_deferred_aars.
+    # Operator-on-demand (off-cycle) bulk-drain knob; the implicit
+    # replay path runs every engine cycle as AAR writes happen, so this
+    # stage is the "catch up the backlog" lever rather than the only
+    # recovery path.
+    ("aar_replay",          lambda pool, cfg: (lambda: _stage_aar_replay(pool, cfg)),            STAGE_TIMEOUT_SEC),
     # kill_switch_smoke — flip kill_switch_active=true for one engine,
     # run scheduler.run_once(), assert zero candidates/submissions,
     # reset in finally. Use: --stage kill_switch_smoke --param engine=reversion
@@ -3347,6 +3394,10 @@ KNOWN_STAGES: tuple[str, ...] = tuple(name for name, _, _ in _STAGE_SPECS)
 _OFF_CYCLE_STAGES: frozenset[str] = frozenset({
     "rebuild_from_archive",
     "dedupe_monotone",
+    # Wave-4 E4 deferred-AAR drain (operator-on-demand; the implicit
+    # replay path runs on every engine cycle via AARWriter so this is
+    # the bulk-drain knob, not the only recovery path).
+    "aar_replay",
 })
 
 # Reasons (from INGESTION_FAILED.data->>'reason' or exception_type) that

@@ -327,6 +327,39 @@ async def _safe_autotune(pool, engine: str, now: datetime) -> None:
                      error=str(exc))
 
 
+async def _safe_lifecycle_pause_checks(pool, engine: str) -> None:
+    """Wave-4 E7 + E11 post-cycle hook — credibility-drop and lifecycle-
+    degradation auto-pause.
+
+    Calls :func:`tpcore.risk.check_credibility_drop` (E7, N=3 consecutive
+    sub-floor credibility scores → ``ENGINE_CREDIBILITY_DROP`` +
+    ``ENGINE_HELD``) and :func:`tpcore.risk.check_lifecycle_degraded`
+    (E11, N=5 consecutive sub-floor lifecycle scores →
+    ``ENGINE_LIFECYCLE_DEGRADED`` + ``ENGINE_HELD``). Both helpers
+    observe the one-hold rule internally so consecutive sweeps don't
+    spam HELD rows.
+
+    Crash-isolated for the same reason as :func:`_safe_autotune` — any
+    exception is logged and swallowed; a broken pause check must
+    NEVER abort the sweep. Allocator gets the check too (the
+    credibility/lifecycle sources are engine-named so an unwritten
+    ``backtest_credibility.allocator`` source returns no rows and the
+    check is a no-op for non-trading actors)."""
+    try:
+        from tpcore.risk import (
+            check_credibility_drop,
+            check_lifecycle_degraded,
+        )
+        await check_credibility_drop(pool, engine=engine)
+        await check_lifecycle_degraded(pool, engine=engine)
+    except Exception as exc:  # noqa: BLE001 — never abort the sweep
+        logger.error(
+            "engine_dispatch.lifecycle_pause_failed",
+            engine=engine,
+            error=str(exc),
+        )
+
+
 async def _safe_invoke(engine: str) -> None:
     """Spawn one engine's scheduler with per-engine crash isolation
     (CLEANUP #1, deferred from T2). A raising subprocess spawn (OSError
@@ -454,6 +487,7 @@ async def _dispatch_allocator(pool, now: datetime) -> None:
     it; on supervisor failure the dispatch still proceeds."""
     await _safe_supervise(pool, "allocator", now, _invoke_allocator)
     await _safe_autotune(pool, "allocator", now)
+    await _safe_lifecycle_pause_checks(pool, "allocator")
     await _dispatch_engine(pool, now, "allocator", _invoke_allocator)
 
 
@@ -470,6 +504,11 @@ async def dispatch_once(pool, now: datetime) -> None:
         for engine in ROSTER:
             await _safe_supervise(pool, engine, now, _safe_invoke)
             await _safe_autotune(pool, engine, now)
+            # Wave-4 E7 + E11 — auto-pause hook runs BEFORE _dispatch_engine
+            # so a HELD row emitted this sweep is honored by the same-
+            # sweep should_fire call (mirrors the DA-1/DA-2 ordering:
+            # supervisor → autotune → lifecycle_pause → dispatch).
+            await _safe_lifecycle_pause_checks(pool, engine)
             await _dispatch_engine(pool, now, engine, _safe_invoke)
     finally:
         _dispatch_pool.reset(token)
