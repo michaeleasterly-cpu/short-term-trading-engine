@@ -11,11 +11,15 @@ tests that exercise the MODIFY path get a stable, intentionally-beatable
 incumbent dossier via this autouse fixture so the criteria gate has the
 substrate it expects without polluting the live ``backtests/`` directory.
 
-The dossier is sharpe=1.0/trades=10/max_drawdown=-0.05/ruin_prob=0.05/
-profit_factor=1.1/min_btl_gap=30: clears the new-engine floor but is
+The dossier is sharpe=1.0/trades=40/max_drawdown=-0.05/ruin_prob=0.05/
+profit_factor=1.1/min_btl_gap=30: clears the new-engine paper-grade
+floor (MIN_TRADE_COUNT=30 after 2026-05-22 expert recalibration) but is
 intentionally beatable so the canonical ``_labresult()`` (Sharpe 1.1)
 clears the strictly-better-than-incumbent clause. The fixture is
 session-scoped + cleans up to avoid mutating the live repo state.
+
+2026-05-22 expert recalibration: trades=10 → 40 (above new MIN_TRADE_COUNT=30
+floor); profit_factor=1.1 above raised MIN_PROFIT_FACTOR=1.05.
 """
 from __future__ import annotations
 
@@ -32,9 +36,9 @@ _SYNTHETIC_INCUMBENT = {
     "credibility_score": 50,
     "passed_gate": False,
     "sharpe": 1.0,
-    "profit_factor": 1.1,
+    "profit_factor": 1.10,
     "max_drawdown": -0.05,
-    "trades": 10,
+    "trades": 40,
     "dsr": 0.6,
     "min_btl_gap": 30,
     "trades_per_param": 5.0,

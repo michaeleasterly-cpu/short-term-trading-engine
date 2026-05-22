@@ -37,32 +37,75 @@ from pydantic import BaseModel, ConfigDict
 
 from tpcore.lab.target import LabPrimaryMetric
 
-# ─── Criterion thresholds (calibrated against catalyst's empirical run) ───
+# ─── Criterion thresholds (calibrated for paper-trade-and-learn) ───
 # These are deliberate, named constants — recalibration is future-spec.
 # Catalyst's recent backtest: sharpe=2.27, trades=24, max_dd=-0.41,
-# ruin_prob=0.087, profit_factor=1.36, min_btl_gap=109. Every criterion
-# clears with margin. The absolute DSR (0.754) / credibility (45) numbers
-# are informational — n_trials sparsity, not signal absence, is what
-# binds them. The criteria below test signal presence directly.
+# ruin_prob=0.087, profit_factor=1.36, min_btl_gap=109. The absolute DSR
+# (0.754) / credibility (45) numbers are informational — n_trials
+# sparsity, not signal absence, is what binds them. The criteria below
+# test signal presence directly, calibrated to the paper-trade-and-learn
+# threshold (not live-money-grade).
+#
+# 2026-05-22 expert recalibration: the original criteria were
+# accidentally LIVE-grade (e.g. MIN_TRADE_COUNT=10 is too thin to
+# distinguish signal from noise; MIN_MAX_DRAWDOWN=-0.50 + no Calmar
+# clause permits high-Sharpe edges that drift into catastrophic
+# drawdown). The new floor admits real paper candidates while still
+# rejecting unrunnable / catastrophic / no-edge dossiers. The original
+# brief: PEAD on T1+T2 gave Sharpe +0.44 / PF 1.11 / 757 trades /
+# MaxDD -69.7% — under the old floor, MaxDD -69.7% would reject; under
+# the new floor (MIN_MAX_DRAWDOWN=-0.75) it survives, AND the new
+# Calmar floor (>= 0.30) bites if the return-per-drawdown ratio is
+# too anaemic to learn from.
 
 #: positive OOS Sharpe — the most basic signal-presence test.
 POSITIVE_SHARPE_FLOOR: float = 0.0
 
-#: non-trivial trade count — below 10 you can't distinguish signal from noise.
-MIN_TRADE_COUNT: int = 10
+#: non-trivial trade count — below 30 you can't distinguish signal from
+#: noise (raised from 10 — paper-grade calibration, 2026-05-22).
+MIN_TRADE_COUNT: int = 30
 
-#: bounded drawdown — no ≤−50% catastrophic draws (signal-presence, NOT live-capital).
-MIN_MAX_DRAWDOWN: float = -0.50
+#: bounded drawdown — no ≤−75% catastrophic draws. Paper-grade tolerance
+#: (loosened from −0.50 — 2026-05-22): a paper engine learns from
+#: live-market drawdowns the backtest didn't surface, so the floor is
+#: "did the strategy survive its training history at all" rather than
+#: live-capital-protect.
+MIN_MAX_DRAWDOWN: float = -0.75
 
 #: bounded ruin probability — 30% chance of ruin too high even for paper-trade-and-learn.
 MAX_RUIN_PROBABILITY: float = 0.30
 
-#: profit factor at least 1.0 — no edge if avg loss > avg win.
-MIN_PROFIT_FACTOR: float = 1.0
+#: profit factor at least 1.05 — small positive edge required (raised
+#: from 1.0 — 2026-05-22; 1.0 is exactly break-even and would admit
+#: pure-noise dossiers, 1.05 forces ≥5% gross excess of wins over
+#: losses).
+MIN_PROFIT_FACTOR: float = 1.05
 
 #: sane min between-trade gap (days) — engine that fires less than once
 #: a year on average has too-slow an experience curve to be useful.
 MAX_MIN_BTL_GAP: int = 365
+
+#: Calmar ratio floor (annualised return / |max drawdown|). NEW
+#: 2026-05-22 — without this clause, a high-Sharpe engine can still
+#: have a drawdown so deep that the return-per-drawdown is too anaemic
+#: to be worth paper-trading. 0.30 = "for every 100% of peak-to-trough
+#: drawdown, the engine must annualise at least 30%". Catalyst's
+#: empirical calibration (sharpe=2.27 → annualised ≈ 0.454 at
+#: assumed_annual_vol=0.20; max_dd=-0.41 → calmar = 0.454/0.41 = 1.11
+#: → clears with margin); a Sharpe-0.44 / MaxDD-0.70 candidate gives
+#: calmar = 0.088 / 0.70 = 0.126 → fails (correct rejection: the
+#: drawdown swallows the return).
+MIN_CALMAR_RATIO: float = 0.30
+
+#: assumed equity-class annualised volatility used to derive
+#: annualised return from Sharpe for the Calmar clause. The dossier
+#: does not carry an annualised-return field directly; per the
+#: expert's recommendation we derive `ann_return = sharpe *
+#: assumed_annual_vol` with 0.20 (the canonical US-equity diversified
+#: portfolio σ; aligns with the volatility-targeting default in
+#: Carver §2). Living constant — adjustable per-engine in future
+#: spec if a single equity-class default proves too coarse.
+ASSUMED_ANNUAL_VOL: float = 0.20
 
 #: trade-count drift bound (improvement criteria) — a "better Sharpe"
 #: that comes from cutting 90% of trades is a different engine, not an
@@ -145,7 +188,46 @@ def _assess_new_engine_signal(
             f"sane_min_btl_gap: min_btl_gap {dossier.min_btl_gap} > "
             f"{MAX_MIN_BTL_GAP} days — engine fires less than once a "
             f"year on average, experience curve too slow")
+    calmar = _calmar_ratio(dossier)
+    if calmar < MIN_CALMAR_RATIO:
+        return False, (
+            f"min_calmar_ratio: calmar {calmar:.4f} < "
+            f"{MIN_CALMAR_RATIO} (derived as sharpe={dossier.sharpe:.4f} "
+            f"* assumed_annual_vol={ASSUMED_ANNUAL_VOL} / "
+            f"|max_drawdown={dossier.max_drawdown:.4f}|) — "
+            f"return-per-drawdown too anaemic to learn from in paper")
     return True, None
+
+
+def _calmar_ratio(dossier: NewEngineDossier) -> float:
+    """Calmar ratio derived from the dossier: annualised_return /
+    |max_drawdown|.
+
+    The dossier does NOT carry an annualised-return field directly
+    (the BacktestRunResult JSON shape is per-trade-derived). Per the
+    2026-05-22 expert recommendation, derive::
+
+        annualised_return = sharpe * ASSUMED_ANNUAL_VOL
+
+    The fallback to an assumed_annual_vol is a calibrated default
+    (0.20 — the canonical US-equity diversified-portfolio σ; aligns
+    with the volatility-targeting default in Carver §2). The
+    constraint stays directionally correct for any engine where the
+    assumed σ is in the right ballpark; per-engine recalibration is
+    future spec.
+
+    Edge cases:
+    - ``max_drawdown == 0`` (no draws observed) → Calmar is undefined;
+      return ``+inf`` so the clause passes (a zero-drawdown engine
+      trivially clears the floor; this is degenerate but defensible).
+    - ``max_drawdown > 0`` should never happen on a real dossier
+      (the field is signed-negative) but is treated symmetrically
+      via ``abs()``.
+    """
+    if dossier.max_drawdown == 0:
+        return float("inf")
+    annualised_return = dossier.sharpe * ASSUMED_ANNUAL_VOL
+    return float(annualised_return / abs(dossier.max_drawdown))
 
 
 def _metric_value(dossier: NewEngineDossier,
@@ -245,8 +327,11 @@ def dossier_from_lab_held_metrics(
     Used by ``_validate_modify`` to synthesize a candidate dossier from
     the Lab sidecar's held_metrics.
     """
-    # NEUTRAL defaults: each defaults to a value just inside the floor —
-    # an explicit non-neutral value in held_metrics is evaluated strictly.
+    # NEUTRAL defaults: each defaults to a value just inside the new
+    # (2026-05-22) floor — an explicit non-neutral value in held_metrics
+    # is evaluated strictly. ``profit_factor`` default raised from 1.0
+    # to MIN_PROFIT_FACTOR (1.05) so the absent-field neutral is on the
+    # passing side of the new floor.
     return NewEngineDossier(
         sharpe=float(held_metrics.get("sharpe", 0.0)),
         trades=int(held_metrics.get("n_trades", 0)),
@@ -254,7 +339,8 @@ def dossier_from_lab_held_metrics(
         ruin_probability=float(
             ruin_probability if ruin_probability is not None
             else held_metrics.get("ruin_probability", 0.0)),
-        profit_factor=float(held_metrics.get("profit_factor", 1.0)),
+        profit_factor=float(
+            held_metrics.get("profit_factor", MIN_PROFIT_FACTOR)),
         min_btl_gap=int(
             min_btl_gap if min_btl_gap is not None
             else held_metrics.get("min_btl_gap", 0)),
@@ -283,8 +369,10 @@ def load_engine_dossier(repo_root: Path,
 
 
 __all__ = [
+    "ASSUMED_ANNUAL_VOL",
     "MAX_MIN_BTL_GAP",
     "MAX_RUIN_PROBABILITY",
+    "MIN_CALMAR_RATIO",
     "MIN_MAX_DRAWDOWN",
     "MIN_PROFIT_FACTOR",
     "MIN_TRADE_COUNT",
@@ -293,6 +381,7 @@ __all__ = [
     "POSITIVE_SHARPE_FLOOR",
     "_assess_improvement",
     "_assess_new_engine_signal",
+    "_calmar_ratio",
     "dossier_from_lab_held_metrics",
     "load_engine_dossier",
 ]
