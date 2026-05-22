@@ -58,12 +58,29 @@ def test_min_observations_threshold_positive():
 
 
 class _FakeConn:
-    def __init__(self, fetch_rows: list[dict] | None = None) -> None:
+    """Dispatches by SQL shape — assign_tiers runs two fetches per call:
+
+    * ``_AGGREGATE_SQL`` (FROM platform.spread_observations) → aggregation pass
+    * ``_GAP_FILL_SQL`` (active-universe LEFT JOIN liquidity_tiers WHERE
+      lt.ticker IS NULL) → gap-fill pass for newly-listed tickers
+      missing from the per-source aggregation
+    """
+
+    def __init__(
+        self,
+        fetch_rows: list[dict] | None = None,
+        gap_fill_rows: list[dict] | None = None,
+    ) -> None:
         self._fetch_rows = fetch_rows or []
+        self._gap_fill_rows = gap_fill_rows or []
         self.executemany_calls: list[tuple] = []
 
     async def fetch(self, sql: str, *args) -> list[dict]:
-        return list(self._fetch_rows)
+        if "platform.spread_observations" in sql:
+            return list(self._fetch_rows)
+        if "active_universe" in sql and "lt.ticker IS NULL" in sql:
+            return list(self._gap_fill_rows)
+        raise AssertionError(f"unexpected fetch SQL: {sql[:120]}")
 
     async def executemany(self, sql: str, rows: list[tuple]) -> None:
         self.executemany_calls.append((sql, rows))
