@@ -53,16 +53,19 @@ MANDATORY_REFERENCE_BUNDLES: tuple[str, ...] = (
 )
 """Always-include reference bundles regardless of --reference-bundle (spec §3.1 + §7)."""
 
-PERSONA_VERSION: str = "v2.2"
-"""Bumped 2026-05-22 — added §8 self-reject rule excluding
-target_engine='canary' (operator clarification: canary is the platform's
-end-to-end heartbeat, non-graduating per spec §4b, never calls
-write_credibility_score). The v2.0 gate pilot's canary_range_reversion_5d
-emission was a misemission; persona now explicitly lists canary as
-ineligible. Pick from {reversion, vector, momentum, sentinel, catalyst}."""
+PERSONA_VERSION: str = "v2.3"
+"""Bumped 2026-05-22 (PM) — added §11 (Memory store discipline) for the
+Sessions API wiring. Persona now teaches the LLM how to use the finder
+memstore (`memstore_01MzLun3AfRf2viPmDqJvsWi`): startup-read paths
+(`/agent-context/`, `/cross-agent/dev-to-finder/`, `/prior-emissions/`,
+`/outcomes/`, `/lessons/`), in-run citation discipline, completion writes
+(`/sessions/<run_id>.md` + conditional `/lessons/<theme>.md`), and the
+curation policy (max 5 writes/run, no /lessons/ duplicates,
+/prior-emissions/ application-managed, /outcomes/ operator-managed).
+v2.2 → v2.3 also retains the §8 self-reject canary exclusion."""
 
-PERSONA_SHA256: str = "3ad0e9693a0c7780bf777381167e0d54f88ee24db700bcb06679317bbfa1cdba"
-"""SHA256 of docs/lab_finder_persona.md at PERSONA_VERSION='v2.2'.
+PERSONA_SHA256: str = "1f9cd272035ff12e279307e8c16132c39c3dc015f72cd615d899fb3ac1393cca"
+"""SHA256 of docs/lab_finder_persona.md at PERSONA_VERSION='v2.3'.
 
 Persona edits MUST update both PERSONA_VERSION AND this constant.
 The sentinel test test_persona_versioned.py reds the build on drift.

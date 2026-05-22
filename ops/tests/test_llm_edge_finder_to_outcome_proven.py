@@ -151,7 +151,7 @@ async def test_finder_emission_to_outcome_proven_e2e() -> None:
     )
     assert run.proposed_spec_count == 1
     assert run.trigger == "operator_command"
-    assert run.persona_version == "v2.2"
+    assert run.persona_version == "v2.3"
     # Mandatory bundles auto-loaded.
     assert "dsr_ntrials_discipline" in run.reference_bundles
     assert "regime_aware_trading" in run.reference_bundles

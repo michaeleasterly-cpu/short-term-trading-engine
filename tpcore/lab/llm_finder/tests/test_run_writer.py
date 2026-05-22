@@ -49,7 +49,7 @@ def _finder_run() -> FinderRun:
         snapshot_regime_tuple_id=_compute_regime_tuple_id(
             "normal", "range", "expansion", "neutral"
         ),
-        persona_version="v2.2",
+        persona_version="v2.3",
         reference_bundles=("dsr_ntrials_discipline", "regime_aware_trading"),
         analysis_turn_count=3,
         proposed_spec_count=1,
