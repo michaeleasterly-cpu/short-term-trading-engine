@@ -1,0 +1,524 @@
+{
+  "audit_date": "2026-05-22",
+  "scope": "every data feed in tpcore/feeds/profile.py FEED_PROFILES plus three feeds enumerated from tpcore/quality/validation/checks/ and scripts/ops.py:_STAGE_SPECS",
+  "verdict": {
+    "feeds_audited": 16,
+    "green": 3,
+    "yellow": 8,
+    "red": 5,
+    "green_feeds": ["prices_daily", "aaii_sentiment", "fear_greed"],
+    "top3_critical_path_blockers": [
+      "fundamentals_quarterly_completeness 285/1090 active tickers failing — largest single corpus-integrity red on main + no _stage_historical_fundamentals_quarterly",
+      "macro_indicators_completeness 1042+ missing weekly initial_claims publications (Thursday-anchor defect) + no per-indicator backfill stage",
+      "corporate_actions_completeness live=109737 vs archived=110630 (0.81% shrinkage) + no D6 cascade map entry"
+    ]
+  },
+  "feeds": {
+    "prices_daily": {
+      "feed_profile_entry": "prices_daily",
+      "stage": "daily_bars",
+      "backfill": {
+        "state": "GREEN",
+        "evidence": "FMP default since PR #276; --stage daily_bars --param force_refresh=true --param universe=active --param feed=fmp; survivorship via PR #283 historical_delisted_universe"
+      },
+      "nightly": {
+        "state": "GREEN",
+        "evidence": "scripts/ops.py:3408 _STAGE_SPECS first entry; tpcore/feeds/dispatcher.py FEED_STAGE maps prices_daily→daily_bars; idempotent ON CONFLICT upsert"
+      },
+      "validation": {
+        "state": "GREEN",
+        "evidence": "prices_daily_freshness + prices_daily_completeness + row_integrity + delistings + splits + constituent all passing per 2026-05-22 corpus-fitness audit"
+      },
+      "self_heal": {
+        "state": "GREEN",
+        "catalog_rows": ["D1", "D2", "D3", "D4", "D5", "D13", "D14"]
+      },
+      "sentinel": {
+        "state": "GREEN",
+        "test_path": "tpcore/tests/test_ingest_fmp_bars_cross_validation.py",
+        "evidence": "10-ticker pin (test_fmp_cross_validation_against_corpus) + 100-ticker T1+T2 percentile-threshold regression (test_fmp_cross_validation_broad_sample_t1_t2, PR #289)"
+      },
+      "overall": "GREEN"
+    },
+    "corporate_actions": {
+      "feed_profile_entry": "corporate_actions",
+      "stage": "corporate_actions",
+      "backfill": {
+        "state": "YELLOW",
+        "evidence": "scripts/run_backfill_corp_actions_csv.sh exists as CSV-first one-shot but not an _stage_historical_corporate_actions; cannot be invoked via --stage; cannot self-cascade"
+      },
+      "nightly": {
+        "state": "GREEN",
+        "evidence": "_stage_corporate_actions scripts/ops.py:796 registered in _STAGE_SPECS:3409; idempotent"
+      },
+      "validation": {
+        "state": "RED",
+        "evidence": "corporate_actions_completeness 1/1 failed per 2026-05-22 audit: live=109737 vs archived=110630 (0.81% shrinkage, archive 2026-05-15); integrity check passes"
+      },
+      "self_heal": {
+        "state": "YELLOW",
+        "catalog_rows": ["D6 (detection)"],
+        "gap": "_VALIDATION_CASCADE_MAP does NOT include corporate_actions_completeness entry"
+      },
+      "sentinel": {
+        "state": "RED",
+        "test_path": null,
+        "evidence": "tests/test_check_corporate_actions_completeness.py is unit test of check logic, no live-DB value pin"
+      },
+      "overall": "RED"
+    },
+    "fundamentals_quarterly": {
+      "feed_profile_entry": "fundamentals_quarterly",
+      "stage": "fundamentals_refresh + compute_fundamental_ratios",
+      "backfill": {
+        "state": "YELLOW",
+        "evidence": "scripts/backfill_fundamentals.py exists (script, not stage); cannot be invoked via --stage"
+      },
+      "nightly": {
+        "state": "GREEN",
+        "evidence": "scripts/ops.py:831 _stage_fundamentals_refresh + scripts/ops.py:873 _stage_compute_fundamental_ratios (chained)"
+      },
+      "validation": {
+        "state": "RED",
+        "evidence": "LARGEST RED ON MAIN: fundamentals_quarterly_completeness 285/1090 tickers failing per 2026-05-22 audit (e.g. ABCL:2 missing quarters)"
+      },
+      "self_heal": {
+        "state": "YELLOW",
+        "catalog_rows": ["D6"],
+        "gap": "Cascade IS wired (PR #261) but fundamentals_refresh re-pulls current cadence not historical missing-quarter gaps; handler short-circuits on recent rows"
+      },
+      "sentinel": {
+        "state": "RED",
+        "test_path": null,
+        "evidence": "tests/test_check_fundamentals_quarterly_completeness.py is unit-test of check logic; no live-DB pin"
+      },
+      "overall": "RED"
+    },
+    "sec_insider_transactions": {
+      "feed_profile_entry": "sec_insider_transactions",
+      "stage": "sec_filings",
+      "backfill": {
+        "state": "GREEN",
+        "evidence": "--stage sec_filings --backfill runs bulk Form-345 quarterly-dataset backfill via _sec_bulk_form345_backfill (scripts/ops.py:1167); proper stage-contract one-shot"
+      },
+      "nightly": {
+        "state": "GREEN",
+        "evidence": "_stage_sec_filings scripts/ops.py:2510; 3-day skip-guard (tightened from 6 per Form 4 2-business-day deadline)"
+      },
+      "validation": {
+        "state": "GREEN",
+        "evidence": "sec_filings_freshness + sec_insider_monotone passing; sec_insider_monotone HEALED 2026-05-22 (passed 1306/1306)"
+      },
+      "self_heal": {
+        "state": "YELLOW",
+        "catalog_rows": ["D7"],
+        "gap": "D7 covers monotonicity (amended-filing dedupe); no per-feed targeted re-pull for staleness reds"
+      },
+      "sentinel": {
+        "state": "YELLOW",
+        "test_path": "tests/test_sec_backfill_chunking.py, tests/test_sec_bulk_etl.py",
+        "evidence": "Unit-level only; no parametrised live-DB Form-4/8-K value pin"
+      },
+      "overall": "YELLOW"
+    },
+    "earnings_events": {
+      "feed_profile_entry": "earnings_events",
+      "stage": "earnings_refresh",
+      "backfill": {
+        "state": "YELLOW",
+        "evidence": "scripts/backfill_earnings_events.py exists (script, not stage); subagent a638f92b31ce29f67 in-flight per operator parallel tasking"
+      },
+      "nightly": {
+        "state": "GREEN",
+        "evidence": "_stage_earnings_refresh scripts/ops.py:1888; 6d skip-guard"
+      },
+      "validation": {
+        "state": "GREEN",
+        "evidence": "earnings_events_freshness + earnings_events_monotone passing; monotone HEALED 2026-05-22 (passed 1104/1104)"
+      },
+      "self_heal": {
+        "state": "YELLOW",
+        "catalog_rows": ["D7"],
+        "gap": "D7 covers FMP reclassification dedupe; no historical-gap repair"
+      },
+      "sentinel": {
+        "state": "YELLOW",
+        "test_path": "tests/test_earnings_quality.py, tests/test_backfill_earnings_events.py",
+        "evidence": "Unit-level only; no parametrised live-DB pin"
+      },
+      "overall": "YELLOW"
+    },
+    "macro_indicators": {
+      "feed_profile_entry": "macro_indicators",
+      "stage": "macro_indicators",
+      "backfill": {
+        "state": "RED",
+        "evidence": "NONE — _stage_macro_indicators (scripts/ops.py:2356) only does rolling refresh; no _stage_historical_macro_indicators"
+      },
+      "nightly": {
+        "state": "GREEN",
+        "evidence": "registered in _STAGE_SPECS"
+      },
+      "validation": {
+        "state": "RED",
+        "evidence": "macro_indicators_completeness 5/59 series failing per 2026-05-22 audit: initial_claims 1042+ missing weekly Thursdays (anchor-day defect), credit_spread 39 missing, hy_spread 2 missing, sahm_rule 1 transient, yield_curve 37 missing"
+      },
+      "self_heal": {
+        "state": "YELLOW",
+        "catalog_rows": ["D8"],
+        "gap": "D8 _MACRO_COMPLETENESS_CHECK parses missing-date list + re-pulls per indicator (PR #261); but initial_claims anchor-day defect is a check bug, re-pulling won't fix"
+      },
+      "sentinel": {
+        "state": "RED",
+        "test_path": null,
+        "evidence": "no live-DB pin"
+      },
+      "overall": "RED"
+    },
+    "liquidity_tiers": {
+      "feed_profile_entry": "liquidity_tiers",
+      "stage": "tier_refresh",
+      "backfill": {
+        "state": "GREEN",
+        "evidence": "bootstrap inside _stage_tier_refresh (scripts/ops.py:2008) — Corwin-Schultz 60d freshness gate then assign_tiers; no historical universe needed"
+      },
+      "nightly": {
+        "state": "GREEN",
+        "evidence": "registered; quarterly cadence"
+      },
+      "validation": {
+        "state": "GREEN",
+        "evidence": "HEALED 2026-05-22 via PR #285 — 15 missing tickers categorized + fixed"
+      },
+      "self_heal": {
+        "state": "GREEN",
+        "catalog_rows": ["D9"]
+      },
+      "sentinel": {
+        "state": "YELLOW",
+        "test_path": "tests/test_check_liquidity_tiers_completeness.py, tests/test_liquidity_tiers_completeness_no_silent_skip.py",
+        "evidence": "PR #285 sentinel asserts check logic doesn't silently skip on missing-row category; does NOT pin known expected-tier-2 tickers against live DB"
+      },
+      "overall": "YELLOW"
+    },
+    "ticker_classifications": {
+      "feed_profile_entry": "ticker_classifications",
+      "stage": "classify_tickers",
+      "backfill": {
+        "state": "GREEN",
+        "evidence": "bootstrap inside _stage_classify_tickers (scripts/ops.py:2112)"
+      },
+      "nightly": {
+        "state": "GREEN",
+        "evidence": "registered; monthly cadence"
+      },
+      "validation": {
+        "state": "RED",
+        "evidence": "ticker_classifications_freshness/coverage red per 2026-05-22 audit: source_count_drift live=13763 vs snapshot=13722 (delta +41); Path-D invariant tripping on new listings"
+      },
+      "self_heal": {
+        "state": "GREEN",
+        "catalog_rows": ["D10"]
+      },
+      "sentinel": {
+        "state": "YELLOW",
+        "test_path": "tests/test_check_ticker_classifications_coverage.py",
+        "evidence": "Unit-level"
+      },
+      "overall": "YELLOW"
+    },
+    "fear_greed": {
+      "feed_profile_entry": "fear_greed",
+      "stage": "fear_greed",
+      "backfill": {
+        "state": "GREEN",
+        "evidence": "--stage fear_greed --param backfill=true goes to 2001 per _stage_fear_greed (scripts/ops.py:2439)"
+      },
+      "nightly": {
+        "state": "GREEN",
+        "evidence": "registered; derived feed (no external pull)"
+      },
+      "validation": {
+        "state": "GREEN",
+        "evidence": "fear_greed_freshness HEALED 2026-05-22 (passed 1/1)"
+      },
+      "self_heal": {
+        "state": "GREEN",
+        "catalog_rows": ["D11"]
+      },
+      "sentinel": {
+        "state": "GREEN",
+        "test_path": "tests/test_fear_greed.py",
+        "evidence": "Derived feed; small surface; freshness check is sentinel"
+      },
+      "overall": "GREEN"
+    },
+    "aaii_sentiment": {
+      "feed_profile_entry": "aaii_sentiment",
+      "stage": "aaii_sentiment",
+      "backfill": {
+        "state": "GREEN",
+        "evidence": "_stage_aaii_sentiment pulls full-history workbook on first run; weekly Thursday delta thereafter"
+      },
+      "nightly": {
+        "state": "GREEN",
+        "evidence": "registered; weekly Thursday cadence"
+      },
+      "validation": {
+        "state": "GREEN",
+        "evidence": "aaii_sentiment_freshness HEALED 2026-05-22 (passed 1/1)"
+      },
+      "self_heal": {
+        "state": "GREEN",
+        "catalog_rows": ["D11"]
+      },
+      "sentinel": {
+        "state": "GREEN",
+        "test_path": "tests/test_aaii_adapter.py",
+        "evidence": "Unit-level but covers Thursday publication anchor + HEAD-Last-Modified probe"
+      },
+      "overall": "GREEN"
+    },
+    "finra_short_interest": {
+      "feed_profile_entry": "finra_short_interest",
+      "stage": "finra_short_interest",
+      "backfill": {
+        "state": "YELLOW",
+        "evidence": "--param since=2018-01-01 to _stage_finra_short_interest works but no explicit _stage_historical_finra_short_interest one-shot or documented recipe"
+      },
+      "nightly": {
+        "state": "GREEN",
+        "evidence": "registered; bi-monthly cadence"
+      },
+      "validation": {
+        "state": "GREEN",
+        "evidence": "short_interest_freshness passes (42d max-age covers bi-monthly + 13d dissemination lag)"
+      },
+      "self_heal": {
+        "state": "YELLOW",
+        "catalog_rows": [],
+        "gap": "No per-feed cascade row; freshness red waits for daily cron"
+      },
+      "sentinel": {
+        "state": "YELLOW",
+        "test_path": "tests/test_finra_adapter.py",
+        "evidence": "Unit-level"
+      },
+      "overall": "YELLOW"
+    },
+    "iborrowdesk_borrow_rates": {
+      "feed_profile_entry": "iborrowdesk_borrow_rates",
+      "stage": "iborrowdesk_borrow_rates",
+      "backfill": {
+        "state": "RED",
+        "evidence": "NONE — vendor (scrape) has no history endpoint; handler is daily-only"
+      },
+      "nightly": {
+        "state": "GREEN",
+        "evidence": "registered; continuous trigger"
+      },
+      "validation": {
+        "state": "GREEN",
+        "evidence": "borrow_rates_freshness passes"
+      },
+      "self_heal": {
+        "state": "YELLOW",
+        "catalog_rows": [],
+        "gap": "No per-feed cascade row"
+      },
+      "sentinel": {
+        "state": "RED",
+        "test_path": "tests/test_iborrowdesk_adapter.py",
+        "evidence": "Unit-level only; combined with backfill RED makes feed structurally unverifiable"
+      },
+      "overall": "RED"
+    },
+    "apewisdom_social_sentiment": {
+      "feed_profile_entry": "apewisdom_social_sentiment",
+      "stage": "apewisdom_social_sentiment",
+      "backfill": {
+        "state": "N/A",
+        "evidence": "Vendor has no history endpoint (~2h refresh, intraday only); backfill structurally impossible"
+      },
+      "nightly": {
+        "state": "GREEN",
+        "evidence": "registered; intraday trigger"
+      },
+      "validation": {
+        "state": "GREEN",
+        "evidence": "social_sentiment_freshness passes (7d max-age + 15% coverage floor)"
+      },
+      "self_heal": {
+        "state": "YELLOW",
+        "catalog_rows": [],
+        "gap": "No per-feed cascade row"
+      },
+      "sentinel": {
+        "state": "RED",
+        "test_path": "tests/test_apewisdom_adapter.py",
+        "evidence": "Unit-level"
+      },
+      "overall": "YELLOW"
+    },
+    "finnhub_insider_sentiment": {
+      "feed_profile_entry": "finnhub_insider_sentiment",
+      "stage": "finnhub_insider_sentiment",
+      "backfill": {
+        "state": "YELLOW",
+        "evidence": "--param since=YYYY-MM-DD to handler works; no explicit historical stage"
+      },
+      "nightly": {
+        "state": "GREEN",
+        "evidence": "registered; monthly cadence"
+      },
+      "validation": {
+        "state": "GREEN",
+        "evidence": "insider_sentiment_freshness passes"
+      },
+      "self_heal": {
+        "state": "YELLOW",
+        "catalog_rows": [],
+        "gap": "No per-feed cascade row"
+      },
+      "sentinel": {
+        "state": "RED",
+        "test_path": "tests/test_finnhub_adapter.py, tests/test_handle_finnhub_insider_sentiment_targeting.py",
+        "evidence": "Unit-level"
+      },
+      "overall": "YELLOW"
+    },
+    "greeks_max_pain": {
+      "feed_profile_entry": "greeks_max_pain",
+      "stage": "greeks_max_pain",
+      "backfill": {
+        "state": "N/A",
+        "evidence": "Vendor (greeks.pro free tier) is daily 1-symbol snapshot; no history endpoint"
+      },
+      "nightly": {
+        "state": "GREEN",
+        "evidence": "registered; market_close trigger"
+      },
+      "validation": {
+        "state": "GREEN",
+        "evidence": "options_max_pain_freshness passes (7d max-age)"
+      },
+      "self_heal": {
+        "state": "YELLOW",
+        "catalog_rows": [],
+        "gap": "No per-feed cascade row"
+      },
+      "sentinel": {
+        "state": "RED",
+        "test_path": null,
+        "evidence": "No live-DB pin"
+      },
+      "overall": "YELLOW"
+    },
+    "delistings_universe": {
+      "feed_profile_entry": null,
+      "stage": "historical_delisted_universe + daily_delisted_universe_check",
+      "backfill": {
+        "state": "GREEN",
+        "evidence": "_stage_historical_delisted_universe (scripts/ops.py:2782, PR #283) — survivorship-corrected one-shot via FMP; verified via PR #288 + #283 + one-shot run"
+      },
+      "nightly": {
+        "state": "YELLOW",
+        "evidence": "_stage_daily_delisted_universe_check exists but in _OFF_CYCLE_STAGES (scripts/ops.py:3597); requires manual --stage call; comment at line 3580 says 'Operator-on-demand for now; promote to daily cadence once the structural backfill above is stable'"
+      },
+      "validation": {
+        "state": "GREEN",
+        "evidence": "delistings fixture check passes on main"
+      },
+      "self_heal": {
+        "state": "RED",
+        "catalog_rows": [],
+        "gap": "No catalog row for T1/T2 ticker silently disappearing; daily check would catch it on the next run if on-cycle"
+      },
+      "sentinel": {
+        "state": "YELLOW",
+        "test_path": "tests/test_stage_historical_delisted_universe.py",
+        "evidence": "Exists but skips against live DB by default"
+      },
+      "overall": "YELLOW"
+    }
+  },
+  "waves": {
+    "wave_1_critical_path": {
+      "scope": "Top-3 operator-visible reds in data_validation today",
+      "concrete_deliverables": [
+        "Ship _stage_fundamentals_quarterly_historical(pool, cfg) in scripts/ops.py; migrate scripts/backfill_fundamentals.py into stage contract; wire into _VALIDATION_CASCADE_MAP",
+        "Fix initial_claims Thursday-anchor defect in tpcore/quality/validation/checks/macro_indicators_completeness.py; add _stage_historical_macro_indicators(pool, cfg, indicator, since)",
+        "Add corporate_actions_completeness → corporate_actions entry to _VALIDATION_CASCADE_MAP; add _stage_rebuild_corporate_actions_from_archive(pool, cfg)"
+      ],
+      "estimated_prs": 1
+    },
+    "wave_2_sentinel_coverage": {
+      "scope": "Parametrised live-DB value-pin tests for all RED-on-sentinel feeds",
+      "concrete_deliverables": [
+        "tests/test_sentinel_corporate_actions.py — 10 known stock splits + 10 known cash dividends",
+        "tests/test_sentinel_fundamentals_quarterly.py — 10 tickers × Q1-2024 row count = 1",
+        "tests/test_sentinel_macro_indicators.py — 5 indicators × known publication-date sample",
+        "tests/test_sentinel_iborrowdesk.py — ≥1 row per active tier-2 demand ticker in last 5d",
+        "tests/test_sentinel_finnhub_insider_sentiment.py — N tracked tickers have row in latest month",
+        "tests/test_sentinel_apewisdom.py — latest row date ≤ 24h ago",
+        "tests/test_sentinel_greeks_max_pain.py — SPY latest row date = previous trading day",
+        "tests/test_sentinel_sec_filings.py — 10 known Form-4 filings + 5 known 8-K filings",
+        "tests/test_sentinel_earnings_events.py — 10 known earnings dates with BEAT/NO_BEAT labels"
+      ],
+      "estimated_prs": 1
+    },
+    "wave_3_per_feed_cascade_rows": {
+      "scope": "Targeted per-feed re-pull entries in _VALIDATION_CASCADE_MAP for long-tail feeds",
+      "concrete_deliverables": [
+        "corporate_actions_completeness → corporate_actions --param skip_guard_days=0 (also Wave 1)",
+        "short_interest_freshness → finra_short_interest --param skip_guard_days=0",
+        "borrow_rates_freshness → iborrowdesk_borrow_rates --param skip_guard_hours=0",
+        "social_sentiment_freshness → apewisdom_social_sentiment --param skip_guard_hours=0",
+        "insider_sentiment_freshness → finnhub_insider_sentiment --param skip_guard_days=0",
+        "options_max_pain_freshness → greeks_max_pain --param skip_guard=false",
+        "earnings_events_freshness → earnings_refresh --param skip_guard_days=0",
+        "sec_filings_freshness → sec_filings --param skip_guard_days=0"
+      ],
+      "estimated_prs": 1
+    },
+    "wave_4_delistings_on_cycle": {
+      "scope": "Promote delistings to daily cron + add D15 cascade row",
+      "concrete_deliverables": [
+        "Move daily_delisted_universe_check out of _OFF_CYCLE_STAGES (scripts/ops.py:3597) into daily cron",
+        "Add D15 row to docs/superpowers/specs/2026-05-21-deterministic-self-heal-coverage-expansion-design.md + tests/test_deterministic_cascade_catalog.py:EXPECTED_CASCADES",
+        "Cascade function: _cascade_d15_delisting_missed; terminal event: INGESTION_AUTO_RECOVERED_DELISTING"
+      ],
+      "estimated_prs": 1
+    },
+    "wave_5_backfill_stage_contract_migration": {
+      "scope": "Migrate orphan one-shot scripts into the stage contract",
+      "concrete_deliverables": [
+        "scripts/backfill_earnings_events.py → _stage_historical_earnings_events",
+        "scripts/backfill_fundamentals.py (handled in Wave 1)",
+        "scripts/run_backfill_corp_actions_csv.sh + scripts/backfill_corp_actions_csv.py → _stage_historical_corporate_actions (separate from Wave 1's R3-replay; this one re-pulls from Alpaca corp-actions API directly)"
+      ],
+      "estimated_prs": 1
+    }
+  },
+  "already_shipped_baseline_today_2026_05_22": [
+    "prices_daily — full FMP migration PR #276",
+    "delistings_universe — survivorship-corrected corpus PR #283 + one-shot",
+    "prices_daily — cross-val regression PR #289 (10-ticker + 100-ticker T1+T2)",
+    "liquidity_tiers — completeness HEALED PR #285",
+    "earnings_events_monotone — HEALED",
+    "sec_insider_monotone — HEALED",
+    "fear_greed_freshness — HEALED",
+    "aaii_sentiment_freshness — HEALED",
+    "deterministic-cascade catalog D1-D14 + E1-E11 complete",
+    "LLM-triage removal PR #274"
+  ],
+  "audit_run_id_reference": "platform.data_quality_log run_id 0dfeae8d-579e-4f53-aea0-c07eeee665ed",
+  "what_we_NOT_doing": [
+    "No code fixes (audit-only)",
+    "No validation threshold changes",
+    "No lowering test rigor",
+    "No engine/Carver/llm_finder touches",
+    "No auto-running backfill stages",
+    "No lowering rigor of GREEN — if flaky, scored YELLOW or RED"
+  ]
+}
