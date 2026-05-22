@@ -348,8 +348,8 @@ tpcore/lab/llm_finder/
 ops/llm_edge_finder.py                       # finder agent (Anthropic SDK, A–D)
 ops/llm_finder_outcome_monitor.py            # outcome-monitor agent (E–F)
 ops/llm_triage_service.py                    # AUGMENTED: +2 co-tasks
-docs/lab_finder_persona.md                   # persona v2.0 (6 sections, §7)
-docs/llm_edge_finder_operator_runbook.md     # operator runbook
+docs/personas/lab_finder_persona.md                   # persona v2.0 (6 sections, §7)
+docs/runbooks/llm_edge_finder_operator_runbook.md     # operator runbook
 docs/lab_emitter_references/                 # SHARED with SP-G
     carver_systematic_trading.md             # SHIPPED (SP-G v1.0)
     chan_algorithmic_trading.md              # SHIPPED (SP-G v1.0)
@@ -802,12 +802,12 @@ Cross-section: `cross_section_return_zscore_20d`,
 
 `"v2.0"` (bumped from Path A v1.0). SHA-pinning mirrors SP-G's
 `_persona_sha()`. The finder's `_persona_sha()` reads
-`docs/lab_finder_persona.md`; SP-G's reads
+`docs/personas/lab_finder_persona.md`; SP-G's reads
 `docs/lab_emitter_persona.md`. Both SHAs CI-sentinel-gated per
 expert review §3.13 (two persona-version provenance fields, two
 files, both pinned).
 
-### §7.2 Six MANDATORY sections of `docs/lab_finder_persona.md`
+### §7.2 Six MANDATORY sections of `docs/personas/lab_finder_persona.md`
 
 Authoring delegated to an expert subagent at brainstorm time per
 `feedback_stop_over_asking_use_expert`.
@@ -1300,7 +1300,7 @@ guarded by `if TYPE_CHECKING` shim at module top.
 
 ### §12.3 Operator runbook
 
-`docs/llm_edge_finder_operator_runbook.md` — procedural counterpart
+`docs/runbooks/llm_edge_finder_operator_runbook.md` — procedural counterpart
 to the dashboard. Covers: pause the finder co-task (kill via
 `ops.llm_triage_service.disable_lab_finder_cotask()` flag in
 `application_log`); investigate an auto-retire (read EULOGY +

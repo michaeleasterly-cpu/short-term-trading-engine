@@ -21,7 +21,7 @@ def test_persona_file_exists() -> None:
 
 
 def test_persona_sha_matches_constant() -> None:
-    """Drift sentinel: edits to docs/lab_finder_persona.md MUST update PERSONA_SHA256.
+    """Drift sentinel: edits to docs/personas/lab_finder_persona.md MUST update PERSONA_SHA256.
 
     If this fails, you edited the persona without bumping the constant
     in tpcore/lab/llm_finder/__init__.py. Either:

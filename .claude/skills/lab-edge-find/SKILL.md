@@ -63,7 +63,7 @@ default to `operator_command`. The trigger value lands in
   `market_structure_primer.md`. (Loader fails loud on missing or stub
   content — `[operator-pending content]` marker triggers
   `ReferenceStubError`.)
-- The persona file `docs/lab_finder_persona.md` matches
+- The persona file `docs/personas/lab_finder_persona.md` matches
   `PERSONA_SHA256` in `tpcore/lab/llm_finder/__init__.py`. Drift reds
   the `test_persona_versioned` sentinel.
 
@@ -94,7 +94,7 @@ default to `operator_command`. The trigger value lands in
 
 ## Operator runbook
 
-Full runbook: `docs/llm_edge_finder_operator_runbook.md`.
+Full runbook: `docs/runbooks/llm_edge_finder_operator_runbook.md`.
 
 Failure modes:
 - **`AuthSkip`** (no `ANTHROPIC_API_KEY`) → smoke-mode run; provenance lands; no emissions.

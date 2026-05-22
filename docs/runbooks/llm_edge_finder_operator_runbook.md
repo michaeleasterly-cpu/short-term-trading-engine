@@ -119,9 +119,9 @@ The finder writes the original `LAB_FINDER_ACTION(action='ecr_retire', triggered
 
 Persona changes are operator-staged (the LLM cannot edit via diff-scope fence):
 
-1. Edit `docs/lab_finder_persona.md`.
+1. Edit `docs/personas/lab_finder_persona.md`.
 2. Bump `PERSONA_VERSION` in `tpcore/lab/llm_finder/__init__.py` (e.g. `v2.0` → `v2.1`).
-3. Update `PERSONA_SHA256` to the new file SHA: `sha256sum docs/lab_finder_persona.md | cut -c1-64`.
+3. Update `PERSONA_SHA256` to the new file SHA: `sha256sum docs/personas/lab_finder_persona.md | cut -c1-64`.
 4. The `test_persona_versioned` sentinel reds on drift — both values must match before CI passes.
 
 ### §4.6 Edit reference bundles

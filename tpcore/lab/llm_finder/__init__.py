@@ -62,7 +62,7 @@ emission was a misemission; persona now explicitly lists canary as
 ineligible. Pick from {reversion, vector, momentum, sentinel, catalyst}."""
 
 PERSONA_SHA256: str = "3ad0e9693a0c7780bf777381167e0d54f88ee24db700bcb06679317bbfa1cdba"
-"""SHA256 of docs/lab_finder_persona.md at PERSONA_VERSION='v2.2'.
+"""SHA256 of docs/personas/lab_finder_persona.md at PERSONA_VERSION='v2.2'.
 
 Persona edits MUST update both PERSONA_VERSION AND this constant.
 The sentinel test test_persona_versioned.py reds the build on drift.
