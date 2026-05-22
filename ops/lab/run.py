@@ -1249,6 +1249,21 @@ async def _run_lab_core(
             tid = trial_id_seq
             trial_id_seq += 1
             params = candidates[idx]
+            # Merge --param-overrides (CLI JSON dict) into per-trial params.
+            # Fixes Lab orchestrator gap where the flag was accepted but
+            # never threaded to engine calls — probe drivers need this to
+            # pin non-LAB_TARGET knobs (e.g. reversion `regime_target` SHA12).
+            # Discovered 2026-05-22 (reversion partial-axis probe failed
+            # 30/30 trials with missing regime_target). Args is the rebuilt
+            # Namespace from ops.lab.__main__._run_args — now forwards
+            # param_overrides as raw JSON string.
+            cli_overrides_json = getattr(args, "param_overrides", None) or "{}"
+            try:
+                cli_overrides = json.loads(cli_overrides_json)
+                if isinstance(cli_overrides, dict) and cli_overrides:
+                    params = {**params, **cli_overrides}
+            except (json.JSONDecodeError, TypeError):
+                pass
             trial_start = time.time()
             result = _evaluate_candidate_with_context(
                 trial_id=tid, window=w, parameters=params,
