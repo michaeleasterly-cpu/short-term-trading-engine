@@ -62,8 +62,15 @@ EXPECTED_CASCADES: dict[str, tuple[str, str]] = {
     "D9": ("liquidity_tiers_completeness", "INGESTION_AUTO_RECOVERED_TIER"),
     # D10 ticker_classifications missing (PR #261)
     "D10": ("ticker_classifications_coverage", "INGESTION_AUTO_RECOVERED_CLASSIFICATION"),
+    # D11 freshness vendor_late classification — orchestrator-level recognition
+    # using tpcore.selfheal.probes.VENDOR_PROBES; skip-without-failing for
+    # known weekly-publish feeds (AAII Thursday, fear_greed daily).
+    "D11": ("_auto_cascade_vendor_late", "INGESTION_VENDOR_LATE_SKIPPED"),
     # D13 pool exhaustion → recycle_asyncpg_pool + retry (PR #262)
     "D13": ("_cascade_d13_pool_exhaustion", "POOL_CIRCUIT_BREAKER_TRIPPED"),
+    # D14 data_validation stage timeout → chunked re-run + synthesize FAILED
+    # entry whose error matches the Wave-1 cascade's parser contract.
+    "D14": ("_chunk_validation_suite", "INGESTION_AUTO_RECOVERED_VALIDATION_CHUNKED"),
     # E1 engine scheduler stage failure → retry once + ENGINE_STAGE_ESCALATED (PR #267)
     "E1": ("ENGINE_STAGE_ESCALATED_EVENT", "ENGINE_STAGE_ESCALATED"),
     # E3 order placement transient → retry + ORDER_ESCALATED (PR #267)

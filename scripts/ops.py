@@ -3464,6 +3464,142 @@ _MACRO_COMPLETENESS_CHECK: str = "macro_indicators_completeness"
 
 
 # ─────────────────────────────────────────────────────────────────────────
+# D11 — vendor_late classification registry. Maps a freshness check name
+# to the feed key that ``tpcore.selfheal.probes.VENDOR_PROBES`` knows. For
+# each red freshness check in this map, the D11 cascade consults the
+# vendor probe; if the vendor probe says "I have nothing newer than what
+# you hold" (has_newer == False) the check is classified VENDOR_LATE
+# (NOT our defect) and skipped from the Wave-1 validation cascade — the
+# daemon stops retrying a heal that can't help because the vendor hasn't
+# published yet. The freshness check itself stays red in the summary;
+# this is a CLASSIFICATION, not a downgrade — per the spec §1 D11
+# guardrail "vendor_late is a CLASSIFICATION (skip-because-not-our-
+# defect), not a relaxation".
+#
+# Scope is intentionally narrow: only the two feed shapes the spec
+# names — AAII Sentiment (Thursday weekly publish) and fear_greed
+# (derived from prices_daily; vendor_late means no new NYSE close has
+# published yet). Adding a row is one entry; the prices_daily +
+# macro_indicators probes are deliberately NOT wired here because their
+# freshness checks have other downstream invariants (prices_daily
+# completeness, macro per-indicator gap) the operator wants to keep
+# strict.
+_VENDOR_LATE_CHECK_MAP: dict[str, str] = {
+    # AAII Sentiment Survey — weekly Thursday publish; HEAD Last-Modified
+    # probe on the .xls confirms the vendor's actual latest publish date.
+    "aaii_sentiment_freshness": "aaii_sentiment",
+    # fear_greed is DERIVED from prices_daily; vendor_late here means
+    # "no new NYSE session has published yet" — answered by the Alpaca
+    # SPY-anchor probe (every NYSE session, never delisted). When SPY's
+    # latest bar matches our latest fear_greed date, the derived feed
+    # can't move until the next session — not our defect.
+    "fear_greed_freshness": "prices_daily",
+}
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# D14 — data_validation TIMEOUT chunking. The Wave-1 validation cascade
+# is keyed on a FAILED check_name list, which a TIMEOUT on the monolithic
+# ``_stage_data_validation`` does NOT produce (the 300s cap fires before
+# the suite returns). Live exercise 2026-05-22 found data_validation
+# timing out at the cap before completing the 25-check suite (50 new SOS
+# PHCI series per PR #216 pushed total wall time past the budget).
+#
+# Recovery: re-run the suite chunked into smaller sub-stages, each with
+# its own 60s budget. Per-chunk timeouts are recorded as failed checks
+# (operator-visible, NOT silently swallowed). The aggregated failed-check
+# list is then synthesised into the same shape the Wave-1 cascade
+# already consumes — ``RuntimeError("validation suite failed: [<names>]")``
+# — so no contract change at the consumer side. Per the spec D14 task:
+# "chunking must preserve the same aggregate failed-check list shape
+# that ``_auto_cascade_validation_failures`` consumes — don't change the
+# contract; just chunk the production".
+#
+# The chunks partition the 25 checks roughly by data layer + cost. Each
+# chunk targets <= 60s wall time on a healthy DB; the budget is per-
+# chunk, not a hard cap on each check, so a single slow check inside
+# its chunk still completes if the others in the chunk are fast.
+_VALIDATION_CHUNK_BUDGET_SEC: float = 60.0
+
+# Chunk specs: (chunk_name, list[check_name]). Names match the
+# ``CHECK_NAME`` constants from each tpcore/quality/validation/checks/*.py
+# module so the suite reader is the single source of truth. A check
+# NOT listed in any chunk is silently skipped by chunking (operator-
+# visible because it does NOT appear in the chunked-run output — the
+# missing check is the operator-surfacing signal).
+_VALIDATION_CHUNK_SPECS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    # Chunk 1 — prices/integrity (lightweight read-only sweeps).
+    (
+        "structure_integrity",
+        (
+            "delistings",
+            "constituent",
+            "splits",
+            "row_integrity",
+            "fundamentals_integrity",
+            "corporate_actions_integrity",
+        ),
+    ),
+    # Chunk 2 — prices_daily heavy (the largest table; isolated so
+    # it doesn't steal budget from sibling checks).
+    (
+        "prices_daily",
+        (
+            "prices_daily_freshness",
+            "prices_daily_completeness",
+        ),
+    ),
+    # Chunk 3 — completeness checks (medium cost; per-ticker scans
+    # across fundamentals / corporate_actions / liquidity / classify).
+    (
+        "completeness",
+        (
+            "fundamentals_quarterly_completeness",
+            "corporate_actions_completeness",
+            "liquidity_tiers_completeness",
+            "liquidity_tiers_freshness",
+            "ticker_classifications_coverage",
+        ),
+    ),
+    # Chunk 4 — events + monotone (per-ticker UPSERT loops; pre-PR-#261
+    # the source of the 300s overrun; pinned in its own chunk so the
+    # seed_monotone_snapshots baseline path is the only churn).
+    (
+        "events_monotone",
+        (
+            "earnings_events_freshness",
+            "earnings_events_monotone",
+            "sec_filings_freshness",
+            "sec_insider_monotone",
+        ),
+    ),
+    # Chunk 5 — macro/FRED (per-indicator gap scan; cost scales with
+    # INDICATOR_SERIES * dates).
+    (
+        "macro",
+        (
+            "macro_indicators_freshness",
+            "macro_indicators_completeness",
+        ),
+    ),
+    # Chunk 6 — sentiment / sentiment-derived (mostly single-row
+    # freshness queries; cheap).
+    (
+        "sentiment",
+        (
+            "options_max_pain_freshness",
+            "insider_sentiment_freshness",
+            "social_sentiment_freshness",
+            "fear_greed_freshness",
+            "short_interest_freshness",
+            "borrow_rates_freshness",
+            "aaii_sentiment_freshness",
+        ),
+    ),
+)
+
+
+# ─────────────────────────────────────────────────────────────────────────
 # Wave-2 deterministic self-heal cascade (D2 / D3 / D5 / D13) — see
 # docs/superpowers/specs/2026-05-21-deterministic-self-heal-coverage-
 # expansion-design.md §1 rows D2 D3 D5 D13 + §4 ANSWERED.
@@ -3838,6 +3974,26 @@ async def cmd_update(
     if not dry_run:
         await _auto_cascade_coverage_collapse(
             summary, pool, daily_bars_config, log=log, db_log=db_log,
+        )
+
+    # D14 — data_validation TIMEOUT → chunked re-run + synthesize FAILED.
+    # Fires BEFORE the Wave-1 validation cascade so a TIMEOUT (which
+    # produces no failed-check list) is rewritten to a FAILED entry
+    # whose error string matches the Wave-1 cascade's parser contract.
+    # Operator-visible recovery via INGESTION_AUTO_RECOVERED_VALIDATION_CHUNKED.
+    if not dry_run:
+        await _auto_cascade_validation_timeout(
+            summary, pool, log=log, db_log=db_log,
+        )
+
+    # D11 — freshness vendor_late classification. Runs BEFORE the Wave-1
+    # validation cascade so red freshness checks whose vendor hasn't
+    # published anything newer are CLASSIFIED (not refreshed). The
+    # freshness check stays red — D11 is a classification, not a
+    # relaxation. INGESTION_VENDOR_LATE_SKIPPED surfaces the verdict.
+    if not dry_run:
+        await _auto_cascade_vendor_late(
+            summary, pool, log=log, db_log=db_log,
         )
 
     # Wave-1 deterministic self-heal cascade (D6..D10) — parse the
@@ -4249,6 +4405,17 @@ async def _auto_cascade_validation_failures(
         )
         return
 
+    # D11 — honour the vendor_late classification added by
+    # ``_auto_cascade_vendor_late``. Checks in this set have already
+    # been classified VENDOR_LATE (their distinct INGESTION_VENDOR_LATE_
+    # SKIPPED event landed) — refreshing them would be useless churn
+    # (the vendor has nothing newer than we hold). The freshness check
+    # remains red in the summary; D11 is a classification, not a
+    # relaxation.
+    vendor_late_set: set[str] = set(
+        (val_result.detail or {}).get("vendor_late_checks", []) or []
+    )
+
     spec_by_name = {n: (n, fb, to) for n, fb, to in _STAGE_SPECS}
 
     await db_log.log(
@@ -4259,17 +4426,27 @@ async def _auto_cascade_validation_failures(
             "stage": "data_validation",
             "cascade_mode": "validation_failures",
             "failed_checks": failed_checks,
+            "vendor_late_skipped": sorted(vendor_late_set),
         },
     )
     log.info(
         "ops.auto_cascade.validation.start",
         failed_checks=failed_checks,
+        vendor_late_skipped=sorted(vendor_late_set),
     )
 
     handled: list[str] = []
     skipped: list[str] = []
+    vendor_late_handled: list[str] = []
 
     for check_name in failed_checks:
+        # D11 — vendor_late classification claims this check; skip the
+        # canonical refresh dispatch entirely. The distinct
+        # INGESTION_VENDOR_LATE_SKIPPED event already landed.
+        if check_name in vendor_late_set:
+            vendor_late_handled.append(check_name)
+            continue
+
         # D8 — macro: per-indicator targeted re-pull (NOT the full
         # macro_indicators stage; per spec §1 D8).
         if check_name == _MACRO_COMPLETENESS_CHECK:
@@ -4485,6 +4662,9 @@ async def _auto_cascade_validation_failures(
 
     # Annotate the data_validation stage result so dashboard readers see
     # which checks were auto-recovered vs deferred to the LLM backstop.
+    # ``vendor_late`` carries the D11 classification (claimed-by-D11
+    # checks did NOT dispatch a refresh — they got the distinct
+    # INGESTION_VENDOR_LATE_SKIPPED event instead).
     val_result.detail = {
         **(val_result.detail or {}),
         "cascade": True,
@@ -4492,6 +4672,7 @@ async def _auto_cascade_validation_failures(
         "failed_checks": failed_checks,
         "handled": handled,
         "skipped": skipped,
+        "vendor_late": vendor_late_handled,
     }
     summary.stages[val_idx] = val_result
 
@@ -5190,6 +5371,613 @@ def _extract_failed_url_snippet(error_text: str) -> str:
         return ""
     m = re.search(r"https?://[^\s'\"<>]+", error_text)
     return m.group(0)[:200] if m else ""
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# D14 — data_validation chunking helper + cascade
+# ─────────────────────────────────────────────────────────────────────────
+
+
+async def _chunk_validation_suite(
+    pool: asyncpg.Pool,
+    *,
+    log: structlog.stdlib.BoundLogger,
+    chunk_budget_sec: float = _VALIDATION_CHUNK_BUDGET_SEC,
+) -> dict[str, Any]:
+    """Run the data_validation suite chunked, each chunk under its own budget.
+
+    Per spec D14: the monolithic ``_stage_data_validation`` hits the 300s
+    stage timeout before the 25-check suite returns. This helper re-runs
+    the same checks split into smaller sub-stages (see
+    ``_VALIDATION_CHUNK_SPECS``), each with its own ``chunk_budget_sec``
+    budget. The aggregate failed-check list is returned in the same shape
+    the Wave-1 validation cascade already consumes — a list of check
+    names that the existing parser (``_parse_failed_check_names``) and
+    the existing dispatcher (``_auto_cascade_validation_failures``)
+    handle without contract change.
+
+    Returns:
+        {
+            "failed_checks": list[str],         # aggregate failed-check names
+            "chunks": list[dict],               # per-chunk telemetry
+            "total_duration_ms": int,           # wall-clock sum
+            "any_chunk_timed_out": bool,        # at least one chunk hit budget
+        }
+
+    Per-chunk timeout semantics: when a chunk hits its budget the helper
+    treats EVERY check inside it as failed (their names join the
+    aggregate failed-check list). That is the safe-degrade — the
+    operator-facing application_log row carries the per-chunk timeout
+    detail so it's not silently swallowed; the downstream validation
+    cascade then dispatches the canonical refresh for each — exactly
+    what would have happened if the original 300s monolithic run had
+    returned the same FAILED list. Non-cascadable check names fall
+    through to the existing INGESTION_AUTO_RECOVERY_VALIDATION_SKIPPED
+    long-tail path.
+
+    Never raises — exceptions inside ``_safe_run`` are wrapped as failed
+    CheckResults by the suite; an unexpected exception in this helper
+    is caught and surfaced as a synthetic "<chunk_name>:exception"
+    failed-check name in the aggregate output. Per the cascade family
+    invariant: never raise into the daemon loop.
+    """
+    import time as _time
+
+    # Lazy-load the check functions + safe-run helper. The chunk-level
+    # invocation uses the same primitives as run_suite, just partitioned
+    # into chunks so each chunk has its own timeout budget.
+    from tpcore.quality.validation import checks as _checks_pkg  # noqa: F401
+
+    # Build a name → check_fn registry by importing each module's
+    # ``check_*`` entry-point. The registry is module-private (we don't
+    # widen the suite's public API) — D14 owns this mapping because the
+    # chunking is a self-heal concern, not a suite-shape change.
+    from tpcore.quality.validation.checks.aaii_sentiment_freshness import (
+        check_aaii_sentiment_freshness,
+    )
+    from tpcore.quality.validation.checks.borrow_rates_freshness import (
+        check_borrow_rates_freshness,
+    )
+    from tpcore.quality.validation.checks.constituent import (
+        check_constituent_snapshot,
+    )
+    from tpcore.quality.validation.checks.corporate_actions_completeness import (
+        check_corporate_actions_completeness,
+    )
+    from tpcore.quality.validation.checks.corporate_actions_integrity import (
+        check_corporate_actions_integrity,
+    )
+    from tpcore.quality.validation.checks.delistings import check_delistings
+    from tpcore.quality.validation.checks.earnings_events_freshness import (
+        check_earnings_events_freshness,
+    )
+    from tpcore.quality.validation.checks.earnings_events_monotone import (
+        check_earnings_events_monotone,
+    )
+    from tpcore.quality.validation.checks.fear_greed_freshness import (
+        check_fear_greed_freshness,
+    )
+    from tpcore.quality.validation.checks.fundamentals_integrity import (
+        check_fundamentals_integrity,
+    )
+    from tpcore.quality.validation.checks.fundamentals_quarterly_completeness import (
+        check_fundamentals_quarterly_completeness,
+    )
+    from tpcore.quality.validation.checks.insider_sentiment_freshness import (
+        check_insider_sentiment_freshness,
+    )
+    from tpcore.quality.validation.checks.liquidity_tiers_completeness import (
+        check_liquidity_tiers_completeness,
+    )
+    from tpcore.quality.validation.checks.liquidity_tiers_freshness import (
+        check_liquidity_tiers_freshness,
+    )
+    from tpcore.quality.validation.checks.macro_indicators_completeness import (
+        check_macro_indicators_completeness,
+    )
+    from tpcore.quality.validation.checks.macro_indicators_freshness import (
+        check_macro_indicators_freshness,
+    )
+    from tpcore.quality.validation.checks.options_max_pain_freshness import (
+        check_options_max_pain_freshness,
+    )
+    from tpcore.quality.validation.checks.prices_daily_completeness import (
+        check_prices_daily_completeness,
+    )
+    from tpcore.quality.validation.checks.prices_daily_freshness import (
+        check_prices_daily_freshness,
+    )
+    from tpcore.quality.validation.checks.row_integrity import check_row_integrity
+    from tpcore.quality.validation.checks.sec_filings_freshness import (
+        check_sec_filings_freshness,
+    )
+    from tpcore.quality.validation.checks.sec_insider_monotone import (
+        check_sec_insider_monotone,
+    )
+    from tpcore.quality.validation.checks.short_interest_freshness import (
+        check_short_interest_freshness,
+    )
+    from tpcore.quality.validation.checks.social_sentiment_freshness import (
+        check_social_sentiment_freshness,
+    )
+    from tpcore.quality.validation.checks.splits import check_splits
+    from tpcore.quality.validation.checks.ticker_classifications_freshness import (
+        check_ticker_classifications_coverage,
+    )
+    from tpcore.quality.validation.suite import _safe_run
+
+    check_fns: dict[str, Any] = {
+        "delistings": check_delistings,
+        "constituent": check_constituent_snapshot,
+        "splits": check_splits,
+        "row_integrity": check_row_integrity,
+        "fundamentals_integrity": check_fundamentals_integrity,
+        "fundamentals_quarterly_completeness": check_fundamentals_quarterly_completeness,
+        "corporate_actions_integrity": check_corporate_actions_integrity,
+        "corporate_actions_completeness": check_corporate_actions_completeness,
+        "earnings_events_freshness": check_earnings_events_freshness,
+        "earnings_events_monotone": check_earnings_events_monotone,
+        "sec_filings_freshness": check_sec_filings_freshness,
+        "sec_insider_monotone": check_sec_insider_monotone,
+        "liquidity_tiers_freshness": check_liquidity_tiers_freshness,
+        "liquidity_tiers_completeness": check_liquidity_tiers_completeness,
+        "ticker_classifications_coverage": check_ticker_classifications_coverage,
+        "macro_indicators_freshness": check_macro_indicators_freshness,
+        "macro_indicators_completeness": check_macro_indicators_completeness,
+        "prices_daily_freshness": check_prices_daily_freshness,
+        "prices_daily_completeness": check_prices_daily_completeness,
+        "options_max_pain_freshness": check_options_max_pain_freshness,
+        "insider_sentiment_freshness": check_insider_sentiment_freshness,
+        "social_sentiment_freshness": check_social_sentiment_freshness,
+        "fear_greed_freshness": check_fear_greed_freshness,
+        "short_interest_freshness": check_short_interest_freshness,
+        "borrow_rates_freshness": check_borrow_rates_freshness,
+        "aaii_sentiment_freshness": check_aaii_sentiment_freshness,
+    }
+
+    total_started = _time.perf_counter()
+    failed_checks: list[str] = []
+    chunks_telemetry: list[dict[str, Any]] = []
+    any_timed_out = False
+
+    for chunk_name, check_names in _VALIDATION_CHUNK_SPECS:
+        chunk_started = _time.perf_counter()
+        # Build per-chunk safe-run tasks. Unknown names get a synthetic
+        # exception row (defensive — would only fire on a typo above).
+        tasks: list[Any] = []
+        for cn in check_names:
+            fn = check_fns.get(cn)
+            if fn is None:
+                log.warning(
+                    "ops.auto_cascade.d14_chunked.unknown_check",
+                    chunk=chunk_name, check=cn,
+                )
+                failed_checks.append(cn)
+                continue
+            tasks.append(_safe_run(cn, fn, pool, None))
+
+        chunk_failed: list[str] = []
+        chunk_timed_out = False
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(*tasks, return_exceptions=False),
+                timeout=chunk_budget_sec,
+            )
+            for r in results:
+                # _safe_run always returns a CheckResult; surface failures
+                # but NOT exceptions (those are already failed-result-wrapped).
+                if not getattr(r, "passed", False):
+                    chunk_failed.append(r.name)
+        except TimeoutError:
+            chunk_timed_out = True
+            any_timed_out = True
+            # Safe-degrade: every check in the chunk is treated as failed
+            # so the downstream cascade dispatches their canonical refreshes
+            # (operator-visible: per-chunk timeout is in chunks_telemetry).
+            chunk_failed.extend(list(check_names))
+        except Exception as exc:  # noqa: BLE001 — never crash the cascade
+            log.error(
+                "ops.auto_cascade.d14_chunked.chunk_exception",
+                chunk=chunk_name, error=str(exc),
+            )
+            # Mark every check in the chunk failed + a synthetic
+            # "<chunk>:exception" sentinel so the operator can grep
+            # application_log for the broken chunk.
+            chunk_failed.extend(list(check_names))
+            chunk_failed.append(f"{chunk_name}:exception")
+
+        failed_checks.extend(chunk_failed)
+        chunks_telemetry.append({
+            "chunk": chunk_name,
+            "checks": list(check_names),
+            "failed": chunk_failed,
+            "timed_out": chunk_timed_out,
+            "duration_ms": int((_time.perf_counter() - chunk_started) * 1000),
+        })
+        log.info(
+            "ops.auto_cascade.d14_chunked.chunk_complete",
+            chunk=chunk_name,
+            failed=len(chunk_failed),
+            timed_out=chunk_timed_out,
+            duration_ms=chunks_telemetry[-1]["duration_ms"],
+        )
+
+    # Dedupe failed_checks while preserving order — the Wave-1 cascade
+    # is order-insensitive but emits one event per name; duplicates would
+    # double-fire.
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for n in failed_checks:
+        if n not in seen:
+            seen.add(n)
+            deduped.append(n)
+
+    return {
+        "failed_checks": deduped,
+        "chunks": chunks_telemetry,
+        "total_duration_ms": int((_time.perf_counter() - total_started) * 1000),
+        "any_chunk_timed_out": any_timed_out,
+    }
+
+
+async def _auto_cascade_validation_timeout(
+    summary: UpdateSummary,
+    pool: asyncpg.Pool,
+    *,
+    log: structlog.stdlib.BoundLogger,
+    db_log,
+) -> None:
+    """D14 — data_validation TIMEOUT → chunked re-run + synthesize FAILED.
+
+    Spec ``2026-05-21-deterministic-self-heal-coverage-expansion-design.md``
+    §1 row D14 (added by PR #263). The monolithic ``_stage_data_validation``
+    hits the 300s cap before completing the 25-check suite; the Wave-1
+    validation cascade is keyed on a FAILED check_name list which a
+    TIMEOUT does not produce, so the cascade can't fire.
+
+    Recovery: scan ``summary.stages`` for a TIMEOUT data_validation entry
+    (status == "TIMEOUT", error contains "timed out"). If found, call
+    ``_chunk_validation_suite`` to re-run the suite in smaller chunks
+    with their own 60s budgets; then REPLACE the TIMEOUT entry with a
+    synthetic FAILED entry whose ``error`` field matches the canonical
+    shape "validation suite failed: [<names>]" — exactly the shape the
+    Wave-1 cascade's ``_parse_failed_check_names`` consumes. The
+    downstream validation cascade then sees the failed-check list and
+    dispatches canonical refreshes as if the original monolithic suite
+    had returned them itself. NO contract change at the consumer.
+
+    Event: ``INGESTION_AUTO_RECOVERED_VALIDATION_CHUNKED`` (the cascade's
+    terminal observability handle). Per-chunk telemetry is carried in
+    the event data + the synthetic stage entry's ``detail`` so the
+    operator can grep application_log for "chunk=<name> timed_out=true"
+    and see exactly which sub-suite blew the budget.
+
+    Never raises — wrapped in a broad try/except per the cascade family
+    invariant (daemon stays alive).
+    """
+    # Locate the TIMEOUT data_validation entry, if any.
+    val_idx: int | None = None
+    val_result: StageResult | None = None
+    for i, result in enumerate(summary.stages):
+        if result.name != "data_validation":
+            continue
+        if result.status != "TIMEOUT":
+            continue
+        if not _matches_any(result.error, _TIMEOUT_TOKENS):
+            continue
+        val_idx = i
+        val_result = result
+        break
+    if val_idx is None or val_result is None:
+        return
+
+    first_error = (val_result.error or "")[:240]
+    await db_log.log(
+        "INGESTION_AUTO_RECOVERY_START",
+        "D14 cascade: data_validation TIMEOUT → chunked re-run",
+        severity="INFO",
+        data={
+            "stage": "data_validation",
+            "cascade_mode": "validation_chunked",
+            "trigger": "timeout",
+            "first_error": first_error,
+            "chunk_budget_sec": _VALIDATION_CHUNK_BUDGET_SEC,
+        },
+    )
+    log.info(
+        "ops.auto_cascade.d14_chunked.start",
+        first_error=first_error,
+        chunk_count=len(_VALIDATION_CHUNK_SPECS),
+    )
+
+    try:
+        chunked = await _chunk_validation_suite(pool, log=log)
+    except Exception as exc:  # noqa: BLE001 — never crash the cascade
+        log.error(
+            "ops.auto_cascade.d14_chunked.failed",
+            error=str(exc),
+        )
+        await db_log.log(
+            "INGESTION_AUTO_RECOVERY_FAILED",
+            f"D14 cascade FAILED: chunked re-run raised ({type(exc).__name__})",
+            severity="ERROR",
+            data={
+                "stage": "data_validation",
+                "cascade_mode": "validation_chunked",
+                "first_error": first_error,
+                "cascade_error": str(exc)[:240],
+            },
+        )
+        return
+
+    failed_checks = chunked["failed_checks"]
+    # Synthesize the FAILED stage entry. The error string MUST match the
+    # canonical shape the Wave-1 cascade parses — that's the explicit
+    # contract D14 preserves (spec rule "don't change the contract; just
+    # chunk the production"). If chunking produced zero failed checks,
+    # report the (rare) success: monolithic timed out but chunked passed,
+    # so the suite green-flipped (the chunk_budget effectively gave the
+    # suite more wall-time per check).
+    if not failed_checks:
+        # Replace the TIMEOUT with an OK so subsequent cascades don't
+        # re-trigger on the (now-stale) TIMEOUT entry. Carry the
+        # chunked-recovery breadcrumb in detail.
+        synthetic = StageResult(
+            name="data_validation",
+            status="OK",
+            duration_ms=int(chunked["total_duration_ms"]),
+            detail={
+                "cascade": True,
+                "cascade_mode": "validation_chunked",
+                "trigger": "timeout",
+                "first_error": first_error,
+                "chunks": chunked["chunks"],
+                "any_chunk_timed_out": chunked["any_chunk_timed_out"],
+                "chunked_recovery": True,
+            },
+            error=None,
+        )
+        summary.stages[val_idx] = synthetic
+        await db_log.log(
+            "INGESTION_AUTO_RECOVERED_VALIDATION_CHUNKED",
+            (
+                "D14 cascade recovered: data_validation TIMEOUT → "
+                "chunked re-run produced zero failed checks "
+                "(suite green-flipped under per-chunk budget)"
+            ),
+            severity="INFO",
+            data={
+                "stage": "data_validation",
+                "cascade_mode": "validation_chunked",
+                "first_error": first_error,
+                "failed_checks": [],
+                "any_chunk_timed_out": chunked["any_chunk_timed_out"],
+                "chunks": chunked["chunks"],
+                "total_duration_ms": int(chunked["total_duration_ms"]),
+            },
+        )
+        log.info(
+            "ops.auto_cascade.d14_chunked.recovered_green",
+            total_duration_ms=int(chunked["total_duration_ms"]),
+        )
+        return
+
+    synthetic_error = f"validation suite failed: {failed_checks!r}"
+    synthetic = StageResult(
+        name="data_validation",
+        status="FAILED",
+        duration_ms=int(chunked["total_duration_ms"]),
+        detail={
+            "cascade": True,
+            "cascade_mode": "validation_chunked",
+            "trigger": "timeout",
+            "first_error": first_error,
+            "chunks": chunked["chunks"],
+            "any_chunk_timed_out": chunked["any_chunk_timed_out"],
+            "chunked_recovery": True,
+            "failed_checks": failed_checks,
+        },
+        error=synthetic_error,
+    )
+    summary.stages[val_idx] = synthetic
+
+    await db_log.log(
+        "INGESTION_AUTO_RECOVERED_VALIDATION_CHUNKED",
+        (
+            f"D14 cascade: data_validation TIMEOUT → chunked re-run "
+            f"produced {len(failed_checks)} failed check(s) — routing to "
+            f"Wave-1 validation cascade"
+        ),
+        severity="INFO",
+        data={
+            "stage": "data_validation",
+            "cascade_mode": "validation_chunked",
+            "first_error": first_error,
+            "failed_checks": failed_checks,
+            "any_chunk_timed_out": chunked["any_chunk_timed_out"],
+            "chunks": chunked["chunks"],
+            "total_duration_ms": int(chunked["total_duration_ms"]),
+        },
+    )
+    log.info(
+        "ops.auto_cascade.d14_chunked.recovered_failed",
+        failed_checks=failed_checks,
+        any_chunk_timed_out=chunked["any_chunk_timed_out"],
+        total_duration_ms=int(chunked["total_duration_ms"]),
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# D11 — Freshness vendor_late cascade
+# ─────────────────────────────────────────────────────────────────────────
+
+
+async def _auto_cascade_vendor_late(
+    summary: UpdateSummary,
+    pool: asyncpg.Pool,
+    *,
+    log: structlog.stdlib.BoundLogger,
+    db_log,
+) -> None:
+    """D11 — classify red freshness checks as VENDOR_LATE when applicable.
+
+    Spec ``2026-05-21-deterministic-self-heal-coverage-expansion-design.md``
+    §1 row D11. Some freshness checks red because the vendor has not
+    published anything newer than what we hold — not our defect; running
+    a refresh against the vendor would return the same stale window we
+    already have. Per the [[etl-bulk-before-api-crawl]] memory + the
+    no-lazy-vendor-blame rule, this classification is PROVEN by a live
+    cheap probe (``tpcore.selfheal.probes.VENDOR_PROBES``), never assumed.
+
+    For each red freshness check in ``_VENDOR_LATE_CHECK_MAP``:
+
+    1. Look up the feed key and call its vendor probe (returns a typed
+       ``VendorState`` with our_latest, vendor_latest, has_newer).
+    2. If ``has_newer == False`` → vendor has NOTHING newer than we hold
+       → classify VENDOR_LATE: emit ``INGESTION_VENDOR_LATE_SKIPPED`` and
+       record the check in the data_validation stage's
+       ``detail["vendor_late_checks"]`` set so the Wave-1 validation
+       cascade skips dispatching a (useless) refresh for it.
+    3. If ``has_newer == True`` → genuine staleness; do nothing here so
+       Wave-1's cascade refreshes as normal.
+    4. If probe returns None (undeterminable: no DB rows yet, probe
+       transient failure, no probe registered) → stay strict; do nothing.
+
+    Per the spec D11 guardrail:
+      * The freshness check itself remains red in summary.stages — D11
+        does NOT downgrade or relax any check.
+      * ``prices_daily_completeness`` is INTENTIONALLY not in the map
+        (the spec calls out preserving this invariant).
+      * vendor_late is a CLASSIFICATION (not-our-defect), surfaced as a
+        DISTINCT event so the operator's daemon doesn't keep retrying.
+
+    Event: ``INGESTION_VENDOR_LATE_SKIPPED`` (one per vendor-late check).
+
+    Never raises — the cascade is wrapped in per-check try/except so a
+    transient probe failure NEVER aborts the daemon. Daemon-alive
+    invariant matches the sibling Wave-2 cascade pattern.
+    """
+    # Locate the FAILED data_validation entry, if any. Mirrors the
+    # Wave-1 cascade — D11 only acts when validation has reds.
+    val_idx: int | None = None
+    val_result: StageResult | None = None
+    for i, result in enumerate(summary.stages):
+        if result.name != "data_validation":
+            continue
+        if result.status != "FAILED":
+            continue
+        if _VALIDATION_SUITE_FAILED_TOKEN not in (result.error or "").lower():
+            continue
+        val_idx = i
+        val_result = result
+        break
+    if val_idx is None or val_result is None:
+        return
+
+    failed_checks = _parse_failed_check_names(val_result.error)
+    if not failed_checks:
+        return
+
+    # Filter to checks we have a vendor-late probe wiring for.
+    candidates = [
+        c for c in failed_checks if c in _VENDOR_LATE_CHECK_MAP
+    ]
+    if not candidates:
+        return
+
+    # Lazy-import the probe registry so a missing tpcore.selfheal at
+    # collection time never breaks the module load.
+    try:
+        from tpcore.selfheal.probes import VENDOR_PROBES
+    except Exception as exc:  # noqa: BLE001 — defensive; module must exist
+        log.error(
+            "ops.auto_cascade.d11_vendor_late.import_failed",
+            error=str(exc),
+        )
+        return
+
+    vendor_late: list[str] = []
+    for check_name in candidates:
+        feed_key = _VENDOR_LATE_CHECK_MAP[check_name]
+        probe = VENDOR_PROBES.get(feed_key)
+        if probe is None:
+            # Probe-less feed — stay strict per the publication-gate
+            # contract; the check stays red and routes to Wave-1.
+            log.info(
+                "ops.auto_cascade.d11_vendor_late.no_probe",
+                check=check_name, feed=feed_key,
+            )
+            continue
+        try:
+            state = await probe(pool)
+        except Exception as exc:  # noqa: BLE001 — probe must never crash daemon
+            log.warning(
+                "ops.auto_cascade.d11_vendor_late.probe_failed",
+                check=check_name, feed=feed_key, error=str(exc),
+            )
+            continue
+        if state is None:
+            # Undeterminable (empty DB, vendor probe transient fail).
+            # Stay strict; the freshness check remains red and the
+            # Wave-1 cascade gets a shot at it normally.
+            log.info(
+                "ops.auto_cascade.d11_vendor_late.indeterminate",
+                check=check_name, feed=feed_key,
+            )
+            continue
+        if state.has_newer:
+            # Vendor IS ahead — genuine staleness; Wave-1 should heal.
+            # No event emitted here; this is normal flow.
+            log.info(
+                "ops.auto_cascade.d11_vendor_late.vendor_ahead",
+                check=check_name, feed=feed_key,
+                our_latest=str(state.our_latest),
+                vendor_latest=str(state.vendor_latest),
+            )
+            continue
+
+        # has_newer is False → vendor_late. Emit the distinct event.
+        await db_log.log(
+            "INGESTION_VENDOR_LATE_SKIPPED",
+            (
+                f"D11 cascade: {check_name} classified VENDOR_LATE "
+                f"(feed={feed_key}, our_latest={state.our_latest}, "
+                f"vendor_latest={state.vendor_latest}) — not our defect, "
+                f"skipping refresh; daemon CONTINUING"
+            ),
+            severity="WARNING",
+            data={
+                "check": check_name,
+                "feed": feed_key,
+                "our_latest": state.our_latest.isoformat(),
+                "vendor_latest": state.vendor_latest.isoformat(),
+                "cascade_mode": "vendor_late",
+                "note": (
+                    "vendor has nothing newer than we hold; freshness "
+                    "check stays red as a classification, no refresh "
+                    "dispatched (would return the same window)"
+                ),
+            },
+        )
+        log.warning(
+            "ops.auto_cascade.d11_vendor_late.classified",
+            check=check_name, feed=feed_key,
+            our_latest=str(state.our_latest),
+            vendor_latest=str(state.vendor_latest),
+        )
+        vendor_late.append(check_name)
+
+    if not vendor_late:
+        return
+
+    # Annotate the data_validation stage entry so the Wave-1 cascade
+    # can skip vendor-late checks. The entry keeps status=FAILED — D11
+    # does NOT downgrade — but the detail carries the classification.
+    val_result.detail = {
+        **(val_result.detail or {}),
+        "vendor_late_checks": vendor_late,
+    }
+    summary.stages[val_idx] = val_result
 
 
 async def _self_heal_failed_stages(

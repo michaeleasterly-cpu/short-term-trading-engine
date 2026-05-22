@@ -27,11 +27,12 @@ Each row: failure shape, current deterministic coverage, proposed coverage.
 | D8 | Macro completeness gap (specific indicator) | `macro_indicators_completeness` reports indicator+missing-dates | None — partial PR #247 fix (no longer crashes) | **NEW:** per-indicator targeted re-pull from the FRED adapter for the missing date range |
 | D9 | Liquidity-tier ticker missing | `liquidity_tiers_completeness` reports 15 specific tickers | None | **NEW:** `tier_refresh --param universe=<missing>` for the specific tickers |
 | D10 | Ticker classification missing | `ticker_classifications_coverage` red | None | **NEW:** `classify_tickers --param force=true --param universe=<missing>` |
-| D11 | Freshness vendor_late | `latest_published` probe returns ≤ our_latest | Memory-documented selfheal.vendor_late event; partial | **EXTEND:** orchestrator-level recognition + skip-without-failing for known weekly-publish feeds (AAII Thursday, fear_greed daily) |
+| D11 | Freshness vendor_late | `latest_published` probe returns ≤ our_latest | Memory-documented selfheal.vendor_late event; partial | **DONE-VIA-#270** orchestrator-level recognition via `_auto_cascade_vendor_late` + `_VENDOR_LATE_CHECK_MAP` (AAII Thursday, fear_greed daily); emits `INGESTION_VENDOR_LATE_SKIPPED`; freshness check stays red as a classification (not a downgrade) |
 | D12 | CSV archive substrate dead (Railway) | `write_archive` raises filesystem error | None | **DONE-VIA-#235** R3 substrate is env-pluggable; fails over to S3 backend |
-| D13 | Postgres pool exhaustion | asyncpg PoolTimeout | None | **NEW:** circuit-breaker stage timeout that closes idle conns + re-opens pool, then retries the stage |
+| D13 | Postgres pool exhaustion | asyncpg PoolTimeout | None | **DONE-VIA-#262** circuit-breaker stage timeout that closes idle conns + re-opens pool, then retries the stage |
+| D14 | `data_validation` stage timeout | `ops.stage.timeout` event on data_validation (300s cap exceeded) | None — Wave 1 cascade is keyed on FAILED check_name list which a TIMEOUT does not produce | **DONE-VIA-#270** `_chunk_validation_suite` partitions the 25-check suite into 6 chunks each with a 60s budget; aggregate failed-check list is synthesised into the canonical `"validation suite failed: [<names>]"` shape consumed by `_auto_cascade_validation_failures` (no contract change); emits `INGESTION_AUTO_RECOVERED_VALIDATION_CHUNKED` |
 
-**Coverage today:** 3/13 (D1, D4, D12 fully; D2/D3/D11 partially). **Coverage after this spec:** 13/13 deterministic; LLM is the long-tail.
+**Coverage today:** 14/14 deterministic (D1, D4, D12 pre-existing; D6-D10 Wave 1 via PR #261; D2/D3/D5/D13 Wave 2 via PR #262; D11+D14 via PR #270). **LLM is the long-tail backstop only.**
 
 ## 2. Engine-lane deterministic self-heal — failure mode catalog
 
