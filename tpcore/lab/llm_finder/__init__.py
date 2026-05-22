@@ -53,15 +53,16 @@ MANDATORY_REFERENCE_BUNDLES: tuple[str, ...] = (
 )
 """Always-include reference bundles regardless of --reference-bundle (spec §3.1 + §7)."""
 
-PERSONA_VERSION: str = "v2.1"
-"""Bumped 2026-05-22 — added §3 testability pre-check directive
-after the reversion_earnings_season_5d_range_normal Lab probe FAILED
-with n_trades=0 (regime 968624efa259 was too rare: 17/2262 historical
-sessions, 0 in 2024-2025 holdout). Persona now mandates a frequency
-pre-check before conditioning on a 4-axis regime_tuple_id."""
+PERSONA_VERSION: str = "v2.2"
+"""Bumped 2026-05-22 — added §8 self-reject rule excluding
+target_engine='canary' (operator clarification: canary is the platform's
+end-to-end heartbeat, non-graduating per spec §4b, never calls
+write_credibility_score). The v2.0 gate pilot's canary_range_reversion_5d
+emission was a misemission; persona now explicitly lists canary as
+ineligible. Pick from {reversion, vector, momentum, sentinel, catalyst}."""
 
-PERSONA_SHA256: str = "dd42d74fbf850d0988ec81821963fd35f6b3226d569e5c5284bb30a5bc2a997a"
-"""SHA256 of docs/lab_finder_persona.md at PERSONA_VERSION='v2.1'.
+PERSONA_SHA256: str = "3ad0e9693a0c7780bf777381167e0d54f88ee24db700bcb06679317bbfa1cdba"
+"""SHA256 of docs/lab_finder_persona.md at PERSONA_VERSION='v2.2'.
 
 Persona edits MUST update both PERSONA_VERSION AND this constant.
 The sentinel test test_persona_versioned.py reds the build on drift.
