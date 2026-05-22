@@ -651,19 +651,27 @@ Engine surface enrichment (PR #277 — catalyst PEAD-only mode + hold_days knob)
 
 Goal: open enough LAB_TARGET knobs in each engine for the LLM's structurally-distinct hypotheses to be testable. Pattern established by catalyst PR #277.
 
-- [x] **catalyst** — `beat_30d_only` PEAD arm + `hold_days` Lab knob (PR #277, merged 2026-05-22)
-- [ ] **reversion** — partial-axis `regime_filter_v1` choice (off/vol_only/trend_only/macro_only/sentiment_only/vol_trend/full) — IN FLIGHT subagent `a9da039f...`
-- [ ] **vector** — BLOCKED on `insider_sentiment` daily-granularity backfill (currently monthly, pre-2025 empty). Adapter work.
-- [ ] **sentinel** — `macro_stress_signal_count` knob (3-of-N stress signals) + arming-threshold knobs (vix, hy_spread, sahm, yield_curve)
-- [ ] **canary** — same partial-axis regime pattern as reversion; possibly delete (non-graduating engine per spec)
+- [x] **catalyst** — `beat_30d_only` PEAD arm + `hold_days` Lab knob (PR #277)
+- [x] **reversion** — partial-axis `regime_filter_v1` choice (PR #278 + #282 probe-driver wiring)
+- [x] **Lab orchestrator** — `--param-overrides` now reaches engines (PR #279, silently dropped before)
+- [x] **sentinel** — `macro_stress_count` mode + 4 threshold knobs + signal count (PR #286)
+- [x] **persona v2.2** — exclude canary from finder's target_engine choices (PR #284)
+- [ ] **vector** — BLOCKED on `insider_sentiment` daily-granularity backfill. Adapter work, not engine.
+- [—] **canary** — EXCLUDED per operator clarification 2026-05-22 (heartbeat, non-graduating per spec §4b).
 
-After all 4 land: re-probe each candidate with the new engine surfaces, get honest DSR/credibility verdicts on whether the LLM's hypotheses have REAL edges that survive the gate.
+**Epic structurally complete 2026-05-22** (vector pending adapter backfill).
 
-### Production-universe probe (deferred, ledger discipline)
+### Probe-readiness matrix (operator-discretion to invoke; ledger spend per probe)
 
-Once engine surface enrichment lands: re-probe `catalyst_pead_expansion_range` with `--universe-tier-max=T2` (~1300 names vs 15). Expected to lift n_trades into the ≥30 band; DSR will still be constrained by cumulative trial count.
+| Candidate | Engine | Surface | Probe verdict | Next move |
+|---|---|---|---|---|
+| `catalyst_pead_expansion_range` | catalyst | ✅ | Sharpe +1.24, PF 3.50, 70% WR; n_trades=10 on 15-ticker test universe | T1+T2 production-universe re-probe |
+| `reversion_earnings_season_5d_range_normal` | reversion | ✅ | n=0 on trend_only (range axis rare) | swap PARTIAL_AXIS_CHOICE to macro_only/vol_only |
+| `sentinel_macro_stress_gate_v1` | sentinel | ✅ | not yet probed | invoke probe with mode=macro_stress_count |
+| `vector_beat_reversal_insider_filter_v1` | vector | ⚠️ adapter | STOPPED at substrate gap | insider_sentiment daily backfill |
+| `canary_range_reversion_5d_earnings_conditional` | canary | — | misemission; persona now excludes canary | — |
 
-`[lane: engine-owned] [gate: open] [effort: M — per-engine work] [signal: real-edge-found 2026-05-22]`
+`[lane: engine-owned] [signal: real-edge-found 2026-05-22 catalyst PEAD]`
 
 ## Deep-research spike adjudication — Lab-candidate backlog (2026-05-19)
 
