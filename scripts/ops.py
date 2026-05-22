@@ -2963,6 +2963,110 @@ async def _stage_daily_delisted_universe_check(
     return out
 
 
+async def _stage_historical_earnings_events_t1_t2(
+    pool: asyncpg.Pool, cfg: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """One-shot T1+T2 earnings-events backfill — unblock Vector engine.
+
+    The 2026-05-13 Vector parameter-search produced ZERO trades on
+    every candidate because ``platform.earnings_events`` had no
+    overlap with the T1+T2 universe. MASTER_PLAN.md §4.3:
+
+        "Re-enabling Vector is gated on a one-time data-ingestion
+        backfill (catalyst events for T1+T2 tickers from FMP
+        earnings-history endpoint), not on any strategy work."
+
+    This stage is that backfill. It enumerates the T1+T2 stock-class
+    universe (~1500 tickers per the
+    ``platform.ticker_classifications.asset_class='stock'`` filter,
+    excluding the 586 ETFs / 301 SPACs / 125 funds that have no
+    earnings to beat), then per-ticker GETs FMP's
+    ``/stable/earnings?symbol=<t>`` endpoint, classifies each
+    historical event via the shared
+    ``scripts.backfill_earnings_events._classify_earnings``, and
+    upserts the BEAT + NO_BEAT rows into ``platform.earnings_events``.
+
+    Mirrors the survivorship-backfill operator-shape:
+
+    * Resumable via ``application_log`` events
+      (``EARNINGS_BACKFILL_TICKER_DONE``) — a crash mid-run keeps
+      completed work; the next invocation skips already-done tickers.
+    * Idempotent — ``ON CONFLICT DO NOTHING`` on the existing PK.
+    * Operator-on-demand only (NOT in ``OPS_UPDATE_STAGES``). Run after
+      PR merge to populate the corpus; the weekly
+      ``earnings_refresh`` stage keeps the tail fresh.
+
+    Distinction from the existing ``earnings_refresh`` stage:
+    ``earnings_refresh`` (a) carries a 6-day skip guard that no-ops
+    same-week re-invocations, (b) calls ``backfill_amain`` directly
+    without per-ticker progress emission so a mid-run crash loses all
+    completed work, and (c) has no audit-trail event surface. This
+    stage is the resumable, audit-emitting one-shot the survivorship
+    PRs (#283 / #288) established as the canonical heavy-lane backfill
+    shape.
+
+    Optional ``--param`` knobs:
+        * ``start_date=YYYY-MM-DD`` — override the 2018-01-01 default
+          (FMP earnings-history coverage start).
+        * ``end_date=YYYY-MM-DD`` — override today's date.
+        * ``resume=false`` — re-process every enumerated ticker
+          (default true).
+        * ``limit=N`` — process at most N tickers (handy for spot-checks).
+
+    Use:
+        DATABASE_URL=… FMP_API_KEY=… .venv/bin/python scripts/ops.py \\
+            --stage historical_earnings_events_t1_t2
+    """
+    from tpcore.data.earnings_events_backfill import (
+        backfill_universe,
+        enumerate_t1_t2_stock_universe,
+    )
+    from tpcore.logging.db_handler import DBLogHandler
+
+    cfg = cfg or {}
+    log = structlog.get_logger("scripts.ops")
+    resume = bool(cfg.get("resume", True))
+    limit = int(cfg.get("limit", 0)) or None
+    start = (
+        date.fromisoformat(str(cfg["start_date"]))
+        if cfg.get("start_date") else date(2018, 1, 1)
+    )
+    end = (
+        date.fromisoformat(str(cfg["end_date"]))
+        if cfg.get("end_date") else None
+    )
+
+    universe = await enumerate_t1_t2_stock_universe(pool)
+    log.info(
+        "ops.stage.historical_earnings_events_t1_t2.enumerated",
+        total=len(universe),
+    )
+    # T1+T2 stock-class typically ≈ 1500 tickers. Below 500 is a
+    # universe-enumeration regression worth flagging (e.g.,
+    # liquidity_tiers empty, or asset_class predicate inverted).
+    if len(universe) < 500:
+        log.warning(
+            "ops.stage.historical_earnings_events_t1_t2.universe_below_floor",
+            count=len(universe),
+            note="expected ~1500 stock-class T1+T2 tickers — check enumeration",
+        )
+    if limit:
+        universe = universe[:limit]
+        log.info(
+            "ops.stage.historical_earnings_events_t1_t2.limited", limit=limit,
+        )
+
+    db_log = DBLogHandler(
+        pool, engine=ENGINE_NAME, run_id=uuid.uuid4(),
+    )
+    result = await backfill_universe(
+        pool, db_log, universe,
+        start=start, end=end, resume=resume,
+    )
+    log.info("ops.stage.historical_earnings_events_t1_t2.done", **result)
+    return result
+
+
 async def _stage_coverage_fill(pool: asyncpg.Pool) -> dict[str, Any]:
     """Self-healing — backfill any tier ≤ 2 ticker missing a bar in the last
     7 days via Alpaca SIP feed. Runs after ``corporate_actions`` (so split
@@ -3589,6 +3693,16 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     ("daily_delisted_universe_check",
         lambda pool, cfg: (lambda: _stage_daily_delisted_universe_check(pool, cfg)),
         STAGE_TIMEOUT_SEC),
+    # historical_earnings_events_t1_t2 — Vector-unblock backfill (one-shot).
+    # Enumerates the ~1500 T1+T2 stock-class universe + per-ticker FMP
+    # /stable/earnings GETs, upserts EARNINGS_BEAT / EARNINGS_NO_BEAT rows
+    # into platform.earnings_events. Resumable via
+    # EARNINGS_BACKFILL_TICKER_DONE events. Heavy timeout: 1500 tickers ×
+    # ~0.6s/call ≈ 15 min wall time; 60-min HEAVY headroom keeps a slow
+    # FMP day inside one stage budget.
+    ("historical_earnings_events_t1_t2",
+        lambda pool, cfg: (lambda: _stage_historical_earnings_events_t1_t2(pool, cfg)),
+        HEAVY_STAGE_TIMEOUT_SEC),
 )
 KNOWN_STAGES: tuple[str, ...] = tuple(name for name, _, _ in _STAGE_SPECS)
 # Stages that are NOT part of the default daily ``cmd_update`` cycle —
@@ -3607,6 +3721,11 @@ _OFF_CYCLE_STAGES: frozenset[str] = frozenset({
     # backfill stabilises.
     "historical_delisted_universe",
     "daily_delisted_universe_check",
+    # Vector-unblock earnings-events one-shot — populates the T1+T2
+    # stock-class catalyst-event coverage. Not in the daily cadence;
+    # the weekly earnings_refresh stage keeps the tail fresh post-
+    # backfill.
+    "historical_earnings_events_t1_t2",
 })
 
 # Reasons (from INGESTION_FAILED.data->>'reason' or exception_type) that
@@ -5611,6 +5730,7 @@ _STAGE_PROVIDER_MAP: dict[str, str] = {
     "corporate_actions": "fmp",
     "fundamentals_refresh": "fmp",
     "earnings_refresh": "fmp",
+    "historical_earnings_events_t1_t2": "fmp",
     "sec_filings": "sec",
     "macro_indicators": "fred",
     "finnhub_insider_sentiment": "finnhub",
