@@ -228,6 +228,21 @@ async def _amain() -> int:
     narrowed_ranges: dict[str, tuple] = dict(original_ranges)
     narrowed_ranges["regime_filter_v1"] = (0, 0, f"choice:{PARTIAL_AXIS_CHOICE}")
     narrowed_ranges["signal_mode"] = (0, 0, "choice:price_z")
+    # NOTE on axis choice (operator-tunable): the candidate's regime
+    # (range × normal × expansion × neutral) decomposes to a SHA12 that
+    # is rare in history because trend=range requires
+    # |SPY 200d slope| < 50bp (~0.5%) — a flat-year condition that
+    # occurred only 17 times in 2018-2025 (per the snapshot SoT
+    # _SPY_SLOPE_BP_TRIGGER). Choosing `trend_only` for the partial axis
+    # is therefore NOT MORE PERMISSIVE than full-match — both match the
+    # same ~17 historical sessions. To unblock the engine to produce
+    # trade counts ≥30 for the gate, try a more-common axis:
+    #   - `vol_only`  matches vol=normal sessions (~50% of history)
+    #   - `macro_only` matches macro=expansion (~80% of history)
+    # These TEST A RELAXED VERSION of the LLM's hypothesis — useful for
+    # probing whether the LLM's claim "5d mean-reversion in current
+    # regime" holds when conditioning is loosened, but does NOT
+    # faithfully test the LLM's narrow conditioning. Operator picks.
     print(
         "\n[probe_reversion_partial_axis] narrowing "
         "reversion.backtest.LAB_TARGET.param_ranges:"
@@ -240,6 +255,7 @@ async def _amain() -> int:
     # resolver (it calls load_window_context(db_url=..., start=...,
     # end=..., universe=...)).
     original_loader = target.load_window_context
+    original_run_for_search = target.run_for_search
 
     async def _loader_with_regime(**kwargs):
         ctx = await original_loader(**kwargs)
@@ -256,8 +272,44 @@ async def _amain() -> int:
         ctx.regime_bundle = bundle
         return ctx
 
+    async def _run_for_search_with_regime(**kwargs):
+        """Mirror of the loader wrap for the chunked final-holdout replay
+        path (`ops.lab.run._run_final_holdout_chunked` calls `_runner_for`
+        which returns `LAB_TARGET.run_for_search` — NOT the loader; the
+        loader wrap above doesn't catch this path). Replicates
+        `reversion.backtest.run_for_search`'s body but attaches the
+        regime_bundle before calling `run_reversion_with_context`.
+
+        Fixes the chunked-replay missing-regime_bundle gap surfaced
+        2026-05-22 by the reversion partial-axis probe (the train-window
+        wrap worked but the held-back replay failed with
+        ``regime_filter_v1 is set but context.regime_bundle is None``).
+        """
+        from reversion.backtest import (
+            load_reversion_window_context, run_reversion_with_context,
+        )
+        ctx_kwargs = {
+            k: v for k, v in kwargs.items()
+            if k in ("db_url", "start", "end", "universe")
+        }
+        ctx = await load_reversion_window_context(**ctx_kwargs)
+        # Same bundle-load pattern as the loader wrap.
+        db_url = kwargs.get("db_url") or os.environ["DATABASE_URL"]
+        pool = await build_asyncpg_pool(db_url)
+        try:
+            bundle = await load_regime_bundle_from_pool(pool, ctx.start, ctx.end)
+        finally:
+            await pool.close()
+        ctx.regime_bundle = bundle
+        return run_reversion_with_context(
+            ctx,
+            overrides=kwargs.get("overrides"),
+            trade_log_path=kwargs.get("trade_log_path"),
+        )
+
     object.__setattr__(target, "param_ranges", narrowed_ranges)
     object.__setattr__(target, "load_window_context", _loader_with_regime)
+    object.__setattr__(target, "run_for_search", _run_for_search_with_regime)
     try:
         rc = await ops_lab_amain(_build_argv())
     finally:
@@ -265,6 +317,7 @@ async def _amain() -> int:
         # leaks into the in-tree state.
         object.__setattr__(target, "param_ranges", original_ranges)
         object.__setattr__(target, "load_window_context", original_loader)
+        object.__setattr__(target, "run_for_search", original_run_for_search)
         print(
             "[probe_reversion_partial_axis] restored "
             "reversion.backtest.LAB_TARGET.param_ranges:"
