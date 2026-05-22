@@ -228,6 +228,14 @@ def _patch_minimal_pipeline(
         return None
 
     monkeypatch.setattr(ops, "_self_heal_failed_stages", _noop_self_heal)
+    # Wave-2 cascades (D2/D3/D5/D13) — neutralised here so these
+    # coverage_collapse tests exercise the coverage-cascade in isolation.
+    # The Wave-2 cascade has its own regression suite in
+    # tests/test_stage_robustness_auto_cascade_wave2.py.
+    if hasattr(ops, "_auto_cascade_stage_robustness"):
+        monkeypatch.setattr(
+            ops, "_auto_cascade_stage_robustness", _noop_self_heal,
+        )
 
     monkeypatch.setattr(ops, "_stage_daily_bars", stub)
 

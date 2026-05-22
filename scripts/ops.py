@@ -3463,6 +3463,86 @@ _MONOTONE_CASCADE_MAP: dict[str, tuple[str, str, dict[str, Any]]] = {
 _MACRO_COMPLETENESS_CHECK: str = "macro_indicators_completeness"
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# Wave-2 deterministic self-heal cascade (D2 / D3 / D5 / D13) — see
+# docs/superpowers/specs/2026-05-21-deterministic-self-heal-coverage-
+# expansion-design.md §1 rows D2 D3 D5 D13 + §4 ANSWERED.
+# ─────────────────────────────────────────────────────────────────────────
+#
+# Discriminator-token sets (lowercased). Each set captures the exact
+# error-string shapes that mark the failure for one Wave-2 row. The
+# cascade dispatcher walks each FAILED/TIMEOUT stage's error string
+# AND its INGESTION_FAILED data.reason (when available) against these
+# sets, dispatching at most ONE Wave-2 cascade per failed stage — the
+# rows are mutually exclusive by construction (a timeout is not an
+# auth-401, a connection-drop is not a pool-exhaustion, etc.).
+#
+# Non-overlap with `_RETRYABLE_FAILURE_REASONS`: the generic transient
+# retry handles timeouts + network blips with the SAME stage config. The
+# Wave-2 cascades use a DIFFERENT recovery shape per row (chunked
+# force_refresh for D2, recycled pool for D13, etc.) — so Wave-2 fires
+# BEFORE `_self_heal_failed_stages` to claim the stage first, then the
+# transient retry only sees what we left FAILED.
+
+# D2 — timeout on a NON-chunked daily_bars invocation. The cascade
+# re-invokes with the chunked force_refresh path (PR #236 + PR #231
+# smart-feed) which has provably stayed under the 3600s ceiling on the
+# operator's full ~7300-ticker universe.
+_TIMEOUT_TOKENS: frozenset[str] = frozenset({
+    "timed out",        # _run_stage's own message: "timed out after Ns"
+    "timeout",
+})
+
+# D3 — connection-drop tokens. The operator's 2026-05-18..20 incidents
+# logged the asyncpg phrase "connection was closed in the middle of
+# operation" + a few sibling shapes from other drivers. Substring match,
+# case-insensitive.
+_CONNECTION_DROP_TOKENS: frozenset[str] = frozenset({
+    "connection was closed in the middle of operation",
+    "connection was closed",
+    "connectionreseterror",
+    "server disconnected",
+    "remote protocol error",
+})
+
+# D5 — provider 401 tokens. Matches HTTP 401 in a response body /
+# httpx-style error message; the cascade is per-stage (any stage can
+# fail with provider auth, not just daily_bars). We use a permissive
+# substring set because providers stringify 401s in many shapes:
+#   "401 Unauthorized"
+#   "HTTP 401"
+#   "status_code=401"
+#   "Client error '401 Unauthorized'..."
+_AUTH_401_TOKENS: frozenset[str] = frozenset({
+    " 401 ",
+    "401 unauthorized",
+    "http 401",
+    "status_code=401",
+    "status code 401",
+})
+
+# D13 — Postgres pool / connection exhaustion tokens. The asyncpg
+# exception class names appear in `str(exc)` when their __repr__ is
+# baked into the error message; the libpq strings appear when the
+# server itself rejects.
+_POOL_EXHAUSTION_TOKENS: frozenset[str] = frozenset({
+    "toomanyconnectionserror",
+    "postgresconnectionerror",
+    "pooltimeout",
+    "connection slots are reserved",
+    "remaining connection slots are reserved",
+    "too many connections",
+})
+
+
+def _matches_any(error_text: str | None, tokens: frozenset[str]) -> bool:
+    """Lower-case substring match against a token set. Safe on None."""
+    if not error_text:
+        return False
+    err = error_text.lower()
+    return any(tok in err for tok in tokens)
+
+
 # Live SIP-availability probe. Single GET against the Alpaca data
 # endpoint with feed=sip; bounded 10s timeout, no retry, no cache. The
 # probe is cheap (one request) and the cascade is one-shot, so we re-
@@ -3767,6 +3847,16 @@ async def cmd_update(
     # expansion-design.md.
     if not dry_run:
         await _auto_cascade_validation_failures(
+            summary, pool, daily_bars_config, log=log, db_log=db_log,
+        )
+
+    # Wave-2 deterministic self-heal cascade (D2 / D3 / D5 / D13) — fires
+    # BEFORE the generic transient retry below so the Wave-2 recovery
+    # shapes (chunked force_refresh, recycled pool, provider-auth retry-
+    # then-skip, orchestrator-level connection-drop re-invoke) claim
+    # their failures first. See ``_auto_cascade_stage_robustness``.
+    if not dry_run:
+        await _auto_cascade_stage_robustness(
             summary, pool, daily_bars_config, log=log, db_log=db_log,
         )
 
@@ -4445,6 +4535,661 @@ async def _invoke_cascade_stage(
         "error": result.error,
         "duration_ms": result.duration_ms,
     }
+
+
+async def _auto_cascade_stage_robustness(
+    summary: UpdateSummary,
+    pool: asyncpg.Pool,
+    daily_bars_config: dict[str, Any],
+    *,
+    log: structlog.stdlib.BoundLogger,
+    db_log,
+) -> None:
+    """Wave-2 deterministic self-heal — D2 / D3 / D5 / D13.
+
+    Spec: ``docs/superpowers/specs/2026-05-21-deterministic-self-heal-
+    coverage-expansion-design.md`` §1 rows D2 D3 D5 D13 + §4 ANSWERED.
+
+    Iterates the summary's FAILED/TIMEOUT stage entries and dispatches at
+    most ONE Wave-2 cascade per entry (the rows are mutually exclusive
+    by detection — a timeout is not an auth-401, etc.). The cascade fires
+    BEFORE ``_self_heal_failed_stages`` so each Wave-2 row claims its
+    failure with the row-specific recovery shape, not the generic
+    same-config retry. Each cascade is ONE-SHOT: a re-fail on the
+    cascade attempt does NOT loop — the stage stays FAILED and the
+    operator-surfacing event is emitted.
+
+    Rows + events:
+
+    * **D2** ``daily_bars`` stage TIMEOUT on a non-chunked invocation
+      → re-invoke with ``force_refresh=True universe=active feed=sip
+      end_offset_days=1`` (the chunked path from PR #236). Event:
+      ``INGESTION_AUTO_RECOVERED_TIMEOUT``.
+    * **D3** any stage with "connection was closed in the middle of
+      operation" (or sibling driver-drop shapes) → re-invoke the same
+      stage ONCE with the same config. Event:
+      ``INGESTION_AUTO_RECOVERED_CONNDROP``. Per-chunk retry (PR #163)
+      already handles in-flight drops; this row catches the
+      orchestrator-level drop where the whole stage tipped over.
+    * **D5** any stage with HTTP 401 in the error string → retry the
+      stage ONCE with the same config (transient creds-cycle
+      assumption). On the second 401 we emit
+      ``PROVIDER_AUTH_ESCALATED`` (FAILED-shape) + leave the stage
+      FAILED but the daemon stays alive (key §4-Q2 invariant: the
+      daemon NEVER aborts on a 401; operator rotates creds on their own
+      cadence). Event: ``PROVIDER_AUTH_ESCALATED``.
+    * **D13** any stage with asyncpg pool-exhaustion tokens
+      (``TooManyConnectionsError`` / ``PostgresConnectionError`` /
+      ``PoolTimeout`` / "connection slots are reserved") → recycle the
+      daemon's LOCAL pool (close + rebuild via
+      ``tpcore.db.recycle_asyncpg_pool``) + retry the stage ONCE
+      against the fresh pool. Sibling-process pools (engine_service,
+      lane-service) are NOT touched — that scope-down is documented
+      in the helper's docstring. Event: ``POOL_CIRCUIT_BREAKER_TRIPPED``.
+
+    Pin: unknown error shapes (random RuntimeError, schema-drift, etc.)
+    do NOT trigger any Wave-2 cascade and are passed through to
+    ``_self_heal_failed_stages`` / the operator-facing failure path
+    unchanged.
+    """
+    spec_by_name = {n: (n, fb, to) for n, fb, to in _STAGE_SPECS}
+    for i, result in enumerate(summary.stages):
+        if result.status not in {"FAILED", "TIMEOUT"}:
+            continue
+        if result.name not in spec_by_name:
+            continue
+        err_text = result.error or ""
+        # Order matters: pool exhaustion + connection drop must precede
+        # the generic timeout match (a pool-acquire timeout can stringify
+        # with "timeout" alongside "PoolTimeout" — we want D13 to claim
+        # it, not D2). Auth-401 is independent.
+        if _matches_any(err_text, _POOL_EXHAUSTION_TOKENS):
+            await _cascade_d13_pool_exhaustion(
+                summary, i, result, daily_bars_config, spec_by_name,
+                pool=pool, log=log, db_log=db_log,
+            )
+            continue
+        if _matches_any(err_text, _CONNECTION_DROP_TOKENS):
+            await _cascade_d3_connection_drop(
+                summary, i, result, daily_bars_config, spec_by_name,
+                pool=pool, log=log, db_log=db_log,
+            )
+            continue
+        if _matches_any(err_text, _AUTH_401_TOKENS):
+            await _cascade_d5_provider_auth(
+                summary, i, result, daily_bars_config, spec_by_name,
+                pool=pool, log=log, db_log=db_log,
+            )
+            continue
+        # D2 — timeout cascade is daily_bars-specific (chunked
+        # force_refresh is the recovery shape only that stage supports).
+        # Other stages with a generic timeout fall through to
+        # `_self_heal_failed_stages` which retries with the same config.
+        if (
+            result.name == "daily_bars"
+            and result.status == "TIMEOUT"
+            and _matches_any(err_text, _TIMEOUT_TOKENS)
+            and not bool(daily_bars_config.get("force_refresh", False))
+        ):
+            await _cascade_d2_daily_bars_timeout(
+                summary, i, result, daily_bars_config, spec_by_name,
+                pool=pool, log=log, db_log=db_log,
+            )
+            continue
+
+
+async def _cascade_d2_daily_bars_timeout(
+    summary: UpdateSummary,
+    idx: int,
+    result: StageResult,
+    daily_bars_config: dict[str, Any],
+    spec_by_name: dict[str, tuple],
+    *,
+    pool: asyncpg.Pool,
+    log: structlog.stdlib.BoundLogger,
+    db_log,
+) -> None:
+    """D2 — daily_bars non-chunked timeout → chunked force_refresh re-invoke.
+
+    Mirrors the operator-verified manual recovery: ``--stage daily_bars
+    --param force_refresh=true --param universe=active --param feed=sip
+    --param end_offset_days=1``. The chunked path inside ``_stage_daily_bars``
+    (PR #236) splits the universe into 500-ticker slices so the whole
+    invocation stays under the 3600s stage-timeout ceiling.
+    """
+    name, factory_builder, timeout = spec_by_name[result.name]
+    first_error = (result.error or "")[:240]
+    await db_log.log(
+        "INGESTION_AUTO_RECOVERY_START",
+        "D2 cascade: daily_bars timeout → chunked force_refresh feed=sip",
+        severity="INFO",
+        data={
+            "stage": name,
+            "cascade_mode": "force_refresh_chunked",
+            "trigger": "timeout",
+            "first_error": first_error,
+        },
+    )
+    log.info(
+        "ops.auto_cascade.d2_timeout.start",
+        stage=name, first_error=first_error,
+    )
+    cascade_config = {
+        **daily_bars_config,
+        "force_refresh": True,
+        "universe": "active",
+        "feed": "sip",
+        "end_offset_days": int(daily_bars_config.get("end_offset_days", 1)),
+    }
+    cascade_result = await _run_stage(
+        name,
+        factory_builder(pool, cascade_config),
+        log=log,
+        db_log=db_log,
+        dry_run=False,
+        timeout=timeout,
+    )
+    cascade_result.detail = {
+        **(cascade_result.detail or {}),
+        "cascade": True,
+        "cascade_mode": "force_refresh_chunked",
+        "trigger": "timeout",
+        "first_error": first_error,
+    }
+    summary.stages[idx] = cascade_result
+    if cascade_result.status == "OK":
+        await db_log.log(
+            "INGESTION_AUTO_RECOVERED_TIMEOUT",
+            (
+                "D2 cascade recovered: daily_bars timeout → "
+                "chunked force_refresh feed=sip OK"
+            ),
+            severity="INFO",
+            data={
+                "stage": name,
+                "cascade_mode": "force_refresh_chunked",
+                "first_error": first_error,
+                "duration_ms": cascade_result.duration_ms,
+                **(cascade_result.detail or {}),
+            },
+        )
+        log.info(
+            "ops.auto_cascade.d2_timeout.recovered",
+            stage=name, duration_ms=cascade_result.duration_ms,
+        )
+    else:
+        # One-shot: the cascade itself failed. Leave it FAILED; do NOT
+        # loop. The operator-facing INGESTION_FAILED row from _run_stage
+        # already landed; we just add the cascade-failed escalation.
+        await db_log.log(
+            "INGESTION_AUTO_RECOVERY_FAILED",
+            (
+                f"D2 cascade FAILED: daily_bars timeout → chunked "
+                f"force_refresh did not recover "
+                f"(status={cascade_result.status})"
+            ),
+            severity="ERROR",
+            data={
+                "stage": name,
+                "cascade_mode": "force_refresh_chunked",
+                "first_error": first_error,
+                "cascade_status": cascade_result.status,
+                "cascade_error": (cascade_result.error or "")[:240],
+                "duration_ms": cascade_result.duration_ms,
+            },
+        )
+        log.error(
+            "ops.auto_cascade.d2_timeout.failed",
+            stage=name, cascade_status=cascade_result.status,
+            cascade_error=cascade_result.error,
+        )
+
+
+async def _cascade_d3_connection_drop(
+    summary: UpdateSummary,
+    idx: int,
+    result: StageResult,
+    daily_bars_config: dict[str, Any],
+    spec_by_name: dict[str, tuple],
+    *,
+    pool: asyncpg.Pool,
+    log: structlog.stdlib.BoundLogger,
+    db_log,
+) -> None:
+    """D3 — orchestrator-level connection-drop re-invoke (one-shot).
+
+    Per-chunk drops are already covered by PR #163's transient-retry
+    inside the data adapters; this row catches the case where the WHOLE
+    stage's outermost connection tipped over (e.g. asyncpg-level pool
+    disconnect mid-batch on a 30-min Lab statement). One re-invoke with
+    the same config; if THAT also drops, the stage stays FAILED and
+    bubbles to the existing INGESTION_FAILED path — no looping.
+    """
+    name, factory_builder, timeout = spec_by_name[result.name]
+    first_error = (result.error or "")[:240]
+    await db_log.log(
+        "INGESTION_AUTO_RECOVERY_START",
+        f"D3 cascade: {name} connection-drop → one-shot re-invoke",
+        severity="INFO",
+        data={
+            "stage": name,
+            "cascade_mode": "conndrop_reinvoke",
+            "trigger": "connection_drop",
+            "first_error": first_error,
+        },
+    )
+    log.info(
+        "ops.auto_cascade.d3_conndrop.start",
+        stage=name, first_error=first_error,
+    )
+    cascade_result = await _run_stage(
+        name,
+        factory_builder(pool, daily_bars_config),
+        log=log,
+        db_log=db_log,
+        dry_run=False,
+        timeout=timeout,
+    )
+    cascade_result.detail = {
+        **(cascade_result.detail or {}),
+        "cascade": True,
+        "cascade_mode": "conndrop_reinvoke",
+        "trigger": "connection_drop",
+        "first_error": first_error,
+    }
+    summary.stages[idx] = cascade_result
+    if cascade_result.status == "OK":
+        await db_log.log(
+            "INGESTION_AUTO_RECOVERED_CONNDROP",
+            f"D3 cascade recovered: {name} re-invoke OK after conn-drop",
+            severity="INFO",
+            data={
+                "stage": name,
+                "cascade_mode": "conndrop_reinvoke",
+                "first_error": first_error,
+                "duration_ms": cascade_result.duration_ms,
+                **(cascade_result.detail or {}),
+            },
+        )
+        log.info(
+            "ops.auto_cascade.d3_conndrop.recovered",
+            stage=name, duration_ms=cascade_result.duration_ms,
+        )
+    else:
+        # Cascade re-fail: do NOT loop. The stage stays FAILED; the
+        # INGESTION_FAILED row from _run_stage already landed.
+        await db_log.log(
+            "INGESTION_AUTO_RECOVERY_FAILED",
+            (
+                f"D3 cascade FAILED: {name} conndrop re-invoke did not "
+                f"recover (status={cascade_result.status})"
+            ),
+            severity="ERROR",
+            data={
+                "stage": name,
+                "cascade_mode": "conndrop_reinvoke",
+                "first_error": first_error,
+                "cascade_status": cascade_result.status,
+                "cascade_error": (cascade_result.error or "")[:240],
+                "duration_ms": cascade_result.duration_ms,
+            },
+        )
+        log.error(
+            "ops.auto_cascade.d3_conndrop.failed",
+            stage=name, cascade_status=cascade_result.status,
+            cascade_error=cascade_result.error,
+        )
+
+
+async def _cascade_d5_provider_auth(
+    summary: UpdateSummary,
+    idx: int,
+    result: StageResult,
+    daily_bars_config: dict[str, Any],
+    spec_by_name: dict[str, tuple],
+    *,
+    pool: asyncpg.Pool,
+    log: structlog.stdlib.BoundLogger,
+    db_log,
+) -> None:
+    """D5 — provider 401: retry-once, then escalate-but-don't-abort.
+
+    Per spec §4 Q2 ANSWERED: daemon STAYS ALIVE. One retry covers the
+    transient creds-cycle case (provider rotated a key mid-rate-limit-
+    cycle; the next request would succeed). A second 401 confirms the
+    creds are bad and we emit ``PROVIDER_AUTH_ESCALATED`` so the
+    operator sees the escalation in ``application_log`` and rotates on
+    their own cadence — NO operator-blocking task, NO daemon abort.
+    The stage stays FAILED in the summary; subsequent stages keep running.
+    """
+    name, factory_builder, timeout = spec_by_name[result.name]
+    first_error = (result.error or "")[:240]
+    # Identify the provider best-effort from the stage name. Used in
+    # the escalation event so the operator's rotate runbook can target
+    # the right vendor.
+    provider = _infer_provider_from_stage(name)
+    await db_log.log(
+        "INGESTION_AUTO_RECOVERY_START",
+        f"D5 cascade: {name} 401 → one-shot retry (provider={provider})",
+        severity="INFO",
+        data={
+            "stage": name,
+            "cascade_mode": "auth_retry",
+            "trigger": "auth_401",
+            "provider": provider,
+            "first_error": first_error,
+        },
+    )
+    log.info(
+        "ops.auto_cascade.d5_auth.start",
+        stage=name, provider=provider, first_error=first_error,
+    )
+    retry_result = await _run_stage(
+        name,
+        factory_builder(pool, daily_bars_config),
+        log=log,
+        db_log=db_log,
+        dry_run=False,
+        timeout=timeout,
+    )
+    retry_result.detail = {
+        **(retry_result.detail or {}),
+        "cascade": True,
+        "cascade_mode": "auth_retry",
+        "trigger": "auth_401",
+        "provider": provider,
+        "first_error": first_error,
+    }
+    summary.stages[idx] = retry_result
+    retry_err_text = retry_result.error or ""
+    second_401 = (
+        retry_result.status != "OK"
+        and _matches_any(retry_err_text, _AUTH_401_TOKENS)
+    )
+    if retry_result.status == "OK":
+        await db_log.log(
+            "INGESTION_AUTO_RECOVERED_AUTH",
+            f"D5 cascade recovered: {name} 401 retry OK",
+            severity="INFO",
+            data={
+                "stage": name,
+                "cascade_mode": "auth_retry",
+                "provider": provider,
+                "first_error": first_error,
+                "duration_ms": retry_result.duration_ms,
+            },
+        )
+        log.info(
+            "ops.auto_cascade.d5_auth.recovered",
+            stage=name, provider=provider,
+            duration_ms=retry_result.duration_ms,
+        )
+    elif second_401:
+        # Confirmed bad creds — emit the operator-surfacing escalation.
+        # The daemon stays alive; subsequent stages still run.
+        # The stage's failed-URL snippet (or its first line) is carried
+        # for the operator's rotate runbook.
+        failed_url_snippet = _extract_failed_url_snippet(retry_err_text)
+        await db_log.log(
+            "PROVIDER_AUTH_ESCALATED",
+            (
+                f"D5 cascade ESCALATED: {name} second 401 on retry "
+                f"(provider={provider}) — operator must rotate creds; "
+                f"daemon CONTINUING"
+            ),
+            severity="ERROR",
+            data={
+                "stage": name,
+                "provider": provider,
+                "first_error": first_error,
+                "retry_error": retry_err_text[:240],
+                "failed_url_snippet": failed_url_snippet,
+                "cascade_mode": "auth_retry",
+                "daemon_continuing": True,
+            },
+        )
+        log.error(
+            "ops.auto_cascade.d5_auth.escalated",
+            stage=name, provider=provider,
+            retry_error=retry_err_text,
+        )
+    else:
+        # Retry failed with a NON-401 error — different failure mode on
+        # the retry. The stage stays FAILED with the cascade annotation;
+        # other Wave-2 / self-heal stages will see the new error shape
+        # on their own pass (we only ran the auth-retry path).
+        await db_log.log(
+            "INGESTION_AUTO_RECOVERY_FAILED",
+            (
+                f"D5 cascade: {name} retry FAILED with non-401 error — "
+                f"NOT escalated as auth"
+            ),
+            severity="ERROR",
+            data={
+                "stage": name,
+                "cascade_mode": "auth_retry",
+                "provider": provider,
+                "first_error": first_error,
+                "retry_status": retry_result.status,
+                "retry_error": retry_err_text[:240],
+            },
+        )
+        log.warning(
+            "ops.auto_cascade.d5_auth.retry_other_error",
+            stage=name, provider=provider,
+            retry_error=retry_err_text,
+        )
+
+
+async def _cascade_d13_pool_exhaustion(
+    summary: UpdateSummary,
+    idx: int,
+    result: StageResult,
+    daily_bars_config: dict[str, Any],
+    spec_by_name: dict[str, tuple],
+    *,
+    pool: asyncpg.Pool,
+    log: structlog.stdlib.BoundLogger,
+    db_log,
+) -> None:
+    """D13 — pool exhaustion: close+reopen LOCAL pool + retry stage once.
+
+    Scope-down per spec: this resets ONLY the daemon's local pool. Sibling
+    processes (engine_service, lane-service, llm_triage_service) hold their
+    own pools — those are NOT touched. A cross-process pool reset would
+    need IPC fencing + graceful drain semantics that are out of scope for
+    a single-row Wave-2 cascade. The cascade emits
+    ``POOL_CIRCUIT_BREAKER_TRIPPED`` so the operator can see if the
+    exhaustion was a daemon-local burst (probably benign — sticky cleanup)
+    vs. a system-wide capacity wall (needs Supabase quota investigation).
+
+    Implementation: ``recycle_asyncpg_pool`` builds a FRESH pool with the
+    same shape against DATABASE_URL, closes the old one. The stage-retry
+    runs against the fresh pool. The caller's reference to the original
+    pool is unchanged (asyncpg.Pool isn't reassignable from inside a
+    helper); the old pool stays closed in the background. Subsequent
+    stages in the *same* cmd_update cycle continue to use the original
+    pool reference — closed. THAT IS THE LIMIT of this row's blast radius:
+    we trade one stage's recovery against the rest of the cycle's
+    likelihood of immediately hitting the same exhaustion on the closed
+    pool reference (which will surface as a fresh `pool is closed` error
+    and itself be handled). The next cmd_update cycle (`amain`) builds a
+    fresh pool from scratch so the limit is bounded to the rest of THIS
+    cycle.
+
+    The cascade is best-effort: any exception inside the recycle/retry
+    is caught and logged so the cascade NEVER raises into the daemon
+    loop (matching the `_auto_cascade_coverage_collapse` invariant).
+    """
+    name, factory_builder, timeout = spec_by_name[result.name]
+    first_error = (result.error or "")[:240]
+    await db_log.log(
+        "POOL_CIRCUIT_BREAKER_TRIPPED",
+        (
+            f"D13 cascade: {name} pool exhaustion → recycle LOCAL pool + "
+            f"retry stage once (sibling processes untouched)"
+        ),
+        severity="WARNING",
+        data={
+            "stage": name,
+            "cascade_mode": "pool_recycle",
+            "trigger": "pool_exhaustion",
+            "first_error": first_error,
+            "scope": "daemon_local_pool_only",
+        },
+    )
+    log.warning(
+        "ops.auto_cascade.d13_pool.tripped",
+        stage=name, first_error=first_error,
+    )
+
+    fresh_pool: asyncpg.Pool | None = None
+    try:
+        from tpcore.db import recycle_asyncpg_pool
+        db_url = os.environ.get("DATABASE_URL")
+        if not db_url:
+            log.error(
+                "ops.auto_cascade.d13_pool.no_database_url",
+                stage=name,
+            )
+            return
+        fresh_pool = await recycle_asyncpg_pool(pool, db_url, max_size=4)
+    except Exception as exc:  # noqa: BLE001 — recycle must never crash daemon
+        log.error(
+            "ops.auto_cascade.d13_pool.recycle_failed",
+            stage=name, error=str(exc),
+        )
+        await db_log.log(
+            "INGESTION_AUTO_RECOVERY_FAILED",
+            f"D13 cascade: pool recycle itself failed ({type(exc).__name__})",
+            severity="ERROR",
+            data={
+                "stage": name,
+                "cascade_mode": "pool_recycle",
+                "first_error": first_error,
+                "recycle_error": str(exc)[:240],
+            },
+        )
+        return
+
+    try:
+        retry_result = await _run_stage(
+            name,
+            factory_builder(fresh_pool, daily_bars_config),
+            log=log,
+            db_log=db_log,
+            dry_run=False,
+            timeout=timeout,
+        )
+    except Exception as exc:  # noqa: BLE001 — never crash on cascade retry
+        log.error(
+            "ops.auto_cascade.d13_pool.retry_exception",
+            stage=name, error=str(exc),
+        )
+        # Close the fresh pool best-effort before returning.
+        try:
+            await fresh_pool.close()
+        except Exception:  # noqa: BLE001
+            pass
+        return
+
+    retry_result.detail = {
+        **(retry_result.detail or {}),
+        "cascade": True,
+        "cascade_mode": "pool_recycle",
+        "trigger": "pool_exhaustion",
+        "first_error": first_error,
+    }
+    summary.stages[idx] = retry_result
+
+    # The fresh pool only holds queries from THIS stage retry. The
+    # rest of the cycle uses the original (now-closed) pool reference.
+    # Close the fresh pool so we don't leak connection budget; the next
+    # cmd_update cycle's amain builds a brand-new pool from scratch.
+    try:
+        await fresh_pool.close()
+    except Exception:  # noqa: BLE001
+        pass
+
+    if retry_result.status == "OK":
+        await db_log.log(
+            "INGESTION_AUTO_RECOVERED_POOL",
+            f"D13 cascade recovered: {name} OK against recycled pool",
+            severity="INFO",
+            data={
+                "stage": name,
+                "cascade_mode": "pool_recycle",
+                "first_error": first_error,
+                "duration_ms": retry_result.duration_ms,
+            },
+        )
+        log.info(
+            "ops.auto_cascade.d13_pool.recovered",
+            stage=name, duration_ms=retry_result.duration_ms,
+        )
+    else:
+        await db_log.log(
+            "INGESTION_AUTO_RECOVERY_FAILED",
+            (
+                f"D13 cascade FAILED: {name} retry against recycled pool "
+                f"did not recover (status={retry_result.status})"
+            ),
+            severity="ERROR",
+            data={
+                "stage": name,
+                "cascade_mode": "pool_recycle",
+                "first_error": first_error,
+                "retry_status": retry_result.status,
+                "retry_error": (retry_result.error or "")[:240],
+            },
+        )
+        log.error(
+            "ops.auto_cascade.d13_pool.retry_failed",
+            stage=name, retry_status=retry_result.status,
+            retry_error=retry_result.error,
+        )
+
+
+# Best-effort mapping from a stage name → its primary external provider
+# string. Used in the D5 PROVIDER_AUTH_ESCALATED event so the operator's
+# rotate-credentials runbook knows which vendor to target. An unmapped
+# stage returns "unknown" — the event still lands.
+_STAGE_PROVIDER_MAP: dict[str, str] = {
+    "daily_bars": "alpaca",
+    "corporate_actions": "fmp",
+    "fundamentals_refresh": "fmp",
+    "earnings_refresh": "fmp",
+    "sec_filings": "sec",
+    "macro_indicators": "fred",
+    "finnhub_insider_sentiment": "finnhub",
+    "apewisdom_social_sentiment": "apewisdom",
+    "fear_greed": "cnn",
+    "aaii_sentiment": "aaii",
+    "finra_short_interest": "finra",
+    "iborrowdesk_borrow_rates": "iborrowdesk",
+    "greeks_max_pain": "alpaca",
+    "classify_tickers": "fmp",
+    "tier_refresh": "alpaca",
+}
+
+
+def _infer_provider_from_stage(stage_name: str) -> str:
+    """Map stage_name → external provider (best-effort, defaults to 'unknown')."""
+    return _STAGE_PROVIDER_MAP.get(stage_name, "unknown")
+
+
+def _extract_failed_url_snippet(error_text: str) -> str:
+    """Pull the first URL-shaped token out of an error string, bounded.
+
+    Used in PROVIDER_AUTH_ESCALATED so the operator can confirm WHICH
+    endpoint 401'd (e.g. paper-vs-live, data-vs-trading) and rotate the
+    right key. Returns an empty string if no URL is found.
+    """
+    import re
+    if not error_text:
+        return ""
+    m = re.search(r"https?://[^\s'\"<>]+", error_text)
+    return m.group(0)[:200] if m else ""
 
 
 async def _self_heal_failed_stages(
