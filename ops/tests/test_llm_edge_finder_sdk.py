@@ -477,5 +477,98 @@ async def test_sdk_integrates_with_run_finder() -> None:
     assert run.proposed_spec_count == 0
 
 
+# ───────────────────────── archive_emission_to_memstore ─────────────────────────
+
+
+class _FakeMemory:
+    def __init__(self, memory_id: str = "mem_test_001") -> None:
+        self.id = memory_id
+
+
+class _FakeMemoriesService:
+    def __init__(self, capture: list[dict[str, Any]] | None = None,
+                 raise_exc: Exception | None = None) -> None:
+        self._capture = capture if capture is not None else []
+        self._raise = raise_exc
+
+    async def create(self, **kwargs: Any) -> _FakeMemory:
+        self._capture.append(kwargs)
+        if self._raise is not None:
+            raise self._raise
+        return _FakeMemory()
+
+
+class _FakeMemoryStoresWithMemories:
+    def __init__(self, memories: _FakeMemoriesService) -> None:
+        self.memories = memories
+
+
+class _FakeBetaWithMemoryStores:
+    def __init__(self, sessions: Any, memory_stores: _FakeMemoryStoresWithMemories) -> None:
+        self.sessions = sessions
+        self.memory_stores = memory_stores
+
+
+@pytest.mark.asyncio
+async def test_archive_emission_to_memstore_writes_prior_emissions_path() -> None:
+    """archive_emission_to_memstore writes /prior-emissions/<candidate>.md."""
+    from ops.llm_edge_finder_sdk import archive_emission_to_memstore
+
+    capture: list[dict[str, Any]] = []
+    memories = _FakeMemoriesService(capture=capture)
+
+    class _Client:
+        def __init__(self) -> None:
+            self.beta = _FakeBetaWithMemoryStores(
+                sessions=None,
+                memory_stores=_FakeMemoryStoresWithMemories(memories),
+            )
+
+    spec_dict = {
+        "candidate_name": "test_cand_xyz",
+        "target_engine": "catalyst",
+        "intent": "fold_existing",
+        "primary_hypothesis": "test hypothesis text",
+        "rationale": "test rationale",
+        "regime_tuple_id": "abc123",
+        "cost_assumption_bps_roundtrip": 8,
+        "falsification_criterion": "test falsification",
+    }
+    memory_id = await archive_emission_to_memstore(
+        spec_dict, run_id="test-run-id-001", session_date="2026-05-22",
+        client=_Client(),  # type: ignore[arg-type]
+    )
+    assert memory_id == "mem_test_001"
+    assert len(capture) == 1
+    assert capture[0]["path"] == "/prior-emissions/test_cand_xyz.md"
+    content = capture[0]["content"]
+    assert "# test_cand_xyz" in content
+    assert "test hypothesis text" in content
+    assert "test rationale" in content
+    assert "test falsification" in content
+
+
+@pytest.mark.asyncio
+async def test_archive_emission_to_memstore_warns_on_failure() -> None:
+    """Memstore-write failure is logged + None-returned (NEVER raises)."""
+    from ops.llm_edge_finder_sdk import archive_emission_to_memstore
+
+    memories = _FakeMemoriesService(raise_exc=RuntimeError("simulated failure"))
+
+    class _Client:
+        def __init__(self) -> None:
+            self.beta = _FakeBetaWithMemoryStores(
+                sessions=None,
+                memory_stores=_FakeMemoryStoresWithMemories(memories),
+            )
+
+    memory_id = await archive_emission_to_memstore(
+        {"candidate_name": "x", "target_engine": "y"},
+        run_id="rid", session_date="2026-05-22",
+        client=_Client(),  # type: ignore[arg-type]
+    )
+    assert memory_id is None
+
+
 if TYPE_CHECKING:  # pragma: no cover
     pass

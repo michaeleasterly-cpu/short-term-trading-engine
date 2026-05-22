@@ -432,6 +432,81 @@ def _strip_markdown_fences_and_prose(text: str) -> str:
     return text
 
 
+async def archive_emission_to_memstore(
+    spec_dict: dict[str, Any],
+    *,
+    run_id: str,
+    session_date: str,
+    memstore_id: str = EDGE_FINDER_MEMSTORE_ID,
+    client: AsyncAnthropic | None = None,
+) -> str | None:
+    """Write a finder emission to the memstore so future runs read it as a prior.
+
+    The memstore's ``/prior-emissions/<candidate_name>.md`` namespace is
+    APPLICATION-MANAGED per persona §11.4. This helper is the application
+    side of that contract — called from ``ops.llm_edge_finder.run_finder``
+    after ``record_finder_emission`` lands the application_log row.
+
+    Args:
+        spec_dict: the emitted ProposedSpec, serialised via
+            ``ProposedSpec.model_dump(mode='json')``.
+        run_id: the finder run UUID (for cross-reference).
+        session_date: ISO-format snapshot session date (e.g. '2026-05-22').
+        memstore_id: defaults to the finder memstore.
+        client: optional pre-constructed client (tests inject a fake).
+
+    Returns:
+        The memory ID (``mem_...``) if successfully written; ``None`` on
+        failure (logged warning, NEVER raises — emission already landed
+        in application_log, this is best-effort cross-run memory).
+    """
+    candidate_name = spec_dict.get("candidate_name", "unnamed")
+    target_engine = spec_dict.get("target_engine", "?")
+    primary_hypothesis = spec_dict.get("primary_hypothesis", "(no hypothesis)")
+    rationale = spec_dict.get("rationale", "(no rationale)")
+    regime_tuple_id = spec_dict.get("regime_tuple_id", "?")
+    falsification = spec_dict.get("falsification_criterion", "(no falsification)")
+    cost_bps = spec_dict.get("cost_assumption_bps_roundtrip", "?")
+    intent = spec_dict.get("intent", "?")
+
+    content = (
+        f"# {candidate_name}\n\n"
+        f"**Emitted:** {session_date} via run {run_id}\n"
+        f"**Target engine:** {target_engine}\n"
+        f"**Intent:** {intent}\n"
+        f"**Regime:** {regime_tuple_id}\n"
+        f"**Cost assumption:** {cost_bps} bps round-trip\n\n"
+        f"## Primary hypothesis\n\n{primary_hypothesis}\n\n"
+        f"## Rationale\n\n{rationale}\n\n"
+        f"## Falsification criterion\n\n{falsification}\n"
+    )
+    path = f"/prior-emissions/{candidate_name}.md"
+    _client = client or AsyncAnthropic()
+    try:
+        memory = await _client.beta.memory_stores.memories.create(
+            memory_store_id=memstore_id,
+            content=content,
+            path=path,
+            betas=[MANAGED_AGENTS_BETA],
+        )
+        log.info(
+            "llm_edge_finder_sdk.emission_archived",
+            run_id=run_id,
+            candidate=candidate_name,
+            memory_id=memory.id,
+            path=path,
+        )
+        return memory.id
+    except Exception as exc:  # noqa: BLE001 — best-effort; emission already in application_log
+        log.warning(
+            "llm_edge_finder_sdk.emission_archive_failed",
+            run_id=run_id,
+            candidate=candidate_name,
+            error=str(exc)[:200],
+        )
+        return None
+
+
 __all__ = [
     "ANTHROPIC_MAX_TOKENS",
     "ANTHROPIC_MODEL",
@@ -439,5 +514,6 @@ __all__ = [
     "AuthSkip",
     "MEMSTORE_ATTACH_INSTRUCTIONS",
     "MEMSTORE_MOUNT_PATH",
+    "archive_emission_to_memstore",
     "make_sdk_llm_callable",
 ]

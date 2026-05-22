@@ -151,12 +151,34 @@ async def run_finder(
     # Spec §10.6.b gate-pilot criterion is "operator judges structural
     # distinctness of emissions" — operator needs the spec content visible.
     for i, spec in enumerate(capped_specs):
+        spec_dict = spec.model_dump(mode="json")
         await record_finder_emission(
             pool,
             run_id=str(run_id),
             spec_index=i,
-            spec_dict=spec.model_dump(mode="json"),
+            spec_dict=spec_dict,
         )
+        # Application-managed memstore archival (per persona §11.4) — the
+        # next finder run reads /prior-emissions/<candidate>.md to avoid
+        # re-emitting structural neighbours. Best-effort; failure is
+        # warning-only because the application_log row already landed.
+        # Skipped in the smoke-mode path (llm_callable is None) because
+        # there's no Anthropic API binding to write through.
+        if llm_callable is not None:
+            try:
+                from ops.llm_edge_finder_sdk import archive_emission_to_memstore
+                await archive_emission_to_memstore(
+                    spec_dict,
+                    run_id=str(run_id),
+                    session_date=str(session_date),
+                )
+            except Exception as exc:  # noqa: BLE001 - best effort
+                log.warning(
+                    "finder.run.memstore_archive_failed",
+                    run_id=str(run_id),
+                    candidate=spec_dict.get("candidate_name", "?"),
+                    error=str(exc)[:200],
+                )
     log.info(
         "finder.run.complete",
         run_id=str(run_id),
