@@ -88,6 +88,10 @@ EXPECTED_INDICATORS: tuple[str, ...] = (
     "industrial_production",
     "sahm_rule",
     "cfnai_ma3",
+    # Chicago Fed National Financial Conditions Index — weekly composite of
+    # credit + vol + liquidity. Added 2026-05-23 per financial-expert
+    # recommendation. Used by sentinel + carver as a single regime gate.
+    "nfci",
     # ── Philadelphia Fed state coincident indices — 50 USPS states
     # (substrate for the derived sos_state_diffusion below).
     "phci_al", "phci_ak", "phci_az", "phci_ar", "phci_ca",
@@ -122,6 +126,8 @@ INDICATOR_CADENCE: dict[str, str] = {
     "industrial_production": CADENCE_MONTHLY,
     "sahm_rule": CADENCE_MONTHLY,
     "cfnai_ma3": CADENCE_MONTHLY,
+    # NFCI publishes weekly (Wednesdays at 8:30am CT). Per FRED release calendar.
+    "nfci": CADENCE_WEEKLY,
     # 50 state PHCI series — each publishes monthly (Phila Fed).
     "phci_al": CADENCE_MONTHLY, "phci_ak": CADENCE_MONTHLY,
     "phci_az": CADENCE_MONTHLY, "phci_ar": CADENCE_MONTHLY,

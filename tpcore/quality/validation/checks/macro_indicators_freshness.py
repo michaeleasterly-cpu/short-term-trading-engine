@@ -39,6 +39,10 @@ EXPECTED_INDICATORS: tuple[str, ...] = (
     "hy_spread",
     "vix",
     "cfnai_ma3",
+    # Chicago Fed National Financial Conditions Index — weekly composite of
+    # credit + vol + liquidity. Added 2026-05-23 per financial-expert
+    # recommendation. Used by sentinel + carver as a single regime gate.
+    "nfci",
     # 50 Philadelphia Fed state coincident indices (substrate for the
     # derived sos_state_diffusion below) — added 2026-05-21 for the
     # Sentinel graduated Bear Score Lab candidate. All MONTHLY.

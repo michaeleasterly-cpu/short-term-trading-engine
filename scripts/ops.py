@@ -2775,6 +2775,11 @@ async def _stage_dedupe_monotone(
     #   key_cols       — the equality columns defining "same row"
     #   table          — qualified table name
     #   tiebreaker     — recorded_at (latest wins; spec §4 Q3)
+    #
+    # 2026-05-23: sec_insider_transactions was renamed insider_transactions
+    # in v2.1 Phase 1 (PR #318). fundamentals_quarterly added to the dedupe
+    # set after audit found 67 natural-key duplicate groups (68 extra rows)
+    # not caught by its synthetic-id PK.
     specs: list[dict[str, Any]] = [
         {
             "name": "earnings_events",
@@ -2782,12 +2787,17 @@ async def _stage_dedupe_monotone(
             "key_cols": ["ticker", "event_date", "event_type"],
         },
         {
-            "name": "sec_insider_transactions",
-            "table": "platform.sec_insider_transactions",
+            "name": "insider_transactions",
+            "table": "platform.insider_transactions",
             "key_cols": [
                 "ticker", "filing_date", "insider_name",
                 "transaction_type", "shares",
             ],
+        },
+        {
+            "name": "fundamentals_quarterly",
+            "table": "platform.fundamentals_quarterly",
+            "key_cols": ["ticker", "period_end_date", "period_label"],
         },
     ]
 

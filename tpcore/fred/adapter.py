@@ -89,6 +89,14 @@ INDICATOR_SERIES: tuple[tuple[str, str], ...] = (
     # publishes MONTHLY (FRED release calendar: monthly, around the 4th
     # week of the following month). No new provider (FRED existing).
     ("cfnai_ma3",            "CFNAIMA3"),
+    # Chicago Fed National Financial Conditions Index — weekly composite
+    # of credit + vol + liquidity. Added 2026-05-23 per financial-expert
+    # recommendation (Brave & Butters 2011; Carver Ch. 15 endorses
+    # single-composite regime gates). Subsumes credit + vol + liquidity
+    # into one number — sentinel + carver consume as primary regime gate;
+    # threshold NFCI > 0 = tighten, > +1σ = full defensive. Series ID is
+    # the FRED canonical (no new provider; FRED existing).
+    ("nfci",                 "NFCI"),
     # ── Philadelphia Fed state coincident indices — 50 USPS states,
     # monthly, 1979→present. Substrate for the derived
     # ``sos_state_diffusion`` series (Crone/Clayton-Matthews 2005
