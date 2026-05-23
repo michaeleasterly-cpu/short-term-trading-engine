@@ -105,13 +105,21 @@ def upgrade() -> None:
     )
 
     # ── 3. CHECK constraint on TKR-14 id regex (applies WHERE id IS NOT NULL) ──
-    # Postgres CHECK with NULL → NULL → row passes. So this implicitly only enforces
-    # for non-null values.
+    # Postgres CHECK with NULL → NULL → row passes. So this implicitly only
+    # enforces for non-null values. Wrapped in DO $$ ... EXCEPTION WHEN
+    # duplicate_object to make partial-replay idempotent (Postgres has no
+    # ADD CONSTRAINT IF NOT EXISTS for CHECK; rest of migration is already
+    # IF NOT EXISTS-guarded). Per PR #328 code-quality reviewer Minor finding.
     op.execute(
         f"""
-        ALTER TABLE platform.ticker_classifications
-            ADD CONSTRAINT ticker_classifications_id_tkr14_regex_chk
-            CHECK (id IS NULL OR id ~ '{_TKR14_REGEX}')
+        DO $$
+        BEGIN
+            ALTER TABLE platform.ticker_classifications
+                ADD CONSTRAINT ticker_classifications_id_tkr14_regex_chk
+                CHECK (id IS NULL OR id ~ '{_TKR14_REGEX}');
+        EXCEPTION
+            WHEN duplicate_object THEN NULL;
+        END $$
         """
     )
 
