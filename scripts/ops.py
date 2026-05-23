@@ -2307,29 +2307,44 @@ async def _stage_tkr14_backfill(
             "sample": [{"ticker": t, "id": i} for t, i in minted[:5]],
         }
 
-    # Live: UPDATE in a single transaction per row + seed ticker_history.
-    # Transactional per-row keeps the inevitable mid-batch failure rollbackable
-    # to the row level, not the batch level.
+    # Live: BULK UPDATE via UPDATE FROM (VALUES (...)) in batches.
+    # Per-row transactions were measured at ~60ms each = ~13 min total for 13K
+    # rows AND surfaced as 221 slow-query incidents in the Supabase dashboard
+    # (each UPDATE/INSERT touches indexes + WAL). Batching to ~500 rows/UPDATE
+    # cuts commits 500x and finishes in ~30s with negligible slow-query impact.
+    BATCH = 500
     n_committed = 0
     async with pool.acquire() as conn:
-        for ticker, new_id in minted:
+        for batch_start in range(0, len(minted), BATCH):
+            batch = minted[batch_start : batch_start + BATCH]
+            # asyncpg requires positional placeholders; use unnest of two parallel arrays.
+            tickers = [t for t, _ in batch]
+            new_ids = [i for _, i in batch]
             async with conn.transaction():
+                # Bulk UPDATE — one statement updates the whole batch via JOIN on unnest.
                 await conn.execute(
-                    "UPDATE platform.ticker_classifications SET id = $1 WHERE ticker = $2 AND id IS NULL",
-                    new_id, ticker,
+                    """
+                    UPDATE platform.ticker_classifications tc
+                    SET id = b.new_id
+                    FROM (SELECT unnest($1::text[]) AS ticker, unnest($2::text[]) AS new_id) b
+                    WHERE tc.ticker = b.ticker AND tc.id IS NULL
+                    """,
+                    tickers, new_ids,
                 )
-                # Seed ticker_history with first-seen row. ON CONFLICT DO NOTHING
-                # protects against re-run partial-replay.
+                # Bulk seed ticker_history — INSERT ... SELECT pattern; ON CONFLICT
+                # DO NOTHING protects re-run partial-replay.
                 await conn.execute(
                     """
                     INSERT INTO platform.ticker_history (classification_id, ticker, valid_from, valid_to)
-                    SELECT $1, $2, COALESCE(updated_at::date, CURRENT_DATE), NULL
-                    FROM platform.ticker_classifications WHERE ticker = $2
+                    SELECT tc.id, tc.ticker, COALESCE(tc.updated_at::date, CURRENT_DATE), NULL
+                    FROM platform.ticker_classifications tc
+                    JOIN (SELECT unnest($1::text[]) AS ticker) b ON tc.ticker = b.ticker
+                    WHERE tc.id IS NOT NULL
                     ON CONFLICT (classification_id, valid_from) DO NOTHING
                     """,
-                    new_id, ticker,
+                    tickers,
                 )
-                n_committed += 1
+                n_committed += len(batch)
 
     log.info(
         "ops.stage.tkr14_backfill.committed",
