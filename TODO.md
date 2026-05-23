@@ -780,13 +780,37 @@ n_trials hazard and are explicitly rejected — single config only.
   EULOGY scoping caveat — NOT a Sigma revival, NOT a new item. Durable
   decision; do not re-litigate.
 
-- **REJECTED: S2 systematic short-squeeze engine.** Data-parked
-  (point-in-time securities-lending + options-positioning history absent;
-  FINRA short-interest structurally bi-monthly). Both spikes independently
-  say archive/manual-only; matches the existing platform decision. Not
-  backtestable now — a DATA limitation, not modeling. Reopen ONLY if
-  point-in-time securities-lending + options-positioning history is
-  acquired; then route as a single-spec Lab candidate. Do not re-litigate.
+- **PARKED: S2 systematic short-squeeze engine** (was REJECTED 2026-05-15;
+  **boundary refined 2026-05-23**). Two viable paths identified:
+
+  **PATH A — Reduced S2 (proxy-based, buildable now):**
+  Trades on signals that *historically correlate* with utilization-driven
+  squeezes but aren't the causal SL-utilization signal. Inputs available today:
+  - FINRA `short_interest` (biweekly settled, 1,498 tickers, lags 2 weeks)
+  - iborrowdesk `borrow_rates` (daily forward; expand from 13 → T1+T2 universe)
+  - Tradier `tradier_options_chains` (current snapshot, refreshable via
+    `scripts/refresh_tradier_options.py`): put/call OI ratio, IV skew widening,
+    gamma-weighted strike concentration
+  - SEC `sec_insider_transactions` (insider buying as contrarian-to-shorts signal)
+  - Macro sentiment `fear_greed` (regime gate)
+
+  Risk: proxy drift — backtest validates on proxies; live trading uses same proxies.
+  Strategy shape diverges from original spec; document as a new design.
+
+  **PATH B — Full S2 (original spec, vendor-blocked):**
+  Requires PIT SL utilization vendor: S3 Partners / DataLend (FIS) /
+  Markit Securities Finance — all enterprise-priced ($50k+/yr).
+  Budget decision. Reopen automatically when vendor is acquired.
+
+  **2026-05-23 data boundary (exact gap):**
+  - HARD: SL utilization + available supply (enterprise vendors only)
+  - STRUCTURAL: daily short-interest impossible (FINRA biweekly by regulation)
+  - API-rate impractical: Tradier historical options chains (~4.5M calls for 2y backtest)
+  - SOFT: forward-going iborrowdesk + Tradier options accumulate now if chosen
+
+  Substrate ready: `platform.tradier_options_chains` (113K rows / 50 tickers) +
+  `scripts/refresh_tradier_options.py` + `docs/runbooks/options-data-turn-on.md`.
+  Tradier API verified working 2026-05-23 (`SPY` $745.64 + 29 expirations).
 
 ## ⚠ PRE-RAILWAY MIGRATION BLOCKER — archive substrate (LOCKED design 2026-05-18)
 
