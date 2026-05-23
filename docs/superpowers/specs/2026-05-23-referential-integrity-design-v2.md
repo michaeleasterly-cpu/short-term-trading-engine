@@ -1,6 +1,8 @@
 # Referential-Integrity Design v2 — `platform.*` Schema, Phase 1 (FK Enforcement, NOT-VALID-FIRST sequence)
 
-**Status:** v2. **Supersedes v1 (`docs/superpowers/specs/2026-05-23-referential-integrity-design.md`)** by inverting the FK rollout sequence to **NOT-VALID-FIRST**. v1's content is preserved as the historical record; do not delete it. Where v2 and v1 conflict on sequence, gating, or migration shape, **v2 wins**. The contract (invariants in §2, scope in §3, acceptance criteria in §13) is unchanged in spirit from v1 — only the *how* changes.
+**Status:** **SUPERSEDED by v2.1 (`docs/superpowers/specs/2026-05-23-referential-integrity-design-v2.1.md`) on 2026-05-23.** v2.1 adds the missing concern-map answers surfaced mid-execution: Phase 0.5 `db_snapshots/` substrate, Phase 0.6 `pg_dump` daily-backup regimen, Phase 3.5 `parent_resolver` build, and the Phase 4 backfill-not-delete protocol for `prices_daily`'s 335K orphans. v2 is preserved as the historical record of the original NOT-VALID-FIRST inversion thinking; do not delete it. Where v2.1 and v2 conflict on phase sequence or orphan-handling protocol, **v2.1 wins**.
+
+**Earlier status (v2 vs v1):** v2 **Supersedes v1 (`docs/superpowers/specs/2026-05-23-referential-integrity-design.md`)** by inverting the FK rollout sequence to **NOT-VALID-FIRST**. v1's content is preserved as the historical record; do not delete it. Where v2 and v1 conflict on sequence, gating, or migration shape, **v2 wins**. The contract (invariants in §2, scope in §3, acceptance criteria in §13) is unchanged in spirit from v1 — only the *how* changes.
 
 **Author / role:** `db-architect` (Postgres + Supabase Pro tier; `platform.*` schema). See `.claude/agents/db-architect.md`.
 

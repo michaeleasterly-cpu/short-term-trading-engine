@@ -1,6 +1,8 @@
 # Referential-Integrity Implementation Plan v2 — `platform.*` schema (NOT-VALID-FIRST sequence)
 
-**Status:** PLAN v2 — no migrations, no code, no tests written. Executable phase-by-phase by a future subagent or the operator without re-investigation.
+**Status:** **SUPERSEDED by v2.1 (`docs/superpowers/plans/2026-05-23-referential-integrity-implementation-plan-v2.1.md`) on 2026-05-23.** v2.1 re-sequences the rollout to insert three new phases discovered mid-execution (Phase 0.5 `db_snapshots/`, Phase 0.6 `pg_dump` regimen, Phase 3.5 `parent_resolver`) and revises Phase 4 to BACKFILL `ticker_classifications` rather than DELETE the 335K orphan bars in `prices_daily` (those are real market history). v2 is preserved as the historical record of the 5-phase NOT-VALID-FIRST sequence; do not delete it. Where v2.1 and v2 conflict on phase order or orphan-handling protocol, **v2.1 wins**.
+
+**Earlier status (v2 vs v1):** PLAN v2 — no migrations, no code, no tests written. Executable phase-by-phase by a future subagent or the operator without re-investigation.
 
 **Supersedes:** `docs/superpowers/plans/2026-05-23-referential-integrity-implementation-plan.md` (v1, 11 phases). v1's phase sequence is REPLACED by this doc's 5-phase NOT-VALID-FIRST sequence. v1 stays on disk as the historical record; do not delete it. Where v2 and v1 conflict on sequence, gating, or migration shape, **v2 wins**. The contract (scope, invariants, acceptance criteria) is unchanged — only the *how* and the *order* change.
 
