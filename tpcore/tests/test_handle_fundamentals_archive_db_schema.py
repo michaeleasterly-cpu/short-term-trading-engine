@@ -40,11 +40,15 @@ pytestmark = pytest.mark.skipif(
     reason="DB-gated; runs only in the lab-isolation-db CI job",
 )
 
-# The ``id`` PK is a surrogate (auto-incremented BigInteger introduced
-# in 20260510_0049_create_fundamentals_quarterly) — it has no semantic
-# meaning and the archive deliberately omits it. Any other column on
-# the table is real data and MUST be archived.
-_SURROGATE_COLUMNS: frozenset[str] = frozenset({"id"})
+# Platform-internal columns the CSV archive deliberately omits:
+#   - ``id`` — auto-incremented surrogate PK (20260510_0049).
+#   - ``classification_id`` — v2.2 P6 denormalized FK to
+#     ``ticker_classifications.id`` (TKR-14). Derived on insert from the
+#     ``ticker`` column via parent_resolver, so it can be recomputed on
+#     restore — archiving it would freeze a TKR-14 whose meaning may
+#     evolve (e.g., a re-IPO re-mints the ID).
+# Any other column on the table is real vendor data and MUST be archived.
+_SURROGATE_COLUMNS: frozenset[str] = frozenset({"id", "classification_id"})
 
 
 async def test_fundamentals_archive_fields_matches_live_db_schema() -> None:

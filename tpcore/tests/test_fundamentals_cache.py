@@ -343,6 +343,27 @@ async def test_cache_integration_roundtrip() -> None:
 
     pool = await build_asyncpg_pool(os.environ["DATABASE_URL"])
     test_ticker = "ZZZTEST"
+    # v2.2 P5: ticker_classifications.id is NOT NULL (TKR-14 stable identity).
+    # Mint a deterministic test-fixture TKR-14 from a stable input so the
+    # fixture is reproducible (same legal_name, salt=0 -> same TKR-14).
+    from datetime import UTC
+    from datetime import datetime as _dt
+
+    from tpcore.identity.tkr14 import (
+        AssetClass,
+        DiscoverySource,
+        IPOVenue,
+        mint,
+    )
+    test_tkr14 = mint(
+        country="US",
+        asset_class=AssetClass.STOCK,
+        ipo_venue=IPOVenue.OTHER,
+        discovery_source=DiscoverySource.OTHER,
+        cik=None,
+        legal_name="ZZZTEST Inc. (test fixture)",
+        now=_dt(2020, 1, 1, tzinfo=UTC),
+    )
     try:
         async with pool.acquire() as conn:
             # FK setup (post-Phase-2): ticker_classifications must contain the
@@ -350,11 +371,12 @@ async def test_cache_integration_roundtrip() -> None:
             # fk_fundamentals_quarterly_ticker REFERENCES ticker_classifications(ticker).
             await conn.execute(
                 """
-                INSERT INTO platform.ticker_classifications (ticker, asset_class, source)
-                VALUES ($1, 'stock', 'test_fixture')
+                INSERT INTO platform.ticker_classifications
+                    (id, ticker, current_ticker, asset_class, source)
+                VALUES ($1, $2, $2, 'stock', 'test_fixture')
                 ON CONFLICT (ticker) DO NOTHING
                 """,
-                test_ticker,
+                test_tkr14, test_ticker,
             )
             await conn.execute(
                 "DELETE FROM platform.fundamentals_quarterly WHERE ticker=$1", test_ticker

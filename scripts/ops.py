@@ -2600,6 +2600,235 @@ async def _stage_prices_daily_backfill_classification_id(
     }
 
 
+async def _stage_macro_data_backfill(
+    pool: asyncpg.Pool, cfg: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Task #18 P2 — backfill platform.macro_data from the 3 source tables.
+
+    Per spec docs/superpowers/specs/2026-05-23-task-18-macro-data-consolidation.md
+    §3 source-row mapping + §8 sacred constraints.
+
+    Three sub-substages, each idempotent (ON CONFLICT DO NOTHING on the
+    bitemporal PK so re-run is safe):
+
+      fred         — macro_indicators (tall) -> macro_data 1:1
+                     'hy_spread' rows copied VERBATIM per
+                     project_hy_spread_sacred. 50 PHCI series + the
+                     sos_state_diffusion derived row preserved as-is.
+      aaii         — aaii_sentiment (3 wide cols) -> 3 macro_data rows/date
+      fear_greed   — fear_greed (8 wide cols mixed num+text) -> 8 rows/date
+
+    realtime_start := source.recorded_at for all backfilled rows (NOT now())
+    so the original transaction-time is preserved (§8.5).
+
+    cfg knobs:
+      dry_run (default 'true') — count what WOULD insert; no writes.
+      sources (default 'fred,aaii,fear_greed') — comma list to selectively
+              backfill a subset (useful for re-running just one source).
+
+    Total estimated rows ~128K (68K fred + 6K aaii expanded + 53K fear_greed
+    expanded). Per-source INSERT-SELECT fits in a single transaction; WAL
+    budget ~10MB total — well under the 100K-row chunk threshold from
+    supabase-constraints-2026-05-23 since each INSERT-SELECT is server-side
+    (no Python round-trips).
+
+    Pre-condition: migration 20260524_0900 (Task #18 P1) applied so
+    macro_data table + indexes exist.
+    """
+    log = structlog.get_logger("scripts.ops")
+    cfg = cfg or {}
+
+    dry_run_param = cfg.get("dry_run", "true")
+    dry_run = (dry_run_param.lower() != "false") if isinstance(dry_run_param, str) else bool(dry_run_param)
+    sources_param = str(cfg.get("sources", "fred,aaii,fear_greed"))
+    sources = {s.strip() for s in sources_param.split(",") if s.strip()}
+
+    has_table = await pool.fetchval(
+        "SELECT count(*) FROM information_schema.tables "
+        "WHERE table_schema='platform' AND table_name='macro_data'"
+    )
+    if not has_table:
+        raise RuntimeError(
+            "platform.macro_data missing — apply migration 20260524_0900 first."
+        )
+
+    log.info("ops.stage.macro_data_backfill.starting", sources=sorted(sources), dry_run=dry_run)
+
+    # FRED source (macro_indicators is already tall: indicator,date,value,recorded_at).
+    # ON CONFLICT (source,series_id,observed_date,realtime_start) DO NOTHING
+    # so a partial-replay just no-ops on already-inserted rows.
+    FRED_INSERT = """
+        INSERT INTO platform.macro_data
+            (source, series_id, observed_date, value_num,
+             realtime_start, realtime_end, recorded_at)
+        SELECT
+            'fred', indicator, date, value,
+            recorded_at, 'infinity', recorded_at
+        FROM platform.macro_indicators
+        WHERE value IS NOT NULL
+        ON CONFLICT (source, series_id, observed_date, realtime_start)
+        DO NOTHING
+    """
+
+    # AAII (wide 3-col -> 3 tall rows per date via LATERAL VALUES fan-out).
+    # WHERE val IS NOT NULL preserves XOR constraint (no all-NULL rows).
+    AAII_INSERT = """
+        INSERT INTO platform.macro_data
+            (source, series_id, observed_date, value_num,
+             realtime_start, realtime_end, recorded_at)
+        SELECT
+            'aaii', channel, a.date, val,
+            a.recorded_at, 'infinity', a.recorded_at
+        FROM platform.aaii_sentiment a
+        CROSS JOIN LATERAL (VALUES
+            ('bullish_pct', a.bullish_pct),
+            ('bearish_pct', a.bearish_pct),
+            ('neutral_pct', a.neutral_pct)
+        ) t(channel, val)
+        WHERE val IS NOT NULL
+        ON CONFLICT (source, series_id, observed_date, realtime_start)
+        DO NOTHING
+    """
+
+    # Fear/Greed numeric channels (6 of 8: score + score_5d_ago + 4 components).
+    FEAR_GREED_NUM_INSERT = """
+        INSERT INTO platform.macro_data
+            (source, series_id, observed_date, value_num,
+             realtime_start, realtime_end, recorded_at)
+        SELECT
+            'cnn_fear_greed', channel, f.date, val,
+            f.recorded_at, 'infinity', f.recorded_at
+        FROM platform.fear_greed f
+        CROSS JOIN LATERAL (VALUES
+            ('score',                f.score),
+            ('score_5d_ago',         f.score_5d_ago),
+            ('volatility_component', f.volatility_component),
+            ('credit_component',     f.credit_component),
+            ('momentum_component',   f.momentum_component),
+            ('safe_haven_component', f.safe_haven_component)
+        ) t(channel, val)
+        WHERE val IS NOT NULL
+        ON CONFLICT (source, series_id, observed_date, realtime_start)
+        DO NOTHING
+    """
+
+    # Fear/Greed text channels (2 of 8: label + direction). Separate INSERT
+    # because value_text channel — XOR CHECK rejects mixed-channel rows.
+    FEAR_GREED_TEXT_INSERT = """
+        INSERT INTO platform.macro_data
+            (source, series_id, observed_date, value_text,
+             realtime_start, realtime_end, recorded_at)
+        SELECT
+            'cnn_fear_greed', channel, f.date, val,
+            f.recorded_at, 'infinity', f.recorded_at
+        FROM platform.fear_greed f
+        CROSS JOIN LATERAL (VALUES
+            ('label',     f.label),
+            ('direction', f.direction)
+        ) t(channel, val)
+        WHERE val IS NOT NULL
+        ON CONFLICT (source, series_id, observed_date, realtime_start)
+        DO NOTHING
+    """
+
+    if dry_run:
+        results: dict[str, Any] = {"dry_run": True, "would_insert": {}}
+        if "fred" in sources:
+            results["would_insert"]["fred"] = int(await pool.fetchval(
+                "SELECT count(*) FROM platform.macro_indicators WHERE value IS NOT NULL"
+            ) or 0)
+        if "aaii" in sources:
+            results["would_insert"]["aaii"] = int(await pool.fetchval(
+                """
+                SELECT
+                    (SELECT count(*) FROM platform.aaii_sentiment WHERE bullish_pct IS NOT NULL)
+                  + (SELECT count(*) FROM platform.aaii_sentiment WHERE bearish_pct IS NOT NULL)
+                  + (SELECT count(*) FROM platform.aaii_sentiment WHERE neutral_pct IS NOT NULL)
+                """
+            ) or 0)
+        if "fear_greed" in sources:
+            results["would_insert"]["fear_greed"] = int(await pool.fetchval(
+                """
+                SELECT
+                    (SELECT count(*) FROM platform.fear_greed WHERE score IS NOT NULL)
+                  + (SELECT count(*) FROM platform.fear_greed WHERE score_5d_ago IS NOT NULL)
+                  + (SELECT count(*) FROM platform.fear_greed WHERE volatility_component IS NOT NULL)
+                  + (SELECT count(*) FROM platform.fear_greed WHERE credit_component IS NOT NULL)
+                  + (SELECT count(*) FROM platform.fear_greed WHERE momentum_component IS NOT NULL)
+                  + (SELECT count(*) FROM platform.fear_greed WHERE safe_haven_component IS NOT NULL)
+                  + (SELECT count(*) FROM platform.fear_greed WHERE label IS NOT NULL)
+                  + (SELECT count(*) FROM platform.fear_greed WHERE direction IS NOT NULL)
+                """
+            ) or 0)
+        results["would_insert_total"] = sum(results["would_insert"].values())
+        log.info("ops.stage.macro_data_backfill.dry_run", **results)
+        return results
+
+    inserted: dict[str, int] = {}
+
+    if "fred" in sources:
+        before = int(await pool.fetchval(
+            "SELECT count(*) FROM platform.macro_data WHERE source='fred'"
+        ) or 0)
+        async with pool.acquire() as conn, conn.transaction():
+            await conn.execute("SET LOCAL statement_timeout = '5min'")
+            await conn.execute(FRED_INSERT)
+        after = int(await pool.fetchval(
+            "SELECT count(*) FROM platform.macro_data WHERE source='fred'"
+        ) or 0)
+        inserted["fred"] = after - before
+        log.info("ops.stage.macro_data_backfill.fred", inserted=inserted["fred"], total=after)
+
+    if "aaii" in sources:
+        before = int(await pool.fetchval(
+            "SELECT count(*) FROM platform.macro_data WHERE source='aaii'"
+        ) or 0)
+        async with pool.acquire() as conn, conn.transaction():
+            await conn.execute("SET LOCAL statement_timeout = '1min'")
+            await conn.execute(AAII_INSERT)
+        after = int(await pool.fetchval(
+            "SELECT count(*) FROM platform.macro_data WHERE source='aaii'"
+        ) or 0)
+        inserted["aaii"] = after - before
+        log.info("ops.stage.macro_data_backfill.aaii", inserted=inserted["aaii"], total=after)
+
+    if "fear_greed" in sources:
+        before = int(await pool.fetchval(
+            "SELECT count(*) FROM platform.macro_data WHERE source='cnn_fear_greed'"
+        ) or 0)
+        async with pool.acquire() as conn, conn.transaction():
+            await conn.execute("SET LOCAL statement_timeout = '5min'")
+            await conn.execute(FEAR_GREED_NUM_INSERT)
+            await conn.execute(FEAR_GREED_TEXT_INSERT)
+        after = int(await pool.fetchval(
+            "SELECT count(*) FROM platform.macro_data WHERE source='cnn_fear_greed'"
+        ) or 0)
+        inserted["fear_greed"] = after - before
+        log.info("ops.stage.macro_data_backfill.fear_greed",
+                 inserted=inserted["fear_greed"], total=after)
+
+    # Sacred-data audit: hy_spread row count must match source exactly.
+    if "fred" in sources:
+        src_hy = int(await pool.fetchval(
+            "SELECT count(*) FROM platform.macro_indicators WHERE indicator='hy_spread'"
+        ) or 0)
+        dst_hy = int(await pool.fetchval(
+            "SELECT count(*) FROM platform.macro_data "
+            "WHERE source='fred' AND series_id='hy_spread'"
+        ) or 0)
+        if src_hy != dst_hy:
+            raise RuntimeError(
+                f"hy_spread sacred-data preservation FAILED: "
+                f"source={src_hy} dst={dst_hy} (delta={dst_hy - src_hy})"
+            )
+        log.info("ops.stage.macro_data_backfill.hy_spread_sacred_ok", rows=dst_hy)
+
+    total_inserted = sum(inserted.values())
+    log.info("ops.stage.macro_data_backfill.done",
+             inserted=inserted, total=total_inserted)
+    return {"dry_run": False, "inserted": inserted, "total_inserted": total_inserted}
+
+
 async def _tkr14_backfill_fmp_profile(
     pool: asyncpg.Pool,
     log: Any,
@@ -4753,6 +4982,14 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # Sidesteps the 1.95 GB WAL blow-up from the 2026-05-23 single-transaction attempt.
     ("prices_daily_backfill_classification_id",
         lambda pool, cfg: (lambda: _stage_prices_daily_backfill_classification_id(pool, cfg)),
+        HEAVY_STAGE_TIMEOUT_SEC),
+    # Task #18 P2 — backfill platform.macro_data (bitemporal tall) from the 3
+    # source tables (macro_indicators, aaii_sentiment, fear_greed). Pure
+    # server-side INSERT-SELECT, idempotent (ON CONFLICT DO NOTHING on the
+    # bitemporal PK), realtime_start = source.recorded_at for verbatim preservation.
+    # hy_spread sacred-row count is asserted equal post-insert.
+    ("macro_data_backfill",
+        lambda pool, cfg: (lambda: _stage_macro_data_backfill(pool, cfg)),
         HEAVY_STAGE_TIMEOUT_SEC),
     ("delist_stale",        lambda pool, cfg: (lambda: _stage_delist_stale(pool)),             STAGE_TIMEOUT_SEC),
     # earnings_refresh — earnings-beat events for vector engine.
