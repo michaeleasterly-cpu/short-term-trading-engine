@@ -1,4 +1,4 @@
-"""SEC filings freshness check — confirms ``platform.sec_insider_transactions``
+"""SEC filings freshness check — confirms ``platform.insider_transactions``
 and ``platform.sec_material_events`` are staying current with the active
 T1+T2 stock universe.
 
@@ -47,7 +47,7 @@ _FRESHNESS_SQL = f"""
           AND COALESCE(tc.asset_class, 'stock') = 'stock'
     ),
     union_filings AS (
-        SELECT ticker, filing_date FROM platform.sec_insider_transactions
+        SELECT ticker, filing_date FROM platform.insider_transactions
         UNION ALL
         SELECT ticker, filing_date FROM platform.sec_material_events
     )
@@ -59,7 +59,7 @@ _FRESHNESS_SQL = f"""
          JOIN union_filings uf ON uf.ticker = a.ticker
          WHERE uf.filing_date >= CURRENT_DATE - INTERVAL '{COVERAGE_WINDOW_DAYS} days'
         ) AS covered_count,
-        (SELECT COUNT(*) FROM platform.sec_insider_transactions) AS insider_rows,
+        (SELECT COUNT(*) FROM platform.insider_transactions) AS insider_rows,
         (SELECT COUNT(*) FROM platform.sec_material_events) AS material_rows
 """
 

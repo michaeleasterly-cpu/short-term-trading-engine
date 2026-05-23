@@ -84,7 +84,7 @@ _PROBES: dict[str, _LatestProbe] = {
     ),
     "sec_insider_transactions": _LatestProbe(
         sql=(
-            "SELECT MAX(filing_date) FROM platform.sec_insider_transactions"
+            "SELECT MAX(filing_date) FROM platform.insider_transactions"
         ),
     ),
     "macro_indicators": _LatestProbe(

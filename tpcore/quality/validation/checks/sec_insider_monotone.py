@@ -11,7 +11,7 @@ This check closes that hole with a *physical-truth invariant* mirroring
 the prices_daily_completeness + corporate_actions_completeness shape but
 keyed on per-ticker counts:
 
-    For every ticker in ``platform.sec_insider_transactions``, the live
+    For every ticker in ``platform.insider_transactions``, the live
     ``COUNT(*)`` must be ≥ the snapshot recorded on the prior run. ANY
     per-ticker negative delta → FAIL.
 
@@ -77,10 +77,10 @@ CHECK_NAME = "sec_insider_monotone"
 # reality. Matches the corp_actions / fundamentals completeness cap.
 MAX_REPORTED = 5
 
-# Live per-ticker counts on platform.sec_insider_transactions.
+# Live per-ticker counts on platform.insider_transactions.
 _LIVE_COUNTS_SQL = (
     "SELECT ticker, COUNT(*) AS rowcount "
-    "FROM platform.sec_insider_transactions "
+    "FROM platform.insider_transactions "
     "GROUP BY ticker"
 )
 

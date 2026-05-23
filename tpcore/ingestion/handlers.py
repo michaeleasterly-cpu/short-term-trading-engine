@@ -711,7 +711,7 @@ async def handle_sec_filings(pool: asyncpg.Pool, config: dict[str, Any]) -> int 
             newest = await conn.fetchval(
                 """
                 SELECT GREATEST(
-                    COALESCE((SELECT MAX(recorded_at) FROM platform.sec_insider_transactions), '-infinity'::timestamptz),
+                    COALESCE((SELECT MAX(recorded_at) FROM platform.insider_transactions), '-infinity'::timestamptz),
                     COALESCE((SELECT MAX(recorded_at) FROM platform.sec_material_events),     '-infinity'::timestamptz)
                 )
                 """
@@ -771,7 +771,7 @@ async def handle_sec_filings(pool: asyncpg.Pool, config: dict[str, Any]) -> int 
         async with pool.acquire() as conn:
             covered = await conn.fetch(
                 """
-                SELECT ticker FROM platform.sec_insider_transactions
+                SELECT ticker FROM platform.insider_transactions
                 UNION
                 SELECT ticker FROM platform.sec_material_events
                 """

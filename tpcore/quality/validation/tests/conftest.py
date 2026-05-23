@@ -97,7 +97,7 @@ class FakePool:
         # ticker with a count that matches the seeded snapshot below so
         # the monotone invariant passes in unrelated e2e tests.
         if (
-            "from platform.sec_insider_transactions" in sql_lower
+            "from platform.insider_transactions" in sql_lower
             and "group by ticker" in sql_lower
         ):
             return [{"ticker": "AAPL", "rowcount": 100}]
@@ -259,7 +259,7 @@ class FakePool:
         # SEC freshness check has the same CTE shape (addressable +
         # newest filing). Return a "clean" snapshot so e2e tests for
         # unrelated checks don't false-fail.
-        if "sec_insider_transactions" in sql_lower and "addressable" in sql_lower:
+        if "insider_transactions" in sql_lower and "addressable" in sql_lower:
             from datetime import UTC, datetime, timedelta
             return {
                 "newest_filing": datetime.now(UTC).date() - timedelta(days=2),
