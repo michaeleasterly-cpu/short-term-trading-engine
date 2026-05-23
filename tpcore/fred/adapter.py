@@ -97,6 +97,18 @@ INDICATOR_SERIES: tuple[tuple[str, str], ...] = (
     # threshold NFCI > 0 = tighten, > +1σ = full defensive. Series ID is
     # the FRED canonical (no new provider; FRED existing).
     ("nfci",                 "NFCI"),
+    # Secured Overnight Financing Rate — daily, since 2018-04-03.
+    # SOFR replaces LIBOR as the US dollar reference rate; useful as a
+    # short-rate signal + as the building block for SOFR-OIS spread
+    # (expert-recommended as an alt to the discontinued TED spread).
+    # Added 2026-05-24. FRED-verified (series 'SOFR').
+    ("sofr",                 "SOFR"),
+    # Economic Policy Uncertainty Index — daily, since 1985-01-01.
+    # Baker-Bloom-Davis newspaper-text-based index. Pástor & Veronesi 2013
+    # show EPU regime conditioning affects equity returns around news
+    # events — useful for catalyst engine event-window risk weighting.
+    # Added 2026-05-24. FRED-verified (series 'USEPUINDXD').
+    ("epu_index",            "USEPUINDXD"),
     # ── Philadelphia Fed state coincident indices — 50 USPS states,
     # monthly, 1979→present. Substrate for the derived
     # ``sos_state_diffusion`` series (Crone/Clayton-Matthews 2005

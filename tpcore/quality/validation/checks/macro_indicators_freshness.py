@@ -43,6 +43,10 @@ EXPECTED_INDICATORS: tuple[str, ...] = (
     # credit + vol + liquidity. Added 2026-05-23 per financial-expert
     # recommendation. Used by sentinel + carver as a single regime gate.
     "nfci",
+    # Secured Overnight Financing Rate (FRED 'SOFR') — daily since 2018-04-03.
+    "sofr",
+    # Economic Policy Uncertainty (FRED 'USEPUINDXD') — daily since 1985.
+    "epu_index",
     # 50 Philadelphia Fed state coincident indices (substrate for the
     # derived sos_state_diffusion below) — added 2026-05-21 for the
     # Sentinel graduated Bear Score Lab candidate. All MONTHLY.

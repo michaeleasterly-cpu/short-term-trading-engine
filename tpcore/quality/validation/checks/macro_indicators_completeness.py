@@ -92,6 +92,12 @@ EXPECTED_INDICATORS: tuple[str, ...] = (
     # credit + vol + liquidity. Added 2026-05-23 per financial-expert
     # recommendation. Used by sentinel + carver as a single regime gate.
     "nfci",
+    # Secured Overnight Financing Rate (FRED 'SOFR') — daily since 2018-04-03.
+    # USD short-rate signal + SOFR-OIS spread building block. Added 2026-05-24.
+    "sofr",
+    # Economic Policy Uncertainty (Baker-Bloom-Davis; FRED 'USEPUINDXD') —
+    # daily since 1985. Catalyst event-window risk weighting. Added 2026-05-24.
+    "epu_index",
     # ── Philadelphia Fed state coincident indices — 50 USPS states
     # (substrate for the derived sos_state_diffusion below).
     "phci_al", "phci_ak", "phci_az", "phci_ar", "phci_ca",
@@ -128,6 +134,10 @@ INDICATOR_CADENCE: dict[str, str] = {
     "cfnai_ma3": CADENCE_MONTHLY,
     # NFCI publishes weekly (Wednesdays at 8:30am CT). Per FRED release calendar.
     "nfci": CADENCE_WEEKLY,
+    # SOFR publishes daily (NY Fed, ~8am ET each business day).
+    "sofr": CADENCE_DAILY,
+    # EPU publishes daily (Baker-Bloom-Davis updates daily).
+    "epu_index": CADENCE_DAILY,
     # 50 state PHCI series — each publishes monthly (Phila Fed).
     "phci_al": CADENCE_MONTHLY, "phci_ak": CADENCE_MONTHLY,
     "phci_az": CADENCE_MONTHLY, "phci_ar": CADENCE_MONTHLY,
