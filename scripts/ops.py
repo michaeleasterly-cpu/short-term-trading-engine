@@ -2216,8 +2216,10 @@ async def _stage_tkr14_backfill(
     cfg = cfg or {}
 
     mode = str(cfg.get("mode", "mint")).lower()
-    if mode not in ("mint", "figi"):
-        raise ValueError(f"tkr14_backfill: mode must be 'mint' or 'figi', got {mode!r}")
+    if mode not in ("mint", "figi", "fmp_profile"):
+        raise ValueError(
+            f"tkr14_backfill: mode must be 'mint' or 'figi' or 'fmp_profile', got {mode!r}"
+        )
 
     dry_run_param = cfg.get("dry_run", "true")
     if isinstance(dry_run_param, str):
@@ -2228,6 +2230,8 @@ async def _stage_tkr14_backfill(
 
     if mode == "figi":
         return await _tkr14_backfill_figi(pool, log, dry_run=dry_run, limit=limit)
+    if mode == "fmp_profile":
+        return await _tkr14_backfill_fmp_profile(pool, log, dry_run=dry_run, limit=limit)
 
     # MODE = mint: original slice-1 behavior.
     # Find rows that need a TKR-14 id minted.
@@ -2386,12 +2390,16 @@ async def _tkr14_backfill_figi(
         SELECT ticker, id
         FROM platform.ticker_classifications
         WHERE id IS NOT NULL AND figi IS NULL
-          AND substring(id, 1, 2) = 'US'   -- OpenFIGI mapping uses exchCode=US; non-US needs different
         ORDER BY ticker
         {where_limit}
         """,
         *args,
     )
+    # All our non-US-country rows are mostly US-listed ADRs that trade with
+    # their US ticker — exchCode='US' still resolves them via OpenFIGI. True
+    # foreign-primary listings (Toyota 7203 etc.) are rare in our universe;
+    # if any miss here, they get figi_not_found and a re-run can target them
+    # with a different exchCode later.
     if not rows:
         log.info("ops.stage.tkr14_backfill.figi.no_rows_to_fill")
         return {"figi_filled": 0, "figi_not_found": 0, "dry_run": dry_run}
@@ -2459,6 +2467,143 @@ async def _tkr14_backfill_figi(
         "figi_not_found": misses,
         "dry_run": False,
     }
+
+
+async def _tkr14_backfill_fmp_profile(
+    pool: asyncpg.Pool,
+    log: Any,
+    *,
+    dry_run: bool,
+    limit: int,
+) -> dict[str, Any]:
+    """SLICE 2 helper: batch-fill cusip / isin / cik via FMP /stable/profile.
+
+    Pin-at-first-resolve discipline: only fills WHERE that column IS NULL.
+    Never overwrites a non-null cross-vendor identifier. Per row, fetches
+    the FMP profile once; populates whichever of cusip/isin/cik come back
+    AND are currently NULL in the row.
+
+    Rate-limited to ~5 req/sec (FMP Starter tier 300/min) via per-request
+    asyncio.sleep. Concurrency 1 to keep the rate predictable. ~13K rows
+    → ~45 min worst case.
+    """
+    import os as _os
+
+    import httpx
+
+    fmp_key = _os.environ.get("FMP_API_KEY")
+    if not fmp_key:
+        from tpcore.outage import DataProviderOutage
+        raise DataProviderOutage(
+            "tkr14_backfill[fmp_profile]: FMP_API_KEY env var required (FMP Starter tier)."
+        )
+    FMP_BASE = "https://financialmodelingprep.com/stable"
+    RATE_SLEEP_S = 0.2  # 5 req/sec under FMP Starter 300/min ceiling
+
+    where_limit = "LIMIT $1" if limit > 0 else ""
+    args: list[Any] = [limit] if limit > 0 else []
+    # Pick rows missing ANY of cusip / isin / cik so one FMP call fills all
+    # three at once where possible.
+    rows = await pool.fetch(
+        f"""
+        SELECT ticker, id, cusip, isin, cik
+        FROM platform.ticker_classifications
+        WHERE id IS NOT NULL
+          AND (cusip IS NULL OR isin IS NULL OR cik IS NULL)
+        ORDER BY ticker
+        {where_limit}
+        """,
+        *args,
+    )
+    if not rows:
+        log.info("ops.stage.tkr14_backfill.fmp_profile.no_rows_to_fill")
+        return {"filled": 0, "not_found": 0, "dry_run": dry_run}
+
+    log.info("ops.stage.tkr14_backfill.fmp_profile.starting", n_tickers=len(rows), dry_run=dry_run)
+
+    updates: list[dict[str, Any]] = []  # {ticker, cusip, isin, cik}
+    misses = 0
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        for i, r in enumerate(rows):
+            ticker = r["ticker"]
+            for attempt in range(3):
+                try:
+                    resp = await client.get(
+                        f"{FMP_BASE}/profile",
+                        params={"symbol": ticker, "apikey": fmp_key},
+                    )
+                    if resp.status_code == 429:
+                        await asyncio.sleep(5 * (attempt + 1))
+                        continue
+                    resp.raise_for_status()
+                    data = resp.json()
+                    if not isinstance(data, list) or not data:
+                        misses += 1
+                        break
+                    profile = data[0]
+                    upd: dict[str, Any] = {"ticker": ticker}
+                    # Pin-at-first-resolve: only emit fields where the current
+                    # row is NULL AND the FMP response carries a non-empty value.
+                    if r["cusip"] is None and (cusip := profile.get("cusip")):
+                        upd["cusip"] = str(cusip)[:9]
+                    if r["isin"] is None and (isin := profile.get("isin")):
+                        upd["isin"] = str(isin)[:12]
+                    if r["cik"] is None and (cik := profile.get("cik")):
+                        upd["cik"] = str(cik)
+                    if len(upd) > 1:
+                        updates.append(upd)
+                    break
+                except httpx.HTTPError as e:
+                    if attempt == 2:
+                        misses += 1
+                        log.warning("ops.stage.tkr14_backfill.fmp_profile.http_failed",
+                                    ticker=ticker, error=str(e)[:120])
+                    else:
+                        await asyncio.sleep(2)
+            await asyncio.sleep(RATE_SLEEP_S)
+            if (i + 1) % 500 == 0:
+                log.info("ops.stage.tkr14_backfill.fmp_profile.progress",
+                         processed=i + 1, total=len(rows), staged_updates=len(updates))
+
+    if dry_run:
+        log.info("ops.stage.tkr14_backfill.fmp_profile.dry_run_preview",
+                 n_updates=len(updates), n_not_found=misses, sample=updates[:3])
+        return {"filled": 0, "previewed": len(updates), "not_found": misses,
+                "dry_run": True, "sample": updates[:5]}
+
+    # Live: bulk per-field UPDATE in batches.
+    BATCH = 500
+    n_committed = 0
+    async with pool.acquire() as conn:
+        for batch_start in range(0, len(updates), BATCH):
+            batch = updates[batch_start : batch_start + BATCH]
+            tickers = [u["ticker"] for u in batch]
+            cusips = [u.get("cusip") for u in batch]
+            isins = [u.get("isin") for u in batch]
+            ciks = [u.get("cik") for u in batch]
+            async with conn.transaction():
+                # COALESCE preserves existing non-null values (pin-at-first-resolve).
+                await conn.execute(
+                    """
+                    UPDATE platform.ticker_classifications tc
+                    SET cusip = COALESCE(tc.cusip, b.cusip),
+                        isin  = COALESCE(tc.isin,  b.isin),
+                        cik   = COALESCE(tc.cik,   b.cik)
+                    FROM (
+                        SELECT unnest($1::text[]) AS ticker,
+                               unnest($2::text[]) AS cusip,
+                               unnest($3::text[]) AS isin,
+                               unnest($4::text[]) AS cik
+                    ) b
+                    WHERE tc.ticker = b.ticker
+                    """,
+                    tickers, cusips, isins, ciks,
+                )
+                n_committed += len(batch)
+
+    log.info("ops.stage.tkr14_backfill.fmp_profile.committed",
+             n_committed=n_committed, n_not_found=misses)
+    return {"filled": n_committed, "not_found": misses, "dry_run": False}
 
 
 async def _stage_dedupe_monotone(
