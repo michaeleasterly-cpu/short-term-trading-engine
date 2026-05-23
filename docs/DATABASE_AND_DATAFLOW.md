@@ -272,6 +272,7 @@ Created by migration `20260512_2100_spread_observations_and_liquidity_tiers.py`.
 - `etf_leverage` (numeric, nullable): leverage factor (e.g., `3.0` for TQQQ, `-2.0` for SQQQ). NULL for non-ETF or 1x ETFs.
 - `etf_category` (text, nullable): rough family (`'equity_broad'`, `'bond_treasury'`, `'commodity_gold'`, …) for the sentinel engine's basket selection.
 - `source` (text): `'alpaca_assets'` or `'name_pattern_fallback'`.
+- `country` (char(2), nullable, **added 2026-05-23**): ISO-2 country code of issuer incorporation. Backfilled from FMP `/stable/profile` since Alpaca `/v2/assets` does not return country. Partial index `WHERE country IS NOT NULL`. `CHECK constraint and NOT NULL deferred to Phase 5 of the v2 referential-integrity rollout once per-asset-class null tolerance is empirically measured (Alpaca documentation suggests ~0-2% null for common-stock-US, ~30-50% null for ETFs).
 - `recorded_at` (timestamptz, default `now()`).
 
 **Used by:**
@@ -282,9 +283,13 @@ Created by migration `20260512_2100_spread_observations_and_liquidity_tiers.py`.
 
 **Maintenance:** `scripts/classify_tickers.py` re-runs the classifier; the operator runs it after a universe expansion. No daily refresh required — asset-class taxonomy is near-static.
 
-#### `platform.sec_insider_transactions`
+#### `platform.insider_transactions` (renamed from `sec_insider_transactions` on 2026-05-23)
 
-**Purpose:** Form 4 insider transactions (BUY/SELL only) parsed from SEC EDGAR. Each row is one non-derivative open-market transaction line from a Form 4 filing. One filing typically produces one row but can produce several when an insider records multiple distinct transactions.
+**Purpose:** Insider transactions (BUY/SELL only). Today the sole source is SEC EDGAR Form 4 (`source='sec'`); future per-country adapters (Task #15) will tag rows with `source IN ('sedi', 'fca', 'cnmv', ...)` per the multi-provider single-table pattern.
+
+`CHECK (source IN ('sec', 'fmp'))` until per-country adapters extend the allowed set.
+
+**Compatibility view:** `platform.sec_insider_transactions` is a SELECT-only VIEW over `WHERE source='sec'` (kept until Phase 5 of the v2 referential-integrity rollout, when consumer migration is verified). Read consumers continue to work transparently against the old name; write consumers fail loud with `cannot insert into view`.
 
 Populated by the weekly `sec_filings` ops stage (`handle_sec_filings` in `tpcore/ingestion/handlers.py`). The adapter (`tpcore/sec/edgar_adapter.py`) uses centralized `@with_retry` for SEC's 10-req/sec rate limit. Filings flow through the CSV-first sub-protocol (download → validate-at-CSV → load → compress).
 
