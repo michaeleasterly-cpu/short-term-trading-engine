@@ -29,11 +29,12 @@ import re
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
+import asyncpg
 import httpx
 import structlog
 
 if TYPE_CHECKING:  # pragma: no cover
-    import asyncpg
+    pass
 
 logger = structlog.get_logger(__name__)
 
@@ -239,14 +240,16 @@ async def upsert_classifications_with_source_snapshot(
     rows: list[tuple[str, str, bool | None, Decimal | None, str | None, str]],
     *,
     source_count: int,
+    delete_tickers: list[str] | None = None,
 ) -> int:
     """Atomically upsert classifications + record the source-of-truth
-    row count snapshot.
+    row count snapshot + delete stale rows.
 
-    Both writes happen in a single transaction. A partial write (upserts
-    succeed, snapshot fails) would silently corrupt the next drift-
-    check's view of "what Alpaca said the row count was last time"; the
-    single-transaction guarantees that can't happen.
+    All three writes happen in a single transaction. A partial write
+    (upserts succeed, snapshot fails, or DELETEs partially apply) would
+    silently corrupt the next drift-check's view of "what Alpaca said
+    the row count was last time"; the single-transaction guarantees
+    that can't happen.
 
     ``source_count`` is the number of assets the upstream (Alpaca
     ``/v2/assets``) returned BEFORE filtering / classification — it is
@@ -254,6 +257,14 @@ async def upsert_classifications_with_source_snapshot(
     ``platform.ticker_classifications`` must equal. A row with that
     count is appended to ``platform.ticker_classifications_source_count``
     (one row per refresh — history is kept).
+
+    ``delete_tickers`` (Phase 3 of v2 referential-integrity rollout,
+    operator 2026-05-23) is the set of stale tickers to remove — those
+    in the existing table that aren't in the current upsert set. Any
+    DELETE against a row with live child references (e.g. orphaned
+    `prices_daily` rows) will fail loud-and-immediate via the v2
+    ON DELETE RESTRICT FK constraints. Per spec §7 Phase 3: that loud
+    failure is strictly better than v1's silent ordering.
     """
     if not rows:
         # Defensive: a zero-row classify run is itself a vendor failure
@@ -267,9 +278,39 @@ async def upsert_classifications_with_source_snapshot(
             "an empty upstream response is a vendor failure and must NOT "
             "be persisted as a baseline."
         )
+    # T1: UPSERTs + snapshot — must succeed atomically; DELETE attempts
+    # run separately so a single FK-blocked stale ticker doesn't roll back
+    # the entire classify run. Per v2 spec §7 Phase 3, loud-fail-on-DELETE
+    # is the SIGNAL not the blocker.
     async with pool.acquire() as conn, conn.transaction():
         await conn.executemany(_UPSERT_SQL, rows)
         await conn.execute(_INSERT_SOURCE_COUNT_SQL, source_count)
+    # T2: per-ticker DELETE with FK-violation tolerance. Each FK rejection
+    # is a SIGNAL that Phase 4 cleanup of that ticker's child rows is
+    # required — captured in the log, never blocks the producer.
+    if delete_tickers:
+        deleted_ok: list[str] = []
+        deleted_blocked: list[str] = []
+        for tk in delete_tickers:
+            try:
+                async with pool.acquire() as conn:
+                    await conn.execute(
+                        "DELETE FROM platform.ticker_classifications WHERE ticker=$1",
+                        tk,
+                    )
+                deleted_ok.append(tk)
+            except asyncpg.ForeignKeyViolationError as exc:
+                deleted_blocked.append(tk)
+                logger.warning(
+                    "classify_tickers.delete_blocked_by_fk",
+                    ticker=tk, error=str(exc)[:200],
+                )
+        logger.info(
+            "classify_tickers.delete_summary",
+            attempted=len(delete_tickers),
+            deleted=len(deleted_ok),
+            blocked_by_fk=len(deleted_blocked),
+        )
     logger.info(
         "classify_tickers.source_snapshot_recorded",
         source_count=source_count,
@@ -283,6 +324,7 @@ async def classify_all_tickers(
     *,
     alpaca_base_url: str,
     alpaca_headers: dict[str, str],
+    dry_run: bool = True,
 ) -> dict[str, int]:
     """One-shot backfill from Alpaca's full asset list.
 
@@ -368,23 +410,101 @@ async def classify_all_tickers(
     # table both equal source_count by construction, on subsequent runs
     # any difference is a real drift signal.
     combined_rows = rows + follow_up_rows
-    source_count = len(combined_rows)
-    if source_count == 0:
+    if not combined_rows:
         # Zero-row Alpaca response is a vendor failure — surface it.
         # Don't write a misleading source_count=0 snapshot (the CHECK
         # constraint on the table forbids it anyway).
         logger.warning("tpcore.classify_tickers.empty_alpaca_response")
         return {"rows": 0, **stats, **follow_up_stats, "source_count": 0}
 
+    # Phase 3 (v2 plan §5): apply the ⊆ prices_daily invariant — only
+    # classify tickers that exist in daily bars. Operator 2026-05-23:
+    # "if the ticker isn't in daily bars then the ticker doesn't need
+    # to be in the ticker classification". This trims Alpaca-returned
+    # tickers that never traded (preferred shares, etc.) before they
+    # ever land in the table.
+    async with pool.acquire() as conn:
+        prices_rows = await conn.fetch(
+            "SELECT DISTINCT ticker FROM platform.prices_daily"
+        )
+        existing_rows = await conn.fetch(
+            "SELECT ticker FROM platform.ticker_classifications"
+        )
+    prices_set = {r["ticker"] for r in prices_rows}
+    existing_set = {r["ticker"] for r in existing_rows}
+    filtered_rows = [r for r in combined_rows if r[0] in prices_set]
+    upsert_set = {r[0] for r in filtered_rows}
+    # DELETE-source-tracking: any ticker_classifications row whose ticker
+    # isn't in the current Alpaca-∩-prices_daily set is stale and must
+    # be removed in the same transaction as the upsert.
+    delete_tickers = sorted(existing_set - upsert_set)
+    excluded_not_in_prices = sorted(
+        {r[0] for r in combined_rows} - prices_set
+    )
+    source_count = len(filtered_rows)
+
+    logger.info(
+        "tpcore.classify_tickers.phase3_filter",
+        alpaca_returned=len(combined_rows),
+        in_prices_daily=source_count,
+        excluded_not_in_prices=len(excluded_not_in_prices),
+        existing_classifications=len(existing_set),
+        stale_to_delete=len(delete_tickers),
+        dry_run=dry_run,
+    )
+
+    # Risk mitigation per v2 plan §5.1: dry_run default. Halt if delete
+    # set >1% of existing universe AND operator hasn't explicitly opted in
+    # with dry_run=false. Today's known orphan situation: 335,159
+    # prices_daily orphans across 166 tickers + 6,083 Alpaca-listed-no-
+    # bars stale classifications. Phase 4 cleanup is required FIRST.
+    pct_delete = (len(delete_tickers) / len(existing_set) * 100) if existing_set else 0
+    if dry_run:
+        logger.info(
+            "tpcore.classify_tickers.dry_run_summary",
+            would_upsert=source_count,
+            would_delete=len(delete_tickers),
+            delete_pct_of_universe=round(pct_delete, 1),
+            sample_delete_tickers=delete_tickers[:20],
+        )
+        return {
+            "rows": 0, **stats, **follow_up_stats,
+            "source_count": source_count,
+            "would_delete": len(delete_tickers),
+            "dry_run": True,
+        }
+    if pct_delete > 1.0:
+        logger.warning(
+            "tpcore.classify_tickers.delete_pct_above_1pct_threshold",
+            delete_pct=round(pct_delete, 1),
+            requires="operator opt-in (pass dry_run=False explicitly + accept this warning) AND Phase 4 cleanup of prices_daily orphans should complete first",
+        )
+
+    if source_count == 0:
+        # All Alpaca tickers were filtered out (no overlap with prices_daily)
+        # — definitely a vendor or data-layer failure, not an empty refresh.
+        logger.warning(
+            "tpcore.classify_tickers.zero_intersection_with_prices_daily",
+            alpaca_count=len(combined_rows),
+            prices_set_size=len(prices_set),
+        )
+        return {"rows": 0, **stats, **follow_up_stats, "source_count": 0}
+
     n = await upsert_classifications_with_source_snapshot(
-        pool, combined_rows, source_count=source_count,
+        pool, filtered_rows, source_count=source_count,
+        delete_tickers=delete_tickers,
     )
 
     logger.info(
         "tpcore.classify_tickers.done",
-        upserted=n, source_count=source_count, **stats, **follow_up_stats,
+        upserted=n, deleted=len(delete_tickers),
+        source_count=source_count, **stats, **follow_up_stats,
     )
-    return {"rows": n, **stats, **follow_up_stats, "source_count": source_count}
+    return {
+        "rows": n, **stats, **follow_up_stats,
+        "source_count": source_count,
+        "deleted": len(delete_tickers),
+    }
 
 
 __all__ = [
