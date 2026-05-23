@@ -345,6 +345,17 @@ async def test_cache_integration_roundtrip() -> None:
     test_ticker = "ZZZTEST"
     try:
         async with pool.acquire() as conn:
+            # FK setup (post-Phase-2): ticker_classifications must contain the
+            # test ticker before any FK-protected table can insert it.
+            # fk_fundamentals_quarterly_ticker REFERENCES ticker_classifications(ticker).
+            await conn.execute(
+                """
+                INSERT INTO platform.ticker_classifications (ticker, asset_class, source)
+                VALUES ($1, 'stock', 'test_fixture')
+                ON CONFLICT (ticker) DO NOTHING
+                """,
+                test_ticker,
+            )
             await conn.execute(
                 "DELETE FROM platform.fundamentals_quarterly WHERE ticker=$1", test_ticker
             )
@@ -366,5 +377,11 @@ async def test_cache_integration_roundtrip() -> None:
         async with pool.acquire() as conn:
             await conn.execute(
                 "DELETE FROM platform.fundamentals_quarterly WHERE ticker=$1", test_ticker
+            )
+            # Tear down the FK-required ticker_classifications row last
+            # (after the child rows are gone — ON DELETE RESTRICT).
+            await conn.execute(
+                "DELETE FROM platform.ticker_classifications WHERE ticker=$1 AND source='test_fixture'",
+                test_ticker,
             )
         await pool.close()
