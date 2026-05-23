@@ -2187,6 +2187,162 @@ async def _stage_classify_tickers(
     return {str(k): (int(v) if isinstance(v, (int, bool)) else v) for k, v in stats.items()}
 
 
+async def _stage_tkr14_backfill(
+    pool: asyncpg.Pool, cfg: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """v2.2 Phase P5 — backfill TKR-14 PK + ticker_history first-seen for existing rows.
+
+    Per v2.2 spec §1.2 / §1.7 + plan P5. SLICE 1: mint TKR-14 + seed
+    ticker_history from local data (country, asset_class, cik already
+    populated by prior migrations). No external API calls in this slice.
+
+    Follow-up slice 2 (separate stage `tkr14_backfill --param mode=cross_vendor`):
+    populate figi/cusip/isin via OpenFIGI + FMP /profile.
+
+    Idempotent: skips any row where `id IS NOT NULL`. Re-runs safely.
+
+    ``cfg`` knobs (all optional):
+      - ``dry_run`` (default 'true') — preview the UPDATE without writing.
+        Operator-explicit ``--param dry_run=false`` to actually execute.
+      - ``limit`` (default 0 = all) — process at most N rows per run.
+
+    For rows missing country or asset_class (some legacy rows), this slice
+    uses safe defaults: country='US' (most of our universe), asset_class='S'
+    (most tickers are common stock). The cross-vendor slice will refine via
+    FMP /profile.
+    """
+    log = structlog.get_logger("scripts.ops")
+    cfg = cfg or {}
+
+    dry_run_param = cfg.get("dry_run", "true")
+    if isinstance(dry_run_param, str):
+        dry_run = dry_run_param.lower() != "false"
+    else:
+        dry_run = bool(dry_run_param)
+    limit = int(cfg.get("limit", 0))
+
+    # Find rows that need a TKR-14 id minted.
+    where_limit = "LIMIT $1" if limit > 0 else ""
+    args: list[Any] = [limit] if limit > 0 else []
+    rows = await pool.fetch(
+        f"""
+        SELECT ticker, current_ticker, country, asset_class, cik, updated_at
+        FROM platform.ticker_classifications
+        WHERE id IS NULL
+        ORDER BY ticker
+        {where_limit}
+        """,
+        *args,
+    )
+
+    if not rows:
+        log.info("ops.stage.tkr14_backfill.no_rows_to_mint")
+        return {"rows_minted": 0, "rows_skipped": 0, "dry_run": dry_run}
+
+    # Import the mint function (deferred for hermetic test collection)
+    from tpcore.identity.tkr14 import AssetClass, DiscoverySource, IPOVenue, mint
+
+    # Map persisted asset_class strings to the TKR-14 enum.
+    _AC_MAP = {
+        "stock": AssetClass.STOCK,
+        "common": AssetClass.STOCK,
+        "preferred": AssetClass.PREFERRED,
+        "etf": AssetClass.ETF,
+        "fund": AssetClass.FUND,
+        "reit": AssetClass.REIT,
+        "trust": AssetClass.TRUST,
+        "adr": AssetClass.ADR,
+        "spac": AssetClass.SPAC_UNIT,
+        "warrant": AssetClass.WARRANT,
+        "note": AssetClass.NOTE,
+    }
+
+    minted: list[tuple[str, str]] = []  # (ticker, new_id)
+    skipped_invalid: list[str] = []
+
+    for r in rows:
+        ticker = r["ticker"]
+        country = (r["country"] or "US").upper()
+        if len(country) != 2 or not country.isalpha():
+            skipped_invalid.append(ticker)
+            continue
+        ac_str = (r["asset_class"] or "stock").lower()
+        ac = _AC_MAP.get(ac_str, AssetClass.STOCK)
+        cik_val = str(r["cik"]) if r["cik"] else None
+        legal_name = r["current_ticker"] or ticker  # safe fallback for hash seed
+        # For backfill of pre-existing rows we use the row's `updated_at` as the
+        # discovery-year proxy (true first-seen timestamp not in schema). This
+        # is honest snapshot semantics for the YY segment.
+        mint_now = r["updated_at"] or datetime.now(UTC)
+        try:
+            new_id = mint(
+                country=country,
+                asset_class=ac,
+                # Historical IPO venue unknown for backfill — use 'O' (other) snapshot.
+                ipo_venue=IPOVenue.OTHER,
+                # Backfill is operator-driven, not feed-discovered — use 'O' (other).
+                discovery_source=DiscoverySource.OTHER,
+                cik=cik_val,
+                legal_name=legal_name,
+                now=mint_now,
+            )
+        except ValueError as e:
+            log.warning("ops.stage.tkr14_backfill.mint_failed", ticker=ticker, error=str(e)[:200])
+            skipped_invalid.append(ticker)
+            continue
+        minted.append((ticker, new_id))
+
+    if dry_run:
+        log.info(
+            "ops.stage.tkr14_backfill.dry_run_preview",
+            n_minted=len(minted),
+            n_skipped_invalid=len(skipped_invalid),
+            sample=minted[:3],
+        )
+        return {
+            "rows_minted": 0,
+            "rows_previewed": len(minted),
+            "rows_skipped_invalid": len(skipped_invalid),
+            "dry_run": True,
+            "sample": [{"ticker": t, "id": i} for t, i in minted[:5]],
+        }
+
+    # Live: UPDATE in a single transaction per row + seed ticker_history.
+    # Transactional per-row keeps the inevitable mid-batch failure rollbackable
+    # to the row level, not the batch level.
+    n_committed = 0
+    async with pool.acquire() as conn:
+        for ticker, new_id in minted:
+            async with conn.transaction():
+                await conn.execute(
+                    "UPDATE platform.ticker_classifications SET id = $1 WHERE ticker = $2 AND id IS NULL",
+                    new_id, ticker,
+                )
+                # Seed ticker_history with first-seen row. ON CONFLICT DO NOTHING
+                # protects against re-run partial-replay.
+                await conn.execute(
+                    """
+                    INSERT INTO platform.ticker_history (classification_id, ticker, valid_from, valid_to)
+                    SELECT $1, $2, COALESCE(updated_at::date, CURRENT_DATE), NULL
+                    FROM platform.ticker_classifications WHERE ticker = $2
+                    ON CONFLICT (classification_id, valid_from) DO NOTHING
+                    """,
+                    new_id, ticker,
+                )
+                n_committed += 1
+
+    log.info(
+        "ops.stage.tkr14_backfill.committed",
+        n_minted=n_committed,
+        n_skipped_invalid=len(skipped_invalid),
+    )
+    return {
+        "rows_minted": n_committed,
+        "rows_skipped_invalid": len(skipped_invalid),
+        "dry_run": False,
+    }
+
+
 async def _stage_dedupe_monotone(
     pool: asyncpg.Pool, cfg: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -4171,6 +4327,12 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # expansion. ETFs/SPACs/funds get flagged so catalyst + earnings
     # pipelines can filter them out.
     ("classify_tickers",    lambda pool, cfg: (lambda: _stage_classify_tickers(pool, cfg)),     HEAVY_STAGE_TIMEOUT_SEC),
+    # v2.2 Phase P5 — backfill TKR-14 PK on existing ticker_classifications
+    # rows + seed ticker_history first-seen entries. Idempotent; safe re-run.
+    # SLICE 1: local-only (no external API). SLICE 2 (cross-vendor mode):
+    # OpenFIGI + FMP /profile for figi/cusip/isin. Operator-on-demand,
+    # NOT a scheduled cadence stage.
+    ("tkr14_backfill",      lambda pool, cfg: (lambda: _stage_tkr14_backfill(pool, cfg)),       HEAVY_STAGE_TIMEOUT_SEC),
     ("delist_stale",        lambda pool, cfg: (lambda: _stage_delist_stale(pool)),             STAGE_TIMEOUT_SEC),
     # earnings_refresh — earnings-beat events for vector engine.
     # Heavy timeout (1h) because the FMP loop is ~1 sec per ticker;
