@@ -2,6 +2,10 @@
 
 **Status:** v2.1. **Supersedes v2 (`docs/superpowers/specs/2026-05-23-referential-integrity-design-v2.md`)** by closing the concern-map gaps surfaced mid-execution and re-sequencing the phase order to land in the right shape. v2 stays on disk as the historical record of the original NOT-VALID-FIRST inversion thinking. Where v2.1 and v2 conflict on phase sequence, orphan-handling protocol, or in-scope table list, **v2.1 wins**.
 
+**Corrections (post-merge 2026-05-23):**
+1. **Phase 0.6 (`pg_dump` daily backup regimen) DROPPED.** Supabase Pro provides daily backups + 7-day PITR (operator-verified 2026-05-23). The earlier expert opinion that recommended `pg_dump` framed it as COMPLEMENT to Supabase's coverage; in this single-Mac, single-tenant operator context, the Supabase coverage is sufficient. Tenant-loss recovery for paper-trading-only scope doesn't justify the daily compute + S3 storage overhead.
+2. **Phase 0.5 (`db_snapshots/`) RE-SCOPED to ON-DEMAND ONLY.** No daily cron, no 30-day retention, no launchd plist. The script (`scripts/db_snapshots.py`) is invoked manually right before a Phase 4 cleanup PR — captures the table(s) being cleaned up — and the snapshot files are DELETED after the cleanup is verified. Pure pre-cleanup rollback, not a backup.
+
 v2 (and v1 before it) stay readable for tactical migration templates + risk-register cross-reference. **For sequencing, scope, and the contract, v2.1 is authoritative.**
 
 **Author / role:** `db-architect` (Postgres + Supabase Pro tier; `platform.*` schema). See `.claude/agents/db-architect.md`.
