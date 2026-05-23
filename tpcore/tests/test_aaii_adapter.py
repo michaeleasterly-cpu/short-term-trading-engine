@@ -134,6 +134,16 @@ class _Conn:
         self.sql = sql
         self.upserts.append(list(rows))
 
+    # Task #18 P3: handle_aaii_sentiment now wraps the legacy upsert
+    # + macro_data double-write in conn.transaction(). The double-write
+    # itself is monkeypatched to a no-op in this test (see below) — but
+    # the transaction context manager must still exist on the mock.
+    def transaction(self):
+        class _Txn:
+            async def __aenter__(self_inner): return None
+            async def __aexit__(self_inner, *exc): return None
+        return _Txn()
+
 
 class _Pool:
     def __init__(self, conn): self._conn = conn
@@ -163,6 +173,15 @@ async def test_handler_idempotent_upsert(monkeypatch) -> None:
     monkeypatch.setattr("tpcore.aaii.AAIIAdapter", _Adapter)
     monkeypatch.setattr("tpcore.ingestion.csv_archive.write_archive",
                         lambda *a, **k: type("A", (), {"path": "/tmp/x"})())
+    # Task #18 P3 — the handler now also calls upsert_macro_data_bitemporal
+    # to double-write into platform.macro_data. This test exercises the
+    # LEGACY-table idempotency contract only; stub the bitemporal helper
+    # so the mock _Conn doesn't need a full SCD-2 fixture.
+    async def _noop_upsert(*a, **k): return {"inserted": 0, "revised": 0, "no_change": 0}
+    monkeypatch.setattr(
+        "tpcore.ingestion.macro_data_emit.upsert_macro_data_bitemporal",
+        _noop_upsert,
+    )
     n1 = await handlers.handle_aaii_sentiment(_Pool(conn), {"skip_guard_days": 0})
     n2 = await handlers.handle_aaii_sentiment(_Pool(conn), {"skip_guard_days": 0})
     assert n1 == n2 == 3
