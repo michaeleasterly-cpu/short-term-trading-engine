@@ -26,13 +26,13 @@ DIRECTLY to macro_data and this helper module is deleted.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from decimal import Decimal
 from typing import TYPE_CHECKING
 
 import structlog
 
 if TYPE_CHECKING:
     from datetime import date
-    from decimal import Decimal
 
     import asyncpg
 
@@ -43,6 +43,24 @@ logger = structlog.get_logger(__name__)
 # Exactly one of value_num / value_text must be non-NULL per row
 # (enforced by the table's macro_data_value_xor CHECK).
 MacroRow = tuple[str, "date", "Decimal | float | None", str | None]
+
+
+def _coerce_numeric(v: Decimal | float | None) -> Decimal | None:
+    """Coerce float -> Decimal(str(f)) so encoding to Postgres NUMERIC
+    is precision-exact. asyncpg encodes Python float arrays via the
+    binary protocol, preserving IEEE-754 noise bits (64.68 stored as
+    64.68000000000000682...); Decimal arrays encode via shortest-
+    round-trip string. The legacy INSERT path with scalar $params
+    happens to round nicely because asyncpg uses str(float) on
+    unknown-type scalars; the unnest($::numeric[]) array path does NOT.
+    Coercing here ensures all callers (Decimal-source or float-source)
+    produce identical macro_data values for parity with the legacy
+    tables they double-write to."""
+    if v is None:
+        return None
+    if isinstance(v, Decimal):
+        return v
+    return Decimal(str(v))
 
 
 _UPSERT_SQL = """
@@ -133,7 +151,7 @@ async def upsert_macro_data_bitemporal(
 
     series_ids = [r[0] for r in rows]
     observed_dates = [r[1] for r in rows]
-    value_nums = [r[2] for r in rows]
+    value_nums = [_coerce_numeric(r[2]) for r in rows]
     value_texts = [r[3] for r in rows]
 
     result = await conn.fetchrow(

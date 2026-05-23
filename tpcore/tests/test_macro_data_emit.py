@@ -145,3 +145,57 @@ async def test_empty_input_is_noop() -> None:
         assert r == {"inserted": 0, "revised": 0, "no_change": 0}
     finally:
         await pool.close()
+
+
+async def test_float_input_stores_precision_exact() -> None:
+    """Float inputs must round-trip via Decimal so the stored value equals
+    the legacy producer's Postgres-NUMERIC encoding.
+
+    Without this contract, the asyncpg ``unnest($::numeric[])`` binary
+    array protocol stores 64.68 as 64.6800000000000068212... (IEEE-754
+    noise), breaking parity with the legacy table that uses scalar
+    $params (which asyncpg encodes via str(float) → shortest-round-trip).
+    The macro_data_parity test would then fail on every fear_greed /
+    aaii cron cycle.
+    """
+    from decimal import Decimal
+
+    from tpcore.db import build_asyncpg_pool
+    from tpcore.ingestion.macro_data_emit import upsert_macro_data_bitemporal
+
+    pool = await build_asyncpg_pool(os.environ["DATABASE_URL"])
+    try:
+        await _clean(pool)
+
+        async with pool.acquire() as conn:
+            # Insert FLOAT 64.68 — was the literal failure mode that
+            # produced 36 mismatches on the 2026-05-24 live cron-cycle test.
+            r = await upsert_macro_data_bitemporal(
+                conn, source=_TEST_SOURCE,
+                rows=[("precision_probe", date(2026, 1, 1), 64.68, None)],
+            )
+            assert r == {"inserted": 1, "revised": 0, "no_change": 0}
+
+            stored = await conn.fetchval(
+                "SELECT value_num FROM platform.macro_data "
+                "WHERE source = $1 AND series_id = 'precision_probe' "
+                "AND realtime_end = 'infinity'",
+                _TEST_SOURCE,
+            )
+            # Exact-equal Decimal('64.68') — no binary-float noise bits.
+            assert stored == Decimal("64.68"), (
+                f"float input 64.68 stored as {stored!r}; coercion broken — "
+                f"this would break legacy↔macro_data parity in cron cycles"
+            )
+
+            # Same float re-emitted: SCD-2 must detect no_change (proves the
+            # coerced Decimal equals itself across calls, not just the
+            # initial insert).
+            r2 = await upsert_macro_data_bitemporal(
+                conn, source=_TEST_SOURCE,
+                rows=[("precision_probe", date(2026, 1, 1), 64.68, None)],
+            )
+            assert r2 == {"inserted": 0, "revised": 0, "no_change": 1}
+    finally:
+        await _clean(pool)
+        await pool.close()
