@@ -95,6 +95,7 @@ def upgrade() -> None:
             ADD COLUMN IF NOT EXISTS ipo_venue          text,
             ADD COLUMN IF NOT EXISTS discovery_source   text,
             ADD COLUMN IF NOT EXISTS cik                text,
+            ADD COLUMN IF NOT EXISTS status             text NOT NULL DEFAULT 'active',
             ADD COLUMN IF NOT EXISTS updated_at         timestamptz NOT NULL DEFAULT now()
         """
     )
@@ -183,6 +184,7 @@ def downgrade() -> None:
         """
         ALTER TABLE platform.ticker_classifications
             DROP COLUMN IF EXISTS updated_at,
+            DROP COLUMN IF EXISTS status,
             DROP COLUMN IF EXISTS cik,
             DROP COLUMN IF EXISTS discovery_source,
             DROP COLUMN IF EXISTS ipo_venue,
