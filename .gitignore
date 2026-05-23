@@ -37,22 +37,22 @@ docs/lab/*-seed*.json
 *.sqlite3
 # Data is NEVER tracked in git (operator directive 2026-05-23: "dont put the csvs
 # on the github... take them completely out... i'm not sharing that work").
-# Whole-directory exclusions kept for clarity even though `data/**` covers them.
-data/
-!data/.gitkeep
-data/raw/
-data/cache/
-data/tradier_export/
-data/alpaca_backfill/
-data/fmp_backfill/
-data/corp_actions_backfill/
-data/sec_backfill/
-data/*_archive/
-data/db_snapshots/
-data/fred_macro_backfill/
-data/hy_spread_recovery/
-data/sentinel_activation_probe/
-data/tsp_entrepreneur_import/
+# Leading slash = top-level `data/` only — DOES NOT match `tpcore/data/` etc.
+/data/
+!/data/.gitkeep
+/data/raw/
+/data/cache/
+/data/tradier_export/
+/data/alpaca_backfill/
+/data/fmp_backfill/
+/data/corp_actions_backfill/
+/data/sec_backfill/
+/data/*_archive/
+/data/db_snapshots/
+/data/fred_macro_backfill/
+/data/hy_spread_recovery/
+/data/sentinel_activation_probe/
+/data/tsp_entrepreneur_import/
 logs/
 backtests/
 

@@ -2165,13 +2165,26 @@ async def _stage_classify_tickers(
     from tpcore.data.classify_tickers import classify_all_tickers
     from tpcore.data.ingest_alpaca_bars import _alpaca_broker_base, _alpaca_headers
 
+    # Phase 3 (v2 referential-integrity rollout): dry_run defaults True
+    # in the producer so accidental ops invocations don't trigger live
+    # DELETEs before Phase 4 cleanup of prices_daily orphans completes.
+    # Opt-in: `--param dry_run=false`.
+    dry_run_param = (cfg or {}).get("dry_run", True)
+    if isinstance(dry_run_param, str):
+        dry_run = dry_run_param.lower() != "false"
+    else:
+        dry_run = bool(dry_run_param)
     stats = await classify_all_tickers(
         pool,
         alpaca_base_url=_alpaca_broker_base(),
         alpaca_headers=_alpaca_headers(),
+        dry_run=dry_run,
     )
-    log.info("ops.stage.classify_tickers.done", **{str(k): int(v) for k, v in stats.items()})
-    return {str(k): int(v) for k, v in stats.items()}
+    log.info(
+        "ops.stage.classify_tickers.done",
+        **{str(k): (int(v) if isinstance(v, (int, bool)) else v) for k, v in stats.items()},
+    )
+    return {str(k): (int(v) if isinstance(v, (int, bool)) else v) for k, v in stats.items()}
 
 
 async def _stage_dedupe_monotone(
