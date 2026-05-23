@@ -508,3 +508,5 @@ CBOE_BZX  # unused variable (tpcore/identity/tkr14.py:73)
 OTC  # unused variable (tpcore/identity/tkr14.py:74)
 SEC  # unused variable (tpcore/identity/tkr14.py:83)
 ALPACA  # unused variable (tpcore/identity/tkr14.py:84)
+# OpenFIGI adapter
+market_sector  # unused variable (tpcore/openfigi/figi_adapter.py:107)
