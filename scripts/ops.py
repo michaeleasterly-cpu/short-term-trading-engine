@@ -2652,8 +2652,39 @@ async def _tkr14_backfill_fmp_profile(
 
     log.info("ops.stage.tkr14_backfill.fmp_profile.starting", n_tickers=len(rows), dry_run=dry_run)
 
-    updates: list[dict[str, Any]] = []  # {ticker, cusip, isin, cik}
+    BATCH = 500
+    pending: list[dict[str, Any]] = []  # {ticker, cusip, isin, cik}
+    n_committed = 0
     misses = 0
+
+    async def _flush(buf: list[dict[str, Any]]) -> int:
+        """Bulk UPDATE the pending buffer; return rows committed. Called streaming."""
+        if not buf or dry_run:
+            return 0
+        tickers = [u["ticker"] for u in buf]
+        cusips = [u.get("cusip") for u in buf]
+        isins = [u.get("isin") for u in buf]
+        ciks = [u.get("cik") for u in buf]
+        async with pool.acquire() as conn, conn.transaction():
+            await conn.execute(
+                """
+                UPDATE platform.ticker_classifications tc
+                SET cusip = COALESCE(tc.cusip, b.cusip),
+                    isin  = COALESCE(tc.isin,  b.isin),
+                    cik   = COALESCE(tc.cik,   b.cik)
+                FROM (
+                    SELECT unnest($1::text[]) AS ticker,
+                           unnest($2::text[]) AS cusip,
+                           unnest($3::text[]) AS isin,
+                           unnest($4::text[]) AS cik
+                ) b
+                WHERE tc.ticker = b.ticker
+                """,
+                tickers, cusips, isins, ciks,
+            )
+        return len(buf)
+
+    sample_preview: list[dict[str, Any]] = []  # first 5 (dry_run only)
     async with httpx.AsyncClient(timeout=20.0) as client:
         for i, r in enumerate(rows):
             ticker = r["ticker"]
@@ -2673,8 +2704,6 @@ async def _tkr14_backfill_fmp_profile(
                         break
                     profile = data[0]
                     upd: dict[str, Any] = {"ticker": ticker}
-                    # Pin-at-first-resolve: only emit fields where the current
-                    # row is NULL AND the FMP response carries a non-empty value.
                     if r["cusip"] is None and (cusip := profile.get("cusip")):
                         upd["cusip"] = str(cusip)[:9]
                     if r["isin"] is None and (isin := profile.get("isin")):
@@ -2682,7 +2711,9 @@ async def _tkr14_backfill_fmp_profile(
                     if r["cik"] is None and (cik := profile.get("cik")):
                         upd["cik"] = str(cik)
                     if len(upd) > 1:
-                        updates.append(upd)
+                        pending.append(upd)
+                        if dry_run and len(sample_preview) < 5:
+                            sample_preview.append(upd)
                     break
                 except httpx.HTTPError as e:
                     if attempt == 2:
@@ -2692,45 +2723,26 @@ async def _tkr14_backfill_fmp_profile(
                     else:
                         await asyncio.sleep(2)
             await asyncio.sleep(RATE_SLEEP_S)
+            # Streaming flush every BATCH rows so progress survives timeout/crash.
+            if len(pending) >= BATCH:
+                n_committed += await _flush(pending)
+                pending.clear()
             if (i + 1) % 500 == 0:
                 log.info("ops.stage.tkr14_backfill.fmp_profile.progress",
-                         processed=i + 1, total=len(rows), staged_updates=len(updates))
+                         processed=i + 1, total=len(rows),
+                         n_committed=n_committed, n_pending=len(pending), n_misses=misses)
+
+    # Final flush
+    if pending:
+        n_committed += await _flush(pending)
+        pending.clear()
 
     if dry_run:
         log.info("ops.stage.tkr14_backfill.fmp_profile.dry_run_preview",
-                 n_updates=len(updates), n_not_found=misses, sample=updates[:3])
-        return {"filled": 0, "previewed": len(updates), "not_found": misses,
-                "dry_run": True, "sample": updates[:5]}
-
-    # Live: bulk per-field UPDATE in batches.
-    BATCH = 500
-    n_committed = 0
-    async with pool.acquire() as conn:
-        for batch_start in range(0, len(updates), BATCH):
-            batch = updates[batch_start : batch_start + BATCH]
-            tickers = [u["ticker"] for u in batch]
-            cusips = [u.get("cusip") for u in batch]
-            isins = [u.get("isin") for u in batch]
-            ciks = [u.get("cik") for u in batch]
-            async with conn.transaction():
-                # COALESCE preserves existing non-null values (pin-at-first-resolve).
-                await conn.execute(
-                    """
-                    UPDATE platform.ticker_classifications tc
-                    SET cusip = COALESCE(tc.cusip, b.cusip),
-                        isin  = COALESCE(tc.isin,  b.isin),
-                        cik   = COALESCE(tc.cik,   b.cik)
-                    FROM (
-                        SELECT unnest($1::text[]) AS ticker,
-                               unnest($2::text[]) AS cusip,
-                               unnest($3::text[]) AS isin,
-                               unnest($4::text[]) AS cik
-                    ) b
-                    WHERE tc.ticker = b.ticker
-                    """,
-                    tickers, cusips, isins, ciks,
-                )
-                n_committed += len(batch)
+                 n_filled=n_committed + len(sample_preview), n_not_found=misses,
+                 sample=sample_preview)
+        return {"filled": 0, "previewed": n_committed + len(sample_preview),
+                "not_found": misses, "dry_run": True, "sample": sample_preview}
 
     log.info("ops.stage.tkr14_backfill.fmp_profile.committed",
              n_committed=n_committed, n_not_found=misses)
