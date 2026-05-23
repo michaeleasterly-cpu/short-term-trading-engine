@@ -45,6 +45,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 from sigma.models import ExecutionDecision
+
 from tpcore.alpaca.broker_adapter import AlpacaPaperBrokerAdapter
 from tpcore.db import build_asyncpg_pool
 from tpcore.logging.db_handler import DBLogHandler

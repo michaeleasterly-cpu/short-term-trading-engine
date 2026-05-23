@@ -32,7 +32,7 @@ class _Conn:
         self._row = row
 
     async def fetchrow(self, sql: str, *args: object) -> dict[str, Any] | None:
-        assert "sec_insider_transactions" in sql.lower()
+        assert "insider_transactions" in sql.lower()
         assert "sec_material_events" in sql.lower()
         return self._row
 

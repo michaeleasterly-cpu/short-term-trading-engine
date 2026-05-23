@@ -1,7 +1,7 @@
 """Tests for the zero-tolerance sec_insider_monotone invariant.
 
 The check compares per-ticker live ``COUNT(*)`` on
-``platform.sec_insider_transactions`` against the prior baseline in
+``platform.insider_transactions`` against the prior baseline in
 ``platform.sec_insider_row_counts_snapshot``, then UPSERTs the new
 baseline on PASS — all in a single transaction. Tests pin behavior with
 a fake asyncpg pool that records the SQL it sees + the UPSERT writes,
@@ -29,7 +29,7 @@ class _Conn:
     ) -> list[dict[str, Any]]:
         # Two distinct SELECTs are issued — route by SQL substring.
         # Live per-ticker counts.
-        if "FROM platform.sec_insider_transactions" in sql:
+        if "FROM platform.insider_transactions" in sql:
             return [
                 {"ticker": t, "rowcount": c}
                 for t, c in self._owner.live_counts.items()
