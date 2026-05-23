@@ -313,7 +313,7 @@ Pull-order INSIDE the stage:
 2. **FMP `/profile` API only for rows the archive doesn't cover** — invoked via the existing FMP adapter, NOT a one-off curl. Rate-limited via FMP Starter (300/min). Expected miss-rate <5% of 13K.
 3. **OpenFIGI bulk for FIGI** — via `tpcore.ingestion.openfigi_adapter.map_tickers([ticker_batch])`. Batches up to 100; ~25K mappings/min with key.
 4. **TKR-14 mint + ticker_history seed** — via `parent_resolver.resolve()` which already encapsulates this logic per P4.
-5. **Idempotent** — `parent_resolver.resolve()` skips rows where `id IS NOT NULL` per pin-at-first-resolve discipline.
+5. **Idempotent + fill-nulls-as-they-arrive** — `parent_resolver.resolve()` skips minting a new `id` when one exists (pin-at-first-resolve for the PK), BUT will fill `cusip`/`isin`/`figi` if they are currently NULL and a new resolution attempt returns a value. Operator's clarification 2026-05-23 ("you will put in cusip and that other shit as you get it, correct?"): yes. Pattern: never overwrite a non-null cross-vendor identifier (treats divergence as `IDENTITY_DIVERGENCE_INVESTIGATE` event), but always fill nulls when data becomes available. The stage can be re-run with `--param mode=fill_nulls_only` to walk all rows with at least one NULL identifier column and try to resolve them.
 6. **Progress reporting** via the standard ops.py logging path (every 100 rows; structlog INFO; persisted to `application_log` table per existing convention).
 7. **Wall-clock estimate:** archive-first means most rows skip API calls. ~10-15 min total.
 
