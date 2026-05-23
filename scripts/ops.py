@@ -2469,6 +2469,137 @@ async def _tkr14_backfill_figi(
     }
 
 
+async def _stage_prices_daily_backfill_classification_id(
+    pool: asyncpg.Pool, cfg: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """v2.2 P6 — chunked backfill of prices_daily.classification_id.
+
+    Step 2 of the 3-step prices_daily P6 rollout (see migration 20260524_0700
+    for the rationale). Single-transaction UPDATE on 21M rows generated 1.95 GB
+    WAL on 2026-05-23 → triggered Supabase auto-protective read-only mode.
+    This stage processes in 100K-row chunks with explicit COMMIT between chunks
+    so WAL recycles incrementally.
+
+    Pre-condition: migration 20260524_0700 added the `classification_id` column.
+
+    cfg knobs:
+      dry_run (default 'true') — count what WOULD update; no writes.
+      chunk_size (default 100000) — rows per transaction.
+      max_chunks (default 0 = no limit) — process at most N chunks this run.
+      sleep_ms (default 500) — ms between chunks (WAL checkpoint headroom).
+    """
+    log = structlog.get_logger("scripts.ops")
+    cfg = cfg or {}
+
+    dry_run_param = cfg.get("dry_run", "true")
+    dry_run = (dry_run_param.lower() != "false") if isinstance(dry_run_param, str) else bool(dry_run_param)
+    chunk_size = int(cfg.get("chunk_size", 100_000))
+    max_chunks = int(cfg.get("max_chunks", 0))
+    sleep_ms = int(cfg.get("sleep_ms", 500))
+
+    has_col = await pool.fetchval(
+        "SELECT count(*) FROM information_schema.columns "
+        "WHERE table_schema='platform' AND table_name='prices_daily' "
+        "AND column_name='classification_id'"
+    )
+    if not has_col:
+        raise RuntimeError(
+            "prices_daily.classification_id missing — apply 20260524_0700 first."
+        )
+
+    n_total = int(await pool.fetchval(
+        "SELECT count(*) FROM platform.prices_daily WHERE classification_id IS NULL"
+    ) or 0)
+    if n_total == 0:
+        log.info("ops.stage.prices_daily_backfill_classification_id.no_rows_to_backfill")
+        return {"backfilled": 0, "chunks": 0, "remaining_orphan": 0, "dry_run": dry_run}
+
+    log.info(
+        "ops.stage.prices_daily_backfill_classification_id.starting",
+        n_rows_to_backfill=n_total, chunk_size=chunk_size,
+        max_chunks=max_chunks, dry_run=dry_run,
+    )
+
+    if dry_run:
+        match = int(await pool.fetchval(
+            "SELECT count(*) FROM platform.prices_daily pd "
+            "JOIN platform.ticker_classifications tc "
+            "  ON pd.ticker = tc.current_ticker "
+            "  AND tc.status IN ('active','active_when_issued') "
+            "WHERE pd.classification_id IS NULL"
+        ) or 0)
+        return {
+            "would_backfill": match,
+            "would_remain_orphan": n_total - match,
+            "chunks_estimated": (match + chunk_size - 1) // chunk_size,
+            "dry_run": True,
+        }
+
+    n_updated = 0
+    n_chunks = 0
+    while True:
+        if max_chunks and n_chunks >= max_chunks:
+            log.info(
+                "ops.stage.prices_daily_backfill_classification_id.max_chunks_reached",
+                chunks=n_chunks, backfilled=n_updated,
+            )
+            break
+
+        async with pool.acquire() as conn, conn.transaction():
+            await conn.execute("SET LOCAL statement_timeout = '5min'")
+            r = await conn.execute(
+                """
+                WITH batch AS (
+                    SELECT pd.ctid
+                    FROM platform.prices_daily pd
+                    WHERE pd.classification_id IS NULL
+                      AND EXISTS (
+                          SELECT 1 FROM platform.ticker_classifications tc
+                          WHERE tc.current_ticker = pd.ticker
+                            AND tc.status IN ('active','active_when_issued')
+                      )
+                    LIMIT $1
+                )
+                UPDATE platform.prices_daily pd
+                SET classification_id = tc.id
+                FROM platform.ticker_classifications tc
+                WHERE pd.ctid IN (SELECT ctid FROM batch)
+                  AND pd.ticker = tc.current_ticker
+                  AND tc.status IN ('active','active_when_issued')
+                """,
+                chunk_size,
+            )
+            n_this = int(r.split()[-1]) if r.startswith("UPDATE") else 0
+
+        if n_this == 0:
+            log.info(
+                "ops.stage.prices_daily_backfill_classification_id.complete",
+                total_backfilled=n_updated, chunks=n_chunks,
+            )
+            break
+
+        n_updated += n_this
+        n_chunks += 1
+        if n_chunks == 1 or n_chunks % 10 == 0:
+            log.info(
+                "ops.stage.prices_daily_backfill_classification_id.progress",
+                chunks_done=n_chunks, rows_backfilled=n_updated,
+            )
+        await asyncio.sleep(sleep_ms / 1000.0)
+
+    n_remaining = int(await pool.fetchval(
+        "SELECT count(*) FROM platform.prices_daily WHERE classification_id IS NULL"
+    ) or 0)
+    log.info(
+        "ops.stage.prices_daily_backfill_classification_id.done",
+        total_backfilled=n_updated, chunks=n_chunks, remaining_orphan=n_remaining,
+    )
+    return {
+        "backfilled": n_updated, "chunks": n_chunks,
+        "remaining_orphan": n_remaining, "dry_run": False,
+    }
+
+
 async def _tkr14_backfill_fmp_profile(
     pool: asyncpg.Pool,
     log: Any,
@@ -4596,6 +4727,11 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # OpenFIGI + FMP /profile for figi/cusip/isin. Operator-on-demand,
     # NOT a scheduled cadence stage.
     ("tkr14_backfill",      lambda pool, cfg: (lambda: _stage_tkr14_backfill(pool, cfg)),       HEAVY_STAGE_TIMEOUT_SEC),
+    # v2.2 P6 step 2 — chunked backfill (100K rows/txn) for prices_daily.classification_id.
+    # Sidesteps the 1.95 GB WAL blow-up from the 2026-05-23 single-transaction attempt.
+    ("prices_daily_backfill_classification_id",
+        lambda pool, cfg: (lambda: _stage_prices_daily_backfill_classification_id(pool, cfg)),
+        HEAVY_STAGE_TIMEOUT_SEC),
     ("delist_stale",        lambda pool, cfg: (lambda: _stage_delist_stale(pool)),             STAGE_TIMEOUT_SEC),
     # earnings_refresh — earnings-beat events for vector engine.
     # Heavy timeout (1h) because the FMP loop is ~1 sec per ticker;
