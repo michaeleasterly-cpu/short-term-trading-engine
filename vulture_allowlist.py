@@ -510,3 +510,6 @@ SEC  # unused variable (tpcore/identity/tkr14.py:83)
 ALPACA  # unused variable (tpcore/identity/tkr14.py:84)
 # OpenFIGI adapter
 market_sector  # unused variable (tpcore/openfigi/figi_adapter.py:107)
+# parent_resolver — returned-snapshot timestamp consumed by callers writing to
+# ticker_classifications.updated_at and AAR rows.
+resolved_at  # unused variable (tpcore/identity/parent_resolver.py:141)
