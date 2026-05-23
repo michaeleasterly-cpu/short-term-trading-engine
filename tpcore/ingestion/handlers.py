@@ -1053,10 +1053,10 @@ async def _sec_load_csvs_to_db(
         async with pool.acquire() as conn:
             res = await conn.executemany(
                 """
-                INSERT INTO platform.sec_insider_transactions
+                INSERT INTO platform.insider_transactions
                     (ticker, filing_date, insider_name, transaction_type,
-                     shares, price, value)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                     shares, price, value, source)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, 'sec')
                 ON CONFLICT (ticker, filing_date, insider_name,
                              transaction_type, shares) DO NOTHING
                 """,
