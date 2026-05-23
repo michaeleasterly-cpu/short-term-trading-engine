@@ -179,16 +179,25 @@ def _verify_iso_7064(full_id: str) -> bool:
     return int("".join(digits)) % 97 == 1
 
 
-def _issuer_hash(country: str, cik: str | None, legal_name: str) -> str:
+def _issuer_hash(country: str, cik: str | None, legal_name: str, salt: int = 0) -> str:
     """Compute the 5-char Crockford base32 issuer hash.
 
     SHA-1 over ``country|CIK`` (preferred) or ``country|normalized_legal_name``
     (fallback); take the top 25 bits; render as 5 Crockford base32 chars.
+
+    ``salt``: when > 0, appended to the seed as ``|salt={n}`` to break
+    collisions. Used by parent_resolver / backfill stages that detect a
+    UNIQUE violation on insert and retry with an incrementing salt.
+    Birthday-paradox at 13K rows is ~1.7%; salt=1 typically resolves it
+    on the first retry. Salt=0 (default) produces the canonical no-collision
+    hash for fresh mints.
     """
     if cik:
         seed = f"{country}|{cik}"
     else:
         seed = f"{country}|{_normalize_legal_name(legal_name)}"
+    if salt > 0:
+        seed = f"{seed}|salt={salt}"
     digest = hashlib.sha1(seed.encode("utf-8")).digest()
     # Top 25 bits of the 160-bit SHA-1 digest
     top_32_bits = int.from_bytes(digest[:4], "big")
@@ -205,6 +214,7 @@ def mint(
     cik: str | None,
     legal_name: str,
     now: datetime,
+    salt: int = 0,
 ) -> str:
     """Mint a new TKR-14 identifier from immutable / at-mint-snapshot facts.
 
@@ -221,25 +231,33 @@ def mint(
       cik: SEC CIK string (preferred for issuer-hash seed). None for non-SEC issuers.
       legal_name: Issuer legal name (fallback seed when CIK is None).
       now: UTC datetime; year-mod-100 becomes the discovery_year_yy segment.
+      salt: collision-retry counter (default 0). Callers that catch a UNIQUE
+        violation on insert should retry with salt=1, salt=2, ... until the
+        generated id no longer collides. Birthday-paradox math at 13K rows
+        + 25-bit hash = ~1.7% probability of ANY collision; salt=1 typically
+        resolves on first retry (each salt increment changes ALL bits of
+        the SHA-1 digest). Salt=0 produces the canonical no-collision hash.
 
     Returns:
       14-char TKR-14 string matching TKR14_REGEX.
 
     Raises:
       ValueError: if country is not 2-uppercase-letter; if enum coercion fails;
-                  if both cik and legal_name are empty.
+                  if both cik and legal_name are empty; if salt is negative.
     """
     if not (isinstance(country, str) and len(country) == 2 and country.isalpha() and country.isupper()):
         raise ValueError(f"mint: country must be 2 uppercase letters (ISO 3166-1 alpha-2), got {country!r}")
     if not cik and not legal_name:
         raise ValueError("mint: at least one of (cik, legal_name) must be non-empty")
+    if salt < 0:
+        raise ValueError(f"mint: salt must be >= 0, got {salt}")
 
     ac = asset_class.value if isinstance(asset_class, AssetClass) else AssetClass(asset_class).value
     venue = ipo_venue.value if isinstance(ipo_venue, IPOVenue) else IPOVenue(ipo_venue).value
     src = discovery_source.value if isinstance(discovery_source, DiscoverySource) else DiscoverySource(discovery_source).value
 
     yy = f"{now.year % 100:02d}"
-    issuer = _issuer_hash(country=country, cik=cik, legal_name=legal_name)
+    issuer = _issuer_hash(country=country, cik=cik, legal_name=legal_name, salt=salt)
     prefix = f"{country}{ac}{venue}{yy}{src}{issuer}"
     assert len(prefix) == 12, f"prefix length mismatch: got {len(prefix)}, expected 12"
     check = iso_7064_mod_97_10(prefix)
