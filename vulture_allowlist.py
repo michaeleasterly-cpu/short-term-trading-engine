@@ -491,6 +491,26 @@ risk_amount_usd  # unused variable (vector/models.py:151)
 vq_reason  # unused variable (vector/plugs/setup_detection.py:352)
 cat_reason  # unused variable (vector/plugs/setup_detection.py:356)
 _reset_composite_override  # unused function (vector/tests/test_composite_flag_byte_identical.py:134)
+<<<<<<< HEAD
 # OpenFIGI adapter
 market_sector  # unused variable (tpcore/openfigi/figi_adapter.py:107)
 _._aexit_unused_tb  # placeholder — tb unused in async-CM __aexit__
+=======
+# TKR-14 enum values per v2.2 spec §1.2 — full taxonomy required even when
+# specific letters haven't been minted yet. Callers use either AssetClass.X
+# attribute or AssetClass("X") string-coercion; vulture sees only the
+# former. Same for IPOVenue / DiscoverySource.
+PREFERRED  # unused variable (tpcore/identity/tkr14.py:56)
+FUND  # unused variable (tpcore/identity/tkr14.py:58)
+REIT  # unused variable (tpcore/identity/tkr14.py:59)
+TRUST  # unused variable (tpcore/identity/tkr14.py:60)
+ADR  # unused variable (tpcore/identity/tkr14.py:61)
+SPAC_UNIT  # unused variable (tpcore/identity/tkr14.py:62)
+WARRANT  # unused variable (tpcore/identity/tkr14.py:63)
+NOTE  # unused variable (tpcore/identity/tkr14.py:64)
+AMEX  # unused variable (tpcore/identity/tkr14.py:72)
+CBOE_BZX  # unused variable (tpcore/identity/tkr14.py:73)
+OTC  # unused variable (tpcore/identity/tkr14.py:74)
+SEC  # unused variable (tpcore/identity/tkr14.py:83)
+ALPACA  # unused variable (tpcore/identity/tkr14.py:84)
+>>>>>>> origin/main
