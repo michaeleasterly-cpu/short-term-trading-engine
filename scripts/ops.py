@@ -2190,29 +2190,34 @@ async def _stage_classify_tickers(
 async def _stage_tkr14_backfill(
     pool: asyncpg.Pool, cfg: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """v2.2 Phase P5 — backfill TKR-14 PK + ticker_history first-seen for existing rows.
+    """v2.2 Phase P5 — backfill TKR-14 PK + cross-vendor identity for existing rows.
 
-    Per v2.2 spec §1.2 / §1.7 + plan P5. SLICE 1: mint TKR-14 + seed
-    ticker_history from local data (country, asset_class, cik already
-    populated by prior migrations). No external API calls in this slice.
+    Per v2.2 spec §1.2 / §1.7 / §1.9 + plan P5. Two modes via ``--param mode``:
 
-    Follow-up slice 2 (separate stage `tkr14_backfill --param mode=cross_vendor`):
-    populate figi/cusip/isin via OpenFIGI + FMP /profile.
+    - ``mode=mint`` (default) — SLICE 1: mint TKR-14 + seed ticker_history
+      from local data (country/asset_class/cik already populated). No
+      external API. Idempotent: skips rows with id IS NOT NULL.
+    - ``mode=figi`` — SLICE 2: for rows with id IS NOT NULL and figi IS
+      NULL, batch-call OpenFIGI /v3/mapping to populate composite FIGI.
+      Pin-at-first-resolve: never overwrites a non-null figi.
 
-    Idempotent: skips any row where `id IS NOT NULL`. Re-runs safely.
+    Both modes are independent — operator can run mint first, then figi
+    later. Re-runs safely (idempotent).
 
     ``cfg`` knobs (all optional):
+      - ``mode`` (default 'mint') — 'mint' or 'figi'.
       - ``dry_run`` (default 'true') — preview the UPDATE without writing.
-        Operator-explicit ``--param dry_run=false`` to actually execute.
       - ``limit`` (default 0 = all) — process at most N rows per run.
 
-    For rows missing country or asset_class (some legacy rows), this slice
-    uses safe defaults: country='US' (most of our universe), asset_class='S'
-    (most tickers are common stock). The cross-vendor slice will refine via
-    FMP /profile.
+    For rows missing country or asset_class (some legacy rows), the mint
+    mode uses safe defaults: country='US', asset_class='S'.
     """
     log = structlog.get_logger("scripts.ops")
     cfg = cfg or {}
+
+    mode = str(cfg.get("mode", "mint")).lower()
+    if mode not in ("mint", "figi"):
+        raise ValueError(f"tkr14_backfill: mode must be 'mint' or 'figi', got {mode!r}")
 
     dry_run_param = cfg.get("dry_run", "true")
     if isinstance(dry_run_param, str):
@@ -2221,6 +2226,10 @@ async def _stage_tkr14_backfill(
         dry_run = bool(dry_run_param)
     limit = int(cfg.get("limit", 0))
 
+    if mode == "figi":
+        return await _tkr14_backfill_figi(pool, log, dry_run=dry_run, limit=limit)
+
+    # MODE = mint: original slice-1 behavior.
     # Find rows that need a TKR-14 id minted.
     where_limit = "LIMIT $1" if limit > 0 else ""
     args: list[Any] = [limit] if limit > 0 else []
@@ -2354,6 +2363,100 @@ async def _stage_tkr14_backfill(
     return {
         "rows_minted": n_committed,
         "rows_skipped_invalid": len(skipped_invalid),
+        "dry_run": False,
+    }
+
+
+async def _tkr14_backfill_figi(
+    pool: asyncpg.Pool,
+    log: Any,
+    *,
+    dry_run: bool,
+    limit: int,
+) -> dict[str, Any]:
+    """SLICE 2 helper: batch-fill figi via OpenFIGI /v3/mapping.
+
+    Pin-at-first-resolve: never overwrites a non-null figi. Processes only
+    rows with id IS NOT NULL AND figi IS NULL.
+    """
+    where_limit = "LIMIT $1" if limit > 0 else ""
+    args: list[Any] = [limit] if limit > 0 else []
+    rows = await pool.fetch(
+        f"""
+        SELECT ticker, id
+        FROM platform.ticker_classifications
+        WHERE id IS NOT NULL AND figi IS NULL
+          AND substring(id, 1, 2) = 'US'   -- OpenFIGI mapping uses exchCode=US; non-US needs different
+        ORDER BY ticker
+        {where_limit}
+        """,
+        *args,
+    )
+    if not rows:
+        log.info("ops.stage.tkr14_backfill.figi.no_rows_to_fill")
+        return {"figi_filled": 0, "figi_not_found": 0, "dry_run": dry_run}
+
+    from tpcore.openfigi import OpenFIGIAdapter
+
+    tickers = [r["ticker"] for r in rows]
+    log.info("ops.stage.tkr14_backfill.figi.starting", n_tickers=len(tickers), dry_run=dry_run)
+
+    async with OpenFIGIAdapter() as adapter:
+        results = await adapter.map_tickers(tickers, exch_code="US")
+
+    # Pair tickers with their composite FIGIs (or None for misses).
+    pairs: list[tuple[str, str]] = []  # (ticker, composite_figi)
+    misses = 0
+    for r in results:
+        if r.figi_not_found or not r.composite_figi:
+            misses += 1
+            continue
+        pairs.append((r.ticker, r.composite_figi))
+
+    if dry_run:
+        log.info(
+            "ops.stage.tkr14_backfill.figi.dry_run_preview",
+            n_filled=len(pairs),
+            n_not_found=misses,
+            sample=pairs[:5],
+        )
+        return {
+            "figi_filled": 0,
+            "figi_previewed": len(pairs),
+            "figi_not_found": misses,
+            "dry_run": True,
+            "sample": [{"ticker": t, "figi": f} for t, f in pairs[:5]],
+        }
+
+    # Live: bulk UPDATE in batches of 500.
+    BATCH = 500
+    n_committed = 0
+    async with pool.acquire() as conn:
+        for batch_start in range(0, len(pairs), BATCH):
+            batch = pairs[batch_start : batch_start + BATCH]
+            batch_tickers = [t for t, _ in batch]
+            batch_figis = [f for _, f in batch]
+            async with conn.transaction():
+                # Pin-at-first-resolve: WHERE figi IS NULL guards against overwrite.
+                await conn.execute(
+                    """
+                    UPDATE platform.ticker_classifications tc
+                    SET figi = b.figi
+                    FROM (SELECT unnest($1::text[]) AS ticker, unnest($2::text[]) AS figi) b
+                    WHERE tc.ticker = b.ticker AND tc.figi IS NULL
+                    """,
+                    batch_tickers, batch_figis,
+                )
+                n_committed += len(batch)
+
+    log.info(
+        "ops.stage.tkr14_backfill.figi.committed",
+        n_filled=n_committed,
+        n_not_found=misses,
+    )
+    return {
+        "figi_filled": n_committed,
+        "figi_not_found": misses,
         "dry_run": False,
     }
 
