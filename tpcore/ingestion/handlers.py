@@ -1598,8 +1598,9 @@ async def handle_macro_indicators(
         pool, "fred_macro", archive.rows_written,
     )
 
-    # ── 5. Load CSV → DB (ON CONFLICT DO NOTHING) ────────────────────
-    async with pool.acquire() as conn:
+    # ── 5. Load CSV → DB (ON CONFLICT DO NOTHING) + Task #18 P3 double-write ─
+    from tpcore.ingestion.macro_data_emit import upsert_macro_data_bitemporal
+    async with pool.acquire() as conn, conn.transaction():
         await conn.executemany(
             """
             INSERT INTO platform.macro_indicators (indicator, date, value)
@@ -1607,6 +1608,15 @@ async def handle_macro_indicators(
             ON CONFLICT (indicator, date) DO NOTHING
             """,
             upsert_rows,
+        )
+        # Task #18 P3 — bitemporal double-write to platform.macro_data.
+        # Same transaction so legacy + bitemporal writes are atomic.
+        # SCD-2 no-change detection means weekly re-runs of the same
+        # FRED data emit ZERO new macro_data rows (vast majority case).
+        await upsert_macro_data_bitemporal(
+            conn,
+            source="fred",
+            rows=[(name, d, value, None) for (name, d, value) in upsert_rows],
         )
 
     summary: dict[str, dict[str, Any]] = {}
@@ -2074,7 +2084,8 @@ async def handle_fear_greed(
         )
         for d, r in fg.iterrows()
     ]
-    async with pool.acquire() as conn:
+    from tpcore.ingestion.macro_data_emit import upsert_macro_data_bitemporal
+    async with pool.acquire() as conn, conn.transaction():
         await conn.executemany(
             """
             INSERT INTO platform.fear_greed
@@ -2093,6 +2104,29 @@ async def handle_fear_greed(
                 recorded_at=now()
             """,
             rows,
+        )
+        # Task #18 P3 — bitemporal double-write to platform.macro_data.
+        # 8 channels per date: 6 numeric (score, score_5d_ago, 4 components)
+        # + 2 text (label, direction). value_xor CHECK requires the channel
+        # not in use to be NULL.
+        macro_rows: list[tuple[str, _date, float | None, str | None]] = []
+        for (d, score, label, direction, score_5d_ago,
+             vol_c, credit_c, momentum_c, safe_haven_c) in rows:
+            macro_rows.append(("score",                d, score,          None))
+            macro_rows.append(("score_5d_ago",         d, score_5d_ago,   None))
+            macro_rows.append(("volatility_component", d, vol_c,          None))
+            macro_rows.append(("credit_component",     d, credit_c,       None))
+            macro_rows.append(("momentum_component",   d, momentum_c,     None))
+            macro_rows.append(("safe_haven_component", d, safe_haven_c,   None))
+            macro_rows.append(("label",                d, None,           label))
+            macro_rows.append(("direction",            d, None,           direction))
+        # Drop rows whose chosen channel is NULL (XOR CHECK rejects all-NULL).
+        macro_rows = [
+            r for r in macro_rows
+            if not (r[2] is None and r[3] is None)
+        ]
+        await upsert_macro_data_bitemporal(
+            conn, source="cnn_fear_greed", rows=macro_rows,
         )
     logger.info(
         "ingestion.handler.fear_greed.done",
@@ -2429,7 +2463,8 @@ async def handle_aaii_sentiment(
         fieldnames=["date", "bullish_pct", "bearish_pct", "neutral_pct"],
         validator=lambda x: bool(x.get("date")) and bool(x.get("bullish_pct")),
     )
-    async with pool.acquire() as conn:
+    from tpcore.ingestion.macro_data_emit import upsert_macro_data_bitemporal
+    async with pool.acquire() as conn, conn.transaction():
         await conn.executemany(
             """
             INSERT INTO platform.aaii_sentiment
@@ -2442,6 +2477,21 @@ async def handle_aaii_sentiment(
                 recorded_at=now()
             """,
             rows,
+        )
+        # Task #18 P3 — bitemporal double-write to platform.macro_data.
+        # 3 channels per date: bullish_pct / bearish_pct / neutral_pct.
+        macro_rows = [
+            (channel, d, val, None)
+            for (d, b, be, n) in rows
+            for (channel, val) in (
+                ("bullish_pct", b),
+                ("bearish_pct", be),
+                ("neutral_pct", n),
+            )
+            if val is not None
+        ]
+        await upsert_macro_data_bitemporal(
+            conn, source="aaii", rows=macro_rows,
         )
     logger.info(
         "ingestion.handler.aaii_sentiment.done",
