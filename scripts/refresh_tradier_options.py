@@ -20,13 +20,11 @@ from __future__ import annotations
 
 import asyncio
 import os
-import sys
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import asyncpg
 import httpx
-
 
 TRADIER_BASE = "https://api.tradier.com"
 RATE_LIMIT_SLEEP_S = 0.6  # ≈100 req/min ceiling, polite vs Tradier's 120/min market-data
