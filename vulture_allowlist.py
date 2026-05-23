@@ -491,3 +491,6 @@ risk_amount_usd  # unused variable (vector/models.py:151)
 vq_reason  # unused variable (vector/plugs/setup_detection.py:352)
 cat_reason  # unused variable (vector/plugs/setup_detection.py:356)
 _reset_composite_override  # unused function (vector/tests/test_composite_flag_byte_identical.py:134)
+# OpenFIGI adapter
+market_sector  # unused variable (tpcore/openfigi/figi_adapter.py:107)
+_._aexit_unused_tb  # placeholder — tb unused in async-CM __aexit__
