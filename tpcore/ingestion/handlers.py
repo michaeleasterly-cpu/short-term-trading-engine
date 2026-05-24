@@ -1468,8 +1468,10 @@ async def handle_macro_indicators(
     skip_days = int(config.get("skip_guard_days", 7))
     if skip_days > 0:
         async with pool.acquire() as conn:
+            # Task #18 P7: skip-guard reads macro_data directly (legacy dropped).
             newest = await conn.fetchval(
-                "SELECT MAX(recorded_at) FROM platform.macro_indicators"
+                "SELECT MAX(recorded_at) FROM platform.macro_data "
+                "WHERE source = 'fred'"
             )
         if newest is not None:
             age = datetime.now(UTC) - newest
@@ -2023,12 +2025,19 @@ async def handle_fear_greed(
                  else datetime.now(UTC).date() - _td(days=10))
 
     async with pool.acquire() as conn:
+        # Task #18 P7: reads platform.macro_data directly (legacy
+        # macro_indicators dropped). Source='fred'; current rows only.
+        # Alias output column names so the downstream compute_fear_greed
+        # pure helper continues to receive (indicator, date, value).
         macro = await conn.fetch(
             """
-            SELECT indicator, date, value
-            FROM platform.macro_indicators
-            WHERE indicator IN ('vix','hy_spread','yield_curve')
-            ORDER BY date
+            SELECT series_id AS indicator,
+                   observed_date AS date,
+                   value_num AS value
+            FROM platform.macro_data
+            WHERE source = 'fred' AND realtime_end = 'infinity'
+              AND series_id IN ('vix','hy_spread','yield_curve')
+            ORDER BY observed_date
             """
         )
         spy = await conn.fetch(
@@ -2407,8 +2416,10 @@ async def handle_aaii_sentiment(
     skip_days = int(config.get("skip_guard_days", 5))
     if skip_days > 0:
         async with pool.acquire() as conn:
+            # Task #18 P7: skip-guard reads macro_data directly (legacy dropped).
             newest = await conn.fetchval(
-                "SELECT MAX(recorded_at) FROM platform.aaii_sentiment"
+                "SELECT MAX(recorded_at) FROM platform.macro_data "
+                "WHERE source = 'aaii'"
             )
         if newest is not None and (datetime.now(UTC) - newest).days < skip_days:
             logger.info(

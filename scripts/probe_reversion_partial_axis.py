@@ -150,13 +150,17 @@ async def load_regime_bundle_from_pool(pool, start, end):
             {pd.Timestamp(r["date"]): float(r["close"]) for r in rows}
         )
 
+        # Task #18 P7: reads macro_data directly (legacy macro_indicators dropped).
         macro_rows = await conn.fetch(
             """
-            SELECT indicator, date, value
-              FROM platform.macro_indicators
-             WHERE indicator IN ('vix', 'sahm_rule', 'cfnai_ma3', 'yield_curve')
-               AND date BETWEEN $1 AND $2
-             ORDER BY indicator, date
+            SELECT series_id AS indicator,
+                   observed_date AS date,
+                   value_num AS value
+              FROM platform.macro_data
+             WHERE source='fred' AND realtime_end='infinity'
+               AND series_id IN ('vix', 'sahm_rule', 'cfnai_ma3', 'yield_curve')
+               AND observed_date BETWEEN $1 AND $2
+             ORDER BY series_id, observed_date
             """,
             start, end,
         )

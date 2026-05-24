@@ -28,7 +28,9 @@ class _Conn:
         self._rows = rows
 
     async def fetch(self, sql: str, *args: object) -> list[dict[str, Any]]:
-        assert "platform.macro_indicators" in sql.lower()
+        # Task #18 P7: reads platform.macro_data with source='fred'.
+        sl = sql.lower()
+        assert "platform.macro_data" in sl and "'fred'" in sl
         return self._rows
 
 

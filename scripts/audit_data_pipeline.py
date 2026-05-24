@@ -85,9 +85,13 @@ DATA_SOURCES: tuple[DataSource, ...] = (
     DataSource("fundamentals",        "platform.fundamentals_quarterly",  freshness_days=120, timestamp_col="period_end_date"),
     DataSource("earnings_events",     "platform.earnings_events",         freshness_days=90, timestamp_col="event_date"),
     DataSource("sec_filings",         "platform.sec_insider_transactions", freshness_days=14, timestamp_col="filing_date"),
-    DataSource("macro_indicators",    "platform.macro_indicators",        freshness_days=90),
-    DataSource("credit_spread",       "platform.macro_indicators",        freshness_days=14,
-               where_clause="WHERE indicator='credit_spread'"),
+    # Task #18 P7: legacy macro tables dropped; read platform.macro_data with source/series filters.
+    DataSource("macro_indicators",    "platform.macro_data",              freshness_days=90,
+               timestamp_col="observed_date",
+               where_clause="WHERE source='fred' AND realtime_end='infinity'"),
+    DataSource("credit_spread",       "platform.macro_data",              freshness_days=14,
+               timestamp_col="observed_date",
+               where_clause="WHERE source='fred' AND series_id='credit_spread' AND realtime_end='infinity'"),
     DataSource("spread_observations", "platform.spread_observations",     freshness_days=90, timestamp_col="observed_at"),
     DataSource("ticker_classifications", "platform.ticker_classifications", freshness_days=30, timestamp_col="last_updated"),
     # ── Cross-sectional / sentiment / macro feeds shipped 2026-05-16.
@@ -101,10 +105,14 @@ DATA_SOURCES: tuple[DataSource, ...] = (
     # (which already surfaces validation.<feed>_freshness reds).
     DataSource("options_max_pain",    "platform.options_max_pain",        freshness_days=freshness_max_age_days("greeks_max_pain", 7),       timestamp_col="observed_date"),
     DataSource("social_sentiment",    "platform.social_sentiment",        freshness_days=freshness_max_age_days("apewisdom_social_sentiment", 7)),
-    DataSource("fear_greed",          "platform.fear_greed",              freshness_days=5),  # validation gate is 3 NYSE sessions; 5 calendar days ≈ session + weekend/holiday pad (advisory defence — validation is the hard gate)
+    DataSource("fear_greed",          "platform.macro_data",              freshness_days=5,
+               timestamp_col="observed_date",
+               where_clause="WHERE source='cnn_fear_greed' AND realtime_end='infinity'"),  # validation gate is 3 NYSE sessions; 5 calendar days ≈ session + weekend/holiday pad (advisory defence — validation is the hard gate)
     DataSource("short_interest",      "platform.short_interest",          freshness_days=freshness_max_age_days("finra_short_interest", 35), timestamp_col="settlement_date"),
     DataSource("borrow_rates",        "platform.borrow_rates",            freshness_days=freshness_max_age_days("iborrowdesk_borrow_rates", 5)),
-    DataSource("aaii_sentiment",      "platform.aaii_sentiment",          freshness_days=freshness_max_age_days("aaii_sentiment", 10)),
+    DataSource("aaii_sentiment",      "platform.macro_data",              freshness_days=freshness_max_age_days("aaii_sentiment", 10),
+               timestamp_col="observed_date",
+               where_clause="WHERE source='aaii' AND realtime_end='infinity'"),
     # NOTE: insider_sentiment (Finnhub MSPR) is period-keyed (year, month)
     # with NO date/timestamp column — it cannot use this date-based
     # MAX()/age loop without fabricating a date. It gets a dedicated
@@ -610,11 +618,12 @@ async def run_known_knowns(pool, sink: _FindingSink | None = None) -> list[Audit
             evidence={t["ticker"]: {"rows": t["n"], "last_bar": str(t["last_bar"])} for t in rows},
         ))
 
-    # credit_spread with BAA10Y history from 1996.
+    # credit_spread with BAA10Y history from 1996. Task #18 P7: reads macro_data.
     async with pool.acquire() as conn:
         row = await conn.fetchrow("""
-            SELECT MIN(date) AS mn, MAX(date) AS mx, COUNT(*) AS n
-            FROM platform.macro_indicators WHERE indicator='credit_spread'
+            SELECT MIN(observed_date) AS mn, MAX(observed_date) AS mx, COUNT(*) AS n
+            FROM platform.macro_data
+            WHERE source='fred' AND series_id='credit_spread' AND realtime_end='infinity'
         """)
     if row["n"] == 0:
         findings.append(AuditFinding(
@@ -862,11 +871,12 @@ async def run_known_unknowns(pool, sink: _FindingSink | None = None) -> list[Aud
             evidence={"tier": gld["tier"], "median_spread_pct": float(gld["median_spread_pct"])},
         ))
 
-    # hy_spread freeze — no new rows since BAA10Y swap.
+    # hy_spread freeze — no new rows since BAA10Y swap. Task #18 P7: macro_data.
     async with pool.acquire() as conn:
         hy = await conn.fetchrow("""
-            SELECT MAX(date) AS mx, COUNT(*) AS n
-            FROM platform.macro_indicators WHERE indicator='hy_spread'
+            SELECT MAX(observed_date) AS mx, COUNT(*) AS n
+            FROM platform.macro_data
+            WHERE source='fred' AND series_id='hy_spread' AND realtime_end='infinity'
         """)
     if hy["n"] == 0:
         findings.append(AuditFinding(
@@ -1131,13 +1141,15 @@ async def run_unknown_knowns(pool, sink: _FindingSink | None = None) -> list[Aud
             evidence={"unexpected_empty": unexpected, "expected_empty": [t for t in empty if t in EXPECTED_EMPTY]},
         ))
 
-    # Macro indicator pairwise correlations (last 90 days).
+    # Macro indicator pairwise correlations (last 90 days). Task #18 P7: macro_data.
     async with pool.acquire() as conn:
         macro_rows = await conn.fetch("""
-            SELECT indicator, date, value FROM platform.macro_indicators
-            WHERE date >= CURRENT_DATE - INTERVAL '90 days'
-              AND indicator IN ('sahm_rule','industrial_production','initial_claims','yield_curve','credit_spread')
-            ORDER BY indicator, date
+            SELECT series_id AS indicator, observed_date AS date, value_num AS value
+            FROM platform.macro_data
+            WHERE source='fred' AND realtime_end='infinity'
+              AND observed_date >= CURRENT_DATE - INTERVAL '90 days'
+              AND series_id IN ('sahm_rule','industrial_production','initial_claims','yield_curve','credit_spread')
+            ORDER BY series_id, observed_date
         """)
     if macro_rows:
         # Build per-indicator series, then forward-fill align on common dates.
@@ -1300,12 +1312,14 @@ async def run_unknown_unknowns(pool, sink: _FindingSink | None = None) -> list[A
                 recommended_action=recommended_action,
             ))
 
-    # Sudden macro stoppage — most recent value > 3σ from 90-day mean.
+    # Sudden macro stoppage — most recent value > 3σ from 90-day mean. Task #18 P7: macro_data.
     async with pool.acquire() as conn:
         macro_rows = await conn.fetch("""
-            SELECT indicator, date, value FROM platform.macro_indicators
-            WHERE date >= CURRENT_DATE - INTERVAL '120 days'
-            ORDER BY indicator, date
+            SELECT series_id AS indicator, observed_date AS date, value_num AS value
+            FROM platform.macro_data
+            WHERE source='fred' AND realtime_end='infinity'
+              AND observed_date >= CURRENT_DATE - INTERVAL '120 days'
+            ORDER BY series_id, observed_date
         """)
     series: dict[str, list[tuple[Any, float]]] = {}
     for r in macro_rows:

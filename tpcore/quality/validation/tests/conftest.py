@@ -154,11 +154,15 @@ class FakePool:
         if "platform.prices_daily" in sql_lower and "ticker = $1" in sql_lower:
             ticker = args[0]
             return [r for r in self.rows if r["ticker"] == ticker]
-        # macro_indicators_completeness: per-indicator first_date /
-        # last_date / row_count over the EXPECTED set. The range SQL
-        # uses MIN(date)/MAX(date); the freshness SQL only MAX(date).
-        # Disambiguate on "min(date)".
-        if "platform.macro_indicators" in sql_lower and "min(date)" in sql_lower:
+        # Task #18 P7: macro checks now query platform.macro_data with
+        # source='fred' + AS-aliased columns (observed_date AS date,
+        # series_id AS indicator, value_num AS value). The routes below
+        # disambiguate on the new SQL shape but return the same column
+        # names the checks consume (alias-preserving fakes).
+        #
+        # macro_indicators_completeness range SQL — MIN(observed_date) /
+        # MAX(observed_date) per series, GROUP BY series_id.
+        if "platform.macro_data" in sql_lower and "min(observed_date)" in sql_lower:
             from datetime import UTC, datetime, timedelta
             today = datetime.now(UTC).date() - timedelta(days=5)
             first = today - timedelta(days=60)
@@ -167,12 +171,10 @@ class FakePool:
                  "row_count": 100}
                 for name in _MACRO_INDICATOR_NAMES
             ]
-        # macro_indicators_completeness: per-indicator present-dates
-        # query (one indicator at a time). Return every expected
-        # publication date per the indicator's cadence so the
-        # zero-tolerance invariant passes for e2e tests focused on
-        # unrelated checks.
-        if "platform.macro_indicators" in sql_lower and "between $2 and $3" in sql_lower:
+        # macro_indicators_completeness per-indicator dates SQL
+        # (observed_date BETWEEN $2 AND $3) — return every expected
+        # publication date per cadence.
+        if "platform.macro_data" in sql_lower and "observed_date between $2 and $3" in sql_lower:
             from tpcore.quality.validation.checks.macro_indicators_completeness import (
                 INDICATOR_CADENCE,
                 _expected_dates_for_cadence,
@@ -187,10 +189,8 @@ class FakePool:
                     cadence, first_d, last_d, indicator=indicator,
                 )
             ]
-        # macro_indicators_freshness check: return one fresh row per
-        # expected indicator so the suite passes when running e2e
-        # tests focused on unrelated checks.
-        if "platform.macro_indicators" in sql_lower and "group by indicator" in sql_lower:
+        # macro_indicators_freshness — GROUP BY series_id over source='fred'.
+        if "platform.macro_data" in sql_lower and "group by series_id" in sql_lower:
             from datetime import UTC, datetime, timedelta
             today = datetime.now(UTC).date() - timedelta(days=5)
             return [
@@ -325,9 +325,13 @@ class FakePool:
         if "max(date)" in sql.lower() and "platform.social_sentiment" in sql.lower():
             from datetime import UTC, datetime, timedelta
             return datetime.now(UTC).date() - timedelta(days=1)
-        # fear_greed_freshness MAX(date): a fresh date so the suite is
-        # green in e2e tests for unrelated checks.
-        if "max(date)" in sql.lower() and "platform.fear_greed" in sql.lower():
+        # Task #18 P7: fear_greed_freshness now reads macro_data
+        # source='cnn_fear_greed' / observed_date.
+        if (
+            "max(observed_date)" in sql.lower()
+            and "platform.macro_data" in sql.lower()
+            and "'cnn_fear_greed'" in sql.lower()
+        ):
             from datetime import UTC, datetime, timedelta
             return datetime.now(UTC).date() - timedelta(days=1)
         # short_interest_freshness MAX(settlement_date) / borrow_rates
@@ -346,12 +350,17 @@ class FakePool:
         ):
             from datetime import UTC, datetime, timedelta
             return datetime.now(UTC).date() - timedelta(days=1)
-        # aaii_sentiment_freshness is now VENDOR-ANCHORED (≥ the last
+        # aaii_sentiment_freshness is VENDOR-ANCHORED (≥ the last
         # scheduled Thursday publish, UTC — not today−N). Return today
         # so the synthetic "healthy data" suite is deterministically
         # green regardless of which weekday the test runs (today is
         # always ≥ the most recent scheduled Thursday).
-        if "max(date)" in sql.lower() and "platform.aaii_sentiment" in sql.lower():
+        # Task #18 P7: now reads macro_data source='aaii' / observed_date.
+        if (
+            "max(observed_date)" in sql.lower()
+            and "platform.macro_data" in sql.lower()
+            and "'aaii'" in sql.lower()
+        ):
             from datetime import UTC, datetime
             return datetime.now(UTC).date()
         return None

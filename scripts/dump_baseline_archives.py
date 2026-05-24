@@ -56,9 +56,14 @@ logger = structlog.get_logger(__name__)
 # presence-only incremental sources (no shrinkage comparator to poison).
 # alpaca_daily_bars excluded (size + self-archives every handler run).
 BASELINE_SOURCES: tuple[tuple[str, str, list[str], str], ...] = (
+    # Task #18 P7: legacy macro_indicators dropped. Project the macro_data
+    # current FRED rows back to the legacy column shape via a subquery so
+    # the archive CSVs preserve the same on-disk schema downstream consumers
+    # of the baselines expect.
     (
         "fred_macro",
-        "platform.macro_indicators",
+        "(SELECT series_id AS indicator, observed_date AS date, value_num AS value, recorded_at "
+        "FROM platform.macro_data WHERE source='fred' AND realtime_end='infinity') AS m",
         ["indicator", "date", "value", "recorded_at"],
         "indicator, date",
     ),

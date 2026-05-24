@@ -2600,259 +2600,259 @@ async def _stage_prices_daily_backfill_classification_id(
     }
 
 
-async def _stage_macro_data_backfill(
+# ── Task #18 follow-on — series_catalog backfill (operator 2026-05-24) ──
+# Encodes per-(source, series_id) metadata for every series currently
+# observable in platform.macro_data. Source of truth for cadence,
+# vendor_series_id, units, publish day/lag, sacred-data flags — replaces
+# the scattered Python constants (INDICATOR_CADENCE in the completeness
+# check, INDICATOR_SERIES in the FRED adapter, hard-coded 'aaii'/'fear_greed'
+# channel lists in handlers) with one DB-side authority. Idempotent
+# (ON CONFLICT (source, series_id) DO UPDATE) so re-runs refresh metadata
+# in-place.
+def _series_catalog_metadata() -> list[dict[str, Any]]:
+    """All 73 (source, series_id) catalog entries with metadata.
+
+    Returns a list of dicts shaped for INSERT into platform.series_catalog.
+    Per-series fields verified against vendor docs (expert subagent review
+    2026-05-24); FRED publish_lag_days are conservative upper bounds.
+    """
+    from tpcore.fred.adapter import INDICATOR_SERIES
+
+    rows: list[dict[str, Any]] = []
+
+    # ── FRED daily series ──────────────────────────────────────────────
+    fred_daily = {
+        "vix":           ("VIXCLS",       "CBOE Volatility Index (S&P 500 implied vol)",       "index_value", 1, False, False),
+        "yield_curve":   ("T10Y2Y",       "10Y Treasury minus 2Y Treasury constant-maturity spread", "percent", 0, False, False),
+        "credit_spread": ("BAA10Y",       "Moody's Seasoned Baa Corporate Yield minus 10Y Treasury", "percent", 0, False, False),
+        "hy_spread":     ("BAMLH0A0HYM2", "ICE BofA US High Yield OAS",                        "percent",     1, False, True),
+        "sofr":          ("SOFR",         "Secured Overnight Financing Rate",                  "percent",     1, False, False),
+        "epu_index":     ("USEPUINDXD",   "Economic Policy Uncertainty Index (Baker-Bloom-Davis, daily)", "index_value", 0, False, False),
+    }
+    for series_id, (vendor_id, desc, unit, lag, sa, sacred) in fred_daily.items():
+        rows.append({
+            "source": "fred", "series_id": series_id, "vendor_series_id": vendor_id,
+            "description": desc, "unit": unit, "frequency": "daily",
+            "publish_weekday": None, "publish_day_of_month": None,
+            "publish_lag_days": lag, "is_seasonally_adjusted": sa,
+            "is_derived": False, "sacred": sacred,
+            "publication_calendar_url": f"https://fred.stlouisfed.org/series/{vendor_id}",
+            "notes": "hy_spread pre-FRED-window history (1996-2010) operator-curated from non-FRED sources — re-derive forbidden." if sacred else None,
+        })
+
+    # ── FRED weekly series ─────────────────────────────────────────────
+    fred_weekly = {
+        # canonical: (vendor_id, description, publish_weekday_ISO, publish_lag_days)
+        "initial_claims": ("IC4WSA", "Initial Unemployment Claims, 4-Week Moving Average (DOL)", 5, 5),
+        "nfci":           ("NFCI",   "Chicago Fed National Financial Conditions Index",          4, 5),
+    }
+    for series_id, (vendor_id, desc, weekday, lag) in fred_weekly.items():
+        rows.append({
+            "source": "fred", "series_id": series_id, "vendor_series_id": vendor_id,
+            "description": desc, "unit": ("count" if series_id == "initial_claims" else "index_value"),
+            "frequency": "weekly",
+            "publish_weekday": weekday, "publish_day_of_month": None,
+            "publish_lag_days": lag, "is_seasonally_adjusted": True,
+            "is_derived": False, "sacred": False,
+            "publication_calendar_url": f"https://fred.stlouisfed.org/series/{vendor_id}",
+            "notes": None,
+        })
+
+    # ── FRED monthly series ────────────────────────────────────────────
+    # canonical: (vendor_id, description, unit, publish_lag_days, SA)
+    fred_monthly = {
+        "industrial_production": ("INDPRO",       "Industrial Production: Total Index (Fed G.17)", "index_value", 15, True),
+        "sahm_rule":             ("SAHMREALTIME", "Sahm Rule Recession Indicator (Real-Time)",     "percentage_points", 14, True),
+        "cfnai_ma3":             ("CFNAIMA3",     "Chicago Fed National Activity Index 3-Month MA", "index_value",  22, True),
+    }
+    for series_id, (vendor_id, desc, unit, lag, sa) in fred_monthly.items():
+        rows.append({
+            "source": "fred", "series_id": series_id, "vendor_series_id": vendor_id,
+            "description": desc, "unit": unit, "frequency": "monthly",
+            "publish_weekday": None, "publish_day_of_month": None,  # variable per series
+            "publish_lag_days": lag, "is_seasonally_adjusted": sa,
+            "is_derived": False, "sacred": False,
+            "publication_calendar_url": f"https://fred.stlouisfed.org/series/{vendor_id}",
+            "notes": None,
+        })
+
+    # ── FRED state-PHCI monthly (50 states) ────────────────────────────
+    state_names = {
+        "al":"Alabama","ak":"Alaska","az":"Arizona","ar":"Arkansas","ca":"California",
+        "co":"Colorado","ct":"Connecticut","de":"Delaware","fl":"Florida","ga":"Georgia",
+        "hi":"Hawaii","id":"Idaho","il":"Illinois","in":"Indiana","ia":"Iowa",
+        "ks":"Kansas","ky":"Kentucky","la":"Louisiana","me":"Maine","md":"Maryland",
+        "ma":"Massachusetts","mi":"Michigan","mn":"Minnesota","ms":"Mississippi","mo":"Missouri",
+        "mt":"Montana","ne":"Nebraska","nv":"Nevada","nh":"New Hampshire","nj":"New Jersey",
+        "nm":"New Mexico","ny":"New York","nc":"North Carolina","nd":"North Dakota","oh":"Ohio",
+        "ok":"Oklahoma","or":"Oregon","pa":"Pennsylvania","ri":"Rhode Island","sc":"South Carolina",
+        "sd":"South Dakota","tn":"Tennessee","tx":"Texas","ut":"Utah","vt":"Vermont",
+        "va":"Virginia","wa":"Washington","wv":"West Virginia","wi":"Wisconsin","wy":"Wyoming",
+    }
+    for series_id, vendor_id in INDICATOR_SERIES:
+        if not series_id.startswith("phci_"):
+            continue
+        state = series_id.removeprefix("phci_")
+        rows.append({
+            "source": "fred", "series_id": series_id, "vendor_series_id": vendor_id,
+            "description": f"Philadelphia Fed State Coincident Index — {state_names.get(state, state.upper())}",
+            "unit": "index_value", "frequency": "monthly",
+            "publish_weekday": None, "publish_day_of_month": None,
+            "publish_lag_days": 22, "is_seasonally_adjusted": True,
+            "is_derived": False, "sacred": False,
+            "publication_calendar_url": f"https://fred.stlouisfed.org/series/{vendor_id}",
+            "notes": None,
+        })
+
+    # ── Derived: sos_state_diffusion ───────────────────────────────────
+    rows.append({
+        "source": "fred", "series_id": "sos_state_diffusion", "vendor_series_id": None,
+        "description": "Sum-of-states diffusion (share of states with PHCI(t) < PHCI(t-3mo)) — Crone/Clayton-Matthews 2005",
+        "unit": "percent", "frequency": "monthly",
+        "publish_weekday": None, "publish_day_of_month": None,
+        "publish_lag_days": 22, "is_seasonally_adjusted": True,
+        "is_derived": True, "sacred": False,
+        "publication_calendar_url": None,
+        "notes": "Derived from the 50 phci_<state> series; recomputed on every macro_indicators stage run.",
+    })
+
+    # ── AAII Sentiment Survey channels ─────────────────────────────────
+    for ch, label in (("bullish_pct", "% bullish"),
+                       ("bearish_pct", "% bearish"),
+                       ("neutral_pct", "% neutral")):
+        rows.append({
+            "source": "aaii", "series_id": ch, "vendor_series_id": None,
+            "description": f"AAII Investor Sentiment Survey — {label}",
+            "unit": "percent", "frequency": "weekly",
+            "publish_weekday": 4, "publish_day_of_month": None,  # Thursday
+            "publish_lag_days": 1, "is_seasonally_adjusted": False,
+            "is_derived": False, "sacred": False,
+            "publication_calendar_url": "https://www.aaii.com/sentimentsurvey",
+            "notes": "Survey closes Wed 23:59 ET; results posted Thursday morning ET.",
+        })
+
+    # ── Fear/Greed derived bundle (8 channels) ─────────────────────────
+    fg_channels = (
+        ("score",                "Composite Fear & Greed score (0-100)",       "index_value", "num"),
+        ("score_5d_ago",         "Composite score from 5 NYSE sessions ago",    "index_value", "num"),
+        ("volatility_component", "Volatility component (VIX z-score sub-index)", "index_value", "num"),
+        ("credit_component",     "Credit component (hy_spread sub-index)",       "index_value", "num"),
+        ("momentum_component",   "Momentum component (SPY-vs-125dMA sub-index)", "index_value", "num"),
+        ("safe_haven_component", "Safe-haven component (yield_curve sub-index)", "index_value", "num"),
+        ("label",                "Discretized regime label (Extreme Fear/Fear/Neutral/Greed/Extreme Greed)", "category", "text"),
+        ("direction",            "1-day direction (rising/falling)",             "category", "text"),
+    )
+    for ch, desc, unit, _channel_type in fg_channels:
+        rows.append({
+            "source": "cnn_fear_greed", "series_id": ch, "vendor_series_id": None,
+            "description": desc, "unit": unit, "frequency": "daily",
+            "publish_weekday": None, "publish_day_of_month": None,
+            "publish_lag_days": 0, "is_seasonally_adjusted": False,
+            "is_derived": True, "sacred": False,
+            "publication_calendar_url": None,
+            "notes": "Computed daily after NYSE close from platform.macro_data (vix/hy_spread/yield_curve) + platform.prices_daily (SPY).",
+        })
+
+    return rows
+
+
+_SERIES_CATALOG_UPSERT_SQL = """
+    INSERT INTO platform.series_catalog (
+        source, series_id, vendor_series_id, description, unit, frequency,
+        publish_weekday, publish_day_of_month, publish_lag_days,
+        is_seasonally_adjusted, is_derived, sacred,
+        publication_calendar_url, notes, updated_at
+    ) VALUES (
+        $1, $2, $3, $4, $5, $6,
+        $7, $8, $9,
+        $10, $11, $12,
+        $13, $14, now()
+    )
+    ON CONFLICT (source, series_id) DO UPDATE SET
+        vendor_series_id = EXCLUDED.vendor_series_id,
+        description      = EXCLUDED.description,
+        unit             = EXCLUDED.unit,
+        frequency        = EXCLUDED.frequency,
+        publish_weekday  = EXCLUDED.publish_weekday,
+        publish_day_of_month = EXCLUDED.publish_day_of_month,
+        publish_lag_days = EXCLUDED.publish_lag_days,
+        is_seasonally_adjusted = EXCLUDED.is_seasonally_adjusted,
+        is_derived       = EXCLUDED.is_derived,
+        sacred           = EXCLUDED.sacred,
+        publication_calendar_url = EXCLUDED.publication_calendar_url,
+        notes            = EXCLUDED.notes,
+        updated_at       = now()
+"""
+
+
+async def _stage_series_catalog_backfill(
     pool: asyncpg.Pool, cfg: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Task #18 P2 — backfill platform.macro_data from the 3 source tables.
+    """Task #18 follow-on — populate platform.series_catalog with metadata
+    for every series observable in platform.macro_data.
 
-    Per spec docs/superpowers/specs/2026-05-23-task-18-macro-data-consolidation.md
-    §3 source-row mapping + §8 sacred constraints.
-
-    Three sub-substages, each idempotent (ON CONFLICT DO NOTHING on the
-    bitemporal PK so re-run is safe):
-
-      fred         — macro_indicators (tall) -> macro_data 1:1
-                     'hy_spread' rows copied VERBATIM per
-                     project_hy_spread_sacred. 50 PHCI series + the
-                     sos_state_diffusion derived row preserved as-is.
-      aaii         — aaii_sentiment (3 wide cols) -> 3 macro_data rows/date
-      fear_greed   — fear_greed (8 wide cols mixed num+text) -> 8 rows/date
-
-    realtime_start := source.recorded_at for all backfilled rows (NOT now())
-    so the original transaction-time is preserved (§8.5).
+    Idempotent UPSERT on (source, series_id) so re-runs refresh metadata
+    in-place when the static catalog dict is updated.
 
     cfg knobs:
-      dry_run (default 'true') — count what WOULD insert; no writes.
-      sources (default 'fred,aaii,fear_greed') — comma list to selectively
-              backfill a subset (useful for re-running just one source).
-
-    Total estimated rows ~128K (68K fred + 6K aaii expanded + 53K fear_greed
-    expanded). Per-source INSERT-SELECT fits in a single transaction; WAL
-    budget ~10MB total — well under the 100K-row chunk threshold from
-    supabase-constraints-2026-05-23 since each INSERT-SELECT is server-side
-    (no Python round-trips).
-
-    Pre-condition: migration 20260524_0900 (Task #18 P1) applied so
-    macro_data table + indexes exist.
+      dry_run (default 'true') — preview count only.
+      verify_coverage (default 'true') — confirm every (source, series_id)
+                                        in macro_data has a catalog row.
     """
     log = structlog.get_logger("scripts.ops")
     cfg = cfg or {}
-
     dry_run_param = cfg.get("dry_run", "true")
     dry_run = (dry_run_param.lower() != "false") if isinstance(dry_run_param, str) else bool(dry_run_param)
-    sources_param = str(cfg.get("sources", "fred,aaii,fear_greed"))
-    sources = {s.strip() for s in sources_param.split(",") if s.strip()}
+    verify_coverage = (cfg.get("verify_coverage", "true").lower() != "false") if isinstance(cfg.get("verify_coverage", "true"), str) else bool(cfg.get("verify_coverage", True))
 
-    has_table = await pool.fetchval(
-        "SELECT count(*) FROM information_schema.tables "
-        "WHERE table_schema='platform' AND table_name='macro_data'"
+    rows = _series_catalog_metadata()
+    by_source: dict[str, int] = {}
+    for r in rows:
+        by_source[r["source"]] = by_source.get(r["source"], 0) + 1
+    log.info(
+        "ops.stage.series_catalog_backfill.starting",
+        total=len(rows), by_source=by_source, dry_run=dry_run,
     )
-    if not has_table:
-        raise RuntimeError(
-            "platform.macro_data missing — apply migration 20260524_0900 first."
-        )
-
-    log.info("ops.stage.macro_data_backfill.starting", sources=sorted(sources), dry_run=dry_run)
-
-    # P2 is idempotent across re-runs by skipping natural keys that already have
-    # a current (realtime_end='infinity') macro_data row. Without this guard, a
-    # re-run after the producer (P3) has fired a cycle creates duplicate-current
-    # rows because the source recorded_at advances (legacy DO UPDATE for aaii +
-    # fear_greed) → realtime_start in the backfill differs from existing rows →
-    # ON CONFLICT on the bitemporal PK doesn't fire. SCD-2 invariant violated.
-    # NOT EXISTS clause makes the stage safe to run at any point.
-
-    # FRED source (macro_indicators is already tall: indicator,date,value,recorded_at).
-    FRED_INSERT = """
-        INSERT INTO platform.macro_data
-            (source, series_id, observed_date, value_num,
-             realtime_start, realtime_end, recorded_at)
-        SELECT
-            'fred', m.indicator, m.date, m.value,
-            m.recorded_at, 'infinity', m.recorded_at
-        FROM platform.macro_indicators m
-        WHERE m.value IS NOT NULL
-          AND NOT EXISTS (
-              SELECT 1 FROM platform.macro_data d
-              WHERE d.source = 'fred' AND d.series_id = m.indicator
-                AND d.observed_date = m.date AND d.realtime_end = 'infinity'
-          )
-        ON CONFLICT (source, series_id, observed_date, realtime_start)
-        DO NOTHING
-    """
-
-    # AAII (wide 3-col -> 3 tall rows per date via LATERAL VALUES fan-out).
-    # WHERE val IS NOT NULL preserves XOR constraint (no all-NULL rows).
-    AAII_INSERT = """
-        INSERT INTO platform.macro_data
-            (source, series_id, observed_date, value_num,
-             realtime_start, realtime_end, recorded_at)
-        SELECT
-            'aaii', t.channel, a.date, t.val,
-            a.recorded_at, 'infinity', a.recorded_at
-        FROM platform.aaii_sentiment a
-        CROSS JOIN LATERAL (VALUES
-            ('bullish_pct', a.bullish_pct),
-            ('bearish_pct', a.bearish_pct),
-            ('neutral_pct', a.neutral_pct)
-        ) t(channel, val)
-        WHERE t.val IS NOT NULL
-          AND NOT EXISTS (
-              SELECT 1 FROM platform.macro_data d
-              WHERE d.source = 'aaii' AND d.series_id = t.channel
-                AND d.observed_date = a.date AND d.realtime_end = 'infinity'
-          )
-        ON CONFLICT (source, series_id, observed_date, realtime_start)
-        DO NOTHING
-    """
-
-    # Fear/Greed numeric channels (6 of 8: score + score_5d_ago + 4 components).
-    FEAR_GREED_NUM_INSERT = """
-        INSERT INTO platform.macro_data
-            (source, series_id, observed_date, value_num,
-             realtime_start, realtime_end, recorded_at)
-        SELECT
-            'cnn_fear_greed', t.channel, f.date, t.val,
-            f.recorded_at, 'infinity', f.recorded_at
-        FROM platform.fear_greed f
-        CROSS JOIN LATERAL (VALUES
-            ('score',                f.score),
-            ('score_5d_ago',         f.score_5d_ago),
-            ('volatility_component', f.volatility_component),
-            ('credit_component',     f.credit_component),
-            ('momentum_component',   f.momentum_component),
-            ('safe_haven_component', f.safe_haven_component)
-        ) t(channel, val)
-        WHERE t.val IS NOT NULL
-          AND NOT EXISTS (
-              SELECT 1 FROM platform.macro_data d
-              WHERE d.source = 'cnn_fear_greed' AND d.series_id = t.channel
-                AND d.observed_date = f.date AND d.realtime_end = 'infinity'
-          )
-        ON CONFLICT (source, series_id, observed_date, realtime_start)
-        DO NOTHING
-    """
-
-    # Fear/Greed text channels (2 of 8: label + direction). Separate INSERT
-    # because value_text channel — XOR CHECK rejects mixed-channel rows.
-    FEAR_GREED_TEXT_INSERT = """
-        INSERT INTO platform.macro_data
-            (source, series_id, observed_date, value_text,
-             realtime_start, realtime_end, recorded_at)
-        SELECT
-            'cnn_fear_greed', t.channel, f.date, t.val,
-            f.recorded_at, 'infinity', f.recorded_at
-        FROM platform.fear_greed f
-        CROSS JOIN LATERAL (VALUES
-            ('label',     f.label),
-            ('direction', f.direction)
-        ) t(channel, val)
-        WHERE t.val IS NOT NULL
-          AND NOT EXISTS (
-              SELECT 1 FROM platform.macro_data d
-              WHERE d.source = 'cnn_fear_greed' AND d.series_id = t.channel
-                AND d.observed_date = f.date AND d.realtime_end = 'infinity'
-          )
-        ON CONFLICT (source, series_id, observed_date, realtime_start)
-        DO NOTHING
-    """
 
     if dry_run:
-        results: dict[str, Any] = {"dry_run": True, "would_insert": {}}
-        if "fred" in sources:
-            results["would_insert"]["fred"] = int(await pool.fetchval(
-                "SELECT count(*) FROM platform.macro_indicators WHERE value IS NOT NULL"
-            ) or 0)
-        if "aaii" in sources:
-            results["would_insert"]["aaii"] = int(await pool.fetchval(
-                """
-                SELECT
-                    (SELECT count(*) FROM platform.aaii_sentiment WHERE bullish_pct IS NOT NULL)
-                  + (SELECT count(*) FROM platform.aaii_sentiment WHERE bearish_pct IS NOT NULL)
-                  + (SELECT count(*) FROM platform.aaii_sentiment WHERE neutral_pct IS NOT NULL)
-                """
-            ) or 0)
-        if "fear_greed" in sources:
-            results["would_insert"]["fear_greed"] = int(await pool.fetchval(
-                """
-                SELECT
-                    (SELECT count(*) FROM platform.fear_greed WHERE score IS NOT NULL)
-                  + (SELECT count(*) FROM platform.fear_greed WHERE score_5d_ago IS NOT NULL)
-                  + (SELECT count(*) FROM platform.fear_greed WHERE volatility_component IS NOT NULL)
-                  + (SELECT count(*) FROM platform.fear_greed WHERE credit_component IS NOT NULL)
-                  + (SELECT count(*) FROM platform.fear_greed WHERE momentum_component IS NOT NULL)
-                  + (SELECT count(*) FROM platform.fear_greed WHERE safe_haven_component IS NOT NULL)
-                  + (SELECT count(*) FROM platform.fear_greed WHERE label IS NOT NULL)
-                  + (SELECT count(*) FROM platform.fear_greed WHERE direction IS NOT NULL)
-                """
-            ) or 0)
-        results["would_insert_total"] = sum(results["would_insert"].values())
-        log.info("ops.stage.macro_data_backfill.dry_run", **results)
-        return results
+        return {"dry_run": True, "rows_to_upsert": len(rows), "by_source": by_source}
 
-    inserted: dict[str, int] = {}
-
-    if "fred" in sources:
-        before = int(await pool.fetchval(
-            "SELECT count(*) FROM platform.macro_data WHERE source='fred'"
-        ) or 0)
-        async with pool.acquire() as conn, conn.transaction():
-            await conn.execute("SET LOCAL statement_timeout = '5min'")
-            await conn.execute(FRED_INSERT)
-        after = int(await pool.fetchval(
-            "SELECT count(*) FROM platform.macro_data WHERE source='fred'"
-        ) or 0)
-        inserted["fred"] = after - before
-        log.info("ops.stage.macro_data_backfill.fred", inserted=inserted["fred"], total=after)
-
-    if "aaii" in sources:
-        before = int(await pool.fetchval(
-            "SELECT count(*) FROM platform.macro_data WHERE source='aaii'"
-        ) or 0)
-        async with pool.acquire() as conn, conn.transaction():
-            await conn.execute("SET LOCAL statement_timeout = '1min'")
-            await conn.execute(AAII_INSERT)
-        after = int(await pool.fetchval(
-            "SELECT count(*) FROM platform.macro_data WHERE source='aaii'"
-        ) or 0)
-        inserted["aaii"] = after - before
-        log.info("ops.stage.macro_data_backfill.aaii", inserted=inserted["aaii"], total=after)
-
-    if "fear_greed" in sources:
-        before = int(await pool.fetchval(
-            "SELECT count(*) FROM platform.macro_data WHERE source='cnn_fear_greed'"
-        ) or 0)
-        async with pool.acquire() as conn, conn.transaction():
-            await conn.execute("SET LOCAL statement_timeout = '5min'")
-            await conn.execute(FEAR_GREED_NUM_INSERT)
-            await conn.execute(FEAR_GREED_TEXT_INSERT)
-        after = int(await pool.fetchval(
-            "SELECT count(*) FROM platform.macro_data WHERE source='cnn_fear_greed'"
-        ) or 0)
-        inserted["fear_greed"] = after - before
-        log.info("ops.stage.macro_data_backfill.fear_greed",
-                 inserted=inserted["fear_greed"], total=after)
-
-    # Sacred-data audit: hy_spread row count must match source exactly.
-    if "fred" in sources:
-        src_hy = int(await pool.fetchval(
-            "SELECT count(*) FROM platform.macro_indicators WHERE indicator='hy_spread'"
-        ) or 0)
-        dst_hy = int(await pool.fetchval(
-            "SELECT count(*) FROM platform.macro_data "
-            "WHERE source='fred' AND series_id='hy_spread'"
-        ) or 0)
-        if src_hy != dst_hy:
-            raise RuntimeError(
-                f"hy_spread sacred-data preservation FAILED: "
-                f"source={src_hy} dst={dst_hy} (delta={dst_hy - src_hy})"
+    n_upserted = 0
+    async with pool.acquire() as conn, conn.transaction():
+        for r in rows:
+            await conn.execute(
+                _SERIES_CATALOG_UPSERT_SQL,
+                r["source"], r["series_id"], r["vendor_series_id"],
+                r["description"], r["unit"], r["frequency"],
+                r["publish_weekday"], r["publish_day_of_month"], r["publish_lag_days"],
+                r["is_seasonally_adjusted"], r["is_derived"], r["sacred"],
+                r["publication_calendar_url"], r["notes"],
             )
-        log.info("ops.stage.macro_data_backfill.hy_spread_sacred_ok", rows=dst_hy)
+            n_upserted += 1
 
-    total_inserted = sum(inserted.values())
-    log.info("ops.stage.macro_data_backfill.done",
-             inserted=inserted, total=total_inserted)
-    return {"dry_run": False, "inserted": inserted, "total_inserted": total_inserted}
+    result: dict[str, Any] = {
+        "dry_run": False, "upserted": n_upserted, "by_source": by_source,
+    }
+
+    if verify_coverage:
+        missing = await pool.fetch(
+            """
+            SELECT DISTINCT md.source, md.series_id
+            FROM platform.macro_data md
+            LEFT JOIN platform.series_catalog sc
+                ON sc.source = md.source AND sc.series_id = md.series_id
+            WHERE sc.series_id IS NULL
+            """
+        )
+        result["coverage_gap"] = [(r["source"], r["series_id"]) for r in missing]
+        if missing:
+            log.warning(
+                "ops.stage.series_catalog_backfill.coverage_gap",
+                n_missing=len(missing), sample=result["coverage_gap"][:10],
+            )
+
+    log.info("ops.stage.series_catalog_backfill.done", **{k: v for k, v in result.items() if k != "coverage_gap"})
+    return result
 
 
 # v2.2 P6 Path-A orphan backfill — resolves each distinct orphan ticker via
@@ -5334,14 +5334,6 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     ("prices_daily_backfill_classification_id",
         lambda pool, cfg: (lambda: _stage_prices_daily_backfill_classification_id(pool, cfg)),
         HEAVY_STAGE_TIMEOUT_SEC),
-    # Task #18 P2 — backfill platform.macro_data (bitemporal tall) from the 3
-    # source tables (macro_indicators, aaii_sentiment, fear_greed). Pure
-    # server-side INSERT-SELECT, idempotent (ON CONFLICT DO NOTHING on the
-    # bitemporal PK), realtime_start = source.recorded_at for verbatim preservation.
-    # hy_spread sacred-row count is asserted equal post-insert.
-    ("macro_data_backfill",
-        lambda pool, cfg: (lambda: _stage_macro_data_backfill(pool, cfg)),
-        HEAVY_STAGE_TIMEOUT_SEC),
     # v2.2 P6 Path-A orphan backfill — resolves unknown tickers via FMP
     # /profile + parent_resolver, INSERTs ticker_classifications,
     # UPDATEs each Path-A child table's classification_id. Operator-on-demand.
@@ -5349,6 +5341,13 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     ("parent_resolver_orphan_backfill",
         lambda pool, cfg: (lambda: _stage_parent_resolver_orphan_backfill(pool, cfg)),
         HEAVY_STAGE_TIMEOUT_SEC),
+    # Task #18 follow-on — populate platform.series_catalog (per-series
+    # metadata: cadence, unit, vendor_series_id, publish day/lag, sacred flag).
+    # Idempotent UPSERT on (source, series_id); operator-on-demand re-run
+    # whenever the static metadata dict is refined.
+    ("series_catalog_backfill",
+        lambda pool, cfg: (lambda: _stage_series_catalog_backfill(pool, cfg)),
+        STAGE_TIMEOUT_SEC),
     ("delist_stale",        lambda pool, cfg: (lambda: _stage_delist_stale(pool)),             STAGE_TIMEOUT_SEC),
     # earnings_refresh — earnings-beat events for vector engine.
     # Heavy timeout (1h) because the FMP loop is ~1 sec per ticker;

@@ -33,13 +33,20 @@ async def check_fear_greed_freshness(
     failures: list[FailureDetail] = []
 
     async with pool.acquire() as conn:
-        latest = await conn.fetchval("SELECT MAX(date) FROM platform.fear_greed")
+        # Task #18 P7: reads platform.macro_data directly (legacy
+        # platform.fear_greed dropped). Source='cnn_fear_greed';
+        # any current series_id (score / label / etc.) gives us the
+        # latest observation date for the bundle.
+        latest = await conn.fetchval(
+            "SELECT MAX(observed_date) FROM platform.macro_data "
+            "WHERE source = 'cnn_fear_greed' AND realtime_end = 'infinity'"
+        )
 
     if latest is None:
         failures.append(FailureDetail(
             ticker="<fear_greed>", reason="empty",
             expected=f"a row within {MAX_AGE_TRADING_DAYS} trading days",
-            observed="zero rows in platform.fear_greed",
+            observed="zero rows for source='cnn_fear_greed' in platform.macro_data",
         ))
     else:
         today = datetime.now(UTC).date()

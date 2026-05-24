@@ -25,7 +25,9 @@ class _Conn:
         self._latest = latest
 
     async def fetchval(self, sql: str, *args: object) -> Any:
-        assert "platform.fear_greed" in sql.lower()
+        # Task #18 P7: reads platform.macro_data with source='cnn_fear_greed'.
+        sl = sql.lower()
+        assert "platform.macro_data" in sl and "'cnn_fear_greed'" in sl
         return self._latest
 
 

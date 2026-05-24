@@ -32,14 +32,19 @@ async def check_aaii_sentiment_freshness(
     started = time.perf_counter()
     failures: list[FailureDetail] = []
     async with pool.acquire() as conn:
+        # Task #18 P7: reads platform.macro_data directly (legacy
+        # platform.aaii_sentiment table/view dropped). Source='aaii';
+        # current rows only (realtime_end='infinity') so SCD-2 revision
+        # history doesn't shift the max.
         latest = await conn.fetchval(
-            "SELECT MAX(date) FROM platform.aaii_sentiment"
+            "SELECT MAX(observed_date) FROM platform.macro_data "
+            "WHERE source = 'aaii' AND realtime_end = 'infinity'"
         )
     if latest is None:
         failures.append(FailureDetail(
             ticker="<aaii_sentiment>", reason="empty",
             expected=f"data within {MAX_AGE_DAYS}d",
-            observed="zero rows in platform.aaii_sentiment",
+            observed="zero rows for source='aaii' in platform.macro_data",
         ))
     else:
         now = datetime.now(UTC)

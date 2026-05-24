@@ -55,9 +55,12 @@ async def _aaii_sentiment_probe(pool: asyncpg.Pool) -> VendorState | None:
     Vendor latest = HEAD Last-Modified on AAII's .xls (publication.py
     AAII probe). Returns None if either side is undeterminable so the
     orchestrator stays strict."""
+    # Task #18 P7: reads platform.macro_data directly (legacy aaii_sentiment
+    # dropped). Source='aaii'; current rows only (realtime_end='infinity').
     async with pool.acquire() as conn:
         our_latest = await conn.fetchval(
-            "SELECT MAX(date) FROM platform.aaii_sentiment"
+            "SELECT MAX(observed_date) FROM platform.macro_data "
+            "WHERE source = 'aaii' AND realtime_end = 'infinity'"
         )
     if our_latest is None:
         return None
@@ -93,13 +96,17 @@ async def _macro_indicators_probe(pool: asyncpg.Pool) -> VendorState | None:
     Vendor latest = MIN(observation_end) across INDICATOR_SERIES (the
     feed-level publication.py probe). Returns None if either side is
     undeterminable."""
+    # Task #18 P7: reads platform.macro_data directly (legacy
+    # macro_indicators dropped). Source='fred'; current rows only.
     async with pool.acquire() as conn:
         row = await conn.fetchrow("""
             SELECT MIN(latest) AS our_latest
             FROM (
-                SELECT indicator, MAX(date) AS latest
-                FROM platform.macro_indicators
-                GROUP BY indicator
+                SELECT series_id AS indicator,
+                       MAX(observed_date) AS latest
+                FROM platform.macro_data
+                WHERE source = 'fred' AND realtime_end = 'infinity'
+                GROUP BY series_id
             ) per_series
         """)
     our_latest = row["our_latest"] if row else None

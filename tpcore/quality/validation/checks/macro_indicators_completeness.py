@@ -192,6 +192,13 @@ INDICATOR_CADENCE: dict[str, str] = {
 # fall-back to a wrong default).
 INDICATOR_WEEKLY_ANCHOR_WEEKDAY: dict[str, int] = {
     "initial_claims": 5,  # Saturday — FRED IC4WSA observation_date
+    # NFCI is published Wednesday morning by the Chicago Fed; FRED
+    # observation_date convention anchors the row on Friday (the week-
+    # ending date the index covers). Without this entry, NFCI fell back
+    # to the Thursday default and produced 169 spurious "missing date"
+    # failures (caught 2026-05-24 by the macro-feed-profile vendor
+    # validation expert-review).
+    "nfci": 4,  # Friday — FRED NFCI weekly observation_date
 }
 
 # Backwards-compat: a WEEKLY indicator with no per-series anchor
@@ -216,21 +223,31 @@ MAX_REPORTED = 25
 REPAIR_LOOKBACK_BUFFER_DAYS = 7
 
 
+# Task #18 P7: reads platform.macro_data directly (legacy
+# platform.macro_indicators table/view dropped). Column mapping:
+#   macro_indicators.indicator -> macro_data.series_id
+#   macro_indicators.date      -> macro_data.observed_date
+#   macro_indicators.value     -> macro_data.value_num
+# Filter source='fred' AND realtime_end='infinity' for the current
+# FRED snapshot (closed/revised rows ignored — gaps measured against
+# what the consumer would actually read).
 _INDICATOR_RANGE_SQL = """
-    SELECT indicator,
-           MIN(date) AS first_date,
-           MAX(date) AS last_date,
+    SELECT series_id AS indicator,
+           MIN(observed_date) AS first_date,
+           MAX(observed_date) AS last_date,
            COUNT(*)  AS row_count
-    FROM platform.macro_indicators
-    WHERE indicator = ANY($1::text[])
-    GROUP BY indicator
+    FROM platform.macro_data
+    WHERE source = 'fred' AND realtime_end = 'infinity'
+      AND series_id = ANY($1::text[])
+    GROUP BY series_id
 """
 
 
 _INDICATOR_DATES_SQL = """
-    SELECT date
-    FROM platform.macro_indicators
-    WHERE indicator = $1 AND date BETWEEN $2 AND $3
+    SELECT observed_date AS date
+    FROM platform.macro_data
+    WHERE source = 'fred' AND realtime_end = 'infinity'
+      AND series_id = $1 AND observed_date BETWEEN $2 AND $3
 """
 
 

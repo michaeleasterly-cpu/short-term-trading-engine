@@ -58,7 +58,9 @@ _PROBES: dict[str, _LatestProbe] = {
         sql="SELECT MAX(settlement_date) FROM platform.short_interest",
     ),
     "aaii_sentiment": _LatestProbe(
-        sql="SELECT MAX(date) FROM platform.aaii_sentiment",
+        # Task #18 P7: reads macro_data source='aaii' / observed_date.
+        sql="SELECT MAX(observed_date) FROM platform.macro_data "
+            "WHERE source='aaii' AND realtime_end='infinity'",
     ),
     "iborrowdesk_borrow_rates": _LatestProbe(
         sql="SELECT MAX(date) FROM platform.borrow_rates",
@@ -88,7 +90,9 @@ _PROBES: dict[str, _LatestProbe] = {
         ),
     ),
     "macro_indicators": _LatestProbe(
-        sql="SELECT MAX(date) FROM platform.macro_indicators",
+        # Task #18 P7: reads macro_data source='fred' / observed_date.
+        sql="SELECT MAX(observed_date) FROM platform.macro_data "
+            "WHERE source='fred' AND realtime_end='infinity'",
     ),
     "liquidity_tiers": _LatestProbe(
         sql="SELECT MAX(last_updated)::date FROM platform.liquidity_tiers",
@@ -101,7 +105,9 @@ _PROBES: dict[str, _LatestProbe] = {
         ),
     ),
     "fear_greed": _LatestProbe(
-        sql="SELECT MAX(date) FROM platform.fear_greed",
+        # Task #18 P7: reads macro_data source='cnn_fear_greed' / observed_date.
+        sql="SELECT MAX(observed_date) FROM platform.macro_data "
+            "WHERE source='cnn_fear_greed' AND realtime_end='infinity'",
     ),
     "fundamentals_quarterly": _LatestProbe(
         sql=(

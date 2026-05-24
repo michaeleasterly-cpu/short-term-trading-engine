@@ -74,9 +74,12 @@ EXPECTED_INDICATORS: tuple[str, ...] = (
 
 
 _SQL = """
-    SELECT indicator, MAX(date) AS latest_date, COUNT(*) AS rows_total
-    FROM platform.macro_indicators
-    GROUP BY indicator
+    SELECT series_id AS indicator,
+           MAX(observed_date) AS latest_date,
+           COUNT(*) AS rows_total
+    FROM platform.macro_data
+    WHERE source = 'fred' AND realtime_end = 'infinity'
+    GROUP BY series_id
 """
 
 
