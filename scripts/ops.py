@@ -2855,6 +2855,260 @@ async def _stage_series_catalog_backfill(
     return result
 
 
+# ── Corporate-history enrichment epic — P2 (thinned) seed stage ──────
+# Loads scripts/seed/corporate_events_seed.csv into platform.{issuers,
+# issuer_securities, corporate_events}. The CSV is operator-curated
+# (15 rows as of 2026-05-24) and serves as the test oracle for the
+# future SEC EDGAR extractor (P3). Per the spec
+# docs/superpowers/specs/2026-05-24-corporate-history-enrichment.md v0.2.
+#
+# Issuer ID minting (operator-minted PK pattern from v2.2 precedent):
+#   - CIK-bearing issuers: 'CIK' + zero-padded 10-digit CIK (e.g. 'CIK0001418091')
+#   - Non-CIK external successors: 'EXT_' + slug of successor_external
+#     (e.g. 'EXT_X_CORP_MUSK_OWNED_PRIVATE_DELAWARE')
+# Stable + deterministic + portable. Re-runs hit ON CONFLICT DO NOTHING.
+
+_CORP_EVENTS_CSV_PATH = "scripts/seed/corporate_events_seed.csv"
+
+
+def _mint_issuer_id_from_cik(cik: str | None) -> str | None:
+    """Mint a stable issuer_id from a CIK; return None if no CIK."""
+    if not cik:
+        return None
+    # Strip leading zeros, re-pad to 10, prepend 'CIK'. Handles both
+    # '1418091' and '0001418091' input shapes deterministically.
+    return "CIK" + str(int(cik)).zfill(10)
+
+
+def _mint_issuer_id_from_external(external: str) -> str:
+    """Mint a stable issuer_id from a successor_external free-text label."""
+    import re
+    slug = re.sub(r"[^A-Z0-9]+", "_", external.upper()).strip("_")
+    # Cap length so the id stays human-readable.
+    return ("EXT_" + slug)[:80]
+
+
+def _mint_event_id(
+    *, predecessor: str, successor: str, event_date: str, event_kind: str,
+) -> str:
+    """Deterministic event_id = SHA-256-12 of (kind|date|pred|succ).
+
+    Idempotent across re-runs of the seed stage (same CSV row → same
+    event_id → ON CONFLICT no-op).
+    """
+    import hashlib
+    payload = f"{event_kind}|{event_date}|{predecessor or ''}|{successor or ''}"
+    h = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24].upper()
+    return f"EVT_{h}"
+
+
+async def _stage_corporate_events_seed(
+    pool: asyncpg.Pool, cfg: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Corporate-history P2 — load scripts/seed/corporate_events_seed.csv
+    into issuers + issuer_securities + corporate_events.
+
+    Idempotent: each row resolves to deterministic issuer_id + event_id;
+    ON CONFLICT DO NOTHING means re-runs are safe (manual CSV edits get
+    picked up next run; existing rows stay put).
+
+    cfg knobs:
+      dry_run (default 'true') — count what WOULD insert; no writes.
+      csv_path (default scripts/seed/corporate_events_seed.csv) — override.
+    """
+    import csv
+    from pathlib import Path
+    log = structlog.get_logger("scripts.ops")
+    cfg = cfg or {}
+    dry_run_param = cfg.get("dry_run", "true")
+    dry_run = (dry_run_param.lower() != "false") if isinstance(dry_run_param, str) else bool(dry_run_param)
+    csv_path = Path(str(cfg.get("csv_path", _CORP_EVENTS_CSV_PATH)))
+
+    if not csv_path.exists():
+        raise RuntimeError(f"corporate_events_seed: CSV not found at {csv_path}")
+
+    with csv_path.open(encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+    log.info("ops.stage.corporate_events_seed.starting",
+             n_rows=len(rows), csv_path=str(csv_path), dry_run=dry_run)
+
+    n_issuers_inserted = 0
+    n_securities_inserted = 0
+    n_events_inserted = 0
+    n_skipped = 0
+    skipped_reasons: list[str] = []
+
+    async with pool.acquire() as conn:
+        for i, r in enumerate(rows):
+            pred_ticker = (r.get("predecessor_ticker") or "").strip() or None
+            succ_ticker = (r.get("successor_ticker") or "").strip() or None
+            pred_cik = (r.get("predecessor_cik") or "").strip() or None
+            succ_cik = (r.get("successor_cik") or "").strip() or None
+            succ_external = (r.get("successor_external") or "").strip() or None
+            event_kind = (r.get("event_kind") or "").strip()
+            event_date_str = (r.get("event_date") or "").strip()
+
+            if not event_kind or not event_date_str:
+                n_skipped += 1
+                skipped_reasons.append(f"row {i}: missing event_kind or event_date")
+                continue
+
+            # Resolve predecessor classification_id from ticker_classifications.
+            pred_cls_id = None
+            if pred_ticker:
+                pred_cls_id = await conn.fetchval(
+                    "SELECT id FROM platform.ticker_classifications WHERE ticker = $1",
+                    pred_ticker,
+                )
+            succ_cls_id = None
+            if succ_ticker:
+                succ_cls_id = await conn.fetchval(
+                    "SELECT id FROM platform.ticker_classifications WHERE ticker = $1",
+                    succ_ticker,
+                )
+
+            # Mint issuer_ids.
+            pred_issuer_id = _mint_issuer_id_from_cik(pred_cik)
+            if succ_cik:
+                succ_issuer_id = _mint_issuer_id_from_cik(succ_cik)
+            elif succ_external:
+                succ_issuer_id = _mint_issuer_id_from_external(succ_external)
+            else:
+                succ_issuer_id = None  # liquidation / no-successor case
+
+            event_id = _mint_event_id(
+                predecessor=pred_ticker or pred_cik or "?",
+                successor=succ_ticker or succ_cik or succ_external or "",
+                event_date=event_date_str,
+                event_kind=event_kind,
+            )
+
+            if dry_run:
+                log.info("ops.stage.corporate_events_seed.would_insert",
+                         row=i, event_id=event_id, kind=event_kind,
+                         pred_ticker=pred_ticker, pred_issuer=pred_issuer_id,
+                         succ_ticker=succ_ticker, succ_issuer=succ_issuer_id)
+                continue
+
+            async with conn.transaction():
+                # 1. INSERT issuers — predecessor + successor (where present).
+                # Pre-fetch a minimal legal_name; CSV doesn't always have one.
+                pred_legal = pred_ticker or pred_cik or "(unknown)"
+                succ_legal = (succ_external or succ_ticker
+                              or succ_cik or "(unknown)")
+
+                if pred_issuer_id:
+                    r1 = await conn.execute(
+                        """
+                        INSERT INTO platform.issuers
+                            (issuer_id, cik, legal_name, status)
+                        VALUES ($1, $2, $3, 'active')
+                        ON CONFLICT (issuer_id) DO NOTHING
+                        """,
+                        pred_issuer_id, pred_cik, pred_legal,
+                    )
+                    if r1 == "INSERT 0 1":
+                        n_issuers_inserted += 1
+
+                if succ_issuer_id:
+                    # Status reflects what the event implies (take_private →
+                    # 'private', merger absorbing succ → 'active', etc.).
+                    succ_status = "private" if succ_external else "active"
+                    r2 = await conn.execute(
+                        """
+                        INSERT INTO platform.issuers
+                            (issuer_id, cik, legal_name, status)
+                        VALUES ($1, $2, $3, $4)
+                        ON CONFLICT (issuer_id) DO NOTHING
+                        """,
+                        succ_issuer_id, succ_cik, succ_legal, succ_status,
+                    )
+                    if r2 == "INSERT 0 1":
+                        n_issuers_inserted += 1
+
+                # 2. INSERT issuer_securities mappings — only when the
+                # security IS tracked in ticker_classifications.
+                from datetime import UTC
+                from datetime import date as _date
+                from datetime import datetime as _dt
+                today = _dt.now(tz=UTC).date()
+                if pred_cls_id and pred_issuer_id:
+                    r3 = await conn.execute(
+                        """
+                        INSERT INTO platform.issuer_securities
+                            (issuer_id, classification_id, valid_from)
+                        VALUES ($1, $2, '1900-01-01')
+                        ON CONFLICT DO NOTHING
+                        """,
+                        pred_issuer_id, pred_cls_id,
+                    )
+                    if r3 == "INSERT 0 1":
+                        n_securities_inserted += 1
+                if succ_cls_id and succ_issuer_id:
+                    r4 = await conn.execute(
+                        """
+                        INSERT INTO platform.issuer_securities
+                            (issuer_id, classification_id, valid_from)
+                        VALUES ($1, $2, $3)
+                        ON CONFLICT DO NOTHING
+                        """,
+                        succ_issuer_id, succ_cls_id, today,
+                    )
+                    if r4 == "INSERT 0 1":
+                        n_securities_inserted += 1
+
+                # 3. INSERT the corporate event itself.
+                event_date = _date.fromisoformat(event_date_str)
+                announced_date = None
+                if r.get("announced_date"):
+                    announced_date = _date.fromisoformat(r["announced_date"].strip())
+                ratio_num = float(r["ratio_num"]) if r.get("ratio_num") else None
+                ratio_den = float(r["ratio_den"]) if r.get("ratio_den") else None
+                cash = float(r["cash_per_share"]) if r.get("cash_per_share") else None
+
+                r5 = await conn.execute(
+                    """
+                    INSERT INTO platform.corporate_events (
+                        event_id, event_kind, event_date, announced_date,
+                        predecessor_cls_id, successor_cls_id,
+                        predecessor_issuer_id, successor_issuer_id,
+                        successor_external,
+                        ratio_num, ratio_den, cash_per_share,
+                        source, source_filing_url, notes
+                    )
+                    VALUES ($1, $2, $3, $4,
+                            $5, $6,
+                            $7, $8,
+                            $9,
+                            $10, $11, $12,
+                            $13, $14, $15)
+                    ON CONFLICT (event_id, realtime_start) DO NOTHING
+                    """,
+                    event_id, event_kind, event_date, announced_date,
+                    pred_cls_id, succ_cls_id,
+                    pred_issuer_id, succ_issuer_id,
+                    succ_external,
+                    ratio_num, ratio_den, cash,
+                    r.get("source") or "operator_manual",
+                    r.get("source_filing_url") or None,
+                    r.get("notes") or None,
+                )
+                if r5 == "INSERT 0 1":
+                    n_events_inserted += 1
+
+    result = {
+        "dry_run": dry_run,
+        "rows_processed": len(rows),
+        "issuers_inserted": n_issuers_inserted,
+        "issuer_securities_inserted": n_securities_inserted,
+        "events_inserted": n_events_inserted,
+        "skipped": n_skipped,
+        "skipped_reasons": skipped_reasons,
+    }
+    log.info("ops.stage.corporate_events_seed.done", **result)
+    return result
+
+
 # v2.2 P6 Path-A orphan backfill — resolves each distinct orphan ticker via
 # FMP /profile (per v2.2 spec §1.10 FMP-first lane for general-identity case),
 # mints a TKR-14 via tpcore.identity.tkr14.mint, INSERTs ticker_classifications
@@ -5347,6 +5601,13 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # whenever the static metadata dict is refined.
     ("series_catalog_backfill",
         lambda pool, cfg: (lambda: _stage_series_catalog_backfill(pool, cfg)),
+        STAGE_TIMEOUT_SEC),
+    # Corporate-history enrichment P2 — load the hand-curated truth-set CSV
+    # at scripts/seed/corporate_events_seed.csv into issuers + issuer_securities
+    # + corporate_events. Idempotent (deterministic issuer_id + event_id;
+    # ON CONFLICT DO NOTHING). Operator-on-demand re-run after CSV edits.
+    ("corporate_events_seed",
+        lambda pool, cfg: (lambda: _stage_corporate_events_seed(pool, cfg)),
         STAGE_TIMEOUT_SEC),
     ("delist_stale",        lambda pool, cfg: (lambda: _stage_delist_stale(pool)),             STAGE_TIMEOUT_SEC),
     # earnings_refresh — earnings-beat events for vector engine.
