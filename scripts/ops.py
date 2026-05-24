@@ -2829,6 +2829,331 @@ async def _stage_macro_data_backfill(
     return {"dry_run": False, "inserted": inserted, "total_inserted": total_inserted}
 
 
+# v2.2 P6 Path-A orphan backfill — resolves each distinct orphan ticker via
+# FMP /profile (per v2.2 spec §1.10 FMP-first lane for general-identity case),
+# mints a TKR-14 via tpcore.identity.tkr14.mint, INSERTs ticker_classifications
+# (pin-at-first-resolve), then UPDATEs every Path-A child table's
+# classification_id where ticker matches. Unresolvable orphans (FMP /profile
+# returns nothing — typically delisted historical tickers) stay NULL.
+_PATH_A_CHILD_TABLES: tuple[str, ...] = (
+    "short_interest",
+    "earnings_events",
+    "fundamentals_quarterly",
+    "corporate_actions",
+    "prices_daily",
+)
+
+
+def _fmp_profile_to_resolved_inputs(profile: dict[str, Any]) -> dict[str, Any]:
+    """Map FMP /profile JSON to the field-shape parent_resolver's _ProfileResult expects."""
+    from tpcore.identity.tkr14 import AssetClass
+    asset_class = AssetClass.STOCK
+    if profile.get("isEtf"):
+        asset_class = AssetClass.ETF
+    elif profile.get("isFund"):
+        asset_class = AssetClass.FUND
+    elif profile.get("isAdr"):
+        asset_class = AssetClass.ADR
+    return {
+        "country": (profile.get("country") or "US")[:2].upper(),
+        "asset_class": asset_class,
+        "exchange": profile.get("exchange") or profile.get("exchangeShortName"),
+        "cik": str(profile["cik"]) if profile.get("cik") else None,
+        "cusip": str(profile["cusip"])[:9] if profile.get("cusip") else None,
+        "isin": str(profile["isin"])[:12] if profile.get("isin") else None,
+        "legal_name": profile.get("companyName"),
+    }
+
+
+def _asset_class_to_long_form(ac: Any) -> str:
+    """Map TKR-14 AssetClass enum (1-char) to ticker_classifications.asset_class
+    long-form (the column's CHECK constraint accepts 'stock'/'etf'/'fund'/'spac').
+
+    TKR-14 keeps a finer 10-way taxonomy for issuer-hash entropy; the legacy
+    classify_tickers column is 4-way. Coarsen here:
+      STOCK/PREFERRED/REIT/ADR/WARRANT/NOTE → 'stock'
+      ETF                                    → 'etf'
+      FUND/TRUST                             → 'fund'
+      SPAC_UNIT                              → 'spac'
+    """
+    from tpcore.identity.tkr14 import AssetClass
+    if ac in (AssetClass.STOCK, AssetClass.PREFERRED, AssetClass.REIT,
+              AssetClass.ADR, AssetClass.WARRANT, AssetClass.NOTE):
+        return "stock"
+    if ac == AssetClass.ETF:
+        return "etf"
+    if ac in (AssetClass.FUND, AssetClass.TRUST):
+        return "fund"
+    if ac == AssetClass.SPAC_UNIT:
+        return "spac"
+    return "stock"
+
+
+async def _persist_resolved_classification(
+    conn: asyncpg.Connection, resolved: Any,
+) -> str:
+    """INSERT ticker_classifications with the resolved identity; return id.
+
+    Pin-at-first-resolve: ON CONFLICT (ticker) DO NOTHING preserves any
+    existing row. If a row already exists (race / re-run), SELECT the id
+    by ticker. The 5 fillable cross-vendor identifier columns (cusip, isin,
+    cik, figi, ipo_venue) are UPDATEd via COALESCE so existing non-nulls
+    are NEVER overwritten — adds only what's currently NULL.
+    """
+    insert_id = await conn.fetchval(
+        """
+        INSERT INTO platform.ticker_classifications
+            (id, ticker, current_ticker, current_exchange, current_legal_name,
+             country, asset_class, source, ipo_venue, discovery_source,
+             cik, cusip, isin, figi, status, updated_at)
+        VALUES ($1, $2, $2, $3, $4,
+                $5, $6, 'parent_resolver_backfill', $7, $8,
+                $9, $10, $11, $12, 'active', now())
+        ON CONFLICT (ticker) DO NOTHING
+        RETURNING id
+        """,
+        resolved.tkr14_id,
+        resolved.ticker,
+        resolved.exchange,
+        resolved.legal_name,
+        resolved.country,
+        _asset_class_to_long_form(resolved.asset_class),
+        str(resolved.ipo_venue.value) if resolved.ipo_venue else None,
+        str(resolved.discovery_source.value) if resolved.discovery_source else None,
+        resolved.cik,
+        resolved.cusip,
+        resolved.isin,
+        resolved.figi,
+    )
+    if insert_id is not None:
+        return str(insert_id)
+    # Existing row — fill any NULL cross-vendor identifiers + SELECT id.
+    existing = await conn.fetchrow(
+        """
+        UPDATE platform.ticker_classifications tc
+        SET cusip = COALESCE(tc.cusip, $2),
+            isin  = COALESCE(tc.isin,  $3),
+            cik   = COALESCE(tc.cik,   $4),
+            figi  = COALESCE(tc.figi,  $5),
+            current_legal_name = COALESCE(tc.current_legal_name, $6),
+            current_exchange   = COALESCE(tc.current_exchange,   $7)
+        WHERE tc.ticker = $1
+        RETURNING id
+        """,
+        resolved.ticker,
+        resolved.cusip, resolved.isin, resolved.cik, resolved.figi,
+        resolved.legal_name, resolved.exchange,
+    )
+    if existing is None or existing["id"] is None:
+        raise RuntimeError(
+            f"parent_resolver_backfill: ticker {resolved.ticker} INSERT no-op'd "
+            f"but no existing row found — ticker_classifications corruption?"
+        )
+    return str(existing["id"])
+
+
+async def _update_path_a_child_tables(
+    conn: asyncpg.Connection, ticker: str, classification_id: str,
+) -> dict[str, int]:
+    """For each Path-A child table, set classification_id WHERE ticker=$1
+    AND classification_id IS NULL. Returns per-table row-count map.
+    Per-table own transaction-scope handled by caller."""
+    counts: dict[str, int] = {}
+    for tbl in _PATH_A_CHILD_TABLES:
+        r = await conn.execute(
+            f"""
+            UPDATE platform.{tbl}
+            SET classification_id = $2
+            WHERE ticker = $1 AND classification_id IS NULL
+            """,
+            ticker, classification_id,
+        )
+        counts[tbl] = int(r.split()[-1]) if r.startswith("UPDATE") else 0
+    return counts
+
+
+async def _stage_parent_resolver_orphan_backfill(
+    pool: asyncpg.Pool, cfg: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """v2.2 P6 Path-A orphan backfill — resolve unknown tickers + fill child FKs.
+
+    Per v2.2 spec §1.10 + per-handler-lane dispatch: uses parent_resolver with
+    the FMP-first general-identity lane (PROFILE kind). FMP /profile call,
+    map to ResolvedClassification, INSERT ticker_classifications (pin-at-
+    first-resolve), then UPDATE every Path-A child table's classification_id.
+
+    cfg knobs:
+      dry_run (default 'true') — count distinct orphans + sample 10.
+      max_tickers (default 0 = no limit) — process at most N distinct tickers.
+      tables (default 'all'; 'small' = exclude prices_daily for fast smoke run).
+      flush_every (default 50) — commit-per-N-tickers (per-ticker UPDATE on
+                                 prices_daily can touch thousands of rows).
+    """
+    import os as _os
+
+    import httpx
+
+    from tpcore.identity.parent_resolver import (
+        HandlerKind,
+        ResolveInputs,
+    )
+    from tpcore.identity.parent_resolver import (
+        resolve as parent_resolve,
+    )
+
+    log = structlog.get_logger("scripts.ops")
+    cfg = cfg or {}
+
+    dry_run_param = cfg.get("dry_run", "true")
+    dry_run = (dry_run_param.lower() != "false") if isinstance(dry_run_param, str) else bool(dry_run_param)
+    max_tickers = int(cfg.get("max_tickers", 0))
+    flush_every = int(cfg.get("flush_every", 50))
+    scope = str(cfg.get("tables", "all"))
+
+    target_tables = _PATH_A_CHILD_TABLES if scope == "all" else _PATH_A_CHILD_TABLES[:4]
+
+    # Discover the distinct orphan ticker set across the target tables.
+    union_sql = " UNION ".join(
+        f"SELECT DISTINCT ticker FROM platform.{t} WHERE classification_id IS NULL"
+        for t in target_tables
+    )
+    async with pool.acquire() as conn:
+        ticker_rows = await conn.fetch(f"SELECT ticker FROM ({union_sql}) u ORDER BY ticker")
+    tickers = [r["ticker"] for r in ticker_rows]
+    if max_tickers:
+        tickers = tickers[:max_tickers]
+
+    log.info(
+        "ops.stage.parent_resolver_orphan_backfill.starting",
+        scope=scope, n_distinct_tickers=len(tickers),
+        target_tables=list(target_tables), dry_run=dry_run,
+    )
+
+    if not tickers:
+        return {"resolved": 0, "unresolved": 0, "child_rows_updated": 0,
+                "dry_run": dry_run}
+
+    if dry_run:
+        # Per-table orphan-count preview.
+        per_table_orphans: dict[str, int] = {}
+        async with pool.acquire() as conn:
+            for t in target_tables:
+                per_table_orphans[t] = int(await conn.fetchval(
+                    f"SELECT count(*) FROM platform.{t} WHERE classification_id IS NULL"
+                ) or 0)
+        log.info(
+            "ops.stage.parent_resolver_orphan_backfill.dry_run",
+            n_distinct_tickers=len(tickers),
+            sample=tickers[:10],
+            per_table_orphans=per_table_orphans,
+        )
+        return {
+            "dry_run": True, "n_distinct_tickers": len(tickers),
+            "sample": tickers[:10], "per_table_orphans": per_table_orphans,
+        }
+
+    fmp_key = _os.environ.get("FMP_API_KEY")
+    if not fmp_key:
+        from tpcore.outage import DataProviderOutage
+        raise DataProviderOutage(
+            "parent_resolver_orphan_backfill: FMP_API_KEY required."
+        )
+    FMP_BASE = "https://financialmodelingprep.com/stable"
+    RATE_SLEEP_S = 0.2  # 5 req/sec FMP Starter ceiling
+
+    resolved_count = 0
+    unresolved_count = 0
+    child_rows_updated = 0
+    # No OpenFIGI calls in this backfill — figi gets filled later by the
+    # separate tkr14_backfill[figi] stage. Saves a rate budget + complexity.
+    async def _no_openfigi(_t: list[str]) -> list[Any]: return []
+
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        async def _fmp_profile_lookup(ticker: str) -> Any:
+            for attempt in range(3):
+                try:
+                    resp = await client.get(
+                        f"{FMP_BASE}/profile",
+                        params={"symbol": ticker, "apikey": fmp_key},
+                    )
+                    if resp.status_code == 429:
+                        await asyncio.sleep(5 * (attempt + 1))
+                        continue
+                    resp.raise_for_status()
+                    data = resp.json()
+                    if isinstance(data, list) and data:
+                        return _fmp_profile_to_resolved_inputs(data[0])
+                    return None  # not-found / delisted
+                except httpx.HTTPError:
+                    if attempt == 2:
+                        return None
+                    await asyncio.sleep(2)
+            return None
+
+        for i, ticker in enumerate(tickers):
+            try:
+                profile_dict = await _fmp_profile_lookup(ticker)
+                await asyncio.sleep(RATE_SLEEP_S)
+                if profile_dict is None:
+                    unresolved_count += 1
+                    if i % 100 == 0 or i + 1 == len(tickers):
+                        log.info(
+                            "ops.stage.parent_resolver_orphan_backfill.progress",
+                            processed=i + 1, total=len(tickers),
+                            resolved=resolved_count, unresolved=unresolved_count,
+                            child_rows_updated=child_rows_updated,
+                        )
+                    continue
+
+                # parent_resolver dispatch — FMP-first lane (general identity).
+                inputs = ResolveInputs(
+                    ticker=ticker, cik=None, handler_kind=HandlerKind.PROFILE,
+                )
+                resolved = await parent_resolve(
+                    inputs,
+                    sec_ticker_lookup={},  # not needed for FMP-first lane
+                    fmp_profile_lookup=lambda _t, _p=profile_dict: _p,
+                    openfigi_lookup=_no_openfigi,
+                )
+
+                async with pool.acquire() as conn, conn.transaction():
+                    cls_id = await _persist_resolved_classification(conn, resolved)
+                    per_table_counts = await _update_path_a_child_tables(
+                        conn, ticker, cls_id,
+                    )
+                resolved_count += 1
+                child_rows_updated += sum(per_table_counts.values())
+            except Exception as exc:  # noqa: BLE001  (operator wants to see failures, not crash run)
+                unresolved_count += 1
+                log.warning(
+                    "ops.stage.parent_resolver_orphan_backfill.ticker_failed",
+                    ticker=ticker, error=str(exc)[:200],
+                )
+
+            if (i + 1) % flush_every == 0:
+                log.info(
+                    "ops.stage.parent_resolver_orphan_backfill.progress",
+                    processed=i + 1, total=len(tickers),
+                    resolved=resolved_count, unresolved=unresolved_count,
+                    child_rows_updated=child_rows_updated,
+                )
+
+    log.info(
+        "ops.stage.parent_resolver_orphan_backfill.done",
+        n_distinct_tickers=len(tickers),
+        resolved=resolved_count,
+        unresolved=unresolved_count,
+        child_rows_updated=child_rows_updated,
+    )
+    return {
+        "dry_run": False,
+        "n_distinct_tickers": len(tickers),
+        "resolved": resolved_count,
+        "unresolved": unresolved_count,
+        "child_rows_updated": child_rows_updated,
+    }
+
+
 async def _tkr14_backfill_fmp_profile(
     pool: asyncpg.Pool,
     log: Any,
@@ -4990,6 +5315,13 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # hy_spread sacred-row count is asserted equal post-insert.
     ("macro_data_backfill",
         lambda pool, cfg: (lambda: _stage_macro_data_backfill(pool, cfg)),
+        HEAVY_STAGE_TIMEOUT_SEC),
+    # v2.2 P6 Path-A orphan backfill — resolves unknown tickers via FMP
+    # /profile + parent_resolver, INSERTs ticker_classifications,
+    # UPDATEs each Path-A child table's classification_id. Operator-on-demand.
+    # cfg: dry_run, max_tickers, tables=all|small, flush_every.
+    ("parent_resolver_orphan_backfill",
+        lambda pool, cfg: (lambda: _stage_parent_resolver_orphan_backfill(pool, cfg)),
         HEAVY_STAGE_TIMEOUT_SEC),
     ("delist_stale",        lambda pool, cfg: (lambda: _stage_delist_stale(pool)),             STAGE_TIMEOUT_SEC),
     # earnings_refresh — earnings-beat events for vector engine.
