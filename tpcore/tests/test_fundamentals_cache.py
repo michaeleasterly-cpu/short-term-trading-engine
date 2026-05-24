@@ -374,7 +374,7 @@ async def test_cache_integration_roundtrip() -> None:
                 INSERT INTO platform.ticker_classifications
                     (id, ticker, current_ticker, asset_class, source)
                 VALUES ($1, $2, $2, 'stock', 'test_fixture')
-                ON CONFLICT (ticker) DO NOTHING
+                ON CONFLICT (ticker) WHERE lifetime_end IS NULL DO NOTHING
                 """,
                 test_tkr14, test_ticker,
             )
