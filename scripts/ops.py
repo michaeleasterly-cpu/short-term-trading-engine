@@ -2953,6 +2953,9 @@ async def _stage_corporate_events_seed(
                 skipped_reasons.append(f"row {i}: missing event_kind or event_date")
                 continue
 
+            from datetime import date as _date
+            event_date = _date.fromisoformat(event_date_str)
+
             # Resolve predecessor classification_id from ticker_classifications.
             pred_cls_id = None
             if pred_ticker:
@@ -3028,19 +3031,30 @@ async def _stage_corporate_events_seed(
 
                 # 2. INSERT issuer_securities mappings — only when the
                 # security IS tracked in ticker_classifications.
-                from datetime import UTC
-                from datetime import date as _date
-                from datetime import datetime as _dt
-                today = _dt.now(tz=UTC).date()
+                # For RENAME / TICKER_SWAP events where predecessor_cik ==
+                # successor_cik (same legal entity), use event_date as the
+                # SCD-2 boundary: predecessor's classification valid until
+                # event_date; successor's classification valid from
+                # event_date onward. The same-CIK detection makes
+                # FB->META, GOOG share-class changes, and similar
+                # entity-preserved transitions queryable.
+                same_entity_rename = (
+                    pred_cik and succ_cik and pred_cik == succ_cik
+                    and event_kind in ("rename", "ticker_swap",
+                                       "name_only_change",
+                                       "share_class_collapse")
+                )
                 if pred_cls_id and pred_issuer_id:
+                    pred_valid_to = event_date if same_entity_rename else None
                     r3 = await conn.execute(
                         """
                         INSERT INTO platform.issuer_securities
-                            (issuer_id, classification_id, valid_from)
-                        VALUES ($1, $2, '1900-01-01')
-                        ON CONFLICT DO NOTHING
+                            (issuer_id, classification_id, valid_from, valid_to)
+                        VALUES ($1, $2, '1900-01-01', $3)
+                        ON CONFLICT (issuer_id, classification_id, valid_from) DO UPDATE
+                            SET valid_to = COALESCE(issuer_securities.valid_to, EXCLUDED.valid_to)
                         """,
-                        pred_issuer_id, pred_cls_id,
+                        pred_issuer_id, pred_cls_id, pred_valid_to,
                     )
                     if r3 == "INSERT 0 1":
                         n_securities_inserted += 1
@@ -3052,13 +3066,77 @@ async def _stage_corporate_events_seed(
                         VALUES ($1, $2, $3)
                         ON CONFLICT DO NOTHING
                         """,
-                        succ_issuer_id, succ_cls_id, today,
+                        succ_issuer_id, succ_cls_id, event_date,
                     )
                     if r4 == "INSERT 0 1":
                         n_securities_inserted += 1
 
+                # 2b. RENAME events also populate issuer_history with the
+                # entity's name timeline — fetch EDGAR's formerNames for
+                # the CIK and emit one issuer_history row per name period.
+                # Only fires for same-CIK rename / ticker_swap events.
+                if same_entity_rename and pred_issuer_id:
+                    import os as _os
+
+                    import httpx as _httpx
+                    ua = _os.environ.get("SEC_EDGAR_USER_AGENT")
+                    if ua:
+                        cik_padded = str(int(pred_cik)).zfill(10)
+                        url = f"https://data.sec.gov/submissions/CIK{cik_padded}.json"
+                        try:
+                            async with _httpx.AsyncClient() as _c:
+                                _r = await _c.get(url, headers={"User-Agent": ua}, timeout=15.0)
+                                if _r.status_code == 200:
+                                    _data = _r.json()
+                                    current_name = _data.get("name") or pred_legal
+                                    former = _data.get("formerNames", []) or []
+                                    # Upgrade the issuers.legal_name to EDGAR's
+                                    # canonical when our seed value (e.g. "FB")
+                                    # was a placeholder.
+                                    await conn.execute(
+                                        """
+                                        UPDATE platform.issuers
+                                        SET legal_name = $2
+                                        WHERE issuer_id = $1 AND legal_name <> $2
+                                        """,
+                                        pred_issuer_id, current_name,
+                                    )
+                                    # INSERT one row per former name (with
+                                    # the from/to dates EDGAR gives us).
+                                    for fn in former:
+                                        fn_name = fn.get("name")
+                                        fn_from_str = (fn.get("from") or "")[:10]
+                                        fn_to_str = (fn.get("to") or "")[:10]
+                                        if not fn_name or not fn_from_str:
+                                            continue
+                                        fn_from = _date.fromisoformat(fn_from_str)
+                                        fn_to = _date.fromisoformat(fn_to_str) if fn_to_str else None
+                                        await conn.execute(
+                                            """
+                                            INSERT INTO platform.issuer_history
+                                                (issuer_id, cik, legal_name, valid_from, valid_to, source)
+                                            VALUES ($1, $2, $3, $4, $5, 'sec_edgar')
+                                            ON CONFLICT (issuer_id, valid_from) DO NOTHING
+                                            """,
+                                            pred_issuer_id, pred_cik, fn_name,
+                                            fn_from, fn_to,
+                                        )
+                                    # And the CURRENT name from event_date onward.
+                                    await conn.execute(
+                                        """
+                                        INSERT INTO platform.issuer_history
+                                            (issuer_id, cik, legal_name, valid_from, valid_to, source)
+                                        VALUES ($1, $2, $3, $4, NULL, 'sec_edgar')
+                                        ON CONFLICT (issuer_id, valid_from) DO NOTHING
+                                        """,
+                                        pred_issuer_id, pred_cik, current_name,
+                                        event_date,
+                                    )
+                        except Exception as _exc:  # noqa: BLE001 — best-effort enrichment
+                            log.warning("ops.stage.corporate_events_seed.edgar_fetch_failed",
+                                        cik=pred_cik, err=str(_exc))
+
                 # 3. INSERT the corporate event itself.
-                event_date = _date.fromisoformat(event_date_str)
                 announced_date = None
                 if r.get("announced_date"):
                     announced_date = _date.fromisoformat(r["announced_date"].strip())
