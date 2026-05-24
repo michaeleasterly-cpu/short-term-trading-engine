@@ -2472,6 +2472,183 @@ async def _tkr14_backfill_figi(
     }
 
 
+async def _stage_fmp_profile_backfill(
+    pool: asyncpg.Pool, cfg: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Populate ticker_classifications.gics_sector + refresh country/legal
+    name from FMP /stable/profile in bulk-style batches.
+
+    Replaces the one-off scripts/backfill_country_from_fmp.py (the
+    bulk-before-API-crawl pattern; data-adapter rule mandates canonical
+    stage entry, not forked scripts).
+
+    For each ticker_classifications row needing fill (gics_sector IS NULL
+    OR current_legal_name IS NULL OR country IS NULL):
+
+      1. Batch tickers in groups of N (default 25).
+      2. Call FMP /stable/profile?symbol=<comma-separated>.
+      3. UPDATE gics_sector + current_legal_name + country (only
+         when the existing value is NULL, never overwrite operator
+         data).
+
+    Idempotent + bounded (only touches NULL). cfg knobs:
+      dry_run (default 'true') — count tickers, no writes.
+      batch_size (default 25) — symbols per FMP call.
+      rate_limit_sleep_s (default 0.1) — between batches.
+      max_tickers (default 0 = no cap) — limit for smoke runs.
+      only_field (default '' = all) — restrict to one of
+        {gics_sector, country, legal_name}.
+
+    Requires FMP_API_KEY env var.
+    """
+    import os as _os
+
+    import httpx as _httpx
+    log = structlog.get_logger("scripts.ops")
+    cfg = cfg or {}
+    dry_run_param = cfg.get("dry_run", "true")
+    dry_run = (dry_run_param.lower() != "false") if isinstance(dry_run_param, str) else bool(dry_run_param)
+    batch_size = int(cfg.get("batch_size", 25))
+    rate_limit_sleep_s = float(cfg.get("rate_limit_sleep_s", 0.1))
+    max_tickers = int(cfg.get("max_tickers", 0))
+    only_field = str(cfg.get("only_field", "")).strip()
+
+    api_key = _os.environ.get("FMP_API_KEY")
+    if not api_key:
+        raise RuntimeError("fmp_profile_backfill: FMP_API_KEY env var required")
+
+    # 1. Universe: ACTIVE tickers (lifetime_end IS NULL) needing any fill.
+    where_clauses = ["lifetime_end IS NULL"]
+    if only_field == "gics_sector":
+        where_clauses.append("gics_sector IS NULL")
+    elif only_field == "country":
+        where_clauses.append("country IS NULL")
+    elif only_field == "legal_name":
+        where_clauses.append("current_legal_name IS NULL")
+    else:
+        where_clauses.append(
+            "(gics_sector IS NULL OR current_legal_name IS NULL OR country IS NULL)"
+        )
+    sql = f"SELECT ticker FROM platform.ticker_classifications WHERE {' AND '.join(where_clauses)} ORDER BY ticker"
+    rows = await pool.fetch(sql)
+    tickers = [r["ticker"] for r in rows]
+    if max_tickers > 0:
+        tickers = tickers[:max_tickers]
+    log.info(
+        "ops.stage.fmp_profile_backfill.starting",
+        n_tickers=len(tickers), dry_run=dry_run,
+        batch_size=batch_size, rate_limit_sleep_s=rate_limit_sleep_s,
+    )
+
+    if not tickers:
+        return {
+            "dry_run": dry_run, "tickers_needing_fill": 0,
+            "updated_sector": 0, "updated_country": 0, "updated_legal_name": 0,
+        }
+
+    if dry_run:
+        return {
+            "dry_run": True, "tickers_needing_fill": len(tickers),
+            "would_fetch_batches": (len(tickers) + batch_size - 1) // batch_size,
+            "estimated_wall_time_sec": int(((len(tickers) + batch_size - 1) // batch_size) * rate_limit_sleep_s),
+        }
+
+    n_sector = 0
+    n_country = 0
+    n_legal = 0
+    n_fetch_errors = 0
+    n_no_profile = 0
+
+    # 2. Concurrent single-ticker fetches (FMP /stable/profile does NOT
+    # support comma-separated symbols — verified 2026-05-25 returns []).
+    # Use semaphore + per-call sleep to stay safely under the 750/min
+    # FMP Starter ceiling. batch_size here is reused as the concurrency.
+    concurrency = max(1, batch_size)
+    sem = asyncio.Semaphore(concurrency)
+    counters = {"done": 0, "sector": 0, "country": 0, "legal": 0,
+                "no_profile": 0, "errors": 0}
+    log_lock = asyncio.Lock()
+
+    async def fetch_one(client: Any, ticker: str) -> None:
+        async with sem:
+            await asyncio.sleep(rate_limit_sleep_s)
+            try:
+                resp = await client.get(
+                    "https://financialmodelingprep.com/stable/profile",
+                    params={"symbol": ticker, "apikey": api_key},
+                )
+            except Exception as exc:  # noqa: BLE001
+                counters["errors"] += 1
+                log.warning("ops.stage.fmp_profile_backfill.fetch_failed",
+                            ticker=ticker, err=str(exc)[:120])
+                return
+            if resp.status_code != 200:
+                counters["errors"] += 1
+                return
+            try:
+                profiles = resp.json() or []
+            except Exception:  # noqa: BLE001
+                counters["errors"] += 1
+                return
+            if not profiles:
+                counters["no_profile"] += 1
+                return
+            prof = profiles[0]
+            sector = prof.get("sector") or None
+            legal_name = prof.get("companyName") or None
+            country = (prof.get("country") or "")[:2].upper() or None
+            if any((sector, legal_name, country)):
+                async with pool.acquire() as conn:
+                    r = await conn.execute(
+                        """
+                        UPDATE platform.ticker_classifications
+                        SET gics_sector = COALESCE(gics_sector, $2),
+                            current_legal_name = COALESCE(current_legal_name, $3),
+                            country = COALESCE(country, $4)
+                        WHERE ticker = $1 AND lifetime_end IS NULL
+                        """,
+                        ticker, sector, legal_name, country,
+                    )
+                if r == "UPDATE 1":
+                    if sector:
+                        counters["sector"] += 1
+                    if country:
+                        counters["country"] += 1
+                    if legal_name:
+                        counters["legal"] += 1
+            counters["done"] += 1
+            if counters["done"] % 500 == 0:
+                async with log_lock:
+                    log.info("ops.stage.fmp_profile_backfill.progress",
+                             done=counters["done"], total=len(tickers),
+                             sector=counters["sector"], country=counters["country"],
+                             legal_name=counters["legal"],
+                             no_profile=counters["no_profile"],
+                             errors=counters["errors"])
+
+    async with _httpx.AsyncClient(timeout=30.0) as client:
+        tasks = [fetch_one(client, t) for t in tickers]
+        await asyncio.gather(*tasks)
+
+    n_sector = counters["sector"]
+    n_country = counters["country"]
+    n_legal = counters["legal"]
+    n_no_profile = counters["no_profile"]
+    n_fetch_errors = counters["errors"]
+
+    result = {
+        "dry_run": False,
+        "tickers_processed": len(tickers),
+        "updated_sector": n_sector,
+        "updated_country": n_country,
+        "updated_legal_name": n_legal,
+        "no_profile_returned": n_no_profile,
+        "fetch_errors": n_fetch_errors,
+    }
+    log.info("ops.stage.fmp_profile_backfill.done", **result)
+    return result
+
+
 async def _stage_audit_cleanup_2026_05_24(
     pool: asyncpg.Pool, cfg: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -6954,6 +7131,14 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     ("audit_cleanup_2026_05_24",
         lambda pool, cfg: (lambda: _stage_audit_cleanup_2026_05_24(pool, cfg)),
         STAGE_TIMEOUT_SEC),
+    # FMP /stable/profile bulk-batch backfill for ticker_classifications.
+    # Populates gics_sector + refreshes country/current_legal_name when
+    # NULL. Canonical replacement for the deprecated one-off
+    # scripts/backfill_country_from_fmp.py (data-adapter rule mandates
+    # canonical stage entry, not forked scripts).
+    ("fmp_profile_backfill",
+        lambda pool, cfg: (lambda: _stage_fmp_profile_backfill(pool, cfg)),
+        HEAVY_STAGE_TIMEOUT_SEC),
     # Maintain platform.ticker_history SCD-2 timeline — INSERTs missing rows
     # for any ticker_classification without one + closes valid_to on rows
     # whose ticker is delisted in prices_daily. Idempotent + safe to wire as
