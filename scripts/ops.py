@@ -2652,40 +2652,45 @@ async def _stage_fmp_profile_backfill(
 async def _stage_gleif_lei_backfill(
     pool: asyncpg.Pool, cfg: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Populate issuers.lei from GLEIF by ISIN lookup.
+    """Populate issuers.lei from GLEIF's daily bulk ISIN→LEI mapping file.
 
-    GLEIF's Legal Entity Identifier (LEI) is the ISO 17442 global
-    identifier for legal entities. It's the canonical cross-jurisdiction
-    issuer ID that complements our local TKR-14 + CIK + FIGI mappings.
+    GLEIF publishes the full ANNA-DSB ISIN-to-LEI relationship file
+    daily at https://mapping.gleif.org/api/v2/isin-lei (~30MB ZIP,
+    ~3M LEI-ISIN pairs). The API form is rate-limited (1 req / few
+    sec) which made the original API-walking version (PR #349) take
+    forever AND hit 429s; per the bulk-before-API-crawl rule we
+    download the bulk file once + look up in-memory.
 
-    Strategy: each of our issuers' related tickers has an ISIN
-    (populated by parent_resolver/openfigi backfill). GLEIF's
-    /lei-records?filter[isin]=<ISIN> returns the unique LEI for that
-    security. We take the first ISIN per issuer + look up the LEI.
+    Strategy:
 
-    99.3% of issuers (3,499 / 3,525) have at least one ISIN-bearing
-    ticker. The remaining 0.7% are CIK-only successor entries that
-    will stay NULL.
+      1. List latest publication: GET /api/v2/isin-lei (returns
+         metadata with downloadLink).
+      2. Download the latest ZIP (~30MB; cached 24h in /tmp).
+      3. Parse the CSV (LEI, ISIN) into a dict[ISIN] = LEI.
+      4. For each issuer without LEI: look up the first ISIN of its
+         related tickers; if matched, UPDATE.
+      5. Bulk UPDATE via asyncpg.executemany.
 
     Idempotent. cfg knobs:
-      dry_run (default 'true').
-      batch_size (default 5) — concurrency.
-      rate_limit_sleep_s (default 0.1).
+      dry_run (default 'true') — count without writes.
+      cache_path (default /tmp/gleif_isin_lei.zip).
+      force_download (default 'false') — bypass 24h cache.
       max_issuers (default 0 = no cap).
-
-    GLEIF API has no documented rate limit but we stay conservative.
     """
+    import time as _time
+    import zipfile as _zipfile
+    from pathlib import Path as _Path
+
     import httpx as _httpx
     log = structlog.get_logger("scripts.ops")
     cfg = cfg or {}
     dry_run_param = cfg.get("dry_run", "true")
     dry_run = (dry_run_param.lower() != "false") if isinstance(dry_run_param, str) else bool(dry_run_param)
-    concurrency = max(1, int(cfg.get("batch_size", 5)))
-    rate_limit_sleep_s = float(cfg.get("rate_limit_sleep_s", 0.1))
+    cache_path = _Path(str(cfg.get("cache_path", "/tmp/gleif_isin_lei.zip")))
+    force_download = str(cfg.get("force_download", "false")).lower() == "true"
     max_issuers = int(cfg.get("max_issuers", 0))
 
-    # 1. Universe: issuers without LEI but with at least one ISIN-bearing
-    # ticker. Pick the first ISIN per issuer deterministically.
+    # 1. Universe: issuers without LEI + first ISIN of any related ticker.
     rows = await pool.fetch(
         """
         SELECT i.issuer_id,
@@ -2704,78 +2709,112 @@ async def _stage_gleif_lei_backfill(
     log.info(
         "ops.stage.gleif_lei_backfill.starting",
         n_candidates=len(candidates), dry_run=dry_run,
-        concurrency=concurrency,
+        cache_path=str(cache_path), force_download=force_download,
     )
 
     if not candidates:
         return {"dry_run": dry_run, "candidates": 0, "leis_filled": 0}
 
+    # 2. Download (cached) the latest bulk file. Listing endpoint is
+    # public + not rate-limited.
+    cache_age_sec = (_time.time() - cache_path.stat().st_mtime) if cache_path.exists() else float("inf")
+    if force_download or not cache_path.exists() or cache_age_sec > 86_400:
+        async with _httpx.AsyncClient(timeout=60.0) as listing_client:
+            list_resp = await listing_client.get("https://mapping.gleif.org/api/v2/isin-lei")
+            list_resp.raise_for_status()
+            entries = (list_resp.json().get("data") or [])
+            if not entries:
+                raise RuntimeError("gleif_lei_backfill: no ISIN-LEI publications listed")
+            latest = entries[0]  # API returns newest-first
+            download_link = latest["attributes"]["downloadLink"]
+        log.info("ops.stage.gleif_lei_backfill.downloading",
+                 url=download_link, file_id=latest["id"],
+                 uploaded_at=latest["attributes"]["uploadedAt"],
+                 cache_age_hr=round(cache_age_sec / 3600, 1))
+        t0 = _time.time()
+        async with _httpx.AsyncClient(timeout=600.0) as client, \
+                client.stream("GET", download_link) as resp:
+            resp.raise_for_status()
+            with cache_path.open("wb") as fh:
+                async for chunk in resp.aiter_bytes(chunk_size=1024 * 1024):
+                    fh.write(chunk)
+        log.info("ops.stage.gleif_lei_backfill.download_done",
+                 size_mb=round(cache_path.stat().st_size / 1024 / 1024, 1),
+                 elapsed_sec=round(_time.time() - t0, 1))
+    else:
+        log.info("ops.stage.gleif_lei_backfill.using_cached",
+                 size_mb=round(cache_path.stat().st_size / 1024 / 1024, 1),
+                 age_hr=round(cache_age_sec / 3600, 1))
+
+    # 3. Parse the CSV — build ISIN→LEI dict.
+    t0 = _time.time()
+    isin_to_lei: dict[str, str] = {}
+    with _zipfile.ZipFile(cache_path) as zf:
+        for entry in zf.namelist():
+            if not entry.endswith(".csv"):
+                continue
+            with zf.open(entry) as fh:
+                first = True
+                for line in fh:
+                    if first:
+                        first = False
+                        continue
+                    parts = line.decode("ascii", errors="ignore").strip().split(",")
+                    if len(parts) >= 2:
+                        lei, isin = parts[0], parts[1]
+                        if len(lei) == 20 and len(isin) == 12:
+                            isin_to_lei[isin] = lei
+    log.info("ops.stage.gleif_lei_backfill.parsed",
+             total_mappings=len(isin_to_lei),
+             elapsed_sec=round(_time.time() - t0, 1))
+
+    # 4. Match + collect updates. Dedupe by LEI: multiple of our issuers
+    # may map to the same LEI (share classes / ADRs share an LEI in
+    # GLEIF) — pick one deterministically by sorted issuer_id since
+    # issuers.lei is UNIQUE.
+    matched: dict[str, str] = {}  # lei -> issuer_id
+    n_no_match = 0
+    n_dup_lei = 0
+    for issuer_id, isin in candidates:
+        lei = isin_to_lei.get(isin)
+        if lei:
+            existing = matched.get(lei)
+            if existing is None or issuer_id < existing:
+                if existing is not None:
+                    n_dup_lei += 1
+                matched[lei] = issuer_id
+            else:
+                n_dup_lei += 1
+        else:
+            n_no_match += 1
+    updates = [(lei, iid) for lei, iid in matched.items()]
+
     if dry_run:
         return {
             "dry_run": True,
             "candidates": len(candidates),
-            "estimated_wall_time_sec": int(len(candidates) * rate_limit_sleep_s / concurrency),
+            "would_update": len(updates),
+            "no_match": n_no_match,
+            "dup_lei_skipped": n_dup_lei,
+            "bulk_file_mappings": len(isin_to_lei),
         }
 
-    sem = asyncio.Semaphore(concurrency)
-    counters = {"done": 0, "filled": 0, "no_match": 0, "errors": 0}
-
-    async def fetch_one(client: Any, issuer_id: str, isin: str) -> None:
-        async with sem:
-            await asyncio.sleep(rate_limit_sleep_s)
-            try:
-                resp = await client.get(
-                    "https://api.gleif.org/api/v1/lei-records",
-                    params={"filter[isin]": isin},
-                )
-            except Exception as exc:  # noqa: BLE001
-                counters["errors"] += 1
-                log.warning("ops.stage.gleif_lei_backfill.fetch_failed",
-                            issuer=issuer_id, isin=isin, err=str(exc)[:120])
-                return
-            if resp.status_code != 200:
-                counters["errors"] += 1
-                return
-            try:
-                data = resp.json().get("data") or []
-            except Exception:  # noqa: BLE001
-                counters["errors"] += 1
-                return
-            if not data:
-                counters["no_match"] += 1
-                return
-            lei = data[0].get("id")
-            if not lei or len(lei) != 20:
-                counters["no_match"] += 1
-                return
-            async with pool.acquire() as conn:
-                r = await conn.execute(
-                    """
-                    UPDATE platform.issuers
-                    SET lei = $2
-                    WHERE issuer_id = $1 AND lei IS NULL
-                    """,
-                    issuer_id, lei,
-                )
-            if r == "UPDATE 1":
-                counters["filled"] += 1
-            counters["done"] += 1
-            if counters["done"] % 200 == 0:
-                log.info("ops.stage.gleif_lei_backfill.progress",
-                         done=counters["done"], total=len(candidates),
-                         filled=counters["filled"], no_match=counters["no_match"],
-                         errors=counters["errors"])
-
-    async with _httpx.AsyncClient(timeout=30.0) as client:
-        tasks = [fetch_one(client, iid, isin) for iid, isin in candidates]
-        await asyncio.gather(*tasks)
+    # 5. Bulk UPDATE via executemany.
+    if updates:
+        async with pool.acquire() as conn:
+            await conn.executemany(
+                "UPDATE platform.issuers SET lei = $1 WHERE issuer_id = $2 AND lei IS NULL",
+                updates,
+            )
+    n_filled = len(updates)
 
     result = {
         "dry_run": False,
         "candidates": len(candidates),
-        "leis_filled": counters["filled"],
-        "no_match": counters["no_match"],
-        "errors": counters["errors"],
+        "leis_filled": n_filled,
+        "no_match": n_no_match,
+        "dup_lei_skipped": n_dup_lei,
+        "bulk_file_mappings": len(isin_to_lei),
     }
     log.info("ops.stage.gleif_lei_backfill.done", **result)
     return result
