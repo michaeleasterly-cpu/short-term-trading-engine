@@ -114,30 +114,39 @@ FEED_PROFILES: dict[str, FeedProfile] = {
         feed="prices_daily", trigger=FeedTrigger.MARKET_CLOSE,
         cadence_days=1, freshness_max_age_days=5, skip_guard_days=1,
         # FMP /stable/historical-price-eod/full on operator's Starter tier
-        # ($200/yr): 300 req/min, no daily cap. The full-universe pull is
-        # ~7,600 tickers — at 5 req/s that's ~25 min.
+        # ($200/yr): 300 req/min AND 100,000/day. Full-universe pull is
+        # ~7,600 tickers — at 5 req/s that's ~25 min, well under daily cap.
+        # FMP daily cap is the operator's recurring worry per
+        # docs/OPERATIONS.md:1252 — encoded here so schedulers/backfillers
+        # can budget against it instead of flying blind.
         rate_limit_requests=300, rate_limit_period_seconds=60,
+        daily_request_quota=100_000,
         concurrent_request_limit=1,
         quota_source_url="https://site.financialmodelingprep.com/developer/docs/pricing",
         evidence="daily bars; pull is triggered by XNYS close, not a "
                  "blanket cron. 5d max-age tolerates weekends/holidays. "
-                 "Quota: FMP Starter 300/min — primary daily-bars feed "
-                 "since 2026-05-22 (project_fmp_primary_daily_bars_2026_05_22).",
+                 "Quota: FMP Starter 300/min + 100k/day — primary daily-bars feed "
+                 "since 2026-05-22 (project_fmp_primary_daily_bars_2026_05_22). "
+                 "Daily cap verified against docs/OPERATIONS.md:1160,1252.",
     ),
     "finra_short_interest": FeedProfile(
         feed="finra_short_interest", trigger=FeedTrigger.VENDOR_BIMONTHLY,
         cadence_days=16, dissemination_lag_days=13,
         freshness_max_age_days=42, skip_guard_days=12,
         targeting=Targeting.CONSTRAINED_DEMAND_DRIVEN,
-        # FINRA cloudfiles direct download — bulk file, single GET per
-        # settlement period; no per-request rate limit but anti-bot HTTP.
+        # FINRA Data Cloud (OAuth2): no published per-client RPM limit.
+        # 10/min is a conservative placeholder — adapter does a single
+        # bulk GET per settlement period (~one call every 16 days), so
+        # the effective rate is negligible regardless of the cap.
         rate_limit_requests=10, rate_limit_period_seconds=60,
         concurrent_request_limit=1,
         quota_source_url="https://api.finra.org/data/group/otcMarket/name/regShoDaily",
         evidence="live FINRA pull 2026-05-16: 10 settlement periods over "
                  "~140d ⇒ bi-monthly ~16d; release−settlement lag ~13d; "
-                 "+~13d slack = 42 (was a guessed 35). Bulk file — quota "
-                 "is loose; concurrency 1 for politeness.",
+                 "+~13d slack = 42 (was a guessed 35). Bulk file (single "
+                 "GET per period). Quota: vendor publishes no per-client "
+                 "RPM cap — declared 10/min is a conservative placeholder "
+                 "(actual usage = one call per ~16-day cycle).",
     ),
     "aaii_sentiment": FeedProfile(
         feed="aaii_sentiment", trigger=FeedTrigger.VENDOR_WEEKLY,
@@ -145,14 +154,17 @@ FEED_PROFILES: dict[str, FeedProfile] = {
         publication_probe=True, publish_weekday=4,  # Thursday (ISO Mon=1)
         # AAII serves a single static .xls workbook; no documented rate
         # limit but anti-bot HTTP (browser-mimicking User-Agent required).
+        # The "rate" field is mostly symbolic — the adapter pulls ONE file
+        # per weekly refresh, so any reasonable cap is non-binding.
         rate_limit_requests=6, rate_limit_period_seconds=60,
         concurrent_request_limit=1,
         quota_source_url="https://www.aaii.com/sentimentsurvey",
         evidence="AAII Sentiment Survey closes Wed, results posted "
                  "Thursday (vendor TZ→UTC). Freshness is vendor-anchored "
                  "(last scheduled Thu publish, not today−N) and confirmed "
-                 "by the HEAD Last-Modified probe. Quota: anti-bot only; "
-                 "1 req/10s headroom (one weekly pull is all we ever need).",
+                 "by the HEAD Last-Modified probe. Quota: anti-bot only — "
+                 "rate field is symbolic (adapter pulls ONE full-history "
+                 ".xls per weekly refresh; no per-request iteration).",
     ),
     "iborrowdesk_borrow_rates": FeedProfile(
         feed="iborrowdesk_borrow_rates", trigger=FeedTrigger.CONTINUOUS,
@@ -171,34 +183,45 @@ FEED_PROFILES: dict[str, FeedProfile] = {
         feed="apewisdom_social_sentiment", trigger=FeedTrigger.INTRADAY,
         cadence_days=1, freshness_max_age_days=7, skip_guard_days=1,
         targeting=Targeting.CONSTRAINED_DEMAND_DRIVEN,
-        # ApeWisdom free API has no documented hard limit; we use ~hourly
-        # polls. 60/min is well within unstated norms.
+        # ApeWisdom free API has NO documented hard limit. The adapter
+        # paces at 1-2 req/s courtesy (per tpcore/apewisdom/adapter.py:11).
+        # Declared 60/min == 1 rps which matches the lower end of that
+        # courtesy band — conservative.
         rate_limit_requests=60, rate_limit_period_seconds=60,
         concurrent_request_limit=1,
         quota_source_url="https://apewisdom.io/api",
         evidence="ApeWisdom refreshes ~2h; coverage ceiling ~23% of "
                  "T1/T2 (1131 source tickers, 345 overlap) — see "
                  "social_sentiment_freshness (floor 0.15, evidence-derived). "
-                 "Quota: undocumented; 60/min is polite for hourly-cadence use.",
+                 "Quota: vendor publishes none; adapter paces at 1-2 rps "
+                 "courtesy (tpcore/apewisdom/adapter.py:11). Declared "
+                 "60/min == 1 rps matches lower courtesy band.",
     ),
     "finnhub_insider_sentiment": FeedProfile(
         feed="finnhub_insider_sentiment", trigger=FeedTrigger.VENDOR_QUARTERLY,
         cadence_days=30, freshness_max_age_days=None, skip_guard_days=25,
         targeting=Targeting.CONSTRAINED_DEMAND_DRIVEN,
-        # Finnhub free tier: 60 req/min + 30 req/sec burst.
+        # Finnhub free tier: 60 req/min sustained + 30 req/sec burst cap.
+        # FeedProfile models only the per-minute cap; the per-second burst
+        # (30/sec) is enforced inside the adapter via httpx Limits.
+        # If consumer-side rate enforcement gets wired, both caps must apply.
         rate_limit_requests=60, rate_limit_period_seconds=60,
         concurrent_request_limit=1,
         quota_source_url="https://finnhub.io/docs/api/rate-limit",
         evidence="Finnhub MSPR is monthly-period (age measured in months "
                  "by its check); free-tier ticker-limited → demand-driven. "
-                 "Quota: Finnhub free tier 60/min + 30/s burst.",
+                 "Quota: Finnhub free tier 60/min sustained + 30/s burst "
+                 "(per-second cap not modeled in profile; enforce adapter-side).",
     ),
     "insider_sentiment_daily": FeedProfile(
         feed="insider_sentiment_daily", trigger=FeedTrigger.CONTINUOUS,
         cadence_days=1, freshness_max_age_days=5, skip_guard_days=1,
         # FMP Starter shared with prices_daily — total budget across all
-        # FMP endpoints is 300 req/min (the budget is per-key not per-feed).
+        # FMP endpoints is 300 req/min AND 100k/day (the budget is per-API-key
+        # not per-endpoint, so this competes with the daily-bars + earnings +
+        # fundamentals pulls for the same daily envelope).
         rate_limit_requests=300, rate_limit_period_seconds=60,
+        daily_request_quota=100_000,
         concurrent_request_limit=1,
         quota_source_url="https://site.financialmodelingprep.com/developer/docs/pricing",
         evidence="FMP /stable/insider-trading/search — per-filing Form-4 "
@@ -208,28 +231,35 @@ FEED_PROFILES: dict[str, FeedProfile] = {
                  "Continuous trigger: Form 4 has a 2-business-day "
                  "filing deadline so a daily pull catches every new "
                  "filing the day after it lands at FMP. Quota: shares "
-                 "the FMP Starter 300/min budget with prices_daily.",
+                 "the FMP Starter 300/min + 100k/day budget with "
+                 "prices_daily + earnings + fundamentals.",
     ),
     "greeks_max_pain": FeedProfile(
         feed="greeks_max_pain", trigger=FeedTrigger.MARKET_CLOSE,
         cadence_days=1, freshness_max_age_days=7, skip_guard_days=1,
         targeting=Targeting.CONSTRAINED_DEMAND_DRIVEN,
-        # greeks.pro free tier = 1 symbol; pull is one HTTP call/day.
-        rate_limit_requests=6, rate_limit_period_seconds=60,
+        # greeks.pro free tier: 10 req/min + 600 req/day + 1 symbol.
+        # Corrected 2026-05-24 per the FeedProfile vendor-validation audit;
+        # in-repo adapter docstring (tpcore/greeks/adapter.py:7) was the
+        # authoritative source — earlier 6/min figure here was guesswork.
+        rate_limit_requests=10, rate_limit_period_seconds=60,
+        daily_request_quota=600,
         concurrent_request_limit=1,
         quota_source_url="https://greeks.pro",
         evidence="greeks.pro free tier = 1 symbol (SPY) by design; "
-                 "demand-driven if it ever expands. Quota: 1 call/day, "
-                 "6/min ceiling is symbolic.",
+                 "demand-driven if it ever expands. Quota: 10/min + "
+                 "600/day per tpcore/greeks/adapter.py (verified 2026-05-16).",
     ),
     "earnings_events": FeedProfile(
         feed="earnings_events", trigger=FeedTrigger.VENDOR_QUARTERLY,
         cadence_days=91, freshness_max_age_days=90, skip_guard_days=6,
         rate_limit_requests=300, rate_limit_period_seconds=60,
+        daily_request_quota=100_000,
         concurrent_request_limit=1,
         quota_source_url="https://site.financialmodelingprep.com/developer/docs/pricing",
         evidence="earnings beats are quarterly; 90d max-age = ~one "
-                 "earnings cycle (FMP). Quota: FMP Starter 300/min.",
+                 "earnings cycle (FMP). Quota: FMP Starter 300/min + "
+                 "100k/day (shared with all FMP endpoints).",
     ),
     "sec_insider_transactions": FeedProfile(
         feed="sec_insider_transactions", trigger=FeedTrigger.CONTINUOUS,
@@ -284,18 +314,22 @@ FEED_PROFILES: dict[str, FeedProfile] = {
         feed='fundamentals_quarterly', trigger=FeedTrigger.VENDOR_RELEASE,
         cadence_days=91, freshness_max_age_days=120, skip_guard_days=6,
         rate_limit_requests=300, rate_limit_period_seconds=60,
+        daily_request_quota=100_000,
         concurrent_request_limit=1,
         quota_source_url="https://site.financialmodelingprep.com/developer/docs/pricing",
-        evidence='financial fundamentals (pb/de/revenue/net_income/fcf/etc) for value-engine setup detection — already ingested via FMP for months; formal ProviderBinding registration was missing (surfaced 2026-05-20 by the autonomous-self-heal P0 completeness invariant work). Quota: FMP Starter 300/min.',
+        evidence='financial fundamentals (pb/de/revenue/net_income/fcf/etc) for value-engine setup detection — already ingested via FMP for months; formal ProviderBinding registration was missing (surfaced 2026-05-20 by the autonomous-self-heal P0 completeness invariant work). Quota: FMP Starter 300/min + 100k/day (shared with all FMP endpoints).',
     ),
     'corporate_actions': FeedProfile(
         feed='corporate_actions', trigger=FeedTrigger.VENDOR_RELEASE,
         cadence_days=1, freshness_max_age_days=7, skip_guard_days=1,
-        # Alpaca corporate-actions API: 200 req/min on the free tier.
+        # Alpaca /v2/corporate_actions is served by the TRADING API
+        # (not the Market Data API — Alpaca has two separate rate-limit
+        # buckets). Free/Basic tier: 200 req/min. Clarified 2026-05-24 per
+        # FeedProfile vendor-validation audit.
         rate_limit_requests=200, rate_limit_period_seconds=60,
         concurrent_request_limit=1,
-        quota_source_url="https://docs.alpaca.markets/docs/rate-limits",
-        evidence='splits + dividends from Alpaca corporate-actions API — already ingested for months; formal ProviderBinding registration was missing (surfaced 2026-05-20 by the autonomous-self-heal P0 completeness invariant work, mirroring the fundamentals_quarterly gap). Quota: Alpaca free tier 200/min.',
+        quota_source_url="https://docs.alpaca.markets/docs/rate-limits#trading-api",
+        evidence='splits + dividends from Alpaca /v2/corporate_actions (Trading API endpoint, NOT Market Data API — separate rate buckets) — already ingested for months; formal ProviderBinding registration was missing (surfaced 2026-05-20 by the autonomous-self-heal P0 completeness invariant work, mirroring the fundamentals_quarterly gap). Quota: Alpaca Trading API Basic 200/min.',
     ),
 }
 
