@@ -3109,6 +3109,219 @@ async def _stage_corporate_events_seed(
     return result
 
 
+# ── SEC EDGAR orphan resolver — operator directive 2026-05-24 ──────────
+# Resolves Path-A orphan tickers (prices_daily.classification_id IS NULL)
+# by looking up the issuer's CIK via either:
+#   (a) the truth-set seed CSV (operator-curated CIKs — Phase A)
+#   (b) SEC EDGAR ticker search (best-effort, deferred to Phase B)
+# Then INSERTs platform.ticker_classifications + triggers fire to
+# auto-populate classification_id on the orphan prices_daily rows.
+#
+# Idempotent (ticker_classifications INSERT uses ON CONFLICT DO NOTHING).
+# Designed to be wired into self-heal as a deterministic agent for the
+# PRICES_DAILY_CLASSIFICATION_ID_NULL signal — follow-on commit.
+
+async def _sec_fetch_issuer_name(client: Any, cik: str, ua: str) -> str | None:
+    """Fetch the legal name from EDGAR submissions JSON for a known CIK.
+
+    Returns the CURRENT legal name (the .name field). The .formerNames
+    array carries history but for ticker_classifications we want the
+    most recent authoritative name — that's what shows up in 8-K bodies
+    for filings AFTER any rename.
+    """
+    cik_padded = str(int(cik)).zfill(10)
+    url = f"https://data.sec.gov/submissions/CIK{cik_padded}.json"
+    try:
+        r = await client.get(url, headers={"User-Agent": ua}, timeout=15.0)
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        return data.get("name") or None
+    except Exception:  # noqa: BLE001 — best-effort lookup
+        return None
+
+
+def _coarsen_to_stock_asset_class(_country: str = "US") -> str:
+    """All truth-set Path-A predecessors are stocks. Coarse 4-way enum
+    in ticker_classifications.asset_class accepts stock|etf|fund|spac.
+    Permanent stage-level default for SEC-resolved orphans (none of
+    them are ETFs/funds — those have their own classification paths)."""
+    return "stock"
+
+
+async def _stage_sec_orphan_resolve(
+    pool: asyncpg.Pool, cfg: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Resolve Path-A orphan tickers via SEC EDGAR.
+
+    Phase A (this commit): uses the seed-CSV's predecessor_cik column for
+    the 7 high-confidence operator-curated tickers (TWTR/SPLK/WORK/MGI/
+    FTCH/DISCA/BBBY). Mints a TKR-14, INSERTs ticker_classifications,
+    and the existing BEFORE INSERT trigger auto-populates prices_daily.
+    classification_id on next ingest. For currently-orphan prices_daily
+    rows, we UPDATE directly (triggers only fire on INSERT).
+
+    Phase B (deferred next commit): for each remaining orphan ticker
+    not in the truth set, attempt direct EDGAR ticker→CIK lookup.
+
+    Phase C (deferred): for the foreign-ADR-suffix (F) + warrant-suffix
+    (W/U/Z) tail that has no SEC presence, alternate-source lookups
+    (OpenFIGI / operator-manual / FMP composite).
+
+    Designed for both operator-on-demand re-run AND wiring into the
+    self-heal cascade catalog (PRICES_DAILY_CLASSIFICATION_ID_NULL
+    signal — follow-on commit).
+
+    cfg knobs:
+      dry_run (default 'true') — print plan; no writes.
+      csv_path (default scripts/seed/corporate_events_seed.csv).
+    """
+    import csv as _csv
+    import os as _os
+    from datetime import UTC
+    from datetime import datetime as _dt
+    from pathlib import Path as _Path
+
+    import httpx
+
+    from tpcore.identity.tkr14 import (
+        AssetClass,
+        DiscoverySource,
+        IPOVenue,
+        mint,
+    )
+
+    log = structlog.get_logger("scripts.ops")
+    cfg = cfg or {}
+    dry_run_param = cfg.get("dry_run", "true")
+    dry_run = (dry_run_param.lower() != "false") if isinstance(dry_run_param, str) else bool(dry_run_param)
+    csv_path = _Path(str(cfg.get("csv_path", "scripts/seed/corporate_events_seed.csv")))
+
+    ua = _os.environ.get("SEC_EDGAR_USER_AGENT")
+    if not ua:
+        raise RuntimeError(
+            "sec_orphan_resolve: SEC_EDGAR_USER_AGENT env var required "
+            "(SEC fair-access policy mandates a real contact)."
+        )
+
+    # 1. Read truth-set CSV, collect rows with predecessor_ticker + predecessor_cik.
+    if not csv_path.exists():
+        raise RuntimeError(f"sec_orphan_resolve: CSV not found at {csv_path}")
+    with csv_path.open(encoding="utf-8") as fh:
+        candidates = [
+            r for r in _csv.DictReader(fh)
+            if r.get("predecessor_ticker") and r.get("predecessor_cik")
+        ]
+
+    # 2. Filter to candidates that are ACTUAL orphans in prices_daily AND
+    #    aren't already in ticker_classifications.
+    actionable: list[dict[str, Any]] = []
+    async with pool.acquire() as conn:
+        for r in candidates:
+            ticker = r["predecessor_ticker"]
+            in_tc = await conn.fetchval(
+                "SELECT count(*) FROM platform.ticker_classifications WHERE ticker=$1",
+                ticker,
+            )
+            if in_tc:
+                continue
+            is_orphan = await conn.fetchval(
+                "SELECT count(*) FROM platform.prices_daily "
+                "WHERE ticker=$1 AND classification_id IS NULL LIMIT 1",
+                ticker,
+            )
+            if not is_orphan:
+                continue
+            actionable.append(r)
+
+    log.info("ops.stage.sec_orphan_resolve.starting",
+             truth_set_size=len(candidates), actionable=len(actionable), dry_run=dry_run)
+
+    if dry_run:
+        return {"dry_run": True, "actionable_tickers": [r["predecessor_ticker"] for r in actionable]}
+
+    # 3. Resolve each — fetch legal name, mint TKR-14, INSERT classification,
+    #    UPDATE prices_daily classification_id for the orphan rows.
+    n_resolved = 0
+    n_rows_updated = 0
+    n_skipped = 0
+    skip_reasons: list[str] = []
+    now_utc = _dt.now(UTC)
+
+    async with httpx.AsyncClient() as client:
+        for r in actionable:
+            ticker = r["predecessor_ticker"]
+            cik = str(r["predecessor_cik"]).lstrip("0") or r["predecessor_cik"]
+            legal_name = await _sec_fetch_issuer_name(client, cik, ua)
+            if not legal_name:
+                n_skipped += 1
+                skip_reasons.append(f"{ticker}: EDGAR submissions JSON unavailable")
+                continue
+
+            tkr14 = mint(
+                country="US",
+                asset_class=AssetClass.STOCK,
+                ipo_venue=IPOVenue.OTHER,  # historical; exchange-at-IPO not in EDGAR submissions
+                discovery_source=DiscoverySource.SEC,
+                cik=cik,
+                legal_name=legal_name,
+                now=now_utc,
+            )
+
+            async with pool.acquire() as conn, conn.transaction():
+                # INSERT ticker_classifications (idempotent on ticker).
+                ins_id = await conn.fetchval(
+                    """
+                    INSERT INTO platform.ticker_classifications
+                        (id, ticker, current_ticker, current_legal_name,
+                         country, asset_class, source, ipo_venue, discovery_source,
+                         cik, status, updated_at)
+                    VALUES ($1, $2, $2, $3,
+                            'US', 'stock', 'sec_edgar_orphan_resolve', 'Z', 'S',
+                            $4, 'active', now())
+                    ON CONFLICT (ticker) DO NOTHING
+                    RETURNING id
+                    """,
+                    tkr14, ticker, legal_name, cik,
+                )
+                cls_id = ins_id or await conn.fetchval(
+                    "SELECT id FROM platform.ticker_classifications WHERE ticker=$1",
+                    ticker,
+                )
+                if not cls_id:
+                    n_skipped += 1
+                    skip_reasons.append(f"{ticker}: INSERT failed + no existing row")
+                    continue
+
+                # UPDATE prices_daily orphan rows. Triggers fire on INSERT
+                # only, so existing NULL rows need explicit UPDATE.
+                upd = await conn.execute(
+                    """
+                    UPDATE platform.prices_daily
+                    SET classification_id = $1
+                    WHERE ticker = $2 AND classification_id IS NULL
+                    """,
+                    cls_id, ticker,
+                )
+                row_count = int(upd.split()[-1]) if upd.startswith("UPDATE") else 0
+                n_rows_updated += row_count
+                n_resolved += 1
+                log.info("ops.stage.sec_orphan_resolve.resolved",
+                         ticker=ticker, cik=cik, legal_name=legal_name,
+                         classification_id=cls_id, prices_daily_rows_updated=row_count)
+
+    result = {
+        "dry_run": False,
+        "actionable": len(actionable),
+        "resolved": n_resolved,
+        "prices_daily_rows_closed": n_rows_updated,
+        "skipped": n_skipped,
+        "skip_reasons": skip_reasons,
+    }
+    log.info("ops.stage.sec_orphan_resolve.done", **result)
+    return result
+
+
 # v2.2 P6 Path-A orphan backfill — resolves each distinct orphan ticker via
 # FMP /profile (per v2.2 spec §1.10 FMP-first lane for general-identity case),
 # mints a TKR-14 via tpcore.identity.tkr14.mint, INSERTs ticker_classifications
@@ -5608,6 +5821,14 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # ON CONFLICT DO NOTHING). Operator-on-demand re-run after CSV edits.
     ("corporate_events_seed",
         lambda pool, cfg: (lambda: _stage_corporate_events_seed(pool, cfg)),
+        STAGE_TIMEOUT_SEC),
+    # SEC EDGAR orphan resolver — Path-A FK closure for delisted/historical
+    # tickers via direct CIK lookup. Phase A uses the seed CSV's CIKs; later
+    # phases extend with EDGAR ticker→CIK lookup + alternate-source for the
+    # foreign/warrant tail. Designed to be wired into the self-heal cascade
+    # catalog (PRICES_DAILY_CLASSIFICATION_ID_NULL signal — follow-on).
+    ("sec_orphan_resolve",
+        lambda pool, cfg: (lambda: _stage_sec_orphan_resolve(pool, cfg)),
         STAGE_TIMEOUT_SEC),
     ("delist_stale",        lambda pool, cfg: (lambda: _stage_delist_stale(pool)),             STAGE_TIMEOUT_SEC),
     # earnings_refresh — earnings-beat events for vector engine.
