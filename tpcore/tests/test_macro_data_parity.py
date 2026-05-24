@@ -62,7 +62,7 @@ async def test_macro_indicators_subset_of_macro_data() -> None:
         async with pool.acquire() as conn:
             missing = await conn.fetchval(
                 """
-                SELECT count(*) FROM platform.macro_indicators m
+                SELECT count(*) FROM platform.macro_indicators_legacy m
                 WHERE NOT EXISTS (
                     SELECT 1 FROM platform.macro_data d
                     WHERE d.source = 'fred'
@@ -95,13 +95,13 @@ async def test_aaii_sentiment_subset_of_macro_data() -> None:
                 """
                 WITH expected AS (
                     SELECT 'bullish_pct'::text AS channel, date, bullish_pct AS val
-                        FROM platform.aaii_sentiment WHERE bullish_pct IS NOT NULL
+                        FROM platform.aaii_sentiment_legacy WHERE bullish_pct IS NOT NULL
                     UNION ALL
                     SELECT 'bearish_pct', date, bearish_pct
-                        FROM platform.aaii_sentiment WHERE bearish_pct IS NOT NULL
+                        FROM platform.aaii_sentiment_legacy WHERE bearish_pct IS NOT NULL
                     UNION ALL
                     SELECT 'neutral_pct', date, neutral_pct
-                        FROM platform.aaii_sentiment WHERE neutral_pct IS NOT NULL
+                        FROM platform.aaii_sentiment_legacy WHERE neutral_pct IS NOT NULL
                 )
                 SELECT count(*) FROM expected e
                 WHERE NOT EXISTS (
@@ -137,22 +137,22 @@ async def test_fear_greed_subset_of_macro_data() -> None:
                 """
                 WITH expected AS (
                     SELECT 'score'::text AS channel, date, score AS val
-                        FROM platform.fear_greed WHERE score IS NOT NULL
+                        FROM platform.fear_greed_legacy WHERE score IS NOT NULL
                     UNION ALL
                     SELECT 'score_5d_ago', date, score_5d_ago
-                        FROM platform.fear_greed WHERE score_5d_ago IS NOT NULL
+                        FROM platform.fear_greed_legacy WHERE score_5d_ago IS NOT NULL
                     UNION ALL
                     SELECT 'volatility_component', date, volatility_component
-                        FROM platform.fear_greed WHERE volatility_component IS NOT NULL
+                        FROM platform.fear_greed_legacy WHERE volatility_component IS NOT NULL
                     UNION ALL
                     SELECT 'credit_component', date, credit_component
-                        FROM platform.fear_greed WHERE credit_component IS NOT NULL
+                        FROM platform.fear_greed_legacy WHERE credit_component IS NOT NULL
                     UNION ALL
                     SELECT 'momentum_component', date, momentum_component
-                        FROM platform.fear_greed WHERE momentum_component IS NOT NULL
+                        FROM platform.fear_greed_legacy WHERE momentum_component IS NOT NULL
                     UNION ALL
                     SELECT 'safe_haven_component', date, safe_haven_component
-                        FROM platform.fear_greed WHERE safe_haven_component IS NOT NULL
+                        FROM platform.fear_greed_legacy WHERE safe_haven_component IS NOT NULL
                 )
                 SELECT count(*) FROM expected e
                 WHERE NOT EXISTS (
@@ -168,10 +168,10 @@ async def test_fear_greed_subset_of_macro_data() -> None:
                 """
                 WITH expected AS (
                     SELECT 'label'::text AS channel, date, label AS val
-                        FROM platform.fear_greed WHERE label IS NOT NULL
+                        FROM platform.fear_greed_legacy WHERE label IS NOT NULL
                     UNION ALL
                     SELECT 'direction', date, direction
-                        FROM platform.fear_greed WHERE direction IS NOT NULL
+                        FROM platform.fear_greed_legacy WHERE direction IS NOT NULL
                 )
                 SELECT count(*) FROM expected e
                 WHERE NOT EXISTS (
@@ -201,12 +201,12 @@ async def test_hy_spread_sacred_preservation() -> None:
     try:
         async with pool.acquire() as conn:
             src_count = await conn.fetchval(
-                "SELECT count(*) FROM platform.macro_indicators "
+                "SELECT count(*) FROM platform.macro_indicators_legacy "
                 "WHERE indicator = 'hy_spread'"
             )
             missing = await conn.fetchval(
                 """
-                SELECT count(*) FROM platform.macro_indicators m
+                SELECT count(*) FROM platform.macro_indicators_legacy m
                 WHERE m.indicator = 'hy_spread'
                   AND NOT EXISTS (
                       SELECT 1 FROM platform.macro_data d

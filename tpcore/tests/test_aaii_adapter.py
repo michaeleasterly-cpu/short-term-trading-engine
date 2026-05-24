@@ -166,24 +166,36 @@ async def test_handler_skip_guard_fresh(monkeypatch) -> None:
 
 
 async def test_handler_idempotent_upsert(monkeypatch) -> None:
-    """Two forced runs produce the same rows + an ON CONFLICT DO UPDATE
-    upsert (idempotent / self-correcting full-history workbook)."""
+    """Two forced runs produce the same rows + a bitemporal SCD-2 emit per
+    call (idempotent / self-correcting full-history workbook).
+
+    Task #18 P5: legacy platform.aaii_sentiment renamed to *_legacy and
+    the canonical name is now a view. Handler writes ONLY to macro_data
+    via upsert_macro_data_bitemporal. This test stubs the helper as a
+    call-recorder and verifies the (channel, date, value, None) row
+    shape it gets from the wide → 3-tall fan-out.
+    """
     from tpcore.ingestion import handlers
     conn = _Conn(newest=None)
     monkeypatch.setattr("tpcore.aaii.AAIIAdapter", _Adapter)
     monkeypatch.setattr("tpcore.ingestion.csv_archive.write_archive",
                         lambda *a, **k: type("A", (), {"path": "/tmp/x"})())
-    # Task #18 P3 — the handler now also calls upsert_macro_data_bitemporal
-    # to double-write into platform.macro_data. This test exercises the
-    # LEGACY-table idempotency contract only; stub the bitemporal helper
-    # so the mock _Conn doesn't need a full SCD-2 fixture.
-    async def _noop_upsert(*a, **k): return {"inserted": 0, "revised": 0, "no_change": 0}
+    calls: list[dict] = []
+    async def _record(conn_, *, source, rows):
+        calls.append({"source": source, "row_count": len(rows), "rows": list(rows)})
+        return {"inserted": len(rows), "revised": 0, "no_change": 0}
     monkeypatch.setattr(
-        "tpcore.ingestion.macro_data_emit.upsert_macro_data_bitemporal",
-        _noop_upsert,
+        "tpcore.ingestion.macro_data_emit.upsert_macro_data_bitemporal", _record,
     )
     n1 = await handlers.handle_aaii_sentiment(_Pool(conn), {"skip_guard_days": 0})
     n2 = await handlers.handle_aaii_sentiment(_Pool(conn), {"skip_guard_days": 0})
     assert n1 == n2 == 3
-    assert "ON CONFLICT (date) DO UPDATE" in conn.sql
-    assert conn.upserts[0] == conn.upserts[1]  # identical → idempotent
+    assert len(calls) == 2 and calls[0]["source"] == "aaii"
+    # Wide → 3 tall channels per date; 3 dates in the fixture → 9 rows per call.
+    assert calls[0]["row_count"] == calls[1]["row_count"] == 9
+    assert calls[0]["rows"] == calls[1]["rows"]  # identical → idempotent
+    # Channel shape sanity: every row is (str, date, numeric, None) — value_num
+    # channel, value_text NULL (XOR CHECK).
+    for r in calls[0]["rows"]:
+        assert isinstance(r[0], str) and r[0] in ("bullish_pct","bearish_pct","neutral_pct")
+        assert r[3] is None

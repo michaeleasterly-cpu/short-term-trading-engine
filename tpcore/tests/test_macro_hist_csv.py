@@ -61,16 +61,38 @@ def _csv(tmp_path: Path, body: str) -> str:
     return str(p)
 
 
+# Task #18 P5: writes go to macro_data via upsert_macro_data_bitemporal
+# instead of executemany on the (renamed) legacy table. Tests stub the
+# helper as a call-recorder so the mock _Conn doesn't need a full
+# SCD-2 fetchrow fixture.
+_macro_emit_calls: list[dict] = []
+
+
+async def _record_emit(_conn, *, source: str, rows) -> dict[str, int]:
+    _macro_emit_calls.append({"source": source, "rows": list(rows)})
+    return {"inserted": len(rows), "revised": 0, "no_change": 0}
+
+
+@pytest.fixture(autouse=True)
+def _stub_macro_emit(monkeypatch):
+    _macro_emit_calls.clear()
+    monkeypatch.setattr(
+        "tpcore.ingestion.macro_data_emit.upsert_macro_data_bitemporal",
+        _record_emit,
+    )
+
+
 async def test_parses_skips_missing_and_upserts(tmp_path) -> None:
     csv = _csv(tmp_path, "1996-12-31,3.13\n1997-01-01,.\n1997-01-02,3.06\n2008-11-21,19.92\n")
     pool = _Pool()
     n = await handlers._ingest_macro_hist_csv(pool, csv, "hy_spread")  # noqa: SLF001
     assert n == 3  # the "." row skipped, not zeroed
-    sql, rows = pool.sink[0]
-    assert "ON CONFLICT (indicator, date) DO NOTHING" in sql
+    assert len(_macro_emit_calls) == 1 and _macro_emit_calls[0]["source"] == "fred"
+    rows = _macro_emit_calls[0]["rows"]
     assert {r[0] for r in rows} == {"hy_spread"}            # only target indicator
     assert [str(r[1]) for r in rows] == ["1996-12-31", "1997-01-02", "2008-11-21"]
     assert float(rows[-1][2]) == 19.92                       # value fidelity
+    assert all(r[3] is None for r in rows)                   # value_text NULL (XOR)
 
 
 async def test_routes_via_handler_and_bypasses_skip_guard(tmp_path) -> None:
@@ -82,7 +104,8 @@ async def test_routes_via_handler_and_bypasses_skip_guard(tmp_path) -> None:
         pool, {"hist_csv_path": csv, "hist_indicator": "hy_spread"}
     )
     assert n == 1
-    assert pool.sink[0][1][0][0] == "hy_spread"
+    assert len(_macro_emit_calls) == 1
+    assert _macro_emit_calls[0]["rows"][0][0] == "hy_spread"
 
 
 async def test_empty_csv_raises(tmp_path) -> None:

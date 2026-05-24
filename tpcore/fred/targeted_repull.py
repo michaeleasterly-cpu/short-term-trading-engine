@@ -41,11 +41,10 @@ _NAME_TO_SERIES_ID: dict[str, str] = dict(INDICATOR_SERIES)
 _DERIVED_INDICATORS: frozenset[str] = frozenset({"sos_state_diffusion"})
 
 
-_UPSERT_SQL = (
-    "INSERT INTO platform.macro_indicators (indicator, date, value) "
-    "VALUES ($1, $2, $3) "
-    "ON CONFLICT (indicator, date) DO NOTHING"
-)
+
+# Task #18 P5: platform.macro_indicators is now a view over macro_data.
+# Targeted re-pull writes directly to macro_data via the bitemporal SCD-2
+# helper — same semantics as the canonical handler.
 
 
 async def per_indicator_fred_repull(
@@ -132,11 +131,16 @@ async def per_indicator_fred_repull(
         )
         return results
 
-    # Bulk upsert with ON CONFLICT idempotency. The actual number of
-    # NEW rows landed is the bulk operation's responsibility; this
-    # helper reports rows-fetched per indicator (the upper bound).
+    # Task #18 P5: bitemporal SCD-2 helper writes to platform.macro_data.
+    # SCD-2 no-change short-circuits unchanged rows so a heal re-run on a
+    # cleanly-populated series is a no-op (counts reported below come from
+    # the helper, not the upper-bound rows-fetched).
+    from tpcore.ingestion.macro_data_emit import upsert_macro_data_bitemporal
     async with pool.acquire() as conn:
-        await conn.executemany(_UPSERT_SQL, upsert_rows)
+        await upsert_macro_data_bitemporal(
+            conn, source="fred",
+            rows=[(name, d, v, None) for (name, d, v) in upsert_rows],
+        )
     logger.info(
         "tpcore.fred.targeted_repull.upserted",
         indicators=list(indicators),

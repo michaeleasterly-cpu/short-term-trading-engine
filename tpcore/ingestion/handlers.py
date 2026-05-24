@@ -1400,14 +1400,14 @@ async def _ingest_macro_hist_csv(
         validator=lambda x: bool(x.get("indicator")) and x.get("date") is not None,
     )
 
+    # Task #18 P5: write to macro_data only (legacy table renamed to _legacy;
+    # the canonical name is now a view over macro_data).
+    from tpcore.ingestion.macro_data_emit import upsert_macro_data_bitemporal
     async with pool.acquire() as conn:
-        await conn.executemany(
-            """
-            INSERT INTO platform.macro_indicators (indicator, date, value)
-            VALUES ($1, $2, $3)
-            ON CONFLICT (indicator, date) DO NOTHING
-            """,
-            upsert_rows,
+        await upsert_macro_data_bitemporal(
+            conn,
+            source="fred",
+            rows=[(name, d, v, None) for (name, d, v) in upsert_rows],
         )
 
     dmin = min(d for _, d, _ in upsert_rows)
@@ -1598,21 +1598,13 @@ async def handle_macro_indicators(
         pool, "fred_macro", archive.rows_written,
     )
 
-    # ── 5. Load CSV → DB (ON CONFLICT DO NOTHING) + Task #18 P3 double-write ─
+    # ── 5. Load CSV → DB (Task #18 P5: writes go ONLY to macro_data) ────────
+    # Pre-P5 this also INSERTed into the legacy platform.macro_indicators
+    # table; that table has been renamed to macro_indicators_legacy (now a
+    # frozen audit snapshot). The original name now resolves to a VIEW over
+    # macro_data, which has no INSTEAD OF trigger — INSERT INTO it would fail.
     from tpcore.ingestion.macro_data_emit import upsert_macro_data_bitemporal
-    async with pool.acquire() as conn, conn.transaction():
-        await conn.executemany(
-            """
-            INSERT INTO platform.macro_indicators (indicator, date, value)
-            VALUES ($1, $2, $3)
-            ON CONFLICT (indicator, date) DO NOTHING
-            """,
-            upsert_rows,
-        )
-        # Task #18 P3 — bitemporal double-write to platform.macro_data.
-        # Same transaction so legacy + bitemporal writes are atomic.
-        # SCD-2 no-change detection means weekly re-runs of the same
-        # FRED data emit ZERO new macro_data rows (vast majority case).
+    async with pool.acquire() as conn:
         await upsert_macro_data_bitemporal(
             conn,
             source="fred",
@@ -2084,28 +2076,10 @@ async def handle_fear_greed(
         )
         for d, r in fg.iterrows()
     ]
+    # Task #18 P5: writes go ONLY to macro_data; legacy table renamed to
+    # fear_greed_legacy (frozen audit snapshot); canonical name is now a view.
     from tpcore.ingestion.macro_data_emit import upsert_macro_data_bitemporal
-    async with pool.acquire() as conn, conn.transaction():
-        await conn.executemany(
-            """
-            INSERT INTO platform.fear_greed
-                (date, score, label, direction, score_5d_ago,
-                 volatility_component, credit_component,
-                 momentum_component, safe_haven_component)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-            ON CONFLICT (date) DO UPDATE SET
-                score=EXCLUDED.score, label=EXCLUDED.label,
-                direction=EXCLUDED.direction,
-                score_5d_ago=EXCLUDED.score_5d_ago,
-                volatility_component=EXCLUDED.volatility_component,
-                credit_component=EXCLUDED.credit_component,
-                momentum_component=EXCLUDED.momentum_component,
-                safe_haven_component=EXCLUDED.safe_haven_component,
-                recorded_at=now()
-            """,
-            rows,
-        )
-        # Task #18 P3 — bitemporal double-write to platform.macro_data.
+    async with pool.acquire() as conn:
         # 8 channels per date: 6 numeric (score, score_5d_ago, 4 components)
         # + 2 text (label, direction). value_xor CHECK requires the channel
         # not in use to be NULL.
@@ -2463,22 +2437,10 @@ async def handle_aaii_sentiment(
         fieldnames=["date", "bullish_pct", "bearish_pct", "neutral_pct"],
         validator=lambda x: bool(x.get("date")) and bool(x.get("bullish_pct")),
     )
+    # Task #18 P5: writes go ONLY to macro_data; legacy table renamed to
+    # aaii_sentiment_legacy (frozen audit snapshot); canonical name is now a view.
     from tpcore.ingestion.macro_data_emit import upsert_macro_data_bitemporal
-    async with pool.acquire() as conn, conn.transaction():
-        await conn.executemany(
-            """
-            INSERT INTO platform.aaii_sentiment
-                (date, bullish_pct, bearish_pct, neutral_pct)
-            VALUES ($1,$2,$3,$4)
-            ON CONFLICT (date) DO UPDATE SET
-                bullish_pct=EXCLUDED.bullish_pct,
-                bearish_pct=EXCLUDED.bearish_pct,
-                neutral_pct=EXCLUDED.neutral_pct,
-                recorded_at=now()
-            """,
-            rows,
-        )
-        # Task #18 P3 — bitemporal double-write to platform.macro_data.
+    async with pool.acquire() as conn:
         # 3 channels per date: bullish_pct / bearish_pct / neutral_pct.
         macro_rows = [
             (channel, d, val, None)
