@@ -76,6 +76,9 @@ from tpcore.quality.validation.checks.macro_indicators_freshness import (
 from tpcore.quality.validation.checks.options_max_pain_freshness import (
     check_options_max_pain_freshness,
 )
+from tpcore.quality.validation.checks.prices_daily_classification_id_completeness import (
+    check_prices_daily_classification_id_completeness,
+)
 from tpcore.quality.validation.checks.prices_daily_completeness import (
     check_prices_daily_completeness,
 )
@@ -152,6 +155,8 @@ _CHECK_FN: dict[str, _CheckCallable] = {
     "macro_indicators_completeness": _src(check_macro_indicators_completeness, None),
     "prices_daily_freshness": _src(check_prices_daily_freshness, None),
     "prices_daily_completeness": _src(check_prices_daily_completeness, None),
+    "prices_daily_classification_id_completeness":
+        _src(check_prices_daily_classification_id_completeness, None),
     "options_max_pain_freshness": _src(check_options_max_pain_freshness, None),
     "insider_sentiment_freshness": _src(check_insider_sentiment_freshness, None),
     "social_sentiment_freshness": _src(check_social_sentiment_freshness, None),

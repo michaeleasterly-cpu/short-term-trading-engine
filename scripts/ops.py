@@ -3177,6 +3177,141 @@ def _coarsen_to_stock_asset_class(_country: str = "US") -> str:
     return "stock"
 
 
+async def _stage_ticker_history_backfill(
+    pool: asyncpg.Pool, cfg: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Maintain the platform.ticker_history SCD-2 timeline:
+      1. INSERT a ticker_history row for every (classification_id, ticker)
+         pair in ticker_classifications that doesn't have one yet.
+         valid_from = MIN(prices_daily.date) for that ticker (first
+         observed bar) — or today if no bars exist.
+         valid_to   = MAX(prices_daily.date) for the ticker IF the
+         ticker is delisted=true in any prices_daily row, else NULL.
+      2. UPDATE valid_to on existing open (valid_to IS NULL) rows where
+         the ticker is now delisted, so the SCD-2 timeline reflects the
+         actual end-of-life date instead of staying open forever.
+
+    Idempotent: re-runs only INSERT missing rows + only UPDATE rows whose
+    valid_to is still NULL. Designed for two callers:
+      - Operator-on-demand re-run after sec_orphan_resolve adds new
+        classifications
+      - HealSpec-driven self-heal when a new
+        `ticker_history_completeness` check (follow-on) reds
+
+    cfg knobs:
+      dry_run (default 'true') — count without writing.
+    """
+    log = structlog.get_logger("scripts.ops")
+    cfg = cfg or {}
+    dry_run_param = cfg.get("dry_run", "true")
+    dry_run = (dry_run_param.lower() != "false") if isinstance(dry_run_param, str) else bool(dry_run_param)
+
+    if dry_run:
+        async with pool.acquire() as conn:
+            missing = int(await conn.fetchval("""
+                SELECT count(*) FROM platform.ticker_classifications tc
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM platform.ticker_history th
+                    WHERE th.classification_id = tc.id AND th.ticker = tc.ticker
+                )
+            """) or 0)
+            open_delisted = int(await conn.fetchval("""
+                SELECT count(*) FROM platform.ticker_history th
+                WHERE th.valid_to IS NULL
+                  AND EXISTS (
+                      SELECT 1 FROM platform.prices_daily pd
+                      WHERE pd.ticker = th.ticker AND pd.delisted = true
+                  )
+            """) or 0)
+        log.info("ops.stage.ticker_history_backfill.dry_run",
+                 missing_history_rows=missing, open_rows_to_close=open_delisted)
+        return {"dry_run": True, "missing_history_rows": missing,
+                "open_rows_to_close": open_delisted}
+
+    # 1. INSERT missing ticker_history rows. valid_from = MIN(date) for the
+    # ticker (first observed bar) or today if no bars exist; valid_to is
+    # set in step 2.
+    async with pool.acquire() as conn, conn.transaction():
+        await conn.execute("SET LOCAL statement_timeout = '5min'")
+        r1 = await conn.execute("""
+            INSERT INTO platform.ticker_history (classification_id, ticker, valid_from, valid_to)
+            SELECT tc.id, tc.ticker,
+                   COALESCE(
+                       (SELECT MIN(pd.date) FROM platform.prices_daily pd
+                        WHERE pd.ticker = tc.ticker),
+                       CURRENT_DATE
+                   ),
+                   NULL
+            FROM platform.ticker_classifications tc
+            WHERE NOT EXISTS (
+                SELECT 1 FROM platform.ticker_history th
+                WHERE th.classification_id = tc.id AND th.ticker = tc.ticker
+            )
+        """)
+        n_inserted = int(r1.split()[-1]) if r1.startswith("INSERT") else 0
+
+    # 2. UPDATE valid_from AND valid_to to reflect the ticker's actual
+    # observed lifetime in prices_daily.
+    # The original seed migration set valid_from=migration_date for every
+    # row — semantically wrong for historical bars (the BEFORE INSERT
+    # triggers' WHERE valid_from <= NEW.date filter returns no match for
+    # bars before 2026-05-23). Fix valid_from = MIN(observed date) so the
+    # SCD-2 range actually covers the ticker's lifetime.
+    # valid_to = MAX(date) only for tickers with any delisted=true bar.
+    # CTE pre-computes lifetime per ticker to avoid a correlated subquery.
+    async with pool.acquire() as conn, conn.transaction():
+        await conn.execute("SET LOCAL statement_timeout = '5min'")
+        r2 = await conn.execute("""
+            WITH lifetime AS (
+                SELECT ticker,
+                       MIN(date) AS first_bar,
+                       MAX(date) AS last_bar,
+                       BOOL_OR(delisted) AS ever_delisted
+                FROM platform.prices_daily
+                GROUP BY ticker
+            )
+            UPDATE platform.ticker_history th
+            SET valid_from = lf.first_bar,
+                valid_to = CASE WHEN lf.ever_delisted THEN lf.last_bar ELSE NULL END
+            FROM lifetime lf
+            WHERE th.ticker = lf.ticker
+              AND (
+                  -- Always tighten valid_from to the true first-observed date.
+                  th.valid_from > lf.first_bar
+                  -- And set valid_to for delisted tickers that don't have one yet.
+                  OR (lf.ever_delisted AND th.valid_to IS NULL)
+              )
+        """)
+        n_updated = int(r2.split()[-1]) if r2.startswith("UPDATE") else 0
+
+    # Verify post-state
+    async with pool.acquire() as conn:
+        n_total = int(await conn.fetchval("SELECT count(*) FROM platform.ticker_history") or 0)
+        n_open = int(await conn.fetchval(
+            "SELECT count(*) FROM platform.ticker_history WHERE valid_to IS NULL"
+        ) or 0)
+        n_closed = n_total - n_open
+        n_still_missing = int(await conn.fetchval("""
+            SELECT count(*) FROM platform.ticker_classifications tc
+            WHERE NOT EXISTS (
+                SELECT 1 FROM platform.ticker_history th
+                WHERE th.classification_id = tc.id AND th.ticker = tc.ticker
+            )
+        """) or 0)
+
+    result = {
+        "dry_run": False,
+        "history_rows_inserted": n_inserted,
+        "open_rows_closed": n_updated,
+        "post_total": n_total,
+        "post_open": n_open,
+        "post_closed": n_closed,
+        "post_still_missing": n_still_missing,
+    }
+    log.info("ops.stage.ticker_history_backfill.done", **result)
+    return result
+
+
 async def _stage_sec_orphan_resolve(
     pool: asyncpg.Pool, cfg: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -6158,6 +6293,13 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     ("sec_orphan_resolve",
         lambda pool, cfg: (lambda: _stage_sec_orphan_resolve(pool, cfg)),
         HEAVY_STAGE_TIMEOUT_SEC),
+    # Maintain platform.ticker_history SCD-2 timeline — INSERTs missing rows
+    # for any ticker_classification without one + closes valid_to on rows
+    # whose ticker is delisted in prices_daily. Idempotent + safe to wire as
+    # a HealSpec for a future ticker_history_completeness check.
+    ("ticker_history_backfill",
+        lambda pool, cfg: (lambda: _stage_ticker_history_backfill(pool, cfg)),
+        STAGE_TIMEOUT_SEC),
     ("delist_stale",        lambda pool, cfg: (lambda: _stage_delist_stale(pool)),             STAGE_TIMEOUT_SEC),
     # earnings_refresh — earnings-beat events for vector engine.
     # Heavy timeout (1h) because the FMP loop is ~1 sec per ticker;
@@ -6604,6 +6746,7 @@ _VALIDATION_CHUNK_SPECS: tuple[tuple[str, tuple[str, ...]], ...] = (
         (
             "prices_daily_freshness",
             "prices_daily_completeness",
+            "prices_daily_classification_id_completeness",
         ),
     ),
     # Chunk 3 — completeness checks (medium cost; per-ticker scans
@@ -8554,6 +8697,9 @@ async def _chunk_validation_suite(
     from tpcore.quality.validation.checks.options_max_pain_freshness import (
         check_options_max_pain_freshness,
     )
+    from tpcore.quality.validation.checks.prices_daily_classification_id_completeness import (
+        check_prices_daily_classification_id_completeness,
+    )
     from tpcore.quality.validation.checks.prices_daily_completeness import (
         check_prices_daily_completeness,
     )
@@ -8599,6 +8745,8 @@ async def _chunk_validation_suite(
         "macro_indicators_completeness": check_macro_indicators_completeness,
         "prices_daily_freshness": check_prices_daily_freshness,
         "prices_daily_completeness": check_prices_daily_completeness,
+        "prices_daily_classification_id_completeness":
+            check_prices_daily_classification_id_completeness,
         "options_max_pain_freshness": check_options_max_pain_freshness,
         "insider_sentiment_freshness": check_insider_sentiment_freshness,
         "social_sentiment_freshness": check_social_sentiment_freshness,
