@@ -324,6 +324,7 @@ model_config  # unused variable (tpcore/providers.py:269)
 model_config  # unused variable (tpcore/quality/data_quality.py:20)
 source_freshness_days  # unused variable (tpcore/quality/data_quality.py:28)
 model_config  # unused variable (tpcore/quality/execution_quality.py:15)
+partial_fill  # unused variable (tpcore/quality/execution_quality.py:22) — emitted via structlog; consumer is LIVE-trading lane, not yet wired
 model_config  # unused variable (tpcore/quality/validation/models.py:18)
 model_config  # unused variable (tpcore/quality/validation/models.py:29)
 model_config  # unused variable (tpcore/quality/validation/models.py:42)
