@@ -57,6 +57,15 @@ _BARS_SINGLE_SQL = """
     ORDER BY date
 """
 
+_LATEST_AT_OR_BEFORE_BATCH_SQL = """
+    SELECT DISTINCT ON (classification_id)
+        classification_id, date, open, high, low, close, volume
+    FROM platform.prices_daily
+    WHERE classification_id = ANY($1::text[])
+      AND date <= $2
+    ORDER BY classification_id, date DESC
+"""
+
 _CHUNK_SIZE = 500
 
 
@@ -143,6 +152,38 @@ class PricesRepo:
                     )
                 )
         return by_cid
+
+    async def latest_at_or_before_batch(
+        self,
+        classification_ids: list[str] | tuple[str, ...],
+        as_of: date,
+    ) -> dict[str, Bar]:
+        """Return ``{cid: Bar}`` — the most recent bar with ``date <= as_of``
+        for each cid.
+
+        Misses (cid with no bars at or before ``as_of``) are absent from
+        the result dict. Used by schedulers that need the "latest close
+        as of session date" for each instrument in a basket.
+
+        Single SQL using Postgres ``DISTINCT ON`` — no chunking; basket
+        sizes are small (sentinel basket ≈ 6 tickers).
+        """
+        if not classification_ids:
+            return {}
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(_LATEST_AT_OR_BEFORE_BATCH_SQL, list(classification_ids), as_of)
+        out: dict[str, Bar] = {}
+        for r in rows:
+            cid = r["classification_id"]
+            out[cid] = Bar(
+                date=r["date"],
+                open=r["open"],
+                high=r["high"],
+                low=r["low"],
+                close=r["close"],
+                volume=r["volume"],
+            )
+        return out
 
 
 __all__ = ["Bar", "PricesRepo"]

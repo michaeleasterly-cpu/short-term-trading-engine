@@ -93,8 +93,9 @@ from tpcore.backtest.search import (
     write_trade_log_csv,
 )
 from tpcore.backtest.statistical_validation import write_credibility_score
-from tpcore.data.repositories import MacroRepo
+from tpcore.data.repositories import MacroRepo, PricesRepo
 from tpcore.db import build_asyncpg_pool
+from tpcore.identity.dispatcher import IdentityDispatcher
 from tpcore.lab.target import LabPrimaryMetric, LabTarget
 
 logger = structlog.get_logger(__name__)
@@ -122,23 +123,32 @@ async def _fetch_etf_prices(
     caller handles re-weighting via :func:`apply_missing_etf_fallback`.
     """
     tickers = list(BASKET_WEIGHTS_DEFAULT.keys()) + ["SPY"]
-    sql = """
-        SELECT ticker, date, close
-        FROM platform.prices_daily
-        WHERE ticker = ANY($1)
-          AND date BETWEEN $2 AND $3
-        ORDER BY ticker, date
-    """
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(sql, tickers, start - timedelta(days=365), end)
+    dispatcher = IdentityDispatcher(pool)
+    repo = PricesRepo(pool)
+
+    cid_to_ticker: dict[str, str] = {}
+    for t in tickers:
+        cid = await dispatcher.ticker_to_classification_id(t)
+        if cid is not None:
+            cid_to_ticker[cid] = t
+
     out: dict[str, pd.Series] = {t: pd.Series(dtype=float, name=t) for t in tickers}
-    if not rows:
+    if not cid_to_ticker:
         return out
-    df = pd.DataFrame([{"ticker": r["ticker"], "date": r["date"], "close": float(r["close"])} for r in rows])
-    for t, group in df.groupby("ticker"):
-        out[t] = pd.Series(
-            {pd.Timestamp(r["date"]): r["close"] for _, r in group.iterrows()},
-            name=t,
+
+    bars_by_cid = await repo.get_window_batch(
+        list(cid_to_ticker),
+        start - timedelta(days=365),
+        end,
+    )
+    for cid, bars in bars_by_cid.items():
+        if not bars:
+            continue
+        ticker = cid_to_ticker[cid]
+        sorted_bars = sorted(bars, key=lambda b: b.date)
+        out[ticker] = pd.Series(
+            {pd.Timestamp(b.date): float(b.close) for b in sorted_bars},
+            name=ticker,
         ).sort_index()
     return out
 

@@ -54,7 +54,8 @@ from sentinel.models import (
     BearScoreBreakdown,
 )
 from tpcore.backtest.filter_diagnostics import FilterDiagnostics
-from tpcore.data.repositories import MacroRepo
+from tpcore.data.repositories import MacroRepo, PricesRepo
+from tpcore.identity.dispatcher import IdentityDispatcher
 from tpcore.interfaces.engine_plug import BaseEnginePlug
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -297,23 +298,22 @@ async def fetch_spy_close(
     end: date_t,
 ) -> pd.Series:
     """SPY close prices indexed by date, sorted ascending."""
-    sql = """
-        SELECT date, close
-        FROM platform.prices_daily
-        WHERE ticker = 'SPY' AND date BETWEEN $1 AND $2
-        ORDER BY date
-    """
     # Pad start so the 200-day MA + 20-day VIX-proxy lookback have data.
     pad_start = start - timedelta(days=365)
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(sql, pad_start, end)
-    if not rows:
+    dispatcher = IdentityDispatcher(pool)
+    repo = PricesRepo(pool)
+
+    cid = await dispatcher.ticker_to_classification_id("SPY")
+    if cid is None:
         return pd.Series(dtype=float, name="SPY")
-    s = pd.Series(
-        {pd.Timestamp(r["date"]): float(r["close"]) for r in rows},
+
+    bars = await repo.get_window(cid, pad_start, end)
+    if not bars:
+        return pd.Series(dtype=float, name="SPY")
+    return pd.Series(
+        {pd.Timestamp(b.date): float(b.close) for b in bars},
         name="SPY",
     ).sort_index()
-    return s
 
 
 # ─── Headline class ─────────────────────────────────────────────────────
