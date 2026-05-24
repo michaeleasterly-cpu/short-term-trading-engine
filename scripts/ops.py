@@ -2649,6 +2649,138 @@ async def _stage_fmp_profile_backfill(
     return result
 
 
+async def _stage_gleif_lei_backfill(
+    pool: asyncpg.Pool, cfg: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Populate issuers.lei from GLEIF by ISIN lookup.
+
+    GLEIF's Legal Entity Identifier (LEI) is the ISO 17442 global
+    identifier for legal entities. It's the canonical cross-jurisdiction
+    issuer ID that complements our local TKR-14 + CIK + FIGI mappings.
+
+    Strategy: each of our issuers' related tickers has an ISIN
+    (populated by parent_resolver/openfigi backfill). GLEIF's
+    /lei-records?filter[isin]=<ISIN> returns the unique LEI for that
+    security. We take the first ISIN per issuer + look up the LEI.
+
+    99.3% of issuers (3,499 / 3,525) have at least one ISIN-bearing
+    ticker. The remaining 0.7% are CIK-only successor entries that
+    will stay NULL.
+
+    Idempotent. cfg knobs:
+      dry_run (default 'true').
+      batch_size (default 5) — concurrency.
+      rate_limit_sleep_s (default 0.1).
+      max_issuers (default 0 = no cap).
+
+    GLEIF API has no documented rate limit but we stay conservative.
+    """
+    import httpx as _httpx
+    log = structlog.get_logger("scripts.ops")
+    cfg = cfg or {}
+    dry_run_param = cfg.get("dry_run", "true")
+    dry_run = (dry_run_param.lower() != "false") if isinstance(dry_run_param, str) else bool(dry_run_param)
+    concurrency = max(1, int(cfg.get("batch_size", 5)))
+    rate_limit_sleep_s = float(cfg.get("rate_limit_sleep_s", 0.1))
+    max_issuers = int(cfg.get("max_issuers", 0))
+
+    # 1. Universe: issuers without LEI but with at least one ISIN-bearing
+    # ticker. Pick the first ISIN per issuer deterministically.
+    rows = await pool.fetch(
+        """
+        SELECT i.issuer_id,
+               (SELECT tc.isin
+                FROM platform.ticker_classifications tc
+                WHERE tc.cik = i.cik AND tc.isin IS NOT NULL
+                ORDER BY tc.id LIMIT 1) AS isin
+        FROM platform.issuers i
+        WHERE i.lei IS NULL AND i.cik IS NOT NULL
+        ORDER BY i.issuer_id
+        """
+    )
+    candidates = [(r["issuer_id"], r["isin"]) for r in rows if r["isin"]]
+    if max_issuers > 0:
+        candidates = candidates[:max_issuers]
+    log.info(
+        "ops.stage.gleif_lei_backfill.starting",
+        n_candidates=len(candidates), dry_run=dry_run,
+        concurrency=concurrency,
+    )
+
+    if not candidates:
+        return {"dry_run": dry_run, "candidates": 0, "leis_filled": 0}
+
+    if dry_run:
+        return {
+            "dry_run": True,
+            "candidates": len(candidates),
+            "estimated_wall_time_sec": int(len(candidates) * rate_limit_sleep_s / concurrency),
+        }
+
+    sem = asyncio.Semaphore(concurrency)
+    counters = {"done": 0, "filled": 0, "no_match": 0, "errors": 0}
+
+    async def fetch_one(client: Any, issuer_id: str, isin: str) -> None:
+        async with sem:
+            await asyncio.sleep(rate_limit_sleep_s)
+            try:
+                resp = await client.get(
+                    "https://api.gleif.org/api/v1/lei-records",
+                    params={"filter[isin]": isin},
+                )
+            except Exception as exc:  # noqa: BLE001
+                counters["errors"] += 1
+                log.warning("ops.stage.gleif_lei_backfill.fetch_failed",
+                            issuer=issuer_id, isin=isin, err=str(exc)[:120])
+                return
+            if resp.status_code != 200:
+                counters["errors"] += 1
+                return
+            try:
+                data = resp.json().get("data") or []
+            except Exception:  # noqa: BLE001
+                counters["errors"] += 1
+                return
+            if not data:
+                counters["no_match"] += 1
+                return
+            lei = data[0].get("id")
+            if not lei or len(lei) != 20:
+                counters["no_match"] += 1
+                return
+            async with pool.acquire() as conn:
+                r = await conn.execute(
+                    """
+                    UPDATE platform.issuers
+                    SET lei = $2
+                    WHERE issuer_id = $1 AND lei IS NULL
+                    """,
+                    issuer_id, lei,
+                )
+            if r == "UPDATE 1":
+                counters["filled"] += 1
+            counters["done"] += 1
+            if counters["done"] % 200 == 0:
+                log.info("ops.stage.gleif_lei_backfill.progress",
+                         done=counters["done"], total=len(candidates),
+                         filled=counters["filled"], no_match=counters["no_match"],
+                         errors=counters["errors"])
+
+    async with _httpx.AsyncClient(timeout=30.0) as client:
+        tasks = [fetch_one(client, iid, isin) for iid, isin in candidates]
+        await asyncio.gather(*tasks)
+
+    result = {
+        "dry_run": False,
+        "candidates": len(candidates),
+        "leis_filled": counters["filled"],
+        "no_match": counters["no_match"],
+        "errors": counters["errors"],
+    }
+    log.info("ops.stage.gleif_lei_backfill.done", **result)
+    return result
+
+
 async def _stage_audit_cleanup_2026_05_24(
     pool: asyncpg.Pool, cfg: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -7138,6 +7270,11 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # canonical stage entry, not forked scripts).
     ("fmp_profile_backfill",
         lambda pool, cfg: (lambda: _stage_fmp_profile_backfill(pool, cfg)),
+        HEAVY_STAGE_TIMEOUT_SEC),
+    # GLEIF ISIN-based LEI lookup for issuers (ISO 17442). Closes the
+    # ALL_NULL issuers.lei gap flagged in 2026-05-24 audit.
+    ("gleif_lei_backfill",
+        lambda pool, cfg: (lambda: _stage_gleif_lei_backfill(pool, cfg)),
         HEAVY_STAGE_TIMEOUT_SEC),
     # Maintain platform.ticker_history SCD-2 timeline — INSERTs missing rows
     # for any ticker_classification without one + closes valid_to on rows
