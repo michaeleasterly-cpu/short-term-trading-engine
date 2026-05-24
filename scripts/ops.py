@@ -3194,49 +3194,44 @@ async def _stage_corp_history_edgar_backfill(
     pool: asyncpg.Pool, cfg: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Walk every CIK in `ticker_classifications` and seed corp-history
-    from SEC EDGAR's `formerNames` array.
+    from SEC EDGAR's `formerNames` array — BULK-FILE path.
 
-    Discovery-driven counterpart to `corporate_events_seed` (which
-    consumes the hand-curated CSV). For each distinct CIK of an active
-    classification:
+    Uses SEC's published bulk dataset rather than per-CIK HTTP calls:
 
-      1. GET data.sec.gov/submissions/CIK{cik}.json
-      2. If `formerNames` is non-empty: UPSERT the issuer record with
-         EDGAR's current canonical legal_name; INSERT one
-         `issuer_history` row per name period (former + current);
-         INSERT a `corporate_events` row of kind `name_only_change`
-         for each former-to-current transition.
+      1. Download `submissions.zip` (~1.5 GB; cached in /tmp for the
+         day so re-runs skip the download).
+      2. Iterate ZIP entries `CIK{padded}.json`. For each CIK in our
+         universe with a non-empty `formerNames` array, parse the
+         entries and accumulate row tuples for issuers + issuer_history
+         + corporate_events.
+      3. Bulk INSERT via `asyncpg.executemany` — one statement per
+         table for the entire batch.
 
-    The issuer_history row set is the durable name-timeline answer to
-    "what was this entity called on date X?". The `corporate_events`
-    rows are best-effort discovery-grade (predecessor / successor
-    classification_id are left NULL because EDGAR does not link
-    historical legal names to historical tickers — only legal-name
-    matching could recover that mapping and would be fragile).
+    The previous per-CIK HTTP-loop version (killed 2026-05-24) was the
+    "bulk-before-API-crawl" anti-pattern: a 6,735-CIK serial walk took
+    ~4 hours. The bulk file gets it under 3 minutes.
 
-    Idempotent: ON CONFLICT (issuer_id, valid_from) DO NOTHING on
-    issuer_history; WHERE NOT EXISTS by event_id on corporate_events
-    (deterministic event_id from cik+former_name; can't use ON
-    CONFLICT because the PK is bitemporal (event_id, realtime_start)).
-    Safe to re-run.
-
-    cfg knobs:
+    Idempotent. cfg knobs:
       dry_run (default 'true') — count what WOULD insert; no writes.
-      rate_limit_sec (default '0.12') — sleep between EDGAR fetches
-        (10 req/sec at SEC's max with a registered UA).
       max_ciks (default '0' = no cap) — limit for smoke runs.
+      cache_path (default '/tmp/sec_submissions.zip') — local cache.
+      force_download (default 'false') — bypass cache.
 
     Requires SEC_EDGAR_USER_AGENT env var (operator policy).
     """
     import os as _os
+    import time as _time
+    import zipfile as _zipfile
+    from pathlib import Path as _Path
 
     import httpx as _httpx
     log = structlog.get_logger("scripts.ops")
     cfg = cfg or {}
     dry_run_param = cfg.get("dry_run", "true")
     dry_run = (dry_run_param.lower() != "false") if isinstance(dry_run_param, str) else bool(dry_run_param)
-    rate_limit_sec = float(cfg.get("rate_limit_sec", 0.12))
     max_ciks = int(cfg.get("max_ciks", 0))
+    cache_path = _Path(str(cfg.get("cache_path", "/tmp/sec_submissions.zip")))
+    force_download = str(cfg.get("force_download", "false")).lower() == "true"
 
     ua = _os.environ.get("SEC_EDGAR_USER_AGENT")
     if not ua:
@@ -3244,6 +3239,7 @@ async def _stage_corp_history_edgar_backfill(
             "corp_history_edgar_backfill: SEC_EDGAR_USER_AGENT env var required"
         )
 
+    # 1. Universe = distinct CIKs of active classifications.
     cik_rows = await pool.fetch(
         """
         SELECT DISTINCT cik
@@ -3252,168 +3248,190 @@ async def _stage_corp_history_edgar_backfill(
         ORDER BY cik
         """
     )
-    ciks = [r["cik"] for r in cik_rows]
+    universe_ciks = {r["cik"] for r in cik_rows}
     if max_ciks > 0:
-        ciks = ciks[:max_ciks]
+        universe_ciks = set(sorted(universe_ciks)[:max_ciks])
     log.info(
         "ops.stage.corp_history_edgar_backfill.starting",
-        n_ciks=len(ciks), dry_run=dry_run, rate_limit_sec=rate_limit_sec,
+        n_universe_ciks=len(universe_ciks), dry_run=dry_run,
+        cache_path=str(cache_path), force_download=force_download,
     )
 
-    import hashlib as _hashlib
-    from datetime import date as _date
-    n_with_former = 0
-    n_issuers_upserted = 0
-    n_history_inserted = 0
-    n_events_inserted = 0
-    n_errors = 0
+    # 2. Download (cached) submissions.zip.
+    bulk_url = "https://www.sec.gov/Archives/edgar/daily-index/bulkdata/submissions.zip"
+    cache_age_sec = (_time.time() - cache_path.stat().st_mtime) if cache_path.exists() else float("inf")
+    if force_download or not cache_path.exists() or cache_age_sec > 86_400:
+        log.info("ops.stage.corp_history_edgar_backfill.downloading",
+                 url=bulk_url, cache_age_hr=round(cache_age_sec / 3600, 1))
+        t0 = _time.time()
+        async with _httpx.AsyncClient(timeout=600.0) as client, \
+                client.stream("GET", bulk_url, headers={"User-Agent": ua}) as resp:
+            resp.raise_for_status()
+            with cache_path.open("wb") as fh:
+                async for chunk in resp.aiter_bytes(chunk_size=1024 * 1024):
+                    fh.write(chunk)
+        log.info("ops.stage.corp_history_edgar_backfill.download_done",
+                 size_mb=round(cache_path.stat().st_size / 1024 / 1024, 1),
+                 elapsed_sec=round(_time.time() - t0, 1))
+    else:
+        log.info("ops.stage.corp_history_edgar_backfill.using_cached",
+                 size_mb=round(cache_path.stat().st_size / 1024 / 1024, 1),
+                 age_hr=round(cache_age_sec / 3600, 1))
 
-    async with _httpx.AsyncClient() as client, pool.acquire() as conn:
-        for i, cik in enumerate(ciks):
-            if i > 0 and i % 250 == 0:
-                log.info(
-                    "ops.stage.corp_history_edgar_backfill.progress",
-                    processed=i, total=len(ciks),
-                    with_former=n_with_former,
-                    issuers_upserted=n_issuers_upserted,
-                    history_inserted=n_history_inserted,
-                    events_inserted=n_events_inserted,
-                )
-            cik_padded = str(int(cik)).zfill(10)
-            url = f"https://data.sec.gov/submissions/CIK{cik_padded}.json"
+    # 3. Iterate ZIP entries — accumulate rows for batch insert.
+    import hashlib as _hashlib
+    import json as _json
+    from datetime import date as _date
+    issuer_rows: list[tuple[str, str, str]] = []  # (issuer_id, cik, legal_name)
+    history_rows: list[tuple[str, str, str, _date, _date | None]] = []  # (issuer_id, cik, legal_name, valid_from, valid_to)
+    event_rows: list[tuple[str, _date, str, str]] = []  # (event_id, event_date, issuer_id, notes)
+    n_ciks_walked = 0
+    n_with_former = 0
+    n_zip_parse_errors = 0
+
+    t0 = _time.time()
+    with _zipfile.ZipFile(cache_path, "r") as zf:
+        for entry in zf.namelist():
+            if not entry.startswith("CIK") or not entry.endswith(".json"):
+                continue
+            if "-" in entry:  # filing-paginated files like CIK0001234567-submissions-001.json
+                continue
+            # Strip "CIK" prefix + ".json" suffix → padded CIK
+            # (10-char zero-padded; matches the storage format in
+            # ticker_classifications.cik).
+            cik = entry[3:-5]
+            if cik not in universe_ciks:
+                continue
+            n_ciks_walked += 1
             try:
-                resp = await client.get(
-                    url, headers={"User-Agent": ua}, timeout=15.0,
-                )
-            except Exception as exc:  # noqa: BLE001
-                n_errors += 1
-                log.warning(
-                    "ops.stage.corp_history_edgar_backfill.fetch_failed",
-                    cik=cik, err=str(exc)[:120],
-                )
-                await asyncio.sleep(rate_limit_sec)
+                data = _json.loads(zf.read(entry))
+            except Exception:  # noqa: BLE001
+                n_zip_parse_errors += 1
                 continue
-            if resp.status_code != 200:
-                n_errors += 1
-                await asyncio.sleep(rate_limit_sec)
-                continue
-            data = resp.json()
             former = data.get("formerNames", []) or []
             current_name = data.get("name")
             if not former or not current_name:
-                await asyncio.sleep(rate_limit_sec)
                 continue
-
             n_with_former += 1
-            if dry_run:
-                await asyncio.sleep(rate_limit_sec)
-                continue
-
             issuer_id = _mint_issuer_id_from_cik(cik)
             if not issuer_id:
                 continue
-            async with conn.transaction():
-                # UPSERT issuer with EDGAR's canonical current name.
-                r_iss = await conn.execute(
-                    """
-                    INSERT INTO platform.issuers (issuer_id, cik, legal_name, status)
-                    VALUES ($1, $2, $3, 'active')
-                    ON CONFLICT (issuer_id) DO UPDATE
-                        SET legal_name = EXCLUDED.legal_name
-                        WHERE issuers.legal_name <> EXCLUDED.legal_name
-                    """,
-                    issuer_id, cik, current_name,
-                )
-                if r_iss == "INSERT 0 1":
-                    n_issuers_upserted += 1
+            issuer_rows.append((issuer_id, cik, current_name))
+            # Former-name history rows + corresponding rename events.
+            prev_to: _date | None = None
+            for fn in former:
+                fn_name = fn.get("name")
+                fn_from_str = (fn.get("from") or "")[:10]
+                fn_to_str = (fn.get("to") or "")[:10]
+                if not fn_name or not fn_from_str:
+                    continue
+                fn_from = _date.fromisoformat(fn_from_str)
+                fn_to = _date.fromisoformat(fn_to_str) if fn_to_str else None
+                history_rows.append((issuer_id, cik, fn_name, fn_from, fn_to))
+                if fn_to is not None:
+                    ev_payload = f"name_only_change|{cik}|{fn_name}|{fn_to}"
+                    ev_hash = _hashlib.sha256(ev_payload.encode("utf-8")).hexdigest()[:24].upper()
+                    event_id = f"EVT_{ev_hash}"
+                    event_rows.append((
+                        event_id, fn_to, issuer_id,
+                        f"EDGAR formerNames: '{fn_name}' -> '{current_name}'",
+                    ))
+                prev_to = fn_to
+            # Current-name row (most-recent boundary onward).
+            cur_from = prev_to or _date.fromisoformat(
+                (former[-1].get("to") or "")[:10] or "1900-01-01"
+            )
+            history_rows.append((issuer_id, cik, current_name, cur_from, None))
 
-                # One issuer_history row per former-name period.
-                prev_to: _date | None = None
-                for fn in former:
-                    fn_name = fn.get("name")
-                    fn_from_str = (fn.get("from") or "")[:10]
-                    fn_to_str = (fn.get("to") or "")[:10]
-                    if not fn_name or not fn_from_str:
-                        continue
-                    fn_from = _date.fromisoformat(fn_from_str)
-                    fn_to = _date.fromisoformat(fn_to_str) if fn_to_str else None
-                    r_h = await conn.execute(
-                        """
-                        INSERT INTO platform.issuer_history
-                            (issuer_id, cik, legal_name, valid_from, valid_to, source)
-                        VALUES ($1, $2, $3, $4, $5, 'sec_edgar')
-                        ON CONFLICT (issuer_id, valid_from) DO NOTHING
-                        """,
-                        issuer_id, cik, fn_name, fn_from, fn_to,
-                    )
-                    if r_h == "INSERT 0 1":
-                        n_history_inserted += 1
+    log.info(
+        "ops.stage.corp_history_edgar_backfill.parsed",
+        n_ciks_walked=n_ciks_walked, n_with_former=n_with_former,
+        n_issuer_rows=len(issuer_rows),
+        n_history_rows=len(history_rows),
+        n_event_rows=len(event_rows),
+        parse_errors=n_zip_parse_errors,
+        elapsed_sec=round(_time.time() - t0, 1),
+    )
 
-                    # Emit a corporate_events row for the rename
-                    # transition (the former-name period END is the
-                    # event_date).
-                    if fn_to is not None:
-                        ev_payload = f"name_only_change|{cik}|{fn_name}|{fn_to}"
-                        ev_hash = _hashlib.sha256(ev_payload.encode("utf-8")).hexdigest()[:24].upper()
-                        event_id = f"EVT_{ev_hash}"
-                        # corporate_events is bitemporal — PK is
-                        # (event_id, realtime_start). The conflict
-                        # target must match the PK exactly, but
-                        # realtime_start defaults to now() so a naive
-                        # re-run would always insert a new version.
-                        # WHERE NOT EXISTS by event_id keeps the stage
-                        # truly idempotent.
-                        r_ev = await conn.execute(
-                            """
-                            INSERT INTO platform.corporate_events (
-                                event_id, event_kind, event_date, announced_date,
-                                predecessor_cls_id, successor_cls_id,
-                                predecessor_issuer_id, successor_issuer_id,
-                                successor_external,
-                                source, notes
-                            )
-                            SELECT $1, 'name_only_change', $2, NULL,
-                                   NULL, NULL,
-                                   $3, $3,
-                                   NULL,
-                                   'sec_edgar', $4
-                            WHERE NOT EXISTS (
-                                SELECT 1 FROM platform.corporate_events
-                                WHERE event_id = $1
-                            )
-                            """,
-                            event_id, fn_to, issuer_id,
-                            f"EDGAR formerNames: '{fn_name}' -> '{current_name}'",
-                        )
-                        if r_ev == "INSERT 0 1":
-                            n_events_inserted += 1
-                    prev_to = fn_to
+    if dry_run:
+        return {
+            "dry_run": True,
+            "universe_ciks": len(universe_ciks),
+            "ciks_walked": n_ciks_walked,
+            "ciks_with_former_names": n_with_former,
+            "issuer_rows_planned": len(issuer_rows),
+            "history_rows_planned": len(history_rows),
+            "event_rows_planned": len(event_rows),
+        }
 
-                # Current-name row (from the most-recent formerName.to
-                # onward — or today if EDGAR's last `to` is missing).
-                cur_from = prev_to or _date.fromisoformat(
-                    (former[-1].get("to") or "")[:10] or "1900-01-01"
-                )
-                await conn.execute(
-                    """
-                    INSERT INTO platform.issuer_history
-                        (issuer_id, cik, legal_name, valid_from, valid_to, source)
-                    VALUES ($1, $2, $3, $4, NULL, 'sec_edgar')
-                    ON CONFLICT (issuer_id, valid_from) DO NOTHING
-                    """,
-                    issuer_id, cik, current_name, cur_from,
-                )
+    # 4. Bulk INSERT — executemany per table.
+    t0 = _time.time()
+    async with pool.acquire() as conn, conn.transaction():
+        # 4a. issuers — UPSERT legal_name.
+        await conn.executemany(
+            """
+            INSERT INTO platform.issuers (issuer_id, cik, legal_name, status)
+            VALUES ($1, $2, $3, 'active')
+            ON CONFLICT (issuer_id) DO UPDATE
+                SET legal_name = EXCLUDED.legal_name
+                WHERE issuers.legal_name <> EXCLUDED.legal_name
+            """,
+            issuer_rows,
+        )
+        # 4b. issuer_history — INSERT IGNORE on (issuer_id, valid_from).
+        await conn.executemany(
+            """
+            INSERT INTO platform.issuer_history
+                (issuer_id, cik, legal_name, valid_from, valid_to, source)
+            VALUES ($1, $2, $3, $4, $5, 'sec_edgar')
+            ON CONFLICT (issuer_id, valid_from) DO NOTHING
+            """,
+            history_rows,
+        )
+        # 4c. corporate_events — bitemporal PK so WHERE NOT EXISTS.
+        await conn.executemany(
+            """
+            INSERT INTO platform.corporate_events (
+                event_id, event_kind, event_date, announced_date,
+                predecessor_cls_id, successor_cls_id,
+                predecessor_issuer_id, successor_issuer_id,
+                successor_external,
+                source, notes
+            )
+            SELECT $1, 'name_only_change', $2, NULL,
+                   NULL, NULL,
+                   $3, $3,
+                   NULL,
+                   'sec_edgar', $4
+            WHERE NOT EXISTS (
+                SELECT 1 FROM platform.corporate_events WHERE event_id = $1
+            )
+            """,
+            event_rows,
+        )
 
-            await asyncio.sleep(rate_limit_sec)
+    log.info("ops.stage.corp_history_edgar_backfill.written",
+             elapsed_sec=round(_time.time() - t0, 1))
+
+    # 5. Recount results (executemany doesn't surface per-row INSERT counts).
+    n_issuers_after = await pool.fetchval("SELECT count(*) FROM platform.issuers")
+    n_history_after = await pool.fetchval("SELECT count(*) FROM platform.issuer_history")
+    n_events_after = await pool.fetchval(
+        "SELECT count(*) FROM platform.corporate_events WHERE event_kind = 'name_only_change'"
+    )
 
     result = {
         "dry_run": dry_run,
-        "ciks_walked": len(ciks),
+        "universe_ciks": len(universe_ciks),
+        "ciks_walked": n_ciks_walked,
         "ciks_with_former_names": n_with_former,
-        "issuers_upserted": n_issuers_upserted,
-        "history_rows_inserted": n_history_inserted,
-        "events_inserted": n_events_inserted,
-        "fetch_errors": n_errors,
+        "issuer_rows_planned": len(issuer_rows),
+        "history_rows_planned": len(history_rows),
+        "event_rows_planned": len(event_rows),
+        "issuers_total_after": n_issuers_after,
+        "history_total_after": n_history_after,
+        "name_only_change_events_total_after": n_events_after,
+        "parse_errors": n_zip_parse_errors,
     }
     log.info("ops.stage.corp_history_edgar_backfill.done", **result)
     return result
