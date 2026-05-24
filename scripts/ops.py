@@ -3443,6 +3443,184 @@ async def _stage_sec_orphan_resolve(
                              legal_name=legal_name,
                              classification_id=cls_id, prices_daily_rows_updated=row_count)
 
+    # ── Phase C — alternate-source resolvers for the SEC-ineligible tail.
+    # Tickers that EDGAR can't resolve (foreign ADRs, SPAC warrants,
+    # tiny obscure names) often have data at OpenFIGI (foreign issuer
+    # identity authority) or FMP /profile (currently-traded coverage).
+    # Tries both in order; skips gracefully when the env var for either
+    # vendor isn't set.
+    phase_c_enabled_param = cfg.get("phase_c", "true")
+    phase_c_enabled = (phase_c_enabled_param.lower() != "false") if isinstance(phase_c_enabled_param, str) else bool(phase_c_enabled_param)
+
+    n_phase_c1_resolved = 0
+    n_phase_c1_rows_updated = 0
+    n_phase_c2_resolved = 0
+    n_phase_c2_rows_updated = 0
+    phase_c_unresolved: list[str] = []
+
+    async def _phase_c_insert(
+        conn: asyncpg.Connection,
+        *,
+        ticker: str,
+        legal_name: str,
+        cik: str | None,
+        figi: str | None,
+        source_tag: str,
+        discovery: Any,
+    ) -> tuple[str | None, int]:
+        """Common INSERT path for Phase C — mints TKR-14 with salt-retry,
+        INSERTs ticker_classifications, UPDATEs prices_daily.
+        Returns (classification_id, rows_updated)."""
+        for salt_try in range(5):
+            tkr14_id = mint(
+                country="US",
+                asset_class=AssetClass.STOCK,
+                ipo_venue=IPOVenue.OTHER,
+                discovery_source=discovery,
+                cik=cik,
+                legal_name=legal_name,
+                now=now_utc,
+                salt=salt_try,
+            )
+            existing = await conn.fetchval(
+                "SELECT ticker FROM platform.ticker_classifications WHERE id=$1",
+                tkr14_id,
+            )
+            if not existing or existing == ticker:
+                break
+        ins_id = await conn.fetchval(
+            """
+            INSERT INTO platform.ticker_classifications
+                (id, ticker, current_ticker, current_legal_name,
+                 country, asset_class, source, ipo_venue, discovery_source,
+                 cik, figi, status, updated_at)
+            VALUES ($1, $2, $2, $3,
+                    'US', 'stock', $4, 'Z', $5,
+                    $6, $7, 'active', now())
+            ON CONFLICT (ticker) DO NOTHING
+            RETURNING id
+            """,
+            tkr14_id, ticker, legal_name, source_tag,
+            str(discovery.value), cik, figi,
+        )
+        cid = ins_id or await conn.fetchval(
+            "SELECT id FROM platform.ticker_classifications WHERE ticker=$1",
+            ticker,
+        )
+        if not cid:
+            return None, 0
+        upd = await conn.execute(
+            """
+            UPDATE platform.prices_daily
+            SET classification_id = $1
+            WHERE ticker = $2 AND classification_id IS NULL
+            """,
+            cid, ticker,
+        )
+        rc = int(upd.split()[-1]) if upd.startswith("UPDATE") else 0
+        return cid, rc
+
+    if phase_c_enabled:
+        # Discover remaining orphans after Phase B.
+        async with pool.acquire() as conn:
+            c_remaining_rows = await conn.fetch(
+                "SELECT DISTINCT ticker FROM platform.prices_daily "
+                "WHERE classification_id IS NULL ORDER BY ticker"
+            )
+        c_remaining = [r["ticker"] for r in c_remaining_rows]
+
+        log.info("ops.stage.sec_orphan_resolve.phase_c_starting", n_remaining=len(c_remaining))
+
+        # ── Phase C1 — OpenFIGI batch lookup (foreign-issuer-aware) ─────
+        openfigi_key = _os.environ.get("OPEN_FIGI_API_KEY")
+        c1_resolved_set: set[str] = set()
+        if openfigi_key and c_remaining:
+            from tpcore.openfigi import OpenFIGIAdapter
+            try:
+                async with OpenFIGIAdapter() as figi_adapter:
+                    figi_results = await figi_adapter.map_tickers(c_remaining, exch_code="US")
+            except Exception as e:  # noqa: BLE001 — best-effort
+                log.warning("ops.stage.sec_orphan_resolve.openfigi_failed", error=str(e)[:200])
+                figi_results = []
+
+            for fr in figi_results:
+                if fr.figi_not_found or not fr.name:
+                    continue
+                async with pool.acquire() as conn, conn.transaction():
+                    cls_id, row_count = await _phase_c_insert(
+                        conn,
+                        ticker=fr.ticker,
+                        legal_name=fr.name,
+                        cik=None,
+                        figi=fr.composite_figi,
+                        source_tag="sec_edgar_orphan_resolve_phaseC1_openfigi",
+                        discovery=DiscoverySource.OTHER,
+                    )
+                if cls_id:
+                    n_phase_c1_resolved += 1
+                    n_phase_c1_rows_updated += row_count
+                    c1_resolved_set.add(fr.ticker)
+                    log.info("ops.stage.sec_orphan_resolve.resolved",
+                             phase="C1", ticker=fr.ticker, figi=fr.composite_figi,
+                             legal_name=fr.name, classification_id=cls_id,
+                             prices_daily_rows_updated=row_count)
+        elif not openfigi_key:
+            log.warning("ops.stage.sec_orphan_resolve.phase_c1_skipped_no_openfigi_key")
+
+        # ── Phase C2 — FMP /profile retry for whatever C1 didn't get ────
+        fmp_key = _os.environ.get("FMP_API_KEY")
+        c2_remaining = [t for t in c_remaining if t not in c1_resolved_set]
+        if fmp_key and c2_remaining:
+            FMP_BASE = "https://financialmodelingprep.com/stable"
+            async with httpx.AsyncClient(timeout=20.0) as fmp_client:
+                for ticker in c2_remaining:
+                    try:
+                        resp = await fmp_client.get(
+                            f"{FMP_BASE}/profile",
+                            params={"symbol": ticker, "apikey": fmp_key},
+                        )
+                        await asyncio.sleep(0.2)
+                        if resp.status_code != 200:
+                            continue
+                        data = resp.json()
+                        if not isinstance(data, list) or not data:
+                            continue
+                        prof = data[0]
+                        legal_name = prof.get("companyName") or ""
+                        if not legal_name:
+                            continue
+                        cik = str(prof["cik"]) if prof.get("cik") else None
+                    except Exception:  # noqa: BLE001 — best-effort
+                        continue
+
+                    async with pool.acquire() as conn, conn.transaction():
+                        cls_id, row_count = await _phase_c_insert(
+                            conn,
+                            ticker=ticker,
+                            legal_name=legal_name,
+                            cik=cik,
+                            figi=None,
+                            source_tag="sec_edgar_orphan_resolve_phaseC2_fmp",
+                            discovery=DiscoverySource.FMP,
+                        )
+                    if cls_id:
+                        n_phase_c2_resolved += 1
+                        n_phase_c2_rows_updated += row_count
+                        log.info("ops.stage.sec_orphan_resolve.resolved",
+                                 phase="C2", ticker=ticker, cik=cik,
+                                 legal_name=legal_name, classification_id=cls_id,
+                                 prices_daily_rows_updated=row_count)
+        elif not fmp_key:
+            log.warning("ops.stage.sec_orphan_resolve.phase_c2_skipped_no_fmp_key")
+
+        # Final residue — what no vendor could resolve.
+        async with pool.acquire() as conn:
+            final_rows = await conn.fetch(
+                "SELECT DISTINCT ticker FROM platform.prices_daily "
+                "WHERE classification_id IS NULL ORDER BY ticker"
+            )
+        phase_c_unresolved = [r["ticker"] for r in final_rows]
+
     result = {
         "dry_run": False,
         "phase_a_actionable": len(actionable),
@@ -3455,8 +3633,18 @@ async def _stage_sec_orphan_resolve(
         "phase_b_rows_closed": n_phase_b_rows_updated,
         "phase_b_unresolved": n_phase_b_unresolved,
         "phase_b_unresolved_sample": phase_b_unresolved_sample,
-        "total_resolved": n_resolved + n_phase_b_resolved,
-        "total_rows_closed": n_rows_updated + n_phase_b_rows_updated,
+        "phase_c_enabled": phase_c_enabled,
+        "phase_c1_openfigi_resolved": n_phase_c1_resolved,
+        "phase_c1_openfigi_rows_closed": n_phase_c1_rows_updated,
+        "phase_c2_fmp_resolved": n_phase_c2_resolved,
+        "phase_c2_fmp_rows_closed": n_phase_c2_rows_updated,
+        "phase_c_unresolved_count": len(phase_c_unresolved),
+        "phase_c_unresolved_residue": phase_c_unresolved,
+        "total_resolved": n_resolved + n_phase_b_resolved + n_phase_c1_resolved + n_phase_c2_resolved,
+        "total_rows_closed": (
+            n_rows_updated + n_phase_b_rows_updated
+            + n_phase_c1_rows_updated + n_phase_c2_rows_updated
+        ),
     }
     log.info("ops.stage.sec_orphan_resolve.done", **result)
     return result
@@ -5969,7 +6157,7 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # catalog (PRICES_DAILY_CLASSIFICATION_ID_NULL signal — follow-on).
     ("sec_orphan_resolve",
         lambda pool, cfg: (lambda: _stage_sec_orphan_resolve(pool, cfg)),
-        STAGE_TIMEOUT_SEC),
+        HEAVY_STAGE_TIMEOUT_SEC),
     ("delist_stale",        lambda pool, cfg: (lambda: _stage_delist_stale(pool)),             STAGE_TIMEOUT_SEC),
     # earnings_refresh — earnings-beat events for vector engine.
     # Heavy timeout (1h) because the FMP loop is ~1 sec per ticker;
