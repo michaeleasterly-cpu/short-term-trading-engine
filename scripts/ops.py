@@ -2472,6 +2472,227 @@ async def _tkr14_backfill_figi(
     }
 
 
+async def _stage_audit_cleanup_2026_05_24(
+    pool: asyncpg.Pool, cfg: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """One-shot cleanup of the 4 audit defects found 2026-05-24.
+
+    db-architect audit (see operator request "audit the database and
+    make sure macros are good and all the tickers and references are
+    good to go") flagged:
+
+      Defect A (was #2): 248 delisted-but-marked-active ticker_classifications
+        rows. Their ticker_history was closed with valid_to set to the
+        actual delisting_date in prices_daily (real M&A / bankruptcy
+        events like ATVI/ALXN/ABMD/BBBY etc.), but the parent
+        ticker_classifications row still has status='active' AND
+        lifetime_end IS NULL. Set status='inactive' + lifetime_end =
+        ticker_history.valid_to so the partial UNIQUE index on
+        (ticker) WHERE lifetime_end IS NULL would correctly allow a
+        future ticker-reuse to take over the same ticker string.
+
+      Defect B (was #3): platform.issuer_history has duplicate
+        valid_to=NULL rows for Meta (CIK0001326801). The corp_events
+        seed inserted one at 2022-06-09 (FB->META rename date) and
+        the EDGAR backfill later inserted another at 2021-10-27
+        (EDGAR's recorded transition date for the rename). Close the
+        earlier one's valid_to to the later one's valid_from so only
+        ONE Meta row stays open.
+
+      Defect C (was #4): platform.corporate_events has 4 bitemporal
+        copies of the FB->META ticker_swap event_id
+        EVT_867CC84F8772CA7919976BE0 (5-min spread on 2026-05-24 from
+        my 3 iterations of the EDGAR backfill stage). The PK
+        (event_id, realtime_start) allows it but logically only the
+        most-recent realtime_start row is the active fact. Close
+        realtime_end on the older versions so historical-as-of
+        queries still resolve correctly but the current view returns
+        one row.
+
+      Defect D (was hy_spread): memory entry corrected separately
+        (~9,097 was wrong — that's credit_spread; actual hy_spread
+        row count is ~7,674). No live-DB action needed.
+
+    Idempotent (each operation is INSERT/UPDATE-driven by a NOT-yet
+    state). Safe to re-run.
+
+    cfg knobs:
+      dry_run (default 'true') — count what WOULD change.
+    """
+    log = structlog.get_logger("scripts.ops")
+    cfg = cfg or {}
+    dry_run_param = cfg.get("dry_run", "true")
+    dry_run = (dry_run_param.lower() != "false") if isinstance(dry_run_param, str) else bool(dry_run_param)
+
+    findings: dict[str, Any] = {"dry_run": dry_run}
+
+    async with pool.acquire() as conn:
+        # Defect A: 248 delisted-but-active classifications.
+        defect_a_predicate = """
+            tc.lifetime_end IS NULL
+            AND tc.status = 'active'
+            AND EXISTS (
+                SELECT 1 FROM platform.ticker_history th
+                WHERE th.classification_id = tc.id
+                  AND th.valid_to IS NOT NULL
+                  AND NOT EXISTS (
+                      SELECT 1 FROM platform.ticker_history th2
+                      WHERE th2.classification_id = tc.id
+                        AND th2.valid_to IS NULL
+                  )
+            )
+        """
+        n_defect_a = await conn.fetchval(
+            f"SELECT count(*) FROM platform.ticker_classifications tc WHERE {defect_a_predicate}"
+        )
+        findings["defect_a_delisted_active_count"] = n_defect_a
+
+        if not dry_run and n_defect_a > 0:
+            r = await conn.execute(
+                """
+                WITH targets AS (
+                    SELECT tc.id AS cls_id, th.valid_to AS close_date
+                    FROM platform.ticker_classifications tc
+                    JOIN platform.ticker_history th ON th.classification_id = tc.id
+                    WHERE tc.lifetime_end IS NULL
+                      AND tc.status = 'active'
+                      AND th.valid_to IS NOT NULL
+                      AND NOT EXISTS (
+                          SELECT 1 FROM platform.ticker_history th2
+                          WHERE th2.classification_id = tc.id
+                            AND th2.valid_to IS NULL
+                      )
+                )
+                UPDATE platform.ticker_classifications tc
+                SET status = 'inactive', lifetime_end = t.close_date
+                FROM targets t
+                WHERE tc.id = t.cls_id
+                """
+            )
+            findings["defect_a_updated"] = r
+            log.info("ops.stage.audit_cleanup.defect_a_done", updated=r)
+
+        # Defect B: duplicate Meta issuer_history open rows.
+        n_defect_b = await conn.fetchval(
+            """
+            SELECT count(*) FROM (
+                SELECT issuer_id FROM platform.issuer_history
+                WHERE valid_to IS NULL
+                GROUP BY issuer_id HAVING count(*) > 1
+            ) s
+            """
+        )
+        findings["defect_b_open_dup_issuers"] = n_defect_b
+
+        if not dry_run and n_defect_b > 0:
+            # For each issuer with >1 open row, close all but the
+            # latest (highest valid_from) and set their valid_to to
+            # the latest's valid_from.
+            r = await conn.execute(
+                """
+                WITH ranked AS (
+                    SELECT issuer_id, valid_from,
+                           ROW_NUMBER() OVER (PARTITION BY issuer_id ORDER BY valid_from DESC) AS rn,
+                           MAX(valid_from) OVER (PARTITION BY issuer_id) AS latest_from
+                    FROM platform.issuer_history
+                    WHERE valid_to IS NULL
+                )
+                UPDATE platform.issuer_history ih
+                SET valid_to = r.latest_from
+                FROM ranked r
+                WHERE ih.issuer_id = r.issuer_id
+                  AND ih.valid_from = r.valid_from
+                  AND r.rn > 1
+                  AND ih.valid_to IS NULL
+                """
+            )
+            findings["defect_b_closed"] = r
+            log.info("ops.stage.audit_cleanup.defect_b_done", updated=r)
+
+        # Defect E (operator catch 2026-05-24): issuer_securities.valid_to
+        # never set for delistings that AREN'T same-entity renames.
+        # The seed stage only updated valid_to when predecessor_cik ==
+        # successor_cik (FB->META same-entity rename). For real delistings
+        # (ATVI/SIVB/BBBY/VMW/TWTR etc.) where the security stops trading,
+        # we never closed the predecessor's mapping. Close them by
+        # joining to ticker_history.valid_to (the security's actual stop
+        # date) when the classification's history is closed.
+        n_defect_e = await conn.fetchval(
+            """
+            SELECT count(*)
+            FROM platform.issuer_securities iss
+            WHERE iss.valid_to IS NULL
+              AND EXISTS (
+                  SELECT 1 FROM platform.ticker_history th
+                  WHERE th.classification_id = iss.classification_id
+                    AND th.valid_to IS NOT NULL
+                    AND NOT EXISTS (
+                        SELECT 1 FROM platform.ticker_history th2
+                        WHERE th2.classification_id = iss.classification_id
+                          AND th2.valid_to IS NULL
+                    )
+              )
+            """
+        )
+        findings["defect_e_delisted_iss_open"] = n_defect_e
+
+        if not dry_run and n_defect_e > 0:
+            r = await conn.execute(
+                """
+                UPDATE platform.issuer_securities iss
+                SET valid_to = th.valid_to
+                FROM platform.ticker_history th
+                WHERE iss.valid_to IS NULL
+                  AND th.classification_id = iss.classification_id
+                  AND th.valid_to IS NOT NULL
+                  AND NOT EXISTS (
+                      SELECT 1 FROM platform.ticker_history th2
+                      WHERE th2.classification_id = iss.classification_id
+                        AND th2.valid_to IS NULL
+                  )
+                """
+            )
+            findings["defect_e_closed"] = r
+            log.info("ops.stage.audit_cleanup.defect_e_done", updated=r)
+
+        # Defect C: bitemporal duplicates of the same event_id.
+        n_defect_c = await conn.fetchval(
+            """
+            SELECT count(*) FROM (
+                SELECT event_id FROM platform.corporate_events
+                WHERE realtime_end IS NULL OR realtime_end = 'infinity'::timestamptz
+                GROUP BY event_id HAVING count(*) > 1
+            ) s
+            """
+        )
+        findings["defect_c_dup_event_ids"] = n_defect_c
+
+        if not dry_run and n_defect_c > 0:
+            r = await conn.execute(
+                """
+                WITH ranked AS (
+                    SELECT event_id, realtime_start,
+                           ROW_NUMBER() OVER (PARTITION BY event_id ORDER BY realtime_start DESC) AS rn,
+                           MAX(realtime_start) OVER (PARTITION BY event_id) AS latest_start
+                    FROM platform.corporate_events
+                    WHERE realtime_end IS NULL OR realtime_end = 'infinity'::timestamptz
+                )
+                UPDATE platform.corporate_events ce
+                SET realtime_end = r.latest_start
+                FROM ranked r
+                WHERE ce.event_id = r.event_id
+                  AND ce.realtime_start = r.realtime_start
+                  AND r.rn > 1
+                  AND (ce.realtime_end IS NULL OR ce.realtime_end = 'infinity'::timestamptz)
+                """
+            )
+            findings["defect_c_closed"] = r
+            log.info("ops.stage.audit_cleanup.defect_c_done", updated=r)
+
+    log.info("ops.stage.audit_cleanup.done", **findings)
+    return findings
+
+
 async def _stage_residual_classification_id_fill(
     pool: asyncpg.Pool, cfg: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -6724,6 +6945,14 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # WHERE lifetime_end IS NULL. Idempotent + bounded (only touches NULL rows).
     ("residual_classification_id_fill",
         lambda pool, cfg: (lambda: _stage_residual_classification_id_fill(pool, cfg)),
+        STAGE_TIMEOUT_SEC),
+    # One-shot audit-cleanup stage (2026-05-24 db-architect audit
+    # found 4 data-consistency defects: delisted-but-active
+    # classifications, duplicate Meta issuer_history opens, bitemporal
+    # duplicates of FB->META event, hy_spread memory mismatch).
+    # Idempotent (each operation is INSERT/UPDATE on a NOT-yet state).
+    ("audit_cleanup_2026_05_24",
+        lambda pool, cfg: (lambda: _stage_audit_cleanup_2026_05_24(pool, cfg)),
         STAGE_TIMEOUT_SEC),
     # Maintain platform.ticker_history SCD-2 timeline — INSERTs missing rows
     # for any ticker_classification without one + closes valid_to on rows
