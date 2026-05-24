@@ -180,5 +180,27 @@ class FundamentalsRepo:
                 out.setdefault(cid, []).append(QuarterlyFundamentals.model_validate(r))
         return out
 
+    async def funded_subset(
+        self,
+        classification_ids: list[str] | tuple[str, ...],
+    ) -> set[str]:
+        """Return the subset of cids with at least one fundamentals row.
+
+        Engines often filter their universe to "tickers we have any
+        fundamentals data for" (reversion's _funded_universe pattern).
+        Single SQL — much cheaper than a per-cid existence check loop.
+        Empty input returns empty set.
+        """
+        if not classification_ids:
+            return set()
+        sql = (
+            "SELECT DISTINCT classification_id "
+            "FROM platform.fundamentals_quarterly "
+            "WHERE classification_id = ANY($1::text[])"
+        )
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(sql, list(classification_ids))
+        return {r["classification_id"] for r in rows}
+
 
 __all__ = ["FundamentalsRepo", "QuarterlyFundamentals"]

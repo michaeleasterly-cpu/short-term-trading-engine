@@ -41,6 +41,7 @@ on the free tier (verified empirically). Default backtest window
 day 1; before that the gated path returns zero trades regardless of
 price action. Override ``--start`` at your own risk.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -91,12 +92,14 @@ from tpcore.backtest.cost_model import (
     slippage_per_side as _tpcore_slippage_per_side,
 )
 from tpcore.backtest.price_loader import load_prices
+from tpcore.data.repositories import FundamentalsRepo
 from tpcore.db import build_asyncpg_pool
 from tpcore.fundamentals.earnings_quality import (
     EarningsQualityGrade,
     EarningsQualityResult,
     check_earnings_quality,
 )
+from tpcore.identity.dispatcher import IdentityDispatcher
 from tpcore.lab.target import LabTarget
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -118,9 +121,7 @@ def _slippage_per_side(ticker: str) -> float:
     Thin delegate to the shared :func:`tpcore.backtest.cost_model.
     slippage_per_side` (Lean P5.2 consolidation, cluster #11).
     """
-    return _tpcore_slippage_per_side(
-        ticker, _TIER_ROUND_TRIP_COSTS, SLIPPAGE_PER_SIDE
-    )
+    return _tpcore_slippage_per_side(ticker, _TIER_ROUND_TRIP_COSTS, SLIPPAGE_PER_SIDE)
 
 
 HARD_STOP_PCT = 0.08
@@ -175,9 +176,7 @@ def _max_hold_days() -> int:
 
 def _volume_climax_threshold() -> float:
     return (
-        _VOLUME_CLIMAX_OVERRIDE
-        if _VOLUME_CLIMAX_OVERRIDE is not None
-        else VOLUME_CLIMAX_MULTIPLIER_DEFAULT
+        _VOLUME_CLIMAX_OVERRIDE if _VOLUME_CLIMAX_OVERRIDE is not None else VOLUME_CLIMAX_MULTIPLIER_DEFAULT
     )
 
 
@@ -297,52 +296,89 @@ class VariantSummary:
 # ────────────────────────────────────────────────────────────────────────────
 
 
-async def _load_prices(
-    pool, tickers: list[str], start: date, end: date
-) -> dict[str, pd.DataFrame]:
+async def _load_prices(pool, tickers: list[str], start: date, end: date) -> dict[str, pd.DataFrame]:
     # Lean P5.3 (#2): thin delegate to the shared tpcore loader. The
     # min-bar floor (MA_50_PERIOD + 5) is reversion's intentional
     # divergence, preserved via the explicit ``min_bars`` parameter.
-    return await load_prices(
-        pool, tickers, start, end, min_bars=MA_50_PERIOD + 5
-    )
+    return await load_prices(pool, tickers, start, end, min_bars=MA_50_PERIOD + 5)
 
 
 async def _load_fundamentals(pool, tickers: list[str]) -> dict[str, list[dict]]:
-    """Pull every cached row for ``tickers``. PIT filtering is done in-loop."""
-    sql = """
-        SELECT ticker, filing_date, period_end_date, period_label,
-               net_income, fcf, operating_cash_flow, capex, revenue,
-               total_assets, total_liabilities, current_assets, current_liabilities,
-               receivables, cash_and_equivalents, shares_outstanding
-        FROM platform.fundamentals_quarterly
-        WHERE ticker = ANY($1)
-        ORDER BY ticker, filing_date DESC
+    """Pull every cached row for ``tickers``. PIT filtering is done in-loop.
+
+    Edge adapter: dispatches ticker → classification_id and queries
+    FundamentalsRepo with a wide window (epoch → far future). Returns
+    ticker-keyed dict to preserve the caller contract — the in-loop
+    PIT filter at this function's callsites still works.
     """
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(sql, tickers)
+    from datetime import date as _date
+
+    dispatcher = IdentityDispatcher(pool)
+    repo = FundamentalsRepo(pool)
+
+    cid_to_ticker: dict[str, str] = {}
+    for t in tickers:
+        cid = await dispatcher.ticker_to_classification_id(t)
+        if cid is not None:
+            cid_to_ticker[cid] = t
+
     by_ticker: dict[str, list[dict]] = defaultdict(list)
-    for r in rows:
-        by_ticker[r["ticker"]].append(
-            {
-                "filing_date": r["filing_date"],
-                "period_end_date": r["period_end_date"],
-                "period": r["period_label"],
-                "net_income": Decimal(str(r["net_income"])) if r["net_income"] is not None else None,
-                "fcf": Decimal(str(r["fcf"])) if r["fcf"] is not None else None,
-                "revenue": Decimal(str(r["revenue"])) if r["revenue"] is not None else None,
-                "receivables": Decimal(str(r["receivables"])) if r["receivables"] is not None else None,
-                "capex": Decimal(str(r["capex"])) if r["capex"] is not None else None,
-                "total_assets": Decimal(str(r["total_assets"])) if r["total_assets"] is not None else None,
-                "total_liabilities": Decimal(str(r["total_liabilities"])) if r["total_liabilities"] is not None else None,
-                "current_assets": Decimal(str(r["current_assets"])) if r["current_assets"] is not None else None,
-                "current_liabilities": Decimal(str(r["current_liabilities"])) if r["current_liabilities"] is not None else None,
-                "cash_and_equivalents": Decimal(str(r["cash_and_equivalents"])) if r["cash_and_equivalents"] is not None else None,
-                "shares_outstanding": Decimal(str(r["shares_outstanding"])) if r["shares_outstanding"] is not None else None,
-                "operating_cash_flow": Decimal(str(r["operating_cash_flow"])) if r["operating_cash_flow"] is not None else None,
-            }
-        )
-    return by_ticker
+    if not cid_to_ticker:
+        return by_ticker
+
+    rows_by_cid = await repo.get_window_batch(
+        list(cid_to_ticker),
+        _date(1900, 1, 1),
+        _date(2100, 1, 1),
+    )
+    for cid, filings in rows_by_cid.items():
+        ticker = cid_to_ticker[cid]
+        # Reverse to filing_date DESC (repo returns ascending per cid)
+        for f in sorted(filings, key=lambda x: x.filing_date, reverse=True):
+            by_ticker[ticker].append(
+                {
+                    "filing_date": f.filing_date,
+                    "period_end_date": f.period_end_date,
+                    "period": f.period_label,
+                    "net_income": f.net_income,
+                    "fcf": f.fcf,
+                    "revenue": f.revenue,
+                    "receivables": f.receivables,
+                    "capex": f.capex,
+                    "total_assets": f.total_assets,
+                    "total_liabilities": f.total_liabilities,
+                    "current_assets": f.current_assets,
+                    "current_liabilities": f.current_liabilities,
+                    "cash_and_equivalents": f.cash_and_equivalents,
+                    "shares_outstanding": f.shares_outstanding,
+                    "operating_cash_flow": f.operating_cash_flow,
+                }
+            )
+    return dict(by_ticker)
+
+
+async def _funded_tickers(pool, universe: list[str]) -> list[str]:
+    """Subset of ``universe`` that has any fundamentals row.
+
+    Edge adapter: ticker universe in, ticker list out (sorted).
+    Internally dispatches to classification_id and uses
+    ``FundamentalsRepo.funded_subset``. Preserves the legacy
+    "ORDER BY ticker" output ordering.
+    """
+    dispatcher = IdentityDispatcher(pool)
+    repo = FundamentalsRepo(pool)
+
+    cid_to_ticker: dict[str, str] = {}
+    for t in universe:
+        cid = await dispatcher.ticker_to_classification_id(t)
+        if cid is not None:
+            cid_to_ticker[cid] = t
+
+    if not cid_to_ticker:
+        return []
+
+    funded_cids = await repo.funded_subset(list(cid_to_ticker))
+    return sorted(cid_to_ticker[cid] for cid in funded_cids)
 
 
 def _pit_fundamentals(rows: list[dict], as_of: date) -> dict | None:
@@ -455,9 +491,7 @@ def _scan_day(
 
         last = df.iloc[idx]
         if direction is Direction.LONG:
-            reversal = _is_hammer(
-                float(last["open"]), float(last["high"]), float(last["low"]), last_close
-            )
+            reversal = _is_hammer(float(last["open"]), float(last["high"]), float(last["low"]), last_close)
         else:
             reversal = _is_shooting_star(
                 float(last["open"]), float(last["high"]), float(last["low"]), last_close
@@ -562,7 +596,9 @@ def _simulate_trade(
         # Stop check first (most punitive).
         stop_hit = (is_long and low <= stop_price) or (not is_long and high >= stop_price)
         if stop_hit:
-            sell_px = stop_price * ((1.0 - _slippage_per_side(ticker)) if is_long else (1.0 + _slippage_per_side(ticker)))
+            sell_px = stop_price * (
+                (1.0 - _slippage_per_side(ticker)) if is_long else (1.0 + _slippage_per_side(ticker))
+            )
             remaining = (tier1_qty if record.tier1_exit_date is None else 0.0) + tier2_qty
             pnl += remaining * (sell_px - entry_price) * (1 if is_long else -1)
             record.stopped_out = True
@@ -574,7 +610,9 @@ def _simulate_trade(
         # Tier 1 fill?
         tier1_hit = (is_long and high >= target_20ma) or (not is_long and low <= target_20ma)
         if record.tier1_exit_date is None and tier1_hit:
-            sell_px = target_20ma * ((1.0 - _slippage_per_side(ticker)) if is_long else (1.0 + _slippage_per_side(ticker)))
+            sell_px = target_20ma * (
+                (1.0 - _slippage_per_side(ticker)) if is_long else (1.0 + _slippage_per_side(ticker))
+            )
             pnl += tier1_qty * (sell_px - entry_price) * (1 if is_long else -1)
             record.tier1_exit_date = bar.name
             record.tier1_exit_price = sell_px
@@ -583,7 +621,9 @@ def _simulate_trade(
         # Tier 2 fill — only after tier 1.
         tier2_hit = (is_long and high >= target_50ma) or (not is_long and low <= target_50ma)
         if record.tier1_exit_date is not None and tier2_hit:
-            sell_px = target_50ma * ((1.0 - _slippage_per_side(ticker)) if is_long else (1.0 + _slippage_per_side(ticker)))
+            sell_px = target_50ma * (
+                (1.0 - _slippage_per_side(ticker)) if is_long else (1.0 + _slippage_per_side(ticker))
+            )
             pnl += tier2_qty * (sell_px - entry_price) * (1 if is_long else -1)
             record.tier2_exit_date = bar.name
             record.tier2_exit_price = sell_px
@@ -600,7 +640,9 @@ def _simulate_trade(
             if bars_without_touching_20ma >= TIME_STOP_DAYS:
                 # Force-close at this bar's close.
                 close = float(bar["close"])
-                sell_px = close * ((1.0 - _slippage_per_side(ticker)) if is_long else (1.0 + _slippage_per_side(ticker)))
+                sell_px = close * (
+                    (1.0 - _slippage_per_side(ticker)) if is_long else (1.0 + _slippage_per_side(ticker))
+                )
                 remaining = tier1_qty + tier2_qty
                 pnl += remaining * (sell_px - entry_price) * (1 if is_long else -1)
                 record.timed_out = True
@@ -611,7 +653,9 @@ def _simulate_trade(
     else:
         # max-hold expired without exit.
         bar = df.iloc[entry_idx + bars_left]
-        sell_px = float(bar["close"]) * ((1.0 - _slippage_per_side(ticker)) if is_long else (1.0 + _slippage_per_side(ticker)))
+        sell_px = float(bar["close"]) * (
+            (1.0 - _slippage_per_side(ticker)) if is_long else (1.0 + _slippage_per_side(ticker))
+        )
         remaining = (tier1_qty if record.tier1_exit_date is None else 0.0) + tier2_qty
         pnl += remaining * (sell_px - entry_price) * (1 if is_long else -1)
         record.tier2_exit_date = bar.name
@@ -668,10 +712,7 @@ def _run_variant(
     for di, today in enumerate(all_dates):
         if di < next_eligible_idx:
             continue
-        if (
-            session_regime_mask is not None
-            and not session_regime_mask.get(today, False)
-        ):
+        if session_regime_mask is not None and not session_regime_mask.get(today, False):
             # Regime-gated: this session's classified regime doesn't
             # match the candidate's target on the selected axes.
             continue
@@ -706,9 +747,7 @@ def _run_variant(
         next_open = float(df.iloc[idx + 1]["open"])
         is_long = chosen.direction is Direction.LONG
         entry_price = next_open * (
-            1.0 + _slippage_per_side(chosen.ticker)
-            if is_long
-            else 1.0 - _slippage_per_side(chosen.ticker)
+            1.0 + _slippage_per_side(chosen.ticker) if is_long else 1.0 - _slippage_per_side(chosen.ticker)
         )
         record = _simulate_trade(
             df,
@@ -780,8 +819,13 @@ def _grade_or_none(
 def _compute_summary(variant: str, trades: list[TradeRecord]) -> VariantSummary:
     if not trades:
         return VariantSummary(
-            variant=variant, n_trades=0, win_rate=0.0, avg_return_pct=0.0,
-            sharpe_annualized=0.0, max_drawdown_pct=0.0, profit_factor=0.0,
+            variant=variant,
+            n_trades=0,
+            win_rate=0.0,
+            avg_return_pct=0.0,
+            sharpe_annualized=0.0,
+            max_drawdown_pct=0.0,
+            profit_factor=0.0,
         )
     returns = np.array([t.return_pct for t in trades], dtype=float)
     n = len(returns)
@@ -818,8 +862,13 @@ def _compute_summary(variant: str, trades: list[TradeRecord]) -> VariantSummary:
         }
 
     return VariantSummary(
-        variant=variant, n_trades=n, win_rate=win_rate, avg_return_pct=avg_return,
-        sharpe_annualized=sharpe, max_drawdown_pct=max_dd, profit_factor=profit_factor,
+        variant=variant,
+        n_trades=n,
+        win_rate=win_rate,
+        avg_return_pct=avg_return,
+        sharpe_annualized=sharpe,
+        max_drawdown_pct=max_dd,
+        profit_factor=profit_factor,
         by_year=by_year,
     )
 
@@ -831,7 +880,7 @@ def _compute_summary(variant: str, trades: list[TradeRecord]) -> VariantSummary:
 
 def _render(summaries: list[VariantSummary]) -> str:
     def fmt_pct(x: float) -> str:
-        return f"{x*100:+.2f}%"
+        return f"{x * 100:+.2f}%"
 
     def fmt_pf(x: float) -> str:
         return "inf" if math.isinf(x) else f"{x:.2f}"
@@ -864,28 +913,45 @@ def _write_trades_csv(path: Path, trades: list[TradeRecord]) -> None:
         writer = csv.writer(fh)
         writer.writerow(
             [
-                "ticker", "direction", "entry_date", "entry_price",
-                "tier1_exit_date", "tier1_exit_price",
-                "tier2_exit_date", "tier2_exit_price",
-                "exit_reason", "stopped_out", "timed_out", "holding_days",
-                "pnl", "return_pct", "quality_grade",
-                "fcf_to_ni", "accruals",
-                "z_score_at_entry", "rsi_at_entry", "adx_at_entry",
+                "ticker",
+                "direction",
+                "entry_date",
+                "entry_price",
+                "tier1_exit_date",
+                "tier1_exit_price",
+                "tier2_exit_date",
+                "tier2_exit_price",
+                "exit_reason",
+                "stopped_out",
+                "timed_out",
+                "holding_days",
+                "pnl",
+                "return_pct",
+                "quality_grade",
+                "fcf_to_ni",
+                "accruals",
+                "z_score_at_entry",
+                "rsi_at_entry",
+                "adx_at_entry",
             ]
         )
         for t in trades:
             writer.writerow(
                 [
-                    t.ticker, t.direction, t.entry_date.isoformat(),
+                    t.ticker,
+                    t.direction,
+                    t.entry_date.isoformat(),
                     f"{t.entry_price:.4f}",
                     t.tier1_exit_date.isoformat() if t.tier1_exit_date else "",
                     f"{t.tier1_exit_price:.4f}" if t.tier1_exit_price is not None else "",
                     t.tier2_exit_date.isoformat() if t.tier2_exit_date else "",
                     f"{t.tier2_exit_price:.4f}" if t.tier2_exit_price is not None else "",
                     t.exit_reason,
-                    str(t.stopped_out).lower(), str(t.timed_out).lower(),
+                    str(t.stopped_out).lower(),
+                    str(t.timed_out).lower(),
                     t.holding_days,
-                    f"{t.pnl:.6f}", f"{t.return_pct:.6f}",
+                    f"{t.pnl:.6f}",
+                    f"{t.return_pct:.6f}",
                     t.quality_grade or "",
                     f"{t.fcf_to_ni:.4f}" if t.fcf_to_ni is not None else "",
                     f"{t.accruals:.6f}" if t.accruals is not None else "",
@@ -907,13 +973,10 @@ def _conclusion(baseline: VariantSummary, treatment: VariantSummary, rejected: l
     if baseline.sharpe_annualized == 0:
         sharpe_line = "baseline Sharpe is zero — no comparison possible"
     else:
-        delta = (
-            (treatment.sharpe_annualized - baseline.sharpe_annualized)
-            / abs(baseline.sharpe_annualized)
-        )
+        delta = (treatment.sharpe_annualized - baseline.sharpe_annualized) / abs(baseline.sharpe_annualized)
         direction = "improved" if delta > 0 else "did not improve"
         sharpe_line = (
-            f"{label} {direction} Sharpe by {delta*100:+.1f}% "
+            f"{label} {direction} Sharpe by {delta * 100:+.1f}% "
             f"(baseline {baseline.sharpe_annualized:+.2f} → {label} {treatment.sharpe_annualized:+.2f})"
         )
     n_rejected = len(rejected)
@@ -922,7 +985,7 @@ def _conclusion(baseline: VariantSummary, treatment: VariantSummary, rejected: l
     rejected_line = (
         f"the LOW-grade-only gate would have rejected {n_rejected} trades — "
         f"{losers} losers, {winners} winners "
-        f"({(winners/n_rejected*100) if n_rejected else 0:.0f}% would have been profitable)"
+        f"({(winners / n_rejected * 100) if n_rejected else 0:.0f}% would have been profitable)"
     )
     return sharpe_line + "\n  " + rejected_line
 
@@ -959,9 +1022,7 @@ def _apply_overrides_from_args(args: argparse.Namespace) -> None:
     global _HARD_STOP_PCT_OVERRIDE, _MAX_HOLD_DAYS_OVERRIDE, _VOLUME_CLIMAX_OVERRIDE
     global _SIGNAL_MODE_OVERRIDE
     global _REGIME_FILTER_OVERRIDE, _REGIME_TARGET_OVERRIDE
-    _HARD_STOP_PCT_OVERRIDE = (
-        float(args.stop_pct) if getattr(args, "stop_pct", None) is not None else None
-    )
+    _HARD_STOP_PCT_OVERRIDE = float(args.stop_pct) if getattr(args, "stop_pct", None) is not None else None
     _MAX_HOLD_DAYS_OVERRIDE = (
         int(args.max_hold_days) if getattr(args, "max_hold_days", None) is not None else None
     )
@@ -970,18 +1031,12 @@ def _apply_overrides_from_args(args: argparse.Namespace) -> None:
         if getattr(args, "volume_climax_multiplier", None) is not None
         else None
     )
-    _SIGNAL_MODE_OVERRIDE = (
-        str(args.signal_mode) if getattr(args, "signal_mode", None) is not None else None
-    )
+    _SIGNAL_MODE_OVERRIDE = str(args.signal_mode) if getattr(args, "signal_mode", None) is not None else None
     _REGIME_FILTER_OVERRIDE = (
-        str(args.regime_filter_v1)
-        if getattr(args, "regime_filter_v1", None) is not None
-        else None
+        str(args.regime_filter_v1) if getattr(args, "regime_filter_v1", None) is not None else None
     )
     _REGIME_TARGET_OVERRIDE = (
-        str(args.regime_target)
-        if getattr(args, "regime_target", None) is not None
-        else None
+        str(args.regime_target) if getattr(args, "regime_target", None) is not None else None
     )
 
 
@@ -1016,14 +1071,56 @@ def _trade_records_to_search_trades(trades: list[TradeRecord]) -> list:
 # Mega-cap universe matched to the standard Reversion backtest set so that
 # search runs are apples-to-apples with the standard backtest's results.
 _REVERSION_SEARCH_UNIVERSE = (
-    "SPY", "QQQ", "IWM",
-    "AAPL", "MSFT", "AMZN", "GOOGL", "META", "TSLA", "NVDA",
-    "JPM", "V", "WMT", "DIS", "NFLX", "BA", "CAT", "GE", "GM", "F",
-    "XOM", "CVX", "PFE", "JNJ", "MRK", "ABBV", "PG", "KO", "PEP",
-    "MCD", "SBUX", "HD", "LOW", "TGT", "COST",
-    "LMT", "RTX", "NOC", "GD",
-    "SO", "DUK", "NEE",
-    "PLTR", "UBER", "ABNB", "SNAP", "RBLX", "RIVN", "LCID", "FSLR",
+    "SPY",
+    "QQQ",
+    "IWM",
+    "AAPL",
+    "MSFT",
+    "AMZN",
+    "GOOGL",
+    "META",
+    "TSLA",
+    "NVDA",
+    "JPM",
+    "V",
+    "WMT",
+    "DIS",
+    "NFLX",
+    "BA",
+    "CAT",
+    "GE",
+    "GM",
+    "F",
+    "XOM",
+    "CVX",
+    "PFE",
+    "JNJ",
+    "MRK",
+    "ABBV",
+    "PG",
+    "KO",
+    "PEP",
+    "MCD",
+    "SBUX",
+    "HD",
+    "LOW",
+    "TGT",
+    "COST",
+    "LMT",
+    "RTX",
+    "NOC",
+    "GD",
+    "SO",
+    "DUK",
+    "NEE",
+    "PLTR",
+    "UBER",
+    "ABNB",
+    "SNAP",
+    "RBLX",
+    "RIVN",
+    "LCID",
+    "FSLR",
 )
 
 
@@ -1078,16 +1175,7 @@ async def load_reversion_window_context(
     pool = await build_asyncpg_pool(db_url)
     try:
         tier_costs = await load_tier_costs(pool)
-        async with pool.acquire() as conn:
-            rows = await conn.fetch(
-                """
-                SELECT DISTINCT ticker FROM platform.fundamentals_quarterly
-                WHERE ticker = ANY($1::text[])
-                ORDER BY ticker
-                """,
-                list(universe),
-            )
-        funded_tickers = [r["ticker"] for r in rows]
+        funded_tickers = await _funded_tickers(pool, list(universe))
         load_tickers = list({*funded_tickers, SPY_SYMBOL})
         prices = await _load_prices(pool, load_tickers, start, end)
         fundamentals = await _load_fundamentals(pool, funded_tickers)
@@ -1097,9 +1185,14 @@ async def load_reversion_window_context(
     panels = {ticker: _precompute_indicators(df) for ticker, df in prices.items()}
     spy_panel = panels.pop(SPY_SYMBOL, None)
     return ReversionWindowContext(
-        panels=panels, spy_panel=spy_panel, fundamentals=fundamentals,
-        tier_round_trip_costs=tier_costs, funded_tickers=funded_tickers,
-        start=start, end=end, universe=universe,
+        panels=panels,
+        spy_panel=spy_panel,
+        fundamentals=fundamentals,
+        tier_round_trip_costs=tier_costs,
+        funded_tickers=funded_tickers,
+        start=start,
+        end=end,
+        universe=universe,
     )
 
 
@@ -1120,36 +1213,23 @@ def run_reversion_with_context(
     global _SIGNAL_MODE_OVERRIDE
     global _REGIME_FILTER_OVERRIDE, _REGIME_TARGET_OVERRIDE
     overrides = dict(overrides or {})
-    _HARD_STOP_PCT_OVERRIDE = (
-        float(overrides["stop_pct"]) if "stop_pct" in overrides else None
-    )
-    _MAX_HOLD_DAYS_OVERRIDE = (
-        int(overrides["max_hold_days"]) if "max_hold_days" in overrides else None
-    )
+    _HARD_STOP_PCT_OVERRIDE = float(overrides["stop_pct"]) if "stop_pct" in overrides else None
+    _MAX_HOLD_DAYS_OVERRIDE = int(overrides["max_hold_days"]) if "max_hold_days" in overrides else None
     _VOLUME_CLIMAX_OVERRIDE = (
-        float(overrides["volume_climax_multiplier"])
-        if "volume_climax_multiplier" in overrides else None
+        float(overrides["volume_climax_multiplier"]) if "volume_climax_multiplier" in overrides else None
     )
     # Lab-only signal-mode override — reset per call (mirror of momentum
     # H-MVM-8). When absent / "price_z" the rest of this function runs
     # the existing price_z code path verbatim (byte-identical with the
     # flag off, C1).
-    _SIGNAL_MODE_OVERRIDE = (
-        str(overrides["signal_mode"]) if "signal_mode" in overrides else None
-    )
+    _SIGNAL_MODE_OVERRIDE = str(overrides["signal_mode"]) if "signal_mode" in overrides else None
     # Lab-only partial-axis regime-filter overrides (2026-05-22). Reset
     # per call - the live path never imports this module, so the
     # module-globals never affect production. The mask is materialised
     # below INSIDE a try/finally so the reset happens even if the
     # variant runner raises.
-    _REGIME_FILTER_OVERRIDE = (
-        str(overrides["regime_filter_v1"])
-        if "regime_filter_v1" in overrides else None
-    )
-    _REGIME_TARGET_OVERRIDE = (
-        str(overrides["regime_target"])
-        if "regime_target" in overrides else None
-    )
+    _REGIME_FILTER_OVERRIDE = str(overrides["regime_filter_v1"]) if "regime_filter_v1" in overrides else None
+    _REGIME_TARGET_OVERRIDE = str(overrides["regime_target"]) if "regime_target" in overrides else None
     _TIER_ROUND_TRIP_COSTS.clear()
     _TIER_ROUND_TRIP_COSTS.update(context.tier_round_trip_costs)
 
@@ -1160,7 +1240,9 @@ def run_reversion_with_context(
         from reversion.lab_pca_residual import run_pca_residual_with_context
 
         return run_pca_residual_with_context(
-            context, overrides=overrides, trade_log_path=trade_log_path,
+            context,
+            overrides=overrides,
+            trade_log_path=trade_log_path,
         )
 
     z_thr = float(overrides.get("z_threshold", 3.0))
@@ -1177,10 +1259,20 @@ def run_reversion_with_context(
         _REGIME_TARGET_OVERRIDE = None
         _SIGNAL_MODE_OVERRIDE = None
         return BacktestRunResult(
-            engine="reversion", parameters=overrides, credibility_score=0, passed_gate=False,
-            sharpe=0.0, profit_factor=0.0, max_drawdown=0.0, trades=0, dsr=0.0,
-            min_btl_gap=0, trades_per_param=0.0, sensitivity_score=None,
-            ruin_probability=0.0, trade_log=[],
+            engine="reversion",
+            parameters=overrides,
+            credibility_score=0,
+            passed_gate=False,
+            sharpe=0.0,
+            profit_factor=0.0,
+            max_drawdown=0.0,
+            trades=0,
+            dsr=0.0,
+            min_btl_gap=0,
+            trades_per_param=0.0,
+            sensitivity_score=None,
+            ruin_probability=0.0,
+            trade_log=[],
         )
 
     # Build the per-session regime mask when the gate is on. Captured
@@ -1282,6 +1374,7 @@ def _build_session_regime_mask(
         decompose_regime_tuple_id,
         session_matches_target,
     )
+
     target_class = decompose_regime_tuple_id(target_hash)
     bundle = context.regime_bundle
     if bundle is None:
@@ -1291,9 +1384,7 @@ def _build_session_regime_mask(
             "(or attach a synthesized RegimeBundle for tests)."
         )
     if not isinstance(bundle, RegimeBundle):
-        raise ValueError(
-            f"context.regime_bundle must be a RegimeBundle; got {type(bundle)!r}"
-        )
+        raise ValueError(f"context.regime_bundle must be a RegimeBundle; got {type(bundle)!r}")
 
     # Materialise per-session classification across every date in the
     # union of panel indices that falls inside [context.start,
@@ -1327,7 +1418,10 @@ async def run_for_search(
     :func:`load_reversion_window_context` + :func:`run_reversion_with_context`
     so the DB load is amortised across all candidates."""
     ctx = await load_reversion_window_context(
-        db_url=db_url, start=start, end=end, universe=universe,
+        db_url=db_url,
+        start=start,
+        end=end,
+        universe=universe,
     )
     return run_reversion_with_context(ctx, overrides=overrides, trade_log_path=trade_log_path)
 
@@ -1421,25 +1515,58 @@ async def amain(args: argparse.Namespace) -> int:
         # later (e.g. via FMP Premium), drop the BACKTEST_UNIVERSE filter
         # below.
         _REVERSION_BACKTEST_UNIVERSE = (
-            "SPY", "QQQ", "IWM",
-            "AAPL", "MSFT", "AMZN", "GOOGL", "META", "TSLA", "NVDA",
-            "JPM", "V", "WMT", "DIS", "NFLX", "BA", "CAT", "GE", "GM", "F",
-            "XOM", "CVX", "PFE", "JNJ", "MRK", "ABBV", "PG", "KO", "PEP",
-            "MCD", "SBUX", "HD", "LOW", "TGT", "COST",
-            "LMT", "RTX", "NOC", "GD",
-            "SO", "DUK", "NEE",
-            "PLTR", "UBER", "ABNB", "SNAP", "RBLX", "RIVN", "LCID", "FSLR",
+            "SPY",
+            "QQQ",
+            "IWM",
+            "AAPL",
+            "MSFT",
+            "AMZN",
+            "GOOGL",
+            "META",
+            "TSLA",
+            "NVDA",
+            "JPM",
+            "V",
+            "WMT",
+            "DIS",
+            "NFLX",
+            "BA",
+            "CAT",
+            "GE",
+            "GM",
+            "F",
+            "XOM",
+            "CVX",
+            "PFE",
+            "JNJ",
+            "MRK",
+            "ABBV",
+            "PG",
+            "KO",
+            "PEP",
+            "MCD",
+            "SBUX",
+            "HD",
+            "LOW",
+            "TGT",
+            "COST",
+            "LMT",
+            "RTX",
+            "NOC",
+            "GD",
+            "SO",
+            "DUK",
+            "NEE",
+            "PLTR",
+            "UBER",
+            "ABNB",
+            "SNAP",
+            "RBLX",
+            "RIVN",
+            "LCID",
+            "FSLR",
         )
-        async with pool.acquire() as conn:
-            rows = await conn.fetch(
-                """
-                SELECT DISTINCT ticker FROM platform.fundamentals_quarterly
-                WHERE ticker = ANY($1::text[])
-                ORDER BY ticker
-                """,
-                list(_REVERSION_BACKTEST_UNIVERSE),
-            )
-        funded_tickers = [r["ticker"] for r in rows]
+        funded_tickers = await _funded_tickers(pool, list(_REVERSION_BACKTEST_UNIVERSE))
         if not funded_tickers:
             print(
                 "platform.fundamentals_quarterly is empty — populate the cache first via "
@@ -1482,7 +1609,9 @@ async def amain(args: argparse.Namespace) -> int:
         z_threshold=2.0,
         filter_mode="none",
     )
-    logger.info("reversion.backtest.running_variant", variant="quality-gated", config="z=2.0, reject LOW or no-data")
+    logger.info(
+        "reversion.backtest.running_variant", variant="quality-gated", config="z=2.0, reject LOW or no-data"
+    )
     gated_trades, _ = _run_variant(
         variant="quality-gated",
         panels=panels,
@@ -1549,26 +1678,40 @@ async def amain(args: argparse.Namespace) -> int:
             writer = csv.writer(fh)
             writer.writerow(
                 [
-                    "ticker", "direction", "entry_date", "entry_price",
-                    "tier1_exit_date", "tier1_exit_price",
-                    "tier2_exit_date", "tier2_exit_price",
-                    "stopped_out", "timed_out", "holding_days",
-                    "pnl", "return_pct", "quality_grade",
-                    "fcf_to_ni", "accruals",
+                    "ticker",
+                    "direction",
+                    "entry_date",
+                    "entry_price",
+                    "tier1_exit_date",
+                    "tier1_exit_price",
+                    "tier2_exit_date",
+                    "tier2_exit_price",
+                    "stopped_out",
+                    "timed_out",
+                    "holding_days",
+                    "pnl",
+                    "return_pct",
+                    "quality_grade",
+                    "fcf_to_ni",
+                    "accruals",
                 ]
             )
             for t in rejected:
                 writer.writerow(
                     [
-                        t.ticker, t.direction, t.entry_date.isoformat(),
+                        t.ticker,
+                        t.direction,
+                        t.entry_date.isoformat(),
                         f"{t.entry_price:.4f}",
                         t.tier1_exit_date.isoformat() if t.tier1_exit_date else "",
                         f"{t.tier1_exit_price:.4f}" if t.tier1_exit_price is not None else "",
                         t.tier2_exit_date.isoformat() if t.tier2_exit_date else "",
                         f"{t.tier2_exit_price:.4f}" if t.tier2_exit_price is not None else "",
-                        str(t.stopped_out).lower(), str(t.timed_out).lower(),
+                        str(t.stopped_out).lower(),
+                        str(t.timed_out).lower(),
                         t.holding_days,
-                        f"{t.pnl:.6f}", f"{t.return_pct:.6f}",
+                        f"{t.pnl:.6f}",
+                        f"{t.return_pct:.6f}",
                         t.quality_grade or "",
                         f"{t.fcf_to_ni:.4f}" if t.fcf_to_ni is not None else "",
                         f"{t.accruals:.6f}" if t.accruals is not None else "",
@@ -1579,9 +1722,7 @@ async def amain(args: argparse.Namespace) -> int:
     if args.trade_log is not None:
         from tpcore.backtest.search import write_trade_log_csv
 
-        n = write_trade_log_csv(
-            args.trade_log, _trade_records_to_search_trades(combined_trades)
-        )
+        n = write_trade_log_csv(args.trade_log, _trade_records_to_search_trades(combined_trades))
         print(f"combined-filter search trade-log → {args.trade_log}  rows={n}")
 
     # ── Statistical Validation + credibility rubric ────────────────────────
@@ -1720,9 +1861,7 @@ def _trades_to_diagnostic_dicts(trades: list[TradeRecord]) -> list[dict]:
     return out
 
 
-def _panels_to_price_data(
-    panels: dict[str, pd.DataFrame], spy_panel: pd.DataFrame | None
-) -> pd.DataFrame:
+def _panels_to_price_data(panels: dict[str, pd.DataFrame], spy_panel: pd.DataFrame | None) -> pd.DataFrame:
     """Stack indicator panels (plus SPY) into the long-form frame the
     diagnostic expects (columns: ticker, date, close, high, low, open).
 
@@ -1826,22 +1965,46 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Skip the Statistical Validation section (saves ~30s of compute).",
     )
     # ─── Parameter-search hooks ─────────────────────────────────────────────
-    p.add_argument("--json", dest="json_output", action="store_true",
-                   help="Emit a single JSON object with search-pipeline metrics and exit 0.")
-    p.add_argument("--trade-log", type=Path, default=None,
-                   help="Write standardised per-trade CSV to this path.")
-    p.add_argument("--z-threshold", type=float, default=None,
-                   help="Override z-score threshold (default 3.0 for the winner variant).")
-    p.add_argument("--earnings-quality", choices=("HIGH", "MEDIUM_AND_HIGH"), default=None,
-                   help="HIGH → only HIGH-grade earnings; MEDIUM_AND_HIGH → reject only LOW/no-data.")
-    p.add_argument("--volume-climax-multiplier", type=float, default=None,
-                   help="Min volume-climax ratio for a candidate (default 1.0 = no gate).")
-    p.add_argument("--max-hold-days", type=int, default=None,
-                   help="Override max holding period in trading days (default 30).")
-    p.add_argument("--stop-pct", type=float, default=None,
-                   help="Override hard-stop percentage (default 0.08).")
     p.add_argument(
-        "--signal-mode", type=str, default=None,
+        "--json",
+        dest="json_output",
+        action="store_true",
+        help="Emit a single JSON object with search-pipeline metrics and exit 0.",
+    )
+    p.add_argument(
+        "--trade-log", type=Path, default=None, help="Write standardised per-trade CSV to this path."
+    )
+    p.add_argument(
+        "--z-threshold",
+        type=float,
+        default=None,
+        help="Override z-score threshold (default 3.0 for the winner variant).",
+    )
+    p.add_argument(
+        "--earnings-quality",
+        choices=("HIGH", "MEDIUM_AND_HIGH"),
+        default=None,
+        help="HIGH → only HIGH-grade earnings; MEDIUM_AND_HIGH → reject only LOW/no-data.",
+    )
+    p.add_argument(
+        "--volume-climax-multiplier",
+        type=float,
+        default=None,
+        help="Min volume-climax ratio for a candidate (default 1.0 = no gate).",
+    )
+    p.add_argument(
+        "--max-hold-days",
+        type=int,
+        default=None,
+        help="Override max holding period in trading days (default 30).",
+    )
+    p.add_argument(
+        "--stop-pct", type=float, default=None, help="Override hard-stop percentage (default 0.08)."
+    )
+    p.add_argument(
+        "--signal-mode",
+        type=str,
+        default=None,
         choices=["price_z", "pca_residual"],
         help=(
             "Lab-only candidate toggle. 'price_z' (default) runs the "
@@ -1852,7 +2015,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     p.add_argument(
-        "--regime-filter-v1", type=str, default=None,
+        "--regime-filter-v1",
+        type=str,
+        default=None,
         choices=[
             "off",
             "vol_only",
@@ -1871,7 +2036,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     p.add_argument(
-        "--regime-target", type=str, default=None,
+        "--regime-target",
+        type=str,
+        default=None,
         help=(
             "Lab-only 12-char SHA12 regime_tuple_id the gate matches "
             "against. Required when --regime-filter-v1 is not 'off'. "
