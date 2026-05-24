@@ -230,25 +230,28 @@ def _parse_params(raw: list[str] | None) -> dict[str, Any]:
 
 
 async def _load_daily_bars_config(pool: asyncpg.Pool) -> dict[str, Any]:
-    """Read the config JSON from the `daily_bars` row of platform.ingestion_jobs.
+    """Return the daily_bars adapter config.
 
-    Hard-fails if the row is missing — the CLI is explicit that filter
-    values must come from the database, not be hardcoded.
+    Previously read from a `daily_bars` row in `platform.ingestion_jobs`,
+    but that scheduler table was frozen 2026-05-12 when the
+    `application_log` event-bus + deterministic-cascade architecture
+    replaced the Railway-tick dispatcher (see operator memory:
+    `project_railway_hobby_tier`). The config never changed in
+    production after the freeze, so it is inlined here. To override at
+    invocation use `--param KEY=VALUE` on the CLI.
+
+    Signature kept (pool-accepting async) so existing call sites and
+    monkeypatch-based tests don't need touching.
     """
-    row = await pool.fetchrow("SELECT config FROM platform.ingestion_jobs WHERE job_name = 'daily_bars'")
-    if row is None:
-        raise RuntimeError(
-            "ops: platform.ingestion_jobs has no row for job_name='daily_bars'. "
-            "Seed it before running --update. Example:\n"
-            "  INSERT INTO platform.ingestion_jobs (job_name, schedule, provider, config) "
-            "VALUES ('daily_bars', '@daily', 'alpaca', "
-            '\'{"universe": "all_active", "lookback_days": 7, '
-            '"min_price": 5, "min_volume": 250000}\'::jsonb);'
-        )
-    cfg = row["config"]
-    if isinstance(cfg, str):
-        cfg = json.loads(cfg)
-    return dict(cfg)
+    del pool  # config no longer DB-backed; pool retained for ABI stability
+    return {
+        "universe": "all_active",
+        "min_price": 5.0,
+        "batch_size": 50,
+        "min_volume": 250000,
+        "lookback_days": 7,
+        "inter_batch_sleep_sec": 0.3,
+    }
 
 
 async def _coarse_filtered_universe(
@@ -10862,8 +10865,8 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="KEY=VALUE",
         help=(
             "--stage only: override a stage config key for this run "
-            "(repeatable). Overlays the platform.ingestion_jobs config "
-            "dict the stage handler receives. Values are coerced "
+            "(repeatable). Overlays the inline stage-config dict the "
+            "stage handler receives. Values are coerced "
             "int/float/bool where unambiguous, else string. This is how "
             "backfills + special pulls run — via the canonical CLI with "
             "parameters, NOT a one-off script. Example: "

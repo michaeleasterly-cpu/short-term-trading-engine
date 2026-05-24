@@ -38,7 +38,7 @@ class DispositionPolicy(BaseModel):
 
 _AUDIT_KK_CHECKS: tuple[str, ...] = (
     "adapter_contract", "row_count", "freshness", "validation_status",
-    "ingestion_jobs", "sentinel_basket", "credit_spread_history",
+    "sentinel_basket", "credit_spread_history",
     "csv_archive_presence", "shrinkage_detector", "governor_enforcement",
     "hy_spread_decommission", "insider_sentiment_period",
 )

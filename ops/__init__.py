@@ -1,6 +1,6 @@
 """Ops daemons + orchestration entrypoints (engine_service,
 
-engine_dispatch, ingestion_engine, platform_pipeline, cron_*).
+engine_dispatch, platform_pipeline, cron_*).
 
 Regular package (not a namespace dir) so ``from ops.<mod> import …``
 resolves DETERMINISTICALLY: a real-package hit at the repo root

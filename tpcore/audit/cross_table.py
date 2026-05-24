@@ -6,7 +6,7 @@ ALSO persist to ``platform.data_quality_log`` (so the auditheal loop
 can detect reds), reusing ``audit_data_pipeline._persist``'s exact
 severity convention. The stdout roll-up is preserved by the thin
 script caller; the informational ``dump`` sections (risk_state /
-open_orders / ingestion_jobs) stay in the script.
+open_orders) stay in the script.
 
 Convergence contract: a check whose violation has a proven canonical
 remediation (today: the two ``tradier_options_chains`` checks fixed by

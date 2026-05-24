@@ -4,7 +4,7 @@ Thin caller: the structured cross-table violation checks now live in
 ``tpcore.audit.cross_table`` (the SoT, persisted to data_quality_log
 so the auditheal loop can act on them). This script preserves the
 operator-facing stdout roll-up and the informational dump sections
-(risk_state / open_orders / ingestion_jobs).
+(risk_state / open_orders).
 
 Exit code is intentionally still 0 on violations in this phase — the
 honest gate flip is wired in a later phase via
@@ -46,15 +46,6 @@ async def main() -> int:
             print("\n=== open_orders (dump) ===")
             for r in await conn.fetch("SELECT * FROM platform.open_orders"):
                 print(f"  • {dict(r)}")
-            print("\n=== ingestion_jobs (dump) ===")
-            for r in await conn.fetch(
-                "SELECT job_name, last_status, last_run_at, last_error "
-                "FROM platform.ingestion_jobs ORDER BY job_name"
-            ):
-                err = (r["last_error"] or "")[:80]
-                status = r["last_status"] or "<none>"
-                print(f"  • {r['job_name']:30s} status={status:10s} "
-                      f"last_run={r['last_run_at']}  err={err}")
 
         n_red = sum(1 for f in findings if f.severity != "OK")
         print(f"\nTOTAL cross-table checks={len(findings)}  🔴 {n_red}")
