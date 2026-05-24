@@ -102,7 +102,7 @@ from tpcore.backtest.search import (
     write_trade_log_csv,
 )
 from tpcore.backtest.statistical_validation import write_credibility_score
-from tpcore.data.repositories import PricesRepo
+from tpcore.data.repositories import EarningsRepo, InsiderRepo, PricesRepo
 from tpcore.db import build_asyncpg_pool
 from tpcore.identity.dispatcher import IdentityDispatcher
 from tpcore.lab.target import LabPrimaryMetric, LabTarget
@@ -302,28 +302,42 @@ async def _fetch_insider_rows(
     start: date_t,
     end: date_t,
 ) -> pd.DataFrame:
-    sql = """
-        SELECT ticker, filing_date, insider_name, transaction_type, value
-        FROM platform.sec_insider_transactions
-        WHERE ticker = ANY($1)
-          AND filing_date BETWEEN $2 AND $3
+    """Edge adapter: ticker universe in, ticker-keyed DataFrame out.
+
+    Dispatches ticker → classification_id via IdentityDispatcher and
+    queries InsiderRepo against ``platform.insider_transactions``
+    (renamed from sec_insider_transactions in v2.2 phase 1; the old
+    name is GONE from the live DB).
     """
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(sql, list(universe), start, end)
+    dispatcher = IdentityDispatcher(pool)
+    repo = InsiderRepo(pool)
+
+    cid_to_ticker: dict[str, str] = {}
+    for t in universe:
+        cid = await dispatcher.ticker_to_classification_id(t)
+        if cid is not None:
+            cid_to_ticker[cid] = t
+
+    if not cid_to_ticker:
+        return pd.DataFrame(columns=["ticker", "filing_date", "insider_name", "transaction_type", "value"])
+
+    txns_by_cid = await repo.get_window_batch(list(cid_to_ticker), start, end)
+    rows: list[dict] = []
+    for cid, txns in txns_by_cid.items():
+        ticker = cid_to_ticker[cid]
+        for txn in txns:
+            rows.append(
+                {
+                    "ticker": ticker,
+                    "filing_date": txn.filing_date,
+                    "insider_name": txn.insider_name,
+                    "transaction_type": txn.transaction_type,
+                    "value": float(txn.value),
+                }
+            )
     if not rows:
         return pd.DataFrame(columns=["ticker", "filing_date", "insider_name", "transaction_type", "value"])
-    return pd.DataFrame(
-        [
-            {
-                "ticker": r["ticker"],
-                "filing_date": r["filing_date"],
-                "insider_name": r["insider_name"],
-                "transaction_type": r["transaction_type"],
-                "value": float(r["value"]),
-            }
-            for r in rows
-        ]
-    )
+    return pd.DataFrame(rows)
 
 
 async def _fetch_prices(
@@ -401,29 +415,32 @@ async def _fetch_earnings_events(
     DataFrame, so adding this read is byte-identical to the legacy
     behaviour (proven by the C1 characterization test).
     """
-    sql = """
-        SELECT ticker, event_date, event_type, magnitude_pct
-        FROM platform.earnings_events
-        WHERE ticker = ANY($1)
-          AND event_type = 'EARNINGS_BEAT'
-          AND magnitude_pct > 0
-          AND event_date BETWEEN $2 AND $3
-    """
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(sql, list(universe), start, end)
+    dispatcher = IdentityDispatcher(pool)
+    repo = EarningsRepo(pool)
+
+    cid_to_ticker: dict[str, str] = {}
+    for t in universe:
+        cid = await dispatcher.ticker_to_classification_id(t)
+        if cid is not None:
+            cid_to_ticker[cid] = t
+
+    if not cid_to_ticker:
+        return pd.DataFrame(columns=["ticker", "event_date", "event_type", "magnitude_pct"])
+
+    events_by_cid = await repo.get_beats(list(cid_to_ticker), start, end)
+    rows = [
+        {
+            "ticker": cid_to_ticker[cid],
+            "event_date": ev.event_date,
+            "event_type": ev.event_type,
+            "magnitude_pct": float(ev.magnitude_pct) if ev.magnitude_pct is not None else 0.0,
+        }
+        for cid, events in events_by_cid.items()
+        for ev in events
+    ]
     if not rows:
         return pd.DataFrame(columns=["ticker", "event_date", "event_type", "magnitude_pct"])
-    return pd.DataFrame(
-        [
-            {
-                "ticker": r["ticker"],
-                "event_date": r["event_date"],
-                "event_type": r["event_type"],
-                "magnitude_pct": float(r["magnitude_pct"]) if r["magnitude_pct"] is not None else 0.0,
-            }
-            for r in rows
-        ]
-    )
+    return pd.DataFrame(rows)
 
 
 async def _round_trip_cost_by_ticker(
