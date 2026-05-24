@@ -134,5 +134,18 @@ class EarningsRepo:
             out.setdefault(cid, []).append(EarningsEvent.model_validate(d))
         return out
 
+    async def cids_with_event_type(self, event_type: str) -> set[str]:
+        """All cids with at least one event of ``event_type``.
+
+        E.g. ``cids_with_event_type('EARNINGS_BEAT')`` returns every
+        instrument that has had at least one positive (or any) earnings
+        beat. Single SQL, whole-table scan — used by vector for the
+        universe-construction primitive.
+        """
+        sql = "SELECT DISTINCT classification_id FROM platform.earnings_events WHERE event_type = $1"
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(sql, event_type)
+        return {r["classification_id"] for r in rows if r["classification_id"] is not None}
+
 
 __all__ = ["EarningsEvent", "EarningsRepo"]

@@ -202,5 +202,25 @@ class FundamentalsRepo:
             rows = await conn.fetch(sql, list(classification_ids))
         return {r["classification_id"] for r in rows}
 
+    async def cids_with_value_factors(self) -> set[str]:
+        """All cids with non-null pb AND de AND revenue (vector's universe filter).
+
+        Returns the set of classification_ids that have at least one
+        filing with all three value-factor columns populated. Engines
+        that consume pb/de/revenue (vector) need this to filter their
+        universe to instruments with complete factor coverage.
+
+        Single SQL with DISTINCT — no ticker scoping (whole-table scan
+        intentional; this is the universe-construction primitive).
+        """
+        sql = (
+            "SELECT DISTINCT classification_id "
+            "FROM platform.fundamentals_quarterly "
+            "WHERE pb IS NOT NULL AND de IS NOT NULL AND revenue IS NOT NULL"
+        )
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(sql)
+        return {r["classification_id"] for r in rows if r["classification_id"] is not None}
+
 
 __all__ = ["FundamentalsRepo", "QuarterlyFundamentals"]

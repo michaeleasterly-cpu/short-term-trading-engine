@@ -13,6 +13,7 @@ Required env:
     ALPACA_KEY / ALPACA_SECRET  — paper credentials.
     VECTOR_ENGINE_EQUITY        — optional; default 10000.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -31,7 +32,9 @@ import structlog
 from tpcore.aar.writer import AARWriter
 from tpcore.alpaca import AlpacaPaperBrokerAdapter
 from tpcore.data.postgres_data_adapter import PostgresDataAdapter
+from tpcore.data.repositories import FundamentalsRepo, PricesRepo
 from tpcore.db import build_asyncpg_pool
+from tpcore.identity.dispatcher import IdentityDispatcher
 from tpcore.logging import DBLogHandler
 from tpcore.parity import LivePaperParityHarness
 from tpcore.risk.governor import RiskGovernor
@@ -70,9 +73,7 @@ class RunSummary:
         )
 
 
-async def _load_bars(
-    pool, tickers: tuple[str, ...], lookback_end: date_t
-) -> dict[str, pd.DataFrame]:
+async def _load_bars(pool, tickers: tuple[str, ...], lookback_end: date_t) -> dict[str, pd.DataFrame]:
     """Pull the last LOOKBACK_DAYS sessions for each ticker.
 
     Date lower bound: ``lookback_end - 400 calendar days`` ≈ 280 trading
@@ -84,26 +85,34 @@ async def _load_bars(
     from datetime import timedelta
 
     lookback_start = lookback_end - timedelta(days=400)
-    sql = """
-        SELECT ticker, date, open, high, low, close, volume
-        FROM platform.prices_daily
-        WHERE ticker = ANY($1) AND date BETWEEN $2 AND $3
-        ORDER BY ticker, date
-    """
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(sql, list(tickers), lookback_start, lookback_end)
+    dispatcher = IdentityDispatcher(pool)
+    repo = PricesRepo(pool)
+    cid_to_ticker: dict[str, str] = {}
+    for t in tickers:
+        cid = await dispatcher.ticker_to_classification_id(t)
+        if cid is not None:
+            cid_to_ticker[cid] = t
     by_ticker: dict[str, list[dict]] = defaultdict(list)
-    for r in rows:
-        by_ticker[r["ticker"]].append(
-            {
-                "date": r["date"],
-                "open": float(r["open"]),
-                "high": float(r["high"]),
-                "low": float(r["low"]),
-                "close": float(r["close"]),
-                "volume": int(r["volume"]),
-            }
-        )
+    if not cid_to_ticker:
+        return by_ticker
+    bars_by_cid = await repo.get_window_batch(
+        list(cid_to_ticker),
+        lookback_start,
+        lookback_end,
+    )
+    for cid, bars in bars_by_cid.items():
+        ticker = cid_to_ticker[cid]
+        for b in sorted(bars, key=lambda x: x.date):
+            by_ticker[ticker].append(
+                {
+                    "date": b.date,
+                    "open": float(b.open),
+                    "high": float(b.high),
+                    "low": float(b.low),
+                    "close": float(b.close),
+                    "volume": int(b.volume),
+                }
+            )
     out: dict[str, pd.DataFrame] = {}
     for ticker, ticker_rows in by_ticker.items():
         df = pd.DataFrame(ticker_rows).set_index("date").sort_index()
@@ -122,20 +131,49 @@ async def _load_fundamentals(
     for every requested ticker, then groups in Python: row 0 is "latest",
     rows 1..N are "history". Tickers with zero rows map to None.
     """
+    from datetime import date as _date
     from decimal import Decimal as _Decimal
 
-    sql = """
-        SELECT ticker, filing_date, period_end_date, period_label,
-               net_income, fcf, operating_cash_flow, capex, revenue,
-               total_assets, total_liabilities, current_assets, current_liabilities,
-               receivables, cash_and_equivalents, shares_outstanding
-        FROM platform.fundamentals_quarterly
-        WHERE ticker = ANY($1::text[]) AND filing_date <= $2
-        ORDER BY ticker, filing_date DESC
-    """
+    dispatcher = IdentityDispatcher(pool)
+    repo = FundamentalsRepo(pool)
     upper_tickers = [t.upper() for t in tickers]
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(sql, upper_tickers, as_of)
+    cid_to_ticker: dict[str, str] = {}
+    for t in upper_tickers:
+        cid = await dispatcher.ticker_to_classification_id(t)
+        if cid is not None:
+            cid_to_ticker[cid] = t
+    filings_by_cid: dict[str, list] = {}
+    if cid_to_ticker:
+        filings_by_cid = await repo.get_window_batch(
+            list(cid_to_ticker),
+            _date(1900, 1, 1),
+            as_of,
+        )
+    # Reassemble into the legacy (ticker, filing_date DESC) row order.
+    rows = []
+    for cid, filings in filings_by_cid.items():
+        ticker = cid_to_ticker[cid]
+        for f in sorted(filings, key=lambda x: x.filing_date, reverse=True):
+            rows.append(
+                {
+                    "ticker": ticker,
+                    "filing_date": f.filing_date,
+                    "period_end_date": f.period_end_date,
+                    "period_label": f.period_label,
+                    "net_income": f.net_income,
+                    "fcf": f.fcf,
+                    "operating_cash_flow": f.operating_cash_flow,
+                    "capex": f.capex,
+                    "revenue": f.revenue,
+                    "total_assets": f.total_assets,
+                    "total_liabilities": f.total_liabilities,
+                    "current_assets": f.current_assets,
+                    "current_liabilities": f.current_liabilities,
+                    "receivables": f.receivables,
+                    "cash_and_equivalents": f.cash_and_equivalents,
+                    "shares_outstanding": f.shares_outstanding,
+                }
+            )
 
     def _dec(v: Any) -> _Decimal | None:
         return _Decimal(str(v)) if v is not None else None
@@ -197,10 +235,7 @@ class VectorScheduler:
         if not self._database_url:
             logger.critical(
                 "vector.scheduler.no_database_pool",
-                message=(
-                    "No database pool available. Refusing to run without "
-                    "source-of-truth data."
-                ),
+                message=("No database pool available. Refusing to run without source-of-truth data."),
             )
             raise SystemExit(1)
 
@@ -210,10 +245,7 @@ class VectorScheduler:
         pool = await build_asyncpg_pool(self._database_url)
         broker = self._injected_broker or AlpacaPaperBrokerAdapter()
         db_log = DBLogHandler(pool, ENGINE_ID, run_id)
-        await db_log.startup(
-            commit_sha=os.getenv("RAILWAY_GIT_COMMIT_SHA")
-            or os.getenv("GIT_COMMIT_SHA")
-        )
+        await db_log.startup(commit_sha=os.getenv("RAILWAY_GIT_COMMIT_SHA") or os.getenv("GIT_COMMIT_SHA"))
         try:
             # Wire risk governor + AAR writer + (optional) parity harness.
             governor = RiskGovernor(
@@ -303,10 +335,12 @@ class VectorScheduler:
                 # only the gates Vector populates land in the JSON.
                 _diag = (
                     cand.filter_diagnostics.model_dump(exclude_none=True)
-                    if cand.filter_diagnostics is not None else None
+                    if cand.filter_diagnostics is not None
+                    else None
                 )
                 await db_log.signal(
-                    cand.ticker, score=float(cand.swing_score),
+                    cand.ticker,
+                    score=float(cand.swing_score),
                     extra_data=({"filter_diagnostics": _diag} if _diag else None),
                 )
                 state = await governor.state_for(ENGINE_ID)
@@ -355,9 +389,7 @@ class VectorScheduler:
         if not live_key or not live_secret:
             logger.info("vector.scheduler.parity_disabled_no_live_creds")
             return None
-        live_broker = AlpacaPaperBrokerAdapter(
-            api_key=live_key, api_secret=live_secret, paper=False
-        )
+        live_broker = AlpacaPaperBrokerAdapter(api_key=live_key, api_secret=live_secret, paper=False)
         return LivePaperParityHarness(paper_broker, live_broker, pool)
 
 
