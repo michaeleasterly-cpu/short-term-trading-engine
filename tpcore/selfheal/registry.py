@@ -217,6 +217,21 @@ _SPECS: tuple[HealSpec, ...] = (
     HealSpec(check_name="prices_daily_completeness", source="prices_daily",
              healable=True, stage="daily_bars", params=dict(_PRICES_REPAIR),
              max_attempts=3),
+    # Path-A FK closure: every prices_daily row must have a non-NULL
+    # classification_id. Healable via sec_orphan_resolve which runs the
+    # 3-phase deterministic cascade (truth-set CIK -> EDGAR direct ->
+    # OpenFIGI + FMP fallback). Phase A+B+C achieved 100% closure live
+    # 2026-05-24. Re-runs are idempotent (ON CONFLICT DO NOTHING) so the
+    # heal cycle is safe regardless of how many orphans accumulate.
+    # Bounded by max_attempts=2 (the resolver is per-ticker; if a heal
+    # pass leaves residue, that's truly-unresolvable + needs operator
+    # manual review per the foreign-ADR / SPAC-warrant / bankruptcy-
+    # shell categorization).
+    HealSpec(check_name="prices_daily_classification_id_completeness",
+             source="prices_daily",
+             healable=True, stage="sec_orphan_resolve",
+             params={"phase_b": "true", "phase_c": "true"},
+             max_attempts=2),
     # A stale max-pain snapshot is fixed by re-running the bounded
     # canonical stage (1 symbol, 1 idempotent API call) — genuinely
     # healable, not escalate-only. force the skip-guard off so the

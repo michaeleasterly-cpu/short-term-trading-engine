@@ -84,6 +84,12 @@ from .checks.macro_indicators_freshness import CHECK_NAME as MACRO_FRESHNESS_NAM
 from .checks.macro_indicators_freshness import check_macro_indicators_freshness
 from .checks.options_max_pain_freshness import CHECK_NAME as OPTIONS_MAXPAIN_NAME
 from .checks.options_max_pain_freshness import check_options_max_pain_freshness
+from .checks.prices_daily_classification_id_completeness import (
+    CHECK_NAME as PRICES_CLASSIFICATION_ID_NAME,
+)
+from .checks.prices_daily_classification_id_completeness import (
+    check_prices_daily_classification_id_completeness,
+)
 from .checks.prices_daily_completeness import CHECK_NAME as PRICES_COMPLETENESS_NAME
 from .checks.prices_daily_completeness import check_prices_daily_completeness
 from .checks.prices_daily_freshness import CHECK_NAME as PRICES_FRESHNESS_NAME
@@ -136,6 +142,7 @@ KNOWN_CHECK_NAMES: tuple[str, ...] = (
     MACRO_COMPLETENESS_NAME,
     PRICES_FRESHNESS_NAME,
     PRICES_COMPLETENESS_NAME,
+    PRICES_CLASSIFICATION_ID_NAME,
     OPTIONS_MAXPAIN_NAME,
     INSIDER_SENTIMENT_NAME,
     SOCIAL_SENTIMENT_NAME,
@@ -222,6 +229,10 @@ async def run_suite(
     completeness_task = _safe_run(
         PRICES_COMPLETENESS_NAME, check_prices_daily_completeness, pool, None
     )
+    classification_id_task = _safe_run(
+        PRICES_CLASSIFICATION_ID_NAME,
+        check_prices_daily_classification_id_completeness, pool, None
+    )
     options_maxpain_task = _safe_run(
         OPTIONS_MAXPAIN_NAME, check_options_max_pain_freshness, pool, None
     )
@@ -254,6 +265,7 @@ async def run_suite(
         sec_result, sec_insider_monotone_result,
         liquidity_result, liquidity_completeness_result, classifications_result,
         macro_result, macro_completeness_result, prices_result, completeness_result,
+        classification_id_result,
         options_maxpain_result, insider_sentiment_result,
         social_sentiment_result, fear_greed_result,
         short_interest_result, borrow_rates_result,
@@ -265,6 +277,7 @@ async def run_suite(
         sec_task, sec_insider_monotone_task,
         liquidity_task, liquidity_completeness_task, classifications_task,
         macro_task, macro_completeness_task, prices_task, completeness_task,
+        classification_id_task,
         options_maxpain_task, insider_sentiment_task,
         social_sentiment_task, fear_greed_task,
         short_interest_task, borrow_rates_task,
@@ -277,6 +290,7 @@ async def run_suite(
         sec_result, sec_insider_monotone_result,
         liquidity_result, liquidity_completeness_result, classifications_result,
         macro_result, macro_completeness_result, prices_result, completeness_result,
+        classification_id_result,
         options_maxpain_result, insider_sentiment_result,
         social_sentiment_result, fear_greed_result,
         short_interest_result, borrow_rates_result,
