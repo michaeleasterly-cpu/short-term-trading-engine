@@ -2654,18 +2654,29 @@ async def _stage_macro_data_backfill(
 
     log.info("ops.stage.macro_data_backfill.starting", sources=sorted(sources), dry_run=dry_run)
 
+    # P2 is idempotent across re-runs by skipping natural keys that already have
+    # a current (realtime_end='infinity') macro_data row. Without this guard, a
+    # re-run after the producer (P3) has fired a cycle creates duplicate-current
+    # rows because the source recorded_at advances (legacy DO UPDATE for aaii +
+    # fear_greed) → realtime_start in the backfill differs from existing rows →
+    # ON CONFLICT on the bitemporal PK doesn't fire. SCD-2 invariant violated.
+    # NOT EXISTS clause makes the stage safe to run at any point.
+
     # FRED source (macro_indicators is already tall: indicator,date,value,recorded_at).
-    # ON CONFLICT (source,series_id,observed_date,realtime_start) DO NOTHING
-    # so a partial-replay just no-ops on already-inserted rows.
     FRED_INSERT = """
         INSERT INTO platform.macro_data
             (source, series_id, observed_date, value_num,
              realtime_start, realtime_end, recorded_at)
         SELECT
-            'fred', indicator, date, value,
-            recorded_at, 'infinity', recorded_at
-        FROM platform.macro_indicators
-        WHERE value IS NOT NULL
+            'fred', m.indicator, m.date, m.value,
+            m.recorded_at, 'infinity', m.recorded_at
+        FROM platform.macro_indicators m
+        WHERE m.value IS NOT NULL
+          AND NOT EXISTS (
+              SELECT 1 FROM platform.macro_data d
+              WHERE d.source = 'fred' AND d.series_id = m.indicator
+                AND d.observed_date = m.date AND d.realtime_end = 'infinity'
+          )
         ON CONFLICT (source, series_id, observed_date, realtime_start)
         DO NOTHING
     """
@@ -2677,7 +2688,7 @@ async def _stage_macro_data_backfill(
             (source, series_id, observed_date, value_num,
              realtime_start, realtime_end, recorded_at)
         SELECT
-            'aaii', channel, a.date, val,
+            'aaii', t.channel, a.date, t.val,
             a.recorded_at, 'infinity', a.recorded_at
         FROM platform.aaii_sentiment a
         CROSS JOIN LATERAL (VALUES
@@ -2685,7 +2696,12 @@ async def _stage_macro_data_backfill(
             ('bearish_pct', a.bearish_pct),
             ('neutral_pct', a.neutral_pct)
         ) t(channel, val)
-        WHERE val IS NOT NULL
+        WHERE t.val IS NOT NULL
+          AND NOT EXISTS (
+              SELECT 1 FROM platform.macro_data d
+              WHERE d.source = 'aaii' AND d.series_id = t.channel
+                AND d.observed_date = a.date AND d.realtime_end = 'infinity'
+          )
         ON CONFLICT (source, series_id, observed_date, realtime_start)
         DO NOTHING
     """
@@ -2696,7 +2712,7 @@ async def _stage_macro_data_backfill(
             (source, series_id, observed_date, value_num,
              realtime_start, realtime_end, recorded_at)
         SELECT
-            'cnn_fear_greed', channel, f.date, val,
+            'cnn_fear_greed', t.channel, f.date, t.val,
             f.recorded_at, 'infinity', f.recorded_at
         FROM platform.fear_greed f
         CROSS JOIN LATERAL (VALUES
@@ -2707,7 +2723,12 @@ async def _stage_macro_data_backfill(
             ('momentum_component',   f.momentum_component),
             ('safe_haven_component', f.safe_haven_component)
         ) t(channel, val)
-        WHERE val IS NOT NULL
+        WHERE t.val IS NOT NULL
+          AND NOT EXISTS (
+              SELECT 1 FROM platform.macro_data d
+              WHERE d.source = 'cnn_fear_greed' AND d.series_id = t.channel
+                AND d.observed_date = f.date AND d.realtime_end = 'infinity'
+          )
         ON CONFLICT (source, series_id, observed_date, realtime_start)
         DO NOTHING
     """
@@ -2719,14 +2740,19 @@ async def _stage_macro_data_backfill(
             (source, series_id, observed_date, value_text,
              realtime_start, realtime_end, recorded_at)
         SELECT
-            'cnn_fear_greed', channel, f.date, val,
+            'cnn_fear_greed', t.channel, f.date, t.val,
             f.recorded_at, 'infinity', f.recorded_at
         FROM platform.fear_greed f
         CROSS JOIN LATERAL (VALUES
             ('label',     f.label),
             ('direction', f.direction)
         ) t(channel, val)
-        WHERE val IS NOT NULL
+        WHERE t.val IS NOT NULL
+          AND NOT EXISTS (
+              SELECT 1 FROM platform.macro_data d
+              WHERE d.source = 'cnn_fear_greed' AND d.series_id = t.channel
+                AND d.observed_date = f.date AND d.realtime_end = 'infinity'
+          )
         ON CONFLICT (source, series_id, observed_date, realtime_start)
         DO NOTHING
     """
