@@ -426,6 +426,7 @@ pytestmark  # unused variable (tpcore/tests/test_lab_sp_d_make_or_break.py:21)
 pytestmark  # unused variable (tpcore/tests/test_lab_sp_d_units.py:10)
 pytestmark  # unused variable (tpcore/tests/test_lab_targeting_consistency.py:53)
 _stub_archive  # unused function (tpcore/tests/test_macro_hist_csv.py:46)
+_stub_macro_emit  # unused function (tpcore/tests/test_macro_hist_csv.py:76) — autouse fixture
 pytestmark  # unused variable (tpcore/tests/test_ops.py:29)
 pytestmark  # unused variable (tpcore/tests/test_ops_helpers.py:33)
 _.bind  # unused attribute (tpcore/tests/test_ops_helpers.py:161)

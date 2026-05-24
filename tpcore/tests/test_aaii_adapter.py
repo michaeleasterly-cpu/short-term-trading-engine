@@ -181,7 +181,7 @@ async def test_handler_idempotent_upsert(monkeypatch) -> None:
     monkeypatch.setattr("tpcore.ingestion.csv_archive.write_archive",
                         lambda *a, **k: type("A", (), {"path": "/tmp/x"})())
     calls: list[dict] = []
-    async def _record(conn_, *, source, rows):
+    async def _record(_conn, *, source, rows):
         calls.append({"source": source, "row_count": len(rows), "rows": list(rows)})
         return {"inserted": len(rows), "revised": 0, "no_change": 0}
     monkeypatch.setattr(
