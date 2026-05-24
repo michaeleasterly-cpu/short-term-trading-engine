@@ -15,13 +15,11 @@ All tables live in the `platform` schema; all timestamps are `TIMESTAMPTZ`.
 | Table | Purpose |
 | --- | --- |
 | `platform.aar_events` | After-Action Reports per closed trade (`(engine, trade_id)` unique). |
-| `platform.execution_quality_log` | Per-fill slippage / partial / paper-vs-live. |
 | `platform.data_quality_log` | Per-source latency / staleness / confidence. |
 | `platform.parity_drift_log` | Live/paper parity-harness drift records. |
 | `platform.risk_state` | Per-engine PnL counters, position count, kill switch flag, reset clocks. |
 | `platform.allocations` | Stub for the future Allocator service. |
 | `platform.forensics_triggers` | Stub for the future Forensics service. |
-| `platform.tax_lots` | FIFO-tracked tax lots across all engines. |
 | `platform.prices_daily` | Daily OHLCV (active + delisted), populated by `tpcore.data.ingest_alpaca_bars`. |
 
 ## Running migrations
