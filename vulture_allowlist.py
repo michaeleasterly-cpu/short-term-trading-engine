@@ -159,6 +159,8 @@ model_config  # unused variable (tpcore/feeds/profile.py:61)
 publication_probe  # unused variable (tpcore/feeds/profile.py:71)
 # Task #18 P7 — vendor rate-limit + quota declarations on FeedProfile.
 # Consumer side (rate-limited HTTP client) is operator scope, not yet wired.
+event_kind  # unused variable (tpcore/sec/corp_events_extractor.py:145) — dataclass field; consumed by downstream callers
+excerpt  # unused variable (tpcore/sec/corp_events_extractor.py:150) — dataclass field; debug aid
 rate_limit_requests  # unused variable (tpcore/feeds/profile.py:89)
 rate_limit_period_seconds  # unused variable (tpcore/feeds/profile.py:90)
 daily_request_quota  # unused variable (tpcore/feeds/profile.py:93)
