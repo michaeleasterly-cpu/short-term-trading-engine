@@ -53,10 +53,14 @@ class WashSaleTracker:
     ) -> WashSaleEvent:
         """Check the 61-day window for any buy in ``ticker`` (any engine).
 
-        TODO: query platform.tax_lots for purchases of ``ticker`` whose
-        acquisition_date falls within ``sale_date ± 30 days``. If any
-        exists and ``loss < 0``, mark the loss disallowed and add it to
-        the replacement lot's cost basis.
+        TODO: query the (future) lot ledger for purchases of ``ticker``
+        whose acquisition_date falls within ``sale_date ± 30 days``. If
+        any exists and ``loss < 0``, mark the loss disallowed and add
+        it to the replacement lot's cost basis. The historic schema
+        substrate (`platform.tax_lots`) was dropped 2026-05-24 because
+        both this tracker and the FIFO lot writer were TODO stubs with
+        no implementer; the LIVE-trading lane will design the lot
+        substrate from scratch when needed.
         """
         _ = (ticker, sale_date, loss, self._pool)
         raise NotImplementedError

@@ -1049,8 +1049,7 @@ async def run_unknown_knowns(pool, sink: _FindingSink | None = None) -> list[Aud
     # haven't cleared the DSR/credibility gate are paper-only and don't
     # close positions yet. Will populate as engines graduate to live.
     EXPECTED_EMPTY = {
-        "forensics_triggers", "open_orders", "tax_lots",
-        "execution_quality_log", "allocations", "parity_drift_log",
+        "forensics_triggers", "open_orders", "allocations", "parity_drift_log",
         "universe_candidates", "alembic_version", "aar_events",
     }
     unexpected = [t for t in empty if t not in EXPECTED_EMPTY]

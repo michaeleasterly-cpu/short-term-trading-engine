@@ -26,47 +26,18 @@ class ExecutionQualityScore(BaseModel):
 
 
 class ExecutionQualityWriter:
-    """Persists ``ExecutionQualityScore`` rows to ``platform.execution_quality_log``.
+    """Emits ``ExecutionQualityScore`` as structured-log lines.
 
-    When ``db_pool`` is ``None`` (DB not yet wired in this environment), the
-    writer falls back to emitting a structured log line so the score is still
-    captured for offline aggregation.
+    The historic `platform.execution_quality_log` table was dropped
+    2026-05-24 — it accumulated silent-write defects (writer wired,
+    no functional consumer). Until a LIVE-execution consumer is built,
+    every score is captured via structlog only. The `db_pool` arg is
+    retained for ABI stability across callers.
     """
 
     def __init__(self, db_pool: Any | None = None) -> None:
-        self._pool = db_pool
+        del db_pool  # retained for caller-ABI; no DB persistence
 
     async def write(self, score: ExecutionQualityScore) -> bool:
-        """Insert ``score`` once. Returns True iff a new row was written.
-
-        Idempotency is enforced by the ``(broker, order_id)`` unique constraint
-        plus ``ON CONFLICT DO NOTHING``. With no pool, every call returns
-        ``True`` (the structlog sink has no dedup).
-        """
-        if self._pool is None:
-            logger.info("tpcore.exq.score", **score.model_dump(mode="json"))
-            return True
-
-        sql = """
-            INSERT INTO platform.execution_quality_log (
-                broker, order_id, requested_price, fill_price, slippage_bps,
-                partial_fill, paper_or_live, timestamp, notes
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-            ON CONFLICT (broker, order_id) DO NOTHING
-            RETURNING 1
-        """
-        async with self._pool.acquire() as conn:
-            row = await conn.fetchrow(
-                sql,
-                score.broker,
-                score.order_id,
-                score.requested_price,
-                score.fill_price,
-                score.slippage_bps,
-                score.partial_fill,
-                score.paper_or_live,
-                score.timestamp,
-                score.notes,
-            )
-        return row is not None
+        logger.info("tpcore.exq.score", **score.model_dump(mode="json"))
+        return True
