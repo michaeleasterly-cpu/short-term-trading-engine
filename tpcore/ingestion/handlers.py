@@ -1068,15 +1068,20 @@ async def _sec_load_csvs_to_db(
         loaded_insider = len(insider_rows)
         del res
     if material_rows:
+        # summary column was dropped 2026-05-25 (LLM-triage was the
+        # intended writer; removed 2026-05-22). Strip the 4th tuple
+        # element here so callers don't have to know about the
+        # schema change.
+        material_rows_trimmed = [(t, d, ev) for (t, d, ev, _summary) in material_rows]
         async with pool.acquire() as conn:
             await conn.executemany(
                 """
                 INSERT INTO platform.sec_material_events
-                    (ticker, filing_date, event_type, summary)
-                VALUES ($1, $2, $3, $4)
+                    (ticker, filing_date, event_type)
+                VALUES ($1, $2, $3)
                 ON CONFLICT (ticker, filing_date, event_type) DO NOTHING
                 """,
-                material_rows,
+                material_rows_trimmed,
             )
         loaded_material = len(material_rows)
     return loaded_insider, loaded_material
