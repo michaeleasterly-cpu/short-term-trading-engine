@@ -16,6 +16,15 @@ Module shape mirrors ``tpcore/fundamentals/cache.py``: caller passes
 an ``asyncpg.Pool`` which the repo uses-but-doesn't-own.
 """
 
+from tpcore.data.repositories.macro import MacroObservation, MacroRepo
+from tpcore.data.repositories.prices import Bar, PricesRepo
 from tpcore.data.repositories.universe import UniverseRepo, UniverseRow
 
-__all__ = ["UniverseRepo", "UniverseRow"]
+__all__ = [
+    "Bar",
+    "MacroObservation",
+    "MacroRepo",
+    "PricesRepo",
+    "UniverseRepo",
+    "UniverseRow",
+]
