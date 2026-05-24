@@ -15,6 +15,7 @@ Hard constraints:
 Engine-FREE: only ``tpcore.calendar`` + ``tpcore.engine_profile`` +
 ``tpcore.lab.llm_finder.models`` imports; no engine modules touched.
 """
+
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
@@ -23,6 +24,7 @@ from typing import TYPE_CHECKING, Final, Literal
 import structlog
 
 from tpcore import calendar as tp_calendar
+from tpcore.data.repositories import MacroRepo
 from tpcore.engine_profile import LifecycleState, lab_targetable_engines, profile_for
 from tpcore.lab.llm_finder import MAX_SNAPSHOT_BYTES
 from tpcore.lab.llm_finder.models import (
@@ -142,9 +144,7 @@ _SP500_UNIVERSE_SQL: Final[str] = """
 """
 
 
-async def _read_universe_tickers(
-    pool: asyncpg.Pool, universe: str, session_date: date
-) -> tuple[str, ...]:
+async def _read_universe_tickers(pool: asyncpg.Pool, universe: str, session_date: date) -> tuple[str, ...]:
     del universe, session_date  # v1: tier=1 only; universe arg reserved for v1.5
     async with pool.acquire() as conn:
         rows = await conn.fetch(_SP500_UNIVERSE_SQL, _UNIVERSE_SIZE_LIMIT)
@@ -180,13 +180,14 @@ async def _read_price_window(
         date(session_date.year - 2, session_date.month, session_date.day),
         session_date,
     )
-    window_start = sessions[-_PRICE_WINDOW_SESSIONS] if len(sessions) >= _PRICE_WINDOW_SESSIONS else sessions[0]
+    window_start = (
+        sessions[-_PRICE_WINDOW_SESSIONS] if len(sessions) >= _PRICE_WINDOW_SESSIONS else sessions[0]
+    )
     async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            _PRICE_WINDOW_SQL, list(tickers), window_start, session_date
-        )
+        rows = await conn.fetch(_PRICE_WINDOW_SQL, list(tickers), window_start, session_date)
     # Compute log_return on the fly (prev-close per (ticker, ordered date)).
     import math as _math
+
     out: list[PricePanelRow] = []
     prev_close_by_ticker: dict[str, float] = {}
     for r in rows:
@@ -226,9 +227,7 @@ _FUNDAMENTALS_SQL: Final[str] = """
 """
 
 
-async def _read_fundamentals(
-    pool: asyncpg.Pool, tickers: tuple[str, ...]
-) -> tuple[FundRow, ...]:
+async def _read_fundamentals(pool: asyncpg.Pool, tickers: tuple[str, ...]) -> tuple[FundRow, ...]:
     if not tickers:
         return ()
     async with pool.acquire() as conn:
@@ -240,7 +239,7 @@ async def _read_fundamentals(
             revenue=float(r["revenue"]) if r["revenue"] is not None else None,
             net_income=float(r["net_income"]) if r["net_income"] is not None else None,
             eps_diluted=None,  # not in this codebase's schema
-            book_value=None,   # not in this codebase's schema
+            book_value=None,  # not in this codebase's schema
             debt_to_equity=float(r["de"]) if r["de"] is not None else None,
             pb_ratio=float(r["pb"]) if r["pb"] is not None else None,
         )
@@ -268,7 +267,9 @@ async def _read_spreads(
         date(session_date.year - 1, session_date.month, session_date.day),
         session_date,
     )
-    window_start = sessions[-_SPREAD_WINDOW_SESSIONS] if len(sessions) >= _SPREAD_WINDOW_SESSIONS else sessions[0]
+    window_start = (
+        sessions[-_SPREAD_WINDOW_SESSIONS] if len(sessions) >= _SPREAD_WINDOW_SESSIONS else sessions[0]
+    )
     async with pool.acquire() as conn:
         rows = await conn.fetch(_SPREADS_SQL, list(tickers), window_start, session_date)
     return tuple(
@@ -282,44 +283,61 @@ async def _read_spreads(
     )
 
 
-_AAII_SQL: Final[str] = """
-    SELECT date AS as_of_date, bullish_pct, bearish_pct, neutral_pct
-      FROM platform.aaii_sentiment
-     WHERE date BETWEEN $1 AND $2
-     ORDER BY date
-"""
-
-_FEAR_GREED_SQL: Final[str] = """
-    SELECT date AS as_of_date, score
-      FROM platform.fear_greed
-     WHERE date BETWEEN $1 AND $2
-     ORDER BY date
-"""
+_AAII_SERIES: Final[tuple[str, ...]] = ("bullish_pct", "bearish_pct", "neutral_pct")
 
 
-async def _read_sentiment(
-    pool: asyncpg.Pool, session_date: date
-) -> tuple[SentimentRow, ...]:
+async def _read_sentiment(pool: asyncpg.Pool, session_date: date) -> tuple[SentimentRow, ...]:
+    """Read AAII (3 series) + CNN Fear & Greed score via MacroRepo.
+
+    Both are stored in platform.macro_data — AAII under source='aaii',
+    Fear & Greed under source='cnn_fear_greed'. Pivot the three AAII
+    series to wide shape; join Fear & Greed score by date.
+    """
     sessions = tp_calendar.sessions_in_range(
         date(session_date.year - 1, session_date.month, session_date.day),
         session_date,
     )
-    window_start = sessions[-_SENTIMENT_WINDOW_SESSIONS] if len(sessions) >= _SENTIMENT_WINDOW_SESSIONS else sessions[0]
+    window_start = (
+        sessions[-_SENTIMENT_WINDOW_SESSIONS] if len(sessions) >= _SENTIMENT_WINDOW_SESSIONS else sessions[0]
+    )
+
+    repo = MacroRepo(pool)
+    aaii_by_series = await repo.get_window_batch(
+        _AAII_SERIES,
+        window_start,
+        session_date,
+        source="aaii",
+    )
+    fg_by_series = await repo.get_window_batch(
+        ("score",),
+        window_start,
+        session_date,
+        source="cnn_fear_greed",
+    )
+
+    # Pivot AAII to {date: {series_id: value}} so the per-row wide
+    # construction below stays straightforward.
+    aaii_wide: dict[date, dict[str, float | None]] = {}
+    for series_id, observations in aaii_by_series.items():
+        for obs in observations:
+            row = aaii_wide.setdefault(obs.observed_date, {})
+            row[series_id] = float(obs.value_num) if obs.value_num is not None else None
+
+    fg_by_date: dict[date, int | None] = {
+        obs.observed_date: int(obs.value_num) if obs.value_num is not None else None
+        for obs in fg_by_series.get("score", [])
+    }
 
     out: list[SentimentRow] = []
-    async with pool.acquire() as conn:
-        aaii_rows = await conn.fetch(_AAII_SQL, window_start, session_date)
-        fg_rows = await conn.fetch(_FEAR_GREED_SQL, window_start, session_date)
-
-    fg_by_date = {r["as_of_date"]: r["score"] for r in fg_rows}
-    for r in aaii_rows:
+    for as_of_date in sorted(aaii_wide):
+        cols = aaii_wide[as_of_date]
         out.append(
             SentimentRow(
-                as_of_date=r["as_of_date"],
-                aaii_bull_pct=float(r["bullish_pct"]) if r["bullish_pct"] is not None else None,
-                aaii_bear_pct=float(r["bearish_pct"]) if r["bearish_pct"] is not None else None,
-                aaii_neutral_pct=float(r["neutral_pct"]) if r["neutral_pct"] is not None else None,
-                fear_greed_score=int(fg_by_date[r["as_of_date"]]) if r["as_of_date"] in fg_by_date and fg_by_date[r["as_of_date"]] is not None else None,
+                as_of_date=as_of_date,
+                aaii_bull_pct=cols.get("bullish_pct"),
+                aaii_bear_pct=cols.get("bearish_pct"),
+                aaii_neutral_pct=cols.get("neutral_pct"),
+                fear_greed_score=fg_by_date.get(as_of_date),
                 apewisdom_mention_rank=None,
                 ticker=None,
             )
@@ -327,30 +345,58 @@ async def _read_sentiment(
     return tuple(out)
 
 
-_MACRO_SQL: Final[str] = """
-    SELECT indicator AS series_id, date AS observation_date, value
-      FROM platform.macro_indicators
-     WHERE date BETWEEN $1 AND $2
-     ORDER BY indicator, date
-"""
-
-
 async def _read_macro(pool: asyncpg.Pool, session_date: date) -> tuple[MacroRow, ...]:
+    """Read FRED macro indicators via MacroRepo.
+
+    Returns one MacroRow per (series_id, observation_date). The series
+    list is intentionally unfiltered here — compute_market_regime picks
+    the ones it needs (sahm_rule, cfnai_ma3, vix, yield_curve, ...).
+    """
     sessions = tp_calendar.sessions_in_range(
         date(session_date.year - 1, session_date.month, session_date.day),
         session_date,
     )
-    window_start = sessions[-_MACRO_WINDOW_SESSIONS] if len(sessions) >= _MACRO_WINDOW_SESSIONS else sessions[0]
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(_MACRO_SQL, window_start, session_date)
-    return tuple(
-        MacroRow(
-            series_id=r["series_id"],
-            observation_date=r["observation_date"],
-            value=float(r["value"]) if r["value"] is not None else 0.0,
-        )
-        for r in rows
+    window_start = (
+        sessions[-_MACRO_WINDOW_SESSIONS] if len(sessions) >= _MACRO_WINDOW_SESSIONS else sessions[0]
     )
+    # The legacy macro_indicators table was FRED-only. Preserve that
+    # filter so compute_market_regime sees the same series set as before.
+    repo = MacroRepo(pool)
+    by_series = await repo.get_window_batch(
+        _MACRO_SERIES_FOR_REGIME,
+        window_start,
+        session_date,
+        source="fred",
+    )
+    out: list[MacroRow] = []
+    for series_id, observations in by_series.items():
+        for obs in observations:
+            out.append(
+                MacroRow(
+                    series_id=series_id,
+                    observation_date=obs.observed_date,
+                    value=float(obs.value_num) if obs.value_num is not None else 0.0,
+                )
+            )
+    return tuple(out)
+
+
+# FRED series the regime computation consumes. Kept narrow and explicit
+# so the repo query is selective instead of scanning all FRED series.
+# Mirrors the pre-cutover macro_indicators ANY($3) call's effective set
+# (cross-checked against compute_market_regime's reads on MacroRow.series_id).
+_MACRO_SERIES_FOR_REGIME: Final[tuple[str, ...]] = (
+    "sahm_rule",
+    "cfnai_ma3",
+    "vix",
+    "yield_curve",
+    "credit_spread",
+    "hy_spread",
+    "industrial_production",
+    "initial_claims",
+    "nfci",
+    "sos_state_diffusion",
+)
 
 
 _LEDGER_SQL: Final[str] = """
@@ -365,9 +411,7 @@ _LEDGER_SQL: Final[str] = """
 """
 
 
-async def _read_ledger(
-    pool: asyncpg.Pool, regime_tuple_id: str
-) -> tuple[LedgerEntry, ...]:
+async def _read_ledger(pool: asyncpg.Pool, regime_tuple_id: str) -> tuple[LedgerEntry, ...]:
     """Read per-regime + aggregate ledger state (spec §4.4 + constraint 17/20).
 
     Returns empty tuple if the view doesn't exist yet (T7's substrate
@@ -545,9 +589,7 @@ _EARNINGS_DENSITY_SQL: Final[str] = """
 """
 
 
-async def compute_calendar_context(
-    pool: asyncpg.Pool, session_date: date
-) -> CalendarContext:
+async def compute_calendar_context(pool: asyncpg.Pool, session_date: date) -> CalendarContext:
     """Build a CalendarContext from XNYS + earnings_calendar + Fed calendar.
 
     FOMC + opex dates: pinned to the v1 spec — operator stages the Fed
@@ -560,9 +602,11 @@ async def compute_calendar_context(
         density = await conn.fetchrow(
             _EARNINGS_DENSITY_SQL,
             session_date,
-            date(session_date.year + (1 if session_date.month == 12 else 0),
-                 1 if session_date.month == 12 else session_date.month + 1,
-                 min(session_date.day, 28)),
+            date(
+                session_date.year + (1 if session_date.month == 12 else 0),
+                1 if session_date.month == 12 else session_date.month + 1,
+                min(session_date.day, 28),
+            ),
         )
     report_count = density["report_count"] if density else 0
     is_earnings_season = report_count >= 100

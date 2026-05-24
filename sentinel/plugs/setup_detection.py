@@ -15,6 +15,7 @@ as-of date. Forward-filling is the standard treatment for stale
 macro readings; the alternative ("indicator unavailable → 0 points")
 would over-weight publish-day jolts.
 """
+
 from __future__ import annotations
 
 from collections.abc import Iterable
@@ -53,6 +54,7 @@ from sentinel.models import (
     BearScoreBreakdown,
 )
 from tpcore.backtest.filter_diagnostics import FilterDiagnostics
+from tpcore.data.repositories import MacroRepo
 from tpcore.interfaces.engine_plug import BaseEnginePlug
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -232,7 +234,7 @@ def compute_spy_rally_pct(spy_close: pd.Series, window_end: date_t, window_days:
     if len(sub) < 2:
         return Decimal("0")
     running_min = sub.cummin()
-    pct = (sub / running_min - 1.0)
+    pct = sub / running_min - 1.0
     max_pct = float(pct.max())
     if max_pct <= 0:
         return Decimal("0")
@@ -254,31 +256,34 @@ async def fetch_macro_indicator_panel(
     recent observation. The DataFrame includes every NYSE trading day
     from ``start - 365 days`` to ``end`` so the activation gate can look
     back across weekends/holidays without missing observations.
+
+    Backed by ``MacroRepo.get_window_batch`` against
+    ``platform.macro_data`` (Task #18 P7 consolidation). Reads are
+    FRED-sourced — sentinel's _INDICATORS_NEEDED are all FRED series.
     """
-    sql = """
-        SELECT date, indicator, value
-        FROM platform.macro_indicators
-        WHERE date BETWEEN $1 AND $2
-          AND indicator = ANY($3)
-        ORDER BY date
-    """
+    repo = MacroRepo(pool)
     # Pad the start so forward-filling on monthly indicators has data.
     pad_start = start - timedelta(days=365)
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(sql, pad_start, end, list(_INDICATORS_NEEDED))
-    if not rows:
-        # Empty panel — caller will treat all indicators as missing.
+    by_series = await repo.get_window_batch(
+        _INDICATORS_NEEDED,
+        pad_start,
+        end,
+        source="fred",
+    )
+    if not by_series:
         return pd.DataFrame(columns=list(_INDICATORS_NEEDED))
     df = pd.DataFrame(
-        [{"date": r["date"], "indicator": r["indicator"], "value": float(r["value"])} for r in rows]
+        [
+            {"date": obs.observed_date, "indicator": series_id, "value": float(obs.value_num)}
+            for series_id, observations in by_series.items()
+            for obs in observations
+            if obs.value_num is not None
+        ]
     )
     wide = df.pivot(index="date", columns="indicator", values="value").sort_index()
-    # Forward-fill to daily, ensuring all needed indicators are columns.
     for ind in _INDICATORS_NEEDED:
         if ind not in wide.columns:
             wide[ind] = float("nan")
-    # Build a daily index spanning the padded range so weekends carry the
-    # last weekday's value.
     daily_idx = pd.date_range(pad_start, end, freq="D").date
     wide = wide.reindex(daily_idx).ffill()
     wide.index.name = "date"
@@ -367,9 +372,7 @@ class SentinelSetupDetection(BaseEnginePlug):
         vix_proxy_series = compute_vix_proxy_series(spy)
         vix_200d_ma_series = vix_proxy_series.rolling(200, min_periods=50).mean()
 
-        spy_dates: Iterable[date_t] = [
-            d.date() if hasattr(d, "date") else d for d in spy.index
-        ]
+        spy_dates: Iterable[date_t] = [d.date() if hasattr(d, "date") else d for d in spy.index]
         for trade_date in spy_dates:
             if not (start <= trade_date <= end):
                 continue

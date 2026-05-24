@@ -10,6 +10,7 @@ Covers:
 Uses FakePool/FakeConn for the asyncpg-touching paths — same pattern
 as the probe tests (sentinel.activation_probe) + ops package tests.
 """
+
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
@@ -222,9 +223,7 @@ def test_compute_market_regime_end_to_end() -> None:
     assert regime.trend_regime == "trend_up"
     assert regime.macro_regime == "expansion"
     assert regime.sentiment_regime == "neutral"
-    assert regime.regime_tuple_id == _compute_regime_tuple_id(
-        "calm", "trend_up", "expansion", "neutral"
-    )
+    assert regime.regime_tuple_id == _compute_regime_tuple_id("calm", "trend_up", "expansion", "neutral")
 
 
 def test_compute_market_regime_crisis_contraction() -> None:
@@ -275,9 +274,7 @@ def _build_minimal_snapshot(price_window_rows: int = 0) -> MarketSnapshot:
         macro_regime="expansion",
         sentiment_regime="neutral",
         cycle_position=("normal",),
-        regime_tuple_id=_compute_regime_tuple_id(
-            "normal", "range", "expansion", "neutral"
-        ),
+        regime_tuple_id=_compute_regime_tuple_id("normal", "range", "expansion", "neutral"),
     )
     return MarketSnapshot(
         snapshot_ts=datetime.now(UTC),
@@ -334,6 +331,68 @@ def test_byte_cap_fails_on_overflow() -> None:
 # ───────────────────────── FakePool integration smoke ─────────────────────────
 
 
+def _macro_data_rows_from_fixtures(
+    fixtures: dict[str, list[dict[str, Any]]],
+    args: tuple[Any, ...],
+) -> list[dict[str, Any]]:
+    """Translate the legacy fixture shape into platform.macro_data rows.
+
+    Post-refactor (PR-5), snapshot.py + sentinel read macro_data via
+    MacroRepo. The SQL is `platform.macro_data ... source = $4` (or no
+    source filter). args[3] holds the source when filtered; route the
+    matching legacy fixture and reshape.
+    """
+    source = args[3] if len(args) >= 4 else None
+    if source == "fred":
+        bucket_key = "macro"
+    elif source == "aaii":
+        bucket_key = "aaii"
+    elif source == "cnn_fear_greed":
+        bucket_key = "fear_greed"
+    else:
+        return []
+    rows: list[dict[str, Any]] = []
+    for r in fixtures.get(bucket_key, []):
+        # Legacy fixture shape carries either (series_id, observation_date,
+        # value) for macro/macro_indicators or (date, bullish_pct, ...)
+        # for the aaii/fear_greed wide rows. The new repo returns long
+        # shape with value_num.
+        if "series_id" in r:
+            rows.append(
+                {
+                    "series_id": r["series_id"],
+                    "observed_date": r["observation_date"],
+                    "value_num": r.get("value"),
+                    "value_text": None,
+                    "source": source,
+                }
+            )
+        elif source == "aaii":
+            for s in ("bullish_pct", "bearish_pct", "neutral_pct"):
+                if s in r and r[s] is not None:
+                    rows.append(
+                        {
+                            "series_id": s,
+                            "observed_date": r.get("date") or r.get("observation_date"),
+                            "value_num": r[s],
+                            "value_text": None,
+                            "source": "aaii",
+                        }
+                    )
+        elif source == "cnn_fear_greed":
+            if "score" in r:
+                rows.append(
+                    {
+                        "series_id": "score",
+                        "observed_date": r.get("date") or r.get("observation_date"),
+                        "value_num": r["score"],
+                        "value_text": None,
+                        "source": "cnn_fear_greed",
+                    }
+                )
+    return rows
+
+
 class _FakeConn:
     def __init__(self, fixtures: dict[str, list[dict[str, Any]]]) -> None:
         self._fixtures = fixtures
@@ -348,16 +407,16 @@ class _FakeConn:
             return self._fixtures.get("fundamentals", [])
         if "spread_observations" in sql:
             return self._fixtures.get("spreads", [])
-        if "aaii_sentiment" in sql:
-            return self._fixtures.get("aaii", [])
-        if "fear_greed" in sql:
-            return self._fixtures.get("fear_greed", [])
-        if "macro_indicators" in sql:
-            return self._fixtures.get("macro", [])
         if "lab_trial_ledger_by_regime" in sql:
             return self._fixtures.get("ledger", [])
         if "earnings_events" in sql:
             return self._fixtures.get("earnings", [])
+        # Post-refactor macro reads hit platform.macro_data. The fake
+        # routes by the bound source (4th positional arg of the
+        # source-filtered MacroRepo SQL) so test fixtures stay shaped
+        # the same as before the refactor.
+        if "platform.macro_data" in sql:
+            return _macro_data_rows_from_fixtures(self._fixtures, args)
         return []
 
     async def fetchrow(self, sql: str, *args: Any) -> dict[str, Any] | None:
