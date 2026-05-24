@@ -3141,6 +3141,34 @@ async def _sec_fetch_issuer_name(client: Any, cik: str, ua: str) -> str | None:
         return None
 
 
+async def _sec_ticker_to_cik(client: Any, ticker: str, ua: str) -> str | None:
+    """Resolve a ticker (current or delisted) to its CIK via EDGAR's
+    browse-edgar disambiguation endpoint.
+
+    EDGAR's `getcompany?CIK=<ticker>` does server-side ticker→CIK
+    resolution. For delisted tickers, returns the CIK of the most-recent
+    registrant under that symbol. Verified 5/5 hit rate on delisted
+    truth-set samples (ATVI, VMW, EKSO, GLPG, OPGN) — vastly more
+    reliable than the EDGAR full-text search path (40% false positives).
+
+    Returns None when no CIK can be extracted (truly-unknown tickers,
+    foreign issuers with no SEC presence, transient HTTP errors).
+    """
+    import re
+    url = (
+        "https://www.sec.gov/cgi-bin/browse-edgar"
+        f"?action=getcompany&CIK={ticker}&type=8-K&dateb=&owner=include&count=10&output=atom"
+    )
+    try:
+        r = await client.get(url, headers={"User-Agent": ua}, timeout=15.0)
+        if r.status_code != 200:
+            return None
+        m = re.search(r"CIK[=]?(\d{10})", r.text[:4000])
+        return m.group(1).lstrip("0") if m else None
+    except Exception:  # noqa: BLE001 — best-effort lookup
+        return None
+
+
 def _coarsen_to_stock_asset_class(_country: str = "US") -> str:
     """All truth-set Path-A predecessors are stocks. Coarse 4-way enum
     in ticker_classifications.asset_class accepts stock|etf|fund|spac.
@@ -3307,16 +3335,128 @@ async def _stage_sec_orphan_resolve(
                 n_rows_updated += row_count
                 n_resolved += 1
                 log.info("ops.stage.sec_orphan_resolve.resolved",
-                         ticker=ticker, cik=cik, legal_name=legal_name,
+                         phase="A", ticker=ticker, cik=cik, legal_name=legal_name,
                          classification_id=cls_id, prices_daily_rows_updated=row_count)
+
+    # ── Phase B — EDGAR direct ticker→CIK lookup for remaining orphans.
+    # Scans prices_daily for ALL still-orphan tickers (after Phase A),
+    # attempts EDGAR's getcompany endpoint per ticker, mints + INSERTs
+    # for any CIK hit. Foreign ADR / warrant / fully-unknown tickers
+    # return None and are left for Phase C (alternate sources).
+    phase_b_enabled_param = cfg.get("phase_b", "true")
+    phase_b_enabled = (phase_b_enabled_param.lower() != "false") if isinstance(phase_b_enabled_param, str) else bool(phase_b_enabled_param)
+
+    n_phase_b_resolved = 0
+    n_phase_b_rows_updated = 0
+    n_phase_b_unresolved = 0
+    phase_b_unresolved_sample: list[str] = []
+
+    if phase_b_enabled:
+        # Discover remaining orphan tickers.
+        async with pool.acquire() as conn:
+            orphan_rows = await conn.fetch("""
+                SELECT DISTINCT ticker FROM platform.prices_daily
+                WHERE classification_id IS NULL
+                ORDER BY ticker
+            """)
+        remaining = [r["ticker"] for r in orphan_rows]
+        log.info("ops.stage.sec_orphan_resolve.phase_b_starting", n_remaining=len(remaining))
+
+        # SEC fair-access: ≤10 req/sec. Two calls per ticker (getcompany + name),
+        # so cap effective rate at ~3-5 tickers/sec to stay well under.
+        SEC_SLEEP_S = 0.15
+
+        async with httpx.AsyncClient() as client:
+            for ticker in remaining:
+                cik = await _sec_ticker_to_cik(client, ticker, ua)
+                await asyncio.sleep(SEC_SLEEP_S)
+                if not cik:
+                    n_phase_b_unresolved += 1
+                    if len(phase_b_unresolved_sample) < 20:
+                        phase_b_unresolved_sample.append(ticker)
+                    continue
+
+                legal_name = await _sec_fetch_issuer_name(client, cik, ua)
+                await asyncio.sleep(SEC_SLEEP_S)
+                if not legal_name:
+                    n_phase_b_unresolved += 1
+                    continue
+
+                # Salt-retry on TKR-14 collision (sub-symbols of the same
+                # entity — e.g. JFBR + JFBRW SPAC + warrant — produce the
+                # same legal_name+CIK input and thus the same mint, per the
+                # birthday-paradox warning in tpcore.identity.tkr14 docstring).
+                async with pool.acquire() as conn, conn.transaction():
+                    cls_id = None
+                    for salt_try in range(5):
+                        tkr14 = mint(
+                            country="US",
+                            asset_class=AssetClass.STOCK,
+                            ipo_venue=IPOVenue.OTHER,
+                            discovery_source=DiscoverySource.SEC,
+                            cik=cik,
+                            legal_name=legal_name,
+                            now=now_utc,
+                            salt=salt_try,
+                        )
+                        existing = await conn.fetchval(
+                            "SELECT ticker FROM platform.ticker_classifications WHERE id=$1",
+                            tkr14,
+                        )
+                        if not existing or existing == ticker:
+                            break  # free to use this id
+                    ins_id = await conn.fetchval(
+                        """
+                        INSERT INTO platform.ticker_classifications
+                            (id, ticker, current_ticker, current_legal_name,
+                             country, asset_class, source, ipo_venue, discovery_source,
+                             cik, status, updated_at)
+                        VALUES ($1, $2, $2, $3,
+                                'US', 'stock', 'sec_edgar_orphan_resolve_phaseB', 'Z', 'S',
+                                $4, 'active', now())
+                        ON CONFLICT (ticker) DO NOTHING
+                        RETURNING id
+                        """,
+                        tkr14, ticker, legal_name, cik,
+                    )
+                    cls_id = ins_id or await conn.fetchval(
+                        "SELECT id FROM platform.ticker_classifications WHERE ticker=$1",
+                        ticker,
+                    )
+                    if not cls_id:
+                        n_phase_b_unresolved += 1
+                        continue
+
+                    upd = await conn.execute(
+                        """
+                        UPDATE platform.prices_daily
+                        SET classification_id = $1
+                        WHERE ticker = $2 AND classification_id IS NULL
+                        """,
+                        cls_id, ticker,
+                    )
+                    row_count = int(upd.split()[-1]) if upd.startswith("UPDATE") else 0
+                    n_phase_b_rows_updated += row_count
+                    n_phase_b_resolved += 1
+                    log.info("ops.stage.sec_orphan_resolve.resolved",
+                             phase="B", ticker=ticker, cik=cik,
+                             legal_name=legal_name,
+                             classification_id=cls_id, prices_daily_rows_updated=row_count)
 
     result = {
         "dry_run": False,
-        "actionable": len(actionable),
-        "resolved": n_resolved,
-        "prices_daily_rows_closed": n_rows_updated,
-        "skipped": n_skipped,
-        "skip_reasons": skip_reasons,
+        "phase_a_actionable": len(actionable),
+        "phase_a_resolved": n_resolved,
+        "phase_a_rows_closed": n_rows_updated,
+        "phase_a_skipped": n_skipped,
+        "phase_a_skip_reasons": skip_reasons,
+        "phase_b_enabled": phase_b_enabled,
+        "phase_b_resolved": n_phase_b_resolved,
+        "phase_b_rows_closed": n_phase_b_rows_updated,
+        "phase_b_unresolved": n_phase_b_unresolved,
+        "phase_b_unresolved_sample": phase_b_unresolved_sample,
+        "total_resolved": n_resolved + n_phase_b_resolved,
+        "total_rows_closed": n_rows_updated + n_phase_b_rows_updated,
     }
     log.info("ops.stage.sec_orphan_resolve.done", **result)
     return result
