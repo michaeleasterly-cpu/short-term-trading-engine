@@ -36,6 +36,7 @@ ticker-reuse data as continuous. Net effect: walk-forward 2018-2023 scores
 are upward-biased; held-back 2024-2025 is less affected (most major
 delistings were 2023, so the 24-25 universe is mostly real survivors).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -54,7 +55,9 @@ import pandas as pd
 import structlog
 
 from tpcore.backtest.cli_overrides import overrides_from_args
+from tpcore.data.repositories import EarningsRepo, PricesRepo, UniverseRepo
 from tpcore.db import build_asyncpg_pool
+from tpcore.identity.dispatcher import IdentityDispatcher
 from tpcore.lab.target import LabTarget
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -193,32 +196,51 @@ class MomentumSummary:
 
 
 async def _load_universe_t12(pool) -> tuple[str, ...]:
-    """Default universe = T1+T2 from platform.liquidity_tiers."""
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            "SELECT ticker FROM platform.liquidity_tiers WHERE tier <= 2 ORDER BY ticker"
-        )
-    return tuple(r["ticker"] for r in rows)
+    """Default universe = T1+T2 from platform.liquidity_tiers.
+
+    Edge adapter: returns the ticker tuple via UniverseRepo (which
+    reads platform.v_universe joining ticker_classifications +
+    ticker_history + liquidity_tiers, all keyed on classification_id).
+    Output is current_ticker ascending — matches the legacy
+    "ORDER BY ticker" semantics.
+    """
+    repo = UniverseRepo(pool)
+    rows = await repo.enumerate(max_liquidity_tier=2)
+    tickers = {r.current_ticker for r in rows if r.current_ticker is not None}
+    return tuple(sorted(tickers))
 
 
 async def _load_bars(
-    pool, tickers: tuple[str, ...], start: date, end: date,
+    pool,
+    tickers: tuple[str, ...],
+    start: date,
+    end: date,
 ) -> dict[str, pd.DataFrame]:
-    sql = """
-        SELECT ticker, date, open, high, low, close, volume
-        FROM platform.prices_daily
-        WHERE ticker = ANY($1) AND date BETWEEN $2 AND $3
-        ORDER BY ticker, date
-    """
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(sql, list(tickers), start, end)
+    dispatcher = IdentityDispatcher(pool)
+    repo = PricesRepo(pool)
+    cid_to_ticker: dict[str, str] = {}
+    for t in tickers:
+        cid = await dispatcher.ticker_to_classification_id(t)
+        if cid is not None:
+            cid_to_ticker[cid] = t
     by_ticker: dict[str, list[dict]] = defaultdict(list)
-    for r in rows:
-        by_ticker[r["ticker"]].append(
-            {"date": r["date"], "open": float(r["open"]),
-             "high": float(r["high"]), "low": float(r["low"]),
-             "close": float(r["close"]), "volume": int(r["volume"])}
-        )
+    if not cid_to_ticker:
+        out: dict[str, pd.DataFrame] = {}
+        return out
+    bars_by_cid = await repo.get_window_batch(list(cid_to_ticker), start, end)
+    for cid, bars in bars_by_cid.items():
+        ticker = cid_to_ticker[cid]
+        for b in sorted(bars, key=lambda x: x.date):
+            by_ticker[ticker].append(
+                {
+                    "date": b.date,
+                    "open": float(b.open),
+                    "high": float(b.high),
+                    "low": float(b.low),
+                    "close": float(b.close),
+                    "volume": int(b.volume),
+                }
+            )
     out: dict[str, pd.DataFrame] = {}
     for ticker, ticker_rows in by_ticker.items():
         if len(ticker_rows) < 50:  # toss tickers with almost no data
@@ -319,32 +341,45 @@ def _compute_one_rebalance(
             entry_d = entry_d.date()
         if isinstance(exit_d, pd.Timestamp):
             exit_d = exit_d.date()
-        trades.append(MomentumTrade(
-            ticker=ticker,
-            entry_date=entry_d,
-            entry_price=entry_px,
-            exit_date=exit_d,
-            exit_price=exit_px,
-            pnl_pct=pnl_pct,
-            score_at_entry=score,
-        ))
+        trades.append(
+            MomentumTrade(
+                ticker=ticker,
+                entry_date=entry_d,
+                entry_price=entry_px,
+                exit_date=exit_d,
+                exit_price=exit_px,
+                pnl_pct=pnl_pct,
+                score_at_entry=score,
+            )
+        )
     return trades
 
 
 def _run_backtest(
-    panels: dict[str, pd.DataFrame], *,
-    start: date, end: date,
-    lookback: int, skip: int, hold: int, top_decile_pct: float,
+    panels: dict[str, pd.DataFrame],
+    *,
+    start: date,
+    end: date,
+    lookback: int,
+    skip: int,
+    hold: int,
+    top_decile_pct: float,
 ) -> list[MomentumTrade]:
     """Walk every month-end in [start, end]; produce per-position trades."""
     all_dates = sorted({d for df in panels.values() for d in df.index})
     rebal_dates = _month_end_dates_within(pd.DatetimeIndex(all_dates), start, end)
     trades: list[MomentumTrade] = []
     for rd in rebal_dates:
-        trades.extend(_compute_one_rebalance(
-            panels, rd,
-            lookback=lookback, skip=skip, hold=hold, top_decile_pct=top_decile_pct,
-        ))
+        trades.extend(
+            _compute_one_rebalance(
+                panels,
+                rd,
+                lookback=lookback,
+                skip=skip,
+                hold=hold,
+                top_decile_pct=top_decile_pct,
+            )
+        )
     return trades
 
 
@@ -375,19 +410,30 @@ def _compute_summary(trades: list[MomentumTrade]) -> MomentumSummary:
     gross_l = float(-losses.sum()) if len(losses) else 0.0
     pf = float(gross_w / gross_l) if gross_l > 0 else float("inf")
     return MomentumSummary(
-        n_trades=n, win_rate=win_rate, avg_return_pct=avg,
-        sharpe_annualized=sharpe, max_drawdown_pct=max_dd, profit_factor=pf,
+        n_trades=n,
+        win_rate=win_rate,
+        avg_return_pct=avg,
+        sharpe_annualized=sharpe,
+        max_drawdown_pct=max_dd,
+        profit_factor=pf,
     )
 
 
 def _trade_records_to_search_trades(trades: list[MomentumTrade]) -> list:
     from tpcore.backtest.search import SearchTrade
+
     return [
         SearchTrade(
-            ticker=t.ticker, entry_date=t.entry_date, entry_price=t.entry_price,
-            exit_date=t.exit_date, exit_price=t.exit_price,
-            pnl_pct=t.pnl_pct, direction="LONG", exit_reason=t.exit_reason,
-        ) for t in trades
+            ticker=t.ticker,
+            entry_date=t.entry_date,
+            entry_price=t.entry_price,
+            exit_date=t.exit_date,
+            exit_price=t.exit_price,
+            pnl_pct=t.pnl_pct,
+            direction="LONG",
+            exit_reason=t.exit_reason,
+        )
+        for t in trades
     ]
 
 
@@ -400,7 +446,8 @@ def _trades_to_diagnostic_dicts(trades: list[MomentumTrade]) -> list[dict]:
             "direction": "LONG",
             "ticker": t.ticker,
             "entry_price": float(t.entry_price),
-        } for t in trades
+        }
+        for t in trades
     ]
 
 
@@ -427,15 +474,9 @@ def _overrides_from_args(args: argparse.Namespace) -> dict:
 def _apply_overrides_from_args(args: argparse.Namespace) -> None:
     global _LOOKBACK_OVERRIDE, _SKIP_OVERRIDE, _HOLD_OVERRIDE, _TOP_DECILE_OVERRIDE
     global _VOL_MANAGED_OVERRIDE
-    _LOOKBACK_OVERRIDE = (
-        int(args.lookback_days) if getattr(args, "lookback_days", None) is not None else None
-    )
-    _SKIP_OVERRIDE = (
-        int(args.skip_days) if getattr(args, "skip_days", None) is not None else None
-    )
-    _HOLD_OVERRIDE = (
-        int(args.hold_days) if getattr(args, "hold_days", None) is not None else None
-    )
+    _LOOKBACK_OVERRIDE = int(args.lookback_days) if getattr(args, "lookback_days", None) is not None else None
+    _SKIP_OVERRIDE = int(args.skip_days) if getattr(args, "skip_days", None) is not None else None
+    _HOLD_OVERRIDE = int(args.hold_days) if getattr(args, "hold_days", None) is not None else None
     _TOP_DECILE_OVERRIDE = (
         float(args.top_decile_pct) if getattr(args, "top_decile_pct", None) is not None else None
     )
@@ -471,7 +512,8 @@ class MomentumWindowContext:
 
 
 async def _load_earnings_beats(
-    pool, tickers: tuple[str, ...],
+    pool,
+    tickers: tuple[str, ...],
 ) -> dict[str, list[tuple[date, float]]]:
     """Load EARNINGS_BEAT events for the candidate universe.
 
@@ -480,22 +522,33 @@ async def _load_earnings_beats(
     this output; populating it on a legacy run is a no-op (C1
     byte-identical test pins this).
     """
-    sql = """
-        SELECT ticker, event_date, magnitude_pct
-        FROM platform.earnings_events
-        WHERE ticker = ANY($1) AND event_type = 'EARNINGS_BEAT'
-        ORDER BY ticker, event_date
-    """
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(sql, list(tickers))
+    from datetime import date as _date
+
+    dispatcher = IdentityDispatcher(pool)
+    repo = EarningsRepo(pool)
+    cid_to_ticker: dict[str, str] = {}
+    for t in tickers:
+        cid = await dispatcher.ticker_to_classification_id(t)
+        if cid is not None:
+            cid_to_ticker[cid] = t
     out: dict[str, list[tuple[date, float]]] = defaultdict(list)
-    for r in rows:
-        out[r["ticker"]].append(
-            (
-                r["event_date"],
-                float(r["magnitude_pct"]) if r["magnitude_pct"] is not None else 0.0,
-            ),
-        )
+    if not cid_to_ticker:
+        return dict(out)
+    events_by_cid = await repo.get_window_batch(
+        list(cid_to_ticker),
+        _date(1900, 1, 1),
+        _date(2100, 1, 1),
+    )
+    for cid, events in events_by_cid.items():
+        ticker = cid_to_ticker[cid]
+        for ev in events:
+            if ev.event_type != "EARNINGS_BEAT":
+                continue
+            mag = float(ev.magnitude_pct) if ev.magnitude_pct is not None else 0.0
+            out[ticker].append((ev.event_date, mag))
+    # Sort per-ticker by event_date to match the legacy ORDER BY behavior.
+    for t in out:
+        out[t].sort(key=lambda x: x[0])
     return dict(out)
 
 
@@ -530,8 +583,12 @@ async def load_momentum_window_context(
     finally:
         await pool.close()
     return MomentumWindowContext(
-        panels=raw, tier_round_trip_costs=tier_costs,
-        start=start, end=end, universe=universe, raw_start=raw_start,
+        panels=raw,
+        tier_round_trip_costs=tier_costs,
+        start=start,
+        end=end,
+        universe=universe,
+        raw_start=raw_start,
         earnings_by_ticker=earnings,
     )
 
@@ -552,24 +609,14 @@ def run_momentum_with_context(
     global _LOOKBACK_OVERRIDE, _SKIP_OVERRIDE, _HOLD_OVERRIDE, _TOP_DECILE_OVERRIDE
     global _VOL_MANAGED_OVERRIDE
     overrides = dict(overrides or {})
-    _LOOKBACK_OVERRIDE = (
-        int(overrides["lookback_days"]) if "lookback_days" in overrides else None
-    )
-    _SKIP_OVERRIDE = (
-        int(overrides["skip_days"]) if "skip_days" in overrides else None
-    )
-    _HOLD_OVERRIDE = (
-        int(overrides["hold_days"]) if "hold_days" in overrides else None
-    )
-    _TOP_DECILE_OVERRIDE = (
-        float(overrides["top_decile_pct"]) if "top_decile_pct" in overrides else None
-    )
+    _LOOKBACK_OVERRIDE = int(overrides["lookback_days"]) if "lookback_days" in overrides else None
+    _SKIP_OVERRIDE = int(overrides["skip_days"]) if "skip_days" in overrides else None
+    _HOLD_OVERRIDE = int(overrides["hold_days"]) if "hold_days" in overrides else None
+    _TOP_DECILE_OVERRIDE = float(overrides["top_decile_pct"]) if "top_decile_pct" in overrides else None
     # Lab-only vol-managed override — reset per call (H-MVM-8). When
     # absent / "legacy" the rest of this function runs the existing 12-1
     # code path verbatim (byte-identical with the flag off, C1).
-    _VOL_MANAGED_OVERRIDE = (
-        str(overrides["vol_managed_mode"]) if "vol_managed_mode" in overrides else None
-    )
+    _VOL_MANAGED_OVERRIDE = str(overrides["vol_managed_mode"]) if "vol_managed_mode" in overrides else None
     _TIER_ROUND_TRIP_COSTS.clear()
     _TIER_ROUND_TRIP_COSTS.update(context.tier_round_trip_costs)
 
@@ -581,22 +628,39 @@ def run_momentum_with_context(
 
         return run_vol_managed_with_context(
             context,
-            lookback=_lookback(), skip=_skip(),
-            hold=_hold(), top_decile_pct=_top_decile(),
+            lookback=_lookback(),
+            skip=_skip(),
+            hold=_hold(),
+            top_decile_pct=_top_decile(),
             trade_log_path=trade_log_path,
         )
 
     if not context.panels:
         return BacktestRunResult(
-            engine="momentum", parameters=overrides, credibility_score=0, passed_gate=False,
-            sharpe=0.0, profit_factor=0.0, max_drawdown=0.0, trades=0, dsr=0.0,
-            min_btl_gap=0, trades_per_param=0.0, sensitivity_score=None,
-            ruin_probability=0.0, trade_log=[],
+            engine="momentum",
+            parameters=overrides,
+            credibility_score=0,
+            passed_gate=False,
+            sharpe=0.0,
+            profit_factor=0.0,
+            max_drawdown=0.0,
+            trades=0,
+            dsr=0.0,
+            min_btl_gap=0,
+            trades_per_param=0.0,
+            sensitivity_score=None,
+            ruin_probability=0.0,
+            trade_log=[],
         )
 
     trades = _run_backtest(
-        context.panels, start=context.start, end=context.end,
-        lookback=_lookback(), skip=_skip(), hold=_hold(), top_decile_pct=_top_decile(),
+        context.panels,
+        start=context.start,
+        end=context.end,
+        lookback=_lookback(),
+        skip=_skip(),
+        hold=_hold(),
+        top_decile_pct=_top_decile(),
     )
     summary = _compute_summary(trades)
 
@@ -644,7 +708,10 @@ async def run_for_search(
 ) -> BacktestRunResult:
     """Thin wrapper: load context, run once. Single-call convenience."""
     ctx = await load_momentum_window_context(
-        db_url=db_url, start=start, end=end, universe=universe,
+        db_url=db_url,
+        start=start,
+        end=end,
+        universe=universe,
     )
     return run_momentum_with_context(ctx, overrides=overrides, trade_log_path=trade_log_path)
 
@@ -688,7 +755,9 @@ async def amain(args: argparse.Namespace) -> int:
 
     if getattr(args, "json_output", False):
         result = await run_for_search(
-            db_url=db_url, start=args.start, end=args.end,
+            db_url=db_url,
+            start=args.start,
+            end=args.end,
             overrides=_overrides_from_args(args),
             trade_log_path=args.trade_log,
         )
@@ -697,14 +766,16 @@ async def amain(args: argparse.Namespace) -> int:
 
     print(f"\nMomentum backtest  {args.start} → {args.end}")
     result = await run_for_search(
-        db_url=db_url, start=args.start, end=args.end,
+        db_url=db_url,
+        start=args.start,
+        end=args.end,
         overrides=_overrides_from_args(args),
         trade_log_path=args.trade_log,
     )
     print(f"  trades        : {result.trades}")
     print(f"  sharpe        : {result.sharpe:+.3f}")
     print(f"  profit factor : {result.profit_factor:+.3f}")
-    print(f"  max drawdown  : {result.max_drawdown*100:+.2f}%")
+    print(f"  max drawdown  : {result.max_drawdown * 100:+.2f}%")
     print(f"  credibility   : {result.credibility_score}/100")
     print(f"  dsr           : {result.dsr:.4f}")
     return 0
@@ -715,20 +786,28 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--start", type=date.fromisoformat, default=date(2018, 1, 1))
     p.add_argument("--end", type=date.fromisoformat, default=date(2025, 12, 31))
     p.add_argument("--database-url", default=None)
-    p.add_argument("--json", dest="json_output", action="store_true",
-                   help="Emit a single JSON object with search-pipeline metrics and exit 0.")
-    p.add_argument("--trade-log", type=Path, default=None,
-                   help="Write standardised per-trade CSV to this path.")
-    p.add_argument("--lookback-days", type=int, default=None,
-                   help="Override lookback in trading days (default 231).")
-    p.add_argument("--skip-days", type=int, default=None,
-                   help="Override skip in trading days (default 21).")
-    p.add_argument("--hold-days", type=int, default=None,
-                   help="Override holding period in trading days (default 21).")
-    p.add_argument("--top-decile-pct", type=float, default=None,
-                   help="Top decile fraction (default 0.10).")
     p.add_argument(
-        "--vol-managed-mode", type=str, default=None, choices=["legacy", "vol_managed"],
+        "--json",
+        dest="json_output",
+        action="store_true",
+        help="Emit a single JSON object with search-pipeline metrics and exit 0.",
+    )
+    p.add_argument(
+        "--trade-log", type=Path, default=None, help="Write standardised per-trade CSV to this path."
+    )
+    p.add_argument(
+        "--lookback-days", type=int, default=None, help="Override lookback in trading days (default 231)."
+    )
+    p.add_argument("--skip-days", type=int, default=None, help="Override skip in trading days (default 21).")
+    p.add_argument(
+        "--hold-days", type=int, default=None, help="Override holding period in trading days (default 21)."
+    )
+    p.add_argument("--top-decile-pct", type=float, default=None, help="Top decile fraction (default 0.10).")
+    p.add_argument(
+        "--vol-managed-mode",
+        type=str,
+        default=None,
+        choices=["legacy", "vol_managed"],
         help=(
             "Lab-only candidate toggle. 'legacy' (default) runs the standard "
             "12-1 backtest; 'vol_managed' runs the vol-managed 12-1 + "
