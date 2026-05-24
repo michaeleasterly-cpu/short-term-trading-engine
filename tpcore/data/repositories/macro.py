@@ -51,6 +51,23 @@ _LATEST_AS_OF_SQL = """
     LIMIT 1
 """
 
+_BATCH_WINDOW_SQL = """
+    SELECT series_id, observed_date, value_num, value_text, source
+    FROM platform.macro_data
+    WHERE series_id = ANY($1::text[])
+      AND observed_date BETWEEN $2 AND $3
+    ORDER BY series_id, observed_date
+"""
+
+_BATCH_WINDOW_WITH_SOURCE_SQL = """
+    SELECT series_id, observed_date, value_num, value_text, source
+    FROM platform.macro_data
+    WHERE series_id = ANY($1::text[])
+      AND source = $4
+      AND observed_date BETWEEN $2 AND $3
+    ORDER BY series_id, observed_date
+"""
+
 
 class MacroObservation(BaseModel):
     """One macro observation — date + value + source.
@@ -85,6 +102,53 @@ class MacroRepo:
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(_SERIES_WINDOW_SQL, series_id, start, end)
         return [MacroObservation.model_validate(dict(r)) for r in rows]
+
+    async def get_window_batch(
+        self,
+        series_ids: list[str] | tuple[str, ...],
+        start: date,
+        end: date,
+        *,
+        source: str | None = None,
+    ) -> dict[str, list[MacroObservation]]:
+        """Return ``{series_id: [MacroObservation, ...]}`` for many series in one shot.
+
+        Caller passes the canonical series_id list (e.g.
+        ``['sahm_rule', 'industrial_production']``). ``source`` is an
+        optional disambiguator — only matters when the same series_id
+        could exist across providers (rare; today none collide). When
+        a series has no observations in the window, its key is omitted
+        from the result (NOT returned as an empty list) — same shape
+        convention as ``PricesRepo.get_window_batch``.
+
+        Args:
+            series_ids: list of canonical series identifiers.
+            start: inclusive lower bound on ``observed_date``.
+            end: inclusive upper bound on ``observed_date``.
+            source: optional provider filter (``'fred'``, ``'aaii'``,
+                ``'cnn_fear_greed'``). When ``None`` (the default),
+                rows from all sources are returned.
+        """
+        if not series_ids:
+            return {}
+        ids = list(series_ids)
+        async with self._pool.acquire() as conn:
+            if source is None:
+                rows = await conn.fetch(_BATCH_WINDOW_SQL, ids, start, end)
+            else:
+                rows = await conn.fetch(_BATCH_WINDOW_WITH_SOURCE_SQL, ids, start, end, source)
+        out: dict[str, list[MacroObservation]] = {}
+        for r in rows:
+            series_id = r["series_id"]
+            out.setdefault(series_id, []).append(
+                MacroObservation(
+                    observed_date=r["observed_date"],
+                    value_num=r["value_num"],
+                    value_text=r["value_text"],
+                    source=r["source"],
+                )
+            )
+        return out
 
     async def get_latest_as_of(
         self,

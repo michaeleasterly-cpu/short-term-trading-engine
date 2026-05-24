@@ -114,6 +114,112 @@ async def test_text_valued_observation_supported():
 
 
 @pytest.mark.asyncio
+async def test_get_window_batch_groups_by_series_id():
+    """Batch fetch returns dict[series_id, list[obs]] from a long-format result."""
+    rows = [
+        {
+            "series_id": "vix",
+            "observed_date": date(2026, 1, 5),
+            "value_num": Decimal("18.5"),
+            "value_text": None,
+            "source": "fred",
+        },
+        {
+            "series_id": "vix",
+            "observed_date": date(2026, 1, 6),
+            "value_num": Decimal("19.0"),
+            "value_text": None,
+            "source": "fred",
+        },
+        {
+            "series_id": "sahm_rule",
+            "observed_date": date(2026, 1, 5),
+            "value_num": Decimal("0.10"),
+            "value_text": None,
+            "source": "fred",
+        },
+    ]
+    pool = _mock_pool(fetch_returns=rows)
+    repo = MacroRepo(pool)
+    out = await repo.get_window_batch(
+        ["vix", "sahm_rule"],
+        date(2026, 1, 1),
+        date(2026, 1, 7),
+    )
+    assert set(out.keys()) == {"vix", "sahm_rule"}
+    assert len(out["vix"]) == 2
+    assert len(out["sahm_rule"]) == 1
+    sql_used = pool.conn_for_assertions.fetch.await_args.args[0]
+    assert "series_id = ANY" in sql_used
+    assert "source = $4" not in sql_used  # no source filter when source=None
+
+
+@pytest.mark.asyncio
+async def test_get_window_batch_with_source_filter():
+    """source kwarg binds $4 in the SQL — narrows to one provider."""
+    rows = [
+        {
+            "series_id": "bullish_pct",
+            "observed_date": date(2026, 1, 7),
+            "value_num": Decimal("0.40"),
+            "value_text": None,
+            "source": "aaii",
+        },
+    ]
+    pool = _mock_pool(fetch_returns=rows)
+    repo = MacroRepo(pool)
+    out = await repo.get_window_batch(
+        ["bullish_pct", "bearish_pct", "neutral_pct"],
+        date(2026, 1, 1),
+        date(2026, 1, 7),
+        source="aaii",
+    )
+    assert "bullish_pct" in out
+    args = pool.conn_for_assertions.fetch.await_args.args
+    sql_used = args[0]
+    assert "source = $4" in sql_used
+    assert args[1:] == (
+        ["bullish_pct", "bearish_pct", "neutral_pct"],
+        date(2026, 1, 1),
+        date(2026, 1, 7),
+        "aaii",
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_window_batch_empty_input_short_circuits():
+    pool = _mock_pool(fetch_returns=[])
+    repo = MacroRepo(pool)
+    out = await repo.get_window_batch([], date(2026, 1, 1), date(2026, 1, 7))
+    assert out == {}
+    assert pool.conn_for_assertions.fetch.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_get_window_batch_omits_series_with_no_observations():
+    """A series_id requested but with no rows is absent from the result dict."""
+    rows = [
+        {
+            "series_id": "vix",
+            "observed_date": date(2026, 1, 5),
+            "value_num": Decimal("18.5"),
+            "value_text": None,
+            "source": "fred",
+        },
+    ]
+    pool = _mock_pool(fetch_returns=rows)
+    repo = MacroRepo(pool)
+    out = await repo.get_window_batch(
+        ["vix", "sahm_rule", "cfnai_ma3"],
+        date(2026, 1, 1),
+        date(2026, 1, 7),
+    )
+    assert "vix" in out
+    assert "sahm_rule" not in out
+    assert "cfnai_ma3" not in out
+
+
+@pytest.mark.asyncio
 async def test_observation_is_frozen():
     obs = MacroObservation(
         observed_date=date(2026, 1, 5),
