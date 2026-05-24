@@ -203,7 +203,7 @@ _UPSERT_SQL = """
     INSERT INTO platform.ticker_classifications
         (ticker, asset_class, etf_inverse, etf_leverage, etf_category, source, last_updated)
     VALUES ($1, $2, $3, $4, $5, $6, now())
-    ON CONFLICT (ticker) DO UPDATE SET
+    ON CONFLICT (ticker) WHERE lifetime_end IS NULL DO UPDATE SET
         asset_class = EXCLUDED.asset_class,
         etf_inverse = EXCLUDED.etf_inverse,
         etf_leverage = EXCLUDED.etf_leverage,
@@ -295,7 +295,7 @@ async def upsert_classifications_with_source_snapshot(
             try:
                 async with pool.acquire() as conn:
                     await conn.execute(
-                        "DELETE FROM platform.ticker_classifications WHERE ticker=$1",
+                        "DELETE FROM platform.ticker_classifications WHERE ticker=$1 AND lifetime_end IS NULL",
                         tk,
                     )
                 deleted_ok.append(tk)

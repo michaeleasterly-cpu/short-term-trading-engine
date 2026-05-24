@@ -2960,13 +2960,13 @@ async def _stage_corporate_events_seed(
             pred_cls_id = None
             if pred_ticker:
                 pred_cls_id = await conn.fetchval(
-                    "SELECT id FROM platform.ticker_classifications WHERE ticker = $1",
+                    "SELECT id FROM platform.ticker_classifications WHERE ticker = $1 AND lifetime_end IS NULL",
                     pred_ticker,
                 )
             succ_cls_id = None
             if succ_ticker:
                 succ_cls_id = await conn.fetchval(
-                    "SELECT id FROM platform.ticker_classifications WHERE ticker = $1",
+                    "SELECT id FROM platform.ticker_classifications WHERE ticker = $1 AND lifetime_end IS NULL",
                     succ_ticker,
                 )
 
@@ -3461,7 +3461,7 @@ async def _stage_sec_orphan_resolve(
         for r in candidates:
             ticker = r["predecessor_ticker"]
             in_tc = await conn.fetchval(
-                "SELECT count(*) FROM platform.ticker_classifications WHERE ticker=$1",
+                "SELECT count(*) FROM platform.ticker_classifications WHERE ticker=$1 AND lifetime_end IS NULL",
                 ticker,
             )
             if in_tc:
@@ -3520,13 +3520,13 @@ async def _stage_sec_orphan_resolve(
                     VALUES ($1, $2, $2, $3,
                             'US', 'stock', 'sec_edgar_orphan_resolve', 'Z', 'S',
                             $4, 'active', now())
-                    ON CONFLICT (ticker) DO NOTHING
+                    ON CONFLICT (ticker) WHERE lifetime_end IS NULL DO NOTHING
                     RETURNING id
                     """,
                     tkr14, ticker, legal_name, cik,
                 )
                 cls_id = ins_id or await conn.fetchval(
-                    "SELECT id FROM platform.ticker_classifications WHERE ticker=$1",
+                    "SELECT id FROM platform.ticker_classifications WHERE ticker=$1 AND lifetime_end IS NULL",
                     ticker,
                 )
                 if not cls_id:
@@ -3627,13 +3627,13 @@ async def _stage_sec_orphan_resolve(
                         VALUES ($1, $2, $2, $3,
                                 'US', 'stock', 'sec_edgar_orphan_resolve_phaseB', 'Z', 'S',
                                 $4, 'active', now())
-                        ON CONFLICT (ticker) DO NOTHING
+                        ON CONFLICT (ticker) WHERE lifetime_end IS NULL DO NOTHING
                         RETURNING id
                         """,
                         tkr14, ticker, legal_name, cik,
                     )
                     cls_id = ins_id or await conn.fetchval(
-                        "SELECT id FROM platform.ticker_classifications WHERE ticker=$1",
+                        "SELECT id FROM platform.ticker_classifications WHERE ticker=$1 AND lifetime_end IS NULL",
                         ticker,
                     )
                     if not cls_id:
@@ -3710,14 +3710,14 @@ async def _stage_sec_orphan_resolve(
             VALUES ($1, $2, $2, $3,
                     'US', 'stock', $4, 'Z', $5,
                     $6, $7, 'active', now())
-            ON CONFLICT (ticker) DO NOTHING
+            ON CONFLICT (ticker) WHERE lifetime_end IS NULL DO NOTHING
             RETURNING id
             """,
             tkr14_id, ticker, legal_name, source_tag,
             str(discovery.value), cik, figi,
         )
         cid = ins_id or await conn.fetchval(
-            "SELECT id FROM platform.ticker_classifications WHERE ticker=$1",
+            "SELECT id FROM platform.ticker_classifications WHERE ticker=$1 AND lifetime_end IS NULL",
             ticker,
         )
         if not cid:
@@ -3928,7 +3928,7 @@ async def _persist_resolved_classification(
 ) -> str:
     """INSERT ticker_classifications with the resolved identity; return id.
 
-    Pin-at-first-resolve: ON CONFLICT (ticker) DO NOTHING preserves any
+    Pin-at-first-resolve: ON CONFLICT (ticker) WHERE lifetime_end IS NULL DO NOTHING preserves any
     existing row. If a row already exists (race / re-run), SELECT the id
     by ticker. The 5 fillable cross-vendor identifier columns (cusip, isin,
     cik, figi, ipo_venue) are UPDATEd via COALESCE so existing non-nulls
@@ -3943,7 +3943,7 @@ async def _persist_resolved_classification(
         VALUES ($1, $2, $2, $3, $4,
                 $5, $6, 'parent_resolver_backfill', $7, $8,
                 $9, $10, $11, $12, 'active', now())
-        ON CONFLICT (ticker) DO NOTHING
+        ON CONFLICT (ticker) WHERE lifetime_end IS NULL DO NOTHING
         RETURNING id
         """,
         resolved.tkr14_id,
