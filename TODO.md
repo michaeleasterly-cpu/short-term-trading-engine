@@ -899,6 +899,49 @@ operator decision: no] [effort: done]`
   Canonical fix = scope the eviction per-test (not at collection time).
   Do **NOT** fix opportunistically — it is its own task.
 
+## Corporate-history enrichment epic (2026-05-24, deferred)
+
+Surfaced during the v2.2 Path-A `prices_daily.classification_id` backfill
+(operator session 2026-05-24). 79 distinct orphan tickers in `prices_daily`
+are unresolvable via FMP /profile + SEC EDGAR ticker-string search because
+the underlying entities are in terminal corporate states:
+- liquidated bankruptcies (BBBYQ, SIVBQ, LAZRQ)
+- taken-private acquisitions (TWTR, MGI, FTCH)
+- merged-into-acquirer (SPLK→Cisco, WORK→Salesforce, DISCA→WBD)
+- foreign issuers deregistered from US (CRRDF, WPDPF, F-suffix)
+- SPAC unit/warrant variants with no FMP profile coverage
+
+EDGAR full-text search on ticker strings returns ~40% false positives
+(WORK→AVI Biopharma, MGI→MGI Pharma, FTCH→Franklin Resources) because the
+ranker matches old filings that incidentally mention the ticker character
+string, not the company that actually used the ticker.
+
+**What this epic would need** (separate scope; not v2.2 / not Task #18):
+- Acquirer / successor relationship graph (TWTR's parent was X Corp after
+  Musk acquisition; SPLK's CIK 1353283 ceased filing after Cisco's CIK
+  858877 absorbed it via Cisco's 10-K)
+- Per-ticker historical-CIK lookup that's REIABLE (probably via EDGAR's
+  `browse-edgar?action=getcompany&CIK=<ticker>` endpoint with disambiguation,
+  not full-text search)
+- Post-IPO rename tracking (Discovery DISCA → WBD; same CIK preserved)
+- Corporate-actions graph wired into `ticker_classifications` so we can
+  query "every ticker historically associated with CIK X" or "every
+  acquirer of company Y"
+
+**Current state (acceptable):** the 79 orphans stay NULL on Path-A's
+nullable `classification_id`. Engines exclude them via the standard
+`asset_class='stock' AND tier <= 2 AND delisted=false` filter, so the
+operational impact is zero. `prices_daily.delisting_date` already captures
+the going-private / merger / bankruptcy event for backtests.
+
+**When to take this:** never, unless a future use case (cross-company
+backtests, M&A event-driven research, corporate-actions deep-dives) needs
+the acquirer-resolution. Not on the critical path of any current engine.
+
+[lane: ops] [gate: none] [needs: corporate-actions adapter design + SEC EDGAR
+ticker-disambiguation client + per-ticker manual review for the ambiguous set]
+
+
 ## Discovered follow-ups — RiskGovernor work + architecture review (2026-05-17)
 
 Surfaced while making the RiskGovernor real + uniform (branch
