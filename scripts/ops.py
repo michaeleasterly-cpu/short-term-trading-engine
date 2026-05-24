@@ -3215,8 +3215,9 @@ async def _stage_corp_history_edgar_backfill(
     matching could recover that mapping and would be fragile).
 
     Idempotent: ON CONFLICT (issuer_id, valid_from) DO NOTHING on
-    issuer_history; ON CONFLICT (event_id) DO NOTHING on
-    corporate_events (deterministic event_id from cik+former_name).
+    issuer_history; WHERE NOT EXISTS by event_id on corporate_events
+    (deterministic event_id from cik+former_name; can't use ON
+    CONFLICT because the PK is bitemporal (event_id, realtime_start)).
     Safe to re-run.
 
     cfg knobs:
@@ -3355,6 +3356,13 @@ async def _stage_corp_history_edgar_backfill(
                         ev_payload = f"name_only_change|{cik}|{fn_name}|{fn_to}"
                         ev_hash = _hashlib.sha256(ev_payload.encode("utf-8")).hexdigest()[:24].upper()
                         event_id = f"EVT_{ev_hash}"
+                        # corporate_events is bitemporal — PK is
+                        # (event_id, realtime_start). The conflict
+                        # target must match the PK exactly, but
+                        # realtime_start defaults to now() so a naive
+                        # re-run would always insert a new version.
+                        # WHERE NOT EXISTS by event_id keeps the stage
+                        # truly idempotent.
                         r_ev = await conn.execute(
                             """
                             INSERT INTO platform.corporate_events (
@@ -3364,12 +3372,15 @@ async def _stage_corp_history_edgar_backfill(
                                 successor_external,
                                 source, notes
                             )
-                            VALUES ($1, 'name_only_change', $2, NULL,
-                                    NULL, NULL,
-                                    $3, $3,
-                                    NULL,
-                                    'sec_edgar', $4)
-                            ON CONFLICT (event_id) DO NOTHING
+                            SELECT $1, 'name_only_change', $2, NULL,
+                                   NULL, NULL,
+                                   $3, $3,
+                                   NULL,
+                                   'sec_edgar', $4
+                            WHERE NOT EXISTS (
+                                SELECT 1 FROM platform.corporate_events
+                                WHERE event_id = $1
+                            )
                             """,
                             event_id, fn_to, issuer_id,
                             f"EDGAR formerNames: '{fn_name}' -> '{current_name}'",
