@@ -229,6 +229,119 @@ def _extract_acquirer(text: str, filer_name_hint: str | None = None) -> str | No
     return None
 
 
+# spaCy NER fallback for acquirer extraction. Lazy import + lazy load —
+# spaCy + en_core_web_sm cost ~150 MB but are only loaded when the regex
+# extractor returns None on a filing. Cached at module level after first load
+# so subsequent filings in the same process re-use the loaded model.
+_NER_MODEL = None
+
+
+def _get_ner_model() -> object | None:
+    """Lazy-load spaCy en_core_web_sm. Returns None if spaCy or the model
+    isn't installed (caller falls back to regex-only behaviour)."""
+    global _NER_MODEL  # noqa: PLW0603 — module-level cache
+    if _NER_MODEL is not None:
+        return _NER_MODEL
+    try:
+        import spacy  # type: ignore[import-untyped]  # lazy import
+        _NER_MODEL = spacy.load("en_core_web_sm")
+    except (ImportError, OSError) as e:
+        logger.warning("sec.corp_events.spacy_unavailable", error=str(e))
+        return None
+    return _NER_MODEL
+
+
+def _extract_acquirer_ner(
+    text: str, filer_name_hint: str | None = None,
+) -> str | None:
+    """spaCy NER fallback for acquirer extraction.
+
+    Strategy: run NER on the post-Item-1.01 narrative; collect ORG entities;
+    skip the filer + boilerplate; prefer ORGs that appear NEAR M&A keywords.
+    If no near-keyword ORG, fall back to the second distinct ORG (the first
+    is usually the filer/target).
+
+    Returns None when spaCy isn't available — caller transparently falls
+    back to whatever regex returned.
+    """
+    nlp = _get_ner_model()
+    if nlp is None:
+        return None
+    body_start = max(
+        text.lower().find("item 1.01"),
+        text.lower().find("item 2.01"),
+        text.lower().find("item 1.03"),
+        0,
+    )
+    # Cap input to ~30 KB — 8-K bodies can be huge with exhibits inlined.
+    # spaCy is fast but loading + processing very long docs eats wall-clock.
+    search_text = text[body_start:body_start + 30_000] if body_start > 0 else text[:30_000]
+
+    doc = nlp(search_text)
+    hint_lower = filer_name_hint.lower() if filer_name_hint else ""
+
+    # M&A-keyword positions — used to score ORG candidates by proximity.
+    keyword_pattern = re.compile(
+        r"\b(?:merger|acquired|acquire|acquisition|merged|wholly[\s-]?owned\s+subsidiary)\b",
+        re.I,
+    )
+    keyword_positions: list[int] = [m.start() for m in keyword_pattern.finditer(search_text)]
+
+    # Merger-vehicle patterns to DEMOTE: NER tags these as ORG but they're
+    # the legal vehicle, not the actual acquirer. The acquirer is the PARENT
+    # of the merger sub — we want that, not the sub.
+    merger_vehicle_substrings: tuple[str, ...] = (
+        "merger sub", "merger agreement", "acquisition sub",
+        "bankruptcy court", "delaware court", "supreme court",
+        "the board", "board of directors", "compensation committee",
+        "event of default", "court", "the offer",
+    )
+
+    candidates: list[tuple[int, int, str]] = []  # (priority_tier, proximity, name)
+    seen: set[str] = set()
+    for ent in doc.ents:
+        if ent.label_ != "ORG":
+            continue
+        name = ent.text.strip()
+        name_lower = name.lower()
+        # Length sanity
+        if len(name) < 6 or len(name) > 80:
+            continue
+        # Skip self-referential / filer matches
+        if hint_lower and hint_lower in name_lower:
+            continue
+        if _is_boilerplate(name):
+            continue
+        # Skip generic placeholders that NER sometimes labels ORG
+        if name_lower in ("the company", "the parent", "the issuer",
+                          "the registrant", "common stock"):
+            continue
+        # Dedup
+        if name_lower in seen:
+            continue
+        seen.add(name_lower)
+        # Tier: 0 = real-company ORG; 1 = merger-vehicle / court / committee.
+        # Always prefer tier 0 over tier 1 regardless of proximity, because
+        # tier-1 matches are structurally not acquirers.
+        is_vehicle = any(sub in name_lower for sub in merger_vehicle_substrings)
+        tier = 1 if is_vehicle else 0
+        # Proximity score: smallest distance to any M&A keyword (lower = better).
+        ent_start = ent.start_char
+        if keyword_positions:
+            proximity = min(abs(ent_start - kp) for kp in keyword_positions)
+        else:
+            proximity = ent_start  # no keywords — use document position
+        candidates.append((tier, proximity, name))
+
+    if not candidates:
+        return None
+
+    # Prefer tier 0 (real companies) over tier 1 (merger vehicles); within
+    # the chosen tier, prefer closest-to-M&A-keyword.
+    candidates.sort(key=lambda c: (c[0], c[1]))
+    return candidates[0][2]
+
+
 # PE / take-private firm name hallmarks. When the acquirer's name ends
 # in one of these AND the deal is cash-only (no exchange ratio), the
 # kind heuristic upgrades from 'merger' to 'take_private'.
@@ -439,7 +552,11 @@ async def extract_for_cik(
             continue
         items = list(f.get("items") or [])
         kind = _detect_event_kind(body, items)
-        acquirer = _extract_acquirer(body, filer_name_hint=filer_name_hint)
+        # NER first (spaCy is more accurate on ORG entities); regex as fallback
+        # for environments where spaCy / en_core_web_sm aren't installed.
+        acquirer = _extract_acquirer_ner(body, filer_name_hint=filer_name_hint)
+        if acquirer is None:
+            acquirer = _extract_acquirer(body, filer_name_hint=filer_name_hint)
         cash = _extract_cash_per_share(body)
         evt_date = _extract_event_date(body, fallback=f["filing_date"])
         kind = _refine_kind_for_take_private(kind, acquirer, cash)
@@ -479,8 +596,11 @@ async def extract_for_ticker(
         items = list(f.get("items") or [])
         kind = _detect_event_kind(body, items)
         acquirer = _extract_acquirer(body, filer_name_hint=ticker)
+        if acquirer is None:
+            acquirer = _extract_acquirer_ner(body, filer_name_hint=ticker)
         cash = _extract_cash_per_share(body)
         evt_date = _extract_event_date(body, fallback=f["filing_date"])
+        kind = _refine_kind_for_take_private(kind, acquirer, cash)
         out.append(ParsedEvent(
             cik=str(f["cik"]),
             filing_date=f["filing_date"],

@@ -42,6 +42,13 @@ dependencies = [
     # proper), which is exactly the R3 design's "S3-compatible bucket
     # attached to the service".
     "minio>=7.2,<8",
+    # spaCy NLP — used by tpcore.sec.corp_events_extractor for ORG-entity
+    # extraction from SEC 8-K filings (acquirer name). The en_core_web_sm
+    # pretrained model (~13 MB) is downloaded separately via
+    # `python -m spacy download en_core_web_sm` and must be present in any
+    # environment that calls _extract_acquirer_ner. Import is lazy so the
+    # default import cost is zero for callers that don't touch the NER path.
+    "spacy>=3.7,<4",
 ]
 
 [project.optional-dependencies]
