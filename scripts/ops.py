@@ -2472,6 +2472,92 @@ async def _tkr14_backfill_figi(
     }
 
 
+async def _stage_residual_classification_id_fill(
+    pool: asyncpg.Pool, cfg: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Close residual NULL classification_id rows in path-A child tables.
+
+    Engine-abstraction session (2026-05-24 handoff) flagged this as
+    defect #3: 74 rows still NULL after the prices_daily-specific
+    backfill (60 in corporate_actions, 14 in fundamentals_quarterly).
+
+    Two root causes:
+      1. Rows were INSERTed before the BEFORE INSERT trigger existed
+         (migration 20260524_1500). Trigger never fired on them.
+      2. The row's date PRECEDES the ticker_history valid_from — the
+         trigger's date-aware lookup returned nothing.
+
+    For the 74 actual rows, the affected tickers (CTDD, NWLG, DCOMP,
+    WLACW) each have exactly ONE active classification (lifetime_end
+    IS NULL) — no reuse — so the active classification IS the right
+    answer regardless of date. The UPDATE is safe.
+
+    Idempotent + bounded (only touches NULL rows). cfg knobs:
+      dry_run (default 'true') — count rows that WOULD update.
+    """
+    log = structlog.get_logger("scripts.ops")
+    cfg = cfg or {}
+    dry_run_param = cfg.get("dry_run", "true")
+    dry_run = (dry_run_param.lower() != "false") if isinstance(dry_run_param, str) else bool(dry_run_param)
+
+    # The 13 path-A child tables that carry classification_id (excludes
+    # prices_daily — handled separately by the chunked stage).
+    targets: tuple[tuple[str, str], ...] = (
+        ("corporate_actions", "ticker"),
+        ("fundamentals_quarterly", "ticker"),
+        ("earnings_events", "ticker"),
+        ("short_interest", "ticker"),
+        ("insider_sentiment", "symbol"),
+        ("insider_transactions", "ticker"),
+        ("liquidity_tiers", "ticker"),
+        ("options_max_pain", "symbol"),
+        ("sec_material_events", "ticker"),
+        ("social_sentiment", "ticker"),
+        ("spread_observations", "ticker"),
+        ("borrow_rates", "ticker"),
+        ("universe_candidates", "ticker"),
+    )
+
+    per_table: dict[str, int] = {}
+    total_updated = 0
+    async with pool.acquire() as conn:
+        for table, ticker_col in targets:
+            n_null = await conn.fetchval(
+                f"SELECT count(*) FROM platform.{table} WHERE classification_id IS NULL"
+            )
+            if n_null == 0:
+                continue
+            if dry_run:
+                per_table[table] = n_null
+                continue
+            # Single UPDATE — for each NULL row, look up the active
+            # classification for its ticker. Unmatched tickers
+            # (no active classification at all) stay NULL.
+            r = await conn.execute(
+                f"""
+                UPDATE platform.{table} t
+                SET classification_id = tc.id
+                FROM platform.ticker_classifications tc
+                WHERE t.classification_id IS NULL
+                  AND tc.ticker = t.{ticker_col}
+                  AND tc.lifetime_end IS NULL
+                """
+            )
+            updated = int(r.split()[-1]) if r.startswith("UPDATE") else 0
+            per_table[table] = updated
+            total_updated += updated
+            log.info("ops.stage.residual_classification_id_fill.table_done",
+                     table=table, rows_updated=updated)
+
+    result = {
+        "dry_run": dry_run,
+        "per_table": per_table,
+        "total_updated": total_updated,
+    }
+    log.info("ops.stage.residual_classification_id_fill.done", **result)
+    return result
+
+
 async def _stage_prices_daily_backfill_classification_id(
     pool: asyncpg.Pool, cfg: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -6631,6 +6717,14 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     ("sec_orphan_resolve",
         lambda pool, cfg: (lambda: _stage_sec_orphan_resolve(pool, cfg)),
         HEAVY_STAGE_TIMEOUT_SEC),
+    # Defect-#3 cleanup — close residual NULL classification_id rows in
+    # the 13 path-A child tables (corporate_actions + fundamentals_quarterly
+    # had 74 nulls post-trigger-creation; pre-trigger inserts + date-
+    # window misses). Single UPDATE per table joins on ticker_classifications
+    # WHERE lifetime_end IS NULL. Idempotent + bounded (only touches NULL rows).
+    ("residual_classification_id_fill",
+        lambda pool, cfg: (lambda: _stage_residual_classification_id_fill(pool, cfg)),
+        STAGE_TIMEOUT_SEC),
     # Maintain platform.ticker_history SCD-2 timeline — INSERTs missing rows
     # for any ticker_classification without one + closes valid_to on rows
     # whose ticker is delisted in prices_daily. Idempotent + safe to wire as
