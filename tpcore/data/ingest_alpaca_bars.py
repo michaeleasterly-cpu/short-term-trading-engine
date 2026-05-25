@@ -274,9 +274,17 @@ async def _upsert_bars(
     #   * OHLC consistent (high >= max(open, close, low), low <= min(open, close, high))
     #   * volume >= 0 and not NULL
     #   * date not in the future
+    #
+    # P5 trust-audit (2026-05-25): rejected rows are routed to
+    # ``platform.ingest_quarantine`` with the offending payload, the
+    # reason, and ``error_kind='validation'``. The legacy behaviour
+    # was to count rejected rows in a log line and drop them
+    # silently — operators had no forensic record of bad bars and
+    # couldn't audit retries.
+    from tpcore.ingestion.quarantine import ERROR_VALIDATION, record_rejection
     today = datetime.now(UTC).date()
     rows: list[tuple] = []
-    rejected = 0
+    rejections: list[tuple[dict, str]] = []
     for b in bars:
         ts = datetime.fromisoformat(b["t"].replace("Z", "+00:00"))
         session_date = ts.date()
@@ -286,27 +294,44 @@ async def _upsert_bars(
         close = b.get("c")
         v = b.get("v")
         if (o is None or h is None or low is None or close is None or v is None):
-            rejected += 1
+            rejections.append((b, "null_required_field"))
             continue
         if close <= 0 or close > 1e8 or o <= 0 or h <= 0 or low <= 0:
-            rejected += 1
+            rejections.append((b, "ohlc_out_of_range"))
             continue
         if h < max(o, close, low) or low > min(o, close, h):
-            rejected += 1
+            rejections.append((b, "ohlc_inconsistent"))
             continue
         if session_date > today:
-            rejected += 1
+            rejections.append((b, "future_date"))
             continue
         rows.append((
             symbol, session_date, o, h, low, close, int(v),
             close,  # adjusted_close — same as close because adjustment=all
             delisted, delisting_date, source,
         ))
-    if rejected:
+    if rejections:
         logger.warning(
             "ingest_alpaca_bars.physical_truth_rejected",
-            symbol=symbol, rejected=rejected, accepted=len(rows),
+            symbol=symbol, rejected=len(rejections), accepted=len(rows),
         )
+        # Route each rejected bar to quarantine. Best-effort —
+        # record_rejection swallows + logs its own write errors so
+        # an audit-row write failure cannot abort the accepted-rows
+        # upsert below.
+        feed_source = "fmp_daily_bars" if source == "fmp" else "alpaca_daily_bars"
+        for payload, reason in rejections:
+            await record_rejection(
+                pool,
+                source=feed_source,
+                target_table="platform.prices_daily",
+                payload={**payload, "ticker": symbol, "source": source},
+                error_message=(
+                    f"physical_truth_gate: {reason} "
+                    f"(symbol={symbol} ts={payload.get('t')})"
+                ),
+                error_kind=ERROR_VALIDATION,
+            )
     if not rows:
         return 0
     async with pool.acquire() as conn:
