@@ -315,7 +315,13 @@ def test_drawdown_breaker_respects_custom_threshold():
 
 class _RecordingConn:
     """Tiny pool stand-in. Hands out canned ``fetch`` results based on whether
-    the SQL hits ``universe_candidates`` or ``liquidity_tiers``."""
+    the SQL hits ``universe_candidates``, ``liquidity_tiers``, or ``v_universe``.
+
+    PR-16: the live-path universe fallback now reads via UniverseRepo
+    (platform.v_universe). ``liquidity_rows`` is reshaped on the fly
+    into v_universe row shape for the fallback path so existing test
+    fixtures don't need rewriting.
+    """
 
     def __init__(self, candidates_rows: list[dict], liquidity_rows: list[dict]) -> None:
         self.candidates_rows = candidates_rows
@@ -326,6 +332,26 @@ class _RecordingConn:
         self.sql_seen.append(sql)
         if "universe_candidates" in sql:
             return self.candidates_rows
+        if "v_universe" in sql:
+            # Reshape liquidity_rows into v_universe row shape for the
+            # UniverseRepo fallback path. Each {ticker: T} becomes the
+            # minimum UniverseRow dict the repo's model_validate accepts.
+            from datetime import date as _date
+
+            return [
+                {
+                    "classification_id": f"CID_{r['ticker']}",
+                    "ticker_at_date": r["ticker"],
+                    "current_ticker": r["ticker"],
+                    "asset_class": "stock",
+                    "country": "US",
+                    "status": "active",
+                    "liquidity_tier": 1,
+                    "valid_from": _date(2020, 1, 1),
+                    "valid_to": None,
+                }
+                for r in self.liquidity_rows
+            ]
         if "liquidity_tiers" in sql:
             return self.liquidity_rows
         return []
@@ -374,4 +400,6 @@ async def test_load_universe_falls_back_to_liquidity_tiers_when_empty():
     universe = await plug._load_universe(pool, date(2026, 5, 13))  # noqa: SLF001
     assert universe == {"AAPL", "MSFT"}
     assert any("universe_candidates" in s for s in pool.conn.sql_seen)
-    assert any("liquidity_tiers" in s for s in pool.conn.sql_seen)
+    # PR-16: fallback now reads v_universe via UniverseRepo (not direct
+    # liquidity_tiers query).
+    assert any("v_universe" in s for s in pool.conn.sql_seen)
