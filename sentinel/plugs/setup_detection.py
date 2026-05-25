@@ -63,7 +63,7 @@ if TYPE_CHECKING:  # pragma: no cover
 
 logger = structlog.get_logger(__name__)
 
-# Indicators we consume from platform.macro_indicators.
+# Indicators we consume from platform.macro_data.
 _INDICATORS_NEEDED: tuple[str, ...] = (
     "sahm_rule",
     "industrial_production",

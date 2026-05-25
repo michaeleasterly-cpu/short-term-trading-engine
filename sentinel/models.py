@@ -31,7 +31,7 @@ SAHM_RULE_THRESHOLD = Decimal("0.50")
 SAHM_RULE_POINTS = 25
 
 # NB: master plan §4.6 quotes ISM-PMI thresholds (< 45 = contraction).
-# The FRED indicator actually loaded into platform.macro_indicators is
+# The FRED indicator actually loaded into platform.macro_data is
 # INDPRO (Industrial Production Index, base 2017=100), not the ISM PMI.
 # INDPRO trough during COVID April 2020 was ~84.5; pre-recession baseline
 # is ~100. Thresholds below are calibrated to that scale — < 90 = COVID-
