@@ -318,13 +318,10 @@ _SPECS: tuple[HealSpec, ...] = (
     HealSpec(check_name="aaii_sentiment_freshness", source="aaii_sentiment",
              healable=True, stage="aaii_sentiment",
              params={"skip_guard_days": "0"}, max_attempts=2),
-    # Stale insider-filings (the daily-granularity Form-4 table for the
-    # vector engine's 30d-rolling MSPR signal) → re-run the bounded
-    # canonical delta stage. Idempotent under the table PK.
-    HealSpec(check_name="insider_filings_freshness",
-             source="insider_sentiment_daily",
-             healable=True, stage="daily_insider_sentiment_delta",
-             params={}, max_attempts=2),
+    # P0_3 RETIRE 2026-05-25 — ``insider_filings_freshness`` HealSpec
+    # removed alongside the dropped ``platform.insider_filings`` table.
+    # The validation check, FeedProfile, ProviderBinding, producer
+    # adapter, and ops stages were all retired in the same PR.
     # P0 trust-audit (2026-05-25): meta-monitor on daemon liveness.
     # Stops the silent-stall failure class where data_operations /
     # engine_service / allocator died days ago but nothing alerted

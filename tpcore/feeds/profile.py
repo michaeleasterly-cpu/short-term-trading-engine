@@ -213,27 +213,10 @@ FEED_PROFILES: dict[str, FeedProfile] = {
                  "Quota: Finnhub free tier 60/min sustained + 30/s burst "
                  "(per-second cap not modeled in profile; enforce adapter-side).",
     ),
-    "insider_sentiment_daily": FeedProfile(
-        feed="insider_sentiment_daily", trigger=FeedTrigger.CONTINUOUS,
-        cadence_days=1, freshness_max_age_days=5, skip_guard_days=1,
-        # FMP Starter shared with prices_daily — total budget across all
-        # FMP endpoints is 300 req/min AND 100k/day (the budget is per-API-key
-        # not per-endpoint, so this competes with the daily-bars + earnings +
-        # fundamentals pulls for the same daily envelope).
-        rate_limit_requests=300, rate_limit_period_seconds=60,
-        daily_request_quota=100_000,
-        concurrent_request_limit=1,
-        quota_source_url="https://site.financialmodelingprep.com/developer/docs/pricing",
-        evidence="FMP /stable/insider-trading/search — per-filing Form-4 "
-                 "rows at DAILY granularity (Carver 2026-05-22 vector "
-                 "engine unblock; the monthly finnhub_insider_sentiment "
-                 "lost information for the 30d-rolling MSPR signal). "
-                 "Continuous trigger: Form 4 has a 2-business-day "
-                 "filing deadline so a daily pull catches every new "
-                 "filing the day after it lands at FMP. Quota: shares "
-                 "the FMP Starter 300/min + 100k/day budget with "
-                 "prices_daily + earnings + fundamentals.",
-    ),
+    # P0_3 RETIRE 2026-05-25 — ``insider_sentiment_daily`` FeedProfile
+    # removed (target table ``platform.insider_filings`` was DROPPED in
+    # migration 20260522_0200; redundant with the
+    # ``sec_insider_transactions`` SEC-EDGAR Form-4 path).
     "greeks_max_pain": FeedProfile(
         feed="greeks_max_pain", trigger=FeedTrigger.MARKET_CLOSE,
         cadence_days=1, freshness_max_age_days=7, skip_guard_days=1,

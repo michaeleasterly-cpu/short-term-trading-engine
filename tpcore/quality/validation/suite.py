@@ -72,10 +72,6 @@ from .checks.fundamentals_quarterly_completeness import (
 from .checks.fundamentals_quarterly_completeness import (
     check_fundamentals_quarterly_completeness,
 )
-from .checks.insider_filings_freshness import (
-    CHECK_NAME as INSIDER_FILINGS_FRESHNESS_NAME,
-)
-from .checks.insider_filings_freshness import check_insider_filings_freshness
 from .checks.insider_sentiment_freshness import CHECK_NAME as INSIDER_SENTIMENT_NAME
 from .checks.insider_sentiment_freshness import check_insider_sentiment_freshness
 from .checks.issuer_history_integrity import (
@@ -174,7 +170,6 @@ KNOWN_CHECK_NAMES: tuple[str, ...] = (
     SHORT_INTEREST_NAME,
     BORROW_RATES_NAME,
     AAII_SENTIMENT_NAME,
-    INSIDER_FILINGS_FRESHNESS_NAME,
     ISSUER_HISTORY_INTEGRITY_NAME,
     ISSUER_SECURITIES_INTEGRITY_NAME,
     CORPORATE_EVENTS_INTEGRITY_NAME,
@@ -300,10 +295,6 @@ async def run_suite(
     aaii_sentiment_task = _safe_run(
         AAII_SENTIMENT_NAME, check_aaii_sentiment_freshness, pool, None
     )
-    insider_filings_task = _safe_run(
-        INSIDER_FILINGS_FRESHNESS_NAME,
-        check_insider_filings_freshness, pool, None,
-    )
     daemon_freshness_task = _safe_run(
         DAEMON_FRESHNESS_NAME, check_daemon_freshness, pool, None,
     )
@@ -321,7 +312,7 @@ async def run_suite(
         options_maxpain_result, insider_sentiment_result,
         social_sentiment_result, fear_greed_result,
         short_interest_result, borrow_rates_result,
-        aaii_sentiment_result, insider_filings_result,
+        aaii_sentiment_result,
         issuer_history_result, issuer_securities_result,
         corporate_events_result, ticker_history_result,
         daemon_freshness_result, doc_cadence_result,
@@ -336,7 +327,7 @@ async def run_suite(
         options_maxpain_task, insider_sentiment_task,
         social_sentiment_task, fear_greed_task,
         short_interest_task, borrow_rates_task,
-        aaii_sentiment_task, insider_filings_task,
+        aaii_sentiment_task,
         issuer_history_task, issuer_securities_task,
         corporate_events_task, ticker_history_task,
         daemon_freshness_task, doc_cadence_task,
@@ -352,7 +343,7 @@ async def run_suite(
         options_maxpain_result, insider_sentiment_result,
         social_sentiment_result, fear_greed_result,
         short_interest_result, borrow_rates_result,
-        aaii_sentiment_result, insider_filings_result,
+        aaii_sentiment_result,
         issuer_history_result, issuer_securities_result,
         corporate_events_result, ticker_history_result,
         daemon_freshness_result, doc_cadence_result,

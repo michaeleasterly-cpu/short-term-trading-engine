@@ -64,9 +64,6 @@ from tpcore.quality.validation.checks.fundamentals_integrity import (
 from tpcore.quality.validation.checks.fundamentals_quarterly_completeness import (
     check_fundamentals_quarterly_completeness,
 )
-from tpcore.quality.validation.checks.insider_filings_freshness import (
-    check_insider_filings_freshness,
-)
 from tpcore.quality.validation.checks.insider_sentiment_freshness import (
     check_insider_sentiment_freshness,
 )
@@ -182,7 +179,7 @@ _CHECK_FN: dict[str, _CheckCallable] = {
     "short_interest_freshness": _src(check_short_interest_freshness, None),
     "borrow_rates_freshness": _src(check_borrow_rates_freshness, None),
     "aaii_sentiment_freshness": _src(check_aaii_sentiment_freshness, None),
-    "insider_filings_freshness": _src(check_insider_filings_freshness, None),
+    # P0_3 RETIRE 2026-05-25 — ``insider_filings_freshness`` removed.
     "issuer_history_integrity": _src(check_issuer_history_integrity, None),
     "issuer_securities_integrity": _src(check_issuer_securities_integrity, None),
     "corporate_events_integrity": _src(check_corporate_events_integrity, None),
