@@ -112,5 +112,13 @@ def test_eco_archive_candidate_is_honest_not_a_fake_fallback() -> None:
     assert active_provider("macro_indicators") is providers["fred"]
     # No other feed gained a fictitious alternative — eco_archive is
     # the only multi-binding feed (registry not padded).
-    multi = [f for f in all_feeds() if len(bindings_for(f)) > 1]
-    assert multi == ["macro_indicators"], f"unexpected multi-binding feeds: {multi}"
+    multi = sorted(f for f in all_feeds() if len(bindings_for(f)) > 1)
+    # ``prices_daily`` gained a second binding in PR P0_4 (2026-05-25 DFCR
+    # realignment): fmp ACTIVE + alpaca DEPRECATED. NOT a fictitious
+    # fallback — alpaca is the prior provider, retained as DEPRECATED to
+    # preserve provenance of the 2.7M existing source='alpaca' rows the
+    # data session is backfilling away. Exactly-one-ACTIVE still holds
+    # (asserted by other tests in this file).
+    assert multi == ["macro_indicators", "prices_daily"], (
+        f"unexpected multi-binding feeds: {multi}"
+    )

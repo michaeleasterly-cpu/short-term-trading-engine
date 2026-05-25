@@ -83,12 +83,47 @@ class ProviderBinding(BaseModel):
 # Exactly one ACTIVE per feed; no fallbacks yet (Phase 4). Feed set ==
 # tpcore.feeds.FEED_PROFILES keys (the drift test enforces both ways).
 _BINDINGS: tuple[ProviderBinding, ...] = (
+    # P0_4 DFCR realignment 2026-05-25 — FMP became the daily-bars
+    # primary on 2026-05-22 (per operator memory
+    # project_fmp_primary_daily_bars_2026_05_22). Alpaca demoted to
+    # DEPRECATED: Alpaca SIP entitlement is unreliable + Alpaca's
+    # daily-bar close-date semantics differ from FMP/Tradier per
+    # operator memory feedback_no_alpaca_for_daily_prices_backfill
+    # (per-row close-date inconsistency contaminates backtest +
+    # engine signals). The 2.7M existing alpaca rows are being
+    # backfilled to tradier/fmp by the data session; new alpaca
+    # writes are also blocked at the substrate by the
+    # ``prices_daily_no_new_alpaca`` CHECK constraint
+    # (migration 20260525_1200).
+    ProviderBinding(
+        feed="prices_daily", provider="fmp",
+        adapter_module="tpcore.data.ingest_fmp_bars",
+        status=ProviderStatus.ACTIVE,
+        evidence="FMP /stable/historical-price-eod/full — full CTA "
+                 "consolidated tape on the operator's $200/year "
+                 "Starter tier (volume parity with SIP confirmed "
+                 "2026-05-22: AAPL 2026-05-21 volume = 42.8M, "
+                 "matching SIP). Per-ticker calls; ~300 req/min; "
+                 "~25 min wall time for the ~7,600-ticker universe.",
+    ),
     ProviderBinding(
         feed="prices_daily", provider="alpaca",
         adapter_module="tpcore.data.ingest_alpaca_bars",
-        status=ProviderStatus.ACTIVE,
-        evidence="Alpaca /v2/stocks/bars multi-symbol; feed=iex (free "
-                 "tier has no SIP entitlement — verified 2026-05-17).",
+        status=ProviderStatus.DEPRECATED,
+        evidence="DEPRECATED 2026-05-25 (P0_4 trust-audit). Was "
+                 "ACTIVE via Alpaca /v2/stocks/bars multi-symbol "
+                 "(feed=iex; free tier has no SIP entitlement). "
+                 "Reason for demote: (1) Alpaca SIP doesn't work "
+                 "as of 2026-05-22 (operator-confirmed); (2) "
+                 "Alpaca's daily-bar close-date semantics differ "
+                 "from FMP/Tradier (session-boundary / timezone "
+                 "aggregation differs — memory feedback_no_alpaca_"
+                 "for_daily_prices_backfill). The 2.7M existing "
+                 "alpaca-tagged rows in prices_daily are HISTORICAL "
+                 "ARTIFACT being backfilled away by the data "
+                 "session; new alpaca writes blocked at the "
+                 "substrate by ``prices_daily_no_new_alpaca`` "
+                 "CHECK constraint (migration 20260525_1200).",
     ),
     ProviderBinding(
         feed="macro_indicators", provider="fred",

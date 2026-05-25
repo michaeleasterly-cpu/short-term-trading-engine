@@ -87,7 +87,10 @@ def test_plan_blocks_candidate_real_case() -> None:
 
 def test_plan_blocks_unknown_and_already_active() -> None:
     assert not plan_cutover("nope", "x").allowed
-    assert not plan_cutover("prices_daily", "alpaca").allowed  # already ACTIVE
+    # ``prices_daily`` ACTIVE provider became fmp in the P0_4 DFCR
+    # realignment (2026-05-25). Cutover plan to the current ACTIVE
+    # must still be blocked.
+    assert not plan_cutover("prices_daily", "fmp").allowed
 
 
 # ── overlay resolver ────────────────────────────────────────────────
@@ -96,7 +99,10 @@ def test_plan_blocks_unknown_and_already_active() -> None:
 async def test_resolve_uses_code_default_when_no_overlay() -> None:
     s = _Store()
     b = await resolve_active_provider(s, "prices_daily")
-    assert b is not None and b.provider == "alpaca"  # code-declared ACTIVE
+    # Code-declared ACTIVE for prices_daily switched alpaca→fmp in
+    # the P0_4 DFCR realignment (2026-05-25); alpaca demoted to
+    # DEPRECATED.
+    assert b is not None and b.provider == "fmp"
 
 
 async def test_resolve_uses_overlay_when_present(monkeypatch) -> None:
@@ -120,7 +126,9 @@ async def test_resolve_uses_overlay_when_present(monkeypatch) -> None:
 
 async def test_apply_cutover_writes_overlay_and_audits_and_blocks_bad() -> None:
     s = _Store()
-    bad = plan_cutover("prices_daily", "alpaca")  # blocked plan
+    # ``prices_daily`` ACTIVE became fmp post-P0_4 (alpaca is now
+    # DEPRECATED) — plan_cutover to the ACTIVE incumbent is blocked.
+    bad = plan_cutover("prices_daily", "fmp")  # blocked plan: already ACTIVE
     with pytest.raises(ValueError, match="blocked cutover"):
         await apply_cutover(s, bad)
     # A synthetic allowed plan applies + audits.
