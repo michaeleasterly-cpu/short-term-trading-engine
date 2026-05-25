@@ -39,6 +39,9 @@ from tpcore.quality.validation.checks.corporate_actions_completeness import (
 from tpcore.quality.validation.checks.corporate_actions_integrity import (
     check_corporate_actions_integrity,
 )
+from tpcore.quality.validation.checks.corporate_events_integrity import (
+    check_corporate_events_integrity,
+)
 from tpcore.quality.validation.checks.delistings import check_delistings
 from tpcore.quality.validation.checks.earnings_events_freshness import (
     check_earnings_events_freshness,
@@ -60,6 +63,12 @@ from tpcore.quality.validation.checks.insider_filings_freshness import (
 )
 from tpcore.quality.validation.checks.insider_sentiment_freshness import (
     check_insider_sentiment_freshness,
+)
+from tpcore.quality.validation.checks.issuer_history_integrity import (
+    check_issuer_history_integrity,
+)
+from tpcore.quality.validation.checks.issuer_securities_integrity import (
+    check_issuer_securities_integrity,
 )
 from tpcore.quality.validation.checks.liquidity_tiers_completeness import (
     check_liquidity_tiers_completeness,
@@ -101,6 +110,9 @@ from tpcore.quality.validation.checks.social_sentiment_freshness import (
 from tpcore.quality.validation.checks.splits import check_splits
 from tpcore.quality.validation.checks.ticker_classifications_freshness import (
     check_ticker_classifications_coverage,
+)
+from tpcore.quality.validation.checks.ticker_history_integrity import (
+    check_ticker_history_integrity,
 )
 from tpcore.quality.validation.models import CheckResult
 from tpcore.quality.validation.sources.constituents import FixtureConstituentSource
@@ -165,6 +177,10 @@ _CHECK_FN: dict[str, _CheckCallable] = {
     "borrow_rates_freshness": _src(check_borrow_rates_freshness, None),
     "aaii_sentiment_freshness": _src(check_aaii_sentiment_freshness, None),
     "insider_filings_freshness": _src(check_insider_filings_freshness, None),
+    "issuer_history_integrity": _src(check_issuer_history_integrity, None),
+    "issuer_securities_integrity": _src(check_issuer_securities_integrity, None),
+    "corporate_events_integrity": _src(check_corporate_events_integrity, None),
+    "ticker_history_integrity": _src(check_ticker_history_integrity, None),
 }
 
 

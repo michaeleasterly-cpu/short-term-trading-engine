@@ -7963,6 +7963,20 @@ _VALIDATION_CHUNK_SPECS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "aaii_sentiment_freshness",
         ),
     ),
+    # Chunk 7 — SCD-2 / bitemporal integrity (added 2026-05-25 after
+    # the META-was-tip-of-iceberg audit found 2,061 overlap pairs).
+    # All four are pure aggregate queries over the corp-history
+    # substrate — fast, no per-ticker scan; isolating them in their
+    # own chunk keeps the prices_daily/macro chunks deterministic.
+    (
+        "corp_history_integrity",
+        (
+            "issuer_history_integrity",
+            "issuer_securities_integrity",
+            "corporate_events_integrity",
+            "ticker_history_integrity",
+        ),
+    ),
 )
 
 
