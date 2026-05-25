@@ -147,6 +147,11 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 1
+    # The codebase's minio-based S3Backend (tpcore/ingestion/csv_archive_backends.py)
+    # expects host:port without scheme; boto3 wants a full URL. Normalize so the
+    # env-var SoT can stay scheme-less and this script still works.
+    if "://" not in endpoint:
+        endpoint = f"https://{endpoint}"
 
     root = _data_dir()
     print(f"Walking archive root: {root}")
@@ -167,7 +172,12 @@ def main(argv: list[str] | None = None) -> int:
         endpoint_url=endpoint,
         aws_access_key_id=key_id,
         aws_secret_access_key=secret,
-        config=BotoConfig(retries={"max_attempts": 5, "mode": "standard"}),
+        region_name="auto",
+        config=BotoConfig(
+            retries={"max_attempts": 5, "mode": "standard"},
+            s3={"addressing_style": "virtual"},
+            signature_version="s3v4",
+        ),
     )
 
     uploaded = skipped = errored = 0
