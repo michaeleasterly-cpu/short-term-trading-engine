@@ -14,6 +14,7 @@ without spinning up a real Postgres. The spec contract under test:
   behavior (used by the replay path itself to avoid infinite-loop
   re-deferral).
 """
+
 from __future__ import annotations
 
 import json
@@ -54,6 +55,15 @@ class _FakeConn:
     async def execute(self, sql: str, *args):
         self.calls.append(("execute", sql, args))
         return self._pool.next_result("execute", sql, args)
+
+    async def fetchval(self, sql: str, *args):
+        # PR-12: AARWriter uses IdentityDispatcher (fetchval against
+        # ticker_history) to resolve classification_id at write time.
+        # Default behavior — return None ⇒ aar_events.classification_id
+        # column stays NULL (acceptable; column is nullable). Tests that
+        # want to assert on cid plumbing can queue via the pool.
+        self.calls.append(("fetchval", sql, args))
+        return self._pool.next_result("fetchval", sql, args)
 
 
 class _FakeAcquireCM:
@@ -105,6 +115,11 @@ class _FakePool:
             return self._fetchrow_queue.pop(0) if self._fetchrow_queue else None
         if method == "fetch":
             return self._fetch_queue.pop(0) if self._fetch_queue else []
+        if method == "fetchval":
+            # PR-12: dispatcher ticker→cid lookup. Default None (column
+            # stays NULL). The tests that exercise the defer path don't
+            # care about cid resolution.
+            return None
         return self._execute_queue.pop(0) if self._execute_queue else None
 
     def acquire(self) -> _FakeAcquireCM:
@@ -230,18 +245,9 @@ async def test_write_aar_on_exception_defers_and_returns_false() -> None:
     # Three SQL calls: the failed aar_events fetchrow, the
     # aar_deferred fetchrow, the application_log execute.
     methods_sqls = [(m, sql) for (m, sql, _) in pool.conn.calls]
-    assert any(
-        m == "fetchrow" and "INSERT INTO platform.aar_events" in sql
-        for (m, sql) in methods_sqls
-    )
-    assert any(
-        m == "fetchrow" and "INSERT INTO platform.aar_deferred" in sql
-        for (m, sql) in methods_sqls
-    )
-    assert any(
-        m == "execute" and "INSERT INTO platform.application_log" in sql
-        for (m, sql) in methods_sqls
-    )
+    assert any(m == "fetchrow" and "INSERT INTO platform.aar_events" in sql for (m, sql) in methods_sqls)
+    assert any(m == "fetchrow" and "INSERT INTO platform.aar_deferred" in sql for (m, sql) in methods_sqls)
+    assert any(m == "execute" and "INSERT INTO platform.application_log" in sql for (m, sql) in methods_sqls)
 
 
 async def test_write_aar_self_heal_false_reraises() -> None:
