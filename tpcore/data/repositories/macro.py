@@ -63,8 +63,8 @@ _BATCH_WINDOW_WITH_SOURCE_SQL = """
     SELECT series_id, observed_date, value_num, value_text, source
     FROM platform.macro_data
     WHERE series_id = ANY($1::text[])
-      AND source = $4
       AND observed_date BETWEEN $2 AND $3
+      AND source = $4
     ORDER BY series_id, observed_date
 """
 

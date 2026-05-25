@@ -196,23 +196,6 @@ async def test_row_to_aar_populates_classification_id_when_present() -> None:
 
 
 @pytest.mark.asyncio
-async def test_row_to_aar_classification_id_defaults_none_when_column_absent() -> None:
-    """Records without a classification_id key (e.g. patched callers
-    querying without the column) leave AARRow.classification_id = None."""
-    record = {
-        "engine": "sigma",
-        "trade_id": "AAPL_1",
-        "ticker": "AAPL",
-        "aar_data": {"pnl_net": "1.00", "exit_ts": "2026-05-12T00:00:00Z"},
-        "recorded_at": datetime(2026, 5, 12, tzinfo=UTC),
-        # NO classification_id key
-    }
-    aar = _row_to_aar(record)
-    assert aar is not None
-    assert aar.classification_id is None
-
-
-@pytest.mark.asyncio
 async def test_reader_fetch_by_classification_id_returns_cross_engine_history() -> None:
     """The cid query spans all engines — useful for cross-engine cid analysis."""
     cid_rows = [

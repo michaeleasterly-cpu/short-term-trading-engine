@@ -101,13 +101,10 @@ def _row_to_aar(record: object) -> AARRow | None:
     exit_ts = _parse_ts(exit_raw)
     if exit_ts is None:
         return None
-    # classification_id is optional on the record (older rows pre-PR-12
-    # may not have the column projected if a caller patches the SQL).
-    cid: str | None = None
-    try:
-        cid = record["classification_id"]  # type: ignore[index]
-    except (KeyError, TypeError):
-        cid = None
+    # classification_id is always projected by the SELECT SQLs in this
+    # module; the DB column itself is nullable (populated by PR-12+ writes
+    # via IdentityDispatcher, NULL for legacy rows + unresolvable tickers).
+    cid: str | None = record["classification_id"]  # type: ignore[index]
     return AARRow(
         engine=record["engine"],  # type: ignore[index]
         trade_id=record["trade_id"],  # type: ignore[index]
