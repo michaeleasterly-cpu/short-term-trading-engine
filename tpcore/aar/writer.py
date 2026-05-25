@@ -1,4 +1,5 @@
 """Idempotent writer for ``AfterActionReport`` rows."""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -6,6 +7,7 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from tpcore.identity.dispatcher import IdentityDispatcher
 from tpcore.lab.context import assert_not_in_lab
 
 from .models import AfterActionReport
@@ -54,6 +56,12 @@ class AARWriter:
         # deferred row. The replay catches the exception itself and
         # leaves the original ``aar_deferred`` row pending.
         self._self_heal = self_heal
+        # Dispatcher resolves the durable classification_id at write
+        # time so aar_events.classification_id is populated alongside
+        # the human-readable ticker. PR #331 added the column to the
+        # table; this writer started populating it. None pool ⇒ no
+        # dispatcher needed (DB-less environments).
+        self._dispatcher = IdentityDispatcher(db_pool) if db_pool is not None else None
 
     @property
     def pool(self) -> asyncpg.Pool | None:
@@ -77,9 +85,19 @@ class AARWriter:
         if self._pool is None:
             return False
 
+        # Resolve the durable classification_id at write time. None is
+        # acceptable — for synthetic AARs whose ticker has no row in
+        # ticker_history (rare; happens on first-issue dates), the
+        # column stays NULL and the FK (nullable) permits it. The
+        # human-readable ticker column is unchanged.
+        cid: str | None = None
+        if self._dispatcher is not None:
+            cid = await self._dispatcher.ticker_to_classification_id(aar.ticker)
+
         sql = """
-            INSERT INTO platform.aar_events (engine, trade_id, ticker, aar_data, recorded_at)
-            VALUES ($1, $2, $3, $4::jsonb, $5)
+            INSERT INTO platform.aar_events
+              (engine, trade_id, ticker, classification_id, aar_data, recorded_at)
+            VALUES ($1, $2, $3, $4, $5::jsonb, $6)
             ON CONFLICT (engine, trade_id) DO NOTHING
             RETURNING 1
         """
@@ -90,6 +108,7 @@ class AARWriter:
                     aar.engine,
                     aar.trade_id,
                     aar.ticker,
+                    cid,
                     aar.model_dump_json(),
                     datetime.now(UTC),
                 )
