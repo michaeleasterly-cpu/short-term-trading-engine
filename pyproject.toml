@@ -161,6 +161,13 @@ ignore = ["E501"]
 # scoped per-file ignore is the correct form (mirrors the frozen-oracle
 # precedent above) — never an inline `# noqa: SLF001`.
 "tpcore/tests/test_stale_order_cancel.py" = ["SLF"]
+# P4 trust-audit sentinel (2026-05-25): a regression-guard against
+# accidentally removing the provenance-downgrade WHERE clause from
+# ``_upsert_bars``. The test reads ``inspect.getsource(_upsert_bars)``
+# (legitimate private-name access — there IS no public surface; the
+# function is module-internal by intent). Scoped per-file ignore is
+# the canonical form per ``.claude/rules/tests-and-ci.md``.
+"tpcore/tests/test_upsert_bars_provenance_guard.py" = ["SLF"]
 # SP-B T4 dispatch-seam characterization test: pinning that the lazy
 # PARAM_RANGES + `_lab_target_for` resolver + the `_runner_for`/
 # `_context_loader_for`/`_context_runner_for` thin views preserve the

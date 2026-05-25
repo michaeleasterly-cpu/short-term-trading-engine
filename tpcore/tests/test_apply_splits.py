@@ -18,17 +18,75 @@ class _FakeConn:
     def __init__(self, rows: list[dict]) -> None:
         self.rows = rows  # mutable; UPDATE modifies in place
         self.calls: list[tuple[str, tuple]] = []
+        # Pre-image audit (P4 trust-audit 2026-05-25): the new
+        # apply_split writes one row here per attempt, then flips
+        # ``applied=true`` after the destructive UPDATE.
+        self.pre_image_log: list[dict] = []
+        from uuid import uuid4
+        self._next_pre_image_id_factory = uuid4
 
     async def fetch(self, sql: str, *args) -> list[dict]:
         self.calls.append((sql, args))
         sql_lower = sql.lower()
-        if "from platform.prices_daily" in sql_lower and "ticker = $1" in sql_lower:
+        # P4 sample-rows query (LIMIT 5).
+        if (
+            "from platform.prices_daily" in sql_lower
+            and "limit 5" in sql_lower
+        ):
+            ticker = args[0]
+            before = args[1]
+            matched = [
+                r for r in self.rows
+                if r["ticker"] == ticker and r["date"] < before
+            ]
+            matched.sort(key=lambda r: r["date"], reverse=True)
+            return [
+                {k: str(v) for k, v in row.items() if k != "ticker"}
+                for row in matched[:5]
+            ]
+        # Legacy around-split bars query (LIMIT 2).
+        if (
+            "from platform.prices_daily" in sql_lower
+            and "ticker = $1" in sql_lower
+        ):
             ticker = args[0]
             on_or_before = args[1]
-            matched = [r for r in self.rows if r["ticker"] == ticker and r["date"] <= on_or_before]
+            matched = [
+                r for r in self.rows
+                if r["ticker"] == ticker and r["date"] <= on_or_before
+            ]
             matched.sort(key=lambda r: r["date"], reverse=True)
             return matched[:2]
         return []
+
+    async def fetchval(self, sql: str, *args):
+        """P4: count rows-to-update + pre-image INSERT ... RETURNING id."""
+        self.calls.append((sql, args))
+        sql_lower = sql.lower()
+        if "count(*)" in sql_lower and "platform.prices_daily" in sql_lower:
+            ticker = args[0]
+            before = args[1]
+            return sum(
+                1 for r in self.rows
+                if r["ticker"] == ticker and r["date"] < before
+            )
+        if "insert into platform.split_pre_image_log" in sql_lower:
+            new_id = self._next_pre_image_id_factory()
+            self.pre_image_log.append({
+                "pre_image_id": new_id,
+                "ticker": args[0],
+                "action_date": args[1],
+                "ratio": args[2],
+                "n_rows_to_update": args[3],
+                "close_before": args[4],
+                "close_after": args[5],
+                "observed_ratio": args[6],
+                "pre_image_sample": args[7],
+                "applied": False,
+                "n_rows_actually_updated": None,
+            })
+            return new_id
+        return None
 
     async def execute(self, sql: str, *args) -> str:
         self.calls.append((sql, args))
@@ -45,6 +103,18 @@ class _FakeConn:
                     r["volume"] = int(Decimal(str(r["volume"])) * ratio)
                     n += 1
             return f"UPDATE {n}"
+        # P4: mark pre-image applied.
+        if (
+            "update platform.split_pre_image_log" in sql_lower
+            and "applied = true" in sql_lower
+        ):
+            pre_image_id, n_actually = args
+            for row in self.pre_image_log:
+                if row["pre_image_id"] == pre_image_id:
+                    row["applied"] = True
+                    row["n_rows_actually_updated"] = n_actually
+                    break
+            return "UPDATE 1"
         return ""
 
 

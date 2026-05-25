@@ -238,6 +238,16 @@ async def _upsert_bars(
     """
     if not bars:
         return 0
+    # P4 trust-audit (2026-05-25): provenance downgrade guard on
+    # ON CONFLICT. The WHERE clause uses platform._source_priority(s)
+    # (migration 20260525_0700) to rank sources so a lower-priority
+    # writer (e.g. legacy ``alpaca``) re-running over a row already
+    # tagged ``fmp`` no longer silently overwrites the FMP-primary
+    # provenance flagged by the audit. Same-priority refresh is
+    # allowed (fresh fmp pull over existing fmp row); strictly-lower
+    # priority is rejected silently (the UPDATE is skipped — ON
+    # CONFLICT WHERE filters the row out; INSERT didn't fire because
+    # the PK collided). The ``source`` column survives unchanged.
     sql = """
         INSERT INTO platform.prices_daily (
             ticker, date, open, high, low, close, volume,
@@ -254,6 +264,8 @@ async def _upsert_bars(
             delisted = EXCLUDED.delisted,
             delisting_date = EXCLUDED.delisting_date,
             source = EXCLUDED.source
+        WHERE platform._source_priority(EXCLUDED.source)
+            >= platform._source_priority(platform.prices_daily.source)
     """
     # Physical-truth gate — matches validation.row_integrity expectations.
     # Bad rows MUST NEVER reach the database (per the data-acceptance rule
