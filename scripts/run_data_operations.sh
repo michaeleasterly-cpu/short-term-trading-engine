@@ -133,7 +133,15 @@ _write_data_operations_heartbeat() {
     fi
     local status="healthy"
     if [[ "$rc" -ne 0 ]]; then status="degraded"; fi
-    DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python -c "
+    # cwd inside the EXIT trap is whatever the parent shell's cwd is —
+    # the script does `cd "$(dirname "$0")/.."` at line ~39, so `.venv`
+    # resolves from repo root. Traps run in the parent process (not a
+    # subshell), so this cwd is preserved through to exit.
+    # Use if/then/else (not `&&/||`) for unambiguous success-vs-fail
+    # logging — the `cmd && A || B` idiom would fire B on ANY non-zero
+    # from A (e.g., a stdout-write error), so the logs would lie about
+    # whether the heartbeat actually wrote.
+    if DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python -c "
 import asyncio, asyncpg, os, sys
 async def main():
     # statement_cache_size/jit: keep in sync with tpcore.db.build_asyncpg_pool (Supabase pooler safety)
@@ -150,8 +158,11 @@ async def main():
     )
     await conn.close()
 asyncio.run(main())
-" "$status" 2>&1 && echo "✓ data_operations heartbeat written (status=$status)" \
-        || echo "⚠ data_operations heartbeat write FAILED (status=$status) — daemon_freshness will surface this"
+" "$status" 2>&1; then
+        echo "✓ data_operations heartbeat written (status=$status)"
+    else
+        echo "⚠ data_operations heartbeat write FAILED (status=$status) — daemon_freshness will surface this"
+    fi
 }
 
 # Catch any unexpected non-zero exit too (set -e isn't on; rely on
