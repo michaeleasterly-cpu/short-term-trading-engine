@@ -91,7 +91,11 @@ async def test_seed_monotone_snapshots_runs_both_upserts_and_returns_counts() ->
     assert len(conn.execute_calls) == 2, conn.execute_calls
     first, second = conn.execute_calls
     assert "platform.sec_insider_row_counts_snapshot" in first
-    assert "platform.sec_insider_transactions" in first
+    # Table was renamed in migration 20260523_0600 — Form-4 transactions
+    # now live in platform.insider_transactions (the rename closed a
+    # runtime ``relation "platform.sec_insider_transactions" does not
+    # exist`` defect in the sec_filings stage 2026-05-25).
+    assert "platform.insider_transactions" in first
     assert "ON CONFLICT (ticker)" in first
     assert "platform.earnings_events_count_snapshot" in second
     assert "platform.earnings_events" in second

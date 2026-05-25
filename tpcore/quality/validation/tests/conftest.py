@@ -148,6 +148,24 @@ class FakePool:
             and "lt.ticker is null" in sql_lower
         ):
             return []
+        # daemon_freshness (P0 trust-audit): all tracked daemons fresh
+        # so unrelated e2e suite tests don't false-fail. The dedicated
+        # unit-test file constructs its own pool with controlled rows.
+        if "platform.daemon_heartbeats" in sql_lower:
+            from datetime import UTC, datetime, timedelta
+
+            from tpcore.quality.validation.checks.daemon_freshness import (
+                DAEMON_MAX_AGE_SECS,
+            )
+            now = datetime.now(UTC)
+            return [
+                {
+                    "daemon_name": daemon,
+                    "last_heartbeat": now - timedelta(seconds=30),
+                    "age_secs": 30,
+                }
+                for daemon in DAEMON_MAX_AGE_SECS
+            ]
         if "platform.prices_daily" in sql_lower and "ticker = any($1)" in sql_lower:
             tickers = set(args[0])
             return [r for r in self.rows if r["ticker"] in tickers]
@@ -225,6 +243,19 @@ class FakePool:
 
     async def fetchrow(self, sql: str, *args) -> dict[str, Any] | None:
         sql_lower = sql.lower()
+        # data_operations_complete_cadence (P0 trust-audit): emit was
+        # fresh so unrelated e2e suite tests don't false-fail. The
+        # dedicated unit-test file constructs its own pool with
+        # controlled return values.
+        if (
+            "platform.application_log" in sql_lower
+            and "data_operations_complete" in sql_lower
+        ):
+            from datetime import UTC, datetime, timedelta
+            return {
+                "last_emit": datetime.now(UTC) - timedelta(hours=1),
+                "total_emits": 1,
+            }
         # corporate_actions_completeness: live DB row count for the
         # shrinkage gate. Return a positive count so the check has a
         # non-empty live snapshot to compare against the (mocked or

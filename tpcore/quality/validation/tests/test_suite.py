@@ -147,6 +147,7 @@ async def test_run_suite_passes_when_all_checks_pass() -> None:
         "issuer_securities_integrity",
         "corporate_events_integrity",
         "ticker_history_integrity",
+        "daemon_freshness", "data_operations_complete_cadence",
     }
     assert all(c.passed for c in result.checks)
 
@@ -157,7 +158,7 @@ async def test_run_suite_writes_one_score_per_check() -> None:
     await run_suite(
         pool, delistings=delistings, constituents=constituents, splits=splits, writer=writer
     )
-    assert len(writer.scores) == 32  # +4 SCD-2/bitemporal integrity checks (2026-05-25)
+    assert len(writer.scores) == 34  # +4 SCD-2/bitemporal + 2 P0 (2026-05-25)
     sources = {s.source for s in writer.scores}
     assert sources == {
         "validation.delistings",
@@ -192,6 +193,8 @@ async def test_run_suite_writes_one_score_per_check() -> None:
         "validation.issuer_securities_integrity",
         "validation.corporate_events_integrity",
         "validation.ticker_history_integrity",
+        "validation.daemon_freshness",
+        "validation.data_operations_complete_cadence",
     }
 
 
@@ -229,8 +232,8 @@ async def test_run_suite_aggregates_failures() -> None:
     failed_checks = [c for c in result.checks if not c.passed]
     assert len(failed_checks) == 1
     assert failed_checks[0].name == "delistings"
-    # All 32 rows still written (+4 SCD-2/bitemporal integrity checks 2026-05-25)
-    assert len(writer.scores) == 32
+    # All 34 rows still written (+4 SCD-2/bitemporal + 2 P0 checks 2026-05-25)
+    assert len(writer.scores) == 34
 
 
 async def test_run_suite_wraps_check_exception() -> None:
