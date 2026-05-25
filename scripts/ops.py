@@ -2820,6 +2820,141 @@ async def _stage_gleif_lei_backfill(
     return result
 
 
+async def _stage_issuer_history_cleanup(
+    pool: asyncpg.Pool, cfg: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Clean up issuer_history corruption from corp_events_seed + EDGAR
+    backfill interaction.
+
+    Operator catch 2026-05-25 after the META duplicate fix landed:
+    "find out if it's more". Comprehensive audit found pervasive
+    duplicate / overlap / zero-duration / invalid-range issues from
+    two loaders writing without coordination:
+
+      - corp_events_seed inserts a (1900-01-01, NULL) catch-all row
+        for each seeded issuer.
+      - EDGAR backfill inserts dated formerName periods + a current
+        name from the last formerName's `to` date onward.
+
+      The two don't conflict on PK (issuer_id, valid_from) because
+      one is 1900-01-01 and the other is 2005-ish, so both land —
+      and the catch-all overlaps everything.
+
+    Fix per issuer (one transactional rewrite):
+
+      1. Delete zero-duration rows (valid_from = valid_to) — useless.
+      2. Delete invalid-range rows (valid_to < valid_from) — broken.
+      3. For overlapping periods: sort by valid_from, then close
+         each row's valid_to to the NEXT row's valid_from.
+      4. Latest row stays open (valid_to = NULL).
+      5. Same-name-twice cases are left as-is (could be legitimate
+         flip-flops; deduplicating risks dropping real history).
+
+    Also touches issuer_securities (open duplicates flagged by
+    same audit).
+
+    Idempotent. cfg knobs:
+      dry_run (default 'true') — count what would change.
+    """
+    log = structlog.get_logger("scripts.ops")
+    cfg = cfg or {}
+    dry_run_param = cfg.get("dry_run", "true")
+    dry_run = (dry_run_param.lower() != "false") if isinstance(dry_run_param, str) else bool(dry_run_param)
+
+    findings: dict[str, Any] = {"dry_run": dry_run}
+
+    async with pool.acquire() as conn:
+        n_zero = await conn.fetchval(
+            "SELECT count(*) FROM platform.issuer_history WHERE valid_from = valid_to"
+        )
+        findings["zero_duration_count"] = n_zero
+        if not dry_run and n_zero > 0:
+            r = await conn.execute(
+                "DELETE FROM platform.issuer_history WHERE valid_from = valid_to"
+            )
+            findings["zero_duration_deleted"] = r
+
+        n_invalid = await conn.fetchval(
+            "SELECT count(*) FROM platform.issuer_history WHERE valid_to IS NOT NULL AND valid_to < valid_from"
+        )
+        findings["invalid_range_count"] = n_invalid
+        if not dry_run and n_invalid > 0:
+            r = await conn.execute(
+                "DELETE FROM platform.issuer_history WHERE valid_to IS NOT NULL AND valid_to < valid_from"
+            )
+            findings["invalid_range_deleted"] = r
+
+        n_overlap = await conn.fetchval(
+            """
+            SELECT count(*) FROM platform.issuer_history a
+            JOIN platform.issuer_history b
+              ON a.issuer_id = b.issuer_id AND a.valid_from < b.valid_from
+            WHERE (a.valid_to IS NULL OR a.valid_to > b.valid_from)
+            """
+        )
+        findings["overlap_pairs_count"] = n_overlap
+        if not dry_run and n_overlap > 0:
+            r = await conn.execute(
+                """
+                WITH ordered AS (
+                    SELECT issuer_id, valid_from, valid_to,
+                           LEAD(valid_from) OVER (
+                               PARTITION BY issuer_id ORDER BY valid_from
+                           ) AS next_from
+                    FROM platform.issuer_history
+                )
+                UPDATE platform.issuer_history ih
+                SET valid_to = o.next_from
+                FROM ordered o
+                WHERE ih.issuer_id = o.issuer_id
+                  AND ih.valid_from = o.valid_from
+                  AND o.next_from IS NOT NULL
+                  AND (ih.valid_to IS NULL OR ih.valid_to > o.next_from)
+                """
+            )
+            findings["overlap_repaired"] = r
+
+        n_iss_open_dup = await conn.fetchval(
+            """
+            SELECT count(*) FROM (
+                SELECT issuer_id, classification_id FROM platform.issuer_securities
+                WHERE valid_to IS NULL
+                GROUP BY issuer_id, classification_id HAVING count(*) > 1
+            ) s
+            """
+        )
+        findings["issuer_securities_open_dup_pairs"] = n_iss_open_dup
+        if not dry_run and n_iss_open_dup > 0:
+            r = await conn.execute(
+                """
+                WITH ranked AS (
+                    SELECT issuer_id, classification_id, valid_from,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY issuer_id, classification_id
+                               ORDER BY valid_from DESC
+                           ) AS rn,
+                           MAX(valid_from) OVER (
+                               PARTITION BY issuer_id, classification_id
+                           ) AS latest_from
+                    FROM platform.issuer_securities
+                    WHERE valid_to IS NULL
+                )
+                UPDATE platform.issuer_securities iss
+                SET valid_to = r.latest_from
+                FROM ranked r
+                WHERE iss.issuer_id = r.issuer_id
+                  AND iss.classification_id = r.classification_id
+                  AND iss.valid_from = r.valid_from
+                  AND r.rn > 1
+                  AND iss.valid_to IS NULL
+                """
+            )
+            findings["issuer_securities_repaired"] = r
+
+    log.info("ops.stage.issuer_history_cleanup.done", **findings)
+    return findings
+
+
 async def _stage_audit_cleanup_2026_05_24(
     pool: asyncpg.Pool, cfg: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -7301,6 +7436,15 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # Idempotent (each operation is INSERT/UPDATE on a NOT-yet state).
     ("audit_cleanup_2026_05_24",
         lambda pool, cfg: (lambda: _stage_audit_cleanup_2026_05_24(pool, cfg)),
+        STAGE_TIMEOUT_SEC),
+    # Operator catch 2026-05-25: META duplicate issuer_history fix
+    # in PR #340 was specific; same root cause produced 2,061
+    # overlapping pairs across other issuers. Stage rewrites
+    # issuer_history per-issuer into a non-overlapping chain (next
+    # row's valid_from caps previous row's valid_to) + cleans
+    # zero-duration + invalid-range. Idempotent.
+    ("issuer_history_cleanup",
+        lambda pool, cfg: (lambda: _stage_issuer_history_cleanup(pool, cfg)),
         STAGE_TIMEOUT_SEC),
     # FMP /stable/profile bulk-batch backfill for ticker_classifications.
     # Populates gics_sector + refreshes country/current_legal_name when
