@@ -148,6 +148,14 @@ def _input_from_block(block: dict) -> dict:
         if not isinstance(patterns, list) or not all(isinstance(p, str) for p in patterns):
             sys.exit("watchPatterns must be a list of glob strings")
         payload["watchPatterns"] = list(patterns)
+    # ipv6EgressEnabled: when true, the service instance can reach
+    # IPv6-only or IPv6-preferred endpoints (Supabase direct connection
+    # is the canonical example — IPv6 is free + lossless, IPv4 incurs
+    # IP-rotation overhead on Supabase Pro). Declare per service in
+    # railway.json so future apply runs re-affirm the setting (otherwise
+    # a dashboard toggle silently regresses to IPv4-only egress).
+    if "ipv6EgressEnabled" in block:
+        payload["ipv6EgressEnabled"] = bool(block["ipv6EgressEnabled"])
     return payload
 
 
