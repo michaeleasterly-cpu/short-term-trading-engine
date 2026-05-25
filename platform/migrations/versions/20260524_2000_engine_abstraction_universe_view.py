@@ -38,7 +38,10 @@ Create Date: 2026-05-24
 from alembic import op
 
 revision: str = "20260524_2000"
-down_revision: str | None = "20260524_1903"
+# Rebased onto the other session's chain (their 20260525_0000..0200 also
+# branched off 20260524_1903 in parallel; this fixes the multi-head
+# conflict by sitting on top of their tail).
+down_revision: str | None = "20260525_0200"
 branch_labels: tuple[str, ...] | None = None
 depends_on: tuple[str, ...] | None = None
 
