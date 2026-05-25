@@ -34,6 +34,8 @@ from momentum.models import (
     is_tradeable_common_stock,
 )
 from tpcore.backtest.filter_diagnostics import FilterDiagnostics
+from tpcore.data.repositories import PricesRepo, UniverseRepo
+from tpcore.identity.dispatcher import IdentityDispatcher
 from tpcore.interfaces.engine_plug import BaseEnginePlug
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -161,16 +163,27 @@ class MomentumSetupDetection(BaseEnginePlug):
                 as_of=as_of.isoformat(),
                 reason="no universe_candidates rows for as_of",
             )
-            rows = await conn.fetch(
-                "SELECT ticker FROM platform.liquidity_tiers WHERE tier <= $1 ORDER BY ticker",
-                self._max_tier,
-            )
-        return {r["ticker"] for r in rows}
+        # Fallback: enumerate the universe via UniverseRepo (PR-16).
+        # UniverseRepo reads platform.v_universe which joins
+        # ticker_classifications × ticker_history × liquidity_tiers.
+        repo = UniverseRepo(pool)
+        universe_rows = await repo.enumerate(max_liquidity_tier=self._max_tier)
+        return {r.current_ticker for r in universe_rows if r.current_ticker is not None}
 
     async def _load_tier_map(self, pool: asyncpg.Pool) -> dict[str, int]:
-        async with pool.acquire() as conn:
-            rows = await conn.fetch("SELECT ticker, tier FROM platform.liquidity_tiers")
-        return {r["ticker"]: int(r["tier"]) for r in rows}
+        """Full tier map ticker → tier.
+
+        Edge adapter: queries UniverseRepo for every cid with a tier
+        assigned, then projects to ticker → tier. Excludes rows with
+        no liquidity_tier (untracked instruments).
+        """
+        repo = UniverseRepo(pool)
+        rows = await repo.enumerate(max_liquidity_tier=999, include_untracked_liquidity=False)
+        return {
+            r.current_ticker: int(r.liquidity_tier)
+            for r in rows
+            if r.current_ticker is not None and r.liquidity_tier is not None
+        }
 
     async def _load_bars(
         self,
@@ -179,21 +192,28 @@ class MomentumSetupDetection(BaseEnginePlug):
         start: date,
         end: date,
     ) -> dict[str, list[dict]]:
-        async with pool.acquire() as conn:
-            rows = await conn.fetch(
-                """
-                SELECT ticker, date, close
-                FROM platform.prices_daily
-                WHERE ticker = ANY($1) AND date BETWEEN $2 AND $3
-                ORDER BY ticker, date
-                """,
-                tickers,
-                start,
-                end,
-            )
+        """Edge adapter: ticker list in, ticker-keyed dict[ticker, [{date,close}]] out.
+
+        Dispatches each ticker → classification_id (PR-16) and fetches
+        via PricesRepo.get_window_batch by cid. Live-path conversion
+        (momentum is the actively-trading paper engine — public method
+        signature preserved so the plug's caller contract is unchanged).
+        """
+        dispatcher = IdentityDispatcher(pool)
+        repo = PricesRepo(pool)
+        cid_to_ticker: dict[str, str] = {}
+        for t in tickers:
+            cid = await dispatcher.ticker_to_classification_id(t)
+            if cid is not None:
+                cid_to_ticker[cid] = t
         out: dict[str, list[dict]] = {}
-        for r in rows:
-            out.setdefault(r["ticker"], []).append({"date": r["date"], "close": float(r["close"])})
+        if not cid_to_ticker:
+            return out
+        bars_by_cid = await repo.get_window_batch(list(cid_to_ticker), start, end)
+        for cid, bars in bars_by_cid.items():
+            ticker = cid_to_ticker[cid]
+            for b in sorted(bars, key=lambda x: x.date):
+                out.setdefault(ticker, []).append({"date": b.date, "close": float(b.close)})
         return out
 
     def _score_one(self, bars: list[dict], as_of: date) -> float | None:
