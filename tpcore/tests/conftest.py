@@ -73,21 +73,14 @@ def _install_reversion_incumbent_dossier():
     yield
 
 
-@pytest.fixture(autouse=True)
-def _reset_identity_dispatcher_cache():
-    """Reset the IdentityDispatcher class-level shared cache between tests.
-
-    PR-19 made the TTL+LRU cache shared across all dispatcher instances
-    holding the same pool (keyed on ``id(pool)``). Python recycles
-    ``id()`` values after objects are GC'd, so a previous test's
-    MagicMock pool can leave cache entries that a later test's fresh
-    MagicMock pool inherits at the same id. The reset runs before AND
-    after every test (autouse=True) so each test starts and ends with
-    an empty cache. Production code is unaffected — pools are
-    long-lived in daemons.
-    """
-    from tpcore.identity.dispatcher import IdentityDispatcher
-
-    IdentityDispatcher.reset_shared_caches()
-    yield
-    IdentityDispatcher.reset_shared_caches()
+# Note (2026-05-25): the autouse `_reset_identity_dispatcher_cache`
+# fixture from PR-19/PR-21 was removed after it correlated with
+# test_run_backtest_persists_credibility_rubric reding the AUTHORITATIVE
+# (serial + order-flip) CI gate. The hypothesis was preventive
+# isolation against id(pool) recycling under MagicMock, but the
+# fixture's autouse-on-every-test changed pytest's ordering of
+# module imports enough to surface a pre-existing fragility in the
+# catalyst credibility test's monkeypatch. The dispatcher's shared
+# cache still works correctly within a single test (per-call dedup)
+# and across tests that don't recycle MagicMock ids — adequate for
+# the cumulative suite.
