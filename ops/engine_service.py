@@ -65,6 +65,17 @@ TRIGGER_EVENT_TYPES: tuple[str, ...] = ("DATA_OPERATIONS_COMPLETE", "DATA_REPAIR
 SWEEP_SCRIPT = "scripts/run_all_engines.sh"
 POOL_MAX_SIZE = 6  # sweep-poll (1) + co-hosted monitor (~4) + headroom (H-8)
 
+# When the deployed topology runs the trade-monitor stream as a SEPARATE
+# Railway service (4-service event-driven shape, 2026-05-25), the
+# co-hosted monitor co-task inside engine-service MUST be disabled, or
+# Alpaca rejects the second simultaneous websocket connection. Set the
+# env var ``STE_DISABLE_TRADE_MONITOR_COTASK=1`` on the Railway
+# engine-service deployment only; leave unset on the Mac (DA-3 mirror).
+DISABLE_TRADE_MONITOR_COTASK = (
+    os.environ.get("STE_DISABLE_TRADE_MONITOR_COTASK", "").strip().lower()
+    in {"1", "true", "yes"}
+)
+
 # Engine-service daemon observability (2026-05-21 fix). The daemon
 # previously emitted ONLY to structlog/stderr → file
 # (~/Library/Logs/short-term-trading-engine/engine-service.log), so its
@@ -549,9 +560,17 @@ async def _amain() -> int:
 
     # H-1: construct the monitor against the SHARED pool (mirror
     # tpcore.trade_monitor.amain()'s construction block — NOT amain()).
-    monitor = TradeMonitor(
-        pool=pool, broker=AlpacaPaperBrokerAdapter(),
-        aar_writer=AARWriter(pool))
+    # Skipped entirely when STE_DISABLE_TRADE_MONITOR_COTASK=1 (Railway
+    # 4-service shape where trade-monitor is its own service).
+    if DISABLE_TRADE_MONITOR_COTASK:
+        monitor = None
+        logger.info(
+            "engine_service.trade_monitor_cotask_disabled_via_env",
+            env_var="STE_DISABLE_TRADE_MONITOR_COTASK")
+    else:
+        monitor = TradeMonitor(
+            pool=pool, broker=AlpacaPaperBrokerAdapter(),
+            aar_writer=AARWriter(pool))
 
     async def _sweep_factory():
         await _main_loop(pool, stop_event, run_id=daemon_run_id)
@@ -561,13 +580,17 @@ async def _amain() -> int:
 
     sweep_task = asyncio.create_task(
         _run_supervised("sweep", _sweep_factory, stop_event, pool=pool))
-    monitor_task = asyncio.create_task(
-        _run_supervised("monitor", _monitor_factory, stop_event, pool=pool))
+    if monitor is None:
+        monitor_task = None
+    else:
+        monitor_task = asyncio.create_task(
+            _run_supervised("monitor", _monitor_factory, stop_event, pool=pool))
+    _live_tasks = tuple(t for t in (sweep_task, monitor_task) if t is not None)
     try:
-        # Exit on signal (stop_event) OR if both co-tasks have exited
+        # Exit on signal (stop_event) OR if all live co-tasks have exited
         # (nothing left to supervise — don't zombie the process).
         stop_waiter = asyncio.ensure_future(stop_event.wait())
-        both_done = asyncio.gather(sweep_task, monitor_task)
+        both_done = asyncio.gather(*_live_tasks)
         done, _pending = await asyncio.wait(
             {stop_waiter, both_done},
             return_when=asyncio.FIRST_COMPLETED)
@@ -578,10 +601,9 @@ async def _amain() -> int:
         with contextlib.suppress(BaseException):
             await both_done
     finally:
-        for t in (sweep_task, monitor_task):
+        for t in _live_tasks:
             t.cancel()
-        await asyncio.gather(sweep_task, monitor_task,
-                             return_exceptions=True)
+        await asyncio.gather(*_live_tasks, return_exceptions=True)
         # Best-effort STOPPED row BEFORE pool.close() — once the pool
         # is closed, the emit helper's acquire() raises and the
         # observability row is lost. Crash-isolated either way.
