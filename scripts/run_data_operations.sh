@@ -105,9 +105,71 @@ _notify_failure() {
     fi
     echo "✗ FAILURE — ${step} exited ${rc}. Notification fired (if osascript available)."
 }
+
+# Heartbeat-writer for the `data_operations` daemon row in
+# `platform.daemon_heartbeats` — the writer side of the
+# `daemon_freshness` check (added 2026-05-25 spec 008 P0). The check
+# tracks four daemons: trade_monitor (writer in tpcore/trade_monitor.py)
+# + engine_service + data_operations + allocator. trade_monitor writes
+# from inside its 15-min loop; data_operations is a once-a-day cron and
+# its writer lives HERE — fired by the EXIT trap so it ALWAYS writes
+# regardless of upstream stage success or failure. The `status` field
+# captures the outcome: 'healthy' on rc=0, 'degraded' otherwise; the
+# daemon_freshness check is liveness-only (any row within 26h is fresh).
+#
+# Same UPSERT shape as tpcore/trade_monitor.py:_write_heartbeat_once.
+# Failure-isolated: a heartbeat-write failure is logged but does NOT
+# alter the parent script's exit code or fire a notification (the parent
+# is already exiting; a heartbeat-write failure must never crash or
+# spam-alert the operator).
+_write_data_operations_heartbeat() {
+    local rc="$1"
+    # If .env hasn't been loaded yet (early exit path — e.g., the lock
+    # was already held by another run), DATABASE_URL_IPV4 isn't set and
+    # we have nothing to write to. Skip silently — the other run will
+    # write its own heartbeat when IT reaches the trap.
+    if [[ -z "${DATABASE_URL_IPV4:-}" ]]; then
+        return 0
+    fi
+    local status="healthy"
+    if [[ "$rc" -ne 0 ]]; then status="degraded"; fi
+    # cwd inside the EXIT trap is whatever the parent shell's cwd is —
+    # the script does `cd "$(dirname "$0")/.."` at line ~39, so `.venv`
+    # resolves from repo root. Traps run in the parent process (not a
+    # subshell), so this cwd is preserved through to exit.
+    # Use if/then/else (not `&&/||`) for unambiguous success-vs-fail
+    # logging — the `cmd && A || B` idiom would fire B on ANY non-zero
+    # from A (e.g., a stdout-write error), so the logs would lie about
+    # whether the heartbeat actually wrote.
+    if DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python -c "
+import asyncio, asyncpg, os, sys
+async def main():
+    # statement_cache_size/jit: keep in sync with tpcore.db.build_asyncpg_pool (Supabase pooler safety)
+    conn = await asyncpg.connect(os.environ['DATABASE_URL'], statement_cache_size=0, server_settings={'jit': 'off'})
+    await conn.execute(
+        '''
+        INSERT INTO platform.daemon_heartbeats (daemon_name, last_heartbeat, status)
+        VALUES ('data_operations', now(), \$1)
+        ON CONFLICT (daemon_name) DO UPDATE
+            SET last_heartbeat = EXCLUDED.last_heartbeat,
+                status = EXCLUDED.status
+        ''',
+        sys.argv[1],
+    )
+    await conn.close()
+asyncio.run(main())
+" "$status" 2>&1; then
+        echo "✓ data_operations heartbeat written (status=$status)"
+    else
+        echo "⚠ data_operations heartbeat write FAILED (status=$status) — daemon_freshness will surface this"
+    fi
+}
+
 # Catch any unexpected non-zero exit too (set -e isn't on; rely on
-# explicit `exit` calls but trap as safety net).
-trap '_rc=$?; rm -rf "$LOCK_DIR" 2>/dev/null; if [[ $_rc -ne 0 ]]; then _notify_failure "trap (unexpected)" $_rc; fi' EXIT
+# explicit `exit` calls but trap as safety net). Always write the
+# data_operations daemon heartbeat (success or failure path) so
+# `daemon_freshness` reflects the run cadence honestly.
+trap '_rc=$?; rm -rf "$LOCK_DIR" 2>/dev/null; _write_data_operations_heartbeat "$_rc" || true; if [[ $_rc -ne 0 ]]; then _notify_failure "trap (unexpected)" $_rc; fi' EXIT
 
 echo "════════════════════════════════════════════════════════════════════════"
 echo "  DATA OPERATIONS WORKFLOW — $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
