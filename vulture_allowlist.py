@@ -525,4 +525,12 @@ market_sector  # unused variable (tpcore/openfigi/figi_adapter.py:107)
 # parent_resolver — returned-snapshot timestamp consumed by callers writing to
 # ticker_classifications.updated_at and AAR rows.
 resolved_at  # unused variable (tpcore/identity/parent_resolver.py:141)
+# P3 trust-audit (2026-05-25): test_aar_writer.py grew a file-scoped
+# autouse fixture that calls IdentityDispatcher.reset_shared_caches()
+# between tests — closes the order-dependent AAR-writer fragility
+# without re-introducing the global autouse (that variant changed
+# discovery order and surfaced an unrelated bug; see tpcore/tests/
+# conftest.py for the historical note). pytest discovers autouse
+# fixtures by attribute lookup; vulture can't see that.
+_reset_dispatcher_cache  # unused function (tpcore/tests/test_aar_writer.py:17)
 

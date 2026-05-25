@@ -105,12 +105,12 @@ def _fast_and_stubbed(monkeypatch):
 
     upserts: list[tuple[str, int]] = []
 
-    async def _fake_upsert(_pool, symbol, bars, *, delisted=False, source=None):
+    async def _fake_upsert(_pool, symbol, bars, *, staging_run_id=None, delisted=False, source=None):
         del _pool, delisted, source
         upserts.append((symbol, len(bars)))
         return len(bars)
 
-    monkeypatch.setattr(ab, "_upsert_bars", _fake_upsert)
+    monkeypatch.setattr(ab, "stage_then_promote_bars", _fake_upsert)
     return {"upserts": upserts}
 
 

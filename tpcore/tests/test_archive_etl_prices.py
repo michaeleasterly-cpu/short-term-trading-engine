@@ -105,15 +105,15 @@ class TestHappyPath:
         pool = _FakePool()
         events: list[str] = []
 
-        async def _spy_upsert(_pool, ticker, bars, *, delisted=False, source=None):
+        async def _spy_upsert(_pool, ticker, bars, *, staging_run_id=None, delisted=False, source=None):
             del _pool, delisted, source
             events.append(f"upsert:{ticker}")
             return len(bars) if bars else 0
 
         # Patch upsert at the import-name the orchestrator reaches via
-        # local import — `tpcore.data.ingest_alpaca_bars._upsert_bars`.
+        # local import — `tpcore.data.ingest_alpaca_bars.stage_then_promote_bars`.
         monkeypatch.setattr(
-            "tpcore.data.ingest_alpaca_bars._upsert_bars", _spy_upsert,
+            "tpcore.data.ingest_alpaca_bars.stage_then_promote_bars", _spy_upsert,
         )
         # Wrap pool.acquire().fetchval to record the INSERT timing too.
         orig_fetchval = pool.conn.fetchval
@@ -150,7 +150,7 @@ class TestHappyPath:
             return 0
 
         monkeypatch.setattr(
-            "tpcore.data.ingest_alpaca_bars._upsert_bars", _noop_upsert,
+            "tpcore.data.ingest_alpaca_bars.stage_then_promote_bars", _noop_upsert,
         )
 
         await archive_etl.archive_first_load_bars(
@@ -178,11 +178,11 @@ class TestHappyPath:
     ) -> None:
         pool = _FakePool()
 
-        async def _upsert(_pool, _ticker, bars, *, delisted=False, source=None):
+        async def _upsert(_pool, _ticker, bars, *, staging_run_id=None, delisted=False, source=None):
             del _pool, _ticker, delisted, source
             return len(bars)
         monkeypatch.setattr(
-            "tpcore.data.ingest_alpaca_bars._upsert_bars", _upsert,
+            "tpcore.data.ingest_alpaca_bars.stage_then_promote_bars", _upsert,
         )
 
         await archive_etl.archive_first_load_bars(
@@ -221,7 +221,7 @@ class TestFailedArchive:
             return 0
 
         monkeypatch.setattr(
-            "tpcore.data.ingest_alpaca_bars._upsert_bars", _spy_upsert,
+            "tpcore.data.ingest_alpaca_bars.stage_then_promote_bars", _spy_upsert,
         )
         # Force the archive writer to fail.
         def _boom(*_a, **_kw):
@@ -256,7 +256,7 @@ class TestFailedEtl:
         async def _raising_upsert(*_a, **_kw):
             raise RuntimeError("simulated upsert failure")
         monkeypatch.setattr(
-            "tpcore.data.ingest_alpaca_bars._upsert_bars", _raising_upsert,
+            "tpcore.data.ingest_alpaca_bars.stage_then_promote_bars", _raising_upsert,
         )
 
         with pytest.raises(RuntimeError, match="simulated upsert failure"):
@@ -301,13 +301,13 @@ class TestEtlReadsArchive:
         pool = _FakePool()
         upsert_args: list[str] = []
 
-        async def _spy(_pool, ticker, bars, *, delisted=False, source=None):
+        async def _spy(_pool, ticker, bars, *, staging_run_id=None, delisted=False, source=None):
             del _pool, bars, delisted, source
             upsert_args.append(ticker)
             return 1
 
         monkeypatch.setattr(
-            "tpcore.data.ingest_alpaca_bars._upsert_bars", _spy,
+            "tpcore.data.ingest_alpaca_bars.stage_then_promote_bars", _spy,
         )
 
         # Replace write_archive with a clobbering version: writes a
