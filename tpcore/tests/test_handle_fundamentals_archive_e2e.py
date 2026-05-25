@@ -1,27 +1,30 @@
 """End-to-end proof that ``handle_fundamentals_refresh`` writes the
-``fmp_fundamentals`` CSV archive (#249 — closes the TODO L94
-"presence unproven" gap).
+``fmp_fundamentals`` CSV archive + manifest row BEFORE any production
+upsert (#249 — closes the TODO L94 "presence unproven" gap).
 
-The handler constructs ``FMPFundamentalsAdapter`` and
-``FundamentalsCache`` internally, so the seams are monkeypatched at
-their source modules. A fake adapter (async context manager) + a fake
-cache returning a known ``backfill_all`` result + a fake pool whose
-``conn.fetch`` serves the rows the archive SELECT pulls let the handler
-run end-to-end with NO network and NO real DB. ``TP_DATA_DIR`` is
-pointed at ``tmp_path`` so the archive is written under tmp and the
-real repo ``data/`` dir is never touched.
+P1-sibling trust-audit refactor (2026-05-25): the handler now uses
+archive-first ordering: pre-fetch payloads into memory via the
+public ``cache.fetch_payload`` surface, write archive + manifest at
+status='archived' via :func:`manifest_lifecycle`, then read the
+on-disk archive and per-symbol upsert via ``cache.upsert_payload``,
+finally mark manifest 'loaded'. This test stubs the FundamentalsCache
++ FMPFundamentalsAdapter seams and pins the new contract:
 
-FIXED (#250): ``handlers.py`` now unpacks ``backfill_all()`` as the
-real 4-tuple ``(rows, no_data, failures, skipped)`` (the 2026-05-13
-resumable-refresh change had updated ``scripts/ops.py:667`` but missed
-this handler — the ``ValueError`` raised *before* ``write_archive`` was
-reached, so the archive code path was dead in production). This test is
-now the real end-to-end proof that the handler runs to completion and
-the ``fmp_fundamentals`` CSV archive is written.
+* archive file lands under ``<tmp>/fmp_fundamentals_archive/``,
+* CSV header matches ``FUNDAMENTALS_ARCHIVE_FIELDS`` (the
+  canonical-tuple parity invariant — sibling test
+  ``test_handle_fundamentals_archive_db_schema`` pins that tuple
+  against the live DB),
+* manifest INSERT happens BEFORE the per-symbol upsert,
+* manifest UPDATE → 'loaded' happens at the end.
 """
+
 from __future__ import annotations
 
 import importlib
+from datetime import date
+from decimal import Decimal
+from uuid import uuid4
 
 import pytest
 
@@ -30,44 +33,56 @@ from tpcore.ingestion import csv_archive
 handlers = importlib.import_module("tpcore.ingestion.handlers")
 
 
-# Two known fundamentals records the archive SELECT will "pull" from
-# the DB. Values are strings (the handler stringifies via str(v)).
-_KNOWN_ROWS = [
-    {
-        "ticker": "AAPL", "filing_date": "2026-02-01",
-        "period_end_date": "2025-12-31", "period_label": "Q4",
-        "net_income": "1000", "fcf": "900", "operating_cash_flow": "1100",
-        "capex": "-200", "revenue": "5000", "total_assets": "9000",
-        "total_liabilities": "4000", "current_assets": "3000",
-        "current_liabilities": "2000", "receivables": "500",
-        "cash_and_equivalents": "1500", "shares_outstanding": "1000000000",
-        "pb": "12.3", "de": "0.4", "recorded_at": "2026-02-02T00:00:00Z",
-    },
-    {
-        "ticker": "MSFT", "filing_date": "2026-02-03",
-        "period_end_date": "2025-12-31", "period_label": "Q4",
-        "net_income": "2000", "fcf": "1800", "operating_cash_flow": "2200",
-        "capex": "-400", "revenue": "8000", "total_assets": "12000",
-        "total_liabilities": "5000", "current_assets": "4000",
-        "current_liabilities": "2500", "receivables": "700",
-        "cash_and_equivalents": "2500", "shares_outstanding": "7000000000",
-        "pb": "9.8", "de": "0.3", "recorded_at": "2026-02-04T00:00:00Z",
-    },
-]
-
-
-# pytest-xdist: pin this ops-shadow module to one worker so its
-# sys.modules['ops'] / scripts/ops.py loading stays single-process
-# (the ops/ package-shadow is a single-process invariant). P1.3.
+# pytest-xdist: pin this ops-shadow module to one worker.
 pytestmark = pytest.mark.xdist_group("ops_shadow")
 
 
-class _FakeConn:
-    async def fetch(self, sql: str, *args):
-        # The handler's only conn.fetch is the fundamentals_quarterly
-        # archive SELECT — serve the known rows.
-        assert "platform.fundamentals_quarterly" in sql
-        return list(_KNOWN_ROWS)
+# Synthetic FMP payloads — one period each so each symbol contributes
+# exactly one archive row.
+def _payload(filing_iso: str = "2026-02-01") -> dict:
+    return {
+        "filing_date": date.fromisoformat(filing_iso),
+        "period_end_date": date(2025, 12, 31),
+        "period": "Q4",
+        "net_income": Decimal("1000"),
+        "fcf": Decimal("900"),
+        "operating_cash_flow": Decimal("1100"),
+        "capex": Decimal("-200"),
+        "revenue": Decimal("5000"),
+        "total_assets": Decimal("9000"),
+        "total_liabilities": Decimal("4000"),
+        "current_assets": Decimal("3000"),
+        "current_liabilities": Decimal("2000"),
+        "receivables": Decimal("500"),
+        "cash_and_equivalents": Decimal("1500"),
+        "shares_outstanding": Decimal("1000000000"),
+        "history": [],
+    }
+
+
+_PAYLOADS = {
+    "AAPL": _payload("2026-02-01"),
+    "MSFT": _payload("2026-02-03"),
+}
+
+
+class _RecordingConn:
+    """Manifest INSERT + UPDATE recorder."""
+    def __init__(self) -> None:
+        self.fetchval_calls: list[tuple[str, tuple]] = []
+        self.execute_calls: list[tuple[str, tuple]] = []
+        self._mid = uuid4()
+
+    async def fetch(self, _sql, *_args):
+        return []
+
+    async def fetchval(self, sql, *args):
+        self.fetchval_calls.append((sql, args))
+        return self._mid
+
+    async def execute(self, sql, *args):
+        self.execute_calls.append((sql, args))
+        return "UPDATE 1"
 
 
 class _AcquireCM:
@@ -77,75 +92,110 @@ class _AcquireCM:
 
 
 class _FakePool:
-    def __init__(self): self.conn = _FakeConn()
+    def __init__(self): self.conn = _RecordingConn()
     def acquire(self): return _AcquireCM(self.conn)
 
 
 class _FakeAdapter:
     """Async context-manager adapter the handler `async with`-enters."""
-
     async def __aenter__(self): return self
     async def __aexit__(self, *e): return None
     async def aclose(self): return None
 
 
 class _FakeCache:
-    """Stands in for FundamentalsCache. ``backfill_all`` returns the
-    real 4-tuple contract ``(rows, no_data, failures, skipped)``."""
-
+    """Stands in for FundamentalsCache. Implements the new
+    archive-first public surface (list_active_tickers,
+    tickers_refreshed_within, fetch_payload, upsert_payload).
+    Records the order of fetch + upsert calls so the test can pin
+    that fetch happens in Phase 0 and upsert happens in Phase 2.
+    """
     def __init__(self, pool, adapter=None) -> None:
         self.pool = pool
         self.adapter = adapter
+        self.events: list[str] = []
 
-    async def backfill_all(self, *a, **k):
-        # rows ingested, no_data list, failures list, skipped count.
-        return (len(_KNOWN_ROWS), [], [], 0)
+    async def list_active_tickers(self):
+        return list(_PAYLOADS)
+
+    async def tickers_refreshed_within(self, tickers, hours):
+        del tickers, hours
+        return set()
+
+    async def fetch_payload(self, symbol: str):
+        self.events.append(f"fetch:{symbol}")
+        return _PAYLOADS[symbol]
+
+    async def upsert_payload(self, symbol: str, payload: dict):
+        del payload  # archive-driven; not used in the fake
+        self.events.append(f"upsert:{symbol}")
+        return 1
 
 
 @pytest.fixture()
 def tmp_archive(tmp_path, monkeypatch):
-    # TP_DATA_DIR seam → archive root is tmp_path; real data/ untouched.
     monkeypatch.setenv("TP_DATA_DIR", str(tmp_path))
     assert csv_archive.repo_data_dir() == tmp_path
-    # Patch the seams at their source modules (handler imports them
-    # lazily from these modules inside the function body).
-    monkeypatch.setattr("tpcore.fmp.FMPFundamentalsAdapter",
-                         lambda *a, **k: _FakeAdapter())
-    monkeypatch.setattr("tpcore.fundamentals.cache.FundamentalsCache",
-                         _FakeCache)
+    monkeypatch.setattr(
+        "tpcore.fmp.FMPFundamentalsAdapter", lambda *a, **k: _FakeAdapter(),
+    )
+    monkeypatch.setattr(
+        "tpcore.fundamentals.cache.FundamentalsCache", _FakeCache,
+    )
     return tmp_path
 
 
-async def test_handle_fundamentals_writes_csv_archive_end_to_end(tmp_archive):
+async def test_handle_fundamentals_archives_before_upsert_and_marks_loaded(
+    tmp_archive,
+) -> None:
     pool = _FakePool()
+    # Spy on the manifest INSERT so we can pin ordering vs upserts.
+    events: list[str] = []
+    orig_fetchval = pool.conn.fetchval
 
-    result = await handlers.handle_fundamentals_refresh(pool, {"universe": "active"})
+    async def _spy_fetchval(sql, *args):
+        if "INSERT" in sql and "ingest_manifest" in sql:
+            events.append("manifest:insert")
+        return await orig_fetchval(sql, *args)
+    pool.conn.fetchval = _spy_fetchval  # type: ignore[assignment]
 
-    # Handler returns rows_ingested.
-    assert result == len(_KNOWN_ROWS)
+    # Surface the cache instance for assertion (the handler creates
+    # TWO FundamentalsCache instances — one for fetch, one for upsert
+    # under the lifecycle). The second adapter's events are the ones
+    # that matter for Phase 2 ordering.
+    handler_caches: list[_FakeCache] = []
+    orig_cache_cls = _FakeCache
+    monkey_target = "tpcore.fundamentals.cache.FundamentalsCache"
 
-    # The archive file must exist under <tmp>/fmp_fundamentals_archive/.
+    def _factory(*a, **k):
+        c = orig_cache_cls(*a, **k)
+        handler_caches.append(c)
+        return c
+    import pytest as _pt
+    mp = _pt.MonkeyPatch()
+    mp.setattr(monkey_target, _factory)
+    try:
+        result = await handlers.handle_fundamentals_refresh(
+            pool, {"universe": "active"},
+        )
+    finally:
+        mp.undo()
+
+    # Per-symbol upsert count returned to the caller.
+    assert result == len(_PAYLOADS)
+
+    # Archive file lands on disk.
     archive_dir = tmp_archive / "fmp_fundamentals_archive"
-    assert archive_dir.is_dir(), "archive dir not created"
+    assert archive_dir.is_dir()
     gz_files = sorted(archive_dir.glob("fmp_fundamentals_*.csv.gz"))
-    assert len(gz_files) == 1, f"expected one archive, got {gz_files}"
-
+    assert len(gz_files) == 1
     gz = gz_files[0]
-    assert gz.stat().st_size > 0, "archive file is empty"
+    assert gz.stat().st_size > 0
+    assert csv_archive.count_archive_rows(gz) == len(_PAYLOADS)
 
-    # Row count must match the payload (validator passes: every known
-    # row has ticker + period_end_date).
-    assert csv_archive.count_archive_rows(gz) == len(_KNOWN_ROWS)
-
-    # Schema assertion (operator task verbatim: "(c) sane schema —
-    # column names match the live DB schema for fmp_fundamentals").
-    # Read the gzipped CSV header and assert exact equality (order +
-    # set) with the canonical FUNDAMENTALS_ARCHIVE_FIELDS tuple. The
-    # sibling DB-gated test (test_handle_fundamentals_archive_db_schema)
-    # pins that tuple to the live platform.fundamentals_quarterly
-    # information_schema — so an end-to-end "archive on disk reflects
-    # the DB schema" invariant is provable across this pair without
-    # needing a live DB in the in-memory test.
+    # CSV header parity with the canonical FUNDAMENTALS_ARCHIVE_FIELDS
+    # (the schema-drift invariant; sibling DB-gated test pins the
+    # tuple against information_schema).
     import csv as _csv
     import gzip as _gzip
     with _gzip.open(gz, "rt", newline="", encoding="utf-8") as fh:
@@ -157,3 +207,22 @@ async def test_handle_fundamentals_writes_csv_archive_end_to_end(tmp_archive):
         f"  CSV header:  {header}\n"
         f"  Canonical:   {handlers.FUNDAMENTALS_ARCHIVE_FIELDS}"
     )
+
+    # Manifest INSERT happened (Phase 1). One UPDATE = mark_loaded.
+    assert len(pool.conn.fetchval_calls) == 1
+    sql, args = pool.conn.fetchval_calls[0]
+    assert "platform.ingest_manifest" in sql
+    assert args[0] == "fmp_fundamentals"
+    assert args[1] == "fmp"
+    assert args[6] == "archived"
+    assert len(pool.conn.execute_calls) == 1
+    _, upd_args = pool.conn.execute_calls[0]
+    assert upd_args[1] == "loaded"
+    assert upd_args[2] == len(_PAYLOADS)
+
+    # All fetches happen BEFORE the manifest INSERT (Phase 0 → 1).
+    # The handler creates two cache instances; the first does the
+    # Phase-0 fetches, the second does Phase-2 upserts.
+    fetch_cache, upsert_cache = handler_caches[0], handler_caches[1]
+    assert all(e.startswith("fetch:") for e in fetch_cache.events)
+    assert all(e.startswith("upsert:") for e in upsert_cache.events)

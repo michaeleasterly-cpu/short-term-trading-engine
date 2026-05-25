@@ -1914,7 +1914,6 @@ async def _stage_earnings_refresh(
     """
     from datetime import date as _date
     from datetime import timedelta as _td
-    from types import SimpleNamespace
 
     # Skip guard. ``skip_guard_days`` (via --param) mirrors the
     # _stage_sec_filings contract: default 6; set 0 to bypass for a
@@ -1957,54 +1956,126 @@ async def _stage_earnings_refresh(
     if not universe:
         return {"tickers": 0, "inserted": 0, "note": "empty stock universe"}
 
-    # Delegate to the existing backfill — same code path as the manual
-    # script. The args namespace must shape exactly like its argparse
-    # output (universe, start, end fields).
-    from scripts.backfill_earnings_events import amain as backfill_amain
-    args = SimpleNamespace(
-        universe=universe,
-        start=_date(2018, 1, 1),
-        end=datetime.now(UTC).date() - _td(days=1),
+    # Archive-first contract (P1-sibling trust-audit 2026-05-25):
+    # the legacy flow delegated to ``backfill_amain`` (per-symbol
+    # fetch + DB upsert interleaved), then post-hoc dumped the DB
+    # rows to the archive. This inverted: fetch every symbol's
+    # classified events into ``archive_rows`` with NO DB write, then
+    # ``manifest_lifecycle`` writes the archive + manifest
+    # status='archived', then Phase 2 reads the archive file and
+    # executemany's into the production table.
+    import os as _os
+
+    import httpx as _httpx
+
+    from scripts.backfill_earnings_events import (
+        _INSERT_SQL as _EARNINGS_INSERT_SQL,
     )
-    run_started = datetime.now(UTC)
-    exit_code = await backfill_amain(args)
-    if exit_code != 0:
-        raise RuntimeError(
-            f"earnings_refresh: backfill_amain returned {exit_code}"
-        )
+    from scripts.backfill_earnings_events import (
+        INTER_SYMBOL_SLEEP_S as _EARNINGS_INTER_SYMBOL_SLEEP,
+    )
+    from scripts.backfill_earnings_events import (
+        _classify_earnings,
+        fetch_earnings,
+    )
+    from tpcore.ingestion.archive_etl import manifest_lifecycle, read_archive_csv
+
+    fmp_api_key = _os.getenv("FMP_API_KEY")
+    if not fmp_api_key:
+        raise RuntimeError("earnings_refresh: FMP_API_KEY not set")
+
+    start = _date(2018, 1, 1)
+    end = datetime.now(UTC).date() - _td(days=1)
+    archive_rows: list[dict] = []
+    no_data: list[str] = []
+    async with _httpx.AsyncClient(timeout=30.0) as client:
+        for i, symbol in enumerate(universe, 1):
+            rows = await fetch_earnings(client, symbol, fmp_api_key)
+            if not rows:
+                no_data.append(symbol)
+                await asyncio.sleep(_EARNINGS_INTER_SYMBOL_SLEEP)
+                continue
+            for r in rows:
+                raw_date = r.get("date")
+                if not raw_date:
+                    continue
+                try:
+                    ev_date = _date.fromisoformat(raw_date)
+                except ValueError:
+                    continue
+                if ev_date < start or ev_date > end:
+                    continue
+                classification = _classify_earnings(r)
+                if classification is None:
+                    continue
+                event_type, magnitude = classification
+                archive_rows.append({
+                    "ticker": symbol,
+                    "event_date": ev_date.isoformat(),
+                    "event_type": event_type,
+                    "magnitude_pct": "" if magnitude is None else str(magnitude),
+                    "source": "fmp",
+                })
+            log.info(
+                "ops.stage.earnings_refresh.fetched",
+                done=i, total=len(universe), symbol=symbol,
+                rows_in_window=sum(
+                    1 for r in archive_rows if r["ticker"] == symbol
+                ),
+            )
+            await asyncio.sleep(_EARNINGS_INTER_SYMBOL_SLEEP)
+
+    inserted_total = 0
+    archive_path_str: str | None = None
+    async with manifest_lifecycle(
+        pool,
+        source="fmp_earnings_events",
+        provider="fmp",
+        archive_rows=archive_rows,
+        fieldnames=["ticker", "event_date", "event_type", "magnitude_pct", "source"],
+        validator=lambda r: bool(r.get("ticker")) and bool(r.get("event_type")),
+        date_range_start=start,
+        date_range_end=end,
+    ) as ctx:
+        archive_path_str = str(ctx.archive_path)
+        # Phase 2 — ETL from the on-disk archive. Reconstruct the
+        # 5-tuple shape the existing INSERT SQL expects; executemany
+        # in a single conn.acquire().
+        csv_rows = read_archive_csv(ctx.archive_path)
+        if csv_rows:
+            from decimal import Decimal as _Decimal
+            tuples = [
+                (
+                    r["ticker"],
+                    _date.fromisoformat(r["event_date"]),
+                    r["event_type"],
+                    (
+                        None
+                        if r.get("magnitude_pct") in (None, "")
+                        else _Decimal(r["magnitude_pct"])
+                    ),
+                    r.get("source") or "fmp",
+                )
+                for r in csv_rows
+            ]
+            async with pool.acquire() as conn:
+                await conn.executemany(_EARNINGS_INSERT_SQL, tuples)
+            inserted_total = len(tuples)
+            ctx.actual_rows = inserted_total
+
     async with pool.acquire() as conn:
         post_count = await conn.fetchval("SELECT COUNT(*) FROM platform.earnings_events")
         post_tickers = await conn.fetchval(
             "SELECT COUNT(DISTINCT ticker) FROM platform.earnings_events"
         )
-        new_rows = await conn.fetch(
-            """
-            SELECT ticker, event_date, event_type, magnitude_pct, source, recorded_at
-            FROM platform.earnings_events
-            WHERE recorded_at >= $1
-            ORDER BY ticker, event_date
-            """,
-            run_started,
-        )
-
-    # CSV-first audit archive (incremental — new rows this run only;
-    # shrinkage detection is reserved for full-snapshot sources).
-    from tpcore.ingestion.csv_archive import write_archive
-    archive_rows = [
-        {k: str(v) if v is not None else "" for k, v in dict(r).items()}
-        for r in new_rows
-    ]
-    archive = write_archive(
-        "fmp_earnings_events", archive_rows,
-        fieldnames=["ticker", "event_date", "event_type", "magnitude_pct", "source", "recorded_at"],
-        validator=lambda r: bool(r.get("ticker")) and bool(r.get("event_type")),
-    )
 
     return {
         "tickers": len(universe),
+        "inserted_this_run": inserted_total,
+        "no_data": len(no_data),
         "total_rows": int(post_count or 0),
         "covered_tickers": int(post_tickers or 0),
-        "csv_archive": str(archive.path),
+        "csv_archive": archive_path_str,
     }
 
 

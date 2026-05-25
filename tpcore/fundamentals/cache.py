@@ -395,4 +395,51 @@ class FundamentalsCache:
         return len(rows)
 
 
+    # ─────────────────────────────────────────────────────────────────
+    # Archive-first surface (P1-sibling trust-audit 2026-05-25)
+    # ─────────────────────────────────────────────────────────────────
+    #
+    # ``backfill_all`` interleaves FMP fetch + DB upsert per-symbol;
+    # the post-hoc DB-readback archive that follows in
+    # ``handle_fundamentals_refresh`` violated the archive-first
+    # prime directive. These two helpers expose the fetch and upsert
+    # legs independently so the handler can: (1) pre-fetch every
+    # symbol's payload into memory, (2) write an archive + manifest
+    # row BEFORE any DB write, (3) ETL from the archive file back to
+    # ``upsert_payload`` per symbol, (4) mark the manifest loaded.
+
+    async def fetch_payload(self, symbol: str) -> dict:
+        """Pull the canonical FMP payload for one symbol without
+        touching the DB. Raises ``DataProviderOutage`` on transport
+        / contract failure; the caller decides whether to retry or
+        record the failure."""
+        if self._adapter is None:
+            raise DataProviderOutage(
+                "FundamentalsCache.fetch_payload requires an adapter"
+            )
+        from datetime import UTC as _UTC
+        from datetime import datetime as _datetime
+        return await self._adapter.get_quarterly_fundamentals(
+            symbol, _datetime.now(_UTC).date(),
+        )
+
+    async def upsert_payload(self, symbol: str, payload: dict) -> int:
+        """Public wrapper around the internal ``_upsert_payload`` so
+        the archive-first handler can drive Phase 2 from the on-disk
+        archive without reaching into a private name."""
+        return await self._upsert_payload(symbol, payload)
+
+    async def list_active_tickers(self) -> list[str]:
+        """Public wrapper around ``_list_active_tickers`` for the
+        archive-first handler's pre-fetch loop."""
+        return await self._list_active_tickers()
+
+    async def tickers_refreshed_within(
+        self, tickers: list[str], hours: float,
+    ) -> set[str]:
+        """Public wrapper around ``_tickers_refreshed_within`` for the
+        archive-first handler's pre-fetch loop's skip-fresh gate."""
+        return await self._tickers_refreshed_within(tickers, hours=hours)
+
+
 __all__ = ["FundamentalsCache"]
