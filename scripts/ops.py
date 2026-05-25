@@ -5394,7 +5394,7 @@ async def _stage_dedupe_monotone(
     ``cfg`` knobs (all optional):
         * ``table``: if provided, restrict to one of
           ``platform.earnings_events`` or
-          ``platform.sec_insider_transactions``. Default is BOTH.
+          ``platform.insider_transactions``. Default is BOTH.
         * ``dry_run``: bool — when True, count rogues but emit no
           DELETE. Default False.
 
@@ -5821,7 +5821,7 @@ async def _stage_sec_filings(
         async with pool.acquire() as conn:
             snap = await conn.fetchrow(
                 "SELECT COUNT(*) r, COUNT(DISTINCT ticker) t, "
-                "MAX(filing_date) mx FROM platform.sec_insider_transactions"
+                "MAX(filing_date) mx FROM platform.insider_transactions"
             )
         out = {
             "repair": True, "rows_loaded": int(rows or 0),
@@ -5871,16 +5871,16 @@ async def _stage_sec_filings(
         snapshot = await conn.fetchrow(
             """
             SELECT
-                (SELECT COUNT(*) FROM platform.sec_insider_transactions) AS insider_rows,
+                (SELECT COUNT(*) FROM platform.insider_transactions) AS insider_rows,
                 (SELECT COUNT(*) FROM platform.sec_material_events) AS material_rows,
-                (SELECT COUNT(DISTINCT ticker) FROM platform.sec_insider_transactions) AS insider_tickers,
+                (SELECT COUNT(DISTINCT ticker) FROM platform.insider_transactions) AS insider_tickers,
                 (SELECT COUNT(DISTINCT ticker) FROM platform.sec_material_events) AS material_tickers,
                 LEAST(
-                    (SELECT MIN(filing_date) FROM platform.sec_insider_transactions),
+                    (SELECT MIN(filing_date) FROM platform.insider_transactions),
                     (SELECT MIN(filing_date) FROM platform.sec_material_events)
                 ) AS earliest_filing,
                 GREATEST(
-                    (SELECT MAX(filing_date) FROM platform.sec_insider_transactions),
+                    (SELECT MAX(filing_date) FROM platform.insider_transactions),
                     (SELECT MAX(filing_date) FROM platform.sec_material_events)
                 ) AS latest_filing
             """
@@ -5953,7 +5953,7 @@ async def _stage_seed_monotone_snapshots(
             INSERT INTO platform.sec_insider_row_counts_snapshot
                 (ticker, rowcount, snapshot_at)
             SELECT ticker, COUNT(*), now()
-            FROM platform.sec_insider_transactions
+            FROM platform.insider_transactions
             GROUP BY ticker
             ON CONFLICT (ticker) DO UPDATE
               SET rowcount = EXCLUDED.rowcount,
@@ -7814,7 +7814,7 @@ _MONOTONE_CASCADE_MAP: dict[str, tuple[str, str, dict[str, Any]]] = {
         {"skip_guard_days": 0},
     ),
     "sec_insider_monotone": (
-        "platform.sec_insider_transactions",
+        "platform.insider_transactions",
         "sec_filings",
         {"skip_guard_days": 0},
     ),
@@ -7975,6 +7975,20 @@ _VALIDATION_CHUNK_SPECS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "issuer_securities_integrity",
             "corporate_events_integrity",
             "ticker_history_integrity",
+        ),
+    ),
+    # Chunk 8 — meta-monitors (added 2026-05-25 P0 trust-audit). Both
+    # are sub-second single-row queries: daemon_freshness reads
+    # platform.daemon_heartbeats, data_operations_complete_cadence
+    # reads MAX(recorded_at) from platform.application_log. They
+    # belong in their own chunk because the failure mode they cover —
+    # the lane has stopped running — would also stop other chunks
+    # from completing, so this chunk gets evaluated first-in-class.
+    (
+        "meta_monitors",
+        (
+            "daemon_freshness",
+            "data_operations_complete_cadence",
         ),
     ),
 )
@@ -10782,10 +10796,10 @@ async def _check_sec_filings_freshness(pool: asyncpg.Pool) -> dict[str, Any]:
         """
         SELECT
             GREATEST(
-                COALESCE((SELECT MAX(filing_date) FROM platform.sec_insider_transactions), '-infinity'::date),
+                COALESCE((SELECT MAX(filing_date) FROM platform.insider_transactions), '-infinity'::date),
                 COALESCE((SELECT MAX(filing_date) FROM platform.sec_material_events),     '-infinity'::date)
             ) AS newest_filing,
-            (SELECT COUNT(*) FROM platform.sec_insider_transactions) AS insider_rows,
+            (SELECT COUNT(*) FROM platform.insider_transactions) AS insider_rows,
             (SELECT COUNT(*) FROM platform.sec_material_events) AS material_rows
         """
     )

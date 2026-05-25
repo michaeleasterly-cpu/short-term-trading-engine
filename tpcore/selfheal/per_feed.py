@@ -42,6 +42,12 @@ from tpcore.quality.validation.checks.corporate_actions_integrity import (
 from tpcore.quality.validation.checks.corporate_events_integrity import (
     check_corporate_events_integrity,
 )
+from tpcore.quality.validation.checks.daemon_freshness import (
+    check_daemon_freshness,
+)
+from tpcore.quality.validation.checks.data_operations_complete_cadence import (
+    check_data_operations_complete_cadence,
+)
 from tpcore.quality.validation.checks.delistings import check_delistings
 from tpcore.quality.validation.checks.earnings_events_freshness import (
     check_earnings_events_freshness,
@@ -181,6 +187,11 @@ _CHECK_FN: dict[str, _CheckCallable] = {
     "issuer_securities_integrity": _src(check_issuer_securities_integrity, None),
     "corporate_events_integrity": _src(check_corporate_events_integrity, None),
     "ticker_history_integrity": _src(check_ticker_history_integrity, None),
+    # P0 trust-audit (2026-05-25): meta-monitors.
+    "daemon_freshness": _src(check_daemon_freshness, None),
+    "data_operations_complete_cadence": _src(
+        check_data_operations_complete_cadence, None
+    ),
 }
 
 

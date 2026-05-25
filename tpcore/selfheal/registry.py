@@ -325,6 +325,38 @@ _SPECS: tuple[HealSpec, ...] = (
              source="insider_sentiment_daily",
              healable=True, stage="daily_insider_sentiment_delta",
              params={}, max_attempts=2),
+    # P0 trust-audit (2026-05-25): meta-monitor on daemon liveness.
+    # Stops the silent-stall failure class where data_operations /
+    # engine_service / allocator died days ago but nothing alerted
+    # because no check covered daemon liveness. healable=False —
+    # no canonical ops.py stage restarts a daemon process; the only
+    # correct heal is operator launchd / systemd restart of the named
+    # daemon (the FailureDetail names which daemon is stale and by
+    # how long, so the escalation is directly actionable).
+    HealSpec(check_name="daemon_freshness", source="daemon_heartbeats",
+             healable=False, unhealable_reason=(
+                 "daemon-process liveness — heal requires operator "
+                 "restart of the named daemon via launchd / systemd; "
+                 "no canonical ops.py stage restarts daemons. The "
+                 "FailureDetail names which daemon is stale and by "
+                 "how long, so the escalation is directly actionable"
+             )),
+    # P0 trust-audit (2026-05-25): meta-monitor on the lane's gate
+    # emission. Catches the case where the lane has been red for so
+    # long DATA_OPERATIONS_COMPLETE never fires, but no individual
+    # check covered the absence of the gate event itself. healable=
+    # False — the only way to re-emit is to clear every other red so
+    # the gate fires; no single ops.py stage produces the event.
+    HealSpec(check_name="data_operations_complete_cadence",
+             source="application_log",
+             healable=False, unhealable_reason=(
+                 "lane-emission meta-monitor — DATA_OPERATIONS_COMPLETE "
+                 "is the END product of a fully-green data lane run; "
+                 "no canonical ops.py stage emits it directly. RED "
+                 "means the lane has not reached 100% green within "
+                 "the cadence window; clear the other reds and the "
+                 "gate fires"
+             )),
 )
 
 HEAL_SPECS: dict[str, HealSpec] = {s.check_name: s for s in _SPECS}

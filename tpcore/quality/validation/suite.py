@@ -46,6 +46,14 @@ from .checks.corporate_events_integrity import (
     CHECK_NAME as CORPORATE_EVENTS_INTEGRITY_NAME,
 )
 from .checks.corporate_events_integrity import check_corporate_events_integrity
+from .checks.daemon_freshness import CHECK_NAME as DAEMON_FRESHNESS_NAME
+from .checks.daemon_freshness import check_daemon_freshness
+from .checks.data_operations_complete_cadence import (
+    CHECK_NAME as DOC_CADENCE_NAME,
+)
+from .checks.data_operations_complete_cadence import (
+    check_data_operations_complete_cadence,
+)
 from .checks.delistings import CHECK_NAME as DELISTINGS_NAME
 from .checks.delistings import check_delistings
 from .checks.earnings_events_freshness import CHECK_NAME as EARNINGS_EVENTS_NAME
@@ -171,6 +179,8 @@ KNOWN_CHECK_NAMES: tuple[str, ...] = (
     ISSUER_SECURITIES_INTEGRITY_NAME,
     CORPORATE_EVENTS_INTEGRITY_NAME,
     TICKER_HISTORY_INTEGRITY_NAME,
+    DAEMON_FRESHNESS_NAME,
+    DOC_CADENCE_NAME,
 )
 
 
@@ -294,6 +304,12 @@ async def run_suite(
         INSIDER_FILINGS_FRESHNESS_NAME,
         check_insider_filings_freshness, pool, None,
     )
+    daemon_freshness_task = _safe_run(
+        DAEMON_FRESHNESS_NAME, check_daemon_freshness, pool, None,
+    )
+    doc_cadence_task = _safe_run(
+        DOC_CADENCE_NAME, check_data_operations_complete_cadence, pool, None,
+    )
     (
         delistings_result, constituent_result, splits_result,
         row_integrity_result, fund_integrity_result, fund_completeness_result, ca_integrity_result, ca_completeness_result,
@@ -308,6 +324,7 @@ async def run_suite(
         aaii_sentiment_result, insider_filings_result,
         issuer_history_result, issuer_securities_result,
         corporate_events_result, ticker_history_result,
+        daemon_freshness_result, doc_cadence_result,
     ) = await asyncio.gather(
         delistings_task, constituent_task, splits_task,
         row_integrity_task, fund_integrity_task, fund_completeness_task, ca_integrity_task, ca_completeness_task,
@@ -322,6 +339,7 @@ async def run_suite(
         aaii_sentiment_task, insider_filings_task,
         issuer_history_task, issuer_securities_task,
         corporate_events_task, ticker_history_task,
+        daemon_freshness_task, doc_cadence_task,
     )
     checks: list[CheckResult] = [
         delistings_result, constituent_result, splits_result,
@@ -337,6 +355,7 @@ async def run_suite(
         aaii_sentiment_result, insider_filings_result,
         issuer_history_result, issuer_securities_result,
         corporate_events_result, ticker_history_result,
+        daemon_freshness_result, doc_cadence_result,
     ]
 
     finished_at = datetime.now(UTC)
