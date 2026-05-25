@@ -1,0 +1,23 @@
+ECR
+action: MODIFY
+engine: momentum
+data_dependencies: earnings_events, liquidity_tiers, prices_daily, v_universe
+
+# Accuracy-only data_dependencies correction. No param_change /
+# lab_dossier / gate_* — bypasses the zero-trust Lab-dossier gate.
+#
+# Why
+# ====
+# momentum/backtest.py:_load_universe_t12 was converted in PR #348 to
+# read through UniverseRepo, which queries platform.v_universe (the
+# CREATE VIEW migration in PR #336 that joins ticker_classifications
+# × ticker_history × liquidity_tiers). The view doesn't appear in
+# _PROFILE.data_dependencies and test_engine_data_dependencies_drift
+# reds.
+#
+# liquidity_tiers stays declared because the live-path setup_detection
+# plug (momentum/plugs/setup_detection.py) still queries it directly —
+# the operator gated converting the live path until momentum is safe
+# to migrate.
+#
+# earnings_events + prices_daily unchanged.

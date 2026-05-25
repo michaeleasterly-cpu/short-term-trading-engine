@@ -1,0 +1,22 @@
+ECR
+action: MODIFY
+engine: catalyst
+data_dependencies: earnings_events, insider_transactions, prices_daily
+
+# Accuracy-only data_dependencies correction (spec §7 follow-up,
+# audit docs/superpowers/audits/2026-05-20-engine-data-dependencies-
+# accuracy.md). No param_change / lab_dossier / gate_* — bypasses
+# the zero-trust Lab-dossier gate.
+#
+# Why
+# ====
+# catalyst's source previously read platform.sec_insider_transactions.
+# v2.2 phase 1 RENAMED that table to platform.insider_transactions.
+# PR #343 (refactor(catalyst)) migrated the engine code to the new
+# table name (via InsiderRepo); test_engine_data_dependencies_drift
+# now reds because _PROFILE still declares sec_insider_transactions.
+# This ECR drops the dead table name and adds the live one.
+#
+# earnings_events + prices_daily are unchanged carryovers — kept here
+# because data_dependencies is the WHOLE frozenset (replaces, not
+# appends).

@@ -1,6 +1,6 @@
 """Catalyst — Plug 1: Setup Detection (insider-cluster leg only).
 
-Reads recent ``platform.sec_insider_transactions`` rows and per-ticker
+Reads recent ``platform.insider_transactions`` rows and per-ticker
 ``platform.prices_daily`` rows; emits a :class:`SetupCandidate` for any
 ticker that
 

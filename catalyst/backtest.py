@@ -1,7 +1,7 @@
 """Catalyst — backtest driver + Lab-targeting declarations.
 
 Simulates the insider-cluster swing engine against historical
-``platform.sec_insider_transactions`` + ``platform.prices_daily`` rows
+``platform.insider_transactions`` + ``platform.prices_daily`` rows
 and emits a :class:`BacktestRunResult` so the parameter-search pipeline
 and `scripts/run_dashboard.sh` can consume it without bespoke shaping.
 

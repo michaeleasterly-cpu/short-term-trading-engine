@@ -1,0 +1,19 @@
+ECR
+action: MODIFY
+engine: sentinel
+data_dependencies: macro_data, prices_daily
+
+# Accuracy-only data_dependencies correction. No param_change /
+# lab_dossier / gate_* — bypasses the zero-trust Lab-dossier gate.
+#
+# Why
+# ====
+# Task #18 P7 (commit a6935d2 today) dropped platform.macro_indicators
+# in favor of platform.macro_data (SCD-2 bitemporal tall format with
+# source + series_id). PR #339 (refactor(macro)) migrated sentinel's
+# reads (backtest.py + plugs/setup_detection.py) onto MacroRepo against
+# macro_data. _PROFILE still declared the now-dropped macro_indicators;
+# test_engine_data_dependencies_drift reds.
+#
+# This ECR drops the dropped-table reference and adds the live one.
+# prices_daily unchanged.

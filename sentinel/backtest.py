@@ -1,7 +1,7 @@
 """Sentinel — backtest driver.
 
 Simulates Sentinel's activation/deactivation cycles against historical
-macro indicators (``platform.macro_indicators``) and ETF prices
+macro indicators (``platform.macro_data``) and ETF prices
 (``platform.prices_daily``). Produces:
 
 * JSON metrics object compatible with :class:`BacktestRunResult` so the
@@ -664,7 +664,7 @@ _GRAD_SCALE_DEEP = 1.00
 # first). Pinned.
 _GRAD_INVERSE_ETF_CAP = 0.25
 
-# Indicator names read from platform.macro_indicators (these are the
+# Indicator names read from platform.macro_data (these are the
 # canonical names in tpcore.fred.adapter.INDICATOR_SERIES).
 _GRAD_INDICATORS: tuple[str, ...] = (
     "sahm_rule",
@@ -786,7 +786,7 @@ async def _fetch_graduated_macro_panel(
     end: date_t,
 ) -> pd.DataFrame:
     """PIT-safe wide panel of the five graduated-Bear-Score indicators
-    from ``platform.macro_indicators``.
+    from ``platform.macro_data``.
 
     Returns a DataFrame indexed by ``date`` with columns
     ``(sahm_rule, sos_state_diffusion, yield_curve, cfnai_ma3, hy_spread)``.
@@ -1019,7 +1019,7 @@ async def load_sentinel_window_context(
     (``BASKET_WEIGHTS_DEFAULT``), not a roster-derived universe.
 
     Strictly-additive read: ``macro_panel`` is loaded from
-    ``platform.macro_indicators`` for the five graduated-Bear-Score
+    ``platform.macro_data`` for the five graduated-Bear-Score
     factors. The legacy ``bear_score_mode="current"`` path NEVER reads
     this attribute (byte-identical contract preserved); only the
     ``bear_score_mode="graduated"`` variant branch consumes it."""
