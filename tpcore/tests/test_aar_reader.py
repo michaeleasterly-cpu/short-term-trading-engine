@@ -17,6 +17,7 @@ def _record(
     engine: str = "sigma",
     trade_id: str = "AAPL_1",
     ticker: str = "AAPL",
+    classification_id: str | None = None,
     aar_data: dict | str = None,  # type: ignore[assignment]
     recorded_at: datetime | None = None,
 ) -> dict:
@@ -24,6 +25,7 @@ def _record(
         "engine": engine,
         "trade_id": trade_id,
         "ticker": ticker,
+        "classification_id": classification_id,
         "aar_data": aar_data if aar_data is not None else {},
         "recorded_at": recorded_at or datetime(2026, 5, 12, tzinfo=UTC),
     }
@@ -101,13 +103,20 @@ def test_row_to_aar_skips_when_jsonb_string_malformed() -> None:
 
 
 class _FakeConn:
-    def __init__(self, rows_by_engine: dict[str, list[dict]]) -> None:
+    def __init__(
+        self,
+        rows_by_engine: dict[str, list[dict]],
+        rows_by_cid: dict[str, list[dict]] | None = None,
+    ) -> None:
         self.rows_by_engine = rows_by_engine
+        self.rows_by_cid = rows_by_cid or {}
         self.all_rows = [r for rows in rows_by_engine.values() for r in rows]
 
     async def fetch(self, sql: str, *args: Any) -> list[dict]:
         if "WHERE engine = $1" in sql:
             return self.rows_by_engine.get(args[0], [])
+        if "WHERE classification_id = $1" in sql:
+            return self.rows_by_cid.get(args[0], [])
         return self.all_rows
 
 
@@ -131,7 +140,7 @@ async def test_reader_fetch_by_engine_filters_and_parses() -> None:
         _record(
             engine="sigma",
             trade_id=f"T{i}",
-            aar_data={"pnl_net": str(p), "exit_ts": f"2026-05-{10+i:02d}T00:00:00Z"},
+            aar_data={"pnl_net": str(p), "exit_ts": f"2026-05-{10 + i:02d}T00:00:00Z"},
         )
         for i, p in enumerate([10, -5, 3])
     ]
@@ -168,6 +177,77 @@ async def test_reader_fetch_all_grouped_sorts_by_exit_ts() -> None:
     grouped = await reader.fetch_all_grouped()
     assert set(grouped.keys()) == {"sigma", "momentum"}
     assert [a.trade_id for a in grouped["sigma"]] == ["early", "late"]
+
+
+@pytest.mark.asyncio
+async def test_row_to_aar_populates_classification_id_when_present() -> None:
+    """Post-PR-12, aar_events.classification_id is populated; the reader
+    plumbs it through to AARRow."""
+    record = _record(
+        classification_id="USOZ80NAAPL456",
+        aar_data={
+            "pnl_net": "5.00",
+            "exit_ts": "2026-05-12T13:32:02Z",
+        },
+    )
+    aar = _row_to_aar(record)
+    assert aar is not None
+    assert aar.classification_id == "USOZ80NAAPL456"
+
+
+@pytest.mark.asyncio
+async def test_row_to_aar_classification_id_defaults_none_when_column_absent() -> None:
+    """Records without a classification_id key (e.g. patched callers
+    querying without the column) leave AARRow.classification_id = None."""
+    record = {
+        "engine": "sigma",
+        "trade_id": "AAPL_1",
+        "ticker": "AAPL",
+        "aar_data": {"pnl_net": "1.00", "exit_ts": "2026-05-12T00:00:00Z"},
+        "recorded_at": datetime(2026, 5, 12, tzinfo=UTC),
+        # NO classification_id key
+    }
+    aar = _row_to_aar(record)
+    assert aar is not None
+    assert aar.classification_id is None
+
+
+@pytest.mark.asyncio
+async def test_reader_fetch_by_classification_id_returns_cross_engine_history() -> None:
+    """The cid query spans all engines — useful for cross-engine cid analysis."""
+    cid_rows = [
+        _record(
+            engine="sigma",
+            trade_id="sig1",
+            classification_id="USOZ80NAAPL456",
+            aar_data={"pnl_net": "1.00", "exit_ts": "2026-05-12T00:00:00Z"},
+        ),
+        _record(
+            engine="momentum",
+            trade_id="mom1",
+            classification_id="USOZ80NAAPL456",
+            aar_data={"pnl_net": "2.00", "exit_ts": "2026-05-13T00:00:00Z"},
+        ),
+    ]
+    pool = _FakePool(
+        _FakeConn(
+            rows_by_engine={},
+            rows_by_cid={"USOZ80NAAPL456": cid_rows},
+        )
+    )
+    reader = AARReader(pool)  # type: ignore[arg-type]
+
+    out = await reader.fetch_by_classification_id("USOZ80NAAPL456")
+    assert len(out) == 2
+    assert {a.engine for a in out} == {"sigma", "momentum"}
+    assert all(a.classification_id == "USOZ80NAAPL456" for a in out)
+
+
+@pytest.mark.asyncio
+async def test_reader_fetch_by_classification_id_empty_for_unknown_cid() -> None:
+    pool = _FakePool(_FakeConn(rows_by_engine={}, rows_by_cid={}))
+    reader = AARReader(pool)  # type: ignore[arg-type]
+    assert await reader.fetch_by_classification_id("UNKNOWN_CID") == []
 
 
 @pytest.mark.asyncio
