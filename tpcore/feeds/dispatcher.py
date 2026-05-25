@@ -36,7 +36,8 @@ FEED_STAGE: dict[str, str] = {
     "iborrowdesk_borrow_rates": "iborrowdesk_borrow_rates",
     "apewisdom_social_sentiment": "apewisdom_social_sentiment",
     "finnhub_insider_sentiment": "finnhub_insider_sentiment",
-    "insider_sentiment_daily": "daily_insider_sentiment_delta",
+    # P0_3 RETIRE 2026-05-25 — ``insider_sentiment_daily`` dispatch
+    # entry removed (target table ``platform.insider_filings`` dropped).
     "greeks_max_pain": "greeks_max_pain",
     "earnings_events": "earnings_refresh",
     "sec_insider_transactions": "sec_filings",

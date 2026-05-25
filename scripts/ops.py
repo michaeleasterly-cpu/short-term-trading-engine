@@ -6673,127 +6673,14 @@ async def _stage_rebuild_corporate_actions_from_archive(
     }
 
 
-async def _stage_historical_insider_sentiment_daily(
-    pool: asyncpg.Pool, cfg: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """One-shot insider-filings backfill — daily granularity, full
-    T1+T2 stock universe + every delisted ticker known to prices_daily.
-
-    Carver-driven 2026-05-22: the vector engine candidate
-    ``vector_beat_reversal_insider_filter_v1`` needs a 30d-rolling MSPR
-    signal at DAILY resolution. The existing monthly
-    ``platform.insider_sentiment`` (Finnhub free-tier) is information-
-    lossy and empty pre-2025. FMP $200/yr Starter ``/stable/insider-
-    trading/search`` returns per-symbol per-filing Form-4 rows — the
-    substrate for any rolling window downstream. This stage backfills
-    2018-01-01 → today, idempotent under the (symbol, transaction_date,
-    reporting_cik, transaction_type, securities_transacted, price) PK.
-
-    Resumable via ``application_log`` events
-    (``INSIDER_BACKFILL_SYMBOL_DONE``) — a crash mid-run keeps
-    completed work; the next invocation skips already-done symbols.
-
-    Operator-on-demand only (NOT in ``OPS_UPDATE_STAGES``). Run after
-    PR merge to populate ``platform.insider_filings``. Sister stage
-    ``daily_insider_sentiment_delta`` IS in the daily cadence and
-    catches new filings nightly.
-
-    Optional ``--param`` knobs:
-        * ``start_date=YYYY-MM-DD`` — override the 2018-01-01 default.
-        * ``resume=false`` — re-process every symbol (default true).
-        * ``limit=N`` — process at most N symbols (smoke).
-        * ``max_pages=N`` — per-symbol page cap (default 200; safety
-          ceiling — typical T1+T2 symbol bottoms out ~12-50 pages).
-
-    Use:
-        DATABASE_URL=… FMP_API_KEY=… .venv/bin/python scripts/ops.py \\
-            --stage historical_insider_sentiment_daily
-    """
-    from tpcore.data.insider_backfill import (
-        backfill_universe,
-        enumerate_insider_universe,
-    )
-    from tpcore.logging.db_handler import DBLogHandler
-
-    cfg = cfg or {}
-    log = structlog.get_logger("scripts.ops")
-    resume = bool(cfg.get("resume", True))
-    limit = int(cfg.get("limit", 0)) or None
-    max_pages = int(cfg.get("max_pages", 200))
-    start = (
-        date.fromisoformat(str(cfg["start_date"]))
-        if cfg.get("start_date") else date(2018, 1, 1)
-    )
-
-    universe = await enumerate_insider_universe(pool)
-    log.info(
-        "ops.stage.historical_insider_sentiment_daily.enumerated",
-        total=len(universe),
-    )
-    if limit:
-        universe = universe[:limit]
-        log.info(
-            "ops.stage.historical_insider_sentiment_daily.limited",
-            limit=limit,
-        )
-
-    db_log = DBLogHandler(pool, engine=ENGINE_NAME, run_id=uuid.uuid4())
-    result = await backfill_universe(
-        pool, db_log, universe,
-        start=start, resume=resume, max_pages=max_pages,
-    )
-    log.info("ops.stage.historical_insider_sentiment_daily.done", **result)
-    return {
-        "universe_enumerated": len(universe),
-        **result,
-    }
-
-
-async def _stage_daily_insider_sentiment_delta(
-    pool: asyncpg.Pool, cfg: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Nightly incremental for ``platform.insider_filings``.
-
-    Pages 0..(pages-1) of FMP ``/stable/insider-trading/search`` per
-    symbol in the T1+T2 stock universe + delisted-prices_daily set.
-    The (symbol, transaction_date, reporting_cik, transaction_type,
-    securities_transacted, price) PK + ON CONFLICT DO NOTHING keep
-    re-runs idempotent and free for already-seen rows.
-
-    Wired into ``OPS_UPDATE_STAGES`` via ``_STAGE_SPECS`` (NOT off-
-    cycle) so the existing data-operations daemon (21:30 UTC weekday
-    cron) catches every filing the day after it lands at FMP — per
-    the operator directive "make sure automation works so we aren't
-    backfilling all the damn time."
-
-    Optional ``--param`` knobs:
-        * ``pages=N`` — per-symbol page cap (default 1 = last 100 rows
-          per symbol; high-volume names that need >100 rows/day are
-          covered by the historical backfill — the delta stage exists
-          purely to catch the prior day's filings, never to backfill).
-        * ``limit=N`` — process at most N symbols (smoke).
-    """
-    from tpcore.data.insider_backfill import (
-        daily_delta,
-        enumerate_insider_universe,
-    )
-    from tpcore.logging.db_handler import DBLogHandler
-
-    cfg = cfg or {}
-    log = structlog.get_logger("scripts.ops")
-    pages = int(cfg.get("pages", 1))
-    limit = int(cfg.get("limit", 0)) or None
-
-    universe = await enumerate_insider_universe(pool)
-    if limit:
-        universe = universe[:limit]
-
-    db_log = DBLogHandler(pool, engine=ENGINE_NAME, run_id=uuid.uuid4())
-    result = await daily_delta(
-        pool, db_log, universe=universe, pages=pages,
-    )
-    log.info("ops.stage.daily_insider_sentiment_delta.done", **result)
-    return result
+# P0_3 RETIRE 2026-05-25 — ``_stage_historical_insider_sentiment_daily``
+# + ``_stage_daily_insider_sentiment_delta`` removed. Target table
+# ``platform.insider_filings`` was DROPPED in migration
+# ``20260522_0200_drop_insider_filings_add_sec_mspr`` (the FMP path was
+# redundant with the SEC-EDGAR ``insider_transactions`` ingest). Producer
+# adapter ``tpcore.data.insider_backfill`` deleted; FeedProfile,
+# ProviderBinding, HealSpec, validation check, and dispatcher entry all
+# closed in the same 3-way retirement (P0_3 trust-audit).
 
 
 async def _stage_coverage_fill(pool: asyncpg.Pool) -> dict[str, Any]:
@@ -7725,24 +7612,11 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     ("rebuild_corporate_actions_from_archive",
         lambda pool, cfg: (lambda: _stage_rebuild_corporate_actions_from_archive(pool, cfg)),
         STAGE_TIMEOUT_SEC),
-    # historical_insider_sentiment_daily — one-shot FMP /stable/insider-
-    # trading/search backfill (Carver, 2026-05-22) for the vector engine's
-    # 30d-rolling MSPR signal. Off-cycle: operator runs once after PR
-    # merge; ~2400 active + ~248 delisted symbols × ~12-50 pages × ~0.5s
-    # = 30-90 min wall-time. Heavy timeout (60min) — limit/resume knobs
-    # available; a crash mid-run is replayed by the resume probe.
-    ("historical_insider_sentiment_daily",
-        lambda pool, cfg: (lambda: _stage_historical_insider_sentiment_daily(pool, cfg)),
-        HEAVY_STAGE_TIMEOUT_SEC),
-    # daily_insider_sentiment_delta — nightly incremental for insider_
-    # filings. IN OPS_UPDATE_STAGES via the feed dispatcher (FeedProfile
-    # 'insider_sentiment_daily', cadence_days=1, CONTINUOUS trigger).
-    # Pulls page 0 of /insider-trading/search per symbol — last 100
-    # filings per ticker, idempotent under the table PK + ON CONFLICT
-    # DO NOTHING. Heavy timeout: ~2400 symbols × ~0.5s/call ≈ 20 min.
-    ("daily_insider_sentiment_delta",
-        lambda pool, cfg: (lambda: _stage_daily_insider_sentiment_delta(pool, cfg)),
-        HEAVY_STAGE_TIMEOUT_SEC),
+    # P0_3 RETIRE 2026-05-25 — ``historical_insider_sentiment_daily``
+    # + ``daily_insider_sentiment_delta`` _STAGE_SPECS entries removed
+    # (target ``platform.insider_filings`` table dropped; full
+    # FeedProfile + ProviderBinding + HealSpec + check + producer +
+    # stage retirement closed in the same PR).
 )
 KNOWN_STAGES: tuple[str, ...] = tuple(name for name, _, _ in _STAGE_SPECS)
 # Stages that are NOT part of the default daily ``cmd_update`` cycle —
@@ -7778,11 +7652,8 @@ _OFF_CYCLE_STAGES: frozenset[str] = frozenset({
     # on-demand only; clears stale paper-engine holds whose credibility
     # is at or above the new paper floor.
     "release_paper_holds_above_paper_floor",
-    # Insider-filings one-shot backfill — Carver 2026-05-22. Operator-on-
-    # demand. The SISTER stage ``daily_insider_sentiment_delta`` IS in
-    # the daily cadence (NOT in this off-cycle set) and rides the feed
-    # dispatcher via FEED_PROFILES['insider_sentiment_daily'].
-    "historical_insider_sentiment_daily",
+    # P0_3 RETIRE 2026-05-25 — ``historical_insider_sentiment_daily``
+    # removed from the off-cycle set (stage definition above also gone).
 })
 
 # Reasons (from INGESTION_FAILED.data->>'reason' or exception_type) that
@@ -8026,7 +7897,6 @@ _VALIDATION_CHUNK_SPECS: tuple[tuple[str, tuple[str, ...]], ...] = (
         (
             "options_max_pain_freshness",
             "insider_sentiment_freshness",
-            "insider_filings_freshness",
             "social_sentiment_freshness",
             "fear_greed_freshness",
             "short_interest_freshness",

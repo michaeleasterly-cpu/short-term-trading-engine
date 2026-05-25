@@ -119,12 +119,8 @@ _PROBES: dict[str, _LatestProbe] = {
             "SELECT MAX(action_date) FROM platform.corporate_actions"
         ),
     ),
-    "insider_sentiment_daily": _LatestProbe(
-        # Per-filing Form-4 rows (Carver 2026-05-22) — daily granularity
-        # vs the monthly finnhub_insider_sentiment feed. Age measured in
-        # calendar days against the newest transaction_date.
-        sql="SELECT MAX(transaction_date) FROM platform.insider_filings",
-    ),
+    # P0_3 RETIRE 2026-05-25 — ``insider_sentiment_daily`` LatestProbe
+    # removed (target table ``platform.insider_filings`` dropped).
 }
 
 
