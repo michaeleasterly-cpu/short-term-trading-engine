@@ -58,8 +58,19 @@ class _Conn:
                 )
                 out.append({"ticker": t, "last_bar": last_bar})
             return out
-        # Coverage-collapse probe (rows ordered date DESC, latest first)
-        if "count(distinct ticker)" in sql_lower:
+        # Coverage-collapse probe (rows ordered date DESC, latest first).
+        # The query MUST filter retired tickers via ticker_classifications
+        # (operator 2026-05-25: retired tickers must not count against
+        # active-coverage denominator).
+        if "count(distinct pd.ticker)" in sql_lower:
+            assert "ticker_classifications" in sql_lower, (
+                "coverage-collapse query must JOIN/EXISTS-filter "
+                "platform.ticker_classifications to exclude retired tickers"
+            )
+            assert "lifetime_end" in sql_lower, (
+                "coverage-collapse query must filter on lifetime_end "
+                "(IS NULL OR > pd.date) to keep active universe only"
+            )
             return self._coverage_rows
         raise AssertionError(f"unexpected fetch SQL: {sql}")
 

@@ -184,15 +184,31 @@ async def check_prices_daily_freshness(
     # trailing average. Catches the daily_bars-incident class where
     # MAX(date) is current but the ingest only covered a fraction of
     # the universe.
+    #
+    # Active-universe-aware denominator (operator catch 2026-05-25):
+    # a ticker whose classification has `lifetime_end <= pd.date` is
+    # RETIRED for that date and must NOT count against coverage. The
+    # 2026-05-22 incident exposed this: 4 tickers retired on 2026-05-18
+    # still had bars on 2026-05-21 (provider serves zombie post-delist
+    # bars), pushing them into the "present prior, absent target" gap
+    # even though they shouldn't trade going forward. The EXISTS clause
+    # admits a ticker if ANY classification was active (lifetime_end IS
+    # NULL OR > date) — supports the ticker-reuse SCD-2 semantics where
+    # one ticker string may map to multiple classifications over time.
     async with pool.acquire() as conn:
         cov_rows = await conn.fetch(
             """
-            SELECT date, COUNT(DISTINCT ticker) AS n
-            FROM platform.prices_daily
-            WHERE delisted = false
-              AND date >= CURRENT_DATE - INTERVAL '40 days'
-            GROUP BY date
-            ORDER BY date DESC
+            SELECT pd.date, COUNT(DISTINCT pd.ticker) AS n
+            FROM platform.prices_daily pd
+            WHERE pd.delisted = false
+              AND pd.date >= CURRENT_DATE - INTERVAL '40 days'
+              AND EXISTS (
+                  SELECT 1 FROM platform.ticker_classifications tc
+                  WHERE tc.ticker = pd.ticker
+                    AND (tc.lifetime_end IS NULL OR tc.lifetime_end > pd.date)
+              )
+            GROUP BY pd.date
+            ORDER BY pd.date DESC
             LIMIT $1
             """,
             COVERAGE_TRAILING_SESSIONS + 1,
