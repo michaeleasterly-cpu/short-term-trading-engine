@@ -8,6 +8,9 @@ Operator directives:
     Anthropic-free).
   * 2026-05-22 — "we aren't going to use the llm triage... take it
     out" (the LLM-triage stack is REMOVED ENTIRELY).
+  * 2026-05-25 — "it is out" (the operator-local LLM lab/finder/monitor
+    orchestrator + LAB-EMITTER + EDGE-FINDER + OUTCOME-MONITOR are
+    also REMOVED, Railway-readiness retirement).
 
 A subprocess test is the only correct shape for the import-graph check.
 The pytest collection process imports ``anthropic`` via sibling tests
@@ -46,6 +49,7 @@ _REPO = Path(__file__).resolve().parents[1]
 # must NOT be importable anywhere in the repo — if any of them is, the
 # directive has been violated.
 _DELETED_LLM_TRIAGE_MODULES: tuple[str, ...] = (
+    # 2026-05-22 — original LLM-triage stack removal
     "ops.llm_data_recovery",
     "ops.llm_data_triage",
     "ops.engine_llm_triage",
@@ -58,6 +62,17 @@ _DELETED_LLM_TRIAGE_MODULES: tuple[str, ...] = (
     "tpcore.engine_llm_triage.fence",
     "tpcore.engine_llm_triage.packet",
     "tpcore.engine_llm_triage.select",
+    # 2026-05-25 — operator-local LLM lab/finder/monitor lanes removed
+    # ("it is out") in the Railway-readiness retirement. The
+    # operator-local orchestrator + LAB-EMITTER + EDGE-FINDER +
+    # OUTCOME-MONITOR + their tpcore companions are all deleted.
+    "ops.llm_triage_service",
+    "ops.llm_lab_emitter",
+    "ops.llm_edge_finder",
+    "ops.llm_edge_finder_sdk",
+    "ops.llm_finder_outcome_monitor",
+    "tpcore.lab.llm_emitter",
+    "tpcore.lab.llm_finder",
 )
 
 
@@ -82,6 +97,14 @@ def test_lane_service_does_not_import_anthropic() -> None:
         "deployed_llm_modules = sorted(\n"
         "    m for m in sys.modules\n"
         "    if m in {\n"
+        # Pre-2026-05-25: these were checked to ensure the deployed
+        # lane-service didn't transitively load them. All are now
+        # DELETED (see _DELETED_LLM_TRIAGE_MODULES); the test below
+        # confirms they're not importable. The leak-check below stays
+        # as belt+braces — if anyone re-introduces any of these the
+        # deleted-modules sentinel reds first, but a partial
+        # re-introduction that imports via a non-canonical path would
+        # still trip this leak check.
         "        'ops.llm_triage_service',\n"
         "        'ops.llm_data_recovery',\n"
         "        'ops.engine_llm_triage',\n"

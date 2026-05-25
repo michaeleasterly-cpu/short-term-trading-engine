@@ -4,7 +4,6 @@ paths:
   - "ops/engine_service.py"
   - "ops/data_repair_service.py"
   - "ops/lane_service.py"
-  - "ops/llm_triage_service.py"
   - "scripts/install_all_daemons.sh"
 description: "Path-scoped rule: 'exactly N daemons' invariant; deployed daemon is PERMANENTLY deterministic-only (no LLM triage in repo); mkdir-atomic locks."
 ---
@@ -25,4 +24,4 @@ Invariants:
 - **mkdir-atomic self-exclusion lock** for the data-ops loop prevents the scheduled-cycle overlap. It does NOT guard ad-hoc concurrent `ops.py --stage` from a separate process — concurrent `daily_bars` contend on the Supabase pooler.
 - **Daemons installed via `scripts/install_all_daemons.sh`** (3-installer launchd label whitelist; the topology invariant test guards against new daemon labels being added without an explicit consolidation case).
 
-What still uses LLM (operator-local only, NOT triage): the SP-G Lab spec-emitter (`ops.llm_lab_emitter`, slash skill `/lab-spec-emit`) and the Task #25 edge-finder (`ops.llm_edge_finder`, slash skill `/lab-edge-find`). Both are Lab-side spec generators, not triage — and neither is deployed. The `ops/llm_triage_service.py` file remains as the local-only orchestrator for those three KEEP co-tasks (lab_emitter + edge_finder + outcome_monitor) but is NOT in `install_all_daemons.sh`.
+**2026-05-25 update — Mac-local LLM lab/finder/monitor REMOVED.** The operator-local orchestrator `ops/llm_triage_service.py` + its three co-tasks (`ops/llm_lab_emitter.py` SP-G LAB-EMITTER, `ops/llm_edge_finder.py` Task #25 EDGE-FINDER, `ops/llm_finder_outcome_monitor.py` OUTCOME-MONITOR) + their `tpcore.lab.llm_emitter` / `tpcore.lab.llm_finder` companions + the `/lab-spec-emit` + `/lab-edge-find` slash skills are all DELETED ("it is out", Railway-readiness retirement). The only LLM caller left in the repo is the AAR critic (`ops/llm_aar_critic*.py` + `tpcore/lab/llm_aar/`) — operator-local-only, NEVER deployed, distinct from the retired lanes.

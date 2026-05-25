@@ -14,7 +14,7 @@ Coverage:
 * C1  classifier thresholds match the snapshot SoT (the leftover
       classifier tests, retained as the pin against drift).
 * C2  ``RegimeClassification.regime_tuple_id`` round-trips through
-      :func:`_compute_regime_tuple_id`.
+      :func:`compute_regime_tuple_id`.
 * C3  ``decompose_regime_tuple_id`` is the inverse of the SHA12 hash
       for every (vol, trend, macro, sentiment) combination - and the
       candidate's hash ``968624efa259`` decomposes to (normal, range,
@@ -69,7 +69,7 @@ from reversion.regime_filter import (
     regime_tuple_id_for_session,
     session_matches_target,
 )
-from tpcore.lab.llm_finder.models import _compute_regime_tuple_id
+from tpcore.lab.regime_tuple import compute_regime_tuple_id
 
 # Module-private accessor used in test fixtures - SLF allowlisted in
 # pyproject.toml below.
@@ -79,7 +79,7 @@ from tpcore.lab.llm_finder.models import _compute_regime_tuple_id
 
 
 def test_C1_vol_classifier_thresholds_match_snapshot_sot() -> None:
-    """SoT: ``tpcore.lab.llm_finder.snapshot._VIX_*_HI`` constants."""
+    """SoT: ``reversion.regime_filter._VIX_*_HI`` constants."""
     assert _classify_vol(None) == "normal"
     assert _classify_vol(14.99) == "calm"
     assert _classify_vol(15.0) == "normal"
@@ -133,7 +133,7 @@ def test_C1_target_regime_sha12_matches_snapshot_sot() -> None:
     for (range, normal, expansion, neutral) - the canonical
     decomposition pinned for this enrichment."""
     assert (
-        _compute_regime_tuple_id("normal", "range", "expansion", "neutral")
+        compute_regime_tuple_id("normal", "range", "expansion", "neutral")
         == "968624efa259"
     )
 
@@ -188,7 +188,7 @@ def test_C3_decompose_round_trip_every_combo() -> None:
         for trend in ("range", "trend_up", "trend_down"):
             for macro in ("expansion", "slowing", "contraction"):
                 for sent in ("extreme_bull", "neutral", "extreme_bear"):
-                    h = _compute_regime_tuple_id(vol, trend, macro, sent)
+                    h = compute_regime_tuple_id(vol, trend, macro, sent)
                     cls = decompose_regime_tuple_id(h)
                     assert (cls.vol, cls.trend, cls.macro, cls.sentiment) == (
                         vol, trend, macro, sent

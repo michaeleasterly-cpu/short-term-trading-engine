@@ -12,11 +12,12 @@ matches only the trend axis, giving a much larger per-session match
 population) without changing what the candidate REGISTERED as its
 hypothesis.
 
-Self-contained: imports only stdlib + pandas + tpcore.lab.llm_finder
-helpers (the SHA12 hash + the threshold constants are SoT). The
-classifier consumes substrates already in Postgres (vix, sahm_rule,
-cfnai_ma3, yield_curve, aaii_sentiment, SPY's prices_daily series) and
-emits one ``regime_tuple_id`` (SHA12 string) per session date.
+Self-contained: imports only stdlib + pandas + tpcore.lab.regime_tuple
+(SHA12 hash extracted 2026-05-25 when the LLM-finder/lab/monitor stack
+was retired). The classifier consumes substrates already in Postgres
+(vix, sahm_rule, cfnai_ma3, yield_curve, aaii_sentiment, SPY's
+prices_daily series) and emits one ``regime_tuple_id`` (SHA12 string)
+per session date.
 
 This module is Lab-only - the live reversion scheduler never imports
 it, and ``run_reversion_with_context`` reaches it only when
@@ -31,12 +32,10 @@ from typing import Final, Literal
 
 import pandas as pd
 
-from tpcore.lab.llm_finder.models import _compute_regime_tuple_id
+from tpcore.lab.regime_tuple import compute_regime_tuple_id
 
-# Thresholds copied from tpcore.lab.llm_finder.snapshot to avoid a deep
-# import of the snapshot assembler (which pulls FRED-specific Pydantic
-# row models that aren't shaped like our raw Postgres rows). Keep the
-# values identical to the snapshot SoT - the test
+# Threshold constants are inlined here as SoT post-2026-05-25
+# retirement of ``tpcore.lab.llm_finder.snapshot``. The test
 # ``reversion/tests/test_regime_filter.py`` pins these.
 _VIX_CALM_HI: Final[float] = 15.0
 _VIX_NORMAL_HI: Final[float] = 20.0
@@ -182,7 +181,7 @@ class RegimeClassification:
 
     @property
     def regime_tuple_id(self) -> str:
-        return _compute_regime_tuple_id(self.vol, self.trend, self.macro, self.sentiment)
+        return compute_regime_tuple_id(self.vol, self.trend, self.macro, self.sentiment)
 
 
 def classify_session(

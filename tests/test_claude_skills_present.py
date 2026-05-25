@@ -23,8 +23,10 @@ _SKILLS = (
     ("engine-readiness", True),
     ("adapter-readiness", True),
     ("lab-target-run", False),
-    ("lab-spec-emit", False),  # SP-G — operator command path for the LLM spec-emitter
-    ("lab-edge-find", False),  # Task #25 T11 — autonomous LLM edge-finder operator command
+    # 2026-05-25 RETIRED — `lab-spec-emit` (SP-G LAB-EMITTER) +
+    # `lab-edge-find` (Task #25 EDGE-FINDER) removed alongside the
+    # operator-local LLM lab/finder/monitor stack ("it is out",
+    # Railway-readiness retirement).
     ("ecr", False),
     ("dfcr", False),
     ("audit-data-pipeline", False),

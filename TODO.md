@@ -512,7 +512,13 @@ archival record.
 
 Historical scope below kept for context.
 
-## ⚠ LOCAL-LLM-BRIDGE — required for all 4 LLM lanes (operator decision 2026-05-21)
+## ✅ LOCAL-LLM-BRIDGE — required for all 4 LLM lanes (operator decision 2026-05-21) — CLOSED 2026-05-25 (LLM stack retired entirely)
+
+**Status 2026-05-25 — MOOT (final).** The 3 operator-local lanes (LAB-EMITTER / EDGE-FINDER / OUTCOME-MONITOR) were RETIRED in the Railway-readiness sweep ("it is out"). The "bridge" no longer has anything to bridge: `ops/llm_triage_service.py` + `ops/llm_lab_emitter.py` + `ops/llm_edge_finder.py` + `ops/llm_edge_finder_sdk.py` + `ops/llm_finder_outcome_monitor.py` + `tpcore.lab.llm_emitter` + `tpcore.lab.llm_finder` + `/lab-spec-emit` + `/lab-edge-find` are all deleted. Only LLM caller left: the AAR critic (`ops/llm_aar_critic*.py` + `tpcore/lab/llm_aar/`), operator-local, NEVER deployed.
+
+Historical scope below kept for context.
+
+## (historical) LOCAL-LLM-BRIDGE — required for all 4 LLM lanes (operator decision 2026-05-21)
 
 **Operator binding 2026-05-21 post-gate-pilot:** **no Anthropic API credit
 top-up**. All LLM lanes that currently call `AsyncAnthropic.messages.create`
@@ -573,15 +579,11 @@ The gate pilot exposed bugs no mocked test could catch. The next
 discoveries land via THE SAME PATTERN: actually-run.
 
 **Components to actually run:**
-- `python -m ops.llm_edge_finder` (post-bridge) — exercise Phase A→F end-to-end
-- `python -m ops.llm_lab_emitter` against each PAPER engine
-- `python -m ops.llm_data_triage` against a synthetic data escalation
-- `python -m ops.engine_llm_triage` against a synthetic engine escalation
+- 2026-05-25 RETIRED: `ops.llm_edge_finder` / `ops.llm_lab_emitter` / `ops.llm_data_triage` / `ops.engine_llm_triage` / `ops.llm_triage_service` ("it is out").
 - `python scripts/ops.py --update` — full data sweep — surface column drift
 - `bash scripts/run_all_engines.sh` — every PAPER engine fires
 - `python -m ops.engine_service` — DA-3 consolidated daemon
 - `python -m ops.data_repair_service` — recovery lane
-- `python -m ops.llm_triage_service` — 5-cotask daemon
 
 **Per actual-run discovery cadence:**
 1. Run the component.
@@ -595,7 +597,11 @@ Self-heal coverage shouldn't have any "we'll find it in production" gaps.
 
 ---
 
-## Task #25 — autonomous LLM+quant edge finder (follow-on epic)
+## ✅ Task #25 — autonomous LLM+quant edge finder (follow-on epic) — CLOSED 2026-05-25 (RETIRED, "it is out")
+
+**Status 2026-05-25 — RETIRED.** The autonomous LLM edge-finder (`ops/llm_edge_finder*.py` + `ops/llm_finder_outcome_monitor.py` + `tpcore/lab/llm_finder/` + the `/lab-edge-find` skill) was removed in the Railway-readiness sweep. Operator directive: "it is out". The autonomous-finder thesis (the first real edge-signal 2026-05-22, see memory `project_finder_first_edge_signal`) remains valid as research substrate — the `regime_tuple` SHA12 primitive was extracted to `tpcore/lab/regime_tuple.py` so `reversion/regime_filter.py` keeps its byte-identical regime IDs — but the LLM-driven discovery loop is shut down. Historical scope below kept for context.
+
+## (historical) Task #25 — autonomous LLM+quant edge finder (follow-on epic)
 
 The richer ambition the operator raised 2026-05-20 when SP-G's scope was
 locked: an LLM that finds tradeable edges **on its own**, driving a real
