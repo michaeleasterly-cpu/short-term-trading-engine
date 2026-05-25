@@ -206,6 +206,7 @@ async def test_ttl_expiry_re_queries():
 @pytest.mark.asyncio
 async def test_lru_eviction_drops_oldest_when_max_size_exceeded():
     """When cache exceeds max_size, oldest entry is evicted."""
+    IdentityDispatcher.reset_shared_caches()
     pool = _mock_pool(["A", "B", "C", "A"])
     d = IdentityDispatcher(pool, cache_max_size=2)
     await d.ticker_to_classification_id("T1")  # cache: [T1]
@@ -214,3 +215,34 @@ async def test_lru_eviction_drops_oldest_when_max_size_exceeded():
     # T1 evicted → re-queries
     await d.ticker_to_classification_id("T1")
     assert pool.conn_for_assertions.fetchval.await_count == 4
+
+
+@pytest.mark.asyncio
+async def test_shared_cache_across_dispatcher_instances_for_same_pool():
+    """PR-19: two IdentityDispatcher instances built from the same pool
+    share their TTL+LRU cache — the engine pattern of constructing a
+    fresh dispatcher per function call gets cross-call caching."""
+    IdentityDispatcher.reset_shared_caches()
+    pool = _mock_pool("USOZ22OFB123XX")
+    d1 = IdentityDispatcher(pool)
+    d2 = IdentityDispatcher(pool)
+    r1 = await d1.ticker_to_classification_id("META")
+    r2 = await d2.ticker_to_classification_id("META")
+    assert r1 == r2 == "USOZ22OFB123XX"
+    # Only ONE fetchval despite TWO dispatchers — the cache is shared.
+    assert pool.conn_for_assertions.fetchval.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_isolated_caches_for_distinct_pools():
+    """Distinct pool ids ⇒ isolated caches. A staging-vs-prod split or
+    test-vs-test isolation requires only different pool objects."""
+    IdentityDispatcher.reset_shared_caches()
+    pool_a = _mock_pool("AAPL_CID")
+    pool_b = _mock_pool("AAPL_CID_DIFFERENT")
+    d_a = IdentityDispatcher(pool_a)
+    d_b = IdentityDispatcher(pool_b)
+    assert await d_a.ticker_to_classification_id("AAPL") == "AAPL_CID"
+    assert await d_b.ticker_to_classification_id("AAPL") == "AAPL_CID_DIFFERENT"
+    assert pool_a.conn_for_assertions.fetchval.await_count == 1
+    assert pool_b.conn_for_assertions.fetchval.await_count == 1
