@@ -179,6 +179,7 @@ revenue_recognition_risk  # unused variable (tpcore/fundamentals/earnings_qualit
 fcf_3y_trend  # unused variable (tpcore/fundamentals/earnings_quality.py:54)
 model_config  # unused variable (tpcore/fundamentals/fcf_trend.py:10)
 cagr  # unused variable (tpcore/fundamentals/fcf_trend.py:13)
+slope  # unused variable (tpcore/fundamentals/fcf_trend.py:14)
 is_growing  # unused variable (tpcore/fundamentals/fcf_trend.py:15)
 is_volatile  # unused variable (tpcore/fundamentals/fcf_trend.py:16)
 OPTION_EXERCISE  # unused variable (tpcore/fundamentals/insider_analysis.py:14)
