@@ -1,7 +1,7 @@
 """Sentinel — backtest driver.
 
 Simulates Sentinel's activation/deactivation cycles against historical
-macro indicators (``platform.macro_indicators``) and ETF prices
+macro indicators (``platform.macro_data``) and ETF prices
 (``platform.prices_daily``). Produces:
 
 * JSON metrics object compatible with :class:`BacktestRunResult` so the
@@ -52,6 +52,7 @@ All three candidates are off-by-default backtest seams; the LIVE trading
 path is byte-identical when neither override is supplied (proven by the
 C1 characterization tests in ``sentinel/tests/``).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -92,7 +93,9 @@ from tpcore.backtest.search import (
     write_trade_log_csv,
 )
 from tpcore.backtest.statistical_validation import write_credibility_score
+from tpcore.data.repositories import MacroRepo, PricesRepo
 from tpcore.db import build_asyncpg_pool
+from tpcore.identity.dispatcher import IdentityDispatcher
 from tpcore.lab.target import LabPrimaryMetric, LabTarget
 
 logger = structlog.get_logger(__name__)
@@ -120,25 +123,32 @@ async def _fetch_etf_prices(
     caller handles re-weighting via :func:`apply_missing_etf_fallback`.
     """
     tickers = list(BASKET_WEIGHTS_DEFAULT.keys()) + ["SPY"]
-    sql = """
-        SELECT ticker, date, close
-        FROM platform.prices_daily
-        WHERE ticker = ANY($1)
-          AND date BETWEEN $2 AND $3
-        ORDER BY ticker, date
-    """
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(sql, tickers, start - timedelta(days=365), end)
+    dispatcher = IdentityDispatcher(pool)
+    repo = PricesRepo(pool)
+
+    cid_to_ticker: dict[str, str] = {}
+    for t in tickers:
+        cid = await dispatcher.ticker_to_classification_id(t)
+        if cid is not None:
+            cid_to_ticker[cid] = t
+
     out: dict[str, pd.Series] = {t: pd.Series(dtype=float, name=t) for t in tickers}
-    if not rows:
+    if not cid_to_ticker:
         return out
-    df = pd.DataFrame(
-        [{"ticker": r["ticker"], "date": r["date"], "close": float(r["close"])} for r in rows]
+
+    bars_by_cid = await repo.get_window_batch(
+        list(cid_to_ticker),
+        start - timedelta(days=365),
+        end,
     )
-    for t, group in df.groupby("ticker"):
-        out[t] = pd.Series(
-            {pd.Timestamp(r["date"]): r["close"] for _, r in group.iterrows()},
-            name=t,
+    for cid, bars in bars_by_cid.items():
+        if not bars:
+            continue
+        ticker = cid_to_ticker[cid]
+        sorted_bars = sorted(bars, key=lambda b: b.date)
+        out[ticker] = pd.Series(
+            {pd.Timestamp(b.date): float(b.close) for b in sorted_bars},
+            name=ticker,
         ).sort_index()
     return out
 
@@ -198,25 +208,29 @@ def _simulate(
             gross_ret = (exit_price - entry_price) / entry_price
             rtc = float(round_trip_costs.get(ticker, Decimal("0.001")))
             net_ret = gross_ret - rtc
-            trades.append(SearchTrade(
-                ticker=ticker,
-                entry_date=pos["entry_date"],
-                entry_price=entry_price,
-                exit_date=close_date,
-                exit_price=exit_price,
-                pnl_pct=net_ret,
-                direction="LONG",
-                exit_reason=exit_reason,
-            ))
-            trades_for_diag.append({
-                "ticker": ticker,
-                "entry_date": pos["entry_date"],
-                "exit_date": close_date,
-                "entry_price": entry_price,
-                "exit_price": exit_price,
-                "pnl_pct": net_ret,
-                "direction": "LONG",
-            })
+            trades.append(
+                SearchTrade(
+                    ticker=ticker,
+                    entry_date=pos["entry_date"],
+                    entry_price=entry_price,
+                    exit_date=close_date,
+                    exit_price=exit_price,
+                    pnl_pct=net_ret,
+                    direction="LONG",
+                    exit_reason=exit_reason,
+                )
+            )
+            trades_for_diag.append(
+                {
+                    "ticker": ticker,
+                    "entry_date": pos["entry_date"],
+                    "exit_date": close_date,
+                    "entry_price": entry_price,
+                    "exit_price": exit_price,
+                    "pnl_pct": net_ret,
+                    "direction": "LONG",
+                }
+            )
             del open_positions[ticker]
 
     for d in sorted_dates:
@@ -270,32 +284,35 @@ def _phase_history_rows(
     for d in sorted(states.keys()):
         bs = breakdowns.get(d)
         st = states[d]
-        out.append({
-            "date": d.isoformat(),
-            "phase": st.phase.value,
-            "bear_score": st.bear_score,
-            "consecutive_above": st.consecutive_days_above_threshold,
-            "days_in_phase": st.days_in_phase,
-            "cycle_id": st.cycle_id if st.cycle_id is not None else "",
-            "shallow_override": int(st.shallow_recession_override),
-            "vix_breaker": int(st.vix_circuit_breaker),
-            "sqqq_eligible": int(st.sqqq_eligible),
-            "fade_factor": str(st.fade_factor),
-            "spy_rally_in_window_pct": str(st.spy_rally_pct_in_window),
-            **(
-                {
-                    "sahm_pts": bs.sahm_pts,
-                    "industrial_production_pts": bs.industrial_production_pts,
-                    "initial_claims_pts": bs.initial_claims_pts,
-                    "yield_curve_pts": bs.yield_curve_pts,
-                    "credit_spread_pts": bs.credit_spread_pts,
-                    "vix_pts": bs.vix_pts,
-                    "raw_total": bs.raw_total,
-                    "indicators_missing": "|".join(bs.indicators_missing),
-                }
-                if bs is not None else {}
-            ),
-        })
+        out.append(
+            {
+                "date": d.isoformat(),
+                "phase": st.phase.value,
+                "bear_score": st.bear_score,
+                "consecutive_above": st.consecutive_days_above_threshold,
+                "days_in_phase": st.days_in_phase,
+                "cycle_id": st.cycle_id if st.cycle_id is not None else "",
+                "shallow_override": int(st.shallow_recession_override),
+                "vix_breaker": int(st.vix_circuit_breaker),
+                "sqqq_eligible": int(st.sqqq_eligible),
+                "fade_factor": str(st.fade_factor),
+                "spy_rally_in_window_pct": str(st.spy_rally_pct_in_window),
+                **(
+                    {
+                        "sahm_pts": bs.sahm_pts,
+                        "industrial_production_pts": bs.industrial_production_pts,
+                        "initial_claims_pts": bs.initial_claims_pts,
+                        "yield_curve_pts": bs.yield_curve_pts,
+                        "credit_spread_pts": bs.credit_spread_pts,
+                        "vix_pts": bs.vix_pts,
+                        "raw_total": bs.raw_total,
+                        "indicators_missing": "|".join(bs.indicators_missing),
+                    }
+                    if bs is not None
+                    else {}
+                ),
+            }
+        )
     return out
 
 
@@ -311,7 +328,7 @@ def _compute_summary(trades: list[SearchTrade]) -> tuple[float, float, float]:
     rets = [t.pnl_pct for t in trades]
     avg = sum(rets) / len(rets)
     sd = (sum((r - avg) ** 2 for r in rets) / max(1, len(rets) - 1)) ** 0.5
-    sharpe = (avg / sd) * (252 ** 0.5) if sd > 0 else 0.0
+    sharpe = (avg / sd) * (252**0.5) if sd > 0 else 0.0
     wins = sum(r for r in rets if r > 0)
     losses = -sum(r for r in rets if r < 0)
     pf = (wins / losses) if losses > 0 else (wins if wins > 0 else 0.0)
@@ -319,7 +336,7 @@ def _compute_summary(trades: list[SearchTrade]) -> tuple[float, float, float]:
     peak = 1.0
     max_dd = 0.0
     for r in rets:
-        cumulative *= (1.0 + r)
+        cumulative *= 1.0 + r
         peak = max(peak, cumulative)
         max_dd = max(max_dd, (peak - cumulative) / peak)
     return float(sharpe), float(pf), float(-max_dd)
@@ -348,8 +365,10 @@ async def run_backtest(
         setup = SentinelSetupDetection()
         breakdowns = await setup.compute_for_range(pool, start=start, end=end)
         if not breakdowns:
-            print("ERROR: no Bear Score breakdowns produced — check macro_indicators + SPY data",
-                  file=sys.stderr)
+            print(
+                "ERROR: no Bear Score breakdowns produced — check macro_indicators + SPY data",
+                file=sys.stderr,
+            )
             return 1
         spy = await fetch_spy_close(pool, start=start, end=end)
         lifecycle = SentinelLifecycleAnalysis()
@@ -357,7 +376,8 @@ async def run_backtest(
 
         etf_prices = await _fetch_etf_prices(pool, start=start, end=end)
         round_trip_costs = await _round_trip_cost_by_ticker(
-            pool, tickers=list(BASKET_WEIGHTS_DEFAULT.keys()),
+            pool,
+            tickers=list(BASKET_WEIGHTS_DEFAULT.keys()),
         )
 
         # Pre-compute decisions for every day so the simulator can iterate
@@ -377,7 +397,8 @@ async def run_backtest(
             if not prices_today:
                 continue
             decisions[d] = execution.build_decision(
-                as_of=d, state=st,
+                as_of=d,
+                state=st,
                 equity_usd=DEFAULT_PLATFORM_EQUITY_USD,
                 prices=prices_today,
                 current_holdings={},
@@ -389,8 +410,10 @@ async def run_backtest(
         # Bundle into BacktestRunResult via compute_search_metrics so the
         # JSON shape matches the other engines.
         prices_for_diag = (
-            etf_prices.get("SPY", pd.Series(dtype=float)).to_frame(name="close")
-            .rename_axis("date").reset_index()
+            etf_prices.get("SPY", pd.Series(dtype=float))
+            .to_frame(name="close")
+            .rename_axis("date")
+            .reset_index()
         )
         prices_for_diag["ticker"] = "SPY"
         result: BacktestRunResult = compute_search_metrics(
@@ -424,11 +447,14 @@ async def run_backtest(
         # Reversion's pattern (reversion/backtest.py:~1423).
         if result.credibility_rubric is not None:
             wrote = await write_credibility_score(
-                pool, engine_name="sentinel", score=result.credibility_rubric,
+                pool,
+                engine_name="sentinel",
+                score=result.credibility_rubric,
             )
             logger.info(
                 "sentinel.backtest.credibility_persisted",
-                wrote=wrote, score=result.credibility_score,
+                wrote=wrote,
+                score=result.credibility_score,
             )
 
         # Write artefacts.
@@ -445,8 +471,9 @@ async def run_backtest(
         if json_output:
             print(result.to_json())
         else:
-            n_cycles = sum(1 for s in states.values() if s.phase == SentinelPhase.ACTIVE
-                           and s.days_in_phase == 1)
+            n_cycles = sum(
+                1 for s in states.values() if s.phase == SentinelPhase.ACTIVE and s.days_in_phase == 1
+            )
             print(_format_human_summary(start, end, len(trades), n_cycles, sharpe, pf, max_dd, result))
             print(f"\nartifacts → {results_path}, {trades_path}, {phase_path}")
         return 0
@@ -464,17 +491,19 @@ def _format_human_summary(
     max_dd: float,
     result: BacktestRunResult,
 ) -> str:
-    return "\n".join([
-        f"Sentinel backtest — {start} → {end}",
-        f"  activation cycles : {n_cycles}",
-        f"  basket-position trades : {n_trades}",
-        f"  Sharpe (annualized)   : {sharpe:+.3f}",
-        f"  Profit factor         : {pf:.3f}",
-        f"  Max drawdown          : {max_dd:+.3%}",
-        f"  Credibility score     : {result.credibility_score}/100  (passed_gate={result.passed_gate})",
-        f"  DSR                   : {result.dsr:.4f}",
-        f"  Trades-per-param      : {result.trades_per_param:.2f}",
-    ])
+    return "\n".join(
+        [
+            f"Sentinel backtest — {start} → {end}",
+            f"  activation cycles : {n_cycles}",
+            f"  basket-position trades : {n_trades}",
+            f"  Sharpe (annualized)   : {sharpe:+.3f}",
+            f"  Profit factor         : {pf:.3f}",
+            f"  Max drawdown          : {max_dd:+.3%}",
+            f"  Credibility score     : {result.credibility_score}/100  (passed_gate={result.passed_gate})",
+            f"  DSR                   : {result.dsr:.4f}",
+            f"  Trades-per-param      : {result.trades_per_param:.2f}",
+        ]
+    )
 
 
 def _write_phase_history(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -623,7 +652,7 @@ _GRAD_HY_CEIL = 8.00
 # Action bands (spec §2.4) — graduated escalation, monotone-increasing.
 _GRAD_BAND_LIGHT_LO = 0.45  # DORMANT → LIGHT
 _GRAD_BAND_HEAVY_LO = 0.60  # LIGHT → HEAVY
-_GRAD_BAND_DEEP_LO = 0.80   # HEAVY → DEEP
+_GRAD_BAND_DEEP_LO = 0.80  # HEAVY → DEEP
 
 # Band → basket-scale (monotone non-decreasing).
 _GRAD_SCALE_DORMANT = 0.00
@@ -635,7 +664,7 @@ _GRAD_SCALE_DEEP = 1.00
 # first). Pinned.
 _GRAD_INVERSE_ETF_CAP = 0.25
 
-# Indicator names read from platform.macro_indicators (these are the
+# Indicator names read from platform.macro_data (these are the
 # canonical names in tpcore.fred.adapter.INDICATOR_SERIES).
 _GRAD_INDICATORS: tuple[str, ...] = (
     "sahm_rule",
@@ -687,9 +716,7 @@ def _macro_stress_count() -> int:
 def _vix_stress_threshold() -> float:
     """Active VIX-proxy stress threshold (percent). Pure."""
     return (
-        _VIX_STRESS_THRESHOLD_OVERRIDE
-        if _VIX_STRESS_THRESHOLD_OVERRIDE is not None
-        else _VIX_STRESS_DEFAULT
+        _VIX_STRESS_THRESHOLD_OVERRIDE if _VIX_STRESS_THRESHOLD_OVERRIDE is not None else _VIX_STRESS_DEFAULT
     )
 
 
@@ -759,7 +786,7 @@ async def _fetch_graduated_macro_panel(
     end: date_t,
 ) -> pd.DataFrame:
     """PIT-safe wide panel of the five graduated-Bear-Score indicators
-    from ``platform.macro_indicators``.
+    from ``platform.macro_data``.
 
     Returns a DataFrame indexed by ``date`` with columns
     ``(sahm_rule, sos_state_diffusion, yield_curve, cfnai_ma3, hy_spread)``.
@@ -772,22 +799,22 @@ async def _fetch_graduated_macro_panel(
     :func:`load_sentinel_window_context` but the resulting panel is
     consumed ONLY in the graduated branch — the legacy path is unchanged.
     """
-    sql = """
-        SELECT date, indicator, value
-        FROM platform.macro_indicators
-        WHERE date BETWEEN $1 AND $2
-          AND indicator = ANY($3)
-        ORDER BY date
-    """
+    repo = MacroRepo(pool)
     pad_start = start - timedelta(days=365)
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(sql, pad_start, end, list(_GRAD_INDICATORS))
-    if not rows:
+    by_series = await repo.get_window_batch(
+        _GRAD_INDICATORS,
+        pad_start,
+        end,
+        source="fred",
+    )
+    if not by_series:
         return pd.DataFrame(columns=list(_GRAD_INDICATORS))
     df = pd.DataFrame(
         [
-            {"date": r["date"], "indicator": r["indicator"], "value": float(r["value"])}
-            for r in rows
+            {"date": obs.observed_date, "indicator": series_id, "value": float(obs.value_num)}
+            for series_id, observations in by_series.items()
+            for obs in observations
+            if obs.value_num is not None
         ]
     )
     wide = df.pivot(index="date", columns="indicator", values="value").sort_index()
@@ -859,6 +886,7 @@ def _grad_composite(panel_row: Mapping[str, float | None]) -> float:
     ``panel_row`` is a Mapping with keys exactly ``_GRAD_INDICATORS`` and
     float-or-None values (a ``None`` entry — or NaN — is treated as
     missing and contributes 0 to that factor). Result is in ``[0, 1]``."""
+
     def _coerce(key: str) -> float | None:
         v = panel_row.get(key)
         if v is None:
@@ -913,9 +941,7 @@ def _grad_basket_weights() -> dict[str, Decimal]:
     legacy = dict(BASKET_WEIGHTS_DEFAULT)
 
     inverse_legacy_total = sum(legacy[t] for t in inverse if t in legacy)
-    treasury_gold_legacy_total = sum(
-        legacy[t] for t in legacy if t not in inverse
-    )
+    treasury_gold_legacy_total = sum(legacy[t] for t in legacy if t not in inverse)
 
     # Scale inverse leg down to the cap, preserving relative shape.
     scaled: dict[str, Decimal] = {}
@@ -930,9 +956,7 @@ def _grad_basket_weights() -> dict[str, Decimal]:
         for t in legacy:
             if t in inverse:
                 continue
-            scaled[t] = (
-                legacy[t] * treasury_gold_target / treasury_gold_legacy_total
-            )
+            scaled[t] = legacy[t] * treasury_gold_target / treasury_gold_legacy_total
     # Renormalize to absorb any rounding drift.
     total = sum(scaled.values())
     if total <= 0:
@@ -995,7 +1019,7 @@ async def load_sentinel_window_context(
     (``BASKET_WEIGHTS_DEFAULT``), not a roster-derived universe.
 
     Strictly-additive read: ``macro_panel`` is loaded from
-    ``platform.macro_indicators`` for the five graduated-Bear-Score
+    ``platform.macro_data`` for the five graduated-Bear-Score
     factors. The legacy ``bear_score_mode="current"`` path NEVER reads
     this attribute (byte-identical contract preserved); only the
     ``bear_score_mode="graduated"`` variant branch consumes it."""
@@ -1007,10 +1031,13 @@ async def load_sentinel_window_context(
         spy = await fetch_spy_close(pool, start=start, end=end)
         etf_prices = await _fetch_etf_prices(pool, start=start, end=end)
         round_trip_costs = await _round_trip_cost_by_ticker(
-            pool, tickers=list(BASKET_WEIGHTS_DEFAULT.keys()),
+            pool,
+            tickers=list(BASKET_WEIGHTS_DEFAULT.keys()),
         )
         macro_panel = await _fetch_graduated_macro_panel(
-            pool, start=start, end=end,
+            pool,
+            start=start,
+            end=end,
         )
     finally:
         await pool.close()
@@ -1018,13 +1045,16 @@ async def load_sentinel_window_context(
     # series from the already-fetched SPY close. Consumed ONLY by the
     # macro_stress_count branch; the legacy / graduated branches never
     # read it.
-    vix_proxy_series = (
-        compute_vix_proxy_series(spy) if len(spy) > 0 else None
-    )
+    vix_proxy_series = compute_vix_proxy_series(spy) if len(spy) > 0 else None
     return SentinelWindowContext(
-        breakdowns=breakdowns, spy_close=spy, etf_prices=etf_prices,
-        round_trip_costs=round_trip_costs, start=start, end=end,
-        graduated=graduated, macro_panel=macro_panel,
+        breakdowns=breakdowns,
+        spy_close=spy,
+        etf_prices=etf_prices,
+        round_trip_costs=round_trip_costs,
+        start=start,
+        end=end,
+        graduated=graduated,
+        macro_panel=macro_panel,
         vix_proxy_series=vix_proxy_series,
     )
 
@@ -1065,24 +1095,14 @@ def run_sentinel_with_context(
     global _YIELD_CURVE_INVERSION_THRESHOLD_OVERRIDE
     overrides = dict(overrides or {})
     _ACTIVATION_THRESHOLD_OVERRIDE = (
-        int(overrides["activation_score_threshold"])
-        if "activation_score_threshold" in overrides
-        else None
+        int(overrides["activation_score_threshold"]) if "activation_score_threshold" in overrides else None
     )
-    _BEAR_SCORE_MODE_OVERRIDE = (
-        str(overrides["bear_score_mode"])
-        if "bear_score_mode" in overrides
-        else None
-    )
+    _BEAR_SCORE_MODE_OVERRIDE = str(overrides["bear_score_mode"]) if "bear_score_mode" in overrides else None
     _MACRO_STRESS_COUNT_OVERRIDE = (
-        int(overrides["macro_stress_signal_count"])
-        if "macro_stress_signal_count" in overrides
-        else None
+        int(overrides["macro_stress_signal_count"]) if "macro_stress_signal_count" in overrides else None
     )
     _VIX_STRESS_THRESHOLD_OVERRIDE = (
-        float(overrides["vix_stress_threshold"])
-        if "vix_stress_threshold" in overrides
-        else None
+        float(overrides["vix_stress_threshold"]) if "vix_stress_threshold" in overrides else None
     )
     _HY_SPREAD_STRESS_THRESHOLD_BPS_OVERRIDE = (
         float(overrides["hy_spread_stress_threshold_bps"])
@@ -1090,9 +1110,7 @@ def run_sentinel_with_context(
         else None
     )
     _SAHM_STRESS_THRESHOLD_OVERRIDE = (
-        float(overrides["sahm_stress_threshold"])
-        if "sahm_stress_threshold" in overrides
-        else None
+        float(overrides["sahm_stress_threshold"]) if "sahm_stress_threshold" in overrides else None
     )
     _YIELD_CURVE_INVERSION_THRESHOLD_OVERRIDE = (
         float(overrides["yield_curve_inversion_threshold"])
@@ -1102,11 +1120,20 @@ def run_sentinel_with_context(
 
     if not context.breakdowns:
         return BacktestRunResult(
-            engine="sentinel", parameters=overrides, credibility_score=0,
-            passed_gate=False, sharpe=0.0, profit_factor=0.0,
-            max_drawdown=0.0, trades=0, dsr=0.0, min_btl_gap=0,
-            trades_per_param=0.0, sensitivity_score=None,
-            ruin_probability=0.0, trade_log=[],
+            engine="sentinel",
+            parameters=overrides,
+            credibility_score=0,
+            passed_gate=False,
+            sharpe=0.0,
+            profit_factor=0.0,
+            max_drawdown=0.0,
+            trades=0,
+            dsr=0.0,
+            min_btl_gap=0,
+            trades_per_param=0.0,
+            sensitivity_score=None,
+            ruin_probability=0.0,
+            trade_log=[],
         )
 
     # bear_score_mode dispatch. _bear_score_mode() returns the variant
@@ -1120,7 +1147,8 @@ def run_sentinel_with_context(
     mode = _bear_score_mode()
     if mode == "graduated" and context.macro_panel is not None:
         return _run_graduated_bear_score(
-            context=context, trade_log_path=trade_log_path,
+            context=context,
+            trade_log_path=trade_log_path,
             effective_mode="graduated",
         )
     if (
@@ -1129,12 +1157,14 @@ def run_sentinel_with_context(
         and context.vix_proxy_series is not None
     ):
         return _run_macro_stress_count(
-            context=context, trade_log_path=trade_log_path,
+            context=context,
+            trade_log_path=trade_log_path,
             effective_mode="macro_stress_count",
         )
 
     return _run_legacy_bear_score(
-        context=context, trade_log_path=trade_log_path,
+        context=context,
+        trade_log_path=trade_log_path,
         effective_mode="current",
     )
 
@@ -1164,7 +1194,8 @@ def _run_legacy_bear_score(
     try:
         _lifecycle_mod.ACTIVATION_SCORE_THRESHOLD = _activation_score_threshold()
         states = lifecycle.walk_states(
-            context.breakdowns, spy_close=context.spy_close,
+            context.breakdowns,
+            spy_close=context.spy_close,
         )
     finally:
         _lifecycle_mod.ACTIVATION_SCORE_THRESHOLD = _saved
@@ -1182,14 +1213,18 @@ def _run_legacy_bear_score(
         if not prices_today:
             continue
         decisions[d] = execution.build_decision(
-            as_of=d, state=st,
+            as_of=d,
+            state=st,
             equity_usd=DEFAULT_PLATFORM_EQUITY_USD,
             prices=prices_today,
             current_holdings={},
         )
 
     trades, trades_for_diag = _simulate(
-        states, decisions, context.etf_prices, context.round_trip_costs,
+        states,
+        decisions,
+        context.etf_prices,
+        context.round_trip_costs,
     )
     sharpe, pf, max_dd = _compute_summary(trades)
 
@@ -1198,7 +1233,9 @@ def _run_legacy_bear_score(
 
     prices_for_diag = (
         context.etf_prices.get("SPY", pd.Series(dtype=float))
-        .to_frame(name="close").rename_axis("date").reset_index()
+        .to_frame(name="close")
+        .rename_axis("date")
+        .reset_index()
     )
     prices_for_diag["ticker"] = "SPY"
     parameters = {
@@ -1280,25 +1317,29 @@ def _run_graduated_bear_score(
             gross_ret = (exit_price - entry_price) / entry_price
             rtc = float(context.round_trip_costs.get(ticker, Decimal("0.001")))
             net_ret = gross_ret - rtc
-            trades.append(SearchTrade(
-                ticker=ticker,
-                entry_date=pos["entry_date"],
-                entry_price=entry_price,
-                exit_date=close_date,
-                exit_price=exit_price,
-                pnl_pct=net_ret,
-                direction="LONG",
-                exit_reason=exit_reason,
-            ))
-            trades_for_diag.append({
-                "ticker": ticker,
-                "entry_date": pos["entry_date"],
-                "exit_date": close_date,
-                "entry_price": entry_price,
-                "exit_price": exit_price,
-                "pnl_pct": net_ret,
-                "direction": "LONG",
-            })
+            trades.append(
+                SearchTrade(
+                    ticker=ticker,
+                    entry_date=pos["entry_date"],
+                    entry_price=entry_price,
+                    exit_date=close_date,
+                    exit_price=exit_price,
+                    pnl_pct=net_ret,
+                    direction="LONG",
+                    exit_reason=exit_reason,
+                )
+            )
+            trades_for_diag.append(
+                {
+                    "ticker": ticker,
+                    "entry_date": pos["entry_date"],
+                    "exit_date": close_date,
+                    "entry_price": entry_price,
+                    "exit_price": exit_price,
+                    "pnl_pct": net_ret,
+                    "direction": "LONG",
+                }
+            )
             del open_positions[ticker]
 
     prev_scale: float = _GRAD_SCALE_DORMANT
@@ -1342,7 +1383,9 @@ def _run_graduated_bear_score(
 
     prices_for_diag = (
         context.etf_prices.get("SPY", pd.Series(dtype=float))
-        .to_frame(name="close").rename_axis("date").reset_index()
+        .to_frame(name="close")
+        .rename_axis("date")
+        .reset_index()
     )
     prices_for_diag["ticker"] = "SPY"
     parameters = {
@@ -1471,7 +1514,9 @@ def _run_macro_stress_count(
     armed_for_date: dict[date_t, bool] = {}
     for d in sorted_dates:
         count = _count_stress_signals_at(
-            panel=panel, vix_series=vix_series, as_of=d,
+            panel=panel,
+            vix_series=vix_series,
+            as_of=d,
             vix_threshold=vix_th,
             hy_spread_threshold_bps=hy_th_bps,
             sahm_threshold=sahm_th,
@@ -1491,37 +1536,37 @@ def _run_macro_stress_count(
             price_series = context.etf_prices.get(ticker)
             if price_series is None or len(price_series) == 0:
                 continue
-            sub = price_series.loc[
-                price_series.index <= pd.Timestamp(close_date)
-            ].dropna()
+            sub = price_series.loc[price_series.index <= pd.Timestamp(close_date)].dropna()
             if len(sub) == 0:
                 continue
             exit_price = float(sub.iloc[-1])
             entry_price = pos["entry_price"]
             gross_ret = (exit_price - entry_price) / entry_price
-            rtc = float(
-                context.round_trip_costs.get(ticker, Decimal("0.001"))
-            )
+            rtc = float(context.round_trip_costs.get(ticker, Decimal("0.001")))
             net_ret = gross_ret - rtc
-            trades.append(SearchTrade(
-                ticker=ticker,
-                entry_date=pos["entry_date"],
-                entry_price=entry_price,
-                exit_date=close_date,
-                exit_price=exit_price,
-                pnl_pct=net_ret,
-                direction="LONG",
-                exit_reason=exit_reason,
-            ))
-            trades_for_diag.append({
-                "ticker": ticker,
-                "entry_date": pos["entry_date"],
-                "exit_date": close_date,
-                "entry_price": entry_price,
-                "exit_price": exit_price,
-                "pnl_pct": net_ret,
-                "direction": "LONG",
-            })
+            trades.append(
+                SearchTrade(
+                    ticker=ticker,
+                    entry_date=pos["entry_date"],
+                    entry_price=entry_price,
+                    exit_date=close_date,
+                    exit_price=exit_price,
+                    pnl_pct=net_ret,
+                    direction="LONG",
+                    exit_reason=exit_reason,
+                )
+            )
+            trades_for_diag.append(
+                {
+                    "ticker": ticker,
+                    "entry_date": pos["entry_date"],
+                    "exit_date": close_date,
+                    "entry_price": entry_price,
+                    "exit_price": exit_price,
+                    "pnl_pct": net_ret,
+                    "direction": "LONG",
+                }
+            )
             del open_positions[ticker]
 
     prev_armed = False
@@ -1538,9 +1583,7 @@ def _run_macro_stress_count(
                 price_series = context.etf_prices.get(ticker)
                 if price_series is None or len(price_series) == 0:
                     continue
-                sub = price_series.loc[
-                    price_series.index <= pd.Timestamp(d)
-                ].dropna()
+                sub = price_series.loc[price_series.index <= pd.Timestamp(d)].dropna()
                 if len(sub) == 0:
                     continue
                 entry_price = float(sub.iloc[-1])
@@ -1560,7 +1603,9 @@ def _run_macro_stress_count(
 
     prices_for_diag = (
         context.etf_prices.get("SPY", pd.Series(dtype=float))
-        .to_frame(name="close").rename_axis("date").reset_index()
+        .to_frame(name="close")
+        .rename_axis("date")
+        .reset_index()
     )
     prices_for_diag["ticker"] = "SPY"
     parameters = {
@@ -1607,10 +1652,15 @@ async def run_for_search(
     :func:`run_sentinel_with_context` to amortise the DB load across all
     candidates in a window."""
     ctx = await load_sentinel_window_context(
-        db_url=db_url, start=start, end=end, universe=universe,
+        db_url=db_url,
+        start=start,
+        end=end,
+        universe=universe,
     )
     return run_sentinel_with_context(
-        ctx, overrides=overrides, trade_log_path=trade_log_path,
+        ctx,
+        overrides=overrides,
+        trade_log_path=trade_log_path,
     )
 
 
@@ -1637,7 +1687,9 @@ LAB_TARGET = LabTarget(
         # docs/superpowers/specs/2026-05-21-sentinel-bear-score-lab-candidate.md
         # finder run_id 91100f12-0674-41dc-9b2b-09c00cc5e507
         "bear_score_mode": (
-            0, 0, "choice:current,graduated,macro_stress_count",
+            0,
+            0,
+            "choice:current,graduated,macro_stress_count",
         ),
         # ── sentinel_macro_stress_gate knobs ─────────────────────────
         # Active ONLY when bear_score_mode == "macro_stress_count".
@@ -1662,24 +1714,29 @@ LAB_TARGET = LabTarget(
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("--start", type=date_t.fromisoformat, default=date_t(2018, 1, 1))
-    p.add_argument("--end", type=date_t.fromisoformat,
-                   default=datetime.now(UTC).date())
+    p.add_argument("--end", type=date_t.fromisoformat, default=datetime.now(UTC).date())
     p.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     p.add_argument("--results-file", default=DEFAULT_RESULTS_FILE)
     p.add_argument("--trades-file", default=DEFAULT_TRADES_FILE)
     p.add_argument("--phase-history-file", default=DEFAULT_PHASE_HISTORY_FILE)
-    p.add_argument("--json", dest="json_output", action="store_true",
-                   help="Emit BacktestRunResult JSON to stdout.")
-    p.add_argument("--trade-log", type=Path, default=None,
-                   help="Write standardised per-trade CSV to this path too.")
-    p.add_argument("--graduated", action="store_true",
-                   help="Use the 20% permanent cap (post-graduation) instead of 10% pre-grad.")
+    p.add_argument(
+        "--json", dest="json_output", action="store_true", help="Emit BacktestRunResult JSON to stdout."
+    )
+    p.add_argument(
+        "--trade-log", type=Path, default=None, help="Write standardised per-trade CSV to this path too."
+    )
+    p.add_argument(
+        "--graduated",
+        action="store_true",
+        help="Use the 20% permanent cap (post-graduation) instead of 10% pre-grad.",
+    )
     return p.parse_args(argv)
 
 
 async def amain(args: argparse.Namespace) -> int:
     return await run_backtest(
-        start=args.start, end=args.end,
+        start=args.start,
+        end=args.end,
         output_dir=args.output_dir,
         results_file=args.results_file,
         trades_file=args.trades_file,

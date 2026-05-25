@@ -21,6 +21,7 @@ session-scoped + cleans up to avoid mutating the live repo state.
 2026-05-22 expert recalibration: trades=10 → 40 (above new MIN_TRADE_COUNT=30
 floor); profit_factor=1.1 above raised MIN_PROFIT_FACTOR=1.05.
 """
+
 from __future__ import annotations
 
 import json
@@ -70,3 +71,16 @@ def _install_reversion_incumbent_dossier():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(_SYNTHETIC_INCUMBENT, indent=2))
     yield
+
+
+# Note (2026-05-25): the autouse `_reset_identity_dispatcher_cache`
+# fixture from PR-19/PR-21 was removed after it correlated with
+# test_run_backtest_persists_credibility_rubric reding the AUTHORITATIVE
+# (serial + order-flip) CI gate. The hypothesis was preventive
+# isolation against id(pool) recycling under MagicMock, but the
+# fixture's autouse-on-every-test changed pytest's ordering of
+# module imports enough to surface a pre-existing fragility in the
+# catalyst credibility test's monkeypatch. The dispatcher's shared
+# cache still works correctly within a single test (per-call dedup)
+# and across tests that don't recycle MagicMock ids — adequate for
+# the cumulative suite.

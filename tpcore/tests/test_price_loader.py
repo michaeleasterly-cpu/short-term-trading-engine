@@ -69,16 +69,34 @@ def _make_rows() -> list[dict]:
 
 
 class _FakeConn:
+    """PR-13: load_prices now goes through IdentityDispatcher + PricesRepo.
+
+    The dispatcher calls ``fetchval`` against ticker_history (returns the
+    cid); PricesRepo then calls ``fetch`` against prices_daily using
+    ``classification_id = ANY``. For test simplicity we use ticker == cid
+    (identity mapping). The fetch route keys on classification_id and
+    populates the row dict with the classification_id column so PricesRepo
+    can group correctly.
+    """
+
     def __init__(self, rows: list[dict]) -> None:
         self._rows = rows
 
-    async def fetch(self, sql: str, tickers, start, end):  # noqa: ANN001
+    async def fetchval(self, sql: str, *args):  # noqa: ANN001
+        # Dispatcher ticker → classification_id lookup. ticker == cid.
+        ticker = args[0]
+        return ticker if any(r["ticker"] == ticker for r in self._rows) else None
+
+    async def fetch(self, sql: str, *args):  # noqa: ANN001
         assert "platform.prices_daily" in sql
-        wanted = set(tickers)
+        # PricesRepo SQL binds (classification_ids_list, start, end).
+        cids = set(args[0])
+        start = args[1]
+        end = args[2]
         return [
-            r
+            {**r, "classification_id": r["ticker"]}
             for r in self._rows
-            if r["ticker"] in wanted and start <= r["date"] <= end
+            if r["ticker"] in cids and start <= r["date"] <= end
         ]
 
 

@@ -1,7 +1,7 @@
 """Catalyst — backtest driver + Lab-targeting declarations.
 
 Simulates the insider-cluster swing engine against historical
-``platform.sec_insider_transactions`` + ``platform.prices_daily`` rows
+``platform.insider_transactions`` + ``platform.prices_daily`` rows
 and emits a :class:`BacktestRunResult` so the parameter-search pipeline
 and `scripts/run_dashboard.sh` can consume it without bespoke shaping.
 
@@ -63,6 +63,7 @@ ranking, never whether it may graduate (SP-D sacred-gate separation).
 Tier-aware costs (``tpcore.backtest.cost_model.get_round_trip_cost``)
 are applied per ticker.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -101,7 +102,9 @@ from tpcore.backtest.search import (
     write_trade_log_csv,
 )
 from tpcore.backtest.statistical_validation import write_credibility_score
+from tpcore.data.repositories import EarningsRepo, InsiderRepo, PricesRepo
 from tpcore.db import build_asyncpg_pool
+from tpcore.identity.dispatcher import IdentityDispatcher
 from tpcore.lab.target import LabPrimaryMetric, LabTarget
 
 logger = structlog.get_logger(__name__)
@@ -136,11 +139,7 @@ def _cluster_window() -> int:
 
     Returns the legacy ``CATALYST_CLUSTER_WINDOW_DAYS`` unless the
     off-by-default Lab override is set. Pure."""
-    return (
-        _CLUSTER_WINDOW_OVERRIDE
-        if _CLUSTER_WINDOW_OVERRIDE is not None
-        else CATALYST_CLUSTER_WINDOW_DAYS
-    )
+    return _CLUSTER_WINDOW_OVERRIDE if _CLUSTER_WINDOW_OVERRIDE is not None else CATALYST_CLUSTER_WINDOW_DAYS
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -190,9 +189,7 @@ _EVENT_CONFIRMATION_BEAT_30D_ONLY = "beat_30d_only"
 # to the ``CatalystWindowContext`` — when absent the mode treats every
 # session as not-expansion (zero trades, defensive: fail-closed not
 # fail-open).
-_EVENT_CONFIRMATION_BEAT_30D_ONLY_MACRO_EXPANSION = (
-    "beat_30d_only_macro_expansion"
-)
+_EVENT_CONFIRMATION_BEAT_30D_ONLY_MACRO_EXPANSION = "beat_30d_only_macro_expansion"
 
 
 def _event_confirmation_mode() -> str:
@@ -210,8 +207,7 @@ def _event_confirmation_mode() -> str:
         return _EVENT_CONFIRMATION_POSITIVE_BEAT_30D
     if _EVENT_CONFIRMATION_MODE_OVERRIDE == _EVENT_CONFIRMATION_BEAT_30D_ONLY:
         return _EVENT_CONFIRMATION_BEAT_30D_ONLY
-    if (_EVENT_CONFIRMATION_MODE_OVERRIDE
-            == _EVENT_CONFIRMATION_BEAT_30D_ONLY_MACRO_EXPANSION):
+    if _EVENT_CONFIRMATION_MODE_OVERRIDE == _EVENT_CONFIRMATION_BEAT_30D_ONLY_MACRO_EXPANSION:
         return _EVENT_CONFIRMATION_BEAT_30D_ONLY_MACRO_EXPANSION
     return _EVENT_CONFIRMATION_OFF
 
@@ -235,11 +231,7 @@ def _hold_days() -> int:
     Returns the legacy ``HOLDING_PERIOD_DAYS`` unless the off-by-default
     Lab override is set. Pure.
     """
-    return (
-        _HOLD_DAYS_OVERRIDE
-        if _HOLD_DAYS_OVERRIDE is not None
-        else HOLDING_PERIOD_DAYS
-    )
+    return _HOLD_DAYS_OVERRIDE if _HOLD_DAYS_OVERRIDE is not None else HOLDING_PERIOD_DAYS
 
 
 def _has_positive_beat(
@@ -310,51 +302,98 @@ async def _fetch_insider_rows(
     start: date_t,
     end: date_t,
 ) -> pd.DataFrame:
-    sql = """
-        SELECT ticker, filing_date, insider_name, transaction_type, value
-        FROM platform.sec_insider_transactions
-        WHERE ticker = ANY($1)
-          AND filing_date BETWEEN $2 AND $3
+    """Edge adapter: ticker universe in, ticker-keyed DataFrame out.
+
+    Dispatches ticker → classification_id via IdentityDispatcher and
+    queries InsiderRepo against ``platform.insider_transactions``
+    (renamed from sec_insider_transactions in v2.2 phase 1; the old
+    name is GONE from the live DB).
     """
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(sql, list(universe), start, end)
+    dispatcher = IdentityDispatcher(pool)
+    repo = InsiderRepo(pool)
+
+    cid_to_ticker: dict[str, str] = {}
+    for t in universe:
+        cid = await dispatcher.ticker_to_classification_id(t)
+        if cid is not None:
+            cid_to_ticker[cid] = t
+
+    if not cid_to_ticker:
+        return pd.DataFrame(columns=["ticker", "filing_date", "insider_name", "transaction_type", "value"])
+
+    txns_by_cid = await repo.get_window_batch(list(cid_to_ticker), start, end)
+    rows: list[dict] = []
+    for cid, txns in txns_by_cid.items():
+        ticker = cid_to_ticker[cid]
+        for txn in txns:
+            rows.append(
+                {
+                    "ticker": ticker,
+                    "filing_date": txn.filing_date,
+                    "insider_name": txn.insider_name,
+                    "transaction_type": txn.transaction_type,
+                    "value": float(txn.value),
+                }
+            )
     if not rows:
-        return pd.DataFrame(columns=["ticker", "filing_date", "insider_name",
-                                     "transaction_type", "value"])
-    return pd.DataFrame([
-        {"ticker": r["ticker"], "filing_date": r["filing_date"],
-         "insider_name": r["insider_name"],
-         "transaction_type": r["transaction_type"],
-         "value": float(r["value"])}
-        for r in rows
-    ])
+        return pd.DataFrame(columns=["ticker", "filing_date", "insider_name", "transaction_type", "value"])
+    return pd.DataFrame(rows)
 
 
 async def _fetch_prices(
-    pool, *, universe: tuple[str, ...],
-    start: date_t, end: date_t,
+    pool,
+    *,
+    universe: tuple[str, ...],
+    start: date_t,
+    end: date_t,
 ) -> dict[str, pd.DataFrame]:
-    sql = """
-        SELECT ticker, date, close, volume
-        FROM platform.prices_daily
-        WHERE ticker = ANY($1) AND date BETWEEN $2 AND $3
-        ORDER BY ticker, date
+    """Fetch close+volume per ticker over [start, end].
+
+    Edge adapter: callers still speak ticker (engine-internal migration
+    to classification_id is incremental). Internally:
+      ticker → classification_id via IdentityDispatcher (TTL+LRU cached)
+      cid    → list[Bar]            via PricesRepo.get_window_batch
+      cid    → ticker (out)         via the inverse map built here
+
+    Tickers absent from ticker_history resolve to None and are silently
+    dropped — preserves the prior behavior where bars-missing-from-DB
+    yielded an empty out dict for that ticker (caller didn't distinguish
+    'no rows' from 'unknown ticker'). The dispatcher caches the miss so
+    a repeated backtest doesn't re-query for the same unknowns.
     """
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(sql, list(universe), start, end)
+    dispatcher = IdentityDispatcher(pool)
+    repo = PricesRepo(pool)
+
+    ticker_to_cid: dict[str, str] = {}
+    cid_to_ticker: dict[str, str] = {}
+    for t in universe:
+        cid = await dispatcher.ticker_to_classification_id(t)
+        if cid is None:
+            continue
+        ticker_to_cid[t] = cid
+        cid_to_ticker[cid] = t
+
+    if not ticker_to_cid:
+        return {}
+
+    bars_by_cid = await repo.get_window_batch(
+        list(ticker_to_cid.values()),
+        start,
+        end,
+    )
+
     out: dict[str, pd.DataFrame] = {}
-    if not rows:
-        return out
-    grouped: dict[str, list[tuple[date_t, float, float]]] = {}
-    for r in rows:
-        grouped.setdefault(r["ticker"], []).append(
-            (r["date"], float(r["close"]), float(r["volume"])))
-    for t, items in grouped.items():
-        items.sort(key=lambda x: x[0])
-        idx = pd.DatetimeIndex([pd.Timestamp(d) for d, _, _ in items])
-        out[t] = pd.DataFrame(
-            {"close": [c for _, c, _ in items],
-             "volume": [v for _, _, v in items]},
+    for cid, bars in bars_by_cid.items():
+        if not bars:
+            continue
+        ticker = cid_to_ticker[cid]
+        sorted_bars = sorted(bars, key=lambda b: b.date)
+        idx = pd.DatetimeIndex([pd.Timestamp(b.date) for b in sorted_bars])
+        out[ticker] = pd.DataFrame(
+            {
+                "close": [float(b.close) for b in sorted_bars],
+                "volume": [b.volume for b in sorted_bars],
+            },
             index=idx,
         )
     return out
@@ -376,31 +415,38 @@ async def _fetch_earnings_events(
     DataFrame, so adding this read is byte-identical to the legacy
     behaviour (proven by the C1 characterization test).
     """
-    sql = """
-        SELECT ticker, event_date, event_type, magnitude_pct
-        FROM platform.earnings_events
-        WHERE ticker = ANY($1)
-          AND event_type = 'EARNINGS_BEAT'
-          AND magnitude_pct > 0
-          AND event_date BETWEEN $2 AND $3
-    """
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(sql, list(universe), start, end)
+    dispatcher = IdentityDispatcher(pool)
+    repo = EarningsRepo(pool)
+
+    cid_to_ticker: dict[str, str] = {}
+    for t in universe:
+        cid = await dispatcher.ticker_to_classification_id(t)
+        if cid is not None:
+            cid_to_ticker[cid] = t
+
+    if not cid_to_ticker:
+        return pd.DataFrame(columns=["ticker", "event_date", "event_type", "magnitude_pct"])
+
+    events_by_cid = await repo.get_beats(list(cid_to_ticker), start, end)
+    rows = [
+        {
+            "ticker": cid_to_ticker[cid],
+            "event_date": ev.event_date,
+            "event_type": ev.event_type,
+            "magnitude_pct": float(ev.magnitude_pct) if ev.magnitude_pct is not None else 0.0,
+        }
+        for cid, events in events_by_cid.items()
+        for ev in events
+    ]
     if not rows:
-        return pd.DataFrame(
-            columns=["ticker", "event_date", "event_type", "magnitude_pct"]
-        )
-    return pd.DataFrame([
-        {"ticker": r["ticker"],
-         "event_date": r["event_date"],
-         "event_type": r["event_type"],
-         "magnitude_pct": float(r["magnitude_pct"]) if r["magnitude_pct"] is not None else 0.0}
-        for r in rows
-    ])
+        return pd.DataFrame(columns=["ticker", "event_date", "event_type", "magnitude_pct"])
+    return pd.DataFrame(rows)
 
 
 async def _round_trip_cost_by_ticker(
-    pool, *, tickers: tuple[str, ...],
+    pool,
+    *,
+    tickers: tuple[str, ...],
 ) -> dict[str, Decimal]:
     out: dict[str, Decimal] = {}
     for t in tickers:
@@ -409,7 +455,8 @@ async def _round_trip_cost_by_ticker(
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "catalyst.backtest.cost_lookup_failed",
-                ticker=t, error=str(exc)[:120],
+                ticker=t,
+                error=str(exc)[:120],
             )
             out[t] = Decimal("0.001")
     return out
@@ -440,8 +487,7 @@ def _simulate_trade(
     (range 5..30, post-2026-05-22 enrichment) is threaded in via
     :func:`_build_trades`.
     """
-    cut = prices[prices.index >= pd.Timestamp(entry_date)].dropna(
-        subset=["close"])
+    cut = prices[prices.index >= pd.Timestamp(entry_date)].dropna(subset=["close"])
     if len(cut) < 2:
         return None
     entry_price = float(cut["close"].iloc[0])
@@ -467,8 +513,7 @@ def _simulate_trade(
             high_water = close
         # Trailing stop: arm at +8% from entry; once armed, exit if
         # close drops > 5% from high_water.
-        if (close >= entry_price * 1.08
-                and close <= high_water * 0.95):
+        if close >= entry_price * 1.08 and close <= high_water * 0.95:
             exit_idx = i
             exit_reason = "TIME_STOP"  # trailing exit; closest bucket
             break
@@ -480,9 +525,14 @@ def _simulate_trade(
     gross_ret = (exit_price - entry_price) / entry_price
     net_ret = gross_ret - round_trip_cost
     return SearchTrade(
-        ticker=ticker, entry_date=entry_date, entry_price=entry_price,
-        exit_date=exit_date, exit_price=exit_price, pnl_pct=net_ret,
-        direction="LONG", exit_reason=exit_reason,
+        ticker=ticker,
+        entry_date=entry_date,
+        entry_price=entry_price,
+        exit_date=exit_date,
+        exit_price=exit_price,
+        pnl_pct=net_ret,
+        direction="LONG",
+        exit_reason=exit_reason,
     )
 
 
@@ -508,8 +558,7 @@ def _passes_universe_filters(
     prices = prices_by_ticker.get(ticker)
     if prices is None or prices.empty:
         return False
-    cut = prices[prices.index <= pd.Timestamp(cursor)].dropna(
-        subset=["close"])
+    cut = prices[prices.index <= pd.Timestamp(cursor)].dropna(subset=["close"])
     if len(cut) < SMA_TREND_PERIOD:
         return False
     last_close = float(cut["close"].iloc[-1])
@@ -519,8 +568,7 @@ def _passes_universe_filters(
     avg_vol_raw = avg_vol_series.iloc[-1]
     if pd.isna(avg_vol_raw) or int(avg_vol_raw) < MIN_AVG_VOLUME:
         return False
-    sma_series = cut["close"].rolling(
-        SMA_TREND_PERIOD, min_periods=SMA_TREND_PERIOD).mean()
+    sma_series = cut["close"].rolling(SMA_TREND_PERIOD, min_periods=SMA_TREND_PERIOD).mean()
     sma_val = sma_series.iloc[-1]
     if pd.isna(sma_val) or last_close <= float(sma_val):
         return False
@@ -567,11 +615,7 @@ def _build_trades_beat_only(
     # magnitude_pct > 0 so the in-DataFrame predicate is just the date
     # / universe slice.
     df = earnings_events
-    mask = (
-        df["ticker"].isin(universe_set)
-        & (df["event_date"] >= start)
-        & (df["event_date"] <= end)
-    )
+    mask = df["ticker"].isin(universe_set) & (df["event_date"] >= start) & (df["event_date"] <= end)
     qualifying = df[mask].sort_values(["event_date", "ticker"])
 
     for _, row in qualifying.iterrows():
@@ -581,7 +625,8 @@ def _build_trades_beat_only(
         # (the same point-in-time cut the legacy cluster path used).
         if not _passes_universe_filters(
             prices_by_ticker=prices_by_ticker,
-            ticker=ticker, cursor=event_date,
+            ticker=ticker,
+            cursor=event_date,
         ):
             continue
         prices = prices_by_ticker.get(ticker)
@@ -593,22 +638,26 @@ def _build_trades_beat_only(
         entry_cursor = event_date + timedelta(days=1)
         rtc = float(round_trip_costs.get(ticker, Decimal("0.001")))
         trade = _simulate_trade(
-            ticker=ticker, entry_date=entry_cursor,
-            prices=prices, round_trip_cost=rtc,
+            ticker=ticker,
+            entry_date=entry_cursor,
+            prices=prices,
+            round_trip_cost=rtc,
             hold_days=hold_days,
         )
         if trade is None:
             continue
         trades.append(trade)
-        trades_for_diag.append({
-            "ticker": trade.ticker,
-            "entry_date": trade.entry_date,
-            "exit_date": trade.exit_date,
-            "entry_price": trade.entry_price,
-            "exit_price": trade.exit_price,
-            "pnl_pct": trade.pnl_pct,
-            "direction": "LONG",
-        })
+        trades_for_diag.append(
+            {
+                "ticker": trade.ticker,
+                "entry_date": trade.entry_date,
+                "exit_date": trade.exit_date,
+                "entry_price": trade.entry_price,
+                "exit_price": trade.exit_price,
+                "pnl_pct": trade.pnl_pct,
+                "direction": "LONG",
+            }
+        )
     return trades, trades_for_diag
 
 
@@ -640,6 +689,7 @@ def _macro_regime_at(regime_bundle: Any, session_date: date_t) -> str | None:
     # future spec; for this delivery PR the cross-engine import is the
     # pragmatic minimum to ship the macro-expansion arm).
     from reversion.regime_filter import classify_session
+
     return classify_session(regime_bundle, session_date).macro
 
 
@@ -692,11 +742,7 @@ def _build_trades_beat_only_macro_expansion(
 
     universe_set = set(universe)
     df = earnings_events
-    mask = (
-        df["ticker"].isin(universe_set)
-        & (df["event_date"] >= start)
-        & (df["event_date"] <= end)
-    )
+    mask = df["ticker"].isin(universe_set) & (df["event_date"] >= start) & (df["event_date"] <= end)
     qualifying = df[mask].sort_values(["event_date", "ticker"])
 
     for _, row in qualifying.iterrows():
@@ -710,7 +756,8 @@ def _build_trades_beat_only_macro_expansion(
         # (same PIT cut the legacy cluster path uses).
         if not _passes_universe_filters(
             prices_by_ticker=prices_by_ticker,
-            ticker=ticker, cursor=event_date,
+            ticker=ticker,
+            cursor=event_date,
         ):
             continue
         prices = prices_by_ticker.get(ticker)
@@ -719,22 +766,26 @@ def _build_trades_beat_only_macro_expansion(
         entry_cursor = event_date + timedelta(days=1)
         rtc = float(round_trip_costs.get(ticker, Decimal("0.001")))
         trade = _simulate_trade(
-            ticker=ticker, entry_date=entry_cursor,
-            prices=prices, round_trip_cost=rtc,
+            ticker=ticker,
+            entry_date=entry_cursor,
+            prices=prices,
+            round_trip_cost=rtc,
             hold_days=hold_days,
         )
         if trade is None:
             continue
         trades.append(trade)
-        trades_for_diag.append({
-            "ticker": trade.ticker,
-            "entry_date": trade.entry_date,
-            "exit_date": trade.exit_date,
-            "entry_price": trade.entry_price,
-            "exit_price": trade.exit_price,
-            "pnl_pct": trade.pnl_pct,
-            "direction": "LONG",
-        })
+        trades_for_diag.append(
+            {
+                "ticker": trade.ticker,
+                "entry_date": trade.entry_date,
+                "exit_date": trade.exit_date,
+                "entry_price": trade.entry_price,
+                "exit_price": trade.exit_price,
+                "pnl_pct": trade.pnl_pct,
+                "direction": "LONG",
+            }
+        )
     return trades, trades_for_diag
 
 
@@ -778,7 +829,8 @@ def _build_trades(
             earnings_events=earnings_events,
             prices_by_ticker=prices_by_ticker,
             round_trip_costs=round_trip_costs,
-            start=start, end=end,
+            start=start,
+            end=end,
             hold_days=hold_days,
         )
 
@@ -793,7 +845,8 @@ def _build_trades(
             prices_by_ticker=prices_by_ticker,
             round_trip_costs=round_trip_costs,
             regime_bundle=regime_bundle,
-            start=start, end=end,
+            start=start,
+            end=end,
             hold_days=hold_days,
         )
 
@@ -802,9 +855,7 @@ def _build_trades(
     if not prices_by_ticker:
         return trades, trades_for_diag
 
-    apply_event_confirmation = (
-        event_confirmation_mode == _EVENT_CONFIRMATION_POSITIVE_BEAT_30D
-    )
+    apply_event_confirmation = event_confirmation_mode == _EVENT_CONFIRMATION_POSITIVE_BEAT_30D
 
     # Walk monthly to keep run-time bounded; a fresh re-cluster every
     # session would re-fire the same trade. One signal per ticker per
@@ -813,7 +864,8 @@ def _build_trades(
     cursor = start
     while cursor <= end:
         clusters = detect_clusters(
-            insider_rows=insider_rows, as_of=cursor,
+            insider_rows=insider_rows,
+            as_of=cursor,
             window_days=cluster_window_days,
         )
         for ticker in universe:
@@ -829,13 +881,16 @@ def _build_trades(
             # without a positive earnings beat in the window. The
             # legacy path skips this entire branch (mode=="off").
             if apply_event_confirmation and not _has_positive_beat(
-                earnings_events, ticker=ticker, cursor=cursor,
+                earnings_events,
+                ticker=ticker,
+                cursor=cursor,
                 window_days=_EVENT_CONFIRMATION_WINDOW_DAYS,
             ):
                 continue
             if not _passes_universe_filters(
                 prices_by_ticker=prices_by_ticker,
-                ticker=ticker, cursor=cursor,
+                ticker=ticker,
+                cursor=cursor,
             ):
                 continue
             prices = prices_by_ticker.get(ticker)
@@ -843,22 +898,26 @@ def _build_trades(
                 continue
             rtc = float(round_trip_costs.get(ticker, Decimal("0.001")))
             trade = _simulate_trade(
-                ticker=ticker, entry_date=cursor,
-                prices=prices, round_trip_cost=rtc,
+                ticker=ticker,
+                entry_date=cursor,
+                prices=prices,
+                round_trip_cost=rtc,
                 hold_days=hold_days,
             )
             if trade is None:
                 continue
             trades.append(trade)
-            trades_for_diag.append({
-                "ticker": trade.ticker,
-                "entry_date": trade.entry_date,
-                "exit_date": trade.exit_date,
-                "entry_price": trade.entry_price,
-                "exit_price": trade.exit_price,
-                "pnl_pct": trade.pnl_pct,
-                "direction": "LONG",
-            })
+            trades_for_diag.append(
+                {
+                    "ticker": trade.ticker,
+                    "entry_date": trade.entry_date,
+                    "exit_date": trade.exit_date,
+                    "entry_price": trade.entry_price,
+                    "exit_price": trade.exit_price,
+                    "pnl_pct": trade.pnl_pct,
+                    "direction": "LONG",
+                }
+            )
         cursor = cursor + timedelta(days=cluster_window_days)
     return trades, trades_for_diag
 
@@ -870,7 +929,7 @@ def _compute_summary(trades: list[SearchTrade]) -> tuple[float, float, float]:
     rets = [t.pnl_pct for t in trades]
     avg = sum(rets) / len(rets)
     sd = (sum((r - avg) ** 2 for r in rets) / max(1, len(rets) - 1)) ** 0.5
-    sharpe = (avg / sd) * (252 ** 0.5) if sd > 0 else 0.0
+    sharpe = (avg / sd) * (252**0.5) if sd > 0 else 0.0
     wins = sum(r for r in rets if r > 0)
     losses = -sum(r for r in rets if r < 0)
     pf = (wins / losses) if losses > 0 else (wins if wins > 0 else 0.0)
@@ -878,7 +937,7 @@ def _compute_summary(trades: list[SearchTrade]) -> tuple[float, float, float]:
     peak = 1.0
     max_dd = 0.0
     for r in rets:
-        cumulative *= (1.0 + r)
+        cumulative *= 1.0 + r
         peak = max(peak, cumulative)
         max_dd = max(max_dd, (peak - cumulative) / peak)
     return float(sharpe), float(pf), float(-max_dd)
@@ -917,9 +976,7 @@ class CatalystWindowContext:
     start: date_t
     end: date_t
     earnings_events: pd.DataFrame = field(
-        default_factory=lambda: pd.DataFrame(
-            columns=["ticker", "event_date", "event_type", "magnitude_pct"]
-        )
+        default_factory=lambda: pd.DataFrame(columns=["ticker", "event_date", "event_type", "magnitude_pct"])
     )
     regime_bundle: Any | None = None
 
@@ -943,17 +1000,20 @@ async def load_catalyst_window_context(
         # bound of the Lab choice).
         insider_lookback = 60
         insider_rows = await _fetch_insider_rows(
-            pool, universe=u,
+            pool,
+            universe=u,
             start=start - timedelta(days=insider_lookback),
             end=end,
         )
         prices_by_ticker = await _fetch_prices(
-            pool, universe=u,
+            pool,
+            universe=u,
             start=start - timedelta(days=SMA_TREND_PERIOD + 30),
             end=end,
         )
         round_trip_costs = await _round_trip_cost_by_ticker(
-            pool, tickers=u,
+            pool,
+            tickers=u,
         )
         # Strictly-additive: consumed by both
         # ``event_confirmation_mode="positive_beat_30d"`` (predicate
@@ -965,17 +1025,20 @@ async def load_catalyst_window_context(
         # predicate; the beat_30d_only branch's [start, end] slice is a
         # subset of this and trivially covered.
         earnings_events = await _fetch_earnings_events(
-            pool, universe=u,
+            pool,
+            universe=u,
             start=start - timedelta(days=_EVENT_CONFIRMATION_WINDOW_DAYS),
             end=end,
         )
     finally:
         await pool.close()
     return CatalystWindowContext(
-        universe=u, insider_rows=insider_rows,
+        universe=u,
+        insider_rows=insider_rows,
         prices_by_ticker=prices_by_ticker,
         round_trip_costs=round_trip_costs,
-        start=start, end=end,
+        start=start,
+        end=end,
         earnings_events=earnings_events,
     )
 
@@ -1013,20 +1076,12 @@ def run_catalyst_with_context(
     global _HOLD_DAYS_OVERRIDE
     overrides = dict(overrides or {})
     _CLUSTER_WINDOW_OVERRIDE = (
-        int(overrides["cluster_window_days"])
-        if "cluster_window_days" in overrides
-        else None
+        int(overrides["cluster_window_days"]) if "cluster_window_days" in overrides else None
     )
     _EVENT_CONFIRMATION_MODE_OVERRIDE = (
-        str(overrides["event_confirmation_mode"])
-        if "event_confirmation_mode" in overrides
-        else None
+        str(overrides["event_confirmation_mode"]) if "event_confirmation_mode" in overrides else None
     )
-    _HOLD_DAYS_OVERRIDE = (
-        int(overrides["hold_days"])
-        if "hold_days" in overrides
-        else None
-    )
+    _HOLD_DAYS_OVERRIDE = int(overrides["hold_days"]) if "hold_days" in overrides else None
     try:
         active_window = _cluster_window()
         active_event_mode = _event_confirmation_mode()
@@ -1037,7 +1092,8 @@ def run_catalyst_with_context(
             prices_by_ticker=context.prices_by_ticker,
             cluster_window_days=active_window,
             round_trip_costs=context.round_trip_costs,
-            start=context.start, end=context.end,
+            start=context.start,
+            end=context.end,
             earnings_events=context.earnings_events,
             event_confirmation_mode=active_event_mode,
             hold_days=active_hold_days,
@@ -1056,15 +1112,14 @@ def run_catalyst_with_context(
     # OverfittingDiagnostic needs *some* price data; use whichever
     # ticker actually has bars in the panel.
     price_frames = [
-        df.assign(ticker=t, date=df.index).reset_index(drop=True)[
-            ["ticker", "date", "close"]]
-        for t, df in context.prices_by_ticker.items() if not df.empty
+        df.assign(ticker=t, date=df.index).reset_index(drop=True)[["ticker", "date", "close"]]
+        for t, df in context.prices_by_ticker.items()
+        if not df.empty
     ]
     if price_frames:
         prices_for_diag = pd.concat(price_frames, ignore_index=True)
     else:
-        prices_for_diag = pd.DataFrame(
-            columns=["ticker", "date", "close"])
+        prices_for_diag = pd.DataFrame(columns=["ticker", "date", "close"])
 
     parameters: dict[str, Any] = {
         "cluster_window_days": int(active_window),
@@ -1106,10 +1161,15 @@ async def run_for_search(
     :func:`run_catalyst_with_context` to amortise the DB load across
     candidates."""
     ctx = await load_catalyst_window_context(
-        db_url=db_url, start=start, end=end, universe=universe,
+        db_url=db_url,
+        start=start,
+        end=end,
+        universe=universe,
     )
     return run_catalyst_with_context(
-        ctx, overrides=overrides, trade_log_path=trade_log_path,
+        ctx,
+        overrides=overrides,
+        trade_log_path=trade_log_path,
     )
 
 
@@ -1141,22 +1201,25 @@ async def run_backtest(
         return 1
     output_dir.mkdir(parents=True, exist_ok=True)
     ctx = await load_catalyst_window_context(
-        db_url=db_url, start=start, end=end,
+        db_url=db_url,
+        start=start,
+        end=end,
     )
-    result = run_catalyst_with_context(ctx, overrides=None,
-                                       trade_log_path=trade_log_path)
+    result = run_catalyst_with_context(ctx, overrides=None, trade_log_path=trade_log_path)
 
     # The mandatory rubric persistence (compliance grep #3).
     pool = await build_asyncpg_pool(db_url)
     try:
         if result.credibility_rubric is not None:
             wrote = await write_credibility_score(
-                pool, engine_name="catalyst",
+                pool,
+                engine_name="catalyst",
                 score=result.credibility_rubric,
             )
             logger.info(
                 "catalyst.backtest.credibility_persisted",
-                wrote=wrote, score=result.credibility_score,
+                wrote=wrote,
+                score=result.credibility_score,
             )
     finally:
         await pool.close()
@@ -1174,19 +1237,22 @@ async def run_backtest(
 
 
 def _format_human_summary(
-    start: date_t, end: date_t, result: BacktestRunResult,
+    start: date_t,
+    end: date_t,
+    result: BacktestRunResult,
 ) -> str:
-    return "\n".join([
-        f"Catalyst backtest — {start} → {end}",
-        f"  trades                : {result.trades}",
-        f"  Sharpe (annualized)   : {result.sharpe:+.3f}",
-        f"  Profit factor         : {result.profit_factor:.3f}",
-        f"  Max drawdown          : {result.max_drawdown:+.3%}",
-        f"  Credibility score     : {result.credibility_score}/100  "
-        f"(passed_gate={result.passed_gate})",
-        f"  DSR                   : {result.dsr:.4f}",
-        f"  Trades-per-param      : {result.trades_per_param:.2f}",
-    ])
+    return "\n".join(
+        [
+            f"Catalyst backtest — {start} → {end}",
+            f"  trades                : {result.trades}",
+            f"  Sharpe (annualized)   : {result.sharpe:+.3f}",
+            f"  Profit factor         : {result.profit_factor:.3f}",
+            f"  Max drawdown          : {result.max_drawdown:+.3%}",
+            f"  Credibility score     : {result.credibility_score}/100  (passed_gate={result.passed_gate})",
+            f"  DSR                   : {result.dsr:.4f}",
+            f"  Trades-per-param      : {result.trades_per_param:.2f}",
+        ]
+    )
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -1227,8 +1293,9 @@ LAB_TARGET = LabTarget(
         #     mode is fail-closed when no ``regime_bundle`` is attached
         #     to the context.
         "event_confirmation_mode": (
-            0, 0, "choice:off,positive_beat_30d,beat_30d_only,"
-                  "beat_30d_only_macro_expansion",
+            0,
+            0,
+            "choice:off,positive_beat_30d,beat_30d_only,beat_30d_only_macro_expansion",
         ),
         # Lab-sampled time-stop horizon (post-2026-05-22 enrichment).
         # The legacy hardcoded value was 30 sessions; the PEAD
@@ -1247,22 +1314,22 @@ LAB_TARGET = LabTarget(
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("--start", type=date_t.fromisoformat,
-                   default=date_t(2020, 1, 1))
-    p.add_argument("--end", type=date_t.fromisoformat,
-                   default=datetime.now(UTC).date())
+    p.add_argument("--start", type=date_t.fromisoformat, default=date_t(2020, 1, 1))
+    p.add_argument("--end", type=date_t.fromisoformat, default=datetime.now(UTC).date())
     p.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     p.add_argument("--results-file", default=DEFAULT_RESULTS_FILE)
     p.add_argument("--trades-file", default=DEFAULT_TRADES_FILE)
     p.add_argument("--json", dest="json_output", action="store_true")
-    p.add_argument("--trade-log", type=Path, default=None,
-                   help="Write standardised per-trade CSV to this path too.")
+    p.add_argument(
+        "--trade-log", type=Path, default=None, help="Write standardised per-trade CSV to this path too."
+    )
     return p.parse_args(argv)
 
 
 async def amain(args: argparse.Namespace) -> int:
     return await run_backtest(
-        start=args.start, end=args.end,
+        start=args.start,
+        end=args.end,
         output_dir=args.output_dir,
         results_file=args.results_file,
         trades_file=args.trades_file,

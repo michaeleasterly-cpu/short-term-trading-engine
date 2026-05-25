@@ -1,4 +1,5 @@
 """Tests for ``tpcore.aar.writer.AARWriter`` against a fake asyncpg pool."""
+
 from __future__ import annotations
 
 import json
@@ -17,13 +18,27 @@ from tpcore.aar.writer import AARWriter
 
 
 class _FakeConn:
-    def __init__(self, fetchrow_result: object = None) -> None:
+    def __init__(
+        self,
+        fetchrow_result: object = None,
+        fetchval_result: object = None,
+    ) -> None:
         self.fetchrow_result = fetchrow_result
+        # PR-12 (2026-05-25): AARWriter now uses IdentityDispatcher to
+        # resolve ticker→classification_id at write time; that runs a
+        # fetchval against ticker_history. ``fetchval_result`` is the
+        # cid the fake returns (default None ⇒ ticker not in history,
+        # which is acceptable — aar_events.classification_id is nullable).
+        self.fetchval_result = fetchval_result
         self.calls: list[tuple[str, tuple]] = []
 
     async def fetchrow(self, sql: str, *args) -> object:
         self.calls.append((sql, args))
         return self.fetchrow_result
+
+    async def fetchval(self, sql: str, *args) -> object:
+        self.calls.append((sql, args))
+        return self.fetchval_result
 
 
 class _FakeAcquireCM:
@@ -38,14 +53,23 @@ class _FakeAcquireCM:
 
 
 class _FakePool:
-    def __init__(self, fetchrow_result: object = None) -> None:
-        self.conn = _FakeConn(fetchrow_result=fetchrow_result)
+    def __init__(
+        self,
+        fetchrow_result: object = None,
+        fetchval_result: object = None,
+    ) -> None:
+        self.conn = _FakeConn(
+            fetchrow_result=fetchrow_result,
+            fetchval_result=fetchval_result,
+        )
 
     def acquire(self) -> _FakeAcquireCM:
         return _FakeAcquireCM(self.conn)
 
 
-def _aar(trade_id: str = "sigma-AAPL-001", exit_reason: ExitReason = ExitReason.TIER1_MID_BAND) -> AfterActionReport:
+def _aar(
+    trade_id: str = "sigma-AAPL-001", exit_reason: ExitReason = ExitReason.TIER1_MID_BAND
+) -> AfterActionReport:
     return AfterActionReport(
         engine="sigma",
         trade_id=trade_id,
@@ -78,16 +102,33 @@ async def test_write_aar_inserts_new_row_returns_true() -> None:
     pool = _FakePool(fetchrow_result={"?column?": 1})
     wrote = await AARWriter(pool).write_aar(_aar())
     assert wrote is True
-    sql, args = pool.conn.calls[0]
-    assert "INSERT INTO platform.aar_events" in sql
+    # The dispatcher's fetchval (ticker → classification_id) ran first;
+    # the INSERT fetchrow is the second call. Find it.
+    insert_call = next(c for c in pool.conn.calls if "INSERT INTO platform.aar_events" in c[0])
+    sql, args = insert_call
     assert "ON CONFLICT (engine, trade_id) DO NOTHING" in sql
+    assert "classification_id" in sql
     assert args[0] == "sigma"
     assert args[1] == "sigma-AAPL-001"
     assert args[2] == "AAPL"
+    assert args[3] is None  # dispatcher returned None (fake fetchval_result default)
     # aar_data is the model serialized as JSON; cast to jsonb in SQL.
-    payload = json.loads(args[3])
+    payload = json.loads(args[4])
     assert payload["engine"] == "sigma"
     assert payload["exit_reason"] == "tier1_mid_band"
+
+
+async def test_write_aar_populates_classification_id_when_dispatcher_resolves() -> None:
+    """When IdentityDispatcher returns a cid, the writer persists it."""
+    pool = _FakePool(
+        fetchrow_result={"?column?": 1},
+        fetchval_result="USOZ80NAAPL456",
+    )
+    wrote = await AARWriter(pool).write_aar(_aar())
+    assert wrote is True
+    insert_call = next(c for c in pool.conn.calls if "INSERT INTO platform.aar_events" in c[0])
+    _, args = insert_call
+    assert args[3] == "USOZ80NAAPL456"
 
 
 async def test_write_aar_idempotent_on_conflict_returns_false() -> None:
@@ -121,8 +162,7 @@ async def test_aar_writer_integration_roundtrip() -> None:
         assert await writer.write_aar(aar) is False
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT engine, trade_id, ticker FROM platform.aar_events "
-                "WHERE engine=$1 AND trade_id=$2",
+                "SELECT engine, trade_id, ticker FROM platform.aar_events WHERE engine=$1 AND trade_id=$2",
                 aar.engine,
                 aar.trade_id,
             )

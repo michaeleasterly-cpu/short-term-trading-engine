@@ -11,6 +11,7 @@ The remaining ``DataProviderInterface`` methods raise ``NotImplementedError``;
 they belong to fundamentals / quote / earnings adapters that are wired
 separately.
 """
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -19,6 +20,8 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from tpcore.data.repositories import PricesRepo, UniverseRepo
+from tpcore.identity.dispatcher import IdentityDispatcher
 from tpcore.interfaces.data import (
     Bar,
     DataProviderInterface,
@@ -40,6 +43,14 @@ class PostgresDataAdapter(DataProviderInterface):
     immediately rather than deferred — there is no Alpaca fallback path,
     and a silently-degraded adapter would break the parity guarantee that
     backtest/paper/live trading all read the same data.
+
+    PR-14 (2026-05-25): edge adapter — public methods take ticker (the
+    DataProviderInterface contract); internally dispatches to
+    classification_id and reads via PricesRepo + UniverseRepo. The
+    legacy column ``prices_daily.adjusted_close`` is NOT exposed by
+    PricesRepo (OHLCV-only); ``Bar.adjusted_close`` falls back to
+    ``close`` (the vast majority of consumers treat them as equivalent
+    post-split-adjustment).
     """
 
     def __init__(self, pool: asyncpg.Pool) -> None:
@@ -71,29 +82,30 @@ class PostgresDataAdapter(DataProviderInterface):
         no data in the window. Bar ``ts`` is the session date at midnight UTC
         (the column is a ``DATE`` — no intra-day resolution to preserve).
         """
-        sql = """
-            SELECT date, open, high, low, close, volume, adjusted_close
-            FROM platform.prices_daily
-            WHERE ticker = $1
-              AND date >= $2
-              AND ($3::date IS NULL OR date <= $3)
-              AND ($4::date IS NULL OR date <= $4)
-            ORDER BY date
-        """
-        async with self._pool.acquire() as conn:
-            rows = await conn.fetch(sql, symbol, start, end, as_of)
+        dispatcher = IdentityDispatcher(self._pool)
+        cid = await dispatcher.ticker_to_classification_id(symbol)
+        if cid is None:
+            return []
+
+        # Resolve effective upper bound: the more restrictive of end/as_of,
+        # or 9999-12-31 sentinel when both are None.
+        upper_bounds = [b for b in (end, as_of) if b is not None]
+        upper = min(upper_bounds) if upper_bounds else date_t(9999, 12, 31)
+
+        repo = PricesRepo(self._pool)
+        bars = await repo.get_window(cid, start, upper)
         return [
             Bar(
                 symbol=symbol,
-                ts=datetime(r["date"].year, r["date"].month, r["date"].day, tzinfo=UTC),
-                open=r["open"],
-                high=r["high"],
-                low=r["low"],
-                close=r["close"],
-                volume=int(r["volume"]),
-                adjusted_close=r["adjusted_close"],
+                ts=datetime(b.date.year, b.date.month, b.date.day, tzinfo=UTC),
+                open=b.open,
+                high=b.high,
+                low=b.low,
+                close=b.close,
+                volume=b.volume,
+                adjusted_close=b.close,
             )
-            for r in rows
+            for b in bars
         ]
 
     async def get_universe_symbols(self) -> list[str]:
@@ -142,30 +154,34 @@ class PostgresDataAdapter(DataProviderInterface):
           tickers with at least one fundamentals row are returned —
           required for the Reversion EQ gate.
         """
-        clauses = ["lt.tier <= $1"]
-        joins: list[str] = []
-        args: list = [max_tier]
-        if asset_class is not None:
-            joins.append(
-                "JOIN platform.ticker_classifications tc ON tc.ticker = lt.ticker"
-            )
-            clauses.append(f"tc.asset_class = ${len(args) + 1}")
-            args.append(asset_class)
+        repo = UniverseRepo(self._pool)
+        rows = await repo.enumerate(
+            max_liquidity_tier=max_tier,
+            asset_class=asset_class,
+        )
         if require_fundamentals:
-            joins.append(
-                "JOIN (SELECT DISTINCT ticker FROM platform.fundamentals_quarterly) f "
-                "ON f.ticker = lt.ticker"
-            )
-        sql = f"""
-            SELECT lt.ticker
-            FROM platform.liquidity_tiers lt
-            {' '.join(joins)}
-            WHERE {' AND '.join(clauses)}
-            ORDER BY lt.tier ASC, lt.ticker ASC
-        """
-        async with self._pool.acquire() as conn:
-            rows = await conn.fetch(sql, *args)
-        return [r["ticker"] for r in rows]
+            from tpcore.data.repositories import FundamentalsRepo
+
+            funded = await FundamentalsRepo(self._pool).funded_subset([r.classification_id for r in rows])
+            rows = [r for r in rows if r.classification_id in funded]
+
+        # Match the legacy ORDER BY (lt.tier ASC, lt.ticker ASC).
+        rows_sorted = sorted(
+            rows,
+            key=lambda r: (
+                r.liquidity_tier if r.liquidity_tier is not None else max_tier + 1,
+                r.current_ticker or "",
+            ),
+        )
+        # Dedupe (same cid can appear via multiple ticker_history rows).
+        seen: set[str] = set()
+        out: list[str] = []
+        for r in rows_sorted:
+            t = r.current_ticker
+            if t is not None and t not in seen:
+                seen.add(t)
+                out.append(t)
+        return out
 
     async def list_active_symbols(self) -> list[str]:
         """``DataProviderInterface`` alias for ``get_universe_symbols``."""
@@ -181,16 +197,13 @@ class PostgresDataAdapter(DataProviderInterface):
         self, symbol: str, as_of: date_t | None = None
     ) -> Fundamentals | None:
         raise NotImplementedError(
-            "Fundamentals come from FundamentalsCache + FMPFundamentalsAdapter, "
-            "not platform.prices_daily"
+            "Fundamentals come from FundamentalsCache + FMPFundamentalsAdapter, not platform.prices_daily"
         )
 
     async def get_earnings_calendar(  # pragma: no cover
         self, symbol: str, start: date_t, end: date_t
     ) -> list[EarningsEvent]:
-        raise NotImplementedError(
-            "Earnings calendar comes from the FMP earnings adapter, not prices_daily"
-        )
+        raise NotImplementedError("Earnings calendar comes from the FMP earnings adapter, not prices_daily")
 
     async def list_delisted_symbols(self) -> list[tuple[str, date_t]]:  # pragma: no cover
         raise NotImplementedError(

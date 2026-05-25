@@ -24,22 +24,36 @@ if TYPE_CHECKING:  # pragma: no cover
 
 
 _SELECT_BY_ENGINE_SQL = """
-    SELECT engine, trade_id, ticker, aar_data, recorded_at
+    SELECT engine, trade_id, ticker, classification_id, aar_data, recorded_at
     FROM platform.aar_events
     WHERE engine = $1
     ORDER BY recorded_at ASC
 """
 
 _SELECT_ALL_SQL = """
-    SELECT engine, trade_id, ticker, aar_data, recorded_at
+    SELECT engine, trade_id, ticker, classification_id, aar_data, recorded_at
     FROM platform.aar_events
     ORDER BY engine, recorded_at ASC
+"""
+
+_SELECT_BY_CLASSIFICATION_ID_SQL = """
+    SELECT engine, trade_id, ticker, classification_id, aar_data, recorded_at
+    FROM platform.aar_events
+    WHERE classification_id = $1
+    ORDER BY recorded_at ASC
 """
 
 
 @dataclass(frozen=True)
 class AARRow:
-    """Minimal AAR slice: only the fields shared services need."""
+    """Minimal AAR slice: only the fields shared services need.
+
+    ``classification_id`` is the durable surrogate (TKR-14) — populated
+    on writes by AARWriter (PR-12 onwards) via IdentityDispatcher. May
+    be ``None`` for rows written before the dispatcher was wired or for
+    tickers absent from ``ticker_history``; the FK on aar_events is
+    nullable, so this column is best-effort.
+    """
 
     engine: str
     trade_id: str
@@ -48,6 +62,7 @@ class AARRow:
     exit_ts: datetime
     entry_ts: datetime | None
     exit_reason: str | None
+    classification_id: str | None = None
 
 
 def _parse_ts(raw: object) -> datetime | None:
@@ -86,6 +101,10 @@ def _row_to_aar(record: object) -> AARRow | None:
     exit_ts = _parse_ts(exit_raw)
     if exit_ts is None:
         return None
+    # classification_id is always projected by the SELECT SQLs in this
+    # module; the DB column itself is nullable (populated by PR-12+ writes
+    # via IdentityDispatcher, NULL for legacy rows + unresolvable tickers).
+    cid: str | None = record["classification_id"]  # type: ignore[index]
     return AARRow(
         engine=record["engine"],  # type: ignore[index]
         trade_id=record["trade_id"],  # type: ignore[index]
@@ -94,6 +113,7 @@ def _row_to_aar(record: object) -> AARRow | None:
         exit_ts=exit_ts,
         entry_ts=_parse_ts(aar_data.get("entry_ts")),
         exit_reason=aar_data.get("exit_reason"),
+        classification_id=cid,
     )
 
 
@@ -126,6 +146,30 @@ class AARReader:
         for aars in by_engine.values():
             aars.sort(key=lambda a: a.exit_ts)
         return by_engine
+
+    async def fetch_by_classification_id(
+        self,
+        classification_id: str,
+    ) -> list[AARRow]:
+        """Every AAR for one classification_id across all engines.
+
+        The durable-surrogate query. Useful for cross-engine analysis
+        (e.g. "how did all engines trade NVDA over its lifetime?") —
+        cid is stable across renames so a query for a single cid
+        captures the instrument's entire trade history including any
+        rebrands. Returns rows sorted by recorded_at ascending.
+        """
+        async with self._pool.acquire() as conn:
+            records = await conn.fetch(
+                _SELECT_BY_CLASSIFICATION_ID_SQL,
+                classification_id,
+            )
+        out: list[AARRow] = []
+        for r in records:
+            aar = _row_to_aar(r)
+            if aar is not None:
+                out.append(aar)
+        return out
 
 
 __all__ = ["AARReader", "AARRow"]

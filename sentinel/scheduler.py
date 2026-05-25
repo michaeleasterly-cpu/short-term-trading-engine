@@ -38,6 +38,7 @@ Out of scope (deferred to a follow-up)
   beyond simply de-eligibility-flagging — the execution diff handles
   the exit on the next state-driven rebalance.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -62,7 +63,9 @@ from sentinel.plugs.setup_detection import (
     fetch_spy_close,
 )
 from tpcore.alpaca import AlpacaPaperBrokerAdapter
+from tpcore.data.repositories import PricesRepo
 from tpcore.db import build_asyncpg_pool
+from tpcore.identity.dispatcher import IdentityDispatcher
 from tpcore.interfaces.broker import (
     Order,
     OrderClass,
@@ -87,14 +90,9 @@ LOOKBACK_DAYS = 90  # rolling window for state replay
 def _filter_to_engine_holdings(positions, recent_orders, engine: str) -> dict[str, int]:
     """Filter broker positions to those originated by ``engine``."""
     engine_symbols = {
-        o.symbol for o in recent_orders
-        if is_engine_cid(getattr(o, "client_order_id", None), engine)
+        o.symbol for o in recent_orders if is_engine_cid(getattr(o, "client_order_id", None), engine)
     }
-    return {
-        p.symbol: int(p.qty)
-        for p in positions
-        if int(p.qty) > 0 and p.symbol in engine_symbols
-    }
+    return {p.symbol: int(p.qty) for p in positions if int(p.qty) > 0 and p.symbol in engine_symbols}
 
 
 class SentinelScheduler:
@@ -174,7 +172,8 @@ class SentinelScheduler:
             if as_of not in breakdowns:
                 logger.warning(
                     "sentinel.scheduler.no_breakdown_for_today",
-                    as_of=as_of.isoformat(), available=len(breakdowns),
+                    as_of=as_of.isoformat(),
+                    available=len(breakdowns),
                 )
                 return {"as_of": as_of.isoformat(), "action": "no_data"}
             spy = await fetch_spy_close(pool, start=start, end=as_of)
@@ -195,7 +194,8 @@ class SentinelScheduler:
 
             execution = SentinelExecutionRisk(graduated=self._graduated)
             decision = execution.build_decision(
-                as_of=as_of, state=today,
+                as_of=as_of,
+                state=today,
                 equity_usd=self._platform_equity,
                 prices=prices_today,
                 current_holdings=current_holdings,
@@ -203,21 +203,27 @@ class SentinelScheduler:
 
             # Capital gate — sanity check the buy notional.
             gate = SentinelCapitalGate(graduated=self._graduated)
-            buy_notional = sum(
-                o.notional_usd for o in decision.orders if o.side == "buy"
-            ) or Decimal("0")
+            buy_notional = sum(o.notional_usd for o in decision.orders if o.side == "buy") or Decimal("0")
             if not gate.check_rebalance(buy_notional, self._platform_equity):
-                return {"as_of": as_of.isoformat(), "action": "gate_rejected",
-                        "buy_notional": str(buy_notional)}
+                return {
+                    "as_of": as_of.isoformat(),
+                    "action": "gate_rejected",
+                    "buy_notional": str(buy_notional),
+                }
 
             # No orders to submit → log + return.
             if not decision.orders:
                 logger.info(
                     "sentinel.scheduler.no_orders",
-                    phase=today.phase.value, bear_score=today.bear_score,
+                    phase=today.phase.value,
+                    bear_score=today.bear_score,
                 )
-                return {"as_of": as_of.isoformat(), "action": "no_orders",
-                        "phase": today.phase.value, "bear_score": today.bear_score}
+                return {
+                    "as_of": as_of.isoformat(),
+                    "action": "no_orders",
+                    "phase": today.phase.value,
+                    "bear_score": today.bear_score,
+                }
 
             # Signal events — one per target. Lift today's FilterDiagnostics
             # (which sub-scorers fired) into extra_data so the dashboard
@@ -230,7 +236,9 @@ class SentinelScheduler:
             )
             for tgt in decision.targets:
                 await db_log.signal(
-                    tgt.ticker, score=float(today.bear_score), direction="LONG",
+                    tgt.ticker,
+                    score=float(today.bear_score),
+                    direction="LONG",
                     extra_data=({"filter_diagnostics": _diag_dict} if _diag_dict else None),
                 )
 
@@ -247,8 +255,9 @@ class SentinelScheduler:
             buys = [o for o in decision.orders if o.side == "buy"]
             for order in sells + buys:
                 if not self._submit:
-                    logger.info("sentinel.scheduler.dry_run_skip",
-                                ticker=order.ticker, qty=order.qty, side=order.side)
+                    logger.info(
+                        "sentinel.scheduler.dry_run_skip", ticker=order.ticker, qty=order.qty, side=order.side
+                    )
                     continue
                 # Every submitted ETF passes the shared batch gate so the
                 # RiskGovernor (loss caps, kill switch, position cap,
@@ -257,7 +266,8 @@ class SentinelScheduler:
                 # the rest of the basket still proceeds.
                 side = OrderSide.SELL if order in sells else OrderSide.BUY
                 gated = await gate_batch_order(
-                    governor, "sentinel",
+                    governor,
+                    "sentinel",
                     ticker=order.ticker,
                     notional=Decimal(str(order.notional_usd)),
                     direction=side,
@@ -266,15 +276,16 @@ class SentinelScheduler:
                     failed.append((order.ticker, "governor_blocked"))
                     logger.warning(
                         "sentinel.scheduler.governor_blocked",
-                        ticker=order.ticker, qty=order.qty, side=order.side,
+                        ticker=order.ticker,
+                        qty=order.qty,
+                        side=order.side,
                     )
                     continue
                 try:
                     placed = await broker.place_order(self._build_order(order))
                 except Exception as exc:  # noqa: BLE001
                     failed.append((order.ticker, str(exc)[:200]))
-                    logger.error("sentinel.scheduler.order_failed",
-                                 ticker=order.ticker, error=str(exc)[:200])
+                    logger.error("sentinel.scheduler.order_failed", ticker=order.ticker, error=str(exc)[:200])
                     continue
                 if side is OrderSide.SELL:
                     # Free the governor slot via the idempotent close
@@ -296,12 +307,14 @@ class SentinelScheduler:
                     except Exception as exc:  # noqa: BLE001
                         logger.error(
                             "sentinel.scheduler.record_close_failed",
-                            ticker=order.ticker, error=str(exc)[:200],
+                            ticker=order.ticker,
+                            error=str(exc)[:200],
                         )
                 if placed.broker_order_id:
                     submitted.append(placed.broker_order_id)
                 await db_log.order_submitted(
-                    order.ticker, quantity=order.qty,
+                    order.ticker,
+                    quantity=order.qty,
                     order_id=placed.broker_order_id,
                 )
 
@@ -363,16 +376,26 @@ class SentinelScheduler:
 
 
 async def _latest_prices(pool, as_of: date_t, tickers: list[str]) -> dict[str, Decimal]:
-    """Most-recent close at or before ``as_of`` per ticker (Decimal)."""
-    sql = """
-        SELECT DISTINCT ON (ticker) ticker, close
-        FROM platform.prices_daily
-        WHERE ticker = ANY($1) AND date <= $2
-        ORDER BY ticker, date DESC
+    """Most-recent close at or before ``as_of`` per ticker (Decimal).
+
+    Edge adapter: dispatches ticker → classification_id and queries
+    PricesRepo.latest_at_or_before_batch by cid. Returns ticker-keyed
+    Decimal map (caller contract preserved).
     """
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(sql, tickers, as_of)
-    return {r["ticker"]: Decimal(str(r["close"])) for r in rows}
+    dispatcher = IdentityDispatcher(pool)
+    repo = PricesRepo(pool)
+
+    cid_to_ticker: dict[str, str] = {}
+    for t in tickers:
+        cid = await dispatcher.ticker_to_classification_id(t)
+        if cid is not None:
+            cid_to_ticker[cid] = t
+
+    if not cid_to_ticker:
+        return {}
+
+    latest_by_cid = await repo.latest_at_or_before_batch(list(cid_to_ticker), as_of)
+    return {cid_to_ticker[cid]: bar.close for cid, bar in latest_by_cid.items()}
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:

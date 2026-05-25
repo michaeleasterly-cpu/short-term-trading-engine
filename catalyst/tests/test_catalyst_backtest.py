@@ -192,14 +192,17 @@ def test_run_backtest_persists_credibility_rubric(monkeypatch):
 
     monkeypatch.setattr(
         "tpcore.db.build_asyncpg_pool", _fb, raising=True)
-    monkeypatch.setattr(
-        "catalyst.backtest.build_asyncpg_pool", _fb, raising=True)
-    monkeypatch.setattr(
-        "catalyst.backtest.load_catalyst_window_context", _fake_loader,
-        raising=True)
-    monkeypatch.setattr(
-        "catalyst.backtest.write_credibility_score", _fake_write,
-        raising=True)
+    # Use the imported module reference (bt) rather than dotted-string
+    # paths. Some prior test in the cumulative suite contaminates
+    # `catalyst` module's attribute table, so monkeypatch.setattr's
+    # dotted-path resolve() raises `module 'catalyst' has no attribute
+    # 'backtest'` despite the earlier `from catalyst import backtest as
+    # bt`. Pinning to the module reference bypasses that resolve path
+    # and is functionally equivalent — monkeypatch tracks the original
+    # value for teardown either way.
+    monkeypatch.setattr(bt, "build_asyncpg_pool", _fb, raising=True)
+    monkeypatch.setattr(bt, "load_catalyst_window_context", _fake_loader, raising=True)
+    monkeypatch.setattr(bt, "write_credibility_score", _fake_write, raising=True)
     monkeypatch.setenv("DATABASE_URL", "postgres://fake/db")
 
     tmp = Path("/tmp/catalyst_test_backtest_out")

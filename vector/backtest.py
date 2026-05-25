@@ -34,6 +34,7 @@ Output:
     full overfitting bundle from tpcore.backtest.overfitting will be
     wired here once the parallel session lands that module.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -58,7 +59,9 @@ from tpcore.backtest.cost_model import (
     slippage_per_side as _tpcore_slippage_per_side,
 )
 from tpcore.backtest.price_loader import load_prices
+from tpcore.data.repositories import EarningsRepo, FundamentalsRepo
 from tpcore.db import build_asyncpg_pool
+from tpcore.identity.dispatcher import IdentityDispatcher
 from tpcore.lab.target import LabTarget
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -104,9 +107,7 @@ def _slippage_per_side(ticker: str) -> float:
     Thin delegate to the shared :func:`tpcore.backtest.cost_model.
     slippage_per_side` (Lean P5.2 consolidation, cluster #11).
     """
-    return _tpcore_slippage_per_side(
-        ticker, _TIER_ROUND_TRIP_COSTS, SLIPPAGE_PER_SIDE
-    )
+    return _tpcore_slippage_per_side(ticker, _TIER_ROUND_TRIP_COSTS, SLIPPAGE_PER_SIDE)
 
 
 # Parameter-search overrides. None = use the module default. Set once per
@@ -139,11 +140,7 @@ def _de_ceiling() -> float:
 
 
 def _earnings_window_days() -> int:
-    return (
-        _EARNINGS_WINDOW_OVERRIDE
-        if _EARNINGS_WINDOW_OVERRIDE is not None
-        else EARNINGS_WINDOW_DAYS
-    )
+    return _EARNINGS_WINDOW_OVERRIDE if _EARNINGS_WINDOW_OVERRIDE is not None else EARNINGS_WINDOW_DAYS
 
 
 def _hard_stop_pct() -> float:
@@ -273,43 +270,110 @@ async def _load_prices(pool, tickers: list[str], start: date, end: date) -> dict
     return await load_prices(pool, tickers, start, end, min_bars=SMA_200 + 5)
 
 
-async def _load_fundamentals(pool, tickers: list[str]) -> dict[str, list[dict]]:
-    """Latest-first list per ticker; PIT filter applied in-loop."""
-    sql = """
-        SELECT ticker, filing_date, pb, de, revenue
-        FROM platform.fundamentals_quarterly
-        WHERE ticker = ANY($1)
-        ORDER BY ticker, filing_date DESC
+async def _vector_eligible_cids(pool) -> tuple[set[str], set[str]]:
+    """Vector's universe-construction primitive (eligible cids).
+
+    Returns (funded_cids, beat_cids) — cids with complete value-factor
+    coverage (pb+de+revenue non-null) AND cids with at least one
+    EARNINGS_BEAT event. Caller intersects them to get the trading
+    universe. Two whole-table scans; cached per backtest run.
     """
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(sql, tickers)
+    fundamentals_repo = FundamentalsRepo(pool)
+    earnings_repo = EarningsRepo(pool)
+    funded = await fundamentals_repo.cids_with_value_factors()
+    beats = await earnings_repo.cids_with_event_type("EARNINGS_BEAT")
+    return funded, beats
+
+
+async def _cids_to_tickers(pool, cids) -> list[str]:
+    """Resolve a set of classification_ids back to their current tickers.
+
+    Uses IdentityDispatcher.classification_id_to_ticker — returns the
+    current ticker (valid_to IS NULL row). Sorted ascending to match
+    the legacy ORDER BY ticker output.
+    """
+    dispatcher = IdentityDispatcher(pool)
+    out: list[str] = []
+    for cid in cids:
+        ticker = await dispatcher.classification_id_to_ticker(cid)
+        if ticker is not None:
+            out.append(ticker)
+    return sorted(out)
+
+
+async def _load_fundamentals(pool, tickers: list[str]) -> dict[str, list[dict]]:
+    """Latest-first list per ticker; PIT filter applied in-loop.
+
+    Edge adapter: dispatcher → FundamentalsRepo.get_window_batch with
+    a wide window → ticker-keyed dict[ticker, list[{filing_date, pb,
+    de, revenue}]] preserving the caller contract.
+    """
+    from datetime import date as _date
+
+    dispatcher = IdentityDispatcher(pool)
+    repo = FundamentalsRepo(pool)
+    cid_to_ticker: dict[str, str] = {}
+    for t in tickers:
+        cid = await dispatcher.ticker_to_classification_id(t)
+        if cid is not None:
+            cid_to_ticker[cid] = t
     out: dict[str, list[dict]] = defaultdict(list)
-    for r in rows:
-        out[r["ticker"]].append(
-            {
-                "filing_date": r["filing_date"],
-                "pb": float(r["pb"]) if r["pb"] is not None else None,
-                "de": float(r["de"]) if r["de"] is not None else None,
-                "revenue": float(r["revenue"]) if r["revenue"] is not None else None,
-            }
-        )
+    if not cid_to_ticker:
+        return out
+    filings_by_cid = await repo.get_window_batch(
+        list(cid_to_ticker),
+        _date(1900, 1, 1),
+        _date(2100, 1, 1),
+    )
+    for cid, filings in filings_by_cid.items():
+        ticker = cid_to_ticker[cid]
+        for f in sorted(filings, key=lambda x: x.filing_date, reverse=True):
+            out[ticker].append(
+                {
+                    "filing_date": f.filing_date,
+                    "pb": float(f.pb) if f.pb is not None else None,
+                    "de": float(f.de) if f.de is not None else None,
+                    "revenue": float(f.revenue) if f.revenue is not None else None,
+                }
+            )
     return out
 
 
 async def _load_earnings(pool, tickers: list[str]) -> dict[str, list[date]]:
-    sql = """
-        SELECT ticker, event_date, magnitude_pct
-        FROM platform.earnings_events
-        WHERE ticker = ANY($1) AND event_type = 'EARNINGS_BEAT'
-        ORDER BY ticker, event_date
+    """Edge adapter: ticker list in, ticker-keyed dict out.
+
+    Uses EarningsRepo.get_window_batch and filters to EARNINGS_BEAT
+    events in Python (no magnitude floor — beat magnitude can be
+    negative or zero in this caller; the consumer downstream applies
+    its own threshold).
     """
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(sql, tickers)
+    from datetime import date as _date
+
+    dispatcher = IdentityDispatcher(pool)
+    repo = EarningsRepo(pool)
+    cid_to_ticker: dict[str, str] = {}
+    for t in tickers:
+        cid = await dispatcher.ticker_to_classification_id(t)
+        if cid is not None:
+            cid_to_ticker[cid] = t
     by_ticker: dict[str, list[tuple[date, float]]] = defaultdict(list)
-    for r in rows:
-        by_ticker[r["ticker"]].append(
-            (r["event_date"], float(r["magnitude_pct"]) if r["magnitude_pct"] is not None else 0.0)
-        )
+    if not cid_to_ticker:
+        return by_ticker
+    events_by_cid = await repo.get_window_batch(
+        list(cid_to_ticker),
+        _date(1900, 1, 1),
+        _date(2100, 1, 1),
+    )
+    for cid, events in events_by_cid.items():
+        ticker = cid_to_ticker[cid]
+        for ev in events:
+            if ev.event_type != "EARNINGS_BEAT":
+                continue
+            mag = float(ev.magnitude_pct) if ev.magnitude_pct is not None else 0.0
+            by_ticker[ticker].append((ev.event_date, mag))
+    # Sort per-ticker by event_date to match the legacy ORDER BY behavior.
+    for t in by_ticker:
+        by_ticker[t].sort(key=lambda x: x[0])
     return by_ticker
 
 
@@ -576,7 +640,9 @@ def _run(
             continue
         if spy_panel is not None and _spy_in_cooldown(spy_panel, today, cooldown_state):
             continue
-        rv_today = float(spy_rv_pct.loc[today]) if (spy_rv_pct is not None and today in spy_rv_pct.index) else None
+        rv_today = (
+            float(spy_rv_pct.loc[today]) if (spy_rv_pct is not None and today in spy_rv_pct.index) else None
+        )
         size_factor = _size_factor_from_rv(rv_today)
 
         chosen: tuple[str, pd.DataFrame, int, str, float | None, dict] | None = None
@@ -779,7 +845,9 @@ def _run_composite(
             continue
         if spy_panel is not None and _spy_in_cooldown(spy_panel, today, cooldown_state):
             continue
-        rv_today = float(spy_rv_pct.loc[today]) if (spy_rv_pct is not None and today in spy_rv_pct.index) else None
+        rv_today = (
+            float(spy_rv_pct.loc[today]) if (spy_rv_pct is not None and today in spy_rv_pct.index) else None
+        )
         size_factor = _size_factor_from_rv(rv_today)
 
         # Per-sim_date cross-sectional scoring — for each eligible
@@ -831,9 +899,7 @@ def _run_composite(
         for i, (ticker, df, idx, sig) in enumerate(per_ticker_raw):
             c_z = earn_zs[i] + insider_zs[i]
             composite = (
-                COMPOSITE_W_VALUE * v_zs[i]
-                + COMPOSITE_W_EARNINGS * c_z
-                + COMPOSITE_W_TECHNICAL * tech_zs[i]
+                COMPOSITE_W_VALUE * v_zs[i] + COMPOSITE_W_EARNINGS * c_z + COMPOSITE_W_TECHNICAL * tech_zs[i]
             )
             composites.append((composite, ticker, df, idx, sig))
 
@@ -902,8 +968,12 @@ def _run_composite(
 def _summary(trades: list[TradeRecord]) -> VariantSummary:
     if not trades:
         return VariantSummary(
-            n_trades=0, win_rate=0.0, avg_return_pct=0.0,
-            sharpe_annualized=0.0, max_drawdown_pct=0.0, profit_factor=0.0,
+            n_trades=0,
+            win_rate=0.0,
+            avg_return_pct=0.0,
+            sharpe_annualized=0.0,
+            max_drawdown_pct=0.0,
+            profit_factor=0.0,
         )
     returns = np.array([t.return_pct for t in trades], dtype=float)
     n = len(returns)
@@ -913,7 +983,11 @@ def _summary(trades: list[TradeRecord]) -> VariantSummary:
     avg = float(returns.mean())
     span_days = (trades[-1].entry_date - trades[0].entry_date).days or 1
     trades_per_year = n / (span_days / 365.25)
-    sharpe = float(avg / returns.std(ddof=1) * math.sqrt(trades_per_year)) if returns.std(ddof=1) > 0 and n > 1 else 0.0
+    sharpe = (
+        float(avg / returns.std(ddof=1) * math.sqrt(trades_per_year))
+        if returns.std(ddof=1) > 0 and n > 1
+        else 0.0
+    )
     equity = np.concatenate(([1.0], 1.0 + np.cumsum(returns)))
     peak = np.maximum.accumulate(equity)
     max_dd = float(((equity - peak) / peak).min())
@@ -932,25 +1006,33 @@ def _summary(trades: list[TradeRecord]) -> VariantSummary:
             "total_return_pct": float(yr.sum()),
         }
     return VariantSummary(
-        n_trades=n, win_rate=win_rate, avg_return_pct=avg,
-        sharpe_annualized=sharpe, max_drawdown_pct=max_dd, profit_factor=pf,
+        n_trades=n,
+        win_rate=win_rate,
+        avg_return_pct=avg,
+        sharpe_annualized=sharpe,
+        max_drawdown_pct=max_dd,
+        profit_factor=pf,
         by_year=by_year,
     )
 
 
 def _render(s: VariantSummary) -> str:
     def fmt_pct(x: float) -> str:
-        return f"{x*100:+.2f}%"
+        return f"{x * 100:+.2f}%"
+
     def fmt_pf(x: float) -> str:
         return "inf" if math.isinf(x) else f"{x:.2f}"
-    return "\n".join([
-        f"  trades              {s.n_trades}",
-        f"  win rate            {fmt_pct(s.win_rate)}",
-        f"  avg return / trade  {fmt_pct(s.avg_return_pct)}",
-        f"  Sharpe (annualized) {s.sharpe_annualized:+.2f}",
-        f"  max drawdown        {fmt_pct(s.max_drawdown_pct)}",
-        f"  profit factor       {fmt_pf(s.profit_factor)}",
-    ])
+
+    return "\n".join(
+        [
+            f"  trades              {s.n_trades}",
+            f"  win rate            {fmt_pct(s.win_rate)}",
+            f"  avg return / trade  {fmt_pct(s.avg_return_pct)}",
+            f"  Sharpe (annualized) {s.sharpe_annualized:+.2f}",
+            f"  max drawdown        {fmt_pct(s.max_drawdown_pct)}",
+            f"  profit factor       {fmt_pf(s.profit_factor)}",
+        ]
+    )
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -959,10 +1041,19 @@ def _render(s: VariantSummary) -> str:
 
 
 _TRADE_COLS = [
-    "ticker", "trigger", "entry_date", "entry_price",
-    "exit_date", "exit_price", "exit_reason", "holding_days",
-    "pnl", "return_pct", "earnings_magnitude",
-    "pb_at_entry", "de_at_entry",
+    "ticker",
+    "trigger",
+    "entry_date",
+    "entry_price",
+    "exit_date",
+    "exit_price",
+    "exit_reason",
+    "holding_days",
+    "pnl",
+    "return_pct",
+    "earnings_magnitude",
+    "pb_at_entry",
+    "de_at_entry",
 ]
 
 
@@ -971,18 +1062,23 @@ def _write_trades_csv(path: Path, trades: list[TradeRecord]) -> None:
         w = csv.writer(fh)
         w.writerow(_TRADE_COLS)
         for t in trades:
-            w.writerow([
-                t.ticker, t.trigger,
-                t.entry_date.isoformat(),
-                f"{t.entry_price:.4f}",
-                t.exit_date.isoformat() if t.exit_date else "",
-                f"{t.exit_price:.4f}" if t.exit_price is not None else "",
-                t.exit_reason, t.holding_days,
-                f"{t.pnl:.6f}", f"{t.return_pct:.6f}",
-                f"{t.earnings_magnitude:.6f}" if t.earnings_magnitude is not None else "",
-                f"{t.pb_at_entry:.6f}" if t.pb_at_entry is not None else "",
-                f"{t.de_at_entry:.6f}" if t.de_at_entry is not None else "",
-            ])
+            w.writerow(
+                [
+                    t.ticker,
+                    t.trigger,
+                    t.entry_date.isoformat(),
+                    f"{t.entry_price:.4f}",
+                    t.exit_date.isoformat() if t.exit_date else "",
+                    f"{t.exit_price:.4f}" if t.exit_price is not None else "",
+                    t.exit_reason,
+                    t.holding_days,
+                    f"{t.pnl:.6f}",
+                    f"{t.return_pct:.6f}",
+                    f"{t.earnings_magnitude:.6f}" if t.earnings_magnitude is not None else "",
+                    f"{t.pb_at_entry:.6f}" if t.pb_at_entry is not None else "",
+                    f"{t.de_at_entry:.6f}" if t.de_at_entry is not None else "",
+                ]
+            )
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -1007,20 +1103,12 @@ def _overrides_from_args(args: argparse.Namespace) -> dict:
 def _apply_overrides_from_args(args: argparse.Namespace) -> None:
     global _PB_CEILING_OVERRIDE, _DE_CEILING_OVERRIDE, _EARNINGS_WINDOW_OVERRIDE
     global _HARD_STOP_PCT_OVERRIDE, _SWING_SCORE_THRESHOLD_OVERRIDE
-    _PB_CEILING_OVERRIDE = (
-        float(args.pb_ceiling) if getattr(args, "pb_ceiling", None) is not None else None
-    )
-    _DE_CEILING_OVERRIDE = (
-        float(args.de_ceiling) if getattr(args, "de_ceiling", None) is not None else None
-    )
+    _PB_CEILING_OVERRIDE = float(args.pb_ceiling) if getattr(args, "pb_ceiling", None) is not None else None
+    _DE_CEILING_OVERRIDE = float(args.de_ceiling) if getattr(args, "de_ceiling", None) is not None else None
     _EARNINGS_WINDOW_OVERRIDE = (
-        int(args.earnings_window_days)
-        if getattr(args, "earnings_window_days", None) is not None
-        else None
+        int(args.earnings_window_days) if getattr(args, "earnings_window_days", None) is not None else None
     )
-    _HARD_STOP_PCT_OVERRIDE = (
-        float(args.stop_pct) if getattr(args, "stop_pct", None) is not None else None
-    )
+    _HARD_STOP_PCT_OVERRIDE = float(args.stop_pct) if getattr(args, "stop_pct", None) is not None else None
     _SWING_SCORE_THRESHOLD_OVERRIDE = (
         float(args.swing_score_threshold)
         if getattr(args, "swing_score_threshold", None) is not None
@@ -1127,15 +1215,9 @@ async def load_vector_window_context(
     pool = await build_asyncpg_pool(db_url)
     try:
         tier_costs = await load_tier_costs(pool)
-        async with pool.acquire() as conn:
-            funded = [r["ticker"] for r in await conn.fetch(
-                "SELECT DISTINCT ticker FROM platform.fundamentals_quarterly "
-                "WHERE pb IS NOT NULL AND de IS NOT NULL AND revenue IS NOT NULL"
-            )]
-            with_earnings = [r["ticker"] for r in await conn.fetch(
-                "SELECT DISTINCT ticker FROM platform.earnings_events "
-                "WHERE event_type='EARNINGS_BEAT'"
-            )]
+        funded_cids, beat_cids = await _vector_eligible_cids(pool)
+        funded = await _cids_to_tickers(pool, funded_cids)
+        with_earnings = await _cids_to_tickers(pool, beat_cids)
         eligible = sorted(set(funded) & set(with_earnings))
         if universe is not None:
             eligible = [t for t in eligible if t in universe]
@@ -1150,10 +1232,16 @@ async def load_vector_window_context(
     spy_panel = panels.pop(SPY_SYMBOL, None)
     spy_rv_pct = _spy_realized_vol_pct(spy_panel) if spy_panel is not None else None
     return VectorWindowContext(
-        panels=panels, spy_panel=spy_panel, spy_rv_pct=spy_rv_pct,
-        fundamentals=fundamentals, earnings=earnings,
-        tier_round_trip_costs=tier_costs, eligible_tickers=eligible,
-        start=start, end=end, universe=universe,
+        panels=panels,
+        spy_panel=spy_panel,
+        spy_rv_pct=spy_rv_pct,
+        fundamentals=fundamentals,
+        earnings=earnings,
+        tier_round_trip_costs=tier_costs,
+        eligible_tickers=eligible,
+        start=start,
+        end=end,
+        universe=universe,
     )
 
 
@@ -1181,6 +1269,7 @@ def run_vector_with_context(
     # catalyst→earnings rename ships forward-only for new artifacts.
     if "catalyst_window_days" in overrides and "earnings_window_days" not in overrides:
         import warnings
+
         warnings.warn(
             "vector.backtest: 'catalyst_window_days' override key is deprecated; "
             "use 'earnings_window_days' (the legacy key is still accepted for "
@@ -1189,29 +1278,19 @@ def run_vector_with_context(
             stacklevel=2,
         )
         overrides["earnings_window_days"] = overrides.pop("catalyst_window_days")
-    _PB_CEILING_OVERRIDE = (
-        float(overrides["pb_ceiling"]) if "pb_ceiling" in overrides else None
-    )
-    _DE_CEILING_OVERRIDE = (
-        float(overrides["de_ceiling"]) if "de_ceiling" in overrides else None
-    )
+    _PB_CEILING_OVERRIDE = float(overrides["pb_ceiling"]) if "pb_ceiling" in overrides else None
+    _DE_CEILING_OVERRIDE = float(overrides["de_ceiling"]) if "de_ceiling" in overrides else None
     _EARNINGS_WINDOW_OVERRIDE = (
-        int(overrides["earnings_window_days"])
-        if "earnings_window_days" in overrides else None
+        int(overrides["earnings_window_days"]) if "earnings_window_days" in overrides else None
     )
-    _HARD_STOP_PCT_OVERRIDE = (
-        float(overrides["stop_pct"]) if "stop_pct" in overrides else None
-    )
+    _HARD_STOP_PCT_OVERRIDE = float(overrides["stop_pct"]) if "stop_pct" in overrides else None
     _SWING_SCORE_THRESHOLD_OVERRIDE = (
-        float(overrides["swing_score_threshold"])
-        if "swing_score_threshold" in overrides else None
+        float(overrides["swing_score_threshold"]) if "swing_score_threshold" in overrides else None
     )
     # vector_composite Lab candidate flag (spec §4.2, H-VC-8): the override
     # MUST be reset every call so module-global state does not bleed across
     # Lab trials. Mirrors every sibling _*_OVERRIDE reset above.
-    _COMPOSITE_MODE_OVERRIDE = (
-        str(overrides["composite_mode"]) if "composite_mode" in overrides else None
-    )
+    _COMPOSITE_MODE_OVERRIDE = str(overrides["composite_mode"]) if "composite_mode" in overrides else None
     _TIER_ROUND_TRIP_COSTS.clear()
     _TIER_ROUND_TRIP_COSTS.update(context.tier_round_trip_costs)
 
@@ -1220,10 +1299,20 @@ def run_vector_with_context(
         # module-global (H-VC-8 — no leakage even on degenerate inputs).
         _COMPOSITE_MODE_OVERRIDE = None
         return BacktestRunResult(
-            engine="vector", parameters=overrides, credibility_score=0, passed_gate=False,
-            sharpe=0.0, profit_factor=0.0, max_drawdown=0.0, trades=0, dsr=0.0,
-            min_btl_gap=0, trades_per_param=0.0, sensitivity_score=None,
-            ruin_probability=0.0, trade_log=[],
+            engine="vector",
+            parameters=overrides,
+            credibility_score=0,
+            passed_gate=False,
+            sharpe=0.0,
+            profit_factor=0.0,
+            max_drawdown=0.0,
+            trades=0,
+            dsr=0.0,
+            min_btl_gap=0,
+            trades_per_param=0.0,
+            sensitivity_score=None,
+            ruin_probability=0.0,
+            trade_log=[],
         )
 
     # Mode selection — the make-or-break invariant (spec §3): the live
@@ -1271,7 +1360,9 @@ def run_vector_with_context(
         "composite_mode": _composite_mode(),
     }
     trade_dicts, price_data = _build_diagnostic_inputs_for_search(
-        trades, context.panels, context.spy_panel,
+        trades,
+        context.panels,
+        context.spy_panel,
     )
     return compute_search_metrics(
         engine="vector",
@@ -1308,7 +1399,10 @@ async def run_for_search(
     :func:`run_vector_with_context` to amortise the DB load across all
     candidates in a window."""
     ctx = await load_vector_window_context(
-        db_url=db_url, start=start, end=end, universe=universe,
+        db_url=db_url,
+        start=start,
+        end=end,
+        universe=universe,
     )
     return run_vector_with_context(ctx, overrides=overrides, trade_log_path=trade_log_path)
 
@@ -1382,15 +1476,9 @@ async def amain(args: argparse.Namespace) -> int:
             n=len(_TIER_ROUND_TRIP_COSTS),
         )
         # Universe: anything that has fundamentals + an earnings event.
-        async with pool.acquire() as conn:
-            funded = [r["ticker"] for r in await conn.fetch(
-                "SELECT DISTINCT ticker FROM platform.fundamentals_quarterly "
-                "WHERE pb IS NOT NULL AND de IS NOT NULL AND revenue IS NOT NULL"
-            )]
-            with_earnings = [r["ticker"] for r in await conn.fetch(
-                "SELECT DISTINCT ticker FROM platform.earnings_events "
-                "WHERE event_type='EARNINGS_BEAT'"
-            )]
+        funded_cids, beat_cids = await _vector_eligible_cids(pool)
+        funded = await _cids_to_tickers(pool, funded_cids)
+        with_earnings = await _cids_to_tickers(pool, beat_cids)
         eligible = sorted(set(funded) & set(with_earnings))
         if not eligible:
             print("no eligible tickers — populate fundamentals + earnings_events first", file=sys.stderr)
@@ -1592,8 +1680,7 @@ async def _run_overfitting_bundle(
     )
 
     trade_dicts = [
-        {"pnl_pct": t.return_pct, "entry_date": t.entry_date, "ticker": t.ticker}
-        for t in winner_trades
+        {"pnl_pct": t.return_pct, "entry_date": t.entry_date, "ticker": t.ticker} for t in winner_trades
     ]
     parameters = {
         "pb_max": PB_CEILING,
@@ -1675,7 +1762,9 @@ def _run_with_thresholds(
             continue
         if spy_panel is not None and _spy_in_cooldown(spy_panel, today, cooldown_state):
             continue
-        rv_today = float(spy_rv_pct.loc[today]) if (spy_rv_pct is not None and today in spy_rv_pct.index) else None
+        rv_today = (
+            float(spy_rv_pct.loc[today]) if (spy_rv_pct is not None and today in spy_rv_pct.index) else None
+        )
         size_factor = _size_factor_from_rv(rv_today)
         chosen: tuple[str, pd.DataFrame, int, str, float | None, dict] | None = None
         for ticker, df in panels.items():
@@ -1752,27 +1841,45 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--trades-file", default=DEFAULT_TRADES_FILE)
     p.add_argument("--skip-statistical-validation", action="store_true")
     p.add_argument(
-        "--n-trials", type=int, default=30,
+        "--n-trials",
+        type=int,
+        default=30,
         help=(
             "Number of independent trials assumed when computing DSR / MinBTL / PBO. "
             "Default 30 reflects Vector's three-gate development-phase parameter search."
         ),
     )
     # ─── Parameter-search hooks ─────────────────────────────────────────────
-    p.add_argument("--json", dest="json_output", action="store_true",
-                   help="Emit a single JSON object with search-pipeline metrics and exit 0.")
-    p.add_argument("--trade-log", type=Path, default=None,
-                   help="Write standardised per-trade CSV to this path.")
-    p.add_argument("--pb-ceiling", type=float, default=None,
-                   help="Override P/B ceiling for Gate 1 (default 1.5).")
-    p.add_argument("--de-ceiling", type=float, default=None,
-                   help="Override D/E ceiling for Gate 1 (default 3.0).")
-    p.add_argument("--earnings-window-days", type=int, default=None,
-                   help="Override earnings window in calendar days (default 5).")
-    p.add_argument("--swing-score-threshold", type=float, default=None,
-                   help="Synthetic swing-score floor for the search pipeline (default: no gate).")
-    p.add_argument("--stop-pct", type=float, default=None,
-                   help="Override hard-stop percentage (default 0.07).")
+    p.add_argument(
+        "--json",
+        dest="json_output",
+        action="store_true",
+        help="Emit a single JSON object with search-pipeline metrics and exit 0.",
+    )
+    p.add_argument(
+        "--trade-log", type=Path, default=None, help="Write standardised per-trade CSV to this path."
+    )
+    p.add_argument(
+        "--pb-ceiling", type=float, default=None, help="Override P/B ceiling for Gate 1 (default 1.5)."
+    )
+    p.add_argument(
+        "--de-ceiling", type=float, default=None, help="Override D/E ceiling for Gate 1 (default 3.0)."
+    )
+    p.add_argument(
+        "--earnings-window-days",
+        type=int,
+        default=None,
+        help="Override earnings window in calendar days (default 5).",
+    )
+    p.add_argument(
+        "--swing-score-threshold",
+        type=float,
+        default=None,
+        help="Synthetic swing-score floor for the search pipeline (default: no gate).",
+    )
+    p.add_argument(
+        "--stop-pct", type=float, default=None, help="Override hard-stop percentage (default 0.07)."
+    )
     return p.parse_args(argv)
 
 

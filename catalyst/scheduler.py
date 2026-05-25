@@ -18,6 +18,7 @@ The scheduler never imports ``catalyst.backtest`` (the Lab seam lives
 there). The live path reads its config from module-level constants —
 ``catalyst.models`` and ``catalyst.plugs.*`` only.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -44,7 +45,9 @@ from catalyst.plugs.lifecycle_analysis import CatalystLifecycleAnalysis  # noqa:
 from catalyst.plugs.setup_detection import CatalystSetupDetection
 from tpcore.alpaca import AlpacaPaperBrokerAdapter
 from tpcore.calendar import is_trading_day
+from tpcore.data.repositories import InsiderRepo, PricesRepo
 from tpcore.db import build_asyncpg_pool
+from tpcore.identity.dispatcher import IdentityDispatcher
 from tpcore.interfaces.broker import (
     Order,
     OrderClass,
@@ -80,25 +83,35 @@ async def _fetch_insider_rows(
     Empty DataFrame on no rows (the caller still emits the SIGNAL with
     a zero-candidate FilterDiagnostics).
     """
-    tickers = list(universe)
-    sql = """
-        SELECT ticker, filing_date, insider_name, transaction_type, value
-        FROM platform.sec_insider_transactions
-        WHERE ticker = ANY($1)
-          AND filing_date BETWEEN $2 AND $3
-    """
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(sql, tickers, start, end)
+    dispatcher = IdentityDispatcher(pool)
+    repo = InsiderRepo(pool)
+
+    cid_to_ticker: dict[str, str] = {}
+    for t in universe:
+        cid = await dispatcher.ticker_to_classification_id(t)
+        if cid is not None:
+            cid_to_ticker[cid] = t
+
+    if not cid_to_ticker:
+        return pd.DataFrame(columns=["ticker", "filing_date", "insider_name", "transaction_type", "value"])
+
+    txns_by_cid = await repo.get_window_batch(list(cid_to_ticker), start, end)
+    rows: list[dict] = []
+    for cid, txns in txns_by_cid.items():
+        ticker = cid_to_ticker[cid]
+        for txn in txns:
+            rows.append(
+                {
+                    "ticker": ticker,
+                    "filing_date": txn.filing_date,
+                    "insider_name": txn.insider_name,
+                    "transaction_type": txn.transaction_type,
+                    "value": float(txn.value),
+                }
+            )
     if not rows:
-        return pd.DataFrame(columns=["ticker", "filing_date", "insider_name",
-                                     "transaction_type", "value"])
-    return pd.DataFrame([
-        {"ticker": r["ticker"], "filing_date": r["filing_date"],
-         "insider_name": r["insider_name"],
-         "transaction_type": r["transaction_type"],
-         "value": float(r["value"])}
-        for r in rows
-    ])
+        return pd.DataFrame(columns=["ticker", "filing_date", "insider_name", "transaction_type", "value"])
+    return pd.DataFrame(rows)
 
 
 async def _fetch_prices(
@@ -108,29 +121,40 @@ async def _fetch_prices(
     start: date_t,
     end: date_t,
 ) -> dict[str, pd.DataFrame]:
-    """Pull per-ticker close+volume panels over ``[start, end]``."""
-    tickers = list(universe)
-    sql = """
-        SELECT ticker, date, close, volume
-        FROM platform.prices_daily
-        WHERE ticker = ANY($1)
-          AND date BETWEEN $2 AND $3
-        ORDER BY ticker, date
+    """Pull per-ticker close+volume panels over ``[start, end]``.
+
+    Edge adapter: ticker universe in, ticker-keyed DataFrame out.
+    Dispatches ticker → classification_id and queries PricesRepo by
+    classification_id (post-v2.2 prices_daily.classification_id column
+    is 100% populated).
     """
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(sql, tickers, start, end)
+    dispatcher = IdentityDispatcher(pool)
+    repo = PricesRepo(pool)
+
+    cid_to_ticker: dict[str, str] = {}
+    for t in universe:
+        cid = await dispatcher.ticker_to_classification_id(t)
+        if cid is not None:
+            cid_to_ticker[cid] = t
+
+    if not cid_to_ticker:
+        return {}
+
+    bars_by_cid = await repo.get_window_batch(list(cid_to_ticker), start, end)
     out: dict[str, pd.DataFrame] = {}
-    if not rows:
-        return out
-    for r in rows:
-        df = out.setdefault(r["ticker"], pd.DataFrame(
-            {"date": [], "close": [], "volume": []}))
-        df.loc[len(df)] = [r["date"], float(r["close"]), float(r["volume"])]
-    for t, df in list(out.items()):
-        df = df.copy()
-        df.index = pd.DatetimeIndex([pd.Timestamp(d) for d in df["date"]])
-        df = df.drop(columns=["date"]).sort_index()
-        out[t] = df
+    for cid, bars in bars_by_cid.items():
+        if not bars:
+            continue
+        ticker = cid_to_ticker[cid]
+        sorted_bars = sorted(bars, key=lambda b: b.date)
+        idx = pd.DatetimeIndex([pd.Timestamp(b.date) for b in sorted_bars])
+        out[ticker] = pd.DataFrame(
+            {
+                "close": [float(b.close) for b in sorted_bars],
+                "volume": [b.volume for b in sorted_bars],
+            },
+            index=idx,
+        )
     return out
 
 
@@ -173,8 +197,7 @@ async def run_once(
     as_of = as_of or datetime.now(UTC).date()
     as_of_dt = datetime.combine(as_of, datetime.min.time(), tzinfo=UTC)
     if not is_trading_day(as_of_dt):
-        logger.info("catalyst.scheduler.non_trading_day",
-                    as_of=as_of.isoformat())
+        logger.info("catalyst.scheduler.non_trading_day", as_of=as_of.isoformat())
         return {"as_of": as_of.isoformat(), "action": "non_trading_day"}
 
     db_url = os.getenv("DATABASE_URL")
@@ -192,7 +215,9 @@ async def run_once(
         state_store = PostgresRiskStateStore(pool=pool)
         governor = RiskGovernor(state_store=state_store, broker=broker, pool=pool)
         await governor.register_engine(
-            "catalyst", platform_equity_usd, limits=limits_for("catalyst"),
+            "catalyst",
+            platform_equity_usd,
+            limits=limits_for("catalyst"),
         )
 
         # Kill-switch pre-flight — same pattern as sentinel/canary.
@@ -203,24 +228,26 @@ async def run_once(
                 as_of=as_of.isoformat(),
                 reason=getattr(risk_state, "kill_switch_reason", None),
             )
-            return {"as_of": as_of.isoformat(),
-                    "action": "kill_switch_halt"}
+            return {"as_of": as_of.isoformat(), "action": "kill_switch_halt"}
 
         universe = CATALYST_TEST_UNIVERSE
         insider_rows = await _fetch_insider_rows(
-            pool, universe=universe,
+            pool,
+            universe=universe,
             start=as_of - timedelta(days=_INSIDER_LOOKBACK_DAYS),
             end=as_of,
         )
         prices_by_ticker = await _fetch_prices(
-            pool, universe=universe,
+            pool,
+            universe=universe,
             start=as_of - timedelta(days=_PRICE_LOOKBACK_DAYS),
             end=as_of,
         )
 
         setup = CatalystSetupDetection()
         candidates, diag = setup.detect(
-            as_of=as_of, universe=universe,
+            as_of=as_of,
+            universe=universe,
             insider_rows=insider_rows,
             prices_by_ticker=prices_by_ticker,
         )
@@ -233,21 +260,22 @@ async def run_once(
                 cand.ticker,
                 score=float(cand.cluster_density),
                 direction="LONG",
-                extra_data={"filter_diagnostics": diag_dict,
-                            "cluster_distinct_insiders":
-                                cand.cluster.distinct_insiders,
-                            "cluster_aggregate_usd":
-                                str(cand.cluster.aggregate_value_usd)},
+                extra_data={
+                    "filter_diagnostics": diag_dict,
+                    "cluster_distinct_insiders": cand.cluster.distinct_insiders,
+                    "cluster_aggregate_usd": str(cand.cluster.aggregate_value_usd),
+                },
             )
         if not candidates:
             # Still emit ONE SIGNAL row carrying the diagnostics so the
             # operator can see "why no setups today?" — mirrors momentum.
             await db_log.signal(
-                "_NONE", score=0.0, direction="NONE",
+                "_NONE",
+                score=0.0,
+                direction="NONE",
                 extra_data={"filter_diagnostics": diag_dict},
             )
-            return {"as_of": as_of.isoformat(), "action": "no_candidates",
-                    "filter_diagnostics": diag_dict}
+            return {"as_of": as_of.isoformat(), "action": "no_candidates", "filter_diagnostics": diag_dict}
 
         # Engine-local capital gate per candidate.
         cap_gate = CatalystCapitalGate(engine_equity=platform_equity_usd)
@@ -258,10 +286,8 @@ async def run_once(
 
         submitted: list[str] = []
         blocked: list[tuple[str, str]] = []
-        for cand in sorted(candidates,
-                           key=lambda c: c.cluster_density, reverse=True):
-            decision = execution.decide(
-                cand, engine_equity_usd=platform_equity_usd)
+        for cand in sorted(candidates, key=lambda c: c.cluster_density, reverse=True):
+            decision = execution.decide(cand, engine_equity_usd=platform_equity_usd)
             if decision is None:
                 blocked.append((cand.ticker, "sizing_zero"))
                 continue
@@ -279,12 +305,10 @@ async def run_once(
             )
             if not check.allowed:
                 blocked.append((cand.ticker, f"governor:{check.reason}"))
-                logger.warning("catalyst.scheduler.governor_blocked",
-                               ticker=cand.ticker, reason=check.reason)
+                logger.warning("catalyst.scheduler.governor_blocked", ticker=cand.ticker, reason=check.reason)
                 continue
             if dry_run:
-                logger.info("catalyst.scheduler.dry_run_skip",
-                            ticker=cand.ticker, qty=decision.qty)
+                logger.info("catalyst.scheduler.dry_run_skip", ticker=cand.ticker, qty=decision.qty)
                 submitted.append(cand.ticker)
                 continue
             order = _build_bracket_order(decision.order_payloads[0])
@@ -292,8 +316,7 @@ async def run_once(
                 placed = await broker.place_order(order)
             except Exception as exc:  # noqa: BLE001
                 blocked.append((cand.ticker, f"order_failed:{exc!s}"[:200]))
-                logger.error("catalyst.scheduler.order_failed",
-                             ticker=cand.ticker, error=str(exc)[:200])
+                logger.error("catalyst.scheduler.order_failed", ticker=cand.ticker, error=str(exc)[:200])
                 continue
             await governor.record_fill(
                 engine_id="catalyst",
@@ -301,7 +324,8 @@ async def run_once(
                 position_delta=1,
             )
             await db_log.order_submitted(
-                cand.ticker, quantity=decision.qty,
+                cand.ticker,
+                quantity=decision.qty,
                 order_id=placed.broker_order_id,
             )
             if placed.broker_order_id:
@@ -321,11 +345,9 @@ async def run_once(
     finally:
         duration_ms = int((datetime.now(UTC) - started).total_seconds() * 1000)
         try:
-            await db_log.shutdown(duration_ms=duration_ms,
-                                  exit_code=exit_code)
+            await db_log.shutdown(duration_ms=duration_ms, exit_code=exit_code)
         except Exception as exc:  # noqa: BLE001 — best-effort shutdown event
-            logger.warning("catalyst.scheduler.shutdown_log_failed",
-                           error=str(exc)[:200])
+            logger.warning("catalyst.scheduler.shutdown_log_failed", error=str(exc)[:200])
         await pool.close()
 
 
@@ -339,7 +361,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 async def amain(args: argparse.Namespace) -> int:
     summary = await run_once(
-        as_of=args.as_of, dry_run=args.dry_run,
+        as_of=args.as_of,
+        dry_run=args.dry_run,
         platform_equity_usd=args.platform_equity,
     )
     print(summary)
