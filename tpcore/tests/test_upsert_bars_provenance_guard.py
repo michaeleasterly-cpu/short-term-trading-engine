@@ -42,23 +42,24 @@ def test_upsert_sql_has_source_priority_where_clause() -> None:
 @pytest.mark.parametrize(
     "lower,higher",
     [
-        ("tradier", "iex"),       # tradier (frozen) is lowest
-        ("iex", "alpaca"),        # alpaca peer to sip > iex
+        # New ordering after migration 20260525_1200 (operator-corrected
+        # P0_5): fmp=4 > tradier=3 > sip=2 > iex=1 > alpaca=0.
+        ("alpaca", "iex"),        # alpaca (frozen) is lowest non-null
         ("iex", "sip"),
-        ("alpaca", "fmp"),        # FMP is primary
-        ("sip", "fmp"),
-        ("tradier", "fmp"),       # any → fmp upgrade allowed
-        ("unknown_value", "iex"), # ELSE branch = 0, lowest
+        ("sip", "tradier"),       # tradier promoted to legitimate secondary
+        ("tradier", "fmp"),       # FMP is primary
+        ("alpaca", "tradier"),    # the data-session backfill direction
+        ("alpaca", "fmp"),        # ditto via FMP
+        ("unknown_value", "iex"), # ELSE branch = 0; iex=1 wins
     ],
 )
 def test_source_priority_ordering(lower: str, higher: str) -> None:
-    """Pin the priority ordering via a live-DB query of the function
-    (the function lives in the migration, not Python — so this test
-    asserts the function is installed correctly + ranks as expected).
+    """Pin the priority ordering via a live-DB query of the function.
 
     Marked DB-gated so CI without a live DB doesn't false-fail; the
-    invariant is the operator memory `project_fmp_primary_daily_bars_2026_05_22`
-    + the migration `20260525_0700`."""
+    invariant is operator memory ``feedback_no_alpaca_for_daily_
+    prices_backfill`` (FMP primary > Tradier secondary > NEVER
+    Alpaca for new writes) + migration ``20260525_1200``."""
     import asyncio
     import os
     pytest.importorskip("asyncpg")
