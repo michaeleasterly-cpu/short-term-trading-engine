@@ -40,7 +40,7 @@ from __future__ import annotations
 
 import time
 from collections import OrderedDict
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 import structlog
 
@@ -166,7 +166,27 @@ class IdentityDispatcher:
         cache_ttl_seconds: Entry expiry. Default 300s (5 min) matches
             the rate at which ``ticker_history`` realistically changes
             (the producer side runs on event ingestion, not per-second).
+
+    Cache lifetime
+    --------------
+    The TTL+LRU cache is **shared across all IdentityDispatcher
+    instances that hold the same pool**. Engine callsites that
+    construct a fresh ``IdentityDispatcher(pool)`` per function call
+    (the common pattern in this codebase) therefore benefit from cross-
+    call caching — the second invocation in the same process sees a
+    warm cache instead of starting empty. The cache keys on
+    ``id(pool)``; multi-pool processes (rare) get isolated caches per
+    pool, so a staging-vs-prod split can't cross-pollute.
+
+    For tests that want a fresh cache (asserting on fetchval counts),
+    pass a unique pool object per test — ``MagicMock()`` gives each
+    test its own id and therefore its own cache slot. Or call
+    ``IdentityDispatcher.reset_shared_caches()`` between tests.
     """
+
+    # Pool id → (ticker_cache, cid_cache). Module-level lifetime; keyed
+    # on id(pool) so each distinct pool gets its own caches.
+    _shared_caches: ClassVar[dict[int, tuple[_TTLCache, _TTLCache]]] = {}
 
     def __init__(
         self,
@@ -176,8 +196,21 @@ class IdentityDispatcher:
         cache_ttl_seconds: float = 300.0,
     ) -> None:
         self._pool = pool
-        self._ticker_cache: _TTLCache = _TTLCache(cache_max_size, cache_ttl_seconds)
-        self._cid_cache: _TTLCache = _TTLCache(cache_max_size, cache_ttl_seconds)
+        cache_key = id(pool)
+        caches = self._shared_caches.get(cache_key)
+        if caches is None:
+            caches = (
+                _TTLCache(cache_max_size, cache_ttl_seconds),
+                _TTLCache(cache_max_size, cache_ttl_seconds),
+            )
+            self._shared_caches[cache_key] = caches
+        self._ticker_cache, self._cid_cache = caches
+
+    @classmethod
+    def reset_shared_caches(cls) -> None:
+        """Drop all shared caches. Use between tests that assert on DB
+        call counts; otherwise unnecessary."""
+        cls._shared_caches.clear()
 
     async def ticker_to_classification_id(
         self,
@@ -210,6 +243,16 @@ class IdentityDispatcher:
         else:
             value = await self._fetchval(_TICKER_TO_CID_AS_OF, ticker, as_of)
         self._ticker_cache.put(cache_key, value)
+        if value is None:
+            # Observability for "unknown ticker" — typos in universe
+            # specs, recently-added tickers not yet in ticker_history,
+            # delisted+pruned tickers. Logged once per (ticker, as_of)
+            # because the None is now cached.
+            logger.debug(
+                "identity.dispatcher.ticker_unknown",
+                ticker=ticker,
+                as_of=str(as_of) if as_of is not None else None,
+            )
         return value
 
     async def classification_id_to_ticker(
@@ -239,6 +282,12 @@ class IdentityDispatcher:
         else:
             value = await self._fetchval(_CID_TO_TICKER_AS_OF, classification_id, as_of)
         self._cid_cache.put(cache_key, value)
+        if value is None:
+            logger.debug(
+                "identity.dispatcher.cid_unknown",
+                classification_id=classification_id,
+                as_of=str(as_of) if as_of is not None else None,
+            )
         return value
 
     def invalidate(

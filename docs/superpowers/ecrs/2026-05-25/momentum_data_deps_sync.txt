@@ -15,9 +15,13 @@ data_dependencies: earnings_events, liquidity_tiers, prices_daily, v_universe
 # _PROFILE.data_dependencies and test_engine_data_dependencies_drift
 # reds.
 #
-# liquidity_tiers stays declared because the live-path setup_detection
-# plug (momentum/plugs/setup_detection.py) still queries it directly —
-# the operator gated converting the live path until momentum is safe
-# to migrate.
+# liquidity_tiers stays declared for two reasons:
+#   1. UniverseRepo joins liquidity_tiers transitively through
+#      v_universe — the underlying table is still read, just through
+#      the view.
+#   2. PR-16 also converted momentum/plugs/setup_detection.py's
+#      live-path universe + tier-map + bars onto repos; the universe
+#      candidate fallback still routes through v_universe (and hence
+#      liquidity_tiers).
 #
 # earnings_events + prices_daily unchanged.
