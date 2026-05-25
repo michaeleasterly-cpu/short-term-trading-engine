@@ -11,6 +11,26 @@ import pytest
 
 from tpcore.aar.models import AfterActionReport, ExitReason
 from tpcore.aar.writer import AARWriter
+from tpcore.identity.dispatcher import IdentityDispatcher
+
+
+@pytest.fixture(autouse=True)
+def _reset_dispatcher_cache() -> None:
+    """The IdentityDispatcher's class-level ``_shared_caches`` is keyed
+    on ``id(pool)``. Python recycles object ids after GC, so a fake
+    pool created here can land on a cache key a prior test populated
+    with a different fetchval result. The dispatcher's caller (
+    ``AARWriter``) then returns the stale None instead of the
+    fetchval value the test set up.
+
+    Order-dependent failure observed in CI under the AUTHORITATIVE
+    serial gate (the local parallel run masks it). Scoped to this
+    file rather than a global autouse to avoid the ordering-shift
+    side effect documented in
+    ``tpcore/tests/conftest.py`` (the global autouse was removed
+    because it surfaced an unrelated fragility).
+    """
+    IdentityDispatcher.reset_shared_caches()
 
 # ────────────────────────────────────────────────────────────────────────────
 # Fake pool (same shape as test_persistent_store.py — kept local on purpose)

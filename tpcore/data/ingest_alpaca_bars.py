@@ -212,6 +212,208 @@ async def fetch_daily_bars(
     return bars
 
 
+# ─────────────────────────────────────────────────────────────────────
+# P3 trust-audit (2026-05-25) — stage-then-promote write path.
+#
+# Production writes to ``platform.prices_daily`` (post-P3) flow:
+#   1. physical-truth filter (same as legacy ``_upsert_bars``);
+#      rejects route to ``platform.ingest_quarantine``.
+#   2. accepted rows bulk-INSERT into ``platform.prices_daily_staging``
+#      with this batch's ``staging_run_id`` (= ``ingest_manifest_id``).
+#   3. validate staging row count = accepted-row count.
+#   4. promote via SQL ``INSERT ... SELECT ... FROM staging WHERE
+#      staging_run_id = $1 ... ON CONFLICT (ticker, date) DO UPDATE
+#      ... WHERE platform._source_priority(...) >= ...`` (carrying
+#      the P4 provenance-downgrade guard).
+#   5. mark staging rows ``promoted = true``.
+#
+# Legacy ``_upsert_bars`` (used by all_active discovery sweep +
+# rebuild_from_archive) is intentionally unchanged so its call sites
+# stay green; the new ``stage_then_promote_bars`` is the path the
+# archive-first orchestrator drives.
+# ─────────────────────────────────────────────────────────────────────
+
+
+_STAGE_INSERT_SQL = """
+    INSERT INTO platform.prices_daily_staging (
+        staging_run_id, ticker, date, open, high, low, close, volume,
+        adjusted_close, delisted, delisting_date, source
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+    ON CONFLICT (staging_run_id, ticker, date) DO NOTHING
+"""
+
+_STAGE_COUNT_SQL = """
+    SELECT COUNT(*)::bigint AS n
+    FROM platform.prices_daily_staging
+    WHERE staging_run_id = $1 AND ticker = $2
+"""
+
+_PROMOTE_FROM_STAGE_SQL = """
+    INSERT INTO platform.prices_daily (
+        ticker, date, open, high, low, close, volume,
+        adjusted_close, delisted, delisting_date, source
+    )
+    SELECT
+        ticker, date, open, high, low, close, volume,
+        adjusted_close, delisted, delisting_date, source
+    FROM platform.prices_daily_staging
+    WHERE staging_run_id = $1 AND ticker = $2 AND promoted = false
+    ON CONFLICT (ticker, date) DO UPDATE SET
+        open = EXCLUDED.open,
+        high = EXCLUDED.high,
+        low = EXCLUDED.low,
+        close = EXCLUDED.close,
+        volume = EXCLUDED.volume,
+        adjusted_close = EXCLUDED.adjusted_close,
+        delisted = EXCLUDED.delisted,
+        delisting_date = EXCLUDED.delisting_date,
+        source = EXCLUDED.source
+    WHERE platform._source_priority(EXCLUDED.source)
+        >= platform._source_priority(platform.prices_daily.source)
+"""
+
+_MARK_PROMOTED_SQL = """
+    UPDATE platform.prices_daily_staging
+    SET promoted = true
+    WHERE staging_run_id = $1 AND ticker = $2 AND promoted = false
+"""
+
+
+class StagingValidationError(RuntimeError):
+    """Raised when staging-level batch validation fails.
+
+    The caller's ``archive_first_load_bars`` catches this in its
+    Phase 3 ``except`` and writes ``manifest_id`` → status='failed'
+    with the validation reason. Staging rows for the failing batch
+    are LEFT in place (promoted=false) for forensic review.
+    """
+
+
+async def stage_then_promote_bars(
+    pool: asyncpg.Pool,
+    symbol: str,
+    bars: list[dict],
+    *,
+    staging_run_id,  # UUID; forward-ref to avoid an import at module top
+    delisted: bool = False,
+    delisting_date: date | None = None,
+    source: str = "alpaca",
+) -> int:
+    """P3 stage-then-promote write path for prices_daily.
+
+    Returns the count promoted into ``platform.prices_daily`` (which
+    equals ``rows_staged`` on the happy path; less if the
+    provenance-downgrade guard from P4 filtered some rows).
+
+    Raises :class:`StagingValidationError` when batch-level validation
+    fails (e.g. staged row count != filtered count). The archive-first
+    orchestrator catches that and marks the manifest 'failed'; the
+    staging rows are preserved with ``promoted=false`` so the operator
+    can audit / re-promote / abandon.
+    """
+    if not bars:
+        return 0
+    # Phase 1 — physical-truth filter + quarantine routing (mirrors
+    # the legacy _upsert_bars contract — bad rows MUST NEVER reach
+    # staging either).
+    from tpcore.ingestion.quarantine import ERROR_VALIDATION, record_rejection
+    today = datetime.now(UTC).date()
+    rows: list[tuple] = []
+    rejections: list[tuple[dict, str]] = []
+    for b in bars:
+        ts = datetime.fromisoformat(b["t"].replace("Z", "+00:00"))
+        session_date = ts.date()
+        o = b.get("o")
+        h = b.get("h")
+        low = b.get("l")
+        close = b.get("c")
+        v = b.get("v")
+        if (o is None or h is None or low is None or close is None or v is None):
+            rejections.append((b, "null_required_field"))
+            continue
+        if close <= 0 or close > 1e8 or o <= 0 or h <= 0 or low <= 0:
+            rejections.append((b, "ohlc_out_of_range"))
+            continue
+        if h < max(o, close, low) or low > min(o, close, h):
+            rejections.append((b, "ohlc_inconsistent"))
+            continue
+        if session_date > today:
+            rejections.append((b, "future_date"))
+            continue
+        rows.append((
+            staging_run_id, symbol, session_date, o, h, low, close, int(v),
+            close,  # adjusted_close — same as close because adjustment=all
+            delisted, delisting_date, source,
+        ))
+    if rejections:
+        logger.warning(
+            "ingest_alpaca_bars.stage_then_promote.physical_truth_rejected",
+            symbol=symbol, rejected=len(rejections), accepted=len(rows),
+        )
+        feed_source = "fmp_daily_bars" if source == "fmp" else "alpaca_daily_bars"
+        for payload, reason in rejections:
+            await record_rejection(
+                pool,
+                source=feed_source,
+                target_table="platform.prices_daily",
+                payload={**payload, "ticker": symbol, "source": source},
+                error_message=(
+                    f"physical_truth_gate: {reason} "
+                    f"(symbol={symbol} ts={payload.get('t')})"
+                ),
+                error_kind=ERROR_VALIDATION,
+            )
+
+    if not rows:
+        return 0
+
+    async with pool.acquire() as conn:
+        # Phase 2 — bulk INSERT to staging.
+        await conn.executemany(_STAGE_INSERT_SQL, rows)
+
+        # Phase 3 — validate staging row count matches what we staged.
+        # If a duplicate (staging_run_id, ticker, date) existed in the
+        # input the ON CONFLICT DO NOTHING above silently dropped it;
+        # a mismatch here means the producer fed us a same-batch
+        # duplicate, which is a bug.
+        staged_count = int(await conn.fetchval(
+            _STAGE_COUNT_SQL, staging_run_id, symbol,
+        ) or 0)
+        if staged_count != len(rows):
+            raise StagingValidationError(
+                f"staging row count mismatch for symbol={symbol} "
+                f"staging_run_id={staging_run_id}: "
+                f"expected={len(rows)} actual={staged_count} — likely "
+                "in-batch duplicate (ticker, date)"
+            )
+
+        # Phase 4 — promote via INSERT ... SELECT, honoring the P4
+        # provenance-downgrade guard.
+        promote_result = await conn.execute(
+            _PROMOTE_FROM_STAGE_SQL, staging_run_id, symbol,
+        )
+
+        # Phase 5 — mark staging rows promoted=true.
+        await conn.execute(_MARK_PROMOTED_SQL, staging_run_id, symbol)
+
+    # asyncpg returns "INSERT 0 N" for INSERT ... ON CONFLICT — N is
+    # the count rows that were INSERT'd OR UPDATE'd. Rows the
+    # provenance-downgrade guard skipped don't count.
+    promoted = 0
+    if isinstance(promote_result, str) and promote_result.startswith("INSERT"):
+        try:
+            promoted = int(promote_result.rsplit(" ", 1)[-1])
+        except ValueError:
+            promoted = 0
+    logger.info(
+        "ingest_alpaca_bars.stage_then_promote.done",
+        symbol=symbol, staging_run_id=str(staging_run_id),
+        staged=staged_count, promoted=promoted, source=source,
+    )
+    return promoted
+
+
 async def _upsert_bars(
     pool: asyncpg.Pool,
     symbol: str,

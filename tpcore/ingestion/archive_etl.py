@@ -208,12 +208,16 @@ async def archive_first_load_bars(
         date_range_end=datetime.combine(date_range_end, datetime.min.time()),
     )
 
-    # Phase 2 — ETL (read archive file, group by ticker, upsert).
-    # _upsert_bars is imported inside the function so importing this
-    # module doesn't pull a live-DB-only dependency at module load
-    # time (the hermetic-CI lesson).
+    # Phase 2 — ETL via the P3 stage-then-promote write path. Each
+    # symbol's bars stage into ``platform.prices_daily_staging``
+    # tagged with ``staging_run_id = manifest_id``, get batch-
+    # validated, then promote into ``platform.prices_daily`` via SQL
+    # INSERT...SELECT honoring the P4 provenance-downgrade guard.
+    # ``stage_then_promote_bars`` is imported inside the function so
+    # importing this module doesn't pull a live-DB-only dependency at
+    # module load time (the hermetic-CI lesson).
     try:
-        from tpcore.data.ingest_alpaca_bars import _upsert_bars
+        from tpcore.data.ingest_alpaca_bars import stage_then_promote_bars
 
         csv_rows = _read_archive_csv(archive_path)
         by_ticker: dict[str, list[dict]] = defaultdict(list)
@@ -234,10 +238,12 @@ async def archive_first_load_bars(
         )
         rows_loaded = 0
         for ticker, bars in by_ticker.items():
-            inserted = await _upsert_bars(
-                pool, ticker, bars, delisted=False, source=upsert_source,
+            promoted = await stage_then_promote_bars(
+                pool, ticker, bars,
+                staging_run_id=manifest_id,
+                delisted=False, source=upsert_source,
             )
-            rows_loaded += inserted
+            rows_loaded += promoted
 
         # Phase 3a — SUCCESS
         await mark_loaded(pool, manifest_id, actual_rows=rows_loaded)
@@ -248,6 +254,7 @@ async def archive_first_load_bars(
             archived_rows=archive_result.rows_written,
             rows_loaded=rows_loaded,
             distinct_tickers=len(by_ticker),
+            staging_run_id=str(manifest_id),
         )
         return rows_loaded, str(archive_path)
     except Exception as exc:
