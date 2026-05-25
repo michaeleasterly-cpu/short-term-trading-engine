@@ -1,35 +1,39 @@
-"""Archive-first ETL orchestrator for prices_daily ingestion.
+"""Archive-first ETL orchestrators for ingestion handlers.
 
-The 2026-05-25 P1 trust-audit remediation: every production write to
-``platform.prices_daily`` must be preceded by an immutable archive
-write + manifest row. This module enforces that contract for the
-daily_bars stage.
+The 2026-05-25 P1 + PR-3 trust-audit remediation: every production
+write to a ``platform.*`` feed table must be preceded by an immutable
+archive write + manifest row.
 
-Phases (per stage run):
+Two surfaces:
 
-    1. ARCHIVE — caller has the in-memory ``archive_rows`` list (one
-       dict per bar). ``archive_first_load_bars`` writes the gzipped
-       CSV to ``data/<source>_archive/<source>_<stamp>.csv.gz``,
-       computes the SHA-256 of the on-disk file, INSERTs an
-       ``ingest_manifest`` row with status='ARCHIVED'.
+- :func:`archive_first_load_bars` — prices_daily-specific orchestrator
+  (PR-2). Wraps the daily_bars fan-out's archive + manifest + upsert
+  contract end-to-end; per-feed knowledge baked in.
+- :func:`manifest_lifecycle` — generic async context manager (PR-3).
+  Phase 1 (archive write + manifest INSERT) on entry; Phase 3
+  (mark loaded / failed) on exit. The caller owns Phase 2 (the
+  per-feed read-archive + upsert). Used by the 3 sibling feeds
+  (corporate_actions, fundamentals_quarterly, earnings_events)
+  whose upsert call signatures differ enough that a single
+  orchestrator function would be over-fitting.
 
-    2. ETL — read the archive CSV back from disk (the FILE, not the
-       in-memory list — proves the substrate goes through archive),
-       group by ticker, call ``_upsert_bars`` per ticker. Track the
-       total rows inserted.
+Phases for both surfaces:
 
-    3. MARK — on success: UPDATE the manifest row to
-       status='LOADED' + actual_rows = total upserted. On any
-       exception: UPDATE to status='FAILED' + error summary, then
-       re-raise so the caller's exit-code contract holds.
+    1. ARCHIVE — write the gzipped CSV to disk, compute SHA-256,
+       INSERT an ``ingest_manifest`` row with status='archived'.
 
-A failed archive write (Phase 1 raises) means no production write
-happens at all — the manifest row is never created, the upsert
-loop never starts. A failed ETL (Phase 2 raises) means the
-manifest row stays as FAILED (Phase 3), the archive on disk is
-preserved (immutable), and the next ops run can either re-attempt
-the ETL from the archive (rebuild_from_archive) or re-pull the
-window (new manifest).
+    2. ETL — read the archive CSV BACK FROM DISK (the FILE, not
+       the in-memory list — archive-as-substrate invariant), do the
+       per-feed upsert.
+
+    3. MARK — on success: UPDATE manifest status='loaded' +
+       actual_rows. On exception: UPDATE status='failed' + error
+       summary; re-raise (mark_failed best-effort).
+
+A failed Phase 1 (write_archive or manifest INSERT raises) means
+no production write happens at all. A failed Phase 2 leaves the
+manifest at status='failed', archive preserved on disk, exception
+propagates.
 """
 
 from __future__ import annotations
@@ -38,9 +42,13 @@ import csv
 import gzip
 import io
 from collections import defaultdict
+from collections.abc import Callable
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
+from uuid import UUID  # noqa: F401 — forward-ref usage inside dataclass
 
 import structlog
 
@@ -259,6 +267,127 @@ async def archive_first_load_bars(
         raise
 
 
+@dataclass
+class _LifecycleCtx:
+    """Object yielded from :func:`manifest_lifecycle`.
+
+    Carries the on-disk archive path so the caller's Phase 2 reads
+    from there (the archive-as-substrate contract), plus the
+    manifest_id so a caller that wants to update notes mid-flight
+    can. ``actual_rows`` defaults to ``archived_row_count``; the
+    caller may overwrite it before exit to record what production
+    actually accepted. That value is what ``mark_loaded`` persists.
+    """
+    archive_path: Path
+    archived_row_count: int
+    manifest_id: UUID
+    actual_rows: int = 0
+
+
+@asynccontextmanager
+async def manifest_lifecycle(
+    pool: asyncpg.Pool,
+    *,
+    source: str,
+    provider: str,
+    archive_rows: list[dict],
+    fieldnames: list[str],
+    validator: Callable[[dict], bool] | None = None,
+    date_range_start: date | None = None,
+    date_range_end: date | None = None,
+    expected_rows: int | None = None,
+):
+    """Generic archive-first lifecycle for any feed.
+
+    Caller pre-fetches everything into ``archive_rows`` (no DB write).
+    On ``async with`` entry: archive lands on disk, manifest row
+    INSERTed at status='archived'. Inside the with block: caller
+    reads ``ctx.archive_path``, does per-feed upsert, sets
+    ``ctx.actual_rows``. On normal exit: manifest → 'loaded'. On
+    exception: manifest → 'failed', exception re-raises.
+
+    The caller MUST do production writes by reading the archive
+    file (``ctx.archive_path``), not the in-memory ``archive_rows``
+    they passed in. This is the archive-as-substrate invariant —
+    the prices_daily orchestrator has a dedicated test
+    (``test_etl_sees_archive_file_content_not_input_list``) pinning
+    this for the bars path; the sibling feeds rely on convention.
+    """
+    archive_result = write_archive(
+        source, archive_rows,
+        fieldnames=fieldnames,
+        validator=validator,
+    )
+    archive_path = archive_result.path
+    if not isinstance(archive_path, Path):
+        # S3-backend support is the R3 substrate follow-up; the
+        # archive-first invariant needs a local file we can hash.
+        raise NotImplementedError(
+            "manifest_lifecycle requires LocalFSBackend; "
+            f"got non-Path archive_path={archive_path!r}"
+        )
+
+    checksum = compute_sha256(archive_path)
+    manifest_id = await create_archived_row(
+        pool,
+        source=source,
+        provider=provider,
+        archive_path=str(archive_path),
+        archived_row_count=archive_result.rows_written,
+        checksum=checksum,
+        expected_rows=expected_rows,
+        date_range_start=(
+            datetime.combine(date_range_start, datetime.min.time())
+            if date_range_start else None
+        ),
+        date_range_end=(
+            datetime.combine(date_range_end, datetime.min.time())
+            if date_range_end else None
+        ),
+    )
+
+    ctx = _LifecycleCtx(
+        archive_path=archive_path,
+        archived_row_count=archive_result.rows_written,
+        manifest_id=manifest_id,
+        actual_rows=archive_result.rows_written,
+    )
+    try:
+        yield ctx
+        await mark_loaded(pool, manifest_id, actual_rows=ctx.actual_rows)
+        logger.info(
+            "ingestion.manifest_lifecycle.loaded",
+            source=source, provider=provider,
+            archive_path=str(archive_path),
+            archived_rows=archive_result.rows_written,
+            actual_rows=ctx.actual_rows,
+        )
+    except Exception as exc:
+        try:
+            await mark_failed(
+                pool, manifest_id,
+                error_summary=f"{type(exc).__name__}: {exc!s}",
+                actual_rows=ctx.actual_rows or None,
+            )
+        except Exception as mark_exc:  # noqa: BLE001
+            logger.exception(
+                "ingestion.manifest_lifecycle.mark_failed_error",
+                manifest_id=str(manifest_id),
+                mark_failed_error=str(mark_exc),
+            )
+        raise
+
+
+def read_archive_csv(archive_path: Path) -> list[dict[str, str]]:
+    """Public wrapper around the internal CSV-archive reader. The
+    sibling-feed orchestrators that build on ``manifest_lifecycle``
+    use this to materialise Phase 2's input from the on-disk archive
+    file — the archive-as-substrate invariant."""
+    return _read_archive_csv(archive_path)
+
+
 __all__ = [
     "archive_first_load_bars",
+    "manifest_lifecycle",
+    "read_archive_csv",
 ]

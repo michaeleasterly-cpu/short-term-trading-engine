@@ -127,21 +127,32 @@ def _read(rec: Any, field: str, accessor: str) -> Any:
 
 def contract_drift() -> tuple[set[str], set[str]]:
     """(missing, extra) vs the CSV-first feed set, re-derived from the
-    write_archive call sites. Both empty == in lockstep.
+    write_archive + manifest_lifecycle call sites. Both empty == in lockstep.
 
-    ``archive_etl.py`` carries the per-source write_archive literals
-    for the P1 archive-first orchestrator (2026-05-25): handlers.py
-    delegates to ``archive_first_load_bars`` which dispatches to a
-    per-source literal call so this regex still finds the feed name.
+    Two call patterns are recognised (both 2026-05-25 trust-audit work):
+
+    1. ``write_archive("feed", ...)`` — direct call site (legacy
+       handlers + the per-source literal dispatch in
+       ``archive_etl.archive_first_load_bars`` for prices_daily).
+    2. ``manifest_lifecycle(... source="feed", ...)`` — the generic
+       PR-3 lifecycle context manager used by the sibling feeds
+       (corp_actions / fundamentals / earnings). The ``source=``
+       kwarg is the canonical feed name the manifest row records.
     """
-    pat = re.compile(r"write_archive\(\s*\n?\s*\"([a-z0-9_]+)\"")
+    pat_write = re.compile(r"write_archive\(\s*\n?\s*\"([a-z0-9_]+)\"")
+    pat_lifecycle = re.compile(
+        r"manifest_lifecycle\b[^)]*?\bsource\s*=\s*\"([a-z0-9_]+)\"",
+        re.DOTALL,
+    )
     feeds: set[str] = set()
     for rel in (
         "tpcore/ingestion/handlers.py",
         "tpcore/ingestion/archive_etl.py",
         "scripts/ops.py",
     ):
-        feeds.update(pat.findall(pathlib.Path(rel).read_text()))
+        text = pathlib.Path(rel).read_text()
+        feeds.update(pat_write.findall(text))
+        feeds.update(pat_lifecycle.findall(text))
     have = set(ADAPTER_CONTRACTS)
     return feeds - have, have - feeds
 

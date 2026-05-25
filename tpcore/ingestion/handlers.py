@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import structlog
@@ -63,61 +64,196 @@ async def handle_data_validation(pool: asyncpg.Pool, config: dict[str, Any]) -> 
     return None
 
 
+_FUNDAMENTALS_FETCH_INTER_SYMBOL_SLEEP_SEC = 1.0
+
+
+def _payload_to_archive_rows(symbol: str, payload: dict) -> list[dict]:
+    """Flatten one FMP payload to one CSV-archive row per period.
+
+    The payload's shape is ``{latest_period_fields..., "history": [...]}``.
+    Each period dict (latest + every history entry) becomes one row.
+    Periods missing ``filing_date`` are dropped (matches the legacy
+    ``_upsert_payload`` gate). Numeric fields are str-encoded; the
+    ETL side parses back as needed by ``_upsert_payload``."""
+    periods: list[dict] = [{k: v for k, v in payload.items() if k != "history"}]
+    for h in payload.get("history") or []:
+        periods.append(h)
+    out: list[dict] = []
+    for p in periods:
+        if p.get("filing_date") is None:
+            continue
+        out.append({
+            "ticker": symbol,
+            "filing_date": str(p.get("filing_date") or ""),
+            "period_end_date": str(p.get("period_end_date") or ""),
+            "period_label": str(p.get("period") or ""),
+            "net_income": "" if p.get("net_income") is None else str(p.get("net_income")),
+            "fcf": "" if p.get("fcf") is None else str(p.get("fcf")),
+            "operating_cash_flow": "" if p.get("operating_cash_flow") is None else str(p.get("operating_cash_flow")),
+            "capex": "" if p.get("capex") is None else str(p.get("capex")),
+            "revenue": "" if p.get("revenue") is None else str(p.get("revenue")),
+            "total_assets": "" if p.get("total_assets") is None else str(p.get("total_assets")),
+            "total_liabilities": "" if p.get("total_liabilities") is None else str(p.get("total_liabilities")),
+            "current_assets": "" if p.get("current_assets") is None else str(p.get("current_assets")),
+            "current_liabilities": "" if p.get("current_liabilities") is None else str(p.get("current_liabilities")),
+            "receivables": "" if p.get("receivables") is None else str(p.get("receivables")),
+            "cash_and_equivalents": "" if p.get("cash_and_equivalents") is None else str(p.get("cash_and_equivalents")),
+            "shares_outstanding": "" if p.get("shares_outstanding") is None else str(p.get("shares_outstanding")),
+            # pb + de are derived columns on the DB side, not in the
+            # FMP payload — they default to empty in the archive so the
+            # CSV-header parity test stays green; the upsert path
+            # doesn't read them either.
+            "pb": "",
+            "de": "",
+            "recorded_at": "",
+        })
+    return out
+
+
+def _archive_rows_to_payload(rows: list[dict]) -> dict:
+    """Reconstruct a payload-shaped dict for one symbol from its CSV
+    rows. The first row becomes the latest period; remaining rows
+    become ``history``. Inverse of :func:`_payload_to_archive_rows`
+    (lossy on the derived pb/de columns which the upsert doesn't read).
+    """
+    from datetime import date as _date_t
+    from decimal import Decimal as _Decimal
+
+    def _to_period(r: dict) -> dict:
+        def _opt(k: str) -> object:
+            v = r.get(k)
+            return None if v in (None, "") else v
+
+        def _opt_decimal(k: str) -> object:
+            v = r.get(k)
+            return None if v in (None, "") else _Decimal(v)
+
+        def _opt_date(k: str) -> object:
+            v = r.get(k)
+            return None if v in (None, "") else _date_t.fromisoformat(v)
+
+        return {
+            "filing_date": _opt_date("filing_date"),
+            "period_end_date": _opt_date("period_end_date"),
+            "period": _opt("period_label"),
+            "net_income": _opt_decimal("net_income"),
+            "fcf": _opt_decimal("fcf"),
+            "operating_cash_flow": _opt_decimal("operating_cash_flow"),
+            "capex": _opt_decimal("capex"),
+            "revenue": _opt_decimal("revenue"),
+            "total_assets": _opt_decimal("total_assets"),
+            "total_liabilities": _opt_decimal("total_liabilities"),
+            "current_assets": _opt_decimal("current_assets"),
+            "current_liabilities": _opt_decimal("current_liabilities"),
+            "receivables": _opt_decimal("receivables"),
+            "cash_and_equivalents": _opt_decimal("cash_and_equivalents"),
+            "shares_outstanding": _opt_decimal("shares_outstanding"),
+        }
+
+    if not rows:
+        return {}
+    latest = _to_period(rows[0])
+    history = [_to_period(r) for r in rows[1:]]
+    return {**latest, "history": history}
+
+
 async def handle_fundamentals_refresh(
     pool: asyncpg.Pool, config: dict[str, Any]
 ) -> int | None:
     """Refresh FMP fundamentals for the active universe.
 
-    ``config`` is currently unused — the cache reads the active universe
-    from ``platform.prices_daily`` directly. Kept as the seed payload's
-    ``{"universe": "active"}`` documents intent and leaves room for a
-    future "ticker list override" knob without a schema change.
-    """
-    from tpcore.fmp import FMPFundamentalsAdapter
-    from tpcore.fundamentals.cache import FundamentalsCache
+    Archive-first contract (P1-sibling trust-audit 2026-05-25): the
+    legacy flow called ``cache.backfill_all()`` (per-ticker fetch +
+    DB upsert interleaved), then post-hoc dumped the DB rows to the
+    archive — violating the archive-as-substrate invariant. New
+    flow: Phase 0 pre-fetches every symbol's payload into memory,
+    Phase 1 writes archive + manifest='archived', Phase 2 reads the
+    on-disk archive and per-symbol upserts via ``cache.upsert_payload``,
+    Phase 3 marks the manifest loaded/failed.
 
-    run_started = datetime.now(UTC)
+    ``config`` is currently unused — the cache reads the active
+    universe from ``platform.prices_daily`` directly. The seed
+    payload's ``{"universe": "active"}`` documents intent.
+    """
+    import asyncio
+
+    from tpcore.fmp import FMPFundamentalsAdapter
+    from tpcore.fmp.fundamentals_adapter import DataProviderOutage
+    from tpcore.fundamentals.cache import FundamentalsCache
+    from tpcore.ingestion.archive_etl import manifest_lifecycle, read_archive_csv
+
+    today = datetime.now(UTC).date()
+    archive_rows: list[dict] = []
+    no_data: list[tuple[str, str]] = []
+    failures: list[tuple[str, str]] = []
+    skipped = 0
+
     async with FMPFundamentalsAdapter() as adapter:
         cache = FundamentalsCache(pool, adapter=adapter)
-        rows, no_data, failures, skipped = await cache.backfill_all()
 
-    # CSV-first archive — pull rows touched in this run from the DB
-    # and write them out. Schema mirrors fundamentals_quarterly so the
-    # archive can fully reconstruct DB state if FMP revokes history.
-    async with pool.acquire() as conn:
-        new_rows = await conn.fetch(
-            """
-            SELECT ticker, filing_date, period_end_date, period_label,
-                   net_income, fcf, operating_cash_flow, capex, revenue,
-                   total_assets, total_liabilities, current_assets,
-                   current_liabilities, receivables, cash_and_equivalents,
-                   shares_outstanding, pb, de, recorded_at
-            FROM platform.fundamentals_quarterly
-            WHERE recorded_at >= $1
-            ORDER BY ticker, period_end_date
-            """,
-            run_started,
-        )
-    archive_rows = [
-        {k: str(v) if v is not None else "" for k, v in dict(r).items()}
-        for r in new_rows
-    ]
-    # CSV-first audit archive (incremental — new rows this run only;
-    # shrinkage detection is reserved for full-snapshot sources).
-    from tpcore.ingestion.csv_archive import write_archive
-    archive = write_archive(
-        "fmp_fundamentals", archive_rows,
+        # Phase 0: pre-fetch every active-universe ticker's payload
+        # into memory. No DB writes. Respects the same skip-fresh +
+        # rate-limit pacing the legacy backfill_all did.
+        tickers = await cache.list_active_tickers()
+        already_fresh = await cache.tickers_refreshed_within(tickers, hours=24.0)
+        for i, symbol in enumerate(tickers, start=1):
+            if symbol.upper() in already_fresh:
+                skipped += 1
+                continue
+            try:
+                payload = await cache.fetch_payload(symbol)
+            except DataProviderOutage as exc:
+                msg = str(exc)
+                bucket = (
+                    no_data
+                    if ("no usable fundamentals" in msg or "returned 402" in msg)
+                    else failures
+                )
+                bucket.append((symbol, msg[:160]))
+                await asyncio.sleep(_FUNDAMENTALS_FETCH_INTER_SYMBOL_SLEEP_SEC)
+                continue
+            archive_rows.extend(_payload_to_archive_rows(symbol, payload))
+            logger.debug(
+                "fundamentals.fetch_payload",
+                symbol=symbol, done=i, total=len(tickers),
+            )
+            await asyncio.sleep(_FUNDAMENTALS_FETCH_INTER_SYMBOL_SLEEP_SEC)
+
+    # Phases 1–3 under the canonical lifecycle.
+    total_rows = 0
+    archive_path_str: str | None = None
+    async with manifest_lifecycle(
+        pool,
+        source="fmp_fundamentals",
+        provider="fmp",
+        archive_rows=archive_rows,
         fieldnames=list(FUNDAMENTALS_ARCHIVE_FIELDS),
         validator=lambda r: bool(r.get("ticker")) and bool(r.get("period_end_date")),
-    )
+        date_range_end=today,
+    ) as ctx:
+        archive_path_str = str(ctx.archive_path)
+        csv_rows = read_archive_csv(ctx.archive_path)
+        by_ticker: dict[str, list[dict]] = {}
+        for r in csv_rows:
+            by_ticker.setdefault(r["ticker"], []).append(r)
+        # Reuse the existing _upsert_payload contract: reconstruct
+        # payload-shaped dicts per symbol from the archive rows.
+        async with FMPFundamentalsAdapter() as upsert_adapter:
+            upsert_cache = FundamentalsCache(pool, adapter=upsert_adapter)
+            for symbol, rows in by_ticker.items():
+                payload = _archive_rows_to_payload(rows)
+                if not payload:
+                    continue
+                total_rows += await upsert_cache.upsert_payload(symbol, payload)
+        ctx.actual_rows = total_rows
 
     logger.info(
         "ingestion.handler.fundamentals_done",
-        rows=rows,
+        rows=total_rows,
         no_data=len(no_data),
         failures=len(failures),
         skipped_fresh=skipped,
-        csv_archive=str(archive.path),
+        csv_archive=archive_path_str,
     )
     if failures:
         # ETF skips (no_data) are expected and silent. Real FMP outages
@@ -126,7 +262,7 @@ async def handle_fundamentals_refresh(
             f"fundamentals_refresh: {len(failures)} real failure(s); "
             f"first={failures[0][0]}: {failures[0][1]}"
         )
-    return rows
+    return total_rows
 
 
 _CORPORATE_ACTIONS_50_NAME_UNIVERSE: tuple[str, ...] = (
@@ -144,10 +280,57 @@ _CORPORATE_ACTIONS_50_NAME_UNIVERSE: tuple[str, ...] = (
 ``config.universe = "all_active"`` overrides to the full prices_daily set."""
 
 
+_CORPORATE_ACTIONS_FIELDS: list[str] = [
+    "ticker", "action_date", "action_type", "ratio", "raw_data",
+]
+
+
+def _action_to_archive_row(action: dict) -> dict:
+    """Serialize a normalized corporate-action dict for the CSV archive.
+
+    The normalized shape (from ``fetch_corporate_actions._normalize_*``)
+    is ``{ticker, action_date(date), action_type, ratio(Decimal),
+    raw_data(dict)}``. We round-trip it through CSV by encoding
+    ``action_date`` as ISO, ``ratio`` as a stringified Decimal, and
+    ``raw_data`` as a full JSON blob (NO truncation — the pre-P1
+    handler clipped to 500 chars, which broke archive-as-substrate
+    round-tripping for actions whose raw payload exceeded that)."""
+    return {
+        "ticker": action["ticker"],
+        "action_date": action["action_date"].isoformat(),
+        "action_type": action["action_type"],
+        "ratio": str(action["ratio"]),
+        "raw_data": json.dumps(action["raw_data"], default=str),
+    }
+
+
+def _archive_row_to_action(row: dict[str, str]) -> dict:
+    """Parse a CSV-archive row back into the upsert-shaped action
+    dict. Inverse of :func:`_action_to_archive_row`."""
+    from datetime import date as _date_t
+    from decimal import Decimal
+    return {
+        "ticker": row["ticker"],
+        "action_date": _date_t.fromisoformat(row["action_date"]),
+        "action_type": row["action_type"],
+        "ratio": Decimal(row["ratio"]),
+        "raw_data": json.loads(row.get("raw_data") or "{}"),
+    }
+
+
 async def handle_corporate_actions(
     pool: asyncpg.Pool, config: dict[str, Any]
 ) -> int | None:
     """Pull Alpaca corporate actions and re-apply splits to ``platform.prices_daily``.
+
+    Archive-first contract (P1 trust-audit 2026-05-25): all action
+    fetches accumulate into an in-memory list. The archive lands on
+    disk + a ``platform.ingest_manifest`` row is INSERTed with
+    status='archived' BEFORE any production write. ETL re-parses
+    the on-disk archive and calls ``upsert_corporate_actions``;
+    manifest moves to 'loaded' on success / 'failed' on exception.
+    The legacy 500-char truncation on ``raw_data`` is dropped —
+    archive-as-substrate requires lossless round-tripping.
 
     ``config`` keys:
         * ``universe``:
@@ -167,6 +350,7 @@ async def handle_corporate_actions(
         fetch_corporate_actions,
         upsert_corporate_actions,
     )
+    from tpcore.ingestion.archive_etl import manifest_lifecycle, read_archive_csv
 
     universe_cfg = config.get("universe", "default")
     if universe_cfg == "all_active":
@@ -192,7 +376,6 @@ async def handle_corporate_actions(
         ingest_start = date_t.fromisoformat(ingest_start)
 
     headers = _alpaca_headers()
-    total_actions = 0
     archive_rows: list[dict] = []
     async with httpx.AsyncClient(
         headers=headers,
@@ -208,48 +391,66 @@ async def handle_corporate_actions(
                 end=today,
                 types=list(DEFAULT_TYPES),
             )
-            if actions:
-                for a in actions:
-                    # actions is typically a list of dicts shaped by
-                    # fetch_corporate_actions; archive what we have.
-                    archive_rows.append({
-                        "ticker": a.get("symbol") or a.get("ticker") or "",
-                        "action_date": str(a.get("ex_date") or a.get("effective_date") or a.get("date") or ""),
-                        "action_type": a.get("type") or a.get("action_type") or "",
-                        "ratio": str(a.get("ratio") or a.get("split_ratio") or ""),
-                        "raw": json.dumps(a, default=str)[:500],
-                    })
-                await upsert_corporate_actions(pool, actions)
-            total_actions += len(actions)
+            for a in actions:
+                archive_rows.append(_action_to_archive_row(a))
 
-    # CSV-first archive.
+    # Archive-first lifecycle: Phase 1 (archive + manifest='archived')
+    # → Phase 2 (read archive + upsert) → Phase 3 (mark loaded/failed).
+    # A failed Phase 1 (archive write or manifest INSERT) blocks the
+    # production write entirely; a failed Phase 2 leaves manifest at
+    # 'failed' with the archive preserved on disk.
+    total_actions = 0
+    archive_path_str: str | None = None
+    async with manifest_lifecycle(
+        pool,
+        source="alpaca_corporate_actions",
+        provider="alpaca",
+        archive_rows=archive_rows,
+        fieldnames=_CORPORATE_ACTIONS_FIELDS,
+        validator=lambda r: bool(r.get("ticker")) and bool(r.get("action_type")),
+        date_range_start=ingest_start,
+        date_range_end=today,
+    ) as ctx:
+        archive_path_str = str(ctx.archive_path)
+        # Phase 2: read archive FROM DISK, reconstruct action dicts,
+        # call the canonical upsert. ETL must read the file (not the
+        # in-memory archive_rows the manifest was built from) — that's
+        # the archive-as-substrate invariant.
+        parsed_actions = [
+            _archive_row_to_action(r) for r in read_archive_csv(ctx.archive_path)
+        ]
+        total_actions = await upsert_corporate_actions(pool, parsed_actions)
+        ctx.actual_rows = total_actions
+
+    # Post-load: shrinkage detection + D2 metrics. These read the
+    # already-written archive — they're observational, not gating.
+    # Kept here (not inside manifest_lifecycle) so a shrinkage signal
+    # doesn't roll back a successful load; the gating remains the
+    # 100%-green-or-don't-trade selfheal contract.
     from tpcore.ingestion.csv_archive import (
         assert_not_shrunk,
         detect_shrinkage,
         log_shrinkage_warning,
-        write_archive,
     )
-    archive = write_archive(
-        "alpaca_corporate_actions", archive_rows,
-        fieldnames=["ticker", "action_date", "action_type", "ratio", "raw"],
-        validator=lambda r: bool(r.get("ticker")) and bool(r.get("action_type")),
+    archive_path_p = Path(archive_path_str) if archive_path_str else None
+    shrinkage = (
+        detect_shrinkage(
+            "alpaca_corporate_actions", total_actions, exclude_path=archive_path_p,
+        ) if archive_path_p else None
     )
-    shrinkage = detect_shrinkage("alpaca_corporate_actions", archive.rows_written, exclude_path=archive.path)
     if shrinkage is not None:
         log_shrinkage_warning(shrinkage)
         assert_not_shrunk(shrinkage)  # producer hard-stop on a short snapshot
 
     # D2 substrate: durable per-source metrics + rolling-median check
-    # in PARALLEL with the v1 single-prior detector. Emit
-    # ``SHRINKAGE_DETECTORS_DISAGREE`` when the two reach different
-    # conclusions; v2 PR retires the v1 detector after soak.
+    # in PARALLEL with the v1 single-prior detector.
     from tpcore.ingestion.d2_metrics import (
         check_shrinkage_vs_rolling_median,
         detectors_disagree,
         record_ingestion_metrics,
     )
     v2_verdict = await check_shrinkage_vs_rolling_median(
-        pool, "alpaca_corporate_actions", archive.rows_written,
+        pool, "alpaca_corporate_actions", total_actions,
     )
     if shrinkage is not None and detectors_disagree(
         shrinkage.over_threshold, v2_verdict,
@@ -265,7 +466,7 @@ async def handle_corporate_actions(
             v2_samples_used=v2_verdict.samples_used,
         )
     await record_ingestion_metrics(
-        pool, "alpaca_corporate_actions", archive.rows_written,
+        pool, "alpaca_corporate_actions", total_actions,
     )
 
     split_summary = await apply_all_splits(pool, only_tickers=apply_filter)
@@ -276,7 +477,7 @@ async def handle_corporate_actions(
         actions_ingested=total_actions,
         splits_applied=len(split_summary["applied"]),
         splits_skipped=len(split_summary["skipped"]),
-        csv_archive=str(archive.path),
+        csv_archive=archive_path_str,
         shrinkage_over_threshold=shrinkage.over_threshold if shrinkage else False,
     )
     return total_actions
