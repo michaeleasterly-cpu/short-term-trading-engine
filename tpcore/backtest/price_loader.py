@@ -10,6 +10,11 @@ lookback windows) and is preserved here as the explicit, required
 
 Layering: ``tpcore`` only, zero engine imports (engine -> tpcore one-way,
 enforced by ``tpcore/scripts/check_imports.py``).
+
+PR-13 (2026-05-25): edge adapter — callers still pass a ticker list and
+get a ticker-keyed dict back, but internally dispatches to
+classification_id and reads via PricesRepo. The post-v2.2
+prices_daily.classification_id is the canonical join column.
 """
 
 from __future__ import annotations
@@ -19,6 +24,9 @@ from datetime import date
 from typing import TYPE_CHECKING
 
 import pandas as pd
+
+from tpcore.data.repositories import PricesRepo
+from tpcore.identity.dispatcher import IdentityDispatcher
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     import asyncpg
@@ -37,27 +45,42 @@ async def load_prices(
     Tickers with fewer than ``min_bars`` rows are dropped (the per-engine
     indicator-warmup floor — the sole intentional divergence, now an
     explicit caller-supplied parameter).
+
+    Edge adapter: ticker list in, ticker-keyed dict[ticker, pd.DataFrame]
+    out. Internally dispatches ticker → classification_id (TTL+LRU
+    cached) and fetches via PricesRepo.get_window_batch by cid. Tickers
+    absent from ticker_history resolve to None and are silently dropped
+    (preserves the prior "ticker missing from DB → absent from output"
+    behavior).
     """
-    sql = """
-        SELECT ticker, date, open, high, low, close, volume
-        FROM platform.prices_daily
-        WHERE ticker = ANY($1) AND date BETWEEN $2 AND $3
-        ORDER BY ticker, date
-    """
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(sql, tickers, start, end)
+    dispatcher = IdentityDispatcher(pool)
+    repo = PricesRepo(pool)
+
+    cid_to_ticker: dict[str, str] = {}
+    for t in tickers:
+        cid = await dispatcher.ticker_to_classification_id(t)
+        if cid is not None:
+            cid_to_ticker[cid] = t
+
+    if not cid_to_ticker:
+        return {}
+
+    bars_by_cid = await repo.get_window_batch(list(cid_to_ticker), start, end)
     by_ticker: dict[str, list[dict]] = defaultdict(list)
-    for r in rows:
-        by_ticker[r["ticker"]].append(
-            {
-                "date": r["date"],
-                "open": float(r["open"]),
-                "high": float(r["high"]),
-                "low": float(r["low"]),
-                "close": float(r["close"]),
-                "volume": int(r["volume"]),
-            }
-        )
+    for cid, bars in bars_by_cid.items():
+        ticker = cid_to_ticker[cid]
+        for b in sorted(bars, key=lambda x: x.date):
+            by_ticker[ticker].append(
+                {
+                    "date": b.date,
+                    "open": float(b.open),
+                    "high": float(b.high),
+                    "low": float(b.low),
+                    "close": float(b.close),
+                    "volume": int(b.volume),
+                }
+            )
+
     out: dict[str, pd.DataFrame] = {}
     for ticker, ticker_rows in by_ticker.items():
         if len(ticker_rows) < min_bars:
