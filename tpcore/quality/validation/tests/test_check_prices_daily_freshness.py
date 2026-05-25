@@ -59,17 +59,30 @@ class _Conn:
                 out.append({"ticker": t, "last_bar": last_bar})
             return out
         # Coverage-collapse probe (rows ordered date DESC, latest first).
-        # The query MUST filter retired tickers via ticker_classifications
-        # (operator 2026-05-25: retired tickers must not count against
-        # active-coverage denominator).
+        # The query MUST scope the denominator to the same strategy-
+        # eligible universe as prices_daily_completeness (operator policy
+        # 2026-05-25): tier ≤ TRADEABLE_TIER_MAX, asset_class='stock',
+        # active-on-date. Each clause guards a specific class of silent
+        # regression.
         if "count(distinct pd.ticker)" in sql_lower:
             assert "ticker_classifications" in sql_lower, (
-                "coverage-collapse query must JOIN/EXISTS-filter "
-                "platform.ticker_classifications to exclude retired tickers"
+                "coverage-collapse query must filter via "
+                "platform.ticker_classifications"
             )
             assert "lifetime_end" in sql_lower, (
                 "coverage-collapse query must filter on lifetime_end "
                 "(IS NULL OR > pd.date) to keep active universe only"
+            )
+            assert "asset_class" in sql_lower and "'stock'" in sql_lower, (
+                "coverage-collapse query must filter asset_class='stock' "
+                "to exclude ETFs/SPACs/funds from the equities denominator"
+            )
+            assert "liquidity_tiers" in sql_lower, (
+                "coverage-collapse query must JOIN liquidity_tiers"
+            )
+            assert "lt.tier" in sql_lower, (
+                "coverage-collapse query must filter on lt.tier "
+                "(≤ TRADEABLE_TIER_MAX) to match the engine universe"
             )
             return self._coverage_rows
         raise AssertionError(f"unexpected fetch SQL: {sql}")

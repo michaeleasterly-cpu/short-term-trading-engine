@@ -40,6 +40,9 @@ from typing import TYPE_CHECKING, Any
 import structlog
 
 from tpcore.feeds import freshness_max_age_days
+from tpcore.quality.validation.checks.prices_daily_completeness import (
+    TRADEABLE_TIER_MAX,
+)
 from tpcore.quality.validation.models import CheckResult, FailureDetail
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -185,32 +188,45 @@ async def check_prices_daily_freshness(
     # MAX(date) is current but the ingest only covered a fraction of
     # the universe.
     #
-    # Active-universe-aware denominator (operator catch 2026-05-25):
-    # a ticker whose classification has `lifetime_end <= pd.date` is
-    # RETIRED for that date and must NOT count against coverage. The
-    # 2026-05-22 incident exposed this: 4 tickers retired on 2026-05-18
-    # still had bars on 2026-05-21 (provider serves zombie post-delist
-    # bars), pushing them into the "present prior, absent target" gap
-    # even though they shouldn't trade going forward. The EXISTS clause
-    # admits a ticker if ANY classification was active (lifetime_end IS
-    # NULL OR > date) — supports the ticker-reuse SCD-2 semantics where
-    # one ticker string may map to multiple classifications over time.
+    # Strategy-eligible denominator (operator policy 2026-05-25): the
+    # denominator MUST equal the universe the engines actually trade,
+    # not the firehose. Same predicate as the zero-tolerance
+    # `prices_daily_completeness` gate:
+    #   1. `tc.asset_class = 'stock'` — excludes ETFs, SPACs, funds.
+    #      (Sentinel's defensive-ETF basket is covered by the
+    #      CRITICAL_TICKERS per-ticker check above, not this gate.)
+    #   2. `lt.tier <= TRADEABLE_TIER_MAX` — excludes thin-liquidity
+    #      names below the engine universe.
+    #   3. `tc.lifetime_end IS NULL OR > pd.date` — excludes retired
+    #      tickers (zombie post-delist bars from the provider). The
+    #      EXISTS shape supports ticker-reuse SCD-2 semantics where
+    #      one ticker string may map to multiple classifications over
+    #      time; admits a row if ANY classification was active on
+    #      pd.date.
+    # Aligning with `prices_daily_completeness`'s universe means the
+    # coverage tripwire and the per-ticker invariant agree on what
+    # counts — no class of disagreement where one passes and the other
+    # silently fails.
     async with pool.acquire() as conn:
         cov_rows = await conn.fetch(
             """
             SELECT pd.date, COUNT(DISTINCT pd.ticker) AS n
             FROM platform.prices_daily pd
+            JOIN platform.liquidity_tiers lt ON lt.ticker = pd.ticker
             WHERE pd.delisted = false
               AND pd.date >= CURRENT_DATE - INTERVAL '40 days'
+              AND lt.tier <= $1
               AND EXISTS (
                   SELECT 1 FROM platform.ticker_classifications tc
                   WHERE tc.ticker = pd.ticker
+                    AND tc.asset_class = 'stock'
                     AND (tc.lifetime_end IS NULL OR tc.lifetime_end > pd.date)
               )
             GROUP BY pd.date
             ORDER BY pd.date DESC
-            LIMIT $1
+            LIMIT $2
             """,
+            TRADEABLE_TIER_MAX,
             COVERAGE_TRAILING_SESSIONS + 1,
         )
     if len(cov_rows) >= 5:
