@@ -295,10 +295,10 @@ def test_engine_profile_has_data_dependencies_field():
 
 def test_data_dependencies_byte_equivalent_to_pre_migration_engine_tables():
     """The migration is byte-equivalent (spec §3.2 / §4.1) AS CORRECTED
-    BY THE 2026-05-20 AUDIT. For every engine that pre-migration had an
-    ENGINE_TABLES row, the same frozenset is present on
-    EngineProfile.data_dependencies — modulo two accuracy corrections
-    applied 2026-05-21 (the post-PR-#171 drift caught by the audit at
+    BY THE 2026-05-20 AUDIT — plus the 2026-05-25 engine-abstraction
+    accuracy sweep (3 ECRs under docs/superpowers/ecrs/2026-05-25/).
+
+    Corrections applied 2026-05-21 (post-PR-#171 drift audit at
     docs/superpowers/audits/2026-05-20-engine-data-dependencies-
     accuracy.md):
 
@@ -309,19 +309,32 @@ def test_data_dependencies_byte_equivalent_to_pre_migration_engine_tables():
         PR #178; reads `platform.earnings_events` unconditionally per
         `backtest.py:292`).
 
-    Both corrections were applied via the canonical ECR path (no hand-
-    edit of _PROFILE), so the pinned literal here reflects the
-    corrected SoT — a refactor that re-drifted either back to the
-    pre-fix value would red this test (the audit's documented
-    invariant).
+    Corrections applied 2026-05-25 (engine-abstraction stack, PR-15):
+
+      - catalyst: sec_insider_transactions → insider_transactions
+        (v2.2 phase 1 rename; PR-7 migrated the engine code).
+      - momentum: + v_universe (PR-11 routes _load_universe_t12 through
+        UniverseRepo which queries platform.v_universe).
+      - sentinel: macro_indicators → macro_data (Task #18 P7 dropped
+        macro_indicators; PR-5 migrated sentinel onto MacroRepo against
+        macro_data).
+
+    All five corrections were applied via the canonical ECR path (no
+    hand-edit of _PROFILE), so the pinned literal here reflects the
+    corrected SoT — a refactor that re-drifted any of them would red
+    this test (the audit's documented invariant).
     """
     expected = {
         "reversion": frozenset({"prices_daily", "fundamentals_quarterly"}),
         "vector": frozenset({"prices_daily", "fundamentals_quarterly", "earnings_events"}),
-        "momentum": frozenset({"prices_daily", "liquidity_tiers", "earnings_events"}),
-        "sentinel": frozenset({"prices_daily", "macro_indicators"}),
+        "momentum": frozenset(
+            {"prices_daily", "liquidity_tiers", "earnings_events", "v_universe"}
+        ),
+        "sentinel": frozenset({"prices_daily", "macro_data"}),
         "canary": frozenset({"prices_daily"}),
-        "catalyst": frozenset({"prices_daily", "sec_insider_transactions", "earnings_events"}),
+        "catalyst": frozenset(
+            {"prices_daily", "insider_transactions", "earnings_events"}
+        ),
         "allocator": frozenset({"prices_daily"}),
     }
     for name, deps in expected.items():
