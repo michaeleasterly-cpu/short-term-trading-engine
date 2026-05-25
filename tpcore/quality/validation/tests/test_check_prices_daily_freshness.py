@@ -204,5 +204,11 @@ def test_universe_max_age_days_pinned() -> None:
 
 
 def test_coverage_collapse_pct_pinned() -> None:
-    assert COVERAGE_COLLAPSE_PCT == 0.30
+    # Tightened 2026-05-25: 0.30 (70% floor) → 0.02 (98% floor) to align
+    # with the operator's standing "100% data or don't trade" rule. The
+    # earlier 0.30 was a coarse early-warning tripwire that tolerated a
+    # 30% gap; 0.02 still catches any catastrophic collapse but no
+    # longer hides large-but-not-catastrophic ingest failures. The per-
+    # ticker 100% invariant remains enforced by prices_daily_completeness.
+    assert COVERAGE_COLLAPSE_PCT == 0.02
     assert COVERAGE_TRAILING_SESSIONS == 20

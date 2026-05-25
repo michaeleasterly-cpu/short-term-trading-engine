@@ -88,7 +88,16 @@ UNIVERSE_STALE_PCT_MAX = 0.02  # 2% of the active universe
 # the ingest is only covering a fraction of the universe even though
 # "today" looks fresh.
 COVERAGE_TRAILING_SESSIONS = 20
-COVERAGE_COLLAPSE_PCT = 0.30   # >30% below trailing avg ticker-count = collapse
+# Tightened 0.30 → 0.02 on 2026-05-25 (operator: "I keep saying 100% for
+# the database... who says 70%?"). The earlier 0.30 (70% floor) was set
+# 2026-05-15 to catch the catastrophic 91% collapse incident — but the
+# threshold itself violated the "100% data or don't trade" rule: 70.01%
+# coverage would PASS this gate while still missing ~2,300 tickers.
+# 0.02 (98% floor) preserves the early-warning purpose (any catastrophic
+# collapse still fails instantly) without tolerating large gaps. The
+# actual per-ticker 100% invariant remains enforced by
+# `prices_daily_completeness`; this gate is the coarse tripwire below it.
+COVERAGE_COLLAPSE_PCT = 0.02   # >2% below trailing avg ticker-count = collapse
 
 
 _CRITICAL_SQL = """
