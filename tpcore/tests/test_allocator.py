@@ -312,6 +312,10 @@ async def test_load_histories_uses_aar_reader_and_buckets_by_session() -> None:
             "engine": "sigma",
             "trade_id": f"T{i}",
             "ticker": "X",
+            # PR-17: aar_events.classification_id is always projected
+            # by the reader's SQL; test fakes must include it (may be
+            # None — the column is nullable).
+            "classification_id": None,
             "aar_data": {
                 "pnl_net": str(p),
                 "exit_ts": (base + timedelta(days=offset)).isoformat(),
