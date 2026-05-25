@@ -4,6 +4,16 @@ Cross-cutting personal action items that don't fit existing docs. Operational
 build queues belong in `docs/DATABASE_AND_DATAFLOW.md §5 Implementation Queue`
 or `docs/MASTER_PLAN.md §9 Build Order`.
 
+## ✅ PUBLIC REPO — recurring secret-audit gate (2026-05-21) — CLOSED 2026-05-25
+
+**Status 2026-05-25 — DONE.** `gitleaks v8.30.1` installed in BOTH:
+- pre-commit hook (`.pre-commit-config.yaml`, local block before push)
+- CI sentinel (`.github/workflows/secret-scan.yml`, every PR scan)
+
+Allowlist at `.gitleaks.toml` documents legitimate placeholders. Baseline audit at `docs/audits/2026-05-21-public-repo-secret-audit.md`. Every PR in this session (PRs #366–#378) confirmed `gitleaks` step green; the gate is live + recurring as designed.
+
+Historical scope below kept for context.
+
 ## ⚠ PUBLIC REPO — recurring secret-audit gate (2026-05-21)
 
 The repo went public 2026-05-21 (operator's GitHub Actions quota was exhausted; public repos get unlimited free Actions, hence the flip). Preliminary in-thread scan today found **zero committed secrets** in either current code or git history (no `sk-ant-*`, no `AKIA*`, no SSH/RSA private keys, no real Postgres credentials, no Alpaca/Finnhub/FMP/Tradier/Greeks-pro env-var assignments). `.env` is gitignored — only `.env.example` is tracked. The only PII-shaped strings are the public repo identifier itself (`michaeleasterly-cpu/short-term-trading-engine` in `railway.json` × 3 + one spec doc), which is necessarily public on a public repo.
@@ -496,6 +506,12 @@ archival record.
   delisting close per Shumway 1997; `survivorship_inclusive=False` caps
   credibility).
 
+## ✅ LOCAL-LLM-BRIDGE — required for all 4 LLM lanes (operator decision 2026-05-21) — CLOSED 2026-05-25
+
+**Status 2026-05-25 — MOOT.** The LLM-triage stack was REMOVED 2026-05-22 (operator directive "we aren't going to use the llm triage... take it out"); `ops/llm_data_triage`, `ops/engine_llm_triage`, `ops/llm_data_recovery` all deleted. The deterministic-cascade catalog is the COMPLETE self-heal layer with no LLM backstop. The remaining `ops/llm_triage_service.py` is **operator-local-only** by design (LAB-EMITTER / EDGE-FINDER / OUTCOME-MONITOR lanes — all run on the operator's Claude Max session, NEVER deployed). Sentinel test `tests/test_lane_service_no_anthropic.py` enforces. No bridge needed: the local-only architecture IS the bridge.
+
+Historical scope below kept for context.
+
 ## ⚠ LOCAL-LLM-BRIDGE — required for all 4 LLM lanes (operator decision 2026-05-21)
 
 **Operator binding 2026-05-21 post-gate-pilot:** **no Anthropic API credit
@@ -812,6 +828,12 @@ n_trials hazard and are explicitly rejected — single config only.
   `scripts/refresh_tradier_options.py` + `docs/runbooks/options-data-turn-on.md`.
   Tradier API verified working 2026-05-23 (`SPY` $745.64 + 29 expirations).
 
+## ✅ PRE-RAILWAY MIGRATION BLOCKER — archive substrate (LOCKED design 2026-05-18) — CLOSED 2026-05-25
+
+**Status 2026-05-25 — R3 substrate done.** `tpcore/ingestion/csv_archive_backends.py` ships the `ArchiveBackend` Protocol + `LocalFSBackend` + `S3Backend` (boto3-shaped, env-pluggable via `CSV_ARCHIVE_BACKEND=s3` + `CSV_ARCHIVE_S3_*` env vars). The `write_archive` call routes through `select_backend()`; unset env or `local` keeps the byte-identical local-FS behaviour. Documented in `docs/OPERATIONS.md` "Catastrophic recovery" table (rewritten in PR #373 P6). D2 substrate (Postgres rolling-median ingestion_metrics) is a separate follow-up but doesn't block the Railway cutover — the R3 substrate is the blocker, and it's done.
+
+Historical scope below kept for context.
+
 ## ⚠ PRE-RAILWAY MIGRATION BLOCKER — archive substrate (LOCKED design 2026-05-18)
 
 **Do NOT let a Railway cutover silently ship the broken substrate.**
@@ -898,6 +920,12 @@ operator decision: no] [effort: done]`
   single-process suite is GREEN (no production / CI-gate impact).
   Canonical fix = scope the eviction per-test (not at collection time).
   Do **NOT** fix opportunistically — it is its own task.
+
+## ✅ Corporate-history enrichment epic (2026-05-24, deferred) — CLOSED 2026-05-25
+
+**Status 2026-05-25 — orphan-resolution work shipped.** Live DB has **0** NULL `classification_id` rows in `platform.prices_daily` (was 79 distinct orphans + 15 residual nulls at TODO-write time). All named example orphans now resolved: BBBYQ → USSZ26S3VA5V13, SIVBQ → USSZ26FANX9D92, TWTR → USSZ26SPAT9780, SPLK → USSZ26SDF8D068, WORK → USSZ26SC068X48, DISCA → USSZ26SSP4AX19, FTCH → USSZ26S60Q4R86, MGI → USSZ26S7W2E222. The data session shipped the SEC EDGAR orphan-resolver phases (sec_orphan_resolve stages); `prices_daily.classification_id` is 100% non-null. The standing-down case below ("never, unless a future use case") was moot — the resolution path that did exist (deterministic per-ticker CIK + OpenFIGI + FMP fallback) closed the gap completely without needing the acquirer/successor graph the epic anticipated.
+
+Historical scope below kept for context.
 
 ## Corporate-history enrichment epic (2026-05-24, deferred)
 
