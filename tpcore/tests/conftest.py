@@ -21,6 +21,7 @@ session-scoped + cleans up to avoid mutating the live repo state.
 2026-05-22 expert recalibration: trades=10 → 40 (above new MIN_TRADE_COUNT=30
 floor); profit_factor=1.1 above raised MIN_PROFIT_FACTOR=1.05.
 """
+
 from __future__ import annotations
 
 import json
@@ -70,3 +71,23 @@ def _install_reversion_incumbent_dossier():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(_SYNTHETIC_INCUMBENT, indent=2))
     yield
+
+
+@pytest.fixture(autouse=True)
+def _reset_identity_dispatcher_cache():
+    """Reset the IdentityDispatcher class-level shared cache between tests.
+
+    PR-19 made the TTL+LRU cache shared across all dispatcher instances
+    holding the same pool (keyed on ``id(pool)``). Python recycles
+    ``id()`` values after objects are GC'd, so a previous test's
+    MagicMock pool can leave cache entries that a later test's fresh
+    MagicMock pool inherits at the same id. The reset runs before AND
+    after every test (autouse=True) so each test starts and ends with
+    an empty cache. Production code is unaffected — pools are
+    long-lived in daemons.
+    """
+    from tpcore.identity.dispatcher import IdentityDispatcher
+
+    IdentityDispatcher.reset_shared_caches()
+    yield
+    IdentityDispatcher.reset_shared_caches()
