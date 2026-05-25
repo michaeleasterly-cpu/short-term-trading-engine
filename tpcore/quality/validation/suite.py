@@ -42,6 +42,10 @@ from .checks.corporate_actions_completeness import (
 )
 from .checks.corporate_actions_integrity import CHECK_NAME as CA_INTEGRITY_NAME
 from .checks.corporate_actions_integrity import check_corporate_actions_integrity
+from .checks.corporate_events_integrity import (
+    CHECK_NAME as CORPORATE_EVENTS_INTEGRITY_NAME,
+)
+from .checks.corporate_events_integrity import check_corporate_events_integrity
 from .checks.delistings import CHECK_NAME as DELISTINGS_NAME
 from .checks.delistings import check_delistings
 from .checks.earnings_events_freshness import CHECK_NAME as EARNINGS_EVENTS_NAME
@@ -66,6 +70,14 @@ from .checks.insider_filings_freshness import (
 from .checks.insider_filings_freshness import check_insider_filings_freshness
 from .checks.insider_sentiment_freshness import CHECK_NAME as INSIDER_SENTIMENT_NAME
 from .checks.insider_sentiment_freshness import check_insider_sentiment_freshness
+from .checks.issuer_history_integrity import (
+    CHECK_NAME as ISSUER_HISTORY_INTEGRITY_NAME,
+)
+from .checks.issuer_history_integrity import check_issuer_history_integrity
+from .checks.issuer_securities_integrity import (
+    CHECK_NAME as ISSUER_SECURITIES_INTEGRITY_NAME,
+)
+from .checks.issuer_securities_integrity import check_issuer_securities_integrity
 from .checks.liquidity_tiers_completeness import (
     CHECK_NAME as LIQUIDITY_COMPLETENESS_NAME,
 )
@@ -112,6 +124,10 @@ from .checks.ticker_classifications_freshness import (
 from .checks.ticker_classifications_freshness import (
     check_ticker_classifications_coverage,
 )
+from .checks.ticker_history_integrity import (
+    CHECK_NAME as TICKER_HISTORY_INTEGRITY_NAME,
+)
+from .checks.ticker_history_integrity import check_ticker_history_integrity
 from .models import CheckResult, FailureDetail, SuiteResult
 from .sources.constituents import ConstituentSource, FixtureConstituentSource
 from .sources.delistings import DelistingsSource, FixtureDelistingsSource
@@ -151,6 +167,10 @@ KNOWN_CHECK_NAMES: tuple[str, ...] = (
     BORROW_RATES_NAME,
     AAII_SENTIMENT_NAME,
     INSIDER_FILINGS_FRESHNESS_NAME,
+    ISSUER_HISTORY_INTEGRITY_NAME,
+    ISSUER_SECURITIES_INTEGRITY_NAME,
+    CORPORATE_EVENTS_INTEGRITY_NAME,
+    TICKER_HISTORY_INTEGRITY_NAME,
 )
 
 
@@ -233,6 +253,22 @@ async def run_suite(
         PRICES_CLASSIFICATION_ID_NAME,
         check_prices_daily_classification_id_completeness, pool, None
     )
+    issuer_history_task = _safe_run(
+        ISSUER_HISTORY_INTEGRITY_NAME,
+        check_issuer_history_integrity, pool, None
+    )
+    issuer_securities_task = _safe_run(
+        ISSUER_SECURITIES_INTEGRITY_NAME,
+        check_issuer_securities_integrity, pool, None
+    )
+    corporate_events_task = _safe_run(
+        CORPORATE_EVENTS_INTEGRITY_NAME,
+        check_corporate_events_integrity, pool, None
+    )
+    ticker_history_task = _safe_run(
+        TICKER_HISTORY_INTEGRITY_NAME,
+        check_ticker_history_integrity, pool, None
+    )
     options_maxpain_task = _safe_run(
         OPTIONS_MAXPAIN_NAME, check_options_max_pain_freshness, pool, None
     )
@@ -270,6 +306,8 @@ async def run_suite(
         social_sentiment_result, fear_greed_result,
         short_interest_result, borrow_rates_result,
         aaii_sentiment_result, insider_filings_result,
+        issuer_history_result, issuer_securities_result,
+        corporate_events_result, ticker_history_result,
     ) = await asyncio.gather(
         delistings_task, constituent_task, splits_task,
         row_integrity_task, fund_integrity_task, fund_completeness_task, ca_integrity_task, ca_completeness_task,
@@ -282,6 +320,8 @@ async def run_suite(
         social_sentiment_task, fear_greed_task,
         short_interest_task, borrow_rates_task,
         aaii_sentiment_task, insider_filings_task,
+        issuer_history_task, issuer_securities_task,
+        corporate_events_task, ticker_history_task,
     )
     checks: list[CheckResult] = [
         delistings_result, constituent_result, splits_result,
@@ -295,6 +335,8 @@ async def run_suite(
         social_sentiment_result, fear_greed_result,
         short_interest_result, borrow_rates_result,
         aaii_sentiment_result, insider_filings_result,
+        issuer_history_result, issuer_securities_result,
+        corporate_events_result, ticker_history_result,
     ]
 
     finished_at = datetime.now(UTC)

@@ -232,6 +232,48 @@ _SPECS: tuple[HealSpec, ...] = (
              healable=True, stage="sec_orphan_resolve",
              params={"phase_b": "true", "phase_c": "true"},
              max_attempts=2),
+    # SCD-2 / bitemporal integrity checks added 2026-05-25 after the
+    # META-was-tip-of-iceberg audit found 2,061 overlap pairs across
+    # the corp-history substrate. ESCALATE-ONLY: these substrates
+    # are derived (no vendor feed), so adding them to FEED_PROFILES /
+    # ProviderBinding would be incorrect. Operators run the bounded
+    # heal stages manually:
+    #   issuer_history / issuer_securities → `issuer_history_cleanup`
+    #   corporate_events → `audit_cleanup_2026_05_24`
+    #   ticker_history → GIST exclude constraint enforces at runtime;
+    #     any defect indicates an upstream loader bug needing review.
+    HealSpec(check_name="issuer_history_integrity",
+             source="issuer_history",
+             healable=False,
+             unhealable_reason=(
+                 "Derived substrate, no vendor feed. Run "
+                 "`ops.py --stage issuer_history_cleanup --param dry_run=false` "
+                 "to repair (window-function chain)."
+             )),
+    HealSpec(check_name="issuer_securities_integrity",
+             source="issuer_securities",
+             healable=False,
+             unhealable_reason=(
+                 "Derived substrate, no vendor feed. Run "
+                 "`ops.py --stage issuer_history_cleanup --param dry_run=false` "
+                 "(same stage; covers issuer_securities partition)."
+             )),
+    HealSpec(check_name="corporate_events_integrity",
+             source="corporate_events",
+             healable=False,
+             unhealable_reason=(
+                 "Derived substrate, no vendor feed. Run "
+                 "`ops.py --stage audit_cleanup_2026_05_24 --param dry_run=false` "
+                 "to close older bitemporal versions' realtime_end."
+             )),
+    HealSpec(check_name="ticker_history_integrity",
+             source="ticker_history",
+             healable=False,
+             unhealable_reason=(
+                 "GIST exclude constraint is the runtime enforcer; "
+                 "any defect here indicates an upstream loader bug "
+                 "that needs operator review, not routine drift"
+             )),
     # A stale max-pain snapshot is fixed by re-running the bounded
     # canonical stage (1 symbol, 1 idempotent API call) — genuinely
     # healable, not escalate-only. force the skip-guard off so the
