@@ -127,10 +127,20 @@ def _read(rec: Any, field: str, accessor: str) -> Any:
 
 def contract_drift() -> tuple[set[str], set[str]]:
     """(missing, extra) vs the CSV-first feed set, re-derived from the
-    write_archive call sites. Both empty == in lockstep."""
+    write_archive call sites. Both empty == in lockstep.
+
+    ``archive_etl.py`` carries the per-source write_archive literals
+    for the P1 archive-first orchestrator (2026-05-25): handlers.py
+    delegates to ``archive_first_load_bars`` which dispatches to a
+    per-source literal call so this regex still finds the feed name.
+    """
     pat = re.compile(r"write_archive\(\s*\n?\s*\"([a-z0-9_]+)\"")
     feeds: set[str] = set()
-    for rel in ("tpcore/ingestion/handlers.py", "scripts/ops.py"):
+    for rel in (
+        "tpcore/ingestion/handlers.py",
+        "tpcore/ingestion/archive_etl.py",
+        "scripts/ops.py",
+    ):
         feeds.update(pat.findall(pathlib.Path(rel).read_text()))
     have = set(ADAPTER_CONTRACTS)
     return feeds - have, have - feeds

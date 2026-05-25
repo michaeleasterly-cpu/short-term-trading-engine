@@ -385,41 +385,33 @@ async def _handle_daily_bars_explicit(
     end = today - timedelta(days=end_offset_days)
     start = end - timedelta(days=lookback_days)
 
-    # CSV-first audit archive. daily_bars pulls a VARIABLE window
-    # (7-day incremental refresh vs 6000-day backfill), so row-count
-    # shrinkage detection is noise here — the archive's value is the
-    # audit trail (reconstruct what the vendor returned on a given
-    # run), not a vendor-truncation alarm. Shrinkage detection is
-    # reserved for the full-snapshot sources (fred_macro, corporate_actions).
-    #
-    # Per-feed `write_archive` literals (not a single variable) so the
-    # contract-drift sentinel (``tpcore.ingestion.adapter_contract.
-    # contract_drift``) can grep the call sites for the canonical feed
-    # name. Each branch passes its own string literal.
-    from tpcore.ingestion.csv_archive import write_archive
-    _bars_fields = ["ticker", "date", "open", "high", "low", "close", "volume", "vwap"]
-
-    def _bars_validator(r: dict) -> bool:
-        return bool(r.get("ticker")) and r.get("date") not in ("", None)
+    # Archive-first contract (P1 trust-audit 2026-05-25): collectors
+    # _fetch_via_fmp / _fetch_via_alpaca no longer touch the production
+    # DB. They return the accumulated bars list; the archive_first_load
+    # orchestrator writes the CSV+manifest BEFORE the upsert, and reads
+    # production rows BACK FROM the on-disk archive (not from the
+    # in-memory list). A failed archive write blocks the upsert; a
+    # failed ETL leaves the manifest row at status=FAILED with the
+    # archive preserved on disk.
+    from tpcore.ingestion.archive_etl import archive_first_load_bars
 
     if feed == "fmp":
-        total_rows, failures, archive_rows = await _fetch_via_fmp(
-            pool, symbols, start, end,
-        )
-        archive = write_archive(
-            "fmp_daily_bars", archive_rows,
-            fieldnames=_bars_fields,
-            validator=_bars_validator,
-        )
+        archive_rows, failures = await _fetch_via_fmp(symbols, start, end)
+        source_label = "fmp_daily_bars"
+        provider_label = "fmp"
     else:
-        total_rows, failures, archive_rows = await _fetch_via_alpaca(
-            pool, symbols, start, end, feed=feed,
-        )
-        archive = write_archive(
-            "alpaca_daily_bars", archive_rows,
-            fieldnames=_bars_fields,
-            validator=_bars_validator,
-        )
+        archive_rows, failures = await _fetch_via_alpaca(symbols, start, end, feed=feed)
+        source_label = "alpaca_daily_bars"
+        provider_label = "alpaca"
+
+    total_rows, archive_path = await archive_first_load_bars(
+        pool,
+        archive_rows=archive_rows,
+        source=source_label,
+        provider=provider_label,
+        date_range_start=start,
+        date_range_end=end,
+    )
 
     logger.info(
         "ingestion.handler.daily_bars_done",
@@ -427,7 +419,7 @@ async def _handle_daily_bars_explicit(
         symbols=len(symbols),
         rows_upserted=total_rows,
         failures=len(failures),
-        csv_archive=str(archive.path),
+        csv_archive=str(archive_path),
     )
     if failures:
         raise RuntimeError(
@@ -437,12 +429,16 @@ async def _handle_daily_bars_explicit(
 
 
 async def _fetch_via_fmp(
-    pool: asyncpg.Pool,
     symbols: list[str],
     start,  # noqa: ANN001 — date; avoiding circular forward-decl friction
     end,  # noqa: ANN001
-) -> tuple[int, list[str], list[dict]]:
-    """Per-symbol FMP daily-bars fan-out.
+) -> tuple[list[dict], list[str]]:
+    """Per-symbol FMP daily-bars fan-out — archive-first collector.
+
+    P1 trust-audit (2026-05-25): this function no longer writes to
+    production. It pulls bars from FMP and accumulates them into
+    ``archive_rows``. The caller writes the archive CSV + manifest
+    BEFORE any production write happens.
 
     FMP's /stable tier has no multi-symbol EOD batch — we issue one
     call per ticker. The adapter's internal 200ms inter-call sleep
@@ -453,10 +449,8 @@ async def _fetch_via_fmp(
     """
     import httpx
 
-    from tpcore.data.ingest_alpaca_bars import _upsert_bars
     from tpcore.data.ingest_fmp_bars import fetch_daily_bars_multi as fmp_fetch
 
-    total_rows = 0
     failures: list[str] = []
     archive_rows: list[dict] = []
 
@@ -467,7 +461,7 @@ async def _fetch_via_fmp(
             by_symbol = await fmp_fetch(client, symbols, start, end)
         except Exception as exc:  # noqa: BLE001 — adapter raised a permanent failure
             failures.append(f"fmp_fetch_aborted({type(exc).__name__}:{str(exc)[:120]})")
-            return total_rows, failures, archive_rows
+            return archive_rows, failures
 
     for symbol, bars in by_symbol.items():
         if not bars:
@@ -479,25 +473,26 @@ async def _fetch_via_fmp(
                 "low": b.get("l", ""), "close": b.get("c", ""),
                 "volume": b.get("v", ""), "vwap": b.get("vw", ""),
             })
-        inserted = await _upsert_bars(pool, symbol, bars, delisted=False, source="fmp")
-        total_rows += inserted
 
-    return total_rows, failures, archive_rows
+    return archive_rows, failures
 
 
 async def _fetch_via_alpaca(
-    pool: asyncpg.Pool,
     symbols: list[str],
     start,  # noqa: ANN001
     end,  # noqa: ANN001
     *,
     feed: str,
-) -> tuple[int, list[str], list[dict]]:
-    """Legacy 100-symbol-chunked Alpaca path.
+) -> tuple[list[dict], list[str]]:
+    """Legacy 100-symbol-chunked Alpaca path — archive-first collector.
+
+    P1 trust-audit (2026-05-25): no longer writes to production.
+    Returns ``(archive_rows, failures)``; the caller's
+    ``archive_first_load_bars`` orchestrator writes the archive +
+    manifest BEFORE any production write.
 
     Kept available behind ``--param feed=iex|sip`` so the operator can
-    A/B against FMP without redeploying. Same upsert + archive shape
-    as the FMP path — the only difference is the transport.
+    A/B against FMP without redeploying.
     """
     import asyncio
 
@@ -506,7 +501,6 @@ async def _fetch_via_alpaca(
     from tpcore.data.ingest_alpaca_bars import (
         _RATE_LIMIT_SLEEP_SEC,
         _alpaca_headers,
-        _upsert_bars,
         fetch_daily_bars_multi,
     )
 
@@ -518,7 +512,6 @@ async def _fetch_via_alpaca(
     _MULTI_CHUNK = 100
 
     headers = _alpaca_headers()
-    total_rows = 0
     failures: list[str] = []
     archive_rows: list[dict] = []
 
@@ -553,11 +546,9 @@ async def _fetch_via_alpaca(
                         "low": b.get("l", ""), "close": b.get("c", ""),
                         "volume": b.get("v", ""), "vwap": b.get("vw", ""),
                     })
-                inserted = await _upsert_bars(pool, symbol, bars, delisted=False)
-                total_rows += inserted
             await asyncio.sleep(_RATE_LIMIT_SLEEP_SEC)
 
-    return total_rows, failures, archive_rows
+    return archive_rows, failures
 
 
 async def _handle_daily_bars_all_active(

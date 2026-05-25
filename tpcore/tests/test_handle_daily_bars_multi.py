@@ -3,15 +3,18 @@
 2026-05-15: the handler's per-symbol fetch loop (a ~45-min rate-limit
 floor on the ~7,669-ticker universe) was replaced with Alpaca's
 ``/v2/stocks/bars?symbols=…`` multi endpoint in 100-symbol chunks.
-These tests pin the chunking, per-symbol upsert, archive collection,
-and per-chunk failure handling — plus ``_parse_params`` (the
-canonical parameterised-backfill channel that replaced the one-off
-backfill scripts).
 
 2026-05-22: with FMP as the default daily-bars feed, every test here
 that exercises the Alpaca multi-symbol code path explicitly pins
 ``feed="iex"`` so the legacy chunking semantics still get covered.
 The FMP path has its own dedicated suite in ``test_ingest_fmp_bars*``.
+
+2026-05-25 (P1 trust-audit): ``_fetch_via_alpaca`` no longer touches
+the production DB — it returns ``(archive_rows, failures)``. The
+``archive_first_load_bars`` orchestrator writes the archive +
+manifest BEFORE the upsert and reads bars BACK FROM the on-disk
+archive. These tests pin chunking + per-symbol upsert (driven from
+the archive read), per-chunk failure recording, and ``_parse_params``.
 """
 from __future__ import annotations
 
@@ -43,50 +46,79 @@ _SPEC.loader.exec_module(ops)
 pytestmark = pytest.mark.xdist_group("ops_shadow")
 
 
+class _RecordingConn:
+    def __init__(self) -> None:
+        self.fetchval_calls: list = []
+        self.execute_calls: list = []
+
+    async def fetchval(self, _sql: str, *args):
+        from uuid import uuid4
+        self.fetchval_calls.append(args)
+        return uuid4()
+
+    async def execute(self, _sql: str, *args):
+        self.execute_calls.append(args)
+        return "UPDATE 1"
+
+
+class _AcquireCM:
+    def __init__(self, conn: _RecordingConn) -> None:
+        self._conn = conn
+
+    async def __aenter__(self) -> _RecordingConn:
+        return self._conn
+
+    async def __aexit__(self, *_exc) -> None:
+        return None
+
+
 class _FakePool:
-    """Trivial stand-in — _upsert_bars is monkeypatched so the pool is
-    only passed through, never used."""
+    """Pool that routes acquire()→RecordingConn for manifest writes."""
+    def __init__(self) -> None:
+        self.conn = _RecordingConn()
+
+    def acquire(self) -> _AcquireCM:
+        return _AcquireCM(self.conn)
 
 
 def _bar(t: str) -> dict:
     return {"t": t, "o": 1.0, "h": 2.0, "l": 0.5, "c": 1.5, "v": 1000, "vw": 1.4}
 
 
+@pytest.fixture
+def _archive_root(tmp_path, monkeypatch):
+    """Redirect csv_archive to tmp so tests don't touch real data/."""
+    monkeypatch.setattr(csv_archive, "repo_data_dir", lambda: tmp_path)
+    return tmp_path
+
+
 @pytest.fixture(autouse=True)
 def _fast_and_stubbed(monkeypatch):
+    """Mock the transport (rate limit + headers + per-ticker upsert).
+
+    The archive-first orchestrator is real — it writes the CSV +
+    manifest + reads back. Only the network transport + final per-
+    ticker upsert are stubbed.
+    """
     monkeypatch.setattr(ab, "_RATE_LIMIT_SLEEP_SEC", 0.0)
     monkeypatch.setattr(ab, "_alpaca_headers", lambda: {})
 
     upserts: list[tuple[str, int]] = []
 
-    async def _fake_upsert(pool, symbol, bars, delisted, delisting_date=None):
+    async def _fake_upsert(_pool, symbol, bars, *, delisted=False, source=None):
+        del _pool, delisted, source
         upserts.append((symbol, len(bars)))
         return len(bars)
 
     monkeypatch.setattr(ab, "_upsert_bars", _fake_upsert)
-
-    class _Arch:
-        path = Path("/tmp/_test_archive.csv.gz")
-        rows_written = 0
-        rows_rejected = 0
-
-    archived: dict = {}
-
-    def _fake_write_archive(source, rows, fieldnames, **kw):
-        rows = list(rows)
-        archived["source"] = source
-        archived["rows"] = rows
-        a = _Arch()
-        a.rows_written = len(rows)
-        return a
-
-    monkeypatch.setattr(csv_archive, "write_archive", _fake_write_archive)
-    return {"upserts": upserts, "archived": archived}
+    return {"upserts": upserts}
 
 
 class TestMultiSymbolChunking:
     @pytest.mark.asyncio
-    async def test_chunks_at_100_and_upserts_per_symbol(self, monkeypatch, _fast_and_stubbed):
+    async def test_chunks_at_100_and_upserts_per_symbol(
+        self, monkeypatch, _archive_root, _fast_and_stubbed,
+    ):
         calls: list[list[str]] = []
 
         async def _fake_multi(client, symbols, start, end, **kw):
@@ -101,14 +133,16 @@ class TestMultiSymbolChunking:
         )
 
         assert [len(c) for c in calls] == [100, 100, 50]
-        assert rows == 250  # 1 bar/symbol upserted
+        assert rows == 250  # 1 bar/symbol upserted via ETL
         assert len(_fast_and_stubbed["upserts"]) == 250
-        # Archive collected one row per symbol-bar.
-        assert _fast_and_stubbed["archived"]["source"] == "alpaca_daily_bars"
-        assert len(_fast_and_stubbed["archived"]["rows"]) == 250
+        # Archive landed on disk under tmp.
+        files = list((_archive_root / "alpaca_daily_bars_archive").glob("*.csv.gz"))
+        assert len(files) == 1, files
 
     @pytest.mark.asyncio
-    async def test_chunk_failure_recorded_and_others_continue(self, monkeypatch):
+    async def test_chunk_failure_recorded_and_others_continue(
+        self, monkeypatch, _archive_root,
+    ):
         async def _fake_multi(client, symbols, start, end, **kw):
             if "T0150" in symbols:  # the 2nd chunk (indices 100-199)
                 resp = httpx.Response(403, request=httpx.Request("GET", "http://x"))
@@ -124,7 +158,9 @@ class TestMultiSymbolChunking:
             )
 
     @pytest.mark.asyncio
-    async def test_symbols_with_no_bars_skipped(self, monkeypatch, _fast_and_stubbed):
+    async def test_symbols_with_no_bars_skipped(
+        self, monkeypatch, _archive_root, _fast_and_stubbed,
+    ):
         async def _fake_multi(client, symbols, start, end, **kw):
             # Half the symbols return [] (no trades in window).
             return {s: ([_bar("2026-05-14T05:00:00Z")] if i % 2 == 0 else [])
