@@ -18,6 +18,19 @@ interface MarketHealth {
   indicators: Record<string, { value: number; date: string }>;
   vix_series: Array<{ date: string; value: number }>;
   spy_series: Array<{ date: string; close: number }>;
+  bear_score?: {
+    score: number;
+    raw: number;
+    max_raw: number;
+    breakdown: {
+      sahm_rule: number;
+      industrial_production: number;
+      initial_claims: number;
+      yield_curve: number;
+      credit_spread: number;
+      vix: number;
+    };
+  };
   summary: { vol_regime: string; macro_regime: string; headline: string };
 }
 
@@ -61,6 +74,30 @@ function buildSections(d: MarketHealth): Section[] {
   const get = (k: string) => ind[k]?.value;
 
   const cards = (...arr: Array<Card | null>): Card[] => arr.filter(Boolean) as Card[];
+
+  // Sentinel Bear Score — added 2026-05-27. Composite recession-regime
+  // signal that ties the macro stack together; ≥60 is sentinel's
+  // activation threshold.
+  const bearCard: Card | null = d.bear_score === undefined ? null : (() => {
+    const bs = d.bear_score!;
+    const t: Tone = bs.score >= 80 ? "stress" : bs.score >= 60 ? "watch" : bs.score >= 40 ? "ok" : "calm";
+    const breakdownPills = Object.entries(bs.breakdown)
+      .filter(([, v]) => v > 0)
+      .map(([k]) => k.replace(/_/g, " "))
+      .join(", ") || "none";
+    return {
+      key: "bear",
+      question: "How bearish is the macro picture?",
+      value: `${bs.score} / 100`,
+      tone: t,
+      explain:
+        t === "stress" ? "Deep recession territory — Sentinel would be ACTIVE if it were running live." :
+        t === "watch"  ? "At or above the Sentinel activation threshold of 60. Defensive tilt warranted." :
+        t === "ok"     ? "Some flags up, but below Sentinel's 60 activation threshold." :
+                         "Sentinel Bear Score is low — no defensive activation signal.",
+      detail: `Composite of 6 macro sub-scorers (sentinel/plugs/setup_detection.py): Sahm rule, industrial production, initial claims, yield curve, credit spread, VIX. Sums to ${bs.raw}/${bs.max_raw} raw, scaled to ${bs.score}/100. Active sub-scorers: ${breakdownPills}.`,
+    };
+  })();
 
   // Stock-market mood
   const vix = get("vix");
@@ -263,6 +300,12 @@ function buildSections(d: MarketHealth): Section[] {
 
   return [
     {
+      id: "bear-score",
+      title: "Sentinel Bear Score",
+      subtitle: "The composite recession-regime signal our defensive engine watches.",
+      cards: cards(bearCard),
+    },
+    {
       id: "market-mood",
       title: "Stock-market mood",
       subtitle: "How nervous or greedy is the stock market right now?",
@@ -312,13 +355,41 @@ function VixChart({ series }: { series: Array<{ date: string; value: number }> }
     return `${x},${y}`;
   }).join(" ");
   const lineY = (v: number) => 220 - ((v - min) / range) * 200;
+
+  // Sparse date ticks — 4 evenly-spaced points along the x-axis, formatted
+  // as "Mon YYYY". Picked so the chart shows roughly a tick every ~6 weeks
+  // for a 6-month window. Skipping the first index to avoid label collision
+  // with the y-axis tone-line labels on the left.
+  const TICK_COUNT = 4;
+  const tickIdxs = Array.from({ length: TICK_COUNT }, (_, i) =>
+    Math.round(((i + 0.5) / TICK_COUNT) * (series.length - 1))
+  );
+  const fmtMonthYear = (iso: string) => {
+    const d = new Date(iso);
+    return d.toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: "UTC" });
+  };
+
   return (
-    <svg viewBox="0 0 800 240" preserveAspectRatio="none" style={{ width: "100%", height: 240 }}>
+    <svg viewBox="0 0 800 260" preserveAspectRatio="none" style={{ width: "100%", height: 260 }}>
       <line x1="0" y1={lineY(20)} x2="800" y2={lineY(20)} stroke="oklch(60% 0.15 60)" strokeWidth="1" strokeDasharray="4 4" />
       <text x="8" y={lineY(20) - 5} fill="oklch(50% 0.15 60)" fontSize="11" fontFamily="ui-sans-serif">Watch line · 20</text>
       <line x1="0" y1={lineY(30)} x2="800" y2={lineY(30)} stroke="oklch(55% 0.20 22)" strokeWidth="1" strokeDasharray="4 4" />
       <text x="8" y={lineY(30) - 5} fill="oklch(50% 0.20 22)" fontSize="11" fontFamily="ui-sans-serif">Scared line · 30</text>
       <polyline fill="none" stroke="oklch(45% 0.16 220)" strokeWidth="2" points={pts} />
+      {/* Sparse x-axis date labels — month + year only, 4 ticks across */}
+      {tickIdxs.map(idx => {
+        const p = series[idx];
+        if (!p) return null;
+        const x = (idx / Math.max(1, series.length - 1)) * 780 + 10;
+        return (
+          <g key={idx}>
+            <line x1={x} y1="220" x2={x} y2="226" stroke="#8a857c" strokeWidth="0.5" />
+            <text x={x} y="245" fill="#5a564d" fontSize="11" fontFamily="ui-sans-serif" textAnchor="middle">
+              {fmtMonthYear(p.date)}
+            </text>
+          </g>
+        );
+      })}
     </svg>
   );
 }

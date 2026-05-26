@@ -148,6 +148,10 @@ INDICATOR_SERIES: tuple[tuple[str, str], ...] = (
     ("phci_tx", "TXPHCI"), ("phci_ut", "UTPHCI"), ("phci_vt", "VTPHCI"),
     ("phci_va", "VAPHCI"), ("phci_wa", "WAPHCI"), ("phci_wv", "WVPHCI"),
     ("phci_wi", "WIPHCI"), ("phci_wy", "WYPHCI"),
+    # NOTE 2026-05-27: tried to add DC (DCPHCI) but the Philadelphia Fed
+    # state coincident-index series does NOT cover the District of
+    # Columbia — FRED returns 400 "series does not exist". The PHCI
+    # set is 50 USPS states only.
 )
 """(canonical_name, FRED series_id) pairs — the platform's vocabulary
 on the left, FRED's identifier on the right. Adding a new indicator

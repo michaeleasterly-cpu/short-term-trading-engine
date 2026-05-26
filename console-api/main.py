@@ -592,11 +592,54 @@ async def public_market_health() -> dict:
         vol_regime = "crisis"
     yc = indicators.get("yield_curve", {}).get("value")
     macro_regime = "inverted" if (yc is not None and yc < 0) else ("normal" if yc is not None else "unknown")
+
+    # Bear Score — simplified version of the Sentinel engine scorer
+    # (sentinel/plugs/setup_detection.py). Same thresholds, same point
+    # weights, scaled to 0-100. Yield-curve sub-scorer is a binary
+    # "inverted = 15 pts" approximation (the engine's full version is
+    # a bear-steepener detector requiring historical context).
+    def _bs_sahm(v):       return 25 if v is not None and v >= 0.50 else 0
+    def _bs_indprod(v):
+        if v is None: return 0
+        if v < 90.0: return 15
+        if v < 95.0: return 10
+        return 0
+    def _bs_claims(v):     return 10 if v is not None and v >= 260_000 else 0
+    def _bs_yield(v):      return 15 if v is not None and v < 0 else 0
+    def _bs_credit(v):
+        if v is None: return 0
+        if v >= 5.00: return 5
+        if v >= 4.00: return 3
+        if v >= 3.00: return 2
+        return 0
+    def _bs_vix(v):        return 15 if v is not None and v >= 25 else 0  # simplified; full version checks 20d MA
+    bs_sahm    = _bs_sahm(indicators.get("sahm_rule", {}).get("value"))
+    bs_indprod = _bs_indprod(indicators.get("industrial_production", {}).get("value"))
+    bs_claims  = _bs_claims(indicators.get("initial_claims", {}).get("value"))
+    bs_yield   = _bs_yield(yc)
+    bs_credit  = _bs_credit(indicators.get("credit_spread", {}).get("value"))
+    bs_vix     = _bs_vix(indicators.get("vix", {}).get("value"))
+    bs_raw     = bs_sahm + bs_indprod + bs_claims + bs_yield + bs_credit + bs_vix
+    bs_scaled  = round((bs_raw / 85.0) * 100.0)
+    bear_score = {
+        "score":      bs_scaled,
+        "raw":        bs_raw,
+        "max_raw":    85,
+        "breakdown": {
+            "sahm_rule":             bs_sahm,
+            "industrial_production": bs_indprod,
+            "initial_claims":        bs_claims,
+            "yield_curve":           bs_yield,
+            "credit_spread":         bs_credit,
+            "vix":                   bs_vix,
+        },
+    }
     return {
         "ts": datetime.now(timezone.utc).isoformat(),
         "indicators": indicators,
         "vix_series": [{"date": r["observed_date"].isoformat(), "value": float(r["value_num"])} for r in vix_series],
         "spy_series": [{"date": r["date"].isoformat(), "close": float(r["adjusted_close"])} for r in spy],
+        "bear_score": bear_score,
         "summary": {
             "vol_regime": vol_regime,
             "macro_regime": macro_regime,
