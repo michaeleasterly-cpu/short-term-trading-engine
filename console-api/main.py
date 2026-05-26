@@ -535,6 +535,8 @@ async def public_market_health() -> dict:
         "vix", "yield_curve", "sahm_rule", "cfnai_ma3", "hy_spread",
         "credit_spread", "nfci", "epu_index", "initial_claims",
         "bullish_pct", "bearish_pct", "neutral_pct", "score",
+        "michigan_sentiment", "unemployment_rate", "fed_funds_rate",
+        "industrial_production",
     )
     async with app.state.pool.acquire() as conn:
         rows = await conn.fetch(

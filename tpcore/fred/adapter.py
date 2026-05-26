@@ -109,6 +109,21 @@ INDICATOR_SERIES: tuple[tuple[str, str], ...] = (
     # events — useful for catalyst engine event-window risk weighting.
     # Added 2026-05-24. FRED-verified (series 'USEPUINDXD').
     ("epu_index",            "USEPUINDXD"),
+    # University of Michigan Consumer Sentiment Index — monthly, since
+    # 1952. Tracks how consumers feel about the economy + their own
+    # finances; a leading indicator that historically turned down 6-12
+    # months before recessions (1973, 1980, 1990, 2001, 2008). Added
+    # 2026-05-27 for the public market-health page (Mood → Consumer).
+    # FRED-verified (series 'UMCSENT'). License: free, used widely.
+    ("michigan_sentiment",   "UMCSENT"),
+    # Unemployment rate — monthly, since 1948. The headline labor-
+    # market read. Sahm rule is derived from this; included alongside
+    # for direct display on the public market-health page.
+    ("unemployment_rate",    "UNRATE"),
+    # Federal funds effective rate — daily, since 1954. The Fed's
+    # policy lever; useful context for every other rate-sensitive
+    # indicator on the page.
+    ("fed_funds_rate",       "DFF"),
     # ── Philadelphia Fed state coincident indices — 50 USPS states,
     # monthly, 1979→present. Substrate for the derived
     # ``sos_state_diffusion`` series (Crone/Clayton-Matthews 2005
