@@ -41,6 +41,28 @@ interface IndustryMix {
   source: string;
 }
 
+interface CityDemographics {
+  name: string;
+  place_fips: string;
+  year: number;
+  population: number | null;
+  median_age: number | null;
+  pct_bachelors_plus: number | null;
+  acs_unemployment_rate: number | null;
+  median_household_income: number | null;
+  poverty_rate_families: number | null;
+  median_home_value: number | null;
+  median_gross_rent: number | null;
+  pct_owner_occupied: number | null;
+  pct_renter_occupied: number | null;
+  pct_foreign_born: number | null;
+  mean_commute_minutes: number | null;
+  pct_white_alone: number | null;
+  pct_black_alone: number | null;
+  pct_hispanic_or_latino: number | null;
+  source: string;
+}
+
 interface CarbondaleData {
   ts: string;
   indicators: Record<string, { value: number; date: string }>;
@@ -48,6 +70,61 @@ interface CarbondaleData {
   labor_force_series: Array<{ date: string; value: number }>;
   business_opportunities?: BusinessOps;
   industry_mix?: IndustryMix;
+  city_demographics?: CityDemographics;
+}
+
+function DemographicsSection({ d, cityShortName }: { d: CityDemographics; cityShortName: string }) {
+  if (!d.population) return null;
+  const fmtPct = (v: number | null) => v == null ? "—" : `${v.toFixed(1)}%`;
+  const fmtMoney = (v: number | null) => v == null ? "—" : `$${v.toLocaleString()}`;
+  const stats: Array<{ label: string; value: string; sub?: string; src: string }> = [
+    { label: "Population", value: d.population!.toLocaleString(), sub: `as of ACS 5y ${d.year}`, src: "DP05_0001E" },
+    { label: "Median age", value: d.median_age != null ? `${d.median_age.toFixed(1)} yrs` : "—", sub: d.median_age != null && d.median_age < 30 ? "very young — youth-anchor" : d.median_age != null && d.median_age > 40 ? "older skew" : "near US median", src: "DP05_0018E" },
+    { label: "Bachelor's degree or higher (25+)", value: fmtPct(d.pct_bachelors_plus), sub: d.pct_bachelors_plus != null && d.pct_bachelors_plus > 40 ? "highly educated workforce" : undefined, src: "DP02_0068PE" },
+    { label: "Median household income", value: fmtMoney(d.median_household_income), src: "DP03_0062E" },
+    { label: "Family poverty rate", value: fmtPct(d.poverty_rate_families), src: "DP03_0119PE" },
+    { label: "ACS unemployment (25+)", value: fmtPct(d.acs_unemployment_rate), sub: "5y avg, narrower scope than monthly LAUS", src: "DP03_0009PE" },
+    { label: "Median home value", value: fmtMoney(d.median_home_value), sub: "owner-occupied units", src: "DP04_0089E" },
+    { label: "Median gross rent", value: fmtMoney(d.median_gross_rent), sub: "renter-occupied units", src: "DP04_0134E" },
+    { label: "% owner-occupied", value: fmtPct(d.pct_owner_occupied), sub: d.pct_renter_occupied != null ? `${d.pct_renter_occupied.toFixed(1)}% renter` : undefined, src: "DP04_0046PE" },
+    { label: "Mean commute time", value: d.mean_commute_minutes != null ? `${d.mean_commute_minutes.toFixed(0)} min` : "—", sub: "one-way to work", src: "DP03_0025E" },
+  ];
+
+  return (
+    <section style={{ marginTop: 40 }}>
+      <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+      <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+        Demographics · {cityShortName}
+      </h2>
+      <div style={{ fontSize: 14, color: "#5a564d", marginBottom: 16, maxWidth: 720 }}>
+        Census American Community Survey 5-year estimates for the {cityShortName}
+        municipality (not the broader county). Use this to know who actually
+        lives here — and to make demographic-grounded pitches when courting
+        employers, housing developers, or grant-makers.
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 16 }}>
+        {stats.map((s, i) => (
+          <div key={i} style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, padding: 14 }}>
+            <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: "#7a756b", marginBottom: 6 }}>{s.label}</div>
+            <div style={{ fontSize: 22, fontWeight: 500, color: "#1f1d18", lineHeight: 1.1, marginBottom: 4 }}>{s.value}</div>
+            {s.sub && <div style={{ fontSize: 12, color: "#7a756b" }}>{s.sub}</div>}
+          </div>
+        ))}
+      </div>
+      <div style={{ marginTop: 16, padding: 14, background: "white", border: "1px solid #d8d2c4", borderRadius: 6 }}>
+        <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em", color: "#7a756b", marginBottom: 8 }}>
+          Race / ethnicity composition
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 12, fontSize: 14 }}>
+          <div><strong>{fmtPct(d.pct_white_alone)}</strong> <span style={{ color: "#5a564d" }}>White alone</span></div>
+          <div><strong>{fmtPct(d.pct_black_alone)}</strong> <span style={{ color: "#5a564d" }}>Black or African American alone</span></div>
+          <div><strong>{fmtPct(d.pct_hispanic_or_latino)}</strong> <span style={{ color: "#5a564d" }}>Hispanic or Latino (any race)</span></div>
+          <div><strong>{fmtPct(d.pct_foreign_born)}</strong> <span style={{ color: "#5a564d" }}>Foreign-born</span></div>
+        </div>
+      </div>
+      <div style={{ marginTop: 12, fontSize: 12, color: "#7a756b" }}>{d.source}</div>
+    </section>
+  );
 }
 
 function IndustryMixSection({ mix, scope }: { mix: IndustryMix; scope: string }) {
@@ -559,6 +636,8 @@ export default async function CarbondalePage() {
                   </div>
                 </>
               )}
+
+              {data.city_demographics && <DemographicsSection d={data.city_demographics} cityShortName="Carbondale" />}
 
               {data.industry_mix && <IndustryMixSection mix={data.industry_mix} scope="Jackson County" />}
 

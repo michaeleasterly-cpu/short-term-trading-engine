@@ -18,7 +18,7 @@ from __future__ import annotations
 import os
 import time
 from contextlib import asynccontextmanager
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import asyncpg
 import httpx
@@ -717,6 +717,7 @@ async def public_carbondale() -> dict:
     indicators = {r["series_id"]: {"value": float(r["value_num"]), "date": r["observed_date"].isoformat()} for r in rows}
     business = await _usaspending_block(county_fips=["077"], recipient_city=None)
     qcew = await _qcew_supersector_block(county_fips=["077"])
+    acs = await _census_acs_place("11163")  # Carbondale city, IL
     return {
         "ts": datetime.now(UTC).isoformat(),
         "indicators": indicators,
@@ -724,7 +725,98 @@ async def public_carbondale() -> dict:
         "labor_force_series": [{"date": r["observed_date"].isoformat(), "value": float(r["value_num"])} for r in labor_force_series],
         "business_opportunities": business,
         "industry_mix": qcew,
+        "city_demographics": acs,
     }
+
+
+# ────────────── Census ACS 5-year Place demographics ──────────────
+# Sub-county Census Place (CDP/city) data — the missing piece for
+# differentiating Carbondale (college town: pop 21.8k, median age 24.9,
+# 46% bachelor's+) from Murphysboro (family town: pop 6.8k, median
+# age 40, higher HH income). 24h cache; ACS releases once per year.
+
+_ACS_CACHE: dict[str, tuple[float, dict]] = {}
+_ACS_CACHE_TTL_SEC = 86400  # 24h
+
+
+async def _census_acs_place(place_fips: str, *, state_fips: str = "17", year: int = 2023) -> dict:
+    cache_key = f"acs|{state_fips}|{place_fips}|{year}"
+    now = time.time()
+    if cache_key in _ACS_CACHE and now - _ACS_CACHE[cache_key][0] < _ACS_CACHE_TTL_SEC:
+        return _ACS_CACHE[cache_key][1]
+
+    api_key = os.environ.get("CENSUS_DATA_API_KEY") or os.environ.get("CENSUS_API_KEY")
+    if not api_key:
+        return {}
+
+    vars_map = {
+        "DP05_0001E":  "population",
+        "DP05_0018E":  "median_age",
+        "DP02_0068PE": "pct_bachelors_plus",
+        "DP03_0009PE": "acs_unemployment_rate",
+        "DP03_0062E":  "median_household_income",
+        "DP03_0119PE": "poverty_rate_families",
+        "DP04_0089E":  "median_home_value",
+        "DP04_0134E":  "median_gross_rent",
+        "DP04_0046PE": "pct_owner_occupied",
+        "DP02_0094PE": "pct_foreign_born",
+        "DP03_0025E":  "mean_commute_minutes",
+        "DP05_0037PE": "pct_white_alone",
+        "DP05_0038PE": "pct_black_alone",
+        "DP05_0071PE": "pct_hispanic_or_latino",
+    }
+    fields = "NAME," + ",".join(vars_map.keys())
+    url = f"https://api.census.gov/data/{year}/acs/acs5/profile"
+    params = {"get": fields, "for": f"place:{place_fips}", "in": f"state:{state_fips}", "key": api_key}
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        try:
+            r = await client.get(url, params=params)
+            if r.status_code != 200:
+                return {}
+            data = r.json()
+        except Exception:
+            return {}
+
+    if not data or len(data) < 2:
+        return {}
+    header, row = data[0], data[1]
+    raw = dict(zip(header, row, strict=False))
+
+    def _f(v: str | None) -> float | None:
+        try:
+            f = float(v) if v is not None else None
+            return f if f is not None and f >= 0 else None
+        except (TypeError, ValueError):
+            return None
+
+    def _i(v: str | None) -> int | None:
+        f = _f(v)
+        return int(f) if f is not None else None
+
+    pct_owner = _f(raw.get("DP04_0046PE"))
+    out = {
+        "name": raw.get("NAME"),
+        "place_fips": place_fips,
+        "year": year,
+        "population":               _i(raw.get("DP05_0001E")),
+        "median_age":               _f(raw.get("DP05_0018E")),
+        "pct_bachelors_plus":       _f(raw.get("DP02_0068PE")),
+        "acs_unemployment_rate":    _f(raw.get("DP03_0009PE")),
+        "median_household_income":  _i(raw.get("DP03_0062E")),
+        "poverty_rate_families":    _f(raw.get("DP03_0119PE")),
+        "median_home_value":        _i(raw.get("DP04_0089E")),
+        "median_gross_rent":        _i(raw.get("DP04_0134E")),
+        "pct_owner_occupied":       pct_owner,
+        "pct_renter_occupied":      (100 - pct_owner) if pct_owner is not None else None,
+        "pct_foreign_born":         _f(raw.get("DP02_0094PE")),
+        "mean_commute_minutes":     _f(raw.get("DP03_0025E")),
+        "pct_white_alone":          _f(raw.get("DP05_0037PE")),
+        "pct_black_alone":          _f(raw.get("DP05_0038PE")),
+        "pct_hispanic_or_latino":   _f(raw.get("DP05_0071PE")),
+        "source": f"US Census Bureau, American Community Survey {year} 5-year estimates, Data Profile DP02/DP03/DP04/DP05.",
+    }
+    _ACS_CACHE[cache_key] = (now, out)
+    return out
 
 
 # ────────────── BLS QCEW (Quarterly Census of Employment & Wages) ──────────────
@@ -754,7 +846,7 @@ _QCEW_CACHE_TTL_SEC = 86400  # 24h
 async def _qcew_latest_quarter() -> tuple[int, int]:
     """Probe BLS for the most recent published quarter. Falls back to (2025, 3)
     if probes fail. BLS publishes Q ~7 months after the end of the quarter."""
-    today = date.today()
+    today = datetime.now(UTC).date()
     candidates: list[tuple[int, int]] = []
     y, q = today.year, (today.month - 1) // 3 + 1
     for _ in range(6):
@@ -877,7 +969,7 @@ async def _usaspending_block(
     if cache_key in _USA_CACHE and now - _USA_CACHE[cache_key][0] < _USA_CACHE_TTL_SEC:
         return _USA_CACHE[cache_key][1]
 
-    end = date.today()
+    end = datetime.now(UTC).date()
     start = end - timedelta(days=lookback_months * 30)
     locations = [{"country": "USA", "state": "IL", "county": c} for c in county_fips]
     base_filters: dict = {
@@ -1019,6 +1111,7 @@ async def public_murphysboro() -> dict:
     business_city = await _usaspending_block(county_fips=["077"], recipient_city="MURPHYSBORO")
     business_county = await _usaspending_block(county_fips=["077"], recipient_city=None)
     qcew = await _qcew_supersector_block(county_fips=["077"])
+    acs = await _census_acs_place("51453")  # Murphysboro city, IL
     return {
         "ts": datetime.now(UTC).isoformat(),
         "indicators": indicators,
@@ -1026,6 +1119,7 @@ async def public_murphysboro() -> dict:
         "business_opportunities_city": business_city,
         "business_opportunities_county": business_county,
         "industry_mix": qcew,
+        "city_demographics": acs,
     }
 
 
