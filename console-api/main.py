@@ -203,7 +203,7 @@ async def ticker_drillin(symbol: str) -> dict:
     async with app.state.pool.acquire() as conn:
         bars = await conn.fetch(
             """
-            SELECT date, adj_open, adj_high, adj_low, adj_close, volume
+            SELECT date, adj_open, adj_high, adj_low, adjusted_close, volume
             FROM platform.prices_daily
             WHERE ticker = $1
               AND date >= CURRENT_DATE - INTERVAL '90 days'
@@ -220,7 +220,7 @@ async def ticker_drillin(symbol: str) -> dict:
                 "o": float(r["adj_open"]),
                 "h": float(r["adj_high"]),
                 "l": float(r["adj_low"]),
-                "c": float(r["adj_close"]),
+                "c": float(r["adjusted_close"]),
                 "v": int(r["volume"]),
             }
             for r in bars
@@ -567,7 +567,7 @@ async def public_market_health() -> dict:
         )
         spy = await conn.fetch(
             """
-            SELECT date, adj_close
+            SELECT date, adjusted_close
             FROM platform.prices_daily
             WHERE ticker = 'SPY'
               AND date >= CURRENT_DATE - INTERVAL '90 days'
@@ -594,7 +594,7 @@ async def public_market_health() -> dict:
         "ts": datetime.now(timezone.utc).isoformat(),
         "indicators": indicators,
         "vix_series": [{"date": r["observed_date"].isoformat(), "value": float(r["value_num"])} for r in vix_series],
-        "spy_series": [{"date": r["date"].isoformat(), "close": float(r["adj_close"])} for r in spy],
+        "spy_series": [{"date": r["date"].isoformat(), "close": float(r["adjusted_close"])} for r in spy],
         "summary": {
             "vol_regime": vol_regime,
             "macro_regime": macro_regime,
