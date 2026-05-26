@@ -32,10 +32,17 @@ interface IndustryRow {
   avg_weekly_wage: number;
   annual_pay_equivalent: number;
 }
+interface CountyIndustrySnapshot {
+  fips: string;
+  name: string;
+  total_employment: number;
+  top_supersectors: Array<{ code: string; name: string; employment: number; avg_weekly_wage: number }>;
+}
 interface IndustryMix {
   as_of_quarter: string;
   top_supersectors: IndustryRow[];
   total_employment: number;
+  by_county?: CountyIndustrySnapshot[];
   source: string;
 }
 
@@ -187,6 +194,55 @@ function URTrendChart({ series }: { series: Array<{ date: string; value: number 
         );
       })}
     </svg>
+  );
+}
+
+function IndustryMixByCountySection({ mix }: { mix: IndustryMix }) {
+  if (!mix.by_county || mix.by_county.length === 0) return null;
+  return (
+    <section style={{ marginTop: 40 }}>
+      <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+      <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+        Industry mix by county
+      </h2>
+      <div style={{ fontSize: 14, color: "#5a564d", marginBottom: 16, maxWidth: 760 }}>
+        Each county in the LWA-25 has a different economic identity. This drilldown
+        shows the top employers-by-NAICS-supersector inside each county so board
+        members representing a specific jurisdiction can see their county's
+        story — and so workforce strategy can be tailored county-by-county
+        rather than averaged across the region.
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 16 }}>
+        {mix.by_county.map(c => {
+          const maxEmp = Math.max(...c.top_supersectors.map(s => s.employment));
+          return (
+            <div key={c.fips} style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, padding: 16 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
+                <h3 style={{ fontSize: 16, fontWeight: 600, color: "#1f1d18", margin: 0 }}>{c.name} County</h3>
+                <div style={{ fontSize: 12, color: "#7a756b" }}>FIPS 17{c.fips}</div>
+              </div>
+              <div style={{ fontSize: 12, color: "#5a564d", marginBottom: 12 }}>
+                Total covered employment: <strong>{c.total_employment.toLocaleString()}</strong>
+              </div>
+              {c.top_supersectors.map((s, i) => {
+                const barPct = (s.employment / maxEmp) * 100;
+                return (
+                  <div key={s.code} style={{ paddingTop: i === 0 ? 0 : 8, borderTop: i === 0 ? "none" : "1px solid #ebe5d6", marginTop: i === 0 ? 0 : 8 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 4 }}>
+                      <div style={{ color: "#1f1d18", fontWeight: 500 }}>{s.name}</div>
+                      <div style={{ color: "#5a564d" }}>{s.employment.toLocaleString()} · ${s.avg_weekly_wage}/wk</div>
+                    </div>
+                    <div style={{ height: 3, background: "#ebe5d6" }}>
+                      <div style={{ height: 3, width: `${barPct}%`, background: "oklch(45% 0.16 220)" }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 
@@ -416,6 +472,8 @@ export default async function MantraconPage() {
           )}
 
           {data.industry_mix && <IndustryMixSection mix={data.industry_mix} scope="the LWA-25 (5-county region)" />}
+
+          {data.industry_mix && <IndustryMixByCountySection mix={data.industry_mix} />}
 
           <BusinessLeadsSection b={data.business_opportunities} />
 

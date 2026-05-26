@@ -866,8 +866,17 @@ async def _qcew_latest_quarter() -> tuple[int, int]:
     return (2025, 3)
 
 
+_COUNTY_FIPS_NAME: dict[str, str] = {
+    "055": "Franklin",
+    "077": "Jackson",
+    "081": "Jefferson",
+    "145": "Perry",
+    "199": "Williamson",
+}
+
+
 async def _qcew_supersector_block(county_fips: list[str]) -> dict:
-    """Returns {as_of_quarter, top_supersectors: [...], total_employment, source}."""
+    """Returns {as_of_quarter, top_supersectors: [...], total_employment, by_county: [...], source}."""
     cache_key = "qcew|" + ",".join(sorted(county_fips))
     now = time.time()
     if cache_key in _QCEW_CACHE and now - _QCEW_CACHE[cache_key][0] < _QCEW_CACHE_TTL_SEC:
@@ -878,9 +887,11 @@ async def _qcew_supersector_block(county_fips: list[str]) -> dict:
     import io as io_mod
     agg: dict[str, dict] = {}
     grand_emp = 0
+    per_county: dict[str, dict] = {}
     async with httpx.AsyncClient(timeout=20.0) as client:
         for fips5 in county_fips:
             area_code = "17" + fips5
+            county_agg: dict[str, dict] = {}
             try:
                 r = await client.get(f"https://data.bls.gov/cew/data/api/{year}/{qtr}/area/{area_code}.csv")
                 if r.status_code != 200:
@@ -895,6 +906,7 @@ async def _qcew_supersector_block(county_fips: list[str]) -> dict:
                     own = row.get("own_code") or "0"
                     emp = int(row.get("month3_emplvl") or 0)
                     wage = float(row.get("avg_wkly_wage") or 0)
+                    # Cross-county aggregate
                     if ic not in agg:
                         agg[ic] = {
                             "code": ic, "name": _BLS_NAICS_SUPERSECTOR[ic],
@@ -908,8 +920,32 @@ async def _qcew_supersector_block(county_fips: list[str]) -> dict:
                     agg[ic]["wage_sum"] += wage * emp
                     agg[ic]["wage_weight"] += emp
                     grand_emp += emp
+                    # Per-county snapshot
+                    if ic not in county_agg:
+                        county_agg[ic] = {"code": ic, "name": _BLS_NAICS_SUPERSECTOR[ic], "emp": 0, "wage_sum": 0.0, "wage_w": 0}
+                    county_agg[ic]["emp"] += emp
+                    county_agg[ic]["wage_sum"] += wage * emp
+                    county_agg[ic]["wage_w"] += emp
             except Exception:
                 continue
+            # Sort county snapshot top sectors
+            county_items = []
+            for cd in county_agg.values():
+                if cd["emp"] == 0:
+                    continue
+                county_items.append({
+                    "code": cd["code"],
+                    "name": cd["name"],
+                    "employment": cd["emp"],
+                    "avg_weekly_wage": round(cd["wage_sum"] / cd["wage_w"] if cd["wage_w"] else 0, 0),
+                })
+            county_items.sort(key=lambda x: -x["employment"])
+            per_county[fips5] = {
+                "fips": fips5,
+                "name": _COUNTY_FIPS_NAME.get(fips5, fips5),
+                "total_employment": sum(c["employment"] for c in county_items),
+                "top_supersectors": county_items[:6],
+            }
 
     items = []
     for d in agg.values():
@@ -928,10 +964,13 @@ async def _qcew_supersector_block(county_fips: list[str]) -> dict:
         })
     items.sort(key=lambda x: -x["total_employment"])
 
+    by_county_list = sorted(per_county.values(), key=lambda c: -c["total_employment"])
+
     out = {
         "as_of_quarter": f"{year}Q{qtr}",
         "top_supersectors": items,
         "total_employment": sum(i["total_employment"] for i in items),
+        "by_county": by_county_list,
         "source": "BLS Quarterly Census of Employment & Wages (QCEW); NAICS supersector aggregation, all ownerships.",
         "county_fips": county_fips,
     }
