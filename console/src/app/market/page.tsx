@@ -327,15 +327,63 @@ function buildSections(d: MarketHealth): Section[] {
   ].filter(s => s.cards.length > 0);
 }
 
+// Section tiering — only hard recession + financial-stress data drive
+// the top "weather" headline. Soft / sentiment / policy-uncertainty data
+// gets its own subhead because it's news-driven and historically a poor
+// recession predictor on its own (Curtin 2007; Baker-Bloom-Davis 2016).
+const TIER1_SECTION_IDS = new Set(["recession", "credit"]);
+
 function topHeadline(sections: Section[]): { headline: string; subhead: string; tone: Tone } {
-  const all = sections.flatMap(s => s.cards);
-  const stress = all.filter(c => c.tone === "stress").length;
-  const watch = all.filter(c => c.tone === "watch").length;
-  if (stress >= 2) return { headline: "Stormy", subhead: `${stress} red flags up. Time to be careful.`, tone: "stress" };
-  if (stress >= 1) return { headline: "Mixed weather", subhead: `One red flag, but most indicators are OK.`, tone: "watch" };
-  if (watch >= 3) return { headline: "Cloudy", subhead: `Several yellow flags up — worth watching.`, tone: "watch" };
-  if (watch >= 1) return { headline: "Mostly sunny", subhead: `A few small worries, but the market is broadly healthy.`, tone: "ok" };
-  return { headline: "Sunny", subhead: `Markets and the economy look healthy across the board.`, tone: "calm" };
+  const tier1 = sections.filter(s => TIER1_SECTION_IDS.has(s.id)).flatMap(s => s.cards);
+  const tier2 = sections.filter(s => !TIER1_SECTION_IDS.has(s.id)).flatMap(s => s.cards);
+
+  const t1Stress = tier1.filter(c => c.tone === "stress").length;
+  const t1Watch  = tier1.filter(c => c.tone === "watch").length;
+  const t2Stress = tier2.filter(c => c.tone === "stress").length;
+  const t2Watch  = tier2.filter(c => c.tone === "watch").length;
+
+  // Soft-data note appended when sentiment/policy is elevated but hard
+  // data is clean — calls it out without overweighting it.
+  const softNote = t2Stress > 0
+    ? ` (${t2Stress} sentiment/policy flag${t2Stress > 1 ? "s" : ""} up, but soft data isn't a recession predictor on its own.)`
+    : t2Watch > 0
+      ? ` (Sentiment is mixed but hard data is clean.)`
+      : "";
+
+  if (t1Stress >= 2) {
+    return {
+      headline: "Stormy",
+      subhead: `${t1Stress} recession or credit indicators flashing red. Time to be careful.`,
+      tone: "stress",
+    };
+  }
+  if (t1Stress >= 1) {
+    return {
+      headline: "Mixed weather",
+      subhead: `One recession/credit flag is red, but the rest of the hard data is OK.${softNote}`,
+      tone: "watch",
+    };
+  }
+  if (t1Watch >= 3) {
+    return {
+      headline: "Cloudy",
+      subhead: `Several recession/credit indicators are yellow — worth watching.${softNote}`,
+      tone: "watch",
+    };
+  }
+  if (t1Watch >= 1) {
+    return {
+      headline: "Mostly sunny",
+      subhead: `A few small worries on the recession/credit side, but the hard data is broadly healthy.${softNote}`,
+      tone: "ok",
+    };
+  }
+  // Tier-1 all clean — sunny regardless of soft-data noise.
+  return {
+    headline: "Sunny",
+    subhead: `Recession and credit indicators are all clean.${softNote || " Markets and the economy look healthy."}`,
+    tone: "calm",
+  };
 }
 
 function VixChart({ series }: { series: Array<{ date: string; value: number }> }) {
