@@ -14,11 +14,123 @@ export const revalidate = 0;
 const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE || "https://console-api-production-4576.up.railway.app";
 
+interface BusinessOps {
+  top_awards: Array<{
+    amount: number; recipient: string; agency: string; description: string;
+    naics_code: string | null; naics_desc: string | null;
+    start_date: string; end_date: string;
+  }>;
+  top_naics: Array<{ code: string; name: string; amount: number }>;
+  totals: { awards_count: number; awards_dollars: number; lookback_months: number };
+  sam_gov_search_link: string;
+}
+
 interface CarbondaleData {
   ts: string;
   indicators: Record<string, { value: number; date: string }>;
   unemployment_series: Array<{ date: string; value: number }>;
   labor_force_series: Array<{ date: string; value: number }>;
+  business_opportunities?: BusinessOps;
+}
+
+function fmtMoney(n: number): string {
+  if (n >= 1_000_000_000) return `$${(n / 1_000_000_000).toFixed(1)}B`;
+  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `$${(n / 1_000).toFixed(0)}k`;
+  return `$${n.toFixed(0)}`;
+}
+
+function BusinessLeadsBlock({ b }: { b: BusinessOps }) {
+  return (
+    <section style={{ marginTop: 40 }}>
+      <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+      <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+        Business lead opportunities · federal contracts
+      </h2>
+      <div style={{ fontSize: 14, color: "#5a564d", marginBottom: 16, maxWidth: 720 }}>
+        Federal contract dollars flowing into Jackson County, by sector. Use these
+        to (a) pitch employers in matching NAICS to consider Carbondale, (b) help
+        local primes find subcontracting wedges, and (c) target SAM.gov solicitations
+        where regional demand is already proven.
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
+        <div>
+          <h3 style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: "0.06em", color: "#7a756b", marginBottom: 10 }}>
+            Top NAICS · Jackson Co. (last {b.totals.lookback_months}mo)
+          </h3>
+          {b.top_naics.length === 0 ? (
+            <div style={{ color: "#7a756b", fontSize: 13 }}>No data returned.</div>
+          ) : (
+            <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "hidden" }}>
+              {b.top_naics.slice(0, 8).map((n, i) => (
+                <div key={n.code} style={{
+                  display: "flex", justifyContent: "space-between", padding: "10px 14px",
+                  borderTop: i === 0 ? "none" : "1px solid #ebe5d6", fontSize: 14,
+                }}>
+                  <div>
+                    <div style={{ fontWeight: 600 }}>{n.name}</div>
+                    <div style={{ fontSize: 11, color: "#7a756b" }}>NAICS {n.code}</div>
+                  </div>
+                  <div style={{ fontWeight: 600, color: "#1f5f8f" }}>{fmtMoney(n.amount)}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        <div>
+          <h3 style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: "0.06em", color: "#7a756b", marginBottom: 10 }}>
+            Largest awards · place-of-performance Jackson Co.
+          </h3>
+          {b.top_awards.length === 0 ? (
+            <div style={{ color: "#7a756b", fontSize: 13 }}>No data returned.</div>
+          ) : (
+            <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "hidden" }}>
+              {b.top_awards.slice(0, 8).map((a, i) => (
+                <div key={i} style={{ padding: "10px 14px", borderTop: i === 0 ? "none" : "1px solid #ebe5d6", fontSize: 13 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                    <div style={{ fontWeight: 600, color: "#1f1d18", flex: 1 }}>{a.recipient || "—"}</div>
+                    <div style={{ fontWeight: 600, color: "#1f5f8f" }}>{fmtMoney(a.amount)}</div>
+                  </div>
+                  <div style={{ fontSize: 12, color: "#5a564d", marginTop: 2 }}>{a.agency}</div>
+                  {a.description && <div style={{ fontSize: 12, color: "#7a756b", marginTop: 4 }}>{a.description}</div>}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+      <div style={{ marginTop: 16, padding: 14, background: "#fef9eb", border: "1px solid #f0d98a", borderRadius: 6, fontSize: 13 }}>
+        <strong>Where to act:</strong>{" "}
+        <a href={b.sam_gov_search_link} target="_blank" rel="noopener noreferrer">SAM.gov · Illinois active opportunities →</a>
+        {" · "}
+        <a href="https://www.usaspending.gov/state/Illinois" target="_blank" rel="noopener noreferrer">USAspending · Illinois</a>
+        {" · "}
+        <a href="https://www.sba.gov/federal-contracting/contracting-assistance-programs/hubzone-program" target="_blank" rel="noopener noreferrer">SBA HUBZone</a>
+      </div>
+    </section>
+  );
+}
+
+function CrossLinkFooter() {
+  return (
+    <div style={{ marginTop: 40, padding: 20, background: "#f0ece1", borderRadius: 6, fontSize: 14, color: "#3d3a33" }}>
+      <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 10, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+        Related views
+      </div>
+      <div style={{ marginBottom: 6 }}>
+        <a href="/murphysboro" style={{ fontWeight: 600 }}>Murphysboro, IL →</a>{" "}
+        <span style={{ color: "#5a564d" }}>— Jackson County seat, 8 mi west; same MSA, city-specific federal awards.</span>
+      </div>
+      <div style={{ marginBottom: 6 }}>
+        <a href="/mantracon" style={{ fontWeight: 600 }}>Man-Tra-Con · SIWIB · LWA-25 →</a>{" "}
+        <span style={{ color: "#5a564d" }}>— 5-county workforce-board view for partnering with the SIWIB on training-to-jobs.</span>
+      </div>
+      <div>
+        <a href="/market" style={{ fontWeight: 600 }}>US Market Health →</a>{" "}
+        <span style={{ color: "#5a564d" }}>— national macro / recession watch backdrop that frames the local picture.</span>
+      </div>
+    </div>
+  );
 }
 
 async function fetchCarbondale(): Promise<CarbondaleData | null> {
@@ -379,6 +491,10 @@ export default async function CarbondalePage() {
                   </div>
                 </>
               )}
+
+              {data.business_opportunities && <BusinessLeadsBlock b={data.business_opportunities} />}
+
+              <CrossLinkFooter />
 
               <div style={{ marginTop: 40, fontSize: 12, color: "#8a857c", lineHeight: 1.6 }}>
                 <strong>Where the data comes from:</strong> all indicators pulled from FRED

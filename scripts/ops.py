@@ -7438,11 +7438,13 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # average. Heavy timeout: ~200 tickers × ~1.5s/call (rate-limited
     # under SEC's 10 req/sec cap) + Form 4 XML fetches.
     ("sec_filings",         lambda pool, cfg: (lambda: _stage_sec_filings(pool, backfill=bool(cfg.get("_sec_backfill")), cfg=cfg)), SEC_FILINGS_STAGE_TIMEOUT_SEC),
-    # FRED macro indicators — weekly. Five canonical series (sahm_rule,
-    # industrial_production, initial_claims, yield_curve, hy_spread)
-    # via FREDAdapter, idempotent ON CONFLICT, 7-day skip-guard.
-    # Added 2026-05-14 — closes the last "spec-only" gap in §6.1.
-    ("macro_indicators",    lambda pool, cfg: (lambda: _stage_macro_indicators(pool, cfg)),    STAGE_TIMEOUT_SEC),
+    # FRED macro indicators — weekly. ~93 canonical series (sahm_rule,
+    # industrial_production, initial_claims, yield_curve, hy_spread,
+    # 50-state PHCI panel, sub-state Carbondale/LWA-25 series, etc.)
+    # via FREDAdapter, idempotent ON CONFLICT. Heavy timeout because a
+    # backfill with skip_guard_days=0 fetches every series in series
+    # (~120s+ wall-clock end-to-end is normal).
+    ("macro_indicators",    lambda pool, cfg: (lambda: _stage_macro_indicators(pool, cfg)),    HEAVY_STAGE_TIMEOUT_SEC),
     # greeks.pro free-tier max-pain (1 symbol/day, X-API-Key, idempotent
     # ON CONFLICT, handler same-day skip-guard). Added 2026-05-16.
     ("greeks_max_pain",     lambda pool, cfg: (lambda: _stage_greeks_max_pain(pool, cfg)),     STAGE_TIMEOUT_SEC),

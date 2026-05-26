@@ -143,9 +143,21 @@ INDICATOR_SERIES: tuple[tuple[str, str], ...] = (
     # All freely licensed via BLS LAUS, BEA, Census ACS, Realtor.com
     # via FRED. Annual series lag 6-18 months; monthly series lag 1-2.
     # Jackson County, IL (FIPS 17077)
+    # Man-Tra-Con LWA-25 (Southern Illinois Workforce Development Board)
+    # 5-county service area. FRED LAUCN format is annual-only (-A suffix);
+    # monthly BLS LAUS county data lives under the IL{XX}{UR,LF}N shorthand.
+    # Jackson (FIPS 17077), Franklin (17055), Jefferson (17081),
+    # Perry (17145), Williamson (17199).
     ("crb_jackson_unemployment_rate",   "ILJAURN"),                  # monthly, 1990+
-    ("crb_jackson_unemployed_persons",  "LAUCN170770000000004"),    # monthly, 1990+
-    ("crb_jackson_labor_force",         "LAUCN170770000000006"),    # monthly, 1990+
+    ("crb_jackson_labor_force",         "ILJALFN"),                  # monthly, 1990+
+    ("crb_franklin_unemployment_rate",  "ILFRURN"),                  # monthly, 1990+
+    ("crb_franklin_labor_force",        "ILFRLFN"),                  # monthly, 1990+
+    ("crb_jefferson_unemployment_rate", "ILJEURN"),                  # monthly, 1990+
+    ("crb_jefferson_labor_force",       "ILJELFN"),                  # monthly, 1990+
+    ("crb_perry_unemployment_rate",     "ILPRURN"),                  # monthly, 1990+
+    ("crb_perry_labor_force",           "ILPRLFN"),                  # monthly, 1990+
+    ("crb_williamson_unemployment_rate","ILWMURN"),                  # monthly, 1990+
+    ("crb_williamson_labor_force",      "ILWMLFN"),                  # monthly, 1990+
     ("crb_jackson_personal_income",     "PI17077"),                  # annual, 1969+
     ("crb_jackson_real_gdp",            "REALGDPALL17077"),         # annual, 2001+
     ("crb_jackson_median_hh_income",    "MHIIL17077A052NCEN"),       # annual, 1989+

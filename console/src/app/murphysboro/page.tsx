@@ -1,0 +1,391 @@
+/**
+ * Public /murphysboro page — Murphysboro, IL economic snapshot.
+ *
+ * Murphysboro is the Jackson County seat, 8 mi W of Carbondale, pop ~7.6k.
+ * Shares the Jackson County / Carbondale-Marion MSA FRED substrate with
+ * /carbondale; differentiation comes from city-specific USAspending awards
+ * (recipient_city=MURPHYSBORO) layered over the county-wide context.
+ */
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
+const API_BASE =
+  process.env.NEXT_PUBLIC_API_BASE || "https://console-api-production-4576.up.railway.app";
+
+interface BusinessOps {
+  top_awards: Array<{
+    amount: number; recipient: string; agency: string; description: string;
+    naics_code: string | null; naics_desc: string | null;
+    start_date: string; end_date: string;
+  }>;
+  top_naics: Array<{ code: string; name: string; amount: number }>;
+  totals: { awards_count: number; awards_dollars: number; lookback_months: number };
+  sam_gov_search_link: string;
+}
+
+interface MurphysboroData {
+  ts: string;
+  indicators: Record<string, { value: number; date: string }>;
+  unemployment_series: Array<{ date: string; value: number }>;
+  business_opportunities_city: BusinessOps;
+  business_opportunities_county: BusinessOps;
+}
+
+async function fetchData(): Promise<MurphysboroData | null> {
+  try {
+    const res = await fetch(`${API_BASE}/api/public/murphysboro`, { cache: "no-store" });
+    if (!res.ok) return null;
+    return (await res.json()) as MurphysboroData;
+  } catch {
+    return null;
+  }
+}
+
+type Tone = "good" | "ok" | "warn" | "bad";
+const TONE_COLOR: Record<Tone, string> = {
+  good: "oklch(55% 0.16 142)",
+  ok:   "oklch(55% 0.16 142)",
+  warn: "oklch(58% 0.15 60)",
+  bad:  "oklch(55% 0.20 22)",
+};
+
+function fmtNum(n: number, dec = 0): string {
+  return n.toLocaleString("en-US", { maximumFractionDigits: dec });
+}
+function fmtCurr(n: number): string {
+  if (n >= 1_000_000_000) return `$${(n / 1_000_000_000).toFixed(1)}B`;
+  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `$${(n / 1_000).toFixed(0)}k`;
+  return `$${n.toFixed(0)}`;
+}
+function ageOf(d: string): string {
+  const date = new Date(d + "T00:00:00Z");
+  const now = new Date();
+  const days = Math.floor((now.getTime() - date.getTime()) / 86400000);
+  if (days < 60) return `${days}d ago`;
+  const months = Math.floor(days / 30);
+  if (months < 24) return `${months}mo ago`;
+  return `${Math.floor(months / 12)}y ago`;
+}
+
+interface Card { key: string; label: string; value: string; sub?: string; tone: Tone; detail: string; }
+
+function buildCards(d: MurphysboroData): Array<{ id: string; title: string; subtitle: string; cards: Card[] }> {
+  const ind = d.indicators;
+  const get = (k: string) => ind[k]?.value;
+  const dt = (k: string) => ind[k]?.date;
+
+  const jacksonUR = get("crb_jackson_unemployment_rate");
+  const msaUR = get("crb_msa_unemployment_rate");
+  const ilUR = get("il_unemployment_rate");
+  const lf = get("crb_jackson_labor_force");
+  const hourly = get("crb_msa_avg_hourly_earnings");
+  const weekly = get("crb_msa_avg_weekly_earnings");
+
+  const pop = get("crb_msa_population");
+  const medHH = get("crb_jackson_median_hh_income");
+  const pi = get("crb_jackson_personal_income");
+  const gdp = get("crb_jackson_real_gdp");
+
+  const dom = get("crb_msa_housing_days_on_market");
+  const newList = get("crb_msa_housing_new_listings_mom");
+  const priceInc = get("crb_msa_housing_price_inc_yoy");
+
+  const snap = get("crb_jackson_snap_recipients");
+  const poverty = get("crb_jackson_poverty_universe");
+  const singleParent = get("crb_jackson_single_parent_pct");
+
+  const arr = (...cs: Array<Card | null>): Card[] => cs.filter(Boolean) as Card[];
+
+  return [
+    {
+      id: "jobs", title: "Jobs & wages",
+      subtitle: "Murphysboro sits inside Jackson County and the Carbondale-Marion MSA — labor market reads off both.",
+      cards: arr(
+        jacksonUR !== undefined ? { key: "j_ur", label: "Unemployment · Jackson County", value: `${jacksonUR.toFixed(1)}%`, sub: `${ageOf(dt("crb_jackson_unemployment_rate")!)}`, tone: jacksonUR < 4 ? "good" : jacksonUR < 6 ? "ok" : jacksonUR < 8 ? "warn" : "bad", detail: "Jackson County unemployment rate (Murphysboro is the county seat). Source: BLS LAUS / FRED ILJAURN." } : null,
+        msaUR !== undefined ? { key: "m_ur", label: "Unemployment · MSA", value: `${msaUR.toFixed(1)}%`, sub: "Carbondale-Marion MSA", tone: msaUR < 4 ? "good" : msaUR < 6 ? "ok" : msaUR < 8 ? "warn" : "bad", detail: "Carbondale-Marion, IL MSA (CBSA 16060). Source: BLS LAUS / FRED LAUMT171606000000003." } : null,
+        ilUR !== undefined ? { key: "i_ur", label: "Unemployment · Illinois", value: `${ilUR.toFixed(1)}%`, sub: "state-wide reference", tone: ilUR < 4 ? "good" : ilUR < 6 ? "ok" : ilUR < 8 ? "warn" : "bad", detail: "Illinois state-wide rate for comparison. Source: BLS LAUS / FRED ILUR." } : null,
+        lf !== undefined ? { key: "lf", label: "Labor Force · Jackson County", value: fmtNum(lf), sub: `${ageOf(dt("crb_jackson_labor_force")!)}`, tone: "ok", detail: "Jackson County civilian labor force. Source: BLS LAUS / FRED ILJALFN." } : null,
+        hourly !== undefined ? { key: "h", label: "Avg Hourly Earnings · MSA", value: `$${hourly.toFixed(2)}`, sub: "total private", tone: "ok", detail: "Average hourly earnings (total private) in the Carbondale-Marion MSA. Source: BLS CES / FRED SMU17160600500000003SA." } : null,
+        weekly !== undefined ? { key: "w", label: "Avg Weekly Earnings · MSA", value: `$${weekly.toFixed(0)}`, sub: "total private", tone: "ok", detail: "Average weekly earnings (total private) in the MSA. Source: BLS CES / FRED SMU17160600500000011SA." } : null,
+      ),
+    },
+    {
+      id: "people", title: "People & income",
+      subtitle: "Population is reported at the MSA level (Census). Income data is county-level (BEA + Census SAIPE).",
+      cards: arr(
+        pop !== undefined ? { key: "pop", label: "MSA Population", value: fmtNum(pop), sub: ageOf(dt("crb_msa_population")!), tone: "ok", detail: "Carbondale-Marion MSA population estimate. Murphysboro itself is ~7,600 (2020 Census). Source: Census Population Estimates / FRED CRBPOP." } : null,
+        medHH !== undefined ? { key: "mh", label: "Median HH Income · Jackson Co.", value: fmtCurr(medHH), sub: ageOf(dt("crb_jackson_median_hh_income")!), tone: medHH > 60000 ? "good" : medHH > 45000 ? "ok" : "warn", detail: "Median household income, Jackson County. Source: Census SAIPE / FRED MHIIL17077A052NCEN." } : null,
+        pi !== undefined ? { key: "pi", label: "Personal Income · Jackson Co.", value: fmtCurr(pi * 1000), sub: ageOf(dt("crb_jackson_personal_income")!), tone: "ok", detail: "Total personal income for Jackson County residents (thousands of dollars). Source: BEA / FRED PI17077." } : null,
+        gdp !== undefined ? { key: "gdp", label: "Real GDP · Jackson Co.", value: fmtCurr(gdp * 1000), sub: "all industries", tone: "ok", detail: "Real GDP, all industries, Jackson County (thousands of chained dollars). Source: BEA / FRED REALGDPALL17077." } : null,
+      ),
+    },
+    {
+      id: "housing", title: "Housing market",
+      subtitle: "MSA-level Realtor.com data — covers Murphysboro listings alongside Carbondale.",
+      cards: arr(
+        dom !== undefined ? { key: "dom", label: "Median Days on Market", value: `${fmtNum(dom)} days`, sub: ageOf(dt("crb_msa_housing_days_on_market")!), tone: dom < 30 ? "good" : dom < 60 ? "ok" : dom < 90 ? "warn" : "bad", detail: "Median days listed before going off-market in the MSA. Source: Realtor.com via FRED MEDDAYONMAR16060." } : null,
+        newList !== undefined ? { key: "nl", label: "New Listings MoM", value: `${newList > 0 ? "+" : ""}${newList.toFixed(0)}`, sub: "month-over-month", tone: "ok", detail: "MoM change in new listings in the MSA. Source: Realtor.com via FRED NEWLISCOUMM16060." } : null,
+        priceInc !== undefined ? { key: "pi2", label: "Price Increases (YoY)", value: `${priceInc > 0 ? "+" : ""}${priceInc.toFixed(0)}`, sub: "year-over-year", tone: "ok", detail: "YoY change in listings where asking price was raised. Source: Realtor.com via FRED PRIINCCOUYY16060." } : null,
+      ),
+    },
+    {
+      id: "hardship", title: "Hardship signals",
+      subtitle: "Jackson County household-stress indicators (smallest jurisdiction with reliable annual stats).",
+      cards: arr(
+        snap !== undefined ? { key: "snap", label: "SNAP Recipients · Jackson Co.", value: fmtNum(snap), sub: ageOf(dt("crb_jackson_snap_recipients")!), tone: "warn", detail: "SNAP recipients in Jackson County. Source: Census SAIPE / FRED CBR17077ILA647NCEN." } : null,
+        poverty !== undefined ? { key: "pv", label: "Poverty Universe · Jackson Co.", value: fmtNum(poverty), sub: "denominator for poverty rate", tone: "warn", detail: "Persons in Jackson County for whom poverty status was determined. Source: Census SAIPE / FRED PUAAIL17077A647NCEN." } : null,
+        singleParent !== undefined ? { key: "sp", label: "Single-Parent HH Share", value: `${singleParent.toFixed(1)}%`, sub: "of households with kids", tone: singleParent > 35 ? "warn" : "ok", detail: "Single-parent households as a share of households with children, Jackson County. Source: Census ACS / FRED S1101SPHOUSE017077." } : null,
+      ),
+    },
+  ].filter(s => s.cards.length > 0);
+}
+
+function URChart({ series }: { series: Array<{ date: string; value: number }> }) {
+  if (!series.length) return null;
+  const values = series.map(p => p.value);
+  const min = Math.max(0, Math.min(...values) - 1);
+  const max = Math.max(...values) + 1;
+  const range = max - min || 1;
+  const pts = series.map((p, i) => {
+    const x = (i / Math.max(1, series.length - 1)) * 780 + 10;
+    const y = 220 - ((p.value - min) / range) * 200;
+    return `${x},${y}`;
+  }).join(" ");
+  const lineY = (v: number) => 220 - ((v - min) / range) * 200;
+  const ticks = Array.from({ length: 4 }, (_, i) => Math.round(((i + 0.5) / 4) * (series.length - 1)));
+  return (
+    <svg viewBox="0 0 800 260" preserveAspectRatio="none" style={{ width: "100%", height: 260 }}>
+      <line x1="0" y1={lineY(4)} x2="800" y2={lineY(4)} stroke="oklch(55% 0.16 142)" strokeWidth="1" strokeDasharray="4 4" />
+      <text x="8" y={lineY(4) - 5} fill="oklch(50% 0.16 142)" fontSize="11" fontFamily="ui-sans-serif">Full-employment · 4%</text>
+      <line x1="0" y1={lineY(6)} x2="800" y2={lineY(6)} stroke="oklch(58% 0.15 60)" strokeWidth="1" strokeDasharray="4 4" />
+      <text x="8" y={lineY(6) - 5} fill="oklch(50% 0.15 60)" fontSize="11" fontFamily="ui-sans-serif">Watch · 6%</text>
+      <polyline fill="none" stroke="oklch(45% 0.16 220)" strokeWidth="2" points={pts} />
+      {ticks.map(idx => {
+        const p = series[idx]; if (!p) return null;
+        const x = (idx / Math.max(1, series.length - 1)) * 780 + 10;
+        const dt = new Date(p.date).toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: "UTC" });
+        return <g key={idx}><line x1={x} y1="220" x2={x} y2="226" stroke="#8a857c" strokeWidth="0.5" /><text x={x} y="245" fill="#5a564d" fontSize="11" fontFamily="ui-sans-serif" textAnchor="middle">{dt}</text></g>;
+      })}
+    </svg>
+  );
+}
+
+function fmtMoney(n: number) {
+  if (n >= 1_000_000_000) return `$${(n / 1_000_000_000).toFixed(1)}B`;
+  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `$${(n / 1_000).toFixed(0)}k`;
+  return `$${n.toFixed(0)}`;
+}
+
+function BusinessLeadsTwo({ city, county }: { city: BusinessOps; county: BusinessOps }) {
+  return (
+    <section style={{ marginTop: 40 }}>
+      <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+      <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+        Business lead opportunities · federal contracts
+      </h2>
+      <div style={{ fontSize: 14, color: "#5a564d", marginBottom: 16, maxWidth: 760 }}>
+        Federal contract dollars flowing into Murphysboro specifically (top) and
+        Jackson County broadly (bottom). Use these to pitch local employers on
+        sectors where federal demand is already proven in the region, and to find
+        primes for HUBZone-status subcontract pitches.
+      </div>
+
+      <div style={{ marginBottom: 24 }}>
+        <h3 style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: "0.06em", color: "#7a756b", marginBottom: 10 }}>
+          Awards with recipient city = Murphysboro · last {city.totals.lookback_months} months
+        </h3>
+        {city.top_awards.length === 0 ? (
+          <div style={{ padding: 16, background: "white", border: "1px solid #d8d2c4", borderRadius: 6, fontSize: 13, color: "#7a756b" }}>
+            No federal contract awards reported with recipient_city = MURPHYSBORO in this window.
+            This is normal for a small city — look at the Jackson County view below to spot regional primes who could be invited to base subcontracting work in Murphysboro.
+          </div>
+        ) : (
+          <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "hidden" }}>
+            {city.top_awards.slice(0, 8).map((a, i) => (
+              <div key={i} style={{ padding: "10px 14px", borderTop: i === 0 ? "none" : "1px solid #ebe5d6", fontSize: 13 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                  <div style={{ fontWeight: 600, color: "#1f1d18", flex: 1 }}>{a.recipient || "—"}</div>
+                  <div style={{ fontWeight: 600, color: "#1f5f8f" }}>{fmtMoney(a.amount)}</div>
+                </div>
+                <div style={{ fontSize: 12, color: "#5a564d", marginTop: 2 }}>{a.agency}</div>
+                {a.description && <div style={{ fontSize: 12, color: "#7a756b", marginTop: 4 }}>{a.description}</div>}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
+        <div>
+          <h3 style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: "0.06em", color: "#7a756b", marginBottom: 10 }}>
+            Top NAICS · Jackson County (last {county.totals.lookback_months}mo)
+          </h3>
+          <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "hidden" }}>
+            {county.top_naics.slice(0, 8).map((n, i) => (
+              <div key={n.code} style={{ display: "flex", justifyContent: "space-between", padding: "10px 14px", borderTop: i === 0 ? "none" : "1px solid #ebe5d6", fontSize: 14 }}>
+                <div>
+                  <div style={{ fontWeight: 600 }}>{n.name}</div>
+                  <div style={{ fontSize: 11, color: "#7a756b" }}>NAICS {n.code}</div>
+                </div>
+                <div style={{ fontWeight: 600, color: "#1f5f8f" }}>{fmtMoney(n.amount)}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div>
+          <h3 style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: "0.06em", color: "#7a756b", marginBottom: 10 }}>
+            Largest awards · Jackson Co. (any city)
+          </h3>
+          <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "hidden" }}>
+            {county.top_awards.slice(0, 8).map((a, i) => (
+              <div key={i} style={{ padding: "10px 14px", borderTop: i === 0 ? "none" : "1px solid #ebe5d6", fontSize: 13 }}>
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <div style={{ fontWeight: 600, color: "#1f1d18", flex: 1 }}>{a.recipient || "—"}</div>
+                  <div style={{ fontWeight: 600, color: "#1f5f8f" }}>{fmtMoney(a.amount)}</div>
+                </div>
+                <div style={{ fontSize: 12, color: "#5a564d", marginTop: 2 }}>{a.agency}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ marginTop: 20, padding: 16, background: "#fef9eb", border: "1px solid #f0d98a", borderRadius: 6, fontSize: 13, color: "#3d3a33" }}>
+        <strong>Where to go for active solicitations:</strong>
+        <ul style={{ margin: "8px 0 0 18px", padding: 0 }}>
+          <li><a href={city.sam_gov_search_link} target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>SAM.gov active opportunities · Illinois filter →</a></li>
+          <li><a href="https://www.usaspending.gov/state/Illinois" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>USAspending · Illinois state deep view</a></li>
+          <li>Murphysboro qualifies for HUBZone preference in parts of the city — local primes can register at <a href="https://www.sba.gov/federal-contracting/contracting-assistance-programs/hubzone-program" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>SBA HUBZone</a> for set-aside contract eligibility.</li>
+        </ul>
+      </div>
+    </section>
+  );
+}
+
+export default async function MurphysboroPage() {
+  const data = await fetchData();
+  if (!data) {
+    return (
+      <html lang="en"><body style={{ fontFamily: "system-ui", padding: 40, color: "#5a564d" }}>
+        Sorry — the Murphysboro data feed isn&apos;t responding right now. Try again in a minute.
+      </body></html>
+    );
+  }
+  const sections = buildCards(data);
+  const ur = data.indicators["crb_jackson_unemployment_rate"]?.value;
+  const tone: Tone = ur == null ? "ok" : ur < 4 ? "good" : ur < 6 ? "ok" : ur < 8 ? "warn" : "bad";
+  const headline =
+    ur == null ? "Murphysboro Snapshot" :
+    ur < 4 ? "Strong local labor market" :
+    ur < 6 ? "Healthy local labor market" :
+    ur < 8 ? "Softening local labor market" :
+    "Stressed local labor market";
+
+  return (
+    <html lang="en">
+      <head>
+        <title>Murphysboro, IL · Economic Snapshot</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+        <style>{`
+          :root { color-scheme: light; }
+          * { box-sizing: border-box; }
+          html, body { margin: 0; padding: 0; background: #f7f5f1; color: #1f1d18; font-family: "IBM Plex Sans", system-ui, sans-serif; line-height: 1.5; }
+          a { color: #1f5f8f; }
+          .container { max-width: 1000px; margin: 0 auto; padding: 32px 20px 64px; }
+        `}</style>
+      </head>
+      <body>
+        <div className="container">
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/logo-icon.svg" alt="Packet Void Labs" width={28} height={28} />
+            <div style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: "0.08em", color: "#8a857c" }}>
+              Murphysboro, IL · Economic Snapshot
+            </div>
+          </div>
+          <h1 style={{ fontSize: 46, fontWeight: 600, lineHeight: 1.05, margin: "8px 0 8px 0", color: TONE_COLOR[tone] }}>
+            {headline}
+          </h1>
+          <div style={{ fontSize: 17, color: "#3d3a33", maxWidth: 720 }}>
+            {ur != null
+              ? <>Jackson County unemployment at <strong>{ur.toFixed(1)}%</strong>. Murphysboro is the Jackson County seat, 8 mi W of Carbondale, in the Carbondale-Marion MSA.</>
+              : <>Jackson County seat. Carbondale-Marion MSA.</>}
+          </div>
+          <div style={{ fontSize: 12, color: "#8a857c", marginTop: 8 }}>
+            Updated {data.ts.slice(0, 16).replace("T", " ")} UTC. County / MSA / state series via BLS LAUS, BEA, Census, Realtor.com (FRED). Federal awards via USAspending.gov.
+          </div>
+
+          {sections.map(section => (
+            <section key={section.id} style={{ marginTop: 40 }}>
+              <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+              <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0" }}>{section.title}</h2>
+              <div style={{ fontSize: 14, color: "#5a564d", marginBottom: 16 }}>{section.subtitle}</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 16 }}>
+                {section.cards.map(c => (
+                  <div key={c.key} style={{ background: "white", border: "1px solid #d8d2c4", borderLeft: `6px solid ${TONE_COLOR[c.tone]}`, borderRadius: 6, padding: 16 }}>
+                    <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: "#7a756b", marginBottom: 8 }}>{c.label}</div>
+                    <div style={{ fontSize: 26, fontWeight: 500, color: TONE_COLOR[c.tone], lineHeight: 1.1, marginBottom: 6 }}>{c.value}</div>
+                    {c.sub && <div style={{ fontSize: 12, color: "#7a756b", marginBottom: 10 }}>{c.sub}</div>}
+                    <details style={{ fontSize: 12, color: "#7a756b" }}>
+                      <summary style={{ cursor: "pointer", userSelect: "none" }}>Source &amp; details</summary>
+                      <div style={{ marginTop: 6 }}>{c.detail}</div>
+                    </details>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ))}
+
+          {data.unemployment_series.length > 0 && (
+            <section style={{ marginTop: 40 }}>
+              <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+              <h2 style={{ fontSize: 22, fontWeight: 600, marginBottom: 8 }}>Jackson County unemployment · last 5 years</h2>
+              <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16 }}>
+                Murphysboro tracks the Jackson County series. Below 4% is full employment; above 6% warrants attention.
+              </div>
+              <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, padding: 16 }}>
+                <URChart series={data.unemployment_series} />
+              </div>
+            </section>
+          )}
+
+          <BusinessLeadsTwo city={data.business_opportunities_city} county={data.business_opportunities_county} />
+
+          <div style={{ marginTop: 40, padding: 20, background: "#f0ece1", borderRadius: 6, fontSize: 14, color: "#3d3a33" }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 10, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+              Related views
+            </div>
+            <div style={{ marginBottom: 6 }}>
+              <a href="/carbondale" style={{ fontWeight: 600 }}>Carbondale, IL →</a>{" "}
+              <span style={{ color: "#5a564d" }}>— same Jackson County / MSA substrate, framed for city BD work.</span>
+            </div>
+            <div style={{ marginBottom: 6 }}>
+              <a href="/mantracon" style={{ fontWeight: 600 }}>Man-Tra-Con · SIWIB · LWA-25 →</a>{" "}
+              <span style={{ color: "#5a564d" }}>— 5-county workforce-board view (Franklin, Jackson, Jefferson, Perry, Williamson) with training-pipeline alignment.</span>
+            </div>
+            <div>
+              <a href="/market" style={{ fontWeight: 600 }}>US Market Health →</a>{" "}
+              <span style={{ color: "#5a564d" }}>— national macro / recession watch backdrop.</span>
+            </div>
+          </div>
+
+          <div style={{ marginTop: 24, fontSize: 12, color: "#8a857c", lineHeight: 1.6 }}>
+            <strong>Sources:</strong> US Bureau of Labor Statistics (LAUS, CES),
+            US Bureau of Economic Analysis (Regional Economic Accounts),
+            US Census Bureau (Population Estimates, SAIPE, ACS), Realtor.com,
+            USAspending.gov, SAM.gov. Aggregated via the St. Louis Fed (FRED).
+            <br /><br />
+            <strong>Coverage caveat:</strong> Most series are reported at Jackson
+            County or Carbondale-Marion MSA scale rather than at the Murphysboro
+            municipal level — the smallest jurisdiction with reliable BLS / BEA /
+            Census coverage in this region is the county. Sub-county Census Place
+            data (ACS) for Murphysboro CDP will be added in a future iteration.
+          </div>
+        </div>
+      </body>
+    </html>
+  );
+}

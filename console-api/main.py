@@ -16,10 +16,12 @@ real data in follow-up commits without frontend changes.
 from __future__ import annotations
 
 import os
+import time
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import UTC, date, datetime, timedelta
 
 import asyncpg
+import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -76,7 +78,7 @@ async def _fetch_recent_events(conn, hours: int = 24) -> list[dict]:
 async def health() -> dict:
     async with app.state.pool.acquire() as conn:
         ok = await conn.fetchval("SELECT 1")
-    return {"ok": bool(ok), "ts": datetime.now(timezone.utc).isoformat()}
+    return {"ok": bool(ok), "ts": datetime.now(UTC).isoformat()}
 
 
 @app.get("/api/overview")
@@ -92,7 +94,7 @@ async def overview() -> dict:
             "SELECT COUNT(*) FROM platform.application_log WHERE event_type LIKE 'INGESTION_HELD%' AND recorded_at >= NOW() - INTERVAL '7 days'"
         )
     return {
-        "ts": datetime.now(timezone.utc).isoformat(),
+        "ts": datetime.now(UTC).isoformat(),
         "kpis": [
             {"label": "Equity",         "value": "$103,442", "sub": "+1.51% today",  "tone": "pos"},
             {"label": "Day P&L",        "value": "+$1,538",  "sub": "+1.51%",         "tone": "pos"},
@@ -135,7 +137,7 @@ async def overview() -> dict:
 async def forensics() -> dict:
     """Forensics triggers — sprint-dossier index (docs/sprints/) is the SoT."""
     return {
-        "ts": datetime.now(timezone.utc).isoformat(),
+        "ts": datetime.now(UTC).isoformat(),
         "triggers": [
             {"id": "F-22-014", "severity": "high", "trigger": "drawdown_pct", "engine": "vector",    "note": "rolling 30d DD -4.8%, 2σ over baseline", "when": "2026-05-22 14:02 UTC"},
             {"id": "F-22-009", "severity": "med",  "trigger": "loss_cluster", "engine": "reversion", "note": "4 consecutive losing AARs (avg hold 2d)", "when": "2026-05-21 22:18 UTC"},
@@ -212,7 +214,7 @@ async def ticker_drillin(symbol: str) -> dict:
             symbol,
         )
     return {
-        "ts": datetime.now(timezone.utc).isoformat(),
+        "ts": datetime.now(UTC).isoformat(),
         "symbol": symbol,
         "bars": [
             {
@@ -242,7 +244,7 @@ async def ticker_drillin(symbol: str) -> dict:
 @app.get("/api/lab")
 async def lab() -> dict:
     return {
-        "ts": datetime.now(timezone.utc).isoformat(),
+        "ts": datetime.now(UTC).isoformat(),
         "summary": {"runs_30d": 14, "survived": 7, "failed": 5, "pending_promotion": 1, "queued": 2},
         "runs": [
             {"id": "L-22-014", "engine": "momentum",  "candidate": "lab.mom_lookback_24mo", "date": "2026-05-22", "seed": 7421, "duration": "8m22s", "verdict": "SURVIVED", "dsr": 0.971, "sharpe": 1.31, "credibility": 79, "trials": 64, "isolationViolations": 0, "promotion_pending": True,  "note": "12-stop walk-forward survives gate"},
@@ -254,7 +256,7 @@ async def lab() -> dict:
 @app.get("/api/ecr")
 async def ecr() -> dict:
     return {
-        "ts": datetime.now(timezone.utc).isoformat(),
+        "ts": datetime.now(UTC).isoformat(),
         "queue": [
             {"id": "ECR-217", "kind": "MODIFY", "engine": "vector",   "action": "raise credibility floor",   "submitted_by": "operator", "submitted_when": "2026-05-25 03:30 UTC", "summary": "Bump capital_gate min_credibility from 50 → 60 on vector to align with reversion/momentum.", "diff": "-min_credibility=50\n+min_credibility=60", "lab_dossier": "L-21-007"},
             {"id": "ECR-216", "kind": "ADD",    "engine": "momentum", "action": "lab.mom_lookback_24mo",     "submitted_by": "lab",      "submitted_when": "2026-05-22 14:12 UTC", "summary": "Promote 24mo lookback variant from Lab to PAPER. DSR 0.971 / credibility 79 / 64 trials.", "diff": "+ENGINE_LOOKBACK_DAYS=504\n+CANDIDATE='lab.mom_lookback_24mo'", "lab_dossier": "L-22-014"},
@@ -277,7 +279,7 @@ async def ecr() -> dict:
 @app.get("/api/allocator")
 async def allocator() -> dict:
     return {
-        "ts": datetime.now(timezone.utc).isoformat(),
+        "ts": datetime.now(UTC).isoformat(),
         "method": "inverse-vol + CHOP gate",
         "trigger": "WEEKLY_FIRST_TRADING_DAY",
         "last_run": "2026-05-19 Mon",
@@ -384,7 +386,7 @@ async def health_page() -> dict:
         "console_api":     "operator-console FastAPI backend (this service)",
     }
     return {
-        "ts": datetime.now(timezone.utc).isoformat(),
+        "ts": datetime.now(UTC).isoformat(),
         "kpis": {
             "open_holds":            0,
             "open_escalations_7d":   open_escalations_count or 0,
@@ -453,7 +455,7 @@ async def health_page() -> dict:
 @app.get("/api/digest")
 async def digest() -> dict:
     return {
-        "ts": datetime.now(timezone.utc).isoformat(),
+        "ts": datetime.now(UTC).isoformat(),
         "digest": {
             "week_of": "2026-05-19",
             "generated_ts": "2026-05-23 21:30 UTC",
@@ -488,7 +490,7 @@ async def data_pipeline() -> dict:
         tickers_count  = await conn.fetchval("SELECT COUNT(DISTINCT ticker) FROM platform.prices_daily WHERE date >= CURRENT_DATE - INTERVAL '7 days'")
         latest_doc     = await conn.fetchval("SELECT MAX(recorded_at) FROM platform.application_log WHERE event_type = 'DATA_OPERATIONS_COMPLETE'")
     return {
-        "ts": datetime.now(timezone.utc).isoformat(),
+        "ts": datetime.now(UTC).isoformat(),
         "kpis": {
             "passed":           13,
             "warnings":         0,
@@ -635,7 +637,7 @@ async def public_market_health() -> dict:
         },
     }
     return {
-        "ts": datetime.now(timezone.utc).isoformat(),
+        "ts": datetime.now(UTC).isoformat(),
         "indicators": indicators,
         "vix_series": [{"date": r["observed_date"].isoformat(), "value": float(r["value_num"])} for r in vix_series],
         "spy_series": [{"date": r["date"].isoformat(), "close": float(r["adjusted_close"])} for r in spy],
@@ -663,11 +665,10 @@ async def public_carbondale() -> dict:
     """
     TARGETS = (
         # Jackson County, IL
-        "crb_jackson_unemployment_rate", "crb_jackson_unemployed_persons",
-        "crb_jackson_labor_force", "crb_jackson_personal_income",
-        "crb_jackson_real_gdp", "crb_jackson_median_hh_income",
-        "crb_jackson_snap_recipients", "crb_jackson_poverty_universe",
-        "crb_jackson_single_parent_pct",
+        "crb_jackson_unemployment_rate", "crb_jackson_labor_force",
+        "crb_jackson_personal_income", "crb_jackson_real_gdp",
+        "crb_jackson_median_hh_income", "crb_jackson_snap_recipients",
+        "crb_jackson_poverty_universe", "crb_jackson_single_parent_pct",
         # Carbondale-Marion MSA
         "crb_msa_population", "crb_msa_unemployment_rate",
         "crb_msa_labor_force", "crb_msa_private_service_jobs",
@@ -714,18 +715,310 @@ async def public_carbondale() -> dict:
             """
         )
     indicators = {r["series_id"]: {"value": float(r["value_num"]), "date": r["observed_date"].isoformat()} for r in rows}
+    business = await _usaspending_block(county_fips=["077"], recipient_city=None)
     return {
-        "ts": datetime.now(timezone.utc).isoformat(),
+        "ts": datetime.now(UTC).isoformat(),
         "indicators": indicators,
         "unemployment_series": [{"date": r["observed_date"].isoformat(), "value": float(r["value_num"])} for r in ur_series],
         "labor_force_series": [{"date": r["observed_date"].isoformat(), "value": float(r["value_num"])} for r in labor_force_series],
+        "business_opportunities": business,
+    }
+
+
+# ────────────── USAspending.gov federal-awards helper ──────────────
+# Used by /api/public/carbondale, /api/public/murphysboro, /api/public/mantracon
+# to surface federal contract dollars flowing into the region as business-lead
+# substrate. Public API, no key required. 5-minute in-process cache to avoid
+# hammering api.usaspending.gov on every page load.
+
+_USA_CACHE: dict[str, tuple[float, dict]] = {}
+_USA_CACHE_TTL_SEC = 300
+
+async def _usaspending_post(path: str, body: dict, timeout: float = 15.0) -> dict:
+    url = f"https://api.usaspending.gov{path}"
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        try:
+            r = await client.post(url, json=body)
+            r.raise_for_status()
+            return r.json()
+        except Exception:
+            return {}
+
+async def _usaspending_block(
+    *, county_fips: list[str], recipient_city: str | None, lookback_months: int = 24
+) -> dict:
+    """Returns {top_awards: [...], top_naics: [...], totals: {...}, sam_gov_link}.
+    Filters federal contract awards by place-of-performance to the given IL counties.
+    """
+    cache_key = f"v1|{','.join(sorted(county_fips))}|{recipient_city or '*'}|{lookback_months}"
+    now = time.time()
+    if cache_key in _USA_CACHE and now - _USA_CACHE[cache_key][0] < _USA_CACHE_TTL_SEC:
+        return _USA_CACHE[cache_key][1]
+
+    end = date.today()
+    start = end - timedelta(days=lookback_months * 30)
+    locations = [{"country": "USA", "state": "IL", "county": c} for c in county_fips]
+    base_filters: dict = {
+        "time_period": [{"start_date": start.isoformat(), "end_date": end.isoformat()}],
+        "place_of_performance_locations": locations,
+        "award_type_codes": ["A", "B", "C", "D"],  # contracts
+    }
+    if recipient_city:
+        base_filters["recipient_locations"] = [
+            {"country": "USA", "state": "IL", "city": recipient_city.upper()}
+        ]
+
+    # Top recipients
+    awards_body = {
+        "filters": base_filters,
+        "fields": [
+            "Award ID", "Recipient Name", "Award Amount", "Awarding Agency",
+            "Description", "Period of Performance Start Date",
+            "Period of Performance Current End Date", "NAICS", "Place of Performance State Code",
+        ],
+        "page": 1, "limit": 25, "sort": "Award Amount", "order": "desc",
+        "subawards": False,
+    }
+    awards_resp = await _usaspending_post("/api/v2/search/spending_by_award/", awards_body)
+    raw_awards = awards_resp.get("results", []) or []
+
+    # Top NAICS by dollars (note: USAspending uses /naics/ path suffix, not category-in-body)
+    naics_body = {"filters": base_filters, "limit": 10}
+    naics_resp = await _usaspending_post("/api/v2/search/spending_by_category/naics/", naics_body)
+    raw_naics = naics_resp.get("results", []) or []
+
+    def _truncate(s: str | None, n: int = 140) -> str:
+        if not s: return ""
+        s = " ".join(s.split())
+        return s if len(s) <= n else s[: n - 1] + "…"
+
+    top_awards = [
+        {
+            "amount": float(a.get("Award Amount") or 0),
+            "recipient": a.get("Recipient Name") or "",
+            "agency": a.get("Awarding Agency") or "",
+            "description": _truncate(a.get("Description")),
+            "naics_code": (a.get("NAICS") or {}).get("code") if isinstance(a.get("NAICS"), dict) else (a.get("naics") or {}).get("code", ""),
+            "naics_desc": (a.get("NAICS") or {}).get("description") if isinstance(a.get("NAICS"), dict) else "",
+            "start_date": a.get("Period of Performance Start Date") or "",
+            "end_date": a.get("Period of Performance Current End Date") or "",
+        }
+        for a in raw_awards
+    ]
+    top_naics = [
+        {
+            "code": str(n.get("code") or ""),
+            "name": n.get("name") or "",
+            "amount": float(n.get("amount") or 0),
+        }
+        for n in raw_naics if n.get("code")
+    ]
+    totals = {
+        "awards_count": len(raw_awards),
+        "awards_dollars": sum(a["amount"] for a in top_awards),
+        "lookback_months": lookback_months,
+    }
+    # Build a SAM.gov opportunities link pre-filtered to IL by NAICS (top 1)
+    sam_link = (
+        "https://sam.gov/search/?index=opp&page=1"
+        "&sort=-modifiedDate&pageSize=25&sfm[status][is_active]=true"
+        "&sfm[placeOfPerformance][country][name]=USA"
+        "&sfm[placeOfPerformance][state][code]=IL"
+    )
+    if top_naics:
+        sam_link += f"&sfm[naics][naics][0][code]={top_naics[0]['code']}"
+
+    out = {
+        "top_awards": top_awards,
+        "top_naics": top_naics,
+        "totals": totals,
+        "sam_gov_search_link": sam_link,
+        "usaspending_search_link": (
+            "https://www.usaspending.gov/search/?hash=" +  # placeholder; users land on filtered search
+            ""
+        ),
+        "note": (
+            "Federal contract awards with place-of-performance in the selected county set. "
+            f"Lookback: {lookback_months} months. Data refreshed nightly upstream by USAspending.gov."
+        ),
+    }
+    _USA_CACHE[cache_key] = (now, out)
+    return out
+
+
+@app.get("/api/public/murphysboro")
+async def public_murphysboro() -> dict:
+    """PUBLIC endpoint — Murphysboro, IL (Jackson County seat, 8 mi W of Carbondale).
+    Shares the Jackson County FRED substrate with /carbondale; differentiation
+    comes from city-specific federal-awards filtering (recipient_city=MURPHYSBORO).
+    """
+    TARGETS = (
+        # Jackson County (Murphysboro is the county seat)
+        "crb_jackson_unemployment_rate", "crb_jackson_labor_force",
+        "crb_jackson_personal_income", "crb_jackson_real_gdp",
+        "crb_jackson_median_hh_income", "crb_jackson_snap_recipients",
+        "crb_jackson_poverty_universe", "crb_jackson_single_parent_pct",
+        # Carbondale-Marion MSA (Murphysboro is in CBSA 16060)
+        "crb_msa_population", "crb_msa_unemployment_rate",
+        "crb_msa_labor_force", "crb_msa_avg_hourly_earnings",
+        "crb_msa_avg_weekly_earnings",
+        "crb_msa_housing_days_on_market", "crb_msa_housing_new_listings_mom",
+        "crb_msa_housing_price_inc_yoy",
+        # IL state context
+        "il_unemployment_rate", "phci_il",
+    )
+    async with app.state.pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            WITH latest AS (
+                SELECT series_id, value_num, observed_date,
+                       ROW_NUMBER() OVER (PARTITION BY series_id ORDER BY observed_date DESC) AS rn
+                FROM platform.macro_data
+                WHERE series_id = ANY($1::text[]) AND value_num IS NOT NULL
+            )
+            SELECT series_id, value_num, observed_date
+            FROM latest WHERE rn = 1
+            ORDER BY series_id
+            """,
+            list(TARGETS),
+        )
+        ur_series = await conn.fetch(
+            """
+            SELECT observed_date, value_num
+            FROM platform.macro_data
+            WHERE series_id = 'crb_jackson_unemployment_rate'
+              AND observed_date >= CURRENT_DATE - INTERVAL '60 months'
+              AND value_num IS NOT NULL
+            ORDER BY observed_date ASC
+            """
+        )
+    indicators = {r["series_id"]: {"value": float(r["value_num"]), "date": r["observed_date"].isoformat()} for r in rows}
+    # Murphysboro is small — also pull county-wide awards alongside city-specific
+    business_city = await _usaspending_block(county_fips=["077"], recipient_city="MURPHYSBORO")
+    business_county = await _usaspending_block(county_fips=["077"], recipient_city=None)
+    return {
+        "ts": datetime.now(UTC).isoformat(),
+        "indicators": indicators,
+        "unemployment_series": [{"date": r["observed_date"].isoformat(), "value": float(r["value_num"])} for r in ur_series],
+        "business_opportunities_city": business_city,
+        "business_opportunities_county": business_county,
+    }
+
+
+@app.get("/api/public/mantracon")
+async def public_mantracon() -> dict:
+    """PUBLIC endpoint — Man-Tra-Con / Southern Illinois Workforce Development
+    Board (SIWIB) LWA-25 dashboard. Five-county service area: Franklin,
+    Jackson, Jefferson, Perry, Williamson. Surfaces aggregate workforce
+    metrics + federal-awards business-lead substrate for board outreach.
+    """
+    LWA = ("jackson", "franklin", "jefferson", "perry", "williamson")
+    series_keys: list[str] = []
+    for c in LWA:
+        series_keys.append(f"crb_{c}_unemployment_rate")
+        series_keys.append(f"crb_{c}_labor_force")
+    series_keys += ["il_unemployment_rate", "il_nonfarm_payrolls", "phci_il"]
+
+    async with app.state.pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            WITH latest AS (
+                SELECT series_id, value_num, observed_date,
+                       ROW_NUMBER() OVER (PARTITION BY series_id ORDER BY observed_date DESC) AS rn
+                FROM platform.macro_data
+                WHERE series_id = ANY($1::text[]) AND value_num IS NOT NULL
+            )
+            SELECT series_id, value_num, observed_date
+            FROM latest WHERE rn = 1
+            """,
+            series_keys,
+        )
+        # LWA-aggregate labor-force trend = sum of 5 county labor forces, by month
+        lwa_lf_series = await conn.fetch(
+            """
+            SELECT observed_date, SUM(value_num) AS lf
+            FROM platform.macro_data
+            WHERE series_id IN (
+                'crb_jackson_labor_force','crb_franklin_labor_force',
+                'crb_jefferson_labor_force','crb_perry_labor_force',
+                'crb_williamson_labor_force'
+            )
+              AND observed_date >= CURRENT_DATE - INTERVAL '60 months'
+              AND value_num IS NOT NULL
+            GROUP BY observed_date
+            HAVING COUNT(*) = 5
+            ORDER BY observed_date ASC
+            """
+        )
+        # Weighted-avg UR by labor force, by month (denom=sum of LF in same month)
+        lwa_ur_series = await conn.fetch(
+            """
+            WITH m AS (
+                SELECT observed_date, series_id, value_num
+                FROM platform.macro_data
+                WHERE series_id = ANY($1::text[])
+                  AND observed_date >= CURRENT_DATE - INTERVAL '60 months'
+                  AND value_num IS NOT NULL
+            ),
+            pairs AS (
+                SELECT ur.observed_date,
+                       SPLIT_PART(REPLACE(ur.series_id, 'crb_', ''), '_unemployment_rate', 1) AS county,
+                       ur.value_num AS ur,
+                       lf.value_num AS lf
+                FROM m ur
+                JOIN m lf ON lf.observed_date = ur.observed_date
+                          AND lf.series_id =
+                              'crb_' ||
+                              SPLIT_PART(REPLACE(ur.series_id, 'crb_', ''), '_unemployment_rate', 1)
+                              || '_labor_force'
+                WHERE ur.series_id LIKE 'crb_%_unemployment_rate'
+                  AND ur.series_id NOT LIKE '%msa%'
+            )
+            SELECT observed_date, ROUND(SUM(ur * lf) / NULLIF(SUM(lf), 0), 2) AS ur
+            FROM pairs
+            GROUP BY observed_date
+            HAVING COUNT(*) = 5
+            ORDER BY observed_date ASC
+            """,
+            [f"crb_{c}_unemployment_rate" for c in LWA] + [f"crb_{c}_labor_force" for c in LWA],
+        )
+    indicators = {
+        r["series_id"]: {"value": float(r["value_num"]), "date": r["observed_date"].isoformat()}
+        for r in rows
+    }
+    # Aggregate (latest month with all 5 counties available)
+    lwa_latest_lf = float(lwa_lf_series[-1]["lf"]) if lwa_lf_series else None
+    lwa_latest_lf_date = lwa_lf_series[-1]["observed_date"].isoformat() if lwa_lf_series else None
+    lwa_latest_ur = float(lwa_ur_series[-1]["ur"]) if lwa_ur_series else None
+    lwa_latest_ur_date = lwa_ur_series[-1]["observed_date"].isoformat() if lwa_ur_series else None
+
+    business = await _usaspending_block(
+        county_fips=["055", "077", "081", "145", "199"], recipient_city=None
+    )
+    return {
+        "ts": datetime.now(UTC).isoformat(),
+        "indicators": indicators,
+        "lwa_aggregate": {
+            "labor_force": lwa_latest_lf,
+            "labor_force_date": lwa_latest_lf_date,
+            "unemployment_rate_weighted": lwa_latest_ur,
+            "unemployment_rate_date": lwa_latest_ur_date,
+            "county_count": 5,
+        },
+        "lwa_labor_force_series": [
+            {"date": r["observed_date"].isoformat(), "value": float(r["lf"])} for r in lwa_lf_series
+        ],
+        "lwa_unemployment_series": [
+            {"date": r["observed_date"].isoformat(), "value": float(r["ur"])} for r in lwa_ur_series
+        ],
+        "business_opportunities": business,
     }
 
 
 @app.get("/api/providers")
 async def providers() -> dict:
     return {
-        "ts": datetime.now(timezone.utc).isoformat(),
+        "ts": datetime.now(UTC).isoformat(),
         "bindings": [
             {"feed": "prices_daily",         "provider": "fmp",     "status": "ACTIVE",     "adapter": "tpcore.data.ingest_fmp_bars",         "note": "primary daily-bars feed since 2026-05-22 (CTA consolidated)"},
             {"feed": "prices_daily",         "provider": "tradier", "status": "FALLBACK",   "adapter": "tpcore.data.ingest_tradier_bars",     "note": "secondary fallback (acceptable)"},

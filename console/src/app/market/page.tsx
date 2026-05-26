@@ -570,6 +570,24 @@ export default async function MarketHealthPage() {
                   about what the gauges mean.
                 </p>
               </div>
+
+              <div style={{ marginTop: 32, padding: 20, background: "#f0ece1", borderRadius: 6, fontSize: 14, color: "#3d3a33" }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 10, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                  Related views
+                </div>
+                <div style={{ marginBottom: 6 }}>
+                  <a href="/carbondale" style={{ fontWeight: 600 }}>Carbondale, IL →</a>{" "}
+                  <span style={{ color: "#5a564d" }}>— Jackson County economic snapshot for city BD work.</span>
+                </div>
+                <div style={{ marginBottom: 6 }}>
+                  <a href="/murphysboro" style={{ fontWeight: 600 }}>Murphysboro, IL →</a>{" "}
+                  <span style={{ color: "#5a564d" }}>— Jackson County seat, same MSA, city-specific federal-awards view.</span>
+                </div>
+                <div>
+                  <a href="/mantracon" style={{ fontWeight: 600 }}>Man-Tra-Con · SIWIB · LWA-25 →</a>{" "}
+                  <span style={{ color: "#5a564d" }}>— Southern Illinois 5-county workforce-board dashboard.</span>
+                </div>
+              </div>
             </>
           )}
         </div>
