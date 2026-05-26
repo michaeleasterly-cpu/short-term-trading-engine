@@ -528,38 +528,41 @@ async def public_market_health() -> dict:
     health using the platform.macro_data substrate. Safe to expose:
     only published macro indicators (FRED + derived), no positions,
     no engines, no AARs.
+
+    Table: platform.macro_data (series_id, observed_date, value_num).
     """
+    TARGETS = (
+        "vix", "yield_curve", "sahm_rule", "cfnai_ma3", "hy_spread",
+        "credit_spread", "nfci", "epu_index", "initial_claims",
+        "bullish_pct", "bearish_pct", "neutral_pct", "score",
+    )
     async with app.state.pool.acquire() as conn:
-        # Most-recent value per indicator we care about for market health
         rows = await conn.fetch(
             """
             WITH latest AS (
-                SELECT indicator,
-                       value,
-                       observation_date,
-                       ROW_NUMBER() OVER (PARTITION BY indicator ORDER BY observation_date DESC) AS rn
-                FROM platform.macro_indicators
-                WHERE indicator IN (
-                    'vix', 'yield_curve', 'sahm_rule', 'cfnai_ma3',
-                    't10y2y', 'hy_spread', 'unemployment_rate',
-                    'cpi_yoy', 'pce_yoy', 'fed_funds_rate'
-                )
-                  AND observation_date >= CURRENT_DATE - INTERVAL '90 days'
+                SELECT series_id,
+                       value_num,
+                       observed_date,
+                       ROW_NUMBER() OVER (PARTITION BY series_id ORDER BY observed_date DESC) AS rn
+                FROM platform.macro_data
+                WHERE series_id = ANY($1::text[])
+                  AND value_num IS NOT NULL
             )
-            SELECT indicator, value, observation_date
+            SELECT series_id, value_num, observed_date
             FROM latest
             WHERE rn = 1
-            ORDER BY indicator
-            """
+            ORDER BY series_id
+            """,
+            list(TARGETS),
         )
-        # 30-day VIX series for the chart
         vix_series = await conn.fetch(
             """
-            SELECT observation_date, value
-            FROM platform.macro_indicators
-            WHERE indicator = 'vix'
-              AND observation_date >= CURRENT_DATE - INTERVAL '180 days'
-            ORDER BY observation_date ASC
+            SELECT observed_date, value_num
+            FROM platform.macro_data
+            WHERE series_id = 'vix'
+              AND observed_date >= CURRENT_DATE - INTERVAL '180 days'
+              AND value_num IS NOT NULL
+            ORDER BY observed_date ASC
             """
         )
         spy = await conn.fetch(
@@ -571,7 +574,7 @@ async def public_market_health() -> dict:
             ORDER BY date ASC
             """
         )
-    indicators = {r["indicator"]: {"value": float(r["value"]), "date": r["observation_date"].isoformat()} for r in rows}
+    indicators = {r["series_id"]: {"value": float(r["value_num"]), "date": r["observed_date"].isoformat()} for r in rows}
     # Heuristic regime classification — uses the same vol thresholds as
     # the reversion regime filter (15 / 20 / 30).
     vix = indicators.get("vix", {}).get("value")
@@ -585,12 +588,12 @@ async def public_market_health() -> dict:
         vol_regime = "stress"
     else:
         vol_regime = "crisis"
-    yc = indicators.get("t10y2y", {}).get("value") or indicators.get("yield_curve", {}).get("value")
+    yc = indicators.get("yield_curve", {}).get("value")
     macro_regime = "inverted" if (yc is not None and yc < 0) else ("normal" if yc is not None else "unknown")
     return {
         "ts": datetime.now(timezone.utc).isoformat(),
         "indicators": indicators,
-        "vix_series": [{"date": r["observation_date"].isoformat(), "value": float(r["value"])} for r in vix_series],
+        "vix_series": [{"date": r["observed_date"].isoformat(), "value": float(r["value_num"])} for r in vix_series],
         "spy_series": [{"date": r["date"].isoformat(), "close": float(r["adj_close"])} for r in spy],
         "summary": {
             "vol_regime": vol_regime,

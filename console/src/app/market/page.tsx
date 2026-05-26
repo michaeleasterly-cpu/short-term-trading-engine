@@ -32,16 +32,19 @@ async function fetchMarketHealth(): Promise<MarketHealth | null> {
 }
 
 const INDICATOR_LABELS: Record<string, { label: string; unit: string; tone: (v: number) => "pos" | "neg" | "warn" | "neutral" }> = {
-  vix:               { label: "VIX",                 unit: "",   tone: v => v < 15 ? "pos" : v < 20 ? "neutral" : v < 30 ? "warn" : "neg" },
-  yield_curve:       { label: "Yield curve 10y-3mo", unit: "%",  tone: v => v < -0.5 ? "neg" : v < 0 ? "warn" : "pos" },
-  t10y2y:            { label: "10y-2y spread",       unit: "%",  tone: v => v < -0.5 ? "neg" : v < 0 ? "warn" : "pos" },
-  sahm_rule:         { label: "Sahm rule",           unit: "",   tone: v => v >= 0.5 ? "neg" : v >= 0.3 ? "warn" : "pos" },
-  cfnai_ma3:         { label: "CFNAI 3-mo MA",       unit: "",   tone: v => v <= -0.7 ? "neg" : v <= -0.35 ? "warn" : "pos" },
-  hy_spread:         { label: "HY OAS spread",       unit: "bp", tone: v => v > 700 ? "neg" : v > 500 ? "warn" : "pos" },
-  unemployment_rate: { label: "Unemployment",        unit: "%",  tone: v => v > 6 ? "neg" : v > 4.5 ? "warn" : "pos" },
-  cpi_yoy:           { label: "CPI YoY",             unit: "%",  tone: v => v > 4 ? "neg" : v > 3 ? "warn" : "pos" },
-  pce_yoy:           { label: "Core PCE YoY",        unit: "%",  tone: v => v > 3 ? "warn" : "pos" },
-  fed_funds_rate:    { label: "Fed funds",           unit: "%",  tone: () => "neutral" },
+  vix:            { label: "VIX",                  unit: "",   tone: v => v < 15 ? "pos" : v < 20 ? "neutral" : v < 30 ? "warn" : "neg" },
+  yield_curve:    { label: "Yield curve 10y-3mo",  unit: "%",  tone: v => v < -0.5 ? "neg" : v < 0 ? "warn" : "pos" },
+  sahm_rule:      { label: "Sahm rule",            unit: "",   tone: v => v >= 0.5 ? "neg" : v >= 0.3 ? "warn" : "pos" },
+  cfnai_ma3:      { label: "CFNAI 3-mo MA",        unit: "",   tone: v => v <= -0.7 ? "neg" : v <= -0.35 ? "warn" : "pos" },
+  hy_spread:      { label: "HY OAS spread",        unit: "%",  tone: v => v > 7 ? "neg" : v > 5 ? "warn" : "pos" },
+  credit_spread:  { label: "Credit spread",        unit: "%",  tone: v => v > 3 ? "neg" : v > 2 ? "warn" : "pos" },
+  nfci:           { label: "Chicago Fed NFCI",     unit: "",   tone: v => v > 0.5 ? "neg" : v > 0 ? "warn" : "pos" },
+  epu_index:      { label: "Policy uncertainty",   unit: "",   tone: v => v > 250 ? "neg" : v > 150 ? "warn" : "pos" },
+  initial_claims: { label: "Initial claims",       unit: "k",  tone: v => v > 350 ? "neg" : v > 275 ? "warn" : "pos" },
+  bullish_pct:    { label: "AAII bullish",         unit: "%",  tone: () => "neutral" },
+  bearish_pct:    { label: "AAII bearish",         unit: "%",  tone: () => "neutral" },
+  neutral_pct:    { label: "AAII neutral",         unit: "%",  tone: () => "neutral" },
+  score:          { label: "Fear & Greed",         unit: "",   tone: v => v < 25 ? "neg" : v < 45 ? "warn" : v > 75 ? "warn" : "pos" },
 };
 
 function VixChart({ series }: { series: Array<{ date: string; value: number }> }) {
