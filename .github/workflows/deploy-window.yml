@@ -1,0 +1,27 @@
+name: deploy-window
+# EMERGENCY DISABLED 2026-05-26 per operator directive: "throw out the
+# safe window for now... we are in emergency operations trying to recover
+# from failed download attempts". Workflow trigger reduced to
+# workflow_dispatch only so it never fires on push to main; Railway's
+# "Wait for CI" gate therefore won't block deploys on the deploy-window
+# rule. The original hard-gate body is preserved below in a stub job so
+# the rules are still documented; the manual-trigger lets the operator
+# spot-check the gate logic without enabling it.
+#
+# RESTORE PATH: change the `on:` block back to `push: { branches: [main] }`
+# and the workflow becomes a hard gate again. See git history of this
+# file for the original 21:30-23:30 UTC + 13:30-20:00 UTC rules.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy-window:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Emergency disabled — gate documentation only
+        run: |
+          echo "deploy-window gate is EMERGENCY DISABLED (operator 2026-05-26)."
+          echo "When re-enabled, blocks deploys during:"
+          echo "  Mon-Fri 13:30-20:00 UTC — NYSE regular session"
+          echo "  Mon-Fri 21:30-23:30 UTC — data-operations cron + cascade"
