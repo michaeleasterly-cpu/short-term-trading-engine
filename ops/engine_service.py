@@ -440,6 +440,33 @@ async def _maybe_escalate_digest_stalled(
         attempts=1)
 
 
+async def _write_heartbeat(pool, status: str = "healthy") -> None:
+    """UPSERT the engine_service row in platform.daemon_heartbeats.
+
+    Writer side of the daemon_freshness check (added 2026-05-26).
+    Mirrors tpcore/trade_monitor.py::_write_heartbeat_once + the
+    data_operations writer in scripts/run_data_operations.sh. The check
+    tracks four daemons (trade_monitor, engine_service, data_operations,
+    allocator); each owns its writer. Swallows DB errors so a transient
+    pooler glitch can't crash the loop.
+    """
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO platform.daemon_heartbeats
+                    (daemon_name, last_heartbeat, status)
+                VALUES ('engine_service', now(), $1)
+                ON CONFLICT (daemon_name) DO UPDATE
+                    SET last_heartbeat = EXCLUDED.last_heartbeat,
+                        status = EXCLUDED.status
+                """,
+                status,
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("engine_service.heartbeat_write_failed", error=str(exc))
+
+
 async def _main_loop(pool, stop_event: asyncio.Event,
                      run_id: uuid.UUID | None = None) -> None:
     cursor = datetime.now(UTC) - INITIAL_CURSOR_LOOKBACK
@@ -467,7 +494,15 @@ async def _main_loop(pool, stop_event: asyncio.Event,
     )
     await _maybe_fire_weekly_digest(digest_state, pool=pool)  # startup kick (O-2)
 
+    # Initial heartbeat so a fresh-started daemon's row reflects liveness
+    # immediately (the freshness check tolerates 1h; an INITIAL write
+    # avoids a stale-row window between launchd start and the first poll).
+    await _write_heartbeat(pool)
+
     while not stop_event.is_set():
+        # Liveness heartbeat — UPSERT every poll iteration. POLL_INTERVAL_SEC
+        # (60s) is well under the daemon_freshness 1h tolerance.
+        await _write_heartbeat(pool)
         try:
             newest = await _find_new_trigger(pool, cursor)
         except Exception as exc:

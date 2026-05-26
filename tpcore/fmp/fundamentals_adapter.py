@@ -194,22 +194,36 @@ class FMPFundamentalsAdapter:
         *,
         as_of_date: date | None,
     ) -> list[dict]:
-        """Inner-join the three statements on ``date`` (the period end).
+        """Outer-join the three statements on ``date`` (the period end).
 
         FMP returns lists ordered most-recent-first. We index by ``date``
-        to handle the rare case where the three statements come back
-        slightly out of order, then re-sort descending by ``filingDate``.
+        and take the UNION of period_end_dates across all three
+        endpoints. Periods present in any endpoint produce a row; fields
+        sourced from missing endpoints fall back to NULL. All financial
+        columns on platform.fundamentals_quarterly are nullable, and
+        downstream consumers (pb/de ratio computation, forensics, AAR)
+        already handle NULL gracefully — INNER-join would drop
+        completeness without any safety benefit.
+
+        Why outer-join (changed 2026-05-26): the prior INNER-join
+        dropped periods where balance-sheet was missing but
+        income+cash were present (common for pre-IPO disclosed
+        quarters and recent IPOs). Detected via the
+        ``fundamentals_quarterly_completeness`` check after 2026-05-25
+        backfill: e.g. ABCL Q2/Q3 2019 — income + cash present, balance
+        absent → 2 historical gaps. Outer-join recovers these as
+        partial-period rows.
         """
         by_date_income = {row.get("date"): row for row in income}
         by_date_cash = {row.get("date"): row for row in cash}
         by_date_balance = {row.get("date"): row for row in balance}
-        common_dates = set(by_date_income) & set(by_date_cash) & set(by_date_balance)
+        all_dates = set(by_date_income) | set(by_date_cash) | set(by_date_balance)
 
         merged: list[dict] = []
-        for d in common_dates:
-            inc = by_date_income[d]
-            cf = by_date_cash[d]
-            bs = by_date_balance[d]
+        for d in all_dates:
+            inc = by_date_income.get(d, {})
+            cf = by_date_cash.get(d, {})
+            bs = by_date_balance.get(d, {})
             filing_date = _parse_filing_date(
                 inc.get("filingDate") or cf.get("filingDate") or bs.get("filingDate")
             )
