@@ -1,0 +1,144 @@
+@import "tailwindcss";
+
+/*
+ * STE Operator Console — design tokens
+ * Ported from design_handoff_trading_console/Trading Console.html (2026-05-21).
+ *
+ * Three themes (operator-dark default, midnight, paper) + four accents.
+ * Densities: comfortable | compact. Tokens use oklch() throughout.
+ */
+
+:root, .theme-operator-dark {
+  --bg:        oklch(13% 0.005 60);
+  --bg-1:      oklch(15% 0.006 60);
+  --bg-2:      oklch(18% 0.006 60);
+  --bg-3:      oklch(22% 0.006 60);
+  --panel:     oklch(16% 0.005 60);
+  --panel-hd:  oklch(19% 0.006 60);
+  --line:      oklch(28% 0.004 60);
+  --line-2:    oklch(34% 0.004 60);
+  --ink:       oklch(92% 0.005 75);
+  --ink-2:     oklch(78% 0.005 75);
+  --ink-3:     oklch(58% 0.005 75);
+  --ink-4:     oklch(40% 0.005 75);
+  --pos:       oklch(72% 0.16 142);
+  --neg:       oklch(67% 0.20 22);
+  --warn:      oklch(78% 0.15 78);
+  --accent:    oklch(74% 0.16 60);
+  --row-hov:   oklch(20% 0.006 60);
+}
+
+.theme-midnight {
+  --bg:        oklch(11% 0.025 250);
+  --bg-1:      oklch(13% 0.025 250);
+  --bg-2:      oklch(16% 0.030 250);
+  --bg-3:      oklch(20% 0.035 250);
+  --panel:     oklch(14% 0.025 250);
+  --panel-hd:  oklch(17% 0.030 250);
+  --line:      oklch(26% 0.030 250);
+  --line-2:    oklch(34% 0.035 250);
+  --ink:       oklch(93% 0.010 230);
+  --ink-2:     oklch(78% 0.020 230);
+  --ink-3:     oklch(58% 0.020 230);
+  --ink-4:     oklch(40% 0.020 230);
+  --pos:       oklch(74% 0.16 162);
+  --neg:       oklch(68% 0.22 17);
+  --warn:      oklch(80% 0.16 88);
+  --accent:    oklch(74% 0.16 220);
+  --row-hov:   oklch(18% 0.030 250);
+}
+
+.theme-paper {
+  --bg:        oklch(97% 0.004 80);
+  --bg-1:      oklch(95% 0.005 80);
+  --bg-2:      oklch(92% 0.005 80);
+  --bg-3:      oklch(88% 0.006 80);
+  --panel:     oklch(96% 0.004 80);
+  --panel-hd:  oklch(93% 0.005 80);
+  --line:      oklch(80% 0.004 80);
+  --line-2:    oklch(70% 0.004 80);
+  --ink:       oklch(20% 0.005 75);
+  --ink-2:     oklch(35% 0.005 75);
+  --ink-3:     oklch(50% 0.005 75);
+  --ink-4:     oklch(65% 0.005 75);
+  --pos:       oklch(50% 0.18 142);
+  --neg:       oklch(50% 0.22 22);
+  --warn:      oklch(60% 0.18 78);
+  --accent:    oklch(55% 0.16 60);
+  --row-hov:   oklch(94% 0.005 80);
+}
+
+/* Accent overrides — apply via .accent-<name> on root */
+.accent-amber  { --accent: oklch(74% 0.16 60); }
+.accent-green  { --accent: oklch(72% 0.16 142); }
+.accent-cyan   { --accent: oklch(72% 0.14 200); }
+.accent-violet { --accent: oklch(70% 0.16 305); }
+
+/* Engine identity colors — used in nav dots, engine pills, card top-borders. */
+:root {
+  --mom: oklch(74% 0.16 60);
+  --rev: oklch(72% 0.14 200);
+  --vec: oklch(70% 0.16 305);
+  --sen: oklch(67% 0.20 22);
+  --can: oklch(76% 0.18 110);
+}
+
+/* Density: comfortable (default) vs compact */
+:root, .density-comfortable {
+  --row-h:    32px;
+  --pad-x:    14px;
+  --pad-y:    10px;
+  --gap:      10px;
+  --text:     12.5px;
+  --label:    10.5px;
+}
+.density-compact {
+  --row-h:    26px;
+  --pad-x:    10px;
+  --pad-y:    7px;
+  --gap:      8px;
+  --text:     12px;
+  --label:    10px;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-bg-1: var(--bg-1);
+  --color-bg-2: var(--bg-2);
+  --color-bg-3: var(--bg-3);
+  --color-panel: var(--panel);
+  --color-panel-hd: var(--panel-hd);
+  --color-line: var(--line);
+  --color-line-2: var(--line-2);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-ink-4: var(--ink-4);
+  --color-pos: var(--pos);
+  --color-neg: var(--neg);
+  --color-warn: var(--warn);
+  --color-accent: var(--accent);
+  --color-row-hov: var(--row-hov);
+  --color-mom: var(--mom);
+  --color-rev: var(--rev);
+  --color-vec: var(--vec);
+  --color-sen: var(--sen);
+  --color-can: var(--can);
+  --font-sans: var(--font-plex-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, monospace;
+}
+
+html, body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: var(--text);
+  letter-spacing: -0.005em;
+}
+
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.hairline { border: 1px solid var(--line); }
+.hairline-b { border-bottom: 1px solid var(--line); }
+.hairline-t { border-top: 1px solid var(--line); }
+.hairline-r { border-right: 1px solid var(--line); }
+.eyebrow { font-size: var(--label); letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-3); }
