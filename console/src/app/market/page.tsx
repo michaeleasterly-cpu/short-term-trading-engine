@@ -112,7 +112,7 @@ function buildSections(d: MarketHealth): Section[] {
       vix < 20 ? "Investors are calm-ish. No alarm bells." :
       vix < 30 ? "Investors are getting jumpy. Bigger price swings expected." :
                  "Investors are scared. Expect big up-and-down days.",
-    detail: "VIX — the stock market's 'fear gauge'. Higher = bigger expected price swings over the next month.",
+    detail: "VIX — the stock market's 'fear gauge'. Higher = bigger expected price swings over the next month. Source: CBOE Volatility Index methodology (Whaley 2009, 'Understanding VIX'); FRED series VIXCLS.",
   };
 
   const fg = get("score");
@@ -128,7 +128,7 @@ function buildSections(d: MarketHealth): Section[] {
         fg < 25 ? "Extreme fear in the market. Historically a buy signal more often than not." :
         fg > 75 ? "Extreme greed in the market. Historically a caution signal." :
                   "Mood is mixed — neither panic nor euphoria.",
-      detail: "Composite of 7 inputs (momentum, breadth, options, junk bonds, safe-haven demand, volatility, put/call). 0 = extreme fear, 100 = extreme greed.",
+      detail: "Composite of 7 inputs (momentum, breadth, options put/call, junk-bond demand, safe-haven demand, market volatility, stock-price strength). 0 = extreme fear, 100 = extreme greed. Source: CNN Business Fear & Greed Index methodology (published since 2012).",
     };
   })();
 
@@ -143,7 +143,7 @@ function buildSections(d: MarketHealth): Section[] {
       sahm >= 0.5 ? "The recession-warning light just turned red." :
       sahm >= 0.3 ? "Some early signs of a slowdown. Worth watching." :
                     "Jobs market looks healthy — no recession signal.",
-    detail: "Sahm rule — when unemployment rises 0.5 above its 12-month low, a recession is usually starting. Currently below that line.",
+    detail: "Sahm rule — when unemployment's 3-month moving average rises 0.5 percentage points above its 12-month low, a recession is usually starting. Currently below that line. Source: Sahm, Claudia (2019), 'Direct Stimulus Payments to Individuals', Federal Reserve; FRED series SAHMREALTIME.",
   };
 
   const cfnai = get("cfnai_ma3");
@@ -156,7 +156,7 @@ function buildSections(d: MarketHealth): Section[] {
       cfnai <= -0.7 ? "Economy looks weak — possibly shrinking." :
       cfnai <= -0.35 ? "Economy is slowing down a bit." :
                        "Economy is growing at a normal pace.",
-    detail: "CFNAI 3-month average. Combines 85 monthly economic indicators into one number. Above 0 = above-average growth, below -0.7 = recession territory.",
+    detail: "Chicago Fed National Activity Index, 3-month moving average. Combines 85 monthly economic indicators into one number. Above 0 = above-average growth, below -0.7 = NBER-defined recession territory. Source: Federal Reserve Bank of Chicago methodology (Stock & Watson 1989 coincident-index lineage); FRED series CFNAIMA3.",
   };
 
   const ic = get("initial_claims");
@@ -172,7 +172,7 @@ function buildSections(d: MarketHealth): Section[] {
         t === "calm"  ? "Layoffs are low. Jobs market is healthy." :
         t === "watch" ? "Layoffs are picking up. Worth watching." :
                         "Layoffs are high — recession-level filings.",
-      detail: "Weekly first-time unemployment claims. Below 275k is healthy; sustained climbs past 350k often signal recessions.",
+      detail: "Weekly first-time unemployment claims. Below 275k is healthy; sustained climbs past 350k often signal recessions. Source: US Department of Labor / Employment & Training Administration weekly release; FRED series ICSA (we use the 4-week MA, IC4WSA).",
     };
   })();
 
@@ -186,7 +186,7 @@ function buildSections(d: MarketHealth): Section[] {
       unrate > 6   ? "Unemployment is high — recession-level." :
       unrate > 4.5 ? "Unemployment is climbing — watch this." :
                      "Unemployment is low — labor market is healthy.",
-    detail: "BLS headline unemployment rate. Historically: 3.5-5% is full employment, sustained > 5% signals a slowdown.",
+    detail: "Headline unemployment rate (U-3). Historically: 3.5-5% is full employment, sustained > 5% signals a slowdown. Source: US Bureau of Labor Statistics, Current Population Survey, monthly; FRED series UNRATE.",
   };
 
   // Yield curve goes here for plain-readers (rate context)
@@ -200,7 +200,7 @@ function buildSections(d: MarketHealth): Section[] {
       yc < -0.5 ? "Bonds are deeply upside-down — a strong recession warning." :
       yc < 0    ? "Bonds are slightly upside-down — a recession warning." :
                   "Bond markets see normal growth ahead.",
-    detail: "10-year minus 2-year Treasury yields. When negative ('inverted'), it's historically been a reliable recession predictor 12-18 months later.",
+    detail: "10-year minus 2-year Treasury yields. When negative ('inverted'), it's historically been a reliable recession predictor 12-18 months later. Source: Estrella, A. & Mishkin, F. (1996), 'The Yield Curve as a Predictor of US Recessions', NY Fed Current Issues 2(7); FRED series T10Y2Y.",
   };
 
   // Credit & borrowing
@@ -214,7 +214,7 @@ function buildSections(d: MarketHealth): Section[] {
       hy > 7 ? "Risky borrowers under heavy stress. Default fears rising." :
       hy > 5 ? "Risky borrowers paying more to borrow. Some stress brewing." :
                "Risky borrowers are paying low extra rates — markets aren't worried.",
-    detail: "Junk-bond spread over Treasuries. How much extra interest junk-rated companies must pay vs the US government. Higher = more default fears.",
+    detail: "High-yield (junk) bond option-adjusted spread over Treasuries. How much extra interest junk-rated companies must pay vs the US government. Higher = more default fears. Source: ICE BofA US High Yield Master II OAS; FRED series BAMLH0A0HYM2.",
   };
 
   const cs = get("credit_spread");
@@ -227,7 +227,7 @@ function buildSections(d: MarketHealth): Section[] {
       cs > 3 ? "Even safer corporates paying high premiums. Stress widespread." :
       cs > 2 ? "Corporate borrowing costs rising. Mild concern." :
                "Investment-grade borrowing is normal.",
-    detail: "BAA-rated corporate vs 10-year Treasury yield. Wider = more credit stress in the safer end of the corporate market.",
+    detail: "BAA-rated (investment-grade) corporate bond yield minus 10-year Treasury. Wider = more credit stress in the safer end of the corporate market. Source: Moody's Seasoned BAA Corporate Bond Yield; FRED series BAA10Y. Theoretical basis: Gilchrist, S. & Zakrajšek, E. (2012), 'Credit Spreads and Business Cycle Fluctuations', AER 102(4).",
   };
 
   const nfci = get("nfci");
@@ -240,7 +240,7 @@ function buildSections(d: MarketHealth): Section[] {
       nfci > 0.5 ? "Lending has seized up — financial stress." :
       nfci > 0   ? "Lending is getting tighter than normal." :
                    "Banks and markets are lending freely — easy money.",
-    detail: "Chicago Fed National Financial Conditions Index. Combines 100+ borrowing-cost measures. Below 0 = easier-than-average; above 0 = tighter.",
+    detail: "Chicago Fed National Financial Conditions Index. Combines 105 financial-conditions indicators (money markets, debt and equity markets, traditional and shadow banking). Below 0 = easier-than-average; above 0 = tighter. Source: Brave, S. & Butters, R. A. (2011), Federal Reserve Bank of Chicago; FRED series NFCI. Adrian, Boyarchenko & Giannone (2019, AER) showed NFCI is the single best predictor of left-tail GDP growth.",
   };
 
   const ffr = get("fed_funds_rate");
@@ -250,7 +250,7 @@ function buildSections(d: MarketHealth): Section[] {
     value: `${ffr.toFixed(2)}%`,
     tone: "ok",
     explain: `The Federal Reserve's policy rate right now. Affects every other interest rate in the economy.`,
-    detail: "Federal funds effective rate (DFF). The rate banks charge each other overnight; the Fed targets this to set monetary policy.",
+    detail: "Federal funds effective rate. The rate banks charge each other overnight; the Fed targets this to set monetary policy. Source: Federal Reserve Board H.15 Selected Interest Rates; FRED series DFF.",
   };
 
   // Investor mood
@@ -268,7 +268,7 @@ function buildSections(d: MarketHealth): Section[] {
         net > 20  ? "Way more bulls than bears — crowds are sometimes wrong at extremes." :
         net < -20 ? "Way more bears than bulls — pessimism often marks a turning point." :
                     "Bulls and bears about balanced — no extreme to fade.",
-      detail: "AAII survey of individual investors: percent expecting stocks UP / DOWN in the next 6 months. Extreme readings (one side > 50%) sometimes mark turning points.",
+      detail: "AAII Investor Sentiment Survey of individual investors: percent expecting stocks UP / DOWN in the next 6 months. Extreme readings (one side > 50%) sometimes mark turning points. Source: American Association of Individual Investors weekly survey, published since 1987.",
     };
   })();
 
@@ -282,7 +282,7 @@ function buildSections(d: MarketHealth): Section[] {
       epu > 250 ? "Very high policy uncertainty in the news — markets often shaky." :
       epu > 150 ? "Elevated policy uncertainty. Markets watching headlines closely." :
                   "Calm news cycle — policy uncertainty is low.",
-    detail: "Baker-Bloom-Davis Economic Policy Uncertainty index. Counts newspaper articles mentioning economic policy uncertainty. Above 200 is historically high.",
+    detail: "Economic Policy Uncertainty Index. Counts newspaper articles mentioning economic policy uncertainty across 10 major US dailies. Above 200 is historically high. Source: Baker, S., Bloom, N. & Davis, S. (2016), 'Measuring Economic Policy Uncertainty', Quarterly Journal of Economics 131(4); FRED series USEPUINDXD. Caveat: news-attention-driven; can spike on political theater without translating to real economic damage.",
   };
 
   // Consumer mood (new with Michigan ingest)
@@ -296,7 +296,7 @@ function buildSections(d: MarketHealth): Section[] {
       umich < 65 ? "Consumers are gloomy — historically near-recession levels." :
       umich < 80 ? "Consumers are cautious. Worth watching." :
                    "Consumers feel pretty good about the economy.",
-    detail: "University of Michigan Consumer Sentiment Index. Indexed to 100 in 1966. Historically turns down 6-12 months before recessions.",
+    detail: "University of Michigan Consumer Sentiment Index. Indexed to 100 in 1966-Q1. Tracks how consumers feel about the economy + their own finances; historically turned down 6-12 months before recessions (1973, 1980, 1990, 2001, 2008). Source: University of Michigan, Surveys of Consumers (monthly since 1952). Caveat: Curtin (2007, J. Economic Perspectives) shows sentiment is coincident-to-slightly-lagging, not a robust standalone recession predictor.",
   };
 
   return [
