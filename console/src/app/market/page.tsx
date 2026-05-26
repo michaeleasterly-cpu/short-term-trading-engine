@@ -300,12 +300,6 @@ function buildSections(d: MarketHealth): Section[] {
 
   return [
     {
-      id: "bear-score",
-      title: "Sentinel Bear Score",
-      subtitle: "The composite recession-regime signal our defensive engine watches.",
-      cards: cards(bearCard),
-    },
-    {
       id: "market-mood",
       title: "Stock-market mood",
       subtitle: "How nervous or greedy is the stock market right now?",
@@ -314,8 +308,8 @@ function buildSections(d: MarketHealth): Section[] {
     {
       id: "recession",
       title: "Recession watch",
-      subtitle: "Are the warning lights flashing yet?",
-      cards: cards(sahmCard, cfnaiCard, icCard, unrateCard, ycCard),
+      subtitle: "Are the warning lights flashing yet? The Bear Score below combines all of these into one number our defensive engine watches.",
+      cards: cards(bearCard, sahmCard, cfnaiCard, icCard, unrateCard, ycCard),
     },
     {
       id: "credit",
