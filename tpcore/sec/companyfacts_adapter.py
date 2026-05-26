@@ -145,9 +145,17 @@ class SECCompanyFactsAdapter:
 
         Mirrors the schema columns on ``platform.fundamentals_quarterly``
         so the caller can upsert directly via the existing cache contract.
+
+        SEC companyfacts JSON shape (verified against live API
+        2026-05-26 for CIK 1726711 / ADTX): the top-level dict has
+        ``cik`` + ``entityName`` + ``facts``, and the namespace dicts
+        (``us-gaap``, ``dei``, ``srt``, ``ffd``) live UNDER ``facts``,
+        not at the top level. This caused a silent always-None bug in
+        the first impl that called ``facts.get("us-gaap")`` directly.
         """
-        us_gaap = facts.get("us-gaap") or {}
-        dei = facts.get("dei") or {}
+        ns = facts.get("facts") or {}
+        us_gaap = ns.get("us-gaap") or {}
+        dei = ns.get("dei") or {}
 
         def _val(scope: dict, key: str) -> Decimal | None:
             entry = scope.get(key)
