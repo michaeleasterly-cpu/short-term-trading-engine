@@ -62,7 +62,7 @@ export const api = {
     holds: Array<{ source: string; held: string; cycles: number; reason: string; esc: string }>;
     auditheal: Array<{ source: string; state: string; last: string; note: string }>;
     escalations: Array<{ when: string; type: string; ref: string; cls: string; open: boolean; msg: string }>;
-    daemons: Array<{ daemon: string; lane: string; pid: string; uptime: string; last: string; status: string; role: string }>;
+    daemons: Array<{ daemon: string; platform: string; lane: string; status: string; last_deploy: string; last_event: string; restart_policy: string; ipv6_egress: boolean; role: string }>;
   }>("/api/health-page"),
   digest: () => fetchJSON<{
     digest: {

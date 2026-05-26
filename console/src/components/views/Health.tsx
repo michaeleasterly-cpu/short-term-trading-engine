@@ -9,7 +9,12 @@ export function Health() {
   return (
     <div>
       <ViewHeader eyebrow="SYSTEM" title="Health"
-        meta={[["live clearance", "PAPER"], ["weeks unacked", "1 / 2"], ["daemons live", String(data?.daemons.length ?? 0)]]}
+        meta={[
+          ["platform", "Railway"],
+          ["live clearance", "PAPER"],
+          ["weeks unacked", "1 / 2"],
+          ["services live", String(data?.daemons.length ?? 0)],
+        ]}
       />
       {loading && <div className="px-5 py-4 text-[11px]" style={{ color: "var(--ink-3)" }}>loading…</div>}
       {error && <div className="px-5 py-4 text-[11px]" style={{ color: "var(--neg)" }}>{error}</div>}
@@ -87,17 +92,18 @@ export function Health() {
             </Panel>
           </div>
           <div className="px-5 pb-5">
-            <Panel title="Daemon topology (live from application_log)">
+            <Panel title="Railway services (TCP project)">
               <table className="w-full text-[11.5px]">
-                <thead><tr style={{ color: "var(--ink-3)" }}>{["Daemon", "Lane", "PID", "Uptime", "Last heartbeat", "Status", "Role"].map(h => (<th key={h} className="eyebrow hairline-b px-3 py-2 text-left">{h}</th>))}</tr></thead>
+                <thead><tr style={{ color: "var(--ink-3)" }}>{["Service", "Lane", "Status", "Last deploy", "Last event", "Restart", "IPv6 egress", "Role"].map(h => (<th key={h} className="eyebrow hairline-b px-3 py-2 text-left">{h}</th>))}</tr></thead>
                 <tbody>{data.daemons.map((d, i) => (
                   <tr key={i}>
                     <td className="mono px-3 py-1.5" style={{ color: "var(--ink)" }}>{d.daemon}</td>
-                    <td className="mono px-3 py-1.5" style={{ color: d.lane === "engine" ? "var(--mom)" : d.lane === "data" ? "var(--rev)" : "var(--ink-3)" }}>{d.lane}</td>
-                    <td className="mono px-3 py-1.5" style={{ color: "var(--ink-3)" }}>{d.pid}</td>
-                    <td className="mono px-3 py-1.5" style={{ color: "var(--ink-2)" }}>{d.uptime}</td>
-                    <td className="mono px-3 py-1.5" style={{ color: "var(--ink-3)" }}>{d.last.length > 19 ? d.last.slice(11, 19) + " UTC" : d.last}</td>
-                    <td className="mono px-3 py-1.5"><Pill tone={d.status === "RUNNING" ? "pos" : "warn"}>{d.status}</Pill></td>
+                    <td className="mono px-3 py-1.5" style={{ color: d.lane === "engine" ? "var(--mom)" : d.lane === "data" ? "var(--rev)" : d.lane === "api" ? "var(--vec)" : "var(--ink-3)" }}>{d.lane}</td>
+                    <td className="mono px-3 py-1.5"><Pill tone={d.status === "SUCCESS" || d.status === "DEPLOYING" ? "pos" : d.status === "CRASHED" || d.status === "FAILED" ? "neg" : "neutral"}>{d.status}</Pill></td>
+                    <td className="mono px-3 py-1.5" style={{ color: "var(--ink-3)" }}>{d.last_deploy.length > 16 ? d.last_deploy.slice(5, 16).replace("T", " ") : d.last_deploy}</td>
+                    <td className="mono px-3 py-1.5" style={{ color: "var(--ink-3)" }}>{d.last_event.length > 16 ? d.last_event.slice(5, 16).replace("T", " ") : d.last_event}</td>
+                    <td className="mono px-3 py-1.5" style={{ color: "var(--ink-2)" }}>{d.restart_policy}</td>
+                    <td className="mono px-3 py-1.5" style={{ color: d.ipv6_egress ? "var(--pos)" : "var(--ink-3)" }}>{d.ipv6_egress ? "✓" : "—"}</td>
                     <td className="px-3 py-1.5" style={{ color: "var(--ink-3)" }}>{d.role}</td>
                   </tr>
                 ))}</tbody>

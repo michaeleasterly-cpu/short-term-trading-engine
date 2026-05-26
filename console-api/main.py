@@ -293,6 +293,64 @@ async def allocator() -> dict:
     }
 
 
+async def _fetch_railway_services() -> list[dict]:
+    """Query Railway GraphQL for current state of the 5 daemons running
+    in the TCP project. Returns list of {name, status, last_deploy, url,
+    restart_policy, ipv6, replicas}. Empty list if RAILWAY_API_TOKEN
+    isn't set in this service's env."""
+    import json as _json
+    import urllib.request
+
+    rw_tok = os.environ.get("RAILWAY_API_TOKEN")
+    if not rw_tok:
+        return []
+    project_id = "4a0e14ee-5f82-4416-b6d9-04526b1d3cf1"
+    env_id = "58653d3b-ff14-4fef-97fa-370e96b0391e"
+    q = (
+        '{ project(id:"' + project_id + '") { services { edges { node { id name } } } } }'
+    )
+    req = urllib.request.Request(
+        "https://backboard.railway.com/graphql/v2",
+        data=_json.dumps({"query": q}).encode(),
+        headers={"Authorization": f"Bearer {rw_tok}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=8) as r:
+            services = (_json.loads(r.read()).get("data") or {}).get("project", {}).get("services", {}).get("edges", [])
+    except Exception:
+        return []
+    out = []
+    for e in services:
+        sid = e["node"]["id"]
+        name = e["node"]["name"]
+        q2 = (
+            "{ serviceInstance(serviceId:\"" + sid + "\", environmentId:\"" + env_id + "\"){ "
+            "restartPolicyType ipv6EgressEnabled latestDeployment{ id status createdAt } } }"
+        )
+        req2 = urllib.request.Request(
+            "https://backboard.railway.com/graphql/v2",
+            data=_json.dumps({"query": q2}).encode(),
+            headers={"Authorization": f"Bearer {rw_tok}", "Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req2, timeout=8) as r:
+                inst = (_json.loads(r.read()).get("data") or {}).get("serviceInstance") or {}
+        except Exception:
+            inst = {}
+        latest = inst.get("latestDeployment") or {}
+        out.append({
+            "name": name,
+            "service_id": sid,
+            "status": latest.get("status") or "—",
+            "last_deploy": latest.get("createdAt") or "—",
+            "restart_policy": inst.get("restartPolicyType") or "—",
+            "ipv6": bool(inst.get("ipv6EgressEnabled")),
+        })
+    return out
+
+
 @app.get("/api/health-page")
 async def health_page() -> dict:
     async with app.state.pool.acquire() as conn:
@@ -311,12 +369,19 @@ async def health_page() -> dict:
         open_escalations_count = await conn.fetchval(
             "SELECT COUNT(*) FROM platform.application_log WHERE event_type LIKE '%ESCALATED%' AND recorded_at >= NOW() - INTERVAL '7 days'"
         )
+    railway_state = await _fetch_railway_services()
+    # Index Railway state by service name (snake_case match against
+    # application_log's `engine` field — the daemon emits both engine
+    # name styles, e.g. "engine_service" vs Railway service "engine-service").
+    rw_by_dash = {s["name"]: s for s in railway_state}
+    rw_by_snake = {s["name"].replace("-", "_"): s for s in railway_state}
     daemon_role = {
         "engine_service":  "engine dispatch + day-rollover digest trigger",
         "lane_service":    "deterministic data-repair listener",
         "trade_monitor":   "Alpaca trade_updates websocket",
-        "data_operations": "scheduled 15-stage data refresh",
+        "data_operations": "scheduled 15-stage data refresh (cron 21:30 UTC weekdays)",
         "weekly_digest":   "weekly digest builder",
+        "console_api":     "operator-console FastAPI backend (this service)",
     }
     return {
         "ts": datetime.now(timezone.utc).isoformat(),
@@ -352,12 +417,32 @@ async def health_page() -> dict:
         ],
         "daemons": [
             {
+                "daemon": s["name"],
+                "platform": "Railway",
+                "lane":   "engine" if s["name"] in ("engine-service", "trade-monitor") else "api" if s["name"] == "console-api" else "data",
+                "status": s["status"],
+                "last_deploy": s["last_deploy"],
+                "last_event": (
+                    (rw_by_snake.get(s["name"].replace("-", "_")) or {}).get("last_event")
+                    or next((r["last_event"].isoformat() for r in daemon_rows if r["engine"] == s["name"].replace("-", "_")), "—")
+                ),
+                "restart_policy": s["restart_policy"],
+                "ipv6_egress":    s["ipv6"],
+                "role":   daemon_role.get(s["name"].replace("-", "_"), ""),
+            }
+            for s in railway_state
+        ] if railway_state else [
+            # Fallback when Railway API isn't reachable from this service
+            # (e.g. RAILWAY_API_TOKEN not set) — use application_log only.
+            {
                 "daemon": r["engine"],
+                "platform": "Railway",
                 "lane":   "engine" if r["engine"] in ("engine_service", "trade_monitor") else "data",
-                "pid":    "—",
-                "uptime": "—",
-                "last":   r["last_event"].isoformat() if r["last_event"] else "—",
-                "status": "RUNNING",
+                "status": "RUNNING (log-derived)",
+                "last_deploy": "—",
+                "last_event": r["last_event"].isoformat() if r["last_event"] else "—",
+                "restart_policy": "—",
+                "ipv6_egress": True,
                 "role":   daemon_role.get(r["engine"], ""),
             }
             for r in daemon_rows
@@ -434,6 +519,89 @@ async def data_pipeline() -> dict:
             {"time": "2026-05-25 21:48 UTC", "stage": "prices_daily",     "result": "HEALED",    "duration": "32s",   "notes": "5 missing bars filled from Tradier"},
             {"time": "2026-05-25 21:31 UTC", "stage": "data_operations",  "result": "ESCALATED", "duration": "—",     "notes": "schema_drift on finnhub_insider — handed off to operator review"},
         ],
+    }
+
+
+@app.get("/api/public/market-health")
+async def public_market_health() -> dict:
+    """PUBLIC endpoint — no auth, no operator-only data. Surfaces macro
+    health using the platform.macro_data substrate. Safe to expose:
+    only published macro indicators (FRED + derived), no positions,
+    no engines, no AARs.
+    """
+    async with app.state.pool.acquire() as conn:
+        # Most-recent value per indicator we care about for market health
+        rows = await conn.fetch(
+            """
+            WITH latest AS (
+                SELECT indicator,
+                       value,
+                       observation_date,
+                       ROW_NUMBER() OVER (PARTITION BY indicator ORDER BY observation_date DESC) AS rn
+                FROM platform.macro_indicators
+                WHERE indicator IN (
+                    'vix', 'yield_curve', 'sahm_rule', 'cfnai_ma3',
+                    't10y2y', 'hy_spread', 'unemployment_rate',
+                    'cpi_yoy', 'pce_yoy', 'fed_funds_rate'
+                )
+                  AND observation_date >= CURRENT_DATE - INTERVAL '90 days'
+            )
+            SELECT indicator, value, observation_date
+            FROM latest
+            WHERE rn = 1
+            ORDER BY indicator
+            """
+        )
+        # 30-day VIX series for the chart
+        vix_series = await conn.fetch(
+            """
+            SELECT observation_date, value
+            FROM platform.macro_indicators
+            WHERE indicator = 'vix'
+              AND observation_date >= CURRENT_DATE - INTERVAL '180 days'
+            ORDER BY observation_date ASC
+            """
+        )
+        spy = await conn.fetch(
+            """
+            SELECT date, adj_close
+            FROM platform.prices_daily
+            WHERE ticker = 'SPY'
+              AND date >= CURRENT_DATE - INTERVAL '90 days'
+            ORDER BY date ASC
+            """
+        )
+    indicators = {r["indicator"]: {"value": float(r["value"]), "date": r["observation_date"].isoformat()} for r in rows}
+    # Heuristic regime classification — uses the same vol thresholds as
+    # the reversion regime filter (15 / 20 / 30).
+    vix = indicators.get("vix", {}).get("value")
+    if vix is None:
+        vol_regime = "unknown"
+    elif vix < 15:
+        vol_regime = "calm"
+    elif vix < 20:
+        vol_regime = "normal"
+    elif vix < 30:
+        vol_regime = "stress"
+    else:
+        vol_regime = "crisis"
+    yc = indicators.get("t10y2y", {}).get("value") or indicators.get("yield_curve", {}).get("value")
+    macro_regime = "inverted" if (yc is not None and yc < 0) else ("normal" if yc is not None else "unknown")
+    return {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "indicators": indicators,
+        "vix_series": [{"date": r["observation_date"].isoformat(), "value": float(r["value"])} for r in vix_series],
+        "spy_series": [{"date": r["date"].isoformat(), "close": float(r["adj_close"])} for r in spy],
+        "summary": {
+            "vol_regime": vol_regime,
+            "macro_regime": macro_regime,
+            "headline": (
+                "Crisis vol regime" if vol_regime == "crisis"
+                else "Stressed vol regime" if vol_regime == "stress"
+                else "Calm vol regime" if vol_regime == "calm"
+                else f"Normal vol regime ({macro_regime} yield-curve)"
+            ),
+        },
     }
 
 
