@@ -564,10 +564,6 @@ export default async function MarketHealthPage() {
                   <li><strong>Vulnerable Growth</strong> — Adrian, T., Boyarchenko, N. &amp; Giannone, D. (2019). <em>Vulnerable Growth</em>. American Economic Review 109(4). Formalized financial-conditions → GDP-at-Risk.</li>
                   <li><strong>Conference Board LEI</strong> — The Conference Board, <em>Leading Economic Index</em>. 10-component composite, monthly.</li>
                 </ul>
-                <p style={{ margin: "0 0 10px 0" }}>
-                  <strong>Implementation</strong>: <span style={{ fontFamily: "monospace" }}>sentinel/plugs/setup_detection.py</span> (engine path, with full bear-steepener detector for the yield-curve component);
-                  this page&apos;s reading uses a simplified inline computation in <span style={{ fontFamily: "monospace" }}>console-api/main.py</span> (binary inverted=15 pts on yield curve).
-                </p>
                 <p style={{ margin: 0 }}>
                   This is a public snapshot of widely-watched market and economic gauges.
                   It is <strong>not</strong> investment advice, and reasonable people can disagree
