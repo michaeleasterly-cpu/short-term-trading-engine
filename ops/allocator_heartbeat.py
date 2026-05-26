@@ -88,6 +88,33 @@ async def fire_allocator_subprocess() -> int:
     return rc
 
 
+async def _write_daemon_heartbeat(pool, status: str) -> None:
+    """UPSERT the allocator row in platform.daemon_heartbeats.
+
+    Writer side of the daemon_freshness check (added 2026-05-26).
+    Same UPSERT shape as tpcore/trade_monitor.py + engine_service +
+    data_operations writers. allocator is a cron (daily 6:30 local =
+    22:30 UTC); daemon_freshness tolerates 6h for this daemon. Status
+    captures the outcome: 'healthy' on gate_closed/fired_inline,
+    'degraded' on check_failed.
+    """
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO platform.daemon_heartbeats
+                    (daemon_name, last_heartbeat, status)
+                VALUES ('allocator', now(), $1)
+                ON CONFLICT (daemon_name) DO UPDATE
+                    SET last_heartbeat = EXCLUDED.last_heartbeat,
+                        status = EXCLUDED.status
+                """,
+                status,
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("allocator_heartbeat.heartbeat_write_failed", error=str(exc))
+
+
 async def heartbeat(pool, now: datetime | None = None) -> str:
     """One heartbeat decision. Returns a short outcome tag:
 
@@ -100,20 +127,24 @@ async def heartbeat(pool, now: datetime | None = None) -> str:
       ``should_fire`` is itself fail-CLOSED so this is rare).
 
     The outcome tag is the observable surface; the caller logs it.
+    Always writes the daemon_heartbeats row regardless of outcome.
     """
     now = now or datetime.now(UTC)
     try:
         decision = await should_fire(ALLOCATOR_ENGINE, now, pool)
     except Exception as exc:  # noqa: BLE001 — isolate; never abort the heartbeat
         logger.error("allocator_heartbeat.check_failed", error=str(exc))
+        await _write_daemon_heartbeat(pool, "degraded")
         return "check_failed"
     if not decision.fire:
         logger.info("allocator_heartbeat.gate_closed",
                     reason=decision.reason, checks=dict(decision.checks))
+        await _write_daemon_heartbeat(pool, "healthy")
         return "gate_closed"
     logger.warning("allocator_heartbeat.daemon_silent_firing_inline",
                    now=now.isoformat())
     await fire_allocator_subprocess()
+    await _write_daemon_heartbeat(pool, "healthy")
     return "fired_inline"
 
 

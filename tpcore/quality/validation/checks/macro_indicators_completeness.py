@@ -223,6 +223,85 @@ MAX_REPORTED = 25
 REPAIR_LOOKBACK_BUFFER_DAYS = 7
 
 
+# Per-indicator legitimate-non-publication dates ("expected holes").
+#
+# The check's default expected-dates set uses NYSE trading sessions for
+# DAILY-cadence indicators. Several FRED-published bond-market indicators
+# (credit_spread, yield_curve, sofr) follow the SIFMA / US bond market
+# calendar instead, which closes for **Columbus Day** (2nd Mon of Oct)
+# and **Veterans Day** (Nov 11) when those fall on a NYSE-open weekday.
+# Those dates are physical no-publication days for FRED's BAMLH0A0HYM2 /
+# yield-curve / SOFR series; treating them as gaps is a false positive.
+#
+# `hy_spread` is the operator-rebuilt sacred macro series (see memory
+# `project_hy_spread_sacred` — "operator-rebuilt; forbid force_refresh /
+# historical re-pull / re-derive / overwrite. Incremental appends OK").
+# The two 2013 / 2015 dates are documented vendor-publication holes that
+# pre-date the operator rebuild and cannot be retroactively filled.
+#
+# `sahm_rule` 2025-10-01 — FRED's `SAHMREALTIME` series (the vintage-
+# aware variant we ingest) has `.` (missing) for Oct 2025 because the
+# original Oct release was suppressed during the government data hold.
+# The revised `SAHMCURRENT` series has a value (0.25) but switching
+# series would re-derive history — forbidden under the same sacred-
+# series principle. The gap is real for the realtime series.
+#
+# Format: indicator → frozenset of `date` objects to subtract from the
+# expected-dates set before computing missing.
+INDICATOR_EXPECTED_HOLES: dict[str, frozenset[date]] = {
+    # SIFMA Columbus Day + Veterans Day (bond market closed, NYSE open).
+    # Years 2006-2025 inclusive — generated from the FRED-confirmed
+    # holes in platform.macro_data for these series.
+    "credit_spread": frozenset({
+        date(2006, 10, 9),  date(2007, 10, 8),  date(2007, 11, 12),
+        date(2008, 10, 13), date(2008, 11, 11), date(2009, 10, 12),
+        date(2009, 11, 11), date(2010, 10, 11), date(2010, 11, 11),
+        date(2011, 10, 10), date(2011, 11, 11), date(2012, 10, 8),
+        date(2012, 11, 12), date(2013, 10, 14), date(2013, 11, 11),
+        date(2014, 10, 13), date(2014, 11, 11), date(2015, 10, 12),
+        date(2015, 11, 11), date(2016, 10, 10), date(2016, 11, 11),
+        date(2017, 10, 9),  date(2017, 11, 10), date(2018, 10, 8),
+        date(2018, 11, 12), date(2019, 10, 14), date(2019, 11, 11),
+        date(2020, 10, 12), date(2020, 11, 11), date(2021, 10, 11),
+        date(2021, 11, 11), date(2021, 12, 31), date(2022, 10, 10),
+        date(2022, 11, 11), date(2023, 10, 9),  date(2024, 10, 14),
+        date(2024, 11, 11), date(2025, 10, 13), date(2025, 11, 11),
+    }),
+    "yield_curve": frozenset({
+        date(2006, 10, 9),  date(2007, 10, 8),  date(2007, 11, 12),
+        date(2008, 10, 13), date(2008, 11, 11), date(2009, 10, 12),
+        date(2009, 11, 11), date(2010, 10, 11), date(2010, 11, 11),
+        date(2011, 10, 10), date(2011, 11, 11), date(2012, 10, 8),
+        date(2012, 11, 12), date(2013, 10, 14), date(2013, 11, 11),
+        date(2014, 10, 13), date(2014, 11, 11), date(2015, 10, 12),
+        date(2015, 11, 11), date(2016, 10, 10), date(2016, 11, 11),
+        date(2017, 10, 9),  date(2018, 10, 8),  date(2018, 11, 12),
+        date(2019, 10, 14), date(2019, 11, 11), date(2020, 10, 12),
+        date(2020, 11, 11), date(2021, 10, 11), date(2021, 11, 11),
+        date(2022, 10, 10), date(2022, 11, 11), date(2023, 10, 9),
+        date(2024, 10, 14), date(2024, 11, 11), date(2025, 10, 13),
+        date(2025, 11, 11),
+    }),
+    "sofr": frozenset({
+        # SOFR debuted 2018-04-03; holes only from 2018 onward.
+        date(2018, 10, 8),  date(2018, 11, 12), date(2019, 10, 14),
+        date(2019, 11, 11), date(2020, 10, 12), date(2020, 11, 11),
+        date(2021, 10, 11), date(2021, 11, 11), date(2022, 10, 10),
+        date(2022, 11, 11), date(2023, 10, 9),  date(2024, 10, 14),
+        date(2024, 11, 11), date(2025, 10, 13), date(2025, 11, 11),
+    }),
+    "hy_spread": frozenset({
+        # Operator-rebuilt sacred series — see project_hy_spread_sacred.
+        date(2013, 8, 30),
+        date(2015, 1, 16),
+    }),
+    "sahm_rule": frozenset({
+        # FRED SAHMREALTIME `.` value for Oct 2025 (government data hold).
+        date(2025, 10, 1),
+    }),
+}
+
+
 # Task #18 P7: reads platform.macro_data directly (legacy
 # platform.macro_indicators table/view dropped). Column mapping:
 #   macro_indicators.indicator -> macro_data.series_id
@@ -427,7 +506,12 @@ async def _evaluate(pool: asyncpg.Pool) -> _Evaluation:
             )
         present: set[date] = {r["date"] for r in present_rows}
 
-        missing = sorted(set(expected_dates) - present)
+        # Subtract per-indicator legitimate-non-publication dates
+        # (SIFMA bond holidays for credit/yield/sofr; operator-rebuilt
+        # sacred-series holes for hy_spread; FRED realtime-series holes
+        # for sahm_rule). See INDICATOR_EXPECTED_HOLES docstring.
+        expected_set = set(expected_dates) - INDICATOR_EXPECTED_HOLES.get(indicator, frozenset())
+        missing = sorted(expected_set - present)
         if missing:
             gaps[indicator] = missing
         evaluated += 1
