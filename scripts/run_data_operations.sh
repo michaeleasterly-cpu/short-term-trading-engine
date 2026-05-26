@@ -37,6 +37,32 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
+# ── Resolve DATABASE_URL early (Mac vs Railway) ─────────────────────────
+# Mac sources .env (operator's IPv4 string lives there); Railway injects
+# DATABASE_URL (IPv6 endpoint) directly into the container env and has
+# NO .env file on disk. Prior `source .env` blew up under `set -u` when
+# the file was absent; the hardcoded `"$DATABASE_URL_IPV4"` references
+# below also failed if that var wasn't set. After this block,
+# `DATABASE_URL_IPV4` is guaranteed set to the right DSN for the
+# environment, so every downstream `DATABASE_URL="$DATABASE_URL_IPV4"`
+# invocation just works.
+if [[ -n "${RAILWAY_ENVIRONMENT:-}" ]]; then
+    : "${DATABASE_URL:=${DATABASE_URL_IPV6:-${DATABASE_URL_IPV4:-}}}"
+    DATABASE_URL_IPV4="${DATABASE_URL}"
+else
+    set -a
+    # shellcheck disable=SC1091
+    [[ -f .env ]] && source .env
+    set +a
+    : "${DATABASE_URL_IPV4:=${DATABASE_URL:-}}"
+    : "${DATABASE_URL:=${DATABASE_URL_IPV4:-}}"
+fi
+if [[ -z "${DATABASE_URL_IPV4:-}" ]]; then
+    echo "✗ no DATABASE URL resolved — set DATABASE_URL or DATABASE_URL_IPV4/_IPV6"
+    exit 1
+fi
+export DATABASE_URL_IPV4 DATABASE_URL
+
 # ── Self-exclusion lock (2026-05-15) ────────────────────────────────────
 # The auto-heal loop (Step 4) makes this workflow's runtime variable —
 # a multi-retry daily_bars backfill can extend a normally-short run by
@@ -179,10 +205,6 @@ echo "════════════════════════�
 echo ""
 echo "▶ STEP 1+2 / 6  download + upload  (ops.py --update)"
 echo "────────────────────────────────────────────────────────────────────────"
-set -a
-# shellcheck disable=SC1091
-source .env
-set +a
 # Profile-driven feed dispatch (#165): ask the EXISTING data-ops flow
 # which feeds are due per their FeedProfile cadence/trigger, and run
 # only those stages — instead of the blanket "every stage every run".
