@@ -653,6 +653,75 @@ async def public_market_health() -> dict:
     }
 
 
+@app.get("/api/public/carbondale")
+async def public_carbondale() -> dict:
+    """PUBLIC endpoint — Carbondale, IL economic-development snapshot.
+    No auth, no operator data. Surfaces Tier-1 FRED county/MSA series
+    plus IL state context. Tier 2-6 (Census ACS, building permits,
+    USAspending, IL state scrapers, SIU, Zillow) land in follow-up
+    endpoints behind this same /api/public/carbondale path.
+    """
+    TARGETS = (
+        # Jackson County, IL
+        "crb_jackson_unemployment_rate", "crb_jackson_unemployed_persons",
+        "crb_jackson_labor_force", "crb_jackson_personal_income",
+        "crb_jackson_real_gdp", "crb_jackson_median_hh_income",
+        "crb_jackson_snap_recipients", "crb_jackson_poverty_universe",
+        "crb_jackson_single_parent_pct",
+        # Carbondale-Marion MSA
+        "crb_msa_population", "crb_msa_unemployment_rate",
+        "crb_msa_labor_force", "crb_msa_private_service_jobs",
+        "crb_msa_avg_hourly_earnings", "crb_msa_avg_weekly_earnings",
+        "crb_msa_housing_days_on_market", "crb_msa_housing_new_listings_mom",
+        "crb_msa_housing_price_inc_yoy",
+        # IL state context
+        "il_unemployment_rate", "il_nonfarm_payrolls", "phci_il",
+    )
+    async with app.state.pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            WITH latest AS (
+                SELECT series_id, value_num, observed_date,
+                       ROW_NUMBER() OVER (PARTITION BY series_id ORDER BY observed_date DESC) AS rn
+                FROM platform.macro_data
+                WHERE series_id = ANY($1::text[]) AND value_num IS NOT NULL
+            )
+            SELECT series_id, value_num, observed_date
+            FROM latest WHERE rn = 1
+            ORDER BY series_id
+            """,
+            list(TARGETS),
+        )
+        # Time series for the unemployment-rate trend chart (last 60 months)
+        ur_series = await conn.fetch(
+            """
+            SELECT observed_date, value_num
+            FROM platform.macro_data
+            WHERE series_id = 'crb_msa_unemployment_rate'
+              AND observed_date >= CURRENT_DATE - INTERVAL '60 months'
+              AND value_num IS NOT NULL
+            ORDER BY observed_date ASC
+            """
+        )
+        labor_force_series = await conn.fetch(
+            """
+            SELECT observed_date, value_num
+            FROM platform.macro_data
+            WHERE series_id = 'crb_msa_labor_force'
+              AND observed_date >= CURRENT_DATE - INTERVAL '60 months'
+              AND value_num IS NOT NULL
+            ORDER BY observed_date ASC
+            """
+        )
+    indicators = {r["series_id"]: {"value": float(r["value_num"]), "date": r["observed_date"].isoformat()} for r in rows}
+    return {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "indicators": indicators,
+        "unemployment_series": [{"date": r["observed_date"].isoformat(), "value": float(r["value_num"])} for r in ur_series],
+        "labor_force_series": [{"date": r["observed_date"].isoformat(), "value": float(r["value_num"])} for r in labor_force_series],
+    }
+
+
 @app.get("/api/providers")
 async def providers() -> dict:
     return {

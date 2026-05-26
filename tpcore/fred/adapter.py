@@ -124,6 +124,47 @@ INDICATOR_SERIES: tuple[tuple[str, str], ...] = (
     # policy lever; useful context for every other rate-sensitive
     # indicator on the page.
     ("fed_funds_rate",       "DFF"),
+    # 10-year minus 3-month Treasury yield — the canonical
+    # Estrella-Mishkin (1996, NY Fed) recession predictor. Sibling to
+    # the existing T10Y2Y `yield_curve` series; T10Y3M is the version
+    # most academic recession-probability models use because the
+    # 3-month rate tracks the Fed policy stance more directly.
+    ("t10y3m",               "T10Y3M"),
+    # 3-month VIX (VXVCLS) — for VIX term structure / VIX:VXV ratio.
+    # Per the financial-expert improvement report (Whaley 2009; Whaley
+    # on VIX statistical properties), term-structure indicators
+    # de-double-count momentum that a simple VIX-above-MA kicker
+    # introduces. Daily since 2007-12-04.
+    ("vxv",                  "VXVCLS"),
+    # ──── Carbondale, IL economic-development panel (2026-05-27) ────
+    # Sub-state / MSA-level series for the /carbondale public page.
+    # Mix of Jackson County (FIPS 17077), Carbondale-Marion MSA (CBSA
+    # 16060), and Williamson County (17199, the other MSA county).
+    # All freely licensed via BLS LAUS, BEA, Census ACS, Realtor.com
+    # via FRED. Annual series lag 6-18 months; monthly series lag 1-2.
+    # Jackson County, IL (FIPS 17077)
+    ("crb_jackson_unemployment_rate",   "ILJAURN"),                  # monthly, 1990+
+    ("crb_jackson_unemployed_persons",  "LAUCN170770000000004"),    # monthly, 1990+
+    ("crb_jackson_labor_force",         "LAUCN170770000000006"),    # monthly, 1990+
+    ("crb_jackson_personal_income",     "PI17077"),                  # annual, 1969+
+    ("crb_jackson_real_gdp",            "REALGDPALL17077"),         # annual, 2001+
+    ("crb_jackson_median_hh_income",    "MHIIL17077A052NCEN"),       # annual, 1989+
+    ("crb_jackson_snap_recipients",     "CBR17077ILA647NCEN"),       # annual, 1989+
+    ("crb_jackson_poverty_universe",    "PUAAIL17077A647NCEN"),      # annual, 1998+
+    ("crb_jackson_single_parent_pct",   "S1101SPHOUSE017077"),       # annual, 2009+
+    # Carbondale-Marion MSA (CBSA 16060) — Jackson + Williamson counties
+    ("crb_msa_population",              "CRBPOP"),                   # annual, 2010+
+    ("crb_msa_unemployment_rate",       "LAUMT171606000000003"),    # monthly, 1990+
+    ("crb_msa_labor_force",             "LAUMT171606000000006"),    # monthly, 1990+
+    ("crb_msa_private_service_jobs",    "SMU17160600800000001SA"),   # monthly, 1990+
+    ("crb_msa_avg_hourly_earnings",     "SMU17160600500000003SA"),   # monthly, 2011+
+    ("crb_msa_avg_weekly_earnings",     "SMU17160600500000011SA"),   # monthly, 2011+
+    ("crb_msa_housing_days_on_market",  "MEDDAYONMAR16060"),         # monthly, 2016+ (Realtor.com)
+    ("crb_msa_housing_new_listings_mom","NEWLISCOUMM16060"),         # monthly, 2017+
+    ("crb_msa_housing_price_inc_yoy",   "PRIINCCOUYY16060"),         # monthly, 2017+
+    # Illinois state context (already have phci_il via 50-state panel)
+    ("il_unemployment_rate",            "ILUR"),                     # monthly, 1976+
+    ("il_nonfarm_payrolls",             "ILNA"),                     # monthly, 1990+
     # ── Philadelphia Fed state coincident indices — 50 USPS states,
     # monthly, 1979→present. Substrate for the derived
     # ``sos_state_diffusion`` series (Crone/Clayton-Matthews 2005
