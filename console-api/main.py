@@ -203,7 +203,7 @@ async def ticker_drillin(symbol: str) -> dict:
     async with app.state.pool.acquire() as conn:
         bars = await conn.fetch(
             """
-            SELECT date, adj_open, adj_high, adj_low, adjusted_close, volume
+            SELECT date, open, high, low, close, adjusted_close, volume
             FROM platform.prices_daily
             WHERE ticker = $1
               AND date >= CURRENT_DATE - INTERVAL '90 days'
@@ -217,10 +217,10 @@ async def ticker_drillin(symbol: str) -> dict:
         "bars": [
             {
                 "date": r["date"].isoformat(),
-                "o": float(r["adj_open"]),
-                "h": float(r["adj_high"]),
-                "l": float(r["adj_low"]),
-                "c": float(r["adjusted_close"]),
+                "o": float(r["open"]),
+                "h": float(r["high"]),
+                "l": float(r["low"]),
+                "c": float(r["adjusted_close"] or r["close"]),
                 "v": int(r["volume"]),
             }
             for r in bars
