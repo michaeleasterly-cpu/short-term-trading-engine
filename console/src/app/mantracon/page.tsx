@@ -23,6 +23,22 @@ interface BusinessOps {
   sam_gov_search_link: string;
 }
 
+interface IndustryRow {
+  code: string;
+  name: string;
+  total_employment: number;
+  private_employment: number;
+  public_employment: number;
+  avg_weekly_wage: number;
+  annual_pay_equivalent: number;
+}
+interface IndustryMix {
+  as_of_quarter: string;
+  top_supersectors: IndustryRow[];
+  total_employment: number;
+  source: string;
+}
+
 interface MantraconData {
   ts: string;
   indicators: Record<string, { value: number; date: string }>;
@@ -36,6 +52,7 @@ interface MantraconData {
   lwa_labor_force_series: Array<{ date: string; value: number }>;
   lwa_unemployment_series: Array<{ date: string; value: number }>;
   business_opportunities: BusinessOps;
+  industry_mix?: IndustryMix;
 }
 
 async function fetchData(): Promise<MantraconData | null> {
@@ -170,6 +187,60 @@ function URTrendChart({ series }: { series: Array<{ date: string; value: number 
         );
       })}
     </svg>
+  );
+}
+
+function IndustryMixSection({ mix, scope }: { mix: IndustryMix; scope: string }) {
+  if (!mix.top_supersectors.length) return null;
+  const maxEmp = Math.max(...mix.top_supersectors.map(s => s.total_employment));
+  return (
+    <section style={{ marginTop: 40 }}>
+      <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+      <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+        Industry mix · who actually employs people in {scope}
+      </h2>
+      <div style={{ fontSize: 14, color: "#5a564d", marginBottom: 16, maxWidth: 760 }}>
+        Total covered employment by NAICS supersector — the single best view of
+        where regional jobs actually are. Wages shown are the QCEW average
+        weekly wage across all ownerships in that sector. Use this to (a) bias
+        WIOA training cohorts to high-employment + high-wage sectors,
+        (b) identify sectors where wages signal employer competition for talent,
+        and (c) recognize what sectors a new employer would be slotting into.
+      </div>
+      <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "hidden" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1.6fr 90px 110px 120px", gap: 0, padding: "10px 14px", background: "#f0ece1", fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em", color: "#5a564d", fontWeight: 600 }}>
+          <div>Supersector</div>
+          <div style={{ textAlign: "right" }}>Employment</div>
+          <div style={{ textAlign: "right" }}>Avg/week</div>
+          <div style={{ textAlign: "right" }}>≈Annual</div>
+        </div>
+        {mix.top_supersectors.map((row, i) => {
+          const barPct = (row.total_employment / maxEmp) * 100;
+          return (
+            <div key={row.code} style={{ borderTop: i === 0 ? "none" : "1px solid #ebe5d6" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1.6fr 90px 110px 120px", gap: 0, padding: "12px 14px", fontSize: 14, alignItems: "center" }}>
+                <div>
+                  <div style={{ fontWeight: 600, color: "#1f1d18" }}>{row.name}</div>
+                  <div style={{ fontSize: 11, color: "#7a756b", marginTop: 2 }}>
+                    Private {row.private_employment.toLocaleString()} ·{" "}
+                    Public {row.public_employment.toLocaleString()}
+                  </div>
+                </div>
+                <div style={{ textAlign: "right", fontWeight: 600 }}>{row.total_employment.toLocaleString()}</div>
+                <div style={{ textAlign: "right" }}>${row.avg_weekly_wage.toLocaleString()}</div>
+                <div style={{ textAlign: "right", color: "#5a564d" }}>${(row.annual_pay_equivalent / 1000).toFixed(0)}k</div>
+              </div>
+              <div style={{ height: 3, background: "#ebe5d6" }}>
+                <div style={{ height: 3, width: `${barPct}%`, background: "oklch(45% 0.16 220)" }} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ marginTop: 12, fontSize: 12, color: "#7a756b" }}>
+        Quarter: <strong>{mix.as_of_quarter}</strong>. Total covered employment in {scope}: <strong>{mix.total_employment.toLocaleString()}</strong>. {mix.source}
+      </div>
+    </section>
   );
 }
 
@@ -343,6 +414,8 @@ export default async function MantraconPage() {
               </div>
             </section>
           )}
+
+          {data.industry_mix && <IndustryMixSection mix={data.industry_mix} scope="the LWA-25 (5-county region)" />}
 
           <BusinessLeadsSection b={data.business_opportunities} />
 

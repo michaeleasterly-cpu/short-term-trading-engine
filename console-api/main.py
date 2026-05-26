@@ -716,13 +716,135 @@ async def public_carbondale() -> dict:
         )
     indicators = {r["series_id"]: {"value": float(r["value_num"]), "date": r["observed_date"].isoformat()} for r in rows}
     business = await _usaspending_block(county_fips=["077"], recipient_city=None)
+    qcew = await _qcew_supersector_block(county_fips=["077"])
     return {
         "ts": datetime.now(UTC).isoformat(),
         "indicators": indicators,
         "unemployment_series": [{"date": r["observed_date"].isoformat(), "value": float(r["value_num"])} for r in ur_series],
         "labor_force_series": [{"date": r["observed_date"].isoformat(), "value": float(r["value_num"])} for r in labor_force_series],
         "business_opportunities": business,
+        "industry_mix": qcew,
     }
+
+
+# ────────────── BLS QCEW (Quarterly Census of Employment & Wages) ──────────────
+# Industry-by-NAICS-supersector employment + average weekly wages, per county,
+# per quarter. Public BLS CSV endpoint; no API key. QCEW publishes Q with ~7
+# month lag. Cached 24h since data refreshes quarterly.
+
+_BLS_NAICS_SUPERSECTOR: dict[str, str] = {
+    "1011": "Natural Resources and Mining",
+    "1012": "Construction",
+    "1013": "Manufacturing",
+    "1021": "Trade, Transportation, and Utilities",
+    "1022": "Information",
+    "1023": "Financial Activities",
+    "1024": "Professional and Business Services",
+    "1025": "Education and Health Services",
+    "1026": "Leisure and Hospitality",
+    "1027": "Other Services",
+    "1028": "Public Administration",
+    "1029": "Unclassified",
+}
+
+_QCEW_CACHE: dict[str, tuple[float, dict]] = {}
+_QCEW_CACHE_TTL_SEC = 86400  # 24h
+
+
+async def _qcew_latest_quarter() -> tuple[int, int]:
+    """Probe BLS for the most recent published quarter. Falls back to (2025, 3)
+    if probes fail. BLS publishes Q ~7 months after the end of the quarter."""
+    today = date.today()
+    candidates: list[tuple[int, int]] = []
+    y, q = today.year, (today.month - 1) // 3 + 1
+    for _ in range(6):
+        q -= 1
+        if q < 1:
+            q = 4
+            y -= 1
+        candidates.append((y, q))
+    async with httpx.AsyncClient(timeout=8.0) as client:
+        for yy, qq in candidates:
+            try:
+                r = await client.head(f"https://data.bls.gov/cew/data/api/{yy}/{qq}/area/17077.csv")
+                if r.status_code == 200:
+                    return (yy, qq)
+            except Exception:
+                continue
+    return (2025, 3)
+
+
+async def _qcew_supersector_block(county_fips: list[str]) -> dict:
+    """Returns {as_of_quarter, top_supersectors: [...], total_employment, source}."""
+    cache_key = "qcew|" + ",".join(sorted(county_fips))
+    now = time.time()
+    if cache_key in _QCEW_CACHE and now - _QCEW_CACHE[cache_key][0] < _QCEW_CACHE_TTL_SEC:
+        return _QCEW_CACHE[cache_key][1]
+
+    year, qtr = await _qcew_latest_quarter()
+    import csv as csv_mod
+    import io as io_mod
+    agg: dict[str, dict] = {}
+    grand_emp = 0
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        for fips5 in county_fips:
+            area_code = "17" + fips5
+            try:
+                r = await client.get(f"https://data.bls.gov/cew/data/api/{year}/{qtr}/area/{area_code}.csv")
+                if r.status_code != 200:
+                    continue
+                reader = csv_mod.DictReader(io_mod.StringIO(r.text))
+                for row in reader:
+                    if row.get("agglvl_code") != "73":
+                        continue
+                    ic = row.get("industry_code") or ""
+                    if ic not in _BLS_NAICS_SUPERSECTOR:
+                        continue
+                    own = row.get("own_code") or "0"
+                    emp = int(row.get("month3_emplvl") or 0)
+                    wage = float(row.get("avg_wkly_wage") or 0)
+                    if ic not in agg:
+                        agg[ic] = {
+                            "code": ic, "name": _BLS_NAICS_SUPERSECTOR[ic],
+                            "private_emp": 0, "public_emp": 0,
+                            "wage_sum": 0.0, "wage_weight": 0,
+                        }
+                    if own == "5":
+                        agg[ic]["private_emp"] += emp
+                    elif own in ("1", "2", "3"):
+                        agg[ic]["public_emp"] += emp
+                    agg[ic]["wage_sum"] += wage * emp
+                    agg[ic]["wage_weight"] += emp
+                    grand_emp += emp
+            except Exception:
+                continue
+
+    items = []
+    for d in agg.values():
+        total_emp = d["private_emp"] + d["public_emp"]
+        if total_emp == 0:
+            continue
+        avg_wkly = d["wage_sum"] / d["wage_weight"] if d["wage_weight"] else 0
+        items.append({
+            "code": d["code"],
+            "name": d["name"],
+            "total_employment": total_emp,
+            "private_employment": d["private_emp"],
+            "public_employment": d["public_emp"],
+            "avg_weekly_wage": round(avg_wkly, 0),
+            "annual_pay_equivalent": round(avg_wkly * 52, 0),
+        })
+    items.sort(key=lambda x: -x["total_employment"])
+
+    out = {
+        "as_of_quarter": f"{year}Q{qtr}",
+        "top_supersectors": items,
+        "total_employment": sum(i["total_employment"] for i in items),
+        "source": "BLS Quarterly Census of Employment & Wages (QCEW); NAICS supersector aggregation, all ownerships.",
+        "county_fips": county_fips,
+    }
+    _QCEW_CACHE[cache_key] = (now, out)
+    return out
 
 
 # ────────────── USAspending.gov federal-awards helper ──────────────
@@ -896,12 +1018,14 @@ async def public_murphysboro() -> dict:
     # Murphysboro is small — also pull county-wide awards alongside city-specific
     business_city = await _usaspending_block(county_fips=["077"], recipient_city="MURPHYSBORO")
     business_county = await _usaspending_block(county_fips=["077"], recipient_city=None)
+    qcew = await _qcew_supersector_block(county_fips=["077"])
     return {
         "ts": datetime.now(UTC).isoformat(),
         "indicators": indicators,
         "unemployment_series": [{"date": r["observed_date"].isoformat(), "value": float(r["value_num"])} for r in ur_series],
         "business_opportunities_city": business_city,
         "business_opportunities_county": business_county,
+        "industry_mix": qcew,
     }
 
 
@@ -992,9 +1116,9 @@ async def public_mantracon() -> dict:
     lwa_latest_ur = float(lwa_ur_series[-1]["ur"]) if lwa_ur_series else None
     lwa_latest_ur_date = lwa_ur_series[-1]["observed_date"].isoformat() if lwa_ur_series else None
 
-    business = await _usaspending_block(
-        county_fips=["055", "077", "081", "145", "199"], recipient_city=None
-    )
+    LWA_FIPS = ["055", "077", "081", "145", "199"]
+    business = await _usaspending_block(county_fips=LWA_FIPS, recipient_city=None)
+    qcew = await _qcew_supersector_block(county_fips=LWA_FIPS)
     return {
         "ts": datetime.now(UTC).isoformat(),
         "indicators": indicators,
@@ -1012,6 +1136,7 @@ async def public_mantracon() -> dict:
             {"date": r["observed_date"].isoformat(), "value": float(r["ur"])} for r in lwa_ur_series
         ],
         "business_opportunities": business,
+        "industry_mix": qcew,
     }
 
 
