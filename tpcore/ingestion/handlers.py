@@ -232,7 +232,7 @@ async def handle_fundamentals_refresh(
         date_range_end=today,
     ) as ctx:
         archive_path_str = str(ctx.archive_path)
-        csv_rows = read_archive_csv(ctx.archive_path)
+        csv_rows = read_archive_csv(ctx)
         by_ticker: dict[str, list[dict]] = {}
         for r in csv_rows:
             by_ticker.setdefault(r["ticker"], []).append(r)
@@ -488,7 +488,7 @@ async def handle_sec_fundamentals_fallback(
         date_range_end=today,
     ) as ctx:
         archive_path_str = str(ctx.archive_path)
-        csv_rows = read_archive_csv(ctx.archive_path)
+        csv_rows = read_archive_csv(ctx)
         # Group archive rows by ticker so we can reuse the existing
         # _upsert_payload contract — same shape as the FMP handler.
         by_ticker: dict[str, list[dict]] = {}
@@ -719,7 +719,7 @@ async def handle_corporate_actions(
         # in-memory archive_rows the manifest was built from) — that's
         # the archive-as-substrate invariant.
         parsed_actions = [
-            _archive_row_to_action(r) for r in read_archive_csv(ctx.archive_path)
+            _archive_row_to_action(r) for r in read_archive_csv(ctx)
         ]
         total_actions = await upsert_corporate_actions(pool, parsed_actions)
         ctx.actual_rows = total_actions

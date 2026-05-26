@@ -278,17 +278,25 @@ async def archive_first_load_bars(
 class _LifecycleCtx:
     """Object yielded from :func:`manifest_lifecycle`.
 
-    Carries the on-disk archive path so the caller's Phase 2 reads
-    from there (the archive-as-substrate contract), plus the
-    manifest_id so a caller that wants to update notes mid-flight
-    can. ``actual_rows`` defaults to ``archived_row_count``; the
-    caller may overwrite it before exit to record what production
-    actually accepted. That value is what ``mark_loaded`` persists.
+    Carries the archive path so the caller's Phase 2 reads from there
+    (the archive-as-substrate contract), plus the manifest_id so a
+    caller that wants to update notes mid-flight can. ``actual_rows``
+    defaults to ``archived_row_count``; the caller may overwrite it
+    before exit to record what production actually accepted. That value
+    is what ``mark_loaded`` persists.
+
+    The 2026-05-26 R3 / S3 fix added ``body``: the gzipped CSV bytes
+    the archive backend received. Local-FS callers can keep using
+    ``read_archive_csv(ctx.archive_path)``; S3-backend callers (where
+    archive_path is an ``s3://...`` URI, not a real local Path) MUST
+    use ``read_archive_csv(ctx)`` which falls back to ``ctx.body``
+    instead of trying to open the URI as a file.
     """
-    archive_path: Path
+    archive_path: Path | str
     archived_row_count: int
     manifest_id: UUID
     actual_rows: int = 0
+    body: bytes | None = None
 
 
 @asynccontextmanager
@@ -326,15 +334,21 @@ async def manifest_lifecycle(
         validator=validator,
     )
     archive_path = archive_result.path
-    if not isinstance(archive_path, Path):
-        # S3-backend support is the R3 substrate follow-up; the
-        # archive-first invariant needs a local file we can hash.
-        raise NotImplementedError(
-            "manifest_lifecycle requires LocalFSBackend; "
-            f"got non-Path archive_path={archive_path!r}"
-        )
 
-    checksum = compute_sha256(archive_path)
+    # Backend-agnostic checksum (2026-05-26 fix): write_archive now
+    # caches the sha256 of the gzipped body on the result, so we no
+    # longer need a local Path to checksum from. Falls back to the
+    # legacy compute_sha256(path) read for unit-test fakes that
+    # don't populate `sha256` on their ArchiveWriteResult.
+    checksum = archive_result.sha256
+    if checksum is None:
+        if not isinstance(archive_path, Path):
+            raise RuntimeError(
+                "manifest_lifecycle: write_archive returned no sha256 AND "
+                f"non-Path archive_path={archive_path!r} — cannot checksum"
+            )
+        checksum = compute_sha256(archive_path)
+
     manifest_id = await create_archived_row(
         pool,
         source=source,
@@ -359,6 +373,11 @@ async def manifest_lifecycle(
         manifest_id=manifest_id,
         actual_rows=archive_result.rows_written,
     )
+    # Stash the gzipped body on the context so backend-agnostic
+    # callers can read it via read_archive_csv(ctx) without a
+    # backend round-trip. Local-FS callers that pass the path to
+    # read_archive_csv(path) keep working unchanged.
+    ctx.body = archive_result.body
     try:
         yield ctx
         await mark_loaded(pool, manifest_id, actual_rows=ctx.actual_rows)
@@ -385,12 +404,43 @@ async def manifest_lifecycle(
         raise
 
 
-def read_archive_csv(archive_path: Path) -> list[dict[str, str]]:
-    """Public wrapper around the internal CSV-archive reader. The
-    sibling-feed orchestrators that build on ``manifest_lifecycle``
-    use this to materialise Phase 2's input from the on-disk archive
-    file — the archive-as-substrate invariant."""
-    return _read_archive_csv(archive_path)
+def read_archive_csv(source: Path | _LifecycleCtx) -> list[dict[str, str]]:
+    """Public wrapper around the internal CSV-archive reader.
+
+    Accepts either:
+      * a local ``Path`` (legacy LocalFSBackend caller — reads from disk)
+      * a ``_LifecycleCtx`` (backend-agnostic — reads from ctx.body bytes
+        captured at write-time, no backend round-trip). The S3-backend
+        cutover (R3, 2026-05-21) makes ctx.archive_path an ``s3://``
+        URI that cannot be opened as a local file; the body-cache is
+        the substrate readers should use going forward.
+
+    Strings that look like local paths fall back to disk read for back-
+    compat with the small number of test fixtures that pass a string.
+    """
+    if isinstance(source, _LifecycleCtx):
+        if source.body is not None:
+            return _read_archive_csv_from_bytes(source.body)
+        # Backend-aware fallback for legacy ctx without body: local-FS
+        # callers still have a real Path; S3-backend with no body is a
+        # programmer error (write_archive should have populated it).
+        if isinstance(source.archive_path, Path):
+            return _read_archive_csv(source.archive_path)
+        raise RuntimeError(
+            "read_archive_csv(ctx): ctx.body is None and archive_path "
+            f"={source.archive_path!r} is not a local Path. The S3-"
+            "backend handler must rely on body — verify write_archive "
+            "populated ArchiveWriteResult.body."
+        )
+    return _read_archive_csv(source)
+
+
+def _read_archive_csv_from_bytes(body: bytes) -> list[dict[str, str]]:
+    """In-memory equivalent of :func:`_read_archive_csv` for the body
+    bytes write_archive captured at write time. Backend-agnostic."""
+    with gzip.open(io.BytesIO(body), "rb") as gz:
+        text = io.TextIOWrapper(gz, encoding="utf-8", newline="")
+        return list(csv.DictReader(text))
 
 
 __all__ = [
