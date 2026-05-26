@@ -245,7 +245,7 @@ async def _load_daily_bars_config(pool: asyncpg.Pool) -> dict[str, Any]:
     """
     del pool  # config no longer DB-backed; pool retained for ABI stability
     return {
-        "universe": "all_active",
+        "universe": "active",  # FMP path (Alpaca all_active discovery forbidden by feedback_no_alpaca_for_daily_prices_backfill)
         "min_price": 5.0,
         "batch_size": 50,
         "min_volume": 250000,
