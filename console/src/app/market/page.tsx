@@ -423,8 +423,12 @@ export default async function MarketHealthPage() {
 
           {data && top && (
             <>
-              <div style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: "0.08em", color: "#8a857c", marginBottom: 8 }}>
-                How is the market today?
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src="/logo-icon.svg" alt="Packet Void Labs" width={28} height={28} />
+                <div style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: "0.08em", color: "#8a857c" }}>
+                  How is the market today?
+                </div>
               </div>
               <h1 style={{ fontSize: 56, fontWeight: 600, lineHeight: 1.05, margin: "8px 0 8px 0", color: TONE_COLOR[top.tone] }}>
                 {top.headline}

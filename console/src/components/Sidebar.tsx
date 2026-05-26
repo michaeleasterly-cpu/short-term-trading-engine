@@ -41,7 +41,8 @@ export function Sidebar({ route, onRoute }: SidebarProps) {
     <aside className="hairline-r flex flex-col" style={{ width: 208, background: "var(--bg-1)" }}>
       <div className="hairline-b px-4 py-3" style={{ background: "var(--panel-hd)" }}>
         <div className="flex items-center gap-2">
-          <div className="h-4 w-4" style={{ background: "var(--accent)" }} />
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/logo-icon.svg" alt="Packet Void Labs" width={20} height={20} />
           <div className="text-[13px] font-medium tracking-tight" style={{ color: "var(--ink)" }}>STE</div>
           <div className="eyebrow ml-auto">CONSOLE</div>
         </div>

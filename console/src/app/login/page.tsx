@@ -22,7 +22,8 @@ export default function LoginPage({
         style={{ background: "var(--panel)" }}
       >
         <div className="flex items-center gap-2 mb-5">
-          <div className="h-4 w-4" style={{ background: "var(--accent)" }} />
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/logo-icon.svg" alt="Packet Void Labs" width={20} height={20} />
           <div className="text-[13px] font-medium" style={{ color: "var(--ink)" }}>STE</div>
           <div className="eyebrow ml-auto">CONSOLE</div>
         </div>
