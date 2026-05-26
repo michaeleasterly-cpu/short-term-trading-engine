@@ -1,0 +1,15 @@
+# Railpack build descriptor for the operator-console FastAPI service.
+#
+# Lives in a SEPARATE subdirectory (console-api/) from the main repo so
+# Railway treats it as an independent buildable unit with its own
+# requirements. The root-level railway.json knows nothing about this
+# service — it's configured via Railway dashboard / API with
+# rootDirectory=console-api/.
+[mise]
+python = "3.12"
+
+[install]
+cmd = "pip install --no-cache-dir -r requirements.txt"
+
+[start]
+cmd = "uvicorn main:app --host 0.0.0.0 --port $PORT"
