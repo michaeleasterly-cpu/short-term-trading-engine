@@ -150,11 +150,35 @@ _notify_failure() {
 # spam-alert the operator).
 _write_data_operations_heartbeat() {
     local rc="$1"
-    # If .env hasn't been loaded yet (early exit path — e.g., the lock
-    # was already held by another run), DATABASE_URL_IPV4 isn't set and
-    # we have nothing to write to. Skip silently — the other run will
-    # write its own heartbeat when IT reaches the trap.
-    if [[ -z "${DATABASE_URL_IPV4:-}" ]]; then
+    # Resolve DB URL with Railway-compatible fallback. Local Mac uses
+    # DATABASE_URL_IPV4 (operator's .env convention to avoid IPv6 / pgbouncer
+    # quirks on the LAN). Railway only injects DATABASE_URL — so without
+    # this fallback the heartbeat would silently skip in prod even though
+    # the cron ran successfully (detected 2026-05-26: data_operations
+    # heartbeat went 37+ hours stale on Railway while INGESTION_COMPLETE /
+    # INGESTION_FAILED events fired every cycle, proving the cron itself
+    # was running but the heartbeat-writer was no-op'ing).
+    # Resolution order matches the script's top-of-file normalization at
+    # line 50: Railway sets DATABASE_URL (IPv6 endpoint) directly; Mac
+    # uses DATABASE_URL_IPV4 from .env. Prefer the v6 variant when both
+    # are set (Railway-recommended path; operator directive 2026-05-26).
+    local db_url="${DATABASE_URL_IPV6:-${DATABASE_URL:-${DATABASE_URL_IPV4:-}}}"
+    if [[ -z "$db_url" ]]; then
+        return 0
+    fi
+    # Discover the Python interpreter. Mac uses .venv/bin/python (the
+    # rest of the script's invocations hardcode this); Railway built
+    # the venv at /app/.deps/bin/python (per railway.json _build_note).
+    # Fall back to whatever `python3` is on PATH as a last resort —
+    # better to fire-and-fail-loudly than to silently skip the
+    # heartbeat (silently-skipped heartbeats look just like a dead
+    # daemon, defeating the freshness check's whole purpose).
+    local py=""
+    if [[ -x .venv/bin/python ]]; then py=".venv/bin/python"
+    elif [[ -x /app/.deps/bin/python ]]; then py="/app/.deps/bin/python"
+    elif command -v python3 >/dev/null 2>&1; then py="$(command -v python3)"
+    else
+        echo "⚠ heartbeat: no python found (tried .venv, /app/.deps, python3)"
         return 0
     fi
     local status="healthy"
@@ -167,7 +191,7 @@ _write_data_operations_heartbeat() {
     # logging — the `cmd && A || B` idiom would fire B on ANY non-zero
     # from A (e.g., a stdout-write error), so the logs would lie about
     # whether the heartbeat actually wrote.
-    if DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python -c "
+    if DATABASE_URL="$db_url" "$py" -c "
 import asyncio, asyncpg, os, sys
 async def main():
     # statement_cache_size/jit: keep in sync with tpcore.db.build_asyncpg_pool (Supabase pooler safety)

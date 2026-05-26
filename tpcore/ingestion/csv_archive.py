@@ -107,6 +107,16 @@ class ArchiveWriteResult:
     path: Path | str     # final ``.csv.gz`` path or s3:// URI
     rows_written: int    # rows after physical-truth filtering
     rows_rejected: int   # rows that failed validation
+    # Backend-agnostic substrate fields (added 2026-05-26 to make
+    # manifest_lifecycle work with S3Backend on Railway). The bytes
+    # are the gzipped CSV body the backend received; sha256 is
+    # computed at write-time so manifest_lifecycle no longer needs
+    # to re-read the file from disk to checksum. body=None on a stub
+    # / dry-run backend; default behaviour for real writes is to
+    # carry the bytes so Phase 2 readers don't need a backend round-
+    # trip just to re-fetch what we already had in memory.
+    body: bytes | None = None
+    sha256: str | None = None
 
 
 def write_archive(
@@ -195,13 +205,27 @@ def write_archive(
     else:
         result_path = written_id
 
+    # Compute sha256 once over the gzipped bytes — backend-agnostic
+    # (LocalFS + S3 both received the same body). Cached on the
+    # result so manifest_lifecycle doesn't have to re-read the file
+    # from disk; previously that re-read was a LocalFSBackend-only
+    # path that broke S3 ingest. (2026-05-26: bug detected during the
+    # SEC fundamentals fallback rollout — every S3-backend handler
+    # would write the archive then raise NotImplementedError on
+    # checksum because compute_sha256 takes a Path.)
+    import hashlib as _hashlib
+    sha256 = _hashlib.sha256(body).hexdigest()
+
     logger.info(
         "csv_archive.write_done",
         source=source, rows_written=written, rows_rejected=rejected,
         path=str(result_path),
         backend=type(backend).__name__,
     )
-    return ArchiveWriteResult(path=result_path, rows_written=written, rows_rejected=rejected)
+    return ArchiveWriteResult(
+        path=result_path, rows_written=written, rows_rejected=rejected,
+        body=body, sha256=sha256,
+    )
 
 
 def _gzip_in_place(path: Path) -> Path:

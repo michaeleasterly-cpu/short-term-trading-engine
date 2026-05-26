@@ -73,6 +73,14 @@ ADAPTER_CONTRACTS: dict[str, AdapterContract] = {
         required_fields=frozenset({"ticker"}),
         evidence="guard_pending: contract declared for coverage; "
                  "enforced wiring is a later increment."),
+    "sec_edgar_fundamentals_fallback": AdapterContract(
+        feed="sec_edgar_fundamentals_fallback", accessor="key",
+        guard_pending=True,
+        required_fields=frozenset({"ticker", "cik", "period_end_date"}),
+        evidence="SEC EDGAR XBRL companyfacts fallback for FMP "
+                 "coverage gaps (handle_sec_fundamentals_fallback). "
+                 "guard_pending: contract declared for coverage; "
+                 "enforced wiring tracked with the FMP entry above."),
     "alpaca_corporate_actions": AdapterContract(
         feed="alpaca_corporate_actions", accessor="key",
         guard_pending=True, required_fields=frozenset({"ticker"}),

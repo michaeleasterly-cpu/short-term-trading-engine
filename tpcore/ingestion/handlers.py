@@ -232,7 +232,7 @@ async def handle_fundamentals_refresh(
         date_range_end=today,
     ) as ctx:
         archive_path_str = str(ctx.archive_path)
-        csv_rows = read_archive_csv(ctx.archive_path)
+        csv_rows = read_archive_csv(ctx)
         by_ticker: dict[str, list[dict]] = {}
         for r in csv_rows:
             by_ticker.setdefault(r["ticker"], []).append(r)
@@ -263,6 +263,308 @@ async def handle_fundamentals_refresh(
             f"first={failures[0][0]}: {failures[0][1]}"
         )
     return total_rows
+
+
+SEC_FUNDAMENTALS_ARCHIVE_FIELDS: tuple[str, ...] = (
+    "ticker", "cik", "filing_date", "period_end_date",
+    "net_income", "fcf", "operating_cash_flow", "capex", "revenue",
+    "total_assets", "total_liabilities", "current_assets",
+    "current_liabilities", "receivables", "cash_and_equivalents",
+    "shares_outstanding", "recorded_at",
+)
+"""CSV-archive column order for the ``sec_edgar_fundamentals_fallback``
+source. Distinct from ``FUNDAMENTALS_ARCHIVE_FIELDS`` because SEC
+companyfacts has no ``period_label`` (Q1/Q2/...) and ``cik`` is
+informational. Same financial columns + ``recorded_at`` so a row replays
+cleanly through ``platform.fundamentals_quarterly``'s upsert."""
+
+_SEC_FUNDAMENTALS_INTER_TICKER_SLEEP_SEC = 0.12
+"""SEC fair-use guidance: ≤10 req/sec unauthenticated. 0.12s sleep =
+8 req/sec, comfortable margin. Per ``feedback_bulk_before_api_crawl_REINFORCED``:
+SEC has a bulk companyfacts.zip (~3 GB) — for the typical FMP-gap
+follow-up the per-ticker call count is small (one HTTP call per CIK
+returns ALL XBRL facts) so bulk is overkill. Revisit if scope widens."""
+
+
+async def handle_sec_fundamentals_fallback(
+    pool: asyncpg.Pool, config: dict[str, Any]
+) -> int | None:
+    """SEC EDGAR companyfacts → fundamentals_quarterly fallback.
+
+    Cascade fallback for ``fundamentals_quarterly_completeness`` when
+    FMP's 3-endpoint merge leaves period gaps (pre-IPO predecessors,
+    recent IPOs with sparse balance-sheet history, etc.).
+
+    Universe: tier-≤2 active stocks with a non-NULL CIK in
+    ``platform.ticker_classifications``. Per-ticker: enumerate the
+    inferred-missing period_ends (same gap-inference the completeness
+    check uses), fetch ``data.sec.gov/api/xbrl/companyfacts/CIK<n>.json``
+    once per CIK, extract the canonical financial fields for each
+    missing period, archive to R2 + upsert into platform.fundamentals_quarterly.
+
+    Config keys (all optional):
+      * ``tickers``: comma-separated list to scope to a specific
+        subset. Default: all tier-≤2 active stocks with CIK.
+      * ``include_no_gap_tickers`` (bool, default False): when True,
+        also fetch SEC facts for tickers without inferred gaps (useful
+        for a deep-history first-time backfill). Default skips them to
+        keep the daily cascade cheap.
+
+    Per memory ``feedback_sec_authoritative_fmp_fallback_non_us``: SEC
+    is the US-filer authoritative source. Non-US tickers without CIKs
+    are out-of-scope here (the universe filter excludes them).
+
+    Per ``.claude/rules/data-adapter.md``: backfills run through this
+    canonical stage (``python scripts/ops.py --stage sec_fundamentals_fallback``)
+    — NEVER as a one-off script.
+    """
+    import asyncio
+    from datetime import date as _date_t
+
+    from tpcore.fundamentals.cache import FundamentalsCache
+    from tpcore.ingestion.archive_etl import manifest_lifecycle, read_archive_csv
+    from tpcore.outage import DataProviderOutage
+    from tpcore.sec.companyfacts_adapter import SECCompanyFactsAdapter
+
+    today = datetime.now(UTC).date()
+    include_no_gap = bool(config.get("include_no_gap_tickers", False))
+    ticker_filter = config.get("tickers")
+    ticker_filter_list: list[str] | None = (
+        [t.strip().upper() for t in str(ticker_filter).split(",") if t.strip()]
+        if ticker_filter else None
+    )
+
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT DISTINCT tc.ticker, tc.cik
+            FROM platform.ticker_classifications tc
+            JOIN platform.liquidity_tiers lt ON lt.ticker = tc.ticker
+            WHERE tc.asset_class = 'stock'
+              AND (tc.lifetime_end IS NULL OR tc.lifetime_end > CURRENT_DATE)
+              AND lt.tier <= 2
+              AND tc.cik IS NOT NULL AND tc.cik <> ''
+            ORDER BY tc.ticker
+            """
+        )
+    candidates = [(r["ticker"], r["cik"]) for r in rows]
+    if ticker_filter_list:
+        wanted = set(ticker_filter_list)
+        candidates = [(t, c) for t, c in candidates if t in wanted]
+    logger.info(
+        "ingestion.handler.sec_fundamentals_fallback.universe",
+        tier2_with_cik=len(candidates),
+        ticker_filter=len(ticker_filter_list or []),
+    )
+
+    import calendar as _cal
+
+    async def _missing_periods_for(t: str) -> list[_date_t]:
+        async with pool.acquire() as cx:
+            r = await cx.fetch(
+                "SELECT period_end_date FROM platform.fundamentals_quarterly "
+                "WHERE ticker = $1 ORDER BY period_end_date",
+                t,
+            )
+        have = sorted({row["period_end_date"] for row in r})
+        if len(have) < 2:
+            return []
+        out: list[_date_t] = []
+        for i in range(1, len(have)):
+            a, b = have[i - 1], have[i]
+            if (b - a).days <= 100:
+                continue
+            cur_y, cur_m = a.year, a.month
+            for _ in range(40):  # safety bound
+                next_m = cur_m + 3
+                next_y = cur_y + (next_m - 1) // 12
+                next_m = ((next_m - 1) % 12) + 1
+                # Calendar-correct last-day-of-month (was a buggy fixed
+                # dict {3,6,9,12}: 31/30/30/31 with 30 fallback — crashed
+                # on Feb fiscal-year-end filers with "day is out of range
+                # for month" on date(y, 2, 30)). Handles leap years too.
+                last_day = _cal.monthrange(next_y, next_m)[1]
+                candidate = _date_t(next_y, next_m, last_day)
+                if candidate >= b:
+                    break
+                if candidate > a:
+                    out.append(candidate)
+                cur_y, cur_m = candidate.year, candidate.month
+        return out
+
+    archive_rows: list[dict] = []
+    no_data: list[tuple[str, str]] = []
+    failures: list[tuple[str, str]] = []
+    nothing_to_fill: list[str] = []
+
+    async with SECCompanyFactsAdapter() as sec:
+        for i, (ticker, cik) in enumerate(candidates, start=1):
+            missing = await _missing_periods_for(ticker)
+            if not missing and not include_no_gap:
+                nothing_to_fill.append(ticker)
+                continue
+            try:
+                facts = await sec.get_companyfacts(cik)
+            except DataProviderOutage as exc:
+                failures.append((ticker, str(exc)[:160]))
+                await asyncio.sleep(_SEC_FUNDAMENTALS_INTER_TICKER_SLEEP_SEC)
+                continue
+            if facts is None:
+                no_data.append((ticker, f"CIK {cik} returned 404 (no XBRL on file)"))
+                await asyncio.sleep(_SEC_FUNDAMENTALS_INTER_TICKER_SLEEP_SEC)
+                continue
+
+            filled = 0
+            for pe in missing:
+                extracted = sec.extract_period(facts, pe)
+                if extracted is None:
+                    continue
+                # SEC companyfacts doesn't expose a single canonical
+                # filing_date per fact (every fact carries its own
+                # ``filed`` per submission). For the upsert we use
+                # period_end as filing_date so the ON CONFLICT
+                # (ticker, filing_date) key is stable + idempotent.
+                # The platform's `fundamentals_integrity` check uses
+                # period_end <= filing_date which is satisfied trivially.
+                filing = pe
+                if filing > today:
+                    continue
+                shares = extracted["shares_outstanding"]
+                if shares is not None and shares <= 0:
+                    continue
+                archive_rows.append({
+                    "ticker": ticker,
+                    "cik": cik,
+                    "filing_date": filing.isoformat(),
+                    "period_end_date": pe.isoformat(),
+                    "net_income": _str_or_blank(extracted["net_income"]),
+                    "fcf": _str_or_blank(extracted["fcf"]),
+                    "operating_cash_flow": _str_or_blank(extracted["operating_cash_flow"]),
+                    "capex": _str_or_blank(extracted["capex"]),
+                    "revenue": _str_or_blank(extracted["revenue"]),
+                    "total_assets": _str_or_blank(extracted["total_assets"]),
+                    "total_liabilities": _str_or_blank(extracted["total_liabilities"]),
+                    "current_assets": _str_or_blank(extracted["current_assets"]),
+                    "current_liabilities": _str_or_blank(extracted["current_liabilities"]),
+                    "receivables": _str_or_blank(extracted["receivables"]),
+                    "cash_and_equivalents": _str_or_blank(extracted["cash_and_equivalents"]),
+                    "shares_outstanding": _str_or_blank(shares),
+                    "recorded_at": "",
+                })
+                filled += 1
+            if i % 25 == 0:
+                logger.info(
+                    "ingestion.handler.sec_fundamentals_fallback.progress",
+                    done=i, total=len(candidates),
+                    ticker=ticker, filled_this_ticker=filled,
+                    archive_rows=len(archive_rows),
+                )
+            await asyncio.sleep(_SEC_FUNDAMENTALS_INTER_TICKER_SLEEP_SEC)
+
+    logger.info(
+        "ingestion.handler.sec_fundamentals_fallback.phase0_done",
+        archive_rows=len(archive_rows),
+        no_data=len(no_data),
+        failures=len(failures),
+        nothing_to_fill=len(nothing_to_fill),
+    )
+
+    if not archive_rows:
+        return 0
+
+    # Phases 1-3 under the canonical lifecycle. Same pattern as
+    # handle_fundamentals_refresh; archive lands in R2 (or local FS
+    # depending on CSV_ARCHIVE_BACKEND), Phase 2 reads back + per-symbol
+    # upserts via the cache's contract.
+    total_rows = 0
+    archive_path_str: str | None = None
+    async with manifest_lifecycle(
+        pool,
+        source="sec_edgar_fundamentals_fallback",
+        provider="sec_edgar",
+        archive_rows=archive_rows,
+        fieldnames=list(SEC_FUNDAMENTALS_ARCHIVE_FIELDS),
+        validator=lambda r: bool(r.get("ticker")) and bool(r.get("period_end_date")),
+        date_range_end=today,
+    ) as ctx:
+        archive_path_str = str(ctx.archive_path)
+        csv_rows = read_archive_csv(ctx)
+        # Group archive rows by ticker so we can reuse the existing
+        # _upsert_payload contract — same shape as the FMP handler.
+        by_ticker: dict[str, list[dict]] = {}
+        for r in csv_rows:
+            by_ticker.setdefault(r["ticker"], []).append(r)
+        cache = FundamentalsCache(pool, adapter=None)
+        for symbol, ticker_rows in by_ticker.items():
+            payload = _sec_archive_rows_to_payload(ticker_rows)
+            if not payload:
+                continue
+            total_rows += await cache.upsert_payload(symbol, payload)
+        ctx.actual_rows = total_rows
+
+    logger.info(
+        "ingestion.handler.sec_fundamentals_fallback.done",
+        rows=total_rows,
+        no_data=len(no_data),
+        failures=len(failures),
+        csv_archive=archive_path_str,
+    )
+    if failures:
+        raise RuntimeError(
+            f"sec_fundamentals_fallback: {len(failures)} real failure(s); "
+            f"first={failures[0][0]}: {failures[0][1]}"
+        )
+    return total_rows
+
+
+def _str_or_blank(v: object) -> str:
+    return "" if v is None else str(v)
+
+
+def _sec_archive_rows_to_payload(rows: list[dict]) -> dict:
+    """Reconstruct a FundamentalsCache-style payload from SEC archive
+    rows. First row → latest period; rest → history. Numeric fields
+    parse as Decimal; date fields parse as date. Mirrors
+    ``_archive_rows_to_payload`` (FMP) — SEC just has a different
+    archive schema."""
+    from datetime import date as _date_t
+    from decimal import Decimal as _Decimal
+
+    def _opt_decimal(r: dict, k: str) -> object:
+        v = r.get(k)
+        return None if v in (None, "") else _Decimal(v)
+
+    def _opt_date(r: dict, k: str) -> object:
+        v = r.get(k)
+        return None if v in (None, "") else _date_t.fromisoformat(v)
+
+    def _to_period(r: dict) -> dict:
+        return {
+            "filing_date": _opt_date(r, "filing_date"),
+            "period_end_date": _opt_date(r, "period_end_date"),
+            "period": None,  # SEC doesn't expose Q1/Q2/... label here
+            "net_income": _opt_decimal(r, "net_income"),
+            "fcf": _opt_decimal(r, "fcf"),
+            "operating_cash_flow": _opt_decimal(r, "operating_cash_flow"),
+            "capex": _opt_decimal(r, "capex"),
+            "revenue": _opt_decimal(r, "revenue"),
+            "total_assets": _opt_decimal(r, "total_assets"),
+            "total_liabilities": _opt_decimal(r, "total_liabilities"),
+            "current_assets": _opt_decimal(r, "current_assets"),
+            "current_liabilities": _opt_decimal(r, "current_liabilities"),
+            "receivables": _opt_decimal(r, "receivables"),
+            "cash_and_equivalents": _opt_decimal(r, "cash_and_equivalents"),
+            "shares_outstanding": _opt_decimal(r, "shares_outstanding"),
+        }
+
+    if not rows:
+        return {}
+    periods = [_to_period(r) for r in rows]
+    head = periods[0]
+    out = dict(head)
+    out["history"] = periods[1:]
+    out["symbol"] = rows[0].get("ticker", "")
+    return out
 
 
 _CORPORATE_ACTIONS_50_NAME_UNIVERSE: tuple[str, ...] = (
@@ -417,7 +719,7 @@ async def handle_corporate_actions(
         # in-memory archive_rows the manifest was built from) — that's
         # the archive-as-substrate invariant.
         parsed_actions = [
-            _archive_row_to_action(r) for r in read_archive_csv(ctx.archive_path)
+            _archive_row_to_action(r) for r in read_archive_csv(ctx)
         ]
         total_actions = await upsert_corporate_actions(pool, parsed_actions)
         ctx.actual_rows = total_actions
@@ -2673,6 +2975,7 @@ async def handle_aaii_sentiment(
 HANDLERS: dict[str, HandlerFn] = {
     "data_validation": handle_data_validation,
     "fundamentals_refresh": handle_fundamentals_refresh,
+    "sec_fundamentals_fallback": handle_sec_fundamentals_fallback,
     "corporate_actions": handle_corporate_actions,
     "daily_bars": handle_daily_bars,
     "sec_filings": handle_sec_filings,
@@ -2692,6 +2995,7 @@ __all__ = [
     "HandlerFn",
     "handle_data_validation",
     "handle_fundamentals_refresh",
+    "handle_sec_fundamentals_fallback",
     "handle_corporate_actions",
     "handle_daily_bars",
     "handle_sec_filings",
