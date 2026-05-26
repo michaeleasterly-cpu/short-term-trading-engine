@@ -873,6 +873,24 @@ async def _stage_fundamentals_refresh(pool: asyncpg.Pool, config: dict[str, Any]
     return detail
 
 
+async def _stage_sec_fundamentals_fallback(pool: asyncpg.Pool, config: dict[str, Any]) -> dict[str, Any]:
+    """SEC EDGAR companyfacts → fundamentals_quarterly fallback.
+
+    Cascade fallback for the periods FMP doesn't have. Runs the
+    canonical handler ``tpcore.ingestion.handlers.handle_sec_fundamentals_fallback``
+    which archives to R2 → upserts via the cache contract.
+
+    Config keys (all optional, passed to the handler):
+      * ``tickers`` (comma-separated): scope to a subset.
+      * ``include_no_gap_tickers`` (bool, default False): deep-history
+        first-time backfill. Daily cascade leaves False.
+    """
+    from tpcore.ingestion.handlers import handle_sec_fundamentals_fallback
+
+    rows = await handle_sec_fundamentals_fallback(pool, config)
+    return {"rows": rows or 0}
+
+
 async def _stage_compute_fundamental_ratios(
     pool: asyncpg.Pool, config: dict[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -7303,6 +7321,15 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # trade_id is never re-closed. No new daemon — rides --update.
     ("risk_close_ledger_prune", lambda pool, cfg: (lambda: _stage_risk_close_ledger_prune(pool)), STAGE_TIMEOUT_SEC),
     ("fundamentals_refresh",lambda pool, cfg: (lambda: _stage_fundamentals_refresh(pool, cfg)),HEAVY_STAGE_TIMEOUT_SEC),
+    # SEC EDGAR companyfacts fallback — fills period gaps FMP doesn't have
+    # (pre-IPO predecessors, recent-IPO sparse history, balance-sheet gaps).
+    # Runs after fundamentals_refresh so the cascade is FMP-first → SEC-fills-gaps.
+    # Per memory feedback_sec_authoritative_fmp_fallback_non_us — SEC is the
+    # US-filer authoritative source. ~10 req/sec; one HTTP call per CIK
+    # returns full XBRL history.
+    ("sec_fundamentals_fallback",
+     lambda pool, cfg: (lambda: _stage_sec_fundamentals_fallback(pool, cfg)),
+     HEAVY_STAGE_TIMEOUT_SEC),
     # Compute point-in-time P/B + D/E on the rows fundamentals_refresh
     # just landed. Set-based UPDATE — closes the manual operator step
     # where pb/de sat NULL until someone ran scripts/compute_fundamental_ratios.py.
@@ -9686,6 +9713,7 @@ _STAGE_PROVIDER_MAP: dict[str, str] = {
     "daily_bars": "alpaca",
     "corporate_actions": "fmp",
     "fundamentals_refresh": "fmp",
+    "sec_fundamentals_fallback": "sec_edgar",
     "earnings_refresh": "fmp",
     "historical_earnings_events_t1_t2": "fmp",
     "historical_fundamentals_quarterly": "fmp",
