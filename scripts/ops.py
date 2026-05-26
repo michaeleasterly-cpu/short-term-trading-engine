@@ -7321,15 +7321,6 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # trade_id is never re-closed. No new daemon — rides --update.
     ("risk_close_ledger_prune", lambda pool, cfg: (lambda: _stage_risk_close_ledger_prune(pool)), STAGE_TIMEOUT_SEC),
     ("fundamentals_refresh",lambda pool, cfg: (lambda: _stage_fundamentals_refresh(pool, cfg)),HEAVY_STAGE_TIMEOUT_SEC),
-    # SEC EDGAR companyfacts fallback — fills period gaps FMP doesn't have
-    # (pre-IPO predecessors, recent-IPO sparse history, balance-sheet gaps).
-    # Runs after fundamentals_refresh so the cascade is FMP-first → SEC-fills-gaps.
-    # Per memory feedback_sec_authoritative_fmp_fallback_non_us — SEC is the
-    # US-filer authoritative source. ~10 req/sec; one HTTP call per CIK
-    # returns full XBRL history.
-    ("sec_fundamentals_fallback",
-     lambda pool, cfg: (lambda: _stage_sec_fundamentals_fallback(pool, cfg)),
-     HEAVY_STAGE_TIMEOUT_SEC),
     # Compute point-in-time P/B + D/E on the rows fundamentals_refresh
     # just landed. Set-based UPDATE — closes the manual operator step
     # where pb/de sat NULL until someone ran scripts/compute_fundamental_ratios.py.
@@ -7339,7 +7330,23 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # semantics hold without an explicit transaction boundary). Migrated
     # 2026-05-20 from scripts/compute_fundamental_ratios.py (orphan-
     # scripts audit; see docs/superpowers/audits/2026-05-20-orphan-scripts-catalog.md).
+    # NOTE: a pinned test (test_compute_fundamental_ratios_stage) asserts
+    # this stage runs at exactly position N+1 where N is fundamentals_refresh.
+    # ANY new stage must NOT be inserted between these two.
     ("compute_fundamental_ratios", lambda pool, cfg: (lambda: _stage_compute_fundamental_ratios(pool, cfg)), STAGE_TIMEOUT_SEC),
+    # SEC EDGAR companyfacts fallback — fills period gaps FMP doesn't have
+    # (pre-IPO predecessors, recent-IPO sparse history, balance-sheet gaps).
+    # Runs AFTER compute_fundamental_ratios so the FMP→ratios chain stays
+    # intact (pin-tested). SEC rows landed by this stage will get their
+    # ratios computed on the NEXT daily cycle's compute_fundamental_ratios
+    # — acceptable because the pre-IPO / historical periods this stage
+    # fills don't drive any same-cycle engine decision.
+    # Per memory feedback_sec_authoritative_fmp_fallback_non_us — SEC is
+    # the US-filer authoritative source. ~10 req/sec; one HTTP call per
+    # CIK returns full XBRL history.
+    ("sec_fundamentals_fallback",
+     lambda pool, cfg: (lambda: _stage_sec_fundamentals_fallback(pool, cfg)),
+     HEAVY_STAGE_TIMEOUT_SEC),
     # Order corrected 2026-05-14 (audit O-1/O-2/O-3): tier_refresh +
     # classify_tickers must run BEFORE earnings_refresh + sec_filings
     # because the latter two filter by ticker_classifications.asset_class.

@@ -357,6 +357,8 @@ async def handle_sec_fundamentals_fallback(
         ticker_filter=len(ticker_filter_list or []),
     )
 
+    import calendar as _cal
+
     async def _missing_periods_for(t: str) -> list[_date_t]:
         async with pool.acquire() as cx:
             r = await cx.fetch(
@@ -377,7 +379,11 @@ async def handle_sec_fundamentals_fallback(
                 next_m = cur_m + 3
                 next_y = cur_y + (next_m - 1) // 12
                 next_m = ((next_m - 1) % 12) + 1
-                last_day = {3: 31, 6: 30, 9: 30, 12: 31}.get(next_m, 30)
+                # Calendar-correct last-day-of-month (was a buggy fixed
+                # dict {3,6,9,12}: 31/30/30/31 with 30 fallback — crashed
+                # on Feb fiscal-year-end filers with "day is out of range
+                # for month" on date(y, 2, 30)). Handles leap years too.
+                last_day = _cal.monthrange(next_y, next_m)[1]
                 candidate = _date_t(next_y, next_m, last_day)
                 if candidate >= b:
                     break
