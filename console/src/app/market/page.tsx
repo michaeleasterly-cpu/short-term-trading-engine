@@ -75,9 +75,10 @@ function buildSections(d: MarketHealth): Section[] {
 
   const cards = (...arr: Array<Card | null>): Card[] => arr.filter(Boolean) as Card[];
 
-  // Sentinel Bear Score — added 2026-05-27. Composite recession-regime
-  // signal that ties the macro stack together; ≥60 is sentinel's
-  // activation threshold.
+  // Bear Market Risk Score — composite recession-regime signal.
+  // Architectural twin of the Goldman Sachs Bear Market Risk Indicator
+  // (Mueller-Glissmann et al., 2017). 6 macro sub-scorers, raw 0-85
+  // scaled to 0-100; ≥60 triggers the platform's defensive engine.
   const bearCard: Card | null = d.bear_score === undefined ? null : (() => {
     const bs = d.bear_score!;
     const t: Tone = bs.score >= 80 ? "stress" : bs.score >= 60 ? "watch" : bs.score >= 40 ? "ok" : "calm";
@@ -87,15 +88,15 @@ function buildSections(d: MarketHealth): Section[] {
       .join(", ") || "none";
     return {
       key: "bear",
-      question: "How bearish is the macro picture?",
+      question: "What's the composite bear-market risk?",
       value: `${bs.score} / 100`,
       tone: t,
       explain:
-        t === "stress" ? "Deep recession territory — Sentinel would be ACTIVE if it were running live." :
-        t === "watch"  ? "At or above the Sentinel activation threshold of 60. Defensive tilt warranted." :
-        t === "ok"     ? "Some flags up, but below Sentinel's 60 activation threshold." :
-                         "Sentinel Bear Score is low — no defensive activation signal.",
-      detail: `Composite of 6 macro sub-scorers (sentinel/plugs/setup_detection.py): Sahm rule, industrial production, initial claims, yield curve, credit spread, VIX. Sums to ${bs.raw}/${bs.max_raw} raw, scaled to ${bs.score}/100. Active sub-scorers: ${breakdownPills}.`,
+        t === "stress" ? "Deep recession territory — defensive posture warranted." :
+        t === "watch"  ? "At or above the 60 activation threshold. Bear-market regime risk elevated." :
+        t === "ok"     ? "Some flags up, but below the 60 activation threshold." :
+                         "Bear-market risk is low — recession indicators are quiet.",
+      detail: `Bear Market Risk Score — composite of 6 macro sub-scorers (Sahm rule, industrial production, initial claims, yield curve, credit spread, VIX). Sums to ${bs.raw}/${bs.max_raw} raw, scaled to ${bs.score}/100. Active sub-scorers: ${breakdownPills}. Architecture follows Goldman Sachs' Bear Market Risk Indicator framework (Mueller-Glissmann et al., 2017). See "Methodology & references" at the bottom of the page.`,
     };
   })();
 
@@ -308,7 +309,7 @@ function buildSections(d: MarketHealth): Section[] {
     {
       id: "recession",
       title: "Recession watch",
-      subtitle: "Are the warning lights flashing yet? The Bear Score below combines all of these into one number our defensive engine watches.",
+      subtitle: "Are the warning lights flashing yet? The Bear Market Risk Score below combines all of these into one number our defensive engine watches.",
       cards: cards(bearCard, sahmCard, cfnaiCard, icCard, unrateCard, ycCard),
     },
     {
@@ -487,10 +488,43 @@ export default async function MarketHealthPage() {
                 (Federal Reserve Economic Data) and the Chicago Fed. Consumer-sentiment numbers
                 from the University of Michigan via FRED. Stock prices from the daily-close data
                 feed. Updated every weekday after the US market closes.
-                <br /><br />
-                This is a public snapshot of widely-watched market and economic gauges.
-                It is <strong>not</strong> investment advice, and reasonable people can disagree
-                about what the gauges mean.
+              </div>
+
+              <div style={{ marginTop: 24, fontSize: 12, color: "#5a564d", lineHeight: 1.7 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8 }}>
+                  Methodology &amp; references
+                </div>
+                <p style={{ margin: "0 0 10px 0" }}>
+                  <strong>Bear Market Risk Score</strong> is a 6-component composite (Sahm rule, industrial production, initial claims,
+                  yield curve, credit spread, VIX) summed to a raw 0-85 then scaled to 0-100. Activation threshold is 60.
+                  Architecture follows the <em>Goldman Sachs Bear Market Risk Indicator</em> framework with adapted inputs.
+                </p>
+                <p style={{ margin: "0 0 6px 0", fontWeight: 600, color: "#3d3a33" }}>Component sources &amp; prior art:</p>
+                <ul style={{ margin: "0 0 10px 18px", padding: 0 }}>
+                  <li><strong>Sahm Rule</strong> — Sahm, Claudia (2019). <em>Direct Stimulus Payments to Individuals</em>. Federal Reserve. Triggers at unemployment 0.5pp above its 12m low.</li>
+                  <li><strong>Yield curve</strong> — Estrella, A. &amp; Mishkin, F. (1996). <em>The Yield Curve as a Predictor of US Recessions</em>. NY Fed Current Issues 2(7).</li>
+                  <li><strong>Credit spread (BAA-10Y)</strong> — Gilchrist, S. &amp; Zakrajšek, E. (2012). <em>Credit Spreads and Business Cycle Fluctuations</em>. American Economic Review 102(4).</li>
+                  <li><strong>Industrial production (INDPRO)</strong> — Federal Reserve Statistical Release G.17. Standard ISM-PMI-equivalent indicator.</li>
+                  <li><strong>Initial claims</strong> — US Department of Labor / Employment &amp; Training Administration weekly release. FRED series <span style={{ fontFamily: "monospace" }}>ICSA</span>.</li>
+                  <li><strong>VIX</strong> — CBOE Volatility Index. Standard volatility-stress threshold ≥25.</li>
+                </ul>
+                <p style={{ margin: "0 0 6px 0", fontWeight: 600, color: "#3d3a33" }}>Related composite recession / financial-stress indices:</p>
+                <ul style={{ margin: "0 0 10px 18px", padding: 0 }}>
+                  <li><strong>GS Bear Market Risk Indicator</strong> — Mueller-Glissmann, C., Wright, I., Kraïdy, A., Maguire, A. (2017). <em>The Bear Necessities</em>. Goldman Sachs Portfolio Strategy Research. The closest architectural ancestor.</li>
+                  <li><strong>Chicago Fed NFCI</strong> — Brave, S. &amp; Butters, R. A. (2011). <em>Monitoring Financial Stability: A Financial Conditions Index Considering Real and Financial Indicators</em>. Federal Reserve Bank of Chicago.</li>
+                  <li><strong>NBER Recession Probability</strong> — Chauvet, M. &amp; Piger, J. (2008). <em>A Comparison of the Real-Time Performance of Business Cycle Dating Methods</em>. JBES 26(1). Smoothed series on FRED as <span style={{ fontFamily: "monospace" }}>USRECP</span>.</li>
+                  <li><strong>Vulnerable Growth</strong> — Adrian, T., Boyarchenko, N. &amp; Giannone, D. (2019). <em>Vulnerable Growth</em>. American Economic Review 109(4). Formalized financial-conditions → GDP-at-Risk.</li>
+                  <li><strong>Conference Board LEI</strong> — The Conference Board, <em>Leading Economic Index</em>. 10-component composite, monthly.</li>
+                </ul>
+                <p style={{ margin: "0 0 10px 0" }}>
+                  <strong>Implementation</strong>: <span style={{ fontFamily: "monospace" }}>sentinel/plugs/setup_detection.py</span> (engine path, with full bear-steepener detector for the yield-curve component);
+                  this page&apos;s reading uses a simplified inline computation in <span style={{ fontFamily: "monospace" }}>console-api/main.py</span> (binary inverted=15 pts on yield curve).
+                </p>
+                <p style={{ margin: 0 }}>
+                  This is a public snapshot of widely-watched market and economic gauges.
+                  It is <strong>not</strong> investment advice, and reasonable people can disagree
+                  about what the gauges mean.
+                </p>
               </div>
             </>
           )}
