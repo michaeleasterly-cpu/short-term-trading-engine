@@ -31,7 +31,14 @@ async function fetchMarketHealth(): Promise<MarketHealth | null> {
   }
 }
 
-const INDICATOR_LABELS: Record<string, { label: string; unit: string; tone: (v: number) => "pos" | "neg" | "warn" | "neutral" }> = {
+interface IndicatorSpec {
+  label: string;
+  unit: string;
+  tone: (v: number) => "pos" | "neg" | "warn" | "neutral";
+  format?: (v: number) => string;
+}
+
+const INDICATOR_LABELS: Record<string, IndicatorSpec> = {
   vix:            { label: "VIX",                  unit: "",   tone: v => v < 15 ? "pos" : v < 20 ? "neutral" : v < 30 ? "warn" : "neg" },
   yield_curve:    { label: "Yield curve 10y-3mo",  unit: "%",  tone: v => v < -0.5 ? "neg" : v < 0 ? "warn" : "pos" },
   sahm_rule:      { label: "Sahm rule",            unit: "",   tone: v => v >= 0.5 ? "neg" : v >= 0.3 ? "warn" : "pos" },
@@ -40,7 +47,7 @@ const INDICATOR_LABELS: Record<string, { label: string; unit: string; tone: (v: 
   credit_spread:  { label: "Credit spread",        unit: "%",  tone: v => v > 3 ? "neg" : v > 2 ? "warn" : "pos" },
   nfci:           { label: "Chicago Fed NFCI",     unit: "",   tone: v => v > 0.5 ? "neg" : v > 0 ? "warn" : "pos" },
   epu_index:      { label: "Policy uncertainty",   unit: "",   tone: v => v > 250 ? "neg" : v > 150 ? "warn" : "pos" },
-  initial_claims: { label: "Initial claims",       unit: "k",  tone: v => v > 350 ? "neg" : v > 275 ? "warn" : "pos" },
+  initial_claims: { label: "Initial claims",       unit: "k",  tone: v => v > 350_000 ? "neg" : v > 275_000 ? "warn" : "pos", format: v => (v / 1000).toFixed(1) },
   bullish_pct:    { label: "AAII bullish",         unit: "%",  tone: () => "neutral" },
   bearish_pct:    { label: "AAII bearish",         unit: "%",  tone: () => "neutral" },
   neutral_pct:    { label: "AAII neutral",         unit: "%",  tone: () => "neutral" },
@@ -121,7 +128,7 @@ export default async function MarketHealthPage() {
                     <div key={key} className="hairline" style={{ background: "var(--panel)", padding: "10px 12px" }}>
                       <div className="eyebrow" style={{ marginBottom: 4 }}>{spec.label}</div>
                       <div className="mono" style={{ fontSize: 20, color, lineHeight: 1.1 }}>
-                        {v.value.toFixed(2)}{spec.unit}
+                        {spec.format ? spec.format(v.value) : v.value.toFixed(2)}{spec.unit}
                       </div>
                       <div className="mono" style={{ fontSize: 10, color: "var(--ink-3)", marginTop: 4 }}>{v.date}</div>
                     </div>
