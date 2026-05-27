@@ -582,6 +582,50 @@ function HousingAffordabilitySection() {
           <li><strong>Carbondale-Marion MSA median days on market: ~89 days</strong> — buyer-leverage market, not seller-leverage. Buyer demand can absorb at current price levels.</li>
         </ul>
       </div>
+
+      {/* Inventory-quality bifurcation: the median-price math hides which inventory is actually desirable */}
+      <div style={{ marginBottom: 20, padding: 16, background: "#fef9eb", border: "1px solid #f0d98a", borderLeft: "6px solid oklch(45% 0.20 22)", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "#1f1d18", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          The median-price math hides the inventory-quality problem
+        </div>
+        <div style={{ marginBottom: 10 }}>
+          The price/wage affordability ratio shows Southern IL as cheap relative to coastal metros — true. But the relocator BD pitch needs to acknowledge that <strong>the affordable inventory is mostly old, mostly rental-degraded, and mostly outside the growth corridor.</strong> Operator-confirmed + Census-verified town-by-town pattern:
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 10 }}>
+          <div style={{ background: "white", border: "1px solid #ebe5d6", borderRadius: 4, padding: 12 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "oklch(35% 0.18 142)", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>✓ Newer construction corridor (Williamson Co.)</div>
+            <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 12.5, lineHeight: 1.55 }}>
+              <li><strong>Marion</strong> — Morningside Phase 11 + Tower Square Art District + Prairie Meadows subdivisions. 90-acre S. Market St tract + 36.6-acre Longstreet Rd tract adjacent to Marion Star Bond District in active development. 4BR/2.5BA contemporary-style new construction.</li>
+              <li><strong>Carterville</strong> — Cedar Creek + Rolling Hills Estates + Spring Garden Estates subdivisions; newer properties $400-600k.</li>
+              <li><strong>Herrin</strong> — newer developments per operator account; Williamson County Housing Authority active.</li>
+              <li><strong>Anchor:</strong> Walker&apos;s Bluff Casino &amp; Resort + IL-13 6-lane widening Marion→Carbondale + Aisin + GD-OTS = economic-growth driver.</li>
+              <li><strong>Williamson Co. is the fastest-growing county in Illinois outside Chicago collar counties + Metro-East</strong> (verified — solar power world / Marion Chamber).</li>
+            </ul>
+          </div>
+          <div style={{ background: "white", border: "1px solid #ebe5d6", borderRadius: 4, padding: 12 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "oklch(45% 0.20 22)", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>⚑ Old-stock / rental-degraded clusters</div>
+            <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 12.5, lineHeight: 1.55 }}>
+              <li><strong>Carbondale</strong> — median build year <strong>1976</strong>, <strong>73% renter-occupied</strong> (college-town pattern), <strong>19.79% vacancy</strong> (~2× healthy market), <strong>0.1% of stock added 2020+</strong> (essentially zero new construction in 5 years). Price spread $97k–$150k same window = bifurcated inventory tiers. Mandatory Rental Housing Inspection Program exists but Council acknowledges enforcement loopholes.</li>
+              <li><strong>Murphysboro</strong> — median build year <strong>1962</strong>; <strong>25.1% built before 1940; 9.2% by 1949 → 34% pre-WWII stock</strong>. <strong>5.5% of housing lacks complete plumbing; 7.1% lacks complete kitchen</strong> (Census ACS condition red flags). Code Enforcement Division active but routine violations.</li>
+              <li><strong>Desoto</strong> (Jackson Co. village, ~5 mi north of Carbondale) — small village, predominantly old stock per operator account.</li>
+              <li><strong>Ziegler + Royalton</strong> (Franklin Co.) — all old housing per operator account; legacy coal-town stock.</li>
+              <li><strong>Benton</strong> (Franklin Co. seat) + <strong>Mt. Vernon</strong> (Jefferson Co. seat, Continental Tire town) — operator-flagged all old, despite Mt. Vernon having Continental Tire (3,667 jobs). The economic anchor didn&apos;t pull new residential construction.</li>
+            </ul>
+          </div>
+        </div>
+        <div style={{ marginBottom: 6 }}>
+          <strong>What this means for the relocator BD pitch:</strong>
+        </div>
+        <ul style={{ margin: "0 0 0 18px", padding: 0 }}>
+          <li><strong>Direct relocators (federal retirees, data-center execs, climate-migration prospects) to the Marion–Herrin–Carterville corridor</strong>, not to Carbondale or Murphysboro. The Williamson Co. triangle has the desirable inventory; the Jackson Co. cities have the old stock.</li>
+          <li><strong>Don&apos;t hide the bifurcation.</strong> Carbondale&apos;s $97-150k median-price spread looks affordable but most of the cheap inventory is rental-degraded; the desirable inventory is priced at premium relative to condition (operator: &quot;a two-bedroom old craftsman that&apos;s been rented for years isn&apos;t a good deal at premium pricing&quot;).</li>
+          <li><strong>SIU graduate-retention housing</strong> needs to be in walking/biking distance of campus — that&apos;s Carbondale&apos;s old stock. Pair retention incentives with rental-quality enforcement, not pure affordability.</li>
+          <li><strong>The economic-anchor → housing-growth link is not automatic.</strong> Mt. Vernon has 3,667 Continental Tire jobs and still has old residential stock; without an active municipal posture toward new construction (TIF, sewer extension, zoning incentives), anchor employers alone don&apos;t pull desirable inventory. Marion has gotten this right (Star Bond District + Longstreet expansion); other anchor towns can copy the playbook.</li>
+        </ul>
+        <div style={{ fontSize: 11, color: "#7a756b", marginTop: 8, lineHeight: 1.5 }}>
+          Sources: <a href="https://www.census.gov/quickfacts/fact/table/carbondalecityillinois/PST045221" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Census QuickFacts Carbondale</a> + <a href="http://censusreporter.org/profiles/16000US1711163-carbondale-il/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Census Reporter Carbondale</a> + <a href="https://www.city-data.com/housing/houses-Murphysboro-Illinois.html" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>City-Data Murphysboro housing</a> + <a href="https://www.explorecarbondale.com/189/Mandatory-Rental-Housing-Inspection-Prog" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Carbondale Mandatory Rental Housing Inspection Program</a> + <a href="https://murphysboro.com/government/city-departments/public-works/code-enforcement/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>City of Murphysboro Code Enforcement</a> + <a href="https://marionillinois.com/relocation/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Marion Chamber of Commerce — Relocating + Investing in Marion</a> + operator primary-source town-by-town inventory account 2026-05-27.
+        </div>
+      </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
         <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, padding: 14 }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8 }}>Supply work needed before scaling relocation</div>
