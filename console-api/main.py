@@ -818,17 +818,22 @@ _MIT_LIVING_WAGE_YEAR = 2024
 # elsewhere on this page so we can pull local employment + avg wage directly.
 
 _TRAINING_LADDER_ROSTER = [
-    # CEJA solar-installer track is the operator's flagship "phantom" example
+    # CEJA solar-installer track is the operator's flagship "phantom" example.
+    # local_employer_override forces the demand signal — the broader supersector
+    # employment (Construction, 3k jobs) is misleading because solar-installer-
+    # specific employers in LWA-25 ≈ zero.
     {"id": "ceja_solar",     "name": "CEJA solar installer",                "supersector_code": "1012",
      "ladder": "Pre-app → NABCEP-certified installer",
      "typical_journey_wage_wkly": 1040,  # $26/hr × 40
      "training_duration": "8-16 weeks",
-     "notes": "CEJA Climate Works pre-apprenticeship. Local solar-installer employer base is essentially zero — workers either commute, relocate, or never work in this credential. The classic 'phantom pipeline' case."},
+     "local_employer_override": 0,
+     "notes": "CEJA Climate Works pre-apprenticeship. The 'Construction' supersector has 3k+ jobs in LWA-25 but NABCEP-installer-specific employers are essentially zero. Reality check: Arevon Energy's 124 MW Big Muddy Solar Project broke ground in Jackson County in 2025 ($200M investment, commercial operation end of 2026) and IS creating 250+ construction jobs — but those jobs are going to IBEW Local 702 lineworkers, IUOE Local 318 operating engineers, and LIUNA Local 773 laborers under EPC partner Signal Energy, NOT to NABCEP-certified solar installers. The CEJA money trained for the wrong credential. The actual local credential pipeline for this work is the IBEW / IUOE / LIUNA pre-apprenticeship (see Lineworker row above). After construction wraps, ongoing O&M = 3-5 permanent technician jobs at typical utility-scale solar O&M ratios."},
     {"id": "ceja_wind",      "name": "CEJA wind technician",                "supersector_code": "1011",
      "ladder": "Pre-app → GWO-certified wind tech",
      "typical_journey_wage_wkly": 1240,
      "training_duration": "12-20 weeks",
-     "notes": "Requires travel to wind farms (out-of-region). Local wind employer base is zero."},
+     "local_employer_override": 0,
+     "notes": "Requires travel to wind farms (out-of-region). Local wind-installation employer base is zero — Southern IL has no operating wind farms. The 'Mining' supersector total is unrelated coal-region work, not wind-turbine service. See the Travel-Required Jobs section below for the credential's real role: a path to family-supporting wages with travel pay, not a local-employment credential."},
     {"id": "ceja_lineworker", "name": "Lineworker (IBEW 702)",              "supersector_code": "1021",
      "ladder": "Pre-app → 4yr apprenticeship → IBEW journey",
      "typical_journey_wage_wkly": 2120,  # $53/hr × 40
@@ -899,7 +904,15 @@ def _training_demand_alignment(qcew_block: dict) -> dict:
     rows: list[dict] = []
     for tl in _TRAINING_LADDER_ROSTER:
         qcew_row = qcew_by_code.get(tl["supersector_code"], {})
-        sector_emp = qcew_row.get("total_employment", 0) or 0
+        # When the credential lands in a narrow sub-industry whose local employer
+        # base is essentially zero (solar installer, wind tech), the supersector
+        # total is misleading. local_employer_override forces the count.
+        if "local_employer_override" in tl:
+            sector_emp = tl["local_employer_override"]
+            credential_specific_demand = True
+        else:
+            sector_emp = qcew_row.get("total_employment", 0) or 0
+            credential_specific_demand = False
         sector_wage = qcew_row.get("avg_weekly_wage", 0) or 0
         wage = tl["typical_journey_wage_wkly"]
 
@@ -934,6 +947,10 @@ def _training_demand_alignment(qcew_block: dict) -> dict:
             verdict = "FAMILY-TIME CONFLICT"
             verdict_color = "warn"
 
+        # When the credential lands in a narrow sub-industry rather than the
+        # broader supersector, label the sector as "(credential-specific)" so
+        # the page doesn't display the misleading broad-supersector name.
+        sector_display = "Credential-specific (out-of-region only)" if credential_specific_demand else qcew_row.get("name", "—")
         rows.append({
             "id": tl["id"],
             "name": tl["name"],
@@ -941,7 +958,7 @@ def _training_demand_alignment(qcew_block: dict) -> dict:
             "training_duration": tl["training_duration"],
             "typical_journey_wage_wkly": wage,
             "typical_journey_wage_hrly": round(wage / 40, 2),
-            "supersector_name": qcew_row.get("name", "—"),
+            "supersector_name": sector_display,
             "supersector_code": tl["supersector_code"],
             "local_sector_employment": sector_emp,
             "local_sector_share_pct": round((sector_emp / LWA_TOTAL_EMP * 100), 1) if LWA_TOTAL_EMP else 0,
