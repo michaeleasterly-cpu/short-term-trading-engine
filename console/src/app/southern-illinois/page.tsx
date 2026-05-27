@@ -782,7 +782,16 @@ function TrainingAlignmentSection({ ta, industryMixAvailable }: { ta: TrainingAl
                 <div style={{ fontSize: 11, color: "#5a564d" }}>{l.local_sector_employment.toLocaleString()} jobs ({l.demand_signal})</div>
               </div>
             </div>
-            <div style={{ marginTop: 10, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>{l.notes}</div>
+            <div style={{ marginTop: 10, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
+              {l.verdict.startsWith("TRAVEL-WORK") ? (
+                <>
+                  <strong>TRAVEL-WORK pathway · this row is detailed in the Travel Jobs section below.</strong>{" "}
+                  See <a href="#sec-travel-jobs" style={{ color: "#1f5f8f", fontWeight: 600 }}>Travel Jobs (§09)</a> for the rotation pattern, per-diem math, and the 4-way household-configuration matrix (dual-earner-w-kids ✓ / single-no-kids ✓ / single-parent-w-kids ✗ / dual-on-rotation ⚑) that determines whether the wage&apos;s family-supporting clearance translates into family-supporting reality.
+                </>
+              ) : (
+                l.notes
+              )}
+            </div>
           </div>
         ))}
       </div>
