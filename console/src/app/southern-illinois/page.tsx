@@ -844,7 +844,7 @@ function TravelJobsSection() {
       annual_est: "$90-130k",
       travel_pattern: "Bridge + industrial steel; mix of local + 2-4hr radius projects",
       family_compat: "GOOD",
-      note: "Local 393 is based in Aurora IL (~4hr north). The downstate IW local serving Southern IL is most likely Local 392 (East St. Louis); confirm at <a href=\"https://www.ironworkers.org/about/locals\" target=\"_blank\" rel=\"noopener noreferrer\">ironworkers.org/about/locals</a> or call the IW International office.",
+      note: "Two ironworkers locals split LWA-25 jurisdiction: <strong>Iron Workers Local 392 (East St. Louis)</strong> covers Perry + Jefferson + parts of Franklin + Jackson (per Local 392's published territorial map); <strong>Iron Workers Local 782 (Paducah KY, &quot;mixed local&quot; covering KY + IL + MO + TN)</strong> covers Williamson + Alexander + Hardin + Johnson + Massac + Pope + Pulaski + Union + parts of Franklin + Jackson + Saline + Gallatin. Williamson County (Marion + GD-OTS + Aisin + Marion VA) is Local 782 territory. Local 393 (Aurora, ~4hr north) does NOT serve Southern IL.",
     },
     {
       name: "IBEW traveling card (Local 702 + sister locals)",
