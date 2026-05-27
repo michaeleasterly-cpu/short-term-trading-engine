@@ -858,11 +858,20 @@ _TRAINING_LADDER_ROSTER = [
      "typical_journey_wage_wkly": 1680,  # $42/hr × 40
      "training_duration": "5 years apprenticeship",
      "notes": "IBEW Local 702 covers most of LWA-25. Strong local construction demand. Hits the family-supporting threshold at journey-out exactly."},
-    {"id": "cdl_class_a",    "name": "CDL Class A (truck driver)",          "supersector_code": "1021",
+    {"id": "cdl_class_a",    "name": "CDL Class A (truck driver, W-2)",     "supersector_code": "1021",
      "ladder": "JALC or Rend Lake 4-8wk CDL school",
      "typical_journey_wage_wkly": 1000,  # $25/hr × 40 local
      "training_duration": "4-8 weeks",
-     "notes": "Local jobs pay $22-28/hr. Regional OTR $35-45/hr but takes drivers away from family. Operator's exact critique — 'nobody wants to be a fucking truck driver' applies to the local rate; the OTR rate breaks the family-supporting frame the other way (you can't raise kids if you're not home)."},
+     "entry_gates": ["dot_physical", "drug_screen", "cdl_class_a"],
+     "notes": "Local W-2 jobs (FedEx Marion hub, Walgreens Distribution Mt. Vernon, Aisin logistics) pay $22-28/hr. Regional OTR $35-45/hr but takes drivers away from family. Operator critique sanitized — local rate sub-1A+2C; OTR rate breaks the family-supporting frame the other way (you can't raise kids if you're not home). See coal_hauler_ownerop row for the owner-operator economics."},
+    {"id": "coal_hauler_ownerop", "name": "Coal-hauler owner-operator (Knight Hawk Prairie Eagle → Cora terminal)", "supersector_code": "1021",
+     "ladder": "CDL Class A school + truck financing + DOT authority",
+     "typical_journey_wage_wkly": 2980,  # ~$155k OOIDA-survey gross annual / 52
+     "training_duration": "4-8wk CDL + 0-1yr W-2 OTR experience before financing a truck",
+     "local_employer_override": 40,  # rough estimate — short-haul coal-hauler owner-ops servicing the Knight Hawk Prairie Eagle → Cora lane plus other Illinois Basin short-haul lanes
+     "owner_operator": True,
+     "entry_gates": ["dot_physical", "drug_screen", "cdl_class_a"],
+     "notes": "Knight Hawk's Prairie Eagle Mine (Perry County, IL, ~30 mi short-haul) routes via owner-operator truck to the Cora Marine Terminal (Rockwood IL, Upper Mississippi mile 98.5, Watco + SCH Services, 1.25M ton storage, 4× 150-car unit-train loadout). Operator's lived account 2026-05-27: 'it's a grind.' OOIDA 2024 Survey + ATBS 2024 + Overdrive: typical owner-op gross ~$155k/yr; NET after expenses $22-27k (only 14.5-17.8% margin) for short-haul respondents — fuel $48.8k, maintenance $18.9k, truck pmt $18k, insurance $13.5k. Short-haul coal lanes specifically: lower gross than OOIDA respondent average (fewer miles) but proportionally lower fuel-share; net margin can run $40-70k for experienced operators. Wage column shows GROSS — actual take-home is much smaller. Cohort risk: 60-70hr weeks, heavy maintenance burden falls on the driver (not employer), market volatility (a Knight Hawk production slowdown = no income that month), trucks beat up faster than OTR (heavy-loaded dirt-road mine approaches). Foresight's Sugar Camp Mine (Franklin Co.) does NOT route this way — Sugar Camp ships via unit train to Sitran on the Ohio (mile 817.5) per Foresight's own Operations page. Cora handles Knight Hawk + historically Peabody Illinois Basin coal."},
     {"id": "cna",            "name": "CNA (Certified Nursing Asst.)",       "supersector_code": "1025",
      "ladder": "4-6 week certification",
      "typical_journey_wage_wkly": 640,  # $16/hr × 40
