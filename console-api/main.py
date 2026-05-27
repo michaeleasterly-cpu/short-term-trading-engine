@@ -820,22 +820,33 @@ _MIT_LIVING_WAGE_YEAR = 2026
 # elsewhere on this page so we can pull local employment + avg wage directly.
 
 _TRAINING_LADDER_ROSTER = [
-    # CEJA solar-installer track is the operator's flagship "phantom" example.
-    # local_employer_override forces the demand signal — the broader supersector
-    # employment (Construction, 3k jobs) is misleading because solar-installer-
-    # specific employers in LWA-25 ≈ zero.
-    {"id": "ceja_solar",     "name": "CEJA solar installer",                "supersector_code": "1012",
-     "ladder": "Pre-app → NABCEP-certified installer",
+    # ── Solar splits into TWO distinct pipelines ──
+    # (1) NABCEP residential/commercial installer credential → small local
+    #     installers (StraightUp Marion, Tick Tock, etc.).
+    # (2) HIRE360 Climate Works pre-apprenticeship → union building-trades
+    #     apprenticeships (IBEW 702 / IUOE 318 / LIUNA 773) → utility-scale
+    #     solar + wind + data-center + outage construction. This is the
+    #     travel-work pathway, not a local-residential-installer job.
+    # Treating them as one row produces a misleading "phantom" verdict.
+    {"id": "nabcep_solar",   "name": "NABCEP solar installer (residential/commercial)", "supersector_code": "1012",
+     "ladder": "SEI / employer-direct → NABCEP PV Installation Professional",
      "typical_journey_wage_wkly": 1040,  # $26/hr × 40
      "training_duration": "8-16 weeks",
-     "local_employer_override": 30,  # rough estimate — modest residential/commercial installer headcount across StraightUp Solar Marion + Tick Tock Energy + other listed installers
-     "notes": "CEJA Climate Works pre-apprenticeship. Earlier version of this page incorrectly stated ~0 local installers — VERIFIED WRONG. Local solar-installer employer base is modest but real: StraightUp Solar (straightupsolar.com) has a Marion IL office with NABCEP-certified technicians, 65MW installed across 3,000+ sites since 2006; Tick Tock Energy (ticktockenergy.com) installs solar for farms/businesses/homes across Southern IL; EnergySage lists multiple additional installers in Carbondale + Murphysboro + Marion. Rough estimate ~20-50 NABCEP-credentialed positions across local residential/commercial installers (verify against BLS OES SOC 47-2231 Carbondale-Marion MSA data when published). SEPARATE issue: utility-scale solar (Big Muddy 124MW, Arevon, Jackson Co.) is being built by IBEW Local 702 + IUOE Local 318 + LIUNA Local 773 under Signal Energy — NOT by NABCEP installers. So CEJA solar credential lands at small residential/commercial installers, NOT at the big visible local solar project. Cohort-vs-capacity question stands (how many graduates per year vs annual hiring at local installers), but the credential is not phantom."},
-    {"id": "ceja_wind",      "name": "CEJA wind technician",                "supersector_code": "1011",
-     "ladder": "Pre-app → GWO-certified wind tech",
-     "typical_journey_wage_wkly": 1240,
-     "training_duration": "12-20 weeks",
+     "local_employer_override": 30,  # StraightUp Solar Marion + Tick Tock Energy + smaller EnergySage-listed installers; ~20-50 NABCEP-credentialed roles across LWA-25
+     "notes": "Distinct from CEJA Climate Works (separate row below). NABCEP is the IPS / Solar Energy International credential for residential + small-commercial installers. Local NABCEP employer base in LWA-25 is verified but small: StraightUp Solar (Marion IL office, NABCEP-certified team, 65 MW installed across 3,000+ sites since 2006), Tick Tock Energy (Effingham IL, services Carbondale/Marion/Mt. Vernon), plus several smaller EnergySage-listed installers in Carbondale/Murphysboro/Marion. Verify against BLS OES SOC 47-2231 Carbondale-Marion MSA when published. NOTE: utility-scale solar work (Big Muddy 124 MW, Arevon, Jackson Co.) does NOT go to NABCEP installers — it goes to IBEW 702 + IUOE 318 + LIUNA 773 union construction. See the ceja_climate_works row for that pathway."},
+    {"id": "ceja_climate_works", "name": "CEJA Climate Works pre-apprenticeship → union building trades", "supersector_code": "1012",
+     "ladder": "HIRE360 8-12wk pre-app (MC3, OSHA 10, GPRO) → IBEW 702 / IUOE 318 / LIUNA 773 / UA 553 / Carpenters apprenticeship → utility-scale construction journey",
+     "typical_journey_wage_wkly": 2200,  # ~$55/hr blended journey + per-diem on utility-scale projects; IBEW 702 outside lineman is $65/hr, IUOE 318 ~$45-60/hr, LIUNA 773 ~$35-45/hr
+     "training_duration": "8-12wk pre-app + 3-5yr trades apprenticeship",
+     "travel_work_credential": True,
+     "notes": "TRAVEL-WORK PATHWAY — the legitimate CEJA-funded ladder. HIRE360 is the Southern IL Climate Works grantee ($3.9M IL DCEO funding; statewide Year-1 capacity 500-700 across 3 hubs, Southern share ~150-200/yr). Graduates feed IBEW Local 702 (West Frankfort), IUOE Local 318 (crane operators), LIUNA Local 773, UA Local 553 (pipefitters), Carpenters/Ironworkers locals — NOT NABCEP installers. Downstream work: Big Muddy Solar 124 MW (currently building, Jackson Co.), future IL utility-scale solar under CEJA prevailing-wage mandate, Central/Northern IL wind farms, data-center construction across IL/IN/MO, industrial outage refits. Family-supporting wages WITH per-diem ($120-150k/yr typical journey); the trade-off is the traveling lifestyle, similar to boilermakers + crane operators already on this page. Bottleneck = annual intake of the union apprenticeship locals themselves, which is supply-controlled."},
+    {"id": "ceja_wind",      "name": "CEJA wind technician (travel-work)",  "supersector_code": "1011",
+     "ladder": "Pre-app + GWO BST/BTT certifications → wind-tech entry",
+     "typical_journey_wage_wkly": 1500,  # ~$37.50/hr base journey; with per-diem on traveling assignments, take-home commonly $75-100k+/yr
+     "training_duration": "12-20 weeks (incl. GWO BST + BTT)",
      "local_employer_override": 0,
-     "notes": "GEOGRAPHIC MISMATCH: Illinois wind farms are concentrated in CENTRAL + NORTHERN Illinois (Livingston, McLean, Lee, LaSalle, Bureau, DeKalb, Vermilion counties). There are NO operating utility-scale wind farms in Southern Illinois. Training Southern IL residents on a wind-tech credential when the work isn't here violates the regional-tailoring principle WIOA Section 108 requires for local workforce plans. Reasonable as a 'travel-pay credential' to wind-belt circuits IF acknowledged upfront; misleading as a 'local employment' credential. See the Travel-Required Jobs section."},
+     "travel_work_credential": True,
+     "notes": "TRAVEL-WORK PATHWAY — same model as the operator's MN pipeline-NDI example. NO utility-scale wind farms operate in Southern IL; the IL wind belt is Central + Northern (Livingston, McLean, Lee, LaSalle, Bureau, DeKalb, Vermilion counties). Graduates work the broader US wind belt — Iowa, Oklahoma, Texas, North Dakota — plus emerging East Coast offshore. Wage structure: $61-68k base in IL; traveling techs commonly $75-90k+ with per-diem; experienced techs $100k+ with overtime + GWO advanced certs. Closest accessible training to Southern IL = Danville Area Community College (Vermilion Co.) or Iowa Lakes CC (across the river). HIRE360 is the Climate Works pre-app grantee for Southern IL ($3.9M); GWO BST + BTT certifications add the wind-specific layer. The trade-off is the traveling lifestyle, not the wage. NOT a phantom credential — the US wind-tech labor market is one of the fastest-growing BLS occupations; the credential lands at wind-belt employers + traveling-crew firms, not at a local Southern IL employer."},
     {"id": "ceja_lineworker", "name": "Lineworker (IBEW 702)",              "supersector_code": "1021",
      "ladder": "Pre-app → 7×1,000hr apprenticeship periods (~3.5yr) → IBEW outside lineman journey",
      "typical_journey_wage_wkly": 2621,  # $65.52/hr × 40 per IBEW 702 outside wage sheet 1/6/2025-1/4/2026
@@ -918,36 +929,95 @@ def _training_demand_alignment(qcew_block: dict) -> dict:
         sector_wage = qcew_row.get("avg_weekly_wage", 0) or 0
         wage = tl["typical_journey_wage_wkly"]
 
-        # Demand signal
-        if sector_emp == 0:
-            demand = "NONE"
-        elif sector_emp < 1000:
-            demand = "VERY LOW"
-        elif sector_emp < 3000:
-            demand = "LOW"
-        elif sector_emp < 10000:
-            demand = "MODERATE"
+        # Demand signal — credential-specific overrides (e.g. solar installer,
+        # wind tech) operate at headcounts ~0-200 across the LWA; broad QCEW
+        # supersectors operate at headcounts 1k-30k. Same threshold table on
+        # both scales gives false PHANTOM verdicts on small-but-real
+        # credential niches.
+        if credential_specific_demand:
+            if sector_emp == 0:
+                demand = "NONE"
+            elif sector_emp < 15:
+                demand = "VERY LOW"
+            elif sector_emp < 50:
+                demand = "MODEST"
+            elif sector_emp < 200:
+                demand = "MODERATE"
+            else:
+                demand = "HIGH"
         else:
-            demand = "HIGH"
+            if sector_emp == 0:
+                demand = "NONE"
+            elif sector_emp < 1000:
+                demand = "VERY LOW"
+            elif sector_emp < 3000:
+                demand = "LOW"
+            elif sector_emp < 10000:
+                demand = "MODERATE"
+            else:
+                demand = "HIGH"
 
-        # Verdict
-        if demand in ("NONE", "VERY LOW"):
-            verdict = "PHANTOM PIPELINE"
-            verdict_color = "danger"
-        elif wage < livable_1a0c:
-            verdict = "BELOW LIVABLE WAGE"
-            verdict_color = "danger"
-        elif wage < livable_1a2c:
-            verdict = "SINGLE ADULT ONLY"
+        # Verdict — five-category taxonomy that captures the actual structure
+        # of the Southern IL labor market, surfaced through operator lived
+        # signal across multiple turns 2026-05-27:
+        #
+        #   1. PHANTOM PIPELINE                                — no local jobs,
+        #      no travel-work backstop. Credential lands nowhere.
+        #   2. TRAVEL-WORK · wage clears / lifestyle cost      — local jobs
+        #      are wherever the project is; wage + per-diem clears 1A+2C but
+        #      the traveling lifestyle is the structural cost. Set
+        #      tl["travel_work_credential"] = True on the row.
+        #   3. LOCAL · WAGE-SUPPRESSED                         — local jobs
+        #      absorb grads but the local wage rung fails 1A+2C; clearing the
+        #      bar requires specialize / flag-rate-at-high-volume / own-a-shop
+        #      / relocate to a higher-wage market.
+        #   4. LOCAL · FAMILY-SUPPORTING                       — local jobs +
+        #      wage clears 1A+2C.
+        #   5. OWNER-OPERATOR · GROSS-MISLEADS · NET-GRIND     — gross revenue
+        #      looks family-supporting; truck/fuel/insurance/maintenance/
+        #      downtime eat the margin to barely-single-adult; lifestyle is
+        #      structural grind. Set tl["owner_operator"] = True.
+        #
+        # Override flags take precedence over wage/demand math because the
+        # gross wage isn't the relevant signal for owner-op or travel-work
+        # rows. CDL keeps its FAMILY-TIME CONFLICT sub-flavor of travel-work.
+        if tl.get("owner_operator"):
+            verdict = "OWNER-OPERATOR · GROSS-MISLEADS · NET-GRIND"
             verdict_color = "warn"
-        else:
-            verdict = "FAMILY-SUPPORTING"
-            verdict_color = "good"
-
-        # Special case for CDL — phrase as a family-time conflict not wage
-        if tl["id"] == "cdl_class_a":
+        elif tl.get("travel_work_credential"):
+            verdict = "TRAVEL-WORK · wage clears / lifestyle cost is high"
+            verdict_color = "warn"
+        elif tl["id"] == "cdl_class_a":
             verdict = "FAMILY-TIME CONFLICT"
             verdict_color = "warn"
+        elif demand == "NONE":
+            verdict = "PHANTOM PIPELINE"
+            verdict_color = "danger"
+        elif demand == "VERY LOW":
+            # credential-specific VERY-LOW is "saturated but real"; broad-
+            # supersector VERY-LOW is genuinely phantom.
+            if credential_specific_demand:
+                verdict = "LOCAL · SATURATED — pipeline exists, absorbs ~1-2 grads/yr"
+                verdict_color = "warn"
+            else:
+                verdict = "PHANTOM PIPELINE"
+                verdict_color = "danger"
+        elif wage < livable_1a0c:
+            verdict = "LOCAL · WAGE-SUPPRESSED — fails single-adult LW"
+            verdict_color = "danger"
+        elif wage < livable_1a2c:
+            verdict = "LOCAL · WAGE-SUPPRESSED — clears single-adult, fails 1A+2C"
+            verdict_color = "warn"
+        elif tl.get("local_market_saturated"):
+            # Wage clears 1A+2C but hiring is constrained by attrition rather
+            # than growth — IL DOC officer, IL State Police, sheriff deputy,
+            # city police, IDOT highway maintainer pattern. The cohort that
+            # trains exceeds the slots that open per year.
+            verdict = "LOCAL · FAMILY-SUPPORTING · SATURATED — wage clears but supply > demand"
+            verdict_color = "warn"
+        else:
+            verdict = "LOCAL · FAMILY-SUPPORTING"
+            verdict_color = "good"
 
         # When the credential lands in a narrow sub-industry rather than the
         # broader supersector, label the sector as "(credential-specific)" so
@@ -971,6 +1041,12 @@ def _training_demand_alignment(qcew_block: dict) -> dict:
             "verdict": verdict,
             "verdict_color": verdict_color,
             "notes": tl["notes"],
+            # Orthogonal entry-gate filters — wash out portions of the
+            # trainable cohort independent of training success. Operator
+            # 2026-05-27: "physical fitness requirements as a barrier for
+            # some of these jobs." Free-form list of gate identifiers so the
+            # frontend can render chips. Empty list = no entry gate.
+            "entry_gates": tl.get("entry_gates", []),
         })
 
     return {
@@ -1577,8 +1653,21 @@ async def _usaspending_top_recipients(
         collapsed[key]["amount"] += amt
         collapsed[key]["names_seen"].add(name)
 
+    # Display-name overrides — USAspending's registered name is sometimes
+    # misleading (e.g., "NAPHCARE LLC" vs the actual legal entity
+    # "NaphCare, Inc."). When the SBA lookup table specifies a display_name,
+    # the frontend should prefer it for the public-stakeholder display.
+    DISPLAY_NAME_OVERRIDES = {
+        "NAPHCARE": "NaphCare, Inc.",
+    }
+    def _display_name(raw: str) -> str:
+        u = raw.upper()
+        for key, override in DISPLAY_NAME_OVERRIDES.items():
+            if key in u:
+                return override
+        return raw
     items = [
-        {"name": v["name"], "amount": v["amount"], "alias_count": len(v["names_seen"])}
+        {"name": _display_name(v["name"]), "amount": v["amount"], "alias_count": len(v["names_seen"])}
         for v in collapsed.values()
     ]
     items.sort(key=lambda x: -x["amount"])
@@ -1595,13 +1684,13 @@ async def _usaspending_top_recipients(
         "JETT":                      {"sba_status": "SDVOSB",       "location_tag": "OUT-OF-REGION · Paducah KY", "founder_note": "Jeffrey Jett · UEI verify at SAM.gov", "source_url": "https://www.veteranownedbusiness.com/business/33768/jetts-specialty-contracting"},
         "ABOVE GROUP":               {"sba_status": "SDVOSB",       "location_tag": "OUT-OF-REGION · Melbourne FL", "founder_note": "Founded 2014 · UEI N5WANJDVRMG8 · CAGE 7DG75 · 40 emp · $14M rev", "source_url": "https://www.abovegroupinc.com/"},
         # 3 confirmed large businesses (no SBA set-aside applies)
-        "NAPHCARE":                  {"sba_status": "LARGE",        "location_tag": "OUT-OF-REGION · national",   "founder_note": "$483M revenue, largest BOP healthcare TPA", "source_url": "https://www.naphcare.com/about"},
+        "NAPHCARE":                  {"sba_status": "LARGE",        "location_tag": "OUT-OF-REGION · Vestavia Hills AL", "founder_note": "NaphCare, Inc. (legal entity is Inc., not LLC) · ~$483M rev, largest BOP healthcare TPA", "source_url": "https://www.naphcare.com/about"},
         "CDM FEDERAL":               {"sba_status": "LARGE",        "location_tag": "OUT-OF-REGION · 131 offices", "founder_note": "CDM Smith subsidiary, ~5,000 employees", "source_url": "https://en.wikipedia.org/wiki/CDM_Smith"},
-        "ILLINOIS POWER MARKETING":  {"sba_status": "LARGE",        "location_tag": "OUT-OF-REGION · utility",    "founder_note": "Dynegy / Vistra subsidiary",  "source_url": ""},
+        "ILLINOIS POWER MARKETING":  {"sba_status": "LARGE",        "location_tag": "OUT-OF-REGION · utility",    "founder_note": "Illinois Power Marketing Company, LLC — Vistra Corp. subsidiary (post-Dynegy merger). Confirm via Vistra 10-K Exhibit 21 (Subsidiaries List).",  "source_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001692819&type=10-K"},
         # Joint ventures + unverified — flag for SAM.gov manual check
         "AOD & RBT":                 {"sba_status": "UNVERIFIED",   "location_tag": "JV — verify at SAM.gov",     "founder_note": "JV structure suggests SBA mentor-protégé", "source_url": ""},
         "FFE - HEAPY":               {"sba_status": "UNVERIFIED",   "location_tag": "JV with large eng firm",     "founder_note": "HEAPY is large; FFE may be small partner", "source_url": ""},
-        "LAKE CONTRACTING":          {"sba_status": "UNVERIFIED",   "location_tag": "regional contractor",        "founder_note": "Small regional, no SDVOSB/HUBZone marker found", "source_url": ""},
+        "LAKE CONTRACTING":          {"sba_status": "UNVERIFIED",   "location_tag": "ambiguous — name shared by multiple US firms", "founder_note": "UEI not yet confirmed; multiple US companies operate under 'Lake Contracting' (IL / MO / others). Treat as ambiguous attribution pending SAM.gov UEI confirmation before any stakeholder outreach.", "source_url": "https://sam.gov/"},
     }
 
     def _lookup_sba(rec_name: str) -> dict:

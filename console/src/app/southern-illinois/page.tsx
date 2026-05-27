@@ -43,6 +43,7 @@ interface TrainingLadder {
   verdict: string;
   verdict_color: string;
   notes: string;
+  entry_gates?: string[];
 }
 interface TrainingAlignment {
   ladders: TrainingLadder[];
@@ -201,7 +202,7 @@ function TrainingROISection() {
       journey_wage: "$50-65/hr + per-diem (~$130k/yr all-in)", annual_premium: "+$98k/yr",       payback_yrs: "Negative",
       local_slots: "~5-15/yr (UA 553 intake; travel work expands range)", saturation: "HIGH",
       verdict: "Top-paying construction trade. Travel-tolerant lifestyle required." },
-    { pathway: "Boilermaker Local 363",
+    { pathway: "Boilermaker Local 363 (Belleville/Highland IL)",
       train_cost: "Paid apprenticeship", train_duration: "4yr",
       journey_wage: "$40-55/hr + per-diem (~$120k/yr)", annual_premium: "+$88k/yr",        payback_yrs: "Negative",
       local_slots: "~3-8/yr (shrinking with coal-plant retirements)", saturation: "MED",
@@ -652,6 +653,19 @@ function TrainingAlignmentSection({ ta, industryMixAvailable }: { ta: TrainingAl
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 16, fontWeight: 600, color: "#1f1d18" }}>{l.name}</div>
                 <div style={{ fontSize: 12, color: "#7a756b", marginTop: 2 }}>{l.ladder} · {l.training_duration}</div>
+                {l.entry_gates && l.entry_gates.length > 0 && (
+                  <div style={{ display: "flex", gap: 5, marginTop: 8, flexWrap: "wrap" }}>
+                    {l.entry_gates.map(g => (
+                      <span key={g} title="Entry-gate filter — washes out portions of the trainable cohort independent of training success" style={{
+                        fontSize: 10, fontWeight: 600, color: "#5a564d", background: "#f0ece1",
+                        padding: "2px 7px", borderRadius: 3, textTransform: "uppercase", letterSpacing: "0.04em",
+                        border: "1px solid #d8d2c4",
+                      }}>
+                        ⚑ {g.replace(/_/g, " ")}
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
               <div style={{
                 fontSize: 11, fontWeight: 700, color: "white", background: colorFor(l.verdict_color),
@@ -1759,7 +1773,7 @@ function FundingDrivenProgrammingSection() {
         <ul style={{ margin: "0 0 0 18px", padding: 0 }}>
           <li><strong>CEJA wind technician training in LWA-25.</strong> Illinois wind farms are in Central + Northern IL (Livingston, McLean, Lee, LaSalle, Bureau, DeKalb, Vermilion counties). Zero operating utility-scale wind farms in Southern IL. Training Southern IL residents for wind-tech credentials when the work is 5+ hours north violates the regional-tailoring principle WIOA Section 108 + local-plan requirements exist to enforce.</li>
           <li><strong>CEJA solar installer training (caveat — earlier &quot;no local employers&quot; claim corrected).</strong> Local NABCEP-installer employer base is modest but NOT zero — StraightUp Solar (Marion office, NABCEP-certified team), Tick Tock Energy, and other EnergySage-listed installers operate in the LWA-25 area. The capacity-vs-cohort question stands: how many CEJA graduates per year vs annual hiring capacity at the small residential / commercial installers. Big Muddy Solar (124 MW, Jackson Co.) is the largest local solar project but is being built by IBEW Local 702 lineworkers + IUOE Local 318 + LIUNA Local 773 under Signal Energy — so utility-scale solar goes to union trades, while NABCEP graduates land at the smaller installers.</li>
-          <li><strong>Negotiated PY24 median-earnings targets below single-adult living wage.</strong> See the PIRL section below — Adult $9,500/quarter (~$18.27/hr), Dislocated Worker $9,400/quarter (~$18.08/hr), Youth $5,000/quarter (~$9.62/hr) vs MIT Jackson Co. single-adult $18.95/hr / 1A+2C $46.76/hr. The system was DESIGNED to deliver these wage levels.</li>
+          <li><strong>Negotiated PY24 median-earnings <em>targets</em> are set below the single-adult living wage.</strong> These are the agreed-upon performance <em>targets</em> in the IL DCEO PY24-25 Model Summary (negotiated between the state and USDOL), not the realized outcomes. Targets: Adult $9,500/quarter (~$18.27/hr), Dislocated Worker $9,400/quarter (~$18.08/hr), Youth $5,000/quarter (~$9.62/hr). MIT Jackson Co. single-adult LW is $18.95/hr; 1A+2C is $46.76/hr. Even if every grantee delivers exactly to target, the median grad clears the single-adult bar by a few cents and falls roughly $28/hr short of the family-supporting bar. Actuals for LWA-25 are not surfaced at LWIA scale in the publicly released statewide narrative — that detail sits in IPATS, which is authorized-users-only. <a href="https://www.dol.gov/sites/dolgov/files/ETA/Performance/pdfs/Negotiations/state-model-summaries/PY24-25/IL_PY2024-2025_Model_Summary.html" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>USDOL IL PY24-25 Model Summary</a>.</li>
         </ul>
         <p style={{ margin: "12px 0 0 0", fontWeight: 600 }}>
           This isn&apos;t a failure of local-board execution — it&apos;s exactly what the
@@ -2100,7 +2114,7 @@ function MobilityJobAccessSection() {
           <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8 }}>Current transit operators serving LWA-25</div>
           <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 13, color: "#3d3a33", lineHeight: 1.65 }}>
             <li><strong>JAX Mass Transit</strong> (formerly Jackson County Mass Transit District; rebranded Oct 2024) — operates Saluki Express (5 fixed routes) + SOAR (seasonal recreation), Saluki Night Shuttle, paratransit. <a href="https://ridejax.com/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>ridejax.com</a></li>
-            <li><strong>Saluki Express fixed routes</strong>: Saluki (campus loop), Pyramid (campus + west Carbondale + airport + Murdale Shopping), Sahara (campus + east Carbondale + CCHS + Kroger/Walmart), Nile (south Carbondale + campus), and the <strong>Big Muddy Route (added 2024)</strong> connecting University Mall + Amtrak station + Murphysboro Courthouse. <a href="https://www.ridesmtd.com/saluki-express/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Saluki Express route detail</a></li>
+            <li><strong>Saluki Express fixed routes</strong>: Saluki (campus loop), Pyramid (campus + west Carbondale + airport + Murdale Shopping), Sahara (campus + east Carbondale + CCHS + Kroger/Walmart), Nile (south Carbondale + campus), and the <strong>Big Muddy Route (added recently)</strong> connecting University Mall + Amtrak station + Murphysboro Courthouse. <a href="https://www.ridesmtd.com/saluki-express/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Saluki Express route detail</a> · verify route inception date with the operator before public stakeholder use.</li>
             <li><strong>RIDES Mass Transit District (RMTD)</strong> — serves Harrisburg, Marion, Robinson, Paris, Mount Carmel, Olney with fixed-route + 17-county demand-response. Transferred Saluki Express to JAX in 2024 due to funding cuts. <a href="https://www.ridesmtd.com/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>ridesmtd.com</a></li>
             <li><strong>Service hours</strong>: Mon-Fri + weekend 7:00am-7:30pm depending on route.</li>
             <li><strong>Federal funding</strong>: FTA Section 5311 (Rural Areas Formula) is the primary federal source. <a href="https://www.transit.dot.gov/rural-formula-grants-5311" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>FTA §5311</a>. Additional possible: Section 5339(b) Bus + Bus Facilities Competitive, 5339(c) Low-No Emissions.</li>
@@ -2111,7 +2125,7 @@ function MobilityJobAccessSection() {
           <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 13, color: "#3d3a33", lineHeight: 1.65 }}>
             <li><strong>2nd-shift &amp; 3rd-shift work is not transit-accessible.</strong> Service closes 7:30pm. Continental Tire (Mt. Vernon), GD-OTS (Marion), and most regional manufacturing run 2nd shifts ending 10pm-midnight. Healthcare 3rd-shift starts at 11pm. Workers without vehicles can&apos;t take these shifts.</li>
             <li><strong>Cross-county work commutes are mostly demand-response.</strong> Murphysboro → Marion (~30min by car), Du Quoin → Carbondale (~25min), West Frankfort → Marion (~20min) work commutes rely on RMTD demand-response, not fixed-route. Same-day demand-response slots are limited.</li>
-            <li><strong>Big Muddy Route (new 2024) is a real improvement</strong> — connects Amtrak station + University Mall + Murphysboro Courthouse. First fixed-route service genuinely tied to the train station.</li>
+            <li><strong>Big Muddy Route is a real improvement</strong> — connects Amtrak station + University Mall + Murphysboro Courthouse. First fixed-route service genuinely tied to the train station.</li>
             <li><strong>Rural connectivity outside fixed-route corridors</strong> (Pomona, Makanda, Anna, Goreville, Vienna) is paratransit + demand-response only.</li>
             <li><strong>The fixed routes DO serve retail + employer destinations</strong> (Walmart, Kroger, airport, SIU campus, Memorial Hospital) — characterization of local transit as &quot;social-services only&quot; is incomplete; structural gaps are around shift timing + geographic edge + same-day demand-response capacity, not destination mix.</li>
           </ul>
