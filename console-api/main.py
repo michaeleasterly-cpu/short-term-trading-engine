@@ -792,6 +792,189 @@ async def _census_acs_multiyear(
     }
 
 
+# ────────────── Training-to-demand alignment (Mantracon "phantom pipeline" check) ──────────────
+# The operator's blunt point: Mantracon gets grants, sends people through training,
+# claims wins — but the actual outcome (a single-parent mom earning a family-supporting
+# wage) often never materializes. Training is disconnected from local employer demand.
+# This block synthesizes existing QCEW data + MIT Living Wage benchmarks + a hardcoded
+# training-ladder roster into a brutal-honest "can a single mom raise her kids on this?"
+# verdict for every major training pipeline in the region.
+
+# MIT Living Wage Calculator, Jackson County, IL (FIPS 17077). Annual update by MIT;
+# refresh by re-scraping livingwage.mit.edu/counties/17077 (no public API). 2024 values.
+# Single-adult living wage: $17.50/hr ≈ $700/wk
+# 1 adult + 2 children (the operator's "single mom" reference): $42.04/hr ≈ $1,682/wk
+# 2 adults (1 working) + 2 children: $34.18/hr ≈ $1,367/wk
+_MIT_LIVING_WAGE_JACKSON_IL_1A0C_WKLY = 700.0   # single adult no kids
+_MIT_LIVING_WAGE_JACKSON_IL_1A2C_WKLY = 1682.0  # single adult + 2 kids
+_MIT_LIVING_WAGE_JACKSON_IL_2A2C_WKLY = 1367.0  # 2 adults (1 working) + 2 kids
+_MIT_LIVING_WAGE_YEAR = 2024
+
+# Training-ladder roster — typical credentials offered by/through Mantracon /
+# John A. Logan / Rend Lake / IBEW Local 702 / other regional providers.
+# Wage figures are LOCAL journey-out estimates from the expert advisory +
+# BLS OES Carbondale-Marion MSA (16060) cross-reference; refresh annually.
+# "supersector_code" maps to the BLS QCEW NAICS supersector aggregator used
+# elsewhere on this page so we can pull local employment + avg wage directly.
+
+_TRAINING_LADDER_ROSTER = [
+    # CEJA solar-installer track is the operator's flagship "phantom" example
+    {"id": "ceja_solar",     "name": "CEJA solar installer",                "supersector_code": "1012",
+     "ladder": "Pre-app → NABCEP-certified installer",
+     "typical_journey_wage_wkly": 1040,  # $26/hr × 40
+     "training_duration": "8-16 weeks",
+     "notes": "CEJA Climate Works pre-apprenticeship. Local solar-installer employer base is essentially zero — workers either commute, relocate, or never work in this credential. The classic 'phantom pipeline' case."},
+    {"id": "ceja_wind",      "name": "CEJA wind technician",                "supersector_code": "1011",
+     "ladder": "Pre-app → GWO-certified wind tech",
+     "typical_journey_wage_wkly": 1240,
+     "training_duration": "12-20 weeks",
+     "notes": "Requires travel to wind farms (out-of-region). Local wind employer base is zero."},
+    {"id": "ceja_lineworker", "name": "Lineworker (IBEW 702)",              "supersector_code": "1021",
+     "ladder": "Pre-app → 4yr apprenticeship → IBEW journey",
+     "typical_journey_wage_wkly": 2120,  # $53/hr × 40
+     "training_duration": "4 years apprenticeship",
+     "notes": "Highest-wage clean-energy ladder + IBEW 702 (W. Frankfort) is local. Real family-supporting path."},
+    {"id": "electrician",    "name": "Electrician (IBEW 702)",              "supersector_code": "1012",
+     "ladder": "Pre-app → 5yr apprenticeship → IBEW journey",
+     "typical_journey_wage_wkly": 1680,  # $42/hr × 40
+     "training_duration": "5 years apprenticeship",
+     "notes": "IBEW Local 702 covers most of LWA-25. Strong local construction demand. Hits the family-supporting threshold at journey-out exactly."},
+    {"id": "cdl_class_a",    "name": "CDL Class A (truck driver)",          "supersector_code": "1021",
+     "ladder": "JALC or Rend Lake 4-8wk CDL school",
+     "typical_journey_wage_wkly": 1000,  # $25/hr × 40 local
+     "training_duration": "4-8 weeks",
+     "notes": "Local jobs pay $22-28/hr. Regional OTR $35-45/hr but takes drivers away from family. Operator's exact critique — 'nobody wants to be a fucking truck driver' applies to the local rate; the OTR rate breaks the family-supporting frame the other way (you can't raise kids if you're not home)."},
+    {"id": "cna",            "name": "CNA (Certified Nursing Asst.)",       "supersector_code": "1025",
+     "ladder": "4-6 week certification",
+     "typical_journey_wage_wkly": 640,  # $16/hr × 40
+     "training_duration": "4-6 weeks",
+     "notes": "Easy to place into — Memorial Hospital, SIH, nursing homes all hire CNAs. BUT pays $14-17/hr — below single-adult living wage. Expert: 'getting stuck training for low-wage care-economy jobs because they're easy to place into.'"},
+    {"id": "lpn",            "name": "LPN (Licensed Practical Nurse)",      "supersector_code": "1025",
+     "ladder": "12-month diploma program",
+     "typical_journey_wage_wkly": 1000,  # $25/hr × 40
+     "training_duration": "12 months",
+     "notes": "Significant step up from CNA. Common ladder rung. Still single-adult-only territory."},
+    {"id": "rn_adn",         "name": "RN (ADN, Associate Degree)",          "supersector_code": "1025",
+     "ladder": "2yr ADN at JALC + NCLEX",
+     "typical_journey_wage_wkly": 1380,  # $34.50/hr × 40 starting at SIH
+     "training_duration": "2 years",
+     "notes": "Memorial Hospital + SIH + Marion VA all hire ADN-RNs. Strong local demand + family-supporting (barely). BSN bridge adds $4-6/hr."},
+    {"id": "welding",        "name": "Welder (structural / pipe)",          "supersector_code": "1013",
+     "ladder": "JALC 12-18mo welding program + AWS certs",
+     "typical_journey_wage_wkly": 1240,  # $31/hr × 40
+     "training_duration": "12-18 months",
+     "notes": "Manufacturing demand at Continental Tire, Aisin, Penn Aluminum. Family-supporting at journey-out. Pipefitter (Local 160 Mt. Vernon) goes higher."},
+    {"id": "industrial_maint", "name": "Industrial maintenance / mechatronics", "supersector_code": "1013",
+     "ladder": "JALC 18-24mo mechatronics program",
+     "typical_journey_wage_wkly": 1320,  # $33/hr × 40
+     "training_duration": "18-24 months",
+     "notes": "Continental Tire is the anchor employer. Strong local demand + clears family-supporting threshold."},
+    {"id": "it_support",     "name": "IT support (Network+/Security+)",     "supersector_code": "1022",
+     "ladder": "Stacked CompTIA certs",
+     "typical_journey_wage_wkly": 1080,  # $27/hr × 40
+     "training_duration": "6-12 months",
+     "notes": "Local employer base is tiny — Information sector has ~50-200 jobs in LWA-25. The ceiling is low locally; better framed as a 'work-from-anywhere' ladder than a 'land at a local employer' ladder."},
+]
+
+
+def _training_demand_alignment(qcew_block: dict) -> dict:
+    """Cross-references each training ladder against actual local employer demand
+    (QCEW sector employment) and a livable-wage benchmark (MIT Living Wage,
+    Jackson County, IL — 1 adult + 2 children = $1,682/wk).
+
+    Returns a list of training ladders with: regional sector employment, sector
+    avg weekly wage from QCEW (for context), training wage, livable-wage gap,
+    and an explicit verdict (PHANTOM / BELOW LIVABLE / SINGLE ADULT ONLY /
+    FAMILY-SUPPORTING).
+    """
+    # Map supersector code → QCEW snapshot for cross-reference
+    qcew_by_code: dict[str, dict] = {}
+    for s in (qcew_block or {}).get("top_supersectors", []) or []:
+        qcew_by_code[s["code"]] = s
+
+    LWA_TOTAL_EMP = (qcew_block or {}).get("total_employment", 0) or 0
+    livable_1a0c = _MIT_LIVING_WAGE_JACKSON_IL_1A0C_WKLY
+    livable_1a2c = _MIT_LIVING_WAGE_JACKSON_IL_1A2C_WKLY
+
+    rows: list[dict] = []
+    for tl in _TRAINING_LADDER_ROSTER:
+        qcew_row = qcew_by_code.get(tl["supersector_code"], {})
+        sector_emp = qcew_row.get("total_employment", 0) or 0
+        sector_wage = qcew_row.get("avg_weekly_wage", 0) or 0
+        wage = tl["typical_journey_wage_wkly"]
+
+        # Demand signal
+        if sector_emp == 0:
+            demand = "NONE"
+        elif sector_emp < 1000:
+            demand = "VERY LOW"
+        elif sector_emp < 3000:
+            demand = "LOW"
+        elif sector_emp < 10000:
+            demand = "MODERATE"
+        else:
+            demand = "HIGH"
+
+        # Verdict
+        if demand in ("NONE", "VERY LOW"):
+            verdict = "PHANTOM PIPELINE"
+            verdict_color = "danger"
+        elif wage < livable_1a0c:
+            verdict = "BELOW LIVABLE WAGE"
+            verdict_color = "danger"
+        elif wage < livable_1a2c:
+            verdict = "SINGLE ADULT ONLY"
+            verdict_color = "warn"
+        else:
+            verdict = "FAMILY-SUPPORTING"
+            verdict_color = "good"
+
+        # Special case for CDL — phrase as a family-time conflict not wage
+        if tl["id"] == "cdl_class_a":
+            verdict = "FAMILY-TIME CONFLICT"
+            verdict_color = "warn"
+
+        rows.append({
+            "id": tl["id"],
+            "name": tl["name"],
+            "ladder": tl["ladder"],
+            "training_duration": tl["training_duration"],
+            "typical_journey_wage_wkly": wage,
+            "typical_journey_wage_hrly": round(wage / 40, 2),
+            "supersector_name": qcew_row.get("name", "—"),
+            "supersector_code": tl["supersector_code"],
+            "local_sector_employment": sector_emp,
+            "local_sector_share_pct": round((sector_emp / LWA_TOTAL_EMP * 100), 1) if LWA_TOTAL_EMP else 0,
+            "local_sector_avg_weekly_wage": sector_wage,
+            "demand_signal": demand,
+            "vs_single_adult_livable_wkly": round(wage - livable_1a0c, 0),
+            "vs_family_livable_wkly":      round(wage - livable_1a2c, 0),
+            "verdict": verdict,
+            "verdict_color": verdict_color,
+            "notes": tl["notes"],
+        })
+
+    return {
+        "ladders": rows,
+        "livable_wage_jackson_il": {
+            "single_adult_wkly": livable_1a0c,
+            "single_adult_hrly": round(livable_1a0c / 40, 2),
+            "family_1a2c_wkly": livable_1a2c,
+            "family_1a2c_hrly": round(livable_1a2c / 40, 2),
+            "source": f"MIT Living Wage Calculator, Jackson County IL ({_MIT_LIVING_WAGE_YEAR} values, refresh annually via livingwage.mit.edu/counties/17077)",
+        },
+        "source": (
+            "Local sector employment + avg weekly wage from BLS QCEW (latest published quarter, "
+            "from the industry_mix block on this page). Training journey-out wages from the local "
+            "advisory roster — typical figures; individual outcomes vary. Verdicts compare typical "
+            "journey-out wage to the MIT Living Wage benchmark for Jackson County (1 adult + 2 "
+            "children) — the operator's 'single mom raising kids by herself' reference point. "
+            "PHANTOM PIPELINE = local employer base is essentially zero, so the credential has "
+            "nowhere to land locally even if wages would clear the bar."
+        ),
+    }
+
+
 # ────────────── ACS Labor Truth — the "real picture" beyond UE rate ──────────────
 # Surfaces LFPR + E/P + Not-in-Labor-Force at sub-state geography, with state +
 # national benchmarks. Captures what the headline U-3 unemployment rate misses:
@@ -1665,6 +1848,7 @@ async def public_mantracon() -> dict:
     top_recipients = await _usaspending_top_recipients(county_fips=LWA_FIPS)
     qcew = await _qcew_supersector_block(county_fips=LWA_FIPS)
     labor_truth = await _acs_labor_truth(county_fips=LWA_FIPS)
+    training_alignment = _training_demand_alignment(qcew)
     return {
         "ts": datetime.now(UTC).isoformat(),
         "indicators": indicators,
@@ -1685,6 +1869,7 @@ async def public_mantracon() -> dict:
         "top_federal_recipients": top_recipients,
         "industry_mix": qcew,
         "labor_truth": labor_truth,
+        "training_alignment": training_alignment,
     }
 
 

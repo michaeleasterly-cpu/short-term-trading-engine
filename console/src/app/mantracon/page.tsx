@@ -23,6 +23,37 @@ interface BusinessOps {
   sam_gov_search_link: string;
 }
 
+interface TrainingLadder {
+  id: string;
+  name: string;
+  ladder: string;
+  training_duration: string;
+  typical_journey_wage_wkly: number;
+  typical_journey_wage_hrly: number;
+  supersector_name: string;
+  supersector_code: string;
+  local_sector_employment: number;
+  local_sector_share_pct: number;
+  local_sector_avg_weekly_wage: number;
+  demand_signal: string;
+  vs_single_adult_livable_wkly: number;
+  vs_family_livable_wkly: number;
+  verdict: string;
+  verdict_color: string;
+  notes: string;
+}
+interface TrainingAlignment {
+  ladders: TrainingLadder[];
+  livable_wage_jackson_il: {
+    single_adult_wkly: number;
+    single_adult_hrly: number;
+    family_1a2c_wkly: number;
+    family_1a2c_hrly: number;
+    source: string;
+  };
+  source: string;
+}
+
 interface TopRecipient { name: string; amount: number; share_pct: number; alias_count: number }
 interface TopRecipientsBlock {
   recipients: TopRecipient[];
@@ -102,6 +133,216 @@ interface MantraconData {
   top_federal_recipients?: TopRecipientsBlock;
   industry_mix?: IndustryMix;
   labor_truth?: LaborTruth;
+  training_alignment?: TrainingAlignment;
+}
+
+function TrainingAlignmentSection({ ta }: { ta: TrainingAlignment }) {
+  if (!ta.ladders.length) return null;
+  const lw = ta.livable_wage_jackson_il;
+  const colorFor = (c: string) => c === "good" ? "oklch(45% 0.16 142)" : c === "warn" ? "oklch(48% 0.15 60)" : "oklch(45% 0.20 22)";
+  const bgFor = (c: string) => c === "good" ? "oklch(96% 0.04 142)" : c === "warn" ? "oklch(97% 0.04 60)" : "oklch(96% 0.05 22)";
+  return (
+    <section style={{ marginTop: 40 }}>
+      <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+      <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+        Training-to-demand alignment · the single-mom test
+      </h2>
+      <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 760, lineHeight: 1.55 }}>
+        Workforce-development theater: grant comes in, training cohort starts, graduates
+        hit the labor market — but does the credential they earned have local employers
+        to hire them, at wages a single parent can raise two kids on? This cross-references
+        every major regional training ladder against (a) actual local sector employment from
+        BLS QCEW and (b) the MIT Living Wage benchmark for Jackson County. PHANTOM PIPELINE
+        means the credential has nowhere to land locally — graduates relocate, commute, or
+        never work in the field.
+      </div>
+
+      {/* Livable wage benchmark callout */}
+      <div style={{ marginBottom: 20, padding: 14, background: "#fff", border: "1px solid #d8d2c4", borderRadius: 6 }}>
+        <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: "#5a564d", marginBottom: 8 }}>
+          Livable-wage benchmark · Jackson County, IL (MIT Living Wage Calculator)
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, fontSize: 13 }}>
+          <div>
+            <div style={{ color: "#5a564d" }}>Single adult, no kids</div>
+            <div style={{ fontSize: 20, fontWeight: 600, color: "#1f1d18" }}>${lw.single_adult_hrly}/hr</div>
+            <div style={{ fontSize: 11, color: "#7a756b" }}>${lw.single_adult_wkly.toFixed(0)}/wk · ${(lw.single_adult_wkly * 52 / 1000).toFixed(0)}k/yr</div>
+          </div>
+          <div>
+            <div style={{ color: "#5a564d" }}>1 adult + 2 kids (single-parent family)</div>
+            <div style={{ fontSize: 20, fontWeight: 600, color: "oklch(45% 0.20 22)" }}>${lw.family_1a2c_hrly}/hr</div>
+            <div style={{ fontSize: 11, color: "#7a756b" }}>${lw.family_1a2c_wkly.toFixed(0)}/wk · ${(lw.family_1a2c_wkly * 52 / 1000).toFixed(0)}k/yr</div>
+          </div>
+        </div>
+        <div style={{ marginTop: 8, fontSize: 11, color: "#7a756b" }}>{lw.source}</div>
+      </div>
+
+      {/* Training ladder grid */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 12 }}>
+        {ta.ladders.map(l => (
+          <div key={l.id} style={{
+            background: "white",
+            border: `1px solid ${colorFor(l.verdict_color)}33`,
+            borderLeft: `6px solid ${colorFor(l.verdict_color)}`,
+            borderRadius: 6, padding: 16,
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, marginBottom: 8 }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 16, fontWeight: 600, color: "#1f1d18" }}>{l.name}</div>
+                <div style={{ fontSize: 12, color: "#7a756b", marginTop: 2 }}>{l.ladder} · {l.training_duration}</div>
+              </div>
+              <div style={{
+                fontSize: 11, fontWeight: 700, color: "white", background: colorFor(l.verdict_color),
+                padding: "5px 10px", borderRadius: 3, textTransform: "uppercase", letterSpacing: "0.06em",
+                whiteSpace: "nowrap",
+              }}>
+                {l.verdict}
+              </div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 14, marginTop: 12, padding: 12, background: bgFor(l.verdict_color), borderRadius: 4 }}>
+              <div>
+                <div style={{ fontSize: 10, color: "#7a756b", textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 600 }}>Journey wage</div>
+                <div style={{ fontSize: 16, fontWeight: 600, color: "#1f1d18" }}>${l.typical_journey_wage_hrly}/hr</div>
+                <div style={{ fontSize: 11, color: "#5a564d" }}>${l.typical_journey_wage_wkly}/wk</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 10, color: "#7a756b", textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 600 }}>vs single-adult LW</div>
+                <div style={{ fontSize: 16, fontWeight: 600, color: l.vs_single_adult_livable_wkly >= 0 ? "oklch(45% 0.16 142)" : "oklch(45% 0.20 22)" }}>
+                  {l.vs_single_adult_livable_wkly > 0 ? "+" : ""}${l.vs_single_adult_livable_wkly}/wk
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: 10, color: "#7a756b", textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 600 }}>vs family LW (1A+2C)</div>
+                <div style={{ fontSize: 16, fontWeight: 600, color: l.vs_family_livable_wkly >= 0 ? "oklch(45% 0.16 142)" : "oklch(45% 0.20 22)" }}>
+                  {l.vs_family_livable_wkly > 0 ? "+" : ""}${l.vs_family_livable_wkly}/wk
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: 10, color: "#7a756b", textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 600 }}>Local sector</div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18" }}>{l.supersector_name}</div>
+                <div style={{ fontSize: 11, color: "#5a564d" }}>{l.local_sector_employment.toLocaleString()} jobs ({l.demand_signal})</div>
+              </div>
+            </div>
+            <div style={{ marginTop: 10, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>{l.notes}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ marginTop: 12, fontSize: 11, color: "#7a756b", lineHeight: 1.55 }}>{ta.source}</div>
+    </section>
+  );
+}
+
+function AttractionPipelineSection() {
+  // Static expert-derived strategy advisory; no live API needed.
+  return (
+    <section style={{ marginTop: 40 }}>
+      <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+      <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+        Anchor-employer attraction pipeline · the realistic targets
+      </h2>
+      <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 760, lineHeight: 1.55 }}>
+        Without new anchor employers paying above the livable-wage threshold, the
+        training-alignment problem above can&apos;t be solved by training alone. Current
+        large local employers in LWA-25 are concentrated in prisons (Marion FCI, IDOC),
+        state agencies + the university (SIU + state university system), large healthcare
+        (SIH / Memorial / Marion VA), and the Marion munitions plant (GD-OTS).
+      </div>
+
+      <div style={{ marginBottom: 16, padding: 14, background: "#fef9eb", border: "1px solid #f0d98a", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
+        <strong>The honesty caveat on current anchors:</strong> &quot;Large local employer&quot;
+        isn&apos;t the same as &quot;family-supporting wages.&quot; The QCEW sector wage shown
+        in the Industry Mix section above is an <em>average across all positions</em>
+        in that sector — it blends faculty / doctors / executives with support staff /
+        IT / clerical. The wage distribution within state agencies and the university
+        skews top-heavy. Verify with role-specific data before pitching any specific
+        employer as &quot;family-supporting&quot;:{" "}
+        <a href="https://salaries.bettergov.org/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f", fontWeight: 600 }}>BetterGov Illinois Public Salaries Database</a>{" "}
+        (search by employer and role){" "}·{" "}
+        <a href="https://www.bls.gov/oes/current/oes_16060.htm" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f", fontWeight: 600 }}>BLS OES Carbondale-Marion MSA</a>{" "}
+        (median wage by occupation, all employers).
+        {" "}<strong>The strategic answer is new anchor employers, not asking existing
+        anchors to pay more.</strong>
+      </div>
+
+      <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 760, lineHeight: 1.55 }}>
+        To break the wage ceiling we need new anchors — and the realistic target
+        list isn&apos;t Google or Microsoft; it&apos;s tier-2 firms hunting stranded
+        power, federal agencies with relocation precedent, and university
+        research-anchored programs.
+      </div>
+
+      {/* Data center attraction scorecard */}
+      <h3 style={{ fontSize: 16, fontWeight: 600, color: "#1f1d18", margin: "20px 0 8px 0" }}>
+        Data center / hyperscaler attraction scorecard for LWA-25
+      </h3>
+      <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, padding: 16 }}>
+        {[
+          { factor: "Stranded coal-plant interconnect", grade: "✓ STRONG", note: "Baldwin retirement = ~1,200MW of substation capacity in MISO-South. Ameren IL serves the area. Hyperscalers (and AI-training operators) value stranded-grid sites.", color: "oklch(45% 0.16 142)" },
+          { factor: "IL Data Center Investments Act", grade: "✓ STRONG", note: "Public Act 101-0031 — 20-year sales-tax exemption on equipment + property-tax abatement eligible, certified by DCEO. File certification before any RFP arrives.", color: "oklch(45% 0.16 142)" },
+          { factor: "Water (cooling)", grade: "✓ STRONG", note: "Crab Orchard NWR, Kinkaid Lake, Mississippi River access. Sufficient for all but the largest installations.", color: "oklch(45% 0.16 142)" },
+          { factor: "Land cost", grade: "✓ STRONG", note: "Undervalued vs Northern Virginia, Phoenix, Columbus.", color: "oklch(45% 0.16 142)" },
+          { factor: "Power cost (industrial retail)", grade: "~ MODERATE", note: "Ameren IL industrial rate ~$0.08-0.09/kWh vs Northern VA $0.06. Not the cheapest, but stranded-coal incentive offsets.", color: "oklch(48% 0.15 60)" },
+          { factor: "Federal IRA Energy Communities adder", grade: "✓ STRONG", note: "Franklin and Perry counties are coal-closure tracts. Solar/wind/storage projects sited here get IRA §48 +10pp ITC bonus on top of 30% base. Use for behind-the-meter generation co-located with DC.", color: "oklch(45% 0.16 142)" },
+          { factor: "Fiber diversity", grade: "✗ WEAK", note: "Limited carrier diversity. Need to map FCC Broadband Map carriers and pitch fiber-construction grants alongside any major siting.", color: "oklch(45% 0.20 22)" },
+          { factor: "Operations talent (200-person ops staff)", grade: "✗ WEAK", note: "SIU produces some IT capacity but no existing data-center workforce concentration. Mantracon + JALC + Rend Lake would need to stand up a DC-ops training program in parallel to any recruitment.", color: "oklch(45% 0.20 22)" },
+        ].map((f, i) => (
+          <div key={i} style={{ padding: "10px 0", borderTop: i === 0 ? "none" : "1px solid #ebe5d6", display: "grid", gridTemplateColumns: "1fr auto", gap: 12, alignItems: "baseline" }}>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: "#1f1d18" }}>{f.factor}</div>
+              <div style={{ fontSize: 12, color: "#5a564d", marginTop: 4, lineHeight: 1.5 }}>{f.note}</div>
+            </div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "white", background: f.color, padding: "4px 8px", borderRadius: 3, whiteSpace: "nowrap" }}>{f.grade}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Target list */}
+      <h3 style={{ fontSize: 16, fontWeight: 600, color: "#1f1d18", margin: "24px 0 8px 0" }}>
+        Realistic target list — recruit these, not those
+      </h3>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+        <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, padding: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8 }}>Tier-2 data centers + AI-training operators</div>
+          <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 13, color: "#3d3a33", lineHeight: 1.7 }}>
+            <li><strong>QTS, CyrusOne, Stack Infrastructure, Compass, Aligned</strong> — tier-2 wholesale DC operators</li>
+            <li><strong>CoreWeave, Lambda, Crusoe</strong> — AI-training operators explicitly hunting stranded-power sites</li>
+            <li><strong>Switch, DataBank</strong> — colocation operators with Midwest expansion appetite</li>
+            <li style={{ color: "#7a756b" }}><span style={{ textDecoration: "line-through" }}>Google, Microsoft, AWS, Meta</span> — these go to Loudoun/Phoenix/Columbus. Don&apos;t waste cycles.</li>
+          </ul>
+        </div>
+        <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, padding: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8 }}>Federal agency relocation candidates</div>
+          <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 13, color: "#3d3a33", lineHeight: 1.7 }}>
+            <li><strong>USDA ARS</strong> — agricultural research, SIU College of Ag is the anchor. Precedent: USDA ERS/NIFA → Kansas City 2019.</li>
+            <li><strong>USGS</strong> — Mississippi River science / Shawnee NF research</li>
+            <li><strong>DOE Office of Fossil Energy &amp; Carbon Management</strong> — perfect fit for coal-country transition mandate</li>
+            <li><strong>VA regional facilities expansion</strong> — Marion VA already exists; pitch VBA processing center co-location</li>
+            <li>Track <a href="https://realestate.gsa.gov" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>GSA real-estate listings</a> + OPM Federal Workforce Priorities Report</li>
+          </ul>
+        </div>
+      </div>
+
+      {/* IL programs to file under */}
+      <div style={{ marginTop: 20, padding: 16, background: "#fef9eb", border: "1px solid #f0d98a", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          Stack these IL state programs in any pitch
+        </div>
+        <ul style={{ margin: "0 0 0 18px", padding: 0 }}>
+          <li><strong>EDGE Tax Credit</strong> — income-tax credit against new jobs created</li>
+          <li><strong>REV Illinois</strong> — electric vehicle / clean-energy specific (applies to battery storage co-located with DC)</li>
+          <li><strong>High Impact Business</strong> designation — sales-tax exemption on building materials</li>
+          <li><strong>Enterprise Zone</strong> designation — confirm with IL DCEO; Carbondale-Marion area should already have one</li>
+          <li><strong>IL Data Center Investments Act</strong> — see scorecard above</li>
+          <li><strong>SBA HUBZone</strong> — most LWA-25 census tracts qualify for set-aside boost on federal contracts</li>
+          <li><strong>CDFI Capital Magnet Fund + New Markets Tax Credits</strong> — Carbondale &amp; Murphysboro both NMTC-eligible</li>
+        </ul>
+      </div>
+
+      <div style={{ marginTop: 12, fontSize: 11, color: "#7a756b", lineHeight: 1.5 }}>
+        Source: synthesized from local-BD expert advisory + IL DCEO program documentation. Refresh annually.
+      </div>
+    </section>
+  );
 }
 
 function FederalConcentrationSection({ tr }: { tr: TopRecipientsBlock }) {
@@ -707,6 +948,10 @@ export default async function MantraconPage() {
           <BusinessLeadsSection b={data.business_opportunities} />
 
           {data.top_federal_recipients && <FederalConcentrationSection tr={data.top_federal_recipients} />}
+
+          {data.training_alignment && <TrainingAlignmentSection ta={data.training_alignment} />}
+
+          <AttractionPipelineSection />
 
           <section style={{ marginTop: 40 }}>
             <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
