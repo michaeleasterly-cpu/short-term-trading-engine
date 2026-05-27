@@ -165,6 +165,153 @@ interface MantraconData {
   training_alignment?: TrainingAlignment;
 }
 
+function ChildcareGatewaySection() {
+  return (
+    <section style={{ marginTop: 40 }}>
+      <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+      <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+        Childcare · the gateway constraint that determines what training outcomes mean
+      </h2>
+      <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 760, lineHeight: 1.55 }}>
+        The 1-adult + 2-children Jackson Co. living wage is <strong>$46.76/hr</strong> not
+        because food + rent require that much — the MIT Living Wage Calculator allocates{" "}
+        <strong>$14,000-$22,000 per child per year</strong> for childcare in that household.{" "}
+        <strong>Childcare cost is what makes most training ladders fail the 1A+2C test by
+        design.</strong> Until single-parent or two-earner-with-children households can
+        secure affordable, quality childcare, the family-supporting wage bar is structurally
+        hard to clear for anyone except journey-level union trades and master-grower /
+        cultivation-manager roles. This is the gateway constraint — not the training credentials.
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
+        <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, padding: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8 }}>What helps Illinois families afford childcare</div>
+          <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 13, color: "#3d3a33", lineHeight: 1.65 }}>
+            <li><strong>Child Care Assistance Program (CCAP)</strong> — IL DHS subsidy for working-parent households below specific income thresholds. The eligibility cliff is sharp — small income gains can lose all subsidy. <a href="https://www.dhs.state.il.us/page.aspx?item=149603" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>IL DHS CCAP</a>.</li>
+            <li><strong>Smart Start Illinois</strong> — multi-year initiative to expand childcare access + raise provider-staff wages. $90M in Smart Start Workforce Grants in 2026 ($6,750/classroom/quarter to raise classroom-staff wages by $2-3/hr). <a href="https://www.ilgateways.com/smart-start" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Smart Start IL</a> · <a href="https://www.dhs.state.il.us/page.aspx?item=31667" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>IDHS Smart Start</a>.</li>
+            <li><strong>IL Employer Child Care Tax Credit (2026)</strong> — 20% employer credit for childcare costs paid + 50% start-up credit. Direct lever for employers attracting workers with kids.</li>
+            <li><strong>Federal Child Tax Credit + IL EITC</strong> stack with CCAP. Combined refundable credits move ~10-15% of low-income families above the family-supporting bar post-tax.</li>
+          </ul>
+        </div>
+        <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, padding: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8 }}>What the workforce board can do</div>
+          <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 13, color: "#3d3a33", lineHeight: 1.65 }}>
+            <li><strong>Co-locate childcare with training programs.</strong> Drop-in childcare at JALC / Rend Lake / Mantracon training sites materially lowers the barrier for parents enrolling in 12-24mo credentials.</li>
+            <li><strong>Push employer-paired childcare benefits</strong> in CBA / community-engagement framing with major federal-contracting employers. On-site or stipend-based childcare costs the employer $200-400/wk and gains ~$3-5/hr in retained-worker effective wage.</li>
+            <li><strong>Help local childcare providers become Smart Start grantees.</strong> Many small in-home providers in LWA-25 are eligible for the $90M Workforce Grant pool but don&apos;t apply. Technical-assistance pipeline through Mantracon + IDHS.</li>
+            <li><strong>Frame childcare-worker positions as a career on-ramp.</strong> The credential ladder (CDA → Bachelor&apos;s in ECE → director) reaches family-supporting at the upper rungs. Same playbook as CNA → LPN → RN.</li>
+          </ul>
+        </div>
+      </div>
+      <div style={{ marginBottom: 16, fontSize: 11, color: "#7a756b", lineHeight: 1.5 }}>
+        Childcare-cost figures from <a href="https://livingwage.mit.edu/counties/17077" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>MIT Living Wage Calculator — Jackson County 17077</a>. Smart Start $90M figure from <a href="https://aftonpartners.com/case-studies/smart-start-workforce-grants/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Afton Partners Smart Start case study</a>.
+      </div>
+    </section>
+  );
+}
+
+function HealthcareWorkforceSection() {
+  return (
+    <section style={{ marginTop: 40 }}>
+      <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+      <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+        Healthcare workforce shortage · the federal-dollar lever the page nearly missed
+      </h2>
+      <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 760, lineHeight: 1.55 }}>
+        Most of LWA-25 carries federal <strong>Health Professional Shortage Area
+        (HPSA)</strong> designations. HPSA designations unlock specific federal-funded
+        workforce-recruitment incentives that bring physicians, NPs, PAs, dentists,
+        psychiatrists, certified nurse midwives, and behavioral-health clinicians into
+        the region at competitive loan-repayment rates.
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
+        <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, padding: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8 }}>HPSA designation + NHSC loan repayment</div>
+          <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 13, color: "#3d3a33", lineHeight: 1.65 }}>
+            <li><strong>Look up LWA-25 HPSA designations</strong> at <a href="https://data.hrsa.gov/topics/health-workforce/shortage-areas" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>HRSA Shortage Area tool</a>. Counties with Primary Care HPSAs, Mental Health HPSAs, and Dental HPSAs each unlock separate federal programs.</li>
+            <li><strong>NHSC Loan Repayment</strong> — up to <strong>$75,000 over 2 years</strong> for primary-care clinicians serving full-time at an NHSC-approved site in a HPSA ($50k for non-primary-care). Half-time options at half-pay. Renewable. <a href="https://nhsc.hrsa.gov/loan-repayment/nhsc-loan-repayment-program" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>NHSC LRP</a>.</li>
+            <li><strong>NHSC Rural Community LRP</strong> — separate stream for SUD treatment in rural HPSAs. <a href="https://nhsc.hrsa.gov/loan-repayment/nhsc-rural-community-loan-repayment-program" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>NHSC Rural LRP</a>.</li>
+            <li><strong>NHSC Substance Use Disorder Workforce LRP</strong> — direct overlay on regional opioid crisis. <a href="https://nhsc.hrsa.gov/loan-repayment/nhsc-sud-workforce-loan-repayment-program" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>NHSC SUD LRP</a>.</li>
+            <li><strong>IL State Loan Repayment Program (SLRP)</strong> — stackable with NHSC; IDPH-administered. Currently in funding gap (<a href="https://dph.illinois.gov/topics-services/life-stages-populations/rural-underserved-populations/slrp.html" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>IDPH SLRP</a>); track for re-opening.</li>
+            <li><strong>Behavioral Health Workforce Center</strong> — IL-specific BH practitioner loan repayment. <a href="https://illinoisbhwc.org/about/loan-repayment-programs/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>BHWC</a>.</li>
+          </ul>
+        </div>
+        <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, padding: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8 }}>Federal-grant programs anchored on HPSA designation</div>
+          <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 13, color: "#3d3a33", lineHeight: 1.65 }}>
+            <li><strong>HRSA Rural Residency Planning and Development (RRPD)</strong> — up to $750k over 36mo to plan a new rural residency program. SIU School of Medicine + SIH/Memorial could partner.</li>
+            <li><strong>J-1 visa waiver Conrad 30 program</strong> — each state has 30 slots/year for foreign-trained physicians completing US residency to waive 2-year home-country requirement in exchange for 3yr serving a HPSA. <strong>DRA&apos;s Delta Doctors program is the J-1 waiver overlay for DRA-eligible counties</strong> — direct lever (see DRA section below).</li>
+            <li><strong>HRSA FQHC New Access Point grants</strong> — start-up funding for new community health centers in HPSAs. Existing LWA-25 FQHC: Shawnee Health Service.</li>
+            <li><strong>HRSA Teaching Health Center GME</strong> — funds primary-care residency slots at community-based teaching sites (vs traditional AMCs). SIH or Memorial could host.</li>
+            <li><strong>USDA Rural Health Care Services Outreach Grant</strong> — operational support for rural healthcare delivery.</li>
+          </ul>
+        </div>
+      </div>
+      <div style={{ marginBottom: 16, fontSize: 11, color: "#7a756b", lineHeight: 1.5 }}>
+        Sources: <a href="https://nhsc.hrsa.gov/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>NHSC / HRSA</a>, <a href="https://www.ruralhealthinfo.org/funding/3492" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Rural Health Information Hub</a>, <a href="https://illinoisbhwc.org/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>IL Behavioral Health Workforce Center</a>.
+      </div>
+    </section>
+  );
+}
+
+function HousingAffordabilitySection() {
+  return (
+    <section style={{ marginTop: 40 }}>
+      <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+      <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+        Housing affordability for relocators · what every people-attraction strategy needs
+      </h2>
+      <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 760, lineHeight: 1.55 }}>
+        Every people-attraction strategy assumes housing exists at price points relocators
+        can absorb. The good news: Carbondale-Marion MSA housing is materially cheaper than
+        nearly every metro relocators would be leaving. The bad news: cheap relative to
+        coastal metros doesn&apos;t mean adequate — the local rental + sale stock may not
+        absorb 50-200+ relocators per year without price escalation that hurts incumbent
+        renters.
+      </div>
+      <div style={{ marginBottom: 16, padding: 14, background: "white", border: "1px solid #d8d2c4", borderRadius: 6 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8 }}>Current housing indicators (full detail in /carbondale + /murphysboro pages)</div>
+        <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 13, color: "#3d3a33", lineHeight: 1.65 }}>
+          <li><strong>Carbondale</strong>: median home ~$124,800 · median gross rent ~$750/mo · 73% renter-occupied (college-town pattern).</li>
+          <li><strong>Murphysboro</strong>: median home ~$79,600 · median gross rent ~$655/mo · 51% renter-occupied — more owner-occupied than Carbondale.</li>
+          <li><strong>Carbondale-Marion MSA median days on market: ~89 days</strong> — buyer-leverage market, not seller-leverage. Buyer demand can absorb at current price levels.</li>
+        </ul>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
+        <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, padding: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8 }}>Supply work needed before scaling relocation</div>
+          <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 13, color: "#3d3a33", lineHeight: 1.65 }}>
+            <li><strong>Rental-stock vacancy audit</strong> via ACS B25004; if &lt;5% in target neighborhoods, incentive program drives rent inflation.</li>
+            <li><strong>Single-family inventory tracking.</strong> 89 days on market looks healthy now; below 30 days = supply-constrained. Track quarterly.</li>
+            <li><strong>Carbondale Amtrak TOD overlay</strong> should add 200-400 mixed-use units within 1/4 mi of the new station. Murphysboro could add 100-150.</li>
+            <li><strong>Modular + manufactured housing</strong> is the under-leveraged affordable-supply category. Most LWA-25 zoning permits it; quality + financing-access are the constraints (FHA Title I + USDA Section 502 manufactured-home loans).</li>
+            <li><strong>Senior/retiree housing.</strong> Federal-retiree strategy needs accessible one-story stock; currently under-supplied. Addressable via Section 202 + LIHTC senior allocations.</li>
+          </ul>
+        </div>
+        <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, padding: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8 }}>Federal + state housing-supply funding levers</div>
+          <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 13, color: "#3d3a33", lineHeight: 1.65 }}>
+            <li><strong>USDA Rural Housing Service (Sections 502, 504, 515)</strong> — single-family rural housing loans + multifamily rural housing development. LWA-25 is rural-eligible across most census tracts. <a href="https://www.rd.usda.gov/programs-services/single-family-housing-programs" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>USDA RHS</a>.</li>
+            <li><strong>IL Housing Development Authority (IHDA)</strong> — LIHTC + tax credits + low-interest loans. <a href="https://www.ihda.org/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>IHDA</a>.</li>
+            <li><strong>HUD Section 202 (senior) + Section 811 (disability)</strong> — capital advance + project-based rental assistance. Direct lever for retiree-targeted housing supply.</li>
+            <li><strong>HUD HOME Investment Partnerships</strong> — block-grant flexible affordable-housing funding.</li>
+            <li><strong>CDFI Capital Magnet Fund + New Markets Tax Credits</strong> — both stackable in LWA-25 (also under IL programs stack below).</li>
+            <li><strong>FHLB Chicago Affordable Housing Program (AHP)</strong> — competitive grants for affordable housing development.</li>
+          </ul>
+        </div>
+      </div>
+      <div style={{ marginBottom: 16, padding: 14, background: "oklch(96% 0.04 142)", border: "1px solid oklch(45% 0.16 142)33", borderLeft: "6px solid oklch(45% 0.16 142)", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
+        <strong>The strategic sequence:</strong> housing-supply work should run 12-18
+        months AHEAD of any major people-attraction program scaling. Standing up a
+        200-unit TOD overlay near the new Amtrak station is a 24-36 month build; the
+        relocation incentive program should launch only when supply can absorb demand
+        without driving local-renter rent burden up. <strong>The Boulder / Bozeman / Bend
+        cautionary tale:</strong> desirable-place economic-development success creates
+        housing-affordability crisis for incumbent residents if supply lags demand.
+      </div>
+    </section>
+  );
+}
+
 function TrainingAlignmentSection({ ta, industryMixAvailable }: { ta: TrainingAlignment; industryMixAvailable: boolean }) {
   if (!ta.ladders.length) return null;
   // If the upstream QCEW fetch failed (empty industry_mix), every ladder will
@@ -1794,6 +1941,8 @@ export default async function MantraconPage() {
 
           {data.top_federal_recipients && <FederalConcentrationSection tr={data.top_federal_recipients} />}
 
+          <ChildcareGatewaySection />
+
           {data.training_alignment && (
             <TrainingAlignmentSection
               ta={data.training_alignment}
@@ -1803,7 +1952,11 @@ export default async function MantraconPage() {
 
           <TravelJobsSection />
 
+          <HealthcareWorkforceSection />
+
           <AttractionPipelineSection />
+
+          <HousingAffordabilitySection />
 
           <section style={{ marginTop: 40 }}>
             <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
