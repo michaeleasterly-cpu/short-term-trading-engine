@@ -281,6 +281,211 @@ function TrainingAlignmentSection({ ta, industryMixAvailable }: { ta: TrainingAl
   );
 }
 
+function TravelJobsSection() {
+  // Travel-required family-supporting credentials. Static roster; refresh annually.
+  // Wage figures sourced from union scale schedules + BLS OES + expert advisory.
+  // Family-compatibility frames distinguish rotational/per-project travel (predictable
+  // home time) from OTR trucking (chronic absence) — that's the "FAMILY-TIME
+  // CONFLICT" classification on the CDL row of the Training Alignment section.
+  type TravelRow = {
+    name: string; cred: string; trainSource: string;
+    wage_hrly: string; per_diem: string; annual_est: string;
+    travel_pattern: string; family_compat: "GOOD" | "OK" | "TOUGH";
+    note: string;
+  };
+  const rows: TravelRow[] = [
+    {
+      name: "Pipefitter / Steamfitter (UA Local 160)",
+      cred: "5yr apprenticeship → journey",
+      trainSource: "UA Local 160 (Mt. Vernon) pre-apprenticeship",
+      wage_hrly: "$50-65/hr",
+      per_diem: "$80-130/day",
+      annual_est: "$110-160k+",
+      travel_pattern: "Refinery/petrochem/power-plant outages; 4-12wk projects; predictable home weekends",
+      family_compat: "OK",
+      note: "Outage season concentrates work in spring/fall. Local 160 covers Mt. Vernon → Evansville → St. Louis radius — often within drivable-home range. Top-paying construction trade in the region.",
+    },
+    {
+      name: "Boilermaker (Local 363)",
+      cred: "4yr apprenticeship → journey",
+      trainSource: "Boilermakers Local 363 pre-apprenticeship",
+      wage_hrly: "$40-55/hr",
+      per_diem: "$110-150/day",
+      annual_est: "$95-140k+",
+      travel_pattern: "Power-plant outages, refinery turnarounds; 2-8wk rotations",
+      family_compat: "OK",
+      note: "Less work as coal plants retire, but nuclear + petrochem outage work is steady. Strong per-diem + travel pay culture.",
+    },
+    {
+      name: "Ironworker (Local 393 Marion)",
+      cred: "3-4yr apprenticeship → journey",
+      trainSource: "Ironworkers Local 393 (Marion) pre-apprenticeship",
+      wage_hrly: "$40-50/hr",
+      per_diem: "$80-110/day",
+      annual_est: "$90-130k",
+      travel_pattern: "Bridge + industrial steel; mix of local + 2-4hr radius projects",
+      family_compat: "GOOD",
+      note: "Local 393 hall is in Marion. Significant local work (interstate bridges, industrial construction). Travel mostly within driving distance of home.",
+    },
+    {
+      name: "IBEW traveling card (Local 702 + sister locals)",
+      cred: "Existing IBEW 702 journey",
+      trainSource: "After IBEW Local 702 5yr apprenticeship",
+      wage_hrly: "$45-65/hr",
+      per_diem: "$100-160/day + truck allowance",
+      annual_est: "$120-180k on travel work",
+      travel_pattern: "Storm restoration, large industrial projects, data-center builds; varies by 'book' status",
+      family_compat: "GOOD",
+      note: "IBEW member can travel for higher-wage work when local book is slow. Storm-restoration after hurricanes pays $$$ for 2-6wk deployments. Coming back to home local when work is available.",
+    },
+    {
+      name: "IUOE crane operator (Local 318)",
+      cred: "3yr apprenticeship → journey",
+      trainSource: "IUOE Local 318 pre-apprenticeship",
+      wage_hrly: "$45-60/hr",
+      per_diem: "$80-130/day",
+      annual_est: "$110-150k",
+      travel_pattern: "Wind farms, big construction, refinery outages; project-based",
+      family_compat: "OK",
+      note: "Local 318 staffed Big Muddy Solar construction (124 MW, Jackson Co.). Same union has wind-farm cranes in IA/TX wind belt — multi-week projects with per-diem.",
+    },
+    {
+      name: "Wind turbine technician",
+      cred: "GWO Basic Safety + 2yr AAS or vendor school",
+      trainSource: "Highland Community College, Freeport IL or vendor (Vestas/GE/Siemens)",
+      wage_hrly: "$28-45/hr base + travel pay",
+      per_diem: "$80-130/day on travel work",
+      annual_est: "$70-100k with overtime + travel",
+      travel_pattern: "IL/IA/KS/TX wind belt; 1-4wk service trips; some rotational O&M (14-on 14-off)",
+      family_compat: "OK",
+      note: "Operator's note: the CEJA wind tech credential lives here, NOT as a local job. Wind belt is 4-8hr drive from LWA-25. Many techs do rotational shifts that keep half the month at home.",
+    },
+    {
+      name: "Offshore wind technician (East Coast)",
+      cred: "GWO + offshore-specific certs",
+      trainSource: "GWO-certified school + offshore module",
+      wage_hrly: "$35-55/hr + offshore premium",
+      per_diem: "Vessel/housing provided + per diem",
+      annual_est: "$85-130k",
+      travel_pattern: "East Coast offshore wind farms (NY/MA/RI/VA); 2-3wk rotations onshore↔offshore",
+      family_compat: "OK",
+      note: "Brand-new US industry, exploding demand 2025-2030. Vineyard Wind, Revolution Wind, Sunrise Wind ramping. Rotational schedules = half the year at home.",
+    },
+    {
+      name: "Locomotive engineer / conductor",
+      cred: "Class I RR hire-and-train (BNSF/UP/CN/NS)",
+      trainSource: "Direct hire by railroad — engineer school is paid",
+      wage_hrly: "Starts ~$28/hr, journey $45-60/hr",
+      per_diem: "Away-from-home meal allowance",
+      annual_est: "$85-130k engineer with seniority",
+      travel_pattern: "Pool service — turnaround trips to crew change point + return; not multi-week travel",
+      family_compat: "OK",
+      note: "Carbondale is on the UP Salem Sub + CN through Du Quoin. Crew terminals at Salem IL + Mounds IL. Schedules are irregular (on-call) but you're home most nights or every other night.",
+    },
+    {
+      name: "Traveling RN (medical)",
+      cred: "RN license + 1yr experience",
+      trainSource: "ADN/BSN → 1yr at SIH/Memorial → agency contract",
+      wage_hrly: "$60-110/hr (blended bill rate)",
+      per_diem: "$1,400-2,800/wk lodging/meals stipend",
+      annual_est: "$130-200k+ on travel contracts",
+      travel_pattern: "13-week assignments anywhere in US; can stack 4×13wk + 8wk home",
+      family_compat: "TOUGH",
+      note: "Family-compatibility depends on family structure. Single parent traveling = childcare problem. Family staying together (RV family pattern) works. Highest dollar of any 2-yr-credential path.",
+    },
+    {
+      name: "Power plant operator",
+      cred: "NUS or vocational certificate + plant training",
+      trainSource: "JALC Power Plant Operations program",
+      wage_hrly: "$35-55/hr + shift premium",
+      per_diem: "Local only (no travel)",
+      annual_est: "$80-115k",
+      travel_pattern: "Mostly LOCAL — IPP plants in Marion / Vienna / Tuscola hire from LWA-25 directly",
+      family_compat: "GOOD",
+      note: "Included here because it's family-supporting + uses similar industrial-controls credentialing as travel jobs. JALC's program is one of the strongest in IL. Local plants (Prairie State + several IPPs) have ongoing demand.",
+    },
+  ];
+  const compatTone = (c: string) => c === "GOOD" ? "oklch(45% 0.16 142)" : c === "OK" ? "oklch(48% 0.15 60)" : "oklch(45% 0.20 22)";
+  const compatBg = (c: string) => c === "GOOD" ? "oklch(96% 0.04 142)" : c === "OK" ? "oklch(97% 0.04 60)" : "oklch(96% 0.05 22)";
+  return (
+    <section style={{ marginTop: 40 }}>
+      <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+      <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+        Travel-required family-supporting opportunities
+      </h2>
+      <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 760, lineHeight: 1.55 }}>
+        Most of the training ladders above land in LOCAL employment. But several
+        family-supporting credentials require travel — and the local training
+        infrastructure exists to feed them. These pay more than any non-degreed
+        local-employment path, often $90k-180k+ all-in. The trade-off is travel,
+        but rotational schedules (e.g., 14-on 14-off offshore wind, IBEW project
+        rotations, RR pool service) keep significant home time. The page calls
+        out CDL OTR separately as &quot;FAMILY-TIME CONFLICT&quot; because long-haul
+        trucking is chronic absence rather than rotational; the credentials below
+        have better home-time structures.
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 12 }}>
+        {rows.map((r, i) => (
+          <div key={i} style={{
+            background: "white", border: `1px solid ${compatTone(r.family_compat)}33`,
+            borderLeft: `6px solid ${compatTone(r.family_compat)}`,
+            borderRadius: 6, padding: 16,
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, marginBottom: 8 }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 16, fontWeight: 600, color: "#1f1d18" }}>{r.name}</div>
+                <div style={{ fontSize: 12, color: "#7a756b", marginTop: 2 }}>
+                  {r.cred} · Training: {r.trainSource}
+                </div>
+              </div>
+              <div style={{
+                fontSize: 11, fontWeight: 700, color: "white", background: compatTone(r.family_compat),
+                padding: "5px 10px", borderRadius: 3, textTransform: "uppercase", letterSpacing: "0.06em",
+                whiteSpace: "nowrap",
+              }}>
+                {r.family_compat === "GOOD" ? "FAMILY-FRIENDLY TRAVEL" : r.family_compat === "OK" ? "MANAGEABLE TRAVEL" : "TRAVEL-HEAVY"}
+              </div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 14, marginTop: 12, padding: 12, background: compatBg(r.family_compat), borderRadius: 4 }}>
+              <div>
+                <div style={{ fontSize: 10, color: "#7a756b", textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 600 }}>Wage</div>
+                <div style={{ fontSize: 15, fontWeight: 600, color: "#1f1d18" }}>{r.wage_hrly}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 10, color: "#7a756b", textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 600 }}>Per diem / travel pay</div>
+                <div style={{ fontSize: 13, color: "#1f1d18" }}>{r.per_diem}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 10, color: "#7a756b", textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 600 }}>Annual all-in</div>
+                <div style={{ fontSize: 15, fontWeight: 600, color: "oklch(35% 0.18 142)" }}>{r.annual_est}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 10, color: "#7a756b", textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 600 }}>Travel pattern</div>
+                <div style={{ fontSize: 12, color: "#1f1d18" }}>{r.travel_pattern}</div>
+              </div>
+            </div>
+            <div style={{ marginTop: 10, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>{r.note}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ marginTop: 16, padding: 14, background: "#fef9eb", border: "1px solid #f0d98a", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
+        <strong>The Mantracon / SIWIB strategic gap this fills:</strong> the
+        existing CEJA wind technician + CEJA solar installer pipelines suffer
+        from local-employer scarcity. But the credentials themselves are real and
+        valuable on travel-supported work. Reframing the CEJA cohort outcome from
+        &quot;land a local job&quot; to &quot;land a regional travel-pay job with
+        predictable home time&quot; changes what success looks like. Pair with
+        Big Muddy Solar (which IS hiring local IBEW/IUOE/LIUNA) for the
+        local construction work + the broader regional travel circuit for ongoing
+        income.
+      </div>
+      <div style={{ marginTop: 12, fontSize: 11, color: "#7a756b" }}>
+        Wage figures are typical journey-out + travel-pay structures sourced from union scale schedules, BLS OES Carbondale-Marion MSA, and the expert advisory. Verify specific opportunities with the named union halls or schools.
+      </div>
+    </section>
+  );
+}
+
 function AttractionPipelineSection() {
   // Static expert-derived strategy advisory; no live API needed.
   return (
@@ -1066,6 +1271,8 @@ export default async function MantraconPage() {
               industryMixAvailable={!!data.industry_mix?.top_supersectors?.length}
             />
           )}
+
+          <TravelJobsSection />
 
           <AttractionPipelineSection />
 
