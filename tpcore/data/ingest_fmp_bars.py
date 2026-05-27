@@ -201,11 +201,18 @@ async def fetch_daily_bars_multi(
             # the outage and treats it as a vendor down event.
             logger.error("fmp.bars.permanent_failure", symbol=symbol, error=str(exc)[:200])
             raise
-        except (httpx.NetworkError, httpx.TimeoutException) as exc:
-            # Transient transport error survived @with_retry's 4 attempts
-            # (RemoteProtocolError, connection drop, read timeout). One
+        except httpx.TransportError as exc:
+            # Transient transport error survived @with_retry's 4 attempts:
+            # NetworkError (connection drop), TimeoutException, ProtocolError
+            # (RemoteProtocolError "server disconnected"), ProxyError. One
             # bad-luck ticker should NOT abort the 7,600-ticker universe —
             # log, leave out[symbol] as the empty default, continue.
+            #
+            # httpx.TransportError is the broadest non-application class —
+            # it covers all of the above. PR #391's narrower
+            # (NetworkError, TimeoutException) catch missed RemoteProtocolError
+            # because it descends from ProtocolError → TransportError, NOT
+            # NetworkError. Test #8 (2026-05-27 03:46 UTC) hit this.
             logger.warning(
                 "fmp.bars.skipped_after_retry_exhausted",
                 symbol=symbol,
