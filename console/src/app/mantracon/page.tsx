@@ -1401,6 +1401,111 @@ function AttractionPipelineSection() {
   );
 }
 
+function MobilityJobAccessSection() {
+  return (
+    <section style={{ marginTop: 40 }}>
+      <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+      <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+        Mobility &amp; job access · transit reality vs the family-supporting jobs map
+      </h2>
+      <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 760, lineHeight: 1.55 }}>
+        Most of the family-supporting jobs identified above (Continental Tire 2nd-shift industrial maintenance, GD-OTS Marion shifts, healthcare facility shifts at Memorial / SIH / Marion VA, IBEW project work at remote sites) require transportation. Workers in Murphysboro / Du Quoin / Benton / West Frankfort who don&apos;t own a vehicle face a structural access problem if local transit doesn&apos;t reach their employer or doesn&apos;t run during their shift. This is the &quot;spatial mismatch&quot; constraint on training-program outcomes — a regional credential pipeline can&apos;t solve a transportation gap.
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
+        <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, padding: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8 }}>Current transit operators serving LWA-25</div>
+          <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 13, color: "#3d3a33", lineHeight: 1.65 }}>
+            <li><strong>JAX Mass Transit</strong> (formerly Jackson County Mass Transit District; rebranded Oct 2024) — operates Saluki Express (5 fixed routes) + SOAR (seasonal recreation), Saluki Night Shuttle, paratransit. <a href="https://ridejax.com/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>ridejax.com</a></li>
+            <li><strong>Saluki Express fixed routes</strong>: Saluki (campus loop), Pyramid (campus + west Carbondale + airport + Murdale Shopping), Sahara (campus + east Carbondale + CCHS + Kroger/Walmart), Nile (south Carbondale + campus), and the <strong>Big Muddy Route (added 2024)</strong> connecting University Mall + Amtrak station + Murphysboro Courthouse. <a href="https://www.ridesmtd.com/saluki-express/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Saluki Express route detail</a></li>
+            <li><strong>RIDES Mass Transit District (RMTD)</strong> — serves Harrisburg, Marion, Robinson, Paris, Mount Carmel, Olney with fixed-route + 17-county demand-response. Transferred Saluki Express to JAX in 2024 due to funding cuts. <a href="https://www.ridesmtd.com/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>ridesmtd.com</a></li>
+            <li><strong>Service hours</strong>: Mon-Fri + weekend 7:00am-7:30pm depending on route.</li>
+            <li><strong>Federal funding</strong>: FTA Section 5311 (Rural Areas Formula) is the primary federal source. <a href="https://www.transit.dot.gov/rural-formula-grants-5311" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>FTA §5311</a>. Additional possible: Section 5339(b) Bus + Bus Facilities Competitive, 5339(c) Low-No Emissions.</li>
+          </ul>
+        </div>
+        <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, padding: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8 }}>The job-access gap — what current service covers vs doesn&apos;t</div>
+          <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 13, color: "#3d3a33", lineHeight: 1.65 }}>
+            <li><strong>2nd-shift &amp; 3rd-shift work is not transit-accessible.</strong> Service closes 7:30pm. Continental Tire (Mt. Vernon), GD-OTS (Marion), and most regional manufacturing run 2nd shifts ending 10pm-midnight. Healthcare 3rd-shift starts at 11pm. Workers without vehicles can&apos;t take these shifts.</li>
+            <li><strong>Cross-county work commutes are mostly demand-response.</strong> Murphysboro → Marion (~30min by car), Du Quoin → Carbondale (~25min), West Frankfort → Marion (~20min) work commutes rely on RMTD demand-response, not fixed-route. Same-day demand-response slots are limited.</li>
+            <li><strong>Big Muddy Route (new 2024) is a real improvement</strong> — connects Amtrak station + University Mall + Murphysboro Courthouse. First fixed-route service genuinely tied to the train station.</li>
+            <li><strong>Rural connectivity outside fixed-route corridors</strong> (Pomona, Makanda, Anna, Goreville, Vienna) is paratransit + demand-response only.</li>
+            <li><strong>The fixed routes DO serve retail + employer destinations</strong> (Walmart, Kroger, airport, SIU campus, Memorial Hospital) — characterization of local transit as &quot;social-services only&quot; is incomplete; structural gaps are around shift timing + geographic edge + same-day demand-response capacity, not destination mix.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div style={{ marginBottom: 16, padding: 14, background: "oklch(96% 0.04 142)", border: "1px solid oklch(45% 0.16 142)33", borderLeft: "6px solid oklch(45% 0.16 142)", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "oklch(35% 0.18 142)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          What would fix the job-access gap
+        </div>
+        <ul style={{ margin: "0 0 0 18px", padding: 0 }}>
+          <li><strong>Extend service hours to cover 2nd/3rd shift.</strong> The single highest-leverage transit fix. Requires FTA §5311 + state matching funds. Coordinate with major employers on shift-end timing.</li>
+          <li><strong>Microtransit overlay for rural + cross-county trips.</strong> On-demand small-vehicle service via apps (TripShot, Via, RideCo) is the modern solution for low-density coverage. Multiple state RTAs have piloted this with FTA §5310 + §5311 funding.</li>
+          <li><strong>Vanpool / employer-sponsored commute programs</strong> for major worksites (GD-OTS Marion, Continental Tire Mt. Vernon, Marion VA). Federal Vanpool Tax Benefit pre-tax, employer-sponsored. Reduces 1-vehicle-per-worker requirement.</li>
+          <li><strong>Integrated Amtrak station + transit hub planning</strong> — Big Muddy Route is a start. Connect to Carbondale park-and-ride for rural commuters reaching the train.</li>
+          <li><strong>Coordinate with employers + healthcare on shift transit</strong> — Marion VA and Memorial Carbondale could co-fund shift-specific transit between their facilities and worker neighborhoods.</li>
+        </ul>
+      </div>
+      <div style={{ marginBottom: 16, fontSize: 11, color: "#7a756b", lineHeight: 1.5 }}>
+        Transit service info from <a href="https://ridejax.com/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>ridejax.com</a> + <a href="https://www.ridesmtd.com/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>ridesmtd.com</a> + <a href="https://en.wikipedia.org/wiki/Saluki_Express" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Saluki Express wiki</a> + <a href="https://news.siu.edu/2024/08/081224-saluki-express-bus-service-has-new-provider-routes.php" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>SIU News 2024-08 service transition</a>. FTA program detail at <a href="https://www.transit.dot.gov/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>transit.dot.gov</a>.
+      </div>
+    </section>
+  );
+}
+
+function StateEmployerWageBenchmarkSection() {
+  return (
+    <section style={{ marginTop: 40 }}>
+      <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+      <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+        Public-sector wage benchmark · SIU + state agencies as a regional wage floor or ceiling?
+      </h2>
+      <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 760, lineHeight: 1.55 }}>
+        Public-sector employers — SIU (the largest single employer in LWA-25), the IL state
+        agencies, IDOC, the federal/state prison system, and the Marion VA — set a
+        meaningful share of the regional wage benchmark. Whether those public-employer
+        wages function as a regional FLOOR (rates other employers must match to compete
+        for talent) or a regional CEILING (rates that keep professional-class compensation
+        from rising even as cost-of-living does) depends on role-specific compensation
+        data that the workforce board should know but most board members don&apos;t.
+        Every claim in this area must be backed by named data sources, not anecdote.
+      </div>
+
+      <div style={{ marginBottom: 16, padding: 14, background: "white", border: "1px solid #d8d2c4", borderRadius: 6 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8 }}>How to verify role-specific public-sector pay (without making accusations)</div>
+        <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 13, color: "#3d3a33", lineHeight: 1.65 }}>
+          <li><strong><a href="https://salaries.bettergov.org/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>BetterGov Illinois Public Salaries Database</a></strong> — search by employer + role + year. Returns individual + median compensation for SIU, IL DOA, IL DOC, IL DHS, IL DCEO, etc. This is public-record FOIA-disclosed data, not third-party hearsay.</li>
+          <li><strong><a href="https://www.bls.gov/oes/current/oes_16060.htm" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>BLS OES Carbondale-Marion MSA wage tables</a></strong> — private + public combined median wage by detailed occupation (SOC code). Cross-reference SIU classifications against private-sector comparators in the same MSA.</li>
+          <li><strong>SIU Civil Service Council bargaining-unit contracts</strong> + SIU&apos;s annual budget filings (public) — give the SIU side of the wage story for non-faculty positions.</li>
+          <li><strong>Federal Pay Schedule (GS / WG) for Marion VA + federal prisons</strong> — published at <a href="https://www.opm.gov/policy-data-oversight/pay-leave/salaries-wages/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>opm.gov</a>. GS-1 through GS-15 rates with locality-pay adjustment for the Carbondale Rest of US locality area.</li>
+        </ul>
+      </div>
+
+      <div style={{ marginBottom: 16, padding: 14, background: "#fef9eb", border: "1px solid #f0d98a", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
+        <strong>Why the benchmark matters strategically:</strong> when a region&apos;s
+        largest employers cluster at the public-sector compensation curve, the
+        market-wage curve for similar roles in private employers tends to anchor to that
+        public level — both up and down. If the workforce board recruits private
+        family-supporting employers (data center operators, manufacturing reshoring,
+        federal-contractor primes), those employers will benchmark THEIR offers against
+        what SIU + the state pays for analogous roles. If public-sector compensation has
+        been compressed below regional cost-of-living growth over a decade-plus window,
+        the entire regional private-sector market for those occupations is anchored too
+        low — and individual employers struggle to compete with coastal-metro counterparts
+        for talent even when their local labor budget is rationally generous.
+        <strong> The strategic ask isn&apos;t to attack SIU or state agencies — it&apos;s
+        to make the wage-benchmark dynamic visible and to factor it into private-employer
+        recruitment math.</strong>
+      </div>
+
+      <div style={{ marginBottom: 16, fontSize: 11, color: "#7a756b", lineHeight: 1.5 }}>
+        Sources: BetterGov Illinois Public Salaries Database is BGA Foundation&apos;s aggregated FOIA-disclosed dataset; BLS OES MSA wage tables are US Bureau of Labor Statistics; OPM GS / WG schedules are the federal pay system. Verify any specific role-level comparison against these sources directly before using a public-sector wage figure in a board presentation.
+      </div>
+    </section>
+  );
+}
+
 function FederalConcentrationSection({ tr }: { tr: TopRecipientsBlock }) {
   if (!tr.recipients.length) return null;
   const top = tr.recipients[0];
@@ -2068,6 +2173,8 @@ export default async function MantraconPage() {
 
           <BusinessLeadsSection b={data.business_opportunities} />
 
+          <MobilityJobAccessSection />
+
           {data.top_federal_recipients && <FederalConcentrationSection tr={data.top_federal_recipients} />}
 
           <ChildcareGatewaySection />
@@ -2086,6 +2193,8 @@ export default async function MantraconPage() {
           <AttractionPipelineSection />
 
           <HousingAffordabilitySection />
+
+          <StateEmployerWageBenchmarkSection />
 
           <section style={{ marginTop: 40 }}>
             <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
