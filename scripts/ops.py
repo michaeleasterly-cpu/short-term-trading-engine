@@ -9030,14 +9030,70 @@ async def _auto_cascade_validation_failures(
             handled.append(check_name)
             continue
 
-        # Unknown check — long-tail; LLM-side backstop will see it.
+        # Fall back to the HealSpec registry — the canonical source of
+        # truth for whether a check is healable + which stage repairs it.
+        # _VALIDATION_CASCADE_MAP above is a legacy override list; HealSpec
+        # is the durable per-feed contract (see tpcore/selfheal/registry.py).
+        from tpcore.selfheal.registry import spec_for as _spec_for
+
+        spec = _spec_for(check_name)
+        if spec is not None and spec.healable and spec.stage is not None:
+            refresh_outcome = await _invoke_cascade_stage(
+                spec.stage, dict(spec.params or {}), daily_bars_config,
+                spec_by_name,
+                pool=pool, log=log, db_log=db_log,
+            )
+            await db_log.log(
+                "INGESTION_AUTO_RECOVERED_VALIDATION",
+                f"healspec cascade {check_name} → {spec.stage}",
+                severity="INFO",
+                data={
+                    "check": check_name,
+                    "refresh_stage": spec.stage,
+                    "refresh_status": refresh_outcome.get("status"),
+                    "refresh_error": refresh_outcome.get("error"),
+                    "source": "healspec_registry",
+                },
+            )
+            log.info(
+                "ops.auto_cascade.healspec.recovered",
+                check=check_name, stage=spec.stage,
+                refresh=refresh_outcome,
+            )
+            handled.append(check_name)
+            continue
+        if spec is not None and not spec.healable:
+            # Documented unhealable — log at INFO with the documented
+            # reason so dashboards see the explicit acknowledgement
+            # instead of a vague "no cascade" warning.
+            await db_log.log(
+                "INGESTION_AUTO_RECOVERY_UNHEALABLE",
+                f"{check_name}: {spec.unhealable_reason or '(no reason given)'}",
+                severity="INFO",
+                data={
+                    "check": check_name,
+                    "reason": spec.unhealable_reason or "",
+                    "source": "healspec_registry",
+                },
+            )
+            log.info(
+                "ops.auto_cascade.healspec.unhealable",
+                check=check_name,
+                reason=spec.unhealable_reason or "",
+            )
+            skipped.append(check_name)
+            continue
+        # Truly unknown check — neither _VALIDATION_CASCADE_MAP nor
+        # HealSpec has an entry. This is a registry-coverage bug; the
+        # tpcore/selfheal/registry.py sentinel reds CI when a check is
+        # missing a HealSpec.
         await db_log.log(
             "INGESTION_AUTO_RECOVERY_VALIDATION_SKIPPED",
-            f"no deterministic cascade for {check_name}",
+            f"no HealSpec registered for {check_name}",
             severity="WARNING",
             data={
                 "check": check_name,
-                "note": "long-tail — LLM-side backstop handles this",
+                "note": "missing HealSpec — add to tpcore/selfheal/registry.py",
             },
         )
         log.info(
