@@ -1642,20 +1642,52 @@ function AttractionPipelineSection() {
         </div>
       </div>
 
-      {/* IL programs to file under */}
-      <div style={{ marginTop: 20, padding: 16, background: "#fef9eb", border: "1px solid #f0d98a", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
-        <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+      {/* IL programs to file under — converted to scannable table per UX audit */}
+      <div style={{ marginTop: 20, padding: 16, background: "#fef9eb", border: "1px solid #f0d98a", borderRadius: 6 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 12, textTransform: "uppercase", letterSpacing: "0.06em" }}>
           Stack these IL state programs in any pitch
         </div>
-        <ul style={{ margin: "0 0 0 18px", padding: 0 }}>
-          <li><strong>EDGE Tax Credit</strong> — income-tax credit against new jobs created</li>
-          <li><strong>REV Illinois</strong> — electric vehicle / clean-energy specific (applies to battery storage co-located with DC)</li>
-          <li><strong>High Impact Business</strong> designation — sales-tax exemption on building materials</li>
-          <li><strong>Enterprise Zone</strong> designation — confirm with IL DCEO; Carbondale-Marion area should already have one</li>
-          <li><strong>IL Data Center Investments Act</strong> — see scorecard above</li>
-          <li><strong>SBA HUBZone</strong> — most LWA-25 census tracts qualify for set-aside boost on federal contracts</li>
-          <li><strong>CDFI Capital Magnet Fund + New Markets Tax Credits</strong> — Carbondale &amp; Murphysboro both NMTC-eligible</li>
-        </ul>
+        <div style={{ background: "white", border: "1px solid #f0d98a", borderRadius: 4, overflow: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 600 }}>
+            <thead>
+              <tr style={{ background: "rgba(240,217,138,0.4)", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em", color: "#5a564d" }}>
+                <th style={{ textAlign: "left", padding: "8px 10px", fontWeight: 600 }}>Program</th>
+                <th style={{ textAlign: "left", padding: "8px 10px", fontWeight: 600 }}>What it provides</th>
+                <th style={{ textAlign: "left", padding: "8px 10px", fontWeight: 600 }}>How to apply</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[
+                { p: "EDGE Tax Credit",                        v: "Income-tax credit against new jobs created", h: "IL DCEO (dceo.illinois.gov/expandrelocate/incentives.html)" },
+                { p: "REV Illinois",                           v: "EV / clean-energy capital-investment + income-tax credit", h: "IL DCEO Office of Business Development" },
+                { p: "High Impact Business designation",       v: "Sales-tax exemption on building materials + machinery", h: "IL DCEO; confirm sector + minimum-investment thresholds" },
+                { p: "Enterprise Zone designation",            v: "Local property-tax abatement + sales-tax exemption", h: "Confirm current LWA-25 EZ status with IL DCEO" },
+                { p: "IL Data Center Investments Act",         v: "20-year sales-tax exemption + property-tax abatement", h: "IL DCEO; $250M minimum capex / 20 FTE at 120% county median wage / carbon-neutral cert (see scorecard)" },
+                { p: "SBA HUBZone",                            v: "Federal-contracting set-aside preference", h: "SBA HUBZone certification (sba.gov/federal-contracting); most LWA-25 census tracts qualify" },
+                { p: "CDFI Capital Magnet Fund",               v: "Affordable-housing development capital", h: "Local CDFI partnerships; competitive annual NOFA" },
+                { p: "New Markets Tax Credits",                v: "39% federal tax credit for investment in low-income census tracts", h: "Carbondale + Murphysboro NMTC-eligible; partner with a CDE allocatee" },
+                { p: "Delta Regional Authority SEDAP",         v: "Workforce + infrastructure + small-business grants", h: "DRA annual NOFA; 4 of 5 LWA-25 counties eligible (Jefferson NOT)" },
+                { p: "DRA Delta Doctors (J-1 waiver)",         v: "Foreign-trained physician waiver for 3yr HPSA service", h: "DRA + IL Secretary of State + Marion VA / SIH / Memorial" },
+                { p: "IRA §48 Energy Communities ITC bonus",   v: "+10pp investment tax credit on solar / wind / storage / advanced mfg", h: "Automatic for projects sited in coal-closure tracts (Franklin + Perry)" },
+                { p: "IRA §45X Advanced Mfg PTC",              v: "Per-unit production tax credit for clean-energy components", h: "IRS — applies at component-mfg level for solar / wind / battery / EV" },
+                { p: "USDA Rural Housing Service",             v: "Sections 502/504/515 single-family + multifamily rural housing", h: "USDA Rural Development (rd.usda.gov); LWA-25 mostly rural-eligible" },
+                { p: "IHDA LIHTC + loans",                     v: "Low-Income Housing Tax Credit allocations + low-interest loans", h: "IHDA annual NOFA (ihda.org)" },
+                { p: "Smart Start IL Workforce Grants",        v: "$90M/yr childcare-staff wage floor support", h: "IL DHS + Gateways to Opportunity (ilgateways.com/smart-start)" },
+                { p: "IL CCAP",                                v: "Childcare subsidy for working-parent households", h: "IL DHS (dhs.state.il.us); eligibility cliff at ~200% FPL family of 3" },
+                { p: "NHSC Loan Repayment (LRP)",              v: "$50-75k over 2yr for primary-care MDs/NPs/PAs/CNMs in HPSAs", h: "HRSA NHSC (nhsc.hrsa.gov); 2-yr commitment minimum" },
+                { p: "NHSC Nurse Corps LRP",                   v: "Up to 85% of outstanding RN/APRN loans over 3yr at Critical Shortage Facility", h: "HRSA BHW (bhw.hrsa.gov/funding/apply-loan-repayment/nurse-corps)" },
+                { p: "FEMA BRIC",                              v: "Pre-disaster flood + climate resilience infrastructure", h: "FEMA annual NOFA; partner with USACE St. Louis District" },
+                { p: "EDA Recompete Pilot",                    v: "Rural workforce capacity + planning grants", h: "EDA (eda.gov); LWA-25 likely qualifies on persistent-distress thresholds" },
+              ].map((r, i) => (
+                <tr key={i} style={{ borderTop: i === 0 ? "none" : "1px solid #f0d98a" }}>
+                  <td style={{ padding: "8px 10px", fontWeight: 600, color: "#1f1d18", verticalAlign: "top" }}>{r.p}</td>
+                  <td style={{ padding: "8px 10px", color: "#3d3a33", verticalAlign: "top" }}>{r.v}</td>
+                  <td style={{ padding: "8px 10px", color: "#5a564d", verticalAlign: "top" }}>{r.h}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       <div style={{ marginTop: 12, fontSize: 11, color: "#7a756b", lineHeight: 1.5 }}>
@@ -2509,7 +2541,33 @@ export default async function MantraconPage() {
             </div>
           </div>
 
-          <section style={{ marginTop: 32 }}>
+          {/* === Sticky table of contents === */}
+          <nav style={{
+            position: "sticky", top: 0, zIndex: 50,
+            marginTop: 16, marginLeft: -20, marginRight: -20, padding: "10px 20px",
+            background: "rgba(255,255,255,0.96)", backdropFilter: "blur(8px)",
+            borderTop: "1px solid #d8d2c4", borderBottom: "1px solid #d8d2c4",
+            fontSize: 12, color: "#3d3a33", display: "flex", flexWrap: "wrap", gap: "8px 16px",
+            alignItems: "center",
+          }}>
+            <span style={{ fontWeight: 700, color: "#1f1d18", textTransform: "uppercase", letterSpacing: "0.06em", fontSize: 10 }}>Jump:</span>
+            <a href="#sec-labor" style={{ color: "#1f5f8f", textDecoration: "none" }}>Labor Market</a>
+            <a href="#sec-labor-truth" style={{ color: "#1f5f8f", textDecoration: "none" }}>True Labor Picture</a>
+            <a href="#sec-industry" style={{ color: "#1f5f8f", textDecoration: "none" }}>Industry Mix</a>
+            <a href="#sec-mobility" style={{ color: "#1f5f8f", textDecoration: "none" }}>Mobility</a>
+            <a href="#sec-federal-money" style={{ color: "#1f5f8f", textDecoration: "none" }}>Federal $</a>
+            <a href="#sec-childcare" style={{ color: "#1f5f8f", textDecoration: "none" }}>Childcare</a>
+            <a href="#sec-roi" style={{ color: "#1f5f8f", textDecoration: "none" }}>Training ROI</a>
+            <a href="#sec-training" style={{ color: "#1f5f8f", textDecoration: "none" }}>Training Ladders</a>
+            <a href="#sec-travel-jobs" style={{ color: "#1f5f8f", textDecoration: "none" }}>Travel Jobs</a>
+            <a href="#sec-healthcare" style={{ color: "#1f5f8f", textDecoration: "none" }}>Healthcare</a>
+            <a href="#sec-anchor" style={{ color: "#1f5f8f", textDecoration: "none" }}>Anchor Attraction</a>
+            <a href="#sec-housing" style={{ color: "#1f5f8f", textDecoration: "none" }}>Housing</a>
+            <a href="#sec-wage-benchmark" style={{ color: "#1f5f8f", textDecoration: "none" }}>Wage Benchmark</a>
+            <a href="#sec-pirl" style={{ color: "#1f5f8f", textDecoration: "none" }}>PIRL Accountability</a>
+          </nav>
+
+          <section id="sec-labor" style={{ marginTop: 32, scrollMarginTop: 60 }}>
             <h2 style={{ fontSize: 20, fontWeight: 600, margin: "0 0 12px 0", color: "#1f1d18" }}>
               County-by-county labor market
             </h2>
@@ -2530,42 +2588,66 @@ export default async function MantraconPage() {
             </section>
           )}
 
-          {data.labor_truth && <LaborTruthSection lt={data.labor_truth} />}
+          <div id="sec-labor-truth" style={{ scrollMarginTop: 60 }}>
+            {data.labor_truth && <LaborTruthSection lt={data.labor_truth} />}
+          </div>
 
-          {data.industry_mix && <IndustryMixSection mix={data.industry_mix} scope="the LWA-25 (5-county region)" />}
-
-          {data.industry_mix && <IndustryMixByCountySection mix={data.industry_mix} />}
+          <div id="sec-industry" style={{ scrollMarginTop: 60 }}>
+            {data.industry_mix && <IndustryMixSection mix={data.industry_mix} scope="the LWA-25 (5-county region)" />}
+            {data.industry_mix && <IndustryMixByCountySection mix={data.industry_mix} />}
+          </div>
 
           <BusinessLeadsSection b={data.business_opportunities} />
 
-          <MobilityJobAccessSection />
+          <div id="sec-mobility" style={{ scrollMarginTop: 60 }}>
+            <MobilityJobAccessSection />
+          </div>
 
-          {data.top_federal_recipients && <FederalConcentrationSection tr={data.top_federal_recipients} />}
+          <div id="sec-federal-money" style={{ scrollMarginTop: 60 }}>
+            {data.top_federal_recipients && <FederalConcentrationSection tr={data.top_federal_recipients} />}
+            <SupplyChainSubawardSection />
+          </div>
 
-          <SupplyChainSubawardSection />
+          <div id="sec-childcare" style={{ scrollMarginTop: 60 }}>
+            <ChildcareGatewaySection />
+          </div>
 
-          <ChildcareGatewaySection />
+          <div id="sec-roi" style={{ scrollMarginTop: 60 }}>
+            <TrainingROISection />
+          </div>
 
-          <TrainingROISection />
+          <div id="sec-training" style={{ scrollMarginTop: 60 }}>
+            {data.training_alignment && (
+              <TrainingAlignmentSection
+                ta={data.training_alignment}
+                industryMixAvailable={!!data.industry_mix?.top_supersectors?.length}
+              />
+            )}
+          </div>
 
-          {data.training_alignment && (
-            <TrainingAlignmentSection
-              ta={data.training_alignment}
-              industryMixAvailable={!!data.industry_mix?.top_supersectors?.length}
-            />
-          )}
+          <div id="sec-travel-jobs" style={{ scrollMarginTop: 60 }}>
+            <TravelJobsSection />
+          </div>
 
-          <TravelJobsSection />
+          <div id="sec-healthcare" style={{ scrollMarginTop: 60 }}>
+            <HealthcareWorkforceSection />
+          </div>
 
-          <HealthcareWorkforceSection />
+          <div id="sec-anchor" style={{ scrollMarginTop: 60 }}>
+            <AttractionPipelineSection />
+          </div>
 
-          <AttractionPipelineSection />
+          <div id="sec-housing" style={{ scrollMarginTop: 60 }}>
+            <HousingAffordabilitySection />
+          </div>
 
-          <HousingAffordabilitySection />
+          <div id="sec-wage-benchmark" style={{ scrollMarginTop: 60 }}>
+            <StateEmployerWageBenchmarkSection />
+          </div>
 
-          <StateEmployerWageBenchmarkSection />
-
-          <PirlOutcomesSection />
+          <div id="sec-pirl" style={{ scrollMarginTop: 60 }}>
+            <PirlOutcomesSection />
+          </div>
 
           <section style={{ marginTop: 40 }}>
             <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
