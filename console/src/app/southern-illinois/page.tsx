@@ -2721,10 +2721,18 @@ function IndustryMixByCountySection({ mix }: { mix: IndustryMix }) {
                 Total covered employment: <strong>{regionTotal.toLocaleString()}</strong>
               </div>
               <div style={{ fontSize: 13, color: "#3d3a33", lineHeight: 1.5 }}>
-                Healthcare anchors every county; Manufacturing concentrates in Jefferson
-                (Continental Tire) and Williamson; Construction shows surprising strength
-                in Jackson at $1,545/wk — outage and big-project wages. Perry runs on
-                Trade/Transport.
+                Healthcare anchors every county (SIH 4,000+ jobs leads Jackson;
+                Heartland + Marion VA + Good Samaritan + Marshall Browning + Pinckneyville
+                Community + Franklin Hospital across the rest). Manufacturing
+                concentrates in Jefferson (Continental Tire 3,667) and Williamson
+                (Aisin Marion 2,000+ across Mfg/Electronics/Light Metals, plus GD-OTS).
+                Construction strength in Jackson at $1,545/wk is driven by
+                <strong> Big Muddy Solar </strong>(124 MW Arevon/Signal Energy; 250+
+                IBEW 702 + IUOE 318 + LIUNA 773 workers, CoD end of 2026) layered on
+                a steady IDOT-contractor baseline anchored by <strong>E.T. Simonds </strong>
+                (Carbondale, 1946, IDOT Prequal #5550 — highways, bridges, dams,
+                runways) plus outage-pay at Continental + Aisin + GD-OTS. Perry runs
+                on Trade/Transport (warehouse, rail, IL DOC).
               </div>
             </div>
           );
