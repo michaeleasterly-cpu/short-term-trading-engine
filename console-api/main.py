@@ -16,8 +16,11 @@ real data in follow-up commits without frontend changes.
 from __future__ import annotations
 
 import asyncio
+import csv
+import io
 import os
 import time
+import zipfile
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 
@@ -2206,6 +2209,423 @@ async def _usaspending_gdots_subawards(lookback_months: int = 24) -> dict | None
     return out
 
 
+# ────── USAspending — GD-OTS Marion sub-award lanes (BULK download) ──────
+# The realtime /subawards/ endpoint above is fast but does NOT surface
+# sub-recipient UEI, state, ZIP, or per-sub-award NAICS — every sub-award
+# rolls up under the prime-award NAICS (332993 Ammunition Mfg for GD-OTS
+# Marion), hiding the services lanes (561730 grounds / 561720 janitorial
+# / 238220 HVAC / 484110 freight / etc.) that are the operator's BD-action
+# lanes.
+#
+# The USAspending bulk-download path (POST /api/v2/download/awards/) solves
+# this: it produces a CSV with the full sub-recipient detail including the
+# verified place-of-performance / sub-recipient state and per-sub-award
+# NAICS code. This is async — submit request → poll status_url → download
+# ZIP → extract Subawards_*.csv. The bulk dataset refreshes upstream
+# weekly, so we cache 7 days. On hard failure we return the last cached
+# value if any, else None (frontend hides the section).
+#
+# Operator BD principle (2026-05-27): the supply-chain replacement
+# strategy targets sub-recipients outside the broader Midwest economic
+# shed. "Don't take from St. Louis neighbors" requires verified
+# sub-recipient state — impossible with the realtime name-only heuristic.
+# This bulk path is what enables that principle.
+#
+# Services lanes (operator's BD-action set, highlighted in the frontend):
+#   561720 Janitorial Services
+#   561730 Landscaping Services
+#   238220 Plumbing/Heating/AC Contractors
+#   484110 General Freight Trucking, Local
+#   561612 Security Guards & Patrol
+#   562111 Solid Waste Collection
+#   561710 Exterminating & Pest Control
+#   722310 Food Service Contractors
+
+_GDOTS_BULK_TTL_SEC = 7 * 24 * 60 * 60  # 7 days — bulk dataset refreshes weekly upstream
+_GDOTS_BULK_POLL_MAX_SEC = 300.0        # 5-min cap on the async poll loop
+_GDOTS_BULK_INITIAL_POLL_SEC = 2.0      # first poll interval; doubles each retry up to 30s
+
+# Candidate CSV column headers — USAspending schemas evolve, so we tolerate
+# the documented field names *and* the actual live-download column names.
+# Verified live 2026-05-27 against
+# Contracts_Subawards_*.csv from /api/v2/download/awards/. Notable
+# discrepancies from the spec the operator passed in:
+#   - The CSV exposes `subawardee_state_code` (NOT `subawardee_address_state_code`)
+#     and `subaward_primary_place_of_performance_state_code` for the
+#     place-of-performance state.
+#   - `subawardee_zip_code` (NOT `subawardee_address_zip_code`).
+#   - `prime_award_piid` (NOT `prime_award_id_piid`).
+#   - `prime_awardee_uei` (NOT `prime_award_recipient_uei`).
+#   - **CRITICAL**: the bulk CSV does NOT contain `subaward_naics_code` /
+#     `subaward_naics_description` at all. Sub-awards inherit the prime
+#     NAICS (`prime_award_naics_code`) — same limitation the realtime
+#     `/subawards/` endpoint has. We capture both candidates anyway in
+#     case USAspending adds the field; downstream the BD intelligence
+#     pivots to the `subaward_description` freeform purpose text + a
+#     services-lane keyword classifier (see _services_lane_from_description).
+_BULK_FIELD_FALLBACKS = {
+    "subaward_amount": ("subaward_amount", "subaward_amount_usd"),
+    "subaward_action_date": ("subaward_action_date", "action_date"),
+    "subawardee_name": ("subawardee_name", "sub_awardee_or_recipient_legal", "subawardee_legal_name"),
+    "subawardee_uei": ("subawardee_uei", "subawardee_uei_number"),
+    "subawardee_state": (
+        "subawardee_state_code",                            # live 2026-05-27
+        "subaward_primary_place_of_performance_state_code",
+        "subaward_place_of_performance_state_code",         # spec-name variant
+        "subawardee_address_state_code",                    # spec-name variant
+    ),
+    "subawardee_zip": ("subawardee_zip_code", "subawardee_address_zip_code"),
+    "subaward_naics_code": (
+        "subaward_naics_code",
+        "subaward_primary_naics",
+        "subawardee_naics_code",
+        "prime_award_naics_code",  # fallback — bulk CSV doesn't carry per-sub NAICS
+    ),
+    "subaward_naics_description": (
+        "subaward_naics_description",
+        "subaward_primary_naics_description",
+        "prime_award_naics_description",  # fallback for same reason as above
+    ),
+    "prime_award_recipient_uei": ("prime_award_recipient_uei", "prime_awardee_uei"),
+    "prime_award_id_piid": ("prime_award_id_piid", "prime_award_piid"),
+    "subaward_description": ("subaward_description",),
+}
+
+# Operator's services-lane BD-action set — see comment above. Frontend
+# highlights these but the backend doesn't filter; we surface ALL lanes
+# so the operator can see relative dollar flow into services vs the
+# manufacturing rollup.
+_GDOTS_SERVICES_LANE_NAICS = frozenset({
+    "561720", "561730", "238220", "484110",
+    "561612", "562111", "561710", "722310",
+})
+
+# Description-based services-lane classifier. Because the bulk CSV does
+# not carry per-sub-award NAICS, we derive a services-lane label from
+# the `subaward_description` freeform purpose text. Best-effort, keyword
+# based — multiple lanes may match, in which case the first hit in this
+# tuple wins. NAICS codes are operator-confirmed BD-action lanes
+# (services + light infrastructure).
+_SERVICES_LANE_KEYWORDS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    ("561730", "Landscaping / grounds maintenance",
+        ("landscap", "grounds maint", "lawn", "mowing")),
+    ("561720", "Janitorial services",
+        ("janitor", "custodi", "cleaning service")),
+    ("238220", "HVAC contractor",
+        ("hvac", "heating", "air conditioning", "ventilation", " ac ")),
+    ("484110", "Local freight trucking",
+        ("trucking", "freight", "drayage", "haul")),
+    ("561612", "Security guards & patrol",
+        ("security guard", "patrol service", "armed guard")),
+    ("562111", "Solid waste collection",
+        ("solid waste", "trash collection", "refuse", "garbage")),
+    ("561710", "Exterminating / pest control",
+        ("pest control", "exterminat", "fumigat")),
+    ("722310", "Food service contractor",
+        ("food service", "cafeteria", "catering")),
+)
+
+
+def _services_lane_from_description(desc: str) -> tuple[str | None, str | None]:
+    """Return (naics, label) when the description text matches one of the
+    operator's BD-action services lanes; (None, None) otherwise."""
+    if not desc:
+        return None, None
+    lower = desc.lower()
+    for naics, label, keywords in _SERVICES_LANE_KEYWORDS:
+        for kw in keywords:
+            if kw in lower:
+                return naics, label
+    return None, None
+
+
+def _bulk_get(row: dict, logical_key: str) -> str:
+    """Return the first non-empty value among the documented fallbacks
+    for a logical column key. Returns "" when no candidate is populated."""
+    candidates = _BULK_FIELD_FALLBACKS.get(logical_key, (logical_key,))
+    for col in candidates:
+        v = row.get(col)
+        if v is not None and str(v).strip() != "":
+            return str(v).strip()
+    return ""
+
+
+async def _usaspending_gdots_bulk_subawards(
+    lookback_months: int = 24,
+) -> list[dict] | None:
+    """POST /api/v2/download/awards/, poll, fetch ZIP, parse Subawards_*.csv.
+
+    Returns a list of normalised sub-award dicts (one per CSV row) with the
+    canonical field names (subaward_amount, subawardee_name, subawardee_state,
+    subaward_naics_code, …). Returns None on hard failure.
+    Caller handles caching; this helper is single-shot.
+    """
+    end = datetime.now(UTC).date()
+    start = end - timedelta(days=lookback_months * 30)
+
+    # NOTE on the API contract (verified live 2026-05-27):
+    #   - `agencies: []` is rejected (422 — "below min 1 items"). The spec
+    #     said to include it; the live API requires non-empty or omitted.
+    #     We omit.
+    #   - `prime_award_types: ["A","B","C","D"]` is silently expanded by
+    #     the server to the full procurement award_type_codes set (BPAs,
+    #     IDV variants, etc.) — fine for our use.
+    #   - `sub_award_types`, `date_type`, and `date_range` are accepted
+    #     but the server normalises them; the response echoes only the
+    #     filters it actually applied (no date filter on this endpoint).
+    #     We send them anyway in case the server tightens its
+    #     date-filtering behaviour later — they're harmless.
+    request_body = {
+        "filters": {
+            "prime_award_types": ["A", "B", "C", "D"],
+            "sub_award_types": ["procurement"],
+            "date_type": "action_date",
+            "date_range": {
+                "start_date": start.isoformat(),
+                "end_date": end.isoformat(),
+            },
+            "recipient_search_text": [_GDOTS_RECIPIENT_NAME],
+            "place_of_performance_locations": [
+                {"country": "USA", "state": "IL"},
+            ],
+        },
+        "subawards": True,
+        "file_format": "csv",
+    }
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=30.0, limits=httpx.Limits(max_connections=4)
+        ) as client:
+            # Step 1: submit download request
+            r = await client.post(
+                "https://api.usaspending.gov/api/v2/download/awards/",
+                json=request_body,
+            )
+            if r.status_code != 200:
+                return None
+            submit = r.json() or {}
+            status_url = submit.get("status_url")
+            file_url = submit.get("file_url")
+            if not status_url and not file_url:
+                return None
+
+            # Step 2: poll for completion (exponential backoff, 5-min cap).
+            # Some submissions are pre-computed and file_url is already
+            # populated with status='finished' on the initial response —
+            # we honour that fast path before entering the poll loop.
+            poll_started = time.monotonic()
+            interval = _GDOTS_BULK_INITIAL_POLL_SEC
+            status = submit.get("status") or ""
+            while status != "finished":
+                if status in {"failed", "expired"}:
+                    return None
+                if time.monotonic() - poll_started > _GDOTS_BULK_POLL_MAX_SEC:
+                    return None
+                await asyncio.sleep(interval)
+                interval = min(interval * 2, 30.0)
+                if not status_url:
+                    break
+                sr = await client.get(status_url)
+                if sr.status_code != 200:
+                    continue
+                sj = sr.json() or {}
+                status = sj.get("status") or ""
+                file_url = sj.get("file_url") or file_url
+
+            if not file_url:
+                return None
+
+            # Step 3: download the ZIP
+            dr = await client.get(file_url, timeout=120.0)
+            if dr.status_code != 200:
+                return None
+            zip_bytes = dr.content
+    except Exception:
+        return None
+
+    # Step 4: extract Subawards_*.csv in-memory + parse.
+    # NOTE: bulk-download CSVs ship one Contracts_Subawards_*.csv plus an
+    # Assistance_Subawards_*.csv (grants/cooperative agreements). For
+    # GD-OTS Marion procurement we read both — assistance is normally
+    # empty but if a research grant subaward appears we don't want to
+    # silently drop it. The CSV is NOT date-filtered server-side
+    # (verified live 2026-05-27) so we apply the lookback client-side.
+    earliest = (datetime.now(UTC).date() - timedelta(days=lookback_months * 30)).isoformat()
+    try:
+        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+            sub_members = [
+                name for name in zf.namelist()
+                if "subaward" in name.lower() and name.lower().endswith(".csv")
+            ]
+            if not sub_members:
+                return None
+            rows: list[dict] = []
+            for sub_member in sub_members:
+                with zf.open(sub_member) as f:
+                    text = io.TextIOWrapper(f, encoding="utf-8-sig", errors="replace")
+                    reader = csv.DictReader(text)
+                    for raw in reader:
+                        if not raw:
+                            continue
+                        action_date = _bulk_get(raw, "subaward_action_date")
+                        # Client-side date filter (server ignores the
+                        # date_range we pass for this endpoint).
+                        if action_date and action_date < earliest:
+                            continue
+                        amt_str = _bulk_get(raw, "subaward_amount").replace(",", "").replace("$", "")
+                        try:
+                            amt = float(amt_str) if amt_str else 0.0
+                        except ValueError:
+                            amt = 0.0
+                        state = _bulk_get(raw, "subawardee_state").upper()
+                        desc = _bulk_get(raw, "subaward_description")
+                        naics_code = _bulk_get(raw, "subaward_naics_code")
+                        naics_desc = _bulk_get(raw, "subaward_naics_description")
+                        # Derive a services-lane label from the description
+                        # when the inherited prime-NAICS is the
+                        # manufacturing rollup (332993). This is the
+                        # workaround for the missing per-sub-award NAICS.
+                        services_lane_naics, services_lane_label = _services_lane_from_description(desc)
+                        rows.append({
+                            "prime_award_id_piid": _bulk_get(raw, "prime_award_id_piid"),
+                            "prime_award_recipient_uei": _bulk_get(raw, "prime_award_recipient_uei"),
+                            "subaward_amount": amt,
+                            "subaward_action_date": action_date,
+                            "subawardee_name": _bulk_get(raw, "subawardee_name"),
+                            "subawardee_uei": _bulk_get(raw, "subawardee_uei"),
+                            "subawardee_state": state,
+                            "subawardee_zip": _bulk_get(raw, "subawardee_zip"),
+                            "subaward_naics_code": naics_code,
+                            "subaward_naics_description": naics_desc,
+                            "subaward_description": desc,
+                            "services_lane_naics": services_lane_naics,
+                            "services_lane_label": services_lane_label,
+                        })
+            return rows
+    except Exception:
+        return None
+
+
+async def _usaspending_gdots_bulk_lanes(lookback_months: int = 24) -> dict | None:
+    """Aggregate the bulk-CSV sub-award detail by sub-award NAICS-6 lane.
+
+    Unlike the realtime helper above, this groups on the SUB-AWARD NAICS
+    (not the prime-award NAICS) — that's the whole BD point: the services
+    lanes (561720, 561730, 238220, 484110, …) become visible instead of
+    rolling up under 332993.
+
+    Per-lane fields:
+      - naics_code, naics_name
+      - subaward_total_usd  (Σ subaward_amount across the lane)
+      - subaward_count      (#sub-awards in the lane)
+      - top_sub_recipients  (top-3 by Σ amount, with name + state + UEI)
+      - out_of_region_count (number of distinct sub-recipients whose state ≠ IL)
+      - out_of_region_total_count (total sub-recipients in the lane, denominator)
+      - is_services_lane    (True if NAICS ∈ operator's services-lane set)
+
+    Caps at top 25 lanes by dollar; returns the envelope shape consumed
+    by the frontend. 7-day cache.
+    """
+    cache_key = f"gdots_bulk|{lookback_months}"
+    now = time.time()
+    cached = _USA_CACHE.get(cache_key)
+    if cached and now - cached[0] < _GDOTS_BULK_TTL_SEC:
+        return cached[1]
+
+    rows = await _usaspending_gdots_bulk_subawards(lookback_months=lookback_months)
+    if rows is None:
+        if cached:
+            return cached[1]
+        return None
+
+    # Aggregate. Lane key = description-derived services NAICS when the
+    # subaward_description matches an operator BD-action services lane;
+    # otherwise the inherited prime NAICS from the CSV. This is the
+    # workaround for the bulk CSV's missing per-sub-award NAICS column —
+    # without it, every GD-OTS sub-award would roll up under 332993
+    # (Ammunition Mfg) and the services lanes would stay hidden.
+    lanes: dict[str, dict] = {}
+    for r in rows:
+        derived_code = r.get("services_lane_naics")
+        derived_label = r.get("services_lane_label")
+        if derived_code:
+            code = derived_code
+            desc = derived_label or ""
+        else:
+            code = r.get("subaward_naics_code") or "UNKNOWN"
+            desc = r.get("subaward_naics_description") or ""
+        amt = float(r.get("subaward_amount") or 0.0)
+        rec_name = r.get("subawardee_name") or ""
+        rec_state = r.get("subawardee_state") or ""
+        rec_uei = r.get("subawardee_uei") or ""
+        lane = lanes.setdefault(code, {
+            "naics_code": code,
+            "naics_name": desc,
+            "subaward_total_usd": 0.0,
+            "subaward_count": 0,
+            "_recipient_sums": {},      # (name, state, uei) -> Σ amount
+            "_distinct_recipients": {},  # (name, state, uei) -> True (for counts)
+        })
+        if not lane["naics_name"] and desc:
+            lane["naics_name"] = desc
+        lane["subaward_total_usd"] += amt
+        lane["subaward_count"] += 1
+        if rec_name:
+            key = (rec_name, rec_state, rec_uei)
+            lane["_recipient_sums"][key] = lane["_recipient_sums"].get(key, 0.0) + amt
+            lane["_distinct_recipients"][key] = True
+
+    out_rows: list[dict] = []
+    total_amount = 0.0
+    for lane in lanes.values():
+        rec_sums = lane.pop("_recipient_sums")
+        distinct_recs = lane.pop("_distinct_recipients")
+        sorted_recs = sorted(rec_sums.items(), key=lambda kv: -kv[1])
+        top3 = [
+            {
+                "name": name,
+                "state": state,
+                "uei": uei,
+                "subaward_sum_usd": round(amt, 2),
+            }
+            for (name, state, uei), amt in sorted_recs[:3]
+        ]
+        # True state-based out-of-region count (vs the name-only heuristic
+        # used in the realtime helper). "Unknown state" rows are NOT
+        # counted as out-of-region — we only flag confirmed non-IL.
+        out_of_region = sum(
+            1 for (_n, s, _u) in distinct_recs
+            if s and s != "IL"
+        )
+        total_distinct = len(distinct_recs)
+        code = lane["naics_code"]
+        amt_total = round(lane["subaward_total_usd"], 2)
+        total_amount += amt_total
+        out_rows.append({
+            "naics_code": code,
+            "naics_name": lane["naics_name"],
+            "subaward_total_usd": amt_total,
+            "subaward_count": lane["subaward_count"],
+            "top_sub_recipients": top3,
+            "out_of_region_count": out_of_region,
+            "out_of_region_total_count": total_distinct,
+            "is_services_lane": code in _GDOTS_SERVICES_LANE_NAICS,
+        })
+    out_rows.sort(key=lambda r: -r["subaward_total_usd"])
+    out_rows = out_rows[:25]
+
+    payload = {
+        "rows": out_rows,
+        "total_subaward_amount_usd": round(total_amount, 2),
+        "lookback_months": lookback_months,
+        "source_url": _GDOTS_USASPENDING_PROFILE_URL,
+        "fetched_at": datetime.now(UTC).isoformat(),
+    }
+    _USA_CACHE[cache_key] = (now, payload)
+    return payload
+
+
 @app.get("/api/public/murphysboro")
 async def public_murphysboro() -> dict:
     """PUBLIC endpoint — Murphysboro, IL (Jackson County seat, 8 mi W of Carbondale).
@@ -2368,6 +2788,7 @@ async def public_mantracon() -> dict:
     labor_truth = await _acs_labor_truth(county_fips=LWA_FIPS)
     training_alignment = _training_demand_alignment(qcew)
     gdots_subaward_lanes = await _usaspending_gdots_subawards()
+    gdots_subaward_lanes_bulk = await _usaspending_gdots_bulk_lanes()
     return {
         "ts": datetime.now(UTC).isoformat(),
         "indicators": indicators,
@@ -2390,6 +2811,7 @@ async def public_mantracon() -> dict:
         "labor_truth": labor_truth,
         "training_alignment": training_alignment,
         "gdots_subaward_lanes": gdots_subaward_lanes,
+        "gdots_subaward_lanes_bulk": gdots_subaward_lanes_bulk,
     }
 
 
