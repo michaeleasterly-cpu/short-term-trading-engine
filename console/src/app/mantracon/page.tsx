@@ -859,13 +859,19 @@ export default async function MantraconPage() {
     );
   }
   const ag = data.lwa_aggregate;
-  const tone = urTone(ag.unemployment_rate_weighted);
-  const headline =
-    ag.unemployment_rate_weighted == null ? "LWA-25 Workforce Snapshot" :
-    ag.unemployment_rate_weighted < 4 ? "Strong regional labor market" :
-    ag.unemployment_rate_weighted < 6 ? "Healthy regional labor market" :
-    ag.unemployment_rate_weighted < 8 ? "Softening regional labor market" :
-    "Stressed regional labor market";
+  // Drive headline from LFPR gap to IL state — captures the full picture of
+  // labor utilization, not just U-3 unemployment which masks discouraged workers.
+  // The labor_truth section below makes this concrete; the headline should
+  // agree with that synthesis, not contradict it.
+  const lfprGap = data.labor_truth?.aggregate?.gap_lfpr_vs_state ?? null;
+  let tone: Tone = "ok";
+  let headline = "LWA-25 Workforce Snapshot";
+  if (lfprGap != null) {
+    if (lfprGap >= 0)        { tone = "good"; headline = `Strong regional labor market`; }
+    else if (lfprGap >= -3)  { tone = "ok";   headline = `Healthy regional labor market`; }
+    else if (lfprGap >= -6)  { tone = "warn"; headline = `Softening regional labor market`; }
+    else                     { tone = "bad";  headline = `Structurally weak regional labor market`; }
+  }
 
   return (
     <html lang="en">
@@ -894,9 +900,9 @@ export default async function MantraconPage() {
             {headline}
           </h1>
           <div style={{ fontSize: 17, color: "#3d3a33", maxWidth: 760 }}>
-            {ag.unemployment_rate_weighted != null && ag.labor_force != null ? (
+            {lfprGap != null && ag.unemployment_rate_weighted != null ? (
               <>
-                LWA-25 weighted-average unemployment <strong>{ag.unemployment_rate_weighted.toFixed(1)}%</strong> across a regional labor force of <strong>{fmtNum(ag.labor_force)}</strong>. Five counties: Franklin, Jackson, Jefferson, Perry, Williamson.
+                Headline UE rate <strong>{ag.unemployment_rate_weighted.toFixed(1)}%</strong> looks fine — but labor-force participation runs <strong>{Math.abs(lfprGap).toFixed(1)}pp below Illinois</strong>. The headline misses everyone who has stopped looking. See the true labor picture below.
               </>
             ) : (
               "Five-county Southern Illinois Workforce Development Board service area (Franklin, Jackson, Jefferson, Perry, Williamson)."

@@ -732,24 +732,30 @@ function buildSections(d: CarbondaleData): Array<{ id: string; title: string; su
 }
 
 function topHeadline(d: CarbondaleData): { headline: string; subhead: string; tone: Tone } {
-  const ur = d.indicators["crb_jackson_unemployment_rate"]?.value;
-  const lf = d.indicators["crb_msa_labor_force"]?.value;
-  const lfSeries = d.labor_force_series;
+  // Drive the headline from the COMMUNITY HEALTH SCORE synthesis (HS-dropout +
+  // poverty + unemployment + income vs state + 5y pop trend + 5y income trend),
+  // not from the unemployment rate alone. The UE rate is the politician-friendly
+  // metric that masks discouraged workers / not-in-LF population — using it as
+  // the headline would contradict the labor-truth + health-score sections below.
+  const h = d.health_score;
+  if (!h || h.score == null) {
+    return {
+      headline: "Carbondale Snapshot",
+      subhead: "Local economic indicators for Jackson County + the Carbondale-Marion MSA.",
+      tone: "ok",
+    };
+  }
+  const worst = [...h.components]
+    .filter(c => c.score != null)
+    .sort((a, b) => (a.score! - b.score!))[0];
+  const worstLabel = worst ? worst.label.toLowerCase() : "";
+  const scoreStr = `Health Score ${h.score.toFixed(0)}/100`;
 
-  if (ur === undefined) {
-    return { headline: "Carbondale Snapshot", subhead: "Local economic indicators for Jackson County + the Carbondale-Marion MSA.", tone: "ok" };
-  }
-  // Simple headline based on unemployment rate
-  if (ur < 4) {
-    return { headline: "Strong labor market", subhead: `Jackson County unemployment is ${ur.toFixed(1)}% — historically low. ${lfSeries.length > 12 ? `Labor force at ${fmtNum(lf || 0)}.` : ""}`, tone: "good" };
-  }
-  if (ur < 6) {
-    return { headline: "Healthy labor market", subhead: `Jackson County unemployment at ${ur.toFixed(1)}% — within normal range.`, tone: "ok" };
-  }
-  if (ur < 8) {
-    return { headline: "Softening labor market", subhead: `Jackson County unemployment at ${ur.toFixed(1)}% — above the national norm. Worth watching.`, tone: "warn" };
-  }
-  return { headline: "Stressed labor market", subhead: `Jackson County unemployment at ${ur.toFixed(1)}% — recession-level.`, tone: "bad" };
+  if (h.score >= 80) return { headline: `Healthy community · ${h.label}`, subhead: `${scoreStr}. ${worstLabel ? `Weakest signal: ${worstLabel}.` : ""} Strong across all six synthesized components.`, tone: "good" };
+  if (h.score >= 60) return { headline: `Stable community · ${h.label}`, subhead: `${scoreStr}. ${worstLabel ? `Weakest signal: ${worstLabel}.` : ""} Generally resilient with isolated soft spots.`, tone: "ok" };
+  if (h.score >= 40) return { headline: `At-risk community · ${h.label}`, subhead: `${scoreStr}. ${worstLabel ? `Weakest signal: ${worstLabel}.` : ""} The headline unemployment rate doesn't capture the full picture — see the synthesis below.`, tone: "warn" };
+  if (h.score >= 20) return { headline: `Distressed community · ${h.label}`, subhead: `${scoreStr}. ${worstLabel ? `Dominant pressure: ${worstLabel}.` : ""} Multiple hardship signals reinforce — the headline UE rate understates the situation.`, tone: "bad" };
+  return { headline: `Community in crisis · ${h.label}`, subhead: `${scoreStr}. ${worstLabel ? `Dominant pressure: ${worstLabel}.` : ""} Severe distress across nearly every synthesized signal.`, tone: "bad" };
 }
 
 function URChart({ series }: { series: Array<{ date: string; value: number }> }) {

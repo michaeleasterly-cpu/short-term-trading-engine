@@ -652,14 +652,24 @@ export default async function MurphysboroPage() {
     );
   }
   const sections = buildCards(data);
-  const ur = data.indicators["crb_jackson_unemployment_rate"]?.value;
-  const tone: Tone = ur == null ? "ok" : ur < 4 ? "good" : ur < 6 ? "ok" : ur < 8 ? "warn" : "bad";
-  const headline =
-    ur == null ? "Murphysboro Snapshot" :
-    ur < 4 ? "Strong local labor market" :
-    ur < 6 ? "Healthy local labor market" :
-    ur < 8 ? "Softening local labor market" :
-    "Stressed local labor market";
+  // Drive the headline from the Community Health Score synthesis, not from the
+  // unemployment rate alone — the UE rate masks discouraged workers / not-in-LF
+  // population. Using it as headline would contradict the labor-truth + health-
+  // score sections below.
+  const h = data.health_score;
+  const worst = h?.components ? [...h.components].filter(c => c.score != null).sort((a, b) => (a.score! - b.score!))[0] : undefined;
+  const worstLabel = worst ? worst.label.toLowerCase() : "";
+  let tone: Tone = "ok";
+  let headline = "Murphysboro Snapshot";
+  let subhead = "";
+  if (h?.score != null) {
+    const scoreStr = `Health Score ${h.score.toFixed(0)}/100`;
+    if (h.score >= 80)      { tone = "good"; headline = `Healthy community · ${h.label}`;      subhead = `${scoreStr}. ${worstLabel ? `Weakest signal: ${worstLabel}.` : ""} Strong across all six synthesized components.`; }
+    else if (h.score >= 60) { tone = "ok";   headline = `Stable community · ${h.label}`;        subhead = `${scoreStr}. ${worstLabel ? `Weakest signal: ${worstLabel}.` : ""} Generally resilient with isolated soft spots.`; }
+    else if (h.score >= 40) { tone = "warn"; headline = `At-risk community · ${h.label}`;       subhead = `${scoreStr}. ${worstLabel ? `Weakest signal: ${worstLabel}.` : ""} The headline UE rate doesn't capture the full picture — see the synthesis below.`; }
+    else if (h.score >= 20) { tone = "bad";  headline = `Distressed community · ${h.label}`;    subhead = `${scoreStr}. ${worstLabel ? `Dominant pressure: ${worstLabel}.` : ""} Multiple hardship signals reinforce.`; }
+    else                    { tone = "bad";  headline = `Community in crisis · ${h.label}`;     subhead = `${scoreStr}. ${worstLabel ? `Dominant pressure: ${worstLabel}.` : ""} Severe distress across nearly every signal.`; }
+  }
 
   return (
     <html lang="en">
@@ -688,9 +698,7 @@ export default async function MurphysboroPage() {
             {headline}
           </h1>
           <div style={{ fontSize: 17, color: "#3d3a33", maxWidth: 720 }}>
-            {ur != null
-              ? <>Jackson County unemployment at <strong>{ur.toFixed(1)}%</strong>. Murphysboro is the Jackson County seat, 8 mi W of Carbondale, in the Carbondale-Marion MSA.</>
-              : <>Jackson County seat. Carbondale-Marion MSA.</>}
+            {subhead || <>Jackson County seat, 8 mi W of Carbondale, in the Carbondale-Marion MSA.</>}
           </div>
           <div style={{ fontSize: 12, color: "#8a857c", marginTop: 8 }}>
             Page rendered {data.ts.slice(0, 16).replace("T", " ")} UTC. County / MSA / state series via BLS LAUS, BEA, Census, Realtor.com (FRED). Federal awards via USAspending.gov.
