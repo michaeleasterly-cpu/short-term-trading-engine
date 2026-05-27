@@ -719,6 +719,7 @@ async def public_carbondale() -> dict:
     qcew = await _qcew_supersector_block(county_fips=["077"])
     acs = await _census_acs_multiyear("11163")  # Carbondale city, IL — 2023 + 2018 ACS5
     health = _community_health_score(acs.get("current") or {}, acs) if acs else {}
+    labor_truth = await _acs_labor_truth(place_fips="11163")  # Carbondale-only labor truth
     return {
         "ts": datetime.now(UTC).isoformat(),
         "indicators": indicators,
@@ -729,6 +730,7 @@ async def public_carbondale() -> dict:
         "city_demographics": acs.get("current") if acs else {},
         "demographics_trend": acs,
         "health_score": health,
+        "labor_truth": labor_truth,
     }
 
 
@@ -787,6 +789,125 @@ async def _census_acs_multiyear(
         "current": current,
         "comparison_years": [years[0], years[-1]],
         "deltas": deltas,
+    }
+
+
+# ────────────── ACS Labor Truth — the "real picture" beyond UE rate ──────────────
+# Surfaces LFPR + E/P + Not-in-Labor-Force at sub-state geography, with state +
+# national benchmarks. Captures what the headline U-3 unemployment rate misses:
+# discouraged workers, the long-term not-in-LF population, the shrinking
+# denominator effect that politicians never cite.
+
+# IL state benchmark — ACS5 2023 (will refresh annually with ACS release)
+_IL_STATE_LFPR = 65.1
+_IL_STATE_EP   = 61.2
+_IL_STATE_NOTLF_PCT = 34.9
+# US national benchmark — BLS CPS, 2023 annual average
+_US_NATIONAL_LFPR = 62.6  # 16+ headline LFPR
+_US_NATIONAL_EP   = 60.3
+
+
+async def _acs_labor_truth(*, county_fips: list[str] | None = None, place_fips: str | None = None,
+                            state_fips: str = "17", year: int = 2023) -> dict:
+    """Pulls ACS B23025 (Employment Status) for the requested geography and
+    returns labor-utilization metrics that go beyond the headline UE rate.
+    Either county_fips (list) or place_fips (single place) must be provided.
+    """
+    api_key = os.environ.get("CENSUS_DATA_API_KEY") or os.environ.get("CENSUS_API_KEY")
+    if not api_key:
+        return {}
+
+    fields = "NAME,B23025_001E,B23025_002E,B23025_004E,B23025_005E,B23025_007E"
+    url = f"https://api.census.gov/data/{year}/acs/acs5"
+    if county_fips:
+        params = {"get": fields, "for": f"county:{','.join(county_fips)}", "in": f"state:{state_fips}", "key": api_key}
+    elif place_fips:
+        params = {"get": fields, "for": f"place:{place_fips}", "in": f"state:{state_fips}", "key": api_key}
+    else:
+        return {}
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        try:
+            r = await client.get(url, params=params)
+            if r.status_code != 200:
+                return {}
+            rows = r.json()
+        except Exception:
+            return {}
+
+    if not rows or len(rows) < 2:
+        return {}
+    header = rows[0]
+    geos = []
+    agg = {"pop": 0, "in_lf": 0, "emp": 0, "unemp": 0, "not_lf": 0}
+    for row in rows[1:]:
+        d = dict(zip(header, row, strict=False))
+        pop = int(d.get("B23025_001E") or 0)
+        if pop == 0:
+            continue
+        in_lf = int(d.get("B23025_002E") or 0)
+        emp   = int(d.get("B23025_004E") or 0)
+        unemp = int(d.get("B23025_005E") or 0)
+        not_lf = int(d.get("B23025_007E") or 0)
+        lfpr = in_lf / pop * 100
+        ep   = emp / pop * 100
+        not_lf_pct = not_lf / pop * 100
+        ue_rate = (unemp / in_lf * 100) if in_lf else None
+        geos.append({
+            "name": d.get("NAME", ""),
+            "fips": d.get("county") or d.get("place") or "",
+            "pop_16plus": pop,
+            "in_labor_force": in_lf,
+            "employed": emp,
+            "unemployed": unemp,
+            "not_in_labor_force": not_lf,
+            "lfpr": round(lfpr, 1),
+            "ep_ratio": round(ep, 1),
+            "not_lf_pct": round(not_lf_pct, 1),
+            "ue_rate": round(ue_rate, 1) if ue_rate is not None else None,
+            "gap_lfpr_vs_state": round(lfpr - _IL_STATE_LFPR, 1),
+            "gap_ep_vs_state": round(ep - _IL_STATE_EP, 1),
+        })
+        agg["pop"] += pop
+        agg["in_lf"] += in_lf
+        agg["emp"] += emp
+        agg["unemp"] += unemp
+        agg["not_lf"] += not_lf
+
+    aggregate = None
+    if agg["pop"] > 0 and len(geos) > 1:
+        aggregate = {
+            "pop_16plus": agg["pop"],
+            "in_labor_force": agg["in_lf"],
+            "employed": agg["emp"],
+            "unemployed": agg["unemp"],
+            "not_in_labor_force": agg["not_lf"],
+            "lfpr": round(agg["in_lf"] / agg["pop"] * 100, 1),
+            "ep_ratio": round(agg["emp"] / agg["pop"] * 100, 1),
+            "not_lf_pct": round(agg["not_lf"] / agg["pop"] * 100, 1),
+            "ue_rate": round(agg["unemp"] / agg["in_lf"] * 100, 1) if agg["in_lf"] else None,
+            "gap_lfpr_vs_state": round(agg["in_lf"] / agg["pop"] * 100 - _IL_STATE_LFPR, 1),
+            "gap_ep_vs_state": round(agg["emp"] / agg["pop"] * 100 - _IL_STATE_EP, 1),
+        }
+
+    geos.sort(key=lambda g: -g["pop_16plus"])
+    return {
+        "geos": geos,
+        "aggregate": aggregate,
+        "benchmarks": {
+            "il_state_lfpr": _IL_STATE_LFPR,
+            "il_state_ep": _IL_STATE_EP,
+            "il_state_not_lf_pct": _IL_STATE_NOTLF_PCT,
+            "us_national_lfpr": _US_NATIONAL_LFPR,
+            "us_national_ep": _US_NATIONAL_EP,
+        },
+        "year": year,
+        "source": (
+            "Census ACS 5y table B23025 (Employment Status for population 16+). "
+            "These metrics go BEYOND the headline UE rate to capture discouraged workers and the "
+            "long-term not-in-labor-force population — the picture politicians rarely cite because "
+            "it's less flattering."
+        ),
     }
 
 
@@ -1344,6 +1465,7 @@ async def public_murphysboro() -> dict:
     qcew = await _qcew_supersector_block(county_fips=["077"])
     acs = await _census_acs_multiyear("51453")  # Murphysboro city, IL — 2023 + 2018 ACS5
     health = _community_health_score(acs.get("current") or {}, acs) if acs else {}
+    labor_truth = await _acs_labor_truth(place_fips="51453")
     return {
         "ts": datetime.now(UTC).isoformat(),
         "indicators": indicators,
@@ -1354,6 +1476,7 @@ async def public_murphysboro() -> dict:
         "city_demographics": acs.get("current") if acs else {},
         "demographics_trend": acs,
         "health_score": health,
+        "labor_truth": labor_truth,
     }
 
 
@@ -1447,6 +1570,7 @@ async def public_mantracon() -> dict:
     LWA_FIPS = ["055", "077", "081", "145", "199"]
     business = await _usaspending_block(county_fips=LWA_FIPS, recipient_city=None)
     qcew = await _qcew_supersector_block(county_fips=LWA_FIPS)
+    labor_truth = await _acs_labor_truth(county_fips=LWA_FIPS)
     return {
         "ts": datetime.now(UTC).isoformat(),
         "indicators": indicators,
@@ -1465,6 +1589,7 @@ async def public_mantracon() -> dict:
         ],
         "business_opportunities": business,
         "industry_mix": qcew,
+        "labor_truth": labor_truth,
     }
 
 

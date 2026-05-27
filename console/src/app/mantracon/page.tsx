@@ -32,6 +32,35 @@ interface IndustryRow {
   avg_weekly_wage: number;
   annual_pay_equivalent: number;
 }
+interface LaborTruthGeo {
+  name: string;
+  fips: string;
+  pop_16plus: number;
+  in_labor_force: number;
+  employed: number;
+  unemployed: number;
+  not_in_labor_force: number;
+  lfpr: number;
+  ep_ratio: number;
+  not_lf_pct: number;
+  ue_rate: number | null;
+  gap_lfpr_vs_state: number;
+  gap_ep_vs_state: number;
+}
+interface LaborTruth {
+  geos: LaborTruthGeo[];
+  aggregate: LaborTruthGeo | null;
+  benchmarks: {
+    il_state_lfpr: number;
+    il_state_ep: number;
+    il_state_not_lf_pct: number;
+    us_national_lfpr: number;
+    us_national_ep: number;
+  };
+  year: number;
+  source: string;
+}
+
 interface CountyIndustrySnapshot {
   fips: string;
   name: string;
@@ -60,6 +89,92 @@ interface MantraconData {
   lwa_unemployment_series: Array<{ date: string; value: number }>;
   business_opportunities: BusinessOps;
   industry_mix?: IndustryMix;
+  labor_truth?: LaborTruth;
+}
+
+function LaborTruthSection({ lt }: { lt: LaborTruth }) {
+  if (!lt.geos.length) return null;
+  const agg = lt.aggregate;
+  const stateLFPR = lt.benchmarks.il_state_lfpr;
+  const stateEP = lt.benchmarks.il_state_ep;
+  return (
+    <section style={{ marginTop: 40 }}>
+      <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+      <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+        The true labor picture · beyond the headline unemployment rate
+      </h2>
+      <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 760, lineHeight: 1.55 }}>
+        The headline unemployment rate only counts people <em>actively looking for work</em>.
+        It misses every working-age person who has stopped looking, gone on disability, dropped
+        into the cash/informal economy, or is otherwise &quot;not in the labor force.&quot;
+        That&apos;s a politician-friendly number — these three metrics tell the real story.
+      </div>
+
+      {/* Headline LWA-5 stats vs IL state */}
+      {agg && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 16, marginBottom: 24 }}>
+          {[
+            { label: "Labor force participation", value: `${agg.lfpr}%`, sub: `IL state: ${stateLFPR}% · gap ${agg.gap_lfpr_vs_state > 0 ? "+" : ""}${agg.gap_lfpr_vs_state}pp`, color: agg.gap_lfpr_vs_state < -3 ? "oklch(45% 0.20 22)" : "#1f1d18" },
+            { label: "Employment-to-population", value: `${agg.ep_ratio}%`, sub: `IL state: ${stateEP}% · gap ${agg.gap_ep_vs_state > 0 ? "+" : ""}${agg.gap_ep_vs_state}pp`, color: agg.gap_ep_vs_state < -3 ? "oklch(45% 0.20 22)" : "#1f1d18" },
+            { label: "Headline UE rate", value: `${agg.ue_rate}%`, sub: "what politicians cite", color: "#1f1d18" },
+            { label: "Not in labor force", value: agg.not_in_labor_force.toLocaleString(), sub: `${agg.not_lf_pct}% of working-age — the invisible population`, color: "oklch(45% 0.20 22)" },
+          ].map((s, i) => (
+            <div key={i} style={{ background: "white", border: `1px solid ${s.color === "#1f1d18" ? "#d8d2c4" : s.color + "33"}`, borderLeft: `6px solid ${s.color}`, borderRadius: 6, padding: 16 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: "#7a756b", marginBottom: 6 }}>{s.label}</div>
+              <div style={{ fontSize: 28, fontWeight: 600, color: s.color, lineHeight: 1.05 }}>{s.value}</div>
+              <div style={{ fontSize: 12, color: "#5a564d", marginTop: 4 }}>{s.sub}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Per-county table */}
+      <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "hidden" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <thead>
+            <tr style={{ background: "#f0ece1", fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em", color: "#5a564d" }}>
+              <th style={{ textAlign: "left", padding: "10px 14px", fontWeight: 600 }}>County</th>
+              <th style={{ textAlign: "right", padding: "10px 14px", fontWeight: 600 }}>Pop 16+</th>
+              <th style={{ textAlign: "right", padding: "10px 14px", fontWeight: 600 }}>Headline UE</th>
+              <th style={{ textAlign: "right", padding: "10px 14px", fontWeight: 600 }}>LFPR</th>
+              <th style={{ textAlign: "right", padding: "10px 14px", fontWeight: 600 }}>E/P ratio</th>
+              <th style={{ textAlign: "right", padding: "10px 14px", fontWeight: 600 }}>NOT in LF</th>
+            </tr>
+          </thead>
+          <tbody>
+            {lt.geos.map((g, i) => {
+              const nm = g.name.split(",")[0].replace(" County", "");
+              return (
+                <tr key={g.fips} style={{ borderTop: i === 0 ? "none" : "1px solid #ebe5d6" }}>
+                  <td style={{ padding: "12px 14px", fontWeight: 600 }}>{nm}</td>
+                  <td style={{ padding: "12px 14px", textAlign: "right" }}>{g.pop_16plus.toLocaleString()}</td>
+                  <td style={{ padding: "12px 14px", textAlign: "right", color: "#5a564d" }}>{g.ue_rate?.toFixed(1)}%</td>
+                  <td style={{ padding: "12px 14px", textAlign: "right", color: g.gap_lfpr_vs_state < -5 ? "oklch(45% 0.20 22)" : "#1f1d18", fontWeight: 600 }}>
+                    {g.lfpr.toFixed(1)}%<span style={{ fontSize: 11, color: "#7a756b", marginLeft: 4 }}>({g.gap_lfpr_vs_state > 0 ? "+" : ""}{g.gap_lfpr_vs_state}pp)</span>
+                  </td>
+                  <td style={{ padding: "12px 14px", textAlign: "right", color: g.gap_ep_vs_state < -5 ? "oklch(45% 0.20 22)" : "#1f1d18", fontWeight: 600 }}>
+                    {g.ep_ratio.toFixed(1)}%<span style={{ fontSize: 11, color: "#7a756b", marginLeft: 4 }}>({g.gap_ep_vs_state > 0 ? "+" : ""}{g.gap_ep_vs_state}pp)</span>
+                  </td>
+                  <td style={{ padding: "12px 14px", textAlign: "right" }}>
+                    <strong>{g.not_in_labor_force.toLocaleString()}</strong><span style={{ fontSize: 11, color: "#7a756b", marginLeft: 4 }}>({g.not_lf_pct.toFixed(1)}%)</span>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ marginTop: 12, fontSize: 12, color: "#5a564d", lineHeight: 1.55, maxWidth: 760 }}>
+        <strong>How to read this:</strong> The headline unemployment rate stays low because once
+        someone stops looking, they vanish from the math. LFPR + E/P ratio capture the entire
+        working-age population (16+) including everyone not currently job-searching. The
+        &quot;NOT in LF&quot; column is the closest legitimate count of the invisible population
+        — people not employed, not unemployed-by-official-definition, not in school.
+        IL state benchmark: LFPR {stateLFPR}% · E/P {stateEP}%. US national: LFPR {lt.benchmarks.us_national_lfpr}% · E/P {lt.benchmarks.us_national_ep}%.
+      </div>
+      <div style={{ marginTop: 8, fontSize: 11, color: "#7a756b" }}>{lt.source}</div>
+    </section>
+  );
 }
 
 async function fetchData(): Promise<MantraconData | null> {
@@ -447,7 +562,19 @@ export default async function MantraconPage() {
             )}
           </div>
           <div style={{ fontSize: 12, color: "#8a857c", marginTop: 8 }}>
-            Updated {data.ts.slice(0, 16).replace("T", " ")} UTC. Workforce metrics from BLS LAUS via FRED, monthly (1-2 month lag). Federal awards from USAspending.gov.
+            Page rendered {data.ts.slice(0, 16).replace("T", " ")} UTC. Workforce metrics from BLS LAUS via FRED, monthly (1-2 month lag). Federal awards from USAspending.gov.
+          </div>
+
+          <div style={{ marginTop: 16, padding: 14, background: "#fff", border: "1px solid #d8d2c4", borderRadius: 6 }}>
+            <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: "#5a564d", marginBottom: 8 }}>
+              Data freshness · each block live-fetched on every page load
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10, fontSize: 12 }}>
+              <div><strong>BLS LAUS labor market:</strong><br /><span style={{ color: "#5a564d" }}>through {data.indicators?.crb_jackson_unemployment_rate?.date ?? "—"} · refreshes monthly</span></div>
+              <div><strong>BLS QCEW industry mix:</strong><br /><span style={{ color: "#5a564d" }}>{data.industry_mix?.as_of_quarter ?? "—"} · refreshes quarterly (~7mo lag)</span></div>
+              <div><strong>Census ACS labor utilization:</strong><br /><span style={{ color: "#5a564d" }}>{data.labor_truth?.year ?? "2023"} 5-year estimates · refreshes annually (Dec)</span></div>
+              <div><strong>Federal awards (USAspending):</strong><br /><span style={{ color: "#5a564d" }}>{data.business_opportunities?.totals?.lookback_months ?? 24}-month rolling · refreshes continuously</span></div>
+            </div>
           </div>
 
           <section style={{ marginTop: 32 }}>
@@ -470,6 +597,8 @@ export default async function MantraconPage() {
               </div>
             </section>
           )}
+
+          {data.labor_truth && <LaborTruthSection lt={data.labor_truth} />}
 
           {data.industry_mix && <IndustryMixSection mix={data.industry_mix} scope="the LWA-25 (5-county region)" />}
 

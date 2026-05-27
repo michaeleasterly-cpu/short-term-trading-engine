@@ -86,6 +86,59 @@ interface HealthScore {
   methodology: string;
 }
 
+interface LaborTruthGeo {
+  name: string; fips: string;
+  pop_16plus: number; in_labor_force: number; employed: number; unemployed: number; not_in_labor_force: number;
+  lfpr: number; ep_ratio: number; not_lf_pct: number; ue_rate: number | null;
+  gap_lfpr_vs_state: number; gap_ep_vs_state: number;
+}
+interface LaborTruth {
+  geos: LaborTruthGeo[];
+  aggregate: LaborTruthGeo | null;
+  benchmarks: { il_state_lfpr: number; il_state_ep: number; il_state_not_lf_pct: number; us_national_lfpr: number; us_national_ep: number };
+  year: number; source: string;
+}
+
+function LaborTruthCitySection({ lt, cityShortName }: { lt: LaborTruth; cityShortName: string }) {
+  if (!lt.geos.length) return null;
+  const g = lt.geos[0];
+  const stateLFPR = lt.benchmarks.il_state_lfpr;
+  const stateEP = lt.benchmarks.il_state_ep;
+  return (
+    <section style={{ marginTop: 40 }}>
+      <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+      <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+        The true labor picture · beyond the headline unemployment rate
+      </h2>
+      <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 720, lineHeight: 1.55 }}>
+        The headline unemployment rate only counts people <em>actively looking for work</em>.
+        It misses every working-age person who has stopped looking, gone on disability, or
+        otherwise dropped out of the labor force. {cityShortName}&apos;s real picture from ACS {lt.year}:
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 14 }}>
+        {[
+          { label: "Headline UE rate", value: g.ue_rate != null ? `${g.ue_rate}%` : "—", sub: "what politicians cite", flag: false },
+          { label: "Labor force participation", value: `${g.lfpr}%`, sub: `IL state: ${stateLFPR}% · gap ${g.gap_lfpr_vs_state > 0 ? "+" : ""}${g.gap_lfpr_vs_state}pp`, flag: g.gap_lfpr_vs_state < -3 },
+          { label: "Employment-to-population", value: `${g.ep_ratio}%`, sub: `IL state: ${stateEP}% · gap ${g.gap_ep_vs_state > 0 ? "+" : ""}${g.gap_ep_vs_state}pp`, flag: g.gap_ep_vs_state < -3 },
+          { label: "Not in labor force", value: g.not_in_labor_force.toLocaleString(), sub: `${g.not_lf_pct}% of working-age — the invisible population`, flag: true },
+        ].map((s, i) => (
+          <div key={i} style={{
+            background: "white",
+            border: `1px solid ${s.flag ? "oklch(45% 0.20 22)33" : "#d8d2c4"}`,
+            borderLeft: `6px solid ${s.flag ? "oklch(45% 0.20 22)" : "#1f1d18"}`,
+            borderRadius: 6, padding: 14,
+          }}>
+            <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: "#7a756b", marginBottom: 6 }}>{s.label}</div>
+            <div style={{ fontSize: 26, fontWeight: 600, color: s.flag ? "oklch(45% 0.20 22)" : "#1f1d18", lineHeight: 1.05 }}>{s.value}</div>
+            <div style={{ fontSize: 12, color: "#5a564d", marginTop: 4 }}>{s.sub}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ marginTop: 8, fontSize: 11, color: "#7a756b" }}>{lt.source}</div>
+    </section>
+  );
+}
+
 function labelColor(label: string): { fg: string; bg: string } {
   switch (label) {
     case "Healthy":   return { fg: "oklch(40% 0.16 142)", bg: "oklch(96% 0.04 142)" };
@@ -180,6 +233,7 @@ interface MurphysboroData {
   city_demographics?: CityDemographics;
   demographics_trend?: DemographicsTrend;
   health_score?: HealthScore;
+  labor_truth?: LaborTruth;
 }
 
 const TREND_GOOD_UP = new Set(["population", "median_household_income"]);
@@ -639,7 +693,19 @@ export default async function MurphysboroPage() {
               : <>Jackson County seat. Carbondale-Marion MSA.</>}
           </div>
           <div style={{ fontSize: 12, color: "#8a857c", marginTop: 8 }}>
-            Updated {data.ts.slice(0, 16).replace("T", " ")} UTC. County / MSA / state series via BLS LAUS, BEA, Census, Realtor.com (FRED). Federal awards via USAspending.gov.
+            Page rendered {data.ts.slice(0, 16).replace("T", " ")} UTC. County / MSA / state series via BLS LAUS, BEA, Census, Realtor.com (FRED). Federal awards via USAspending.gov.
+          </div>
+
+          <div style={{ marginTop: 16, padding: 14, background: "#fff", border: "1px solid #d8d2c4", borderRadius: 6 }}>
+            <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: "#5a564d", marginBottom: 8 }}>
+              Data freshness · each block live-fetched on every page load
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10, fontSize: 12 }}>
+              <div><strong>Census ACS demographics:</strong><br /><span style={{ color: "#5a564d" }}>{data.city_demographics?.year ?? "2023"} 5-year estimates · refreshes annually (Dec)</span></div>
+              <div><strong>BLS LAUS labor market:</strong><br /><span style={{ color: "#5a564d" }}>through {data.indicators?.crb_jackson_unemployment_rate?.date ?? "—"} · refreshes monthly</span></div>
+              <div><strong>BLS QCEW industry mix:</strong><br /><span style={{ color: "#5a564d" }}>{data.industry_mix?.as_of_quarter ?? "—"} · refreshes quarterly (~7mo lag)</span></div>
+              <div><strong>Federal awards (USAspending):</strong><br /><span style={{ color: "#5a564d" }}>{data.business_opportunities_county?.totals?.lookback_months ?? 24}-month rolling · refreshes continuously</span></div>
+            </div>
           </div>
 
           {sections.map(section => (
@@ -677,6 +743,8 @@ export default async function MurphysboroPage() {
           )}
 
           {data.health_score && <HealthScoreSection health={data.health_score} cityShortName="Murphysboro" />}
+
+          {data.labor_truth && <LaborTruthCitySection lt={data.labor_truth} cityShortName="Murphysboro" />}
 
           {data.city_demographics && <DemographicsSection d={data.city_demographics} cityShortName="Murphysboro" trend={data.demographics_trend} />}
 
