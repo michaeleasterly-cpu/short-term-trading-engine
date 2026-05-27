@@ -167,6 +167,24 @@ interface GdotsSubawardLanes {
   fetched_at: string;
 }
 
+interface GdotsSubawardLaneBulk {
+  naics_code: string;
+  naics_name: string;
+  subaward_total_usd: number;
+  subaward_count: number;
+  top_sub_recipients: Array<{ name: string; state: string; uei: string; subaward_sum_usd: number }>;
+  out_of_region_count: number;
+  out_of_region_total_count: number;
+  is_services_lane: boolean;
+}
+interface GdotsSubawardLanesBulk {
+  rows: GdotsSubawardLaneBulk[];
+  total_subaward_amount_usd: number;
+  lookback_months: number;
+  source_url: string;
+  fetched_at: string;
+}
+
 interface PageData {
   ts: string;
   indicators: Record<string, { value: number; date: string }>;
@@ -185,6 +203,7 @@ interface PageData {
   labor_truth?: LaborTruth;
   training_alignment?: TrainingAlignment;
   gdots_subaward_lanes?: GdotsSubawardLanes | null;
+  gdots_subaward_lanes_bulk?: GdotsSubawardLanesBulk | null;
 }
 
 function TrainingROISection() {
@@ -2154,7 +2173,106 @@ function GdotsSubawardLanesTable({ lanes }: { lanes: GdotsSubawardLanes }) {
   );
 }
 
-function SupplyChainSubawardSection({ lanes }: { lanes?: GdotsSubawardLanes | null }) {
+function GdotsSubawardLanesBulkTable({ lanes }: { lanes: GdotsSubawardLanesBulk }) {
+  const fetchedDate = lanes.fetched_at ? new Date(lanes.fetched_at) : null;
+  const fetchedLabel = fetchedDate
+    ? fetchedDate.toISOString().slice(0, 10)
+    : "—";
+  return (
+    <div style={{ marginTop: 24, marginBottom: 16 }}>
+      <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 4 }}>
+        Sub-recipient detail (USAspending bulk-download, weekly refresh — verified state)
+      </div>
+      <div style={{ fontSize: 12, color: "#5a564d", marginBottom: 8, lineHeight: 1.5 }}>
+        Per-NAICS rollup of <em>all</em> sub-recipients (not just the top-3 per prime), grouped on the <strong>sub-award NAICS</strong> rather than the prime-award NAICS (332993 Ammunition Mfg). This is the view that exposes the services lanes hidden under the manufacturing rollup. Services lanes (operator&apos;s BD-action set) are accented.
+      </div>
+      <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "hidden" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, color: "#3d3a33" }}>
+          <thead>
+            <tr style={{ background: "#f0ece1", textAlign: "left", borderBottom: "1px solid #d8d2c4" }}>
+              <th style={{ padding: "8px 10px", fontWeight: 600, color: "#1f1d18" }}>NAICS-6 · industry</th>
+              <th style={{ padding: "8px 10px", fontWeight: 600, color: "#1f1d18", textAlign: "right" }}>24-mo sub-$</th>
+              <th style={{ padding: "8px 10px", fontWeight: 600, color: "#1f1d18", textAlign: "right" }}>Sub-award count</th>
+              <th style={{ padding: "8px 10px", fontWeight: 600, color: "#1f1d18" }}>Top-3 sub-recipients (name · state)</th>
+              <th style={{ padding: "8px 10px", fontWeight: 600, color: "#1f1d18" }}>Out-of-region (verified state)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {lanes.rows.map((r) => {
+              const accent = r.is_services_lane;
+              return (
+                <tr
+                  key={r.naics_code}
+                  style={{
+                    borderTop: "1px solid #ece7d8",
+                    background: accent ? "#fbf6e8" : undefined,
+                    borderLeft: accent ? "3px solid #b8851f" : "3px solid transparent",
+                  }}
+                >
+                  <td style={{ padding: "8px 10px", verticalAlign: "top" }}>
+                    <div style={{ fontFamily: "ui-monospace, monospace", color: "#1f1d18", fontWeight: 600 }}>
+                      {r.naics_code}
+                      {accent && (
+                        <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 600, color: "#7a5e15", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                          services
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ color: "#5a564d", fontSize: 11 }}>{r.naics_name || "—"}</div>
+                  </td>
+                  <td style={{ padding: "8px 10px", textAlign: "right", verticalAlign: "top", fontFamily: "ui-monospace, monospace" }}>
+                    {fmtUsdShort(r.subaward_total_usd)}
+                  </td>
+                  <td style={{ padding: "8px 10px", textAlign: "right", verticalAlign: "top", fontFamily: "ui-monospace, monospace" }}>
+                    {r.subaward_count}
+                  </td>
+                  <td style={{ padding: "8px 10px", verticalAlign: "top", maxWidth: 360 }}>
+                    {r.top_sub_recipients.length > 0 ? (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                        {r.top_sub_recipients.map((s, i) => (
+                          <div key={`${s.uei || s.name}-${i}`} style={{ fontSize: 11.5 }}>
+                            <span>{s.name}</span>
+                            {s.state && (
+                              <span style={{ color: "#7a756b", marginLeft: 6 }}>
+                                · {s.state}
+                              </span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <span style={{ color: "#7a756b" }}>—</span>
+                    )}
+                  </td>
+                  <td style={{ padding: "8px 10px", verticalAlign: "top" }}>
+                    {r.out_of_region_total_count > 0 ? (
+                      <span style={{ fontSize: 11, color: r.out_of_region_count > 0 ? "#7a5e15" : "#5a564d", fontWeight: r.out_of_region_count > 0 ? 600 : 400 }}>
+                        {r.out_of_region_count} of {r.out_of_region_total_count} subs in non-IL states
+                      </span>
+                    ) : (
+                      <span style={{ fontSize: 11, color: "#7a756b" }}>—</span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ marginTop: 8, fontSize: 11, color: "#7a756b", lineHeight: 1.5 }}>
+        Source: <a href={lanes.source_url} target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>USAspending.gov</a> bulk-download CSV, weekly refresh through {fetchedLabel}. Verified sub-recipient state (not name-heuristic). The realtime view above shows top-3 recipients per prime; this view shows the per-NAICS rollup of ALL sub-recipients. {fmtUsdShort(lanes.total_subaward_amount_usd)} represented across the top 25 sub-award NAICS lanes.
+      </div>
+    </div>
+  );
+}
+
+function SupplyChainSubawardSection({
+  lanes,
+  bulkLanes,
+}: {
+  lanes?: GdotsSubawardLanes | null;
+  bulkLanes?: GdotsSubawardLanesBulk | null;
+}) {
   return (
     <section style={{ marginTop: 40 }}>
       <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
@@ -2174,6 +2292,8 @@ function SupplyChainSubawardSection({ lanes }: { lanes?: GdotsSubawardLanes | nu
       </div>
 
       {lanes && lanes.rows.length > 0 && <GdotsSubawardLanesTable lanes={lanes} />}
+
+      {bulkLanes && bulkLanes.rows.length > 0 && <GdotsSubawardLanesBulkTable lanes={bulkLanes} />}
 
       <div style={{ marginBottom: 16, padding: 14, background: "white", border: "1px solid #d8d2c4", borderRadius: 6 }}>
         <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8 }}>How to query subaward data for community-engagement leverage</div>
@@ -3135,7 +3255,7 @@ export default async function SouthernIllinoisPage() {
 
           <div id="sec-federal-money" style={{ scrollMarginTop: 60 }}>
             {data.top_federal_recipients && <FederalConcentrationSection tr={data.top_federal_recipients} />}
-            <SupplyChainSubawardSection lanes={data.gdots_subaward_lanes} />
+            <SupplyChainSubawardSection lanes={data.gdots_subaward_lanes} bulkLanes={data.gdots_subaward_lanes_bulk} />
           </div>
 
           <div id="sec-childcare" style={{ scrollMarginTop: 60 }}>
