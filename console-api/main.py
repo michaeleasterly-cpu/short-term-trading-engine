@@ -15,6 +15,7 @@ real data in follow-up commits without frontend changes.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import time
 from contextlib import asynccontextmanager
@@ -1874,6 +1875,222 @@ async def _usaspending_block(
     return out
 
 
+# ────────────── USAspending — GD-OTS Marion sub-award lanes ──────────────
+# Surfaces "what does GD-OTS Marion buy from out-of-region subs that local
+# firms could supply?" — the operational complement to the federal-money
+# concentration section. Joins three USAspending API endpoints client-side:
+#   A) spending_by_subaward_grouped (filtered to GD-OTS prime awards w/ subs)
+#   B) /awards/{id}/                  (NAICS-6 per prime)
+#   C) /subawards/ (POST)             (sub-recipient detail per prime)
+# 24h cache (matches the existing _USA_CACHE_TTL_SEC pattern).
+#
+# TODO: the "out_of_region_candidate" heuristic is name-only — a
+# sub-recipient name lacking MARION/CARBONDALE/ILLINOIS/IL tokens is treated
+# as likely-out-of-region. This will misclassify subs whose registered name
+# omits a city/state token but whose place-of-performance is in-region, and
+# vice versa. A proper fix requires the sub-recipient UEI + SAM.gov location
+# lookup, which the realtime /subawards/ endpoint does not return. Use this
+# field as a BD-triage hint, not a verdict.
+
+_GDOTS_RECIPIENT_NAME = "GENERAL DYNAMICS ORDNANCE & TACTICAL SYSTEMS, INC."
+_GDOTS_USASPENDING_PROFILE_URL = (
+    "https://www.usaspending.gov/recipient/"
+    "0ebec944-fe6a-00a0-5964-978a54540e03-C/latest"
+)
+_GDOTS_SUBAWARD_TTL_SEC = 24 * 60 * 60  # 24h — overrides 5-min default for this slow lane
+_LOCAL_NAME_TOKENS = ("MARION", "CARBONDALE", "ILLINOIS", " IL ")
+
+
+def _is_local_subrecipient_name(name: str) -> bool:
+    """Return True when a sub-recipient name contains any local-region token.
+    Heuristic — see TODO above. Pads the name so " IL " can match as a word."""
+    if not name:
+        return False
+    padded = f" {name.upper()} "
+    return any(tok in padded for tok in _LOCAL_NAME_TOKENS)
+
+
+async def _usaspending_gdots_subawards(lookback_months: int = 24) -> dict | None:
+    """Aggregate GD-OTS Marion sub-award flow by NAICS-6 lane.
+
+    Returns the payload shape documented in the /api/public/mantracon
+    response (gdots_subaward_lanes), or None on hard fetch failure when
+    no prior cached value is available (frontend hides the section).
+    """
+    cache_key = f"gdots_sub|{lookback_months}"
+    now = time.time()
+    cached = _USA_CACHE.get(cache_key)
+    if cached and now - cached[0] < _GDOTS_SUBAWARD_TTL_SEC:
+        return cached[1]
+
+    end = datetime.now(UTC).date()
+    start = end - timedelta(days=lookback_months * 30)
+
+    # ── Step A: prime awards with subawards ───────────────────────────────
+    step_a_body = {
+        "filters": {
+            "recipient_search_text": [_GDOTS_RECIPIENT_NAME],
+            "time_period": [{"start_date": start.isoformat(), "end_date": end.isoformat()}],
+            "award_type_codes": ["A", "B", "C", "D"],
+            "place_of_performance_locations": [{"country": "USA", "state": "IL"}],
+        },
+        "limit": 100,
+        "page": 1,
+    }
+    try:
+        async with httpx.AsyncClient(
+            timeout=20.0, limits=httpx.Limits(max_connections=8)
+        ) as client:
+            resp_a = await client.post(
+                "https://api.usaspending.gov/api/v2/search/spending_by_subaward_grouped/",
+                json=step_a_body,
+            )
+            if resp_a.status_code != 200:
+                if cached:
+                    return cached[1]
+                return None
+            primes = (resp_a.json() or {}).get("results", []) or []
+            primes = [
+                p for p in primes
+                if (p.get("subaward_count") or 0) > 0 and p.get("award_generated_internal_id")
+            ]
+            if not primes:
+                if cached:
+                    return cached[1]
+                return None
+
+            # ── Step B + Step C: NAICS + sub-recipient detail per prime ─────
+            async def _fetch_naics(internal_id: str) -> tuple[str, dict]:
+                try:
+                    r = await client.get(
+                        f"https://api.usaspending.gov/api/v2/awards/{internal_id}/"
+                    )
+                    r.raise_for_status()
+                    j = r.json() or {}
+                    base = ((j.get("naics_hierarchy") or {}).get("base_code") or {})
+                    return internal_id, {
+                        "code": str(base.get("code") or "") or None,
+                        "description": base.get("description") or "",
+                    }
+                except Exception:
+                    return internal_id, {"code": None, "description": ""}
+
+            async def _fetch_subs(internal_id: str) -> tuple[str, list[dict]]:
+                try:
+                    r = await client.post(
+                        "https://api.usaspending.gov/api/v2/subawards/",
+                        json={
+                            "award_id": internal_id,
+                            "limit": 100,
+                            "page": 1,
+                            "sort": "amount",
+                            "order": "desc",
+                        },
+                    )
+                    r.raise_for_status()
+                    j = r.json() or {}
+                    return internal_id, j.get("results", []) or []
+                except Exception:
+                    return internal_id, []
+
+            naics_tasks = [_fetch_naics(p["award_generated_internal_id"]) for p in primes]
+            subs_tasks = [_fetch_subs(p["award_generated_internal_id"]) for p in primes]
+            naics_results = await asyncio.gather(*naics_tasks, return_exceptions=True)
+            subs_results = await asyncio.gather(*subs_tasks, return_exceptions=True)
+    except Exception:
+        if cached:
+            return cached[1]
+        return None
+
+    naics_by_id: dict[str, dict] = {}
+    for item in naics_results:
+        if isinstance(item, Exception):
+            continue
+        internal_id, naics = item
+        naics_by_id[internal_id] = naics
+
+    subs_by_id: dict[str, list[dict]] = {}
+    for item in subs_results:
+        if isinstance(item, Exception):
+            continue
+        internal_id, subs = item
+        subs_by_id[internal_id] = subs
+
+    # ── Aggregate per NAICS-6 lane ──────────────────────────────────────────
+    # lane structure:
+    #   subaward_total_usd   = Σ(prime.subaward_obligation) across primes in this NAICS
+    #   subaward_count       = Σ(prime.subaward_count)
+    #   prime_award_count    = #primes mapped to this NAICS
+    #   top_sub_recipients   = top-3 by Σ(/subawards/ amount) within this NAICS
+    lanes: dict[str, dict] = {}
+    total_subaward_amount = 0.0
+    for prime in primes:
+        internal_id = prime["award_generated_internal_id"]
+        naics = naics_by_id.get(internal_id) or {"code": None, "description": ""}
+        code = naics.get("code") or "UNKNOWN"
+        name = naics.get("description") or ""
+        sub_obligation = float(prime.get("subaward_obligation") or 0)
+        sub_count = int(prime.get("subaward_count") or 0)
+        total_subaward_amount += sub_obligation
+
+        lane = lanes.setdefault(code, {
+            "naics_code": code,
+            "naics_name": name,
+            "subaward_total_usd": 0.0,
+            "subaward_count": 0,
+            "prime_award_count": 0,
+            "_recipient_sums": {},  # name -> Σ amount across /subawards/ for this lane
+        })
+        # First non-empty name wins (USAspending occasionally has blank descriptions).
+        if not lane["naics_name"] and name:
+            lane["naics_name"] = name
+        lane["subaward_total_usd"] += sub_obligation
+        lane["subaward_count"] += sub_count
+        lane["prime_award_count"] += 1
+
+        for sub in subs_by_id.get(internal_id, []):
+            rec_name = (sub.get("recipient_name") or "").strip()
+            if not rec_name:
+                continue
+            amt = float(sub.get("amount") or 0)
+            lane["_recipient_sums"][rec_name] = (
+                lane["_recipient_sums"].get(rec_name, 0.0) + amt
+            )
+
+    rows: list[dict] = []
+    for lane in lanes.values():
+        rec_sums = lane.pop("_recipient_sums")
+        sorted_recs = sorted(rec_sums.items(), key=lambda kv: -kv[1])
+        top3 = [
+            {"name": rec_name, "subaward_sum_usd": round(amt, 2)}
+            for rec_name, amt in sorted_recs[:3]
+        ]
+        out_of_region = bool(top3) and not any(
+            _is_local_subrecipient_name(r["name"]) for r in top3
+        )
+        rows.append({
+            "naics_code": lane["naics_code"],
+            "naics_name": lane["naics_name"],
+            "subaward_total_usd": round(lane["subaward_total_usd"], 2),
+            "subaward_count": lane["subaward_count"],
+            "prime_award_count": lane["prime_award_count"],
+            "top_sub_recipients": top3,
+            "out_of_region_candidate": out_of_region,
+        })
+    rows.sort(key=lambda r: -r["subaward_total_usd"])
+    rows = rows[:15]
+
+    out = {
+        "rows": rows,
+        "total_subaward_amount_usd": round(total_subaward_amount, 2),
+        "lookback_months": lookback_months,
+        "source_url": _GDOTS_USASPENDING_PROFILE_URL,
+        "fetched_at": datetime.now(UTC).isoformat(),
+    }
+    _USA_CACHE[cache_key] = (now, out)
+    return out
+
+
 @app.get("/api/public/murphysboro")
 async def public_murphysboro() -> dict:
     """PUBLIC endpoint — Murphysboro, IL (Jackson County seat, 8 mi W of Carbondale).
@@ -2035,6 +2252,7 @@ async def public_mantracon() -> dict:
     qcew = await _qcew_supersector_block(county_fips=LWA_FIPS)
     labor_truth = await _acs_labor_truth(county_fips=LWA_FIPS)
     training_alignment = _training_demand_alignment(qcew)
+    gdots_subaward_lanes = await _usaspending_gdots_subawards()
     return {
         "ts": datetime.now(UTC).isoformat(),
         "indicators": indicators,
@@ -2056,6 +2274,7 @@ async def public_mantracon() -> dict:
         "industry_mix": qcew,
         "labor_truth": labor_truth,
         "training_alignment": training_alignment,
+        "gdots_subaward_lanes": gdots_subaward_lanes,
     }
 
 

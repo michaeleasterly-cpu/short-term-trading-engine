@@ -149,6 +149,23 @@ interface IndustryMix {
   source: string;
 }
 
+interface GdotsSubawardLane {
+  naics_code: string;
+  naics_name: string;
+  subaward_total_usd: number;
+  subaward_count: number;
+  prime_award_count: number;
+  top_sub_recipients: Array<{ name: string; subaward_sum_usd: number }>;
+  out_of_region_candidate: boolean;
+}
+interface GdotsSubawardLanes {
+  rows: GdotsSubawardLane[];
+  total_subaward_amount_usd: number;
+  lookback_months: number;
+  source_url: string;
+  fetched_at: string;
+}
+
 interface PageData {
   ts: string;
   indicators: Record<string, { value: number; date: string }>;
@@ -166,6 +183,7 @@ interface PageData {
   industry_mix?: IndustryMix;
   labor_truth?: LaborTruth;
   training_alignment?: TrainingAlignment;
+  gdots_subaward_lanes?: GdotsSubawardLanes | null;
 }
 
 function TrainingROISection() {
@@ -2058,7 +2076,82 @@ function PirlOutcomesSection() {
   );
 }
 
-function SupplyChainSubawardSection() {
+function fmtUsdShort(n: number): string {
+  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `$${(n / 1_000).toFixed(0)}k`;
+  return `$${n.toFixed(0)}`;
+}
+
+function GdotsSubawardLanesTable({ lanes }: { lanes: GdotsSubawardLanes }) {
+  const fetchedDate = lanes.fetched_at ? new Date(lanes.fetched_at) : null;
+  const fetchedLabel = fetchedDate
+    ? fetchedDate.toISOString().slice(0, 10)
+    : "—";
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8 }}>
+        GD-OTS Marion sub-award lanes · top 15 by NAICS-6 (24-month lookback)
+      </div>
+      <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "hidden" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, color: "#3d3a33" }}>
+          <thead>
+            <tr style={{ background: "#f0ece1", textAlign: "left", borderBottom: "1px solid #d8d2c4" }}>
+              <th style={{ padding: "8px 10px", fontWeight: 600, color: "#1f1d18" }}>NAICS-6 · industry</th>
+              <th style={{ padding: "8px 10px", fontWeight: 600, color: "#1f1d18", textAlign: "right" }}>24-mo sub-$</th>
+              <th style={{ padding: "8px 10px", fontWeight: 600, color: "#1f1d18", textAlign: "right" }}>Sub-awards</th>
+              <th style={{ padding: "8px 10px", fontWeight: 600, color: "#1f1d18" }}>Top-3 sub-recipients</th>
+              <th style={{ padding: "8px 10px", fontWeight: 600, color: "#1f1d18" }}>Out-of-region candidate</th>
+            </tr>
+          </thead>
+          <tbody>
+            {lanes.rows.map((r) => {
+              const topNames = r.top_sub_recipients.map((s) => s.name).join(", ");
+              return (
+                <tr
+                  key={r.naics_code}
+                  style={{
+                    borderTop: "1px solid #ece7d8",
+                    borderLeft: r.out_of_region_candidate ? "3px solid #b8851f" : "3px solid transparent",
+                  }}
+                >
+                  <td style={{ padding: "8px 10px", verticalAlign: "top" }}>
+                    <div style={{ fontFamily: "ui-monospace, monospace", color: "#1f1d18", fontWeight: 600 }}>{r.naics_code}</div>
+                    <div style={{ color: "#5a564d", fontSize: 11 }}>{r.naics_name || "—"}</div>
+                  </td>
+                  <td style={{ padding: "8px 10px", textAlign: "right", verticalAlign: "top", fontFamily: "ui-monospace, monospace" }}>
+                    {fmtUsdShort(r.subaward_total_usd)}
+                    <div style={{ color: "#7a756b", fontSize: 11 }}>{r.prime_award_count} prime{r.prime_award_count === 1 ? "" : "s"}</div>
+                  </td>
+                  <td style={{ padding: "8px 10px", textAlign: "right", verticalAlign: "top", fontFamily: "ui-monospace, monospace" }}>
+                    {r.subaward_count}
+                  </td>
+                  <td style={{ padding: "8px 10px", verticalAlign: "top", maxWidth: 360 }}>
+                    {topNames || <span style={{ color: "#7a756b" }}>—</span>}
+                  </td>
+                  <td style={{ padding: "8px 10px", verticalAlign: "top" }}>
+                    {r.out_of_region_candidate ? (
+                      <span style={{ fontSize: 11, color: "#7a5e15", fontWeight: 600 }}>Yes</span>
+                    ) : (
+                      <span style={{ fontSize: 11, color: "#7a756b" }}>—</span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ marginTop: 8, fontSize: 11, color: "#7a756b", lineHeight: 1.5 }}>
+        Source: <a href={lanes.source_url} target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>USAspending.gov</a>,
+        {" "}{lanes.lookback_months}-mo lookback through {fetchedLabel}.
+        {" "}{fmtUsdShort(lanes.total_subaward_amount_usd)} flowed through sub-awards on Marion prime contracts.
+        The &quot;out-of-region candidate&quot; flag is a name-only heuristic — sub-recipient names lacking MARION / CARBONDALE / ILLINOIS / IL tokens are highlighted as likely-out-of-region. Treat as a BD-triage hint; verify each candidate&apos;s actual place-of-performance at SAM.gov before stakeholder outreach.
+      </div>
+    </div>
+  );
+}
+
+function SupplyChainSubawardSection({ lanes }: { lanes?: GdotsSubawardLanes | null }) {
   return (
     <section style={{ marginTop: 40 }}>
       <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
@@ -2076,6 +2169,8 @@ function SupplyChainSubawardSection() {
         — it&apos;s in USAspending&apos;s subaward records — but querying it requires
         per-prime filtering that&apos;s not yet wired into this page.
       </div>
+
+      {lanes && lanes.rows.length > 0 && <GdotsSubawardLanesTable lanes={lanes} />}
 
       <div style={{ marginBottom: 16, padding: 14, background: "white", border: "1px solid #d8d2c4", borderRadius: 6 }}>
         <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8 }}>How to query subaward data for community-engagement leverage</div>
@@ -2946,7 +3041,7 @@ export default async function SouthernIllinoisPage() {
 
           <div id="sec-federal-money" style={{ scrollMarginTop: 60 }}>
             {data.top_federal_recipients && <FederalConcentrationSection tr={data.top_federal_recipients} />}
-            <SupplyChainSubawardSection />
+            <SupplyChainSubawardSection lanes={data.gdots_subaward_lanes} />
           </div>
 
           <div id="sec-childcare" style={{ scrollMarginTop: 60 }}>
