@@ -9954,7 +9954,25 @@ async def _chunk_validation_suite(
     from tpcore.quality.validation.checks.ticker_classifications_freshness import (
         check_ticker_classifications_coverage,
     )
+    from tpcore.quality.validation.sources.constituents import (
+        FixtureConstituentSource,
+    )
+    from tpcore.quality.validation.sources.delistings import (
+        FixtureDelistingsSource,
+    )
+    from tpcore.quality.validation.sources.splits import FixtureSplitsSource
     from tpcore.quality.validation.suite import _safe_run
+
+    # 3 checks need fixture-source adapters (the canonical suite.py wires
+    # these via the same Fixture* defaults). The chunked path used to
+    # pass None for ALL checks, which made delistings/constituent/splits
+    # fail with AttributeError("'NoneType' object has no attribute
+    # 'list_delistings'") — fixed 2026-05-27.
+    _check_sources: dict[str, Any] = {
+        "delistings": FixtureDelistingsSource(),
+        "constituent": FixtureConstituentSource(),
+        "splits": FixtureSplitsSource(),
+    }
 
     check_fns: dict[str, Any] = {
         "delistings": check_delistings,
@@ -10006,7 +10024,7 @@ async def _chunk_validation_suite(
                 )
                 failed_checks.append(cn)
                 continue
-            tasks.append(_safe_run(cn, fn, pool, None))
+            tasks.append(_safe_run(cn, fn, pool, _check_sources.get(cn)))
 
         chunk_failed: list[str] = []
         chunk_timed_out = False
