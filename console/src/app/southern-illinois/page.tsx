@@ -1956,16 +1956,113 @@ function StructuralWorkforceConstraintsSection() {
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 24 }}>
         <div style={{ background: "white", border: "1px solid #d8d2c4", borderLeft: "6px solid oklch(45% 0.20 22)", borderRadius: 6, padding: 16 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: "#1f1d18", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>Carbondale crime rate</div>
-          <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 13, lineHeight: 1.6, color: "#3d3a33" }}>
-            <li><strong>Crime rate: 50 per 1,000 residents</strong> — among the highest in America for cities of any size (NeighborhoodScout analysis of FBI UCR data).</li>
-            <li><strong>1 in 101</strong> chance of being a violent-crime victim (incl. rape, murder/non-negligent manslaughter, armed robbery, aggravated assault).</li>
-            <li><strong>1 in 25</strong> chance of being a property-crime victim — rate of 40 per 1,000 population.</li>
-            <li>Motor vehicle theft rate explicitly flagged as among the highest in the nation.</li>
-            <li>Cross-county gang activity operates across the 5-county LWA-25 footprint (operator primary-source account).</li>
-          </ul>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#1f1d18", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>LWA-25 crime · 9-city safety ranking (FBI UCR 2024)</div>
+          <div style={{ fontSize: 12, color: "#5a564d", marginBottom: 10, lineHeight: 1.5 }}>
+            The relocator BD pitch + workforce-board safety planning both need city-level granularity, not regional aggregate. The 9 sizable LWA-25 cities span a 50× crime-rate range — Benton (1 per 1,000) is among the safest in America; Carbondale (50 per 1,000) is among the highest.
+          </div>
+          <div style={{ overflowX: "auto", marginBottom: 8 }}>
+            <table style={{ width: "100%", fontSize: 11.5, borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ background: "#ebe5d6", textAlign: "left" }}>
+                  <th style={{ padding: "5px 6px", borderBottom: "1px solid #d8d2c4" }}>#</th>
+                  <th style={{ padding: "5px 6px", borderBottom: "1px solid #d8d2c4" }}>City · County</th>
+                  <th style={{ padding: "5px 6px", borderBottom: "1px solid #d8d2c4", textAlign: "right" }}>Crime / 1,000</th>
+                  <th style={{ padding: "5px 6px", borderBottom: "1px solid #d8d2c4", textAlign: "right" }}>Violent (1 in N)</th>
+                  <th style={{ padding: "5px 6px", borderBottom: "1px solid #d8d2c4", textAlign: "right" }}>Property (1 in N)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[
+                  {rank:"🟢 1", city:"Benton · Franklin", rate:"1", violent:"very low", property:"1 in 940", tone:"safe", note:"Elite-safest in America"},
+                  {rank:"🟢 2", city:"Du Quoin · Perry", rate:"5", violent:"1 in 802", property:"1 in 255", tone:"safe", note:"Safer than 62% of IL"},
+                  {rank:"🟢 3", city:"Carterville · Williamson", rate:"10", violent:"—", property:"property 8/1k", tone:"safe", note:"Newer-construction corridor"},
+                  {rank:"🟡 4", city:"Mt. Vernon · Jefferson", rate:"13", violent:"1 in 405", property:"1 in 92", tone:"moderate", note:"Continental Tire town"},
+                  {rank:"🟠 5", city:"Herrin · Williamson", rate:"29", violent:"1 in 261", property:"1 in 40", tone:"high", note:"Williamson Co. growth corridor"},
+                  {rank:"🔴 6", city:"West Frankfort · Franklin", rate:"31", violent:"1 in 3,573 (very low)", property:"1 in 33 · MV theft 1 in 159", tone:"high", note:"IBEW 702 HQ; nearly-zero violent + high MV theft / property"},
+                  {rank:"🔴 7", city:"Marion · Williamson", rate:"34", violent:"1 in 215", property:"1 in 34", tone:"high", note:"Federal-contracting hub"},
+                  {rank:"🔴 8", city:"Murphysboro · Jackson", rate:"38", violent:"1 in 170", property:"1 in 31", tone:"high", note:"Old housing stock"},
+                  {rank:"🔴 9", city:"Carbondale · Jackson", rate:"50", violent:"1 in 101", property:"1 in 25", tone:"high", note:"SIU town; MV theft among highest in US"},
+                ].map((r, i) => (
+                  <tr key={r.city} style={{ borderBottom: i < 8 ? "1px solid #ebe5d6" : "none", background: r.tone === "safe" ? "oklch(98% 0.02 142)" : r.tone === "moderate" ? "oklch(98% 0.02 60)" : "oklch(98% 0.02 22)" }}>
+                    <td style={{ padding: "4px 6px", whiteSpace: "nowrap" }}>{r.rank}</td>
+                    <td style={{ padding: "4px 6px" }}><strong>{r.city}</strong><br /><span style={{ fontSize: 10.5, color: "#7a756b" }}>{r.note}</span></td>
+                    <td style={{ padding: "4px 6px", textAlign: "right", fontWeight: 600, color: r.tone === "safe" ? "oklch(40% 0.18 142)" : r.tone === "high" ? "oklch(45% 0.20 22)" : "oklch(45% 0.18 60)" }}>{r.rate}</td>
+                    <td style={{ padding: "4px 6px", textAlign: "right", color: "#5a564d" }}>{r.violent}</td>
+                    <td style={{ padding: "4px 6px", textAlign: "right", color: "#5a564d" }}>{r.property}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ fontSize: 12, lineHeight: 1.55, color: "#3d3a33", marginBottom: 8 }}>
+            <strong>BD takeaways:</strong>
+            <ul style={{ margin: "4px 0 0 18px", padding: 0 }}>
+              <li><strong>Direct safety-prioritized relocators to Benton, Du Quoin, or Carterville</strong> — these are the safest LWA-25 cities. Carterville pairs safety with newer-construction inventory + Walker&apos;s Bluff anchor + I-13 corridor.</li>
+              <li><strong>Mt. Vernon is the &quot;safer larger town&quot; pick</strong> for relocators wanting more amenity density than Benton + Continental Tire job adjacency. Old housing stock is the trade-off.</li>
+              <li><strong>Marion has elevated crime (34/1,000) despite the newer-construction + federal-contracting story.</strong> Pair the BD pitch with honest acknowledgment + the response (Marion PD + Williamson County Sheriff + IL State Police District 13).</li>
+              <li><strong>West Frankfort is a profile outlier</strong> — total crime 31/1,000 but VIOLENT crime is nearly zero (1 in 3,573); essentially all crime is property-side, with MV theft 1 in 159 (among the highest in the nation). Quality-of-life for residents is closer to Mt. Vernon than to Marion / Murphysboro / Carbondale, but car theft is a real exposure.</li>
+              <li><strong>Carbondale (50/1,000) + Murphysboro (38/1,000) + Marion (34) + West Frankfort property-only (31) + Herrin (29) are the higher-crime cities.</strong> SIU recruitment / graduate-retention housing strategy has to address security + visibility-of-response, not just price-to-wage math. Motor vehicle theft is the signature local crime in Carbondale + West Frankfort.</li>
+              <li><strong>SIU campus (Clery Act 2024) reports zero murder/robbery/arson across 3 years</strong> + low motor-vehicle theft, BUT reported rapes trended UP 2→4→9 (2022→2024), 8 of the 9 in student housing. Whether this is rising incident rate or rising reporting culture is the open question — both deserve operations attention from SIU DPS + Title IX.</li>
+              <li><strong>Cross-county gang activity</strong> operates across the LWA-25 footprint (operator account — primary source for that specific framing); FBI UCR doesn&apos;t aggregate gang-association the same way it tracks individual offenses.</li>
+            </ul>
+          </div>
           <div style={{ fontSize: 11, color: "#7a756b", marginTop: 8, lineHeight: 1.5 }}>
-            Sources: <a href="https://www.neighborhoodscout.com/il/carbondale/crime" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>NeighborhoodScout · Carbondale Crime</a> + <a href="https://isp.illinois.gov/CrimeReporting/CrimeInIllinoisReports" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>IL State Police Crime in Illinois reports</a>.
+            Sources: <a href="https://www.neighborhoodscout.com/il/carbondale/crime" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>NeighborhoodScout Carbondale</a> · <a href="https://www.neighborhoodscout.com/il/marion/crime" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Marion</a> · <a href="https://www.neighborhoodscout.com/il/mount-vernon/crime" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Mt. Vernon</a> · <a href="https://www.neighborhoodscout.com/il/herrin/crime" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Herrin</a> · <a href="https://www.neighborhoodscout.com/il/murphysboro/crime" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Murphysboro</a> · <a href="https://www.neighborhoodscout.com/il/du-quoin/crime" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Du Quoin</a> · <a href="https://www.neighborhoodscout.com/il/benton/crime" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Benton</a> · <a href="https://www.neighborhoodscout.com/il/west-frankfort/crime" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>West Frankfort</a> · <a href="https://www.neighborhoodscout.com/il/carterville/crime" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Carterville</a> · <a href="https://isp.illinois.gov/CrimeReporting/CrimeInIllinoisReports" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>IL State Police Crime in Illinois reports</a>. All FBI UCR 2024 calendar year, released October 2025. (West Frankfort 2023 data; NeighborhoodScout 2024 release pending.)
+          </div>
+
+          {/* SIU Carbondale campus — Clery Act, separate metric (raw counts not per-1000) */}
+          <div style={{ marginTop: 12, padding: 12, background: "oklch(98% 0.015 220)", border: "1px solid #d8d2c4", borderRadius: 4 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "#1f1d18", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+              SIU Carbondale campus · Clery Act 2024 ASR (released Sept 2025)
+            </div>
+            <div style={{ fontSize: 11.5, color: "#5a564d", marginBottom: 8, lineHeight: 1.5 }}>
+              Different metric — Clery counts ONLY specific federally-defined offenses on the campus footprint + immediate public property. <strong>Not directly comparable to the per-1,000 city rates above.</strong> Campus population ~11k students + staff; on-campus housing capacity ~5-6k students.
+            </div>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", fontSize: 11.5, borderCollapse: "collapse" }}>
+                <thead>
+                  <tr style={{ background: "#ebe5d6", textAlign: "left" }}>
+                    <th style={{ padding: "4px 6px", borderBottom: "1px solid #d8d2c4" }}>Clery offense</th>
+                    <th style={{ padding: "4px 6px", borderBottom: "1px solid #d8d2c4", textAlign: "right" }}>2022 total</th>
+                    <th style={{ padding: "4px 6px", borderBottom: "1px solid #d8d2c4", textAlign: "right" }}>2023 total</th>
+                    <th style={{ padding: "4px 6px", borderBottom: "1px solid #d8d2c4", textAlign: "right" }}>2024 total</th>
+                    <th style={{ padding: "4px 6px", borderBottom: "1px solid #d8d2c4", textAlign: "right" }}>2024 in student housing</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[
+                    {label: "Murder / non-negligent manslaughter", y22:"0", y23:"0", y24:"0", h24:"0"},
+                    {label: "Sex offense: rape", y22:"2", y23:"4", y24:"9", h24:"8", flag: true},
+                    {label: "Sex offense: forcible fondling", y22:"1", y23:"1", y24:"0", h24:"0"},
+                    {label: "Robbery", y22:"0", y23:"0", y24:"0", h24:"0"},
+                    {label: "Aggravated assault", y22:"3", y23:"6", y24:"2", h24:"2"},
+                    {label: "Burglary", y22:"10", y23:"4", y24:"10", h24:"1"},
+                    {label: "Motor vehicle theft", y22:"5", y23:"0", y24:"2", h24:"0"},
+                    {label: "Arson", y22:"0", y23:"0", y24:"0", h24:"0"},
+                  ].map((r, i) => (
+                    <tr key={r.label} style={{ borderBottom: i < 7 ? "1px solid #ebe5d6" : "none", background: r.flag ? "oklch(98% 0.03 22)" : "transparent" }}>
+                      <td style={{ padding: "3px 6px" }}>{r.label}{r.flag && <span style={{ fontSize: 10, color: "oklch(45% 0.20 22)", marginLeft: 6 }}>(2022→2024 trend up: 2→4→9)</span>}</td>
+                      <td style={{ padding: "3px 6px", textAlign: "right", color: "#5a564d" }}>{r.y22}</td>
+                      <td style={{ padding: "3px 6px", textAlign: "right", color: "#5a564d" }}>{r.y23}</td>
+                      <td style={{ padding: "3px 6px", textAlign: "right", fontWeight: 600 }}>{r.y24}</td>
+                      <td style={{ padding: "3px 6px", textAlign: "right", color: "#5a564d" }}>{r.h24}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div style={{ fontSize: 11, color: "#3d3a33", marginTop: 8, lineHeight: 1.5 }}>
+              <strong>SIU campus signals worth flagging to admissions / Title IX / housing operations:</strong>
+              <ul style={{ margin: "4px 0 0 18px", padding: 0 }}>
+                <li><strong>Reported rapes UP 2→4→9 over three years</strong>, with 8 of the 9 in student housing in 2024. Whether the underlying incident rate is rising or reporting culture is improving is the operator question — but the trend deserves attention.</li>
+                <li><strong>Aggravated assault DOWN 3→6→2.</strong> Burglary held flat (10 → 4 → 10). Motor vehicle theft on-campus is low compared to the Carbondale-citywide rate (which is among the highest in the US per NeighborhoodScout).</li>
+                <li><strong>Robbery, murder, arson all ZERO across all three years.</strong></li>
+                <li>SIU campus + UnivPark housing footprint is materially safer than the surrounding Carbondale city footprint for property crime, but the rape-trend signal is the standout.</li>
+              </ul>
+            </div>
+            <div style={{ fontSize: 10.5, color: "#7a756b", marginTop: 6, lineHeight: 1.5 }}>
+              Source: <a href="https://safe.siu.edu/_common/documents/2024_asr.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>SIU Department of Public Safety · 2024 Annual Security and Fire Safety Report</a> (released September 2025, covers calendar years 2022-2024). On-Campus Total includes On-Campus Student Housing as a subset.
+            </div>
           </div>
         </div>
 
