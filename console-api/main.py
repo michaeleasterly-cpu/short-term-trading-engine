@@ -860,10 +860,10 @@ _TRAINING_LADDER_ROSTER = [
      "training_duration": "12 months",
      "notes": "Significant step up from CNA. Common ladder rung. Still single-adult-only territory."},
     {"id": "rn_adn",         "name": "RN (ADN, Associate Degree)",          "supersector_code": "1025",
-     "ladder": "2yr ADN at JALC + NCLEX",
+     "ladder": "2yr ADN at JALC + NCLEX (+ optional 1yr local before travel-agency)",
      "typical_journey_wage_wkly": 1380,  # $34.50/hr × 40 starting at SIH
      "training_duration": "2 years",
-     "notes": "Memorial Hospital + SIH + Marion VA all hire ADN-RNs. Strong local demand + family-supporting (barely). BSN bridge adds $4-6/hr."},
+     "notes": "Memorial Hospital + SIH + Marion VA all hire ADN-RNs. Strong local demand at $32-38/hr starting. BSN bridge adds $4-6/hr. CRITICAL PATH UP: after 1 year of local floor experience, RNs become eligible for travel-nurse agencies paying $60-110/hr blended ($130-200k+/yr — see Travel Jobs section below). The 'land at SIH for 1 year then go travel' play is the highest-dollar 2-year-credential path in the region. Family compatibility depends on family structure — single parents = tough; partnered nurses with childcare = transformative income jump."},
     {"id": "welding",        "name": "Welder (structural / pipe)",          "supersector_code": "1013",
      "ladder": "JALC 12-18mo welding program + AWS certs",
      "typical_journey_wage_wkly": 1240,  # $31/hr × 40
