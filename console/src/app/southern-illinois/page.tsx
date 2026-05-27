@@ -599,7 +599,7 @@ function HousingAffordabilitySection() {
               <li><strong>Carterville</strong> — Cedar Creek + Rolling Hills Estates + Spring Garden Estates subdivisions; newer properties $400-600k.</li>
               <li><strong>Herrin</strong> — newer developments per operator account; Williamson County Housing Authority active.</li>
               <li><strong>Anchor:</strong> Walker&apos;s Bluff Casino &amp; Resort + IL-13 6-lane widening Marion→Carbondale + Aisin + GD-OTS = economic-growth driver.</li>
-              <li><strong>Williamson Co. is the fastest-growing county in Illinois outside Chicago collar counties + Metro-East</strong> (verified — solar power world / Marion Chamber).</li>
+              <li><strong>Williamson Co. is the standout growth county in the Southern Illinois (LWA-25) footprint</strong> per Marion Chamber + regional sources; growth is modest relative to Chicago collar counties (Kendall, McHenry) + Metro-East but is the active corridor downstate.</li>
             </ul>
           </div>
           <div style={{ background: "white", border: "1px solid #ebe5d6", borderRadius: 4, padding: 12 }}>
@@ -623,7 +623,7 @@ function HousingAffordabilitySection() {
           <li><strong>The economic-anchor → housing-growth link is not automatic.</strong> Mt. Vernon has 3,667 Continental Tire jobs and still has old residential stock; without an active municipal posture toward new construction (TIF, sewer extension, zoning incentives), anchor employers alone don&apos;t pull desirable inventory. Marion has gotten this right (Star Bond District + Longstreet expansion); other anchor towns can copy the playbook.</li>
         </ul>
         <div style={{ fontSize: 11, color: "#7a756b", marginTop: 8, lineHeight: 1.5 }}>
-          Sources: <a href="https://www.census.gov/quickfacts/fact/table/carbondalecityillinois/PST045221" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Census QuickFacts Carbondale</a> + <a href="http://censusreporter.org/profiles/16000US1711163-carbondale-il/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Census Reporter Carbondale</a> + <a href="https://www.city-data.com/housing/houses-Murphysboro-Illinois.html" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>City-Data Murphysboro housing</a> + <a href="https://www.explorecarbondale.com/189/Mandatory-Rental-Housing-Inspection-Prog" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Carbondale Mandatory Rental Housing Inspection Program</a> + <a href="https://murphysboro.com/government/city-departments/public-works/code-enforcement/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>City of Murphysboro Code Enforcement</a> + <a href="https://marionillinois.com/relocation/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Marion Chamber of Commerce — Relocating + Investing in Marion</a> + operator primary-source town-by-town inventory account 2026-05-27.
+          Sources: <a href="https://www.census.gov/quickfacts/fact/table/carbondalecityillinois/PST045221" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Census QuickFacts Carbondale</a> + <a href="http://censusreporter.org/profiles/16000US1711163-carbondale-il/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Census Reporter Carbondale</a> + <a href="https://www.city-data.com/housing/houses-Murphysboro-Illinois.html" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>City-Data Murphysboro housing</a> + <a href="https://www.explorecarbondale.com/189/Mandatory-Rental-Housing-Inspection-Prog" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Carbondale Mandatory Rental Housing Inspection Program</a> + <a href="https://murphysboro.com/government/city-departments/public-works/code-enforcement/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>City of Murphysboro Code Enforcement</a> + <a href="https://marionillinois.com/relocation/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Marion Chamber of Commerce — Relocating + Investing in Marion</a> . Census housing-stock figures are sourced from ACS 5-year tables: B25034 (Year Structure Built), B25003 (Tenure / Owner vs Renter), B25002 (Occupancy Status incl. vacancy), B25047 (Complete Plumbing Facilities), B25048 (Complete Kitchen Facilities), accessible via Census Reporter + data.census.gov for the Carbondale + Murphysboro Census Place codes (16000US1711163 + 16000US1751453).
         </div>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
@@ -944,7 +944,7 @@ function TravelJobsSection() {
         have better home-time structures.
       </div>
       <div style={{ padding: 14, background: "#fef9eb", border: "1px solid #f0d98a", borderLeft: "6px solid oklch(45% 0.20 22)", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, marginBottom: 16 }}>
-        <strong>Honest framing — wage clears, home-time depends on household configuration.</strong> Each row below carries a TRAVEL-WORK verdict in the single-mom-test taxonomy. The wage column shows the all-in number that clears the MIT Living Wage Jackson Co. 1A+2C bar ($46.76/hr / ~$97k/yr) — sometimes by 2× or more. <strong>The viability of travel work depends entirely on who&apos;s at home covering the kids.</strong>
+        <strong>Honest framing — wage clears, home-time depends on household configuration.</strong> Each row below carries a TRAVEL-WORK verdict in the single-mom-test taxonomy. The wage column shows the all-in number that clears the MIT Living Wage Jackson Co. 1A+2C bar ($46.76/hr / ~$97k/yr) — sometimes by 2× or more. <strong>The viability of travel work depends entirely on who&apos;s at home covering the kids.</strong>{" "}<em>The same home-time test extends to the LOCAL · FAMILY-SUPPORTING rows further down — the §14 Structural Constraints section documents the mandatory-overtime pattern (Aisin, Continental, USG, etc.) where wage clears 1A+2C but a 6-day / 50-60 hr schedule destroys home-life. Read both together.</em>
         <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10 }}>
           <div style={{ background: "white", border: "1px solid oklch(45% 0.16 142)33", borderLeft: "4px solid oklch(45% 0.16 142)", borderRadius: 4, padding: 10 }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: "oklch(35% 0.18 142)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>✓ Dual-earner with children</div>
@@ -1098,11 +1098,11 @@ function AttractionPipelineSection() {
           { factor: "IL Data Center Investments Act", grade: "✓ STRONG", note: "Public Act 101-0031 — 20-year sales-tax exemption on equipment + property-tax abatement eligible. Eligibility floor per IL DCEO program page (dceo.illinois.gov/expandrelocate/incentives/datacenters.html): $250M minimum capital investment over 60 months, minimum 20 FTE at 120% of COUNTY MEDIAN WAGE, carbon-neutral OR green-building certification required. The 120%-of-county-median-wage requirement is a workforce-board WIN — any DC operator must pay above median to qualify. Underserved-area projects unlock an additional 20% construction-wage tax credit. File DCEO certification before any RFP arrives.", color: "oklch(45% 0.16 142)" },
           { factor: "Water (cooling)", grade: "✓ STRONG", note: "Crab Orchard NWR, Kinkaid Lake, Mississippi River access. Sufficient for all but the largest installations.", color: "oklch(45% 0.16 142)" },
           { factor: "Land cost", grade: "✓ STRONG", note: "Undervalued vs Northern Virginia, Phoenix, Columbus.", color: "oklch(45% 0.16 142)" },
-          { factor: "Power cost — Ameren vs Egyptian Electric Cooperative (EECA) head-to-head", grade: "~ MODERATE", note: "Ameren IL published industrial rate ~$0.08-0.09/kWh. EECA does not publish a comparable industrial-class per-kWh tariff in the same machine-readable way (member-coops negotiate large-power deals bespoke; see eeca.coop/member-services/rate-schedules/). Typical rural-coop industrial rates run 1-2¢/kWh below IOU — call it ~$0.06-0.08/kWh expected range, subject to negotiation. EECA's wholesale supplier Southern Illinois Power Cooperative (SIPC) operates the Marion Generating Station AT LAKE OF EGYPT (Williamson County, inside LWA-25): 120 MW circulating fluidized bed coal boiler + 2× 70 MW simple-cycle natural gas/oil turbines (~260 MW total operating, after the October 2020 retirement of Unit 4 — SIPC's largest coal unit). Lake of Egypt itself was built in 1962 as the cooling reservoir for the plant. SIPC also owns 125 MW (7.9%) of Prairie State Energy Campus (Lively Grove, IL — Washington County), 28 MW hydro from SEPA in the TVA region, 10 MW Pioneer Trail Wind (Paxton IL), and 100 MW Big River Solar (White County IL). That's a 'local generation for local load' pitch with minimal transmission distance — Northern VA can't claim that. Neither can compete with NoVa $0.06 on a paper-rate basis, but the bespoke-deal latitude + local-generation story plus the IL Data Center Act sales-tax exemption changes the all-in math. Sources: sipower.org/power-supply + SIPC Unit 4 retirement filings (icl.coop, thesouthern.com).", color: "oklch(48% 0.15 60)" },
+          { factor: "Power cost — Ameren vs Egyptian Electric Cooperative (EECA) head-to-head", grade: "~ MODERATE", note: "Ameren IL industrial rate ~$0.08-0.09/kWh. EECA (member co-op) negotiates large-power deals bespoke; expect ~$0.06-0.08/kWh range. EECA wholesales from SIPC's Marion Generating Station at Lake of Egypt (Williamson Co.) — 260 MW total (120 MW coal + 140 MW gas/oil). SIPC also owns 125 MW of Prairie State (Lively Grove), 28 MW SEPA hydro, 10 MW Pioneer Trail Wind, 100 MW Big River Solar. Local generation for local load. Neither beats NoVa $0.06 on paper; the bespoke-deal latitude + IL Data Center Act sales-tax exemption change the all-in math. Sources: sipower.org, icl.coop, thesouthern.com.", color: "oklch(48% 0.15 60)" },
           { factor: "Federal IRA Energy Communities adder", grade: "✓ STRONG", note: "Franklin and Perry counties are coal-closure tracts. Solar/wind/storage projects sited here get IRA §48 +10pp ITC bonus on top of 30% base. Use for behind-the-meter generation co-located with DC.", color: "oklch(45% 0.16 142)" },
           { factor: "Fiber diversity — the grant-but-no-coverage paradox", grade: "✗ WEAK", note: "Public broadband investment in Southern IL is large and verifiable. Delta Communications dba Clearwave Communications received $31.5M from NTIA's BTOP program + $11M IL state match ($42.5M total) for a 23-county middle-mile network connecting 232 community anchor institutions (NTIA grant filing, ntia.doc.gov). Recent IL state Connect Illinois rounds have added WK&T's $9.8M (Jackson + Union Cos.) and ProTek Communications' $51M (Franklin/Jackson/Johnson/Massac/Williamson/Union Cos.). BEAD adds another $1B+ in IL allocation. Coverage on paper has improved. But data-center-grade fiber diversity is a different problem these grants don't fully solve: hyperscale needs 3+ INDEPENDENT carriers with physically diverse routes; most LWA-25 enterprise-class footprint has 1-2 carriers, not 3+ with route diversity. Carriers present include AT&T, Frontier, Mediacom, Clearwave, WK&T, ProTek. NTIA's original Clearwave grant terms included an open-access interconnection requirement for smaller last-mile providers — small ISP operators who believe these conditions are not being honored should file complaints with the IL Office of Broadband (DCEO) and NTIA. The fix-up paths: (a) audit grant compliance (open-access conditions), (b) IL Century Network (ICN — state-owned middle-mile) as alternative wholesale source, (c) municipal / coop broadband authority creation, (d) IIJA middle-mile grants directed to public or cooperative entities rather than incumbents. This remains the single weakest scorecard line for hyperscale recruitment.", color: "oklch(45% 0.20 22)" },
           { factor: "Operations talent (200-person ops staff)", grade: "✗ WEAK", note: "SIU produces some IT capacity but no existing data-center workforce concentration. the workforce board + JALC + Rend Lake would need to stand up a DC-ops training program in parallel to any recruitment.", color: "oklch(45% 0.20 22)" },
-          { factor: "On-campus utility anchor — SIU Carbondale Power Plant", grade: "✓ EMERGING", note: "SIU operates a 3.14 MW turbine generator powered by a circulating fluidized bed (CFB) coal boiler (B&W primary), consuming ~50,000 tons of coal/year and supplying 10-15% of campus electrical load plus a district steam loop for heating/cooling. 4 boilers on site: 2 mothballed stokers + 1 gas-fired + 1 primary CFB coal. 2022 sustainability proposals ($105-120M) target retrofit of the 27-yr-old coal boiler + replacement of the old gas boiler with two new natural-gas units — i.e., on a coal→gas path but still operating. For data-center attraction: existing on-site generation + steam-distribution + electrical-bus + cooling-tower water infrastructure is a real anchor asset. University-anchored data center is a documented pattern (NSF NCSA Petascale Computing Facility at UIUC sits next to its own campus utilities operation). The coal→gas conversion plan is also an opportunity for adjacent siting / heat-recovery integration. Source: facilities.siu.edu/utilities/ + Global Energy Monitor SIU Carbondale Plant page.", color: "oklch(48% 0.15 60)" },
+          { factor: "On-campus utility anchor — SIU Carbondale Power Plant", grade: "✓ EMERGING", note: "SIU operates a 3.14 MW coal-fired turbine + district steam loop (4 boilers: 1 primary coal CFB + 1 gas + 2 mothballed). Supplies 10-15% of campus electrical load. 2022 sustainability proposals ($105-120M) target the coal→gas conversion. Existing generation + steam + electrical-bus + cooling-tower water are an anchor asset for university-adjacent data-center siting. NSF NCSA Petascale at UIUC is the documented comparable. Sources: facilities.siu.edu/utilities/ + Global Energy Monitor.", color: "oklch(48% 0.15 60)" },
         ].map((f, i) => (
           <div key={i} style={{ padding: "10px 0", borderTop: i === 0 ? "none" : "1px solid #ebe5d6", display: "grid", gridTemplateColumns: "1fr auto", gap: 12, alignItems: "baseline" }}>
             <div>
@@ -1639,7 +1639,7 @@ function AttractionPipelineSection() {
             fit: "STRONG FIT",
             fit_color: "oklch(45% 0.16 142)",
             what: "Target federal civilian retirees + veteran retirees + ESPECIALLY 70%+ service-connected disabled veterans seeking low cost-of-living retirement with healthcare access. They bring pension income (typically $40-100k+) and Medicare / VA healthcare demand that supports the regional health-sector workforce. Illinois' combined disabled-veteran + retiree tax stack is one of the strongest in the US — verified specifics below.",
-            why_here: "Marion VA Medical Center is the existing healthcare anchor. SIH + Memorial Carbondale add capacity. LWA-25 cost-of-living is far below federal-retiree concentration cities. Veteran population already loves the region (per the Federal Money Concentration section — VA-driven economic flows dominate). \n\nIL STATE TAX STACK FOR THIS COHORT (verified IL Dept of Revenue Pub-102 + Pub-120 + 35 ILCS 200/15-169): \n\n(a) PROPERTY TAX — Standard Homestead Exemption for Veterans with Disabilities (SHEVD), 35 ILCS 200/15-169: 30-49% SC disability = $2,500 EAV exemption; 50-69% SC disability = $5,000 EAV exemption; 70%+ SC disability = exemption on the first $250,000 of EAV (Equalized Assessed Value), which translates to roughly $750,000 market value (IL EAV ≈ ⅓ of market value). Homes above that cap pay tax only on the portion above the $750k market threshold. Statute was amended in 2023 to add the $250k EAV ceiling — pre-2023 was unlimited. Unmarried surviving spouse qualifies if vet held exemption pre-death OR if service member KIA. Annual filing required at the county assessor (PTAX-342). \n\n(b) IL INCOME TAX — Illinois does NOT tax: military active pay, military retirement (incl. disability pay), federal civilian pensions (FERS / CSRS), state pensions, Social Security, IRA distributions, 401(k) distributions, railroad retirement. IL income tax is a 4.95% flat rate; for federal retirees + military retirees, effectively zero applies to retirement income. File IL-1040 with the Line-5 subtraction. \n\n(c) COMBINED MATH for a 70%+ SC disabled vet in LWA-25: $0 property tax + $0 IL income tax on disability/military-retired/federal-pension/Social-Security/IRA-401k + on-site VA healthcare at Marion VAMC + low housing cost in the Marion-Herrin-Carterville newer-construction corridor (Williamson Co. growth area) = a stack few US regions can match.",
+            why_here: "Marion VA Medical Center is the existing healthcare anchor. SIH + Memorial Carbondale add capacity. LWA-25 cost-of-living is far below federal-retiree concentration cities. Veteran population already loves the region (per the Federal Money Concentration section — VA-driven economic flows dominate). \n\nIL STATE TAX STACK FOR THIS COHORT (verified IL Dept of Revenue Pub-102 + Pub-120 + 35 ILCS 200/15-169): \n\n(a) PROPERTY TAX — Standard Homestead Exemption for Veterans with Disabilities (SHEVD), 35 ILCS 200/15-169: 30-49% SC disability = $2,500 EAV exemption; 50-69% SC disability = $5,000 EAV exemption; 70%+ SC disability = exemption on the first $250,000 of EAV (Equalized Assessed Value), which translates to roughly $750,000 market value (IL EAV ≈ ⅓ of market value). Homes above that cap pay tax only on the portion above the $750k market threshold. Statute was amended in 2023 to add the $250k EAV ceiling — pre-2023 was unlimited. Unmarried surviving spouse qualifies if vet held exemption pre-death OR if service member KIA. Annual filing required at the county assessor (PTAX-342). \n\n(b) IL INCOME TAX — Illinois does not tax military active pay. It does not tax military retirement, including disability pay. It does not tax federal civilian pensions (FERS or CSRS), state pensions, Social Security, IRA withdrawals, 401(k) withdrawals, or railroad retirement. The IL income tax rate is a flat 4.95%. For federal and military retirees, almost no retirement income is taxed. File IL-1040 with the Line-5 subtraction. \n\n(c) COMBINED MATH for a 70%+ SC disabled vet in LWA-25: $0 property tax + $0 IL income tax on disability/military-retired/federal-pension/Social-Security/IRA-401k + on-site VA healthcare at Marion VAMC + low housing cost in the Marion-Herrin-Carterville newer-construction corridor (Williamson Co. growth area) = a stack few US regions can match.",
             action: "Targeted marketing through Federal News Network, Military Times, VFW + American Legion networks, DAV chapters, Vet Tix, MOAA. Carbondale + Marion Chambers partner with Marion VA to host quarterly retirement-relocation open houses (at Giant City Lodge — the destination-grade venue, not the I-57 chain hotels). Each open house leads with the IL combined tax-stack math + property-tax SHEVD calculator for the prospect's specific disability rating.",
             sources: [
               { url: "https://www.marion.va.gov/", label: "Marion VA Medical Center" },
@@ -2002,7 +2002,7 @@ function StructuralWorkforceConstraintsSection() {
               <li><strong>Marion has elevated crime (34/1,000) despite the newer-construction + federal-contracting story.</strong> Pair the BD pitch with honest acknowledgment + the response (Marion PD + Williamson County Sheriff + IL State Police District 13).</li>
               <li><strong>West Frankfort is a profile outlier</strong> — total crime 31/1,000 but VIOLENT crime is nearly zero (1 in 3,573); essentially all crime is property-side, with MV theft 1 in 159 (among the highest in the nation). Quality-of-life for residents is closer to Mt. Vernon than to Marion / Murphysboro / Carbondale, but car theft is a real exposure.</li>
               <li><strong>Carbondale (50/1,000) + Murphysboro (38/1,000) + Marion (34) + West Frankfort property-only (31) + Herrin (29) are the higher-crime cities.</strong> SIU recruitment / graduate-retention housing strategy has to address security + visibility-of-response, not just price-to-wage math. Motor vehicle theft is the signature local crime in Carbondale + West Frankfort.</li>
-              <li><strong>SIU campus (Clery Act 2024) reports zero murder/robbery/arson across 3 years</strong> + low motor-vehicle theft, BUT reported rapes trended UP 2→4→9 (2022→2024), 8 of the 9 in student housing. Whether this is rising incident rate or rising reporting culture is the open question — both deserve operations attention from SIU DPS + Title IX.</li>
+              <li><strong>SIU campus (Clery Act 2024) three-year totals:</strong> zero murder, robbery, and arson across all three years. Motor vehicle theft on-campus: 5 → 0 → 2. Burglary: 10 → 4 → 10. Aggravated assault: 3 → 6 → 2. Reported rapes: 2 → 4 → 9 (with 8 of 9 in 2024 in student housing).</li>
               <li><strong>Cross-county gang activity</strong> operates across the LWA-25 footprint (operator account — primary source for that specific framing); FBI UCR doesn&apos;t aggregate gang-association the same way it tracks individual offenses.</li>
             </ul>
           </div>
@@ -2041,7 +2041,7 @@ function StructuralWorkforceConstraintsSection() {
                     {label: "Arson", y22:"0", y23:"0", y24:"0", h24:"0"},
                   ].map((r, i) => (
                     <tr key={r.label} style={{ borderBottom: i < 7 ? "1px solid #ebe5d6" : "none", background: r.flag ? "oklch(98% 0.03 22)" : "transparent" }}>
-                      <td style={{ padding: "3px 6px" }}>{r.label}{r.flag && <span style={{ fontSize: 10, color: "oklch(45% 0.20 22)", marginLeft: 6 }}>(2022→2024 trend up: 2→4→9)</span>}</td>
+                      <td style={{ padding: "3px 6px" }}>{r.label}</td>
                       <td style={{ padding: "3px 6px", textAlign: "right", color: "#5a564d" }}>{r.y22}</td>
                       <td style={{ padding: "3px 6px", textAlign: "right", color: "#5a564d" }}>{r.y23}</td>
                       <td style={{ padding: "3px 6px", textAlign: "right", fontWeight: 600 }}>{r.y24}</td>
@@ -2052,12 +2052,13 @@ function StructuralWorkforceConstraintsSection() {
               </table>
             </div>
             <div style={{ fontSize: 11, color: "#3d3a33", marginTop: 8, lineHeight: 1.5 }}>
-              <strong>SIU campus signals worth flagging to admissions / Title IX / housing operations:</strong>
+              <strong>SIU campus three-year movement:</strong>
               <ul style={{ margin: "4px 0 0 18px", padding: 0 }}>
-                <li><strong>Reported rapes UP 2→4→9 over three years</strong>, with 8 of the 9 in student housing in 2024. Whether the underlying incident rate is rising or reporting culture is improving is the operator question — but the trend deserves attention.</li>
-                <li><strong>Aggravated assault DOWN 3→6→2.</strong> Burglary held flat (10 → 4 → 10). Motor vehicle theft on-campus is low compared to the Carbondale-citywide rate (which is among the highest in the US per NeighborhoodScout).</li>
-                <li><strong>Robbery, murder, arson all ZERO across all three years.</strong></li>
-                <li>SIU campus + UnivPark housing footprint is materially safer than the surrounding Carbondale city footprint for property crime, but the rape-trend signal is the standout.</li>
+                <li>Reported rapes: 2 → 4 → 9 (2022 → 2023 → 2024). 8 of the 9 in 2024 were in student housing.</li>
+                <li>Aggravated assault: 3 → 6 → 2.</li>
+                <li>Burglary: 10 → 4 → 10.</li>
+                <li>Motor vehicle theft: 5 → 0 → 2.</li>
+                <li>Robbery, murder, arson: 0 in each of the three years.</li>
               </ul>
             </div>
             <div style={{ fontSize: 10.5, color: "#7a756b", marginTop: 6, lineHeight: 1.5 }}>
@@ -2181,18 +2182,17 @@ function FundingDrivenProgrammingSection() {
         WIOA funding incentives vs LWA-25 demand mix · where the formula and the region diverge
       </h2>
       <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 760, lineHeight: 1.55 }}>
-        The pattern emerges across multiple sections of this page: CEJA solar
-        installer training with no local installers; CEJA wind tech training when
-        the wind farms are in Northern Illinois; negotiated PIRL median-earnings
-        targets that annualize below the local single-adult living wage. Each of
-        these looks like a local choice but is actually a structural consequence
-        of how WIOA + state workforce funding flows. Workforce boards are funded
-        AGAINST METRICS the federal + state programs already measure (enrollment,
-        completion, credential attainment, Q2 employment rate) — NOT against
-        whether trainees land in family-supporting local jobs. When a new
-        funding stream opens (CEJA Climate Works pre-apprenticeship), boards
-        deploy it because operating budgets depend on deployment, regardless of
-        whether the local economy can absorb the credential-holders.
+        The pattern shows up in several sections: CEJA solar installer training
+        with a small local installer base; CEJA wind tech training when the
+        wind farms are 5+ hours north; PIRL targets that annualize below the
+        local single-adult living wage. Each looks like a local choice. It is
+        not. It follows from how WIOA and state workforce dollars flow. Boards
+        are funded against metrics the federal and state programs measure
+        (enrollment, completion, credential attainment, Q2 employment rate).
+        They are not funded against whether trainees land in family-supporting
+        local jobs. When a new funding stream opens, boards deploy it.
+        Operating budgets depend on deployment, whether or not the local
+        economy can absorb the credentials.
       </div>
 
       <div style={{ marginBottom: 16, padding: 14, background: "white", border: "1px solid #d8d2c4", borderRadius: 6 }}>
@@ -2703,14 +2703,14 @@ function SupplyChainSubawardSection({
           <li><strong>Filter subawards by NAICS code.</strong> Common GD-OTS munitions-manufacturing subaward NAICS: 332710 (Machine Shops), 332618 (Wire Products Manufacturing), 332999 (Misc Fabricated Metal Products), 488510 (Freight Transportation Arrangement), 561621 (Security Systems Services), 423840 (Industrial Supplies Wholesale).</li>
           <li><strong>Filter subaward recipients by place-of-performance.</strong> Subawardees in OTHER states for work performed at GD-OTS Marion are the candidates for local-firm replacement.</li>
           <li><strong>IL DCEO Industrial Supply Directory</strong> at <a href="https://dceo.illinois.gov/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>dceo.illinois.gov</a> — cross-reference local IL firms with capability to fill those NAICS gaps.</li>
-          <li><strong>SBA HUBZone + 8(a) directories</strong> — local certified-status firms get federal-contracting set-aside preference. Smith Hafeli&apos;s SDVOSB status (see Federal Money Concentration section) is the precedent.</li>
+          <li><strong>SBA HUBZone + 8(a) directories</strong> — local certified-status firms get federal-contracting set-aside preference. The Marion-headquartered SDVOSB recipient profiled in the Federal Money Concentration section is the local precedent.</li>
         </ul>
       </div>
 
       <div style={{ marginBottom: 16, padding: 14, background: "#fef9eb", border: "1px solid #f0d98a", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
         <strong>What this dashboard already does for you:</strong> the GD-OTS subaward table above is auto-refreshed every 24 hours from USAspending.gov, aggregated by NAICS-6 lane, with top sub-recipient names + out-of-region flags pre-computed. The federal-money concentration section above marks each top recipient with its SBA certification status (SDVOSB / HUBZone / 8(a) / WOSB / Large biz / Verify @SAM.gov) via the maintained KNOWN_SBA_STATUS lookup.
         <br /><br />
-        <strong>Your one residual step:</strong> for any NAICS lane flagged out-of-region above, identify whether a local firm in the same NAICS code could pick up that work, and broker the introduction to the prime&apos;s procurement team. That introduction is the human-only part — the data join is done. This is the practical CBA-precedent move — and it&apos;s how Smith Hafeli grew from a small SDVOSB-set-aside firm to a $11.9M / 24-month local presence on the same Marion-area federal pipeline.
+        <strong>Your one residual step:</strong> for any NAICS lane flagged out-of-region above, identify whether a local firm in the same NAICS code could pick up that work, and broker the introduction to the prime&apos;s procurement team. That introduction is the human-only part — the data join is done. This is the practical CBA-precedent move — and it&apos;s how the local SDVOSB profiled in the Federal Money Concentration section grew to $11.9M / 24 months on the same Marion-area federal pipeline.
       </div>
       <div style={{ marginBottom: 16, fontSize: 11, color: "#7a756b", lineHeight: 1.5 }}>
         Sources: <a href="https://www.usaspending.gov/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>USAspending.gov</a> subaward data; <a href="https://www.sba.gov/federal-contracting/contracting-assistance-programs/hubzone-program" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>SBA HUBZone Program</a>; <a href="https://www.sba.gov/federal-contracting/contracting-assistance-programs/8a-business-development-program" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>SBA 8(a) Business Development Program</a>; IL DCEO Industrial Supply Directory.
@@ -2773,7 +2773,7 @@ function SupplyChainSubawardSection({
           <strong>Local-BD principle (operator-confirmed 2026-05-27):</strong> the supply-chain replacement strategy targets sub-recipients <em>outside the broader Midwest economic shed</em> — outside ~200 miles, outside the St. Louis / Evansville / Paducah / Indianapolis labor markets. <strong>Don&apos;t take jobs from St. Louis-area neighbors</strong> (John J. Steuby Co. = St. Louis MO; Spartan Light Metals = Mexico MO + Sparta IL — these are shared labor market, leave them alone). Target out-of-economic-shed primes like AMTEC (Janesville WI, ~350 mi) for any precision-manufacturing replacement; concentrate services-lane replacement on out-of-region service contractors first.
         </div>
         <div style={{ marginBottom: 8 }}>
-          <strong>Smith Hafeli playbook (reproducible for local services-lane pickup):</strong>
+          <strong>SDVOSB local-entry playbook (reproducible for local services-lane pickup):</strong>
         </div>
         <ol style={{ margin: "0 0 0 18px", padding: 0, fontSize: 12, lineHeight: 1.55 }}>
           <li>Local small business (S-corp or LLC) with primary place of business in LWA-25 — Marion / Carbondale / Murphysboro qualify; Franklin / Perry / parts-of-Jackson qualify for HUBZone</li>
@@ -2781,7 +2781,7 @@ function SupplyChainSubawardSection({
           <li>SAM.gov registration + UEI assignment + qualifying NAICS codes</li>
           <li>Background-investigated workforce (Tier 1 / Tier 2 — not Secret clearance for most services lanes)</li>
           <li>Start with a single small contract under FAR §19 (small-business set-aside) — even a $50-200k starter is enough to establish past-performance</li>
-          <li>Optional: SBA Mentor-Protégé Program pairing with an established firm (Smith Hafeli is the obvious local mentor candidate)</li>
+          <li>Optional: SBA Mentor-Protégé Program pairing with an established firm (the local SDVOSB precedent firm is the obvious mentor candidate)</li>
         </ol>
         <div style={{ marginTop: 8, fontSize: 11, color: "#7a756b", lineHeight: 1.5 }}>
           Sources: <a href="https://www.naics.com/naics-code-description/?code=561210" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>NAICS 561210 Facilities Support Services</a>; <a href="https://www.acquisition.gov/tar/1252.204-70-contractor-personnel-security-and-agency-access." target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>FAR §1252.204-70 (Contractor Personnel Security)</a>; <a href="https://www.sba.gov/federal-contracting/contracting-assistance-programs/sba-mentor-protege-program" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>SBA Mentor-Protégé Program</a>; OPM e-QIP investigation guidance.
@@ -2794,7 +2794,7 @@ function SupplyChainSubawardSection({
           The drop-ship federal-product reseller path · honest BD analysis
         </div>
         <div style={{ marginBottom: 10 }}>
-          A complementary pathway to services replacement: bid federal supply contracts for commodity products (PPE, hardware, office supplies, specialty equipment, ag supplies, sport / wildlife / debris nets, etc.), source from US small-business manufacturers, drop-ship directly from manufacturer to the requesting government agency. Minimal warehousing, low fixed cost, geographic location nearly irrelevant. The Smith Hafeli pattern at scale, applied to commodity supplies rather than services.
+          A complementary pathway to services replacement: bid federal supply contracts for commodity products (PPE, hardware, office supplies, specialty equipment, ag supplies, sport / wildlife / debris nets, etc.), source from US small-business manufacturers, drop-ship directly from manufacturer to the requesting government agency. Minimal warehousing, low fixed cost, geographic location nearly irrelevant. The local SDVOSB set-aside pattern at scale, applied to commodity supplies rather than services.
         </div>
         <div style={{ marginBottom: 8 }}>
           <strong>Expert-reviewed feasibility verdict (independent 2026-05-27 second-opinion):</strong> <span style={{ color: "oklch(40% 0.18 60)", fontWeight: 600 }}>FEASIBLE-WITH-CAVEATS · 6/10 confidence.</span> Real path but a small-percentage path. Below are the corrections the promotional GSA/SBA materials don&apos;t surface.
@@ -2862,7 +2862,7 @@ function SupplyChainSubawardSection({
         <ul style={{ margin: "0 0 10px 18px", padding: 0, fontSize: 12.5, lineHeight: 1.55 }}>
           <li>Protégés in <strong>active MPP joint ventures had a 34% win rate</strong> on 16,651 offers in FY22 (NCMA published analysis).</li>
           <li>Unmentored small-business win rates are dramatically lower (single-digit percentages typical).</li>
-          <li>The Smith Hafeli MPP relationship isn&apos;t optional — it&apos;s the variable that moves you from &lt;10% to 30%+ win rates on bids.</li>
+          <li>The MPP mentor relationship isn&apos;t optional — it&apos;s the variable that moves you from &lt;10% to 30%+ win rates on bids.</li>
         </ul>
 
         <div style={{ marginBottom: 8 }}>
@@ -2897,7 +2897,7 @@ function SupplyChainSubawardSection({
         </ul>
 
         <div style={{ marginBottom: 8 }}>
-          <strong>What the dashboard already does for you:</strong> The federal-money concentration section above + the supply-chain subaward integration + the services-lane NAICS table + the clearance-tier mapping all surface the data a prospective Southern IL HUBZone reseller needs to identify lanes, sub-recipients, and entry barriers. The Smith Hafeli proof-of-concept (Marion IL SDVOSB at $11.9M / 24 months) is documented in the federal-money section.
+          <strong>What the dashboard already does for you:</strong> The federal-money concentration section above + the supply-chain subaward integration + the services-lane NAICS table + the clearance-tier mapping all surface the data a prospective Southern IL HUBZone reseller needs to identify lanes, sub-recipients, and entry barriers. The local SDVOSB proof-of-concept (Marion IL · $11.9M / 24 months) is documented in the federal-money section.
         </div>
         <div style={{ marginBottom: 8 }}>
           <strong>Your residual moves (the dashboard cannot self-execute these):</strong>
@@ -3039,17 +3039,14 @@ function FederalConcentrationSection({ tr }: { tr: TopRecipientsBlock }) {
         Federal contract dollars in LWA-25 · $812.8M, 95.6% to one prime
       </h2>
       <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 760, lineHeight: 1.55 }}>
-        Total federal contract obligations with place-of-performance in the 5-county
-        LWA over the last {tr.lookback_months} months: <strong>{formatM(tr.total_dollars)}</strong>.
-        Concentration on a single recipient is a natural consequence of how the data
-        flows: ammunition manufacturing contracts are large dollar-per-job by industry
-        nature, and one Marion-based facility happens to be the work locale for most
-        of that spend. This is <em>not</em> a statement that the local economy depends on
-        one company — QCEW shows roughly 77,000 covered jobs distributed across 11
-        NAICS supersectors. It IS a statement that the federal-contracting channel
-        most active in the region runs primarily through one operator, which gives
-        the workforce board a concentrated point of engagement for CBA / apprenticeship
-        / supplier-development conversations.
+        Federal contract dollars to the 5-county LWA over the last {tr.lookback_months} months:
+        <strong> {formatM(tr.total_dollars)}</strong>. One recipient holds 95.6% of the dollars.
+        That is normal for this kind of data. Ammunition contracts are large per job, and
+        one Marion plant does most of that work. The local economy does not depend on
+        that one company — QCEW counts roughly 77,000 covered jobs across 11 NAICS
+        supersectors. But the federal-contracting channel does run mostly through one
+        operator. That gives the workforce board one concentrated point of contact for
+        CBA / apprenticeship / supplier-development talks.
       </div>
 
       {/* Concentration headline */}
@@ -3149,7 +3146,7 @@ function FederalConcentrationSection({ tr }: { tr: TopRecipientsBlock }) {
               <a href="https://www.sba.gov/federal-contracting/contracting-assistance-programs/sba-mentor-protege-program" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>SBA Mentor-Protégé</a>{" "}
               relationships pairing the out-of-region SDVOSBs in the table above (Above Group FL, Jett&apos;s KY, SDV Office NC) with local protégés so the work stays here
             </li>
-            <li>Smith Hafeli is the proof-of-concept: a local Marion-headquartered SDVOSB winning $11.9M in 24 months. The data shows there&apos;s no reason 5-10 more local SDVOSBs couldn&apos;t exist with the right certification support.</li>
+            <li>The Marion-headquartered SDVOSB above is the proof-of-concept: $11.9M won in 24 months. The data shows there&apos;s no reason 5-10 more local SDVOSBs couldn&apos;t exist with the right certification support.</li>
           </ul>
         </div>
       )}
@@ -3193,7 +3190,7 @@ function LaborTruthSection({ lt }: { lt: LaborTruth }) {
         The headline unemployment rate only counts people <em>actively looking for work</em>.
         It misses every working-age person who has stopped looking, gone on disability, dropped
         into the cash/informal economy, or is otherwise &quot;not in the labor force.&quot;
-        That&apos;s a politician-friendly number — these three metrics tell the real story.
+        These three metrics carry the real story.
       </div>
 
       {/* Headline LWA-5 stats vs IL state */}
@@ -3940,24 +3937,23 @@ export default async function SouthernIllinoisPage() {
                 },
                 {
                   title: "Place the procurement intro call",
-                  body: "The Supply-Chain Mapping section above already shows GD-OTS Marion's $406M sub-award pool by NAICS lane + out-of-region candidates + top sub-recipient names. Your residual: for each out-of-region lane with a local-firm candidate (per the local precision-shop inventory we're queuing), call GD-OTS Procurement and broker the Tier-2 introduction. Smith Hafeli is the proof-of-concept.",
+                  body: "The Supply-Chain Mapping section above already shows GD-OTS Marion's $406M sub-award pool by NAICS lane + out-of-region candidates + top sub-recipient names. Your residual: for each out-of-region lane with a local-firm candidate (per the local precision-shop inventory we're queuing), call GD-OTS Procurement and broker the Tier-2 introduction. The local SDVOSB profiled in the Federal Money Concentration section is the proof-of-concept.",
                 },
                 {
                   title: "Negotiate the next CBA",
                   body: "The Federal Money Concentration section above already documents the 95.6% top-1 share + the SDVOSB local-vs-out-of-region gap. Your residual: when the next federal-funded project lands (data-center prospect, new GD-OTS expansion, anchor-attraction win), use that data to negotiate a Community Benefit Agreement on local-hire + apprenticeship + supplier-development. Standing → leverage → CBA is human work; the standing is already in your hand.",
                 },
                 {
-                  title: "Coordinate with the sister pages",
+                  title: "Decide where the next relocation cohort lands",
                   body: (
                     <>
-                      Three companion pages share data — review them and coordinate stakeholders across them:{" "}
+                      The page shows the bifurcation — Marion-Herrin-Carterville (Williamson Co.) is the newer-construction corridor with safer crime rates; Carbondale + Murphysboro (Jackson Co.) carry SIU and the federal-money concentration but pair with older housing stock and elevated crime. <strong>Your residual decision:</strong> whether the next federal-retiree / data-center / climate-migration cohort gets directed to the Marion corridor for inventory + safety, or paired with SIU graduate-retention housing in Carbondale&apos;s older stock. Companion pages:{" "}
                       <a href="/carbondale" style={{ color: "#1f5f8f", fontWeight: 600 }}>Carbondale →</a>{" "}
                       and{" "}
                       <a href="/murphysboro" style={{ color: "#1f5f8f", fontWeight: 600 }}>Murphysboro →</a>{" "}
-                      share the Jackson County substrate with city-specific housing, hardship,
-                      and federal-awards framing.{" "}
+                      share the Jackson County substrate;{" "}
                       <a href="/market" style={{ color: "#1f5f8f", fontWeight: 600 }}>US Market Health →</a>{" "}
-                      for the national macro backdrop. The cross-page coordination meeting is human work.
+                      for the national macro backdrop.
                     </>
                   ),
                 },
