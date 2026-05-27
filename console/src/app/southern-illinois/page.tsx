@@ -1714,6 +1714,59 @@ function AttractionPipelineSection() {
   );
 }
 
+function FundingDrivenProgrammingSection() {
+  return (
+    <section style={{ marginTop: 40 }}>
+      <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+      <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+        Why training pipelines don&apos;t align with local demand · the structural funding-incentive problem
+      </h2>
+      <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 760, lineHeight: 1.55 }}>
+        The pattern emerges across multiple sections of this page: CEJA solar
+        installer training with no local installers; CEJA wind tech training when
+        the wind farms are in Northern Illinois; negotiated PIRL median-earnings
+        targets that annualize below the local single-adult living wage. Each of
+        these looks like a local choice but is actually a structural consequence
+        of how WIOA + state workforce funding flows. Workforce boards are funded
+        AGAINST METRICS the federal + state programs already measure (enrollment,
+        completion, credential attainment, Q2 employment rate) — NOT against
+        whether trainees land in family-supporting local jobs. When a new
+        funding stream opens (CEJA Climate Works pre-apprenticeship), boards
+        deploy it because operating budgets depend on deployment, regardless of
+        whether the local economy can absorb the credential-holders.
+      </div>
+
+      <div style={{ marginBottom: 16, padding: 14, background: "white", border: "1px solid #d8d2c4", borderRadius: 6 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8 }}>The mechanism · what the WIOA reform literature names this</div>
+        <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 13, color: "#3d3a33", lineHeight: 1.65 }}>
+          <li><strong>WIOA performance metrics measure rapid placement at any employer + credential attainment</strong> — not wage levels, not family-supporting outcomes, not local-economic-development fit.</li>
+          <li><strong>Local workforce boards are funded against those metrics.</strong> Operating budgets, staffing, contract renewals all depend on hitting enrollment + completion + Q2 employment + credential targets.</li>
+          <li><strong>When new categorical funding streams open</strong> (CEJA, sector partnerships, dislocated-worker rapid-response grants), boards deploy them because: (a) the money exists, (b) deployment generates metric-counted activity, (c) declining the funding signals reduced capacity to the state and the next funding cycle.</li>
+          <li><strong>Result, per published WIOA reform literature</strong>: &quot;A good portion of WIOA funding effectively serves as a publicly subsidized recruitment and training mechanism for firms that rely on a high-churn, low-wage labor model with no clear pathway to professional advancement or upward mobility&quot; — <a href="https://tcf.org/content/report/beyond-job-placement-reimagining-wioa-for-economic-mobility-and-workforce-resilience/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>The Century Foundation, &quot;Beyond Job Placement&quot;</a>.</li>
+          <li><strong>And</strong>: workforce boards are &quot;incentivized to prioritize rapid job placement and cost-efficiency, often focusing on industries that can absorb large numbers of workers quickly with minimal training investment. High-churn sectors—such as health care and transportation—fit this model well, offering fast placement outcomes and low-cost credentialing programs that help boards meet federal targets&quot; (TCF, same report).</li>
+          <li><strong>Recommended reform direction</strong>: add wage-based outcome metrics + hourly-wage outcomes to WIOA performance requirements. <a href="https://www.americanprogress.org/article/recommendations-for-reauthorizing-the-workforce-innovation-and-opportunity-act/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Center for American Progress — WIOA reauthorization recommendations</a> explicitly call for &quot;performance measures that measure program success based on participants&apos; hourly wage outcomes in addition to their quarterly earnings.&quot;</li>
+        </ul>
+      </div>
+
+      <div style={{ marginBottom: 16, padding: 14, background: "oklch(96% 0.05 22)", border: "1px solid oklch(45% 0.20 22)33", borderLeft: "6px solid oklch(45% 0.20 22)", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "oklch(35% 0.22 22)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          The Southern IL evidence · concrete examples of the pattern
+        </div>
+        <ul style={{ margin: "0 0 0 18px", padding: 0 }}>
+          <li><strong>CEJA wind technician training in LWA-25.</strong> Illinois wind farms are in Central + Northern IL (Livingston, McLean, Lee, LaSalle, Bureau, DeKalb, Vermilion counties). Zero operating utility-scale wind farms in Southern IL. Training Southern IL residents for wind-tech credentials when the work is 5+ hours north violates the regional-tailoring principle WIOA Section 108 + local-plan requirements exist to enforce.</li>
+          <li><strong>CEJA solar installer training.</strong> Local NABCEP-installer employer base ≈ 0. Big Muddy Solar (124 MW, Jackson Co.) is the one real local solar project, and it&apos;s being built by IBEW Local 702 lineworkers + IUOE Local 318 + LIUNA Local 773 — NOT NABCEP installers. The CEJA solar money trained for the wrong credential, but it deployed because the funding existed.</li>
+          <li><strong>Negotiated PY24 median-earnings targets below single-adult living wage.</strong> See the PIRL section below — Adult $9,500/quarter (~$18.27/hr), Dislocated Worker $9,400/quarter (~$18.08/hr), Youth $5,000/quarter (~$9.62/hr) vs MIT Jackson Co. single-adult $18.95/hr / 1A+2C $46.76/hr. The system was DESIGNED to deliver these wage levels.</li>
+        </ul>
+        <p style={{ margin: "12px 0 0 0", fontWeight: 600 }}>
+          This isn&apos;t a failure of local-board execution — it&apos;s exactly what the
+          incentive structure rewards. Reform requires changing federal + state metrics,
+          not asking the local board to optimize against metrics they aren&apos;t funded for.
+        </p>
+      </div>
+    </section>
+  );
+}
+
 function PirlOutcomesSection() {
   return (
     <section style={{ marginTop: 40 }}>
@@ -2791,6 +2844,10 @@ export default async function SouthernIllinoisPage() {
 
           <div id="sec-wage-benchmark" style={{ scrollMarginTop: 60 }}>
             <StateEmployerWageBenchmarkSection />
+          </div>
+
+          <div id="sec-funding-driven" style={{ scrollMarginTop: 60 }}>
+            <FundingDrivenProgrammingSection />
           </div>
 
           <div id="sec-pirl" style={{ scrollMarginTop: 60 }}>

@@ -835,7 +835,7 @@ _TRAINING_LADDER_ROSTER = [
      "typical_journey_wage_wkly": 1240,
      "training_duration": "12-20 weeks",
      "local_employer_override": 0,
-     "notes": "Requires travel to wind farms (out-of-region). Local wind-installation employer base is zero — Southern IL has no operating wind farms. The 'Mining' supersector total is unrelated coal-region work, not wind-turbine service. See the Travel-Required Jobs section below for the credential's real role: a path to family-supporting wages with travel pay, not a local-employment credential."},
+     "notes": "GEOGRAPHIC MISMATCH: Illinois wind farms are concentrated in CENTRAL + NORTHERN Illinois (Livingston, McLean, Lee, LaSalle, Bureau, DeKalb, Vermilion counties). There are NO operating utility-scale wind farms in Southern Illinois. Training Southern IL residents on a wind-tech credential when the work isn't here violates the regional-tailoring principle WIOA Section 108 requires for local workforce plans. Reasonable as a 'travel-pay credential' to wind-belt circuits IF acknowledged upfront; misleading as a 'local employment' credential. See the Travel-Required Jobs section."},
     {"id": "ceja_lineworker", "name": "Lineworker (IBEW 702)",              "supersector_code": "1021",
      "ladder": "Pre-app → 7×1,000hr apprenticeship periods (~3.5yr) → IBEW outside lineman journey",
      "typical_journey_wage_wkly": 2621,  # $65.52/hr × 40 per IBEW 702 outside wage sheet 1/6/2025-1/4/2026
