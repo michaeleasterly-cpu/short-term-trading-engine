@@ -2002,21 +2002,23 @@ function StructuralWorkforceConstraintsSection() {
               <li><strong>Marion has elevated crime (34/1,000) despite the newer-construction + federal-contracting story.</strong> Pair the BD pitch with honest acknowledgment + the response (Marion PD + Williamson County Sheriff + IL State Police District 13).</li>
               <li><strong>West Frankfort is a profile outlier</strong> — total crime 31/1,000 but VIOLENT crime is nearly zero (1 in 3,573); essentially all crime is property-side, with MV theft 1 in 159 (among the highest in the nation). Quality-of-life for residents is closer to Mt. Vernon than to Marion / Murphysboro / Carbondale, but car theft is a real exposure.</li>
               <li><strong>Carbondale (50/1,000) + Murphysboro (38/1,000) + Marion (34) + West Frankfort property-only (31) + Herrin (29) are the higher-crime cities.</strong> SIU recruitment / graduate-retention housing strategy has to address security + visibility-of-response, not just price-to-wage math. Motor vehicle theft is the signature local crime in Carbondale + West Frankfort.</li>
-              <li><strong>SIU campus (Clery Act 2024) three-year totals:</strong> zero murder, robbery, and arson across all three years. Burglary: 10 → 4 → 10. Aggravated assault: 3 → 6 → 2. Motor vehicle theft on-campus: 5 → 0 → 2. (Full Clery breakdown including sex-offense categories is in the campus table below.)</li>
+              <li><strong>SIU campus (Clery Act 2024) three-year totals:</strong> zero murder, robbery, and arson across all three years. Burglary: 10 → 4 → 10. Aggravated assault: 3 → 6 → 2. Motor vehicle theft on-campus: 5 → 0 → 2. (Full Clery breakdown including sex-offense categories is in the campus card to the right.)</li>
               <li><strong>Cross-county network activity</strong> across the LWA-25 footprint is not visible at the offense-aggregate level: FBI UCR + IL State Police annual reports track individual offenses by jurisdiction but don&apos;t aggregate cross-county network association. Treat the per-city rates above as the answerable metric and direct security-concerned relocators to county sheriff + ISP District 13 for site-specific advisory.</li>
             </ul>
           </div>
           <div style={{ fontSize: 11, color: "#7a756b", marginTop: 8, lineHeight: 1.5 }}>
             Sources: <a href="https://www.neighborhoodscout.com/il/carbondale/crime" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>NeighborhoodScout Carbondale</a> · <a href="https://www.neighborhoodscout.com/il/marion/crime" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Marion</a> · <a href="https://www.neighborhoodscout.com/il/mount-vernon/crime" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Mt. Vernon</a> · <a href="https://www.neighborhoodscout.com/il/herrin/crime" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Herrin</a> · <a href="https://www.neighborhoodscout.com/il/murphysboro/crime" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Murphysboro</a> · <a href="https://www.neighborhoodscout.com/il/du-quoin/crime" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Du Quoin</a> · <a href="https://www.neighborhoodscout.com/il/benton/crime" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Benton</a> · <a href="https://www.neighborhoodscout.com/il/west-frankfort/crime" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>West Frankfort</a> · <a href="https://www.neighborhoodscout.com/il/carterville/crime" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Carterville</a> · <a href="https://isp.illinois.gov/CrimeReporting/CrimeInIllinoisReports" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>IL State Police Crime in Illinois reports</a>. All FBI UCR 2024 calendar year, released October 2025. (West Frankfort 2023 data; NeighborhoodScout 2024 release pending.)
           </div>
+        </div>
 
+        <div style={{ background: "white", border: "1px solid #d8d2c4", borderLeft: "6px solid oklch(45% 0.20 22)", borderRadius: 6, padding: 16 }}>
           {/* SIU Carbondale campus — Clery Act, separate metric (raw counts not per-1000) */}
-          <div style={{ marginTop: 12, padding: 12, background: "oklch(98% 0.015 220)", border: "1px solid #d8d2c4", borderRadius: 4 }}>
+          <div style={{ marginBottom: 16, padding: 12, background: "oklch(98% 0.015 220)", border: "1px solid #d8d2c4", borderRadius: 4 }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: "#1f1d18", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>
               SIU Carbondale campus · Clery Act 2024 ASR (released Sept 2025)
             </div>
             <div style={{ fontSize: 11.5, color: "#5a564d", marginBottom: 8, lineHeight: 1.5 }}>
-              Different metric — Clery counts ONLY specific federally-defined offenses on the campus footprint + immediate public property. <strong>Not directly comparable to the per-1,000 city rates above.</strong> Campus population ~11k students + staff; on-campus housing capacity ~5-6k students.
+              Different metric — Clery counts ONLY specific federally-defined offenses on the campus footprint + immediate public property. <strong>Not directly comparable to the per-1,000 city rates in the left card.</strong> Campus population ~11k students + staff; on-campus housing capacity ~5-6k students.
             </div>
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", fontSize: 11.5, borderCollapse: "collapse" }}>
@@ -2064,9 +2066,7 @@ function StructuralWorkforceConstraintsSection() {
               Source: <a href="https://safe.siu.edu/_common/documents/2024_asr.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>SIU Department of Public Safety · 2024 Annual Security and Fire Safety Report</a> (released September 2025, covers calendar years 2022-2024). On-Campus Total includes On-Campus Student Housing as a subset.
             </div>
           </div>
-        </div>
 
-        <div style={{ background: "white", border: "1px solid #d8d2c4", borderLeft: "6px solid oklch(45% 0.20 22)", borderRadius: 6, padding: 16 }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: "#1f1d18", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>Drug-use reality (not "opioid epidemic")</div>
           <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 13, lineHeight: 1.6, color: "#3d3a33" }}>
             <li>IL 2023 OD deaths: <strong>3,502</strong>; opioid-involved <strong>2,855</strong> (81%) — but most current opioid deaths are <strong>fentanyl cut into street drugs</strong>, not prescription pills.</li>
