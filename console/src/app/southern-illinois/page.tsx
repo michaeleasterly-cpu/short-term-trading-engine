@@ -1719,16 +1719,44 @@ function PirlOutcomesSection() {
     <section style={{ marginTop: 40 }}>
       <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
       <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
-        Workforce-board program outcomes (the accountability question) · what the board should be publishing about itself
+        Workforce-board program outcomes · where the WIOA performance data already lives
       </h2>
       <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 760, lineHeight: 1.55 }}>
-        This page critiques training-program effectiveness against employer demand
-        and against the family-supporting wage threshold. The same accountability
-        standard applies to the workforce board&apos;s own performance. Under WIOA, the workforce board
-        files Title I program data quarterly with USDOL Employment &amp; Training
-        Administration via the <a href="https://www.dol.gov/agencies/eta/performance/wips" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>WIPS portal</a> in the
-        Participant Individual Record Layout (PIRL) format. These metrics are not
-        currently published on the public workforce-board website. They should be.
+        This page critiques training-program effectiveness against employer demand and
+        against the family-supporting wage threshold. The same accountability standard
+        applies to workforce-board program outcomes. Under WIOA, workforce boards file
+        Title I program data quarterly with USDOL Employment &amp; Training Administration
+        via the <a href="https://www.dol.gov/agencies/eta/performance/wips" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>WIPS portal</a> in the
+        Participant Individual Record Layout (PIRL) format. The data IS published
+        publicly — here&apos;s where to find it.
+      </div>
+
+      <div style={{ marginBottom: 16, padding: 14, background: "white", border: "1px solid #d8d2c4", borderRadius: 6 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8 }}>Where WIOA performance outcomes are published (verified):</div>
+        <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 13, color: "#3d3a33", lineHeight: 1.65 }}>
+          <li><strong>Illinois workNet WIOA Performance &amp; Transparency dashboard</strong> — <a href="https://www.illinoisworknet.com/WIOA/Pages/PerformanceTransparency.aspx" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>illinoisworknet.com/WIOA/Pages/PerformanceTransparency.aspx</a>. Snapshot + Timeline graphs of all WIOA key performance indicators reported to USDOL + USDOE by the four WIOA core partners (Adult / Dislocated Worker / Youth / Wagner-Peyser).</li>
+          <li><strong>Illinois WIOA Annual Statewide Performance Report Narratives</strong> — IL DCEO publishes these annually. <a href="https://dceo.illinois.gov/content/dam/soi/en/web/dceo/aboutdceo/reportsrequiredbystatute/illinois-wioa-annual-narrative-report-py24-usdol.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>PY2024 (latest)</a> · <a href="https://dceo.illinois.gov/content/dam/soi/en/web/dceo/aboutdceo/reportsrequiredbystatute/wioa-2024.11.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>PY2023</a>. ETA 9169 form data + qualitative narrative on key initiatives.</li>
+          <li><strong>USDOL ETA Performance Data</strong> — <a href="https://www.dol.gov/agencies/eta/performance/results" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>dol.gov/agencies/eta/performance/results</a> — federal aggregator with state-level + national-level PIRL data tables, the WIPS Data Book, and quarterly performance summaries.</li>
+        </ul>
+      </div>
+
+      <div style={{ marginBottom: 16, padding: 14, background: "oklch(97% 0.04 60)", border: "1px solid oklch(58% 0.15 60)33", borderLeft: "6px solid oklch(58% 0.15 60)", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "oklch(40% 0.15 60)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          What&apos;s NOT typically published — the local-area breakout
+        </div>
+        <p style={{ margin: 0 }}>
+          The above sources publish data at the STATE-AGGREGATE level, with some
+          program-by-program breakouts. What is NOT usually surfaced in a dedicated
+          public dashboard is <strong>local-workforce-area-specific outcomes</strong> —
+          PY-by-PY enrollment, completion, Q2 + Q4 employment rates, median earnings,
+          credential attainment, and Measurable Skill Gains broken out for LWA-25
+          (or any individual Local Workforce Investment Area). That data exists in
+          the state submissions but isn&apos;t typically extracted to a single board-
+          accessible page. The local accountability ask is to surface those LWA-level
+          breakouts alongside the statewide aggregates, so board members and the
+          public can compare local performance against statewide and national
+          benchmarks.
+        </p>
       </div>
 
       <div style={{ marginBottom: 16, padding: 14, background: "white", border: "1px solid #d8d2c4", borderRadius: 6 }}>
@@ -1745,16 +1773,18 @@ function PirlOutcomesSection() {
 
       <div style={{ marginBottom: 16, padding: 14, background: "oklch(96% 0.04 142)", border: "1px solid oklch(45% 0.16 142)33", borderLeft: "6px solid oklch(45% 0.16 142)", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: "oklch(35% 0.18 142)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>
-          The accountability ask
+          What a useful local-area dashboard would surface
         </div>
         <p style={{ margin: "0 0 8px 0" }}>
-          Publish program-level PIRL outcomes on this dashboard. Specifically, by
-          program (WIOA Adult, Dislocated Worker, Youth, CEJA Climate Works, every
-          named training ladder):
+          Drawing from the state-aggregate sources above + IWDS local-area extracts
+          (the Illinois Workforce Development System is the state&apos;s record-of-truth
+          for PIRL submissions), the next-tier accountability view would publish
+          LWA-25-specific outcomes by program (WIOA Adult, Dislocated Worker, Youth,
+          regional CEJA Climate Works cohorts, every named training ladder):
         </p>
         <ul style={{ margin: "0 0 0 18px", padding: 0 }}>
           <li>Enrollment count + completion rate (last 3 program years)</li>
-          <li>Median Q2 post-exit earnings — cross-checked against MIT Living Wage 1A+2C ($46.76/hr or $97,260/yr) bar</li>
+          <li>Median Q2 post-exit earnings — cross-checked against MIT Living Wage 1A+2C (\$46.76/hr or \$97,260/yr) bar</li>
           <li>% of completers earning above single-adult living wage</li>
           <li>% of completers earning above family-supporting wage</li>
           <li>Credential attainment rate</li>
@@ -1762,14 +1792,14 @@ function PirlOutcomesSection() {
         </ul>
         <p style={{ margin: "8px 0 0 0" }}>
           The standard the page applies to CEJA solar (PHANTOM PIPELINE) and CNA
-          ladders (BELOW LIVABLE WAGE) is the same standard the workforce board should apply
-          to its own roster. Honest measurement, including the inconvenient outcomes,
-          is what makes a workforce board credible to fund.
+          ladders (BELOW LIVABLE WAGE) is the same standard worth applying to
+          local-area workforce-board outcomes. Honest measurement, including the
+          inconvenient outcomes, is what makes a workforce board credible to fund.
         </p>
       </div>
 
       <div style={{ marginBottom: 16, fontSize: 11, color: "#7a756b", lineHeight: 1.5 }}>
-        Sources: <a href="https://www.dol.gov/agencies/eta/performance/wips" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>USDOL ETA WIPS (Workforce Integrated Performance System)</a> · <a href="https://www.dol.gov/sites/dolgov/files/ETA/wioa/pdfs/WIOA-Joint-Performance-Standards-FAQs.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>WIOA Joint Performance Standards FAQ</a> · <a href="https://www.illinoisworknet.com/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Illinois workNet</a> (state-level WIOA portal).
+        Sources: <a href="https://www.dol.gov/agencies/eta/performance/wips" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>USDOL ETA WIPS (Workforce Integrated Performance System)</a> · <a href="https://www.dol.gov/sites/dolgov/files/ETA/wioa/pdfs/WIOA-Joint-Performance-Standards-FAQs.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>WIOA Joint Performance Standards FAQ</a> · <a href="https://www.illinoisworknet.com/WIOA/Pages/PerformanceTransparency.aspx" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Illinois workNet WIOA Performance &amp; Transparency dashboard</a> · <a href="https://dceo.illinois.gov/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>IL DCEO Annual Statewide Performance Reports</a> · <a href="https://www.dol.gov/agencies/eta/performance/results" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>USDOL ETA Performance Results</a>.
       </div>
     </section>
   );
