@@ -1767,6 +1767,86 @@ function FundingDrivenProgrammingSection() {
   );
 }
 
+function HarmCascadeSection() {
+  return (
+    <section style={{ marginTop: 40 }}>
+      <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+      <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+        The harm cascade · how the funding-incentive pattern actually hurts trainees
+      </h2>
+      <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 760, lineHeight: 1.55 }}>
+        The funding-driven programming pattern above isn&apos;t harmless. Here&apos;s what
+        actually happens to a worker who enrolls in a phantom-pipeline training program —
+        and why the outcome shows up nowhere in the official metrics.
+      </div>
+
+      <div style={{ marginBottom: 16 }}>
+        {[
+          {
+            n: "1",
+            title: "Program gets funded; board + community college both have economic incentive to run it.",
+            body: "State or federal categorical grant (CEJA, sector partnership, dislocated-worker rapid-response) opens. Workforce board applies because operating-budget renewal depends on deployment. Community college (JALC, Rend Lake) gets training-delivery contract or curriculum-development funding. Both organizations now have financial stake in enrolling participants.",
+          },
+          {
+            n: "2",
+            title: "Worker enrolls with reasonable belief that completing training leads to a job.",
+            body: "Marketing materials describe the credential + wage potential. Recruitment events emphasize placement opportunities. Trainee is not told that local employer demand for the specific credential is essentially zero. The trainee invests 8 weeks (CEJA solar) to 5 years (apprenticeship-style) of their working life into the program.",
+          },
+          {
+            n: "3",
+            title: "Trainee completes program. Credential earned. Metrics look good.",
+            body: "PIRL outcome measures register: Measurable Skill Gains ✓ · Credential Attainment ✓. The workforce board and the community college both record a successful outcome on the metrics they're funded against. The state-level Annual Statewide Performance Report counts the credential. From a federal accountability standpoint, the program 'worked.'",
+          },
+          {
+            n: "4",
+            title: "Trainee can't find local work in the credential — because no local employers exist.",
+            body: "CEJA solar installer with NABCEP cert → there are no NABCEP installers in LWA-25 hiring. CEJA wind tech with GWO cert → nearest operating wind farms are 5+ hours north in Livingston / McLean / Lee / LaSalle counties. CDL Class A → local trucking pays $22-28/hr (below 1A+2C livable), OTR available but breaks family time. Outcomes diverge from expectations.",
+          },
+          {
+            n: "5",
+            title: "Trainee accepts the local low-wage job they could have gotten without the training, OR drops out of the labor force.",
+            body: "If they land a $14-22/hr hospitality / retail / CNA job, the PIRL Q2-employment metric still registers as success (they're employed) even though the credential is irrelevant to the role. If they don't, they join the 'not in labor force' population documented in the True Labor Picture section — adding to the regional LFPR gap to IL state (-8pp aggregate, worse in some counties). The 'invisible population' grows by one.",
+          },
+          {
+            n: "6",
+            title: "Trainee can't easily get re-trained — the WIOA Individual Training Account chance is largely used up.",
+            body: "Local workforce boards set lifetime ITA caps (typically $7,000-$10,000 per participant per 20 CFR 680 + local board policy). One round of CEJA / vocational training often consumes most of that allotment. Subsequent ITAs are issued only if (a) under the lifetime maximum, OR (b) participant qualifies for new Dislocated Worker eligibility via a qualifying layoff. The phantom-pipeline failure consumed the participant's main shot at federally-funded retraining. Source: 20 CFR Part 680 Subpart C — Individual Training Accounts.",
+          },
+          {
+            n: "7",
+            title: "The official record shows program success. The trainee's actual outcome is invisible.",
+            body: "The board's PY24 performance report counts the credential. The community college counts the enrollment. The state aggregates these into 'Illinois met all negotiated levels of performance for Title I.' The trainee — discouraged, out of retraining eligibility, possibly out of the labor force — does not appear in the success metrics. The gap between metric-success and outcome-reality is the harm.",
+          },
+        ].map((step, i) => (
+          <div key={i} style={{ display: "grid", gridTemplateColumns: "44px 1fr", gap: 12, padding: "12px 0", borderTop: i === 0 ? "none" : "1px solid #ebe5d6" }}>
+            <div style={{ fontSize: 28, fontWeight: 700, color: "oklch(45% 0.20 22)", textAlign: "center", lineHeight: 1 }}>{step.n}</div>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: "#1f1d18", marginBottom: 4 }}>{step.title}</div>
+              <div style={{ fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>{step.body}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ padding: 14, background: "oklch(96% 0.05 22)", border: "1px solid oklch(45% 0.20 22)33", borderLeft: "6px solid oklch(45% 0.20 22)", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "oklch(35% 0.22 22)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          The policy implication
+        </div>
+        <p style={{ margin: 0 }}>
+          The cascade is reproducible. Every misaligned training cohort generates: (a) a
+          workforce-board operating-budget renewal, (b) a community-college contract,
+          (c) trainee opportunity-cost loss, (d) a depleted ITA entitlement, and
+          (e) a metric-success record. The only party harmed is the trainee. Reform
+          requires aligning metrics to actual local employer demand + wage outcomes (per
+          the TCF + CAP recommendations cited above) AND protecting individual retraining
+          eligibility when a board-driven training program fails to land participants in
+          the promised credential&apos;s actual labor market.
+        </p>
+      </div>
+    </section>
+  );
+}
+
 function PirlOutcomesSection() {
   return (
     <section style={{ marginTop: 40 }}>
@@ -2848,6 +2928,10 @@ export default async function SouthernIllinoisPage() {
 
           <div id="sec-funding-driven" style={{ scrollMarginTop: 60 }}>
             <FundingDrivenProgrammingSection />
+          </div>
+
+          <div id="sec-harm-cascade" style={{ scrollMarginTop: 60 }}>
+            <HarmCascadeSection />
           </div>
 
           <div id="sec-pirl" style={{ scrollMarginTop: 60 }}>
