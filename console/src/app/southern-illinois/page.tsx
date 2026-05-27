@@ -454,7 +454,7 @@ function ChildcareGatewaySection() {
     <section style={{ marginTop: 40 }}>
       <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
       <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
-        Childcare · the gateway constraint that determines what training outcomes mean
+        Childcare cost in LWA-25 · $14-22k per child per year (MIT LWC)
       </h2>
       <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 760, lineHeight: 1.55 }}>
         The 1-adult + 2-children Jackson Co. living wage is <strong>$46.76/hr</strong> not
@@ -691,7 +691,7 @@ function TrainingAlignmentSection({ ta, industryMixAvailable }: { ta: TrainingAl
     <section style={{ marginTop: 40 }}>
       <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
       <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
-        Training-to-demand alignment · the single-mom test
+        Training-to-demand alignment · the single-mom test · 22 pathways scored against $46.76/hr 1A+2C MIT-LWC bar
       </h2>
       <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 760, lineHeight: 1.55 }}>
         Workforce-development theater: grant comes in, training cohort starts, graduates
@@ -1019,7 +1019,7 @@ function AttractionPipelineSection() {
     <section style={{ marginTop: 40 }}>
       <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
       <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
-        Anchor-employer attraction pipeline · the realistic targets
+        Anchor-employer attraction · Tier-2 data centers, federal satellite labs, university-anchored programs
       </h2>
       <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 760, lineHeight: 1.55 }}>
         Without new anchor employers paying above the livable-wage threshold, the
@@ -2022,7 +2022,7 @@ function FundingDrivenProgrammingSection() {
     <section style={{ marginTop: 40 }}>
       <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
       <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
-        Why training pipelines don&apos;t align with local demand · the structural funding-incentive problem
+        WIOA funding incentives vs LWA-25 demand mix · where the formula and the region diverge
       </h2>
       <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 760, lineHeight: 1.55 }}>
         The pattern emerges across multiple sections of this page: CEJA solar
@@ -2075,7 +2075,7 @@ function HarmCascadeSection() {
     <section style={{ marginTop: 40 }}>
       <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
       <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
-        The harm cascade · how the funding-incentive pattern actually hurts trainees
+        Cascade cost · what the gap means for the 75,950 not-in-labor-force adults
       </h2>
       <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 760, lineHeight: 1.55 }}>
         The funding-driven programming pattern above isn&apos;t harmless. Here&apos;s what
@@ -2754,7 +2754,7 @@ function FederalConcentrationSection({ tr }: { tr: TopRecipientsBlock }) {
     <section style={{ marginTop: 40 }}>
       <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
       <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
-        Where the federal money actually goes · community-leverage view
+        Federal contract dollars in LWA-25 · $812.8M, 95.6% to one prime
       </h2>
       <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 760, lineHeight: 1.55 }}>
         Total federal contract obligations with place-of-performance in the 5-county
@@ -2905,7 +2905,7 @@ function LaborTruthSection({ lt }: { lt: LaborTruth }) {
     <section style={{ marginTop: 40 }}>
       <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
       <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
-        The true labor picture · beyond the headline unemployment rate
+        Labor force participation + not-in-labor-force · 75,950 working-age adults outside the count
       </h2>
       <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 760, lineHeight: 1.55 }}>
         The headline unemployment rate only counts people <em>actively looking for work</em>.
@@ -3486,19 +3486,21 @@ export default async function SouthernIllinoisPage() {
             <a href="#sec-labor"><span className="num">01</span>Labor Market</a>
             <a href="#sec-labor-truth"><span className="num">02</span>True Picture</a>
             <a href="#sec-industry"><span className="num">03</span>Industry Mix</a>
-            <a href="#sec-mobility"><span className="num">04</span>Mobility</a>
+            <a href="#sec-wage-benchmark"><span className="num">04</span>Wages</a>
             <a href="#sec-federal-money"><span className="num">05</span>Federal $</a>
-            <a href="#sec-childcare"><span className="num">06</span>Childcare</a>
+            <a href="#sec-anchor"><span className="num">06</span>Anchor</a>
             <a href="#sec-roi"><span className="num">07</span>Training ROI</a>
-            <a href="#sec-training"><span className="num">08</span>Ladders</a>
+            <a href="#sec-training"><span className="num">08</span>Single-Mom Test</a>
             <a href="#sec-travel-jobs"><span className="num">09</span>Travel Jobs</a>
             <a href="#sec-healthcare"><span className="num">10</span>Healthcare</a>
-            <a href="#sec-anchor"><span className="num">11</span>Anchor</a>
-            <a href="#sec-housing"><span className="num">12</span>Housing</a>
-            <a href="#sec-wage-benchmark"><span className="num">13</span>Wages</a>
-            <a href="#sec-pirl"><span className="num">14</span>PIRL</a>
+            <a href="#sec-childcare"><span className="num">11</span>Childcare</a>
+            <a href="#sec-mobility"><span className="num">12</span>Mobility</a>
+            <a href="#sec-housing"><span className="num">13</span>Housing</a>
+            <a href="#sec-structural-constraints"><span className="num">14</span>Constraints</a>
+            <a href="#sec-pirl"><span className="num">15</span>PIRL</a>
           </nav>
 
+          {/* ═══ DIAGNOSIS BLOCK · finish the labor-market truth before anything else ═══ */}
           <section id="sec-labor" style={{ marginTop: 32, scrollMarginTop: 60 }}>
             <h2 style={{ fontSize: 20, fontWeight: 600, margin: "0 0 12px 0", color: "#1f1d18" }}>
               County-by-county labor market
@@ -3524,15 +3526,24 @@ export default async function SouthernIllinoisPage() {
             {data.labor_truth && <LaborTruthSection lt={data.labor_truth} />}
           </div>
 
+          {/* ═══ DEMAND STACK · industry mix → wages → federal $ → supply chain → anchor attraction ═══ */}
           <div id="sec-industry" style={{ scrollMarginTop: 60 }}>
             {data.industry_mix && <IndustryMixSection mix={data.industry_mix} scope="the LWA-25 (5-county region)" />}
             {data.industry_mix && <IndustryMixByCountySection mix={data.industry_mix} />}
           </div>
 
-          <BusinessLeadsSection b={data.business_opportunities} />
+          {/* Bridge — industry mix → wage benchmark */}
+          <div style={{ marginTop: 28, padding: 14, background: "#f0ece1", border: "1px solid #d8d2c4", borderLeft: "3px solid #5a564d", borderRadius: 4, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, fontStyle: "italic" }}>
+            The mix above tells us <em>what</em> employs the region; the next view tells us <em>how those same supersectors pay here versus the rest of the state</em>.
+          </div>
 
-          <div id="sec-mobility" style={{ scrollMarginTop: 60 }}>
-            <MobilityJobAccessSection />
+          <div id="sec-wage-benchmark" style={{ scrollMarginTop: 60 }}>
+            <StateEmployerWageBenchmarkSection />
+          </div>
+
+          {/* Bridge — wage benchmark → federal money concentration */}
+          <div style={{ marginTop: 28, padding: 14, background: "#f0ece1", border: "1px solid #d8d2c4", borderLeft: "3px solid #5a564d", borderRadius: 4, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, fontStyle: "italic" }}>
+            Wages set the floor. The next question is who, inside that industry mix, controls the largest payrolls — and how concentrated those payrolls really are.
           </div>
 
           <div id="sec-federal-money" style={{ scrollMarginTop: 60 }}>
@@ -3540,10 +3551,18 @@ export default async function SouthernIllinoisPage() {
             <SupplyChainSubawardSection lanes={data.gdots_subaward_lanes} bulkLanes={data.gdots_subaward_lanes_bulk} />
           </div>
 
-          <div id="sec-childcare" style={{ scrollMarginTop: 60 }}>
-            <ChildcareGatewaySection />
+          <BusinessLeadsSection b={data.business_opportunities} />
+
+          {/* Bridge — anchor attraction follows the federal-$ picture */}
+          <div style={{ marginTop: 28, padding: 14, background: "#f0ece1", border: "1px solid #d8d2c4", borderLeft: "3px solid #5a564d", borderRadius: 4, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, fontStyle: "italic" }}>
+            Anchor attraction sets a longer-horizon demand ceiling. The next sections take today&apos;s demand picture as given and ask: what does it cost to train someone into it, and does the math work?
           </div>
 
+          <div id="sec-anchor" style={{ scrollMarginTop: 60 }}>
+            <AttractionPipelineSection />
+          </div>
+
+          {/* ═══ SUPPLY STACK · training ROI → single-mom test → travel-work → healthcare special case ═══ */}
           <div id="sec-roi" style={{ scrollMarginTop: 60 }}>
             <TrainingROISection />
           </div>
@@ -3557,6 +3576,11 @@ export default async function SouthernIllinoisPage() {
             )}
           </div>
 
+          {/* Bridge — single-mom test → travel jobs (extension of TRAVEL-WORK verdict) */}
+          <div style={{ marginTop: 28, padding: 14, background: "#f0ece1", border: "1px solid #d8d2c4", borderLeft: "3px solid #5a564d", borderRadius: 4, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, fontStyle: "italic" }}>
+            Several of the verdicts above carry a TRAVEL-WORK tag. Those pathways deserve their own treatment, because the rotation patterns + per-diem structure change the household math materially.
+          </div>
+
           <div id="sec-travel-jobs" style={{ scrollMarginTop: 60 }}>
             <TravelJobsSection />
           </div>
@@ -3565,16 +3589,41 @@ export default async function SouthernIllinoisPage() {
             <HealthcareWorkforceSection />
           </div>
 
-          <div id="sec-anchor" style={{ scrollMarginTop: 60 }}>
-            <AttractionPipelineSection />
+          {/* ═══ GATEWAY BLOCK · the three structural barriers, together ═══ */}
+          {/* Bridge — healthcare special case → childcare gateway */}
+          <div style={{ marginTop: 28, padding: 14, background: "#f0ece1", border: "1px solid #d8d2c4", borderLeft: "3px solid #5a564d", borderRadius: 4, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, fontStyle: "italic" }}>
+            Healthcare illustrates the page&apos;s central pattern: a wage-suppressed local rung with a federal lever overhead. The next three sections name the gateways that decide whether a worker can ever reach the rung in the first place.
+          </div>
+
+          <div id="sec-childcare" style={{ scrollMarginTop: 60 }}>
+            <ChildcareGatewaySection />
+          </div>
+
+          <div id="sec-mobility" style={{ scrollMarginTop: 60 }}>
+            <MobilityJobAccessSection />
           </div>
 
           <div id="sec-housing" style={{ scrollMarginTop: 60 }}>
             <HousingAffordabilitySection />
           </div>
 
-          <div id="sec-wage-benchmark" style={{ scrollMarginTop: 60 }}>
-            <StateEmployerWageBenchmarkSection />
+          <div id="sec-structural-constraints" style={{ scrollMarginTop: 60 }}>
+            <StructuralWorkforceConstraintsSection />
+          </div>
+
+          {/* ═══ ACCOUNTABILITY BLOCK · WIOA outcomes + funding incentives + harm cascade ═══ */}
+          {/* Bridge — gateways → PIRL accountability */}
+          <div style={{ marginTop: 28, padding: 14, background: "#f0ece1", border: "1px solid #d8d2c4", borderLeft: "3px solid #5a564d", borderRadius: 4, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, fontStyle: "italic" }}>
+            Childcare, mobility, housing, and the broader structural constraints are gateways the board cannot directly fund but must design around. With those constraints named, the WIOA outcomes table below reads differently.
+          </div>
+
+          <div id="sec-pirl" style={{ scrollMarginTop: 60 }}>
+            <PirlOutcomesSection />
+          </div>
+
+          {/* Bridge — PIRL → funding-driven critique */}
+          <div style={{ marginTop: 28, padding: 14, background: "#f0ece1", border: "1px solid #d8d2c4", borderLeft: "3px solid #5a564d", borderRadius: 4, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, fontStyle: "italic" }}>
+            The PIRL numbers measure what got delivered. The next section asks <em>why that mix got delivered</em> — and whether the funding model selected for it.
           </div>
 
           <div id="sec-funding-driven" style={{ scrollMarginTop: 60 }}>
@@ -3585,12 +3634,9 @@ export default async function SouthernIllinoisPage() {
             <HarmCascadeSection />
           </div>
 
-          <div id="sec-structural-constraints" style={{ scrollMarginTop: 60 }}>
-            <StructuralWorkforceConstraintsSection />
-          </div>
-
-          <div id="sec-pirl" style={{ scrollMarginTop: 60 }}>
-            <PirlOutcomesSection />
+          {/* Bridge — harm cascade → action ladder */}
+          <div style={{ marginTop: 28, padding: 14, background: "#f0ece1", border: "1px solid #d8d2c4", borderLeft: "3px solid #5a564d", borderRadius: 4, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, fontStyle: "italic" }}>
+            The cascade is the cost of leaving the constraints above unaddressed. The ladder below is what the board can do this quarter, this year, and this funding cycle to interrupt it.
           </div>
 
           <section style={{ marginTop: 40 }}>
