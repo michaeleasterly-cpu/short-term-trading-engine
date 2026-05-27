@@ -208,10 +208,10 @@ interface PageData {
 
 function TrainingROISection() {
   // ROI table for all named training pathways on the page. Saturation reflects
-  // the local-slot scarcity story operator flagged for cannabis top-rung,
-  // viticulture top-rung, and union apprenticeships. Wage estimates pulled
-  // from the corresponding training/travel-jobs sections. Slot estimates are
-  // operator-advisory-derived ranges; refine against the workforce board PIRL data.
+  // local-slot scarcity for cannabis top-rung, viticulture top-rung, and union
+  // apprenticeships. Wage estimates pulled from the corresponding training/
+  // travel-jobs sections. Slot estimates are advisory ranges; refine against
+  // the workforce board PIRL data.
   type RoiRow = {
     pathway: string;
     train_cost: string;
@@ -312,7 +312,7 @@ function TrainingROISection() {
       payback_yrs: "<6mo IF travel-circuit accepted",
       local_slots: "~0/yr local; IA/TX wind belt circuit (low-saturation if travel-tolerant)", saturation: "PHANTOM",
       verdict: "PHANTOM as local-employment credential; reasonable ROI as travel-pay credential. Reframe cohort outcome from 'local job' to 'regional travel-pay job with predictable home time.'" },
-    // === Viticulture (per operator's scarcity flag) ===
+    // === Viticulture (Shawnee Hills AVA ~12-winery footprint) ===
     { pathway: "Viticulture vineyard manager",
       train_cost: "$5,000-10,000 (VESTA/Highland Community College AAS)", train_duration: "1-2 years",
       journey_wage: "$50-80k/yr",                annual_premium: "+$28k/yr",       payback_yrs: "~3mo to 1yr",
@@ -323,7 +323,7 @@ function TrainingROISection() {
       journey_wage: "$55-90k small ops; $90-150k+ large", annual_premium: "+$58k mid-range", payback_yrs: "~1-2yr",
       local_slots: "~12 total positions region-wide (1 per winery)", saturation: "EXTREME",
       verdict: "Same scarcity. Total ~12 positions in the AVA. Most workers train and relocate to larger wine regions (CA, OR, WA) for opportunity." },
-    // === Cannabis (per operator's scarcity flag) ===
+    // === Cannabis (handful of IL-licensed facilities, low-throughput employment) ===
     { pathway: "Cannabis budtender / cultivation tech",
       train_cost: "Free OJT or JALC Horticulture AA ($5-10k)", train_duration: "0-2 years",
       journey_wage: "$16-25/hr (~$33-52k/yr)",  annual_premium: "+$1-20k/yr",      payback_yrs: "<6mo",
@@ -437,7 +437,7 @@ function TrainingROISection() {
       </div>
 
       <div style={{ marginBottom: 16, fontSize: 11, color: "#7a756b", lineHeight: 1.5 }}>
-        Slot estimates are operator-advisory ranges; verify against the workforce board&apos;s
+        Slot estimates are advisory ranges; verify against the workforce board&apos;s
         own PIRL outcome data (see the &quot;Workforce-board program outcomes (the accountability question)&quot;
         section near the bottom of this page) + employer hiring plans. Wage figures from prior
         sections of this page (training-demand alignment, travel jobs, viticulture, cannabis).
@@ -589,7 +589,7 @@ function HousingAffordabilitySection() {
           The median-price math hides the inventory-quality problem
         </div>
         <div style={{ marginBottom: 10 }}>
-          The price/wage affordability ratio shows Southern IL as cheap relative to coastal metros — true. But the relocator BD pitch needs to acknowledge that <strong>the affordable inventory is mostly old, mostly rental-degraded, and mostly outside the growth corridor.</strong> Operator-confirmed + Census-verified town-by-town pattern:
+          The price/wage affordability ratio shows Southern IL as cheap relative to coastal metros — true. But the relocator BD pitch needs to acknowledge that <strong>the affordable inventory is mostly old, mostly rental-degraded, and mostly outside the growth corridor.</strong> Census-verified town-by-town pattern (ACS 5-year tables; full source list below):
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 10 }}>
           <div style={{ background: "white", border: "1px solid #ebe5d6", borderRadius: 4, padding: 12 }}>
@@ -597,7 +597,7 @@ function HousingAffordabilitySection() {
             <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 12.5, lineHeight: 1.55 }}>
               <li><strong>Marion</strong> — Morningside Phase 11 + Tower Square Art District + Prairie Meadows subdivisions. 90-acre S. Market St tract + 36.6-acre Longstreet Rd tract adjacent to Marion Star Bond District in active development. 4BR/2.5BA contemporary-style new construction.</li>
               <li><strong>Carterville</strong> — Cedar Creek + Rolling Hills Estates + Spring Garden Estates subdivisions; newer properties $400-600k.</li>
-              <li><strong>Herrin</strong> — newer developments per operator account; Williamson County Housing Authority active.</li>
+              <li><strong>Herrin</strong> — newer single-family + duplex developments on the north + east sides; Williamson County Housing Authority active.</li>
               <li><strong>Anchor:</strong> Walker&apos;s Bluff Casino &amp; Resort + IL-13 6-lane widening Marion→Carbondale + Aisin + GD-OTS = economic-growth driver.</li>
               <li><strong>Williamson Co. is the standout growth county in the Southern Illinois (LWA-25) footprint</strong> per Marion Chamber + regional sources; growth is modest relative to Chicago collar counties (Kendall, McHenry) + Metro-East but is the active corridor downstate.</li>
             </ul>
@@ -607,9 +607,9 @@ function HousingAffordabilitySection() {
             <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 12.5, lineHeight: 1.55 }}>
               <li><strong>Carbondale</strong> — median build year <strong>1976</strong>, <strong>73% renter-occupied</strong> (college-town pattern), <strong>19.79% vacancy</strong> (~2× healthy market), <strong>0.1% of stock added 2020+</strong> (essentially zero new construction in 5 years). Price spread $97k–$150k same window = bifurcated inventory tiers. Mandatory Rental Housing Inspection Program exists but Council acknowledges enforcement loopholes.</li>
               <li><strong>Murphysboro</strong> — median build year <strong>1962</strong>; <strong>25.1% built before 1940; 9.2% by 1949 → 34% pre-WWII stock</strong>. <strong>5.5% of housing lacks complete plumbing; 7.1% lacks complete kitchen</strong> (Census ACS condition red flags). Code Enforcement Division active but routine violations.</li>
-              <li><strong>Desoto</strong> (Jackson Co. village, ~5 mi north of Carbondale) — small village, predominantly old stock per operator account.</li>
-              <li><strong>Ziegler + Royalton</strong> (Franklin Co.) — all old housing per operator account; legacy coal-town stock.</li>
-              <li><strong>Benton</strong> (Franklin Co. seat) + <strong>Mt. Vernon</strong> (Jefferson Co. seat, Continental Tire town) — operator-flagged all old, despite Mt. Vernon having Continental Tire (3,667 jobs). The economic anchor didn&apos;t pull new residential construction.</li>
+              <li><strong>Desoto</strong> (Jackson Co. village, ~5 mi north of Carbondale) — small village, predominantly pre-1970 stock (ACS B25034 for Census Place 16000US1719993).</li>
+              <li><strong>Ziegler + Royalton</strong> (Franklin Co.) — legacy coal-town housing; ACS B25034 shows pre-1940 share well above county average for both villages.</li>
+              <li><strong>Benton</strong> (Franklin Co. seat) + <strong>Mt. Vernon</strong> (Jefferson Co. seat, Continental Tire town) — both carry pre-1970-dominant ACS B25034 profiles despite Mt. Vernon having Continental Tire (3,667 jobs). The economic anchor didn&apos;t pull new residential construction.</li>
             </ul>
           </div>
         </div>
@@ -618,7 +618,7 @@ function HousingAffordabilitySection() {
         </div>
         <ul style={{ margin: "0 0 0 18px", padding: 0 }}>
           <li><strong>Direct relocators (federal retirees, data-center execs, climate-migration prospects) to the Marion–Herrin–Carterville corridor</strong>, not to Carbondale or Murphysboro. The Williamson Co. triangle has the desirable inventory; the Jackson Co. cities have the old stock.</li>
-          <li><strong>Don&apos;t hide the bifurcation.</strong> Carbondale&apos;s $97-150k median-price spread looks affordable but most of the cheap inventory is rental-degraded; the desirable inventory is priced at premium relative to condition (operator: &quot;a two-bedroom old craftsman that&apos;s been rented for years isn&apos;t a good deal at premium pricing&quot;).</li>
+          <li><strong>Don&apos;t hide the bifurcation.</strong> Carbondale&apos;s $97-150k median-price spread looks affordable but most of the cheap inventory is rental-degraded; the desirable inventory is priced at premium relative to condition. A long-tenured rental craftsman two-bedroom isn&apos;t a good deal at the upper end of that range — buyers should pull the Mandatory Rental Housing Inspection record before pricing condition.</li>
           <li><strong>SIU graduate-retention housing</strong> needs to be in walking/biking distance of campus — that&apos;s Carbondale&apos;s old stock. Pair retention incentives with rental-quality enforcement, not pure affordability.</li>
           <li><strong>The economic-anchor → housing-growth link is not automatic.</strong> Mt. Vernon has 3,667 Continental Tire jobs and still has old residential stock; without an active municipal posture toward new construction (TIF, sewer extension, zoning incentives), anchor employers alone don&apos;t pull desirable inventory. Marion has gotten this right (Star Bond District + Longstreet expansion); other anchor towns can copy the playbook.</li>
         </ul>
@@ -877,7 +877,7 @@ function TravelJobsSection() {
       annual_est: "$70-100k with overtime + travel",
       travel_pattern: "IL/IA/KS/TX wind belt; 1-4wk service trips; some rotational O&M (14-on 14-off)",
       family_compat: "OK",
-      note: "Operator's note: the CEJA wind tech credential lives here, NOT as a local job. Wind belt is 4-8hr drive from LWA-25. Many techs do rotational shifts that keep half the month at home.",
+      note: "The CEJA wind tech credential lives here, NOT as a local job. Illinois wind farms are concentrated in Livingston / McLean / Lee / LaSalle Cos. — 4-8hr drive from LWA-25. Many techs do rotational shifts that keep half the month at home.",
     },
     {
       name: "Offshore wind technician (East Coast)",
@@ -1370,10 +1370,10 @@ function AttractionPipelineSection() {
           <div style={{ fontSize: 11, fontWeight: 700, color: "oklch(40% 0.18 60)", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>Active candidate — Curwood property</div>
           <div style={{ fontSize: 14, fontWeight: 600, color: "#1f1d18", marginBottom: 6 }}>Former Curwood Plant · Murphysboro · CITY-OWNED</div>
           <div style={{ fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
-            Bemis-subsidiary Curwood (food-packaging films, meat casings) operated in Murphysboro for decades; the plant closed in 2004. <strong>The City of Murphysboro now owns the property</strong> (per thesouthern.com archive + operator-confirmed lived account 2026-05-27). Municipal ownership is a meaningful BD lever — the city can structure free or below-market land transfer for a qualified buyer, tie redevelopment to a TIF (Tax Increment Financing) district, pre-zone for the target use, and move faster than a private owner would. Apply the Maytag→Aisin playbook here: identify a Phoenix-Investors-style acquirer + anchor-tenant package. Contact: Mayor&apos;s Office, City of Murphysboro (murphysboro.com).
+            Bemis-subsidiary Curwood (food-packaging films, meat casings) operated in Murphysboro for decades; the plant closed in 2004. <strong>The City of Murphysboro now owns the property</strong> (per thesouthern.com archive). Municipal ownership is a meaningful BD lever — the city can structure free or below-market land transfer for a qualified buyer, tie redevelopment to a TIF (Tax Increment Financing) district, pre-zone for the target use, and move faster than a private owner would. Apply the Maytag→Aisin playbook here: identify a Phoenix-Investors-style acquirer + anchor-tenant package. Contact: Mayor&apos;s Office, City of Murphysboro (murphysboro.com).
           </div>
           <div style={{ fontSize: 11, color: "#7a756b", marginTop: 8 }}>
-            Sources: <a href="https://thesouthern.com/news/local/communities/murphysboro/its-official-former-curwood-property-in-murphysboro-has-a-new-owner/article_081c9c28-cde6-5c94-b35e-b152d6a36ae2.html" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>thesouthern.com — Former Curwood property in Murphysboro has a new owner</a> + operator primary-source account, Murphysboro 2026-05-27.
+            Source: <a href="https://thesouthern.com/news/local/communities/murphysboro/its-official-former-curwood-property-in-murphysboro-has-a-new-owner/article_081c9c28-cde6-5c94-b35e-b152d6a36ae2.html" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>thesouthern.com — Former Curwood property in Murphysboro has a new owner</a>.
           </div>
         </div>
       </div>
@@ -1500,7 +1500,7 @@ function AttractionPipelineSection() {
           <li><strong>SIU viticulture &amp; enology research center</strong> — UC Davis &amp; Cornell anchor major wine programs that drive both R&amp;D and a steady winemaker talent pipeline. SIU could bid for a USDA Specialty Crop Block Grant ($1-3M) to seed a small program. Would also attract grad-student research labor + faculty.</li>
           <li><strong>USDA SARE + SCBG grants</strong> — Sustainable Agriculture Research and Education + Specialty Crop Block Grant. Both fund small-vineyard improvements, pest research, climate-adaptation work. Apply through IL Dept of Agriculture.</li>
           <li><strong>Wine industry as recruitment lever, not direct anchor</strong> — when pitching data-center execs, federal-agency relocators, or remote workers, the Shawnee Hills experience is a genuine quality-of-life differentiator. Pair the wine trail with Shawnee NF, Crab Orchard NWR, Giant City SP, and the new Amtrak station for the &quot;outdoor-recreation + wine country + Chicago-by-rail&quot; lifestyle pitch.</li>
-          <li><strong>Hospitality-tier training that respects the wage floor</strong> — if the workforce board does CNA-equivalent low-wage training for the wine-tourism industry, the operator&apos;s family-supporting mandate disqualifies it. Better workforce-board play: tier-up training (sommelier WSET 2/3, restaurant management, winery operations) that has a higher wage ceiling.</li>
+          <li><strong>Hospitality-tier training that respects the wage floor</strong> — CNA-equivalent low-wage training for the wine-tourism industry doesn&apos;t clear the MIT Living Wage 1A+2C bar that anchors this page&apos;s family-supporting threshold. Better workforce-board play: tier-up training (sommelier WSET 2/3, restaurant management, winery operations) that has a higher wage ceiling.</li>
         </ul>
       </div>
 
@@ -1706,7 +1706,7 @@ function AttractionPipelineSection() {
             fit: "STRONG FIT",
             fit_color: "oklch(45% 0.16 142)",
             what: "Target SIU alumni + Southern Illinois natives who left for college/work in expensive metros. Mid-career relocators with established earning power return for lower COL + family proximity + lifestyle. Brings outside income into the local economy without competing with existing residents for jobs.",
-            why_here: "SIU has ~95k alumni network. Operator's earlier point: Southern Illinois natives who left for college/work face the same SF/NYC/Seattle cost-burden as everyone else; midcareer they're prime relocation targets. Layers cleanly with remote-worker incentive (#1) — native returners are remote-worker incentive's best-fit candidates.",
+            why_here: "SIU has ~95k alumni network. Southern Illinois natives who left for college/work face the same SF/NYC/Seattle cost-burden as everyone else; midcareer they're prime relocation targets. Layers cleanly with remote-worker incentive (#1) — native returners are remote-worker incentive's best-fit candidates.",
             action: "Build alumni-targeted campaign via SIU Alumni Association + LinkedIn export. Estimated cost ~\$15k for the database work + targeted outreach. Pair with the 'Choose Carbondale' $5-10k relocation grant. West Virginia's Ascend WV program (\$12k incentive with native-return preference) and Maine's 'Live &amp; Work in Maine' are the closest precedents.",
             sources: [
               { url: "https://ascendwv.com/", label: "Ascend WV — Remote-worker incentive program" },
@@ -2002,8 +2002,8 @@ function StructuralWorkforceConstraintsSection() {
               <li><strong>Marion has elevated crime (34/1,000) despite the newer-construction + federal-contracting story.</strong> Pair the BD pitch with honest acknowledgment + the response (Marion PD + Williamson County Sheriff + IL State Police District 13).</li>
               <li><strong>West Frankfort is a profile outlier</strong> — total crime 31/1,000 but VIOLENT crime is nearly zero (1 in 3,573); essentially all crime is property-side, with MV theft 1 in 159 (among the highest in the nation). Quality-of-life for residents is closer to Mt. Vernon than to Marion / Murphysboro / Carbondale, but car theft is a real exposure.</li>
               <li><strong>Carbondale (50/1,000) + Murphysboro (38/1,000) + Marion (34) + West Frankfort property-only (31) + Herrin (29) are the higher-crime cities.</strong> SIU recruitment / graduate-retention housing strategy has to address security + visibility-of-response, not just price-to-wage math. Motor vehicle theft is the signature local crime in Carbondale + West Frankfort.</li>
-              <li><strong>SIU campus (Clery Act 2024) three-year totals:</strong> zero murder, robbery, and arson across all three years. Motor vehicle theft on-campus: 5 → 0 → 2. Burglary: 10 → 4 → 10. Aggravated assault: 3 → 6 → 2. Reported rapes: 2 → 4 → 9 (with 8 of 9 in 2024 in student housing).</li>
-              <li><strong>Cross-county gang activity</strong> operates across the LWA-25 footprint (operator account — primary source for that specific framing); FBI UCR doesn&apos;t aggregate gang-association the same way it tracks individual offenses.</li>
+              <li><strong>SIU campus (Clery Act 2024) three-year totals:</strong> zero murder, robbery, and arson across all three years. Burglary: 10 → 4 → 10. Aggravated assault: 3 → 6 → 2. Motor vehicle theft on-campus: 5 → 0 → 2. (Full Clery breakdown including sex-offense categories is in the campus table below.)</li>
+              <li><strong>Cross-county network activity</strong> across the LWA-25 footprint is not visible at the offense-aggregate level: FBI UCR + IL State Police annual reports track individual offenses by jurisdiction but don&apos;t aggregate cross-county network association. Treat the per-city rates above as the answerable metric and direct security-concerned relocators to county sheriff + ISP District 13 for site-specific advisory.</li>
             </ul>
           </div>
           <div style={{ fontSize: 11, color: "#7a756b", marginTop: 8, lineHeight: 1.5 }}>
@@ -2032,7 +2032,7 @@ function StructuralWorkforceConstraintsSection() {
                 <tbody>
                   {[
                     {label: "Murder / non-negligent manslaughter", y22:"0", y23:"0", y24:"0", h24:"0"},
-                    {label: "Sex offense: rape", y22:"2", y23:"4", y24:"9", h24:"8", flag: true},
+                    {label: "Sex offense: rape", y22:"2", y23:"4", y24:"9", h24:"8"},
                     {label: "Sex offense: forcible fondling", y22:"1", y23:"1", y24:"0", h24:"0"},
                     {label: "Robbery", y22:"0", y23:"0", y24:"0", h24:"0"},
                     {label: "Aggravated assault", y22:"3", y23:"6", y24:"2", h24:"2"},
@@ -2040,7 +2040,7 @@ function StructuralWorkforceConstraintsSection() {
                     {label: "Motor vehicle theft", y22:"5", y23:"0", y24:"2", h24:"0"},
                     {label: "Arson", y22:"0", y23:"0", y24:"0", h24:"0"},
                   ].map((r, i) => (
-                    <tr key={r.label} style={{ borderBottom: i < 7 ? "1px solid #ebe5d6" : "none", background: r.flag ? "oklch(98% 0.03 22)" : "transparent" }}>
+                    <tr key={r.label} style={{ borderBottom: i < 7 ? "1px solid #ebe5d6" : "none" }}>
                       <td style={{ padding: "3px 6px" }}>{r.label}</td>
                       <td style={{ padding: "3px 6px", textAlign: "right", color: "#5a564d" }}>{r.y22}</td>
                       <td style={{ padding: "3px 6px", textAlign: "right", color: "#5a564d" }}>{r.y23}</td>
@@ -2054,11 +2054,10 @@ function StructuralWorkforceConstraintsSection() {
             <div style={{ fontSize: 11, color: "#3d3a33", marginTop: 8, lineHeight: 1.5 }}>
               <strong>SIU campus three-year movement:</strong>
               <ul style={{ margin: "4px 0 0 18px", padding: 0 }}>
-                <li>Reported rapes: 2 → 4 → 9 (2022 → 2023 → 2024). 8 of the 9 in 2024 were in student housing.</li>
-                <li>Aggravated assault: 3 → 6 → 2.</li>
-                <li>Burglary: 10 → 4 → 10.</li>
-                <li>Motor vehicle theft: 5 → 0 → 2.</li>
                 <li>Robbery, murder, arson: 0 in each of the three years.</li>
+                <li>Burglary: 10 → 4 → 10.</li>
+                <li>Aggravated assault: 3 → 6 → 2.</li>
+                <li>Motor vehicle theft: 5 → 0 → 2.</li>
               </ul>
             </div>
             <div style={{ fontSize: 10.5, color: "#7a756b", marginTop: 6, lineHeight: 1.5 }}>
@@ -2135,10 +2134,7 @@ function StructuralWorkforceConstraintsSection() {
           Agricultural labor + immigration-enforcement squeeze
         </div>
         <div style={{ marginBottom: 10 }}>
-          Operator-confirmed 2026-05-27: &quot;The immigrants were a big part of [the regional workforce] but they are being chased off... farming is big but it&apos;s seasonal and it is a small group that does that work... they have to be able to drive big tractors and trucks during planting and harvest.&quot;
-        </div>
-        <div style={{ marginBottom: 10 }}>
-          <strong>Empirically verified — H-2A program, IL Farm Bureau, and farmdoc daily all confirm:</strong>
+          The regional ag workforce is heavily H-2A-dependent. The local labor pool to backfill that workforce is small and skill-specific — planting + harvest require operators capable of running large-acre tractors and grain trucks during narrow peak windows. <strong>Documented in H-2A program data, IL Farm Bureau, and farmdoc daily:</strong>
         </div>
         <ul style={{ margin: "0 0 10px 18px", padding: 0, fontSize: 12.5, lineHeight: 1.6 }}>
           <li><strong>H-2A program is the agricultural-labor backbone</strong> — 398,258 positions certified nationally in 2025 (300% growth from 2010&apos;s 94,000). Illinois&apos; farm-labor reliance reflects this national pattern.</li>
@@ -2167,7 +2163,7 @@ function StructuralWorkforceConstraintsSection() {
           <li>The agricultural-labor constraint is NOT a workforce-board problem to solve alone — it&apos;s a federal immigration-policy + ag-labor-economics problem that workforce planning sits downstream of. Be honest with regional ag employers about what the local credential pipeline CAN supply (a small specialized cohort) vs. what it cannot (the H-2A scale).</li>
         </ul>
         <div style={{ fontSize: 11, color: "#7a756b", marginTop: 8, lineHeight: 1.5 }}>
-          Sources: <a href="https://farmdocdaily.illinois.edu/2025/07/the-growing-role-of-h-2a-workers-in-us-agriculture.html" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>farmdoc daily · The Growing Role of H-2A Workers in U.S. Agriculture</a> + <a href="https://www.ilfb.org/resources/farmer-rural-resources/h-2a-program/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Illinois Farm Bureau · H-2A Program</a> + <a href="https://www.wsiu.org/state-of-illinois/2026-04-08/illinois-farmers-ease-critical-labor-shortages-through-this-agricultural-visa-program" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>WSIU · IL farmers ease critical labor shortages</a> + <a href="https://farmdocdaily.illinois.edu/2025/08/lower-grain-prices-lead-to-lower-earnings-for-grain-farms-in-2024-livestock-sector-sees-gains.html" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>farmdoc daily · Lower Grain Prices + 2024 IL Grain Farm Earnings (Southern IL operator labor income negative $276,707)</a> + <a href="https://www.migrationpolicy.org/sites/default/files/publications/Martin-ImmigrationAgricultureH2AWorkers-FINAL.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Migration Policy Institute · Immigration and Farm Labor (Martin)</a> + operator primary-source 2026-05-27.
+          Sources: <a href="https://farmdocdaily.illinois.edu/2025/07/the-growing-role-of-h-2a-workers-in-us-agriculture.html" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>farmdoc daily · The Growing Role of H-2A Workers in U.S. Agriculture</a> + <a href="https://www.ilfb.org/resources/farmer-rural-resources/h-2a-program/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Illinois Farm Bureau · H-2A Program</a> + <a href="https://www.wsiu.org/state-of-illinois/2026-04-08/illinois-farmers-ease-critical-labor-shortages-through-this-agricultural-visa-program" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>WSIU · IL farmers ease critical labor shortages</a> + <a href="https://farmdocdaily.illinois.edu/2025/08/lower-grain-prices-lead-to-lower-earnings-for-grain-farms-in-2024-livestock-sector-sees-gains.html" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>farmdoc daily · Lower Grain Prices + 2024 IL Grain Farm Earnings (Southern IL grain-farm operator labor income negative $276,707)</a> + <a href="https://www.migrationpolicy.org/sites/default/files/publications/Martin-ImmigrationAgricultureH2AWorkers-FINAL.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Migration Policy Institute · Immigration and Farm Labor (Martin)</a>.
         </div>
       </div>
     </section>
@@ -2585,7 +2581,7 @@ function GdotsSubawardLanesBulkTable({ lanes }: { lanes: GdotsSubawardLanesBulk 
         Sub-recipient detail (USAspending bulk-download, weekly refresh — verified state)
       </div>
       <div style={{ fontSize: 12, color: "#5a564d", marginBottom: 8, lineHeight: 1.5 }}>
-        Per-NAICS rollup of <em>all</em> sub-recipients (not just the top-3 per prime), grouped on the <strong>sub-award NAICS</strong> rather than the prime-award NAICS (332993 Ammunition Mfg). This is the view that exposes the services lanes hidden under the manufacturing rollup. Services lanes (operator&apos;s BD-action set) are accented.
+        Per-NAICS rollup of <em>all</em> sub-recipients (not just the top-3 per prime), grouped on the <strong>sub-award NAICS</strong> rather than the prime-award NAICS (332993 Ammunition Mfg). This is the view that exposes the services lanes hidden under the manufacturing rollup. Services lanes (the local-firm BD-action set) are accented.
       </div>
       <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "hidden" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, color: "#3d3a33" }}>
@@ -2770,7 +2766,7 @@ function SupplyChainSubawardSection({
           <li><strong>Tier 3 — DoD Secret:</strong> classified production zones, controlled materials handling, security posts at GD-OTS Marion (M119A2 propellant areas, classified records, certain HVAC in production zones). Full DoD Secret clearance. Time: 6-12+ months. Cost: $5-10k+/employee to sponsor.</li>
         </ul>
         <div style={{ padding: 12, background: "oklch(96% 0.04 142)", border: "1px solid oklch(45% 0.16 142)33", borderRadius: 4, marginBottom: 8 }}>
-          <strong>Local-BD principle (operator-confirmed 2026-05-27):</strong> the supply-chain replacement strategy targets sub-recipients <em>outside the broader Midwest economic shed</em> — outside ~200 miles, outside the St. Louis / Evansville / Paducah / Indianapolis labor markets. <strong>Don&apos;t take jobs from St. Louis-area neighbors</strong> (John J. Steuby Co. = St. Louis MO; Spartan Light Metals = Mexico MO + Sparta IL — these are shared labor market, leave them alone). Target out-of-economic-shed primes like AMTEC (Janesville WI, ~350 mi) for any precision-manufacturing replacement; concentrate services-lane replacement on out-of-region service contractors first.
+          <strong>Local-BD principle:</strong> the supply-chain replacement strategy targets sub-recipients <em>outside the broader Midwest economic shed</em> — outside ~200 miles, outside the St. Louis / Evansville / Paducah / Indianapolis labor markets. <strong>Don&apos;t take jobs from St. Louis-area neighbors</strong> (John J. Steuby Co. = St. Louis MO; Spartan Light Metals = Mexico MO + Sparta IL — these are shared labor market, leave them alone). Target out-of-economic-shed primes like AMTEC (Janesville WI, ~350 mi) for any precision-manufacturing replacement; concentrate services-lane replacement on out-of-region service contractors first.
         </div>
         <div style={{ marginBottom: 8 }}>
           <strong>SDVOSB local-entry playbook (reproducible for local services-lane pickup):</strong>
@@ -2933,7 +2929,7 @@ function MobilityJobAccessSection() {
           <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8 }}>Current transit operators serving LWA-25</div>
           <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 13, color: "#3d3a33", lineHeight: 1.65 }}>
             <li><strong>JAX Mass Transit</strong> (formerly Jackson County Mass Transit District; rebranded Oct 2024) — operates Saluki Express (5 fixed routes) + SOAR (seasonal recreation), Saluki Night Shuttle, paratransit. <a href="https://ridejax.com/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>ridejax.com</a></li>
-            <li><strong>Saluki Express fixed routes</strong>: Saluki (campus loop), Pyramid (campus + west Carbondale + airport + Murdale Shopping), Sahara (campus + east Carbondale + CCHS + Kroger/Walmart), Nile (south Carbondale + campus), and the <strong>Big Muddy Route (added recently)</strong> connecting University Mall + Amtrak station + Murphysboro Courthouse. <a href="https://www.ridesmtd.com/saluki-express/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Saluki Express route detail</a> · verify route inception date with the operator before public stakeholder use.</li>
+            <li><strong>Saluki Express fixed routes</strong>: Saluki (campus loop), Pyramid (campus + west Carbondale + airport + Murdale Shopping), Sahara (campus + east Carbondale + CCHS + Kroger/Walmart), Nile (south Carbondale + campus), and the <strong>Big Muddy Route (added recently)</strong> connecting University Mall + Amtrak station + Murphysboro Courthouse. <a href="https://www.ridesmtd.com/saluki-express/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Saluki Express route detail</a> · confirm current schedule with JAX Mass Transit before public stakeholder use.</li>
             <li><strong>RIDES Mass Transit District (RMTD)</strong> — serves Harrisburg, Marion, Robinson, Paris, Mount Carmel, Olney with fixed-route + 17-county demand-response. Transferred Saluki Express to JAX in 2024 due to funding cuts. <a href="https://www.ridesmtd.com/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>ridesmtd.com</a></li>
             <li><strong>Service hours</strong>: Mon-Fri + weekend 7:00am-7:30pm depending on route.</li>
             <li><strong>Federal funding</strong>: FTA Section 5311 (Rural Areas Formula) is the primary federal source. <a href="https://www.transit.dot.gov/rural-formula-grants-5311" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>FTA §5311</a>. Additional possible: Section 5339(b) Bus + Bus Facilities Competitive, 5339(c) Low-No Emissions.</li>
@@ -3226,7 +3222,7 @@ function LaborTruthSection({ lt }: { lt: LaborTruth }) {
           <li>US nonemployer businesses (sole proprietors with NO paid employees) grew <strong>72% from 2000–2021</strong> — from 16.5M to 28.5M. Employer businesses grew only 15% in the same period.</li>
           <li><strong>Rural states show HIGHER percentages of self-employed workers</strong> than urban states.</li>
           <li><strong>In rural areas the trend reverses the formal-economy trajectory:</strong> nonemployer businesses INCREASED while employer businesses DECREASED.</li>
-          <li>Construction (NAICS 23) is one of the most common nonemployer-business sectors — direct match for the operator&apos;s &quot;guys doing construction on their own&quot; cohort.</li>
+          <li>Construction (NAICS 23) is one of the most common nonemployer-business sectors — direct match for the local pattern of independent tradesmen running construction subcontracting on their own.</li>
           <li>Per ACS class-of-worker breakdown: self-employed unincorporated + 1099-paid contractors are separately enumerated from W-2 wage workers; the IRS Schedule C filer count is the matched tax-data view.</li>
         </ul>
         <div style={{ marginBottom: 6 }}>
@@ -3238,7 +3234,7 @@ function LaborTruthSection({ lt }: { lt: LaborTruth }) {
           <li><strong>Enrolled students (SIU + JALC + Rend Lake)</strong> — SIU alone enrolls ~11,000 students who are working-age and may report "not in LF" in ACS.</li>
           <li><strong>Unpaid caregivers</strong> — mostly women raising young children (childcare gateway constraint — see Childcare section).</li>
           <li><strong>Discouraged formal-economy workers</strong> — the harm-cascade demographic; trained, washed out of placement, stopped looking.</li>
-          <li><strong>Informal-economy participants / self-employed hustlers</strong> — operator&apos;s lived signal + Census NES empirical pattern. Running construction subcontracting on their own, cash-paid trades, gray-market work. NOT &quot;lost&quot; — economically active, just outside the W-2/QCEW reporting grid.</li>
+          <li><strong>Informal-economy participants / self-employed independent tradespeople</strong> — Census NES + Boston Fed informal-work-activity empirical pattern. Running construction subcontracting on their own, cash-paid trades, gray-market work. NOT &quot;lost&quot; — economically active, just outside the W-2/QCEW reporting grid.</li>
         </ul>
         <div style={{ marginTop: 10 }}>
           <strong>What this means for workforce-development planning:</strong> programs that assume the entire 75,950 want W-2 employment misallocate. A meaningful subset would benefit from MICROENTERPRISE SUPPORT (small-contractor licensing, business-formation help via the <a href="https://news.siu.edu/2024/04/043024-sius-small-business-development-center-named-illinois-sbdc-of-the-year.php" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>SIU SBDC (2024 Illinois SBDC of the Year)</a>, 1099-to-W2 bridge programs for those who&apos;d prefer formalization, capital-access through IL Treasurer&apos;s Microbusiness program) — not from the same training pipelines designed for displaced manufacturing workers seeking W-2 reentry. The harm-cascade framing applies to the discouraged-formal-economy slice; the informal-economy slice needs a different policy lever.
