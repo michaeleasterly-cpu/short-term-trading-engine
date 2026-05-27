@@ -717,7 +717,7 @@ async def public_carbondale() -> dict:
     indicators = {r["series_id"]: {"value": float(r["value_num"]), "date": r["observed_date"].isoformat()} for r in rows}
     business = await _usaspending_block(county_fips=["077"], recipient_city=None)
     qcew = await _qcew_supersector_block(county_fips=["077"])
-    acs = await _census_acs_place("11163")  # Carbondale city, IL
+    acs = await _census_acs_multiyear("11163")  # Carbondale city, IL — 2023 + 2018 ACS5
     return {
         "ts": datetime.now(UTC).isoformat(),
         "indicators": indicators,
@@ -725,7 +725,8 @@ async def public_carbondale() -> dict:
         "labor_force_series": [{"date": r["observed_date"].isoformat(), "value": float(r["value_num"])} for r in labor_force_series],
         "business_opportunities": business,
         "industry_mix": qcew,
-        "city_demographics": acs,
+        "city_demographics": acs.get("current") if acs else {},
+        "demographics_trend": acs,
     }
 
 
@@ -737,6 +738,54 @@ async def public_carbondale() -> dict:
 
 _ACS_CACHE: dict[str, tuple[float, dict]] = {}
 _ACS_CACHE_TTL_SEC = 86400  # 24h
+
+
+async def _census_acs_multiyear(
+    place_fips: str, *, state_fips: str = "17", years: tuple[int, ...] = (2023, 2018)
+) -> dict:
+    """Returns the latest-year ACS snapshot plus 5-year-prior comparison deltas
+    for the subset of variables that are stable across years.
+
+    Output shape:
+      {
+        "current": {... full ACS profile for years[0] ...},
+        "prior": {... abbreviated dict for years[-1] (stable vars only) ...},
+        "deltas": {var: {abs_change, pct_change}, ...},  # for stable vars
+        "comparison_years": [latest, prior],
+      }
+    """
+    snapshots = []
+    for y in years:
+        snap = await _census_acs_place(place_fips, state_fips=state_fips, year=y)
+        snapshots.append(snap)
+    current, prior = snapshots[0], snapshots[-1] if len(snapshots) > 1 else {}
+    if not current:
+        return {}
+
+    # Variables stable across years for delta computation
+    STABLE = (
+        "population", "median_age", "median_household_income",
+        "poverty_rate_families", "median_home_value", "median_gross_rent",
+        "pct_owner_occupied", "acs_unemployment_rate", "mean_commute_minutes",
+    )
+    deltas: dict[str, dict] = {}
+    for k in STABLE:
+        a = current.get(k)
+        b = prior.get(k) if prior else None
+        if a is not None and b is not None and b != 0:
+            abs_change = a - b
+            pct_change = (abs_change / b) * 100
+            deltas[k] = {
+                "abs_change": round(abs_change, 2),
+                "pct_change": round(pct_change, 1),
+                "prior_value": b,
+            }
+
+    return {
+        "current": current,
+        "comparison_years": [years[0], years[-1]],
+        "deltas": deltas,
+    }
 
 
 async def _census_acs_place(place_fips: str, *, state_fips: str = "17", year: int = 2023) -> dict:
@@ -1150,7 +1199,7 @@ async def public_murphysboro() -> dict:
     business_city = await _usaspending_block(county_fips=["077"], recipient_city="MURPHYSBORO")
     business_county = await _usaspending_block(county_fips=["077"], recipient_city=None)
     qcew = await _qcew_supersector_block(county_fips=["077"])
-    acs = await _census_acs_place("51453")  # Murphysboro city, IL
+    acs = await _census_acs_multiyear("51453")  # Murphysboro city, IL — 2023 + 2018 ACS5
     return {
         "ts": datetime.now(UTC).isoformat(),
         "indicators": indicators,
@@ -1158,7 +1207,8 @@ async def public_murphysboro() -> dict:
         "business_opportunities_city": business_city,
         "business_opportunities_county": business_county,
         "industry_mix": qcew,
-        "city_demographics": acs,
+        "city_demographics": acs.get("current") if acs else {},
+        "demographics_trend": acs,
     }
 
 

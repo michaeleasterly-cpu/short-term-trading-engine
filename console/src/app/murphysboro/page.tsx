@@ -61,6 +61,17 @@ interface CityDemographics {
   source: string;
 }
 
+interface DemoDelta {
+  abs_change: number;
+  pct_change: number;
+  prior_value: number;
+}
+interface DemographicsTrend {
+  current: CityDemographics;
+  comparison_years: [number, number];
+  deltas: Record<string, DemoDelta>;
+}
+
 interface MurphysboroData {
   ts: string;
   indicators: Record<string, { value: number; date: string }>;
@@ -69,23 +80,38 @@ interface MurphysboroData {
   business_opportunities_county: BusinessOps;
   industry_mix?: IndustryMix;
   city_demographics?: CityDemographics;
+  demographics_trend?: DemographicsTrend;
 }
 
-function DemographicsSection({ d, cityShortName }: { d: CityDemographics; cityShortName: string }) {
+function DemographicsSection({ d, cityShortName, trend }: { d: CityDemographics; cityShortName: string; trend?: DemographicsTrend }) {
   if (!d.population) return null;
   const fmtPct = (v: number | null) => v == null ? "—" : `${v.toFixed(1)}%`;
   const fmtMoneyL = (v: number | null) => v == null ? "—" : `$${v.toLocaleString()}`;
-  const stats: Array<{ label: string; value: string; sub?: string }> = [
-    { label: "Population", value: d.population!.toLocaleString(), sub: `ACS 5y ${d.year}` },
-    { label: "Median age", value: d.median_age != null ? `${d.median_age.toFixed(1)} yrs` : "—", sub: d.median_age != null && d.median_age >= 38 ? "established / family-skew" : d.median_age != null && d.median_age < 30 ? "very young" : "near US median" },
-    { label: "Bachelor's degree or higher (25+)", value: fmtPct(d.pct_bachelors_plus) },
-    { label: "Median household income", value: fmtMoneyL(d.median_household_income) },
-    { label: "Family poverty rate", value: fmtPct(d.poverty_rate_families) },
-    { label: "ACS unemployment (25+)", value: fmtPct(d.acs_unemployment_rate), sub: "5y avg, narrower than LAUS" },
-    { label: "Median home value", value: fmtMoneyL(d.median_home_value), sub: "owner-occupied" },
-    { label: "Median gross rent", value: fmtMoneyL(d.median_gross_rent) },
-    { label: "% owner-occupied", value: fmtPct(d.pct_owner_occupied), sub: d.pct_renter_occupied != null ? `${d.pct_renter_occupied.toFixed(1)}% renter` : undefined },
-    { label: "Mean commute time", value: d.mean_commute_minutes != null ? `${d.mean_commute_minutes.toFixed(0)} min` : "—", sub: "one-way" },
+  const priorYear = trend?.comparison_years?.[1];
+  const PP_VARS = new Set(["poverty_rate_families", "acs_unemployment_rate", "pct_owner_occupied"]);
+
+  const renderTrend = (key: string) => {
+    const dl = trend?.deltas?.[key];
+    if (!dl || priorYear == null) return null;
+    const display = PP_VARS.has(key)
+      ? `${dl.abs_change > 0 ? "+" : ""}${dl.abs_change.toFixed(1)}pp vs ${priorYear}`
+      : `${dl.pct_change > 0 ? "+" : ""}${dl.pct_change.toFixed(1)}% vs ${priorYear}`;
+    return (
+      <div style={{ fontSize: 11, color: "#5a564d", marginTop: 6, fontWeight: 500 }}>{display}</div>
+    );
+  };
+
+  const stats: Array<{ key: string | null; label: string; value: string; sub?: string }> = [
+    { key: "population",              label: "Population",                          value: d.population!.toLocaleString(), sub: `ACS 5y ${d.year}` },
+    { key: "median_age",              label: "Median age",                          value: d.median_age != null ? `${d.median_age.toFixed(1)} yrs` : "—", sub: d.median_age != null && d.median_age >= 38 ? "established / family-skew" : d.median_age != null && d.median_age < 30 ? "very young" : "near US median" },
+    { key: null,                      label: "Bachelor's degree or higher (25+)",   value: fmtPct(d.pct_bachelors_plus) },
+    { key: "median_household_income", label: "Median household income",             value: fmtMoneyL(d.median_household_income) },
+    { key: "poverty_rate_families",   label: "Family poverty rate",                 value: fmtPct(d.poverty_rate_families) },
+    { key: "acs_unemployment_rate",   label: "ACS unemployment (25+)",              value: fmtPct(d.acs_unemployment_rate), sub: "5y avg, narrower than LAUS" },
+    { key: "median_home_value",       label: "Median home value",                   value: fmtMoneyL(d.median_home_value), sub: "owner-occupied" },
+    { key: "median_gross_rent",       label: "Median gross rent",                   value: fmtMoneyL(d.median_gross_rent) },
+    { key: "pct_owner_occupied",      label: "% owner-occupied",                    value: fmtPct(d.pct_owner_occupied), sub: d.pct_renter_occupied != null ? `${d.pct_renter_occupied.toFixed(1)}% renter` : undefined },
+    { key: "mean_commute_minutes",    label: "Mean commute time",                   value: d.mean_commute_minutes != null ? `${d.mean_commute_minutes.toFixed(0)} min` : "—", sub: "one-way" },
   ];
 
   return (
@@ -96,9 +122,9 @@ function DemographicsSection({ d, cityShortName }: { d: CityDemographics; citySh
       </h2>
       <div style={{ fontSize: 14, color: "#5a564d", marginBottom: 16, maxWidth: 720 }}>
         Census American Community Survey 5-year estimates for the {cityShortName}
-        municipality (not the broader county). The Carbondale vs. Murphysboro
-        contrast is sharp: a college town next door to a smaller family town
-        with very different income, age, and housing-tenure profiles.
+        municipality (not the broader county). Trend tags compare the latest
+        snapshot to the {priorYear ?? "prior"} ACS5 release — the direction of
+        travel matters more than any single point in time.
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 16 }}>
         {stats.map((s, i) => (
@@ -106,6 +132,7 @@ function DemographicsSection({ d, cityShortName }: { d: CityDemographics; citySh
             <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: "#7a756b", marginBottom: 6 }}>{s.label}</div>
             <div style={{ fontSize: 22, fontWeight: 500, color: "#1f1d18", lineHeight: 1.1, marginBottom: 4 }}>{s.value}</div>
             {s.sub && <div style={{ fontSize: 12, color: "#7a756b" }}>{s.sub}</div>}
+            {s.key && renderTrend(s.key)}
           </div>
         ))}
       </div>
@@ -498,7 +525,7 @@ export default async function MurphysboroPage() {
             </section>
           )}
 
-          {data.city_demographics && <DemographicsSection d={data.city_demographics} cityShortName="Murphysboro" />}
+          {data.city_demographics && <DemographicsSection d={data.city_demographics} cityShortName="Murphysboro" trend={data.demographics_trend} />}
 
           {data.industry_mix && <IndustryMixSection mix={data.industry_mix} scope="Jackson County" />}
 
