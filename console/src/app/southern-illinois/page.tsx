@@ -256,14 +256,14 @@ function TrainingROISection() {
       payback_yrs: "<6mo",
       local_slots: "~20-50/yr local (Information sector small)", saturation: "MED",
       verdict: "Best ROI for credential cost but ceiling is low LOCALLY. Frame as 'remote-work credential' not 'local-employer ladder.'" },
-    // === CEJA clean-energy (PHANTOM scrutiny applied) ===
+    // === CEJA clean-energy ===
     { pathway: "CEJA solar installer (NABCEP)",
       train_cost: "$0-1,000 (CEJA Climate Works subsidized)", train_duration: "8-16 weeks",
-      journey_wage: "$26/hr (~$54k/yr) IF you land",
-      annual_premium: "+$22k/yr IF placed; $0 if no placement",
-      payback_yrs: "Indeterminate (PHANTOM)",
-      local_slots: "~0/yr local (no employers); travel-circuit only", saturation: "PHANTOM",
-      verdict: "Free training that produces a credential with no local employer base. The Big Muddy Solar construction trades go to IBEW/IUOE/LIUNA — NOT NABCEP installers. The CEJA money trained for the wrong credential." },
+      journey_wage: "$26/hr (~$54k/yr)",
+      annual_premium: "+$22k/yr if placed",
+      payback_yrs: "<6mo IF placed",
+      local_slots: "Modest — verified local installers exist (StraightUp Solar Marion, Tick Tock Energy)", saturation: "MED-HIGH",
+      verdict: "Earlier version of this page said PHANTOM — CORRECTED. Local NABCEP-employer base is modest but real: StraightUp Solar (Marion office) + Tick Tock Energy + others listed on EnergySage Carbondale/Marion/Murphysboro. Capacity-vs-cohort question stands (annual CEJA grad count vs annual hiring at small installers) but the credential is NOT phantom. Distinct from Big Muddy Solar (utility-scale, goes to IBEW/IUOE/LIUNA — NOT NABCEP installers); the residential/commercial installer market IS where NABCEP graduates land." },
     { pathway: "CEJA wind technician (GWO)",
       train_cost: "$0-2,000 subsidized", train_duration: "12-20 weeks",
       journey_wage: "$31/hr base + per-diem traveling (~$80-100k all-in)",
@@ -391,7 +391,7 @@ function TrainingROISection() {
           <li><strong>RN-ADN at JALC + 1yr local → travel-RN is the highest-dollar 2-year credential</strong> with abundant slots. The system already runs but is under-promoted as a deliberate ladder.</li>
           <li><strong>Welder + Industrial Maintenance + CDL OTR + IT-remote</strong> form the second tier — reasonable ROI, hundreds-of-slots local + travel/remote expansion.</li>
           <li><strong>EXTREME-saturation pathways are NOT primary investments</strong>: viticulture top-rung (12-24 total slots region-wide), cannabis top-rung (5-10 slots). Train for these only as second-credential or hobby-to-employment moves, never as primary workforce-board cohort focus.</li>
-          <li><strong>PHANTOM pathways</strong>: CEJA solar installer (no local employer base). Either reframe the cohort outcome explicitly or redirect the CEJA money to credentials where Big Muddy Solar / other regional construction IS hiring (IBEW pre-apprenticeship, IUOE 318, LIUNA 773).</li>
+          <li><strong>PHANTOM pathways verdict updated</strong>: prior version called CEJA solar installer PHANTOM (~0 local employers). Web verification turned up StraightUp Solar (Marion office, 65MW installed since 2006, NABCEP-certified team) + Tick Tock Energy + EnergySage-listed others. CEJA solar installer is no longer PHANTOM — verdict is MED-HIGH saturation pending cohort-vs-capacity analysis. CEJA wind technician remains PHANTOM locally (Illinois wind farms are 5+ hours north in Livingston / McLean / Lee / LaSalle counties).</li>
         </ul>
       </div>
 
@@ -881,14 +881,16 @@ function TravelJobsSection() {
       </div>
       <div style={{ marginTop: 16, padding: 14, background: "#fef9eb", border: "1px solid #f0d98a", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
         <strong>The regional workforce-development strategic gap this fills:</strong> the
-        existing CEJA wind technician + CEJA solar installer pipelines suffer
-        from local-employer scarcity. But the credentials themselves are real and
-        valuable on travel-supported work. Reframing the CEJA cohort outcome from
-        &quot;land a local job&quot; to &quot;land a regional travel-pay job with
-        predictable home time&quot; changes what success looks like. Pair with
-        Big Muddy Solar (which IS hiring local IBEW/IUOE/LIUNA) for the
-        local construction work + the broader regional travel circuit for ongoing
-        income.
+        existing CEJA wind technician pipeline suffers from local-employer
+        scarcity (Illinois wind farms are 5+ hours north). CEJA solar installer
+        has a modest local employer base (StraightUp Solar Marion + Tick Tock Energy
+        + others) — capacity-vs-cohort sizing is the question, not credential-validity.
+        The wind-tech credential is real and valuable on travel-supported work — reframing
+        the wind cohort outcome from &quot;land a local job&quot; to &quot;land a regional
+        travel-pay job with predictable home time&quot; changes what success looks like.
+        Pair with Big Muddy Solar (which IS hiring local IBEW/IUOE/LIUNA for utility-scale
+        construction) for that line of work + the broader regional travel circuit for
+        ongoing income.
       </div>
       <div style={{ marginTop: 12, fontSize: 11, color: "#7a756b" }}>
         Wage figures are typical journey-out + travel-pay structures sourced from union scale schedules, BLS OES Carbondale-Marion MSA, and the expert advisory. Verify specific opportunities with the named union halls or schools.
@@ -1754,7 +1756,7 @@ function FundingDrivenProgrammingSection() {
         </div>
         <ul style={{ margin: "0 0 0 18px", padding: 0 }}>
           <li><strong>CEJA wind technician training in LWA-25.</strong> Illinois wind farms are in Central + Northern IL (Livingston, McLean, Lee, LaSalle, Bureau, DeKalb, Vermilion counties). Zero operating utility-scale wind farms in Southern IL. Training Southern IL residents for wind-tech credentials when the work is 5+ hours north violates the regional-tailoring principle WIOA Section 108 + local-plan requirements exist to enforce.</li>
-          <li><strong>CEJA solar installer training.</strong> Local NABCEP-installer employer base ≈ 0. Big Muddy Solar (124 MW, Jackson Co.) is the one real local solar project, and it&apos;s being built by IBEW Local 702 lineworkers + IUOE Local 318 + LIUNA Local 773 — NOT NABCEP installers. The CEJA solar money trained for the wrong credential, but it deployed because the funding existed.</li>
+          <li><strong>CEJA solar installer training (caveat — earlier &quot;no local employers&quot; claim corrected).</strong> Local NABCEP-installer employer base is modest but NOT zero — StraightUp Solar (Marion office, NABCEP-certified team), Tick Tock Energy, and other EnergySage-listed installers operate in the LWA-25 area. The capacity-vs-cohort question stands: how many CEJA graduates per year vs annual hiring capacity at the small residential / commercial installers. Big Muddy Solar (124 MW, Jackson Co.) is the largest local solar project but is being built by IBEW Local 702 lineworkers + IUOE Local 318 + LIUNA Local 773 under Signal Energy — so utility-scale solar goes to union trades, while NABCEP graduates land at the smaller installers.</li>
           <li><strong>Negotiated PY24 median-earnings targets below single-adult living wage.</strong> See the PIRL section below — Adult $9,500/quarter (~$18.27/hr), Dislocated Worker $9,400/quarter (~$18.08/hr), Youth $5,000/quarter (~$9.62/hr) vs MIT Jackson Co. single-adult $18.95/hr / 1A+2C $46.76/hr. The system was DESIGNED to deliver these wage levels.</li>
         </ul>
         <p style={{ margin: "12px 0 0 0", fontWeight: 600 }}>
@@ -1800,7 +1802,7 @@ function HarmCascadeSection() {
           {
             n: "4",
             title: "Trainee can't find local work in the credential — because no local employers exist.",
-            body: "CEJA solar installer with NABCEP cert → there are no NABCEP installers in LWA-25 hiring. CEJA wind tech with GWO cert → nearest operating wind farms are 5+ hours north in Livingston / McLean / Lee / LaSalle counties. CDL Class A → local trucking pays $22-28/hr (below 1A+2C livable), OTR available but breaks family time. Outcomes diverge from expectations.",
+            body: "CEJA wind tech with GWO cert → nearest operating wind farms are 5+ hours north in Livingston / McLean / Lee / LaSalle counties (PHANTOM locally). CDL Class A → local trucking pays $22-28/hr (below 1A+2C livable), OTR available but breaks family time. CEJA solar installer is a MIXED case (verified): local installers DO exist (StraightUp Solar Marion, Tick Tock Energy) but cohort-throughput-vs-hiring capacity isn't yet measured — could be over-saturation if cohort size exceeds annual installer hiring. Outcomes can diverge from expectations.",
           },
           {
             n: "5",
@@ -2025,8 +2027,9 @@ function PirlOutcomesSection() {
           <li>Employer-side: which employers hired completers, in which roles</li>
         </ul>
         <p style={{ margin: "8px 0 0 0" }}>
-          The standard the page applies to CEJA solar (PHANTOM PIPELINE) and CNA
-          ladders (BELOW LIVABLE WAGE) is the same standard worth applying to
+          The standard the page applies to credential-vs-demand alignment (the CEJA wind
+          PHANTOM verdict + the CEJA solar capacity-question + the CNA BELOW LIVABLE
+          WAGE verdict) is the same standard worth applying to
           local-area workforce-board outcomes. Honest measurement, including the
           inconvenient outcomes, is what makes a workforce board credible to fund.
         </p>
