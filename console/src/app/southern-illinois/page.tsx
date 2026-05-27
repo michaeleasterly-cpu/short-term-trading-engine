@@ -1962,7 +1962,7 @@ function StructuralWorkforceConstraintsSection() {
         </div>
       </div>
 
-      <div style={{ padding: 14, background: "#f0ece1", border: "1px solid #d8d2c4", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
+      <div style={{ padding: 14, background: "#f0ece1", border: "1px solid #d8d2c4", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, marginBottom: 16 }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: "#1f1d18", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>What this means for workforce planning</div>
         <ul style={{ margin: "0 0 0 18px", padding: 0 }}>
           <li><strong>Drug-screen failure rate is a real cohort-selection issue</strong> — most family-supporting credentials in the page&apos;s roster (IL DOC officer, IDOT, IBEW 702 apprenticeship, GD-OTS production, coal-mine MSHA, IL State Police) require passing a pre-employment drug screen. A workforce board that recruits trainees without honest drug-screen pre-vetting produces cohort attrition at the placement step, not at training.</li>
@@ -1970,6 +1970,48 @@ function StructuralWorkforceConstraintsSection() {
           <li><strong>Crime rate affects relocator BD pitch</strong> — visiting executives + federal-retiree open houses see Carbondale&apos;s crime rate before they see the wine trail. Be honest with prospects about the security profile + show the response (Carbondale PD, SIU Department of Public Safety, IL State Police District 13 in Du Quoin); don&apos;t hide it.</li>
           <li><strong>Gang activity across the 5-county footprint</strong> affects worker mobility — workers in West Frankfort or Du Quoin may avoid Carbondale corridors after dark; that&apos;s a real transit-and-safety constraint on the &quot;match worker to job&quot; mapping the dashboard implies.</li>
         </ul>
+      </div>
+
+      {/* Agricultural labor + immigration enforcement constraint */}
+      <div style={{ padding: 16, background: "white", border: "1px solid #d8d2c4", borderLeft: "6px solid oklch(45% 0.20 22)", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "#1f1d18", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          Agricultural labor + immigration-enforcement squeeze
+        </div>
+        <div style={{ marginBottom: 10 }}>
+          Operator-confirmed 2026-05-27: &quot;The immigrants were a big part of [the regional workforce] but they are being chased off... farming is big but it&apos;s seasonal and it is a small group that does that work... they have to be able to drive big tractors and trucks during planting and harvest.&quot;
+        </div>
+        <div style={{ marginBottom: 10 }}>
+          <strong>Empirically verified — H-2A program, IL Farm Bureau, and farmdoc daily all confirm:</strong>
+        </div>
+        <ul style={{ margin: "0 0 10px 18px", padding: 0, fontSize: 12.5, lineHeight: 1.6 }}>
+          <li><strong>H-2A program is the agricultural-labor backbone</strong> — 398,258 positions certified nationally in 2025 (300% growth from 2010&apos;s 94,000). Illinois&apos; farm-labor reliance reflects this national pattern.</li>
+          <li><strong>Domestic applicants fill less than 0.04% of positions</strong> — only 182 farming positions out of 415,000+ certified in 2025 were filled by domestic applicants. The formal local labor market essentially does NOT supply farm workers.</li>
+          <li><strong>90% of H-2A workers are from Mexico</strong>; South Africa + Jamaica are secondary source countries.</li>
+          <li><strong>Illinois AEWR (Adverse Effect Wage Rate) up 6% in 2024-2025</strong> — labor-cost pressure increasing. Some states up 15%.</li>
+          <li><strong>Southern IL farm economic squeeze:</strong> per farmdoc daily 2025 grain-farm earnings analysis, southern Illinois grain farm operator labor + management income ranged DOWN TO NEGATIVE $276,707 in the most-southern parts of the state in 2024. The squeeze compounds the labor problem — farmers can&apos;t afford rising H-2A costs AND can&apos;t source domestic alternatives.</li>
+          <li><strong>Enforcement-related processing delays:</strong> DHS partial-shutdown + broader enforcement climate has extended H-2A wait times. Local employers feeling the squeeze in real time.</li>
+        </ul>
+        <div style={{ marginBottom: 6 }}>
+          <strong>What the credential market actually needs (planting/harvest big-equipment operator):</strong>
+        </div>
+        <ul style={{ margin: "0 0 10px 18px", padding: 0, fontSize: 12.5 }}>
+          <li>CDL Class A (grain trucks haul to elevator)</li>
+          <li>Tractor + combine operator certification (precision-ag GPS systems, large-acre tillage + planting + harvest equipment)</li>
+          <li>Ag-mechanic credential (John Deere / Case IH dealer-certified) for maintenance during peak windows</li>
+          <li>Spanish-language competency for crew supervisors (the H-2A workforce is overwhelmingly Mexican)</li>
+          <li>Seasonal-work tolerance — planting (March-May) + harvest (Sept-Nov) are concentrated peak windows; off-season pivot to elevator / fertilizer-plant / equipment-shop work</li>
+        </ul>
+        <div style={{ marginBottom: 6 }}>
+          <strong>Workforce-board implications:</strong>
+        </div>
+        <ul style={{ margin: "0 0 0 18px", padding: 0 }}>
+          <li>If H-2A access tightens further, IL farms either pay materially more or leave acres unharvested. The local labor pool to absorb the gap is tiny (the 182-of-415,000 nationwide pattern is the headwind) and big-equipment-credential-trained.</li>
+          <li>JALC + Rend Lake + SIC <strong>precision-agriculture + ag-mechanic credentials</strong> are the right pipeline, but enrollment is small + the work is seasonal — pairs naturally with the CDL Class A row above for a year-round combined-pathway income.</li>
+          <li>The agricultural-labor constraint is NOT a workforce-board problem to solve alone — it&apos;s a federal immigration-policy + ag-labor-economics problem that workforce planning sits downstream of. Be honest with regional ag employers about what the local credential pipeline CAN supply (a small specialized cohort) vs. what it cannot (the H-2A scale).</li>
+        </ul>
+        <div style={{ fontSize: 11, color: "#7a756b", marginTop: 8, lineHeight: 1.5 }}>
+          Sources: <a href="https://farmdocdaily.illinois.edu/2025/07/the-growing-role-of-h-2a-workers-in-us-agriculture.html" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>farmdoc daily · The Growing Role of H-2A Workers in U.S. Agriculture</a> + <a href="https://www.ilfb.org/resources/farmer-rural-resources/h-2a-program/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Illinois Farm Bureau · H-2A Program</a> + <a href="https://www.wsiu.org/state-of-illinois/2026-04-08/illinois-farmers-ease-critical-labor-shortages-through-this-agricultural-visa-program" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>WSIU · IL farmers ease critical labor shortages</a> + <a href="https://farmdocdaily.illinois.edu/2025/08/lower-grain-prices-lead-to-lower-earnings-for-grain-farms-in-2024-livestock-sector-sees-gains.html" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>farmdoc daily · Lower Grain Prices + 2024 IL Grain Farm Earnings (Southern IL operator labor income negative $276,707)</a> + <a href="https://www.migrationpolicy.org/sites/default/files/publications/Martin-ImmigrationAgricultureH2AWorkers-FINAL.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Migration Policy Institute · Immigration and Farm Labor (Martin)</a> + operator primary-source 2026-05-27.
+        </div>
       </div>
     </section>
   );
