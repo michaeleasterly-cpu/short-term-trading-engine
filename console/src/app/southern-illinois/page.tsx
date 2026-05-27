@@ -1996,6 +1996,26 @@ function StructuralWorkforceConstraintsSection() {
         </div>
       </div>
 
+      {/* Mandatory-OT cross-credential meta-finding (social-media pull 2026-05-27) */}
+      <div style={{ padding: 14, background: "white", border: "1px solid #d8d2c4", borderLeft: "6px solid oklch(45% 0.20 22)", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, marginBottom: 16 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "#1f1d18", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          Mandatory overtime is the dominant attrition driver across LWA-25 family-supporting employers
+        </div>
+        <div style={{ marginBottom: 8 }}>
+          Cross-credential lived-experience signal (social-media + Indeed + Glassdoor pull 2026-05-27): the family-supporting employers on this page&apos;s roster share a single dominant attrition driver — <strong>mandatory overtime</strong>, not low pay. Workers stay for the pension or benefits or wage; they leave because the schedule destroys home-life. Verbatim employee signal across multiple employers:
+        </div>
+        <ul style={{ margin: "0 0 8px 18px", padding: 0, fontSize: 12.5, lineHeight: 1.55 }}>
+          <li><strong>IL DOC officer:</strong> &quot;40-hour shift PLUS at least two shifts of Mandatory overtime every week — does not make up for lost time with family&quot; (Indeed)</li>
+          <li><strong>Continental Tire Mt. Vernon:</strong> &quot;They will mandate you for overtime every week&quot; · &quot;constant turnover&quot; (Glassdoor + Indeed; 4.0/5 overall, 77% recommend locally)</li>
+          <li><strong>Aisin Marion:</strong> &quot;6 days a week mandatory overtime&quot; · &quot;If you want a life forget it&quot; (Glassdoor; 3.2/5; 79% recommend in Marion vs 68% company-wide)</li>
+          <li><strong>Foresight Energy (Sugar Camp / Pond Creek):</strong> &quot;Make as much money as you like but do not plan on having a home life&quot; · vacation forced during mine shutdowns (Indeed + Glassdoor)</li>
+          <li><strong>SIH (Southern Illinois Healthcare):</strong> staffing pressures + advancement &quot;preferential treatment related to who you know&quot; (Glassdoor; 3.4/5)</li>
+        </ul>
+        <div>
+          <strong>Implication for the single-mom test framing:</strong> the wage column shows whether the credential clears the 1A+2C math. The home-time column the dashboard cannot show is whether the worker can BE the parent the wage assumes they can support. Mandatory OT is the structural cost the wage doesn&apos;t reflect — same lens we applied to the TRAVEL-WORK rows, now extended to LOCAL · FAMILY-SUPPORTING employers where the schedule structurally destroys home-time. Workforce planning that ignores the OT pattern produces cohort attrition at the &quot;retention&quot; step, not at training. Sources: Indeed.com + Glassdoor employer reviews, pulled 2026-05-27.
+        </div>
+      </div>
+
       <div style={{ padding: 14, background: "#f0ece1", border: "1px solid #d8d2c4", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, marginBottom: 16 }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: "#1f1d18", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>What this means for workforce planning</div>
         <ul style={{ margin: "0 0 0 18px", padding: 0 }}>
