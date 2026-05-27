@@ -221,8 +221,27 @@ function HealthcareWorkforceSection() {
         Most of LWA-25 carries federal <strong>Health Professional Shortage Area
         (HPSA)</strong> designations. HPSA designations unlock specific federal-funded
         workforce-recruitment incentives that bring physicians, NPs, PAs, dentists,
-        psychiatrists, certified nurse midwives, and behavioral-health clinicians into
-        the region at competitive loan-repayment rates.
+        psychiatrists, certified nurse midwives, behavioral-health clinicians — AND
+        registered nurses (via a separate Nurse Corps program) — into the region at
+        competitive loan-repayment rates.
+      </div>
+
+      <div style={{ marginBottom: 16, padding: 14, background: "oklch(97% 0.04 60)", border: "1px solid oklch(58% 0.15 60)33", borderLeft: "6px solid oklch(58% 0.15 60)", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "oklch(40% 0.15 60)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          Does the region pay less than other regions for nursing?
+        </div>
+        <p style={{ margin: "0 0 8px 0" }}>
+          Yes — verifiably so, and the gap is structural. Per the most recent <a href="https://www.bls.gov/regions/midwest/news-release/occupationalemploymentandwages_carbondale.htm" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>BLS Carbondale-Marion MSA occupational wage release (May 2023)</a>, workers in the Carbondale-Marion MSA had an <strong>average hourly wage of $26.21 vs the national average of $31.48 — a 17% wage gap across ALL occupations</strong>. For registered nurses specifically: per the <a href="https://www.bls.gov/regions/midwest/news-release/nursesoccupationalemploymentandwages_illinois.htm" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>BLS Midwest Office Illinois nursing-occupations release</a>, <strong>10 of 13 Illinois metropolitan areas (Carbondale-Marion among them) had RN annual mean wages significantly below the national average</strong>. Pull the current Carbondale-Marion RN-specific figure from the <a href="https://www.bls.gov/oes/2023/may/oes_16060.htm" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>BLS OES May 2023 Carbondale-Marion table</a> (SOC 29-1141) and compare against the national RN median of $93,600 (May 2024).
+        </p>
+        <p style={{ margin: 0 }}>
+          <strong>Implication for the workforce board:</strong> credential pipelines for RN ladder
+          (CNA → LPN → ADN-RN → BSN at JALC) produce graduates who land into a regional
+          wage structure ~17% below national norms. Loan repayment programs partially
+          offset this — but the structural wage compression matters when private healthcare
+          employers benchmark offers against the broader regional wage market. This is the
+          same dynamic the State Employer Wage Benchmark section describes, applied to
+          healthcare specifically.
+        </p>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
         <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, padding: 14 }}>
@@ -234,6 +253,7 @@ function HealthcareWorkforceSection() {
             <li><strong>NHSC Substance Use Disorder Workforce LRP</strong> — direct overlay on regional opioid crisis. <a href="https://nhsc.hrsa.gov/loan-repayment/nhsc-sud-workforce-loan-repayment-program" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>NHSC SUD LRP</a>.</li>
             <li><strong>IL State Loan Repayment Program (SLRP)</strong> — stackable with NHSC; IDPH-administered. Currently in funding gap (<a href="https://dph.illinois.gov/topics-services/life-stages-populations/rural-underserved-populations/slrp.html" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>IDPH SLRP</a>); track for re-opening.</li>
             <li><strong>Behavioral Health Workforce Center</strong> — IL-specific BH practitioner loan repayment. <a href="https://illinoisbhwc.org/about/loan-repayment-programs/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>BHWC</a>.</li>
+            <li><strong>NHSC Nurse Corps Loan Repayment Program (RN-specific — separate from main NHSC LRP).</strong> The NHSC LRP referenced above is for physicians + NPs + PAs + CNMs + dentists + psychiatrists. <strong>Registered nurses, advanced practice nurses, and nursing-school faculty have their own separate program</strong> through HRSA: the <a href="https://bhw.hrsa.gov/funding/apply-loan-repayment/nurse-corps" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Nurse Corps LRP</a>. Pays up to 85% of outstanding nursing-school loan balance for 3 years of service at a Critical Shortage Facility in a HPSA. Marion VA, SIH, Memorial Carbondale, and Shawnee Health Service are candidate qualifying employers. Direct, specific lever for the RN wage-gap problem above.</li>
           </ul>
         </div>
         <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, padding: 14 }}>
