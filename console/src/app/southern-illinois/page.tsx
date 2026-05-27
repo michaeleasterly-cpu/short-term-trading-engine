@@ -2631,6 +2631,132 @@ function SupplyChainSubawardSection({
           Sources: <a href="https://www.naics.com/naics-code-description/?code=561210" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>NAICS 561210 Facilities Support Services</a>; <a href="https://www.acquisition.gov/tar/1252.204-70-contractor-personnel-security-and-agency-access." target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>FAR §1252.204-70 (Contractor Personnel Security)</a>; <a href="https://www.sba.gov/federal-contracting/contracting-assistance-programs/sba-mentor-protege-program" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>SBA Mentor-Protégé Program</a>; OPM e-QIP investigation guidance.
         </div>
       </div>
+
+      {/* ─── Drop-ship federal-product reseller model (with expert corrections) ─── */}
+      <div style={{ marginTop: 20, padding: 16, background: "#f7f5ef", border: "1px solid #d8d2c4", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          The drop-ship federal-product reseller path · honest BD analysis
+        </div>
+        <div style={{ marginBottom: 10 }}>
+          A complementary pathway to services replacement: bid federal supply contracts for commodity products (PPE, hardware, office supplies, specialty equipment, ag supplies, sport / wildlife / debris nets, etc.), source from US small-business manufacturers, drop-ship directly from manufacturer to the requesting government agency. Minimal warehousing, low fixed cost, geographic location nearly irrelevant. The Smith Hafeli pattern at scale, applied to commodity supplies rather than services.
+        </div>
+        <div style={{ marginBottom: 8 }}>
+          <strong>Expert-reviewed feasibility verdict (independent 2026-05-27 second-opinion):</strong> <span style={{ color: "oklch(40% 0.18 60)", fontWeight: 600 }}>FEASIBLE-WITH-CAVEATS · 6/10 confidence.</span> Real path but a small-percentage path. Below are the corrections the promotional GSA/SBA materials don&apos;t surface.
+        </div>
+
+        <div style={{ marginBottom: 8 }}>
+          <strong>Critical regulatory constraint — HUBZone has NO Nonmanufacturer Rule (NMR) waivers:</strong>
+        </div>
+        <ul style={{ margin: "0 0 10px 18px", padding: 0, fontSize: 12.5, lineHeight: 1.55 }}>
+          <li>SBA NMR waivers (Class + Individual) exist for <strong>8(a) / SDVOSB / WOSB</strong> set-asides — but <strong>NOT HUBZone</strong>.</li>
+          <li>A HUBZone reseller MUST source from a <strong>US small-business manufacturer</strong> on every HUBZone set-aside above $250k. There is no waiver path.</li>
+          <li><strong>As of 2025</strong>, NMR applies to ALL socio-economic set-asides above <strong>$10,000</strong> (down from earlier thresholds) — the lane is tighter than the marketing implies.</li>
+          <li>Competitors will size-protest you on NMR compliance the moment you win; the SBA digs in, GAO sustains where the proposal shows facial non-compliance. Document the manufacturer chain immaculately.</li>
+        </ul>
+
+        <div style={{ marginBottom: 8 }}>
+          <strong>HUBZone "advantage" is half what the marketing implies:</strong>
+        </div>
+        <ul style={{ margin: "0 0 10px 18px", padding: 0, fontSize: 12.5, lineHeight: 1.55 }}>
+          <li>Government-wide 3% HUBZone goal <strong>missed every year</strong> — actual spend is <strong>~2.05-2.5%</strong> (USFCR + GovScout data).</li>
+          <li>The <strong>10% price preference triggers only in full-and-open competition</strong>, not in set-asides themselves.</li>
+          <li>The widely-quoted "HUBZone resellers sell 350% more" figure is from Winvale (vendor marketing), <strong>not a peer-reviewed number</strong>. Discount accordingly.</li>
+        </ul>
+
+        <div style={{ marginBottom: 8 }}>
+          <strong>Actual success rate — sobering reality:</strong>
+        </div>
+        <ul style={{ margin: "0 0 10px 18px", padding: 0, fontSize: 12.5, lineHeight: 1.55 }}>
+          <li><strong>~50% of GSA Schedule holders reported $0 in sales in FY24</strong> — and those are the holders who already cleared the Schedule-application bar. SAM-only attrition is materially worse (practitioner consensus &lt;25% of SAM registrants ever win anything).</li>
+          <li><strong>Median time to first contract: ~12 months</strong> (6-18 month range). Practitioner norm: bid 30-60 qualified opportunities to land win #1.</li>
+          <li>Encouraging counterweight: <strong>67% of first-time winners win another contract within 12 months</strong>. The cliff is getting to win #1, not scaling past it.</li>
+        </ul>
+
+        <div style={{ marginBottom: 8 }}>
+          <strong>Working-capital cost is higher than the casual framing:</strong>
+        </div>
+        <ul style={{ margin: "0 0 10px 18px", padding: 0, fontSize: 12.5, lineHeight: 1.55 }}>
+          <li>Federal Prompt Payment Act says Net-30; <strong>reality is Net-60 to Net-90 typical</strong>.</li>
+          <li>Government-contract factoring runs <strong>~1-2% per 30 days</strong> — so on a 90-day federal pay cycle you give up <strong>3-6% of gross</strong>, not the 1-3% the headline factoring rate implies.</li>
+          <li>SBA Contract CAPLine (specifically designed for this) + SBA Working CAPLine + Live Oak Bank 7(a) + USDA B&amp;I rural loan are the bank-side options.</li>
+        </ul>
+
+        <div style={{ marginBottom: 8 }}>
+          <strong>Realistic margin structure (thinner than commodity-reseller intuition):</strong>
+        </div>
+        <ul style={{ margin: "0 0 10px 18px", padding: 0, fontSize: 12.5, lineHeight: 1.55 }}>
+          <li>Gross margins on commodity supply contracts: 8-15% typical</li>
+          <li>Subtract: NMR-domestic premium (5-15% cost over offshore alternatives), factoring on 90-day federal cycle (3-6%), bid/proposal cost amortized (~2-4%), wrong-SKU / return risk (~1-3%)</li>
+          <li><strong>Net margin lands at 3-8% of revenue</strong>, not the 15-25% retail-reseller intuition.</li>
+        </ul>
+
+        <div style={{ marginBottom: 8 }}>
+          <strong>Realistic income trajectory:</strong>
+        </div>
+        <ul style={{ margin: "0 0 10px 18px", padding: 0, fontSize: 12.5, lineHeight: 1.55 }}>
+          <li><strong>Year 1:</strong> gross $0-$150k, net often <em>negative</em> after $30-$233k of cash + sweat</li>
+          <li><strong>Year 3:</strong> median surviving operator $300k-$1.5M gross; net 8-15% of revenue (after Years 1-2 absorbed the learning curve)</li>
+          <li><strong>Year 5 real-business threshold:</strong> $1M+ gross with 2+ recurring IDIQ / BPA vehicles</li>
+          <li><strong>Without a Mentor-Protégé JV OR a recurring vehicle, this stays a hobby past year 3.</strong></li>
+        </ul>
+
+        <div style={{ marginBottom: 8 }}>
+          <strong>Mentor-Protégé JV is NOT optional flavoring:</strong>
+        </div>
+        <ul style={{ margin: "0 0 10px 18px", padding: 0, fontSize: 12.5, lineHeight: 1.55 }}>
+          <li>Protégés in <strong>active MPP joint ventures had a 34% win rate</strong> on 16,651 offers in FY22 (NCMA published analysis).</li>
+          <li>Unmentored small-business win rates are dramatically lower (single-digit percentages typical).</li>
+          <li>The Smith Hafeli MPP relationship isn&apos;t optional — it&apos;s the variable that moves you from &lt;10% to 30%+ win rates on bids.</li>
+        </ul>
+
+        <div style={{ marginBottom: 8 }}>
+          <strong>Profile of the typical winning operator (calibrate yourself against this):</strong>
+        </div>
+        <ul style={{ margin: "0 0 10px 18px", padding: 0, fontSize: 12.5, lineHeight: 1.55 }}>
+          <li>Prior corporate procurement, supply-chain, or military-logistics background</li>
+          <li>Brings <strong>$50k-$150k in working capital</strong> + a tolerance for 12-18 months without revenue</li>
+          <li>Treats it as <strong>40+ hrs/week from month 1</strong> — not a side hustle</li>
+          <li>Has <strong>2-3 specific manufacturer relationships locked before SAM registration</strong></li>
+          <li>Picks <strong>ONE NAICS lane</strong> and stays in it</li>
+        </ul>
+
+        <div style={{ marginBottom: 8 }}>
+          <strong>Sourcing + tariff strategy for Southern IL HUBZone reseller:</strong>
+        </div>
+        <ol style={{ margin: "0 0 10px 18px", padding: 0, fontSize: 12.5, lineHeight: 1.55 }}>
+          <li><strong>Source domestic first</strong> — avoids tariff issues entirely + qualifies for Buy American Act preference + meets HUBZone NMR (no waiver alternative).</li>
+          <li><strong>TAA-designated countries</strong> (~125 countries: USMCA partners + WTO GPA + KORUS + FTA partners) when domestic unavailable — zero tariff for supply contracts above ~$183k threshold. Note: this works for SDVOSB/8(a)/WOSB but is more constrained for HUBZone due to NMR.</li>
+          <li><strong>HTSUS Chapter 98 Subchapters VIII + X</strong> — narrow government-contract duty-exemption mechanism for specific supplies imported under contract. Consult a customs broker before bidding. FAR Subpart 25.9 covers the procedure.</li>
+          <li><strong>Foreign Trade Zone (FTZ) #271 (Metro East — Madison + St. Clair Co.)</strong> is nearest to LWA-25 if operation scales enough to warrant FTZ benefits — duty deferral / cash-flow timing.</li>
+          <li><strong>AVOID China-origin</strong> — Section 301 tariffs (25-100% depending on category) + broader 2025 tariffs make Chinese goods uneconomic for federal supply.</li>
+          <li><strong>Don&apos;t take jobs from St. Louis neighbors</strong> — same principle as the services-lane BD intel above. Target out-of-economic-shed (~200mi+) competitors for displacement, not regional Midwest manufacturers.</li>
+        </ol>
+
+        <div style={{ marginBottom: 8 }}>
+          <strong>Common &quot;tariff break&quot; myths to drop:</strong>
+        </div>
+        <ul style={{ margin: "0 0 10px 18px", padding: 0, fontSize: 12.5, lineHeight: 1.55 }}>
+          <li><strong>"Not-for-profit gets tariff break"</strong> — MOSTLY WRONG. 501(c)(3) = income-tax exemption, NOT customs-duty exemption. Narrow exception (HTSUS 9810.00.60) for nonprofit imports of scientific instruments/apparatus for educational/scientific purposes — doesn&apos;t fit a commodity-reseller drop-ship model.</li>
+          <li><strong>"Government contract = automatic duty exemption"</strong> — PARTIALLY RIGHT. HTSUS Chapter 98 Subchapters VIII + X do provide narrow duty exemptions for supplies imported under specific government contracts. Requires customs-broker filing + contract-specific certification + government-end-use documentation. Not a blanket exemption.</li>
+        </ul>
+
+        <div style={{ marginBottom: 8 }}>
+          <strong>What the dashboard already does for you:</strong> The federal-money concentration section above + the supply-chain subaward integration + the services-lane NAICS table + the clearance-tier mapping all surface the data a prospective Southern IL HUBZone reseller needs to identify lanes, sub-recipients, and entry barriers. The Smith Hafeli proof-of-concept (Marion IL SDVOSB at $11.9M / 24 months) is documented in the federal-money section.
+        </div>
+        <div style={{ marginBottom: 8 }}>
+          <strong>Your residual moves (the dashboard cannot self-execute these):</strong>
+        </div>
+        <ol style={{ margin: "0 0 0 18px", padding: 0 }}>
+          <li><strong>Apply for SBA HUBZone certification</strong> — Franklin / Perry / parts of Jackson qualify; the SBA District Office (Chicago) processes applications. SIU SBDC (2024 IL SBDC of the Year) provides free application support.</li>
+          <li><strong>Lock 2-3 US small-business manufacturer relationships BEFORE SAM registration.</strong> Pick one NAICS commodity lane. Without these locked, the bid process is hypothetical.</li>
+          <li><strong>Apply to SBA Mentor-Protégé Program with Smith Hafeli</strong> as the mentor candidate. The 34% MPP-JV win rate vs single-digit unmentored is the leverage that makes this viable.</li>
+          <li><strong>Bring $50-150k working capital</strong> + 12-18 month dry-spell tolerance. SBA Contract CAPLine + USDA B&amp;I (rural-eligible) + Live Oak Bank 7(a) cover the gap once contracts start flowing.</li>
+          <li><strong>Treat it as 40+ hrs/week from month 1.</strong> Side-hustle commitment produces side-hustle outcomes (the $0-sales 50% of GSA Schedule holders).</li>
+        </ol>
+        <div style={{ fontSize: 11, color: "#7a756b", marginTop: 8, lineHeight: 1.5 }}>
+          Sources (expert-verified second opinion): <a href="https://www.sba.gov/partners/contracting-officials/small-business-procurement/nonmanufacturer-rule" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>SBA Nonmanufacturer Rule</a>; <a href="https://smallgovcon.com/sba-size-protests/back-to-basics-the-nonmanufacturer-rule/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>SmallGovCon · NMR Basics &amp; Size Protests</a>; <a href="https://www.ecfr.gov/current/title-13/chapter-I/part-121/subpart-A/subject-group-ECFR0fca5207262de47/section-121.406" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>13 CFR 121.406 Nonmanufacturer Rule</a>; <a href="https://www.acquisition.gov/far/subpart-19.13" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>FAR Subpart 19.13 HUBZone</a>; <a href="https://blogs.usfcr.com/the-hubzone-program" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>USFCR · HUBZone 3% goal missed every year</a>; <a href="https://growfedbiz.com/the-ultimate-guide-to-win-federal-contracts-2/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Summit Insight / Judy Bradt · Ultimate Guide (50% of Schedule holders $0 sales)</a>; <a href="https://ncmahq.org/Web/Shared_Content/CM-Magazine/CM-Magazine-October-2024/The-SBA-s-All-Small-Mentor-Prot-g--Program--A-Bane-for-Most-Small-Businesses.aspx" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>NCMA · All Small Mentor-Protégé analysis (34% MPP-JV win rate)</a>; <a href="https://altline.sobanco.com/invoice-factoring/invoice-factoring-rates-explained/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>altLINE · Factoring Rates</a>; <a href="https://www.acquisition.gov/far/subpart-25.9" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>FAR Subpart 25.9 · Customs &amp; Duties (Chapter 98 government-contract exemption)</a>.
+        </div>
+      </div>
     </section>
   );
 }
