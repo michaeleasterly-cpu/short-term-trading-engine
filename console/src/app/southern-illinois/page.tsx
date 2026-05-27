@@ -3651,7 +3651,7 @@ export default async function SouthernIllinoisPage() {
             <div className="fresh-cell">
               <div className="k">BLS QCEW · industry mix</div>
               <div className="v">{data.industry_mix?.as_of_quarter ?? "—"}</div>
-              <div className="sub">refreshes quarterly · ~7mo lag</div>
+              <div className="sub">each quarter published ~7mo after it ends</div>
             </div>
             <div className="fresh-cell">
               <div className="k">Census ACS · labor utilization</div>
