@@ -567,15 +567,217 @@ function AttractionPipelineSection() {
           </ul>
         </div>
         <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, padding: 14 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8 }}>Federal agency relocation candidates</div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8 }}>Federal agency relocation candidates (short list)</div>
           <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 13, color: "#3d3a33", lineHeight: 1.7 }}>
-            <li><strong>USDA ARS</strong> — agricultural research, SIU College of Ag is the anchor. Precedent: USDA ERS/NIFA → Kansas City 2019.</li>
+            <li><strong>USDA ARS</strong> — agricultural research, SIU College of Ag is the anchor</li>
             <li><strong>USGS</strong> — Mississippi River science / Shawnee NF research</li>
-            <li><strong>DOE Office of Fossil Energy &amp; Carbon Management</strong> — perfect fit for coal-country transition mandate</li>
+            <li><strong>DOE Office of Fossil Energy &amp; Carbon Management</strong> — coal-country transition mandate</li>
             <li><strong>VA regional facilities expansion</strong> — Marion VA already exists; pitch VBA processing center co-location</li>
-            <li>Track <a href="https://realestate.gsa.gov" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>GSA real-estate listings</a> + OPM Federal Workforce Priorities Report</li>
+            <li>Full playbook + process detail in the <em>Federal agency relocation</em> subsection below.</li>
           </ul>
         </div>
+      </div>
+
+      {/* === Federal agency relocation — full playbook === */}
+      <h3 style={{ fontSize: 18, fontWeight: 600, color: "#1f1d18", margin: "32px 0 8px 0" }}>
+        Federal agency relocation · the actual playbook
+      </h3>
+      <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 760, lineHeight: 1.55 }}>
+        Federal-agency relocation out of DC is real but rare, contentious, and structurally
+        different post-2020-pandemic. Two precedents bracket the strategy: USDA ERS/NIFA →
+        Kansas City (2019, controversial; retained the agencies) and BLM HQ → Grand Junction
+        CO (2019, reversed 2021 after only 41 of 328 staff actually relocated). The lessons
+        are unambiguous: <strong>relocation only works when the local site has a real talent
+        pool, a credible university anchor, and a multi-year congressional champion. The
+        local champion is the lever; everything else is consequence.</strong>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 20 }}>
+        <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, padding: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8 }}>What the agency itself evaluates</div>
+          <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 13, color: "#3d3a33", lineHeight: 1.65 }}>
+            <li><strong>Talent supply within driving distance</strong> — land-grant universities + technical colleges that produce the agency&apos;s specific workforce (e.g., USDA ARS wants AG-science PhDs)</li>
+            <li><strong>Cost-of-living delta vs DC</strong> — USDA cited this as the #1 cost-driver. Southern IL wins this on paper vs essentially any DC alternative.</li>
+            <li><strong>Co-location infrastructure</strong> — existing federal real estate (Marion VA, USACE Rend Lake) lowers the build-out friction.</li>
+            <li><strong>Accessibility / connectivity</strong> — air-served (MWA, BLV, EVV), interstate (I-57, I-24, I-64), now Amtrak. The new station improves the case.</li>
+            <li><strong>Mission fit with regional industry</strong> — coal-region for DOE FECM, ag-region for USDA ARS, water-systems region for USGS.</li>
+          </ul>
+        </div>
+        <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, padding: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8 }}>What the local champion must deliver</div>
+          <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 13, color: "#3d3a33", lineHeight: 1.65 }}>
+            <li><strong>Congressional delegation alignment</strong> — IL-12 (Bost), IL senators (Durbin + Duckworth), House Appropriations Ag/Interior/Energy subcommittee allies. Need bipartisan cover for relocations specifically.</li>
+            <li><strong>Governor + IL DCEO commitment</strong> — IL DCEO opens-relocate/locate-incentives playbook is the state vehicle. State Capitol-side champion needed.</li>
+            <li><strong>SIU institutional partnership letter</strong> — explicit research-collaboration + facilities commitment from SIU as the anchor university (more on this below).</li>
+            <li><strong>City + county zoning + utility commitments</strong> — site-ready, utilities provisioned, sales-tax abatement in place.</li>
+            <li><strong>Avoid the BLM mistake</strong> — engage employees and unions FROM THE START. The Grand Junction reversal happened because of staff attrition + zero employee consultation.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div style={{ marginBottom: 20 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 10, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          Named target agencies — what they need + why Southern IL fits
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 12 }}>
+          {[
+            {
+              agency: "USDA ARS — Agricultural Research Service",
+              size: "~7,000 staff nationally · ~110 research locations",
+              fit_strong: "SIU College of Agricultural, Life & Physical Sciences is the natural anchor. Land-grant proximity (UIUC 3hr, SIU on-site). Ag talent pool. Cost-of-living delta vs DC is steep. Mission fit: row-crop + livestock research relevant to Midwest.",
+              process: "Track ARS facility consolidation in the FY budget cycle. ARS has been actively rationalizing 1990s-era locations. Pitch a new regional lab focused on a Southern-IL-specific topic (cover crops, biofuels feedstock, livestock health). USDA cited 'proximity to land-grant universities' as the explicit win criterion in the 2019 KC selection.",
+            },
+            {
+              agency: "USGS — US Geological Survey",
+              size: "~8,500 staff · regional water/biology/minerals centers",
+              fit_strong: "Mississippi River science is the SIU Center for Fisheries, Aquaculture, and Aquatic Sciences (CFAAS) sweet spot. Shawnee NF biology research already happens here informally. USGS Critical Minerals priority + SIU's existing $200K NSF/DOE grant on extracting rare-earth elements from abandoned coal mines is a perfect bridge.",
+              process: "USGS doesn't do big bang relocations like USDA did; they expand existing regional centers when funded. Pitch is an EXPANSION of the existing USGS Illinois Water Science Center presence into Southern IL — co-located with SIU CFAAS + a new critical-minerals satellite tied to coal-mine remediation work.",
+            },
+            {
+              agency: "DOE Office of Fossil Energy and Carbon Management (FECM)",
+              size: "Office of ~200 + NETL national lab footprint",
+              fit_strong: "Perfect mission fit. Coal-region transition is FECM&apos;s explicit congressional mandate. SIU has the rare-earth coal-mine extraction grant already. Franklin + Perry counties are IRA Energy Communities tracts (10pp ITC bonus). NETL (Morgantown WV + Pittsburgh PA) needs a Midwest field presence; Southern IL is the natural site.",
+              process: "Push for an NETL field office (not full FECM HQ relocation — that won&apos;t happen). $5-15M facility, 30-80 staff, SIU faculty partnerships. File through the DOE-tracked Office of Communities (legacy DOE Office of Legacy Management has a similar mission).",
+            },
+            {
+              agency: "USDA Forest Service research — Shawnee NF satellite",
+              size: "USFS R&D has ~80 sites; Shawnee is a major Eastern NF",
+              fit_strong: "Shawnee NF is the largest forest reservation in IL — 280k acres. USFS Northern Research Station (NRS) already covers IL with offices in Carbondale, IL — formally a NRS station exists at SIU. Expansion is incremental, not relocation.",
+              process: "Lower-stakes target: expand the existing NRS Carbondale presence. SIU College of Ag + Forestry program is the anchor. Push for additional research positions tied to forest health / oak decline / fire-on-the-prairie research.",
+            },
+            {
+              agency: "USDA Climate Hub — Midwest regional addition",
+              size: "10 regional Climate Hubs nationally · ~25 staff each",
+              fit_strong: "Midwest Climate Hub is currently at Iowa State University (Ames). A Southern IL co-location at SIU would extend the Hub's reach into the Ohio River Valley / Lower Midwest ag transition zone — distinct from Iowa's Northern Plains focus.",
+              process: "USDA + NOAA partnership; Hub additions happen via Farm Bill appropriations cycle. Frame as 'Lower Mississippi / Ohio Valley Climate Hub'.",
+            },
+            {
+              agency: "VA — VBA processing center expansion at Marion",
+              size: "Marion VAMC already operational; add VBA claims processing",
+              fit_strong: "Lowest-risk target. Marion VA is already the regional anchor for federal contracting (see Federal Money Concentration section). Adding a VBA (Veterans Benefits Administration) Regional Office or claims-processing center co-locates with existing infrastructure.",
+              process: "VBA expansion happens at the appropriations level, not via formal &apos;relocation&apos;. Congressional ask through House Veterans Affairs Committee.",
+            },
+          ].map((a, i) => (
+            <div key={i} style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, padding: 14 }}>
+              <div style={{ fontSize: 14, fontWeight: 600, color: "#1f1d18", marginBottom: 4 }}>{a.agency}</div>
+              <div style={{ fontSize: 11, color: "#7a756b", marginBottom: 8 }}>{a.size}</div>
+              <div style={{ fontSize: 12, color: "#3d3a33", marginBottom: 6 }}><strong>Why Southern IL fits:</strong> {a.fit_strong}</div>
+              <div style={{ fontSize: 12, color: "#3d3a33" }}><strong>Process:</strong> {a.process}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ padding: 14, background: "#fef9eb", border: "1px solid #f0d98a", borderRadius: 6, fontSize: 12, color: "#3d3a33", lineHeight: 1.55, marginBottom: 24 }}>
+        <strong>Post-pandemic-telework caveat:</strong> federal-employee remote work has
+        normalized since 2020, which CHANGED what relocation can deliver. Many agencies now
+        operate hybrid; physically relocating an HQ no longer forces staff to a specific city.
+        The successful play has shifted from "big bang HQ move" to "spin up a new regional
+        center / satellite lab in the target city." Lower political cost, higher success
+        rate, and you can grow it over time. Plan around the satellite-lab pattern.
+      </div>
+
+      {/* === University research-anchored programs === */}
+      <h3 style={{ fontSize: 18, fontWeight: 600, color: "#1f1d18", margin: "32px 0 8px 0" }}>
+        University research-anchored federal programs · SIU as the bid vehicle
+      </h3>
+      <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 760, lineHeight: 1.55 }}>
+        SIU Carbondale is a <strong>Carnegie R1 research university</strong> (top tier of US
+        research institutions) — the credential most federal research programs require to
+        even compete. SIU is the bid vehicle through which the region can capture
+        multi-decade, multi-million-dollar federal research investment that <em>creates
+        $80-130k research-staff positions and graduate-student-to-permanent-staff
+        pipelines</em>. These are family-supporting STEM jobs that wouldn&apos;t otherwise
+        land in LWA-25 — and they&apos;re what the &quot;research-anchored&quot; line of the
+        original Anchor Attraction strategy refers to. SIU already wins individual NSF/NIH/
+        USDA grants — the strategic move is to win the BIG center-scale programs.
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 12 }}>
+        {[
+          {
+            program: "NSF Regional Innovation Engines",
+            funding: "Up to $160M over 10 years (Type-2) · $1M / 2yr Type-1 prep grant",
+            what: "NSF&apos;s flagship 'transform a region around a technology specialty' program. 29 semifinalists in the 2025 round. Each Engine builds a research-to-commercialization ecosystem around one key technology area.",
+            fit: "SIU&apos;s coal-mine rare-earth extraction work + the broader 'critical minerals from legacy coal infrastructure' theme is exactly the kind of differentiated regional bet NSF wants. Other candidate themes: rural broadband + AI agriculture (with UIUC partnership); Mississippi River corridor environmental sensing.",
+            process: "Need multi-sector regional coalition: SIU + UIUC + JALC + Rend Lake + Mantracon + IL DCEO + at least 3-5 industry partners. Start with the $1M Type-1 prep grant — apply for Type-2 after 24mo coalition-building.",
+            url: "https://www.nsf.gov/funding/initiatives/regional-innovation-engines",
+          },
+          {
+            program: "DOE / NETL — coal-region critical minerals",
+            funding: "$5-50M individual grants; up to $200M for major demonstration projects",
+            what: "DOE Office of Fossil Energy & Carbon Management funds research on extracting rare-earth elements + critical minerals from coal byproducts (acid mine drainage, fly ash, coal-mine tailings).",
+            fit: "SIU already has a $200K seed grant in this exact space. Franklin + Perry + Saline + Williamson counties have hundreds of abandoned coal mines. The substrate is here, the credential is here, the federal mandate is here.",
+            process: "Move from $200K seed → multi-million demonstration project → eventual production facility. Critical Materials Innovation Hub partnership is the model; DOE is actively seeking Midwest sites.",
+            url: "https://www.energy.gov/fecm",
+          },
+          {
+            program: "USDA Long-Term Agroecosystem Research (LTAR) network",
+            funding: "$1-3M/year per site, indefinite duration",
+            what: "USDA-ARS network of 18 long-term research sites studying agricultural ecosystems over decades. Each site is staffed with permanent research scientists + technicians.",
+            fit: "Southern IL is the transition zone between Corn Belt and Mid-South / Ohio Valley agriculture — under-represented in the LTAR network. SIU's existing crop + soil research could anchor a new site.",
+            process: "USDA-ARS proposes new LTAR additions through the Farm Bill cycle. Need SIU faculty PI + multi-decade commitment from the region.",
+            url: "https://ltar.ars.usda.gov/",
+          },
+          {
+            program: "NSF Engineering Research Centers (ERC)",
+            funding: "$26-32M over 10 years per ERC",
+            what: "Multi-university research consortia tackling Convergence Research Challenges. ~30 active ERCs nationally.",
+            fit: "SIU would partner with a larger anchor (UIUC, Northwestern, U of Chicago). Possible themes: clean-coal-to-products, rare-earth recovery, agricultural-water remediation.",
+            process: "Multi-year coalition building. SIU as one of 3-5 partner institutions; major university would be lead. Apply via NSF ENG directorate solicitations.",
+            url: "https://www.nsf.gov/funding/opportunities/erc-engineering-research-centers",
+          },
+          {
+            program: "NIH P30 / P50 Centers — biomedical research",
+            funding: "$10-25M over 5 years per center, renewable",
+            what: "NIH Institutional Center grants. P30 = Core Center (shared research infrastructure); P50 = Specialized Center (disease-focused research program).",
+            fit: "SIU School of Medicine (Springfield campus) is the bid vehicle. Possible themes: rural-health disparities, opioid-epidemic research, telehealth in underserved communities. Aligns with HRSA HPSA designations of Southern IL.",
+            process: "PI must have NIH R01 track record + institutional infrastructure. SIU SOM already has NIH-funded labs. Time horizon 18-36mo from concept to award.",
+            url: "https://grants.nih.gov/funding/activity-codes",
+          },
+          {
+            program: "ARPA-E — energy moonshots",
+            funding: "$3-10M individual awards · 3-yr terms",
+            what: "DOE's high-risk / high-reward energy R&D. Smaller per-award but more iterations.",
+            fit: "Lower-probability shot but worth filing. Theme alignment: critical minerals + battery storage + carbon management. SIU's coal-byproduct work is competitive.",
+            process: "Watch ARPA-E open solicitations 2-3 times/year. SIU PIs apply individually or with industry partner.",
+            url: "https://arpa-e.energy.gov/",
+          },
+          {
+            program: "FAA Air Traffic Collegiate Training Initiative (AT-CTI)",
+            funding: "Indirect — graduates feed FAA hiring pipeline at premium pay",
+            what: "SIU is an AT-CTI partner school. Graduates skip part of the FAA Academy and go to higher starting pay.",
+            fit: "Underleveraged. The local feed could be much stronger if Mantracon promoted the pathway.",
+            process: "Already in place — push enrollment + retention. FAA controller starting salary is $50-75k, journey $130-180k.",
+            url: "https://www.faa.gov/about/office_org/headquarters_offices/ahr/job_opportunities/atc_recruitment",
+          },
+        ].map((p, i) => (
+          <div key={i} style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, padding: 14 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 16, marginBottom: 4 }}>
+              <div style={{ fontSize: 14, fontWeight: 600, color: "#1f1d18" }}>{p.program}</div>
+              <div style={{ fontSize: 11, fontWeight: 600, color: "#1f5f8f", whiteSpace: "nowrap" }}>{p.funding}</div>
+            </div>
+            <div style={{ fontSize: 12, color: "#3d3a33", marginBottom: 5 }}><strong>What it is:</strong> {p.what}</div>
+            <div style={{ fontSize: 12, color: "#3d3a33", marginBottom: 5 }}><strong>SIU / regional fit:</strong> {p.fit}</div>
+            <div style={{ fontSize: 12, color: "#3d3a33", marginBottom: 5 }}><strong>Process:</strong> {p.process}</div>
+            {p.url && <div style={{ fontSize: 11, marginTop: 4 }}><a href={p.url} target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>{p.url} →</a></div>}
+          </div>
+        ))}
+      </div>
+
+      <div style={{ marginTop: 16, padding: 14, background: "oklch(96% 0.04 142)", border: "1px solid oklch(45% 0.16 142)33", borderLeft: "6px solid oklch(45% 0.16 142)", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "oklch(35% 0.18 142)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          SIU&apos;s actual current research strengths (what to bid AROUND)
+        </div>
+        <ul style={{ margin: "0 0 0 18px", padding: 0 }}>
+          <li><strong>Coal-region critical minerals</strong> — already has $200K NSF/DOE seed grant on rare-earth extraction from abandoned coal mines. THE differentiated bid theme.</li>
+          <li><strong>Mississippi River / aquatic sciences</strong> — SIU Center for Fisheries, Aquaculture, and Aquatic Sciences (CFAAS) is regionally renowned.</li>
+          <li><strong>Forestry / forest health</strong> — Shawnee NF adjacent; USFS Northern Research Station already has Carbondale presence.</li>
+          <li><strong>Aviation</strong> — SIU Aviation Flight + FAA AT-CTI partnership — underleveraged.</li>
+          <li><strong>Agriculture</strong> — College of Agricultural, Life &amp; Physical Sciences — natural USDA partner.</li>
+          <li><strong>Medical / rural health</strong> — SIU School of Medicine (Springfield) is the NIH bid vehicle.</li>
+          <li><strong>Workforce development research</strong> — partnership with JALC + Rend Lake creates a community-college-research consortium opportunity for DOL grants.</li>
+        </ul>
       </div>
 
       {/* IL programs to file under */}
