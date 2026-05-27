@@ -442,15 +442,15 @@ function TravelJobsSection() {
   };
   const rows: TravelRow[] = [
     {
-      name: "Pipefitter / Steamfitter (UA Local 160)",
+      name: "Pipefitter / Steamfitter (UA Local 553)",
       cred: "5yr apprenticeship → journey",
-      trainSource: "UA Local 160 (Mt. Vernon) pre-apprenticeship",
+      trainSource: "UA Local 553 (East Alton IL) pre-apprenticeship — chartered Aug 1933, 7-county jurisdiction in southern IL",
       wage_hrly: "$50-65/hr",
       per_diem: "$80-130/day",
       annual_est: "$110-160k+",
       travel_pattern: "Refinery/petrochem/power-plant outages; 4-12wk projects; predictable home weekends",
       family_compat: "OK",
-      note: "Outage season concentrates work in spring/fall. Local 160 covers Mt. Vernon → Evansville → St. Louis radius — often within drivable-home range. Top-paying construction trade in the region.",
+      note: "Outage season concentrates work in spring/fall. UA Local 553 jurisdiction covers southern IL including the Carbondale-Marion area (Illinois Pipe Trades Association locals directory). Top-paying construction trade in the region. Verify current scale + apprenticeship intake at ualocal553.org.",
     },
     {
       name: "Boilermaker (Local 363)",
@@ -464,15 +464,15 @@ function TravelJobsSection() {
       note: "Less work as coal plants retire, but nuclear + petrochem outage work is steady. Strong per-diem + travel pay culture.",
     },
     {
-      name: "Ironworker (Local 393 Marion)",
+      name: "Ironworker (verify exact local for Carbondale-Marion)",
       cred: "3-4yr apprenticeship → journey",
-      trainSource: "Ironworkers Local 393 (Marion) pre-apprenticeship",
+      trainSource: "Verify correct IW local for LWA-25 via ironworkers.org directory — IW Local 393 is Aurora IL (not Marion); Local 392 is East St. Louis IL (closer fit for downstate work); members may also work via the IW traveling card",
       wage_hrly: "$40-50/hr",
       per_diem: "$80-110/day",
       annual_est: "$90-130k",
       travel_pattern: "Bridge + industrial steel; mix of local + 2-4hr radius projects",
       family_compat: "GOOD",
-      note: "Local 393 hall is in Marion. Significant local work (interstate bridges, industrial construction). Travel mostly within driving distance of home.",
+      note: "Earlier version of this page incorrectly stated 'Local 393 Marion' — Local 393 is actually based in Aurora IL (~ 4hr north). The downstate IW local serving Southern IL is most likely Local 392 (East St. Louis); confirm at <a href=\"https://www.ironworkers.org/about/locals\" target=\"_blank\" rel=\"noopener noreferrer\">ironworkers.org/about/locals</a> or call the IW International office.",
     },
     {
       name: "IBEW traveling card (Local 702 + sister locals)",
@@ -494,7 +494,7 @@ function TravelJobsSection() {
       annual_est: "$110-150k",
       travel_pattern: "Wind farms, big construction, refinery outages; project-based",
       family_compat: "OK",
-      note: "Local 318 staffed Big Muddy Solar construction (124 MW, Jackson Co.). Same union has wind-farm cranes in IA/TX wind belt — multi-week projects with per-diem.",
+      note: "Local 318 staffed Big Muddy Solar construction (124 MW, Jackson Co. — south of Vergennes; $200M Arevon investment, ~$12.6M property tax flowing to Elverado School District + Jackson Co. over project life). Same union has wind-farm cranes in IA/TX wind belt — multi-week projects with per-diem.",
     },
     {
       name: "Wind turbine technician",
@@ -679,7 +679,7 @@ function AttractionPipelineSection() {
       <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, padding: 16 }}>
         {[
           { factor: "Stranded coal-plant interconnect", grade: "✓ STRONG", note: "Baldwin retirement = ~1,200MW of substation capacity in MISO-South. Ameren IL serves the area. Hyperscalers (and AI-training operators) value stranded-grid sites.", color: "oklch(45% 0.16 142)" },
-          { factor: "Power utility — Egyptian Electric as Ameren alternative", grade: "✓ STRONG", note: "Egyptian Electric Cooperative Association (EECA, Murphysboro HQ) serves portions of 10 counties in the LWA-25 footprint and can be approached as an alternative to investor-owned Ameren for industrial-scale power purchase. Member-owned coops typically structure more flexible industrial rates than IOUs. For 100MW+ data-center loads, the wholesale supply comes from EECA's G&T parent (Southern Illinois Power Cooperative) + the MISO market — but EECA is the negotiation counterparty for retail-scale arrangements. The TVA + local-distribution-coop model served Google's Chattanooga DC.", color: "oklch(45% 0.16 142)" },
+          { factor: "Power utility — Egyptian Electric as Ameren alternative", grade: "✓ STRONG", note: "Egyptian Electric Cooperative Association (EECA, Murphysboro HQ) serves four of five LWA-25 counties (Jackson, Williamson, Perry, Franklin) plus six adjacent (Randolph, St. Clair, Johnson, Union, Monroe, Washington). Note: Jefferson County is NOT in EECA territory (same gap pattern as DRA eligibility). Member-owned coops typically structure more flexible industrial rates than IOUs. For 100MW+ data-center loads, the wholesale supply comes from EECA's G&T parent (Southern Illinois Power Cooperative, generation physically located in Williamson + Washington Cos.) + the MISO market — but EECA is the negotiation counterparty for retail-scale arrangements. The TVA + local-distribution-coop model served Google's Chattanooga DC.", color: "oklch(45% 0.16 142)" },
           { factor: "Local renewable supply pipeline", grade: "✓ EMERGING", note: "Arevon Energy's 124 MW Big Muddy Solar Project (Jackson County, commercial operation end of 2026, $200M private investment) is utility-scale solar feeding the local grid. For data-center recruitment, this is a concrete answer to the 'green PPA?' question — both Ameren-served and EECA-served sites can structure direct or virtual PPAs against Big Muddy generation.", color: "oklch(45% 0.16 142)" },
           { factor: "IL Data Center Investments Act", grade: "✓ STRONG", note: "Public Act 101-0031 — 20-year sales-tax exemption on equipment + property-tax abatement eligible. Eligibility floor per IL DCEO program page (dceo.illinois.gov/expandrelocate/incentives/datacenters.html): $250M minimum capital investment over 60 months, minimum 20 FTE at 120% of COUNTY MEDIAN WAGE, carbon-neutral OR green-building certification required. The 120%-of-county-median-wage requirement is a workforce-board WIN — any DC operator must pay above median to qualify. Underserved-area projects unlock an additional 20% construction-wage tax credit. File DCEO certification before any RFP arrives.", color: "oklch(45% 0.16 142)" },
           { factor: "Water (cooling)", grade: "✓ STRONG", note: "Crab Orchard NWR, Kinkaid Lake, Mississippi River access. Sufficient for all but the largest installations.", color: "oklch(45% 0.16 142)" },
@@ -941,7 +941,7 @@ function AttractionPipelineSection() {
         The Shawnee Hills American Viticultural Area (AVA, designated December 2006 — the
         FIRST AVA in Illinois) spans Jackson + Union counties along a 40-mile wine trail
         with 12 active wineries (down from 15 at AVA designation). The industry contributes
-        an estimated <strong>$126M/year to the regional economy with 150,000 annual visitors</strong>,
+        an estimated <strong>$126M/year to the regional economy with 150,000 annual visitors</strong> (figure attributed to Carol Hoffman, Southernmost Illinois Tourism Bureau, via Illinois Farm Bureau Partners reporting — IGGVA's commissioned 2019 study showed Illinois wineries supported ~5,700 FTE statewide with ~$1.09B visitor spend, suggesting the Shawnee Hills slice is methodologically reasonable but not source-of-record),
         and Shawnee Hills wineries took <strong>7 of the top 11 awards</strong> at the
         2024 Illinois Wine Competition — quality is real, not just a tourism gimmick. But
         the honest job-economics analysis matters: tourism revenue is real, but most
