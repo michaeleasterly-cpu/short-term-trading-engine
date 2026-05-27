@@ -1236,6 +1236,73 @@ function AttractionPipelineSection() {
         </ul>
       </div>
 
+      {/* === Industrial real-estate inventory: success + candidate === */}
+      <h3 style={{ fontSize: 18, fontWeight: 600, color: "#1f1d18", margin: "32px 0 8px 0" }}>
+        Industrial real-estate inventory · success precedent + active candidate
+      </h3>
+      <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 760, lineHeight: 1.55 }}>
+        Vacant industrial buildings are a BD lever — they signal the labor shed already exists, the utility infrastructure is built, and the cost basis for a new tenant is far below greenfield. LWA-25 has one successful adaptive-reuse precedent and one active municipally-controlled redevelopment candidate.
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 24 }}>
+        <div style={{ background: "oklch(96% 0.04 142)", border: "1px solid oklch(45% 0.16 142)33", borderLeft: "6px solid oklch(45% 0.16 142)", borderRadius: 6, padding: 16 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "oklch(35% 0.18 142)", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>Success precedent — Maytag → Aisin</div>
+          <div style={{ fontSize: 14, fontWeight: 600, color: "#1f1d18", marginBottom: 6 }}>Former Maytag Plant · Herrin · 800,000+ sq ft</div>
+          <div style={{ fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
+            Maytag operated this Williamson Co. facility for 40+ years; Whirlpool acquired Maytag March 2006 and closed Herrin by end of 2006 (~1,000 jobs lost; ~$35M/yr regional payroll). <strong>Phoenix Investors LLC (Milwaukee) acquired the property for $1 million in 2015</strong>; the plant is now repurposed with <strong>Aisin Manufacturing</strong> + Ortho Tech + Southern Illinois Hospital as anchor tenants. That is HOW the Aisin Marion footprint (2,000+ jobs across Aisin Mfg + Electronics + Light Metals) partially rebuilt regional manufacturing presence — adaptive reuse of stranded industrial space. The playbook works.
+          </div>
+          <div style={{ fontSize: 11, color: "#7a756b", marginTop: 8 }}>
+            Sources: <a href="https://www.kfvs12.com/story/28988141/milwaukee-based-company-buys-former-maytag-facility-in-herrin-il/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>KFVS12 — Milwaukee company buys former Maytag</a>, <a href="https://phoenixinvestors.com/articles/attracting-new-business-to-the-old-maytag-factory/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Phoenix Investors — Attracting new business to the old Maytag factory</a>, <a href="https://thesouthern.com/news/data/look-back-herrin-maytag-plant-closing-had-big-impact/collection_9d30eff4-f404-11e4-9ed0-3b77acf63687.html" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>thesouthern.com — Look back: Herrin Maytag plant closing</a>.
+          </div>
+        </div>
+        <div style={{ background: "oklch(97% 0.04 60)", border: "1px solid oklch(45% 0.18 60)33", borderLeft: "6px solid oklch(45% 0.18 60)", borderRadius: 6, padding: 16 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "oklch(40% 0.18 60)", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>Active candidate — Curwood property</div>
+          <div style={{ fontSize: 14, fontWeight: 600, color: "#1f1d18", marginBottom: 6 }}>Former Curwood Plant · Murphysboro · CITY-OWNED</div>
+          <div style={{ fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
+            Bemis-subsidiary Curwood (food-packaging films, meat casings) operated in Murphysboro for decades; the plant closed in 2004. <strong>The City of Murphysboro now owns the property</strong> (per thesouthern.com archive + operator-confirmed lived account 2026-05-27). Municipal ownership is a meaningful BD lever — the city can structure free or below-market land transfer for a qualified buyer, tie redevelopment to a TIF (Tax Increment Financing) district, pre-zone for the target use, and move faster than a private owner would. Apply the Maytag→Aisin playbook here: identify a Phoenix-Investors-style acquirer + anchor-tenant package. Contact: Mayor&apos;s Office, City of Murphysboro (murphysboro.com).
+          </div>
+          <div style={{ fontSize: 11, color: "#7a756b", marginTop: 8 }}>
+            Sources: <a href="https://thesouthern.com/news/local/communities/murphysboro/its-official-former-curwood-property-in-murphysboro-has-a-new-owner/article_081c9c28-cde6-5c94-b35e-b152d6a36ae2.html" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>thesouthern.com — Former Curwood property in Murphysboro has a new owner</a> + operator primary-source account, Murphysboro 2026-05-27.
+          </div>
+        </div>
+      </div>
+
+      {/* === SIU's indigenous entrepreneurship infrastructure (paired with the federal-attraction story above) === */}
+      <h3 style={{ fontSize: 18, fontWeight: 600, color: "#1f1d18", margin: "32px 0 8px 0" }}>
+        Indigenous entrepreneurship infrastructure · SIU Dunn-Richmond + SBDC + Research Park
+      </h3>
+      <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 760, lineHeight: 1.55 }}>
+        Southern Illinois doesn&apos;t only need to attract outside employers — it has an indigenous entrepreneurial pipeline that&apos;s currently capacity-constrained. The federal-relocation + university-research lanes above pair with this in-house lane.
+      </div>
+      <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, padding: 16, marginBottom: 24 }}>
+        <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 13, color: "#3d3a33", lineHeight: 1.65 }}>
+          <li><strong>SIU Research Park</strong> (1740 Innovation Drive, Carbondale) — non-profit affiliated with SIU; the primary innovation + technology space in the southern third of Illinois.</li>
+          <li><strong>Dunn-Richmond Economic Development Center</strong> — 55,000 sq ft mixed-use facility inside the Research Park, built 1990. Houses the region&apos;s LARGEST business incubator. <strong>Currently AT CAPACITY with a growing waitlist for the first time in its 35-year history</strong> — a real signal that regional entrepreneurial demand exceeds incubator supply.</li>
+          <li><strong>Illinois SBDC at SIU</strong> — named the <strong>2024 Illinois SBDC of the Year</strong> by the US Small Business Administration. 40 years of operation; no-cost confidential business services (one-on-one consulting, training/workshops, capital-access support, technology adoption, market expansion). The credential the region has but doesn&apos;t cite enough.</li>
+          <li><strong>$150K recent grant funding</strong> to Southern Illinois Research Park to support entrepreneurs (per thesouthern.com, 2024).</li>
+        </ul>
+        <div style={{ fontSize: 12, color: "#5a564d", marginTop: 12, lineHeight: 1.5 }}>
+          <strong>BD lever:</strong> when pitching anchor-attraction targets (federal-agency staff relocation, data-center execs, university-anchored programs), the Dunn-Richmond + SBDC stack is the credential that says &quot;this region knows how to start + grow businesses, not just collect WIOA grants.&quot; The Dunn-Richmond capacity constraint is itself a federal-funding ask — expansion to a second incubator building or satellite location would directly relieve a documented bottleneck.
+        </div>
+        <div style={{ fontSize: 11, color: "#7a756b", marginTop: 8 }}>
+          Sources: <a href="https://researchpark.siu.edu/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>SIU Research Park</a>, <a href="https://researchpark.siu.edu/our-tenants/dunn-richmond-development-center.php" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Dunn-Richmond Economic Development Center</a>, <a href="https://news.siu.edu/2024/04/043024-sius-small-business-development-center-named-illinois-sbdc-of-the-year.php" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>SIU SBDC named 2024 Illinois SBDC of the Year</a>, <a href="https://thesouthern.com/news/local/siu/sius-southern-illinois-research-park-receives-150k-to-help-entrepreneurs/article_e286ae2f-c79c-55e3-a9f9-7c2978fe5d07.html" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>thesouthern.com — SIU Research Park $150K</a>.
+        </div>
+      </div>
+
+      {/* === Lifestyle pitch additions: Solar eclipse + Giant City Lodge (used by visiting executives) === */}
+      <h3 style={{ fontSize: 18, fontWeight: 600, color: "#1f1d18", margin: "32px 0 8px 0" }}>
+        Lifestyle pitch · destination-grade assets for visiting execs + relocator open houses
+      </h3>
+      <div style={{ background: "#fff", border: "1px solid #d8d2c4", borderRadius: 6, padding: 16, marginBottom: 24, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
+        <ul style={{ margin: "0 0 0 18px", padding: 0 }}>
+          <li><strong>Solar eclipse crossroads</strong> — Carbondale sat on the path of TOTALITY for both the <strong>2017 + 2024 solar eclipses</strong> (the &quot;crossroads of the eclipse&quot; — only US location with two totalities within 7 years). 2017 drew an estimated 100,000+ visitors; 2024 was larger. Operationally significant for BD: the region has proven event-hosting capacity at scale + national-press credentials in the science-tourism lane.</li>
+          <li><strong>Giant City Lodge</strong> (Giant City State Park, Jackson Co., ~12 mi south of Carbondale) — historic CCC-built (1930s) IL DNR-operated state-park lodge with stone-and-timber main building, cabin rentals, restaurant, and meeting space. THIS is the destination-grade lodging asset for hosting visiting executives, federal-retiree open houses, climate-migration tours, and anchor-attraction site visits. The I-57/I-64 chain hotels (Hampton + Holiday Inn Express + Drury + Best Western) provide commercial-traveler capacity; Giant City Lodge provides the &quot;authentic outdoor-rec experience&quot; that competes with Asheville NC / Sedona AZ when pitching to relocators.</li>
+          <li><strong>Hospitality is NOT a primary jobs anchor</strong> — see the Training-to-Demand section&apos;s &quot;Hotel / hospitality management&quot; row, marked LOCAL · WAGE-SUPPRESSED · SATURATED. Lodging is a quality-of-life amenity for attracting OTHER industries, not a workforce-development end in itself.</li>
+        </ul>
+        <div style={{ fontSize: 11, color: "#7a756b", marginTop: 8 }}>
+          Sources: NASA Eclipse maps (2017 + 2024 total solar eclipse paths); <a href="https://giantcitylodge.com/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Giant City Lodge</a> + IL DNR Giant City State Park.
+        </div>
+      </div>
+
       {/* === Supplementary Sectors parent heading — groups Viticulture, Cannabis, Outdoor Industry === */}
       <h2 style={{ fontSize: 22, fontWeight: 600, color: "#1f1d18", margin: "40px 0 4px 0", paddingTop: 16, borderTop: "2px solid #d8d2c4" }}>
         Supplementary sectors · allowed, real, not primary anchor candidates
@@ -1398,12 +1465,18 @@ function AttractionPipelineSection() {
         <div style={{ fontSize: 13, fontWeight: 700, color: "oklch(35% 0.18 142)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>
           Strategic moves that could capture real value from the cannabis economy
         </div>
+        <div style={{ marginBottom: 8 }}>
+          <strong>What the dashboard already shows:</strong> per-role wage analysis above with verdict against MIT LWC Jackson Co. 1A+2C $46.76/hr, sourced from BLS-adjacent industry salary tables; the credential ladder (JALC Horticulture AA → cultivation → grower management) cross-referenced against local-facility scarcity (~5-10 top-rung slots region-wide); honest size-up (~13,500 IL hemp-cannabinoid jobs statewide, LWA-25 share small).
+        </div>
+        <div style={{ marginBottom: 4 }}>
+          <strong>Your residual moves (the dashboard cannot self-execute these):</strong>
+        </div>
         <ul style={{ margin: "0 0 0 18px", padding: 0 }}>
-          <li><strong>Community-college cannabis vocational program</strong> — IL Dept of Ag licenses Community College Cannabis Vocational Pilot Programs (<a href="https://cannabis.illinois.gov/agencies/cannabis-idoa.html" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>cannabis.illinois.gov</a>). JALC or Rend Lake could apply. Cannabis cultivation + horticulture credentials + business operations.</li>
-          <li><strong>Help local applicants navigate the next license rounds</strong> — the workforce-board partnership with the IL Cannabis Business Development Fund (<a href="https://illinoisanswers.org/2023/10/19/illinois-cannabis-business-development-fund-craft-growers/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Illinois Answers Project</a> reporting on barriers). The Cannabis Equity Program offers loans + technical assistance to social-equity applicants.</li>
-          <li><strong>Local employment requirements in zoning approvals</strong> — when Carbondale or Marion approves a cannabis facility, the approval can include local-hiring + livable-wage commitments. Use the next SuiteGreens-style approval as precedent.</li>
-          <li><strong>Adjacent industries</strong> — cannabis processing equipment, packaging, lab testing, security, compliance consulting all have higher-wage opportunity ceilings than retail/cultivation labor. the workforce board could front-load training for these niches.</li>
-          <li><strong>Honest size-up</strong> — cannabis is a real industry but a small one for jobs at scale. IL hemp-derived cannabinoid industry employs ~13,500 statewide (<a href="https://themarijuanaherald.com/2025/12/illinois-hemp-industry-supports-nearly-13500-jobs-and-2-7-billion-in-revenue-analysis-finds/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>The Marijuana Herald, Dec 2025</a>); LWA-25 share is small. Don&apos;t pitch cannabis as primary jobs anchor; pitch it as supplementary economic activity that should be allowed and supported on its own terms.</li>
+          <li><strong>Apply for a Community-College Cannabis Vocational Pilot Program license</strong> — IL Dept of Ag licenses these (<a href="https://cannabis.illinois.gov/agencies/cannabis-idoa.html" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>cannabis.illinois.gov</a>). JALC or Rend Lake applies; the dashboard surfaced the credential gap and the wage-ceiling reality — the application is human work.</li>
+          <li><strong>Sponsor local social-equity applicants through the next IL Cannabis Business Development Fund (CBDF) license round</strong> — the dashboard names the eligibility criteria + the fund; the application support + capital-access introduction is human work. <a href="https://illinoisanswers.org/2023/10/19/illinois-cannabis-business-development-fund-craft-growers/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Illinois Answers Project on CBDF barriers</a> documents the typical obstacles.</li>
+          <li><strong>Negotiate local-hiring + livable-wage zoning conditions when the next cannabis facility seeks approval</strong> in Carbondale or Marion. Use the next SuiteGreens-style approval as precedent. The dashboard surfaces the WAGE-vs-MIT-LWC gap that justifies the condition; the negotiation itself happens in the council chamber.</li>
+          <li><strong>Steer cohort planning toward adjacent industries</strong> — cannabis processing equipment, packaging, lab testing, security, compliance consulting carry higher-wage ceilings than retail/cultivation. The training-to-demand section above already maps these; cohort enrollment decisions are the human residual.</li>
+          <li><strong>Frame cannabis honestly in regional pitches</strong> — supplementary economic activity, not a primary jobs anchor. The dashboard provides the numbers (LWA-25 share is small; ~13,500 IL hemp-cannabinoid jobs statewide per <a href="https://themarijuanaherald.com/2025/12/illinois-hemp-industry-supports-nearly-13500-jobs-and-2-7-billion-in-revenue-analysis-finds/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>The Marijuana Herald Dec 2025</a>); how you frame this for a chamber-of-commerce audience is human work.</li>
         </ul>
       </div>
 
@@ -1748,6 +1821,77 @@ function AttractionPipelineSection() {
 
       <div style={{ marginTop: 12, fontSize: 11, color: "#7a756b", lineHeight: 1.5 }}>
         Source: synthesized from local-BD expert advisory + IL DCEO program documentation. Refresh annually.
+      </div>
+    </section>
+  );
+}
+
+function StructuralWorkforceConstraintsSection() {
+  return (
+    <section style={{ marginTop: 40 }}>
+      <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+      <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+        Structural workforce constraints · crime + drug-class reality + framing
+      </h2>
+      <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 780, lineHeight: 1.55 }}>
+        Workforce-development planning that ignores the actual security + substance-use reality of the region will mis-design programs. These constraints are not the workforce board&apos;s fault and not its to solve alone — but ignoring them produces brochures that read true on paper while trainees wash out in practice. Sourced data, plain framing.
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 24 }}>
+        <div style={{ background: "white", border: "1px solid #d8d2c4", borderLeft: "6px solid oklch(45% 0.20 22)", borderRadius: 6, padding: 16 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#1f1d18", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>Carbondale crime rate</div>
+          <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 13, lineHeight: 1.6, color: "#3d3a33" }}>
+            <li><strong>Crime rate: 50 per 1,000 residents</strong> — among the highest in America for cities of any size (NeighborhoodScout analysis of FBI UCR data).</li>
+            <li><strong>1 in 101</strong> chance of being a violent-crime victim (incl. rape, murder/non-negligent manslaughter, armed robbery, aggravated assault).</li>
+            <li><strong>1 in 25</strong> chance of being a property-crime victim — rate of 40 per 1,000 population.</li>
+            <li>Motor vehicle theft rate explicitly flagged as among the highest in the nation.</li>
+            <li>Cross-county gang activity operates across the 5-county LWA-25 footprint (operator primary-source account).</li>
+          </ul>
+          <div style={{ fontSize: 11, color: "#7a756b", marginTop: 8, lineHeight: 1.5 }}>
+            Sources: <a href="https://www.neighborhoodscout.com/il/carbondale/crime" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>NeighborhoodScout · Carbondale Crime</a> + <a href="https://isp.illinois.gov/CrimeReporting/CrimeInIllinoisReports" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>IL State Police Crime in Illinois reports</a>.
+          </div>
+        </div>
+
+        <div style={{ background: "white", border: "1px solid #d8d2c4", borderLeft: "6px solid oklch(45% 0.20 22)", borderRadius: 6, padding: 16 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#1f1d18", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>Drug-use reality (not "opioid epidemic")</div>
+          <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 13, lineHeight: 1.6, color: "#3d3a33" }}>
+            <li>IL 2023 OD deaths: <strong>3,502</strong>; opioid-involved <strong>2,855</strong> (81%) — but most current opioid deaths are <strong>fentanyl cut into street drugs</strong>, not prescription pills.</li>
+            <li>IL&apos;s <strong>16 southernmost counties are explicitly named as the region hardest-hit by IL&apos;s overdose deaths</strong>, including 4 of 5 LWA-25 counties (Franklin, Jackson, Perry, Williamson per IDPH/newspaper investigation; Jefferson included in the broader IDPH Marion Region).</li>
+            <li>Dominant local drugs are <strong>meth + heroin (now fentanyl-contaminated) + emerging xylazine + cocaine</strong> — NOT pain pills. The &quot;opioid epidemic&quot; national label is misleading for Southern IL; the early-2010s prescription-pill wave is largely historical.</li>
+            <li>Statewide OD declined 8.3% in 2023 (first drop since 2018) — but baseline rate in Southern IL remains substantially elevated.</li>
+            <li>Active meth-enforcement indictments across Franklin/Jackson/Jefferson/Perry/Williamson per thesouthern.com archive.</li>
+          </ul>
+          <div style={{ fontSize: 11, color: "#7a756b", marginTop: 8, lineHeight: 1.5 }}>
+            Sources: <a href="https://dph.illinois.gov/topics-services/opioids/idph-data-dashboard/overdoses.html" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>IDPH Overdose Data Dashboard</a> + <a href="https://thesouthern.com/news/local/state-and-regional/newspaper-investigation-shows-that-illinois-16-southernmost-counties-are-hardest-hit-by-states-opioid-epidemic/article_3806ccec-495e-5f60-880f-3f27552a3994.html" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>thesouthern.com — 16 southernmost counties hardest hit</a> + <a href="https://dph.illinois.gov/resource-center/news/2025/march/release-20250306.html" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Pritzker administration OD-decline announcement 2025-03-06</a>.
+          </div>
+        </div>
+      </div>
+
+      <div style={{ padding: 14, background: "#fef9eb", border: "1px solid #f0d98a", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, marginBottom: 16 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "#1f1d18", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>Framing critique — why &quot;opioid epidemic&quot; mislabels this region</div>
+        <div>
+          The &quot;opioid epidemic&quot; national label emerged from the Wave 1 (2000s-2012) prescription-pill abuse pattern that hit suburban + middle-class white populations hardest — and got <em>sympathetic-victim</em> media + policy framing (treatment-based response, &quot;dirty doctors&quot; villains) that earlier urban heroin waves never received. The academic literature is explicit about this: <strong>Netherland &amp; Hansen 2016</strong> showed in a content-analysis of 100 popular-press articles that none of the articles about white prescription-opioid users suggested incarceration for use/possession, while urban Black/Latino heroin users in the same period got criminalization framing.
+          <br /><br />
+          For rural Southern IL workforce planning, that label is doubly misleading:
+        </div>
+        <ul style={{ margin: "8px 0 0 18px", padding: 0 }}>
+          <li>The dominant drugs here are <strong>meth + street heroin (fentanyl-contaminated)</strong> — not Rx pills</li>
+          <li>The demographic + cultural pattern of meth use in rural Southern IL is different from suburban Rx-opioid use; treating it as one &quot;opioid epidemic&quot; problem under-serves the region</li>
+          <li>Workforce-board program designs that assume Rx-pill recovery pathways will mis-fit a population whose constraint is street-supply fentanyl + xylazine + meth</li>
+        </ul>
+        <div style={{ fontSize: 11, color: "#7a756b", marginTop: 8, lineHeight: 1.5 }}>
+          Sources: <a href="https://pmc.ncbi.nlm.nih.gov/articles/PMC5121004/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Netherland &amp; Hansen 2016 · &quot;The War on Drugs That Wasn&apos;t: Wasted Whiteness&quot; · PMC NIH-indexed</a> + <a href="https://www.sapiens.org/culture/helena-hansen-racial-capitalism-opioids/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>SAPIENS · Helena Hansen on racial capitalism + opioids</a> + <a href="https://www.hks.harvard.edu/faculty-research/policy-topics/health/study-shows-race-central-opioid-policy-preferences" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>HKS · Race central in opioid policy preferences</a>.
+        </div>
+      </div>
+
+      <div style={{ padding: 14, background: "#f0ece1", border: "1px solid #d8d2c4", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "#1f1d18", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>What this means for workforce planning</div>
+        <ul style={{ margin: "0 0 0 18px", padding: 0 }}>
+          <li><strong>Drug-screen failure rate is a real cohort-selection issue</strong> — most family-supporting credentials in the page&apos;s roster (IL DOC officer, IDOT, IBEW 702 apprenticeship, GD-OTS production, coal-mine MSHA, IL State Police) require passing a pre-employment drug screen. A workforce board that recruits trainees without honest drug-screen pre-vetting produces cohort attrition at the placement step, not at training.</li>
+          <li><strong>The dashboard shows what credentials clear 1A+2C; the trainee&apos;s ability to actually keep a slot depends on substance-use status the credential doesn&apos;t measure.</strong> Address this with recovery-program partnership (Centerstone, IDHS-funded MAT clinics) rather than ignoring it.</li>
+          <li><strong>Crime rate affects relocator BD pitch</strong> — visiting executives + federal-retiree open houses see Carbondale&apos;s crime rate before they see the wine trail. Be honest with prospects about the security profile + show the response (Carbondale PD, SIU Department of Public Safety, IL State Police District 13 in Du Quoin); don&apos;t hide it.</li>
+          <li><strong>Gang activity across the 5-county footprint</strong> affects worker mobility — workers in West Frankfort or Du Quoin may avoid Carbondale corridors after dark; that&apos;s a real transit-and-safety constraint on the &quot;match worker to job&quot; mapping the dashboard implies.</li>
+        </ul>
       </div>
     </section>
   );
@@ -3181,6 +3325,10 @@ export default async function SouthernIllinoisPage() {
 
           <div id="sec-harm-cascade" style={{ scrollMarginTop: 60 }}>
             <HarmCascadeSection />
+          </div>
+
+          <div id="sec-structural-constraints" style={{ scrollMarginTop: 60 }}>
+            <StructuralWorkforceConstraintsSection />
           </div>
 
           <div id="sec-pirl" style={{ scrollMarginTop: 60 }}>
