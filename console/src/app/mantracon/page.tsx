@@ -136,8 +136,28 @@ interface MantraconData {
   training_alignment?: TrainingAlignment;
 }
 
-function TrainingAlignmentSection({ ta }: { ta: TrainingAlignment }) {
+function TrainingAlignmentSection({ ta, industryMixAvailable }: { ta: TrainingAlignment; industryMixAvailable: boolean }) {
   if (!ta.ladders.length) return null;
+  // If the upstream QCEW fetch failed (empty industry_mix), every ladder will
+  // get bogus "0 jobs / PHANTOM PIPELINE" verdicts. Render an explicit error
+  // banner instead of pretending the verdicts are real.
+  if (!industryMixAvailable) {
+    return (
+      <section style={{ marginTop: 40 }}>
+        <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+        <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+          Training-to-demand alignment · data feed temporarily unavailable
+        </h2>
+        <div style={{ padding: 16, background: "oklch(97% 0.04 60)", border: "1px solid oklch(58% 0.15 60)33", borderLeft: "6px solid oklch(58% 0.15 60)", borderRadius: 6, fontSize: 14, color: "#3d3a33", lineHeight: 1.55 }}>
+          The BLS QCEW industry-employment feed is currently unreachable from our
+          server, so per-ladder demand verdicts (PHANTOM / FAMILY-SUPPORTING etc.) cannot
+          be computed right now. Refresh in a few minutes — empty results are not
+          cached, so the next page load will retry the BLS fetch. The training-ladder
+          roster + livable-wage benchmarks below are still informative on their own.
+        </div>
+      </section>
+    );
+  }
   const lw = ta.livable_wage_jackson_il;
   const colorFor = (c: string) => c === "good" ? "oklch(45% 0.16 142)" : c === "warn" ? "oklch(48% 0.15 60)" : "oklch(45% 0.20 22)";
   const bgFor = (c: string) => c === "good" ? "oklch(96% 0.04 142)" : c === "warn" ? "oklch(97% 0.04 60)" : "oklch(96% 0.05 22)";
@@ -955,7 +975,12 @@ export default async function MantraconPage() {
 
           {data.top_federal_recipients && <FederalConcentrationSection tr={data.top_federal_recipients} />}
 
-          {data.training_alignment && <TrainingAlignmentSection ta={data.training_alignment} />}
+          {data.training_alignment && (
+            <TrainingAlignmentSection
+              ta={data.training_alignment}
+              industryMixAvailable={!!data.industry_mix?.top_supersectors?.length}
+            />
+          )}
 
           <AttractionPipelineSection />
 

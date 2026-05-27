@@ -1339,6 +1339,14 @@ _QCEW_CACHE: dict[str, tuple[float, dict]] = {}
 _QCEW_CACHE_TTL_SEC = 86400  # 24h
 
 
+# BLS throttles unidentified UAs from cloud egress IPs. A descriptive UA gets
+# through reliably (BLS API guidance recommends including a contact endpoint).
+_BLS_HEADERS = {
+    "User-Agent": "ste-console-api/1.0 (operator-console contact: ops@packetvoidlabs.dev)",
+    "Accept": "text/csv,application/json,*/*",
+}
+
+
 async def _qcew_latest_quarter() -> tuple[int, int]:
     """Probe BLS for the most recent published quarter. Falls back to (2025, 3)
     if probes fail. BLS publishes Q ~7 months after the end of the quarter."""
@@ -1351,7 +1359,7 @@ async def _qcew_latest_quarter() -> tuple[int, int]:
             q = 4
             y -= 1
         candidates.append((y, q))
-    async with httpx.AsyncClient(timeout=8.0) as client:
+    async with httpx.AsyncClient(timeout=8.0, headers=_BLS_HEADERS) as client:
         for yy, qq in candidates:
             try:
                 r = await client.head(f"https://data.bls.gov/cew/data/api/{yy}/{qq}/area/17077.csv")
@@ -1371,29 +1379,50 @@ _COUNTY_FIPS_NAME: dict[str, str] = {
 }
 
 
+async def _qcew_fetch_one_county(client: httpx.AsyncClient, year: int, qtr: int, fips5: str):
+    """Fetch one county QCEW CSV. Returns (fips, parsed_rows). Empty list on failure."""
+    import csv as csv_mod
+    import io as io_mod
+    area_code = "17" + fips5
+    try:
+        r = await client.get(f"https://data.bls.gov/cew/data/api/{year}/{qtr}/area/{area_code}.csv")
+        if r.status_code != 200:
+            return (fips5, [], f"HTTP {r.status_code}")
+        return (fips5, list(csv_mod.DictReader(io_mod.StringIO(r.text))), None)
+    except Exception as exc:
+        return (fips5, [], type(exc).__name__)
+
+
 async def _qcew_supersector_block(county_fips: list[str]) -> dict:
-    """Returns {as_of_quarter, top_supersectors: [...], total_employment, by_county: [...], source}."""
+    """Returns {as_of_quarter, top_supersectors: [...], total_employment, by_county: [...], source}.
+    Never returns empty cached results — those are silent failures we want to retry."""
     cache_key = "qcew|" + ",".join(sorted(county_fips))
     now = time.time()
     if cache_key in _QCEW_CACHE and now - _QCEW_CACHE[cache_key][0] < _QCEW_CACHE_TTL_SEC:
-        return _QCEW_CACHE[cache_key][1]
+        cached = _QCEW_CACHE[cache_key][1]
+        # Don't return empty cached results — they came from a failed fetch and
+        # should be retried, not held for 24h.
+        if cached.get("top_supersectors"):
+            return cached
 
     year, qtr = await _qcew_latest_quarter()
-    import csv as csv_mod
-    import io as io_mod
     agg: dict[str, dict] = {}
     grand_emp = 0
     per_county: dict[str, dict] = {}
-    async with httpx.AsyncClient(timeout=20.0) as client:
-        for fips5 in county_fips:
-            area_code = "17" + fips5
+    fetch_errors: list[str] = []
+    # Parallelize the 5 BLS county fetches — completes in ~3-5s instead of ~15-20s
+    # serial, avoiding Railway request-timeout on cold cache.
+    import asyncio as _asyncio
+    async with httpx.AsyncClient(timeout=30.0, headers=_BLS_HEADERS) as client:
+        results = await _asyncio.gather(
+            *[_qcew_fetch_one_county(client, year, qtr, f) for f in county_fips]
+        )
+        for fips5, rows, err in results:
+            if err:
+                fetch_errors.append(f"{fips5}:{err}")
             county_agg: dict[str, dict] = {}
             try:
-                r = await client.get(f"https://data.bls.gov/cew/data/api/{year}/{qtr}/area/{area_code}.csv")
-                if r.status_code != 200:
-                    continue
-                reader = csv_mod.DictReader(io_mod.StringIO(r.text))
-                for row in reader:
+                for row in rows:
                     if row.get("agglvl_code") != "73":
                         continue
                     ic = row.get("industry_code") or ""
@@ -1469,8 +1498,12 @@ async def _qcew_supersector_block(county_fips: list[str]) -> dict:
         "by_county": by_county_list,
         "source": "BLS Quarterly Census of Employment & Wages (QCEW); NAICS supersector aggregation, all ownerships.",
         "county_fips": county_fips,
+        "fetch_errors": fetch_errors,  # surfaced to frontend so it can show data-unavailable state
     }
-    _QCEW_CACHE[cache_key] = (now, out)
+    # Only cache successful results. Empty results indicate a silent fetch
+    # failure (BLS throttling, transient outage) — caching that for 24h is bad.
+    if items:
+        _QCEW_CACHE[cache_key] = (now, out)
     return out
 
 
