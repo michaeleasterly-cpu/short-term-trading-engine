@@ -193,7 +193,7 @@ async def fetch_daily_bars_multi(
     out: dict[str, list[dict[str, Any]]] = {s: [] for s in symbols}
     for symbol in symbols:
         try:
-            bars = await _fetch_one_symbol(client, symbol, start, end)
+            out[symbol] = await _fetch_one_symbol(client, symbol, start, end)
         except DataProviderOutage as exc:
             # Permanent auth / shape failure — bubble so the caller can
             # decide to abort vs continue. The chunked stage above
@@ -201,7 +201,17 @@ async def fetch_daily_bars_multi(
             # the outage and treats it as a vendor down event.
             logger.error("fmp.bars.permanent_failure", symbol=symbol, error=str(exc)[:200])
             raise
-        out[symbol] = bars
+        except (httpx.NetworkError, httpx.TimeoutException) as exc:
+            # Transient transport error survived @with_retry's 4 attempts
+            # (RemoteProtocolError, connection drop, read timeout). One
+            # bad-luck ticker should NOT abort the 7,600-ticker universe —
+            # log, leave out[symbol] as the empty default, continue.
+            logger.warning(
+                "fmp.bars.skipped_after_retry_exhausted",
+                symbol=symbol,
+                error=type(exc).__name__,
+                message=str(exc)[:200],
+            )
         await asyncio.sleep(_RATE_LIMIT_SLEEP_SEC)
     return out
 
