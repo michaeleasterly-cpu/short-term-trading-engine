@@ -165,6 +165,249 @@ interface MantraconData {
   training_alignment?: TrainingAlignment;
 }
 
+function TrainingROISection() {
+  // ROI table for all named training pathways on the page. Saturation reflects
+  // the local-slot scarcity story operator flagged for cannabis top-rung,
+  // viticulture top-rung, and union apprenticeships. Wage estimates pulled
+  // from the corresponding training/travel-jobs sections. Slot estimates are
+  // operator-advisory-derived ranges; refine against Mantracon PIRL data.
+  type RoiRow = {
+    pathway: string;
+    train_cost: string;
+    train_duration: string;
+    journey_wage: string;
+    annual_premium: string;  // vs $32k US-median single-earner baseline
+    payback_yrs: string;
+    local_slots: string;  // estimated annual openings region-wide
+    saturation: "LOW" | "LOW-MED" | "MED" | "MED-HIGH" | "HIGH" | "EXTREME" | "PHANTOM";
+    verdict: string;
+  };
+  const rows: RoiRow[] = [
+    // === Family-supporting union trades (high-wage, low-slot, gated by apprenticeship) ===
+    { pathway: "Lineworker IBEW 702 outside",
+      train_cost: "Paid apprenticeship ($0 cost; you earn)", train_duration: "~3.5yr (7×1,000hr periods)",
+      journey_wage: "$65.52/hr (~$136k/yr)",     annual_premium: "+$104k/yr",       payback_yrs: "Negative (paid during training)",
+      local_slots: "~5-15/yr (IBEW 702 apprentice intake)", saturation: "HIGH",
+      verdict: "Best ROI on the page IF you land an apprenticeship slot. Gated by union intake cycles." },
+    { pathway: "Electrician IBEW 702 inside",
+      train_cost: "Paid apprenticeship ($0 cost)", train_duration: "5yr",
+      journey_wage: "$42-50/hr (~$92k/yr)",      annual_premium: "+$60k/yr",        payback_yrs: "Negative (paid during training)",
+      local_slots: "~10-20/yr apprentice intake", saturation: "HIGH",
+      verdict: "Excellent ROI. Single-adult LW cleared easily; 1A+2C threshold met with overtime. Gated by intake." },
+    { pathway: "Pipefitter UA Local 553",
+      train_cost: "Paid apprenticeship ($0 cost)", train_duration: "5yr",
+      journey_wage: "$50-65/hr + per-diem (~$130k/yr all-in)", annual_premium: "+$98k/yr",       payback_yrs: "Negative",
+      local_slots: "~5-15/yr (UA 553 intake; travel work expands range)", saturation: "HIGH",
+      verdict: "Top-paying construction trade. Travel-tolerant lifestyle required." },
+    { pathway: "Boilermaker Local 363",
+      train_cost: "Paid apprenticeship", train_duration: "4yr",
+      journey_wage: "$40-55/hr + per-diem (~$120k/yr)", annual_premium: "+$88k/yr",        payback_yrs: "Negative",
+      local_slots: "~3-8/yr (shrinking with coal-plant retirements)", saturation: "MED",
+      verdict: "Family-supporting if you tolerate outage-driven travel. Sector contracting." },
+    { pathway: "Crane operator IUOE Local 318",
+      train_cost: "Paid apprenticeship", train_duration: "3yr",
+      journey_wage: "$45-60/hr + per-diem (~$125k/yr)", annual_premium: "+$93k/yr",        payback_yrs: "Negative",
+      local_slots: "~5-12/yr (boosted by Big Muddy Solar)", saturation: "MED",
+      verdict: "Big Muddy Solar created near-term openings; ongoing through wind/data-center construction cycles." },
+    // === Healthcare ladder ===
+    { pathway: "CNA (Certified Nursing Asst.)",
+      train_cost: "$500-1,500", train_duration: "4-6 weeks",
+      journey_wage: "$14-17/hr (~$30k/yr)",      annual_premium: "-$2k/yr (BELOW baseline)", payback_yrs: "N/A — below baseline",
+      local_slots: "Many (turnover-driven, 100s/yr)", saturation: "LOW",
+      verdict: "Easy entry, low wage. Use ONLY as on-ramp to LPN→RN ladder, not as terminus." },
+    { pathway: "LPN (Licensed Practical Nurse)",
+      train_cost: "$8,000-15,000", train_duration: "12 months",
+      journey_wage: "$25/hr (~$52k/yr)",         annual_premium: "+$20k/yr",        payback_yrs: "~0.5-1yr",
+      local_slots: "Dozens/yr (SIH + Memorial + nursing homes)", saturation: "LOW-MED",
+      verdict: "Fast ROI. Single-adult LW cleared; below 1A+2C without overtime." },
+    { pathway: "RN (ADN, Associate Degree)",
+      train_cost: "$10,000-20,000 tuition", train_duration: "2 years",
+      journey_wage: "$32-38/hr local (~$72k/yr); travel-RN $130-200k+",
+      annual_premium: "+$40k/yr local; +$130k/yr travel",
+      payback_yrs: "<1yr (travel-RN); ~1yr (local)",
+      local_slots: "Dozens/yr at SIH+Memorial+Marion VA + unlimited travel pool", saturation: "LOW",
+      verdict: "Best single 2-year credential on the page. Travel-RN path is highest-dollar of any 2-yr credential in the region." },
+    // === Manufacturing / industrial ===
+    { pathway: "Welder (structural / pipe)",
+      train_cost: "$5,000-15,000 (JALC 12-18mo)", train_duration: "12-18 months",
+      journey_wage: "$31/hr local (~$64k); pipe welder traveling $50-70/hr + per-diem",
+      annual_premium: "+$32k/yr local; +$80-100k traveling",
+      payback_yrs: "~1yr local; ~3mo traveling",
+      local_slots: "Dozens/yr (Continental, Aisin, Penn Aluminum)", saturation: "LOW-MED",
+      verdict: "Strong. Local family-supporting at journey + Pipe-welder travel work goes to top-rung wages." },
+    { pathway: "Industrial maintenance / mechatronics",
+      train_cost: "$10,000-25,000 (JALC 18-24mo)", train_duration: "18-24 months",
+      journey_wage: "$33/hr (~$69k/yr)",         annual_premium: "+$37k/yr",       payback_yrs: "~1yr",
+      local_slots: "Dozens/yr (Continental anchor)", saturation: "LOW-MED",
+      verdict: "Family-supporting, anchored on Continental Tire demand. Aisin + Penn Aluminum add depth." },
+    // === Driving / logistics ===
+    { pathway: "CDL Class A (truck driver)",
+      train_cost: "$3,000-6,000 + 4-8wk lost income", train_duration: "4-8 weeks",
+      journey_wage: "$22-28/hr local (~$50k); regional OTR $35-45/hr (~$80k+)",
+      annual_premium: "+$18k local; +$48k OTR",
+      payback_yrs: "<1yr",
+      local_slots: "100s/yr (chronic turnover + national shortage)", saturation: "LOW",
+      verdict: "FAMILY-TIME CONFLICT verdict applies — OTR pay clears family-supporting bar but destroys home time. Local rate doesn't clear 1A+2C." },
+    // === Tech ===
+    { pathway: "IT support (Network+/Security+ stacked)",
+      train_cost: "$1,000-3,000 cert exams + self-study", train_duration: "6-12 months",
+      journey_wage: "$27/hr (~$56k/yr) local; remote roles $70-120k+",
+      annual_premium: "+$24k local; +$50-90k remote",
+      payback_yrs: "<6mo",
+      local_slots: "~20-50/yr local (Information sector small)", saturation: "MED",
+      verdict: "Best ROI for credential cost but ceiling is low LOCALLY. Frame as 'remote-work credential' not 'local-employer ladder.'" },
+    // === CEJA clean-energy (PHANTOM scrutiny applied) ===
+    { pathway: "CEJA solar installer (NABCEP)",
+      train_cost: "$0-1,000 (CEJA Climate Works subsidized)", train_duration: "8-16 weeks",
+      journey_wage: "$26/hr (~$54k/yr) IF you land",
+      annual_premium: "+$22k/yr IF placed; $0 if no placement",
+      payback_yrs: "Indeterminate (PHANTOM)",
+      local_slots: "~0/yr local (no employers); travel-circuit only", saturation: "PHANTOM",
+      verdict: "Free training that produces a credential with no local employer base. The Big Muddy Solar construction trades go to IBEW/IUOE/LIUNA — NOT NABCEP installers. The CEJA money trained for the wrong credential." },
+    { pathway: "CEJA wind technician (GWO)",
+      train_cost: "$0-2,000 subsidized", train_duration: "12-20 weeks",
+      journey_wage: "$31/hr base + per-diem traveling (~$80-100k all-in)",
+      annual_premium: "+$48-68k IF travel-tolerant",
+      payback_yrs: "<6mo IF travel-circuit accepted",
+      local_slots: "~0/yr local; IA/TX wind belt circuit (low-saturation if travel-tolerant)", saturation: "PHANTOM",
+      verdict: "PHANTOM as local-employment credential; reasonable ROI as travel-pay credential. Reframe cohort outcome from 'local job' to 'regional travel-pay job with predictable home time.'" },
+    // === Viticulture (per operator's scarcity flag) ===
+    { pathway: "Viticulture vineyard manager",
+      train_cost: "$5,000-10,000 (VESTA/Highland Community College AAS)", train_duration: "1-2 years",
+      journey_wage: "$50-80k/yr",                annual_premium: "+$28k/yr",       payback_yrs: "~3mo to 1yr",
+      local_slots: "~12-24 total positions region-wide (1-2 per winery × 12 wineries)", saturation: "EXTREME",
+      verdict: "Pay is real but total positions across the Shawnee Hills AVA region cap at 12-24. New entrants displace incumbents only on retirement / expansion. Don't oversell as reliable destination." },
+    { pathway: "Viticulture winemaker",
+      train_cost: "$20,000-60,000 (UC Davis / Cornell / VESTA AAS bridge)", train_duration: "2-4 years",
+      journey_wage: "$55-90k small ops; $90-150k+ large", annual_premium: "+$58k mid-range", payback_yrs: "~1-2yr",
+      local_slots: "~12 total positions region-wide (1 per winery)", saturation: "EXTREME",
+      verdict: "Same scarcity. Total ~12 positions in the AVA. Most workers train and relocate to larger wine regions (CA, OR, WA) for opportunity." },
+    // === Cannabis (per operator's scarcity flag) ===
+    { pathway: "Cannabis budtender / cultivation tech",
+      train_cost: "Free OJT or JALC Horticulture AA ($5-10k)", train_duration: "0-2 years",
+      journey_wage: "$16-25/hr (~$33-52k/yr)",  annual_premium: "+$1-20k/yr",      payback_yrs: "<6mo",
+      local_slots: "~30-100 region-wide (handful of facilities currently)", saturation: "MED-HIGH",
+      verdict: "Easy entry, low-mid wage. Single-adult LW barely cleared at top of range. Below 1A+2C." },
+    { pathway: "Cannabis cultivation manager",
+      train_cost: "3-5yr OJT + AAS ($5-10k)", train_duration: "5+ years",
+      journey_wage: "Up to $120k/yr",            annual_premium: "+$88k/yr",       payback_yrs: "<6mo",
+      local_slots: "~5-10 total region-wide (1-2 per facility)", saturation: "EXTREME",
+      verdict: "Pay is real but slots are scarce + filled internally or by experienced outside hires. Realistic local pathway tops out at assistant grower for most workers." },
+    { pathway: "Cannabis master grower",
+      train_cost: "5-10yr OJT + degree", train_duration: "10+ years",
+      journey_wage: "$80-150k/yr",               annual_premium: "+$68k/yr",       payback_yrs: "N/A (career-ladder)",
+      local_slots: "~5-10 total region-wide", saturation: "EXTREME",
+      verdict: "Ceiling that exists, not reliable destination. Don't oversell." },
+    // === Childcare (per gateway-constraint analysis) ===
+    { pathway: "Childcare worker / CDA → director ladder",
+      train_cost: "$500-2,000 CDA; $5,000-15,000 AAS ECE; $20,000-40,000 BA",
+      train_duration: "Months to 4 years",
+      journey_wage: "CDA $13-17/hr; AAS $17-22/hr; BA director $40-60k",
+      annual_premium: "BELOW baseline at CDA/AAS; +$8-28k at director",
+      payback_yrs: "Long; Smart Start Workforce Grants offset",
+      local_slots: "Dozens/yr (chronic shortage)", saturation: "LOW",
+      verdict: "Below livable for entry positions; director-level barely family-supporting. Smart Start $90M Workforce Grant pool partially raises floor. Strategic on-ramp, not destination." },
+  ];
+
+  const satTone = (s: string) =>
+    s === "LOW" ? { bg: "oklch(96% 0.04 142)", fg: "oklch(35% 0.18 142)" } :
+    s === "LOW-MED" ? { bg: "oklch(96% 0.04 142)", fg: "oklch(35% 0.18 142)" } :
+    s === "MED" ? { bg: "oklch(97% 0.04 60)", fg: "oklch(40% 0.15 60)" } :
+    s === "MED-HIGH" ? { bg: "oklch(97% 0.04 60)", fg: "oklch(40% 0.15 60)" } :
+    s === "HIGH" ? { bg: "oklch(97% 0.04 60)", fg: "oklch(40% 0.15 60)" } :
+    s === "EXTREME" ? { bg: "oklch(96% 0.05 22)", fg: "oklch(40% 0.20 22)" } :
+    /* PHANTOM */ { bg: "oklch(96% 0.05 22)", fg: "oklch(40% 0.20 22)" };
+
+  return (
+    <section style={{ marginTop: 40 }}>
+      <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+      <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+        Training ROI · cost-of-training vs available-jobs vs wage-payback per pathway
+      </h2>
+      <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 760, lineHeight: 1.55 }}>
+        <strong>The honest ROI question:</strong> for each named training pathway on
+        this page, how many jobs actually exist regionally to absorb credential
+        holders, and how does that compare to training cost + payback at <em>local
+        cost-of-living</em>? The family-supporting wage threshold is necessary but not
+        sufficient — a $100k pathway with only 12 total positions region-wide is
+        fundamentally different from a $50k pathway with hundreds of slots.
+      </div>
+
+      <div style={{ marginBottom: 16, padding: 14, background: "oklch(97% 0.04 60)", border: "1px solid oklch(58% 0.15 60)33", borderLeft: "6px solid oklch(58% 0.15 60)", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "oklch(40% 0.15 60)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          Cost-of-living context for the wage comparisons
+        </div>
+        <p style={{ margin: "0 0 6px 0" }}>
+          Wages in LWA-25 are nominally lower than national averages (BLS Carbondale-Marion MSA May 2023: $26.21/hr mean vs $31.48 national = 17% nominal gap). But cost-of-living in Jackson + Williamson counties is also materially lower than national average. The two largest deltas: housing (~30-40% cheaper than national median) and consumer services. Per <a href="https://www.bea.gov/data/prices-inflation/regional-price-parities-state-and-metro-area" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>BEA Regional Price Parities</a>, the Carbondale-Marion MSA RPP is roughly 85-87% of the national average — meaning <strong>$1 here buys what ~$1.15 buys nationally</strong>.
+        </p>
+        <p style={{ margin: "0 0 6px 0" }}>
+          <strong>What that means for the table below:</strong> the MIT Living Wage thresholds used as the "1A+2C $46.76/hr" benchmark are <em>already</em> Jackson-County-specific and account for local COL. Wages that clear MIT 1A+2C in Jackson Co. are genuinely family-supporting AT JACKSON COUNTY PRICES. A "single-adult LW cleared" verdict in this region means actual local-COL livability, not just a nominal-wage hit.
+        </p>
+        <p style={{ margin: 0 }}>
+          <strong>What the 17% wage gap still means:</strong> regional COL is ~13-15% lower than national, but wages are ~17% lower. <strong>So even after COL adjustment, there's a residual 2-4% real-wage gap</strong> — workers in LWA-25 are slightly worse off in real terms than national averages, not vastly worse off. This residual gap is what the State Employer Wage Benchmark section + the RN wage-gap context above describe structurally.
+        </p>
+      </div>
+
+      <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 720 }}>
+          <thead>
+            <tr style={{ background: "#f0ece1", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em", color: "#5a564d" }}>
+              <th style={{ textAlign: "left", padding: "8px 10px", fontWeight: 600 }}>Pathway</th>
+              <th style={{ textAlign: "left", padding: "8px 10px", fontWeight: 600 }}>Train cost / time</th>
+              <th style={{ textAlign: "left", padding: "8px 10px", fontWeight: 600 }}>Journey wage</th>
+              <th style={{ textAlign: "right", padding: "8px 10px", fontWeight: 600 }}>Payback</th>
+              <th style={{ textAlign: "left", padding: "8px 10px", fontWeight: 600 }}>Local slots / year</th>
+              <th style={{ textAlign: "center", padding: "8px 10px", fontWeight: 600 }}>Saturation</th>
+              <th style={{ textAlign: "left", padding: "8px 10px", fontWeight: 600 }}>Verdict</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => {
+              const s = satTone(r.saturation);
+              return (
+                <tr key={i} style={{ borderTop: i === 0 ? "none" : "1px solid #ebe5d6" }}>
+                  <td style={{ padding: "10px", fontWeight: 600, color: "#1f1d18" }}>{r.pathway}</td>
+                  <td style={{ padding: "10px", color: "#3d3a33" }}>{r.train_cost}<div style={{ color: "#7a756b", fontSize: 11 }}>{r.train_duration}</div></td>
+                  <td style={{ padding: "10px", color: "#3d3a33" }}>{r.journey_wage}<div style={{ color: "#7a756b", fontSize: 11 }}>premium {r.annual_premium}</div></td>
+                  <td style={{ padding: "10px", textAlign: "right", fontWeight: 600 }}>{r.payback_yrs}</td>
+                  <td style={{ padding: "10px", color: "#3d3a33" }}>{r.local_slots}</td>
+                  <td style={{ padding: "10px", textAlign: "center" }}>
+                    <span style={{ background: s.bg, color: s.fg, padding: "3px 8px", borderRadius: 3, fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em" }}>{r.saturation}</span>
+                  </td>
+                  <td style={{ padding: "10px", color: "#3d3a33", fontSize: 11, maxWidth: 280 }}>{r.verdict}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <div style={{ marginTop: 16, padding: 14, background: "oklch(96% 0.04 142)", border: "1px solid oklch(45% 0.16 142)33", borderLeft: "6px solid oklch(45% 0.16 142)", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "oklch(35% 0.18 142)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          What the table tells the workforce board
+        </div>
+        <ul style={{ margin: "0 0 0 18px", padding: 0 }}>
+          <li><strong>Union apprenticeships dominate ROI</strong> (paid training, $0 cost, family-supporting journey wages) BUT their intake is capacity-constrained. Lineworker / Electrician / Pipefitter total ~30-50 apprenticeship slots/yr region-wide. Mantracon pre-apprenticeship investment is highest-leverage where it positions candidates to WIN those slots.</li>
+          <li><strong>RN-ADN at JALC + 1yr local → travel-RN is the highest-dollar 2-year credential</strong> with abundant slots. The system already runs but is under-promoted as a deliberate ladder.</li>
+          <li><strong>Welder + Industrial Maintenance + CDL OTR + IT-remote</strong> form the second tier — reasonable ROI, hundreds-of-slots local + travel/remote expansion.</li>
+          <li><strong>EXTREME-saturation pathways are NOT primary investments</strong>: viticulture top-rung (12-24 total slots region-wide), cannabis top-rung (5-10 slots). Train for these only as second-credential or hobby-to-employment moves, never as primary workforce-board cohort focus.</li>
+          <li><strong>PHANTOM pathways</strong>: CEJA solar installer (no local employer base). Either reframe the cohort outcome explicitly or redirect the CEJA money to credentials where Big Muddy Solar / other regional construction IS hiring (IBEW pre-apprenticeship, IUOE 318, LIUNA 773).</li>
+        </ul>
+      </div>
+
+      <div style={{ marginBottom: 16, fontSize: 11, color: "#7a756b", lineHeight: 1.5 }}>
+        Slot estimates are operator-advisory ranges; verify against Mantracon&apos;s
+        own PIRL outcome data (see the &quot;Mantracon&apos;s own program outcomes&quot;
+        section near the bottom of this page) + employer hiring plans. Wage figures from prior
+        sections of this page (training-demand alignment, travel jobs, viticulture, cannabis).
+        Baseline for &quot;annual premium&quot; calculation is $32,000/yr (~$15.40/hr) — roughly
+        the US median single-earner. MIT 1A+2C livable wage for Jackson County is $97,260/yr
+        ($46.76/hr).
+      </div>
+    </section>
+  );
+}
+
 function ChildcareGatewaySection() {
   return (
     <section style={{ marginTop: 40 }}>
@@ -2302,6 +2545,8 @@ export default async function MantraconPage() {
           <SupplyChainSubawardSection />
 
           <ChildcareGatewaySection />
+
+          <TrainingROISection />
 
           {data.training_alignment && (
             <TrainingAlignmentSection
