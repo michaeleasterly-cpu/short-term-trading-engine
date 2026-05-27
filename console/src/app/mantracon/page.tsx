@@ -826,18 +826,24 @@ function AttractionPipelineSection() {
 
       {/* === University research-anchored programs === */}
       <h3 style={{ fontSize: 18, fontWeight: 600, color: "#1f1d18", margin: "32px 0 8px 0" }}>
-        University research-anchored federal programs · SIU as the bid vehicle
+        University research-anchored federal programs · &quot;Eds and Meds&quot; · SIU as the bid vehicle
       </h3>
       <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 760, lineHeight: 1.55 }}>
         SIU Carbondale is a <strong>Carnegie R1 research university</strong> (top tier of US
         research institutions) — the credential most federal research programs require to
-        even compete. SIU is the bid vehicle through which the region can capture
-        multi-decade, multi-million-dollar federal research investment that <em>creates
-        $80-130k research-staff positions and graduate-student-to-permanent-staff
-        pipelines</em>. These are family-supporting STEM jobs that wouldn&apos;t otherwise
-        land in LWA-25 — and they&apos;re what the &quot;research-anchored&quot; line of the
-        original Anchor Attraction strategy refers to. SIU already wins individual NSF/NIH/
-        USDA grants — the strategic move is to win the BIG center-scale programs.
+        even compete. This puts LWA-25 squarely in the <strong>&quot;Eds and Meds&quot;</strong>
+        category — the playbook that anchored post-industrial-transition Pittsburgh
+        (Carnegie Mellon + UPMC), Cleveland (Case Western + Cleveland Clinic — birthplace of
+        the Evergreen Cooperatives model already cited), Indianapolis (IUPUI + IU Health),
+        and Buffalo (UB + Roswell Park) — to <a href="https://anchors.org/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Anchor Institutions Task Force / anchors.org</a> for the framework.
+        LWA-25&apos;s Eds-and-Meds substrate: SIU + SIU School of Medicine (Springfield) +
+        SIH + Memorial Carbondale + Marion VA + JALC + Rend Lake. That&apos;s a real
+        institutional stack to anchor regional strategy on. SIU is the bid vehicle through
+        which the region can capture multi-decade, multi-million-dollar federal research
+        investment that <em>creates $80-130k research-staff positions and graduate-student-
+        to-permanent-staff pipelines</em>. SIU already wins individual NSF/NIH/USDA grants
+        — the strategic move is to win the BIG center-scale programs <em>using the
+        Eds-and-Meds anchor frame</em>.
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 12 }}>
@@ -1185,6 +1191,19 @@ function AttractionPipelineSection() {
               { url: "https://www.rd.usda.gov/programs-services/business-programs/rural-cooperative-development-grant-program", label: "USDA Rural Cooperative Development Grant" },
             ],
           },
+          {
+            name: "Returning-expat / native-return program — 'Come home to Southern Illinois'",
+            fit: "STRONG FIT",
+            fit_color: "oklch(45% 0.16 142)",
+            what: "Target SIU alumni + Southern Illinois natives who left for college/work in expensive metros. Mid-career relocators with established earning power return for lower COL + family proximity + lifestyle. Brings outside income into the local economy without competing with existing residents for jobs.",
+            why_here: "SIU has ~95k alumni network. Operator's earlier point: Southern Illinois natives who left for college/work face the same SF/NYC/Seattle cost-burden as everyone else; midcareer they're prime relocation targets. Layers cleanly with remote-worker incentive (#1) — native returners are remote-worker incentive's best-fit candidates.",
+            action: "Build alumni-targeted campaign via SIU Alumni Association + LinkedIn export. Estimated cost ~\$15k for the database work + targeted outreach. Pair with the 'Choose Carbondale' $5-10k relocation grant. West Virginia's Ascend WV program (\$12k incentive with native-return preference) and Maine's 'Live &amp; Work in Maine' are the closest precedents.",
+            sources: [
+              { url: "https://ascendwv.com/", label: "Ascend WV — Remote-worker incentive program" },
+              { url: "https://liveandworkinmaine.com/", label: "Live &amp; Work in Maine" },
+              { url: "https://alumni.siu.edu/", label: "SIU Alumni Association" },
+            ],
+          },
         ].map((s, i) => (
           <div key={i} style={{
             background: "white",
@@ -1246,6 +1265,116 @@ function AttractionPipelineSection() {
         </ul>
         <div style={{ fontSize: 12, color: "#5a564d", marginTop: 6 }}>
           DRA money is materially under-applied-for by IL applicants — the political and grant-writing weight historically goes to MS/AR/LA counties. Mantracon partnering with DRA staff (delta.gov contact directory) to coordinate an annual IL-counties SEDAP cohort is the play.
+        </div>
+      </div>
+
+      {/* === Federal infrastructure + reshoring + climate adaptation + foundation capital === */}
+      <h3 style={{ fontSize: 18, fontWeight: 600, color: "#1f1d18", margin: "32px 0 8px 0" }}>
+        Federal infrastructure + reshoring + foundation capital · additional federal &amp; philanthropic levers
+      </h3>
+      <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 760, lineHeight: 1.55 }}>
+        Beyond the data-center / federal-agency / university-research plays, three more
+        federal funding streams + one philanthropic stream are under-leveraged in LWA-25:
+        CHIPS Act + IRA Energy-Communities reshoring; climate-adaptation infrastructure
+        (Mississippi River + Cache River + flood resilience); and place-based foundation
+        capital. Each creates either family-supporting union-construction jobs or
+        federal-grant capacity that doesn&apos;t require federal-program eligibility tests.
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 12 }}>
+        <div style={{ background: "white", border: "1px solid #d8d2c4", borderLeft: "6px solid oklch(45% 0.16 142)", borderRadius: 6, padding: 14 }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: "#1f1d18", marginBottom: 4 }}>CHIPS Act + IRA Energy Communities manufacturing reshoring</div>
+          <div style={{ fontSize: 12, color: "#3d3a33", marginBottom: 5 }}>
+            <strong>What it is:</strong> CHIPS &amp; Science Act ($52B for US semiconductor manufacturing) + IRA §45X Advanced Manufacturing Production Tax Credit
+            + IRA §48 ITC bonus adders for Energy Communities (10pp on top of base 30%).
+          </div>
+          <div style={{ fontSize: 12, color: "#3d3a33", marginBottom: 5 }}>
+            <strong>Why LWA-25 fits:</strong> Franklin and Perry counties are designated
+            IRA Energy Communities tracts (coal-closure status). That's an automatic
+            10pp ITC bonus on top of the base credit for any solar / wind / storage /
+            advanced-manufacturing project sited there. Stranded Baldwin coal-plant
+            interconnect adds the grid-capacity angle. Realistic targets: semiconductor
+            packaging (Wolfspeed Marcy NY precedent — $1.5B CHIPS-supported expansion);
+            polysilicon (Hemlock Semiconductor Saginaw MI — $375M CHIPS award); battery
+            cell / module assembly; EV charging-infrastructure components.
+          </div>
+          <div style={{ fontSize: 12, color: "#3d3a33", marginBottom: 6 }}>
+            <strong>Action:</strong> File site nominations with US Commerce CHIPS Program
+            Office for advanced-packaging + ATP (Advanced Technology Packaging) consortia.
+            Apply for DOE Industrial Demonstrations Program funding on adjacent clean-energy
+            manufacturing. SIU's existing critical-minerals seed grant is a credibility
+            anchor.
+          </div>
+          <div style={{ fontSize: 11, color: "#5a564d" }}>
+            <strong>Sources:</strong>{" "}
+            <a href="https://www.commerce.gov/issues/chips-and-science-act" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>US Commerce CHIPS Program</a> · {" "}
+            <a href="https://www.energy.gov/manufacturing-energy-supply-chains/articles/inflation-reduction-act-energy-community-tax-credit-bonus" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>DOE IRA Energy Community Tax Credit Bonus</a> · {" "}
+            <a href="https://www.irs.gov/credits-deductions/businesses/section-45x-advanced-manufacturing-production-credit" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>IRS §45X Advanced Manufacturing PTC</a>
+          </div>
+        </div>
+
+        <div style={{ background: "white", border: "1px solid #d8d2c4", borderLeft: "6px solid oklch(45% 0.16 142)", borderRadius: 6, padding: 14 }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: "#1f1d18", marginBottom: 4 }}>Climate-adaptation infrastructure · USACE + FEMA + EPA flood-resilience work</div>
+          <div style={{ fontSize: 12, color: "#3d3a33", marginBottom: 5 }}>
+            <strong>What it is:</strong> Federal climate-adaptation appropriations are at
+            record levels post-IIJA. USACE St. Louis District is responsible for the
+            Mississippi River reach along LWA-25's western boundary. FEMA BRIC (Building
+            Resilient Infrastructure and Communities) funds pre-disaster mitigation. EPA
+            Section 319 nonpoint-source funds fund watershed-scale work on Big Muddy +
+            Cache River.
+          </div>
+          <div style={{ fontSize: 12, color: "#3d3a33", marginBottom: 5 }}>
+            <strong>Why LWA-25 fits:</strong> Mississippi River runs along Jackson + Union
+            counties' west edge. Big Muddy + Cache River are major tributaries with
+            documented flood + sediment + habitat issues. Federal climate work in this
+            corridor creates union-construction jobs (IBEW + LIUNA + IUOE) at scale and
+            multi-decade duration. Louisiana&apos;s Coastal Master Plan precedent: $50B+
+            over 50 years funding sustained construction-trades employment.
+          </div>
+          <div style={{ fontSize: 12, color: "#3d3a33", marginBottom: 6 }}>
+            <strong>Action:</strong> Position the city/county as co-applicants on
+            USACE Section 219 (Environmental Infrastructure) projects + FEMA BRIC
+            grants. Partner with The Nature Conservancy IL on Mississippi River
+            initiatives. State leadership through IL Office of Resource Conservation.
+          </div>
+          <div style={{ fontSize: 11, color: "#5a564d" }}>
+            <strong>Sources:</strong>{" "}
+            <a href="https://www.fema.gov/grants/mitigation/building-resilient-infrastructure-communities" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>FEMA BRIC</a> · {" "}
+            <a href="https://www.mvs.usace.army.mil/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>USACE St. Louis District</a> · {" "}
+            <a href="https://www.epa.gov/nps/319-program-grants" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>EPA §319 Nonpoint Source grants</a>
+          </div>
+        </div>
+
+        <div style={{ background: "white", border: "1px solid #d8d2c4", borderLeft: "6px solid oklch(45% 0.16 142)", borderRadius: 6, padding: 14 }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: "#1f1d18", marginBottom: 4 }}>Foundation / philanthropic capital · the non-federal funding lane</div>
+          <div style={{ fontSize: 12, color: "#3d3a33", marginBottom: 5 }}>
+            <strong>What it is:</strong> Major US foundations directly fund regional
+            economic-development planning, capacity-building, and pilot programs.
+            Foundation capital doesn&apos;t require federal-program eligibility tests, has
+            longer time horizons, and is more flexible than government grants.
+          </div>
+          <div style={{ fontSize: 12, color: "#3d3a33", marginBottom: 5 }}>
+            <strong>Why LWA-25 fits:</strong> Walton Family Foundation invests ~$30M/yr in
+            whole-of-river Mississippi work — LWA-25 sits on the river. RWJF Culture of
+            Health Prizes recognize rural communities. Kresge Strong Cities (community
+            development capital + TA). Knight Foundation has rural pilots. Ford Foundation
+            BUILD program provides general-operating support to community-anchor orgs.
+            None of these require a federal-eligibility match.
+          </div>
+          <div style={{ fontSize: 12, color: "#3d3a33", marginBottom: 6 }}>
+            <strong>Action:</strong> Mantracon partner with Carbondale Chamber + SIU
+            Foundation to develop a regional-strategy planning grant proposal — Walton
+            Mississippi work is the most geographically aligned. Targets: $200k-2M planning
+            grants leading to multi-year program funding.
+          </div>
+          <div style={{ fontSize: 11, color: "#5a564d" }}>
+            <strong>Sources:</strong>{" "}
+            <a href="https://www.waltonfamilyfoundation.org/our-work/environment/mississippi-river" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Walton Family Foundation — Mississippi River</a> · {" "}
+            <a href="https://www.rwjf.org/en/grants/funding-opportunities.html" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>RWJF funding opportunities</a> · {" "}
+            <a href="https://kresge.org/our-work/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Kresge Foundation</a> · {" "}
+            <a href="https://knightfoundation.org/communities/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Knight Foundation Communities</a> · {" "}
+            <a href="https://www.fordfoundation.org/work/our-grants/build/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Ford Foundation BUILD</a>
+          </div>
         </div>
       </div>
 
