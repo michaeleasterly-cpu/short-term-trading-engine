@@ -584,7 +584,7 @@ export default async function MarketHealthPage() {
                   <span style={{ color: "#5a564d" }}>— Jackson County seat, same MSA, city-specific federal-awards view.</span>
                 </div>
                 <div>
-                  <a href="/mantracon" style={{ fontWeight: 600 }}>Man-Tra-Con · SIWIB · LWA-25 →</a>{" "}
+                  <a href="/southern-illinois" style={{ fontWeight: 600 }}>Southern Illinois Region (LWA-25, 5-county) →</a>{" "}
                   <span style={{ color: "#5a564d" }}>— Southern Illinois 5-county workforce-board dashboard.</span>
                 </div>
               </div>

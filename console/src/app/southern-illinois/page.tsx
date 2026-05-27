@@ -1,5 +1,5 @@
 /**
- * Public /mantracon page — Man-Tra-Con / SIWIB LWA-25 workforce dashboard.
+ * Public /southern-illinois page — 5-county LWA-25 workforce + economic-development dashboard.
  *
  * 5-county service area (Franklin, Jackson, Jefferson, Perry, Williamson).
  * Headline = labor-force-weighted UR across the LWA. Per-county detail.
@@ -146,7 +146,7 @@ interface IndustryMix {
   source: string;
 }
 
-interface MantraconData {
+interface PageData {
   ts: string;
   indicators: Record<string, { value: number; date: string }>;
   lwa_aggregate: {
@@ -170,7 +170,7 @@ function TrainingROISection() {
   // the local-slot scarcity story operator flagged for cannabis top-rung,
   // viticulture top-rung, and union apprenticeships. Wage estimates pulled
   // from the corresponding training/travel-jobs sections. Slot estimates are
-  // operator-advisory-derived ranges; refine against Mantracon PIRL data.
+  // operator-advisory-derived ranges; refine against the workforce board PIRL data.
   type RoiRow = {
     pathway: string;
     train_cost: string;
@@ -387,7 +387,7 @@ function TrainingROISection() {
           What the table tells the workforce board
         </div>
         <ul style={{ margin: "0 0 0 18px", padding: 0 }}>
-          <li><strong>Union apprenticeships dominate ROI</strong> (paid training, $0 cost, family-supporting journey wages) BUT their intake is capacity-constrained. Lineworker / Electrician / Pipefitter total ~30-50 apprenticeship slots/yr region-wide. Mantracon pre-apprenticeship investment is highest-leverage where it positions candidates to WIN those slots.</li>
+          <li><strong>Union apprenticeships dominate ROI</strong> (paid training, $0 cost, family-supporting journey wages) BUT their intake is capacity-constrained. Lineworker / Electrician / Pipefitter total ~30-50 apprenticeship slots/yr region-wide. workforce-board pre-apprenticeship investment is highest-leverage where it positions candidates to WIN those slots.</li>
           <li><strong>RN-ADN at JALC + 1yr local → travel-RN is the highest-dollar 2-year credential</strong> with abundant slots. The system already runs but is under-promoted as a deliberate ladder.</li>
           <li><strong>Welder + Industrial Maintenance + CDL OTR + IT-remote</strong> form the second tier — reasonable ROI, hundreds-of-slots local + travel/remote expansion.</li>
           <li><strong>EXTREME-saturation pathways are NOT primary investments</strong>: viticulture top-rung (12-24 total slots region-wide), cannabis top-rung (5-10 slots). Train for these only as second-credential or hobby-to-employment moves, never as primary workforce-board cohort focus.</li>
@@ -396,8 +396,8 @@ function TrainingROISection() {
       </div>
 
       <div style={{ marginBottom: 16, fontSize: 11, color: "#7a756b", lineHeight: 1.5 }}>
-        Slot estimates are operator-advisory ranges; verify against Mantracon&apos;s
-        own PIRL outcome data (see the &quot;Mantracon&apos;s own program outcomes&quot;
+        Slot estimates are operator-advisory ranges; verify against the workforce board&apos;s
+        own PIRL outcome data (see the &quot;Workforce-board program outcomes (the accountability question)&quot;
         section near the bottom of this page) + employer hiring plans. Wage figures from prior
         sections of this page (training-demand alignment, travel jobs, viticulture, cannabis).
         Baseline for &quot;annual premium&quot; calculation is $32,000/yr (~$15.40/hr) — roughly
@@ -439,9 +439,9 @@ function ChildcareGatewaySection() {
         <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, padding: 14 }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8 }}>What the workforce board can do</div>
           <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 13, color: "#3d3a33", lineHeight: 1.65 }}>
-            <li><strong>Co-locate childcare with training programs.</strong> Drop-in childcare at JALC / Rend Lake / Mantracon training sites materially lowers the barrier for parents enrolling in 12-24mo credentials.</li>
+            <li><strong>Co-locate childcare with training programs.</strong> Drop-in childcare at JALC / Rend Lake / regional training sites (JALC, Rend Lake, local workforce-board offices) materially lowers the barrier for parents enrolling in 12-24mo credentials.</li>
             <li><strong>Push employer-paired childcare benefits</strong> in CBA / community-engagement framing with major federal-contracting employers. On-site or stipend-based childcare costs the employer $200-400/wk and gains ~$3-5/hr in retained-worker effective wage.</li>
-            <li><strong>Help local childcare providers become Smart Start grantees.</strong> Many small in-home providers in LWA-25 are eligible for the $90M Workforce Grant pool but don&apos;t apply. Technical-assistance pipeline through Mantracon + IDHS.</li>
+            <li><strong>Help local childcare providers become Smart Start grantees.</strong> Many small in-home providers in LWA-25 are eligible for the $90M Workforce Grant pool but don&apos;t apply. Technical-assistance pipeline through the workforce board + IDHS.</li>
             <li><strong>Frame childcare-worker positions as a career on-ramp.</strong> The credential ladder (CDA → Bachelor&apos;s in ECE → director) reaches family-supporting at the upper rungs. Same playbook as CNA → LPN → RN.</li>
           </ul>
         </div>
@@ -880,7 +880,7 @@ function TravelJobsSection() {
         ))}
       </div>
       <div style={{ marginTop: 16, padding: 14, background: "#fef9eb", border: "1px solid #f0d98a", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
-        <strong>The Mantracon / SIWIB strategic gap this fills:</strong> the
+        <strong>The regional workforce-development strategic gap this fills:</strong> the
         existing CEJA wind technician + CEJA solar installer pipelines suffer
         from local-employer scarcity. But the credentials themselves are real and
         valuable on travel-supported work. Reframing the CEJA cohort outcome from
@@ -951,7 +951,7 @@ function AttractionPipelineSection() {
           { factor: "Power cost — Ameren vs Egyptian Electric Cooperative (EECA) head-to-head", grade: "~ MODERATE", note: "Ameren IL published industrial rate ~$0.08-0.09/kWh. EECA does not publish a comparable industrial-class per-kWh tariff in the same machine-readable way (member-coops negotiate large-power deals bespoke; see eeca.coop/member-services/rate-schedules/). Typical rural-coop industrial rates run 1-2¢/kWh below IOU — call it ~$0.06-0.08/kWh expected range, subject to negotiation. EECA's wholesale supplier Southern Illinois Power Cooperative (SIPC) owns coal + natural-gas generation PHYSICALLY LOCATED in Williamson and Washington counties (inside the LWA-25 footprint), plus long-term contracts for IL solar (White County) + IL wind (Paxton). That's a 'local generation for local load' pitch with minimal transmission distance — Northern VA can't claim that. Neither can compete with NoVa $0.06 on a paper-rate basis, but the bespoke-deal latitude + local-generation story plus the IL Data Center Act sales-tax exemption changes the all-in math.", color: "oklch(48% 0.15 60)" },
           { factor: "Federal IRA Energy Communities adder", grade: "✓ STRONG", note: "Franklin and Perry counties are coal-closure tracts. Solar/wind/storage projects sited here get IRA §48 +10pp ITC bonus on top of 30% base. Use for behind-the-meter generation co-located with DC.", color: "oklch(45% 0.16 142)" },
           { factor: "Fiber diversity — the grant-but-no-coverage paradox", grade: "✗ WEAK", note: "Public broadband investment in Southern IL is large and verifiable. Delta Communications dba Clearwave Communications received $31.5M from NTIA's BTOP program + $11M IL state match ($42.5M total) for a 23-county middle-mile network connecting 232 community anchor institutions (NTIA grant filing, ntia.doc.gov). Recent IL state Connect Illinois rounds have added WK&T's $9.8M (Jackson + Union Cos.) and ProTek Communications' $51M (Franklin/Jackson/Johnson/Massac/Williamson/Union Cos.). BEAD adds another $1B+ in IL allocation. Coverage on paper has improved. But data-center-grade fiber diversity is a different problem these grants don't fully solve: hyperscale needs 3+ INDEPENDENT carriers with physically diverse routes; most LWA-25 enterprise-class footprint has 1-2 carriers, not 3+ with route diversity. Carriers present include AT&T, Frontier, Mediacom, Clearwave, WK&T, ProTek. NTIA's original Clearwave grant terms included an open-access interconnection requirement for smaller last-mile providers — small ISP operators who believe these conditions are not being honored should file complaints with the IL Office of Broadband (DCEO) and NTIA. The fix-up paths: (a) audit grant compliance (open-access conditions), (b) IL Century Network (ICN — state-owned middle-mile) as alternative wholesale source, (c) municipal / coop broadband authority creation, (d) IIJA middle-mile grants directed to public or cooperative entities rather than incumbents. This remains the single weakest scorecard line for hyperscale recruitment.", color: "oklch(45% 0.20 22)" },
-          { factor: "Operations talent (200-person ops staff)", grade: "✗ WEAK", note: "SIU produces some IT capacity but no existing data-center workforce concentration. Mantracon + JALC + Rend Lake would need to stand up a DC-ops training program in parallel to any recruitment.", color: "oklch(45% 0.20 22)" },
+          { factor: "Operations talent (200-person ops staff)", grade: "✗ WEAK", note: "SIU produces some IT capacity but no existing data-center workforce concentration. the workforce board + JALC + Rend Lake would need to stand up a DC-ops training program in parallel to any recruitment.", color: "oklch(45% 0.20 22)" },
         ].map((f, i) => (
           <div key={i} style={{ padding: "10px 0", borderTop: i === 0 ? "none" : "1px solid #ebe5d6", display: "grid", gridTemplateColumns: "1fr auto", gap: 12, alignItems: "baseline" }}>
             <div>
@@ -1117,7 +1117,7 @@ function AttractionPipelineSection() {
             funding: "Up to $160M over 10 years (Type-2) · $1M / 2yr Type-1 prep grant",
             what: "NSF&apos;s flagship 'transform a region around a technology specialty' program. 29 semifinalists in the 2025 round. Each Engine builds a research-to-commercialization ecosystem around one key technology area.",
             fit: "SIU&apos;s coal-mine rare-earth extraction work + the broader 'critical minerals from legacy coal infrastructure' theme is exactly the kind of differentiated regional bet NSF wants. Other candidate themes: rural broadband + AI agriculture (with UIUC partnership); Mississippi River corridor environmental sensing.",
-            process: "Need multi-sector regional coalition: SIU + UIUC + JALC + Rend Lake + Mantracon + IL DCEO + at least 3-5 industry partners. Start with the $1M Type-1 prep grant — apply for Type-2 after 24mo coalition-building.",
+            process: "Need multi-sector regional coalition: SIU + UIUC + JALC + Rend Lake + the workforce board + IL DCEO + at least 3-5 industry partners. Start with the $1M Type-1 prep grant — apply for Type-2 after 24mo coalition-building.",
             url: "https://www.nsf.gov/funding/initiatives/regional-innovation-engines",
           },
           {
@@ -1164,7 +1164,7 @@ function AttractionPipelineSection() {
             program: "FAA Air Traffic Collegiate Training Initiative (AT-CTI)",
             funding: "Indirect — graduates feed FAA hiring pipeline at premium pay",
             what: "SIU is an AT-CTI partner school. Graduates skip part of the FAA Academy and go to higher starting pay.",
-            fit: "Underleveraged. The local feed could be much stronger if Mantracon promoted the pathway.",
+            fit: "Underleveraged. The local feed could be much stronger if the workforce board promoted the pathway.",
             process: "Already in place — push enrollment + retention. FAA controller starting salary is $50-75k, journey $130-180k.",
             url: "https://www.faa.gov/about/office_org/headquarters_offices/ahr/job_opportunities/atc_recruitment",
           },
@@ -1258,11 +1258,10 @@ function AttractionPipelineSection() {
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12 }}>
           {[
-            { role: "Vineyard manager", wage: "$50-80k", note: "Larger established vineyards (Owl Creek, Blue Sky, Von Jakob, Pomona). Year-round. Family-supporting at the upper end.", training: "Hands-on apprenticeship + viticulture cert (VESTA / Highland CC) + 3-5yr in field" },
-            { role: "Winemaker / cellar master", wage: "$55-90k (small ops); $90-150k+ (large)", note: "Limited positions — 1-2 per winery. Quality matters more than volume here.", training: "Enology degree (UC Davis, Cornell, MSU, or VESTA AAS pathway) + 5-10yr cellar experience" },
-            { role: "Tasting-room / hospitality manager", wage: "$30-50k", note: "Not family-supporting at the upper end. Year-round at larger operations.", training: "Hospitality background + WSET wine credentials" },
-            { role: "Value-add processing (case-good production, bottling, packaging)", wage: "$20-30/hr ($40-60k)", note: "Borderline family-supporting. Multi-winery shared facility would amortize. This is a real Mantracon project opportunity.", training: "JALC packaging / food-processing program (would need to be created)" },
-            { role: "Agritourism / events ops", wage: "$30-55k", note: "Wedding venues, harvest festivals, multi-winery tour ops. Often owner-operated.", training: "Hospitality + small-business management" },
+            { role: "Vineyard manager", wage: "SCARCE — not a realistic entry path", note: "Only ~12-24 total positions across the entire Shawnee Hills AVA region (1-2 per winery × 12 wineries). New entrants displace incumbents only on retirement / expansion. Wage data omitted to avoid implying this is a reliable destination for someone breaking in cold.", training: "If a slot opens: hands-on apprenticeship + viticulture cert (VESTA / Highland CC) + 3-5yr in field" },
+            { role: "Winemaker / cellar master", wage: "SCARCE — not a realistic entry path", note: "~12 total positions in the entire AVA (1 per winery). Most aspiring winemakers train locally then RELOCATE to CA / OR / WA for opportunity — that's the typical outcome, not local employment. Wage data omitted.", training: "Enology training (VESTA AAS pathway + UC Davis / Cornell bridge) — primarily for export-of-labor, not local placement" },
+            { role: "Value-add processing (bottling / packaging / case-goods)", wage: "$20-30/hr ($40-60k)", note: "The most realistically-accessible higher-wage viticulture-adjacent role IF a multi-winery shared facility gets stood up. Currently does not exist; needs to be built. Real workforce-board project opportunity.", training: "JALC packaging / food-processing program (would need to be created)" },
+            { role: "Tasting-room / hospitality / events", wage: "$14-25/hr (typical hospitality wage)", note: "The realistic-entry positions in viticulture. BELOW family-supporting wage for anyone except single adults. Tier-up via sommelier credentials raises wage ceiling but slots stay limited.", training: "Hospitality background + WSET wine credentials for tier-up" },
           ].map((r, i) => (
             <div key={i} style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, padding: 12 }}>
               <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18" }}>{r.role}</div>
@@ -1283,7 +1282,7 @@ function AttractionPipelineSection() {
           <li><strong>SIU viticulture &amp; enology research center</strong> — UC Davis &amp; Cornell anchor major wine programs that drive both R&amp;D and a steady winemaker talent pipeline. SIU could bid for a USDA Specialty Crop Block Grant ($1-3M) to seed a small program. Would also attract grad-student research labor + faculty.</li>
           <li><strong>USDA SARE + SCBG grants</strong> — Sustainable Agriculture Research and Education + Specialty Crop Block Grant. Both fund small-vineyard improvements, pest research, climate-adaptation work. Apply through IL Dept of Agriculture.</li>
           <li><strong>Wine industry as recruitment lever, not direct anchor</strong> — when pitching data-center execs, federal-agency relocators, or remote workers, the Shawnee Hills experience is a genuine quality-of-life differentiator. Pair the wine trail with Shawnee NF, Crab Orchard NWR, Giant City SP, and the new Amtrak station for the &quot;outdoor-recreation + wine country + Chicago-by-rail&quot; lifestyle pitch.</li>
-          <li><strong>Hospitality-tier training that respects the wage floor</strong> — if Mantracon does CNA-equivalent low-wage training for the wine-tourism industry, the operator&apos;s family-supporting mandate disqualifies it. Better Mantracon play: tier-up training (sommelier WSET 2/3, restaurant management, winery operations) that has a higher wage ceiling.</li>
+          <li><strong>Hospitality-tier training that respects the wage floor</strong> — if the workforce board does CNA-equivalent low-wage training for the wine-tourism industry, the operator&apos;s family-supporting mandate disqualifies it. Better workforce-board play: tier-up training (sommelier WSET 2/3, restaurant management, winery operations) that has a higher wage ceiling.</li>
         </ul>
       </div>
 
@@ -1327,7 +1326,7 @@ function AttractionPipelineSection() {
         <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>
           Why this matters for the workforce board
         </div>
-        Cannabis is a real, growing employer in Illinois — the broader hemp-derived cannabinoid industry employs ~13,500 workers statewide and pays ~\$545M annually in wages (<a href="https://themarijuanaherald.com/2025/12/illinois-hemp-industry-supports-nearly-13500-jobs-and-2-7-billion-in-revenue-analysis-finds/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>The Marijuana Herald, Dec 2025</a>). The local share is small but real. The credential ladder from JALC Horticulture AA → cultivation work → grower management is one of the few <em>2-year-degree</em> paths that ends in a family-supporting wage. The action items: (1) confirm whether JALC could add cannabis-specific elective modules under the IL Community College Cannabis Vocational Pilot framework, (2) when a new local facility is approved (e.g., the 2023 SuiteGreens LLC craft-grow in Carbondale, per <a href="https://thesouthern.com/news/local/company-hopes-to-bring-cannabis-craft-grow-facility-dispensary-to-carbondale/article_7e4b5fd2-3c60-526e-8c62-5a42ca995135.html" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>The Southern Illinoisan</a>), Mantracon coordinates pre-hire training pipelines.
+        Cannabis is a real, growing employer in Illinois — the broader hemp-derived cannabinoid industry employs ~13,500 workers statewide and pays ~\$545M annually in wages (<a href="https://themarijuanaherald.com/2025/12/illinois-hemp-industry-supports-nearly-13500-jobs-and-2-7-billion-in-revenue-analysis-finds/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>The Marijuana Herald, Dec 2025</a>). The local share is small but real. The credential ladder from JALC Horticulture AA → cultivation work → grower management is one of the few <em>2-year-degree</em> paths that ends in a family-supporting wage. The action items: (1) confirm whether JALC could add cannabis-specific elective modules under the IL Community College Cannabis Vocational Pilot framework, (2) when a new local facility is approved (e.g., the 2023 SuiteGreens LLC craft-grow in Carbondale, per <a href="https://thesouthern.com/news/local/company-hopes-to-bring-cannabis-craft-grow-facility-dispensary-to-carbondale/article_7e4b5fd2-3c60-526e-8c62-5a42ca995135.html" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>The Southern Illinoisan</a>), the workforce board coordinates pre-hire training pipelines.
       </div>
 
       <div style={{ marginBottom: 16 }}>
@@ -1339,9 +1338,9 @@ function AttractionPipelineSection() {
             { role: "Budtender / dispensary associate", wage: "$17-22/hr (~$31-40k/yr)", note: "Most numerous position; doesn't clear single-adult living wage. Tips supplement.", verdict: "BELOW LIVABLE" },
             { role: "Cultivation technician / trimmer", wage: "$16-25/hr (~$33-52k/yr)", note: "Production floor work. Borderline single-adult; below family.", verdict: "BELOW LIVABLE → SINGLE ADULT" },
             { role: "Assistant grower", wage: "Up to $55k/yr", note: "1-2yr experience; some autonomy.", verdict: "SINGLE ADULT ONLY" },
-            { role: "Cultivation manager", wage: "Up to $120k/yr", note: "Larger operations only. Strong family-supporting wage.", verdict: "FAMILY-SUPPORTING" },
-            { role: "Master grower", wage: "$80-150k/yr", note: "1-2 per facility. 5-10 yr experience required.", verdict: "FAMILY-SUPPORTING" },
-            { role: "Compliance / extraction tech", wage: "$45-80k/yr", note: "Technical credential roles. Family-supporting at upper end.", verdict: "SINGLE → FAMILY" },
+            { role: "Cultivation manager", wage: "SCARCE — not a realistic entry path", note: "Only 1-2 per facility × handful of LWA-25 facilities = ~5-10 slots region-wide. Filled by existing workers + outside experienced hires. Wage data omitted to avoid implying this is a reliable destination.", verdict: "EXTREME SATURATION" },
+            { role: "Master grower", wage: "SCARCE — not a realistic entry path", note: "1-2 per facility × handful of facilities = ~5-10 slots region-wide. 5-10yr experience required + positions are not local-promotion-from-budtender in practice. Wage data omitted.", verdict: "EXTREME SATURATION" },
+            { role: "Compliance / extraction tech", wage: "$45-80k/yr", note: "Realistically more accessible than top-rung grower positions, but still limited slots (1-3 per facility). Technical credential roles.", verdict: "SINGLE → FAMILY · MED-HIGH saturation" },
           ].map((r, i) => (
             <div key={i} style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, padding: 12 }}>
               <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18" }}>{r.role}</div>
@@ -1362,9 +1361,9 @@ function AttractionPipelineSection() {
         </div>
         <ul style={{ margin: "0 0 0 18px", padding: 0 }}>
           <li><strong>Community-college cannabis vocational program</strong> — IL Dept of Ag licenses Community College Cannabis Vocational Pilot Programs (<a href="https://cannabis.illinois.gov/agencies/cannabis-idoa.html" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>cannabis.illinois.gov</a>). JALC or Rend Lake could apply. Cannabis cultivation + horticulture credentials + business operations.</li>
-          <li><strong>Help local applicants navigate the next license rounds</strong> — Mantracon partnership with the IL Cannabis Business Development Fund (<a href="https://illinoisanswers.org/2023/10/19/illinois-cannabis-business-development-fund-craft-growers/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Illinois Answers Project</a> reporting on barriers). The Cannabis Equity Program offers loans + technical assistance to social-equity applicants.</li>
+          <li><strong>Help local applicants navigate the next license rounds</strong> — the workforce-board partnership with the IL Cannabis Business Development Fund (<a href="https://illinoisanswers.org/2023/10/19/illinois-cannabis-business-development-fund-craft-growers/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Illinois Answers Project</a> reporting on barriers). The Cannabis Equity Program offers loans + technical assistance to social-equity applicants.</li>
           <li><strong>Local employment requirements in zoning approvals</strong> — when Carbondale or Marion approves a cannabis facility, the approval can include local-hiring + livable-wage commitments. Use the next SuiteGreens-style approval as precedent.</li>
-          <li><strong>Adjacent industries</strong> — cannabis processing equipment, packaging, lab testing, security, compliance consulting all have higher-wage opportunity ceilings than retail/cultivation labor. Mantracon could front-load training for these niches.</li>
+          <li><strong>Adjacent industries</strong> — cannabis processing equipment, packaging, lab testing, security, compliance consulting all have higher-wage opportunity ceilings than retail/cultivation labor. the workforce board could front-load training for these niches.</li>
           <li><strong>Honest size-up</strong> — cannabis is a real industry but a small one for jobs at scale. IL hemp-derived cannabinoid industry employs ~13,500 statewide (<a href="https://themarijuanaherald.com/2025/12/illinois-hemp-industry-supports-nearly-13500-jobs-and-2-7-billion-in-revenue-analysis-finds/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>The Marijuana Herald, Dec 2025</a>); LWA-25 share is small. Don&apos;t pitch cannabis as primary jobs anchor; pitch it as supplementary economic activity that should be allowed and supported on its own terms.</li>
         </ul>
       </div>
@@ -1405,7 +1404,7 @@ function AttractionPipelineSection() {
             fit_color: "oklch(45% 0.16 142)",
             what: "Match SIU graduates with regional employers + first-year housing assistance + employer-funded student-loan-payment match. Address rural brain drain at the source.",
             why_here: "SIU graduates ~3,000+ students/year. Per the Demographics section, Carbondale's population dropped 15.6% in 5 years driven largely by SIU enrollment + graduate-retention failure. Retaining even 10% of annual graduates at family-supporting wages materially offsets the population trend.",
-            action: "Partnership between SIU Career Services + Mantracon + Carbondale + Marion Chambers. Build employer-graduate matching platform + offer relocation-style $5K stipend conditional on 2-year regional commitment. Apply for EDA Recompete grant.",
+            action: "Partnership between SIU Career Services + the workforce board + Carbondale + Marion Chambers. Build employer-graduate matching platform + offer relocation-style $5K stipend conditional on 2-year regional commitment. Apply for EDA Recompete grant.",
             sources: [
               { url: "https://www.eda.gov/funding/programs/recompete", label: "EDA Recompete Pilot (rural workforce program)" },
               { url: "https://siu.edu/", label: "Southern Illinois University Carbondale" },
@@ -1429,7 +1428,7 @@ function AttractionPipelineSection() {
             fit_color: "oklch(45% 0.16 142)",
             what: "35-50yo professionals leaving expensive metros seeking lower-COL location + career pivot. They self-fund a credential (coding bootcamp, IBEW pre-apprenticeship, RN program at JALC) while consuming local services and bringing remaining savings into the local economy.",
             why_here: "JALC offers the credential infrastructure (Agriculture-Horticulture AA, RN ADN, electrical, welding programs). IBEW Local 702 takes pre-apprentices. Living-cost gap vs SF/NYC/Seattle covers 12-24 months of credential training with no income.",
-            action: "Marketing partnership between JALC + Mantracon + Chamber: 'Reset your career in Carbondale.' Target 30-50 enrollees/year. Bundle with the remote-worker incentive when graduates take remote jobs post-credential.",
+            action: "Marketing partnership between JALC + the workforce board + Chamber: 'Reset your career in Carbondale.' Target 30-50 enrollees/year. Bundle with the remote-worker incentive when graduates take remote jobs post-credential.",
             sources: [
               { url: "https://www.jalc.edu/", label: "John A. Logan College programs" },
               { url: "https://ibew702.org/", label: "IBEW Local 702 (West Frankfort)" },
@@ -1546,7 +1545,7 @@ function AttractionPipelineSection() {
           <li><strong>Delta Workforce Innovation</strong> — competitive grants for regional training partnerships.</li>
         </ul>
         <div style={{ fontSize: 12, color: "#5a564d", marginTop: 6 }}>
-          DRA money is materially under-applied-for by IL applicants — the political and grant-writing weight historically goes to MS/AR/LA counties. Mantracon partnering with DRA staff (delta.gov contact directory) to coordinate an annual IL-counties SEDAP cohort is the play.
+          DRA money is materially under-applied-for by IL applicants — the political and grant-writing weight historically goes to MS/AR/LA counties. the workforce board partnering with DRA staff (delta.gov contact directory) to coordinate an annual IL-counties SEDAP cohort is the play.
         </div>
       </div>
 
@@ -1644,7 +1643,7 @@ function AttractionPipelineSection() {
             None of these require a federal-eligibility match.
           </div>
           <div style={{ fontSize: 12, color: "#3d3a33", marginBottom: 6 }}>
-            <strong>Action:</strong> Mantracon partner with Carbondale Chamber + SIU
+            <strong>Action:</strong> the workforce-development organizations + Carbondale Chamber partner with Carbondale Chamber + SIU
             Foundation to develop a regional-strategy planning grant proposal — Walton
             Mississippi work is the most geographically aligned. Targets: $200k-2M planning
             grants leading to multi-year program funding.
@@ -1720,16 +1719,16 @@ function PirlOutcomesSection() {
     <section style={{ marginTop: 40 }}>
       <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
       <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
-        Mantracon&apos;s own program outcomes · what the board should be publishing about itself
+        Workforce-board program outcomes (the accountability question) · what the board should be publishing about itself
       </h2>
       <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 760, lineHeight: 1.55 }}>
         This page critiques training-program effectiveness against employer demand
         and against the family-supporting wage threshold. The same accountability
-        standard applies to Mantracon&apos;s own performance. Under WIOA, Mantracon
+        standard applies to the workforce board&apos;s own performance. Under WIOA, the workforce board
         files Title I program data quarterly with USDOL Employment &amp; Training
         Administration via the <a href="https://www.dol.gov/agencies/eta/performance/wips" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>WIPS portal</a> in the
         Participant Individual Record Layout (PIRL) format. These metrics are not
-        currently published on the public Mantracon website. They should be.
+        currently published on the public workforce-board website. They should be.
       </div>
 
       <div style={{ marginBottom: 16, padding: 14, background: "white", border: "1px solid #d8d2c4", borderRadius: 6 }}>
@@ -1763,7 +1762,7 @@ function PirlOutcomesSection() {
         </ul>
         <p style={{ margin: "8px 0 0 0" }}>
           The standard the page applies to CEJA solar (PHANTOM PIPELINE) and CNA
-          ladders (BELOW LIVABLE WAGE) is the same standard Mantracon should apply
+          ladders (BELOW LIVABLE WAGE) is the same standard the workforce board should apply
           to its own roster. Honest measurement, including the inconvenient outcomes,
           is what makes a workforce board credible to fund.
         </p>
@@ -1807,7 +1806,7 @@ function SupplyChainSubawardSection() {
       </div>
 
       <div style={{ marginBottom: 16, padding: 14, background: "#fef9eb", border: "1px solid #f0d98a", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
-        <strong>Action ladder:</strong> Mantracon + Marion Chamber + Southern Illinois Business Alliance pull GD-OTS subaward export quarterly → identify out-of-region subs by NAICS → match against local-firm capability + SBA certification status → broker introductions between primes&apos; procurement teams and local firms in the same NAICS lane. This is the practical CBA-precedent move the page&apos;s federal-money-concentration section calls for — and it&apos;s how Smith Hafeli grew from a small SDVOSB-set-aside firm to a $11.9M-24-month local presence on the same Marion-area federal pipeline.
+        <strong>Action ladder:</strong> the workforce board + Marion Chamber + Southern Illinois Business Alliance pull GD-OTS subaward export quarterly → identify out-of-region subs by NAICS → match against local-firm capability + SBA certification status → broker introductions between primes&apos; procurement teams and local firms in the same NAICS lane. This is the practical CBA-precedent move the page&apos;s federal-money-concentration section calls for — and it&apos;s how Smith Hafeli grew from a small SDVOSB-set-aside firm to a $11.9M-24-month local presence on the same Marion-area federal pipeline.
       </div>
       <div style={{ marginBottom: 16, fontSize: 11, color: "#7a756b", lineHeight: 1.5 }}>
         Sources: <a href="https://www.usaspending.gov/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>USAspending.gov</a> subaward data; <a href="https://www.sba.gov/federal-contracting/contracting-assistance-programs/hubzone-program" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>SBA HUBZone Program</a>; <a href="https://www.sba.gov/federal-contracting/contracting-assistance-programs/8a-business-development-program" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>SBA 8(a) Business Development Program</a>; IL DCEO Industrial Supply Directory.
@@ -2034,7 +2033,7 @@ function FederalConcentrationSection({ tr }: { tr: TopRecipientsBlock }) {
             certified <em>local</em> SDVOSBs to absorb the demand.
           </div>
           <div style={{ marginBottom: 4 }}>
-            <strong>What Mantracon / SIWIB can do about it:</strong>
+            <strong>What the workforce board / the regional workforce board can do about it:</strong>
           </div>
           <ul style={{ margin: "0 0 0 18px", padding: 0 }}>
             <li>Stand up an &quot;SDVOSB certification on-ramp&quot; with the regional{" "}
@@ -2057,7 +2056,7 @@ function FederalConcentrationSection({ tr }: { tr: TopRecipientsBlock }) {
         </div>
         <ul style={{ margin: "0 0 0 18px", padding: 0 }}>
           <li><strong>Community Benefit Agreement (CBA)</strong> — when a single recipient captures the majority of federal dollars in a region but employs only a fraction of local labor, the workforce board has standing to negotiate hiring commitments, apprenticeship slots, and local supplier-development. Precedents: Intel Ohio, Amazon HQ2 negotiations, Foxconn Wisconsin (revised).</li>
-          <li><strong>Apprenticeship pipeline</strong> — federal contractors with prevailing-wage requirements are natural anchors for registered apprenticeships. Partner with the dominant recipient on a Mantracon-hosted pre-apprenticeship for the skill ladders they consume (machinist, electrician, industrial maintenance, quality tech).</li>
+          <li><strong>Apprenticeship pipeline</strong> — federal contractors with prevailing-wage requirements are natural anchors for registered apprenticeships. Partner with the dominant recipient on a workforce-board-hosted pre-apprenticeship for the skill ladders they consume (machinist, electrician, industrial maintenance, quality tech).</li>
           <li><strong>Tier-2 supplier development</strong> — large primes use out-of-region subcontractors. Identify which work could be done by HUBZone-certified local firms (Franklin/Perry/parts-of-Jackson qualify) and broker the relationships.</li>
           <li><strong>Federal contracting set-asides</strong> — the more local firms that show up in this list, the more federal money stays in the regional payroll. SBA HUBZone + 8(a) + WOSB certifications are the on-ramp.</li>
         </ul>
@@ -2153,11 +2152,11 @@ function LaborTruthSection({ lt }: { lt: LaborTruth }) {
   );
 }
 
-async function fetchData(): Promise<MantraconData | null> {
+async function fetchData(): Promise<PageData | null> {
   try {
     const res = await fetch(`${API_BASE}/api/public/mantracon`, { cache: "no-store" });
     if (!res.ok) return null;
-    return (await res.json()) as MantraconData;
+    return (await res.json()) as PageData;
   } catch {
     return null;
   }
@@ -2208,7 +2207,7 @@ const COUNTY_LABELS: Record<string, string> = {
   williamson: "Williamson (Marion, Herrin, Carterville)",
 };
 
-function CountyTable({ d }: { d: MantraconData }) {
+function CountyTable({ d }: { d: PageData }) {
   const counties = ["jackson", "franklin", "jefferson", "perry", "williamson"];
   return (
     <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "hidden" }}>
@@ -2484,7 +2483,7 @@ function BusinessLeadsSection({ b }: { b: BusinessOps }) {
   );
 }
 
-export default async function MantraconPage() {
+export default async function SouthernIllinoisPage() {
   const data = await fetchData();
   if (!data) {
     return (
@@ -2511,7 +2510,7 @@ export default async function MantraconPage() {
   return (
     <html lang="en">
       <head>
-        <title>Man-Tra-Con · SIWIB · LWA-25 Workforce Dashboard</title>
+        <title>Southern Illinois Region · Workforce + Economic Development Dashboard</title>
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
         <style>{`
@@ -2528,7 +2527,7 @@ export default async function MantraconPage() {
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src="/logo-icon.svg" alt="Packet Void Labs" width={28} height={28} />
             <div style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: "0.08em", color: "#8a857c" }}>
-              Man-Tra-Con · SIWIB · LWA-25 Workforce Dashboard
+              Southern Illinois Region · Workforce + Economic Development Dashboard
             </div>
           </div>
           <h1 style={{ fontSize: 44, fontWeight: 600, lineHeight: 1.05, margin: "8px 0 8px 0", color: TONE_COLOR[tone] }}>
@@ -2687,7 +2686,7 @@ export default async function MantraconPage() {
                 },
                 {
                   title: "CEJA clean-energy alignment",
-                  body: "Man-Tra-Con's $2.3M CEJA grant trains residents for clean-energy jobs. Cross-reference EPA / DOE / USDA Rural Energy awards above against the credentialing pipeline — the graduates need somewhere to land.",
+                  body: "The regional $2.3M CEJA grant trains residents for clean-energy jobs. Cross-reference EPA / DOE / USDA Rural Energy awards above against the credentialing pipeline — the graduates need somewhere to land.",
                 },
                 {
                   title: "Coordinate with city pages",
@@ -2720,7 +2719,7 @@ export default async function MantraconPage() {
             <br /><br />
             <strong>Coverage:</strong> LWA-25 = Franklin, Jackson, Jefferson, Perry,
             Williamson. This is the Southern Illinois Workforce Development Board
-            (SIWIB) service area as administered by Man-Tra-Con Corp.,
+            (the regional workforce-development board) service area as administered by the local workforce-development organization,
             3117 Civic Circle Boulevard, Suite B, Marion, IL 62959.
             <br /><br />
             <strong>Caveats:</strong> Monthly BLS LAUS series are 1-2 months lagged.

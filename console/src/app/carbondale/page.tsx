@@ -518,8 +518,8 @@ function CrossLinkFooter() {
         <span style={{ color: "#5a564d" }}>— Jackson County seat, 8 mi west; same MSA, city-specific federal awards.</span>
       </div>
       <div style={{ marginBottom: 6 }}>
-        <a href="/mantracon" style={{ fontWeight: 600 }}>Man-Tra-Con · SIWIB · LWA-25 →</a>{" "}
-        <span style={{ color: "#5a564d" }}>— 5-county workforce-board view for partnering with the SIWIB on training-to-jobs.</span>
+        <a href="/southern-illinois" style={{ fontWeight: 600 }}>Southern Illinois Region (LWA-25, 5-county) →</a>{" "}
+        <span style={{ color: "#5a564d" }}>— regional workforce + economic-development strategic view.</span>
       </div>
       <div>
         <a href="/market" style={{ fontWeight: 600 }}>US Market Health →</a>{" "}

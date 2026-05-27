@@ -769,7 +769,7 @@ export default async function MurphysboroPage() {
               <span style={{ color: "#5a564d" }}>— same Jackson County / MSA substrate, framed for city BD work.</span>
             </div>
             <div style={{ marginBottom: 6 }}>
-              <a href="/mantracon" style={{ fontWeight: 600 }}>Man-Tra-Con · SIWIB · LWA-25 →</a>{" "}
+              <a href="/southern-illinois" style={{ fontWeight: 600 }}>Southern Illinois Region (LWA-25, 5-county) →</a>{" "}
               <span style={{ color: "#5a564d" }}>— 5-county workforce-board view (Franklin, Jackson, Jefferson, Perry, Williamson) with training-pipeline alignment.</span>
             </div>
             <div>
