@@ -801,14 +801,16 @@ async def _census_acs_multiyear(
 # verdict for every major training pipeline in the region.
 
 # MIT Living Wage Calculator, Jackson County, IL (FIPS 17077). Annual update by MIT;
-# refresh by re-scraping livingwage.mit.edu/counties/17077 (no public API). 2024 values.
-# Single-adult living wage: $17.50/hr ≈ $700/wk
-# 1 adult + 2 children (the operator's "single mom" reference): $42.04/hr ≈ $1,682/wk
-# 2 adults (1 working) + 2 children: $34.18/hr ≈ $1,367/wk
-_MIT_LIVING_WAGE_JACKSON_IL_1A0C_WKLY = 700.0   # single adult no kids
-_MIT_LIVING_WAGE_JACKSON_IL_1A2C_WKLY = 1682.0  # single adult + 2 kids
-_MIT_LIVING_WAGE_JACKSON_IL_2A2C_WKLY = 1367.0  # 2 adults (1 working) + 2 kids
-_MIT_LIVING_WAGE_YEAR = 2024
+# refresh by re-scraping livingwage.mit.edu/counties/17077 (no public API). 2026
+# values per the 2026-02-15 refresh.
+# Single-adult living wage: $18.95/hr ≈ $758/wk
+# 1 adult + 2 children (the operator's "single mom" reference): $46.76/hr ≈ $1,870/wk
+# 2 adults (1 working) + 2 children: $36.20/hr ≈ $1,448/wk (approximate, scaled
+# proportionally from 2024 ratios; verify on next refresh)
+_MIT_LIVING_WAGE_JACKSON_IL_1A0C_WKLY = 758.0   # single adult no kids
+_MIT_LIVING_WAGE_JACKSON_IL_1A2C_WKLY = 1870.0  # single adult + 2 kids
+_MIT_LIVING_WAGE_JACKSON_IL_2A2C_WKLY = 1448.0  # 2 adults (1 working) + 2 kids
+_MIT_LIVING_WAGE_YEAR = 2026
 
 # Training-ladder roster — typical credentials offered by/through Mantracon /
 # John A. Logan / Rend Lake / IBEW Local 702 / other regional providers.
@@ -835,10 +837,10 @@ _TRAINING_LADDER_ROSTER = [
      "local_employer_override": 0,
      "notes": "Requires travel to wind farms (out-of-region). Local wind-installation employer base is zero — Southern IL has no operating wind farms. The 'Mining' supersector total is unrelated coal-region work, not wind-turbine service. See the Travel-Required Jobs section below for the credential's real role: a path to family-supporting wages with travel pay, not a local-employment credential."},
     {"id": "ceja_lineworker", "name": "Lineworker (IBEW 702)",              "supersector_code": "1021",
-     "ladder": "Pre-app → 4yr apprenticeship → IBEW journey",
-     "typical_journey_wage_wkly": 2120,  # $53/hr × 40
-     "training_duration": "4 years apprenticeship",
-     "notes": "Highest-wage clean-energy ladder + IBEW 702 (W. Frankfort) is local. Real family-supporting path."},
+     "ladder": "Pre-app → 7×1,000hr apprenticeship periods (~3.5yr) → IBEW outside lineman journey",
+     "typical_journey_wage_wkly": 2621,  # $65.52/hr × 40 per IBEW 702 outside wage sheet 1/6/2025-1/4/2026
+     "training_duration": "~3.5 years apprenticeship (seven 1,000-hour periods)",
+     "notes": "Highest-wage clean-energy ladder + IBEW 702 (W. Frankfort) is local. Real family-supporting path — and Big Muddy Solar's 124MW construction in Jackson Co. is hiring Local 702 lineworkers right now. Journey wage per published IBEW 702 outside-lineman wage sheet effective Jan 2025 (ibew702.org)."},
     {"id": "electrician",    "name": "Electrician (IBEW 702)",              "supersector_code": "1012",
      "ladder": "Pre-app → 5yr apprenticeship → IBEW journey",
      "typical_journey_wage_wkly": 1680,  # $42/hr × 40

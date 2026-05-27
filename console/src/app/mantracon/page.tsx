@@ -534,7 +534,7 @@ function AttractionPipelineSection() {
           { factor: "Stranded coal-plant interconnect", grade: "✓ STRONG", note: "Baldwin retirement = ~1,200MW of substation capacity in MISO-South. Ameren IL serves the area. Hyperscalers (and AI-training operators) value stranded-grid sites.", color: "oklch(45% 0.16 142)" },
           { factor: "Power utility — Egyptian Electric as Ameren alternative", grade: "✓ STRONG", note: "Egyptian Electric Cooperative Association (EECA, Murphysboro HQ) serves portions of 10 counties in the LWA-25 footprint and can be approached as an alternative to investor-owned Ameren for industrial-scale power purchase. Member-owned coops typically structure more flexible industrial rates than IOUs. For 100MW+ data-center loads, the wholesale supply comes from EECA's G&T parent (Southern Illinois Power Cooperative) + the MISO market — but EECA is the negotiation counterparty for retail-scale arrangements. The TVA + local-distribution-coop model served Google's Chattanooga DC.", color: "oklch(45% 0.16 142)" },
           { factor: "Local renewable supply pipeline", grade: "✓ EMERGING", note: "Arevon Energy's 124 MW Big Muddy Solar Project (Jackson County, commercial operation end of 2026, $200M private investment) is utility-scale solar feeding the local grid. For data-center recruitment, this is a concrete answer to the 'green PPA?' question — both Ameren-served and EECA-served sites can structure direct or virtual PPAs against Big Muddy generation.", color: "oklch(45% 0.16 142)" },
-          { factor: "IL Data Center Investments Act", grade: "✓ STRONG", note: "Public Act 101-0031 — 20-year sales-tax exemption on equipment + property-tax abatement eligible, certified by DCEO. File certification before any RFP arrives.", color: "oklch(45% 0.16 142)" },
+          { factor: "IL Data Center Investments Act", grade: "✓ STRONG", note: "Public Act 101-0031 — 20-year sales-tax exemption on equipment + property-tax abatement eligible. Eligibility floor per IL DCEO program page (dceo.illinois.gov/expandrelocate/incentives/datacenters.html): $250M minimum capital investment over 60 months, minimum 20 FTE at 120% of COUNTY MEDIAN WAGE, carbon-neutral OR green-building certification required. The 120%-of-county-median-wage requirement is a workforce-board WIN — any DC operator must pay above median to qualify. Underserved-area projects unlock an additional 20% construction-wage tax credit. File DCEO certification before any RFP arrives.", color: "oklch(45% 0.16 142)" },
           { factor: "Water (cooling)", grade: "✓ STRONG", note: "Crab Orchard NWR, Kinkaid Lake, Mississippi River access. Sufficient for all but the largest installations.", color: "oklch(45% 0.16 142)" },
           { factor: "Land cost", grade: "✓ STRONG", note: "Undervalued vs Northern Virginia, Phoenix, Columbus.", color: "oklch(45% 0.16 142)" },
           { factor: "Power cost — Ameren vs Egyptian Electric Cooperative (EECA) head-to-head", grade: "~ MODERATE", note: "Ameren IL published industrial rate ~$0.08-0.09/kWh. EECA does not publish a comparable industrial-class per-kWh tariff in the same machine-readable way (member-coops negotiate large-power deals bespoke; see eeca.coop/member-services/rate-schedules/). Typical rural-coop industrial rates run 1-2¢/kWh below IOU — call it ~$0.06-0.08/kWh expected range, subject to negotiation. EECA's wholesale supplier Southern Illinois Power Cooperative (SIPC) owns coal + natural-gas generation PHYSICALLY LOCATED in Williamson and Washington counties (inside the LWA-25 footprint), plus long-term contracts for IL solar (White County) + IL wind (Paxton). That's a 'local generation for local load' pitch with minimal transmission distance — Northern VA can't claim that. Neither can compete with NoVa $0.06 on a paper-rate basis, but the bespoke-deal latitude + local-generation story plus the IL Data Center Act sales-tax exemption changes the all-in math.", color: "oklch(48% 0.15 60)" },
@@ -1081,6 +1081,27 @@ function AttractionPipelineSection() {
         they complement it.
       </div>
 
+      {/* Delta Regional Authority — federal regional commission covering LWA-25 */}
+      <div style={{ marginTop: 20, padding: 16, background: "oklch(96% 0.04 142)", border: "1px solid oklch(45% 0.16 142)33", borderLeft: "6px solid oklch(45% 0.16 142)", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "oklch(35% 0.18 142)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          Delta Regional Authority — federal regional commission covering 4 of 5 LWA-25 counties
+        </div>
+        <div style={{ marginBottom: 10 }}>
+          The Delta Regional Authority (<a href="https://dra.gov/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>dra.gov</a>) is a federal-state partnership covering the eight-state Mississippi River Delta region. <strong>Franklin, Jackson, Perry, and Williamson counties are DRA-eligible</strong> (Jefferson County is NOT in the DRA territory — verify county-by-county on the <a href="https://dra.gov/states/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>DRA states page</a>). Note: Illinois is NOT in ARC (Appalachian Regional Commission), so don&apos;t pursue ARC POWER — DRA is the analogue.
+        </div>
+        <div style={{ marginBottom: 6 }}><strong>Active DRA programs to stack:</strong></div>
+        <ul style={{ margin: "0 0 10px 18px", padding: 0 }}>
+          <li><strong>SEDAP (States&apos; Economic Development Assistance Program)</strong> — workforce + infrastructure + small-business. Annual NOFA; typically $1-2M per state allocation cycle.</li>
+          <li><strong>Delta Workforce</strong> — workforce-training capacity for DRA-eligible communities.</li>
+          <li><strong>Delta Doctors / J-1 visa waiver program</strong> — recruits foreign-trained physicians to underserved DRA counties. Direct lever for Marion VA + SIH + Memorial primary-care shortage.</li>
+          <li><strong>Healthy Delta Communities</strong> — community-health investment.</li>
+          <li><strong>Delta Workforce Innovation</strong> — competitive grants for regional training partnerships.</li>
+        </ul>
+        <div style={{ fontSize: 12, color: "#5a564d", marginTop: 6 }}>
+          DRA money is materially under-applied-for by IL applicants — the political and grant-writing weight historically goes to MS/AR/LA counties. Mantracon partnering with DRA staff (delta.gov contact directory) to coordinate an annual IL-counties SEDAP cohort is the play.
+        </div>
+      </div>
+
       {/* IL programs to file under */}
       <div style={{ marginTop: 20, padding: 16, background: "#fef9eb", border: "1px solid #f0d98a", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
         <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>
@@ -1121,12 +1142,17 @@ function FederalConcentrationSection({ tr }: { tr: TopRecipientsBlock }) {
         Where the federal money actually goes · community-leverage view
       </h2>
       <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 760, lineHeight: 1.55 }}>
-        Total federal contract dollars flowing into the 5-county LWA over the
-        last {tr.lookback_months} months: <strong>{formatM(tr.total_dollars)}</strong>.
-        Place-of-performance filter — these are firms doing the work locally, regardless of
-        where they&apos;re headquartered. The asymmetry between federal-dollar flow and
-        local-job creation is what gives the workforce board real CBA / apprenticeship /
-        supplier-development leverage with the top recipients.
+        Total federal contract obligations with place-of-performance in the 5-county
+        LWA over the last {tr.lookback_months} months: <strong>{formatM(tr.total_dollars)}</strong>.
+        Concentration on a single recipient is a natural consequence of how the data
+        flows: ammunition manufacturing contracts are large dollar-per-job by industry
+        nature, and one Marion-based facility happens to be the work locale for most
+        of that spend. This is <em>not</em> a statement that the local economy depends on
+        one company — QCEW shows roughly 77,000 covered jobs distributed across 11
+        NAICS supersectors. It IS a statement that the federal-contracting channel
+        most active in the region runs primarily through one operator, which gives
+        the workforce board a concentrated point of engagement for CBA / apprenticeship
+        / supplier-development conversations.
       </div>
 
       {/* Concentration headline */}
