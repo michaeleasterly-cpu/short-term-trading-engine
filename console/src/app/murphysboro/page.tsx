@@ -83,6 +83,23 @@ interface MurphysboroData {
   demographics_trend?: DemographicsTrend;
 }
 
+const TREND_GOOD_UP = new Set(["population", "median_household_income"]);
+const TREND_GOOD_DOWN = new Set(["poverty_rate_families", "acs_unemployment_rate"]);
+
+function trendTone(key: string, pct_change: number): { color: string; bg: string } {
+  if (TREND_GOOD_UP.has(key)) {
+    return pct_change > 0
+      ? { color: "oklch(40% 0.16 142)", bg: "oklch(96% 0.04 142)" }
+      : { color: "oklch(40% 0.20 22)", bg: "oklch(96% 0.05 22)" };
+  }
+  if (TREND_GOOD_DOWN.has(key)) {
+    return pct_change < 0
+      ? { color: "oklch(40% 0.16 142)", bg: "oklch(96% 0.04 142)" }
+      : { color: "oklch(40% 0.20 22)", bg: "oklch(96% 0.05 22)" };
+  }
+  return { color: "#3d3a33", bg: "#f0ece1" };
+}
+
 function DemographicsSection({ d, cityShortName, trend }: { d: CityDemographics; cityShortName: string; trend?: DemographicsTrend }) {
   if (!d.population) return null;
   const fmtPct = (v: number | null) => v == null ? "—" : `${v.toFixed(1)}%`;
@@ -96,8 +113,9 @@ function DemographicsSection({ d, cityShortName, trend }: { d: CityDemographics;
     const display = PP_VARS.has(key)
       ? `${dl.abs_change > 0 ? "+" : ""}${dl.abs_change.toFixed(1)}pp vs ${priorYear}`
       : `${dl.pct_change > 0 ? "+" : ""}${dl.pct_change.toFixed(1)}% vs ${priorYear}`;
+    const tone = trendTone(key, dl.pct_change);
     return (
-      <div style={{ fontSize: 11, color: "#5a564d", marginTop: 6, fontWeight: 500 }}>{display}</div>
+      <div style={{ fontSize: 12, color: tone.color, background: tone.bg, padding: "2px 6px", borderRadius: 3, marginTop: 8, fontWeight: 600, display: "inline-block" }}>{display}</div>
     );
   };
 
@@ -111,7 +129,14 @@ function DemographicsSection({ d, cityShortName, trend }: { d: CityDemographics;
     { key: "median_home_value",       label: "Median home value",                   value: fmtMoneyL(d.median_home_value), sub: "owner-occupied" },
     { key: "median_gross_rent",       label: "Median gross rent",                   value: fmtMoneyL(d.median_gross_rent) },
     { key: "pct_owner_occupied",      label: "% owner-occupied",                    value: fmtPct(d.pct_owner_occupied), sub: d.pct_renter_occupied != null ? `${d.pct_renter_occupied.toFixed(1)}% renter` : undefined },
-    { key: "mean_commute_minutes",    label: "Mean commute time",                   value: d.mean_commute_minutes != null ? `${d.mean_commute_minutes.toFixed(0)} min` : "—", sub: "one-way" },
+    { key: "mean_commute_minutes",    label: "Mean commute time",                   value: d.mean_commute_minutes != null ? `${Math.round(d.mean_commute_minutes)} min` : "—", sub: "one-way" },
+  ];
+
+  const headlineKeys: Array<[string, string, string]> = [
+    ["population",              "Population",          "city headcount"],
+    ["median_household_income", "Median HH income",    "per family unit"],
+    ["poverty_rate_families",   "Family poverty",      "of families"],
+    ["acs_unemployment_rate",   "ACS unemployment",    "ages 25+"],
   ];
 
   return (
@@ -122,10 +147,37 @@ function DemographicsSection({ d, cityShortName, trend }: { d: CityDemographics;
       </h2>
       <div style={{ fontSize: 14, color: "#5a564d", marginBottom: 16, maxWidth: 720 }}>
         Census American Community Survey 5-year estimates for the {cityShortName}
-        municipality (not the broader county). Trend tags compare the latest
-        snapshot to the {priorYear ?? "prior"} ACS5 release — the direction of
-        travel matters more than any single point in time.
+        municipality (not the broader county).
       </div>
+
+      {trend?.deltas && priorYear != null && (
+        <div style={{ marginBottom: 24 }}>
+          <h3 style={{ fontSize: 15, fontWeight: 600, color: "#1f1d18", margin: "0 0 4px 0", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+            Direction of travel · {priorYear} → {d.year}
+          </h3>
+          <div style={{ fontSize: 13, color: "#5a564d", marginBottom: 12, maxWidth: 720 }}>
+            How {cityShortName} has changed since the prior Census ACS5 release. Green = improvement, red = deterioration, grey = direction-agnostic.
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
+            {headlineKeys.map(([key, label, sub]) => {
+              const dl = trend.deltas[key];
+              if (!dl) return null;
+              const isPP = PP_VARS.has(key);
+              const display = isPP
+                ? `${dl.abs_change > 0 ? "+" : ""}${dl.abs_change.toFixed(1)}pp`
+                : `${dl.pct_change > 0 ? "+" : ""}${dl.pct_change.toFixed(1)}%`;
+              const tone = trendTone(key, dl.pct_change);
+              return (
+                <div key={key} style={{ background: tone.bg, border: `1px solid ${tone.color}33`, borderRadius: 6, padding: 14 }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: tone.color, marginBottom: 4 }}>{label}</div>
+                  <div style={{ fontSize: 28, fontWeight: 600, color: tone.color, lineHeight: 1.05 }}>{display}</div>
+                  <div style={{ fontSize: 12, color: "#5a564d", marginTop: 4 }}>{sub}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 16 }}>
         {stats.map((s, i) => (
           <div key={i} style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, padding: 14 }}>
