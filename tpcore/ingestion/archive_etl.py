@@ -183,19 +183,20 @@ async def archive_first_load_bars(
             validator=_bars_validator,
         )
     archive_path = archive_result.path
-    if not isinstance(archive_path, Path):
-        # S3 backend returns a URI string; bail with a structured
-        # error rather than try to checksum a remote object — the
-        # archive-first invariant needs a local file we can hash.
-        # The R3 substrate (object-storage backend) needs its own
-        # manifest helper; tracked but out of P1 scope.
-        raise NotImplementedError(
-            "archive_first_load_bars requires LocalFSBackend; "
-            f"got non-Path archive_path={archive_path!r} — "
-            "S3/object-storage manifest path is the R3 follow-up"
-        )
 
-    checksum = compute_sha256(archive_path)
+    # Backend-agnostic checksum (2026-05-27 R3/S3 fix): write_archive
+    # caches the sha256 of the gzipped body on the result, so we no
+    # longer need a local Path to checksum from. Falls back to the
+    # legacy compute_sha256(path) read for unit-test fakes that
+    # don't populate sha256 on their ArchiveWriteResult.
+    checksum = archive_result.sha256
+    if checksum is None:
+        if not isinstance(archive_path, Path):
+            raise RuntimeError(
+                "archive_first_load_bars: write_archive returned no sha256 "
+                f"AND non-Path archive_path={archive_path!r} — cannot checksum"
+            )
+        checksum = compute_sha256(archive_path)
     manifest_id = await create_archived_row(
         pool,
         source=source,
@@ -219,7 +220,20 @@ async def archive_first_load_bars(
     try:
         from tpcore.data.ingest_alpaca_bars import stage_then_promote_bars
 
-        csv_rows = _read_archive_csv(archive_path)
+        # Backend-agnostic CSV read. Local-FS path keeps reading from
+        # disk (preserves the archive-as-substrate invariant — a
+        # clobbered file is what the ETL must see, NOT the in-memory
+        # input list). S3 backend has no local file we can re-open;
+        # fall back to the body bytes write_archive cached.
+        if isinstance(archive_path, Path):
+            csv_rows = _read_archive_csv(archive_path)
+        elif archive_result.body is not None:
+            csv_rows = _read_archive_csv_from_bytes(archive_result.body)
+        else:
+            raise RuntimeError(
+                "archive_first_load_bars: non-Path archive_path="
+                f"{archive_path!r} AND no body bytes — cannot read archive"
+            )
         by_ticker: dict[str, list[dict]] = defaultdict(list)
         for r in csv_rows:
             t = r.get("ticker", "").strip()
