@@ -54,7 +54,23 @@ interface TrainingAlignment {
   source: string;
 }
 
-interface TopRecipient { name: string; amount: number; share_pct: number; alias_count: number }
+interface TopRecipient {
+  name: string;
+  amount: number;
+  share_pct: number;
+  alias_count: number;
+  sba_status?: string;
+  location_tag?: string;
+  founder_note?: string;
+  source_url?: string;
+}
+interface SdvosbSummary {
+  count: number;
+  local_count: number;
+  out_of_region_count: number;
+  total_dollars: number;
+  total_share_pct: number;
+}
 interface TopRecipientsBlock {
   recipients: TopRecipient[];
   total_dollars: number;
@@ -62,7 +78,20 @@ interface TopRecipientsBlock {
   top1_share: number;
   top3_share: number;
   concentration_label: string;
+  sdvosb_summary?: SdvosbSummary;
   source: string;
+}
+
+function sbaBadge(status: string | undefined): { label: string; bg: string; fg: string } {
+  switch (status) {
+    case "SDVOSB":      return { label: "SDVOSB",       bg: "oklch(96% 0.04 142)", fg: "oklch(35% 0.18 142)" };
+    case "WOSB":        return { label: "WOSB",         bg: "oklch(96% 0.04 142)", fg: "oklch(35% 0.18 142)" };
+    case "HUBZONE":     return { label: "HUBZone",      bg: "oklch(96% 0.04 142)", fg: "oklch(35% 0.18 142)" };
+    case "8A":          return { label: "8(a)",         bg: "oklch(96% 0.04 142)", fg: "oklch(35% 0.18 142)" };
+    case "LARGE":       return { label: "Large biz",    bg: "#f0ece1",              fg: "#5a564d" };
+    case "UNVERIFIED":  return { label: "Verify @SAM.gov", bg: "oklch(97% 0.04 60)", fg: "oklch(40% 0.15 60)" };
+    default:            return { label: "—",            bg: "#f0ece1",              fg: "#5a564d" };
+  }
 }
 
 interface IndustryRow {
@@ -408,22 +437,35 @@ function FederalConcentrationSection({ tr }: { tr: TopRecipientsBlock }) {
         </div>
       </div>
 
-      {/* Recipient table with share bars */}
+      {/* Recipient table with share bars + SBA status badges */}
       <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "hidden" }}>
         {tr.recipients.map((r, i) => {
           const barPct = (r.amount / topAmt) * 100;
           const flag = i === 0 && r.share_pct >= 70;
+          const badge = sbaBadge(r.sba_status);
           return (
             <div key={r.name} style={{ borderTop: i === 0 ? "none" : "1px solid #ebe5d6", padding: "12px 14px" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12 }}>
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 14, fontWeight: 600, color: flag ? "oklch(45% 0.20 22)" : "#1f1d18" }}>
-                    {r.name}
-                    {flag && <span style={{ fontSize: 10, marginLeft: 8, padding: "2px 6px", background: "oklch(45% 0.20 22)", color: "white", borderRadius: 3, textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 700 }}>DOMINANT</span>}
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 14, fontWeight: 600, color: flag ? "oklch(45% 0.20 22)" : "#1f1d18" }}>{r.name}</span>
+                    {flag && <span style={{ fontSize: 10, padding: "2px 6px", background: "oklch(45% 0.20 22)", color: "white", borderRadius: 3, textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 700 }}>DOMINANT</span>}
+                    {r.sba_status && r.sba_status !== "UNCLASSIFIED" && (
+                      <span style={{ fontSize: 10, padding: "2px 6px", background: badge.bg, color: badge.fg, borderRadius: 3, textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 700, border: `1px solid ${badge.fg}33` }}>
+                        {badge.label}
+                      </span>
+                    )}
                   </div>
-                  <div style={{ fontSize: 11, color: "#7a756b", marginTop: 2 }}>
+                  <div style={{ fontSize: 11, color: "#7a756b", marginTop: 4 }}>
                     {r.share_pct.toFixed(1)}% of all federal contract $ in LWA-25
+                    {r.location_tag && <span> · {r.location_tag}</span>}
+                    {r.founder_note && <span> · {r.founder_note}</span>}
                   </div>
+                  {r.source_url && (
+                    <div style={{ fontSize: 11, marginTop: 4 }}>
+                      <a href={r.source_url} target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>certification source →</a>
+                    </div>
+                  )}
                 </div>
                 <div style={{ fontSize: 15, fontWeight: 600, color: "#1f5f8f", whiteSpace: "nowrap" }}>{formatM(r.amount)}</div>
               </div>
@@ -434,6 +476,47 @@ function FederalConcentrationSection({ tr }: { tr: TopRecipientsBlock }) {
           );
         })}
       </div>
+
+      {/* SDVOSB strategic callout — the Marion VA Veterans First story */}
+      {tr.sdvosb_summary && tr.sdvosb_summary.count > 0 && (
+        <div style={{ marginTop: 20, padding: 16, background: "oklch(96% 0.04 142)", border: "1px solid oklch(45% 0.16 142)33", borderLeft: "6px solid oklch(45% 0.16 142)", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "oklch(35% 0.18 142)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+            The Marion VA Veterans First contracting story
+          </div>
+          <div style={{ marginBottom: 10 }}>
+            <strong>{tr.sdvosb_summary.count} of the top recipients</strong> in LWA-25 are
+            confirmed Service-Disabled Veteran-Owned Small Businesses (SDVOSBs), capturing{" "}
+            <strong>{formatM(tr.sdvosb_summary.total_dollars)}</strong> in federal contracts
+            ({tr.sdvosb_summary.total_share_pct.toFixed(1)}% of regional total). Marion VA Medical
+            Center&apos;s Veterans First Contracting Program is the single biggest non-DoD
+            federal procurement channel in the region — and it&apos;s the highest-value SBA
+            certification to pursue for any local firm wanting to win this work.
+          </div>
+          <div style={{ marginBottom: 10 }}>
+            <strong style={{ color: "oklch(35% 0.18 22)" }}>The asymmetry:</strong> only{" "}
+            <strong>{tr.sdvosb_summary.local_count} of {tr.sdvosb_summary.count}</strong> are
+            local to Southern Illinois — the other{" "}
+            <strong>{tr.sdvosb_summary.out_of_region_count}</strong> are headquartered in
+            Florida, Kentucky, and North Carolina. The set-aside money is flowing, but to
+            <em> out-of-region</em> veteran firms because the region doesn&apos;t have enough
+            certified <em>local</em> SDVOSBs to absorb the demand.
+          </div>
+          <div style={{ marginBottom: 4 }}>
+            <strong>What Mantracon / SIWIB can do about it:</strong>
+          </div>
+          <ul style={{ margin: "0 0 0 18px", padding: 0 }}>
+            <li>Stand up an &quot;SDVOSB certification on-ramp&quot; with the regional{" "}
+              <a href="https://www.sba.gov/local-assistance/find/?type=Veterans%20Business%20Outreach%20Center" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Veterans Business Outreach Center (VBOC)</a>{" "}
+              — help local veterans apply for SBA SDVOSB certification + bid for Marion VA work
+            </li>
+            <li>Partner with{" "}
+              <a href="https://www.sba.gov/federal-contracting/contracting-assistance-programs/sba-mentor-protege-program" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>SBA Mentor-Protégé Program</a>{" "}
+              — pair the existing out-of-region SDVOSBs (Above Group, Jett&apos;s, SDV Office) with local protégés so the work stays here
+            </li>
+            <li>Smith Hafeli is the proof-of-concept: a local Marion-headquartered SDVOSB winning $11.9M in 24 months. There&apos;s no reason 5-10 more local SDVOSBs couldn&apos;t exist with the right certification support.</li>
+          </ul>
+        </div>
+      )}
 
       {/* Community leverage callout */}
       <div style={{ marginTop: 20, padding: 16, background: "#fef9eb", border: "1px solid #f0d98a", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>

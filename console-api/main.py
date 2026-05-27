@@ -1564,9 +1564,52 @@ async def _usaspending_top_recipients(
     ]
     items.sort(key=lambda x: -x["amount"])
 
+    # Enrich each recipient with SBA classification + location from a web-researched
+    # lookup table. USAspending's "Type of Set Aside" field reflects the CONTRACT
+    # set-aside type, NOT the recipient's SBA certification status — recipients can
+    # be SDVOSBs winning open competition. Maintained manually; verify by checking
+    # the recipient's website / SAM.gov / veteranownedbusiness.com / DSBS.
+    KNOWN_SBA_STATUS: dict[str, dict] = {
+        # 4 confirmed SDVOSBs in the LWA-25 top recipient list (web-sourced 2026-05-27)
+        "SMITH HAFELI":              {"sba_status": "SDVOSB",       "location_tag": "LOCAL · Marion IL",       "founder_note": "USAF Col. Lance Hafeli",        "source_url": "https://smith-hafeli.com/about-us/"},
+        "SDV OFFICE":                {"sba_status": "SDVOSB",       "location_tag": "OUT-OF-REGION · Fletcher NC", "founder_note": "Two USMC officers",          "source_url": "https://sdvosystems.com/contracts/"},
+        "JETT":                      {"sba_status": "SDVOSB",       "location_tag": "OUT-OF-REGION · Paducah KY", "founder_note": "Jeffrey Jett (USMC veteran)", "source_url": "https://www.veteranownedbusiness.com/business/33768/jetts-specialty-contracting"},
+        "ABOVE GROUP":               {"sba_status": "SDVOSB",       "location_tag": "OUT-OF-REGION · Melbourne FL", "founder_note": "Founded by service-disabled veterans", "source_url": "https://www.abovegroupinc.com/"},
+        # 3 confirmed large businesses (no SBA set-aside applies)
+        "NAPHCARE":                  {"sba_status": "LARGE",        "location_tag": "OUT-OF-REGION · national",   "founder_note": "$483M revenue, largest BOP healthcare TPA", "source_url": "https://www.naphcare.com/about"},
+        "CDM FEDERAL":               {"sba_status": "LARGE",        "location_tag": "OUT-OF-REGION · 131 offices", "founder_note": "CDM Smith subsidiary, ~5,000 employees", "source_url": "https://en.wikipedia.org/wiki/CDM_Smith"},
+        "ILLINOIS POWER MARKETING":  {"sba_status": "LARGE",        "location_tag": "OUT-OF-REGION · utility",    "founder_note": "Dynegy / Vistra subsidiary",  "source_url": ""},
+        # Joint ventures + unverified — flag for SAM.gov manual check
+        "AOD & RBT":                 {"sba_status": "UNVERIFIED",   "location_tag": "JV — verify at SAM.gov",     "founder_note": "JV structure suggests SBA mentor-protégé", "source_url": ""},
+        "FFE - HEAPY":               {"sba_status": "UNVERIFIED",   "location_tag": "JV with large eng firm",     "founder_note": "HEAPY is large; FFE may be small partner", "source_url": ""},
+        "LAKE CONTRACTING":          {"sba_status": "UNVERIFIED",   "location_tag": "regional contractor",        "founder_note": "Small regional, no SDVOSB/HUBZone marker found", "source_url": ""},
+    }
+
+    def _lookup_sba(rec_name: str) -> dict:
+        n = rec_name.upper()
+        for key, val in KNOWN_SBA_STATUS.items():
+            if key in n:
+                return val
+        return {"sba_status": "UNCLASSIFIED", "location_tag": "", "founder_note": "", "source_url": ""}
+
+    for x in items:
+        x.update(_lookup_sba(x["name"]))
+
     total = sum(x["amount"] for x in items)
     for x in items:
         x["share_pct"] = round((x["amount"] / total * 100), 1) if total else 0.0
+
+    # Set-aside-aware summary stats
+    sdvosb_items = [x for x in items if x.get("sba_status") == "SDVOSB"]
+    sdvosb_total = sum(x["amount"] for x in sdvosb_items)
+    local_sdvosb_count = sum(1 for x in sdvosb_items if "LOCAL" in (x.get("location_tag") or ""))
+    sdvosb_summary = {
+        "count": len(sdvosb_items),
+        "local_count": local_sdvosb_count,
+        "out_of_region_count": len(sdvosb_items) - local_sdvosb_count,
+        "total_dollars": sdvosb_total,
+        "total_share_pct": round((sdvosb_total / total * 100), 1) if total else 0.0,
+    }
 
     # Concentration metric — HHI-style + top-1 share
     top1_share = items[0]["share_pct"] if items else 0
@@ -1588,12 +1631,14 @@ async def _usaspending_top_recipients(
         "top1_share": top1_share,
         "top3_share": top3_share,
         "concentration_label": concentration_label,
+        "sdvosb_summary": sdvosb_summary,
         "county_fips": county_fips,
         "source": (
             "USAspending.gov spending_by_category/recipient. Recipients are deduplicated "
-            "across name variants (punctuation differences) before aggregation. "
-            "Place-of-performance filter — these are the firms doing the work in the "
-            "selected counties, not necessarily headquartered locally."
+            "across name variants (punctuation differences) before aggregation. SBA "
+            "set-aside classification is from a manually-maintained lookup table sourced "
+            "to each recipient's website / SAM.gov / veteranownedbusiness.com — verify any "
+            "specific classification at SAM.gov before acting on it."
         ),
     }
     _USA_CACHE[cache_key] = (now, out)
