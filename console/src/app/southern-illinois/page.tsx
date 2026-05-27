@@ -1760,15 +1760,116 @@ function PirlOutcomesSection() {
       </div>
 
       <div style={{ marginBottom: 16, padding: 14, background: "white", border: "1px solid #d8d2c4", borderRadius: 6 }}>
-        <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8 }}>The 6 federally-mandated WIOA Title I outcome measures (PIRL)</div>
+        <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8 }}>The 5 federally-mandated WIOA Title I outcome measures (LWIA-level)</div>
         <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 13, color: "#3d3a33", lineHeight: 1.65 }}>
-          <li><strong>Employment Rate Q2 post-exit</strong> — % of participants employed in 2nd quarter after exiting program.</li>
-          <li><strong>Employment Rate Q4 post-exit</strong> — same, 4th quarter (durability of placement).</li>
-          <li><strong>Median Earnings Q2 post-exit</strong> — dollar level (compare against MIT Living Wage thresholds on this page).</li>
-          <li><strong>Credential Attainment Rate</strong> — % of program participants earning a recognized credential within 1 year of exit.</li>
+          <li><strong>Employment Rate 2nd Quarter after Exit</strong> — % of participants employed in 2nd quarter after exiting program.</li>
+          <li><strong>Employment Rate 4th Quarter after Exit</strong> — same, 4th quarter (durability of placement).</li>
+          <li><strong>Median Earnings 2nd Quarter after Exit</strong> — dollar level (compare against MIT Living Wage thresholds).</li>
+          <li><strong>Credential Attainment within 4 Quarters after Exit</strong> — % of program participants earning a recognized credential within 1 year of exit.</li>
           <li><strong>Measurable Skill Gains</strong> — % of participants meeting interim skill-gain benchmarks during program.</li>
-          <li><strong>Effectiveness in Serving Employers</strong> — repeat-business + employer-penetration rate.</li>
         </ul>
+        <div style={{ marginTop: 8, fontSize: 11, color: "#7a756b" }}>
+          A 6th statewide-level measure — <strong>Effectiveness in Serving Employers</strong> (repeat-business + employer-penetration) — is tracked at state level but not in LWIA-level breakouts.
+        </div>
+      </div>
+
+      <div style={{ marginBottom: 16, padding: 14, background: "oklch(96% 0.05 22)", border: "1px solid oklch(45% 0.20 22)33", borderLeft: "6px solid oklch(45% 0.20 22)", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "oklch(35% 0.22 22)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          What the LWIA-25 PY24 targets actually say about wage outcomes
+        </div>
+        <p style={{ margin: "0 0 8px 0" }}>
+          The PY24 IL Annual Statewide Performance Report Narrative publishes <strong>LWIA-25
+          specific negotiated targets</strong> for each Title I program. Cross-referencing
+          against the MIT Living Wage Jackson Co. thresholds elsewhere on this page reveals
+          the structural truth:
+        </p>
+        <div style={{ background: "white", border: "1px solid oklch(45% 0.20 22)33", borderRadius: 4, overflow: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 600 }}>
+            <thead>
+              <tr style={{ background: "oklch(96% 0.05 22)", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em", color: "oklch(35% 0.22 22)" }}>
+                <th style={{ textAlign: "left", padding: "8px 10px", fontWeight: 600 }}>Indicator</th>
+                <th style={{ textAlign: "right", padding: "8px 10px", fontWeight: 600 }}>Adult</th>
+                <th style={{ textAlign: "right", padding: "8px 10px", fontWeight: 600 }}>Dislocated Worker</th>
+                <th style={{ textAlign: "right", padding: "8px 10px", fontWeight: 600 }}>Youth</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr style={{ borderTop: "1px solid oklch(45% 0.20 22)33" }}>
+                <td style={{ padding: "8px 10px", fontWeight: 600 }}>Employment Rate Q2</td>
+                <td style={{ padding: "8px 10px", textAlign: "right" }}>75.0%</td>
+                <td style={{ padding: "8px 10px", textAlign: "right" }}>82.5%</td>
+                <td style={{ padding: "8px 10px", textAlign: "right" }}>67.0%</td>
+              </tr>
+              <tr style={{ borderTop: "1px solid oklch(45% 0.20 22)33" }}>
+                <td style={{ padding: "8px 10px", fontWeight: 600 }}>Employment Rate Q4</td>
+                <td style={{ padding: "8px 10px", textAlign: "right" }}>76.0%</td>
+                <td style={{ padding: "8px 10px", textAlign: "right" }}>82.0%</td>
+                <td style={{ padding: "8px 10px", textAlign: "right" }}>70.0%</td>
+              </tr>
+              <tr style={{ borderTop: "1px solid oklch(45% 0.20 22)33", background: "oklch(94% 0.06 22)" }}>
+                <td style={{ padding: "8px 10px", fontWeight: 700, color: "oklch(35% 0.22 22)" }}>Median Earnings Q2 (per-quarter)</td>
+                <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700, color: "oklch(35% 0.22 22)" }}>$9,500</td>
+                <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700, color: "oklch(35% 0.22 22)" }}>$9,400</td>
+                <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700, color: "oklch(35% 0.22 22)" }}>$5,000</td>
+              </tr>
+              <tr style={{ borderTop: "1px solid oklch(45% 0.20 22)33", background: "oklch(94% 0.06 22)" }}>
+                <td style={{ padding: "8px 10px", color: "oklch(40% 0.20 22)" }}>↳ Annualized</td>
+                <td style={{ padding: "8px 10px", textAlign: "right", color: "oklch(40% 0.20 22)" }}>~$38,000 / ~$18.27/hr</td>
+                <td style={{ padding: "8px 10px", textAlign: "right", color: "oklch(40% 0.20 22)" }}>~$37,600 / ~$18.08/hr</td>
+                <td style={{ padding: "8px 10px", textAlign: "right", color: "oklch(40% 0.20 22)" }}>~$20,000 / ~$9.62/hr</td>
+              </tr>
+              <tr style={{ borderTop: "1px solid oklch(45% 0.20 22)33" }}>
+                <td style={{ padding: "8px 10px", fontWeight: 600 }}>Credential Attainment (4Q)</td>
+                <td style={{ padding: "8px 10px", textAlign: "right" }}>74.5%</td>
+                <td style={{ padding: "8px 10px", textAlign: "right" }}>73.0%</td>
+                <td style={{ padding: "8px 10px", textAlign: "right" }}>65.0%</td>
+              </tr>
+              <tr style={{ borderTop: "1px solid oklch(45% 0.20 22)33" }}>
+                <td style={{ padding: "8px 10px", fontWeight: 600 }}>Measurable Skill Gains</td>
+                <td style={{ padding: "8px 10px", textAlign: "right" }}>72.5%</td>
+                <td style={{ padding: "8px 10px", textAlign: "right" }}>68.0%</td>
+                <td style={{ padding: "8px 10px", textAlign: "right" }}>75.0%</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p style={{ margin: "12px 0 0 0", fontWeight: 600 }}>
+          The negotiated TARGET for median Q2 earnings — what the local board AGREED TO
+          DELIVER, not what they exceeded — annualizes to ~$18/hr for Adult + Dislocated
+          Worker exiters and ~$9.62/hr for Youth.
+        </p>
+        <p style={{ margin: "8px 0 0 0" }}>
+          MIT Living Wage Jackson County (2026): single adult = $18.95/hr · 1 adult + 2
+          children family-supporting = $46.76/hr. <strong>The LWIA-25 negotiated targets
+          place exiters at-or-just-below single-adult living wage; the Youth target is
+          less than half of single-adult LW.</strong> This isn&apos;t a critique of
+          execution — it&apos;s a statement about what the system was designed to
+          produce. Raising those negotiated targets is a state-level conversation
+          (DCEO + the State Workforce Innovation Board) about what &quot;successful&quot;
+          workforce-program completion should actually mean in terms of livable wages.
+        </p>
+        <p style={{ margin: "8px 0 0 0", fontSize: 11, color: "#7a756b" }}>
+          Source: <a href="https://dceo.illinois.gov/content/dam/soi/en/web/dceo/aboutdceo/reportsrequiredbystatute/illinois-wioa-annual-narrative-report-py24-usdol.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>IL DCEO PY24 WIOA Annual Statewide Performance Report Narrative</a>, p. 14-17 (LWIA-level Adult / Dislocated Worker / Youth negotiated-target tables).
+        </p>
+      </div>
+
+      <div style={{ marginBottom: 16, padding: 14, background: "oklch(97% 0.04 60)", border: "1px solid oklch(58% 0.15 60)33", borderLeft: "6px solid oklch(58% 0.15 60)", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "oklch(40% 0.15 60)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          Where to view PIRL outcomes by program year + LWIA
+        </div>
+        <p style={{ margin: 0 }}>
+          The PY24 report (p. 14) confirms: <strong>a new WIOA Title I Participant
+          Dashboard was launched as part of the WIOA Performance &amp; Transparency
+          dashboard.</strong> Per the report&apos;s own language: &quot;LWIBs, Title I
+          Director, Performance Managers and other stakeholders will have the ability
+          to view participant data, enrollment information and outcomes to better
+          assess the effectiveness of their programs. Data has been extracted from the
+          Participant Individual Record Layout (PIRL) from Program Years 2017 through
+          2023.&quot; Public-facing entry point:{" "}
+          <a href="https://www.illinoisworknet.com/WIOA/Pages/PerformanceTransparency.aspx" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>
+            illinoisworknet.com/WIOA/Pages/PerformanceTransparency.aspx
+          </a>.
+        </p>
       </div>
 
       <div style={{ marginBottom: 16, padding: 14, background: "oklch(96% 0.04 142)", border: "1px solid oklch(45% 0.16 142)33", borderLeft: "6px solid oklch(45% 0.16 142)", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
