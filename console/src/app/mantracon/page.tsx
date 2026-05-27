@@ -179,8 +179,9 @@ function ChildcareGatewaySection() {
         <strong>Childcare cost is what makes most training ladders fail the 1A+2C test by
         design.</strong> Until single-parent or two-earner-with-children households can
         secure affordable, quality childcare, the family-supporting wage bar is structurally
-        hard to clear for anyone except journey-level union trades and master-grower /
-        cultivation-manager roles. This is the gateway constraint — not the training credentials.
+        hard to clear for anyone except journey-level union trades — which are themselves
+        gated by multi-year apprenticeships and limited annual intake. This is the gateway
+        constraint — not the training credentials.
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
         <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, padding: 14 }}>
@@ -1024,7 +1025,7 @@ function AttractionPipelineSection() {
             <li><strong>Entry-level retail (budtender / dispensary associate)</strong> — \$17-22/hr to start; tips supplement. Hiring posted on standard job boards.</li>
             <li><strong>Cultivation technician / trimmer</strong> — production-floor work at craft-grow + cultivation-center facilities. \$16-25/hr.</li>
             <li><strong>Credential ladder</strong> — JALC offers a <a href="https://www.jalc.edu/agriculture-horticulture-aa-degree/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>2-year Agriculture-Horticulture AA Degree (63 credit hours)</a> that directly transfers to cannabis cultivation work + traditional horticulture. The IL Dept of Ag also licenses <a href="https://cannabis.illinois.gov/agencies/cannabis-idoa.html" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Community College Cannabis Vocational Pilot Programs</a> specifically for cannabis-credential community-college offerings.</li>
-            <li><strong>Worker progression</strong> — Budtender / cultivation tech → Assistant grower (up to ~\$55k) → Cultivation manager (up to ~\$120k) → Master grower (\$80-150k). The wage ceiling at journey-level positions is genuinely family-supporting.</li>
+            <li><strong>Worker progression — with honest caveat on top-rung scarcity.</strong> Budtender / cultivation tech → Assistant grower (up to ~\$55k) → Cultivation manager (~\$120k) → Master grower (\$80-150k). The wage ceiling at upper-rung positions is genuinely family-supporting BUT those positions are scarce: typically 1-2 master growers + 1-2 cultivation managers per facility. With only a handful of cannabis facilities currently operating in LWA-25, the upper-rung slots are few — and existing workers + outside experienced hires fill most of them. Realistic local pathway tops out for most workers at assistant-grower or below. Frame as &quot;ceiling that exists&quot; not as &quot;reliable destination.&quot;</li>
             <li><strong>Adjacent technical roles</strong> — extraction technician, compliance officer, lab QA, packaging — \$45-80k range. JALC chemistry / biology credits transfer.</li>
           </ul>
         </div>
@@ -1396,6 +1397,107 @@ function AttractionPipelineSection() {
 
       <div style={{ marginTop: 12, fontSize: 11, color: "#7a756b", lineHeight: 1.5 }}>
         Source: synthesized from local-BD expert advisory + IL DCEO program documentation. Refresh annually.
+      </div>
+    </section>
+  );
+}
+
+function PirlOutcomesSection() {
+  return (
+    <section style={{ marginTop: 40 }}>
+      <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+      <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+        Mantracon&apos;s own program outcomes · what the board should be publishing about itself
+      </h2>
+      <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 760, lineHeight: 1.55 }}>
+        This page critiques training-program effectiveness against employer demand
+        and against the family-supporting wage threshold. The same accountability
+        standard applies to Mantracon&apos;s own performance. Under WIOA, Mantracon
+        files Title I program data quarterly with USDOL Employment &amp; Training
+        Administration via the <a href="https://www.dol.gov/agencies/eta/performance/wips" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>WIPS portal</a> in the
+        Participant Individual Record Layout (PIRL) format. These metrics are not
+        currently published on the public Mantracon website. They should be.
+      </div>
+
+      <div style={{ marginBottom: 16, padding: 14, background: "white", border: "1px solid #d8d2c4", borderRadius: 6 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8 }}>The 6 federally-mandated WIOA Title I outcome measures (PIRL)</div>
+        <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 13, color: "#3d3a33", lineHeight: 1.65 }}>
+          <li><strong>Employment Rate Q2 post-exit</strong> — % of participants employed in 2nd quarter after exiting program.</li>
+          <li><strong>Employment Rate Q4 post-exit</strong> — same, 4th quarter (durability of placement).</li>
+          <li><strong>Median Earnings Q2 post-exit</strong> — dollar level (compare against MIT Living Wage thresholds on this page).</li>
+          <li><strong>Credential Attainment Rate</strong> — % of program participants earning a recognized credential within 1 year of exit.</li>
+          <li><strong>Measurable Skill Gains</strong> — % of participants meeting interim skill-gain benchmarks during program.</li>
+          <li><strong>Effectiveness in Serving Employers</strong> — repeat-business + employer-penetration rate.</li>
+        </ul>
+      </div>
+
+      <div style={{ marginBottom: 16, padding: 14, background: "oklch(96% 0.04 142)", border: "1px solid oklch(45% 0.16 142)33", borderLeft: "6px solid oklch(45% 0.16 142)", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "oklch(35% 0.18 142)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          The accountability ask
+        </div>
+        <p style={{ margin: "0 0 8px 0" }}>
+          Publish program-level PIRL outcomes on this dashboard. Specifically, by
+          program (WIOA Adult, Dislocated Worker, Youth, CEJA Climate Works, every
+          named training ladder):
+        </p>
+        <ul style={{ margin: "0 0 0 18px", padding: 0 }}>
+          <li>Enrollment count + completion rate (last 3 program years)</li>
+          <li>Median Q2 post-exit earnings — cross-checked against MIT Living Wage 1A+2C ($46.76/hr or $97,260/yr) bar</li>
+          <li>% of completers earning above single-adult living wage</li>
+          <li>% of completers earning above family-supporting wage</li>
+          <li>Credential attainment rate</li>
+          <li>Employer-side: which employers hired completers, in which roles</li>
+        </ul>
+        <p style={{ margin: "8px 0 0 0" }}>
+          The standard the page applies to CEJA solar (PHANTOM PIPELINE) and CNA
+          ladders (BELOW LIVABLE WAGE) is the same standard Mantracon should apply
+          to its own roster. Honest measurement, including the inconvenient outcomes,
+          is what makes a workforce board credible to fund.
+        </p>
+      </div>
+
+      <div style={{ marginBottom: 16, fontSize: 11, color: "#7a756b", lineHeight: 1.5 }}>
+        Sources: <a href="https://www.dol.gov/agencies/eta/performance/wips" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>USDOL ETA WIPS (Workforce Integrated Performance System)</a> · <a href="https://www.dol.gov/sites/dolgov/files/ETA/wioa/pdfs/WIOA-Joint-Performance-Standards-FAQs.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>WIOA Joint Performance Standards FAQ</a> · <a href="https://www.illinoisworknet.com/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Illinois workNet</a> (state-level WIOA portal).
+      </div>
+    </section>
+  );
+}
+
+function SupplyChainSubawardSection() {
+  return (
+    <section style={{ marginTop: 40 }}>
+      <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+      <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+        Local supply-chain mapping · where the federal money flows after the prime
+      </h2>
+      <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 760, lineHeight: 1.55 }}>
+        The federal-money concentration section above shows GD-OTS Marion receiving
+        the lion&apos;s share of LWA-25 federal CONTRACTING obligations. The
+        community-engagement leverage hinges on a question that the dashboard can&apos;t
+        fully answer yet: <strong>what does GD-OTS (and other primes) buy from local
+        subcontractors, and what are they buying from out-of-region subs that LOCAL
+        firms could supply?</strong> This is the actionable BD lead the
+        concentration section promises but doesn&apos;t yet deliver. The data exists
+        — it&apos;s in USAspending&apos;s subaward records — but querying it requires
+        per-prime filtering that&apos;s not yet wired into this page.
+      </div>
+
+      <div style={{ marginBottom: 16, padding: 14, background: "white", border: "1px solid #d8d2c4", borderRadius: 6 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8 }}>How to query subaward data for community-engagement leverage</div>
+        <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 13, color: "#3d3a33", lineHeight: 1.65 }}>
+          <li><strong>USAspending recipient profile + subaward tab.</strong> Each prime contractor has a recipient page at <a href="https://www.usaspending.gov/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>usaspending.gov</a> with a Sub-Awards tab listing every subaward of $30k+. For GD-OTS Marion, this is the operational view of who the prime actually pays.</li>
+          <li><strong>Filter subawards by NAICS code.</strong> Common GD-OTS munitions-manufacturing subaward NAICS: 332710 (Machine Shops), 332618 (Wire Products Manufacturing), 332999 (Misc Fabricated Metal Products), 488510 (Freight Transportation Arrangement), 561621 (Security Systems Services), 423840 (Industrial Supplies Wholesale).</li>
+          <li><strong>Filter subaward recipients by place-of-performance.</strong> Subawardees in OTHER states for work performed at GD-OTS Marion are the candidates for local-firm replacement.</li>
+          <li><strong>IL DCEO Industrial Supply Directory</strong> at <a href="https://dceo.illinois.gov/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>dceo.illinois.gov</a> — cross-reference local IL firms with capability to fill those NAICS gaps.</li>
+          <li><strong>SBA HUBZone + 8(a) directories</strong> — local certified-status firms get federal-contracting set-aside preference. Smith Hafeli&apos;s SDVOSB status (see Federal Money Concentration section) is the precedent.</li>
+        </ul>
+      </div>
+
+      <div style={{ marginBottom: 16, padding: 14, background: "#fef9eb", border: "1px solid #f0d98a", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
+        <strong>Action ladder:</strong> Mantracon + Marion Chamber + Southern Illinois Business Alliance pull GD-OTS subaward export quarterly → identify out-of-region subs by NAICS → match against local-firm capability + SBA certification status → broker introductions between primes&apos; procurement teams and local firms in the same NAICS lane. This is the practical CBA-precedent move the page&apos;s federal-money-concentration section calls for — and it&apos;s how Smith Hafeli grew from a small SDVOSB-set-aside firm to a $11.9M-24-month local presence on the same Marion-area federal pipeline.
+      </div>
+      <div style={{ marginBottom: 16, fontSize: 11, color: "#7a756b", lineHeight: 1.5 }}>
+        Sources: <a href="https://www.usaspending.gov/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>USAspending.gov</a> subaward data; <a href="https://www.sba.gov/federal-contracting/contracting-assistance-programs/hubzone-program" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>SBA HUBZone Program</a>; <a href="https://www.sba.gov/federal-contracting/contracting-assistance-programs/8a-business-development-program" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>SBA 8(a) Business Development Program</a>; IL DCEO Industrial Supply Directory.
       </div>
     </section>
   );
@@ -2177,6 +2279,8 @@ export default async function MantraconPage() {
 
           {data.top_federal_recipients && <FederalConcentrationSection tr={data.top_federal_recipients} />}
 
+          <SupplyChainSubawardSection />
+
           <ChildcareGatewaySection />
 
           {data.training_alignment && (
@@ -2195,6 +2299,8 @@ export default async function MantraconPage() {
           <HousingAffordabilitySection />
 
           <StateEmployerWageBenchmarkSection />
+
+          <PirlOutcomesSection />
 
           <section style={{ marginTop: 40 }}>
             <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
