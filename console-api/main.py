@@ -718,6 +718,7 @@ async def public_carbondale() -> dict:
     business = await _usaspending_block(county_fips=["077"], recipient_city=None)
     qcew = await _qcew_supersector_block(county_fips=["077"])
     acs = await _census_acs_multiyear("11163")  # Carbondale city, IL — 2023 + 2018 ACS5
+    health = _community_health_score(acs.get("current") or {}, acs) if acs else {}
     return {
         "ts": datetime.now(UTC).isoformat(),
         "indicators": indicators,
@@ -727,6 +728,7 @@ async def public_carbondale() -> dict:
         "industry_mix": qcew,
         "city_demographics": acs.get("current") if acs else {},
         "demographics_trend": acs,
+        "health_score": health,
     }
 
 
@@ -788,6 +790,141 @@ async def _census_acs_multiyear(
     }
 
 
+# ────────────── Community Health Score (synthetic composite) ──────────────
+# Inspired by the Economic Innovation Group (EIG) Distressed Communities Index
+# and CDC Social Vulnerability Index, but computed locally from the ACS +
+# FRED data already on hand. Six components scored 0-100 (higher=healthier),
+# averaged. Methodology + thresholds are deliberately transparent and tunable.
+
+# Illinois state median household income reference for the income-ratio
+# component. ACS 2023 5y estimate for the state. Refresh annually.
+_IL_STATE_MEDIAN_HH_INCOME_2023 = 78433
+
+
+def _linear_score(value: float | None, worst: float, best: float) -> float | None:
+    """Map a value to 0-100 by linear interpolation. worst→0, best→100.
+    Direction is inferred from the worst<best vs worst>best relationship."""
+    if value is None:
+        return None
+    if worst == best:
+        return 50.0
+    raw = (value - worst) / (best - worst) * 100
+    return max(0.0, min(100.0, round(raw, 1)))
+
+
+def _community_health_score(acs_current: dict, trend: dict) -> dict:
+    """Compute a 0-100 community-health composite from the latest ACS snapshot
+    plus the 5y trend. Components designed to be transparent + tunable:
+
+      no_hs_diploma:    0% → 100;  20%+ → 0       (worst: 20%+, best: 0%)
+      poverty_rate:     0% → 100;  30%+ → 0
+      unemployment:     0% → 100;  15%+ → 0
+      income_vs_state:  ≥state median → 100;  ≤30% of state → 0
+      pop_change_5y:    +20% → 100;  -20% → 0;   0 → 50
+      income_change_5y: +25% → 100;  -25% → 0;   0 → 50
+
+    Returns {score, label, components: [...]}.
+    """
+    components: list[dict] = []
+
+    # 1. HS-dropout (strongest predictor of poor outcomes per EIG/CDC research)
+    no_hs = acs_current.get("pct_no_hs_diploma")
+    s = _linear_score(no_hs, worst=20.0, best=0.0)
+    components.append({
+        "key": "no_hs_diploma",
+        "label": "Educational attainment",
+        "value": f"{no_hs:.1f}% adults 25+ without HS diploma" if no_hs is not None else "—",
+        "score": s,
+        "weight": 1.0,
+        "rationale": "Census EIG DCI weights this most heavily — strongest single predictor of long-term distress.",
+    })
+
+    # 2. Family poverty rate
+    pov = acs_current.get("poverty_rate_families")
+    s = _linear_score(pov, worst=30.0, best=0.0)
+    components.append({
+        "key": "poverty",
+        "label": "Family poverty",
+        "value": f"{pov:.1f}% of families in poverty" if pov is not None else "—",
+        "score": s,
+        "weight": 1.0,
+        "rationale": "Census SAIPE / ACS family poverty rate.",
+    })
+
+    # 3. ACS unemployment
+    ue = acs_current.get("acs_unemployment_rate")
+    s = _linear_score(ue, worst=15.0, best=0.0)
+    components.append({
+        "key": "unemployment",
+        "label": "Unemployment",
+        "value": f"{ue:.1f}% ACS 5y unemployment (ages 25+)" if ue is not None else "—",
+        "score": s,
+        "weight": 1.0,
+        "rationale": "ACS 5y narrower than BLS LAUS but captures discouraged workers more honestly over a 5y window.",
+    })
+
+    # 4. Income vs Illinois state median
+    inc = acs_current.get("median_household_income")
+    ratio = (inc / _IL_STATE_MEDIAN_HH_INCOME_2023) if inc else None
+    s = _linear_score(ratio, worst=0.30, best=1.0)
+    components.append({
+        "key": "income_vs_state",
+        "label": "Income vs IL state median",
+        "value": f"${inc:,} vs ${_IL_STATE_MEDIAN_HH_INCOME_2023:,} (state median) — {ratio*100:.0f}% of state" if inc and ratio else "—",
+        "score": s,
+        "weight": 1.0,
+        "rationale": "How well does the city's median household income compare to the Illinois state median? Below 50% signals serious wage gap.",
+    })
+
+    # 5. 5y population change
+    pop_dl = (trend or {}).get("deltas", {}).get("population")
+    pop_pct = pop_dl["pct_change"] if pop_dl else None
+    s = _linear_score(pop_pct, worst=-20.0, best=20.0)
+    components.append({
+        "key": "pop_change_5y",
+        "label": "Population change (5y)",
+        "value": f"{'+' if (pop_pct or 0) > 0 else ''}{pop_pct:.1f}% since prior ACS5" if pop_pct is not None else "—",
+        "score": s,
+        "weight": 1.0,
+        "rationale": "Population growth signals economic vitality; shrinkage signals out-migration / aging.",
+    })
+
+    # 6. 5y income change
+    inc_dl = (trend or {}).get("deltas", {}).get("median_household_income")
+    inc_pct = inc_dl["pct_change"] if inc_dl else None
+    s = _linear_score(inc_pct, worst=-25.0, best=25.0)
+    components.append({
+        "key": "income_change_5y",
+        "label": "Income change (5y)",
+        "value": f"{'+' if (inc_pct or 0) > 0 else ''}{inc_pct:.1f}% median HH income vs prior ACS5" if inc_pct is not None else "—",
+        "score": s,
+        "weight": 1.0,
+        "rationale": "Direction of household-income travel — real-terms inflation-adjusted growth would be even more informative.",
+    })
+
+    # Aggregate
+    weighted = [(c["score"], c["weight"]) for c in components if c["score"] is not None]
+    if not weighted:
+        return {"score": None, "label": "Insufficient data", "components": components}
+    total_w = sum(w for _, w in weighted)
+    total_s = sum(s * w for s, w in weighted)
+    score = round(total_s / total_w, 1)
+
+    label = (
+        "Healthy" if score >= 80
+        else "Stable" if score >= 60
+        else "At-Risk" if score >= 40
+        else "Distressed" if score >= 20
+        else "Crisis"
+    )
+    return {
+        "score": score,
+        "label": label,
+        "components": components,
+        "methodology": "Six equally-weighted components, each scored 0-100 by linear interpolation between worst/best thresholds, then averaged. Inspired by EIG Distressed Communities Index methodology; thresholds are transparent and tunable.",
+    }
+
+
 async def _census_acs_place(place_fips: str, *, state_fips: str = "17", year: int = 2023) -> dict:
     cache_key = f"acs|{state_fips}|{place_fips}|{year}"
     now = time.time()
@@ -801,6 +938,7 @@ async def _census_acs_place(place_fips: str, *, state_fips: str = "17", year: in
     vars_map = {
         "DP05_0001E":  "population",
         "DP05_0018E":  "median_age",
+        "DP02_0067PE": "pct_hs_graduate_or_higher",
         "DP02_0068PE": "pct_bachelors_plus",
         "DP03_0009PE": "acs_unemployment_rate",
         "DP03_0062E":  "median_household_income",
@@ -808,6 +946,7 @@ async def _census_acs_place(place_fips: str, *, state_fips: str = "17", year: in
         "DP04_0089E":  "median_home_value",
         "DP04_0134E":  "median_gross_rent",
         "DP04_0046PE": "pct_owner_occupied",
+        "DP04_0003PE": "pct_housing_vacant",
         "DP02_0094PE": "pct_foreign_born",
         "DP03_0025E":  "mean_commute_minutes",
         "DP05_0037PE": "pct_white_alone",
@@ -843,12 +982,15 @@ async def _census_acs_place(place_fips: str, *, state_fips: str = "17", year: in
         return int(f) if f is not None else None
 
     pct_owner = _f(raw.get("DP04_0046PE"))
+    pct_hs_plus = _f(raw.get("DP02_0067PE"))
     out = {
         "name": raw.get("NAME"),
         "place_fips": place_fips,
         "year": year,
         "population":               _i(raw.get("DP05_0001E")),
         "median_age":               _f(raw.get("DP05_0018E")),
+        "pct_hs_graduate_or_higher": pct_hs_plus,
+        "pct_no_hs_diploma":         (100 - pct_hs_plus) if pct_hs_plus is not None else None,
         "pct_bachelors_plus":       _f(raw.get("DP02_0068PE")),
         "acs_unemployment_rate":    _f(raw.get("DP03_0009PE")),
         "median_household_income":  _i(raw.get("DP03_0062E")),
@@ -857,6 +999,7 @@ async def _census_acs_place(place_fips: str, *, state_fips: str = "17", year: in
         "median_gross_rent":        _i(raw.get("DP04_0134E")),
         "pct_owner_occupied":       pct_owner,
         "pct_renter_occupied":      (100 - pct_owner) if pct_owner is not None else None,
+        "pct_housing_vacant":       _f(raw.get("DP04_0003PE")),
         "pct_foreign_born":         _f(raw.get("DP02_0094PE")),
         "mean_commute_minutes":     _f(raw.get("DP03_0025E")),
         "pct_white_alone":          _f(raw.get("DP05_0037PE")),
@@ -1200,6 +1343,7 @@ async def public_murphysboro() -> dict:
     business_county = await _usaspending_block(county_fips=["077"], recipient_city=None)
     qcew = await _qcew_supersector_block(county_fips=["077"])
     acs = await _census_acs_multiyear("51453")  # Murphysboro city, IL — 2023 + 2018 ACS5
+    health = _community_health_score(acs.get("current") or {}, acs) if acs else {}
     return {
         "ts": datetime.now(UTC).isoformat(),
         "indicators": indicators,
@@ -1209,6 +1353,7 @@ async def public_murphysboro() -> dict:
         "industry_mix": qcew,
         "city_demographics": acs.get("current") if acs else {},
         "demographics_trend": acs,
+        "health_score": health,
     }
 
 

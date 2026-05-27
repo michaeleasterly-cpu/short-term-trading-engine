@@ -71,6 +71,104 @@ interface DemographicsTrend {
   comparison_years: [number, number];
   deltas: Record<string, DemoDelta>;
 }
+interface HealthComponent {
+  key: string;
+  label: string;
+  value: string;
+  score: number | null;
+  weight: number;
+  rationale: string;
+}
+interface HealthScore {
+  score: number | null;
+  label: string;
+  components: HealthComponent[];
+  methodology: string;
+}
+
+function labelColor(label: string): { fg: string; bg: string } {
+  switch (label) {
+    case "Healthy":   return { fg: "oklch(40% 0.16 142)", bg: "oklch(96% 0.04 142)" };
+    case "Stable":    return { fg: "oklch(40% 0.16 142)", bg: "oklch(96% 0.04 142)" };
+    case "At-Risk":   return { fg: "oklch(40% 0.15 60)",  bg: "oklch(97% 0.04 60)"  };
+    case "Distressed":return { fg: "oklch(40% 0.20 22)",  bg: "oklch(96% 0.05 22)"  };
+    case "Crisis":    return { fg: "oklch(35% 0.22 22)",  bg: "oklch(94% 0.06 22)"  };
+    default:          return { fg: "#5a564d", bg: "#f0ece1" };
+  }
+}
+
+function ScoreBar({ score }: { score: number }) {
+  return (
+    <div style={{ position: "relative", height: 10, background: "#ebe5d6", borderRadius: 5, marginTop: 10 }}>
+      <div style={{
+        position: "absolute", top: 0, left: 0, height: 10, width: `${score}%`,
+        background: score >= 60 ? "oklch(55% 0.16 142)" : score >= 40 ? "oklch(58% 0.15 60)" : "oklch(55% 0.20 22)",
+        borderRadius: 5,
+      }} />
+    </div>
+  );
+}
+
+function HealthScoreSection({ health, cityShortName }: { health: HealthScore; cityShortName: string }) {
+  if (health.score == null) return null;
+  const tone = labelColor(health.label);
+  return (
+    <section style={{ marginTop: 40 }}>
+      <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+      <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+        Community Health Score · {cityShortName}
+      </h2>
+      <div style={{ fontSize: 14, color: "#5a564d", marginBottom: 16, maxWidth: 720 }}>
+        A single 0-100 composite synthesizing six hardship-vs-resilience signals from the Census ACS.
+        Methodology inspired by the EIG Distressed Communities Index — HS-dropout rate is the
+        most heavily-weighted predictor of long-term distress in published research.
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "320px 1fr", gap: 24, alignItems: "start" }}>
+        <div style={{ background: tone.bg, border: `2px solid ${tone.fg}33`, borderRadius: 8, padding: 24, textAlign: "center" }}>
+          <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: tone.fg, marginBottom: 6 }}>
+            Health Score
+          </div>
+          <div style={{ fontSize: 72, fontWeight: 700, color: tone.fg, lineHeight: 1 }}>
+            {health.score!.toFixed(0)}
+          </div>
+          <div style={{ fontSize: 11, color: "#7a756b", marginTop: 2 }}>out of 100</div>
+          <div style={{
+            display: "inline-block", marginTop: 12, padding: "6px 14px",
+            background: tone.fg, color: "white", borderRadius: 4, fontSize: 13, fontWeight: 600,
+            textTransform: "uppercase", letterSpacing: "0.06em",
+          }}>{health.label}</div>
+          <div style={{ fontSize: 11, color: "#7a756b", marginTop: 14, lineHeight: 1.5 }}>
+            80+ Healthy · 60+ Stable · 40+ At-Risk · 20+ Distressed · &lt;20 Crisis
+          </div>
+        </div>
+        <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, padding: 16 }}>
+          <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: "#7a756b", marginBottom: 12 }}>
+            Component breakdown
+          </div>
+          {health.components.map(c => (
+            <div key={c.key} style={{ marginBottom: 14 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                <div style={{ fontSize: 14, fontWeight: 600, color: "#1f1d18" }}>{c.label}</div>
+                <div style={{ fontSize: 18, fontWeight: 600, color: c.score == null ? "#7a756b" : c.score >= 60 ? "oklch(45% 0.16 142)" : c.score >= 40 ? "oklch(48% 0.15 60)" : "oklch(45% 0.20 22)" }}>
+                  {c.score != null ? c.score.toFixed(0) : "—"}<span style={{ fontSize: 12, color: "#7a756b", fontWeight: 400 }}> / 100</span>
+                </div>
+              </div>
+              <div style={{ fontSize: 12, color: "#5a564d", marginTop: 2 }}>{c.value}</div>
+              {c.score != null && <ScoreBar score={c.score} />}
+              <details style={{ marginTop: 6, fontSize: 11, color: "#7a756b" }}>
+                <summary style={{ cursor: "pointer" }}>Why this matters</summary>
+                <div style={{ marginTop: 4 }}>{c.rationale}</div>
+              </details>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div style={{ marginTop: 12, fontSize: 11, color: "#7a756b", lineHeight: 1.5, maxWidth: 720 }}>
+        <strong>Methodology:</strong> {health.methodology} The HS-dropout rate is included because it is the strongest single predictor of long-term economic distress in EIG / CDC SVI / Opportunity Insights research.
+      </div>
+    </section>
+  );
+}
 
 interface MurphysboroData {
   ts: string;
@@ -81,6 +179,7 @@ interface MurphysboroData {
   industry_mix?: IndustryMix;
   city_demographics?: CityDemographics;
   demographics_trend?: DemographicsTrend;
+  health_score?: HealthScore;
 }
 
 const TREND_GOOD_UP = new Set(["population", "median_household_income"]);
@@ -576,6 +675,8 @@ export default async function MurphysboroPage() {
               </div>
             </section>
           )}
+
+          {data.health_score && <HealthScoreSection health={data.health_score} cityShortName="Murphysboro" />}
 
           {data.city_demographics && <DemographicsSection d={data.city_demographics} cityShortName="Murphysboro" trend={data.demographics_trend} />}
 
