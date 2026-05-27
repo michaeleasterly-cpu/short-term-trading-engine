@@ -8,6 +8,8 @@
  * scrapers, SIU enrollment, Zillow/Amtrak) land in subsequent commits
  * behind the same /api/public/carbondale endpoint.
  */
+import { DashboardHead, Topbar, DashboardFooter, DEFAULT_FOOTER_COLUMNS } from "@/components/dashboard-chrome";
+
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
@@ -507,28 +509,6 @@ function BusinessLeadsBlock({ b }: { b: BusinessOps }) {
   );
 }
 
-function CrossLinkFooter() {
-  return (
-    <div style={{ marginTop: 40, padding: 20, background: "#f0ece1", borderRadius: 6, fontSize: 14, color: "#3d3a33" }}>
-      <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 10, textTransform: "uppercase", letterSpacing: "0.06em" }}>
-        Related views
-      </div>
-      <div style={{ marginBottom: 6 }}>
-        <a href="/murphysboro" style={{ fontWeight: 600 }}>Murphysboro, IL →</a>{" "}
-        <span style={{ color: "#5a564d" }}>— Jackson County seat, 8 mi west; same MSA, city-specific federal awards.</span>
-      </div>
-      <div style={{ marginBottom: 6 }}>
-        <a href="/southern-illinois" style={{ fontWeight: 600 }}>Southern Illinois Region (LWA-25, 5-county) →</a>{" "}
-        <span style={{ color: "#5a564d" }}>— regional workforce + economic-development strategic view.</span>
-      </div>
-      <div>
-        <a href="/market" style={{ fontWeight: 600 }}>US Market Health →</a>{" "}
-        <span style={{ color: "#5a564d" }}>— national macro / recession watch backdrop that frames the local picture.</span>
-      </div>
-    </div>
-  );
-}
-
 async function fetchCarbondale(): Promise<CarbondaleData | null> {
   try {
     const res = await fetch(`${API_BASE}/api/public/carbondale`, { cache: "no-store" });
@@ -731,31 +711,40 @@ function buildSections(d: CarbondaleData): Array<{ id: string; title: string; su
   ].filter(s => s.cards.length > 0);
 }
 
-function topHeadline(d: CarbondaleData): { headline: string; subhead: string; tone: Tone } {
-  // Drive the headline from the COMMUNITY HEALTH SCORE synthesis (HS-dropout +
-  // poverty + unemployment + income vs state + 5y pop trend + 5y income trend),
-  // not from the unemployment rate alone. The UE rate is the politician-friendly
-  // metric that masks discouraged workers / not-in-LF population — using it as
-  // the headline would contradict the labor-truth + health-score sections below.
+function topHeadline(d: CarbondaleData): { headline: string; subhead: string; tone: Tone; score: number | null; band: string | null } {
+  // Headline is purely numeric (the composite score); the band label appears as a
+  // methodology identifier in the subhead, not as a verdict in the banner. No
+  // editorial language at the H1 level — reader interprets the number.
   const h = d.health_score;
   if (!h || h.score == null) {
     return {
-      headline: "Carbondale Snapshot",
-      subhead: "Local economic indicators for Jackson County + the Carbondale-Marion MSA.",
+      headline: "Economic profile",
+      subhead: "Local indicators for Jackson County + the Carbondale-Marion MSA.",
       tone: "ok",
+      score: null,
+      band: null,
     };
   }
   const worst = [...h.components]
     .filter(c => c.score != null)
     .sort((a, b) => (a.score! - b.score!))[0];
   const worstLabel = worst ? worst.label.toLowerCase() : "";
-  const scoreStr = `Health Score ${h.score.toFixed(0)}/100`;
 
-  if (h.score >= 80) return { headline: `Healthy community · ${h.label}`, subhead: `${scoreStr}. ${worstLabel ? `Weakest signal: ${worstLabel}.` : ""} Strong across all six synthesized components.`, tone: "good" };
-  if (h.score >= 60) return { headline: `Stable community · ${h.label}`, subhead: `${scoreStr}. ${worstLabel ? `Weakest signal: ${worstLabel}.` : ""} Generally resilient with isolated soft spots.`, tone: "ok" };
-  if (h.score >= 40) return { headline: `At-risk community · ${h.label}`, subhead: `${scoreStr}. ${worstLabel ? `Weakest signal: ${worstLabel}.` : ""} The headline unemployment rate doesn't capture the full picture — see the synthesis below.`, tone: "warn" };
-  if (h.score >= 20) return { headline: `Distressed community · ${h.label}`, subhead: `${scoreStr}. ${worstLabel ? `Dominant pressure: ${worstLabel}.` : ""} Multiple hardship signals reinforce — the headline UE rate understates the situation.`, tone: "bad" };
-  return { headline: `Community in crisis · ${h.label}`, subhead: `${scoreStr}. ${worstLabel ? `Dominant pressure: ${worstLabel}.` : ""} Severe distress across nearly every synthesized signal.`, tone: "bad" };
+  // Tone drives color of the numeric score, not a verdict word.
+  const tone: Tone =
+    h.score >= 80 ? "good" :
+    h.score >= 60 ? "ok" :
+    h.score >= 40 ? "warn" : "bad";
+
+  const subhead = `Band: ${h.label} (composite of 6 hardship signals — HS-dropout, poverty, unemployment, income vs state, 5y pop trend, 5y income trend).${worstLabel ? ` Weakest component: ${worstLabel}.` : ""} Methodology + per-component scores below.`;
+
+  return {
+    headline: `Community Health Score · ${h.score.toFixed(0)} / 100`,
+    subhead,
+    tone,
+    score: h.score,
+    band: h.label,
+  };
 }
 
 function URChart({ series }: { series: Array<{ date: string; value: number }> }) {
@@ -807,55 +796,72 @@ export default async function CarbondalePage() {
   const sections = data ? buildSections(data) : [];
   const top = data ? topHeadline(data) : null;
 
+  const renderedAt = data ? data.ts.slice(0, 16).replace("T", " ") + " UTC" : "—";
+
   return (
     <html lang="en">
       <head>
-        <title>Carbondale, IL · Economic Snapshot</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
-        <style>{`
-          :root { color-scheme: light; }
-          * { box-sizing: border-box; }
-          html, body { margin: 0; padding: 0; background: #f7f5f1; color: #1f1d18; font-family: "IBM Plex Sans", system-ui, sans-serif; line-height: 1.5; }
-          a { color: #1f5f8f; }
-          .container { max-width: 1000px; margin: 0 auto; padding: 32px 20px 64px; }
-        `}</style>
+        <DashboardHead title="Carbondale, IL · Economic Profile" />
       </head>
       <body>
-        <div className="container">
+        <div className="shell">
+          <Topbar region="Carbondale · Jackson County · IL" renderedAt={renderedAt} />
+
           {!data && (
-            <div style={{ padding: 40, textAlign: "center", color: "#8a857c" }}>
+            <div style={{ padding: 40, textAlign: "center", color: "var(--ink-3)" }}>
               Sorry — the Carbondale data feed isn&apos;t responding right now. Try again in a minute.
             </div>
           )}
 
           {data && top && (
             <>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src="/logo-icon.svg" alt="Packet Void Labs" width={28} height={28} />
-                <div style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: "0.08em", color: "#8a857c" }}>
-                  Carbondale, IL · Economic Snapshot
+              <header className="hero">
+                <div>
+                  <div className="eyebrow">Jackson County, IL · Carbondale-Marion MSA (CBSA 16060)</div>
+                  <h1 className="serif" style={{ fontFamily: '"IBM Plex Serif", Georgia, serif', fontSize: 56, fontWeight: 500, lineHeight: 1.04, margin: "18px 0 18px", letterSpacing: "-0.02em", color: "var(--ink)", textWrap: "balance" }}>
+                    {top.headline}
+                  </h1>
+                  <p className="lead" style={{ fontSize: 17, lineHeight: 1.5, color: "var(--ink-2)", maxWidth: "58ch", margin: 0 }}>{top.subhead}</p>
                 </div>
-              </div>
-              <h1 style={{ fontSize: 48, fontWeight: 600, lineHeight: 1.05, margin: "8px 0 8px 0", color: TONE_COLOR[top.tone] }}>
-                {top.headline}
-              </h1>
-              <div style={{ fontSize: 18, color: "#3d3a33", maxWidth: 720 }}>{top.subhead}</div>
-              <div style={{ fontSize: 12, color: "#8a857c", marginTop: 8 }}>
-                Page rendered {data.ts.slice(0, 16).replace("T", " ")} UTC. Jackson County, IL + Carbondale-Marion MSA (CBSA 16060) + Illinois state context.
-              </div>
+                {top.score != null && (
+                  <aside className="hero-side">
+                    <div className="hero-stat">
+                      <div className={`n ${top.tone === "bad" ? "neg" : top.tone === "warn" ? "warn" : top.tone === "good" ? "pos" : ""}`}>
+                        {top.score.toFixed(0)}
+                        <span style={{ fontSize: 18, color: "var(--ink-3)" }}> / 100</span>
+                      </div>
+                      <div className="label">Community Health Score<br />6-signal composite</div>
+                    </div>
+                    {top.band && (
+                      <div className="hero-stat">
+                        <div className="n" style={{ fontSize: 22 }}>{top.band}</div>
+                        <div className="label">Methodology band<br />0–20 · 20–40 · 40–60 · 60–80 · 80–100</div>
+                      </div>
+                    )}
+                  </aside>
+                )}
+              </header>
 
-              {/* Data freshness panel */}
-              <div style={{ marginTop: 16, padding: 14, background: "#fff", border: "1px solid #d8d2c4", borderRadius: 6 }}>
-                <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: "#5a564d", marginBottom: 8 }}>
-                  Data freshness · each block live-fetched on every page load
+              <div className="freshness">
+                <div className="fresh-cell">
+                  <div className="k">Census ACS · demographics</div>
+                  <div className="v">{data.city_demographics?.year ?? "2023"} 5-year</div>
+                  <div className="sub">refreshes annually · Dec</div>
                 </div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10, fontSize: 12 }}>
-                  <div><strong>Census ACS demographics:</strong><br /><span style={{ color: "#5a564d" }}>{data.city_demographics?.year ?? "2023"} 5-year estimates · refreshes annually (Dec)</span></div>
-                  <div><strong>BLS LAUS labor market:</strong><br /><span style={{ color: "#5a564d" }}>through {data.indicators?.crb_jackson_unemployment_rate?.date ?? "—"} · refreshes monthly</span></div>
-                  <div><strong>BLS QCEW industry mix:</strong><br /><span style={{ color: "#5a564d" }}>{data.industry_mix?.as_of_quarter ?? "—"} · refreshes quarterly (~7mo lag)</span></div>
-                  <div><strong>Federal awards (USAspending):</strong><br /><span style={{ color: "#5a564d" }}>{data.business_opportunities?.totals?.lookback_months ?? 24}-month rolling · refreshes continuously</span></div>
+                <div className="fresh-cell">
+                  <div className="k">BLS LAUS · labor market</div>
+                  <div className="v">Through {data.indicators?.crb_jackson_unemployment_rate?.date ?? "—"}</div>
+                  <div className="sub">refreshes monthly</div>
+                </div>
+                <div className="fresh-cell">
+                  <div className="k">BLS QCEW · industry mix</div>
+                  <div className="v">{data.industry_mix?.as_of_quarter ?? "—"}</div>
+                  <div className="sub">refreshes quarterly · ~7mo lag</div>
+                </div>
+                <div className="fresh-cell">
+                  <div className="k">USAspending · federal $</div>
+                  <div className="v">{data.business_opportunities?.totals?.lookback_months ?? 24}-month rolling</div>
+                  <div className="sub">refreshes continuously</div>
                 </div>
               </div>
 
@@ -917,34 +923,18 @@ export default async function CarbondalePage() {
 
               {data.business_opportunities && <BusinessLeadsBlock b={data.business_opportunities} />}
 
-              <CrossLinkFooter />
-
-              <div style={{ marginTop: 40, fontSize: 12, color: "#8a857c", lineHeight: 1.6 }}>
-                <strong>Where the data comes from:</strong> all indicators pulled from FRED
-                (Federal Reserve Economic Data, St. Louis Fed) — which aggregates BLS Local
-                Area Unemployment Statistics, BLS Current Employment Statistics, Census Bureau
-                Population Estimates, Census Small Area Income and Poverty Estimates, BEA Regional
-                Economic Accounts, Census American Community Survey, and Realtor.com housing
-                data. Monthly series refresh ~1-2 months after the reference period; annual
-                series lag 6-18 months. Updated nightly via our data pipeline.
+              <div className="sources" style={{ marginTop: 40, lineHeight: 1.6 }}>
+                <b>Sources:</b> FRED (Federal Reserve Economic Data, St. Louis Fed),
+                aggregating BLS LAUS, BLS CES, Census Population Estimates, Census SAIPE,
+                BEA Regional Economic Accounts, Census ACS, and Realtor.com housing data.
+                Monthly series refresh ~1–2 months after the reference period; annual series
+                lag 6–18 months. Updated nightly.{" "}
+                <b>Coverage:</b> Jackson County, IL (FIPS 17077) · Carbondale-Marion MSA
+                (CBSA 16060 = Jackson + Williamson) · Illinois state context. Illinois
+                state averages skew toward Chicago and may diverge from Southern Illinois.
               </div>
 
-              <div style={{ marginTop: 24, fontSize: 12, color: "#5a564d", lineHeight: 1.7 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8 }}>
-                  Coverage notes
-                </div>
-                <ul style={{ margin: "0 0 10px 18px", padding: 0 }}>
-                  <li><strong>Jackson County, IL</strong> (FIPS 17077) — where the City of Carbondale sits.</li>
-                  <li><strong>Carbondale-Marion, IL MSA</strong> (CBSA 16060) — Jackson + Williamson counties. The MSA is the federal statistical unit for sub-state labor and housing data.</li>
-                  <li><strong>Illinois state context</strong> — included for comparison. Note Illinois state averages skew toward Chicago and may diverge significantly from Southern Illinois conditions.</li>
-                </ul>
-                <p style={{ margin: 0 }}>
-                  This is a public snapshot of widely-used federal economic gauges for the
-                  Carbondale area. Tier 2-6 enhancements (Census ACS demographics, building
-                  permits, federal contract awards, IL sales-tax revenue, SIU enrollment,
-                  Zillow housing) ship in subsequent commits.
-                </p>
-              </div>
+              <DashboardFooter columns={DEFAULT_FOOTER_COLUMNS} />
             </>
           )}
         </div>

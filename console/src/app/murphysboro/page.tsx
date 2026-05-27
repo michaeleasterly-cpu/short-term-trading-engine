@@ -6,6 +6,8 @@
  * /carbondale; differentiation comes from city-specific USAspending awards
  * (recipient_city=MURPHYSBORO) layered over the county-wide context.
  */
+import { DashboardHead, Topbar, DashboardFooter, DEFAULT_FOOTER_COLUMNS } from "@/components/dashboard-chrome";
+
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
@@ -652,67 +654,75 @@ export default async function MurphysboroPage() {
     );
   }
   const sections = buildCards(data);
-  // Drive the headline from the Community Health Score synthesis, not from the
-  // unemployment rate alone — the UE rate masks discouraged workers / not-in-LF
-  // population. Using it as headline would contradict the labor-truth + health-
-  // score sections below.
+  // Headline is numeric (composite health score); the band label appears in the
+  // subhead as a methodology identifier, not as an editorial verdict.
   const h = data.health_score;
   const worst = h?.components ? [...h.components].filter(c => c.score != null).sort((a, b) => (a.score! - b.score!))[0] : undefined;
   const worstLabel = worst ? worst.label.toLowerCase() : "";
   let tone: Tone = "ok";
-  let headline = "Murphysboro Snapshot";
-  let subhead = "";
+  let headline = "Economic profile";
+  let subhead: React.ReactNode = "Jackson County seat, 8 mi W of Carbondale, in the Carbondale-Marion MSA.";
   if (h?.score != null) {
-    const scoreStr = `Health Score ${h.score.toFixed(0)}/100`;
-    if (h.score >= 80)      { tone = "good"; headline = `Healthy community · ${h.label}`;      subhead = `${scoreStr}. ${worstLabel ? `Weakest signal: ${worstLabel}.` : ""} Strong across all six synthesized components.`; }
-    else if (h.score >= 60) { tone = "ok";   headline = `Stable community · ${h.label}`;        subhead = `${scoreStr}. ${worstLabel ? `Weakest signal: ${worstLabel}.` : ""} Generally resilient with isolated soft spots.`; }
-    else if (h.score >= 40) { tone = "warn"; headline = `At-risk community · ${h.label}`;       subhead = `${scoreStr}. ${worstLabel ? `Weakest signal: ${worstLabel}.` : ""} The headline UE rate doesn't capture the full picture — see the synthesis below.`; }
-    else if (h.score >= 20) { tone = "bad";  headline = `Distressed community · ${h.label}`;    subhead = `${scoreStr}. ${worstLabel ? `Dominant pressure: ${worstLabel}.` : ""} Multiple hardship signals reinforce.`; }
-    else                    { tone = "bad";  headline = `Community in crisis · ${h.label}`;     subhead = `${scoreStr}. ${worstLabel ? `Dominant pressure: ${worstLabel}.` : ""} Severe distress across nearly every signal.`; }
+    tone = h.score >= 80 ? "good" : h.score >= 60 ? "ok" : h.score >= 40 ? "warn" : "bad";
+    headline = `Community Health Score · ${h.score.toFixed(0)} / 100`;
+    subhead = `Band: ${h.label} (composite of 6 hardship signals — HS-dropout, poverty, unemployment, income vs state, 5y pop trend, 5y income trend).${worstLabel ? ` Weakest component: ${worstLabel}.` : ""} Per-component scores + methodology below.`;
   }
+  const renderedAt = data.ts.slice(0, 16).replace("T", " ") + " UTC";
 
   return (
     <html lang="en">
       <head>
-        <title>Murphysboro, IL · Economic Snapshot</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
-        <style>{`
-          :root { color-scheme: light; }
-          * { box-sizing: border-box; }
-          html, body { margin: 0; padding: 0; background: #f7f5f1; color: #1f1d18; font-family: "IBM Plex Sans", system-ui, sans-serif; line-height: 1.5; }
-          a { color: #1f5f8f; }
-          .container { max-width: 1000px; margin: 0 auto; padding: 32px 20px 64px; }
-        `}</style>
+        <DashboardHead title="Murphysboro, IL · Economic Profile" />
       </head>
       <body>
-        <div className="container">
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/logo-icon.svg" alt="Packet Void Labs" width={28} height={28} />
-            <div style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: "0.08em", color: "#8a857c" }}>
-              Murphysboro, IL · Economic Snapshot
-            </div>
-          </div>
-          <h1 style={{ fontSize: 46, fontWeight: 600, lineHeight: 1.05, margin: "8px 0 8px 0", color: TONE_COLOR[tone] }}>
-            {headline}
-          </h1>
-          <div style={{ fontSize: 17, color: "#3d3a33", maxWidth: 720 }}>
-            {subhead || <>Jackson County seat, 8 mi W of Carbondale, in the Carbondale-Marion MSA.</>}
-          </div>
-          <div style={{ fontSize: 12, color: "#8a857c", marginTop: 8 }}>
-            Page rendered {data.ts.slice(0, 16).replace("T", " ")} UTC. County / MSA / state series via BLS LAUS, BEA, Census, Realtor.com (FRED). Federal awards via USAspending.gov.
-          </div>
+        <div className="shell">
+          <Topbar region="Murphysboro · Jackson County · IL" renderedAt={renderedAt} />
 
-          <div style={{ marginTop: 16, padding: 14, background: "#fff", border: "1px solid #d8d2c4", borderRadius: 6 }}>
-            <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: "#5a564d", marginBottom: 8 }}>
-              Data freshness · each block live-fetched on every page load
+          <header className="hero">
+            <div>
+              <div className="eyebrow">Jackson County, IL · Carbondale-Marion MSA (CBSA 16060) · pop ~7.6k</div>
+              <h1 className="serif" style={{ fontFamily: '"IBM Plex Serif", Georgia, serif', fontSize: 56, fontWeight: 500, lineHeight: 1.04, margin: "18px 0 18px", letterSpacing: "-0.02em", color: "var(--ink)", textWrap: "balance" }}>
+                {headline}
+              </h1>
+              <p className="lead" style={{ fontSize: 17, lineHeight: 1.5, color: "var(--ink-2)", maxWidth: "58ch", margin: 0 }}>{subhead}</p>
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10, fontSize: 12 }}>
-              <div><strong>Census ACS demographics:</strong><br /><span style={{ color: "#5a564d" }}>{data.city_demographics?.year ?? "2023"} 5-year estimates · refreshes annually (Dec)</span></div>
-              <div><strong>BLS LAUS labor market:</strong><br /><span style={{ color: "#5a564d" }}>through {data.indicators?.crb_jackson_unemployment_rate?.date ?? "—"} · refreshes monthly</span></div>
-              <div><strong>BLS QCEW industry mix:</strong><br /><span style={{ color: "#5a564d" }}>{data.industry_mix?.as_of_quarter ?? "—"} · refreshes quarterly (~7mo lag)</span></div>
-              <div><strong>Federal awards (USAspending):</strong><br /><span style={{ color: "#5a564d" }}>{data.business_opportunities_county?.totals?.lookback_months ?? 24}-month rolling · refreshes continuously</span></div>
+            {h?.score != null && (
+              <aside className="hero-side">
+                <div className="hero-stat">
+                  <div className={`n ${tone === "bad" ? "neg" : tone === "warn" ? "warn" : tone === "good" ? "pos" : ""}`}>
+                    {h.score.toFixed(0)}
+                    <span style={{ fontSize: 18, color: "var(--ink-3)" }}> / 100</span>
+                  </div>
+                  <div className="label">Community Health Score<br />6-signal composite</div>
+                </div>
+                <div className="hero-stat">
+                  <div className="n" style={{ fontSize: 22 }}>{h.label}</div>
+                  <div className="label">Methodology band<br />0–20 · 20–40 · 40–60 · 60–80 · 80–100</div>
+                </div>
+              </aside>
+            )}
+          </header>
+
+          <div className="freshness">
+            <div className="fresh-cell">
+              <div className="k">Census ACS · demographics</div>
+              <div className="v">{data.city_demographics?.year ?? "2023"} 5-year</div>
+              <div className="sub">refreshes annually · Dec</div>
+            </div>
+            <div className="fresh-cell">
+              <div className="k">BLS LAUS · labor market</div>
+              <div className="v">Through {data.indicators?.crb_jackson_unemployment_rate?.date ?? "—"}</div>
+              <div className="sub">refreshes monthly</div>
+            </div>
+            <div className="fresh-cell">
+              <div className="k">BLS QCEW · industry mix</div>
+              <div className="v">{data.industry_mix?.as_of_quarter ?? "—"}</div>
+              <div className="sub">refreshes quarterly · ~7mo lag</div>
+            </div>
+            <div className="fresh-cell">
+              <div className="k">USAspending · federal $</div>
+              <div className="v">{data.business_opportunities_county?.totals?.lookback_months ?? 24}-month rolling</div>
+              <div className="sub">refreshes continuously</div>
             </div>
           </div>
 
@@ -760,36 +770,18 @@ export default async function MurphysboroPage() {
 
           <BusinessLeadsTwo city={data.business_opportunities_city} county={data.business_opportunities_county} />
 
-          <div style={{ marginTop: 40, padding: 20, background: "#f0ece1", borderRadius: 6, fontSize: 14, color: "#3d3a33" }}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 10, textTransform: "uppercase", letterSpacing: "0.06em" }}>
-              Related views
-            </div>
-            <div style={{ marginBottom: 6 }}>
-              <a href="/carbondale" style={{ fontWeight: 600 }}>Carbondale, IL →</a>{" "}
-              <span style={{ color: "#5a564d" }}>— same Jackson County / MSA substrate, framed for city BD work.</span>
-            </div>
-            <div style={{ marginBottom: 6 }}>
-              <a href="/southern-illinois" style={{ fontWeight: 600 }}>Southern Illinois Region (LWA-25, 5-county) →</a>{" "}
-              <span style={{ color: "#5a564d" }}>— 5-county workforce-board view (Franklin, Jackson, Jefferson, Perry, Williamson) with training-pipeline alignment.</span>
-            </div>
-            <div>
-              <a href="/market" style={{ fontWeight: 600 }}>US Market Health →</a>{" "}
-              <span style={{ color: "#5a564d" }}>— national macro / recession watch backdrop.</span>
-            </div>
+          <div className="sources" style={{ marginTop: 40, lineHeight: 1.6 }}>
+            <b>Sources:</b> BLS (LAUS, CES), BEA Regional Economic Accounts, Census
+            (Population Estimates, SAIPE, ACS), Realtor.com, USAspending.gov, SAM.gov
+            — aggregated via FRED.{" "}
+            <b>Coverage caveat:</b> Most series are reported at Jackson County or
+            Carbondale-Marion MSA scale rather than at the Murphysboro municipal level —
+            the smallest jurisdiction with reliable BLS / BEA / Census coverage in this
+            region is the county. Sub-county Census Place data (ACS) for Murphysboro CDP
+            will be added in a future iteration.
           </div>
 
-          <div style={{ marginTop: 24, fontSize: 12, color: "#8a857c", lineHeight: 1.6 }}>
-            <strong>Sources:</strong> US Bureau of Labor Statistics (LAUS, CES),
-            US Bureau of Economic Analysis (Regional Economic Accounts),
-            US Census Bureau (Population Estimates, SAIPE, ACS), Realtor.com,
-            USAspending.gov, SAM.gov. Aggregated via the St. Louis Fed (FRED).
-            <br /><br />
-            <strong>Coverage caveat:</strong> Most series are reported at Jackson
-            County or Carbondale-Marion MSA scale rather than at the Murphysboro
-            municipal level — the smallest jurisdiction with reliable BLS / BEA /
-            Census coverage in this region is the county. Sub-county Census Place
-            data (ACS) for Murphysboro CDP will be added in a future iteration.
-          </div>
+          <DashboardFooter columns={DEFAULT_FOOTER_COLUMNS} />
         </div>
       </body>
     </html>

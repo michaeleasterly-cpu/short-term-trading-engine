@@ -1,0 +1,1511 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Southern Illinois Region · Workforce + Economic Development Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Serif:wght@400;500;600&display=swap" rel="stylesheet" />
+
+<style>
+:root {
+  --paper:    #f3f0e8;
+  --paper-2:  #ece8dd;
+  --card:     #fbfaf6;
+  --card-2:   #f7f4ec;
+  --ink:      #1b1a17;
+  --ink-2:    #3d3a33;
+  --ink-3:    #6b6759;
+  --ink-4:    #8e8a7c;
+  --rule:     #d3ccb8;
+  --rule-2:   #bdb59f;
+  --rule-3:   #ece6d4;
+  --accent:   #1f5f8f;        /* slate-blue — links, data emphasis */
+  --accent-2: #14456a;
+  --pos:      #2e6f4f;
+  --warn:     #a06a14;
+  --neg:      #9b2c2c;
+  --hi:       #c3a55a;        /* gold highlight */
+  --pos-bg:   #e6efe5;
+  --warn-bg:  #f5ecd6;
+  --neg-bg:   #f1ddd9;
+  --hi-bg:    #f4ead2;
+}
+
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; padding: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 14px/1.55 "IBM Plex Sans", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: "cv11", "ss01";
+}
+
+a { color: var(--accent); text-decoration: none; border-bottom: 1px solid color-mix(in oklab, var(--accent) 30%, transparent); }
+a:hover { color: var(--accent-2); border-bottom-color: var(--accent-2); }
+
+.mono { font-family: "IBM Plex Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+.serif { font-family: "IBM Plex Serif", Georgia, serif; }
+.tab { font-variant-numeric: tabular-nums; }
+.eyebrow {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10.5px; font-weight: 500;
+  letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--ink-3);
+}
+.muted { color: var(--ink-3); }
+
+.shell { max-width: 1240px; margin: 0 auto; padding: 28px 28px 96px; }
+
+/* ─── Top bar ─────────────────────────────────────────────────── */
+.topbar {
+  display: flex; align-items: center; gap: 14px;
+  padding: 10px 0 18px;
+  border-bottom: 1px solid var(--rule);
+}
+.brand {
+  display: flex; align-items: center; gap: 10px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--ink-2);
+}
+.brand-mark {
+  width: 22px; height: 22px;
+  background:
+    radial-gradient(circle at 30% 30%, #1b1a17 35%, transparent 36%) 0 0/8px 8px,
+    var(--ink);
+  border-radius: 3px;
+  display: grid; place-items: center;
+  color: var(--paper); font-size: 11px; font-weight: 700;
+  font-family: "IBM Plex Mono", monospace;
+}
+.topbar .sep { flex: 1; }
+.topbar .meta { display: flex; gap: 18px; font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--ink-3); }
+.topbar .meta b { color: var(--ink); font-weight: 500; }
+.topbar .dot { width: 7px; height: 7px; background: var(--pos); border-radius: 50%; display: inline-block; margin-right: 6px; vertical-align: 1px; box-shadow: 0 0 0 3px color-mix(in oklab, var(--pos) 20%, transparent); }
+
+/* ─── Hero ─────────────────────────────────────────────────────── */
+.hero { padding: 40px 0 28px; display: grid; grid-template-columns: 1.45fr 1fr; gap: 56px; align-items: end; }
+.hero-tag {
+  display: inline-flex; align-items: center; gap: 10px;
+  padding: 5px 10px;
+  background: var(--neg-bg); color: var(--neg);
+  font-family: "IBM Plex Mono", monospace; font-size: 10.5px;
+  letter-spacing: 0.12em; text-transform: uppercase;
+  border: 1px solid color-mix(in oklab, var(--neg) 25%, transparent);
+  border-radius: 2px;
+}
+.hero h1 {
+  font-family: "IBM Plex Serif", Georgia, serif;
+  font-weight: 500; font-size: 64px; line-height: 1.02;
+  margin: 18px 0 18px; letter-spacing: -0.02em;
+  color: var(--ink);
+  text-wrap: balance;
+}
+.hero h1 em { font-style: normal; color: var(--neg); }
+.hero .lead {
+  font-size: 17.5px; line-height: 1.5;
+  color: var(--ink-2); max-width: 58ch;
+}
+.hero .lead b { color: var(--ink); font-weight: 600; }
+
+.hero-side {
+  border-left: 1px solid var(--rule);
+  padding: 0 0 6px 28px;
+  display: flex; flex-direction: column; gap: 18px;
+}
+.hero-stat { display: flex; align-items: baseline; gap: 14px; }
+.hero-stat .n { font-family: "IBM Plex Mono", monospace; font-size: 34px; font-weight: 500; color: var(--ink); letter-spacing: -0.01em; }
+.hero-stat .n.warn { color: var(--warn); }
+.hero-stat .n.neg { color: var(--neg); }
+.hero-stat .n.pos { color: var(--pos); }
+.hero-stat .label { font-family: "IBM Plex Mono", monospace; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); line-height: 1.35; }
+
+/* ─── Data freshness strip ─────────────────────────────────────── */
+.freshness {
+  margin-top: 24px;
+  background: var(--card-2);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  display: grid; grid-template-columns: 1fr 1fr 1fr 1fr;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11.5px;
+}
+.fresh-cell { padding: 14px 18px; border-right: 1px solid var(--rule); }
+.fresh-cell:last-child { border-right: none; }
+.fresh-cell .k { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 6px; }
+.fresh-cell .v { color: var(--ink); font-weight: 500; }
+.fresh-cell .sub { color: var(--ink-3); font-size: 10.5px; margin-top: 2px; }
+
+/* ─── Sticky nav ───────────────────────────────────────────────── */
+.nav {
+  position: sticky; top: 0; z-index: 20;
+  margin: 28px -28px 0;
+  padding: 11px 28px;
+  background: color-mix(in oklab, var(--paper) 92%, transparent);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+  display: flex; align-items: center; gap: 20px; flex-wrap: wrap;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+}
+.nav .label { color: var(--ink-3); letter-spacing: 0.14em; text-transform: uppercase; font-weight: 500; }
+.nav a { color: var(--ink-2); border-bottom: none; letter-spacing: 0.02em; }
+.nav a:hover { color: var(--accent); }
+.nav .num { color: var(--ink-4); margin-right: 5px; }
+
+/* ─── Section scaffolding ─────────────────────────────────────── */
+section { margin-top: 14px; scroll-margin-top: 64px; }
+.section-head {
+  margin-bottom: 14px;
+  padding-top: 14px;
+  border-top: 2px solid var(--ink);
+}
+.section-num {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px; letter-spacing: 0.14em;
+  color: var(--ink-4);
+  margin-bottom: 10px;
+}
+.section-head h2 {
+  font-family: "IBM Plex Serif", Georgia, serif;
+  font-weight: 500; font-size: 32px; line-height: 1.1;
+  margin: 0 0 10px 0; letter-spacing: -0.015em;
+  color: var(--ink);
+  max-width: 28ch;
+}
+.section-head .desc { font-size: 14.5px; color: var(--ink-2); max-width: 78ch; margin-top: 4px; line-height: 1.55; }
+
+.section-body { padding-left: 0; }
+
+/* ─── Cards / tables ───────────────────────────────────────────── */
+.card {
+  background: var(--card);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+}
+
+.table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.table thead th {
+  text-align: left;
+  font-family: "IBM Plex Mono", monospace;
+  font-weight: 500; font-size: 10.5px;
+  letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--ink-3);
+  padding: 12px 16px;
+  background: var(--card-2);
+  border-bottom: 1px solid var(--rule);
+}
+.table tbody td { padding: 13px 16px; border-bottom: 1px solid var(--rule-3); vertical-align: middle; color: var(--ink-2); }
+.table tbody tr:last-child td { border-bottom: none; }
+.table tbody tr:hover td { background: var(--card-2); }
+.table .n { font-family: "IBM Plex Mono", monospace; font-variant-numeric: tabular-nums; color: var(--ink); }
+.table .name { color: var(--ink); font-weight: 500; }
+.table .name .sub { display: block; font-weight: 400; font-size: 11.5px; color: var(--ink-3); margin-top: 1px; }
+.right { text-align: right; }
+.center { text-align: center; }
+
+/* status pills + badges */
+.pill {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 2px 8px;
+  font-family: "IBM Plex Mono", monospace; font-size: 10.5px;
+  font-weight: 500; letter-spacing: 0.06em; text-transform: uppercase;
+  border-radius: 2px; border: 1px solid;
+  white-space: nowrap;
+}
+.pill.pos  { color: var(--pos);  background: var(--pos-bg);  border-color: color-mix(in oklab, var(--pos) 25%, transparent); }
+.pill.warn { color: var(--warn); background: var(--warn-bg); border-color: color-mix(in oklab, var(--warn) 30%, transparent); }
+.pill.neg  { color: var(--neg);  background: var(--neg-bg);  border-color: color-mix(in oklab, var(--neg) 25%, transparent); }
+.pill.hi   { color: #6e5410;     background: var(--hi-bg);   border-color: color-mix(in oklab, var(--hi) 50%, transparent); }
+.pill.muted{ color: var(--ink-3);background: var(--paper-2);  border-color: var(--rule); }
+
+/* ─── Hero side stat list ─────────────────────────────────────── */
+.diff { font-family: "IBM Plex Mono", monospace; font-size: 11px; letter-spacing: 0.04em; }
+.diff.neg { color: var(--neg); } .diff.pos { color: var(--pos); } .diff.warn { color: var(--warn); }
+
+/* ─── KPI tiles ───────────────────────────────────────────────── */
+.kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+.kpi {
+  background: var(--card);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 18px 20px 18px;
+  position: relative;
+}
+.kpi.alert { background: var(--neg-bg); border-color: color-mix(in oklab, var(--neg) 30%, transparent); }
+.kpi .k { font-family: "IBM Plex Mono", monospace; font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 12px; }
+.kpi .v { font-family: "IBM Plex Mono", monospace; font-size: 36px; font-weight: 500; color: var(--ink); letter-spacing: -0.01em; line-height: 1; margin-bottom: 8px; }
+.kpi.alert .v { color: var(--neg); }
+.kpi .v .unit { font-size: 18px; color: var(--ink-3); margin-left: 1px; }
+.kpi .vs { font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--ink-3); }
+.kpi .vs b { color: var(--ink); font-weight: 500; }
+.kpi .gap { color: var(--neg); }
+.kpi .desc { font-size: 12px; color: var(--ink-3); margin-top: 6px; line-height: 1.4; }
+.kpi .ribbon {
+  position: absolute; top: 0; right: 0;
+  font-family: "IBM Plex Mono", monospace; font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--ink-4);
+  padding: 8px 12px;
+}
+
+/* ─── UE trend chart ──────────────────────────────────────────── */
+.chart-card { padding: 24px 28px 18px; }
+.chart-head { display: flex; justify-content: space-between; align-items: end; margin-bottom: 14px; gap: 24px; }
+.chart-head .legend { display: flex; gap: 16px; font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--ink-3); }
+.chart-head .legend .sw { display: inline-block; width: 14px; height: 2px; vertical-align: 3px; margin-right: 5px; }
+.ue-svg { width: 100%; height: 220px; display: block; }
+
+/* ─── Industry mix bars ───────────────────────────────────────── */
+.imix { display: grid; grid-template-columns: 1fr; gap: 0; }
+.imix-row {
+  display: grid;
+  grid-template-columns: 240px 1fr 110px 110px 80px;
+  gap: 18px;
+  align-items: center;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--rule-3);
+  font-size: 13px;
+}
+.imix-row:last-child { border-bottom: none; }
+.imix-row .name { color: var(--ink); font-weight: 500; }
+.imix-row .name .sub { display: block; font-weight: 400; font-size: 11px; color: var(--ink-3); margin-top: 1px; font-family: "IBM Plex Mono", monospace; }
+.bar-track { position: relative; height: 10px; background: var(--paper-2); border-radius: 1px; overflow: hidden; }
+.bar-fill { position: absolute; top: 0; bottom: 0; left: 0; background: var(--ink); }
+.bar-pub  { position: absolute; top: 0; bottom: 0; background: var(--accent); opacity: 0.85; }
+.imix-row.head {
+  font-family: "IBM Plex Mono", monospace; font-size: 10.5px;
+  letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--ink-3); border-bottom: 1px solid var(--rule); padding-bottom: 8px;
+}
+.imix-row .right { text-align: right; }
+
+/* ─── County industry mix grid ─────────────────────────────────── */
+.county-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.county-card { background: var(--card); border: 1px solid var(--rule); border-radius: 4px; padding: 18px 20px; }
+.county-card h4 { margin: 0 0 4px; font-family: "IBM Plex Serif", Georgia, serif; font-weight: 500; font-size: 17px; color: var(--ink); }
+.county-card .fips { font-family: "IBM Plex Mono", monospace; font-size: 10.5px; color: var(--ink-4); letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 10px; }
+.county-card .tot { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--ink-3); padding: 8px 0 10px; border-top: 1px solid var(--rule-3); border-bottom: 1px solid var(--rule-3); margin-bottom: 10px; }
+.county-card .tot b { color: var(--ink); font-weight: 600; }
+.county-list { list-style: none; padding: 0; margin: 0; font-size: 12.5px; }
+.county-list li { display: grid; grid-template-columns: 1fr auto; gap: 8px; padding: 5px 0; color: var(--ink-2); }
+.county-list .sect { color: var(--ink); }
+.county-list .v { font-family: "IBM Plex Mono", monospace; color: var(--ink-3); font-size: 11.5px; }
+.county-list .v b { color: var(--ink); font-weight: 500; }
+
+/* ─── Federal concentration ───────────────────────────────────── */
+.conc-hero {
+  display: grid; grid-template-columns: 1fr 2.2fr; gap: 28px;
+  background: var(--card); border: 1px solid var(--rule); border-radius: 4px;
+  padding: 26px 30px;
+}
+.conc-hero .big {
+  font-family: "IBM Plex Mono", monospace; font-size: 56px; font-weight: 500; line-height: 1;
+  color: var(--neg); letter-spacing: -0.02em; margin-bottom: 8px;
+}
+.conc-hero .lbl { font-family: "IBM Plex Mono", monospace; font-size: 10.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 14px; }
+.conc-hero .note { font-size: 13px; color: var(--ink-2); line-height: 1.45; }
+.conc-hero .note b { color: var(--ink); }
+
+.recip-list { display: grid; grid-template-columns: 1fr; gap: 0; margin-top: 16px; }
+.recip-row {
+  display: grid;
+  grid-template-columns: 28px 1fr 1fr 130px 110px;
+  gap: 14px; align-items: center;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--rule-3);
+  font-size: 13px;
+}
+.recip-row:first-child { border-top: 1px solid var(--rule); }
+.recip-row .rank { font-family: "IBM Plex Mono", monospace; color: var(--ink-4); font-size: 11px; }
+.recip-row .name { color: var(--ink); font-weight: 500; }
+.recip-row .loc { color: var(--ink-3); font-family: "IBM Plex Mono", monospace; font-size: 11.5px; }
+.recip-row .amt { font-family: "IBM Plex Mono", monospace; text-align: right; color: var(--ink); font-weight: 500; }
+.recip-row.dom { background: color-mix(in oklab, var(--neg-bg) 60%, transparent); }
+.recip-row.dom .name { color: var(--neg); }
+.recip-row .sharebar {
+  position: relative; height: 6px; background: var(--paper-2); border-radius: 1px; overflow: hidden;
+}
+.recip-row .sharebar > i {
+  position: absolute; inset: 0 auto 0 0; background: var(--ink);
+}
+.recip-row.dom .sharebar > i { background: var(--neg); }
+
+/* ─── ROI table ────────────────────────────────────────────────── */
+.roi-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.roi-table thead th {
+  font-family: "IBM Plex Mono", monospace; font-weight: 500; font-size: 10.5px;
+  letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3);
+  text-align: left; padding: 10px 12px; background: var(--card-2);
+  border-bottom: 1px solid var(--rule); white-space: nowrap;
+}
+.roi-table td {
+  padding: 12px; border-bottom: 1px solid var(--rule-3); vertical-align: top;
+  color: var(--ink-2);
+}
+.roi-table tbody tr:last-child td { border-bottom: none; }
+.roi-table .path { color: var(--ink); font-weight: 500; }
+.roi-table .path .sub { display: block; font-weight: 400; font-size: 11px; color: var(--ink-3); margin-top: 2px; }
+.roi-table .n { font-family: "IBM Plex Mono", monospace; }
+.roi-table tbody tr:hover td { background: var(--card-2); }
+
+/* ─── Travel job cards ────────────────────────────────────────── */
+.travel-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+.travel-card { background: var(--card); border: 1px solid var(--rule); border-radius: 4px; padding: 20px 22px; }
+.travel-card .top { display: flex; justify-content: space-between; gap: 16px; align-items: start; margin-bottom: 14px; }
+.travel-card h4 { margin: 0 0 4px; font-family: "IBM Plex Serif", Georgia, serif; font-weight: 500; font-size: 18px; color: var(--ink); }
+.travel-card .sub { font-size: 12px; color: var(--ink-3); font-family: "IBM Plex Mono", monospace; }
+.travel-stats { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; padding: 14px 0; border-top: 1px solid var(--rule-3); border-bottom: 1px solid var(--rule-3); }
+.travel-stat .k { font-family: "IBM Plex Mono", monospace; font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 4px; }
+.travel-stat .v { font-family: "IBM Plex Mono", monospace; font-size: 15px; font-weight: 500; color: var(--ink); }
+.travel-card .pat { font-size: 12.5px; color: var(--ink-2); margin-top: 12px; line-height: 1.45; }
+
+/* ─── Anchor scorecard ────────────────────────────────────────── */
+.scorecard { background: var(--card); border: 1px solid var(--rule); border-radius: 4px; }
+.score-row {
+  display: grid; grid-template-columns: 30px 1.1fr 2fr 120px;
+  gap: 18px; align-items: center;
+  padding: 16px 22px;
+  border-bottom: 1px solid var(--rule-3);
+}
+.score-row:last-child { border-bottom: none; }
+.score-row .icon { font-family: "IBM Plex Mono", monospace; font-size: 18px; font-weight: 500; text-align: center; }
+.score-row.strong .icon { color: var(--pos); }
+.score-row.mod .icon    { color: var(--warn); }
+.score-row.weak .icon   { color: var(--neg); }
+.score-row .title { color: var(--ink); font-weight: 500; font-size: 14px; }
+.score-row .title .sub { display: block; font-weight: 400; font-size: 11.5px; color: var(--ink-3); margin-top: 2px; font-family: "IBM Plex Mono", monospace; }
+.score-row .note { font-size: 12.5px; color: var(--ink-2); line-height: 1.45; }
+.score-row .rating { text-align: right; }
+
+/* ─── Callout ─────────────────────────────────────────────────── */
+.callout {
+  background: var(--hi-bg);
+  border: 1px solid color-mix(in oklab, var(--hi) 45%, transparent);
+  border-radius: 4px;
+  padding: 18px 22px;
+  font-size: 13.5px; color: var(--ink-2); line-height: 1.5;
+}
+.callout b { color: var(--ink); }
+
+/* ─── Sources ─────────────────────────────────────────────────── */
+.sources {
+  margin-top: 14px;
+  font-family: "IBM Plex Mono", monospace; font-size: 11px;
+  color: var(--ink-3); line-height: 1.5;
+}
+.sources::before {
+  content: "Sources ·";
+  letter-spacing: 0.12em; text-transform: uppercase;
+  font-weight: 500; color: var(--ink-4);
+  margin-right: 6px;
+}
+
+/* ─── Footer ──────────────────────────────────────────────────── */
+footer { margin-top: 80px; padding-top: 28px; border-top: 1px solid var(--rule); display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 30px; font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--ink-3); }
+footer h5 { font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-2); margin: 0 0 8px; font-weight: 500; }
+
+/* ─── Responsive ──────────────────────────────────────────────── */
+@media (max-width: 1100px) {
+  .hero { grid-template-columns: 1fr; gap: 28px; }
+  .hero-side { border-left: none; border-top: 1px solid var(--rule); padding: 28px 0 0; }
+  .section-body { padding-left: 0; }
+  .section-head { padding-top: 12px; }
+  .section-head h2 { font-size: 26px; }
+  .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+  .county-grid { grid-template-columns: repeat(2, 1fr); }
+  .travel-grid { grid-template-columns: 1fr; }
+  .conc-hero { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<div class="shell">
+
+<!-- ────── Topbar ────── -->
+<div class="topbar">
+  <div class="brand">
+    <div class="brand-mark">P</div>
+    <div>Packet Void Labs · Operator Console</div>
+  </div>
+  <div class="sep"></div>
+  <div class="meta">
+    <span><span class="dot"></span>LIVE FEED</span>
+    <span>RENDERED <b>2026-05-27 05:05 UTC</b></span>
+    <span>REGION <b>LWA-25</b></span>
+    <span>BUILD <b>5b1f3a</b></span>
+  </div>
+</div>
+
+<!-- ────── Hero ────── -->
+<header class="hero">
+  <div>
+    <div class="hero-tag">⚑ Structurally weak labor market</div>
+    <h1>The headline says <em>fine.</em><br/>The participation rate says <em>hollow.</em></h1>
+    <p class="lead">
+      Five Southern Illinois counties post a <b>5.3% unemployment rate</b> — but labor-force participation runs <b>8.4 percentage points below the Illinois average.</b> The headline number misses everyone who has stopped looking. Below: the true labor picture, where the federal dollars actually land, and which training ladders survive the single-mom test.
+    </p>
+  </div>
+
+  <aside class="hero-side">
+    <div class="hero-stat">
+      <div class="n warn">5.3<span style="font-size:18px;color:var(--ink-3)">%</span></div>
+      <div class="label">Headline UE rate<br/>weighted across 5 counties</div>
+    </div>
+    <div class="hero-stat">
+      <div class="n neg">56.7<span style="font-size:18px;color:var(--ink-3)">%</span></div>
+      <div class="label">Labor-force participation<br/><span class="diff neg">−8.4pp vs Illinois</span></div>
+    </div>
+    <div class="hero-stat">
+      <div class="n">75,950</div>
+      <div class="label">Working-age, not in labor force<br/><span class="diff neg">43.3% of pop 16+</span></div>
+    </div>
+    <div class="hero-stat">
+      <div class="n neg">1.5<span style="font-size:18px;color:var(--ink-3)">%</span></div>
+      <div class="label">Of $812.8M federal $ flows to local firms<br/><span class="diff neg">Smith Hafeli alone · only certified local</span></div>
+    </div>
+  </aside>
+</header>
+
+<!-- ────── Freshness strip ────── -->
+<div class="freshness">
+  <div class="fresh-cell">
+    <div class="k">BLS LAUS · labor market</div>
+    <div class="v">Through 2026-03-01</div>
+    <div class="sub">refreshes monthly</div>
+  </div>
+  <div class="fresh-cell">
+    <div class="k">BLS QCEW · industry mix</div>
+    <div class="v">2025 Q3</div>
+    <div class="sub">refreshes quarterly · ~7mo lag</div>
+  </div>
+  <div class="fresh-cell">
+    <div class="k">Census ACS · labor utilization</div>
+    <div class="v">2023 5-year</div>
+    <div class="sub">refreshes annually · Dec</div>
+  </div>
+  <div class="fresh-cell">
+    <div class="k">USAspending · federal $</div>
+    <div class="v">24-month rolling</div>
+    <div class="sub">refreshes continuously</div>
+  </div>
+</div>
+
+<!-- ────── Sticky nav ────── -->
+<nav class="nav">
+  <span class="label">Jump §</span>
+  <a href="#labor"><span class="num">01</span>Labor Market</a>
+  <a href="#truth"><span class="num">02</span>True Picture</a>
+  <a href="#industry"><span class="num">03</span>Industry Mix</a>
+  <a href="#federal"><span class="num">04</span>Federal $</a>
+  <a href="#roi"><span class="num">05</span>Training ROI</a>
+  <a href="#travel"><span class="num">06</span>Travel Jobs</a>
+  <a href="#anchor"><span class="num">07</span>Anchor Attraction</a>
+</nav>
+
+<!-- ══════ §01 Labor Market ══════ -->
+<section id="labor">
+  <div class="section-head">
+    <div class="section-num">§ 01 / 07</div>
+    <div>
+      <h2>County-by-county labor market</h2>
+      <div class="desc">BLS Local Area Unemployment Statistics — the same monthly series each county council cites. Headline rates run 4.8–5.8% across the LWA-25, well below historical highs but the gap from state participation tells a different story.</div>
+    </div>
+  </div>
+
+  <div class="section-body">
+    <div class="card" style="overflow:hidden">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>County</th>
+            <th>Principal towns</th>
+            <th class="right">Unemployment</th>
+            <th class="right">Labor force</th>
+            <th class="right">As of</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="name">Williamson</td>
+            <td class="muted">Marion · Herrin · Carterville</td>
+            <td class="right n">4.8%</td>
+            <td class="right n">32,093</td>
+            <td class="right n muted">2mo ago</td>
+            <td><span class="pill pos">✓ best in region</span></td>
+          </tr>
+          <tr>
+            <td class="name">Jackson</td>
+            <td class="muted">Carbondale · Murphysboro</td>
+            <td class="right n">5.5%</td>
+            <td class="right n">24,546</td>
+            <td class="right n muted">2mo ago</td>
+            <td></td>
+          </tr>
+          <tr>
+            <td class="name">Franklin</td>
+            <td class="muted">Benton · West Frankfort</td>
+            <td class="right n">5.6%</td>
+            <td class="right n">16,383</td>
+            <td class="right n muted">2mo ago</td>
+            <td></td>
+          </tr>
+          <tr>
+            <td class="name">Perry</td>
+            <td class="muted">Du Quoin · Pinckneyville</td>
+            <td class="right n">5.6%</td>
+            <td class="right n">7,888</td>
+            <td class="right n muted">2mo ago</td>
+            <td></td>
+          </tr>
+          <tr>
+            <td class="name">Jefferson</td>
+            <td class="muted">Mt. Vernon</td>
+            <td class="right n">5.8%</td>
+            <td class="right n">15,621</td>
+            <td class="right n muted">2mo ago</td>
+            <td><span class="pill warn">⚑ region high</span></td>
+          </tr>
+          <tr style="background:var(--card-2)">
+            <td class="name" style="color:var(--ink)"><b>LWA-25 · weighted</b></td>
+            <td class="muted">all 5 counties</td>
+            <td class="right n"><b>5.3%</b></td>
+            <td class="right n"><b>96,531</b></td>
+            <td class="right n muted">—</td>
+            <td></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- ── UE trend chart ── -->
+    <div class="card chart-card" style="margin-top:18px">
+      <div class="chart-head">
+        <div>
+          <div class="eyebrow">LWA-25 weighted unemployment</div>
+          <div class="muted" style="font-size:12.5px;margin-top:2px">Labor-force-weighted average across 5 counties · monthly · last 5 years</div>
+        </div>
+        <div class="legend">
+          <span><span class="sw" style="background:var(--ink)"></span>LWA-25 weighted</span>
+          <span><span class="sw" style="background:var(--pos);border-top:1px dashed var(--pos)"></span>Full-employment 4%</span>
+          <span><span class="sw" style="background:var(--warn);border-top:1px dashed var(--warn)"></span>Watch 6%</span>
+        </div>
+      </div>
+      <svg class="ue-svg" viewBox="0 0 1000 220" preserveAspectRatio="none" aria-label="LWA-25 unemployment trend">
+        <!-- background grid -->
+        <g stroke="var(--rule-3)" stroke-width="1">
+          <line x1="0" y1="40"  x2="1000" y2="40"/>
+          <line x1="0" y1="90"  x2="1000" y2="90"/>
+          <line x1="0" y1="140" x2="1000" y2="140"/>
+          <line x1="0" y1="190" x2="1000" y2="190"/>
+        </g>
+        <!-- 8% / 6% / 4% / 2% axis labels -->
+        <g font-family="IBM Plex Mono" font-size="10" fill="var(--ink-4)">
+          <text x="6" y="36">8%</text>
+          <text x="6" y="86">6%</text>
+          <text x="6" y="136">4%</text>
+          <text x="6" y="186">2%</text>
+        </g>
+        <!-- 6% watch line -->
+        <line x1="40" y1="90" x2="1000" y2="90" stroke="var(--warn)" stroke-width="1" stroke-dasharray="3 4" opacity="0.55"/>
+        <!-- 4% full-employment line -->
+        <line x1="40" y1="140" x2="1000" y2="140" stroke="var(--pos)" stroke-width="1" stroke-dasharray="3 4" opacity="0.55"/>
+        <!-- UE line: Jan2022..May2026 -->
+        <path d="M 40 100
+                 L 90 88 L 140 85 L 190 79 L 240 64 L 290 50
+                 L 340 38 L 390 36 L 440 42 L 490 56 L 540 70
+                 L 590 92 L 640 102 L 690 104 L 740 96 L 790 92
+                 L 840 95 L 890 100 L 940 104 L 980 108"
+              fill="none" stroke="var(--ink)" stroke-width="1.8" stroke-linejoin="round"/>
+        <!-- end-point marker -->
+        <circle cx="980" cy="108" r="3.5" fill="var(--ink)"/>
+        <text x="945" y="125" font-family="IBM Plex Mono" font-size="10" fill="var(--ink)">5.3%</text>
+        <!-- x-axis labels -->
+        <g font-family="IBM Plex Mono" font-size="10" fill="var(--ink-4)">
+          <text x="40" y="212">Jan 2022</text>
+          <text x="285" y="212">Mar 2023</text>
+          <text x="530" y="212">May 2024</text>
+          <text x="775" y="212">Jul 2025</text>
+          <text x="945" y="212">Now</text>
+        </g>
+      </svg>
+      <div class="sources">BLS Local Area Unemployment Statistics via FRED · labor-force-weighted across Franklin, Jackson, Jefferson, Perry, Williamson</div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════ §02 True labor picture ══════ -->
+<section id="truth">
+  <div class="section-head">
+    <div class="section-num">§ 02 / 07</div>
+    <div>
+      <h2>The labor picture politicians don't cite</h2>
+      <div class="desc">The headline UE rate only counts people <em>actively looking</em>. It misses everyone who has stopped looking, gone on disability, dropped into the cash economy, or otherwise vanished from the math. Census ACS B23025 captures the entire working-age (16+) population — and tells the real story.</div>
+    </div>
+  </div>
+
+  <div class="section-body">
+
+    <div class="kpi-grid">
+      <div class="kpi alert">
+        <div class="ribbon">⚑ deficit</div>
+        <div class="k">Labor force participation</div>
+        <div class="v">56.7<span class="unit">%</span></div>
+        <div class="vs"><b>IL state</b> 65.1% · <span class="gap">gap −8.4pp</span></div>
+        <div class="desc">Share of 16+ pop working or actively job-hunting</div>
+      </div>
+      <div class="kpi alert">
+        <div class="k">Employment-to-population</div>
+        <div class="v">53.2<span class="unit">%</span></div>
+        <div class="vs"><b>IL state</b> 61.2% · <span class="gap">gap −8.0pp</span></div>
+        <div class="desc">The most honest "are people working" measure</div>
+      </div>
+      <div class="kpi">
+        <div class="k">Headline UE rate</div>
+        <div class="v">5.9<span class="unit">%</span></div>
+        <div class="vs">what politicians cite</div>
+        <div class="desc">Active job seekers only · masks discouraged workers</div>
+      </div>
+      <div class="kpi alert">
+        <div class="k">Not in labor force</div>
+        <div class="v">75,950</div>
+        <div class="vs">43.3% of working-age pop</div>
+        <div class="desc">The invisible population · closest legitimate count</div>
+      </div>
+    </div>
+
+    <div class="card" style="overflow:hidden;margin-top:18px">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>County</th>
+            <th class="right">Pop 16+</th>
+            <th class="right">Headline UE</th>
+            <th class="right">LFPR</th>
+            <th class="right">E/P ratio</th>
+            <th class="right">Not in LF</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="name">Williamson</td>
+            <td class="right n">54,189</td>
+            <td class="right n">4.3%</td>
+            <td class="right n">58.3% <span class="diff neg">−6.8pp</span></td>
+            <td class="right n">55.5% <span class="diff neg">−5.7pp</span></td>
+            <td class="right n"><b>22,608</b> <span class="muted">(41.7%)</span></td>
+            <td></td>
+          </tr>
+          <tr>
+            <td class="name">Jackson</td>
+            <td class="right n">43,872</td>
+            <td class="right n">7.2%</td>
+            <td class="right n">56.7% <span class="diff neg">−8.4pp</span></td>
+            <td class="right n">52.5% <span class="diff neg">−8.7pp</span></td>
+            <td class="right n"><b>19,001</b> <span class="muted">(43.3%)</span></td>
+            <td></td>
+          </tr>
+          <tr>
+            <td class="name">Franklin</td>
+            <td class="right n">30,303</td>
+            <td class="right n">6.5%</td>
+            <td class="right n">56.2% <span class="diff neg">−8.9pp</span></td>
+            <td class="right n">52.6% <span class="diff neg">−8.6pp</span></td>
+            <td class="right n"><b>13,268</b> <span class="muted">(43.8%)</span></td>
+            <td></td>
+          </tr>
+          <tr>
+            <td class="name">Jefferson</td>
+            <td class="right n">29,538</td>
+            <td class="right n">6.5%</td>
+            <td class="right n">58.4% <span class="diff neg">−6.7pp</span></td>
+            <td class="right n">54.5% <span class="diff neg">−6.7pp</span></td>
+            <td class="right n"><b>12,293</b> <span class="muted">(41.6%)</span></td>
+            <td></td>
+          </tr>
+          <tr>
+            <td class="name">Perry</td>
+            <td class="right n">17,307</td>
+            <td class="right n">5.1%</td>
+            <td class="right n">49.3% <span class="diff neg">−15.8pp</span></td>
+            <td class="right n">46.8% <span class="diff neg">−14.4pp</span></td>
+            <td class="right n"><b>8,780</b> <span class="muted">(50.7%)</span></td>
+            <td><span class="pill neg">⚑ structural</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout" style="margin-top:18px">
+      <b>How to read this.</b> The headline UE rate stays low because once someone stops looking they vanish from the math. LFPR + E/P ratio capture the entire 16+ population. The "Not in LF" column is the closest legitimate count of the invisible population — not employed, not unemployed by official definition, not in school. Benchmarks: <b>IL state</b> LFPR 65.1% / E/P 61.2% · <b>US national</b> LFPR 62.6% / E/P 60.3%.
+    </div>
+    <div class="sources">Census ACS 5-year table B23025 (Employment Status for population 16+)</div>
+  </div>
+</section>
+
+<!-- ══════ §03 Industry Mix ══════ -->
+<section id="industry">
+  <div class="section-head">
+    <div class="section-num">§ 03 / 07</div>
+    <div>
+      <h2>Where the jobs actually are</h2>
+      <div class="desc">Total covered employment by NAICS supersector — the single best view of where regional jobs live. Wages are QCEW average weekly across all ownerships. Use to bias WIOA cohorts toward high-employment + high-wage sectors and to recognize what a new employer would be slotting into.</div>
+    </div>
+  </div>
+
+  <div class="section-body">
+    <div class="card" style="padding: 22px 26px 18px">
+      <div class="imix">
+        <div class="imix-row head">
+          <div>Supersector</div>
+          <div>Employment · private vs public</div>
+          <div class="right">Total</div>
+          <div class="right">Avg / wk</div>
+          <div class="right">≈ Annual</div>
+        </div>
+
+        <!-- Education and Health -->
+        <div class="imix-row">
+          <div class="name">Education & Health Services<span class="sub">private 17,456 · public 7,199</span></div>
+          <div><div class="bar-track"><i class="bar-fill" style="width:100%"></i><i class="bar-pub" style="width:29.2%; left:70.8%"></i></div></div>
+          <div class="right n">24,655</div>
+          <div class="right n">$1,160</div>
+          <div class="right n">$60k</div>
+        </div>
+
+        <div class="imix-row">
+          <div class="name">Trade, Transportation & Utilities<span class="sub">private 15,327 · public 399</span></div>
+          <div><div class="bar-track"><i class="bar-fill" style="width:63.8%"></i></div></div>
+          <div class="right n">15,726</div>
+          <div class="right n">$881</div>
+          <div class="right n">$46k</div>
+        </div>
+
+        <div class="imix-row">
+          <div class="name">Manufacturing<span class="sub">private 9,748 · public 0</span></div>
+          <div><div class="bar-track"><i class="bar-fill" style="width:39.5%"></i></div></div>
+          <div class="right n">9,748</div>
+          <div class="right n">$1,250</div>
+          <div class="right n">$65k</div>
+        </div>
+
+        <div class="imix-row">
+          <div class="name">Leisure & Hospitality<span class="sub">private 9,282 · public 0</span></div>
+          <div><div class="bar-track"><i class="bar-fill" style="width:37.6%"></i></div></div>
+          <div class="right n">9,282</div>
+          <div class="right n">$454</div>
+          <div class="right n">$24k</div>
+        </div>
+
+        <div class="imix-row">
+          <div class="name">Professional & Business Services<span class="sub">private 4,557 · public 34</span></div>
+          <div><div class="bar-track"><i class="bar-fill" style="width:18.6%"></i></div></div>
+          <div class="right n">4,591</div>
+          <div class="right n">$1,095</div>
+          <div class="right n">$57k</div>
+        </div>
+
+        <div class="imix-row">
+          <div class="name">Financial Activities<span class="sub">private 3,795 · public 33</span></div>
+          <div><div class="bar-track"><i class="bar-fill" style="width:15.5%"></i></div></div>
+          <div class="right n">3,828</div>
+          <div class="right n">$1,247</div>
+          <div class="right n">$65k</div>
+        </div>
+
+        <div class="imix-row">
+          <div class="name">Construction<span class="sub">private 3,245 · public 0</span></div>
+          <div><div class="bar-track"><i class="bar-fill" style="width:13.2%"></i></div></div>
+          <div class="right n">3,245</div>
+          <div class="right n">$1,354</div>
+          <div class="right n">$70k</div>
+        </div>
+
+        <div class="imix-row">
+          <div class="name">Public Administration<span class="sub">private 0 · public 2,620</span></div>
+          <div><div class="bar-track"><i class="bar-pub" style="width:10.6%"></i></div></div>
+          <div class="right n">2,620</div>
+          <div class="right n">$1,215</div>
+          <div class="right n">$63k</div>
+        </div>
+
+        <div class="imix-row">
+          <div class="name">Other Services<span class="sub">private 1,620 · public 0</span></div>
+          <div><div class="bar-track"><i class="bar-fill" style="width:6.6%"></i></div></div>
+          <div class="right n">1,620</div>
+          <div class="right n">$720</div>
+          <div class="right n">$37k</div>
+        </div>
+
+        <div class="imix-row">
+          <div class="name">Natural Resources & Mining<span class="sub">private 1,463 · public 0</span></div>
+          <div><div class="bar-track"><i class="bar-fill" style="width:5.9%"></i></div></div>
+          <div class="right n">1,463</div>
+          <div class="right n">$1,578</div>
+          <div class="right n">$82k</div>
+        </div>
+
+        <div class="imix-row">
+          <div class="name">Information<span class="sub">private 363 · public 29</span></div>
+          <div><div class="bar-track"><i class="bar-fill" style="width:1.6%"></i></div></div>
+          <div class="right n">392</div>
+          <div class="right n">$1,186</div>
+          <div class="right n">$62k</div>
+        </div>
+      </div>
+
+      <div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--rule);display:flex;justify-content:space-between;font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:var(--ink-3)">
+        <div>Quarter <b style="color:var(--ink)">2025 Q3</b> · NAICS supersector aggregation · all ownerships</div>
+        <div>Total covered employment <b style="color:var(--ink)">77,171</b></div>
+      </div>
+      <div style="margin-top:12px;display:flex;gap:18px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--ink-3)">
+        <span><span style="display:inline-block;width:12px;height:8px;background:var(--ink);vertical-align:1px;margin-right:6px"></span>Private</span>
+        <span><span style="display:inline-block;width:12px;height:8px;background:var(--accent);opacity:0.85;vertical-align:1px;margin-right:6px"></span>Public</span>
+      </div>
+    </div>
+
+    <!-- ── County breakdown ── -->
+    <div style="margin-top:22px">
+      <div class="eyebrow" style="margin-bottom:10px">By county · top supersectors</div>
+      <div class="county-grid">
+
+        <div class="county-card">
+          <h4>Williamson</h4>
+          <div class="fips">FIPS 17199</div>
+          <div class="tot">Total covered employment <b>28,285</b></div>
+          <ul class="county-list">
+            <li><span class="sect">Education & Health</span><span class="v"><b>9,529</b> · $1,200/wk</span></li>
+            <li><span class="sect">Trade / Transport</span><span class="v"><b>5,219</b> · $948/wk</span></li>
+            <li><span class="sect">Manufacturing</span><span class="v"><b>3,624</b> · $1,082/wk</span></li>
+            <li><span class="sect">Leisure & Hospitality</span><span class="v"><b>3,511</b> · $483/wk</span></li>
+            <li><span class="sect">Prof. & Business</span><span class="v"><b>1,758</b> · $998/wk</span></li>
+            <li><span class="sect">Financial Activities</span><span class="v"><b>1,710</b> · $1,053/wk</span></li>
+          </ul>
+        </div>
+
+        <div class="county-card">
+          <h4>Jackson</h4>
+          <div class="fips">FIPS 17077</div>
+          <div class="tot">Total covered employment <b>19,511</b></div>
+          <ul class="county-list">
+            <li><span class="sect">Education & Health</span><span class="v"><b>6,515</b> · $1,143/wk</span></li>
+            <li><span class="sect">Trade / Transport</span><span class="v"><b>3,483</b> · $782/wk</span></li>
+            <li><span class="sect">Leisure & Hospitality</span><span class="v"><b>2,530</b> · $432/wk</span></li>
+            <li><span class="sect">Prof. & Business</span><span class="v"><b>1,487</b> · $1,234/wk</span></li>
+            <li><span class="sect">Construction</span><span class="v"><b>1,441</b> · $1,545/wk</span></li>
+            <li><span class="sect">Manufacturing</span><span class="v"><b>1,038</b> · $1,072/wk</span></li>
+          </ul>
+        </div>
+
+        <div class="county-card">
+          <h4>Jefferson</h4>
+          <div class="fips">FIPS 17081</div>
+          <div class="tot">Total covered employment <b>17,963</b></div>
+          <ul class="county-list">
+            <li><span class="sect">Education & Health</span><span class="v"><b>5,370</b> · $1,220/wk</span></li>
+            <li><span class="sect">Trade / Transport</span><span class="v"><b>4,411</b> · $923/wk</span></li>
+            <li><span class="sect">Manufacturing</span><span class="v"><b>4,382</b> · $1,424/wk</span></li>
+            <li><span class="sect">Leisure & Hospitality</span><span class="v"><b>1,712</b> · $502/wk</span></li>
+            <li><span class="sect">Prof. & Business</span><span class="v"><b>738</b> · $1,115/wk</span></li>
+            <li><span class="sect">Financial Activities</span><span class="v"><b>537</b> · $1,503/wk</span></li>
+          </ul>
+        </div>
+
+        <div class="county-card">
+          <h4>Franklin</h4>
+          <div class="fips">FIPS 17055</div>
+          <div class="tot">Total covered employment <b>8,456</b></div>
+          <ul class="county-list">
+            <li><span class="sect">Education & Health</span><span class="v"><b>2,488</b> · $993/wk</span></li>
+            <li><span class="sect">Trade / Transport</span><span class="v"><b>1,747</b> · $803/wk</span></li>
+            <li><span class="sect">Leisure & Hospitality</span><span class="v"><b>1,130</b> · $363/wk</span></li>
+            <li><span class="sect">Public Administration</span><span class="v"><b>847</b> · $954/wk</span></li>
+            <li><span class="sect">Construction</span><span class="v"><b>507</b> · $1,180/wk</span></li>
+            <li><span class="sect">Prof. & Business</span><span class="v"><b>474</b> · $1,068/wk</span></li>
+          </ul>
+        </div>
+
+        <div class="county-card">
+          <h4>Perry</h4>
+          <div class="fips">FIPS 17145</div>
+          <div class="tot">Total covered employment <b>2,956</b></div>
+          <ul class="county-list">
+            <li><span class="sect">Trade / Transport</span><span class="v"><b>866</b> · $817/wk</span></li>
+            <li><span class="sect">Education & Health</span><span class="v"><b>753</b> · $929/wk</span></li>
+            <li><span class="sect">Leisure & Hospitality</span><span class="v"><b>399</b> · $401/wk</span></li>
+            <li><span class="sect">Manufacturing</span><span class="v"><b>238</b> · $1,067/wk</span></li>
+            <li><span class="sect">Financial Activities</span><span class="v"><b>207</b> · $1,051/wk</span></li>
+            <li><span class="sect">Other Services</span><span class="v"><b>144</b> · $529/wk</span></li>
+          </ul>
+        </div>
+
+        <div class="county-card" style="background:var(--card-2);border-style:dashed">
+          <h4 style="color:var(--ink-2)">LWA-25 · region</h4>
+          <div class="fips">5 counties combined</div>
+          <div class="tot">Total covered employment <b>77,171</b></div>
+          <p style="font-size:12.5px;color:var(--ink-3);line-height:1.5;margin:0">
+            Healthcare anchors every county; Manufacturing concentrates in Jefferson (Continental Tire) and Williamson; Construction shows surprising strength in Jackson at $1,545/wk — outage and big-project wages. Perry runs on Trade/Transport.
+          </p>
+        </div>
+      </div>
+    </div>
+    <div class="sources">BLS Quarterly Census of Employment & Wages (QCEW) · 2025 Q3 · NAICS supersector aggregation · all ownerships</div>
+  </div>
+</section>
+
+<!-- ══════ §04 Federal money ══════ -->
+<section id="federal">
+  <div class="section-head">
+    <div class="section-num">§ 04 / 07</div>
+    <div>
+      <h2>Where the federal money actually goes</h2>
+      <div class="desc">$812.8M in federal contract obligations flowed into the 5-county LWA over the last 24 months. The concentration on a single recipient is the natural consequence of how the channel works — ammunition contracts are large-dollar-per-job and one Marion-based facility happens to be the work locale. It's not that the local economy depends on one company; it's that the federal-contracting channel runs primarily through one operator.</div>
+    </div>
+  </div>
+
+  <div class="section-body">
+
+    <div class="conc-hero">
+      <div>
+        <div class="lbl">Concentration index</div>
+        <div class="big">95.6<span style="font-size:32px;color:var(--ink-3)">%</span></div>
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--ink-3)">Top-1 recipient share<br/>Top-3 share · <b style="color:var(--ink)">97.6%</b></div>
+        <div style="margin-top:14px"><span class="pill neg">⚑ Extreme</span></div>
+      </div>
+      <div>
+        <div class="lbl">What it means for the workforce board</div>
+        <div class="note">
+          When a single recipient captures the majority of federal dollars in a region but employs only a fraction of local labor, the board has standing to negotiate <b>hiring commitments, apprenticeship slots, and local supplier-development</b> — Community Benefit Agreement precedent. The same prime is a natural anchor for registered apprenticeships in machinist, electrician, industrial maintenance and quality tech ladders. Tier-2 supplier development is the underused lever: large primes use out-of-region subs; HUBZone-certified local firms (Franklin / Perry / parts of Jackson qualify) can absorb that work.
+        </div>
+      </div>
+    </div>
+
+    <div class="recip-list card" style="margin-top:18px">
+      <div class="recip-row dom">
+        <div class="rank">01</div>
+        <div>
+          <div class="name">General Dynamics Ordnance & Tactical Systems</div>
+          <div class="loc">Marion IL · Department of Defense · ammunition manufacturing</div>
+        </div>
+        <div><div class="sharebar"><i style="width:95.6%"></i></div></div>
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--neg);text-align:right">95.6% of LWA-25 $</div>
+        <div class="amt">$777.3M</div>
+      </div>
+      <div class="recip-row">
+        <div class="rank">02</div>
+        <div>
+          <div class="name">Smith Hafeli Inc.</div>
+          <div class="loc">Marion IL · SDVOSB · local · USAF Col. Lance Hafeli</div>
+        </div>
+        <div><div class="sharebar"><i style="width:1.5%"></i></div></div>
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--ink-3);text-align:right">1.5%</div>
+        <div class="amt">$11.9M</div>
+      </div>
+      <div class="recip-row">
+        <div class="rank">03</div>
+        <div>
+          <div class="name">NaphCare LLC</div>
+          <div class="loc">out-of-region · national · BOP healthcare TPA</div>
+        </div>
+        <div><div class="sharebar"><i style="width:0.5%"></i></div></div>
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--ink-3);text-align:right">0.5%</div>
+        <div class="amt">$3.9M</div>
+      </div>
+      <div class="recip-row">
+        <div class="rank">04</div>
+        <div>
+          <div class="name">Lake Contracting Inc.</div>
+          <div class="loc">regional · small · no SDVOSB/HUBZone marker found</div>
+        </div>
+        <div><div class="sharebar"><i style="width:0.44%"></i></div></div>
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--ink-3);text-align:right">0.4%</div>
+        <div class="amt">$3.6M</div>
+      </div>
+      <div class="recip-row">
+        <div class="rank">05</div>
+        <div>
+          <div class="name">CDM Federal Programs Corporation</div>
+          <div class="loc">out-of-region · CDM Smith subsidiary · ~5,000 employees</div>
+        </div>
+        <div><div class="sharebar"><i style="width:0.43%"></i></div></div>
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--ink-3);text-align:right">0.4%</div>
+        <div class="amt">$3.5M</div>
+      </div>
+      <div class="recip-row">
+        <div class="rank">06</div>
+        <div>
+          <div class="name">Illinois Power Marketing Company, LLC</div>
+          <div class="loc">out-of-region · utility · Dynegy / Vistra subsidiary</div>
+        </div>
+        <div><div class="sharebar"><i style="width:0.31%"></i></div></div>
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--ink-3);text-align:right">0.3%</div>
+        <div class="amt">$2.5M</div>
+      </div>
+      <div class="recip-row">
+        <div class="rank">07</div>
+        <div>
+          <div class="name">Above Group Inc.</div>
+          <div class="loc">SDVOSB · Melbourne FL · 40 employees · $14M rev</div>
+        </div>
+        <div><div class="sharebar"><i style="width:0.26%"></i></div></div>
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--ink-3);text-align:right">0.3%</div>
+        <div class="amt">$2.1M</div>
+      </div>
+      <div class="recip-row">
+        <div class="rank">08</div>
+        <div>
+          <div class="name">Jett's Specialty Contracting, LLC</div>
+          <div class="loc">SDVOSB · Paducah KY · Jeffrey Jett</div>
+        </div>
+        <div><div class="sharebar"><i style="width:0.22%"></i></div></div>
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--ink-3);text-align:right">0.2%</div>
+        <div class="amt">$1.8M</div>
+      </div>
+    </div>
+
+    <div class="callout" style="margin-top:18px">
+      <b>The Marion VA Veterans First contracting story.</b> 4 of the top recipients are confirmed SDVOSBs capturing <b>$17.6M</b> (2.2% of regional total). Marion VA's Veterans First Contracting Program is the single biggest non-DoD federal procurement channel in the region — and the highest-value SBA certification to pursue for any local firm. The asymmetry: only <b>1 of 4</b> are local. The other three are headquartered in FL / KY / NC. The set-aside money flows; it just flows to out-of-region veteran firms because the region doesn't have enough certified local SDVOSBs. Smith Hafeli is the proof of concept — $11.9M in 24 months. There's no reason 5–10 more local SDVOSBs couldn't exist with the right certification on-ramp.
+    </div>
+
+    <div class="sources">USAspending.gov spending_by_category/recipient · recipients deduped across name variants · SBA set-aside classification cross-referenced to SAM.gov / company websites</div>
+  </div>
+</section>
+
+<!-- ══════ §05 Training ROI ══════ -->
+<section id="roi">
+  <div class="section-head">
+    <div class="section-num">§ 05 / 07</div>
+    <div>
+      <h2>Training ROI · the single-mom test</h2>
+      <div class="desc">For each named training pathway: how many jobs actually exist regionally to absorb credential holders, and how does that compare to training cost + payback at local cost of living? Family-supporting wage is necessary but not sufficient — a $100k pathway with 12 total positions region-wide is fundamentally different from a $50k pathway with hundreds. Benchmark wage: MIT Living Wage Jackson Co., 1 adult + 2 children = <b style="color:var(--ink)">$46.76/hr ($97k/yr)</b>.</div>
+    </div>
+  </div>
+
+  <div class="section-body">
+    <div class="card" style="overflow:hidden">
+      <table class="roi-table">
+        <thead>
+          <tr>
+            <th>Pathway</th>
+            <th>Train cost / time</th>
+            <th class="right">Journey wage</th>
+            <th class="right">Slots / yr</th>
+            <th>Saturation</th>
+            <th>Verdict</th>
+          </tr>
+        </thead>
+        <tbody>
+          <!-- Tier 1: union apprenticeships -->
+          <tr>
+            <td class="path">Lineworker · IBEW 702 outside<span class="sub">Paid apprenticeship · ~3.5yr · 7 × 1,000hr periods</span></td>
+            <td><span class="n">$0</span> · earn during<br/><span class="muted" style="font-size:11px">~3.5 years</span></td>
+            <td class="right n">$65.52/hr<br/><span class="muted" style="font-size:11px">≈ $136k/yr</span></td>
+            <td class="right n">5–15</td>
+            <td><span class="pill warn">High intake gate</span></td>
+            <td><span class="pill pos">★ Best ROI</span></td>
+          </tr>
+          <tr>
+            <td class="path">Electrician · IBEW 702 inside<span class="sub">Paid apprenticeship · 5yr</span></td>
+            <td><span class="n">$0</span> · earn during<br/><span class="muted" style="font-size:11px">5 years</span></td>
+            <td class="right n">$42–50/hr<br/><span class="muted" style="font-size:11px">≈ $92k/yr</span></td>
+            <td class="right n">10–20</td>
+            <td><span class="pill warn">High intake gate</span></td>
+            <td><span class="pill pos">Excellent</span></td>
+          </tr>
+          <tr>
+            <td class="path">Pipefitter · UA Local 553<span class="sub">Paid apprenticeship · 5yr · travel-tolerant</span></td>
+            <td><span class="n">$0</span> · earn during<br/><span class="muted" style="font-size:11px">5 years</span></td>
+            <td class="right n">$50–65/hr<br/><span class="muted" style="font-size:11px">≈ $130k/yr all-in</span></td>
+            <td class="right n">5–15</td>
+            <td><span class="pill warn">High intake gate</span></td>
+            <td><span class="pill pos">Top trade</span></td>
+          </tr>
+
+          <!-- Tier 2 -->
+          <tr>
+            <td class="path">RN · ADN at JALC<span class="sub">$10–20k tuition · 2 years</span></td>
+            <td><span class="n">$10–20k</span><br/><span class="muted" style="font-size:11px">2 years</span></td>
+            <td class="right n">$32–38/hr local<br/><span class="muted" style="font-size:11px">$130–200k traveling</span></td>
+            <td class="right n">dozens</td>
+            <td><span class="pill pos">Low</span></td>
+            <td><span class="pill pos">Best 2-yr</span></td>
+          </tr>
+          <tr>
+            <td class="path">Welder · structural / pipe<span class="sub">JALC 12–18mo program + AWS certs</span></td>
+            <td><span class="n">$5–15k</span><br/><span class="muted" style="font-size:11px">12–18 months</span></td>
+            <td class="right n">$31/hr local<br/><span class="muted" style="font-size:11px">$50–70/hr pipe travel</span></td>
+            <td class="right n">dozens</td>
+            <td><span class="pill pos">Low–Med</span></td>
+            <td><span class="pill pos">Strong</span></td>
+          </tr>
+          <tr>
+            <td class="path">Industrial maintenance · mechatronics<span class="sub">JALC 18–24mo · Continental anchor</span></td>
+            <td><span class="n">$10–25k</span><br/><span class="muted" style="font-size:11px">18–24 months</span></td>
+            <td class="right n">$33/hr<br/><span class="muted" style="font-size:11px">≈ $69k/yr</span></td>
+            <td class="right n">dozens</td>
+            <td><span class="pill pos">Low–Med</span></td>
+            <td><span class="pill pos">Family-supp.</span></td>
+          </tr>
+          <tr>
+            <td class="path">LPN · Licensed Practical Nurse<span class="sub">12mo diploma · SIH + Memorial hire</span></td>
+            <td><span class="n">$8–15k</span><br/><span class="muted" style="font-size:11px">12 months</span></td>
+            <td class="right n">$25/hr<br/><span class="muted" style="font-size:11px">≈ $52k/yr</span></td>
+            <td class="right n">dozens</td>
+            <td><span class="pill pos">Low–Med</span></td>
+            <td><span class="pill warn">Single adult only</span></td>
+          </tr>
+
+          <!-- Tier 3 — borderline -->
+          <tr>
+            <td class="path">CDL Class A · truck driver<span class="sub">JALC / Rend Lake · 4–8wk</span></td>
+            <td><span class="n">$3–6k</span><br/><span class="muted" style="font-size:11px">4–8 weeks</span></td>
+            <td class="right n">$22–28/hr local<br/><span class="muted" style="font-size:11px">$35–45/hr OTR</span></td>
+            <td class="right n">100s</td>
+            <td><span class="pill pos">Low</span></td>
+            <td><span class="pill warn">Family-time conflict</span></td>
+          </tr>
+          <tr>
+            <td class="path">IT support · Network+ / Security+<span class="sub">Self-study stack · 6–12mo</span></td>
+            <td><span class="n">$1–3k</span><br/><span class="muted" style="font-size:11px">6–12 months</span></td>
+            <td class="right n">$27/hr local<br/><span class="muted" style="font-size:11px">$70–120k remote</span></td>
+            <td class="right n">20–50</td>
+            <td><span class="pill warn">Med</span></td>
+            <td><span class="pill warn">Frame as remote</span></td>
+          </tr>
+
+          <!-- Phantom -->
+          <tr>
+            <td class="path">CEJA solar installer · NABCEP<span class="sub">8–16wk · CEJA Climate Works subsidized</span></td>
+            <td><span class="n">$0–1k</span><br/><span class="muted" style="font-size:11px">8–16 weeks</span></td>
+            <td class="right n">$26/hr if placed<br/><span class="muted" style="font-size:11px">$0 if no placement</span></td>
+            <td class="right n">~0</td>
+            <td><span class="pill neg">Phantom</span></td>
+            <td><span class="pill neg">⚑ Wrong credential</span></td>
+          </tr>
+          <tr>
+            <td class="path">CEJA wind technician · GWO<span class="sub">12–20wk · IA/TX wind belt travel</span></td>
+            <td><span class="n">$0–2k</span><br/><span class="muted" style="font-size:11px">12–20 weeks</span></td>
+            <td class="right n">$31/hr base<br/><span class="muted" style="font-size:11px">$80–100k all-in travel</span></td>
+            <td class="right n">~0 local</td>
+            <td><span class="pill neg">Phantom local</span></td>
+            <td><span class="pill warn">Reframe as travel</span></td>
+          </tr>
+
+          <!-- Below livable -->
+          <tr>
+            <td class="path">CNA · Certified Nursing Asst.<span class="sub">4–6wk cert · turnover-driven hiring</span></td>
+            <td><span class="n">$0.5–1.5k</span><br/><span class="muted" style="font-size:11px">4–6 weeks</span></td>
+            <td class="right n">$14–17/hr<br/><span class="muted" style="font-size:11px">≈ $30k/yr</span></td>
+            <td class="right n">100s</td>
+            <td><span class="pill pos">Low</span></td>
+            <td><span class="pill neg">Below livable</span></td>
+          </tr>
+
+          <!-- Saturation extreme -->
+          <tr>
+            <td class="path">Viticulture · vineyard mgr / winemaker<span class="sub">VESTA / UC Davis · 1–4yr</span></td>
+            <td><span class="n">$5–60k</span><br/><span class="muted" style="font-size:11px">1–4 years</span></td>
+            <td class="right n">$50–150k</td>
+            <td class="right n">12–24 total</td>
+            <td><span class="pill neg">Extreme</span></td>
+            <td><span class="pill neg">Don't oversell</span></td>
+          </tr>
+          <tr>
+            <td class="path">Cannabis · master grower<span class="sub">5–10yr OJT + degree</span></td>
+            <td><span class="n">$5–10k</span><br/><span class="muted" style="font-size:11px">10+ years</span></td>
+            <td class="right n">$80–150k</td>
+            <td class="right n">5–10 total</td>
+            <td><span class="pill neg">Extreme</span></td>
+            <td><span class="pill neg">Ceiling, not destination</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Insight strip -->
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:18px">
+      <div class="kpi" style="background:var(--card-2)">
+        <div class="k">Tier 1 · Union apprentice</div>
+        <div class="v" style="font-size:24px">$0 cost · paid</div>
+        <div class="vs">30–50 slots/yr · capacity-gated</div>
+      </div>
+      <div class="kpi" style="background:var(--card-2)">
+        <div class="k">Tier 2 · RN-ADN ladder</div>
+        <div class="v" style="font-size:24px">2yr → $130k</div>
+        <div class="vs">travel-RN is best 2-yr ROI in region</div>
+      </div>
+      <div class="kpi" style="background:var(--card-2)">
+        <div class="k">Saturation extreme</div>
+        <div class="v" style="font-size:24px">≤24 slots</div>
+        <div class="vs">viticulture · cannabis upper rungs</div>
+      </div>
+      <div class="kpi" style="background:var(--neg-bg);border-color:color-mix(in oklab,var(--neg) 30%,transparent)">
+        <div class="k">Phantom pipeline</div>
+        <div class="v" style="font-size:24px;color:var(--neg)">~0 jobs</div>
+        <div class="vs">CEJA solar installer · no local employers</div>
+      </div>
+    </div>
+
+    <div class="sources">Slot estimates are operator-advisory ranges · verify against PIRL outcome data · wages from BLS OES Carbondale-Marion MSA, union scale sheets, and named advisory roster · MIT Living Wage Jackson Co. 1A+2C = $46.76/hr ($97,260/yr)</div>
+  </div>
+</section>
+
+<!-- ══════ §06 Travel jobs ══════ -->
+<section id="travel">
+  <div class="section-head">
+    <div class="section-num">§ 06 / 07</div>
+    <div>
+      <h2>Travel-required, family-supporting opportunities</h2>
+      <div class="desc">Several family-supporting credentials require travel — and the local training infrastructure exists to feed them. These pay more than any non-degreed local-employment path: $90k–180k+ all-in. Rotational schedules (14-on / 14-off offshore wind, IBEW project rotations, RR pool service) keep significant home time. CDL OTR is called out separately as <em>family-time conflict</em> — it's chronic absence, not rotational.</div>
+    </div>
+  </div>
+
+  <div class="section-body">
+    <div class="travel-grid">
+
+      <div class="travel-card">
+        <div class="top">
+          <div>
+            <h4>Pipefitter / Steamfitter · UA Local 553</h4>
+            <div class="sub">East Alton IL · 7-county jurisdiction · 5yr apprenticeship</div>
+          </div>
+          <span class="pill pos">Manageable</span>
+        </div>
+        <div class="travel-stats">
+          <div class="travel-stat"><div class="k">Wage</div><div class="v">$50–65/hr</div></div>
+          <div class="travel-stat"><div class="k">Per diem</div><div class="v">$80–130/day</div></div>
+          <div class="travel-stat"><div class="k">All-in</div><div class="v">$110–160k+</div></div>
+        </div>
+        <div class="pat"><b>Pattern · </b> Refinery / petrochem / power-plant outages · 4–12wk projects · predictable home weekends. Top-paying construction trade in the region.</div>
+      </div>
+
+      <div class="travel-card">
+        <div class="top">
+          <div>
+            <h4>IBEW traveling card · Local 702 +</h4>
+            <div class="sub">After IBEW 702 5yr apprenticeship · sister-local mobility</div>
+          </div>
+          <span class="pill pos">Family-friendly</span>
+        </div>
+        <div class="travel-stats">
+          <div class="travel-stat"><div class="k">Wage</div><div class="v">$45–65/hr</div></div>
+          <div class="travel-stat"><div class="k">Per diem</div><div class="v">$100–160/day</div></div>
+          <div class="travel-stat"><div class="k">All-in</div><div class="v">$120–180k</div></div>
+        </div>
+        <div class="pat"><b>Pattern · </b> Storm restoration · large industrial · data-center builds. Storm work after hurricanes pays exceptional for 2–6wk deployments. Return to home local when work available.</div>
+      </div>
+
+      <div class="travel-card">
+        <div class="top">
+          <div>
+            <h4>Boilermaker · Local 363</h4>
+            <div class="sub">4yr paid apprenticeship · outage-heavy</div>
+          </div>
+          <span class="pill pos">Manageable</span>
+        </div>
+        <div class="travel-stats">
+          <div class="travel-stat"><div class="k">Wage</div><div class="v">$40–55/hr</div></div>
+          <div class="travel-stat"><div class="k">Per diem</div><div class="v">$110–150/day</div></div>
+          <div class="travel-stat"><div class="k">All-in</div><div class="v">$95–140k+</div></div>
+        </div>
+        <div class="pat"><b>Pattern · </b> Power-plant outages · refinery turnarounds · 2–8wk rotations. Less work as coal plants retire; nuclear + petrochem outage work steady. Strong per-diem culture.</div>
+      </div>
+
+      <div class="travel-card">
+        <div class="top">
+          <div>
+            <h4>IUOE Crane operator · Local 318</h4>
+            <div class="sub">3yr apprenticeship · Big Muddy Solar anchor</div>
+          </div>
+          <span class="pill pos">Manageable</span>
+        </div>
+        <div class="travel-stats">
+          <div class="travel-stat"><div class="k">Wage</div><div class="v">$45–60/hr</div></div>
+          <div class="travel-stat"><div class="k">Per diem</div><div class="v">$80–130/day</div></div>
+          <div class="travel-stat"><div class="k">All-in</div><div class="v">$110–150k</div></div>
+        </div>
+        <div class="pat"><b>Pattern · </b> Wind farms · big construction · refinery outages. Local 318 staffed the 124 MW Big Muddy Solar build in Jackson Co.; same union runs wind cranes in IA/TX wind belt.</div>
+      </div>
+
+      <div class="travel-card">
+        <div class="top">
+          <div>
+            <h4>Traveling RN · medical</h4>
+            <div class="sub">ADN/BSN + 1yr local → agency contract</div>
+          </div>
+          <span class="pill warn">Travel-heavy</span>
+        </div>
+        <div class="travel-stats">
+          <div class="travel-stat"><div class="k">Wage</div><div class="v">$60–110/hr</div></div>
+          <div class="travel-stat"><div class="k">Per diem</div><div class="v">$1.4–2.8k/wk</div></div>
+          <div class="travel-stat"><div class="k">All-in</div><div class="v">$130–200k+</div></div>
+        </div>
+        <div class="pat"><b>Pattern · </b> 13-week assignments anywhere in US · stack 4×13wk + 8wk home. Family compatibility depends on structure — single parent traveling = childcare problem; partnered nurses + childcare = transformative income jump. Highest dollar of any 2-yr credential.</div>
+      </div>
+
+      <div class="travel-card">
+        <div class="top">
+          <div>
+            <h4>Locomotive engineer / conductor</h4>
+            <div class="sub">Class I RR direct hire · BNSF / UP / CN / NS</div>
+          </div>
+          <span class="pill pos">Manageable</span>
+        </div>
+        <div class="travel-stats">
+          <div class="travel-stat"><div class="k">Wage</div><div class="v">$28–60/hr</div></div>
+          <div class="travel-stat"><div class="k">Per diem</div><div class="v">meal allow.</div></div>
+          <div class="travel-stat"><div class="k">All-in</div><div class="v">$85–130k</div></div>
+        </div>
+        <div class="pat"><b>Pattern · </b> Pool service — turnaround trips to crew change point + return; not multi-week travel. Carbondale on UP Salem Sub + CN through Du Quoin. Crew terminals at Salem + Mounds. Schedules irregular but home most nights.</div>
+      </div>
+
+    </div>
+
+    <div class="callout" style="margin-top:18px">
+      <b>The CEJA reframe.</b> CEJA wind-tech + solar-installer pipelines suffer from local-employer scarcity. The credentials themselves are real and valuable on travel-supported work. Reframe the cohort outcome from <em>"land a local job"</em> to <em>"land a regional travel-pay job with predictable home time."</em> Pair with Big Muddy Solar (hiring local IBEW / IUOE / LIUNA right now) for the local construction + the broader travel circuit for ongoing income.
+    </div>
+  </div>
+</section>
+
+<!-- ══════ §07 Anchor attraction ══════ -->
+<section id="anchor">
+  <div class="section-head">
+    <div class="section-num">§ 07 / 07</div>
+    <div>
+      <h2>Anchor-employer attraction · data-center scorecard</h2>
+      <div class="desc">Without new anchors paying above the livable-wage threshold, the training-alignment problem can't be solved by training alone. The realistic target list isn't Google or Microsoft; it's tier-2 firms hunting stranded power, federal agencies with relocation precedent, and university research-anchored programs. The data-center scorecard for LWA-25:</div>
+    </div>
+  </div>
+
+  <div class="section-body">
+    <div class="scorecard">
+
+      <div class="score-row strong">
+        <div class="icon">✓</div>
+        <div class="title">Stranded coal-plant interconnect<span class="sub">Baldwin retirement · ~1,200MW MISO-South</span></div>
+        <div class="note">Ameren IL serves the area. Hyperscalers and AI-training operators value stranded-grid sites for fast interconnect timelines.</div>
+        <div class="rating"><span class="pill pos">★★★ Strong</span></div>
+      </div>
+
+      <div class="score-row strong">
+        <div class="icon">✓</div>
+        <div class="title">Coop utility alternative<span class="sub">Egyptian Electric Cooperative · Murphysboro HQ</span></div>
+        <div class="note">Serves 4 of 5 LWA-25 counties (Jefferson is NOT in EECA territory). Member-owned coops structure flexible industrial rates. G&T parent SIPC owns coal + gas generation physically in Williamson + Washington — "local generation for local load" pitch.</div>
+        <div class="rating"><span class="pill pos">★★★ Strong</span></div>
+      </div>
+
+      <div class="score-row strong">
+        <div class="icon">✓</div>
+        <div class="title">IL Data Center Investments Act<span class="sub">Public Act 101-0031 · 20yr sales-tax exemption</span></div>
+        <div class="note">$250M min capital investment over 60mo · 20 FTE at <b>120% of county median wage</b> (workforce-board win) · carbon-neutral or green-building cert required. Underserved-area projects get +20% construction-wage tax credit.</div>
+        <div class="rating"><span class="pill pos">★★★ Strong</span></div>
+      </div>
+
+      <div class="score-row strong">
+        <div class="icon">✓</div>
+        <div class="title">Federal IRA Energy Communities adder<span class="sub">Franklin + Perry · coal-closure tracts</span></div>
+        <div class="note">Solar / wind / storage projects sited here get IRA §48 +10pp ITC bonus on top of 30% base. Use for behind-the-meter generation co-located with DC.</div>
+        <div class="rating"><span class="pill pos">★★★ Strong</span></div>
+      </div>
+
+      <div class="score-row strong">
+        <div class="icon">✓</div>
+        <div class="title">Water for cooling<span class="sub">Crab Orchard NWR · Kinkaid Lake · Mississippi</span></div>
+        <div class="note">Sufficient for all but the largest installations. Cooling-water is the silent disqualifier in NoVa and Phoenix; not a concern here.</div>
+        <div class="rating"><span class="pill pos">★★★ Strong</span></div>
+      </div>
+
+      <div class="score-row strong">
+        <div class="icon">✓</div>
+        <div class="title">Land cost<span class="sub">Undervalued vs NoVa / Phoenix / Columbus</span></div>
+        <div class="note">Order-of-magnitude cheaper acreage. The lifestyle pitch (Shawnee NF, wine trail, new Amtrak via Big Muddy Route) adds executive-relocation amenity value.</div>
+        <div class="rating"><span class="pill pos">★★★ Strong</span></div>
+      </div>
+
+      <div class="score-row mod">
+        <div class="icon">~</div>
+        <div class="title">Power cost · IOU vs coop<span class="sub">Ameren ~$0.08–0.09/kWh · EECA bespoke</span></div>
+        <div class="note">Ameren published industrial ~$0.08–0.09/kWh. EECA does not publish a comparable per-kWh tariff in the same machine-readable way — rural-coop industrial typically 1–2¢ below IOU. Neither competes with NoVa $0.06 on paper, but bespoke-deal latitude + local-generation story + IL DC Act sales-tax exemption changes all-in math.</div>
+        <div class="rating"><span class="pill warn">★★ Moderate</span></div>
+      </div>
+
+      <div class="score-row weak">
+        <div class="icon">✕</div>
+        <div class="title">Fiber diversity<span class="sub">$42.5M Clearwave BTOP + WK&T + ProTek + BEAD</span></div>
+        <div class="note">Public broadband investment is large and verifiable. But data-center-grade fiber diversity is a different problem — hyperscale needs 3+ <b>independent</b> carriers with physically diverse routes; most LWA-25 footprint has 1–2. NTIA's Clearwave grant terms included open-access interconnection; audit compliance + ICN wholesale alternative are the fix-up paths.</div>
+        <div class="rating"><span class="pill neg">★ Weak</span></div>
+      </div>
+
+      <div class="score-row weak">
+        <div class="icon">✕</div>
+        <div class="title">Operations talent · 200-person ops staff<span class="sub">No existing data-center workforce concentration</span></div>
+        <div class="note">SIU produces some IT capacity. JALC + Rend Lake would need to stand up a DC-ops training program in parallel to any recruitment. This is a workforce-board project, not a recruitment blocker.</div>
+        <div class="rating"><span class="pill neg">★ Weak</span></div>
+      </div>
+
+    </div>
+
+    <!-- Realistic target list -->
+    <div style="margin-top:24px;display:grid;grid-template-columns:1fr 1fr;gap:16px">
+      <div class="card" style="padding:22px 24px">
+        <div class="eyebrow" style="margin-bottom:6px">Recruit these</div>
+        <h4 style="font-family:'IBM Plex Serif',Georgia,serif;font-weight:500;font-size:18px;margin:0 0 12px;color:var(--ink)">Tier-2 data centers + AI operators</h4>
+        <ul style="margin:0;padding:0;list-style:none;font-size:13px;color:var(--ink-2);line-height:1.7">
+          <li><b style="color:var(--ink)">QTS · CyrusOne · Stack · Compass · Aligned</b> — tier-2 wholesale</li>
+          <li><b style="color:var(--ink)">CoreWeave · Lambda · Crusoe</b> — AI training, stranded-power hunters</li>
+          <li><b style="color:var(--ink)">Switch · DataBank</b> — colocation, Midwest appetite</li>
+          <li><span class="muted">Google / Microsoft / AWS / Meta</span> → go to Loudoun / Phoenix / Columbus. Don't waste cycles.</li>
+        </ul>
+      </div>
+      <div class="card" style="padding:22px 24px">
+        <div class="eyebrow" style="margin-bottom:6px">Federal agency relocation candidates</div>
+        <h4 style="font-family:'IBM Plex Serif',Georgia,serif;font-weight:500;font-size:18px;margin:0 0 12px;color:var(--ink)">Post-pandemic = satellite labs, not HQ moves</h4>
+        <ul style="margin:0;padding:0;list-style:none;font-size:13px;color:var(--ink-2);line-height:1.7">
+          <li><b style="color:var(--ink)">USDA ARS</b> — SIU College of Ag anchors land-grant proximity</li>
+          <li><b style="color:var(--ink)">USGS</b> — Mississippi River science · SIU CFAAS</li>
+          <li><b style="color:var(--ink)">DOE FECM / NETL Midwest field office</b> — coal-region mandate</li>
+          <li><b style="color:var(--ink)">VBA at Marion VA</b> — lowest-risk; co-locate w/ existing infra</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="sources">Power data: Ameren IL published tariff · EECA member services · SIPC generation portfolio · Land/water: USACE Rend Lake + Crab Orchard NWR · Fiber: NTIA BTOP grant filing · IL Data Center Act: dceo.illinois.gov · IRA Energy Communities: IRS §48</div>
+
+  </div>
+</section>
+
+<!-- ══════ Footer ══════ -->
+<footer>
+  <div>
+    <h5>Data sources</h5>
+    BLS LAUS via FRED · monthly<br/>
+    BLS QCEW · 2025 Q3<br/>
+    Census ACS B23025 · 2023 5yr<br/>
+    USAspending.gov · 24mo rolling<br/>
+    MIT Living Wage Calculator<br/>
+    IL DCEO · DRA · NHSC / HRSA
+  </div>
+  <div>
+    <h5>Refresh cadence</h5>
+    LAUS · monthly · 1–2mo lag<br/>
+    QCEW · quarterly · ~7mo lag<br/>
+    ACS · annual · December<br/>
+    USAspending · continuous<br/>
+    Living Wage · annual
+  </div>
+  <div>
+    <h5>About</h5>
+    Operator dashboard maintained by Packet Void Labs for the 5-county LWA-25 Southern Illinois Workforce Development Board. All figures verifiable at source. Methodology + slot estimates documented inline.<br/>
+    <br/>
+    <span style="color:var(--ink-4)">Page hash <b style="color:var(--ink-2)">5b1f3a · 2026-05-27 05:05 UTC</b></span>
+  </div>
+</footer>
+
+</div>
+</body>
+</html>

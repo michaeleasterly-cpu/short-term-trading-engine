@@ -7,6 +7,8 @@
  *
  * Same data source: GET /api/public/market-health. No auth.
  */
+import { DashboardHead, Topbar, DashboardFooter, DEFAULT_FOOTER_COLUMNS } from "@/components/dashboard-chrome";
+
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
@@ -333,12 +335,25 @@ function buildSections(d: MarketHealth): Section[] {
 // recession predictor on its own (Curtin 2007; Baker-Bloom-Davis 2016).
 const TIER1_SECTION_IDS = new Set(["recession", "credit"]);
 
-function topHeadline(sections: Section[]): { headline: string; subhead: string; tone: Tone } {
+interface TopHeadline {
+  headline: string;
+  subhead: string;
+  tone: Tone;
+  weatherWord: string;
+  t1Stress: number;
+  t1Watch: number;
+  t1Total: number;
+  t2Stress: number;
+  t2Watch: number;
+}
+
+function topHeadline(sections: Section[]): TopHeadline {
   const tier1 = sections.filter(s => TIER1_SECTION_IDS.has(s.id)).flatMap(s => s.cards);
   const tier2 = sections.filter(s => !TIER1_SECTION_IDS.has(s.id)).flatMap(s => s.cards);
 
   const t1Stress = tier1.filter(c => c.tone === "stress").length;
   const t1Watch  = tier1.filter(c => c.tone === "watch").length;
+  const t1Total  = tier1.length;
   const t2Stress = tier2.filter(c => c.tone === "stress").length;
   const t2Watch  = tier2.filter(c => c.tone === "watch").length;
 
@@ -350,40 +365,24 @@ function topHeadline(sections: Section[]): { headline: string; subhead: string; 
       ? ` (Sentiment is mixed but hard data is clean.)`
       : "";
 
+  // Headline is a neutral question; the weather word becomes a band identifier
+  // shown alongside the numeric flag counts, not a verdict at H1 size.
+  const headline = "How is the US market today?";
+  const base = { headline, t1Stress, t1Watch, t1Total, t2Stress, t2Watch };
+
   if (t1Stress >= 2) {
-    return {
-      headline: "Stormy",
-      subhead: `${t1Stress} recession or credit indicators flashing red. Time to be careful.`,
-      tone: "stress",
-    };
+    return { ...base, weatherWord: "Stormy", subhead: `${t1Stress} of ${t1Total} recession or credit indicators are flashing red.${softNote}`, tone: "stress" };
   }
   if (t1Stress >= 1) {
-    return {
-      headline: "Mixed weather",
-      subhead: `One recession/credit flag is red, but the rest of the hard data is OK.${softNote}`,
-      tone: "watch",
-    };
+    return { ...base, weatherWord: "Mixed", subhead: `${t1Stress} of ${t1Total} hard-data flags is red; the rest are calm.${softNote}`, tone: "watch" };
   }
   if (t1Watch >= 3) {
-    return {
-      headline: "Cloudy",
-      subhead: `Several recession/credit indicators are yellow — worth watching.${softNote}`,
-      tone: "watch",
-    };
+    return { ...base, weatherWord: "Cloudy", subhead: `${t1Watch} of ${t1Total} recession/credit indicators are yellow.${softNote}`, tone: "watch" };
   }
   if (t1Watch >= 1) {
-    return {
-      headline: "Mostly sunny",
-      subhead: `A few small worries on the recession/credit side, but the hard data is broadly healthy.${softNote}`,
-      tone: "ok",
-    };
+    return { ...base, weatherWord: "Mostly clear", subhead: `${t1Watch} of ${t1Total} recession/credit flags is yellow; the rest are calm.${softNote}`, tone: "ok" };
   }
-  // Tier-1 all clean — sunny regardless of soft-data noise.
-  return {
-    headline: "Sunny",
-    subhead: `Recession and credit indicators are all clean.${softNote || " Markets and the economy look healthy."}`,
-    tone: "calm",
-  };
+  return { ...base, weatherWord: "Clear", subhead: `All ${t1Total} recession/credit indicators are calm.${softNote || ""}`, tone: "calm" };
 }
 
 function VixChart({ series }: { series: Array<{ date: string; value: number }> }) {
@@ -442,44 +441,54 @@ export default async function MarketHealthPage() {
   const sections = data ? buildSections(data) : [];
   const top = data && sections.length ? topHeadline(sections) : null;
 
+  const renderedAt = data ? data.ts.slice(0, 16).replace("T", " ") + " UTC" : "—";
+
   return (
     <html lang="en">
       <head>
-        <title>How is the market today? · STE</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
-        <style>{`
-          :root { color-scheme: light; }
-          * { box-sizing: border-box; }
-          html, body { margin: 0; padding: 0; background: #f7f5f1; color: #1f1d18; font-family: "IBM Plex Sans", system-ui, sans-serif; line-height: 1.5; }
-          a { color: #1f5f8f; }
-          .container { max-width: 1000px; margin: 0 auto; padding: 32px 20px 64px; }
-        `}</style>
+        <DashboardHead title="US Market Health · Recession & credit gauges" />
       </head>
       <body>
-        <div className="container">
+        <div className="shell">
+          <Topbar region="US · National" renderedAt={renderedAt} />
+
           {!data && (
-            <div style={{ padding: 40, textAlign: "center", color: "#8a857c" }}>
+            <div style={{ padding: 40, textAlign: "center", color: "var(--ink-3)" }}>
               Sorry — the market-health data feed isn&apos;t responding right now. Try again in a minute.
             </div>
           )}
 
           {data && top && (
             <>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src="/logo-icon.svg" alt="Packet Void Labs" width={28} height={28} />
-                <div style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: "0.08em", color: "#8a857c" }}>
-                  How is the market today?
+              <header className="hero">
+                <div>
+                  <div className="eyebrow">US · National · macro & market gauges · automatic, no opinions</div>
+                  <h1 className="serif" style={{ fontFamily: '"IBM Plex Serif", Georgia, serif', fontSize: 56, fontWeight: 500, lineHeight: 1.04, margin: "18px 0 18px", letterSpacing: "-0.02em", color: "var(--ink)", textWrap: "balance" }}>
+                    {top.headline}
+                  </h1>
+                  <p className="lead" style={{ fontSize: 17, lineHeight: 1.5, color: "var(--ink-2)", maxWidth: "58ch", margin: 0 }}>{top.subhead}</p>
                 </div>
-              </div>
-              <h1 style={{ fontSize: 56, fontWeight: 600, lineHeight: 1.05, margin: "8px 0 8px 0", color: TONE_COLOR[top.tone] }}>
-                {top.headline}
-              </h1>
-              <div style={{ fontSize: 19, color: "#3d3a33", maxWidth: 720 }}>{top.subhead}</div>
-              <div style={{ fontSize: 12, color: "#8a857c", marginTop: 8 }}>
-                Updated {data.ts.slice(0, 16).replace("T", " ")} UTC — automatic, no opinions.
-              </div>
+                <aside className="hero-side">
+                  <div className="hero-stat">
+                    <div className={`n ${top.tone === "stress" ? "neg" : top.tone === "watch" ? "warn" : top.tone === "calm" ? "pos" : ""}`}>
+                      {top.t1Stress}
+                      <span style={{ fontSize: 18, color: "var(--ink-3)" }}> / {top.t1Total}</span>
+                    </div>
+                    <div className="label">Hard-data flags red<br />recession + credit tier</div>
+                  </div>
+                  <div className="hero-stat">
+                    <div className={`n ${top.t1Watch >= 3 ? "warn" : ""}`}>
+                      {top.t1Watch}
+                      <span style={{ fontSize: 18, color: "var(--ink-3)" }}> / {top.t1Total}</span>
+                    </div>
+                    <div className="label">Hard-data flags yellow<br />watch zone</div>
+                  </div>
+                  <div className="hero-stat">
+                    <div className="n" style={{ fontSize: 22 }}>{top.weatherWord}</div>
+                    <div className="label">Composite read<br />derived from flag counts</div>
+                  </div>
+                </aside>
+              </header>
 
               {sections.map(section => (
                 <section key={section.id} style={{ marginTop: 40 }}>
@@ -571,23 +580,7 @@ export default async function MarketHealthPage() {
                 </p>
               </div>
 
-              <div style={{ marginTop: 32, padding: 20, background: "#f0ece1", borderRadius: 6, fontSize: 14, color: "#3d3a33" }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 10, textTransform: "uppercase", letterSpacing: "0.06em" }}>
-                  Related views
-                </div>
-                <div style={{ marginBottom: 6 }}>
-                  <a href="/carbondale" style={{ fontWeight: 600 }}>Carbondale, IL →</a>{" "}
-                  <span style={{ color: "#5a564d" }}>— Jackson County economic snapshot for city BD work.</span>
-                </div>
-                <div style={{ marginBottom: 6 }}>
-                  <a href="/murphysboro" style={{ fontWeight: 600 }}>Murphysboro, IL →</a>{" "}
-                  <span style={{ color: "#5a564d" }}>— Jackson County seat, same MSA, city-specific federal-awards view.</span>
-                </div>
-                <div>
-                  <a href="/southern-illinois" style={{ fontWeight: 600 }}>Southern Illinois Region (LWA-25, 5-county) →</a>{" "}
-                  <span style={{ color: "#5a564d" }}>— Southern Illinois 5-county workforce-board dashboard.</span>
-                </div>
-              </div>
+              <DashboardFooter columns={DEFAULT_FOOTER_COLUMNS} />
             </>
           )}
         </div>

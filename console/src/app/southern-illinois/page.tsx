@@ -6,6 +6,8 @@
  * Federal-contract business leads (USAspending) so the board can match
  * sectors with regional demand to local training pipelines.
  */
+import { DashboardHead, Topbar, DashboardFooter, DEFAULT_FOOTER_COLUMNS } from "@/components/dashboard-chrome";
+
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
@@ -2764,91 +2766,112 @@ export default async function SouthernIllinoisPage() {
   // labor utilization, not just U-3 unemployment which masks discouraged workers.
   // The labor_truth section below makes this concrete; the headline should
   // agree with that synthesis, not contradict it.
+  // Hero stats only — no editorial verdict. Reader interprets the numbers.
   const lfprGap = data.labor_truth?.aggregate?.gap_lfpr_vs_state ?? null;
-  let tone: Tone = "ok";
-  let headline = "LWA-25 Workforce Snapshot";
-  if (lfprGap != null) {
-    if (lfprGap >= 0)        { tone = "good"; headline = `Strong regional labor market`; }
-    else if (lfprGap >= -3)  { tone = "ok";   headline = `Healthy regional labor market`; }
-    else if (lfprGap >= -6)  { tone = "warn"; headline = `Softening regional labor market`; }
-    else                     { tone = "bad";  headline = `Structurally weak regional labor market`; }
-  }
+  const aggLfpr = data.labor_truth?.aggregate?.lfpr ?? null;
+  const aggNotLF = data.labor_truth?.aggregate?.not_in_labor_force ?? null;
+  const aggNotLFPct = data.labor_truth?.aggregate?.not_lf_pct ?? null;
+  const renderedAt = data.ts.slice(0, 16).replace("T", " ") + " UTC";
 
   return (
     <html lang="en">
       <head>
-        <title>Southern Illinois Region · Workforce + Economic Development Dashboard</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
-        <style>{`
-          :root { color-scheme: light; }
-          * { box-sizing: border-box; }
-          html, body { margin: 0; padding: 0; background: #f7f5f1; color: #1f1d18; font-family: "IBM Plex Sans", system-ui, sans-serif; line-height: 1.5; }
-          a { color: #1f5f8f; }
-          .container { max-width: 1080px; margin: 0 auto; padding: 32px 20px 64px; }
-        `}</style>
+        <DashboardHead title="Southern Illinois Region · Workforce + Economic Development Dashboard" />
       </head>
       <body>
-        <div className="container">
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/logo-icon.svg" alt="Packet Void Labs" width={28} height={28} />
-            <div style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: "0.08em", color: "#8a857c" }}>
-              Southern Illinois Region · Workforce + Economic Development Dashboard
+        <div className="shell">
+          <Topbar region="LWA-25" renderedAt={renderedAt} />
+
+          {/* Hero — data-first; numbers and identifiers only, no verdict adjectives. */}
+          <header className="hero">
+            <div>
+              <div className="eyebrow">LWA-25 · Five-county service area · Franklin · Jackson · Jefferson · Perry · Williamson</div>
+              <h1 className="serif" style={{ fontFamily: '"IBM Plex Serif", Georgia, serif', fontSize: 56, fontWeight: 500, lineHeight: 1.04, margin: "18px 0 18px", letterSpacing: "-0.02em", color: "var(--ink)", textWrap: "balance" }}>
+                Workforce + economic-development profile
+              </h1>
+              <p className="lead" style={{ fontSize: 17, lineHeight: 1.5, color: "var(--ink-2)", maxWidth: "58ch", margin: 0 }}>
+                {ag.unemployment_rate_weighted != null && lfprGap != null ? (
+                  <>
+                    Weighted unemployment rate <b>{ag.unemployment_rate_weighted.toFixed(1)}%</b>. Labor-force participation <b>{aggLfpr?.toFixed(1) ?? "—"}%</b> ({lfprGap >= 0 ? "+" : ""}{lfprGap.toFixed(1)}pp vs Illinois). Sources cited inline; every section names its API endpoint and as-of date.
+                  </>
+                ) : (
+                  <>Five-county Southern Illinois Workforce Development service area. Sources cited inline.</>
+                )}
+              </p>
             </div>
-          </div>
-          <h1 style={{ fontSize: 44, fontWeight: 600, lineHeight: 1.05, margin: "8px 0 8px 0", color: TONE_COLOR[tone] }}>
-            {headline}
-          </h1>
-          <div style={{ fontSize: 17, color: "#3d3a33", maxWidth: 760 }}>
-            {lfprGap != null && ag.unemployment_rate_weighted != null ? (
-              <>
-                Headline UE rate <strong>{ag.unemployment_rate_weighted.toFixed(1)}%</strong> looks fine — but labor-force participation runs <strong>{Math.abs(lfprGap).toFixed(1)}pp below Illinois</strong>. The headline misses everyone who has stopped looking. See the true labor picture below.
-              </>
-            ) : (
-              "Five-county Southern Illinois Workforce Development Board service area (Franklin, Jackson, Jefferson, Perry, Williamson)."
-            )}
-          </div>
-          <div style={{ fontSize: 12, color: "#8a857c", marginTop: 8 }}>
-            Page rendered {data.ts.slice(0, 16).replace("T", " ")} UTC. Workforce metrics from BLS LAUS via FRED, monthly (1-2 month lag). Federal awards from USAspending.gov.
+            <aside className="hero-side">
+              <div className="hero-stat">
+                <div className="n">
+                  {ag.unemployment_rate_weighted != null ? ag.unemployment_rate_weighted.toFixed(1) : "—"}
+                  <span style={{ fontSize: 18, color: "var(--ink-3)" }}>%</span>
+                </div>
+                <div className="label">Headline UE rate<br />weighted, 5 counties</div>
+              </div>
+              <div className="hero-stat">
+                <div className={`n ${lfprGap != null && lfprGap <= -6 ? "neg" : lfprGap != null && lfprGap <= -3 ? "warn" : ""}`}>
+                  {aggLfpr != null ? aggLfpr.toFixed(1) : "—"}
+                  <span style={{ fontSize: 18, color: "var(--ink-3)" }}>%</span>
+                </div>
+                <div className="label">
+                  Labor-force participation<br />
+                  {lfprGap != null && (
+                    <span className={`diff ${lfprGap < 0 ? "neg" : "pos"}`}>{lfprGap >= 0 ? "+" : ""}{lfprGap.toFixed(1)}pp vs Illinois</span>
+                  )}
+                </div>
+              </div>
+              <div className="hero-stat">
+                <div className="n">{aggNotLF != null ? aggNotLF.toLocaleString() : "—"}</div>
+                <div className="label">
+                  Working-age, not in labor force<br />
+                  {aggNotLFPct != null && (
+                    <span className="diff">{aggNotLFPct.toFixed(1)}% of pop 16+</span>
+                  )}
+                </div>
+              </div>
+            </aside>
+          </header>
+
+          {/* Freshness strip — matches scaffold */}
+          <div className="freshness">
+            <div className="fresh-cell">
+              <div className="k">BLS LAUS · labor market</div>
+              <div className="v">Through {data.indicators?.crb_jackson_unemployment_rate?.date ?? "—"}</div>
+              <div className="sub">refreshes monthly</div>
+            </div>
+            <div className="fresh-cell">
+              <div className="k">BLS QCEW · industry mix</div>
+              <div className="v">{data.industry_mix?.as_of_quarter ?? "—"}</div>
+              <div className="sub">refreshes quarterly · ~7mo lag</div>
+            </div>
+            <div className="fresh-cell">
+              <div className="k">Census ACS · labor utilization</div>
+              <div className="v">{data.labor_truth?.year ?? "2023"} 5-year</div>
+              <div className="sub">refreshes annually · Dec</div>
+            </div>
+            <div className="fresh-cell">
+              <div className="k">USAspending · federal $</div>
+              <div className="v">{data.business_opportunities?.totals?.lookback_months ?? 24}-month rolling</div>
+              <div className="sub">refreshes continuously</div>
+            </div>
           </div>
 
-          <div style={{ marginTop: 16, padding: 14, background: "#fff", border: "1px solid #d8d2c4", borderRadius: 6 }}>
-            <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: "#5a564d", marginBottom: 8 }}>
-              Data freshness · each block live-fetched on every page load
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10, fontSize: 12 }}>
-              <div><strong>BLS LAUS labor market:</strong><br /><span style={{ color: "#5a564d" }}>through {data.indicators?.crb_jackson_unemployment_rate?.date ?? "—"} · refreshes monthly</span></div>
-              <div><strong>BLS QCEW industry mix:</strong><br /><span style={{ color: "#5a564d" }}>{data.industry_mix?.as_of_quarter ?? "—"} · refreshes quarterly (~7mo lag)</span></div>
-              <div><strong>Census ACS labor utilization:</strong><br /><span style={{ color: "#5a564d" }}>{data.labor_truth?.year ?? "2023"} 5-year estimates · refreshes annually (Dec)</span></div>
-              <div><strong>Federal awards (USAspending):</strong><br /><span style={{ color: "#5a564d" }}>{data.business_opportunities?.totals?.lookback_months ?? 24}-month rolling · refreshes continuously</span></div>
-            </div>
-          </div>
-
-          {/* === Sticky table of contents === */}
-          <nav style={{
-            position: "sticky", top: 0, zIndex: 50,
-            marginTop: 16, marginLeft: -20, marginRight: -20, padding: "10px 20px",
-            background: "rgba(255,255,255,0.96)", backdropFilter: "blur(8px)",
-            borderTop: "1px solid #d8d2c4", borderBottom: "1px solid #d8d2c4",
-            fontSize: 12, color: "#3d3a33", display: "flex", flexWrap: "wrap", gap: "8px 16px",
-            alignItems: "center",
-          }}>
-            <span style={{ fontWeight: 700, color: "#1f1d18", textTransform: "uppercase", letterSpacing: "0.06em", fontSize: 10 }}>Jump:</span>
-            <a href="#sec-labor" style={{ color: "#1f5f8f", textDecoration: "none" }}>Labor Market</a>
-            <a href="#sec-labor-truth" style={{ color: "#1f5f8f", textDecoration: "none" }}>True Labor Picture</a>
-            <a href="#sec-industry" style={{ color: "#1f5f8f", textDecoration: "none" }}>Industry Mix</a>
-            <a href="#sec-mobility" style={{ color: "#1f5f8f", textDecoration: "none" }}>Mobility</a>
-            <a href="#sec-federal-money" style={{ color: "#1f5f8f", textDecoration: "none" }}>Federal $</a>
-            <a href="#sec-childcare" style={{ color: "#1f5f8f", textDecoration: "none" }}>Childcare</a>
-            <a href="#sec-roi" style={{ color: "#1f5f8f", textDecoration: "none" }}>Training ROI</a>
-            <a href="#sec-training" style={{ color: "#1f5f8f", textDecoration: "none" }}>Training Ladders</a>
-            <a href="#sec-travel-jobs" style={{ color: "#1f5f8f", textDecoration: "none" }}>Travel Jobs</a>
-            <a href="#sec-healthcare" style={{ color: "#1f5f8f", textDecoration: "none" }}>Healthcare</a>
-            <a href="#sec-anchor" style={{ color: "#1f5f8f", textDecoration: "none" }}>Anchor Attraction</a>
-            <a href="#sec-housing" style={{ color: "#1f5f8f", textDecoration: "none" }}>Housing</a>
-            <a href="#sec-wage-benchmark" style={{ color: "#1f5f8f", textDecoration: "none" }}>Wage Benchmark</a>
-            <a href="#sec-pirl" style={{ color: "#1f5f8f", textDecoration: "none" }}>PIRL Accountability</a>
+          {/* Sticky nav */}
+          <nav className="nav">
+            <span className="nav-label">Jump §</span>
+            <a href="#sec-labor"><span className="num">01</span>Labor Market</a>
+            <a href="#sec-labor-truth"><span className="num">02</span>True Picture</a>
+            <a href="#sec-industry"><span className="num">03</span>Industry Mix</a>
+            <a href="#sec-mobility"><span className="num">04</span>Mobility</a>
+            <a href="#sec-federal-money"><span className="num">05</span>Federal $</a>
+            <a href="#sec-childcare"><span className="num">06</span>Childcare</a>
+            <a href="#sec-roi"><span className="num">07</span>Training ROI</a>
+            <a href="#sec-training"><span className="num">08</span>Ladders</a>
+            <a href="#sec-travel-jobs"><span className="num">09</span>Travel Jobs</a>
+            <a href="#sec-healthcare"><span className="num">10</span>Healthcare</a>
+            <a href="#sec-anchor"><span className="num">11</span>Anchor</a>
+            <a href="#sec-housing"><span className="num">12</span>Housing</a>
+            <a href="#sec-wage-benchmark"><span className="num">13</span>Wages</a>
+            <a href="#sec-pirl"><span className="num">14</span>PIRL</a>
           </nav>
 
           <section id="sec-labor" style={{ marginTop: 32, scrollMarginTop: 60 }}>
@@ -2986,22 +3009,18 @@ export default async function SouthernIllinoisPage() {
             </div>
           </section>
 
-          <div style={{ marginTop: 40, fontSize: 12, color: "#8a857c", lineHeight: 1.6 }}>
-            <strong>Sources:</strong> County labor-market data — US Bureau of Labor
-            Statistics Local Area Unemployment Statistics (LAUS) via the St. Louis
-            Fed (FRED). Federal contract awards — USAspending.gov (Treasury / OMB).
-            SAM.gov for active solicitations. SBA HUBZone & 8(a) program info from sba.gov.
-            <br /><br />
-            <strong>Coverage:</strong> LWA-25 = Franklin, Jackson, Jefferson, Perry,
-            Williamson. This is the Southern Illinois Workforce Development Board
-            (the regional workforce-development board) service area as administered by the local workforce-development organization,
-            3117 Civic Circle Boulevard, Suite B, Marion, IL 62959.
-            <br /><br />
-            <strong>Caveats:</strong> Monthly BLS LAUS series are 1-2 months lagged.
-            USAspending federal-awards data reflects what has been reported by
-            agencies — there is reporting lag, and prime-award place-of-performance
-            does not capture subcontract flow.
+          <div className="sources" style={{ marginTop: 40, lineHeight: 1.6 }}>
+            <b>Coverage:</b> LWA-25 = Franklin, Jackson, Jefferson, Perry, Williamson —
+            the regional workforce-development board service area.{" "}
+            <b>Sources:</b> County labor-market data — BLS LAUS via FRED. Federal contract
+            awards — USAspending.gov (Treasury / OMB). SAM.gov for active solicitations.
+            SBA HUBZone &amp; 8(a) program info from sba.gov.{" "}
+            <b>Caveats:</b> BLS LAUS series are 1–2 months lagged. USAspending data reflects
+            what agencies have reported — there is reporting lag, and prime-award
+            place-of-performance does not capture subcontract flow.
           </div>
+
+          <DashboardFooter columns={DEFAULT_FOOTER_COLUMNS} />
         </div>
       </body>
     </html>
