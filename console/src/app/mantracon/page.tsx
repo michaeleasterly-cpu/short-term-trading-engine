@@ -1197,8 +1197,26 @@ function AttractionPipelineSection() {
         </ul>
       </div>
 
+      {/* === Supplementary Sectors parent heading — groups Viticulture, Cannabis, Outdoor Industry === */}
+      <h2 style={{ fontSize: 22, fontWeight: 600, color: "#1f1d18", margin: "40px 0 4px 0", paddingTop: 16, borderTop: "2px solid #d8d2c4" }}>
+        Supplementary sectors · allowed, real, not primary anchor candidates
+      </h2>
+      <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 760, lineHeight: 1.55 }}>
+        Three sectors deserve allow-and-support treatment without being primary
+        jobs anchors: viticulture (Shawnee Hills AVA), cannabis (legal in IL since
+        2020), and outdoor recreation tourism (Shawnee NF + Crab Orchard + Cache
+        River). Each contributes real economic value but each shares the same
+        structural pattern — hospitality-heavy job mix that doesn&apos;t clear the
+        1A+2C family-supporting wage bar at entry positions, with scarce top-rung
+        positions that pay well but don&apos;t exist in volume. Worth allowing,
+        supporting, and amenity-leveraging for relocator recruitment. NOT worth
+        building primary training-cohort strategy around. (Outdoor recreation
+        industry HQ attraction is covered inside the data-center attraction
+        scorecard above.)
+      </div>
+
       {/* === Viticulture / agri-tourism === */}
-      <h3 style={{ fontSize: 18, fontWeight: 600, color: "#1f1d18", margin: "32px 0 8px 0" }}>
+      <h3 style={{ fontSize: 18, fontWeight: 600, color: "#1f1d18", margin: "20px 0 8px 0" }}>
         Viticulture &amp; agri-tourism · regional asset, selective opportunity
       </h3>
       <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 760, lineHeight: 1.55 }}>
