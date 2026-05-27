@@ -935,7 +935,28 @@ function TravelJobsSection() {
         have better home-time structures.
       </div>
       <div style={{ padding: 14, background: "#fef9eb", border: "1px solid #f0d98a", borderLeft: "6px solid oklch(45% 0.20 22)", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, marginBottom: 16 }}>
-        <strong>Honest framing — the wage clears, the home-time doesn&apos;t.</strong> Each row below carries a TRAVEL-WORK verdict in the single-mom-test taxonomy. The wage column shows the all-in number that clears the MIT Living Wage Jackson Co. 1A+2C bar ($46.76/hr / ~$97k/yr) — sometimes by 2× or more. <strong>BUT the worker is not home for significant stretches of every month.</strong> If the home structure is a single parent with school-age children, the wage may clear the family-supporting <em>math</em> while failing the family-supporting <em>reality</em> — there&apos;s no parent at school pickup, no parent at the dinner table, no parent at the back-to-school night. Some rows below carry the LOCAL · WAGE-SUPPRESSED flag where the BASE-only wage (no per-diem, no rotation premium) falls below 1A+2C; those rows clear the family bar only on the all-in number that ASSUMES the worker accepts the away-from-home schedule. The TRAVEL-WORK lifestyle cost is the structural trade-off salary tables don&apos;t show: high divorce risk, missed milestones, surrogate childcare (grandparents, the home-side spouse&apos;s parents, paid live-in help) that has to fill the gap. Workforce planning must weigh this honestly, not pitch the all-in wage and ignore the cost.
+        <strong>Honest framing — wage clears, home-time depends on household configuration.</strong> Each row below carries a TRAVEL-WORK verdict in the single-mom-test taxonomy. The wage column shows the all-in number that clears the MIT Living Wage Jackson Co. 1A+2C bar ($46.76/hr / ~$97k/yr) — sometimes by 2× or more. <strong>The viability of travel work depends entirely on who&apos;s at home covering the kids.</strong>
+        <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10 }}>
+          <div style={{ background: "white", border: "1px solid oklch(45% 0.16 142)33", borderLeft: "4px solid oklch(45% 0.16 142)", borderRadius: 4, padding: 10 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "oklch(35% 0.18 142)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>✓ Dual-earner with children</div>
+            <div style={{ fontSize: 12, lineHeight: 1.5 }}>One spouse travels, the other stays home (or stays at a local job) and covers the kids. Wage clears 1A+2C math AND home-time reality. <strong>Family-supporting.</strong></div>
+          </div>
+          <div style={{ background: "white", border: "1px solid oklch(45% 0.16 142)33", borderLeft: "4px solid oklch(45% 0.16 142)", borderRadius: 4, padding: 10 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "oklch(35% 0.18 142)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>✓ Single, no children</div>
+            <div style={{ fontSize: 12, lineHeight: 1.5 }}>No dependents to cover during away-time. Wage clears 1A+2C math AND is far above single-adult LW. <strong>Family-supporting (no family to support yet, but the math works for future).</strong></div>
+          </div>
+          <div style={{ background: "white", border: "1px solid oklch(45% 0.20 22)33", borderLeft: "4px solid oklch(45% 0.20 22)", borderRadius: 4, padding: 10 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "oklch(40% 0.20 22)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>✗ Single parent with children</div>
+            <div style={{ fontSize: 12, lineHeight: 1.5 }}>No surrogate caregiver during away-time. Wage clears the math but the kids have no parent at school pickup, dinner table, back-to-school night. <strong>Fails the family-supporting reality unless grandparents or paid live-in help cover.</strong></div>
+          </div>
+          <div style={{ background: "white", border: "1px solid oklch(45% 0.20 22)33", borderLeft: "4px solid oklch(45% 0.20 22)", borderRadius: 4, padding: 10 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "oklch(40% 0.20 22)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>⚑ Dual-earner, neither home, with children</div>
+            <div style={{ fontSize: 12, lineHeight: 1.5 }}>Both spouses on travel rotations. Wage stacks well but requires full-time surrogate caregiver (live-in nanny, grandparents, boarding school). Rare; high cost.</div>
+          </div>
+        </div>
+        <div style={{ marginTop: 10 }}>
+          Some rows carry the LOCAL · WAGE-SUPPRESSED flag where BASE-only wage (no per-diem, no rotation premium) falls below 1A+2C; those clear the family bar only on the all-in number that ASSUMES the away-from-home schedule. The TRAVEL-WORK lifestyle cost is the structural trade-off salary tables don&apos;t show: high divorce risk among long-rotation crews + missed milestones + surrogate childcare expense (grandparents, the home-side spouse&apos;s parents, paid live-in help). Workforce planning must match credential pathway to household configuration, not pitch the all-in wage and ignore the configuration question.
+        </div>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 12 }}>
         {rows.map((r, i) => (
@@ -950,8 +971,12 @@ function TravelJobsSection() {
                 <div style={{ fontSize: 12, color: "#7a756b", marginTop: 2 }}>
                   {r.cred} · Training: {r.trainSource}
                 </div>
-                <div style={{ fontSize: 11, color: "oklch(45% 0.20 22)", marginTop: 6, fontWeight: 600 }}>
-                  ⚑ Single-parent reality: the worker is not home during the {r.family_compat === "TOUGH" ? "13-week-on / 8-week-home" : r.family_compat === "OK" ? "rotation hitch" : "shift block"}. Childcare during away-time must be covered by the home-side spouse, grandparents, or paid arrangement — NOT by the worker. If no surrogate caregiver exists, this credential fails the family-supporting reality even though it clears the family-supporting math.
+                <div style={{ fontSize: 11, marginTop: 6, lineHeight: 1.45 }}>
+                  <strong style={{ color: "#1f1d18" }}>Household-config fit:</strong>
+                  <span style={{ color: "oklch(35% 0.18 142)", marginLeft: 6, fontWeight: 600 }}>✓ dual-earner-with-kids</span>
+                  <span style={{ color: "oklch(35% 0.18 142)", marginLeft: 6, fontWeight: 600 }}>✓ single-no-kids</span>
+                  <span style={{ color: "oklch(45% 0.20 22)", marginLeft: 6, fontWeight: 600 }}>✗ single-parent-with-kids</span>
+                  <span style={{ color: "#5a564d", marginLeft: 6 }}>(worker away during {r.family_compat === "TOUGH" ? "13-week-on / 8-week-home" : r.family_compat === "OK" ? "rotation hitch" : "shift block"} — childcare must be covered by spouse / grandparents / paid arrangement)</span>
                 </div>
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end" }}>
