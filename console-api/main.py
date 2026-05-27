@@ -1291,6 +1291,99 @@ async def _qcew_supersector_block(county_fips: list[str]) -> dict:
     return out
 
 
+# ────────────── USAspending — top recipients + concentration ──────────────
+# Surfaces "who actually gets the federal money flowing into this region",
+# which exposes asymmetries between federal-dollar flow and local-job creation
+# that the workforce board / city BD can use as community-engagement leverage
+# (e.g., LWA-25 has ~99% of all federal contract dollars going to a single
+# munitions manufacturer — that's CBA leverage if the workforce board wants
+# expanded local hiring, apprenticeships, or supplier-development commitments).
+
+async def _usaspending_top_recipients(
+    *, county_fips: list[str], lookback_months: int = 24, top_n: int = 12,
+) -> dict:
+    cache_key = f"recip|{','.join(sorted(county_fips))}|{lookback_months}"
+    now = time.time()
+    if cache_key in _USA_CACHE and now - _USA_CACHE[cache_key][0] < _USA_CACHE_TTL_SEC:
+        return _USA_CACHE[cache_key][1]
+
+    end = datetime.now(UTC).date()
+    start = end - timedelta(days=lookback_months * 30)
+    locations = [{"country": "USA", "state": "IL", "county": c} for c in county_fips]
+    body = {
+        "filters": {
+            "time_period": [{"start_date": start.isoformat(), "end_date": end.isoformat()}],
+            "place_of_performance_locations": locations,
+            "award_type_codes": ["A", "B", "C", "D"],
+        },
+        "limit": top_n,
+    }
+    resp = await _usaspending_post("/api/v2/search/spending_by_category/recipient/", body)
+    raw = resp.get("results", []) or []
+
+    # Normalize recipient names: "GD ORDNANCE & TACTICAL SYSTEMS" and
+    # "GD ORDNANCE AND TACTICAL SYSTEMS" appear as separate entries due to
+    # variant punctuation, but it's the same entity. Collapse by a normalized key.
+    def _normalize(name: str) -> str:
+        n = name.upper()
+        for ch in [",", ".", "'", "&"]:
+            n = n.replace(ch, " AND " if ch == "&" else " ")
+        for ch in ["INC", "LLC", "CORPORATION", "CORP"]:
+            n = n.replace(ch, "")
+        return " ".join(n.split())
+
+    collapsed: dict[str, dict] = {}
+    for r in raw:
+        name = r.get("name") or ""
+        amt = float(r.get("amount") or 0)
+        key = _normalize(name)
+        if key not in collapsed:
+            collapsed[key] = {"name": name, "amount": 0.0, "names_seen": set()}
+        collapsed[key]["amount"] += amt
+        collapsed[key]["names_seen"].add(name)
+
+    items = [
+        {"name": v["name"], "amount": v["amount"], "alias_count": len(v["names_seen"])}
+        for v in collapsed.values()
+    ]
+    items.sort(key=lambda x: -x["amount"])
+
+    total = sum(x["amount"] for x in items)
+    for x in items:
+        x["share_pct"] = round((x["amount"] / total * 100), 1) if total else 0.0
+
+    # Concentration metric — HHI-style + top-1 share
+    top1_share = items[0]["share_pct"] if items else 0
+    top3_share = round(sum(x["share_pct"] for x in items[:3]), 1)
+    # Categorize concentration
+    if top1_share >= 70:
+        concentration_label = "EXTREME — single recipient dominates the regional federal-dollar flow"
+    elif top1_share >= 40:
+        concentration_label = "HIGH — one recipient captures most federal contract dollars"
+    elif top3_share >= 60:
+        concentration_label = "MODERATE — three recipients dominate"
+    else:
+        concentration_label = "DIVERSE — federal contract dollars spread across many recipients"
+
+    out = {
+        "recipients": items,
+        "total_dollars": total,
+        "lookback_months": lookback_months,
+        "top1_share": top1_share,
+        "top3_share": top3_share,
+        "concentration_label": concentration_label,
+        "county_fips": county_fips,
+        "source": (
+            "USAspending.gov spending_by_category/recipient. Recipients are deduplicated "
+            "across name variants (punctuation differences) before aggregation. "
+            "Place-of-performance filter — these are the firms doing the work in the "
+            "selected counties, not necessarily headquartered locally."
+        ),
+    }
+    _USA_CACHE[cache_key] = (now, out)
+    return out
+
+
 # ────────────── USAspending.gov federal-awards helper ──────────────
 # Used by /api/public/carbondale, /api/public/murphysboro, /api/public/mantracon
 # to surface federal contract dollars flowing into the region as business-lead
@@ -1569,6 +1662,7 @@ async def public_mantracon() -> dict:
 
     LWA_FIPS = ["055", "077", "081", "145", "199"]
     business = await _usaspending_block(county_fips=LWA_FIPS, recipient_city=None)
+    top_recipients = await _usaspending_top_recipients(county_fips=LWA_FIPS)
     qcew = await _qcew_supersector_block(county_fips=LWA_FIPS)
     labor_truth = await _acs_labor_truth(county_fips=LWA_FIPS)
     return {
@@ -1588,6 +1682,7 @@ async def public_mantracon() -> dict:
             {"date": r["observed_date"].isoformat(), "value": float(r["ur"])} for r in lwa_ur_series
         ],
         "business_opportunities": business,
+        "top_federal_recipients": top_recipients,
         "industry_mix": qcew,
         "labor_truth": labor_truth,
     }

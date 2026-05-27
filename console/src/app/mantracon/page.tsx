@@ -23,6 +23,17 @@ interface BusinessOps {
   sam_gov_search_link: string;
 }
 
+interface TopRecipient { name: string; amount: number; share_pct: number; alias_count: number }
+interface TopRecipientsBlock {
+  recipients: TopRecipient[];
+  total_dollars: number;
+  lookback_months: number;
+  top1_share: number;
+  top3_share: number;
+  concentration_label: string;
+  source: string;
+}
+
 interface IndustryRow {
   code: string;
   name: string;
@@ -88,8 +99,97 @@ interface MantraconData {
   lwa_labor_force_series: Array<{ date: string; value: number }>;
   lwa_unemployment_series: Array<{ date: string; value: number }>;
   business_opportunities: BusinessOps;
+  top_federal_recipients?: TopRecipientsBlock;
   industry_mix?: IndustryMix;
   labor_truth?: LaborTruth;
+}
+
+function FederalConcentrationSection({ tr }: { tr: TopRecipientsBlock }) {
+  if (!tr.recipients.length) return null;
+  const top = tr.recipients[0];
+  const topAmt = top.amount;
+  // Heuristic — flag extreme concentration
+  const isConcentrated = tr.top1_share >= 40;
+  const formatM = (n: number) =>
+    n >= 1_000_000_000 ? `$${(n / 1_000_000_000).toFixed(2)}B`
+    : n >= 1_000_000 ? `$${(n / 1_000_000).toFixed(1)}M`
+    : `$${(n / 1_000).toFixed(0)}k`;
+  return (
+    <section style={{ marginTop: 40 }}>
+      <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+      <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+        Where the federal money actually goes · community-leverage view
+      </h2>
+      <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 760, lineHeight: 1.55 }}>
+        Total federal contract dollars flowing into the 5-county LWA over the
+        last {tr.lookback_months} months: <strong>{formatM(tr.total_dollars)}</strong>.
+        Place-of-performance filter — these are firms doing the work locally, regardless of
+        where they&apos;re headquartered. The asymmetry between federal-dollar flow and
+        local-job creation is what gives the workforce board real CBA / apprenticeship /
+        supplier-development leverage with the top recipients.
+      </div>
+
+      {/* Concentration headline */}
+      <div style={{
+        background: isConcentrated ? "oklch(96% 0.05 22)" : "#f0ece1",
+        border: `1px solid ${isConcentrated ? "oklch(55% 0.20 22)33" : "#d8d2c4"}`,
+        borderLeft: `6px solid ${isConcentrated ? "oklch(45% 0.20 22)" : "#5a564d"}`,
+        borderRadius: 6, padding: 16, marginBottom: 20,
+      }}>
+        <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: isConcentrated ? "oklch(40% 0.20 22)" : "#5a564d", marginBottom: 4 }}>
+          Concentration · {tr.concentration_label.split("—")[0].trim()}
+        </div>
+        <div style={{ fontSize: 16, color: "#1f1d18", marginBottom: 8 }}>
+          {tr.concentration_label.split("—")[1]?.trim() || tr.concentration_label}
+        </div>
+        <div style={{ fontSize: 14, color: "#3d3a33" }}>
+          Top-1 recipient share: <strong>{tr.top1_share.toFixed(1)}%</strong> · Top-3: <strong>{tr.top3_share.toFixed(1)}%</strong>
+        </div>
+      </div>
+
+      {/* Recipient table with share bars */}
+      <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "hidden" }}>
+        {tr.recipients.map((r, i) => {
+          const barPct = (r.amount / topAmt) * 100;
+          const flag = i === 0 && r.share_pct >= 70;
+          return (
+            <div key={r.name} style={{ borderTop: i === 0 ? "none" : "1px solid #ebe5d6", padding: "12px 14px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12 }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: flag ? "oklch(45% 0.20 22)" : "#1f1d18" }}>
+                    {r.name}
+                    {flag && <span style={{ fontSize: 10, marginLeft: 8, padding: "2px 6px", background: "oklch(45% 0.20 22)", color: "white", borderRadius: 3, textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 700 }}>DOMINANT</span>}
+                  </div>
+                  <div style={{ fontSize: 11, color: "#7a756b", marginTop: 2 }}>
+                    {r.share_pct.toFixed(1)}% of all federal contract $ in LWA-25
+                  </div>
+                </div>
+                <div style={{ fontSize: 15, fontWeight: 600, color: "#1f5f8f", whiteSpace: "nowrap" }}>{formatM(r.amount)}</div>
+              </div>
+              <div style={{ marginTop: 6, height: 4, background: "#ebe5d6", borderRadius: 2 }}>
+                <div style={{ height: 4, width: `${barPct}%`, background: flag ? "oklch(45% 0.20 22)" : "oklch(45% 0.16 220)", borderRadius: 2 }} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Community leverage callout */}
+      <div style={{ marginTop: 20, padding: 16, background: "#fef9eb", border: "1px solid #f0d98a", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          What the workforce board can do with this
+        </div>
+        <ul style={{ margin: "0 0 0 18px", padding: 0 }}>
+          <li><strong>Community Benefit Agreement (CBA)</strong> — when a single recipient captures the majority of federal dollars in a region but employs only a fraction of local labor, the workforce board has standing to negotiate hiring commitments, apprenticeship slots, and local supplier-development. Precedents: Intel Ohio, Amazon HQ2 negotiations, Foxconn Wisconsin (revised).</li>
+          <li><strong>Apprenticeship pipeline</strong> — federal contractors with prevailing-wage requirements are natural anchors for registered apprenticeships. Partner with the dominant recipient on a Mantracon-hosted pre-apprenticeship for the skill ladders they consume (machinist, electrician, industrial maintenance, quality tech).</li>
+          <li><strong>Tier-2 supplier development</strong> — large primes use out-of-region subcontractors. Identify which work could be done by HUBZone-certified local firms (Franklin/Perry/parts-of-Jackson qualify) and broker the relationships.</li>
+          <li><strong>Federal contracting set-asides</strong> — the more local firms that show up in this list, the more federal money stays in the regional payroll. SBA HUBZone + 8(a) + WOSB certifications are the on-ramp.</li>
+        </ul>
+      </div>
+
+      <div style={{ marginTop: 12, fontSize: 11, color: "#7a756b", lineHeight: 1.5 }}>{tr.source}</div>
+    </section>
+  );
 }
 
 function LaborTruthSection({ lt }: { lt: LaborTruth }) {
@@ -605,6 +705,8 @@ export default async function MantraconPage() {
           {data.industry_mix && <IndustryMixByCountySection mix={data.industry_mix} />}
 
           <BusinessLeadsSection b={data.business_opportunities} />
+
+          {data.top_federal_recipients && <FederalConcentrationSection tr={data.top_federal_recipients} />}
 
           <section style={{ marginTop: 40 }}>
             <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
