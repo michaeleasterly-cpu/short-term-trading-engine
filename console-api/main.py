@@ -909,7 +909,8 @@ _TRAINING_LADDER_ROSTER = [
 
     {"id": "underground_coal_miner", "name": "Underground coal miner (UMWA scale, Sugar Camp / Pond Creek / Knight Hawk)", "supersector_code": "1011",
      "ladder": "MSHA Part 48 surface (40hr) + underground (24hr) certification → on-job training under journey miner",
-     "typical_journey_wage_wkly": 1400,  # ~$35/hr × 40; with productivity bonuses + overtime, ~$80-110k/yr take-home
+     "typical_journey_wage_wkly": 1400,  # ~$35/hr × 40 BASE
+     "total_package_wkly": 2000,  # base + productivity bonuses + 50-60hr/wk OT pushes effective take-home to $80-110k/yr — clears 1A+2C
      "training_duration": "64hr MSHA Part 48 cert + 6-12mo apprentice / red-hat → full miner",
      "local_employer_override": 800,  # Sugar Camp + Pond Creek (Foresight) + Knight Hawk operations combined; IL produced ~the same tonnage in 2023 as 1998 with 1,748 fewer miners — small but real remaining workforce
      "entry_gates": ["msha_part_48_certification", "physical_fitness", "drug_screen", "no_claustrophobia", "often_family_connection_to_enter"],
@@ -926,7 +927,8 @@ _TRAINING_LADDER_ROSTER = [
 
     {"id": "il_doc_officer", "name": "IL DOC correctional officer (Pinckneyville / Big Muddy / Vienna / Shawnee)", "supersector_code": "9091",
      "ladder": "Civil service exam (CMS) → background investigation → 5-week DOC training academy at Logan CC",
-     "typical_journey_wage_wkly": 1430,  # ~$58k starting / 52, plus pension contribution adds ~$10k effective
+     "typical_journey_wage_wkly": 1430,  # ~$58k starting / 52 — CHECK WAGE
+     "total_package_wkly": 1900,  # check + state pension contribution + health benefits — clears 1A+2C
      "training_duration": "5-week academy + 6mo probationary period",
      "local_employer_override": 1200,  # Pinckneyville Correctional (Perry) + Big Muddy River Correctional (Jefferson, Ina) + Shawnee Correctional + Vienna Correctional (Johnson, adjacent to LWA-25); IL DOC publishes facility-level FTE counts but consolidated regional total ~1,200 officers
      "local_market_saturated": True,
@@ -935,7 +937,8 @@ _TRAINING_LADDER_ROSTER = [
 
     {"id": "idot_highway_maintainer", "name": "IDOT Highway Maintainer (District 9)", "supersector_code": "9091",
      "ladder": "CMS civil service exam → CDL Class A → IDOT field training",
-     "typical_journey_wage_wkly": 1200,  # ~$25/hr × 40 base, plus state pension + benefits adds ~$8-10k effective
+     "typical_journey_wage_wkly": 1200,  # ~$25/hr × 40 CHECK WAGE
+     "total_package_wkly": 1620,  # check + state pension contribution + health benefits + storm-response OT — clears 1A+2C
      "training_duration": "CDL 4-8 weeks + IDOT field training 3-6 months",
      "local_employer_override": 80,  # IDOT District 9 (south of I-64) covers LWA-25 + adjacent counties; ~80 field positions estimated
      "local_market_saturated": True,
@@ -944,7 +947,8 @@ _TRAINING_LADDER_ROSTER = [
 
     {"id": "hvac_union_sheet_metal", "name": "HVAC sheet metal (SMART Local 268 union)", "supersector_code": "1012",
      "ladder": "SMART Local 268 5-year apprenticeship — apprentice → journey sheet metal worker",
-     "typical_journey_wage_wkly": 1863,  # journey check wage $46.57/hr × 40; total package $71.43/hr × 40 = $2857/wk
+     "typical_journey_wage_wkly": 1863,  # journey check wage $46.57/hr × 40
+     "total_package_wkly": 2857,  # journey total package $71.43/hr × 40 (check $46.57 + benefits $24.86) — clears 1A+2C by $25/hr
      "training_duration": "5-year apprenticeship (10,000hr OJT + 1,000hr classroom)",
      "entry_gates": ["aptitude_test", "drug_screen", "basic_math"],
      "notes": "Verified 2025 wage sheet (Local 268, Caseyville HQ — covers 36 Southern IL counties Mississippi-to-Ohio rivers): APPRENTICE start $23.29/hr on check + $24.23 benefits = $47.52/hr TOTAL PACKAGE (clears Jackson Co. 1A+2C $46.76 already). JOURNEY $46.57/hr on check + $24.86 benefits = $71.43/hr TOTAL PACKAGE. Operator 2026-05-27: 'hvac went union and now they get paid.' Coverage includes all of LWA-25. Annual apprentice intake for LWA-25 counties not published — workforce board could request from Local 268 apprenticeship coordinator or via IL Apprenticeship Council. Major commercial / industrial HVAC work in LWA-25: Continental Tire HVAC + dust collection, Aisin facilities, SIH + Marion VA hospital systems, SIU campus, school district installs, federal contracting (GD-OTS environmental controls). UA Local 553 (East Alton) covers HVAC mechanical / refrigeration on the pipefitter side — similar family-supporting outcome. Sources: local268.com/wp-content/uploads/2025/06/Local-268-Journeyperson-Wage-Sheet.pdf, ualocal553.org."},
@@ -980,6 +984,15 @@ _TRAINING_LADDER_ROSTER = [
      "local_employer_override": 2000,  # Aisin Marion total: 2,000+ across Aisin Manufacturing IL + Aisin Electronics IL + Aisin Light Metals (Williamson Co.); WSIU 2023 announcement of half-million sq ft logistics center expansion
      "entry_gates": ["hs_diploma", "drug_screen", "basic_skills_assessment"],
      "notes": "Major Williamson Co. employer — 2,000+ jobs across three Aisin entities in Marion (Manufacturing IL + Electronics IL + Light Metals). Production-tech roles cover assembly, electronics, light-metals casting, quality, packaging. Starting $18-22/hr; production lead + skilled trades inside Aisin push to $24-30/hr; with overtime + 2nd-shift premium can clear 1A+2C. Entry gate is mild — HS diploma + drug screen + basic skills assessment. Aisin is actively hiring (WSIU 2023 announcement of nearly half-million sq ft logistics center expansion). Maps well to HS CTE manufacturing tracks at Marion Unit 2 + JALC industrial-maintenance / mechatronics programs."},
+
+    {"id": "hotel_hospitality_mgmt", "name": "Hotel / hospitality management (HS or bachelor's path)", "supersector_code": "1027",
+     "ladder": "HS CTE hospitality OR community-college AAS OR bachelor's hospitality management",
+     "typical_journey_wage_wkly": 725,  # BLS OEWS national hospitality bachelor's entry $37,668/yr ÷ 52 ≈ $725/wk
+     "training_duration": "HS CTE 2yr (free) OR AAS 2yr OR bachelor's 4yr ($30-80k tuition debt)",
+     "local_employer_override": 25,  # ~20-25 lodging-manager / hospitality-management slots LWA-25-wide across Carbondale (Home2 Suites Hilton + Hampton + Holiday Inn Express + Best Western + Super 8 + Comfort Inn), Marion (Country Inn + Hampton + Holiday Inn Express + Drury + Best Western), Mt. Vernon (Drury + Hampton + Comfort), Murphysboro (Holiday Inn Express)
+     "local_market_saturated": True,
+     "entry_gates": ["hs_diploma_or_bachelors", "drug_screen", "customer_service_experience_typical"],
+     "notes": "OPERATOR LIVED SIGNAL 2026-05-27: 'a degree in hotel management does not have a good ROI.' VERIFIED via BLS OEWS SOC 11-9081 (Lodging Managers) May 2024: national median $68,130; bachelor's entry median $37,668 (under 1 yr exp); 10-19 yrs experienced $57,995 (still below 1A+2C $97,260); 20+ yrs $75,778; top 10% only $102,410. Tuition debt ($30-80k bachelor's hospitality) plus $37k entry wage = ROI fails the family-supporting test by every measure. LWA-25 lodging-manager market is small + saturated (~20-25 GM slots across chain hotels in Carbondale + Marion + Mt. Vernon + Murphysboro; all filled, attrition-only entry). Visiting executives + relocator open houses stay at chain hotels OR Giant City Lodge (the destination-grade IL DNR-operated lodge in Giant City SP, ~12 mi south of Carbondale). Hospitality is NOT a primary jobs anchor for the region; it's a wage-suppressed credential path with a saturated local market."},
 
     {"id": "continental_tire_production", "name": "Continental Tire production operator (Mt. Vernon)", "supersector_code": "1013",
      "ladder": "HS diploma → Continental Tire onboarding + tire-build certification",
@@ -1023,7 +1036,14 @@ def _training_demand_alignment(qcew_block: dict) -> dict:
             sector_emp = qcew_row.get("total_employment", 0) or 0
             credential_specific_demand = False
         sector_wage = qcew_row.get("avg_weekly_wage", 0) or 0
-        wage = tl["typical_journey_wage_wkly"]
+        # Verdict comparison wage: prefer total_package_wkly when present
+        # (union trades + civil-service jobs have substantial pension/benefit
+        # value beyond check wage — Operator 2026-05-27: SMART Local 268 HVAC
+        # has $24.86/hr in benefits on top of $46.57/hr check; IL DOC + IDOT
+        # carry state pension contributions). Display columns still show
+        # typical_journey_wage_wkly as the headline number; verdict uses the
+        # richer total when available.
+        wage = tl.get("total_package_wkly") or tl["typical_journey_wage_wkly"]
 
         # Demand signal — credential-specific overrides (e.g. solar installer,
         # wind tech) operate at headcounts ~0-200 across the LWA; broad QCEW

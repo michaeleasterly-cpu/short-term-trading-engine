@@ -32,6 +32,7 @@ interface TrainingLadder {
   training_duration: string;
   typical_journey_wage_wkly: number;
   typical_journey_wage_hrly: number;
+  total_package_wkly?: number;
   supersector_name: string;
   supersector_code: string;
   local_sector_employment: number;
