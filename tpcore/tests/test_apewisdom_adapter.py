@@ -90,7 +90,11 @@ async def test_429_retries_then_succeeds() -> None:
 class _Conn:
     def __init__(self, sink): self._sink = sink
     async def fetch(self, sql, *a):
-        return [{"ticker": "MU"}, {"ticker": "MSFT"}]  # T1/T2 universe
+        # T1/T2 universe + the v2.1 classification_id FK target
+        return [
+            {"ticker": "MU", "classification_id": "USSZ_MU_CID"},
+            {"ticker": "MSFT", "classification_id": "USSZ_MSFT_CID"},
+        ]
     async def fetchval(self, sql, *a):
         return None  # skip-guard: no prior rows
     async def executemany(self, sql, rows):

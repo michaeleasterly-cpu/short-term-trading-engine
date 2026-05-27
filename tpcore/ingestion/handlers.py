@@ -2408,14 +2408,22 @@ async def handle_apewisdom_social_sentiment(
     async with pool.acquire() as conn:
         urows = await conn.fetch(
             """
-            SELECT lt.ticker
+            SELECT lt.ticker, tc.id AS classification_id
             FROM platform.liquidity_tiers lt
             LEFT JOIN platform.ticker_classifications tc USING (ticker)
             WHERE lt.tier <= 2
               AND COALESCE(tc.asset_class, 'stock') = 'stock'
+              AND tc.id IS NOT NULL
             """
         )
-    universe = {r["ticker"].upper() for r in urows}
+    # Universe maps ticker -> classification_id (the v2.1 referential-
+    # integrity FK target on social_sentiment). Tickers without a
+    # classifications row are excluded — INSERT would fail the NOT NULL
+    # FK anyway.
+    ticker_to_classification: dict[str, str] = {
+        r["ticker"].upper(): r["classification_id"] for r in urows
+    }
+    universe = set(ticker_to_classification.keys())
     if not universe:
         logger.info("ingestion.handler.social_sentiment.empty_universe")
         return 0
@@ -2444,10 +2452,12 @@ async def handle_apewisdom_social_sentiment(
         if rec.ticker not in universe:
             continue
         prev = _by_ticker.get(rec.ticker)
+        # rank is at index 4; classification_id at index 7
         if prev is None or rec.rank < prev[4]:
             _by_ticker[rec.ticker] = (
                 rec.ticker, today, rec.mentions, rec.upvotes, rec.rank,
                 rec.rank_24h_ago, rec.mentions_24h_ago,
+                ticker_to_classification[rec.ticker],
             )
     rows = list(_by_ticker.values())
     if not rows:
@@ -2465,12 +2475,13 @@ async def handle_apewisdom_social_sentiment(
                 "upvotes": str(u), "rank": str(rk),
                 "rank_24h_ago": "" if r24 is None else str(r24),
                 "mentions_24h_ago": "" if m24 is None else str(m24),
+                "classification_id": cid,
             }
-            for (t, d, m, u, rk, r24, m24) in rows
+            for (t, d, m, u, rk, r24, m24, cid) in rows
         ],
         fieldnames=[
             "ticker", "date", "mentions", "upvotes", "rank",
-            "rank_24h_ago", "mentions_24h_ago",
+            "rank_24h_ago", "mentions_24h_ago", "classification_id",
         ],
         validator=lambda x: bool(x.get("ticker")) and bool(x.get("date")),
     )
@@ -2479,8 +2490,8 @@ async def handle_apewisdom_social_sentiment(
             """
             INSERT INTO platform.social_sentiment
                 (ticker, date, mentions, upvotes, rank,
-                 rank_24h_ago, mentions_24h_ago)
-            VALUES ($1,$2,$3,$4,$5,$6,$7)
+                 rank_24h_ago, mentions_24h_ago, classification_id)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
             ON CONFLICT (ticker, date) DO NOTHING
             """,
             rows,
