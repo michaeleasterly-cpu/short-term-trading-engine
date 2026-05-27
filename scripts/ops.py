@@ -2059,7 +2059,10 @@ async def _stage_earnings_refresh(
         # Phase 2 — ETL from the on-disk archive. Reconstruct the
         # 5-tuple shape the existing INSERT SQL expects; executemany
         # in a single conn.acquire().
-        csv_rows = read_archive_csv(ctx.archive_path)
+        # Pass ctx so read_archive_csv routes to ctx.body bytes on S3
+        # backend (where ctx.archive_path is an s3:// URI, not a local
+        # Path). On local-FS backend the result is byte-identical.
+        csv_rows = read_archive_csv(ctx)
         if csv_rows:
             from decimal import Decimal as _Decimal
             tuples = [
