@@ -2890,6 +2890,43 @@ function LaborTruthSection({ lt }: { lt: LaborTruth }) {
         </div>
       )}
 
+      {/* Not-in-labor-force decomposition — the population isn't homogeneous */}
+      <div style={{ padding: 16, background: "#fef9eb", border: "1px solid #f0d98a", borderLeft: "6px solid oklch(45% 0.20 22)", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, marginBottom: 24 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "#1f1d18", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          The not-in-labor-force population is not homogeneous · "lost" vs. "self-employed hustler" are different demographics
+        </div>
+        <div style={{ marginBottom: 10 }}>
+          The 75,950 working-age adults outside the count includes multiple distinct demographics. The harm-cascade framing further down captures one slice — workers churned through training pipelines who exit discouraged. <strong>It does NOT capture another meaningful slice: self-employed informal-economy workers who run their own income off the formal grid</strong> (construction contractors operating sole-proprietor, cash-paid side work, gray-market trades, hustlers earning a real living that doesn&apos;t show up in W-2 / QCEW data). Operator-confirmed lived signal 2026-05-27: &quot;there are people who actually hustle for a living.&quot;
+        </div>
+        <div style={{ marginBottom: 10 }}>
+          <strong>Census Bureau Nonemployer Statistics (NES) — the authoritative source on this slice — empirically supports the operator&apos;s framing:</strong>
+        </div>
+        <ul style={{ margin: "0 0 10px 18px", padding: 0, fontSize: 12.5, lineHeight: 1.55 }}>
+          <li>US nonemployer businesses (sole proprietors with NO paid employees) grew <strong>72% from 2000–2021</strong> — from 16.5M to 28.5M. Employer businesses grew only 15% in the same period.</li>
+          <li><strong>Rural states show HIGHER percentages of self-employed workers</strong> than urban states.</li>
+          <li><strong>In rural areas the trend reverses the formal-economy trajectory:</strong> nonemployer businesses INCREASED while employer businesses DECREASED.</li>
+          <li>Construction (NAICS 23) is one of the most common nonemployer-business sectors — direct match for the operator&apos;s &quot;guys doing construction on their own&quot; cohort.</li>
+          <li>Per ACS class-of-worker breakdown: self-employed unincorporated + 1099-paid contractors are separately enumerated from W-2 wage workers; the IRS Schedule C filer count is the matched tax-data view.</li>
+        </ul>
+        <div style={{ marginBottom: 6 }}>
+          <strong>Honest decomposition of the 75,950 not-in-LF population:</strong>
+        </div>
+        <ul style={{ margin: "0 0 0 18px", padding: 0 }}>
+          <li><strong>Retired</strong> — expected demographic; no harm-cascade interpretation.</li>
+          <li><strong>Disabled / on SSDI</strong> — real Census category; no harm-cascade interpretation.</li>
+          <li><strong>Enrolled students (SIU + JALC + Rend Lake)</strong> — SIU alone enrolls ~11,000 students who are working-age and may report "not in LF" in ACS.</li>
+          <li><strong>Unpaid caregivers</strong> — mostly women raising young children (childcare gateway constraint — see Childcare section).</li>
+          <li><strong>Discouraged formal-economy workers</strong> — the harm-cascade demographic; trained, washed out of placement, stopped looking.</li>
+          <li><strong>Informal-economy participants / self-employed hustlers</strong> — operator&apos;s lived signal + Census NES empirical pattern. Running construction subcontracting on their own, cash-paid trades, gray-market work. NOT &quot;lost&quot; — economically active, just outside the W-2/QCEW reporting grid.</li>
+        </ul>
+        <div style={{ marginTop: 10 }}>
+          <strong>What this means for workforce-development planning:</strong> programs that assume the entire 75,950 want W-2 employment misallocate. A meaningful subset would benefit from MICROENTERPRISE SUPPORT (small-contractor licensing, business-formation help via the <a href="https://news.siu.edu/2024/04/043024-sius-small-business-development-center-named-illinois-sbdc-of-the-year.php" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>SIU SBDC (2024 Illinois SBDC of the Year)</a>, 1099-to-W2 bridge programs for those who&apos;d prefer formalization, capital-access through IL Treasurer&apos;s Microbusiness program) — not from the same training pipelines designed for displaced manufacturing workers seeking W-2 reentry. The harm-cascade framing applies to the discouraged-formal-economy slice; the informal-economy slice needs a different policy lever.
+        </div>
+        <div style={{ fontSize: 11, color: "#7a756b", marginTop: 8, lineHeight: 1.5 }}>
+          Sources: <a href="https://www.census.gov/programs-surveys/nonemployer-statistics.html" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Census Bureau Nonemployer Statistics (NES)</a> + <a href="https://www.census.gov/newsroom/press-releases/2025/2023-nonemployer-statistics.html" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Census 2023 NES press release</a> + <a href="https://farmdocdaily.illinois.edu/2025/06/nonemployer-businesses-and-the-geography-of-self-employment.html" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>farmdoc daily · Nonemployer Businesses and the Geography of Self-Employment</a> + <a href="https://www.choicesmagazine.org/choices-magazine/submitted-articles/nonemployer-businesses-are-increasing-in-number-in-rural-america" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Choices Magazine · Nonemployer Businesses Are Increasing in Number in Rural America</a> + <a href="https://www.bostonfed.org/-/media/Documents/Workingpapers/PDF/economic/cpp1413.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Boston Fed · Informal Work Activity in the United States (working paper)</a> + operator primary-source 2026-05-27.
+        </div>
+      </div>
+
       {/* Per-county table */}
       <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "hidden" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
