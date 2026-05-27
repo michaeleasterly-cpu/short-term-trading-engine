@@ -935,7 +935,150 @@ function AttractionPipelineSection() {
       </div>
 
       <div style={{ marginBottom: 24, fontSize: 12, color: "#7a756b", lineHeight: 1.5 }}>
-        All licensing process &amp; wage figures are public record. License decisions and disputed-finalist allegations cited from named outlets above. Operator should ALWAYS verify current local license status at <a href="https://cannabis.illinois.gov/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>cannabis.illinois.gov</a> before acting on any specific claim.
+        All licensing process &amp; wage figures are public record from state agencies and the named industry-salary sources above. Verify current local license status + open application windows at <a href="https://cannabis.illinois.gov/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>cannabis.illinois.gov</a> before acting on any specific claim.
+      </div>
+
+      {/* === Outside-the-box people-attraction strategies === */}
+      <h3 style={{ fontSize: 18, fontWeight: 600, color: "#1f1d18", margin: "32px 0 8px 0" }}>
+        Outside-the-box people-attraction strategies · creative pathways to a living-wage population
+      </h3>
+      <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 760, lineHeight: 1.55 }}>
+        Recruiting new anchor employers is one strategy. <strong>Recruiting new
+        residents directly — people who already earn living wages, or will earn them
+        once they arrive — is a complementary strategy</strong> with documented ROI
+        in peer regions. Each option below carries a named precedent + sources.
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 12 }}>
+        {[
+          {
+            name: "Remote-worker relocation incentive — 'Choose Carbondale' / 'Move to Shawnee'",
+            fit: "STRONG FIT",
+            fit_color: "oklch(45% 0.16 142)",
+            what: "Pay remote workers a cash incentive (typically $10k) to relocate, with a 12-month residency requirement. They bring their out-of-state salary into the local economy.",
+            why_here: "Tulsa Remote documented impact: 4,000+ relocated, $878M economic impact, $36k cost-per-job vs $218k typical business incentive (6× more efficient, 4:1 benefit-cost ratio for existing residents). 70% of relocators stay past their initial obligation. LWA-25's amenity profile (Shawnee NF, wine trail, Amtrak via the new station, cheap housing, SIU community) is competitive with Tulsa / Topeka / Bentonville.",
+            action: "Stand up 'Choose Carbondale' or regional equivalent. $5K-10K relocation grant + curated welcome program. Funding: hotel-tax allocation + EDA seed grant + IL DCEO match. Target: 30-50 relocators/year initial.",
+            sources: [
+              { url: "https://www.brookings.edu/articles/work-from-anywhere-as-a-public-policy-three-findings-from-the-tulsa-remote-program/", label: "Brookings — Tulsa Remote findings" },
+              { url: "https://www.upjohn.org/research-highlights/each-dollar-spent-drawing-remote-workers-tulsa-delivers-4-benefit-current-residents", label: "Upjohn Institute — 4:1 benefit-cost ratio" },
+              { url: "https://www.tulsaremote.com/", label: "Tulsa Remote program" },
+            ],
+          },
+          {
+            name: "University graduate retention — 'Stay Carbondale' for SIU grads",
+            fit: "STRONG FIT",
+            fit_color: "oklch(45% 0.16 142)",
+            what: "Match SIU graduates with regional employers + first-year housing assistance + employer-funded student-loan-payment match. Address rural brain drain at the source.",
+            why_here: "SIU graduates ~3,000+ students/year. Per the Demographics section, Carbondale's population dropped 15.6% in 5 years driven largely by SIU enrollment + graduate-retention failure. Retaining even 10% of annual graduates at family-supporting wages materially offsets the population trend.",
+            action: "Partnership between SIU Career Services + Mantracon + Carbondale + Marion Chambers. Build employer-graduate matching platform + offer relocation-style $5K stipend conditional on 2-year regional commitment. Apply for EDA Recompete grant.",
+            sources: [
+              { url: "https://www.eda.gov/funding/programs/recompete", label: "EDA Recompete Pilot (rural workforce program)" },
+              { url: "https://siu.edu/", label: "Southern Illinois University Carbondale" },
+            ],
+          },
+          {
+            name: "Federal retiree / military veteran relocation pitch",
+            fit: "STRONG FIT",
+            fit_color: "oklch(45% 0.16 142)",
+            what: "Target federal civilian retirees + veteran retirees seeking low cost-of-living retirement with healthcare access. They bring pension income (typically $40-100k+) and Medicare/VA healthcare demand that supports the regional health-sector workforce.",
+            why_here: "Marion VA Medical Center is the existing healthcare anchor. SIH + Memorial Carbondale add capacity. LWA-25 cost-of-living is far below federal-retiree concentration cities. Veteran population already loves the region (per the Federal Money Concentration section — VA-driven economic flows dominate).",
+            action: "Targeted marketing through Federal News Network, Military Times, VFW + American Legion networks. Carbondale + Marion Chambers partner with Marion VA to host quarterly retirement-relocation open houses.",
+            sources: [
+              { url: "https://www.marion.va.gov/", label: "Marion VA Medical Center" },
+              { url: "https://www.opm.gov/policy-data-oversight/data-analysis-documentation/federal-employment-reports/", label: "OPM federal workforce statistics" },
+            ],
+          },
+          {
+            name: "Mid-career career-change relocation — coding bootcamp / trades retraining + lifestyle pitch",
+            fit: "MODERATE-STRONG FIT",
+            fit_color: "oklch(45% 0.16 142)",
+            what: "35-50yo professionals leaving expensive metros seeking lower-COL location + career pivot. They self-fund a credential (coding bootcamp, IBEW pre-apprenticeship, RN program at JALC) while consuming local services and bringing remaining savings into the local economy.",
+            why_here: "JALC offers the credential infrastructure (Agriculture-Horticulture AA, RN ADN, electrical, welding programs). IBEW Local 702 takes pre-apprentices. Living-cost gap vs SF/NYC/Seattle covers 12-24 months of credential training with no income.",
+            action: "Marketing partnership between JALC + Mantracon + Chamber: 'Reset your career in Carbondale.' Target 30-50 enrollees/year. Bundle with the remote-worker incentive when graduates take remote jobs post-credential.",
+            sources: [
+              { url: "https://www.jalc.edu/", label: "John A. Logan College programs" },
+              { url: "https://ibew702.org/", label: "IBEW Local 702 (West Frankfort)" },
+            ],
+          },
+          {
+            name: "Climate-migration positioning — Mississippi River valley as water-rich refuge",
+            fit: "MODERATE FIT",
+            fit_color: "oklch(48% 0.15 60)",
+            what: "Position LWA-25 as climate-stable: ample fresh water (Mississippi River + Kinkaid + Crab Orchard), no hurricane risk, lower wildfire risk than the West, lower flood risk than coastal regions, lower extreme-heat risk than Southwest.",
+            why_here: "Academic literature documents climate migration to the Upper Midwest as a real and accelerating phenomenon. LWA-25 is south of the typical 'Great Lakes climate haven' framing but shares the water-rich + disaster-resistant profile, with materially lower COL than Buffalo or Duluth (the named climate-haven cities).",
+            action: "Marketing campaign positioning the region for SW drought refugees + FL/coastal flood refugees. Track climate-driven home-insurance unavailability in source regions (the active leading indicator).",
+            sources: [
+              { url: "https://agupubs.onlinelibrary.wiley.com/doi/full/10.1029/2022EF002942", label: "AGU 2022 — Climate Migration to Great Lakes Cities" },
+              { url: "https://www.planetizen.com/features/135561-great-lakes-cities-are-touted-climate-refuge-reality-much-more-complex", label: "Planetizen — climate refuge realities" },
+              { url: "https://www.crainsdetroit.com/crains-forum/climate-change-extreme-weather-spur-migration-great-lakes", label: "Crain's Detroit — climate migration data" },
+            ],
+          },
+          {
+            name: "Outdoor recreation industry HQ + tourism magnet attraction",
+            fit: "MODERATE FIT",
+            fit_color: "oklch(48% 0.15 60)",
+            what: "Attract outdoor-industry companies + adventure-tourism operators to base regional HQs near Shawnee NF. Industries: outdoor gear retail, guide services, outdoor education, eco-lodge operators.",
+            why_here: "Shawnee NF is the ONLY national forest in IL — 280k acres. Climbing at Jackson Falls + Cedar Falls; MTB at Rim Rock + Lake Glendale; paddling on Cache River + Mississippi backwaters; backpacking the River-to-River Trail. BEA Outdoor Recreation Satellite Account shows outdoor rec contributes ~$1.1T to US GDP annually; the industry hasn't placed an HQ in Illinois.",
+            action: "Partnership with Shawnee NF Forest Service + IL Office of Tourism. Pitch outdoor gear brands + regional outfitters + adventure-education orgs (Outward Bound, NOLS).",
+            sources: [
+              { url: "https://www.fs.usda.gov/main/shawnee/home", label: "Shawnee National Forest" },
+              { url: "https://www.bea.gov/data/special-topics/outdoor-recreation", label: "BEA Outdoor Recreation Satellite Account" },
+            ],
+          },
+          {
+            name: "Worker-owned cooperative seeding — capture more value locally",
+            fit: "LONG SHOT BUT INTERESTING",
+            fit_color: "oklch(48% 0.15 60)",
+            what: "Seed worker-owned cooperative businesses in sectors with stable local demand (childcare, eldercare, food production, construction). Cooperative ownership means workers capture more of the business surplus → higher individual income than the same role at a traditional employer.",
+            why_here: "Evergreen Cooperatives Cleveland is the US showcase (10+ co-ops, 250+ worker-owners). Sectors with cooperative-friendly fit in LWA-25: childcare (chronic shortage), home healthcare (aging population), specialty food production (wine, dairy, produce), retrofit construction (federal weatherization money flowing).",
+            action: "Partner with Cooperative Development Foundation + Democracy at Work Institute. Pilot one cooperative in childcare or home healthcare. Apply for USDA Rural Cooperative Development Grant.",
+            sources: [
+              { url: "https://institute.coop/", label: "Democracy at Work Institute" },
+              { url: "https://www.evgoh.com/", label: "Evergreen Cooperatives — Cleveland" },
+              { url: "https://www.rd.usda.gov/programs-services/business-programs/rural-cooperative-development-grant-program", label: "USDA Rural Cooperative Development Grant" },
+            ],
+          },
+        ].map((s, i) => (
+          <div key={i} style={{
+            background: "white",
+            border: `1px solid ${s.fit_color}33`,
+            borderLeft: `6px solid ${s.fit_color}`,
+            borderRadius: 6, padding: 16,
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, marginBottom: 8 }}>
+              <div style={{ fontSize: 16, fontWeight: 600, color: "#1f1d18", flex: 1 }}>{s.name}</div>
+              <div style={{
+                fontSize: 11, fontWeight: 700, color: "white", background: s.fit_color,
+                padding: "5px 10px", borderRadius: 3, textTransform: "uppercase", letterSpacing: "0.06em",
+                whiteSpace: "nowrap",
+              }}>{s.fit}</div>
+            </div>
+            <div style={{ fontSize: 13, color: "#3d3a33", marginBottom: 6 }}><strong>What it is:</strong> {s.what}</div>
+            <div style={{ fontSize: 13, color: "#3d3a33", marginBottom: 6 }}><strong>Why it fits LWA-25:</strong> {s.why_here}</div>
+            <div style={{ fontSize: 13, color: "#3d3a33", marginBottom: 8 }}><strong>Action items:</strong> {s.action}</div>
+            <div style={{ fontSize: 11, color: "#5a564d" }}>
+              <strong>Sources:</strong>{" "}
+              {s.sources.map((src, j) => (
+                <span key={j}>
+                  {j > 0 && " · "}
+                  <a href={src.url} target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>{src.label}</a>
+                </span>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ marginTop: 16, marginBottom: 24, padding: 14, background: "#fef9eb", border: "1px solid #f0d98a", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
+        <strong>Strategic sequencing:</strong> remote-worker incentive + graduate
+        retention are highest ROI, fastest to deploy, lowest political risk —
+        start there with EDA Recompete seed funding. Federal-retiree pitch is
+        relationship-driven and 18-36 months. Climate-migration positioning is
+        essentially marketing — low cost, optional upside. Outdoor industry HQ
+        is a multi-year courtship. Cooperative seeding is the longest-cycle but
+        has the strongest local-value-capture once it works. None of these
+        substitute for the anchor employer recruitment in the scorecard above —
+        they complement it.
       </div>
 
       {/* IL programs to file under */}
