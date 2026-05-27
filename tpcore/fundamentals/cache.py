@@ -343,6 +343,32 @@ class FundamentalsCache:
         # platform's data-acceptance rules (per-row write-time filtering,
         # not post-hoc cleanup). Today's incident: USAR / SLDB came in
         # with shares_outstanding=0; VNOM had period_end > filing_date.
+        # 2026-05-27: also reject rows where any numeric(20,4) financial
+        # column exceeds the |10^16| precision ceiling (FMP occasionally
+        # returns garbage values; the DB cap fires NumericValueOutOfRange).
+        from decimal import Decimal
+
+        _NUMERIC_20_4_CAP = Decimal("1e16")  # numeric(20,4) max ≈ 10^16
+        _CAP_FIELDS = (
+            "net_income", "fcf", "operating_cash_flow", "capex", "revenue",
+            "total_assets", "total_liabilities", "current_assets",
+            "current_liabilities", "receivables", "cash_and_equivalents",
+            "shares_outstanding",
+        )
+
+        def _exceeds_cap(payload: dict) -> str | None:
+            for field in _CAP_FIELDS:
+                val = payload.get(field)
+                if val is None:
+                    continue
+                try:
+                    d = abs(Decimal(str(val)))
+                except (ValueError, ArithmeticError):
+                    return field
+                if d >= _NUMERIC_20_4_CAP:
+                    return field
+            return None
+
         today_d = datetime.now(UTC).date()
         rows: list[tuple] = []
         now = datetime.now(UTC)
@@ -362,6 +388,16 @@ class FundamentalsCache:
             # shares_outstanding must be > 0 OR NULL (not zero)
             if shares is not None and shares <= 0:
                 rejected += 1
+                continue
+            # numeric(20,4) cap (FMP occasional garbage values)
+            cap_field = _exceeds_cap(p)
+            if cap_field is not None:
+                rejected += 1
+                logger.warning(
+                    "fundamentals.cache.numeric_overflow_rejected",
+                    symbol=symbol, field=cap_field,
+                    value=str(p.get(cap_field)), filing=str(filing),
+                )
                 continue
             rows.append((
                 symbol.upper(),
