@@ -1591,9 +1591,9 @@ async def _usaspending_top_recipients(
     KNOWN_SBA_STATUS: dict[str, dict] = {
         # 4 confirmed SDVOSBs in the LWA-25 top recipient list (web-sourced 2026-05-27)
         "SMITH HAFELI":              {"sba_status": "SDVOSB",       "location_tag": "LOCAL · Marion IL",       "founder_note": "USAF Col. Lance Hafeli",        "source_url": "https://smith-hafeli.com/about-us/"},
-        "SDV OFFICE":                {"sba_status": "SDVOSB",       "location_tag": "OUT-OF-REGION · Fletcher NC", "founder_note": "Two USMC officers",          "source_url": "https://sdvosystems.com/contracts/"},
-        "JETT":                      {"sba_status": "SDVOSB",       "location_tag": "OUT-OF-REGION · Paducah KY", "founder_note": "Jeffrey Jett (USMC veteran)", "source_url": "https://www.veteranownedbusiness.com/business/33768/jetts-specialty-contracting"},
-        "ABOVE GROUP":               {"sba_status": "SDVOSB",       "location_tag": "OUT-OF-REGION · Melbourne FL", "founder_note": "Founded by service-disabled veterans", "source_url": "https://www.abovegroupinc.com/"},
+        "SDV OFFICE":                {"sba_status": "SDVOSB",       "location_tag": "OUT-OF-REGION · Fletcher NC", "founder_note": "Two USMC officers · UEI verify at SAM.gov",          "source_url": "https://sdvosystems.com/contracts/"},
+        "JETT":                      {"sba_status": "SDVOSB",       "location_tag": "OUT-OF-REGION · Paducah KY", "founder_note": "Jeffrey Jett · UEI verify at SAM.gov", "source_url": "https://www.veteranownedbusiness.com/business/33768/jetts-specialty-contracting"},
+        "ABOVE GROUP":               {"sba_status": "SDVOSB",       "location_tag": "OUT-OF-REGION · Melbourne FL", "founder_note": "Founded 2014 · UEI N5WANJDVRMG8 · CAGE 7DG75 · 40 emp · $14M rev", "source_url": "https://www.abovegroupinc.com/"},
         # 3 confirmed large businesses (no SBA set-aside applies)
         "NAPHCARE":                  {"sba_status": "LARGE",        "location_tag": "OUT-OF-REGION · national",   "founder_note": "$483M revenue, largest BOP healthcare TPA", "source_url": "https://www.naphcare.com/about"},
         "CDM FEDERAL":               {"sba_status": "LARGE",        "location_tag": "OUT-OF-REGION · 131 offices", "founder_note": "CDM Smith subsidiary, ~5,000 employees", "source_url": "https://en.wikipedia.org/wiki/CDM_Smith"},

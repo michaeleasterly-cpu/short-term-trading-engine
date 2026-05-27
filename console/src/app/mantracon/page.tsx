@@ -1053,7 +1053,7 @@ function AttractionPipelineSection() {
             {
               agency: "USDA Forest Service research — Shawnee NF satellite",
               size: "USFS R&D has ~80 sites; Shawnee is a major Eastern NF",
-              fit_strong: "Shawnee NF is the largest forest reservation in IL — 280k acres. USFS Northern Research Station (NRS) already covers IL with offices in Carbondale, IL — formally a NRS station exists at SIU. Expansion is incremental, not relocation.",
+              fit_strong: "Shawnee NF is the largest forest reservation in IL — 280k acres. The USFS Northern Research Station (NRS) HAS HAD historical Carbondale-area presence via the Kaskaskia Experimental Forest (researchers Minckler + Lane in published NRS literature) — verify current staffing structure post-NRS consolidation before claiming an active office. The University of Illinois Natural History Survey operates a separate Kaskaskia Biological Station near Lake Shelbyville (not USFS).",
               process: "Lower-stakes target: expand the existing NRS Carbondale presence. SIU College of Ag + Forestry program is the anchor. Push for additional research positions tied to forest health / oak decline / fire-on-the-prairie research.",
             },
             {
@@ -1189,7 +1189,7 @@ function AttractionPipelineSection() {
         <ul style={{ margin: "0 0 0 18px", padding: 0 }}>
           <li><strong>Coal-region critical minerals</strong> — already has $200K NSF/DOE seed grant on rare-earth extraction from abandoned coal mines. THE differentiated bid theme.</li>
           <li><strong>Mississippi River / aquatic sciences</strong> — SIU Center for Fisheries, Aquaculture, and Aquatic Sciences (CFAAS) is regionally renowned.</li>
-          <li><strong>Forestry / forest health</strong> — Shawnee NF adjacent; USFS Northern Research Station already has Carbondale presence.</li>
+          <li><strong>Forestry / forest health</strong> — Shawnee NF adjacent (280k acres); Kaskaskia Experimental Forest legacy through USFS NRS literature. Confirm current staffing structure with the NRS directorate before claiming an active station.</li>
           <li><strong>Aviation</strong> — SIU Aviation Flight + FAA AT-CTI partnership — underleveraged.</li>
           <li><strong>Agriculture</strong> — College of Agricultural, Life &amp; Physical Sciences — natural USDA partner.</li>
           <li><strong>Medical / rural health</strong> — SIU School of Medicine (Springfield) is the NIH bid vehicle.</li>
