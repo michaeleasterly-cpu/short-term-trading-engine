@@ -2194,6 +2194,78 @@ function SupplyChainSubawardSection({ lanes }: { lanes?: GdotsSubawardLanes | nu
       <div style={{ marginBottom: 16, fontSize: 11, color: "#7a756b", lineHeight: 1.5 }}>
         Sources: <a href="https://www.usaspending.gov/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>USAspending.gov</a> subaward data; <a href="https://www.sba.gov/federal-contracting/contracting-assistance-programs/hubzone-program" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>SBA HUBZone Program</a>; <a href="https://www.sba.gov/federal-contracting/contracting-assistance-programs/8a-business-development-program" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>SBA 8(a) Business Development Program</a>; IL DCEO Industrial Supply Directory.
       </div>
+
+      {/* Services-lane BD intelligence — hidden under the 332993 prime-NAICS rollup */}
+      <div style={{ marginTop: 20, padding: 16, background: "#f7f5ef", border: "1px solid #d8d2c4", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          Services-lane BD intelligence — the easier lanes hidden under the 332993 rollup
+        </div>
+        <div style={{ marginBottom: 10 }}>
+          The realtime USAspending API rolls every GD-OTS Marion sub-award up under the prime-award NAICS (332993 Ammunition Mfg). The actual sub-recipient work spans many NAICS codes — and the SERVICES lanes (grounds, janitorial, HVAC, freight, pest, waste, food, equipment repair) are typically lower-clearance + lower-precision-machining-barrier than the manufacturing lanes. These are the most replaceable lanes by local SDVOSB / HUBZone / 8(a) firms.
+        </div>
+        <div style={{ overflowX: "auto", marginBottom: 10 }}>
+          <table style={{ width: "100%", fontSize: 11.5, borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ background: "#ebe5d6", textAlign: "left" }}>
+                <th style={{ padding: "6px 8px", borderBottom: "1px solid #d8d2c4" }}>NAICS</th>
+                <th style={{ padding: "6px 8px", borderBottom: "1px solid #d8d2c4" }}>Category</th>
+                <th style={{ padding: "6px 8px", borderBottom: "1px solid #d8d2c4" }}>Clearance tier</th>
+                <th style={{ padding: "6px 8px", borderBottom: "1px solid #d8d2c4" }}>Local pickup</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[
+                {n: "561730", c: "Grounds / landscape maintenance", t: "Tier 1 (escorted, exterior)", l: "EASY"},
+                {n: "561720", c: "Janitorial — admin spaces", t: "Tier 1-2 (background + escorted)", l: "EASY — common SDVOSB set-aside"},
+                {n: "561210", c: "Facilities support (umbrella)", t: "Tier 1-2", l: "MEDIUM"},
+                {n: "561612", c: "Security guard & patrol", t: "Tier 3 (DoD Secret)", l: "HARD — clearance barrier"},
+                {n: "561621", c: "Security systems services", t: "Tier 2-3", l: "MEDIUM (page already flags this lane)"},
+                {n: "238220", c: "HVAC maintenance", t: "Tier 1-2 (exterior) / Tier 3 (production zones)", l: "MEDIUM — SMART Local 268 union shops fit"},
+                {n: "238210", c: "Electrical contractors", t: "Tier 1-2 (exterior) / Tier 3 (production zones)", l: "MEDIUM — IBEW Local 702 fit"},
+                {n: "484110", c: "Local freight trucking", t: "DOT + drug screen (no clearance)", l: "EASY — Knight Hawk-area CDL operators already exist"},
+                {n: "488510", c: "Freight transp. arrangement", t: "Tier 1 (background)", l: "EASY (page already flags this lane)"},
+                {n: "722310", c: "Food service contractor", t: "Tier 1-2", l: "EASY-MEDIUM — SIH already runs the Marion VA cafeteria"},
+                {n: "562111", c: "Solid waste collection", t: "Tier 1 (background)", l: "EASY"},
+                {n: "562211", c: "Hazmat waste treatment", t: "Tier 2-3 (cleared technicians)", l: "HARDER (regulatory)"},
+                {n: "811310", c: "Industrial equipment repair", t: "Tier 1-2 (escorted)", l: "MEDIUM"},
+                {n: "561710", c: "Pest control", t: "Tier 1 (background)", l: "EASY"},
+              ].map((r, i) => (
+                <tr key={r.n} style={{ borderBottom: i < 13 ? "1px solid #ebe5d6" : "none" }}>
+                  <td style={{ padding: "5px 8px", fontFamily: "monospace", color: "#1f5f8f" }}>{r.n}</td>
+                  <td style={{ padding: "5px 8px" }}><strong>{r.c}</strong></td>
+                  <td style={{ padding: "5px 8px", color: "#5a564d" }}>{r.t}</td>
+                  <td style={{ padding: "5px 8px", color: r.l.startsWith("EASY") ? "oklch(40% 0.18 142)" : r.l.startsWith("HARD") ? "oklch(45% 0.20 22)" : "#5a564d", fontWeight: r.l.startsWith("EASY") ? 600 : 400 }}>{r.l}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ marginBottom: 8 }}>
+          <strong>Clearance reality (per FAR §1252.204-70 + DoD personnel security policy)</strong> — there are <em>three</em> tiers, not a single Secret-clearance barrier:
+        </div>
+        <ul style={{ margin: "0 0 10px 18px", padding: 0, fontSize: 12, lineHeight: 1.5 }}>
+          <li><strong>Tier 1 — NACI / HSPD-12 facility access:</strong> exterior maintenance / landscaping / gates / supply delivery / food service. Background investigation + drug screen + DoD facility-access card (RAPIDGate-style). NO security clearance. Most replaceable services lanes live here. Time-to-clear: 1-4 weeks. Sponsor cost: ~$200-500/employee.</li>
+          <li><strong>Tier 2 — Public Trust (Moderate Risk):</strong> interior unclassified work (admin janitorial, food service in plant cafeteria, IT support, vehicle maintenance). OPM NACI / Tier 1 BI + drug screen + identity proofing. Still NOT a clearance — it's a suitability determination. Time: 4-12 weeks. Cost: ~$500-1500/employee.</li>
+          <li><strong>Tier 3 — DoD Secret:</strong> classified production zones, controlled materials handling, security posts at GD-OTS Marion (M119A2 propellant areas, classified records, certain HVAC in production zones). Full DoD Secret clearance. Time: 6-12+ months. Cost: $5-10k+/employee to sponsor.</li>
+        </ul>
+        <div style={{ padding: 12, background: "oklch(96% 0.04 142)", border: "1px solid oklch(45% 0.16 142)33", borderRadius: 4, marginBottom: 8 }}>
+          <strong>Local-BD principle (operator-confirmed 2026-05-27):</strong> the supply-chain replacement strategy targets sub-recipients <em>outside the broader Midwest economic shed</em> — outside ~200 miles, outside the St. Louis / Evansville / Paducah / Indianapolis labor markets. <strong>Don&apos;t take jobs from St. Louis-area neighbors</strong> (John J. Steuby Co. = St. Louis MO; Spartan Light Metals = Mexico MO + Sparta IL — these are shared labor market, leave them alone). Target out-of-economic-shed primes like AMTEC (Janesville WI, ~350 mi) for any precision-manufacturing replacement; concentrate services-lane replacement on out-of-region service contractors first.
+        </div>
+        <div style={{ marginBottom: 8 }}>
+          <strong>Smith Hafeli playbook (reproducible for local services-lane pickup):</strong>
+        </div>
+        <ol style={{ margin: "0 0 0 18px", padding: 0, fontSize: 12, lineHeight: 1.55 }}>
+          <li>Local small business (S-corp or LLC) with primary place of business in LWA-25 — Marion / Carbondale / Murphysboro qualify; Franklin / Perry / parts-of-Jackson qualify for HUBZone</li>
+          <li>SDVOSB / HUBZone / 8(a) / WOSB certification through SBA — Veterans Business Outreach Center (VBOC) for SDVOSB; SBA District Office for HUBZone + 8(a) + WOSB</li>
+          <li>SAM.gov registration + UEI assignment + qualifying NAICS codes</li>
+          <li>Background-investigated workforce (Tier 1 / Tier 2 — not Secret clearance for most services lanes)</li>
+          <li>Start with a single small contract under FAR §19 (small-business set-aside) — even a $50-200k starter is enough to establish past-performance</li>
+          <li>Optional: SBA Mentor-Protégé Program pairing with an established firm (Smith Hafeli is the obvious local mentor candidate)</li>
+        </ol>
+        <div style={{ marginTop: 8, fontSize: 11, color: "#7a756b", lineHeight: 1.5 }}>
+          Sources: <a href="https://www.naics.com/naics-code-description/?code=561210" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>NAICS 561210 Facilities Support Services</a>; <a href="https://www.acquisition.gov/tar/1252.204-70-contractor-personnel-security-and-agency-access." target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>FAR §1252.204-70 (Contractor Personnel Security)</a>; <a href="https://www.sba.gov/federal-contracting/contracting-assistance-programs/sba-mentor-protege-program" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>SBA Mentor-Protégé Program</a>; OPM e-QIP investigation guidance.
+        </div>
+      </div>
     </section>
   );
 }
