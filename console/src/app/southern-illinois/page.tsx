@@ -3003,7 +3003,7 @@ export default async function SouthernIllinoisPage() {
       </head>
       <body>
         <div className="shell">
-          <Topbar region="LWA-25" renderedAt={renderedAt} />
+          <Topbar brand="Southern Illinois Region · Workforce + Economic Development" region="LWA-25" renderedAt={renderedAt} />
 
           {/* Hero — data-first; numbers and identifiers only, no verdict adjectives. */}
           <header className="hero">

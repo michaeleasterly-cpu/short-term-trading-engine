@@ -805,7 +805,7 @@ export default async function CarbondalePage() {
       </head>
       <body>
         <div className="shell">
-          <Topbar region="Carbondale · Jackson County · IL" renderedAt={renderedAt} />
+          <Topbar brand="Carbondale, IL · Economic Profile" region="Carbondale · Jackson County · IL" renderedAt={renderedAt} />
 
           {!data && (
             <div style={{ padding: 40, textAlign: "center", color: "var(--ink-3)" }}>

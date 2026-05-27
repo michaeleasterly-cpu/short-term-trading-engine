@@ -676,7 +676,7 @@ export default async function MurphysboroPage() {
       </head>
       <body>
         <div className="shell">
-          <Topbar region="Murphysboro · Jackson County · IL" renderedAt={renderedAt} />
+          <Topbar brand="Murphysboro, IL · Economic Profile" region="Murphysboro · Jackson County · IL" renderedAt={renderedAt} />
 
           <header className="hero">
             <div>

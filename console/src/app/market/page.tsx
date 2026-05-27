@@ -450,7 +450,7 @@ export default async function MarketHealthPage() {
       </head>
       <body>
         <div className="shell">
-          <Topbar region="US · National" renderedAt={renderedAt} />
+          <Topbar brand="US Market Health · Recession & credit gauges" region="US · National" renderedAt={renderedAt} />
 
           {!data && (
             <div style={{ padding: 40, textAlign: "center", color: "var(--ink-3)" }}>

@@ -58,7 +58,7 @@ a:hover { color: var(--accent-2); border-bottom-color: var(--accent-2); }
 
 .topbar { display: flex; align-items: center; gap: 14px; padding: 10px 0 18px; border-bottom: 1px solid var(--rule); flex-wrap: wrap; }
 .brand { display: flex; align-items: center; gap: 10px; font-family: "IBM Plex Mono", monospace; font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-2); }
-.brand-mark { width: 22px; height: 22px; background: var(--ink); border-radius: 3px; display: grid; place-items: center; color: var(--paper); font-size: 11px; font-weight: 700; font-family: "IBM Plex Mono", monospace; }
+.brand img { width: 22px; height: 22px; display: block; }
 .topbar .sep { flex: 1; }
 .topbar .meta { display: flex; gap: 18px; font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--ink-3); flex-wrap: wrap; }
 .topbar .meta b { color: var(--ink); font-weight: 500; }
@@ -157,13 +157,28 @@ export function DashboardHead({ title }: { title: string }) {
   );
 }
 
-/** Newspaper-style topbar with brand mark + meta strip. */
-export function Topbar({ region, renderedAt, build }: { region: string; renderedAt: string; build?: string }) {
+/** Newspaper-style topbar with logo + page-specific brand line + meta strip.
+ * `brand` is the per-page identity — name the page for what it actually is,
+ * not the internal company name. `logoSrc` defaults to /logo-icon.svg. */
+export function Topbar({
+  brand,
+  region,
+  renderedAt,
+  build,
+  logoSrc = "/logo-icon.svg",
+}: {
+  brand: string;
+  region: string;
+  renderedAt: string;
+  build?: string;
+  logoSrc?: string;
+}) {
   return (
     <div className="topbar">
       <div className="brand">
-        <div className="brand-mark">P</div>
-        <div>Packet Void Labs · Operator Console</div>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={logoSrc} alt="" width={22} height={22} style={{ display: "block" }} />
+        <div>{brand}</div>
       </div>
       <div className="sep" />
       <div className="meta">
