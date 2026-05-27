@@ -458,12 +458,13 @@ function ChildcareGatewaySection() {
           </ul>
         </div>
         <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, padding: 14 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8 }}>What the workforce board can do</div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8 }}>Human-coordination levers (dashboard cannot automate)</div>
+          <div style={{ fontSize: 11, color: "#5a564d", marginBottom: 8, lineHeight: 1.5 }}>The dashboard surfaces childcare cost as the gateway constraint with MIT-LWC + Smart Start sources above. The four levers below are the residual human-coordination work:</div>
           <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 13, color: "#3d3a33", lineHeight: 1.65 }}>
-            <li><strong>Co-locate childcare with training programs.</strong> Drop-in childcare at JALC / Rend Lake / regional training sites (JALC, Rend Lake, local workforce-board offices) materially lowers the barrier for parents enrolling in 12-24mo credentials.</li>
-            <li><strong>Push employer-paired childcare benefits</strong> in CBA / community-engagement framing with major federal-contracting employers. On-site or stipend-based childcare costs the employer $200-400/wk and gains ~$3-5/hr in retained-worker effective wage.</li>
-            <li><strong>Help local childcare providers become Smart Start grantees.</strong> Many small in-home providers in LWA-25 are eligible for the $90M Workforce Grant pool but don&apos;t apply. Technical-assistance pipeline through the workforce board + IDHS.</li>
-            <li><strong>Frame childcare-worker positions as a career on-ramp.</strong> The credential ladder (CDA → Bachelor&apos;s in ECE → director) reaches family-supporting at the upper rungs. Same playbook as CNA → LPN → RN.</li>
+            <li><strong>Co-locate childcare with training sites</strong> at JALC / Rend Lake / regional offices. Drop-in childcare materially lowers the barrier for parents enrolling in 12-24mo credentials.</li>
+            <li><strong>Negotiate employer-paired childcare benefits</strong> in CBA / community-engagement framing with major federal-contracting employers (GD-OTS, Continental Tire, Aisin). On-site or stipend-based childcare costs the employer $200-400/wk and gains ~$3-5/hr in retained-worker effective wage.</li>
+            <li><strong>Steer local in-home providers into Smart Start grant applications.</strong> The $90M IL DHS Workforce Grant pool is materially under-applied-for by LWA-25 providers; the technical-assistance gap is the constraint.</li>
+            <li><strong>Frame childcare-worker positions as a career on-ramp</strong> in regional credential outreach. The CDA → Bachelor&apos;s ECE → director ladder reaches family-supporting at the upper rungs (same structure as CNA → LPN → RN).</li>
           </ul>
         </div>
       </div>
@@ -2414,18 +2415,21 @@ function FederalConcentrationSection({ tr }: { tr: TopRecipientsBlock }) {
             certified <em>local</em> SDVOSBs to absorb the demand.
           </div>
           <div style={{ marginBottom: 4 }}>
-            <strong>What the workforce board / the regional workforce board can do about it:</strong>
+            <strong>What the dashboard already did:</strong> the table above identifies every SDVOSB recipient by name, dollar amount, certification source, and {`{LOCAL · Marion IL}`} vs {`{OUT-OF-REGION · state}`} tag. Smith Hafeli (Marion IL) is the only LOCAL SDVOSB; the rest are FL / KY / NC.
+          </div>
+          <div style={{ marginBottom: 4 }}>
+            <strong>Your residual steps</strong> (the dashboard cannot self-execute these):
           </div>
           <ul style={{ margin: "0 0 0 18px", padding: 0 }}>
             <li>Stand up an &quot;SDVOSB certification on-ramp&quot; with the regional{" "}
               <a href="https://www.sba.gov/local-assistance/find/?type=Veterans%20Business%20Outreach%20Center" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Veterans Business Outreach Center (VBOC)</a>{" "}
               — help local veterans apply for SBA SDVOSB certification + bid for Marion VA work
             </li>
-            <li>Partner with{" "}
-              <a href="https://www.sba.gov/federal-contracting/contracting-assistance-programs/sba-mentor-protege-program" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>SBA Mentor-Protégé Program</a>{" "}
-              — pair the existing out-of-region SDVOSBs (Above Group, Jett&apos;s, SDV Office) with local protégés so the work stays here
+            <li>Broker{" "}
+              <a href="https://www.sba.gov/federal-contracting/contracting-assistance-programs/sba-mentor-protege-program" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>SBA Mentor-Protégé</a>{" "}
+              relationships pairing the out-of-region SDVOSBs in the table above (Above Group FL, Jett&apos;s KY, SDV Office NC) with local protégés so the work stays here
             </li>
-            <li>Smith Hafeli is the proof-of-concept: a local Marion-headquartered SDVOSB winning $11.9M in 24 months. There&apos;s no reason 5-10 more local SDVOSBs couldn&apos;t exist with the right certification support.</li>
+            <li>Smith Hafeli is the proof-of-concept: a local Marion-headquartered SDVOSB winning $11.9M in 24 months. The data shows there&apos;s no reason 5-10 more local SDVOSBs couldn&apos;t exist with the right certification support.</li>
           </ul>
         </div>
       )}
@@ -2433,13 +2437,19 @@ function FederalConcentrationSection({ tr }: { tr: TopRecipientsBlock }) {
       {/* Community leverage callout */}
       <div style={{ marginTop: 20, padding: 16, background: "#fef9eb", border: "1px solid #f0d98a", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
         <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>
-          What the workforce board can do with this
+          What the dashboard already did + your residual leverage
+        </div>
+        <div style={{ marginBottom: 8 }}>
+          <strong>Dashboard contributions (above):</strong> total federal contract obligations into LWA-25 ($812.8M / 24mo), top-1 + top-3 concentration percentages, recipient-by-recipient table with SBA certification status + LOCAL vs OUT-OF-REGION tags, NAICS-lane breakout via the supply-chain mapping below, sub-recipient names for the dominant lane. The diagnosis is done.
+        </div>
+        <div style={{ marginBottom: 4 }}>
+          <strong>Your residual leverage (the human-only steps the dashboard cannot execute):</strong>
         </div>
         <ul style={{ margin: "0 0 0 18px", padding: 0 }}>
-          <li><strong>Community Benefit Agreement (CBA)</strong> — when a single recipient captures the majority of federal dollars in a region but employs only a fraction of local labor, the workforce board has standing to negotiate hiring commitments, apprenticeship slots, and local supplier-development. Precedents: Intel Ohio, Amazon HQ2 negotiations, Foxconn Wisconsin (revised).</li>
-          <li><strong>Apprenticeship pipeline</strong> — federal contractors with prevailing-wage requirements are natural anchors for registered apprenticeships. Partner with the dominant recipient on a workforce-board-hosted pre-apprenticeship for the skill ladders they consume (machinist, electrician, industrial maintenance, quality tech).</li>
-          <li><strong>Tier-2 supplier development</strong> — large primes use out-of-region subcontractors. Identify which work could be done by HUBZone-certified local firms (Franklin/Perry/parts-of-Jackson qualify) and broker the relationships.</li>
-          <li><strong>Federal contracting set-asides</strong> — the more local firms that show up in this list, the more federal money stays in the regional payroll. SBA HUBZone + 8(a) + WOSB certifications are the on-ramp.</li>
+          <li><strong>Negotiate a Community Benefit Agreement (CBA)</strong> when a new federal-funded project lands — the concentration data above gives you the standing. Precedents: Intel Ohio, Amazon HQ2, Foxconn Wisconsin (revised). The CBA negotiation itself is human work; the dashboard surfaces the concentration evidence that justifies it.</li>
+          <li><strong>Broker the dominant-recipient apprenticeship partnership.</strong> Federal contractors with prevailing-wage requirements are natural apprenticeship anchors. The skill ladders they consume (machinist, electrician, industrial maintenance, quality tech) are already mapped in the Training-to-Demand section above. Your step: schedule the meeting with GD-OTS HR + the regional training partners.</li>
+          <li><strong>Broker Tier-2 supplier introductions</strong> for the out-of-region sub-recipients flagged in the supply-chain table below. The dashboard identified the lanes + the candidates; the human step is the procurement-team intro.</li>
+          <li><strong>Sponsor local firms through SBA HUBZone / 8(a) / WOSB certification.</strong> Franklin / Perry / parts-of-Jackson qualify for HUBZone (per the SBA HUBZone map). The dashboard surfaced the gap (only 1 LOCAL SDVOSB vs 3 out-of-region); the human step is the certification on-ramp with VBOC + SBA District Office.</li>
         </ul>
       </div>
 
@@ -3107,36 +3117,40 @@ export default async function SouthernIllinoisPage() {
           <section style={{ marginTop: 40 }}>
             <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
             <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
-              How a board member can move on this
+              Your residual moves — the human-only steps the dashboard cannot self-execute
             </h2>
-            <div style={{ fontSize: 14, color: "#5a564d", marginBottom: 16, maxWidth: 760 }}>
-              Concrete next steps the data above supports.
+            <div style={{ fontSize: 14, color: "#5a564d", marginBottom: 16, maxWidth: 760, lineHeight: 1.55 }}>
+              Everything above was auto-pulled, cross-referenced, scored, and surfaced by the dashboard.
+              The four boxes below name the remaining steps that require a human in the room — a phone call,
+              a negotiation, a vote, a policy decision. The data is already in your hand; these are the moves
+              that turn the data into outcomes.
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16 }}>
               {[
                 {
-                  title: "Align WIOA training to in-demand NAICS",
-                  body: "The top-NAICS list above shows where federal dollars are already buying labor in the LWA. Bias annual WIOA training-cohort planning toward credentials that map to those NAICS codes — graduates land in sectors with active local demand instead of speculative future hires.",
+                  title: "Make the WIOA cohort-planning call",
+                  body: "The Industry Mix + Training-to-Demand sections above already cross-reference QCEW supersector employment against credential pipelines and assign each ladder a verdict (PHANTOM / TRAVEL-WORK / WAGE-SUPPRESSED / FAMILY-SUPPORTING / SATURATED / OWNER-OP). Your residual: bias the next annual WIOA cohort plan toward the FAMILY-SUPPORTING + TRAVEL-WORK rows, away from the WAGE-SUPPRESSED + PHANTOM rows. That's a policy decision the dashboard surfaces but doesn't make.",
                 },
                 {
-                  title: "Recruit second-tier primes",
-                  body: "Largest-awards list identifies primes already winning in the LWA. Ask staff to flag which ones use out-of-region subs; that's the wedge for a HUBZone-status local sub to pitch as a tier-2.",
+                  title: "Place the procurement intro call",
+                  body: "The Supply-Chain Mapping section above already shows GD-OTS Marion's $406M sub-award pool by NAICS lane + out-of-region candidates + top sub-recipient names. Your residual: for each out-of-region lane with a local-firm candidate (per the local precision-shop inventory we're queuing), call GD-OTS Procurement and broker the Tier-2 introduction. Smith Hafeli is the proof-of-concept.",
                 },
                 {
-                  title: "CEJA clean-energy alignment",
-                  body: "The regional $2.3M CEJA grant trains residents for clean-energy jobs. Cross-reference EPA / DOE / USDA Rural Energy awards above against the credentialing pipeline — the graduates need somewhere to land.",
+                  title: "Negotiate the next CBA",
+                  body: "The Federal Money Concentration section above already documents the 95.6% top-1 share + the SDVOSB local-vs-out-of-region gap. Your residual: when the next federal-funded project lands (data-center prospect, new GD-OTS expansion, anchor-attraction win), use that data to negotiate a Community Benefit Agreement on local-hire + apprenticeship + supplier-development. Standing → leverage → CBA is human work; the standing is already in your hand.",
                 },
                 {
-                  title: "Coordinate with city pages",
+                  title: "Coordinate with the sister pages",
                   body: (
                     <>
+                      Three companion pages share data — review them and coordinate stakeholders across them:{" "}
                       <a href="/carbondale" style={{ color: "#1f5f8f", fontWeight: 600 }}>Carbondale →</a>{" "}
                       and{" "}
                       <a href="/murphysboro" style={{ color: "#1f5f8f", fontWeight: 600 }}>Murphysboro →</a>{" "}
                       share the Jackson County substrate with city-specific housing, hardship,
                       and federal-awards framing.{" "}
                       <a href="/market" style={{ color: "#1f5f8f", fontWeight: 600 }}>US Market Health →</a>{" "}
-                      for the national macro backdrop.
+                      for the national macro backdrop. The cross-page coordination meeting is human work.
                     </>
                   ),
                 },
