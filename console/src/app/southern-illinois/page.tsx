@@ -691,15 +691,16 @@ function TrainingAlignmentSection({ ta, industryMixAvailable }: { ta: TrainingAl
     <section style={{ marginTop: 40 }}>
       <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
       <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
-        Training-to-demand alignment · the single-mom test · 22 pathways scored against $46.76/hr 1A+2C MIT-LWC bar
+        Training-to-demand alignment · the single-earner 1A+2C test · 22 pathways scored against $46.76/hr MIT-LWC bar
       </h2>
       <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 760, lineHeight: 1.55 }}>
         Workforce-development theater: grant comes in, training cohort starts, graduates
         hit the labor market — but does the credential they earned have local employers
-        to hire them, at wages a single parent can raise two kids on? This cross-references
-        every major regional training ladder against (a) actual local sector employment from
-        BLS QCEW and (b) the MIT Living Wage benchmark for Jackson County. PHANTOM PIPELINE
-        means the credential has nowhere to land locally — graduates relocate, commute, or
+        to hire them, at wages that clear the MIT Living Wage 1A+2C bar (one working
+        adult supporting two children)? This cross-references every major regional
+        training ladder against (a) actual local sector employment from BLS QCEW and
+        (b) the MIT Living Wage benchmark for Jackson County. PHANTOM PIPELINE means
+        the credential has nowhere to land locally — graduates relocate, commute, or
         never work in the field.
       </div>
 
@@ -944,7 +945,7 @@ function TravelJobsSection() {
         have better home-time structures.
       </div>
       <div style={{ padding: 14, background: "#fef9eb", border: "1px solid #f0d98a", borderLeft: "6px solid oklch(45% 0.20 22)", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, marginBottom: 16 }}>
-        <strong>Honest framing — wage clears, home-time depends on household configuration.</strong> Each row below carries a TRAVEL-WORK verdict in the single-mom-test taxonomy. The wage column shows the all-in number that clears the MIT Living Wage Jackson Co. 1A+2C bar ($46.76/hr / ~$97k/yr) — sometimes by 2× or more. <strong>The viability of travel work depends entirely on who&apos;s at home covering the kids.</strong>{" "}<em>The same home-time test extends to the LOCAL · FAMILY-SUPPORTING rows further down — the §14 Structural Constraints section documents the mandatory-overtime pattern (Aisin, Continental, USG, etc.) where wage clears 1A+2C but a 6-day / 50-60 hr schedule destroys home-life. Read both together.</em>
+        <strong>Honest framing — wage clears, home-time depends on household configuration.</strong> Each row below carries a TRAVEL-WORK verdict in the 1A+2C single-earner taxonomy. The wage column shows the all-in number that clears the MIT Living Wage Jackson Co. 1A+2C bar ($46.76/hr / ~$97k/yr) — sometimes by 2× or more. <strong>The viability of travel work depends entirely on who&apos;s at home covering the kids.</strong>{" "}<em>The same home-time test extends to the LOCAL · FAMILY-SUPPORTING rows further down — the §14 Structural Constraints section documents the mandatory-overtime pattern (Aisin, Continental, USG, etc.) where wage clears 1A+2C but a 6-day / 50-60 hr schedule destroys home-life. Read both together.</em>
         <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10 }}>
           <div style={{ background: "white", border: "1px solid oklch(45% 0.16 142)33", borderLeft: "4px solid oklch(45% 0.16 142)", borderRadius: 4, padding: 10 }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: "oklch(35% 0.18 142)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>✓ Dual-earner with children</div>
@@ -2114,7 +2115,7 @@ function StructuralWorkforceConstraintsSection() {
           <li><strong>SIH (Southern Illinois Healthcare):</strong> staffing pressures + advancement &quot;preferential treatment related to who you know&quot; (Glassdoor; 3.4/5)</li>
         </ul>
         <div>
-          <strong>Implication for the single-mom test framing:</strong> the wage column shows whether the credential clears the 1A+2C math. The home-time column the dashboard cannot show is whether the worker can BE the parent the wage assumes they can support. Mandatory OT is the structural cost the wage doesn&apos;t reflect — same lens we applied to the TRAVEL-WORK rows, now extended to LOCAL · FAMILY-SUPPORTING employers where the schedule structurally destroys home-time. Workforce planning that ignores the OT pattern produces cohort attrition at the &quot;retention&quot; step, not at training. Sources: Indeed.com + Glassdoor employer reviews, pulled 2026-05-27.
+          <strong>Implication for the 1A+2C single-earner framing:</strong> the wage column shows whether the credential clears the 1A+2C math. The home-time column the dashboard cannot show is whether the worker can BE the parent the wage assumes they can support. Mandatory OT is the structural cost the wage doesn&apos;t reflect — same lens we applied to the TRAVEL-WORK rows, now extended to LOCAL · FAMILY-SUPPORTING employers where the schedule structurally destroys home-time. Workforce planning that ignores the OT pattern produces cohort attrition at the &quot;retention&quot; step, not at training. Sources: Indeed.com + Glassdoor employer reviews, pulled 2026-05-27.
         </div>
       </div>
 
@@ -3765,7 +3766,7 @@ export default async function SouthernIllinoisPage() {
             <a href="#sec-federal-money"><span className="num">05</span>Federal $</a>
             <a href="#sec-anchor"><span className="num">06</span>Anchor</a>
             <a href="#sec-roi"><span className="num">07</span>Training ROI</a>
-            <a href="#sec-training"><span className="num">08</span>Single-Mom Test</a>
+            <a href="#sec-training"><span className="num">08</span>1A+2C Wage Test</a>
             <a href="#sec-travel-jobs"><span className="num">09</span>Travel Jobs</a>
             <a href="#sec-healthcare"><span className="num">10</span>Healthcare</a>
             <a href="#sec-childcare"><span className="num">11</span>Childcare</a>
@@ -3837,7 +3838,7 @@ export default async function SouthernIllinoisPage() {
             <AttractionPipelineSection />
           </div>
 
-          {/* ═══ SUPPLY STACK · training ROI → single-mom test → travel-work → healthcare special case ═══ */}
+          {/* ═══ SUPPLY STACK · training ROI → 1A+2C wage test → travel-work → healthcare special case ═══ */}
           <div id="sec-roi" style={{ scrollMarginTop: 60 }}>
             <TrainingROISection />
           </div>
@@ -3851,7 +3852,7 @@ export default async function SouthernIllinoisPage() {
             )}
           </div>
 
-          {/* Bridge — single-mom test → travel jobs (extension of TRAVEL-WORK verdict) */}
+          {/* Bridge — 1A+2C wage test → travel jobs (extension of TRAVEL-WORK verdict) */}
           <div style={{ marginTop: 28, padding: 14, background: "#f0ece1", border: "1px solid #d8d2c4", borderLeft: "3px solid #5a564d", borderRadius: 4, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, fontStyle: "italic" }}>
             Several of the verdicts above carry a TRAVEL-WORK tag. Those pathways deserve their own treatment, because the rotation patterns + per-diem structure change the household math materially.
           </div>
