@@ -296,7 +296,7 @@ function TrainingROISection() {
       annual_premium: "+$24k local; +$50-90k remote",
       payback_yrs: "<6mo",
       local_slots: "~20-50/yr local (Information sector small)", saturation: "MED",
-      verdict: "Best ROI for credential cost but ceiling is low LOCALLY. Frame as 'remote-work credential' not 'local-employer ladder.'" },
+      verdict: "Best ROI for credential cost but local ceiling is structural. SIU (the dominant local IT employer) staffs IT through two active civil-service classes — IT Support Associate (Class 5032, SUCSS range $16.77-$30.00/hr → $32,702-$58,500/yr) and IT Technical Associate (Class 5031, SUCSS range $17.31-$45.36/hr → $33,755-$88,452/yr; effective 10/2025). Top step of the higher class is $8,800/yr BELOW the 1A+2C bar ($97,260). Promotion above requires conversion to A/P track (master's + national-pool hiring), not a step-up the local credential pipeline feeds. Frame as 'remote-work credential' for trainees who want to clear 1A+2C locally; or as 'first-rung at SIU' for those planning A/P-conversion or relocation. Sources: SIU HR Civil Service Salary Schedule + SUCSS Salary Range Reports." },
     // === CEJA clean-energy ===
     { pathway: "CEJA solar installer (NABCEP)",
       train_cost: "$0-1,000 (CEJA Climate Works subsidized)", train_duration: "8-16 weeks",
