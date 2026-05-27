@@ -539,7 +539,7 @@ function AttractionPipelineSection() {
           { factor: "Land cost", grade: "✓ STRONG", note: "Undervalued vs Northern Virginia, Phoenix, Columbus.", color: "oklch(45% 0.16 142)" },
           { factor: "Power cost — Ameren vs Egyptian Electric Cooperative (EECA) head-to-head", grade: "~ MODERATE", note: "Ameren IL published industrial rate ~$0.08-0.09/kWh. EECA does not publish a comparable industrial-class per-kWh tariff in the same machine-readable way (member-coops negotiate large-power deals bespoke; see eeca.coop/member-services/rate-schedules/). Typical rural-coop industrial rates run 1-2¢/kWh below IOU — call it ~$0.06-0.08/kWh expected range, subject to negotiation. EECA's wholesale supplier Southern Illinois Power Cooperative (SIPC) owns coal + natural-gas generation PHYSICALLY LOCATED in Williamson and Washington counties (inside the LWA-25 footprint), plus long-term contracts for IL solar (White County) + IL wind (Paxton). That's a 'local generation for local load' pitch with minimal transmission distance — Northern VA can't claim that. Neither can compete with NoVa $0.06 on a paper-rate basis, but the bespoke-deal latitude + local-generation story plus the IL Data Center Act sales-tax exemption changes the all-in math.", color: "oklch(48% 0.15 60)" },
           { factor: "Federal IRA Energy Communities adder", grade: "✓ STRONG", note: "Franklin and Perry counties are coal-closure tracts. Solar/wind/storage projects sited here get IRA §48 +10pp ITC bonus on top of 30% base. Use for behind-the-meter generation co-located with DC.", color: "oklch(45% 0.16 142)" },
-          { factor: "Fiber diversity — the grant-but-no-coverage paradox", grade: "✗ WEAK", note: "$1.6B+ in Southern IL broadband grants has been deployed/committed since 2020 — Connect Illinois ($400M state), BEAD ($1B IL share of federal IIJA), USDA ReConnect (~$3.1B national). Named Southern-IL projects: WK&T's $9.8M (Jackson + Union Cos.), ProTek Communications' $51M (Franklin/Jackson/Johnson/Massac/Williamson/Union Cos.), Clearwave Communications' 23-county middle-mile network. RESIDENTIAL coverage HAS improved. BUT data-center-grade fiber diversity is a different problem these grants don't solve — hyperscale needs 3+ INDEPENDENT carriers with physically diverse routes; the grants fund 'any service' coverage, not redundant overbuild. Current LWA-25 enterprise-class carrier set: AT&T, Frontier, Mediacom, Clearwave, WK&T, ProTek — but most areas have 1-2 carriers, not 3+ with route diversity. The fix is bespoke: pitch any major siting as a co-located dark-fiber leasing deal with Zayo / Crown Castle / Lumen, OR push the IL Century Network (ICN — state-owned middle-mile) for additional capacity, OR aggregate carrier-diversity into the next IIJA middle-mile grant cycle. This is THE single weakest scorecard line for hyperscale recruitment; honest framing required.", color: "oklch(45% 0.20 22)" },
+          { factor: "Fiber diversity — the grant-but-no-coverage paradox", grade: "✗ WEAK", note: "Public broadband investment in Southern IL is large and verifiable. Delta Communications dba Clearwave Communications received $31.5M from NTIA's BTOP program + $11M IL state match ($42.5M total) for a 23-county middle-mile network connecting 232 community anchor institutions (NTIA grant filing, ntia.doc.gov). Recent IL state Connect Illinois rounds have added WK&T's $9.8M (Jackson + Union Cos.) and ProTek Communications' $51M (Franklin/Jackson/Johnson/Massac/Williamson/Union Cos.). BEAD adds another $1B+ in IL allocation. Coverage on paper has improved. But data-center-grade fiber diversity is a different problem these grants don't fully solve: hyperscale needs 3+ INDEPENDENT carriers with physically diverse routes; most LWA-25 enterprise-class footprint has 1-2 carriers, not 3+ with route diversity. Carriers present include AT&T, Frontier, Mediacom, Clearwave, WK&T, ProTek. NTIA's original Clearwave grant terms included an open-access interconnection requirement for smaller last-mile providers — small ISP operators who believe these conditions are not being honored should file complaints with the IL Office of Broadband (DCEO) and NTIA. The fix-up paths: (a) audit grant compliance (open-access conditions), (b) IL Century Network (ICN — state-owned middle-mile) as alternative wholesale source, (c) municipal / coop broadband authority creation, (d) IIJA middle-mile grants directed to public or cooperative entities rather than incumbents. This remains the single weakest scorecard line for hyperscale recruitment.", color: "oklch(45% 0.20 22)" },
           { factor: "Operations talent (200-person ops staff)", grade: "✗ WEAK", note: "SIU produces some IT capacity but no existing data-center workforce concentration. Mantracon + JALC + Rend Lake would need to stand up a DC-ops training program in parallel to any recruitment.", color: "oklch(45% 0.20 22)" },
         ].map((f, i) => (
           <div key={i} style={{ padding: "10px 0", borderTop: i === 0 ? "none" : "1px solid #ebe5d6", display: "grid", gridTemplateColumns: "1fr auto", gap: 12, alignItems: "baseline" }}>
@@ -778,6 +778,164 @@ function AttractionPipelineSection() {
           <li><strong>Medical / rural health</strong> — SIU School of Medicine (Springfield) is the NIH bid vehicle.</li>
           <li><strong>Workforce development research</strong> — partnership with JALC + Rend Lake creates a community-college-research consortium opportunity for DOL grants.</li>
         </ul>
+      </div>
+
+      {/* === Viticulture / agri-tourism === */}
+      <h3 style={{ fontSize: 18, fontWeight: 600, color: "#1f1d18", margin: "32px 0 8px 0" }}>
+        Viticulture &amp; agri-tourism · regional asset, selective opportunity
+      </h3>
+      <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 760, lineHeight: 1.55 }}>
+        The Shawnee Hills American Viticultural Area (AVA, designated December 2006 — the
+        FIRST AVA in Illinois) spans Jackson + Union counties along a 40-mile wine trail
+        with 12 active wineries (down from 15 at AVA designation). The industry contributes
+        an estimated <strong>$126M/year to the regional economy with 150,000 annual visitors</strong>,
+        and Shawnee Hills wineries took <strong>7 of the top 11 awards</strong> at the
+        2024 Illinois Wine Competition — quality is real, not just a tourism gimmick. But
+        the honest job-economics analysis matters: tourism revenue is real, but most
+        winery employment is hospitality (tasting rooms, restaurants, B&amp;Bs) at
+        \$14-22/hr — well below the family-supporting wage threshold.
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
+        <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, padding: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8 }}>What viticulture IS doing for the region</div>
+          <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 13, color: "#3d3a33", lineHeight: 1.65 }}>
+            <li><strong>\$126M/yr economic injection</strong> — real money flowing in from out-of-region visitors</li>
+            <li><strong>Amenity for BD pitches</strong> — Carbondale&apos;s lifestyle pitch to relocators (data-center execs, federal-agency staff, remote workers) is genuinely strengthened by a quality wine region 20 min away. Pair with Shawnee NF, Crab Orchard, Giant City.</li>
+            <li><strong>Land use that resists strip-mall sprawl</strong> — vineyards preserve rural character + agricultural use that supports the broader ag economy</li>
+            <li><strong>Brand differentiation</strong> — Southern IL's first-AVA status is a regional marketing asset; the Shawnee Hills name carries</li>
+          </ul>
+        </div>
+        <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, padding: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8 }}>What viticulture is NOT doing (honest framing)</div>
+          <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 13, color: "#3d3a33", lineHeight: 1.65 }}>
+            <li><strong>Not creating family-supporting jobs at scale</strong> — most jobs are tasting-room / hospitality / restaurant at \$14-22/hr. Doesn&apos;t clear the 1A+2C livable-wage bar.</li>
+            <li><strong>Wineries themselves are small businesses</strong>, mostly owner-operated. Limited employee headcount per winery (5-25 typical).</li>
+            <li><strong>Industry contraction</strong> — count dropped from 15 wineries (2006) to 12 (current). Underlying business pressure is real.</li>
+            <li><strong>Tourism is seasonal</strong> — peak Apr-Oct; winter staff retention is hard.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 10, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          Where the higher-wage opportunities actually are
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12 }}>
+          {[
+            { role: "Vineyard manager", wage: "$50-80k", note: "Larger established vineyards (Owl Creek, Blue Sky, Von Jakob, Pomona). Year-round. Family-supporting at the upper end.", training: "Hands-on apprenticeship + viticulture cert (VESTA / Highland CC) + 3-5yr in field" },
+            { role: "Winemaker / cellar master", wage: "$55-90k (small ops); $90-150k+ (large)", note: "Limited positions — 1-2 per winery. Quality matters more than volume here.", training: "Enology degree (UC Davis, Cornell, MSU, or VESTA AAS pathway) + 5-10yr cellar experience" },
+            { role: "Tasting-room / hospitality manager", wage: "$30-50k", note: "Not family-supporting at the upper end. Year-round at larger operations.", training: "Hospitality background + WSET wine credentials" },
+            { role: "Value-add processing (case-good production, bottling, packaging)", wage: "$20-30/hr ($40-60k)", note: "Borderline family-supporting. Multi-winery shared facility would amortize. This is a real Mantracon project opportunity.", training: "JALC packaging / food-processing program (would need to be created)" },
+            { role: "Agritourism / events ops", wage: "$30-55k", note: "Wedding venues, harvest festivals, multi-winery tour ops. Often owner-operated.", training: "Hospitality + small-business management" },
+          ].map((r, i) => (
+            <div key={i} style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, padding: 12 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18" }}>{r.role}</div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: "oklch(35% 0.18 142)", marginTop: 2 }}>{r.wage}</div>
+              <div style={{ fontSize: 12, color: "#3d3a33", marginTop: 4, lineHeight: 1.5 }}>{r.note}</div>
+              <div style={{ fontSize: 11, color: "#5a564d", marginTop: 6 }}><strong>Training:</strong> {r.training}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ marginBottom: 16, padding: 14, background: "oklch(96% 0.04 142)", border: "1px solid oklch(45% 0.16 142)33", borderLeft: "6px solid oklch(45% 0.16 142)", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "oklch(35% 0.18 142)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          Strategic moves that could expand viticulture into a more substantive jobs anchor
+        </div>
+        <ul style={{ margin: "0 0 0 18px", padding: 0 }}>
+          <li><strong>Shared value-add processing facility</strong> — pool multiple wineries to build / use a mid-scale bottling, packaging, label-printing, and warehousing facility. Could create 15-40 stable \$40-60k production jobs (vs current pattern where each winery does small-batch bottling separately).</li>
+          <li><strong>SIU viticulture &amp; enology research center</strong> — UC Davis &amp; Cornell anchor major wine programs that drive both R&amp;D and a steady winemaker talent pipeline. SIU could bid for a USDA Specialty Crop Block Grant ($1-3M) to seed a small program. Would also attract grad-student research labor + faculty.</li>
+          <li><strong>USDA SARE + SCBG grants</strong> — Sustainable Agriculture Research and Education + Specialty Crop Block Grant. Both fund small-vineyard improvements, pest research, climate-adaptation work. Apply through IL Dept of Agriculture.</li>
+          <li><strong>Wine industry as recruitment lever, not direct anchor</strong> — when pitching data-center execs, federal-agency relocators, or remote workers, the Shawnee Hills experience is a genuine quality-of-life differentiator. Pair the wine trail with Shawnee NF, Crab Orchard NWR, Giant City SP, and the new Amtrak station for the &quot;outdoor-recreation + wine country + Chicago-by-rail&quot; lifestyle pitch.</li>
+          <li><strong>Hospitality-tier training that respects the wage floor</strong> — if Mantracon does CNA-equivalent low-wage training for the wine-tourism industry, the operator&apos;s family-supporting mandate disqualifies it. Better Mantracon play: tier-up training (sommelier WSET 2/3, restaurant management, winery operations) that has a higher wage ceiling.</li>
+        </ul>
+      </div>
+
+      <div style={{ marginBottom: 24, fontSize: 12, color: "#7a756b", lineHeight: 1.5 }}>
+        Sources: <a href="https://shawneewinetrail.com/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>shawneewinetrail.com</a>, <a href="https://illinoiswine.com/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>illinoiswine.com</a> (IL Grape Growers &amp; Vintners Association), <a href="https://en.wikipedia.org/wiki/Shawnee_Hills_AVA" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Shawnee Hills AVA</a>, IL Wine Competition 2024 results, BD-expert advisory. Refresh annually.
+      </div>
+
+      {/* === Cannabis / craft grow === */}
+      <h3 style={{ fontSize: 18, fontWeight: 600, color: "#1f1d18", margin: "32px 0 8px 0" }}>
+        Cannabis industry · how an individual enters the market to earn a living
+      </h3>
+      <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 760, lineHeight: 1.55 }}>
+        Illinois legalized recreational cannabis under the <a href="https://cannabis.illinois.gov/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Cannabis Regulation and Tax Act</a> (effective Jan 1, 2020). Carbondale City Council has affirmatively permitted cannabis businesses within city limits (<a href="https://www.explorecarbondale.com/646/Recreational-Cannabis-Information" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>explorecarbondale.com</a>). The IL Department of Agriculture regulates craft growers, cultivation centers, infusers, and transporters; the IL Dept of Financial &amp; Professional Regulation (IDFPR) regulates dispensaries. There are two practical entry paths for an individual seeking to earn a living from this industry: as a worker, or as a license-holding business owner.
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
+        <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, padding: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8 }}>Path 1 · Enter as a worker (no license required)</div>
+          <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 13, color: "#3d3a33", lineHeight: 1.65 }}>
+            <li><strong>Entry-level retail (budtender / dispensary associate)</strong> — \$17-22/hr to start; tips supplement. Hiring posted on standard job boards.</li>
+            <li><strong>Cultivation technician / trimmer</strong> — production-floor work at craft-grow + cultivation-center facilities. \$16-25/hr.</li>
+            <li><strong>Credential ladder</strong> — JALC offers a <a href="https://www.jalc.edu/agriculture-horticulture-aa-degree/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>2-year Agriculture-Horticulture AA Degree (63 credit hours)</a> that directly transfers to cannabis cultivation work + traditional horticulture. The IL Dept of Ag also licenses <a href="https://cannabis.illinois.gov/agencies/cannabis-idoa.html" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Community College Cannabis Vocational Pilot Programs</a> specifically for cannabis-credential community-college offerings.</li>
+            <li><strong>Worker progression</strong> — Budtender / cultivation tech → Assistant grower (up to ~\$55k) → Cultivation manager (up to ~\$120k) → Master grower (\$80-150k). The wage ceiling at journey-level positions is genuinely family-supporting.</li>
+            <li><strong>Adjacent technical roles</strong> — extraction technician, compliance officer, lab QA, packaging — \$45-80k range. JALC chemistry / biology credits transfer.</li>
+          </ul>
+        </div>
+        <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, padding: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8 }}>Path 2 · Enter as a business owner (license required)</div>
+          <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 13, color: "#3d3a33", lineHeight: 1.65 }}>
+            <li><strong>Craft grower license</strong> — issued by IL Dept of Ag. 5,000-14,000 sq ft canopy. Statewide cap of 150 licenses. Sell wholesale to dispensaries.</li>
+            <li><strong>Dispensary license</strong> — IDFPR-issued retail license, allocated via state lottery rounds.</li>
+            <li><strong>Infuser license</strong> — for cannabis-infused products (edibles, topicals); lower capital threshold.</li>
+            <li><strong>Transporter license</strong> — B2B logistics between licensed facilities.</li>
+            <li><strong>Social-Equity Applicant track</strong> — lower fees, technical assistance, and access to the <a href="https://cannabis.illinois.gov/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Cannabis Business Development Fund (CBDF)</a> for state-backed loans + grants (federal SBA loans are not available for cannabis because cannabis remains federally Schedule I; cannabis-specific state funding is the only public-capital path). Eligibility is based on residence in a Disproportionately Impacted Area, prior cannabis-conviction history, or family member with same.</li>
+            <li><strong>Most-current license-round info</strong> always lives at <a href="https://cannabis.illinois.gov/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>cannabis.illinois.gov</a>. Application windows and lotteries operate on cycles; check there for current openings.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div style={{ marginBottom: 16, padding: 14, background: "#fff", border: "1px solid #d8d2c4", borderLeft: "6px solid oklch(45% 0.16 220)", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          Why this matters for the workforce board
+        </div>
+        Cannabis is a real, growing employer in Illinois — the broader hemp-derived cannabinoid industry employs ~13,500 workers statewide and pays ~\$545M annually in wages (<a href="https://themarijuanaherald.com/2025/12/illinois-hemp-industry-supports-nearly-13500-jobs-and-2-7-billion-in-revenue-analysis-finds/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>The Marijuana Herald, Dec 2025</a>). The local share is small but real. The credential ladder from JALC Horticulture AA → cultivation work → grower management is one of the few <em>2-year-degree</em> paths that ends in a family-supporting wage. The action items: (1) confirm whether JALC could add cannabis-specific elective modules under the IL Community College Cannabis Vocational Pilot framework, (2) when a new local facility is approved (e.g., the 2023 SuiteGreens LLC craft-grow in Carbondale, per <a href="https://thesouthern.com/news/local/company-hopes-to-bring-cannabis-craft-grow-facility-dispensary-to-carbondale/article_7e4b5fd2-3c60-526e-8c62-5a42ca995135.html" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>The Southern Illinoisan</a>), Mantracon coordinates pre-hire training pipelines.
+      </div>
+
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 10, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          Wage analysis — most positions are NOT family-supporting; some are
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12 }}>
+          {[
+            { role: "Budtender / dispensary associate", wage: "$17-22/hr (~$31-40k/yr)", note: "Most numerous position; doesn't clear single-adult living wage. Tips supplement.", verdict: "BELOW LIVABLE" },
+            { role: "Cultivation technician / trimmer", wage: "$16-25/hr (~$33-52k/yr)", note: "Production floor work. Borderline single-adult; below family.", verdict: "BELOW LIVABLE → SINGLE ADULT" },
+            { role: "Assistant grower", wage: "Up to $55k/yr", note: "1-2yr experience; some autonomy.", verdict: "SINGLE ADULT ONLY" },
+            { role: "Cultivation manager", wage: "Up to $120k/yr", note: "Larger operations only. Strong family-supporting wage.", verdict: "FAMILY-SUPPORTING" },
+            { role: "Master grower", wage: "$80-150k/yr", note: "1-2 per facility. 5-10 yr experience required.", verdict: "FAMILY-SUPPORTING" },
+            { role: "Compliance / extraction tech", wage: "$45-80k/yr", note: "Technical credential roles. Family-supporting at upper end.", verdict: "SINGLE → FAMILY" },
+          ].map((r, i) => (
+            <div key={i} style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, padding: 12 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18" }}>{r.role}</div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: "oklch(35% 0.18 142)", marginTop: 2 }}>{r.wage}</div>
+              <div style={{ fontSize: 12, color: "#3d3a33", marginTop: 4, lineHeight: 1.5 }}>{r.note}</div>
+              <div style={{ fontSize: 11, color: "#5a564d", marginTop: 6 }}><strong>Verdict:</strong> {r.verdict}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{ marginTop: 8, fontSize: 11, color: "#7a756b" }}>
+          Wage sources: <a href="https://www.indeed.com/career/marijuana-budtender/salaries/IL" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Indeed</a>, <a href="https://www.ziprecruiter.com/Jobs/Cannabis/--in-Illinois" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>ZipRecruiter</a>, <a href="https://www.highbluffgroup.com/cannabis-industry-salary-guides-for-2024/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>High Bluff Group 2024 Cannabis Salary Guide</a>, <a href="https://cannabizteam.com/wp-content/uploads/2024/03/2024-CannabizTeam-Salary-Guide_1.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>CannabizTeam 2024</a>.
+        </div>
+      </div>
+
+      <div style={{ marginBottom: 16, padding: 14, background: "oklch(96% 0.04 142)", border: "1px solid oklch(45% 0.16 142)33", borderLeft: "6px solid oklch(45% 0.16 142)", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "oklch(35% 0.18 142)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          Strategic moves that could capture real value from the cannabis economy
+        </div>
+        <ul style={{ margin: "0 0 0 18px", padding: 0 }}>
+          <li><strong>Community-college cannabis vocational program</strong> — IL Dept of Ag licenses Community College Cannabis Vocational Pilot Programs (<a href="https://cannabis.illinois.gov/agencies/cannabis-idoa.html" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>cannabis.illinois.gov</a>). JALC or Rend Lake could apply. Cannabis cultivation + horticulture credentials + business operations.</li>
+          <li><strong>Help local applicants navigate the next license rounds</strong> — Mantracon partnership with the IL Cannabis Business Development Fund (<a href="https://illinoisanswers.org/2023/10/19/illinois-cannabis-business-development-fund-craft-growers/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Illinois Answers Project</a> reporting on barriers). The Cannabis Equity Program offers loans + technical assistance to social-equity applicants.</li>
+          <li><strong>Local employment requirements in zoning approvals</strong> — when Carbondale or Marion approves a cannabis facility, the approval can include local-hiring + livable-wage commitments. Use the next SuiteGreens-style approval as precedent.</li>
+          <li><strong>Adjacent industries</strong> — cannabis processing equipment, packaging, lab testing, security, compliance consulting all have higher-wage opportunity ceilings than retail/cultivation labor. Mantracon could front-load training for these niches.</li>
+          <li><strong>Honest size-up</strong> — cannabis is a real industry but a small one for jobs at scale. IL hemp-derived cannabinoid industry employs ~13,500 statewide (<a href="https://themarijuanaherald.com/2025/12/illinois-hemp-industry-supports-nearly-13500-jobs-and-2-7-billion-in-revenue-analysis-finds/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>The Marijuana Herald, Dec 2025</a>); LWA-25 share is small. Don&apos;t pitch cannabis as primary jobs anchor; pitch it as supplementary economic activity that should be allowed and supported on its own terms.</li>
+        </ul>
+      </div>
+
+      <div style={{ marginBottom: 24, fontSize: 12, color: "#7a756b", lineHeight: 1.5 }}>
+        All licensing process &amp; wage figures are public record. License decisions and disputed-finalist allegations cited from named outlets above. Operator should ALWAYS verify current local license status at <a href="https://cannabis.illinois.gov/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>cannabis.illinois.gov</a> before acting on any specific claim.
       </div>
 
       {/* IL programs to file under */}
