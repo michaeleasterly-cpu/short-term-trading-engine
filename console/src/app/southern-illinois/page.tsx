@@ -871,6 +871,9 @@ function TravelJobsSection() {
         trucking is chronic absence rather than rotational; the credentials below
         have better home-time structures.
       </div>
+      <div style={{ padding: 14, background: "#fef9eb", border: "1px solid #f0d98a", borderLeft: "6px solid oklch(45% 0.20 22)", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, marginBottom: 16 }}>
+        <strong>Honest framing — the wage clears, the home-time doesn&apos;t.</strong> Each row below carries a TRAVEL-WORK verdict in the single-mom-test taxonomy. The wage column shows the all-in number that clears the MIT Living Wage Jackson Co. 1A+2C bar ($46.76/hr / ~$97k/yr) — sometimes by 2× or more. <strong>BUT the worker is not home for significant stretches of every month.</strong> If the home structure is a single parent with school-age children, the wage may clear the family-supporting <em>math</em> while failing the family-supporting <em>reality</em> — there&apos;s no parent at school pickup, no parent at the dinner table, no parent at the back-to-school night. Some rows below carry the LOCAL · WAGE-SUPPRESSED flag where the BASE-only wage (no per-diem, no rotation premium) falls below 1A+2C; those rows clear the family bar only on the all-in number that ASSUMES the worker accepts the away-from-home schedule. The TRAVEL-WORK lifestyle cost is the structural trade-off salary tables don&apos;t show: high divorce risk, missed milestones, surrogate childcare (grandparents, the home-side spouse&apos;s parents, paid live-in help) that has to fill the gap. Workforce planning must weigh this honestly, not pitch the all-in wage and ignore the cost.
+      </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 12 }}>
         {rows.map((r, i) => (
           <div key={i} style={{
@@ -884,13 +887,25 @@ function TravelJobsSection() {
                 <div style={{ fontSize: 12, color: "#7a756b", marginTop: 2 }}>
                   {r.cred} · Training: {r.trainSource}
                 </div>
+                <div style={{ fontSize: 11, color: "oklch(45% 0.20 22)", marginTop: 6, fontWeight: 600 }}>
+                  ⚑ Single-parent reality: the worker is not home during the {r.family_compat === "TOUGH" ? "13-week-on / 8-week-home" : r.family_compat === "OK" ? "rotation hitch" : "shift block"}. Childcare during away-time must be covered by the home-side spouse, grandparents, or paid arrangement — NOT by the worker. If no surrogate caregiver exists, this credential fails the family-supporting reality even though it clears the family-supporting math.
+                </div>
               </div>
-              <div style={{
-                fontSize: 11, fontWeight: 700, color: "white", background: compatTone(r.family_compat),
-                padding: "5px 10px", borderRadius: 3, textTransform: "uppercase", letterSpacing: "0.06em",
-                whiteSpace: "nowrap",
-              }}>
-                {r.family_compat === "GOOD" ? "FAMILY-FRIENDLY TRAVEL" : r.family_compat === "OK" ? "MANAGEABLE TRAVEL" : "TRAVEL-HEAVY"}
+              <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end" }}>
+                <div style={{
+                  fontSize: 11, fontWeight: 700, color: "white", background: compatTone(r.family_compat),
+                  padding: "5px 10px", borderRadius: 3, textTransform: "uppercase", letterSpacing: "0.06em",
+                  whiteSpace: "nowrap",
+                }}>
+                  {r.family_compat === "GOOD" ? "FAMILY-FRIENDLY TRAVEL" : r.family_compat === "OK" ? "MANAGEABLE TRAVEL" : "TRAVEL-HEAVY"}
+                </div>
+                <div style={{
+                  fontSize: 10, fontWeight: 700, color: "oklch(40% 0.18 60)", background: "oklch(97% 0.04 60)",
+                  padding: "3px 8px", borderRadius: 3, textTransform: "uppercase", letterSpacing: "0.05em",
+                  whiteSpace: "nowrap", border: "1px solid oklch(45% 0.18 60)33",
+                }}>
+                  TRAVEL-WORK · wage clears w/ per-diem · home-time fails
+                </div>
               </div>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 14, marginTop: 12, padding: 12, background: compatBg(r.family_compat), borderRadius: 4 }}>
