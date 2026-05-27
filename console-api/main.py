@@ -902,6 +902,92 @@ _TRAINING_LADDER_ROSTER = [
      "typical_journey_wage_wkly": 1080,  # $27/hr × 40
      "training_duration": "6-12 months",
      "notes": "Local employer base is tiny — Information sector has ~50-200 jobs in LWA-25. The ceiling is low locally; better framed as a 'work-from-anywhere' ladder than a 'land at a local employer' ladder."},
+
+    # ── Gap-credentials added 2026-05-27 (operator brainstorm + verified
+    # primary sources). These were missing from the page and represent real
+    # Southern IL employer pathways the workforce-board cohort can land in. ──
+
+    {"id": "underground_coal_miner", "name": "Underground coal miner (UMWA scale, Sugar Camp / Pond Creek / Knight Hawk)", "supersector_code": "1011",
+     "ladder": "MSHA Part 48 surface (40hr) + underground (24hr) certification → on-job training under journey miner",
+     "typical_journey_wage_wkly": 1400,  # ~$35/hr × 40; with productivity bonuses + overtime, ~$80-110k/yr take-home
+     "training_duration": "64hr MSHA Part 48 cert + 6-12mo apprentice / red-hat → full miner",
+     "local_employer_override": 800,  # Sugar Camp + Pond Creek (Foresight) + Knight Hawk operations combined; IL produced ~the same tonnage in 2023 as 1998 with 1,748 fewer miners — small but real remaining workforce
+     "entry_gates": ["msha_part_48_certification", "physical_fitness", "drug_screen", "no_claustrophobia", "often_family_connection_to_enter"],
+     "notes": "Sugar Camp Mine (Franklin Co., Foresight Energy / American Consolidated Natural Resources, 2024 production 6.2M tons, largest active mine in IL by cumulative tonnage at 116M tons, 1.264B ton reserves) + Pond Creek / Mach #1 (Williamson + Franklin, Foresight / Williamson Energy) + Knight Hawk Prairie Eagle (Perry Co.) are the active LWA-25-region mines hiring underground positions: roof bolters, longwall operators, mechanical maintenance, electrical, foremen. UMWA wage scale ~$28-40/hr base; productivity bonuses + 50-60hr weeks can push take-home to $80-110k/yr. ENTRY GATE STRUCTURE: MSHA Part 48 certification is required (40hr surface + 24hr underground); physical/drug screen; many mines still recruit heavily through family connections (fathers/uncles already on a crew). The 'coal is dead' narrative is wrong for hiring — IL mining produces ~the same tonnage in 2023 as in 1998 with 1,748 fewer miners (per ICL.coop), so the remaining slots are very productive and family-supporting. Source: Foresight Energy Operations page (foresight.com/operations), Prairie Rivers Network Sugar Camp profile, ILMines wiki, ICL.coop / thesouthern.com SIPC Unit 4 retirement filings (showing IL coal labor market still in operation)."},
+
+    {"id": "river_barge_crew", "name": "River-barge deckhand → mate → pilot (Cora / Mississippi + Ohio reach)", "supersector_code": "1021",
+     "ladder": "USCG Merchant Mariner Credential (MMC) entry-level → deckhand → 360 days sea-time → mate test → pilot test",
+     "typical_journey_wage_wkly": 1500,  # blended deckhand-to-mate range; with overtime + per-diem, traveling techs commonly $75-100k+; pilot $125k+ per Glassdoor 2025
+     "training_duration": "MMC + TWIC processing 2-6 months entry; sea-time 360 days for mate; multi-year ladder to pilot",
+     "local_employer_override": 60,  # rough estimate of LWA-25-resident barge crew members on the Cora / Sitran / Mississippi-Ohio reach; ACBL + Marquette + Ingram + Madison Coal & Supply employers
+     "travel_work_credential": True,
+     "entry_gates": ["uscg_merchant_mariner_credential", "twic_card", "drug_screen", "physical", "swim_test"],
+     "notes": "TRAVEL-WORK PATHWAY — operator's lived account 2026-05-27: schedule is rotating hitches (14/7, 20/10, or 30/30 depending on company); crews live on the boat their whole hitch. Major employers in the Upper Miss / Ohio reach: ACBL (American Commercial Barge Line), Marquette Transportation, Ingram Marine, Madison Coal & Supply, Calumet Marine. Wage progression (industry tables): entry deckhand ~$52k/yr base; mate / engineer $300-500/day; pilot $125k+. **OPERATOR-PRIMARY-SOURCE caveats not in salary tables:** high divorce rate among long-rotation crews; high occupational injury rate (Transportation and material moving occupations: 13.6 fatal injuries per 100,000 FTE vs 3.5 all-occupations baseline per BLS CFOI 2023); rough on-boat social culture; injuries from deck work + line handling + machinery + weather. Wage column shows BASE journey rate — actual take-home with per-diem on traveling hitches is higher. Entry path: Cora-area entry usually walk-in to ACBL or Marquette OR through a family connection on a crew. Honest verdict: wage clears 1A+2C at mate/engineer/pilot rungs; lifestyle cost (divorce + injury baseline) is the structural trade-off salary tables don't show."},
+
+    {"id": "il_doc_officer", "name": "IL DOC correctional officer (Pinckneyville / Big Muddy / Vienna / Shawnee)", "supersector_code": "9091",
+     "ladder": "Civil service exam (CMS) → background investigation → 5-week DOC training academy at Logan CC",
+     "typical_journey_wage_wkly": 1430,  # ~$58k starting / 52, plus pension contribution adds ~$10k effective
+     "training_duration": "5-week academy + 6mo probationary period",
+     "local_employer_override": 1200,  # Pinckneyville Correctional (Perry) + Big Muddy River Correctional (Jefferson, Ina) + Shawnee Correctional + Vienna Correctional (Johnson, adjacent to LWA-25); IL DOC publishes facility-level FTE counts but consolidated regional total ~1,200 officers
+     "local_market_saturated": True,
+     "entry_gates": ["physical_fitness", "background_check", "drug_screen", "civil_service_exam", "post_academy"],
+     "notes": "OPERATOR-CORRECTED 2026-05-27: 'doc officer is saturated too and there are physical fitness requirements as a barrier for some of these jobs.' Wage clears 1A+2C with overtime + state pension contribution, but hiring is attrition-only (IL DOC has consolidated facilities, not expanded). The cohort that trains exceeds slots that open per year. Physical fitness test is a real wash-out: push-ups + sit-ups + 1.5-mile run within time + body composition. Background check + drug screen + civil service exam are sequential gates. The 5-week academy at Logan CC has a typical attrition of 10-15%. Family-supporting wage + state benefits make this attractive when you can get in; SATURATED means you may sit on a waitlist."},
+
+    {"id": "idot_highway_maintainer", "name": "IDOT Highway Maintainer (District 9)", "supersector_code": "9091",
+     "ladder": "CMS civil service exam → CDL Class A → IDOT field training",
+     "typical_journey_wage_wkly": 1200,  # ~$25/hr × 40 base, plus state pension + benefits adds ~$8-10k effective
+     "training_duration": "CDL 4-8 weeks + IDOT field training 3-6 months",
+     "local_employer_override": 80,  # IDOT District 9 (south of I-64) covers LWA-25 + adjacent counties; ~80 field positions estimated
+     "local_market_saturated": True,
+     "entry_gates": ["cdl_class_a", "civil_service_exam", "drug_screen", "dot_physical"],
+     "notes": "State civil service job covering road plowing, pavement repair, sign maintenance, traffic-control, snow removal. Hiring is attrition-only — IDOT doesn't grow its field workforce, just replaces retirements. Family-supporting all-in with state pension + benefits + overtime on storm-response. The CDL gate is the biggest entry barrier; many candidates train via JALC / Rend Lake CDL school + apply when an opening posts on illinois.jobs2web.com."},
+
+    {"id": "hvac_union_sheet_metal", "name": "HVAC sheet metal (SMART Local 268 union)", "supersector_code": "1012",
+     "ladder": "SMART Local 268 5-year apprenticeship — apprentice → journey sheet metal worker",
+     "typical_journey_wage_wkly": 1863,  # journey check wage $46.57/hr × 40; total package $71.43/hr × 40 = $2857/wk
+     "training_duration": "5-year apprenticeship (10,000hr OJT + 1,000hr classroom)",
+     "entry_gates": ["aptitude_test", "drug_screen", "basic_math"],
+     "notes": "Verified 2025 wage sheet (Local 268, Caseyville HQ — covers 36 Southern IL counties Mississippi-to-Ohio rivers): APPRENTICE start $23.29/hr on check + $24.23 benefits = $47.52/hr TOTAL PACKAGE (clears Jackson Co. 1A+2C $46.76 already). JOURNEY $46.57/hr on check + $24.86 benefits = $71.43/hr TOTAL PACKAGE. Operator 2026-05-27: 'hvac went union and now they get paid.' Coverage includes all of LWA-25. Annual apprentice intake for LWA-25 counties not published — workforce board could request from Local 268 apprenticeship coordinator or via IL Apprenticeship Council. Major commercial / industrial HVAC work in LWA-25: Continental Tire HVAC + dust collection, Aisin facilities, SIH + Marion VA hospital systems, SIU campus, school district installs, federal contracting (GD-OTS environmental controls). UA Local 553 (East Alton) covers HVAC mechanical / refrigeration on the pipefitter side — similar family-supporting outcome. Sources: local268.com/wp-content/uploads/2025/06/Local-268-Journeyperson-Wage-Sheet.pdf, ualocal553.org."},
+
+    {"id": "hvac_residential_nonunion", "name": "HVAC residential (non-union, small shop)", "supersector_code": "1012",
+     "ladder": "EPA 608 certification + 1-2yr OJT at residential service shop",
+     "typical_journey_wage_wkly": 880,  # ~$22/hr × 40
+     "training_duration": "EPA 608 + 1-2yr OJT to service tech",
+     "local_employer_override": 150,  # small residential / light-commercial HVAC shops across LWA-25
+     "entry_gates": ["epa_608_universal_certification", "drug_screen", "valid_drivers_license"],
+     "notes": "DISTINCT from the union sheet-metal track (see hvac_union_sheet_metal). Small residential / light-commercial service shops pay $18-25/hr; experienced techs $22-30/hr; below 1A+2C unless owner of shop or specialize (heat-pump + geothermal premium installer, commercial refrigeration). Clearing 1A+2C from this rung requires (a) shop ownership, (b) commercial specialization, (c) relocate to higher-wage market, or (d) cross to union. Local employer base ~150 jobs across small shops in LWA-25; placement easy but wage ceiling is the constraint."},
+
+    {"id": "auto_mechanic_hs_cte", "name": "Auto mechanic (HS CTE → dealership / garage)", "supersector_code": "1024",
+     "ladder": "HS CTE program (Carbondale CHS, Marion Unit 2, Mt. Vernon HS, Murphysboro HS — varies by district) → ASE certifications stacked",
+     "typical_journey_wage_wkly": 760,  # ~$19/hr × 40 typical Carbondale-Marion MSA shop rate
+     "training_duration": "2-yr HS CTE program (free) + ASE certs over working career",
+     "local_employer_override": 250,  # estimated SOC 49-3023 employment Carbondale-Marion MSA; BLS OEWS May 2024 area data confirms directional gap vs Chicago + St. Louis
+     "entry_gates": ["drug_screen", "valid_drivers_license"],
+     "notes": "OPERATOR LIVED SIGNAL 2026-05-27: 'they have the certified auto mechanic in the high schools and those guys work in the dealerships and the garages but don't make a good living like they would in the city.' Local placement WORKS — HS CTE grads land at small-town shops + dealerships. Local wage FAILS 1A+2C: rural shops $15-22/hr; Carbondale-Marion MSA dealership flag-rate $22-30/hr; city dealerships (Chicago, St. Louis, Indianapolis) + specialty (Tesla, transmission, European, performance) $30-40+/hr. BLS OEWS national median for SOC 49-3023 = $49,670/yr ($23.88/hr) May 2024; Carbondale-Marion MSA tracks below national. Clearing 1A+2C from this rung requires (a) flag-rate at high-volume dealership, (b) specialize, (c) own a shop, or (d) relocate. The credential isn't phantom; the LOCAL WAGE CEILING is the constraint. Source: BLS OEWS May 2024 area data Carbondale-Marion MSA 49500 vs Chicago MSA 16980 + St. Louis MSA 41180."},
+
+    {"id": "diesel_mechanic", "name": "Diesel mechanic (Kaskaskia / Rend Lake / SIC programs)", "supersector_code": "1024",
+     "ladder": "Community college 1-2yr diesel-tech AAS or 8-month certificate",
+     "typical_journey_wage_wkly": 1166,  # BLS OEWS national median SOC 49-3031 = $60,640/yr / 52
+     "training_duration": "8mo-2yr program",
+     "local_employer_override": 80,  # estimated Carbondale-Marion MSA SOC 49-3031 employment; entry-level slots much smaller than total employment count
+     "entry_gates": ["drug_screen", "valid_drivers_license", "cdl_class_a_bumps_wage"],
+     "notes": "OPERATOR LIVED SIGNAL 2026-05-27: 'my cousin's kid did that in Nashville and couldn't find a job locally.' The credential LOOKS mapped on paper (FedEx Marion fleet, Walgreens Distribution Mt. Vernon, regional trucking, Class I railroads BNSF/NS/UP/CN/CSX, Aisin / Continental / GD-OTS captive maintenance shops, John Deere + Case IH ag-equipment dealers, coal-mine maintenance crews) — but the local ENTRY-LEVEL slot pipeline is broken: big captive shops hire experienced techs from within; railroads hire centrally not at local yards; ag-equipment dealers prefer 3-5yr experience; coal-mine maintenance has shrunk with mechanization. The typical path is: train locally → travel for first job (Memphis, St. Louis, Evansville IN, Nashville TN, Tulsa) to log 3-5 yr experience → maybe return to a local shop later. Cohort-vs-capacity gap shows up at the ENTRY rung, not the trade itself. Verdict: PHANTOM LOCALLY at entry-level / TRAVEL-WORK to build experience / MAY return after 3-5 yrs. Source: BLS OEWS May 2024 national + Carbondale-Marion MSA SOC 49-3031; IPEDS cohort completion vs OEWS employment join is the next-level analysis needed."},
+
+    {"id": "aisin_production_tech", "name": "Aisin production technician (Marion — Aisin Mfg / Electronics / Light Metals)", "supersector_code": "1013",
+     "ladder": "HS diploma → Aisin onboarding + on-job training",
+     "typical_journey_wage_wkly": 900,  # ~$22/hr × 40 starting; production lead $24-28/hr; with overtime + 2nd-shift premium pushes higher
+     "training_duration": "2-4wk onboarding + ongoing skills progression",
+     "local_employer_override": 2000,  # Aisin Marion total: 2,000+ across Aisin Manufacturing IL + Aisin Electronics IL + Aisin Light Metals (Williamson Co.); WSIU 2023 announcement of half-million sq ft logistics center expansion
+     "entry_gates": ["hs_diploma", "drug_screen", "basic_skills_assessment"],
+     "notes": "Major Williamson Co. employer — 2,000+ jobs across three Aisin entities in Marion (Manufacturing IL + Electronics IL + Light Metals). Production-tech roles cover assembly, electronics, light-metals casting, quality, packaging. Starting $18-22/hr; production lead + skilled trades inside Aisin push to $24-30/hr; with overtime + 2nd-shift premium can clear 1A+2C. Entry gate is mild — HS diploma + drug screen + basic skills assessment. Aisin is actively hiring (WSIU 2023 announcement of nearly half-million sq ft logistics center expansion). Maps well to HS CTE manufacturing tracks at Marion Unit 2 + JALC industrial-maintenance / mechatronics programs."},
+
+    {"id": "continental_tire_production", "name": "Continental Tire production operator (Mt. Vernon)", "supersector_code": "1013",
+     "ladder": "HS diploma → Continental Tire onboarding + tire-build certification",
+     "typical_journey_wage_wkly": 1000,  # ~$25/hr × 40 typical starting; production technician $25-30/hr; tire builder + skilled trades inside the plant push higher
+     "training_duration": "4-8wk onboarding + tire-build certification",
+     "local_employer_override": 3667,  # Continental Tire Mt. Vernon: 3,667 employees verified — the largest single employer south of Peoria
+     "entry_gates": ["hs_diploma", "drug_screen", "physical", "mechanical_aptitude_test"],
+     "notes": "JEFFERSON CO. ANCHOR — 3,667 jobs in Mt. Vernon, the largest single employer south of Peoria. Plant produces passenger + light-truck tires, truck tires, pre-cure tread. Production operator + tire builder roles start $20-25/hr; with overtime + 2nd-shift premium + skilled-trades progression (electrician / millwright / mechatronics inside the plant) clears 1A+2C. Plant is 45+ years old (per Town Square Publications celebration article) and is the anchor of Mt. Vernon's manufacturing identity. Mechanical aptitude test is a real gate; HS shop / CTE background helps. Continental is one of the few LWA-25 employers where the production rung itself can be family-supporting (not just the skilled-trade rung above)."},
 ]
 
 
