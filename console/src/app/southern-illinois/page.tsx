@@ -2600,6 +2600,26 @@ function IndustryMixByCountySection({ mix }: { mix: IndustryMix }) {
             </div>
           );
         })}
+        {(() => {
+          const regionTotal = mix.by_county.reduce((acc, c) => acc + c.total_employment, 0);
+          return (
+            <div style={{ background: "#f3efe4", border: "1px dashed #d8d2c4", borderRadius: 6, padding: 16 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
+                <h3 style={{ fontSize: 16, fontWeight: 600, color: "#5a564d", margin: 0 }}>LWA-25 · region</h3>
+                <div style={{ fontSize: 12, color: "#7a756b" }}>5 counties combined</div>
+              </div>
+              <div style={{ fontSize: 12, color: "#5a564d", marginBottom: 12 }}>
+                Total covered employment: <strong>{regionTotal.toLocaleString()}</strong>
+              </div>
+              <div style={{ fontSize: 13, color: "#3d3a33", lineHeight: 1.5 }}>
+                Healthcare anchors every county; Manufacturing concentrates in Jefferson
+                (Continental Tire) and Williamson; Construction shows surprising strength
+                in Jackson at $1,545/wk — outage and big-project wages. Perry runs on
+                Trade/Transport.
+              </div>
+            </div>
+          );
+        })()}
       </div>
     </section>
   );
