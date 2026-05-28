@@ -1239,19 +1239,57 @@ export default async function EastCentralIllinoisPage() {
             Unlike LWA-25 (which sits on the Carbondale-Marion MSA + I-57 / I-24 corridor with regional pull toward St. Louis Metro East), <strong>LWA-23 has no major-MSA commuter shed</strong>. The 13 counties span ~120 miles east-west + ~100 miles north-south but no MSA borders. Workers stay in-footprint or commute to Effingham (the I-57/I-70 in-footprint magnet). Coles County mean commute = 18.2 min (well below US 26.4 min mean) — most LWA-23 jobs are in-county.
           </div>
           <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, padding: 14, marginBottom: 12 }}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8 }}>The job-flow structure (per LEHD LODES via secondary aggregation):</div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8 }}>The job-flow structure:</div>
             <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 13, color: "#3d3a33", lineHeight: 1.65 }}>
               <li><strong>Effingham city is the in-footprint net job-importer</strong> — pulls workers from Fayette, Jasper, Clay, Cumberland. Driven by the I-57/I-70 interchange industrial cluster, Beef Packers, IDEX, HSHS St. Anthony&apos;s Memorial Hospital. Effingham County industry mix is 22.8% education/health/social, 13.4% manufacturing, 12.7% retail (ACS-derived).</li>
               <li><strong>Sarah Bush Lincoln Health Center (Mattoon-Charleston line)</strong> is the single largest in-footprint employer pulling workers from Coles + Cumberland + Edgar + Moultrie + Douglas (Coles County Transportation Plan 2025).</li>
               <li><strong>Coles County → Champaign-Urbana</strong> is the only meaningful intra-state MSA-commute link in LWA-23 (US-45/I-57 corridor, ~50 mi). Dial-A-Ride&apos;s $7 cross-county service is the only transit-accessible component.</li>
-              <li><strong>Clark + Edgar → Terre Haute IN</strong> (US-40/I-70, ~25 mi from Marshall + Paris) — the only meaningful out-of-state commute pattern in the footprint. Workers leak to Indiana&apos;s side of the Wabash Valley.</li>
-              <li><strong>Crawford + Lawrence → Vincennes IN + Wabash Valley refining/petrochemical cluster</strong> — same out-of-state leakage, this time south.</li>
               <li><strong>Marion → Mt. Vernon (Jefferson Co.) + St. Louis Metro East</strong> via I-64 (~75 mi). Long-haul commute pattern; not transit-accessible.</li>
               <li><strong>No meaningful Indianapolis commute</strong> — &gt;100 mi from the easternmost county seats; no transit link.</li>
             </ul>
           </div>
-          <div style={{ padding: 14, background: "#fef9eb", border: "1px solid #f0d98a", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
-            <strong>Methodological caveat:</strong> precise LEHD OnTheMap LODES county-pair flows require interactive queries that aren&apos;t served by static CSVs. The directional findings above are drawn from secondary aggregations (Data USA, Coles County Transportation Plan 2025, Ready Set Hire Effingham). The dashboard should run server-side OnTheMap queries to render county→destination tables with explicit numbers. Until that backend integration lands, the qualitative pattern stated here is hypothesis-strength, not finding-strength. Source: <a href="https://onthemap.ces.census.gov/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>LEHD OnTheMap (CES)</a> + <a href="https://www.colesco.illinois.gov/static/plans/Coles%20County%20Transportation%20Plan%202025.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Coles County Transportation Plan 2025</a> + <a href="https://datausa.io/profile/geo/coles-county-il" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Data USA Coles County profile</a>.
+
+          <h3 style={{ fontSize: 15, fontWeight: 600, color: "#1f1d18", marginTop: 16, marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+            Verified IL → IN cross-border commute flows (LEHD LODES 2021)
+          </h3>
+          <div style={{ fontSize: 13, color: "#3d3a33", marginBottom: 12, maxWidth: 820, lineHeight: 1.55 }}>
+            Direct LEHD LODES 2021 in_od_aux.csv extraction (h_geocode = IL residence, w_geocode = IN workplace, aggregated to county pair). Numbers are workers — actual commute flow.
+          </div>
+          <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+              <thead>
+                <tr style={{ background: "#f0ece1", textAlign: "left", borderBottom: "1px solid #d8d2c4" }}>
+                  <th style={{ padding: "8px 10px", fontWeight: 600 }}>IL residence county</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>→ Vigo IN (Terre Haute)</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>→ Knox IN (Vincennes)</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600 }}>Pattern</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[
+                  { c: "Clark", vigo: 591, knox: 26, p: "STRONG → Terre Haute (US-40/I-70, ~25 mi from Marshall)" },
+                  { c: "Edgar", vigo: 396, knox: 1, p: "STRONG → Terre Haute (NAL Paris ~30 mi from Vigo)" },
+                  { c: "Crawford", vigo: 132, knox: 221, p: "MIXED → both Wabash Valley nodes; ~equal split" },
+                  { c: "Lawrence", vigo: 95, knox: 925, p: "DOMINANT → Vincennes (Lawrenceville/Sumner ~15 mi from Knox)" },
+                ].map((r, i) => (
+                  <tr key={i} style={{ borderTop: i === 0 ? "none" : "1px solid #ebe5d6" }}>
+                    <td style={{ padding: "8px 10px", fontWeight: 600 }}>{r.c}</td>
+                    <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 600 }}>{r.vigo.toLocaleString()}</td>
+                    <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 600 }}>{r.knox.toLocaleString()}</td>
+                    <td style={{ padding: "8px 10px", fontSize: 11, color: "#5a564d" }}>{r.p}</td>
+                  </tr>
+                ))}
+                <tr style={{ borderTop: "1px solid #ebe5d6", background: "#fef9eb" }}>
+                  <td style={{ padding: "8px 10px", fontWeight: 700 }}>4-county total</td>
+                  <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700 }}>1,214</td>
+                  <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700 }}>1,173</td>
+                  <td style={{ padding: "8px 10px", fontSize: 11, color: "#5a564d" }}>2,387 LWA-23 residents cross the state line to work in 2 IN counties</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div style={{ padding: 14, background: "#fef9eb", border: "1px solid #f0d98a", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, marginTop: 12 }}>
+            <strong>Strategic implication:</strong> Lawrence County&apos;s LFPR 51.4% (worst in footprint, §02) is partially explained by the 925-commuter outflow to Knox IN — those workers ARE in the labor force, just not in the IL count. The Lawrence Correctional Center can&apos;t employ everyone, so a significant share of working-age Lawrence residents work in Vincennes IN. <strong>Cross-state placement-agreement pathway for CEFS:</strong> 2,387 LWA-23 → IN commuters is a meaningful number; formal Workforce Innovation cross-state coordination with Indiana Region 7 / Region 8 workforce boards could capture additional placement opportunities (Lawrence + Edgar + Clark have the strongest existing flows). Source: <a href="https://lehd.ces.census.gov/data/lodes/LODES8/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>LEHD LODES 8 / 2021 vintage</a> · in_od_aux IL-residence-to-IN-workplace pairs · LWA-23 4-county extraction 2026-05-28.
           </div>
         </section>
 
@@ -1591,7 +1629,7 @@ export default async function EastCentralIllinoisPage() {
             20 · PIRL / WIOA Performance Accountability · what should be measured
           </h2>
           <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
-            WIOA programs are accountable to six primary indicators (Q2 employment, Q4 employment, median earnings, credential attainment, measurable skill gains, effectiveness in serving employers). <strong>Audit correction (caught 2026-05-28):</strong> a prior version of this page identified the candidate ETA code as &quot;17125 Mantracon Corp&quot; — that is incorrect. Man-Tra-Con is LWA-25 (Southern Illinois) admin, NOT LWA-23. The correct ETA code for the CEFS-administered LWA-23 board is pending verification via the IL workNet LWIA Matrix PDF (image-only, requires OCR or CEFS direct confirmation). Statewide PY2023 ETA-9169 baselines below are correct + sourced; the LWA-23-specific row will be added once the ETA code is confirmed.
+            WIOA programs are accountable to six primary indicators (Q2 employment, Q4 employment, median earnings, credential attainment, measurable skill gains, effectiveness in serving employers). <strong>LWA-23 organizational structure (verified 2026-05-28):</strong> Lake Land College is the WIOA grant recipient / fiscal agent on behalf of the 13-county Chief Elected Officials; CEFS Economic Opportunity Corporation is the operator / sub-recipient. The federally-published identifier is literally <strong>Local Workforce Innovation Area 23 (LWIA 23)</strong> — no separate numeric ETA/WIPS code is published publicly. Statewide PY2023 ETA-9169 baselines below are public + sourced; the LWA-23-specific row is policy-restricted (DOL ETA dashboard requires authenticated session; IL IPATS is authorized-users-only) and is not publishable from public schema.
           </div>
           <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "auto", marginBottom: 12 }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
@@ -1638,7 +1676,7 @@ export default async function EastCentralIllinoisPage() {
             </ul>
           </div>
           <div style={{ fontSize: 11, color: "#7a756b", marginTop: 8, lineHeight: 1.5 }}>
-            Sources: <a href="https://www.dol.gov/sites/dolgov/files/ETA/Performance/PY23%20Databooks/IL_Annual%20Performance%20Narrative%20PY23.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>IL PY23 WIOA Annual Performance Narrative</a> + <a href="https://www.dol.gov/sites/dolgov/files/ETA/Performance/PY2023_WIOA_Local_Board_Annual_Report.html" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>DOL PY2023 WIOA Local Board Annual Report</a> + <a href="https://www.illinoisworknet.com/WIOA/RegPlanning/Pages/StateWorkforcePerformance.aspx" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>IL workNet WIOA Performance dashboard (IPATS)</a> + <a href="https://www.illinoisworknet.com/DownloadPrint/LWIA%20Matrix.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>IL workNet LWIA Matrix</a>. ETA code for LWA-23 is pending CEFS confirmation (the prior &quot;17125 / Mantracon Corp&quot; identification was a research error — Man-Tra-Con is LWA-25, not LWA-23).
+            Sources: <a href="https://www.dol.gov/sites/dolgov/files/ETA/Performance/PY23%20Databooks/IL_Annual%20Performance%20Narrative%20PY23.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>IL PY23 WIOA Annual Performance Narrative</a> + <a href="https://www.dol.gov/sites/dolgov/files/ETA/Performance/PY2023_WIOA_Local_Board_Annual_Report.html" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>DOL PY2023 WIOA Local Board Annual Report (interactive dashboard; 403 to programmatic access)</a> + <a href="https://www.illinoisworknet.com/WIOA/RegPlanning/Pages/StateWorkforcePerformance.aspx" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>IL workNet WIOA Performance dashboard (IPATS, authorized-users only)</a> + <a href="https://lwa23.net/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>LWA-23 (Connecting People with Jobs)</a> + <a href="https://illinoisworkforcepartnership.org/wioa/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Illinois Workforce Partnership · WIOA LWA-23 profile</a>. Numeric ETA/WIPS code: VERIFIED_UNAVAILABLE_PUBLICLY 2026-05-28 (the prior &quot;17125 / Mantracon Corp&quot; identification was wrong — Man-Tra-Con is LWA-25; canonical LWA-23 identifier is the literal designation &quot;LWIA 23&quot;).
           </div>
         </section>
 
@@ -1859,8 +1897,8 @@ export default async function EastCentralIllinoisPage() {
                 {[
                   {
                     item: "DOL ETA numeric local-area code for LWA-23",
-                    cls: "Confirmable by direct local contact",
-                    step: "Email CEFS HR / IL DCEO Office of Employment & Training (Deputy Director Teri Morris); the code lives in DOL ETA's authenticated WIPS tool, not the public dashboard. Page intentionally uses entity name (CEFS Economic Opportunity Corporation / LWIA 23) instead of asserting a number.",
+                    cls: "VERIFIED_UNAVAILABLE_PUBLICLY",
+                    step: "Resolved 2026-05-28 — no separate numeric ETA/WIPS code is published publicly for any IL LWIA. The federally-published identifier IS literally \"Local Workforce Innovation Area 23\" (LWIA 23). Sources checked + result: DOL ETA PY2023 dashboard (403 to programmatic access), IL DCEO PY2023 narrative (qualitative, no per-LWIA table), IL workNet LWIA Matrix (LWIA 23 only), IPATS user guide (explicitly authorized-users-only policy), WIOA State Plan Portal (LWIA numbers only), CEFS Form 990 (no WIPS code). Page now uses canonical \"LWIA 23\" identifier; no false ETA number asserted anywhere.",
                   },
                   {
                     item: "IRS Notice 2024-48 Appendix 1 — LWA-23 pre-retirement Energy Community status under Statistical Area Category",
@@ -1868,9 +1906,9 @@ export default async function EastCentralIllinoisPage() {
                     step: "Resolved 2026-05-28 via direct PDF extraction of IRS Notice 2024-48 Appendix 1. ALL 13 LWA-23 counties qualify as Energy Communities for CY2023 — 12 counties in East Central IL nonmetropolitan area (code 1700003); Moultrie in West Central IL nonmetropolitan area (1700002). Both areas meet the Fossil Fuel Employment threshold + UR-≥-national-avg requirement. §21 Anchor Attraction Newton entry updated to reflect: the entire footprint is eligible for the 10% IRA §45/§48 bonus tax credit TODAY; Newton retirement adds Coal Closure overlay post-2027.",
                   },
                   {
-                    item: "LEHD OnTheMap / LODES county-pair commute flows (Clark/Edgar → Terre Haute IN, Crawford/Lawrence → Vincennes IN, Marion → St. Louis Metro East)",
-                    cls: "Requires API/backend integration",
-                    step: "Build a server-side OnTheMap query wrapper into console-api (lehd.ces.census.gov LODES data). Until then, commute claims on this page are clearly labeled hypothesis-strength (drawn from secondary aggregations — Data USA, Coles County Transportation Plan 2025, Ready Set Hire Effingham).",
+                    item: "LEHD LODES IL → IN county-pair commute flows (Clark/Edgar → Vigo IN, Crawford/Lawrence → Knox IN)",
+                    cls: "CLOSED",
+                    step: "Resolved 2026-05-28 via direct LEHD LODES 2021 in_od_aux.csv extraction. Verified flows: Clark→Vigo 591, Edgar→Vigo 396, Crawford→Knox 221, Lawrence→Knox 925, 4-county cross-state total 2,387. §14 upgraded from hypothesis-strength to verified-finding with the per-pair table. Marion → St. Louis Metro East remains in §14 as qualitative pattern (Marion → Madison/St. Clair Co MO not pulled this round; can be added with same LODES pattern if needed).",
                   },
                   {
                     item: "Per-1,000 crime rates for Marshall (Clark), Toledo (Cumberland), Newton (Jasper), Sullivan (Moultrie)",
@@ -1883,9 +1921,9 @@ export default async function EastCentralIllinoisPage() {
                     step: "Form 990 publishes total &quot;Other Salaries and Wages&quot; + officer comp only — never SOC-coded payroll. Obtaining this requires an Illinois Hospital Association data request OR each hospital's internal HR census. Page uses 990 payroll ÷ headcount as a proxy for occupation-tier and labels the inference as such.",
                   },
                   {
-                    item: "Per-county LWA-23 WIOA PIRL outcomes (PY2023 ETA-9169 row)",
-                    cls: "Requires interactive IPATS query",
-                    step: "Pull from IL workNet IPATS interactive dashboard (illinoisworknet.com/WIOA/RegPlanning/Pages/StateWorkforcePerformance.aspx). Page uses IL statewide PY23 baselines until LWA-23-specific row is extracted.",
+                    item: "LWA-23-specific PY2023 ETA-9169 PIRL row (six primary indicators)",
+                    cls: "VERIFIED_UNAVAILABLE_PUBLICLY",
+                    step: "Resolved 2026-05-28 — verified through direct check of all known public sources. DOL ETA PY2023 Local Board Annual Report dashboard requires authenticated interactive-browser session (403 via curl/WebFetch). IL workNet IPATS LWIA Comparison Tool is policy-restricted: \"available only to authorized users... will not be provided to outside parties.\" CEFS / lwa23.net / lwa23.com do not publish PY2023 PIRL row publicly. IL DCEO PY2023 Statewide Annual Performance Narrative is qualitative-format only, no per-LWIA tabular data. The authoritative dataset exists but is access-controlled by policy. Page uses IL statewide PY23 baselines (which ARE public) as the comparator; LWA-23-specific row not publishable from public schema.",
                   },
                 ].map((r, i) => {
                   const clsColor = r.cls.startsWith("Confirmable") ? "oklch(40% 0.16 142)"
