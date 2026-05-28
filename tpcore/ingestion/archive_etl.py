@@ -218,7 +218,7 @@ async def archive_first_load_bars(
     # importing this module doesn't pull a live-DB-only dependency at
     # module load time (the hermetic-CI lesson).
     try:
-        from tpcore.data.ingest_alpaca_bars import stage_then_promote_bars
+        from tpcore.data.ingest_alpaca_bars import stage_then_promote_bars_batch
 
         # Backend-agnostic CSV read. Local-FS path keeps reading from
         # disk (preserves the archive-as-substrate invariant — a
@@ -250,14 +250,14 @@ async def archive_first_load_bars(
             else "alpaca" if provider == "alpaca"
             else provider
         )
-        rows_loaded = 0
-        for ticker, bars in by_ticker.items():
-            promoted = await stage_then_promote_bars(
-                pool, ticker, bars,
-                staging_run_id=manifest_id,
-                delisted=False, source=upsert_source,
-            )
-            rows_loaded += promoted
+        # 2026-05-28 perf fix: collapse per-ticker stage_then_promote
+        # (~5 RTTs/ticker × 7,600 = ~3.4hr on Supabase pooler) to one
+        # batch call that does the same work in 4 RTTs total.
+        rows_loaded = await stage_then_promote_bars_batch(
+            pool, dict(by_ticker),
+            staging_run_id=manifest_id,
+            delisted=False, source=upsert_source,
+        )
 
         # Phase 3a — SUCCESS
         await mark_loaded(pool, manifest_id, actual_rows=rows_loaded)

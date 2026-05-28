@@ -414,6 +414,160 @@ async def stage_then_promote_bars(
     return promoted
 
 
+async def stage_then_promote_bars_batch(
+    pool: asyncpg.Pool,
+    bars_by_ticker: dict[str, list[dict]],
+    *,
+    staging_run_id,  # UUID
+    delisted: bool = False,
+    delisting_date: date | None = None,
+    source: str = "alpaca",
+) -> int:
+    """Batched variant of stage_then_promote_bars — N tickers, 4 DB round-trips.
+
+    The per-ticker variant does ~5 RTTs per ticker. On a 7,600-ticker
+    full-universe ingest that's ~30k RTTs × ~400ms Supabase pooler RTT
+    = ~3.4 hours of pure round-trip time, dwarfing the work itself.
+
+    This batch variant does the same logical work but bounded to a single
+    DB acquire():
+
+      1. executemany INSERT to staging (one row per (ticker, date) tuple)
+      2. ONE SELECT COUNT for validation (covers all tickers)
+      3. ONE INSERT ... SELECT promote (covers all tickers)
+      4. ONE UPDATE mark-promoted (covers all tickers)
+
+    Same physical-truth filter + quarantine routing as the per-ticker
+    function — same rejection log shape per ticker (the rejection batch
+    accumulates across tickers; quarantine routing happens once at end).
+
+    Returns total promoted row count across all tickers.
+    """
+    if not bars_by_ticker:
+        return 0
+    from tpcore.ingestion.quarantine import ERROR_VALIDATION, record_rejection
+
+    today = datetime.now(UTC).date()
+    rows: list[tuple] = []
+    rejections: list[tuple[str, dict, str]] = []
+    expected_per_ticker: dict[str, int] = {}
+
+    for symbol, bars in bars_by_ticker.items():
+        sym_kept = 0
+        for b in bars:
+            ts = datetime.fromisoformat(b["t"].replace("Z", "+00:00"))
+            session_date = ts.date()
+            o = b.get("o")
+            h = b.get("h")
+            low = b.get("l")
+            close = b.get("c")
+            v = b.get("v")
+            if (o is None or h is None or low is None or close is None or v is None):
+                rejections.append((symbol, b, "null_required_field"))
+                continue
+            if close <= 0 or close > 1e8 or o <= 0 or h <= 0 or low <= 0:
+                rejections.append((symbol, b, "ohlc_out_of_range"))
+                continue
+            if h < max(o, close, low) or low > min(o, close, h):
+                rejections.append((symbol, b, "ohlc_inconsistent"))
+                continue
+            if session_date > today:
+                rejections.append((symbol, b, "future_date"))
+                continue
+            rows.append((
+                staging_run_id, symbol, session_date, o, h, low, close, int(v),
+                close, delisted, delisting_date, source,
+            ))
+            sym_kept += 1
+        expected_per_ticker[symbol] = sym_kept
+
+    if rejections:
+        feed_source = "fmp_daily_bars" if source == "fmp" else "alpaca_daily_bars"
+        for sym, payload, reason in rejections:
+            await record_rejection(
+                pool,
+                source=feed_source,
+                target_table="platform.prices_daily",
+                payload={**payload, "ticker": sym, "source": source},
+                error_message=(
+                    f"physical_truth_gate: {reason} "
+                    f"(symbol={sym} ts={payload.get('t')})"
+                ),
+                error_kind=ERROR_VALIDATION,
+            )
+
+    if not rows:
+        return 0
+
+    # Batch-scope variants of the per-ticker SQL: drop the AND ticker = $2
+    # filter so one call covers all tickers in this staging_run_id.
+    promote_all_sql = """
+        INSERT INTO platform.prices_daily (
+            ticker, date, open, high, low, close, volume,
+            adjusted_close, delisted, delisting_date, source
+        )
+        SELECT
+            ticker, date, open, high, low, close, volume,
+            adjusted_close, delisted, delisting_date, source
+        FROM platform.prices_daily_staging
+        WHERE staging_run_id = $1 AND promoted = false
+        ON CONFLICT (ticker, date) DO UPDATE SET
+            open = EXCLUDED.open,
+            high = EXCLUDED.high,
+            low = EXCLUDED.low,
+            close = EXCLUDED.close,
+            volume = EXCLUDED.volume,
+            adjusted_close = EXCLUDED.adjusted_close,
+            delisted = EXCLUDED.delisted,
+            delisting_date = EXCLUDED.delisting_date,
+            source = EXCLUDED.source
+        WHERE platform._source_priority(EXCLUDED.source)
+            >= platform._source_priority(platform.prices_daily.source)
+    """
+    mark_all_sql = """
+        UPDATE platform.prices_daily_staging
+        SET promoted = true
+        WHERE staging_run_id = $1 AND promoted = false
+    """
+    count_all_sql = (
+        "SELECT COUNT(*)::bigint FROM platform.prices_daily_staging "
+        "WHERE staging_run_id = $1"
+    )
+
+    async with pool.acquire() as conn:
+        # Phase 2 — bulk INSERT to staging.
+        await conn.executemany(_STAGE_INSERT_SQL, rows)
+        # Phase 3 — single COUNT for validation across all tickers.
+        staged_total = int(
+            await conn.fetchval(count_all_sql, staging_run_id) or 0
+        )
+        if staged_total != len(rows):
+            raise StagingValidationError(
+                f"staging row count mismatch (batch) "
+                f"staging_run_id={staging_run_id}: "
+                f"expected={len(rows)} actual={staged_total} — likely "
+                "in-batch duplicate (ticker, date)"
+            )
+        # Phase 4 — single promote INSERT ... SELECT covers all tickers.
+        promote_result = await conn.execute(promote_all_sql, staging_run_id)
+        # Phase 5 — single UPDATE mark-promoted.
+        await conn.execute(mark_all_sql, staging_run_id)
+
+    promoted = 0
+    if isinstance(promote_result, str) and promote_result.startswith("INSERT"):
+        try:
+            promoted = int(promote_result.rsplit(" ", 1)[-1])
+        except ValueError:
+            promoted = 0
+    logger.info(
+        "ingest_alpaca_bars.stage_then_promote.batch_done",
+        staging_run_id=str(staging_run_id),
+        tickers=len(bars_by_ticker), staged=staged_total,
+        promoted=promoted, source=source,
+    )
+    return promoted
+
+
 async def _upsert_bars(
     pool: asyncpg.Pool,
     symbol: str,
