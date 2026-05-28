@@ -1273,6 +1273,224 @@ export default async function EastCentralIllinoisPage() {
           </div>
         </section>
 
+        {/* ═══ §14 IL DCEO In-Demand Occupations — Southeast EDR 7 ═══ */}
+        <section style={{ marginTop: 40 }}>
+          <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+          <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+            14 · IL DCEO In-Demand Occupations · Southeast EDR 7 (LWA-23 coterminous)
+          </h2>
+          <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
+            The IL workNet Southeastern Regional Data Packet 2026 publishes the official Demand Occupations list — eligible-training-provider WIOA funding is tied to occupations on this list. LWA-23 is coterminous with IDES Economic Development Region 7. Below: annual openings + entry/experienced hourly wage by credential tier, sorted by openings within tier.
+          </div>
+          <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+              <thead>
+                <tr style={{ background: "#f0ece1", textAlign: "left", borderBottom: "1px solid #d8d2c4" }}>
+                  <th style={{ padding: "8px 10px", fontWeight: 600 }}>Credential tier</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600 }}>SOC</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600 }}>Occupation</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Annual openings</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Entry $/hr</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Experienced $/hr</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[
+                  // Certificate / License
+                  { tier: "Cert/License", soc: "31-1131", occ: "Nursing Assistants", openings: 226, entry: 16.96, exp: 21.20 },
+                  { tier: "Cert/License", soc: "53-3032", occ: "Heavy + Tractor-Trailer Truck Drivers", openings: 219, entry: 19.14, exp: 31.61 },
+                  { tier: "Cert/License", soc: "25-9045", occ: "Teaching Assistants (ex-postsecondary)", openings: 128, entry: null, exp: null },
+                  { tier: "Cert/License", soc: "39-9011", occ: "Childcare Workers", openings: 115, entry: 14.42, exp: 17.28 },
+                  { tier: "Cert/License", soc: "49-3023", occ: "Automotive Service Technicians + Mechanics", openings: 75, entry: 17.01, exp: 29.43 },
+                  { tier: "Cert/License", soc: "39-9031", occ: "Exercise Trainers + Group Fitness Instructors", openings: 70, entry: 14.52, exp: 30.34 },
+                  { tier: "Cert/License", soc: "31-9092", occ: "Medical Assistants", openings: 43, entry: 16.97, exp: 21.40 },
+                  // Associate's
+                  { tier: "Associate's", soc: "29-1141", occ: "Registered Nurses (RN)", openings: 154, entry: 31.10, exp: 44.86 },
+                  { tier: "Associate's", soc: "25-2011", occ: "Preschool Teachers (ex-Sp Ed)", openings: 38, entry: 15.08, exp: 21.58 },
+                  { tier: "Associate's", soc: "15-1232", occ: "Computer User Support Specialists", openings: 20, entry: 19.35, exp: 32.27 },
+                  { tier: "Associate's", soc: "29-2010", occ: "Clinical Lab Technologists / Technicians", openings: 12, entry: 24.02, exp: 36.77 },
+                  { tier: "Associate's", soc: "23-2011", occ: "Paralegals + Legal Assistants", openings: 11, entry: 18.57, exp: 30.17 },
+                  { tier: "Associate's", soc: "31-2021", occ: "Physical Therapist Assistants (PTA)", openings: 10, entry: 26.92, exp: 33.69 },
+                  { tier: "Associate's", soc: "15-1231", occ: "Computer Network Support Specialists", openings: 9, entry: 18.10, exp: 34.59 },
+                  // Bachelor's
+                  { tier: "Bachelor's", soc: "11-1021", occ: "General + Operations Managers", openings: 248, entry: 23.13, exp: 67.42 },
+                  { tier: "Bachelor's", soc: "13-1199", occ: "Business Operations Specialists, All Other", openings: 79, entry: 20.14, exp: 43.36 },
+                  { tier: "Bachelor's", soc: "25-2021", occ: "Elementary School Teachers (ex-Sp Ed)", openings: 79, entry: null, exp: null },
+                  { tier: "Bachelor's", soc: "13-2011", occ: "Accountants + Auditors", openings: 69, entry: 23.32, exp: 41.13 },
+                  { tier: "Bachelor's", soc: "13-1161", occ: "Market Research Analysts", openings: 46, entry: 19.89, exp: 37.45 },
+                  { tier: "Bachelor's", soc: "13-1111", occ: "Management Analysts", openings: 34, entry: 32.24, exp: 64.67 },
+                  { tier: "Bachelor's", soc: "41-3021", occ: "Insurance Sales Agents", openings: 32, entry: 19.93, exp: 38.29 },
+                  // Beyond Bachelor's
+                  { tier: "Beyond Bach", soc: "11-3031", occ: "Financial Managers", openings: 56, entry: 39.40, exp: 79.11 },
+                  { tier: "Beyond Bach", soc: "11-9199", occ: "Managers, All Other", openings: 45, entry: 34.47, exp: 72.12 },
+                  { tier: "Beyond Bach", soc: "15-1252", occ: "Software Developers", openings: 39, entry: 32.53, exp: 61.30 },
+                  { tier: "Beyond Bach", soc: "11-2022", occ: "Sales Managers", openings: 35, entry: 38.79, exp: 89.32 },
+                  { tier: "Beyond Bach", soc: "11-9111", occ: "Medical + Health Services Managers", openings: 31, entry: 33.88, exp: 63.17 },
+                  { tier: "Beyond Bach", soc: "11-2021", occ: "Marketing Managers", openings: 26, entry: 38.86, exp: 80.67 },
+                  { tier: "Beyond Bach", soc: "23-1011", occ: "Lawyers", openings: 17, entry: 25.76, exp: 74.41 },
+                ].map((r, i) => (
+                  <tr key={i} style={{ borderTop: i === 0 ? "none" : "1px solid #ebe5d6" }}>
+                    <td style={{ padding: "5px 10px", fontSize: 11, color: "#7a756b", fontWeight: 600 }}>{r.tier}</td>
+                    <td style={{ padding: "5px 10px", fontFamily: "monospace", fontSize: 11, color: "#5a564d" }}>{r.soc}</td>
+                    <td style={{ padding: "5px 10px", fontWeight: 600 }}>{r.occ}</td>
+                    <td style={{ padding: "5px 10px", textAlign: "right", fontWeight: 600, color: r.openings >= 100 ? "oklch(40% 0.16 142)" : "#1f1d18" }}>{r.openings}</td>
+                    <td style={{ padding: "5px 10px", textAlign: "right", color: "#5a564d" }}>{r.entry != null ? `$${r.entry.toFixed(2)}` : "—"}</td>
+                    <td style={{ padding: "5px 10px", textAlign: "right", color: "#5a564d" }}>{r.exp != null ? `$${r.exp.toFixed(2)}` : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ padding: 14, background: "#fef9eb", border: "1px solid #f0d98a", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, marginTop: 12 }}>
+            <strong>Real-time corroboration — HWOL December 2025 EDR 7 top job postings:</strong> Heavy Truck Drivers (67 new ads), Food Prep Workers (63), Retail Salespersons (58), Registered Nurses (49), Home Health + Personal Care Aides (45), Food Service Managers (35), General Maintenance + Repair (32), Customer Service Reps (31), Driver/Sales Workers (31), First-Line Retail Supervisors (30). <strong>Top posting employers:</strong> Flynn Group/Taco Bell (49), Casey&apos;s (34), Rural King (33), Domino&apos;s (31), UPS (30), Addus HomeCare (27), Walmart/Sam&apos;s Club (22), Lake Land College (20), Love&apos;s (18), Sherwin-Williams (14). Source: <a href="https://ides.illinois.gov/content/dam/soi/en/web/ides/labor_market_information/hwol/edr7_dec25.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>IDES EDR 7 HWOL Dec 2025</a>.
+          </div>
+          <div style={{ fontSize: 11, color: "#7a756b", marginTop: 8, lineHeight: 1.5 }}>
+            Sources: <a href="https://www.illinoisworknet.com/WIOA/RegPlanning/Documents/2026WIOARegionalandLocalPlanning/SoutheasternRegionalDataPacket2026.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Southeastern Regional Data Packet 2026 (IL workNet)</a> · DCEO Office of Employment and Training + NIU Workforce Policy Lab joint product · IDES Long-Term Occupational Employment Projections 2022-2032 + OEWS 2024. Living-wage benchmark (IL one adult / single parent): $23.56 / $40.41 (<a href="https://livingwage.mit.edu/states/17" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>MIT Living Wage Calculator</a>).
+          </div>
+        </section>
+
+        {/* ═══ §14.5 PIRL / WIOA Performance Accountability ═══ */}
+        <section style={{ marginTop: 40 }}>
+          <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+          <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+            15 · PIRL / WIOA Performance Accountability · what should be measured
+          </h2>
+          <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
+            WIOA programs are accountable to six primary indicators (Q2 employment, Q4 employment, median earnings, credential attainment, measurable skill gains, effectiveness in serving employers). CEFS/LWA-23 doesn&apos;t appear under a self-identifying name in the DOL ETA-9169 PY2023 Local Board Annual Report — the candidate ETA code is <strong>17125 (Mantracon Corp.)</strong>, legacy grant administrator for East Central IL, but the operator should verify the mapping with CEFS / IL DCEO before public-stakeholder use.
+          </div>
+          <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "auto", marginBottom: 12 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+              <thead>
+                <tr style={{ background: "#f0ece1", textAlign: "left", borderBottom: "1px solid #d8d2c4" }}>
+                  <th style={{ padding: "8px 10px", fontWeight: 600 }}>Title I program</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>IL statewide served</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Q2 emp rate</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Q4 emp rate</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Median earnings Q2</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Credential</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>MSG</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[
+                  { p: "Adult", served: 8489, q2: "80.5%", q4: "78.2%", earn: "$10,293", cred: "73.2%", msg: "69.1%" },
+                  { p: "Dislocated Worker", served: 5282, q2: "81.3%", q4: "80.3%", earn: "$11,693", cred: "73.9%", msg: "69.8%" },
+                  { p: "Youth", served: 5666, q2: "80.3%", q4: "78.4%", earn: "$5,700", cred: "70.8%", msg: "65.5%" },
+                ].map((r, i) => (
+                  <tr key={i} style={{ borderTop: i === 0 ? "none" : "1px solid #ebe5d6" }}>
+                    <td style={{ padding: "6px 10px", fontWeight: 600 }}>{r.p}</td>
+                    <td style={{ padding: "6px 10px", textAlign: "right" }}>{r.served.toLocaleString()}</td>
+                    <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: 600 }}>{r.q2}</td>
+                    <td style={{ padding: "6px 10px", textAlign: "right" }}>{r.q4}</td>
+                    <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: 600 }}>{r.earn}</td>
+                    <td style={{ padding: "6px 10px", textAlign: "right" }}>{r.cred}</td>
+                    <td style={{ padding: "6px 10px", textAlign: "right" }}>{r.msg}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ padding: 14, background: "#fef9eb", border: "1px solid #f0d98a", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
+            <strong>What CEFS/LWA-23 should measure + report</strong> (PIRL-aligned, region-specific):
+            <ul style={{ margin: "8px 0 0 18px", padding: 0 }}>
+              <li><strong>Q2 + Q4 employment rate</strong> vs IL statewide 80.5% / 78.2% (Adult) — LWA-23 should publish its own rate annually; legitimate goal is at or above state median.</li>
+              <li><strong>Median Q2 earnings</strong> vs IL statewide $10,293 (Adult) — given the LWA-23 rural-IL ~17% wage discount, expect 80-90% of state median; the publication-grade question is whether training-to-job match is FAMILY-SUPPORTING (clears Coles 1A+2C $35.68/hr ~$74k/yr).</li>
+              <li><strong>Credential attainment</strong> vs IL statewide 73.2% (Adult) — for LWA-23 this is closely tied to Lake Land + Kaskaskia + Olney Central completion rates for the in-demand SOC codes in §14.</li>
+              <li><strong>Training-to-job match rate</strong> — the operator-side accountability metric: of WIOA completers credentialed in SOC X, what % placed in a job using that credential at the wage-tier the credential should command? PIRL captures the wage; the match needs an additional employer-side survey or LEHD-LODES match.</li>
+              <li><strong>Employer-side effectiveness</strong> — IL DCEO publishes employer-side measures (penetration rate, repeat-business rate, employer retention). The IPATS dashboard at <a href="https://www.illinoisworknet.com/WIOA/RegPlanning/Pages/StateWorkforcePerformance.aspx" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>illinoisworknet.com</a> is the operator-facing source.</li>
+              <li><strong>Region-specific add-on metrics:</strong> (a) <em>Not-in-LF re-engagement</em> — given the §01 finding of 87,127 working-age adults out of the labor force, the region-specific PIRL augmentation is the count of WIOA enrollees who were not-in-LF at intake. Standard PIRL doesn&apos;t segment by labor-force status at intake; this is the additional question LWA-23 needs to track.</li>
+              <li><strong>(b) Childcare-barrier removal:</strong> of WIOA enrollees whose intake survey flagged childcare as a barrier (§08 / Region 11 76% slot gap), the % retained through credential completion. This is the LWA-23 leakage point.</li>
+            </ul>
+          </div>
+          <div style={{ fontSize: 11, color: "#7a756b", marginTop: 8, lineHeight: 1.5 }}>
+            Sources: <a href="https://www.dol.gov/sites/dolgov/files/ETA/Performance/PY23%20Databooks/IL_Annual%20Performance%20Narrative%20PY23.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>IL PY23 WIOA Annual Performance Narrative</a> + <a href="https://www.dol.gov/sites/dolgov/files/ETA/Performance/PY2023_WIOA_Local_Board_Annual_Report.html" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>DOL PY2023 WIOA Local Board Annual Report</a> + <a href="https://www.illinoisworknet.com/WIOA/RegPlanning/Pages/StateWorkforcePerformance.aspx" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>IL workNet WIOA Performance dashboard (IPATS)</a> + <a href="https://www.illinoisworknet.com/DownloadPrint/LWIA%20Matrix.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>IL workNet LWIA Matrix</a>. ETA code 17125 (Mantracon Corp.) is the candidate — verify with CEFS before publication.
+          </div>
+        </section>
+
+        {/* ═══ §15 Anchor Attraction Targets ═══ */}
+        <section style={{ marginTop: 40 }}>
+          <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+          <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+            16 · Anchor-attraction targets · realistic + asset-grounded
+          </h2>
+          <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
+            Five anchor-attraction targets that map to LWA-23 actual labor + infrastructure assets. Each carries a stackable federal/state grant program with a current Notice of Funding Opportunity URL. Order is by realistic-feasibility (asset fit) not by funding scale.
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 12 }}>
+            {[
+              {
+                title: "EV / Battery Component Manufacturing Cluster",
+                anchor: "North American Lighting (Paris) supply chain",
+                rationale: "NAL Paris is a Tier-1 automotive lighting plant in Koito Group, already supplying the OEM EV transition. Adjacent capacity in Coles/Edgar/Clark counties on I-70 corridor is the leverage.",
+                programs: [
+                  { name: "IL DCEO Reimagining Energy and Vehicles (REV) Act", url: "https://dceo.illinois.gov/businesshelp/rev.html", detail: "Payroll-withholding credit up to 100% in Underserved or Energy Transition Areas; 75% withholding for construction; $2.5M capex / 50-job floor (Tier 1, 20-yr) or larger (Tier 2, 30-yr)" },
+                  { name: "20 ILCS 686 REV Act statute", url: "https://ilga.gov/Legislation/ILCS/Articles?ActID=4229&ChapterID=5", detail: "Statutory text" },
+                  { name: "EDA Good Jobs Challenge", url: "https://www.eda.gov/funding/programs/good-jobs-challenge/2024", detail: "Sectoral-partnership training pipeline through Lake Land + Olney Central + Kaskaskia" },
+                ],
+              },
+              {
+                title: "I-57 / I-70 Logistics + Distribution Expansion",
+                anchor: "Rural King DC Mattoon + Effingham crossroads + Casey's/UPS/Love's/TravelCenters footprint",
+                rationale: "Truck-driver demand is 219 annual openings (§14 highest single SOC), Rural King + UPS + Casey's + Love's already posting heavily, and the literal interstate cross. Strongest sector-fit on existing labor supply.",
+                programs: [
+                  { name: "EDA Public Works + Economic Adjustment Assistance", url: "https://www.eda.gov/funding/programs/public-works", detail: "Intermodal + site-readiness" },
+                  { name: "USDA Business + Industry Loan Guarantees", url: "https://www.rd.usda.gov/programs-services/business-programs/business-industry-loan-guarantees", detail: "Warehouse-tenant financing" },
+                  { name: "WIOA SOC 53-3032 CDL pipeline funding", url: "https://www.cefseoc.org/wioa", detail: "CEFS administers; Kaskaskia + Lake Land + private schools deliver" },
+                ],
+              },
+              {
+                title: "Energy-Transition Reinvestment at Newton (Jasper County)",
+                anchor: "Vistra Newton Power Plant — Vistra has announced retirement of Newton Unit 1 by end-2027",
+                rationale: "Vistra 10-K filing confirms Newton Unit 1 retirement by end-2027. The IRA bonus 10% adder for projects sited in Energy Communities (coal-plant retirements since 2009 + adjoining tracts) is the federal lever. Jasper County is a candidate Energy Community tract — operator should verify against the active DOE/NETL map.",
+                programs: [
+                  { name: "DOE/NETL IRA Energy Community Data Layers", url: "https://edx.netl.doe.gov/dataset/ira-energy-community-data-layers", detail: "Interactive map to verify Jasper's 2024/2025 tract designation" },
+                  { name: "IRA Energy Community Tax Credit Bonus portal", url: "https://energycommunities.gov/energy-community-tax-credit-bonus/", detail: "10% adder for qualifying renewable projects + battery storage + clean manufacturing" },
+                  { name: "EDA Recompete Pilot Program", url: "https://www.eda.gov/funding/programs/recompete-pilot-program/faq", detail: "Targets prime-age employment gaps; coalitions accepted; no match at Phase 1/2" },
+                  { name: "Vistra 10-K FY2025 Newton retirement filing", url: "https://www.sec.gov/Archives/edgar/data/0001692819/000169281926000006/vistra-20251231xex417.htm", detail: "Primary-source confirmation of retirement timeline" },
+                ],
+              },
+              {
+                title: "Petrochemical Downstream + Specialty Coatings",
+                anchor: "Marathon Robinson Refinery (245k bpd) + Sherwin-Williams Effingham",
+                rationale: "Marathon Robinson is a 245k-bpd downstream refinery feeding hydrocarbon-derivatives demand; Sherwin-Williams Effingham is the regional architectural-coatings hub. Cluster strategy: specialty-chemical / coatings tier-2 suppliers.",
+                programs: [
+                  { name: "DCEO EDGE tax credit", url: "https://dceo.illinois.gov/expandrelocate/incentives/taxassistance.html", detail: "Economic Development for a Growing Economy tax credit program" },
+                  { name: "EDA Investing in America's Regional Innovation Hubs / Tech Hubs Phase 2", url: "https://www.eda.gov/funding/programs/regional-technology-and-innovation-hubs/faq", detail: "Advanced-materials consortia funding" },
+                  { name: "Lake Land + Olney Central chemical-tech programs", url: "https://www.lakelandcollege.edu/", detail: "Map directly to SOC 29-2010 (Clinical Lab Tech) + process-tech career cluster" },
+                ],
+              },
+              {
+                title: "Rural Broadband + Telework Hub",
+                anchor: "Consolidated Communications HQ (Mattoon) + IL $1.04B BEAD allocation",
+                rationale: "Consolidated is a publicly-traded ILEC headquartered in LWA-23; Illinois received $1,040,420,751.50 in BEAD allocation. Fiber-to-the-premises in the rural counties unlocks remote-work in-flow against the SOC 15-1252 (Software Developers, 39 openings/yr per §14) and SOC 13-2011 (Accountants, 69 openings/yr) demand.",
+                programs: [
+                  { name: "Internet for All — Illinois BEAD allocation", url: "https://www.internetforall.gov/news-media/biden-harris-administration-announces-1-billion-illinois-deploy-high-speed-internet", detail: "$1,040,420,751.50 IL BEAD allocation announced" },
+                  { name: "DCEO Office of Broadband BEAD program", url: "https://dceo.illinois.gov/broadband/bead.html", detail: "IL DCEO runs the deployment program" },
+                  { name: "USDA ReConnect", url: "https://www.usda.gov/reconnect", detail: "Rural broadband infrastructure grants/loans" },
+                  { name: "USDA Rural Business Development Grants", url: "https://www.rd.usda.gov/programs-services/business-programs/rural-business-development-grants-33", detail: "Eligible: towns, communities, state agencies, nonprofits, higher-ed, federally-recognized Tribes, cooperatives (individuals + for-profits ineligible)" },
+                ],
+              },
+            ].map((t, i) => (
+              <div key={i} style={{ background: "white", border: "1px solid #d8d2c4", borderLeft: "6px solid #1f1d18", borderRadius: 6, padding: 14 }}>
+                <div style={{ fontSize: 15, fontWeight: 700, color: "#1f1d18", marginBottom: 4 }}>{String.fromCharCode(97 + i)}) {t.title}</div>
+                <div style={{ fontSize: 12, color: "#5a564d", marginBottom: 8 }}><strong>Anchor asset:</strong> {t.anchor}</div>
+                <div style={{ fontSize: 13, color: "#3d3a33", lineHeight: 1.55, marginBottom: 10 }}>{t.rationale}</div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#7a756b", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>Stackable programs:</div>
+                <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 12.5, color: "#3d3a33", lineHeight: 1.6 }}>
+                  {t.programs.map((p, j) => (
+                    <li key={j}>
+                      <a href={p.url} target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f", fontWeight: 600 }}>{p.name}</a> — {p.detail}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+          <div style={{ padding: 14, background: "#fef9eb", border: "1px solid #f0d98a", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, marginTop: 12 }}>
+            <strong>Operator verification items before public-stakeholder use:</strong> (1) ETA local-area code for LWA-23 (candidate 17125 / Mantracon Corp.; alternatives 17120 Mid America WIB, 17100 Land of Lincoln Consortium). (2) Jasper County&apos;s active IRA Energy Community designation against the DOE/NETL interactive map. (3) LWA-23 PY2023 ETA-9169 narrative via IPATS interactive dashboard for the exact LWA-23 rows.
+          </div>
+        </section>
+
         {/* ═══ §8 LWA-23 vs LWA-25 ═══ */}
         <section style={{ marginTop: 40 }}>
           <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
