@@ -684,19 +684,19 @@ export default async function EastCentralIllinoisPage() {
               </thead>
               <tbody>
                 {[
-                  { c: "Lawrence", disab: 20.2, age: 40.6, lfpr: 51.4, rent: 31.1, driver: "Disability + carceral economy (max-security IDOC; pop disability rate highest in footprint)" },
-                  { c: "Marion", disab: 18.7, age: 41.3, lfpr: 60.0, rent: 38.5, driver: "Disability + rent-burden + thin private sector outside Salem Twp Hospital" },
-                  { c: "Clay", disab: 18.6, age: 41.5, lfpr: 56.6, rent: 21.2, driver: "Disability — single-anchor hospital economy (Clay County Hospital)" },
-                  { c: "Edgar", disab: 18.4, age: 46.4, lfpr: 56.5, rent: 30.4, driver: "Disability + age (oldest median in footprint) + NAL single-anchor" },
-                  { c: "Richland", disab: 18.3, age: 42.5, lfpr: 62.1, rent: 31.0, driver: "Disability — counterbalanced by Walmart DC + Olney Central + Carle Richland anchor" },
-                  { c: "Fayette", disab: 17.5, age: 41.7, lfpr: 53.4, rent: 31.9, driver: "Disability + carceral economy (Vandalia Correctional) + rent-burden" },
-                  { c: "Coles", disab: 16.3, age: 38.2, lfpr: 62.5, rent: 41.0, driver: "Rent-burden (highest in footprint) — EIU+SBL anchor counterbalances disability tier" },
-                  { c: "Jasper", disab: 15.9, age: 44.2, lfpr: 65.8, rent: 20.4, driver: "Newton Power Plant anchor + low rent-burden — LFPR ABOVE state average" },
-                  { c: "Crawford", disab: 15.7, age: 42.4, lfpr: 54.8, rent: 23.3, driver: "Single-anchor refinery — workers outside Marathon disproportionately not in LF; not driven by disability" },
-                  { c: "Effingham", disab: 14.8, age: 39.5, lfpr: 64.8, rent: 27.6, driver: "Anchor county effect (CEFS + HSHS + Sherwin-Williams + I-57/I-70) — LFPR near state" },
-                  { c: "Clark", disab: 13.5, age: 42.0, lfpr: 59.7, rent: 46.1, driver: "Rent-burden HIGHEST in footprint (46.1%); ZF Marshall anchor; cross-border to Terre Haute IN" },
-                  { c: "Cumberland", disab: 13.4, age: 42.3, lfpr: 67.2, rent: 26.2, driver: "Commuter county — residents work in Effingham/Mattoon-Charleston; LFPR ABOVE state" },
-                  { c: "Moultrie", disab: 13.2, age: 40.4, lfpr: 60.5, rent: 28.7, driver: "Agri-Fab + Hydro-Gear manufacturing cluster — LFPR near state" },
+                  { c: "Lawrence", disab: 20.2, age: 40.6, lfpr: 51.4, rent: 28.6, driver: "Disability + carceral economy (max-security IDOC; population disability rate highest in footprint)" },
+                  { c: "Marion", disab: 18.7, age: 41.3, lfpr: 60.0, rent: 36.6, driver: "Disability + rent-burden + thin private sector outside Salem Twp Hospital" },
+                  { c: "Clay", disab: 18.6, age: 41.5, lfpr: 56.6, rent: 23.1, driver: "Disability — single-anchor hospital economy (Clay County Hospital)" },
+                  { c: "Edgar", disab: 18.4, age: 46.4, lfpr: 56.5, rent: 26.4, driver: "Disability + age (oldest median in footprint) + NAL single-anchor" },
+                  { c: "Richland", disab: 18.3, age: 42.5, lfpr: 62.1, rent: 37.0, driver: "Disability + rent-burden — counterbalanced by Walmart DC + Olney Central + Carle Richland" },
+                  { c: "Fayette", disab: 17.5, age: 41.7, lfpr: 53.4, rent: 40.8, driver: "Disability + carceral economy (Vandalia Correctional) + HIGHEST rent-burden in footprint" },
+                  { c: "Coles", disab: 16.3, age: 38.2, lfpr: 62.5, rent: 40.4, driver: "Second-highest rent-burden (40.4%) — EIU + SBL anchor counterbalances disability tier" },
+                  { c: "Jasper", disab: 15.9, age: 44.2, lfpr: 65.8, rent: 31.4, driver: "Newton Power Plant anchor — LFPR ABOVE state average; rent-burden moderate" },
+                  { c: "Crawford", disab: 15.7, age: 42.4, lfpr: 54.8, rent: 28.9, driver: "Single-anchor refinery — workers outside Marathon disproportionately not in LF; not driven by disability" },
+                  { c: "Effingham", disab: 14.8, age: 39.5, lfpr: 64.8, rent: 30.3, driver: "Anchor county effect (CEFS + HSHS + Sherwin-Williams + I-57/I-70) — LFPR near state" },
+                  { c: "Clark", disab: 13.5, age: 42.0, lfpr: 59.7, rent: 30.6, driver: "ZF Marshall anchor; cross-border commute to Terre Haute IN" },
+                  { c: "Cumberland", disab: 13.4, age: 42.3, lfpr: 67.2, rent: 30.4, driver: "Commuter county — residents work in Effingham/Mattoon-Charleston; LFPR ABOVE state" },
+                  { c: "Moultrie", disab: 13.2, age: 40.4, lfpr: 60.5, rent: 30.1, driver: "Agri-Fab + Hydro-Gear manufacturing cluster — LFPR near state" },
                 ].map((r, i) => {
                   const disabColor = r.disab >= 18 ? "oklch(45% 0.20 22)" : r.disab >= 16 ? "oklch(45% 0.18 60)" : "oklch(40% 0.16 142)";
                   const lfprColor = r.lfpr < 55 ? "oklch(45% 0.20 22)" : r.lfpr < 62 ? "oklch(45% 0.18 60)" : "oklch(40% 0.16 142)";
@@ -721,7 +721,7 @@ export default async function EastCentralIllinoisPage() {
               <li><strong>Carceral economy compounds disability where present</strong> — Lawrence (max-security IDOC + 20.2% disability) is the most-extreme participation collapse. Fayette (min-security IDOC + 17.5%) is third-worst.</li>
               <li><strong>Single-anchor counties</strong> — Crawford (15.7% disability but 54.8% LFPR) shows the anchor-only pattern: workers outside Marathon refinery disproportionately don&apos;t participate, regardless of health.</li>
               <li><strong>Anchor counties counterbalance disability</strong> — Effingham (14.8% disability + LFPR 64.8%) and Coles (16.3% + 62.5%) show that strong anchor presence (CEFS+HSHS / EIU+SBL) keeps LFPR near state average despite typical rural-IL disability rates.</li>
-              <li><strong>Rent-burden is the income-side amplifier</strong> — Clark 46.1%, Coles 41.0%, Marion 38.5% of renters paying 30%+ of income. High rent-burden + high disability = compounded structural exit from the labor market.</li>
+              <li><strong>Rent-burden is the income-side amplifier</strong> — Fayette 40.8%, Coles 40.4%, Richland 37.0%, Marion 36.6% of renters paying 30%+ of income. Fayette compounds the worst combo: 17.5% disability + carceral economy + highest rent-burden in footprint. High rent-burden + high disability = compounded structural exit from the labor market.</li>
               <li><strong>Age is NOT the primary driver</strong> — median age range 38.2-46.4 across the 13 counties; only Edgar (46.4) tilts old. The Census participation gap is concentrated in working-age 16-64 disability + low private-sector demand, not retirees.</li>
             </ul>
           </div>
@@ -1398,10 +1398,62 @@ export default async function EastCentralIllinoisPage() {
             </table>
           </div>
           <div style={{ padding: 14, background: "#fef9eb", border: "1px solid #f0d98a", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, marginTop: 12 }}>
-            <strong>Coles County anchor (MIT Living Wage, Feb 2026 update):</strong> 1A $19.17/hr; 2A+2C (one earner) $35.68/hr. Housing line: $668/mo single / $970/mo family — both BELOW the HUD 40th-percentile FMR, meaning the MIT model uses a lower-percentile rent than HUD does. Coles ACS median home value: $127,400 ± $7,333. <strong>Affordability fail-points:</strong> CNA at IL median ($39,530 nationally) clears single-adult housing but FAILS 2A+2C wage. RN at IL median ($82,500) clears both. Welder at US median ($51,000) clears single-adult, falls short of family-wage by ~$24k/yr.
+            <strong>Coles County anchor (MIT Living Wage, Feb 2026 update):</strong> 1A $19.17/hr; 2A+2C (one earner) $35.68/hr. Housing line: $668/mo single / $970/mo family — both BELOW the HUD 40th-percentile FMR, meaning the MIT model uses a lower-percentile rent than HUD does. <strong>Affordability fail-points:</strong> CNA at IL median ($39,530 nationally) clears single-adult housing but FAILS 2A+2C wage. RN at IL median ($82,500) clears both. Welder at US median ($51,000) clears single-adult, falls short of family-wage by ~$24k/yr.
+          </div>
+
+          {/* GAP CLOSED 2026-05-28: ACS 2024 5-year table via Census Reporter API */}
+          <h3 style={{ fontSize: 15, fontWeight: 600, color: "#1f1d18", marginTop: 24, marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+            Actual ACS cost-burden by county (5-year 2024 vintage)
+          </h3>
+          <div style={{ fontSize: 13, color: "#3d3a33", marginBottom: 12, maxWidth: 820, lineHeight: 1.55 }}>
+            Pulled from Census Reporter API (B25064 + B25077 + B25070 + B25091). Cost-burden = household paying 30%+ of income on housing.
+          </div>
+          <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+              <thead>
+                <tr style={{ background: "#f0ece1", textAlign: "left", borderBottom: "1px solid #d8d2c4" }}>
+                  <th style={{ padding: "8px 10px", fontWeight: 600 }}>County</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Median rent (B25064)</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Median home value (B25077)</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Renters cost-burdened (B25070)</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Mortgaged owners burdened (B25091)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[
+                  { c: "Clark", rent: 861, home: 132400, rb: 30.6, ob: 19.2 },
+                  { c: "Clay", rent: 735, home: 97400, rb: 23.1, ob: 22.5 },
+                  { c: "Coles", rent: 780, home: 127400, rb: 40.4, ob: 17.4 },
+                  { c: "Crawford", rent: 811, home: 121100, rb: 28.9, ob: 11.5 },
+                  { c: "Cumberland", rent: 772, home: 126000, rb: 30.4, ob: 15.5 },
+                  { c: "Edgar", rent: 775, home: 97300, rb: 26.4, ob: 14.4 },
+                  { c: "Effingham", rent: 733, home: 189500, rb: 30.3, ob: 14.6 },
+                  { c: "Fayette", rent: 798, home: 130700, rb: 40.8, ob: 19.3 },
+                  { c: "Jasper", rent: 793, home: 125500, rb: 31.4, ob: 20.2 },
+                  { c: "Lawrence", rent: 836, home: 99100, rb: 28.6, ob: 14.7 },
+                  { c: "Marion", rent: 794, home: 103000, rb: 36.6, ob: 19.2 },
+                  { c: "Moultrie", rent: 804, home: 134000, rb: 30.1, ob: 17.4 },
+                  { c: "Richland", rent: 805, home: 112000, rb: 37.0, ob: 20.5 },
+                ].map((r, i) => {
+                  const rbColor = r.rb >= 38 ? "oklch(45% 0.20 22)" : r.rb >= 30 ? "oklch(45% 0.18 60)" : "oklch(40% 0.16 142)";
+                  return (
+                    <tr key={i} style={{ borderTop: i === 0 ? "none" : "1px solid #ebe5d6" }}>
+                      <td style={{ padding: "6px 10px", fontWeight: 600 }}>{r.c}</td>
+                      <td style={{ padding: "6px 10px", textAlign: "right" }}>${r.rent}</td>
+                      <td style={{ padding: "6px 10px", textAlign: "right" }}>${r.home.toLocaleString()}</td>
+                      <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: 600, color: rbColor }}>{r.rb}%</td>
+                      <td style={{ padding: "6px 10px", textAlign: "right", color: "#5a564d" }}>{r.ob}%</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ padding: 14, background: "#fef9eb", border: "1px solid #f0d98a", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, marginTop: 12 }}>
+            <strong>Key finding:</strong> renter cost-burden is severe + broad. <strong>Fayette (40.8%), Coles (40.4%), Richland (37.0%), Marion (36.6%)</strong> all exceed the national 30%-rent-burdened share. Below-state-median home values ($97k-$135k for 12 of 13 counties; only Effingham reaches $189,500 reflecting its commercial-center role) don&apos;t translate to rental affordability — the rental stock is thinner + older + concentrated in the anchor towns. Owner-with-mortgage burden range 11.5% (Crawford) to 22.5% (Clay).
           </div>
           <div style={{ fontSize: 11, color: "#7a756b", marginTop: 8, lineHeight: 1.5 }}>
-            <strong>Data gap flagged:</strong> full 13-county ACS B25064/B25077/B25070/B25091 (median gross rent + median home value + cost-burdened share for renters + owners) requires Census API key + per-county pull; data.census.gov returns 403 to automated fetch. Recommend ingesting via Census API as a follow-up data adapter. Sources: <a href="https://www.huduser.gov/portal/datasets/fmr/fmr2025/FY2025_FMR_Schedule.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>HUD FY2025 FMR schedule</a> + <a href="https://livingwage.mit.edu/counties/17029" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>MIT Living Wage Coles County</a> + <a href="https://censusreporter.org/profiles/05000US17029-coles-county-il/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Census Reporter Coles County (ACS median home value $127,400)</a> + <a href="https://nlihc.org/sites/default/files/SHP_IL.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>NLIHC 2025 Illinois Housing Profile</a>.
+            Sources: <a href="https://www.huduser.gov/portal/datasets/fmr/fmr2025/FY2025_FMR_Schedule.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>HUD FY2025 FMR schedule</a> + <a href="https://livingwage.mit.edu/counties/17029" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>MIT Living Wage Coles County</a> + <a href="https://api.censusreporter.org/1.0/data/show/latest?table_ids=B25064,B25077,B25070,B25091" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Census Reporter API · ACS 2024 5-year B25064/B25070/B25077/B25091 (full 13-county pull)</a> + <a href="https://nlihc.org/sites/default/files/SHP_IL.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>NLIHC 2025 Illinois Housing Profile</a>.
           </div>
         </section>
 
@@ -1622,14 +1674,16 @@ export default async function EastCentralIllinoisPage() {
                 ],
               },
               {
-                title: "Energy-Transition Reinvestment at Newton (Jasper County)",
-                anchor: "Vistra Newton Power Plant — Vistra has announced retirement of Newton Unit 1 by end-2027",
-                rationale: "Vistra 10-K filing confirms Newton Unit 1 retirement by end-2027. The IRA bonus 10% adder for projects sited in Energy Communities (coal-plant retirements since 2009 + adjoining tracts) is the federal lever. Jasper County is a candidate Energy Community tract — operator should verify against the active DOE/NETL map.",
+                title: "Energy-Transition Reinvestment at Newton (Jasper County) — POST-2027 lever",
+                anchor: "Vistra Newton Power Plant Unit 1 retiring end-2027 (Vistra 10-K confirmed)",
+                rationale: "Audit-corrected 2026-05-28: Newton has NOT yet retired, so the Jasper census tract containing the plant is NOT YET designated under IRA's Coal Closure Category (IRS Notice 2024-48 Appendix 2 lists tracts where coal-fired EGUs retired AFTER 2009-12-31; Newton is on the retirement schedule but isn't there yet). The 10% IRA bonus tax credit activates POST-retirement. Until 2027, Jasper may still qualify via the Statistical Area Category (≥0.17% fossil-fuel direct employment + UR ≥ national avg) — operator must verify against IRS Notice 2024-48 Appendix 1. Illinois DCEO has already awarded Jasper an Energy Transition Community Grant ($565,615) — that's a separate IL CEJA designation, NOT the federal IRA designation. <strong>Strategic implication:</strong> the federal lever is post-2027; the IL CEJA grant is now. Sequence accordingly.",
                 programs: [
-                  { name: "DOE/NETL IRA Energy Community Data Layers", url: "https://edx.netl.doe.gov/dataset/ira-energy-community-data-layers", detail: "Interactive map to verify Jasper's 2024/2025 tract designation" },
-                  { name: "IRA Energy Community Tax Credit Bonus portal", url: "https://energycommunities.gov/energy-community-tax-credit-bonus/", detail: "10% adder for qualifying renewable projects + battery storage + clean manufacturing" },
-                  { name: "EDA Recompete Pilot Program", url: "https://www.eda.gov/funding/programs/recompete-pilot-program/faq", detail: "Targets prime-age employment gaps; coalitions accepted; no match at Phase 1/2" },
-                  { name: "Vistra 10-K FY2025 Newton retirement filing", url: "https://www.sec.gov/Archives/edgar/data/0001692819/000169281926000006/vistra-20251231xex417.htm", detail: "Primary-source confirmation of retirement timeline" },
+                  { name: "IRS Notice 2024-48 Appendix 2 (Coal Closure tracts list)", url: "https://www.irs.gov/pub/irs-drop/n-24-48-appendix-2.pdf", detail: "Authoritative Coal Closure tract list — Newton not yet on it (pre-retirement)" },
+                  { name: "IRS Notice 2024-48 (full)", url: "https://www.irs.gov/pub/irs-drop/n-24-48.pdf", detail: "Energy Community designation methodology" },
+                  { name: "NETL 2024 Coal Closure interactive map", url: "https://arcgis.netl.doe.gov/portal/home/item.html?id=bc0fb23213804024a69a9fdd8a937b35", detail: "Live tract-level verification tool" },
+                  { name: "IRS Energy Communities FAQ", url: "https://www.irs.gov/credits-deductions/frequently-asked-questions-for-energy-communities", detail: "10% IRA §45/§48 adder mechanics" },
+                  { name: "EDA Recompete Pilot Program", url: "https://www.eda.gov/funding/programs/recompete-pilot-program/faq", detail: "Targets prime-age employment gaps — usable NOW pre-retirement" },
+                  { name: "Vistra 10-K FY2025 Newton retirement filing", url: "https://www.sec.gov/Archives/edgar/data/0001692819/000169281926000006/vistra-20251231xex417.htm", detail: "Primary-source confirmation of end-2027 retirement timeline" },
                 ],
               },
               {
