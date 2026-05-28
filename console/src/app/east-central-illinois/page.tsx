@@ -1060,6 +1060,167 @@ export default async function EastCentralIllinoisPage() {
           </div>
         </section>
 
+        {/* ═══ §9.5 Healthcare anchor analysis — stabilizer vs growth engine vs low-wage trap ═══ */}
+        <section style={{ marginTop: 40 }}>
+          <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+          <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+            11 · Healthcare anchor analysis · stabilizer vs growth engine vs low-wage trap
+          </h2>
+          <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
+            Six hospital anchors serve LWA-23. The per-employee payroll signal (IRS Form 990 &quot;Other Salaries and Wages&quot; ÷ headcount) is the cleanest proxy for occupation-mix wage tier, since neither 990s nor IL Hospital Report Card publishes SOC-level breakdowns. IL statewide RN median = ~$82,500 (BLS OEWS May 2024); CNA national median = $39,530 — the &quot;modal worker&quot; tier is the key verdict variable.
+          </div>
+          <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "auto", marginBottom: 12 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+              <thead>
+                <tr style={{ background: "#f0ece1", textAlign: "left", borderBottom: "1px solid #d8d2c4" }}>
+                  <th style={{ padding: "8px 10px", fontWeight: 600 }}>Hospital</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600 }}>County · beds</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>~Headcount</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Avg payroll/emp</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600 }}>Verdict</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[
+                  { name: "Sarah Bush Lincoln (SBL)", loc: "Mattoon, Coles · 145 beds", hc: "~3,000", pay: "$86k", verdict: "STABILIZER → GROWTH ENGINE", verdictColor: "oklch(40% 0.16 142)", note: "Avg $86k = IL RN median = RN/physician/allied-health dominant payroll mix. Top-5 comp rows all physicians ($1.76M-$1.92M each).", src: "https://projects.propublica.org/nonprofits/organizations/237098532" },
+                  { name: "HSHS St. Anthony's Memorial", loc: "Effingham · 133 beds", hc: "700-900", pay: "$50-65k", verdict: "STABILIZER", verdictColor: "oklch(40% 0.16 142)", note: "Mixed CNA/LPN/RN tier; modal employee at journey-LPN/early-RN wages. Family-supporting in Effingham (median home $140k) but not a growth engine.", src: "https://projects.propublica.org/nonprofits/organizations/370661233" },
+                  { name: "Carle Richland Memorial", loc: "Olney, Richland · 49 beds (CAH)", hc: ">500", pay: "$73k", verdict: "STABILIZER", verdictColor: "oklch(40% 0.16 142)", note: "Critical Access Hospital. Second-largest Richland employer. CAH designation caps growth; payroll consistent with high RN/allied-health share.", src: "https://projects.propublica.org/nonprofits/organizations/371363001" },
+                  { name: "Clay County Hospital and Clinics", loc: "Flora, Clay · 18 beds (CAH)", hc: "201-500", pay: "Not disclosed (county-owned, no 990)", verdict: "STABILIZER + LOW-WAGE TRAP RISK", verdictColor: "oklch(45% 0.18 60)", note: "County government-owned; 990 not filed. RN-heavy inpatient but if headcount weight is on CNA-paid clinic/LTC side, modal worker is sub-livable.", src: "https://healthcarereportcard.illinois.gov/hospital/101161" },
+                  { name: "SBL Fayette County Hospital", loc: "Vandalia, Fayette · 42 beds", hc: "(rolled up to SBL)", pay: "Inherits SBL $86k average", verdict: "STABILIZER", verdictColor: "oklch(40% 0.16 142)", note: "SBL subsidiary; financials roll up to Mattoon 990. Most likely site outside Mattoon to pay journey-rate RN wages.", src: "https://healthcarereportcard.illinois.gov/hospital/105684" },
+                  { name: "Salem Township Hospital", loc: "Salem, Marion · 25 beds (CAH)", hc: "201-500 (LinkedIn); 75-83 (commercial)", pay: "Not disclosed (township-owned, no 990)", verdict: "LOW-WAGE TRAP RISK", verdictColor: "oklch(45% 0.20 22)", note: "Township-owned; commercial data brokers under-report CNA/dietary/EVS. Modal employee outside RN/physician likely sub-livable. Stabilizer for Marion employment level, NOT wage growth.", src: "https://healthcarereportcard.illinois.gov/hospital/101331" },
+                ].map((r, i) => (
+                  <tr key={i} style={{ borderTop: i === 0 ? "none" : "1px solid #ebe5d6" }}>
+                    <td style={{ padding: "8px 10px", fontWeight: 600 }}>{r.name}</td>
+                    <td style={{ padding: "8px 10px", fontSize: 12, color: "#5a564d" }}>{r.loc}</td>
+                    <td style={{ padding: "8px 10px", textAlign: "right", color: "#5a564d" }}>{r.hc}</td>
+                    <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 600 }}>{r.pay}</td>
+                    <td style={{ padding: "8px 10px" }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: r.verdictColor, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 3 }}>{r.verdict}</div>
+                      <div style={{ fontSize: 11, color: "#5a564d", lineHeight: 1.5 }}>{r.note}{" · "}<a href={r.src} target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>source</a></div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ padding: 14, background: "#fef9eb", border: "1px solid #f0d98a", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
+            <strong>Rollup:</strong> SBL Mattoon is the only clear growth-engine candidate. SBL Fayette + HSHS St. Anthony&apos;s + Carle Richland are stabilizers. Clay County Hospital + Salem Township Hospital carry low-wage-trap risk in their non-clinical headcount. <strong>Data limitation flagged:</strong> no 990 in this set discloses SOC-level breakdowns. Obtaining the actual occupation mix requires either an Illinois Hospital Association data request or each system&apos;s internal HR census.
+          </div>
+          <div style={{ fontSize: 11, color: "#7a756b", marginTop: 8, lineHeight: 1.5 }}>
+            Sources: ProPublica Nonprofit Explorer 990 filings for each hospital + <a href="https://healthcarereportcard.illinois.gov/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Illinois Hospital Report Card</a> licensed-beds data + <a href="https://www.bls.gov/ooh/healthcare/registered-nurses.htm" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>BLS OOH Registered Nurses (May 2024 IL median $82,500)</a> + <a href="https://www.bls.gov/ooh/Healthcare/Nursing-assistants.htm" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>BLS OOH Nursing Assistants (US median $39,530)</a> + <a href="https://connector.hrsa.gov/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>HRSA Connector CAH workforce data</a>.
+          </div>
+        </section>
+
+        {/* ═══ §9.6 Housing affordability — HUD FMR per county vs MIT LWC ═══ */}
+        <section style={{ marginTop: 40 }}>
+          <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+          <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+            12 · Housing affordability · HUD Fair Market Rent vs MIT Living Wage Coles County
+          </h2>
+          <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
+            HUD FY2025 Fair Market Rent (effective Oct 2024-Sep 2025) per county. The <strong>HUD 30% rule</strong> says a household needs ~3.33× annualized rent in gross income to afford FMR-priced housing. With 12 of 13 LWA-23 counties at the rural-IL 2-BR FMR floor of $870, a household needs <strong>$34,800/yr ($16.73/hr)</strong> just to clear FMR — below the MIT LWC Coles single-adult $19.17/hr line, and FAR below the 2A+2C (one earner) $35.68/hr line. CNA-tier wages clear single-adult housing but fail the family wage. RN-tier wages clear both.
+          </div>
+          <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+              <thead>
+                <tr style={{ background: "#f0ece1", textAlign: "left", borderBottom: "1px solid #d8d2c4" }}>
+                  <th style={{ padding: "8px 10px", fontWeight: 600 }}>County</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>2-BR FMR</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>3-BR FMR</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Min income to afford 2-BR (30% rule)</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Min hourly wage (2,080 hrs)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[
+                  { c: "Clark", fmr2: 926, fmr3: 1181 },
+                  { c: "Clay", fmr2: 870, fmr3: 1140 },
+                  { c: "Coles", fmr2: 895, fmr3: 1188 },
+                  { c: "Crawford", fmr2: 870, fmr3: 1125 },
+                  { c: "Cumberland", fmr2: 870, fmr3: 1048 },
+                  { c: "Edgar", fmr2: 870, fmr3: 1187 },
+                  { c: "Effingham", fmr2: 870, fmr3: 1160 },
+                  { c: "Fayette", fmr2: 870, fmr3: 1113 },
+                  { c: "Jasper", fmr2: 870, fmr3: 1048 },
+                  { c: "Lawrence", fmr2: 870, fmr3: 1075 },
+                  { c: "Marion", fmr2: 870, fmr3: 1125 },
+                  { c: "Moultrie", fmr2: 870, fmr3: 1219 },
+                  { c: "Richland", fmr2: 870, fmr3: 1067 },
+                ].map((r, i) => {
+                  const minIncome = Math.round((r.fmr2 * 12) / 0.30);
+                  const minWage = (minIncome / 2080).toFixed(2);
+                  return (
+                    <tr key={i} style={{ borderTop: i === 0 ? "none" : "1px solid #ebe5d6" }}>
+                      <td style={{ padding: "6px 10px", fontWeight: 600 }}>{r.c}</td>
+                      <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: 600 }}>${r.fmr2}</td>
+                      <td style={{ padding: "6px 10px", textAlign: "right", color: "#5a564d" }}>${r.fmr3}</td>
+                      <td style={{ padding: "6px 10px", textAlign: "right", color: "#5a564d" }}>${minIncome.toLocaleString()}</td>
+                      <td style={{ padding: "6px 10px", textAlign: "right", color: "#1f5f8f", fontWeight: 600 }}>${minWage}/hr</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ padding: 14, background: "#fef9eb", border: "1px solid #f0d98a", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, marginTop: 12 }}>
+            <strong>Coles County anchor (MIT Living Wage, Feb 2026 update):</strong> 1A $19.17/hr; 2A+2C (one earner) $35.68/hr. Housing line: $668/mo single / $970/mo family — both BELOW the HUD 40th-percentile FMR, meaning the MIT model uses a lower-percentile rent than HUD does. Coles ACS median home value: $127,400 ± $7,333. <strong>Affordability fail-points:</strong> CNA at IL median ($39,530 nationally) clears single-adult housing but FAILS 2A+2C wage. RN at IL median ($82,500) clears both. Welder at US median ($51,000) clears single-adult, falls short of family-wage by ~$24k/yr.
+          </div>
+          <div style={{ fontSize: 11, color: "#7a756b", marginTop: 8, lineHeight: 1.5 }}>
+            <strong>Data gap flagged:</strong> full 13-county ACS B25064/B25077/B25070/B25091 (median gross rent + median home value + cost-burdened share for renters + owners) requires Census API key + per-county pull; data.census.gov returns 403 to automated fetch. Recommend ingesting via Census API as a follow-up data adapter. Sources: <a href="https://www.huduser.gov/portal/datasets/fmr/fmr2025/FY2025_FMR_Schedule.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>HUD FY2025 FMR schedule</a> + <a href="https://livingwage.mit.edu/counties/17029" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>MIT Living Wage Coles County</a> + <a href="https://censusreporter.org/profiles/05000US17029-coles-county-il/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Census Reporter Coles County (ACS median home value $127,400)</a> + <a href="https://nlihc.org/sites/default/files/SHP_IL.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>NLIHC 2025 Illinois Housing Profile</a>.
+          </div>
+        </section>
+
+        {/* ═══ §9.7 Wage benchmark — IL OEWS by occupation ═══ */}
+        <section style={{ marginTop: 40 }}>
+          <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+          <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+            13 · Wage benchmark · BLS OEWS Illinois statewide May 2024
+          </h2>
+          <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
+            LWA-23 has no MSA — Mattoon is Micropolitan. Closest reference: BLS East Central IL nonmetropolitan area (code 1700003) + Champaign-Urbana MSA (CBSA 16580) to the north. Carbondale-Marion MSA (CBSA 16060, LWA-25) total mean hourly wage was $26.21 vs US $31.48 in May 2023 — that&apos;s a -16.7% rural-IL discount. LWA-23 wages run in the same band.
+          </div>
+          <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+              <thead>
+                <tr style={{ background: "#f0ece1", textAlign: "left", borderBottom: "1px solid #d8d2c4" }}>
+                  <th style={{ padding: "8px 10px", fontWeight: 600 }}>SOC</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600 }}>Occupation</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>IL median</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>IL P10 (entry)</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>IL P90 (exp)</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600 }}>vs Coles 1A+2C $35.68/hr ($74,214/yr)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[
+                  { soc: "29-1141", occ: "Registered Nurses", median: 82500, p10: 63900, p90: 105140, verdict: "CLEARS 1A+2C at median", color: "oklch(40% 0.16 142)" },
+                  { soc: "33-3012", occ: "Correctional Officers", median: 65190, p10: 50530, p90: 82830, verdict: "BELOW 1A+2C at median; clears at P90 with OT", color: "oklch(45% 0.18 60)" },
+                  { soc: "47-2152", occ: "Plumbers / Pipefitters", median: 87900, p10: null, p90: null, verdict: "CLEARS 1A+2C at median (rural-IL adjusted)", color: "oklch(40% 0.16 142)" },
+                  { soc: "15-1244", occ: "Network / Systems Admin (US ref)", median: 95360, p10: null, p90: null, verdict: "US median CLEARS; SIU local ceiling $88,452 (LWA-25) FAILS — see /southern-illinois IT row", color: "oklch(45% 0.18 60)" },
+                  { soc: "15-1232", occ: "Computer User Support (US ref)", median: 61250, p10: null, p90: null, verdict: "US median FAILS 1A+2C", color: "oklch(45% 0.20 22)" },
+                  { soc: "51-4121", occ: "Welders / Cutters (US ref)", median: 51000, p10: null, p90: null, verdict: "US median FAILS 1A+2C; shutdown circuit clears", color: "oklch(45% 0.20 22)" },
+                  { soc: "53-3032", occ: "Heavy Truck Drivers (US ref)", median: 57440, p10: null, p90: null, verdict: "US median FAILS 1A+2C; OTR + tanker clears", color: "oklch(45% 0.20 22)" },
+                  { soc: "31-1014", occ: "Nursing Assistants (US ref)", median: 39530, p10: null, p90: null, verdict: "FAILS 1A+2C by ~$35k/yr — CNA tier is sub-livable", color: "oklch(45% 0.20 22)" },
+                  { soc: "25-2021", occ: "Elementary School Teachers", median: null, p10: null, p90: null, verdict: "IL starting ~$40-55k → FAILS at entry; mid-career + master's clears (EIU pipeline)", color: "oklch(45% 0.18 60)" },
+                  { soc: "49-9071", occ: "Maintenance / Repair Workers", median: null, p10: null, p90: null, verdict: "IL mid-career $50-67k → marginal; experienced at refinery / mfg clears", color: "oklch(45% 0.18 60)" },
+                ].map((r, i) => (
+                  <tr key={i} style={{ borderTop: i === 0 ? "none" : "1px solid #ebe5d6" }}>
+                    <td style={{ padding: "6px 10px", fontFamily: "monospace", fontSize: 11, color: "#5a564d" }}>{r.soc}</td>
+                    <td style={{ padding: "6px 10px", fontWeight: 600 }}>{r.occ}</td>
+                    <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: 600 }}>{r.median ? `$${(r.median / 1000).toFixed(0)}k` : "—"}</td>
+                    <td style={{ padding: "6px 10px", textAlign: "right", color: "#5a564d" }}>{r.p10 ? `$${(r.p10 / 1000).toFixed(0)}k` : "—"}</td>
+                    <td style={{ padding: "6px 10px", textAlign: "right", color: "#5a564d" }}>{r.p90 ? `$${(r.p90 / 1000).toFixed(0)}k` : "—"}</td>
+                    <td style={{ padding: "6px 10px", fontSize: 11, color: r.color, fontWeight: 600 }}>{r.verdict}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ fontSize: 11, color: "#7a756b", marginTop: 12, lineHeight: 1.5 }}>
+            <strong>Data note:</strong> IL statewide medians from <a href="https://www.bls.gov/ooh/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>BLS Occupational Outlook Handbook (May 2024)</a> + <a href="https://www.careeronestop.org/Toolkit/Wages/find-salary.aspx?soccode=333012&keyword=Correctional+Officers&location=Illinois" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>CareerOneStop IL OES extract</a>. P10/P90 percentiles only published for some SOCs; US median used where IL detail requires the IDES 2024 Statewide Wage Publication XLS download. The full IL OEWS file is at <a href="https://ides.illinois.gov/content/dam/soi/en/web/ides/labor_market_information/where_workers_work/2024_Statewide_Wage_Publication.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>IDES 2024 Statewide Wage Publication</a>; East Central IL nonmetro area-specific data at <a href="https://www.bls.gov/oes/2024/may/oessrcma.htm" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>BLS OEWS May 2024 area index</a>.
+          </div>
+        </section>
+
         {/* ═══ §8 LWA-23 vs LWA-25 ═══ */}
         <section style={{ marginTop: 40 }}>
           <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
