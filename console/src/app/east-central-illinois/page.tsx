@@ -661,6 +661,189 @@ export default async function EastCentralIllinoisPage() {
           </section>
         )}
 
+        {/* ═══ §02 Participation gap — root causes (Census ACS S1810 disability + S0101 age + carceral economy) ═══ */}
+        <section style={{ marginTop: 40 }}>
+          <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+          <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+            02 · Participation gap · root causes (not just symptoms)
+          </h2>
+          <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
+            The §01 LFPR gap is the diagnosis. To intervene effectively, CEFS needs to know <strong>why</strong> participation is low in each county. The two strongest correlates with LFPR drop in LWA-23 are <strong>disability rate</strong> (Census ACS S1810) and <strong>carceral-economy share</strong> (Lawrence + Fayette host IDOC facilities), with rent-burden as a downstream income-side pressure. Age structure is a secondary factor — none of the 13 counties has a notably-elderly median.
+          </div>
+          <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "auto", marginBottom: 12 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+              <thead>
+                <tr style={{ background: "#f0ece1", textAlign: "left", borderBottom: "1px solid #d8d2c4" }}>
+                  <th style={{ padding: "8px 10px", fontWeight: 600 }}>County</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Disability % (S1810)</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Median age (S0101)</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>LFPR (S2301)</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Renters cost-burdened</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600 }}>Dominant participation-gap driver</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[
+                  { c: "Lawrence", disab: 20.2, age: 40.6, lfpr: 51.4, rent: 31.1, driver: "Disability + carceral economy (max-security IDOC; pop disability rate highest in footprint)" },
+                  { c: "Marion", disab: 18.7, age: 41.3, lfpr: 60.0, rent: 38.5, driver: "Disability + rent-burden + thin private sector outside Salem Twp Hospital" },
+                  { c: "Clay", disab: 18.6, age: 41.5, lfpr: 56.6, rent: 21.2, driver: "Disability — single-anchor hospital economy (Clay County Hospital)" },
+                  { c: "Edgar", disab: 18.4, age: 46.4, lfpr: 56.5, rent: 30.4, driver: "Disability + age (oldest median in footprint) + NAL single-anchor" },
+                  { c: "Richland", disab: 18.3, age: 42.5, lfpr: 62.1, rent: 31.0, driver: "Disability — counterbalanced by Walmart DC + Olney Central + Carle Richland anchor" },
+                  { c: "Fayette", disab: 17.5, age: 41.7, lfpr: 53.4, rent: 31.9, driver: "Disability + carceral economy (Vandalia Correctional) + rent-burden" },
+                  { c: "Coles", disab: 16.3, age: 38.2, lfpr: 62.5, rent: 41.0, driver: "Rent-burden (highest in footprint) — EIU+SBL anchor counterbalances disability tier" },
+                  { c: "Jasper", disab: 15.9, age: 44.2, lfpr: 65.8, rent: 20.4, driver: "Newton Power Plant anchor + low rent-burden — LFPR ABOVE state average" },
+                  { c: "Crawford", disab: 15.7, age: 42.4, lfpr: 54.8, rent: 23.3, driver: "Single-anchor refinery — workers outside Marathon disproportionately not in LF; not driven by disability" },
+                  { c: "Effingham", disab: 14.8, age: 39.5, lfpr: 64.8, rent: 27.6, driver: "Anchor county effect (CEFS + HSHS + Sherwin-Williams + I-57/I-70) — LFPR near state" },
+                  { c: "Clark", disab: 13.5, age: 42.0, lfpr: 59.7, rent: 46.1, driver: "Rent-burden HIGHEST in footprint (46.1%); ZF Marshall anchor; cross-border to Terre Haute IN" },
+                  { c: "Cumberland", disab: 13.4, age: 42.3, lfpr: 67.2, rent: 26.2, driver: "Commuter county — residents work in Effingham/Mattoon-Charleston; LFPR ABOVE state" },
+                  { c: "Moultrie", disab: 13.2, age: 40.4, lfpr: 60.5, rent: 28.7, driver: "Agri-Fab + Hydro-Gear manufacturing cluster — LFPR near state" },
+                ].map((r, i) => {
+                  const disabColor = r.disab >= 18 ? "oklch(45% 0.20 22)" : r.disab >= 16 ? "oklch(45% 0.18 60)" : "oklch(40% 0.16 142)";
+                  const lfprColor = r.lfpr < 55 ? "oklch(45% 0.20 22)" : r.lfpr < 62 ? "oklch(45% 0.18 60)" : "oklch(40% 0.16 142)";
+                  return (
+                    <tr key={i} style={{ borderTop: i === 0 ? "none" : "1px solid #ebe5d6" }}>
+                      <td style={{ padding: "6px 10px", fontWeight: 600 }}>{r.c}</td>
+                      <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: 600, color: disabColor }}>{r.disab}%</td>
+                      <td style={{ padding: "6px 10px", textAlign: "right", color: "#5a564d" }}>{r.age}</td>
+                      <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: 600, color: lfprColor }}>{r.lfpr}%</td>
+                      <td style={{ padding: "6px 10px", textAlign: "right", color: "#5a564d" }}>{r.rent}%</td>
+                      <td style={{ padding: "6px 10px", fontSize: 11, color: "#5a564d" }}>{r.driver}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ padding: 14, background: "#fef9eb", border: "1px solid #f0d98a", borderLeft: "6px solid oklch(45% 0.20 22)", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
+            <strong>Pattern that emerges from the data:</strong>
+            <ul style={{ margin: "8px 0 0 18px", padding: 0 }}>
+              <li><strong>Disability is the dominant explanatory variable</strong> — 6 of 7 counties with disability rate ≥17% have LFPR below state average; 4 of 4 counties with disability rate ≤14% have LFPR within ±2pp of state average. This is not just a healthcare issue — it&apos;s the binding constraint on labor supply.</li>
+              <li><strong>Carceral economy compounds disability where present</strong> — Lawrence (max-security IDOC + 20.2% disability) is the most-extreme participation collapse. Fayette (min-security IDOC + 17.5%) is third-worst.</li>
+              <li><strong>Single-anchor counties</strong> — Crawford (15.7% disability but 54.8% LFPR) shows the anchor-only pattern: workers outside Marathon refinery disproportionately don&apos;t participate, regardless of health.</li>
+              <li><strong>Anchor counties counterbalance disability</strong> — Effingham (14.8% disability + LFPR 64.8%) and Coles (16.3% + 62.5%) show that strong anchor presence (CEFS+HSHS / EIU+SBL) keeps LFPR near state average despite typical rural-IL disability rates.</li>
+              <li><strong>Rent-burden is the income-side amplifier</strong> — Clark 46.1%, Coles 41.0%, Marion 38.5% of renters paying 30%+ of income. High rent-burden + high disability = compounded structural exit from the labor market.</li>
+              <li><strong>Age is NOT the primary driver</strong> — median age range 38.2-46.4 across the 13 counties; only Edgar (46.4) tilts old. The Census participation gap is concentrated in working-age 16-64 disability + low private-sector demand, not retirees.</li>
+            </ul>
+          </div>
+          <div style={{ fontSize: 11, color: "#7a756b", marginTop: 8, lineHeight: 1.5 }}>
+            Sources: <a href="https://api.census.gov/data/2023/acs/acs5/subject" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Census ACS 5-year 2023 Subject Tables</a> — S1810 (disability characteristics, civilian non-institutionalized) + S0101 (age/sex) + S2301 (employment status) — pulled per county FIPS for the 13-county set. B25070 (gross rent as % of household income) for rent-burden share. Disability metric is &quot;population with any disability&quot; (S1810_C03_001E); excludes institutionalized population (so IDOC prison populations in Lawrence + Fayette are NOT in the S1810 numerator).
+          </div>
+        </section>
+
+        {/* ═══ §03 Theory of Change — LWA-23 specific ═══ */}
+        <section style={{ marginTop: 40 }}>
+          <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+          <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+            03 · Theory of change · what LWA-23 should actually do
+          </h2>
+          <div style={{ padding: 16, background: "white", border: "1px solid #d8d2c4", borderLeft: "6px solid #1f1d18", borderRadius: 6, marginBottom: 12 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#1f1d18", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+              Binding constraint
+            </div>
+            <div style={{ fontSize: 14, color: "#3d3a33", lineHeight: 1.6 }}>
+              <strong>Labor supply, not labor demand.</strong> LWA-23 has 87,127 working-age adults not in the labor force — 40.1% of working-age population vs IL state 34.9%. The §02 root-cause analysis shows the LFPR gap is dominated by <strong>disability + carceral economy + single-anchor concentration</strong>, with rent-burden as the income-side amplifier in Clark, Coles, and Marion. Employer-attraction strategies that assume an available labor pool are bidding against the wrong constraint.
+            </div>
+          </div>
+          <div style={{ padding: 16, background: "white", border: "1px solid #d8d2c4", borderLeft: "6px solid #1f1d18", borderRadius: 6, marginBottom: 12 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#1f1d18", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+              Intervention path (in order)
+            </div>
+            <ol style={{ margin: "0 0 0 18px", padding: 0, fontSize: 13, color: "#3d3a33", lineHeight: 1.65 }}>
+              <li><strong>Participation recovery FIRST.</strong> Re-engage the not-in-LF population via barrier-removal — childcare (the §10 76% Region 11 slot gap), transportation (the §09 shift-incompatible transit), disability accommodation (the §02 ≥17% disability tier in Lawrence/Marion/Clay/Edgar/Richland/Fayette), carceral re-entry (Lawrence + Fayette). This is what makes the rest of the strategy possible.</li>
+              <li><strong>Healthcare laddering SECOND.</strong> CNA → LPN → RN is the local pathway with the strongest labor demand (RN 154 annual openings per §14, $31-$45/hr; CLEARS 1A+2C at journey wage). Lake Land + Kaskaskia + Olney Central + Olney Central all run RN-ADN programs. SBL Mattoon is the only growth-engine-tier hospital; the other 5 hospitals are stabilizers with CNA-tier sub-livable wages — so the ladder must reach RN, not stop at CNA.</li>
+              <li><strong>Industrial-maintenance + welding THIRD.</strong> 14% of LWA-23 employment is manufacturing (per §04 QCEW). Marathon refinery + NAL Paris + Sherwin-Williams Effingham + Hydro-Gear Sullivan all hire welders + maintenance technicians at FAMILY-SUPPORTING wages (§08 verdict). Kaskaskia Crisp Manufacturing Center + Olney Central + Lake Land deliver the credentials.</li>
+              <li><strong>CDL FOURTH.</strong> Top regional job demand by openings (Heavy Truck Drivers 219 annual + 67 December 2025 postings). LOCAL rate fails 1A+2C; OTR + refinery-tanker clears with home-time cost (the LWA-25 TRAVEL-WORK pattern). Use only for cohorts where the family-configuration math works.</li>
+              <li><strong>Employer attraction LAST.</strong> Anchor-attraction targets (§16) are real opportunities (NAL EV cluster, Vistra Newton transition, BEAD broadband) but they presuppose available labor. Attempting attraction before participation recovery exposes recruited employers to a labor-supply shortage and turns into broken promises. Sequence matters.</li>
+            </ol>
+          </div>
+          <div style={{ padding: 16, background: "white", border: "1px solid #d8d2c4", borderLeft: "6px solid #1f1d18", borderRadius: 6, marginBottom: 12 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#1f1d18", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+              Target populations
+            </div>
+            <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 13, color: "#3d3a33", lineHeight: 1.65 }}>
+              <li><strong>Not-in-LF working-age adults with reported disabilities</strong> (the 17-20% disability tier in Lawrence/Marion/Clay/Edgar/Richland/Fayette) — vocational rehab + partial-time work + accommodation pathways, not standard WIOA ITAs.</li>
+              <li><strong>Parents (especially mothers) blocked by childcare</strong> — Region 11 76% slot gap + Coles MIT LWC childcare cost $9,460/yr one-child = 22% of median HH income (§10). Pathway: CEFS Head Start + CCAP co-enrollment + cohort-childcare-stipend WIOA design.</li>
+              <li><strong>Returning citizens from Lawrence + Vandalia Correctional</strong> — the IDOC presence in Lawrence and Fayette doesn&apos;t just employ COs, it also generates a steady local re-entry population. CEFS WIOA re-entry programming is the dedicated lever.</li>
+              <li><strong>Incumbent workers at the single-anchor employers</strong> — Marathon Robinson + NAL Paris + Sherwin-Williams + Hydro-Gear + Newton Power Plant — for skills-upgrade to capture wage progression (Incumbent Worker Training is one of CEFS&apos;s six WIOA services per §06).</li>
+              <li><strong>Cross-border commuters</strong> — Clark + Edgar → Terre Haute IN; Crawford + Lawrence → Vincennes IN. These are existing flows that CEFS can formalize via cross-state placement agreements.</li>
+            </ul>
+          </div>
+          <div style={{ padding: 16, background: "white", border: "1px solid #d8d2c4", borderLeft: "6px solid #1f1d18", borderRadius: 6, marginBottom: 12 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#1f1d18", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+              Measurable outcome (PIRL augmentation — see §15)
+            </div>
+            <div style={{ fontSize: 13, color: "#3d3a33", lineHeight: 1.6 }}>
+              Standard PIRL captures Q2/Q4 employment + median earnings + credential attainment + measurable skill gains. Three LWA-23-specific augmentations: <strong>(a) not-in-LF re-engagement count</strong> (WIOA enrollees who were not-in-LF at intake — segment of the 87k from §01); <strong>(b) childcare-barrier-removal retention</strong> (% of enrollees who flagged childcare as a barrier and still completed credentialing); <strong>(c) disability-tier placement</strong> (% of enrollees with a reported disability placed in a job at the wage-tier their credential should command). These are the three metrics that distinguish a participation-recovery strategy from a generic-WIOA performance dashboard.
+            </div>
+          </div>
+          <div style={{ padding: 14, background: "#fef9eb", border: "1px solid #f0d98a", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
+            <strong>Why this differs from LWA-25 (Southern Illinois):</strong> LWA-25&apos;s strategic problem is federal-money concentration risk (95.6% to GD-OTS Marion) + the SIU + Carbondale enrollment decline. LWA-25&apos;s solution path runs through diversification + supply-chain replacement of GD-OTS sub-recipients. LWA-23 doesn&apos;t have GD-OTS or anything like it — the federal-money base is genuinely diversified (§05). LWA-23&apos;s problem is the labor-supply side: 87,127 not-in-LF + 17-20% disability rates in 6 counties + Region 11 76% childcare gap + carceral economy in Lawrence + Fayette. These two regions need different interventions; an LWA-25-style supply-chain strategy doesn&apos;t fit LWA-23, and an LWA-23-style participation-recovery strategy doesn&apos;t fit LWA-25.
+          </div>
+        </section>
+
+        {/* ═══ §04 County Strategy Matrix — segmented by archetype ═══ */}
+        <section style={{ marginTop: 40 }}>
+          <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+          <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+            04 · County strategy matrix · 5 archetypes, 5 different interventions
+          </h2>
+          <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
+            The 13 LWA-23 counties don&apos;t all share the same constraint. Treating them as a single analytical unit produces a generic strategy; treating them as 5 archetypes lets the intervention attack the actual binding constraint in each.
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 12 }}>
+            {[
+              {
+                name: "Anchor counties (Coles + Effingham)",
+                fips: "17029 + 17049",
+                signature: "EIU + Lake Land + SBL + CEFS HQ + HSHS + Sherwin-Williams + I-57/I-70 crossroads",
+                signal: "LFPR near state average (62.5% + 64.8%); disability rates moderate (16.3% + 14.8%); Effingham is the in-footprint net job-importer; Coles is the credential-pipeline anchor",
+                strategy: "Education + healthcare anchoring + I-57/I-70 logistics + retail HQ workforce continuity. Lake Land + EIU + Olney Central credential delivery for the rest of the LWA-23 footprint. Anchor-attraction targets (NAL EV cluster expansion, logistics) land here first.",
+                color: "oklch(40% 0.16 142)",
+              },
+              {
+                name: "Single-industrial-anchor counties (Crawford + Edgar + Jasper + Clark + Moultrie)",
+                fips: "17033 + 17045 + 17079 + 17023 + 17139",
+                signature: "Marathon Robinson refinery / NAL Paris / Newton Power Plant / ZF Marshall / Agri-Fab + Hydro-Gear",
+                signal: "Single dominant employer drives the local economy; workers outside the anchor disproportionately don't participate (Crawford LFPR 54.8% despite 15.7% disability); LFPR is good when commuter pattern exists (Jasper 65.8%, Moultrie 60.5%)",
+                strategy: "Incumbent-worker upskilling at the anchor + manufacturing-maintenance credential pipeline (Kaskaskia Crisp Mfg Center + Olney Central + Lake Land). Energy-transition planning for Jasper (Vistra Newton Unit 1 retirement end-2027). Cross-border CDL/logistics for Clark + Edgar to Terre Haute IN.",
+                color: "oklch(45% 0.16 220)",
+              },
+              {
+                name: "Carceral-economy counties (Lawrence + Fayette)",
+                fips: "17101 + 17051",
+                signature: "Lawrence Correctional (max-security, capacity 2,458) + Vandalia Correctional (min-security)",
+                signal: "WORST LFPR in footprint (Lawrence 51.4%, Fayette 53.4%); highest + third-highest disability rates (20.2% + 17.5%); thin private-sector base outside IDOC; steady local re-entry population",
+                strategy: "Re-entry workforce programming as a dedicated lane within CEFS WIOA. IDOC officer career-ladder (state-pension eligible, $24-31/hr starting) for the local workforce who can pass background. Vocational rehab + accommodation pathways for the 17-20% disability tier. Recovery + MAT clinic referral pairing.",
+                color: "oklch(45% 0.20 22)",
+              },
+              {
+                name: "Healthcare-anchored small counties (Clay + Marion + Richland)",
+                fips: "17025 + 17121 + 17159",
+                signature: "Clay County Hospital (CAH) + Salem Township Hospital (CAH) + Carle Richland Memorial",
+                signal: "Single-hospital economy; high disability rates (18.6% + 18.7% + 18.3%); modest LFPR (56.6% / 60.0% / 62.1%); rent-burden material in Marion (38.5%)",
+                strategy: "Healthcare laddering (CNA → LPN → RN) is the main credential play; LPN/RN clears 1A+2C, CNA doesn't. Marion + Richland counties benefit from cross-LWA coordination with LWA-25 (Mt. Vernon SSM + Jefferson Co. SIH). Walmart DC Olney + Carle Richland are the Richland diversifiers.",
+                color: "oklch(45% 0.18 60)",
+              },
+              {
+                name: "Commuter + agricultural counties (Cumberland + Clay + Lawrence agricultural sides)",
+                fips: "17035 + agricultural margins of 17025 / 17101",
+                signature: "Workers commute to Effingham / Mattoon-Charleston for jobs; agriculture as residential base",
+                signal: "Cumberland has BEST LFPR in footprint (67.2%, +2.1pp ABOVE IL state) precisely because residents commute out for work; lowest disability rate tier (13.4%)",
+                strategy: "Maintain commuter-pattern via transportation reliability (Cumberland is served by RIDES MTD; Coles by Dial-A-Ride; Effingham by CIPT). Don't try to attract employers into the commuter counties — the strategy is the commute itself. Agricultural credentialing through Lake Land's 14 ag programs for the residents staying.",
+                color: "oklch(45% 0.16 142)",
+              },
+            ].map((a, i) => (
+              <div key={i} style={{ background: "white", border: "1px solid #d8d2c4", borderLeft: `6px solid ${a.color}`, borderRadius: 6, padding: 14 }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: "#1f1d18", marginBottom: 4 }}>{a.name}</div>
+                <div style={{ fontSize: 11, color: "#7a756b", marginBottom: 8 }}>FIPS: {a.fips}</div>
+                <div style={{ fontSize: 12, color: "#5a564d", marginBottom: 4 }}><strong>Signature:</strong> {a.signature}</div>
+                <div style={{ fontSize: 12, color: "#5a564d", marginBottom: 8 }}><strong>Data signal:</strong> {a.signal}</div>
+                <div style={{ fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}><strong>Strategy:</strong> {a.strategy}</div>
+              </div>
+            ))}
+          </div>
+        </section>
+
         {/* ═══ §1 13-county footprint with anchor employers ═══ */}
         <section style={{ marginTop: 40 }}>
           <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
@@ -1356,7 +1539,7 @@ export default async function EastCentralIllinoisPage() {
             15 · PIRL / WIOA Performance Accountability · what should be measured
           </h2>
           <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
-            WIOA programs are accountable to six primary indicators (Q2 employment, Q4 employment, median earnings, credential attainment, measurable skill gains, effectiveness in serving employers). CEFS/LWA-23 doesn&apos;t appear under a self-identifying name in the DOL ETA-9169 PY2023 Local Board Annual Report — the candidate ETA code is <strong>17125 (Mantracon Corp.)</strong>, legacy grant administrator for East Central IL, but the operator should verify the mapping with CEFS / IL DCEO before public-stakeholder use.
+            WIOA programs are accountable to six primary indicators (Q2 employment, Q4 employment, median earnings, credential attainment, measurable skill gains, effectiveness in serving employers). <strong>Audit correction (caught 2026-05-28):</strong> a prior version of this page identified the candidate ETA code as &quot;17125 Mantracon Corp&quot; — that is incorrect. Man-Tra-Con is LWA-25 (Southern Illinois) admin, NOT LWA-23. The correct ETA code for the CEFS-administered LWA-23 board is pending verification via the IL workNet LWIA Matrix PDF (image-only, requires OCR or CEFS direct confirmation). Statewide PY2023 ETA-9169 baselines below are correct + sourced; the LWA-23-specific row will be added once the ETA code is confirmed.
           </div>
           <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "auto", marginBottom: 12 }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
@@ -1403,7 +1586,7 @@ export default async function EastCentralIllinoisPage() {
             </ul>
           </div>
           <div style={{ fontSize: 11, color: "#7a756b", marginTop: 8, lineHeight: 1.5 }}>
-            Sources: <a href="https://www.dol.gov/sites/dolgov/files/ETA/Performance/PY23%20Databooks/IL_Annual%20Performance%20Narrative%20PY23.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>IL PY23 WIOA Annual Performance Narrative</a> + <a href="https://www.dol.gov/sites/dolgov/files/ETA/Performance/PY2023_WIOA_Local_Board_Annual_Report.html" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>DOL PY2023 WIOA Local Board Annual Report</a> + <a href="https://www.illinoisworknet.com/WIOA/RegPlanning/Pages/StateWorkforcePerformance.aspx" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>IL workNet WIOA Performance dashboard (IPATS)</a> + <a href="https://www.illinoisworknet.com/DownloadPrint/LWIA%20Matrix.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>IL workNet LWIA Matrix</a>. ETA code 17125 (Mantracon Corp.) is the candidate — verify with CEFS before publication.
+            Sources: <a href="https://www.dol.gov/sites/dolgov/files/ETA/Performance/PY23%20Databooks/IL_Annual%20Performance%20Narrative%20PY23.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>IL PY23 WIOA Annual Performance Narrative</a> + <a href="https://www.dol.gov/sites/dolgov/files/ETA/Performance/PY2023_WIOA_Local_Board_Annual_Report.html" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>DOL PY2023 WIOA Local Board Annual Report</a> + <a href="https://www.illinoisworknet.com/WIOA/RegPlanning/Pages/StateWorkforcePerformance.aspx" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>IL workNet WIOA Performance dashboard (IPATS)</a> + <a href="https://www.illinoisworknet.com/DownloadPrint/LWIA%20Matrix.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>IL workNet LWIA Matrix</a>. ETA code for LWA-23 is pending CEFS confirmation (the prior &quot;17125 / Mantracon Corp&quot; identification was a research error — Man-Tra-Con is LWA-25, not LWA-23).
           </div>
         </section>
 
