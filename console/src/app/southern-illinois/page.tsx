@@ -289,14 +289,19 @@ function TrainingROISection() {
       payback_yrs: "<1yr",
       local_slots: "100s/yr (chronic turnover + national shortage)", saturation: "LOW",
       verdict: "FAMILY-TIME CONFLICT verdict applies — OTR pay clears family-supporting bar but destroys home time. Local rate doesn't clear 1A+2C." },
-    // === Tech ===
-    { pathway: "IT support (Network+/Security+ stacked)",
-      train_cost: "$1,000-3,000 cert exams + self-study", train_duration: "6-12 months",
-      journey_wage: "$27/hr (~$56k/yr) local; remote roles $70-120k+",
-      annual_premium: "+$24k local; +$50-90k remote",
-      payback_yrs: "<6mo",
-      local_slots: "~20-50/yr local (Information sector small)", saturation: "MED",
-      verdict: "Best ROI for credential cost but local ceiling is structural. SIU (the dominant local IT employer) staffs IT through two active civil-service classes — IT Support Associate (Class 5032, SUCSS range $16.77-$30.00/hr → $32,702-$58,500/yr) and IT Technical Associate (Class 5031, SUCSS range $17.31-$45.36/hr → $33,755-$88,452/yr; effective 10/2025). Top step of the higher class is $8,800/yr BELOW the 1A+2C bar ($97,260). Promotion above requires conversion to A/P track (master's + national-pool hiring), not a step-up the local credential pipeline feeds. Frame as 'remote-work credential' for trainees who want to clear 1A+2C locally; or as 'first-rung at SIU' for those planning A/P-conversion or relocation. Sources: SIU HR Civil Service Salary Schedule + SUCSS Salary Range Reports." },
+    // === Tech / IT — JALC offers two credential paths: Cyber-Security /
+    // Information Assurance AAS (2-yr) + Computer Networking Certificate
+    // (24 cr-hr, ~1 yr) that prep students to sit for CompTIA A+/Network+
+    // /Security+/CCENT/CCNA exams. The credential itself is solid. The
+    // local-employer market is what fails. ===
+    { pathway: "IT support / cybersecurity (JALC AAS or Network+/Security+/A+ stacked)",
+      train_cost: "$1,000-3,000 cert exams + self-study (cert track); $10-15k tuition (JALC AAS 2-yr)", train_duration: "6-12mo cert; 2yr AAS",
+      journey_wage: "Local SIU ceiling $33,755-$88,452/yr (Classes 5032/5031); remote roles $60-120k+",
+      annual_premium: "+$25-55k local; +$50-90k remote",
+      payback_yrs: "<6mo cert; ~1yr AAS",
+      local_slots: "Thin — SIU IT shop is the dominant local employer (two civil-service classes 5031+5032); private-sector Information supersector is ~1-3% of Carbondale-Marion MSA employment (BLS OEWS 2023); LinkedIn shows ~36 information-security postings in the MSA",
+      saturation: "PHANTOM",
+      verdict: "PHANTOM for a livable LOCAL job. SIU (the dominant local IT employer) staffs IT through two active civil-service classes — IT Support Associate (Class 5032, SUCSS hourly range $16.77-$30.00 → $32,702-$58,500/yr) and IT Technical Associate (Class 5031, $17.31-$45.36/hr → $33,755-$88,452/yr; effective 10/2025). Top step of the higher class is $8,800/yr BELOW the 1A+2C bar ($97,260). Promotion above the civil-service ladder requires conversion to A/P track (master's + nationally-competitive hiring) — not a step-up the JALC credential pipeline feeds. Private-sector local IT employment is thin: the Carbondale-Marion MSA Information supersector is small + LinkedIn shows ~36 area information-security postings vs JALC's annual Cyber-Security AAS + Computer Networking Certificate completers competing for them. Reframe the cohort outcome: this credential lands a livable wage via REMOTE work or relocation, not a local-employer ladder. JALC's program is strong; the local employer market is the constraint. Sources: SIU HR Civil Service Salary Schedule + SUCSS Salary Range Reports + JALC Center for Information Assurance program page + BLS OEWS Carbondale-Marion 2023." },
     // === CEJA clean-energy ===
     { pathway: "CEJA solar installer (NABCEP)",
       train_cost: "$0-1,000 (CEJA Climate Works subsidized)", train_duration: "8-16 weeks",
