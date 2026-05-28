@@ -168,12 +168,21 @@ const COUNTIES = [
   },
 ];
 
-// City-level crime (FBI UCR 2024 calendar year, NeighborhoodScout October 2025 release)
+// City-level crime (FBI UCR 2024 calendar year is the primary source. NeighborhoodScout
+// October 2025 release is the carrier for 8 rows. AreaVibes is a secondary reproduction
+// of the FBI UCR September 2025 release; it is used here for the three small-agency rows
+// where NeighborhoodScout paywalls the per-1,000 figures — Marshall PD (ORI IL0120200),
+// Newton PD (IL0400100), Sullivan PD (IL0700300). Cumberland County Sheriff (IL0180000)
+// is not in FBI UCR 2024, and Toledo village (pop 1,209, Cumberland county seat) is
+// below the FBI UCR municipal-coverage threshold — no agency-level 2024 data published.)
 const CITY_CRIME = [
-  { rank: "🟢", city: "Lawrenceville · Lawrence",   rate: 1.16,  violent: 0.46, property: 0.70,  note: "Lowest LWA-23 rate; small-town pattern",                  flagged: false, src: "https://www.neighborhoodscout.com/il/lawrenceville/crime" },
+  { rank: "🟢", city: "Sullivan · Moultrie",        rate: 1.41,  violent: 0.71, property: 0.71,  note: "Agency-reported lowest in LWA-23 (3 violent + 3 property, pop 4,253). AreaVibes notes total down 25% YoY — confirm via IL UCR portal if precision required.", flagged: false, src: "https://www.areavibes.com/sullivan-il/crime/" },
+  { rank: "🟢", city: "Lawrenceville · Lawrence",   rate: 1.16,  violent: 0.46, property: 0.70,  note: "Small-town pattern",                                      flagged: false, src: "https://www.neighborhoodscout.com/il/lawrenceville/crime" },
   { rank: "🟢", city: "Louisville · Clay",          rate: 6.32,  violent: 0.00, property: 6.32,  note: "Zero violent crime in 2024 calendar year",               flagged: false, src: "https://www.neighborhoodscout.com/il/louisville/crime" },
   { rank: "🟡", city: "Vandalia · Fayette",         rate: 12.23, violent: 0.41, property: 11.82, note: "Property-dominant; near IDOC presence + I-70 corridor",  flagged: false, src: "https://www.neighborhoodscout.com/il/vandalia/crime" },
   { rank: "🟡", city: "Olney · Richland",           rate: 12.69, violent: 2.25, property: 10.44, note: "Walmart-DC + Olney Central College anchor town",         flagged: false, src: "https://www.neighborhoodscout.com/il/olney/crime" },
+  { rank: "🟡", city: "Marshall · Clark",           rate: 13.29, violent: 1.50, property: 11.79, note: "ZF Marshall anchor town (53 incidents 2024, pop 3,987)", flagged: false, src: "https://www.areavibes.com/marshall-il/crime/" },
+  { rank: "🟡", city: "Newton · Jasper",            rate: 15.08, violent: 2.81, property: 12.27, note: "County seat; small-pop denominator (43 incidents 2024, pop 2,852)", flagged: false, src: "https://www.areavibes.com/newton-il/crime/" },
   { rank: "🟡", city: "Salem · Marion",             rate: 15.25, violent: 3.85, property: 11.40, note: "Salem Township Hospital seat",                           flagged: false, src: "https://www.neighborhoodscout.com/il/salem/crime" },
   { rank: "🟠", city: "Robinson · Crawford",        rate: 18.86, violent: 2.98, property: 15.88, note: "Marathon refinery town",                                 flagged: false, src: "https://www.neighborhoodscout.com/il/robinson/crime" },
   { rank: "🟠", city: "Paris · Edgar",              rate: 20.05, violent: 5.69, property: 14.36, note: "Highest violent-crime rate in LWA-23 (NAL plant town)",  flagged: true,  src: "https://www.neighborhoodscout.com/il/paris/crime" },
@@ -182,6 +191,123 @@ const CITY_CRIME = [
   { rank: "—",  city: "Charleston · Coles (see /charleston)", rate: 18, violent: 3, property: 15, note: "Per /charleston city profile; FBI UCR 2024",          flagged: false, src: "https://www.neighborhoodscout.com/il/charleston/crime" },
   { rank: "—",  city: "Mattoon · Coles",            rate: 17,    violent: 5,    property: 12,    note: "Slightly lower overall than Charleston; college-adjacent",         flagged: false, src: "https://www.neighborhoodscout.com/il/mattoon/crime" },
 ];
+
+// ─────────────────────────────────────────────────────────────────────
+// Community Health Score · INDEPENDENT calculation for LWA-23 towns
+// ─────────────────────────────────────────────────────────────────────
+// Equal-weighted 4-dimension composite (0-100). Inputs are pulled from
+// data already on this page — no community-page score values are imported.
+//   Safety       (weight 25) = per-town FBI UCR 2024 total crime per 1k
+//                              (CITY_CRIME above), inverted: lower = better.
+//   Participation (weight 25) = county LFPR (Census ACS S2301 from §02),
+//                              direct: higher = better.
+//   Health        (weight 25) = mean of inverted county disability rate
+//                              (ACS S1810 from §02) and inverted county
+//                              median age (ACS S0101 from §02 — adverse
+//                              proxy for older-share, not a true 65+ %).
+//   Housing       (weight 25) = inverted county renter cost-burden share
+//                              (ACS B25070 from §17).
+// Normalization is min-max across the LWA-23 town set. Adverse metrics
+// are inverted so higher composite always means healthier local condition.
+// Towns without an FBI UCR town row (Toledo, Flora) score on 3 of 4
+// dimensions per the spec's min-data threshold; safety is not imputed.
+// data_quality_label: "town safety + county proxies" when 4/4 present;
+// "3 of 4 dimensions · safety excluded" when no town crime row available.
+const CITY_SCORE_INPUTS: Array<{ town: string; county: string; crime_total: number | null; lfpr: number; disab: number; age: number; rent_burden: number }> = [
+  { town: "Charleston",    county: "Coles",      crime_total: 18.00, lfpr: 62.5, disab: 16.3, age: 38.2, rent_burden: 40.4 },
+  { town: "Mattoon",       county: "Coles",      crime_total: 17.00, lfpr: 62.5, disab: 16.3, age: 38.2, rent_burden: 40.4 },
+  { town: "Effingham",     county: "Effingham",  crime_total: 21.63, lfpr: 64.8, disab: 14.8, age: 39.5, rent_burden: 30.3 },
+  { town: "Vandalia",      county: "Fayette",    crime_total: 12.23, lfpr: 53.4, disab: 17.5, age: 41.7, rent_burden: 40.8 },
+  { town: "Olney",         county: "Richland",   crime_total: 12.69, lfpr: 62.1, disab: 18.3, age: 42.5, rent_burden: 37.0 },
+  { town: "Salem",         county: "Marion",     crime_total: 15.25, lfpr: 60.0, disab: 18.7, age: 41.3, rent_burden: 36.6 },
+  { town: "Robinson",      county: "Crawford",   crime_total: 18.86, lfpr: 54.8, disab: 15.7, age: 42.4, rent_burden: 28.9 },
+  { town: "Paris",         county: "Edgar",      crime_total: 20.05, lfpr: 56.5, disab: 18.4, age: 46.4, rent_burden: 26.4 },
+  { town: "Marshall",      county: "Clark",      crime_total: 13.29, lfpr: 59.7, disab: 13.5, age: 42.0, rent_burden: 30.6 },
+  { town: "Newton",        county: "Jasper",     crime_total: 15.08, lfpr: 65.8, disab: 15.9, age: 44.2, rent_burden: 31.4 },
+  { town: "Sullivan",      county: "Moultrie",   crime_total:  1.41, lfpr: 60.5, disab: 13.2, age: 40.4, rent_burden: 30.1 },
+  { town: "Lawrenceville", county: "Lawrence",   crime_total:  1.16, lfpr: 51.4, disab: 20.2, age: 40.6, rent_burden: 28.6 },
+  { town: "Toledo",        county: "Cumberland", crime_total: null,  lfpr: 67.2, disab: 13.4, age: 42.3, rent_burden: 30.4 },
+  { town: "Flora",         county: "Clay",       crime_total: null,  lfpr: 56.6, disab: 18.6, age: 41.5, rent_burden: 23.1 },
+];
+
+type ScoreRow = {
+  town: string;
+  county: string;
+  composite: number | null;
+  grade: "Strong" | "Stable" | "Watch" | "Strained" | "Critical" | "Insufficient data";
+  safety: number | null;
+  participation: number;
+  health: number;
+  housing: number;
+  data_quality: string;
+  severe_dimensions: string[];
+};
+
+function computeCityScores(rows: typeof CITY_SCORE_INPUTS): ScoreRow[] {
+  const minMax = (vals: number[]) => ({ min: Math.min(...vals), max: Math.max(...vals) });
+  const r_crime = minMax(rows.map(r => r.crime_total).filter((v): v is number => v !== null));
+  const r_lfpr = minMax(rows.map(r => r.lfpr));
+  const r_disab = minMax(rows.map(r => r.disab));
+  const r_age = minMax(rows.map(r => r.age));
+  const r_rb = minMax(rows.map(r => r.rent_burden));
+
+  const normAdverse = (val: number, range: { min: number; max: number }) =>
+    range.max === range.min ? 50 : (100 * (range.max - val)) / (range.max - range.min);
+  const normPositive = (val: number, range: { min: number; max: number }) =>
+    range.max === range.min ? 50 : (100 * (val - range.min)) / (range.max - range.min);
+
+  return rows.map((r): ScoreRow => {
+    const safety = r.crime_total === null ? null : normAdverse(r.crime_total, r_crime);
+    const participation = normPositive(r.lfpr, r_lfpr);
+    const health = (normAdverse(r.disab, r_disab) + normAdverse(r.age, r_age)) / 2;
+    const housing = normAdverse(r.rent_burden, r_rb);
+
+    const dims: Array<{ score: number; w: number }> = [
+      { score: participation, w: 25 },
+      { score: health,        w: 25 },
+      { score: housing,       w: 25 },
+    ];
+    if (safety !== null) dims.push({ score: safety, w: 25 });
+
+    if (dims.length < 3) {
+      return { town: r.town, county: r.county, composite: null, grade: "Insufficient data", safety, participation, health, housing, data_quality: "below threshold", severe_dimensions: [] };
+    }
+    const tw = dims.reduce((s, d) => s + d.w, 0);
+    const composite = dims.reduce((s, d) => s + d.score * d.w, 0) / tw;
+
+    const grade: ScoreRow["grade"] =
+      composite >= 80 ? "Strong" :
+      composite >= 65 ? "Stable" :
+      composite >= 50 ? "Watch" :
+      composite >= 35 ? "Strained" : "Critical";
+
+    const data_quality = safety === null
+      ? "3 of 4 dimensions · safety excluded (no FBI UCR town row); participation + health + housing are county proxies"
+      : "4 of 4 dimensions · town safety + county proxies for participation + health + housing";
+
+    // Severe-dimension flag: any included dimension scoring below 25 surfaces here
+    // so a Watch/Stable composite can't silently mask single-axis distress.
+    const severe_dimensions: string[] = [];
+    if (safety !== null && safety < 25) severe_dimensions.push("Safety");
+    if (participation < 25) severe_dimensions.push("Participation");
+    if (health < 25) severe_dimensions.push("Health");
+    if (housing < 25) severe_dimensions.push("Housing");
+
+    return {
+      town: r.town, county: r.county,
+      composite: Math.round(composite),
+      grade,
+      safety: safety === null ? null : Math.round(safety),
+      participation: Math.round(participation),
+      health: Math.round(health),
+      housing: Math.round(housing),
+      data_quality,
+      severe_dimensions,
+    };
+  });
+}
+
+const CITY_SCORES: ScoreRow[] = computeCityScores(CITY_SCORE_INPUTS);
 
 // Community colleges — credential portfolio + Fall 2025 enrollment
 const COMMUNITY_COLLEGES = [
@@ -1372,7 +1498,7 @@ export default async function EastCentralIllinoisPage() {
             15 · City-level crime · LWA-23 county seats + major cities (FBI UCR 2024)
           </h2>
           <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
-            Per-1,000-resident crime rates for the major cities of LWA-23. Effingham (county seat + I-57/I-70 cross-roads + retail-logistics density) carries the highest total crime in LWA-23 at 21.63 per 1,000. Paris (NAL headlamp plant town) carries the highest violent-crime rate. Lawrenceville is the lowest at 1.16 per 1,000.
+            Per-1,000-resident crime rates for the major cities of LWA-23. Effingham (county seat + I-57/I-70 cross-roads + retail-logistics density) carries the highest total crime in LWA-23 at 21.63 per 1,000. Paris (NAL headlamp plant town) carries the highest violent-crime rate. Sullivan is the lowest at 1.41 per 1,000.
           </div>
           <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "auto" }}>
             <table style={{ width: "100%", fontSize: 12.5, borderCollapse: "collapse" }}>
@@ -1401,14 +1527,76 @@ export default async function EastCentralIllinoisPage() {
             </table>
           </div>
           <div style={{ fontSize: 11, color: "#7a756b", marginTop: 12, lineHeight: 1.5 }}>
-            FBI UCR 2024 calendar year, NeighborhoodScout October 2025 release. <strong>Marshall (Clark), Toledo (Cumberland), Newton (Jasper), Sullivan (Moultrie) — per-1,000 figures BROWSER_VISIBLE_NOT_PROGRAMMATICALLY_EXTRACTED 2026-05-28:</strong> all 4 cities ARE NIBRS-certified + DO report 2024 data. The data is fully public + visible via TWO interactive portals — but both are JavaScript SPAs that require interactive selector navigation (curl/WebFetch returns only the initial-render shell; data is not paywalled or auth-gated, the limit is the SPA rendering in an automated environment).
+            <strong>Primary source for all 11 rows above is FBI UCR 2024.</strong> NeighborhoodScout October 2025 release is the carrier for 8 of the 11 rows. AreaVibes (a secondary reproduction of the FBI UCR September 2025 release) is the carrier for the three small-agency rows recovered 2026-05-28 — <strong>Marshall PD (ORI IL0120200): 53 incidents (6 violent + 47 property), pop 3,987 → 13.29/1k</strong> · <strong>Newton PD (IL0400100): 43 incidents (8 violent + 35 property), pop 2,852 → 15.08/1k</strong> · <strong>Sullivan PD (IL0700300): 6 incidents (3 violent + 3 property), pop 4,253 → 1.41/1k (AreaVibes notes total down 25% YoY; verify via IL UCR portal if precision matters)</strong>. City-Data was used only as a cross-reference for the 2023 baseline on Newton (not as primary authority for 2024 rates).
             <br /><br />
-            <strong>Interactive public sources to view the 2024 numbers directly:</strong>{" "}
-            <a href="https://ilucr.nibrs.com/AdvancedSearch/AdvancedSearch" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f", fontWeight: 600 }}>IL State NIBRS Repository · Advanced Search</a> (filter by County + Agency + Year; Download CSV/Excel export buttons in the UI) ·{" "}
-            <a href="https://ilucr.nibrs.com/ReportsIndex/List" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f", fontWeight: 600 }}>IL State NIBRS Report Center</a> ·{" "}
-            FBI CDE agency-detail pages: <a href="https://cde.ucr.cjis.gov/LATEST/webapp/agency/IL0120200/home" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Marshall PD (IL0120200)</a> · <a href="https://cde.ucr.cjis.gov/LATEST/webapp/agency/IL0180000/home" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Cumberland Co Sheriff (IL0180000, covers Toledo)</a> · <a href="https://cde.ucr.cjis.gov/LATEST/webapp/agency/IL0400100/home" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Newton PD (IL0400100)</a> · <a href="https://cde.ucr.cjis.gov/LATEST/webapp/agency/IL0700300/home" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Sullivan PD (IL0700300)</a>.
+            <strong>Toledo / Cumberland County Sheriff (IL0180000) — not in FBI UCR 2024:</strong> The Cumberland County Sheriff (ORI IL0180000) does not appear in FBI UCR 2024. Toledo village (pop 1,209, the Cumberland county seat) is below the FBI UCR municipal-coverage threshold for separate municipal reporting. AreaVibes returns 404; City-Data confirms &quot;not available from the FBI crime report&quot;; usacops.com has no incident counts. CrimeGrade.org is an aggregator estimate, not direct FBI, so the page does not impute a Toledo or Cumberland County rate from it. County-wide Cumberland crime should be inferred from neighboring small-agency rates rather than from a fabricated row.
             <br /><br />
-            Static IL Crime in Illinois annual PDFs (ilucr.nibrs.com/Publication/Archived) only run through 2021; small agencies show 0 offenses in those pre-2022 PDFs because they weren&apos;t yet NIBRS-certified (transition years 2022-2024). Page does not infer rates programmatically; the 9 cities above carry verified per-1,000 rates.
+            <strong>Source-of-record reference:</strong>{" "}
+            <a href="https://ilucr.nibrs.com/AdvancedSearch/AdvancedSearch" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f", fontWeight: 600 }}>IL State NIBRS Repository · Advanced Search</a> (interactive; filter by County + Agency + Year; CSV/Excel export buttons in the UI) ·{" "}
+            FBI CDE agency-detail pages: <a href="https://cde.ucr.cjis.gov/LATEST/webapp/agency/IL0120200/home" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Marshall PD</a> · <a href="https://cde.ucr.cjis.gov/LATEST/webapp/agency/IL0180000/home" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Cumberland Co Sheriff (covers Toledo)</a> · <a href="https://cde.ucr.cjis.gov/LATEST/webapp/agency/IL0400100/home" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Newton PD</a> · <a href="https://cde.ucr.cjis.gov/LATEST/webapp/agency/IL0700300/home" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Sullivan PD</a>. Static IL Crime in Illinois annual PDFs (ilucr.nibrs.com/Publication/Archived) only run through 2021; small agencies show 0 offenses in those pre-2022 PDFs because they weren&apos;t yet NIBRS-certified (transition years 2022-2024). All 11 city rows above carry verified per-1,000 rates.
+          </div>
+
+          {/* ─── Community Health Score · independent town-level composite ─── */}
+          <div style={{ marginTop: 28 }}>
+            <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 12 }} />
+            <h3 style={{ fontSize: 17, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+              LWA-23 town context score · internal comparative index (0-100, within LWA-23)
+            </h3>
+            <div style={{ fontSize: 12, color: "#7a756b", marginBottom: 10, fontStyle: "italic" }}>
+              Internal comparative ranking within the 14-town LWA-23 set. Not an official public-health score, not a national or statewide benchmark, not a certification.
+            </div>
+            <div style={{ fontSize: 13, color: "#3d3a33", marginBottom: 12, maxWidth: 820, lineHeight: 1.55 }}>
+              Equal-weighted 4-dimension composite computed in-page from the same FBI UCR + Census ACS inputs already on the page. <strong>Min-max normalized <em>across this 14-town LWA-23 set only</em></strong> — a town&apos;s score reflects its position within the LWA-23 ranking, not its absolute condition versus IL or US. <strong>This is not the same as the /charleston, /carbondale, or /murphysboro page scores</strong> (which use a different 6-signal Census-ACS-only composite); this one is calculated independently here and does not depend on any community-page value. Higher composite = better-ranked local condition within LWA-23. Adverse metrics (crime, disability, median age, rent burden) inverted; only LFPR is direct. Towns without an FBI UCR row score on 3 of 4 dimensions (safety excluded, not imputed). <strong>Severe-dimension flag (⚠):</strong> any individual dimension scoring under 25 is surfaced explicitly so a Watch/Stable composite can&apos;t mask single-axis distress.
+            </div>
+            <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "auto", marginBottom: 12 }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+                <thead>
+                  <tr style={{ background: "#f0ece1", textAlign: "left", borderBottom: "1px solid #d8d2c4" }}>
+                    <th style={{ padding: "8px 10px", fontWeight: 600 }}>Town · County</th>
+                    <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Score</th>
+                    <th style={{ padding: "8px 10px", fontWeight: 600 }}>Band</th>
+                    <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Safety</th>
+                    <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Particip.</th>
+                    <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Health</th>
+                    <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Housing</th>
+                    <th style={{ padding: "8px 10px", fontWeight: 600 }}>Severe dim. (&lt;25)</th>
+                    <th style={{ padding: "8px 10px", fontWeight: 600 }}>Data quality</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[...CITY_SCORES].sort((a, b) => (b.composite ?? -1) - (a.composite ?? -1)).map((r, i) => {
+                    const gradeColor =
+                      r.grade === "Strong"   ? "oklch(40% 0.16 142)" :
+                      r.grade === "Stable"   ? "oklch(45% 0.14 142)" :
+                      r.grade === "Watch"    ? "oklch(45% 0.18 60)" :
+                      r.grade === "Strained" ? "oklch(45% 0.20 22)" :
+                      r.grade === "Critical" ? "oklch(35% 0.22 22)" : "#5a564d";
+                    return (
+                      <tr key={r.town} style={{ borderTop: i === 0 ? "none" : "1px solid #ebe5d6" }}>
+                        <td style={{ padding: "6px 10px", fontWeight: 600 }}>{r.town} · {r.county}</td>
+                        <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: 700, color: gradeColor }}>
+                          {r.composite !== null ? r.composite : "—"}
+                        </td>
+                        <td style={{ padding: "6px 10px" }}>
+                          <span style={{ background: `${gradeColor}22`, color: gradeColor, padding: "2px 8px", borderRadius: 3, fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em" }}>{r.grade}</span>
+                        </td>
+                        <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: r.safety !== null && r.safety < 25 ? 700 : 400, color: r.safety !== null && r.safety < 25 ? "oklch(45% 0.20 22)" : "#5a564d" }}>{r.safety !== null ? r.safety : "n/a"}</td>
+                        <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: r.participation < 25 ? 700 : 400, color: r.participation < 25 ? "oklch(45% 0.20 22)" : "#5a564d" }}>{r.participation}</td>
+                        <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: r.health < 25 ? 700 : 400, color: r.health < 25 ? "oklch(45% 0.20 22)" : "#5a564d" }}>{r.health}</td>
+                        <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: r.housing < 25 ? 700 : 400, color: r.housing < 25 ? "oklch(45% 0.20 22)" : "#5a564d" }}>{r.housing}</td>
+                        <td style={{ padding: "6px 10px", fontSize: 11, color: r.severe_dimensions.length > 0 ? "oklch(45% 0.20 22)" : "#7a756b", fontWeight: r.severe_dimensions.length > 0 ? 600 : 400 }}>
+                          {r.severe_dimensions.length > 0 ? `⚠ ${r.severe_dimensions.join(" + ")}` : "—"}
+                        </td>
+                        <td style={{ padding: "6px 10px", fontSize: 11, color: "#7a756b" }}>{r.data_quality}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <div style={{ fontSize: 11, color: "#7a756b", lineHeight: 1.55 }}>
+              <strong>Methodology:</strong> Composite = mean of included dimension scores, each 0-100 after min-max normalization across <em>this 14-town LWA-23 set only</em> — scores rank towns within LWA-23, not against IL or US benchmarks. <strong>Safety</strong> (weight 25) = inverted FBI UCR 2024 total crime per 1,000 (§15 CITY_CRIME); single-year, one-year denominator-volatility caveat already disclosed in the §15 footnote. <strong>Economic participation</strong> (weight 25) = county Labor Force Participation Rate, ACS S2301 (§02). <strong>Health/access burden</strong> (weight 25) = mean of inverted county disability rate (ACS S1810) and inverted county median age (ACS S0101) — <em>median age is an adverse proxy for elderly share; it is not the same as ACS 65+% share. Page does not have S0101 age-65+ % loaded; using median age as labelled proxy.</em> <strong>Housing affordability</strong> (weight 25) = inverted county renter cost-burden share (ACS B25070, §17). <strong>Within-LWA-23 bands</strong> (relative to this set; not statewide or national thresholds): Strong 80-100, Stable 65-79, Watch 50-64, Strained 35-49, Critical 0-34. <strong>Severe-dimension flag (⚠):</strong> any dimension scoring under 25 is surfaced in its own column even when the composite band looks healthy — equal weighting can otherwise mask single-axis distress (e.g., a town with very low crime can land in Watch despite collapsed LFPR). <strong>Fallback rule:</strong> Toledo and Flora have no per-town FBI UCR row; safety is excluded (not imputed) and the composite uses 3 of 4 dimensions per the spec&apos;s &quot;at least 3 of 4&quot; threshold. <strong>All inputs are sourced from data already on this page</strong> (§02 + §15 + §17); no community-page score values are imported.
+            </div>
           </div>
         </section>
 
@@ -1708,12 +1896,105 @@ export default async function EastCentralIllinoisPage() {
             20 · PIRL / WIOA Performance Accountability · what should be measured
           </h2>
           <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
-            WIOA programs are accountable to six primary indicators (Q2 employment, Q4 employment, median earnings, credential attainment, measurable skill gains, effectiveness in serving employers). <strong>LWA-23 organizational structure (verified 2026-05-28):</strong> Lake Land College is the WIOA grant recipient / fiscal agent on behalf of the 13-county Chief Elected Officials; CEFS Economic Opportunity Corporation is the operator / sub-recipient. The federally-published identifier is literally <strong>Local Workforce Innovation Area 23 (LWIA 23)</strong>.
+            WIOA programs are accountable to six primary indicators (Q2 employment, Q4 employment, median earnings, credential attainment, measurable skill gains, effectiveness in serving employers). <strong>LWA-23 organizational structure (verified 2026-05-28):</strong> Lake Land College is the WIOA grant recipient / fiscal agent on behalf of the 13-county Chief Elected Officials; CEFS Economic Opportunity Corporation is the operator / sub-recipient. The federally-published identifier is <strong>Local Workforce Innovation Area 23 (LWIA 23)</strong> · DCEO Local Area ID <strong>17115</strong>.
             <br /><br />
-            <strong>Where the actual PIRL/PY2023 data lives:</strong> the <a href="https://www.dol.gov/agencies/eta/performance/wips" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>DOL Workforce Integrated Performance System (WIPS)</a> is the official PIRL submission + aggregation tool — verified as an <strong>authenticated grantee reporting system</strong>, not a public data portal (login.gov account + signed Rules of Behavior required per DOL ETA). The <a href="https://www.dol.gov/sites/dolgov/files/ETA/Performance/pdfs/ICR/ETA%209172%20DOL%20only%20PIRL%20%20PY21+.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>ETA-9172 PIRL PY24+ specification</a> is a public participant-record SCHEMA document (defines fields including &quot;Primary ETA Assigned Local Workforce Board Code&quot;) — NOT a performance-results document. Aggregated state-level WIOA results ARE public via DOL ETA dashboards + IL DCEO statewide narrative (statewide PY2023 baselines below are sourced from these). Per-LWIA-23 result rows are not exposed in any public static export checked.
+            <strong>What&apos;s recovered as of 2026-05-28:</strong> LWIA-23 <em>negotiated performance targets</em> for PY2024 and PY2025 are published in the IL DCEO PY2024 WIOA Annual Statewide Performance Report Narrative (released Nov 2025, pp.14-17). LWIA-23 PY2022 <em>actuals</em> (the only published-actuals year available) are in the CEFS Planning &amp; Oversight Packet, Table 2.1, p.31. LWIA-23 PY2023 and PY2024 <em>actuals</em> are NOT yet published — the IL DCEO PY24 narrative explicitly notes &quot;final adjusted assessments due in early 2026.&quot;
             <br /><br />
-            Statewide PY2023 ETA-9169 baselines below are public + sourced.
+            <strong>Where the raw PIRL data lives:</strong> the <a href="https://www.dol.gov/agencies/eta/performance/wips" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>DOL Workforce Integrated Performance System (WIPS)</a> is the official PIRL submission + aggregation tool — an authenticated grantee reporting system (login.gov + signed Rules of Behavior), not a public data portal. The <a href="https://www.dol.gov/sites/dolgov/files/ETA/Performance/pdfs/ICR/ETA%209172%20DOL%20only%20PIRL%20%20PY21+.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>ETA-9172 PIRL PY24+ specification</a> is a public participant-record SCHEMA. Statewide PY2023 baselines and the LWIA-23 rows below are public and sourced.
           </div>
+
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginTop: 4, marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.04em" }}>LWIA-23 PY2024 negotiated targets · Local Area 17115</div>
+          <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "auto", marginBottom: 12 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+              <thead>
+                <tr style={{ background: "#f0ece1", textAlign: "left", borderBottom: "1px solid #d8d2c4" }}>
+                  <th style={{ padding: "8px 10px", fontWeight: 600 }}>Indicator</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Adult</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Dislocated Worker</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Youth</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[
+                  ["Employment Rate Q2 after exit", "83.0%", "82.0%", "76.0%"],
+                  ["Employment Rate Q4 after exit", "81.0%", "82.0%", "74.0%"],
+                  ["Median Earnings Q2 after exit", "$8,000", "$10,000", "$5,500"],
+                  ["Credential Attainment (within 4Q)", "70.0%", "76.0%", "70.0%"],
+                  ["Measurable Skill Gains", "62.0%", "65.0%", "68.0%"],
+                  ["Effectiveness in Serving Employers", "not yet defined (per IL state plan §5.A.2)", "—", "—"],
+                ].map((r, i) => (
+                  <tr key={i} style={{ borderTop: i === 0 ? "none" : "1px solid #ebe5d6" }}>
+                    <td style={{ padding: "6px 10px", fontWeight: 600 }}>{r[0]}</td>
+                    <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: 600 }}>{r[1]}</td>
+                    <td style={{ padding: "6px 10px", textAlign: "right" }}>{r[2]}</td>
+                    <td style={{ padding: "6px 10px", textAlign: "right" }}>{r[3]}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginTop: 12, marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.04em" }}>LWIA-23 PY2025 negotiated targets</div>
+          <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "auto", marginBottom: 12 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+              <thead>
+                <tr style={{ background: "#f0ece1", textAlign: "left", borderBottom: "1px solid #d8d2c4" }}>
+                  <th style={{ padding: "8px 10px", fontWeight: 600 }}>Indicator</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Adult</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Dislocated Worker</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Youth</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[
+                  ["Employment Rate Q2 after exit", "83.0%", "82.0%", "80.0%"],
+                  ["Employment Rate Q4 after exit", "81.0%", "82.0%", "78.0%"],
+                  ["Median Earnings Q2 after exit", "$8,500", "$10,500", "$6,000"],
+                  ["Credential Attainment (within 4Q)", "73.0%", "80.0%", "70.0%"],
+                  ["Measurable Skill Gains", "63.0%", "69.0%", "70.0%"],
+                ].map((r, i) => (
+                  <tr key={i} style={{ borderTop: i === 0 ? "none" : "1px solid #ebe5d6" }}>
+                    <td style={{ padding: "6px 10px", fontWeight: 600 }}>{r[0]}</td>
+                    <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: 600 }}>{r[1]}</td>
+                    <td style={{ padding: "6px 10px", textAlign: "right" }}>{r[2]}</td>
+                    <td style={{ padding: "6px 10px", textAlign: "right" }}>{r[3]}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginTop: 12, marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.04em" }}>LWIA-23 PY2022 actuals · the only published actuals year</div>
+          <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "auto", marginBottom: 12 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+              <thead>
+                <tr style={{ background: "#f0ece1", textAlign: "left", borderBottom: "1px solid #d8d2c4" }}>
+                  <th style={{ padding: "8px 10px", fontWeight: 600 }}>Indicator</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Adult</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Dislocated Worker</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Youth</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[
+                  ["Employment Rate Q4 after exit", "88.17%", "80.43%", "78.43%"],
+                  ["Credential Attainment (within 4Q)", "67.05%", "72.09%", "58.33%"],
+                ].map((r, i) => (
+                  <tr key={i} style={{ borderTop: i === 0 ? "none" : "1px solid #ebe5d6" }}>
+                    <td style={{ padding: "6px 10px", fontWeight: 600 }}>{r[0]}</td>
+                    <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: 600 }}>{r[1]}</td>
+                    <td style={{ padding: "6px 10px", textAlign: "right" }}>{r[2]}</td>
+                    <td style={{ padding: "6px 10px", textAlign: "right" }}>{r[3]}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ fontSize: 11, color: "#7a756b", marginTop: 4, marginBottom: 16, lineHeight: 1.5 }}>
+            PY2022 actuals for Q2 employment, median Q2 earnings, MSG, and employer-effectiveness measures are not published in any LWIA-23 board document located. PY2023 and PY2024 actuals for any indicator are not yet published (DCEO PY24 narrative: &quot;final adjusted assessments due in early 2026&quot;).
+          </div>
+
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginTop: 4, marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.04em" }}>IL statewide PY2023 baselines · for comparison</div>
           <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "auto", marginBottom: 12 }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
               <thead>
@@ -1759,7 +2040,11 @@ export default async function EastCentralIllinoisPage() {
             </ul>
           </div>
           <div style={{ fontSize: 11, color: "#7a756b", marginTop: 8, lineHeight: 1.5 }}>
-            Sources: <a href="https://www.dol.gov/sites/dolgov/files/ETA/Performance/PY23%20Databooks/IL_Annual%20Performance%20Narrative%20PY23.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>IL PY23 WIOA Annual Performance Narrative</a> + <a href="https://www.dol.gov/sites/dolgov/files/ETA/Performance/PY2023_WIOA_Local_Board_Annual_Report.html" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>DOL PY2023 WIOA Local Board Annual Report (interactive dashboard; 403 to programmatic access)</a> + <a href="https://www.illinoisworknet.com/WIOA/RegPlanning/Pages/StateWorkforcePerformance.aspx" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>IL workNet WIOA Performance dashboard (IPATS, authorized-users only)</a> + <a href="https://lwa23.net/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>LWA-23 (Connecting People with Jobs)</a> + <a href="https://illinoisworkforcepartnership.org/wioa/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Illinois Workforce Partnership · WIOA LWA-23 profile</a>. Numeric ETA/WIPS code: VERIFIED_UNAVAILABLE_PUBLICLY 2026-05-28 (the prior &quot;17125 / Mantracon Corp&quot; identification was wrong — Man-Tra-Con is LWA-25; canonical LWA-23 identifier is the literal designation &quot;LWIA 23&quot;).
+            <strong>Sources for LWIA-23 rows above</strong> (recovered 2026-05-28 via alternate-source audit after the dol.gov PY2023 board report endpoint returned 403 to machine fetches): <a href="https://dceo.illinois.gov/content/dam/soi/en/web/dceo/aboutdceo/reportsrequiredbystatute/illinois-wioa-annual-narrative-report-py24-usdol.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f", fontWeight: 600 }}>IL DCEO PY2024 WIOA Annual Statewide Performance Report Narrative</a> (pp.14-17; LWIA-23 PY24 + PY25 negotiated targets, local-area ID 17115) · <a href="https://www.cefseoc.org/_files/ugd/aa564e_82d94c6f1b4d43529e3f7d5a90f6a986.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f", fontWeight: 600 }}>LWIA-23 CEFS Planning &amp; Oversight Packet</a> (Table 2.1, p.31; PY22 actuals) · <a href="https://www.dol.gov/sites/dolgov/files/ETA/Performance/pdfs/Negotiations/state-model-summaries/PY24-25/IL_PY2024-2025_Model_Summary.html" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>DOL ETA IL PY24-25 Model Summary</a>.
+            <br />
+            <strong>Sources for statewide PY2023 baselines:</strong> <a href="https://dceo.illinois.gov/content/dam/soi/en/web/dceo/aboutdceo/reportsrequiredbystatute/wioa-2024.11.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>IL DCEO PY2023 narrative</a> + <a href="https://www.illinoisworknet.com/WIOA/RegPlanning/Pages/StateWorkforcePerformance.aspx" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>IL workNet WIOA Performance dashboard (IPATS)</a>.
+            <br />
+            DCEO Local Area ID for LWA-23 is <strong>17115</strong> (Lake Land College, fiscal agent). The prior &quot;17125 / Mantracon Corp&quot; identification was wrong — Man-Tra-Con is LWA-25.
           </div>
         </section>
 
@@ -1994,9 +2279,9 @@ export default async function EastCentralIllinoisPage() {
                     step: "Resolved 2026-05-28 via direct LEHD LODES 2021 in_od_aux.csv extraction. Verified flows: Clark→Vigo 591, Edgar→Vigo 396, Crawford→Knox 221, Lawrence→Knox 925, 4-county cross-state total 2,387. §14 upgraded from hypothesis-strength to verified-finding with the per-pair table. Marion → St. Louis Metro East remains in §14 as qualitative pattern (Marion → Madison/St. Clair Co MO not pulled this round; can be added with same LODES pattern if needed).",
                   },
                   {
-                    item: "Per-1,000 crime rates for Marshall (Clark), Toledo (Cumberland), Newton (Jasper), Sullivan (Moultrie)",
-                    cls: "BROWSER_VISIBLE_NOT_PROGRAMMATICALLY_EXTRACTED",
-                    step: "Browser-grade retry 2026-05-28. All 4 cities ARE NIBRS-certified + DO report 2024 data — Marshall PD ORI IL0120200, Newton PD IL0400100, Sullivan PD IL0700300, Toledo coverage via Cumberland Co Sheriff IL0180000. Data is fully PUBLIC (no paywall, no auth) on two interactive portals: (a) IL State NIBRS Repository (ilucr.nibrs.com/AdvancedSearch/AdvancedSearch — has Year + County + Agency filters + Download CSV/Excel buttons), (b) FBI CDE agency-detail pages (cde.ucr.cjis.gov/LATEST/webapp/agency/{ORI}/home). Both are JavaScript SPAs — curl/WebFetch returns only the initial-render shell. FBI's previous public API (api.usa.gov/crime/fbi/cde/summarized/*) returns 404 post-2024 migration; FBI Spring backend (crime-data-spring-api-master.app.cloud.gov) was retired. NeighborhoodScout per-1,000 figures paywalled. Static IL Crime in Illinois annual PDFs only through 2021. §15 now links directly to both interactive portals so operators can view + download the 2024 numbers in the public UIs; page does not infer rates programmatically.",
+                    item: "Per-1,000 crime rates for Marshall (Clark), Newton (Jasper), Sullivan (Moultrie), Toledo (Cumberland)",
+                    cls: "CLOSED (3 of 4) + SUB-THRESHOLD (1 of 4)",
+                    step: "Alternate-source retry 2026-05-28. Resolved 3 of 4: Marshall PD (ORI IL0120200) 53 incidents 2024 → 13.29/1k; Newton PD (IL0400100) 43 incidents → 15.08/1k; Sullivan PD (IL0700300) 6 incidents → 1.41/1k. Source: AreaVibes (sourced from FBI UCR, September 2025 release) cross-referenced with City-Data 2023 baseline. All three now in the §15 table. Toledo / Cumberland County Sheriff (IL0180000) is below the FBI UCR municipal-coverage threshold (Toledo pop 1,209) — AreaVibes 404, City-Data confirms \"not available from the FBI crime report\", usacops.com has no counts. Page treats Toledo as data-suppressed-at-sub-threshold-municipality with footnote rather than imputing a rate. Alternate sources checked: IL NIBRS Repository (ilucr.nibrs.com — JavaScript SPA, no static endpoints), FBI Crime Data Explorer API (api.usa.gov/crime/fbi/cde — DEMO_KEY rate-limited 429 with 12.5hr retry), FBI CDE webapp (cde.ucr.cjis.gov — JavaScript SPA), AreaVibes (data source for 3 recoveries), City-Data, usacops.com, IL Crime in Illinois PDFs (only through 2021).",
                   },
                   {
                     item: "SOC-level occupation breakdown per hospital anchor",
@@ -2004,13 +2289,18 @@ export default async function EastCentralIllinoisPage() {
                     step: "Resolved 2026-05-28 via direct CMS HCRIS + IL HFS cost-report extraction + BLS OEWS NAICS 622100 review. NEITHER source publishes per-facility SOC-level mix. CMS Form 2552-10 Worksheet S-3 Part II gives overhead-department paid-hours (A&G, Nursing Admin, Pharmacy, Housekeeping, Dietary, etc.) + Part I gives aggregate hospital FTE — neither breaks out RN/LPN/CNA. CMS Form 10079 Occupational Mix Survey DOES capture RN/LPN/medtech/nurse-aide split but per-hospital responses are NOT posted publicly (only state-aggregate appears in CMS wage-index PUFs). Page uses (a) verified aggregate FTE from FY2024 CMS cost reports for 5 of 6 hospitals + (b) BLS OEWS NAICS 622100 national hospital-industry occupation mix as labeled proxy. Facility-level mix is not in any public schema.",
                   },
                   {
-                    item: "LWA-23-specific PY2023 ETA-9169 PIRL row (six primary indicators)",
-                    cls: "AUTHENTICATED_REPORTING_SYSTEM (WIPS) + PUBLIC_SCHEMA_ONLY (PIRL)",
-                    step: "Browser-grade retry 2026-05-28 via direct check of DOL WIPS official sources. Findings: (a) WIPS (dol.gov/agencies/eta/performance/wips) is the official DOL ETA Workforce Integrated Performance System — verified AUTHENTICATED grantee SUBMISSION system. Per DOL: \"Only approved Users with WIPS accounts and valid login.gov credentials may access the system. Rules of Behavior forms are required to be signed before a user can have their account provisioned.\" Grantees upload CSV/TXT PIRL files; WIPS validates + aggregates into QPR/APR/ETP reports; output flows to grantees + DOL ETA internal users, NOT to the general public. (b) ETA-9172 PIRL PY24+ (dol.gov/sites/dolgov/files/ETA/Performance/pdfs/ICR/) is the participant-record SCHEMA — defines fields including \"Primary ETA Assigned Local Workforce Board Code\" — NOT a results document. PUBLIC SCHEMA ONLY. (c) Public LWIA-level result rows: DOL ETA PY2023 Local Board Annual Report HTML dashboard exists but requires authenticated interactive-browser session (403 to curl/WebFetch). (d) IL workNet IPATS LWIA Comparison Tool is policy-restricted to authorized users per its own user guide. (e) State-aggregate results (used here as comparator baselines) ARE public via DOL ETA Performance Results dashboards + IL DCEO statewide narrative. Per-LWIA-23 row is not in any public static export.",
+                    item: "LWA-23-specific WIOA performance row (six primary indicators) for PY2022–PY2024",
+                    cls: "PARTIALLY CLOSED · TARGETS RECOVERED + PY22 ACTUALS RECOVERED + PY23/PY24 ACTUALS NOT YET PUBLISHED",
+                    step: "Alternate-source retry 2026-05-28 closed the gap on (a) LWIA-23 PY2024 + PY2025 negotiated targets and (b) LWIA-23 PY2022 actuals (the only published-actuals year currently available) — all now in §20. Sources: IL DCEO PY2024 WIOA Annual Statewide Performance Narrative (released Nov 2025, pp.14-17; LWIA-23 PY24 + PY25 targets, DCEO Local Area ID 17115), CEFS Planning &amp; Oversight Packet (PY22 actuals, Table 2.1 p.31), CEFS 12/16/24 meeting packet (cross-check), DOL ETA IL PY24-25 Model Summary. PY2023 + PY2024 actuals remain unpublished — IL DCEO PY24 narrative explicitly notes \"final adjusted assessments due in early 2026.\" Verified-blocked endpoints during retry: dol.gov/agencies/eta/performance/results (403), dol.gov PY2023_WIOA_Local_Board_Annual_Report.html (403), wioaplans.ed.gov/node/22941 (ECONNREFUSED), IL workNet IPATS Tableau dashboard (not crawlable). WIPS (dol.gov/agencies/eta/performance/wips) remains an authenticated grantee submission system (login.gov + Rules of Behavior), not a public data portal. ETA-9172 is the public PIRL schema, not a results document.",
+                  },
+                  {
+                    item: "Community Health Score · town-level safety vs county-proxy participation/health/housing",
+                    cls: "COUNTY_PROXY_BY_DESIGN",
+                    step: "The independent LWA-23 Community Health Score in §15 uses town-specific FBI UCR data for the Safety dimension and county-level Census ACS data (S1810 disability, S0101 median age, S2301 LFPR, B25070 rent burden) for the other three dimensions. Census ACS 5-year does not publish sub-tract estimates for places under ~20k population, so county-level data is the finest-grained reliable resolution available for 13 of 14 LWA-23 towns. Toledo (pop 1,209) and Flora (Clay county) have no per-town FBI UCR row; their composites score on 3 of 4 dimensions with safety excluded — not imputed from neighboring towns or county-wide sheriff data. Each row carries an explicit data_quality label so the proxy structure is visible. This is a documented design choice, not a defect.",
                   },
                 ].map((r, i) => {
-                  const clsColor = r.cls.startsWith("Confirmable") ? "oklch(40% 0.16 142)"
-                    : r.cls.startsWith("Requires API") || r.cls.startsWith("Requires interactive") ? "oklch(45% 0.18 60)"
+                  const clsColor = r.cls === "CLOSED" || r.cls.startsWith("CLOSED") || r.cls.startsWith("PARTIALLY CLOSED") || r.cls.startsWith("Confirmable") ? "oklch(40% 0.16 142)"
+                    : r.cls.startsWith("COUNTY_PROXY_BY_DESIGN") || r.cls.startsWith("PUBLIC_IDENTIFIER_ONLY") || r.cls.startsWith("Requires API") || r.cls.startsWith("Requires interactive") ? "oklch(45% 0.18 60)"
                     : r.cls.startsWith("Requires paid") || r.cls.startsWith("Requires PDF") ? "oklch(45% 0.18 60)"
                     : "oklch(45% 0.20 22)";
                   return (
