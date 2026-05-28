@@ -290,7 +290,7 @@ async def test_sip_available_cascade_uses_sip_and_recovers(monkeypatch):
     #     target; this PR replaces it with the operator-verified shape).
     assert stub.calls[1]["force_refresh"] is True, stub.calls[1]
     assert stub.calls[1]["repair_gaps"] is False, stub.calls[1]
-    assert stub.calls[1]["feed"] == "sip", stub.calls[1]
+    assert stub.calls[1]["feed"] == "fmp", stub.calls[1]
     assert stub.calls[1]["universe"] == "active", stub.calls[1]
 
     # 2. The summary contains exactly ONE daily_bars row (replaced, not
@@ -301,8 +301,10 @@ async def test_sip_available_cascade_uses_sip_and_recovers(monkeypatch):
     assert db_rows[0].status == "OK"
     assert db_rows[0].detail.get("cascade") is True
     assert db_rows[0].detail.get("cascade_mode") == "force_refresh"
-    assert db_rows[0].detail.get("feed") == "sip"
-    assert db_rows[0].detail.get("sip_probe") is True
+    assert db_rows[0].detail.get("feed") == "fmp"
+    # Post-FMP-mandate cascade: sip_probe field retained as structured
+    # cascade-detail but always False (probe no longer drives feed choice).
+    assert db_rows[0].detail.get("sip_probe") is False
     assert "coverage collapse" in (db_rows[0].detail.get("first_error") or "")
 
     # 3. Overall exit_code is 0 (recovered, no FAILED entries).
@@ -319,13 +321,13 @@ async def test_sip_available_cascade_uses_sip_and_recovers(monkeypatch):
                  if e["event_type"] == "INGESTION_AUTO_RECOVERY_START")
     assert start["data"].get("cascade_mode") == "force_refresh"
     assert start["data"].get("trigger") == "coverage_collapse"
-    assert start["data"].get("feed") == "sip"
-    assert start["data"].get("reason") == "sip_probe_ok"
+    assert start["data"].get("feed") == "fmp"
+    assert start["data"].get("reason") == "fmp_primary_per_operator_rule"
 
     recovered = next(e for e in db_log.events
                      if e["event_type"] == "INGESTION_AUTO_RECOVERED")
     assert recovered["severity"] == "INFO"
-    assert recovered["data"].get("feed") == "sip"
+    assert recovered["data"].get("feed") == "fmp"
     assert "coverage collapse" in (recovered["data"].get("first_error") or "")
 
 
@@ -353,7 +355,7 @@ async def test_sip_unavailable_cascade_falls_back_to_iex_degraded(monkeypatch):
     # Cascade fired exactly once with feed=iex.
     assert len(stub.calls) == 2
     assert stub.calls[1]["force_refresh"] is True
-    assert stub.calls[1]["feed"] == "iex", stub.calls[1]
+    assert stub.calls[1]["feed"] == "fmp", stub.calls[1]
     assert stub.calls[1]["universe"] == "active"
 
     # Stage stays FAILED (the IEX fetch produced sub-floor coverage)
@@ -363,7 +365,7 @@ async def test_sip_unavailable_cascade_falls_back_to_iex_degraded(monkeypatch):
     assert len(db_rows) == 1
     assert db_rows[0].status == "FAILED"
     assert db_rows[0].detail.get("cascade") is True
-    assert db_rows[0].detail.get("feed") == "iex"
+    assert db_rows[0].detail.get("feed") == "fmp"
     assert db_rows[0].detail.get("sip_probe") is False
 
     # Events: START → DEGRADED. NOT RECOVERED, NOT FAILED.
@@ -375,14 +377,14 @@ async def test_sip_unavailable_cascade_falls_back_to_iex_degraded(monkeypatch):
 
     start = next(e for e in db_log.events
                  if e["event_type"] == "INGESTION_AUTO_RECOVERY_START")
-    assert start["data"].get("feed") == "iex"
-    assert start["data"].get("reason") == "sip_probe_fail"
+    assert start["data"].get("feed") == "fmp"
+    assert start["data"].get("reason") == "fmp_primary_per_operator_rule"
 
     degraded = next(e for e in db_log.events
                     if e["event_type"] == "INGESTION_AUTO_RECOVERY_DEGRADED")
     assert degraded["severity"] == "WARNING"
-    assert degraded["data"].get("feed") == "iex"
-    assert degraded["data"].get("reason") == "sip_probe_fail"
+    assert degraded["data"].get("feed") == "fmp"
+    assert degraded["data"].get("reason") == "fmp_primary_per_operator_rule"
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -406,7 +408,7 @@ async def test_cascade_fully_fails_emits_recovery_failed(monkeypatch):
     # ONE-SHOT: cascade fired exactly once, did not loop.
     assert len(stub.calls) == 2
     assert stub.calls[1]["force_refresh"] is True
-    assert stub.calls[1]["feed"] == "iex"
+    assert stub.calls[1]["feed"] == "fmp"
 
     # Final stage state: FAILED (escalated honestly), with the cascade
     # annotation so the dashboard reader can tell this was an attempted
@@ -415,7 +417,7 @@ async def test_cascade_fully_fails_emits_recovery_failed(monkeypatch):
     assert len(db_rows) == 1
     assert db_rows[0].status == "FAILED"
     assert db_rows[0].detail.get("cascade") is True
-    assert db_rows[0].detail.get("feed") == "iex"
+    assert db_rows[0].detail.get("feed") == "fmp"
     assert summary.exit_code == 1
 
     # FAILED event was logged with severity=ERROR.
@@ -428,7 +430,7 @@ async def test_cascade_fully_fails_emits_recovery_failed(monkeypatch):
                   if e["event_type"] == "INGESTION_AUTO_RECOVERY_FAILED")
     assert failed["severity"] == "ERROR"
     assert failed["data"].get("cascade_mode") == "force_refresh"
-    assert failed["data"].get("feed") == "iex"
+    assert failed["data"].get("feed") == "fmp"
     # The cascade_error must reflect the network-down failure, NOT
     # coverage_collapse (the discriminator that pins us to DEGRADED
     # instead would be "coverage collapse" being present in the error).
@@ -457,7 +459,7 @@ async def test_probe_exception_is_tolerated_as_sip_unavailable(monkeypatch):
 
     # Cascade fell through to IEX.
     assert len(stub.calls) == 2
-    assert stub.calls[1]["feed"] == "iex"
+    assert stub.calls[1]["feed"] == "fmp"
 
     event_types = [e["event_type"] for e in db_log.events]
     assert "INGESTION_AUTO_RECOVERY_DEGRADED" in event_types, event_types
@@ -466,7 +468,7 @@ async def test_probe_exception_is_tolerated_as_sip_unavailable(monkeypatch):
     # row with feed=iex annotation.
     db_rows = [s for s in summary.stages if s.name == "daily_bars"]
     assert len(db_rows) == 1
-    assert db_rows[0].detail.get("feed") == "iex"
+    assert db_rows[0].detail.get("feed") == "fmp"
 
 
 # ────────────────────────────────────────────────────────────────────────
