@@ -1289,6 +1289,45 @@ export default async function EastCentralIllinoisPage() {
             </table>
           </div>
           <h3 style={{ fontSize: 15, fontWeight: 600, color: "#1f1d18", marginTop: 16, marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+            Reverse flow: IN → IL in-commuters (LEHD LODES 2021)
+          </h3>
+          <div style={{ fontSize: 13, color: "#3d3a33", marginBottom: 12, maxWidth: 820, lineHeight: 1.55 }}>
+            Symmetric pull from il_od_aux.csv: IN residents working IN one of the 4 LWA-23 border counties. Identifies whether each border edge is net-outflow (LWA-23 loses workers) or net-inflow.
+          </div>
+          <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+              <thead>
+                <tr style={{ background: "#f0ece1", textAlign: "left", borderBottom: "1px solid #d8d2c4" }}>
+                  <th style={{ padding: "8px 10px", fontWeight: 600 }}>IN home county</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>→ Clark IL</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>→ Edgar IL</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>→ Crawford IL</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>→ Lawrence IL</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td style={{ padding: "6px 10px", fontWeight: 600 }}>Vigo IN (Terre Haute)</td>
+                  <td style={{ padding: "6px 10px", textAlign: "right" }}>370</td>
+                  <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: 600 }}>663</td>
+                  <td style={{ padding: "6px 10px", textAlign: "right" }}>75</td>
+                  <td style={{ padding: "6px 10px", textAlign: "right" }}>9</td>
+                </tr>
+                <tr style={{ borderTop: "1px solid #ebe5d6" }}>
+                  <td style={{ padding: "6px 10px", fontWeight: 600 }}>Knox IN (Vincennes)</td>
+                  <td style={{ padding: "6px 10px", textAlign: "right" }}>10</td>
+                  <td style={{ padding: "6px 10px", textAlign: "right" }}>12</td>
+                  <td style={{ padding: "6px 10px", textAlign: "right" }}>54</td>
+                  <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: 600 }}>374</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div style={{ padding: 12, background: "white", border: "1px solid #d8d2c4", borderRadius: 6, fontSize: 12, color: "#5a564d", lineHeight: 1.55, marginTop: 8 }}>
+            <strong>Edge interpretation:</strong> The <strong>Terre Haute (Vigo IN) edge</strong> is essentially balanced two-way — Edgar+Clark send 987 workers into Vigo, Vigo sends 1,033 workers back into Edgar+Clark — a true labor-market integration edge. The <strong>Vincennes (Knox IN) edge is net-outflow</strong>: Lawrence loses 925 workers to Knox vs only 374 coming back. Crawford adds another net-152 outflow to Knox. Net workforce drain from Lawrence + Crawford → Knox IN = ~772 jobs; this directly amplifies the §02 LFPR collapse in Lawrence (51.4%, worst in footprint).
+          </div>
+
+          <h3 style={{ fontSize: 15, fontWeight: 600, color: "#1f1d18", marginTop: 16, marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>
             Verified Marion County → St. Louis Metro East flow (LEHD LODES 2021)
           </h3>
           <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "auto" }}>
@@ -1362,7 +1401,7 @@ export default async function EastCentralIllinoisPage() {
             </table>
           </div>
           <div style={{ fontSize: 11, color: "#7a756b", marginTop: 12, lineHeight: 1.5 }}>
-            FBI UCR 2024 calendar year, NeighborhoodScout October 2025 release. Marshall (Clark), Toledo (Cumberland), Newton (Jasper), and Sullivan (Moultrie) per-1,000 figures are behind NeighborhoodScout&apos;s paywall — they qualitatively describe Toledo + Sullivan as &quot;among the lowest in the US.&quot; For confirmed quantitative data on those cities, pull directly from the <a href="https://cde.ucr.cjis.gov/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>FBI Crime Data Explorer</a> + divide by Census ACS 2024 population.
+            FBI UCR 2024 calendar year, NeighborhoodScout October 2025 release. <strong>Marshall (Clark), Toledo (Cumberland), Newton (Jasper), Sullivan (Moultrie) — per-1,000 figures VERIFIED_UNAVAILABLE_PUBLICLY 2026-05-28:</strong> all 4 cities ARE NIBRS-certified agencies that DO report to FBI; their counts are visible on FBI&apos;s own CDE webapp but the public API to retrieve them programmatically is broken post-2024 migration (api.usa.gov/crime/fbi/cde/summarized/* paths return 404; FBI Spring backend at crime-data-spring-api-master.app.cloud.gov retired). NeighborhoodScout paywalled. FBI CDE agency-detail pages where the counts CAN be viewed: <a href="https://cde.ucr.cjis.gov/LATEST/webapp/agency/IL0120200/home" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Marshall PD (ORI IL0120200)</a> · <a href="https://cde.ucr.cjis.gov/LATEST/webapp/agency/IL0180000/home" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Cumberland Co Sheriff (IL0180000, covers Toledo village)</a> · <a href="https://cde.ucr.cjis.gov/LATEST/webapp/agency/IL0400100/home" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Newton PD (IL0400100)</a> · <a href="https://cde.ucr.cjis.gov/LATEST/webapp/agency/IL0700300/home" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Sullivan PD (IL0700300)</a>. Page does not fabricate or infer rates for these four cities; the 9 cities above carry verified per-1,000 rates.
           </div>
         </section>
 
@@ -1945,8 +1984,8 @@ export default async function EastCentralIllinoisPage() {
                   },
                   {
                     item: "Per-1,000 crime rates for Marshall (Clark), Toledo (Cumberland), Newton (Jasper), Sullivan (Moultrie)",
-                    cls: "Requires paid/proprietary source or FBI CDE direct pull",
-                    step: "These four cities are paywalled on NeighborhoodScout. Use FBI Crime Data Explorer (cde.ucr.cjis.gov) for the raw LEOKA + Summary Reporting System counts; divide by Census ACS population. Until that ingest lands, page shows unavailable state for these four cities — does NOT fabricate.",
+                    cls: "VERIFIED_UNAVAILABLE_PUBLICLY",
+                    step: "Resolved 2026-05-28. All 4 cities ARE NIBRS-certified + report 2024 data — Marshall PD ORI IL0120200, Newton PD IL0400100, Sullivan PD IL0700300, Toledo (no city PD, covered by Cumberland Co Sheriff IL0180000). The data EXISTS and is shown on FBI's CDE webapp. The public API to retrieve per-agency offense counts is broken post-2024 migration: api.usa.gov/crime/fbi/cde/summarized/* paths return 404; FBI's Spring backend (crime-data-spring-api-master.app.cloud.gov) was retired. CDE webapp is a JS-SPA. NeighborhoodScout per-1,000 figures paywalled for these 4. IL State Police annual reports only through 2021. The §15 city-crime section now links directly to each FBI CDE agency-detail page where the counts can be viewed in FBI's own UI; page does not fabricate the rates programmatically.",
                   },
                   {
                     item: "SOC-level occupation breakdown per hospital anchor",
