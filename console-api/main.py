@@ -2757,6 +2757,135 @@ async def public_charleston() -> dict:
     }
 
 
+@app.get("/api/public/cefs")
+async def public_cefs() -> dict:
+    """PUBLIC endpoint — CEFS Economic Opportunity Corporation / LWA-23
+    (East Central IL workforce-development board) 13-county dashboard.
+    Service area: Clark, Clay, Coles, Crawford, Cumberland, Edgar, Effingham,
+    Fayette, Jasper, Lawrence, Marion, Moultrie, Richland counties.
+    Mirrors /api/public/mantracon (LWA-25) for the parallel /east-central-
+    illinois regional page.
+    """
+    LWA23_COUNTIES = (
+        "clark", "clay", "coles", "crawford", "cumberland", "edgar",
+        "effingham", "fayette", "jasper", "lawrence", "marion", "moultrie",
+        "richland",
+    )
+    LWA23_FIPS = ["023", "025", "029", "033", "035", "045", "049", "051",
+                  "079", "101", "121", "139", "159"]
+    series_keys: list[str] = []
+    for c in LWA23_COUNTIES:
+        # Coles uses cle_coles_* (the Charleston substrate); other 12 use eci_*
+        prefix = "cle_coles" if c == "coles" else f"eci_{c}"
+        series_keys.append(f"{prefix}_unemployment_rate")
+        series_keys.append(f"{prefix}_labor_force")
+    series_keys += ["il_unemployment_rate", "il_nonfarm_payrolls", "phci_il"]
+
+    async with app.state.pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            WITH latest AS (
+                SELECT series_id, value_num, observed_date,
+                       ROW_NUMBER() OVER (PARTITION BY series_id ORDER BY observed_date DESC) AS rn
+                FROM platform.macro_data
+                WHERE series_id = ANY($1::text[]) AND value_num IS NOT NULL
+            )
+            SELECT series_id, value_num, observed_date
+            FROM latest WHERE rn = 1
+            """,
+            series_keys,
+        )
+        # LWA-23 aggregate labor force = sum of 13 county labor forces, by month
+        lwa_lf_series = await conn.fetch(
+            """
+            SELECT observed_date, SUM(value_num) AS lf
+            FROM platform.macro_data
+            WHERE series_id IN (
+                'cle_coles_labor_force',
+                'eci_clark_labor_force','eci_clay_labor_force',
+                'eci_crawford_labor_force','eci_cumberland_labor_force',
+                'eci_edgar_labor_force','eci_effingham_labor_force',
+                'eci_fayette_labor_force','eci_jasper_labor_force',
+                'eci_lawrence_labor_force','eci_marion_labor_force',
+                'eci_moultrie_labor_force','eci_richland_labor_force'
+            )
+              AND observed_date >= CURRENT_DATE - INTERVAL '60 months'
+              AND value_num IS NOT NULL
+            GROUP BY observed_date
+            HAVING COUNT(*) = 13
+            ORDER BY observed_date ASC
+            """
+        )
+        # Weighted-avg UR by labor force, by month (denom=sum of LF same month)
+        ur_lf_keys = []
+        for c in LWA23_COUNTIES:
+            prefix = "cle_coles" if c == "coles" else f"eci_{c}"
+            ur_lf_keys.append(f"{prefix}_unemployment_rate")
+            ur_lf_keys.append(f"{prefix}_labor_force")
+        lwa_ur_series = await conn.fetch(
+            """
+            WITH m AS (
+                SELECT observed_date, series_id, value_num
+                FROM platform.macro_data
+                WHERE series_id = ANY($1::text[])
+                  AND observed_date >= CURRENT_DATE - INTERVAL '60 months'
+                  AND value_num IS NOT NULL
+            ),
+            pairs AS (
+                SELECT ur.observed_date,
+                       regexp_replace(ur.series_id, '_unemployment_rate$', '') AS prefix,
+                       ur.value_num AS ur,
+                       lf.value_num AS lf
+                FROM m ur
+                JOIN m lf ON lf.observed_date = ur.observed_date
+                          AND lf.series_id =
+                              regexp_replace(ur.series_id, '_unemployment_rate$', '') || '_labor_force'
+                WHERE ur.series_id LIKE '%_unemployment_rate'
+            )
+            SELECT observed_date, ROUND(SUM(ur * lf) / NULLIF(SUM(lf), 0), 2) AS ur
+            FROM pairs
+            GROUP BY observed_date
+            HAVING COUNT(*) = 13
+            ORDER BY observed_date ASC
+            """,
+            ur_lf_keys,
+        )
+    indicators = {
+        r["series_id"]: {"value": float(r["value_num"]), "date": r["observed_date"].isoformat()}
+        for r in rows
+    }
+    lwa_latest_lf = float(lwa_lf_series[-1]["lf"]) if lwa_lf_series else None
+    lwa_latest_lf_date = lwa_lf_series[-1]["observed_date"].isoformat() if lwa_lf_series else None
+    lwa_latest_ur = float(lwa_ur_series[-1]["ur"]) if lwa_ur_series else None
+    lwa_latest_ur_date = lwa_ur_series[-1]["observed_date"].isoformat() if lwa_ur_series else None
+
+    business = await _usaspending_block(county_fips=LWA23_FIPS, recipient_city=None)
+    top_recipients = await _usaspending_top_recipients(county_fips=LWA23_FIPS)
+    qcew = await _qcew_supersector_block(county_fips=LWA23_FIPS)
+    labor_truth = await _acs_labor_truth(county_fips=LWA23_FIPS)
+    return {
+        "ts": datetime.now(UTC).isoformat(),
+        "indicators": indicators,
+        "lwa_aggregate": {
+            "labor_force": lwa_latest_lf,
+            "labor_force_date": lwa_latest_lf_date,
+            "unemployment_rate_weighted": lwa_latest_ur,
+            "unemployment_rate_date": lwa_latest_ur_date,
+            "county_count": 13,
+        },
+        "lwa_labor_force_series": [
+            {"date": r["observed_date"].isoformat(), "value": float(r["lf"])} for r in lwa_lf_series
+        ],
+        "lwa_unemployment_series": [
+            {"date": r["observed_date"].isoformat(), "value": float(r["ur"])} for r in lwa_ur_series
+        ],
+        "business_opportunities": business,
+        "top_federal_recipients": top_recipients,
+        "industry_mix": qcew,
+        "labor_truth": labor_truth,
+    }
+
+
 @app.get("/api/public/mantracon")
 async def public_mantracon() -> dict:
     """PUBLIC endpoint — Man-Tra-Con / Southern Illinois Workforce Development
