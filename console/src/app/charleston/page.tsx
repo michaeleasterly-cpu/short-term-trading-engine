@@ -1,571 +1,906 @@
 /**
  * Public Charleston, IL economic-development page.
  *
- * Charleston is the Coles County seat (East Central IL · LWA-23), home to
- * Eastern Illinois University. ~17k city population, anchored by EIU + the
- * Mattoon-area employer base (Sarah Bush Lincoln, Rural King, Lake Land
- * College, Consolidated Communications, R.R. Donnelley).
+ * Mirrors the /carbondale structure exactly — same sections, same flow,
+ * same components — adapted for Coles County / Charleston Place / Mattoon
+ * Micropolitan Statistical Area + EIU as the anchor university (replacing
+ * Jackson County / Carbondale Place / Carbondale-Marion MSA + SIU).
  *
- * This page is currently STATIC (primary-source data hardcoded); it does not
- * yet route through console-api. Companion pages /carbondale and /murphysboro
- * are data-driven from the API — Charleston can migrate to the same pattern
- * once Coles County + Mattoon Micropolitan series are wired in the backend.
+ * Data substrate: /api/public/charleston (Coles County FIPS 17029 +
+ * Charleston Place FIPS 1712567 + Mattoon Micropolitan CBSA 31380). FRED
+ * macro series for Coles County (`cle_coles_*` family) are TBD in
+ * platform.macro_data; until loaded, the FRED-anchored cards render only
+ * IL state context. ACS / USAspending / QCEW / labor-truth / health-score
+ * are live via the FIPS-parameterized helpers in the backend.
  */
 import { DashboardHead, Topbar, DashboardFooter, DEFAULT_FOOTER_COLUMNS } from "@/components/dashboard-chrome";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-// ════════════════════════════════════════════════════════════════════════
-// Primary-source Charleston data — see source citations beneath each block.
-// ════════════════════════════════════════════════════════════════════════
+const API_BASE =
+  process.env.NEXT_PUBLIC_API_BASE || "https://console-api-production-4576.up.railway.app";
 
-const CITY = {
-  name: "Charleston, IL",
-  county: "Coles County",
-  fips_place: "16000US1712567",
-  fips_county: "17029",
-  msa: "Mattoon, IL Micropolitan Statistical Area (CBSA 31380)",
-  lwa: "East Central Illinois (LWA-23)",
-  population_2024: 17062,
-  population_2020: 17579,
-  pop_decline_pct: -2.9, // 17062 vs 17579 = -517 = -2.94%
-  median_household_income_2024: 49300,
-  median_age: 29.6,
-  poverty_rate_pct: 26.3,
-  pct_white: 82.7,
-  pct_black: 6.8,
-  pct_hispanic: 4.5,
-  pct_bachelors_or_higher: 25.0, // ~13.2 + 11.8 from ACS source
-};
+interface BusinessOps {
+  top_awards: Array<{
+    amount: number; recipient: string; agency: string; description: string;
+    naics_code: string | null; naics_desc: string | null;
+    start_date: string; end_date: string;
+  }>;
+  top_naics: Array<{ code: string; name: string; amount: number }>;
+  totals: { awards_count: number; awards_dollars: number; lookback_months: number };
+  sam_gov_search_link: string;
+}
 
-const EIU_ENROLLMENT = [
-  { year: "Fall 2004", headcount: 11651, note: "Recent peak — pre-decline baseline" },
-  { year: "Fall 2014", headcount: 8520, note: "Pre-state-budget-standoff" },
-  { year: "Fall 2016", headcount: 7440, note: "Aftermath of 2015-2017 IL budget impasse" },
-  { year: "Fall 2019", headcount: 7806, note: "Pre-COVID partial recovery" },
-  { year: "Fall 2022", headcount: 7682, note: "Post-COVID stability" },
-  { year: "Fall 2024", headcount: 5910, note: "FAFSA-delay year (national)" },
-  { year: "Fall 2025", headcount: 5434, note: "Most recent; -8% YoY, but largest first-year domestic cohort in 3 years" },
-];
+interface IndustryRow {
+  code: string;
+  name: string;
+  total_employment: number;
+  private_employment: number;
+  public_employment: number;
+  avg_weekly_wage: number;
+  annual_pay_equivalent: number;
+}
+interface IndustryMix {
+  as_of_quarter: string;
+  top_supersectors: IndustryRow[];
+  total_employment: number;
+  source: string;
+}
 
-// ── Anchor employers — Coles County footprint (Charleston + Mattoon + SBL between)
-const ANCHOR_EMPLOYERS = [
-  {
-    name: "Eastern Illinois University (EIU)",
-    location: "Charleston",
-    sector: "Public university",
-    role: "Largest single employer in Coles County; faculty + staff + research.",
-    headcount_note: "Total employment is enrollment-coupled; staff levels have contracted alongside the 20-year enrollment decline (see §1).",
-    url: "https://www.eiu.edu/",
-  },
-  {
-    name: "Sarah Bush Lincoln Health Center",
-    location: "Between Mattoon + Charleston on IL Route 16",
-    sector: "Regional healthcare system",
-    role: "Forbes / Statista Top 10 Best Employers in Illinois (2024). Regional hospital system serving 8 counties.",
-    headcount_note: "Anchor regional-services employer; primary local clinical career ladder.",
-    url: "https://www.sarahbush.org/",
-  },
-  {
-    name: "Rural King Supply",
-    location: "Headquarters: Mattoon; distribution center: Mattoon; Charleston facility in former Casey Tool & Machine building",
-    sector: "Retail / farm + ranch supply",
-    role: "Privately held; ~146 stores across 13+ states; ~9,000+ total employees (national).",
-    headcount_note: "Mattoon distribution center supplies 80+ stores. Charleston facility supports Rural King's growing e-commerce operation.",
-    url: "https://www.ruralking.com/",
-  },
-  {
-    name: "Lake Land College",
-    location: "Mattoon",
-    sector: "Community college",
-    role: "Comprehensive community college serving 15-county East Central IL footprint, ~4,500 credit students.",
-    headcount_note: "Companion higher-ed anchor to EIU; the credential-pipeline source for most workforce-board-relevant training in Coles County.",
-    url: "https://www.lakelandcollege.edu/",
-  },
-  {
-    name: "Consolidated Communications",
-    location: "Headquarters: Mattoon",
-    sector: "Telecommunications + broadband",
-    role: "Mid-size publicly traded telecom; pre-2024 publicly traded (CNSL), acquired by Searchlight Capital + BCI 2024-12.",
-    headcount_note: "HQ employment in Mattoon is a structural anchor — even post-acquisition, HQ functions remain locally based.",
-    url: "https://www.consolidated.com/",
-  },
-  {
-    name: "R.R. Donnelley Charleston",
-    location: "Charleston",
-    sector: "Printing / commercial print",
-    role: "RRD operates a Charleston facility producing direct mail + commercial print products.",
-    headcount_note: "Print-industry employment has contracted nationally over the past 15 years; the Charleston facility's role within RRD's footprint is a watch-item for the local industrial base.",
-    url: "https://www.rrd.com/",
-  },
-];
+interface CityDemographics {
+  name: string;
+  place_fips: string;
+  year: number;
+  population: number | null;
+  median_age: number | null;
+  pct_bachelors_plus: number | null;
+  acs_unemployment_rate: number | null;
+  median_household_income: number | null;
+  poverty_rate_families: number | null;
+  median_home_value: number | null;
+  median_gross_rent: number | null;
+  pct_owner_occupied: number | null;
+  pct_renter_occupied: number | null;
+  pct_foreign_born: number | null;
+  mean_commute_minutes: number | null;
+  pct_white_alone: number | null;
+  pct_black_alone: number | null;
+  pct_hispanic_or_latino: number | null;
+  source: string;
+}
 
-// ── Crime stats — Charleston + Mattoon NeighborhoodScout / FBI UCR 2024
-const CRIME_DATA = {
-  charleston: {
-    crime_per_1000: 18,
-    violent_per_1000: 3,
-    property_per_1000: 15,
-    violent_1_in_n: "1 in 334",
-    note: "Higher than 84% of IL cities + towns. Not among the very highest; college-town pattern (high overall rate driven by property crime + young population).",
-  },
-  mattoon: {
-    crime_per_1000: 17,
-    violent_per_1000: 5, // ~17 total - 12 property = 5 violent
-    property_per_1000: 12,
-    note: "Slightly lower overall vs Charleston; lower property crime but slightly higher violent-crime share.",
-  },
-  release_year: "FBI UCR 2024 calendar year (NeighborhoodScout October 2025 release).",
-};
+interface DemoDelta {
+  abs_change: number;
+  pct_change: number;
+  prior_value: number;
+}
+interface DemographicsTrend {
+  current: CityDemographics;
+  comparison_years: [number, number];
+  deltas: Record<string, DemoDelta>;
+}
+interface HealthComponent {
+  key: string;
+  label: string;
+  value: string;
+  score: number | null;
+  weight: number;
+  rationale: string;
+}
+interface HealthScore {
+  score: number | null;
+  label: string;
+  components: HealthComponent[];
+  methodology: string;
+}
 
-// ════════════════════════════════════════════════════════════════════════
-// Render helpers
-// ════════════════════════════════════════════════════════════════════════
+interface LaborTruthGeo {
+  name: string; fips: string;
+  pop_16plus: number; in_labor_force: number; employed: number; unemployed: number; not_in_labor_force: number;
+  lfpr: number; ep_ratio: number; not_lf_pct: number; ue_rate: number | null;
+  gap_lfpr_vs_state: number; gap_ep_vs_state: number;
+}
+interface LaborTruth {
+  geos: LaborTruthGeo[];
+  aggregate: LaborTruthGeo | null;
+  benchmarks: { il_state_lfpr: number; il_state_ep: number; il_state_not_lf_pct: number; us_national_lfpr: number; us_national_ep: number };
+  year: number; source: string;
+}
 
-function StatCard({ label, value, sub, flag }: { label: string; value: string; sub?: string; flag?: boolean }) {
+function LaborTruthCitySection({ lt, cityShortName }: { lt: LaborTruth; cityShortName: string }) {
+  if (!lt.geos.length) return null;
+  const g = lt.geos[0];
+  const stateLFPR = lt.benchmarks.il_state_lfpr;
+  const stateEP = lt.benchmarks.il_state_ep;
   return (
-    <div style={{
-      background: "white",
-      border: `1px solid ${flag ? "oklch(45% 0.20 22)33" : "#d8d2c4"}`,
-      borderLeft: `6px solid ${flag ? "oklch(45% 0.20 22)" : "#1f1d18"}`,
-      borderRadius: 6, padding: 14,
-    }}>
-      <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: "#7a756b", marginBottom: 6 }}>{label}</div>
-      <div style={{ fontSize: 26, fontWeight: 600, color: flag ? "oklch(45% 0.20 22)" : "#1f1d18", lineHeight: 1.05 }}>{value}</div>
-      {sub && <div style={{ fontSize: 12, color: "#5a564d", marginTop: 4 }}>{sub}</div>}
+    <section style={{ marginTop: 40 }}>
+      <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+      <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+        The true labor picture · beyond the headline unemployment rate
+      </h2>
+      <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 720, lineHeight: 1.55 }}>
+        The headline unemployment rate only counts people <em>actively looking for work</em>.
+        It misses every working-age person who has stopped looking, gone on disability, or
+        otherwise dropped out of the labor force. {cityShortName}&apos;s real picture from ACS {lt.year}:
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 14 }}>
+        {[
+          { label: "Headline UE rate", value: g.ue_rate != null ? `${g.ue_rate}%` : "—", sub: "what politicians cite", flag: false },
+          { label: "Labor force participation", value: `${g.lfpr}%`, sub: `IL state: ${stateLFPR}% · gap ${g.gap_lfpr_vs_state > 0 ? "+" : ""}${g.gap_lfpr_vs_state}pp`, flag: g.gap_lfpr_vs_state < -3 },
+          { label: "Employment-to-population", value: `${g.ep_ratio}%`, sub: `IL state: ${stateEP}% · gap ${g.gap_ep_vs_state > 0 ? "+" : ""}${g.gap_ep_vs_state}pp`, flag: g.gap_ep_vs_state < -3 },
+          { label: "Not in labor force", value: g.not_in_labor_force.toLocaleString(), sub: `${g.not_lf_pct}% of working-age — the invisible population`, flag: true },
+        ].map((s, i) => (
+          <div key={i} style={{
+            background: "white",
+            border: `1px solid ${s.flag ? "oklch(45% 0.20 22)33" : "#d8d2c4"}`,
+            borderLeft: `6px solid ${s.flag ? "oklch(45% 0.20 22)" : "#1f1d18"}`,
+            borderRadius: 6, padding: 14,
+          }}>
+            <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: "#7a756b", marginBottom: 6 }}>{s.label}</div>
+            <div style={{ fontSize: 26, fontWeight: 600, color: s.flag ? "oklch(45% 0.20 22)" : "#1f1d18", lineHeight: 1.05 }}>{s.value}</div>
+            <div style={{ fontSize: 12, color: "#5a564d", marginTop: 4 }}>{s.sub}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ marginTop: 12, fontSize: 12, color: "#5a564d", lineHeight: 1.55, maxWidth: 720 }}>
+        <strong>How to read this:</strong> The headline UE rate stays low because once someone
+        stops looking, they vanish from the math. LFPR + E/P ratio capture the entire
+        working-age (16+) population. The &quot;Not in LF&quot; count is the closest legitimate
+        proxy for the invisible-population concern — people neither employed nor officially
+        unemployed-and-looking.
+      </div>
+      <div style={{ marginTop: 8, fontSize: 11, color: "#7a756b" }}>{lt.source}</div>
+    </section>
+  );
+}
+
+interface CharlestonData {
+  ts: string;
+  indicators: Record<string, { value: number; date: string }>;
+  unemployment_series: Array<{ date: string; value: number }>;
+  business_opportunities_city?: BusinessOps;
+  business_opportunities_county?: BusinessOps;
+  industry_mix?: IndustryMix;
+  city_demographics?: CityDemographics;
+  demographics_trend?: DemographicsTrend;
+  health_score?: HealthScore;
+  labor_truth?: LaborTruth;
+}
+
+function labelColor(label: string): { fg: string; bg: string } {
+  switch (label) {
+    case "Healthy":   return { fg: "oklch(40% 0.16 142)", bg: "oklch(96% 0.04 142)" };
+    case "Stable":    return { fg: "oklch(40% 0.16 142)", bg: "oklch(96% 0.04 142)" };
+    case "At-Risk":   return { fg: "oklch(40% 0.15 60)",  bg: "oklch(97% 0.04 60)"  };
+    case "Distressed":return { fg: "oklch(40% 0.20 22)",  bg: "oklch(96% 0.05 22)"  };
+    case "Crisis":    return { fg: "oklch(35% 0.22 22)",  bg: "oklch(94% 0.06 22)"  };
+    default:          return { fg: "#5a564d", bg: "#f0ece1" };
+  }
+}
+
+function ScoreBar({ score }: { score: number }) {
+  return (
+    <div style={{ position: "relative", height: 10, background: "#ebe5d6", borderRadius: 5, marginTop: 10 }}>
+      <div style={{
+        position: "absolute", top: 0, left: 0, height: 10, width: `${score}%`,
+        background: score >= 60 ? "oklch(55% 0.16 142)" : score >= 40 ? "oklch(58% 0.15 60)" : "oklch(55% 0.20 22)",
+        borderRadius: 5,
+      }} />
     </div>
   );
 }
 
-// ════════════════════════════════════════════════════════════════════════
-// Page
-// ════════════════════════════════════════════════════════════════════════
+function HealthScoreSection({ health, cityShortName }: { health: HealthScore; cityShortName: string }) {
+  if (health.score == null) return null;
+  const tone = labelColor(health.label);
+  return (
+    <section style={{ marginTop: 40 }}>
+      <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+      <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+        Community Health Score · {cityShortName}
+      </h2>
+      <div style={{ fontSize: 14, color: "#5a564d", marginBottom: 16, maxWidth: 720 }}>
+        A single 0-100 composite synthesizing six hardship-vs-resilience signals from the Census ACS.
+        Methodology inspired by the EIG Distressed Communities Index — HS-dropout rate is the
+        most heavily-weighted predictor of long-term distress in published research. Lower scores
+        signal more intervention need; higher scores signal underlying resilience.
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "320px 1fr", gap: 24, alignItems: "start" }}>
+        {/* Headline score */}
+        <div style={{ background: tone.bg, border: `2px solid ${tone.fg}33`, borderRadius: 8, padding: 24, textAlign: "center" }}>
+          <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: tone.fg, marginBottom: 6 }}>
+            Health Score
+          </div>
+          <div style={{ fontSize: 72, fontWeight: 700, color: tone.fg, lineHeight: 1 }}>
+            {health.score!.toFixed(0)}
+          </div>
+          <div style={{ fontSize: 11, color: "#7a756b", marginTop: 2 }}>out of 100</div>
+          <div style={{
+            display: "inline-block", marginTop: 12, padding: "6px 14px",
+            background: tone.fg, color: "white", borderRadius: 4, fontSize: 13, fontWeight: 600,
+            textTransform: "uppercase", letterSpacing: "0.06em",
+          }}>{health.label}</div>
+          <div style={{ fontSize: 11, color: "#7a756b", marginTop: 14, lineHeight: 1.5 }}>
+            80+ Healthy · 60+ Stable · 40+ At-Risk · 20+ Distressed · &lt;20 Crisis
+          </div>
+        </div>
+        {/* Component breakdown */}
+        <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, padding: 16 }}>
+          <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: "#7a756b", marginBottom: 12 }}>
+            Component breakdown
+          </div>
+          {health.components.map(c => (
+            <div key={c.key} style={{ marginBottom: 14 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                <div style={{ fontSize: 14, fontWeight: 600, color: "#1f1d18" }}>{c.label}</div>
+                <div style={{ fontSize: 18, fontWeight: 600, color: c.score == null ? "#7a756b" : c.score >= 60 ? "oklch(45% 0.16 142)" : c.score >= 40 ? "oklch(48% 0.15 60)" : "oklch(45% 0.20 22)" }}>
+                  {c.score != null ? c.score.toFixed(0) : "—"}<span style={{ fontSize: 12, color: "#7a756b", fontWeight: 400 }}> / 100</span>
+                </div>
+              </div>
+              <div style={{ fontSize: 12, color: "#5a564d", marginTop: 2 }}>{c.value}</div>
+              {c.score != null && <ScoreBar score={c.score} />}
+              <details style={{ marginTop: 6, fontSize: 11, color: "#7a756b" }}>
+                <summary style={{ cursor: "pointer" }}>Why this matters</summary>
+                <div style={{ marginTop: 4 }}>{c.rationale}</div>
+              </details>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div style={{ marginTop: 12, fontSize: 11, color: "#7a756b", lineHeight: 1.5, maxWidth: 720 }}>
+        <strong>Methodology:</strong> {health.methodology} The HS-dropout rate is included because it is the strongest single predictor of long-term economic distress in EIG / CDC SVI / Opportunity Insights research.
+      </div>
+    </section>
+  );
+}
 
-export default async function CharlestonPage() {
-  const renderedAt = new Date().toISOString().replace("T", " ").slice(0, 16) + " UTC";
+
+// Metrics whose UP direction is GOOD (green) for community well-being.
+const TREND_GOOD_UP = new Set(["population", "median_household_income"]);
+// Metrics whose DOWN direction is good (green when negative).
+const TREND_GOOD_DOWN = new Set(["poverty_rate_families", "acs_unemployment_rate"]);
+
+function trendTone(key: string, pct_change: number): { color: string; bg: string } {
+  if (TREND_GOOD_UP.has(key)) {
+    return pct_change > 0
+      ? { color: "oklch(40% 0.16 142)", bg: "oklch(96% 0.04 142)" }
+      : { color: "oklch(40% 0.20 22)", bg: "oklch(96% 0.05 22)" };
+  }
+  if (TREND_GOOD_DOWN.has(key)) {
+    return pct_change < 0
+      ? { color: "oklch(40% 0.16 142)", bg: "oklch(96% 0.04 142)" }
+      : { color: "oklch(40% 0.20 22)", bg: "oklch(96% 0.05 22)" };
+  }
+  return { color: "#3d3a33", bg: "#f0ece1" };
+}
+
+function DemographicsSection({ d, cityShortName, trend }: { d: CityDemographics; cityShortName: string; trend?: DemographicsTrend }) {
+  if (!d.population) return null;
+  const fmtPct = (v: number | null) => v == null ? "—" : `${v.toFixed(1)}%`;
+  const fmtMoney = (v: number | null) => v == null ? "—" : `$${v.toLocaleString()}`;
+  const priorYear = trend?.comparison_years?.[1];
+  const PP_VARS = new Set(["poverty_rate_families", "acs_unemployment_rate", "pct_owner_occupied"]);
+
+  const renderTrend = (key: string) => {
+    const dl = trend?.deltas?.[key];
+    if (!dl || priorYear == null) return null;
+    const display = PP_VARS.has(key)
+      ? `${dl.abs_change > 0 ? "+" : ""}${dl.abs_change.toFixed(1)}pp vs ${priorYear}`
+      : `${dl.pct_change > 0 ? "+" : ""}${dl.pct_change.toFixed(1)}% vs ${priorYear}`;
+    const tone = trendTone(key, dl.pct_change);
+    return (
+      <div style={{ fontSize: 12, color: tone.color, background: tone.bg, padding: "2px 6px", borderRadius: 3, marginTop: 8, fontWeight: 600, display: "inline-block" }}>{display}</div>
+    );
+  };
+
+  const stats: Array<{ key: string | null; label: string; value: string; sub?: string }> = [
+    { key: "population",              label: "Population",                          value: d.population!.toLocaleString(), sub: `ACS 5y ${d.year}` },
+    { key: "median_age",              label: "Median age",                          value: d.median_age != null ? `${d.median_age.toFixed(1)} yrs` : "—", sub: d.median_age != null && d.median_age < 30 ? "very young — youth-anchor" : d.median_age != null && d.median_age > 40 ? "older skew" : "near US median" },
+    { key: null,                      label: "Bachelor's degree or higher (25+)",   value: fmtPct(d.pct_bachelors_plus), sub: d.pct_bachelors_plus != null && d.pct_bachelors_plus > 40 ? "highly educated workforce" : undefined },
+    { key: "median_household_income", label: "Median household income",             value: fmtMoney(d.median_household_income) },
+    { key: "poverty_rate_families",   label: "Family poverty rate",                 value: fmtPct(d.poverty_rate_families) },
+    { key: "acs_unemployment_rate",   label: "ACS unemployment (25+)",              value: fmtPct(d.acs_unemployment_rate), sub: "5y avg, narrower than LAUS" },
+    { key: "median_home_value",       label: "Median home value",                   value: fmtMoney(d.median_home_value), sub: "owner-occupied units" },
+    { key: "median_gross_rent",       label: "Median gross rent",                   value: fmtMoney(d.median_gross_rent), sub: "renter-occupied units" },
+    { key: "pct_owner_occupied",      label: "% owner-occupied",                    value: fmtPct(d.pct_owner_occupied), sub: d.pct_renter_occupied != null ? `${d.pct_renter_occupied.toFixed(1)}% renter` : undefined },
+    { key: "mean_commute_minutes",    label: "Mean commute time",                   value: d.mean_commute_minutes != null ? `${Math.round(d.mean_commute_minutes)} min` : "—", sub: "one-way to work" },
+  ];
+
+  const headlineKeys: Array<[string, string, string]> = [
+    ["population",              "Population",          "city headcount"],
+    ["median_household_income", "Median HH income",    "per family unit"],
+    ["poverty_rate_families",   "Family poverty",      "of families"],
+    ["acs_unemployment_rate",   "ACS unemployment",    "ages 25+"],
+  ];
 
   return (
-    <>
-      <DashboardHead title="Charleston, IL · Economic Snapshot" />
-      <div className="dashboard-shell" style={{ maxWidth: 1180, margin: "0 auto", padding: "24px 24px 60px", fontFamily: "var(--font-serif), Georgia, serif" }}>
-        <Topbar
-          brand="Charleston, IL · Economic Snapshot"
-          region="Coles County · East Central Illinois (LWA-23)"
-          renderedAt={renderedAt}
-        />
-
-        {/* ═══ Hero · framing ═══ */}
-        <section style={{ marginTop: 24 }}>
-          <h1 style={{ fontSize: 32, fontWeight: 600, margin: 0, color: "#1f1d18", lineHeight: 1.15 }}>
-            Charleston, IL — a college town reshaped by 20 years of enrollment decline at Eastern Illinois University
-          </h1>
-          <p style={{ fontSize: 15, color: "#3d3a33", marginTop: 12, maxWidth: 820, lineHeight: 1.6 }}>
-            Charleston is the Coles County seat (pop {CITY.population_2024.toLocaleString()}, ACS 5-year 2024), home to Eastern Illinois University (EIU). Like {" "}
-            <a href="/carbondale" style={{ color: "#1f5f8f", fontWeight: 600 }}>Carbondale</a>{" "}— SIU's host city ~95 mi south-west — Charleston's economic fortunes are tied to a regional state university whose enrollment has fallen sharply over the last two decades. Both cities share the same structural challenge: a young-skewed population, elevated poverty + crime rates, and an anchor institution that is no longer the employer + economic engine it was in the mid-2000s.
-          </p>
-          <p style={{ fontSize: 13, color: "#5a564d", marginTop: 8, lineHeight: 1.55 }}>
-            <strong>Regional context:</strong> Charleston sits in <em>{CITY.lwa}</em> — a separate workforce-development area from <a href="/southern-illinois" style={{ color: "#1f5f8f", fontWeight: 600 }}>LWA-25 Southern Illinois</a>. The two regions face structurally similar challenges (regional-university decline, rural East Central IL labor markets, federal-funding-dependence) but operate under distinct workforce boards + program portfolios.
-          </p>
-        </section>
-
-        {/* ═══ Headline KPIs ═══ */}
-        <section style={{ marginTop: 32 }}>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14 }}>
-            <StatCard
-              label="Population (ACS 2024)"
-              value={CITY.population_2024.toLocaleString()}
-              sub={`Down from ${CITY.population_2020.toLocaleString()} in 2020 (${CITY.pop_decline_pct.toFixed(1)}%)`}
-              flag
-            />
-            <StatCard
-              label="EIU enrollment (Fall 2025)"
-              value="5,434"
-              sub="Down from 11,651 peak (Fall 2004) — 53% drop"
-              flag
-            />
-            <StatCard
-              label="Median household income"
-              value={`$${CITY.median_household_income_2024.toLocaleString()}`}
-              sub="ACS 5-year 2024"
-            />
-            <StatCard
-              label="Family poverty rate"
-              value={`${CITY.poverty_rate_pct.toFixed(1)}%`}
-              sub="High; college-town pattern + structural drift"
-              flag
-            />
-          </div>
-          <div style={{ fontSize: 11, color: "#7a756b", marginTop: 10, lineHeight: 1.5 }}>
-            Sources: <a href="https://www.census.gov/quickfacts/fact/table/charlestoncityillinois/PST045221" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Census QuickFacts Charleston</a> + <a href="http://censusreporter.org/profiles/16000US1712567-charleston-il/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Census Reporter Charleston</a> + <a href="https://www.eiu.edu/ir/fall_enrollment_tables.php" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>EIU Institutional Research · Fall Enrollment Tables</a> + <a href="https://www.dailyeasternnews.com/2025/06/27/easterns-20-year-enrollment-decrease-is-part-of-statewide-trend/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Daily Eastern News · 20-year enrollment decrease (2025-06-27)</a>.
-          </div>
-        </section>
-
-        {/* ═══ §1 EIU enrollment decline · the defining story ═══ */}
-        <section style={{ marginTop: 40 }}>
-          <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
-          <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
-            01 · The EIU enrollment trajectory · headcount halved over two decades
-          </h2>
-          <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
-            EIU's enrollment trajectory is the dominant economic factor for Charleston. A loss of roughly 6,200 students over 20 years cascades through the city's housing market (student rentals + landlord-investor exposure), retail (restaurants, bars, services oriented around campus), and university employment (faculty + administrative staff levels track enrollment over time).
-          </div>
-          <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "hidden", marginBottom: 12 }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, color: "#3d3a33" }}>
-              <thead>
-                <tr style={{ background: "#f0ece1", textAlign: "left", borderBottom: "1px solid #d8d2c4" }}>
-                  <th style={{ padding: "8px 10px", fontWeight: 600, color: "#1f1d18" }}>Term</th>
-                  <th style={{ padding: "8px 10px", fontWeight: 600, color: "#1f1d18", textAlign: "right" }}>Total enrollment</th>
-                  <th style={{ padding: "8px 10px", fontWeight: 600, color: "#1f1d18", textAlign: "right" }}>Change vs Fall 2004</th>
-                  <th style={{ padding: "8px 10px", fontWeight: 600, color: "#1f1d18" }}>Context</th>
-                </tr>
-              </thead>
-              <tbody>
-                {EIU_ENROLLMENT.map((r, i) => {
-                  const delta = r.headcount - EIU_ENROLLMENT[0].headcount;
-                  const deltaPct = (delta / EIU_ENROLLMENT[0].headcount) * 100;
-                  return (
-                    <tr key={r.year} style={{ borderBottom: i < EIU_ENROLLMENT.length - 1 ? "1px solid #ebe5d6" : "none" }}>
-                      <td style={{ padding: "8px 10px", fontWeight: 600 }}>{r.year}</td>
-                      <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 600 }}>{r.headcount.toLocaleString()}</td>
-                      <td style={{ padding: "8px 10px", textAlign: "right", color: delta < 0 ? "oklch(45% 0.20 22)" : "#5a564d" }}>
-                        {i === 0 ? "—" : `${delta > 0 ? "+" : ""}${delta.toLocaleString()} (${deltaPct > 0 ? "+" : ""}${deltaPct.toFixed(1)}%)`}
-                      </td>
-                      <td style={{ padding: "8px 10px", color: "#5a564d", fontSize: 12 }}>{r.note}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-          <div style={{ padding: 14, background: "#fef9eb", border: "1px solid #f0d98a", borderLeft: "6px solid oklch(45% 0.20 22)", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, marginBottom: 12 }}>
-            <strong>Why this matters for workforce + economic planning in Charleston:</strong>
-            <ul style={{ margin: "8px 0 0 18px", padding: 0 }}>
-              <li><strong>Anchor-institution employment is not stable.</strong> EIU faculty + staff levels are downstream of student enrollment over the long horizon. A 53% enrollment decline cannot be absorbed indefinitely without corresponding employment contraction.</li>
-              <li><strong>Off-campus student housing is overbuilt for current demand.</strong> The rental + landlord market in Charleston was sized for the early-2000s student population; current demand sits half that level. The same Census ACS structural vacancy + rental-degradation pattern visible in <a href="/carbondale" style={{ color: "#1f5f8f" }}>Carbondale</a> is the parallel here.</li>
-              <li><strong>Retail + services oriented around campus traffic are exposed.</strong> Bar / restaurant / services density built for 11k students serves 5k students now; the marginal businesses have already closed, but the residual stock is fragile.</li>
-              <li><strong>Recovery is not predicted by recent FAFSA-delay data alone.</strong> EIU welcomed its largest first-year domestic cohort in three years in Fall 2025 — a positive signal — but transfer + international declines outweighed it. Year-on-year volatility is FAFSA-driven; the underlying 20-year trajectory is structural.</li>
-            </ul>
-          </div>
-          <div style={{ fontSize: 11, color: "#7a756b", lineHeight: 1.5 }}>
-            Sources: <a href="https://www.eiu.edu/ir/fall_enrollment_tables.php" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>EIU Institutional Research · Fall Enrollment Tables</a> + <a href="https://www.eiu.edu/ir/tenth_day_enrollment.php" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>EIU Tenth-Day Enrollment</a> + <a href="https://www.dailyeasternnews.com/2025/06/27/easterns-20-year-enrollment-decrease-is-part-of-statewide-trend/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Daily Eastern News · 20-year enrollment decrease is part of statewide trend (2025-06-27)</a> + <a href="https://jg-tc.com/news/local/education/article_235c4b96-1e4d-4d4e-94ad-5c5614e1856e.html" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>JG-TC · EIU total enrollment drops 8%</a> + <a href="https://nces.ed.gov/ipeds/dfr/2024/ReportHTML.aspx?unitId=144892" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>NCES IPEDS Data Feedback Report · EIU (UnitID 144892)</a>.
-          </div>
-        </section>
-
-        {/* ═══ §2 Demographics ═══ */}
-        <section style={{ marginTop: 40 }}>
-          <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
-          <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
-            02 · Demographics · the very-young college-town pattern
-          </h2>
-          <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
-            ACS 5-year 2024 puts the median age at <strong>{CITY.median_age} years</strong> — among the youngest non-trivial-population cities in Illinois. Roughly one-third of the city headcount is undergraduate or graduate student population; the demographic profile reflects that.
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14, marginBottom: 12 }}>
-            <StatCard label="Median age" value={`${CITY.median_age} yrs`} sub="Very young — student population skew" />
-            <StatCard label="Bachelor's degree or higher" value={`~${CITY.pct_bachelors_or_higher.toFixed(0)}%`} sub="(adults 25+); EIU's transient student population doesn't lift this baseline" />
-            <StatCard label="Race · White alone" value={`${CITY.pct_white.toFixed(1)}%`} />
-            <StatCard label="Race · Black alone" value={`${CITY.pct_black.toFixed(1)}%`} />
-            <StatCard label="Hispanic / Latino" value={`${CITY.pct_hispanic.toFixed(1)}%`} sub="Of any race" />
-            <StatCard label="Family poverty rate" value={`${CITY.poverty_rate_pct.toFixed(1)}%`} flag sub="Persistent + structural" />
-          </div>
-          <div style={{ fontSize: 11, color: "#7a756b", lineHeight: 1.5 }}>
-            Source: <a href="http://censusreporter.org/profiles/16000US1712567-charleston-il/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Census Reporter · Charleston, IL (Place 16000US1712567)</a>. ACS 5-year vintage 2024.
-          </div>
-        </section>
-
-        {/* ═══ §3 Anchor employers ═══ */}
-        <section style={{ marginTop: 40 }}>
-          <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
-          <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
-            03 · Anchor employers · the Coles County industrial + institutional base
-          </h2>
-          <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
-            Coles County's employer base is more diversified than a single-anchor town would suggest. EIU is the largest employer, but Sarah Bush Lincoln Health Center (between Charleston + Mattoon), Rural King (HQ + distribution in Mattoon), Lake Land College, and Consolidated Communications all carry meaningful headcount. R.R. Donnelley operates a Charleston print facility. The president of Coles Together (the regional economic-development organization) describes the employer base as deliberately diversified — no single large employer carries the regional economy.
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 12 }}>
-            {ANCHOR_EMPLOYERS.map((e) => (
-              <div key={e.name} style={{ background: "white", border: "1px solid #d8d2c4", borderLeft: "6px solid #1f1d18", borderRadius: 6, padding: 14 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
-                  <div style={{ fontSize: 15, fontWeight: 600, color: "#1f1d18" }}>{e.name}</div>
-                  <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: "#7a756b" }}>{e.sector}</div>
-                </div>
-                <div style={{ fontSize: 12, color: "#5a564d", marginTop: 4, marginBottom: 8 }}>{e.location}</div>
-                <div style={{ fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>{e.role}</div>
-                <div style={{ fontSize: 12, color: "#5a564d", lineHeight: 1.55, marginTop: 6 }}>{e.headcount_note}</div>
-                <div style={{ fontSize: 11, marginTop: 6 }}>
-                  <a href={e.url} target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>{e.url}</a>
-                </div>
-              </div>
-            ))}
-          </div>
-          <div style={{ fontSize: 11, color: "#7a756b", marginTop: 12, lineHeight: 1.5 }}>
-            Sources: <a href="https://www.colestogether.com/industriesandworkforce" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Coles Together · Industries + Workforce</a> + <a href="https://jg-tc.com/news/article_30a6eadd-84c3-5edd-a7a6-be80ebcfd1d3.html" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>JG-TC · Leading the way · large employers in the area</a> + <a href="https://jg-tc.com/business/local/achievements/article_7c72debe-3b48-4dbb-9daa-49c2bcad8230.html" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>JG-TC · Sarah Bush Lincoln ranked among IL's best employers</a> + <a href="https://www.colesco.illinois.gov/static/coclerk/CountyDirectory.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Coles County Directory of County, Municipal, Township + School Officials</a>. Always confirm current headcount via the employer directly before public stakeholder use.
-          </div>
-        </section>
-
-        {/* ═══ §3.5 EIU Clery Act campus statistics ═══ */}
-        <section style={{ marginTop: 40 }}>
-          <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
-          <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
-            EIU campus · Clery Act Annual Security Report
-          </h2>
-          <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
-            EIU publishes the Annual Safety and Security Report (ASR) in compliance with the Jeanne Clery Disclosure of Campus Security Policy and Campus Crime Statistics Act, the IL Campus Security Enhancement Act, the Higher Education Opportunity Act of 2008, and VAWA. The ASR carries 3-year totals for federally-defined Clery offenses on the campus footprint + immediate public property + non-campus university-controlled properties.
-          </div>
-          <div style={{ padding: 14, background: "oklch(98% 0.015 220)", border: "1px solid #d8d2c4", borderLeft: "6px solid #1f1d18", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, marginBottom: 12 }}>
-            <strong>Different metric than the city per-1,000 rates above.</strong> Clery counts only specific federally-defined offenses on the campus footprint + immediate public property, expressed as raw counts (not rates per 1,000 residents). EIU on-campus enrollment ~5,400 students (Fall 2025); residence-hall capacity is materially smaller. Compare Clery raw counts to the Charleston city per-1,000 rates carefully — different denominator, different geographic scope.
-          </div>
-          <div style={{ padding: 14, background: "white", border: "1px solid #d8d2c4", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, marginBottom: 12 }}>
-            <strong>How to pull current EIU Clery statistics:</strong> EIU&apos;s Annual Safety and Security Report is hosted by the EIU Police Department at <a href="https://www.eiu.edu/police/Safety_Report.php" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>eiu.edu/police/Safety_Report.php</a>. The most recent ASR (released October 2025, covering 2022-2024) carries 3-year totals for Murder, Sex offenses (Rape + Forcible fondling), Robbery, Aggravated assault, Burglary, Motor vehicle theft, and Arson — broken down by On-Campus, On-Campus Student Housing, Non-campus, and Public Property categories per federal Clery formatting. For comparable cross-institution data, the US Department of Education Campus Safety and Security data portal (<a href="https://ope.ed.gov/campussafety/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>ope.ed.gov/campussafety</a>) indexes Clery filings for all federally-funded postsecondary institutions; EIU&apos;s IPEDS UnitID is 144892. This page will mirror the EIU ASR table once the operator pulls + transcribes the current report (same pattern as the SIU Carbondale Clery card on the <a href="/carbondale" style={{ color: "#1f5f8f", fontWeight: 600 }}>Carbondale page</a>).
-          </div>
-          <div style={{ fontSize: 11, color: "#7a756b", lineHeight: 1.5 }}>
-            Sources: <a href="https://www.eiu.edu/police/Safety_Report.php" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>EIU Police · Annual Safety and Security Report</a> + <a href="https://www.eiu.edu/police/Welcome_Statistics.php" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>EIU Police · Criminal Statistics</a> + <a href="https://ope.ed.gov/campussafety/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>US Dept of Education · Campus Safety + Security data tool</a> (IPEDS UnitID 144892).
-          </div>
-        </section>
-
-        {/* ═══ §4 Crime · NeighborhoodScout / FBI UCR 2024 ═══ */}
-        <section style={{ marginTop: 40 }}>
-          <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
-          <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
-            04 · Crime · Charleston + Mattoon (FBI UCR 2024)
-          </h2>
-          <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
-            Charleston's crime rate is elevated relative to the national average and to most Illinois cities (higher than 84% of IL communities). The pattern is property-crime dominant — typical of a college town with high transient + rental-housing density. Violent-crime rate is 3 per 1,000 (1 in 334 chance of violent victimization).
-          </div>
-          <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "hidden", marginBottom: 12 }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-              <thead>
-                <tr style={{ background: "#f0ece1", textAlign: "left", borderBottom: "1px solid #d8d2c4" }}>
-                  <th style={{ padding: "8px 10px", fontWeight: 600 }}>City</th>
-                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Crime / 1,000</th>
-                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Violent / 1,000</th>
-                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Property / 1,000</th>
-                  <th style={{ padding: "8px 10px", fontWeight: 600 }}>Note</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td style={{ padding: "8px 10px", fontWeight: 600 }}>Charleston · Coles</td>
-                  <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 600, color: "oklch(45% 0.20 22)" }}>{CRIME_DATA.charleston.crime_per_1000}</td>
-                  <td style={{ padding: "8px 10px", textAlign: "right" }}>{CRIME_DATA.charleston.violent_per_1000}</td>
-                  <td style={{ padding: "8px 10px", textAlign: "right" }}>{CRIME_DATA.charleston.property_per_1000}</td>
-                  <td style={{ padding: "8px 10px", fontSize: 12, color: "#5a564d" }}>{CRIME_DATA.charleston.note}</td>
-                </tr>
-                <tr style={{ borderTop: "1px solid #ebe5d6" }}>
-                  <td style={{ padding: "8px 10px", fontWeight: 600 }}>Mattoon · Coles</td>
-                  <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 600, color: "oklch(45% 0.20 22)" }}>{CRIME_DATA.mattoon.crime_per_1000}</td>
-                  <td style={{ padding: "8px 10px", textAlign: "right" }}>{CRIME_DATA.mattoon.violent_per_1000}</td>
-                  <td style={{ padding: "8px 10px", textAlign: "right" }}>{CRIME_DATA.mattoon.property_per_1000}</td>
-                  <td style={{ padding: "8px 10px", fontSize: 12, color: "#5a564d" }}>{CRIME_DATA.mattoon.note}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <div style={{ fontSize: 11, color: "#7a756b", lineHeight: 1.5 }}>
-            Sources: <a href="https://www.neighborhoodscout.com/il/charleston/crime" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>NeighborhoodScout Charleston</a> + <a href="https://www.neighborhoodscout.com/il/mattoon/crime" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>NeighborhoodScout Mattoon</a> + <a href="https://isp.illinois.gov/CrimeReporting/CrimeInIllinoisReports" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>IL State Police Crime in Illinois reports</a>. {CRIME_DATA.release_year}
-          </div>
-        </section>
-
-        {/* ═══ §5 Comparison · Charleston-EIU vs Carbondale-SIU ═══ */}
-        <section style={{ marginTop: 40 }}>
-          <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
-          <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
-            05 · Sibling cities · Charleston + Carbondale share the regional-university decline pattern
-          </h2>
-          <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
-            Charleston and <a href="/carbondale" style={{ color: "#1f5f8f", fontWeight: 600 }}>Carbondale</a> are the two clearest examples of the Illinois regional-state-university decline pattern. Both cities are college-town anchored — Carbondale on SIU, Charleston on EIU — and both have lost roughly half their student headcount over the last two decades. The downstream effects on housing, retail, employment, and city demographics are structurally similar.
-          </div>
-          <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "hidden", marginBottom: 12 }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-              <thead>
-                <tr style={{ background: "#f0ece1", textAlign: "left", borderBottom: "1px solid #d8d2c4" }}>
-                  <th style={{ padding: "8px 10px", fontWeight: 600 }}>Metric</th>
-                  <th style={{ padding: "8px 10px", fontWeight: 600 }}>Charleston · EIU</th>
-                  <th style={{ padding: "8px 10px", fontWeight: 600 }}>Carbondale · SIU</th>
-                </tr>
-              </thead>
-              <tbody>
-                {[
-                  ["City population (ACS 2024)", "~17,062", "~21,857"],
-                  ["University Fall 2025 enrollment", "5,434 (EIU)", "~11,116 (SIU)"],
-                  ["20-year enrollment decline", "-53%", "-45%"],
-                  ["Median age", "29.6 yrs", "~25.5 yrs"],
-                  ["Median household income", "$49,300", "~$31,000"],
-                  ["Family poverty rate", "26.3%", "~37%"],
-                  ["Crime rate per 1,000 (FBI UCR 2024)", "18", "50"],
-                  ["Workforce-development area", "LWA-23 East Central IL", "LWA-25 Southern IL"],
-                  ["Regional anchor health system", "Sarah Bush Lincoln (Mattoon-Charleston)", "Memorial Hospital of Carbondale (SIH)"],
-                ].map(([label, ch, ca], i) => (
-                  <tr key={i} style={{ borderTop: i === 0 ? "none" : "1px solid #ebe5d6" }}>
-                    <td style={{ padding: "8px 10px", fontWeight: 600 }}>{label}</td>
-                    <td style={{ padding: "8px 10px", color: "#3d3a33" }}>{ch}</td>
-                    <td style={{ padding: "8px 10px", color: "#3d3a33" }}>{ca}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div style={{ fontSize: 13, color: "#3d3a33", lineHeight: 1.55, marginBottom: 8 }}>
-            <strong>Differences worth flagging for stakeholders:</strong>
-          </div>
-          <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 13, color: "#3d3a33", lineHeight: 1.6 }}>
-            <li><strong>Charleston is materially more affluent than Carbondale</strong> on median household income (+59%) — partially explained by EIU's higher faculty-pay vs SIU's older student-renter housing depressing the Carbondale figure.</li>
-            <li><strong>Charleston has substantially lower crime rates</strong> (18 per 1,000 vs Carbondale's 50 per 1,000). The college-town pattern is consistent, but Carbondale's MV-theft + property-crime rates are notably higher.</li>
-            <li><strong>The federal-contracting concentration that defines LWA-25 (GD-OTS Marion at $812M / 24 months)</strong> has no equivalent in Coles County. Charleston / Mattoon are diversified-services + light-industrial; the federal-money story that anchors the Southern IL page does not apply here.</li>
-            <li><strong>Sarah Bush Lincoln is a Forbes Top 10 IL employer ranking</strong> — a meaningful regional differentiator. Carbondale's SIH Memorial Hospital is comparable in scale but doesn't carry the same independent national rating recognition.</li>
-          </ul>
-        </section>
-
-        {/* ═══ §6 Comparison framework · 12 dimensions ═══ */}
-        <section style={{ marginTop: 40 }}>
-          <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
-          <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
-            06 · Comparison framework · the analytical dimensions for a Carbondale vs Charleston cross-read
-          </h2>
-          <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
-            The §05 headline metrics are the visible top of the comparison. The substantive comparison — the one that actually shifts workforce-planning, BD-pitch, federal-grant, or relocator decisions — runs through these 12 dimensions. Each carries a canonical primary-source data path. The dashboard renders the headline numbers; the deeper questions land here so stakeholders can pull them on demand.
-          </div>
-          <ol style={{ margin: "0 0 0 22px", padding: 0, fontSize: 13, color: "#3d3a33", lineHeight: 1.65 }}>
-            {[
-              {
-                q: "Wage-adjusted private-sector employment trajectory (10-yr), excluding the university payroll",
-                why: "Strips the anchor-institution distortion and shows whether the surrounding private economy is growing, flat, or hollowing out.",
-                src: "BLS QCEW (NAICS 6113 carve-out) at the county level",
-                url: "https://www.bls.gov/cew/",
-              },
-              {
-                q: "Occupational mix + median wage by major SOC group in each Micropolitan SA",
-                why: "Determines whether either city has a transferable workforce for advanced manufacturing, healthcare, or tech relocation — vs. a service-economy lock-in.",
-                src: "BLS OEWS · Carbondale-Marion + Mattoon Micro SAs",
-                url: "https://www.bls.gov/oes/",
-              },
-              {
-                q: "Tradable vs non-tradable employment share + how the split has moved since 2015",
-                why: "Tradable employment (manufacturing, ag-tech, logistics, federal) is the leading indicator of whether a city can recover from anchor decline; non-tradable just recirculates local dollars.",
-                src: "BLS QCEW 2-digit NAICS + Brookings tradable-sector classification",
-                url: "https://www.brookings.edu/articles/the-geography-of-trade-in-goods-and-services-in-the-u-s/",
-              },
-              {
-                q: "Net domestic migration pattern for the 25-44 age cohort over the last 5 years",
-                why: "Student churn masks whether prime-working-age adults are arriving or leaving — the actual labor-supply signal for a relocator.",
-                src: "Census ACS B07001 migration tables + IRS SOI county-to-county migration",
-                url: "https://www.irs.gov/statistics/soi-tax-stats-migration-data",
-              },
-              {
-                q: "Federal contract + grant inflow per capita by agency + NAICS over the last 5 fiscal years",
-                why: "Reveals existing federal anchors (DOE/NSF research at SIU, USDA, VA, DoD subcontracts) that a grant proposal can stack onto or a BD pitch can cite.",
-                src: "USAspending.gov + SAM.gov · Jackson + Coles county recipients",
-                url: "https://www.usaspending.gov/",
-              },
-              {
-                q: "Commuting shed — where do workers live + where do residents work?",
-                why: "Charleston-Mattoon is a twin-city labor market; Carbondale is more isolated. Changes program design (transit, regional LWA coordination) + the realistic labor-draw radius.",
-                src: "Census LEHD OnTheMap (LODES) county inflow/outflow",
-                url: "https://onthemap.ces.census.gov/",
-              },
-              {
-                q: "Housing affordability + vacancy relative to median wage; share of stock that is student-dependent rental",
-                why: "Both cities have overbuilt student housing; the conversion risk + relocator housing-cost story diverges sharply.",
-                src: "Census ACS B25 series + HUD CHAS + local MLS / Zillow Research",
-                url: "https://www.huduser.gov/portal/datasets/cp.html",
-              },
-              {
-                q: "LWA WIOA performance vs state-average exit / credential / median-earnings benchmarks",
-                why: "LWA-25 (Man-Tra-Con) vs LWA-23 (East Central IL) have different program portfolios + outcomes — drives where a federal workforce grant should land.",
-                src: "IL DCEO WIOA Annual Performance Reports + USDOL ETA-9169",
-                url: "https://www.illinoisworknet.com/WIOA/Pages/PerformanceTransparency.aspx",
-              },
-              {
-                q: "Healthcare-sector employment share + concentration (Location Quotient > 1.5?)",
-                why: "Both cities have regional hospitals (SIH / Sarah Bush Lincoln); healthcare often becomes the post-anchor employer + the LQ tells you whether it's already saturated or still absorbing.",
-                src: "BLS QCEW location quotients · NAICS 62",
-                url: "https://www.bls.gov/cew/about-data/location-quotients-explained.htm",
-              },
-              {
-                q: "Prime-age (25-54) labor force participation rate vs IL + US averages",
-                why: "LFPR catches the discouraged-worker problem the unemployment rate hides — critical for both grant narrative + BD honest-broker pitch.",
-                src: "Census ACS S2301 county tables",
-                url: "https://data.census.gov/table?q=S2301",
-              },
-              {
-                q: "Broadband availability + adoption rate (100/20 Mbps fixed) at census-tract level",
-                why: "Remote-work + federal BEAD eligibility hinge on this; Coles vs Jackson differs materially.",
-                src: "FCC Broadband Data Collection + NTIA BEAD eligibility maps",
-                url: "https://broadbandmap.fcc.gov/",
-              },
-              {
-                q: "Property-tax burden on commercial real estate + TIF / Enterprise Zone / Opportunity Zone footprints",
-                why: "The single biggest line item in a relocator's pro-forma + the actual lever a city BD office can pull.",
-                src: "IL Dept of Revenue PTAX-203 + IL DCEO Enterprise Zone registry + Treasury OZ map",
-                url: "https://dceo.illinois.gov/expandrelocate/incentives/enterprisezone.html",
-              },
-            ].map((d, i) => (
-              <li key={i} style={{ marginBottom: 14 }}>
-                <strong>{d.q}.</strong>{" "}
-                <span style={{ color: "#5a564d" }}>{d.why}</span>{" "}
-                <em style={{ color: "#5a564d" }}>Source: <a href={d.url} target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>{d.src}</a>.</em>
-              </li>
-            ))}
-          </ol>
-          <div style={{ padding: 14, background: "#fef9eb", border: "1px solid #f0d98a", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, marginTop: 12 }}>
-            <strong>Operator note:</strong> the table in §05 carries the visible top-line comparison; this framework is what the dashboard will iteratively fill in. Items 1-4 + 8 + 10 are the highest-leverage for workforce-planning + grant-narrative decisions; items 5-6 + 12 carry the highest leverage for BD relocator pitches; items 7 + 11 are the relocator-side housing + connectivity diligence pair. Pull each as needed; cite the primary source on every claim.
-          </div>
-        </section>
-
-        {/* ═══ §7 Action ladder ═══ */}
-        <section style={{ marginTop: 40 }}>
-          <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
-          <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
-            07 · Action ladder · what the page surfaces for the LWA-23 workforce board + Coles Together
-          </h2>
-          <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
-            Each card below leads with what the page already does (data-side) and ends with the human-only residual step. The Lake Land College + EIU credential pipeline is the right place to anchor any workforce-board cohort planning; Sarah Bush Lincoln Health Center is the right place to anchor any allied-health credential discussion; Rural King + Consolidated Communications HQ presence in Mattoon are the right places to anchor any retail / telecom / logistics conversation.
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
-            {[
-              {
-                title: "Compare Charleston-EIU + Carbondale-SIU side-by-side",
-                body: <>The two cities share the regional-university decline pattern but differ on crime, poverty, and federal-money concentration. Use the §05 comparison table to map joint-region workforce-planning analogues (e.g., what works for SIU graduate-retention housing in Carbondale's old stock vs EIU's Charleston student-rental market). Companion: <a href="/carbondale" style={{ color: "#1f5f8f", fontWeight: 600 }}>Carbondale →</a></>,
-              },
-              {
-                title: "Anchor allied-health credential pipelines on Sarah Bush Lincoln",
-                body: "SBL is a Forbes-ranked top 10 IL employer + the regional hospital system. Lake Land College CNA / LPN / RN-ADN credentials are the natural pipeline; the workforce board's residual step is brokering the next cohort intake at SBL's HR + nursing leadership. Pull current SBL job postings + hire counts before any cohort planning.",
-              },
-              {
-                title: "Map EIU enrollment-decline cascade to local economic impact",
-                body: "The §01 table shows EIU enrollment dropping from 11,651 (2004) to 5,434 (2025). The downstream consequences — student-rental oversupply, campus-adjacent retail attrition, university staff levels — are workforce-board-adjacent but not workforce-board-solvable. Coles Together's role is regional economic-development advocacy; the data anchors the case.",
-              },
-              {
-                title: "Coordinate with sister regions",
-                body: <>Companion public dashboards: <a href="/southern-illinois" style={{ color: "#1f5f8f", fontWeight: 600 }}>Southern Illinois Region (LWA-25) →</a> for the regional-university decline parallel + federal-money concentration framework; <a href="/carbondale" style={{ color: "#1f5f8f", fontWeight: 600 }}>Carbondale →</a> for the SIU-host-city economic profile; <a href="/murphysboro" style={{ color: "#1f5f8f", fontWeight: 600 }}>Murphysboro →</a> for the Jackson County secondary-city pattern; <a href="/market" style={{ color: "#1f5f8f", fontWeight: 600 }}>US Market Health →</a> for national macro context.</>,
-              },
-            ].map((c, i) => (
-              <div key={i} style={{ background: "white", border: "1px solid #d8d2c4", borderLeft: "6px solid #1f1d18", borderRadius: 6, padding: 14 }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: "#1f1d18", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>{c.title}</div>
-                <div style={{ fontSize: 13, color: "#3d3a33", lineHeight: 1.6 }}>{c.body}</div>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        {/* ═══ §8 Page scope + methodology ═══ */}
-        <section style={{ marginTop: 40 }}>
-          <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
-          <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
-            08 · Page scope + methodology
-          </h2>
-          <div style={{ fontSize: 13, color: "#3d3a33", lineHeight: 1.6, maxWidth: 820 }}>
-            This page is currently a <strong>static primary-source profile</strong> — data is hardcoded against the citations above and refreshed manually. Companion pages <a href="/carbondale" style={{ color: "#1f5f8f", fontWeight: 600 }}>/carbondale</a> and <a href="/murphysboro" style={{ color: "#1f5f8f", fontWeight: 600 }}>/murphysboro</a> route through console-api with live FRED + Census + USAspending pulls. Charleston can migrate to the same live-data pattern once Coles County / Mattoon Micropolitan series are wired in the backend (Coles County FIPS {CITY.fips_county}; Mattoon Micropolitan CBSA 31380).
-            <br /><br />
-            <strong>Refresh cadence:</strong> EIU enrollment is published annually in October (Tenth-Day) and November (Fall Enrollment Tables) by EIU Institutional Research. Census ACS 5-year is published in December for the preceding 5-year window. FBI UCR is published in October for the preceding calendar year. NeighborhoodScout publishes shortly after FBI UCR release. Update this page accordingly.
-            <br /><br />
-            <strong>Editorial standard:</strong> every claim on this page is anchored on a primary source (cited inline); no inferences or unsourced framings. Verdict adjectives are reserved for verifiable patterns (e.g., &quot;higher than 84% of IL communities&quot; for crime, where NeighborhoodScout publishes the percentile).
-          </div>
-        </section>
-
-        <DashboardFooter columns={DEFAULT_FOOTER_COLUMNS} />
+    <section style={{ marginTop: 40 }}>
+      <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+      <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+        Demographics · {cityShortName}
+      </h2>
+      <div style={{ fontSize: 14, color: "#5a564d", marginBottom: 16, maxWidth: 720 }}>
+        Census American Community Survey 5-year estimates for the {cityShortName}
+        municipality (not the broader county). Use this to know who actually
+        lives here — and to make demographic-grounded pitches when courting
+        employers, housing developers, or grant-makers.
       </div>
-    </>
+
+      {trend?.deltas && priorYear != null && (
+        <div style={{ marginBottom: 24 }}>
+          <h3 style={{ fontSize: 15, fontWeight: 600, color: "#1f1d18", margin: "0 0 4px 0", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+            Direction of travel · {priorYear} → {d.year}
+          </h3>
+          <div style={{ fontSize: 13, color: "#5a564d", marginBottom: 12, maxWidth: 720 }}>
+            How {cityShortName} has changed since the prior Census ACS5 release. Green = improvement, red = deterioration, grey = direction-agnostic.
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
+            {headlineKeys.map(([key, label, sub]) => {
+              const dl = trend.deltas[key];
+              if (!dl) return null;
+              const isPP = PP_VARS.has(key);
+              const display = isPP
+                ? `${dl.abs_change > 0 ? "+" : ""}${dl.abs_change.toFixed(1)}pp`
+                : `${dl.pct_change > 0 ? "+" : ""}${dl.pct_change.toFixed(1)}%`;
+              const tone = trendTone(key, dl.pct_change);
+              return (
+                <div key={key} style={{ background: tone.bg, border: `1px solid ${tone.color}33`, borderRadius: 6, padding: 14 }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: tone.color, marginBottom: 4 }}>{label}</div>
+                  <div style={{ fontSize: 28, fontWeight: 600, color: tone.color, lineHeight: 1.05 }}>{display}</div>
+                  <div style={{ fontSize: 12, color: "#5a564d", marginTop: 4 }}>{sub}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 16 }}>
+        {stats.map((s, i) => (
+          <div key={i} style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, padding: 14 }}>
+            <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: "#7a756b", marginBottom: 6 }}>{s.label}</div>
+            <div style={{ fontSize: 22, fontWeight: 500, color: "#1f1d18", lineHeight: 1.1, marginBottom: 4 }}>{s.value}</div>
+            {s.sub && <div style={{ fontSize: 12, color: "#7a756b" }}>{s.sub}</div>}
+            {s.key && renderTrend(s.key)}
+          </div>
+        ))}
+      </div>
+      <div style={{ marginTop: 16, padding: 14, background: "white", border: "1px solid #d8d2c4", borderRadius: 6 }}>
+        <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em", color: "#7a756b", marginBottom: 8 }}>
+          Race / ethnicity composition
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 12, fontSize: 14 }}>
+          <div><strong>{fmtPct(d.pct_white_alone)}</strong> <span style={{ color: "#5a564d" }}>White alone</span></div>
+          <div><strong>{fmtPct(d.pct_black_alone)}</strong> <span style={{ color: "#5a564d" }}>Black or African American alone</span></div>
+          <div><strong>{fmtPct(d.pct_hispanic_or_latino)}</strong> <span style={{ color: "#5a564d" }}>Hispanic or Latino (any race)</span></div>
+          <div><strong>{fmtPct(d.pct_foreign_born)}</strong> <span style={{ color: "#5a564d" }}>Foreign-born</span></div>
+        </div>
+      </div>
+      <div style={{ marginTop: 12, fontSize: 12, color: "#7a756b" }}>{d.source}</div>
+    </section>
+  );
+}
+
+function IndustryMixSection({ mix, scope }: { mix: IndustryMix; scope: string }) {
+  if (!mix.top_supersectors.length) return null;
+  const maxEmp = Math.max(...mix.top_supersectors.map(s => s.total_employment));
+  return (
+    <section style={{ marginTop: 40 }}>
+      <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+      <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+        Industry mix · who employs people in {scope}
+      </h2>
+      <div style={{ fontSize: 14, color: "#5a564d", marginBottom: 16, maxWidth: 720 }}>
+        Total covered employment by NAICS supersector (BLS QCEW, latest published quarter).
+        This is the answer to &ldquo;what kind of city is this for jobs?&rdquo; — and the
+        leverage list for which sectors to court when recruiting employers.
+      </div>
+      <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "hidden" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1.6fr 90px 110px 120px", gap: 0, padding: "10px 14px", background: "#f0ece1", fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em", color: "#5a564d", fontWeight: 600 }}>
+          <div>Supersector</div>
+          <div style={{ textAlign: "right" }}>Employment</div>
+          <div style={{ textAlign: "right" }}>Avg/week</div>
+          <div style={{ textAlign: "right" }}>≈Annual</div>
+        </div>
+        {mix.top_supersectors.map((row, i) => {
+          const barPct = (row.total_employment / maxEmp) * 100;
+          return (
+            <div key={row.code} style={{ borderTop: i === 0 ? "none" : "1px solid #ebe5d6" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1.6fr 90px 110px 120px", gap: 0, padding: "12px 14px", fontSize: 14, alignItems: "center" }}>
+                <div>
+                  <div style={{ fontWeight: 600, color: "#1f1d18" }}>{row.name}</div>
+                  <div style={{ fontSize: 11, color: "#7a756b", marginTop: 2 }}>
+                    Private {row.private_employment.toLocaleString()} ·{" "}
+                    Public {row.public_employment.toLocaleString()}
+                  </div>
+                </div>
+                <div style={{ textAlign: "right", fontWeight: 600 }}>{row.total_employment.toLocaleString()}</div>
+                <div style={{ textAlign: "right" }}>${row.avg_weekly_wage.toLocaleString()}</div>
+                <div style={{ textAlign: "right", color: "#5a564d" }}>${(row.annual_pay_equivalent / 1000).toFixed(0)}k</div>
+              </div>
+              <div style={{ height: 3, background: "#ebe5d6" }}>
+                <div style={{ height: 3, width: `${barPct}%`, background: "oklch(45% 0.16 220)" }} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ marginTop: 12, fontSize: 12, color: "#7a756b" }}>
+        Quarter: <strong>{mix.as_of_quarter}</strong>. Total covered employment in {scope}: <strong>{mix.total_employment.toLocaleString()}</strong>. {mix.source}
+      </div>
+    </section>
+  );
+}
+
+function fmtMoney(n: number): string {
+  if (n >= 1_000_000_000) return `$${(n / 1_000_000_000).toFixed(1)}B`;
+  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `$${(n / 1_000).toFixed(0)}k`;
+  return `$${n.toFixed(0)}`;
+}
+
+function BusinessLeadsBlock({ b }: { b: BusinessOps }) {
+  return (
+    <section style={{ marginTop: 40 }}>
+      <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+      <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+        Business lead opportunities · federal contracts
+      </h2>
+      <div style={{ fontSize: 14, color: "#5a564d", marginBottom: 16, maxWidth: 720 }}>
+        Federal contract dollars flowing into Coles County, by sector. Use these
+        to (a) pitch employers in matching NAICS to consider Charleston, (b) help
+        local primes find subcontracting wedges, and (c) target SAM.gov solicitations
+        where regional demand is already proven.
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
+        <div>
+          <h3 style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: "0.06em", color: "#7a756b", marginBottom: 10 }}>
+            Top NAICS · Coles Co. (last {b.totals.lookback_months}mo)
+          </h3>
+          {b.top_naics.length === 0 ? (
+            <div style={{ color: "#7a756b", fontSize: 13 }}>No data returned.</div>
+          ) : (
+            <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "hidden" }}>
+              {b.top_naics.slice(0, 8).map((n, i) => (
+                <div key={n.code} style={{
+                  display: "flex", justifyContent: "space-between", padding: "10px 14px",
+                  borderTop: i === 0 ? "none" : "1px solid #ebe5d6", fontSize: 14,
+                }}>
+                  <div>
+                    <div style={{ fontWeight: 600 }}>{n.name}</div>
+                    <div style={{ fontSize: 11, color: "#7a756b" }}>NAICS {n.code}</div>
+                  </div>
+                  <div style={{ fontWeight: 600, color: "#1f5f8f" }}>{fmtMoney(n.amount)}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        <div>
+          <h3 style={{ fontSize: 13, textTransform: "uppercase", letterSpacing: "0.06em", color: "#7a756b", marginBottom: 10 }}>
+            Largest awards · place-of-performance Coles Co.
+          </h3>
+          {b.top_awards.length === 0 ? (
+            <div style={{ color: "#7a756b", fontSize: 13 }}>No data returned.</div>
+          ) : (
+            <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "hidden" }}>
+              {b.top_awards.slice(0, 8).map((a, i) => (
+                <div key={i} style={{ padding: "10px 14px", borderTop: i === 0 ? "none" : "1px solid #ebe5d6", fontSize: 13 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                    <div style={{ fontWeight: 600, color: "#1f1d18", flex: 1 }}>{a.recipient || "—"}</div>
+                    <div style={{ fontWeight: 600, color: "#1f5f8f" }}>{fmtMoney(a.amount)}</div>
+                  </div>
+                  <div style={{ fontSize: 12, color: "#5a564d", marginTop: 2 }}>{a.agency}</div>
+                  {a.description && <div style={{ fontSize: 12, color: "#7a756b", marginTop: 4 }}>{a.description}</div>}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+      <div style={{ marginTop: 16, padding: 14, background: "#fef9eb", border: "1px solid #f0d98a", borderRadius: 6, fontSize: 13 }}>
+        <strong>Where to act:</strong>{" "}
+        <a href={b.sam_gov_search_link} target="_blank" rel="noopener noreferrer">SAM.gov · Illinois active opportunities →</a>
+        {" · "}
+        <a href="https://www.usaspending.gov/state/Illinois" target="_blank" rel="noopener noreferrer">USAspending · Illinois</a>
+        {" · "}
+        <a href="https://www.sba.gov/federal-contracting/contracting-assistance-programs/hubzone-program" target="_blank" rel="noopener noreferrer">SBA HUBZone</a>
+      </div>
+    </section>
+  );
+}
+
+async function fetchCharleston(): Promise<CharlestonData | null> {
+  try {
+    const res = await fetch(`${API_BASE}/api/public/charleston`, { cache: "no-store" });
+    if (!res.ok) return null;
+    return (await res.json()) as CharlestonData;
+  } catch {
+    return null;
+  }
+}
+
+type Tone = "good" | "ok" | "warn" | "bad";
+const TONE_COLOR: Record<Tone, string> = {
+  good: "oklch(55% 0.16 142)",
+  ok:   "oklch(55% 0.16 142)",
+  warn: "oklch(58% 0.15 60)",
+  bad:  "oklch(55% 0.20 22)",
+};
+
+interface Card {
+  key: string;
+  label: string;
+  value: string;
+  sub?: string;
+  tone: Tone;
+  detail: string;
+}
+
+function fmtNum(n: number, dec = 0): string {
+  return n.toLocaleString("en-US", { maximumFractionDigits: dec });
+}
+
+function ageOf(d: string): string {
+  const date = new Date(d + "T00:00:00Z");
+  const now = new Date();
+  const days = Math.floor((now.getTime() - date.getTime()) / 86400000);
+  if (days < 60) return `${days}d ago`;
+  const months = Math.floor(days / 30);
+  if (months < 24) return `${months}mo ago`;
+  return `${Math.floor(months / 12)}y ago`;
+}
+
+function buildSections(d: CharlestonData): Array<{ id: string; title: string; subtitle: string; cards: Card[] }> {
+  const ind = d.indicators;
+  const get = (k: string) => ind[k]?.value;
+  const getDate = (k: string) => ind[k]?.date;
+  const cards = (...arr: Array<Card | null>): Card[] => arr.filter(Boolean) as Card[];
+
+  // FRED Coles County series (`cle_coles_*` family) are TBD in platform.macro_data.
+  // Until they're loaded the Jobs/People/Housing/Hardship cards will be empty —
+  // the IL state context card always renders so the section header is meaningful.
+  const colesUR = get("cle_coles_unemployment_rate");
+  const microUR = get("cle_micro_unemployment_rate");
+  const ilUR = get("il_unemployment_rate");
+  const lf = get("cle_micro_labor_force");
+
+  const jobsCards: Array<Card | null> = [
+    colesUR !== undefined ? {
+      key: "c_ur", label: "Unemployment (Coles Co.)", value: `${colesUR.toFixed(1)}%`,
+      sub: `as of ${ageOf(getDate("cle_coles_unemployment_rate")!)}`,
+      tone: colesUR < 4 ? "good" : colesUR < 6 ? "ok" : colesUR < 8 ? "warn" : "bad",
+      detail: "Coles County, IL unemployment rate. Source: BLS LAUS via FRED.",
+    } : null,
+    microUR !== undefined ? {
+      key: "m_ur", label: "Unemployment (Mattoon Micro SA)", value: `${microUR.toFixed(1)}%`,
+      sub: `Micro-wide; ${ageOf(getDate("cle_micro_unemployment_rate")!)}`,
+      tone: microUR < 4 ? "good" : microUR < 6 ? "ok" : microUR < 8 ? "warn" : "bad",
+      detail: "Mattoon, IL Micropolitan Statistical Area (CBSA 31380; Coles County). Source: BLS LAUS via FRED.",
+    } : null,
+    ilUR !== undefined ? {
+      key: "i_ur", label: "Unemployment (Illinois)", value: `${ilUR.toFixed(1)}%`,
+      sub: "state-wide reference",
+      tone: ilUR < 4 ? "good" : ilUR < 6 ? "ok" : ilUR < 8 ? "warn" : "bad",
+      detail: "Illinois state unemployment rate for context vs Coles County. Source: BLS LAUS via FRED.",
+    } : null,
+    lf !== undefined ? {
+      key: "lf", label: "Micro SA Labor Force", value: fmtNum(lf),
+      sub: `as of ${ageOf(getDate("cle_micro_labor_force")!)}`,
+      tone: "ok",
+      detail: "Total civilian labor force in the Mattoon Micropolitan SA. Source: BLS LAUS via FRED.",
+    } : null,
+  ];
+
+  return [
+    { id: "jobs", title: "Jobs & wages", subtitle: "How is the local labor market doing?", cards: cards(...jobsCards) },
+  ].filter(s => s.cards.length > 0);
+}
+
+function topHeadline(d: CharlestonData): { headline: string; subhead: string; tone: Tone; score: number | null; band: string | null } {
+  const h = d.health_score;
+  if (!h || h.score == null) {
+    return {
+      headline: "Economic profile",
+      subhead: "Local indicators for Coles County + the Mattoon Micropolitan SA.",
+      tone: "ok",
+      score: null,
+      band: null,
+    };
+  }
+  const worst = [...h.components]
+    .filter(c => c.score != null)
+    .sort((a, b) => (a.score! - b.score!))[0];
+  const worstLabel = worst ? worst.label.toLowerCase() : "";
+
+  const tone: Tone =
+    h.score >= 80 ? "good" :
+    h.score >= 60 ? "ok" :
+    h.score >= 40 ? "warn" : "bad";
+
+  const subhead = `Band: ${h.label} (composite of 6 hardship signals — HS-dropout, poverty, unemployment, income vs state, 5y pop trend, 5y income trend).${worstLabel ? ` Weakest component: ${worstLabel}.` : ""} Methodology + per-component scores below.`;
+
+  return {
+    headline: `Community Health Score · ${h.score.toFixed(0)} / 100`,
+    subhead,
+    tone,
+    score: h.score,
+    band: h.label,
+  };
+}
+
+function URChart({ series }: { series: Array<{ date: string; value: number }> }) {
+  if (!series.length) return null;
+  const values = series.map(p => p.value);
+  const min = Math.max(0, Math.min(...values) - 1);
+  const max = Math.max(...values) + 1;
+  const range = max - min || 1;
+  const pts = series.map((p, i) => {
+    const x = (i / Math.max(1, series.length - 1)) * 780 + 10;
+    const y = 220 - ((p.value - min) / range) * 200;
+    return `${x},${y}`;
+  }).join(" ");
+  const lineY = (v: number) => 220 - ((v - min) / range) * 200;
+  const TICK_COUNT = 4;
+  const tickIdxs = Array.from({ length: TICK_COUNT }, (_, i) =>
+    Math.round(((i + 0.5) / TICK_COUNT) * (series.length - 1))
+  );
+  const fmtMonthYear = (iso: string) => {
+    const d = new Date(iso);
+    return d.toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: "UTC" });
+  };
+  return (
+    <svg viewBox="0 0 800 260" preserveAspectRatio="none" style={{ width: "100%", height: 260 }}>
+      <line x1="0" y1={lineY(4)} x2="800" y2={lineY(4)} stroke="oklch(55% 0.16 142)" strokeWidth="1" strokeDasharray="4 4" />
+      <text x="8" y={lineY(4) - 5} fill="oklch(50% 0.16 142)" fontSize="11" fontFamily="ui-sans-serif">Full-employment line · 4%</text>
+      <line x1="0" y1={lineY(6)} x2="800" y2={lineY(6)} stroke="oklch(58% 0.15 60)" strokeWidth="1" strokeDasharray="4 4" />
+      <text x="8" y={lineY(6) - 5} fill="oklch(50% 0.15 60)" fontSize="11" fontFamily="ui-sans-serif">Watch line · 6%</text>
+      <polyline fill="none" stroke="oklch(45% 0.16 220)" strokeWidth="2" points={pts} />
+      {tickIdxs.map(idx => {
+        const p = series[idx];
+        if (!p) return null;
+        const x = (idx / Math.max(1, series.length - 1)) * 780 + 10;
+        return (
+          <g key={idx}>
+            <line x1={x} y1="220" x2={x} y2="226" stroke="#8a857c" strokeWidth="0.5" />
+            <text x={x} y="245" fill="#5a564d" fontSize="11" fontFamily="ui-sans-serif" textAnchor="middle">
+              {fmtMonthYear(p.date)}
+            </text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+export default async function CharlestonPage() {
+  const data = await fetchCharleston();
+  const sections = data ? buildSections(data) : [];
+  const top = data ? topHeadline(data) : null;
+
+  const renderedAt = data ? data.ts.slice(0, 16).replace("T", " ") + " UTC" : "—";
+
+  // Charleston-side awards: prefer city-level filtering when present; fall back to county-wide
+  const charlestonCityAwards = data?.business_opportunities_city;
+  const colesCountyAwards = data?.business_opportunities_county;
+  const businessForDisplay =
+    charlestonCityAwards && charlestonCityAwards.top_awards.length > 0
+      ? charlestonCityAwards
+      : colesCountyAwards;
+
+  return (
+    <html lang="en">
+      <head>
+        <DashboardHead title="Charleston, IL · Economic Profile" />
+      </head>
+      <body>
+        <div className="shell">
+          <Topbar brand="Charleston, IL · Economic Profile" region="Charleston · Coles County · IL" renderedAt={renderedAt} />
+
+          {!data && (
+            <div style={{ padding: 40, textAlign: "center", color: "var(--ink-3)" }}>
+              Sorry — the Charleston data feed isn&apos;t responding right now. Try again in a minute.
+            </div>
+          )}
+
+          {data && top && (
+            <>
+              <header className="hero">
+                <div>
+                  <div className="eyebrow">Coles County, IL · Mattoon Micropolitan SA (CBSA 31380) · EIU host city</div>
+                  <h1 className="serif" style={{ fontFamily: '"IBM Plex Serif", Georgia, serif', fontSize: 56, fontWeight: 500, lineHeight: 1.04, margin: "18px 0 18px", letterSpacing: "-0.02em", color: "var(--ink)", textWrap: "balance" }}>
+                    {top.headline}
+                  </h1>
+                  <p className="lead" style={{ fontSize: 17, lineHeight: 1.5, color: "var(--ink-2)", maxWidth: "58ch", margin: 0 }}>{top.subhead}</p>
+                </div>
+                {top.score != null && (
+                  <aside className="hero-side">
+                    <div className="hero-stat">
+                      <div className={`n ${top.tone === "bad" ? "neg" : top.tone === "warn" ? "warn" : top.tone === "good" ? "pos" : ""}`}>
+                        {top.score.toFixed(0)}
+                        <span style={{ fontSize: 18, color: "var(--ink-3)" }}> / 100</span>
+                      </div>
+                      <div className="label">Community Health Score<br />6-signal composite</div>
+                    </div>
+                    {top.band && (
+                      <div className="hero-stat">
+                        <div className="n" style={{ fontSize: 22 }}>{top.band}</div>
+                        <div className="label">Methodology band<br />0–20 · 20–40 · 40–60 · 60–80 · 80–100</div>
+                      </div>
+                    )}
+                  </aside>
+                )}
+              </header>
+
+              <div className="freshness">
+                <div className="fresh-cell">
+                  <div className="k">Census ACS · demographics</div>
+                  <div className="v">{data.city_demographics?.year ?? "2023"} 5-year</div>
+                  <div className="sub">refreshes annually · Dec</div>
+                </div>
+                <div className="fresh-cell">
+                  <div className="k">BLS LAUS · labor market</div>
+                  <div className="v">{data.indicators?.cle_coles_unemployment_rate?.date ?? "Coles series TBD"}</div>
+                  <div className="sub">refreshes monthly</div>
+                </div>
+                <div className="fresh-cell">
+                  <div className="k">BLS QCEW · industry mix</div>
+                  <div className="v">{data.industry_mix?.as_of_quarter ?? "—"}</div>
+                  <div className="sub">refreshes quarterly · ~7mo lag</div>
+                </div>
+                <div className="fresh-cell">
+                  <div className="k">USAspending · federal $</div>
+                  <div className="v">{businessForDisplay?.totals?.lookback_months ?? 24}-month rolling</div>
+                  <div className="sub">refreshes continuously</div>
+                </div>
+              </div>
+
+              {sections.map(section => (
+                <section key={section.id} style={{ marginTop: 40 }}>
+                  <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+                  <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+                    {section.title}
+                  </h2>
+                  <div style={{ fontSize: 14, color: "#5a564d", marginBottom: 16 }}>{section.subtitle}</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 16 }}>
+                    {section.cards.map(c => (
+                      <div key={c.key} style={{
+                        background: "white",
+                        border: "1px solid #d8d2c4",
+                        borderLeft: `6px solid ${TONE_COLOR[c.tone]}`,
+                        borderRadius: 6,
+                        padding: 16,
+                      }}>
+                        <div style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em", color: "#7a756b", marginBottom: 8 }}>
+                          {c.label}
+                        </div>
+                        <div style={{ fontSize: 26, fontWeight: 500, color: TONE_COLOR[c.tone], lineHeight: 1.1, marginBottom: 6 }}>
+                          {c.value}
+                        </div>
+                        {c.sub && <div style={{ fontSize: 12, color: "#7a756b", marginBottom: 10 }}>{c.sub}</div>}
+                        <details style={{ fontSize: 12, color: "#7a756b" }}>
+                          <summary style={{ cursor: "pointer", userSelect: "none" }}>Source &amp; details</summary>
+                          <div style={{ marginTop: 6 }}>{c.detail}</div>
+                        </details>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              ))}
+
+              {data.unemployment_series.length > 0 && (
+                <>
+                  <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", margin: "40px 0 24px" }} />
+                  <h2 style={{ fontSize: 22, fontWeight: 600, marginBottom: 8, color: "#1f1d18" }}>
+                    Mattoon Micropolitan SA unemployment — last 5 years
+                  </h2>
+                  <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16 }}>
+                    The Micro-wide unemployment rate. Below 4% (green dotted) is full-employment territory; above 6% (yellow dotted) warrants attention.
+                  </div>
+                  <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, padding: 16 }}>
+                    <URChart series={data.unemployment_series} />
+                  </div>
+                </>
+              )}
+
+              {data.health_score && <HealthScoreSection health={data.health_score} cityShortName="Charleston" />}
+
+              {data.labor_truth && <LaborTruthCitySection lt={data.labor_truth} cityShortName="Charleston" />}
+
+              {data.city_demographics && <DemographicsSection d={data.city_demographics} cityShortName="Charleston" trend={data.demographics_trend} />}
+
+              {data.industry_mix && <IndustryMixSection mix={data.industry_mix} scope="Coles County" />}
+
+              {businessForDisplay && <BusinessLeadsBlock b={businessForDisplay} />}
+
+              {/* EIU Charleston campus — Clery Act 2023 ASR (covers calendar years 2020-2022) */}
+              <section style={{ marginTop: 40 }}>
+                <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+                <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+                  EIU campus · Clery Act Annual Security Report
+                </h2>
+                <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
+                  EIU publishes the Annual Safety and Security Report (ASR) in compliance with the Jeanne Clery Disclosure of Campus Security Policy and Campus Crime Statistics Act + the IL Campus Security Enhancement Act + HEOA 2008 + VAWA. The ASR carries 3-year totals for federally-defined Clery offenses on the campus footprint + immediate public property + non-campus university-controlled properties.
+                </div>
+                <div style={{ marginBottom: 12, padding: 12, background: "oklch(98% 0.015 220)", border: "1px solid #d8d2c4", borderLeft: "6px solid #1f1d18", borderRadius: 6 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: "#1f1d18", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                    EIU Charleston campus · Clery Act 2023 ASR (covers 2020-2022)
+                  </div>
+                  <div style={{ fontSize: 11.5, color: "#5a564d", marginBottom: 8, lineHeight: 1.5 }}>
+                    Different metric than the per-1,000 city rates. Clery counts ONLY specific federally-defined offenses on the campus footprint + immediate public property as raw counts (not rates per 1,000 residents). Campus population ~5,434 students (Fall 2025); on-campus residential capacity materially smaller. The 3-year columns below reflect the 2023 ASR (covering calendar years 2020-2022); the more recent ASR (covering 2022-2024, the same window as the SIU 2024 ASR on the <a href="/carbondale" style={{ color: "#1f5f8f", fontWeight: 600 }}>Carbondale page</a>) will be transcribed once EIU&apos;s 2025 ASR is published in PDF form.
+                  </div>
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", fontSize: 11.5, borderCollapse: "collapse" }}>
+                      <thead>
+                        <tr style={{ background: "#ebe5d6", textAlign: "left" }}>
+                          <th style={{ padding: "4px 6px", borderBottom: "1px solid #d8d2c4" }}>Clery offense</th>
+                          <th style={{ padding: "4px 6px", borderBottom: "1px solid #d8d2c4", textAlign: "right" }}>2020 total</th>
+                          <th style={{ padding: "4px 6px", borderBottom: "1px solid #d8d2c4", textAlign: "right" }}>2021 total</th>
+                          <th style={{ padding: "4px 6px", borderBottom: "1px solid #d8d2c4", textAlign: "right" }}>2022 total</th>
+                          <th style={{ padding: "4px 6px", borderBottom: "1px solid #d8d2c4", textAlign: "right" }}>2022 in student housing</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {[
+                          {label: "Murder / non-negligent manslaughter", y20:"0", y21:"0", y22:"0", h22:"0"},
+                          {label: "Sex offense: rape", y20:"3", y21:"2", y22:"6", h22:"6"},
+                          {label: "Sex offense: fondling", y20:"2", y21:"1", y22:"4", h22:"3"},
+                          {label: "Robbery", y20:"0", y21:"0", y22:"0", h22:"0"},
+                          {label: "Aggravated assault", y20:"1", y21:"1", y22:"2", h22:"0"},
+                          {label: "Burglary", y20:"1", y21:"3", y22:"3", h22:"2"},
+                          {label: "Motor vehicle theft", y20:"0", y21:"4", y22:"0", h22:"0"},
+                          {label: "Arson", y20:"0", y21:"0", y22:"0", h22:"0"},
+                        ].map((r, i) => (
+                          <tr key={r.label} style={{ borderBottom: i < 7 ? "1px solid #ebe5d6" : "none" }}>
+                            <td style={{ padding: "3px 6px" }}>{r.label}</td>
+                            <td style={{ padding: "3px 6px", textAlign: "right", color: "#5a564d" }}>{r.y20}</td>
+                            <td style={{ padding: "3px 6px", textAlign: "right", color: "#5a564d" }}>{r.y21}</td>
+                            <td style={{ padding: "3px 6px", textAlign: "right", fontWeight: 600 }}>{r.y22}</td>
+                            <td style={{ padding: "3px 6px", textAlign: "right", color: "#5a564d" }}>{r.h22}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div style={{ fontSize: 11, color: "#3d3a33", marginTop: 8, lineHeight: 1.5 }}>
+                    <strong>EIU campus three-year movement:</strong>
+                    <ul style={{ margin: "4px 0 0 18px", padding: 0 }}>
+                      <li>Murder, robbery, arson: 0 in each of the three years.</li>
+                      <li>Burglary: 1 → 3 → 3.</li>
+                      <li>Aggravated assault: 1 → 1 → 2.</li>
+                      <li>Motor vehicle theft: 0 → 4 → 0.</li>
+                    </ul>
+                  </div>
+                  <div style={{ fontSize: 10.5, color: "#7a756b", marginTop: 6, lineHeight: 1.5 }}>
+                    Source: <a href="https://www.eiu.edu/police/docs/2023annual_Campus_safety_and_securityreport.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>EIU University Police · 2023 Annual Campus Safety and Security Report</a> (covers calendar years 2020-2022). On-Campus Total includes On-Campus Student Housing (residential) as a subset; figures are the Clery &quot;Total&quot; column (On-Campus + Non-Campus + Public Property combined). Reference: US Department of Education Campus Safety + Security data tool — EIU IPEDS UnitID 144892.
+                  </div>
+                </div>
+                <div style={{ fontSize: 12, color: "#5a564d", lineHeight: 1.55 }}>
+                  Companion: <a href="/carbondale" style={{ color: "#1f5f8f", fontWeight: 600 }}>Carbondale, IL → SIU Annual Security and Fire Safety Report</a> for the parallel-college-town Clery comparison.
+                </div>
+              </section>
+
+              <div className="sources" style={{ marginTop: 40, lineHeight: 1.6 }}>
+                <b>Sources:</b> FRED (Federal Reserve Economic Data, St. Louis Fed),
+                aggregating BLS LAUS, BLS CES, Census Population Estimates, Census SAIPE,
+                BEA Regional Economic Accounts, Census ACS, and Realtor.com housing data.
+                Monthly series refresh ~1–2 months after the reference period; annual series
+                lag 6–18 months. Updated nightly.{" "}
+                <b>Coverage:</b> Coles County, IL (FIPS 17029) · Mattoon Micropolitan SA
+                (CBSA 31380) · Illinois state context. Illinois state averages skew toward
+                Chicago and may diverge from East Central Illinois. <b>Note:</b> Coles County
+                FRED series (`cle_coles_*` family) are TBD in the macro_data substrate; the
+                FRED-anchored Jobs/People/Housing/Hardship cards will be empty until those
+                series are loaded. The ACS-anchored sections (Demographics, Labor Truth,
+                Health Score) + the BLS QCEW Industry Mix + the USAspending Business Leads
+                are live now.
+              </div>
+
+              <DashboardFooter columns={DEFAULT_FOOTER_COLUMNS} />
+            </>
+          )}
+        </div>
+      </body>
+    </html>
   );
 }
