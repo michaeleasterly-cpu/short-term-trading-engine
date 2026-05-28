@@ -1830,56 +1830,106 @@ export default async function EastCentralIllinoisPage() {
                   <th style={{ padding: "8px 10px", fontWeight: 600 }}>SOC</th>
                   <th style={{ padding: "8px 10px", fontWeight: 600 }}>Occupation</th>
                   <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Annual openings</th>
-                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Entry $/hr</th>
-                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Experienced $/hr</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Entry $/hr<br /><span style={{ fontSize: 10, fontWeight: 400, color: "#7a756b" }}>1A · 2C</span></th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Experienced $/hr<br /><span style={{ fontSize: 10, fontWeight: 400, color: "#7a756b" }}>1A · 2C</span></th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600 }}>Training ROI verdict</th>
                 </tr>
               </thead>
               <tbody>
-                {[
-                  // Certificate / License
-                  { tier: "Cert/License", soc: "31-1131", occ: "Nursing Assistants", openings: 226, entry: 16.96, exp: 21.20 },
-                  { tier: "Cert/License", soc: "53-3032", occ: "Heavy + Tractor-Trailer Truck Drivers", openings: 219, entry: 19.14, exp: 31.61 },
-                  { tier: "Cert/License", soc: "25-9045", occ: "Teaching Assistants (ex-postsecondary)", openings: 128, entry: null, exp: null },
-                  { tier: "Cert/License", soc: "39-9011", occ: "Childcare Workers", openings: 115, entry: 14.42, exp: 17.28 },
-                  { tier: "Cert/License", soc: "49-3023", occ: "Automotive Service Technicians + Mechanics", openings: 75, entry: 17.01, exp: 29.43 },
-                  { tier: "Cert/License", soc: "39-9031", occ: "Exercise Trainers + Group Fitness Instructors", openings: 70, entry: 14.52, exp: 30.34 },
-                  { tier: "Cert/License", soc: "31-9092", occ: "Medical Assistants", openings: 43, entry: 16.97, exp: 21.40 },
-                  // Associate's
-                  { tier: "Associate's", soc: "29-1141", occ: "Registered Nurses (RN)", openings: 154, entry: 31.10, exp: 44.86 },
-                  { tier: "Associate's", soc: "25-2011", occ: "Preschool Teachers (ex-Sp Ed)", openings: 38, entry: 15.08, exp: 21.58 },
-                  { tier: "Associate's", soc: "15-1232", occ: "Computer User Support Specialists", openings: 20, entry: 19.35, exp: 32.27 },
-                  { tier: "Associate's", soc: "29-2010", occ: "Clinical Lab Technologists / Technicians", openings: 12, entry: 24.02, exp: 36.77 },
-                  { tier: "Associate's", soc: "23-2011", occ: "Paralegals + Legal Assistants", openings: 11, entry: 18.57, exp: 30.17 },
-                  { tier: "Associate's", soc: "31-2021", occ: "Physical Therapist Assistants (PTA)", openings: 10, entry: 26.92, exp: 33.69 },
-                  { tier: "Associate's", soc: "15-1231", occ: "Computer Network Support Specialists", openings: 9, entry: 18.10, exp: 34.59 },
-                  // Bachelor's
-                  { tier: "Bachelor's", soc: "11-1021", occ: "General + Operations Managers", openings: 248, entry: 23.13, exp: 67.42 },
-                  { tier: "Bachelor's", soc: "13-1199", occ: "Business Operations Specialists, All Other", openings: 79, entry: 20.14, exp: 43.36 },
-                  { tier: "Bachelor's", soc: "25-2021", occ: "Elementary School Teachers (ex-Sp Ed)", openings: 79, entry: null, exp: null },
-                  { tier: "Bachelor's", soc: "13-2011", occ: "Accountants + Auditors", openings: 69, entry: 23.32, exp: 41.13 },
-                  { tier: "Bachelor's", soc: "13-1161", occ: "Market Research Analysts", openings: 46, entry: 19.89, exp: 37.45 },
-                  { tier: "Bachelor's", soc: "13-1111", occ: "Management Analysts", openings: 34, entry: 32.24, exp: 64.67 },
-                  { tier: "Bachelor's", soc: "41-3021", occ: "Insurance Sales Agents", openings: 32, entry: 19.93, exp: 38.29 },
-                  // Beyond Bachelor's
-                  { tier: "Beyond Bach", soc: "11-3031", occ: "Financial Managers", openings: 56, entry: 39.40, exp: 79.11 },
-                  { tier: "Beyond Bach", soc: "11-9199", occ: "Managers, All Other", openings: 45, entry: 34.47, exp: 72.12 },
-                  { tier: "Beyond Bach", soc: "15-1252", occ: "Software Developers", openings: 39, entry: 32.53, exp: 61.30 },
-                  { tier: "Beyond Bach", soc: "11-2022", occ: "Sales Managers", openings: 35, entry: 38.79, exp: 89.32 },
-                  { tier: "Beyond Bach", soc: "11-9111", occ: "Medical + Health Services Managers", openings: 31, entry: 33.88, exp: 63.17 },
-                  { tier: "Beyond Bach", soc: "11-2021", occ: "Marketing Managers", openings: 26, entry: 38.86, exp: 80.67 },
-                  { tier: "Beyond Bach", soc: "23-1011", occ: "Lawyers", openings: 17, entry: 25.76, exp: 74.41 },
-                ].map((r, i) => (
-                  <tr key={i} style={{ borderTop: i === 0 ? "none" : "1px solid #ebe5d6" }}>
-                    <td style={{ padding: "5px 10px", fontSize: 11, color: "#7a756b", fontWeight: 600 }}>{r.tier}</td>
-                    <td style={{ padding: "5px 10px", fontFamily: "monospace", fontSize: 11, color: "#5a564d" }}>{r.soc}</td>
-                    <td style={{ padding: "5px 10px", fontWeight: 600 }}>{r.occ}</td>
-                    <td style={{ padding: "5px 10px", textAlign: "right", fontWeight: 600, color: r.openings >= 100 ? "oklch(40% 0.16 142)" : "#1f1d18" }}>{r.openings}</td>
-                    <td style={{ padding: "5px 10px", textAlign: "right", color: "#5a564d" }}>{r.entry != null ? `$${r.entry.toFixed(2)}` : "—"}</td>
-                    <td style={{ padding: "5px 10px", textAlign: "right", color: "#5a564d" }}>{r.exp != null ? `$${r.exp.toFixed(2)}` : "—"}</td>
-                  </tr>
-                ))}
+                {(() => {
+                  // IL statewide MIT Living Wage Calculator benchmarks (cited inline in §19 footer):
+                  // 1A (single adult, 0 kids) = $23.56/hr · 1A+2C (single parent, 2 kids) = $40.41/hr
+                  const LW_1A = 23.56;
+                  const LW_2C = 40.41;
+                  const occupations: Array<{ tier: string; soc: string; occ: string; openings: number; entry: number | null; exp: number | null }> = [
+                    // Certificate / License
+                    { tier: "Cert/License", soc: "31-1131", occ: "Nursing Assistants", openings: 226, entry: 16.96, exp: 21.20 },
+                    { tier: "Cert/License", soc: "53-3032", occ: "Heavy + Tractor-Trailer Truck Drivers", openings: 219, entry: 19.14, exp: 31.61 },
+                    { tier: "Cert/License", soc: "25-9045", occ: "Teaching Assistants (ex-postsecondary)", openings: 128, entry: null, exp: null },
+                    { tier: "Cert/License", soc: "39-9011", occ: "Childcare Workers", openings: 115, entry: 14.42, exp: 17.28 },
+                    { tier: "Cert/License", soc: "49-3023", occ: "Automotive Service Technicians + Mechanics", openings: 75, entry: 17.01, exp: 29.43 },
+                    { tier: "Cert/License", soc: "39-9031", occ: "Exercise Trainers + Group Fitness Instructors", openings: 70, entry: 14.52, exp: 30.34 },
+                    { tier: "Cert/License", soc: "31-9092", occ: "Medical Assistants", openings: 43, entry: 16.97, exp: 21.40 },
+                    // Associate's
+                    { tier: "Associate's", soc: "29-1141", occ: "Registered Nurses (RN)", openings: 154, entry: 31.10, exp: 44.86 },
+                    { tier: "Associate's", soc: "25-2011", occ: "Preschool Teachers (ex-Sp Ed)", openings: 38, entry: 15.08, exp: 21.58 },
+                    { tier: "Associate's", soc: "15-1232", occ: "Computer User Support Specialists", openings: 20, entry: 19.35, exp: 32.27 },
+                    { tier: "Associate's", soc: "29-2010", occ: "Clinical Lab Technologists / Technicians", openings: 12, entry: 24.02, exp: 36.77 },
+                    { tier: "Associate's", soc: "23-2011", occ: "Paralegals + Legal Assistants", openings: 11, entry: 18.57, exp: 30.17 },
+                    { tier: "Associate's", soc: "31-2021", occ: "Physical Therapist Assistants (PTA)", openings: 10, entry: 26.92, exp: 33.69 },
+                    { tier: "Associate's", soc: "15-1231", occ: "Computer Network Support Specialists", openings: 9, entry: 18.10, exp: 34.59 },
+                    // Bachelor's
+                    { tier: "Bachelor's", soc: "11-1021", occ: "General + Operations Managers", openings: 248, entry: 23.13, exp: 67.42 },
+                    { tier: "Bachelor's", soc: "13-1199", occ: "Business Operations Specialists, All Other", openings: 79, entry: 20.14, exp: 43.36 },
+                    { tier: "Bachelor's", soc: "25-2021", occ: "Elementary School Teachers (ex-Sp Ed)", openings: 79, entry: null, exp: null },
+                    { tier: "Bachelor's", soc: "13-2011", occ: "Accountants + Auditors", openings: 69, entry: 23.32, exp: 41.13 },
+                    { tier: "Bachelor's", soc: "13-1161", occ: "Market Research Analysts", openings: 46, entry: 19.89, exp: 37.45 },
+                    { tier: "Bachelor's", soc: "13-1111", occ: "Management Analysts", openings: 34, entry: 32.24, exp: 64.67 },
+                    { tier: "Bachelor's", soc: "41-3021", occ: "Insurance Sales Agents", openings: 32, entry: 19.93, exp: 38.29 },
+                    // Beyond Bachelor's
+                    { tier: "Beyond Bach", soc: "11-3031", occ: "Financial Managers", openings: 56, entry: 39.40, exp: 79.11 },
+                    { tier: "Beyond Bach", soc: "11-9199", occ: "Managers, All Other", openings: 45, entry: 34.47, exp: 72.12 },
+                    { tier: "Beyond Bach", soc: "15-1252", occ: "Software Developers", openings: 39, entry: 32.53, exp: 61.30 },
+                    { tier: "Beyond Bach", soc: "11-2022", occ: "Sales Managers", openings: 35, entry: 38.79, exp: 89.32 },
+                    { tier: "Beyond Bach", soc: "11-9111", occ: "Medical + Health Services Managers", openings: 31, entry: 33.88, exp: 63.17 },
+                    { tier: "Beyond Bach", soc: "11-2021", occ: "Marketing Managers", openings: 26, entry: 38.86, exp: 80.67 },
+                    { tier: "Beyond Bach", soc: "23-1011", occ: "Lawyers", openings: 17, entry: 25.76, exp: 74.41 },
+                  ];
+                  const Mark = ({ pass }: { pass: boolean }) => (
+                    <span style={{ color: pass ? "oklch(40% 0.16 142)" : "oklch(45% 0.20 22)", fontWeight: 700 }}>{pass ? "✓" : "✗"}</span>
+                  );
+                  return occupations.map((r, i) => {
+                    const entryClears1A = r.entry != null && r.entry >= LW_1A;
+                    const entryClears2C = r.entry != null && r.entry >= LW_2C;
+                    const expClears1A = r.exp != null && r.exp >= LW_1A;
+                    const expClears2C = r.exp != null && r.exp >= LW_2C;
+                    let verdict: string;
+                    let verdictColor: string;
+                    if (r.entry == null || r.exp == null) {
+                      verdict = "Missing wage data";
+                      verdictColor = "#7a756b";
+                    } else if (expClears2C) {
+                      verdict = "Strong ladder";
+                      verdictColor = "oklch(40% 0.16 142)";
+                    } else if (expClears1A) {
+                      verdict = "Viable single-adult";
+                      verdictColor = "oklch(45% 0.18 60)";
+                    } else {
+                      verdict = "Low-wage trap";
+                      verdictColor = "oklch(45% 0.20 22)";
+                    }
+                    return (
+                      <tr key={i} style={{ borderTop: i === 0 ? "none" : "1px solid #ebe5d6" }}>
+                        <td style={{ padding: "5px 10px", fontSize: 11, color: "#7a756b", fontWeight: 600 }}>{r.tier}</td>
+                        <td style={{ padding: "5px 10px", fontFamily: "monospace", fontSize: 11, color: "#5a564d" }}>{r.soc}</td>
+                        <td style={{ padding: "5px 10px", fontWeight: 600 }}>{r.occ}</td>
+                        <td style={{ padding: "5px 10px", textAlign: "right", fontWeight: 600, color: r.openings >= 100 ? "oklch(40% 0.16 142)" : "#1f1d18" }}>{r.openings}</td>
+                        <td style={{ padding: "5px 10px", textAlign: "right", color: "#5a564d" }}>
+                          <div>{r.entry != null ? `$${r.entry.toFixed(2)}` : "—"}</div>
+                          {r.entry != null && <div style={{ fontSize: 10, marginTop: 2 }}><Mark pass={entryClears1A} /> · <Mark pass={entryClears2C} /></div>}
+                        </td>
+                        <td style={{ padding: "5px 10px", textAlign: "right", color: "#5a564d" }}>
+                          <div>{r.exp != null ? `$${r.exp.toFixed(2)}` : "—"}</div>
+                          {r.exp != null && <div style={{ fontSize: 10, marginTop: 2 }}><Mark pass={expClears1A} /> · <Mark pass={expClears2C} /></div>}
+                        </td>
+                        <td style={{ padding: "5px 10px" }}>
+                          <span style={{ background: `${verdictColor}22`, color: verdictColor, padding: "2px 8px", borderRadius: 3, fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", whiteSpace: "nowrap" }}>{verdict}</span>
+                        </td>
+                      </tr>
+                    );
+                  });
+                })()}
               </tbody>
             </table>
+          </div>
+          <div style={{ padding: 14, background: "oklch(96% 0.04 142)", border: "1px solid oklch(45% 0.16 142)33", borderLeft: "6px solid oklch(45% 0.16 142)", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, marginTop: 12 }}>
+            <strong>Training ROI readout · DCEO-demand list ≠ wage viability.</strong> The DCEO Demand Occupations list proves training eligibility + employer demand; it does not by itself prove that a credential leads to a family-supporting wage. Cross-referenced against the IL MIT Living Wage Calculator benchmarks (1A $23.56/hr · 1A+2C $40.41/hr):
+            <ul style={{ margin: "8px 0 0 18px", padding: 0 }}>
+              <li><strong>Strong ladders (experienced wage clears 1A+2C):</strong> RN (154 openings, $44.86 exp), Bus Ops Specialists ($43.36 exp), Accountants ($41.13 exp), Mgmt Analysts ($64.67 exp), General/Ops Managers ($67.42 exp), and every Beyond-Bachelor&apos;s tier role (Financial Mgrs $79.11, Software Devs $61.30, Sales Mgrs $89.32, Medical Health Svcs Mgrs $63.17, Marketing Mgrs $80.67, Lawyers $74.41). These are the credentials a CEFS WIOA cohort should bias toward.</li>
+              <li><strong>Viable single-adult only (clears 1A, fails 2C):</strong> Heavy Truck Drivers (219 openings, exp $31.61), Auto Tech ($29.43 exp), Exercise Trainers ($30.34 exp), Computer User Support ($32.27 exp), Clinical Lab Tech ($36.77 exp), Paralegals ($30.17 exp), PTA ($33.69 exp), Computer Net Support ($34.59 exp), Market Research ($37.45 exp), Insurance Sales ($38.29 exp). Ladder-dependent: viable for a single earner but not a single parent of two.</li>
+              <li><strong>Low-wage traps (experienced wage fails 1A):</strong> <em>Nursing Assistants (226 openings · exp $21.20)</em>, <em>Childcare Workers (115 openings · exp $17.28)</em>, <em>Medical Assistants (43 · exp $21.40)</em>, <em>Preschool Teachers (38 · exp $21.58)</em>. <strong>Three of the four highest-opening Cert/License roles are low-wage traps</strong> — exactly the credentials WIOA grants are easiest to fund and exactly the credentials least likely to lift a participant above single-adult living wage. This is the §22 wage-suppression pattern in numeric form.</li>
+              <li><strong>Missing wage data:</strong> Teaching Assistants (128 openings) + Elementary School Teachers (79 openings) — OEWS suppresses public-sector school wage rows. Verdict cannot be computed without supplemental IL TRS / district salary-schedule pulls.</li>
+            </ul>
           </div>
           <div style={{ padding: 14, background: "#fef9eb", border: "1px solid #f0d98a", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, marginTop: 12 }}>
             <strong>Real-time corroboration — HWOL December 2025 EDR 7 top job postings:</strong> Heavy Truck Drivers (67 new ads), Food Prep Workers (63), Retail Salespersons (58), Registered Nurses (49), Home Health + Personal Care Aides (45), Food Service Managers (35), General Maintenance + Repair (32), Customer Service Reps (31), Driver/Sales Workers (31), First-Line Retail Supervisors (30). <strong>Top posting employers:</strong> Flynn Group/Taco Bell (49), Casey&apos;s (34), Rural King (33), Domino&apos;s (31), UPS (30), Addus HomeCare (27), Walmart/Sam&apos;s Club (22), Lake Land College (20), Love&apos;s (18), Sherwin-Williams (14). Source: <a href="https://ides.illinois.gov/content/dam/soi/en/web/ides/labor_market_information/hwol/edr7_dec25.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>IDES EDR 7 HWOL Dec 2025</a>.
@@ -2294,9 +2344,9 @@ export default async function EastCentralIllinoisPage() {
                     step: "Alternate-source retry 2026-05-28 closed the gap on (a) LWIA-23 PY2024 + PY2025 negotiated targets and (b) LWIA-23 PY2022 actuals (the only published-actuals year currently available) — all now in §20. Sources: IL DCEO PY2024 WIOA Annual Statewide Performance Narrative (released Nov 2025, pp.14-17; LWIA-23 PY24 + PY25 targets, DCEO Local Area ID 17115), CEFS Planning &amp; Oversight Packet (PY22 actuals, Table 2.1 p.31), CEFS 12/16/24 meeting packet (cross-check), DOL ETA IL PY24-25 Model Summary. PY2023 + PY2024 actuals remain unpublished — IL DCEO PY24 narrative explicitly notes \"final adjusted assessments due in early 2026.\" Verified-blocked endpoints during retry: dol.gov/agencies/eta/performance/results (403), dol.gov PY2023_WIOA_Local_Board_Annual_Report.html (403), wioaplans.ed.gov/node/22941 (ECONNREFUSED), IL workNet IPATS Tableau dashboard (not crawlable). WIPS (dol.gov/agencies/eta/performance/wips) remains an authenticated grantee submission system (login.gov + Rules of Behavior), not a public data portal. ETA-9172 is the public PIRL schema, not a results document.",
                   },
                   {
-                    item: "Community Health Score · town-level safety vs county-proxy participation/health/housing",
+                    item: "Town context score · town-level safety vs county-proxy participation/health/housing",
                     cls: "COUNTY_PROXY_BY_DESIGN",
-                    step: "The independent LWA-23 Community Health Score in §15 uses town-specific FBI UCR data for the Safety dimension and county-level Census ACS data (S1810 disability, S0101 median age, S2301 LFPR, B25070 rent burden) for the other three dimensions. Census ACS 5-year does not publish sub-tract estimates for places under ~20k population, so county-level data is the finest-grained reliable resolution available for 13 of 14 LWA-23 towns. Toledo (pop 1,209) and Flora (Clay county) have no per-town FBI UCR row; their composites score on 3 of 4 dimensions with safety excluded — not imputed from neighboring towns or county-wide sheriff data. Each row carries an explicit data_quality label so the proxy structure is visible. This is a documented design choice, not a defect.",
+                    step: "The LWA-23 town context score in §15 (internal comparative index, 0-100 within LWA-23) uses town-specific FBI UCR data for the Safety dimension and county-level Census ACS data (S1810 disability, S0101 median age, S2301 LFPR, B25070 rent burden) for the other three dimensions. Census ACS 5-year does not publish sub-tract estimates for places under ~20k population, so county-level data is the finest-grained reliable resolution available for 13 of 14 LWA-23 towns. Toledo (pop 1,209) and Flora (Clay county) have no per-town FBI UCR row; their composites score on 3 of 4 dimensions with safety excluded — not imputed from neighboring towns or county-wide sheriff data. Each row carries an explicit data_quality label so the proxy structure is visible. This is a documented design choice, not a defect.",
                   },
                 ].map((r, i) => {
                   const clsColor = r.cls === "CLOSED" || r.cls.startsWith("CLOSED") || r.cls.startsWith("PARTIALLY CLOSED") || r.cls.startsWith("Confirmable") ? "oklch(40% 0.16 142)"

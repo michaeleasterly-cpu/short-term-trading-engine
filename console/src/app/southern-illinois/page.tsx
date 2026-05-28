@@ -435,6 +435,253 @@ function KnownLimitsSection() {
   );
 }
 
+function Lwa25DceoOccupationsSection() {
+  // IL workNet SouthernRegionalDataPacket2026 publishes the official Demand Occupations list
+  // for EDR 8 (Southern Illinois) — coterminous with LWA-25 / Man-Tra-Con. WIOA eligible-training-
+  // provider funding follows this list. Wages: IDES OEWS 2024 entry + experienced bands.
+  // Annual openings: IDES Long-Term Occupational Projections 2022-2032.
+  // Living-wage benchmarks here are IL statewide MIT-LWC (matches what the source packet uses);
+  // for Jackson County reality check ($18.95 1A / $46.76 1A+2C), see Training-to-Demand
+  // Alignment section above.
+  const LW_1A = 23.56;
+  const LW_2C = 40.41;
+  const occupations: Array<{ tier: string; soc: string; occ: string; openings: number; entry: number | null; exp: number | null }> = [
+    { tier: "Cert/License", soc: "31-1131", occ: "Nursing Assistants", openings: 306, entry: 16.91, exp: 22.06 },
+    { tier: "Cert/License", soc: "53-3032", occ: "Heavy + Tractor-Trailer Truck Drivers", openings: 200, entry: 18.95, exp: 29.24 },
+    { tier: "Cert/License", soc: "25-9045", occ: "Teaching Assistants (ex-postsecondary)", openings: 168, entry: null, exp: null },
+    { tier: "Cert/License", soc: "39-9011", occ: "Childcare Workers", openings: 139, entry: 14.41, exp: 17.03 },
+    { tier: "Cert/License", soc: "31-9092", occ: "Medical Assistants", openings: 110, entry: 17.26, exp: 21.85 },
+    { tier: "Cert/License", soc: "49-3023", occ: "Automotive Service Technicians + Mechanics", openings: 78, entry: 16.82, exp: 27.94 },
+    { tier: "Cert/License", soc: "39-9031", occ: "Exercise Trainers + Group Fitness Instructors", openings: 56, entry: 16.65, exp: 30.74 },
+    { tier: "Associate's", soc: "29-1141", occ: "Registered Nurses (RN)", openings: 274, entry: 29.73, exp: 46.45 },
+    { tier: "Associate's", soc: "25-2011", occ: "Preschool Teachers (ex-Sp Ed)", openings: 48, entry: 15.96, exp: 23.77 },
+    { tier: "Associate's", soc: "31-2021", occ: "Physical Therapist Assistants (PTA)", openings: 33, entry: 23.70, exp: 34.76 },
+    { tier: "Associate's", soc: "15-1232", occ: "Computer User Support Specialists", openings: 23, entry: 14.74, exp: 28.05 },
+    { tier: "Associate's", soc: "23-2011", occ: "Paralegals + Legal Assistants", openings: 19, entry: 17.06, exp: 26.14 },
+    { tier: "Associate's", soc: "29-2010", occ: "Clinical Lab Technologists / Technicians", openings: 17, entry: 22.09, exp: 36.33 },
+    { tier: "Associate's", soc: "15-1231", occ: "Computer Network Support Specialists", openings: 15, entry: 18.20, exp: 31.90 },
+    { tier: "Bachelor's", soc: "11-1021", occ: "General + Operations Managers", openings: 270, entry: 23.48, exp: 62.02 },
+    { tier: "Bachelor's", soc: "25-2021", occ: "Elementary School Teachers (ex-Sp Ed)", openings: 106, entry: null, exp: null },
+    { tier: "Bachelor's", soc: "13-1199", occ: "Business Operations Specialists, All Other", openings: 100, entry: 19.64, exp: 42.45 },
+    { tier: "Bachelor's", soc: "13-2011", occ: "Accountants + Auditors", openings: 66, entry: 22.47, exp: 39.88 },
+    { tier: "Bachelor's", soc: "13-1161", occ: "Market Research Analysts", openings: 51, entry: 18.07, exp: 33.83 },
+    { tier: "Bachelor's", soc: "41-3021", occ: "Insurance Sales Agents", openings: 43, entry: 16.30, exp: 36.78 },
+    { tier: "Bachelor's", soc: "13-1111", occ: "Management Analysts", openings: 37, entry: 30.83, exp: 63.79 },
+    { tier: "Beyond Bach", soc: "11-3031", occ: "Financial Managers", openings: 63, entry: 31.90, exp: 70.57 },
+    { tier: "Beyond Bach", soc: "11-9111", occ: "Medical + Health Services Managers", openings: 60, entry: 35.33, exp: 67.91 },
+    { tier: "Beyond Bach", soc: "11-9199", occ: "Managers, All Other", openings: 58, entry: 32.86, exp: 72.70 },
+    { tier: "Beyond Bach", soc: "15-1252", occ: "Software Developers", openings: 38, entry: 38.27, exp: 73.73 },
+    { tier: "Beyond Bach", soc: "11-2022", occ: "Sales Managers", openings: 31, entry: 33.83, exp: 80.69 },
+    { tier: "Beyond Bach", soc: "11-2021", occ: "Marketing Managers", openings: 30, entry: 28.58, exp: 60.66 },
+    { tier: "Beyond Bach", soc: "23-1011", occ: "Lawyers", openings: 25, entry: 30.75, exp: 74.90 },
+  ];
+  const Mark = ({ pass }: { pass: boolean }) => (
+    <span style={{ color: pass ? "oklch(40% 0.16 142)" : "oklch(45% 0.20 22)", fontWeight: 700 }}>{pass ? "✓" : "✗"}</span>
+  );
+  return (
+    <section style={{ marginTop: 40 }}>
+      <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+      <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+        IL DCEO In-Demand Occupations · EDR 8 Southern Illinois (LWA-25 coterminous)
+      </h2>
+      <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
+        The IL workNet Southern Regional Data Packet 2026 publishes the official Demand Occupations list — eligible-training-provider WIOA funding is tied to occupations on this list. LWA-25 is coterminous with IDES Economic Development Region 8 (Southern). Below: annual openings + entry/experienced hourly wage by credential tier, with each row scored against the IL statewide MIT Living Wage Calculator benchmarks (1A $23.56/hr · 1A+2C $40.41/hr). The packet uses the IL statewide benchmark; for the Jackson County reality check ($18.95 1A / $46.76 1A+2C), see Training-to-Demand Alignment above.
+      </div>
+      <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+          <thead>
+            <tr style={{ background: "#f0ece1", textAlign: "left", borderBottom: "1px solid #d8d2c4" }}>
+              <th style={{ padding: "8px 10px", fontWeight: 600 }}>Credential tier</th>
+              <th style={{ padding: "8px 10px", fontWeight: 600 }}>SOC</th>
+              <th style={{ padding: "8px 10px", fontWeight: 600 }}>Occupation</th>
+              <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Annual openings</th>
+              <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Entry $/hr<br /><span style={{ fontSize: 10, fontWeight: 400, color: "#7a756b" }}>1A · 2C</span></th>
+              <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Experienced $/hr<br /><span style={{ fontSize: 10, fontWeight: 400, color: "#7a756b" }}>1A · 2C</span></th>
+              <th style={{ padding: "8px 10px", fontWeight: 600 }}>Training ROI verdict</th>
+            </tr>
+          </thead>
+          <tbody>
+            {occupations.map((r, i) => {
+              const entryClears1A = r.entry != null && r.entry >= LW_1A;
+              const entryClears2C = r.entry != null && r.entry >= LW_2C;
+              const expClears1A = r.exp != null && r.exp >= LW_1A;
+              const expClears2C = r.exp != null && r.exp >= LW_2C;
+              let verdict: string;
+              let verdictColor: string;
+              if (r.entry == null || r.exp == null) {
+                verdict = "Missing wage data";
+                verdictColor = "#7a756b";
+              } else if (expClears2C) {
+                verdict = "Strong ladder";
+                verdictColor = "oklch(40% 0.16 142)";
+              } else if (expClears1A) {
+                verdict = "Viable single-adult";
+                verdictColor = "oklch(45% 0.18 60)";
+              } else {
+                verdict = "Low-wage trap";
+                verdictColor = "oklch(45% 0.20 22)";
+              }
+              return (
+                <tr key={i} style={{ borderTop: i === 0 ? "none" : "1px solid #ebe5d6" }}>
+                  <td style={{ padding: "5px 10px", fontSize: 11, color: "#7a756b", fontWeight: 600 }}>{r.tier}</td>
+                  <td style={{ padding: "5px 10px", fontFamily: "monospace", fontSize: 11, color: "#5a564d" }}>{r.soc}</td>
+                  <td style={{ padding: "5px 10px", fontWeight: 600 }}>{r.occ}</td>
+                  <td style={{ padding: "5px 10px", textAlign: "right", fontWeight: 600, color: r.openings >= 100 ? "oklch(40% 0.16 142)" : "#1f1d18" }}>{r.openings}</td>
+                  <td style={{ padding: "5px 10px", textAlign: "right", color: "#5a564d" }}>
+                    <div>{r.entry != null ? `$${r.entry.toFixed(2)}` : "—"}</div>
+                    {r.entry != null && <div style={{ fontSize: 10, marginTop: 2 }}><Mark pass={entryClears1A} /> · <Mark pass={entryClears2C} /></div>}
+                  </td>
+                  <td style={{ padding: "5px 10px", textAlign: "right", color: "#5a564d" }}>
+                    <div>{r.exp != null ? `$${r.exp.toFixed(2)}` : "—"}</div>
+                    {r.exp != null && <div style={{ fontSize: 10, marginTop: 2 }}><Mark pass={expClears1A} /> · <Mark pass={expClears2C} /></div>}
+                  </td>
+                  <td style={{ padding: "5px 10px" }}>
+                    <span style={{ background: `${verdictColor}22`, color: verdictColor, padding: "2px 8px", borderRadius: 3, fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", whiteSpace: "nowrap" }}>{verdict}</span>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ padding: 14, background: "oklch(96% 0.04 142)", border: "1px solid oklch(45% 0.16 142)33", borderLeft: "6px solid oklch(45% 0.16 142)", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, marginTop: 12 }}>
+        <strong>Training ROI readout · DCEO-demand list ≠ wage viability.</strong> The DCEO Demand Occupations list proves training eligibility + employer demand; it does not by itself prove that a credential leads to a family-supporting wage. Against IL statewide MIT LWC benchmarks (1A $23.56/hr · 1A+2C $40.41/hr):
+        <ul style={{ margin: "8px 0 0 18px", padding: 0 }}>
+          <li><strong>Strong ladders (experienced wage clears 1A+2C):</strong> RN (274 openings, $46.45 exp), Bus Ops Specialists (100 · $42.45), Mgmt Analysts (37 · $63.79), General/Ops Managers (270 · $62.02), and every Beyond-Bachelor&apos;s tier role (Financial Mgrs $70.57, Software Devs $73.73, Sales Mgrs $80.69, Medical Health Mgrs $67.91, Marketing Mgrs $60.66, Lawyers $74.90). RN at 274 annual openings is LWA-25&apos;s single highest-volume Strong ladder.</li>
+          <li><strong>Viable single-adult only (clears 1A, fails 2C):</strong> Heavy Truck Drivers (200 openings · exp $29.24), Auto Tech (78 · $27.94), Exercise Trainers (56 · $30.74), PTA (33 · $34.76), Computer User Support (23 · $28.05), Paralegals (19 · $26.14), Clinical Lab Tech (17 · $36.33), Computer Net Support (15 · $31.90), Accountants (66 · $39.88 — just below 2C), Market Research (51 · $33.83), Insurance Sales (43 · $36.78). Preschool Teachers (48 · $23.77 exp barely clears 1A). Ladder-dependent: viable for a single earner, not a single parent of two.</li>
+          <li><strong>Low-wage traps (experienced wage fails 1A):</strong> <em>Nursing Assistants (306 openings · exp $22.06)</em>, <em>Childcare Workers (139 · exp $17.03)</em>, <em>Medical Assistants (110 · exp $21.85)</em>. <strong>The top-3 Cert/License-tier openings by volume are all low-wage traps</strong> — exactly the credentials WIOA grants are easiest to fund and exactly the credentials least likely to lift a participant above single-adult living wage. This is the same wage-suppression pattern the page&apos;s training-to-demand alignment section already flags for Jackson County.</li>
+          <li><strong>Missing wage data:</strong> Teaching Assistants (168 openings) + Elementary School Teachers (106 openings) — OEWS suppresses public-sector school wage rows. Verdict cannot be computed without IL TRS / district salary-schedule pulls.</li>
+        </ul>
+      </div>
+      <div style={{ padding: 14, background: "#fef9eb", border: "1px solid #f0d98a", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, marginTop: 12 }}>
+        <strong>Real-time corroboration — HWOL December 2025 EDR 8 top job postings:</strong> Registered Nurses (129 new ads), Food Prep Workers (56), Heavy Truck Drivers (52), Retail Salespersons (47), Food Service Managers (40), Home Health + Personal Care Aides (40), Customer Service Reps (40), First-Line Retail Supervisors (26), General Maintenance + Repair (24), Cashiers (23). <strong>Top posting employers:</strong> Flynn Group/Pizza Hut/Taco Bell (44), State of Illinois (35), Casey&apos;s (29), Addus HomeCare (27), USPS (26), Kroger/Mariano&apos;s (26), Walmart/Sam&apos;s Club (25), SIH (25), SSM Health Care (21), Love&apos;s (19), SIU-Carbondale (15), Banterra Bank (15), H&amp;R Block (15). Source: <a href="https://ides.illinois.gov/content/dam/soi/en/web/ides/labor_market_information/hwol/edr8_dec25.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>IDES EDR 8 HWOL Dec 2025</a>.
+      </div>
+      <div style={{ fontSize: 11, color: "#7a756b", marginTop: 8, lineHeight: 1.5 }}>
+        Sources: <a href="https://www.illinoisworknet.com/WIOA/RegPlanning/Documents/2026WIOARegionalandLocalPlanning/SouthernRegionalDataPacket2026.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Southern Regional Data Packet 2026 · EDR 8 (IL workNet)</a> · DCEO Office of Employment and Training + NIU Workforce Policy Lab joint product · IDES Long-Term Occupational Employment Projections 2022-2032 + OEWS 2024 entry/experienced bands. Living-wage benchmark (IL one adult / single parent): $23.56 / $40.41 (<a href="https://livingwage.mit.edu/states/17" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>MIT Living Wage Calculator</a>). SOC codes are BLS SOC-2018 mappings (the source packet labels by occupation title; SOC codes are deterministic federal identifiers, not wage data).
+      </div>
+    </section>
+  );
+}
+
+// Section-header banner used by the standardized LWA-25 report flow.
+// Sits above each numbered section block to mirror LWA-23's "NN · Title" pattern.
+function SectionHeader({ num, title }: { num: string; title: string }) {
+  return (
+    <h2 style={{
+      fontSize: 22, fontWeight: 600, margin: "40px 0 8px 0",
+      color: "#1f1d18", paddingTop: 16, borderTop: "2px solid #d8d2c4",
+      scrollMarginTop: 60,
+    }}>
+      {num} · {title}
+    </h2>
+  );
+}
+
+function Lwa25TheoryOfChangeSection() {
+  return (
+    <section style={{ marginTop: 8, marginBottom: 8 }}>
+      <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.6 }}>
+        <strong>Anchor-concentration-at-risk + structural gateways.</strong> LWA-25&apos;s binding constraint is not labor-force participation per se — it is <strong>federal-money concentration risk paired with stacked household gateways</strong>. GD-OTS Marion alone receives 95.6% of the 24-month federal-award flow into the 5-county footprint (§07). SIU Carbondale enrollment continues a multi-year decline that compounds the Jackson-County labor-supply pressure. Below those macro pressures, four household gateways (childcare, mobility, housing, mandatory-overtime employer culture — §10-§11, §16) determine whether any individual training cohort can actually reach a family-supporting wage.
+      </div>
+      <div style={{ background: "white", border: "1px solid #d8d2c4", borderLeft: "6px solid #1f1d18", borderRadius: 6, padding: 18, fontSize: 13.5, color: "#3d3a33", lineHeight: 1.65 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: "#1f1d18", marginBottom: 10, textTransform: "uppercase", letterSpacing: "0.06em" }}>The LWA-25 intervention sequence</div>
+        <ol style={{ margin: "0 0 0 18px", padding: 0 }}>
+          <li><strong>De-risk the anchor concentration FIRST.</strong> Map GD-OTS Marion&apos;s $406M sub-award pool by NAICS lane (§07). For every lane currently sourced out-of-region, queue a Tier-2 introduction with a local-firm candidate. The local SDVOSB precedent already exists. This converts concentration from a permanent dependence into a temporary stepping-stone.</li>
+          <li><strong>Bias training cohorts toward FAMILY-SUPPORTING + TRAVEL-WORK rungs SECOND.</strong> The §14 Training-to-Demand verdict already assigns every named ladder one of {`{PHANTOM / WAGE-SUPPRESSED / TRAVEL-WORK / FAMILY-SUPPORTING / SATURATED / OWNER-OP}`}. The §15 DCEO 1A+2C clearance confirms which of the federally-funded credentials actually clear single-adult and family-supporting living wage. WIOA cohort planning bias toward the green-verdict rows is the highest-leverage workforce-board lever.</li>
+          <li><strong>Remove household gateways in parallel</strong> (NOT sequenced after — gateways are concurrent prerequisites). Childcare slot expansion (§10), mobility / transit-to-shift-work (§09), housing inventory in the Williamson corridor (§11), and mandatory-overtime negotiation with anchor employers (§16) all unlock the workforce supply the cohort-planning above presumes.</li>
+          <li><strong>Anchor-attraction LAST in sequence but largest in horizon.</strong> Data-center recruitment (Williamson corridor power + EECA wholesale + Big Muddy Solar PPA), federal-retiree corridor capture (Marion-Herrin-Carterville inventory), CEJA solar buildout — all pursued from the standing the first three moves establish, not before.</li>
+        </ol>
+        <div style={{ marginTop: 14, padding: 12, background: "#fef9eb", border: "1px solid #f0d98a", borderRadius: 4, fontSize: 12.5 }}>
+          <strong>Contrast with LWA-23 (East Central Illinois).</strong> LWA-23&apos;s thesis is <em>participation recovery first</em> — labor-supply collapse driven by disability rates 17-20% and carceral economy in Lawrence + Fayette. LWA-25 is not labor-supply-collapsed in the same way; <em>concentration risk + gateway barriers</em> are the binding constraints. The two regions need different interventions in different order. See <a href="/east-central-illinois" style={{ color: "#1f5f8f", fontWeight: 600 }}>/east-central-illinois →</a> for the parallel LWA-23 report.
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function Lwa25CountyStrategyMatrixSection() {
+  type Row = { archetype: string; counties: string; role: string; constraint: string; intervention: string; anchor: string };
+  const rows: Row[] = [
+    {
+      archetype: "Williamson Corridor (Marion–Herrin–Carterville)",
+      counties: "Williamson",
+      role: "Newer-construction relocation corridor + GD-OTS Marion host + I-57/I-24 logistics + Marion VA",
+      constraint: "Anchor-concentration dependence on GD-OTS (95.6% of 24-mo federal flow); housing-inventory bottleneck at the upper end of the corridor",
+      intervention: "Supply-chain diversification away from GD-OTS via Tier-2 broker calls; data-center recruitment on Big Muddy Solar PPA + EECA wholesale rate; federal-retiree relocation cohort directed here over Jackson Co. for safety + inventory",
+      anchor: "GD-OTS sub-award lanes (§07), Williamson safety scores top-3 in §08, EECA / SIPC power (§17)",
+    },
+    {
+      archetype: "Jackson / SIU-Carbondale Corridor",
+      counties: "Jackson",
+      role: "SIU Carbondale university anchor + Murphysboro municipal seat + Big Muddy Solar host + young-skewed county (median age 32.4)",
+      constraint: "SIU enrollment decline + Carbondale crime (highest in LWA-25 at 49.54/1k) + older housing stock + Jackson Co rent-burden 50.2% renters cost-burdened",
+      intervention: "SIU graduate retention via housing-revitalization + climate-migration pitch; Big Muddy Solar PPA marketing; healthcare-laddering at SIH Memorial; municipal-broadband + middle-mile fiber as anchor-attraction differentiator",
+      anchor: "SIU Carbondale enrollment trend, Carbondale + Murphysboro town context scores (§08), Big Muddy Solar (§17), housing affordability data (§11)",
+    },
+    {
+      archetype: "Franklin / West Frankfort–Benton",
+      counties: "Franklin",
+      role: "Coal-legacy county + IRA Energy Community (coal-closure tract) + low-cost housing + highest LWA-25 county disability rate (21.3%) + highest rent-burden share (52.2%)",
+      constraint: "Stacked health-and-housing distress (West Frankfort + Benton both surface ⚠ Health + Housing severe-dimension flags in §08); thin private-sector base outside coal-legacy + Vienna IDOC commute",
+      intervention: "IRA §48 +10pp solar/storage adder for behind-the-meter generation; CEJA Climate Works cohorts directed here; manufactured-housing / Section 502 financing for housing-stock upgrade; targeted childcare-slot expansion (Region 26)",
+      anchor: "IRA Energy Community designation (§07/§17), Franklin disability + rent-burden (§02), West Frankfort + Benton severe-dimension flags (§08)",
+    },
+    {
+      archetype: "Jefferson / Mt. Vernon",
+      counties: "Jefferson",
+      role: "Continental Tire host (3,667 jobs) + manufacturing anchor + LWA-25&apos;s top-ranked town context score (Mt. Vernon 81 Strong)",
+      constraint: "Single-anchor exposure (Continental Tire); Jefferson Co. age 65+ share at 20.0% — Mt. Vernon&apos;s only severe-dimension flag is the elderly-share component of Health; Mt. Vernon residential stock is pre-1970-dominant despite Continental presence",
+      intervention: "Industrial-mechanics + welding cohort intake at Continental Tire; senior/retiree housing supply via HUD §202 + LIHTC senior; advanced-manufacturing supplier diversification around the Continental footprint",
+      anchor: "Mt. Vernon town context score 81 / Strong with ⚠ Health-age dimension (§08), Continental Tire anchor (§06/§07)",
+    },
+    {
+      archetype: "Perry / Du Quoin–Pinckneyville",
+      counties: "Perry",
+      role: "Lowest-LFPR county in footprint (49.0%) + IDOC IL River Correctional host + USG Pinckneyville + coal-legacy + IRA Energy Community",
+      constraint: "Severe-low participation rate (Du Quoin + Pinckneyville both ⚠ Participation in §08, scoring composite Critical + Strained); thinnest private-sector base; longest commute distances",
+      intervention: "Carceral re-entry workforce programming (IDOC officer career-ladder); CEJA solar siting opportunities; targeted transit-shift-work investment (FTA §5311); GD-OTS Tier-2 introduction for any local precision shop able to qualify",
+      anchor: "Perry LFPR 49% (§02/§05), Du Quoin + Pinckneyville town context score (§08), IRA Energy Community + USG anchor (§07)",
+    },
+  ];
+  return (
+    <section style={{ marginTop: 8 }}>
+      <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.6 }}>
+        Five distinct subregional archetypes within the LWA-25 5-county footprint. Each carries a different structural role, a different binding constraint, and a different best-fit intervention. The matrix below is the workforce board&apos;s allocation map — different cohorts, different placements, different funding strategies per archetype rather than a single uniform regional program.
+      </div>
+      <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+          <thead>
+            <tr style={{ background: "#f0ece1", textAlign: "left", borderBottom: "1px solid #d8d2c4" }}>
+              <th style={{ padding: "8px 10px", fontWeight: 600, minWidth: 160 }}>Archetype · County(ies)</th>
+              <th style={{ padding: "8px 10px", fontWeight: 600 }}>Structural role</th>
+              <th style={{ padding: "8px 10px", fontWeight: 600 }}>Binding constraint</th>
+              <th style={{ padding: "8px 10px", fontWeight: 600 }}>Best-fit intervention</th>
+              <th style={{ padding: "8px 10px", fontWeight: 600, minWidth: 130 }}>Data anchor</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={i} style={{ borderTop: i === 0 ? "none" : "1px solid #ebe5d6", verticalAlign: "top" }}>
+                <td style={{ padding: "8px 10px", fontWeight: 600, color: "#1f1d18" }}>
+                  <div>{r.archetype}</div>
+                  <div style={{ fontSize: 10, color: "#7a756b", fontWeight: 400, marginTop: 2 }}>{r.counties}</div>
+                </td>
+                <td style={{ padding: "8px 10px", color: "#3d3a33", lineHeight: 1.5 }}>{r.role}</td>
+                <td style={{ padding: "8px 10px", color: "oklch(45% 0.20 22)", lineHeight: 1.5 }}>{r.constraint}</td>
+                <td style={{ padding: "8px 10px", color: "oklch(40% 0.16 142)", lineHeight: 1.5 }}>{r.intervention}</td>
+                <td style={{ padding: "8px 10px", fontSize: 11, color: "#7a756b", lineHeight: 1.5 }}>{r.anchor}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ fontSize: 11, color: "#7a756b", marginTop: 10, lineHeight: 1.5 }}>
+        Archetypes derived from on-page evidence: GD-OTS concentration data (§07), Town Context Score severe-dimension flags (§08), ACS 2024 5-yr county disability + age + LFPR + rent-burden (§02 + §05), IRA Energy Community designations (§07/§17), and the local anchor-employer inventory referenced throughout the page. <strong>Not interchangeable with LWA-23&apos;s county archetypes.</strong>
+      </div>
+    </section>
+  );
+}
+
 function TrainingROISection() {
   // ROI table for all named training pathways on the page. Saturation reflects
   // local-slot scarcity for cannabis top-rung, viticulture top-rung, and union
@@ -4006,20 +4253,44 @@ export default async function SouthernIllinoisPage() {
             <a href="#sec-pirl"><span className="num">15</span>PIRL</a>
           </nav>
 
-          {/* ═══ DIAGNOSIS BLOCK · finish the labor-market truth before anything else ═══ */}
-          <section id="sec-labor" style={{ marginTop: 32, scrollMarginTop: 60 }}>
-            <h2 style={{ fontSize: 20, fontWeight: 600, margin: "0 0 12px 0", color: "#1f1d18" }}>
-              County-by-county labor market
-            </h2>
+          {/* ═══════════════════════════════════════════════════════════════
+              LWA-25 standardized report flow · §01-§19 sequential sections,
+              modelled on the LWA-23 page architecture but carrying LWA-25-
+              specific facts, strategy, and theory of change.
+              ═══════════════════════════════════════════════════════════════ */}
+
+          {/* §01 · Executive verdict · regional diagnosis */}
+          <SectionHeader num="01" title="Executive verdict · regional diagnosis" />
+          <section id="sec-labor" style={{ scrollMarginTop: 60 }}>
+            <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.6 }}>
+              LWA-25 is the 5-county Southern Illinois workforce footprint (Franklin, Jackson, Jefferson, Perry, Williamson). The county-by-county labor market below is the first-pass diagnosis — UR, labor force, and the largest single employer per county. Subsequent sections (§02-§07) deepen the diagnosis, §03 declares the theory of change, and §04 segments the 5 counties into 5 distinct subregional archetypes with different best-fit interventions.
+            </div>
             <CountyTable d={data} />
           </section>
 
+          {/* §02 · Root causes · true labor picture */}
+          <SectionHeader num="02" title="Root causes · true labor picture" />
+          <div id="sec-labor-truth" style={{ scrollMarginTop: 60 }}>
+            {data.labor_truth && <LaborTruthSection lt={data.labor_truth} />}
+          </div>
+
+          {/* §03 · Theory of change */}
+          <SectionHeader num="03" title="Theory of change · anchor-concentration-at-risk + structural gateways" />
+          <div id="sec-theory-of-change" style={{ scrollMarginTop: 60 }}>
+            <Lwa25TheoryOfChangeSection />
+          </div>
+
+          {/* §04 · County / subregional strategy matrix */}
+          <SectionHeader num="04" title="County / subregional strategy matrix · 5 archetypes, 5 interventions" />
+          <div id="sec-county-strategy" style={{ scrollMarginTop: 60 }}>
+            <Lwa25CountyStrategyMatrixSection />
+          </div>
+
+          {/* §05 · Labor-force + unemployment evidence */}
+          <SectionHeader num="05" title="Labor-force + unemployment evidence · weighted LWA-25 trend" />
           {data.lwa_unemployment_series.length > 0 && (
-            <section style={{ marginTop: 32 }}>
-              <h2 style={{ fontSize: 20, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
-                LWA-25 weighted unemployment · last 5 years
-              </h2>
-              <div style={{ fontSize: 13, color: "#5a564d", marginBottom: 12 }}>
+            <section id="sec-lwa-ur" style={{ marginTop: 8, scrollMarginTop: 60 }}>
+              <div style={{ fontSize: 13, color: "#5a564d", marginBottom: 12, maxWidth: 760 }}>
                 Labor-force-weighted average across the 5 counties. Calculated from BLS LAUS monthly data — the same series each county council uses.
               </div>
               <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, padding: 16 }}>
@@ -4028,51 +4299,62 @@ export default async function SouthernIllinoisPage() {
             </section>
           )}
 
-          <div id="sec-labor-truth" style={{ scrollMarginTop: 60 }}>
-            {data.labor_truth && <LaborTruthSection lt={data.labor_truth} />}
-          </div>
-
-          {/* ═══ DEMAND STACK · industry mix → wages → federal $ → supply chain → anchor attraction ═══ */}
+          {/* §06 · Industry mix · economic base */}
+          <SectionHeader num="06" title="Industry mix · economic base by sector and county" />
           <div id="sec-industry" style={{ scrollMarginTop: 60 }}>
             {data.industry_mix && <IndustryMixSection mix={data.industry_mix} scope="the LWA-25 (5-county region)" />}
             {data.industry_mix && <IndustryMixByCountySection mix={data.industry_mix} />}
           </div>
 
-          {/* Bridge — industry mix → wage benchmark */}
-          <div style={{ marginTop: 28, padding: 14, background: "#f0ece1", border: "1px solid #d8d2c4", borderLeft: "3px solid #5a564d", borderRadius: 4, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, fontStyle: "italic" }}>
-            The mix above tells us <em>what</em> employs the region; the next view tells us <em>how those same supersectors pay here versus the rest of the state</em>.
+          {/* §07 · Federal awards · GD-OTS concentration exposure */}
+          <SectionHeader num="07" title="Federal awards · GD-OTS Marion concentration exposure" />
+          <div id="sec-federal-money" style={{ scrollMarginTop: 60 }}>
+            {data.top_federal_recipients && <FederalConcentrationSection tr={data.top_federal_recipients} />}
+            <SupplyChainSubawardSection lanes={data.gdots_subaward_lanes} bulkLanes={data.gdots_subaward_lanes_bulk} />
+            <BusinessLeadsSection b={data.business_opportunities} />
           </div>
 
+          {/* §08 · City/town safety + LWA-25 town context score */}
+          <SectionHeader num="08" title="City/town safety + LWA-25 town context score · 10-town composite" />
+          <div id="sec-town-context" style={{ scrollMarginTop: 60 }}>
+            <Lwa25TownContextScoreSection />
+          </div>
+
+          {/* §09 · Mobility / commute / transit */}
+          <SectionHeader num="09" title="Mobility · commute + transit access" />
+          <div id="sec-mobility" style={{ scrollMarginTop: 60 }}>
+            <MobilityJobAccessSection />
+          </div>
+
+          {/* §10 · Childcare · gateway barrier */}
+          <SectionHeader num="10" title="Childcare · the gateway barrier that makes ladders fail" />
+          <div id="sec-childcare" style={{ scrollMarginTop: 60 }}>
+            <ChildcareGatewaySection />
+          </div>
+
+          {/* §11 · Housing affordability */}
+          <SectionHeader num="11" title="Housing affordability · stock, cost, corridor" />
+          <div id="sec-housing" style={{ scrollMarginTop: 60 }}>
+            <HousingAffordabilitySection />
+          </div>
+
+          {/* §12 · Healthcare anchors / workforce ladder */}
+          <SectionHeader num="12" title="Healthcare anchors · workforce ladder + wage-suppression pattern" />
+          <div id="sec-healthcare" style={{ scrollMarginTop: 60 }}>
+            <HealthcareWorkforceSection />
+          </div>
+
+          {/* §13 · Wage benchmark · household reality check */}
+          <SectionHeader num="13" title="Wage benchmark · supersector pay vs IL statewide" />
           <div id="sec-wage-benchmark" style={{ scrollMarginTop: 60 }}>
             <StateEmployerWageBenchmarkSection />
           </div>
 
-          {/* Bridge — wage benchmark → federal money concentration */}
-          <div style={{ marginTop: 28, padding: 14, background: "#f0ece1", border: "1px solid #d8d2c4", borderLeft: "3px solid #5a564d", borderRadius: 4, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, fontStyle: "italic" }}>
-            Wages set the floor. The next question is who, inside that industry mix, controls the largest payrolls — and how concentrated those payrolls really are.
-          </div>
-
-          <div id="sec-federal-money" style={{ scrollMarginTop: 60 }}>
-            {data.top_federal_recipients && <FederalConcentrationSection tr={data.top_federal_recipients} />}
-            <SupplyChainSubawardSection lanes={data.gdots_subaward_lanes} bulkLanes={data.gdots_subaward_lanes_bulk} />
-          </div>
-
-          <BusinessLeadsSection b={data.business_opportunities} />
-
-          {/* Bridge — anchor attraction follows the federal-$ picture */}
-          <div style={{ marginTop: 28, padding: 14, background: "#f0ece1", border: "1px solid #d8d2c4", borderLeft: "3px solid #5a564d", borderRadius: 4, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, fontStyle: "italic" }}>
-            Anchor attraction sets a longer-horizon demand ceiling. The next sections take today&apos;s demand picture as given and ask: what does it cost to train someone into it, and does the math work?
-          </div>
-
-          <div id="sec-anchor" style={{ scrollMarginTop: 60 }}>
-            <AttractionPipelineSection />
-          </div>
-
-          {/* ═══ SUPPLY STACK · training ROI → 1A+2C wage test → travel-work → healthcare special case ═══ */}
+          {/* §14 · Training ROI · credential ladders */}
+          <SectionHeader num="14" title="Training ROI · credential ladders against the Jackson-Co 1A+2C bar" />
           <div id="sec-roi" style={{ scrollMarginTop: 60 }}>
             <TrainingROISection />
           </div>
-
           <div id="sec-training" style={{ scrollMarginTop: 60 }}>
             {data.training_alignment && (
               <TrainingAlignmentSection
@@ -4081,93 +4363,43 @@ export default async function SouthernIllinoisPage() {
               />
             )}
           </div>
-
-          {/* Bridge — 1A+2C wage test → travel jobs (extension of TRAVEL-WORK verdict) */}
-          <div style={{ marginTop: 28, padding: 14, background: "#f0ece1", border: "1px solid #d8d2c4", borderLeft: "3px solid #5a564d", borderRadius: 4, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, fontStyle: "italic" }}>
-            Several of the verdicts above carry a TRAVEL-WORK tag. Those pathways deserve their own treatment, because the rotation patterns + per-diem structure change the household math materially.
-          </div>
-
           <div id="sec-travel-jobs" style={{ scrollMarginTop: 60 }}>
             <TravelJobsSection />
           </div>
 
-          <div id="sec-healthcare" style={{ scrollMarginTop: 60 }}>
-            <HealthcareWorkforceSection />
+          {/* §15 · IL DCEO In-Demand Occupations + 1A/2C clearance */}
+          <SectionHeader num="15" title="IL DCEO In-Demand Occupations · EDR 8 + 1A/2C wage clearance" />
+          <div id="sec-dceo-demand" style={{ scrollMarginTop: 60 }}>
+            <Lwa25DceoOccupationsSection />
           </div>
 
-          {/* ═══ GATEWAY BLOCK · the three structural barriers, together ═══ */}
-          {/* Bridge — healthcare special case → childcare gateway */}
-          <div style={{ marginTop: 28, padding: 14, background: "#f0ece1", border: "1px solid #d8d2c4", borderLeft: "3px solid #5a564d", borderRadius: 4, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, fontStyle: "italic" }}>
-            Healthcare illustrates the page&apos;s central pattern: a wage-suppressed local rung with a federal lever overhead. The next three sections name the gateways that decide whether a worker can ever reach the rung in the first place.
+          {/* §16 · WIOA/PIRL accountability */}
+          <SectionHeader num="16" title="WIOA/PIRL accountability · LWIA-25 targets + funding-driven critique + harm cascade" />
+          <div id="sec-pirl" style={{ scrollMarginTop: 60 }}>
+            <PirlOutcomesSection />
           </div>
-
-          <div id="sec-childcare" style={{ scrollMarginTop: 60 }}>
-            <ChildcareGatewaySection />
+          <div id="sec-funding-driven" style={{ scrollMarginTop: 60 }}>
+            <FundingDrivenProgrammingSection />
           </div>
-
-          <div id="sec-mobility" style={{ scrollMarginTop: 60 }}>
-            <MobilityJobAccessSection />
+          <div id="sec-harm-cascade" style={{ scrollMarginTop: 60 }}>
+            <HarmCascadeSection />
           </div>
-
-          <div id="sec-housing" style={{ scrollMarginTop: 60 }}>
-            <HousingAffordabilitySection />
-          </div>
-
           <div id="sec-structural-constraints" style={{ scrollMarginTop: 60 }}>
             <StructuralWorkforceConstraintsSection />
           </div>
 
-          {/* ═══ ACCOUNTABILITY BLOCK · WIOA outcomes + funding incentives + harm cascade ═══ */}
-          {/* Bridge — gateways → PIRL accountability */}
-          <div style={{ marginTop: 28, padding: 14, background: "#f0ece1", border: "1px solid #d8d2c4", borderLeft: "3px solid #5a564d", borderRadius: 4, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, fontStyle: "italic" }}>
-            Childcare, mobility, housing, and the broader structural constraints are gateways the board cannot directly fund but must design around. With those constraints named, the WIOA outcomes table below reads differently.
+          {/* §17 · Anchor attraction · supply-chain diversification */}
+          <SectionHeader num="17" title="Anchor attraction · supply-chain diversification + data-center recruitment" />
+          <div id="sec-anchor" style={{ scrollMarginTop: 60 }}>
+            <AttractionPipelineSection />
           </div>
 
-          <div id="sec-pirl" style={{ scrollMarginTop: 60 }}>
-            <PirlOutcomesSection />
-          </div>
-
-          {/* Bridge — PIRL → town context score */}
-          <div style={{ marginTop: 28, padding: 14, background: "#f0ece1", border: "1px solid #d8d2c4", borderLeft: "3px solid #5a564d", borderRadius: 4, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, fontStyle: "italic" }}>
-            PIRL measures workforce-board accountability. The town context score below measures where each of the 10 reporting towns sits within LWA-25 across safety, participation, health, and housing — the same dimensions the board has to design around when it places programs and cohorts.
-          </div>
-
-          <div id="sec-town-context" style={{ scrollMarginTop: 60 }}>
-            <Lwa25TownContextScoreSection />
-          </div>
-
-          {/* Bridge — PIRL → funding-driven critique */}
-          <div style={{ marginTop: 28, padding: 14, background: "#f0ece1", border: "1px solid #d8d2c4", borderLeft: "3px solid #5a564d", borderRadius: 4, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, fontStyle: "italic" }}>
-            The PIRL numbers measure what got delivered. The next section asks <em>why that mix got delivered</em> — and whether the funding model selected for it.
-          </div>
-
-          <div id="sec-funding-driven" style={{ scrollMarginTop: 60 }}>
-            <FundingDrivenProgrammingSection />
-          </div>
-
-          <div id="sec-harm-cascade" style={{ scrollMarginTop: 60 }}>
-            <HarmCascadeSection />
-          </div>
-
-          {/* Bridge — harm cascade → known limits */}
-          <div style={{ marginTop: 28, padding: 14, background: "#f0ece1", border: "1px solid #d8d2c4", borderLeft: "3px solid #5a564d", borderRadius: 4, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, fontStyle: "italic" }}>
-            Before the action ladder, an explicit accounting of where the page&apos;s data has limits — every open item carries an attempted-source record and a closure class.
-          </div>
-
-          <div id="sec-known-limits" style={{ scrollMarginTop: 60 }}>
-            <KnownLimitsSection />
-          </div>
-
-          {/* Bridge — known limits → action ladder */}
-          <div style={{ marginTop: 28, padding: 14, background: "#f0ece1", border: "1px solid #d8d2c4", borderLeft: "3px solid #5a564d", borderRadius: 4, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, fontStyle: "italic" }}>
-            The cascade is the cost of leaving the constraints above unaddressed. The ladder below is what the board can do this quarter, this year, and this funding cycle to interrupt it.
-          </div>
-
-          <section style={{ marginTop: 40 }}>
-            <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
-            <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+          {/* §18 · Action ladder · implementation priorities */}
+          <SectionHeader num="18" title="Action ladder · implementation priorities the dashboard cannot self-execute" />
+          <section style={{ marginTop: 8 }}>
+            <h3 style={{ fontSize: 16, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
               Your residual moves — the human-only steps the dashboard cannot self-execute
-            </h2>
+            </h3>
             <div style={{ fontSize: 14, color: "#5a564d", marginBottom: 16, maxWidth: 760, lineHeight: 1.55 }}>
               Everything above was auto-pulled, cross-referenced, scored, and surfaced by the dashboard.
               The four boxes below name the remaining steps that require a human in the room — a phone call,
@@ -4210,6 +4442,12 @@ export default async function SouthernIllinoisPage() {
               ))}
             </div>
           </section>
+
+          {/* §19 · Methodology + Known Limits */}
+          <SectionHeader num="19" title="Methodology + Known Limits · source integrity + open caveats" />
+          <div id="sec-known-limits" style={{ scrollMarginTop: 60 }}>
+            <KnownLimitsSection />
+          </div>
 
           <div className="sources" style={{ marginTop: 40, lineHeight: 1.6 }}>
             <b>Coverage:</b> LWA-25 = Franklin, Jackson, Jefferson, Perry, Williamson —
