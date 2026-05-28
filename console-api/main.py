@@ -2701,16 +2701,23 @@ async def public_charleston() -> dict:
     prefix that anchor /carbondale + /murphysboro do NOT apply here — those
     cover Jackson County + Carbondale-Marion MSA only.
 
-    Coles County FRED series (`cle_coles_*` family) are TBD in platform.macro_data;
-    until loaded, the indicators block returns IL state context only. The
-    externally-sourced blocks (ACS via Census API, USAspending county-level,
-    QCEW county-level) ARE live because the helper functions are FIPS-
-    parameterized.
+    Coles County FRED series (`cle_coles_*` family) registered in
+    tpcore.fred.adapter.INDICATOR_SERIES 2026-05-28; they populate
+    platform.macro_data on the next macro_indicators ingest run.
 
     Coles County FIPS = 029. Charleston Place FIPS = 12567.
     """
     TARGETS = (
-        # IL state context only — Coles County FRED series TBD
+        # Coles County, IL (parallel to crb_jackson_* on /carbondale)
+        "cle_coles_unemployment_rate", "cle_coles_labor_force",
+        "cle_coles_population",
+        "cle_coles_personal_income", "cle_coles_real_gdp",
+        "cle_coles_median_hh_income", "cle_coles_snap_recipients",
+        "cle_coles_poverty_universe", "cle_coles_single_parent_pct",
+        "cle_coles_housing_median_listing",
+        "cle_coles_housing_new_listings",
+        "cle_coles_housing_new_listings_mom",
+        # IL state context
         "il_unemployment_rate", "il_nonfarm_payrolls", "phci_il",
     )
     async with app.state.pool.acquire() as conn:

@@ -551,49 +551,137 @@ function ageOf(d: string): string {
   return `${Math.floor(months / 12)}y ago`;
 }
 
+function fmtCurr(n: number): string {
+  if (n >= 1_000_000_000) return `$${(n / 1_000_000_000).toFixed(1)}B`;
+  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(0)}M`;
+  if (n >= 1_000) return `$${(n / 1_000).toFixed(0)}k`;
+  return `$${n.toFixed(0)}`;
+}
+
 function buildSections(d: CharlestonData): Array<{ id: string; title: string; subtitle: string; cards: Card[] }> {
   const ind = d.indicators;
   const get = (k: string) => ind[k]?.value;
   const getDate = (k: string) => ind[k]?.date;
   const cards = (...arr: Array<Card | null>): Card[] => arr.filter(Boolean) as Card[];
 
-  // FRED Coles County series (`cle_coles_*` family) are TBD in platform.macro_data.
-  // Until they're loaded the Jobs/People/Housing/Hardship cards will be empty —
-  // the IL state context card always renders so the section header is meaningful.
+  // ─── Jobs (county) — Mattoon Micropolitan SA doesn't carry MSA-level
+  //     CES series (no SMU* prefix for Micropolitan), so wage cards are
+  //     county-only or omitted ──────────────────────────────────────
   const colesUR = get("cle_coles_unemployment_rate");
-  const microUR = get("cle_micro_unemployment_rate");
   const ilUR = get("il_unemployment_rate");
-  const lf = get("cle_micro_labor_force");
+  const lf = get("cle_coles_labor_force");
 
   const jobsCards: Array<Card | null> = [
     colesUR !== undefined ? {
       key: "c_ur", label: "Unemployment (Coles Co.)", value: `${colesUR.toFixed(1)}%`,
       sub: `as of ${ageOf(getDate("cle_coles_unemployment_rate")!)}`,
       tone: colesUR < 4 ? "good" : colesUR < 6 ? "ok" : colesUR < 8 ? "warn" : "bad",
-      detail: "Coles County, IL unemployment rate. Source: BLS LAUS via FRED.",
-    } : null,
-    microUR !== undefined ? {
-      key: "m_ur", label: "Unemployment (Mattoon Micro SA)", value: `${microUR.toFixed(1)}%`,
-      sub: `Micro-wide; ${ageOf(getDate("cle_micro_unemployment_rate")!)}`,
-      tone: microUR < 4 ? "good" : microUR < 6 ? "ok" : microUR < 8 ? "warn" : "bad",
-      detail: "Mattoon, IL Micropolitan Statistical Area (CBSA 31380; Coles County). Source: BLS LAUS via FRED.",
+      detail: "Coles County, IL unemployment rate. Source: BLS LAUS via FRED; series ILCOLE3URN. Monthly since 1990.",
     } : null,
     ilUR !== undefined ? {
       key: "i_ur", label: "Unemployment (Illinois)", value: `${ilUR.toFixed(1)}%`,
       sub: "state-wide reference",
       tone: ilUR < 4 ? "good" : ilUR < 6 ? "ok" : ilUR < 8 ? "warn" : "bad",
-      detail: "Illinois state unemployment rate for context vs Coles County. Source: BLS LAUS via FRED.",
+      detail: "Illinois state unemployment rate for context vs Coles County. Source: BLS LAUS via FRED; series ILUR.",
     } : null,
     lf !== undefined ? {
-      key: "lf", label: "Micro SA Labor Force", value: fmtNum(lf),
-      sub: `as of ${ageOf(getDate("cle_micro_labor_force")!)}`,
+      key: "lf", label: "Coles Co. Labor Force", value: fmtNum(lf),
+      sub: `as of ${ageOf(getDate("cle_coles_labor_force")!)}`,
       tone: "ok",
-      detail: "Total civilian labor force in the Mattoon Micropolitan SA. Source: BLS LAUS via FRED.",
+      detail: "Total civilian labor force in Coles County. Source: BLS LAUS via FRED; series ILCOLE3LFN.",
+    } : null,
+  ];
+
+  // ─── People + income ─────────────────────────────────────────
+  const pop = get("cle_coles_population");
+  const medHH = get("cle_coles_median_hh_income");
+  const pi = get("cle_coles_personal_income");
+  const gdp = get("cle_coles_real_gdp");
+
+  const peopleCards: Array<Card | null> = [
+    pop !== undefined ? {
+      key: "pop", label: "Coles Co. Population", value: fmtNum(pop),
+      sub: `as of ${ageOf(getDate("cle_coles_population")!)}`,
+      tone: "ok",
+      detail: "Resident population estimate for Coles County. Source: US Census Bureau Population Estimates via FRED; series ILCOLE3POP. Annual.",
+    } : null,
+    medHH !== undefined ? {
+      key: "medhh", label: "Median Household Income (Coles Co.)", value: fmtCurr(medHH),
+      sub: `as of ${ageOf(getDate("cle_coles_median_hh_income")!)}`,
+      tone: medHH > 60000 ? "good" : medHH > 45000 ? "ok" : "warn",
+      detail: "Median household income estimate for Coles County, IL. Source: Census SAIPE via FRED; series MHIIL17029A052NCEN. Annual, ~12-month lag.",
+    } : null,
+    pi !== undefined ? {
+      key: "pi", label: "Personal Income (Coles Co.)", value: fmtCurr(pi * 1000),
+      sub: `total; ${ageOf(getDate("cle_coles_personal_income")!)}`,
+      tone: "ok",
+      detail: "Total personal income (all sources) for Coles County residents. Source: BEA via FRED; series PI17029. Annual, in thousands.",
+    } : null,
+    gdp !== undefined ? {
+      key: "gdp", label: "Real GDP (Coles Co., all ind.)", value: fmtCurr(gdp * 1000),
+      sub: `as of ${ageOf(getDate("cle_coles_real_gdp")!)}`,
+      tone: "ok",
+      detail: "Real Gross Domestic Product, all industries, Coles County. Source: BEA Regional Economic Accounts via FRED; series REALGDPALL17029. Annual, chained dollars.",
+    } : null,
+  ];
+
+  // ─── Housing ─────────────────────────────────────────────────
+  const medList = get("cle_coles_housing_median_listing");
+  const newListings = get("cle_coles_housing_new_listings");
+  const newListingsMoM = get("cle_coles_housing_new_listings_mom");
+
+  const housingCards: Array<Card | null> = [
+    medList !== undefined ? {
+      key: "medlist", label: "Median Listing Price (Coles Co.)", value: fmtCurr(medList),
+      sub: `Realtor.com; ${ageOf(getDate("cle_coles_housing_median_listing")!)}`,
+      tone: "ok",
+      detail: "Median asking price for active listings in Coles County. Source: Realtor.com via FRED; series MEDLISPRI17029. Monthly since 2016.",
+    } : null,
+    newListings !== undefined ? {
+      key: "newlist", label: "New Listing Count", value: fmtNum(newListings),
+      sub: `Coles Co.; ${ageOf(getDate("cle_coles_housing_new_listings")!)}`,
+      tone: "ok",
+      detail: "Number of new home listings in Coles County in the reference month. Source: Realtor.com via FRED; series NEWLISCOU17029.",
+    } : null,
+    newListingsMoM !== undefined ? {
+      key: "newlistmm", label: "New Listings MoM Change", value: `${newListingsMoM > 0 ? "+" : ""}${newListingsMoM.toFixed(0)}`,
+      sub: "month-over-month",
+      tone: "ok",
+      detail: "Month-over-month change in new home listings in Coles County. Source: Realtor.com via FRED; series NEWLISCOUMM17029.",
+    } : null,
+  ];
+
+  // ─── Hardship / safety net ───────────────────────────────────
+  const snap = get("cle_coles_snap_recipients");
+  const poverty = get("cle_coles_poverty_universe");
+  const singleParent = get("cle_coles_single_parent_pct");
+
+  const hardshipCards: Array<Card | null> = [
+    snap !== undefined ? {
+      key: "snap", label: "SNAP Recipients (Coles Co.)", value: fmtNum(snap),
+      sub: `as of ${ageOf(getDate("cle_coles_snap_recipients")!)}`,
+      tone: "warn",
+      detail: "Number of SNAP (food stamp) benefit recipients in Coles County. Source: Census SAIPE via FRED; series CBR17029ILA647NCEN. Annual.",
+    } : null,
+    poverty !== undefined ? {
+      key: "pov", label: "Poverty Universe (Coles Co.)", value: fmtNum(poverty),
+      sub: `all ages; ${ageOf(getDate("cle_coles_poverty_universe")!)}`,
+      tone: "warn",
+      detail: "Number of persons in Coles County for whom poverty status was determined (denominator for poverty-rate calculations). Source: Census SAIPE via FRED; series PUAAIL17029A647NCEN. Annual.",
+    } : null,
+    singleParent !== undefined ? {
+      key: "sp", label: "Single-Parent Household Share", value: `${singleParent.toFixed(1)}%`,
+      sub: `of households with children; ${ageOf(getDate("cle_coles_single_parent_pct")!)}`,
+      tone: singleParent > 35 ? "warn" : "ok",
+      detail: "Single-parent households as a percentage of households with children, Coles County. Source: Census ACS via FRED; series S1101SPHOUSE017029. Annual.",
     } : null,
   ];
 
   return [
     { id: "jobs", title: "Jobs & wages", subtitle: "How is the local labor market doing?", cards: cards(...jobsCards) },
+    { id: "people", title: "People & income", subtitle: "Who lives here, and how is the economy supporting them?", cards: cards(...peopleCards) },
+    { id: "housing", title: "Housing market", subtitle: "Coles County housing-market conditions (Realtor.com).", cards: cards(...housingCards) },
+    { id: "hardship", title: "Hardship signals", subtitle: "Indicators of economic stress at the household level.", cards: cards(...hardshipCards) },
   ].filter(s => s.cards.length > 0);
 }
 

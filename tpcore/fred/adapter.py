@@ -174,6 +174,31 @@ INDICATOR_SERIES: tuple[tuple[str, str], ...] = (
     ("crb_msa_housing_days_on_market",  "MEDDAYONMAR16060"),         # monthly, 2016+ (Realtor.com)
     ("crb_msa_housing_new_listings_mom","NEWLISCOUMM16060"),         # monthly, 2017+
     ("crb_msa_housing_price_inc_yoy",   "PRIINCCOUYY16060"),         # monthly, 2017+
+    # ──── Charleston, IL / Coles County / LWA-23 panel (2026-05-28) ────
+    # Parallel substrate for the /charleston public page (mirrors the
+    # crb_jackson_* + crb_msa_* Jackson County panel above). Coles County
+    # FIPS 17029. Mattoon Micropolitan SA = CBSA 31380 but Micropolitan
+    # SAs don't carry the SMU* CES series MSAs do — so the wage / private-
+    # service-jobs cards remain MSA-only (no Mattoon equivalent).
+    # LWA-23 (East Central IL) admin: CEFS Economic Opportunity Corporation,
+    # Effingham. 13-county footprint (Coles is one of 13). FRED IL-county
+    # 2-letter abbrev for Coles is `COLE` (4-char + numeric suffix `3`
+    # disambiguates from other IL counties starting with C).
+    ("cle_coles_unemployment_rate",     "ILCOLE3URN"),               # monthly, 1990+
+    ("cle_coles_labor_force",           "ILCOLE3LFN"),               # monthly, 1990+
+    ("cle_coles_population",            "ILCOLE3POP"),               # annual, 1970+
+    ("cle_coles_personal_income",       "PI17029"),                  # annual, 1969+
+    ("cle_coles_real_gdp",              "REALGDPALL17029"),          # annual, 2001+
+    ("cle_coles_median_hh_income",      "MHIIL17029A052NCEN"),       # annual, 1989+
+    ("cle_coles_snap_recipients",       "CBR17029ILA647NCEN"),       # annual, 1989+
+    ("cle_coles_poverty_universe",      "PUAAIL17029A647NCEN"),      # annual, 1998+
+    ("cle_coles_single_parent_pct",     "S1101SPHOUSE017029"),       # annual, 2009+
+    # Realtor.com housing series (Coles County; Mattoon Micro CBSA-level
+    # data not published — county is the smallest geography Realtor.com
+    # publishes for non-metro areas)
+    ("cle_coles_housing_median_listing",       "MEDLISPRI17029"),     # monthly, 2016+
+    ("cle_coles_housing_new_listings",         "NEWLISCOU17029"),     # monthly, 2017+
+    ("cle_coles_housing_new_listings_mom",     "NEWLISCOUMM17029"),   # monthly, 2017+
     # Illinois state context (already have phci_il via 50-state panel)
     ("il_unemployment_rate",            "ILUR"),                     # monthly, 1976+
     ("il_nonfarm_payrolls",             "ILNA"),                     # monthly, 1990+
