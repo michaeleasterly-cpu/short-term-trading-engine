@@ -27,10 +27,16 @@ interface IndustryRow {
   total_employment: number; private_employment: number; public_employment: number;
   avg_weekly_wage: number; annual_pay_equivalent: number;
 }
+interface CountyIndustryRow {
+  fips: string; name: string;
+  total_employment: number;
+  top_supersectors: Array<{ code: string; name: string; employment: number; avg_weekly_wage: number }>;
+}
 interface IndustryMix {
   as_of_quarter: string;
   top_supersectors: IndustryRow[];
   total_employment: number;
+  by_county?: CountyIndustryRow[];
   source: string;
 }
 interface BusinessOps {
@@ -893,6 +899,124 @@ export default async function EastCentralIllinoisPage() {
           </div>
           <div style={{ fontSize: 11, color: "#7a756b", marginTop: 12, lineHeight: 1.5 }}>
             Sources: <a href={LWA23_LIVING_WAGE.source_url} target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>MIT Living Wage Calculator · Coles County, IL</a> + Lake Land + Kaskaskia + Olney Central program catalogs + BLS OEWS Illinois statewide + employer-side wage signals from JG-TC + Effingham Daily News + USAspending.gov.
+          </div>
+        </section>
+
+        {/* ═══ §6.5 Mobility + job access — transit coverage across 13 counties ═══ */}
+        <section style={{ marginTop: 40 }}>
+          <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+          <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+            07 · Mobility + job access · transit coverage across 13 counties
+          </h2>
+          <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
+            The 13-county footprint is covered by <strong>four</strong> rural transit agencies, all demand-response by default with a few deviated/fixed routes in larger towns. <strong>None operate evenings, Sundays, or full-Saturday hours</strong> — any 2nd-shift manufacturing job (Beef Packers + IDEX Effingham, Mattoon factory cluster, NAL Paris, Hydro-Gear Sullivan) is effectively car-dependent. CEFS itself operates the Central IL Public Transit (CIPT) service for 4 of the 13 counties.
+          </div>
+          <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "auto", marginBottom: 12 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+              <thead>
+                <tr style={{ background: "#f0ece1", textAlign: "left", borderBottom: "1px solid #d8d2c4" }}>
+                  <th style={{ padding: "8px 10px", fontWeight: 600 }}>Counties served</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600 }}>Provider</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600 }}>Service hours</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600 }}>Service type</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[
+                  { counties: "Clay + Effingham + Fayette + Moultrie", provider: "Central Illinois Public Transit (CIPT) — operated by CEFS Economic Opportunity Corp", hours: "M-F 6am-5pm (Effingham dispatch 6am-6pm)", type: "Demand-response + ETrax deviated route inside Effingham city", src: "https://www.cefseoc.org/transportation-cipt" },
+                  { counties: "Clark + Crawford + Cumberland + Edgar + Jasper + Lawrence + Richland", provider: "RIDES Mass Transit District (RMTD)", hours: "M-Sat 8am-4pm (Robinson office); demand-response county-wide. Fixed routes in Paris, Robinson, Olney (e.g., Bulldog/Wildcat 6:00am-5:52pm)", type: "Demand-response + limited deviated fixed-route in larger towns", src: "https://www.ridesmtd.com/" },
+                  { counties: "Coles", provider: "Dial-A-Ride Public Transportation", hours: "M-F 8am-5pm; \"Zip Line\" deviated route Mattoon-Charleston runs through ~2pm", type: "Demand-response + one deviated route. Cross-county service to Champaign-Urbana / Douglas / Effingham at $7 one-way (the only meaningful MSA-job-access link in LWA-23)", src: "https://www.dialaridetransit.org/coles-county-public-transportation.html" },
+                  { counties: "Marion", provider: "South Central Transit (SCT)", hours: "Varies by route; dispatch 1-800-660-7433", type: "Deviated fixed-route + demand-response", src: "http://southcentraltransit.org/routes-and-schedules/" },
+                ].map((r, i) => (
+                  <tr key={i} style={{ borderTop: i === 0 ? "none" : "1px solid #ebe5d6" }}>
+                    <td style={{ padding: "8px 10px", fontWeight: 600 }}>{r.counties}</td>
+                    <td style={{ padding: "8px 10px", color: "#3d3a33" }}>{r.provider}<br /><a href={r.src} target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f", fontSize: 11 }}>source</a></td>
+                    <td style={{ padding: "8px 10px", fontSize: 12, color: "#5a564d" }}>{r.hours}</td>
+                    <td style={{ padding: "8px 10px", fontSize: 12, color: "#5a564d" }}>{r.type}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ padding: 14, background: "#fef9eb", border: "1px solid #f0d98a", borderLeft: "6px solid oklch(45% 0.20 22)", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
+            <strong>Workforce-board implication:</strong> the 87,127 working-age adults not in the labor force (see §01) face a transportation barrier the WIOA training pipeline doesn&apos;t directly address. CIPT (CEFS-operated) is the in-board lever for Clay/Effingham/Fayette/Moultrie residents. RMTD coverage of the 7 south + east counties is demand-response only — no fixed-route reliability for shift-work commute. The cross-county Dial-A-Ride link from Coles to Champaign-Urbana at $7 one-way is the single best LWA-23 → MSA-job-access link. Source: <a href="https://en.wikipedia.org/wiki/Rides_Mass_Transit_District" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>RMTD FY2024-25 NTD data via Wikipedia</a> (FY24 = 636,290 rides / 141,218 revenue hours; FY25 = 367,682 rides / 142,368 revenue hours — flag for follow-up on the ridership drop).
+          </div>
+          <div style={{ fontSize: 11, color: "#7a756b", marginTop: 8, lineHeight: 1.5 }}>
+            Note: SHOW BUS does NOT serve any LWA-23 county (its territory is DeWitt/Ford/Iroquois/Kankakee/Livingston/Logan/Mason/McLean; per <a href="https://www.showbusonline.org/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>showbusonline.org</a>, withdrew from rural Macon/DeWitt/Ford/McLean 2025-06-30). Effingham city&apos;s ETrax is a CIPT deviated route, not a standalone provider. Coles County is NOT served by JAX Mass Transit (JAX is Carbondale/Jackson County).
+          </div>
+        </section>
+
+        {/* ═══ §6.6 Childcare constraint — Region 11 76% slot gap ═══ */}
+        <section style={{ marginTop: 40 }}>
+          <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+          <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+            08 · Childcare constraint · the 76% slot-gap that caps labor-force participation
+          </h2>
+          <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
+            Per the <a href="https://www.birthtofiveil.com/region11" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Birth to Five Illinois Region 11 Needs Assessment</a>, of 8,122 children under age 6 in Region 11 (Clark, Coles, Cumberland, Douglas, Edgar, Moultrie, Shelby — covering 5 of the 13 LWA-23 counties), <strong>76% do not have a slot in a licensed or license-exempt childcare center or home</strong>. Five named regional needs include &quot;more infant and toddler care slots and full-day preschool opportunities.&quot; This is a direct mechanism feeding the LWA-23 not-in-labor-force gap documented in §01 — parents without childcare cannot participate in the labor market regardless of credential or wage.
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))", gap: 12, marginBottom: 12 }}>
+            <div style={{ background: "white", border: "1px solid #d8d2c4", borderLeft: "6px solid oklch(45% 0.20 22)", borderRadius: 6, padding: 14 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "oklch(45% 0.20 22)", marginBottom: 4, textTransform: "uppercase" }}>Region 11 slot gap</div>
+              <div style={{ fontSize: 24, fontWeight: 600 }}>76%</div>
+              <div style={{ fontSize: 12, color: "#5a564d", marginTop: 4 }}>of children under 6 lack a licensed slot (Clark+Coles+Cumberland+Edgar+Moultrie + Douglas + Shelby)</div>
+            </div>
+            <div style={{ background: "white", border: "1px solid #d8d2c4", borderLeft: "6px solid #1f1d18", borderRadius: 6, padding: 14 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#1f1d18", marginBottom: 4, textTransform: "uppercase" }}>Coles 1-child cost</div>
+              <div style={{ fontSize: 24, fontWeight: 600 }}>$9,460/yr</div>
+              <div style={{ fontSize: 12, color: "#5a564d", marginTop: 4 }}>MIT Living Wage Coles County — ~22% of ACS median HH income (3x HHS 7% affordability benchmark)</div>
+            </div>
+            <div style={{ background: "white", border: "1px solid #d8d2c4", borderLeft: "6px solid #1f1d18", borderRadius: 6, padding: 14 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#1f1d18", marginBottom: 4, textTransform: "uppercase" }}>Coles 2-child cost</div>
+              <div style={{ fontSize: 24, fontWeight: 600 }}>$18,323/yr</div>
+              <div style={{ fontSize: 12, color: "#5a564d", marginTop: 4 }}>MIT LWC Coles — 1A+2C living wage = $33.54/hr (= $69,763/yr single-earner)</div>
+            </div>
+            <div style={{ background: "white", border: "1px solid #d8d2c4", borderLeft: "6px solid oklch(40% 0.16 142)", borderRadius: 6, padding: 14 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "oklch(40% 0.16 142)", marginBottom: 4, textTransform: "uppercase" }}>CEFS Head Start sites</div>
+              <div style={{ fontSize: 24, fontWeight: 600 }}>8</div>
+              <div style={{ fontSize: 12, color: "#5a564d", marginTop: 4 }}>Altamont, Effingham, Litchfield, Louisville (Clay), Pana, Shelbyville, Taylorville, Vandalia (Fayette) + home-based EHS in 7 counties</div>
+            </div>
+          </div>
+          <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, padding: 14, marginBottom: 12 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8 }}>The 13 LWA-23 counties span 4 Birth to Five Illinois regions:</div>
+            <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 13, color: "#3d3a33", lineHeight: 1.65 }}>
+              <li><strong>Region 3</strong> — Effingham + Fayette (with Bond + Christian + Montgomery). <a href="https://www.birthtofiveil.com/region3" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>birthtofiveil.com/region3</a></li>
+              <li><strong>Region 11</strong> — Clark + Coles + Cumberland + Edgar + Moultrie (with Douglas + Shelby). <a href="https://www.birthtofiveil.com/region11" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>birthtofiveil.com/region11</a></li>
+              <li><strong>Region 12</strong> — Clay + Crawford + Jasper + Lawrence + Richland. <a href="https://www.birthtofiveil.com/region12" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>birthtofiveil.com/region12</a></li>
+              <li><strong>Region 13</strong> — Marion (with Clinton + Jefferson + Washington). <a href="https://www.birthtofiveil.com/region13" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>birthtofiveil.com/region13</a></li>
+            </ul>
+          </div>
+          <div style={{ padding: 14, background: "#fef9eb", border: "1px solid #f0d98a", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
+            <strong>Workforce-planning implication:</strong> the WIOA cohort funnel loses participants at the childcare-barrier step before they reach training enrollment. CEFS already operates Head Start as the income-eligible (≤100% federal poverty) zero-fee floor — the eight CEFS Head Start sites are the only formal childcare floor for low-income families in 8 of the 13 counties. The next-leverage move is the IL CCAP (Child Care Assistance Program) co-enrollment pathway for WIOA participants whose income clears the Head Start threshold but falls under the CCAP eligibility ceiling.
+          </div>
+          <div style={{ fontSize: 11, color: "#7a756b", marginTop: 8, lineHeight: 1.5 }}>
+            Sources: <a href="https://www.birthtofiveil.com/region11" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Birth to Five IL Region 11 ECEC Needs Assessment</a> + <a href="https://datahub.iecam.illinois.edu/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>IECAM data hub</a> + <a href="https://sunshine.dcfs.illinois.gov/Content/Licensing/Daycare/ProviderLookup.aspx" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>DCFS Sunshine Provider Lookup</a> + <a href="https://www.cefseoc.org/headstart" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>CEFS Head Start program</a> + <a href="https://livingwage.mit.edu/counties/17029" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>MIT Living Wage Calculator Coles County</a> + <a href="https://bipartisanpolicy.org/article/state-child-care-data-2025-update/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>BPC Child Care Gaps Assessment 2025</a>.
+          </div>
+        </section>
+
+        {/* ═══ §6.7 Travel / regional leakage — commute flows ═══ */}
+        <section style={{ marginTop: 40 }}>
+          <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+          <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+            09 · Commute + regional leakage · LWA-23 has no major-MSA commuter shed
+          </h2>
+          <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
+            Unlike LWA-25 (which sits on the Carbondale-Marion MSA + I-57 / I-24 corridor with regional pull toward St. Louis Metro East), <strong>LWA-23 has no major-MSA commuter shed</strong>. The 13 counties span ~120 miles east-west + ~100 miles north-south but no MSA borders. Workers stay in-footprint or commute to Effingham (the I-57/I-70 in-footprint magnet). Coles County mean commute = 18.2 min (well below US 26.4 min mean) — most LWA-23 jobs are in-county.
+          </div>
+          <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, padding: 14, marginBottom: 12 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8 }}>The job-flow structure (per LEHD LODES via secondary aggregation):</div>
+            <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 13, color: "#3d3a33", lineHeight: 1.65 }}>
+              <li><strong>Effingham city is the in-footprint net job-importer</strong> — pulls workers from Fayette, Jasper, Clay, Cumberland. Driven by the I-57/I-70 interchange industrial cluster, Beef Packers, IDEX, HSHS St. Anthony&apos;s Memorial Hospital. Effingham County industry mix is 22.8% education/health/social, 13.4% manufacturing, 12.7% retail (ACS-derived).</li>
+              <li><strong>Sarah Bush Lincoln Health Center (Mattoon-Charleston line)</strong> is the single largest in-footprint employer pulling workers from Coles + Cumberland + Edgar + Moultrie + Douglas (Coles County Transportation Plan 2025).</li>
+              <li><strong>Coles County → Champaign-Urbana</strong> is the only meaningful intra-state MSA-commute link in LWA-23 (US-45/I-57 corridor, ~50 mi). Dial-A-Ride&apos;s $7 cross-county service is the only transit-accessible component.</li>
+              <li><strong>Clark + Edgar → Terre Haute IN</strong> (US-40/I-70, ~25 mi from Marshall + Paris) — the only meaningful out-of-state commute pattern in the footprint. Workers leak to Indiana&apos;s side of the Wabash Valley.</li>
+              <li><strong>Crawford + Lawrence → Vincennes IN + Wabash Valley refining/petrochemical cluster</strong> — same out-of-state leakage, this time south.</li>
+              <li><strong>Marion → Mt. Vernon (Jefferson Co.) + St. Louis Metro East</strong> via I-64 (~75 mi). Long-haul commute pattern; not transit-accessible.</li>
+              <li><strong>No meaningful Indianapolis commute</strong> — &gt;100 mi from the easternmost county seats; no transit link.</li>
+            </ul>
+          </div>
+          <div style={{ padding: 14, background: "#fef9eb", border: "1px solid #f0d98a", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
+            <strong>Methodological caveat:</strong> precise LEHD OnTheMap LODES county-pair flows require interactive queries that aren&apos;t served by static CSVs. The directional findings above are drawn from secondary aggregations (Data USA, Coles County Transportation Plan 2025, Ready Set Hire Effingham). The dashboard should run server-side OnTheMap queries to render county→destination tables with explicit numbers. Until that backend integration lands, the qualitative pattern stated here is hypothesis-strength, not finding-strength. Source: <a href="https://onthemap.ces.census.gov/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>LEHD OnTheMap (CES)</a> + <a href="https://www.colesco.illinois.gov/static/plans/Coles%20County%20Transportation%20Plan%202025.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Coles County Transportation Plan 2025</a> + <a href="https://datausa.io/profile/geo/coles-county-il" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Data USA Coles County profile</a>.
           </div>
         </section>
 
