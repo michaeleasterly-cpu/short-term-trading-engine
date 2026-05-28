@@ -8600,18 +8600,22 @@ async def _auto_cascade_coverage_collapse(
         #                                        landed in time)
         cascade_err_lower = (cascade_result.error or "").lower()
         coverage_collapse_again = token in cascade_err_lower
-        if cascade_result.status == "OK" and sip_ok:
+        # Post-FMP-mandate (PR #400): FMP is the only acceptable feed for
+        # daily-bar backfill. A successful cascade IS the full recovery —
+        # no DEGRADED tier. Only a coverage_collapse-again or a non-OK
+        # outcome trips the FAILED/DEGRADED branches.
+        if cascade_result.status == "OK" and not coverage_collapse_again:
             await db_log.log(
                 "INGESTION_AUTO_RECOVERED",
                 (
                     "auto-cascade healed daily_bars coverage_collapse "
-                    "via force_refresh feed=sip"
+                    "via force_refresh feed=fmp"
                 ),
                 severity="INFO",
                 data={
                     "stage": name,
                     "cascade_mode": "force_refresh",
-                    "feed": "sip",
+                    "feed": "fmp",
                     "first_error": first_error,
                     "duration_ms": cascade_result.duration_ms,
                     **(cascade_result.detail or {}),
@@ -8620,12 +8624,11 @@ async def _auto_cascade_coverage_collapse(
             log.info(
                 "ops.auto_cascade.recovered",
                 stage=name,
-                feed="sip",
+                feed="fmp",
                 duration_ms=cascade_result.duration_ms,
             )
         elif (
-            (cascade_result.status == "OK" and not sip_ok)
-            or (cascade_result.status == "FAILED" and coverage_collapse_again)
+            cascade_result.status == "FAILED" and coverage_collapse_again
         ):
             # IEX path: either it landed OK (rare — IEX would have to
             # somehow cover the full active universe) or it landed but
