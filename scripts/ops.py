@@ -5688,19 +5688,25 @@ async def _stage_greeks_max_pain(
 ) -> dict[str, Any]:
     """Daily greeks.pro free-tier max-pain snapshot (1 symbol).
 
+    DISABLED 2026-05-28 — operator's greeks.pro account access is broken
+    (portal won't accept login). The stage was 401'ing every run, making
+    the cascade always flag options_max_pain_freshness RED and blocking
+    DATA_OPERATIONS_COMPLETE emission. Short-circuit to OK with rows=0
+    instead of removing the stage entry — the stage manifest stays
+    stable, the validation check naturally degrades to stale, and
+    re-enabling is a one-line revert when the operator restores access.
+
     Handler has its own same-day skip-guard (idempotent regardless).
     ``--param symbol=XXX`` overrides the tracked symbol (default SPY);
     ``--param skip_guard=false`` forces a re-pull (used by self-heal).
     """
-    from tpcore.ingestion.handlers import handle_greeks_max_pain
-
+    del pool, config
     log = structlog.get_logger("scripts.ops")
-    try:
-        rows = await handle_greeks_max_pain(pool, config or {})
-    except Exception as exc:
-        log.error("ops.stage.greeks_max_pain.failed", error=str(exc))
-        raise
-    return {"rows_loaded": int(rows or 0)}
+    log.info(
+        "ops.stage.greeks_max_pain.disabled",
+        reason="operator-disabled 2026-05-28 (greeks.pro login broken)",
+    )
+    return {"rows_loaded": 0, "skipped": "operator_disabled"}
 
 
 async def _stage_finnhub_insider_sentiment(
