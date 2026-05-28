@@ -95,12 +95,30 @@ if [[ "${1:-}" == "--force" ]]; then
     FORCE_FLAG="--force"
 fi
 
+# Resolve the Python interpreter once for the whole script. Mac uses
+# the project-local .venv/bin/python; Railway's railpack builder
+# lands the venv at /app/.deps/bin/python (per railway.json
+# _build_note). The heartbeat function used to discover this locally
+# but the script's main invocations hardcoded the venv path, which
+# broke on Railway (2026-05-28: "scripts/run_data_operations.sh: line
+# 250: .venv/bin/python: No such file or directory"). Hoist the
+# discovery to the top so every callsite shares the resolved path.
+_MAC_VENV_PY=".venv/bin/python"
+_RAILWAY_VENV_PY="/app/.deps/bin/python"
+if [[ -x "$_MAC_VENV_PY" ]]; then PY="$_MAC_VENV_PY"
+elif [[ -x "$_RAILWAY_VENV_PY" ]]; then PY="$_RAILWAY_VENV_PY"
+elif command -v python3 >/dev/null 2>&1; then PY="$(command -v python3)"
+else
+    echo "✗ no python found (tried .venv, /app/.deps, python3) — cannot continue" >&2
+    exit 127
+fi
+
 # Generate one run_id for the whole workflow (added 2026-05-15 to close
 # the daemon-progress visibility gap). Passed to ops.py via --run-id so
 # every event — the 15 --update stages AND the bash-wrapper steps below
 # — shares one row family in application_log. The progress panel
 # queries by run_id, so this is what makes wrapper steps show up.
-RUN_ID=$(.venv/bin/python -c "import uuid; print(uuid.uuid4())")
+RUN_ID=$("$PY" -c "import uuid; print(uuid.uuid4())")
 
 # Helper: emit a single application_log event with the shared RUN_ID.
 # Swallows logging failures (a missing event must not crash the
@@ -111,7 +129,7 @@ _log_event() {
     local stage_name="$2"
     local msg="${3:-}"
     DATABASE_URL="${DATABASE_URL_IPV4:-$DATABASE_URL}" \
-        .venv/bin/python scripts/_log_event.py \
+        "$PY" scripts/_log_event.py \
             --run-id "$RUN_ID" \
             --event-type "$event_type" \
             --stage-name "$stage_name" \
@@ -166,19 +184,13 @@ _write_data_operations_heartbeat() {
     if [[ -z "$db_url" ]]; then
         return 0
     fi
-    # Discover the Python interpreter. Mac uses .venv/bin/python (the
-    # rest of the script's invocations hardcode this); Railway built
-    # the venv at /app/.deps/bin/python (per railway.json _build_note).
-    # Fall back to whatever `python3` is on PATH as a last resort —
-    # better to fire-and-fail-loudly than to silently skip the
-    # heartbeat (silently-skipped heartbeats look just like a dead
-    # daemon, defeating the freshness check's whole purpose).
-    local py=""
-    if [[ -x .venv/bin/python ]]; then py=".venv/bin/python"
-    elif [[ -x /app/.deps/bin/python ]]; then py="/app/.deps/bin/python"
-    elif command -v python3 >/dev/null 2>&1; then py="$(command -v python3)"
-    else
-        echo "⚠ heartbeat: no python found (tried .venv, /app/.deps, python3)"
+    # Reuse the script-level $PY resolved at startup. (The duplicate
+    # discovery block here was rendered defective by the 2026-05-28
+    # bulk-sed that hoisted $PY; collapsed to the shared var so the
+    # heartbeat tracks any future interpreter-path change at one site.)
+    local py="${PY:-}"
+    if [[ -z "$py" || ! -x "$py" ]]; then
+        echo "⚠ heartbeat: no python resolved at script start ($PY)"
         return 0
     fi
     local status="healthy"
@@ -237,7 +249,7 @@ echo "────────────────────────�
 # cadence is up) — ops.py still runs data_validation/forensics +
 # Step-4 self-heal regardless, so the 100%-green gate is unaffected.
 ONLY_FLAG=""
-if DUE_STAGES=$(DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python -m tpcore.feeds 2>/tmp/feeds_dispatch.err); then
+if DUE_STAGES=$(DATABASE_URL="$DATABASE_URL_IPV4" "$PY" -m tpcore.feeds 2>/tmp/feeds_dispatch.err); then
     DUE_CSV=$(echo "$DUE_STAGES" | paste -sd, - | tr -d '[:space:]')
     # Empty due list is VALID (nothing's cadence is up). Pass a
     # non-matching sentinel so ops runs only infra + Step-4 self-heal,
@@ -247,7 +259,7 @@ if DUE_STAGES=$(DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python -m tpcore.fee
 else
     echo "  ⚠ feed dispatcher failed (see /tmp/feeds_dispatch.err) — full sweep fallback"
 fi
-DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python scripts/ops.py \
+DATABASE_URL="$DATABASE_URL_IPV4" "$PY" scripts/ops.py \
     --update --source data_operations_daemon --run-id "$RUN_ID" $FORCE_FLAG $ONLY_FLAG
 UPDATE_RC=$?
 if [[ $UPDATE_RC -ne 0 ]]; then
@@ -269,7 +281,7 @@ echo ""
 echo "▶ STEP 3 / 6  cross-table audit + auto-remediation"
 echo "────────────────────────────────────────────────────────────────────────"
 _log_event INGESTION_START wrapper_audit
-DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python -m tpcore.auditheal
+DATABASE_URL="$DATABASE_URL_IPV4" "$PY" -m tpcore.auditheal
 AUDIT_RC=$?
 if [[ $AUDIT_RC -ne 0 ]]; then
     _log_event INGESTION_FAILED wrapper_audit "audit exited $AUDIT_RC"
@@ -300,7 +312,7 @@ echo ""
 echo "▶ STEP 4 / 6  autonomous self-heal (tpcore.selfheal) — guarantee 100% green"
 echo "─────────────────────────────────────────────────────────────────"
 _log_event INGESTION_START wrapper_selfheal
-DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python -m tpcore.selfheal
+DATABASE_URL="$DATABASE_URL_IPV4" "$PY" -m tpcore.selfheal
 SELFHEAL_RC=$?
 if [[ $SELFHEAL_RC -ne 0 ]]; then
     _log_event INGESTION_FAILED wrapper_selfheal "self-heal escalated (rc $SELFHEAL_RC)"
@@ -319,7 +331,7 @@ echo ""
 echo "▶ STEP 4b / 6  refresh platform.prices_daily_tickers matview"
 echo "────────────────────────────────────────────────────────────────────────"
 _log_event INGESTION_START wrapper_matview_refresh
-if DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python -c "
+if DATABASE_URL="$DATABASE_URL_IPV4" "$PY" -c "
 import asyncio, asyncpg, os
 async def main():
     # statement_cache_size/jit: keep in sync with tpcore.db.build_asyncpg_pool (Supabase pooler safety)
@@ -355,7 +367,7 @@ echo ""
 echo "▶ STEP 4c / 6  4-phase deep audit (unattended)"
 echo "────────────────────────────────────────────────────────────────────────"
 _log_event INGESTION_START wrapper_deep_audit
-DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python scripts/audit_data_pipeline.py
+DATABASE_URL="$DATABASE_URL_IPV4" "$PY" scripts/audit_data_pipeline.py
 DEEP_AUDIT_RC=$?
 if [[ $DEEP_AUDIT_RC -eq 1 ]]; then
     _log_event INGESTION_FAILED wrapper_deep_audit "known_knowns FAIL (exit 1)"
@@ -390,7 +402,7 @@ echo ""
 echo "▶ STEP 4d / 6  data supervisor (per-source hold + auto-clear)"
 echo "────────────────────────────────────────────────────────────────────────"
 _log_event INGESTION_START wrapper_datasupervisor
-DATABASE_URL="${DATABASE_URL_IPV4:-$DATABASE_URL}" .venv/bin/python -m tpcore.datasupervisor || true
+DATABASE_URL="${DATABASE_URL_IPV4:-$DATABASE_URL}" "$PY" -m tpcore.datasupervisor || true
 _log_event INGESTION_COMPLETE wrapper_datasupervisor
 
 # Step 5 — compress any CSVs left behind by the backfill scripts.
@@ -418,7 +430,7 @@ else
     echo "▶ STEP 6 / 6  emit DATA_OPERATIONS_COMPLETE → engine-service daemon"
     echo "────────────────────────────────────────────────────────────────────────"
     _log_event INGESTION_START wrapper_emit_event
-    DATABASE_URL="$DATABASE_URL_IPV4" .venv/bin/python -c "
+    DATABASE_URL="$DATABASE_URL_IPV4" "$PY" -c "
 import asyncio, asyncpg, os, uuid
 async def main():
     # statement_cache_size/jit: keep in sync with tpcore.db.build_asyncpg_pool (Supabase pooler safety)
