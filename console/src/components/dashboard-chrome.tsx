@@ -221,6 +221,7 @@ export const DEFAULT_FOOTER_COLUMNS = [
     title: "Public dashboards",
     items: [
       { label: "Southern Illinois Region (LWA-25)", href: "/southern-illinois" },
+      { label: "East Central Illinois (LWA-23)", href: "/east-central-illinois" },
       { label: "Carbondale, IL", href: "/carbondale" },
       { label: "Murphysboro, IL", href: "/murphysboro" },
       { label: "Charleston, IL", href: "/charleston" },

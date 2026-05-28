@@ -2693,6 +2693,63 @@ async def public_murphysboro() -> dict:
     }
 
 
+@app.get("/api/public/charleston")
+async def public_charleston() -> dict:
+    """PUBLIC endpoint — Charleston, IL (Coles County seat, EIU host city, LWA-23).
+    Charleston is in the Mattoon Micropolitan Statistical Area (CBSA 31380),
+    NOT the Carbondale-Marion MSA. The FRED macro series with the `crb_*`
+    prefix that anchor /carbondale + /murphysboro do NOT apply here — those
+    cover Jackson County + Carbondale-Marion MSA only.
+
+    Coles County FRED series (`cle_coles_*` family) are TBD in platform.macro_data;
+    until loaded, the indicators block returns IL state context only. The
+    externally-sourced blocks (ACS via Census API, USAspending county-level,
+    QCEW county-level) ARE live because the helper functions are FIPS-
+    parameterized.
+
+    Coles County FIPS = 029. Charleston Place FIPS = 12567.
+    """
+    TARGETS = (
+        # IL state context only — Coles County FRED series TBD
+        "il_unemployment_rate", "il_nonfarm_payrolls", "phci_il",
+    )
+    async with app.state.pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            WITH latest AS (
+                SELECT series_id, value_num, observed_date,
+                       ROW_NUMBER() OVER (PARTITION BY series_id ORDER BY observed_date DESC) AS rn
+                FROM platform.macro_data
+                WHERE series_id = ANY($1::text[]) AND value_num IS NOT NULL
+            )
+            SELECT series_id, value_num, observed_date
+            FROM latest WHERE rn = 1
+            ORDER BY series_id
+            """,
+            list(TARGETS),
+        )
+    indicators = {r["series_id"]: {"value": float(r["value_num"]), "date": r["observed_date"].isoformat()} for r in rows}
+    # Charleston-specific city awards + Coles County-wide awards (Charleston is smaller than Carbondale)
+    business_city = await _usaspending_block(county_fips=["029"], recipient_city="CHARLESTON")
+    business_county = await _usaspending_block(county_fips=["029"], recipient_city=None)
+    qcew = await _qcew_supersector_block(county_fips=["029"])
+    acs = await _census_acs_multiyear("12567")  # Charleston city, IL — 2023 + 2018 ACS5
+    health = _community_health_score(acs.get("current") or {}, acs) if acs else {}
+    labor_truth = await _acs_labor_truth(place_fips="12567")
+    return {
+        "ts": datetime.now(UTC).isoformat(),
+        "indicators": indicators,
+        "unemployment_series": [],  # Coles County FRED series TBD
+        "business_opportunities_city": business_city,
+        "business_opportunities_county": business_county,
+        "industry_mix": qcew,
+        "city_demographics": acs.get("current") if acs else {},
+        "demographics_trend": acs,
+        "health_score": health,
+        "labor_truth": labor_truth,
+    }
+
+
 @app.get("/api/public/mantracon")
 async def public_mantracon() -> dict:
     """PUBLIC endpoint — Man-Tra-Con / Southern Illinois Workforce Development
