@@ -923,6 +923,73 @@ export default async function CarbondalePage() {
 
               {data.business_opportunities && <BusinessLeadsBlock b={data.business_opportunities} />}
 
+              {/* SIU Carbondale campus — Clery Act 2024 ASR */}
+              <section style={{ marginTop: 40 }}>
+                <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+                <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+                  SIU campus · Clery Act Annual Security Report
+                </h2>
+                <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
+                  SIU publishes the Annual Security and Fire Safety Report (ASR) in compliance with the Jeanne Clery Disclosure of Campus Security Policy and Campus Crime Statistics Act + the IL Campus Security Enhancement Act + HEOA 2008 + VAWA. The ASR carries 3-year totals for federally-defined Clery offenses on the campus footprint + immediate public property + non-campus university-controlled properties.
+                </div>
+                <div style={{ marginBottom: 12, padding: 12, background: "oklch(98% 0.015 220)", border: "1px solid #d8d2c4", borderLeft: "6px solid #1f1d18", borderRadius: 6 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: "#1f1d18", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                    SIU Carbondale campus · Clery Act 2024 ASR (released Sept 2025)
+                  </div>
+                  <div style={{ fontSize: 11.5, color: "#5a564d", marginBottom: 8, lineHeight: 1.5 }}>
+                    Different metric than the per-1,000 city rates. Clery counts ONLY specific federally-defined offenses on the campus footprint + immediate public property as raw counts (not rates per 1,000 residents). Campus population ~11k students + staff; on-campus housing capacity ~5-6k students.
+                  </div>
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", fontSize: 11.5, borderCollapse: "collapse" }}>
+                      <thead>
+                        <tr style={{ background: "#ebe5d6", textAlign: "left" }}>
+                          <th style={{ padding: "4px 6px", borderBottom: "1px solid #d8d2c4" }}>Clery offense</th>
+                          <th style={{ padding: "4px 6px", borderBottom: "1px solid #d8d2c4", textAlign: "right" }}>2022 total</th>
+                          <th style={{ padding: "4px 6px", borderBottom: "1px solid #d8d2c4", textAlign: "right" }}>2023 total</th>
+                          <th style={{ padding: "4px 6px", borderBottom: "1px solid #d8d2c4", textAlign: "right" }}>2024 total</th>
+                          <th style={{ padding: "4px 6px", borderBottom: "1px solid #d8d2c4", textAlign: "right" }}>2024 in student housing</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {[
+                          {label: "Murder / non-negligent manslaughter", y22:"0", y23:"0", y24:"0", h24:"0"},
+                          {label: "Sex offense: rape", y22:"2", y23:"4", y24:"9", h24:"8"},
+                          {label: "Sex offense: forcible fondling", y22:"1", y23:"1", y24:"0", h24:"0"},
+                          {label: "Robbery", y22:"0", y23:"0", y24:"0", h24:"0"},
+                          {label: "Aggravated assault", y22:"3", y23:"6", y24:"2", h24:"2"},
+                          {label: "Burglary", y22:"10", y23:"4", y24:"10", h24:"1"},
+                          {label: "Motor vehicle theft", y22:"5", y23:"0", y24:"2", h24:"0"},
+                          {label: "Arson", y22:"0", y23:"0", y24:"0", h24:"0"},
+                        ].map((r, i) => (
+                          <tr key={r.label} style={{ borderBottom: i < 7 ? "1px solid #ebe5d6" : "none" }}>
+                            <td style={{ padding: "3px 6px" }}>{r.label}</td>
+                            <td style={{ padding: "3px 6px", textAlign: "right", color: "#5a564d" }}>{r.y22}</td>
+                            <td style={{ padding: "3px 6px", textAlign: "right", color: "#5a564d" }}>{r.y23}</td>
+                            <td style={{ padding: "3px 6px", textAlign: "right", fontWeight: 600 }}>{r.y24}</td>
+                            <td style={{ padding: "3px 6px", textAlign: "right", color: "#5a564d" }}>{r.h24}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div style={{ fontSize: 11, color: "#3d3a33", marginTop: 8, lineHeight: 1.5 }}>
+                    <strong>SIU campus three-year movement:</strong>
+                    <ul style={{ margin: "4px 0 0 18px", padding: 0 }}>
+                      <li>Robbery, murder, arson: 0 in each of the three years.</li>
+                      <li>Burglary: 10 → 4 → 10.</li>
+                      <li>Aggravated assault: 3 → 6 → 2.</li>
+                      <li>Motor vehicle theft: 5 → 0 → 2.</li>
+                    </ul>
+                  </div>
+                  <div style={{ fontSize: 10.5, color: "#7a756b", marginTop: 6, lineHeight: 1.5 }}>
+                    Source: <a href="https://safe.siu.edu/_common/documents/2024_asr.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>SIU Department of Public Safety · 2024 Annual Security and Fire Safety Report</a> (released September 2025, covers calendar years 2022-2024). On-Campus Total includes On-Campus Student Housing as a subset.
+                  </div>
+                </div>
+                <div style={{ fontSize: 12, color: "#5a564d", lineHeight: 1.55 }}>
+                  Companion: <a href="/charleston" style={{ color: "#1f5f8f", fontWeight: 600 }}>Charleston, IL → EIU Annual Safety + Security Report</a> for the parallel-college-town Clery comparison.
+                </div>
+              </section>
+
               <div className="sources" style={{ marginTop: 40, lineHeight: 1.6 }}>
                 <b>Sources:</b> FRED (Federal Reserve Economic Data, St. Louis Fed),
                 aggregating BLS LAUS, BLS CES, Census Population Estimates, Census SAIPE,

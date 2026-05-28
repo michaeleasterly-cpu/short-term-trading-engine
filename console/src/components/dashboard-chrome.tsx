@@ -223,6 +223,7 @@ export const DEFAULT_FOOTER_COLUMNS = [
       { label: "Southern Illinois Region (LWA-25)", href: "/southern-illinois" },
       { label: "Carbondale, IL", href: "/carbondale" },
       { label: "Murphysboro, IL", href: "/murphysboro" },
+      { label: "Charleston, IL", href: "/charleston" },
       { label: "US Market Health", href: "/market" },
     ],
   },
