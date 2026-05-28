@@ -749,11 +749,11 @@ export default async function EastCentralIllinoisPage() {
               Intervention path (in order)
             </div>
             <ol style={{ margin: "0 0 0 18px", padding: 0, fontSize: 13, color: "#3d3a33", lineHeight: 1.65 }}>
-              <li><strong>Participation recovery FIRST.</strong> Re-engage the not-in-LF population via barrier-removal — childcare (the §10 76% Region 11 slot gap), transportation (the §09 shift-incompatible transit), disability accommodation (the §02 ≥17% disability tier in Lawrence/Marion/Clay/Edgar/Richland/Fayette), carceral re-entry (Lawrence + Fayette). This is what makes the rest of the strategy possible.</li>
-              <li><strong>Healthcare laddering SECOND.</strong> CNA → LPN → RN is the local pathway with the strongest labor demand (RN 154 annual openings per §14, $31-$45/hr; CLEARS 1A+2C at journey wage). Lake Land + Kaskaskia + Olney Central + Olney Central all run RN-ADN programs. SBL Mattoon is the only growth-engine-tier hospital; the other 5 hospitals are stabilizers with CNA-tier sub-livable wages — so the ladder must reach RN, not stop at CNA.</li>
-              <li><strong>Industrial-maintenance + welding THIRD.</strong> 14% of LWA-23 employment is manufacturing (per §04 QCEW). Marathon refinery + NAL Paris + Sherwin-Williams Effingham + Hydro-Gear Sullivan all hire welders + maintenance technicians at FAMILY-SUPPORTING wages (§08 verdict). Kaskaskia Crisp Manufacturing Center + Olney Central + Lake Land deliver the credentials.</li>
+              <li><strong>Participation recovery FIRST.</strong> Re-engage the not-in-LF population via barrier-removal — childcare (the §13 76% Region 11 slot gap), transportation (the §12 shift-incompatible transit), disability accommodation (the §02 ≥17% disability tier in Lawrence/Marion/Clay/Edgar/Richland/Fayette), carceral re-entry (Lawrence + Fayette). This is what makes the rest of the strategy possible.</li>
+              <li><strong>Healthcare laddering SECOND.</strong> CNA → LPN → RN is the local pathway with the strongest labor demand (RN 154 annual openings per §19, $31-$45/hr; CLEARS 1A+2C at journey wage). Lake Land + Kaskaskia + Olney Central + Olney Central all run RN-ADN programs. SBL Mattoon is the only growth-engine-tier hospital; the other 5 hospitals are stabilizers with CNA-tier sub-livable wages — so the ladder must reach RN, not stop at CNA.</li>
+              <li><strong>Industrial-maintenance + welding THIRD.</strong> 14% of LWA-23 employment is manufacturing (per §06 QCEW). Marathon refinery + NAL Paris + Sherwin-Williams Effingham + Hydro-Gear Sullivan all hire welders + maintenance technicians at FAMILY-SUPPORTING wages (§11 Training-to-Demand verdict). Kaskaskia Crisp Manufacturing Center + Olney Central + Lake Land deliver the credentials.</li>
               <li><strong>CDL FOURTH.</strong> Top regional job demand by openings (Heavy Truck Drivers 219 annual + 67 December 2025 postings). LOCAL rate fails 1A+2C; OTR + refinery-tanker clears with home-time cost (the LWA-25 TRAVEL-WORK pattern). Use only for cohorts where the family-configuration math works.</li>
-              <li><strong>Employer attraction LAST.</strong> Anchor-attraction targets (§16) are real opportunities (NAL EV cluster, Vistra Newton transition, BEAD broadband) but they presuppose available labor. Attempting attraction before participation recovery exposes recruited employers to a labor-supply shortage and turns into broken promises. Sequence matters.</li>
+              <li><strong>Employer attraction LAST.</strong> Anchor-attraction targets (§21) are real opportunities (NAL EV cluster, Vistra Newton transition, BEAD broadband) but they presuppose available labor. Attempting attraction before participation recovery exposes recruited employers to a labor-supply shortage and turns into broken promises. Sequence matters.</li>
             </ol>
           </div>
           <div style={{ padding: 16, background: "white", border: "1px solid #d8d2c4", borderLeft: "6px solid #1f1d18", borderRadius: 6, marginBottom: 12 }}>
@@ -762,22 +762,22 @@ export default async function EastCentralIllinoisPage() {
             </div>
             <ul style={{ margin: "0 0 0 18px", padding: 0, fontSize: 13, color: "#3d3a33", lineHeight: 1.65 }}>
               <li><strong>Not-in-LF working-age adults with reported disabilities</strong> (the 17-20% disability tier in Lawrence/Marion/Clay/Edgar/Richland/Fayette) — vocational rehab + partial-time work + accommodation pathways, not standard WIOA ITAs.</li>
-              <li><strong>Parents (especially mothers) blocked by childcare</strong> — Region 11 76% slot gap + Coles MIT LWC childcare cost $9,460/yr one-child = 22% of median HH income (§10). Pathway: CEFS Head Start + CCAP co-enrollment + cohort-childcare-stipend WIOA design.</li>
+              <li><strong>Parents (especially mothers) blocked by childcare</strong> — Region 11 76% slot gap + Coles MIT LWC childcare cost $9,460/yr one-child = 22% of median HH income (§13). Pathway: CEFS Head Start + CCAP co-enrollment + cohort-childcare-stipend WIOA design.</li>
               <li><strong>Returning citizens from Lawrence + Vandalia Correctional</strong> — the IDOC presence in Lawrence and Fayette doesn&apos;t just employ COs, it also generates a steady local re-entry population. CEFS WIOA re-entry programming is the dedicated lever.</li>
-              <li><strong>Incumbent workers at the single-anchor employers</strong> — Marathon Robinson + NAL Paris + Sherwin-Williams + Hydro-Gear + Newton Power Plant — for skills-upgrade to capture wage progression (Incumbent Worker Training is one of CEFS&apos;s six WIOA services per §06).</li>
+              <li><strong>Incumbent workers at the single-anchor employers</strong> — Marathon Robinson + NAL Paris + Sherwin-Williams + Hydro-Gear + Newton Power Plant — for skills-upgrade to capture wage progression (Incumbent Worker Training is one of CEFS&apos;s six WIOA services per §09).</li>
               <li><strong>Cross-border commuters</strong> — Clark + Edgar → Terre Haute IN; Crawford + Lawrence → Vincennes IN. These are existing flows that CEFS can formalize via cross-state placement agreements.</li>
             </ul>
           </div>
           <div style={{ padding: 16, background: "white", border: "1px solid #d8d2c4", borderLeft: "6px solid #1f1d18", borderRadius: 6, marginBottom: 12 }}>
             <div style={{ fontSize: 13, fontWeight: 700, color: "#1f1d18", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>
-              Measurable outcome (PIRL augmentation — see §15)
+              Measurable outcome (PIRL augmentation — see §20)
             </div>
             <div style={{ fontSize: 13, color: "#3d3a33", lineHeight: 1.6 }}>
               Standard PIRL captures Q2/Q4 employment + median earnings + credential attainment + measurable skill gains. Three LWA-23-specific augmentations: <strong>(a) not-in-LF re-engagement count</strong> (WIOA enrollees who were not-in-LF at intake — segment of the 87k from §01); <strong>(b) childcare-barrier-removal retention</strong> (% of enrollees who flagged childcare as a barrier and still completed credentialing); <strong>(c) disability-tier placement</strong> (% of enrollees with a reported disability placed in a job at the wage-tier their credential should command). These are the three metrics that distinguish a participation-recovery strategy from a generic-WIOA performance dashboard.
             </div>
           </div>
           <div style={{ padding: 14, background: "#fef9eb", border: "1px solid #f0d98a", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
-            <strong>Why this differs from LWA-25 (Southern Illinois):</strong> LWA-25&apos;s strategic problem is federal-money concentration risk (95.6% to GD-OTS Marion) + the SIU + Carbondale enrollment decline. LWA-25&apos;s solution path runs through diversification + supply-chain replacement of GD-OTS sub-recipients. LWA-23 doesn&apos;t have GD-OTS or anything like it — the federal-money base is genuinely diversified (§05). LWA-23&apos;s problem is the labor-supply side: 87,127 not-in-LF + 17-20% disability rates in 6 counties + Region 11 76% childcare gap + carceral economy in Lawrence + Fayette. These two regions need different interventions; an LWA-25-style supply-chain strategy doesn&apos;t fit LWA-23, and an LWA-23-style participation-recovery strategy doesn&apos;t fit LWA-25.
+            <strong>Why this differs from LWA-25 (Southern Illinois):</strong> LWA-25&apos;s strategic problem is federal-money concentration risk (95.6% to GD-OTS Marion) + the SIU + Carbondale enrollment decline. LWA-25&apos;s solution path runs through diversification + supply-chain replacement of GD-OTS sub-recipients. LWA-23 doesn&apos;t have GD-OTS or anything like it — the federal-money base is genuinely diversified (§08). LWA-23&apos;s problem is the labor-supply side: 87,127 not-in-LF + 17-20% disability rates in 6 counties + Region 11 76% childcare gap + carceral economy in Lawrence + Fayette. These two regions need different interventions; an LWA-25-style supply-chain strategy doesn&apos;t fit LWA-23, and an LWA-23-style participation-recovery strategy doesn&apos;t fit LWA-25.
           </div>
         </section>
 
@@ -848,7 +848,7 @@ export default async function EastCentralIllinoisPage() {
         <section style={{ marginTop: 40 }}>
           <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
           <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
-            01 · 13-county footprint · anchor employer per county seat
+            05 · 13-county footprint · anchor employer per county seat
           </h2>
           <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
             LWA-23 has two clear anchor counties — <strong>Coles</strong> (EIU + Lake Land + SBL + Rural King + Consolidated Communications) and <strong>Effingham</strong> (CEFS HQ + HSHS St. Anthony&apos;s + Sherwin-Williams + I-57/I-70 logistics hub). The other 11 counties carry meaningful single-employer or single-sector anchors: Marathon refinery in Crawford (Robinson), NAL headlamp plant in Edgar (Paris), Walmart DC + Carle hospital in Richland (Olney), Agri-Fab + Hydro-Gear in Moultrie (Sullivan), ZF automotive electronics in Clark (Marshall), and two IDOC state prisons (Vandalia minimum in Fayette + Lawrence maximum in Lawrence County).
@@ -887,7 +887,7 @@ export default async function EastCentralIllinoisPage() {
           <section style={{ marginTop: 40 }}>
             <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
             <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
-              02 · LWA-23 industry mix · BLS QCEW (13-county aggregate)
+              06 · LWA-23 industry mix · BLS QCEW (13-county aggregate)
             </h2>
             <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
               Aggregate covered employment across the 13-county LWA-23 footprint by NAICS supersector. Quarter: <strong>{mix.as_of_quarter}</strong>. Total covered employment: <strong>{fmtNum(mix.total_employment)}</strong>.
@@ -931,7 +931,7 @@ export default async function EastCentralIllinoisPage() {
           <section style={{ marginTop: 40 }}>
             <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
             <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
-              03 · Industry mix by county · each county&apos;s own economic identity
+              07 · Industry mix by county · each county&apos;s own economic identity
             </h2>
             <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
               Top supersectors per county (BLS QCEW, latest published quarter). Effingham (~23k jobs) and Coles (~22k) are the dominant employment centers; the smaller counties typically concentrate in 2-3 sectors with a single anchor employer driving the largest line.
@@ -980,7 +980,7 @@ export default async function EastCentralIllinoisPage() {
           <section style={{ marginTop: 40 }}>
             <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
             <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
-              03 · Federal contract dollars · {fmtMoney(data.business_opportunities.totals.awards_dollars)} (last {data.business_opportunities.totals.lookback_months} months)
+              08 · Federal contract dollars · {fmtMoney(data.business_opportunities.totals.awards_dollars)} (last {data.business_opportunities.totals.lookback_months} months)
             </h2>
             <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
               Federal contract dollars with place-of-performance in the 13-county LWA-23 footprint over the last {data.business_opportunities.totals.lookback_months} months. <strong>Critically: no single dominant prime.</strong> The Southern Illinois Region (LWA-25) page documents 95.6% of its federal dollars concentrated in one prime (GD-OTS Marion); LWA-23 has no equivalent concentration. Diversification is the structural difference between the two regions.
@@ -1043,7 +1043,7 @@ export default async function EastCentralIllinoisPage() {
         <section style={{ marginTop: 40 }}>
           <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
           <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
-            04 · CEFS LWA-23 WIOA program portfolio · what the board actually delivers
+            09 · CEFS LWA-23 WIOA program portfolio · what the board actually delivers
           </h2>
           <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
             CEFS Economic Opportunity Corporation administers six WIOA service categories for the 13-county LWA-23 footprint. The board does not publish a stand-alone Eligible Training Provider List (ETPL) on its own site — approved providers come from the statewide Illinois workNet ETPL. Lake Land College + Kaskaskia College + Olney Central College are all listed approved providers (Lake Land school ID 540081). The 2024-2028 Southeast Regional Plan (EDR 7) is the controlling document for occupational priorities.
@@ -1066,7 +1066,7 @@ export default async function EastCentralIllinoisPage() {
         <section style={{ marginTop: 40 }}>
           <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
           <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
-            05 · Community college credential pipelines · Lake Land + Kaskaskia + Olney Central
+            10 · Community college credential pipelines · Lake Land + Kaskaskia + Olney Central
           </h2>
           <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
             LWA-23 has one public 4-year university (EIU; see <a href="/charleston" style={{ color: "#1f5f8f" }}>Charleston</a>) + three community colleges that supply the WIOA-funded credential pipeline. Lake Land + Kaskaskia + Olney Central together carry the bulk of allied-health, industrial-trades, and CTE training capacity for the 13-county footprint. CEFS approves these as ETPL providers.
@@ -1096,7 +1096,7 @@ export default async function EastCentralIllinoisPage() {
         <section style={{ marginTop: 40 }}>
           <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
           <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
-            06 · Training-to-demand alignment · the 1A+2C single-earner wage test
+            11 · Training-to-demand alignment · the 1A+2C single-earner wage test
           </h2>
           <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
             Cross-references the credentials offered by Lake Land + Kaskaskia + Olney Central against the LWA-23 employer base. Wage benchmark: <strong>MIT Living Wage Calculator for {LWA23_LIVING_WAGE.county}</strong> — 1A+2C (one working adult supporting two children) sits at ~<strong>${LWA23_LIVING_WAGE.oneA_2C_hrly.toFixed(2)}/hr · ${fmtNum(LWA23_LIVING_WAGE.oneA_2C_yearly)}/yr</strong>. Single-adult LW ≈ ${LWA23_LIVING_WAGE.single_adult_hrly.toFixed(2)}/hr.
@@ -1141,7 +1141,7 @@ export default async function EastCentralIllinoisPage() {
         <section style={{ marginTop: 40 }}>
           <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
           <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
-            07 · Mobility + job access · transit coverage across 13 counties
+            12 · Mobility + job access · transit coverage across 13 counties
           </h2>
           <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
             The 13-county footprint is covered by <strong>four</strong> rural transit agencies, all demand-response by default with a few deviated/fixed routes in larger towns. <strong>None operate evenings, Sundays, or full-Saturday hours</strong> — any 2nd-shift manufacturing job (Beef Packers + IDEX Effingham, Mattoon factory cluster, NAL Paris, Hydro-Gear Sullivan) is effectively car-dependent. CEFS itself operates the Central IL Public Transit (CIPT) service for 4 of the 13 counties.
@@ -1185,7 +1185,7 @@ export default async function EastCentralIllinoisPage() {
         <section style={{ marginTop: 40 }}>
           <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
           <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
-            08 · Childcare constraint · the 76% slot-gap that caps labor-force participation
+            13 · Childcare constraint · the 76% slot-gap that caps labor-force participation
           </h2>
           <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
             Per the <a href="https://www.birthtofiveil.com/region11" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Birth to Five Illinois Region 11 Needs Assessment</a>, of 8,122 children under age 6 in Region 11 (Clark, Coles, Cumberland, Douglas, Edgar, Moultrie, Shelby — covering 5 of the 13 LWA-23 counties), <strong>76% do not have a slot in a licensed or license-exempt childcare center or home</strong>. Five named regional needs include &quot;more infant and toddler care slots and full-day preschool opportunities.&quot; This is a direct mechanism feeding the LWA-23 not-in-labor-force gap documented in §01 — parents without childcare cannot participate in the labor market regardless of credential or wage.
@@ -1233,7 +1233,7 @@ export default async function EastCentralIllinoisPage() {
         <section style={{ marginTop: 40 }}>
           <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
           <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
-            09 · Commute + regional leakage · LWA-23 has no major-MSA commuter shed
+            14 · Commute + regional leakage · LWA-23 has no major-MSA commuter shed
           </h2>
           <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
             Unlike LWA-25 (which sits on the Carbondale-Marion MSA + I-57 / I-24 corridor with regional pull toward St. Louis Metro East), <strong>LWA-23 has no major-MSA commuter shed</strong>. The 13 counties span ~120 miles east-west + ~100 miles north-south but no MSA borders. Workers stay in-footprint or commute to Effingham (the I-57/I-70 in-footprint magnet). Coles County mean commute = 18.2 min (well below US 26.4 min mean) — most LWA-23 jobs are in-county.
@@ -1259,7 +1259,7 @@ export default async function EastCentralIllinoisPage() {
         <section style={{ marginTop: 40 }}>
           <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
           <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
-            07 · City-level crime · LWA-23 county seats + major cities (FBI UCR 2024)
+            15 · City-level crime · LWA-23 county seats + major cities (FBI UCR 2024)
           </h2>
           <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
             Per-1,000-resident crime rates for the major cities of LWA-23. Effingham (county seat + I-57/I-70 cross-roads + retail-logistics density) carries the highest total crime in LWA-23 at 21.63 per 1,000. Paris (NAL headlamp plant town) carries the highest violent-crime rate. Lawrenceville is the lowest at 1.16 per 1,000.
@@ -1299,7 +1299,7 @@ export default async function EastCentralIllinoisPage() {
         <section style={{ marginTop: 40 }}>
           <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
           <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
-            11 · Healthcare anchor analysis · stabilizer vs growth engine vs low-wage trap
+            16 · Healthcare anchor analysis · stabilizer vs growth engine vs low-wage trap
           </h2>
           <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
             Six hospital anchors serve LWA-23. The per-employee payroll signal (IRS Form 990 &quot;Other Salaries and Wages&quot; ÷ headcount) is the cleanest proxy for occupation-mix wage tier, since neither 990s nor IL Hospital Report Card publishes SOC-level breakdowns. IL statewide RN median = ~$82,500 (BLS OEWS May 2024); CNA national median = $39,530 — the &quot;modal worker&quot; tier is the key verdict variable.
@@ -1350,7 +1350,7 @@ export default async function EastCentralIllinoisPage() {
         <section style={{ marginTop: 40 }}>
           <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
           <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
-            12 · Housing affordability · HUD Fair Market Rent vs MIT Living Wage Coles County
+            17 · Housing affordability · HUD Fair Market Rent vs MIT Living Wage Coles County
           </h2>
           <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
             HUD FY2025 Fair Market Rent (effective Oct 2024-Sep 2025) per county. The <strong>HUD 30% rule</strong> says a household needs ~3.33× annualized rent in gross income to afford FMR-priced housing. With 12 of 13 LWA-23 counties at the rural-IL 2-BR FMR floor of $870, a household needs <strong>$34,800/yr ($16.73/hr)</strong> just to clear FMR — below the MIT LWC Coles single-adult $19.17/hr line, and FAR below the 2A+2C (one earner) $35.68/hr line. CNA-tier wages clear single-adult housing but fail the family wage. RN-tier wages clear both.
@@ -1461,7 +1461,7 @@ export default async function EastCentralIllinoisPage() {
         <section style={{ marginTop: 40 }}>
           <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
           <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
-            13 · Wage benchmark · BLS OEWS Illinois statewide May 2024
+            18 · Wage benchmark · BLS OEWS Illinois statewide May 2024
           </h2>
           <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
             LWA-23 has no MSA — Mattoon is Micropolitan. Closest reference: BLS East Central IL nonmetropolitan area (code 1700003) + Champaign-Urbana MSA (CBSA 16580) to the north. Carbondale-Marion MSA (CBSA 16060, LWA-25) total mean hourly wage was $26.21 vs US $31.48 in May 2023 — that&apos;s a -16.7% rural-IL discount. LWA-23 wages run in the same band.
@@ -1512,7 +1512,7 @@ export default async function EastCentralIllinoisPage() {
         <section style={{ marginTop: 40 }}>
           <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
           <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
-            14 · IL DCEO In-Demand Occupations · Southeast EDR 7 (LWA-23 coterminous)
+            19 · IL DCEO In-Demand Occupations · Southeast EDR 7 (LWA-23 coterminous)
           </h2>
           <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
             The IL workNet Southeastern Regional Data Packet 2026 publishes the official Demand Occupations list — eligible-training-provider WIOA funding is tied to occupations on this list. LWA-23 is coterminous with IDES Economic Development Region 7. Below: annual openings + entry/experienced hourly wage by credential tier, sorted by openings within tier.
@@ -1588,7 +1588,7 @@ export default async function EastCentralIllinoisPage() {
         <section style={{ marginTop: 40 }}>
           <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
           <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
-            15 · PIRL / WIOA Performance Accountability · what should be measured
+            20 · PIRL / WIOA Performance Accountability · what should be measured
           </h2>
           <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
             WIOA programs are accountable to six primary indicators (Q2 employment, Q4 employment, median earnings, credential attainment, measurable skill gains, effectiveness in serving employers). <strong>Audit correction (caught 2026-05-28):</strong> a prior version of this page identified the candidate ETA code as &quot;17125 Mantracon Corp&quot; — that is incorrect. Man-Tra-Con is LWA-25 (Southern Illinois) admin, NOT LWA-23. The correct ETA code for the CEFS-administered LWA-23 board is pending verification via the IL workNet LWIA Matrix PDF (image-only, requires OCR or CEFS direct confirmation). Statewide PY2023 ETA-9169 baselines below are correct + sourced; the LWA-23-specific row will be added once the ETA code is confirmed.
@@ -1630,11 +1630,11 @@ export default async function EastCentralIllinoisPage() {
             <ul style={{ margin: "8px 0 0 18px", padding: 0 }}>
               <li><strong>Q2 + Q4 employment rate</strong> vs IL statewide 80.5% / 78.2% (Adult) — LWA-23 should publish its own rate annually; legitimate goal is at or above state median.</li>
               <li><strong>Median Q2 earnings</strong> vs IL statewide $10,293 (Adult) — given the LWA-23 rural-IL ~17% wage discount, expect 80-90% of state median; the publication-grade question is whether training-to-job match is FAMILY-SUPPORTING (clears Coles 1A+2C $35.68/hr ~$74k/yr).</li>
-              <li><strong>Credential attainment</strong> vs IL statewide 73.2% (Adult) — for LWA-23 this is closely tied to Lake Land + Kaskaskia + Olney Central completion rates for the in-demand SOC codes in §14.</li>
+              <li><strong>Credential attainment</strong> vs IL statewide 73.2% (Adult) — for LWA-23 this is closely tied to Lake Land + Kaskaskia + Olney Central completion rates for the in-demand SOC codes in §19.</li>
               <li><strong>Training-to-job match rate</strong> — the operator-side accountability metric: of WIOA completers credentialed in SOC X, what % placed in a job using that credential at the wage-tier the credential should command? PIRL captures the wage; the match needs an additional employer-side survey or LEHD-LODES match.</li>
               <li><strong>Employer-side effectiveness</strong> — IL DCEO publishes employer-side measures (penetration rate, repeat-business rate, employer retention). The IPATS dashboard at <a href="https://www.illinoisworknet.com/WIOA/RegPlanning/Pages/StateWorkforcePerformance.aspx" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>illinoisworknet.com</a> is the operator-facing source.</li>
               <li><strong>Region-specific add-on metrics:</strong> (a) <em>Not-in-LF re-engagement</em> — given the §01 finding of 87,127 working-age adults out of the labor force, the region-specific PIRL augmentation is the count of WIOA enrollees who were not-in-LF at intake. Standard PIRL doesn&apos;t segment by labor-force status at intake; this is the additional question LWA-23 needs to track.</li>
-              <li><strong>(b) Childcare-barrier removal:</strong> of WIOA enrollees whose intake survey flagged childcare as a barrier (§08 / Region 11 76% slot gap), the % retained through credential completion. This is the LWA-23 leakage point.</li>
+              <li><strong>(b) Childcare-barrier removal:</strong> of WIOA enrollees whose intake survey flagged childcare as a barrier (§13 / Region 11 76% slot gap), the % retained through credential completion. This is the LWA-23 leakage point.</li>
             </ul>
           </div>
           <div style={{ fontSize: 11, color: "#7a756b", marginTop: 8, lineHeight: 1.5 }}>
@@ -1646,7 +1646,7 @@ export default async function EastCentralIllinoisPage() {
         <section style={{ marginTop: 40 }}>
           <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
           <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
-            16 · Anchor-attraction targets · realistic + asset-grounded
+            21 · Anchor-attraction targets · realistic + asset-grounded
           </h2>
           <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
             Five anchor-attraction targets that map to LWA-23 actual labor + infrastructure assets. Each carries a stackable federal/state grant program with a current Notice of Funding Opportunity URL. Order is by realistic-feasibility (asset fit) not by funding scale.
@@ -1666,7 +1666,7 @@ export default async function EastCentralIllinoisPage() {
               {
                 title: "I-57 / I-70 Logistics + Distribution Expansion",
                 anchor: "Rural King DC Mattoon + Effingham crossroads + Casey's/UPS/Love's/TravelCenters footprint",
-                rationale: "Truck-driver demand is 219 annual openings (§14 highest single SOC), Rural King + UPS + Casey's + Love's already posting heavily, and the literal interstate cross. Strongest sector-fit on existing labor supply.",
+                rationale: "Truck-driver demand is 219 annual openings (§19 highest single SOC), Rural King + UPS + Casey's + Love's already posting heavily, and the literal interstate cross. Strongest sector-fit on existing labor supply.",
                 programs: [
                   { name: "EDA Public Works + Economic Adjustment Assistance", url: "https://www.eda.gov/funding/programs/public-works", detail: "Intermodal + site-readiness" },
                   { name: "USDA Business + Industry Loan Guarantees", url: "https://www.rd.usda.gov/programs-services/business-programs/business-industry-loan-guarantees", detail: "Warehouse-tenant financing" },
@@ -1699,7 +1699,7 @@ export default async function EastCentralIllinoisPage() {
               {
                 title: "Rural Broadband + Telework Hub",
                 anchor: "Consolidated Communications HQ (Mattoon) + IL $1.04B BEAD allocation",
-                rationale: "Consolidated is a publicly-traded ILEC headquartered in LWA-23; Illinois received $1,040,420,751.50 in BEAD allocation. Fiber-to-the-premises in the rural counties unlocks remote-work in-flow against the SOC 15-1252 (Software Developers, 39 openings/yr per §14) and SOC 13-2011 (Accountants, 69 openings/yr) demand.",
+                rationale: "Consolidated is a publicly-traded ILEC headquartered in LWA-23; Illinois received $1,040,420,751.50 in BEAD allocation. Fiber-to-the-premises in the rural counties unlocks remote-work in-flow against the SOC 15-1252 (Software Developers, 39 openings/yr per §19) and SOC 13-2011 (Accountants, 69 openings/yr) demand.",
                 programs: [
                   { name: "Internet for All — Illinois BEAD allocation", url: "https://www.internetforall.gov/news-media/biden-harris-administration-announces-1-billion-illinois-deploy-high-speed-internet", detail: "$1,040,420,751.50 IL BEAD allocation announced" },
                   { name: "DCEO Office of Broadband BEAD program", url: "https://dceo.illinois.gov/broadband/bead.html", detail: "IL DCEO runs the deployment program" },
@@ -1732,7 +1732,7 @@ export default async function EastCentralIllinoisPage() {
         <section style={{ marginTop: 40 }}>
           <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
           <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
-            08 · LWA-23 vs LWA-25 · structural comparison
+            22 · LWA-23 vs LWA-25 · structural comparison
           </h2>
           <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
             Both regions share rural Illinois patterns (regional-university enrollment decline, agricultural-labor H-2A dependence, drug-supply pattern of meth + fentanyl-contaminated street drugs, mandatory-OT attrition at family-supporting employers). They differ on three axes: footprint size, federal-money concentration, and the anchor-employer mix.
@@ -1775,7 +1775,7 @@ export default async function EastCentralIllinoisPage() {
         <section style={{ marginTop: 40 }}>
           <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
           <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
-            09 · Action ladder · what the page surfaces for the CEFS board + regional stakeholders
+            23 · Action ladder · what the page surfaces for the CEFS board + regional stakeholders
           </h2>
           <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
             Each card below leads with what the page already does (data-side) and ends with the human-only residual step.
@@ -1784,7 +1784,7 @@ export default async function EastCentralIllinoisPage() {
             {[
               {
                 title: "Weight cohort placement toward Welding + Industrial Mechanics + RN",
-                body: <>The §06 Training-to-Demand table identifies three FAMILY-SUPPORTING pathways available in LWA-23: <strong>RN (ADN)</strong>, <strong>Welding</strong>, <strong>Industrial Mechanics</strong>. All three clear 1A+2C, all three have strong local employer demand (SBL + HSHS for RN; Marathon + Sherwin-Williams + NAL + Hydro-Gear for welding + maintenance). <strong>Residual:</strong> CEFS&apos;s next annual cohort plan should weight ITAs toward these three pathways over CNA / LPN / Cosmetology which fail the wage test.</>,
+                body: <>The §11 Training-to-Demand table identifies three FAMILY-SUPPORTING pathways available in LWA-23: <strong>RN (ADN)</strong>, <strong>Welding</strong>, <strong>Industrial Mechanics</strong>. All three clear 1A+2C, all three have strong local employer demand (SBL + HSHS for RN; Marathon + Sherwin-Williams + NAL + Hydro-Gear for welding + maintenance). <strong>Residual:</strong> CEFS&apos;s next annual cohort plan should weight ITAs toward these three pathways over CNA / LPN / Cosmetology which fail the wage test.</>,
               },
               {
                 title: "Coordinate cohort intake with the two big industrial anchors",
@@ -1823,18 +1823,89 @@ export default async function EastCentralIllinoisPage() {
           </div>
         </section>
 
-        {/* ═══ §10 Methodology + sources ═══ */}
+        {/* ═══ §24 Methodology + Known Limits ═══ */}
         <section style={{ marginTop: 40 }}>
           <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
           <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
-            10 · Methodology + page scope
+            24 · Methodology + page scope
           </h2>
           <div style={{ fontSize: 13, color: "#3d3a33", lineHeight: 1.6, maxWidth: 820 }}>
-            <strong>Live data substrate:</strong> /api/public/cefs aggregates monthly UR + labor force across all 13 LWA-23 counties (sum-of-labor-forces method for the LWA aggregate; weighted-by-labor-force method for the LWA UR). FRED panel: 170 series for LWA-23 in platform.macro_data (98 monthly UR + LF + 60 annual labor + education + 12 Coles housing + 12 annual income/poverty/SNAP for Coles via cle_coles_*). QCEW industry mix + USAspending federal awards + ACS labor truth are pulled live via FIPS-parameterized helpers across the 13-county set.
+            <strong>Live data substrate:</strong> /api/public/cefs aggregates monthly UR + labor force across all 13 LWA-23 counties (sum-of-labor-forces method for the LWA aggregate; weighted-by-labor-force method for the LWA UR). FRED panel: 170 series for LWA-23 in platform.macro_data (98 monthly UR + LF + 60 annual labor + education + 12 Coles housing + 12 annual income/poverty/SNAP for Coles via cle_coles_*). QCEW industry mix + USAspending federal awards + ACS labor truth are pulled live via FIPS-parameterized helpers across the 13-county set. Census ACS Subject Tables (S1810 disability + S0101 age + S2301 LFPR + B25064/B25070/B25077/B25091 housing) pulled per county via Census API.
             <br /><br />
             <strong>Refresh cadence:</strong> Monthly FRED ingest refreshes UR + labor force ~1-2 months after the reference period. Annual series (income, GDP, poverty, SNAP) lag 6-18 months. USAspending refreshes nightly. Census ACS refreshes annually in December for the preceding 5-year window. FBI UCR + NeighborhoodScout refresh annually in October.
             <br /><br />
             <strong>Editorial standard:</strong> every claim on this page is anchored on a primary source (cited inline); no inferences or unsourced framings. <strong>LWA-23 admin contact:</strong> CEFS Economic Opportunity Corporation, 1805 South Banker Street, Effingham, IL 62401 · (217) 342-2193 ext. 2121 · lwia23@cefseoc.org · <a href="https://www.lwa23.com/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>lwa23.com</a>.
+            <br /><br />
+            <strong>Official naming note:</strong> This page uses the brand label &quot;East Central Illinois&quot; for accessibility, but IL DCEO + IL workNet officially designate this region as <strong>Southeastern Economic Development Region 7 (EDR 7)</strong>, coterminous with Local Workforce Innovation Area 23 (LWIA 23). Public-stakeholder materials should use both labels.
+          </div>
+
+          <h3 style={{ fontSize: 15, fontWeight: 600, color: "#1f1d18", marginTop: 24, marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+            Known limits · data still pending
+          </h3>
+          <div style={{ fontSize: 13, color: "#3d3a33", marginBottom: 12, maxWidth: 820, lineHeight: 1.55 }}>
+            Open limitations are tracked here, classified by what kind of action closes each one. Source-integrity discipline rather than failure-flagging.
+          </div>
+          <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+              <thead>
+                <tr style={{ background: "#f0ece1", textAlign: "left", borderBottom: "1px solid #d8d2c4" }}>
+                  <th style={{ padding: "8px 10px", fontWeight: 600 }}>Limitation</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600 }}>Closure class</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600 }}>Operational next step</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[
+                  {
+                    item: "DOL ETA numeric local-area code for LWA-23",
+                    cls: "Confirmable by direct local contact",
+                    step: "Email CEFS HR / IL DCEO Office of Employment & Training (Deputy Director Teri Morris); the code lives in DOL ETA's authenticated WIPS tool, not the public dashboard. Page intentionally uses entity name (CEFS Economic Opportunity Corporation / LWIA 23) instead of asserting a number.",
+                  },
+                  {
+                    item: "IRS Notice 2024-48 Appendix 1 — Jasper County pre-retirement Energy Community status under Statistical Area Category",
+                    cls: "Requires PDF text extraction (or NETL map verification)",
+                    step: "Pull the Notice 2024-48 Appendix 1 PDF text via OCR or download direct; confirm Effingham, IL Micropolitan SA fossil-fuel direct-employment % vs threshold. Until then, page asserts only the post-2027 Coal Closure Category path + the active IL CEJA grant.",
+                  },
+                  {
+                    item: "LEHD OnTheMap / LODES county-pair commute flows (Clark/Edgar → Terre Haute IN, Crawford/Lawrence → Vincennes IN, Marion → St. Louis Metro East)",
+                    cls: "Requires API/backend integration",
+                    step: "Build a server-side OnTheMap query wrapper into console-api (lehd.ces.census.gov LODES data). Until then, commute claims on this page are clearly labeled hypothesis-strength (drawn from secondary aggregations — Data USA, Coles County Transportation Plan 2025, Ready Set Hire Effingham).",
+                  },
+                  {
+                    item: "Per-1,000 crime rates for Marshall (Clark), Toledo (Cumberland), Newton (Jasper), Sullivan (Moultrie)",
+                    cls: "Requires paid/proprietary source or FBI CDE direct pull",
+                    step: "These four cities are paywalled on NeighborhoodScout. Use FBI Crime Data Explorer (cde.ucr.cjis.gov) for the raw LEOKA + Summary Reporting System counts; divide by Census ACS population. Until that ingest lands, page shows unavailable state for these four cities — does NOT fabricate.",
+                  },
+                  {
+                    item: "SOC-level occupation breakdown by hospital anchor (RN headcount, LPN, CNA, allied health, physician, admin)",
+                    cls: "Unavailable from public schema",
+                    step: "Form 990 publishes total &quot;Other Salaries and Wages&quot; + officer comp only — never SOC-coded payroll. Obtaining this requires an Illinois Hospital Association data request OR each hospital's internal HR census. Page uses 990 payroll ÷ headcount as a proxy for occupation-tier and labels the inference as such.",
+                  },
+                  {
+                    item: "Per-county LWA-23 WIOA PIRL outcomes (PY2023 ETA-9169 row)",
+                    cls: "Requires interactive IPATS query",
+                    step: "Pull from IL workNet IPATS interactive dashboard (illinoisworknet.com/WIOA/RegPlanning/Pages/StateWorkforcePerformance.aspx). Page uses IL statewide PY23 baselines until LWA-23-specific row is extracted.",
+                  },
+                ].map((r, i) => {
+                  const clsColor = r.cls.startsWith("Confirmable") ? "oklch(40% 0.16 142)"
+                    : r.cls.startsWith("Requires API") || r.cls.startsWith("Requires interactive") ? "oklch(45% 0.18 60)"
+                    : r.cls.startsWith("Requires paid") || r.cls.startsWith("Requires PDF") ? "oklch(45% 0.18 60)"
+                    : "oklch(45% 0.20 22)";
+                  return (
+                    <tr key={i} style={{ borderTop: i === 0 ? "none" : "1px solid #ebe5d6" }}>
+                      <td style={{ padding: "8px 10px", fontWeight: 600, color: "#1f1d18" }}>{r.item}</td>
+                      <td style={{ padding: "8px 10px" }}>
+                        <span style={{ background: `${clsColor}22`, color: clsColor, padding: "3px 8px", borderRadius: 3, fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em" }}>{r.cls}</span>
+                      </td>
+                      <td style={{ padding: "8px 10px", fontSize: 12, color: "#3d3a33", lineHeight: 1.5 }}>{r.step}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ padding: 14, background: "#fef9eb", border: "1px solid #f0d98a", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, marginTop: 12 }}>
+            <strong>Bottom line:</strong> the LWA-23 page&apos;s core diagnosis + theory of change + county strategy matrix are anchored on confirmed primary-source data. The six items above are operational refinements, not foundational uncertainties. The strategic conclusion — <strong>LWA-23 should recover workers before chasing new anchors</strong> — does not depend on closing any of them.
           </div>
         </section>
 
