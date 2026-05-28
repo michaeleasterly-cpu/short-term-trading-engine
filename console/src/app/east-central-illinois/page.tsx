@@ -1674,16 +1674,17 @@ export default async function EastCentralIllinoisPage() {
                 ],
               },
               {
-                title: "Energy-Transition Reinvestment at Newton (Jasper County) — POST-2027 lever",
-                anchor: "Vistra Newton Power Plant Unit 1 retiring end-2027 (Vistra 10-K confirmed)",
-                rationale: "Audit-corrected 2026-05-28: Newton has NOT yet retired, so the Jasper census tract containing the plant is NOT YET designated under IRA's Coal Closure Category (IRS Notice 2024-48 Appendix 2 lists tracts where coal-fired EGUs retired AFTER 2009-12-31; Newton is on the retirement schedule but isn't there yet). The 10% IRA bonus tax credit activates POST-retirement. Until 2027, Jasper may still qualify via the Statistical Area Category (≥0.17% fossil-fuel direct employment + UR ≥ national avg) — operator must verify against IRS Notice 2024-48 Appendix 1. Illinois DCEO has already awarded Jasper an Energy Transition Community Grant ($565,615) — that's a separate IL CEJA designation, NOT the federal IRA designation. <strong>Strategic implication:</strong> the federal lever is post-2027; the IL CEJA grant is now. Sequence accordingly.",
+                title: "Energy-Transition Reinvestment — entire LWA-23 footprint qualifies as IRA Energy Community NOW",
+                anchor: "ALL 13 LWA-23 counties qualify under IRS Notice 2024-48 Appendix 1 Statistical Area Category for CY2023 (verified 2026-05-28 via direct PDF extraction) — 12 counties in East Central IL nonmetropolitan area (1700003); Moultrie in West Central IL nonmetropolitan area (1700002). Vistra Newton Power Plant Unit 1 retirement (end-2027 per Vistra 10-K) activates the ADDITIONAL Coal Closure Category for the Jasper census tract + adjoining tracts post-retirement.",
+                rationale: "This is the single most-favorable federal lever in LWA-23. The entire 13-county footprint already meets the Fossil Fuel Employment threshold + UR-≥-national-avg requirement for CY2023 — meaning any qualifying renewable energy, battery storage, or clean manufacturing project sited anywhere in LWA-23 gets the 10% IRA §45/§48 bonus tax credit TODAY. Strategic implication: don't wait for Newton retirement to start sequencing projects; the Statistical Area lever is active now, the Coal Closure lever stacks on top of it post-2027 for Jasper specifically. The IL DCEO Energy Transition Community Grant ($565,615 to Jasper) layers on the IL-side designation independently.",
                 programs: [
-                  { name: "IRS Notice 2024-48 Appendix 2 (Coal Closure tracts list)", url: "https://www.irs.gov/pub/irs-drop/n-24-48-appendix-2.pdf", detail: "Authoritative Coal Closure tract list — Newton not yet on it (pre-retirement)" },
+                  { name: "IRS Notice 2024-48 Appendix 1 (Statistical Area Category qualifying list, CY2023)", url: "https://www.irs.gov/pub/irs-drop/n-24-48-appendix-1.pdf", detail: "Confirmed via direct PDF extraction: all 13 LWA-23 counties are listed (East Central IL non-metro 1700003 + West Central IL non-metro 1700002 for Moultrie)" },
+                  { name: "IRS Notice 2024-48 Appendix 2 (Coal Closure tracts list)", url: "https://www.irs.gov/pub/irs-drop/n-24-48-appendix-2.pdf", detail: "Will add Jasper census tract + adjoining tracts AFTER Newton Unit 1 retires (end-2027)" },
                   { name: "IRS Notice 2024-48 (full)", url: "https://www.irs.gov/pub/irs-drop/n-24-48.pdf", detail: "Energy Community designation methodology" },
-                  { name: "NETL 2024 Coal Closure interactive map", url: "https://arcgis.netl.doe.gov/portal/home/item.html?id=bc0fb23213804024a69a9fdd8a937b35", detail: "Live tract-level verification tool" },
+                  { name: "NETL Energy Communities interactive map", url: "https://arcgis.netl.doe.gov/portal/home/item.html?id=bc0fb23213804024a69a9fdd8a937b35", detail: "Tract-level visualization" },
                   { name: "IRS Energy Communities FAQ", url: "https://www.irs.gov/credits-deductions/frequently-asked-questions-for-energy-communities", detail: "10% IRA §45/§48 adder mechanics" },
-                  { name: "EDA Recompete Pilot Program", url: "https://www.eda.gov/funding/programs/recompete-pilot-program/faq", detail: "Targets prime-age employment gaps — usable NOW pre-retirement" },
-                  { name: "Vistra 10-K FY2025 Newton retirement filing", url: "https://www.sec.gov/Archives/edgar/data/0001692819/000169281926000006/vistra-20251231xex417.htm", detail: "Primary-source confirmation of end-2027 retirement timeline" },
+                  { name: "EDA Recompete Pilot Program", url: "https://www.eda.gov/funding/programs/recompete-pilot-program/faq", detail: "Targets prime-age employment gaps — stackable" },
+                  { name: "Vistra 10-K FY2025 Newton retirement filing", url: "https://www.sec.gov/Archives/edgar/data/0001692819/000169281926000006/vistra-20251231xex417.htm", detail: "End-2027 retirement triggers Coal Closure overlay on existing Statistical Area qualification" },
                 ],
               },
               {
@@ -1862,9 +1863,9 @@ export default async function EastCentralIllinoisPage() {
                     step: "Email CEFS HR / IL DCEO Office of Employment & Training (Deputy Director Teri Morris); the code lives in DOL ETA's authenticated WIPS tool, not the public dashboard. Page intentionally uses entity name (CEFS Economic Opportunity Corporation / LWIA 23) instead of asserting a number.",
                   },
                   {
-                    item: "IRS Notice 2024-48 Appendix 1 — Jasper County pre-retirement Energy Community status under Statistical Area Category",
-                    cls: "Requires PDF text extraction (or NETL map verification)",
-                    step: "Pull the Notice 2024-48 Appendix 1 PDF text via OCR or download direct; confirm Effingham, IL Micropolitan SA fossil-fuel direct-employment % vs threshold. Until then, page asserts only the post-2027 Coal Closure Category path + the active IL CEJA grant.",
+                    item: "IRS Notice 2024-48 Appendix 1 — LWA-23 pre-retirement Energy Community status under Statistical Area Category",
+                    cls: "CLOSED",
+                    step: "Resolved 2026-05-28 via direct PDF extraction of IRS Notice 2024-48 Appendix 1. ALL 13 LWA-23 counties qualify as Energy Communities for CY2023 — 12 counties in East Central IL nonmetropolitan area (code 1700003); Moultrie in West Central IL nonmetropolitan area (1700002). Both areas meet the Fossil Fuel Employment threshold + UR-≥-national-avg requirement. §21 Anchor Attraction Newton entry updated to reflect: the entire footprint is eligible for the 10% IRA §45/§48 bonus tax credit TODAY; Newton retirement adds Coal Closure overlay post-2027.",
                   },
                   {
                     item: "LEHD OnTheMap / LODES county-pair commute flows (Clark/Edgar → Terre Haute IN, Crawford/Lawrence → Vincennes IN, Marion → St. Louis Metro East)",
