@@ -574,6 +574,84 @@ export default async function EastCentralIllinoisPage() {
           </section>
         )}
 
+        {/* ═══ §0.5 True Labor Picture — the 87k story the headline UR hides ═══ */}
+        {data?.labor_truth && data.labor_truth.aggregate && (
+          <section style={{ marginTop: 40 }}>
+            <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+            <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+              01 · The true labor picture · what the headline {(data.lwa_aggregate?.unemployment_rate_weighted ?? 0).toFixed(1)}% unemployment rate hides
+            </h2>
+            <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
+              The headline LWA-23 weighted UR of <strong>{(data.lwa_aggregate?.unemployment_rate_weighted ?? 0).toFixed(1)}%</strong> only counts adults <em>actively looking for work</em>. Census ACS labor-force data tells a different story: <strong>{data.labor_truth.aggregate.not_in_labor_force.toLocaleString()} working-age adults across the 13-county footprint are NOT in the labor force</strong> — neither employed nor officially searching. That&apos;s <strong>{data.labor_truth.aggregate.not_lf_pct.toFixed(1)}% of working-age (16+) population vs IL state&apos;s {data.labor_truth.benchmarks.il_state_not_lf_pct.toFixed(1)}%</strong>. The structural labor-supply constraint in LWA-23 is participation, not unemployment.
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 14, marginBottom: 16 }}>
+              {[
+                { label: "Headline UR (13-co weighted)", value: `${(data.lwa_aggregate?.unemployment_rate_weighted ?? 0).toFixed(1)}%`, sub: "what politicians cite", flag: false },
+                { label: "Labor force participation", value: `${data.labor_truth.aggregate.lfpr}%`, sub: `IL state ${data.labor_truth.benchmarks.il_state_lfpr}% · gap ${data.labor_truth.aggregate.gap_lfpr_vs_state > 0 ? "+" : ""}${data.labor_truth.aggregate.gap_lfpr_vs_state}pp`, flag: data.labor_truth.aggregate.gap_lfpr_vs_state < -3 },
+                { label: "Employment-to-population", value: `${data.labor_truth.aggregate.ep_ratio}%`, sub: `IL state ${data.labor_truth.benchmarks.il_state_ep}% · gap ${data.labor_truth.aggregate.gap_ep_vs_state > 0 ? "+" : ""}${data.labor_truth.aggregate.gap_ep_vs_state}pp`, flag: data.labor_truth.aggregate.gap_ep_vs_state < -3 },
+                { label: "Not in labor force", value: data.labor_truth.aggregate.not_in_labor_force.toLocaleString(), sub: `${data.labor_truth.aggregate.not_lf_pct}% of working-age — the invisible population`, flag: true },
+              ].map((s, i) => (
+                <StatCard key={i} label={s.label} value={s.value} sub={s.sub} flag={s.flag} />
+              ))}
+            </div>
+            <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "auto", marginBottom: 12 }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+                <thead>
+                  <tr style={{ background: "#f0ece1", textAlign: "left", borderBottom: "1px solid #d8d2c4" }}>
+                    <th style={{ padding: "8px 10px", fontWeight: 600 }}>County</th>
+                    <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>LFPR</th>
+                    <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>EP-ratio</th>
+                    <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Not-in-LF</th>
+                    <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>LFPR gap vs IL</th>
+                    <th style={{ padding: "8px 10px", fontWeight: 600 }}>Pattern</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.labor_truth.geos
+                    .slice()
+                    .sort((a, b) => a.gap_lfpr_vs_state - b.gap_lfpr_vs_state)
+                    .map((g, i) => {
+                      const cleanName = g.name.replace(", Illinois", "").replace(" County", "");
+                      const gapColor = g.gap_lfpr_vs_state < -10 ? "oklch(35% 0.22 22)"
+                        : g.gap_lfpr_vs_state < -5 ? "oklch(45% 0.20 22)"
+                        : g.gap_lfpr_vs_state < 0 ? "oklch(45% 0.18 60)"
+                        : "oklch(40% 0.16 142)";
+                      const pattern = g.gap_lfpr_vs_state < -10
+                        ? "Severe gap — prison economy + small private sector"
+                        : g.gap_lfpr_vs_state < -5
+                        ? "Significant gap — single-anchor county or thin private market"
+                        : g.gap_lfpr_vs_state < 0
+                        ? "Mild gap — typical rural-IL pattern"
+                        : "Above IL state — commuter county or anchor-employer effect";
+                      return (
+                        <tr key={g.fips} style={{ borderTop: i === 0 ? "none" : "1px solid #ebe5d6" }}>
+                          <td style={{ padding: "6px 10px", fontWeight: 600 }}>{cleanName}</td>
+                          <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: 600 }}>{g.lfpr}%</td>
+                          <td style={{ padding: "6px 10px", textAlign: "right", color: "#5a564d" }}>{g.ep_ratio}%</td>
+                          <td style={{ padding: "6px 10px", textAlign: "right", color: "#5a564d" }}>{g.not_in_labor_force.toLocaleString()}</td>
+                          <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: 600, color: gapColor }}>{g.gap_lfpr_vs_state > 0 ? "+" : ""}{g.gap_lfpr_vs_state}pp</td>
+                          <td style={{ padding: "6px 10px", fontSize: 11, color: "#5a564d" }}>{pattern}</td>
+                        </tr>
+                      );
+                    })}
+                </tbody>
+              </table>
+            </div>
+            <div style={{ padding: 14, background: "#fef9eb", border: "1px solid #f0d98a", borderLeft: "6px solid oklch(45% 0.20 22)", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
+              <strong>Why this matters for CEFS workforce planning:</strong>
+              <ul style={{ margin: "8px 0 0 18px", padding: 0 }}>
+                <li><strong>Lawrence County (LFPR 51.4%, gap -13.7pp)</strong> is the most-extreme case: the county hosts Lawrence Correctional Center (IDOC max-security, capacity 2,458) but otherwise has a thin private-sector base — labor-force participation collapses outside the prison-economy.</li>
+                <li><strong>Fayette (53.4%, -11.7pp), Crawford (54.8%, -10.3pp), Edgar (56.5%, -8.6pp), Clay (56.6%, -8.5pp)</strong> all carry single-anchor economies (Vandalia Correctional, Marathon refinery, NAL plant, Clay County Hospital) but everyone outside the anchor is disproportionately out of the labor force.</li>
+                <li><strong>Cumberland (LFPR 67.2%, +2.1pp ABOVE state) + Jasper (65.8%, +0.7pp)</strong> are the commuter counties — residents work in Effingham + Mattoon-Charleston + Newton Power Plant; their labor-force participation tracks the anchor county they commute to.</li>
+                <li><strong>The 87,127 not-in-LF population is the leading metric for CEFS WIOA enrollment targeting</strong>, not the headline UR. Standard WIOA outreach reaches the unemployed-and-looking; this group needs barrier-removal (childcare, transportation, basic-skills bridge) before training enrollment.</li>
+              </ul>
+            </div>
+            <div style={{ fontSize: 11, color: "#7a756b", marginTop: 8, lineHeight: 1.5 }}>
+              {data.labor_truth.source}. ACS year: {data.labor_truth.year}. The &quot;Not in labor force&quot; count is the closest legitimate proxy for the invisible-population concern — people neither employed nor officially unemployed-and-looking.
+            </div>
+          </section>
+        )}
+
         {/* ═══ §1 13-county footprint with anchor employers ═══ */}
         <section style={{ marginTop: 40 }}>
           <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
