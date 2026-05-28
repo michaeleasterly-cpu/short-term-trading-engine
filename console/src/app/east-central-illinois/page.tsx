@@ -740,6 +740,55 @@ export default async function EastCentralIllinoisPage() {
           </section>
         )}
 
+        {/* ═══ §2.5 Industry mix by county — per-county QCEW top sectors ═══ */}
+        {mix && mix.by_county && mix.by_county.length > 0 && (
+          <section style={{ marginTop: 40 }}>
+            <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+            <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+              03 · Industry mix by county · each county&apos;s own economic identity
+            </h2>
+            <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55 }}>
+              Top supersectors per county (BLS QCEW, latest published quarter). Effingham (~23k jobs) and Coles (~22k) are the dominant employment centers; the smaller counties typically concentrate in 2-3 sectors with a single anchor employer driving the largest line.
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))", gap: 12 }}>
+              {mix.by_county
+                .slice()
+                .sort((a, b) => b.total_employment - a.total_employment)
+                .map((c) => {
+                  const FIPS_TO_NAME: Record<string, string> = {
+                    "023": "Clark", "025": "Clay", "029": "Coles", "033": "Crawford",
+                    "035": "Cumberland", "045": "Edgar", "049": "Effingham",
+                    "051": "Fayette", "079": "Jasper", "101": "Lawrence",
+                    "121": "Marion", "139": "Moultrie", "159": "Richland",
+                  };
+                  const niceName = FIPS_TO_NAME[c.fips] || c.fips;
+                  return (
+                    <div key={c.fips} style={{ background: "white", border: "1px solid #d8d2c4", borderLeft: "6px solid #1f1d18", borderRadius: 6, padding: 14 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 10 }}>
+                        <div style={{ fontSize: 15, fontWeight: 600, color: "#1f1d18" }}>{niceName} County</div>
+                        <div style={{ fontSize: 12, color: "#7a756b" }}>Total: <strong>{c.total_employment.toLocaleString()}</strong> jobs</div>
+                      </div>
+                      <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
+                        <tbody>
+                          {(c.top_supersectors || []).slice(0, 5).map((s, i) => (
+                            <tr key={s.code} style={{ borderTop: i === 0 ? "none" : "1px solid #ebe5d6" }}>
+                              <td style={{ padding: "4px 0", color: "#3d3a33" }}>{s.name}</td>
+                              <td style={{ padding: "4px 0", textAlign: "right", fontWeight: 600 }}>{s.employment.toLocaleString()}</td>
+                              <td style={{ padding: "4px 0", textAlign: "right", color: "#5a564d" }}>${s.avg_weekly_wage.toLocaleString()}/wk</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  );
+                })}
+            </div>
+            <div style={{ fontSize: 11, color: "#7a756b", marginTop: 12, lineHeight: 1.5 }}>
+              Source: live BLS QCEW pull per county (quarter {mix.as_of_quarter}). Smaller counties show smaller absolute employment but the supersector mix exposes their structural anchor (e.g., Jasper&apos;s Manufacturing line reflects Newton Power Plant; Lawrence&apos;s Public Administration is the Correctional Center; Crawford&apos;s Manufacturing is the Marathon refinery).
+            </div>
+          </section>
+        )}
+
         {/* ═══ §3 Federal money concentration — diversified, no GD-OTS equivalent ═══ */}
         {data?.business_opportunities && (
           <section style={{ marginTop: 40 }}>
