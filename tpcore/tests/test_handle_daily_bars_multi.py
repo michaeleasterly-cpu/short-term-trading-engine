@@ -105,12 +105,17 @@ def _fast_and_stubbed(monkeypatch):
 
     upserts: list[tuple[str, int]] = []
 
-    async def _fake_upsert(_pool, symbol, bars, *, staging_run_id=None, delisted=False, source=None):
+    async def _fake_upsert_batch(_pool, bars_by_ticker, *, staging_run_id=None, delisted=False, source=None):
         del _pool, delisted, source
-        upserts.append((symbol, len(bars)))
-        return len(bars)
+        total = 0
+        for symbol, bars in bars_by_ticker.items():
+            upserts.append((symbol, len(bars)))
+            total += len(bars)
+        return total
 
-    monkeypatch.setattr(ab, "stage_then_promote_bars", _fake_upsert)
+    # 2026-05-28: archive_etl now calls the batch variant (one call per
+    # chunk instead of one call per ticker).
+    monkeypatch.setattr(ab, "stage_then_promote_bars_batch", _fake_upsert_batch)
     return {"upserts": upserts}
 
 
