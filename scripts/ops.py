@@ -8507,15 +8507,16 @@ async def _auto_cascade_coverage_collapse(
         name, factory_builder, timeout = spec_by_name[result.name]
         first_error = (result.error or "")[:240]
 
-        # Feed selection — the load-bearing decision this PR exists for.
-        # Live probe, no cache. See docstring.
-        try:
-            sip_ok = await _alpaca_sip_available()
-        except Exception as exc:  # noqa: BLE001 — probe must never break the cascade
-            log.warning("ops.auto_cascade.probe_error", error=str(exc))
-            sip_ok = False
-        feed = "sip" if sip_ok else "iex"
-        probe_reason = "sip_probe_ok" if sip_ok else "sip_probe_fail"
+        # Feed selection — operator's standing rule
+        # `feedback_no_alpaca_for_daily_prices_backfill` (2026-05-25):
+        # NEVER Alpaca (sip/iex) for daily-bar backfill. The DB
+        # constraint `prices_daily_no_new_alpaca` rejects every row
+        # the cascade tried to write (every chunk a CheckViolationError
+        # on test #12), so the cascade architecturally has to use FMP.
+        # PR #386 made FMP the primary; this catches up the cascade.
+        feed = "fmp"
+        probe_reason = "fmp_primary_per_operator_rule"
+        sip_ok = False  # Retained as a structured cascade-detail field below.
 
         await db_log.log(
             "INGESTION_AUTO_RECOVERY_START",
