@@ -567,7 +567,7 @@ export default async function EastCentralIllinoisPage() {
           </div>
         </section>
 
-        {/* ═══ §0 LWA-23 UR trend chart ═══ */}
+        {/* ═══ LWA-23 UR trend chart · chart-only, not a numbered section ═══ */}
         {data && data.lwa_unemployment_series.length > 0 && (
           <section style={{ marginTop: 40 }}>
             <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
@@ -583,7 +583,7 @@ export default async function EastCentralIllinoisPage() {
           </section>
         )}
 
-        {/* ═══ §0.5 True Labor Picture — the 87k story the headline UR hides ═══ */}
+        {/* ═══ §01 The true labor picture ═══ */}
         {data?.labor_truth && data.labor_truth.aggregate && (
           <section style={{ marginTop: 40 }}>
             <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
@@ -661,7 +661,7 @@ export default async function EastCentralIllinoisPage() {
           </section>
         )}
 
-        {/* ═══ §02 Participation gap — root causes (Census ACS S1810 disability + S0101 age + carceral economy) ═══ */}
+        {/* ═══ §02 Participation gap ═══ */}
         <section style={{ marginTop: 40 }}>
           <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
           <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
@@ -730,7 +730,7 @@ export default async function EastCentralIllinoisPage() {
           </div>
         </section>
 
-        {/* ═══ §03 Theory of Change — LWA-23 specific ═══ */}
+        {/* ═══ §03 Theory of change ═══ */}
         <section style={{ marginTop: 40 }}>
           <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
           <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
@@ -781,7 +781,7 @@ export default async function EastCentralIllinoisPage() {
           </div>
         </section>
 
-        {/* ═══ §04 County Strategy Matrix — segmented by archetype ═══ */}
+        {/* ═══ §04 County strategy matrix ═══ */}
         <section style={{ marginTop: 40 }}>
           <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
           <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
@@ -844,7 +844,7 @@ export default async function EastCentralIllinoisPage() {
           </div>
         </section>
 
-        {/* ═══ §1 13-county footprint with anchor employers ═══ */}
+        {/* ═══ §05 13-county footprint ═══ */}
         <section style={{ marginTop: 40 }}>
           <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
           <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
@@ -882,7 +882,7 @@ export default async function EastCentralIllinoisPage() {
           </div>
         </section>
 
-        {/* ═══ §2 LWA-23 industry mix (live QCEW) ═══ */}
+        {/* ═══ §06 LWA-23 industry mix ═══ */}
         {mix && mix.top_supersectors && mix.top_supersectors.length > 0 && (
           <section style={{ marginTop: 40 }}>
             <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
@@ -926,7 +926,7 @@ export default async function EastCentralIllinoisPage() {
           </section>
         )}
 
-        {/* ═══ §2.5 Industry mix by county — per-county QCEW top sectors ═══ */}
+        {/* ═══ §07 Industry mix by county ═══ */}
         {mix && mix.by_county && mix.by_county.length > 0 && (
           <section style={{ marginTop: 40 }}>
             <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
@@ -975,7 +975,7 @@ export default async function EastCentralIllinoisPage() {
           </section>
         )}
 
-        {/* ═══ §3 Federal money concentration — diversified, no GD-OTS equivalent ═══ */}
+        {/* ═══ §08 Federal contract dollars ═══ */}
         {data?.business_opportunities && (
           <section style={{ marginTop: 40 }}>
             <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
@@ -1039,7 +1039,7 @@ export default async function EastCentralIllinoisPage() {
           </section>
         )}
 
-        {/* ═══ §4 CEFS WIOA program portfolio ═══ */}
+        {/* ═══ §09 CEFS LWA-23 WIOA program portfolio ═══ */}
         <section style={{ marginTop: 40 }}>
           <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
           <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
@@ -1062,7 +1062,7 @@ export default async function EastCentralIllinoisPage() {
           </div>
         </section>
 
-        {/* ═══ §5 Community college credential pipelines ═══ */}
+        {/* ═══ §10 Community college credential pipelines ═══ */}
         <section style={{ marginTop: 40 }}>
           <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
           <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
@@ -1092,7 +1092,7 @@ export default async function EastCentralIllinoisPage() {
           </div>
         </section>
 
-        {/* ═══ §6 Training-to-Demand 1A+2C wage test ═══ */}
+        {/* ═══ §11 Training-to-demand alignment ═══ */}
         <section style={{ marginTop: 40 }}>
           <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
           <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
@@ -1137,7 +1137,7 @@ export default async function EastCentralIllinoisPage() {
           </div>
         </section>
 
-        {/* ═══ §6.5 Mobility + job access — transit coverage across 13 counties ═══ */}
+        {/* ═══ §12 Mobility + job access ═══ */}
         <section style={{ marginTop: 40 }}>
           <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
           <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
@@ -1181,7 +1181,7 @@ export default async function EastCentralIllinoisPage() {
           </div>
         </section>
 
-        {/* ═══ §6.6 Childcare constraint — Region 11 76% slot gap ═══ */}
+        {/* ═══ §13 Childcare constraint ═══ */}
         <section style={{ marginTop: 40 }}>
           <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
           <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
@@ -1229,7 +1229,7 @@ export default async function EastCentralIllinoisPage() {
           </div>
         </section>
 
-        {/* ═══ §6.7 Travel / regional leakage — commute flows ═══ */}
+        {/* ═══ §14 Commute + regional leakage ═══ */}
         <section style={{ marginTop: 40 }}>
           <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
           <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
@@ -1255,7 +1255,7 @@ export default async function EastCentralIllinoisPage() {
           </div>
         </section>
 
-        {/* ═══ §7 City-level crime ═══ */}
+        {/* ═══ §15 City-level crime ═══ */}
         <section style={{ marginTop: 40 }}>
           <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
           <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
@@ -1295,7 +1295,7 @@ export default async function EastCentralIllinoisPage() {
           </div>
         </section>
 
-        {/* ═══ §9.5 Healthcare anchor analysis — stabilizer vs growth engine vs low-wage trap ═══ */}
+        {/* ═══ §16 Healthcare anchor analysis ═══ */}
         <section style={{ marginTop: 40 }}>
           <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
           <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
@@ -1346,7 +1346,7 @@ export default async function EastCentralIllinoisPage() {
           </div>
         </section>
 
-        {/* ═══ §9.6 Housing affordability — HUD FMR per county vs MIT LWC ═══ */}
+        {/* ═══ §17 Housing affordability ═══ */}
         <section style={{ marginTop: 40 }}>
           <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
           <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
@@ -1457,7 +1457,7 @@ export default async function EastCentralIllinoisPage() {
           </div>
         </section>
 
-        {/* ═══ §9.7 Wage benchmark — IL OEWS by occupation ═══ */}
+        {/* ═══ §18 Wage benchmark ═══ */}
         <section style={{ marginTop: 40 }}>
           <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
           <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
@@ -1508,7 +1508,7 @@ export default async function EastCentralIllinoisPage() {
           </div>
         </section>
 
-        {/* ═══ §14 IL DCEO In-Demand Occupations — Southeast EDR 7 ═══ */}
+        {/* ═══ §19 IL DCEO In-Demand Occupations ═══ */}
         <section style={{ marginTop: 40 }}>
           <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
           <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
@@ -1584,7 +1584,7 @@ export default async function EastCentralIllinoisPage() {
           </div>
         </section>
 
-        {/* ═══ §14.5 PIRL / WIOA Performance Accountability ═══ */}
+        {/* ═══ §20 PIRL / WIOA Performance Accountability ═══ */}
         <section style={{ marginTop: 40 }}>
           <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
           <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
@@ -1642,7 +1642,7 @@ export default async function EastCentralIllinoisPage() {
           </div>
         </section>
 
-        {/* ═══ §15 Anchor Attraction Targets ═══ */}
+        {/* ═══ §21 Anchor-attraction targets ═══ */}
         <section style={{ marginTop: 40 }}>
           <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
           <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
@@ -1728,7 +1728,7 @@ export default async function EastCentralIllinoisPage() {
           </div>
         </section>
 
-        {/* ═══ §8 LWA-23 vs LWA-25 ═══ */}
+        {/* ═══ §22 LWA-23 vs LWA-25 ═══ */}
         <section style={{ marginTop: 40 }}>
           <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
           <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
@@ -1771,7 +1771,7 @@ export default async function EastCentralIllinoisPage() {
           </div>
         </section>
 
-        {/* ═══ §9 Action ladder ═══ */}
+        {/* ═══ §23 Action ladder ═══ */}
         <section style={{ marginTop: 40 }}>
           <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
           <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
@@ -1823,7 +1823,7 @@ export default async function EastCentralIllinoisPage() {
           </div>
         </section>
 
-        {/* ═══ §24 Methodology + Known Limits ═══ */}
+        {/* ═══ §24 Methodology + page scope ═══ */}
         <section style={{ marginTop: 40 }}>
           <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
           <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
