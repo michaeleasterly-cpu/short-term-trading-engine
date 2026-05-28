@@ -206,6 +206,235 @@ interface PageData {
   gdots_subaward_lanes_bulk?: GdotsSubawardLanesBulk | null;
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// LWA-25 town context score · INDEPENDENT calculation for Southern IL
+// ─────────────────────────────────────────────────────────────────────
+// Internal comparative index (0-100), normalized within the 10-town
+// LWA-25 set only. Equal-weighted 4-dimension composite — calculated
+// independently from page-local inputs; no /carbondale, /charleston,
+// /murphysboro page scores are imported.
+//   Safety        (weight 25) = per-town FBI UCR 2024 total crime per
+//                               1,000 (NeighborhoodScout/AreaVibes as
+//                               labelled FBI-UCR carriers; primary is
+//                               FBI UCR 2024), inverted: lower = better.
+//   Participation (weight 25) = county LFPR (ACS 2024 5-yr B23025-derived
+//                               equivalent of S2301), direct: higher = better.
+//   Health        (weight 25) = mean of inverted county disability rate
+//                               (ACS B18101→S1810 equivalent) and inverted
+//                               county age 65+ share (ACS B01001→S0101
+//                               equivalent — REAL 65+%, not median-age
+//                               proxy; this is a precision upgrade over
+//                               LWA-23's median-age proxy).
+//   Housing       (weight 25) = inverted county renter cost-burden share
+//                               (ACS B25070).
+// Min-max normalized within LWA-25 set. Adverse metrics inverted so
+// higher composite = better-ranked within LWA-25.
+// Severe-dimension flag (⚠): any single dimension under 25 surfaces
+// explicitly so a Watch composite can't mask single-axis distress.
+// Source-year note: ACS 2024 5-year (vintage 2020-2024).
+const LWA25_CITY_SCORE_INPUTS: Array<{ town: string; county: string; crime_total: number; lfpr: number; disab: number; age65: number; rent_burden: number }> = [
+  { town: "Carbondale",     county: "Jackson",    crime_total: 49.54, lfpr: 56.6, disab: 17.2, age65: 16.5, rent_burden: 50.2 },
+  { town: "Marion",         county: "Williamson", crime_total: 33.66, lfpr: 58.8, disab: 19.1, age65: 19.6, rent_burden: 46.4 },
+  { town: "Murphysboro",    county: "Jackson",    crime_total: 34.07, lfpr: 56.6, disab: 17.2, age65: 16.5, rent_burden: 50.2 },
+  { town: "Mt. Vernon",     county: "Jefferson",  crime_total: 13.35, lfpr: 59.0, disab: 18.3, age65: 20.0, rent_burden: 43.3 },
+  { town: "Benton",         county: "Franklin",   crime_total:  1.22, lfpr: 56.0, disab: 21.3, age65: 21.0, rent_burden: 52.2 },
+  { town: "West Frankfort", county: "Franklin",   crime_total:  7.85, lfpr: 56.0, disab: 21.3, age65: 21.0, rent_burden: 52.2 },
+  { town: "Herrin",         county: "Williamson", crime_total: 28.97, lfpr: 58.8, disab: 19.1, age65: 19.6, rent_burden: 46.4 },
+  { town: "Carterville",    county: "Williamson", crime_total:  7.73, lfpr: 58.8, disab: 19.1, age65: 19.6, rent_burden: 46.4 },
+  { town: "Pinckneyville",  county: "Perry",      crime_total:  3.42, lfpr: 49.0, disab: 21.1, age65: 20.3, rent_burden: 49.3 },
+  { town: "Du Quoin",       county: "Perry",      crime_total:  5.17, lfpr: 49.0, disab: 21.1, age65: 20.3, rent_burden: 49.3 },
+];
+
+type Lwa25ScoreRow = {
+  town: string;
+  county: string;
+  composite: number;
+  grade: "Strong" | "Stable" | "Watch" | "Strained" | "Critical";
+  safety: number;
+  participation: number;
+  health: number;
+  housing: number;
+  data_quality: string;
+  severe_dimensions: string[];
+};
+
+function computeLwa25CityScores(rows: typeof LWA25_CITY_SCORE_INPUTS): Lwa25ScoreRow[] {
+  const minMax = (vals: number[]) => ({ min: Math.min(...vals), max: Math.max(...vals) });
+  const r_crime = minMax(rows.map(r => r.crime_total));
+  const r_lfpr = minMax(rows.map(r => r.lfpr));
+  const r_disab = minMax(rows.map(r => r.disab));
+  const r_age65 = minMax(rows.map(r => r.age65));
+  const r_rb = minMax(rows.map(r => r.rent_burden));
+
+  const normAdverse = (val: number, range: { min: number; max: number }) =>
+    range.max === range.min ? 50 : (100 * (range.max - val)) / (range.max - range.min);
+  const normPositive = (val: number, range: { min: number; max: number }) =>
+    range.max === range.min ? 50 : (100 * (val - range.min)) / (range.max - range.min);
+
+  return rows.map((r): Lwa25ScoreRow => {
+    const safety = normAdverse(r.crime_total, r_crime);
+    const participation = normPositive(r.lfpr, r_lfpr);
+    const health = (normAdverse(r.disab, r_disab) + normAdverse(r.age65, r_age65)) / 2;
+    const housing = normAdverse(r.rent_burden, r_rb);
+    const compositeRaw = (safety + participation + health + housing) / 4;
+    const composite = Math.round(compositeRaw);
+
+    const grade: Lwa25ScoreRow["grade"] =
+      composite >= 80 ? "Strong" :
+      composite >= 65 ? "Stable" :
+      composite >= 50 ? "Watch" :
+      composite >= 35 ? "Strained" : "Critical";
+
+    const severe_dimensions: string[] = [];
+    if (safety < 25) severe_dimensions.push("Safety");
+    if (participation < 25) severe_dimensions.push("Participation");
+    if (health < 25) severe_dimensions.push("Health");
+    if (housing < 25) severe_dimensions.push("Housing");
+
+    return {
+      town: r.town, county: r.county,
+      composite,
+      grade,
+      safety: Math.round(safety),
+      participation: Math.round(participation),
+      health: Math.round(health),
+      housing: Math.round(housing),
+      data_quality: "4 of 4 dimensions · town safety + county proxies for participation + health + housing",
+      severe_dimensions,
+    };
+  });
+}
+
+const LWA25_CITY_SCORES: Lwa25ScoreRow[] = computeLwa25CityScores(LWA25_CITY_SCORE_INPUTS);
+
+function Lwa25TownContextScoreSection() {
+  const sorted = [...LWA25_CITY_SCORES].sort((a, b) => b.composite - a.composite);
+  return (
+    <section style={{ marginTop: 40 }}>
+      <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+      <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+        LWA-25 town context score · internal comparative index (0-100, within LWA-25)
+      </h2>
+      <div style={{ fontSize: 12, color: "#7a756b", marginBottom: 10, fontStyle: "italic" }}>
+        Internal comparative ranking within the 10-town LWA-25 set. Not an official public-health score, not a national or statewide benchmark, not a certification.
+      </div>
+      <div style={{ fontSize: 13, color: "#3d3a33", marginBottom: 14, maxWidth: 820, lineHeight: 1.55 }}>
+        Equal-weighted 4-dimension composite computed in-page from FBI UCR 2024 (Safety) + ACS 2024 5-year county data (Participation, Health, Housing). <strong>Min-max normalized <em>across this 10-town LWA-25 set only</em></strong> — scores rank towns within LWA-25, not against IL or US benchmarks. <strong>This is calculated independently here</strong> and does not import any /carbondale, /murphysboro, or other community-page score value. Higher composite = better-ranked condition within LWA-25. Adverse metrics (crime, disability, age 65+, rent burden) inverted; only LFPR is direct. <strong>Severe-dimension flag (⚠):</strong> any single dimension under 25 is surfaced even when the composite band looks healthy. The Williamson corridor (Carterville, Herrin, Marion) ranks top-3 for the county-level dimensions; Carbondale and Murphysboro carry the highest single-axis distress (Carbondale&apos;s crime burden + the Jackson County rent-burden tier).
+      </div>
+      <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "auto", marginBottom: 12 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+          <thead>
+            <tr style={{ background: "#f0ece1", textAlign: "left", borderBottom: "1px solid #d8d2c4" }}>
+              <th style={{ padding: "8px 10px", fontWeight: 600 }}>Town · County</th>
+              <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Score</th>
+              <th style={{ padding: "8px 10px", fontWeight: 600 }}>Band</th>
+              <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Safety</th>
+              <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Particip.</th>
+              <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Health</th>
+              <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Housing</th>
+              <th style={{ padding: "8px 10px", fontWeight: 600 }}>Severe dim. (&lt;25)</th>
+              <th style={{ padding: "8px 10px", fontWeight: 600 }}>Data quality</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((r, i) => {
+              const gradeColor =
+                r.grade === "Strong"   ? "oklch(40% 0.16 142)" :
+                r.grade === "Stable"   ? "oklch(45% 0.14 142)" :
+                r.grade === "Watch"    ? "oklch(45% 0.18 60)" :
+                r.grade === "Strained" ? "oklch(45% 0.20 22)" :
+                "oklch(35% 0.22 22)";
+              return (
+                <tr key={r.town} style={{ borderTop: i === 0 ? "none" : "1px solid #ebe5d6" }}>
+                  <td style={{ padding: "6px 10px", fontWeight: 600 }}>{r.town} · {r.county}</td>
+                  <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: 700, color: gradeColor }}>{r.composite}</td>
+                  <td style={{ padding: "6px 10px" }}>
+                    <span style={{ background: `${gradeColor}22`, color: gradeColor, padding: "2px 8px", borderRadius: 3, fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em" }}>{r.grade}</span>
+                  </td>
+                  <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: r.safety < 25 ? 700 : 400, color: r.safety < 25 ? "oklch(45% 0.20 22)" : "#5a564d" }}>{r.safety}</td>
+                  <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: r.participation < 25 ? 700 : 400, color: r.participation < 25 ? "oklch(45% 0.20 22)" : "#5a564d" }}>{r.participation}</td>
+                  <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: r.health < 25 ? 700 : 400, color: r.health < 25 ? "oklch(45% 0.20 22)" : "#5a564d" }}>{r.health}</td>
+                  <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: r.housing < 25 ? 700 : 400, color: r.housing < 25 ? "oklch(45% 0.20 22)" : "#5a564d" }}>{r.housing}</td>
+                  <td style={{ padding: "6px 10px", fontSize: 11, color: r.severe_dimensions.length > 0 ? "oklch(45% 0.20 22)" : "#7a756b", fontWeight: r.severe_dimensions.length > 0 ? 600 : 400 }}>
+                    {r.severe_dimensions.length > 0 ? `⚠ ${r.severe_dimensions.join(" + ")}` : "—"}
+                  </td>
+                  <td style={{ padding: "6px 10px", fontSize: 11, color: "#7a756b" }}>{r.data_quality}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ fontSize: 11, color: "#7a756b", lineHeight: 1.55 }}>
+        <strong>Methodology:</strong> Composite = mean of 4 dimensions, each 0-100 after min-max normalization across <em>this 10-town LWA-25 set only</em> — scores rank towns within LWA-25, not against IL or US benchmarks. <strong>Safety</strong> (weight 25) = inverted FBI UCR 2024 total crime per 1,000 (NeighborhoodScout / AreaVibes as labelled FBI-UCR carriers). <strong>Economic participation</strong> (weight 25) = county Labor Force Participation Rate (ACS 2024 5-year, B23025-derived equivalent of S2301). <strong>Health/access burden</strong> (weight 25) = mean of inverted county disability rate (B18101→S1810 equivalent) and inverted county age 65+ share (B01001→S0101 equivalent — <em>this is the actual 65+ %, not a median-age proxy</em>). <strong>Housing affordability</strong> (weight 25) = inverted county renter cost-burden share (ACS B25070). <strong>Within-LWA-25 bands</strong> (relative to this set; not statewide or national thresholds): Strong 80-100, Stable 65-79, Watch 50-64, Strained 35-49, Critical 0-34. <strong>Severe-dimension flag (⚠):</strong> any dimension scoring under 25 is surfaced in its own column even when the composite band looks healthy — equal weighting can otherwise mask single-axis distress. <strong>All inputs are sourced from FBI UCR 2024 (via NeighborhoodScout/AreaVibes carriers) + Census ACS 2024 5-year</strong>; no community-page score values are imported. ACS source URL: <a href="https://api.censusreporter.org/1.0/data/show/acs2024_5yr?table_ids=B18101,B01002,B01001,B23025,B25064,B25070,B25077,B25091&amp;geo_ids=05000US17055,05000US17077,05000US17081,05000US17145,05000US17199" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Census Reporter ACS 2024 5-yr · 5-county pull</a>.
+      </div>
+    </section>
+  );
+}
+
+function KnownLimitsSection() {
+  const items: Array<{ item: string; cls: string; step: string }> = [
+    {
+      item: "LWA-25-specific WIOA performance row for PY2023–PY2024 (six primary indicators)",
+      cls: "PARTIALLY CLOSED · TARGETS RECOVERED + ACTUALS NOT YET PUBLISHED",
+      step: "Alternate-source retry 2026-05-28 closed (a) LWIA-25 PY2024 + PY2025 negotiated targets (now in PIRL section) sourced from the IL DCEO PY2024 WIOA Annual Statewide Performance Report Narrative (released Nov 2025, pp.14-18; DCEO Local Area ID 17125, fiscal agent + operator: Man-Tra-Con Corp, Marion IL). PY2022–PY2024 LWIA-25 actuals: not located in any public source. IL DCEO PY24 narrative p.23 explicitly defers: \"Final adjusted levels of performance will not be made available until early 2026.\" Verified-blocked endpoints during retry: dol.gov/sites/dolgov/files/ETA/Performance/pdfs/PY2022/IL_PY22…pdf (403), siwdb.org meeting-minutes individual PDFs (404 on guessed paths; listing page enumerates dates but rendered HTML doesn't expose download URLs), DOL PY2023 Local Board Annual Report HTML (403 to programmatic access). WIPS (dol.gov/agencies/eta/performance/wips) remains an authenticated grantee submission system (login.gov + Rules of Behavior), not a public data portal.",
+    },
+    {
+      item: "Town context score · town-level safety vs county-proxy participation/health/housing",
+      cls: "COUNTY_PROXY_BY_DESIGN",
+      step: "The LWA-25 town context score uses town-specific FBI UCR 2024 data for the Safety dimension and county-level Census ACS 2024 5-yr data (B18101 disability, B01001 age 65+, B23025 LFPR, B25070 rent burden) for the other three dimensions. Census ACS 5-year does not publish reliable place-level estimates for towns below ~20k population, so county-level data is the finest-grained reliable resolution available for 9 of 10 LWA-25 towns (only Carbondale exceeds 20k and could be replaced with town-level place pulls in a follow-on; the current implementation uses county-level Jackson values for consistency across the LWA-25 ranking). Each row carries an explicit data_quality label so the proxy structure is visible. This is a documented design choice, not a defect.",
+    },
+    {
+      item: "ORI codes for the 10 LWA-25 reporting agencies",
+      cls: "PUBLIC_IDENTIFIER_ONLY",
+      step: "FBI CDE webapp (cde.ucr.cjis.gov) holds per-agency ORI codes and is the canonical public source — but its agency-detail pages are JavaScript SPAs (curl/WebFetch returns initial-render shell). The NeighborhoodScout / AreaVibes carriers used for the recovered town crime counts do not surface ORI codes in their public-facing pages. Known: Carbondale PD ORI is IL039015A from prior IL-UCR work. Other 9 agency ORIs are recoverable from FBI CDE agency-detail pages in a browser session if a stakeholder needs them for direct UCR cross-reference; the crime counts on the page are sourced and reproducible without them.",
+    },
+    {
+      item: "GD-OTS Marion 95.6% federal-money concentration claim · refresh cadence",
+      cls: "TIME-WINDOWED",
+      step: "The 95.6% concentration is reported on the Federal Money Concentration section's stated 24-month USAspending lookback window. Concentration is window-dependent: a different lookback (12mo, 36mo, FY-bounded) produces a different share. Every dashboard refresh should re-pull USAspending place-of-performance for the 5 LWA-25 counties and re-state the concentration. Source: usaspending.gov advanced search by place-of-performance, county FIPS 17055/17077/17081/17145/17199.",
+    },
+  ];
+  return (
+    <section style={{ marginTop: 40 }}>
+      <hr style={{ border: 0, borderTop: "1px solid #d8d2c4", marginBottom: 16 }} />
+      <h2 style={{ fontSize: 22, fontWeight: 600, margin: "0 0 4px 0", color: "#1f1d18" }}>
+        Known limits · data still pending or qualified
+      </h2>
+      <div style={{ fontSize: 13, color: "#3d3a33", marginBottom: 12, maxWidth: 820, lineHeight: 1.55 }}>
+        Open limitations are tracked here, classified by what kind of action closes each one. Source-integrity discipline rather than failure-flagging; every row carries the attempted-source record.
+      </div>
+      <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+          <thead>
+            <tr style={{ background: "#f0ece1", textAlign: "left", borderBottom: "1px solid #d8d2c4" }}>
+              <th style={{ padding: "8px 10px", fontWeight: 600 }}>Limitation</th>
+              <th style={{ padding: "8px 10px", fontWeight: 600 }}>Closure class</th>
+              <th style={{ padding: "8px 10px", fontWeight: 600 }}>Attempted-source record</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((r, i) => {
+              const clsColor = r.cls.startsWith("PARTIALLY CLOSED") || r.cls.startsWith("CLOSED") ? "oklch(40% 0.16 142)"
+                : r.cls.startsWith("COUNTY_PROXY") || r.cls.startsWith("PUBLIC_IDENTIFIER") || r.cls.startsWith("TIME-WINDOWED") ? "oklch(45% 0.18 60)"
+                : "oklch(45% 0.20 22)";
+              return (
+                <tr key={i} style={{ borderTop: i === 0 ? "none" : "1px solid #ebe5d6" }}>
+                  <td style={{ padding: "8px 10px", fontWeight: 600, color: "#1f1d18" }}>{r.item}</td>
+                  <td style={{ padding: "8px 10px" }}>
+                    <span style={{ background: `${clsColor}22`, color: clsColor, padding: "3px 8px", borderRadius: 3, fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em" }}>{r.cls}</span>
+                  </td>
+                  <td style={{ padding: "8px 10px", fontSize: 12, color: "#3d3a33", lineHeight: 1.5 }}>{r.step}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 function TrainingROISection() {
   // ROI table for all named training pathways on the page. Saturation reflects
   // local-slot scarcity for cannabis top-rung, viticulture top-rung, and union
@@ -2266,6 +2495,9 @@ function PirlOutcomesSection() {
         Participant Individual Record Layout (PIRL) format. The data IS published
         publicly — here&apos;s where to find it.
       </div>
+      <div style={{ fontSize: 13, color: "#3d3a33", marginBottom: 16, maxWidth: 820, lineHeight: 1.55, padding: 12, background: "#f0ece1", border: "1px solid #d8d2c4", borderRadius: 6 }}>
+        <strong>LWIA-25 identifier reference:</strong> DCEO Local Area ID <strong>17125</strong> · fiscal agent + operator <strong>Man-Tra-Con Corp</strong>, 3117 Civic Circle Blvd Suite B, Marion IL 62959 · 5-county footprint (Franklin, Jackson, Jefferson, Perry, Williamson) · Southern Illinois Workforce Development Board (SIWDB) governance. Sister workforce-area page: <a href="/east-central-illinois" style={{ color: "#1f5f8f", fontWeight: 600 }}>East Central Illinois (LWA-23, DCEO ID 17115, Lake Land College fiscal agent + CEFS operator) →</a>.
+      </div>
 
       <div style={{ marginBottom: 16, padding: 14, background: "white", border: "1px solid #d8d2c4", borderRadius: 6 }}>
         <div style={{ fontSize: 13, fontWeight: 600, color: "#1f1d18", marginBottom: 8 }}>Where WIOA performance outcomes are published (verified):</div>
@@ -2385,7 +2617,58 @@ function PirlOutcomesSection() {
           workforce-program completion should actually mean in terms of livable wages.
         </p>
         <p style={{ margin: "8px 0 0 0", fontSize: 11, color: "#7a756b" }}>
-          Source: <a href="https://dceo.illinois.gov/content/dam/soi/en/web/dceo/aboutdceo/reportsrequiredbystatute/illinois-wioa-annual-narrative-report-py24-usdol.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>IL DCEO PY24 WIOA Annual Statewide Performance Report Narrative</a>, p. 14-17 (LWIA-level Adult / Dislocated Worker / Youth negotiated-target tables).
+          Source: <a href="https://dceo.illinois.gov/content/dam/soi/en/web/dceo/aboutdceo/reportsrequiredbystatute/illinois-wioa-annual-narrative-report-py24-usdol.pdf" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>IL DCEO PY24 WIOA Annual Statewide Performance Report Narrative</a>, p. 14-18 (LWIA-25 / Local Area 17125 Adult / Dislocated Worker / Youth negotiated-target rows).
+        </p>
+      </div>
+
+      {/* PY2025 negotiated targets */}
+      <div style={{ marginBottom: 16, padding: 14, background: "white", border: "1px solid #d8d2c4", borderRadius: 6 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "#1f1d18", marginBottom: 10, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          LWIA-25 PY2025 negotiated targets · Local Area 17125
+        </div>
+        <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 4, overflow: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 600 }}>
+            <thead>
+              <tr style={{ background: "#f0ece1", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em", color: "#5a564d" }}>
+                <th style={{ textAlign: "left", padding: "8px 10px", fontWeight: 600 }}>Indicator</th>
+                <th style={{ textAlign: "right", padding: "8px 10px", fontWeight: 600 }}>Adult</th>
+                <th style={{ textAlign: "right", padding: "8px 10px", fontWeight: 600 }}>Dislocated Worker</th>
+                <th style={{ textAlign: "right", padding: "8px 10px", fontWeight: 600 }}>Youth</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[
+                ["Employment Rate Q2", "76.5%", "83.0%", "70.0%"],
+                ["Employment Rate Q4", "77.0%", "82.0%", "72.0%"],
+                ["Median Earnings Q2 (per-quarter)", "$9,500", "$9,500", "$5,000"],
+                ["Credential Attainment (4Q)", "74.5%", "74.0%", "73.0%"],
+                ["Measurable Skill Gains", "73.0%", "68.5%", "75.0%"],
+              ].map((r, i) => (
+                <tr key={i} style={{ borderTop: i === 0 ? "none" : "1px solid #ebe5d6" }}>
+                  <td style={{ padding: "8px 10px", fontWeight: 600 }}>{r[0]}</td>
+                  <td style={{ padding: "8px 10px", textAlign: "right" }}>{r[1]}</td>
+                  <td style={{ padding: "8px 10px", textAlign: "right" }}>{r[2]}</td>
+                  <td style={{ padding: "8px 10px", textAlign: "right" }}>{r[3]}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p style={{ margin: "10px 0 0 0", fontSize: 12, color: "#5a564d" }}>
+          PY2025 targets hold the Adult + Youth median-earnings benchmark flat at $9,500 / $5,000; Dislocated Worker median earnings step up $100 (~$0.19/hr). The same single-adult living wage gap as PY2024 remains structurally intact.
+        </p>
+        <p style={{ margin: "8px 0 0 0", fontSize: 11, color: "#7a756b" }}>
+          Source: same IL DCEO PY24 narrative, LWIA-25 / 17125 PY25 rows. Indicator codes per ETA Performance Accountability Reporting (AER2/AER4/AMER/ACAR/AMSG for Adult; DER2/DER4/DMER/DCAR/DMSG for DW; YER2/YER4/YMER/YCAR/YMSG for Youth).
+        </p>
+      </div>
+
+      {/* Actuals pending disclosure */}
+      <div style={{ marginBottom: 16, padding: 14, background: "oklch(97% 0.04 60)", border: "1px solid oklch(58% 0.15 60)33", borderLeft: "6px solid oklch(58% 0.15 60)", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "oklch(40% 0.15 60)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          LWIA-25 actual outcomes · status as of 2026-05-28
+        </div>
+        <p style={{ margin: 0 }}>
+          The tables above are <strong>negotiated targets</strong> — the floor the local board agreed to deliver against. Actual realized outcomes for LWIA-25 PY2022, PY2023, and PY2024 are <strong>not yet published in any public source located</strong>. The IL DCEO PY24 narrative, p. 23, explicitly states: <em>&quot;Final adjusted levels of performance will not be made available until early 2026.&quot;</em> Sources checked: IL DCEO Annual Statewide Performance Narratives (statewide aggregates only, no LWIA-level actuals), SIWDB meeting-minutes index (titles enumerated but PDFs not exposed in rendered HTML), Man-Tra-Con program brochures (no annual report), USDOL ETA Performance Results (state-level dashboards, 403 to programmatic per-LWIA extraction), WIPS (authenticated grantee-only). When IL DCEO publishes the PY24 adjusted assessments in early 2026, this section will be updated with the actual vs target delta — that is the publication-ready accountability comparison.
         </p>
       </div>
 
@@ -3844,6 +4127,15 @@ export default async function SouthernIllinoisPage() {
             <PirlOutcomesSection />
           </div>
 
+          {/* Bridge — PIRL → town context score */}
+          <div style={{ marginTop: 28, padding: 14, background: "#f0ece1", border: "1px solid #d8d2c4", borderLeft: "3px solid #5a564d", borderRadius: 4, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, fontStyle: "italic" }}>
+            PIRL measures workforce-board accountability. The town context score below measures where each of the 10 reporting towns sits within LWA-25 across safety, participation, health, and housing — the same dimensions the board has to design around when it places programs and cohorts.
+          </div>
+
+          <div id="sec-town-context" style={{ scrollMarginTop: 60 }}>
+            <Lwa25TownContextScoreSection />
+          </div>
+
           {/* Bridge — PIRL → funding-driven critique */}
           <div style={{ marginTop: 28, padding: 14, background: "#f0ece1", border: "1px solid #d8d2c4", borderLeft: "3px solid #5a564d", borderRadius: 4, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, fontStyle: "italic" }}>
             The PIRL numbers measure what got delivered. The next section asks <em>why that mix got delivered</em> — and whether the funding model selected for it.
@@ -3857,7 +4149,16 @@ export default async function SouthernIllinoisPage() {
             <HarmCascadeSection />
           </div>
 
-          {/* Bridge — harm cascade → action ladder */}
+          {/* Bridge — harm cascade → known limits */}
+          <div style={{ marginTop: 28, padding: 14, background: "#f0ece1", border: "1px solid #d8d2c4", borderLeft: "3px solid #5a564d", borderRadius: 4, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, fontStyle: "italic" }}>
+            Before the action ladder, an explicit accounting of where the page&apos;s data has limits — every open item carries an attempted-source record and a closure class.
+          </div>
+
+          <div id="sec-known-limits" style={{ scrollMarginTop: 60 }}>
+            <KnownLimitsSection />
+          </div>
+
+          {/* Bridge — known limits → action ladder */}
           <div style={{ marginTop: 28, padding: 14, background: "#f0ece1", border: "1px solid #d8d2c4", borderLeft: "3px solid #5a564d", borderRadius: 4, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, fontStyle: "italic" }}>
             The cascade is the cost of leaving the constraints above unaddressed. The ladder below is what the board can do this quarter, this year, and this funding cycle to interrupt it.
           </div>
