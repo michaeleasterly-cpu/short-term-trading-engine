@@ -174,6 +174,119 @@ INDICATOR_SERIES: tuple[tuple[str, str], ...] = (
     ("crb_msa_housing_days_on_market",  "MEDDAYONMAR16060"),         # monthly, 2016+ (Realtor.com)
     ("crb_msa_housing_new_listings_mom","NEWLISCOUMM16060"),         # monthly, 2017+
     ("crb_msa_housing_price_inc_yoy",   "PRIINCCOUYY16060"),         # monthly, 2017+
+    # ──── East Central Illinois / LWA-23 13-county panel (2026-05-28) ────
+    # Parallel substrate for the /east-central-illinois regional page (mirrors
+    # the crb_<county>_* 5-county LWA-25 panel above). LWA-23 admin: CEFS
+    # Economic Opportunity Corporation, Effingham. 13 counties: Clark (17023),
+    # Clay (17025), Coles (17029), Crawford (17033), Cumberland (17035), Edgar
+    # (17045), Effingham (17049), Fayette (17051), Jasper (17079), Lawrence
+    # (17101), Marion (17121), Moultrie (17139), Richland (17159).
+    # FRED IL-county abbrevs that disambiguate counties starting with the same
+    # letters use a 4-letter abbrev + numeric suffix (CLAR3 = Clark; COLE3 =
+    # Coles; CUMB5 = Cumberland; EDGA5 = Edgar; MOUL9 = Moultrie).
+    ("eci_clark_unemployment_rate",     "ILCLAR3URN"),               # monthly
+    ("eci_clark_labor_force",           "ILCLAR3LFN"),
+    ("eci_clay_unemployment_rate",      "ILCYURN"),                  # monthly
+    ("eci_clay_labor_force",            "ILCYLFN"),
+    ("eci_coles_unemployment_rate",     "ILCOLE3URN"),               # monthly
+    ("eci_coles_labor_force",           "ILCOLE3LFN"),
+    ("eci_crawford_unemployment_rate",  "ILCWURN"),                  # monthly
+    ("eci_crawford_labor_force",        "ILCWLFN"),
+    ("eci_cumberland_unemployment_rate","ILCUMB5URN"),               # monthly
+    ("eci_cumberland_labor_force",      "ILCUMB5LFN"),
+    ("eci_edgar_unemployment_rate",     "ILEDGA5URN"),               # monthly
+    ("eci_edgar_labor_force",           "ILEDGA5LFN"),
+    ("eci_effingham_unemployment_rate", "ILEFURN"),                  # monthly
+    ("eci_effingham_labor_force",       "ILEFLFN"),
+    ("eci_fayette_unemployment_rate",   "ILFAURN"),                  # monthly
+    ("eci_fayette_labor_force",         "ILFALFN"),
+    ("eci_jasper_unemployment_rate",    "ILJSURN"),                  # monthly
+    ("eci_jasper_labor_force",          "ILJSLFN"),
+    ("eci_lawrence_unemployment_rate",  "ILLWURN"),                  # monthly
+    ("eci_lawrence_labor_force",        "ILLWLFN"),
+    ("eci_marion_unemployment_rate",    "ILMRURN"),                  # monthly
+    ("eci_marion_labor_force",          "ILMRLFN"),
+    ("eci_moultrie_unemployment_rate",  "ILMOUL9URN"),               # monthly
+    ("eci_moultrie_labor_force",        "ILMOUL9LFN"),
+    ("eci_richland_unemployment_rate",  "ILRIURN"),                  # monthly
+    ("eci_richland_labor_force",        "ILRILFN"),
+    # Annual panel for the other 12 LWA-23 counties (Coles already covered
+    # below under cle_coles_* for the /charleston city profile). 72 tuples =
+    # 12 counties × {personal_income, real_gdp, median_hh_income,
+    # snap_recipients, poverty_universe, single_parent_pct}. All verified
+    # against FRED 2026-05-28 — every entry returns 200.
+    ("eci_clark_personal_income",       "PI17023"),
+    ("eci_clark_real_gdp",              "REALGDPALL17023"),
+    ("eci_clark_median_hh_income",      "MHIIL17023A052NCEN"),
+    ("eci_clark_snap_recipients",       "CBR17023ILA647NCEN"),
+    ("eci_clark_poverty_universe",      "PUAAIL17023A647NCEN"),
+    ("eci_clark_single_parent_pct",     "S1101SPHOUSE017023"),
+    ("eci_clay_personal_income",        "PI17025"),
+    ("eci_clay_real_gdp",               "REALGDPALL17025"),
+    ("eci_clay_median_hh_income",       "MHIIL17025A052NCEN"),
+    ("eci_clay_snap_recipients",        "CBR17025ILA647NCEN"),
+    ("eci_clay_poverty_universe",       "PUAAIL17025A647NCEN"),
+    ("eci_clay_single_parent_pct",      "S1101SPHOUSE017025"),
+    ("eci_crawford_personal_income",    "PI17033"),
+    ("eci_crawford_real_gdp",           "REALGDPALL17033"),
+    ("eci_crawford_median_hh_income",   "MHIIL17033A052NCEN"),
+    ("eci_crawford_snap_recipients",    "CBR17033ILA647NCEN"),
+    ("eci_crawford_poverty_universe",   "PUAAIL17033A647NCEN"),
+    ("eci_crawford_single_parent_pct",  "S1101SPHOUSE017033"),
+    ("eci_cumberland_personal_income",  "PI17035"),
+    ("eci_cumberland_real_gdp",         "REALGDPALL17035"),
+    ("eci_cumberland_median_hh_income", "MHIIL17035A052NCEN"),
+    ("eci_cumberland_snap_recipients",  "CBR17035ILA647NCEN"),
+    ("eci_cumberland_poverty_universe", "PUAAIL17035A647NCEN"),
+    ("eci_cumberland_single_parent_pct","S1101SPHOUSE017035"),
+    ("eci_edgar_personal_income",       "PI17045"),
+    ("eci_edgar_real_gdp",              "REALGDPALL17045"),
+    ("eci_edgar_median_hh_income",      "MHIIL17045A052NCEN"),
+    ("eci_edgar_snap_recipients",       "CBR17045ILA647NCEN"),
+    ("eci_edgar_poverty_universe",      "PUAAIL17045A647NCEN"),
+    ("eci_edgar_single_parent_pct",     "S1101SPHOUSE017045"),
+    ("eci_effingham_personal_income",   "PI17049"),
+    ("eci_effingham_real_gdp",          "REALGDPALL17049"),
+    ("eci_effingham_median_hh_income",  "MHIIL17049A052NCEN"),
+    ("eci_effingham_snap_recipients",   "CBR17049ILA647NCEN"),
+    ("eci_effingham_poverty_universe",  "PUAAIL17049A647NCEN"),
+    ("eci_effingham_single_parent_pct", "S1101SPHOUSE017049"),
+    ("eci_fayette_personal_income",     "PI17051"),
+    ("eci_fayette_real_gdp",            "REALGDPALL17051"),
+    ("eci_fayette_median_hh_income",    "MHIIL17051A052NCEN"),
+    ("eci_fayette_snap_recipients",     "CBR17051ILA647NCEN"),
+    ("eci_fayette_poverty_universe",    "PUAAIL17051A647NCEN"),
+    ("eci_fayette_single_parent_pct",   "S1101SPHOUSE017051"),
+    ("eci_jasper_personal_income",      "PI17079"),
+    ("eci_jasper_real_gdp",             "REALGDPALL17079"),
+    ("eci_jasper_median_hh_income",     "MHIIL17079A052NCEN"),
+    ("eci_jasper_snap_recipients",      "CBR17079ILA647NCEN"),
+    ("eci_jasper_poverty_universe",     "PUAAIL17079A647NCEN"),
+    ("eci_jasper_single_parent_pct",    "S1101SPHOUSE017079"),
+    ("eci_lawrence_personal_income",    "PI17101"),
+    ("eci_lawrence_real_gdp",           "REALGDPALL17101"),
+    ("eci_lawrence_median_hh_income",   "MHIIL17101A052NCEN"),
+    ("eci_lawrence_snap_recipients",    "CBR17101ILA647NCEN"),
+    ("eci_lawrence_poverty_universe",   "PUAAIL17101A647NCEN"),
+    ("eci_lawrence_single_parent_pct",  "S1101SPHOUSE017101"),
+    ("eci_marion_personal_income",      "PI17121"),
+    ("eci_marion_real_gdp",             "REALGDPALL17121"),
+    ("eci_marion_median_hh_income",     "MHIIL17121A052NCEN"),
+    ("eci_marion_snap_recipients",      "CBR17121ILA647NCEN"),
+    ("eci_marion_poverty_universe",     "PUAAIL17121A647NCEN"),
+    ("eci_marion_single_parent_pct",    "S1101SPHOUSE017121"),
+    ("eci_moultrie_personal_income",    "PI17139"),
+    ("eci_moultrie_real_gdp",           "REALGDPALL17139"),
+    ("eci_moultrie_median_hh_income",   "MHIIL17139A052NCEN"),
+    ("eci_moultrie_snap_recipients",    "CBR17139ILA647NCEN"),
+    ("eci_moultrie_poverty_universe",   "PUAAIL17139A647NCEN"),
+    ("eci_moultrie_single_parent_pct",  "S1101SPHOUSE017139"),
+    ("eci_richland_personal_income",    "PI17159"),
+    ("eci_richland_real_gdp",           "REALGDPALL17159"),
+    ("eci_richland_median_hh_income",   "MHIIL17159A052NCEN"),
+    ("eci_richland_snap_recipients",    "CBR17159ILA647NCEN"),
+    ("eci_richland_poverty_universe",   "PUAAIL17159A647NCEN"),
+    ("eci_richland_single_parent_pct",  "S1101SPHOUSE017159"),
     # ──── Charleston, IL / Coles County / LWA-23 panel (2026-05-28) ────
     # Parallel substrate for the /charleston public page (mirrors the
     # crb_jackson_* + crb_msa_* Jackson County panel above). Coles County
