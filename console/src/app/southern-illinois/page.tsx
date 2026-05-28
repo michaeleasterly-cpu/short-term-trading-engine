@@ -253,6 +253,8 @@ type Lwa25ScoreRow = {
   safety: number;
   participation: number;
   health: number;
+  health_disab: number;
+  health_age65: number;
   housing: number;
   data_quality: string;
   severe_dimensions: string[];
@@ -274,7 +276,9 @@ function computeLwa25CityScores(rows: typeof LWA25_CITY_SCORE_INPUTS): Lwa25Scor
   return rows.map((r): Lwa25ScoreRow => {
     const safety = normAdverse(r.crime_total, r_crime);
     const participation = normPositive(r.lfpr, r_lfpr);
-    const health = (normAdverse(r.disab, r_disab) + normAdverse(r.age65, r_age65)) / 2;
+    const health_disab = normAdverse(r.disab, r_disab);
+    const health_age65 = normAdverse(r.age65, r_age65);
+    const health = (health_disab + health_age65) / 2;
     const housing = normAdverse(r.rent_burden, r_rb);
     const compositeRaw = (safety + participation + health + housing) / 4;
     const composite = Math.round(compositeRaw);
@@ -285,10 +289,17 @@ function computeLwa25CityScores(rows: typeof LWA25_CITY_SCORE_INPUTS): Lwa25Scor
       composite >= 50 ? "Watch" :
       composite >= 35 ? "Strained" : "Critical";
 
+    // Sub-component severe-flag check: Health splits into Disability + Age 65+
+    // sub-components. Either can collapse to 0 (min-max worst-in-set) while
+    // the dimension-level average masks it — e.g., Mt. Vernon Jefferson age65
+    // 22 + disab 73 → mean 48 looks healthy at the dimension level but the
+    // age-65+ sub-component is below the 25 threshold and should surface.
     const severe_dimensions: string[] = [];
     if (safety < 25) severe_dimensions.push("Safety");
     if (participation < 25) severe_dimensions.push("Participation");
     if (health < 25) severe_dimensions.push("Health");
+    else if (health_disab < 25) severe_dimensions.push("Health (disability)");
+    else if (health_age65 < 25) severe_dimensions.push("Health (age 65+)");
     if (housing < 25) severe_dimensions.push("Housing");
 
     return {
@@ -298,8 +309,10 @@ function computeLwa25CityScores(rows: typeof LWA25_CITY_SCORE_INPUTS): Lwa25Scor
       safety: Math.round(safety),
       participation: Math.round(participation),
       health: Math.round(health),
+      health_disab: Math.round(health_disab),
+      health_age65: Math.round(health_age65),
       housing: Math.round(housing),
-      data_quality: "4 of 4 dimensions · town safety + county proxies for participation + health + housing",
+      data_quality: "4 of 4 dimensions · town safety + county proxies for participation + health + housing; housing measures cost burden only, not stock vintage",
       severe_dimensions,
     };
   });
@@ -330,8 +343,8 @@ function Lwa25TownContextScoreSection() {
               <th style={{ padding: "8px 10px", fontWeight: 600 }}>Band</th>
               <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Safety</th>
               <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Particip.</th>
-              <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Health</th>
-              <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Housing</th>
+              <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Health<br /><span style={{ fontSize: 10, fontWeight: 400, color: "#7a756b" }}>D = disab · A = 65+%</span></th>
+              <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Housing<br /><span style={{ fontSize: 10, fontWeight: 400, color: "#7a756b" }}>(cost burden only)</span></th>
               <th style={{ padding: "8px 10px", fontWeight: 600 }}>Severe dim. (&lt;25)</th>
               <th style={{ padding: "8px 10px", fontWeight: 600 }}>Data quality</th>
             </tr>
@@ -353,7 +366,14 @@ function Lwa25TownContextScoreSection() {
                   </td>
                   <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: r.safety < 25 ? 700 : 400, color: r.safety < 25 ? "oklch(45% 0.20 22)" : "#5a564d" }}>{r.safety}</td>
                   <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: r.participation < 25 ? 700 : 400, color: r.participation < 25 ? "oklch(45% 0.20 22)" : "#5a564d" }}>{r.participation}</td>
-                  <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: r.health < 25 ? 700 : 400, color: r.health < 25 ? "oklch(45% 0.20 22)" : "#5a564d" }}>{r.health}</td>
+                  <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: r.health < 25 ? 700 : 400, color: r.health < 25 ? "oklch(45% 0.20 22)" : "#5a564d" }}>
+                    <div>{r.health}</div>
+                    <div style={{ fontSize: 10, marginTop: 2, color: "#7a756b", fontWeight: 400 }}>
+                      <span style={{ color: r.health_disab < 25 ? "oklch(45% 0.20 22)" : "#7a756b", fontWeight: r.health_disab < 25 ? 600 : 400 }}>D{r.health_disab}</span>
+                      {" · "}
+                      <span style={{ color: r.health_age65 < 25 ? "oklch(45% 0.20 22)" : "#7a756b", fontWeight: r.health_age65 < 25 ? 600 : 400 }}>A{r.health_age65}</span>
+                    </div>
+                  </td>
                   <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: r.housing < 25 ? 700 : 400, color: r.housing < 25 ? "oklch(45% 0.20 22)" : "#5a564d" }}>{r.housing}</td>
                   <td style={{ padding: "6px 10px", fontSize: 11, color: r.severe_dimensions.length > 0 ? "oklch(45% 0.20 22)" : "#7a756b", fontWeight: r.severe_dimensions.length > 0 ? 600 : 400 }}>
                     {r.severe_dimensions.length > 0 ? `⚠ ${r.severe_dimensions.join(" + ")}` : "—"}
@@ -366,7 +386,7 @@ function Lwa25TownContextScoreSection() {
         </table>
       </div>
       <div style={{ fontSize: 11, color: "#7a756b", lineHeight: 1.55 }}>
-        <strong>Methodology:</strong> Composite = mean of 4 dimensions, each 0-100 after min-max normalization across <em>this 10-town LWA-25 set only</em> — scores rank towns within LWA-25, not against IL or US benchmarks. <strong>Safety</strong> (weight 25) = inverted FBI UCR 2024 total crime per 1,000 (NeighborhoodScout / AreaVibes as labelled FBI-UCR carriers). <strong>Economic participation</strong> (weight 25) = county Labor Force Participation Rate (ACS 2024 5-year, B23025-derived equivalent of S2301). <strong>Health/access burden</strong> (weight 25) = mean of inverted county disability rate (B18101→S1810 equivalent) and inverted county age 65+ share (B01001→S0101 equivalent — <em>this is the actual 65+ %, not a median-age proxy</em>). <strong>Housing affordability</strong> (weight 25) = inverted county renter cost-burden share (ACS B25070). <strong>Within-LWA-25 bands</strong> (relative to this set; not statewide or national thresholds): Strong 80-100, Stable 65-79, Watch 50-64, Strained 35-49, Critical 0-34. <strong>Severe-dimension flag (⚠):</strong> any dimension scoring under 25 is surfaced in its own column even when the composite band looks healthy — equal weighting can otherwise mask single-axis distress. <strong>All inputs are sourced from FBI UCR 2024 (via NeighborhoodScout/AreaVibes carriers) + Census ACS 2024 5-year</strong>; no community-page score values are imported. ACS source URL: <a href="https://api.censusreporter.org/1.0/data/show/acs2024_5yr?table_ids=B18101,B01002,B01001,B23025,B25064,B25070,B25077,B25091&amp;geo_ids=05000US17055,05000US17077,05000US17081,05000US17145,05000US17199" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Census Reporter ACS 2024 5-yr · 5-county pull</a>.
+        <strong>Methodology:</strong> Composite = mean of 4 dimensions, each 0-100 after min-max normalization across <em>this 10-town LWA-25 set only</em> — scores rank towns within LWA-25, not against IL or US benchmarks. <strong>What 0 and 100 mean in this table:</strong> a dimension score of <strong>0 is the worst value within the 10-town LWA-25 set</strong> on that dimension (mathematically forced by min-max — e.g., Carbondale Safety 0 = highest crime in LWA-25 at 49.54/1k; Pinckneyville + Du Quoin Participation 0 = Perry County&apos;s 49.0% LFPR is the lowest in LWA-25; Benton + West Frankfort Health 0 = Franklin County&apos;s 21.3% disability and 21.0% age-65+ share are both the highest in LWA-25). A score of <strong>100 is the best value within the set</strong>. <strong>0 ≠ missing data.</strong> <strong>Safety</strong> (weight 25) = inverted FBI UCR 2024 total crime per 1,000 (NeighborhoodScout / AreaVibes as labelled FBI-UCR carriers). <strong>Economic participation</strong> (weight 25) = county Labor Force Participation Rate (ACS 2024 5-year, B23025-derived equivalent of S2301). <strong>Health/access burden</strong> (weight 25) = mean of <em>two sub-components shown inline as D (disability) · A (age 65+)</em>: inverted county disability rate (B18101→S1810 equivalent) and inverted county age 65+ share (B01001→S0101 equivalent — <em>this is the actual 65+ %, not a median-age proxy</em>). <strong>Housing</strong> (weight 25) = inverted county renter cost-burden share (ACS B25070). <strong>The Housing dimension measures rent-affordability / cost-burden only; it does NOT capture housing-stock age, vintage, or quality.</strong> Mt. Vernon scores 100 on Housing because Jefferson has the lowest renter cost-burden in LWA-25 (43.3%) — but Mt. Vernon&apos;s actual housing stock includes old pre-1970 single-family stock; the operator&apos;s lived signal on that gap is correct and not captured by the cost-burden measure (tracked in §19 Known Limits). <strong>Within-LWA-25 bands</strong> (relative to this set; not statewide or national thresholds): Strong 80-100, Stable 65-79, Watch 50-64, Strained 35-49, Critical 0-34. <strong>Severe-dimension flag (⚠):</strong> any dimension OR Health sub-component scoring under 25 is surfaced in its own column even when the composite band looks healthy — equal weighting can otherwise mask single-axis distress (e.g., Mt. Vernon Health D 73 · A 22 → dimension-mean 48 looks healthy, but the age-65+ sub-component is below 25 and the flag exposes it). <strong>All inputs are sourced from FBI UCR 2024 (via NeighborhoodScout/AreaVibes carriers) + Census ACS 2024 5-year</strong>; no community-page score values are imported. ACS source URL: <a href="https://api.censusreporter.org/1.0/data/show/acs2024_5yr?table_ids=B18101,B01002,B01001,B23025,B25064,B25070,B25077,B25091&amp;geo_ids=05000US17055,05000US17077,05000US17081,05000US17145,05000US17199" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>Census Reporter ACS 2024 5-yr · 5-county pull</a>.
       </div>
     </section>
   );
@@ -383,6 +403,11 @@ function KnownLimitsSection() {
       item: "Town context score · town-level safety vs county-proxy participation/health/housing",
       cls: "COUNTY_PROXY_BY_DESIGN",
       step: "The LWA-25 town context score uses town-specific FBI UCR 2024 data for the Safety dimension and county-level Census ACS 2024 5-yr data (B18101 disability, B01001 age 65+, B23025 LFPR, B25070 rent burden) for the other three dimensions. Census ACS 5-year does not publish reliable place-level estimates for towns below ~20k population, so county-level data is the finest-grained reliable resolution available for 9 of 10 LWA-25 towns (only Carbondale exceeds 20k and could be replaced with town-level place pulls in a follow-on; the current implementation uses county-level Jackson values for consistency across the LWA-25 ranking). Each row carries an explicit data_quality label so the proxy structure is visible. This is a documented design choice, not a defect.",
+    },
+    {
+      item: "Housing dimension measures cost burden, NOT stock vintage / quality",
+      cls: "DIMENSION_SCOPE_LIMIT",
+      step: "The Housing dimension on the §08 town context score is inverted county renter cost-burden share (ACS B25070) only. It does not measure housing-stock age, structural quality, or vintage. Mt. Vernon (Jefferson) scores 100 on Housing because Jefferson has the lowest renter cost-burden share in LWA-25 (43.3%) — but Mt. Vernon's actual housing stock is documented as pre-1970-dominant in the §11 housing-affordability section (B25034 year-structure-built shows this pattern even with the Continental Tire anchor failing to pull new residential construction). The 100 Housing score on Mt. Vernon reflects affordability only, not stock quality. Operator's lived signal on Mt. Vernon old housing is correct and not captured by the composite. A town-level housing-stock-vintage augmentation (B25034 at place level for towns >20k pop) would be additive but is not currently in the composite.",
     },
     {
       item: "ORI codes for the 10 LWA-25 reporting agencies",
@@ -416,7 +441,7 @@ function KnownLimitsSection() {
           <tbody>
             {items.map((r, i) => {
               const clsColor = r.cls.startsWith("PARTIALLY CLOSED") || r.cls.startsWith("CLOSED") ? "oklch(40% 0.16 142)"
-                : r.cls.startsWith("COUNTY_PROXY") || r.cls.startsWith("PUBLIC_IDENTIFIER") || r.cls.startsWith("TIME-WINDOWED") ? "oklch(45% 0.18 60)"
+                : r.cls.startsWith("COUNTY_PROXY") || r.cls.startsWith("DIMENSION_SCOPE") || r.cls.startsWith("PUBLIC_IDENTIFIER") || r.cls.startsWith("TIME-WINDOWED") ? "oklch(45% 0.18 60)"
                 : "oklch(45% 0.20 22)";
               return (
                 <tr key={i} style={{ borderTop: i === 0 ? "none" : "1px solid #ebe5d6" }}>

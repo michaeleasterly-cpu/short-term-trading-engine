@@ -122,9 +122,11 @@ section { margin-top: 14px; scroll-margin-top: 64px; }
 .sources { margin-top: 14px; font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--ink-3); line-height: 1.5; }
 .sources::before { content: "Sources ·"; letter-spacing: 0.12em; text-transform: uppercase; font-weight: 500; color: var(--ink-4); margin-right: 6px; }
 
-footer.dashboard-footer { margin-top: 80px; padding-top: 28px; border-top: 1px solid var(--rule); display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 30px; font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--ink-3); }
-footer.dashboard-footer h5 { font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-2); margin: 0 0 8px; font-weight: 500; }
-footer.dashboard-footer a { color: var(--ink-2); }
+footer.dashboard-footer { margin-top: 80px; padding: 32px 24px 24px; border-top: 3px solid var(--ink); background: var(--card-2); display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 36px; font-family: "IBM Plex Mono", monospace; font-size: 13px; color: var(--ink); }
+footer.dashboard-footer h5 { font-size: 11.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink); margin: 0 0 14px; font-weight: 700; border-bottom: 2px solid var(--ink); padding-bottom: 6px; }
+footer.dashboard-footer a { color: var(--ink); font-weight: 500; text-decoration: underline; text-decoration-color: var(--ink-4); text-underline-offset: 3px; line-height: 1.9; }
+footer.dashboard-footer a:hover { color: oklch(45% 0.18 240); text-decoration-color: oklch(45% 0.18 240); }
+footer.dashboard-footer > div > div { line-height: 1.9; }
 
 @media (max-width: 1100px) {
   .hero { grid-template-columns: 1fr; gap: 28px; }

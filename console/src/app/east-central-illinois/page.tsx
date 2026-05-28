@@ -238,6 +238,8 @@ type ScoreRow = {
   safety: number | null;
   participation: number;
   health: number;
+  health_disab: number;
+  health_age: number;
   housing: number;
   data_quality: string;
   severe_dimensions: string[];
@@ -259,7 +261,9 @@ function computeCityScores(rows: typeof CITY_SCORE_INPUTS): ScoreRow[] {
   return rows.map((r): ScoreRow => {
     const safety = r.crime_total === null ? null : normAdverse(r.crime_total, r_crime);
     const participation = normPositive(r.lfpr, r_lfpr);
-    const health = (normAdverse(r.disab, r_disab) + normAdverse(r.age, r_age)) / 2;
+    const health_disab = normAdverse(r.disab, r_disab);
+    const health_age = normAdverse(r.age, r_age);
+    const health = (health_disab + health_age) / 2;
     const housing = normAdverse(r.rent_burden, r_rb);
 
     const dims: Array<{ score: number; w: number }> = [
@@ -270,7 +274,7 @@ function computeCityScores(rows: typeof CITY_SCORE_INPUTS): ScoreRow[] {
     if (safety !== null) dims.push({ score: safety, w: 25 });
 
     if (dims.length < 3) {
-      return { town: r.town, county: r.county, composite: null, grade: "Insufficient data", safety, participation, health, housing, data_quality: "below threshold", severe_dimensions: [] };
+      return { town: r.town, county: r.county, composite: null, grade: "Insufficient data", safety, participation, health, health_disab: Math.round(health_disab), health_age: Math.round(health_age), housing, data_quality: "below threshold", severe_dimensions: [] };
     }
     const tw = dims.reduce((s, d) => s + d.w, 0);
     const composite = dims.reduce((s, d) => s + d.score * d.w, 0) / tw;
@@ -282,15 +286,21 @@ function computeCityScores(rows: typeof CITY_SCORE_INPUTS): ScoreRow[] {
       composite >= 35 ? "Strained" : "Critical";
 
     const data_quality = safety === null
-      ? "3 of 4 dimensions · safety excluded (no FBI UCR town row); participation + health + housing are county proxies"
-      : "4 of 4 dimensions · town safety + county proxies for participation + health + housing";
+      ? "3 of 4 dimensions · safety excluded (no FBI UCR town row); participation + health + housing are county proxies; housing measures cost burden only, not stock vintage"
+      : "4 of 4 dimensions · town safety + county proxies for participation + health + housing; housing measures cost burden only, not stock vintage";
 
-    // Severe-dimension flag: any included dimension scoring below 25 surfaces here
-    // so a Watch/Stable composite can't silently mask single-axis distress.
+    // Severe-dimension flag: any included dimension or Health sub-component
+    // scoring below 25 surfaces here so a Watch/Stable composite can't silently
+    // mask single-axis distress. Health is split into Disability + Median-age
+    // sub-components because each can collapse independently (mathematically
+    // forced by min-max — e.g., Lawrenceville Disability 0 + Age 71 → mean 35,
+    // dimension-level flag misses the disability collapse without sub-checks).
     const severe_dimensions: string[] = [];
     if (safety !== null && safety < 25) severe_dimensions.push("Safety");
     if (participation < 25) severe_dimensions.push("Participation");
     if (health < 25) severe_dimensions.push("Health");
+    else if (health_disab < 25) severe_dimensions.push("Health (disability)");
+    else if (health_age < 25) severe_dimensions.push("Health (median age)");
     if (housing < 25) severe_dimensions.push("Housing");
 
     return {
@@ -300,6 +310,8 @@ function computeCityScores(rows: typeof CITY_SCORE_INPUTS): ScoreRow[] {
       safety: safety === null ? null : Math.round(safety),
       participation: Math.round(participation),
       health: Math.round(health),
+      health_disab: Math.round(health_disab),
+      health_age: Math.round(health_age),
       housing: Math.round(housing),
       data_quality,
       severe_dimensions,
@@ -1557,8 +1569,8 @@ export default async function EastCentralIllinoisPage() {
                     <th style={{ padding: "8px 10px", fontWeight: 600 }}>Band</th>
                     <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Safety</th>
                     <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Particip.</th>
-                    <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Health</th>
-                    <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Housing</th>
+                    <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Health<br /><span style={{ fontSize: 10, fontWeight: 400, color: "#7a756b" }}>D = disab · A = age</span></th>
+                    <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Housing<br /><span style={{ fontSize: 10, fontWeight: 400, color: "#7a756b" }}>(cost burden only)</span></th>
                     <th style={{ padding: "8px 10px", fontWeight: 600 }}>Severe dim. (&lt;25)</th>
                     <th style={{ padding: "8px 10px", fontWeight: 600 }}>Data quality</th>
                   </tr>
@@ -1582,7 +1594,14 @@ export default async function EastCentralIllinoisPage() {
                         </td>
                         <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: r.safety !== null && r.safety < 25 ? 700 : 400, color: r.safety !== null && r.safety < 25 ? "oklch(45% 0.20 22)" : "#5a564d" }}>{r.safety !== null ? r.safety : "n/a"}</td>
                         <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: r.participation < 25 ? 700 : 400, color: r.participation < 25 ? "oklch(45% 0.20 22)" : "#5a564d" }}>{r.participation}</td>
-                        <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: r.health < 25 ? 700 : 400, color: r.health < 25 ? "oklch(45% 0.20 22)" : "#5a564d" }}>{r.health}</td>
+                        <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: r.health < 25 ? 700 : 400, color: r.health < 25 ? "oklch(45% 0.20 22)" : "#5a564d" }}>
+                          <div>{r.health}</div>
+                          <div style={{ fontSize: 10, marginTop: 2, color: "#7a756b", fontWeight: 400 }}>
+                            <span style={{ color: r.health_disab < 25 ? "oklch(45% 0.20 22)" : "#7a756b", fontWeight: r.health_disab < 25 ? 600 : 400 }}>D{r.health_disab}</span>
+                            {" · "}
+                            <span style={{ color: r.health_age < 25 ? "oklch(45% 0.20 22)" : "#7a756b", fontWeight: r.health_age < 25 ? 600 : 400 }}>A{r.health_age}</span>
+                          </div>
+                        </td>
                         <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: r.housing < 25 ? 700 : 400, color: r.housing < 25 ? "oklch(45% 0.20 22)" : "#5a564d" }}>{r.housing}</td>
                         <td style={{ padding: "6px 10px", fontSize: 11, color: r.severe_dimensions.length > 0 ? "oklch(45% 0.20 22)" : "#7a756b", fontWeight: r.severe_dimensions.length > 0 ? 600 : 400 }}>
                           {r.severe_dimensions.length > 0 ? `⚠ ${r.severe_dimensions.join(" + ")}` : "—"}
@@ -1595,7 +1614,7 @@ export default async function EastCentralIllinoisPage() {
               </table>
             </div>
             <div style={{ fontSize: 11, color: "#7a756b", lineHeight: 1.55 }}>
-              <strong>Methodology:</strong> Composite = mean of included dimension scores, each 0-100 after min-max normalization across <em>this 14-town LWA-23 set only</em> — scores rank towns within LWA-23, not against IL or US benchmarks. <strong>Safety</strong> (weight 25) = inverted FBI UCR 2024 total crime per 1,000 (§15 CITY_CRIME); single-year, one-year denominator-volatility caveat already disclosed in the §15 footnote. <strong>Economic participation</strong> (weight 25) = county Labor Force Participation Rate, ACS S2301 (§02). <strong>Health/access burden</strong> (weight 25) = mean of inverted county disability rate (ACS S1810) and inverted county median age (ACS S0101) — <em>median age is an adverse proxy for elderly share; it is not the same as ACS 65+% share. Page does not have S0101 age-65+ % loaded; using median age as labelled proxy.</em> <strong>Housing affordability</strong> (weight 25) = inverted county renter cost-burden share (ACS B25070, §17). <strong>Within-LWA-23 bands</strong> (relative to this set; not statewide or national thresholds): Strong 80-100, Stable 65-79, Watch 50-64, Strained 35-49, Critical 0-34. <strong>Severe-dimension flag (⚠):</strong> any dimension scoring under 25 is surfaced in its own column even when the composite band looks healthy — equal weighting can otherwise mask single-axis distress (e.g., a town with very low crime can land in Watch despite collapsed LFPR). <strong>Fallback rule:</strong> Toledo and Flora have no per-town FBI UCR row; safety is excluded (not imputed) and the composite uses 3 of 4 dimensions per the spec&apos;s &quot;at least 3 of 4&quot; threshold. <strong>All inputs are sourced from data already on this page</strong> (§02 + §15 + §17); no community-page score values are imported.
+              <strong>Methodology:</strong> Composite = mean of included dimension scores, each 0-100 after min-max normalization across <em>this 14-town LWA-23 set only</em> — scores rank towns within LWA-23, not against IL or US benchmarks. <strong>What 0 and 100 mean in this table:</strong> a dimension score of <strong>0 is the worst value within the 14-town LWA-23 set</strong> on that dimension (mathematically forced by min-max — e.g., Effingham Safety 0 = highest crime in LWA-23 at 21.63/1k; Lawrenceville Participation 0 = lowest LFPR in LWA-23 at 51.4%); a score of <strong>100 is the best value within the set</strong>. <strong>0 ≠ missing data</strong> — missing values display as &quot;n/a&quot; (Toledo + Flora carry n/a for Safety because they have no FBI UCR town row, and their composite drops to 3-of-4 dimensions). <strong>Safety</strong> (weight 25) = inverted FBI UCR 2024 total crime per 1,000 (§15 CITY_CRIME); single-year, one-year denominator-volatility caveat already disclosed in the §15 footnote. <strong>Economic participation</strong> (weight 25) = county Labor Force Participation Rate, ACS S2301 (§02). <strong>Health/access burden</strong> (weight 25) = mean of <em>two sub-components shown inline as D (disability) · A (age)</em>: inverted county disability rate (ACS S1810) and inverted county median age (ACS S0101). <em>Median age is an adverse proxy for elderly share, not ACS 65+% share.</em> <strong>Housing</strong> (weight 25) = inverted county renter cost-burden share (ACS B25070, §17). <strong>The Housing dimension measures rent-affordability / cost-burden only; it does NOT capture housing-stock age, vintage, or quality.</strong> A town can score 100 on Housing because its county has the lowest rent burden in the set while still carrying old or low-quality housing stock — that gap is tracked in §24 Known Limits, not in this score. <strong>Within-LWA-23 bands</strong> (relative to this set; not statewide or national thresholds): Strong 80-100, Stable 65-79, Watch 50-64, Strained 35-49, Critical 0-34. <strong>Severe-dimension flag (⚠):</strong> any dimension OR Health sub-component scoring under 25 is surfaced in its own column even when the composite band looks healthy — equal weighting can otherwise mask single-axis distress (e.g., Lawrenceville Health D 0 · A 71 → mean 35 looks healthy at the dimension level, but the Disability sub-component is at the worst-in-set floor; the sub-component flag exposes it). <strong>Fallback rule:</strong> Toledo and Flora have no per-town FBI UCR row; safety is excluded (not imputed) and the composite uses 3 of 4 dimensions per the spec&apos;s &quot;at least 3 of 4&quot; threshold. <strong>All inputs are sourced from data already on this page</strong> (§02 + §15 + §17); no community-page score values are imported.
             </div>
           </div>
         </section>
@@ -2348,9 +2367,14 @@ export default async function EastCentralIllinoisPage() {
                     cls: "COUNTY_PROXY_BY_DESIGN",
                     step: "The LWA-23 town context score in §15 (internal comparative index, 0-100 within LWA-23) uses town-specific FBI UCR data for the Safety dimension and county-level Census ACS data (S1810 disability, S0101 median age, S2301 LFPR, B25070 rent burden) for the other three dimensions. Census ACS 5-year does not publish sub-tract estimates for places under ~20k population, so county-level data is the finest-grained reliable resolution available for 13 of 14 LWA-23 towns. Toledo (pop 1,209) and Flora (Clay county) have no per-town FBI UCR row; their composites score on 3 of 4 dimensions with safety excluded — not imputed from neighboring towns or county-wide sheriff data. Each row carries an explicit data_quality label so the proxy structure is visible. This is a documented design choice, not a defect.",
                   },
+                  {
+                    item: "Housing dimension measures cost burden, NOT stock vintage / quality",
+                    cls: "DIMENSION_SCOPE_LIMIT",
+                    step: "The Housing dimension on the §15 town context score is inverted county renter cost-burden share (ACS B25070) only. It does not measure housing-stock age (median year built), structural quality, or owner-occupied vs rental mix at the town level. A town can score 100 on Housing because its county has the lowest renter cost-burden share in the LWA-23 set while still carrying old housing stock, structural age, or rural-vintage limitations — those signals are not in the composite. The §17 housing-affordability section discloses the underlying ACS data; a town-level housing-stock-vintage augmentation (B25034 year-structure-built at place level for towns >20k pop) would be additive but is not currently in the composite.",
+                  },
                 ].map((r, i) => {
                   const clsColor = r.cls === "CLOSED" || r.cls.startsWith("CLOSED") || r.cls.startsWith("PARTIALLY CLOSED") || r.cls.startsWith("Confirmable") ? "oklch(40% 0.16 142)"
-                    : r.cls.startsWith("COUNTY_PROXY_BY_DESIGN") || r.cls.startsWith("PUBLIC_IDENTIFIER_ONLY") || r.cls.startsWith("Requires API") || r.cls.startsWith("Requires interactive") ? "oklch(45% 0.18 60)"
+                    : r.cls.startsWith("COUNTY_PROXY_BY_DESIGN") || r.cls.startsWith("DIMENSION_SCOPE_LIMIT") || r.cls.startsWith("PUBLIC_IDENTIFIER_ONLY") || r.cls.startsWith("Requires API") || r.cls.startsWith("Requires interactive") ? "oklch(45% 0.18 60)"
                     : r.cls.startsWith("Requires paid") || r.cls.startsWith("Requires PDF") ? "oklch(45% 0.18 60)"
                     : "oklch(45% 0.20 22)";
                   return (
