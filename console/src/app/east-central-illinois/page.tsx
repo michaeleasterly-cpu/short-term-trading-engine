@@ -1280,7 +1280,7 @@ export default async function EastCentralIllinoisPage() {
                   </tr>
                 ))}
                 <tr style={{ borderTop: "1px solid #ebe5d6", background: "#fef9eb" }}>
-                  <td style={{ padding: "8px 10px", fontWeight: 700 }}>4-county total</td>
+                  <td style={{ padding: "8px 10px", fontWeight: 700 }}>4-county → IN total</td>
                   <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700 }}>1,214</td>
                   <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700 }}>1,173</td>
                   <td style={{ padding: "8px 10px", fontSize: 11, color: "#5a564d" }}>2,387 LWA-23 residents cross the state line to work in 2 IN counties</td>
@@ -1288,8 +1288,41 @@ export default async function EastCentralIllinoisPage() {
               </tbody>
             </table>
           </div>
+          <h3 style={{ fontSize: 15, fontWeight: 600, color: "#1f1d18", marginTop: 16, marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+            Verified Marion County → St. Louis Metro East flow (LEHD LODES 2021)
+          </h3>
+          <div style={{ background: "white", border: "1px solid #d8d2c4", borderRadius: 6, overflow: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+              <thead>
+                <tr style={{ background: "#f0ece1", textAlign: "left", borderBottom: "1px solid #d8d2c4" }}>
+                  <th style={{ padding: "8px 10px", fontWeight: 600 }}>Marion County, IL residents working in MO county</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600, textAlign: "right" }}>Commuters</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[
+                  { c: "St. Louis County MO", n: 344 },
+                  { c: "St. Louis City MO", n: 225 },
+                  { c: "St. Charles MO", n: 40 },
+                  { c: "Jefferson MO", n: 38 },
+                  { c: "Franklin MO", n: 6 },
+                ].map((r, i) => (
+                  <tr key={i} style={{ borderTop: i === 0 ? "none" : "1px solid #ebe5d6" }}>
+                    <td style={{ padding: "6px 10px", fontWeight: 600 }}>{r.c}</td>
+                    <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: 600 }}>{r.n}</td>
+                  </tr>
+                ))}
+                <tr style={{ borderTop: "1px solid #ebe5d6", background: "#fef9eb" }}>
+                  <td style={{ padding: "6px 10px", fontWeight: 700 }}>Marion IL → STL Metro East total</td>
+                  <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: 700 }}>653 (84% of Marion's 773 total MO commuters)</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
           <div style={{ padding: 14, background: "#fef9eb", border: "1px solid #f0d98a", borderRadius: 6, fontSize: 13, color: "#3d3a33", lineHeight: 1.55, marginTop: 12 }}>
-            <strong>Strategic implication:</strong> Lawrence County&apos;s LFPR 51.4% (worst in footprint, §02) is partially explained by the 925-commuter outflow to Knox IN — those workers ARE in the labor force, just not in the IL count. The Lawrence Correctional Center can&apos;t employ everyone, so a significant share of working-age Lawrence residents work in Vincennes IN. <strong>Cross-state placement-agreement pathway for CEFS:</strong> 2,387 LWA-23 → IN commuters is a meaningful number; formal Workforce Innovation cross-state coordination with Indiana Region 7 / Region 8 workforce boards could capture additional placement opportunities (Lawrence + Edgar + Clark have the strongest existing flows). Source: <a href="https://lehd.ces.census.gov/data/lodes/LODES8/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>LEHD LODES 8 / 2021 vintage</a> · in_od_aux IL-residence-to-IN-workplace pairs · LWA-23 4-county extraction 2026-05-28.
+            <strong>Strategic implication:</strong> Lawrence County&apos;s LFPR 51.4% (worst in footprint, §02) is partially explained by the 925-commuter outflow to Knox IN — those workers ARE in the labor force, just not in the IL count. The Lawrence Correctional Center can&apos;t employ everyone, so a significant share of working-age Lawrence residents work in Vincennes IN. Marion County&apos;s 38.5%-rent-burdened, 18.7%-disability profile is similarly amplified by the 653-commuter outflow to St. Louis Metro East (Marion → STL is a ~75-mi I-64 corridor, requires a car — not transit-accessible).
+            <br /><br />
+            <strong>Cross-state placement-agreement pathway for CEFS:</strong> 2,387 LWA-23 → IN commuters + 1,790 LWA-23 → MO commuters = <strong>4,177 cross-state commuters</strong>. Formal Workforce Innovation cross-state coordination with Indiana Region 7 (Wabash Valley) + the MO Workforce Development Board St. Louis would capture additional placement opportunities. Source: <a href="https://lehd.ces.census.gov/data/lodes/LODES8/" target="_blank" rel="noopener noreferrer" style={{ color: "#1f5f8f" }}>LEHD LODES 8 / 2021 vintage</a> · in_od_aux + mo_od_aux IL-residence pairs · LWA-23 13-county extraction 2026-05-28.
           </div>
         </section>
 
