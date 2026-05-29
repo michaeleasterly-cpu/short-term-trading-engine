@@ -98,8 +98,10 @@ def _load_json(value: Any) -> dict[str, Any]:
 CONSOLE_VALIDATION_CHECKS: list[str] = [
     "prices_daily_completeness",
     "prices_daily_freshness",
+    "prices_daily_classification_id_completeness",
     "fundamentals_quarterly_completeness",
     "corporate_actions_completeness",
+    "corporate_actions_integrity",
     "macro_indicators_completeness",
     "macro_indicators_freshness",
     "earnings_events_freshness",
@@ -114,13 +116,24 @@ CONSOLE_VALIDATION_CHECKS: list[str] = [
     "aaii_sentiment_freshness",
     "social_sentiment_freshness",
     "short_interest_freshness",
-    "tradier_options_chain",
-    "alpaca_corporate_actions",
-    "ingest_manifest_loaded",
-    "ingest_quarantine_review",
+    "insider_sentiment_freshness",
+    # insider_filings_freshness was RETIRED on 2026-05-25 (P0_3) —
+    # no longer produced by the validation suite. Listing it here
+    # surfaces as a stuck UNKNOWN (no data_quality_log row in 72h).
     "issuer_history_integrity",
     "issuer_securities_integrity",
     "corporate_events_integrity",
+    "liquidity_tiers_completeness",
+    "liquidity_tiers_freshness",
+    "fundamentals_integrity",
+    # NOTE: removed (no validator implementation, no
+    # data_quality_log rows ever written):
+    #   * tradier_options_chain
+    #   * alpaca_corporate_actions
+    #   * ingest_manifest_loaded
+    #   * ingest_quarantine_review
+    # These were speculative phantom checks. The console now lists
+    # only checks the validation suite actually produces.
 ]
 
 
@@ -357,6 +370,49 @@ CHECK_REMEDIATION: dict[str, dict[str, Any]] = {
         "scope_kind": "full",
         "estimated_runtime_seconds": 60,
     },
+    # ─── additional checks the validation suite actually writes ───
+    "prices_daily_classification_id_completeness": {
+        "class": "scoped_auto_heal",
+        "stage": "sec_orphan_resolve",
+        "params": {"phase_b": True, "phase_c": True},
+        "scope_kind": "tickers",
+        "estimated_runtime_seconds": 180,
+    },
+    "corporate_actions_integrity": {
+        "class": "operator_required",
+        "operator_procedure": (
+            "Per-row integrity violation in corporate_actions. "
+            "Run tpcore audit cleanup procedure after operator review."
+        ),
+    },
+    "insider_sentiment_freshness": {
+        "class": "full_stage_required",
+        "stage": "finnhub_insider_sentiment",
+        "params": {"skip_guard_days": 0},
+        "scope_kind": "full",
+        "estimated_runtime_seconds": 60,
+    },
+    "liquidity_tiers_completeness": {
+        "class": "full_stage_required",
+        "stage": "tier_refresh",
+        "params": {"skip_guard_days": 0},
+        "scope_kind": "full",
+        "estimated_runtime_seconds": 240,
+    },
+    "liquidity_tiers_freshness": {
+        "class": "full_stage_required",
+        "stage": "tier_refresh",
+        "params": {"skip_guard_days": 0},
+        "scope_kind": "full",
+        "estimated_runtime_seconds": 240,
+    },
+    "fundamentals_integrity": {
+        "class": "operator_required",
+        "operator_procedure": (
+            "Fundamentals-table integrity violation (orphan rows, "
+            "duplicate quarter keys, etc). Audit + manual cleanup."
+        ),
+    },
     # ─── secondary feeds ───
     "tradier_options_chain": {
         "class": "not_implemented",
@@ -494,6 +550,9 @@ async def _fetch_kpis(conn: asyncpg.Connection) -> dict[str, Any]:
     # Validation pass/warn/fail rollup from the latest-per-source rows
     # of data_quality_log. PASS = not stale AND confidence >= 1.0;
     # FAIL = stale OR confidence < 0.5; WARN otherwise.
+    # ``stale`` is dispositive — see _classify_validation_row docstring.
+    # 2026-05-29 fix: align KPI rollup with the per-row rule. A vacuously-
+    # true check (confidence=0.0 + stale=False) is PASS, not FAIL.
     counts = await conn.fetchrow(
         """
         WITH latest AS (
@@ -504,14 +563,17 @@ async def _fetch_kpis(conn: asyncpg.Connection) -> dict[str, Any]:
             ORDER BY source, timestamp DESC
         )
         SELECT
-            COUNT(*) FILTER (WHERE NOT stale AND confidence >= 1.0)
-                AS passed,
-            COUNT(*) FILTER (WHERE NOT stale
-                AND confidence >= 0.5 AND confidence < 1.0)
-                AS warnings,
-            COUNT(*) FILTER (WHERE stale OR confidence < 0.5)
-                AS failed,
-            COALESCE(MIN(confidence), 0) AS min_confidence
+            COUNT(*) FILTER (
+                WHERE NOT stale
+                  AND (confidence = 0 OR confidence >= 1.0)
+            ) AS passed,
+            COUNT(*) FILTER (
+                WHERE NOT stale
+                  AND confidence > 0
+                  AND confidence < 1.0
+            ) AS warnings,
+            COUNT(*) FILTER (WHERE stale) AS failed,
+            COALESCE(MIN(NULLIF(confidence, 0)), 0) AS min_confidence
         FROM latest
         """
     )
@@ -741,12 +803,31 @@ def _extract_failed_symbols(
 
 
 def _classify_validation_row(row: dict[str, Any]) -> str:
-    """Apply the data-acceptance gate rule. Stale OR low confidence is
-    FAIL; medium confidence is WARN; high confidence is PASS."""
+    """Apply the data-acceptance gate rule.
+
+    The validator's ``stale`` field is **dispositive** — the suite sets
+    ``stale = not check.passed``. So ``stale=False`` already means the
+    check explicitly passed. Confidence is a secondary quality signal.
+
+    2026-05-29 fix: prior logic ``stale OR conf < 0.5 → FAIL`` mis-
+    classified vacuously-true checks (e.g. integrity checks on empty
+    sub-tables → confidence=0.0 by ``_confidence(check.total<=0)`` but
+    ``stale=False`` because the check did pass). The console rendered
+    those as FAIL even though the underlying lane was healthy.
+
+    Rule:
+      * stale=True                                  → FAIL
+      * stale=False AND confidence==0 (vacuous OK)  → PASS
+      * stale=False AND 0 < confidence < 1.0 (partial) → WARN
+      * stale=False AND confidence >= 1.0           → PASS
+    """
     stale = bool(row.get("stale"))
-    conf = float(row.get("confidence") or 0)
-    if stale or conf < 0.5:
+    if stale:
         return "FAIL"
+    conf = float(row.get("confidence") or 0)
+    if conf == 0.0:
+        # Vacuously-true — check passed with no rows to evaluate.
+        return "PASS"
     if conf < 1.0:
         return "WARN"
     return "PASS"
