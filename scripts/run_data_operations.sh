@@ -405,6 +405,24 @@ _log_event INGESTION_START wrapper_datasupervisor
 DATABASE_URL="${DATABASE_URL_IPV4:-$DATABASE_URL}" "$PY" -m tpcore.datasupervisor || true
 _log_event INGESTION_COMPLETE wrapper_datasupervisor
 
+# Step 4e — allocator heartbeat (writes platform.daemon_heartbeats so
+# daemon_freshness check stops surfacing 'allocator' as STALE; spawns
+# the allocator subprocess if should_fire() returns True). The
+# heartbeat function is a thin safety net — should_fire's gate ladder
+# (profiled → cadence → market-closed → supervisor hold → data ready →
+# not already ran) handles the no-op cases structurally, so calling it
+# every daily-ops cycle is idempotent. Added 2026-05-29: there's no
+# Railway service for the allocator (engine_dispatch.py event-driven
+# path covers the canonical fire); without this call the heartbeat
+# row would never write, daemon_freshness stays RED, and
+# DATA_OPERATIONS_COMPLETE never emits.
+echo ""
+echo "▶ STEP 4e / 6  allocator heartbeat"
+echo "────────────────────────────────────────────────────────────────────────"
+_log_event INGESTION_START wrapper_allocator_heartbeat
+DATABASE_URL="${DATABASE_URL_IPV4:-$DATABASE_URL}" "$PY" -m ops.allocator_heartbeat || true
+_log_event INGESTION_COMPLETE wrapper_allocator_heartbeat
+
 # Step 5 — compress any CSVs left behind by the backfill scripts.
 echo ""
 echo "▶ STEP 5 / 6  compress backfill CSVs"
