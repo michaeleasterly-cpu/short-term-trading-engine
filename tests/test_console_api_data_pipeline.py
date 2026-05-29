@@ -37,6 +37,21 @@ import pytest
 _REPO = Path(__file__).resolve().parents[1]
 _CONSOLE_API = _REPO / "console-api"
 
+# CI venv has no fastapi (mirrors the streamlit precedent in
+# .claude/rules/tests-and-ci.md — "CI venv has no streamlit → never
+# import dashboard.py in a CI test"). console-api/main.py imports
+# fastapi, so the tests that load main.py only run when fastapi is
+# available locally. The data_pipeline module tests (most of the
+# file) need only asyncpg + json and run everywhere.
+_fastapi_required = pytest.mark.skipif(
+    importlib.util.find_spec("fastapi") is None,
+    reason=(
+        "fastapi not installed in this env — console-api/main.py "
+        "tests are operator-local only (matches the streamlit/CI "
+        "precedent in .claude/rules/tests-and-ci.md)"
+    ),
+)
+
 
 @pytest.fixture(scope="module")
 def data_pipeline_module():
@@ -420,6 +435,7 @@ async def test_active_run_conflict_returns_conflict_error(data_pipeline_module):
 # ───────────────── TEST-011 / TEST-012 ─────────────────
 
 
+@_fastapi_required
 def test_bearer_token_guard_503_when_unset(
     console_api_app, monkeypatch,
 ):
@@ -441,6 +457,7 @@ def test_bearer_token_guard_503_when_unset(
         sys.path.remove(str(_CONSOLE_API))
 
 
+@_fastapi_required
 def test_bearer_token_guard_403_on_invalid_token(monkeypatch):
     """REQ-008: a request with a non-matching bearer token is 403."""
     monkeypatch.setenv("CONSOLE_OPS_TOKEN", "the-right-token")
@@ -459,6 +476,7 @@ def test_bearer_token_guard_403_on_invalid_token(monkeypatch):
         sys.path.remove(str(_CONSOLE_API))
 
 
+@_fastapi_required
 def test_bearer_token_guard_accepts_valid_token(monkeypatch):
     """Happy path — the right token is accepted, returns 'operator'."""
     monkeypatch.setenv("CONSOLE_OPS_TOKEN", "the-right-token")
@@ -475,6 +493,7 @@ def test_bearer_token_guard_accepts_valid_token(monkeypatch):
         sys.path.remove(str(_CONSOLE_API))
 
 
+@_fastapi_required
 def test_bearer_token_actor_header_accepted_when_bearer_valid(monkeypatch):
     """When the bearer is valid AND X-Console-Actor is set, the actor
     string flows from the header. This is how the Next.js forwarder
@@ -494,6 +513,7 @@ def test_bearer_token_actor_header_accepted_when_bearer_valid(monkeypatch):
         sys.path.remove(str(_CONSOLE_API))
 
 
+@_fastapi_required
 def test_bearer_token_actor_header_ignored_when_bearer_invalid(monkeypatch):
     """An attacker who guesses the X-Console-Actor header but lacks
     the bearer token must still get 403 — the actor header is NOT a
@@ -554,6 +574,7 @@ async def test_active_job_shape_matches_contract(data_pipeline_module):
 # ───────────────── REQ-002 cache headers ─────────────────
 
 
+@_fastapi_required
 @pytest.mark.asyncio
 async def test_data_pipeline_endpoint_sets_no_store_headers(console_api_app):
     """REQ-002: the endpoint sets Cache-Control: no-store + Pragma:
