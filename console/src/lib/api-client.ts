@@ -8,15 +8,160 @@
 const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE || "https://console-api-production-4576.up.railway.app";
 
-async function fetchJSON<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
+async function fetchJSON<T>(
+  path: string,
+  opts: { useConsoleApi?: boolean } = { useConsoleApi: true },
+): Promise<T> {
+  // useConsoleApi=true (default) → call console-api directly. Used
+  // for read-only status endpoints. useConsoleApi=false → call the
+  // Next.js relative path; the Next.js route forwards with the
+  // server-side bearer token. Used for endpoints under
+  // /api/operations/data-pipeline/* that require auth.
+  const url = opts.useConsoleApi === false
+    ? path
+    : `${API_BASE}${path}`;
+  const res = await fetch(url, {
     cache: "no-store",
+    credentials: opts.useConsoleApi === false ? "include" : "omit",
     headers: { Accept: "application/json" },
   });
   if (!res.ok) {
-    throw new Error(`${path} → HTTP ${res.status} ${res.statusText}`);
+    let detail = "";
+    try {
+      detail = JSON.stringify(await res.json());
+    } catch {
+      // No JSON body — keep detail empty.
+    }
+    throw new Error(
+      `${path} → HTTP ${res.status} ${res.statusText}${detail ? " " + detail : ""}`,
+    );
   }
   return (await res.json()) as T;
+}
+
+async function postJSON<T>(
+  path: string,
+  body?: Record<string, unknown>,
+): Promise<T> {
+  // POST always goes through the Next.js route so we get auth +
+  // server-side token forwarding. Never call console-api directly
+  // from the browser with the token.
+  const res = await fetch(path, {
+    method: "POST",
+    cache: "no-store",
+    credentials: "include",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) {
+    let detail: Record<string, unknown> = {};
+    try {
+      detail = await res.json();
+    } catch {
+      detail = { error: res.statusText };
+    }
+    const err = new Error(
+      `${path} → HTTP ${res.status} ${res.statusText}`,
+    ) as Error & { status: number; payload: Record<string, unknown> };
+    err.status = res.status;
+    err.payload = detail;
+    throw err;
+  }
+  return (await res.json()) as T;
+}
+
+// ───── Data Pipeline status + job-control types ─────
+
+export type ChartCheckStatus = "PASS" | "WARN" | "FAIL" | "RUNNING" | "UNKNOWN";
+
+export interface DataPipelineCheck {
+  name: string;
+  status: ChartCheckStatus;
+  rows: number | null;
+  age: string | null;
+  notes: string;
+  last_checked_at: string | null;
+  healable: boolean;
+  actionable: boolean;
+  allowed_actions: string[];
+}
+
+export interface DataPipelineSelfHealEntry {
+  time: string;
+  stage: string;
+  result: "HEALED" | "FAILED" | "ESCALATED" | "SKIPPED" | "INFO";
+  duration: string | null;
+  notes: string;
+  severity: string;
+  event_type: string;
+}
+
+export interface ActiveJob {
+  job_id: string;
+  run_id: string;
+  type: string | null;
+  status: "QUEUED" | "RUNNING" | "SUCCESS" | "FAILED" | "CANCELLED" | "TIMEOUT" | "ABORTED";
+  started_at: string;
+  updated_at: string;
+  elapsed_seconds: number;
+  current_stage: string | null;
+  current_check: string | null;
+  completed_stages: Array<{
+    stage: string;
+    status: string;
+    started_at: string | null;
+    completed_at: string | null;
+    duration_seconds: number | null;
+    rows_processed: number | null;
+    message: string | null;
+  }>;
+  pending_stages: string[];
+  failed_stage: string | null;
+  latest_log: { time: string; event_type: string; severity: string; message: string } | null;
+  progress: { stages_total: number | null; stages_completed: number | null; percent: number | null; label: string };
+  triggered_by: "operator" | "cron";
+}
+
+export interface DataPipelineStatus {
+  status: "GREEN" | "WARNING" | "RED" | "RUNNING" | "UNKNOWN";
+  last_refreshed_at: string;
+  latest_run_id: string | null;
+  latest_data_ops_event: { recorded_at: string | null; event_type: string; status: "OK" | "MISSING" | "STALE" };
+  summary: {
+    passed: number;
+    warnings: number;
+    failed: number;
+    confidence: string;
+    tickers_tracked: number;
+    daily_bars_60d: number;
+    forensics_open: number;
+    cycle_latency: string;
+  };
+  checks: DataPipelineCheck[];
+  self_heal_log: DataPipelineSelfHealEntry[];
+  active_job: ActiveJob | null;
+}
+
+export interface JobDescriptor {
+  job_id: string;
+  run_id: string;
+  action: string;
+  stage: string | null;
+  status: string;
+  queued_at: string;
+}
+
+export interface JobStatus {
+  job_id: string;
+  run_id: string;
+  status: "QUEUED" | "RUNNING" | "SUCCESS" | "FAILED" | "ABORTED";
+  started_at: string;
+  updated_at: string;
+  elapsed_seconds: number;
+  events: Array<{ time: string; event_type: string; severity: string; message: string }>;
 }
 
 export const api = {
@@ -72,11 +217,16 @@ export const api = {
     };
     llm_triage: Array<{ id: string; lane: string; ref: string; cls: string; disposition: string; confidence: number; model: string; persona: string; rationale: string; fence: string }>;
   }>("/api/digest"),
-  dataPipeline: () => fetchJSON<{
-    kpis: { passed: number; warnings: number; failed: number; data_ops_event: string | null; confidence: string; tickers_tracked: number; daily_bars_60d: number; forensics_open: number };
-    validation: Array<{ check: string; status: string; rows: number; age: string; notes: string }>;
-    self_heal: Array<{ time: string; stage: string; result: string; duration: string; notes: string }>;
-  }>("/api/data-pipeline"),
+  dataPipeline: () => fetchJSON<DataPipelineStatus>("/api/operations/data-pipeline/status"),
+  // Action endpoints forward through Next.js routes that verify the
+  // NextAuth session + inject the CONSOLE_OPS_TOKEN bearer header
+  // server-side (the token NEVER reaches the browser). The Next.js
+  // route returns the console-api response verbatim.
+  runDataUpdate: () => postJSON<JobDescriptor>("/api/operations/data-pipeline/run-update"),
+  runDataValidation: () => postJSON<JobDescriptor>("/api/operations/data-pipeline/run-validation"),
+  runDataFeed: (stage: string) => postJSON<JobDescriptor>(`/api/operations/data-pipeline/run-feed/${encodeURIComponent(stage)}`),
+  jobStatus: (jobId: string) => fetchJSON<JobStatus>(`/api/operations/data-pipeline/jobs/${encodeURIComponent(jobId)}`, { useConsoleApi: false }),
+  abortJob: (jobId: string) => postJSON<{ job_id: string; status: string }>(`/api/operations/data-pipeline/abort/${encodeURIComponent(jobId)}`),
   providers: () => fetchJSON<{ bindings: Array<{ feed: string; provider: string; status: string; adapter: string; note: string }> }>("/api/providers"),
 };
 

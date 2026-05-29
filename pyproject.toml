@@ -371,6 +371,14 @@ ignore = ["E501"]
 # cascade test immediately above. The scoped per-file ignore is the
 # correct form — never an inline ``# noqa: SLF001``.
 "tests/test_final_lane_verdict.py" = ["SLF"]
+# console-api operator-trigger endpoints (2026-05-29
+# build_real_data_pipeline_operations_console). The bearer-token
+# guard ``_require_operator_token`` is intentionally module-private
+# (only the operator-action routes call it; no other surface should).
+# Tests verify the 503 / 401 / 403 / accept paths directly to pin the
+# auth contract — the scoped per-file ignore is the correct form
+# (mirrors the precedents above) — never an inline ``# noqa: SLF001``.
+"tests/test_console_api_data_pipeline.py" = ["SLF"]
 # Wave-2 deterministic self-heal stage-robustness cascade (D2 / D3 /
 # D5 / D13 — spec docs/superpowers/specs/2026-05-21-deterministic-self-
 # heal-coverage-expansion-design.md §1 rows D2 D3 D5 D13 + §4 ANSWERED).

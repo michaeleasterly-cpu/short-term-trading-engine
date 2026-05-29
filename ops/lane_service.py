@@ -64,6 +64,9 @@ from ops.data_repair_service import (
 from ops.data_repair_service import (
     _main_loop as _data_repair_main_loop,
 )
+from ops.operator_trigger_lane import (
+    _main_loop as _operator_trigger_main_loop,
+)
 from tpcore.db import build_asyncpg_pool
 
 logger = structlog.get_logger(__name__)
@@ -76,6 +79,14 @@ POOL_MAX_SIZE = 3
 
 LANE_NAMES = (
     "data_repair",
+    # 2026-05-29 — operator-trigger lane added alongside data_repair.
+    # Polls platform.application_log for OPERATOR_RUN_REQUESTED rows
+    # written by console-api and shells out to the canonical script.
+    # Deterministic-only (no LLM); reuses the same crash-isolation
+    # supervisor + shared asyncpg pool. Two co-tasks now under the
+    # same lane_service daemon — preserves the two-daemon Railway
+    # invariant (engine-service + lane-service + data-operations cron).
+    "operator_trigger",
 )
 
 
@@ -148,9 +159,19 @@ async def _amain() -> int:
     async def _data_repair_factory():
         await _data_repair_main_loop(pool, stop_event, data_repair_lock_dir)
 
+    async def _operator_trigger_factory():
+        await _operator_trigger_main_loop(pool, stop_event)
+
     tasks = {
         "data_repair": asyncio.create_task(
             _run_supervised("data_repair", _data_repair_factory, stop_event)
+        ),
+        "operator_trigger": asyncio.create_task(
+            _run_supervised(
+                "operator_trigger",
+                _operator_trigger_factory,
+                stop_event,
+            )
         ),
     }
 

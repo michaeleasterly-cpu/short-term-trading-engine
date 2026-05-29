@@ -56,12 +56,30 @@ def lane_service_mod():
     return mod
 
 
-def test_lane_names_exactly_data_repair(lane_service_mod) -> None:
-    """Behaviour (a): the ONLY co-task the deployed daemon hosts is
-    the deterministic ``data_repair`` lane. The three LLM-invoking
-    co-tasks were removed (2026-05-22, operator directive — see
-    ``docs/audits/2026-05-22-llm-triage-removal-from-deployed-daemon.md``)."""
-    assert lane_service_mod.LANE_NAMES == ("data_repair",)
+def test_lane_names_exactly_data_repair_and_operator_trigger(
+    lane_service_mod,
+) -> None:
+    """Behaviour (a): the deployed daemon hosts exactly TWO
+    deterministic co-tasks:
+
+      * ``data_repair`` — polls ENGINE_DATA_REQUEST events
+        (existing, 2026-05-21).
+      * ``operator_trigger`` — polls OPERATOR_RUN_REQUESTED events
+        written by the console-api when the operator clicks Run
+        data update / Run validation / Run feed (added 2026-05-29
+        for the build_real_data_pipeline_operations_console task).
+
+    Both are deterministic, no LLM, no autonomous fallback. The
+    three previous LLM-invoking co-tasks remain REMOVED (operator
+    directive 2026-05-22) — neither one of these new entries calls
+    Anthropic.
+
+    The two-daemon Railway invariant (engine-service + lane-service
+    + data-operations cron) is preserved — we added a co-task to
+    ``lane_service``, not a new daemon."""
+    assert lane_service_mod.LANE_NAMES == (
+        "data_repair", "operator_trigger",
+    )
 
 
 def test_pool_max_size_at_least_one_per_lane(lane_service_mod) -> None:

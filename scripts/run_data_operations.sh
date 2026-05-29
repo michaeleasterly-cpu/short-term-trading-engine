@@ -90,6 +90,51 @@ if ! mkdir "$LOCK_DIR" 2>/dev/null; then
 fi
 echo "$$" > "$LOCK_DIR/pid"
 
+# ── Cross-container advisory lock (2026-05-29) ──────────────────────────
+# The mkdir lock above guards same-host overlap (cron + manual on the
+# operator's Mac). It does NOT arbitrate between two Railway containers
+# running the script — e.g., the scheduled cron container + the
+# lane-service operator-trigger container dispatching the same script.
+# Add a Postgres advisory lock as the global cross-container mutex. The
+# holder is a Python subprocess; on EXIT trap we SIGTERM it and the
+# connection close releases the lock automatically.
+_MAC_VENV_PY_PROBE=".venv/bin/python"
+_RAILWAY_VENV_PY_PROBE="/app/.deps/bin/python"
+if [[ -x "$_MAC_VENV_PY_PROBE" ]]; then PY_LOCK="$_MAC_VENV_PY_PROBE"
+elif [[ -x "$_RAILWAY_VENV_PY_PROBE" ]]; then PY_LOCK="$_RAILWAY_VENV_PY_PROBE"
+elif command -v python3 >/dev/null 2>&1; then PY_LOCK="$(command -v python3)"
+else PY_LOCK=""
+fi
+LOCK_HOLDER_PID=""
+if [[ -n "$PY_LOCK" ]]; then
+    _LOCK_FIFO="${TMPDIR:-/tmp}/ste-advisory-lock-$$.fifo"
+    rm -f "$_LOCK_FIFO" 2>/dev/null || true
+    mkfifo "$_LOCK_FIFO" 2>/dev/null || true
+    if [[ -p "$_LOCK_FIFO" ]]; then
+        DATABASE_URL="${DATABASE_URL_IPV4:-$DATABASE_URL}" \
+            "$PY_LOCK" scripts/_advisory_lock_holder.py > "$_LOCK_FIFO" 2>&1 &
+        LOCK_HOLDER_PID=$!
+        if read -r _LOCK_RESULT < "$_LOCK_FIFO" 2>/dev/null; then
+            rm -f "$_LOCK_FIFO"
+            if [[ "$_LOCK_RESULT" == "ACQUIRED" ]]; then
+                echo "  advisory lock acquired (pid $LOCK_HOLDER_PID)"
+            elif [[ "$_LOCK_RESULT" == "HELD" ]]; then
+                echo "✗ data-operations advisory lock held by another"
+                echo "  container/process — refusing to start. This guards"
+                echo "  against cron + operator-trigger overlap across"
+                echo "  Railway containers. If genuinely stuck, the"
+                echo "  holder's DB connection has gone away."
+                LOCK_HOLDER_PID=""
+                exit 0
+            else
+                echo "  advisory lock probe returned '${_LOCK_RESULT}' —"
+                echo "  proceeding without advisory lock (best-effort)"
+                LOCK_HOLDER_PID=""
+            fi
+        fi
+    fi
+fi
+
 FORCE_FLAG=""
 if [[ "${1:-}" == "--force" ]]; then
     FORCE_FLAG="--force"
@@ -253,7 +298,7 @@ _write_allocator_heartbeat() {
 # explicit `exit` calls but trap as safety net). Always write the
 # data_operations + allocator daemon heartbeats (success or failure
 # path) so `daemon_freshness` reflects the run cadence honestly.
-trap '_rc=$?; rm -rf "$LOCK_DIR" 2>/dev/null; _write_data_operations_heartbeat "$_rc" || true; _write_allocator_heartbeat || true; if [[ $_rc -ne 0 ]]; then _notify_failure "trap (unexpected)" $_rc; fi' EXIT
+trap '_rc=$?; rm -rf "$LOCK_DIR" 2>/dev/null; if [[ -n "${LOCK_HOLDER_PID:-}" ]]; then kill "$LOCK_HOLDER_PID" 2>/dev/null || true; wait "$LOCK_HOLDER_PID" 2>/dev/null || true; fi; _write_data_operations_heartbeat "$_rc" || true; _write_allocator_heartbeat || true; if [[ $_rc -ne 0 ]]; then _notify_failure "trap (unexpected)" $_rc; fi' EXIT
 
 echo "════════════════════════════════════════════════════════════════════════"
 echo "  DATA OPERATIONS WORKFLOW — $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
@@ -535,6 +580,20 @@ fi
 
 # Disable the failure-trap before exiting cleanly so the success path
 # doesn't fire a spurious "trap (unexpected)" notification.
+# F-002 fix (2026-05-29 expert review): the trap is what kills the
+# LOCK_HOLDER_PID subprocess (scripts/_advisory_lock_holder.py) and
+# releases the Postgres advisory lock. Disabling the trap WITHOUT
+# explicitly killing the holder leaks the lock — the orphaned holder
+# keeps its Postgres connection (and the advisory lock) alive until
+# something else kills it. Subsequent cron + operator-trigger runs
+# would then see ``HELD`` forever, silently disabling all future
+# pipeline runs. Kill the holder + remove the local mkdir lock BEFORE
+# disabling the failure-trap.
+if [[ -n "${LOCK_HOLDER_PID:-}" ]]; then
+    kill "$LOCK_HOLDER_PID" 2>/dev/null || true
+    wait "$LOCK_HOLDER_PID" 2>/dev/null || true
+fi
+rm -rf "$LOCK_DIR" 2>/dev/null || true
 trap - EXIT
 echo ""
 echo "════════════════════════════════════════════════════════════════════════"

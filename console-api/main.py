@@ -25,8 +25,9 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 
 import asyncpg
+import data_pipeline as data_pipeline_module
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 
@@ -53,9 +54,78 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[CONSOLE_ORIGIN, "https://ste-console.vercel.app", "http://localhost:3000"],
     allow_credentials=True,
-    allow_methods=["GET"],
+    # POST added 2026-05-29 for the operator-trigger endpoints
+    # under /api/operations/data-pipeline/* (REQ-006 of the
+    # build_real_data_pipeline_operations_console task spec).
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
+
+# ───── shared-secret auth for operator-trigger endpoints ─────
+#
+# The console-api otherwise serves read-only GETs that are safe to
+# expose to any browser that's already past the Next.js NextAuth
+# matcher (which gates /operations/*). The operator-trigger POST
+# endpoints introduce side-effects — they enqueue
+# OPERATOR_RUN_REQUESTED rows that the lane daemon will execute. To
+# prevent an attacker who finds the public Railway URL from kicking
+# off jobs at will, require a shared secret on every operator-action
+# POST. The token is set as a Railway env var on console-api AND in
+# the Next.js console's server-side env (NEVER ``NEXT_PUBLIC_*``); the
+# Next.js server-side handler forwards the token via httpx, the
+# browser never sees it.
+
+OPERATOR_TOKEN_ENV = "CONSOLE_OPS_TOKEN"  # noqa: S105 — env-var name
+
+
+def _require_operator_token(
+    authorization: str | None,
+    actor_header: str | None = None,
+) -> str:
+    """Validate the shared-secret token from the Authorization header
+    and return the canonical actor string. Operator-action endpoints
+    use this guard — read endpoints do NOT.
+
+    actor_header (X-Console-Actor): when the Next.js forwarder
+    authenticates a NextAuth session, it passes the operator's email/
+    name in this header. We accept it for the audit row but only AFTER
+    the bearer token check — an attacker without the token can't
+    spoof a fake actor.
+
+    Returns the actor string (header value when present and bearer
+    is valid; otherwise the fallback 'operator')."""
+    expected = os.environ.get(OPERATOR_TOKEN_ENV)
+    if not expected:
+        # Operationally: until the operator sets CONSOLE_OPS_TOKEN on
+        # the Railway service, every operator-action POST must 503.
+        # This is the no-false-success contract — never silently
+        # accept actions while unprotected.
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"{OPERATOR_TOKEN_ENV} not configured on console-api; "
+                "operator actions blocked until the token is set. See "
+                "docs/runbooks/console-operator-actions.md."
+            ),
+        )
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(
+            status_code=401, detail="missing bearer token"
+        )
+    token = authorization[len("Bearer "):].strip()
+    if token != expected:
+        raise HTTPException(status_code=403, detail="invalid token")
+    # Bearer is valid — accept the actor header if present, else fall
+    # back to the generic identity. Cap at 120 chars + strip control
+    # bytes so the audit row stays well-formed even if the forwarder
+    # is misconfigured.
+    if actor_header:
+        actor = actor_header.strip()[:120]
+        if actor and all(
+            ord(c) >= 32 and ord(c) != 127 for c in actor
+        ):
+            return actor
+    return "operator"
 
 
 # ───────────────────────── helpers ─────────────────────────
@@ -488,44 +558,118 @@ async def digest() -> dict:
 
 
 @app.get("/api/data-pipeline")
-async def data_pipeline() -> dict:
-    async with app.state.pool.acquire() as conn:
-        prices_count   = await conn.fetchval("SELECT COUNT(*) FROM platform.prices_daily WHERE date >= CURRENT_DATE - INTERVAL '60 days'")
-        tickers_count  = await conn.fetchval("SELECT COUNT(DISTINCT ticker) FROM platform.prices_daily WHERE date >= CURRENT_DATE - INTERVAL '7 days'")
-        latest_doc     = await conn.fetchval("SELECT MAX(recorded_at) FROM platform.application_log WHERE event_type = 'DATA_OPERATIONS_COMPLETE'")
-    return {
-        "ts": datetime.now(UTC).isoformat(),
-        "kpis": {
-            "passed":           13,
-            "warnings":         0,
-            "failed":           0,
-            "data_ops_event":   latest_doc.isoformat() if latest_doc else None,
-            "confidence":       "100%",
-            "tickers_tracked":  tickers_count or 0,
-            "daily_bars_60d":   prices_count or 0,
-            "forensics_open":   3,
-        },
-        "validation": [
-            {"check": "prices_daily_completeness",   "status": "PASS", "rows": prices_count or 0,   "age": "2h", "notes": "all liquid tickers covered"},
-            {"check": "prices_daily_freshness",      "status": "PASS", "rows": tickers_count or 0,  "age": "2h", "notes": "CRITICAL_TICKERS up to date"},
-            {"check": "fundamentals_cache",          "status": "PASS", "rows": 320410,              "age": "3d", "notes": "weekly refresh"},
-            {"check": "corporate_actions_lookback",  "status": "PASS", "rows": 18240,               "age": "1d", "notes": ""},
-            {"check": "macro_indicators_freshness",  "status": "PASS", "rows": 9440,                "age": "1d", "notes": "all 14 FRED series"},
-            {"check": "insider_mspr_daily",          "status": "PASS", "rows": 130043,              "age": "1d", "notes": "SEC Form-4 derived"},
-            {"check": "ticker_history_continuity",   "status": "PASS", "rows": 78540,               "age": "2d", "notes": "rename-aware"},
-            {"check": "ingest_manifest_loaded",      "status": "PASS", "rows": 1822,                "age": "0d", "notes": "archive-first invariant"},
-            {"check": "ingest_quarantine_review",    "status": "PASS", "rows": 0,                   "age": "0d", "notes": "0 rejected rows"},
-            {"check": "alpaca_corporate_actions",    "status": "PASS", "rows": 4217,                "age": "1d", "notes": ""},
-            {"check": "tradier_options_chain",       "status": "PASS", "rows": 12440,               "age": "1d", "notes": ""},
-            {"check": "aaii_sentiment",              "status": "PASS", "rows": 1440,                "age": "5d", "notes": "weekly cadence"},
-            {"check": "finra_short_interest",        "status": "PASS", "rows": 88240,               "age": "6d", "notes": "biweekly cadence"},
-        ],
-        "self_heal": [
-            {"time": "2026-05-25 22:14 UTC", "stage": "fmp_fundamentals", "result": "HEALED",    "duration": "1m02s", "notes": "backfill window 2026-05-22..2026-05-25"},
-            {"time": "2026-05-25 21:48 UTC", "stage": "prices_daily",     "result": "HEALED",    "duration": "32s",   "notes": "5 missing bars filled from Tradier"},
-            {"time": "2026-05-25 21:31 UTC", "stage": "data_operations",  "result": "ESCALATED", "duration": "—",     "notes": "schema_drift on finnhub_insider — handed off to operator review"},
-        ],
-    }
+async def data_pipeline(response: Response) -> dict:
+    """LIVE data-pipeline status. Mock values removed 2026-05-29 per
+    REQ-001 of the build_real_data_pipeline_operations_console task.
+    Backed by:
+      * platform.application_log — event lifecycle + DATA_OPERATIONS_COMPLETE
+      * platform.data_quality_log — per-check freshness/confidence
+      * platform.prices_daily — bars/tickers KPIs
+      * platform.forensics_triggers — open forensics count
+    A silent backend renders UNKNOWN, never PASS. The frontend's no-
+    store fetch must see fresh state on every page open."""
+    # REQ-002: no caching — the operator must see CURRENT state.
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    return await data_pipeline_module.fetch_status_payload(app.state.pool)
+
+
+@app.get("/api/operations/data-pipeline/status")
+async def data_pipeline_status(response: Response) -> dict:
+    """Alias of /api/data-pipeline under the canonical operations
+    namespace. Frontend can use either; tests pin both."""
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    return await data_pipeline_module.fetch_status_payload(app.state.pool)
+
+
+# ─── operator action endpoints (require shared-secret bearer) ───
+
+
+@app.post("/api/operations/data-pipeline/run-update")
+async def run_update(
+    authorization: str | None = Header(default=None),
+    x_console_actor: str | None = Header(default=None),
+) -> dict:
+    """Enqueue an OPERATOR_RUN_REQUESTED row for the full data-ops
+    pipeline (scripts/run_data_operations.sh). Returns the job_id
+    immediately; the deployed lane daemon picks it up on its next
+    poll tick and dispatches the run. Concurrency arbitrated by the
+    pg_advisory_lock acquired by the script at entry."""
+    actor = _require_operator_token(authorization, x_console_actor)
+    try:
+        return await data_pipeline_module.request_operator_run(
+            app.state.pool, actor=actor, action="run_update",
+        )
+    except data_pipeline_module.ConflictError as e:
+        raise HTTPException(status_code=409, detail=e.args[0]) from e
+
+
+@app.post("/api/operations/data-pipeline/run-validation")
+async def run_validation(
+    authorization: str | None = Header(default=None),
+    x_console_actor: str | None = Header(default=None),
+) -> dict:
+    """Enqueue a data_validation-only operator run."""
+    actor = _require_operator_token(authorization, x_console_actor)
+    try:
+        return await data_pipeline_module.request_operator_run(
+            app.state.pool, actor=actor, action="run_validation",
+        )
+    except data_pipeline_module.ConflictError as e:
+        raise HTTPException(status_code=409, detail=e.args[0]) from e
+
+
+@app.post("/api/operations/data-pipeline/run-feed/{stage}")
+async def run_feed(
+    stage: str,
+    authorization: str | None = Header(default=None),
+    x_console_actor: str | None = Header(default=None),
+) -> dict:
+    """Enqueue a single-stage operator run. The ``stage`` path param
+    must be in RUN_FEED_ALLOWLIST or the endpoint returns 400 — no
+    arbitrary stage names admissable from the client."""
+    actor = _require_operator_token(authorization, x_console_actor)
+    try:
+        return await data_pipeline_module.request_operator_run(
+            app.state.pool, actor=actor, action="run_feed", stage=stage,
+        )
+    except data_pipeline_module.ConflictError as e:
+        raise HTTPException(status_code=409, detail=e.args[0]) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.get("/api/operations/data-pipeline/jobs/{job_id}")
+async def job_status(job_id: str) -> dict:
+    """Status of a single operator-triggered job by job_id. Returns
+    404 if no application_log rows match the run_id."""
+    try:
+        status = await data_pipeline_module.fetch_job_status(
+            app.state.pool, job_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    if status is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    return status
+
+
+@app.post("/api/operations/data-pipeline/abort/{job_id}")
+async def abort_job(
+    job_id: str,
+    authorization: str | None = Header(default=None),
+    x_console_actor: str | None = Header(default=None),
+) -> dict:
+    """Write an OPERATOR_RUN_ABORTED row for an in-flight job. The
+    lane daemon stops its subprocess on the next poll tick."""
+    actor = _require_operator_token(authorization, x_console_actor)
+    try:
+        return await data_pipeline_module.abort_operator_run(
+            app.state.pool, actor=actor, job_id=job_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @app.get("/api/public/market-health")
