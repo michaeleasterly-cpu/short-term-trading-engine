@@ -227,11 +227,33 @@ asyncio.run(main())
     fi
 }
 
+# Allocator-heartbeat writer (called from EXIT trap so it ALWAYS runs,
+# even when --update exits non-zero. The Step 4e block below would never
+# execute on a failed run because `exit $UPDATE_RC` aborts the script —
+# precisely the case where we MOST need the heartbeat to write so
+# daemon_freshness clears next cycle. should_fire's gate ladder makes
+# the call idempotent / safe-by-default; the row write happens
+# regardless of fire/no-fire outcome).
+_write_allocator_heartbeat() {
+    local py="${PY:-}"
+    if [[ -z "$py" || ! -x "$py" ]]; then
+        echo "⚠ allocator-heartbeat: no python resolved at script start"
+        return 0
+    fi
+    local db_url="${DATABASE_URL_IPV6:-${DATABASE_URL:-${DATABASE_URL_IPV4:-}}}"
+    if [[ -z "$db_url" ]]; then return 0; fi
+    if DATABASE_URL="$db_url" "$py" -m ops.allocator_heartbeat 2>&1; then
+        echo "✓ allocator heartbeat written"
+    else
+        echo "⚠ allocator heartbeat write FAILED — daemon_freshness will surface this"
+    fi
+}
+
 # Catch any unexpected non-zero exit too (set -e isn't on; rely on
 # explicit `exit` calls but trap as safety net). Always write the
-# data_operations daemon heartbeat (success or failure path) so
-# `daemon_freshness` reflects the run cadence honestly.
-trap '_rc=$?; rm -rf "$LOCK_DIR" 2>/dev/null; _write_data_operations_heartbeat "$_rc" || true; if [[ $_rc -ne 0 ]]; then _notify_failure "trap (unexpected)" $_rc; fi' EXIT
+# data_operations + allocator daemon heartbeats (success or failure
+# path) so `daemon_freshness` reflects the run cadence honestly.
+trap '_rc=$?; rm -rf "$LOCK_DIR" 2>/dev/null; _write_data_operations_heartbeat "$_rc" || true; _write_allocator_heartbeat || true; if [[ $_rc -ne 0 ]]; then _notify_failure "trap (unexpected)" $_rc; fi' EXIT
 
 echo "════════════════════════════════════════════════════════════════════════"
 echo "  DATA OPERATIONS WORKFLOW — $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
@@ -405,23 +427,11 @@ _log_event INGESTION_START wrapper_datasupervisor
 DATABASE_URL="${DATABASE_URL_IPV4:-$DATABASE_URL}" "$PY" -m tpcore.datasupervisor || true
 _log_event INGESTION_COMPLETE wrapper_datasupervisor
 
-# Step 4e — allocator heartbeat (writes platform.daemon_heartbeats so
-# daemon_freshness check stops surfacing 'allocator' as STALE; spawns
-# the allocator subprocess if should_fire() returns True). The
-# heartbeat function is a thin safety net — should_fire's gate ladder
-# (profiled → cadence → market-closed → supervisor hold → data ready →
-# not already ran) handles the no-op cases structurally, so calling it
-# every daily-ops cycle is idempotent. Added 2026-05-29: there's no
-# Railway service for the allocator (engine_dispatch.py event-driven
-# path covers the canonical fire); without this call the heartbeat
-# row would never write, daemon_freshness stays RED, and
-# DATA_OPERATIONS_COMPLETE never emits.
-echo ""
-echo "▶ STEP 4e / 6  allocator heartbeat"
-echo "────────────────────────────────────────────────────────────────────────"
-_log_event INGESTION_START wrapper_allocator_heartbeat
-DATABASE_URL="${DATABASE_URL_IPV4:-$DATABASE_URL}" "$PY" -m ops.allocator_heartbeat || true
-_log_event INGESTION_COMPLETE wrapper_allocator_heartbeat
+# (Step 4e — allocator heartbeat — moved to the EXIT trap above so it
+# fires on BOTH success and failure paths. The original Step 4e here
+# never ran on the failure path because `exit $UPDATE_RC` at line ~265
+# aborts the script — exactly the case where the heartbeat must still
+# write so daemon_freshness clears next cycle.)
 
 # Step 5 — compress any CSVs left behind by the backfill scripts.
 echo ""
