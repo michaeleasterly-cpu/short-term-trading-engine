@@ -175,6 +175,20 @@ class S3Backend:
 
     def __init__(self) -> None:
         endpoint = os.environ.get("CSV_ARCHIVE_S3_ENDPOINT", "").strip()
+        # minio rejects ANY endpoint with an http(s):// scheme prefix
+        # ("path in endpoint is not allowed" — empirically reproducible
+        # 2026-05-28). The operator's documented standard is bare
+        # host:port; Railway's Cloudflare R2 generator drops the full
+        # URL into env vars. Strip http(s):// + trailing slash here so
+        # both formats Just Work. The `secure` flag below picks up the
+        # scheme intent (https → secure=True; bare → operator's
+        # CSV_ARCHIVE_S3_SECURE env wins, default True).
+        if endpoint.startswith(("https://", "http://")):
+            os.environ.setdefault(
+                "CSV_ARCHIVE_S3_SECURE",
+                "true" if endpoint.startswith("https://") else "false",
+            )
+            endpoint = endpoint.split("://", 1)[1].rstrip("/")
         bucket = os.environ.get("CSV_ARCHIVE_S3_BUCKET", "").strip()
         key_id = os.environ.get("CSV_ARCHIVE_S3_KEY_ID", "").strip()
         secret = os.environ.get("CSV_ARCHIVE_S3_SECRET", "").strip()
