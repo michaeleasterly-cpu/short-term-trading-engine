@@ -83,9 +83,11 @@ export interface DataPipelineCheck {
   rows: number | null;
   age: string | null;
   notes: string;
+  notes_details: Array<Record<string, unknown>> | null;
   last_checked_at: string | null;
   healable: boolean;
   actionable: boolean;
+  target_stage: string | null;
   allowed_actions: string[];
 }
 

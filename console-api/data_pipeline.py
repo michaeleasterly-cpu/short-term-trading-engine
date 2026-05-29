@@ -134,6 +134,49 @@ RUN_FEED_ALLOWLIST: dict[str, str] = {
 }
 
 
+# Map each console-tracked validation check to the canonical stage
+# that PRODUCES it. The check name in data_quality_log uses one
+# convention (e.g. ``prices_daily_completeness``); the stage name in
+# scripts/ops.py uses another (e.g. ``daily_bars``). Without this map,
+# the UI shows "not healable" on every row because the check name
+# isn't directly in RUN_FEED_ALLOWLIST. When a check fails, the
+# operator clicks Run feed, which dispatches the mapped stage.
+#
+# Some checks are intentionally unhealable by single-stage rerun:
+#   * data_operations_complete_cadence — emission gate, depends on
+#     every other check passing first.
+#   * daemon_freshness — driven by daemon heartbeats, not a data
+#     stage.
+#   * ingest_manifest_loaded / ingest_quarantine_review — operator-
+#     review states, not re-runnable.
+# Those entries omit the mapping → renders without a Run feed button.
+CHECK_TO_STAGE: dict[str, str] = {
+    "prices_daily_completeness": "daily_bars",
+    "prices_daily_freshness": "daily_bars",
+    "fundamentals_quarterly_completeness": "fundamentals",
+    "corporate_actions_completeness": "corporate_actions",
+    "macro_indicators_completeness": "macro_data",
+    "macro_indicators_freshness": "macro_data",
+    "earnings_events_freshness": "earnings_events",
+    "earnings_events_monotone": "earnings_events",
+    "sec_filings_freshness": "sec_filings",
+    "sec_insider_monotone": "sec_insider",
+    "options_max_pain_freshness": "options_max_pain",
+    "ticker_history_integrity": "ticker_classifications",
+    "ticker_classifications_coverage": "ticker_classifications",
+    "issuer_history_integrity": "ticker_classifications",
+    "issuer_securities_integrity": "ticker_classifications",
+    "corporate_events_integrity": "corporate_actions",
+    "aaii_sentiment_freshness": "aaii_sentiment",
+    "social_sentiment_freshness": "social_sentiment",
+    "short_interest_freshness": "short_interest",
+    "tradier_options_chain": "tradier_options",
+    "alpaca_corporate_actions": "alpaca_corporate_actions",
+    # Intentionally unmapped: data_operations_complete_cadence,
+    # daemon_freshness, ingest_manifest_loaded, ingest_quarantine_review.
+}
+
+
 # How fresh a DATA_OPERATIONS_COMPLETE row must be before the lane is
 # treated as STALE. Daily cadence is 21:30 UTC weekdays. A 30 h window
 # is the operator's normal expectation (30 h covers Friday → Monday
@@ -337,6 +380,8 @@ async def _fetch_validation_rows(
     out: list[dict[str, Any]] = []
     now = datetime.now(UTC)
     for name in CONSOLE_VALIDATION_CHECKS:
+        target_stage = _check_target_stage(name)
+        actionable = target_stage is not None
         row = seen.get(name)
         if row is None:
             out.append({
@@ -345,22 +390,27 @@ async def _fetch_validation_rows(
                 "rows": None,
                 "age": None,
                 "notes": "no data_quality_log row in last 72 h",
+                "notes_details": None,
                 "last_checked_at": None,
                 "healable": _check_healable(name),
-                "actionable": name in RUN_FEED_ALLOWLIST,
+                "actionable": actionable,
+                "target_stage": target_stage,
                 "allowed_actions": _check_allowed_actions(name),
             })
             continue
         status = _classify_validation_row(row)
+        notes_summary, notes_details = _format_notes(row["notes"])
         out.append({
             "name": name,
             "status": status,
             "rows": int(row["missing_bars"]) if row["missing_bars"] is not None else None,
             "age": _age_str(now, row["timestamp"]),
-            "notes": row["notes"] or "",
+            "notes": notes_summary,
+            "notes_details": notes_details,
             "last_checked_at": row["timestamp"].isoformat(),
             "healable": _check_healable(name),
-            "actionable": name in RUN_FEED_ALLOWLIST,
+            "actionable": actionable,
+            "target_stage": target_stage,
             "allowed_actions": _check_allowed_actions(name),
         })
     return out
@@ -378,32 +428,74 @@ def _classify_validation_row(row: dict[str, Any]) -> str:
     return "PASS"
 
 
+def _check_target_stage(name: str) -> str | None:
+    """Returns the canonical stage that produces this check, or None
+    if there's no single stage to rerun (e.g. the cadence meta-monitor
+    or a daemon-heartbeat-driven check). Used by the UI to decide
+    where to dispatch a Run feed click."""
+    stage = CHECK_TO_STAGE.get(name)
+    if stage is None or stage not in RUN_FEED_ALLOWLIST:
+        return None
+    return stage
+
+
 def _check_healable(name: str) -> bool:
-    """Best-effort lookup against the HealSpec registry. Returns True
-    when the check has a healable=True spec, False when healable=False,
-    True (optimistic — operator may still want a manual rerun) when
-    unmapped. Conservative: leaning toward 'show a Run feed button'
-    rather than hiding remediation."""
-    try:
-        from tpcore.selfheal.registry import spec_for  # type: ignore
-        sp = spec_for(name)
-        if sp is None:
-            return name in RUN_FEED_ALLOWLIST
-        return bool(sp.healable)
-    except Exception:  # noqa: BLE001 — registry not installed in the
-        # console-api deploy is the normal case; degrade gracefully.
-        return name in RUN_FEED_ALLOWLIST
+    """A check is rendered as healable if it has a mapped stage in
+    RUN_FEED_ALLOWLIST. Unmapped checks (cadence, daemon_freshness,
+    manifest, quarantine) render "not healable" honestly because
+    there's no single stage to re-run to clear them."""
+    return _check_target_stage(name) is not None
 
 
 def _check_allowed_actions(name: str) -> list[str]:
-    """Per-row action list. Always includes ``view_logs``; adds
-    ``run_feed`` if the stage is allowlisted; adds ``view_forensics``
-    for the forensics row."""
+    """Per-row action list. ``view_logs`` is always available;
+    ``run_feed`` only when the check has a mapped, allowlisted stage."""
     actions = ["view_logs"]
-    if name in RUN_FEED_ALLOWLIST:
+    if _check_target_stage(name) is not None:
         actions.append("run_feed")
-    actions.append("run_validation")
     return actions
+
+
+def _format_notes(raw: str | None) -> tuple[str, list[dict] | None]:
+    """Notes from data_quality_log are typically a JSON-encoded array
+    of per-ticker / per-row failure objects. For the UI we want:
+      * empty list → blank
+      * single failure → "first ticker: first reason"
+      * multi failure → "N tickers with <reason>, first: <ticker>"
+    Returns (summary_string, raw_list_or_None). UI renders the
+    summary in the column and may expose the raw list in a tooltip."""
+    if not raw:
+        return "", None
+    text = raw.strip()
+    if not text or text == "[]":
+        return "", None
+    # Try JSON parse. If the body isn't a list, fall back to the text.
+    try:
+        parsed = json.loads(text)
+    except (ValueError, TypeError):
+        return text[:160], None
+    if not isinstance(parsed, list):
+        return text[:160], None
+    if len(parsed) == 0:
+        return "", None
+    first = parsed[0] if isinstance(parsed[0], dict) else {}
+    ticker = first.get("ticker") or "<row>"
+    reason = first.get("reason") or first.get("observed") or "failure"
+    if len(parsed) == 1:
+        summary = f"{ticker}: {reason}"
+    else:
+        # Cluster by reason to surface the dominant failure pattern.
+        reasons: dict[str, int] = {}
+        for it in parsed:
+            if isinstance(it, dict):
+                r = it.get("reason") or "failure"
+                reasons[r] = reasons.get(r, 0) + 1
+        top_reason = max(reasons, key=reasons.get) if reasons else reason
+        summary = (
+            f"{len(parsed)} failures (dominant: {top_reason}), "
+            f"first: {ticker}"
+        )
+    return summary[:200], parsed
 
 
 def _age_str(now: datetime, ts: datetime) -> str:

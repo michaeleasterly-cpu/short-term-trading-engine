@@ -236,9 +236,9 @@ export function DataPipeline() {
               <ValidationTable
                 checks={data.checks}
                 disabled={buttonsDisabled}
-                onRunFeed={(name) => runAction(
-                  `run feed: ${name}`,
-                  () => api.runDataFeed(name),
+                onRunFeed={(stage, checkName) => runAction(
+                  `run ${stage} (for check ${checkName})`,
+                  () => api.runDataFeed(stage),
                 )}
               />
             </Panel>
@@ -356,7 +356,7 @@ function ValidationTable({
 }: {
   checks: DataPipelineCheck[];
   disabled: boolean;
-  onRunFeed: (name: string) => void;
+  onRunFeed: (stage: string, checkName: string) => void;
 }) {
   return (
     <table className="w-full text-[11.5px]">
@@ -371,7 +371,9 @@ function ValidationTable({
             <td className="mono px-3 py-1.5" style={{ color: "var(--ink)" }}>{c.name}</td>
             <td className="px-3 py-1.5"><CheckStatusPill status={c.status} /></td>
             <td className="mono px-3 py-1.5" style={{ color: "var(--ink-3)" }}>{c.age ?? "—"}</td>
-            <td className="px-3 py-1.5" style={{ color: "var(--ink-3)" }}>{c.notes}</td>
+            <td className="px-3 py-1.5" style={{ color: "var(--ink-3)" }}>
+              <NotesCell check={c} />
+            </td>
             <td className="px-3 py-1.5">
               <CheckActionMenu check={c} disabled={disabled} onRunFeed={onRunFeed} />
             </td>
@@ -379,6 +381,48 @@ function ValidationTable({
         ))}
       </tbody>
     </table>
+  );
+}
+
+function NotesCell({ check }: { check: DataPipelineCheck }) {
+  const [expanded, setExpanded] = useState(false);
+  const hasDetails = (check.notes_details?.length ?? 0) > 0;
+  if (!check.notes && !hasDetails) {
+    return <span style={{ color: "var(--ink-3)" }}>—</span>;
+  }
+  return (
+    <div>
+      <div>{check.notes}</div>
+      {hasDetails && (
+        <button
+          className="mono text-[10px] mt-1"
+          style={{ color: "var(--accent)" }}
+          onClick={() => setExpanded(e => !e)}
+        >
+          {expanded ? "hide details" : `${check.notes_details!.length} item${check.notes_details!.length === 1 ? "" : "s"} →`}
+        </button>
+      )}
+      {expanded && hasDetails && (
+        <ul
+          className="mono text-[10px] mt-1 pl-3 max-h-56 overflow-auto"
+          style={{ color: "var(--ink-3)" }}
+        >
+          {check.notes_details!.slice(0, 50).map((d, i) => {
+            const obj = d as Record<string, string>;
+            return (
+              <li key={i} className="my-0.5">
+                {obj.ticker ?? "<row>"}: {obj.reason ?? obj.observed ?? JSON.stringify(d)}
+              </li>
+            );
+          })}
+          {(check.notes_details!.length > 50) && (
+            <li style={{ color: "var(--ink-3)" }}>
+              … {check.notes_details!.length - 50} more
+            </li>
+          )}
+        </ul>
+      )}
+    </div>
   );
 }
 
@@ -397,27 +441,24 @@ function CheckActionMenu({
 }: {
   check: DataPipelineCheck;
   disabled: boolean;
-  onRunFeed: (name: string) => void;
+  onRunFeed: (stage: string, checkName: string) => void;
 }) {
-  if (check.actionable && check.allowed_actions.includes("run_feed")) {
+  if (check.actionable && check.target_stage) {
+    const label = `Run ${check.target_stage}`;
     return (
       <button
         className="hairline mono text-[10px] px-2 py-0.5"
         style={{ color: "var(--accent)", opacity: disabled ? 0.45 : 1 }}
         disabled={disabled}
-        onClick={() => onRunFeed(check.name)}
-      >Run feed</button>
-    );
-  }
-  if (!check.healable) {
-    return (
-      <span className="mono text-[10px]" style={{ color: "var(--ink-3)" }}>
-        not healable
-      </span>
+        onClick={() => onRunFeed(check.target_stage as string, check.name)}
+        title={`Dispatches the ${check.target_stage} stage of scripts/ops.py`}
+      >{label}</button>
     );
   }
   return (
-    <span className="mono text-[10px]" style={{ color: "var(--ink-3)" }}>—</span>
+    <span className="mono text-[10px]" style={{ color: "var(--ink-3)" }}>
+      —
+    </span>
   );
 }
 
