@@ -555,17 +555,33 @@ function CheckActionMenu({
     );
   }
   if (cls === "bootstrap" && check.target_stage) {
+    // ChatGPT verification #7: bootstrap is a one-shot write that
+    // affects ALL downstream consumers of the table. Confirmation
+    // gate prevents accidental clicks (e.g. operator scrolling past
+    // a yellow button). The confirmation copy names what's about to
+    // happen + what stage will run.
     return (
       <button
         className="hairline mono text-[10px] px-2 py-0.5"
         style={{ color: "var(--warn)", opacity: disabled ? 0.45 : 1 }}
         disabled={disabled}
-        onClick={() => onRepair({
-          stage: check.target_stage as string,
-          action: "bootstrap_baseline",
-          label: `Write baseline (${check.target_stage})`,
-          checkName: check.name,
-        })}
+        onClick={() => {
+          const msg = (
+            `Run bootstrap baseline for ${check.name}?\n\n`
+            + `Dispatches stage: ${check.target_stage}\n`
+            + `${check.operator_note || "One-time baseline write."}\n\n`
+            + `This will write a baseline snapshot used by every future `
+            + `validation cycle. Continue?`
+          );
+          if (window.confirm(msg)) {
+            onRepair({
+              stage: check.target_stage as string,
+              action: "bootstrap_baseline",
+              label: `Write baseline (${check.target_stage})`,
+              checkName: check.name,
+            });
+          }
+        }}
         title={check.operator_note || "One-time bootstrap write"}
       >Write baseline</button>
     );
