@@ -194,6 +194,37 @@ context). Steps:
   required for console-api to accept the forward. There is NO path
   where a write action lands without both.
 
+## Restoring a blocked vendor (runtime toggle)
+
+When a check is classified as ``blocked_vendor`` (e.g.
+``options_max_pain_freshness`` is blocked while greeks.pro access
+is revoked), the console rewrites its status to
+``BLOCKED_VENDOR_ACCESS`` regardless of what the underlying
+``data_quality_log`` row says. This is the honest "lane is known-
+broken" surface.
+
+When you restore vendor access, you do NOT need to redeploy or
+edit code. Set the ``CONSOLE_VENDOR_ENABLED`` Railway env var on
+the ``console-api`` service:
+
+  * Var name: ``CONSOLE_VENDOR_ENABLED``
+  * Value: comma-list of vendor names to treat as RESTORED (e.g.
+    ``greeks.pro`` or ``greeks.pro,iborrow``).
+  * Save → Railway auto-redeploys console-api → the check returns
+    to its honest derived status from ``data_quality_log``.
+
+To re-block (e.g. vendor outage recurs): remove the vendor from
+the comma-list and save. Same redeploy cycle, ~60 s.
+
+The vendor name in the env var must match the ``vendor`` field on
+the ``CHECK_REMEDIATION`` entry exactly (case-insensitive,
+whitespace-trimmed). Current vendor classifications:
+
+  * ``options_max_pain_freshness`` → ``greeks.pro``
+
+If a vendor isn't in the env-var list, the rewrite stays — fail-
+closed contract (operator must explicitly opt back in).
+
 ## What's not yet wired
 
   * Operator-action endpoints honor the bearer + cookie check, but

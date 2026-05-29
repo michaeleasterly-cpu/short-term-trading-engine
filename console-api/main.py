@@ -27,7 +27,7 @@ from datetime import UTC, datetime, timedelta
 import asyncpg
 import data_pipeline as data_pipeline_module
 import httpx
-from fastapi import FastAPI, Header, HTTPException, Response
+from fastapi import Body, FastAPI, Header, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 
@@ -48,6 +48,14 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="STE Operator Console API", version="0.1.0", lifespan=lifespan)
+
+# Module-level singleton for Body(default=None). fastapi.Body in a
+# function-default trips ruff B008 (function call in argument default).
+# Header has an exemption in the default B008 allowlist; Body does
+# not. Pulling the call out to a module-level constant is the
+# canonical fix (mirrors the fastapi.Depends() singleton pattern).
+_OPTIONAL_BODY = Body(default=None)
+
 
 CONSOLE_ORIGIN = os.environ.get("CONSOLE_ORIGIN", "https://ste-console.vercel.app")
 app.add_middleware(
@@ -623,16 +631,69 @@ async def run_validation(
 @app.post("/api/operations/data-pipeline/run-feed/{stage}")
 async def run_feed(
     stage: str,
+    body: dict | None = _OPTIONAL_BODY,
     authorization: str | None = Header(default=None),
     x_console_actor: str | None = Header(default=None),
 ) -> dict:
     """Enqueue a single-stage operator run. The ``stage`` path param
     must be in RUN_FEED_ALLOWLIST or the endpoint returns 400 — no
-    arbitrary stage names admissable from the client."""
+    arbitrary stage names admissable from the client.
+
+    Optional JSON body:
+        {
+          "tickers": ["AAPL", "MSFT", ...],   # scopes the run
+          "action": "repair_failed_scope"      # for the audit row
+        }
+
+    When ``tickers`` is present, the lane daemon dispatches the stage
+    with ``--param tickers=A,B,C`` so the repair is scoped (REQ-002).
+    Stages that don't honor the tickers param run their full sweep.
+    """
     actor = _require_operator_token(authorization, x_console_actor)
+    body = body or {}
+    tickers = body.get("tickers")
+    check_name = body.get("check_name")
+    action_label = body.get("action") or "run_feed"
+    if action_label not in (
+        "run_feed", "run_scoped_feed",
+        "repair_failed_scope", "bootstrap_baseline",
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"action {action_label!r} not allowed for run-feed",
+        )
     try:
         return await data_pipeline_module.request_operator_run(
-            app.state.pool, actor=actor, action="run_feed", stage=stage,
+            app.state.pool, actor=actor, action=action_label,
+            stage=stage, tickers=tickers, check_name=check_name,
+        )
+    except data_pipeline_module.ConflictError as e:
+        raise HTTPException(status_code=409, detail=e.args[0]) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.post("/api/operations/data-pipeline/run-fallback/{stage}")
+async def run_fallback(
+    stage: str,
+    body: dict | None = _OPTIONAL_BODY,
+    authorization: str | None = Header(default=None),
+    x_console_actor: str | None = Header(default=None),
+) -> dict:
+    """Dispatch a fallback-source stage (e.g. ``sec_fundamentals_fallback``
+    for ``fundamentals_quarterly_completeness`` failures FMP can't
+    satisfy). REQ-003: the SEC EDGAR fallback path.
+
+    Optional JSON body: ``{"tickers": [...]}``. When supplied, scopes
+    the fallback to those tickers — same semantics as run-feed."""
+    actor = _require_operator_token(authorization, x_console_actor)
+    body = body or {}
+    tickers = body.get("tickers")
+    check_name = body.get("check_name")
+    try:
+        return await data_pipeline_module.request_operator_run(
+            app.state.pool, actor=actor, action="run_fallback_source",
+            stage=stage, tickers=tickers, check_name=check_name,
         )
     except data_pipeline_module.ConflictError as e:
         raise HTTPException(status_code=409, detail=e.args[0]) from e

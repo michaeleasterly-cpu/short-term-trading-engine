@@ -911,9 +911,31 @@ async def _stage_reconcile(pool: asyncpg.Pool) -> dict[str, Any]:
 
 
 async def _stage_fundamentals_refresh(pool: asyncpg.Pool, config: dict[str, Any]) -> dict[str, Any]:
-    """Refresh FMP fundamentals restricted to the coarse-filtered universe."""
+    """Refresh FMP fundamentals restricted to the coarse-filtered universe.
+
+    Scoped repair support (2026-05-29): when ``config['tickers']`` is
+    set (comma-list), constrain the refresh to JUST those symbols
+    instead of the ~5k-ticker universe. Mirrors the
+    ``sec_fundamentals_fallback`` scoping precedent (line 963). Used
+    by the console's per-check "Repair failed scope" button to fix
+    only the failed tickers, not the whole universe.
+
+    Without this, fixing 25 ADV-class missing-quarter rows required a
+    47-min full-universe sweep.
+    """
     from tpcore.fmp import FMPFundamentalsAdapter
     from tpcore.fundamentals.cache import FundamentalsCache
+
+    ticker_scope_raw = config.get("tickers")
+    ticker_scope: list[str] | None = None
+    if ticker_scope_raw:
+        ticker_scope = [
+            t.strip().upper()
+            for t in str(ticker_scope_raw).split(",")
+            if t.strip()
+        ]
+        if not ticker_scope:
+            ticker_scope = None
 
     tickers = await _coarse_filtered_universe(
         pool,
@@ -921,6 +943,32 @@ async def _stage_fundamentals_refresh(pool: asyncpg.Pool, config: dict[str, Any]
         min_volume=int(config.get("min_volume", 250_000)),
         lookback_days=int(config.get("lookback_days", 7)),
     )
+    if ticker_scope is not None:
+        wanted = set(ticker_scope)
+        # Scoped path: intersect with the coarse-filter result so
+        # we never run on a delisted / unliquid ticker even if the
+        # operator typed it. Operator-typed tickers that aren't in
+        # the universe are silently skipped + reported in the note.
+        before = len(tickers)
+        tickers = [t for t in tickers if t in wanted]
+        skipped_unlisted = sorted(wanted - {t for t in tickers})
+        if not tickers:
+            return {
+                "tickers": 0, "rows": 0, "no_data": 0, "failures": 0,
+                "note": (
+                    f"scoped repair: 0 of {len(wanted)} requested tickers "
+                    f"are in the coarse-filtered universe "
+                    f"(min_price/min_volume/lookback). "
+                    f"Skipped: {skipped_unlisted[:10]}"
+                ),
+            }
+        scoped_note = (
+            f"scoped to {len(tickers)} of {before} ticker universe "
+            f"(operator-requested)"
+        )
+    else:
+        scoped_note = None
+
     if not tickers:
         return {"tickers": 0, "rows": 0, "no_data": 0, "failures": 0, "note": "empty universe"}
 
@@ -943,6 +991,8 @@ async def _stage_fundamentals_refresh(pool: asyncpg.Pool, config: dict[str, Any]
         "failures": len(failures),
         "skipped_fresh": skipped,
     }
+    if scoped_note:
+        detail["note"] = scoped_note
     if failures:
         # Match handler semantics: real FMP failures surface as an error
         # event for the stage, but the pipeline still continues.

@@ -46,11 +46,28 @@ backend has no row, the check renders ``UNKNOWN``.
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from datetime import UTC, datetime
 from typing import Any
 
 import asyncpg
+
+
+# Runtime override for blocked_vendor checks. F-004 fix (2026-05-29
+# expert review): the previous design hard-coded blocked_vendor in
+# CHECK_REMEDIATION so restoring a vendor required a code change +
+# redeploy. Now the operator can set ``CONSOLE_VENDOR_ENABLED``
+# (comma-list of vendor names) on the console-api Railway service —
+# a vendor in this set is treated as RESTORED and the corresponding
+# checks revert to their derived status instead of being rewritten
+# to BLOCKED_VENDOR_ACCESS.
+def _vendor_enabled(vendor: str | None) -> bool:
+    if not vendor:
+        return False
+    enabled_raw = os.environ.get("CONSOLE_VENDOR_ENABLED", "")
+    enabled = {v.strip().lower() for v in enabled_raw.split(",") if v.strip()}
+    return vendor.strip().lower() in enabled
 
 
 def _load_json(value: Any) -> dict[str, Any]:
@@ -112,68 +129,297 @@ CONSOLE_VALIDATION_CHECKS: list[str] = [
 # stage not in this map cannot be triggered from the console — the
 # operator must run it from a wrapper script directly. Sourced from
 # the data-adapter pipeline canonical roster.
+# Stage allowlist — keys mirror the canonical scripts/ops.py
+# _STAGE_SPECS names. Operator action endpoints reject any stage NOT
+# in this set (server-side static, no client-controlled value can
+# bypass). Names verified against
+# ``grep -E '\\("[a-z_]+",' scripts/ops.py`` 2026-05-29.
 RUN_FEED_ALLOWLIST: dict[str, str] = {
     "daily_bars": "daily_bars",
     "data_validation": "data_validation",
-    "auditheal": "auditheal",
-    "ticker_classifications": "ticker_classifications",
-    "fundamentals": "fundamentals",
     "corporate_actions": "corporate_actions",
-    "macro_data": "macro_data",
-    "earnings_events": "earnings_events",
+    "fundamentals_refresh": "fundamentals_refresh",
+    "earnings_refresh": "earnings_refresh",
+    "macro_indicators": "macro_indicators",
     "sec_filings": "sec_filings",
-    "sec_insider": "sec_insider",
-    "options_max_pain": "options_max_pain",
-    "insider_sentiment": "insider_sentiment",
-    "social_sentiment": "social_sentiment",
     "aaii_sentiment": "aaii_sentiment",
-    "short_interest": "short_interest",
-    "tradier_options": "tradier_options",
-    "alpaca_corporate_actions": "alpaca_corporate_actions",
+    "apewisdom_social_sentiment": "apewisdom_social_sentiment",
+    "finra_short_interest": "finra_short_interest",
+    "tier_refresh": "tier_refresh",
+    "classify_tickers": "classify_tickers",
     "forensics": "forensics",
+    # SEC EDGAR fallback (task #34) — supports --param tickers=A,B,C.
+    "sec_fundamentals_fallback": "sec_fundamentals_fallback",
 }
 
 
-# Map each console-tracked validation check to the canonical stage
-# that PRODUCES it. The check name in data_quality_log uses one
-# convention (e.g. ``prices_daily_completeness``); the stage name in
-# scripts/ops.py uses another (e.g. ``daily_bars``). Without this map,
-# the UI shows "not healable" on every row because the check name
-# isn't directly in RUN_FEED_ALLOWLIST. When a check fails, the
-# operator clicks Run feed, which dispatches the mapped stage.
+# Remediation classification per check. Replaces the prior
+# CHECK_TO_STAGE map. Each check is bucketed into one of seven
+# remediation classes; the UI renders different actions per class.
 #
-# Some checks are intentionally unhealable by single-stage rerun:
-#   * data_operations_complete_cadence — emission gate, depends on
-#     every other check passing first.
-#   * daemon_freshness — driven by daemon heartbeats, not a data
-#     stage.
-#   * ingest_manifest_loaded / ingest_quarantine_review — operator-
-#     review states, not re-runnable.
-# Those entries omit the mapping → renders without a Run feed button.
-CHECK_TO_STAGE: dict[str, str] = {
-    "prices_daily_completeness": "daily_bars",
-    "prices_daily_freshness": "daily_bars",
-    "fundamentals_quarterly_completeness": "fundamentals",
-    "corporate_actions_completeness": "corporate_actions",
-    "macro_indicators_completeness": "macro_data",
-    "macro_indicators_freshness": "macro_data",
-    "earnings_events_freshness": "earnings_events",
-    "earnings_events_monotone": "earnings_events",
-    "sec_filings_freshness": "sec_filings",
-    "sec_insider_monotone": "sec_insider",
-    "options_max_pain_freshness": "options_max_pain",
-    "ticker_history_integrity": "ticker_classifications",
-    "ticker_classifications_coverage": "ticker_classifications",
-    "issuer_history_integrity": "ticker_classifications",
-    "issuer_securities_integrity": "ticker_classifications",
-    "corporate_events_integrity": "corporate_actions",
-    "aaii_sentiment_freshness": "aaii_sentiment",
-    "social_sentiment_freshness": "social_sentiment",
-    "short_interest_freshness": "short_interest",
-    "tradier_options_chain": "tradier_options",
-    "alpaca_corporate_actions": "alpaca_corporate_actions",
-    # Intentionally unmapped: data_operations_complete_cadence,
-    # daemon_freshness, ingest_manifest_loaded, ingest_quarantine_review.
+# Classes:
+#   scoped_auto_heal     — repair affected symbols only (no full
+#                          stage sweep). Reads failed-ticker list
+#                          from notes_details and passes
+#                          --param tickers=A,B,C to the stage.
+#                          PREFERRED when the stage supports it.
+#   full_stage_required  — stage cannot be scoped (e.g.
+#                          freshness checks must re-pull the whole
+#                          cadence-window). Run feed = full stage.
+#   blocked_vendor       — vendor access is broken/disabled.
+#                          No heal button; surface vendor + reason.
+#   operator_required    — needs a manual procedure (SQL cleanup,
+#                          daemon restart, etc.). Show procedure
+#                          link; no auto-action button.
+#   unhealable           — meta-monitor / definitionally unhealable
+#                          (cadence gate, manifest-review states).
+#                          No action button; explain why.
+#   bootstrap            — one-time baseline write needed
+#                          (corporate_actions no_prior_archive).
+#                          Show "Write baseline" one-shot button.
+#   not_implemented      — there's a known heal but it isn't wired
+#                          to the console yet. Show "see runbook".
+#
+# scope_kind tells the dispatcher what shape of scope to send:
+#   tickers              — flatten failed_symbols into --param tickers=
+#   tickers_dates        — also pass date range when emitted
+#   full                 — no scoping; whole stage
+#
+# fallback_stage is the secondary stage to run if the primary
+# returns "no data" on a ticker — e.g. SEC EDGAR fallback for FMP
+# fundamentals gaps (task #34's sec_fundamentals_fallback).
+#
+# This dict is the SoT for console behavior. Kept in sync with
+# tpcore/selfheal/registry.py via a sentinel test (see TODO).
+CHECK_REMEDIATION: dict[str, dict[str, Any]] = {
+    # ─── price-data checks ───
+    # F-002 fix (2026-05-29 expert review): _stage_daily_bars does
+    # NOT honor an operator-supplied ``tickers`` config — its scope
+    # comes from its own gap detector. Classifying these as
+    # ``scoped_auto_heal`` would lie to the operator (the UI would
+    # show "Repair N tickers" but the tickers list would be ignored).
+    # Use ``full_stage_required`` with the canonical ``repair_gaps`` /
+    # ``repair_coverage`` params — the stage self-scopes, the UI says
+    # so honestly via the operator_note.
+    "prices_daily_completeness": {
+        "class": "full_stage_required",
+        "stage": "daily_bars",
+        "params": {"repair_gaps": True},
+        "scope_kind": "full",
+        "operator_note": (
+            "Stage self-scopes via repair_gaps — the gap detector "
+            "identifies which (ticker, date) cells to fix. Does NOT "
+            "honor an operator-supplied ticker list."
+        ),
+        "estimated_runtime_seconds": 120,
+    },
+    "prices_daily_freshness": {
+        "class": "full_stage_required",
+        "stage": "daily_bars",
+        "params": {"repair_coverage": True},
+        "scope_kind": "full",
+        "estimated_runtime_seconds": 600,
+    },
+    # ─── fundamentals ───
+    "fundamentals_quarterly_completeness": {
+        "class": "scoped_auto_heal",
+        "stage": "fundamentals_refresh",
+        "params": {"skip_guard_days": 0},
+        "scope_kind": "tickers",
+        "fallback_stage": "sec_fundamentals_fallback",
+        "estimated_runtime_seconds": 180,
+    },
+    # ─── corporate actions / events ───
+    "corporate_actions_completeness": {
+        "class": "bootstrap",
+        "stage": "corporate_actions",
+        "params": {"skip_guard_days": 0},
+        "scope_kind": "full",
+        "operator_note": (
+            "no_prior_archive — initial CSV-archive baseline missing. "
+            "Running this stage once writes the baseline."
+        ),
+        "estimated_runtime_seconds": 240,
+    },
+    "corporate_events_integrity": {
+        "class": "operator_required",
+        "operator_procedure": (
+            "Bitemporal-open dup or event-after-record row exists. "
+            "Run tpcore.audit cleanup procedure "
+            "(audit_cleanup_2026_05_24.py) — manual SQL."
+        ),
+    },
+    # ─── macro ───
+    "macro_indicators_completeness": {
+        "class": "full_stage_required",
+        "stage": "macro_indicators",
+        "params": {"skip_guard_days": 0},
+        "scope_kind": "full",
+        "estimated_runtime_seconds": 120,
+    },
+    "macro_indicators_freshness": {
+        "class": "full_stage_required",
+        "stage": "macro_indicators",
+        "params": {"skip_guard_days": 0},
+        "scope_kind": "full",
+        "estimated_runtime_seconds": 120,
+    },
+    # ─── earnings / SEC filings ───
+    "earnings_events_freshness": {
+        "class": "full_stage_required",
+        "stage": "earnings_refresh",
+        "params": {"skip_guard_days": 0},
+        "scope_kind": "full",
+        "estimated_runtime_seconds": 600,
+    },
+    "earnings_events_monotone": {
+        "class": "scoped_auto_heal",
+        "stage": "earnings_refresh",
+        "params": {"skip_guard_days": 0},
+        "scope_kind": "tickers",
+        "estimated_runtime_seconds": 180,
+    },
+    "sec_filings_freshness": {
+        "class": "full_stage_required",
+        "stage": "sec_filings",
+        "params": {"repair": True},
+        "scope_kind": "full",
+        "estimated_runtime_seconds": 480,
+    },
+    "sec_insider_monotone": {
+        "class": "scoped_auto_heal",
+        "stage": "sec_filings",
+        "params": {"repair": True},
+        "scope_kind": "tickers",
+        "estimated_runtime_seconds": 240,
+    },
+    # ─── options ───
+    "options_max_pain_freshness": {
+        "class": "blocked_vendor",
+        "vendor": "greeks.pro",
+        "blocker_reason": (
+            "Operator-disabled 2026-05-29: greeks.pro access "
+            "revoked. Lane stays RED until restored."
+        ),
+        "scope_kind": "full",
+    },
+    # ─── ticker / issuer integrity ───
+    "ticker_history_integrity": {
+        "class": "operator_required",
+        "operator_procedure": (
+            "Zero-duration / invalid-range / open-row-dup classification "
+            "rows exist. Run tpcore/integrity/issuer_history_cleanup.py "
+            "manually after operator review."
+        ),
+    },
+    "ticker_classifications_coverage": {
+        "class": "full_stage_required",
+        "stage": "classify_tickers",
+        "params": {"skip_guard_days": 0},
+        "scope_kind": "full",
+        "estimated_runtime_seconds": 240,
+    },
+    "issuer_history_integrity": {
+        "class": "operator_required",
+        "operator_procedure": (
+            "Bitemporal integrity violation. "
+            "Run tpcore/integrity/issuer_history_cleanup.py — "
+            "manual SQL after operator review."
+        ),
+    },
+    "issuer_securities_integrity": {
+        "class": "operator_required",
+        "operator_procedure": (
+            "Bitemporal integrity violation in issuer_securities. "
+            "Run tpcore/integrity/issuer_history_cleanup.py — "
+            "manual SQL after operator review."
+        ),
+    },
+    # ─── sentiment / short interest ───
+    "aaii_sentiment_freshness": {
+        "class": "full_stage_required",
+        "stage": "aaii_sentiment",
+        "params": {"skip_guard_days": 0},
+        "scope_kind": "full",
+        "estimated_runtime_seconds": 30,
+    },
+    "social_sentiment_freshness": {
+        "class": "full_stage_required",
+        "stage": "apewisdom_social_sentiment",
+        "params": {"skip_guard_hours": 0},
+        "scope_kind": "full",
+        "estimated_runtime_seconds": 60,
+    },
+    "short_interest_freshness": {
+        "class": "full_stage_required",
+        "stage": "finra_short_interest",
+        "params": {"skip_guard_days": 0},
+        "scope_kind": "full",
+        "estimated_runtime_seconds": 60,
+    },
+    # ─── secondary feeds ───
+    "tradier_options_chain": {
+        "class": "not_implemented",
+        "reason": (
+            "No dedicated ``tradier_options`` stage in scripts/ops.py "
+            "(the table is populated by a different ingest path that "
+            "isn't on the operator-trigger surface yet). Operator must "
+            "use ops/_helpers/ scripts directly until wired."
+        ),
+    },
+    "alpaca_corporate_actions": {
+        "class": "full_stage_required",
+        "stage": "corporate_actions",
+        "params": {},
+        "scope_kind": "full",
+        "estimated_runtime_seconds": 60,
+    },
+    # ─── meta-monitors (definitionally unhealable) ───
+    "data_operations_complete_cadence": {
+        "class": "unhealable",
+        "reason": (
+            "Meta-monitor — DATA_OPERATIONS_COMPLETE is the END product "
+            "of a fully-green data lane run; clearing the other reds "
+            "fires the emission gate naturally. No stage emits this."
+        ),
+    },
+    "daemon_freshness": {
+        "class": "operator_required",
+        "operator_procedure": (
+            "Daemon heartbeat stale. Check daemon liveness via the Health "
+            "page (daemons table) OR query "
+            "platform.daemon_heartbeats WHERE daemon=<name>. If the daemon "
+            "is dead, the owning Railway service must be restarted "
+            "(allocator runs in engine-service; data_operations runs as a "
+            "cron). Cascade does NOT restart daemons."
+        ),
+    },
+    "ingest_manifest_loaded": {
+        "class": "unhealable",
+        "reason": (
+            "Manifest review state — surfaced for operator review, no "
+            "single stage clears it."
+        ),
+    },
+    "ingest_quarantine_review": {
+        "class": "unhealable",
+        "reason": (
+            "Quarantine review state — operator must inspect quarantined "
+            "rows before clearing."
+        ),
+    },
+}
+
+
+# Valid remediation classes — used by tests + UI for type safety.
+VALID_REMEDIATION_CLASSES = {
+    "scoped_auto_heal",
+    "full_stage_required",
+    "blocked_vendor",
+    "operator_required",
+    "unhealable",
+    "bootstrap",
+    "not_implemented",
 }
 
 
@@ -380,39 +626,117 @@ async def _fetch_validation_rows(
     out: list[dict[str, Any]] = []
     now = datetime.now(UTC)
     for name in CONSOLE_VALIDATION_CHECKS:
-        target_stage = _check_target_stage(name)
-        actionable = target_stage is not None
+        remediation = _check_remediation(name)
         row = seen.get(name)
         if row is None:
-            out.append({
-                "name": name,
-                "status": "UNKNOWN",
-                "rows": None,
-                "age": None,
-                "notes": "no data_quality_log row in last 72 h",
-                "notes_details": None,
-                "last_checked_at": None,
-                "healable": _check_healable(name),
-                "actionable": actionable,
-                "target_stage": target_stage,
-                "allowed_actions": _check_allowed_actions(name),
-            })
+            out.append(_build_check_row(
+                name=name, status="UNKNOWN", rows=None, age=None,
+                notes="no data_quality_log row in last 72 h",
+                notes_details=None,
+                last_checked_at=None,
+                failed_symbols=[],
+                remediation=remediation,
+            ))
             continue
-        status = _classify_validation_row(row)
+        # Status derives from row state. For blocked_vendor checks,
+        # surface that explicitly even when stale=False — the check
+        # may say PASS by luck-of-window but the underlying lane is
+        # known-broken. F-004 fix: when the operator restores access
+        # via the CONSOLE_VENDOR_ENABLED env var, skip the rewrite so
+        # the check can return to its honest derived status.
+        derived_status = _classify_validation_row(row)
+        if (
+            remediation["class"] == "blocked_vendor"
+            and derived_status != "UNKNOWN"
+            and not _vendor_enabled(remediation.get("vendor"))
+        ):
+            derived_status = "BLOCKED_VENDOR_ACCESS"
         notes_summary, notes_details = _format_notes(row["notes"])
-        out.append({
-            "name": name,
-            "status": status,
-            "rows": int(row["missing_bars"]) if row["missing_bars"] is not None else None,
-            "age": _age_str(now, row["timestamp"]),
-            "notes": notes_summary,
-            "notes_details": notes_details,
-            "last_checked_at": row["timestamp"].isoformat(),
-            "healable": _check_healable(name),
-            "actionable": actionable,
-            "target_stage": target_stage,
-            "allowed_actions": _check_allowed_actions(name),
-        })
+        failed_symbols = _extract_failed_symbols(notes_details)
+        out.append(_build_check_row(
+            name=name,
+            status=derived_status,
+            rows=int(row["missing_bars"]) if row["missing_bars"] is not None else None,
+            age=_age_str(now, row["timestamp"]),
+            notes=notes_summary,
+            notes_details=notes_details,
+            last_checked_at=row["timestamp"].isoformat(),
+            failed_symbols=failed_symbols,
+            remediation=remediation,
+        ))
+    return out
+
+
+def _build_check_row(
+    *,
+    name: str,
+    status: str,
+    rows: int | None,
+    age: str | None,
+    notes: str,
+    notes_details: list[dict] | None,
+    last_checked_at: str | None,
+    failed_symbols: list[str],
+    remediation: dict[str, Any],
+) -> dict[str, Any]:
+    """Assemble the contract-shaped row the UI consumes.
+
+    The remediation class + scope_kind drives the action surface.
+    Per REQ-001 the row includes the full classification so the
+    frontend can pick the right button without re-deriving."""
+    return {
+        "name": name,
+        "status": status,
+        "rows": rows,
+        "age": age,
+        "notes": notes,
+        "notes_details": notes_details,
+        "last_checked_at": last_checked_at,
+        # ─── REMEDIATION CONTRACT (REQ-001) ───
+        "remediation_class": remediation["class"],
+        "target_stage": remediation.get("stage"),
+        "scope_kind": remediation.get("scope_kind", "full"),
+        "fallback_stage": remediation.get("fallback_stage"),
+        "vendor": remediation.get("vendor"),
+        "blocker_reason": remediation.get("blocker_reason"),
+        "operator_procedure": remediation.get("operator_procedure"),
+        "operator_note": remediation.get("operator_note"),
+        "unhealable_reason": remediation.get("reason"),
+        "estimated_runtime_seconds": remediation.get(
+            "estimated_runtime_seconds"
+        ),
+        "affected_symbols": failed_symbols,
+        "allowed_actions": remediation["allowed_actions"],
+        # ─── legacy shape kept for backwards compat ───
+        "healable": _check_healable(name),
+        "actionable": (
+            remediation["class"] in (
+                "scoped_auto_heal", "full_stage_required", "bootstrap",
+            )
+        ),
+    }
+
+
+def _extract_failed_symbols(
+    notes_details: list[dict] | None,
+) -> list[str]:
+    """Pull the unique list of tickers from the failure-detail array.
+    Used by scoped repair to send --param tickers=A,B,C to the stage.
+    Caps at 200 tickers (safety bound — past this the scope IS the
+    full stage, in which case we just dispatch the full stage)."""
+    if not notes_details:
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for d in notes_details:
+        if not isinstance(d, dict):
+            continue
+        t = d.get("ticker")
+        if t and isinstance(t, str) and not t.startswith("<") and t not in seen:
+            seen.add(t)
+            out.append(t)
+            if len(out) >= 200:
+                break
     return out
 
 
@@ -428,32 +752,59 @@ def _classify_validation_row(row: dict[str, Any]) -> str:
     return "PASS"
 
 
-def _check_target_stage(name: str) -> str | None:
-    """Returns the canonical stage that produces this check, or None
-    if there's no single stage to rerun (e.g. the cadence meta-monitor
-    or a daemon-heartbeat-driven check). Used by the UI to decide
-    where to dispatch a Run feed click."""
-    stage = CHECK_TO_STAGE.get(name)
-    if stage is None or stage not in RUN_FEED_ALLOWLIST:
-        return None
-    return stage
+def _check_remediation(name: str) -> dict[str, Any]:
+    """Returns the rich remediation classification for a check, OR a
+    fallback ``not_implemented`` block if the check isn't in the map.
+    Output shape is the contract surfaced to the frontend."""
+    spec = CHECK_REMEDIATION.get(name)
+    if spec is None:
+        return {
+            "class": "not_implemented",
+            "reason": (
+                "no remediation entry in CHECK_REMEDIATION — surface as "
+                "operator-review state until a remediation is wired"
+            ),
+            "stage": None,
+            "scope_kind": "full",
+            "allowed_actions": ["view_logs"],
+        }
+    out = dict(spec)
+    out["allowed_actions"] = _check_allowed_actions_for_class(spec)
+    return out
+
+
+def _check_allowed_actions_for_class(spec: dict[str, Any]) -> list[str]:
+    """Action list derived from the remediation class. The frontend
+    uses this to pick which button to render."""
+    cls = spec.get("class")
+    actions = ["view_logs"]
+    if cls == "scoped_auto_heal":
+        actions.append("repair_failed_scope")
+        # Operator can still escalate to full-stage if scope is empty.
+        actions.append("run_scoped_feed")
+        if spec.get("fallback_stage"):
+            actions.append("run_fallback_source")
+    elif cls == "full_stage_required":
+        actions.append("run_scoped_feed")  # name kept for API parity
+    elif cls == "bootstrap":
+        actions.append("bootstrap_baseline")
+    elif cls == "blocked_vendor":
+        actions.append("view_blocker")
+    elif cls == "operator_required":
+        actions.append("view_blocker")  # serves as the procedure-link target
+    elif cls == "unhealable":
+        pass  # no action — explain why via reason field
+    elif cls == "not_implemented":
+        pass
+    return actions
 
 
 def _check_healable(name: str) -> bool:
-    """A check is rendered as healable if it has a mapped stage in
-    RUN_FEED_ALLOWLIST. Unmapped checks (cadence, daemon_freshness,
-    manifest, quarantine) render "not healable" honestly because
-    there's no single stage to re-run to clear them."""
-    return _check_target_stage(name) is not None
-
-
-def _check_allowed_actions(name: str) -> list[str]:
-    """Per-row action list. ``view_logs`` is always available;
-    ``run_feed`` only when the check has a mapped, allowlisted stage."""
-    actions = ["view_logs"]
-    if _check_target_stage(name) is not None:
-        actions.append("run_feed")
-    return actions
+    """A check is "healable" if its remediation class actually has an
+    automatic recovery path. blocked_vendor / operator_required /
+    unhealable / not_implemented are honest about not auto-healing."""
+    cls = CHECK_REMEDIATION.get(name, {}).get("class")
+    return cls in ("scoped_auto_heal", "full_stage_required", "bootstrap")
 
 
 def _format_notes(raw: str | None) -> tuple[str, list[dict] | None]:
@@ -841,6 +1192,29 @@ class ConflictError(Exception):
     """Raised when an operator action would overlap an active run."""
 
 
+def _params_for_check(
+    check_name: str | None, stage: str | None,
+) -> dict[str, Any]:
+    """Look up the canonical ``params`` block for a remediation
+    dispatch. F-008 fix (2026-05-29 pass-2 expert review): if the
+    UI sends ``check_name`` we use it directly — eliminates the N:1
+    ambiguity where a stage that produces multiple checks (daily_bars
+    → completeness + freshness, corporate_actions → completeness +
+    integrity) silently dispatched the FIRST check's params on every
+    click. Only fall back to stage-reverse-lookup if the UI didn't
+    send check_name (older clients / direct API callers)."""
+    if check_name and check_name in CHECK_REMEDIATION:
+        return dict(CHECK_REMEDIATION[check_name].get("params") or {})
+    # Legacy / direct-API path: stage reverse-lookup (first-match-wins).
+    # Documented as imprecise; callers should pass check_name.
+    if not stage:
+        return {}
+    for _name, spec in CHECK_REMEDIATION.items():
+        if spec.get("stage") == stage:
+            return dict(spec.get("params") or {})
+    return {}
+
+
 async def request_operator_run(
     pool: asyncpg.Pool,
     *,
@@ -848,9 +1222,18 @@ async def request_operator_run(
     action: str,
     stage: str | None = None,
     params: dict[str, Any] | None = None,
+    tickers: list[str] | None = None,
+    check_name: str | None = None,
 ) -> dict[str, Any]:
     """Insert an OPERATOR_RUN_REQUESTED row to enqueue an operator-
     triggered run. The lane daemon picks it up out-of-band.
+
+    ``tickers`` (optional): when present, the lane daemon dispatches
+    the stage with ``--param tickers=A,B,C`` so the repair is scoped
+    to just those symbols (REQ-002). Currently honored by stages that
+    support the ``tickers`` config key — see
+    ``CHECK_REMEDIATION[<check>]['scope_kind']`` for which stages do.
+    For ``scope_kind='full'`` stages the tickers list is ignored.
 
     Returns the job descriptor: {job_id, action, queued_at, status='QUEUED'}.
 
@@ -860,9 +1243,31 @@ async def request_operator_run(
         canonical_stage = None
     elif action == "run_validation":
         canonical_stage = "data_validation"
-    elif action == "run_feed":
+    elif action in ("run_feed", "run_scoped_feed", "repair_failed_scope"):
         if stage is None:
-            raise ValueError("run_feed requires stage")
+            raise ValueError(f"{action} requires stage")
+        if stage not in RUN_FEED_ALLOWLIST:
+            raise ValueError(
+                f"stage {stage!r} not in RUN_FEED_ALLOWLIST"
+            )
+        canonical_stage = RUN_FEED_ALLOWLIST[stage]
+    elif action == "run_fallback_source":
+        # Wired specifically for sec_fundamentals_fallback today —
+        # any other fallback would need an allowlist entry.
+        # F-003 fix (2026-05-29 expert review): no inline bootstrap.
+        # Rely on the static RUN_FEED_ALLOWLIST membership; if a
+        # future fallback stage isn't allowlisted, fail closed like
+        # any other action.
+        if stage is None:
+            stage = "sec_fundamentals_fallback"
+        if stage not in RUN_FEED_ALLOWLIST:
+            raise ValueError(
+                f"fallback stage {stage!r} not in RUN_FEED_ALLOWLIST"
+            )
+        canonical_stage = stage
+    elif action == "bootstrap_baseline":
+        if stage is None:
+            raise ValueError("bootstrap_baseline requires stage")
         if stage not in RUN_FEED_ALLOWLIST:
             raise ValueError(
                 f"stage {stage!r} not in RUN_FEED_ALLOWLIST"
@@ -878,11 +1283,45 @@ async def request_operator_run(
     # ``queued_at`` diverge by milliseconds; the audit trail and the
     # UI then disagree about the request time.
     requested_at = datetime.now(UTC).isoformat()
+    # Sanitize the optional ticker scope — strip whitespace, upper-
+    # case, cap length. F-005 fix (2026-05-29 expert review): surface
+    # the truncation in the payload so the operator sees the cap in
+    # the audit row and the job-status events.
+    scoped_tickers: list[str] = []
+    tickers_truncated_from: int | None = None
+    if tickers:
+        seen_t: set[str] = set()
+        for t in tickers:
+            if not isinstance(t, str):
+                continue
+            cleaned = t.strip().upper()
+            if cleaned and cleaned not in seen_t:
+                seen_t.add(cleaned)
+                scoped_tickers.append(cleaned)
+        if len(scoped_tickers) > 500:
+            tickers_truncated_from = len(scoped_tickers)
+            scoped_tickers = scoped_tickers[:500]
+
+    # F-001 + F-008 fix (2026-05-29 expert review): merge the canonical
+    # CHECK_REMEDIATION params block into the dispatched payload using
+    # the explicit ``check_name`` (when the UI sent it). Eliminates
+    # the N:1 ambiguity where stages with multiple checks (daily_bars
+    # produces completeness AND freshness with different params)
+    # silently sent the first check's params for every click.
+    # Caller-supplied ``params`` wins on conflict.
+    merged_params: dict[str, Any] = _params_for_check(
+        check_name, canonical_stage,
+    )
+    if params:
+        merged_params.update(params)
+
     payload = {
         "actor": actor,
         "action": action,
         "stage": canonical_stage,
-        "params": params or {},
+        "params": merged_params,
+        "tickers": scoped_tickers if scoped_tickers else None,
+        "tickers_truncated_from": tickers_truncated_from,
         "source": "console",
         "requested_at": requested_at,
     }
@@ -924,6 +1363,9 @@ async def request_operator_run(
         "run_id": str(job_id),
         "action": action,
         "stage": canonical_stage,
+        "tickers": scoped_tickers if scoped_tickers else None,
+        "tickers_truncated_from": tickers_truncated_from,
+        "params": merged_params,
         "status": "QUEUED",
         "queued_at": requested_at,
     }

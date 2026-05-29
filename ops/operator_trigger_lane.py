@@ -255,21 +255,30 @@ async def _dispatch_request(
     action = payload.get("action") or "run_update"
     stage = payload.get("stage")
     actor = payload.get("actor") or "unknown"
+    # Scoped repair payload (REQ-002): comma-list of tickers to
+    # restrict the dispatched stage to. Only honored by stages that
+    # accept ``--param tickers=A,B,C`` (see CHECK_REMEDIATION
+    # scope_kind classification in console-api/data_pipeline.py).
+    tickers: list[str] | None = payload.get("tickers") or None
+    extra_params: dict[str, Any] = dict(payload.get("params") or {})
 
     logger.info(
         "operator_trigger_lane.dispatch_start",
         run_id=str(run_id), action=action, stage=stage, actor=actor,
+        scoped_ticker_count=len(tickers) if tickers else 0,
     )
 
     # Mark STARTED — this is what flips the UI from QUEUED to RUNNING.
     await _emit(
         pool, run_id, "OPERATOR_RUN_STARTED", "INFO",
         f"operator-trigger run started (action={action}, "
-        f"stage={stage or 'all'})",
+        f"stage={stage or 'all'}"
+        f"{', scoped to ' + str(len(tickers)) + ' tickers' if tickers else ''})",
         {
             "action": action,
             "stage": stage,
             "actor": actor,
+            "tickers_count": len(tickers) if tickers else 0,
             "started_at": datetime.now(UTC).isoformat(),
             "host": os.environ.get("RAILWAY_REPLICA_ID") or "local",
         },
@@ -278,6 +287,7 @@ async def _dispatch_request(
     # Run the subprocess and watch for OPERATOR_RUN_ABORTED.
     exit_code, error_msg = await _run_subprocess_with_abort_watch(
         pool, run_id, action, stage,
+        tickers=tickers, extra_params=extra_params,
     )
 
     if exit_code == 0:
@@ -312,11 +322,15 @@ async def _run_subprocess_with_abort_watch(
     run_id: uuid.UUID,
     action: str,
     stage: str | None,
+    tickers: list[str] | None = None,
+    extra_params: dict[str, Any] | None = None,
 ) -> tuple[int, str | None]:
     """Spawn the canonical script as a subprocess. Concurrently watch
     for OPERATOR_RUN_ABORTED rows for this run_id and SIGTERM the
     process when one appears. Returns (exit_code, error_msg)."""
-    cmd = _build_command(action, stage)
+    cmd = _build_command(
+        action, stage, tickers=tickers, extra_params=extra_params,
+    )
     env = {**os.environ, "STE_OPERATOR_RUN_ID": str(run_id)}
 
     logger.info(
@@ -395,24 +409,47 @@ async def _run_subprocess_with_abort_watch(
     return exit_code, (tail if exit_code != 0 else None)
 
 
-def _build_command(action: str, stage: str | None) -> list[str]:
+def _build_command(
+    action: str,
+    stage: str | None,
+    tickers: list[str] | None = None,
+    extra_params: dict[str, Any] | None = None,
+) -> list[str]:
     """Build the subprocess argv. Allowlisted forms only — never an
-    arbitrary shell string from the request payload."""
+    arbitrary shell string from the request payload.
+
+    REQ-002 scoping (2026-05-29): when ``tickers`` is non-empty, the
+    stage runs with ``--param tickers=A,B,C`` so the repair is
+    constrained to those symbols. Stages that don't honor the
+    ``tickers`` config key (e.g. macro_indicators) simply ignore it.
+    """
     if action == "run_update":
         return ["bash", "scripts/run_data_operations.sh"]
-    if action == "run_validation":
-        return [
-            sys.executable, "scripts/ops.py", "--stage", "data_validation",
-        ]
-    if action == "run_feed":
-        # Allowlist re-checked at the API surface. Trust here only the
-        # name passed via the OPERATOR_RUN_REQUESTED row.
-        if not stage:
-            raise ValueError("run_feed needs a stage")
-        return [
-            sys.executable, "scripts/ops.py", "--stage", stage,
-        ]
-    raise ValueError(f"unknown action: {action!r}")
+
+    # All other actions dispatch a single ops.py stage.
+    feed_actions = {
+        "run_validation": "data_validation",
+        "run_feed": stage,
+        "run_scoped_feed": stage,
+        "repair_failed_scope": stage,
+        "run_fallback_source": stage,
+        "bootstrap_baseline": stage,
+    }
+    if action not in feed_actions:
+        raise ValueError(f"unknown action: {action!r}")
+    resolved_stage = feed_actions[action]
+    if not resolved_stage:
+        raise ValueError(f"{action} requires a stage")
+
+    cmd = [sys.executable, "scripts/ops.py", "--stage", resolved_stage]
+    if tickers:
+        cmd.extend(["--param", "tickers=" + ",".join(tickers)])
+    if extra_params:
+        for k, v in extra_params.items():
+            if k == "tickers":
+                continue  # already handled above
+            cmd.extend(["--param", f"{k}={v}"])
+    return cmd
 
 
 async def _has_abort_request(

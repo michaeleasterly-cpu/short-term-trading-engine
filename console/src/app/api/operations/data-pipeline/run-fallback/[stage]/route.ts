@@ -7,7 +7,7 @@ export async function POST(
   const session = await requireSession();
   if (!session.ok) return session.response;
   const { stage } = await ctx.params;
-  // Forward the body verbatim (tickers list, action override, etc.).
+  // Forward the body verbatim — tickers list etc.
   let body: Record<string, unknown> | undefined;
   try {
     body = await req.json();
@@ -15,7 +15,7 @@ export async function POST(
     body = undefined;
   }
   return forwardPost(
-    `/api/operations/data-pipeline/run-feed/${encodeURIComponent(stage)}`,
+    `/api/operations/data-pipeline/run-fallback/${encodeURIComponent(stage)}`,
     session.actor,
     body,
   );

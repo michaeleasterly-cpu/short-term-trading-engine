@@ -599,3 +599,346 @@ async def test_data_pipeline_endpoint_sets_no_store_headers(console_api_app):
     cache_ctrl = response.headers.get("cache-control", "").lower()
     assert "no-store" in cache_ctrl
     assert response.headers.get("pragma") == "no-cache"
+
+
+# ───────────────── Surgical remediation TEST-001..TEST-010 ─────────────────
+# Spec: 2026-05-29 make_data_pipeline_console_surgical_and_honest
+
+
+@pytest.mark.asyncio
+async def test_remediation_classification_covers_known_checks(data_pipeline_module):
+    """Every CONSOLE_VALIDATION_CHECKS entry must have a
+    CHECK_REMEDIATION entry, AND the class must be one of the seven
+    valid classes. Drift here = console silently fails to surface a
+    new check's remediation."""
+    valid = data_pipeline_module.VALID_REMEDIATION_CLASSES
+    for name in data_pipeline_module.CONSOLE_VALIDATION_CHECKS:
+        assert name in data_pipeline_module.CHECK_REMEDIATION, (
+            f"check {name!r} missing from CHECK_REMEDIATION map"
+        )
+        cls = data_pipeline_module.CHECK_REMEDIATION[name]["class"]
+        assert cls in valid, (
+            f"check {name!r} has invalid class {cls!r}; "
+            f"expected one of {sorted(valid)}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_scoped_repair_dispatches_only_failed_tickers(data_pipeline_module):
+    """TEST-001 (spec): a scoped repair for fundamentals_quarterly_
+    completeness sends ONLY the affected tickers — does NOT trigger a
+    full-stage refresh."""
+    pool = _FakePool(_base_fixture())
+    failed = ["ADTX", "ADV", "AER", "AEVA"]
+    desc = await data_pipeline_module.request_operator_run(
+        pool, actor="alice", action="repair_failed_scope",
+        stage="fundamentals_refresh", tickers=failed,
+    )
+    assert desc["action"] == "repair_failed_scope"
+    assert desc["stage"] == "fundamentals_refresh"
+    assert desc["tickers"] == failed
+    insert_calls = [
+        c for c in pool.connections[0].execute_calls
+        if "INSERT INTO" in c[0]
+    ]
+    assert len(insert_calls) == 1
+    sql, args = insert_calls[0]
+    payload = json.loads(args[3])
+    assert payload["tickers"] == failed
+    assert payload["action"] == "repair_failed_scope"
+
+
+@pytest.mark.asyncio
+async def test_sec_fallback_runs_with_scoped_tickers(data_pipeline_module):
+    """TEST-002 (spec): SEC EDGAR fallback dispatches with the same
+    ticker scope as the primary FMP repair."""
+    pool = _FakePool(_base_fixture())
+    failed = ["ADV", "ARDT"]
+    desc = await data_pipeline_module.request_operator_run(
+        pool, actor="alice", action="run_fallback_source",
+        stage="sec_fundamentals_fallback", tickers=failed,
+    )
+    assert desc["stage"] == "sec_fundamentals_fallback"
+    assert desc["tickers"] == failed
+
+
+@pytest.mark.asyncio
+async def test_blocked_vendor_check_renders_no_normal_run_button(data_pipeline_module):
+    """TEST-004 (spec): options_max_pain_freshness is blocked_vendor,
+    allowed_actions does NOT include run_scoped_feed / repair_failed_
+    scope. UI uses this to suppress the Run feed button."""
+    spec = data_pipeline_module.CHECK_REMEDIATION["options_max_pain_freshness"]
+    assert spec["class"] == "blocked_vendor"
+    assert spec["vendor"] == "greeks.pro"
+    assert "perator-disabled" in spec["blocker_reason"]  # case-insensitive substring
+    remediation = data_pipeline_module._check_remediation(
+        "options_max_pain_freshness"
+    )
+    assert "run_scoped_feed" not in remediation["allowed_actions"]
+    assert "repair_failed_scope" not in remediation["allowed_actions"]
+    assert "view_blocker" in remediation["allowed_actions"]
+
+
+@pytest.mark.asyncio
+async def test_corporate_actions_bootstrap_classified_honestly(data_pipeline_module):
+    """TEST-006: corporate_actions_completeness classified as bootstrap
+    (one-shot baseline), NOT generic full-stage rerun."""
+    spec = data_pipeline_module.CHECK_REMEDIATION["corporate_actions_completeness"]
+    assert spec["class"] == "bootstrap"
+    remediation = data_pipeline_module._check_remediation(
+        "corporate_actions_completeness"
+    )
+    assert "bootstrap_baseline" in remediation["allowed_actions"]
+
+
+@pytest.mark.asyncio
+async def test_daemon_freshness_is_operator_required(data_pipeline_module):
+    """TEST-007: daemon_freshness is operator_required, NOT feed-healable."""
+    spec = data_pipeline_module.CHECK_REMEDIATION["daemon_freshness"]
+    assert spec["class"] == "operator_required"
+    assert "daemon" in spec["operator_procedure"].lower()
+    remediation = data_pipeline_module._check_remediation("daemon_freshness")
+    assert "run_scoped_feed" not in remediation["allowed_actions"]
+
+
+@pytest.mark.asyncio
+async def test_repair_failed_scope_allowlist(data_pipeline_module):
+    """TEST-009: server-side stage allowlist still rejects arbitrary
+    stage names even with the new scoped path."""
+    pool = _FakePool(_base_fixture())
+    with pytest.raises(ValueError, match="not in RUN_FEED_ALLOWLIST"):
+        await data_pipeline_module.request_operator_run(
+            pool, actor="alice", action="repair_failed_scope",
+            stage="rm_minus_rf_arbitrary",
+            tickers=["AAPL"],
+        )
+
+
+@pytest.mark.asyncio
+async def test_tickers_sanitized_and_capped(data_pipeline_module):
+    """Tickers are whitespace-stripped, upper-cased, deduped, capped
+    at 500. Prevents accidental 50k-ticker paste from blowing up the
+    command line."""
+    pool = _FakePool(_base_fixture())
+    raw = ["aapl", "AAPL", "  MSFT  ", "msft", *[f"X{i}" for i in range(600)]]
+    desc = await data_pipeline_module.request_operator_run(
+        pool, actor="alice", action="repair_failed_scope",
+        stage="fundamentals_refresh", tickers=raw,
+    )
+    out = desc["tickers"]
+    assert out is not None
+    assert "AAPL" in out and "MSFT" in out
+    assert len(out) <= 500
+    assert len(out) == len(set(out))
+
+
+@pytest.mark.asyncio
+async def test_validation_row_full_remediation_contract(data_pipeline_module):
+    """REQ-001: every check row carries the full remediation contract."""
+    pool = _FakePool(_base_fixture())
+    payload = await data_pipeline_module.fetch_status_payload(pool)
+    for c in payload["checks"]:
+        for field in (
+            "remediation_class", "target_stage", "scope_kind",
+            "allowed_actions", "affected_symbols",
+        ):
+            name = c["name"]
+            assert field in c, f"check {name!r} missing {field}"
+        assert isinstance(c["allowed_actions"], list)
+        assert isinstance(c["affected_symbols"], list)
+
+
+@pytest.mark.asyncio
+async def test_failed_symbols_extracted_from_notes_details(data_pipeline_module):
+    """REQ-002 hook: _extract_failed_symbols pulls unique tickers from
+    FailureDetail list. Sentinel rows (<corporate_actions>) excluded."""
+    details = [
+        {"ticker": "ADV", "reason": "missing_quarter"},
+        {"ticker": "ADTX", "reason": "missing_quarter"},
+        {"ticker": "ADV", "reason": "another"},
+        {"ticker": "<corporate_actions>", "reason": "no_prior_archive"},
+    ]
+    out = data_pipeline_module._extract_failed_symbols(details)
+    assert out == ["ADV", "ADTX"]
+
+
+@pytest.mark.asyncio
+async def test_check_name_disambiguates_multi_check_stage(data_pipeline_module):
+    """F-008 fix (2026-05-29 expert review pass 2): when a stage
+    produces multiple checks with DIFFERENT params (e.g. daily_bars
+    → prices_daily_completeness {repair_gaps: True} vs
+    prices_daily_freshness {repair_coverage: True}), passing the
+    explicit check_name MUST drive the params lookup. Without this,
+    first-match-wins via dict insertion order silently dispatches the
+    wrong params for the second check."""
+    pool = _FakePool(_base_fixture())
+    # prices_daily_freshness should send repair_coverage=True, NOT
+    # repair_gaps=True (which is prices_daily_completeness's param).
+    await data_pipeline_module.request_operator_run(
+        pool, actor="alice", action="run_scoped_feed",
+        stage="daily_bars",
+        check_name="prices_daily_freshness",
+    )
+    insert_calls = [
+        c for c in pool.connections[0].execute_calls
+        if "INSERT INTO" in c[0]
+    ]
+    payload = json.loads(insert_calls[0][1][3])
+    assert payload["params"].get("repair_coverage") is True, (
+        "F-008: prices_daily_freshness must dispatch with "
+        "repair_coverage=True, not the prices_daily_completeness "
+        "{repair_gaps: True} catalog default"
+    )
+    assert "repair_gaps" not in payload["params"]
+
+
+@pytest.mark.asyncio
+async def test_check_name_completeness_uses_repair_gaps(data_pipeline_module):
+    """F-008 inverse: prices_daily_completeness's click DOES dispatch
+    with repair_gaps=True."""
+    pool = _FakePool(_base_fixture())
+    await data_pipeline_module.request_operator_run(
+        pool, actor="alice", action="run_scoped_feed",
+        stage="daily_bars",
+        check_name="prices_daily_completeness",
+    )
+    insert_calls = [
+        c for c in pool.connections[0].execute_calls
+        if "INSERT INTO" in c[0]
+    ]
+    payload = json.loads(insert_calls[0][1][3])
+    assert payload["params"].get("repair_gaps") is True
+
+
+@pytest.mark.asyncio
+async def test_legacy_stage_only_dispatch_documented_first_match(
+    data_pipeline_module,
+):
+    """Legacy / direct-API callers that don't pass check_name still
+    get a valid params dict via stage reverse-lookup, but the
+    contract is documented as imprecise. This pins that fall-back
+    works (doesn't crash) without claiming it's correct."""
+    pool = _FakePool(_base_fixture())
+    await data_pipeline_module.request_operator_run(
+        pool, actor="alice", action="run_scoped_feed",
+        stage="fundamentals_refresh",
+        # No check_name passed.
+    )
+    insert_calls = [
+        c for c in pool.connections[0].execute_calls
+        if "INSERT INTO" in c[0]
+    ]
+    payload = json.loads(insert_calls[0][1][3])
+    # Whatever params landed are deterministic but documented as
+    # "first match wins"; we just assert it returned A dict.
+    assert isinstance(payload["params"], dict)
+
+
+@pytest.mark.asyncio
+async def test_catalog_params_forwarded_to_audit_payload(data_pipeline_module):
+    """F-001 fix (2026-05-29 expert review): the CHECK_REMEDIATION
+    ``params`` dict (skip_guard_days=0, repair_gaps=True, etc.) MUST
+    be threaded through to the lane daemon. Without this, the surgical
+    repair sends only the tickers list and the stage falls through to
+    its full-universe defaults — the EXACT failure mode the operator's
+    complaint targets."""
+    pool = _FakePool(_base_fixture())
+    # fundamentals_quarterly_completeness → fundamentals_refresh
+    # with catalog params {skip_guard_days: 0}.
+    await data_pipeline_module.request_operator_run(
+        pool, actor="alice", action="repair_failed_scope",
+        stage="fundamentals_refresh", tickers=["ADV", "ADTX"],
+    )
+    insert_calls = [
+        c for c in pool.connections[0].execute_calls
+        if "INSERT INTO" in c[0]
+    ]
+    sql, args = insert_calls[0]
+    payload = json.loads(args[3])
+    # The catalog params must be in the dispatched payload.
+    assert payload["params"]["skip_guard_days"] == 0, (
+        "F-001: catalog params not forwarded — operator-supplied "
+        "tickers without skip_guard_days=0 falls through to the "
+        "24h-skip-fresh logic and silently no-ops"
+    )
+
+
+@pytest.mark.asyncio
+async def test_caller_params_override_catalog(data_pipeline_module):
+    """Explicit operator-supplied params beat the catalog default
+    (allows manual override for unusual situations)."""
+    pool = _FakePool(_base_fixture())
+    await data_pipeline_module.request_operator_run(
+        pool, actor="alice", action="repair_failed_scope",
+        stage="fundamentals_refresh", tickers=["AAPL"],
+        params={"skip_guard_days": 7},
+    )
+    insert_calls = [
+        c for c in pool.connections[0].execute_calls
+        if "INSERT INTO" in c[0]
+    ]
+    payload = json.loads(insert_calls[0][1][3])
+    assert payload["params"]["skip_guard_days"] == 7
+
+
+@pytest.mark.asyncio
+async def test_tickers_truncation_surfaced_in_audit(data_pipeline_module):
+    """F-005 fix: when the ticker list exceeds the 500 cap, the audit
+    payload must record the original count so the operator can see
+    via job-status events that truncation happened."""
+    pool = _FakePool(_base_fixture())
+    raw = [f"T{i}" for i in range(700)]
+    desc = await data_pipeline_module.request_operator_run(
+        pool, actor="alice", action="repair_failed_scope",
+        stage="fundamentals_refresh", tickers=raw,
+    )
+    assert desc["tickers_truncated_from"] == 700
+    assert len(desc["tickers"]) == 500
+    insert_calls = [
+        c for c in pool.connections[0].execute_calls
+        if "INSERT INTO" in c[0]
+    ]
+    payload = json.loads(insert_calls[0][1][3])
+    assert payload["tickers_truncated_from"] == 700
+
+
+def test_blocked_vendor_runtime_toggle(data_pipeline_module, monkeypatch):
+    """F-004 fix: setting CONSOLE_VENDOR_ENABLED=greeks.pro restores
+    the vendor without a code change. Honest round-trip."""
+    monkeypatch.delenv("CONSOLE_VENDOR_ENABLED", raising=False)
+    assert not data_pipeline_module._vendor_enabled("greeks.pro")
+    monkeypatch.setenv("CONSOLE_VENDOR_ENABLED", "greeks.pro,iborrow")
+    assert data_pipeline_module._vendor_enabled("greeks.pro")
+    assert data_pipeline_module._vendor_enabled("iborrow")
+    assert not data_pipeline_module._vendor_enabled("polygon")
+
+
+def test_run_fallback_source_allowlist_strict(data_pipeline_module):
+    """F-003 fix: removed the inline allowlist bootstrap for
+    run_fallback_source. Arbitrary fallback stages now fail with the
+    same strict ValueError as run_feed."""
+    import asyncio
+    pool = _FakePool(_base_fixture())
+    with pytest.raises(ValueError, match="not in RUN_FEED_ALLOWLIST"):
+        asyncio.run(data_pipeline_module.request_operator_run(
+            pool, actor="alice", action="run_fallback_source",
+            stage="some_made_up_stage", tickers=["AAPL"],
+        ))
+
+
+@pytest.mark.asyncio
+async def test_full_pipeline_not_default_for_narrow_failure(data_pipeline_module):
+    """TEST-010 (spec): for narrow validation failures (a check with
+    scoped_auto_heal class and affected_symbols < 100), the primary
+    action surface includes ``repair_failed_scope`` — NOT ``run_update``
+    (which would run the full pipeline)."""
+    # Verify the class config for a known scoped_auto_heal check.
+    spec = data_pipeline_module.CHECK_REMEDIATION["fundamentals_quarterly_completeness"]
+    assert spec["class"] == "scoped_auto_heal"
+    remediation = data_pipeline_module._check_remediation(
+        "fundamentals_quarterly_completeness"
+    )
+    assert "repair_failed_scope" in remediation["allowed_actions"]
+    # Fallback offered too.
+    assert "run_fallback_source" in remediation["allowed_actions"]
+

@@ -75,7 +75,16 @@ async function postJSON<T>(
 
 // ───── Data Pipeline status + job-control types ─────
 
-export type ChartCheckStatus = "PASS" | "WARN" | "FAIL" | "RUNNING" | "UNKNOWN";
+export type ChartCheckStatus = "PASS" | "WARN" | "FAIL" | "RUNNING" | "UNKNOWN" | "BLOCKED_VENDOR_ACCESS";
+
+export type RemediationClass =
+  | "scoped_auto_heal"
+  | "full_stage_required"
+  | "blocked_vendor"
+  | "operator_required"
+  | "unhealable"
+  | "bootstrap"
+  | "not_implemented";
 
 export interface DataPipelineCheck {
   name: string;
@@ -85,10 +94,21 @@ export interface DataPipelineCheck {
   notes: string;
   notes_details: Array<Record<string, unknown>> | null;
   last_checked_at: string | null;
+  remediation_class: RemediationClass;
+  target_stage: string | null;
+  scope_kind: "full" | "tickers" | "tickers_dates";
+  fallback_stage: string | null;
+  vendor: string | null;
+  blocker_reason: string | null;
+  operator_procedure: string | null;
+  operator_note: string | null;
+  unhealable_reason: string | null;
+  estimated_runtime_seconds: number | null;
+  affected_symbols: string[];
+  allowed_actions: string[];
+  // Legacy compat fields:
   healable: boolean;
   actionable: boolean;
-  target_stage: string | null;
-  allowed_actions: string[];
 }
 
 export interface DataPipelineSelfHealEntry {
@@ -226,7 +246,16 @@ export const api = {
   // route returns the console-api response verbatim.
   runDataUpdate: () => postJSON<JobDescriptor>("/api/operations/data-pipeline/run-update"),
   runDataValidation: () => postJSON<JobDescriptor>("/api/operations/data-pipeline/run-validation"),
-  runDataFeed: (stage: string) => postJSON<JobDescriptor>(`/api/operations/data-pipeline/run-feed/${encodeURIComponent(stage)}`),
+  runDataFeed: (stage: string, opts?: { tickers?: string[]; action?: string; check_name?: string }) =>
+    postJSON<JobDescriptor>(
+      `/api/operations/data-pipeline/run-feed/${encodeURIComponent(stage)}`,
+      opts as Record<string, unknown> | undefined,
+    ),
+  runFallback: (stage: string, opts?: { tickers?: string[]; check_name?: string }) =>
+    postJSON<JobDescriptor>(
+      `/api/operations/data-pipeline/run-fallback/${encodeURIComponent(stage)}`,
+      opts as Record<string, unknown> | undefined,
+    ),
   jobStatus: (jobId: string) => fetchJSON<JobStatus>(`/api/operations/data-pipeline/jobs/${encodeURIComponent(jobId)}`, { useConsoleApi: false }),
   abortJob: (jobId: string) => postJSON<{ job_id: string; status: string }>(`/api/operations/data-pipeline/abort/${encodeURIComponent(jobId)}`),
   providers: () => fetchJSON<{ bindings: Array<{ feed: string; provider: string; status: string; adapter: string; note: string }> }>("/api/providers"),

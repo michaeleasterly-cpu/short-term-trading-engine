@@ -55,6 +55,7 @@ export async function requireSession(): Promise<
 export async function forwardPost(
   path: string,
   actor: string,
+  bodyOverride?: Record<string, unknown>,
 ): Promise<NextResponse> {
   const token = process.env.CONSOLE_OPS_TOKEN;
   if (!token) {
@@ -69,6 +70,11 @@ export async function forwardPost(
     );
   }
   const url = `${CONSOLE_API_BASE}${path}`;
+  // Body shape: always carries actor. If the caller supplied a
+  // bodyOverride (e.g. {tickers:[...]} from a scoped repair), merge
+  // it in so the downstream endpoint sees both the actor and the
+  // scope.
+  const body: Record<string, unknown> = { actor, ...(bodyOverride ?? {}) };
   let res: Response;
   try {
     res = await fetch(url, {
@@ -78,12 +84,9 @@ export async function forwardPost(
         Accept: "application/json",
         "Content-Type": "application/json",
         Authorization: `Bearer ${token}`,
-        // Forward the authenticated actor for the audit row. console-api
-        // currently derives actor server-side as 'operator' but accepts
-        // an optional override for the row's ``data->>'actor'``.
         "X-Console-Actor": actor,
       },
-      body: JSON.stringify({ actor }),
+      body: JSON.stringify(body),
     });
   } catch (e) {
     return NextResponse.json(
@@ -91,13 +94,13 @@ export async function forwardPost(
       { status: 502 },
     );
   }
-  let body: unknown = null;
+  let respBody: unknown = null;
   try {
-    body = await res.json();
+    respBody = await res.json();
   } catch {
-    body = { error: res.statusText };
+    respBody = { error: res.statusText };
   }
-  return NextResponse.json(body, { status: res.status });
+  return NextResponse.json(respBody, { status: res.status });
 }
 
 export async function forwardGet(path: string): Promise<NextResponse> {
