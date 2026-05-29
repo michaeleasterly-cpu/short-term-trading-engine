@@ -130,15 +130,24 @@ def _patch_data_validation_only_pipeline(
             ops, "_auto_cascade_stage_robustness", _noop_self_heal,
         )
 
-    # data_validation stub — raises with the requested failed-check list.
-    async def _failing_data_validation(_pool):
+    # data_validation stub — raises on FIRST call (initial validation
+    # found the requested reds); returns passed=True on SECOND call (the
+    # 2026-05-29 control-plane post-cascade re-validation — the cascade
+    # healed the reds). Wave-1 tests model the happy path: cascade
+    # dispatches the canonical refresh AND that refresh actually heals.
+    # Tests that need the failure-still-red path (e.g. TEST-003 in
+    # test_final_lane_verdict.py) construct a separate setup.
+    async def _failing_then_passing_data_validation(_pool):
         validation_stub_calls.append({"called": True})
-        raise RuntimeError(
-            f"validation suite failed: {failed_check_names!r}"
-        )
+        if len(validation_stub_calls) == 1:
+            raise RuntimeError(
+                f"validation suite failed: {failed_check_names!r}"
+            )
+        return {"passed": True, "checks": len(failed_check_names) + 1}
 
     monkeypatch.setattr(
-        ops, "_stage_data_validation", _failing_data_validation,
+        ops, "_stage_data_validation",
+        _failing_then_passing_data_validation,
     )
 
     # Build a minimal _STAGE_SPECS with data_validation FIRST + every
@@ -242,22 +251,36 @@ async def test_d6_fundamentals_completeness_red_invokes_fundamentals_refresh(
         _FakePool(), log, db_log, dry_run=False, force=True,
     )
 
-    # 1. data_validation ran; cascade refresh stage ran exactly once.
-    assert len(validation_calls) == 1
+    # 1. data_validation ran TWICE (2026-05-29 control plane: first pass
+    # finds reds; post-cascade re-validation confirms green); cascade
+    # refresh stage ran exactly once.
+    assert len(validation_calls) == 2
     assert len(refresh_calls) == 1, refresh_calls
     # 2. The cascade passed skip_guard_days=0 to force past skip-guard.
     assert refresh_calls[0]["cfg"].get("skip_guard_days") == 0
 
-    # 3. The cascade's event lands.
+    # 3. Both cascade events land — STAGE_OK from the per-check loop
+    # AND AUTO_RECOVERED_VALIDATION from the post-cascade verdict
+    # (2026-05-29 control plane).
     event_types = [e["event_type"] for e in db_log.events]
+    assert "INGESTION_AUTO_RECOVERY_STAGE_OK" in event_types, event_types
     assert "INGESTION_AUTO_RECOVERED_VALIDATION" in event_types, event_types
+    stage_ok = next(
+        e for e in db_log.events
+        if e["event_type"] == "INGESTION_AUTO_RECOVERY_STAGE_OK"
+    )
+    assert stage_ok["data"].get("check") == "fundamentals_quarterly_completeness"
+    assert stage_ok["data"].get("refresh_stage") == "fundamentals_refresh"
+    assert stage_ok["data"].get("refresh_status") == "OK"
+    # The proven-recovery event carries the post-cascade payload.
     recovered = next(
         e for e in db_log.events
         if e["event_type"] == "INGESTION_AUTO_RECOVERED_VALIDATION"
     )
-    assert recovered["data"].get("check") == "fundamentals_quarterly_completeness"
-    assert recovered["data"].get("refresh_stage") == "fundamentals_refresh"
-    assert recovered["data"].get("refresh_status") == "OK"
+    assert recovered["data"].get("post_cascade_passed") is True
+    assert recovered["data"].get("recovered_checks") == [
+        "fundamentals_quarterly_completeness",
+    ]
 
     # 4. data_validation StageResult is annotated with the cascade meta.
     val_rows = [s for s in summary.stages if s.name == "data_validation"]

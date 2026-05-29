@@ -274,13 +274,30 @@ _SPECS: tuple[HealSpec, ...] = (
                  "any defect here indicates an upstream loader bug "
                  "that needs operator review, not routine drift"
              )),
-    # A stale max-pain snapshot is fixed by re-running the bounded
-    # canonical stage (1 symbol, 1 idempotent API call) — genuinely
-    # healable, not escalate-only. force the skip-guard off so the
-    # heal actually re-pulls.
-    HealSpec(check_name="options_max_pain_freshness", source="greeks_max_pain",
-             healable=True, stage="greeks_max_pain",
-             params={"skip_guard": "false"}, max_attempts=2),
+    # Options max-pain freshness — TEMPORARILY UNHEALABLE 2026-05-29
+    # while greeks.pro account access is broken (operator can't log in to
+    # rotate the revoked API key). The greeks_max_pain stage was
+    # operator-disabled to a no-op stub in scripts/ops.py:5686-5709 on
+    # 2026-05-28 so the cron stops 401-looping; that means the canonical
+    # heal stage will succeed-but-do-nothing every call, leaving the
+    # freshness check perma-red. Reclassify as healable=False with a
+    # documented operator action so the cascade emits one INFO-level
+    # UNHEALABLE acknowledgement per cycle instead of looping a no-op
+    # refresh forever. REVERT in the same commit as re-enabling
+    # _stage_greeks_max_pain (restore healable=True, stage="greeks_max_pain",
+    # params={"skip_guard": "false"}, max_attempts=2).
+    HealSpec(check_name="options_max_pain_freshness",
+             source="greeks_max_pain",
+             healable=False,
+             unhealable_reason=(
+                 "greeks.pro account access disabled 2026-05-29 "
+                 "(operator portal login broken; email sent to vendor). "
+                 "The greeks_max_pain stage is operator-disabled to a "
+                 "no-op stub (scripts/ops.py:5686-5709) so the canonical "
+                 "heal cannot actually refresh data. REVERT this entry "
+                 "back to healable=True in the same commit that restores "
+                 "the stage when greeks.pro access is back."
+             )),
     # Stale insider-sentiment is fixed by re-running the bounded
     # canonical stage with the monthly skip-guard disabled.
     HealSpec(check_name="insider_sentiment_freshness",

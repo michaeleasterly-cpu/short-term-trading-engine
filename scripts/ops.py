@@ -163,15 +163,94 @@ class StageResult:
 
 
 @dataclass
+class FinalLaneVerdict:
+    """Authoritative end-of-run lane verdict (2026-05-29 control-plane fix).
+
+    Single source of truth for every downstream decision: ops.py process
+    exit code, scripts/run_data_operations.sh wrapper continuation, the
+    DATA_OPERATIONS_COMPLETE Step-6 emission gate, and engine sweep
+    eligibility. All of those used to be derived independently from
+    intermediate StageResult statuses; the result was a stale
+    first-pass FAILED data_validation row blocking emission even after
+    every red was cascade-healed (audit 2026-05-29).
+
+    Producer: `cmd_update` builds the verdict AFTER the Wave-1
+    cascade re-runs data_validation. Consumers: UpdateSummary.exit_code
+    (below), amain (process exit), wrapper Step 6 (the
+    INSERT-DATA_OPERATIONS_COMPLETE row only fires when the wrapper
+    sees exit 0, which now means final_status == 'GREEN').
+
+    Field semantics (the schema operator's task spec REQ-001 mandated):
+
+    * ``final_status``: ``'GREEN'`` (lane proven green either first-pass
+      or post-cascade) or ``'RED'`` (unresolved reds remain, OR no
+      data_validation stage ran).
+    * ``exit_code``: ``0`` iff ``final_status == 'GREEN'``.
+    * ``emission_allowed``: ``True`` iff ``final_status == 'GREEN'`` —
+      the wrapper Step 6 + engine sweep gate consult this.
+    * ``engine_dispatch_allowed``: mirror of ``emission_allowed`` (kept
+      separate so a future policy split between emission and dispatch
+      stays expressible without churning the verdict shape).
+    * ``first_pass_failed_checks``: the failed-check list parsed from
+      the FIRST data_validation run's error message (empty when first
+      pass was already green).
+    * ``recovered_checks``: cascade handled these AND post-cascade
+      validation proved them green.
+    * ``remaining_failed_checks``: still red after post-cascade
+      re-validation.
+    * ``unhealable_checks``: HealSpec marked these healable=False —
+      operator-visible reason in the cascade UNHEALABLE event.
+    * ``vendor_late_checks``: D11 classification (vendor has nothing
+      newer; check stays red but is not a regression — preserves the
+      sacred "classification, not relaxation" invariant).
+    * ``cascade_attempted``: did the Wave-1 validation cascade fire?
+    * ``post_cascade_validation_status``: ``None`` (no cascade ran),
+      ``'GREEN'`` (re-validation passed), ``'RED'`` (re-validation
+      found remaining reds), ``'NOT_RUN'`` (cascade fired but
+      re-validate was skipped — e.g. all checks vendor_late or all
+      checks unhealable, so re-running adds no new info).
+    """
+    final_status: str  # "GREEN" | "RED"
+    exit_code: int
+    emission_allowed: bool
+    engine_dispatch_allowed: bool
+    first_pass_failed_checks: list[str] = field(default_factory=list)
+    recovered_checks: list[str] = field(default_factory=list)
+    remaining_failed_checks: list[str] = field(default_factory=list)
+    unhealable_checks: list[str] = field(default_factory=list)
+    vendor_late_checks: list[str] = field(default_factory=list)
+    cascade_attempted: bool = False
+    post_cascade_validation_status: str | None = None  # "GREEN" | "RED" | "NOT_RUN"
+
+
+@dataclass
 class UpdateSummary:
     run_id: uuid.UUID
     started_at: datetime
     finished_at: datetime
     stages: list[StageResult] = field(default_factory=list)
+    # 2026-05-29 control-plane fix: produced by cmd_update AFTER all
+    # cascades complete. When None, exit_code falls back to the legacy
+    # stage-status derivation (preserves backwards compat for code
+    # paths that build UpdateSummary directly without going through
+    # cmd_update — e.g., the dashboard's mock-summary fixtures + the
+    # CLI dry-run path).
+    final_verdict: FinalLaneVerdict | None = None
 
     @property
     def exit_code(self) -> int:
-        # Non-zero if any non-skipped stage failed. Dry-run is never an error.
+        # 2026-05-29 control-plane fix: when the cmd_update flow produced
+        # a FinalLaneVerdict, its exit_code is authoritative — it
+        # accounts for cascade-healed reds (post-cascade re-validation
+        # green-flipped them to OK) and stays 1 on genuinely-unresolved
+        # reds. Without this seam, a stale first-pass FAILED
+        # data_validation row would block DATA_OPERATIONS_COMPLETE
+        # emission even after every red was healed.
+        if self.final_verdict is not None:
+            return self.final_verdict.exit_code
+        # Legacy path: non-zero if any non-skipped stage failed.
+        # Preserved for direct-construction callers + dry-run mode
+        # (which short-circuits before the cascade pipeline runs).
         for s in self.stages:
             if s.status in ("FAILED", "TIMEOUT"):
                 return 1
@@ -8419,8 +8498,404 @@ async def cmd_update(
             summary, pool, daily_bars_config, log=log, db_log=db_log,
         )
 
+    # 2026-05-29 control-plane fix (REQ-001/002/003/004) — after all
+    # cascades complete, build the authoritative FinalLaneVerdict. This
+    # may re-run data_validation ONCE inline (post-cascade re-validation)
+    # so a cascade-healed lane reports exit_code=0 honestly. Skipped on
+    # dry_run (no DB writes allowed) — dry_run uses the legacy
+    # stage-status exit_code path.
+    if not dry_run:
+        summary.final_verdict = await _build_final_lane_verdict(
+            summary, pool, log=log, db_log=db_log,
+        )
+
     summary.finished_at = datetime.now(UTC)
     return summary
+
+
+async def _build_final_lane_verdict(
+    summary: UpdateSummary,
+    pool: asyncpg.Pool,
+    *,
+    log: structlog.stdlib.BoundLogger,
+    db_log,
+) -> FinalLaneVerdict:
+    """Build the FinalLaneVerdict that governs every downstream gate.
+
+    Spec: 2026-05-29 control-plane fix (`task_spec.long_term_data_
+    operations_control_plane_fix`). Audit verdict was FAIL — the Wave-1
+    cascade healed reds without re-running data_validation, so
+    UpdateSummary.exit_code stayed 1 (derived purely from stage status),
+    the wrapper aborted before Step 6, and DATA_OPERATIONS_COMPLETE
+    never emitted naturally.
+
+    This function consolidates ALL the post-cascade decisions:
+
+    1. Locate the FIRST-PASS ``data_validation`` stage row.
+       * If no row exists: NO data_validation ran (only-flag path, infra
+         stages only). Verdict GREEN — there were no reds to heal.
+       * If row.status == 'OK': first pass passed. Verdict GREEN,
+         cascade_attempted=False, post_cascade_validation_status=None.
+       * If row.status == 'FAILED' with a parseable failed_checks list:
+         the cascade may have already mutated row.detail with
+         ``handled`` / ``skipped`` / ``vendor_late`` lists. Re-validate
+         to see whether the heal actually worked.
+
+    2. Re-validation rules (post-cascade, exactly once):
+       * If every first-pass red was either ``handled`` (cascade
+         attempted a refresh) OR ``vendor_late`` (D11 classification,
+         no refresh) OR ``unhealable`` (HealSpec healable=False, no
+         refresh), AND at least one ``handled`` entry exists
+         (something WAS dispatched), then re-run data_validation
+         ONCE.
+       * If nothing was ``handled`` (all reds were vendor_late /
+         unhealable), there's no point re-running — no data changed.
+         Set post_cascade_validation_status='NOT_RUN'.
+
+    3. Final-status computation:
+       * post-cascade re-validation GREEN → final_status='GREEN',
+         flip the data_validation stage row to status='OK' with a
+         ``post_cascade_passed`` detail breadcrumb so
+         ``UpdateSummary.exit_code``'s legacy fallback agrees.
+       * post-cascade re-validation RED → final_status='RED',
+         leave row FAILED with updated ``remaining_failed_checks``
+         detail; exit_code=1.
+       * 'NOT_RUN' branch → final_status depends on whether all
+         remaining reds are unhealable+vendor_late (operator-visible
+         but lane is "as good as it gets"). Per the
+         100%-green-or-don't-trade invariant, we still classify this
+         as RED — operator gates the lane, no silent green. The
+         emission_allowed=False guard is the wrapper's safety.
+
+    4. INGESTION_AUTO_RECOVERED_VALIDATION emission semantics
+       (REQ-003): only emitted by this function, only when
+       post_cascade_validation_status='GREEN'. The intermediate
+       INGESTION_AUTO_RECOVERED_VALIDATION events emitted from
+       _auto_cascade_validation_failures are renamed elsewhere to
+       INGESTION_AUTO_RECOVERY_STAGE_OK (refresh stage dispatched and
+       returned OK) — that's an *attempted* recovery, not *proven*
+       recovery. This function fires the proven-green event.
+
+    Returns the FinalLaneVerdict; the caller stores it on
+    summary.final_verdict so the legacy ``exit_code`` property
+    consults it.
+    """
+    from datetime import UTC as _UTC
+    from datetime import datetime as _dt
+
+    # Locate data_validation row (if any).
+    val_idx: int | None = None
+    val_result: StageResult | None = None
+    for i, s in enumerate(summary.stages):
+        if s.name == "data_validation":
+            val_idx = i
+            val_result = s
+            break
+
+    # Case A — no data_validation ran (--only path, infra-only). Verdict
+    # depends on whether any OTHER stage failed. Preserves backwards
+    # compat with the legacy exit_code semantics.
+    if val_result is None:
+        any_failed = any(
+            s.status in ("FAILED", "TIMEOUT") for s in summary.stages
+        )
+        status = "GREEN" if not any_failed else "RED"
+        return FinalLaneVerdict(
+            final_status=status,
+            exit_code=0 if status == "GREEN" else 1,
+            emission_allowed=(status == "GREEN"),
+            engine_dispatch_allowed=(status == "GREEN"),
+            cascade_attempted=False,
+            post_cascade_validation_status=None,
+        )
+
+    # Case B — first pass already green (no cascade fired).
+    if val_result.status == "OK":
+        any_other_failed = any(
+            s.name != "data_validation"
+            and s.status in ("FAILED", "TIMEOUT")
+            for s in summary.stages
+        )
+        status = "GREEN" if not any_other_failed else "RED"
+        return FinalLaneVerdict(
+            final_status=status,
+            exit_code=0 if status == "GREEN" else 1,
+            emission_allowed=(status == "GREEN"),
+            engine_dispatch_allowed=(status == "GREEN"),
+            cascade_attempted=False,
+            post_cascade_validation_status=None,
+        )
+
+    # Case C — first pass FAILED. Parse the cascade-mutated detail to
+    # see what was handled vs left red.
+    detail = val_result.detail or {}
+    first_pass_failed = list(detail.get("failed_checks") or [])
+    if not first_pass_failed:
+        # Couldn't parse — re-extract from error message as a fallback.
+        first_pass_failed = _parse_failed_check_names(val_result.error)
+    handled = list(detail.get("handled") or [])
+    skipped = list(detail.get("skipped") or [])
+    vendor_late = list(detail.get("vendor_late") or [])
+    cascade_ran = bool(detail.get("cascade")) or bool(handled)
+
+    # Classify ``skipped`` entries: HealSpec-unhealable vs missing-
+    # HealSpec. The registry call is the source of truth.
+    unhealable: list[str] = []
+    truly_unmapped: list[str] = []
+    try:
+        from tpcore.selfheal.registry import spec_for as _spec_for
+        for cn in skipped:
+            sp = _spec_for(cn)
+            if sp is not None and not sp.healable:
+                unhealable.append(cn)
+            else:
+                truly_unmapped.append(cn)
+    except Exception:  # noqa: BLE001 — registry import is best-effort
+        truly_unmapped = list(skipped)
+
+    # Decide whether to re-run data_validation (REQ-002).
+    should_revalidate = bool(handled)  # nothing dispatched → no point
+    post_status: str | None = None
+    remaining_failed: list[str] = []
+    recovered: list[str] = []
+
+    if not should_revalidate:
+        post_status = "NOT_RUN"
+        # No reds were dispatched. Everything that was red stays red.
+        # Distinguish unhealable+vendor_late (operator-classified) from
+        # genuinely unmapped (sentinel-fail).
+        remaining_failed = [
+            c for c in first_pass_failed
+            if c not in vendor_late and c not in unhealable
+        ]
+    else:
+        # Re-run data_validation exactly once. Bounded by the SAME 300s
+        # cap _STAGE_SPECS registers for the regular stage invocation
+        # (line ~7593) so a slow re-validate never hangs the cron past
+        # the cadence budget — REQ-001 from the 2026-05-29 expert
+        # review's F-001 (post-cascade re-validate must not be
+        # unbounded). The wrapped stage-runner path uses
+        # _run_stage_with_timeout's asyncio.wait_for; mirror it here.
+        _REVALIDATE_TIMEOUT_SEC = 300.0
+        try:
+            revalidate_t0 = _dt.now(_UTC)
+            revalidate_payload = await asyncio.wait_for(
+                _stage_data_validation(pool),
+                timeout=_REVALIDATE_TIMEOUT_SEC,
+            )
+            post_status = "GREEN" if revalidate_payload.get("passed") else "RED"
+            duration_ms = int(
+                (_dt.now(_UTC) - revalidate_t0).total_seconds() * 1000
+            )
+        except TimeoutError:
+            # Re-validate ran past 300s. Classify RED with an
+            # operator-visible synthetic check name so the verdict's
+            # remaining_failed_checks captures the cause.
+            log.error(
+                "ops.final_verdict.revalidate_timeout",
+                timeout_sec=_REVALIDATE_TIMEOUT_SEC,
+            )
+            post_status = "RED"
+            remaining_failed = ["data_validation_revalidate_timeout"]
+            duration_ms = int(_REVALIDATE_TIMEOUT_SEC * 1000)
+        except RuntimeError as exc:
+            # _stage_data_validation raises on red — parse the message.
+            msg = str(exc)
+            post_status = "RED"
+            remaining_failed = _parse_failed_check_names(msg)
+            duration_ms = 0
+        except Exception as exc:  # noqa: BLE001 — never crash the cycle
+            log.error(
+                "ops.final_verdict.revalidate_error",
+                error=str(exc), exc_type=type(exc).__name__,
+            )
+            post_status = "RED"
+            duration_ms = 0
+
+        if post_status == "GREEN":
+            recovered = sorted(set(handled))
+            # Flip the data_validation row to OK so the legacy
+            # stage-status path agrees with the verdict. Mirrors the
+            # D14 chunked-recovery pattern (line ~10282) — the
+            # in-codebase precedent for status-flipping after proven
+            # recovery.
+            synthetic = StageResult(
+                name="data_validation",
+                status="OK",
+                duration_ms=duration_ms or val_result.duration_ms,
+                detail={
+                    **detail,
+                    "cascade": True,
+                    "cascade_mode": "validation_failures",
+                    "post_cascade_passed": True,
+                    "post_cascade_failed_checks": [],
+                    "first_pass_failed_checks": first_pass_failed,
+                    "recovered_checks": recovered,
+                    "vendor_late": vendor_late,
+                    "unhealable": unhealable,
+                },
+                error=None,
+            )
+            summary.stages[val_idx] = synthetic
+            # Truthful "proven recovery" event (REQ-003).
+            await db_log.log(
+                "INGESTION_AUTO_RECOVERED_VALIDATION",
+                (
+                    f"validation cascade recovered: post-cascade "
+                    f"re-validation passed (recovered={len(recovered)}, "
+                    f"vendor_late={len(vendor_late)})"
+                ),
+                severity="INFO",
+                data={
+                    "stage": "data_validation",
+                    "cascade_mode": "validation_failures",
+                    "post_cascade_passed": True,
+                    "first_pass_failed_checks": first_pass_failed,
+                    "recovered_checks": recovered,
+                    "vendor_late_checks": vendor_late,
+                    "unhealable_checks": unhealable,
+                },
+            )
+            log.info(
+                "ops.final_verdict.post_cascade_green",
+                recovered=recovered,
+                vendor_late=vendor_late,
+                unhealable=unhealable,
+            )
+        else:
+            # Re-validate still red. Compute the remaining failures
+            # (those not in handled / vendor_late / unhealable).
+            if not remaining_failed:
+                # We didn't get a parsed list from the exception — fall
+                # back to "anything that wasn't recovered".
+                remaining_failed = [
+                    c for c in first_pass_failed
+                    if c not in vendor_late and c not in unhealable
+                ]
+            # Update detail with the post-cascade truth. Keep status=FAILED.
+            val_result.detail = {
+                **detail,
+                "cascade": True,
+                "cascade_mode": "validation_failures",
+                "post_cascade_passed": False,
+                "post_cascade_failed_checks": remaining_failed,
+                "first_pass_failed_checks": first_pass_failed,
+                "vendor_late": vendor_late,
+                "unhealable": unhealable,
+            }
+            summary.stages[val_idx] = val_result
+            await db_log.log(
+                "INGESTION_AUTO_RECOVERY_FAILED",
+                (
+                    f"validation cascade did NOT prove green: "
+                    f"post-cascade remaining reds = {remaining_failed}"
+                ),
+                severity="ERROR",
+                data={
+                    "stage": "data_validation",
+                    "cascade_mode": "validation_failures",
+                    "post_cascade_passed": False,
+                    "first_pass_failed_checks": first_pass_failed,
+                    "remaining_failed_checks": remaining_failed,
+                    "vendor_late_checks": vendor_late,
+                    "unhealable_checks": unhealable,
+                },
+            )
+            log.warning(
+                "ops.final_verdict.post_cascade_red",
+                remaining_failed=remaining_failed,
+                vendor_late=vendor_late,
+                unhealable=unhealable,
+            )
+
+    # Final-status arithmetic. The hard invariant per CLAUDE.md is
+    # "100% data or don't trade" — so any remaining red (including
+    # unhealable + vendor_late) is RED. The operator gates emission;
+    # silent-green on unhealable would violate the contract.
+    #
+    # 2026-05-29 expert review fix (F-003): the prior special-case
+    # override at this point unconditionally set final='GREEN' when
+    # post_status=='GREEN', which leaked vendor_late entries past the
+    # gate. Per orchestrator.py:74-78 ("vendor_late is CLASSIFICATION,
+    # not RELAXATION") any vendor_late entry MUST keep the row red.
+    # Derive ``final`` purely from has_remaining_reds.
+    has_other_stage_fails = any(
+        s.name != "data_validation"
+        and s.status in ("FAILED", "TIMEOUT")
+        for s in summary.stages
+    )
+    has_remaining_reds = (
+        bool(remaining_failed) or bool(unhealable) or bool(vendor_late)
+    )
+
+    # 2026-05-29 expert review fix (F-002, bootstrap unblock): the
+    # cadence check ``data_operations_complete_cadence`` is registered
+    # healable=False and goes RED with reason='never_emitted' on a
+    # fresh DB where no DATA_OPERATIONS_COMPLETE row exists yet. The
+    # check exists to surface a silently-broken lane in steady state,
+    # but in the bootstrap state (no rows ever) it is structurally a
+    # chicken-and-egg — the gate event can never emit because the
+    # check is red, the check can never go green because no event
+    # exists. Special-case ONLY this one check, and ONLY when:
+    #   1. it is the SOLE unhealable entry,
+    #   2. no remaining_failed entries (all other healable reds were
+    #      proven-recovered via post-cascade re-validation),
+    #   3. no vendor_late entries (sacred-gate invariant),
+    #   4. no other stage failed.
+    # Under those conditions, allow this cycle to emit
+    # DATA_OPERATIONS_COMPLETE so the cadence check can self-bootstrap.
+    # From the second cycle onward, the cadence check returns GREEN
+    # (the seed row is < 30h old) and the override never fires. This
+    # makes the system honestly self-bootstrapping — no operator-seed
+    # required for normal operation on a fresh DB.
+    BOOTSTRAP_CADENCE_CHECK = "data_operations_complete_cadence"
+    # post_status semantics for bootstrap eligibility:
+    #   GREEN    — re-validate confirmed all healable reds recovered
+    #   NOT_RUN  — no healable reds existed in the first pass, so the
+    #              cadence is the ONLY red and there's nothing to
+    #              re-validate; the lane is otherwise clean
+    # RED is excluded — re-validate found unrecovered reds, which means
+    # the lane is genuinely not at 100% and bootstrap must not unblock.
+    is_bootstrap_unblock = (
+        unhealable == [BOOTSTRAP_CADENCE_CHECK]
+        and not remaining_failed
+        and not vendor_late
+        and not has_other_stage_fails
+        and post_status in ("GREEN", "NOT_RUN")
+    )
+
+    if is_bootstrap_unblock:
+        # Set the verdict to GREEN; the cadence check will go green
+        # within the same cycle's lookup of the emitted row.
+        final = "GREEN"
+        log.warning(
+            "ops.final_verdict.bootstrap_unblock",
+            reason=(
+                "data_operations_complete_cadence is the SOLE unhealable "
+                "red on a never-emitted lane — allowing this cycle's "
+                "emission to seed the cadence gate; from cycle 2 onward "
+                "the check resolves green naturally"
+            ),
+        )
+    else:
+        final = (
+            "GREEN" if not has_remaining_reds and not has_other_stage_fails
+            else "RED"
+        )
+
+    return FinalLaneVerdict(
+        final_status=final,
+        exit_code=0 if final == "GREEN" else 1,
+        emission_allowed=(final == "GREEN"),
+        engine_dispatch_allowed=(final == "GREEN"),
+        first_pass_failed_checks=first_pass_failed,
+        recovered_checks=recovered,
+        remaining_failed_checks=remaining_failed,
+        unhealable_checks=unhealable,
+        vendor_late_checks=vendor_late,
+        cascade_attempted=cascade_ran,
+        post_cascade_validation_status=post_status,
+    )
 
 
 async def _auto_cascade_coverage_collapse(
@@ -9021,23 +9496,40 @@ async def _auto_cascade_validation_failures(
                 spec_by_name,
                 pool=pool, log=log, db_log=db_log,
             )
+            # 2026-05-29 control-plane fix (REQ-003): emit the attempted-
+            # recovery event ONLY when the refresh stage actually returned
+            # OK. Even then, this is a STAGE_OK event — it proves the
+            # refresh stage dispatched cleanly, NOT that validation passes.
+            # _build_final_lane_verdict emits the proven-recovery
+            # INGESTION_AUTO_RECOVERED_VALIDATION event after re-running
+            # data_validation.
+            refresh_ok = (refresh_outcome.get("status") == "OK")
             await db_log.log(
-                "INGESTION_AUTO_RECOVERED_VALIDATION",
+                "INGESTION_AUTO_RECOVERY_STAGE_OK" if refresh_ok
+                else "INGESTION_AUTO_RECOVERY_FAILED",
                 f"validation cascade {check_name} → {stage_name}",
-                severity="INFO",
+                severity="INFO" if refresh_ok else "ERROR",
                 data={
                     "check": check_name,
                     "refresh_stage": stage_name,
                     "refresh_status": refresh_outcome.get("status"),
                     "refresh_error": refresh_outcome.get("error"),
+                    "stage_ok_means": (
+                        "refresh dispatched cleanly; validation re-run "
+                        "at end-of-cycle determines proven recovery"
+                    ),
                 },
             )
             log.info(
-                "ops.auto_cascade.validation.recovered",
+                "ops.auto_cascade.validation.stage_ok" if refresh_ok
+                else "ops.auto_cascade.validation.stage_failed",
                 check=check_name, stage=stage_name,
                 refresh=refresh_outcome,
             )
-            handled.append(check_name)
+            if refresh_ok:
+                handled.append(check_name)
+            else:
+                skipped.append(check_name)
             continue
 
         # Fall back to the HealSpec registry — the canonical source of
@@ -9053,24 +9545,38 @@ async def _auto_cascade_validation_failures(
                 spec_by_name,
                 pool=pool, log=log, db_log=db_log,
             )
+            # 2026-05-29 control-plane fix (REQ-003): STAGE_OK event,
+            # not optimistic VALIDATION_RECOVERED. The proven-recovery
+            # event is emitted by _build_final_lane_verdict after
+            # post-cascade data_validation re-runs and proves green.
+            refresh_ok = (refresh_outcome.get("status") == "OK")
             await db_log.log(
-                "INGESTION_AUTO_RECOVERED_VALIDATION",
+                "INGESTION_AUTO_RECOVERY_STAGE_OK" if refresh_ok
+                else "INGESTION_AUTO_RECOVERY_FAILED",
                 f"healspec cascade {check_name} → {spec.stage}",
-                severity="INFO",
+                severity="INFO" if refresh_ok else "ERROR",
                 data={
                     "check": check_name,
                     "refresh_stage": spec.stage,
                     "refresh_status": refresh_outcome.get("status"),
                     "refresh_error": refresh_outcome.get("error"),
                     "source": "healspec_registry",
+                    "stage_ok_means": (
+                        "refresh dispatched cleanly; validation re-run "
+                        "at end-of-cycle determines proven recovery"
+                    ),
                 },
             )
             log.info(
-                "ops.auto_cascade.healspec.recovered",
+                "ops.auto_cascade.healspec.stage_ok" if refresh_ok
+                else "ops.auto_cascade.healspec.stage_failed",
                 check=check_name, stage=spec.stage,
                 refresh=refresh_outcome,
             )
-            handled.append(check_name)
+            if refresh_ok:
+                handled.append(check_name)
+            else:
+                skipped.append(check_name)
             continue
         if spec is not None and not spec.healable:
             # Documented unhealable — log at INFO with the documented

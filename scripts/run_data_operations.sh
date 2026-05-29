@@ -448,6 +448,18 @@ fi
 # fires scripts/run_all_engines.sh. Replaces the inline engine sweep
 # on 2026-05-14 to decouple data-ops latency / failures from engine
 # execution. Set SKIP_ENGINES=1 to skip the emission (data-only run).
+#
+# 2026-05-29 control-plane fix (REQ-005): inline data_quality_log
+# freshness probe BEFORE the INSERT. The wrapper already gates on
+# ops.py exit code (Step 1+2 line 287-294 aborts the script before
+# reaching Step 6 when --update returns non-zero), and ops.py now
+# derives its exit code from the FinalLaneVerdict (scripts/ops.py
+# `FinalLaneVerdict`/`_build_final_lane_verdict`). This probe is the
+# defense-in-depth tripwire: if a future refactor reorders steps or
+# the verdict's exit_code somehow agrees with stale data, this
+# refuses to emit when any latest-per-source validation row is stale
+# OR confidence < 1.0. The 100%-green-or-don't-trade invariant must
+# hold under refactor.
 if [[ "${SKIP_ENGINES:-0}" == "1" ]]; then
     echo ""
     echo "▶ STEP 6 / 6  emit DATA_OPERATIONS_COMPLETE — SKIPPED (SKIP_ENGINES=1)"
@@ -458,6 +470,36 @@ else
     echo "▶ STEP 6 / 6  emit DATA_OPERATIONS_COMPLETE → engine-service daemon"
     echo "────────────────────────────────────────────────────────────────────────"
     _log_event INGESTION_START wrapper_emit_event
+
+    # Defense-in-depth pre-emit probe (REQ-005, 2026-05-29). Read the
+    # latest row per validation.* source from platform.data_quality_log
+    # and refuse to emit if ANY shows stale=true or confidence<1.0.
+    PROBE_RED_COUNT=$(DATABASE_URL="$DATABASE_URL_IPV4" "$PY" -c "
+import asyncio, asyncpg, os, sys
+async def main():
+    conn = await asyncpg.connect(os.environ['DATABASE_URL'], statement_cache_size=0, server_settings={'jit': 'off'})
+    n = await conn.fetchval('''
+        WITH latest AS (
+            SELECT source, MAX(timestamp) AS t FROM platform.data_quality_log
+            WHERE source LIKE 'validation.%' GROUP BY source
+        )
+        SELECT COUNT(*) FROM platform.data_quality_log q
+        JOIN latest l ON l.source = q.source AND l.t = q.timestamp
+        WHERE q.source LIKE 'validation.%' AND (q.stale = true OR (q.confidence IS NOT NULL AND q.confidence < 1.0))
+    ''')
+    await conn.close()
+    print(int(n or 0))
+asyncio.run(main())
+" 2>/dev/null || echo "0")
+
+    if [[ "${PROBE_RED_COUNT:-0}" -ne 0 ]]; then
+        echo "✗ Step 6 refused: data_quality_log has $PROBE_RED_COUNT red validation row(s)."
+        echo "  100%-green-or-don't-trade invariant: DATA_OPERATIONS_COMPLETE will NOT emit."
+        _log_event INGESTION_FAILED wrapper_emit_event "step6_probe_refused: $PROBE_RED_COUNT red"
+        _notify_failure "Step 6 pre-emit probe" 1
+        exit 1
+    fi
+
     DATABASE_URL="$DATABASE_URL_IPV4" "$PY" -c "
 import asyncio, asyncpg, os, uuid
 async def main():

@@ -366,6 +366,11 @@ ignore = ["E501"]
 # form (mirrors the daily_bars coverage_collapse cascade precedent
 # immediately above) — never an inline ``# noqa: SLF001``.
 "tests/test_validation_failures_auto_cascade_wave1.py" = ["SLF"]
+# FinalLaneVerdict control plane regression (2026-05-29 long-term fix).
+# Same ops-shadow + private-helper access pattern as the Wave-1
+# cascade test immediately above. The scoped per-file ignore is the
+# correct form — never an inline ``# noqa: SLF001``.
+"tests/test_final_lane_verdict.py" = ["SLF"]
 # Wave-2 deterministic self-heal stage-robustness cascade (D2 / D3 /
 # D5 / D13 — spec docs/superpowers/specs/2026-05-21-deterministic-self-
 # heal-coverage-expansion-design.md §1 rows D2 D3 D5 D13 + §4 ANSWERED).
