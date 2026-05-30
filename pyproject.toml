@@ -168,6 +168,22 @@ ignore = ["E501"]
 # function is module-internal by intent). Scoped per-file ignore is
 # the canonical form per ``.claude/rules/tests-and-ci.md``.
 "tpcore/tests/test_upsert_bars_provenance_guard.py" = ["SLF"]
+# P0 foundation (2026-05-30) — three test files that legitimately
+# reach into module-private surface to verify foundation invariants:
+#   * test_sec_ticker_cik_map.py — injects a fake map into
+#     ``SECTickerCIKMap._map`` so the resolution tests are hermetic
+#     (no network, no SEC_EDGAR_USER_AGENT required).
+#   * test_backfill_sec_metadata_stage.py — names ``ops._STAGE_SPECS``
+#     directly to confirm stage registration without invoking the CLI.
+#   * test_p0_no_validator_semantics_change.py — pins the byte-frozen
+#     ``_FILING_DATES_SQL`` constant on the validator (the operator
+#     hard rule "no validator semantics change in this patch" needs a
+#     sentinel, and the SQL is module-internal by intent).
+# Scoped per-file ignores are the canonical form per
+# ``.claude/rules/tests-and-ci.md`` — never inline ``# noqa: SLF001``.
+"tests/test_sec_ticker_cik_map.py" = ["SLF"]
+"tests/test_backfill_sec_metadata_stage.py" = ["SLF"]
+"tests/test_p0_no_validator_semantics_change.py" = ["SLF"]
 # SP-B T4 dispatch-seam characterization test: pinning that the lazy
 # PARAM_RANGES + `_lab_target_for` resolver + the `_runner_for`/
 # `_context_loader_for`/`_context_runner_for` thin views preserve the

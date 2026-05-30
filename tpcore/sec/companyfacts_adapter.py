@@ -210,6 +210,253 @@ class SECCompanyFactsAdapter:
         }
 
 
+    @staticmethod
+    def extract_filing_metadata(submissions: dict) -> dict:
+        """Extract issuer reporting-model evidence from a SEC EDGAR
+        ``submissions.json`` payload (P0-002, 2026-05-30 expert plan).
+
+        IMPORTANT — wrong endpoint correction during the P0 build: the
+        original P0 spec said "extract from DEI block in companyfacts"
+        but the live SEC companyfacts payload only exposes
+        ``dei.EntityCommonStockSharesOutstanding`` and
+        ``dei.EntityPublicFloat``. The dispositive issuer-class signals
+        (DocumentType histogram, fiscal year end, first/last filing
+        dates) live on the SEC ``submissions/CIK<cik>.json`` endpoint
+        which the existing ``edgar_adapter.py`` already fetches.
+
+        SEC submissions.json shape (verified for CIK 0000320193 / AAPL
+        2026-05-30):
+
+            {
+              "name": "Apple Inc.",
+              "fiscalYearEnd": "0926",          # MMDD, AAPL fy ends Sep
+              "category": "Large accelerated filer",
+              "filings": {
+                "recent": {
+                  "form": ["10-Q","8-K","4","20-F",...],
+                  "filingDate": ["2026-05-12",...],
+                  "reportDate": ["2026-03-29",...]
+                }
+              }
+            }
+
+        Returns a structured dict — every field is ``None`` when the
+        submissions payload doesn't carry the signal (no guessing). The
+        caller persists these to ``platform.ticker_classifications``
+        columns ``sec_document_type_primary``, ``sec_document_type_
+        history``, ``first_public_filing_date``, ``fiscal_year_end_
+        month``, ``last_filing_date``.
+
+        Derivation rules:
+
+          * ``document_type_primary``: the most-frequent
+            **periodic-report** form (10-Q / 10-K / 20-F / 40-F / 10-Q/A
+            / 10-K/A). Excludes 8-K, 4, 144, S-* registration filings,
+            etc. — they are not the issuer's primary reporting cadence
+            and would corrupt the histogram. Tie-break by most-recent.
+
+          * ``document_type_history``: full histogram across ALL forms
+            (not filtered) for diagnostics.
+
+          * ``first_public_filing_date``: min(reportDate) over rows
+            where form == primary. Anchors on the primary periodic
+            report (not on first 8-K) so SPACs and post-IPO entities
+            are dated correctly.
+
+          * ``last_filing_date``: max(filingDate) across ALL rows.
+            Used downstream (P2) to corroborate delisting via
+            cessation of filings.
+
+          * ``fiscal_year_end_month``: parse the month component out
+            of the top-level ``fiscalYearEnd`` field, format ``"MMDD"``
+            (e.g. ``"0926"`` → 9, ``"1231"`` → 12, ``"0831"`` → 8).
+
+        Returns:
+            ``{
+                'document_type_primary': str | None,
+                'document_type_history': dict[str, int] | None,
+                'first_public_filing_date': date | None,
+                'last_filing_date': date | None,
+                'fiscal_year_end_month': int | None,
+            }``
+
+        Limitations:
+          * ``filings.recent`` carries only the most-recent ~1000
+            filings. Companies with > 1000 filings have older entries
+            in ``filings.files[]`` (paginated). For our currently-
+            failing 25 tickers all post-2010 IPOs, recent covers their
+            entire history. For first_public_filing_date of long-lived
+            companies (AAPL 1995-onward), recent only captures the
+            last ~8 years — that's a known P0 limitation; full-history
+            pagination is a P1 follow-up.
+        """
+        from collections import Counter
+        from datetime import date as _date
+
+        # Periodic-report forms we treat as primary candidates.
+        _PERIODIC_FORMS = {
+            "10-Q", "10-K", "10-Q/A", "10-K/A",
+            "20-F", "20-F/A", "40-F", "40-F/A",
+        }
+
+        filings = submissions.get("filings") or {}
+        recent = filings.get("recent") or {}
+        forms = list(recent.get("form") or [])
+        filing_dates = list(recent.get("filingDate") or [])
+        report_dates = list(recent.get("reportDate") or [])
+
+        if not forms:
+            return {
+                "document_type_primary": None,
+                "document_type_history": None,
+                "first_public_filing_date": None,
+                "last_filing_date": None,
+                "fiscal_year_end_month": _parse_fiscal_year_end_mmdd(
+                    submissions.get("fiscalYearEnd"),
+                ),
+            }
+
+        # Align parallel arrays defensively — SEC keeps them in lock-
+        # step but slice to the shortest length just in case.
+        n = min(len(forms), len(filing_dates), len(report_dates))
+        forms = forms[:n]
+        filing_dates = filing_dates[:n]
+        report_dates = report_dates[:n]
+
+        full_histogram: Counter = Counter(forms)
+
+        # Periodic-report subset for primary classification.
+        # ``strict=False``: arrays sliced to common ``n`` above so they
+        # are length-aligned; the defensive slice is the invariant, not
+        # the zip strictness.
+        periodic_rows: list[tuple[str, _date | None, _date | None]] = []
+        for f, fd, rd in zip(forms, filing_dates, report_dates, strict=False):
+            if f not in _PERIODIC_FORMS:
+                continue
+            try:
+                fd_d = _date.fromisoformat(fd) if fd else None
+            except (ValueError, TypeError):
+                fd_d = None
+            try:
+                rd_d = _date.fromisoformat(rd) if rd else None
+            except (ValueError, TypeError):
+                rd_d = None
+            periodic_rows.append((f, fd_d, rd_d))
+
+        primary: str | None = None
+        first_filing: _date | None = None
+        if periodic_rows:
+            periodic_counter: Counter = Counter(
+                r[0] for r in periodic_rows
+            )
+            # Collapse the /A amendment variants into the base form for
+            # primary-type classification (10-Q/A → counts toward 10-Q).
+            base_counter: Counter = Counter()
+            for form, count in periodic_counter.items():
+                base = form.rstrip("/A").rstrip("/")
+                base_counter[base] += count
+
+            max_count = max(base_counter.values())
+            top = [v for v, c in base_counter.items() if c == max_count]
+            if len(top) == 1:
+                primary = top[0]
+            else:
+                # Tie-break — pick the base whose most-recent filing is
+                # newest. Compare on filingDate.
+                most_recent_by_base: dict[str, _date] = {}
+                for form, fd, _rd in periodic_rows:
+                    base = form.rstrip("/A").rstrip("/")
+                    if base in top and fd is not None:
+                        cur = most_recent_by_base.get(base)
+                        if cur is None or fd > cur:
+                            most_recent_by_base[base] = fd
+                if most_recent_by_base:
+                    primary = max(
+                        most_recent_by_base,
+                        key=lambda k: most_recent_by_base[k],
+                    )
+
+            if primary:
+                primary_report_dates = [
+                    rd for f, _fd, rd in periodic_rows
+                    if f.rstrip("/A").rstrip("/") == primary and rd is not None
+                ]
+                if primary_report_dates:
+                    first_filing = min(primary_report_dates)
+
+        # last_filing_date — over ALL forms (not just periodic).
+        last_filing: _date | None = None
+        all_fd = []
+        for fd in filing_dates:
+            try:
+                d = _date.fromisoformat(fd) if fd else None
+                if d:
+                    all_fd.append(d)
+            except (ValueError, TypeError):
+                continue
+        if all_fd:
+            last_filing = max(all_fd)
+
+        return {
+            "document_type_primary": primary,
+            "document_type_history": dict(full_histogram),
+            "first_public_filing_date": first_filing,
+            "last_filing_date": last_filing,
+            "fiscal_year_end_month": _parse_fiscal_year_end_mmdd(
+                submissions.get("fiscalYearEnd"),
+            ),
+        }
+
+    async def get_submissions(self, cik: str) -> dict | None:
+        """Fetch ``submissions/CIK<cik>.json`` from data.sec.gov
+        (P0-002 2026-05-30).
+
+        Companyfacts is at ``data.sec.gov/api/xbrl/companyfacts/`` —
+        submissions live at ``data.sec.gov/submissions/`` (sibling
+        path under the same host). The shared base_url on this
+        adapter is ``https://data.sec.gov`` so a relative path
+        works. Returns the parsed dict, or ``None`` if SEC returned
+        404 (CIK exists in our DB but SEC doesn't have a submissions
+        index — rare; usually means the CIK is wrong)."""
+        if self._client is None:
+            raise RuntimeError(
+                "SECCompanyFactsAdapter must be used as a context manager"
+            )
+        cik_padded = str(cik).lstrip("0").zfill(10)
+        url = f"/submissions/CIK{cik_padded}.json"
+        try:
+            resp = await self._client.get(url)
+        except httpx.RequestError as exc:
+            logger.warning(
+                "sec.submissions.fetch_error",
+                cik=cik_padded, error=str(exc),
+            )
+            return None
+        if resp.status_code == 404:
+            return None
+        if resp.status_code != 200:
+            logger.warning(
+                "sec.submissions.unexpected_status",
+                cik=cik_padded, status=resp.status_code,
+            )
+            return None
+        return resp.json()
+
+
+def _parse_fiscal_year_end_mmdd(raw: str | None) -> int | None:
+    """Parse SEC submissions.json ``fiscalYearEnd`` field. Format is
+    ``MMDD`` (4-char zero-padded, e.g. ``"0926"`` for September 26).
+    Returns the month component as 1-12, or ``None`` if the format
+    is unexpected. Never guesses."""
+    if not raw or not isinstance(raw, str) or len(raw) != 4:
+        return None
+    try:
+        month = int(raw[:2])
+    except ValueError:
+        return None
+    return month if 1 <= month <= 12 else None
+
+
 __all__ = [
     "SECCompanyFactsAdapter",
     "SEC_DATA_BASE_URL",

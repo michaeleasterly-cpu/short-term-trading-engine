@@ -2601,6 +2601,399 @@ async def _stage_reclassify_asset_class(
     }
 
 
+async def _stage_backfill_sec_metadata(
+    pool: asyncpg.Pool, cfg: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """SEC-evidence metadata backfill (P0-003, 2026-05-30).
+
+    Foundation stage for the evidence-based fundamentals-validation
+    rewrite (spec `2026-05-30-asset-class-refinement.md` follow-up;
+    expert audit verdict REVISE_ARCHITECTURE). This stage ONLY writes
+    metadata columns added by migration `20260530_0200`. It does NOT
+    change validator semantics, does NOT touch the capital gate, does
+    NOT change PASS/FAIL behavior. The new fields are foundation for
+    a future five-state ``fundamentals_quarterly_completeness``
+    rewrite — this stage simply populates evidence so that rewrite has
+    something to read.
+
+    Two paths, both optional, both idempotent:
+
+      * ``do_cik=true`` — for rows where ``cik IS NULL``, fetch the
+        SEC ticker→CIK map (``data.sec.gov/files/company_tickers``)
+        and resolve. NEVER overwrites a non-NULL CIK
+        (operator-provenance preservation). Records ``cik_source =
+        'sec_ticker_map'`` for resolved rows.
+
+      * ``do_metadata=true`` — for rows where ``cik IS NOT NULL`` AND
+        any of the SEC evidence columns are NULL, fetch
+        ``data.sec.gov/submissions/CIK<cik>.json`` and extract the
+        primary DocumentType + form histogram + fiscal_year_end_month
+        + first/last filing dates. Stores provenance via
+        ``metadata_source = 'sec_submissions'`` and
+        ``metadata_updated_at = NOW()``.
+
+    Scope params (``--param key=value``):
+
+      * ``dry_run`` (bool, default **True**) — print plan, no DB writes.
+        Operator hard rule: never assume backfills are non-dry by
+        default.
+      * ``do_cik`` (bool, default True) — run the CIK-resolution leg.
+      * ``do_metadata`` (bool, default True) — run the metadata leg.
+      * ``tickers`` (comma-list) — explicit scope.
+      * ``failing_only`` (bool, default False) — scope to the tickers
+        currently flagged by ``check_fundamentals_quarterly_completeness``.
+        The dispositive operator-facing case for "fix the 25 failing".
+      * ``no_cik_country_null`` (bool, default False) — scope to the
+        ~1,630 rows with ``cik IS NULL AND country IS NULL`` (the
+        large CIK-discovery backfill bucket).
+      * ``max_tickers`` (int, optional) — cap (testing/incremental).
+      * ``force_refresh_metadata`` (bool, default False) — re-run
+        metadata extraction even for rows already populated.
+
+    SEC fair-use: 10 req/sec hard cap. We sleep 0.11s between
+    submissions fetches to stay comfortably under the limit.
+
+    Output payload:
+
+        {
+          "scope_size": int,
+          "cik": {
+              "candidates": int, "resolved": int, "unresolved": int,
+              "skipped_already_set": int, "written": int,
+          },
+          "metadata": {
+              "candidates": int, "fetched": int, "submissions_404": int,
+              "extracted_with_values": int, "written": int,
+              "failures": [<ticker>, ...],
+          },
+          "coverage_before": {<col>: int, ...},
+          "coverage_after": {<col>: int, ...},
+          "dry_run": bool,
+        }
+    """
+    log = structlog.get_logger("scripts.ops")
+    cfg = cfg or {}
+
+    def _to_bool(v: Any) -> bool:
+        if isinstance(v, bool):
+            return v
+        return str(v).lower() in ("true", "1", "yes", "y")
+
+    dry_run = _to_bool(cfg.get("dry_run", True))
+    do_cik = _to_bool(cfg.get("do_cik", True))
+    do_metadata = _to_bool(cfg.get("do_metadata", True))
+    failing_only = _to_bool(cfg.get("failing_only", False))
+    no_cik_country_null = _to_bool(cfg.get("no_cik_country_null", False))
+    force_refresh_metadata = _to_bool(cfg.get("force_refresh_metadata", False))
+    max_tickers = int(cfg["max_tickers"]) if cfg.get("max_tickers") else None
+    ticker_scope_raw = cfg.get("tickers")
+    explicit_tickers: list[str] | None = None
+    if ticker_scope_raw:
+        explicit_tickers = [
+            t.strip().upper()
+            for t in str(ticker_scope_raw).split(",")
+            if t.strip()
+        ] or None
+
+    # ─── coverage snapshot helper ───
+    _COVERAGE_SQL = """
+        SELECT
+            COUNT(*) AS total,
+            COUNT(*) FILTER (WHERE cik IS NOT NULL) AS has_cik,
+            COUNT(*) FILTER (WHERE sec_document_type_primary IS NOT NULL)
+                AS has_sec_document_type_primary,
+            COUNT(*) FILTER (WHERE first_public_filing_date IS NOT NULL)
+                AS has_first_public_filing_date,
+            COUNT(*) FILTER (WHERE last_filing_date IS NOT NULL)
+                AS has_last_filing_date,
+            COUNT(*) FILTER (WHERE fiscal_year_end_month IS NOT NULL)
+                AS has_fiscal_year_end_month,
+            COUNT(*) FILTER (WHERE metadata_source IS NOT NULL)
+                AS has_metadata_source,
+            COUNT(*) FILTER (WHERE cik_source IS NOT NULL)
+                AS has_cik_source
+        FROM platform.ticker_classifications
+    """
+
+    async def _snapshot() -> dict[str, int]:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(_COVERAGE_SQL)
+        return {k: int(v or 0) for k, v in dict(row).items()}
+
+    coverage_before = await _snapshot()
+    log.info(
+        "ops.stage.backfill_sec_metadata.start",
+        dry_run=dry_run, do_cik=do_cik, do_metadata=do_metadata,
+        failing_only=failing_only,
+        no_cik_country_null=no_cik_country_null,
+        force_refresh_metadata=force_refresh_metadata,
+        explicit_tickers=len(explicit_tickers) if explicit_tickers else None,
+        max_tickers=max_tickers,
+        coverage_before=coverage_before,
+    )
+
+    # ─── resolve scope ───
+    scope_tickers: list[str] = []
+    if failing_only:
+        from tpcore.quality.validation.checks.fundamentals_quarterly_completeness import (  # noqa: E501
+            _evaluate as _fund_eval,
+        )
+        ev = await _fund_eval(pool)
+        if ev.sentinel is None:
+            scope_tickers = sorted(ev.gaps)
+        log.info(
+            "ops.stage.backfill_sec_metadata.failing_only_scope",
+            count=len(scope_tickers),
+        )
+    if explicit_tickers:
+        scope_tickers = sorted(set(scope_tickers) | set(explicit_tickers))
+    if no_cik_country_null:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT ticker FROM platform.ticker_classifications
+                WHERE cik IS NULL AND country IS NULL
+                ORDER BY ticker
+                """
+            )
+        scope_tickers = sorted(set(scope_tickers) | {r["ticker"] for r in rows})
+        log.info(
+            "ops.stage.backfill_sec_metadata.no_cik_country_null_added",
+            added=len(rows), total_scope=len(scope_tickers),
+        )
+
+    if not scope_tickers and not (failing_only or no_cik_country_null
+                                  or explicit_tickers):
+        # No explicit scope filter set → default to "rows missing
+        # metadata", but cap to max_tickers so we don't accidentally
+        # walk the whole 13,840-row table.
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT ticker FROM platform.ticker_classifications
+                WHERE cik IS NULL
+                   OR sec_document_type_primary IS NULL
+                ORDER BY ticker
+                """
+            )
+        scope_tickers = [r["ticker"] for r in rows]
+
+    if max_tickers:
+        scope_tickers = scope_tickers[:max_tickers]
+
+    if not scope_tickers:
+        coverage_after = await _snapshot()
+        return {
+            "scope_size": 0,
+            "cik": {"candidates": 0, "resolved": 0, "unresolved": 0,
+                    "skipped_already_set": 0, "written": 0},
+            "metadata": {"candidates": 0, "fetched": 0,
+                         "submissions_404": 0,
+                         "extracted_with_values": 0, "written": 0,
+                         "failures": []},
+            "coverage_before": coverage_before,
+            "coverage_after": coverage_after,
+            "dry_run": dry_run,
+            "note": "no rows matched scope",
+        }
+
+    # Pull current state for the scope (cik so we can gate, plus we
+    # need the row to exist before we UPDATE).
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT ticker, cik, country,
+                   sec_document_type_primary, first_public_filing_date,
+                   last_filing_date, fiscal_year_end_month, metadata_source
+            FROM platform.ticker_classifications
+            WHERE ticker = ANY($1::text[])
+            ORDER BY ticker
+            """,
+            scope_tickers,
+        )
+    state_by_ticker: dict[str, dict[str, Any]] = {
+        r["ticker"]: dict(r) for r in rows
+    }
+    # Drop any scope tickers that don't have a row (defensive — they
+    # would silently fail the UPDATE otherwise).
+    scope_tickers = [t for t in scope_tickers if t in state_by_ticker]
+    log.info(
+        "ops.stage.backfill_sec_metadata.scope_resolved",
+        scope_size=len(scope_tickers),
+    )
+
+    # ─── CIK resolution leg ───
+    cik_stats = {
+        "candidates": 0, "resolved": 0, "unresolved": 0,
+        "skipped_already_set": 0, "written": 0,
+    }
+    cik_writes: list[tuple[str, str, str]] = []  # (ticker, cik, cik_source)
+    if do_cik:
+        from tpcore.sec.ticker_cik_map import SECTickerCIKMap
+
+        existing_ciks = {
+            t: state_by_ticker[t]["cik"] for t in scope_tickers
+        }
+        sec_map = SECTickerCIKMap()
+        result = await sec_map.resolve_missing_ciks(
+            scope_tickers, existing_ciks,
+        )
+        cik_stats["candidates"] = sum(
+            1 for t in scope_tickers if not existing_ciks.get(t)
+        )
+        cik_stats["resolved"] = len(result.resolved)
+        cik_stats["unresolved"] = len(result.unresolved)
+        cik_stats["skipped_already_set"] = len(result.skipped_already_set)
+        for ticker, entry in result.resolved.items():
+            cik_writes.append((ticker, entry.cik, "sec_ticker_map"))
+        log.info(
+            "ops.stage.backfill_sec_metadata.cik_leg",
+            **cik_stats,
+        )
+
+    # ─── metadata extraction leg ───
+    metadata_stats = {
+        "candidates": 0, "fetched": 0, "submissions_404": 0,
+        "extracted_with_values": 0, "written": 0,
+    }
+    metadata_failures: list[str] = []
+    metadata_writes: list[tuple[str, str, dict | None,
+                                date | None, date | None,
+                                int | None]] = []
+    # ^ (ticker, document_type_primary, document_type_history,
+    #    first_public_filing_date, last_filing_date,
+    #    fiscal_year_end_month)
+    if do_metadata:
+        from tpcore.sec.companyfacts_adapter import SECCompanyFactsAdapter
+
+        # CIK source: prefer the row's existing CIK; if the CIK leg
+        # just resolved one in this run, use that for the same ticker
+        # (so a single stage run can both resolve CIK and pull
+        # metadata for newly-resolved rows).
+        cik_resolutions_this_run = {
+            t: cik for t, cik, _src in cik_writes
+        }
+
+        async def _cik_for(ticker: str) -> str | None:
+            existing = state_by_ticker[ticker].get("cik")
+            if existing:
+                return str(existing)
+            return cik_resolutions_this_run.get(ticker)
+
+        async with SECCompanyFactsAdapter() as sec:
+            for ticker in scope_tickers:
+                cik = await _cik_for(ticker)
+                if cik is None:
+                    continue
+                # Skip if already populated unless force_refresh_metadata.
+                state = state_by_ticker[ticker]
+                already_populated = (
+                    state.get("sec_document_type_primary") is not None
+                    and state.get("fiscal_year_end_month") is not None
+                )
+                if already_populated and not force_refresh_metadata:
+                    continue
+                metadata_stats["candidates"] += 1
+                # SEC fair-use throttle.
+                await asyncio.sleep(0.11)
+                try:
+                    subs = await sec.get_submissions(cik)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning(
+                        "ops.stage.backfill_sec_metadata.submissions_error",
+                        ticker=ticker, cik=cik,
+                        error_type=type(exc).__name__, error=str(exc),
+                    )
+                    metadata_failures.append(ticker)
+                    continue
+                if subs is None:
+                    metadata_stats["submissions_404"] += 1
+                    continue
+                metadata_stats["fetched"] += 1
+                meta = sec.extract_filing_metadata(subs)
+                has_any = any(meta.get(k) is not None for k in (
+                    "document_type_primary", "fiscal_year_end_month",
+                    "first_public_filing_date", "last_filing_date",
+                ))
+                if has_any:
+                    metadata_stats["extracted_with_values"] += 1
+                metadata_writes.append((
+                    ticker,
+                    meta.get("document_type_primary"),
+                    meta.get("document_type_history"),
+                    meta.get("first_public_filing_date"),
+                    meta.get("last_filing_date"),
+                    meta.get("fiscal_year_end_month"),
+                ))
+        log.info(
+            "ops.stage.backfill_sec_metadata.metadata_leg",
+            **metadata_stats,
+            failures=len(metadata_failures),
+        )
+
+    # ─── apply writes (idempotent UPDATEs) ───
+    if not dry_run and (cik_writes or metadata_writes):
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                if cik_writes:
+                    # Only writes where CIK is currently NULL (the safety
+                    # invariant — operator-provenance preserved). Doing
+                    # the gate at SQL time too is belt-and-braces; the
+                    # SECTickerCIKMap already filtered, but a concurrent
+                    # writer could have populated CIK between the read
+                    # and this write.
+                    await conn.executemany(
+                        """
+                        UPDATE platform.ticker_classifications
+                        SET cik = $2, cik_source = $3, updated_at = NOW()
+                        WHERE ticker = $1 AND cik IS NULL
+                        """,
+                        cik_writes,
+                    )
+                    cik_stats["written"] = len(cik_writes)
+                if metadata_writes:
+                    # The metadata UPDATE always writes (re-write is
+                    # safe for the foundation columns; if we got the
+                    # row this time we re-confirm provenance).
+                    await conn.executemany(
+                        """
+                        UPDATE platform.ticker_classifications
+                        SET sec_document_type_primary = $2,
+                            sec_document_type_history = $3::jsonb,
+                            first_public_filing_date = $4,
+                            last_filing_date = $5,
+                            fiscal_year_end_month = $6,
+                            metadata_source = 'sec_submissions',
+                            metadata_updated_at = NOW(),
+                            updated_at = NOW()
+                        WHERE ticker = $1
+                        """,
+                        [
+                            (t, dt,
+                             json.dumps(hist) if hist is not None else None,
+                             first, last, fy)
+                            for t, dt, hist, first, last, fy
+                            in metadata_writes
+                        ],
+                    )
+                    metadata_stats["written"] = len(metadata_writes)
+        log.info(
+            "ops.stage.backfill_sec_metadata.writes_committed",
+            cik_written=cik_stats["written"],
+            metadata_written=metadata_stats["written"],
+        )
+
+    coverage_after = await _snapshot()
+    return {
+        "scope_size": len(scope_tickers),
+        "cik": cik_stats,
+        "metadata": {**metadata_stats, "failures": metadata_failures[:50]},
+        "coverage_before": coverage_before,
+        "coverage_after": coverage_after,
+        "dry_run": dry_run,
+    }
+
+
 async def _stage_classify_tickers(
     pool: asyncpg.Pool, cfg: dict[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -7774,6 +8167,16 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # one-shot followed by per-new-ticker refresh on classify_tickers cadence).
     ("reclassify_asset_class",
         lambda pool, cfg: (lambda: _stage_reclassify_asset_class(pool, cfg)),
+        HEAVY_STAGE_TIMEOUT_SEC),
+    # P0-003 (2026-05-30) — SEC-evidence metadata backfill (operator-on-
+    # demand; not in any scheduled pipeline). Foundation for the future
+    # five-state fundamentals_quarterly_completeness rewrite — this
+    # stage ONLY writes the new evidence columns added by migration
+    # 20260530_0200; validator semantics are unchanged. Idempotent.
+    # See docs/superpowers/specs/2026-05-30-asset-class-refinement.md
+    # follow-up + expert audit REVISE_ARCHITECTURE.
+    ("backfill_sec_metadata",
+        lambda pool, cfg: (lambda: _stage_backfill_sec_metadata(pool, cfg)),
         HEAVY_STAGE_TIMEOUT_SEC),
     # v2.2 Phase P5 — backfill TKR-14 PK on existing ticker_classifications
     # rows + seed ticker_history first-seen entries. Idempotent; safe re-run.
