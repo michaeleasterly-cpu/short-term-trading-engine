@@ -826,19 +826,51 @@ async def _stage_daily_bars(pool: asyncpg.Pool, config: dict[str, Any]) -> dict[
     # `prices_daily_*` checks now also run on-completion via the
     # Phase 2/3 tripwire (_per_feed_tripwire). Defense-in-depth — do
     # NOT grow bespoke logic here; extend the canonical check instead.
+    # 2026-05-30 fix: align the pre-filter denominator with the
+    # canonical check at tpcore/quality/validation/checks/prices_daily_
+    # freshness.py:210-231, which counts ONLY rows whose ticker has an
+    # ``asset_class='stock'`` classification AND a liquidity_tiers row
+    # with ``tier <= TRADEABLE_TIER_MAX``. The pre-existing query
+    # counted ALL distinct tickers (including SPAC units/warrants,
+    # funds, ETFs) so SPAC redemption-day churn — which is structural,
+    # not a real coverage collapse — repeatedly red-tripped the gate
+    # on Fridays.
+    #
+    # The denominator drift contradicted the comment block above
+    # ("It already reuses the canonical check's threshold so it cannot
+    # diverge"). The threshold (COVERAGE_COLLAPSE_PCT) was indeed
+    # shared, but the UNIVERSE was not. That's the divergence the
+    # comment forbids — corrected here.
+    #
+    # Investigation memo, 2026-05-29: 82 tickers missing Friday vs
+    # Thursday = 78 SPACs (units U / warrants W / Class A) + 2 funds
+    # + 1 ETF + 1 common-stock SPAC. Filtering to asset_class='stock'
+    # would have left the gate green because the underlying common-
+    # stock denominator barely moved.
     from tpcore.quality.validation.checks.prices_daily_freshness import (
         COVERAGE_COLLAPSE_PCT,
+        TRADEABLE_TIER_MAX,
     )
-
     async with pool.acquire() as conn:
         cov = await conn.fetch(
             """
-            SELECT date, COUNT(DISTINCT ticker) AS n
-            FROM platform.prices_daily
-            WHERE date >= $1::date - INTERVAL '40 days' AND date <= $1
-            GROUP BY date ORDER BY date DESC LIMIT 21
+            SELECT pd.date, COUNT(DISTINCT pd.ticker) AS n
+            FROM platform.prices_daily pd
+            JOIN platform.liquidity_tiers lt ON lt.ticker = pd.ticker
+            WHERE pd.date >= $1::date - INTERVAL '40 days'
+              AND pd.date <= $1
+              AND pd.delisted = false
+              AND lt.tier <= $2
+              AND EXISTS (
+                  SELECT 1 FROM platform.ticker_classifications tc
+                  WHERE tc.ticker = pd.ticker
+                    AND tc.asset_class = 'stock'
+                    AND (tc.lifetime_end IS NULL OR tc.lifetime_end > pd.date)
+              )
+            GROUP BY pd.date ORDER BY pd.date DESC LIMIT 21
             """,
             target_session,
+            TRADEABLE_TIER_MAX,
         )
     by_date = {r["date"]: int(r["n"]) for r in cov}
     latest_n = by_date.get(target_session, 0)
@@ -849,9 +881,13 @@ async def _stage_daily_bars(pool: asyncpg.Pool, config: dict[str, Any]) -> dict[
         if avg_trailing > 0 and latest_n < floor:
             raise RuntimeError(
                 f"daily_bars coverage collapse: {target_session} has "
-                f"{latest_n} tickers = {latest_n / avg_trailing:.0%} of the "
+                f"{latest_n} stock tickers (tier<={TRADEABLE_TIER_MAX}) "
+                f"= {latest_n / avg_trailing:.0%} of the "
                 f"trailing-{len(trailing)}-session avg ({avg_trailing:,.0f}); "
                 f"floor is {floor:,.0f} ({1 - COVERAGE_COLLAPSE_PCT:.0%}). "
+                f"Denominator is asset_class='stock' only — SPAC units / "
+                f"warrants / Class A churn is intentionally excluded so "
+                f"redemption-day SPAC drops do NOT trip this gate. "
                 f"Refusing to report OK — partial/failed ingest "
                 f"(rows_upserted={rows or 0}, universe="
                 f"{config.get('universe', 'active')!r}). "
