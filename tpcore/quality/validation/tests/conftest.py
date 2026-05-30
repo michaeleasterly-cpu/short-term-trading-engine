@@ -227,6 +227,11 @@ class FakePool:
         # by a gap. Routes on the distinctive CTE+JOIN shape of the
         # completeness check (the integrity check uses different SQL —
         # no liquid-universe CTE, no JOIN).
+        # P1 (2026-05-30): the cadence-routed check requires
+        # ``sec_document_type_primary`` in the row payload so it can
+        # route to the quarterly cadence; without it the rows fall
+        # into the METADATA_REQUIRED bucket and the structural
+        # sentinel fires (which would false-fail unrelated e2e tests).
         if (
             "platform.fundamentals_quarterly" in sql_lower
             and "join liquid using (ticker)" in sql_lower
@@ -235,7 +240,8 @@ class FakePool:
             today = datetime.now(UTC).date()
             return [
                 {"ticker": "AAPL",
-                 "period_end_date": today - timedelta(days=91 * (7 - i))}
+                 "period_end_date": today - timedelta(days=91 * (7 - i)),
+                 "sec_document_type_primary": "10-Q"}
                 for i in range(8)
             ]
         return []
