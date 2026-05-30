@@ -296,7 +296,17 @@ class VectorScheduler:
             # universe must be small enough to fit under Supabase's
             # statement timeout. The credibility backtests scored on
             # T1+T2 (~1,200 tickers); use the same universe live.
-            universe = tuple(await data.get_universe_by_liquidity_tier(max_tier=2))
+            # 2026-05-30: scoped to EngineProfile.allowed_asset_classes
+            # (default stock+adr+reit+etf — excludes SPAC*/CEF/preferred
+            # which fundamentals models misweight).
+            from tpcore.engine_profile import profile_for
+            _profile = profile_for("vector")
+            universe = tuple(await data.get_universe_by_liquidity_tier(
+                max_tier=2,
+                asset_class_in=(
+                    _profile.allowed_asset_classes if _profile else None
+                ),
+            ))
             logger.info(
                 "vector.scheduler.universe_loaded",
                 as_of=str(as_of),

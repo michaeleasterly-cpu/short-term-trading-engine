@@ -68,8 +68,11 @@ class _FakeConn:
         # Two SQLs touch the conn: the universe SELECT (in the
         # resolver) and the trailing-coverage SELECT (in the stage
         # producer-validation). Discriminate by a substring.
+        # The coverage pre-filter query (2026-05-30) now joins
+        # ticker_classifications and uses "GROUP BY pd.date"; the
+        # universe SELECT does not. Discriminate by joining/grouping.
         if "FROM platform.prices_daily" in sql and "delisted = false" in sql \
-                and "GROUP BY date" not in sql:
+                and "GROUP BY" not in sql:
             return [{"ticker": t} for t in self._tickers]
         # trailing coverage query — return target_session present with
         # n equal to the trailing average so the producer-validation

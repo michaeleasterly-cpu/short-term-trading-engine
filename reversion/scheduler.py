@@ -161,17 +161,22 @@ class ReversionScheduler:
                 )
                 return RunSummary(as_of=as_of, n_candidates=0, n_submitted=0, aars=[])
 
-            # Universe: T1+T2+T3 stocks with fundamentals coverage
+            # Universe: T1+T2+T3 with fundamentals coverage
             # (expanded 2026-05-15 per param-sweep signal-sparsity
-            # finding). T3 inclusion ~doubles the candidate set;
-            # asset_class='stock' excludes ETFs/SPACs/funds which
-            # don't have meaningful earnings-quality signals;
-            # require_fundamentals filters to tickers with at least
-            # one quarterly row so the EQ gate can evaluate. Was
-            # ``max_tier=2`` (T1+T2 only, no asset-class filter).
+            # finding). asset_class_in=EngineProfile.allowed_asset_
+            # classes (2026-05-30) — the roster SoT declares the
+            # admissible classes per engine. Reversion default
+            # admits {stock, adr, reit, etf}; ETFs in this set are
+            # filtered later by require_fundamentals (no quarterly
+            # filings → excluded). require_fundamentals also
+            # eliminates SPAC pre-merger entities.
+            from tpcore.engine_profile import profile_for
+            _profile = profile_for("reversion")
             universe = tuple(await data.get_universe_by_liquidity_tier(
                 max_tier=3,
-                asset_class="stock",
+                asset_class_in=(
+                    _profile.allowed_asset_classes if _profile else None
+                ),
                 require_fundamentals=True,
             ))
             logger.info(

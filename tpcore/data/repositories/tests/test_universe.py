@@ -127,6 +127,35 @@ async def test_asset_class_and_country_filters_bind_in_order():
 
 
 @pytest.mark.asyncio
+async def test_asset_class_in_binds_ANY_filter():
+    """2026-05-30: ``asset_class_in`` is the multi-class filter for
+    the new ``EngineProfile.allowed_asset_classes`` consumer pattern.
+    Renders as ``asset_class = ANY($N::text[])`` with a list bound."""
+    pool = _mock_pool([_row()])
+    repo = UniverseRepo(pool)
+    await repo.enumerate(asset_class_in=frozenset({"stock", "adr", "reit", "etf"}))
+    args = pool.conn_for_assertions.fetch.await_args.args
+    sql_used = args[0]
+    assert "asset_class = ANY($1::text[])" in sql_used
+    assert isinstance(args[1], list)
+    assert set(args[1]) == {"stock", "adr", "reit", "etf"}
+
+
+@pytest.mark.asyncio
+async def test_asset_class_and_asset_class_in_raise():
+    """The two filters are mutually exclusive — passing both is a
+    caller bug that we surface immediately rather than silently
+    favouring one."""
+    pool = _mock_pool([_row()])
+    repo = UniverseRepo(pool)
+    with pytest.raises(ValueError, match="not both"):
+        await repo.enumerate(
+            asset_class="stock",
+            asset_class_in=frozenset({"stock", "etf"}),
+        )
+
+
+@pytest.mark.asyncio
 async def test_all_filters_combined():
     """All four filters together — param order matches placeholder order in SQL."""
     pool = _mock_pool([_row()])

@@ -73,6 +73,7 @@ class UniverseRepo:
         as_of: date | None = None,
         max_liquidity_tier: int | None = None,
         asset_class: str | None = None,
+        asset_class_in: frozenset[str] | None = None,
         country: str | None = None,
         include_untracked_liquidity: bool = False,
     ) -> list[UniverseRow]:
@@ -86,7 +87,13 @@ class UniverseRepo:
                 returns only rows with ``liquidity_tier <= N``. Combined
                 with ``include_untracked_liquidity=False`` (the default)
                 this excludes rows without a ``liquidity_tiers`` entry.
-            asset_class: filter to e.g. 'stock', 'etf'. ``None`` = no filter.
+            asset_class: legacy single-class filter — kept for
+                backwards-compat. Use ``asset_class_in`` for new code.
+            asset_class_in: 2026-05-30 — multi-class filter for the
+                new ``EngineProfile.allowed_asset_classes`` consumer
+                pattern. When set, returns rows whose ``asset_class IN``
+                the set. Cannot be combined with ``asset_class`` —
+                raises ValueError. ``None`` = no filter.
             country: ISO-3166-1 alpha-2; ``None`` = no filter.
             include_untracked_liquidity: when ``max_liquidity_tier`` is
                 set, controls whether rows with ``liquidity_tier IS
@@ -97,6 +104,10 @@ class UniverseRepo:
         Returns:
             ``list[UniverseRow]`` ordered by ``classification_id``.
         """
+        if asset_class is not None and asset_class_in is not None:
+            raise ValueError(
+                "pass asset_class OR asset_class_in, not both"
+            )
         clauses: list[str] = []
         args: list[object] = []
         n = 1
@@ -119,6 +130,12 @@ class UniverseRepo:
         if asset_class is not None:
             args.append(asset_class)
             clauses.append(f"asset_class = ${n}")
+            n += 1
+        elif asset_class_in is not None:
+            # Multi-class filter (2026-05-30). Frozenset → list for
+            # asyncpg array binding.
+            args.append(list(asset_class_in))
+            clauses.append(f"asset_class = ANY(${n}::text[])")
             n += 1
 
         if country is not None:

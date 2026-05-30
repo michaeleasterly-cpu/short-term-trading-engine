@@ -166,8 +166,19 @@ class MomentumSetupDetection(BaseEnginePlug):
         # Fallback: enumerate the universe via UniverseRepo (PR-16).
         # UniverseRepo reads platform.v_universe which joins
         # ticker_classifications × ticker_history × liquidity_tiers.
+        # 2026-05-30: filter by EngineProfile.allowed_asset_classes
+        # (momentum default = stock + adr + reit + etf) so SPAC
+        # warrants/units, preferreds, CEFs and other instruments
+        # momentum can't model are excluded at the universe-build step.
+        from tpcore.engine_profile import profile_for
+        _profile = profile_for("momentum")
         repo = UniverseRepo(pool)
-        universe_rows = await repo.enumerate(max_liquidity_tier=self._max_tier)
+        universe_rows = await repo.enumerate(
+            max_liquidity_tier=self._max_tier,
+            asset_class_in=(
+                _profile.allowed_asset_classes if _profile else None
+            ),
+        )
         return {r.current_ticker for r in universe_rows if r.current_ticker is not None}
 
     async def _load_tier_map(self, pool: asyncpg.Pool) -> dict[str, int]:

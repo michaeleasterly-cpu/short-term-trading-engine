@@ -132,6 +132,7 @@ class PostgresDataAdapter(DataProviderInterface):
         max_tier: int = 2,
         *,
         asset_class: str | None = None,
+        asset_class_in: frozenset[str] | None = None,
         require_fundamentals: bool = False,
     ) -> list[str]:
         """Tickers up to and including the given liquidity tier.
@@ -142,13 +143,14 @@ class PostgresDataAdapter(DataProviderInterface):
         against Supabase. T1+T2 is ~1,200 tickers and parallels what
         the credibility backtests scored on.
 
-        Optional filters (added 2026-05-15 for the Reversion sweep
-        expansion to T3 with fundamentals coverage):
+        Optional filters:
 
-        * ``asset_class``: when set (e.g. ``"stock"``), inner-joins
-          ``platform.ticker_classifications`` and filters to rows where
-          ``asset_class = <value>``. ETFs/SPACs/funds are excluded by
-          passing ``"stock"``.
+        * ``asset_class`` (legacy 2026-05-15) / ``asset_class_in``
+          (multi-class, 2026-05-30) — inner-joins
+          ``platform.ticker_classifications`` and filters by
+          ``asset_class``. New engine code should use
+          ``asset_class_in=engine_profile.allowed_asset_classes``
+          to honour the per-engine roster declaration.
         * ``require_fundamentals``: when True, inner-joins
           ``platform.fundamentals_quarterly`` (DISTINCT ticker) so only
           tickers with at least one fundamentals row are returned —
@@ -158,6 +160,7 @@ class PostgresDataAdapter(DataProviderInterface):
         rows = await repo.enumerate(
             max_liquidity_tier=max_tier,
             asset_class=asset_class,
+            asset_class_in=asset_class_in,
         )
         if require_fundamentals:
             from tpcore.data.repositories import FundamentalsRepo
