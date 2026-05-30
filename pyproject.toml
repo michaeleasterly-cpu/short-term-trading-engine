@@ -184,6 +184,13 @@ ignore = ["E501"]
 "tests/test_sec_ticker_cik_map.py" = ["SLF"]
 "tests/test_backfill_sec_metadata_stage.py" = ["SLF"]
 "tests/test_p0_no_validator_semantics_change.py" = ["SLF"]
+# P2a SEC lifecycle-events extractor tests (2026-05-30):
+#   * test_p2_sec_lifecycle_events.py names ``_extract_lifecycle_events``
+#     and ``_build_sec_filing_url`` module-private helpers + accesses
+#     ``ops._STAGE_SPECS`` / ``ops._LIFECYCLE_SOURCE_PRECEDENCE`` for
+#     the precedence-dict + stage-registration sentinels. Same
+#     precedent as the P0 test ignores above.
+"tests/test_p2_sec_lifecycle_events.py" = ["SLF"]
 # SP-B T4 dispatch-seam characterization test: pinning that the lazy
 # PARAM_RANGES + `_lab_target_for` resolver + the `_runner_for`/
 # `_context_loader_for`/`_context_runner_for` thin views preserve the

@@ -91,3 +91,10 @@ backtests/
 publishing/stelib/dist/
 publishing/stelib/build/
 publishing/stelib/*.egg-info/
+
+# P2a (2026-05-30) — SEC submissions cache. Operator-local bulk-file
+# cache for the ``_stage_backfill_sec_lifecycle`` stage; the on-disk
+# ``CIK<padded>.json`` files mirror SEC's URL shape so they are self-
+# describing. ~1.3 GB for the full delisted+inactive cohort; never
+# committed. TP_DATA_DIR override is supported.
+data/sec_submissions/

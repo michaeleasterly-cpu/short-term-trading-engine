@@ -407,6 +407,96 @@ class SECCompanyFactsAdapter:
             ),
         }
 
+    @staticmethod
+    def extract_lifecycle_events(
+        submissions: dict, *, cik: str | None = None,
+    ) -> dict:
+        """Public wrapper for ``_extract_lifecycle_events``
+        (P2a 2026-05-30).
+
+        Mirrors the ``extract_filing_metadata`` shape so the call
+        sites use a consistent ``SECCompanyFactsAdapter.extract_*``
+        pattern. See the module-level ``_extract_lifecycle_events``
+        for the return-shape contract.
+        """
+        return _extract_lifecycle_events(submissions, cik=cik)
+
+    async def get_submissions_cached(
+        self,
+        cik: str,
+        *,
+        cache_dir: str | None = None,
+        force_refresh: bool = False,
+    ) -> dict | None:
+        """Cache-first variant of ``get_submissions`` (P2a 2026-05-30).
+
+        Reads ``<cache_dir>/CIK<padded>.json`` if present (and not
+        ``force_refresh``); falls back to SEC HTTP otherwise and
+        persists the payload to disk for the next run.
+
+        Cache layout intentionally mirrors SEC's URL shape so the
+        on-disk files are self-describing and trivially comparable
+        against a fresh pull.
+
+        Args:
+            cik: zero-pad-tolerant CIK string.
+            cache_dir: cache root path. If None, resolves to
+                ``os.environ['TP_DATA_DIR'] + '/sec_submissions'`` if
+                ``TP_DATA_DIR`` is set, else ``./data/sec_submissions``
+                relative to CWD. The directory is created on first
+                write.
+            force_refresh: bypass cache (re-fetch + overwrite).
+
+        Returns the parsed dict, or ``None`` if SEC returned 404 — in
+        which case a sentinel ``"__sec_404__": true`` is cached so
+        future runs short-circuit without re-hitting SEC.
+        """
+        import json
+        import os as _os
+        from pathlib import Path
+
+        cik_padded = str(cik).lstrip("0").zfill(10)
+        if cache_dir is None:
+            tp_data = _os.environ.get("TP_DATA_DIR")
+            cache_dir = (
+                f"{tp_data}/sec_submissions" if tp_data
+                else "data/sec_submissions"
+            )
+        cache_path = Path(cache_dir) / f"CIK{cik_padded}.json"
+        if cache_path.exists() and not force_refresh:
+            try:
+                payload = json.loads(cache_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                logger.warning(
+                    "sec.submissions.cache_read_error",
+                    cik=cik_padded, error=str(exc),
+                )
+                payload = None
+            if isinstance(payload, dict):
+                if payload.get("__sec_404__") is True:
+                    return None
+                return payload
+            # Fallthrough on bad cache → re-fetch.
+
+        payload = await self.get_submissions(cik)
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            if payload is None:
+                cache_path.write_text(
+                    json.dumps({"__sec_404__": True}),
+                    encoding="utf-8",
+                )
+            else:
+                cache_path.write_text(
+                    json.dumps(payload), encoding="utf-8",
+                )
+        except OSError as exc:
+            logger.warning(
+                "sec.submissions.cache_write_error",
+                cik=cik_padded, error=str(exc),
+            )
+        return payload
+
     async def get_submissions(self, cik: str) -> dict | None:
         """Fetch ``submissions/CIK<cik>.json`` from data.sec.gov
         (P0-002 2026-05-30).
@@ -441,6 +531,192 @@ class SECCompanyFactsAdapter:
             )
             return None
         return resp.json()
+
+
+# P2a (2026-05-30): SEC Form 25 / Form 15 evidence — periodic-lifecycle
+# event signals. Form 25 ("Notification of Removal from Listing") is the
+# delist notice; Form 15 ("Certification and Notice of Termination of
+# Registration") is the SEC-reporting-obligation termination. State
+# precedence: any Form 15 → 'deregistered'; Form 25 only → 'delist_effective'.
+_FORM_25_VARIANTS: frozenset[str] = frozenset({"25", "25-NSE"})
+_FORM_15_VARIANTS: frozenset[str] = frozenset({
+    "15", "15-12G", "15-12B", "15F", "15-15D",
+})
+_LIFECYCLE_FORM_VARIANTS: frozenset[str] = (
+    _FORM_25_VARIANTS | _FORM_15_VARIANTS
+)
+
+
+def _build_sec_filing_url(cik: str | None, accession: str | None) -> str | None:
+    """Construct the canonical SEC Archives URL for a filing
+    (P2a 2026-05-30).
+
+    Format::
+
+        https://www.sec.gov/Archives/edgar/data/<cik_int>/
+            <accession_no_dashes>/<accession_with_dashes>-index.htm
+
+    Both ``cik`` and ``accession`` must be present + well-formed.
+    Returns ``None`` for any malformed input — operator hard rule:
+    "NULL+evidence > guessing". The empty/wrong-format URL is worse
+    than no URL.
+
+    Accession numbers come from SEC as ``XXXXXXXXXX-XX-XXXXXX``
+    (18 digits + 2 dashes). The Archives path strips the dashes for
+    the directory name; the file basename keeps them.
+    """
+    if not cik or not accession:
+        return None
+    if not isinstance(cik, str) or not isinstance(accession, str):
+        return None
+    try:
+        cik_int = int(cik.lstrip("0") or "0")
+    except ValueError:
+        return None
+    if cik_int <= 0:
+        return None
+    # Accession format: 10 digits + "-" + 2 digits + "-" + 6 digits
+    parts = accession.split("-")
+    if len(parts) != 3:
+        return None
+    if not (len(parts[0]) == 10 and len(parts[1]) == 2
+            and len(parts[2]) == 6):
+        return None
+    if not all(p.isdigit() for p in parts):
+        return None
+    no_dashes = "".join(parts)
+    return (
+        f"https://www.sec.gov/Archives/edgar/data/{cik_int}/"
+        f"{no_dashes}/{accession}-index.htm"
+    )
+
+
+def _extract_lifecycle_events(
+    submissions: dict, *, cik: str | None = None,
+) -> dict:
+    """Pull Form 25 + Form 15 events from a SEC submissions.json payload
+    (P2a 2026-05-30).
+
+    Walks ``submissions["filings"]["recent"]`` arrays in lock-step
+    (form / filingDate / reportDate / accessionNumber) and collects
+    every Form 25 / Form 15 event encountered. Returns the **list of
+    all events** plus a **derived projection** for the operator-facing
+    ``ticker_classifications`` columns.
+
+    Args:
+        submissions: parsed submissions.json dict.
+        cik: CIK passed through to ``_build_sec_filing_url``. If None,
+             the per-event ``evidence_url`` field is None even when an
+             accessionNumber is present.
+
+    Returns dict shape::
+
+        {
+          "form_25_events": [
+              {"form": "25", "filing_date": date, "report_date": date,
+               "accession_number": "...", "evidence_url": "https://..."},
+              ...
+          ],
+          "form_15_events": [...same shape...],
+          "derived_state": "deregistered" | "delist_effective" | None,
+          "derived_event_date": date | None,  # report_date if present
+                                                else filing_date of the
+                                                latest LATEST event
+                                                contributing to the state
+          "derived_source": "sec_form_15" | "sec_form_25" | None,
+          "derived_evidence_url": str | None,  # latest event's URL
+        }
+
+    State derivation precedence:
+        * Any Form 15 present → 'deregistered' (terminal state — SEC
+          reporting obligation ended)
+        * Form 25 present + no Form 15 → 'delist_effective'
+        * Neither → None (don't overwrite — operator hard rule:
+          NULL > guessing)
+    """
+    from datetime import date as _date  # noqa: PLR0402
+
+    filings = submissions.get("filings") or {}
+    recent = filings.get("recent") or {}
+    forms = list(recent.get("form") or [])
+    filing_dates = list(recent.get("filingDate") or [])
+    report_dates = list(recent.get("reportDate") or [])
+    accessions = list(recent.get("accessionNumber") or [])
+
+    n = min(len(forms), len(filing_dates),
+            len(report_dates), len(accessions))
+    forms = forms[:n]
+    filing_dates = filing_dates[:n]
+    report_dates = report_dates[:n]
+    accessions = accessions[:n]
+
+    form_25_events: list[dict] = []
+    form_15_events: list[dict] = []
+
+    for form, fd, rd, acc in zip(
+        forms, filing_dates, report_dates, accessions, strict=False,
+    ):
+        if form not in _LIFECYCLE_FORM_VARIANTS:
+            continue
+        try:
+            fd_d = _date.fromisoformat(fd) if fd else None
+        except (ValueError, TypeError):
+            fd_d = None
+        try:
+            rd_d = _date.fromisoformat(rd) if rd else None
+        except (ValueError, TypeError):
+            rd_d = None
+        event = {
+            "form": form,
+            "filing_date": fd_d,
+            "report_date": rd_d,
+            "accession_number": acc if isinstance(acc, str) else None,
+            "evidence_url": _build_sec_filing_url(cik, acc),
+        }
+        if form in _FORM_25_VARIANTS:
+            form_25_events.append(event)
+        else:  # Form 15 variant
+            form_15_events.append(event)
+
+    # State derivation — Form 15 is terminal, always wins.
+    derived_state: str | None = None
+    derived_source: str | None = None
+    contributing: list[dict] = []
+    if form_15_events:
+        derived_state = "deregistered"
+        derived_source = "sec_form_15"
+        contributing = form_15_events
+    elif form_25_events:
+        derived_state = "delist_effective"
+        derived_source = "sec_form_25"
+        contributing = form_25_events
+
+    derived_event_date: _date | None = None
+    derived_evidence_url: str | None = None
+    if contributing:
+        # Latest event: prefer the most-recent filing_date as the
+        # ordering key (report_date may be in the future and inconsistent
+        # across issuers). For the canonical event_date itself, prefer
+        # report_date if present (issuer's claimed effective date) else
+        # filing_date.
+        def _sort_key(e: dict) -> _date:
+            fd_v = e["filing_date"]
+            return fd_v if fd_v is not None else _date.min
+        contributing_sorted = sorted(contributing, key=_sort_key, reverse=True)
+        latest = contributing_sorted[0]
+        derived_event_date = (
+            latest["report_date"] or latest["filing_date"]
+        )
+        derived_evidence_url = latest["evidence_url"]
+
+    return {
+        "form_25_events": form_25_events,
+        "form_15_events": form_15_events,
+        "derived_state": derived_state,
+        "derived_source": derived_source,
+        "derived_event_date": derived_event_date,
+        "derived_evidence_url": derived_evidence_url,
+    }
 
 
 def _parse_fiscal_year_end_mmdd(raw: str | None) -> int | None:

@@ -482,3 +482,14 @@ get_submissions  # unused method (tpcore/sec/companyfacts_adapter.py:410)
 company_name  # unused variable (tpcore/sec/ticker_cik_map.py:58)
 cached  # unused property (tpcore/sec/ticker_cik_map.py:96)
 resolve_missing_ciks  # unused method (tpcore/sec/ticker_cik_map.py:150)
+# P2a SEC Form 25 / Form 15 lifecycle extractor (2026-05-30) —
+# extract_lifecycle_events is dispatched from scripts/ops.py via
+# the SECCompanyFactsAdapter context manager AND from the
+# test_p2_sec_lifecycle_events suite. Same static-method-through-
+# lambda-factory dispatch pattern vulture can't trace.
+extract_lifecycle_events  # unused method (tpcore/sec/companyfacts_adapter.py:410)
+# Same dispatch-via-stage-lambda invisibility for the bulk-cache
+# variant (P2a 2026-05-30) — get_submissions_cached is the cache-
+# first wrapper called by _stage_backfill_sec_lifecycle and used
+# by the new test_p2_o* tests.
+get_submissions_cached  # unused method (tpcore/sec/companyfacts_adapter.py:424)

@@ -2994,6 +2994,437 @@ async def _stage_backfill_sec_metadata(
     }
 
 
+# Provenance precedence dict for the P2a lifecycle backfill.
+# Higher value wins on overwrite. ``manual`` is never overwritten;
+# ``sec_form_15`` is the strongest evidence (deregistration is
+# terminal). FMP / Alpaca are operator-on-demand fallbacks.
+_LIFECYCLE_SOURCE_PRECEDENCE: dict[str, int] = {
+    "manual": 100,
+    "sec_form_15": 80,
+    "sec_form_25": 70,
+    "sec_form_8k": 60,
+    "alpaca_asset_status": 40,
+    "fmp_profile": 30,
+}
+
+
+async def _stage_backfill_sec_lifecycle(
+    pool: asyncpg.Pool, cfg: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """SEC Form 25 / Form 15 lifecycle evidence backfill (P2a, 2026-05-30).
+
+    Foundation stage for the future P2b lifecycle-bound validator
+    wiring (spec ``2026-05-30-asset-class-refinement.md`` follow-up).
+    This stage ONLY writes the new evidence columns + the new
+    ``platform.ticker_lifecycle_events`` append-only event log added
+    by migration ``20260530_0300``. It does NOT change validator
+    semantics, does NOT touch the capital gate, does NOT change
+    PASS/FAIL behavior.
+
+    For each scoped ticker with a CIK:
+      1. Fetch SEC submissions (via the P0 ``SECCompanyFactsAdapter``
+         primitive — reuses the same 0.11 s fair-use throttle).
+      2. Call ``extract_lifecycle_events`` → all Form 25 + Form 15
+         events with their accession numbers + dates.
+      3. UPSERT every event into ``platform.ticker_lifecycle_events``
+         (UNIQUE on (classification_id, form_type, accession_number) →
+         ON CONFLICT DO NOTHING for idempotency).
+      4. UPDATE the projection columns on
+         ``platform.ticker_classifications`` IFF the new evidence
+         source outranks the existing one per
+         ``_LIFECYCLE_SOURCE_PRECEDENCE``. Manual entries are NEVER
+         overwritten.
+
+    Scope params (``--param key=value``):
+      * ``dry_run`` (bool, default **True**) — print plan, no DB writes.
+      * ``tickers`` (comma-list) — explicit scope.
+      * ``delisted_only`` (bool, default False) — scope to rows with
+        ``prices_daily.delisted=true``.
+      * ``inactive_only`` (bool, default False) — scope to rows with
+        ``ticker_classifications.status='inactive'``.
+      * ``stale_filing`` (bool, default False) — scope to rows whose
+        ``last_filing_date < NOW() - 90 days`` (potential delist_pending
+        candidates).
+      * ``max_tickers`` (int, optional) — cap (testing / incremental).
+      * ``force_refresh`` (bool, default False) — re-run extraction
+        even for rows already populated.
+
+    Default scope (no flags): rows where issuer_lifecycle_state IS
+    NULL AND cik IS NOT NULL, capped by ``max_tickers``. Bare
+    invocation never walks the full table by accident.
+
+    SEC fair-use: same 0.11 s sleep as ``_stage_backfill_sec_metadata``.
+
+    Output payload::
+
+        {
+          "scope_size": int,
+          "fetched": int, "submissions_404": int,
+          "events_extracted": int, "events_upserted": int,
+          "state_writes": int, "state_skipped_precedence": int,
+          "state_skipped_no_change": int,
+          "by_state": {<state>: <count>, ...},
+          "coverage_before": {...}, "coverage_after": {...},
+          "failures": [<ticker>, ...],
+          "dry_run": bool,
+        }
+    """
+    log = structlog.get_logger("scripts.ops")
+    cfg = cfg or {}
+
+    def _to_bool(v: Any) -> bool:
+        if isinstance(v, bool):
+            return v
+        return str(v).lower() in ("true", "1", "yes", "y")
+
+    dry_run = _to_bool(cfg.get("dry_run", True))
+    delisted_only = _to_bool(cfg.get("delisted_only", False))
+    inactive_only = _to_bool(cfg.get("inactive_only", False))
+    stale_filing = _to_bool(cfg.get("stale_filing", False))
+    force_refresh = _to_bool(cfg.get("force_refresh", False))
+    max_tickers = int(cfg["max_tickers"]) if cfg.get("max_tickers") else None
+    ticker_scope_raw = cfg.get("tickers")
+    explicit_tickers: list[str] | None = None
+    if ticker_scope_raw:
+        explicit_tickers = [
+            t.strip().upper()
+            for t in str(ticker_scope_raw).split(",")
+            if t.strip()
+        ] or None
+
+    _COVERAGE_SQL = """
+        SELECT
+            COUNT(*) AS total,
+            COUNT(*) FILTER (WHERE cik IS NOT NULL) AS has_cik,
+            COUNT(*) FILTER (WHERE issuer_lifecycle_state IS NOT NULL)
+                AS has_lifecycle_state,
+            COUNT(*) FILTER (WHERE issuer_lifecycle_state = 'deregistered')
+                AS has_deregistered,
+            COUNT(*) FILTER (WHERE issuer_lifecycle_state = 'delist_effective')
+                AS has_delist_effective,
+            COUNT(*) FILTER (WHERE issuer_lifecycle_state = 'active')
+                AS has_active,
+            COUNT(*) FILTER (WHERE issuer_lifecycle_state_source IS NOT NULL)
+                AS has_source
+        FROM platform.ticker_classifications
+    """
+
+    async def _snapshot() -> dict[str, int]:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(_COVERAGE_SQL)
+        return {k: int(v or 0) for k, v in dict(row).items()}
+
+    coverage_before = await _snapshot()
+    log.info(
+        "ops.stage.backfill_sec_lifecycle.start",
+        dry_run=dry_run,
+        delisted_only=delisted_only,
+        inactive_only=inactive_only,
+        stale_filing=stale_filing,
+        force_refresh=force_refresh,
+        explicit_tickers=len(explicit_tickers) if explicit_tickers else None,
+        max_tickers=max_tickers,
+        coverage_before=coverage_before,
+    )
+
+    # ─── resolve scope ───
+    scope_tickers: list[str] = []
+    if explicit_tickers:
+        scope_tickers = sorted(set(explicit_tickers))
+    if inactive_only:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT ticker FROM platform.ticker_classifications
+                WHERE status = 'inactive' AND cik IS NOT NULL
+                ORDER BY ticker
+                """
+            )
+        scope_tickers = sorted(set(scope_tickers) | {r["ticker"] for r in rows})
+    if delisted_only:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT DISTINCT pd.ticker
+                FROM platform.prices_daily pd
+                JOIN platform.ticker_classifications tc ON tc.ticker = pd.ticker
+                WHERE pd.delisted = true AND tc.cik IS NOT NULL
+                ORDER BY pd.ticker
+                """
+            )
+        scope_tickers = sorted(set(scope_tickers) | {r["ticker"] for r in rows})
+    if stale_filing:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT ticker FROM platform.ticker_classifications
+                WHERE last_filing_date < (NOW() - INTERVAL '90 days')
+                  AND cik IS NOT NULL
+                ORDER BY ticker
+                """
+            )
+        scope_tickers = sorted(set(scope_tickers) | {r["ticker"] for r in rows})
+
+    if not scope_tickers and not (
+        delisted_only or inactive_only or stale_filing or explicit_tickers
+    ):
+        # Default scope: rows missing lifecycle evidence + having a CIK
+        # we can query SEC with. Capped by max_tickers — never walks the
+        # full table.
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT ticker FROM platform.ticker_classifications
+                WHERE issuer_lifecycle_state IS NULL
+                  AND cik IS NOT NULL
+                ORDER BY ticker
+                """
+            )
+        scope_tickers = [r["ticker"] for r in rows]
+
+    if max_tickers:
+        scope_tickers = scope_tickers[:max_tickers]
+
+    if not scope_tickers:
+        coverage_after = await _snapshot()
+        return {
+            "scope_size": 0,
+            "fetched": 0, "submissions_404": 0,
+            "events_extracted": 0, "events_upserted": 0,
+            "state_writes": 0, "state_skipped_precedence": 0,
+            "state_skipped_no_change": 0,
+            "by_state": {}, "failures": [],
+            "coverage_before": coverage_before,
+            "coverage_after": coverage_after,
+            "dry_run": dry_run,
+            "note": "no rows matched scope",
+        }
+
+    # Pull current state for the scope (id + cik + existing lifecycle
+    # state/source so we can apply the precedence gate).
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT ticker, id AS classification_id, cik,
+                   issuer_lifecycle_state,
+                   issuer_lifecycle_state_source
+            FROM platform.ticker_classifications
+            WHERE ticker = ANY($1::text[])
+            ORDER BY ticker
+            """,
+            scope_tickers,
+        )
+    state_by_ticker: dict[str, dict[str, Any]] = {
+        r["ticker"]: dict(r) for r in rows
+    }
+    scope_tickers = [t for t in scope_tickers if t in state_by_ticker]
+    log.info(
+        "ops.stage.backfill_sec_lifecycle.scope_resolved",
+        scope_size=len(scope_tickers),
+    )
+
+    # ─── fetch + extract ───
+    from collections import Counter
+
+    from tpcore.sec.companyfacts_adapter import SECCompanyFactsAdapter
+
+    fetched = 0
+    submissions_404 = 0
+    events_extracted = 0
+    failures: list[str] = []
+    by_state: Counter = Counter()
+    # Per ticker: (current_state, current_source, all_events, derived projection)
+    extracted: list[tuple[str, str, str | None, list[dict], dict]] = []
+    # entries = list of (ticker, classification_id, current_source, events, derived)
+
+    # Cache-first SEC submissions: cache once to disk; subsequent
+    # backfill runs (operator re-runs, P2b validator dev, future
+    # extensions) read from cache without re-hitting SEC. Operator
+    # standing rule ``feedback_bulk_before_api_crawl_REINFORCED``:
+    # never re-pull what you already have on disk.
+    cache_dir_override = cfg.get("cache_dir") if cfg else None
+    force_refresh_cache = _to_bool(cfg.get("force_refresh_cache", False))
+    cache_hits = 0
+    cache_misses = 0
+    import os as _os
+    from pathlib import Path as _Path
+    if cache_dir_override:
+        cache_dir_resolved = str(cache_dir_override)
+    else:
+        tp_data = _os.environ.get("TP_DATA_DIR")
+        cache_dir_resolved = (
+            f"{tp_data}/sec_submissions" if tp_data
+            else "data/sec_submissions"
+        )
+
+    async with SECCompanyFactsAdapter() as sec:
+        for ticker in scope_tickers:
+            state = state_by_ticker[ticker]
+            cik = state.get("cik")
+            current_source = state.get("issuer_lifecycle_state_source")
+            classification_id = state.get("classification_id")
+            if cik is None or classification_id is None:
+                continue
+            # Cache check happens BEFORE the SEC throttle — a cache hit
+            # incurs zero API cost and zero rate-limit pressure. Only
+            # cache misses pay the 0.11 s SEC fair-use sleep.
+            cik_padded = str(cik).lstrip("0").zfill(10)
+            cache_path = _Path(cache_dir_resolved) / f"CIK{cik_padded}.json"
+            if cache_path.exists() and not force_refresh_cache:
+                cache_hits += 1
+            else:
+                cache_misses += 1
+                await asyncio.sleep(0.11)  # SEC fair-use
+            try:
+                subs = await sec.get_submissions_cached(
+                    str(cik),
+                    cache_dir=cache_dir_resolved,
+                    force_refresh=force_refresh_cache,
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "ops.stage.backfill_sec_lifecycle.submissions_error",
+                    ticker=ticker, cik=cik,
+                    error_type=type(exc).__name__, error=str(exc),
+                )
+                failures.append(ticker)
+                continue
+            if subs is None:
+                submissions_404 += 1
+                continue
+            fetched += 1
+            result = sec.extract_lifecycle_events(subs, cik=str(cik))
+            all_events = (
+                result["form_25_events"] + result["form_15_events"]
+            )
+            events_extracted += len(all_events)
+            if result["derived_state"] is not None:
+                by_state[result["derived_state"]] += 1
+            extracted.append((
+                ticker, str(classification_id), current_source,
+                all_events, result,
+            ))
+
+    log.info(
+        "ops.stage.backfill_sec_lifecycle.extraction_done",
+        fetched=fetched, submissions_404=submissions_404,
+        events_extracted=events_extracted,
+        failures=len(failures),
+        by_state=dict(by_state),
+    )
+
+    # ─── apply writes (idempotent) ───
+    state_writes = 0
+    state_skipped_precedence = 0
+    state_skipped_no_change = 0
+    events_upserted = 0
+
+    if not dry_run and extracted:
+        # Per-ticker transaction so the projection never lags the log
+        # AND so a partial run commits incremental progress (the
+        # across-batch single-transaction shape held a long-lived txn
+        # on the Supabase pooler; per-ticker txns avoid that hazard).
+        async with pool.acquire() as conn:
+            for ticker, cid, current_source, events, derived in extracted:
+                async with conn.transaction():
+                    # Event log: UPSERT (ON CONFLICT DO NOTHING).
+                    for ev in events:
+                        if ev.get("filing_date") is None:
+                            # Skip events without a filing_date — these
+                            # are malformed SEC payloads (rare).
+                            continue
+                        source_for_form = (
+                            "sec_form_15"
+                            if ev["form"] in {
+                                "15", "15-12G", "15-12B", "15F", "15-15D",
+                            } else "sec_form_25"
+                        )
+                        result = await conn.execute(
+                            """
+                            INSERT INTO platform.ticker_lifecycle_events
+                                (classification_id, ticker, form_type,
+                                 filing_date, report_date,
+                                 accession_number, source, evidence_url)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                            ON CONFLICT (classification_id, form_type,
+                                         accession_number)
+                            WHERE accession_number IS NOT NULL
+                            DO NOTHING
+                            """,
+                            cid, ticker, ev["form"],
+                            ev["filing_date"], ev["report_date"],
+                            ev.get("accession_number"),
+                            source_for_form, ev.get("evidence_url"),
+                        )
+                        # asyncpg returns "INSERT 0 1" on success or
+                        # "INSERT 0 0" on conflict skip.
+                        if result.endswith(" 1"):
+                            events_upserted += 1
+
+                    # Projection: precedence-gated UPDATE.
+                    derived_source = derived.get("derived_source")
+                    if derived_source is None:
+                        continue
+                    new_rank = _LIFECYCLE_SOURCE_PRECEDENCE.get(
+                        derived_source, 0,
+                    )
+                    current_rank = _LIFECYCLE_SOURCE_PRECEDENCE.get(
+                        current_source or "", 0,
+                    )
+                    if (current_source is not None
+                            and new_rank < current_rank):
+                        state_skipped_precedence += 1
+                        continue
+                    if (current_source == derived_source
+                            and not force_refresh):
+                        state_skipped_no_change += 1
+                        continue
+                    await conn.execute(
+                        """
+                        UPDATE platform.ticker_classifications
+                        SET issuer_lifecycle_state = $2,
+                            issuer_lifecycle_state_source = $3,
+                            issuer_lifecycle_event_date = $4,
+                            issuer_lifecycle_evidence_url = $5,
+                            issuer_lifecycle_updated_at = NOW(),
+                            updated_at = NOW()
+                        WHERE ticker = $1
+                        """,
+                        ticker, derived["derived_state"], derived_source,
+                        derived["derived_event_date"],
+                        derived["derived_evidence_url"],
+                    )
+                    state_writes += 1
+
+        log.info(
+            "ops.stage.backfill_sec_lifecycle.writes_committed",
+            events_upserted=events_upserted,
+            state_writes=state_writes,
+            state_skipped_precedence=state_skipped_precedence,
+            state_skipped_no_change=state_skipped_no_change,
+        )
+
+    coverage_after = await _snapshot()
+    return {
+        "scope_size": len(scope_tickers),
+        "fetched": fetched,
+        "submissions_404": submissions_404,
+        "cache_hits": cache_hits,
+        "cache_misses": cache_misses,
+        "cache_dir": cache_dir_resolved,
+        "events_extracted": events_extracted,
+        "events_upserted": events_upserted,
+        "state_writes": state_writes,
+        "state_skipped_precedence": state_skipped_precedence,
+        "state_skipped_no_change": state_skipped_no_change,
+        "by_state": dict(by_state),
+        "failures": failures[:50],
+        "coverage_before": coverage_before,
+        "coverage_after": coverage_after,
+        "dry_run": dry_run,
+    }
+
+
 async def _stage_classify_tickers(
     pool: asyncpg.Pool, cfg: dict[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -8177,6 +8608,15 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # follow-up + expert audit REVISE_ARCHITECTURE.
     ("backfill_sec_metadata",
         lambda pool, cfg: (lambda: _stage_backfill_sec_metadata(pool, cfg)),
+        HEAVY_STAGE_TIMEOUT_SEC),
+    # P2a (2026-05-30) — SEC Form 25 / Form 15 lifecycle evidence
+    # backfill. Operator-on-demand (not in the scheduled pipeline).
+    # Foundation for the future P2b lifecycle-bound validator wiring —
+    # this stage ONLY writes the new evidence columns + the new
+    # ticker_lifecycle_events table added by migration 20260530_0300;
+    # validator semantics + capital gate are unchanged. Idempotent.
+    ("backfill_sec_lifecycle",
+        lambda pool, cfg: (lambda: _stage_backfill_sec_lifecycle(pool, cfg)),
         HEAVY_STAGE_TIMEOUT_SEC),
     # v2.2 Phase P5 — backfill TKR-14 PK on existing ticker_classifications
     # rows + seed ticker_history first-seen entries. Idempotent; safe re-run.
