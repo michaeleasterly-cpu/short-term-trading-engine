@@ -2369,6 +2369,238 @@ async def _stage_tier_refresh(
     }
 
 
+async def _stage_reclassify_asset_class(
+    pool: asyncpg.Pool, cfg: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """OpenFIGI-driven asset_class taxonomy refinement (2026-05-30).
+
+    Walks ``platform.ticker_classifications``, calls OpenFIGI for each
+    ticker, runs the taxonomy mapper at ``tpcore/openfigi/taxonomy.py``,
+    and UPDATEs the asset_class / instrument_subtype columns when the
+    new classification differs from what's stored. Idempotent — a
+    second run is a near-no-op (most rows already match).
+
+    Config params (``--param key=value``):
+        * ``dry_run`` (bool, default True) — preview without writing.
+        * ``tickers`` (comma-list) — scope to a subset.
+        * ``batch_size`` (int, default 100) — OpenFIGI request batch.
+        * ``max_tickers`` (int, optional) — cap for testing.
+        * ``only_changed`` (bool, default True) — log only rows that
+          would change. Set False to log every classification.
+
+    Rate-limit (OpenFIGI authenticated): 25 req/6s = batched 100/req →
+    ~4 batches/sec. 13,840 tickers = ~140 batches = ~35s API time. Add
+    DB roundtrips and we land in the 1-3 minute range.
+
+    Defects this fixes:
+        * SPAC units / warrants conflated with Class A shares under
+          one ``spac`` value — Friday 2026-05-29 coverage-collapse
+          false trigger.
+        * ADRs hidden under ``stock`` → catalyst engine reads them
+          on a 10-Q calendar when they file 20-F.
+        * REITs hidden under ``stock`` → momentum engine misweights
+          them (90% distribution mechanic).
+        * Leveraged/inverse ETFs lumped with vanilla ETFs → reversion
+          / momentum both misbehave (path decay).
+
+    Output:
+        {
+          "tickers": <int>,
+          "reclassified": <int>,
+          "unchanged": <int>,
+          "openfigi_no_match": <int>,
+          "by_class": {<asset_class>: <count>, ...},
+          "by_subtype": {<subtype>: <count>, ...},
+          "dry_run": <bool>,
+          "changes_preview": [<sample>, ...]
+        }
+    """
+    log = structlog.get_logger("scripts.ops")
+    from tpcore.openfigi.figi_adapter import OpenFIGIAdapter
+    from tpcore.openfigi.taxonomy import classify as taxonomy_classify
+
+    cfg = cfg or {}
+
+    def _to_bool(v: Any) -> bool:
+        if isinstance(v, bool):
+            return v
+        return str(v).lower() in ("true", "1", "yes", "y")
+
+    dry_run = _to_bool(cfg.get("dry_run", True))
+    only_changed = _to_bool(cfg.get("only_changed", True))
+    batch_size = int(cfg.get("batch_size", 100))
+    max_tickers = int(cfg["max_tickers"]) if cfg.get("max_tickers") else None
+    ticker_scope_raw = cfg.get("tickers")
+    ticker_scope: list[str] | None = None
+    if ticker_scope_raw:
+        ticker_scope = [
+            t.strip().upper()
+            for t in str(ticker_scope_raw).split(",")
+            if t.strip()
+        ]
+        if not ticker_scope:
+            ticker_scope = None
+
+    log.info(
+        "ops.stage.reclassify_asset_class.start",
+        dry_run=dry_run, batch_size=batch_size,
+        scope=len(ticker_scope) if ticker_scope else "all",
+        max_tickers=max_tickers,
+    )
+
+    # ─── pull current state ───
+    async with pool.acquire() as conn:
+        if ticker_scope:
+            rows = await conn.fetch(
+                """
+                SELECT ticker, asset_class, instrument_subtype,
+                       current_legal_name, current_exchange
+                FROM platform.ticker_classifications
+                WHERE ticker = ANY($1::text[])
+                ORDER BY ticker
+                """,
+                ticker_scope,
+            )
+        else:
+            rows = await conn.fetch(
+                """
+                SELECT ticker, asset_class, instrument_subtype,
+                       current_legal_name, current_exchange
+                FROM platform.ticker_classifications
+                ORDER BY ticker
+                """,
+            )
+    if max_tickers:
+        rows = rows[:max_tickers]
+
+    if not rows:
+        return {
+            "tickers": 0, "reclassified": 0, "unchanged": 0,
+            "openfigi_no_match": 0, "dry_run": dry_run,
+            "note": "no rows matched scope",
+        }
+
+    log.info(
+        "ops.stage.reclassify_asset_class.fetched_tickers",
+        count=len(rows),
+    )
+
+    # ─── OpenFIGI lookups ───
+    no_match: list[str] = []
+    decisions: list[tuple[str, str, str | None, str | None]] = []
+    # decisions = list of (ticker, new_asset_class, new_subtype, prev_asset_class)
+
+    from collections import Counter
+    by_class: Counter = Counter()
+    by_subtype: Counter = Counter()
+
+    async with OpenFIGIAdapter() as figi:
+        for i in range(0, len(rows), batch_size):
+            batch = rows[i:i + batch_size]
+            tickers = [r["ticker"] for r in batch]
+            results = await figi.map_tickers(tickers, exch_code="US")
+            results_by_ticker = {r.ticker: r for r in results}
+            for r in batch:
+                t = r["ticker"]
+                figi_result = results_by_ticker.get(t)
+                if figi_result is None or figi_result.figi_not_found:
+                    no_match.append(t)
+                    # Keep existing classification — don't overwrite.
+                    by_class[r["asset_class"]] += 1
+                    if r["instrument_subtype"]:
+                        by_subtype[r["instrument_subtype"]] += 1
+                    continue
+                decision = taxonomy_classify(
+                    ticker=t,
+                    security_type=figi_result.security_type,
+                    security_type2=figi_result.security_type2,
+                    name=figi_result.name or r["current_legal_name"],
+                    fallback_asset_class=r["asset_class"],
+                )
+                by_class[decision.asset_class] += 1
+                if decision.instrument_subtype:
+                    by_subtype[decision.instrument_subtype] += 1
+                if (
+                    decision.asset_class != r["asset_class"]
+                    or decision.instrument_subtype != r["instrument_subtype"]
+                ):
+                    decisions.append((
+                        t, decision.asset_class,
+                        decision.instrument_subtype, r["asset_class"],
+                    ))
+
+            if (i // batch_size) % 10 == 0:
+                log.info(
+                    "ops.stage.reclassify_asset_class.batch_progress",
+                    done=min(i + batch_size, len(rows)),
+                    total=len(rows),
+                    reclassified_so_far=len(decisions),
+                    no_match_so_far=len(no_match),
+                )
+
+    log.info(
+        "ops.stage.reclassify_asset_class.lookup_done",
+        total=len(rows),
+        reclassified=len(decisions),
+        unchanged=len(rows) - len(decisions) - len(no_match),
+        no_match=len(no_match),
+    )
+
+    # ─── apply changes (unless dry_run) ───
+    if decisions and not dry_run:
+        # When moving OUT of asset_class IN ('etf', 'etn'), the
+        # etf_fields_chk constraint requires etf_inverse / etf_leverage
+        # / etf_category to be NULL. Two-pass UPDATE: first nullify
+        # those fields for rows moving away from etf/etn, then write
+        # the new asset_class + subtype.
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                non_etf_targets = [
+                    t for t, ac, _, _prev in decisions
+                    if ac not in ("etf", "etn")
+                ]
+                if non_etf_targets:
+                    await conn.execute(
+                        """
+                        UPDATE platform.ticker_classifications
+                        SET etf_inverse = NULL, etf_leverage = NULL,
+                            etf_category = NULL
+                        WHERE ticker = ANY($1::text[])
+                        """,
+                        non_etf_targets,
+                    )
+                await conn.executemany(
+                    """
+                    UPDATE platform.ticker_classifications
+                    SET asset_class = $2, instrument_subtype = $3,
+                        updated_at = NOW()
+                    WHERE ticker = $1
+                    """,
+                    [(t, ac, st) for t, ac, st, _ in decisions],
+                )
+        log.info(
+            "ops.stage.reclassify_asset_class.updates_committed",
+            count=len(decisions),
+            non_etf_targets_nullified=len(non_etf_targets),
+        )
+
+    preview = decisions[:25] if only_changed else decisions[:50]
+    return {
+        "tickers": len(rows),
+        "reclassified": len(decisions),
+        "unchanged": len(rows) - len(decisions) - len(no_match),
+        "openfigi_no_match": len(no_match),
+        "by_class": dict(by_class),
+        "by_subtype": dict(by_subtype),
+        "dry_run": dry_run,
+        "changes_preview": [
+            {"ticker": t, "new_asset_class": ac,
+             "new_subtype": st, "prev_asset_class": prev}
+            for t, ac, st, prev in preview
+        ],
+    }
+
+
 async def _stage_classify_tickers(
     pool: asyncpg.Pool, cfg: dict[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -7537,6 +7769,12 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # expansion. ETFs/SPACs/funds get flagged so catalyst + earnings
     # pipelines can filter them out.
     ("classify_tickers",    lambda pool, cfg: (lambda: _stage_classify_tickers(pool, cfg)),     HEAVY_STAGE_TIMEOUT_SEC),
+    # OpenFIGI-driven asset_class taxonomy refinement (2026-05-30 expert review).
+    # Operator-on-demand; not run on the cron path (the 4→10 mapping is a
+    # one-shot followed by per-new-ticker refresh on classify_tickers cadence).
+    ("reclassify_asset_class",
+        lambda pool, cfg: (lambda: _stage_reclassify_asset_class(pool, cfg)),
+        HEAVY_STAGE_TIMEOUT_SEC),
     # v2.2 Phase P5 — backfill TKR-14 PK on existing ticker_classifications
     # rows + seed ticker_history first-seen entries. Idempotent; safe re-run.
     # SLICE 1: local-only (no external API). SLICE 2 (cross-vendor mode):

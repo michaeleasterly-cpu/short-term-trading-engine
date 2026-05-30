@@ -104,6 +104,13 @@ class OpenFIGIResult(BaseModel):
     security_type: str | None = None
     """OpenFIGI's security_type label (e.g. 'Common Stock', 'ETP', 'ADR')."""
 
+    security_type2: str | None = None
+    """OpenFIGI's securityType2 — the MORE-SPECIFIC Bloomberg-derived
+    classification (e.g. 'Common Stock', 'REIT', 'Closed-End Fund',
+    'Preferred', 'ETP', 'ETN'). Use this preferentially for taxonomy
+    mapping (see ``tpcore.openfigi.taxonomy``). Added 2026-05-30 for
+    the asset_class refinement build."""
+
     market_sector: str | None = None
     """OpenFIGI's market_sector label (e.g. 'Equity', 'Govt', 'Corp')."""
 
@@ -287,6 +294,7 @@ def _parse_one_result(
         exchange_figi=_validate_figi(first.get("figi")),
         name=first.get("name"),
         security_type=first.get("securityType"),
+        security_type2=first.get("securityType2"),
         market_sector=first.get("marketSector"),
         figi_not_found=False,
     )

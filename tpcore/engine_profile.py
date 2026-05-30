@@ -68,6 +68,21 @@ class EngineProfile(BaseModel):
     # PAPER/LIVE with an empty set. Same pattern as tpcore.feeds.profile
     # / tpcore.risk.limits_profile.
     data_dependencies: frozenset[str] = frozenset()
+    # 2026-05-30 (asset_class refinement spec): the asset_class values
+    # this engine includes in its tradeable universe. The default
+    # excludes SPAC*, ETN, CEF, leveraged/inverse ETFs, preferreds,
+    # and bare 'fund' (mutual funds, not exchange-listed) - these are
+    # category errors for daily-equity engines. Per-engine overrides
+    # in _PROFILE below.
+    #
+    # The 'vanilla ETF only' subset (excludes leveraged/inverse) is
+    # enforced at universe-build time via the
+    # ``instrument_subtype = 'vanilla'`` predicate.
+    #
+    # Spec: docs/superpowers/specs/2026-05-30-asset-class-refinement.md.
+    allowed_asset_classes: frozenset[str] = frozenset({
+        'stock', 'adr', 'reit', 'etf',
+    })
 
 
 _PROFILE: dict[str, EngineProfile] = {
@@ -85,20 +100,24 @@ _PROFILE: dict[str, EngineProfile] = {
                                data_dependencies=frozenset({"earnings_events", "liquidity_tiers", "prices_daily", "v_universe"})),
     "sentinel":  EngineProfile(engine="sentinel", cadence=Cadence.DAILY,
                                dispatch_order=4, lifecycle_state=LifecycleState.PAPER,
-                               data_dependencies=frozenset({"macro_data", "prices_daily"})),
+                               data_dependencies=frozenset({"macro_data", "prices_daily"}),
+                               allowed_asset_classes=frozenset({'etf'})),
     "canary":    EngineProfile(engine="canary", cadence=Cadence.DAILY,
                                dispatch_order=5, lifecycle_state=LifecycleState.PAPER,
-                               data_dependencies=frozenset({"prices_daily"})),
+                               data_dependencies=frozenset({"prices_daily"}),
+                               allowed_asset_classes=frozenset({'stock'})),
     "carver":   EngineProfile(engine="carver", cadence=Cadence.MONTHLY_FIRST_TRADING_DAY,
                                dispatch_order=6, lifecycle_state=LifecycleState.LAB),
     "catalyst":   EngineProfile(engine="catalyst", cadence=Cadence.DAILY,
                                dispatch_order=7, lifecycle_state=LifecycleState.PAPER,
                                allocator_eligible=True,
-                               data_dependencies=frozenset({"earnings_events", "insider_transactions", "prices_daily"})),
+                               data_dependencies=frozenset({"earnings_events", "insider_transactions", "prices_daily"}),
+                               allowed_asset_classes=frozenset({'stock', 'adr'})),
     # allocator: separate _dispatch_allocator path (NOT in the ROSTER loop, D-SDLC1-4).
     "allocator": EngineProfile(engine="allocator", cadence=Cadence.WEEKLY_FIRST_TRADING_DAY,
                                dispatch_order=0, lifecycle_state=LifecycleState.PAPER,
-                               data_dependencies=frozenset({"prices_daily"})),
+                               data_dependencies=frozenset({"prices_daily"}),
+                               allowed_asset_classes=frozenset({'stock', 'adr', 'reit', 'etf'})),
     # sigma RETIRED (data-SDLC RETIRED symmetry, D-SDLC1-2). cadence/dispatch_order are arbitrary inert placeholders — RETIRED engines are filtered out of every dispatch/allocator accessor (T2) so these values are never consumed (D-SDLC1-6).
     "sigma":     EngineProfile(engine="sigma", cadence=Cadence.DAILY,
                                dispatch_order=99, lifecycle_state=LifecycleState.RETIRED),
