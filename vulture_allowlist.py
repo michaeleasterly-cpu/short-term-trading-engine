@@ -465,3 +465,20 @@ resolved_at  # unused variable (tpcore/identity/parent_resolver.py:141)
 # conftest.py for the historical note). pytest discovers autouse
 # fixtures by attribute lookup; vulture can't see that.
 _reset_dispatcher_cache  # unused function (tpcore/tests/test_aar_writer.py:17)
+# OpenFIGI taxonomy refinement (2026-05-30, commit 98585f7) — VALID_INSTRUMENT_SUBTYPES is the
+# enum the docstring + CHECK constraint references; the taxonomy mapper's internal helpers
+# consume `instrument_subtype` + `securitytype2` via decision plumbing vulture can't trace.
+VALID_INSTRUMENT_SUBTYPES  # unused variable (tpcore/openfigi/taxonomy.py:63)
+instrument_subtype  # unused variable (tpcore/openfigi/taxonomy.py:75)
+securitytype2  # unused variable (tpcore/openfigi/taxonomy.py:405)
+# P0 SEC-evidence metadata foundation (2026-05-30) — extract_filing_metadata + get_submissions are
+# called by scripts/ops.py via the SECCompanyFactsAdapter context manager AND from the
+# test_sec_submissions_extract suite; resolve_missing_ciks is called by the backfill stage via
+# SECTickerCIKMap. company_name + cached property are operator-facing diagnostic surfaces
+# (tests assert against them). Vulture can't trace any of these across the lambda factory in
+# _STAGE_SPECS or the async context-manager dispatch.
+extract_filing_metadata  # unused method (tpcore/sec/companyfacts_adapter.py:213)
+get_submissions  # unused method (tpcore/sec/companyfacts_adapter.py:410)
+company_name  # unused variable (tpcore/sec/ticker_cik_map.py:58)
+cached  # unused property (tpcore/sec/ticker_cik_map.py:96)
+resolve_missing_ciks  # unused method (tpcore/sec/ticker_cik_map.py:150)
