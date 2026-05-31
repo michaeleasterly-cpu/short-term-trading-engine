@@ -75,7 +75,7 @@ def test_filing_dates_sql_pinned_to_p1_shape() -> None:
         fqc._FILING_DATES_SQL.encode("utf-8"),
     ).hexdigest()
     assert sha == (
-        "bbfa79597f63b0a467a0fa170a478b96893f271994925f932a05a0569ee1c2eb"
+        "15ead84d3ecb6416c4bbb952f11d1a4329c560f9aef8269dd1c39234e195e49c"
     ), (
         "fundamentals_quarterly_completeness._FILING_DATES_SQL changed "
         "from the P1 cadence-routed shape. If this is a deliberate next-"

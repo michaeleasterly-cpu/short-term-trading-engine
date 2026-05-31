@@ -493,3 +493,8 @@ extract_lifecycle_events  # unused method (tpcore/sec/companyfacts_adapter.py:41
 # first wrapper called by _stage_backfill_sec_lifecycle and used
 # by the new test_p2_o* tests.
 get_submissions_cached  # unused method (tpcore/sec/companyfacts_adapter.py:424)
+# P2b (2026-05-31): TERMINAL_LIFECYCLE_STATES is the public re-export
+# of the routing set. Vulture can't trace the consumer (the test
+# suite + future P2c capital-gate read). Static analysis sees only
+# the assignment.
+TERMINAL_LIFECYCLE_STATES  # unused variable (tpcore/quality/validation/checks/fundamentals_quarterly_completeness.py:581)

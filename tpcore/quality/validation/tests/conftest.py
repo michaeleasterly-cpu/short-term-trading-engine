@@ -241,7 +241,11 @@ class FakePool:
             return [
                 {"ticker": "AAPL",
                  "period_end_date": today - timedelta(days=91 * (7 - i)),
-                 "sec_document_type_primary": "10-Q"}
+                 "sec_document_type_primary": "10-Q",
+                 # P2b (2026-05-31): lifecycle columns added to SELECT;
+                 # synthetic AAPL is 'active' so cadence routing fires.
+                 "issuer_lifecycle_state": None,
+                 "issuer_lifecycle_event_date": None}
                 for i in range(8)
             ]
         return []

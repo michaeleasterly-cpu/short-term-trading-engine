@@ -62,17 +62,25 @@ def _quarterly_filings(
     n: int,
     days_step: int = 91,
     primary: str = "10-Q",
+    lifecycle_state: str | None = None,
+    lifecycle_event_date: date | None = None,
 ) -> list[dict[str, Any]]:
     """Build n quarterly filings for ticker starting at `start`.
 
     Default primary form = '10-Q' (US quarterly filer); pass another
     form to exercise alternate routing.
+
+    P2b: ``lifecycle_state`` + ``lifecycle_event_date`` simulate the
+    issuer-lifecycle backfill columns. Default None → cadence routing
+    fires normally.
     """
     return [
         {
             "ticker": ticker,
             "period_end_date": start + timedelta(days=days_step * i),
             "sec_document_type_primary": primary,
+            "issuer_lifecycle_state": lifecycle_state,
+            "issuer_lifecycle_event_date": lifecycle_event_date,
         }
         for i in range(n)
     ]
@@ -84,6 +92,8 @@ def _annual_filings(
     n: int,
     days_step: int = 365,
     primary: str = "20-F",
+    lifecycle_state: str | None = None,
+    lifecycle_event_date: date | None = None,
 ) -> list[dict[str, Any]]:
     """Build n annual filings for ticker starting at `start`."""
     return [
@@ -91,6 +101,8 @@ def _annual_filings(
             "ticker": ticker,
             "period_end_date": start + timedelta(days=days_step * i),
             "sec_document_type_primary": primary,
+            "issuer_lifecycle_state": lifecycle_state,
+            "issuer_lifecycle_event_date": lifecycle_event_date,
         }
         for i in range(n)
     ]

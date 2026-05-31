@@ -91,7 +91,7 @@ extra=forbid``).
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -166,15 +166,30 @@ REPAIR_LOOKBACK_BUFFER_DAYS = 14
 _METADATA_COVERAGE_SENTINEL_TICKER = "<metadata_coverage>"
 _UNIVERSE_SENTINEL_TICKER = "<universe>"
 
+# P2b (2026-05-31): terminal lifecycle states from the issuer-lifecycle
+# evidence model (migration 20260530_0300; populated by the
+# ``backfill_sec_lifecycle`` stage). A ticker in any of these states
+# has SEC Form 25 / Form 15 evidence of termination — the validator
+# routes them to ``excluded_lifecycle_terminated`` instead of the
+# silence-based ``excluded_dark`` heuristic (evidence > heuristic).
+_TERMINAL_LIFECYCLE_STATES: frozenset[str] = frozenset({
+    "deregistered", "delist_effective",
+})
+
 
 _FILING_DATES_SQL = """
     WITH liquid AS (
-        SELECT lt.ticker, tc.sec_document_type_primary
+        SELECT lt.ticker, tc.sec_document_type_primary,
+               tc.issuer_lifecycle_state,
+               tc.issuer_lifecycle_event_date
         FROM platform.liquidity_tiers lt
         JOIN platform.ticker_classifications tc ON tc.ticker = lt.ticker
         WHERE lt.tier <= $1
     )
-    SELECT fq.ticker, fq.period_end_date, liquid.sec_document_type_primary
+    SELECT fq.ticker, fq.period_end_date,
+           liquid.sec_document_type_primary,
+           liquid.issuer_lifecycle_state,
+           liquid.issuer_lifecycle_event_date
     FROM platform.fundamentals_quarterly fq
     JOIN liquid USING (ticker)
     WHERE fq.period_end_date IS NOT NULL
@@ -197,9 +212,15 @@ class _Evaluation:
     excluded_metadata_required: int
     excluded_confirmed_data_gap: int
     excluded_other_form: int
-    by_form: dict[str, int]
+    # P2b (2026-05-31) — evidence-backed terminal state (Form 25 /
+    # Form 15 from issuer-lifecycle backfill). Disjoint from
+    # excluded_dark: tickers with terminal evidence are bucketed here
+    # FIRST; only tickers WITHOUT lifecycle evidence fall through to
+    # the silence-based dark heuristic.
+    excluded_lifecycle_terminated: int = 0
+    by_form: dict[str, int] = field(default_factory=dict)
     # ticker → (sorted list of inferred missing period_end_dates, form)
-    gaps: dict[str, tuple[list[date], str]]
+    gaps: dict[str, tuple[list[date], str]] = field(default_factory=dict)
     # Set when the metadata-coverage sentinel must additionally fire.
     metadata_coverage_low: bool = False
     metadata_coverage_ratio: float = 0.0
@@ -277,29 +298,46 @@ async def _evaluate(pool: asyncpg.Pool) -> _Evaluation:
             excluded_metadata_required=0,
             excluded_confirmed_data_gap=0,
             excluded_other_form=0,
-            by_form={}, gaps={},
         )
 
-    # Group filings by ticker; capture each ticker's primary form (a
-    # ticker can appear in multiple rows but the form is invariant per
-    # row since it comes from the joined classification row).
+    # Group filings by ticker; capture each ticker's primary form +
+    # lifecycle state (a ticker can appear in multiple rows but both
+    # are invariant per row since they come from the joined
+    # classification row).
     per_ticker: dict[str, list[date]] = {}
     primary_by_ticker: dict[str, str | None] = {}
+    lifecycle_by_ticker: dict[str, str | None] = {}
     for r in rows:
         per_ticker.setdefault(r["ticker"], []).append(r["period_end_date"])
         primary_by_ticker[r["ticker"]] = r["sec_document_type_primary"]
+        # P2b: ``issuer_lifecycle_state`` is NULL until the lifecycle
+        # backfill stage runs against this ticker. NULL → fall through
+        # to the silence-based excluded_dark heuristic; a known terminal
+        # state short-circuits BEFORE the cadence check.
+        lifecycle_by_ticker[r["ticker"]] = r.get("issuer_lifecycle_state")
 
     evaluated_routed = 0
     excluded_dark = 0
     excluded_metadata_required = 0
     excluded_confirmed_data_gap = 0
     excluded_other_form = 0
+    excluded_lifecycle_terminated = 0
     by_form: dict[str, int] = {}
     gaps: dict[str, tuple[list[date], str]] = {}
 
     for ticker, period_ends in per_ticker.items():
         if not period_ends:
             continue
+
+        # P2b: evidence-first routing. Form 25 / Form 15 evidence of
+        # termination is dispositive — route BEFORE cadence/liveness.
+        # The silence-based excluded_dark heuristic only applies when
+        # we have NO lifecycle evidence (NULL state).
+        lifecycle_state = lifecycle_by_ticker.get(ticker)
+        if lifecycle_state in _TERMINAL_LIFECYCLE_STATES:
+            excluded_lifecycle_terminated += 1
+            continue
+
         primary = primary_by_ticker.get(ticker)
         cadence = _cadence_for(primary)
         if cadence is None:
@@ -318,7 +356,9 @@ async def _evaluate(pool: asyncpg.Pool) -> _Evaluation:
 
         # Per-cadence liveness gate. A 20-F filer just past their
         # 4-month deadline is NOT dark; an analogous 10-Q filer past
-        # 120 days IS dark.
+        # 120 days IS dark. P2b: tickers with terminal lifecycle
+        # evidence were already excluded above — this fallback only
+        # fires for tickers with NULL lifecycle state.
         if (today - last_filed).days > live_within:
             excluded_dark += 1
             continue
@@ -377,6 +417,7 @@ async def _evaluate(pool: asyncpg.Pool) -> _Evaluation:
         excluded_metadata_required=excluded_metadata_required,
         excluded_confirmed_data_gap=excluded_confirmed_data_gap,
         excluded_other_form=excluded_other_form,
+        excluded_lifecycle_terminated=excluded_lifecycle_terminated,
         by_form=by_form,
         gaps=gaps,
         metadata_coverage_low=metadata_coverage_low,
@@ -461,6 +502,7 @@ async def check_fundamentals_quarterly_completeness(
             "tpcore.validation.fundamentals_completeness.ok",
             evaluated_routed=ev.evaluated_routed,
             excluded_dark=ev.excluded_dark,
+            excluded_lifecycle_terminated=ev.excluded_lifecycle_terminated,
             excluded_metadata_required=ev.excluded_metadata_required,
             excluded_confirmed_data_gap=ev.excluded_confirmed_data_gap,
             excluded_other_form=ev.excluded_other_form,
@@ -473,6 +515,7 @@ async def check_fundamentals_quarterly_completeness(
             offending_tickers=total_failed,
             evaluated_routed=ev.evaluated_routed,
             excluded_dark=ev.excluded_dark,
+            excluded_lifecycle_terminated=ev.excluded_lifecycle_terminated,
             excluded_metadata_required=ev.excluded_metadata_required,
             excluded_confirmed_data_gap=ev.excluded_confirmed_data_gap,
             excluded_other_form=ev.excluded_other_form,
@@ -532,3 +575,7 @@ __all__ = [
     "check_fundamentals_quarterly_completeness",
     "compute_fundamentals_repair_targets",
 ]
+
+
+# Re-exported for tests + downstream consumers (P2b 2026-05-31).
+TERMINAL_LIFECYCLE_STATES: frozenset[str] = _TERMINAL_LIFECYCLE_STATES
