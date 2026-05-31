@@ -4,6 +4,98 @@ Cross-cutting personal action items that don't fit existing docs. Operational
 build queues belong in `docs/DATABASE_AND_DATAFLOW.md §5 Implementation Queue`
 or `docs/MASTER_PLAN.md §9 Build Order`.
 
+## ⚑ Evidence-based fundamentals/lifecycle arc (2026-05-30 → 2026-05-31)
+
+Five-commit refactor closing the "no validator suppression, no
+country-based classification, evidence over heuristics" mandate.
+SEC Form 25/15 + DEI metadata → cadence-routed validator → capital
+gate refuses orders on terminally-delisted tickers.
+
+- **P0 — `2eca8c7` SEC metadata foundation** (DONE 2026-05-30 + CI green
+  via `2bbdfe4` vulture allowlist).
+  - migration `20260530_0200`: 8 nullable cols on
+    `platform.ticker_classifications` (`sec_document_type_primary`,
+    `sec_document_type_history`, `first_public_filing_date`,
+    `last_filing_date`, `fiscal_year_end_month`, `metadata_source`,
+    `metadata_updated_at`, `cik_source`) + 1 partial index.
+  - `tpcore/sec/ticker_cik_map.py` — P0-001 SEC ticker→CIK adapter.
+  - `tpcore/sec/companyfacts_adapter.py` — P0-002 `extract_filing_metadata`
+    + `get_submissions`.
+  - `scripts/ops.py` — P0-003 `_stage_backfill_sec_metadata` (idempotent;
+    `dry_run=true` default). Live coverage: 362/13,840 tickers (2.6%) —
+    P0 backfill is operator-on-demand; long-tail expansion is P1b.
+  - 26 hermetic tests. Validator byte-frozen via SHA pin.
+
+- **P1 — `cd0f658` cadence-routed validator** (DONE 2026-05-30, CI green).
+  - `fundamentals_quarterly_completeness` rewrite: routes on
+    `sec_document_type_primary`. 10-Q→quarterly (100d gap), 10-K/20-F/40-F
+    →annual (450d gap). Per-cadence liveness windows (120d / 540d).
+  - 5-state encoding: PASS/FAIL/METADATA_REQUIRED/CONFIRMED_DATA_GAP/
+    BLOCKED_VENDOR_ACCESS (last one reserved for P2 vendor-error surface).
+  - Metadata-coverage structural sentinel — fires when >25% NULL doctype.
+    Currently fires at 90% (DATA_OPERATIONS_COMPLETE intentionally blocked
+    until P0 backfill catches up).
+  - Live: 8 of 25 failing tickers flipped to PASS (the 20-F false positives
+    AER/ARCO/ARQQ/ASTL/AU/BIP/BIPC/BWMX/CAMT cleared).
+
+- **P2a — `b3fa906` issuer-lifecycle evidence model** (DONE 2026-05-30, CI green).
+  - migration `20260530_0300`: 5 nullable cols on `ticker_classifications`
+    (`issuer_lifecycle_state` + `_state_source` + `_event_date` +
+    `_evidence_url` + `_updated_at`) + new append-only event log
+    `platform.ticker_lifecycle_events` (UNIQUE partial idx on
+    `(classification_id, form_type, accession_number)` for idempotent
+    UPSERT).
+  - `SECCompanyFactsAdapter.extract_lifecycle_events` — Form 25 (delist
+    notice) + Form 15 (deregistration) extractor. Variants: 25/25-NSE and
+    15/15-12G/15-12B/15F/15-15D.
+  - `get_submissions_cached` — bulk-before-API-crawl cache layer.
+    `data/sec_submissions/CIK<padded>.json` (gitignored). 922 cached →
+    cold 30min → cached 30sec (60× speedup, zero SEC re-pulls).
+  - `_stage_backfill_sec_lifecycle` — provenance precedence dict
+    (`manual`>`sec_form_15`>`sec_form_25`>… > `fmp_profile`).
+    Per-ticker transactions.
+  - Live coverage: 544/~1,750 (208 deregistered + 336 delist_effective).
+  - 38 hermetic tests.
+
+- **P2b — `588fd31` validator reads evidence** (DONE 2026-05-30, CI green).
+  - `fundamentals_quarterly_completeness` now reads
+    `issuer_lifecycle_state` from the join. New
+    `excluded_lifecycle_terminated` bucket — Form 25/15 evidence routes
+    BEFORE the silence-based `excluded_dark` heuristic. Evidence wins.
+  - `compute_fundamentals_repair_targets` excludes terminated tickers
+    (no wasted `fundamentals_refresh` SEC pulls on dead names).
+  - Live: 6 routed-eligible tickers reclassified from cadence-FAIL/dark
+    → terminated. The 100%-green invariant is preserved.
+  - 9 new tests.
+
+- **P2c — `fac5f79` capital gate blocks terminated lifecycle**
+  (PUSHED 2026-05-31; **CI FAILED** — under triage).
+  - `RiskGovernor.check_lifecycle(ticker)` — reads
+    `issuer_lifecycle_state`; BLOCK on `'deregistered'` /
+    `'delist_effective'`; ALLOW on active/NULL/delist_pending/unknown.
+  - Wired into `check_trade` at position 5.5 — BEFORE the broker
+    `get_positions()` round-trip. Fail-fast.
+  - 11 hermetic tests; all 20 pre-existing risk tests still green
+    locally.
+
+### Remaining (deferred to future commits)
+
+- **P1b — CIK discovery long tail.** The 1,419 SEC-ticker-map-unresolved
+  tickers (delisted/non-equity/pink-sheet) need an FMP `/profile` fallback
+  in a P1b CIK-discovery loop. Today they sit as `excluded_metadata_required`
+  forever.
+- **P2c+ — 8-K Item 3.01 extractor (`delist_pending`).** The enum value
+  is reserved; `tpcore/sec/corp_events_extractor.py` already has 8-K
+  parsing for items 1.01/2.01/1.02/1.03; extending pattern set to 3.01
+  is a small lift but needs spec on what delist_pending semantically
+  means for the capital gate.
+- **Metadata coverage gate.** The 90% NULL rate today blocks
+  `DATA_OPERATIONS_COMPLETE` via the P1 structural sentinel. To clear
+  the gate, run `backfill_sec_metadata` against the full active
+  universe (operator-on-demand; SEC fair-use ~7600 * 0.11s = ~14 min
+  cold, ~30 sec cached on re-run).
+
+
 ## ✅ PUBLIC REPO — recurring secret-audit gate (2026-05-21) — CLOSED 2026-05-25
 
 **Status 2026-05-25 — DONE.** `gitleaks v8.30.1` installed in BOTH:

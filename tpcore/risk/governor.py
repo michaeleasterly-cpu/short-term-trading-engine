@@ -584,7 +584,13 @@ class RiskGovernor:
             # filter, broker tradability — and this gate is additive,
             # not the SoT for "exists at all").
             return CheckResult(RiskDecision.ALLOW)
-        state = row["issuer_lifecycle_state"]
+        # ``.get`` (not ``[]``) so a malformed row payload — including
+        # a mock fixture that returns a row without the lifecycle column,
+        # or a hypothetical mid-migration race — degrades to ALLOW
+        # instead of crashing the gate. The operator-correct fallback
+        # for missing evidence is ALWAYS ALLOW (additive gate; never
+        # broader than the universe filter).
+        state = row.get("issuer_lifecycle_state")
         if state in TERMINAL_LIFECYCLE_STATES:
             return CheckResult(
                 RiskDecision.BLOCK,
