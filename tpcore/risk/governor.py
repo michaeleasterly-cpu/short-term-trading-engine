@@ -359,9 +359,16 @@ class RiskGovernor:
             2. Kill switch active.
             3. Daily loss cap.
             4. Weekly loss cap.
-            5. Max open positions.
-            6. Platform-wide net long exposure (BUY only).
-            7. Round-trip cost vs expected edge (opt-in via kwargs).
+            5. Issuer-lifecycle terminated (P2c 2026-05-31) — BLOCK
+               new orders when ``platform.ticker_classifications.
+               issuer_lifecycle_state`` is ``'deregistered'`` (Form 15
+               evidence) or ``'delist_effective'`` (Form 25 evidence).
+               Cheap indexed read; placed BEFORE the broker round-trip
+               so a known-terminated name short-circuits without any
+               broker API cost.
+            6. Max open positions.
+            7. Platform-wide net long exposure (BUY only).
+            8. Round-trip cost vs expected edge (opt-in via kwargs).
         """
         if size <= 0:
             return CheckResult(RiskDecision.BLOCK, reason="size must be positive")
@@ -393,6 +400,19 @@ class RiskGovernor:
                 RiskDecision.BLOCK,
                 reason=f"weekly loss cap hit ({state.weekly_pnl} ≤ {weekly_floor})",
             )
+        # P2c (2026-05-31) — issuer-lifecycle terminated gate. A ticker
+        # with Form 25/Form 15 SEC evidence is terminally ended; no
+        # new orders against it can ever close at the assumed price
+        # because the security itself is being unwound. Cheap indexed
+        # read; fires BEFORE the broker round-trip so a terminated
+        # name short-circuits without consuming the broker's API
+        # budget. Opt-in via ``ticker`` kwarg (preserves the existing
+        # ticker-less call sites that gate non-ticker-aware
+        # operations).
+        if ticker is not None:
+            lifecycle_check = await self.check_lifecycle(ticker)
+            if lifecycle_check.decision is RiskDecision.BLOCK:
+                return lifecycle_check
         # #251 Part A: the never-fail-open ``max(proxy, broker_floor)``
         # raise. Fetch the broker's open positions ONCE here (the single
         # in-band ``get_positions()`` round-trip — its result is also
@@ -511,6 +531,67 @@ class RiskGovernor:
                 reason=(
                     f"round-trip cost {cost} > expected edge {expected_edge_pct} "
                     f"for {ticker}"
+                ),
+            )
+        return CheckResult(RiskDecision.ALLOW)
+
+    async def check_lifecycle(self, ticker: str) -> CheckResult:
+        """Block when the issuer is terminally delisted / deregistered
+        (P2c 2026-05-31).
+
+        Reads ``platform.ticker_classifications.issuer_lifecycle_state``
+        — populated by the ``backfill_sec_lifecycle`` stage from SEC
+        Form 25 (delist notice) / Form 15 (deregistration) evidence.
+
+        State decisions:
+          * ``'deregistered'``  → BLOCK (Form 15 — SEC reporting
+                                  obligation terminated; the security
+                                  is being unwound)
+          * ``'delist_effective'`` → BLOCK (Form 25 — delist effective
+                                  on the exchange; may trade on OTC
+                                  but the listing is gone)
+          * ``'delist_pending'`` → ALLOW (P2c reserved; Form 25
+                                  announced but not effective yet —
+                                  the security still trades on the
+                                  primary listing)
+          * ``'active'`` / NULL / any other state → ALLOW
+
+        Returns ALLOW when the governor has no DB pool wired (tests
+        without DB stay green) — mirrors :meth:`check_cost`. A NULL
+        state (pre-backfill default for most of the universe) is also
+        ALLOW — the operator-correct fallback while P2a coverage
+        extends.
+        """
+        if self._pool is None:
+            return CheckResult(RiskDecision.ALLOW)
+        from tpcore.quality.validation.checks.fundamentals_quarterly_completeness import (  # noqa: E501
+            TERMINAL_LIFECYCLE_STATES,
+        )
+
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT issuer_lifecycle_state
+                FROM platform.ticker_classifications
+                WHERE ticker = $1
+                """,
+                ticker,
+            )
+        if row is None:
+            # Ticker not in classifications — pre-existing universe
+            # may not cover every smoke/integration test ticker. ALLOW
+            # (the live universe path catches this elsewhere — universe
+            # filter, broker tradability — and this gate is additive,
+            # not the SoT for "exists at all").
+            return CheckResult(RiskDecision.ALLOW)
+        state = row["issuer_lifecycle_state"]
+        if state in TERMINAL_LIFECYCLE_STATES:
+            return CheckResult(
+                RiskDecision.BLOCK,
+                reason=(
+                    f"issuer lifecycle terminated for {ticker} "
+                    f"(state={state}) — SEC Form 25/15 evidence "
+                    f"(see platform.ticker_lifecycle_events)"
                 ),
             )
         return CheckResult(RiskDecision.ALLOW)
