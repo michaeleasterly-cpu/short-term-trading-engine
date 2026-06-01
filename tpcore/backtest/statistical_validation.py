@@ -35,6 +35,12 @@ from .statistical_significance import (
 if TYPE_CHECKING:  # pragma: no cover
     import asyncpg
 
+    from tpcore.forensics.alpha_ledger import (
+        BlockingConstraint,
+        FailedAlphaRecord,
+        RecordResult,
+    )
+
 
 @dataclass(frozen=True)
 class StatValidationReport:
@@ -231,10 +237,10 @@ async def write_credibility_score_with_failed_alpha(
     *,
     engine_name: str,
     score: CredibilityScore,
-    failed_alpha_record: object | None = None,
-    blocking_constraint: object | None = None,
+    failed_alpha_record: FailedAlphaRecord | None = None,
+    blocking_constraint: BlockingConstraint | None = None,
     timestamp: datetime | None = None,
-) -> tuple[bool, object | None]:
+) -> tuple[bool, RecordResult | None]:
     """F1 (2026-06-01) — write credibility AND emit a structured
     failed-alpha row on low score.
 
@@ -266,11 +272,15 @@ async def write_credibility_score_with_failed_alpha(
     The companion ``write_credibility_score`` keeps its original
     contract for back-compat; new callers use this entry-point.
 
-    The signature uses ``object`` for the F1 model types to avoid an
-    eager import of ``tpcore.forensics.alpha_ledger`` at module-import
-    time (which would create a top-level dependency on a brand-new
-    module from a long-stable file). The runtime check below imports
-    lazily.
+    F1 model types (``FailedAlphaRecord``, ``BlockingConstraint``,
+    ``RecordResult``) are imported under ``TYPE_CHECKING`` at the
+    module top so static type-checkers see real types on the public
+    signature, while the runtime ``record_failed_alpha`` call is
+    imported lazily inside the FAIL branch to avoid a top-level
+    dependency from ``tpcore.backtest.statistical_validation`` (a
+    long-stable file) onto the F1-introduced
+    ``tpcore.forensics.alpha_ledger`` module. Pydantic's parameter
+    validation at the call sites enforces the runtime types.
     """
     # Always write the credibility row first.
     credibility_inserted = await write_credibility_score(
@@ -281,33 +291,10 @@ async def write_credibility_score_with_failed_alpha(
     if score.score >= MIN_LIVE_SCORE:
         return credibility_inserted, None
 
-    # FAIL path. Three sub-cases below.
-    from tpcore.forensics.alpha_ledger import (
-        BlockingConstraint as _BC,
-    )
-    from tpcore.forensics.alpha_ledger import (
-        FailedAlphaRecord as _FAR,
-    )
+    # FAIL path — lazy import of the runtime helper.
     from tpcore.forensics.alpha_ledger import (
         record_failed_alpha as _record,
     )
-
-    if failed_alpha_record is not None and not isinstance(
-        failed_alpha_record, _FAR
-    ):
-        raise TypeError(
-            "failed_alpha_record must be a "
-            "tpcore.forensics.alpha_ledger.FailedAlphaRecord; "
-            f"got {type(failed_alpha_record).__name__}"
-        )
-    if blocking_constraint is not None and not isinstance(
-        blocking_constraint, _BC
-    ):
-        raise TypeError(
-            "blocking_constraint must be a "
-            "tpcore.forensics.alpha_ledger.BlockingConstraint; "
-            f"got {type(blocking_constraint).__name__}"
-        )
 
     if failed_alpha_record is not None:
         # Complete classification provided — record it.

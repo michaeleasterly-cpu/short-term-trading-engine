@@ -321,9 +321,17 @@ async def test_write_credibility_score_no_failed_alpha_on_pass() -> None:
     )
 
     assert cred_inserted is True
+    # ``rec_result is None`` IS the dispositive proof that the ledger
+    # row was not written: ``record_failed_alpha`` returns a
+    # ``RecordResult`` (never None) on every code path, so a None
+    # return value can only come from the PASS short-circuit in
+    # ``write_credibility_score_with_failed_alpha`` that skips the
+    # ledger call entirely. A separate mock-await-count assertion is
+    # tempting but wrong here — ``DataQualityWriter.write`` uses
+    # ``conn.fetchrow`` internally for the credibility INSERT, so the
+    # mock's fetchrow legitimately gets called once on the PASS path
+    # for the credibility row (not the ledger).
     assert rec_result is None  # ledger row NOT written
-    # fetchrow (the ledger INSERT) MUST NOT have been called.
-    assert conn.fetchrow.await_count == 0
 
 
 # ─── TEST-F1-13 — Backfill script shape
