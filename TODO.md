@@ -69,14 +69,17 @@ gate refuses orders on terminally-delisted tickers.
   - 9 new tests.
 
 - **P2c — `fac5f79` capital gate blocks terminated lifecycle**
-  (PUSHED 2026-05-31; **CI FAILED** — under triage).
+  (DONE 2026-05-31, CI green after fix `8048529 fix(risk): P2c —
+  use row.get() for lifecycle col (existing test mock fragility)`).
   - `RiskGovernor.check_lifecycle(ticker)` — reads
     `issuer_lifecycle_state`; BLOCK on `'deregistered'` /
     `'delist_effective'`; ALLOW on active/NULL/delist_pending/unknown.
   - Wired into `check_trade` at position 5.5 — BEFORE the broker
     `get_positions()` round-trip. Fail-fast.
-  - 11 hermetic tests; all 20 pre-existing risk tests still green
-    locally.
+  - 11 hermetic tests; all 20 pre-existing risk tests still green.
+  - **Original CI red on push (2026-05-31)** was triaged + fixed
+    same-day via the `row.get()` lifecycle-column patch in
+    `8048529` (test-mock fragility, not a logic defect). On main.
 
 ### Remaining (deferred to future commits)
 
@@ -95,6 +98,49 @@ gate refuses orders on terminally-delisted tickers.
   universe (operator-on-demand; SEC fair-use ~7600 * 0.11s = ~14 min
   cold, ~30 sec cached on re-run).
 
+
+## ✅ STE dev-system round-trip — CLOSED 2026-06-01
+
+> **Status 2026-06-01 — DONE.** STE has adopted the `packetvoid-dev-system` reusable Claude/dev workflow scaffold as its declared dev-system profile, with the portable workflow fixes back-ported and the residual STE-vs-portable drift formally documented as STE_OVERRIDE. Audit signal is now meaningful and steady-state. **No S6 or S7 work remains unless a future portable-template improvement appears that's net-additive to STE's richer canonical surface.**
+
+### What shipped — STE side
+
+- **PR #416** (`79ea010`) — **S0 plan doc**: `docs/superpowers/plans/2026-06-01-ste-round-trip-dev-system-adoption-plan.md`. Full artifact-by-artifact classification (PORTABLE_MATCH / STE_EXTENSION / STE_OVERRIDE / CONFLICT / DEFER), conflict + non-overwrite rules, staged adoption sequence S0–S7, rollback plan.
+- **PR #417** (`03b1aa3`) — **S1 PROJECT_PROFILE.yaml + alignment sentinel**: hand-authored declaration of STE's current dev-system posture; `critical_paths` + `claude_system_paths` mirror `.claude/path_registry.yaml` verbatim; `memory_policy.api_memstores_enabled: true` with `memstore_reference: docs/MEMSTORE_HANDOFF.md` (pointer-only — no inlined IDs); 11-test alignment sentinel.
+- **PR #418** (`137a32e`) — **S2 read-only audit wrapper**: `scripts/run_dev_system_audit.sh` invokes the dev-system `audit_project.py` + `check_manifests.py` against the STE tree in REPORT_ONLY mode; 13-test sentinel pins the read-only / no-mutation / no-Anthropic-API contract.
+- **PR #419** (`fd04493`) — **S5 workflow portability back-ports**: `.github/workflows/secret-scan.yml` gains `permissions.actions: read` + `continue-on-error: true` on SARIF upload (D0g fixes); `.github/workflows/claude-review-heavy-lane.yml` gains the `Gate on ANTHROPIC_API_KEY presence` step (D2 fix). All STE-specific paths, comments, and prompt wording preserved verbatim. 13-test sentinel.
+- **PR #420** (`9cb7ed1`) — **PR-template drift fix**: `.github/pull_request_template.md` splits the combined `ops/engine_sdlc.py or ops/engine_sdlc/**` checkbox into two dedicated lines so the portable `check_manifests` parser recognizes both. 3-test sentinel walks the registry and asserts every heavy-lane path has its own checkbox.
+- **PR #421** (`2378e1f`) — **S2 override acceptance addendum**: appends `## S2 audit override acceptance — 2026-06-01` to the S0 plan doc. Documents the 20 `audit_project` drift findings — 19 STE_OVERRIDE + 1 DEFER (the `block-pytest-subset-when-ops` ↔ `…-when-critical` hook rename). 9-test sentinel pins the addendum's load-bearing claims.
+
+### What shipped — dev-system side
+
+- **`packetvoid-dev-system` PRs #1–#9** — the D0a–D0g extraction sequence: skeleton, portable docs, scripts + bootstrap renderer, portable Claude surface (rules / skills / hooks / agents), GitHub workflow templates + profile seeds, dogfooded secret-scan gate. Public + branch-protected.
+- **`packetvoid-dev-system` PR #10** (`df1b0e3`) — **pointer-only `memstore_reference` semantics**: schema + renderer accept `api_memstores_enabled: true` with either inlined IDs OR a `memstore_reference` pointer. Unblocks STE's `audit_project` parser pathway against STE's pointer-only S1 profile without inlining memstore IDs anywhere new.
+
+### Consumer validation evidence
+
+- **D1 generic-python consumer** (`packetvoid-d1-consumer-smoke` PRs #1 #2): bootstrap PR merged after 3 fix cycles (each surfaced a real portability gap that landed back as a dev-system fix); real-edit PR merged first try.
+- **D2 python-railway consumer** (`packetvoid-d2-railway-consumer-smoke` PRs #1 #2): bootstrap PR merged first try; real-edit PR merged first try.
+- Four real PR cycles total on real GitHub infrastructure across two profile shapes — zero regressions on the railway side after the four D0g/D1 portability fixes landed.
+
+### Steady-state operating expectation
+
+- `scripts/run_dev_system_audit.sh` returns `REPORT_ONLY: DRIFT_DETECTED` indefinitely — the 20 documented STE_OVERRIDE findings stay drift-detected by design. **Exit code is `0`** (advisory; never reds STE CI).
+- `check_manifests --target-dir` returns **CLEAN** going forward. Any future stage-2 red is a real defect worth a fix PR.
+- A new `audit_project` finding **beyond** the documented 20 is the signal worth investigating — re-triage that one delta against the plan's §"Artifact-by-artifact classification" table.
+
+### What is NOT done (and is intentionally not done)
+
+- **S3 portable doc adoption** — no-op per current evidence; all 5 portable-shape STE docs are richer than their portable counterparts. Re-evaluate only if a future portable-template change adds something STE lacks.
+- **S6 `.claude` reconciliation** — additive-only going forward; no bulk overwrite of `.claude/settings.json`, `gate-ecr-dfcr-edits.sh`, `risk-path-reminder.sh`, the 10 STE-specific rules, the 10 STE-specific skills, or the 4 STE-specific agents.
+- **S7 regenerate-on-demand allowlist** — empty. S2's evidence shows every PORTABLE_MATCH-shaped artifact actually drifts as STE_OVERRIDE in practice; there is no allowlist to write.
+- **Hook rename `when-ops` → `when-critical`** — DEFER. The OPS-shadow lesson STE encodes is non-portable in shape; the rename is an operator decision the plan defers (NEEDS_OPERATOR_DECISION #1).
+
+### Cross-references
+
+- Plan + addendum: `docs/superpowers/plans/2026-06-01-ste-round-trip-dev-system-adoption-plan.md` (PRs #416 + #421).
+- Dev system: <https://github.com/michaeleasterly-cpu/packetvoid-dev-system> (public, branch-protected `main-branch-protection` ruleset).
+- Round-trip ruleset fix (STE side): `main-branch-protection` `required_status_checks` corrected mid-sequence to reference actual check-run names (`pytest + ruff + check_imports`, `lab-isolation-db (Postgres-gated suites)`, `gitleaks (worktree + SARIF)`). Six consecutive STE PRs since (#416–#421) merged normal — no `--admin`.
 
 ## ✅ PUBLIC REPO — recurring secret-audit gate (2026-05-21) — CLOSED 2026-05-25
 
