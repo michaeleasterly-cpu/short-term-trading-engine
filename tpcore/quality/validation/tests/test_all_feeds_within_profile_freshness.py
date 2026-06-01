@@ -75,12 +75,6 @@ _PROBES: dict[str, _LatestProbe] = {
             "calendar days); freshness_max_age_days=None in the profile"
         ),
     ),
-    "greeks_max_pain": _LatestProbe(
-        sql=(
-            "SELECT MAX(observed_date) FROM platform.options_max_pain "
-            "WHERE symbol='SPY'"
-        ),
-    ),
     "earnings_events": _LatestProbe(
         sql="SELECT MAX(report_date) FROM platform.earnings_events",
     ),

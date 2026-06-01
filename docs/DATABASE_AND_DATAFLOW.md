@@ -383,11 +383,16 @@ The index correctly bottoms at the two worst crashes (COVID < GFC, matching the 
 
 **Refresh cadence:** monthly-ish via the `finnhub_insider_sentiment` stage; 25-day skip-guard. `insider_sentiment_freshness` validation check warns if the newest period is > 3 months old; self-heal re-runs the bounded stage.
 
-#### `platform.options_max_pain`
+#### `platform.options_max_pain` *(RETIRED 2026-06-01)*
 
-**Purpose:** greeks.pro free-tier options max-pain. One row per (symbol, expiration_date, observed_date) — daily max-pain strike / total-pain / spot-distance for 1 tracked symbol (SPY). Ingested by `tpcore.greeks.GreeksProAdapter` → `handle_greeks_max_pain` → daily `greeks_max_pain` ops stage (same-day skip-guard, idempotent `ON CONFLICT DO NOTHING`). Added 2026-05-16. `/flow`/`/greeks`/`/gex` are Trader+ (paid, verified 403) and intentionally NOT ingested.
-
-**Refresh cadence:** daily via `ops.py` `greeks_max_pain` stage; same-day skip-guard. `options_max_pain_freshness` validation check warns if the tracked symbol's latest `observed_date` is > 7 days old; self-heal re-runs the bounded stage.
+**Status:** Historical rows preserved; no active producer. The
+`greeks_max_pain` feed (greeks.pro free-tier max-pain) was retired
+via DFCR on 2026-06-01 — upstream key returns 401 (revoked) and the
+feed was not consumed by any engine. ProviderBinding, FeedProfile,
+HealSpec, validation check, ops stage, ingestion handler, and the
+`tpcore.greeks` adapter package were all removed. The table itself
+is kept for historical-row preservation; a separate DDL change can
+drop it later if desired.
 
 #### `platform.macro_indicators`
 

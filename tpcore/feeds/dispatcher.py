@@ -38,7 +38,8 @@ FEED_STAGE: dict[str, str] = {
     "finnhub_insider_sentiment": "finnhub_insider_sentiment",
     # P0_3 RETIRE 2026-05-25 — ``insider_sentiment_daily`` dispatch
     # entry removed (target table ``platform.insider_filings`` dropped).
-    "greeks_max_pain": "greeks_max_pain",
+    # 2026-06-01 RETIRE — ``greeks_max_pain`` dispatch entry removed
+    # (DFCR; greeks.pro key revoked; no engine consumers).
     "earnings_events": "earnings_refresh",
     "sec_insider_transactions": "sec_filings",
     "macro_indicators": "macro_indicators",

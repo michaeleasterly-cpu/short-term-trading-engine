@@ -272,20 +272,19 @@ async def test_recovery_stage_failure_blocks_emission(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_unhealable_blocking_check_no_loop(monkeypatch):
-    """A check whose HealSpec is healable=False (e.g., the
-    operator-disabled options_max_pain_freshness). Cascade puts it in
-    `skipped`; verdict classifies as unhealable, does NOT re-run
-    data_validation, reports RED."""
+    """A check whose HealSpec is healable=False (e.g., daemon_freshness,
+    escalate-only). Cascade puts it in `skipped`; verdict classifies as
+    unhealable, does NOT re-run data_validation, reports RED."""
     summary = _new_summary()
     _add_stage(
         summary, "data_validation", "FAILED",
-        error="validation suite failed: ['options_max_pain_freshness']",
+        error="validation suite failed: ['daemon_freshness']",
         detail={
             "cascade": True,
             "cascade_mode": "validation_failures",
-            "failed_checks": ["options_max_pain_freshness"],
+            "failed_checks": ["daemon_freshness"],
             "handled": [],
-            "skipped": ["options_max_pain_freshness"],
+            "skipped": ["daemon_freshness"],
             "vendor_late": [],
         },
     )
@@ -293,8 +292,7 @@ async def test_unhealable_blocking_check_no_loop(monkeypatch):
     verdict = await ops._build_final_lane_verdict(
         summary, _FakePool(), log=_log, db_log=db_log,
     )
-    # Operator-visible reason via the HealSpec registry.
-    assert "options_max_pain_freshness" in verdict.unhealable_checks
+    assert "daemon_freshness" in verdict.unhealable_checks
     assert verdict.final_status == "RED"
     assert verdict.exit_code == 1
     assert verdict.emission_allowed is False
@@ -428,16 +426,16 @@ async def test_no_false_auto_recovered_event_when_revalidate_skipped(monkeypatch
     summary = _new_summary()
     _add_stage(
         summary, "data_validation", "FAILED",
-        error="validation suite failed: ['options_max_pain_freshness', 'aaii_sentiment_freshness']",
+        error="validation suite failed: ['daemon_freshness', 'aaii_sentiment_freshness']",
         detail={
             "cascade": True,
             "cascade_mode": "validation_failures",
             "failed_checks": [
-                "options_max_pain_freshness",
+                "daemon_freshness",
                 "aaii_sentiment_freshness",
             ],
             "handled": [],
-            "skipped": ["options_max_pain_freshness"],
+            "skipped": ["daemon_freshness"],
             "vendor_late": ["aaii_sentiment_freshness"],
         },
     )

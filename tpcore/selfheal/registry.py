@@ -274,30 +274,13 @@ _SPECS: tuple[HealSpec, ...] = (
                  "any defect here indicates an upstream loader bug "
                  "that needs operator review, not routine drift"
              )),
-    # Options max-pain freshness — TEMPORARILY UNHEALABLE 2026-05-29
-    # while greeks.pro account access is broken (operator can't log in to
-    # rotate the revoked API key). The greeks_max_pain stage was
-    # operator-disabled to a no-op stub in scripts/ops.py:5686-5709 on
-    # 2026-05-28 so the cron stops 401-looping; that means the canonical
-    # heal stage will succeed-but-do-nothing every call, leaving the
-    # freshness check perma-red. Reclassify as healable=False with a
-    # documented operator action so the cascade emits one INFO-level
-    # UNHEALABLE acknowledgement per cycle instead of looping a no-op
-    # refresh forever. REVERT in the same commit as re-enabling
-    # _stage_greeks_max_pain (restore healable=True, stage="greeks_max_pain",
-    # params={"skip_guard": "false"}, max_attempts=2).
-    HealSpec(check_name="options_max_pain_freshness",
-             source="greeks_max_pain",
-             healable=False,
-             unhealable_reason=(
-                 "greeks.pro account access disabled 2026-05-29 "
-                 "(operator portal login broken; email sent to vendor). "
-                 "The greeks_max_pain stage is operator-disabled to a "
-                 "no-op stub (scripts/ops.py:5686-5709) so the canonical "
-                 "heal cannot actually refresh data. REVERT this entry "
-                 "back to healable=True in the same commit that restores "
-                 "the stage when greeks.pro access is back."
-             )),
+    # options_max_pain_freshness HealSpec retired 2026-06-01 alongside
+    # the DFCR REMOVE of the greeks_max_pain feed (operator-authorized:
+    # greeks.pro upstream returns 401 / key revoked; the ingest path
+    # was mis-attributed to tradier in the registry; not consumed by
+    # any engine). Half-retirement would red CI via the 3-way drift
+    # test, so the HealSpec + the suite check entry land in the same
+    # commit as the binding + FeedProfile drops.
     # Stale insider-sentiment is fixed by re-running the bounded
     # canonical stage with the monthly skip-guard disabled.
     HealSpec(check_name="insider_sentiment_freshness",

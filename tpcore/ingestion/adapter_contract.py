@@ -103,10 +103,6 @@ ADAPTER_CONTRACTS: dict[str, AdapterContract] = {
         feed="fmp_earnings_events", accessor="key", guard_pending=True,
         required_fields=frozenset({"ticker"}),
         evidence="guard_pending: declared for coverage; wiring later."),
-    "greeks_max_pain": AdapterContract(
-        feed="greeks_max_pain", accessor="key", guard_pending=True,
-        required_fields=frozenset({"ticker"}),
-        evidence="guard_pending: declared for coverage; wiring later."),
     "finnhub_insider_sentiment": AdapterContract(
         feed="finnhub_insider_sentiment", accessor="key",
         guard_pending=True, required_fields=frozenset({"ticker"}),
