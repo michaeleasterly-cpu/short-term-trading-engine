@@ -15,6 +15,7 @@ Daily counters reset at the next XNYS session open; weekly counters reset
 at the next Monday session open. Reset happens lazily on the next
 ``check_trade``.
 """
+# Heavy-lane validation note: this comment-only PR verifies Claude review workflow routing.
 from __future__ import annotations
 
 from dataclasses import dataclass
