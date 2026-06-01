@@ -140,3 +140,37 @@ Operator says **"clean up your memories"** / **"cleanup your memories"**
 Bound by the no-shortcuts / 100%-verified standard: verify each
 RETAIN/UPDATE/DELETE decision against current code or docs — do not
 hand-wave "looks stale". Cross-ref: memory `feedback_memory_cleanup_command.md`.
+
+## MEMORY.md over the 24 400-byte ceiling
+
+`tests/test_memory_index_size.py` (C0.1, 2026-06-01) reds CI if a
+tracked `MEMORY.md` exceeds 24 400 bytes. The local memstore at
+`~/.claude/projects/-Users-michael-short-term-trading-engine/memory/MEMORY.md`
+is operator-local and not tracked, so the sentinel does not police it
+directly — but Claude Code truncates the index at session start above
+the same threshold, so the local file should follow the same ceiling.
+
+Remediation when `MEMORY.md` approaches or exceeds 24 400 bytes:
+
+1. **Summarize stale entries.** Lines dated `2026-05-21` or earlier
+   that are subsumed by later, more-specific lines collapse into a
+   single survivor or are deleted. Older-date lines lose dispositiveness
+   to newer ones; the audit decides which to keep.
+2. **Move durable decisions to `docs/**`.** Any line that should
+   outlive a memory-audit cycle (operator-decision records, accepted
+   architectural choices, named-incident lessons) is moved to a
+   `docs/superpowers/specs/` or `docs/superpowers/plans/` entry; the
+   memory line becomes a one-line pointer to the doc.
+3. **Replace long descriptions with pointers.** The only allowed
+   shape for an index entry is
+   `- [Title](file.md) — one-line hook (≤ 150 chars)`. Body text
+   lives in the per-fact `<name>.md`, not in the index. If a hook
+   is more than 150 chars, the line is wrong shape — shorten or
+   split.
+4. **Re-check the structural invariants** from step 2 of the
+   cleanup procedure (frontmatter, one fact per file, dates, no
+   dead `[[links]]`) AND the line-count invariant under "Acceptance":
+   `wc -l MEMORY.md` == `ls memory/*.md | wc -l` minus 1.
+
+Aim to land the file under 22 000 bytes after a cleanup pass so the
+next month's natural growth doesn't immediately re-red the sentinel.
