@@ -32,6 +32,7 @@ _RULES = (
     # `llm-triage` was REMOVED 2026-05-22 alongside the deleted LLM-
     # triage stack (operator directive "we aren't going to use the llm
     # triage... take it out").
+    "security-guidance",  # C0.4 — auto-loads on security-sensitive paths.
 )
 
 

@@ -82,6 +82,7 @@ backtests/
 !.claude/skills/run-data-ops/
 !.claude/skills/weekly-digest/
 !.claude/skills/defect-register/
+!.claude/skills/security-review/
 !.claude/skills/lab-spec-emit/
 !.claude/skills/lab-edge-find/
 !.claude/skills/triage-data-failures/
