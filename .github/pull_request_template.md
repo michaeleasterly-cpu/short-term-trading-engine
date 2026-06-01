@@ -27,18 +27,24 @@
 
 <!--
   Check ALL that apply. Any check here forces the heavy lane and
-  triggers .github/workflows/claude-review-heavy-lane.yml.
+  triggers .github/workflows/claude-review-heavy-lane.yml. The
+  canonical heavy-lane path list lives in
+  .claude/path_registry.yaml (groups.heavy_lane); this checklist
+  mirrors it and is verified by scripts/check_manifests.py.
 -->
 
 - [ ] `tpcore/risk/**`
-- [ ] `tpcore/selfheal/**` or `tpcore/auditheal/**`
+- [ ] `tpcore/selfheal/**`
+- [ ] `tpcore/auditheal/**`
 - [ ] `tpcore/quality/validation/**`
-- [ ] `tpcore/engine_profile.py` (the engine roster SoT — ECR-only)
-- [ ] `tpcore/providers.py` (the data-feed ProviderBinding SoT —
-      DFCR-only)
-- [ ] `platform/migrations/**`
-- [ ] `ops/engine_service.py` or `ops/engine_sdlc/**`
+- [ ] `ops/engine_service.py`
+- [ ] `ops/engine_sdlc.py` or `ops/engine_sdlc/**`
 - [ ] `ops/data_feed_sdlc/**`
+- [ ] `ops/cutover_agent.py`
+- [ ] `scripts/ops.py`
+- [ ] `platform/migrations/**`
+- [ ] `tpcore/engine_profile.py` (the engine roster SoT — ECR-only)
+- [ ] `tpcore/providers.py` (the data-feed ProviderBinding SoT — DFCR-only)
 - [ ] `.claude/` extension surface (rules/skills/agents/hooks)
 - [ ] `.github/workflows/**`
 - [ ] None of the above

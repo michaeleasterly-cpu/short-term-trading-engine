@@ -1,0 +1,91 @@
+# STE Canonical Path Registry — H0 path hardening (2026-06-01)
+#
+# Single source of truth for the path lists previously duplicated
+# across the Claude review workflow filter, the heavy-lane rule
+# frontmatter/body, docs/DEV_PIPELINE_STANDARD.md §0,
+# .github/pull_request_template.md, .claude/hooks/session-start.sh,
+# scripts/check_manifests.py, tests/test_claude_review_workflow_present.py,
+# and tests/test_path_registry_present.py.
+#
+# Consumers:
+#   * scripts/check_manifests.py (validator) — reds CI on drift.
+#   * tests/test_path_registry_present.py (sentinel) — schema +
+#     consumer-presence asserts.
+#   * tests/test_claude_review_workflow_present.py — reads
+#     heavy_lane ∪ claude_system to assert the workflow filter.
+#
+# Adding a new heavy-lane path:
+#   1. Append a {path, why} entry under groups.heavy_lane.paths here.
+#   2. Mirror the entry into .claude/rules/heavy-lane.md frontmatter +
+#      body, .github/workflows/claude-review-heavy-lane.yml `paths:`,
+#      docs/DEV_PIPELINE_STANDARD.md §0,
+#      .github/pull_request_template.md "Touched risk paths", and
+#      .claude/hooks/session-start.sh heredoc.
+#   3. `python scripts/check_manifests.py` must exit 0 (drift sentinel).
+#
+# Stdlib parser: scripts/check_manifests.py reads this with a minimal
+# stdlib YAML extractor — see _parse_path_registry. Keep the schema
+# changes mechanical: top-level `schema_version`, top-level `groups:`
+# block, each group with `description: |` multiline + `paths:` list of
+# `- path:` / `  why:` pairs. No anchors, no flow style, no nested
+# mappings beyond what's already here — the parser is intentionally
+# minimal so the registry stays unambiguous.
+
+schema_version: 1
+
+groups:
+
+  heavy_lane:
+    description: |
+      Paths that trigger the full §1 pipeline of
+      docs/DEV_PIPELINE_STANDARD.md. Adding a path here makes it
+      heavy-lane everywhere; removing it strips heavy-lane discipline
+      from every consumer artifact at once.
+    paths:
+      - path: "tpcore/risk/**"
+        why: "platform-wide RiskGovernor / capital-gate live-money trade path"
+      - path: "tpcore/selfheal/**"
+        why: "autonomous self-heal and 100%-green-or-don't-trade invariant"
+      - path: "tpcore/auditheal/**"
+        why: "cross-table audit and bounded cross_ref_cleanup"
+      - path: "tpcore/quality/validation/**"
+        why: "data-acceptance gate and DATA_OPERATIONS_COMPLETE predicate"
+      - path: "ops/engine_service.py"
+        why: "consolidated engine dispatch daemon"
+      - path: "ops/engine_sdlc.py"
+        why: "ECR mutator entrypoint"
+      - path: "ops/engine_sdlc/**"
+        why: "ECR mutator package"
+      - path: "ops/data_feed_sdlc/**"
+        why: "DFCR mutator and data-feed-lifecycle planner"
+      - path: "ops/cutover_agent.py"
+        why: "automated provider-CUTOVER agent"
+      - path: "scripts/ops.py"
+        why: "operator-on-demand stage registry"
+      - path: "platform/migrations/**"
+        why: "Alembic schema substrate"
+      - path: "tpcore/engine_profile.py"
+        why: "engine roster source of truth"
+      - path: "tpcore/providers.py"
+        why: "data-feed ProviderBinding source of truth"
+
+  claude_system:
+    description: |
+      Extension-layer paths whose changes mutate Claude's own behavior
+      surface. Reviewed under the same workflow as heavy_lane but not
+      part of the heavy-lane risk discipline (no capital-gate /
+      data-acceptance invariant). The workflow filter is exactly
+      heavy_lane ∪ claude_system.
+    paths:
+      - path: ".claude/rules/**"
+        why: "path-scoped rule definitions"
+      - path: ".claude/skills/**"
+        why: "invocable skill wrappers"
+      - path: ".claude/agents/**"
+        why: "named subagent profiles"
+      - path: ".claude/hooks/**"
+        why: "enforcement hooks"
+      - path: ".claude/settings.json"
+        why: "session and hook configuration"
+      - path: ".github/workflows/**"
+        why: "CI gate and Claude-review workflow surface"

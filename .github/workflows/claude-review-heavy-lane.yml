@@ -26,10 +26,15 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
-      # Heavy-lane paths — SoT lives in docs/DEV_PIPELINE_STANDARD.md
-      # §0 and the frontmatter of .claude/rules/heavy-lane.md.
-      # Keep this list in sync with both; the manifest-linter
-      # (scripts/check_manifests.py) verifies the rule file exists.
+      # ─────────────────────────────────────────────────────────────
+      # H0 (2026-06-01) — SoT is .claude/path_registry.yaml.
+      # The list below MUST equal exactly:
+      #   groups.heavy_lane.paths ∪ groups.claude_system.paths
+      # Adding a path in only one of (registry, this filter) reds CI
+      # via scripts/check_manifests.py +
+      # tests/test_path_registry_present.py.
+      # ─────────────────────────────────────────────────────────────
+      # heavy_lane (capital-gate / data-acceptance / SDLC mutators)
       - "tpcore/risk/**"
       - "tpcore/selfheal/**"
       - "tpcore/auditheal/**"
@@ -39,18 +44,11 @@ on:
       - "ops/engine_sdlc/**"
       - "ops/data_feed_sdlc/**"
       - "ops/cutover_agent.py"
+      - "scripts/ops.py"
       - "platform/migrations/**"
       - "tpcore/engine_profile.py"
       - "tpcore/providers.py"
-      # F0 (2026-06-01) — scripts/ops.py hosts the operator-on-demand
-      # stages (backfill_sec_metadata, evaluate_provider_parity, etc.)
-      # that mutate the data-feed-lifecycle substrate. A new stage
-      # adjacent to the DFCR cutover path is heavy-lane-by-discipline;
-      # adding the filter trigger here closes the F0 PR #408 gap where
-      # F0-class files merged without an automated review pass.
-      - "scripts/ops.py"
-      # Extension-layer paths — changes here mutate Claude's own
-      # behavior surface and merit the same first-pass review.
+      # claude_system (extension-layer behavior surface)
       - ".claude/rules/**"
       - ".claude/skills/**"
       - ".claude/agents/**"
@@ -109,13 +107,10 @@ jobs:
             # You are a fresh-context heavy-lane first-pass reviewer
 
             This PR touches at least one heavy-lane path
-            (`tpcore/risk/**`, `tpcore/selfheal/**`,
-            `tpcore/auditheal/**`, `tpcore/quality/validation/**`,
-            `ops/engine_service.py`, `ops/engine_sdlc/**`,
-            `ops/data_feed_sdlc/**`, `ops/cutover_agent.py`,
-            `scripts/ops.py`, `platform/migrations/**`,
-            `tpcore/engine_profile.py`, `tpcore/providers.py`, or the
-            `.claude/**` extension surface).
+            (`heavy_lane` group) or extension-layer path
+            (`claude_system` group). The canonical enumeration lives
+            in `.claude/path_registry.yaml` — see that file for the
+            current list and the per-path `why`.
 
             ## Your job — REVIEW ONLY
 
