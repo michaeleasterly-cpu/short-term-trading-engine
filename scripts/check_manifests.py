@@ -35,6 +35,24 @@ on-disk target):
          ``.claude/hooks/session-start.sh`` each contain every
          ``heavy_lane`` path string verbatim.
 
+  5. C0.3 (2026-06-01) Claude execution-surface contract:
+
+       * Every ``.claude/hooks/*.sh`` has a shebang and is executable.
+       * No hook invokes ``gh pr merge``, ``git push --force``,
+         ``curl`` against the Anthropic API, or memstore mutation
+         endpoints (comments stripped before scan). Deployment
+         commands are intentionally out of scope.
+       * Every ``.claude/agents/*.md`` carries YAML frontmatter and a
+         non-empty body.
+       * No agent or skill body authorizes auto-merge, auto-fix,
+         auto-rebase, force-push, or memstore mutation (negation-
+         aware — ``do not auto-merge`` survives the scan).
+       * ``.github/workflows/claude-review-heavy-lane.yml`` declares
+         ``contents: read`` (never ``contents: write``), pins the
+         third-party action to a major tag, and its
+         ``--allowedTools`` argument enumerates no mutating Bash /
+         Edit / Write tool.
+
   5. ``.github/workflows/*.yml`` ``run: python …`` script invocations
      point at files that exist on disk when the invocation is a
      literal path (heuristic — only fires when the run line is
@@ -131,6 +149,257 @@ def check_hook_paths_in_settings() -> list[str]:
                 )
         except OSError:
             pass
+    return failures
+
+
+# ─────────────────────────────────────────────────────────────────────
+# C0.3 (2026-06-01) — Claude execution-surface contract.
+# ─────────────────────────────────────────────────────────────────────
+
+# Scope: the contract protects the Claude review / orchestration
+# surface from silent weakening. Deployment commands (``docker`` /
+# ``railway up``) are intentionally NOT in scope — the project deploys
+# to Railway and may automate deploys from operator-controlled paths
+# in the future. The workflow ``--allowedTools`` block below still
+# bars deploy commands because the review action is review-only by
+# design (deployment is operator-side, never run by the reviewer).
+_HOOK_FORBIDDEN_REGEXES: tuple[tuple[str, str], ...] = (
+    (r"\bgh\s+pr\s+merge\b", "gh pr merge"),
+    (r"\bgh\s+api\s+.*--method\s+(PATCH|POST|PUT|DELETE)\b", "gh api mutation"),
+    (r"\bgit\s+push\s+[^\n]*(--force|--force-with-lease|\s-f(\s|$))", "git push --force"),
+    (r"curl\s+[^\n]*ANTHROPIC_API_KEY", "Anthropic API call from hook"),
+    (r"/memory_stores/[^\s]+/memories", "memstore API endpoint"),
+)
+
+_AGENT_SKILL_FORBIDDEN_REGEXES: tuple[tuple[str, str], ...] = (
+    (r"\bgh\s+pr\s+merge\b", "gh pr merge"),
+    (r"\bauto[- ]?merge\b", "auto-merge"),
+    (r"\bauto[- ]?fix\b", "auto-fix"),
+    (r"\bauto[- ]?rebase\b", "auto-rebase"),
+    (r"\bgit\s+push\s+[^\n]*(--force|-f\s)", "git push --force"),
+    (r"/memory_stores/[^\s]+/memories", "memstore API mutation"),
+)
+
+_WORKFLOW_FORBIDDEN_ALLOWED_TOOLS: tuple[str, ...] = (
+    "Bash(gh pr merge",
+    "Bash(git push",
+    "Bash(git commit",
+    "Bash(git rebase",
+    "Bash(git reset",
+    "Bash(docker",
+    "Bash(railway",
+    "Bash(gh api --method PATCH",
+    "Bash(gh api --method POST",
+    "Bash(gh api --method PUT",
+    "Bash(gh api --method DELETE",
+    "Bash(rm ",
+    "Edit",
+    "Write",
+    "MultiEdit",
+    "NotebookEdit",
+)
+
+_NEGATION_WINDOW = 80
+_NEGATION_TERMS = (
+    "do not", "don't", "never", "must not", "must NOT", "MUST NOT",
+    "prohibit", "prohibited", "forbid", "forbidden",
+    "block", "blocks", "blocked", "refuse", "refuses",
+    "reject", "rejects", "without", "no ", "NEVER",
+)
+
+
+def _strip_shell_comments_for_scan(text: str) -> str:
+    out: list[str] = []
+    for raw in text.splitlines():
+        if raw.lstrip().startswith("#"):
+            continue
+        out.append(raw)
+    return "\n".join(out)
+
+
+def _has_negation_nearby(text: str, idx: int) -> bool:
+    window = text[max(0, idx - _NEGATION_WINDOW):idx].lower()
+    return any(term.lower() in window for term in _NEGATION_TERMS)
+
+
+def _scan_forbidden(
+    text: str,
+    patterns: tuple[tuple[str, str], ...],
+    *,
+    allow_negation: bool,
+) -> list[tuple[str, str]]:
+    findings: list[tuple[str, str]] = []
+    for pattern, label in patterns:
+        for m in re.finditer(pattern, text, flags=re.IGNORECASE):
+            if allow_negation and _has_negation_nearby(text, m.start()):
+                continue
+            findings.append((label, m.group(0)))
+    return findings
+
+
+def _markdown_body_after_frontmatter(text: str) -> str:
+    if not text.startswith("---"):
+        return text
+    closing = re.search(r"\n---\s*\n", text)
+    if closing is None:
+        return text
+    return text[closing.end():]
+
+
+def check_hooks_have_shebang_and_are_executable() -> list[str]:
+    """Every ``.claude/hooks/*.sh`` must carry a shebang on line 1 and
+    have the executable bit set. An unsigned / unexecutable hook is
+    silently interpreted by whatever shell the runtime picks."""
+    failures: list[str] = []
+    hooks_dir = REPO_ROOT / ".claude" / "hooks"
+    if not hooks_dir.is_dir():
+        return failures
+    for hook in sorted(hooks_dir.glob("*.sh")):
+        try:
+            first_line = hook.read_text(encoding="utf-8").splitlines()[0]
+        except (OSError, UnicodeDecodeError, IndexError) as exc:
+            failures.append(_err(hook, f"unreadable or empty: {exc}"))
+            continue
+        if not first_line.startswith("#!"):
+            failures.append(
+                _err(hook, "missing shebang on line 1 (C0.3 invariant)")
+            )
+        try:
+            mode = hook.stat().st_mode
+            if not (mode & 0o111):
+                failures.append(
+                    _err(hook, "not executable (chmod +x needed)")
+                )
+        except OSError:
+            pass
+    return failures
+
+
+def check_hooks_do_not_invoke_forbidden_commands() -> list[str]:
+    """Hooks must not invoke ``gh pr merge``, ``git push --force``,
+    ``curl`` against the Anthropic API, or memstore mutation
+    endpoints. Comments are stripped before scanning so a hook
+    documenting what it *blocks* does not false-positive. Deployment
+    commands (``docker`` / ``railway``) are NOT in scope — this
+    contract protects the review/orchestration surface, not the
+    deploy path."""
+    failures: list[str] = []
+    hooks_dir = REPO_ROOT / ".claude" / "hooks"
+    if not hooks_dir.is_dir():
+        return failures
+    for hook in sorted(hooks_dir.glob("*.sh")):
+        text = hook.read_text(encoding="utf-8")
+        scan_text = _strip_shell_comments_for_scan(text)
+        findings = _scan_forbidden(
+            scan_text, _HOOK_FORBIDDEN_REGEXES, allow_negation=False,
+        )
+        for label, matched in findings:
+            failures.append(_err(hook, f"forbidden {label}: {matched!r}"))
+    return failures
+
+
+def check_agents_have_frontmatter_and_body() -> list[str]:
+    """Mirror of the agent-frontmatter rule with an explicit
+    non-empty-body check (C0.3 strengthening over the generic
+    ``check_markdown_has_frontmatter``)."""
+    failures: list[str] = []
+    agents_dir = REPO_ROOT / ".claude" / "agents"
+    if not agents_dir.is_dir():
+        return failures
+    for agent in sorted(agents_dir.glob("*.md")):
+        text = agent.read_text(encoding="utf-8")
+        if not text.startswith("---"):
+            failures.append(
+                _err(agent, "missing YAML frontmatter (---/---)")
+            )
+            continue
+        body = _markdown_body_after_frontmatter(text)
+        if not body.strip():
+            failures.append(_err(agent, "body is empty after frontmatter"))
+    return failures
+
+
+def check_agents_skills_no_forbidden_authorizations() -> list[str]:
+    """Agent and skill instruction bodies must not authorize
+    auto-merge, auto-fix, auto-rebase, ``gh pr merge``, force-push,
+    or memstore mutations. Negation-aware scan (``do not auto-merge``
+    survives). Deployment commands are intentionally out of scope —
+    see ``_HOOK_FORBIDDEN_REGEXES`` for the rationale."""
+    failures: list[str] = []
+    for base, glob in (
+        (REPO_ROOT / ".claude" / "agents", "*.md"),
+        (REPO_ROOT / ".claude" / "skills", "*/SKILL.md"),
+    ):
+        if not base.is_dir():
+            continue
+        for target in sorted(base.glob(glob)):
+            body = _markdown_body_after_frontmatter(
+                target.read_text(encoding="utf-8")
+            )
+            findings = _scan_forbidden(
+                body, _AGENT_SKILL_FORBIDDEN_REGEXES, allow_negation=True,
+            )
+            for label, matched in findings:
+                failures.append(
+                    _err(
+                        target,
+                        f"authorizes {label} (no negation nearby): "
+                        f"{matched!r}",
+                    )
+                )
+    return failures
+
+
+def check_workflow_allowed_tools_read_only() -> list[str]:
+    """``.github/workflows/claude-review-heavy-lane.yml`` must
+    declare ``contents: read``, pin the third-party action to a major
+    tag (not ``@main``), and the ``--allowedTools`` argument must not
+    enumerate any mutating Bash / Edit / Write / MultiEdit /
+    NotebookEdit tool."""
+    failures: list[str] = []
+    workflow = (
+        REPO_ROOT / ".github" / "workflows" / "claude-review-heavy-lane.yml"
+    )
+    if not workflow.exists():
+        return failures
+    src = workflow.read_text(encoding="utf-8")
+    if "contents: write" in src:
+        failures.append(
+            _err(workflow, "grants contents: write — review-only invariant")
+        )
+    if "contents: read" not in src:
+        failures.append(
+            _err(workflow, "missing explicit contents: read")
+        )
+    if "anthropics/claude-code-action@main" in src:
+        failures.append(
+            _err(
+                workflow,
+                "anthropics/claude-code-action pinned to @main — would "
+                "silently shift behavior",
+            )
+        )
+    allowed_lines = [
+        line for line in src.splitlines() if "--allowedTools" in line
+    ]
+    if not allowed_lines:
+        failures.append(
+            _err(
+                workflow,
+                "missing --allowedTools — Claude action would default to "
+                "its full tool set",
+            )
+        )
+    for line in allowed_lines:
+        for forbidden in _WORKFLOW_FORBIDDEN_ALLOWED_TOOLS:
+            if forbidden in line:
+                failures.append(
+                    _err(
+                        workflow,
+                        f"--allowedTools authorizes forbidden tool: "
+                        f"{forbidden!r}",
+                    )
+                )
     return failures
 
 
@@ -815,6 +1084,11 @@ def main() -> int:
     all_failures.extend(check_doc_pipeline_standard_lists_heavy_lane())
     all_failures.extend(check_pr_template_lists_heavy_lane())
     all_failures.extend(check_session_start_hook_lists_heavy_lane())
+    all_failures.extend(check_hooks_have_shebang_and_are_executable())
+    all_failures.extend(check_hooks_do_not_invoke_forbidden_commands())
+    all_failures.extend(check_agents_have_frontmatter_and_body())
+    all_failures.extend(check_agents_skills_no_forbidden_authorizations())
+    all_failures.extend(check_workflow_allowed_tools_read_only())
     all_failures.extend(check_vocabulary_pinned_files_present())
     all_failures.extend(check_workflow_script_invocations())
 
