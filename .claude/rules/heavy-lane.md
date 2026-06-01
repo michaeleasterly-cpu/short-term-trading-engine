@@ -8,6 +8,9 @@ paths:
   - "ops/engine_service.py"
   - "ops/engine_sdlc.py"
   - "ops/engine_sdlc/**"
+  - "ops/data_feed_sdlc/**"
+  - "ops/cutover_agent.py"
+  - "scripts/ops.py"
   - "platform/migrations/**"
   - "tpcore/engine_profile.py"
   - "tpcore/providers.py"
@@ -40,6 +43,9 @@ Triggers (this rule's `paths:`):
 - `tpcore/selfheal/**`, `tpcore/auditheal/**` — autonomous repair / cross-table audit (100%-green-or-don't-trade invariant)
 - `tpcore/quality/validation/**` — data-acceptance gate (`DATA_OPERATIONS_COMPLETE` predicate)
 - `ops/engine_service.py`, `ops/engine_sdlc.py`/`ops/engine_sdlc/**` — engine dispatch + SDLC ECR mutator
+- `ops/data_feed_sdlc/**` — DFCR mutator + data-feed-lifecycle planner
+- `ops/cutover_agent.py` — automated provider-CUTOVER agent (parity-gated swap)
+- `scripts/ops.py` — operator-on-demand stage registry (backfill_sec_metadata, backfill_sec_lifecycle, evaluate_provider_parity, …). New stages adjacent to the DFCR / cutover path are heavy-lane-by-discipline.
 - `platform/migrations/**` — Alembic (schema is the durable substrate; rollback discipline)
 - `tpcore/engine_profile.py` — the engine roster SoT
 - `tpcore/providers.py` — the data-feed ProviderBinding SoT

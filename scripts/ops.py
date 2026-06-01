@@ -3425,6 +3425,410 @@ async def _stage_backfill_sec_lifecycle(
     }
 
 
+# F0 (2026-06-01) — provider-parity EVALUATE stage. Lights up the
+# tpcore/parity/data_parity.py primitive at the EVALUATE phase of the
+# data-provider lifecycle so the CANDIDATE → FALLBACK promotion is
+# evidence-gated rather than operator-set. The primitive itself is
+# left untouched (it is pure + unit-tested); this stage is the
+# runtime caller plus persistence.
+#
+# Per-feed-class sample-pull dispatch lives in
+# ``_pull_dual_samples_for_evaluation`` below. PRICE feeds are
+# implemented today (the operator's primary need). MACRO / SENTIMENT
+# / FILING / DERIVED return a clear "not implemented for feed=…"
+# block message — operator can add each as the underlying table's
+# provider-attribution column comes online. The stage's contract +
+# tests prove the WIRING; the per-feed actuation is incremental.
+
+
+def _stage_param_to_bool(v: Any) -> bool:
+    """Shared ``--param`` boolean parser (matches the other stages'
+    ``_to_bool`` inner helpers; promoted to module-level so the F0
+    stage's helpers can share without re-declaring)."""
+    if isinstance(v, bool):
+        return v
+    return str(v).lower() in ("true", "1", "yes", "y")
+
+
+# Map of platform feed name → (FeedClass, sample-pull SQL template).
+# Keys here are the canonical feed names used in
+# ``tpcore.providers.PROVIDER_BINDINGS``. Only PRICE today; other
+# classes raise NotImplementedError at the stage level with a clear
+# message naming the missing dispatch entry.
+_FEED_PARITY_DISPATCH: dict[str, str] = {
+    # ``daily_bars`` is the canonical feed name for the daily OHLCV
+    # bars. The incumbent + candidate rows are differentiated by
+    # ``prices_daily.source`` (per the schema verified 2026-06-01).
+    "daily_bars": "price_daily",
+}
+
+
+async def _pull_dual_samples_for_evaluation(
+    pool: asyncpg.Pool,
+    *,
+    feed: str,
+    incumbent_provider: str,
+    candidate_provider: str,
+    overlap_window_days: int,
+) -> tuple[list[Any], list[Any], str]:
+    """Pull ``(incumbent_samples, candidate_samples, feed_class_name)``
+    for the EVALUATE parity comparison.
+
+    Today: implemented for ``feed=daily_bars`` (queries
+    ``platform.prices_daily`` filtered by ``source``). Other feeds
+    raise NotImplementedError with a message naming the missing
+    dispatch entry — keeps the stage's contract honest while letting
+    the operator extend per-feed as needed.
+
+    Returns ``ParitySample`` lists ready for ``compare_provider_parity``.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from tpcore.parity import ParitySample
+
+    if feed not in _FEED_PARITY_DISPATCH:
+        # NotImplementedError surfaces as a clean "not yet wired for
+        # feed=X" verdict at the stage level rather than a silent
+        # NOT_EVALUABLE. The caller catches and reports.
+        raise NotImplementedError(
+            f"parity dual-pull dispatch not yet wired for feed={feed!r}. "
+            f"Add a (FeedClass, query) entry to _FEED_PARITY_DISPATCH + "
+            f"extend _pull_dual_samples_for_evaluation. Supported "
+            f"today: {sorted(_FEED_PARITY_DISPATCH)}"
+        )
+
+    today = datetime.now(UTC).date()
+    start = today - timedelta(days=overlap_window_days)
+
+    incumbent: list[ParitySample] = []
+    candidate: list[ParitySample] = []
+
+    # daily_bars / prices_daily dual-pull: key on "ticker|date",
+    # value is close price.
+    sql = """
+        SELECT ticker, date, close
+        FROM platform.prices_daily
+        WHERE source = $1 AND date >= $2 AND date <= $3
+        ORDER BY ticker, date
+    """
+    async with pool.acquire() as conn:
+        inc_rows = await conn.fetch(sql, incumbent_provider, start, today)
+        cand_rows = await conn.fetch(sql, candidate_provider, start, today)
+
+    for r in inc_rows:
+        incumbent.append(ParitySample(
+            key=f"{r['ticker']}|{r['date'].isoformat()}",
+            asof=r["date"],
+            value=float(r["close"]) if r["close"] is not None else None,
+        ))
+    for r in cand_rows:
+        candidate.append(ParitySample(
+            key=f"{r['ticker']}|{r['date'].isoformat()}",
+            asof=r["date"],
+            value=float(r["close"]) if r["close"] is not None else None,
+        ))
+
+    return incumbent, candidate, "price"
+
+
+async def _stage_evaluate_provider_parity(
+    pool: asyncpg.Pool, cfg: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Run the data-provider parity gate at the EVALUATE phase
+    (F0 2026-06-01).
+
+    Pulls normalized samples for the named feed from BOTH the current
+    ACTIVE (incumbent) provider and the named CANDIDATE provider over
+    an ``overlap_window_days`` window, calls
+    ``compare_provider_parity()``, and persists the verdict to
+    ``platform.data_quality_log`` (source =
+    ``evaluate.{feed}.{candidate}``) + emits
+    ``PROVIDER_PARITY_EVALUATED`` on ``platform.application_log``
+    when not in dry_run.
+
+    On PASS, the operator's next step is the DFCR EVALUATE promotion
+    that sets ``status=FALLBACK + parity_verified_at=<today>`` on the
+    candidate's ``ProviderBinding`` (see ``/dfcr`` skill +
+    ``docs/superpowers/checklists/data_feed_change_request.md``). The
+    cutover_agent's freshness check (``_parity_verdict_fresh``) reads
+    this verdict at cutover time.
+
+    Params (``--param key=value``):
+
+      * ``feed`` (required) — canonical feed name from
+        ``tpcore.providers.PROVIDER_BINDINGS`` (today supports
+        ``daily_bars``).
+      * ``candidate`` (required) — provider name being evaluated.
+      * ``overlap_window_days`` (int, default 30) — duration of the
+        dual-pull comparison window.
+      * ``dry_run`` (bool, default **True**) — print verdict; no DB
+        writes.
+      * ``force`` (bool, default False) — re-evaluate even if a recent
+        verdict exists. Today the stage always re-pulls; ``force`` is
+        wired for future caching at the EVALUATE layer.
+      * ``incumbent_samples`` / ``candidate_samples`` — internal test
+        hook: when present, skip dual-pull and use these in-process
+        sample lists. Operator-facing runs should NEVER pass these;
+        they exist so the hermetic tests in
+        ``tests/test_evaluate_provider_parity_stage.py`` can exercise
+        the stage's verdict + persistence + reporting paths without a
+        live DB roundtrip.
+
+    Output payload::
+
+        {
+          "feed": str, "candidate": str,
+          "incumbent_provider": str,
+          "verdict": "pass" | "fail" | "not_evaluable",
+          "coverage_ratio": float | None,
+          "freshness_lag_days": int | None,
+          "accuracy_ratio": float | None,
+          "evidence": str,
+          "next_action": str,
+          "data_quality_log_written": bool,
+          "application_log_written": bool,
+          "dry_run": bool,
+        }
+    """
+    import json
+
+    from tpcore.parity import (
+        DataParityResult,
+        FeedClass,
+        ParitySample,
+        ParityVerdict,
+        compare_provider_parity,
+    )
+
+    log = structlog.get_logger("scripts.ops")
+    cfg = cfg or {}
+
+    feed = str(cfg.get("feed") or "").strip()
+    candidate = str(cfg.get("candidate") or "").strip()
+    overlap_window_days = int(cfg.get("overlap_window_days", 30))
+    dry_run = _stage_param_to_bool(cfg.get("dry_run", True))
+    # ``force`` reserved — wired for future verdict caching.
+    _force = _stage_param_to_bool(cfg.get("force", False))
+
+    if not feed:
+        return {
+            "verdict": "not_evaluable",
+            "evidence": "missing required --param feed=<name>",
+            "data_quality_log_written": False,
+            "application_log_written": False,
+            "dry_run": dry_run,
+        }
+    if not candidate:
+        return {
+            "feed": feed,
+            "verdict": "not_evaluable",
+            "evidence": "missing required --param candidate=<provider>",
+            "data_quality_log_written": False,
+            "application_log_written": False,
+            "dry_run": dry_run,
+        }
+
+    # ─── resolve incumbent ───
+    from tpcore import providers as P
+    incumbent_binding = P.active_provider(feed)
+    if incumbent_binding is None:
+        return {
+            "feed": feed, "candidate": candidate,
+            "verdict": "not_evaluable",
+            "evidence": (
+                f"no ACTIVE provider declared for feed={feed!r} in "
+                "PROVIDER_BINDINGS — cannot evaluate parity blind"
+            ),
+            "data_quality_log_written": False,
+            "application_log_written": False,
+            "dry_run": dry_run,
+        }
+    incumbent_provider = incumbent_binding.provider
+
+    if candidate == incumbent_provider:
+        return {
+            "feed": feed, "candidate": candidate,
+            "incumbent_provider": incumbent_provider,
+            "verdict": "not_evaluable",
+            "evidence": (
+                f"candidate {candidate!r} is already the ACTIVE provider "
+                f"for {feed!r} — nothing to evaluate"
+            ),
+            "data_quality_log_written": False,
+            "application_log_written": False,
+            "dry_run": dry_run,
+        }
+
+    log.info(
+        "ops.stage.evaluate_provider_parity.start",
+        feed=feed, candidate=candidate,
+        incumbent=incumbent_provider,
+        overlap_window_days=overlap_window_days,
+        dry_run=dry_run,
+    )
+
+    # ─── pull samples ───
+    # Test hook: cfg can carry pre-built sample lists so hermetic tests
+    # exercise the verdict + persistence paths without a live DB.
+    test_incumbent = cfg.get("incumbent_samples")
+    test_candidate = cfg.get("candidate_samples")
+    test_feed_class = cfg.get("test_feed_class")
+    if (test_incumbent is not None and test_candidate is not None
+            and test_feed_class is not None):
+        incumbent_samples: list[ParitySample] = list(test_incumbent)
+        candidate_samples: list[ParitySample] = list(test_candidate)
+        feed_class_name = str(test_feed_class)
+    else:
+        try:
+            incumbent_samples, candidate_samples, feed_class_name = (
+                await _pull_dual_samples_for_evaluation(
+                    pool,
+                    feed=feed,
+                    incumbent_provider=incumbent_provider,
+                    candidate_provider=candidate,
+                    overlap_window_days=overlap_window_days,
+                )
+            )
+        except NotImplementedError as exc:
+            return {
+                "feed": feed, "candidate": candidate,
+                "incumbent_provider": incumbent_provider,
+                "verdict": "not_evaluable",
+                "evidence": str(exc),
+                "data_quality_log_written": False,
+                "application_log_written": False,
+                "dry_run": dry_run,
+            }
+
+    # ─── resolve feed class ───
+    try:
+        feed_class = FeedClass(feed_class_name)
+    except ValueError:
+        return {
+            "feed": feed, "candidate": candidate,
+            "incumbent_provider": incumbent_provider,
+            "verdict": "not_evaluable",
+            "evidence": (
+                f"unknown FeedClass={feed_class_name!r} — must be one of "
+                f"{[fc.value for fc in FeedClass]}"
+            ),
+            "data_quality_log_written": False,
+            "application_log_written": False,
+            "dry_run": dry_run,
+        }
+
+    # ─── verdict ───
+    result: DataParityResult = compare_provider_parity(
+        feed_class=feed_class,
+        incumbent=incumbent_samples,
+        candidate=candidate_samples,
+    )
+
+    next_action = {
+        ParityVerdict.PASS: (
+            f"PASS — operator next step: open DFCR for feed={feed!r} "
+            f"change=status:FALLBACK + parity_verified_at:<today> on "
+            f"provider {candidate!r}. See /dfcr skill + "
+            f"docs/superpowers/checklists/data_feed_change_request.md"
+        ),
+        ParityVerdict.FAIL: (
+            f"FAIL — BLOCK promotion. {candidate!r} cannot become a "
+            f"FALLBACK for feed={feed!r} until parity passes. Per-"
+            f"dimension reasons in evidence; address the failing "
+            f"dimension and re-evaluate"
+        ),
+        ParityVerdict.NOT_EVALUABLE: (
+            "NOT_EVALUABLE — honest non-verdict (no incumbent samples, "
+            "or DERIVED feed). Promotion remains blocked"
+        ),
+    }[result.verdict]
+
+    log_event = {
+        "feed": feed,
+        "candidate_provider": candidate,
+        "incumbent_provider": incumbent_provider,
+        "feed_class": feed_class_name,
+        "overlap_window_days": overlap_window_days,
+        "verdict": result.verdict.value,
+        "coverage_ratio": result.coverage_ratio,
+        "freshness_lag_days": result.freshness_lag_days,
+        "accuracy_ratio": result.accuracy_ratio,
+        "evidence": result.evidence,
+    }
+
+    log.info(
+        "ops.stage.evaluate_provider_parity.verdict",
+        **{k: v for k, v in log_event.items() if k != "evidence"},
+    )
+
+    # ─── persist (operator hard rule: dry_run defaults true) ───
+    dq_written = False
+    app_written = False
+    if not dry_run:
+        async with pool.acquire() as conn:
+            # data_quality_log row.
+            # source = "evaluate.{feed}.{candidate}" — the verdict
+            # freshness check (_parity_verdict_fresh in
+            # ops/cutover_agent.py) keys on this string.
+            confidence_for_verdict = {
+                ParityVerdict.PASS: 1.0,
+                ParityVerdict.FAIL: 0.0,
+                ParityVerdict.NOT_EVALUABLE: None,
+            }[result.verdict]
+            await conn.execute(
+                """
+                INSERT INTO platform.data_quality_log
+                    (source, timestamp, confidence, stale, notes)
+                VALUES ($1, NOW(), $2, $3, $4)
+                """,
+                f"evaluate.{feed}.{candidate}",
+                confidence_for_verdict,
+                False,  # stale=false; this IS the verdict, not a freshness measure
+                json.dumps(log_event),
+            )
+            dq_written = True
+
+            # application_log event.
+            severity = (
+                "WARNING" if result.verdict is ParityVerdict.FAIL
+                else "INFO"
+            )
+            await conn.execute(
+                """
+                INSERT INTO platform.application_log
+                    (engine, run_id, event_type, severity, message, data)
+                VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+                """,
+                "ops.evaluate_provider_parity",  # engine
+                None,  # run_id
+                "PROVIDER_PARITY_EVALUATED",
+                severity,
+                f"feed={feed} candidate={candidate} verdict={result.verdict.value}",
+                json.dumps(log_event),
+            )
+            app_written = True
+            log.info(
+                "ops.stage.evaluate_provider_parity.persisted",
+                dq_written=True, app_written=True,
+            )
+
+    return {
+        "feed": feed,
+        "candidate": candidate,
+        "incumbent_provider": incumbent_provider,
+        "feed_class": feed_class_name,
+        "verdict": result.verdict.value,
+        "coverage_ratio": result.coverage_ratio,
+        "freshness_lag_days": result.freshness_lag_days,
+        "accuracy_ratio": result.accuracy_ratio,
+        "evidence": result.evidence,
+        "next_action": next_action,
+        "data_quality_log_written": dq_written,
+        "application_log_written": app_written,
+        "dry_run": dry_run,
+    }
+
+
 async def _stage_classify_tickers(
     pool: asyncpg.Pool, cfg: dict[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -8617,6 +9021,16 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # validator semantics + capital gate are unchanged. Idempotent.
     ("backfill_sec_lifecycle",
         lambda pool, cfg: (lambda: _stage_backfill_sec_lifecycle(pool, cfg)),
+        HEAVY_STAGE_TIMEOUT_SEC),
+    # F0 (2026-06-01) — provider-parity EVALUATE stage. Operator-on-
+    # demand only (not in any scheduled pipeline). Pulls dual samples
+    # for a (feed, candidate) pair, calls
+    # tpcore.parity.compare_provider_parity, persists verdict to
+    # data_quality_log + application_log. Pre-requisite for any
+    # CANDIDATE → FALLBACK promotion (the cutover_agent's freshness
+    # check at ops/cutover_agent.py reads these verdicts).
+    ("evaluate_provider_parity",
+        lambda pool, cfg: (lambda: _stage_evaluate_provider_parity(pool, cfg)),
         HEAVY_STAGE_TIMEOUT_SEC),
     # v2.2 Phase P5 — backfill TKR-14 PK on existing ticker_classifications
     # rows + seed ticker_history first-seen entries. Idempotent; safe re-run.

@@ -191,6 +191,15 @@ ignore = ["E501"]
 #     the precedence-dict + stage-registration sentinels. Same
 #     precedent as the P0 test ignores above.
 "tests/test_p2_sec_lifecycle_events.py" = ["SLF"]
+# F0 parity-gate-cutover (2026-06-01) — tests legitimately reach into
+# module-private surface to verify foundation invariants:
+#   * test_evaluate_provider_parity_stage.py — names ops._STAGE_SPECS
+#     to confirm stage registration without invoking the CLI.
+#   * test_parity_primitive_byte_frozen.py — pins the byte-frozen
+#     ``_tol`` private helper on the parity primitive (F0's hard rule:
+#     don't touch the primitive).
+"tests/test_evaluate_provider_parity_stage.py" = ["SLF"]
+"tests/test_parity_primitive_byte_frozen.py" = ["SLF"]
 # SP-B T4 dispatch-seam characterization test: pinning that the lazy
 # PARAM_RANGES + `_lab_target_for` resolver + the `_runner_for`/
 # `_context_loader_for`/`_context_runner_for` thin views preserve the
