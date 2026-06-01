@@ -259,4 +259,75 @@ At no stage does STE depend on the dev system being present on disk. The dev sys
 
 ---
 
-> Status: PLAN ONLY. Adoption is staged across S1–S7 in follow-up PRs, with operator authorization at each stage. Cross-references: packetvoid-dev-system PRs #1–#9; consumer validation PRs at `packetvoid-d1-consumer-smoke` #1 #2 and `packetvoid-d2-railway-consumer-smoke` #1 #2.
+## S2 audit override acceptance — 2026-06-01
+
+> **Status: ACCEPTED.** This addendum closes the S2 audit loop. The S2 wrapper is operating correctly. `check_manifests.py --target-dir` is **CLEAN**. `audit_project.py --target-dir` reports intentional **STE_OVERRIDE** drift because STE has richer / domain-specific artifacts than the portable baseline. These findings are advisory and **do not authorize `bootstrap_project.py --force`, blind overwrite, or regeneration over the STE working tree** — the §"Conflicts and non-overwrite rules" section still governs.
+
+S2 work completed since the plan first landed:
+
+| Stage | Status | Reference |
+|---|---|---|
+| S0 plan doc | merged | this file (PR #416) |
+| S1 PROJECT_PROFILE.yaml + alignment sentinel | merged | PR #417 |
+| S2 read-only audit wrapper | merged | PR #418 |
+| S5 workflow portability back-ports | merged | PR #419 |
+| PR-template `ops/engine_sdlc/**` checkbox fix | merged | PR #420 |
+| Dev-system pointer-only memstore semantics | merged | `packetvoid-dev-system` PR #10 |
+
+After the dev-system PR #10 fix, `audit_project` no longer hard-errors on STE's pointer-only `PROJECT_PROFILE.yaml` and now successfully proceeds to file comparison. The drift it reports is precisely the §"Conflicts and non-overwrite rules" surface enumerated in this plan; it is not a defect.
+
+### Current audit_project findings (20)
+
+Each row is a finding from `scripts/run_dev_system_audit.sh` stage 1 (`audit_project.py --target-dir <STE>`), captured 2026-06-01 against `main` at `9cb7ed1`. Classification re-confirms the §"Artifact-by-artifact classification" table above.
+
+| # | Audit finding | Classification | Disposition |
+|---|---|---|---|
+| 1 | `docs/CLAUDE_SESSION_OBSERVABILITY.md` differs from re-rendered template | **STE_OVERRIDE** | STE 226 lines vs portable 117; STE adds session-cost + redaction history. Keep STE. |
+| 2 | `docs/DEV_PIPELINE_STANDARD.md` differs from re-rendered template | **STE_OVERRIDE** | STE 95 lines vs portable 82; STE encodes whole-suite + order-flip discipline + ops-package-shadow lesson. Keep STE. |
+| 3 | `docs/MEMORY_MAINTENANCE.md` differs from re-rendered template | **STE_OVERRIDE** | STE 176 lines vs portable 71; STE encodes the operator-side audit procedure. Keep STE. |
+| 4 | `docs/MEMSTORE_HANDOFF.md` differs from re-rendered template | **STE_OVERRIDE** | STE is the canonical memstore-ID location for the cloud-memory boundary. Per §"Cloud memstore handling" rule 1: never overwritten. Keep STE. |
+| 5 | `docs/SECURITY_GUIDANCE.md` differs from re-rendered template | **STE_OVERRIDE** | STE 218 lines vs portable 124; STE wraps the C0.4 cascade with STE-specific incident refs. Keep STE. |
+| 6 | `.claude/path_registry.yaml` differs from re-rendered template | **STE_OVERRIDE** | STE registry is canonical SoT; portable would have to mirror STE, not the other way round. Keep STE. |
+| 7 | `.claude/settings.json` differs from re-rendered template | **CONFLICT → resolved STE_EXTENSION wins** | STE wires 4 hooks across 3 matchers (`PreToolUse(Bash)`, `PreToolUse(Edit│Write│MultiEdit)`, `PostToolUse(Edit│Write│MultiEdit)`, `SessionStart`). Portable wires 2 hooks across 2 matchers. Overwriting would drop ECR/DFCR + risk-path enforcement. Keep STE. |
+| 8 | `.claude/rules/heavy-lane.md` differs | **STE_OVERRIDE** | STE 74 lines vs portable 62; STE adds ECR/DFCR + spec/audit pointers. Keep STE. |
+| 9 | `.claude/rules/security-guidance.md` differs | **STE_OVERRIDE** | STE 58 vs portable 56; STE wraps the C0.4 cascade with STE-specific spec/audit refs. Keep STE. |
+| 10 | `.claude/skills/security-review/SKILL.md` differs | **STE_OVERRIDE** | STE 146 vs portable 141; STE has small extensions tied to STE-specific path globs. Keep STE. |
+| 11 | `.claude/hooks/block-git-checkout.sh` differs | **STE_OVERRIDE** | STE is the original from which the portable hook was derived; STE has the canonical implementation. Keep STE. |
+| 12 | missing `.claude/hooks/block-pytest-subset-when-critical.sh` | **DEFER (hook rename)** | STE has `block-pytest-subset-when-ops.sh`; portable has `…-when-critical.sh`. The OPS-shadow lesson STE encodes is non-portable in shape. Per §S6 + §"NEEDS_OPERATOR_DECISION #1": keep STE name. |
+| 13 | `.claude/hooks/session-start.sh` differs | **STE_OVERRIDE** | STE version is canonical; portable was templated from STE. Keep STE. |
+| 14 | `.claude/agents/code-quality-reviewer.md` differs | **STE_OVERRIDE** | STE includes STE-specific quality-check checklist items (tpcore-private access, classify_exit_reason, FilterDiagnostics). Keep STE. |
+| 15 | `.claude/agents/spec-reviewer.md` differs | **STE_OVERRIDE** | STE includes STE-specific spec-review checklist items (engine SDLC, ECR/DFCR). Keep STE. |
+| 16 | `.github/workflows/secret-scan.yml` differs | **STE_OVERRIDE** (S5 back-port + STE comments) | STE has the D0g `actions: read` + `continue-on-error` fixes (PR #419) plus STE's public-repo audit history comments. Portable lacks the comments; STE keeps them. Keep STE. |
+| 17 | `.github/workflows/ci.yml` differs | **STE_OVERRIDE** | STE has full Postgres-service shape (`lab-isolation-db`), alembic migration to `platform` schema, STE-specific test paths. Portable `ci.yml` is generic Python — replacing STE's CI with it would be a massive downgrade. Keep STE. |
+| 18 | `.github/workflows/claude-review-heavy-lane.yml` differs | **STE_OVERRIDE** (S5 back-port + STE path filter) | STE has the D2 `ANTHROPIC_API_KEY` gate step (PR #419) plus STE-specific path filter (`tpcore/risk/**`, …) and STE-specific review prompt wording. Keep STE. |
+| 19 | `.github/pull_request_template.md` differs | **STE_OVERRIDE** | STE's checklist mirrors STE's `path_registry.yaml` (`tpcore/risk/**`, `ops/engine_service.py`, etc.) — portable uses fintech-shape paths (`src/risk/**`). The PR-template `ops/engine_sdlc/**` checkbox fix (PR #420) closed the only check_manifests-side gap; the remaining diff is STE's canonical path-list shape. Keep STE. |
+| 20 | `.gitleaks.toml` differs | **STE_OVERRIDE** | STE is the full posture (historical-baseline allowlist + `.gitleaksignore` for the 3 confirmed-clean test fixtures from the 2026-05-21 public-repo audit). Portable is a minimal starter. Keep STE. |
+
+### S3 disposition
+
+§"Proposed staged adoption PR sequence" S3 (adopt portable docs where strictly additive) is **NO-OP per current audit evidence.** All 5 portable-shape STE docs are richer than their portable counterparts (findings #1–#5); there is no additive doc improvement to port back. S3 stays scheduled in the plan as a future re-check trigger but does not require a PR today.
+
+### S6 disposition
+
+§"Proposed staged adoption PR sequence" S6 (`.claude` reconciliation) is **scoped to additive-only** going forward. The 10 `.claude/`-surface drift findings above (#6–#15) are all STE_OVERRIDE or DEFER. None warrants a bulk patch.
+
+### S7 disposition
+
+§"Optional regenerate-on-demand" S7 selective-copy allowlist remains **empty.** S2's evidence shows that every PORTABLE_MATCH-shaped artifact actually drifts as STE_OVERRIDE in practice. There is no allowlist to write yet.
+
+### Operating expectation going forward
+
+- `scripts/run_dev_system_audit.sh` is expected to return `REPORT_ONLY: DRIFT_DETECTED` for stage 1 (`audit_project`) and `exit 0` overall, indefinitely. That is the correct steady state given STE's canonical / richer / domain-specific posture.
+- `check_manifests --target-dir` is expected to return **CLEAN** going forward. Any future stage-2 red is a real defect (registry / PR-template / settings-json drift, etc.) worth a fix PR.
+- A new audit_project finding beyond the 20 above is the signal worth investigating — re-triage that single delta against the §"Artifact-by-artifact classification" table.
+
+### Forbidden actions (re-asserted)
+
+- No `bootstrap_project.py --target-dir /Users/michael/short-term-trading-engine --force`.
+- No blind overwrite of any `.claude/` file, any `.github/workflows/*.yml`, any STE doc.
+- No memstore write; no Anthropic API call as part of adoption tooling.
+- No `--admin` to bypass branch protection.
+
+---
+
+> Status: PLAN ONLY. Adoption is staged across S1–S7 in follow-up PRs, with operator authorization at each stage. Cross-references: packetvoid-dev-system PRs #1–#10; consumer validation PRs at `packetvoid-d1-consumer-smoke` #1 #2 and `packetvoid-d2-railway-consumer-smoke` #1 #2; STE PRs #416 #417 #418 #419 #420.
