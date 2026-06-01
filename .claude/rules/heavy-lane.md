@@ -46,3 +46,22 @@ Triggers (this rule's `paths:`):
 - New engine (5-plug `<engine>/` scaffold) and new data adapter — covered by `engine-build` / `data-adapter` rules
 
 Default and fast lanes are explicitly NOT permitted for these paths.
+
+## Automated first-pass reviewer (advisory)
+
+When a PR touches any of these paths, the workflow
+`.github/workflows/claude-review-heavy-lane.yml` (Anthropic
+``claude-code-action`` v1) posts a first-pass review comment with a
+verdict of `PASS` / `REQUEST_CHANGES` / `NEEDS_OPERATOR_REVIEW`. This
+is **advisory / review-only** — the workflow has `contents: read` and
+`pull-requests: write` permissions ONLY, never `contents: write`. It
+cannot commit, push, auto-fix, or auto-merge.
+
+The operator remains the final gate. A `VERDICT: PASS` is necessary
+but not sufficient for merge; the §1 pipeline above (spec → plan →
+subagent execution → split-review → operator authorization) is
+unchanged.
+
+The path-filter on the workflow is kept in sync with the `paths:`
+list in this file's frontmatter by `scripts/check_manifests.py`
+(sentinel: `tests/test_claude_review_workflow_present.py`).
