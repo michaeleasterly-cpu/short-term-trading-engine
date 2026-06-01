@@ -206,6 +206,12 @@ async def write_credibility_score(
     The score is encoded in ``confidence`` as ``score / 100``; ``stale``
     is True iff score < 60 (the live-promotion threshold). Returns True
     iff a new row was written (False on conflict or no pool).
+
+    F1 (2026-06-01) — when a CALLER wants to also record a structured
+    failed-alpha record on the dedicated ``platform.failed_alpha_ledger``
+    table, use :func:`write_credibility_score_with_failed_alpha`. This
+    plain entry-point is kept for backward compatibility with the
+    existing engine-backtest callers; semantics are unchanged.
     """
     ts = timestamp or datetime.now(UTC)
     dq = DataQualityScore(
@@ -218,6 +224,122 @@ async def write_credibility_score(
         notes=score.model_dump_json(),
     )
     return await DataQualityWriter(pool).write(dq)
+
+
+async def write_credibility_score_with_failed_alpha(
+    pool: asyncpg.Pool,
+    *,
+    engine_name: str,
+    score: CredibilityScore,
+    failed_alpha_record: object | None = None,
+    blocking_constraint: object | None = None,
+    timestamp: datetime | None = None,
+) -> tuple[bool, object | None]:
+    """F1 (2026-06-01) — write credibility AND emit a structured
+    failed-alpha row on low score.
+
+    Behaviour:
+
+      * Score ≥ ``MIN_LIVE_SCORE`` (=60) → write credibility row only,
+        return ``(True, None)``. ``failed_alpha_record`` /
+        ``blocking_constraint`` are accepted but IGNORED on a passing
+        score (a PASS is not a research-failure event).
+
+      * Score < ``MIN_LIVE_SCORE`` AND ``failed_alpha_record`` is
+        provided → write credibility row AND insert the failed-alpha
+        record. Returns ``(credibility_inserted, RecordResult)``.
+
+      * Score < ``MIN_LIVE_SCORE`` AND ``failed_alpha_record`` is None
+        BUT ``blocking_constraint`` is provided → raise ``ValueError``.
+        The caller must supply either a complete ``FailedAlphaRecord``
+        OR omit both — passing a constraint without the rest of the
+        record means the caller hasn't classified the failure yet.
+        Operator hard rule: every ledger row must self-explain
+        (failure_summary + blocking_constraint + sweep_id + window).
+
+      * Score < ``MIN_LIVE_SCORE`` AND NEITHER provided → write
+        credibility row only (back-compat path). Logs a structlog
+        warning so the caller knows a failed-alpha row WAS NOT
+        recorded; useful for legacy engine backtests that haven't
+        adopted the F1 classification step yet.
+
+    The companion ``write_credibility_score`` keeps its original
+    contract for back-compat; new callers use this entry-point.
+
+    The signature uses ``object`` for the F1 model types to avoid an
+    eager import of ``tpcore.forensics.alpha_ledger`` at module-import
+    time (which would create a top-level dependency on a brand-new
+    module from a long-stable file). The runtime check below imports
+    lazily.
+    """
+    # Always write the credibility row first.
+    credibility_inserted = await write_credibility_score(
+        pool, engine_name=engine_name, score=score, timestamp=timestamp,
+    )
+
+    # Pass path — short-circuit.
+    if score.score >= MIN_LIVE_SCORE:
+        return credibility_inserted, None
+
+    # FAIL path. Three sub-cases below.
+    from tpcore.forensics.alpha_ledger import (
+        BlockingConstraint as _BC,
+    )
+    from tpcore.forensics.alpha_ledger import (
+        FailedAlphaRecord as _FAR,
+    )
+    from tpcore.forensics.alpha_ledger import (
+        record_failed_alpha as _record,
+    )
+
+    if failed_alpha_record is not None and not isinstance(
+        failed_alpha_record, _FAR
+    ):
+        raise TypeError(
+            "failed_alpha_record must be a "
+            "tpcore.forensics.alpha_ledger.FailedAlphaRecord; "
+            f"got {type(failed_alpha_record).__name__}"
+        )
+    if blocking_constraint is not None and not isinstance(
+        blocking_constraint, _BC
+    ):
+        raise TypeError(
+            "blocking_constraint must be a "
+            "tpcore.forensics.alpha_ledger.BlockingConstraint; "
+            f"got {type(blocking_constraint).__name__}"
+        )
+
+    if failed_alpha_record is not None:
+        # Complete classification provided — record it.
+        rec_result = await _record(pool, failed_alpha_record)
+        return credibility_inserted, rec_result
+
+    if blocking_constraint is not None:
+        # Partial classification — refuse rather than silently fabricate.
+        raise ValueError(
+            f"engine={engine_name!r} score={score.score} < "
+            f"{MIN_LIVE_SCORE} and blocking_constraint="
+            f"{blocking_constraint.value!r} was provided WITHOUT a "
+            "complete FailedAlphaRecord. The caller must supply a "
+            "full record (sweep_id, data_window_start, "
+            "data_window_end, universe, n_trials, failure_summary, "
+            "etc.) — the auto-emission path will not fabricate the "
+            "remaining fields on the operator's behalf."
+        )
+
+    # Back-compat path — neither provided, just log a warning.
+    import structlog
+    log = structlog.get_logger(__name__)
+    log.warning(
+        "tpcore.statistical_validation.failed_alpha_not_recorded",
+        engine=engine_name, score=score.score,
+        detail=(
+            "credibility < 60 but no FailedAlphaRecord was passed — "
+            "legacy back-compat path. Migrate this caller to pass a "
+            "FailedAlphaRecord with the dispositive blocking_constraint."
+        ),
+    )
+    return credibility_inserted, None
 
 
 def render_rubric(score: CredibilityScore) -> str:
@@ -261,4 +383,5 @@ __all__ = [
     "render",
     "render_rubric",
     "write_credibility_score",
+    "write_credibility_score_with_failed_alpha",
 ]

@@ -200,6 +200,13 @@ ignore = ["E501"]
 #     don't touch the primitive).
 "tests/test_evaluate_provider_parity_stage.py" = ["SLF"]
 "tests/test_parity_primitive_byte_frozen.py" = ["SLF"]
+# F1 failed-alpha ledger (2026-06-01) — backfill test names the
+# module-private ``_build_backfill_records`` helper to verify the
+# 5 hand-coded EDGE_VALIDATION_PLAN.md records match the doc; the
+# alpha_ledger constructor test names ``_summary_nonempty`` and
+# the migration sentinel reads ``ast``-parsed module-private SQL.
+"tests/test_failed_alpha_ledger.py" = ["SLF"]
+"tests/test_failed_alpha_ledger_migration.py" = ["SLF"]
 # SP-B T4 dispatch-seam characterization test: pinning that the lazy
 # PARAM_RANGES + `_lab_target_for` resolver + the `_runner_for`/
 # `_context_loader_for`/`_context_runner_for` thin views preserve the

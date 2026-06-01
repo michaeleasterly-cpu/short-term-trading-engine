@@ -498,3 +498,32 @@ get_submissions_cached  # unused method (tpcore/sec/companyfacts_adapter.py:424)
 # suite + future P2c capital-gate read). Static analysis sees only
 # the assignment.
 TERMINAL_LIFECYCLE_STATES  # unused variable (tpcore/quality/validation/checks/fundamentals_quarterly_completeness.py:581)
+# F1 failed-alpha ledger (2026-06-01) — Pydantic ``@field_validator``
+# decorated methods are called by the validation pipeline at construct
+# time, not invoked directly. ``RecordResult.record_id`` is read by
+# the backfill script + tests but vulture can't trace through the
+# dataclass field surface.
+_summary_nonempty  # unused method (tpcore/forensics/alpha_ledger.py:155)
+_window_ordered  # unused method (tpcore/forensics/alpha_ledger.py:166)
+record_id  # unused variable (tpcore/forensics/alpha_ledger.py:187)
+ARCHIVED  # unused variable (tpcore/forensics/alpha_ledger.py:103)
+REVISIT_QUEUED  # unused variable (tpcore/forensics/alpha_ledger.py:104)
+SHELVED  # unused variable (tpcore/forensics/alpha_ledger.py:102)
+OPERATOR_REJECTED  # unused variable (tpcore/forensics/alpha_ledger.py:86)
+DEPRECATED_SIGNAL_SOURCE  # unused variable (tpcore/forensics/alpha_ledger.py:92)
+schema_version  # unused variable (tpcore/forensics/alpha_ledger.py:115)
+# All BlockingConstraint enum members — referenced by name in the
+# backfill script + dashboards + future research-classification code.
+# Vulture can't trace through iteration / set membership.
+N_TRADES_LOW
+LIQUIDITY_FAILURE
+DSR_FAILURE
+PSR_FAILURE
+PBO_FAILURE
+MIN_BTL_FAILURE
+SIGNAL_CLASS_MISMATCH
+MULTI_GATE_INTERSECTION
+REGIME_FRAGILITY
+COST_DOMINATED
+DATA_QUALITY_FAILURE
+LOOKAHEAD_OR_BIAS_RISK
