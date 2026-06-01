@@ -25,7 +25,7 @@ fi
 
 cat <<EOF
 Claude-Code extension surface: ${rules_count} path-scoped rules + ${skills_count} skills + ${agents_count} subagent profiles + ${hooks_count} hooks loaded.
-Heavy-lane triggers (full §1 pipeline): tpcore/risk/, tpcore/selfheal/, tpcore/auditheal/, tpcore/quality/validation/, ops/engine_service.py, ops/engine_sdlc/, ops/llm_*triage.py, platform/migrations/, new engine (5-plug), new data adapter, tpcore/engine_profile.py, tpcore/providers.py.
+Heavy-lane triggers (full §1 pipeline; canonical SoT .claude/path_registry.yaml groups.heavy_lane): tpcore/risk/**, tpcore/selfheal/**, tpcore/auditheal/**, tpcore/quality/validation/**, ops/engine_service.py, ops/engine_sdlc.py, ops/engine_sdlc/**, ops/data_feed_sdlc/**, ops/cutover_agent.py, scripts/ops.py, platform/migrations/**, tpcore/engine_profile.py, tpcore/providers.py. Plus new-engine (5-plug) + new-data-adapter scaffolds.
 Default = Anthropic Explore → Plan → Implement → Commit (one review). Fast = single-file/doc-only one-sentence diff. See docs/DEV_PIPELINE_STANDARD.md §0.
 
 CANONICAL WORK-TRACKING: TODO.md is the source of truth for "what's left to do" (git-tracked; survives memory audits). Memory entries are rationale/constraints, NOT task state. ALWAYS consult TODO.md before any next-work decision; never drive next-work choices from memory alone.

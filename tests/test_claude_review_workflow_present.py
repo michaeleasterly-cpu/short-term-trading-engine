@@ -10,17 +10,38 @@ the Anthropic ``claude-code-action`` examples and is described in
 asserts the workflow keeps its review-only invariants intact across
 future edits.
 
+Path-filter SoT is ``.claude/path_registry.yaml`` (H0 hardening,
+2026-06-01). This file reads the registry — it does NOT carry its
+own canonical path tuple anymore. Drift between the workflow filter
+and the registry is caught by
+``test_workflow_filter_equals_registry_union`` here and by
+``scripts/check_manifests.py``.
+
 Authoritative external:
   * https://github.com/anthropics/claude-code-action
 """
 from __future__ import annotations
 
+import importlib.util
+import sys
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
 _WORKFLOW = (
     _REPO / ".github" / "workflows" / "claude-review-heavy-lane.yml"
 )
+_CHECK_MANIFESTS = _REPO / "scripts" / "check_manifests.py"
+
+
+def _load_check_manifests_module():
+    spec = importlib.util.spec_from_file_location(
+        "check_manifests_h0_workflow", _CHECK_MANIFESTS,
+    )
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["check_manifests_h0_workflow"] = mod
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def _text() -> str:
@@ -39,31 +60,21 @@ def test_workflow_triggers_on_pull_request() -> None:
 
 
 def test_workflow_has_heavy_lane_path_filters() -> None:
-    """The workflow's ``paths:`` filter must include the canonical
-    heavy-lane subset (kept in sync with
-    ``.claude/rules/heavy-lane.md`` by
-    ``scripts/check_manifests.py``)."""
-    src = _text()
-    canonical = (
-        "tpcore/risk/**",
-        "tpcore/selfheal/**",
-        "tpcore/auditheal/**",
-        "tpcore/quality/validation/**",
-        "ops/engine_service.py",
-        "ops/engine_sdlc/**",
-        "ops/data_feed_sdlc/**",
-        "ops/cutover_agent.py",
-        "scripts/ops.py",
-        "platform/migrations/**",
-        "tpcore/engine_profile.py",
-        "tpcore/providers.py",
+    """The workflow's ``paths:`` filter must equal exactly
+    ``heavy_lane ∪ claude_system`` from ``.claude/path_registry.yaml``.
+
+    H0 (2026-06-01) — replaces the previously inlined canonical tuple
+    with a registry read so a path added in only one of (registry,
+    workflow) is caught here. The check delegates to
+    ``scripts/check_manifests.check_workflow_filter_equals_registry_union``
+    so the failure messages match the manifest linter's output.
+    """
+    mod = _load_check_manifests_module()
+    failures = mod.check_workflow_filter_equals_registry_union()
+    assert not failures, (
+        "workflow path filter drift from .claude/path_registry.yaml:\n  "
+        + "\n  ".join(failures)
     )
-    for path in canonical:
-        # Match either quoted or unquoted form (the workflow uses
-        # quoted; we accept both for forward compatibility).
-        assert (
-            f'"{path}"' in src or f"'{path}'" in src or f"- {path}" in src
-        ), f"workflow paths filter missing canonical heavy-lane entry: {path}"
 
 
 def test_workflow_references_anthropic_api_key_secret() -> None:

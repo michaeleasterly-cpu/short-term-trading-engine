@@ -23,18 +23,24 @@ Fast-lane workflow: **Implement → verify (tests + CI) → Commit.** Explicitly
 
 ### Heavy lane (mandatory full §1 pipeline)
 
-The full §1 pipeline (including the `expert subagent` harden, the `spec-read gate`, and the `split-review`) is **mandatory** when the change touches any of:
+The full §1 pipeline (including the `expert subagent` harden, the `spec-read gate`, and the `split-review`) is **mandatory** when the change touches any path enumerated in `.claude/path_registry.yaml` under `groups.heavy_lane` (canonical SoT since H0, 2026-06-01). The current `heavy_lane` list:
 
-- `tpcore/risk/` (the platform-wide RiskGovernor / capital-gate path)
-- `tpcore/selfheal/`
-- `tpcore/auditheal/`
-- `tpcore/quality/validation/` (the data-acceptance gate)
+- `tpcore/risk/**` (the platform-wide RiskGovernor / capital-gate path)
+- `tpcore/selfheal/**`
+- `tpcore/auditheal/**`
+- `tpcore/quality/validation/**` (the data-acceptance gate)
 - `ops/engine_service.py`
-- `ops/engine_sdlc.py` (or anything under `ops/engine_sdlc/`)
-- `platform/migrations/`
+- `ops/engine_sdlc.py` and anything under `ops/engine_sdlc/**`
+- `ops/data_feed_sdlc/**` (the DFCR mutator + planner)
+- `ops/cutover_agent.py` (the parity-gated provider CUTOVER agent)
+- `scripts/ops.py` (the operator-on-demand stage registry; new stages adjacent to the DFCR / cutover path are heavy-lane-by-discipline — F0 follow-up 2026-06-01)
+- `platform/migrations/**`
+- `tpcore/engine_profile.py` (the engine roster SoT)
+- `tpcore/providers.py` (the data-feed `ProviderBinding` SoT)
 - a **new engine** — anything matching the `<engine>/` 5-plug structure at the repo root (setup_detection / lifecycle_analysis / execution_risk / aar_logging / capital_gate)
 - a **new data adapter**
-- the `tpcore/engine_profile._PROFILE` SoT (the engine roster)
+
+Drift between this list, the registry, the workflow filter, the heavy-lane rule frontmatter, the PR template checklist, and the session-start summary is caught by `scripts/check_manifests.py` and `tests/test_path_registry_present.py`.
 
 ### Default lane (Anthropic's Explore → Plan → Implement → Commit)
 
