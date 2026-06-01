@@ -46,6 +46,24 @@ class _Conn:
         if "provider_binding_state" in sql and "SELECT" in sql:
             ap = self._s.state.get(a[0])
             return {"active_provider": ap} if ap else None
+        # F0 (2026-06-01) — the cutover_agent's parity-freshness gate
+        # queries data_quality_log for the latest "evaluate.{feed}.
+        # {candidate}" row. Synthesize a fresh PASS so the test's
+        # happy path (a real cutover with a fallback) reaches
+        # plan_cutover. Tests that exercise the BLOCK path can set
+        # ``_s.parity_overrides`` to inject a different row payload.
+        if "data_quality_log" in sql and "evaluate." in str(a[0] or ""):
+            from datetime import UTC, datetime, timedelta
+            override = self._s.parity_overrides.get(a[0])
+            if override is not None:
+                return override
+            # Default: fresh PASS verdict, 1 day old.
+            import json as _json
+            return {
+                "timestamp": datetime.now(UTC) - timedelta(days=1),
+                "confidence": 1.0,
+                "notes": _json.dumps({"verdict": "pass"}),
+            }
         return None
 
     async def fetch(self, sql: str, *a):
@@ -71,6 +89,10 @@ class _Store:
         self.state: dict[str, str] = {}
         self.applog: list[dict] = []
         self.red_checks: set[str] = set()
+        # F0: override map keyed on "evaluate.{feed}.{candidate}".
+        # Empty by default → _Conn.fetchrow returns a fresh PASS so
+        # the deterministic-pass tests keep their original semantics.
+        self.parity_overrides: dict[str, dict | None] = {}
 
     def acquire(self):
         return _CM(_Conn(self))
