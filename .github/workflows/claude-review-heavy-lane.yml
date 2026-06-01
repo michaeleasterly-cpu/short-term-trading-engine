@@ -18,9 +18,13 @@ name: Claude Review — Heavy Lane
 #   - examples/pr-review-filtered-paths.yml from the upstream repo
 #
 # Adoption: the action requires ANTHROPIC_API_KEY in repo secrets.
-# Without the secret, the workflow runs but the action step errors
-# out and the rest of the heavy-lane discipline (manual review) takes
-# over. See docs/DEV_PIPELINE_STANDARD.md §1 step 7.
+# S5 (2026-06-01) — back-port from packetvoid-dev-system D2:
+# the workflow auto-detects whether the secret is configured and
+# **gracefully no-ops when it is missing** — the manual fresh-context
+# heavy-lane review discipline in docs/DEV_PIPELINE_STANDARD.md §1
+# step 7 remains the dispositive gate. This means a missing or
+# rotated secret no longer poisons every heavy-lane PR with a hard-
+# fail; the operator sees a workflow notice and the job passes.
 
 on:
   pull_request:
@@ -81,7 +85,26 @@ jobs:
       id-token: write
 
     steps:
+      - name: Gate on ANTHROPIC_API_KEY presence
+        id: gate
+        # S5 (2026-06-01) — back-port from packetvoid-dev-system D2.
+        # GitHub Actions does not allow referencing ``secrets`` in
+        # job-level ``if:`` conditionals. The standard portable pattern
+        # is: expose the secret-presence boolean via an env var on a
+        # guard step, write a ``skip`` output, then gate downstream
+        # steps on that output.
+        env:
+          HAS_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+        run: |
+          if [ "$HAS_KEY" != "true" ]; then
+            echo "::notice::ANTHROPIC_API_KEY secret is not configured on this repository; skipping the Claude review action. The manual fresh-context review discipline in docs/DEV_PIPELINE_STANDARD.md §1 step 7 remains the dispositive gate. Set the secret under Settings → Secrets and variables → Actions to enable automated first-pass review."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Checkout repository (PR head, shallow)
+        if: steps.gate.outputs.skip != 'true'
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
@@ -89,6 +112,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Claude Code Action review (review-only / no commits)
+        if: steps.gate.outputs.skip != 'true'
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
