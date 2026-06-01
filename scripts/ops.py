@@ -7308,32 +7308,6 @@ async def _stage_macro_indicators(
     return {"rows_loaded": int(rows or 0)}
 
 
-async def _stage_greeks_max_pain(
-    pool: asyncpg.Pool, config: dict[str, Any] | None = None
-) -> dict[str, Any]:
-    """Daily greeks.pro free-tier max-pain snapshot (1 symbol).
-
-    DISABLED 2026-05-28 — operator's greeks.pro account access is broken
-    (portal won't accept login). The stage was 401'ing every run, making
-    the cascade always flag options_max_pain_freshness RED and blocking
-    DATA_OPERATIONS_COMPLETE emission. Short-circuit to OK with rows=0
-    instead of removing the stage entry — the stage manifest stays
-    stable, the validation check naturally degrades to stale, and
-    re-enabling is a one-line revert when the operator restores access.
-
-    Handler has its own same-day skip-guard (idempotent regardless).
-    ``--param symbol=XXX`` overrides the tracked symbol (default SPY);
-    ``--param skip_guard=false`` forces a re-pull (used by self-heal).
-    """
-    del pool, config
-    log = structlog.get_logger("scripts.ops")
-    log.info(
-        "ops.stage.greeks_max_pain.disabled",
-        reason="operator-disabled 2026-05-28 (greeks.pro login broken)",
-    )
-    return {"rows_loaded": 0, "skipped": "operator_disabled"}
-
-
 async def _stage_finnhub_insider_sentiment(
     pool: asyncpg.Pool, config: dict[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -9148,9 +9122,6 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # backfill with skip_guard_days=0 fetches every series in series
     # (~120s+ wall-clock end-to-end is normal).
     ("macro_indicators",    lambda pool, cfg: (lambda: _stage_macro_indicators(pool, cfg)),    HEAVY_STAGE_TIMEOUT_SEC),
-    # greeks.pro free-tier max-pain (1 symbol/day, X-API-Key, idempotent
-    # ON CONFLICT, handler same-day skip-guard). Added 2026-05-16.
-    ("greeks_max_pain",     lambda pool, cfg: (lambda: _stage_greeks_max_pain(pool, cfg)),     STAGE_TIMEOUT_SEC),
     # Finnhub insider-sentiment (MSPR) for the T1/T2 universe; monthly,
     # 25-day skip-guard, idempotent ON CONFLICT. Added 2026-05-16.
     ("finnhub_insider_sentiment", lambda pool, cfg: (lambda: _stage_finnhub_insider_sentiment(pool, cfg)), HEAVY_STAGE_TIMEOUT_SEC),
@@ -9600,7 +9571,6 @@ _VALIDATION_CHUNK_SPECS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "sentiment",
         (
-            "options_max_pain_freshness",
             "insider_sentiment_freshness",
             "social_sentiment_freshness",
             "fear_greed_freshness",
@@ -11892,7 +11862,6 @@ _STAGE_PROVIDER_MAP: dict[str, str] = {
     "aaii_sentiment": "aaii",
     "finra_short_interest": "finra",
     "iborrowdesk_borrow_rates": "iborrowdesk",
-    "greeks_max_pain": "alpaca",
     "classify_tickers": "fmp",
     "tier_refresh": "alpaca",
 }
@@ -12022,9 +11991,6 @@ async def _chunk_validation_suite(
     from tpcore.quality.validation.checks.macro_indicators_freshness import (
         check_macro_indicators_freshness,
     )
-    from tpcore.quality.validation.checks.options_max_pain_freshness import (
-        check_options_max_pain_freshness,
-    )
     from tpcore.quality.validation.checks.prices_daily_classification_id_completeness import (
         check_prices_daily_classification_id_completeness,
     )
@@ -12093,7 +12059,6 @@ async def _chunk_validation_suite(
         "prices_daily_completeness": check_prices_daily_completeness,
         "prices_daily_classification_id_completeness":
             check_prices_daily_classification_id_completeness,
-        "options_max_pain_freshness": check_options_max_pain_freshness,
         "insider_sentiment_freshness": check_insider_sentiment_freshness,
         "social_sentiment_freshness": check_social_sentiment_freshness,
         "fear_greed_freshness": check_fear_greed_freshness,
@@ -13611,34 +13576,6 @@ async def _check_daemon_progress(pool: asyncpg.Pool) -> dict[str, Any]:
     }
 
 
-async def _check_greeks_max_pain(pool: asyncpg.Pool) -> dict[str, Any]:
-    """Dashboard probe — greeks.pro max-pain snapshot freshness.
-
-    ok=True if the tracked symbol (SPY) has a snapshot within 7d;
-    warn (yellow) in the 7-14d band; red beyond.
-    """
-    row = await pool.fetchrow(
-        """
-        SELECT MAX(observed_date) AS latest, COUNT(*) AS rows_total
-        FROM platform.options_max_pain
-        WHERE symbol = 'SPY'
-        """
-    )
-    latest = row["latest"] if row else None
-    total = int(row["rows_total"]) if row and row["rows_total"] else 0
-    if latest is None:
-        return {"ok": False, "reason": "no SPY max-pain rows", "rows_total": 0}
-    age = (date.today() - latest).days  # noqa: DTZ011
-    return {
-        "ok": age <= 7,
-        "warn": 7 < age <= 14,
-        "latest_observed_date": latest.isoformat(),
-        "age_days": age,
-        "threshold_days": 7,
-        "rows_total": total,
-    }
-
-
 async def _check_finnhub_insider_sentiment(pool: asyncpg.Pool) -> dict[str, Any]:
     """Dashboard probe — Finnhub insider-sentiment freshness.
 
@@ -13827,7 +13764,6 @@ _CHECK_FNS = [
     ("earnings_events_freshness", _check_earnings_events_freshness),
     ("sec_filings_freshness", _check_sec_filings_freshness),
     ("macro_indicators_freshness", _check_macro_indicators_freshness),
-    ("greeks_max_pain_freshness", _check_greeks_max_pain),
     ("insider_sentiment_freshness", _check_finnhub_insider_sentiment),
     ("social_sentiment_freshness", _check_apewisdom_social_sentiment),
     ("fear_greed", _check_fear_greed),

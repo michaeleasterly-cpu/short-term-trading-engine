@@ -215,12 +215,6 @@ class FakePool:
                 {"indicator": name, "latest_date": today, "rows_total": 100}
                 for name in _MACRO_INDICATOR_NAMES
             ]
-        # options_max_pain_freshness: one fresh snapshot per expected
-        # symbol so the suite passes in e2e tests for unrelated checks.
-        if "platform.options_max_pain" in sql_lower:
-            from datetime import UTC, datetime, timedelta
-            fresh = datetime.now(UTC).date() - timedelta(days=1)
-            return [{"symbol": "SPY", "latest": fresh}]
         # fundamentals_quarterly_completeness: synthesize a clean
         # quarterly cadence for one T1 stock so e2e tests for unrelated
         # checks aren't false-failed by an empty universe sentinel or

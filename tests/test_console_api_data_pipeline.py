@@ -663,16 +663,26 @@ async def test_sec_fallback_runs_with_scoped_tickers(data_pipeline_module):
 
 
 @pytest.mark.asyncio
-async def test_blocked_vendor_check_renders_no_normal_run_button(data_pipeline_module):
-    """TEST-004 (spec): options_max_pain_freshness is blocked_vendor,
-    allowed_actions does NOT include run_scoped_feed / repair_failed_
-    scope. UI uses this to suppress the Run feed button."""
-    spec = data_pipeline_module.CHECK_REMEDIATION["options_max_pain_freshness"]
-    assert spec["class"] == "blocked_vendor"
-    assert spec["vendor"] == "greeks.pro"
-    assert "perator-disabled" in spec["blocker_reason"]  # case-insensitive substring
+async def test_blocked_vendor_class_branch_present(data_pipeline_module, monkeypatch):
+    """TEST-004 (spec): blocked_vendor class infrastructure remains in
+    place for future vendor-disabled feeds, even after greeks_max_pain
+    retirement removed the only live producer. Synthesizes a fixture
+    entry to exercise the branch — UI still suppresses run_scoped_feed
+    / repair_failed_scope for blocked_vendor and surfaces view_blocker.
+    """
+    synthetic = {
+        "class": "blocked_vendor",
+        "vendor": "synthetic_vendor",
+        "blocker_reason": "synthetic fixture exercising the blocked_vendor branch",
+        "scope_kind": "full",
+    }
+    monkeypatch.setitem(
+        data_pipeline_module.CHECK_REMEDIATION,
+        "synthetic_blocked_vendor_check",
+        synthetic,
+    )
     remediation = data_pipeline_module._check_remediation(
-        "options_max_pain_freshness"
+        "synthetic_blocked_vendor_check"
     )
     assert "run_scoped_feed" not in remediation["allowed_actions"]
     assert "repair_failed_scope" not in remediation["allowed_actions"]
@@ -903,12 +913,13 @@ async def test_tickers_truncation_surfaced_in_audit(data_pipeline_module):
 
 
 def test_blocked_vendor_runtime_toggle(data_pipeline_module, monkeypatch):
-    """F-004 fix: setting CONSOLE_VENDOR_ENABLED=greeks.pro restores
-    the vendor without a code change. Honest round-trip."""
+    """F-004 fix: CONSOLE_VENDOR_ENABLED enables specific vendors at
+    runtime without a code change. Honest round-trip with arbitrary
+    vendor identifier strings."""
     monkeypatch.delenv("CONSOLE_VENDOR_ENABLED", raising=False)
-    assert not data_pipeline_module._vendor_enabled("greeks.pro")
-    monkeypatch.setenv("CONSOLE_VENDOR_ENABLED", "greeks.pro,iborrow")
-    assert data_pipeline_module._vendor_enabled("greeks.pro")
+    assert not data_pipeline_module._vendor_enabled("synthetic_vendor")
+    monkeypatch.setenv("CONSOLE_VENDOR_ENABLED", "synthetic_vendor,iborrow")
+    assert data_pipeline_module._vendor_enabled("synthetic_vendor")
     assert data_pipeline_module._vendor_enabled("iborrow")
     assert not data_pipeline_module._vendor_enabled("polygon")
 

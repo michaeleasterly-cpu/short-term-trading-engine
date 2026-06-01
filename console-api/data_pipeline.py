@@ -108,7 +108,6 @@ CONSOLE_VALIDATION_CHECKS: list[str] = [
     "earnings_events_monotone",
     "sec_filings_freshness",
     "sec_insider_monotone",
-    "options_max_pain_freshness",
     "ticker_history_integrity",
     "ticker_classifications_coverage",
     "data_operations_complete_cadence",
@@ -305,16 +304,6 @@ CHECK_REMEDIATION: dict[str, dict[str, Any]] = {
         "params": {"repair": True},
         "scope_kind": "tickers",
         "estimated_runtime_seconds": 240,
-    },
-    # ─── options ───
-    "options_max_pain_freshness": {
-        "class": "blocked_vendor",
-        "vendor": "greeks.pro",
-        "blocker_reason": (
-            "Operator-disabled 2026-05-29: greeks.pro access "
-            "revoked. Lane stays RED until restored."
-        ),
-        "scope_kind": "full",
     },
     # ─── ticker / issuer integrity ───
     "ticker_history_integrity": {

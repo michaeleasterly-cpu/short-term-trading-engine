@@ -219,13 +219,6 @@ _BINDINGS: tuple[ProviderBinding, ...] = (
     # ``daily_insider_sentiment_delta``) were retained as orphans
     # until this PR closed the 3-way (P0_3 trust-audit).
     ProviderBinding(
-        feed="greeks_max_pain", provider="tradier",
-        adapter_module="tpcore.ingestion.handlers.handle_greeks_max_pain",
-        status=ProviderStatus.ACTIVE,
-        evidence="Max-pain computed from platform.tradier_options_chains "
-                 "(Tradier options chains); SPY only.",
-    ),
-    ProviderBinding(
         feed="ticker_classifications", provider="alpaca",
         adapter_module="tpcore.data.classify_tickers.classify_all_tickers",
         status=ProviderStatus.ACTIVE,

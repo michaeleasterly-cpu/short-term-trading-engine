@@ -196,12 +196,13 @@ context). Steps:
 
 ## Restoring a blocked vendor (runtime toggle)
 
-When a check is classified as ``blocked_vendor`` (e.g.
-``options_max_pain_freshness`` is blocked while greeks.pro access
-is revoked), the console rewrites its status to
-``BLOCKED_VENDOR_ACCESS`` regardless of what the underlying
-``data_quality_log`` row says. This is the honest "lane is known-
-broken" surface.
+When a check is classified as ``blocked_vendor`` (the
+``CHECK_REMEDIATION`` class for vendor-disabled feeds; no live
+producers as of 2026-06-01 after the ``greeks_max_pain`` retirement,
+but the class infrastructure is preserved for future use), the
+console rewrites its status to ``BLOCKED_VENDOR_ACCESS`` regardless
+of what the underlying ``data_quality_log`` row says. This is the
+honest "lane is known-broken" surface.
 
 When you restore vendor access, you do NOT need to redeploy or
 edit code. Set the ``CONSOLE_VENDOR_ENABLED`` Railway env var on

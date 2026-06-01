@@ -98,8 +98,6 @@ from .checks.macro_indicators_completeness import (
 )
 from .checks.macro_indicators_freshness import CHECK_NAME as MACRO_FRESHNESS_NAME
 from .checks.macro_indicators_freshness import check_macro_indicators_freshness
-from .checks.options_max_pain_freshness import CHECK_NAME as OPTIONS_MAXPAIN_NAME
-from .checks.options_max_pain_freshness import check_options_max_pain_freshness
 from .checks.prices_daily_classification_id_completeness import (
     CHECK_NAME as PRICES_CLASSIFICATION_ID_NAME,
 )
@@ -163,7 +161,6 @@ KNOWN_CHECK_NAMES: tuple[str, ...] = (
     PRICES_FRESHNESS_NAME,
     PRICES_COMPLETENESS_NAME,
     PRICES_CLASSIFICATION_ID_NAME,
-    OPTIONS_MAXPAIN_NAME,
     INSIDER_SENTIMENT_NAME,
     SOCIAL_SENTIMENT_NAME,
     FEAR_GREED_NAME,
@@ -274,9 +271,6 @@ async def run_suite(
         TICKER_HISTORY_INTEGRITY_NAME,
         check_ticker_history_integrity, pool, None
     )
-    options_maxpain_task = _safe_run(
-        OPTIONS_MAXPAIN_NAME, check_options_max_pain_freshness, pool, None
-    )
     insider_sentiment_task = _safe_run(
         INSIDER_SENTIMENT_NAME, check_insider_sentiment_freshness, pool, None
     )
@@ -309,7 +303,7 @@ async def run_suite(
         liquidity_result, liquidity_completeness_result, classifications_result,
         macro_result, macro_completeness_result, prices_result, completeness_result,
         classification_id_result,
-        options_maxpain_result, insider_sentiment_result,
+        insider_sentiment_result,
         social_sentiment_result, fear_greed_result,
         short_interest_result, borrow_rates_result,
         aaii_sentiment_result,
@@ -324,7 +318,7 @@ async def run_suite(
         liquidity_task, liquidity_completeness_task, classifications_task,
         macro_task, macro_completeness_task, prices_task, completeness_task,
         classification_id_task,
-        options_maxpain_task, insider_sentiment_task,
+        insider_sentiment_task,
         social_sentiment_task, fear_greed_task,
         short_interest_task, borrow_rates_task,
         aaii_sentiment_task,
@@ -340,7 +334,7 @@ async def run_suite(
         liquidity_result, liquidity_completeness_result, classifications_result,
         macro_result, macro_completeness_result, prices_result, completeness_result,
         classification_id_result,
-        options_maxpain_result, insider_sentiment_result,
+        insider_sentiment_result,
         social_sentiment_result, fear_greed_result,
         short_interest_result, borrow_rates_result,
         aaii_sentiment_result,

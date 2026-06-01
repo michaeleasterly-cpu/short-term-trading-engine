@@ -89,7 +89,7 @@ Add to data_operations cron OR create a new ops stage `extract_tradier_options`:
 ## Why this is dormant infrastructure now
 
 - 113,834 rows from a 2026-05-10 one-shot export (50 tickers, expirations through 2028-12-15)
-- `platform.options_max_pain` derived table has 1 row — abandoned consumer
+- `platform.options_max_pain` derived table has 1 row — abandoned consumer (the `greeks_max_pain` producer feed was retired 2026-06-01)
 - No engine currently reads from `tradier_options_chains`
 - Tradier API works, token valid, but pulling fresh data burns budget for zero edge
 

@@ -217,22 +217,6 @@ FEED_PROFILES: dict[str, FeedProfile] = {
     # removed (target table ``platform.insider_filings`` was DROPPED in
     # migration 20260522_0200; redundant with the
     # ``sec_insider_transactions`` SEC-EDGAR Form-4 path).
-    "greeks_max_pain": FeedProfile(
-        feed="greeks_max_pain", trigger=FeedTrigger.MARKET_CLOSE,
-        cadence_days=1, freshness_max_age_days=7, skip_guard_days=1,
-        targeting=Targeting.CONSTRAINED_DEMAND_DRIVEN,
-        # greeks.pro free tier: 10 req/min + 600 req/day + 1 symbol.
-        # Corrected 2026-05-24 per the FeedProfile vendor-validation audit;
-        # in-repo adapter docstring (tpcore/greeks/adapter.py:7) was the
-        # authoritative source — earlier 6/min figure here was guesswork.
-        rate_limit_requests=10, rate_limit_period_seconds=60,
-        daily_request_quota=600,
-        concurrent_request_limit=1,
-        quota_source_url="https://greeks.pro",
-        evidence="greeks.pro free tier = 1 symbol (SPY) by design; "
-                 "demand-driven if it ever expands. Quota: 10/min + "
-                 "600/day per tpcore/greeks/adapter.py (verified 2026-05-16).",
-    ),
     "earnings_events": FeedProfile(
         feed="earnings_events", trigger=FeedTrigger.VENDOR_QUARTERLY,
         cadence_days=91, freshness_max_age_days=90, skip_guard_days=6,
