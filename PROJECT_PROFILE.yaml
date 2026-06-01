@@ -1,0 +1,141 @@
+# STE PROJECT_PROFILE.yaml — S1 of dev-system adoption plan
+# (docs/superpowers/plans/2026-06-01-ste-round-trip-dev-system-adoption-plan.md)
+#
+# This file DECLARES STE's current dev-system posture so the Packet
+# Void dev system (https://github.com/michaeleasterly-cpu/packetvoid-dev-system,
+# fintech-research seed shape) has a profile to read against in
+# read-only audits (S2). It is NOT a regeneration spec — at S1, STE
+# renders nothing from this file.
+#
+# Authoritative SoT for path lists is .claude/path_registry.yaml.
+# critical_paths and claude_system_paths below mirror that registry
+# verbatim (see tests/test_project_profile_present.py for the
+# alignment sentinel).
+#
+# Cloud-memstore policy: api_memstores_enabled is true. The raw
+# memstore IDs are NOT inlined here — they live only in their
+# canonical doc, docs/MEMSTORE_HANDOFF.md. See memstore_reference
+# below.
+#
+# Hand-authored. Do not regenerate. Do not let bootstrap_project.py
+# rewrite this file.
+
+schema_version: 1
+
+project_name: short-term-trading-engine
+language: python
+deployment: railway
+database: postgres
+
+# critical_paths mirrors .claude/path_registry.yaml groups.heavy_lane
+# verbatim. Order matches the registry. Changes here require a matching
+# change in the registry — the sentinel test rejects drift.
+critical_paths:
+  - path: "tpcore/risk/**"
+    why: "platform-wide RiskGovernor / capital-gate live-money trade path"
+  - path: "tpcore/selfheal/**"
+    why: "autonomous self-heal and 100%-green-or-don't-trade invariant"
+  - path: "tpcore/auditheal/**"
+    why: "cross-table audit and bounded cross_ref_cleanup"
+  - path: "tpcore/quality/validation/**"
+    why: "data-acceptance gate and DATA_OPERATIONS_COMPLETE predicate"
+  - path: "ops/engine_service.py"
+    why: "consolidated engine dispatch daemon"
+  - path: "ops/engine_sdlc.py"
+    why: "ECR mutator entrypoint"
+  - path: "ops/engine_sdlc/**"
+    why: "ECR mutator package"
+  - path: "ops/data_feed_sdlc/**"
+    why: "DFCR mutator and data-feed-lifecycle planner"
+  - path: "ops/cutover_agent.py"
+    why: "automated provider-CUTOVER agent"
+  - path: "scripts/ops.py"
+    why: "operator-on-demand stage registry"
+  - path: "platform/migrations/**"
+    why: "Alembic schema substrate"
+  - path: "tpcore/engine_profile.py"
+    why: "engine roster source of truth"
+  - path: "tpcore/providers.py"
+    why: "data-feed ProviderBinding source of truth"
+
+# Railway-shape deployment-specific paths. They are also enumerated
+# in security_sensitive_paths below because changes here have
+# operator-on-deploy-target consequences.
+deployment_specific_paths:
+  - "railway.json"
+  - "railpack.toml"
+  - "Procfile"
+
+# claude_system_paths mirrors .claude/path_registry.yaml
+# groups.claude_system verbatim. The sentinel rejects drift.
+claude_system_paths:
+  - ".claude/rules/**"
+  - ".claude/skills/**"
+  - ".claude/agents/**"
+  - ".claude/hooks/**"
+  - ".claude/settings.json"
+  - ".github/workflows/**"
+
+# Security-sensitive paths layer onto critical_paths. They are
+# scanned by .claude/rules/security-guidance.md and by the
+# Claude-review heavy-lane workflow path filter. Live-money paths
+# and credential-shaped files are both included.
+security_sensitive_paths:
+  - ".github/workflows/**"
+  - ".gitleaks.toml"
+  - ".gitleaksignore"
+  - ".pre-commit-config.yaml"
+  - "pyproject.toml"
+  - "requirements*.txt"
+  - "tpcore/providers.py"
+  - "tpcore/engine_profile.py"
+  - "platform/migrations/**"
+  - "railway.json"
+  - "railpack.toml"
+  - "Procfile"
+
+# Operator-declared posture violations. Mirrored from
+# .claude/rules/security-guidance.md.
+forbidden_assumptions:
+  - "docker"
+  - "railway up unless explicitly operator-approved"
+  - "auto-merge"
+  - "auto-fix"
+  - "Anthropic API calls from bootstrap or adoption tooling"
+  - "memstore writes from bootstrap or adoption tooling"
+  - "raw broker / market-data credentials in tracked files"
+
+memory_policy:
+  # 24 400-byte ceiling from C0.1 (docs/MEMSTORE_HANDOFF.md +
+  # tests/test_memory_index_size.py).
+  local_memory_limit_bytes: 24400
+  memory_boundary_doc: true
+  # STE currently uses two Anthropic API beta memstores (operator's
+  # personal dev memstore + the finder memstore). The raw IDs are
+  # NEVER inlined here — the canonical location is the doc referenced
+  # below. See cloud_memory_handling §3 in
+  # docs/superpowers/plans/2026-06-01-ste-round-trip-dev-system-adoption-plan.md
+  api_memstores_enabled: true
+  # Pointer-only. The dev-system parser treats missing dev_memstore_id /
+  # agent_memstore_id as a failure when api_memstores_enabled is true,
+  # but the S1 sentinel never invokes that parser path against STE —
+  # the dev system is not authorized to render anything from this
+  # profile against the STE working tree (see plan §"Conflicts and
+  # non-overwrite rules").
+  memstore_reference: "docs/MEMSTORE_HANDOFF.md"
+
+review_mode: claude-review-only
+
+output_paths:
+  operator_reports: ".operator/reports/claude/"
+
+home_session_path: "~/.claude/projects/-Users-michael-short-term-trading-engine/"
+
+python_version: "3.11"
+
+# STE full-suite discipline: pytest serial mode is the authoritative
+# gate (ops/* package-shadow risk). Mirrors docs/DEV_PIPELINE_STANDARD.md
+# and .claude/rules/tests-and-ci.md.
+test_command: "python -m pytest -p no:xdist -q"
+
+gitleaks_version: "8.30.1"
