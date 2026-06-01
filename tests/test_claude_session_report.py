@@ -48,6 +48,11 @@ _QUEUE_MARKER = "QUEUE_OPERATION_CONTENT_MUST_NOT_LEAK_INTO_REPORT_C0_5"
 _AI_TITLE_MARKER = "AI_TITLE_BODY_MUST_NOT_LEAK_INTO_REPORT_C0_5"
 
 
+_CUSTOM_TITLE_MARKER = "CUSTOM_TITLE_BODY_MUST_NOT_LEAK_INTO_REPORT_C0_5"
+_AGENT_NAME_MARKER = "AGENT_NAME_BODY_MUST_NOT_LEAK_INTO_REPORT_C0_5"
+_PR_URL_MARKER = "PR_URL_BODY_MUST_NOT_LEAK_INTO_REPORT_C0_5"
+
+
 def _make_fixture_jsonl(
     dir_: Path,
     *,
@@ -57,6 +62,8 @@ def _make_fixture_jsonl(
     include_ai_title: bool = True,
     include_secret_in_model: bool = False,
     include_unknown_event: bool = False,
+    include_routing_metadata: bool = False,
+    routing_metadata_repeats: int = 1,
     extra_redactions: int = 0,
 ) -> Path:
     """Generate a single synthetic session jsonl. Every event carries
@@ -154,6 +161,39 @@ def _make_fixture_jsonl(
             "sessionId": "synthetic-session-1",
             "timestamp": "2026-06-01T00:00:05Z",
         })
+    if include_routing_metadata:
+        # The 5 routing-metadata event types observed in the operator's
+        # local Claude session jsonl (PR #415 schema-drift fix). They
+        # are recognized but their bodies are NEVER walked.
+        for i in range(routing_metadata_repeats):
+            events.append({
+                "type": "pr-link",
+                "sessionId": "synthetic-session-1",
+                "timestamp": f"2026-06-01T00:01:{i:02d}Z",
+                "prNumber": 415,
+                "prRepository": "michaeleasterly-cpu/short-term-trading-engine",
+                "prUrl": _PR_URL_MARKER,
+            })
+            events.append({
+                "type": "worktree-state",
+                "sessionId": "synthetic-session-1",
+                "worktreeSession": f"wt-{i}",
+            })
+            events.append({
+                "type": "custom-title",
+                "sessionId": "synthetic-session-1",
+                "customTitle": _CUSTOM_TITLE_MARKER,
+            })
+            events.append({
+                "type": "mode",
+                "sessionId": "synthetic-session-1",
+                "mode": "default",
+            })
+            events.append({
+                "type": "agent-name",
+                "sessionId": "synthetic-session-1",
+                "agentName": _AGENT_NAME_MARKER,
+            })
     # Extra redactable assistant events to drive --max-redactions.
     for i in range(extra_redactions):
         events.append({
@@ -579,6 +619,99 @@ def test_doc_present_and_names_forbidden_data_model() -> None:
         assert marker.lower() in text.lower(), (
             f"observability doc must mention {marker!r}"
         )
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Schema-drift regression (PR #415 follow-up)
+# ─────────────────────────────────────────────────────────────────────
+
+def test_default_mode_succeeds_on_observed_routing_metadata(
+    tmp_path: Path,
+) -> None:
+    """The 5 observed routing-metadata event types
+    (``pr-link``, ``worktree-state``, ``custom-title``, ``mode``,
+    ``agent-name``) must be recognized by default — fail-closed mode
+    succeeds without ``--best-effort``."""
+    in_dir = tmp_path / "input"
+    in_dir.mkdir()
+    _make_fixture_jsonl(
+        in_dir, include_routing_metadata=True, routing_metadata_repeats=3,
+    )
+    out_dir = tmp_path / "output"
+    _run([
+        "--input-dir", str(in_dir),
+        "--output-dir", str(out_dir),
+        # NO --best-effort — default fail-closed must accept these.
+    ])
+    json_files = sorted(out_dir.glob("*.json"))
+    assert json_files, "no report written"
+
+
+def test_routing_metadata_bodies_excluded_from_report(
+    tmp_path: Path,
+) -> None:
+    """The new routing-metadata event types must NOT leak their text
+    bodies (``customTitle``, ``agentName``, ``prUrl``) into the
+    report."""
+    in_dir = tmp_path / "input"
+    in_dir.mkdir()
+    _make_fixture_jsonl(
+        in_dir, include_routing_metadata=True, routing_metadata_repeats=2,
+    )
+    out_dir = tmp_path / "output"
+    _run([
+        "--input-dir", str(in_dir),
+        "--output-dir", str(out_dir),
+        "--format", "json",
+    ])
+    body = (sorted(out_dir.glob("*.json"))[0]).read_text(encoding="utf-8")
+    for marker in (_CUSTOM_TITLE_MARKER, _AGENT_NAME_MARKER, _PR_URL_MARKER):
+        assert marker not in body, (
+            f"routing-metadata leaked marker {marker!r} into the report"
+        )
+
+
+def test_warnings_aggregated_not_per_event(tmp_path: Path) -> None:
+    """With many events of one unknown type under ``--best-effort``,
+    the report's ``warnings`` field must contain ONE aggregated line
+    per category, not one per event (PR #415 schema-drift fix)."""
+    # Fixture with 50 repeats of one synthetic unknown type so we can
+    # tell aggregation from spam.
+    in_dir = tmp_path / "input"
+    in_dir.mkdir()
+    events: list[dict] = []
+    for i in range(50):
+        events.append({
+            "type": "synthetic-unknown-event-type",
+            "sessionId": "synthetic-session-1",
+            "timestamp": f"2026-06-01T00:00:{i:02d}Z",
+        })
+    (in_dir / "session.jsonl").write_text(
+        "\n".join(json.dumps(e) for e in events) + "\n",
+        encoding="utf-8",
+    )
+    out_dir = tmp_path / "output"
+    _run([
+        "--input-dir", str(in_dir),
+        "--output-dir", str(out_dir),
+        "--best-effort",
+    ])
+    report = json.loads(
+        (sorted(out_dir.glob("*.json"))[0]).read_text(encoding="utf-8"),
+    )
+    matching = [
+        w for w in report["warnings"]
+        if "synthetic-unknown-event-type" in w
+    ]
+    assert len(matching) == 1, (
+        f"expected ONE aggregated warning, got {len(matching)}: "
+        f"{matching}"
+    )
+    # And the aggregated line must carry the event count so the
+    # operator sees scale.
+    assert "encountered 50" in matching[0] or "50 times" in matching[0], (
+        f"aggregated warning must include the event count: {matching[0]!r}"
+    )
 
 
 def test_doc_references_output_dir_and_wrapper_script() -> None:

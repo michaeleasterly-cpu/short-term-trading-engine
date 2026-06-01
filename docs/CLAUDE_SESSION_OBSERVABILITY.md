@@ -119,14 +119,43 @@ Other flags:
 - `--input-dir <path>` — default is
   `~/.claude/projects/-Users-michael-short-term-trading-engine/`.
 - `--dry-run` — emit nothing to disk; print summary only.
-- `--best-effort` — gracefully skip unknown event types with a
-  warning. Default is OFF; unknown schema fails closed.
+- `--best-effort` — **intended for triage runs only.** Gracefully
+  skips unknown event types with an aggregated warning instead of
+  failing closed. Default is OFF; normal runs should fail closed
+  on truly unknown schema so a real drift gets a human look. Use
+  `--best-effort` when you're already investigating drift and want
+  the partial report.
 - `--max-files <N>` — refuse to read more than N input jsonl
   files in one invocation (defense in depth; default 200).
 - `--max-redactions <N>` — fail-stop ceiling on redacted-string
   count (default 10).
 - `--include-ai-titles` — opt in to the `aiTitle` event type per
   §3.
+
+### Recognized event types and ignored payload surfaces
+
+The script's `_KNOWN_EVENT_TYPES` allowlist covers every event
+type observed in current Claude Code session jsonl files:
+`assistant`, `user`, `system`, `attachment`, `ai-title`,
+`last-prompt`, `permission-mode`, `queue-operation`,
+`file-history-snapshot`, plus the routing-metadata types
+`pr-link`, `worktree-state`, `custom-title`, `mode`,
+`agent-name`. The routing-metadata types are recognized so the
+default fail-closed mode succeeds on real session files, but
+**their bodies are never walked** — the script reads only their
+`sessionId` and `timestamp`. The `customTitle` / `agentName` /
+`prUrl` payload fields stay forbidden (see §3) and are silently
+ignored — they never enter the report.
+
+A new event type Anthropic ships in a future Claude Code release
+will fail-closed by default, surfacing one aggregated warning so
+an operator can decide whether to add it to the allowlist after
+confirming its payload shape.
+
+Warnings are aggregated by category — a session jsonl with
+thousands of routing-metadata events of one unknown type
+produces ONE warning line with the event count, not thousands of
+per-event lines.
 
 ## §5 — Cost rate snapshot
 

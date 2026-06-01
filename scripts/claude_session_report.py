@@ -96,6 +96,15 @@ _REPORT_TOP_LEVEL_FIELDS: tuple[str, ...] = (
 
 # Recognized jsonl event types. Anything else is a fail-closed
 # defect unless ``--best-effort`` is passed.
+#
+# Routing / metadata event types (``pr-link``, ``worktree-state``,
+# ``custom-title``, ``mode``, ``agent-name``) carry only project /
+# session identifiers (URLs, mode enums, session UUIDs). Their bodies
+# are NEVER walked — the script records only ``sessionId`` +
+# ``timestamp`` for these types, same as for ``permission-mode`` and
+# ``last-prompt``. Adding them here recognizes the type so default
+# fail-closed mode doesn't trip on the observed Claude Code session
+# schema; it does NOT widen the data surface read into the report.
 _KNOWN_EVENT_TYPES: frozenset[str] = frozenset({
     "assistant",
     "user",
@@ -106,6 +115,13 @@ _KNOWN_EVENT_TYPES: frozenset[str] = frozenset({
     "permission-mode",
     "queue-operation",
     "file-history-snapshot",
+    # C0.5 fix (2026-06-01) — observed-but-routing metadata types.
+    # Bodies are NOT walked; only sessionId + timestamp are used.
+    "pr-link",
+    "worktree-state",
+    "custom-title",
+    "mode",
+    "agent-name",
 })
 
 # Secret-shape regex panel. Defense-in-depth on whitelisted string
@@ -185,7 +201,7 @@ def _aggregate_usage(model_usage: dict[str, dict[str, int]]) -> dict[str, int]:
 
 def _estimate_costs(
     model_usage: dict[str, dict[str, int]],
-    warnings: list[str],
+    warning_counts: Counter[str],
 ) -> tuple[dict[str, float | None], float | None]:
     per_model: dict[str, float | None] = {}
     aggregate: float | None = 0.0
@@ -194,10 +210,10 @@ def _estimate_costs(
         rate = _pick_rate(model_name)
         if rate is None:
             per_model[model_name] = None
-            warnings.append(
+            warning_counts[
                 f"unknown model rate for {model_name!r}; "
                 "estimated_cost_usd for this model is null"
-            )
+            ] += 1
             saw_unknown = True
             continue
         cost = 0.0
@@ -230,16 +246,22 @@ def _scan_event(
     session_ids: set[str],
     timestamps: list[str],
     redacted_strings: list[tuple[str, int]],
-    warnings: list[str],
+    warning_counts: Counter[str],
     best_effort: bool,
 ) -> None:
     """Walk a single jsonl event. ONLY whitelisted metadata reaches
-    the report — no content text, no tool args, no tool results."""
+    the report — no content text, no tool args, no tool results.
+
+    Warnings are accumulated into ``warning_counts`` (a Counter) so
+    a session jsonl with thousands of routing-metadata events of one
+    unknown type produces one aggregated warning instead of thousands
+    of per-event lines.
+    """
     evt_type = evt.get("type")
     if evt_type not in _KNOWN_EVENT_TYPES:
         msg = f"unknown event type {evt_type!r}"
         if best_effort:
-            warnings.append(msg)
+            warning_counts[msg] += 1
             return
         raise ValueError(
             f"{msg}; re-run with --best-effort to skip (fail-closed default)"
@@ -306,10 +328,10 @@ def _scan_event(
                 redacted_strings.append(("ai-title", n))
             # ai-title body is NOT recorded in the report even when
             # included — we count the event only.
-        warnings.append(
+        warning_counts[
             "ai-title events were considered via --include-ai-titles "
             "(operator opt-in)"
-        )
+        ] += 1
     # All other event types are counted via timestamps / session_ids
     # above. Their bodies are NEVER walked.
 
@@ -338,7 +360,7 @@ def _build_report(
     session_ids: set[str] = set()
     timestamps: list[str] = []
     redacted_strings: list[tuple[str, int]] = []
-    warnings: list[str] = []
+    warning_counts: Counter[str] = Counter()
 
     for jsonl in jsonl_files:
         try:
@@ -350,7 +372,9 @@ def _build_report(
                     try:
                         evt = json.loads(line)
                     except json.JSONDecodeError:
-                        warnings.append(f"malformed jsonl line in {jsonl.name}")
+                        warning_counts[
+                            f"malformed jsonl line in {jsonl.name}"
+                        ] += 1
                         continue
                     _scan_event(
                         evt,
@@ -361,11 +385,11 @@ def _build_report(
                         session_ids=session_ids,
                         timestamps=timestamps,
                         redacted_strings=redacted_strings,
-                        warnings=warnings,
+                        warning_counts=warning_counts,
                         best_effort=args.best_effort,
                     )
         except (OSError, UnicodeDecodeError) as exc:
-            warnings.append(f"failed to read {jsonl.name}: {exc}")
+            warning_counts[f"failed to read {jsonl.name}: {exc}"] += 1
 
     redaction_count = sum(n for _, n in redacted_strings)
     if redaction_count > args.max_redactions:
@@ -375,8 +399,21 @@ def _build_report(
             "report that may still carry sensitive shapes"
         )
 
-    per_model_cost, agg_cost = _estimate_costs(model_usage, warnings)
+    per_model_cost, agg_cost = _estimate_costs(model_usage, warning_counts)
     aggregate_token_counts = _aggregate_usage(model_usage)
+
+    # Flatten the Counter into ordered "<message> (N events)" lines so
+    # a session jsonl with thousands of routing-metadata events
+    # surfaces ONE aggregated warning instead of thousands of per-event
+    # lines (PR #415 fix).
+    warnings: list[str] = [
+        f"{msg} (encountered {n} time{'s' if n != 1 else ''})"
+        if n > 1
+        else msg
+        for msg, n in sorted(
+            warning_counts.items(), key=lambda kv: (-kv[1], kv[0]),
+        )
+    ]
 
     report = {
         "report_generated_at": datetime.now(UTC).isoformat(),
