@@ -38,9 +38,17 @@ on:
       - "ops/engine_sdlc.py"
       - "ops/engine_sdlc/**"
       - "ops/data_feed_sdlc/**"
+      - "ops/cutover_agent.py"
       - "platform/migrations/**"
       - "tpcore/engine_profile.py"
       - "tpcore/providers.py"
+      # F0 (2026-06-01) — scripts/ops.py hosts the operator-on-demand
+      # stages (backfill_sec_metadata, evaluate_provider_parity, etc.)
+      # that mutate the data-feed-lifecycle substrate. A new stage
+      # adjacent to the DFCR cutover path is heavy-lane-by-discipline;
+      # adding the filter trigger here closes the F0 PR #408 gap where
+      # F0-class files merged without an automated review pass.
+      - "scripts/ops.py"
       # Extension-layer paths — changes here mutate Claude's own
       # behavior surface and merit the same first-pass review.
       - ".claude/rules/**"
@@ -104,7 +112,8 @@ jobs:
             (`tpcore/risk/**`, `tpcore/selfheal/**`,
             `tpcore/auditheal/**`, `tpcore/quality/validation/**`,
             `ops/engine_service.py`, `ops/engine_sdlc/**`,
-            `ops/data_feed_sdlc/**`, `platform/migrations/**`,
+            `ops/data_feed_sdlc/**`, `ops/cutover_agent.py`,
+            `scripts/ops.py`, `platform/migrations/**`,
             `tpcore/engine_profile.py`, `tpcore/providers.py`, or the
             `.claude/**` extension surface).
 

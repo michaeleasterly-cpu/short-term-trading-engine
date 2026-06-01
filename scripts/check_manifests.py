@@ -217,7 +217,8 @@ def check_heavy_lane_paths_sync() -> list[str]:
     workflow_paths = _extract_yaml_paths_list(workflow_text)
 
     # Canonical heavy-lane subset that MUST appear in BOTH (matches
-    # docs/DEV_PIPELINE_STANDARD.md §0 enumeration).
+    # docs/DEV_PIPELINE_STANDARD.md §0 enumeration + the F0 follow-up
+    # expansion 2026-06-01).
     canonical_subset = {
         "tpcore/risk/**",
         "tpcore/selfheal/**",
@@ -226,6 +227,9 @@ def check_heavy_lane_paths_sync() -> list[str]:
         "ops/engine_service.py",
         "ops/engine_sdlc.py",
         "ops/engine_sdlc/**",
+        "ops/data_feed_sdlc/**",
+        "ops/cutover_agent.py",
+        "scripts/ops.py",
         "platform/migrations/**",
         "tpcore/engine_profile.py",
         "tpcore/providers.py",
