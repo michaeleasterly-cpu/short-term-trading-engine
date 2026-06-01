@@ -76,6 +76,11 @@ Two-session work (one Claude window per task) is the lock-in. Each session gets 
 - **`docs/MASTER_PLAN.md §9 Build Order`** is the sequenced rollout plan.
 - The `.claude/hooks/session-start.sh` SessionStart hook auto-extracts open TODO.md H2 sections and injects them at session open — that summary is the trustworthy in-context view; consult `TODO.md` directly for sub-item detail.
 
+## Memory boundary (C0.1, 2026-06-01)
+- **Memory is context, not source of truth.** Code, tests, schemas, migrations, and `docs/**` override every memory tier.
+- **Four-tier boundary** (`CLAUDE.md` → local `MEMORY.md` → Anthropic API memstores → repo docs/tests/hooks): full model + forbidden-content list in `docs/MEMSTORE_HANDOFF.md`. Sentinel `tests/test_memory_boundary_present.py` reds CI if the policy goes missing; `tests/test_memory_index_size.py` reds CI if a tracked `MEMORY.md` exceeds 24 400 bytes.
+- **If a rule must be enforced, it belongs in tests / hooks / CI** — never memory.
+
 ## Style + glossary
 - Read `docs/STYLE_GUIDE.md` before writing any code.
 - Read `docs/glossary.md` if present.
