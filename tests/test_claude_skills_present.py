@@ -33,6 +33,9 @@ _SKILLS = (
     ("run-data-ops", False),
     ("weekly-digest", False),
     ("defect-register", False),
+    # C0.4 — model-invocable security-review skill walked by the
+    # security-guidance rule on security-sensitive diffs.
+    ("security-review", True),
 )
 
 
