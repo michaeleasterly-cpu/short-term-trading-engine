@@ -38,7 +38,8 @@
 - [ ] `tpcore/auditheal/**`
 - [ ] `tpcore/quality/validation/**`
 - [ ] `ops/engine_service.py`
-- [ ] `ops/engine_sdlc.py` or `ops/engine_sdlc/**`
+- [ ] `ops/engine_sdlc.py`
+- [ ] `ops/engine_sdlc/**`
 - [ ] `ops/data_feed_sdlc/**`
 - [ ] `ops/cutover_agent.py`
 - [ ] `scripts/ops.py`
