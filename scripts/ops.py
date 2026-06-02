@@ -2685,6 +2685,17 @@ async def _stage_backfill_sec_metadata(
     failing_only = _to_bool(cfg.get("failing_only", False))
     no_cik_country_null = _to_bool(cfg.get("no_cik_country_null", False))
     force_refresh_metadata = _to_bool(cfg.get("force_refresh_metadata", False))
+    # 2026-06-02 — bulk-zip path for the metadata leg. When True, the
+    # stage reads SEC submissions from data/sec_submissions/ first,
+    # then the bulk submissions.zip, with ZERO per-CIK HTTP. Default
+    # False preserves the existing per-CIK + full_history HTTP path for
+    # incremental use. Operator policy mandates this for cohort-scale
+    # repairs (feedback_bulk_before_api_crawl_REINFORCED).
+    use_bulk_zip = _to_bool(cfg.get("use_bulk_zip", False))
+    bulk_zip_cache_path = str(cfg.get(
+        "bulk_zip_cache_path", "/tmp/sec_submissions.zip",  # noqa: S108
+    ))
+    bulk_zip_force_download = _to_bool(cfg.get("bulk_zip_force_download", False))
     # P1b CIK long-tail FMP fallback knobs. Defaults preserve the
     # pre-P1b stage behaviour exactly: do_fmp_fallback=False means
     # the sub-leg is skipped entirely. Spec PR #423; plan PR #424.
@@ -3040,6 +3051,43 @@ async def _stage_backfill_sec_metadata(
                 return str(existing)
             return cik_resolutions_this_run.get(ticker)
 
+        # ─── bulk-mode prep ───
+        # 2026-06-02 — use_bulk_zip=True reads SEC submissions from the
+        # local data/sec_submissions/ cache + bulk submissions.zip with
+        # ZERO per-CIK HTTP. Mirrors to S3/R2 archive on download per
+        # the standing bulk-before-API-crawl operator policy.
+        bulk_reader = None
+        bulk_zip_path = None
+        if use_bulk_zip:
+            import os as _os_bulk
+            from pathlib import Path as _Path_bulk
+
+            from tpcore.sec.submissions_bulk_reader import (
+                SECSubmissionsBulkReader,
+                ensure_zip_cached,
+            )
+            ua = _os_bulk.environ.get("SEC_EDGAR_USER_AGENT")
+            if not ua:
+                raise RuntimeError(
+                    "backfill_sec_metadata[use_bulk_zip]: "
+                    "SEC_EDGAR_USER_AGENT env var required to download "
+                    "the SEC bulk submissions.zip when the cache is "
+                    "stale or missing."
+                )
+            bulk_zip_path = await ensure_zip_cached(
+                _Path_bulk(bulk_zip_cache_path),
+                user_agent=ua,
+                force_download=bulk_zip_force_download,
+            )
+            bulk_reader = SECSubmissionsBulkReader(
+                zip_path=bulk_zip_path,
+            )
+            log.info(
+                "ops.stage.backfill_sec_metadata.bulk_mode_active",
+                zip_path=str(bulk_zip_path),
+                local_dir=str(bulk_reader._local_dir),  # noqa: SLF001
+            )
+
         async with SECCompanyFactsAdapter() as sec:
             for ticker in scope_tickers:
                 cik = await _cik_for(ticker)
@@ -3054,17 +3102,25 @@ async def _stage_backfill_sec_metadata(
                 if already_populated and not force_refresh_metadata:
                     continue
                 metadata_stats["candidates"] += 1
-                # SEC fair-use throttle.
-                await asyncio.sleep(0.11)
+                # SEC fair-use throttle (only applies on per-CIK HTTP).
+                # Bulk mode does NOT sleep — every CIK comes from the
+                # local zip / cache file.
+                if bulk_reader is None:
+                    await asyncio.sleep(0.11)
                 try:
-                    # 2026-06-02 — full_history=True paginates SEC's
-                    # filings.files[] so first_public_filing_date is
-                    # correct for long-lived issuers (JPM/MS/BMO/AAPL/…).
-                    # Spec PR #435 §10 + §13. Without pagination FPFD
-                    # reflects only the recent ~1000-filing shard (~8
-                    # years for prolific filers) and was producing
-                    # decade-shifted FPFD values for ~999 tickers.
-                    subs = await sec.get_submissions(cik, full_history=True)
+                    if bulk_reader is not None:
+                        subs = bulk_reader.get_merged_submissions(cik)
+                    else:
+                        # 2026-06-02 — full_history=True paginates SEC's
+                        # filings.files[] so first_public_filing_date is
+                        # correct for long-lived issuers (JPM/MS/BMO/AAPL/…).
+                        # Spec PR #435 §10 + §13. Without pagination FPFD
+                        # reflects only the recent ~1000-filing shard (~8
+                        # years for prolific filers) and was producing
+                        # decade-shifted FPFD values for ~999 tickers.
+                        subs = await sec.get_submissions(
+                            cik, full_history=True,
+                        )
                 except Exception as exc:  # noqa: BLE001
                     log.warning(
                         "ops.stage.backfill_sec_metadata.submissions_error",
@@ -3092,10 +3148,14 @@ async def _stage_backfill_sec_metadata(
                     meta.get("last_filing_date"),
                     meta.get("fiscal_year_end_month"),
                 ))
+        bulk_stats = bulk_reader.stats() if bulk_reader is not None else None
+        if bulk_reader is not None:
+            bulk_reader.close()
         log.info(
             "ops.stage.backfill_sec_metadata.metadata_leg",
             **metadata_stats,
             failures=len(metadata_failures),
+            bulk_stats=bulk_stats,
         )
 
     # ─── apply writes (idempotent UPDATEs) ───
@@ -3203,7 +3263,7 @@ async def _stage_backfill_sec_metadata(
         )
 
     coverage_after = await _snapshot()
-    return {
+    out: dict[str, Any] = {
         "scope_size": len(scope_tickers),
         "cik": cik_stats,
         "metadata": {**metadata_stats, "failures": metadata_failures[:50]},
@@ -3212,6 +3272,12 @@ async def _stage_backfill_sec_metadata(
         "coverage_after": coverage_after,
         "dry_run": dry_run,
     }
+    if use_bulk_zip and bulk_reader is not None:
+        out["bulk_zip"] = {
+            "zip_path": str(bulk_zip_path) if bulk_zip_path else None,
+            **bulk_reader.stats(),
+        }
+    return out
 
 
 async def _execute_fmp_cik_updates(

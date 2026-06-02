@@ -506,17 +506,22 @@ async def test_008f_shard_fetch_error_degrades_gracefully() -> None:
 
 def test_008g_backfill_sec_metadata_calls_get_submissions_full_history_true() -> None:
     """Sentinel: the ``_stage_backfill_sec_metadata`` caller must pass
-    ``full_history=True`` to ``sec.get_submissions``. If anyone removes
-    that argument (returning the recent-only behaviour), this test
-    reds CI. String-match on the source file rather than executing
-    the stage (hermetic; no DB / network)."""
+    ``full_history=True`` to ``sec.get_submissions`` on the per-CIK
+    HTTP fallback path. If anyone removes that argument (returning
+    the recent-only behaviour), this test reds CI. Uses a
+    whitespace-tolerant regex so the call can be formatted across
+    multiple lines (e.g. nested under the bulk-mode branch)."""
+    import re
     from pathlib import Path
     source = (
         Path(__file__).resolve().parents[1] / "scripts" / "ops.py"
     ).read_text(encoding="utf-8")
-    needle = "sec.get_submissions(cik, full_history=True)"
-    assert needle in source, (
-        f"_stage_backfill_sec_metadata must call {needle!r} so "
+    pattern = re.compile(
+        r"sec\.get_submissions\(\s*cik\s*,\s*full_history\s*=\s*True\s*,?\s*\)"
+    )
+    assert pattern.search(source), (
+        "_stage_backfill_sec_metadata must call "
+        "`sec.get_submissions(cik, full_history=True)` so "
         "first_public_filing_date is computed across the issuer's "
         "complete SEC filing history. Spec PR #435 §10 + §13; "
         "removing the full_history=True kwarg silently regresses "
