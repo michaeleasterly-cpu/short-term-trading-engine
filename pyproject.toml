@@ -216,6 +216,12 @@ ignore = ["E501"]
 # helpers to keep the run hermetic (no real FMP HTTP, no real SEC zip).
 # Same precedent as the cleanup-stage entry above.
 "tests/test_symbol_history_evidence_backfill_stage.py" = ["SLF"]
+# sec_fundamentals_fallback dry_run knob (2026-06-03):
+#   * test_sec_fundamentals_fallback_dry_run.py — Test 7 pins the
+#     validator's module-private ``_FILING_DATES_SQL`` sha256 as a
+#     "no validator-semantics change" guard for the dry_run patch.
+#     Same precedent as the P0 sentinel above.
+"tests/test_sec_fundamentals_fallback_dry_run.py" = ["SLF"]
 # P2a SEC lifecycle-events extractor tests (2026-05-30):
 #   * test_p2_sec_lifecycle_events.py names ``_extract_lifecycle_events``
 #     and ``_build_sec_filing_url`` module-private helpers + accesses

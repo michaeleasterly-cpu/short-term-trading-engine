@@ -1049,11 +1049,27 @@ async def _stage_sec_fundamentals_fallback(pool: asyncpg.Pool, config: dict[str,
       * ``tickers`` (comma-separated): scope to a subset.
       * ``include_no_gap_tickers`` (bool, default False): deep-history
         first-time backfill. Daily cascade leaves False.
+      * ``dry_run`` (bool, **default True** at this stage layer):
+        preview SEC companyfacts coverage without writing the archive
+        or DB. Read-only universe SQL + per-CIK fetches + period
+        extraction still happen; only ``manifest_lifecycle`` and
+        ``cache.upsert_payload`` are skipped. The stage returns
+        ``{"dry_run": True, "archive_rows_planned": …, "per_ticker_planned":
+        {…}, …}``. Pass ``--param dry_run=false`` for the actual
+        write run. Matches the standing default-True convention
+        across the symbol-history / ticker-classifications stages.
     """
     from tpcore.ingestion.handlers import handle_sec_fundamentals_fallback
 
-    rows = await handle_sec_fundamentals_fallback(pool, config)
-    return {"rows": rows or 0}
+    # Default ``dry_run`` to True at the stage layer (handler defaults
+    # to False to preserve in-process backwards compat). Honor str/bool
+    # via the shared ``_stage_param_to_bool`` helper.
+    cfg = dict(config or {})
+    cfg["dry_run"] = _stage_param_to_bool(cfg.get("dry_run", True))
+    rows = await handle_sec_fundamentals_fallback(pool, cfg)
+    if isinstance(rows, dict):
+        return {"dry_run": True, **rows}
+    return {"dry_run": False, "rows": rows or 0}
 
 
 async def _stage_compute_fundamental_ratios(
