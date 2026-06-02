@@ -453,6 +453,20 @@ gate refuses orders on terminally-delisted tickers.
 
   [lane: heavy] [gate: implementation PR shipped → operator merge + live populate]
 
+  **FMP-leg dry-run purity defect — fix shipped (this PR follow-up to #452).**
+  Operator's 2026-06-02 run of `confirmed_data_gap_evidence_populator
+  --param dry_run=true --param limit=10` observed 5 AXIN rows in
+  `platform.fundamentals_quarterly` whose `recorded_at` was bumped to
+  the dry-run window. Root cause: `backfill_one_ticker` called
+  `cache.backfill` -> `cache.upsert_payload` UNCONDITIONALLY. Evidence
+  writes were correctly gated; the PRIMARY `fundamentals_quarterly`
+  upsert was not. Fix: `backfill_one_ticker` accepts `dry_run: bool =
+  False`; the dry-run branch calls the public `cache.fetch_payload`
+  (no DB write) and returns the would-write row count. Populator
+  passes `dry_run=dry_run`. Live path bit-identical. SEC handler
+  (PR #448) unchanged. Evidence-gate sentinel preserved. Retry bounded
+  sequence authorized post-merge.
+
 
 ## ✅ FPFD extractor repair (PRs #433–#437) — CLOSED 2026-06-02
 

@@ -1178,11 +1178,21 @@ async def _stage_confirmed_data_gap_evidence_populator(
     #    evidence rows. The `backfill_one_ticker` evidence writer is
     #    gated on `pool is not None and record_evidence_for_periods is
     #    not None`; we pass `pool=None` for dry-run to skip the writes.
+    #
+    #    Dry-run-purity fix (2026-06-03 — PR follow-up to PR #452):
+    #    pass ``dry_run=dry_run`` to ``backfill_one_ticker`` so the
+    #    primary ``cache.upsert_payload`` write into
+    #    ``platform.fundamentals_quarterly`` is ALSO suppressed during
+    #    dry-run. Pre-fix: only the evidence write was gated; the FMP
+    #    fetch + ``cache.backfill`` ran unconditionally and bumped
+    #    ``recorded_at`` on existing rows. Mirror semantic with the SEC
+    #    handler's PR #448 dry-run contract.
     counters = {
         "tickers_attempted": 0,
         "fmp_outage_count": 0,
         "fmp_yielded_periods": 0,
         "fmp_empty_periods": 0,
+        "fmp_would_write_rows": 0,
         "sec_yielded_periods": 0,
         "sec_extract_none_periods": 0,
         "sec_fetch_failure_periods": 0,
@@ -1200,9 +1210,17 @@ async def _stage_confirmed_data_gap_evidence_populator(
             for symbol, periods in per_ticker_periods.items():
                 counters["tickers_attempted"] += 1
                 # 2a. FMP cascade — opt-in evidence write.
+                #     Pass ``dry_run=dry_run`` so the primary
+                #     ``cache.upsert_payload`` write into
+                #     ``platform.fundamentals_quarterly`` is suppressed
+                #     in preview mode. In dry-run the returned
+                #     ``rows_would_write`` is the FMP payload row count
+                #     that WOULD have been upserted; we surface it via
+                #     the ``fmp_would_write_rows`` counter.
                 try:
-                    await backfill_one_ticker(
+                    rows_would_write = await backfill_one_ticker(
                         cache, db_log, symbol,
+                        dry_run=dry_run,
                         # Pass pool only in live mode so the evidence
                         # writer's idempotent UPSERT runs.
                         pool=(None if dry_run else pool),
@@ -1212,11 +1230,13 @@ async def _stage_confirmed_data_gap_evidence_populator(
                         evidence_source="fmp_historical",
                     )
                 except RuntimeError as exc:
+                    rows_would_write = 0
                     counters["fmp_outage_count"] += 1
                     log.warning(
                         "ops.stage.confirmed_data_gap_evidence_populator.fmp_outage",
                         ticker=symbol, error=str(exc)[:160],
                     )
+                counters["fmp_would_write_rows"] += rows_would_write
                 # 2b. Query post-fetch state to populate the manifest
                 #     regardless of dry/live (read-only).
                 async with pool.acquire() as conn:
