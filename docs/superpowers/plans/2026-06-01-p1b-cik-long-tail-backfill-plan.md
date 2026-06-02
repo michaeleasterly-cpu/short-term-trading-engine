@@ -502,6 +502,49 @@ The next PR (heavy-lane execution PR) should be opened with the following task s
 >
 > Open the implementation PR titled `feat(sec): P1b — CIK long-tail FMP /profile fallback (impl)`. Body must reference PR #423 (spec) and \<this-PR\> (plan), declare heavy-lane, and check the §"Acceptance criteria" boxes.
 
+## Post-merge live-smoke result — 2026-06-02
+
+> Implementation PR #425 + ruff hygiene PR #426 merged 2026-06-01. The operator ran the three-step live-smoke sequence per §"Live smoke sequence" on 2026-06-02. **Result: implementation works correctly; the original hypothesis that FMP `/stable/profile` would resolve part of the 1,419 long-tail bucket is empirically NOT supported.**
+
+### Steps run
+
+| Step | Command knobs | Wall clock | Result |
+|---|---|---|---|
+| 1 | `dry_run=true do_fmp_fallback=true fmp_max_unresolved=25` | 9.6 s | `cik_fmp_fallback = {candidates: 25, resolved: 0, no_match: 25, fmp_error: 0, written: 0, divergence_events_written: 0}` |
+| 2 | `dry_run=true do_fmp_fallback=true fmp_max_unresolved=100` | 32 s | `{candidates: 100, resolved: 0, no_match: 100, ...same shape}` |
+| 3 (live) | `dry_run=false do_fmp_fallback=true fmp_max_unresolved=100` | 35.6 s | `{candidates: 100, resolved: 0, no_match: 100, written: 0, divergence_events_written: 0}`; `coverage_before == coverage_after` |
+
+Coverage snapshot (steady-state across all three runs): `total=13,840 has_cik=10,239` → 1,419 unresolved (exactly matches the TODO entry).
+
+### Safety-check outcomes (per spec §"Resolution states")
+
+- ✅ No overwrite of existing CIK (0 writes total across 3 runs).
+- ✅ No lifetime-ended row updated.
+- ✅ No country writeback.
+- ✅ `platform.application_log` `IDENTITY_DIVERGENCE_INVESTIGATE` rows introduced: 0 (consistent with 0 symbol-mismatch + 0 ambiguous-response across 225 FMP calls).
+- ✅ FMP HTTP layer healthy (0 errors, 0 rate-limit hits, 0 timeouts).
+- ✅ Adapter terminal-state distribution observed live matches the hermetic-test classification (`no_match` for all 225 calls; the other 5 states stay exercised by the unit tests).
+
+### Empirical finding
+
+The 1,419 SEC-ticker-map-unresolved tickers (`cik IS NULL AND country IS NULL` scope) are **also unresolvable by FMP `/stable/profile`** in the sampled 100-ticker prefix. FMP returns an empty list (`no_match`) for every requested ticker. The bucket appears to be composed of issuers neither SEC's public file nor FMP indexes — delisted / non-equity (warrants, units, preferred) / pink-sheet OTCs with no canonical CIK. P1b's adapter correctly classifies them as the spec's `no_match` honest dead end.
+
+### Recommendation against running the uncapped full pass
+
+The spec's §"Live verification strategy" envisioned a Step-4 full run after Steps 1–3 passed. Based on the 100-ticker sample, the full ~1,419-ticker run would:
+
+- consume ~1,419 × 0.32 s ≈ 7.5 min of FMP quota
+- produce ~0 writes with high statistical confidence
+- not move the `metadata_coverage_low` coverage-gate threshold (currently 90% NULL; needs the full-active-universe `backfill_sec_metadata` run for that — different bucket)
+
+**Do not run the full pass until a separate triage (TODO `P1c — unresolved-security-source triage`) produces evidence of an alternative source with non-zero hit rate.**
+
+### Follow-up disposition (live in TODO.md)
+
+- **P1b — DONE** (implementation), but the optimistic assumption embedded in the original framing is documented as empirically not supported.
+- **P1c (NEW)** — unresolved-security-source triage. Probe FMP with different params, OpenFIGI `/v3/mapping`, SEC EDGAR full-text search, manual spot-check. Do NOT implement another stage extension until a non-zero-hit source is identified.
+- **Metadata coverage gate — STILL OPEN.** P1b's path does not advance it. The full-active-universe `backfill_sec_metadata` run remains the highest-leverage next move for `DATA_OPERATIONS_COMPLETE` progress.
+
 ---
 
-> Status: PLAN ONLY. Implementation PR is the next step. Cross-references: spec PR #423 (`0748593`); existing P0-003 stage at `scripts/ops.py:2604`; existing FMP `/profile` call sites at `scripts/ops.py:4194` + `scripts/ops.py:6955`; SEC CIK map at `tpcore/sec/ticker_cik_map.py`; divergence-event protocol at `tpcore/identity/parent_resolver.py`; coverage gate at `tpcore/quality/validation/checks/fundamentals_quarterly_completeness.py`; schema CHECK at `platform/migrations/versions/20260530_0200_issuer_metadata_foundation.py:76-77`.
+> Status: PLAN COMPLETE. Spec PR #423, plan PR #424, impl PR #425, ruff hygiene PR #426 — all merged. 2026-06-02 live smoke captured this section. Cross-references: spec PR #423 (`0748593`); existing P0-003 stage at `scripts/ops.py:2604`; existing FMP `/profile` call sites at `scripts/ops.py:4194` + `scripts/ops.py:6955`; SEC CIK map at `tpcore/sec/ticker_cik_map.py`; divergence-event protocol at `tpcore/identity/parent_resolver.py`; coverage gate at `tpcore/quality/validation/checks/fundamentals_quarterly_completeness.py`; schema CHECK at `platform/migrations/versions/20260530_0200_issuer_metadata_foundation.py:76-77`.
