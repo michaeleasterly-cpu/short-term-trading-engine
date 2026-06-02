@@ -177,37 +177,67 @@ gate refuses orders on terminally-delisted tickers.
   Global cik-null residual: ~1,419. The 343 tier ≤ 2 subset is the
   load-bearing slice; tier 3+ residual is incidental.
 
-- **Fundamentals quarterly cadence — 144 per-ticker FAILs (NEW,
-  2026-06-02).** With the structural metadata-coverage gate cleared,
-  the `fundamentals_quarterly_completeness` check now surfaces its
-  designed per-ticker FAIL signal: 144 tickers have
-  `sec_document_type_primary` populated but are missing 1+ inferred
-  quarterly periods in `platform.fundamentals_quarterly`. This is the
-  NEXT blocker for `DATA_OPERATIONS_COMPLETE`. Breakdown captured
-  2026-06-02 05:23 UTC:
+- **Fundamentals quarterly cadence — 144 per-ticker FAILs
+  (2026-06-02, §12.2 EMPIRICALLY STOPPED).** With the structural
+  metadata-coverage gate cleared, the
+  `fundamentals_quarterly_completeness` check surfaces its designed
+  per-ticker FAIL signal: 144 tickers with
+  `sec_document_type_primary` populated but missing 1+ inferred
+  quarterly periods. Spec PR #430 verdict was "existing
+  `historical_fundamentals_quarterly` stage will heal ~89.6 %".
+  **§12.2 bounded live (10-ticker smoke, 2026-06-02 07:15 UTC)
+  empirically falsified that forecast.** The stage is mechanically
+  correct; the source data does not contain the inferred missing
+  periods.
 
-  | By primary form  | Count | % of 144 |
-  |------------------|------:|---------:|
-  | 10-Q             | 137   | 95.1 %   |
-  | 20-F             | 6     | 4.2 %    |
-  | 40-F             | 1     | 0.7 %    |
+  Live-smoke result:
 
-  | By severity (missing-period count) | Count | % of 144 |
-  |-----------------------------------|------:|---------:|
-  | 1 missing                         | 58    | 40.3 %   |
-  | 2–3 missing                       | 40    | 27.8 %   |
-  | 4–9 missing                       | 23    | 16.0 %   |
-  | 10–19 missing                     | 15    | 10.4 %   |
-  | 20+ missing                       | 8     | 5.6 %    |
+  | metric                                | value                                                       |
+  |---------------------------------------|-------------------------------------------------------------|
+  | wall                                  | 23.5 s                                                      |
+  | `tickers_attempted` / `succeeded`     | 10 / 10 (0 failures)                                        |
+  | FMP rows fetched + cache.upsert calls | 226                                                         |
+  | `fundamentals_quarterly.total`        | 183 348 → 183 352 (**+4 new rows**, all to AACB)            |
+  | physical_truth gate rejections        | 5 on ARDT (safety mechanism worked as designed)             |
+  | `IDENTITY_DIVERGENCE_INVESTIGATE`     | 0                                                           |
+  | Per-ticker validator improvement      | 1 of 10 (AACB: miss 3 → 2; **9 others UNCHANGED**)          |
+  | Total per-ticker FAIL count           | **144 → 144** (delta = 0)                                   |
 
-  Sample tickers (alphabetical first 5 per form):
-  10-Q AACB, ADV, AEVA, AGPU, AIDX; 20-F CGNT, FRGT, IBG, IMPP, ITOC;
-  40-F ASTL. The 1-missing + 2–3-missing cohorts (68.1 % of total)
-  are most likely "recent quarter not yet refreshed" — candidate for
-  a routine `fundamentals_refresh` re-pull rather than a new
-  implementation arc. The 4–9, 10–19, and 20+ cohorts (31.9 %) are
-  long-standing gaps that may need targeted source triage. No
-  implementation work scheduled yet; this entry is a triage anchor.
+  **§12.3 (full live) is NOT recommended** per the operator's
+  `stop_if` rule from the §12.2 task spec ("no improvement in
+  routine A/B/D candidates"). Running it would consume ~3–5 min of
+  FMP traffic with forecast yield ≈ 0 new validator passes.
+
+  **Reclassification of spec PR #430's B-bucket** ("likely
+  historical backfill", 117 / 81.2 %): empirically wrong. The new
+  shape:
+
+  - **Recent-quarter not-yet-filed** — 1 of 10 tested (AACB
+    partial). Routine `fundamentals_refresh` cadence may catch as
+    filings land.
+  - **FMP-unreachable historical residual** — ≈ 117 of 144 (the
+    former B-bucket). Validator infers these periods but no
+    accessible source has them. Right next move: spike SEC
+    companyfacts (the `_stage_sec_fundamentals_fallback` stage,
+    `scripts/ops.py:1042`) against a 10-ticker subset of the
+    unchanged cohort (ADV, AEVA, AGPU, AIDX, AKTS, ALIT, ASTL,
+    AVX + 2 more) to see whether SEC has periods FMP lacks. If
+    not, the residual is genuinely unrecoverable and the right
+    move is the validator's `excluded_confirmed_data_gap` bucket
+    once that path's evidence test fully covers "issuer existed
+    but quarter is unrecoverable".
+  - **Validator-semantics (C1 recent-filer + C2 annual-filer)** —
+    still 15. Spec PR #430 §9–§10 still applies; separate
+    validator-semantics spec arc remains the right next step.
+  - **ARDT physical_truth anomaly (NEW follow-up).** 5 rejected FMP
+    rows for ARDT during §12.2. Read the 5 rejected payloads from
+    `application_log` for run_id `0cdb362c-d9de-4361-afb5-a83b456975f3`
+    and decide whether to escalate (FMP support / FMP-side bug) or
+    treat as expected long-tail.
+
+  Spec PR #430 status: **VERDICT FALSIFIED** by §12.2 empirics. The
+  spec doc has a "Post-execution result — 2026-06-02" section
+  appended with the empirical finding (this PR).
 
 
 ## ✅ STE dev-system round-trip — CLOSED 2026-06-01

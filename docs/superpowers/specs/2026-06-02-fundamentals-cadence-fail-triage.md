@@ -493,3 +493,144 @@ by default" rule.
 
 The next item is **operator-side**: authorize §12.2 against the
 sequence above.
+
+---
+
+## Post-execution result — 2026-06-02 (§12.2 empirically stopped)
+
+Operator-authorized §12.2 ran the same evening as this spec PR (#430)
+merged. The original spec body above is preserved unmodified for
+auditability; this section is the empirical correction.
+
+### Sequence executed
+
+| step | command params                                                          | wall      |
+|------|-------------------------------------------------------------------------|-----------|
+| §10  | ad-hoc SQL read-only preview (144-ticker inventory + taxonomy)          | —         |
+| §12.2 | `--param dry_run=false --param limit=10 --param resume=true`           | **23.5 s** |
+| §12.3 | **NOT RUN** — blocked by operator `stop_if` rule (see below)            | —         |
+
+### §12.2 result counters
+
+* `universe_size`: 10 · `resumed_skipped`: 0 · `tickers_attempted`: 10
+* `tickers_succeeded`: 10 · `tickers_failed`: 0
+* `rows_written` (FMP fetch + cache.upsert calls): **226**
+* `fundamentals_quarterly.total`: 183 348 → 183 352 (delta **+4** —
+  all four to AACB)
+* `physical_truth gate rejections`: 5 on ARDT (safety mechanism
+  worked as designed — anomalous FMP rows blocked before they could
+  land)
+* `IDENTITY_DIVERGENCE_INVESTIGATE` events: 0
+* `FUNDAMENTALS_BACKFILL_TICKER_DONE` markers: 10 (one per ticker)
+
+### Per-ticker validator state
+
+Pre vs. post for the first-10 cohort:
+
+| ticker | form | pre miss | post miss | pre fq | post fq | verdict        |
+|--------|------|---------:|----------:|-------:|--------:|----------------|
+| AACB   | 10-Q | 3        | **2**     | 2      | **6**   | partial: −1 missing, +4 fq rows |
+| ADV    | 10-Q | 9        | 9         | 32     | 32      | no change      |
+| AEVA   | 10-Q | 1        | 1         | 26     | 26      | no change      |
+| AGPU   | 10-Q | 1        | 1         | 40     | 40      | no change      |
+| AIDX   | 10-Q | 5        | 5         | 8      | 8       | no change      |
+| AKTS   | 10-Q | 1        | 1         | 6      | 6       | no change      |
+| ALIT   | 10-Q | 6        | 6         | 28     | 28      | no change      |
+| ARDT   | 10-Q | 23       | 23        | 22     | 22      | no change (5 rows rejected by safety gate) |
+| ASTL   | 40-F | 5        | 5         | 33     | 33      | no change      |
+| AVX    | 10-Q | 3        | 3         | 30     | 30      | no change      |
+
+Total per-ticker FAIL count: **144 → 144** (delta = 0).
+`metadata_coverage_low` remains `False` (the structural sentinel
+cleared by PRs #428/#429 stayed off — no regression).
+
+### Empirical finding
+
+**The stage is mechanically correct. The source data is the problem.**
+`historical_fundamentals_quarterly` fetched FMP at the 80-quarter
+depth, called `cache.backfill` for every ticker, and idempotently
+upserted exactly the periods FMP returned. For 9 of 10 sampled
+tickers, FMP returned the same `period_end_date` set the database
+already had. The "missing periods" the validator infers are absent
+from FMP itself.
+
+Mechanistically: `compute_fundamentals_repair_targets` infers
+expected period_end_dates from observed cadence between known
+filings. For these tickers, the validator's inference produces dates
+that FMP has no record of (genuine source gaps, fiscal-calendar
+edge cases, or filings that exist on SEC EDGAR but not via the FMP
+endpoint).
+
+### Verdict correction — spec §11 sufficiency
+
+The §11 "existing-code sufficiency" verdict said: *"Sufficient for
+buckets A + B + D (129 tickers; ~89.6 %)."* That is **empirically
+incorrect**. Correct verdict: existing code is **mechanically
+sufficient but empirically insufficient** because the FMP source
+does not have the periods the validator infers. The B-bucket
+("likely historical backfill", 117 / 81.2 %) is therefore reclassified
+as an **FMP-unreachable historical residual**, not an FMP-fillable
+gap.
+
+### Bucket taxonomy correction
+
+| Bucket (original spec)              | Original count | Corrected reading                                                                                              |
+|-------------------------------------|---------------:|-----------------------------------------------------------------------------------------------------------------|
+| A — likely routine refresh          | 5              | Mostly **recent-quarter not-yet-filed**. AACB (1 of 10 tested) showed partial progress; others may resolve as cadence catches. |
+| B — likely historical backfill      | 117            | **FMP-unreachable historical residual.** Not backfillable from FMP.                                             |
+| C1 — recent-filer validator defect  | 8              | Unchanged. Still validator-semantics arc.                                                                       |
+| C2 — annual-filer cadence defect    | 7              | Unchanged. Still validator-semantics arc.                                                                       |
+| D — FMP depth limit (heuristic)     | 7              | Folds into FMP-unreachable historical residual.                                                                 |
+
+### §12.3 explicitly blocked
+
+The operator's §12.2 task spec `stop_if` rule fires:
+*"No improvement in routine A/B/D candidates."* The 9-of-10 unchanged
+rate triggers stop. **§12.3 (full live, no cap) is NOT to be run**
+without one of:
+
+1. New evidence that a *different source* (SEC companyfacts, FMP
+   stable, IEX, etc.) has periods FMP does not. The
+   `_stage_sec_fundamentals_fallback` stage at `scripts/ops.py:1042`
+   is the obvious next probe.
+2. A validator-semantics change that reclassifies the
+   FMP-unreachable residual into `excluded_confirmed_data_gap` based
+   on evidence (issuer existed, quarter is genuinely unrecoverable).
+3. Operator override on the `stop_if` rule with documented rationale.
+
+### ARDT physical_truth anomaly — NEW follow-up
+
+The §12.2 stage log line:
+
+```
+fundamentals.cache.physical_truth_rejected
+  symbol='ARDT' rejected=5 accepted=20
+```
+
+…is the safety mechanism working as designed: 5 of 25 FMP-returned
+rows for ARDT were blocked before insertion. These payloads are in
+`application_log` for run_id
+`0cdb362c-d9de-4361-afb5-a83b456975f3`. Follow-up: read the 5
+rejected payloads, decide whether to escalate (FMP-side data bug
+worth filing) or accept as expected long-tail.
+
+### Next-arc items (operator-actionable, no implementation here)
+
+1. **SEC companyfacts spike** — run `_stage_sec_fundamentals_fallback`
+   scoped to 10 tickers from the unchanged cohort (ADV, AEVA, AGPU,
+   AIDX, AKTS, ALIT, ASTL, AVX + 2 more). Confirms or refutes
+   "different source has different periods."
+2. **Validator-semantics / `excluded_confirmed_data_gap` spec arc**
+   covering: (a) FMP-unreachable historical residuals, (b) C1
+   recent-filer over-demand, (c) C2 annual-filer cadence, (d) ARDT
+   physical_truth anomaly disposition.
+3. **Do NOT loosen the validator threshold** under any circumstance —
+   the gate is the contract.
+
+### Spec status
+
+**COMPLETE.** §10 + §12.2 executed; §12.3 explicitly blocked. The
+spec body above is preserved unmodified; this section is the
+correction. Next operator action is the validator-semantics /
+data-gap spec arc, not another `historical_fundamentals_quarterly`
+run.
