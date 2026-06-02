@@ -301,7 +301,7 @@ gate refuses orders on terminally-delisted tickers.
   [lane: closed for cohort cleanup] [arc state: SEC fallback insufficient]
   [follow-up: excluded_confirmed_data_gap spec arc + AGPU classifier triage]
 
-- **`excluded_confirmed_data_gap` validator-semantics arc — SPEC + PLAN LANDED 2026-06-02.**
+- **`excluded_confirmed_data_gap` validator-semantics arc — SPEC + PLAN LANDED 2026-06-02; IMPL SHIPPED 2026-06-03.**
   Operator's `if_source_unavailable` follow-up from PR #449. Spec extends
   the validator's existing-but-narrow `excluded_confirmed_data_gap` bucket
   (currently fires only on `< 2 filings + first-filing past grace`) to also
@@ -378,9 +378,80 @@ gate refuses orders on terminally-delisted tickers.
   re-evaluation → full populator (`--param dry_run=false`) → confirm
   FAIL count residual → `DATA_OPERATIONS_COMPLETE` check.
 
-  [lane: heavy] [gate: plan-reviewer PASS + operator plan-read]
-  [needs: operator plan review + implementation PR per heavy-lane §1
-  step 6 (one coherent PR; subagent-driven; split-review)]
+  Implementation shipped 2026-06-03 (this commit):
+
+  - Migration `platform/migrations/versions/20260602_0200_fundamentals_period_source_evidence.py` —
+    table + PK (`ticker, period_end_date, source`) + CHECK enums
+    (4 outcomes, 3 sources) + `(ticker, period_end_date)` index +
+    `updated_at` trigger.
+  - `scripts/ops.py::_stage_confirmed_data_gap_evidence_populator` —
+    operator-on-demand stage; default `dry_run=true`; `use_bulk_zip=false`
+    raises; manifest CSV; HEAVY timeout; in `_OFF_CYCLE_STAGES`.
+  - `tpcore/ingestion/handlers.py::handle_sec_fundamentals_fallback` —
+    accumulates evidence rows + UPSERTs in live mode via the new
+    `_upsert_fundamentals_period_source_evidence` helper. Dry-run skips
+    writes (preserved contract).
+  - `tpcore/data/fundamentals_backfill.py::backfill_one_ticker` —
+    opt-in evidence write via `record_evidence_for_periods` +
+    `_record_fmp_evidence` helper. Default behaviour unchanged
+    (None → no evidence writes; preserves existing callers).
+  - `tpcore/quality/validation/checks/fundamentals_quarterly_completeness.py` —
+    new constants `CONFIRMED_DATA_GAP_FRESHNESS_DAYS=180` and
+    `ARDT_WATCHLIST={'ARDT'}`; `_Evaluation` gains
+    `excluded_confirmed_data_gap_evidenced`; evidence join SQL added;
+    ARDT routes to `excluded_dark`; `to_regclass` existence check
+    (defensive — try/except so legacy hermetic-pool fixtures stay
+    green). `CheckResult` shape preserved (frozen-shape sentinel
+    pins this). `_infer_missing_period_ends` byte-frozen (sha256
+    sentinel pins this).
+  - Tests: `tests/test_excluded_confirmed_data_gap_validator.py` (12
+    tests, byte-freeze + frozen-shape sentinels), `tests/test_fundamentals_period_source_evidence_stage.py`
+    (8 tests, `ops_shadow` xdist group), `tests/test_excluded_confirmed_data_gap_migration.py`
+    (8 tests, static parse), 3 new test cases on
+    `tests/test_sec_fundamentals_fallback_dry_run.py`.
+  - `pyproject.toml` SLF allowlist extended for the 2 new test files.
+  - `compute_fundamentals_gap_periods` public companion to
+    `compute_fundamentals_repair_targets` — returns the per-ticker
+    missing-period map so the populator stage doesn't reach into the
+    private `_evaluate` helper.
+
+  Plan deviations from the brief (pre-authorized):
+
+  - **Dashboard panel deferred to a separate PR.** No existing
+    data-quality / validator panel exists in `dashboard_components/`
+    (only charts / defect_register / escalation / health). Per the
+    brief's pre-authorized deviation, the new `excluded_confirmed_data_gap_evidenced`
+    sub-counter is logged via structlog at completion (per plan §9);
+    a dashboard panel is a separate follow-up. [follow-up:
+    dashboard surface for excluded_confirmed_data_gap_evidenced
+    sub-counter — read from structlog completion events]
+
+  Future-work TODOs:
+
+  - **ARDT watchlist dynamism.** `ARDT_WATCHLIST` is a module-level
+    constant per plan §11 / §17 #2. A future arc should source it
+    from a `ticker_quality_overrides` table (or similar substrate)
+    so the operator can add tickers without a code change.
+  - **Daily-cadence evidence top-up.** This PR registers the
+    populator stage as operator-on-demand only. A future arc can
+    promote it to a scheduled cadence via `data_repair_service`
+    once the live populate cycles confirm the throughput envelope.
+
+  Operator next steps (live run sequence per plan §15):
+
+  1. Merge this PR.
+  2. `alembic upgrade head` to apply the migration.
+  3. Run `python scripts/ops.py --stage confirmed_data_gap_evidence_populator
+     --param dry_run=false --param limit=50` against a 50-ticker
+     smoke. Verify counters + manifest.
+  4. Re-run the validator (the data-ops daemon does this automatically).
+  5. Verify FAIL count drops via the structlog completion event
+     (look for `excluded_confirmed_data_gap_evidenced` > 0).
+  6. Full populator (`--param dry_run=false`) once smoke is clean.
+  7. Confirm `DATA_OPERATIONS_COMPLETE` is achievable when residual
+     FAIL is 0.
+
+  [lane: heavy] [gate: implementation PR shipped → operator merge + live populate]
 
 
 ## ✅ FPFD extractor repair (PRs #433–#437) — CLOSED 2026-06-02

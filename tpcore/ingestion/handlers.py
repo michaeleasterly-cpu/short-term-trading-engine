@@ -415,6 +415,20 @@ async def handle_sec_fundamentals_fallback(
     # alongside each ``archive_rows.append`` below). Surfaced to the
     # operator in the dry-run return dict.
     per_ticker_planned: dict[str, int] = {}
+    # Per-`(ticker, period_end_date, source)` evidence rows pending
+    # upsert to ``platform.fundamentals_period_source_evidence``. The
+    # `excluded_confirmed_data_gap` validator-semantics arc (spec PR
+    # #450 + plan PR #451) requires the SEC fallback to record one row
+    # per requested period — ``outcome='yielded'`` when extracted is
+    # non-None, ``outcome='extract_none'`` when the extract returned
+    # None (SEC has the company but lacks that period). The upsert
+    # lands in live mode only; dry_run skips evidence writes (matches
+    # the standing dry-run contract). ``outcome='fetch_failure'`` lands
+    # in the outage handler below.
+    evidence_rows_pending: list[
+        tuple[str, _date_t, str, str, str | None]
+    ] = []
+    attempted_ts = datetime.now(UTC)
 
     async with SECCompanyFactsAdapter() as sec:
         for i, (ticker, cik) in enumerate(candidates, start=1):
@@ -426,10 +440,28 @@ async def handle_sec_fundamentals_fallback(
                 facts = await sec.get_companyfacts(cik)
             except DataProviderOutage as exc:
                 failures.append((ticker, str(exc)[:160]))
+                # Evidence: every missing period this ticker attempted
+                # gets a ``fetch_failure`` row so the validator's
+                # freshness-gated join rejects exclusion (per spec §4
+                # rule #4).
+                for pe in missing:
+                    evidence_rows_pending.append(
+                        (ticker, pe, "sec_companyfacts", "fetch_failure",
+                         f"CIK {cik}: {str(exc)[:120]}"),
+                    )
                 await asyncio.sleep(_SEC_FUNDAMENTALS_INTER_TICKER_SLEEP_SEC)
                 continue
             if facts is None:
                 no_data.append((ticker, f"CIK {cik} returned 404 (no XBRL on file)"))
+                # SEC has no companyfacts for this CIK at all. Per spec
+                # §4 #4 a 404 is a ``fetch_failure``-shaped finding —
+                # it tells us the source COULDN'T be checked for this
+                # period, not that the period truly doesn't exist.
+                for pe in missing:
+                    evidence_rows_pending.append(
+                        (ticker, pe, "sec_companyfacts", "fetch_failure",
+                         f"CIK {cik} returned 404 (no XBRL on file)"),
+                    )
                 await asyncio.sleep(_SEC_FUNDAMENTALS_INTER_TICKER_SLEEP_SEC)
                 continue
 
@@ -437,6 +469,13 @@ async def handle_sec_fundamentals_fallback(
             for pe in missing:
                 extracted = sec.extract_period(facts, pe)
                 if extracted is None:
+                    # Evidence: SEC has the company but no facts at
+                    # this period_end — qualifies for the SEC leg of
+                    # the validator's dual-source-empty exclusion.
+                    evidence_rows_pending.append(
+                        (ticker, pe, "sec_companyfacts", "extract_none",
+                         f"CIK {cik}"),
+                    )
                     continue
                 # SEC companyfacts doesn't expose a single canonical
                 # filing_date per fact (every fact carries its own
@@ -451,6 +490,13 @@ async def handle_sec_fundamentals_fallback(
                 shares = extracted["shares_outstanding"]
                 if shares is not None and shares <= 0:
                     continue
+                # Evidence: SEC extracted a usable row — does NOT
+                # qualify for exclusion (the row lands in
+                # fundamentals_quarterly via the upsert below).
+                evidence_rows_pending.append(
+                    (ticker, pe, "sec_companyfacts", "yielded",
+                     f"CIK {cik}"),
+                )
                 archive_rows.append({
                     "ticker": ticker,
                     "cik": cik,
@@ -492,11 +538,15 @@ async def handle_sec_fundamentals_fallback(
 
     if dry_run:
         # Read-only preview: skip ``manifest_lifecycle`` (no archive
-        # write) and ``cache.upsert_payload`` (no DB write). Failures
-        # are surfaced in the returned dict rather than raised so the
-        # operator can inspect the per-ticker error sample without
-        # aborting the preview. Live mode (below) preserves the
-        # ``RuntimeError`` on ``failures``.
+        # write) and ``cache.upsert_payload`` (no DB write) AND skip
+        # the evidence-row upsert (per ``excluded_confirmed_data_gap``
+        # spec PR #450 + plan PR #451 §7.1: dry-run NEVER writes
+        # evidence rows; the contract is "evidence is a live-DB
+        # attestation that the source was attempted with real intent").
+        # Failures are surfaced in the returned dict rather than raised
+        # so the operator can inspect the per-ticker error sample
+        # without aborting the preview. Live mode (below) preserves
+        # the ``RuntimeError`` on ``failures``.
         return {
             "dry_run": True,
             "archive_rows_planned": len(archive_rows),
@@ -504,7 +554,18 @@ async def handle_sec_fundamentals_fallback(
             "failures": len(failures),
             "nothing_to_fill": len(nothing_to_fill),
             "per_ticker_planned": dict(per_ticker_planned),
+            "evidence_rows_planned": len(evidence_rows_pending),
         }
+
+    # Live-mode evidence-row UPSERT runs alongside the archive lifecycle
+    # — happens whether archive_rows is empty or not (a ticker can have
+    # every period yield ``extract_none`` and STILL need to record the
+    # evidence so the validator can route those periods to
+    # ``excluded_confirmed_data_gap``). The upsert is idempotent via
+    # ``ON CONFLICT (ticker, period_end_date, source) DO UPDATE SET``.
+    await _upsert_fundamentals_period_source_evidence(
+        pool, evidence_rows_pending, attempted_ts,
+    )
 
     if not archive_rows:
         return 0
@@ -544,6 +605,7 @@ async def handle_sec_fundamentals_fallback(
         rows=total_rows,
         no_data=len(no_data),
         failures=len(failures),
+        evidence_rows=len(evidence_rows_pending),
         csv_archive=archive_path_str,
     )
     if failures:
@@ -556,6 +618,55 @@ async def handle_sec_fundamentals_fallback(
 
 def _str_or_blank(v: object) -> str:
     return "" if v is None else str(v)
+
+
+async def _upsert_fundamentals_period_source_evidence(
+    pool: asyncpg.Pool,
+    rows: list[tuple[str, Any, str, str, str | None]],
+    attempted_at: datetime,
+) -> int:
+    """Idempotent UPSERT into ``platform.fundamentals_period_source_evidence``.
+
+    Rows shape: ``(ticker, period_end_date, source, outcome, notes)``.
+    Per the `excluded_confirmed_data_gap` spec PR #450 + plan PR #451
+    §5.3, the ON CONFLICT clause is ``DO UPDATE SET outcome=EXCLUDED.outcome,
+    attempted_at=EXCLUDED.attempted_at, notes=EXCLUDED.notes`` so the
+    latest attempt always wins.
+
+    Skips silently if the table doesn't exist (post-rollback case —
+    plan §14). The validator's evidence-join is similarly gated on
+    ``to_regclass`` so the rollback path is symmetric.
+
+    Returns the number of rows written. A no-op when ``rows`` is empty.
+    """
+    if not rows:
+        return 0
+    async with pool.acquire() as conn:
+        exists = await conn.fetchval(
+            "SELECT to_regclass('platform.fundamentals_period_source_evidence') IS NOT NULL"
+        )
+        if not exists:
+            logger.info(
+                "ingestion.handler.fundamentals_period_source_evidence.absent",
+                pending=len(rows),
+            )
+            return 0
+        await conn.executemany(
+            """
+            INSERT INTO platform.fundamentals_period_source_evidence
+                (ticker, period_end_date, source, outcome, attempted_at, notes)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (ticker, period_end_date, source) DO UPDATE
+                SET outcome = EXCLUDED.outcome,
+                    attempted_at = EXCLUDED.attempted_at,
+                    notes = EXCLUDED.notes
+            """,
+            [
+                (t, pe, src, oc, attempted_at, notes)
+                for (t, pe, src, oc, notes) in rows
+            ],
+        )
+    return len(rows)
 
 
 def _sec_archive_rows_to_payload(rows: list[dict]) -> dict:
