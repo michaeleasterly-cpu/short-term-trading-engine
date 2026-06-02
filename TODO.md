@@ -301,6 +301,58 @@ gate refuses orders on terminally-delisted tickers.
   [lane: closed for cohort cleanup] [arc state: SEC fallback insufficient]
   [follow-up: excluded_confirmed_data_gap spec arc + AGPU classifier triage]
 
+- **`excluded_confirmed_data_gap` validator-semantics spec arc — SPEC LANDED 2026-06-02.**
+  Operator's `if_source_unavailable` follow-up from PR #449. Spec extends
+  the validator's existing-but-narrow `excluded_confirmed_data_gap` bucket
+  (currently fires only on `< 2 filings + first-filing past grace`) to also
+  cover **period-level dual-source-confirmed unavailable** — a row whose
+  inferred missing `period_end_date` has been attempted from both FMP and
+  SEC and both attempts yielded empty, freshness-gated via a queryable
+  evidence substrate.
+
+  Spec: `docs/superpowers/specs/2026-06-02-excluded-confirmed-data-gap-validator-semantics.md`
+  (this PR).
+
+  Design highlights:
+
+  - New table `platform.fundamentals_period_source_evidence` (PK
+    `(ticker, period_end_date, source)`) records FMP + SEC attempts +
+    outcomes (`yielded` / `empty` / `fetch_failure` / `extract_none`).
+  - Validator joins evidence into the per-period gap evaluation; rows
+    with dual-source-empty + freshness-gated (default 180 days) +
+    no-fetch-failure move to extended `excluded_confirmed_data_gap`.
+  - Sub-counter `excluded_confirmed_data_gap_evidenced` separates the
+    extended semantic from the existing sparse-ticker case in structlog
+    output.
+  - `CheckResult` stays frozen; PASS/FAIL gate logic unchanged at the
+    top level.
+  - Dual-source evidence required per `(ticker, period)`. Tickers cannot
+    be excluded in bulk. Heuristic exclusion is explicitly rejected.
+
+  Hard rules carried:
+
+  - No threshold loosening.
+  - No `_infer_missing_period_ends` change (over-inference is a separate
+    defect class).
+  - No live SEC fallback writes in spec PR.
+  - No `fundamentals_quarterly` cleanup / quarantine / delete.
+
+  Open operator decisions (deferred to plan PR per heavy-lane §1):
+
+  - Freshness window (180 days proposed; 90 / 365 alternatives).
+  - Dry-run population (spec recommends live-only writes).
+  - Bundling of inference-clamp follow-up (`_infer_missing_period_ends`
+    clamping to `classification.lifetime_start`).
+  - Evidence backfill cadence (one-shot vs daily background top-up).
+
+  Expected post-implementation outcome: 144 per-ticker FAILs drop to
+  ≤ ~5 after evidence backfill; `DATA_OPERATIONS_COMPLETE` becomes
+  achievable if residual reflects truly source-unavailable periods.
+
+  [lane: heavy] [gate: spec-reviewer PASS + operator spec-read]
+  [needs: operator review + plan PR + implementation PR (migration +
+  validator wiring + evidence-populator stage + dashboard surface)]
+
 
 ## ✅ FPFD extractor repair (PRs #433–#437) — CLOSED 2026-06-02
 
