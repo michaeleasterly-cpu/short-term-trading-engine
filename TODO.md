@@ -239,6 +239,68 @@ gate refuses orders on terminally-delisted tickers.
   spec doc has a "Post-execution result — 2026-06-02" section
   appended with the empirical finding (this PR).
 
+- **SEC fallback spike (2026-06-02 afternoon) — ARC CLOSEOUT.** Per the
+  §12.2 follow-up that named SEC `_stage_sec_fundamentals_fallback` as
+  the next-best source for the 117-row FMP-unreachable residual cohort.
+
+  Required adding a `dry_run` knob to `handle_sec_fundamentals_fallback`
+  first — shipped as **PR #448** (`88a7d36`, dry_run default True at the
+  stage layer, manifest_lifecycle + cache.upsert_payload gated behind
+  `if not dry_run`, RuntimeError on failures preserved in live mode and
+  surfaced in the dry-run return dict). 7 hermetic tests; full pytest
+  3,316 → 3,323 (+7); zero regressions; CI 7/7 SUCCESS including the
+  Anthropic-funded Claude review heavy-lane PASS.
+
+  Spike (`python scripts/ops.py --stage sec_fundamentals_fallback
+  --param dry_run=true --param tickers=AACB,ADV,AEVA,AGPU,AIDX,AKTS,
+  ALIT,ARDT,ASTL,AVX`) ran 6.6 s, exit 0. **9 of 10 tickers in scope**
+  after the handler's `asset_class='stock'` predicate excluded AGPU
+  (`asset_class='spac'`, `current_legal_name='Axe Compute Inc.'`,
+  `instrument_subtype='unit'`).
+
+  | metric | value |
+  |---|---:|
+  | universe (tier ≤ 2 + active + CIK + asset_class='stock') | 9 |
+  | inferred missing periods across in-scope tickers | 72 |
+  | SEC `archive_rows_planned` | **1** |
+  | SEC-fillable yield | **1.4 %** |
+  | DB writes during spike | 0 |
+  | `manifest_lifecycle` calls | 0 |
+  | `cache.upsert_payload` calls | 0 |
+  | `no_data` / `failures` / `nothing_to_fill` | 0 / 0 / 0 |
+
+  **Source-fillable**: only AEVA at 2021-03-31 (SPAC-merger Q1; CIK
+  `0001789029` retained from InterPrivate II Acquisition Corp's
+  pre-merger filing). FMP missed this quarter because its
+  fundamentals normalization keys off the operating-company filing
+  date. **One-off SPAC-merger Q1 pattern.**
+
+  **Source-unavailable**: 8 of 9 in-scope tickers. SEC companyfacts
+  was reachable + parseable for each CIK, but `sec.extract_period`
+  returned `None` for every inferred missing date — SEC has the same
+  gap as FMP.
+
+  Extrapolation to the 117-row cohort: ≤ ~5 rows SEC-fillable.
+
+  **Empirical 117-row verdict: SOURCE-UNAVAILABLE.** Doc batch PR #449
+  (this entry) appends a `§ Post-merge SEC fallback spike result`
+  section to `docs/superpowers/specs/2026-06-02-fundamentals-cadence-fail-triage.md`
+  + adds a 9-case sentinel test pinning the empirical numbers.
+
+  **Next arc (operator decision, not in this PR):** the
+  `excluded_confirmed_data_gap` validator-semantics spec arc. Drafts
+  a new validator exit state for "issuer existed but inferred quarter
+  is unrecoverable from any current source" with bucket-shape evidence
+  test. NOT a live SEC fallback run.
+
+  **Deferred follow-up:** AGPU asset_class triage. Read-only check
+  confirms `asset_class='spac'` but `current_legal_name='Axe Compute Inc.'`
+  + `instrument_subtype='unit'` suggests a post-merger residual. Not
+  authorized to reclassify in this PR.
+
+  [lane: closed for cohort cleanup] [arc state: SEC fallback insufficient]
+  [follow-up: excluded_confirmed_data_gap spec arc + AGPU classifier triage]
+
 
 ## ✅ FPFD extractor repair (PRs #433–#437) — CLOSED 2026-06-02
 
