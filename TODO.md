@@ -240,6 +240,67 @@ gate refuses orders on terminally-delisted tickers.
   appended with the empirical finding (this PR).
 
 
+## ✅ FPFD extractor repair (PRs #433–#437) — CLOSED 2026-06-02
+
+> **Status 2026-06-02 — DONE.** The validator-correct first-public-filing-date
+> extractor + bulk-zip path landed. 240 mega-cap FPFDs repaired
+> end-to-end; pre-FPFD bad-row inventory dropped 8,633 → 6,016
+> (-30.3 %). Validator stayed strict throughout (no filter, no
+> threshold change, no exclusion bucket added).
+
+### What shipped
+
+- **PR #433** (`fc5d474`) — **spec**: `docs/superpowers/specs/2026-06-02-validator-semantics-confirmed-data-gap.md`. Classified the 144 cadence FAILs into R1–R4 and proposed the I1 / I2 / I3 / I4 implementation arcs.
+- **PR #434** (`684d9eb`) — **I1 plan** for the recent-filer FPFD bound. Superseded by the FPFD extractor repair direction below.
+- **PR #435** (`60a63b8`) — **FPFD extractor spec**: `docs/superpowers/specs/2026-06-02-fpfd-extractor-repair-before-fundamentals-cleanup.md`. Root-caused the wrong-FPFD-for-long-lived-issuer bug to `get_submissions` not paginating `filings.files[]`. Operator rejected validator-filter in favour of deep data-path fix.
+- **PR #436** (`8d8b878`) — **FPFD extractor pagination impl**: `tpcore/sec/companyfacts_adapter.py::get_submissions(cik, *, full_history=False)` walks `filings.files[]` shards and merges into `filings.recent`. Stage caller passes `full_history=True`. 7 hermetic tests. Bounded-live sentinel on 6 mega-caps green.
+- **PR #437** (`0e44f2a`) — **bulk-zip path**: `tpcore/sec/submissions_bulk_reader.py::SECSubmissionsBulkReader` + `ensure_zip_cached` with local → S3/R2 → SEC resolution and S3 mirror-back. New stage knob `use_bulk_zip=true`. 12 hermetic tests + 2 source sentinels. Single bulk-zip download (~1.5 GB) replaces per-CIK HTTP crawl; bulk dry-run on 994 affected tickers in 8.7 s.
+
+### Empirical closeout
+
+| metric | value |
+|--------|------:|
+| Total spec/plan/impl PRs | 5 (#433 / #434 / #435 / #436 / #437) |
+| Bounded-live (6 mega-caps) | 51.8 s; 6/6 FPFDs corrected; 0 regressions |
+| Bulk dry-run (994 affected) | **8.7 s wall**; 240 moves earlier, 0 later, 754 unchanged |
+| Bulk bounded-live (240 cohort) | **6.6 s wall**; 240 metadata writes; 0 non-cohort updates; 0 divergence events |
+| `fundamentals_quarterly.total` | 183,352 → **183,352 unchanged** |
+| Pre-FPFD bad rows | 8,633 → **6,016** (-2,617 / **30.3 %**) |
+| Tickers fully cleaned | **211** |
+| Affected tickers post-repair | 994 → **783** (-211) |
+
+### Sample mega-cap repairs
+
+BAC 2025-06-30 → **1994-03-31**; C → **1994-03-31**;
+COST 2016-11-20 → **1993-11-21**; CSCO 2020-01-25 → **1995-01-29**;
+GS 2025-06-30 → **1999-05-28**; GOOGL 2023-03-31 → **2015-09-30**;
+META 2024-03-31 → **2012-06-30**; MSFT 2019-12-31 → **1993-12-31**;
+T 2022-03-31 → **1994-03-31**; WMT 2023-04-30 → **1995-04-30**;
+XOM 2020-03-31 → **1994-03-31**.
+
+### Validator status
+
+**Untouched.** The 144 cadence FAIL surface remains the validator's
+designed signal; the data path took all the load. No filter, no
+threshold loosening, no exclusion bucket added.
+
+### What is NOT done (and is intentionally not yet authorized)
+
+**Ticker-reuse cleanup arc — separate spec PR required.** The
+remaining 6,016 pre-FPFD `fundamentals_quarterly` rows across 783
+tickers are the ticker-reuse residual: FPFD is now correct for the
+*current* issuer, but the pre-FPFD rows belong to a *previous*
+holder of the ticker symbol. This is a different mutation pattern
+(row DELETE / re-key vs. FPFD UPDATE) and warrants its own
+spec → plan → impl arc with explicit operator authorization.
+
+
+## STE dev-system round-trip — packetvoid-dev-system follow-ups
+
+Operator follow-ups carried over from the closed STE round-trip
+arc — see "✅ STE dev-system round-trip — CLOSED 2026-06-01" below.
+
+
 ## ✅ STE dev-system round-trip — CLOSED 2026-06-01
 
 > **Status 2026-06-01 — DONE.** STE has adopted the `packetvoid-dev-system` reusable Claude/dev workflow scaffold as its declared dev-system profile, with the portable workflow fixes back-ported and the residual STE-vs-portable drift formally documented as STE_OVERRIDE. Audit signal is now meaningful and steady-state. **No S6 or S7 work remains unless a future portable-template improvement appears that's net-additive to STE's richer canonical surface.**

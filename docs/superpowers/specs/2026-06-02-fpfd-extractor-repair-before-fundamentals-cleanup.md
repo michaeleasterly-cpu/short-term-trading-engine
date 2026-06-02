@@ -433,3 +433,125 @@ Implementation PR for the FPFD extractor pagination per §10 + §12.
 Default lane. ~80 LOC. Operator-authorized bounded-live sentinel
 on 6 mega-caps before broader recompute. No fundamentals row
 work until §11 #5 re-audit completes.
+
+---
+
+## Post-execution result — 2026-06-02 (FPFD repair COMPLETE)
+
+The FPFD repair arc spec'd above shipped end-to-end on 2026-06-02.
+Spec body §1–§17 above is preserved for auditability; this section
+captures the empirical closeout.
+
+### Implementation PRs
+
+| PR # | Title | Status |
+|------|-------|--------|
+| **#436** | `fix(data): paginate SEC submissions for true first_public_filing_date` | MERGED 2026-06-02T08:34:53Z |
+| **#437** | `fix(data): bulk-zip path for FPFD repair — bulk-before-API-crawl` | MERGED 2026-06-02T09:12:21Z |
+
+PR #436 implemented the §10 pagination algorithm:
+`SECCompanyFactsAdapter.get_submissions(cik, *, full_history=False)`
+walks `filings.files[]` shards and merges them into `filings.recent`.
+Stage caller updated to pass `full_history=True`. 7 hermetic tests.
+
+PR #437 added the bulk-zip path per the standing `bulk-before-API-crawl`
+rule + the existing `_stage_corp_history_edgar_backfill` precedent:
+`SECSubmissionsBulkReader` (local-first / bulk-zip-fallback / no
+per-CIK HTTP), `ensure_zip_cached` with local → S3/R2 → SEC resolution
+and S3 mirror-back after SEC download. New stage knob
+`use_bulk_zip=true`. 12 hermetic tests + 2 source sentinels.
+
+### Bounded-live sentinel (6 mega-caps, PR #436 post-merge)
+
+`backfill_sec_metadata --param tickers=AAPL,JPM,MS,BMO,RY,CM force_refresh_metadata=true`:
+
+| ticker | pre | post | shape |
+|--------|------|------|-------|
+| AAPL | 2015-06-27 | 1993-12-31 | mega-cap repair |
+| JPM  | 2025-06-30 | 1994-03-31 | accepted from spec phase |
+| MS   | 2025-06-30 | 1996-03-31 | accepted from spec phase |
+| BMO  | 2025-10-31 | 2001-10-31 | accepted from spec phase |
+| RY   | 2025-10-31 | 2002-10-31 | mega-cap repair |
+| CM   | 2025-10-31 | 2002-10-31 | mega-cap repair |
+
+8 / 8 acceptance gates green; UPDATE-only invariant preserved.
+
+### Bulk dry-run preview (PR #437 post-merge, 994 affected tickers)
+
+| metric | value |
+|--------|------:|
+| Runtime | **8.7 s wall** (vs ~30+ min per-CIK HTTP) |
+| Zip source | `/tmp/sec_submissions.zip` (cache hit, 1471.8 MB) |
+| `local_hit_count` | 39 |
+| `bulk_hit_count` | 955 |
+| `missing_from_bulk_count` | **0** |
+| `shard_count` | 439 |
+| `shard_error_count` | **0** |
+| `extracted_with_values` | 994 |
+| `written` | 0 (dry_run reflected) |
+| FPFD moves earlier (forecast) | **240** |
+| FPFD moves later | **0** |
+| FPFD unchanged | 754 |
+| Pre-FPFD bad-row forecast | 8,633 → **6,016 (-2,617, 30.3 % reduction)** |
+| Tickers fully cleaned (forecast) | 211 |
+
+### Bounded-live FPFD repair (240 moved-earlier cohort)
+
+`backfill_sec_metadata --param tickers="<240>" force_refresh_metadata=true use_bulk_zip=true`:
+
+| metric | value |
+|--------|------:|
+| Runtime | **6.6 s wall** |
+| `metadata.written` | **240** |
+| `bulk_hit_count` | 240 (no local, no missing) |
+| `shard_count` / `shard_error_count` | 435 / **0** |
+| Non-cohort updates | **0** (scope discipline) |
+| `fundamentals_quarterly.total` | 183,352 → **183,352 unchanged** (UPDATE-only invariant) |
+| `IDENTITY_DIVERGENCE_INVESTIGATE` events | **0** |
+| Pre-FPFD bad rows global | 8,633 → **6,016** (-2,617, **30.3 % reduction**) |
+| Affected tickers | 994 → **783** (-211 fully cleaned) |
+| FPFD moves later (regression) | **0** |
+
+### Sample mega-cap repairs (all confirmed in live DB)
+
+| ticker | pre | post |
+|--------|------|------|
+| BAC   | 2025-06-30 | **1994-03-31** |
+| C     | 2025-06-30 | **1994-03-31** |
+| COST  | 2016-11-20 | **1993-11-21** |
+| CSCO  | 2020-01-25 | **1995-01-29** |
+| GS    | 2025-06-30 | **1999-05-28** |
+| GOOGL | 2023-03-31 | **2015-09-30** |
+| META  | 2024-03-31 | **2012-06-30** |
+| MSFT  | 2019-12-31 | **1993-12-31** |
+| T     | 2022-03-31 | **1994-03-31** |
+| WMT   | 2023-04-30 | **1995-04-30** |
+| XOM   | 2020-03-31 | **1994-03-31** |
+
+### Final residual — NOT in scope of this arc
+
+**6,016 pre-FPFD `fundamentals_quarterly` rows across 783 tickers
+remain** after FPFD repair. Per the §4 / §6 taxonomy, these are the
+**ticker-reuse residual**: FPFD is now correct for the *current*
+issuer, but the pre-FPFD rows belong to a *previous* holder of the
+ticker symbol.
+
+This is a **separate cleanup arc** with a different mutation pattern
+(row DELETE / re-key, NOT FPFD UPDATE). The validator stays strict —
+no filter, no threshold change, no bucket added.
+
+**A separate spec PR is the right next step.**
+
+### Validator status
+
+The validator was **not touched**. Per the operator's hard rule from
+PR #435 §1 (rejected validator filter), the data path took the load.
+Spec PRs #433, #434, #435, #436, #437 preserved the validator's
+strict contract throughout.
+
+### Spec status
+
+**COMPLETE.** Spec body (§1–§17) preserved for audit; this
+post-execution section captures the empirical closeout. Ticker-reuse
+cleanup deferred to a separate spec arc with explicit operator
+authorization required.
