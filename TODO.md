@@ -147,16 +147,67 @@ gate refuses orders on terminally-delisted tickers.
   is a small lift but needs spec on what delist_pending semantically
   means for the capital gate.
 
-- **Metadata coverage gate** (STILL OPEN — P1b did NOT move it). The
-  90% NULL rate today blocks `DATA_OPERATIONS_COMPLETE` via the P1
-  structural sentinel. P1b's FMP fallback was the optimistic path; the
-  2026-06-02 empirical no-match result confirms it does not advance
-  this metric. To clear the gate, the canonical path is the **full
-  active-universe** `backfill_sec_metadata` run (operator-on-demand;
-  SEC fair-use ~7,600 × 0.11 s = ~14 min cold, ~30 sec cached on
-  re-run) — this targets a different (and larger) bucket than P1b's
-  unresolved set. This item is the highest-leverage next move for
-  `DATA_OPERATIONS_COMPLETE` progress.
+- **Metadata coverage gate** — ✅ CLEARED 2026-06-02. Tier ≤ 2 scoped
+  `backfill_sec_metadata` run (§12, operator-authorized, 10 m 17 s
+  wall) drove `metadata_coverage_ratio` from ~92 % MISSING to
+  **5.46 % MISSING** — well below the 25 % threshold. Structural
+  sentinel (`metadata_coverage_insufficient`) no longer fires.
+  Spec: `docs/superpowers/specs/2026-06-02-metadata-coverage-backfill-full-universe.md`
+  (PR #428). Spec was correct that existing
+  `scripts/ops.py::_stage_backfill_sec_metadata` is sufficient — no
+  implementation change needed. Empirical run summary:
+
+  > §10 zero-IO snapshot (5 s) → §10 sampled HTTP forecast
+  > (max_tickers=300, 87 s, 100 % SEC extraction yield,
+  > 0 % submissions_404) → §11 bounded live (max_tickers=200, 51 s,
+  > 171 new document_type writes, 0 divergence) → tier ≤ 2 denominator
+  > measurement (2,511 rows, not 13,840 — major forecast revision) →
+  > §12 scoped live (tier ≤ 2 only, 10 m 17 s, **1,989 writes** =
+  > 47 CIK + 1,942 metadata, 1 submissions_404 of 1,942 = 0.05 %,
+  > 0 `IDENTITY_DIVERGENCE_INVESTIGATE` events,
+  > `ticker_classifications.total` invariant preserved).
+
+  Spec open decision #2 (NEEDS_REPO_VERIFICATION on dry_run scope)
+  empirically ANSWERED: `--param dry_run=true` gates ONLY the DB-write
+  block; SEC HTTP fetches execute. The strict no-IO gate is the
+  top-level `--dry-run` CLI flag (different from `--param`).
+
+  Residual tier ≤ 2 cik-null cohort: **343 rows** (P1c source-triage
+  territory — same long-tail bucket P1b proved FMP can't resolve).
+  Global cik-null residual: ~1,419. The 343 tier ≤ 2 subset is the
+  load-bearing slice; tier 3+ residual is incidental.
+
+- **Fundamentals quarterly cadence — 144 per-ticker FAILs (NEW,
+  2026-06-02).** With the structural metadata-coverage gate cleared,
+  the `fundamentals_quarterly_completeness` check now surfaces its
+  designed per-ticker FAIL signal: 144 tickers have
+  `sec_document_type_primary` populated but are missing 1+ inferred
+  quarterly periods in `platform.fundamentals_quarterly`. This is the
+  NEXT blocker for `DATA_OPERATIONS_COMPLETE`. Breakdown captured
+  2026-06-02 05:23 UTC:
+
+  | By primary form  | Count | % of 144 |
+  |------------------|------:|---------:|
+  | 10-Q             | 137   | 95.1 %   |
+  | 20-F             | 6     | 4.2 %    |
+  | 40-F             | 1     | 0.7 %    |
+
+  | By severity (missing-period count) | Count | % of 144 |
+  |-----------------------------------|------:|---------:|
+  | 1 missing                         | 58    | 40.3 %   |
+  | 2–3 missing                       | 40    | 27.8 %   |
+  | 4–9 missing                       | 23    | 16.0 %   |
+  | 10–19 missing                     | 15    | 10.4 %   |
+  | 20+ missing                       | 8     | 5.6 %    |
+
+  Sample tickers (alphabetical first 5 per form):
+  10-Q AACB, ADV, AEVA, AGPU, AIDX; 20-F CGNT, FRGT, IBG, IMPP, ITOC;
+  40-F ASTL. The 1-missing + 2–3-missing cohorts (68.1 % of total)
+  are most likely "recent quarter not yet refreshed" — candidate for
+  a routine `fundamentals_refresh` re-pull rather than a new
+  implementation arc. The 4–9, 10–19, and 20+ cohorts (31.9 %) are
+  long-standing gaps that may need targeted source triage. No
+  implementation work scheduled yet; this entry is a triage anchor.
 
 
 ## ✅ STE dev-system round-trip — CLOSED 2026-06-01

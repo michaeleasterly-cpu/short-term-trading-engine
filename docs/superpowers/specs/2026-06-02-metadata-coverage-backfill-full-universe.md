@@ -501,3 +501,75 @@ explicit operator authorization PER RUN per the standing
   PR #427).
 * Memstore writes; Anthropic API calls; Docker; Railway deploy; admin
   bypass; secret-bearing files in the diff.
+
+---
+
+## Post-execution result — 2026-06-02
+
+Operator-authorized live run of the §10 → §11 → §12 sequence ran the
+same evening as the spec PR (#428) merged. Spec verdict (§1 "existing
+code is sufficient") was confirmed empirically — no implementation
+change was needed at any step.
+
+### Sequence executed
+
+| Step | Command params                                                       | Wall    | Writes |
+|------|----------------------------------------------------------------------|---------|-------:|
+| §10a (zero-IO)            | `dry_run=true do_cik=false do_metadata=false`       | 5 s     | 0      |
+| §10b (sampled HTTP)       | `dry_run=true do_cik=true do_metadata=true max_tickers=300` | 87 s | 0 |
+| §11 (bounded live)        | `dry_run=false do_cik=true do_metadata=true max_tickers=200` | 51 s | 186 metadata |
+| Tier ≤ 2 measurement      | SQL only (no stage call)                            | <1 s    | 0      |
+| §12 (scoped live)         | `dry_run=false do_cik=true do_metadata=true tickers=<2,286 tier ≤ 2>` | 10 m 17 s | 47 CIK + 1,942 metadata = **1,989** |
+
+### Acceptance gates (per §15)
+
+All steps' acceptance signals were green at the time of run.
+Critical post-§12 measurement:
+
+| Gate metric                                | Value      |
+|--------------------------------------------|------------|
+| `evaluated_routed`                         | 1,488      |
+| `excluded_metadata_required`               | 86         |
+| `metadata_coverage_ratio`                  | **5.46 %** |
+| Gate threshold (fail when ratio > 0.25)    | 25 %       |
+| `metadata_coverage_low` (`True` = fail)    | **False**  |
+| Sentinel emission                          | **None**   |
+| `ticker_classifications.total`             | 13,840     |
+| `IDENTITY_DIVERGENCE_INVESTIGATE` events   | 0          |
+
+**Verdict: structural metadata-coverage sentinel CLEARED.** The
+`fundamentals_quarterly_completeness` check now returns 144 per-ticker
+cadence FAILs (95.1 % 10-Q, 4.2 % 20-F, 0.7 % 40-F; 68.1 % with only
+1–3 missing periods) — the designed operator-actionable signal, not a
+structural blocker. That's a separate arc (TODO entry "Fundamentals
+quarterly cadence — 144 per-ticker FAILs (NEW, 2026-06-02)").
+
+### Spec open decisions — resolution
+
+| § | Decision                                                  | Resolution                                                                                                                |
+|---|-----------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------|
+| 19 #1 | Run §11/§12 as-is or `tradeable_only` knob first      | Hybrid: §12 scoped via explicit `--param tickers=<tier ≤ 2 list>`. No new knob added; existing `tickers` param sufficed.    |
+| 19 #2 | dry_run gates HTTP or only DB writes (NEEDS_REPO_VERIFICATION) | **Answered empirically.** `--param dry_run=true` gates only the DB-write block (line 3095). SEC HTTP fetches execute. Top-level `--dry-run` CLI flag is the strict no-IO gate (different mechanism). |
+| 19 #3 | Cautionary `max_tickers=N` ceiling on §12             | Not applied. Tier ≤ 2 scope (2,286 candidates) was the natural ceiling.                                                    |
+| 19 #4 | `coverage_after_tradeable` sub-dict                   | Not added. Operator-side SQL measurement against the tier ≤ 2 denominator was sufficient for this run.                     |
+| 19 #5 | Lifetime-ended guard parity (SEC legs vs FMP leg)     | Not exercised. §12 saw 0 spurious writes; no evidence the parity gap is currently load-bearing. **Decision: defer.**       |
+
+### Forecast vs reality
+
+| Metric                              | Forecast                                                | Actual              |
+|-------------------------------------|---------------------------------------------------------|---------------------|
+| §12 wall-clock                      | ~50 min (initial); ~8.5 min (post tier ≤ 2 measurement) | **10 m 17 s**       |
+| §12 metadata writes                 | ~1,896                                                  | **1,942** (within 2.5 %) |
+| §12 CIK writes                      | Forecast not stated                                     | 47                  |
+| `metadata_coverage_ratio` post-§12  | ≤ 25 % (gate passes)                                    | **5.46 %**          |
+| `submissions_404` rate              | < 1 %                                                   | 0.05 % (1/1,942)    |
+| `IDENTITY_DIVERGENCE_INVESTIGATE`   | 0                                                       | 0                   |
+
+Tier ≤ 2 measurement (2,511 rows, not 13,840) was the critical
+forecast-revising signal; without it the spec would have suggested
+~50 min wall against a denominator that didn't apply.
+
+### Spec status
+
+**COMPLETE.** Verdict confirmed; sequence executed; gate cleared;
+empirical record captured in this section and in `TODO.md`.
