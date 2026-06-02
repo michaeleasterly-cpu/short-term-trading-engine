@@ -253,6 +253,15 @@ gate refuses orders on terminally-delisted tickers.
 - Dev system: <https://github.com/michaeleasterly-cpu/packetvoid-dev-system> (public, branch-protected `main-branch-protection` ruleset).
 - Round-trip ruleset fix (STE side): `main-branch-protection` `required_status_checks` corrected mid-sequence to reference actual check-run names (`pytest + ruff + check_imports`, `lab-isolation-db (Postgres-gated suites)`, `gitleaks (worktree + SARIF)`). Six consecutive STE PRs since (#416–#421) merged normal — no `--admin`.
 
+## packetvoid-dev-system — rename + gist (operator follow-up, 2026-06-02)
+
+Follow-on to the closed STE round-trip arc above. The reusable Claude/dev workflow scaffold currently lives at <https://github.com/michaeleasterly-cpu/packetvoid-dev-system> with the working name `packetvoid-dev-system`. Operator follow-up items (no implementation yet):
+
+- **Rename to a more marketable name.** Current name is internal/codename-shaped. Pick a name that's easy to say, easy to search, and reads as a product, not an internal tool. Constraints to preserve when renaming: existing two consumer smoke repos (`packetvoid-d1-consumer-smoke`, `packetvoid-d2-railway-consumer-smoke`) — rename plan should either rename them in lockstep or document why they keep the old codename. The STE side has live references in `TODO.md`, `docs/superpowers/plans/2026-06-01-ste-round-trip-dev-system-adoption-plan.md`, and the `PROJECT_PROFILE.yaml` consumer profile — any rename needs a coordinated sweep on the STE side too.
+- **Publish a gist.** Operator wants a discoverable shortlink/landing snippet (GitHub Gist) for the dev system — likely the bootstrap one-liner + one-paragraph pitch + repo link. Most useful **after** the rename so the gist links the marketable name, not the codename. Defer until the rename lands or accept that the gist may need a re-publish.
+
+No code work scheduled. Sequence is operator-led naming → STE-side reference sweep → dev-system repo rename → gist publish.
+
 ## ✅ PUBLIC REPO — recurring secret-audit gate (2026-05-21) — CLOSED 2026-05-25
 
 **Status 2026-05-25 — DONE.** `gitleaks v8.30.1` installed in BOTH:
