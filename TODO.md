@@ -301,7 +301,7 @@ gate refuses orders on terminally-delisted tickers.
   [lane: closed for cohort cleanup] [arc state: SEC fallback insufficient]
   [follow-up: excluded_confirmed_data_gap spec arc + AGPU classifier triage]
 
-- **`excluded_confirmed_data_gap` validator-semantics spec arc — SPEC LANDED 2026-06-02.**
+- **`excluded_confirmed_data_gap` validator-semantics arc — SPEC + PLAN LANDED 2026-06-02.**
   Operator's `if_source_unavailable` follow-up from PR #449. Spec extends
   the validator's existing-but-narrow `excluded_confirmed_data_gap` bucket
   (currently fires only on `< 2 filings + first-filing past grace`) to also
@@ -310,8 +310,8 @@ gate refuses orders on terminally-delisted tickers.
   SEC and both attempts yielded empty, freshness-gated via a queryable
   evidence substrate.
 
-  Spec: `docs/superpowers/specs/2026-06-02-excluded-confirmed-data-gap-validator-semantics.md`
-  (this PR).
+  Spec: `docs/superpowers/specs/2026-06-02-excluded-confirmed-data-gap-validator-semantics.md` (PR #450, MERGED at `2be9dec`).
+  Plan: `docs/superpowers/plans/2026-06-02-excluded-confirmed-data-gap-validator-semantics-plan.md` (this PR).
 
   Design highlights:
 
@@ -337,21 +337,50 @@ gate refuses orders on terminally-delisted tickers.
   - No live SEC fallback writes in spec PR.
   - No `fundamentals_quarterly` cleanup / quarantine / delete.
 
-  Open operator decisions (deferred to plan PR per heavy-lane §1):
+  Open operator decisions RESOLVED in plan PR:
 
-  - Freshness window (180 days proposed; 90 / 365 alternatives).
-  - Dry-run population (spec recommends live-only writes).
-  - Bundling of inference-clamp follow-up (`_infer_missing_period_ends`
-    clamping to `classification.lifetime_start`).
-  - Evidence backfill cadence (one-shot vs daily background top-up).
+  - **Freshness window: 180 days** (`CONFIRMED_DATA_GAP_FRESHNESS_DAYS = 180`).
+  - **Dry-run NEVER writes evidence.** Live writes require explicit operator
+    authorization.
+  - **Inference clamp: SPLIT to separate arc** unless impl-PR fixtures
+    surface a forcing case (`_infer_missing_period_ends` unchanged in this arc).
+  - **Backfill cadence: operator-on-demand one-shot.** No scheduler / daemon
+    integration in this arc.
+
+  Plan scope (heavy-lane, one coherent implementation PR):
+
+  - Alembic migration `20260602_0200_fundamentals_period_source_evidence`
+    (PK `(ticker, period_end_date, source)` + CHECK constraints on
+    `outcome` enum 4 values + `source` enum 3 values + UPSERT trigger
+    for `updated_at`).
+  - New `scripts/ops.py` stage `confirmed_data_gap_evidence_populator`
+    (operator-on-demand; default `dry_run=true`; honors
+    `use_bulk_zip=true`; manifest CSV).
+  - Extends `handle_sec_fundamentals_fallback` to write evidence rows
+    on yielded/extract_none outcomes (in live mode only).
+  - Extends `handle_historical_fundamentals_quarterly` similarly.
+  - Validator wiring in `fundamentals_quarterly_completeness._evaluate`
+    (per-period evidence join; sub-counter
+    `excluded_confirmed_data_gap_evidenced`; `to_regclass` existence
+    check to gracefully handle missing-table rollback).
+  - Dashboard panel sub-counter surfacing.
+  - ARDT watchlist override (force `excluded_dark` until FMP issue
+    triaged).
+  - Hermetic test suite (~10 tests + `CheckResult` frozen-shape
+    sentinel + `_infer_missing_period_ends` byte-freeze sentinel).
 
   Expected post-implementation outcome: 144 per-ticker FAILs drop to
   ≤ ~5 after evidence backfill; `DATA_OPERATIONS_COMPLETE` becomes
   achievable if residual reflects truly source-unavailable periods.
 
-  [lane: heavy] [gate: spec-reviewer PASS + operator spec-read]
-  [needs: operator review + plan PR + implementation PR (migration +
-  validator wiring + evidence-populator stage + dashboard surface)]
+  Operator live-run sequence (post-impl-merge): apply migration → bounded
+  populator smoke (`--param dry_run=false --param limit=50`) → validator
+  re-evaluation → full populator (`--param dry_run=false`) → confirm
+  FAIL count residual → `DATA_OPERATIONS_COMPLETE` check.
+
+  [lane: heavy] [gate: plan-reviewer PASS + operator plan-read]
+  [needs: operator plan review + implementation PR per heavy-lane §1
+  step 6 (one coherent PR; subagent-driven; split-review)]
 
 
 ## ✅ FPFD extractor repair (PRs #433–#437) — CLOSED 2026-06-02
