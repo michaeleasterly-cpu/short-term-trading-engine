@@ -497,9 +497,11 @@ class SECCompanyFactsAdapter:
             )
         return payload
 
-    async def get_submissions(self, cik: str) -> dict | None:
+    async def get_submissions(
+        self, cik: str, *, full_history: bool = False,
+    ) -> dict | None:
         """Fetch ``submissions/CIK<cik>.json`` from data.sec.gov
-        (P0-002 2026-05-30).
+        (P0-002 2026-05-30; full-history pagination 2026-06-02).
 
         Companyfacts is at ``data.sec.gov/api/xbrl/companyfacts/`` —
         submissions live at ``data.sec.gov/submissions/`` (sibling
@@ -507,7 +509,32 @@ class SECCompanyFactsAdapter:
         adapter is ``https://data.sec.gov`` so a relative path
         works. Returns the parsed dict, or ``None`` if SEC returned
         404 (CIK exists in our DB but SEC doesn't have a submissions
-        index — rare; usually means the CIK is wrong)."""
+        index — rare; usually means the CIK is wrong).
+
+        Pagination (``full_history=True``, 2026-06-02, spec PR #435):
+        SEC's ``filings.recent`` carries only the most recent ~1000
+        filings; older entries live in dated shards under
+        ``filings.files[]``. For long-lived issuers (JPM, MS, BMO,
+        RY, CM, AAPL, ~800 others) the base shard alone gives a wrong
+        ``first_public_filing_date`` because the actual first filing
+        happened decades ago and aged out of ``recent``. Setting
+        ``full_history=True`` walks every shard in ``filings.files[]``
+        and merges them into a single composite ``filings.recent``
+        block so the downstream ``extract_filing_metadata`` sees the
+        complete history. The mirror of the proven
+        ``tpcore/sec/edgar_adapter.py::fetch_filings`` pagination.
+
+        SEC fair-use: each shard is one additional HTTP request with a
+        0.11 s sleep between calls (matches the existing inter-fetch
+        pace in ``_stage_backfill_sec_metadata``). Shard fetch errors
+        are logged but do not abort — the partial merge is the safer
+        degradation than no data; failed shard names are surfaced via
+        the adapter-internal ``_shard_errors`` key in the returned
+        payload so callers / tests can inspect partial state. Default
+        ``False`` preserves the original single-call behaviour for all
+        callers that don't need deep history (incremental refresh
+        paths).
+        """
         if self._client is None:
             raise RuntimeError(
                 "SECCompanyFactsAdapter must be used as a context manager"
@@ -530,7 +557,69 @@ class SECCompanyFactsAdapter:
                 cik=cik_padded, status=resp.status_code,
             )
             return None
-        return resp.json()
+        payload = resp.json()
+        if not full_history:
+            return payload
+
+        # ─── pagination: walk filings.files[] and merge ───
+        filings = payload.get("filings") or {}
+        recent = filings.get("recent") or {}
+        files = filings.get("files") or []
+        if not files:
+            return payload
+
+        # Fields we merge for extract_filing_metadata. We deliberately
+        # don't merge optional-and-rarely-populated fields (items,
+        # accessionNumber, primaryDocument) because the metadata
+        # extractor doesn't read them — keeping the merge surface
+        # minimal lowers the risk of array-length skew between fields.
+        merge_keys = ("form", "filingDate", "reportDate")
+        merged: dict[str, list] = {
+            k: list(recent.get(k) or []) for k in merge_keys
+        }
+
+        import asyncio as _asyncio
+        shard_errors: list[str] = []
+        for shard in files:
+            name = shard.get("name")
+            if not name:
+                continue
+            shard_url = f"/submissions/{name}"
+            await _asyncio.sleep(0.11)  # SEC fair-use
+            try:
+                shard_resp = await self._client.get(shard_url)
+            except httpx.RequestError as exc:
+                shard_errors.append(name)
+                logger.warning(
+                    "sec.submissions.shard_fetch_error",
+                    cik=cik_padded, shard=name, error=str(exc),
+                )
+                continue
+            if shard_resp.status_code != 200:
+                shard_errors.append(name)
+                logger.warning(
+                    "sec.submissions.shard_unexpected_status",
+                    cik=cik_padded, shard=name,
+                    status=shard_resp.status_code,
+                )
+                continue
+            shard_payload = shard_resp.json()
+            for k in merge_keys:
+                merged[k].extend(shard_payload.get(k) or [])
+
+        # Rebuild payload with merged arrays in filings.recent. Drop
+        # files[] so downstream callers don't re-paginate.
+        new_recent = dict(recent)
+        for k in merge_keys:
+            new_recent[k] = merged[k]
+        new_filings = dict(filings)
+        new_filings["recent"] = new_recent
+        new_filings["files"] = []
+        new_payload = dict(payload)
+        new_payload["filings"] = new_filings
+        if shard_errors:
+            new_payload["_shard_errors"] = shard_errors
+        return new_payload
 
 
 # P2a (2026-05-30): SEC Form 25 / Form 15 evidence — periodic-lifecycle

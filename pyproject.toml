@@ -196,6 +196,11 @@ ignore = ["E501"]
 "tests/test_sec_ticker_cik_map.py" = ["SLF"]
 "tests/test_backfill_sec_metadata_stage.py" = ["SLF"]
 "tests/test_p0_no_validator_semantics_change.py" = ["SLF"]
+# 2026-06-02 FPFD extractor pagination tests need to inject a fake
+# httpx client (``sec._client = fake_client``) to assert pagination
+# behaviour hermetically without real SEC HTTP. Same precedent as the
+# CIK / backfill / lifecycle test allowlist entries above.
+"tests/test_sec_submissions_extract.py" = ["SLF"]
 # P2a SEC lifecycle-events extractor tests (2026-05-30):
 #   * test_p2_sec_lifecycle_events.py names ``_extract_lifecycle_events``
 #     and ``_build_sec_filing_url`` module-private helpers + accesses

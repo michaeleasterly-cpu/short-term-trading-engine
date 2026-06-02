@@ -221,3 +221,304 @@ async def test_007_get_submissions_requires_context_manager() -> None:
     sec = SECCompanyFactsAdapter()  # _client is None
     with pytest.raises(RuntimeError, match="context manager"):
         await sec.get_submissions("0000320193")
+
+
+# ── TEST-008 — full_history pagination merges filings.files[] shards ──
+# Spec PR #435 §12. Seven tests per the spec's tests_required list.
+
+
+def _fake_resp(payload: dict, status: int = 200):
+    """Build a minimal mock httpx response with .status_code + .json()."""
+    from unittest.mock import MagicMock
+    r = MagicMock()
+    r.status_code = status
+    r.json = MagicMock(return_value=payload)
+    return r
+
+
+@pytest.mark.asyncio
+async def test_008a_full_history_false_preserves_existing_recent_only_behavior() -> None:
+    """``full_history=False`` (default) issues exactly one HTTP call
+    and returns the raw payload — no pagination. Existing callers that
+    don't need deep history are unaffected."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    base_payload = {
+        "cik": "0000019617",
+        "fiscalYearEnd": "1231",
+        "filings": {
+            "recent": {
+                "form": ["10-Q"],
+                "filingDate": ["2026-05-01"],
+                "reportDate": ["2026-03-31"],
+            },
+            "files": [{"name": "CIK0000019617-submissions-001.json"}],
+        },
+    }
+    fake_client = MagicMock()
+    fake_client.get = AsyncMock(return_value=_fake_resp(base_payload))
+
+    sec = SECCompanyFactsAdapter()
+    sec._client = fake_client
+    payload = await sec.get_submissions("0000019617")
+
+    assert fake_client.get.await_count == 1
+    # files[] NOT consumed — caller didn't ask for full history.
+    assert payload["filings"]["files"] == [
+        {"name": "CIK0000019617-submissions-001.json"},
+    ]
+    assert payload["filings"]["recent"]["form"] == ["10-Q"]
+    assert "_shard_errors" not in payload
+
+
+@pytest.mark.asyncio
+async def test_008b_full_history_true_fetches_filings_files_shards() -> None:
+    """``full_history=True`` fetches every shard listed in
+    ``filings.files[]`` (one HTTP request per shard)."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    base_payload = {
+        "cik": "0000019617",
+        "fiscalYearEnd": "1231",
+        "filings": {
+            "recent": {
+                "form": ["10-Q"],
+                "filingDate": ["2026-05-01"],
+                "reportDate": ["2026-03-31"],
+            },
+            "files": [
+                {"name": "CIK0000019617-submissions-001.json"},
+                {"name": "CIK0000019617-submissions-002.json"},
+                {"name": "CIK0000019617-submissions-003.json"},
+            ],
+        },
+    }
+    shard = {
+        "form": ["10-Q"],
+        "filingDate": ["2017-05-01"],
+        "reportDate": ["2017-03-31"],
+    }
+    fake_client = MagicMock()
+    fake_client.get = AsyncMock(side_effect=[
+        _fake_resp(base_payload),
+        _fake_resp(shard),
+        _fake_resp(shard),
+        _fake_resp(shard),
+    ])
+
+    sec = SECCompanyFactsAdapter()
+    sec._client = fake_client
+    await sec.get_submissions("0000019617", full_history=True)
+
+    # 1 base + 3 shards = 4 HTTP calls.
+    assert fake_client.get.await_count == 4
+
+
+@pytest.mark.asyncio
+async def test_008c_pagination_merges_recent_and_shard_filings() -> None:
+    """Recent + each shard's parallel arrays are concatenated
+    in-order in the returned ``filings.recent`` block, and ``files[]``
+    is consumed (set to ``[]``)."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    base_payload = {
+        "cik": "0000019617",
+        "fiscalYearEnd": "1231",
+        "filings": {
+            "recent": {
+                "form": ["10-Q", "10-Q"],
+                "filingDate": ["2026-05-01", "2026-02-01"],
+                "reportDate": ["2026-03-31", "2025-12-31"],
+            },
+            "files": [
+                {"name": "CIK0000019617-submissions-001.json"},
+                {"name": "CIK0000019617-submissions-002.json"},
+            ],
+        },
+    }
+    shard_001 = {
+        "form": ["10-Q", "10-Q"],
+        "filingDate": ["2017-05-01", "2017-02-01"],
+        "reportDate": ["2017-03-31", "2016-12-31"],
+    }
+    shard_002 = {
+        "form": ["10-K", "10-Q"],
+        "filingDate": ["1981-03-30", "1980-11-15"],
+        "reportDate": ["1980-12-31", "1980-09-30"],
+    }
+    fake_client = MagicMock()
+    fake_client.get = AsyncMock(side_effect=[
+        _fake_resp(base_payload),
+        _fake_resp(shard_001),
+        _fake_resp(shard_002),
+    ])
+
+    sec = SECCompanyFactsAdapter()
+    sec._client = fake_client
+    payload = await sec.get_submissions("0000019617", full_history=True)
+
+    recent = payload["filings"]["recent"]
+    assert recent["form"] == [
+        "10-Q", "10-Q",  # base
+        "10-Q", "10-Q",  # shard 001
+        "10-K", "10-Q",  # shard 002
+    ]
+    assert recent["reportDate"] == [
+        "2026-03-31", "2025-12-31",
+        "2017-03-31", "2016-12-31",
+        "1980-12-31", "1980-09-30",
+    ]
+    assert recent["filingDate"] == [
+        "2026-05-01", "2026-02-01",
+        "2017-05-01", "2017-02-01",
+        "1981-03-30", "1980-11-15",
+    ]
+    # files[] consumed so downstream callers don't re-paginate.
+    assert payload["filings"]["files"] == []
+
+
+@pytest.mark.asyncio
+async def test_008d_mega_cap_fixture_computes_true_earliest_fpfd_not_recent_window_min() -> None:
+    """JPM-style regression: when shards span decades, the extractor
+    must compute ``first_public_filing_date`` from the merged history,
+    not the recent shard's floor.
+
+    Pre-pagination behaviour produced FPFD = min(reportDate within
+    recent-shard) ≈ 2017+ for JPM. With pagination, the extractor sees
+    the 1980 entry and returns it as FPFD."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    base_payload = {
+        "cik": "0000019617",
+        "fiscalYearEnd": "1231",
+        "filings": {
+            "recent": {
+                "form": ["10-Q", "10-K"],
+                "filingDate": ["2026-05-01", "2025-09-15"],
+                "reportDate": ["2026-03-31", "2025-06-30"],
+            },
+            "files": [
+                {"name": "CIK0000019617-submissions-001.json"},
+            ],
+        },
+    }
+    shard_001 = {
+        "form": ["10-K", "10-Q"],
+        "filingDate": ["1981-03-30", "1980-11-15"],
+        "reportDate": ["1980-12-31", "1980-09-30"],
+    }
+    fake_client = MagicMock()
+    fake_client.get = AsyncMock(side_effect=[
+        _fake_resp(base_payload),
+        _fake_resp(shard_001),
+    ])
+
+    sec = SECCompanyFactsAdapter()
+    sec._client = fake_client
+    payload = await sec.get_submissions("0000019617", full_history=True)
+    meta = SECCompanyFactsAdapter.extract_filing_metadata(payload)
+
+    # min(reportDate) over primary-form rows across merged history.
+    # Primary: 10-Q wins (3 occurrences vs 2 for 10-K).
+    # 10-Q reportDates: 2026-03-31, 1980-09-30 → min = 1980-09-30.
+    assert meta["first_public_filing_date"] == date(1980, 9, 30)
+    # The 2025-06-30 recent-shard floor is NOT returned.
+    assert meta["first_public_filing_date"] != date(2025, 6, 30)
+
+
+@pytest.mark.asyncio
+async def test_008e_no_shards_noop_uses_recent_only() -> None:
+    """When ``filings.files[]`` is empty or missing, ``full_history=True``
+    issues exactly one HTTP call and returns the payload as-is —
+    functional no-op on small filers (the recent-IPO cohort)."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    base_payload = {
+        "cik": "0001234567",
+        "fiscalYearEnd": "1231",
+        "filings": {
+            "recent": {
+                "form": ["10-Q"],
+                "filingDate": ["2026-05-01"],
+                "reportDate": ["2026-03-31"],
+            },
+            "files": [],
+        },
+    }
+    fake_client = MagicMock()
+    fake_client.get = AsyncMock(return_value=_fake_resp(base_payload))
+
+    sec = SECCompanyFactsAdapter()
+    sec._client = fake_client
+    payload = await sec.get_submissions("0001234567", full_history=True)
+
+    assert fake_client.get.await_count == 1
+    assert payload == base_payload
+
+
+@pytest.mark.asyncio
+async def test_008f_shard_fetch_error_degrades_gracefully() -> None:
+    """If one shard returns 5xx, the merge skips it but keeps the
+    partial result + lists the failed shard name in
+    ``_shard_errors``."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    base_payload = {
+        "cik": "0000019617",
+        "fiscalYearEnd": "1231",
+        "filings": {
+            "recent": {
+                "form": ["10-Q"],
+                "filingDate": ["2026-05-01"],
+                "reportDate": ["2026-03-31"],
+            },
+            "files": [
+                {"name": "CIK0000019617-submissions-001.json"},
+                {"name": "CIK0000019617-submissions-002.json"},
+            ],
+        },
+    }
+    shard_001 = {
+        "form": ["10-Q"],
+        "filingDate": ["2017-05-01"],
+        "reportDate": ["2017-03-31"],
+    }
+    # shard_002 errors out with 503.
+    fake_client = MagicMock()
+    fake_client.get = AsyncMock(side_effect=[
+        _fake_resp(base_payload),
+        _fake_resp(shard_001),
+        _fake_resp({}, status=503),
+    ])
+
+    sec = SECCompanyFactsAdapter()
+    sec._client = fake_client
+    payload = await sec.get_submissions("0000019617", full_history=True)
+
+    # All 3 fetches attempted; partial merge succeeds.
+    assert fake_client.get.await_count == 3
+    recent = payload["filings"]["recent"]
+    assert recent["form"] == ["10-Q", "10-Q"]  # base + shard_001 only
+    assert payload["_shard_errors"] == [
+        "CIK0000019617-submissions-002.json",
+    ]
+
+
+def test_008g_backfill_sec_metadata_calls_get_submissions_full_history_true() -> None:
+    """Sentinel: the ``_stage_backfill_sec_metadata`` caller must pass
+    ``full_history=True`` to ``sec.get_submissions``. If anyone removes
+    that argument (returning the recent-only behaviour), this test
+    reds CI. String-match on the source file rather than executing
+    the stage (hermetic; no DB / network)."""
+    from pathlib import Path
+    source = (
+        Path(__file__).resolve().parents[1] / "scripts" / "ops.py"
+    ).read_text(encoding="utf-8")
+    needle = "sec.get_submissions(cik, full_history=True)"
+    assert needle in source, (
+        f"_stage_backfill_sec_metadata must call {needle!r} so "
+        "first_public_filing_date is computed across the issuer's "
+        "complete SEC filing history. Spec PR #435 §10 + §13; "
+        "removing the full_history=True kwarg silently regresses "
+        "FPFD for ~999 long-lived issuers."
+    )

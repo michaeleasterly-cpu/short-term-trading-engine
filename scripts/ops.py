@@ -3057,7 +3057,14 @@ async def _stage_backfill_sec_metadata(
                 # SEC fair-use throttle.
                 await asyncio.sleep(0.11)
                 try:
-                    subs = await sec.get_submissions(cik)
+                    # 2026-06-02 — full_history=True paginates SEC's
+                    # filings.files[] so first_public_filing_date is
+                    # correct for long-lived issuers (JPM/MS/BMO/AAPL/…).
+                    # Spec PR #435 §10 + §13. Without pagination FPFD
+                    # reflects only the recent ~1000-filing shard (~8
+                    # years for prolific filers) and was producing
+                    # decade-shifted FPFD values for ~999 tickers.
+                    subs = await sec.get_submissions(cik, full_history=True)
                 except Exception as exc:  # noqa: BLE001
                     log.warning(
                         "ops.stage.backfill_sec_metadata.submissions_error",
