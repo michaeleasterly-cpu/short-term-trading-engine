@@ -1326,7 +1326,7 @@ the acquirer-resolution. Not on the critical path of any current engine.
 [lane: ops] [gate: none] [needs: corporate-actions adapter design + SEC EDGAR
 ticker-disambiguation client + per-ticker manual review for the ambiguous set]
 
-### Symbol-history evidence backfill (2026-06-02, spec + plan landed; impl shipped PR #444; Option B same-CIK forward fix in flight)
+### Symbol-history evidence backfill (2026-06-02, spec + plan + impl + Option B fix all SHIPPED; live populate + all 5 bucket dry-runs done; cleanup arc STOPPED — substrate insufficient for automated cleanup)
 
 Direct follow-up from the ticker-reuse fundamentals cleanup arc (PR #441 +
 2026-06-02 bucket=1 dry-run verification). Bucket=1 dry-run produced **0
@@ -1382,9 +1382,39 @@ natural key (actual: 2-col `(classification_id, valid_from)` PK +
 GiST EXCLUDE). Tests pinned in
 `tests/test_symbol_history_evidence_backfill_stage.py`.
 
-[lane: heavy] [gate: operator code-review PASS on forward-fix PR]
-[needs: live re-run with Option B in dry_run=false to verify zero
-overlap violations + populated counters]
+**Closeout (2026-06-02 afternoon):** PR #445 (Option B fix) MERGED at `8498f14`. Live `--param dry_run=false` retry SUCCEEDED:
+
+- `ticker_history`: 13,840 → **19,013** (+5,173; the −1 from forecast is the 1 same-CIK `pre_dates_change` skip — Option B guard fired correctly and emitted `data_quality_log kind='same_cik_window_pre_dates_change'`)
+- `issuer_securities`: 25 → **89** (+64, exact)
+- `ticker_classifications`: 13,840 → **19,004** (+5,164; −159 short of 5,323 forecast = TKR-14 deterministic-mint collisions hitting `ON CONFLICT DO NOTHING` at ~3% rate, above the 1.7% theoretical floor — SPACs' short-tickered same-year mints cluster the hash space)
+- `ticker_classifications` (`lifetime_end IS NULL` = active): UNCHANGED at 12,344 — Option B did not mutate any live row.
+- `data_quality_log`: 1,331 → **6,407** (+5,076; stage-reported 5,256 written → 180 deduped by table-side natural key; non-blocking)
+- `fundamentals_quarterly`: UNCHANGED at 183,352 (invariant held)
+- Zero GiST EXCLUDE violations. Archive-first short-circuit confirmed (no FMP provider GET).
+
+**Post-populate cleanup dry-runs (all 5 buckets, 2026-06-02):**
+
+| Bucket | Candidates | Distinct tix | rank-0 (no_evidence → ambiguous) | rank-2 (issuer_history → weak_keep) | **rank-1** | **rank-3** |
+|---|---:|---:|---:|---:|---:|---:|
+| 1 | 74 | 74 | 50 | 24 | **0** | **0** |
+| 2-3 | 267 | 111 | 204 | 63 | **0** | **0** |
+| 4-9 | 2,536 | 432 | 1,983 | 553 | **0** | **0** |
+| 10-19 | 1,255 | 97 | 916 | 339 | **0** | **0** |
+| 20+ | 1,884 | 69 | 1,535 | 349 | **0** | **0** |
+| **Total** | **6,016** | **783** | **4,688 (77.9%)** | **1,328 (22.1%)** | **0** | **0** |
+
+**Empirical decisive finding:** rank-3 NEVER fires across all 6,016 candidate rows. A classifier rank-priority reframe (rank-3-before-rank-2) would change NOTHING because the substrate is structurally insufficient — of the 1,304 rank-2 weak-keep rows, 551 have a `ticker_history` row at the bucket-row's `period_end_date`, but **0** of those 551 have a corresponding `issuer_securities` row at the same date. The reason: 5,109 of 5,173 (98.8%) of the new `ticker_history` rows tie to FMP-only-minted classification_ids that SKIP the `issuer_securities` insert path (the FMP `/symbol-change` endpoint has no CIK field; Path C cross-walk to SEC `submissions.zip` resolves only 68 of 5,334 rows — 1.3%).
+
+**Decision (operator, 2026-06-02 afternoon):** STOP cleanup arc. No live cleanup, no quarantine, no fundamentals_quarterly delete. The 6,016 residual rows remain in `fundamentals_quarterly`; they are flagged via `first_public_filing_date < period_end_date` but cannot be safely auto-classified with the current evidence sources.
+
+**What would unblock automated cleanup (future, not in scope):**
+
+1. **A richer ticker→issuer historical mapping source** — e.g., CRSP/Compustat subscription, OpenFIGI batch (not per-ticker crawl), or a NASDAQ/NYSE archive of daily issuer-list snapshots that intersect the bucket-row period_end_dates. The FMP `/symbol-change` feed alone is too thin (1.3% Path C resolution).
+2. **A different cleanup framing** — e.g., treat the 6,016 residuals as a `data_quality_log` annotation (mark rows as "pre-FPFD; provenance uncertain") rather than archive/quarantine candidates. Preserves the rows for backtest research while signaling caution to engines that consume fundamentals.
+
+No further work on this arc until one of those substrate sources lands.
+
+[lane: closed] [gate: none — arc STOPPED] [empirical-result: 0 high_confidence across 5 buckets / 6,016 rows / 783 tickers]
 
 
 ## Discovered follow-ups — RiskGovernor work + architecture review (2026-05-17)
