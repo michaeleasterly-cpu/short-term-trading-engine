@@ -510,3 +510,112 @@ carries that `source` prefix.
 
 These do not block this plan PR — they are research items for the
 implementer to resolve before opening the implementation PR.
+
+## 16. Post-populate empirical result (2026-06-02 afternoon — arc CLOSEOUT)
+
+PR #444 (impl) merged at `b68f915`. The first live `--param dry_run=false`
+hit `asyncpg.ExclusionViolationError` on the `ticker_history_no_overlap`
+GiST EXCLUDE on the same-CIK ticker-change path. Partial state was rolled
+back via the `source LIKE 'symbol_history_evidence_backfill.%'` predicate
+(see §13). PR #445 (Option B forward fix) merged at `8498f14`. The live
+retry SUCCEEDED.
+
+### 16.1 Live populate deltas
+
+| Table | Pre | Post | Δ | Forecast | Status |
+|---|---:|---:|---:|---:|---|
+| `ticker_history` | 13,840 | 19,013 | **+5,173** | +5,174 | −1 (1 same-CIK row hit `same_cik_pre_dates_change` — Option B guard fired correctly) |
+| `issuer_securities` | 25 | 89 | **+64** | +64 | **exact** |
+| `ticker_classifications` | 13,840 | 19,004 | **+5,164** | +5,323 | −159 (TKR-14 collisions; `ON CONFLICT DO NOTHING`) |
+| `ticker_classifications` (`lifetime_end IS NULL` = active) | 12,344 | 12,344 | **0** | 0 | **no active row mutated** |
+| `data_quality_log` | 1,331 | 6,407 | **+5,076** | stage-reported 5,256 written | 180 deduped at DB layer |
+| `fundamentals_quarterly` | 183,352 | 183,352 | **0** | 0 | **invariant held** |
+
+Zero GiST EXCLUDE violations. Archive-first short-circuit confirmed (no
+provider GET). Same-CIK Option B path: 9 successful close+insert pairs,
+1 unresolvable-window skip with `data_quality_log` row.
+
+### 16.2 Post-populate cleanup dry-runs (all 5 buckets)
+
+`python scripts/ops.py --stage cleanup_ticker_reuse_fundamentals --param
+dry_run=true --param severity_bucket={1, 2-3, 4-9, 10-19, 20+}`. All five
+dry-runs executed read-only; 0 DB writes; all archive-hit, no provider
+calls; no shard errors.
+
+| Bucket | Candidates | Distinct tickers | rank-0 (no_evidence → ambiguous) | rank-2 (issuer_history → weak_keep) | **rank-1** | **rank-3** | high_confidence |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 74 | 74 | 50 | 24 | **0** | **0** | **0** |
+| 2-3 | 267 | 111 | 204 | 63 | **0** | **0** | **0** |
+| 4-9 | 2,536 | 432 | 1,983 | 553 | **0** | **0** | **0** |
+| 10-19 | 1,255 | 97 | 916 | 339 | **0** | **0** | **0** |
+| 20+ | 1,884 | 69 | 1,535 | 349 | **0** | **0** | **0** |
+| **Total** | **6,016** | **783** | **4,688 (77.9%)** | **1,328 (22.1%)** | **0** | **0** | **0** |
+
+### 16.3 Why rank-3 NEVER fires — structural finding
+
+Of the 1,304 rank-2 weak-keep rows aggregated across buckets 1 + 2-3 + 4-9
++ 10-19 + 20+:
+
+- **551** (42%) have a `ticker_history` row at the bucket-row's
+  `period_end_date` (i.e., the populated substrate did intersect).
+- **0** (zero) of those 551 have a corresponding `issuer_securities` row
+  at the same date.
+- **0** would flip to `high_confidence` under a classifier rank-priority
+  reframe (rank-3-before-rank-2) — the second-stage `issuer_securities`
+  lookup is what makes rank-3 dispositive, and it is empty for the
+  reachable substrate.
+
+The reason: of the 5,173 new `ticker_history` rows, 5,109 (98.8%) tie to
+FMP-only-minted classification_ids that **deliberately skip** the
+`issuer_securities` insert (Path C cross-walk to SEC `submissions.zip`
+resolved only 68 of 5,334 rows — 1.3% — because FMP `/symbol-change`
+carries no CIK field and the cross-walk only hits when the predecessor
+still appears in current `submissions.zip tickers[]`, which delisted
+predecessors don't).
+
+### 16.4 Decision — arc STOPPED
+
+The substrate populated correctly (Option B fix held; no GiST collisions;
+fundamentals_quarterly invariant intact). The cleanup classifier
+correctly applied its rank logic against the populated substrate. The
+empirical answer: **the current evidence sources are structurally
+insufficient for automated high-confidence cleanup of any of the 6,016
+candidate rows**.
+
+A classifier rank-priority reframe is NOT JUSTIFIED — the empirical
+evidence shows the reframe would change zero dispositions. The bottleneck
+is `issuer_securities` coverage, not classifier-logic order.
+
+What would unblock automated cleanup (out of scope for this arc):
+
+1. **Richer ticker→issuer historical-mapping source** — e.g., CRSP /
+   Compustat subscription, OpenFIGI batch (NOT per-ticker crawl), or a
+   NASDAQ / NYSE archive of daily issuer-list snapshots that intersect
+   bucket-row period_end_dates. The FMP `/symbol-change` feed alone is
+   too thin (1.3% Path C resolution rate).
+2. **A different cleanup framing** — e.g., treat the 6,016 residuals as a
+   `data_quality_log` annotation (mark rows "pre-FPFD; provenance
+   uncertain") rather than archive/quarantine candidates. Preserves rows
+   for backtest research while signaling caution to engines that consume
+   `fundamentals_quarterly`.
+
+No further work on this cleanup arc until one of those substrate
+sources lands or the framing changes.
+
+### 16.5 What this plan delivered
+
+- `ticker_history` 38% larger, `issuer_securities` 256% larger
+  (`(89 / 25) − 1`), and historical predecessor identity captured for
+  ~5,164 prior issuers — all useful **research substrate** for future
+  ticker-lineage queries even though it didn't move the cleanup
+  classifier on bucket=1.
+- Verified `ticker_history_no_overlap` GiST EXCLUDE in a live failure +
+  rollback + Option B fix cycle — the temporal-integrity invariant is
+  now tested and proven correct at the schema level.
+- 21 plan-sentinel + 29 stage tests + 50 plan + 9 Option B tests pinning
+  the load-bearing claims so future "tidy" passes cannot silently lose
+  the empirical numbers above.
+
+**Status: CLOSEOUT.** The arc shipped its substrate but did not unlock
+the downstream cleanup. The doc is preserved as historical record + the
+empirical-floor sentinel test pins the numbers.
