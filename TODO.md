@@ -1326,6 +1326,35 @@ the acquirer-resolution. Not on the critical path of any current engine.
 [lane: ops] [gate: none] [needs: corporate-actions adapter design + SEC EDGAR
 ticker-disambiguation client + per-ticker manual review for the ambiguous set]
 
+### Symbol-history evidence backfill (2026-06-02, spec landed)
+
+Direct follow-up from the ticker-reuse fundamentals cleanup arc (PR #441 +
+2026-06-02 bucket=1 dry-run verification). Bucket=1 dry-run produced **0
+high-confidence delete candidates** across two runs, including one
+immediately after `corp_history_edgar_backfill` populated +513
+`issuer_history` rows. Root cause: classifier rank-3 path needs
+`ticker_history` historical reassignments + `issuer_securities` mappings,
+both effectively empty (13,840 current-snapshot rows in `ticker_history`,
+25 rows in `issuer_securities`). SEC `formerNames` cannot fill this —
+captures same-CIK *name* change, silent on SPAC ticker change and
+true cross-issuer reuse.
+
+**Operator decision 2026-06-02:** stop bucket-cleanup execution. No
+quarantine of the 50 ambiguous bucket=1 rows. Build substrate first.
+
+Spec: `docs/superpowers/specs/2026-06-02-symbol-history-evidence-backfill.md`.
+Next: plan PR per heavy-lane §1 (spec-reviewer PASS → operator gate →
+implementation PR). Implementation surface = new bulk-first
+`scripts/ops.py` stage `symbol_history_evidence_backfill` populating
+`ticker_history` + `issuer_securities` from R2-archived FMP daily
+snapshots (preferred) or FMP bulk symbol-change (secondary), plus
+classifier reframe distinguishing same-CIK ticker change (KEEP) from
+different-issuer reuse (ARCHIVE).
+
+[lane: heavy] [gate: spec-reviewer PASS + operator spec-read]
+[needs: R2 archive prefix inventory, FMP symbol-change endpoint shape,
+empirical floor for `issuer_securities` sentinel]
+
 
 ## Discovered follow-ups — RiskGovernor work + architecture review (2026-05-17)
 
