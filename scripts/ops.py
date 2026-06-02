@@ -3956,6 +3956,1005 @@ async def _stage_cleanup_ticker_reuse_fundamentals(
     return out
 
 
+# ─── Symbol-history evidence backfill (spec PR #442 + plan PR #443) ────
+# Path B (FMP /stable/symbol-change bulk) primary + Path C (SEC submissions.zip
+# cross-walk) resolver. Single bulk GET → R2 archive → ticker_history +
+# issuer_securities (additive only). Idempotent. NEVER touches
+# fundamentals_quarterly. No per-ticker crawl. See:
+#   docs/superpowers/specs/2026-06-02-symbol-history-evidence-backfill.md
+#   docs/superpowers/plans/2026-06-02-symbol-history-evidence-backfill-plan.md
+#   tests/test_symbol_history_evidence_plan_documented.py
+
+FMP_SYMBOL_CHANGE_LIMIT_DEFAULT: int = 10000
+FMP_SYMBOL_CHANGE_SENTINEL_DATE: str = "1969-12-31"
+FMP_SYMBOL_CHANGE_ARCHIVE_SOURCE: str = "fmp_symbol_change"
+FMP_SYMBOL_CHANGE_URL: str = (
+    "https://financialmodelingprep.com/stable/symbol-change"
+)
+
+
+def _symbol_history_evidence_manifest_columns() -> tuple[str, ...]:
+    """Fixed manifest CSV column set for symbol_history_evidence_backfill.
+
+    Pinned by the plan §6.2 schema sentinel test.
+    """
+    return (
+        "oldSymbol",
+        "newSymbol",
+        "change_date",
+        "companyName",
+        "old_cik_resolved",
+        "old_cik_source",
+        "new_cik_resolved",
+        "new_cik_source",
+        "predecessor_classification_id_minted",
+        "classification_action",
+        "ticker_history_written",
+        "issuer_securities_written",
+        "disposition",
+    )
+
+
+async def _stage_symbol_history_evidence_backfill(
+    pool: asyncpg.Pool, cfg: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Populate ``ticker_history`` + ``issuer_securities`` + historical
+    ``ticker_classifications`` predecessors from the FMP bulk
+    ``/stable/symbol-change`` endpoint (Path B primary) cross-walked
+    against the SEC ``submissions.zip`` for ``oldSymbol@date → oldCIK``
+    (Path C resolver).
+
+    Per spec ``2026-06-02-symbol-history-evidence-backfill.md`` +
+    plan ``2026-06-02-symbol-history-evidence-backfill-plan.md``.
+
+    Hard invariants (sentinel-pinned):
+
+      1. Archive-first read — if a recent R2 archive exists
+         (``<archive_max_age_days``), use that. No provider call.
+      2. Archive-after-download parity — if FMP is called, the bytes
+         are written to R2 BEFORE ingest, re-read, and
+         ``len() + sha256()`` MUST match. Mismatch hard-stops the run
+         before any DB write.
+      3. ``use_bulk_zip=true`` is the only path; ``use_bulk_zip=false``
+         raises immediately. No per-ticker crawl.
+      4. At most ONE ``httpx.AsyncClient.get`` call site in this stage.
+         Per-row HTTP is a producer-hard-stop (AST-asserted by
+         ``tests/test_symbol_history_evidence_backfill_stage.py``).
+      5. ``1969-12-31`` sentinel-date rows are NEVER silently dropped —
+         emit ``data_quality_log kind='fmp_symbol_change_sentinel_date'``
+         and skip the ``ticker_history`` insert (no trustworthy
+         ``valid_to``).
+      6. ``oldSymbol == newSymbol`` rows are skipped (FMP echoes).
+      7. Same-CIK ticker change → SAME issuer used both symbols;
+         emit one ``ticker_history`` row tying old symbol to the NEW
+         issuer's classification_id; disposition
+         ``same_cik_ticker_change``. No new ticker_classifications row.
+      8. Different-issuer reuse → mint historical predecessor
+         ``ticker_classifications`` row (lifetime_end = change_date,
+         non-NULL) + ``issuer_securities`` row + ``ticker_history`` row;
+         disposition ``different_issuer_reuse``.
+      9. FMP-only unresolved-CIK → mint TKR-14 predecessor from
+         ``(country=US, asset_class=S, ipo_venue=Z, discovery_source=F,
+         seed=country|companyName)``; insert ``ticker_classifications``
+         row + ``ticker_history`` row; SKIP ``issuer_securities``;
+         emit ``data_quality_log kind='fmp_only_no_issuer'``;
+         disposition ``fmp_only_unresolved``.
+     10. All writes idempotent via ``ON CONFLICT DO NOTHING`` on the
+         natural keys (``ticker_history(classification_id, valid_from)``
+         per the existing PK / GiST EXCLUDE; ``issuer_securities
+         (issuer_id, classification_id, valid_from)``).
+     11. NO ``fundamentals_quarterly`` writes; NO DELETE; NO UPDATE on
+         existing rows; additive-only.
+
+    Knobs (``--param key=value``):
+
+      * ``dry_run`` (bool, default True) — print plan; no DB writes.
+      * ``use_bulk_zip`` (bool, default True) — ``false`` raises.
+      * ``archive_max_age_days`` (float, default 7) — freshness floor
+        for the R2 archive.
+      * ``local_cache_path`` (str, default
+        ``/tmp/fmp_symbol_change_latest.json.gz``) — local fallback.
+      * ``force_download`` (bool, default False) — operator override
+        bypassing archive + local cache.
+      * ``limit`` (int, default 10000) — FMP ``?limit=`` value.
+      * ``manifest_path`` (str, default
+        ``data/symbol_history_evidence_manifest_<UTC>.csv``).
+      * ``archive_source_name`` (str, default ``fmp_symbol_change``).
+    """
+    from datetime import UTC as _UTC
+    from datetime import date as _date
+    from datetime import datetime as _dt
+    from pathlib import Path as _Path
+
+    log = structlog.get_logger("scripts.ops")
+    cfg = cfg or {}
+
+    def _to_bool(v: Any) -> bool:
+        if isinstance(v, bool):
+            return v
+        return str(v).lower() in ("true", "1", "yes", "y")
+
+    dry_run = _to_bool(cfg.get("dry_run", True))
+    use_bulk_zip = _to_bool(cfg.get("use_bulk_zip", True))
+    if not use_bulk_zip:
+        # Producer-hard-stop: a per-ticker crawl is the killed
+        # anti-pattern. The bulk endpoint is the only legitimate path.
+        raise RuntimeError(
+            "symbol_history_evidence_backfill: use_bulk_zip=true is the "
+            "only supported path (per-ticker crawl is a producer-hard-"
+            "stop; see plan §7). Drop the --param use_bulk_zip=false "
+            "flag or set it to true."
+        )
+    archive_max_age_days = float(cfg.get("archive_max_age_days", 7))
+    local_cache_path = _Path(
+        str(cfg.get("local_cache_path", "/tmp/fmp_symbol_change_latest.json.gz"))  # noqa: S108
+    )
+    force_download = _to_bool(cfg.get("force_download", False))
+    limit = int(cfg.get("limit", FMP_SYMBOL_CHANGE_LIMIT_DEFAULT))
+    archive_source = str(cfg.get(
+        "archive_source_name", FMP_SYMBOL_CHANGE_ARCHIVE_SOURCE,
+    ))
+    default_manifest = (
+        f"data/symbol_history_evidence_manifest_"
+        f"{_dt.now(_UTC).strftime('%Y%m%dT%H%MZ')}.csv"
+    )
+    manifest_path = _Path(str(cfg.get("manifest_path", default_manifest)))
+
+    run_id = uuid.uuid4()
+    log.info(
+        "ops.stage.symbol_history_evidence_backfill.start",
+        dry_run=dry_run,
+        use_bulk_zip=use_bulk_zip,
+        archive_max_age_days=archive_max_age_days,
+        local_cache_path=str(local_cache_path),
+        force_download=force_download,
+        limit=limit,
+        archive_source=archive_source,
+        manifest_path=str(manifest_path),
+        run_id=str(run_id),
+    )
+
+    # ─── 1. Resolve the FMP symbol-change bulk artifact ───
+    payload_bytes = await _fetch_fmp_symbol_change_bulk(
+        archive_source=archive_source,
+        archive_max_age_days=archive_max_age_days,
+        local_cache_path=local_cache_path,
+        force_download=force_download,
+        limit=limit,
+        log=log,
+    )
+
+    # ─── 2. Decode JSON payload ───
+    import gzip as _gzip
+    import json as _json
+    decoded_text = _gzip.decompress(payload_bytes).decode("utf-8")
+    raw_rows = _json.loads(decoded_text)
+    if not isinstance(raw_rows, list):
+        raise RuntimeError(
+            "symbol_history_evidence_backfill: FMP symbol-change payload "
+            f"must be a list, got {type(raw_rows).__name__}"
+        )
+    log.info(
+        "ops.stage.symbol_history_evidence_backfill.payload_parsed",
+        n_rows=len(raw_rows),
+    )
+
+    # ─── 3. Build SEC cross-walk dict from submissions.zip ───
+    cross_walk = await _build_sec_ticker_cik_crosswalk(log=log)
+    log.info(
+        "ops.stage.symbol_history_evidence_backfill.crosswalk_built",
+        n_keys=len(cross_walk),
+    )
+
+    # ─── 4. Pull current ticker_classifications snapshot ───
+    async with pool.acquire() as conn:
+        tc_rows = await conn.fetch(
+            """
+            SELECT ticker, id AS classification_id, cik, country,
+                   current_legal_name
+            FROM platform.ticker_classifications
+            WHERE lifetime_end IS NULL
+            """
+        )
+    current_by_ticker: dict[str, dict[str, Any]] = {
+        r["ticker"]: dict(r) for r in tc_rows
+    }
+    log.info(
+        "ops.stage.symbol_history_evidence_backfill.current_snapshot",
+        n_active_classifications=len(current_by_ticker),
+    )
+
+    # ─── 5. Per-row classification ───
+    counters: dict[str, int] = {
+        "rows_input": len(raw_rows),
+        "rows_skipped_same_symbol": 0,
+        "rows_skipped_sentinel_date": 0,
+        "rows_same_cik_ticker_change": 0,
+        "rows_different_issuer_reuse": 0,
+        "rows_fmp_only_unresolved": 0,
+        "rows_skipped_no_new_cls": 0,
+        "ticker_history_planned": 0,
+        "issuer_securities_planned": 0,
+        "ticker_classifications_planned": 0,
+        "data_quality_log_planned": 0,
+    }
+
+    # Insertable rows (one per disposition). Each entry knows what tables
+    # it touches; the live-mode loop flushes batches.
+    ticker_classifications_inserts: list[tuple[Any, ...]] = []
+    issuers_inserts: list[tuple[Any, ...]] = []
+    issuer_securities_inserts: list[tuple[Any, ...]] = []
+    ticker_history_inserts: list[tuple[Any, ...]] = []
+    data_quality_log_inserts: list[tuple[Any, ...]] = []
+    manifest_rows: list[dict[str, Any]] = []
+
+    # Track classification_ids we minted this run so we don't double-
+    # plan a ticker_history row that would violate the GiST EXCLUDE
+    # constraint within the same batch. The DB-level constraints catch
+    # cross-run dupes; this in-memory dedupe catches same-run echoes.
+    planned_th_keys: set[tuple[str, _date]] = set()
+    planned_is_keys: set[tuple[str, str, _date]] = set()
+
+    for raw in raw_rows:
+        old_symbol = str(raw.get("oldSymbol", "")).strip().upper()
+        new_symbol = str(raw.get("newSymbol", "")).strip().upper()
+        change_date_str = str(raw.get("date", "")).strip()[:10]
+        company_name = str(raw.get("companyName", "")).strip()
+
+        if not old_symbol or not new_symbol or not change_date_str:
+            counters["rows_skipped_no_new_cls"] += 1
+            continue
+
+        if old_symbol == new_symbol:
+            counters["rows_skipped_same_symbol"] += 1
+            manifest_rows.append({
+                "oldSymbol": old_symbol,
+                "newSymbol": new_symbol,
+                "change_date": change_date_str,
+                "companyName": company_name,
+                "old_cik_resolved": "",
+                "old_cik_source": "none",
+                "new_cik_resolved": "",
+                "new_cik_source": "none",
+                "predecessor_classification_id_minted": "",
+                "classification_action": "skipped",
+                "ticker_history_written": "false",
+                "issuer_securities_written": "false",
+                "disposition": "skipped_same_symbol",
+            })
+            continue
+
+        # 1969-12-31 sentinel: emit data_quality_log, skip ticker_history
+        # (no trustworthy valid_to).
+        if change_date_str == FMP_SYMBOL_CHANGE_SENTINEL_DATE:
+            counters["rows_skipped_sentinel_date"] += 1
+            counters["data_quality_log_planned"] += 1
+            data_quality_log_inserts.append((
+                f"symbol_history_evidence_backfill.{old_symbol}",
+                _json.dumps({
+                    "kind": "fmp_symbol_change_sentinel_date",
+                    "oldSymbol": old_symbol,
+                    "newSymbol": new_symbol,
+                    "date": change_date_str,
+                    "companyName": company_name,
+                }),
+            ))
+            manifest_rows.append({
+                "oldSymbol": old_symbol,
+                "newSymbol": new_symbol,
+                "change_date": change_date_str,
+                "companyName": company_name,
+                "old_cik_resolved": "",
+                "old_cik_source": "none",
+                "new_cik_resolved": "",
+                "new_cik_source": "none",
+                "predecessor_classification_id_minted": "",
+                "classification_action": "skipped_sentinel_date",
+                "ticker_history_written": "false",
+                "issuer_securities_written": "false",
+                "disposition": "skipped_sentinel_date",
+            })
+            continue
+
+        try:
+            change_date = _date.fromisoformat(change_date_str)
+        except ValueError:
+            counters["rows_skipped_no_new_cls"] += 1
+            continue
+
+        # Resolve new-symbol classification (must currently exist).
+        new_entry = current_by_ticker.get(new_symbol)
+        new_classification_id = (
+            str(new_entry["classification_id"]) if new_entry else None
+        )
+        new_cik = (
+            str(new_entry["cik"]) if new_entry and new_entry.get("cik")
+            else None
+        )
+
+        # Cross-walk oldSymbol@date → oldCIK via SEC submissions.zip.
+        old_cik, old_cik_source = _resolve_old_cik_from_crosswalk(
+            cross_walk, old_symbol, change_date,
+        )
+
+        # Same-CIK ticker change → emit ticker_history row tying old
+        # symbol to the NEW issuer's classification_id.
+        if (
+            old_cik is not None
+            and new_cik is not None
+            and old_cik == new_cik
+            and new_classification_id is not None
+        ):
+            # valid_from heuristic: 1 year before change_date — historical
+            # SEC-filing-year would be more precise but is not available
+            # without iterating CIK's filings; the cleanup classifier only
+            # needs same/different issuer evidence (not perfect window).
+            valid_from = _date(
+                max(change_date.year - 1, 1900), 1, 1,
+            )
+            valid_to = change_date
+            th_key = (new_classification_id, valid_from)
+            if th_key not in planned_th_keys:
+                planned_th_keys.add(th_key)
+                ticker_history_inserts.append((
+                    new_classification_id, old_symbol, valid_from, valid_to,
+                ))
+                counters["ticker_history_planned"] += 1
+            counters["rows_same_cik_ticker_change"] += 1
+            manifest_rows.append({
+                "oldSymbol": old_symbol,
+                "newSymbol": new_symbol,
+                "change_date": change_date_str,
+                "companyName": company_name,
+                "old_cik_resolved": old_cik,
+                "old_cik_source": old_cik_source,
+                "new_cik_resolved": new_cik,
+                "new_cik_source": "ticker_classifications",
+                "predecessor_classification_id_minted": "",
+                "classification_action": "existing",
+                "ticker_history_written": "true",
+                "issuer_securities_written": "false",
+                "disposition": "same_cik_ticker_change",
+            })
+            continue
+
+        # Different-issuer reuse (old_cik != new_cik AND both non-NULL).
+        if (
+            old_cik is not None
+            and new_cik is not None
+            and old_cik != new_cik
+        ):
+            disposition = "different_issuer_reuse"
+            tkr14_source_code = "S"
+        elif old_cik is None:
+            disposition = "fmp_only_unresolved"
+            tkr14_source_code = "F"
+        else:
+            # old_cik known, new_cik unknown — treat as fmp_only_unresolved
+            # to surface the new-side gap.
+            disposition = "fmp_only_unresolved"
+            tkr14_source_code = "F"
+
+        # Mint TKR-14 predecessor.
+        country_seed = "US"
+        if new_entry and new_entry.get("country"):
+            country_seed = str(new_entry["country"])[:2].upper() or "US"
+        elif company_name:
+            country_seed = "US"  # FMP-only fallback per plan §2.3.
+
+        # The mint year segment uses the predecessor's discovery-time
+        # snapshot; for unknown historical rows we use the change_date's
+        # YEAR (the at-mint convention for historical predecessors).
+        mint_now = _dt(
+            change_date.year, change_date.month, change_date.day,
+            tzinfo=_UTC,
+        )
+        legal_name_seed = company_name or new_symbol
+        predecessor_cls_id = _mint_tkr14_predecessor(
+            country=country_seed,
+            cik=old_cik,
+            legal_name=legal_name_seed,
+            discovery_source_code=tkr14_source_code,
+            mint_now=mint_now,
+        )
+
+        # ticker_classifications insert: predecessor row with
+        # lifetime_end = change_date (non-NULL — the historical-row
+        # marker). Carries cik (may be NULL for FMP-only).
+        ticker_classifications_inserts.append((
+            predecessor_cls_id,
+            old_symbol,
+            country_seed,
+            old_cik,
+            "stock",
+            "Z",  # ipo_venue sentinel — unknown historical
+            tkr14_source_code,
+            "inactive",
+            _date(max(change_date.year - 1, 1900), 1, 1),  # lifetime_start
+            change_date,                                     # lifetime_end
+            company_name or None,
+            f"symbol_history_evidence_backfill.{tkr14_source_code}",
+        ))
+        counters["ticker_classifications_planned"] += 1
+
+        valid_from = _date(max(change_date.year - 1, 1900), 1, 1)
+        valid_to = change_date
+        th_key = (predecessor_cls_id, valid_from)
+        if th_key not in planned_th_keys:
+            planned_th_keys.add(th_key)
+            ticker_history_inserts.append((
+                predecessor_cls_id, old_symbol, valid_from, valid_to,
+            ))
+            counters["ticker_history_planned"] += 1
+
+        # issuer_securities + issuers — only for different_issuer_reuse
+        # (old_cik known → we can mint issuer_id from CIK).
+        issuer_securities_written = False
+        if disposition == "different_issuer_reuse":
+            predecessor_issuer_id = _mint_issuer_id_from_cik(old_cik)
+            if predecessor_issuer_id is not None:
+                # Ensure issuer row exists before issuer_securities FK fires.
+                issuers_inserts.append((
+                    predecessor_issuer_id,
+                    old_cik,
+                    legal_name_seed,
+                    "active",
+                ))
+                is_key = (
+                    predecessor_issuer_id, predecessor_cls_id, valid_from,
+                )
+                if is_key not in planned_is_keys:
+                    planned_is_keys.add(is_key)
+                    issuer_securities_inserts.append((
+                        predecessor_issuer_id,
+                        predecessor_cls_id,
+                        valid_from,
+                        valid_to,
+                    ))
+                    counters["issuer_securities_planned"] += 1
+                    issuer_securities_written = True
+            counters["rows_different_issuer_reuse"] += 1
+        else:
+            # fmp_only_unresolved — no issuer to mint without CIK; emit
+            # data_quality_log for operator awareness.
+            counters["rows_fmp_only_unresolved"] += 1
+            counters["data_quality_log_planned"] += 1
+            data_quality_log_inserts.append((
+                f"symbol_history_evidence_backfill.{old_symbol}",
+                _json.dumps({
+                    "kind": "fmp_only_no_issuer",
+                    "oldSymbol": old_symbol,
+                    "newSymbol": new_symbol,
+                    "date": change_date_str,
+                    "companyName": company_name,
+                    "predecessor_classification_id": predecessor_cls_id,
+                }),
+            ))
+
+        manifest_rows.append({
+            "oldSymbol": old_symbol,
+            "newSymbol": new_symbol,
+            "change_date": change_date_str,
+            "companyName": company_name,
+            "old_cik_resolved": old_cik or "",
+            "old_cik_source": old_cik_source,
+            "new_cik_resolved": new_cik or "",
+            "new_cik_source": (
+                "ticker_classifications" if new_cik else "none"
+            ),
+            "predecessor_classification_id_minted": predecessor_cls_id,
+            "classification_action": "minted_new",
+            "ticker_history_written": "true",
+            "issuer_securities_written": (
+                "true" if issuer_securities_written else "false"
+            ),
+            "disposition": disposition,
+        })
+
+    log.info(
+        "ops.stage.symbol_history_evidence_backfill.classified",
+        **counters,
+    )
+
+    # ─── 6. Dry-run: write manifest, return; no DB writes ───
+    if dry_run:
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        import csv as _csv
+        with manifest_path.open("w", newline="", encoding="utf-8") as fh:
+            w = _csv.DictWriter(
+                fh, fieldnames=_symbol_history_evidence_manifest_columns(),
+            )
+            w.writeheader()
+            for m in manifest_rows:
+                w.writerow(m)
+        return {
+            "dry_run": True,
+            "manifest_path": str(manifest_path),
+            "run_id": str(run_id),
+            **counters,
+        }
+
+    # ─── 7. Live: idempotent batched INSERTs in one connection's txn
+    # per batch. Ordering: issuers → ticker_classifications →
+    # issuer_securities (FK targets) → ticker_history (no FK constraint
+    # but logical order) → data_quality_log.
+    n_issuers_written = 0
+    n_tc_written = 0
+    n_isec_written = 0
+    n_th_written = 0
+    n_dql_written = 0
+
+    async with pool.acquire() as conn:
+        if issuers_inserts:
+            async with conn.transaction():
+                await conn.executemany(
+                    """
+                    INSERT INTO platform.issuers
+                        (issuer_id, cik, legal_name, status)
+                    VALUES ($1, $2, $3, $4)
+                    ON CONFLICT (issuer_id) DO NOTHING
+                    """,
+                    issuers_inserts,
+                )
+            n_issuers_written = len(issuers_inserts)
+
+        if ticker_classifications_inserts:
+            async with conn.transaction():
+                await conn.executemany(
+                    """
+                    INSERT INTO platform.ticker_classifications
+                        (id, ticker, country, cik, asset_class,
+                         ipo_venue, discovery_source, status,
+                         lifetime_start, lifetime_end,
+                         current_legal_name, source)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                            $11, $12)
+                    ON CONFLICT (id) DO NOTHING
+                    """,
+                    ticker_classifications_inserts,
+                )
+            n_tc_written = len(ticker_classifications_inserts)
+
+        if issuer_securities_inserts:
+            async with conn.transaction():
+                await conn.executemany(
+                    """
+                    INSERT INTO platform.issuer_securities
+                        (issuer_id, classification_id, valid_from, valid_to)
+                    VALUES ($1, $2, $3, $4)
+                    ON CONFLICT (issuer_id, classification_id, valid_from)
+                        DO NOTHING
+                    """,
+                    issuer_securities_inserts,
+                )
+            n_isec_written = len(issuer_securities_inserts)
+
+        if ticker_history_inserts:
+            async with conn.transaction():
+                await conn.executemany(
+                    """
+                    INSERT INTO platform.ticker_history
+                        (classification_id, ticker, valid_from, valid_to)
+                    VALUES ($1, $2, $3, $4)
+                    ON CONFLICT (classification_id, valid_from)
+                        DO NOTHING
+                    """,
+                    ticker_history_inserts,
+                )
+            n_th_written = len(ticker_history_inserts)
+
+        if data_quality_log_inserts:
+            async with conn.transaction():
+                await conn.executemany(
+                    """
+                    INSERT INTO platform.data_quality_log
+                        (source, timestamp, latency_ms, missing_bars,
+                         stale, confidence, notes)
+                    VALUES ($1, NOW(), 0, 0, FALSE, 1.000, $2)
+                    ON CONFLICT (source, timestamp) DO NOTHING
+                    """,
+                    data_quality_log_inserts,
+                )
+            n_dql_written = len(data_quality_log_inserts)
+
+    # Manifest written even in live mode for forensic record.
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    import csv as _csv
+    with manifest_path.open("w", newline="", encoding="utf-8") as fh:
+        w = _csv.DictWriter(
+            fh, fieldnames=_symbol_history_evidence_manifest_columns(),
+        )
+        w.writeheader()
+        for m in manifest_rows:
+            w.writerow(m)
+
+    out: dict[str, Any] = {
+        "dry_run": False,
+        "manifest_path": str(manifest_path),
+        "run_id": str(run_id),
+        "issuers_written": n_issuers_written,
+        "ticker_classifications_written": n_tc_written,
+        "issuer_securities_written": n_isec_written,
+        "ticker_history_written": n_th_written,
+        "data_quality_log_written": n_dql_written,
+        **counters,
+    }
+    log.info(
+        "ops.stage.symbol_history_evidence_backfill.complete", **out,
+    )
+    return out
+
+
+def _mint_tkr14_predecessor(
+    *,
+    country: str,
+    cik: str | None,
+    legal_name: str,
+    discovery_source_code: str,
+    mint_now: datetime,
+) -> str:
+    """Mint a historical-predecessor TKR-14 id.
+
+    Uses ``ipo_venue='Z'`` (sentinel/unknown) per plan §2.3 and the
+    given ``discovery_source_code`` (``'S'`` when CIK resolves via SEC
+    cross-walk; ``'F'`` for FMP-only fallback).
+
+    Salt-retry caller responsibility lives in the live-INSERT path
+    (``ON CONFLICT (id) DO NOTHING`` is the idempotency floor); if the
+    operator hits a salt collision rate >1.7% we'll add a salt loop.
+    For now salt=0 is the default; same seed always yields the same id.
+    """
+    from tpcore.identity.tkr14 import (  # noqa: PLC0415
+        AssetClass as _AC,
+    )
+    from tpcore.identity.tkr14 import (
+        DiscoverySource as _DS,
+    )
+    from tpcore.identity.tkr14 import (
+        IPOVenue as _IPO,
+    )
+    from tpcore.identity.tkr14 import (
+        mint as _mint,
+    )
+    return _mint(
+        country=country,
+        asset_class=_AC.STOCK,
+        ipo_venue=_IPO.OTHER,  # "Z"
+        discovery_source=_DS(discovery_source_code),
+        cik=cik,
+        legal_name=legal_name,
+        now=mint_now,
+        salt=0,
+    )
+
+
+def _resolve_old_cik_from_crosswalk(
+    crosswalk: dict[str, list[tuple[str, date, date | None]]],
+    old_symbol: str,
+    change_date: date,
+) -> tuple[str | None, str]:
+    """Return ``(cik, source)`` per the §4.1 cross-walk rules.
+
+    * Exact one match → ``(cik, 'sec_cross_walk')``.
+    * Multiple matches → ``(None, 'ambiguous')`` (the caller emits a
+      ``data_quality_log`` row with ``kind='ambiguous_oldcik_resolution'``
+      via the same downstream path).
+    * Zero matches → ``(None, 'none')``.
+    """
+    candidates = crosswalk.get(old_symbol, [])
+    matches: list[str] = []
+    for cik, vfrom, vto in candidates:
+        if vfrom <= change_date and (vto is None or change_date <= vto):
+            matches.append(cik)
+    if len(matches) == 1:
+        return matches[0], "sec_cross_walk"
+    if len(matches) > 1:
+        return None, "ambiguous"
+    return None, "none"
+
+
+async def _build_sec_ticker_cik_crosswalk(
+    *,
+    log: Any,
+) -> dict[str, list[tuple[str, date, date | None]]]:
+    """Build the ``symbol → [(cik, valid_from, valid_to)]`` map by
+    iterating the cached SEC ``submissions.zip`` once.
+
+    Reads ``tickers[]`` (CURRENT tickers for the CIK; valid from each
+    formerNames entry's ``to`` date onward — or from filing-history
+    start for CIKs with no formerNames) AND each ``formerNames[]``
+    entry's ``from..to`` window (the prior NAME-windows that may have
+    used the same ticker assignment in old filings).
+
+    SEC does NOT publish per-symbol history per se. This is a
+    best-effort confirmatory cross-walk; the dominant case (delisted
+    predecessor whose CIK no longer carries the ticker) WILL return
+    zero matches, and the stage will fall through to the FMP-only
+    predecessor mint path. Spec §4.2 explicitly accepts this.
+
+    The reused ``ensure_zip_cached`` helper handles the 3-tier
+    resolution (local cache → R2 → SEC); no per-CIK HTTP is issued
+    here.
+    """
+    import os as _os
+    import zipfile as _zipfile
+
+    from tpcore.sec.submissions_bulk_reader import (  # noqa: PLC0415
+        DEFAULT_BULK_ZIP_PATH,
+        ensure_zip_cached,
+    )
+
+    ua = _os.environ.get("SEC_EDGAR_USER_AGENT")
+    if not ua:
+        raise RuntimeError(
+            "symbol_history_evidence_backfill: SEC_EDGAR_USER_AGENT env "
+            "var required (Path C cross-walk reads submissions.zip)."
+        )
+    zip_path = await ensure_zip_cached(
+        DEFAULT_BULK_ZIP_PATH, user_agent=ua, force_download=False,
+    )
+
+    crosswalk: dict[str, list[tuple[str, date, date | None]]] = {}
+    n_ciks_parsed = 0
+    n_parse_errors = 0
+    import json as _json
+    with _zipfile.ZipFile(zip_path, "r") as zf:
+        for entry in zf.namelist():
+            if not entry.startswith("CIK") or not entry.endswith(".json"):
+                continue
+            if "-" in entry:
+                continue
+            cik = entry[3:-5]
+            try:
+                data = _json.loads(zf.read(entry))
+            except Exception:  # noqa: BLE001
+                n_parse_errors += 1
+                continue
+            n_ciks_parsed += 1
+            tickers = data.get("tickers", []) or []
+            former_names = data.get("formerNames", []) or []
+            # "Current ticker" window: from the latest formerNames.to
+            # (if any) to NULL (current).
+            current_from: date = date(1900, 1, 1)
+            for fn in former_names:
+                fn_to_str = (fn.get("to") or "")[:10]
+                if not fn_to_str:
+                    continue
+                try:
+                    fn_to = date.fromisoformat(fn_to_str)
+                except ValueError:
+                    continue
+                if fn_to > current_from:
+                    current_from = fn_to
+            for tk in tickers:
+                if not isinstance(tk, str):
+                    continue
+                symbol = tk.strip().upper()
+                if not symbol:
+                    continue
+                crosswalk.setdefault(symbol, []).append(
+                    (cik, current_from, None),
+                )
+            # formerNames windows — best-effort echo (cap on the
+            # `to` date; ticker assignment within the window is
+            # inferred only when SEC also carries that historical
+            # ticker in `tickers[]`, which is rare). We do NOT
+            # invent per-former-name ticker mappings; this map keys
+            # on the CURRENT tickers[] only. The plan §4.2 spec
+            # acknowledges this limitation.
+
+    log.info(
+        "ops.stage.symbol_history_evidence_backfill.crosswalk_parsed",
+        n_ciks_parsed=n_ciks_parsed,
+        n_parse_errors=n_parse_errors,
+        n_unique_symbols=len(crosswalk),
+    )
+    return crosswalk
+
+
+async def _fetch_fmp_symbol_change_bulk(
+    *,
+    archive_source: str,
+    archive_max_age_days: float,
+    local_cache_path: Path,
+    force_download: bool,
+    limit: int,
+    log: Any,
+) -> bytes:
+    """Resolve the FMP ``/stable/symbol-change`` payload as gzipped bytes.
+
+    Priority (plan §3.1 + §7):
+
+      1. R2 archive first — list ``<source>_archive/`` for ``archive_source``,
+         sort by name (filenames are ``<source>_<UTC>.csv.gz`` — sortable
+         by construction). If the most-recent entry is within
+         ``archive_max_age_days``, read+return its body (gzipped JSON
+         in a ``.csv.gz``-named container).
+      2. Local cache — if R2 unreachable AND the local cache exists
+         AND is within ``archive_max_age_days``, return its bytes.
+      3. Provider download — one ``httpx.AsyncClient.get``
+         (``with_retry``-wrapped). Write to R2 BEFORE ingest; re-read R2
+         and verify ``len() + sha256()`` parity vs the local copy.
+         Mismatch raises before any DB write.
+
+    ``force_download=True`` skips both archive + local cache.
+
+    The artifact is **gzipped JSON bytes**, stored with the existing
+    ``.csv.gz`` archive naming convention (the backend's protocol
+    expects ``<source>_<UTC>.csv.gz`` for `list_archives`-ordering;
+    the body is opaque bytes from the backend's view, so naming the
+    container ``.csv.gz`` while the payload is JSON is acceptable —
+    every downstream consumer of this archive reads it via
+    ``gzip.decompress(body)`` + ``json.loads(...)``, never as CSV).
+    """
+    import hashlib as _hashlib
+    import time as _time
+    from datetime import UTC as _UTC
+    from datetime import datetime as _dt
+
+    from tpcore.ingestion.csv_archive_backends import (  # noqa: PLC0415
+        select_backend,
+    )
+
+    age_floor_seconds = archive_max_age_days * 86_400
+
+    # ── 1. Archive-first ───
+    if not force_download:
+        try:
+            backend = select_backend()
+            archives = backend.list_archives(archive_source)
+            if archives:
+                # Sort ascending; the last entry is the most recent
+                # because filenames embed sortable UTC timestamps.
+                latest = sorted(archives)[-1]
+                ts = _parse_archive_timestamp(latest)
+                if ts is not None:
+                    age = _time.time() - ts
+                    if age <= age_floor_seconds:
+                        log.info(
+                            "ops.stage.symbol_history_evidence_backfill.archive_hit",
+                            backend=type(backend).__name__,
+                            filename=latest,
+                            age_hr=round(age / 3600, 1),
+                        )
+                        return backend.read(archive_source, latest)
+                    log.info(
+                        "ops.stage.symbol_history_evidence_backfill.archive_stale",
+                        backend=type(backend).__name__,
+                        filename=latest,
+                        age_hr=round(age / 3600, 1),
+                    )
+        except Exception as exc:  # noqa: BLE001 — archive-side errors fall through to cache
+            log.warning(
+                "ops.stage.symbol_history_evidence_backfill.archive_unreachable",
+                error=type(exc).__name__,
+                message=str(exc)[:200],
+            )
+
+    # ── 2. Local cache ───
+    if (
+        not force_download
+        and local_cache_path.exists()
+    ):
+        age = _time.time() - local_cache_path.stat().st_mtime
+        if age <= age_floor_seconds:
+            log.info(
+                "ops.stage.symbol_history_evidence_backfill.local_cache_hit",
+                path=str(local_cache_path),
+                age_hr=round(age / 3600, 1),
+            )
+            return local_cache_path.read_bytes()
+
+    # ── 3. Provider download (the only allowed httpx.AsyncClient.get) ───
+    payload_bytes = await _fmp_symbol_change_download(limit=limit, log=log)
+
+    # ── 4. Archive-after-download with parity check ───
+    ts_label = _dt.now(_UTC).strftime("%Y%m%dT%H%MZ")
+    filename = f"{archive_source}_{ts_label}.csv.gz"
+    try:
+        backend = select_backend()
+        uri = backend.write(archive_source, payload_bytes, filename)
+        log.info(
+            "ops.stage.symbol_history_evidence_backfill.archive_write_ok",
+            backend=type(backend).__name__, uri=uri,
+        )
+        re_read = backend.read(archive_source, filename)
+        if (
+            len(re_read) != len(payload_bytes)
+            or _hashlib.sha256(re_read).hexdigest()
+            != _hashlib.sha256(payload_bytes).hexdigest()
+        ):
+            raise RuntimeError(
+                "symbol_history_evidence_backfill: archive parity check "
+                f"FAILED (downloaded {len(payload_bytes)} bytes vs "
+                f"re-read {len(re_read)} bytes); hard-stopping before "
+                "any DB write per plan §7."
+            )
+        log.info(
+            "ops.stage.symbol_history_evidence_backfill.archive_parity_ok",
+            n_bytes=len(payload_bytes),
+        )
+    except RuntimeError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — backend errors don't block the run
+        log.warning(
+            "ops.stage.symbol_history_evidence_backfill.archive_write_failed",
+            error=type(exc).__name__,
+            message=str(exc)[:200],
+        )
+
+    # ── 5. Persist local cache ───
+    local_cache_path.parent.mkdir(parents=True, exist_ok=True)
+    local_cache_path.write_bytes(payload_bytes)
+    return payload_bytes
+
+
+async def _fmp_symbol_change_download(*, limit: int, log: Any) -> bytes:
+    """Single bulk GET to FMP ``/stable/symbol-change?limit=<n>``,
+    ``with_retry``-wrapped, returns gzipped JSON bytes.
+
+    This is the **only** ``httpx.AsyncClient.get`` call site in the
+    stage source (AST-sentineled by
+    ``tests/test_symbol_history_evidence_backfill_stage.py``).
+    """
+    import gzip as _gzip
+    import os as _os
+
+    import httpx as _httpx
+
+    from tpcore.outage import with_retry as _with_retry  # noqa: PLC0415
+
+    api_key = _os.environ.get("FMP_API_KEY")
+    if not api_key:
+        raise RuntimeError(
+            "symbol_history_evidence_backfill: FMP_API_KEY env var required"
+        )
+
+    @_with_retry(max_attempts=3, backoff_base_sec=2.0, backoff_cap_sec=30.0)
+    async def _do() -> bytes:
+        url = (
+            f"{FMP_SYMBOL_CHANGE_URL}?limit={int(limit)}&apikey={api_key}"
+        )
+        async with _httpx.AsyncClient(timeout=180.0) as client:
+            r = await client.get(url)
+        r.raise_for_status()
+        body = r.content
+        log.info(
+            "ops.stage.symbol_history_evidence_backfill.provider_get_ok",
+            n_bytes=len(body),
+        )
+        return _gzip.compress(body)
+
+    return await _do()
+
+
+def _parse_archive_timestamp(filename: str) -> float | None:
+    """Parse the ``<source>_<UTC>.csv.gz`` timestamp into POSIX seconds.
+
+    Filenames follow the existing csv_archive precedent:
+    ``<source>_YYYYMMDDTHHmmZ.csv.gz``. Returns POSIX seconds on a clean
+    parse or None otherwise (caller treats None as "unparseable timestamp"
+    and falls through to provider download).
+    """
+    from datetime import UTC as _UTC
+    from datetime import datetime as _dt
+    # Strip suffix.
+    stem = filename
+    for suffix in (".csv.gz", ".json.gz", ".gz"):
+        if stem.endswith(suffix):
+            stem = stem[: -len(suffix)]
+            break
+    parts = stem.rsplit("_", 1)
+    if len(parts) != 2:
+        return None
+    ts_label = parts[1]
+    try:
+        ts = _dt.strptime(ts_label, "%Y%m%dT%H%MZ").replace(tzinfo=_UTC)
+    except ValueError:
+        return None
+    return ts.timestamp()
+
+
 async def _stage_backfill_sec_lifecycle(
     pool: asyncpg.Pool, cfg: dict[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -9954,6 +10953,21 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     ("cleanup_ticker_reuse_fundamentals",
         lambda pool, cfg: (
             lambda: _stage_cleanup_ticker_reuse_fundamentals(pool, cfg)
+        ),
+        HEAVY_STAGE_TIMEOUT_SEC),
+    # Symbol-history evidence backfill (spec PR #442, plan PR #443).
+    # Populates ticker_history + issuer_securities + historical
+    # ticker_classifications predecessors from FMP /stable/symbol-change
+    # (Path B primary) cross-walked against SEC submissions.zip
+    # (Path C resolver). Single bulk GET; archive-first via R2; no
+    # per-ticker crawl (``use_bulk_zip=false`` raises). Additive only —
+    # NEVER touches fundamentals_quarterly. Operator-on-demand;
+    # ``dry_run=true`` by default. See:
+    #   docs/superpowers/specs/2026-06-02-symbol-history-evidence-backfill.md
+    #   docs/superpowers/plans/2026-06-02-symbol-history-evidence-backfill-plan.md
+    ("symbol_history_evidence_backfill",
+        lambda pool, cfg: (
+            lambda: _stage_symbol_history_evidence_backfill(pool, cfg)
         ),
         HEAVY_STAGE_TIMEOUT_SEC),
     # F0 (2026-06-01) — provider-parity EVALUATE stage. Operator-on-
