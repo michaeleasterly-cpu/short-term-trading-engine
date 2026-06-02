@@ -288,7 +288,7 @@ returns ALL XBRL facts) so bulk is overkill. Revisit if scope widens."""
 
 async def handle_sec_fundamentals_fallback(
     pool: asyncpg.Pool, config: dict[str, Any]
-) -> int | None:
+) -> int | dict[str, Any] | None:
     """SEC EDGAR companyfacts → fundamentals_quarterly fallback.
 
     Cascade fallback for ``fundamentals_quarterly_completeness`` when
@@ -309,6 +309,16 @@ async def handle_sec_fundamentals_fallback(
         also fetch SEC facts for tickers without inferred gaps (useful
         for a deep-history first-time backfill). Default skips them to
         keep the daily cascade cheap.
+      * ``dry_run`` (bool, default False at handler layer; defaulted
+        True at the ``scripts/ops.py`` stage layer): when True, perform
+        all read-only work (universe SQL, missing-period compute, SEC
+        fetches, period extraction) but SKIP ``manifest_lifecycle`` +
+        ``cache.upsert_payload`` (no archive write, no DB write). The
+        handler returns a planning-counts dict instead of the row count.
+        Failures land in the dict (not raised) so the operator can see
+        the per-ticker error sample without aborting the preview. In
+        live mode (``dry_run=False``) ``RuntimeError`` on ``failures``
+        is preserved.
 
     Per memory ``feedback_sec_authoritative_fmp_fallback_non_us``: SEC
     is the US-filer authoritative source. Non-US tickers without CIKs
@@ -328,6 +338,11 @@ async def handle_sec_fundamentals_fallback(
 
     today = datetime.now(UTC).date()
     include_no_gap = bool(config.get("include_no_gap_tickers", False))
+    # String-coerce ``dry_run`` so the ``scripts/ops.py`` ``--param
+    # dry_run=true|false`` convention works identically with bool kwargs
+    # from in-process callers. Matches the ``_stage_param_to_bool`` /
+    # ``_to_bool`` shape used across other stages.
+    dry_run = str(config.get("dry_run", "false")).lower() == "true"
     ticker_filter = config.get("tickers")
     ticker_filter_list: list[str] | None = (
         [t.strip().upper() for t in str(ticker_filter).split(",") if t.strip()]
@@ -396,6 +411,10 @@ async def handle_sec_fundamentals_fallback(
     no_data: list[tuple[str, str]] = []
     failures: list[tuple[str, str]] = []
     nothing_to_fill: list[str] = []
+    # Per-ticker tally of would-be archive rows (cheap; just increments
+    # alongside each ``archive_rows.append`` below). Surfaced to the
+    # operator in the dry-run return dict.
+    per_ticker_planned: dict[str, int] = {}
 
     async with SECCompanyFactsAdapter() as sec:
         for i, (ticker, cik) in enumerate(candidates, start=1):
@@ -451,6 +470,7 @@ async def handle_sec_fundamentals_fallback(
                     "shares_outstanding": _str_or_blank(shares),
                     "recorded_at": "",
                 })
+                per_ticker_planned[ticker] = per_ticker_planned.get(ticker, 0) + 1
                 filled += 1
             if i % 25 == 0:
                 logger.info(
@@ -467,7 +487,24 @@ async def handle_sec_fundamentals_fallback(
         no_data=len(no_data),
         failures=len(failures),
         nothing_to_fill=len(nothing_to_fill),
+        dry_run=dry_run,
     )
+
+    if dry_run:
+        # Read-only preview: skip ``manifest_lifecycle`` (no archive
+        # write) and ``cache.upsert_payload`` (no DB write). Failures
+        # are surfaced in the returned dict rather than raised so the
+        # operator can inspect the per-ticker error sample without
+        # aborting the preview. Live mode (below) preserves the
+        # ``RuntimeError`` on ``failures``.
+        return {
+            "dry_run": True,
+            "archive_rows_planned": len(archive_rows),
+            "no_data": len(no_data),
+            "failures": len(failures),
+            "nothing_to_fill": len(nothing_to_fill),
+            "per_ticker_planned": dict(per_ticker_planned),
+        }
 
     if not archive_rows:
         return 0
