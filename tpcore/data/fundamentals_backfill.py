@@ -41,10 +41,32 @@ Wired into ``scripts/ops.py`` as one stage:
 * ``historical_fundamentals_quarterly`` — one-shot operator backfill.
   Runs once after PR merges to populate the missing quarters; not part
   of ``OPS_UPDATE_STAGES`` so the daily cadence stays bounded.
+
+# Evidence-write extension (2026-06-03)
+
+Per the `excluded_confirmed_data_gap` validator-semantics arc — spec
+PR #450 + plan PR #451 §7.2 — `backfill_one_ticker` accepts a
+`record_evidence_for_periods` argument. When non-None (per-ticker
+list of `period_end_date` values), the function writes per-period
+evidence rows into `platform.fundamentals_period_source_evidence`
+AFTER the FMP fetch:
+
+  * `outcome='yielded'` for each period that landed in
+    `fundamentals_quarterly` as a result of the fetch.
+  * `outcome='empty'` for each requested period that did NOT land
+    (FMP fetched but lacked that period).
+
+This is opt-in: when `record_evidence_for_periods` is None (the
+default), behavior is byte-equivalent to pre-extension. The
+`confirmed_data_gap_evidence_populator` stage opts in; the regular
+`historical_fundamentals_quarterly` daily stage can opt in via
+`backfill_universe(..., record_evidence=True)` to populate the daily
+substrate, but defaults to off to keep the existing backfill cycle
+unchanged in this PR.
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any
 
 import structlog
@@ -144,6 +166,9 @@ async def backfill_one_ticker(
     symbol: str,
     *,
     end: date | None = None,
+    pool: asyncpg.Pool | None = None,
+    record_evidence_for_periods: list[date] | None = None,
+    evidence_source: str = "fmp_historical",
 ) -> int:
     """Pull the full FMP quarterly history for ``symbol`` (deep limit)
     and upsert every period into ``platform.fundamentals_quarterly``.
@@ -156,12 +181,22 @@ async def backfill_one_ticker(
 
     Re-uses ``FundamentalsCache.backfill`` so the same physical-truth
     gate and idempotent upsert path apply.
+
+    When ``record_evidence_for_periods`` is non-None AND ``pool`` is
+    provided, the function writes per-period evidence rows into
+    ``platform.fundamentals_period_source_evidence`` AFTER the FMP
+    fetch. Per the `excluded_confirmed_data_gap` arc, ``yielded`` for
+    each period that landed in ``fundamentals_quarterly``, ``empty``
+    for each requested period that did NOT land, ``fetch_failure`` if
+    the FMP fetch hit a real outage. Opt-in; default (None) is
+    byte-equivalent to pre-extension behavior.
     """
     from tpcore.outage import DataProviderOutage
 
     rows_written = 0
     error_class: str | None = None
     error_msg: str | None = None
+    fmp_outage: str | None = None
     try:
         rows_written = await cache.backfill(symbol, end_date=end)
     except DataProviderOutage as exc:
@@ -176,6 +211,7 @@ async def backfill_one_ticker(
         if not (is_no_data or is_premium_gated):
             error_class = type(exc).__name__
             error_msg = msg[:200]
+            fmp_outage = msg[:160]
         logger.warning(
             "fundamentals_backfill.ticker_outage"
             if not (is_no_data or is_premium_gated)
@@ -185,6 +221,7 @@ async def backfill_one_ticker(
     except Exception as exc:  # noqa: BLE001 — keep the run moving
         error_class = type(exc).__name__
         error_msg = str(exc)[:200]
+        fmp_outage = error_msg
         logger.error(
             "fundamentals_backfill.ticker_failed",
             ticker=symbol, error=error_msg,
@@ -200,9 +237,95 @@ async def backfill_one_ticker(
             "error_msg": error_msg,
         },
     )
+    # Evidence-write extension (opt-in). Runs BEFORE the error re-raise
+    # so a transient outage still leaves a ``fetch_failure`` evidence
+    # row for the operator's next attempt (per plan §7.2 +
+    # spec §4 rule #4 — fetch_failure does NOT qualify for exclusion).
+    if pool is not None and record_evidence_for_periods is not None:
+        await _record_fmp_evidence(
+            pool,
+            symbol=symbol,
+            requested=list(record_evidence_for_periods),
+            source=evidence_source,
+            fmp_outage=fmp_outage,
+        )
     if error_class:
         raise RuntimeError(f"{symbol}:{error_class}:{error_msg}")
     return rows_written
+
+
+async def _record_fmp_evidence(
+    pool: asyncpg.Pool,
+    *,
+    symbol: str,
+    requested: list[date],
+    source: str,
+    fmp_outage: str | None,
+) -> int:
+    """Write per-`(ticker, period_end_date)` FMP evidence rows.
+
+    For each requested period:
+      * If ``fmp_outage`` is set → ``outcome='fetch_failure'``
+        (notes=outage message; per spec §4 #4 a real outage doesn't
+        qualify for exclusion).
+      * Else, query ``platform.fundamentals_quarterly`` for the
+        ticker's current period_ends → ``yielded`` for periods present,
+        ``empty`` for periods absent.
+
+    Skips silently if the evidence table doesn't exist (post-rollback
+    case). Idempotent UPSERT (``ON CONFLICT … DO UPDATE``); latest
+    attempt wins. Returns the number of rows written.
+    """
+    if not requested:
+        return 0
+    attempted_at = datetime.now(UTC)
+    if fmp_outage is not None:
+        rows = [
+            (symbol, pe, source, "fetch_failure", attempted_at,
+             fmp_outage[:200])
+            for pe in requested
+        ]
+    else:
+        async with pool.acquire() as conn:
+            present_rows = await conn.fetch(
+                "SELECT DISTINCT period_end_date "
+                "FROM platform.fundamentals_quarterly "
+                "WHERE ticker = $1 AND period_end_date = ANY($2::date[])",
+                symbol, list(requested),
+            )
+        present = {r["period_end_date"] for r in present_rows}
+        rows = [
+            (
+                symbol, pe, source,
+                "yielded" if pe in present else "empty",
+                attempted_at,
+                None,
+            )
+            for pe in requested
+        ]
+    async with pool.acquire() as conn:
+        exists = await conn.fetchval(
+            "SELECT to_regclass('platform.fundamentals_period_source_evidence') IS NOT NULL"
+        )
+        if not exists:
+            logger.info(
+                "fundamentals_backfill.evidence_table_absent",
+                pending=len(rows), ticker=symbol,
+            )
+            return 0
+        await conn.executemany(
+            """
+            INSERT INTO platform.fundamentals_period_source_evidence
+                (ticker, period_end_date, source, outcome, attempted_at, notes)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (ticker, period_end_date, source) DO UPDATE
+                SET outcome = EXCLUDED.outcome,
+                    attempted_at = EXCLUDED.attempted_at,
+                    notes = EXCLUDED.notes
+            """,
+            rows,
+        )
+    return len(rows)
 
 
 async def backfill_universe(
@@ -277,6 +400,7 @@ async def backfill_universe(
 __all__ = [
     "DEFAULT_HISTORY_LIMIT_QUARTERS",
     "PROGRESS_EVENT_TYPE",
+    "_record_fmp_evidence",
     "already_completed_tickers",
     "backfill_one_ticker",
     "backfill_universe",

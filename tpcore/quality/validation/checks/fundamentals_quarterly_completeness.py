@@ -176,6 +176,52 @@ _TERMINAL_LIFECYCLE_STATES: frozenset[str] = frozenset({
     "deregistered", "delist_effective",
 })
 
+# `excluded_confirmed_data_gap` validator-semantics extension
+# (2026-06-03, spec PR #450 + plan PR #451).
+#
+# CONFIRMED_DATA_GAP_FRESHNESS_DAYS — evidence rows older than this
+# fall back to FAIL (re-attempt window). 180 days = ~2 fiscal
+# quarters; matches the plan's operator-resolved decision.
+CONFIRMED_DATA_GAP_FRESHNESS_DAYS = 180
+
+# ARDT_WATCHLIST — operator override per plan §11. ARDT's FMP rows
+# are structurally rejected by the `physical_truth` gate (a real
+# defect being triaged separately). Until the underlying FMP issue
+# is resolved, ARDT must NOT be allowed to qualify for the extended
+# dual-source-evidence exclusion (even if the dual-source evidence
+# accrues, FMP's `empty` here doesn't mean source-unavailable — it
+# means physical_truth rejected the row). The watchlist forces ARDT
+# into `excluded_dark` instead.
+#
+# Module-level constant per plan §17 #2 (small surface; revisitable).
+# Future-work TODO: make this dynamic, sourcing from a
+# `ticker_quality_overrides` or similar substrate.
+ARDT_WATCHLIST: frozenset[str] = frozenset({"ARDT"})
+
+# Evidence-join SQL — kept module-level so the byte-freeze sentinel
+# can pin it. Mirrors the plan §8 specification exactly:
+#   * `to_regclass` existence-gated by the caller before the join.
+#   * Freshness gate at 180 days (`CONFIRMED_DATA_GAP_FRESHNESS_DAYS`).
+#   * Dual-source requirement: at least one `fmp_*` row + at least one
+#     `sec_companyfacts` row, BOTH `outcome IN ('empty', 'extract_none')`.
+#   * Hard reject if either leg's row in the freshness window carries
+#     `outcome='fetch_failure'` (spec §4 rule #4).
+_EVIDENCE_JOIN_SQL = (
+    """
+    SELECT period_end_date
+    FROM platform.fundamentals_period_source_evidence
+    WHERE ticker = $1
+      AND period_end_date = ANY($2::date[])
+      AND attempted_at >= NOW() - ($3::int * INTERVAL '1 day')
+    GROUP BY period_end_date
+    HAVING bool_or(source IN ('fmp_historical', 'fmp_refresh')
+                   AND outcome IN ('empty', 'extract_none'))
+       AND bool_or(source = 'sec_companyfacts'
+                   AND outcome IN ('empty', 'extract_none'))
+       AND NOT bool_or(outcome = 'fetch_failure')
+    """
+)
+
 
 _FILING_DATES_SQL = """
     WITH liquid AS (
@@ -218,6 +264,11 @@ class _Evaluation:
     # FIRST; only tickers WITHOUT lifecycle evidence fall through to
     # the silence-based dark heuristic.
     excluded_lifecycle_terminated: int = 0
+    # `excluded_confirmed_data_gap` sub-counter (2026-06-03). Logged
+    # via structlog at completion; the parent counter
+    # ``excluded_confirmed_data_gap`` always carries the total
+    # (sparse + evidenced) so existing readers see the right number.
+    excluded_confirmed_data_gap_evidenced: int = 0
     by_form: dict[str, int] = field(default_factory=dict)
     # ticker → (sorted list of inferred missing period_end_dates, form)
     gaps: dict[str, tuple[list[date], str]] = field(default_factory=dict)
@@ -278,6 +329,23 @@ async def _evaluate(pool: asyncpg.Pool) -> _Evaluation:
 
     async with pool.acquire() as conn:
         rows = await conn.fetch(_FILING_DATES_SQL, TRADEABLE_TIER_MAX)
+        # `to_regclass` existence check (per plan §14). Cached once
+        # per evaluator run. When the new evidence substrate doesn't
+        # exist (post-rollback or pre-migration), the evidence join
+        # is skipped entirely and the bucket's narrow semantic
+        # (< 2 filings + past grace) continues to fire as today.
+        #
+        # Defensive: hermetic-test pools that pre-date the evidence
+        # extension may not have ``fetchval`` configured. Any failure
+        # of the probe is treated as "table absent" — equivalent to
+        # the post-rollback case and the safest default.
+        try:
+            evidence_table_present = bool(await conn.fetchval(
+                "SELECT to_regclass("
+                "'platform.fundamentals_period_source_evidence') IS NOT NULL"
+            ))
+        except Exception:  # noqa: BLE001 — defensive probe
+            evidence_table_present = False
 
     if not rows:
         return _Evaluation(
@@ -320,6 +388,7 @@ async def _evaluate(pool: asyncpg.Pool) -> _Evaluation:
     excluded_dark = 0
     excluded_metadata_required = 0
     excluded_confirmed_data_gap = 0
+    excluded_confirmed_data_gap_evidenced = 0
     excluded_other_form = 0
     excluded_lifecycle_terminated = 0
     by_form: dict[str, int] = {}
@@ -395,6 +464,42 @@ async def _evaluate(pool: asyncpg.Pool) -> _Evaluation:
                 max_gap_days=max_gap, period_days=period_days,
             )
             ticker_gaps.extend(inferred)
+        if not ticker_gaps:
+            continue
+
+        # `excluded_confirmed_data_gap` extension (2026-06-03,
+        # spec PR #450 + plan PR #451).
+        #
+        # ARDT override (per plan §11): ARDT's FMP rows are rejected
+        # by physical_truth — even if the dual-source evidence accrues,
+        # the FMP `empty` is not source-unavailable, it's
+        # gate-rejected. Force ARDT into `excluded_dark` BEFORE
+        # consulting the evidence join. (FAIL → exclusion routing on
+        # this ticker; we already incremented evaluated_routed above,
+        # so decrement it and clear the ticker from the by_form tally.)
+        if ticker in ARDT_WATCHLIST:
+            excluded_dark += 1
+            evaluated_routed -= 1
+            by_form[primary] = max(0, by_form.get(primary, 0) - 1)
+            continue
+
+        # Evidence join: route dual-source-confirmed-empty periods
+        # to `excluded_confirmed_data_gap_evidenced`. The remaining
+        # un-evidenced periods stay in the ticker's gap list →
+        # ticker FAILs on those. The freshness gate (180 days) +
+        # fetch_failure rejection are enforced inside the SQL.
+        if evidence_table_present:
+            async with pool.acquire() as conn:
+                ev_rows = await conn.fetch(
+                    _EVIDENCE_JOIN_SQL, ticker, sorted(ticker_gaps),
+                    CONFIRMED_DATA_GAP_FRESHNESS_DAYS,
+                )
+            evidenced = {r["period_end_date"] for r in ev_rows}
+            if evidenced:
+                excluded_confirmed_data_gap_evidenced += len(evidenced)
+                excluded_confirmed_data_gap += len(evidenced)
+                ticker_gaps = [d for d in ticker_gaps if d not in evidenced]
+
         if ticker_gaps:
             gaps[ticker] = (sorted(ticker_gaps), primary)
 
@@ -418,6 +523,9 @@ async def _evaluate(pool: asyncpg.Pool) -> _Evaluation:
         excluded_confirmed_data_gap=excluded_confirmed_data_gap,
         excluded_other_form=excluded_other_form,
         excluded_lifecycle_terminated=excluded_lifecycle_terminated,
+        excluded_confirmed_data_gap_evidenced=(
+            excluded_confirmed_data_gap_evidenced
+        ),
         by_form=by_form,
         gaps=gaps,
         metadata_coverage_low=metadata_coverage_low,
@@ -497,6 +605,14 @@ async def check_fundamentals_quarterly_completeness(
     total_failed = len(failures)
     passed = total_failed == 0
 
+    # Per plan §9, log the sparse-vs-evidenced split of the
+    # `excluded_confirmed_data_gap` bucket so the operator can see at
+    # a glance how many exclusions came from the existing sparse-ticker
+    # path vs the new dual-source-evidence path.
+    sparse_count = (
+        ev.excluded_confirmed_data_gap
+        - ev.excluded_confirmed_data_gap_evidenced
+    )
     if passed:
         logger.info(
             "tpcore.validation.fundamentals_completeness.ok",
@@ -505,6 +621,10 @@ async def check_fundamentals_quarterly_completeness(
             excluded_lifecycle_terminated=ev.excluded_lifecycle_terminated,
             excluded_metadata_required=ev.excluded_metadata_required,
             excluded_confirmed_data_gap=ev.excluded_confirmed_data_gap,
+            excluded_confirmed_data_gap_sparse=sparse_count,
+            excluded_confirmed_data_gap_evidenced=(
+                ev.excluded_confirmed_data_gap_evidenced
+            ),
             excluded_other_form=ev.excluded_other_form,
             by_form=ev.by_form,
             metadata_coverage_ratio=round(ev.metadata_coverage_ratio, 4),
@@ -518,6 +638,10 @@ async def check_fundamentals_quarterly_completeness(
             excluded_lifecycle_terminated=ev.excluded_lifecycle_terminated,
             excluded_metadata_required=ev.excluded_metadata_required,
             excluded_confirmed_data_gap=ev.excluded_confirmed_data_gap,
+            excluded_confirmed_data_gap_sparse=sparse_count,
+            excluded_confirmed_data_gap_evidenced=(
+                ev.excluded_confirmed_data_gap_evidenced
+            ),
             excluded_other_form=ev.excluded_other_form,
             by_form=ev.by_form,
             metadata_coverage_low=ev.metadata_coverage_low,
@@ -532,6 +656,28 @@ async def check_fundamentals_quarterly_completeness(
         duration_ms=int((time.perf_counter() - started) * 1000),
         failures=failures[:MAX_REPORTED],
     )
+
+
+async def compute_fundamentals_gap_periods(
+    pool: asyncpg.Pool,
+) -> dict[str, list[date]]:
+    """Return the validator's current per-ticker missing-period map.
+
+    Public companion to ``compute_fundamentals_repair_targets`` —
+    same ``_evaluate`` source, returns ``ticker → sorted missing
+    period_end_dates`` instead of just the ticker list. Used by the
+    ``confirmed_data_gap_evidence_populator`` stage to scope its
+    per-period FMP+SEC attempts to exactly the periods the validator
+    is FAILing on.
+
+    Returns ``{}`` when the validator has no gaps OR a structural
+    sentinel is active (those aren't bars-backfill-fixable — see the
+    repair-targets companion).
+    """
+    ev = await _evaluate(pool)
+    if ev.sentinel is not None or not ev.gaps:
+        return {}
+    return {t: sorted(missing) for t, (missing, _form) in ev.gaps.items()}
 
 
 async def compute_fundamentals_repair_targets(
@@ -565,7 +711,9 @@ async def compute_fundamentals_repair_targets(
 
 
 __all__ = [
+    "ARDT_WATCHLIST",
     "CHECK_NAME",
+    "CONFIRMED_DATA_GAP_FRESHNESS_DAYS",
     "LIVE_WITHIN_DAYS_ANNUAL",
     "LIVE_WITHIN_DAYS_QUARTERLY",
     "MAX_ANNUAL_GAP_DAYS",
@@ -573,6 +721,7 @@ __all__ = [
     "METADATA_COVERAGE_FAIL_THRESHOLD",
     "TRADEABLE_TIER_MAX",
     "check_fundamentals_quarterly_completeness",
+    "compute_fundamentals_gap_periods",
     "compute_fundamentals_repair_targets",
 ]
 

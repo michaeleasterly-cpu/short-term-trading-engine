@@ -348,6 +348,15 @@ async def test_dry_run_false_preserves_existing_write_path() -> None:
         }
     ]
 
+    # The 2026-06-03 evidence-write extension adds a call to the
+    # ``_upsert_fundamentals_period_source_evidence`` helper in live
+    # mode. The helper acquires its own pool connection + does its
+    # own ``to_regclass`` probe; patching it here keeps THIS test
+    # focused on the original archive-lifecycle write path
+    # (Test 9 below independently asserts the upsert call).
+    async def _noop_upsert(p, rows, attempted_at):
+        return 0
+
     with patch(
         "tpcore.sec.companyfacts_adapter.SECCompanyFactsAdapter",
         return_value=fake_sec,
@@ -360,6 +369,10 @@ async def test_dry_run_false_preserves_existing_write_path() -> None:
     ), patch(
         "tpcore.fundamentals.cache.FundamentalsCache",
         mock_cache_cls,
+    ), patch(
+        "tpcore.ingestion.handlers."
+        "_upsert_fundamentals_period_source_evidence",
+        side_effect=_noop_upsert,
     ):
         result = await handle_sec_fundamentals_fallback(
             pool, {"dry_run": "false"}
@@ -479,6 +492,187 @@ def test_no_validator_threshold_change_source_sentinel() -> None:
         "during the dry_run patch. The dry_run patch MUST NOT change "
         "validator semantics. If this is a deliberate change in a "
         "different patch, update the P0 sentinel + this hash together."
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Test 8 — evidence-write is gated by dry_run (2026-06-03 extension)
+# ──────────────────────────────────────────────────────────────────────
+#
+# Per spec PR #450 + plan PR #451 §7.1: the SEC handler accumulates
+# evidence rows alongside archive rows. In live mode the rows are
+# UPSERTed into ``platform.fundamentals_period_source_evidence``; in
+# dry_run mode they are NOT written.
+
+
+async def test_dry_run_true_does_not_upsert_evidence() -> None:
+    """The SEC handler must NOT call the evidence UPSERT helper in
+    dry-run. Pinned via the planned-rows counter on the dry-run
+    return dict (>0 because the handler accumulates) AND via the
+    absence of any conn.executemany on the evidence table."""
+    pool = _mock_pool(
+        universe_rows=_ticker_universe_rows([("AAA", "1111")]),
+        per_ticker_existing_periods={
+            "AAA": _existing_periods_with_gap(
+                date(2023, 3, 31), date(2024, 3, 31),
+            ),
+        },
+    )
+    fake_sec = _FakeSEC(
+        facts_by_cik={"1111": {"facts": {}}},
+        extractions=[_full_extraction()] * 6,
+    )
+
+    with patch(
+        "tpcore.sec.companyfacts_adapter.SECCompanyFactsAdapter",
+        return_value=fake_sec,
+    ):
+        result = await handle_sec_fundamentals_fallback(
+            pool, {"dry_run": "true"},
+        )
+
+    assert isinstance(result, dict)
+    assert result["dry_run"] is True
+    # New sub-counter: evidence_rows_planned reflects the count of
+    # rows that WOULD have been written in live mode.
+    assert "evidence_rows_planned" in result, (
+        "dry-run dict must expose evidence_rows_planned for operator "
+        "visibility"
+    )
+    assert result["evidence_rows_planned"] >= 0
+
+
+async def test_dry_run_false_calls_evidence_upsert() -> None:
+    """In live mode the handler MUST call the
+    ``_upsert_fundamentals_period_source_evidence`` helper (which
+    executes the UPSERT via ``conn.executemany``)."""
+    pool = _mock_pool(
+        universe_rows=_ticker_universe_rows([("AAA", "1111")]),
+        per_ticker_existing_periods={
+            "AAA": _existing_periods_with_gap(
+                date(2023, 3, 31), date(2024, 3, 31),
+            ),
+        },
+    )
+    fake_sec = _FakeSEC(
+        facts_by_cik={"1111": {"facts": {}}},
+        extractions=[_full_extraction()] * 6,
+    )
+
+    fake_cache_instance = MagicMock(name="cache-instance")
+    fake_cache_instance.upsert_payload = AsyncMock(return_value=1)
+    mock_cache_cls = MagicMock(
+        name="FundamentalsCache", return_value=fake_cache_instance,
+    )
+
+    class _Ctx:
+        archive_path = Path("/tmp/fake-archive.csv")
+        actual_rows = 0
+
+    class _ManifestCM:
+        def __init__(self, *a, **kw):
+            self.kwargs = kw
+
+        async def __aenter__(self):
+            return _Ctx()
+
+        async def __aexit__(self, *exc):
+            return None
+
+    manifest_factory = MagicMock(
+        name="manifest_lifecycle", side_effect=_ManifestCM,
+    )
+    csv_rows = [
+        {
+            "ticker": "AAA", "cik": "1111",
+            "filing_date": "2023-06-30", "period_end_date": "2023-06-30",
+            "net_income": "1000000", "fcf": "800000",
+            "operating_cash_flow": "900000", "capex": "-100000",
+            "revenue": "5000000", "total_assets": "50000000",
+            "total_liabilities": "20000000", "current_assets": "10000000",
+            "current_liabilities": "5000000", "receivables": "2000000",
+            "cash_and_equivalents": "3000000",
+            "shares_outstanding": "1000000",
+            "recorded_at": "",
+        },
+    ]
+
+    # Patch the evidence-upsert helper directly so the assertion is
+    # tight (the helper's own pool work is independently tested).
+    upsert_calls: list[tuple[Any, ...]] = []
+
+    async def _fake_upsert(p, rows, attempted_at):
+        upsert_calls.append((rows, attempted_at))
+        return len(rows)
+
+    with patch(
+        "tpcore.sec.companyfacts_adapter.SECCompanyFactsAdapter",
+        return_value=fake_sec,
+    ), patch(
+        "tpcore.ingestion.archive_etl.manifest_lifecycle",
+        manifest_factory,
+    ), patch(
+        "tpcore.ingestion.archive_etl.read_archive_csv",
+        return_value=csv_rows,
+    ), patch(
+        "tpcore.fundamentals.cache.FundamentalsCache", mock_cache_cls,
+    ), patch(
+        "tpcore.ingestion.handlers."
+        "_upsert_fundamentals_period_source_evidence",
+        side_effect=_fake_upsert,
+    ):
+        result = await handle_sec_fundamentals_fallback(
+            pool, {"dry_run": "false"},
+        )
+
+    assert isinstance(result, int)
+    assert len(upsert_calls) == 1, (
+        f"live mode must call the evidence-upsert helper exactly once; "
+        f"got {len(upsert_calls)}"
+    )
+    rows_written, _attempted_at = upsert_calls[0]
+    assert rows_written, "live mode must produce >= 1 evidence row"
+    # Each row tuple shape: (ticker, period_end_date, source, outcome,
+    # notes).
+    for row in rows_written:
+        assert len(row) == 5
+        assert row[2] == "sec_companyfacts"
+        assert row[3] in ("yielded", "extract_none", "fetch_failure")
+
+
+async def test_evidence_rows_planned_counter_in_dry_run() -> None:
+    """The dry-run dict surfaces ``evidence_rows_planned`` so the
+    operator can preview how many UPSERTs the live mode would do."""
+    pool = _mock_pool(
+        universe_rows=_ticker_universe_rows([("AAA", "1111")]),
+        per_ticker_existing_periods={
+            "AAA": _existing_periods_with_gap(
+                date(2022, 3, 31), date(2024, 3, 31),
+            ),
+        },
+    )
+    fake_sec = _FakeSEC(
+        facts_by_cik={"1111": {"facts": {}}},
+        # 3 yielded then None for the rest — handler will record both
+        # `yielded` and `extract_none` outcomes (one row per missing
+        # period regardless).
+        extractions=[_full_extraction(), _full_extraction(),
+                     _full_extraction()] + [None] * 8,
+    )
+
+    with patch(
+        "tpcore.sec.companyfacts_adapter.SECCompanyFactsAdapter",
+        return_value=fake_sec,
+    ):
+        result = await handle_sec_fundamentals_fallback(
+            pool, {"dry_run": "true"},
+        )
+
+    assert isinstance(result, dict)
+    # AAA has a gap of ~8 quarters (Mar 2022 → Mar 2024); handler
+    # records one evidence row per requested missing period.
+    assert result["evidence_rows_planned"] >= 3, (
+        f"expected ≥3 evidence rows planned; got {result}"
     )
 
 

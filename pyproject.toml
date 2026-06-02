@@ -221,7 +221,23 @@ ignore = ["E501"]
 #     validator's module-private ``_FILING_DATES_SQL`` sha256 as a
 #     "no validator-semantics change" guard for the dry_run patch.
 #     Same precedent as the P0 sentinel above.
+#     Tests 8-10 (2026-06-03 extension) additionally patch
+#     ``handlers._upsert_fundamentals_period_source_evidence``
+#     module-private to assert the live-mode evidence-write gate.
 "tests/test_sec_fundamentals_fallback_dry_run.py" = ["SLF"]
+# `excluded_confirmed_data_gap` validator-semantics extension
+# (2026-06-03):
+#   * test_excluded_confirmed_data_gap_validator.py — pins
+#     ``fqc._evaluate`` + ``_FILING_DATES_SQL`` +
+#     ``_infer_missing_period_ends`` sha256 hashes as byte-frozen
+#     sentinels (same precedent as the P0 sentinel above).
+#   * test_fundamentals_period_source_evidence_stage.py — names
+#     ``ops._STAGE_SPECS`` + ``ops._OFF_CYCLE_STAGES`` +
+#     ``ops.HEAVY_STAGE_TIMEOUT_SEC`` to verify stage registration
+#     without invoking the CLI. Same precedent as the
+#     backfill_sec_metadata_stage allowlist entry above.
+"tests/test_excluded_confirmed_data_gap_validator.py" = ["SLF"]
+"tests/test_fundamentals_period_source_evidence_stage.py" = ["SLF"]
 # P2a SEC lifecycle-events extractor tests (2026-05-30):
 #   * test_p2_sec_lifecycle_events.py names ``_extract_lifecycle_events``
 #     and ``_build_sec_filing_url`` module-private helpers + accesses

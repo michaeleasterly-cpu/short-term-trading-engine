@@ -1072,6 +1072,298 @@ async def _stage_sec_fundamentals_fallback(pool: asyncpg.Pool, config: dict[str,
     return {"dry_run": False, "rows": rows or 0}
 
 
+async def _stage_confirmed_data_gap_evidence_populator(
+    pool: asyncpg.Pool, config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Populate `platform.fundamentals_period_source_evidence` for
+    currently-FAILing `(ticker, period_end_date)` tuples.
+
+    Implements the `confirmed_data_gap_evidence_populator` stage per
+    `docs/superpowers/specs/2026-06-02-excluded-confirmed-data-gap-validator-semantics.md`
+    + `docs/superpowers/plans/2026-06-02-excluded-confirmed-data-gap-validator-semantics-plan.md`
+    §5.
+
+    For each `(ticker, period_end_date)` in the validator's current
+    FAIL set, attempts the FMP cascade then the SEC fallback. Records
+    one evidence row per source per period (yielded / empty /
+    extract_none / fetch_failure). Writes a manifest CSV at
+    `data/confirmed_data_gap_evidence_manifest_<UTC-stamp>.csv` with
+    columns `(ticker, period_end_date, fmp_outcome, sec_outcome,
+    would_exclude)`.
+
+    Knobs (all optional):
+      * `dry_run` (default True at the stage layer): when True, reports
+        counters + manifest, NEVER writes evidence rows. Pass
+        `--param dry_run=false` for the actual write.
+      * `tickers` (comma-separated subset): scope to specific tickers.
+      * `limit` (default 0 = no cap): bound the number of tickers
+        processed in one run.
+      * `use_bulk_zip` (default True): bulk-first invariant. `False`
+        raises — no per-row crawl.
+      * `archive_max_age_days` (default 7): archive freshness floor.
+
+    Op-on-demand only. NOT part of OPS_UPDATE_STAGES.
+    """
+    import csv as _csv
+    import uuid as _uuid
+
+    from tpcore.data.fundamentals_backfill import backfill_one_ticker
+    from tpcore.fmp import FMPFundamentalsAdapter
+    from tpcore.fundamentals.cache import FundamentalsCache
+    from tpcore.ingestion.handlers import handle_sec_fundamentals_fallback
+    from tpcore.logging.db_handler import DBLogHandler
+    from tpcore.quality.validation.checks.fundamentals_quarterly_completeness import (
+        compute_fundamentals_gap_periods,
+    )
+
+    cfg = dict(config or {})
+    log = structlog.get_logger("scripts.ops")
+    dry_run = _stage_param_to_bool(cfg.get("dry_run", True))
+    use_bulk_zip = _stage_param_to_bool(cfg.get("use_bulk_zip", True))
+    if not use_bulk_zip:
+        # Per plan §5.2 / §6: bulk-first invariant; raise before any
+        # HTTP call. The sentinel test pins this.
+        raise RuntimeError(
+            "confirmed_data_gap_evidence_populator: use_bulk_zip=false "
+            "is forbidden (bulk-first invariant per plan §6)"
+        )
+    explicit_tickers = cfg.get("tickers")
+    if explicit_tickers:
+        if isinstance(explicit_tickers, str):
+            ticker_filter = [
+                t.strip().upper()
+                for t in explicit_tickers.split(",") if t.strip()
+            ]
+        else:
+            ticker_filter = [str(t).upper() for t in explicit_tickers]
+    else:
+        ticker_filter = None
+    limit = int(cfg.get("limit", 0)) or None
+    archive_max_age_days = int(cfg.get("archive_max_age_days", 7))
+    log.info(
+        "ops.stage.confirmed_data_gap_evidence_populator.start",
+        dry_run=dry_run,
+        use_bulk_zip=use_bulk_zip,
+        ticker_filter=len(ticker_filter or []),
+        limit=limit or 0,
+        archive_max_age_days=archive_max_age_days,
+    )
+
+    # 1. Universe: validator's current FAIL set (per plan §5.3 #1).
+    #    `compute_fundamentals_gap_periods` returns ticker → list of
+    #    inferred missing period_end_dates (the same set the validator
+    #    is currently FAILing on; identical to the detector's gap dict).
+    per_ticker_periods = await compute_fundamentals_gap_periods(pool)
+    if ticker_filter:
+        wanted = set(ticker_filter)
+        per_ticker_periods = {
+            t: pe for t, pe in per_ticker_periods.items() if t in wanted
+        }
+    if limit:
+        # Deterministic order so the limit is stable across runs.
+        ordered = sorted(per_ticker_periods.keys())[:limit]
+        per_ticker_periods = {
+            t: per_ticker_periods[t] for t in ordered
+        }
+    tickers = sorted(per_ticker_periods.keys())
+    log.info(
+        "ops.stage.confirmed_data_gap_evidence_populator.universe",
+        tickers=len(tickers),
+        total_periods=sum(len(v) for v in per_ticker_periods.values()),
+    )
+
+    # 2. Per `(ticker, period)`: attempt FMP cascade then SEC fallback.
+    #    Skip the FMP+SEC attempts in dry_run? No — per plan §5.3 #3
+    #    dry_run runs the FMP cascade + SEC fallback but does NOT write
+    #    evidence rows. The `backfill_one_ticker` evidence writer is
+    #    gated on `pool is not None and record_evidence_for_periods is
+    #    not None`; we pass `pool=None` for dry-run to skip the writes.
+    counters = {
+        "tickers_attempted": 0,
+        "fmp_outage_count": 0,
+        "fmp_yielded_periods": 0,
+        "fmp_empty_periods": 0,
+        "sec_yielded_periods": 0,
+        "sec_extract_none_periods": 0,
+        "sec_fetch_failure_periods": 0,
+        "would_exclude_periods": 0,
+    }
+    manifest_records: list[dict[str, str]] = []
+    per_ticker_outcomes: dict[str, dict[date, dict[str, str]]] = {}
+
+    if per_ticker_periods:
+        db_log = DBLogHandler(
+            pool, engine=ENGINE_NAME, run_id=_uuid.uuid4(),
+        )
+        async with FMPFundamentalsAdapter() as adapter:
+            cache = FundamentalsCache(pool, adapter=adapter)
+            for symbol, periods in per_ticker_periods.items():
+                counters["tickers_attempted"] += 1
+                # 2a. FMP cascade — opt-in evidence write.
+                try:
+                    await backfill_one_ticker(
+                        cache, db_log, symbol,
+                        # Pass pool only in live mode so the evidence
+                        # writer's idempotent UPSERT runs.
+                        pool=(None if dry_run else pool),
+                        record_evidence_for_periods=(
+                            None if dry_run else periods
+                        ),
+                        evidence_source="fmp_historical",
+                    )
+                except RuntimeError as exc:
+                    counters["fmp_outage_count"] += 1
+                    log.warning(
+                        "ops.stage.confirmed_data_gap_evidence_populator.fmp_outage",
+                        ticker=symbol, error=str(exc)[:160],
+                    )
+                # 2b. Query post-fetch state to populate the manifest
+                #     regardless of dry/live (read-only).
+                async with pool.acquire() as conn:
+                    present = await conn.fetch(
+                        "SELECT DISTINCT period_end_date "
+                        "FROM platform.fundamentals_quarterly "
+                        "WHERE ticker = $1 AND period_end_date = ANY($2::date[])",
+                        symbol, periods,
+                    )
+                present_set = {r["period_end_date"] for r in present}
+                ticker_outcomes: dict[date, dict[str, str]] = {}
+                for pe in periods:
+                    fmp_outcome = (
+                        "yielded" if pe in present_set else "empty"
+                    )
+                    if fmp_outcome == "yielded":
+                        counters["fmp_yielded_periods"] += 1
+                    else:
+                        counters["fmp_empty_periods"] += 1
+                    ticker_outcomes[pe] = {"fmp": fmp_outcome}
+                per_ticker_outcomes[symbol] = ticker_outcomes
+
+        # 2c. SEC fallback — re-uses the handler. Honors dry_run.
+        sec_cfg = {
+            "tickers": ",".join(per_ticker_periods.keys()),
+            "include_no_gap_tickers": False,
+            "dry_run": "true" if dry_run else "false",
+        }
+        try:
+            sec_result = await handle_sec_fundamentals_fallback(
+                pool, sec_cfg,
+            )
+        except RuntimeError as exc:
+            sec_result = {"error": str(exc)[:160]}
+            log.warning(
+                "ops.stage.confirmed_data_gap_evidence_populator.sec_handler_raised",
+                error=str(exc)[:160],
+            )
+        log.info(
+            "ops.stage.confirmed_data_gap_evidence_populator.sec_done",
+            result_keys=sorted(
+                k for k in (sec_result or {}).keys() if isinstance(k, str)
+            ),
+        )
+
+        # 2d. Read SEC evidence rows back from the substrate (live)
+        #     OR from the handler's per-ticker counters (dry-run) so
+        #     the manifest's `sec_outcome` column reflects reality.
+        async with pool.acquire() as conn:
+            evidence_present = bool(await conn.fetchval(
+                "SELECT to_regclass("
+                "'platform.fundamentals_period_source_evidence') IS NOT NULL"
+            ))
+            sec_outcomes: dict[tuple[str, date], str] = {}
+            if evidence_present and not dry_run:
+                ev_rows = await conn.fetch(
+                    """
+                    SELECT ticker, period_end_date, outcome
+                    FROM platform.fundamentals_period_source_evidence
+                    WHERE source = 'sec_companyfacts'
+                      AND ticker = ANY($1::text[])
+                      AND period_end_date = ANY($2::date[])
+                    """,
+                    list(per_ticker_periods.keys()),
+                    sorted({
+                        pe for periods in per_ticker_periods.values()
+                        for pe in periods
+                    }),
+                )
+                for r in ev_rows:
+                    sec_outcomes[(r["ticker"], r["period_end_date"])] = (
+                        r["outcome"]
+                    )
+
+        # 2e. Roll up per-ticker outcomes for the manifest.
+        for symbol, periods in per_ticker_periods.items():
+            for pe in periods:
+                sec_outcome = sec_outcomes.get(
+                    (symbol, pe),
+                    "unknown" if dry_run else "extract_none",
+                )
+                if sec_outcome == "yielded":
+                    counters["sec_yielded_periods"] += 1
+                elif sec_outcome == "extract_none":
+                    counters["sec_extract_none_periods"] += 1
+                elif sec_outcome == "fetch_failure":
+                    counters["sec_fetch_failure_periods"] += 1
+                fmp_outcome = per_ticker_outcomes.get(
+                    symbol, {}
+                ).get(pe, {}).get("fmp", "unknown")
+                would_exclude = (
+                    fmp_outcome == "empty"
+                    and sec_outcome == "extract_none"
+                )
+                if would_exclude:
+                    counters["would_exclude_periods"] += 1
+                manifest_records.append({
+                    "ticker": symbol,
+                    "period_end_date": pe.isoformat(),
+                    "fmp_outcome": fmp_outcome,
+                    "sec_outcome": sec_outcome,
+                    "would_exclude": "true" if would_exclude else "false",
+                })
+
+    # 3. Write the manifest CSV (always — dry_run + live both produce
+    #    one so the operator can review).
+    manifest_path: str | None = None
+    if manifest_records:
+        utc_stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        manifest_dir = Path("data")
+        manifest_dir.mkdir(parents=True, exist_ok=True)
+        manifest_path_obj = (
+            manifest_dir
+            / f"confirmed_data_gap_evidence_manifest_{utc_stamp}.csv"
+        )
+        with manifest_path_obj.open("w", newline="", encoding="utf-8") as f:
+            writer = _csv.DictWriter(
+                f,
+                fieldnames=[
+                    "ticker", "period_end_date",
+                    "fmp_outcome", "sec_outcome", "would_exclude",
+                ],
+            )
+            writer.writeheader()
+            writer.writerows(manifest_records)
+        manifest_path = str(manifest_path_obj)
+        log.info(
+            "ops.stage.confirmed_data_gap_evidence_populator.manifest",
+            path=manifest_path, rows=len(manifest_records),
+        )
+
+    result = {
+        "dry_run": dry_run,
+        "use_bulk_zip": use_bulk_zip,
+        "archive_max_age_days": archive_max_age_days,
+        "tickers_attempted": counters["tickers_attempted"],
+        "tickers_in_filter": len(ticker_filter or []),
+        "limit": limit or 0,
+        "manifest_path": manifest_path,
+        **counters,
+    }
+    log.info(
+        "ops.stage.confirmed_data_gap_evidence_populator.done", **result,
+    )
+    return result
+
+
 async def _stage_compute_fundamental_ratios(
     pool: asyncpg.Pool, config: dict[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -11467,6 +11759,17 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # (target ``platform.insider_filings`` table dropped; full
     # FeedProfile + ProviderBinding + HealSpec + check + producer +
     # stage retirement closed in the same PR).
+    # confirmed_data_gap_evidence_populator (2026-06-03) — heavy lane
+    # one-shot operator-on-demand stage per spec PR #450 + plan
+    # PR #451. Populates platform.fundamentals_period_source_evidence
+    # for currently-FAILing (ticker, period_end_date) tuples. Default
+    # dry_run=true at the stage layer; live writes require the
+    # operator to pass --param dry_run=false.
+    ("confirmed_data_gap_evidence_populator",
+        lambda pool, cfg: (
+            lambda: _stage_confirmed_data_gap_evidence_populator(pool, cfg)
+        ),
+        HEAVY_STAGE_TIMEOUT_SEC),
 )
 KNOWN_STAGES: tuple[str, ...] = tuple(name for name, _, _ in _STAGE_SPECS)
 # Stages that are NOT part of the default daily ``cmd_update`` cycle —
@@ -11502,6 +11805,11 @@ _OFF_CYCLE_STAGES: frozenset[str] = frozenset({
     # on-demand only; clears stale paper-engine holds whose credibility
     # is at or above the new paper floor.
     "release_paper_holds_above_paper_floor",
+    # `excluded_confirmed_data_gap` evidence populator (2026-06-03).
+    # Operator-on-demand only; default dry_run=true. Lives off the
+    # daily cycle until evidence-substrate population reaches a
+    # cadence cadence-policy operator authorizes.
+    "confirmed_data_gap_evidence_populator",
     # P0_3 RETIRE 2026-05-25 — ``historical_insider_sentiment_daily``
     # removed from the off-cycle set (stage definition above also gone).
 })
@@ -14038,6 +14346,7 @@ _STAGE_PROVIDER_MAP: dict[str, str] = {
     "iborrowdesk_borrow_rates": "iborrowdesk",
     "classify_tickers": "fmp",
     "tier_refresh": "alpaca",
+    "confirmed_data_gap_evidence_populator": "fmp",
 }
 
 
