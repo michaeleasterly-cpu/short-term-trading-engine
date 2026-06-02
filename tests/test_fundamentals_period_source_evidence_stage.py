@@ -396,5 +396,187 @@ async def test_manifest_csv_columns(tmp_path) -> None:
         ]
 
 
+# ──────────────────────────────────────────────────────────────────────
+# Test 8 — dry-run-purity fix: populator passes dry_run=True to
+# backfill_one_ticker so cache.upsert_payload is NEVER called
+# ──────────────────────────────────────────────────────────────────────
+#
+# Per the 2026-06-02 operator finding: the populator's FMP-cascade leg
+# called ``cache.upsert_payload`` UNCONDITIONALLY in dry-run mode,
+# bumping ``recorded_at`` on 5 AXIN rows during a ``--param
+# dry_run=true --param limit=10`` preview. The fix gates the primary
+# upsert on ``dry_run`` (mirror semantic with PR #448 SEC handler).
+# This test pins the populator's contract: ``backfill_one_ticker``
+# MUST receive ``dry_run=True`` when the stage is in preview mode.
+
+
+async def test_confirmed_data_gap_populator_dry_run_passes_dry_run_to_backfill(
+    tmp_path,
+) -> None:
+    """The populator MUST forward ``dry_run=True`` to
+    ``backfill_one_ticker`` so the FMP-cascade leg's
+    ``cache.upsert_payload`` write is suppressed."""
+    from scripts import ops
+    today = datetime.now(UTC).date()
+    pool = _make_pool(filing_rows=_two_quarterly_filings("AAA", today))
+    captured: dict[str, Any] = {}
+
+    async def _fake_backfill(cache, db_log, symbol, **kwargs):
+        captured["dry_run"] = kwargs.get("dry_run")
+        captured["pool"] = kwargs.get("pool")
+        return 0
+
+    async def _fake_handler(p, cfg):
+        return {"dry_run": True, "evidence_rows_planned": 0}
+
+    fake_adapter = MagicMock()
+    fake_adapter.__aenter__ = AsyncMock(return_value=fake_adapter)
+    fake_adapter.__aexit__ = AsyncMock(return_value=None)
+
+    with patch(
+        "tpcore.fmp.FMPFundamentalsAdapter", return_value=fake_adapter,
+    ), patch(
+        "tpcore.fundamentals.cache.FundamentalsCache", MagicMock(),
+    ), patch(
+        "tpcore.logging.db_handler.DBLogHandler", return_value=MagicMock(),
+    ), patch(
+        "tpcore.data.fundamentals_backfill.backfill_one_ticker",
+        side_effect=_fake_backfill,
+    ), patch(
+        "tpcore.ingestion.handlers.handle_sec_fundamentals_fallback",
+        side_effect=_fake_handler,
+    ), patch.object(
+        ops, "Path",
+        lambda p="data": tmp_path / p if p == "data" else Path(p),
+    ):
+        await ops._stage_confirmed_data_gap_evidence_populator(
+            pool, {"dry_run": "true"},
+        )
+
+    assert captured.get("dry_run") is True, (
+        "populator must pass dry_run=True to backfill_one_ticker so "
+        "cache.upsert_payload is skipped (fix for the 2026-06-02 AXIN "
+        "recorded_at bump defect)"
+    )
+    assert captured.get("pool") is None, (
+        "populator must pass pool=None in dry-run so the evidence "
+        "writer is also skipped"
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Test 9 — dry-run dict surfaces fmp_would_write_rows counter
+# ──────────────────────────────────────────────────────────────────────
+
+
+async def test_confirmed_data_gap_populator_dry_run_returns_fmp_would_write_rows(
+    tmp_path,
+) -> None:
+    """The dry-run result dict MUST surface
+    ``fmp_would_write_rows`` so the operator can preview how many
+    rows the live mode WOULD have upserted into
+    ``platform.fundamentals_quarterly``. Mirrors PR #448's
+    ``archive_rows_planned`` precedent for the SEC leg."""
+    from scripts import ops
+    today = datetime.now(UTC).date()
+    pool = _make_pool(filing_rows=_two_quarterly_filings("AAA", today))
+
+    async def _fake_backfill(cache, db_log, symbol, **kwargs):
+        # Return a non-zero would-write count so the populator can
+        # accumulate it on the counter.
+        return 7
+
+    async def _fake_handler(p, cfg):
+        return {"dry_run": True, "evidence_rows_planned": 0}
+
+    fake_adapter = MagicMock()
+    fake_adapter.__aenter__ = AsyncMock(return_value=fake_adapter)
+    fake_adapter.__aexit__ = AsyncMock(return_value=None)
+
+    with patch(
+        "tpcore.fmp.FMPFundamentalsAdapter", return_value=fake_adapter,
+    ), patch(
+        "tpcore.fundamentals.cache.FundamentalsCache", MagicMock(),
+    ), patch(
+        "tpcore.logging.db_handler.DBLogHandler", return_value=MagicMock(),
+    ), patch(
+        "tpcore.data.fundamentals_backfill.backfill_one_ticker",
+        side_effect=_fake_backfill,
+    ), patch(
+        "tpcore.ingestion.handlers.handle_sec_fundamentals_fallback",
+        side_effect=_fake_handler,
+    ), patch.object(
+        ops, "Path",
+        lambda p="data": tmp_path / p if p == "data" else Path(p),
+    ):
+        result = await ops._stage_confirmed_data_gap_evidence_populator(
+            pool, {"dry_run": "true"},
+        )
+
+    assert result["dry_run"] is True
+    assert "fmp_would_write_rows" in result, (
+        "dry-run dict must expose fmp_would_write_rows counter for "
+        "operator preview parity with SEC leg's archive_rows_planned"
+    )
+    assert result["fmp_would_write_rows"] >= 7, (
+        f"expected fmp_would_write_rows ≥ 7; got {result}"
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Test 10 — regression-pin: dry_run=true STILL writes zero evidence
+# rows (the PR #452 contract; ensure the fix doesn't regress)
+# ──────────────────────────────────────────────────────────────────────
+
+
+async def test_confirmed_data_gap_populator_dry_run_writes_zero_evidence_rows(
+    tmp_path,
+) -> None:
+    """Regression-pin: the dry-run-purity fix MUST NOT regress the
+    PR #452 evidence-gate. ``executemany`` must remain unfired on the
+    evidence table in dry-run."""
+    from scripts import ops
+    today = datetime.now(UTC).date()
+    pool = _make_pool(filing_rows=_two_quarterly_filings("ZZZ", today))
+
+    async def _fake_backfill(cache, db_log, symbol, **kwargs):
+        # The populator should never reach the evidence-writer in
+        # dry-run; just return 0 to keep the stage progressing.
+        return 0
+
+    async def _fake_handler(p, cfg):
+        return {"dry_run": True, "evidence_rows_planned": 0}
+
+    fake_adapter = MagicMock()
+    fake_adapter.__aenter__ = AsyncMock(return_value=fake_adapter)
+    fake_adapter.__aexit__ = AsyncMock(return_value=None)
+
+    with patch(
+        "tpcore.fmp.FMPFundamentalsAdapter", return_value=fake_adapter,
+    ), patch(
+        "tpcore.fundamentals.cache.FundamentalsCache", MagicMock(),
+    ), patch(
+        "tpcore.logging.db_handler.DBLogHandler", return_value=MagicMock(),
+    ), patch(
+        "tpcore.data.fundamentals_backfill.backfill_one_ticker",
+        side_effect=_fake_backfill,
+    ), patch(
+        "tpcore.ingestion.handlers.handle_sec_fundamentals_fallback",
+        side_effect=_fake_handler,
+    ), patch.object(
+        ops, "Path",
+        lambda p="data": tmp_path / p if p == "data" else Path(p),
+    ):
+        await ops._stage_confirmed_data_gap_evidence_populator(
+            pool, {"dry_run": "true"},
+        )
+
+    em_calls = pool._executemany_conn.executemany.await_count
+    assert em_calls == 0, (
+        "dry-run-purity fix must NOT regress the PR #452 evidence-gate: "
+        f"executemany should be 0; got {em_calls}"
+    )
+
+
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-v"])

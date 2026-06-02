@@ -238,6 +238,12 @@ ignore = ["E501"]
 #     backfill_sec_metadata_stage allowlist entry above.
 "tests/test_excluded_confirmed_data_gap_validator.py" = ["SLF"]
 "tests/test_fundamentals_period_source_evidence_stage.py" = ["SLF"]
+# FMP-leg dry-run-purity fix (2026-06-03 follow-up to PR #452):
+#   * test_historical_fundamentals_dry_run.py — names module-private
+#     ``fundamentals_backfill._count_payload_rows`` to verify the
+#     payload-row-count helper's contract (mirrors the precedent of
+#     test_sec_fundamentals_fallback_dry_run.py's helper sentinels).
+"tests/test_historical_fundamentals_dry_run.py" = ["SLF"]
 # P2a SEC lifecycle-events extractor tests (2026-05-30):
 #   * test_p2_sec_lifecycle_events.py names ``_extract_lifecycle_events``
 #     and ``_build_sec_filing_url`` module-private helpers + accesses

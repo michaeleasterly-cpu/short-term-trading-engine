@@ -63,6 +63,25 @@ default), behavior is byte-equivalent to pre-extension. The
 `backfill_universe(..., record_evidence=True)` to populate the daily
 substrate, but defaults to off to keep the existing backfill cycle
 unchanged in this PR.
+
+# Dry-run-purity fix (2026-06-03 — PR follow-up to PR #452)
+
+`backfill_one_ticker` accepts a `dry_run: bool = False` kwarg. When
+`dry_run=True` the function STILL performs the FMP fetch (via the
+public `cache.fetch_payload(symbol)` accessor — no DB write), builds
+the would-write payload in-memory, and reports the row-count it
+WOULD have upserted — but DOES NOT call `cache.upsert_payload`. This
+mirrors the PR #448 dry-run contract of `handle_sec_fundamentals_fallback`
+exactly: read-only fetch + planning counters, zero `fundamentals_quarterly`
+mutation. Default `False` keeps the live path bit-identical.
+
+WHY this matters: the operator's 2026-06-02 run of
+`confirmed_data_gap_evidence_populator --param dry_run=true --param limit=10`
+observed 5 AXIN rows in `fundamentals_quarterly` whose `recorded_at`
+was bumped to the dry-run window — evidence-row writes WERE gated
+(zero new evidence rows), but `cache.backfill` ran unconditionally
+and re-upserted the existing rows (the ON CONFLICT clause sets
+`recorded_at = now()`). The fix gates that primary write too.
 """
 from __future__ import annotations
 
@@ -160,6 +179,29 @@ async def enumerate_gap_tickers(pool: asyncpg.Pool) -> list[str]:
 # ──────────────────────────────────────────────────────────────────────
 
 
+def _count_payload_rows(payload: dict[str, Any]) -> int:
+    """Return the number of periods present in an FMP fundamentals
+    payload — the count ``cache.upsert_payload`` would have written.
+
+    The payload shape mirrors ``FundamentalsCache.fetch_payload``
+    (see ``tpcore.fmp.fundamentals_adapter._merge``): one ``latest``
+    period at the top level + a ``history`` list of earlier periods.
+    The upsert-time physical-truth gate rejects rows whose
+    ``filing_date`` is None; mirror that here so the dry-run count
+    matches what the live path would actually write.
+    """
+    if not payload:
+        return 0
+    periods: list[dict[str, Any]] = [
+        {k: v for k, v in payload.items() if k != "history"}
+    ]
+    for h in payload.get("history") or []:
+        periods.append(h)
+    # Mirror ``cache._upsert_payload``: drop periods without
+    # ``filing_date`` (same physical-truth gate, no DB call).
+    return sum(1 for p in periods if p.get("filing_date") is not None)
+
+
 async def backfill_one_ticker(
     cache,
     db_log,  # tpcore.logging.db_handler.DBLogHandler
@@ -169,6 +211,7 @@ async def backfill_one_ticker(
     pool: asyncpg.Pool | None = None,
     record_evidence_for_periods: list[date] | None = None,
     evidence_source: str = "fmp_historical",
+    dry_run: bool = False,
 ) -> int:
     """Pull the full FMP quarterly history for ``symbol`` (deep limit)
     and upsert every period into ``platform.fundamentals_quarterly``.
@@ -190,6 +233,17 @@ async def backfill_one_ticker(
     for each requested period that did NOT land, ``fetch_failure`` if
     the FMP fetch hit a real outage. Opt-in; default (None) is
     byte-equivalent to pre-extension behavior.
+
+    When ``dry_run=True`` (default False), the FMP fetch STILL runs
+    (via ``cache.fetch_payload`` — the public adapter accessor that
+    returns the payload without touching the DB) BUT ``cache.upsert_payload``
+    is skipped entirely. The returned int reports the row-count that
+    WOULD have been upserted (latest + history). Evidence-row writes
+    are similarly suppressed (the populator stage passes ``pool=None``
+    in dry-run so ``_record_fmp_evidence`` short-circuits). This
+    mirrors the PR #448 dry-run contract of
+    ``handle_sec_fundamentals_fallback``. Live path is bit-identical
+    to pre-fix behavior (``dry_run=False``).
     """
     from tpcore.outage import DataProviderOutage
 
@@ -198,7 +252,18 @@ async def backfill_one_ticker(
     error_msg: str | None = None
     fmp_outage: str | None = None
     try:
-        rows_written = await cache.backfill(symbol, end_date=end)
+        if dry_run:
+            # Dry-run: fetch the FMP payload via the public accessor
+            # (no DB write) and count the rows that WOULD have been
+            # upserted. ``cache.fetch_payload`` raises
+            # ``DataProviderOutage`` on transport / contract failure —
+            # same exception surface as ``cache.backfill`` — so the
+            # downstream classification and event-log paths are
+            # symmetric.
+            payload = await cache.fetch_payload(symbol)
+            rows_written = _count_payload_rows(payload)
+        else:
+            rows_written = await cache.backfill(symbol, end_date=end)
     except DataProviderOutage as exc:
         msg = str(exc)
         # Classify upstream:
@@ -400,6 +465,7 @@ async def backfill_universe(
 __all__ = [
     "DEFAULT_HISTORY_LIMIT_QUARTERS",
     "PROGRESS_EVENT_TYPE",
+    "_count_payload_rows",
     "_record_fmp_evidence",
     "already_completed_tickers",
     "backfill_one_ticker",
