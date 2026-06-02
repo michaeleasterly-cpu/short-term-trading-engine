@@ -634,3 +634,123 @@ spec body above is preserved unmodified; this section is the
 correction. Next operator action is the validator-semantics /
 data-gap spec arc, not another `historical_fundamentals_quarterly`
 run.
+
+
+## Post-merge SEC fallback spike result — 2026-06-02 afternoon
+
+The §12.2 falsification of spec §11's FMP-cascade verdict prompted the
+operator to spike SEC companyfacts as the next-best source of the 117
+FMP-unreachable historical residuals. That requires a read-only
+preview, which the `sec_fundamentals_fallback` stage did not support.
+PR #448 (merged at `88a7d36`) added a `dry_run` knob to
+`handle_sec_fundamentals_fallback` with stage-layer default
+`dry_run=True`. The spike then ran read-only.
+
+### Spike command
+
+```
+python scripts/ops.py --stage sec_fundamentals_fallback \
+  --param dry_run=true \
+  --param tickers=AACB,ADV,AEVA,AGPU,AIDX,AKTS,ALIT,ARDT,ASTL,AVX
+```
+
+Runtime 6.6 s. Exit 0.
+
+### Per-ticker result table
+
+| Ticker | `asset_class` | tier | have_periods | inferred_missing | SEC `archive_rows_planned` | status |
+|--------|---------------|----:|------------:|-----------------:|---------------------------:|--------|
+| AACB   | stock | 1 | 6  | 2  | 0 | source-unavailable |
+| ADV    | stock | 1 | 32 | 9  | 0 | source-unavailable |
+| AEVA   | stock | 1 | 25 | 1  | **1** | **source-fillable** (only hit; 2021-03-31; SPAC-merger Q1 — see §AEVA below) |
+| **AGPU** | **spac** | 1 | 40 | 1  | — | **excluded** by handler `asset_class='stock'` filter |
+| AIDX   | stock | 1 | 8  | 5  | 0 | source-unavailable |
+| AKTS   | stock | 1 | 6  | 1  | 0 | source-unavailable |
+| ALIT   | stock | 1 | 28 | 6  | 0 | source-unavailable |
+| ARDT   | stock | 1 | 22 | 23 | 0 | source-unavailable |
+| ASTL   | stock | 1 | 33 | 22 | 0 | source-unavailable |
+| AVX    | stock | 1 | 30 | 3  | 0 | source-unavailable |
+| **Total in-scope** | | | **190** | **72** | **1** | **1.4 % SEC-fillable** |
+
+Universe filter: `asset_class='stock' AND tier ≤ 2 AND active AND
+CIK NOT NULL`. AGPU's `asset_class='spac'` excluded it. The handler
+emitted `tier2_with_cik=9, ticker_filter=10` on the universe log line.
+
+The 8 in-scope tickers with `archive_rows_planned=0` all returned
+`no_data=0`, `failures=0`, `nothing_to_fill=0` — i.e., SEC
+companyfacts was reachable and parseable for each CIK, the handler
+called `sec.extract_period(facts, pe)` for every inferred missing
+date, and **the SEC payload did NOT carry the requested period**.
+SEC has the same gap as FMP for these tickers.
+
+### Acceptance gates (all green)
+
+* `dry_run=true` reflected in `param_override`, `phase0_done`, and
+  `ops.stage.complete` events.
+* 0 DB writes.
+* `manifest_lifecycle` NOT called.
+* `cache.upsert_payload` NOT called.
+* No unrelated table writes (read-only universe + missing-period SQL only).
+* Per-ticker `archive_rows_planned` reported via
+  `per_ticker_planned={'AEVA': 1}`.
+
+### AEVA — the one source-fillable period
+
+* Ticker: **AEVA** (CIK `0001789029` = InterPrivate II Acquisition Corp → Aeva Inc).
+* Missing period: **2021-03-31** (Q1 2021), inferred between observed
+  2020-12-31 and 2021-06-30 quarters.
+* FMP: no row in 2021-03-* for AEVA.
+* SEC companyfacts: extracts the period (1 archive_row planned).
+* Pattern: **SPAC-merger Q1 quarter**. InterPrivate II merged with Aeva
+  Inc on 2021-03-12; the merger CIK retains its 10-Q for the quarter
+  of the merger but FMP frequently misses the SPAC's pre-merger Q1
+  filing because its fundamentals normalization keyes off the
+  operating-company filing date.
+* Classification: **one-off pattern specific to SPAC-merger quarters**.
+  Not a recurring source-fillable shape for the broader 117 cohort
+  unless those tickers are also SPAC-merger Q1s.
+
+### AGPU — `asset_class='spac'` classifier finding
+
+* Ticker: **AGPU** · CIK `0001446159` · `current_legal_name='Axe Compute Inc.'`
+  · `instrument_subtype='unit'` · `sec_document_type_primary='10-Q'` ·
+  `lifetime_start=1900-01-01` (sentinel) · `lifetime_end=NULL` (active).
+* The handler's `asset_class='stock'` predicate excludes AGPU. Today
+  this is the intended behavior — SPACs typically have no operating-
+  company cashflows to backfill — but `current_legal_name='Axe Compute Inc.'`
+  + `instrument_subtype='unit'` suggests a post-merger residual unit
+  ticker. Whether AGPU should remain `spac` or be reclassified to
+  `stock` is a classifier-triage question.
+* **Deferred follow-up** (not in this PR): triage AGPU's
+  `asset_class` against the underlying entity state. Read-only; no
+  reclassification authorized in this doc batch.
+
+### Empirical 117-row cohort verdict
+
+Extrapolating the 1.4 % SEC-fillable yield to the wider 117-row
+FMP-unreachable historical residual cohort: ≤ ~5 rows would be
+SEC-fillable. The bulk of the cohort is **source-unavailable** via
+both FMP and SEC companyfacts.
+
+### Next arc (operator decision, not authorized in this PR)
+
+Per `if_source_unavailable`: the right downstream is the
+**`excluded_confirmed_data_gap` validator-semantics spec arc** —
+NOT a live SEC fallback run. The validator gains a new exit state
+for "issuer existed but the inferred quarter is unrecoverable from
+any current source", which the bucket-shape evidence test would
+require to be a Form 10-Q-cadence ticker with continuous neighbors
+and ≥ N attempted source fetches (FMP + SEC) returning empty.
+
+The single AEVA hit could be folded into a separate "SPAC-merger
+Q1 source-fillable" sub-spec, but it is **not** the load-bearing
+deliverable — 1 row is not worth a heavy-lane stage modification on
+its own.
+
+### Spec status (post-spike)
+
+**§12.3 still blocked** (no live FMP cascade). **SEC fallback
+empirically confirmed insufficient** for automated cleanup of the
+117-row cohort. The validator-semantics / `excluded_confirmed_data_gap`
+spec arc is now the right next deliverable. No live writes
+authorized.
