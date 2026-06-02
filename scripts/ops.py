@@ -2685,6 +2685,12 @@ async def _stage_backfill_sec_metadata(
     failing_only = _to_bool(cfg.get("failing_only", False))
     no_cik_country_null = _to_bool(cfg.get("no_cik_country_null", False))
     force_refresh_metadata = _to_bool(cfg.get("force_refresh_metadata", False))
+    # P1b CIK long-tail FMP fallback knobs. Defaults preserve the
+    # pre-P1b stage behaviour exactly: do_fmp_fallback=False means
+    # the sub-leg is skipped entirely. Spec PR #423; plan PR #424.
+    do_fmp_fallback = _to_bool(cfg.get("do_fmp_fallback", False))
+    fmp_rate_limit_sleep_s = float(cfg.get("fmp_rate_limit_sleep_s", 0.2))
+    fmp_max_unresolved = int(cfg.get("fmp_max_unresolved", 100))
     max_tickers = int(cfg["max_tickers"]) if cfg.get("max_tickers") else None
     ticker_scope_raw = cfg.get("tickers")
     explicit_tickers: list[str] | None = None
@@ -2851,6 +2857,153 @@ async def _stage_backfill_sec_metadata(
             **cik_stats,
         )
 
+    # ─── P1b CIK FMP-fallback sub-leg ───
+    # Run only when explicitly opted in (do_fmp_fallback=True). Per
+    # spec PR #423 + plan PR #424: lower authority than SEC; never
+    # overwrites a non-NULL CIK; symbol-mismatch / ambiguous failures
+    # close + emit IDENTITY_DIVERGENCE_INVESTIGATE per the
+    # parent_resolver.py protocol; country writeback is OFF.
+    fmp_cik_writes: list[tuple[str, str]] = []  # (ticker, cik) — source is always 'fmp'
+    fmp_divergence_events: list[tuple[str, dict[str, Any]]] = []  # (run_id, payload)
+    fmp_stats = {
+        "candidates": 0,
+        "resolved": 0,
+        "no_match": 0,
+        "symbol_mismatch": 0,
+        "no_cik_in_profile": 0,
+        "fmp_error": 0,
+        "skipped_existing_cik": 0,
+        "skipped_lifetime_ended": 0,
+        "written": 0,
+        "divergence_events_written": 0,
+    }
+    if do_fmp_fallback and do_cik:
+        import os as _os
+        import uuid as _uuid
+
+        import httpx as _httpx_fmp
+
+        from tpcore.fmp.profile_adapter import fetch_profile
+
+        unresolved_input = list(result.unresolved) if "result" in locals() else []
+        cap = fmp_max_unresolved if fmp_max_unresolved > 0 else len(unresolved_input)
+        unresolved_capped = unresolved_input[:cap] if cap > 0 else []
+        fmp_stats["candidates"] = len(unresolved_capped)
+
+        fmp_api_key = _os.environ.get("FMP_API_KEY")
+        run_id = f"p1b_fmp_fallback_{_uuid.uuid4().hex[:12]}"
+
+        if not unresolved_capped:
+            log.info(
+                "ops.stage.backfill_sec_metadata.fmp_fallback.start",
+                unresolved_count=0,
+                cap_applied=fmp_max_unresolved,
+                fmp_rate_limit_sleep_s=fmp_rate_limit_sleep_s,
+                dry_run=dry_run,
+            )
+        elif not fmp_api_key:
+            # Fail loud — operator opted in but credential missing.
+            raise RuntimeError(
+                "backfill_sec_metadata[fmp_fallback]: FMP_API_KEY env "
+                "var required when do_fmp_fallback=true"
+            )
+        else:
+            log.info(
+                "ops.stage.backfill_sec_metadata.fmp_fallback.start",
+                unresolved_count=len(unresolved_capped),
+                cap_applied=fmp_max_unresolved,
+                fmp_rate_limit_sleep_s=fmp_rate_limit_sleep_s,
+                dry_run=dry_run,
+            )
+
+            async with _httpx_fmp.AsyncClient(timeout=20.0) as _fmp_client:
+                for _i, _ticker in enumerate(unresolved_capped, start=1):
+                    await asyncio.sleep(fmp_rate_limit_sleep_s)
+                    _state_row = state_by_ticker.get(_ticker, {})
+                    _existing_cik = _state_row.get("cik")
+                    # Defensive guard — the SEC unresolved path
+                    # implies cik IS NULL but a concurrent process
+                    # could populate it between scope read and the
+                    # FMP call. The UPDATE's WHERE-clause also
+                    # guards; this saves the FMP quota in the
+                    # common case.
+                    if _existing_cik:
+                        fmp_stats["skipped_existing_cik"] += 1
+                        continue
+
+                    _result = await fetch_profile(
+                        _fmp_client, _ticker, api_key=fmp_api_key,
+                    )
+
+                    if _result.state == "resolved" and _result.cik:
+                        fmp_stats["resolved"] += 1
+                        fmp_cik_writes.append((_ticker, _result.cik))
+                    elif _result.state == "no_match":
+                        fmp_stats["no_match"] += 1
+                    elif _result.state == "symbol_mismatch":
+                        fmp_stats["symbol_mismatch"] += 1
+                        fmp_divergence_events.append((
+                            run_id,
+                            {
+                                "source": "p1b_fmp_fallback",
+                                "ticker": _ticker,
+                                "requested_symbol": _ticker,
+                                "returned_symbol": _result.returned_symbol,
+                                "raw_count": _result.profiles_count,
+                                "reason": "fmp_symbol_mismatch",
+                                "row_existing_cik": _existing_cik,
+                                "advised": (
+                                    "operator review before relying on "
+                                    "FMP profile for this ticker"
+                                ),
+                            },
+                        ))
+                    elif _result.state == "ambiguous_response":
+                        # Map to symbol_mismatch counter per the plan's
+                        # operator-facing collapse.
+                        fmp_stats["symbol_mismatch"] += 1
+                        fmp_divergence_events.append((
+                            run_id,
+                            {
+                                "source": "p1b_fmp_fallback",
+                                "ticker": _ticker,
+                                "requested_symbol": _ticker,
+                                "returned_symbol": _result.returned_symbol,
+                                "raw_count": _result.profiles_count,
+                                "reason": "fmp_ambiguous_response",
+                                "row_existing_cik": _existing_cik,
+                                "advised": (
+                                    "operator review before relying on "
+                                    "FMP profile for this ticker"
+                                ),
+                            },
+                        ))
+                    elif _result.state == "no_cik_in_profile":
+                        fmp_stats["no_cik_in_profile"] += 1
+                    elif _result.state == "fmp_error":
+                        fmp_stats["fmp_error"] += 1
+                        log.warning(
+                            "ops.stage.backfill_sec_metadata.fmp_fallback.fmp_error",
+                            ticker=_ticker,
+                            http_status=_result.http_status,
+                            error=_result.error_summary,
+                        )
+
+                    if _i % 100 == 0:
+                        log.info(
+                            "ops.stage.backfill_sec_metadata.fmp_fallback.progress",
+                            processed=_i,
+                            total=len(unresolved_capped),
+                            resolved=fmp_stats["resolved"],
+                            errors=fmp_stats["fmp_error"],
+                        )
+
+        log.info(
+            "ops.stage.backfill_sec_metadata.fmp_fallback.end",
+            **fmp_stats,
+            divergence_events_pending=len(fmp_divergence_events),
+        )
+
     # ─── metadata extraction leg ───
     metadata_stats = {
         "candidates": 0, "fetched": 0, "submissions_404": 0,
@@ -2873,6 +3026,13 @@ async def _stage_backfill_sec_metadata(
         cik_resolutions_this_run = {
             t: cik for t, cik, _src in cik_writes
         }
+        # P1b — FMP-fallback-resolved CIKs also feed the metadata
+        # leg in the same run so the operator gets evidence-column
+        # population for free on the long-tail rows. setdefault keeps
+        # SEC ticker map authority on the (impossible-by-construction)
+        # collision case.
+        for _t, _cik in fmp_cik_writes:
+            cik_resolutions_this_run.setdefault(_t, _cik)
 
         async def _cik_for(ticker: str) -> str | None:
             existing = state_by_ticker[ticker].get("cik")
@@ -2932,7 +3092,10 @@ async def _stage_backfill_sec_metadata(
         )
 
     # ─── apply writes (idempotent UPDATEs) ───
-    if not dry_run and (cik_writes or metadata_writes):
+    if not dry_run and (
+        cik_writes or metadata_writes
+        or fmp_cik_writes or fmp_divergence_events
+    ):
         async with pool.acquire() as conn:
             async with conn.transaction():
                 if cik_writes:
@@ -2951,6 +3114,53 @@ async def _stage_backfill_sec_metadata(
                         cik_writes,
                     )
                     cik_stats["written"] = len(cik_writes)
+                if fmp_cik_writes:
+                    # P1b — FMP-fallback CIK writes carry a stricter
+                    # guard (cik IS NULL AND lifetime_end IS NULL) per
+                    # the plan's persistence contract. The cik IS NULL
+                    # clause is operator-provenance preservation;
+                    # lifetime_end IS NULL drops any delisted ticker
+                    # that became inactive between scope read and
+                    # write. Provenance pinned to 'fmp'.
+                    fmp_update_count = await _execute_fmp_cik_updates(
+                        conn, fmp_cik_writes,
+                    )
+                    fmp_stats["written"] = fmp_update_count
+                    fmp_stats["skipped_lifetime_ended"] += max(
+                        0, len(fmp_cik_writes) - fmp_update_count,
+                    )
+                if fmp_divergence_events:
+                    # IDENTITY_DIVERGENCE_INVESTIGATE events to
+                    # platform.application_log per the parent_resolver.py
+                    # protocol. One row per symbol_mismatch /
+                    # ambiguous_response occurrence.
+                    await conn.executemany(
+                        """
+                        INSERT INTO platform.application_log
+                            (engine, run_id, event_type, severity,
+                             message, data)
+                        VALUES
+                            ('sec_metadata_backfill', $1,
+                             'IDENTITY_DIVERGENCE_INVESTIGATE',
+                             'WARNING',
+                             $2, $3::jsonb)
+                        """,
+                        [
+                            (
+                                run_id,
+                                (
+                                    f"FMP /profile divergence for "
+                                    f"{payload.get('ticker', '?')}: "
+                                    f"{payload.get('reason', '?')}"
+                                ),
+                                json.dumps(payload),
+                            )
+                            for run_id, payload in fmp_divergence_events
+                        ],
+                    )
+                    fmp_stats["divergence_events_written"] = len(
+                        fmp_divergence_events,
+                    )
                 if metadata_writes:
                     # The metadata UPDATE always writes (re-write is
                     # safe for the foundation columns; if we got the
@@ -2981,6 +3191,8 @@ async def _stage_backfill_sec_metadata(
             "ops.stage.backfill_sec_metadata.writes_committed",
             cik_written=cik_stats["written"],
             metadata_written=metadata_stats["written"],
+            fmp_cik_written=fmp_stats["written"],
+            fmp_divergence_events_written=fmp_stats["divergence_events_written"],
         )
 
     coverage_after = await _snapshot()
@@ -2988,10 +3200,51 @@ async def _stage_backfill_sec_metadata(
         "scope_size": len(scope_tickers),
         "cik": cik_stats,
         "metadata": {**metadata_stats, "failures": metadata_failures[:50]},
+        "cik_fmp_fallback": fmp_stats,
         "coverage_before": coverage_before,
         "coverage_after": coverage_after,
         "dry_run": dry_run,
     }
+
+
+async def _execute_fmp_cik_updates(
+    conn: Any, fmp_cik_writes: list[tuple[str, str]],
+) -> int:
+    """Apply the P1b FMP-fallback CIK writes with the stricter
+    ``cik IS NULL AND lifetime_end IS NULL`` guard.
+
+    Returns the cumulative number of rows actually updated (a row
+    whose ``lifetime_end`` became non-NULL between the scope read
+    and the UPDATE results in a zero-row outcome — that's the
+    ``skipped_lifetime_ended`` signal the caller increments).
+
+    Per-row (rather than executemany) so the UPDATE-row-count is
+    observable per ticker; the long-tail batch is bounded by the
+    operator's ``fmp_max_unresolved`` (default 100) so the
+    per-row overhead is negligible.
+    """
+    written = 0
+    for ticker, cik in fmp_cik_writes:
+        result = await conn.execute(
+            """
+            UPDATE platform.ticker_classifications
+            SET cik = $2, cik_source = 'fmp', updated_at = NOW()
+            WHERE ticker = $1
+              AND cik IS NULL
+              AND lifetime_end IS NULL
+            """,
+            ticker, cik,
+        )
+        # asyncpg returns "UPDATE N" as the command tag string.
+        if isinstance(result, str) and result.startswith("UPDATE "):
+            try:
+                written += int(result.split(" ", 1)[1])
+            except (ValueError, IndexError):
+                pass
+        elif isinstance(result, int):
+            # Some mock returns int directly — tolerate.
+            written += result
+    return written
 
 
 # Provenance precedence dict for the P2a lifecycle backfill.

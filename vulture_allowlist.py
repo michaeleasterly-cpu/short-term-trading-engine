@@ -525,3 +525,21 @@ REGIME_FRAGILITY
 COST_DOMINATED
 DATA_QUALITY_FAILURE
 LOOKAHEAD_OR_BIAS_RISK
+
+# ─── P1b — tpcore.fmp.profile_adapter.FMPProfileResult ───
+# Per the vulture-documented whitelist pattern
+# (https://github.com/jendrikseipp/vulture#whitelists), simulate the
+# usage of dataclass attributes read via dot notation in
+# scripts/ops.py::_stage_backfill_sec_metadata (the FMP-fallback
+# sub-leg consumes ``_result.returned_symbol`` / ``.profiles_count``
+# / ``.http_status``). Import-style entries are stricter than bare
+# names — if the class or any field is renamed, the import or
+# attribute access fails and the whitelist rots loudly, surfacing
+# the drift on the next vulture run. The previously
+# ``# unused variable (file:line)`` bare-name format above this
+# section is the auto-generated baseline; new entries should follow
+# the import-style pattern when they belong to a single class.
+from tpcore.fmp.profile_adapter import FMPProfileResult as _P1bFMPProfileResult
+_P1bFMPProfileResult.returned_symbol
+_P1bFMPProfileResult.profiles_count
+_P1bFMPProfileResult.http_status
