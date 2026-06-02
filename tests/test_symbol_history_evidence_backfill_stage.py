@@ -212,10 +212,33 @@ def test_tkr14_predecessor_uses_z_venue() -> None:
 def _mock_pool(
     tc_rows: list[dict],
     captured: dict[str, list],
+    *,
+    fetchrow_open_window: dict | None = None,
+    fetchrow_factory: Any = None,
+    insert_failure_table: str | None = None,
 ) -> MagicMock:
-    """Build a mock asyncpg pool. ``tc_rows`` is the current
-    ticker_classifications snapshot; ``captured`` is a dict the test
-    inspects after the call to assert per-table INSERT batches."""
+    """Build a mock asyncpg pool.
+
+    Args:
+      tc_rows: current ``ticker_classifications`` snapshot returned
+        by the §4 ``SELECT lifetime_end IS NULL`` query.
+      captured: dict the test inspects post-call. Keys:
+        ``issuers`` / ``ticker_classifications`` / ``issuer_securities`` /
+        ``ticker_history`` / ``data_quality_log`` for the bulk
+        ``executemany`` paths PLUS
+        ``th_updates`` (Option B UPDATE param tuples) /
+        ``th_single_inserts`` (Option B INSERT param tuples) /
+        ``dql_single_inserts`` (in-loop dql writes).
+      fetchrow_open_window: pre-existing open-ended ``ticker_history``
+        row the Option B guard SELECT returns. Single static row
+        for tests that touch one classification_id.
+      fetchrow_factory: optional callable ``(sql, *args) -> row|None``
+        for tests that need per-call dynamic responses (e.g.,
+        idempotency).
+      insert_failure_table: name of a table (``platform.ticker_history``
+        for the Option B INSERT failure test) whose ``conn.execute``
+        INSERT should raise to assert transactional rollback.
+    """
     conn = MagicMock()
 
     async def _fetch(sql: str, *_args: Any, **_kw: Any) -> list[dict]:
@@ -223,10 +246,32 @@ def _mock_pool(
             return tc_rows
         return []
 
+    async def _fetchrow(sql: str, *args: Any, **_kw: Any) -> Any:
+        if fetchrow_factory is not None:
+            return fetchrow_factory(sql, *args)
+        if "FROM platform.ticker_history" in sql:
+            return fetchrow_open_window
+        return None
+
     conn.fetch = AsyncMock(side_effect=_fetch)
-    conn.fetchrow = AsyncMock(return_value=None)
+    conn.fetchrow = AsyncMock(side_effect=_fetchrow)
     conn.fetchval = AsyncMock(return_value=0)
-    conn.execute = AsyncMock(return_value=None)
+
+    async def _execute(sql: str, *args: Any) -> None:
+        if "UPDATE platform.ticker_history" in sql:
+            captured.setdefault("th_updates", []).append(args)
+            return
+        if "INSERT INTO platform.ticker_history" in sql:
+            captured.setdefault("th_single_inserts", []).append(args)
+            if insert_failure_table == "platform.ticker_history":
+                raise RuntimeError("simulated INSERT failure")
+            return
+        if "INSERT INTO platform.data_quality_log" in sql:
+            captured.setdefault("dql_single_inserts", []).append(args)
+            return
+        return
+
+    conn.execute = AsyncMock(side_effect=_execute)
 
     async def _executemany(sql: str, args: list[tuple]) -> None:
         if "INSERT INTO platform.issuers" in sql:
@@ -466,9 +511,11 @@ async def test_same_cik_ticker_change_disposition(
     _stub_crosswalk_and_select_backend, tmp_path,
 ):
     """When old_cik == new_cik (resolved via cross-walk), the stage
-    emits a ticker_history row tying old symbol to the NEW issuer's
-    classification_id and does NOT mint a new ticker_classifications
-    predecessor."""
+    runs the Option B forward-fix three-step sequence (close pre-existing
+    open-ended row + rewrite ticker to oldSymbol, then INSERT a new
+    open-ended row for newSymbol) instead of an additive INSERT that
+    would trip the GiST EXCLUDE constraint. No new ticker_classifications
+    predecessor is minted."""
     from scripts import ops as _ops_mod
     payload = _gzipped_json([
         {"oldSymbol": "OLDX", "newSymbol": "NEWX", "date": "2020-06-01",
@@ -492,8 +539,13 @@ async def test_same_cik_ticker_change_disposition(
             "cik": "0001234567",  # same as old
             "country": "US",
             "current_legal_name": "Same Issuer Inc",
+            "lifetime_start": date(2008, 7, 7),
         }],
         captured=captured,
+        fetchrow_open_window={
+            "valid_from": date(2008, 7, 7),
+            "ticker": "NEWX",
+        },
     )
 
     out = await _ops_mod._stage_symbol_history_evidence_backfill(pool, {
@@ -504,15 +556,22 @@ async def test_same_cik_ticker_change_disposition(
     })
 
     assert out["rows_same_cik_ticker_change"] == 1
-    assert out["ticker_history_written"] == 1
     assert out["ticker_classifications_written"] == 0
     assert out["issuer_securities_written"] == 0
-
-    th_rows = captured.get("ticker_history", [])
-    assert len(th_rows) == 1
-    # First column is classification_id, second is ticker — tied to NEW issuer.
-    assert th_rows[0][0] == "USSQ20FAAAAA01"
-    assert th_rows[0][1] == "OLDX"
+    # Option B: one UPDATE closing the open window + one INSERT for
+    # the new open-ended newSymbol row.
+    assert out["same_cik_window_closed"] == 1
+    assert out["same_cik_current_inserted"] == 1
+    # Bulk ticker_history INSERTs are NOT used on the same-CIK path.
+    assert "ticker_history" not in captured
+    # The Option B UPDATE carries (change_date, oldSymbol, cls).
+    upd = captured.get("th_updates", [])
+    assert len(upd) == 1
+    assert upd[0] == (date(2020, 6, 1), "OLDX", "USSQ20FAAAAA01")
+    # The new open-ended row is (cls, newSymbol, change_date).
+    ins = captured.get("th_single_inserts", [])
+    assert len(ins) == 1
+    assert ins[0] == ("USSQ20FAAAAA01", "NEWX", date(2020, 6, 1))
 
 
 @pytest.mark.asyncio
@@ -726,3 +785,464 @@ async def test_predecessor_lifetime_end_nonnull(
     # lifetime_end (position 9) is non-NULL and equals change_date.
     assert tc_rows[0][9] is not None
     assert tc_rows[0][9] == date(2020, 6, 1)
+
+
+# ────────────────────────────────────────────────────────────────
+# Option B forward-fix tests (2026-06-02; same-CIK GiST overlap fix)
+# ────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_same_cik_ticker_change_closes_open_ended_current_window_before_insert(
+    _stub_crosswalk_and_select_backend, tmp_path,
+):
+    """Option B: the stage's same-CIK path runs UPDATE-then-INSERT in
+    one transaction, NOT an additive INSERT. The UPDATE closes the
+    pre-existing open-ended row (rewriting its ticker to oldSymbol)
+    and the INSERT writes the new open-ended row for newSymbol."""
+    from scripts import ops as _ops_mod
+    payload = _gzipped_json([
+        {"oldSymbol": "OLDX", "newSymbol": "NEWX", "date": "2026-05-08",
+         "companyName": "Same Issuer Inc"},
+    ])
+
+    async def _do_download(**_kw: Any) -> bytes:
+        return payload
+
+    _ops_mod._fmp_symbol_change_download = _do_download  # type: ignore[assignment]
+
+    _stub_crosswalk_and_select_backend["crosswalk"] = {
+        "OLDX": [("0001234567", date(2008, 7, 7), None)],
+    }
+
+    captured: dict[str, list] = {}
+    pool = _mock_pool(
+        tc_rows=[{
+            "ticker": "NEWX",
+            "classification_id": "USFZ26ODRA4870",
+            "cik": "0001234567",
+            "country": "US",
+            "current_legal_name": "Same Issuer Inc",
+            "lifetime_start": date(2008, 7, 7),
+        }],
+        captured=captured,
+        fetchrow_open_window={
+            "valid_from": date(2008, 7, 7),
+            "ticker": "NEWX",
+        },
+    )
+
+    out = await _ops_mod._stage_symbol_history_evidence_backfill(pool, {
+        "dry_run": False,
+        "force_download": True,
+        "local_cache_path": str(tmp_path / "cache.json.gz"),
+        "manifest_path": str(tmp_path / "m.csv"),
+    })
+
+    upd = captured.get("th_updates", [])
+    assert len(upd) == 1, "Option B requires exactly one UPDATE"
+    # UPDATE args: (change_date, oldSymbol, classification_id) per
+    # the SET valid_to=$1, ticker=$2 WHERE classification_id=$3
+    # AND valid_to IS NULL AND valid_from < $1 statement.
+    assert upd[0] == (date(2026, 5, 8), "OLDX", "USFZ26ODRA4870")
+
+    ins = captured.get("th_single_inserts", [])
+    assert len(ins) == 1, "Option B requires exactly one INSERT"
+    # INSERT args: (classification_id, newSymbol, change_date)
+    # per the VALUES ($1, $2, $3, NULL) statement.
+    assert ins[0] == ("USFZ26ODRA4870", "NEWX", date(2026, 5, 8))
+
+    # No bulk ticker_history insert path on the same-CIK case.
+    assert "ticker_history" not in captured
+
+    # Output counters reflect the Option B path.
+    assert out["same_cik_window_closed"] == 1
+    assert out["same_cik_current_inserted"] == 1
+
+
+@pytest.mark.asyncio
+async def test_same_cik_ticker_change_does_not_violate_gist_overlap_fixture(
+    _stub_crosswalk_and_select_backend, tmp_path,
+):
+    """Replicates the live failure fixture (USFZ26ODRA4870 existing
+    `[2008-07-07, infinity)` vs attempted `[2025-01-01, 2026-05-08)`).
+    Option B emits UPDATE-then-INSERT — NOT a direct INSERT into a
+    `[2025-01-01, 2026-05-08)` historical window that would overlap
+    the open-ended row and trip ticker_history_no_overlap."""
+    from scripts import ops as _ops_mod
+    payload = _gzipped_json([
+        {"oldSymbol": "OLDX", "newSymbol": "NEWX", "date": "2026-05-08",
+         "companyName": "USFZ Same Issuer"},
+    ])
+
+    async def _do_download(**_kw: Any) -> bytes:
+        return payload
+
+    _ops_mod._fmp_symbol_change_download = _do_download  # type: ignore[assignment]
+
+    _stub_crosswalk_and_select_backend["crosswalk"] = {
+        "OLDX": [("0001234567", date(2008, 7, 7), None)],
+    }
+
+    captured: dict[str, list] = {}
+    pool = _mock_pool(
+        tc_rows=[{
+            "ticker": "NEWX",
+            "classification_id": "USFZ26ODRA4870",
+            "cik": "0001234567",
+            "country": "US",
+            "current_legal_name": "USFZ Same Issuer",
+            "lifetime_start": date(2008, 7, 7),
+        }],
+        captured=captured,
+        fetchrow_open_window={
+            "valid_from": date(2008, 7, 7),
+            "ticker": "NEWX",
+        },
+    )
+
+    await _ops_mod._stage_symbol_history_evidence_backfill(pool, {
+        "dry_run": False,
+        "force_download": True,
+        "local_cache_path": str(tmp_path / "cache.json.gz"),
+        "manifest_path": str(tmp_path / "m.csv"),
+    })
+
+    # The bulk ticker_history insert path would have produced the
+    # offending `[2025-01-01, 2026-05-08)` daterange via the planning
+    # heuristic (`change_date.year - 1`); Option B never reaches that
+    # bulk path.
+    bulk_th = captured.get("ticker_history", [])
+    assert bulk_th == [], (
+        "Option B must not enqueue a direct bulk INSERT for the same-"
+        "CIK case (that's the GiST overlap path that hard-failed live)"
+    )
+
+    # Instead the UPDATE-then-INSERT sequence fires.
+    assert len(captured.get("th_updates", [])) == 1
+    assert len(captured.get("th_single_inserts", [])) == 1
+
+
+@pytest.mark.asyncio
+async def test_same_cik_operation_is_transactional(
+    _stub_crosswalk_and_select_backend, tmp_path,
+):
+    """When the Option B INSERT step raises, the parent ``conn.transaction``
+    aexit fires with the exception (asyncpg rolls back the UPDATE).
+    The stage propagates the failure rather than silently dropping
+    the same-CIK case."""
+    from scripts import ops as _ops_mod
+    payload = _gzipped_json([
+        {"oldSymbol": "OLDX", "newSymbol": "NEWX", "date": "2020-06-01",
+         "companyName": "Failing Co"},
+    ])
+
+    async def _do_download(**_kw: Any) -> bytes:
+        return payload
+
+    _ops_mod._fmp_symbol_change_download = _do_download  # type: ignore[assignment]
+
+    _stub_crosswalk_and_select_backend["crosswalk"] = {
+        "OLDX": [("0001234567", date(2010, 1, 1), None)],
+    }
+
+    captured: dict[str, list] = {}
+    pool = _mock_pool(
+        tc_rows=[{
+            "ticker": "NEWX",
+            "classification_id": "USSQ20FAAAAA01",
+            "cik": "0001234567",
+            "country": "US",
+            "current_legal_name": "Failing Co",
+            "lifetime_start": date(2008, 7, 7),
+        }],
+        captured=captured,
+        fetchrow_open_window={
+            "valid_from": date(2008, 7, 7),
+            "ticker": "NEWX",
+        },
+        insert_failure_table="platform.ticker_history",
+    )
+
+    with pytest.raises(RuntimeError, match="simulated INSERT failure"):
+        await _ops_mod._stage_symbol_history_evidence_backfill(pool, {
+            "dry_run": False,
+            "force_download": True,
+            "local_cache_path": str(tmp_path / "cache.json.gz"),
+            "manifest_path": str(tmp_path / "m.csv"),
+        })
+
+    # The UPDATE fired BEFORE the INSERT raised. The transactional
+    # rollback is the responsibility of asyncpg's ``conn.transaction``
+    # context manager — the test asserts the failure propagates so
+    # the operator sees a hard stop, not a silent half-write.
+    assert len(captured.get("th_updates", [])) == 1
+    assert len(captured.get("th_single_inserts", [])) == 1
+
+
+@pytest.mark.asyncio
+async def test_same_cik_operation_is_idempotent_on_second_run(
+    _stub_crosswalk_and_select_backend, tmp_path,
+):
+    """When the substrate already reflects the Option B post-state —
+    the open-ended row's ``valid_from == change_date`` AND
+    ``ticker == newSymbol`` — the stage SKIPS both UPDATE and INSERT
+    (silent re-run no-op). The counter
+    ``same_cik_already_applied_skipped`` reflects the skip."""
+    from scripts import ops as _ops_mod
+    payload = _gzipped_json([
+        {"oldSymbol": "OLDX", "newSymbol": "NEWX", "date": "2020-06-01",
+         "companyName": "Already Applied Co"},
+    ])
+
+    async def _do_download(**_kw: Any) -> bytes:
+        return payload
+
+    _ops_mod._fmp_symbol_change_download = _do_download  # type: ignore[assignment]
+
+    _stub_crosswalk_and_select_backend["crosswalk"] = {
+        "OLDX": [("0001234567", date(2010, 1, 1), None)],
+    }
+
+    captured: dict[str, list] = {}
+    pool = _mock_pool(
+        tc_rows=[{
+            "ticker": "NEWX",
+            "classification_id": "USSQ20FAAAAA01",
+            "cik": "0001234567",
+            "country": "US",
+            "current_legal_name": "Already Applied Co",
+            "lifetime_start": date(2008, 7, 7),
+        }],
+        captured=captured,
+        # Post-Option-B state: open-ended row is the NEW one at
+        # change_date.
+        fetchrow_open_window={
+            "valid_from": date(2020, 6, 1),
+            "ticker": "NEWX",
+        },
+    )
+
+    out = await _ops_mod._stage_symbol_history_evidence_backfill(pool, {
+        "dry_run": False,
+        "force_download": True,
+        "local_cache_path": str(tmp_path / "cache.json.gz"),
+        "manifest_path": str(tmp_path / "m.csv"),
+    })
+
+    assert captured.get("th_updates", []) == []
+    assert captured.get("th_single_inserts", []) == []
+    assert out["same_cik_already_applied_skipped"] == 1
+    assert out["same_cik_window_closed"] == 0
+    assert out["same_cik_current_inserted"] == 0
+
+
+@pytest.mark.asyncio
+async def test_same_cik_unresolvable_window_emits_data_quality_log(
+    _stub_crosswalk_and_select_backend, tmp_path,
+):
+    """When the pre-existing open-ended row's ``valid_from > change_date``
+    (the ticker change pre-dates the row's start — an unresolvable
+    temporal conflict), the stage emits a ``data_quality_log`` row
+    with ``kind='same_cik_window_pre_dates_change'`` and SKIPS the
+    UPDATE/INSERT."""
+    from scripts import ops as _ops_mod
+    payload = _gzipped_json([
+        {"oldSymbol": "OLDX", "newSymbol": "NEWX", "date": "2026-05-08",
+         "companyName": "Conflict Co"},
+    ])
+
+    async def _do_download(**_kw: Any) -> bytes:
+        return payload
+
+    _ops_mod._fmp_symbol_change_download = _do_download  # type: ignore[assignment]
+
+    _stub_crosswalk_and_select_backend["crosswalk"] = {
+        "OLDX": [("0001234567", date(2010, 1, 1), None)],
+    }
+
+    captured: dict[str, list] = {}
+    pool = _mock_pool(
+        tc_rows=[{
+            "ticker": "NEWX",
+            "classification_id": "USSQ20FAAAAA01",
+            "cik": "0001234567",
+            "country": "US",
+            "current_legal_name": "Conflict Co",
+            "lifetime_start": date(2027, 1, 1),
+        }],
+        captured=captured,
+        # Conflict: pre-existing row's valid_from POST-dates the
+        # change_date.
+        fetchrow_open_window={
+            "valid_from": date(2027, 1, 1),
+            "ticker": "NEWX",
+        },
+    )
+
+    out = await _ops_mod._stage_symbol_history_evidence_backfill(pool, {
+        "dry_run": False,
+        "force_download": True,
+        "local_cache_path": str(tmp_path / "cache.json.gz"),
+        "manifest_path": str(tmp_path / "m.csv"),
+    })
+
+    assert captured.get("th_updates", []) == []
+    assert captured.get("th_single_inserts", []) == []
+    dql = captured.get("dql_single_inserts", [])
+    assert len(dql) == 1
+    notes_json = dql[0][1]
+    payload_dict = json.loads(notes_json)
+    assert payload_dict["kind"] == "same_cik_window_pre_dates_change"
+    assert out["same_cik_pre_dates_change_skipped"] == 1
+
+
+@pytest.mark.asyncio
+async def test_different_issuer_reuse_path_unchanged(
+    _stub_crosswalk_and_select_backend, tmp_path,
+):
+    """Option B fix is bounded to the same-CIK path. The different-
+    issuer reuse case still uses the bulk additive INSERT into
+    ``ticker_history`` (a NEW predecessor classification_id has no
+    pre-existing rows, so no overlap risk) and does NOT emit any
+    UPDATE."""
+    from scripts import ops as _ops_mod
+    payload = _gzipped_json([
+        {"oldSymbol": "OLDX", "newSymbol": "NEWX", "date": "2020-06-01",
+         "companyName": "Original Delisted Co"},
+    ])
+
+    async def _do_download(**_kw: Any) -> bytes:
+        return payload
+
+    _ops_mod._fmp_symbol_change_download = _do_download  # type: ignore[assignment]
+
+    _stub_crosswalk_and_select_backend["crosswalk"] = {
+        "OLDX": [("0001111111", date(2010, 1, 1), None)],
+    }
+
+    captured: dict[str, list] = {}
+    pool = _mock_pool(
+        tc_rows=[{
+            "ticker": "NEWX",
+            "classification_id": "USSQ20FNEWXX01",
+            "cik": "0002222222",  # different from old
+            "country": "US",
+            "current_legal_name": "Brand-New Registrant",
+            "lifetime_start": date(2019, 1, 1),
+        }],
+        captured=captured,
+    )
+
+    out = await _ops_mod._stage_symbol_history_evidence_backfill(pool, {
+        "dry_run": False,
+        "force_download": True,
+        "local_cache_path": str(tmp_path / "cache.json.gz"),
+        "manifest_path": str(tmp_path / "m.csv"),
+    })
+
+    # The bulk additive ticker_history insert path is used.
+    assert len(captured.get("ticker_history", [])) == 1
+    # The Option B per-row UPDATE path is NOT used.
+    assert captured.get("th_updates", []) == []
+    # The same-CIK counters stay at zero.
+    assert out["same_cik_window_closed"] == 0
+    assert out["same_cik_current_inserted"] == 0
+
+
+@pytest.mark.asyncio
+async def test_dry_run_does_not_update_valid_to(
+    _stub_crosswalk_and_select_backend, tmp_path,
+):
+    """In dry_run mode the same-CIK path plans the close but
+    issues NO ``UPDATE platform.ticker_history`` statement and NO
+    new-current ``INSERT``. The plan/manifest still records the
+    intent."""
+    from scripts import ops as _ops_mod
+    payload = _gzipped_json([
+        {"oldSymbol": "OLDX", "newSymbol": "NEWX", "date": "2020-06-01",
+         "companyName": "Dry Run Co"},
+    ])
+
+    async def _do_download(**_kw: Any) -> bytes:
+        return payload
+
+    _ops_mod._fmp_symbol_change_download = _do_download  # type: ignore[assignment]
+
+    _stub_crosswalk_and_select_backend["crosswalk"] = {
+        "OLDX": [("0001234567", date(2010, 1, 1), None)],
+    }
+
+    captured: dict[str, list] = {}
+    pool = _mock_pool(
+        tc_rows=[{
+            "ticker": "NEWX",
+            "classification_id": "USSQ20FAAAAA01",
+            "cik": "0001234567",
+            "country": "US",
+            "current_legal_name": "Dry Run Co",
+            "lifetime_start": date(2008, 7, 7),
+        }],
+        captured=captured,
+        fetchrow_open_window={
+            "valid_from": date(2008, 7, 7),
+            "ticker": "NEWX",
+        },
+    )
+
+    out = await _ops_mod._stage_symbol_history_evidence_backfill(pool, {
+        "dry_run": True,
+        "force_download": True,
+        "local_cache_path": str(tmp_path / "cache.json.gz"),
+        "manifest_path": str(tmp_path / "m.csv"),
+    })
+
+    assert out["dry_run"] is True
+    # Dry-run is the planning-only path; no UPDATEs / INSERTs hit
+    # the connection.
+    assert captured.get("th_updates", []) == []
+    assert captured.get("th_single_inserts", []) == []
+    # Planning counter still reflects the intent.
+    assert out["same_cik_window_close_planned"] == 1
+
+
+def test_fundamentals_quarterly_untouched_source_sentinel() -> None:
+    """Forward-fix scope guard: the stage source contains zero
+    ``fundamentals_quarterly`` references in executable code (the
+    docstring's non-goal-list mention is allowed). Ensures the
+    Option B PR keeps strict scope; cleanup is a SEPARATE PR."""
+    import re as _re
+    body = _stage_body()
+    body_no_doc = _re.sub(
+        r'""".*?"""', "", body, count=1, flags=_re.DOTALL,
+    )
+    assert "fundamentals_quarterly" not in body_no_doc, (
+        "symbol_history_evidence_backfill stage body must not reference "
+        "fundamentals_quarterly in executable code"
+    )
+
+
+def test_plan_doc_corrects_ticker_history_pk_claim() -> None:
+    """Plan §5.1 amendment: the natural-key claim was empirically
+    wrong in the spec PR. The actual schema declares a 2-col PK
+    ``(classification_id, valid_from)`` + GiST EXCLUDE
+    ``ticker_history_no_overlap``. The amended plan must reflect
+    this and call the correction out."""
+    from pathlib import Path as _P
+    plan_path = (
+        _P(__file__).resolve().parents[1]
+        / "docs" / "superpowers" / "plans"
+        / "2026-06-02-symbol-history-evidence-backfill-plan.md"
+    )
+    text = plan_path.read_text(encoding="utf-8")
+    # 2-col PK is named explicitly.
+    assert "(classification_id, valid_from)" in text
+    # GiST EXCLUDE is named explicitly.
+    assert "ticker_history_no_overlap" in text
+    assert "EXCLUDE USING gist" in text
+    # Correction is acknowledged so a future grooming pass can't
+    # silently revert.
+    assert (
+        "Schema-audited correction" in text
+        or "schema-audited correction" in text.lower()
+    )

@@ -4147,11 +4147,15 @@ async def _stage_symbol_history_evidence_backfill(
     )
 
     # ─── 4. Pull current ticker_classifications snapshot ───
+    # ``lifetime_start`` is loaded because the Option B same-CIK fix uses
+    # it as the historical row's ``valid_from`` when closing the
+    # pre-existing open-ended ``ticker_history`` window. See the
+    # ``same-CIK ticker change`` block below.
     async with pool.acquire() as conn:
         tc_rows = await conn.fetch(
             """
             SELECT ticker, id AS classification_id, cik, country,
-                   current_legal_name
+                   current_legal_name, lifetime_start
             FROM platform.ticker_classifications
             WHERE lifetime_end IS NULL
             """
@@ -4177,6 +4181,15 @@ async def _stage_symbol_history_evidence_backfill(
         "issuer_securities_planned": 0,
         "ticker_classifications_planned": 0,
         "data_quality_log_planned": 0,
+        # Option B (2026-06-02 fix): same-CIK ticker-change closes the
+        # pre-existing open-ended row + rewrites its ticker to oldSymbol,
+        # then inserts a new open-ended row for newSymbol. Tracked
+        # separately from the additive ``ticker_history_planned``
+        # counter so the GiST-overlap fix is observable in the manifest.
+        "same_cik_window_close_planned": 0,
+        "same_cik_window_pre_dates_change": 0,
+        "same_cik_no_open_window": 0,
+        "same_cik_already_applied": 0,
     }
 
     # Insertable rows (one per disposition). Each entry knows what tables
@@ -4186,6 +4199,13 @@ async def _stage_symbol_history_evidence_backfill(
     issuer_securities_inserts: list[tuple[Any, ...]] = []
     ticker_history_inserts: list[tuple[Any, ...]] = []
     data_quality_log_inserts: list[tuple[Any, ...]] = []
+    # Option B (2026-06-02 fix): per-row close+rewrite+insert operations
+    # for same-CIK ticker changes. Each entry is the parameter bundle
+    # consumed in §7b's transactional loop. Kept distinct from the
+    # bulk-INSERT lists because each op runs as its own transaction
+    # (guard SELECT → UPDATE → INSERT) to avoid the GiST EXCLUDE overlap
+    # the additive-only approach hit on the 2026-06-02 live populate.
+    same_cik_ops: list[dict[str, Any]] = []
     manifest_rows: list[dict[str, Any]] = []
 
     # Track classification_ids we minted this run so we don't double-
@@ -4194,6 +4214,7 @@ async def _stage_symbol_history_evidence_backfill(
     # cross-run dupes; this in-memory dedupe catches same-run echoes.
     planned_th_keys: set[tuple[str, _date]] = set()
     planned_is_keys: set[tuple[str, str, _date]] = set()
+    planned_same_cik_cls: set[str] = set()
 
     for raw in raw_rows:
         old_symbol = str(raw.get("oldSymbol", "")).strip().upper()
@@ -4277,28 +4298,46 @@ async def _stage_symbol_history_evidence_backfill(
             cross_walk, old_symbol, change_date,
         )
 
-        # Same-CIK ticker change → emit ticker_history row tying old
-        # symbol to the NEW issuer's classification_id.
+        # Same-CIK ticker change → Option B forward fix (2026-06-02).
+        # The pre-existing ``ticker_history`` row for ``new_classification_id``
+        # is open-ended (valid_to IS NULL) with the CURRENT ticker value
+        # and a valid_from that pre-dates the change_date (typically the
+        # issuer's first-seen date). Naively inserting an OLD-symbol
+        # historical row would overlap that open-ended range and trip
+        # the ``ticker_history_no_overlap`` GiST EXCLUDE constraint
+        # (asyncpg ExclusionViolationError — observed live 2026-06-02
+        # on USFZ26ODRA4870). Option B closes the pre-existing window
+        # to ``change_date`` (rewriting its ``ticker`` to oldSymbol so
+        # the now-finite window honestly carries the predecessor symbol)
+        # and inserts a new open-ended row for newSymbol from
+        # change_date onward. Both steps run in ONE transaction at
+        # live-write time (§7b). The historical row's valid_from comes
+        # from the existing classification's ``lifetime_start`` (the
+        # earliest known activity of THIS issuer); rare NULL falls back
+        # to the (change_date.year - 1, 1, 1) heuristic per plan §3.3.
         if (
             old_cik is not None
             and new_cik is not None
             and old_cik == new_cik
             and new_classification_id is not None
         ):
-            # valid_from heuristic: 1 year before change_date — historical
-            # SEC-filing-year would be more precise but is not available
-            # without iterating CIK's filings; the cleanup classifier only
-            # needs same/different issuer evidence (not perfect window).
-            valid_from = _date(
-                max(change_date.year - 1, 1900), 1, 1,
-            )
-            valid_to = change_date
-            th_key = (new_classification_id, valid_from)
-            if th_key not in planned_th_keys:
-                planned_th_keys.add(th_key)
-                ticker_history_inserts.append((
-                    new_classification_id, old_symbol, valid_from, valid_to,
-                ))
+            ls_val = new_entry.get("lifetime_start") if new_entry else None
+            if isinstance(ls_val, _date):
+                derived_valid_from = ls_val
+            else:
+                derived_valid_from = _date(
+                    max(change_date.year - 1, 1900), 1, 1,
+                )
+            if new_classification_id not in planned_same_cik_cls:
+                planned_same_cik_cls.add(new_classification_id)
+                same_cik_ops.append({
+                    "classification_id": new_classification_id,
+                    "old_symbol": old_symbol,
+                    "new_symbol": new_symbol,
+                    "change_date": change_date,
+                    "derived_valid_from": derived_valid_from,
+                })
+                counters["same_cik_window_close_planned"] += 1
                 counters["ticker_history_planned"] += 1
             counters["rows_same_cik_ticker_change"] += 1
             manifest_rows.append({
@@ -4477,12 +4516,18 @@ async def _stage_symbol_history_evidence_backfill(
     # ─── 7. Live: idempotent batched INSERTs in one connection's txn
     # per batch. Ordering: issuers → ticker_classifications →
     # issuer_securities (FK targets) → ticker_history (no FK constraint
-    # but logical order) → data_quality_log.
+    # but logical order) → same-CIK Option B per-row close+rewrite+
+    # insert (§7b) → data_quality_log.
     n_issuers_written = 0
     n_tc_written = 0
     n_isec_written = 0
     n_th_written = 0
     n_dql_written = 0
+    n_same_cik_window_closed = 0
+    n_same_cik_current_inserted = 0
+    n_same_cik_pre_dates_change = 0
+    n_same_cik_no_open_window = 0
+    n_same_cik_already_applied = 0
 
     async with pool.acquire() as conn:
         if issuers_inserts:
@@ -4543,6 +4588,131 @@ async def _stage_symbol_history_evidence_backfill(
                 )
             n_th_written = len(ticker_history_inserts)
 
+        # ─── 7b. Same-CIK Option B (2026-06-02 fix) ───
+        # For each same-CIK ticker change, run guard SELECT → UPDATE
+        # (close pre-existing open-ended window + rewrite ticker to
+        # oldSymbol) → INSERT (new open-ended row for newSymbol) inside
+        # ONE transaction. Idempotent: a re-run finds the open-ended
+        # row already moved to ``change_date`` valid_from and silently
+        # skips. Boundary cases (valid_from >= change_date OR no open
+        # row) emit ``data_quality_log`` and skip the write.
+        for op in same_cik_ops:
+            cls = op["classification_id"]
+            change_date_val = op["change_date"]
+            old_symbol_val = op["old_symbol"]
+            new_symbol_val = op["new_symbol"]
+            derived_valid_from = op["derived_valid_from"]
+            async with conn.transaction():
+                existing_row = await conn.fetchrow(
+                    """
+                    SELECT valid_from, ticker
+                    FROM platform.ticker_history
+                    WHERE classification_id = $1 AND valid_to IS NULL
+                    LIMIT 1
+                    """,
+                    cls,
+                )
+                if existing_row is None:
+                    # No open-ended row — pre-existing temporal gap.
+                    # Don't fabricate one; emit forensic dql + skip.
+                    await conn.execute(
+                        """
+                        INSERT INTO platform.data_quality_log
+                            (source, timestamp, latency_ms, missing_bars,
+                             stale, confidence, notes)
+                        VALUES ($1, NOW(), 0, 0, FALSE, 1.000, $2)
+                        ON CONFLICT (source, timestamp) DO NOTHING
+                        """,
+                        (
+                            f"symbol_history_evidence_backfill."
+                            f"{old_symbol_val}"
+                        ),
+                        _json.dumps({
+                            "kind": "same_cik_no_open_window",
+                            "classification_id": cls,
+                            "oldSymbol": old_symbol_val,
+                            "newSymbol": new_symbol_val,
+                            "change_date": change_date_val.isoformat(),
+                        }),
+                    )
+                    n_same_cik_no_open_window += 1
+                    counters["same_cik_no_open_window"] += 1
+                    continue
+                existing_vf = existing_row["valid_from"]
+                existing_ticker = existing_row["ticker"]
+                if (
+                    existing_vf == change_date_val
+                    and existing_ticker == new_symbol_val
+                ):
+                    # Already applied — silent no-op (re-run safety).
+                    n_same_cik_already_applied += 1
+                    counters["same_cik_already_applied"] += 1
+                    continue
+                if existing_vf >= change_date_val:
+                    # Pre-existing window post-dates the change — unresolvable
+                    # temporal conflict; emit dql + skip rather than write
+                    # a row that would still overlap or invert.
+                    await conn.execute(
+                        """
+                        INSERT INTO platform.data_quality_log
+                            (source, timestamp, latency_ms, missing_bars,
+                             stale, confidence, notes)
+                        VALUES ($1, NOW(), 0, 0, FALSE, 1.000, $2)
+                        ON CONFLICT (source, timestamp) DO NOTHING
+                        """,
+                        (
+                            f"symbol_history_evidence_backfill."
+                            f"{old_symbol_val}"
+                        ),
+                        _json.dumps({
+                            "kind": "same_cik_window_pre_dates_change",
+                            "classification_id": cls,
+                            "oldSymbol": old_symbol_val,
+                            "newSymbol": new_symbol_val,
+                            "change_date": change_date_val.isoformat(),
+                            "existing_valid_from": existing_vf.isoformat(),
+                        }),
+                    )
+                    n_same_cik_pre_dates_change += 1
+                    counters["same_cik_window_pre_dates_change"] += 1
+                    continue
+                # Normal Option B: close the pre-existing window AND
+                # rewrite its ticker to oldSymbol so the now-finite
+                # window honestly represents [existing_vf, change_date)
+                # under the OLD ticker. Then insert the new open-ended
+                # row for newSymbol.
+                await conn.execute(
+                    """
+                    UPDATE platform.ticker_history
+                    SET valid_to = $1, ticker = $2
+                    WHERE classification_id = $3
+                      AND valid_to IS NULL
+                      AND valid_from < $1
+                    """,
+                    change_date_val, old_symbol_val, cls,
+                )
+                n_same_cik_window_closed += 1
+                await conn.execute(
+                    """
+                    INSERT INTO platform.ticker_history
+                        (classification_id, ticker, valid_from, valid_to)
+                    VALUES ($1, $2, $3, NULL)
+                    ON CONFLICT (classification_id, valid_from)
+                        DO NOTHING
+                    """,
+                    cls, new_symbol_val, change_date_val,
+                )
+                n_same_cik_current_inserted += 1
+                # Note: ``derived_valid_from`` is retained on ``op`` for
+                # forensic observability — the historical-window's
+                # ``valid_from`` after the UPDATE remains ``existing_vf``,
+                # not ``derived_valid_from``. The lifetime_start-based
+                # derived_valid_from is only used if a future evolution
+                # of this stage decides to back-shift the pre-existing
+                # ``valid_from`` (not authorized in this fix).
+                _ = derived_valid_from
+        n_th_written += n_same_cik_current_inserted
+
         if data_quality_log_inserts:
             async with conn.transaction():
                 await conn.executemany(
@@ -4568,6 +4738,15 @@ async def _stage_symbol_history_evidence_backfill(
         for m in manifest_rows:
             w.writerow(m)
 
+    # The in-loop §7b dql writes (kind ∈ {same_cik_no_open_window,
+    # same_cik_window_pre_dates_change}) are NOT planned in
+    # ``data_quality_log_inserts`` (they're decided per-row at live
+    # time), so fold their counts into the result for operator
+    # observability.
+    n_dql_written += (
+        n_same_cik_no_open_window + n_same_cik_pre_dates_change
+    )
+
     out: dict[str, Any] = {
         "dry_run": False,
         "manifest_path": str(manifest_path),
@@ -4577,6 +4756,11 @@ async def _stage_symbol_history_evidence_backfill(
         "issuer_securities_written": n_isec_written,
         "ticker_history_written": n_th_written,
         "data_quality_log_written": n_dql_written,
+        "same_cik_window_closed": n_same_cik_window_closed,
+        "same_cik_current_inserted": n_same_cik_current_inserted,
+        "same_cik_already_applied_skipped": n_same_cik_already_applied,
+        "same_cik_pre_dates_change_skipped": n_same_cik_pre_dates_change,
+        "same_cik_no_open_window_skipped": n_same_cik_no_open_window,
         **counters,
     }
     log.info(

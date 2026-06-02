@@ -124,21 +124,58 @@ For each `(oldSymbol, newSymbol, date)` row, after Path C cross-walk
 resolves `oldSymbol@date → oldCIK` and `newSymbol@now → newCIK`:
 
 * `oldCIK == newCIK` → **same-CIK ticker change** (SPAC merger
-  pattern). Emit a `ticker_history` row for `(classification_id_of_newCIK,
-  oldSymbol, valid_from=?, valid_to=date)` — proves the SAME issuer
-  used both symbols. The cleanup classifier will read this as
-  "no different-issuer evidence" → no high_confidence delete.
+  pattern). **Option B forward fix (2026-06-02; corrects the
+  spec-PR-doc's additive-row intent that ran into the GiST
+  `ticker_history_no_overlap` EXCLUDE constraint on the live
+  populate of 2026-06-02; see §5.1 and §13):** run the
+  three-step sequence inside ONE transaction:
+  1. **Guard SELECT** — read the pre-existing open-ended
+     ticker_history row (`valid_to IS NULL`) for
+     `classification_id_of_newCIK`. If the row's
+     `valid_from >= change_date` (unresolvable temporal conflict)
+     OR no open row exists, emit `data_quality_log kind=
+     'same_cik_window_pre_dates_change'` or `'same_cik_no_open_window'`
+     and skip the write. If the row's `valid_from == change_date`
+     AND `ticker == newSymbol`, the state is already-applied —
+     silent re-run no-op.
+  2. **UPDATE existing row** — `SET valid_to = change_date,
+     ticker = oldSymbol` (closes the previously open-ended
+     window AND rewrites its ticker so the now-finite
+     `[lifetime_start, change_date)` window honestly carries the
+     predecessor symbol). The WHERE clause stays `classification_id
+     = <cls> AND valid_to IS NULL AND valid_from < change_date`
+     so re-runs are no-ops.
+  3. **INSERT new current row** — `(classification_id_of_newCIK,
+     newSymbol, change_date, NULL)` with `ON CONFLICT
+     (classification_id, valid_from) DO NOTHING` for idempotency.
+
+  Final three-row state per same-CIK case:
+  `(cls, oldSymbol, lifetime_start, change_date)` historical +
+  `(cls, newSymbol, change_date, infinity)` current. The cleanup
+  classifier still reads this as "no different-issuer evidence" →
+  no high_confidence delete.
+
+  `valid_from` for the historical row (post-UPDATE) remains the
+  pre-existing row's `valid_from` (the issuer's
+  `lifetime_start` baseline); the implementer does NOT back-shift
+  it. If a future evolution needs a more precise predecessor
+  window, that's a separate change.
 * `oldCIK != newCIK` AND both non-NULL → **different-issuer ticker
   reuse** (classic case). Emit `(classification_id_of_oldCIK, oldSymbol,
   valid_from=earliest_predecessor_filing, valid_to=date)` PLUS the
   matching `issuer_securities` row tying `classification_id_of_oldCIK`
   to the predecessor `issuer_id`. The cleanup classifier reads this
-  as rank-3 evidence → high_confidence delete candidate.
+  as rank-3 evidence → high_confidence delete candidate. **No
+  change from Option B**: this path inserts on a NEW predecessor
+  `classification_id` which has no pre-existing rows, so there is
+  no overlap risk.
 * `oldCIK NULL` (Path C cannot resolve) → mint FMP-only predecessor
   per §2.3 fallback row. Mark rank-3 evidence with `source = 'fmp_only'`
   in `data_quality_log` so the cleanup classifier can downweight
   (still emits as rank-3, but the cleanup-rerun PR can elect to
-  treat `fmp_only` as ambiguous if the operator decides).
+  treat `fmp_only` as ambiguous if the operator decides). **No
+  change from Option B**: same as different-issuer — new
+  `classification_id`, no overlap risk.
 
 ## 4. Path C resolver — SEC `submissions.zip` cross-walk
 
@@ -184,12 +221,41 @@ classification_id inequality alone.
 
 ### 5.1 `ticker_history` upsert
 
-Natural key: `(classification_id, ticker, valid_from)`. Insert:
+**Schema-audited correction (2026-06-02 forward-fix PR).** The
+spec-PR doc claimed a 3-column natural key
+`(classification_id, ticker, valid_from)`. The actual schema in
+`platform/migrations/versions/20260524_0100_create_ticker_history.py`
+declares:
+
+* **Primary key:** `(classification_id, valid_from)` — 2 columns, not
+  3. `ticker` is the value, not part of the key.
+* **GiST EXCLUDE constraint** `ticker_history_no_overlap`:
+  ```sql
+  EXCLUDE USING gist (
+      classification_id WITH =,
+      daterange(valid_from, COALESCE(valid_to, 'infinity'::date), '[)') WITH &&
+  )
+  ```
+  enforces NO overlapping `[valid_from, valid_to)` windows per
+  `classification_id`.
+
+The additive-INSERT pattern from the original §3.3 wording
+(historical row spanning `[lifetime_start - 1y, change_date)`
+inserted while the pre-existing row's `(currentTicker, valid_from,
+infinity)` range covers `change_date`) trips this EXCLUDE on the
+same-CIK path. PR #444 hit the live failure on 2026-06-02
+(`classification_id=USFZ26ODRA4870`, existing `[2008-07-07, infinity)`
+vs attempted `[2025-01-01, 2026-05-08)`); the partial state was
+rolled back. Option B (§3.3) closes the pre-existing window
+BEFORE inserting, preserving the GiST invariant.
+
+Idempotent additive insert (for the different-issuer / FMP-only
+paths — new `classification_id`, no overlap risk):
 
 ```sql
 INSERT INTO platform.ticker_history (classification_id, ticker, valid_from, valid_to)
 VALUES ($1, $2, $3, $4)
-ON CONFLICT (classification_id, ticker, valid_from) DO NOTHING;
+ON CONFLICT (classification_id, valid_from) DO NOTHING;
 ```
 
 * `ON CONFLICT DO NOTHING` — reloads are safe. We do NOT update
@@ -201,12 +267,10 @@ ON CONFLICT (classification_id, ticker, valid_from) DO NOTHING;
   `1969-12-31` sentinel handler from §3.2.
 * `valid_to` source: the symbol-change `date` (the day the ticker
   was reassigned).
-* Migration: the `(classification_id, ticker, valid_from)` UNIQUE
-  index needs to exist. **Plan check**: confirm in the implementer
-  PR's migration whether the existing
-  `20260524_0100_create_ticker_history.py` already declares this
-  uniqueness — if not, the implementer PR ships a `CREATE UNIQUE INDEX
-  CONCURRENTLY` migration.
+* No new migration needed — the existing 2-col PK + GiST EXCLUDE
+  already give the idempotency floor. The implementer PR does NOT
+  ship a `CREATE UNIQUE INDEX CONCURRENTLY` migration (the spec
+  open question is resolved by direct schema inspection).
 
 ### 5.2 `issuer_securities` upsert
 
@@ -390,6 +454,33 @@ zero new rows (the `ON CONFLICT DO NOTHING` invariant). Failure
 modes: R2 unreachable + local cache missing + FMP 401/5xx → stage
 raises before any DB write; partial-batch failures roll back the
 batch but leave earlier batches committed.
+
+**Live-populate failure of 2026-06-02 + rollback predicate
+(addendum to the Option B forward-fix PR).** The first live run of
+PR #444 hit `asyncpg.exceptions.ExclusionViolationError` on the
+same-CIK path against the existing GiST `ticker_history_no_overlap`
+constraint (see §5.1 and §3.3). The partial DB state was rolled
+back via the predicate
+
+```sql
+DELETE FROM platform.ticker_history
+WHERE source LIKE 'symbol_history_evidence_backfill.%';
+
+DELETE FROM platform.issuer_securities
+WHERE source LIKE 'symbol_history_evidence_backfill.%';
+
+DELETE FROM platform.ticker_classifications
+WHERE source LIKE 'symbol_history_evidence_backfill.%';
+```
+
+The naive operator instinct of a date-based predicate (e.g.,
+`lifetime_end BETWEEN <run_start> AND <run_end>`) would have
+targeted 0 rows for the rolled-back same-CIK writes because the
+populated `lifetime_end` values are HISTORICAL change-dates
+(spanning 1998–2026) not the run timestamp. The `source LIKE
+'symbol_history_evidence_backfill.%'` discriminator is the
+correct rollback key because every row written by this stage
+carries that `source` prefix.
 
 ## 14. Non-goals
 
