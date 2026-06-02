@@ -1326,7 +1326,7 @@ the acquirer-resolution. Not on the critical path of any current engine.
 [lane: ops] [gate: none] [needs: corporate-actions adapter design + SEC EDGAR
 ticker-disambiguation client + per-ticker manual review for the ambiguous set]
 
-### Symbol-history evidence backfill (2026-06-02, spec + plan landed)
+### Symbol-history evidence backfill (2026-06-02, spec + plan landed; impl shipped PR #444; Option B same-CIK forward fix in flight)
 
 Direct follow-up from the ticker-reuse fundamentals cleanup arc (PR #441 +
 2026-06-02 bucket=1 dry-run verification). Bucket=1 dry-run produced **0
@@ -1355,16 +1355,36 @@ Plan: `docs/superpowers/plans/2026-06-02-symbol-history-evidence-backfill-plan.m
 - TKR-14 mint covers historical predecessors deterministically using
   sentinel `Z` venue + SEC-or-FMP-derived seeds.
 
-Next: implementation PR per heavy-lane §1 — new stage
+Implementation: PR #444 SHIPPED 2026-06-02. Stage
 `symbol_history_evidence_backfill` populates `ticker_history` +
 `issuer_securities` (and minted historical predecessor
 `ticker_classifications` rows where needed). Cleanup re-run is a
 SEPARATE downstream PR.
 
-[lane: heavy] [gate: plan-reviewer PASS + operator plan-read]
-[needs: confirm UNIQUE indexes on ticker_history + issuer_securities,
-empirical issuer_securities floor for sentinel, optional Path A
-hardening side-quest disposition]
+**Live-populate forward fix (Option B, 2026-06-02 in flight):** the
+first live `--param dry_run=false` run of PR #444 hit
+`asyncpg.exceptions.ExclusionViolationError` on the same-CIK ticker-
+change path against the existing GiST `ticker_history_no_overlap`
+EXCLUDE constraint. Root cause: the plan §3.3 wording prescribed an
+additive INSERT of `(cls_of_newCIK, oldSymbol, valid_from=?,
+valid_to=change_date)` while the schema already carries
+`(cls_of_newCIK, currentTicker, lifetime_start, NULL)` for the same
+classification_id — the daterange overlap trips the GiST EXCLUDE.
+Partial state was rolled back via the
+`source LIKE 'symbol_history_evidence_backfill.%'` predicate (see
+plan §13). Option B forward fix: for same-CIK only, run guard
+SELECT → UPDATE (close pre-existing open-ended window + rewrite its
+ticker to oldSymbol) → INSERT new open-ended row for newSymbol,
+all in one transaction. Different-issuer / FMP-only paths unchanged
+(no overlap risk on a brand-new classification_id). Plan §3.3 and
+§5.1 amended; §5.1 also corrects the spec-PR-doc's claim of a 3-col
+natural key (actual: 2-col `(classification_id, valid_from)` PK +
+GiST EXCLUDE). Tests pinned in
+`tests/test_symbol_history_evidence_backfill_stage.py`.
+
+[lane: heavy] [gate: operator code-review PASS on forward-fix PR]
+[needs: live re-run with Option B in dry_run=false to verify zero
+overlap violations + populated counters]
 
 
 ## Discovered follow-ups — RiskGovernor work + architecture review (2026-05-17)
