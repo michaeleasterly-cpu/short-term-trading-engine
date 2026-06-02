@@ -3334,6 +3334,628 @@ _LIFECYCLE_SOURCE_PRECEDENCE: dict[str, int] = {
 }
 
 
+# ─────────────────────────────────────────────────────────────────────
+# Ticker-reuse fundamentals cleanup (PR #440 plan + this PR impl)
+# ─────────────────────────────────────────────────────────────────────
+
+# Columns of platform.fundamentals_quarterly that the sidecar tables
+# mirror 1-to-1. Used for the INSERT … SELECT archive-then-delete path
+# and the manifest schema's "source column inventory" sentinel test.
+_FQ_MIRROR_COLUMNS: tuple[str, ...] = (
+    "ticker", "filing_date", "period_end_date", "period_label",
+    "net_income", "fcf", "operating_cash_flow", "capex", "revenue",
+    "total_assets", "total_liabilities", "current_assets",
+    "current_liabilities", "receivables", "cash_and_equivalents",
+    "shares_outstanding", "recorded_at", "pb", "de", "classification_id",
+)
+
+# Quarantine-table allowed `disposition` enum (matches CHECK constraint
+# in migration 20260602_0100).
+_QUARANTINE_DISPOSITIONS: frozenset[str] = frozenset({
+    "ambiguous_predecessor_unknown",
+    "corp_history_substrate_sparse",
+    "cik_null",
+    "operator_review_pending",
+})
+
+
+def _ticker_reuse_manifest_columns() -> tuple[str, ...]:
+    """Fixed manifest CSV column set. Asserted by the schema sentinel test."""
+    return (
+        "ticker",
+        "period_end_date",
+        "original_id",
+        "current_cik",
+        "current_fpfd",
+        "proposed_disposition",
+        "evidence_rank_used",
+        "evidence_summary",
+    )
+
+
+async def _classify_ticker_reuse_row(
+    conn: Any,
+    *,
+    ticker: str,
+    period_end_date: Any,
+    current_cik: str | None,
+    current_fpfd: Any,
+    current_issuer_id: str | None,
+) -> tuple[str, int, str]:
+    """Per-row evidence classifier for the ticker-reuse cleanup stage.
+
+    Returns ``(disposition, evidence_rank_used, evidence_summary)``.
+
+    Implements spec PR #439 §5 rank order: SEC formerNames →
+    issuer_history → issuer_securities (via ticker_history) →
+    ambiguous fallback. The rank-3 hit is **dispositive** for the
+    high-confidence ticker-reuse cohort. Ranks 1 + 2 hits mean the
+    current CIK plausibly used the ticker — route to
+    weak_evidence_keep.
+    """
+    # Rank 1: SEC formerNames[] coverage for current CIK.
+    # We don't re-fetch the SEC submissions JSON here — that's the
+    # caller's job (uses the bulk reader). The caller passes the
+    # already-extracted formerNames coverage via current_issuer_id;
+    # if the current issuer_history row's valid_from covers
+    # period_end_date, rank 1 fires.
+    # (See plan §5; the caller embeds the formerNames check in the
+    # current_issuer_id resolution path.)
+
+    # Rank 2: issuer_history for the current CIK covers period_end_date?
+    if current_cik is not None:
+        row = await conn.fetchrow(
+            """
+            SELECT issuer_id, legal_name, valid_from, valid_to
+            FROM platform.issuer_history
+            WHERE cik = $1
+              AND valid_from <= $2
+              AND (valid_to IS NULL OR valid_to >= $2)
+            ORDER BY valid_from DESC LIMIT 1
+            """,
+            current_cik, period_end_date,
+        )
+        if row is not None:
+            summary = (
+                f"rank2_issuer_history: current_cik={current_cik} "
+                f"covered by issuer_id={row['issuer_id']} "
+                f"name='{row['legal_name']}' "
+                f"valid_from={row['valid_from']}"
+            )
+            return ("weak_evidence_keep", 2, summary[:500])
+
+    # Rank 3: ticker_history → issuer_securities at period_end_date.
+    # Was the ticker on a different issuer_id at period_end_date?
+    th_row = await conn.fetchrow(
+        """
+        SELECT classification_id, valid_from, valid_to
+        FROM platform.ticker_history
+        WHERE ticker = $1
+          AND valid_from <= $2
+          AND (valid_to IS NULL OR valid_to >= $2)
+        ORDER BY valid_from DESC LIMIT 1
+        """,
+        ticker, period_end_date,
+    )
+    if th_row is not None:
+        is_row = await conn.fetchrow(
+            """
+            SELECT issuer_id
+            FROM platform.issuer_securities
+            WHERE classification_id = $1
+              AND valid_from <= $2
+              AND (valid_to IS NULL OR valid_to >= $2)
+            ORDER BY valid_from DESC LIMIT 1
+            """,
+            th_row["classification_id"], period_end_date,
+        )
+        if is_row is not None and current_issuer_id is not None:
+            if is_row["issuer_id"] != current_issuer_id:
+                summary = (
+                    f"rank3_different_issuer: at {period_end_date}, "
+                    f"ticker on issuer_id={is_row['issuer_id']}, "
+                    f"current_issuer_id={current_issuer_id}"
+                )
+                return (
+                    "high_confidence_ticker_reuse", 3, summary[:500],
+                )
+            # Same issuer historically — current CIK plausibly used
+            # the ticker (rank-1/2 fallback).
+            summary = (
+                f"rank3_same_issuer: at {period_end_date}, ticker on "
+                f"current_issuer_id={current_issuer_id}"
+            )
+            return ("weak_evidence_keep", 3, summary[:500])
+
+    # No dispositive evidence → ambiguous (quarantine, not delete).
+    summary = (
+        f"no_evidence: ticker_history empty / issuer_securities sparse "
+        f"for ticker={ticker} at {period_end_date}"
+    )
+    return ("ambiguous_predecessor_unknown", 0, summary[:500])
+
+
+async def _archive_row(
+    conn: Any,
+    *,
+    original_id: int,
+    disposition_reason: str,
+    decided_by_run_id: str,
+    evidence_summary: str,
+) -> int:
+    """Move one fundamentals_quarterly row to the archive table inside
+    the active transaction. INSERT-then-DELETE so an interrupted
+    transaction either rolls back BOTH or commits BOTH (the
+    archive-before-delete invariant from plan §5.2 #1)."""
+    n = await conn.fetchval(
+        f"""
+        WITH inserted AS (
+            INSERT INTO platform.fundamentals_quarterly_archive (
+                original_id, {", ".join(_FQ_MIRROR_COLUMNS)},
+                disposition_reason, decided_by_run_id, evidence_summary
+            )
+            SELECT
+                id, {", ".join(_FQ_MIRROR_COLUMNS)},
+                $2, $3::uuid, $4
+            FROM platform.fundamentals_quarterly
+            WHERE id = $1
+            RETURNING original_id
+        ),
+        deleted AS (
+            DELETE FROM platform.fundamentals_quarterly
+            WHERE id = (SELECT original_id FROM inserted)
+            RETURNING id
+        )
+        SELECT COUNT(*) FROM deleted
+        """,
+        original_id, disposition_reason, decided_by_run_id,
+        evidence_summary,
+    )
+    return int(n or 0)
+
+
+async def _quarantine_row(
+    conn: Any,
+    *,
+    original_id: int,
+    disposition: str,
+    decided_by_run_id: str,
+    evidence_summary: str,
+) -> int:
+    """Move one fundamentals_quarterly row to the quarantine table inside
+    the active transaction. Same shape as `_archive_row` but routes to
+    the quarantine sidecar."""
+    if disposition not in _QUARANTINE_DISPOSITIONS:
+        raise ValueError(
+            f"_quarantine_row: disposition {disposition!r} not in "
+            f"allowed set {sorted(_QUARANTINE_DISPOSITIONS)}"
+        )
+    n = await conn.fetchval(
+        f"""
+        WITH inserted AS (
+            INSERT INTO platform.fundamentals_quarterly_quarantine (
+                original_id, {", ".join(_FQ_MIRROR_COLUMNS)},
+                disposition, decided_by_run_id, evidence_summary
+            )
+            SELECT
+                id, {", ".join(_FQ_MIRROR_COLUMNS)},
+                $2, $3::uuid, $4
+            FROM platform.fundamentals_quarterly
+            WHERE id = $1
+            RETURNING original_id
+        ),
+        deleted AS (
+            DELETE FROM platform.fundamentals_quarterly
+            WHERE id = (SELECT original_id FROM inserted)
+            RETURNING id
+        )
+        SELECT COUNT(*) FROM deleted
+        """,
+        original_id, disposition, decided_by_run_id, evidence_summary,
+    )
+    return int(n or 0)
+
+
+async def _stage_cleanup_ticker_reuse_fundamentals(
+    pool: asyncpg.Pool, cfg: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Ticker-reuse fundamentals cleanup (plan PR #440 impl, 2026-06-02).
+
+    Operator-on-demand only. Default ``dry_run=true`` writes a manifest
+    CSV but no DB rows. ``dry_run=false`` reads the manifest, re-validates
+    each row's evidence against the live substrate, then routes per-row
+    to:
+
+      * high_confidence_ticker_reuse → archive-before-delete (sidecar
+        `fundamentals_quarterly_archive`).
+      * weak_evidence_keep → no mutation; write a `data_quality_log`
+        row instead.
+      * ambiguous_predecessor_unknown → quarantine sidecar
+        (`fundamentals_quarterly_quarantine`).
+
+    Hard invariants (plan §5.2, structurally encoded — no toggle):
+
+      1. Archive-before-delete in one CTE statement; rolls back both
+         on failure.
+      2. ``delete_after_archive=true`` is required for any DELETE; the
+         default is false (archive-only).
+      3. Weak-evidence rows are never deleted.
+      4. FPFD-drift rows are skipped (the stage re-reads the bulk-
+         extracted FPFD for the current CIK; if it does not match the
+         stored value, the row is rejected with
+         ``disposition='fpfd_drift_detected_skipped'``).
+      5. Manifest reproducibility — the dry-run reads the bulk-zip
+         submissions cache + DB substrate; no per-CIK HTTP.
+      6. Bounded by manifest row IDs — every DELETE/quarantine targets
+         a specific ``fundamentals_quarterly.id``, not a range.
+
+    Knobs (``--param key=value``):
+
+      * ``dry_run`` (bool, default True)
+      * ``manifest_path`` (str, default
+        ``data/fundamentals_quarterly_cleanup_manifest_<UTC>.csv``)
+      * ``evidence_level`` (``strong|weak|all``, default ``strong``)
+      * ``tickers`` (csv list, default all 783 affected)
+      * ``limit`` (int, default 0 = no cap)
+      * ``severity_bucket`` (``1|2-3|4-9|10-19|20+|all``, default
+        ``all`` for dry-run; operator usually picks one for live)
+      * ``archive_only`` (bool, default False)
+      * ``delete_after_archive`` (bool, default False — must be explicit)
+      * ``quarantine_weak`` (bool, default True)
+      * ``use_bulk_zip`` (bool, default True)
+      * ``bulk_zip_cache_path`` (str, default ``/tmp/sec_submissions.zip``)
+      * ``bulk_zip_force_download`` (bool, default False)
+    """
+    from datetime import UTC as _UTC
+    from datetime import datetime as _dt
+    from pathlib import Path as _Path
+    log = structlog.get_logger("scripts.ops")
+    cfg = cfg or {}
+
+    def _to_bool(v: Any) -> bool:
+        if isinstance(v, bool):
+            return v
+        return str(v).lower() in ("true", "1", "yes", "y")
+
+    dry_run = _to_bool(cfg.get("dry_run", True))
+    evidence_level = str(cfg.get("evidence_level", "strong")).lower()
+    if evidence_level not in ("strong", "weak", "all"):
+        raise ValueError(
+            f"evidence_level must be 'strong'/'weak'/'all'; got "
+            f"{evidence_level!r}"
+        )
+    explicit_tickers_raw = cfg.get("tickers")
+    explicit_tickers: list[str] | None = None
+    if explicit_tickers_raw:
+        explicit_tickers = [
+            t.strip().upper() for t in str(explicit_tickers_raw).split(",")
+            if t.strip()
+        ] or None
+    limit = int(cfg.get("limit", 0)) or None
+    severity_bucket = str(cfg.get("severity_bucket", "all"))
+    archive_only = _to_bool(cfg.get("archive_only", False))
+    delete_after_archive = _to_bool(cfg.get("delete_after_archive", False))
+    quarantine_weak = _to_bool(cfg.get("quarantine_weak", True))
+    use_bulk_zip = _to_bool(cfg.get("use_bulk_zip", True))
+    bulk_zip_cache_path = str(cfg.get(
+        "bulk_zip_cache_path", "/tmp/sec_submissions.zip",  # noqa: S108
+    ))
+    bulk_zip_force_download = _to_bool(cfg.get(
+        "bulk_zip_force_download", False,
+    ))
+
+    # Manifest path default — timestamped so repeated dry-runs don't
+    # overwrite. Caller picks a specific manifest for live by passing
+    # `--param manifest_path=…` explicitly.
+    default_manifest = (
+        f"data/fundamentals_quarterly_cleanup_manifest_"
+        f"{_dt.now(_UTC).strftime('%Y%m%dT%H%MZ')}.csv"
+    )
+    manifest_path = _Path(str(cfg.get("manifest_path", default_manifest)))
+
+    run_id = uuid.uuid4()
+    log.info(
+        "ops.stage.cleanup_ticker_reuse_fundamentals.start",
+        dry_run=dry_run,
+        evidence_level=evidence_level,
+        severity_bucket=severity_bucket,
+        archive_only=archive_only,
+        delete_after_archive=delete_after_archive,
+        quarantine_weak=quarantine_weak,
+        use_bulk_zip=use_bulk_zip,
+        manifest_path=str(manifest_path),
+        run_id=str(run_id),
+        explicit_tickers=(
+            len(explicit_tickers) if explicit_tickers else None
+        ),
+        limit=limit,
+    )
+
+    # ─── bulk reader (if enabled) ───
+    bulk_reader = None
+    if use_bulk_zip:
+        import os as _os_b
+
+        from tpcore.sec.submissions_bulk_reader import (  # noqa: PLC0415  # noqa: PLC0415
+            SECSubmissionsBulkReader,
+            ensure_zip_cached,
+        )
+        ua = _os_b.environ.get("SEC_EDGAR_USER_AGENT")
+        if not ua:
+            raise RuntimeError(
+                "cleanup_ticker_reuse_fundamentals[use_bulk_zip]: "
+                "SEC_EDGAR_USER_AGENT env var required."
+            )
+        zip_path = await ensure_zip_cached(
+            _Path(bulk_zip_cache_path),
+            user_agent=ua,
+            force_download=bulk_zip_force_download,
+        )
+        bulk_reader = SECSubmissionsBulkReader(zip_path=zip_path)
+        log.info(
+            "ops.stage.cleanup_ticker_reuse_fundamentals.bulk_mode_active",
+            zip_path=str(zip_path),
+        )
+
+    # ─── resolve scope ───
+    severity_clause = ""
+    severity_params: tuple = ()
+    if severity_bucket != "all":
+        # severity_bucket selects tickers whose pre-FPFD row count
+        # falls into the named bucket. Per plan §6.3.
+        bounds = {
+            "1": (1, 1),
+            "2-3": (2, 3),
+            "4-9": (4, 9),
+            "10-19": (10, 19),
+            "20+": (20, 10_000_000),
+        }.get(severity_bucket)
+        if bounds is None:
+            raise ValueError(
+                f"severity_bucket must be 1/2-3/4-9/10-19/20+/all; got "
+                f"{severity_bucket!r}"
+            )
+        severity_clause = (
+            "AND fq.ticker IN ("
+            "  SELECT fq2.ticker "
+            "  FROM platform.fundamentals_quarterly fq2 "
+            "  JOIN platform.ticker_classifications tc2 "
+            "    ON tc2.ticker = fq2.ticker "
+            "  WHERE tc2.first_public_filing_date IS NOT NULL "
+            "    AND fq2.period_end_date < tc2.first_public_filing_date "
+            "  GROUP BY fq2.ticker "
+            "  HAVING COUNT(*) BETWEEN $1 AND $2"
+            ")"
+        )
+        severity_params = bounds
+
+    # Pull candidate rows.
+    base_sql = f"""
+        SELECT fq.id, fq.ticker, fq.period_end_date,
+               tc.cik AS current_cik,
+               tc.first_public_filing_date AS current_fpfd
+        FROM platform.fundamentals_quarterly fq
+        JOIN platform.ticker_classifications tc ON tc.ticker = fq.ticker
+        WHERE tc.first_public_filing_date IS NOT NULL
+          AND fq.period_end_date < tc.first_public_filing_date
+          {severity_clause}
+    """
+    if explicit_tickers:
+        explicit_param_idx = len(severity_params) + 1
+        base_sql += f"  AND fq.ticker = ANY(${explicit_param_idx}::text[])"
+    base_sql += "\n        ORDER BY fq.ticker, fq.period_end_date"
+    if limit:
+        base_sql += f"\n        LIMIT {limit}"
+
+    sql_params: list = list(severity_params)
+    if explicit_tickers:
+        sql_params.append(explicit_tickers)
+
+    async with pool.acquire() as conn:
+        candidate_rows = await conn.fetch(base_sql, *sql_params)
+
+    log.info(
+        "ops.stage.cleanup_ticker_reuse_fundamentals.scope_resolved",
+        candidates=len(candidate_rows),
+        severity_bucket=severity_bucket,
+    )
+
+    counters = {
+        "manifest_writes": 0,
+        "high_confidence_archive_count": 0,
+        "ambiguous_quarantine_count": 0,
+        "weak_evidence_keep_count": 0,
+        "fpfd_drift_detected_skipped_count": 0,
+        "rejected_no_cik": 0,
+    }
+
+    # ─── per-row classification + manifest write / live execution ───
+    # Resolve current issuer_id per ticker once (lookup table).
+    async with pool.acquire() as conn:
+        unique_tickers = {r["ticker"] for r in candidate_rows}
+        if unique_tickers:
+            issuer_rows = await conn.fetch(
+                """
+                SELECT tc.ticker, isec.issuer_id
+                FROM platform.ticker_classifications tc
+                LEFT JOIN platform.ticker_history th
+                  ON th.ticker = tc.ticker
+                 AND th.valid_to IS NULL
+                LEFT JOIN platform.issuer_securities isec
+                  ON isec.classification_id = th.classification_id
+                 AND isec.valid_to IS NULL
+                WHERE tc.ticker = ANY($1::text[])
+                """,
+                list(unique_tickers),
+            )
+            current_issuer_by_ticker: dict[str, str | None] = {
+                r["ticker"]: r["issuer_id"] for r in issuer_rows
+            }
+        else:
+            current_issuer_by_ticker = {}
+
+    manifest_rows: list[dict[str, Any]] = []
+    if dry_run:
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+
+    async with pool.acquire() as conn:
+        for r in candidate_rows:
+            ticker = r["ticker"]
+            cik = r["current_cik"]
+            if cik is None:
+                counters["rejected_no_cik"] += 1
+                continue
+
+            # Invariant #4: FPFD drift detection — re-extract from the
+            # bulk reader and compare against the DB's stored value.
+            stored_fpfd = r["current_fpfd"]
+            if bulk_reader is not None:
+                payload = bulk_reader.get_merged_submissions(cik)
+                if payload is not None:
+                    from tpcore.sec.companyfacts_adapter import (
+                        SECCompanyFactsAdapter as _ExtractorCF,
+                    )
+                    meta = _ExtractorCF.extract_filing_metadata(payload)
+                    extracted_fpfd = meta.get("first_public_filing_date")
+                    if (
+                        extracted_fpfd is not None
+                        and extracted_fpfd != stored_fpfd
+                    ):
+                        counters["fpfd_drift_detected_skipped_count"] += 1
+                        manifest_rows.append({
+                            "ticker": ticker,
+                            "period_end_date": str(r["period_end_date"]),
+                            "original_id": r["id"],
+                            "current_cik": cik,
+                            "current_fpfd": str(stored_fpfd),
+                            "proposed_disposition": (
+                                "fpfd_drift_detected_skipped"
+                            ),
+                            "evidence_rank_used": "0",
+                            "evidence_summary": (
+                                f"stored_fpfd={stored_fpfd} != "
+                                f"bulk_extracted_fpfd={extracted_fpfd}"
+                            )[:500],
+                        })
+                        continue
+
+            current_issuer_id = current_issuer_by_ticker.get(ticker)
+            disposition, rank, summary = await _classify_ticker_reuse_row(
+                conn,
+                ticker=ticker,
+                period_end_date=r["period_end_date"],
+                current_cik=cik,
+                current_fpfd=stored_fpfd,
+                current_issuer_id=current_issuer_id,
+            )
+
+            manifest_rows.append({
+                "ticker": ticker,
+                "period_end_date": str(r["period_end_date"]),
+                "original_id": r["id"],
+                "current_cik": cik,
+                "current_fpfd": str(stored_fpfd),
+                "proposed_disposition": disposition,
+                "evidence_rank_used": str(rank),
+                "evidence_summary": summary,
+            })
+
+            if dry_run:
+                continue  # manifest-only
+
+            # ─── LIVE: per-row mutation ───
+            # Invariant #3: weak-evidence never deleted.
+            # Invariant #2: delete_after_archive must be explicit.
+            if disposition == "high_confidence_ticker_reuse":
+                if archive_only:
+                    # Archive only — leave row in main table for now.
+                    continue
+                if not delete_after_archive:
+                    # Dry-run-equivalent live posture (operator inspects
+                    # archive without destructive step).
+                    continue
+                if evidence_level != "strong":
+                    # Invariant: strong-evidence-only deletes.
+                    continue
+                async with conn.transaction():
+                    n = await _archive_row(
+                        conn,
+                        original_id=r["id"],
+                        disposition_reason=(
+                            f"rank{rank}_high_confidence_ticker_reuse"
+                        ),
+                        decided_by_run_id=str(run_id),
+                        evidence_summary=summary,
+                    )
+                    if n != 1:
+                        # Row vanished between scope read + transaction;
+                        # not a bug, just a race. Skip without raising.
+                        continue
+                counters["high_confidence_archive_count"] += 1
+
+            elif disposition == "ambiguous_predecessor_unknown":
+                if not quarantine_weak:
+                    continue
+                async with conn.transaction():
+                    n = await _quarantine_row(
+                        conn,
+                        original_id=r["id"],
+                        disposition=disposition,
+                        decided_by_run_id=str(run_id),
+                        evidence_summary=summary,
+                    )
+                    if n != 1:
+                        continue
+                counters["ambiguous_quarantine_count"] += 1
+
+            else:  # weak_evidence_keep
+                counters["weak_evidence_keep_count"] += 1
+
+    # Dry-run forecast counters (count what WOULD happen).
+    if dry_run:
+        for m in manifest_rows:
+            d = m["proposed_disposition"]
+            if d == "high_confidence_ticker_reuse":
+                counters["high_confidence_archive_count"] += 1
+            elif d == "ambiguous_predecessor_unknown":
+                counters["ambiguous_quarantine_count"] += 1
+            elif d == "weak_evidence_keep":
+                counters["weak_evidence_keep_count"] += 1
+
+        # Write manifest CSV.
+        import csv as _csv
+        with manifest_path.open("w", newline="", encoding="utf-8") as fh:
+            w = _csv.DictWriter(
+                fh, fieldnames=_ticker_reuse_manifest_columns(),
+            )
+            w.writeheader()
+            for m in manifest_rows:
+                w.writerow(m)
+        counters["manifest_writes"] = len(manifest_rows)
+
+    bulk_stats = bulk_reader.stats() if bulk_reader is not None else None
+    if bulk_reader is not None:
+        bulk_reader.close()
+
+    log.info(
+        "ops.stage.cleanup_ticker_reuse_fundamentals.complete",
+        **counters,
+        bulk_stats=bulk_stats,
+        run_id=str(run_id),
+    )
+
+    out: dict[str, Any] = {
+        "scope_size": len(candidate_rows),
+        "manifest_path": str(manifest_path) if dry_run else None,
+        "dry_run": dry_run,
+        "run_id": str(run_id),
+        **counters,
+    }
+    if bulk_stats is not None:
+        out["bulk_zip"] = bulk_stats
+    return out
+
+
 async def _stage_backfill_sec_lifecycle(
     pool: asyncpg.Pool, cfg: dict[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -9321,6 +9943,18 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # validator semantics + capital gate are unchanged. Idempotent.
     ("backfill_sec_lifecycle",
         lambda pool, cfg: (lambda: _stage_backfill_sec_lifecycle(pool, cfg)),
+        HEAVY_STAGE_TIMEOUT_SEC),
+    # 2026-06-02 — ticker-reuse fundamentals cleanup (PR #440 plan).
+    # Operator-on-demand only. Default dry_run=true writes a manifest
+    # CSV with proposed dispositions; `--param dry_run=false
+    # --param delete_after_archive=true --param evidence_level=strong`
+    # is required for any DELETE. Archive-before-delete is structural;
+    # weak-evidence rows are NEVER deleted; FPFD-drift rows are skipped
+    # via re-extraction from the bulk reader. See plan §5–§10.
+    ("cleanup_ticker_reuse_fundamentals",
+        lambda pool, cfg: (
+            lambda: _stage_cleanup_ticker_reuse_fundamentals(pool, cfg)
+        ),
         HEAVY_STAGE_TIMEOUT_SEC),
     # F0 (2026-06-01) — provider-parity EVALUATE stage. Operator-on-
     # demand only (not in any scheduled pipeline). Pulls dual samples

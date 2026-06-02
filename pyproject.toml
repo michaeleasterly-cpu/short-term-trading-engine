@@ -205,6 +205,11 @@ ignore = ["E501"]
 # on ``SECSubmissionsBulkReader`` to assert provider-priority semantics
 # (local-first, zip-fallback) hermetically. Same precedent.
 "tests/test_sec_submissions_bulk_reader.py" = ["SLF"]
+# 2026-06-02 ticker-reuse cleanup stage tests name ``ops._STAGE_SPECS``
+# and the module-private ``_FQ_MIRROR_COLUMNS`` / ``_QUARANTINE_DISPOSITIONS``
+# / ``_ticker_reuse_manifest_columns`` / ``_quarantine_row`` to pin
+# stage registration + the schema contract. Same precedent.
+"tests/test_ticker_reuse_cleanup_stage.py" = ["SLF"]
 # P2a SEC lifecycle-events extractor tests (2026-05-30):
 #   * test_p2_sec_lifecycle_events.py names ``_extract_lifecycle_events``
 #     and ``_build_sec_filing_url`` module-private helpers + accesses
