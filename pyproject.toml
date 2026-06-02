@@ -210,6 +210,12 @@ ignore = ["E501"]
 # / ``_ticker_reuse_manifest_columns`` / ``_quarantine_row`` to pin
 # stage registration + the schema contract. Same precedent.
 "tests/test_ticker_reuse_cleanup_stage.py" = ["SLF"]
+# 2026-06-02 symbol-history evidence backfill stage tests name
+# ``ops._STAGE_SPECS`` to pin stage registration + monkeypatch the
+# module-private ``_fmp_symbol_change_download`` / ``_build_sec_ticker_cik_crosswalk``
+# helpers to keep the run hermetic (no real FMP HTTP, no real SEC zip).
+# Same precedent as the cleanup-stage entry above.
+"tests/test_symbol_history_evidence_backfill_stage.py" = ["SLF"]
 # P2a SEC lifecycle-events extractor tests (2026-05-30):
 #   * test_p2_sec_lifecycle_events.py names ``_extract_lifecycle_events``
 #     and ``_build_sec_filing_url`` module-private helpers + accesses
