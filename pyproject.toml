@@ -201,6 +201,10 @@ ignore = ["E501"]
 # behaviour hermetically without real SEC HTTP. Same precedent as the
 # CIK / backfill / lifecycle test allowlist entries above.
 "tests/test_sec_submissions_extract.py" = ["SLF"]
+# 2026-06-02 bulk-zip reader tests reach into ``_local_dir`` / ``_zip_path``
+# on ``SECSubmissionsBulkReader`` to assert provider-priority semantics
+# (local-first, zip-fallback) hermetically. Same precedent.
+"tests/test_sec_submissions_bulk_reader.py" = ["SLF"]
 # P2a SEC lifecycle-events extractor tests (2026-05-30):
 #   * test_p2_sec_lifecycle_events.py names ``_extract_lifecycle_events``
 #     and ``_build_sec_filing_url`` module-private helpers + accesses
