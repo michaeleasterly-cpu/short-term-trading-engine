@@ -117,7 +117,19 @@ target-version = "py311"
 # stays unanchored: a suffix glob for the data/*_archive/ dirs at any depth
 # (verified: no first-party package matches *_archive).
 respect-gitignore = false
-extend-exclude = ["./data", "./logs", "*_archive", "./.claude"]
+# ``vulture_allowlist.py`` at the repo root is a vulture-hint file, not
+# executable Python — vulture parses it as AST patterns to silence
+# false-positive dead-code reports (see
+# https://github.com/jendrikseipp/vulture#whitelists). Linting it with
+# ruff yields ~967 spurious diagnostics (undefined names, unused
+# expressions). The canonical ruff-documented way to keep such a file
+# in the tree without false-positive noise is ``extend-exclude``
+# (https://docs.astral.sh/ruff/settings/#extend-exclude). This is
+# strictly stronger than the implicit "CI invokes ruff against
+# specific dirs only" pattern — a future contributor running
+# ``ruff check .`` locally now matches CI's behaviour, and a new
+# top-level ``foo.py`` is NOT silently unlinted.
+extend-exclude = ["./data", "./logs", "*_archive", "./.claude", "./vulture_allowlist.py"]
 
 [tool.ruff.lint]
 # DTZ (flake8-datetimez) mechanizes the prose-only CLAUDE.md "all
