@@ -543,3 +543,22 @@ from tpcore.fmp.profile_adapter import FMPProfileResult as _P1bFMPProfileResult
 _P1bFMPProfileResult.returned_symbol
 _P1bFMPProfileResult.profiles_count
 _P1bFMPProfileResult.http_status
+
+# ─── 2026-06-02 — tpcore.sec.submissions_bulk_reader ───
+# Same vulture-whitelist pattern as the P1b entries above: import-style
+# entries rot loudly on rename. ``get_merged_submissions`` and
+# ``ensure_zip_cached`` are consumed in
+# ``scripts/ops.py::_stage_backfill_sec_metadata`` via a deferred
+# import nested inside the ``use_bulk_zip`` branch — vulture's static
+# analyzer can't trace deferred imports inside function bodies, so it
+# flags both as unused at ``--min-confidence 60``.
+from tpcore.sec.submissions_bulk_reader import (
+    SECSubmissionsBulkReader as _BulkReader,
+)
+from tpcore.sec.submissions_bulk_reader import (
+    ensure_zip_cached as _ensure_zip_cached,
+)
+_BulkReader.get_merged_submissions
+_BulkReader.stats
+_BulkReader.close
+_ensure_zip_cached
