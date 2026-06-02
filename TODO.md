@@ -83,20 +83,80 @@ gate refuses orders on terminally-delisted tickers.
 
 ### Remaining (deferred to future commits)
 
-- **P1b — CIK discovery long tail.** The 1,419 SEC-ticker-map-unresolved
-  tickers (delisted/non-equity/pink-sheet) need an FMP `/profile` fallback
-  in a P1b CIK-discovery loop. Today they sit as `excluded_metadata_required`
-  forever.
+- **P1b — CIK discovery long tail.** ✅ **Implementation DONE 2026-06-01**
+  via PR #425 (impl) + PR #426 (ruff hygiene follow-up). Spec PR #423,
+  plan PR #424. FMP `/stable/profile` fallback wired into
+  `_stage_backfill_sec_metadata` as a sub-leg consuming
+  `CIKResolveResult.unresolved`; SEC-first authority preserved; existing
+  non-NULL CIKs never overwritten; symbol-mismatch / ambiguous responses
+  fail closed + emit `IDENTITY_DIVERGENCE_INVESTIGATE`. 12 hermetic
+  tests; no migration; no validator-semantics or risk-path change.
+
+  ⚠ **Empirical finding from 2026-06-02 operator-on-demand live smoke**:
+  the FMP fallback resolves **0 of 100** sampled SEC-unresolved tickers.
+  Three runs (dry-run 25 → dry-run 100 → bounded-live 100,
+  `no_cik_country_null=true` scope, `fmp_rate_limit_sleep_s=0.2`):
+  - All three returned `cik_fmp_fallback = {candidates: N, resolved: 0,
+    no_match: N, fmp_error: 0, written: 0, divergence_events_written: 0}`
+    (N = 25 / 100 / 100 respectively).
+  - Bounded-live step 3: 0 writes, `coverage_before == coverage_after`,
+    no exceptions, no tracebacks. Wall clock 35.6 s for 100 tickers
+    (~0.32 s/ticker including 0.2 s rate-limit sleep).
+  - `platform.application_log` IDENTITY_DIVERGENCE_INVESTIGATE rows
+    introduced by this run: **0** (consistent with 0 symbol mismatches
+    and 0 ambiguous responses across 225 FMP calls).
+
+  **Interpretation**: the original spec/plan/TODO hypothesis — that the
+  1,419 SEC-ticker-map-unresolved bucket would partially resolve via FMP
+  — is **empirically not supported** for the sampled prefix. The bucket
+  appears to be composed of issuers neither SEC's public file nor FMP
+  index (delisted / non-equity / pink-sheet OTCs with no canonical
+  CIK). P1b's adapter correctly classifies them as `no_match` (honest
+  dead end per spec §"Resolution states").
+
+  ⛔ **DO NOT run the uncapped full pass** (`fmp_max_unresolved=0`)
+  until P1c source triage (below) produces evidence the remaining
+  ~1,319 unresolved tickers would resolve differently. Based on the
+  100-sample evidence, the full run would consume ~1,419 × 0.32 s ≈
+  7.5 min of FMP quota for ~0 writes with high confidence — wasted
+  budget, no coverage progress.
+
+- **P1c — unresolved-security-source triage (NEW, 2026-06-02).**
+  Investigate which alternative source (if any) covers the 1,419
+  SEC-and-FMP-unresolved long-tail. Concrete probes worth running
+  before committing to another implementation arc:
+  1. FMP `/stable/profile` with different params (no `country` is
+     passed today; try with `country` hints, or `/search` endpoint).
+  2. OpenFIGI `/v3/mapping` — already used by `parent_resolver.py` at
+     a lower lane priority; may carry CIKs SEC/FMP miss for foreign
+     issuers + structured products.
+  3. Direct SEC EDGAR full-text search (`efts.sec.gov`) for a sample
+     of 10 unresolved tickers to determine if the issuer ever filed
+     under a different ticker (rename / reverse split / etc.).
+  4. Spot-check the alphabetically-first 25 tickers from the scope
+     manually against FMP web UI to confirm they're genuinely
+     uncovered (vs. an API-param edge case).
+
+  Disposition: open as a deferred research task. **Do not implement
+  another P1b-style stage extension** until the triage produces a
+  source with demonstrated non-zero hit rate against the bucket.
+
 - **P2c+ — 8-K Item 3.01 extractor (`delist_pending`).** The enum value
   is reserved; `tpcore/sec/corp_events_extractor.py` already has 8-K
   parsing for items 1.01/2.01/1.02/1.03; extending pattern set to 3.01
   is a small lift but needs spec on what delist_pending semantically
   means for the capital gate.
-- **Metadata coverage gate.** The 90% NULL rate today blocks
-  `DATA_OPERATIONS_COMPLETE` via the P1 structural sentinel. To clear
-  the gate, run `backfill_sec_metadata` against the full active
-  universe (operator-on-demand; SEC fair-use ~7600 * 0.11s = ~14 min
-  cold, ~30 sec cached on re-run).
+
+- **Metadata coverage gate** (STILL OPEN — P1b did NOT move it). The
+  90% NULL rate today blocks `DATA_OPERATIONS_COMPLETE` via the P1
+  structural sentinel. P1b's FMP fallback was the optimistic path; the
+  2026-06-02 empirical no-match result confirms it does not advance
+  this metric. To clear the gate, the canonical path is the **full
+  active-universe** `backfill_sec_metadata` run (operator-on-demand;
+  SEC fair-use ~7,600 × 0.11 s = ~14 min cold, ~30 sec cached on
+  re-run) — this targets a different (and larger) bucket than P1b's
+  unresolved set. This item is the highest-leverage next move for
+  `DATA_OPERATIONS_COMPLETE` progress.
 
 
 ## ✅ STE dev-system round-trip — CLOSED 2026-06-01
