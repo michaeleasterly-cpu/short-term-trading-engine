@@ -1326,7 +1326,7 @@ the acquirer-resolution. Not on the critical path of any current engine.
 [lane: ops] [gate: none] [needs: corporate-actions adapter design + SEC EDGAR
 ticker-disambiguation client + per-ticker manual review for the ambiguous set]
 
-### Symbol-history evidence backfill (2026-06-02, spec landed)
+### Symbol-history evidence backfill (2026-06-02, spec + plan landed)
 
 Direct follow-up from the ticker-reuse fundamentals cleanup arc (PR #441 +
 2026-06-02 bucket=1 dry-run verification). Bucket=1 dry-run produced **0
@@ -1342,18 +1342,29 @@ true cross-issuer reuse.
 **Operator decision 2026-06-02:** stop bucket-cleanup execution. No
 quarantine of the 50 ambiguous bucket=1 rows. Build substrate first.
 
-Spec: `docs/superpowers/specs/2026-06-02-symbol-history-evidence-backfill.md`.
-Next: plan PR per heavy-lane §1 (spec-reviewer PASS → operator gate →
-implementation PR). Implementation surface = new bulk-first
-`scripts/ops.py` stage `symbol_history_evidence_backfill` populating
-`ticker_history` + `issuer_securities` from R2-archived FMP daily
-snapshots (preferred) or FMP bulk symbol-change (secondary), plus
-classifier reframe distinguishing same-CIK ticker change (KEEP) from
-different-issuer reuse (ARCHIVE).
+Spec: `docs/superpowers/specs/2026-06-02-symbol-history-evidence-backfill.md` (PR #442, MERGED).
+Plan: `docs/superpowers/plans/2026-06-02-symbol-history-evidence-backfill-plan.md` (this PR).
 
-[lane: heavy] [gate: spec-reviewer PASS + operator spec-read]
-[needs: R2 archive prefix inventory, FMP symbol-change endpoint shape,
-empirical floor for `issuer_securities` sentinel]
+**Discovery findings (2026-06-02):**
+- Path A (R2 roster snapshots) UNAVAILABLE — `ste-archives` carries 0
+  daily ticker→CIK snapshots; deferred to optional future hardening.
+- Path B (FMP `/stable/symbol-change?limit=10000`) PRIMARY — single bulk
+  GET returns 5,334 rows spanning 1969-12-31 → 2026-06-01.
+- Path C (SEC `submissions.zip` via existing `SECSubmissionsBulkReader`)
+  RESOLVER for `(oldSymbol, date) → oldCIK` cross-walk + SEC attestation.
+- TKR-14 mint covers historical predecessors deterministically using
+  sentinel `Z` venue + SEC-or-FMP-derived seeds.
+
+Next: implementation PR per heavy-lane §1 — new stage
+`symbol_history_evidence_backfill` populates `ticker_history` +
+`issuer_securities` (and minted historical predecessor
+`ticker_classifications` rows where needed). Cleanup re-run is a
+SEPARATE downstream PR.
+
+[lane: heavy] [gate: plan-reviewer PASS + operator plan-read]
+[needs: confirm UNIQUE indexes on ticker_history + issuer_securities,
+empirical issuer_securities floor for sentinel, optional Path A
+hardening side-quest disposition]
 
 
 ## Discovered follow-ups — RiskGovernor work + architecture review (2026-05-17)
