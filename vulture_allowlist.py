@@ -525,3 +525,6 @@ REGIME_FRAGILITY
 COST_DOMINATED
 DATA_QUALITY_FAILURE
 LOOKAHEAD_OR_BIAS_RISK
+returned_symbol  # unused variable (tpcore/fmp/profile_adapter.py:72)
+profiles_count  # unused variable (tpcore/fmp/profile_adapter.py:85)
+http_status  # unused variable (tpcore/fmp/profile_adapter.py:89)
